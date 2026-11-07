@@ -827,10 +827,9 @@ const gmVisualAura uint32 = 37800
 // handleCmdGM dispatches the ".gm" arms (cs_gm.cpp gm_commandscript,
 // FOURTEENTH Commands file): chat, fly, ingame, list, visible, on, off —
 // each RBAC-gated per the C++ ChatCommandTable.
-func (s *session) handleCmdGM(ctx context.Context, args []string) {
+func (s *session) handleCmdGM(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
-		return
+		return false
 	}
 	// The C++ handlers take Optional<bool> or no args (cs_gm.cpp:73-216)
 	// and the dispatcher consumes the whole string (ChatCommand.h:112),
@@ -838,32 +837,30 @@ func (s *session) handleCmdGM(ctx context.Context, args []string) {
 	switch strings.ToLower(args[0]) {
 	case "on", "off", "ingame", "list":
 		if len(args) != 1 {
-			s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
-			return
+			return false
 		}
 	case "chat", "fly", "visible", "vis":
 		if len(args) > 2 {
-			s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
-			return
+			return false
 		}
 	}
 	switch sub := strings.ToLower(args[0]); sub {
 	case "on":
-		s.handleCmdGMOn(ctx)
+		return s.handleCmdGMOn(ctx)
 	case "off":
-		s.handleCmdGMOff(ctx)
+		return s.handleCmdGMOff(ctx)
 	case "chat":
-		s.handleCmdGMChat(ctx, args[1:])
+		return s.handleCmdGMChat(ctx, args[1:])
 	case "fly":
-		s.handleCmdGMFly(ctx, args[1:])
+		return s.handleCmdGMFly(ctx, args[1:])
 	case "visible", "vis":
-		s.handleCmdGMVisible(ctx, args[1:])
+		return s.handleCmdGMVisible(ctx, args[1:])
 	case "ingame":
-		s.handleCmdGMInGame(ctx)
+		return s.handleCmdGMInGame(ctx)
 	case "list":
-		s.handleCmdGMList(ctx)
+		return s.handleCmdGMList(ctx)
 	default:
-		s.sendSysMessage("Syntax: .gm on|off|chat [on|off]|fly [on|off]|visible [on|off]|ingame|list")
+		return false
 	}
 }
 
@@ -875,10 +872,9 @@ func (s *session) handleCmdGM(ctx context.Context, args []string) {
 // portable core and are stored for real. The GM visibility detect is stored
 // too: SetGameMaster(true) sets it to the account security, which is what
 // lets the session see serverside-hidden creatures (Object.cpp:2457).
-func (s *session) handleCmdGMOn(ctx context.Context) {
+func (s *session) handleCmdGMOn(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandGM) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.player != nil {
 		s.player.ExtraFlags |= playerExtraGMOn
@@ -891,15 +887,15 @@ func (s *session) handleCmdGMOn(ctx context.Context) {
 	}
 	// LANG_GM_ON (332).
 	s.sendNotification("GM mode is ON.")
+	return true
 }
 
 // handleCmdGMOff mirrors HandleGMOffCommand (cs_gm.cpp:216).
 // Fidelity gap: same SetGameMaster engine-effect gap as the on arm
 // (faction/phase/FFA-PvP/pet-faction/combat restore unported).
-func (s *session) handleCmdGMOff(ctx context.Context) {
+func (s *session) handleCmdGMOff(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandGM) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.player != nil {
 		s.player.ExtraFlags &^= playerExtraGMOn
@@ -915,13 +911,13 @@ func (s *session) handleCmdGMOff(ctx context.Context) {
 	}
 	// LANG_GM_OFF (333).
 	s.sendNotification("GM mode is OFF.")
+	return true
 }
 
 // handleCmdGMChat mirrors HandleGMChatCommand (cs_gm.cpp:73).
-func (s *session) handleCmdGMChat(ctx context.Context, args []string) {
+func (s *session) handleCmdGMChat(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandGMChat) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if len(args) == 0 {
 		// No argument reports the current badge state; only players holding
@@ -933,12 +929,12 @@ func (s *session) handleCmdGMChat(ctx context.Context, args []string) {
 			// LANG_GM_CHAT_OFF (335).
 			s.sendNotification("GM chat is OFF.")
 		}
-		return
+		return true
 	}
 	enable, ok := cheatArgBool(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .gm chat [on|off]")
-		return
+		return true
 	}
 	s.gmChat = enable
 	if s.player != nil {
@@ -954,29 +950,28 @@ func (s *session) handleCmdGMChat(ctx context.Context, args []string) {
 	} else {
 		s.sendNotification("GM chat is OFF.")
 	}
+	return true
 }
 
 // handleCmdGMFly mirrors HandleGMFlyCommand (cs_gm.cpp:96, plain bool arg).
 // The C++ dispatcher never runs the handler on a missing arg: bool rides
 // the integral ArgInfo (ChatCommandArgs.h:53-56), whose empty token returns
 // nullopt, so the dispatcher prints command help instead. A missing arg
-// therefore reports syntax rather than enabling fly (the old Go default).
+// therefore returns false silently (the framework shows the gm group help).
 // The C++ broadcasts the SMSG_MOVE_SET/UNSET_CAN_FLY packet via
 // SendMessageToSet (cs_gm.cpp:108-115: target plus everyone in range);
 // setFlyMode fans the packet out to the nearby sessions as well.
-func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
+func (s *session) handleCmdGMFly(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandGMFly) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .gm fly [on|off]")
-		return
+		return false
 	}
 	enable, ok := cheatArgBool(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .gm fly [on|off]")
-		return
+		return true
 	}
 	// getSelectedPlayer: own player when nothing is targeted; the C++ falls
 	// back to the handler's own player when the selection resolves null.
@@ -998,19 +993,19 @@ func (s *session) handleCmdGMFly(ctx context.Context, args []string) {
 		state = "on"
 	}
 	s.sendSysMessage(fmt.Sprintf("Fly mode %s for %s.", name, state))
+	return true
 }
 
 // handleCmdGMVisible mirrors HandleGMVisibleCommand (cs_gm.cpp:185).
 // Fidelity gap: SetGMVisible's SetAcceptWhispers(false) and channel
 // SetInvisible have no Go bridges; the aura + flag + visibility-detect
 // changes are the portable core.
-func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
+func (s *session) handleCmdGMVisible(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandGMVisible) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.player == nil {
-		return
+		return true
 	}
 	if len(args) == 0 {
 		// LANG_YOU_ARE with LANG_VISIBLE/LANG_INVISIBLE; isGMVisible() is
@@ -1020,12 +1015,12 @@ func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage("You are Invisible.")
 		}
-		return
+		return true
 	}
 	visible, ok := cheatArgBool(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .gm visible [on|off]")
-		return
+		return true
 	}
 	if visible {
 		if s.hasAura(gmVisualAura) {
@@ -1043,7 +1038,7 @@ func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
 		s.refreshNearbyObjects(ctx)
 		// LANG_INVISIBLE_VISIBLE (578).
 		s.sendNotification("You are now visible.")
-		return
+		return true
 	}
 	// Player::SetGMVisible(false): aura + invisible flag + SetGameMaster(true)
 	// (SetGameMaster engine effects are the documented gm-on gap); the
@@ -1060,18 +1055,18 @@ func (s *session) handleCmdGMVisible(ctx context.Context, args []string) {
 	s.refreshNearbyObjects(ctx)
 	// LANG_INVISIBLE_INVISIBLE (577).
 	s.sendNotification("You are now invisible.")
+	return true
 }
 
 // handleCmdGMInGame mirrors HandleGMListIngameCommand (cs_gm.cpp:129): the
 // online-GM list for a session (the C++ console branch is moot — the Go
 // command path is always sessioned, same convention as the arena port).
-func (s *session) handleCmdGMInGame(ctx context.Context) {
+func (s *session) handleCmdGMInGame(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandGMIngame) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.server == nil {
-		return
+		return true
 	}
 	type gmEntry struct {
 		name     string
@@ -1107,7 +1102,7 @@ func (s *session) handleCmdGMInGame(ctx context.Context) {
 	if len(list) == 0 {
 		// LANG_GMS_NOT_LOGGED (17).
 		s.sendSysMessage("There are no GMs currently logged in.")
-		return
+		return true
 	}
 	// LANG_GMS_ON_SRV (16).
 	s.sendSysMessage("Currently logged in GMs:")
@@ -1116,24 +1111,27 @@ func (s *session) handleCmdGMInGame(ctx context.Context) {
 		s.sendSysMessage(fmt.Sprintf("|    %s GMLevel %d", e.name, e.security))
 	}
 	s.sendSysMessage("========================")
+	return true
 }
 
 // handleCmdGMList mirrors HandleGMListFullCommand (cs_gm.cpp:161): the
 // database list of GM accounts (console branch moot — always sessioned).
-func (s *session) handleCmdGMList(ctx context.Context) {
+func (s *session) handleCmdGMList(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandGMList) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	if s.server == nil || s.server.AuthStore == nil || s.server.AuthStore.DB == nil {
-		return
+		return true
 	}
 	// LOGIN_SEL_GM_ACCOUNTS (LoginDatabase.cpp:89); SEC_MODERATOR=1.
 	rows, err := s.server.AuthStore.DB.QueryContext(ctx,
 		"SELECT a.username, aa.SecurityLevel FROM account a, account_access aa WHERE a.id = aa.AccountID AND aa.SecurityLevel >= ? AND (aa.RealmID = -1 OR aa.RealmID = ?)",
 		1, s.server.RealmID)
 	if err != nil {
-		return
+		// A failed query prints the empty-list message, as a null result
+		// does in C++ (cs_gm.cpp:161-188); there is no silent-false leg.
+		s.sendSysMessage("No GMs found.")
+		return true
 	}
 	defer rows.Close()
 	type gmAccount struct {
@@ -1144,14 +1142,16 @@ func (s *session) handleCmdGMList(ctx context.Context) {
 	for rows.Next() {
 		var a gmAccount
 		if err := rows.Scan(&a.username, &a.security); err != nil {
-			return
+			// No C++ counterpart (a valid result set always scans);
+			// print the rows collected so far.
+			break
 		}
 		accounts = append(accounts, a)
 	}
 	if len(accounts) == 0 {
 		// LANG_GMLIST_EMPTY (599).
 		s.sendSysMessage("No GMs found.")
-		return
+		return true
 	}
 	// LANG_GMLIST (597).
 	s.sendSysMessage("List of GMs:")
@@ -1160,6 +1160,7 @@ func (s *session) handleCmdGMList(ctx context.Context) {
 		s.sendSysMessage(fmt.Sprintf("|    %s GMLevel %d", a.username, a.security))
 	}
 	s.sendSysMessage("========================")
+	return true
 }
 
 // Cheat flag bits mirroring the CHEAT_* enum (Player.h:822-829).
@@ -1295,37 +1296,36 @@ func (s *session) handleCmdCheat(ctx context.Context, args []string) bool {
 	if s.player == nil {
 		return true
 	}
+	// The cheat table (cs_cheat.cpp:44-64) has no "" entry: a bare or
+	// unknown invocation shows the cheat group help (silent false).
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore")
-		return true
+		return false
 	}
 	switch strings.ToLower(args[0]) {
 	case "god":
-		s.handleCheatGod(ctx, args[1:])
+		return s.handleCheatGod(ctx, args[1:])
 	case "casttime":
-		s.handleCheatCasttime(ctx, args[1:])
+		return s.handleCheatCasttime(ctx, args[1:])
 	case "cooldown":
-		s.handleCheatCooldown(ctx, args[1:])
+		return s.handleCheatCooldown(ctx, args[1:])
 	case "power":
-		s.handleCheatPower(ctx, args[1:])
+		return s.handleCheatPower(ctx, args[1:])
 	case "waterwalk":
-		s.handleCheatWaterwalk(ctx, args[1:])
+		return s.handleCheatWaterwalk(ctx, args[1:])
 	case "status":
 		// HandleCheatStatusCommand takes no arguments; a trailing token
 		// fails the whole-string-consumed check (ChatCommand.h:112).
 		if len(args) > 1 {
-			s.sendSysMessage("Syntax: .cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore")
-			break
+			return false
 		}
-		s.handleCheatStatus(ctx)
+		return s.handleCheatStatus(ctx)
 	case "taxi":
-		s.handleCheatTaxi(ctx, args[1:])
+		return s.handleCheatTaxi(ctx, args[1:])
 	case "explore":
-		s.handleCheatExplore(ctx, args[1:])
+		return s.handleCheatExplore(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .cheat god|casttime|cooldown|power|waterwalk|status|taxi|explore")
+		return false
 	}
-	return true
 }
 
 // cheatToggle mirrors the Optional<bool> toggle arms of cs_cheat.cpp: an
@@ -1361,97 +1361,111 @@ func (s *session) cheatToggle(flag uint32, args []string) (bool, bool) {
 // Player.cpp:784, which also covers the HandleFall zeroing at Player.cpp:25390)
 // and Spell::EffectInstaKill (SpellEffects.cpp:283) via godCheatActive in
 // executeSpellInstantKill.
-func (s *session) handleCheatGod(ctx context.Context, args []string) {
+func (s *session) handleCheatGod(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatGod) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
 	}
 	enable, ok := s.cheatToggle(cheatGod, args)
 	if !ok {
 		s.sendSysMessage("Syntax: .cheat god [on|off]")
-		return
+		return true
 	}
 	if enable {
 		s.sendSysMessage("Godmode is ON. You won't take damage.")
 	} else {
 		s.sendSysMessage("Godmode is OFF. You can take damage.")
 	}
+	return true
 }
 
 // handleCheatCasttime mirrors HandleCasttimeCheatCommand (cs_cheat.cpp:87).
 // Fidelity gap: the CHEAT_CASTTIME consumer (Spell.cpp:3127, cast-time
 // zeroing) has no Go bridge; the flag is stored and reported only.
-func (s *session) handleCheatCasttime(ctx context.Context, args []string) {
+func (s *session) handleCheatCasttime(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatCasttime) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
 	}
 	enable, ok := s.cheatToggle(cheatCasttime, args)
 	if !ok {
 		s.sendSysMessage("Syntax: .cheat casttime [on|off]")
-		return
+		return true
 	}
 	if enable {
 		s.sendSysMessage("CastTime Cheat is ON. Your spells won't have a casttime.")
 	} else {
 		s.sendSysMessage("CastTime Cheat is OFF. Your spells will have a casttime.")
 	}
+	return true
 }
 
 // handleCheatCooldown mirrors HandleCoolDownCheatCommand (cs_cheat.cpp:108).
 // Fidelity gap: the CHEAT_COOLDOWN consumers (Spell.cpp:3522/8241) have no
 // Go bridge (gcd.go notes CHEAT_COOLDOWN infra as unbuilt); the flag is
 // stored and reported only.
-func (s *session) handleCheatCooldown(ctx context.Context, args []string) {
+func (s *session) handleCheatCooldown(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatCooldown) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
 	}
 	enable, ok := s.cheatToggle(cheatCooldown, args)
 	if !ok {
 		s.sendSysMessage("Syntax: .cheat cooldown [on|off]")
-		return
+		return true
 	}
 	if enable {
 		s.sendSysMessage("Cooldown Cheat is ON. You are not on the global cooldown.")
 	} else {
 		s.sendSysMessage("Cooldown Cheat is OFF. You are on the global cooldown.")
 	}
+	return true
 }
 
 // handleCheatPower mirrors HandlePowerCheatCommand (cs_cheat.cpp:129).
 // The CHEAT_POWER consumer (Spell.cpp:4792, power-cost skip) is bridged in
 // finishSpellCast's TakePower legs (spells.go): the flag skips power/rune
 // deduction and the five-second-rule timer there.
-func (s *session) handleCheatPower(ctx context.Context, args []string) {
+func (s *session) handleCheatPower(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatPower) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
 	}
 	enable, ok := s.cheatToggle(cheatPower, args)
 	if !ok {
 		s.sendSysMessage("Syntax: .cheat power [on|off]")
-		return
+		return true
 	}
 	if enable {
 		s.sendSysMessage("Power Cheat is ON. You don't need mana/rage/energy to use spells.")
 	} else {
 		s.sendSysMessage("Power Cheat is OFF. You need mana/rage/energy to use spells.")
 	}
+	return true
 }
 
 // handleCheatWaterwalk mirrors HandleWaterWalkCheatCommand (cs_cheat.cpp:185):
 // the CHEAT_WATERWALK bit plus the immediate forced movement (Player::
 // SetMovement(MOVE_WATER_WALK / MOVE_LAND_WALK)).
-func (s *session) handleCheatWaterwalk(ctx context.Context, args []string) {
+func (s *session) handleCheatWaterwalk(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatWaterwalk) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
+	}
+	if len(args) > 1 {
+		return false
 	}
 	enable, ok := s.cheatToggle(cheatWaterwalk, args)
 	if !ok {
 		s.sendSysMessage("Syntax: .cheat waterwalk [on|off]")
-		return
+		return true
 	}
 	if enable {
 		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
@@ -1460,16 +1474,16 @@ func (s *session) handleCheatWaterwalk(ctx context.Context, args []string) {
 		s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
 		s.sendSysMessage("Waterwalking is OFF. You can't walk on water.")
 	}
+	return true
 }
 
 // handleCheatStatus mirrors HandleCheatStatusCommand (cs_cheat.cpp:150): the
 // LANG_COMMAND_CHEAT_STATUS (357) header plus one line per flag (358-362,
 // 364). The trinity_string English is inlined; Go has no lang-text helper
 // and the strings live in the world DB, not the repo.
-func (s *session) handleCheatStatus(ctx context.Context) {
+func (s *session) handleCheatStatus(ctx context.Context) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatStatus) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	s.sendSysMessage("Cheat status")
 	s.sendSysMessage(fmt.Sprintf("Godmode is %s.", cheatOnOff(s.player.ActiveCheats&cheatGod != 0)))
@@ -1478,6 +1492,7 @@ func (s *session) handleCheatStatus(ctx context.Context) {
 	s.sendSysMessage(fmt.Sprintf("Power cheat is %s.", cheatOnOff(s.player.ActiveCheats&cheatPower != 0)))
 	s.sendSysMessage(fmt.Sprintf("Waterwalk is %s.", cheatOnOff(s.player.ActiveCheats&cheatWaterwalk != 0)))
 	s.sendSysMessage(fmt.Sprintf("All taxi nodes enabled is %s.", cheatOnOff(s.isTaxiCheater())))
+	return true
 }
 
 // handleCheatTaxi mirrors HandleTaxiCheatCommand (cs_cheat.cpp:210): the
@@ -1485,17 +1500,26 @@ func (s *session) handleCheatStatus(ctx context.Context) {
 // C++ getSelectedPlayer null falls back to self), guarded by
 // HasLowerSecurity; the PLAYER_EXTRA_TAXICHEAT bit rides the existing
 // persistExtraFlags path.
-func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
+func (s *session) handleCheatTaxi(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCheatTaxi) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	// Optional<bool> plus the whole-string-consumed check (ChatCommand.h:112):
 	// the framework parses the argument before the handler runs, so a
-	// trailing token fails before target resolution.
+	// trailing token fails before target resolution and a bad token
+	// reports the parse message.
 	if len(args) > 1 {
-		s.sendSysMessage("Syntax: .cheat taxi [on|off]")
-		return
+		return false
+	}
+	enable := false
+	hasArg := false
+	if len(args) > 0 {
+		v, ok := cheatArgBool(args[0])
+		if !ok {
+			s.sendSysMessage("Syntax: .cheat taxi [on|off]")
+			return true
+		}
+		enable, hasArg = v, true
 	}
 	target := s
 	if s.selection != 0 && s.server != nil {
@@ -1503,20 +1527,18 @@ func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
 			target = ts
 		}
 	}
-	if target != s && s.security < s.accountSecurityLevel(ctx, target.accountID) {
-		return // C++ HasLowerSecurity: silent fail
+	// ChatHandler::HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW and
+	// sets the error flag (Chat.cpp:96-99), so the leg reports (message +
+	// true), not a silent false.
+	if target != s && s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if target.player == nil {
-		return
+		return true
 	}
-	enable := !target.isTaxiCheater()
-	if len(args) > 0 {
-		v, ok := cheatArgBool(args[0])
-		if !ok {
-			s.sendSysMessage("Syntax: .cheat taxi [on|off]")
-			return
-		}
-		enable = v
+	if !hasArg {
+		enable = !target.isTaxiCheater()
 	}
 	if enable {
 		target.player.ExtraFlags |= playerExtraTaxiCheat
@@ -1536,6 +1558,7 @@ func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
 			target.sendSysMessage(fmt.Sprintf("%s removes all taxi nodes from you.", s.player.Name))
 		}
 	}
+	return true
 }
 
 // handleCheatExplore mirrors HandleExploreCheatCommand (cs_cheat.cpp:238):
@@ -1545,23 +1568,21 @@ func (s *session) handleCheatTaxi(ctx context.Context, args []string) {
 // PLAYER_EXPLORED_ZONES flags land on the handler's own player exactly like
 // the C++ loop (a known upstream quirk: the messages name the target while
 // the flags apply to self).
-func (s *session) handleCheatExplore(ctx context.Context, args []string) {
+func (s *session) handleCheatExplore(ctx context.Context, args []string) bool {
 	// The permission check runs before argument parsing in C++
 	// (ChatCommandNode::TryExecuteCommand checks IsInvokerVisible before
 	// the invoker parses its args); the sibling arms already check first.
 	if !s.commandAllowed(ctx, permissionCommandCheatExplore) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	syntax := "Syntax: .cheat explore on|off"
 	if len(args) != 1 {
-		s.sendSysMessage(syntax)
-		return
+		return false
 	}
 	reveal, ok := cheatArgBool(args[0])
 	if !ok {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	// ChatHandler::getSelectedPlayer (Chat.cpp:300-308): the handler's own
 	// player when nothing is targeted; null only for an offline/non-player
@@ -1574,7 +1595,7 @@ func (s *session) handleCheatExplore(ctx context.Context, args []string) {
 	}
 	if target == nil || target.player == nil {
 		s.sendSysMessage("No character selected.")
-		return
+		return true
 	}
 	explored := uint32(0)
 	if reveal {
@@ -1598,6 +1619,7 @@ func (s *session) handleCheatExplore(ctx context.Context, args []string) {
 			target.sendSysMessage(fmt.Sprintf("%s gives you explore-nothing.", s.player.Name))
 		}
 	}
+	return true
 }
 
 func (s *session) sendNotification(msg string) {
@@ -2759,10 +2781,9 @@ func (s *session) handleCmdGoBoss(ctx context.Context, args []string) bool {
 	return true
 }
 
-func (s *session) handleCmdCast(ctx context.Context, args []string) {
+func (s *session) handleCmdCast(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .cast <spellId> [triggered]")
-		return
+		return false
 	}
 	// cast_commandscript (cs_cast.cpp) sub-arms, wired on the player and
 	// creature cast funnels: self/back/target ride castCreatureSpell (and
@@ -2770,42 +2791,35 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	// explicit-destination entries (player AoF funnel, creature AoF leg).
 	switch strings.ToLower(args[0]) {
 	case "back":
-		s.handleCmdCastBack(ctx, args)
-		return
+		return s.handleCmdCastBack(ctx, args)
 	case "dist":
-		s.handleCmdCastDist(ctx, args)
-		return
+		return s.handleCmdCastDist(ctx, args)
 	case "self":
-		s.handleCmdCastSelf(ctx, args)
-		return
+		return s.handleCmdCastSelf(ctx, args)
 	case "target":
-		s.handleCmdCastTarget(ctx, args)
-		return
+		return s.handleCmdCastTarget(ctx, args)
 	case "dest":
-		s.handleCmdCastDest(ctx, args)
-		return
+		return s.handleCmdCastDest(ctx, args)
 	}
-	// Bare arm: HandleCastCommand — player casts at the selected unit.
+	// Bare arm: HandleCastCommand - player casts at the selected unit.
 	if !s.commandAllowed(ctx, permissionCommandCast) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const bareSyntax = "Syntax: .cast <spellId> [triggered]"
-	// ChatCommand.h:112 — the entire string must be consumed; a trailing
-	// token fails the command before the handler runs.
-	if len(args) > 2 {
-		s.sendSysMessage(bareSyntax)
-		return
-	}
 	spellID, ok := s.castCommandSpell(args[0])
 	if !ok {
-		return
+		return true
+	}
+	// ChatCommand.h:112 - the entire string must be consumed; a trailing
+	// token fails the command before the handler runs.
+	if len(args) > 2 {
+		return false
 	}
 	// SpellMgr::IsSpellValid has no Go model; DBC-loaded spells are assumed
 	// structurally valid, so the LANG_COMMAND_SPELL_BROKEN branch is unreachable.
 	if s.selection == 0 {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	// GetTriggerFlags mirror: the optional flag must be a prefix of
 	// "triggered" (e.g. "trig"); anything else fails the command. The C++
@@ -2815,9 +2829,10 @@ func (s *session) handleCmdCast(ctx context.Context, args []string) {
 	// so the TRIGGERED_NONE normal-cast path is a documented fidelity gap
 	// — the flag is accepted but changes nothing.
 	if _, ok := castCommandTriggeredArg(s, args, 1, bareSyntax); !ok {
-		return
+		return false
 	}
 	s.castSpellDirect(ctx, spellID, s.selection)
+	return true
 }
 
 // castCommandSpell mirrors the bare arm's spell validation (cs_cast.cpp
@@ -2854,14 +2869,13 @@ func (s *session) castCommandSpell(spellArg string) (uint32, bool) {
 
 // castCommandTriggered mirrors GetTriggerFlags (cs_cast.cpp): an absent flag
 // is TRIGGERED_NONE, a prefix of "triggered" is TRIGGERED_FULL_DEBUG_MASK,
-// anything else fails the command with its syntax line. The C++ match is
+// anything else fails the command silently (GetTriggerFlags returns nullopt). The C++ match is
 // case-sensitive (StringStartsWith, Util.h:335), so "Trig" fails.
 func (s *session) castCommandTriggered(trigArg, syntax string) (bool, bool) {
 	if trigArg == "" {
 		return false, true
 	}
 	if !strings.HasPrefix("triggered", trigArg) {
-		s.sendSysMessage(syntax)
 		return false, false
 	}
 	return true, true
@@ -2900,15 +2914,13 @@ func (s *session) castCommandCreatureCast(ctx context.Context, motion *creatureM
 // (triggered-only, so the flag is accepted but changes nothing, as in the
 // bare arm); a selected creature rides the creature funnel with the flag
 // honored.
-func (s *session) handleCmdCastSelf(ctx context.Context, args []string) {
+func (s *session) handleCmdCastSelf(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastSelf) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .cast self <spellId> [triggered]"
-	if len(args) < 2 || len(args) > 3 {
-		s.sendSysMessage(syntax)
-		return
+	if len(args) < 2 {
+		return false
 	}
 	// The framework parses the spell argument before the handler runs, so
 	// a nonexistent spell fails before the selection check (the 2026-11-03
@@ -2917,91 +2929,99 @@ func (s *session) handleCmdCastSelf(ctx context.Context, args []string) {
 	// whose IsSpellValid leg has no Go model).
 	spellID, ok := s.castCommandSpell(args[1])
 	if !ok {
-		return
+		return true
+	}
+	if len(args) > 3 {
+		return false
 	}
 	if s.selection == 0 {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
 	if !ok {
-		return
+		return false
 	}
 	if ts := s.lookupSelectedPlayer(); ts != nil {
 		ts.castSpellDirect(ctx, spellID, ts.playerGUID)
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	s.castCommandCreatureCast(ctx, motion, spellID, motion.GUID, triggered)
+	return true
 }
 
 // handleCmdCastBack wires HandleCastBackCommand (cs_cast.cpp): the selected
 // creature casts the spell on the invoking player.
-func (s *session) handleCmdCastBack(ctx context.Context, args []string) {
+func (s *session) handleCmdCastBack(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastBack) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .cast back <spellId> [triggered]"
-	if len(args) < 2 || len(args) > 3 {
-		s.sendSysMessage(syntax)
-		return
+	if len(args) < 2 {
+		return false
 	}
 	// Framework-first spell order, as in the self arm: a nonexistent spell
 	// fails before the handler's selection check.
 	spellID, ok := s.castCommandSpell(args[1])
 	if !ok {
-		return
+		return true
+	}
+	if len(args) > 3 {
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
 	if !ok {
-		return
+		return false
 	}
 	s.castCommandCreatureCast(ctx, motion, spellID, s.playerGUID, triggered)
+	return true
 }
 
 // handleCmdCastTarget wires HandleCastTargetCommad (cs_cast.cpp): the
 // selected creature casts the spell on its victim (motion.TargetGUID, the
 // threat-manager combat victim).
-func (s *session) handleCmdCastTarget(ctx context.Context, args []string) {
+func (s *session) handleCmdCastTarget(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastTarget) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .cast target <spellId> [triggered]"
-	if len(args) < 2 || len(args) > 3 {
-		s.sendSysMessage(syntax)
-		return
+	if len(args) < 2 {
+		return false
 	}
 	// Framework-first spell order, as in the self arm; the victim check
 	// keeps its handler-internal place after the selection check.
 	spellID, ok := s.castCommandSpell(args[1])
 	if !ok {
-		return
+		return true
+	}
+	if len(args) > 3 {
+		return false
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	if motion.TargetGUID == 0 {
 		s.sendSysMessage("The selected target has no victim.")
-		return
+		return true
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 2, syntax)
 	if !ok {
-		return
+		return false
 	}
 	s.castCommandCreatureCast(ctx, motion, spellID, motion.TargetGUID, triggered)
+	return true
 }
 
 // handleCmdCastDist wires HandleCastDistCommand (cs_cast.cpp): the player
@@ -3009,31 +3029,43 @@ func (s *session) handleCmdCastTarget(ctx context.Context, args []string) {
 // dist lands in the size slot (Object.cpp:3307-3311), so the point sits
 // combatReach + dist along the player's orientation at the player's z; the
 // UpdateAllowedPositionZ ground clamp and the LoS walk have no Go model
-// (transmittedClosePoint precedent).
-func (s *session) handleCmdCastDist(ctx context.Context, args []string) {
+// (transmittedClosePoint precedent). The triggered flag is validated but
+// the player funnel is triggered-only (castSpellDirectWithOverrides is
+// Go's Unit::CastSpell(id, triggered=true)), so a no-flag dist cast rides
+// the triggered path exactly like the bare arm; the TRIGGERED_NONE
+// normal-cast path is the documented triggered-only pipeline gap, not a
+// dist-specific dropped flag (audit D10 corrected).
+func (s *session) handleCmdCastDist(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastDist) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .cast dist <spellId> <dist> [triggered]"
-	if len(args) < 3 || len(args) > 4 {
-		s.sendSysMessage(syntax)
-		return
+	// The framework parses the spell and dist arguments before the
+	// handler runs: a garbage spell token reports before the missing-dist
+	// check, and a bad dist token reports the parse message.
+	if len(args) < 2 {
+		return false
 	}
 	spellID, ok := s.castCommandSpell(args[1])
 	if !ok {
-		return
+		return true
+	}
+	if len(args) < 3 {
+		return false
 	}
 	dist, err := strconv.ParseFloat(args[2], 32)
 	if err != nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
+	}
+	if len(args) > 4 {
+		return false
 	}
 	if _, ok := castCommandTriggeredArg(s, args, 3, syntax); !ok {
-		return
+		return false
 	}
 	if s.player == nil {
-		return
+		return true
 	}
 	offset := s.player.CombatReach + float32(dist)
 	dest := protocol.SpellTargetLocation{
@@ -3042,69 +3074,77 @@ func (s *session) handleCmdCastDist(ctx context.Context, args []string) {
 		Z: s.player.Z,
 	}
 	s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+	return true
 }
 
 // handleCmdCastDest wires HandleCastDestCommand (cs_cast.cpp): the selected
 // unit casts the spell at the given coordinates. A selected player rides
 // the player AoF funnel (triggered-only, flag accepted but ignored); a
 // selected creature rides the creature AoF leg with the flag honored.
-func (s *session) handleCmdCastDest(ctx context.Context, args []string) {
+func (s *session) handleCmdCastDest(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandCastDest) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	const syntax = "Syntax: .cast dest <spellId> <x> <y> <z> [triggered]"
-	if len(args) < 5 || len(args) > 6 {
-		s.sendSysMessage(syntax)
-		return
+	if len(args) < 2 {
+		return false
 	}
 	// Framework-first order, as in the self arm: the spell and the three
 	// coordinates are all parsed before the handler runs, so they fail
 	// before the selection check.
 	spellID, ok := s.castCommandSpell(args[1])
 	if !ok {
-		return
+		return true
+	}
+	if len(args) < 5 {
+		return false
 	}
 	coords := make([]float32, 3)
 	for i := 0; i < 3; i++ {
 		v, err := strconv.ParseFloat(args[2+i], 32)
 		if err != nil {
 			s.sendSysMessage(syntax)
-			return
+			return true
 		}
 		coords[i] = float32(v)
 	}
+	if len(args) > 6 {
+		return false
+	}
 	if s.selection == 0 {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	triggered, ok := castCommandTriggeredArg(s, args, 5, syntax)
 	if !ok {
-		return
+		return false
 	}
 	if ts := s.lookupSelectedPlayer(); ts != nil {
 		dest := protocol.SpellTargetLocation{X: coords[0], Y: coords[1], Z: coords[2]}
 		ts.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
 		s.sendSysMessage("Select a character or creature.")
-		return
+		return true
 	}
 	dest := [3]float32{coords[0], coords[1], coords[2]}
 	s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false)
+	return true
 }
 
 // blockedCommandArm gates a blocked command sub-arm on its RBAC permission (mirroring
 // the ChatCommandTable permission check, which runs before the handler body)
 // and reports the missing bridge honestly instead of stubbing the arm.
-func (s *session) blockedCommandArm(ctx context.Context, permissionID uint32, reason string) {
+// Denial is silent false: the C++ framework never invokes a denied leaf
+// (ChatCommand.cpp:481-488), so no notification is sent.
+func (s *session) blockedCommandArm(ctx context.Context, permissionID uint32, reason string) bool {
 	if !s.commandAllowed(ctx, permissionID) {
-		s.sendNotification("You do not have permission to use that command.")
-		return
+		return false
 	}
 	s.sendSysMessage(reason)
+	return true
 }
 
 // handleCmdAhbot dispatches ".ahbot items|ratio|rebuild|reload|status"
@@ -3113,8 +3153,10 @@ func (s *session) blockedCommandArm(ctx context.Context, permissionID uint32, re
 // SetItemsRatio[ForHouse], Rebuild, ReloadAllConfig, PrepareStatusInfos),
 // which has no Go model, so each arm is RBAC-gated on its own C++
 // permission and reports the missing bridge honestly instead of stubbing
-// the arm (blockedCommandArm pattern). The argument SHAPE is still validated
-// against the C++ typed dispatcher before the blocked message, because a
+// the arm (blockedCommandArm pattern). The RBAC permission is checked
+// BEFORE the shape (ChatCommandNode checks IsInvokerVisible before the
+// invoker parses its args); the shape is still validated against the C++
+// typed dispatcher before the blocked message, because a
 // malformed invocation never reaches the engine in C++: the bare items
 // handler takes a 7-element array and the bare ratio handler three uint32s,
 // so a bare arm with no numbers fails the parse (the array/uint32
@@ -3123,10 +3165,9 @@ func (s *session) blockedCommandArm(ctx context.Context, permissionID uint32, re
 // Optional<EXACT_SEQUENCE("all")> (case-insensitive per ChatCommandTags.h),
 // so any other trailing token fails the whole-string-consumed check
 // (ChatCommand.h ConsumeFromOffset) and the framework shows help.
-func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
+func (s *session) handleCmdAhbot(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
-		return
+		return false
 	}
 	const blocked = "ahbot is not supported: the auction house bot engine has no Go model."
 	switch strings.ToLower(args[0]) {
@@ -3137,47 +3178,60 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) {
 				for _, name := range matches {
 					s.sendSysMessage("  " + name)
 				}
-				return
+				return true
 			}
 		}
-		if !ahbotItemsShape(args) {
-			s.sendSysMessage("Syntax: .ahbot items [gray|white|green|blue|purple|orange|yellow]")
-			return
+		perm := ahbotItemsPerm(args)
+		if !s.commandAllowed(ctx, perm) {
+			return false
 		}
-		perm, _ := ahbotItemsPerm(args)
-		s.blockedCommandArm(ctx, perm, blocked)
-		return
+		if ok, msgLeg := ahbotItemsLeg(args); !ok {
+			if msgLeg {
+				s.sendSysMessage("Syntax: .ahbot items [gray|white|green|blue|purple|orange|yellow]")
+				return true
+			}
+			return false
+		}
+		return s.blockedCommandArm(ctx, perm, blocked)
 	case "ratio":
-		if !ahbotRatioShape(args) {
-			s.sendSysMessage("Syntax: .ahbot ratio [alliance|horde|neutral]")
-			return
+		perm := ahbotRatioPerm(args)
+		if !s.commandAllowed(ctx, perm) {
+			return false
 		}
-		perm, _ := ahbotRatioPerm(args)
-		s.blockedCommandArm(ctx, perm, blocked)
-		return
+		if ok, msgLeg := ahbotRatioLeg(args); !ok {
+			if msgLeg {
+				s.sendSysMessage("Syntax: .ahbot ratio [alliance|horde|neutral]")
+				return true
+			}
+			return false
+		}
+		return s.blockedCommandArm(ctx, perm, blocked)
 	case "rebuild":
-		if len(args) > 2 || (len(args) == 2 && !strings.EqualFold(args[1], "all")) {
-			s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
-			return
+		if !s.commandAllowed(ctx, permissionCommandAhbotRebuild) {
+			return false
 		}
-		s.blockedCommandArm(ctx, permissionCommandAhbotRebuild, blocked)
-		return
+		if len(args) > 2 || (len(args) == 2 && !strings.EqualFold(args[1], "all")) {
+			return false
+		}
+		return s.blockedCommandArm(ctx, permissionCommandAhbotRebuild, blocked)
 	case "reload":
+		if !s.commandAllowed(ctx, permissionCommandAhbotReload) {
+			return false
+		}
 		if len(args) > 1 {
-			s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
-			return
+			return false
 		}
-		s.blockedCommandArm(ctx, permissionCommandAhbotReload, blocked)
-		return
+		return s.blockedCommandArm(ctx, permissionCommandAhbotReload, blocked)
 	case "status":
-		if len(args) > 2 || (len(args) == 2 && !strings.EqualFold(args[1], "all")) {
-			s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
-			return
+		if !s.commandAllowed(ctx, permissionCommandAhbotStatus) {
+			return false
 		}
-		s.blockedCommandArm(ctx, permissionCommandAhbotStatus, blocked)
-		return
+		if len(args) > 2 || (len(args) == 2 && !strings.EqualFold(args[1], "all")) {
+			return false
+		}
+		return s.blockedCommandArm(ctx, permissionCommandAhbotStatus, blocked)
 	}
-	s.sendSysMessage("Syntax: .ahbot items|ratio|rebuild|reload|status")
+	return false
 }
 
 // parseCommandUint32 mirrors the C++ uint32 argument parse (StringTo<uint32>
@@ -3388,93 +3442,119 @@ func ahbotHouseToken(tok string) (string, bool) {
 	return match, true
 }
 
-// ahbotItemsShape reports whether args (starting with "items") match one of
-// the C++ items arms: quality + one uint32, or exactly seven uint32s for
-// the bare array arm. A bare arm with no numbers, a quality arm with a
-// missing/non-uint32 amount, and any other token count all fail the parse.
-func ahbotItemsShape(args []string) bool {
-	switch len(args) {
-	case 3:
-		_, ok := ahbotQualityToken(args[1])
-		return ok && ahbotUint32(args[2])
-	case 8:
-		for _, tok := range args[1:] {
-			if !ahbotUint32(tok) {
-				return false
+// ahbotItemsLeg classifies an items invocation the way the C++ typed
+// dispatcher does (ChatCommandArgs.h): (valid, messageLeg). A quality arm
+// takes exactly one uint32 amount; an unknown quality token falls through
+// to the bare array arm, which takes exactly seven uint32s. A non-uint32
+// token reports the framework parse message (messageLeg); a short array,
+// a missing amount, or trailing tokens fail silently.
+func ahbotItemsLeg(args []string) (bool, bool) {
+	if len(args) >= 2 {
+		if _, ok := ahbotQualityToken(args[1]); ok {
+			switch {
+			case len(args) == 2:
+				return false, false
+			case !ahbotUint32(args[2]):
+				return false, true
+			case len(args) > 3:
+				return false, false
+			default:
+				return true, false
 			}
 		}
-		return true
 	}
-	return false
+	nums := args[1:]
+	if len(nums) > 7 {
+		nums = nums[:7]
+	}
+	for _, tok := range nums {
+		if !ahbotUint32(tok) {
+			return false, true
+		}
+	}
+	if len(args)-1 != 7 {
+		return false, false
+	}
+	return true, false
 }
 
-// ahbotRatioShape is the ahbotItemsShape equivalent for ratio: house + one
+// ahbotRatioLeg is the ahbotItemsLeg equivalent for ratio: house + one
 // uint32, or exactly three uint32s for the bare arm.
-func ahbotRatioShape(args []string) bool {
-	switch len(args) {
-	case 3:
-		_, ok := ahbotHouseToken(args[1])
-		return ok && ahbotUint32(args[2])
-	case 4:
-		for _, tok := range args[1:] {
-			if !ahbotUint32(tok) {
-				return false
+func ahbotRatioLeg(args []string) (bool, bool) {
+	if len(args) >= 2 {
+		if _, ok := ahbotHouseToken(args[1]); ok {
+			switch {
+			case len(args) == 2:
+				return false, false
+			case !ahbotUint32(args[2]):
+				return false, true
+			case len(args) > 3:
+				return false, false
+			default:
+				return true, false
 			}
 		}
-		return true
 	}
-	return false
+	nums := args[1:]
+	if len(nums) > 3 {
+		nums = nums[:3]
+	}
+	for _, tok := range nums {
+		if !ahbotUint32(tok) {
+			return false, true
+		}
+	}
+	if len(args)-1 != 3 {
+		return false, false
+	}
+	return true, false
 }
 
 // ahbotItemsPerm mirrors the ahbotItemsAmountCommandTable permission ladder:
-// a quality sub-token picks its own permission, the bare row (including the
-// 7-number array form) uses the items permission. Callers validate the
-// shape first; an unknown token matches no C++ table row (syntax failure).
-func ahbotItemsPerm(args []string) (uint32, bool) {
-	if len(args) == 1 || len(args) == 8 {
-		return permissionCommandAhbotItems, true
+// a quality sub-token picks its own permission; anything else falls
+// through to the bare array handler, which carries the items permission
+// (an unknown token matches no quality row, so the "" entry handles it).
+func ahbotItemsPerm(args []string) uint32 {
+	if len(args) >= 2 {
+		if quality, ok := ahbotQualityToken(args[1]); ok {
+			switch quality {
+			case "gray":
+				return permissionCommandAhbotItemsGray
+			case "white":
+				return permissionCommandAhbotItemsWhite
+			case "green":
+				return permissionCommandAhbotItemsGreen
+			case "blue":
+				return permissionCommandAhbotItemsBlue
+			case "purple":
+				return permissionCommandAhbotItemsPurple
+			case "orange":
+				return permissionCommandAhbotItemsOrange
+			case "yellow":
+				return permissionCommandAhbotItemsYellow
+			}
+		}
 	}
-	quality, ok := ahbotQualityToken(args[1])
-	if !ok {
-		return 0, false
-	}
-	switch quality {
-	case "gray":
-		return permissionCommandAhbotItemsGray, true
-	case "white":
-		return permissionCommandAhbotItemsWhite, true
-	case "green":
-		return permissionCommandAhbotItemsGreen, true
-	case "blue":
-		return permissionCommandAhbotItemsBlue, true
-	case "purple":
-		return permissionCommandAhbotItemsPurple, true
-	case "orange":
-		return permissionCommandAhbotItemsOrange, true
-	case "yellow":
-		return permissionCommandAhbotItemsYellow, true
-	}
-	return 0, false
+	return permissionCommandAhbotItems
 }
 
-// ahbotRatioPerm mirrors the ahbotItemsRatioCommandTable permission ladder.
-func ahbotRatioPerm(args []string) (uint32, bool) {
-	if len(args) == 1 || len(args) == 4 {
-		return permissionCommandAhbotRatio, true
+// ahbotRatioPerm mirrors the ahbotItemsRatioCommandTable permission ladder:
+// a house sub-token picks its own permission; anything else falls through
+// to the bare triple handler, which carries the ratio permission.
+func ahbotRatioPerm(args []string) uint32 {
+	if len(args) >= 2 {
+		if house, ok := ahbotHouseToken(args[1]); ok {
+			switch house {
+			case "alliance":
+				return permissionCommandAhbotRatioAlliance
+			case "horde":
+				return permissionCommandAhbotRatioHorde
+			case "neutral":
+				return permissionCommandAhbotRatioNeutral
+			}
+		}
 	}
-	house, ok := ahbotHouseToken(args[1])
-	if !ok {
-		return 0, false
-	}
-	switch house {
-	case "alliance":
-		return permissionCommandAhbotRatioAlliance, true
-	case "horde":
-		return permissionCommandAhbotRatioHorde, true
-	case "neutral":
-		return permissionCommandAhbotRatioNeutral, true
-	}
-	return 0, false
+	return permissionCommandAhbotRatio
 }
 
 // handleCmdCharacter dispatches ".character customize|changefaction|changerace|
@@ -8698,7 +8778,7 @@ func (s *session) handleCmdUnBanCharacter(ctx context.Context, args []string) {
 // TrinityCore names; aliases mark non-prefix spellings.
 func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
-	root.addWithPerms("gm", func(ctx context.Context, args []string) bool { s.handleCmdGM(ctx, args); return true }, map[string]uint32{"chat": permissionCommandGMChat, "fly": permissionCommandGMFly, "ingame": permissionCommandGMIngame, "list": permissionCommandGMList, "visible": permissionCommandGMVisible, "on": permissionCommandGM, "off": permissionCommandGM}, map[string]string{"vis": "visible"})
+	root.addWithPerms("gm", func(ctx context.Context, args []string) bool { return s.handleCmdGM(ctx, args) }, map[string]uint32{"chat": permissionCommandGMChat, "fly": permissionCommandGMFly, "ingame": permissionCommandGMIngame, "list": permissionCommandGMList, "visible": permissionCommandGMVisible, "on": permissionCommandGM, "off": permissionCommandGM}, map[string]string{"vis": "visible"})
 	root.addWithPerms("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, map[string]uint32{"god": permissionCommandCheatGod, "casttime": permissionCommandCheatCasttime, "cooldown": permissionCommandCheatCooldown, "power": permissionCommandCheatPower, "waterwalk": permissionCommandCheatWaterwalk, "status": permissionCommandCheatStatus, "taxi": permissionCommandCheatTaxi, "explore": permissionCommandCheatExplore}, nil)
 	debugNode := root.addWithPerms("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, map[string]uint32{"areatriggers": permissionCommandDebug, "anim": permissionCommandDebug, "worldstate": permissionCommandDebug, "objectcount": permissionCommandDebug, "dummy": permissionCommandDebug, "neargraveyard": permissionCommandDebug, "lootrecipient": permissionCommandDebug, "instancespawn": permissionCommandDebug, "los": permissionCommandDebug, "play": permissionCommandDebug, "send": permissionCommandDebug, "threat": permissionCommandDebug, "threatinfo": permissionCommandDebug, "combat": permissionCommandDebug, "guidlimits": permissionCommandDebug, "wpgps": permissionCommandDebug, "transport": permissionCommandDebug, "arena": permissionCommandDebug, "bg": permissionCommandDebug, "questreset": permissionCommandDebug, "raidreset": permissionCommandDebug, "spawnvehicle": permissionCommandDebug, "entervehicle": permissionCommandDebug}, nil)
 	// R13 depth (cs_debug.cpp:63-82): "play" and "send" are
@@ -8803,7 +8883,7 @@ func (s *session) buildCommandTree() *commandNode {
 		return s.handleCmdModify(ctx, append([]string{"speed", "swim"}, args...))
 	}, permissionCommandModifySpeedSwim)
 	root.addWithPerms("additem", func(ctx context.Context, args []string) bool { return s.handleCmdAddItem(ctx, args) }, map[string]uint32{"set": permissionCommandAddItemSet}, nil).withPerm(permissionCommandAddItem)
-	root.addWithPerms("cast", func(ctx context.Context, args []string) bool { s.handleCmdCast(ctx, args); return true }, map[string]uint32{"back": permissionCommandCastBack, "dist": permissionCommandCastDist, "self": permissionCommandCastSelf, "target": permissionCommandCastTarget, "dest": permissionCommandCastDest}, nil).withPerm(permissionCommandCast)
+	root.addWithPerms("cast", func(ctx context.Context, args []string) bool { return s.handleCmdCast(ctx, args) }, map[string]uint32{"back": permissionCommandCastBack, "dist": permissionCommandCastDist, "self": permissionCommandCastSelf, "target": permissionCommandCastTarget, "dest": permissionCommandCastDest}, nil).withPerm(permissionCommandCast)
 	serverNode := root.addWithPerms("server", func(ctx context.Context, args []string) bool { return s.handleCmdServer(ctx, args) }, map[string]uint32{"corpses": permissionCommandServerCorpses, "debug": permissionCommandServerDebug, "exit": permissionCommandServerExit, "idlerestart": permissionCommandServerIdlerestart, "idleshutdown": permissionCommandServerIdleshutdown, "info": permissionCommandServerInfo, "motd": permissionCommandServerMotd, "plimit": permissionCommandServerPlimit, "restart": permissionCommandServerRestart, "shutdown": permissionCommandServerShutdown, "set": permissionCommandServerSet}, nil).withPerm(permissionCommandServer)
 	// R13 depth (cs_server.cpp:66-94): restart/shutdown/idlerestart/
 	// idleshutdown are sub-tables with cancel/force leaves and a ""
@@ -8913,7 +8993,7 @@ func (s *session) buildCommandTree() *commandNode {
 		return true
 	}, permissionCommandAccountLockCountry)
 	root.addWithPerms("achievement", func(ctx context.Context, args []string) bool { s.handleCmdAchievement(ctx, args); return true }, map[string]uint32{"add": permissionCommandAchievementAdd}, nil)
-	root.addWithPerms("ahbot", func(ctx context.Context, args []string) bool { s.handleCmdAhbot(ctx, args); return true }, map[string]uint32{"items": permissionCommandAhbotItems, "ratio": permissionCommandAhbotRatio, "rebuild": permissionCommandAhbotRebuild, "reload": permissionCommandAhbotReload, "status": permissionCommandAhbotStatus}, nil)
+	root.addWithPerms("ahbot", func(ctx context.Context, args []string) bool { return s.handleCmdAhbot(ctx, args) }, map[string]uint32{"items": permissionCommandAhbotItems, "ratio": permissionCommandAhbotRatio, "rebuild": permissionCommandAhbotRebuild, "reload": permissionCommandAhbotReload, "status": permissionCommandAhbotStatus}, nil)
 	root.addWithPerms("arena", func(ctx context.Context, args []string) bool { s.handleCmdArena(ctx, args); return true }, map[string]uint32{"create": permissionCommandArenaCreate, "disband": permissionCommandArenaDisband, "rename": permissionCommandArenaRename, "captain": permissionCommandArenaCaptain, "info": permissionCommandArenaInfo, "lookup": permissionCommandArenaLookup}, nil)
 	root.addWithPerms("ban", func(ctx context.Context, args []string) bool { s.handleCmdBan(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanAccount, "character": permissionCommandBanCharacter, "playeraccount": permissionCommandBanPlayerAccount, "ip": permissionCommandBanIP}, nil)
 	root.addWithPerms("baninfo", func(ctx context.Context, args []string) bool { s.handleCmdBanInfo(ctx, args); return true }, map[string]uint32{"account": permissionCommandBanInfoAccount, "character": permissionCommandBanInfoCharacter, "ip": permissionCommandBanInfoIP}, nil)
