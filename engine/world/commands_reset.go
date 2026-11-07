@@ -122,11 +122,16 @@ func (s *session) handleCmdReset(ctx context.Context, args []string) bool {
 		{"talents", permissionCommandResetTalents, s.handleResetTalents},
 		{"all", permissionCommandResetAll, s.handleResetAll},
 	}
-	names := make([]string, len(arms))
+	// Prefix-match over the invoker-visible arms only
+	// (FilteredCommandListIterator, ChatCommand.cpp:207-237): a prefix
+	// that matches several names but leaves one visible resolves to it,
+	// and names the invoker cannot see never surface as ambiguous.
+	visible := func(perm uint32) bool { return s.commandAllowed(ctx, perm) }
+	subs := make([]groupSubcommand, len(arms))
 	for i, arm := range arms {
-		names[i] = arm.name
+		subs[i] = groupSubcommand{arm.name, []uint32{arm.perm}}
 	}
-	sub, cands, ok := groupMatchName(args[0], names)
+	sub, cands, ok := groupMatchNameVisible(args[0], subs, visible)
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)

@@ -259,9 +259,19 @@ func (s *session) handleCmdInstance(ctx context.Context, args []string) bool {
 	deny := func(perm uint32) bool {
 		return !s.commandAllowed(ctx, perm)
 	}
-	// Subcommand names prefix-match (ChatCommand.cpp:261-288), like group:
-	// ".instance s" is ambiguous (stats/savedata/setbossstate), not stats.
-	sub, cands, ok := groupMatchName(args[0], []string{"listbinds", "unbind", "stats", "savedata", "setbossstate", "getbossstate"})
+	// Subcommand names prefix-match over the invoker-visible arms only
+	// (ChatCommand.cpp:261-288 + FilteredCommandListIterator :207-237),
+	// like group: ".instance s" is ambiguous (stats/savedata/setbossstate)
+	// only when several are visible, not stats.
+	visible := func(perm uint32) bool { return !deny(perm) }
+	sub, cands, ok := groupMatchNameVisible(args[0], []groupSubcommand{
+		{"listbinds", []uint32{permissionCommandInstanceListBinds}},
+		{"unbind", []uint32{permissionCommandInstanceUnbind}},
+		{"stats", []uint32{permissionCommandInstanceStats}},
+		{"savedata", []uint32{permissionCommandInstanceSaveData}},
+		{"setbossstate", []uint32{permissionCommandInstanceSetBossState}},
+		{"getbossstate", []uint32{permissionCommandInstanceGetBossState}},
+	}, visible)
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)
@@ -535,11 +545,14 @@ func (s *session) instanceBossStateTarget(args []string, playerIdx int) (*sessio
 // LANG_BAD_VALUE gate are all ported in C++ order, then the live
 // boss-state store takes the set and the LANG_COMMAND_INST_SET_BOSS_STATE
 // line prints unconditionally, as in C++ (the SetBossState return is
-// ignored there too). DELTAS: no encounter-count gate (Go has no per-script
-// boss count), negative states are rejected as Bad value (C++ would pass
-// one through to a wrapped enum), and the NO_INSTANCE_DATA gate is vacuous
-// (Go instances always carry the store; the dungeon gate above is the live
-// check). The message wording is a plain-English recall (LANG text is TDB).
+// ignored there too). A negative state passes the gate like C++ (the
+// check is `state > TO_BE_DECIDED` only, cs_instance.cpp:256): it wraps
+// to the uint8 enum, and the name prints INVALID via encounterStateName,
+// exactly as GetBossStateName does for the wrapped value. DELTAS: no
+// encounter-count gate (Go has no per-script boss count; the table is a
+// census job, D41) and the NO_INSTANCE_DATA gate is vacuous (Go instances
+// always carry the store; the dungeon gate above is the live check, D40).
+// The message wording is a plain-English recall (LANG text is TDB).
 func (s *session) handleInstanceSetBossState(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .instance setbossstate <encounter> <state> [player]"
 	if len(args) == 0 {
@@ -560,7 +573,10 @@ func (s *session) handleInstanceSetBossState(ctx context.Context, args []string)
 	}
 	encounterID := uint32(cAtoi(args[0]))
 	state := cAtoi(args[1])
-	if state < 0 || state > int(encounterStateToBeDecided) {
+	// C++ rejects only state > TO_BE_DECIDED (cs_instance.cpp:256); a
+	// negative state passes and wraps into the EncounterState enum, so
+	// it is set (uint8(state)) and reported INVALID, not Bad value.
+	if state > int(encounterStateToBeDecided) {
 		s.sendSysMessage("Bad value.")
 		return true
 	}

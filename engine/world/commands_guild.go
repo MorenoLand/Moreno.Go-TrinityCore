@@ -20,9 +20,9 @@
 // the empty and >24-char rejects only; guild ids come from
 // MAX(guildid)+1 instead of GuildMgr's in-memory NextGuildId; the
 // sScriptMgr OnGuild* hooks have no Go script bridge (consistent with the
-// rest of the tree). Unterminated quotes are a shared-helper deviation:
-// C++ strtok-based extractQuotedArg accepts them, but splitQuotedArgs
-// returns nil, so the Go arms print syntax instead.
+// rest of the tree). Unterminated quotes are accepted like the C++
+// strtok-based extractQuotedArg: the arms re-split with
+// splitQuotedArgsLenient, so `"My Guild` yields the name `My Guild`.
 package world
 
 import (
@@ -50,9 +50,20 @@ func (s *session) handleCmdGuild(ctx context.Context, args []string) bool {
 	deny := func(perm uint32) bool {
 		return !s.commandAllowed(ctx, perm)
 	}
-	// Subcommand names prefix-match (ChatCommand.cpp:261-288), like group:
-	// ".guild c" reaches create, ".guild i" is ambiguous (invite/info).
-	sub, cands, ok := groupMatchName(args[0], []string{"create", "delete", "invite", "uninvite", "rank", "rename", "info"})
+	// Subcommand names prefix-match over the invoker-visible arms only
+	// (ChatCommand.cpp:261-288 + FilteredCommandListIterator :207-237),
+	// like group: ".guild c" reaches create, ".guild i" is ambiguous
+	// (invite/info) only when both are visible.
+	visible := func(perm uint32) bool { return !deny(perm) }
+	sub, cands, ok := groupMatchNameVisible(args[0], []groupSubcommand{
+		{"create", []uint32{permissionCommandGuildCreate}},
+		{"delete", []uint32{permissionCommandGuildDelete}},
+		{"invite", []uint32{permissionCommandGuildInvite}},
+		{"uninvite", []uint32{permissionCommandGuildUninvite}},
+		{"rank", []uint32{permissionCommandGuildRank}},
+		{"rename", []uint32{permissionCommandGuildRename}},
+		{"info", []uint32{permissionCommandGuildInfo}},
+	}, visible)
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)
@@ -302,7 +313,7 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) b
 	if cdb == nil {
 		return true
 	}
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	if len(toks) == 0 {
 		return false
 	}
@@ -396,7 +407,7 @@ func (s *session) handleGuildDeleteCommand(ctx context.Context, args []string) b
 	if cdb == nil {
 		return true
 	}
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	if len(toks) == 0 {
 		return false
 	}
@@ -423,7 +434,7 @@ func (s *session) handleGuildInviteCommand(ctx context.Context, args []string) b
 	if cdb == nil {
 		return true
 	}
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	if len(toks) == 0 {
 		return false
 	}
@@ -487,7 +498,7 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 	// self (Chat.cpp:657).
 	target := s.guildSelectionOrSelf()
 	var guid uint64
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	if len(toks) > 0 {
 		name := normalizePlayerName(extractPlayerNameFromLink(unquoteCommandToken(toks[0])))
 		if ts := s.server.findSessionByName(name); ts != nil && ts.player != nil {
@@ -500,11 +511,6 @@ func (s *session) handleGuildUninviteCommand(ctx context.Context, args []string)
 				return true
 			}
 		}
-	} else if len(args) > 0 {
-		// splitQuotedArgs returned nil: unterminated quoted name, which
-		// the C++ PlayerIdentifier parse rejects outright.
-		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return true
 	} else if target.player != nil {
 		guid = target.playerGUID
 	}
@@ -536,7 +542,7 @@ func (s *session) handleGuildRankCommand(ctx context.Context, args []string) boo
 		return true
 	}
 	const syntax = "Syntax: .guild rank [<player>] <rank>"
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	// The C++ handler is framework-parsed (Optional<PlayerIdentifier>,
 	// uint8), so the whole string must be consumed (ChatCommand.h:112):
 	// trailing tokens fail the parse.
@@ -656,7 +662,7 @@ func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) b
 	if cdb == nil {
 		return true
 	}
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	if len(toks) < 1 {
 		// No args at all: the C++ handler returns false with no message
 		// and the framework shows the command help.

@@ -39,17 +39,58 @@ const (
 // from the candidates) is not modeled: permission is checked on the leaf
 // after the match, per the tree's deny convention.
 func groupMatchName(token string, names []string) (string, []string, bool) {
+	cands := make([]groupSubcommand, 0, len(names))
+	for _, n := range names {
+		cands = append(cands, groupSubcommand{name: n})
+	}
+	return groupMatchNameVisible(token, cands, nil)
+}
+
+// groupSubcommand pairs a prefix-matchable subcommand name with the RBAC
+// permissions that make it visible (ChatCommandNode::IsVisible,
+// ChatCommand.h:200: invoker-visible, or any visible subcommand). A
+// container entry carries its own permission plus every descendant leaf
+// permission, so "set" stays visible when any of its arms is; a leaf
+// carries just its own. An entry with no permissions counts as visible,
+// like a perm-0 tree node (commandNodeVisible).
+type groupSubcommand struct {
+	name  string
+	perms []uint32
+}
+
+// groupMatchNameVisible mirrors groupMatchName over the invoker-visible
+// candidates only (FilteredCommandListIterator, ChatCommand.cpp:207-237):
+// a prefix that matches several names but leaves one visible resolves to
+// it, and names the invoker cannot see never surface as ambiguous
+// candidates. A nil visible predicate matches everything. The framework
+// resolve() already filters the first subcommand token this way; this
+// covers the paths that reach the handlers raw — a token with no visible
+// match, and the nested group-set / rbac-account levels, which resolve()
+// never descends into.
+func groupMatchNameVisible(token string, cands []groupSubcommand, visible func(perm uint32) bool) (string, []string, bool) {
 	token = strings.ToLower(token)
 	if token == "" {
 		return "", nil, false
 	}
 	var matches []string
-	for _, n := range names {
-		if n == token {
-			return n, nil, true
+	for _, c := range cands {
+		if visible != nil {
+			seen := len(c.perms) == 0
+			for _, perm := range c.perms {
+				if visible(perm) {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				continue
+			}
 		}
-		if strings.HasPrefix(n, token) {
-			matches = append(matches, n)
+		if c.name == token {
+			return c.name, nil, true
+		}
+		if strings.HasPrefix(c.name, token) {
+			matches = append(matches, c.name)
 		}
 	}
 	if len(matches) == 1 {
@@ -77,9 +118,23 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) bool {
 	deny := func(perm uint32) bool {
 		return !s.commandAllowed(ctx, perm)
 	}
-	// Subcommand names prefix-match (ChatCommand.cpp:261-288): ".group lea"
-	// reaches leader, ".group s" is ambiguous (set/summon) and lists both.
-	sub, cands, ok := groupMatchName(args[0], []string{"set", "leader", "disband", "remove", "join", "list", "summon"})
+	// Subcommand names prefix-match over the invoker-visible arms only
+	// (ChatCommand.cpp:261-288 + FilteredCommandListIterator :207-237):
+	// ".group lea" reaches leader, ".group s" is ambiguous (set/summon)
+	// only when both are visible, and resolves uniquely to "set" for a GM
+	// without GROUP_SUMMON. The "set" entry carries its own permission
+	// plus every set-arm permission (IsVisible ORs the container perm
+	// with its visible subcommands, ChatCommand.h:200).
+	visible := func(perm uint32) bool { return !deny(perm) }
+	sub, cands, ok := groupMatchNameVisible(args[0], []groupSubcommand{
+		{"set", []uint32{permissionCommandGroupSet, permissionCommandGroupLeader, permissionCommandGroupAssistant, permissionCommandGroupMainTank, permissionCommandGroupMainAssist}},
+		{"leader", []uint32{permissionCommandGroupLeader}},
+		{"disband", []uint32{permissionCommandGroupDisband}},
+		{"remove", []uint32{permissionCommandGroupRemove}},
+		{"join", []uint32{permissionCommandGroupJoin}},
+		{"list", []uint32{permissionCommandGroupList}},
+		{"summon", []uint32{permissionCommandGroupSummon}},
+	}, visible)
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)
@@ -99,7 +154,14 @@ func (s *session) handleCmdGroup(ctx context.Context, args []string) bool {
 		}
 		// ".group set main" is ambiguous (maintank/mainassist), not
 		// maintank: the old HasPrefix-first-match silently picked one.
-		setSub, setCands, setOK := groupMatchName(args[1], []string{"leader", "assistant", "maintank", "mainassist"})
+		// The nested level is matched here, not by the framework
+		// resolve(), so it filters by visibility the same way.
+		setSub, setCands, setOK := groupMatchNameVisible(args[1], []groupSubcommand{
+			{"leader", []uint32{permissionCommandGroupLeader}},
+			{"assistant", []uint32{permissionCommandGroupAssistant}},
+			{"maintank", []uint32{permissionCommandGroupMainTank}},
+			{"mainassist", []uint32{permissionCommandGroupMainAssist}},
+		}, visible)
 		if !setOK {
 			if len(setCands) > 1 {
 				s.groupAmbiguousMessage(args[1], setCands)

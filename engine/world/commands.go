@@ -5980,6 +5980,20 @@ func (s *session) commandAllowed(ctx context.Context, permissionID uint32) bool 
 // when a quoted segment is never closed: C++ rejects the unterminated
 // QuotedString parse outright.
 func splitQuotedArgs(args []string) []string {
+	return splitQuotedArgsMode(args, false)
+}
+
+// splitQuotedArgsLenient mirrors splitQuotedArgs but keeps an unterminated
+// quoted segment as its final token instead of rejecting the line:
+// ChatHandler::extractQuotedArg (Chat.cpp:714-744) is strtok-based and runs
+// an unterminated quote to end-of-string, so the guild create/delete/invite/
+// rename arms and the send mail/items subject/text args accept it. The
+// framework QuotedString args (arena create/rename) keep the strict form.
+func splitQuotedArgsLenient(args []string) []string {
+	return splitQuotedArgsMode(args, true)
+}
+
+func splitQuotedArgsMode(args []string, lenient bool) []string {
 	line := strings.Join(args, " ")
 	var toks []string
 	var cur strings.Builder
@@ -6014,7 +6028,7 @@ func splitQuotedArgs(args []string) []string {
 		}
 		cur.WriteByte(c)
 	}
-	if quote != 0 {
+	if quote != 0 && !lenient {
 		return nil
 	}
 	if cur.Len() > 0 {

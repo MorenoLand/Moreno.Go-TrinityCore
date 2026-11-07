@@ -303,7 +303,16 @@ func (s *session) handleCmdRBAC(ctx context.Context, args []string) bool {
 		s.sendSysMessage("You must be in game to use that command.")
 		return true
 	}
-	sub, cands, ok := groupMatchName(args[0], []string{"account", "list"})
+	// Prefix-match over the invoker-visible arms only
+	// (FilteredCommandListIterator, ChatCommand.cpp:207-237). The
+	// "account" container carries its own permission plus every
+	// account-arm permission (IsVisible ORs the container perm with
+	// its visible subcommands, ChatCommand.h:200).
+	visible := func(perm uint32) bool { return s.commandAllowed(ctx, perm) }
+	sub, cands, ok := groupMatchNameVisible(args[0], []groupSubcommand{
+		{"account", []uint32{permissionCommandRBACAcc, permissionCommandRBACAccPermList, permissionCommandRBACAccPermGrant, permissionCommandRBACAccPermDeny, permissionCommandRBACAccPermRevoke}},
+		{"list", []uint32{permissionCommandRBACList}},
+	}, visible)
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)
@@ -316,7 +325,14 @@ func (s *session) handleCmdRBAC(ctx context.Context, args []string) bool {
 		if len(args) < 2 {
 			return false
 		}
-		lvl, lvlCands, lvlOK := groupMatchName(args[1], []string{"list", "grant", "deny", "revoke"})
+		// The nested account level is matched here, not by the
+		// framework resolve(), so it filters by visibility the same way.
+		lvl, lvlCands, lvlOK := groupMatchNameVisible(args[1], []groupSubcommand{
+			{"list", []uint32{permissionCommandRBACAccPermList}},
+			{"grant", []uint32{permissionCommandRBACAccPermGrant}},
+			{"deny", []uint32{permissionCommandRBACAccPermDeny}},
+			{"revoke", []uint32{permissionCommandRBACAccPermRevoke}},
+		}, visible)
 		if !lvlOK {
 			if len(lvlCands) > 1 {
 				s.groupAmbiguousMessage(args[1], lvlCands)

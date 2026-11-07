@@ -74,9 +74,18 @@ func (s *session) handleCmdMMap(ctx context.Context, args []string) bool {
 		return true
 	}
 	// The Trinity parser prefix-matches command names at every nesting
-	// level; match the arm the same way here. ".mmap l" / ".mmap lo" are
-	// ambiguous (loadedtiles/loc) and list both, like C++.
-	sub, cands, ok := groupMatchName(args[0], []string{"loadedtiles", "loc", "path", "stats", "testarea"})
+	// level; match the arm the same way here, over the invoker-visible
+	// arms only (FilteredCommandListIterator, ChatCommand.cpp:207-237).
+	// ".mmap l" / ".mmap lo" are ambiguous (loadedtiles/loc) and list
+	// both, like C++, when both are visible.
+	visible := func(perm uint32) bool { return s.commandAllowed(ctx, perm) }
+	sub, cands, ok := groupMatchNameVisible(args[0], []groupSubcommand{
+		{"loadedtiles", []uint32{permissionCommandMMapLoadedTiles}},
+		{"loc", []uint32{permissionCommandMMapLoc}},
+		{"path", []uint32{permissionCommandMMapPath}},
+		{"stats", []uint32{permissionCommandMMapStats}},
+		{"testarea", []uint32{permissionCommandMMapTestArea}},
+	}, visible)
 	if !ok {
 		if len(cands) > 1 {
 			s.groupAmbiguousMessage(args[0], cands)

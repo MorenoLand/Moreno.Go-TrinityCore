@@ -117,9 +117,12 @@ func sendQuotedArg(tok string) (string, bool) {
 	return rest, true
 }
 
-// sendMailArgs parses: name "subject text" "mail text" [rest...].
+// sendMailArgs parses: name "subject text" "mail text" [rest...]. The
+// subject/text come from ChatHandler::extractQuotedArg (cs_send.cpp:70/78),
+// so an unterminated quote runs to end-of-string: the lenient splitter,
+// not the strict framework one.
 func sendMailArgs(args []string) (name, subject, text string, rest []string, ok bool) {
-	toks := splitQuotedArgs(args)
+	toks := splitQuotedArgsLenient(args)
 	if len(toks) < 3 {
 		return "", "", "", nil, false
 	}
