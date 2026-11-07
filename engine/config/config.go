@@ -158,6 +158,12 @@ type Config struct {
 	DeathSicknessLevel                      uint32
 	DeathBonesWorld                         bool
 	DeathBonesBattleground                  bool
+	RespawnDynamicMode                      int // Respawn.DynamicMode (World.cpp:1319)
+	RespawnDynamicEscortNPC                 bool
+	RespawnDynamicRateCreature              float64
+	RespawnDynamicMinimumCreature           int
+	RespawnDynamicRateGameObject            float64
+	RespawnDynamicMinimumGameObject         int
 	DurabilityLossInPvP                     bool
 	DurabilityLossOnDeath                   float64
 	ResetDuelCooldowns                      bool
@@ -413,6 +419,12 @@ func Default() Config {
 	c.AutoBalance.DebugLevel = 2
 	c.AutoBalance.PlayerChangeNotify = true
 	c.AutoBalance.MinHPModifier = 0.1
+	// Respawn.Dynamic* defaults (World.cpp:1319-1357): mode 0 (off) and
+	// escort off are the zero values; rates/minimums default to 10.
+	c.RespawnDynamicRateCreature = 10
+	c.RespawnDynamicMinimumCreature = 10
+	c.RespawnDynamicRateGameObject = 10
+	c.RespawnDynamicMinimumGameObject = 10
 	c.AutoBalance.MinManaModifier = 0.1
 	c.AutoBalance.MinDamageModifier = 0.1
 	c.AutoBalance.GlobalRate = 1
@@ -456,6 +468,17 @@ func Load(path string) (Config, error) {
 	}
 	if c.MinDiscoveredScaledXpRatio > 100 {
 		c.MinDiscoveredScaledXpRatio = 0
+	}
+	// World.cpp:1319-1357: an out-of-range dynamic mode disables the
+	// feature; a negative rate falls back to 10.
+	if c.RespawnDynamicMode > 1 {
+		c.RespawnDynamicMode = 0
+	}
+	if c.RespawnDynamicRateCreature < 0 {
+		c.RespawnDynamicRateCreature = 10
+	}
+	if c.RespawnDynamicRateGameObject < 0 {
+		c.RespawnDynamicRateGameObject = 10
 	}
 	c.finalizeAutoBalance()
 	return c, nil
@@ -1244,6 +1267,18 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.DeathBonesWorld, key, value)
 	case "Death.Bones.BattlegroundOrArena":
 		return setBool(&c.DeathBonesBattleground, key, value)
+	case "Respawn.DynamicMode":
+		return setInt(&c.RespawnDynamicMode, key, value)
+	case "Respawn.DynamicEscortNPC":
+		return setBool(&c.RespawnDynamicEscortNPC, key, value)
+	case "Respawn.DynamicRateCreature":
+		return setFloat64(&c.RespawnDynamicRateCreature, key, value)
+	case "Respawn.DynamicMinimumCreature":
+		return setInt(&c.RespawnDynamicMinimumCreature, key, value)
+	case "Respawn.DynamicRateGameObject":
+		return setFloat64(&c.RespawnDynamicRateGameObject, key, value)
+	case "Respawn.DynamicMinimumGameObject":
+		return setInt(&c.RespawnDynamicMinimumGameObject, key, value)
 	case "DurabilityLoss.InPvP":
 		return setBool(&c.DurabilityLossInPvP, key, value)
 	case "DurabilityLoss.OnDeath":

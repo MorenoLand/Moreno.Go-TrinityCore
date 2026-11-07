@@ -1008,11 +1008,27 @@ type scriptProcCast struct {
 	bp0Set     bool
 }
 
+// procActionTargetGUID mirrors ProcEventInfo::GetActionTarget
+// (Unit.h:473): the actor-side event's action target is the other unit
+// (Unit.cpp:10388: actor=this, actionTarget=other, procTarget=other),
+// the target-side event's action target is the aura holder itself
+// (Unit.cpp:10412: actor=attacker, actionTarget=holder, procTarget=
+// attacker). The side is the event actor: actorGUID == holderGUID is the
+// actor-side event; anything else is the target-side event. The loops
+// pass triggerTargetGUID as the other unit on both sides, so it is the
+// action target exactly on the actor side.
+func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint64 {
+	if actorGUID != 0 && actorGUID == holderGUID {
+		return triggerTargetGUID
+	}
+	return holderGUID
+}
+
 // scriptAuraProcCast resolves the script arm for a dummy proc effect.
 // C++ owners: spell_deathwhisper_vampiric_might::HandleProc
 // (boss_lady_deathwhisper.cpp:1019-1032),
 // spell_gen_vampiric_touch::HandleProc (spell_generic.cpp:3479-3495), and
-// spell_uk_second_wind::HandleProc (utgarde_keep.cpp:236-263).
+// spell_uk_second_wind::HandleProc (utgarde_keep.cpp:198-240).
 // A zero-damage event fires nothing for the first two (the C++ early
 // return); the effect index gates to the registered effect (70674
 // EFFECT_1, 52723/60501 EFFECT_0, 42770 EFFECT_0) so sibling dummy
@@ -1021,8 +1037,13 @@ type scriptProcCast struct {
 // mechanic mask), so its case bypasses the damage gate; its trigger
 // spell rides DBC base points (the C++ aurEff overload marks the cast
 // aura-triggered only), so bp0Set stays false and no base-point
-// override is applied.
-func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID uint64, triggerSpell *wotlk.Spell) (scriptProcCast, bool) {
+// override is applied. Second Wind and Vampiric Touch cast from the
+// proc ACTOR (eventInfo.GetActor / the damage dealer); Second Wind's
+// target is the ACTION TARGET, which the caller passes as
+// triggerTargetGUID — on a taken event that is the holder, on a done
+// event (a root/stun the holder cast, e.g. Charge) it is the enemy, and
+// the C++ cast lands on the enemy (utgarde_keep.cpp:225-227).
+func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID, triggerTargetGUID uint64, triggerSpell *wotlk.Spell) (scriptProcCast, bool) {
 	if effAura != spellAuraDummy {
 		return scriptProcCast{}, false
 	}
@@ -1050,7 +1071,11 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 		if mechanicMask&((uint32(1)<<7)|(uint32(1)<<12)) == 0 { // MECHANIC_ROOT, MECHANIC_STUN (SharedDefines.h:1364,1369)
 			return scriptProcCast{}, false
 		}
-		return scriptProcCast{spellID: 42771, casterGUID: holderGUID, targetGUID: holderGUID}, true
+		actionTarget := procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID)
+		if actionTarget == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 42771, casterGUID: actionTarget, targetGUID: actionTarget}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -3144,7 +3169,7 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, ev.eventSpell); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
 					continue
 				}
@@ -3171,6 +3196,17 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 			if eff.TriggerSpell == 0 {
 				// C++ HandleProcTriggerSpellAuraProc warns and returns when
 				// the effect carries no triggered spell (SpellAuraEffects.cpp:5654-5661).
+				continue
+			}
+			if auraSpell.ID == 71770 {
+				// spell_putricide_ooze_tank_protection::HandleProc
+				// (boss_professor_putricide.cpp:1017-1040): PreventDefaultAction
+				// + the ACTION TARGET casts the DBC trigger spell on null
+				// (self). The generic arm below would cast from the holder
+				// onto the proc target instead.
+				if actionTarget := procActionTargetGUID(ev.actorGUID, s.playerGUID, triggerTargetGUID); actionTarget != 0 {
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: eff.TriggerSpell, casterGUID: actionTarget, targetGUID: actionTarget})
+				}
 				continue
 			}
 			if eff.Aura == spellAuraProcTriggerSpell && eff.TriggerSpell == triggerReplenishLifeSpell && auraSpell.ID == spellVampiricAura {

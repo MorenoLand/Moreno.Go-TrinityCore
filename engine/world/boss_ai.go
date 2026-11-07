@@ -9979,7 +9979,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, ev.eventSpell); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)
 					continue
 				}
@@ -9992,6 +9992,17 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				// C++ HandleProcTriggerSpellAuraProc warns and returns when
 				// the effect carries no triggered spell
 				// (SpellAuraEffects.cpp:5654-5661).
+				continue
+			}
+			if auraSpell.ID == 71770 {
+				// spell_putricide_ooze_tank_protection::HandleProc
+				// (boss_professor_putricide.cpp:1017-1040): PreventDefaultAction
+				// + the ACTION TARGET casts the DBC trigger spell on null
+				// (self). The generic arm below would cast from the holder
+				// onto the proc target instead.
+				if actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID); actionTarget != 0 {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: eff.TriggerSpell, casterGUID: actionTarget, targetGUID: actionTarget})
+				}
 				continue
 			}
 			if eff.Aura == spellAuraProcTriggerSpellWithValue {

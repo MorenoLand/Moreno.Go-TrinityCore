@@ -1279,12 +1279,18 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				killerGUID = killer.GUID
 			}
 			if creatureType != creatureTypeCritter {
+				// Unit::ProcSkillsAndAuras(attacker, victim, PROC_FLAG_KILL,
+				// PROC_FLAG_KILLED, ...) (Unit.cpp:11287): the KILLED
+				// event's actor is the killer, not the victim — the
+				// victim-GUID actor here misrouted the proc actor leg
+				// (scriptAuraProcCast's 52723 caster) and the action-target
+				// side test on every KILLED evaluation.
 				s.server.fireCreatureAuraProcLoop(ctx, victim, killerGUID, procEventInfo{
 					typeMask:       procFlagKilled,
 					spellTypeMask:  procSpellTypeMaskAll,
 					spellPhaseMask: procSpellPhaseNone,
 					hitMask:        procHitNone,
-					actorGUID:      victim.GUID,
+					actorGUID:      killerGUID,
 				})
 			}
 			s.server.fireCreatureAuraProcLoop(ctx, victim, target.GUID, procEventInfo{
@@ -2055,6 +2061,80 @@ func (s *session) grantXPWithVictimGroup(ctx context.Context, amount uint32, vic
 	grantPetXP()
 }
 
+// spawnGroupCompatModeFor resolves Creature::m_respawnCompatibilityMode
+// (Creature.cpp:1705): the spawn's group carries SPAWNGROUP_FLAG_
+// COMPATIBILITY_MODE (SpawnData.h:50). Unlisted spawns are group 0 (no
+// compat flag); a load failure fails open to non-compat, matching the
+// spawn-group cache's degrade path.
+func (s *Server) spawnGroupCompatModeFor(ctx context.Context, spawnType uint8, spawnID, mapID, instanceID uint32) bool {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return false
+	}
+	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnType, spawnID, mapID, instanceID)
+	return ok && tmpl != nil && tmpl.Flags&spawnGroupFlagCompat != 0
+}
+
+// dynamicRespawnScalingDelay is the arithmetic core of Map::
+// ApplyDynamicModeRespawnScaling (Map.cpp:3333-3361): the delay scales
+// down by rate/playerCount, floored at the configured minimum, and only
+// when there is actually someone to scale for. A zero count, a factor at
+// or above 1, or a delay already at/below the minimum all leave the delay
+// untouched, in C++ order.
+func dynamicRespawnScalingDelay(delay uint32, rate float64, minimum uint32, playerCount uint32) uint32 {
+	if playerCount == 0 || rate <= 0 {
+		return delay
+	}
+	adjustFactor := rate / float64(playerCount)
+	if adjustFactor >= 1.0 {
+		return delay
+	}
+	if delay <= minimum {
+		return delay
+	}
+	scaled := uint32(math.Ceil(float64(delay) * adjustFactor))
+	if scaled < minimum {
+		return minimum
+	}
+	return scaled
+}
+
+// dynamicModeRespawnDelay mirrors Map::ApplyDynamicModeRespawnScaling
+// (Map.cpp:3333-3361) for creatures: it runs only when Respawn.
+// DynamicMode is 1 (World.cpp:1319, default 0), never on battleground or
+// arena maps, and only for spawns whose group carries SPAWNGROUP_FLAG_
+// DYNAMIC_SPAWN_RATE. The zone player count is the live session count on
+// this (map, instance, zone) — the Go twin of Map::_zonePlayerCountMap
+// (Map.cpp:760-764, maintained on every player zone change); the
+// creature's zone comes from its spawn position via zoneAndAreaID. The
+// gameobject leg has no call site: Go tracks no gameobject respawns
+// (spawn_groups.go). The count runs only on the flagged+enabled path, so
+// the default-off mode costs nothing per kill.
+func (s *Server) dynamicModeRespawnDelay(ctx context.Context, mapID, instanceID, spawnID uint32, x, y, z float32, delay uint32) uint32 {
+	if s == nil || s.Config.RespawnDynamicMode != 1 || isBattlegroundMap(mapID) {
+		return delay
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return delay
+	}
+	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnTypeCreature, spawnID, mapID, instanceID)
+	if !ok || tmpl == nil || tmpl.Flags&spawnGroupFlagDynamicSpawnRate == 0 {
+		return delay
+	}
+	zoneID, _ := s.zoneAndAreaID(mapID, x, y, z, 0)
+	if zoneID == 0 {
+		return delay
+	}
+	var playerCount uint32
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID && sess.player.Zone == zoneID {
+			playerCount++
+		}
+	}
+	s.sessionsMu.RUnlock()
+	return dynamicRespawnScalingDelay(delay, s.Config.RespawnDynamicRateCreature, uint32(s.Config.RespawnDynamicMinimumCreature), playerCount)
+}
+
 // scheduleCreatureRespawn stores spawn health to restore after
 // creature.spawntimesecs like Map::AddToActiveMap respawn handling.
 func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint32, now time.Time) {
@@ -2091,6 +2171,11 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	if seconds <= 0 {
 		seconds = 300
 	}
+	// Map::ApplyDynamicModeRespawnScaling (Map.cpp:3333): the scaling
+	// runs on the effective delay — after the SetRespawnDelay override
+	// above and the 300s default. C++ scales m_respawnDelay, which the
+	// override already replaced; a 0 delay scales to itself.
+	seconds = int64(s.dynamicModeRespawnDelay(ctx, uint32(mapID), 0, guid, float32(x), float32(y), float32(z), uint32(seconds)))
 	// Creature::RemoveCorpse (Creature.cpp:393/429) is the sole
 	// CREATURE_EVENT_ON_CORPSE_REMOVED (26) fire site; it now fires from
 	// processCreatureCorpseRemovals at removal time, not here. The
@@ -2108,8 +2193,18 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 		motion.PreDeathLooted = false
 		s.motionMu.Unlock()
 	}
+	// Creature::setDeathState JUST_DIED (Creature.cpp:2077-2093): a
+	// compatibility-mode spawn respawns at death + delay + corpse delay;
+	// a normal spawn at death + delay. The pre-death-looted push below
+	// can only shorten the compat time to corpseRemoveAt + delay, which
+	// is still earlier than death + delay + corpseDelay, so the compat
+	// time stands — the C++ RemoveCorpse max() arm (Creature.cpp:429).
+	compat := s.spawnGroupCompatModeFor(ctx, spawnTypeCreature, guid, uint32(mapID), 0)
 	corpseRemoveAt := now.Add(time.Duration(corpseDelay) * time.Second)
 	respawnAt := now.Add(time.Duration(seconds) * time.Second)
+	if compat {
+		respawnAt = respawnAt.Add(time.Duration(corpseDelay) * time.Second)
+	}
 	if preDeathLooted {
 		corpseRemoveAt = now.Add(time.Duration(corpseDelay/2) * time.Second)
 		if pushed := corpseRemoveAt.Add(time.Duration(seconds) * time.Second); pushed.After(respawnAt) {
@@ -2185,6 +2280,8 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if seconds <= 0 {
 		seconds = 300
 	}
+	// Map::ApplyDynamicModeRespawnScaling, same as the world path above.
+	seconds = int64(s.dynamicModeRespawnDelay(ctx, target.Map, target.InstanceID, guid, float32(x), float32(y), float32(z), uint32(seconds)))
 	// Corpse-removed hook and DealDamage pickpocket arm: same as the
 	// world path above (Creature::RemoveCorpse; Unit.cpp:11376-11381).
 	corpseDelay := s.creatureCorpseDelaySeconds(ctx, uint32(spawnEntry))
@@ -2195,8 +2292,14 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 		motion.PreDeathLooted = false
 		s.motionMu.Unlock()
 	}
+	// Compatibility-mode respawn time, same as the world path above
+	// (Creature.cpp:2077-2093): death + delay + corpse delay.
+	compat := s.spawnGroupCompatModeFor(ctx, spawnTypeCreature, guid, target.Map, target.InstanceID)
 	corpseRemoveAt := now.Add(time.Duration(corpseDelay) * time.Second)
 	respawnAt := now.Add(time.Duration(seconds) * time.Second)
+	if compat {
+		respawnAt = respawnAt.Add(time.Duration(corpseDelay) * time.Second)
+	}
 	if preDeathLooted {
 		corpseRemoveAt = now.Add(time.Duration(corpseDelay/2) * time.Second)
 		if pushed := corpseRemoveAt.Add(time.Duration(seconds) * time.Second); pushed.After(respawnAt) {

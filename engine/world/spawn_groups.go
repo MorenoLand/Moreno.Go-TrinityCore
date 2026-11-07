@@ -46,10 +46,12 @@ import (
 )
 
 const (
-	spawnGroupFlagSystem      = 0x01
-	spawnGroupFlagCompat      = 0x02
-	spawnGroupFlagManualSpawn = 0x04
-	spawnGroupFlagsAll        = 0x1F
+	spawnGroupFlagSystem           = 0x01
+	spawnGroupFlagCompat           = 0x02
+	spawnGroupFlagManualSpawn      = 0x04
+	spawnGroupFlagDynamicSpawnRate = 0x08
+	spawnGroupFlagEscortQuestNPC   = 0x10
+	spawnGroupFlagsAll             = 0x1F
 
 	spawnTypeCreature   = 0
 	spawnTypeGameObject = 1
