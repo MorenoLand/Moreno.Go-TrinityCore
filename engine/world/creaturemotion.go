@@ -5134,9 +5134,13 @@ func (s *Server) waypointNodeArrival(ctx context.Context, motion *creatureMotion
 		return
 	}
 	arrived := (motion.NextIdx - 1 + len(motion.Points)) % len(motion.Points)
-	s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachWP, uint32(waypointMotionType), uint32(arrived))
 	point := motion.Points[arrived]
+	// LastWaypointID lands BEFORE the event fires so an event-6 handler
+	// reading GetCurrentWaypointId() sees the just-reached DB point — the
+	// C++ WaypointReached(waypoint.id) twin (WaypointMovementGenerator.cpp:261).
+	// The event's own id arg stays the node index (the C++ MovementInform twin).
 	motion.LastWaypointID = point.Point
+	s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachWP, uint32(waypointMotionType), uint32(arrived))
 	if point.Orientation != 0 && point.Delay > 0 {
 		motion.Orientation = point.Orientation
 	}

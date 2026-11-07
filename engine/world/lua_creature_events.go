@@ -3680,6 +3680,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.spawnDynamicGameObject(dyn)
 		return []any{newGUID}, nil
 	}
+	// GetGameObjectByGUID is ObjectAccessor::GetGameObject (ObjectAccessor.h)
+	// by packed GUID — the creature-surface twin of the player bridge
+	// (lua_player.go): unlike GetGameObject above it is not keyed on an
+	// owner spell, so it resolves runtime-spawned objects the creature
+	// summoned (serverLuaGameObject reads the dynamic registries first,
+	// then the DB-saved rows). Nil when no such object is live. Backs the
+	// legoso explosives-detonate arms (zone_bloodmyst_isle.cpp: the
+	// summoned draenei-explosives GOs are removed by GUID).
+	methods["GetGameObjectByGUID"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.serverLuaGameObject(ctx, guid)}, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id
@@ -5587,6 +5608,52 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if dynDirty {
 			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 				map[int]uint32{unitFieldDynamicFlags: dynFlags})
+		}
+		return nil, nil
+	}
+	// SetImmuneToAll is Unit::SetImmuneToAll (Unit.cpp:8440) via the
+	// Creature override (Creature.h:124: keepCombat =
+	// HasReactState(REACT_PASSIVE)): set/clear UNIT_FLAG_IMMUNE_TO_PC
+	// (0x100) | UNIT_FLAG_IMMUNE_TO_NPC (0x200) on UNIT_FIELD_FLAGS (59),
+	// the motion.UnitFlags mirror the SetFlag/RemoveFlag bridges write,
+	// with the same values-update broadcast. On apply, a non-passive
+	// creature ends all combat (m_combatManager.EndAllCombat) — the
+	// ClearInCombat teardown (threat wipe + cross-list removal +
+	// broadcast). DELTA: ValidateAttackersAndOwnTarget has no Go model;
+	// attackers keep a stale InCombat until their own teardown, the
+	// accepted ClearInCombat delta. Backs the legoso sironas-detonate
+	// arm (zone_bloodmyst_isle.cpp: SetImmuneToAll(false)).
+	methods["SetImmuneToAll"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("apply is required")
+		}
+		apply, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("apply must be a boolean")
+		}
+		const immuneFlags = uint32(0x100 | 0x200)
+		s.motionMu.Lock()
+		if apply {
+			motion.UnitFlags |= immuneFlags
+		} else {
+			motion.UnitFlags &^= immuneFlags
+		}
+		unitFlags := motion.UnitFlags
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		endCombat := apply && !isCreaturePassive(motion)
+		if endCombat {
+			motion.InCombat = false
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.ClearThreat()
+			}
+		}
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+			map[int]uint32{unitFieldFlags: unitFlags})
+		if endCombat {
+			s.removeThreatVictimFromAllLists(mapID, instanceID, guid)
+			s.broadcastThreatClearInInstance(mapID, instanceID, x, y, z, guid, phase)
 		}
 		return nil, nil
 	}
