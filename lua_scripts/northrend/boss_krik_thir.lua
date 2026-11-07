@@ -150,8 +150,10 @@
 -- bridge EXISTS (creature:RemoveAura — the gal_darah / drakkari_colossus /
 -- festergut precedent; the aeranas "absent" verdict is retracted
 -- 2026-10-17) but the arm stays out: the host npc is
--- entry-unverifiable + summon STRAND absent, and no summoner-unit
--- bridge exists.
+-- entry-unverifiable + summon STRAND absent (GetSummonerUnit IS
+-- bridged, lua_creature_events.go:4999 — the "no summoner-unit
+-- bridge" verdict is retracted 2026-11-07; the stay-out stands on
+-- entry + summon-STRAND grounds alone).
 -- spell_gatewatcher_subboss_trigger (52343 watcher target selection)
 -- / spell_anub_ar_skirmisher_fixate (52536 -> 52537) /
 -- spell_gatewatcher_web_wrap (52086 expire -> 52087) — no

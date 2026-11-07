@@ -164,11 +164,13 @@
 -- - YELL_ARCHIMONDE_INTRO (8) is Talked from the instance script, not
 --   this file (instance-model blocked, standing).
 -- npc_doomfire / npc_doomfire_targetting / npc_ancient_wisp: NOT
--- registered — zero C++ entry evidence (no hyjal.h constant for
--- 18095/18104/17946; named only in this cpp's enum Summons; instance
--- OnCreatureCreate cases none of them): registering would invent
--- identifiers (gelihast precedent). Their bridgeable arms are documented
--- above for when entries verify.
+-- registered — entries ARE named in this cpp's enum Summons
+-- (NPC_DOOMFIRE 18095 / NPC_DOOMFIRE_SPIRIT 18104 / NPC_ANCIENT_WISP
+-- 17946, boss_archimonde.cpp:86-88 — the old "zero C++ entry
+-- evidence" claim is retracted 2026-11-07); they stay out on
+-- instance-model grounds, and none of the three classes has a
+-- JustDied override in any case. Their bridgeable arms are
+-- documented above.
 
 local ENTRY = 17968
 

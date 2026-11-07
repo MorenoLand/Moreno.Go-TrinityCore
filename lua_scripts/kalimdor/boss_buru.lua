@@ -37,17 +37,19 @@
 --   Talk(EMOTE_TARGET 0, victim). No switch when the pool is empty
 --   (C++ SelectTarget nullptr leg).
 -- Unmodeled (documented-only, no bridges):
+-- - npc_buru_egg JustDied (boss_buru.cpp:225-233) — PORTED 2026-11-07
+--   (eggDied below): entry 15514 Wowhead-verified (browser,
+--   wowhead.com/classic/npc=15514/buru-egg — "Egg Explosion" +
+--   "Summon Hive'Zara Hatchling" match C++ 19593 + 1881; no
+--   NPC_BURU_EGG constant exists in ruins_of_ahnqiraj.h, the entry
+--   is DB-side via ScriptName "npc_buru_egg"). The three death-cast
+--   arms port in C++ order (DoCastAOE = self-cast per convention,
+--   all triggered); the ManageRespawn leg stays out (cross-AI
+--   dynamic_cast to boss_buruAI, no bridge — the Eggs GuidList +
+--   EVENT_RESPAWN_EGG scheduling with it).
 -- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
---   buru retargeting via instance GetGuidData(DATA_BURU);
---   JustDied's ManageRespawn via dynamic_cast to boss_buruAI):
---   no bridge. JustDied's three death-cast arms (boss_buru.cpp:225-233:
---   DoCastAOE(SPELL_EXPLODE 19593, true) + DoCastAOE(SPELL_EXPLODE_2
---   5255, true) + DoCast(me, SPELL_SUMMON_HATCHLING 1881, true)) are
---   bridgeable (self-cast with `true` under the CastSpell bridge) but
---   unregistrable: no NPC_BURU_EGG constant exists in
---   ruins_of_ahnqiraj.h (the egg entry is DB-side via ScriptName
---   "npc_buru_egg"), so there is no groundable entry to
---   RegisterCreatureEvent on.
+--   buru retargeting via instance GetGuidData(DATA_BURU)):
+--   no bridge.
 -- - spell_egg_explosion (SpellScript: ACTION_EXPLODE on Buru at 5yd
 --   + distance-scaled dummy damage): no SpellScript bridge.
 -- - ACTION_EXPLODE's DealDamage(me, me, 45000): no bridge; also only
@@ -72,6 +74,11 @@ local SPELL_GATHERING_SPEED = 1834
 local SPELL_FULL_SPEED = 1557
 local SPELL_THORNS = 25640
 local SPELL_BURU_TRANSFORM = 24721
+
+local ENTRY_BURU_EGG = 15514 -- Wowhead-verified 2026-11-07, see header
+local SPELL_EXPLODE = 19593 -- boss_buru.cpp:39
+local SPELL_EXPLODE_2 = 5255 -- boss_buru.cpp:40
+local SPELL_SUMMON_HATCHLING = 1881 -- boss_buru.cpp:38
 
 local PHASE_EGG = 0
 local PHASE_TRANSFORM = 1
@@ -251,9 +258,21 @@ local function onDied(event, creature, killer)
     creature:SetBossState(DATA_BURU, BOSS_STATE_DONE)
 end
 
+-- C++ npc_buru_eggAI::JustDied (boss_buru.cpp:225-233), C++ order:
+-- DoCastAOE(SPELL_EXPLODE, true) + DoCastAOE(SPELL_EXPLODE_2, true)
+-- + DoCast(me, SPELL_SUMMON_HATCHLING, true). DoCastAOE is self-cast
+-- per convention; all three casts are triggered in C++. The
+-- ManageRespawn leg stays out (cross-AI dynamic_cast, no bridge).
+local function eggDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_EXPLODE, true)
+    creature:CastSpell(creature, SPELL_EXPLODE_2, true)
+    creature:CastSpell(creature, SPELL_SUMMON_HATCHLING, true)
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY_BURU_EGG, 4, eggDied)

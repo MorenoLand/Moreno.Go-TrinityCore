@@ -14,9 +14,10 @@
 --   Reset runs on spawn + evade only.
 -- - OnQuestAccept (zone_ashenvale.cpp:87-94): quest id 6482
 --   (QUEST_FREEDOM_TO_RUUL) -> SetFaction(113
---   FACTION_ESCORTEE_N_NEUTRAL_PASSIVE, SharedDefines.h:240).
---   EscortAI::Start alone has no bridge — documented-only
---   (muglash precedent: Talk + SetFaction ported, Start out).
+--   FACTION_ESCORTEE_N_NEUTRAL_PASSIVE, SharedDefines.h:240) +
+--   StartEscort(player), C++ order (muglash precedent — the escort
+--   bridges landed ticks 372-373; the old "no escort bridge" claim
+--   is stale). No Talk leg in C++ here.
 -- Unmodeled (documented-only, no bridges):
 -- - WaypointReached cage-open leg (waypoint 0: cage SetGoState
 --   GO_STATE_ACTIVE) + Thistlefur summon waves (waypoints 13/19)
@@ -45,12 +46,13 @@ local function ruulReset(event, creature)
 end
 
 -- C++ npc_ruul_snowhoofAI::OnQuestAccept (zone_ashenvale.cpp:87-94):
--- SetFaction only; EscortAI::Start stays out (no escort bridge).
+-- SetFaction + EscortAI::Start, C++ order.
 local function ruulQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_FREEDOM_TO_RUUL then
         return
     end
     creature:SetFaction(FACTION_ESCORTEE_N_NEUTRAL_PASSIVE)
+    creature:StartEscort(player)
 end
 
 RegisterCreatureEvent(ENTRY_RUUL_SNOWHOOF, 23, ruulReset)
