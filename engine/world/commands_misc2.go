@@ -56,8 +56,8 @@ import (
 //   - `possess` is wired: the GM casts possess (530, triggered) on the
 //     selected unit, and the funnel's MOD_POSSESS apply arm runs
 //     charmCreatureFaction with the possess leg (POSSESSED flag, client
-//     control, possess bar). Delta: no selection reports the family
-//     message where C++ returns false silently.
+//     control, possess bar). Delta: no selection is a silent false
+//     (R13), as in C++.
 //   - `unpossess` is wired: Unit::RemoveCharmAuras on the selected unit
 //     (else the GM) removes the MOD_CHARM / MOD_POSSESS_PET / MOD_POSSESS /
 //     AOE_CHARM auras in C++ order; the creature remove funnel runs
@@ -302,41 +302,41 @@ func (s *session) gpsLiveGameObject(spawnGUID uint32) *dynamicGameObjectState {
 // player, the live creature, or the live gameobject in the GM's
 // map/instance; unknown kinds and unresolvable targets fail the way C++
 // does (not-found message for a known kind, silent for a bad link).
-func (s *session) gpsHyperlinkTarget(arg string) (mapID, instanceID, phase uint32, x, y, z, o float32, ok bool) {
+func (s *session) gpsHyperlinkTarget(arg string) (mapID, instanceID, phase uint32, x, y, z, o float32, ok, messaged bool) {
 	tag, data := gpsLinkTagData(arg)
 	switch tag {
 	case "player":
 		name := normalizePlayerName(data)
 		if name == "" {
-			return 0, 0, 0, 0, 0, 0, 0, false
+			return 0, 0, 0, 0, 0, 0, 0, false, false
 		}
 		if sess := s.sessionForPlayerName(name); sess != nil && sess.player != nil {
-			return sess.player.Map, sess.player.InstanceID, sess.currentPlayerPhaseMask(), sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, true
+			return sess.player.Map, sess.player.InstanceID, sess.currentPlayerPhaseMask(), sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, true, false
 		}
 		s.sendSysMessage(miscPlayerNotFound) // LANG_PLAYER_NOT_FOUND 499
-		return 0, 0, 0, 0, 0, 0, 0, false
+		return 0, 0, 0, 0, 0, 0, 0, false, true
 	case "creature":
 		guid, err := strconv.ParseUint(data, 10, 32)
 		if err != nil {
-			return 0, 0, 0, 0, 0, 0, 0, false
+			return 0, 0, 0, 0, 0, 0, 0, false, false
 		}
 		if motion := s.npcLiveCreatureBySpawnGUID(uint32(guid)); motion != nil {
-			return motion.Map, motion.InstanceID, gpsPhaseMask(motion.PhaseMask), motion.X, motion.Y, motion.Z, motion.Orientation, true
+			return motion.Map, motion.InstanceID, gpsPhaseMask(motion.PhaseMask), motion.X, motion.Y, motion.Z, motion.Orientation, true, false
 		}
 		s.sendSysMessage("No creature found.") // LANG_COMMAND_NOCREATUREFOUND 447 recall
-		return 0, 0, 0, 0, 0, 0, 0, false
+		return 0, 0, 0, 0, 0, 0, 0, false, true
 	case "gameobject":
 		guid, err := strconv.ParseUint(data, 10, 32)
 		if err != nil {
-			return 0, 0, 0, 0, 0, 0, 0, false
+			return 0, 0, 0, 0, 0, 0, 0, false, false
 		}
 		if dyn := s.gpsLiveGameObject(uint32(guid)); dyn != nil {
-			return dyn.Map, dyn.InstanceID, gpsPhaseMask(dyn.PhaseMask), dyn.X, dyn.Y, dyn.Z, dyn.Orientation, true
+			return dyn.Map, dyn.InstanceID, gpsPhaseMask(dyn.PhaseMask), dyn.X, dyn.Y, dyn.Z, dyn.Orientation, true, false
 		}
 		s.sendSysMessage("No gameobject found.") // LANG_COMMAND_NOGAMEOBJECTFOUND 448 recall
-		return 0, 0, 0, 0, 0, 0, 0, false
+		return 0, 0, 0, 0, 0, 0, 0, false, true
 	}
-	return 0, 0, 0, 0, 0, 0, 0, false
+	return 0, 0, 0, 0, 0, 0, 0, false, false
 }
 
 // handleCmdGPS mirrors HandleGPSCommand (cs_misc.cpp:183-302, RBAC 505):
@@ -349,26 +349,29 @@ func (s *session) gpsHyperlinkTarget(arg string) (mapID, instanceID, phase uint3
 // map/entry/name leg), and outdoors rides the zone area flags (the
 // non-WMO fallback twin). LANG texts are TDB enUS recalls (no in-tree
 // trinity_string seed), per tree convention.
-func (s *session) handleCmdGPS(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandGPS) {
-		return
+func (s *session) handleCmdGPS(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandGPS) {
+		return false
 	}
 	if s.player == nil || s.server == nil {
-		return
+		return false
 	}
 	var mapID, instanceID, phase uint32
 	var x, y, z, o float32
 	if len(args) > 0 && args[0] != "" {
-		var ok bool
-		mapID, instanceID, phase, x, y, z, o, ok = s.gpsHyperlinkTarget(args[0])
+		var ok, messaged bool
+		mapID, instanceID, phase, x, y, z, o, ok, messaged = s.gpsHyperlinkTarget(args[0])
 		if !ok {
-			return
+			if messaged {
+				return true
+			}
+			return false
 		}
 	} else {
 		var ok bool
 		mapID, instanceID, phase, x, y, z, o, ok = s.gpsSelectedTarget()
 		if !ok {
-			return
+			return true
 		}
 	}
 	zoneID, areaID := s.server.zoneAndAreaID(mapID, x, y, z, 0)
@@ -423,19 +426,21 @@ Position: %f %f %f %f`, mapID, mapName, zoneID, zoneName, areaID, areaName, phas
 	if status, data := s.server.mapLiquidStatus(mapID, x, y, z, liquidTypeAll, terrainDefaultCollisionHeight); status != liquidStatusNoWater {
 		s.sendSysMessage(fmt.Sprintf("Liquid level: %f, depth: %f, entry: %d, type: %d, status: %d", data.level, data.depthLevel, data.entry, data.typeFlags, status)) // LANG_LIQUID_STATUS 175 recall
 	}
+	return true
 }
 
 // handleCmdGUID mirrors HandleGUIDCommand (cs_misc.cpp:680-694, RBAC 506):
 // print the selected unit's GUID.
-func (s *session) handleCmdGUID(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandGUID) {
-		return
+func (s *session) handleCmdGUID(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandGUID) {
+		return false
 	}
 	if s.selection == 0 {
 		s.sendSysMessage(misc2NoSelection)
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf(misc2ObjectGUID, miscGUIDToString(s.selection)))
+	return true
 }
 
 // miscGUIDToString mirrors ObjectGuid::ToString (ObjectGuid.cpp:48-58):
@@ -492,11 +497,12 @@ func miscGUIDToString(guid uint64) string {
 
 // handleCmdHelp2 mirrors HandleHelpCommand (cs_misc.cpp:695-703, RBAC 507):
 // delegate to the tree's help printer (SendCommandHelpFor equivalent).
-func (s *session) handleCmdHelp2(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandHelp) {
-		return
+func (s *session) handleCmdHelp2(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandHelp) {
+		return false
 	}
 	s.handleCmdHelp(ctx, args)
+	return true
 }
 
 // misc2ExploredBit resolves an area id to its explored-zone bit offset and
@@ -520,65 +526,63 @@ func (s *session) misc2ExploredBit(areaID uint32) (offset int, mask uint32, ok b
 
 // handleCmdShowArea mirrors HandleShowAreaCommand (cs_misc.cpp:1079-1112,
 // RBAC 527): set the area's explored bit on the selected player.
-func (s *session) handleCmdShowArea(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandShowArea) {
-		return
+func (s *session) handleCmdShowArea(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandShowArea) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .showarea <areaId>")
-		return
+		return false
 	}
 	areaID, err := strconv.ParseUint(args[0], 10, 32)
 	if err != nil {
-		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
 		s.sendSysMessage(miscNoCharSelected)
-		return
+		return true
 	}
 	offset, mask, ok := s.misc2ExploredBit(uint32(areaID))
 	if !ok {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	target.player.ExploredZones[offset] |= mask
 	target.persistExploredZones(ctx)
 	target.sendPlayerValuesUpdate(map[int]uint32{playerExploredZonesStart + offset: target.player.ExploredZones[offset]})
 	s.sendSysMessage(misc2ExploreArea)
+	return true
 }
 
 // handleCmdHideArea mirrors HandleHideAreaCommand (cs_misc.cpp:1113-1145,
 // RBAC 508): XOR-toggle the area's explored bit on the selected player —
 // hiding an unexplored area explores it (cs_misc.cpp:1140).
-func (s *session) handleCmdHideArea(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandHideArea) {
-		return
+func (s *session) handleCmdHideArea(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandHideArea) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .hidearea <areaId>")
-		return
+		return false
 	}
 	areaID, err := strconv.ParseUint(args[0], 10, 32)
 	if err != nil {
-		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
 		s.sendSysMessage(miscNoCharSelected)
-		return
+		return true
 	}
 	offset, mask, ok := s.misc2ExploredBit(uint32(areaID))
 	if !ok {
 		s.sendSysMessage(misc2BadValue)
-		return
+		return true
 	}
 	target.player.ExploredZones[offset] ^= mask
 	target.persistExploredZones(ctx)
 	target.sendPlayerValuesUpdate(map[int]uint32{playerExploredZonesStart + offset: target.player.ExploredZones[offset]})
 	s.sendSysMessage(misc2HideArea)
+	return true
 }
 
 // misc2ValidBag0Pos mirrors Player::IsValidPos (Player.cpp:10185) for
@@ -619,43 +623,41 @@ func misc2ValidBag0Pos(slot uint8, explicit bool) bool {
 // Deltas: no CanUnequipItem / CanEquipItem / CanStoreItem / CanBankItem
 // gates, no trade or loot-generated guards, no equipped-item duration
 // packet on equip destinations.
-func (s *session) handleCmdItemMove(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandItemMove) {
-		return
+func (s *session) handleCmdItemMove(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandItemMove) {
+		return false
 	}
 	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return false
 	}
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .itemmove <srcSlot> <dstSlot>")
-		return
+		return false
 	}
 	srcSlot, srcErr := strconv.ParseUint(args[0], 10, 8)
 	dstSlot, dstErr := strconv.ParseUint(args[1], 10, 8)
 	if srcErr != nil || dstErr != nil {
-		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	if srcSlot == dstSlot {
-		return
+		return true
 	}
 	if !misc2ValidBag0Pos(uint8(srcSlot), true) {
-		return
+		return false
 	}
 	if !misc2ValidBag0Pos(uint8(dstSlot), false) {
-		return
+		return false
 	}
 	if dstSlot == 255 {
-		return
+		return true
 	}
 	db := s.server.CharactersStore.DB
 	var srcItem int64
 	if err := db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, srcSlot).Scan(&srcItem); err != nil || srcItem == 0 {
-		return
+		return true
 	}
 	if s.player.Health == 0 {
 		s.sendEquipError(equipErrYouAreDead, uint64(srcItem))
-		return
+		return true
 	}
 	var dstItem int64
 	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, dstSlot).Scan(&dstItem)
@@ -664,11 +666,11 @@ func (s *session) handleCmdItemMove(ctx context.Context, args []string) {
 			!(srcSlot >= 19 && srcSlot < 23 || srcSlot >= 67 && srcSlot < 74) &&
 			!(s.itemIsBag(ctx, uint64(srcItem)) && s.isBagEmpty(ctx, srcItem)) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItem))
-			return
+			return true
 		}
 		if !s.itemIsBag(ctx, uint64(srcItem)) && !s.itemIsBag(ctx, uint64(dstItem)) {
 			if merged, _ := s.tryMergeStacks(ctx, srcItem, 0, uint8(srcSlot), dstItem, 0, uint8(dstSlot)); merged {
-				return
+				return true
 			}
 		}
 	}
@@ -693,32 +695,34 @@ func (s *session) handleCmdItemMove(ctx context.Context, args []string) {
 	if dstSlot < 19 {
 		s.fireEquipHook(ctx, srcItem, 255, uint8(dstSlot))
 	}
+	return true
 }
 
 // handleCmdKickPlayer mirrors HandleKickPlayerCommand (cs_misc.cpp:880-915,
 // RBAC 510): disconnect the target player. Documented fidelity gap (not a
 // stub): CONFIG_SHOW_KICK_IN_WORLD has no Go config field, so the world
 // broadcast leg is skipped and the direct message is always used.
-func (s *session) handleCmdKickPlayer(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandKick) {
-		return
+func (s *session) handleCmdKickPlayer(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandKick) {
+		return false
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target == nil {
 		// C++ extractPlayerTarget (Chat.cpp:657-706) fails for offline
 		// targets: PLAYER_NOT_FOUND, no kick message.
 		s.sendSysMessage(miscPlayerNotFound)
-		return
+		return true
 	}
 	if target == s {
 		s.sendSysMessage(misc2KickSelf)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
-		return
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	reason := "No reason."
 	if len(args) > 1 {
@@ -729,6 +733,7 @@ func (s *session) handleCmdKickPlayer(ctx context.Context, args []string) {
 	if target != nil {
 		s.kickSession(target)
 	}
+	return true
 }
 
 // misc2GraveTeamArg parses the optional horde/alliance team token at
@@ -770,52 +775,51 @@ func misc2GraveTeamName(team uint32) string {
 // (ID, GhostZone, Faction) shape. Go's closestGraveyard reads
 // graveyard_zone from the world DB on every call, so no in-memory store
 // update is needed for the link to take effect.
-func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandLinkGrave) {
-		return
+func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandLinkGrave) {
+		return false
 	}
 	if s.player == nil || s.server == nil || s.server.Data == nil {
-		return
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .linkgrave <graveyardId> [horde|alliance]")
-		return
+		return false
 	}
 	graveyardID, err := strconv.ParseUint(args[0], 10, 32)
 	if err != nil {
-		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	team, ok := misc2GraveTeamArg(args, 1)
 	if !ok {
-		return
+		return false
 	}
 	if _, found, err := s.server.Data.WorldSafeLoc(uint32(graveyardID)); err != nil || !found {
 		s.sendSysMessage(fmt.Sprintf(misc2GraveNoExist, graveyardID))
-		return
+		return true
 	}
 	zoneID := s.player.Zone
 	area, found, err := s.server.Data.Area(zoneID)
 	if err != nil || !found || area.ParentAreaID != 0 {
 		s.sendSysMessage(fmt.Sprintf(misc2GraveWrongZone, graveyardID, zoneID))
-		return
+		return true
 	}
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage(misc2GraveNoData)
-		return
+		return true
 	}
 	db := s.server.WorldStore.DB
 	var existing int
 	_ = db.QueryRowContext(ctx, "SELECT COUNT(1) FROM graveyard_zone WHERE ID = ? AND GhostZone = ?", graveyardID, zoneID).Scan(&existing)
 	if existing > 0 {
 		s.sendSysMessage(fmt.Sprintf(misc2GraveAlreadyLinked, graveyardID, zoneID))
-		return
+		return true
 	}
 	if _, err := db.ExecContext(ctx, "INSERT INTO graveyard_zone (ID, GhostZone, Faction) VALUES (?, ?, ?)", graveyardID, zoneID, team); err != nil {
 		s.sendSysMessage(misc2GraveNoData)
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf(misc2GraveLinked, graveyardID, zoneID))
+	return true
 }
 
 // handleCmdListFreeze mirrors HandleListFreezeCommand (cs_misc.cpp:2473-2508,
@@ -823,19 +827,19 @@ func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) {
 // (CHAR_SEL_CHARACTER_AURA_FROZEN). Documented fidelity gap (not a stub): the
 // C++ re-save of online frozen players (SaveToDB to refresh remainTime) is
 // skipped; remainTime is reported as stored.
-func (s *session) handleCmdListFreeze(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandListFreeze) {
-		return
+func (s *session) handleCmdListFreeze(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandListFreeze) {
+		return false
 	}
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		s.sendSysMessage(misc2NoFrozen)
-		return
+		return true
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx,
 		"SELECT c.name, ca.remainTime FROM character_aura ca JOIN characters c ON c.guid = ca.guid WHERE ca.spell = ?", freezeAuraSpellID)
 	if err != nil {
 		s.sendSysMessage(misc2NoFrozen)
-		return
+		return true
 	}
 	defer rows.Close()
 	var lines []string
@@ -853,12 +857,13 @@ func (s *session) handleCmdListFreeze(ctx context.Context) {
 	}
 	if len(lines) == 0 {
 		s.sendSysMessage(misc2NoFrozen)
-		return
+		return true
 	}
 	s.sendSysMessage(misc2ListFreeze)
 	for _, l := range lines {
 		s.sendSysMessage(l)
 	}
+	return true
 }
 
 // misc2PersistSkill is the character_skills REPLACE twin of the Lua
@@ -941,14 +946,14 @@ func misc2ParseSkillArg(arg string) (uint32, bool) {
 // SKILL_DEFENSE (95) UpdateDefenseBonusesMod leg has no Go defense-bonus
 // model (aura_skill.go delta), and no values-update broadcast is sent —
 // the Lua SetSkill bridge persists the same way.
-func (s *session) handleCmdMaxSkill(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMaxSkill) {
-		return
+func (s *session) handleCmdMaxSkill(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMaxSkill) {
+		return false
 	}
 	target := s.guildSelectionOrSelf()
 	if target == nil || target.player == nil {
 		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED
-		return
+		return true
 	}
 	for i := range target.player.Skills {
 		sk := &target.player.Skills[i]
@@ -960,6 +965,7 @@ func (s *session) handleCmdMaxSkill(ctx context.Context) {
 			misc2PersistSkill(ctx, target, *sk)
 		}
 	}
+	return true
 }
 
 // misc2MovegenChaseTarget resolves the chase generator's target the way
@@ -1007,13 +1013,13 @@ func misc2MovegenTargetLine(ctx context.Context, s *session, verb string, target
 // snapped spline position (Go snaps at launch, so it equals the spline
 // destination), and a player reports only Idle or Flight (taxi path) —
 // Go has no player chase/follow generator model.
-func (s *session) handleCmdMovegens(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandMovegens) {
-		return
+func (s *session) handleCmdMovegens(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMovegens) {
+		return false
 	}
 	if s.selection == 0 {
 		s.sendSysMessage("Select a character or creature.") // LANG_SELECT_CHAR_OR_CREATURE
-		return
+		return true
 	}
 	if s.server != nil {
 		if target := s.server.playerSessionForGUID(s.selection); target != nil && target.player != nil {
@@ -1023,13 +1029,13 @@ func (s *session) handleCmdMovegens(ctx context.Context) {
 			} else {
 				s.sendSysMessage("Idle")
 			}
-			return
+			return true
 		}
 	}
 	motion := s.findCreatureMotion(s.selection)
 	if motion == nil {
 		s.sendSysMessage("Select a character or creature.") // LANG_SELECT_CHAR_OR_CREATURE
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Movement generators for Creature %d:", uint32(motion.GUID&0x00FFFFFF)))
 	switch genType := s.server.creatureMovementType(motion); genType {
@@ -1058,6 +1064,7 @@ func (s *session) handleCmdMovegens(ctx context.Context) {
 	default:
 		s.sendSysMessage(fmt.Sprintf("Unknown movement generator type: %d", genType))
 	}
+	return true
 }
 
 // handleCmdMute mirrors HandleMuteCommand (cs_misc.cpp:1841-1915, RBAC 515):
@@ -1069,18 +1076,16 @@ func (s *session) handleCmdMovegens(ctx context.Context) {
 // LOGIN_INS_ACCOUNT_MUTE history row. Documented fidelity gap (not a
 // stub): the CONFIG_SHOW_MUTE_IN_WORLD world broadcast has no Go config
 // field, so it is skipped (same convention as the kick broadcast gap).
-func (s *session) handleCmdMute(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandMute) {
-		return
+func (s *session) handleCmdMute(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandMute) {
+		return false
 	}
 	nameArgs, minutes, reasonStart, status := misc2ParseMuteArgs(args)
 	if status == 1 {
-		s.sendSysMessage("Syntax: .mute [<player>] <minutes> [reason]")
-		return
+		return false
 	}
 	if status == 2 {
-		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	reason := "No reason."
 	if reasonStart >= 0 {
@@ -1090,7 +1095,7 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, nameArgs)
 	if !ok {
-		return
+		return true
 	}
 	if target == nil {
 		if accountID := s.misc2AccountForGUID(ctx, guid); accountID != 0 {
@@ -1100,7 +1105,8 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 	// C++ HasLowerSecurity(..., true) (cs_misc.cpp:1865): strong — equal
 	// security also fails, no RBAC-47 bypass.
 	if s.characterTargetLowerSecurityStrong(ctx, characterTarget{online: target, guid: guid, name: name}) {
-		return
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	var accountID uint32
 	if target != nil {
@@ -1130,6 +1136,7 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 	} else {
 		s.sendSysMessage(fmt.Sprintf("Chat for %s will be disabled for %d minutes on next login. Reason: %s.", miscPlayerLink(name), minutes, reason))
 	}
+	return true
 }
 
 // handleCmdMuteHistory mirrors HandleMuteHistoryCommand (cs_misc.cpp:1965-2015,
@@ -1138,31 +1145,30 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) {
 // then print LOGIN_SEL_ACCOUNT_MUTE_INFO rows oldest first, dates in the
 // C++ "%Y-%m-%d %I:%M%p" shape. A missing table or empty history both
 // report no history (the table is best-effort in the Go auth DB).
-func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandMuteHistory) {
-		return
+func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandMuteHistory) {
+		return false
 	}
 	// The C++ framework consumes the whole arg string (ChatCommand.h:
 	// ConsumeFromOffset returns nullopt on leftover args), so extra
 	// tokens fail the parse and print help — they are never ignored.
 	if len(args) != 1 || args[0] == "" {
-		s.sendSysMessage("Syntax: .mutehistory <account>")
-		return
+		return false
 	}
 	accountID := s.accountIDByName(ctx, args[0])
 	if accountID == 0 {
 		s.sendSysMessage(fmt.Sprintf("Account %s does not exist.", args[0]))
-		return
+		return true
 	}
 	db := s.authDB()
 	if db == nil {
 		s.sendSysMessage(fmt.Sprintf("No mute history for account %s.", args[0]))
-		return
+		return true
 	}
 	rows, err := db.QueryContext(ctx, "SELECT mutedate, mutetime, COALESCE(mutereason, ''), COALESCE(mutedby, '') FROM account_muted WHERE guid = ? ORDER BY mutedate ASC", accountID)
 	if err != nil {
 		s.sendSysMessage(fmt.Sprintf("No mute history for account %s.", args[0]))
-		return
+		return true
 	}
 	defer rows.Close()
 	type muteRow struct {
@@ -1180,12 +1186,13 @@ func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) {
 	}
 	if len(history) == 0 {
 		s.sendSysMessage(fmt.Sprintf("No mute history for account %s.", args[0]))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("Mute history for account %s:", args[0]))
 	for _, r := range history {
 		s.sendSysMessage(fmt.Sprintf("%s - %d minutes - %s - %s", time.Unix(r.date, 0).Format("2006-01-02 03:04PM"), r.minutes, r.reason, r.mutedBy))
 	}
+	return true
 }
 
 // handleCmdNearGrave mirrors HandleNearGraveCommand (cs_misc.cpp:1019-1078,
@@ -1203,27 +1210,27 @@ func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) {
 // does) rather than the C++ map-position zone lookup, and the far
 // graveyard follows DB row order (ORDER BY ID) rather than C++ multimap
 // insertion order.
-func (s *session) handleCmdNearGrave(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandNearGrave) {
-		return
+func (s *session) handleCmdNearGrave(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandNearGrave) {
+		return false
 	}
 	if s.player == nil || s.server == nil || s.server.Data == nil {
-		return
+		return false
 	}
 	team, ok := misc2GraveTeamArg(args, 0)
 	if !ok {
-		return
+		return false
 	}
 	zoneID := s.player.Zone
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage(misc2GraveNoData)
-		return
+		return true
 	}
 	rootZone := s.server.rootAreaID(zoneID)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ID, Faction FROM graveyard_zone WHERE GhostZone = ? ORDER BY ID", rootZone)
 	if err != nil {
 		s.sendSysMessage(misc2GraveNoData)
-		return
+		return true
 	}
 	defer rows.Close()
 	type graveLink struct {
@@ -1247,14 +1254,14 @@ func (s *session) handleCmdNearGrave(ctx context.Context, args []string) {
 			} else {
 				s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveFaction, zoneID, misc2GraveTeamName(team)))
 			}
-			return
+			return true
 		}
 		defaultID := defaultGraveyardAlliance
 		if team == teamHorde {
 			defaultID = defaultGraveyardHorde
 		}
 		s.sendSysMessage(fmt.Sprintf(misc2GraveError, defaultID))
-		return
+		return true
 	}
 	var locations []wotlk.WorldSafeLoc
 	factionByID := make(map[uint32]uint32, len(links))
@@ -1275,14 +1282,15 @@ func (s *session) handleCmdNearGrave(ctx context.Context, args []string) {
 		} else {
 			s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveFaction, zoneID, misc2GraveTeamName(team)))
 		}
-		return
+		return true
 	}
 	chosen, found := closestGraveyardCandidate(locations, s.player.Map, mapEntry, hasMapEntry, s.player.X, s.player.Y, s.player.Z)
 	if !found {
 		s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveyards, zoneID))
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf(misc2GraveNearest, chosen.ID, misc2GraveTeamName(factionByID[chosen.ID]), zoneID))
+	return true
 }
 
 // handleCmdPInfo mirrors HandlePInfoCommand (cs_misc.cpp:1430-1801, RBAC
@@ -1293,9 +1301,9 @@ func (s *session) handleCmdNearGrave(ctx context.Context, args []string) {
 // country suffix (no IP-location bridge); the account-ban type prints
 // "Unknown", mirroring the C++ quirk where banType is only set to
 // "Character" on the character-ban fallback (cs_misc.cpp:1654-1659).
-func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandPInfo) {
-		return
+func (s *session) handleCmdPInfo(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandPInfo) {
+		return false
 	}
 	// C++ tries atoul(args) -> GetCharacterNameByGuid first (cs_misc.cpp:1445-1450),
 	// so a bare numeric GUID resolves offline targets too; a name that
@@ -1311,10 +1319,11 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, resolveArgs)
 	if !ok {
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target, guid: guid, name: name}) {
-		return // C++ HasLowerSecurity: silent fail
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	online := target != nil && target.player != nil
 	var accountID uint32
@@ -1342,14 +1351,13 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
 			"SELECT totaltime, level, money, account, race, class, map, zone, gender, health, playerFlags FROM characters WHERE guid = ?",
 			guid).Scan(&totalTime, &level, &money, &accountID, &race, &class, &mapID, &zoneID, &gender, &health, &playerFlags); err != nil {
-			return // C++ returns false on no PINFO row, it does not print a level-0 row
+			return false // C++ returns false on no PINFO row, it does not print a level-0 row
 		}
 		alive = health > 0 && playerFlags&playerFlagGhost == 0
 		haveBase = true
 	}
 	if !haveBase {
-		s.sendSysMessage(fmt.Sprintf("Player %s (guid: %d)", miscPlayerLink(name), guid))
-		return
+		return false
 	}
 
 	// LOGIN_SEL_PINFO (LoginDatabase.cpp:87): username, email, reg_mail,
@@ -1564,6 +1572,7 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 			s.sendSysMessage(fmt.Sprintf("Mails: %d Read/%d Total", readMail.Int64, totalMail.Int64))
 		}
 	}
+	return true
 }
 
 // handleCmdPlayAll mirrors HandlePlayAllCommand (cs_misc.cpp:2509-2523, RBAC
@@ -1572,18 +1581,16 @@ func (s *session) handleCmdPInfo(ctx context.Context, args []string) {
 // player-in-world filter). Documented fidelity gap (not a stub): the
 // sSoundEntriesStore existence gate has no Go bridge, so unknown sound ids
 // are sent rather than rejected with LANG_SOUND_NOT_EXIST.
-func (s *session) handleCmdPlayAll(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandPlayAll) {
-		return
+func (s *session) handleCmdPlayAll(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandPlayAll) {
+		return false
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .playall <soundId>")
-		return
+		return false
 	}
 	soundID, err := strconv.ParseUint(args[0], 10, 32)
 	if err != nil {
-		s.sendSysMessage(misc2BadValue)
-		return
+		return false
 	}
 	payload := buildPlaySound(uint32(soundID))
 	if s.server != nil {
@@ -1600,26 +1607,26 @@ func (s *session) handleCmdPlayAll(ctx context.Context, args []string) {
 		}
 	}
 	s.sendSysMessage(fmt.Sprintf("Played sound %d to all players.", soundID))
+	return true
 }
 
 // handleCmdPossess mirrors HandlePossessCommand (cs_misc.cpp:2524-2533, RBAC
 // 519): the GM casts possess (530, triggered) on the selected unit; the
 // funnel's MOD_POSSESS apply arm runs charmCreatureFaction with the possess
-// leg. Delta: no selection reports the family message where C++ returns
-// false silently.
-func (s *session) handleCmdPossess(ctx context.Context) {
+// leg. Delta: no selection is a silent false (R13), as in C++.
+func (s *session) handleCmdPossess(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandPossess) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandPossess) {
-		return
+		return true
 	}
 	if s.selection == 0 {
-		s.sendSysMessage(miscSelectCharOrCreat)
-		return
+		return false
 	}
 	s.castSpellDirect(ctx, 530, s.selection)
+	return true
 }
 
 // handleCmdPvPstats mirrors HandlePvPstatsCommand (cs_misc.cpp:130-157, RBAC
@@ -1630,38 +1637,39 @@ func (s *session) handleCmdPossess(ctx context.Context) {
 // counts calendar days, so the filter is date(date) within the last 6
 // calendar days plus today (future rows included, as in C++). LANG
 // wordings are plain-English recalls (no in-tree seed).
-func (s *session) handleCmdPvPstats(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandPvPstats) {
-		return
+func (s *session) handleCmdPvPstats(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandPvPstats) {
+		return false
 	}
 	if s.server == nil || !s.server.Config.BattlegroundStoreStatisticsEnable {
 		s.sendSysMessage("Battleground statistics are disabled.")
-		return
+		return true
 	}
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return false
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT winner_faction, COUNT(*) AS count FROM pvpstats_battlegrounds WHERE date(date) >= date('now', '-6 days') GROUP BY winner_faction ORDER BY winner_faction ASC")
 	if err != nil {
-		return
+		return false
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return
+		return false
 	}
 	var winnerFaction uint32
 	var hordeVictories uint32
 	if err := rows.Scan(&winnerFaction, &hordeVictories); err != nil {
-		return
+		return false
 	}
 	if !rows.Next() {
-		return
+		return false
 	}
 	var allianceVictories uint32
 	if err := rows.Scan(&winnerFaction, &allianceVictories); err != nil {
-		return
+		return false
 	}
 	s.sendSysMessage(fmt.Sprintf("PvP statistics: %d Alliance victories, %d Horde victories in the last 7 days.", allianceVictories, hordeVictories))
+	return true
 }
 
 // handleCmdRecall mirrors HandleRecallCommand (cs_misc.cpp:825-847, RBAC
@@ -1670,28 +1678,30 @@ func (s *session) handleCmdPvPstats(ctx context.Context) {
 // has no Go bridge (Go teleports are synchronous, so the window never
 // opens); an unset recall location is a silent no-op (C++ TeleportTo on
 // the default WorldLocation fails with no message).
-func (s *session) handleCmdRecall(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandRecall) {
-		return
+func (s *session) handleCmdRecall(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRecall) {
+		return false
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target == nil || target.player == nil {
 		s.sendSysMessage(miscPlayerNotFound)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
-		return
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if target.isInFlight() {
 		target.finishTaxiFlight()
 	}
 	if !target.player.RecallSet {
-		return
+		return true
 	}
 	target.teleportTo(target.player.RecallMap, target.player.RecallX, target.player.RecallY, target.player.RecallZ, target.player.RecallO)
+	return true
 }
 
 // handleCmdRepairItems mirrors HandleRepairitemsCommand (cs_misc.cpp:2298-2316,
@@ -1699,25 +1709,26 @@ func (s *session) handleCmdRecall(ctx context.Context, args []string) {
 // DurabilityRepairAll(false, 0, false) path — no cost, no discount). Max
 // durability comes from item_template; the repair is a direct
 // item_instance.durability update, per the items.go repair pattern.
-func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandRepairItems) {
-		return
+func (s *session) handleCmdRepairItems(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRepairItems) {
+		return false
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target == nil {
 		// C++ extractPlayerTarget (cs_misc.cpp:2301-2302) fails for offline
 		// targets: PLAYER_NOT_FOUND, nothing repaired.
 		s.sendSysMessage(miscPlayerNotFound)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
-		return
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	// Player::DurabilityRepairAll (Player.cpp:4996-5006) covers equipped,
@@ -1728,7 +1739,7 @@ func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
 		 JOIN item_instance ii ON ii.guid = ci.item WHERE ci.guid = ?
 		 AND ((ci.bag = 0 AND ci.slot < 39) OR (ci.bag >= 19 AND ci.bag < 23 AND ci.slot < 36))`, guid)
 	if err != nil {
-		return
+		return true
 	}
 	defer rows.Close()
 	type itemRow struct {
@@ -1765,6 +1776,7 @@ func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
 	if target != nil && target != s {
 		target.sendSysMessage(fmt.Sprintf(misc2RepairedTarget, miscPlayerLink(s.player.Name)))
 	}
+	return true
 }
 
 // handleCmdRespawn mirrors HandleRespawnCommand (cs_misc.cpp:1801-1840,
@@ -1772,12 +1784,12 @@ func (s *session) handleCmdRepairItems(ctx context.Context, args []string) {
 // leg (pets refused, dead creatures revived, live ones left alone); any
 // other selection falls through to the grid sweep, as C++ does when
 // getSelectedCreature returns null.
-func (s *session) handleCmdRespawn(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandRespawn) {
-		return
+func (s *session) handleCmdRespawn(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandRespawn) {
+		return false
 	}
 	if s.player == nil || s.server == nil {
-		return
+		return false
 	}
 	if s.selection != 0 {
 		if motion := s.castCommandSelectedCreature(); motion != nil {
@@ -1785,12 +1797,12 @@ func (s *session) handleCmdRespawn(ctx context.Context) {
 			// guardians and charmed creatures respawn like any other.
 			if motionIsPet(motion) {
 				s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE recall
-				return
+				return true
 			}
 			if motion.Health <= 0 {
 				s.server.respawnCreatureNow(ctx, motion, uint32(motion.GUID&0x00FFFFFF), uint32(motion.GUID>>24)&0x00FFFFFF)
 			}
-			return
+			return true
 		}
 	}
 	// Grid sweep (cs_misc.cpp:1826-1839). Leg 1 is RespawnDo over grid
@@ -1872,6 +1884,7 @@ func (s *session) handleCmdRespawn(ctx context.Context) {
 	for _, st := range goRespawns {
 		s.server.setGameObjectHiddenInInstance(st.Map, st.InstanceID, st.GUID, false)
 	}
+	return true
 }
 
 // respawnCreatureNow mirrors the world-path revive block of
@@ -1975,13 +1988,13 @@ func (s *Server) respawnCreatureNow(ctx context.Context, motion *creatureMotion,
 // fidelity gap, not a stub): the online path is native (ResurrectPlayer +
 // SpawnCorpseBones + SaveToDB); the offline path
 // (Player::OfflineResurrect) has no Go bridge.
-func (s *session) handleCmdRevive2(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandRevive) {
-		return
+func (s *session) handleCmdRevive2(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandRevive) {
+		return false
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target != nil {
 		// C++ checks the TARGET's permission (cs_misc.cpp:644), and is
@@ -1994,20 +2007,21 @@ func (s *session) handleCmdRevive2(ctx context.Context, args []string) {
 		target.resurrectPlayer(ctx, pct)
 		target.spawnCorpseBones(ctx)
 		_ = target.savePlayerState(ctx, 1, false)
-		return
+		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("The offline revive of %s is not available: offline resurrection has no Go bridge yet.", miscPlayerLink(name)))
 	_ = guid
+	return true
 }
 
 // handleCmdSaveAll mirrors HandleSaveAllCommand (cs_misc.cpp:872-879, RBAC
 // 524): save every online player (ObjectAccessor::SaveAllPlayers).
-func (s *session) handleCmdSaveAll(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandSaveAll) {
-		return
+func (s *session) handleCmdSaveAll(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandSaveAll) {
+		return false
 	}
 	if s.server == nil {
-		return
+		return false
 	}
 	s.server.sessionsMu.RLock()
 	sessions := make([]*session, 0, len(s.server.sessions))
@@ -2019,6 +2033,7 @@ func (s *session) handleCmdSaveAll(ctx context.Context) {
 		_ = sess.savePlayerState(ctx, 1, false)
 	}
 	s.sendSysMessage(misc2PlayersSaved)
+	return true
 }
 
 // handleCmdSave2 mirrors HandleSaveCommand (cs_misc.cpp:848-871, RBAC 525):
@@ -2028,9 +2043,9 @@ func (s *session) handleCmdSaveAll(ctx context.Context) {
 // C++ port. Documented fidelity gap (not a stub): CONFIG_INTERVAL_SAVE has
 // no Go config field, so the 20-second save throttle is skipped and the
 // save is unconditional outside the without-delay permission path.
-func (s *session) handleCmdSave2(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandSave) {
-		return
+func (s *session) handleCmdSave2(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandSave) {
+		return false
 	}
 	target := s.server.playerSessionForGUID(s.selection)
 	if target == nil || target.player == nil {
@@ -2039,14 +2054,15 @@ func (s *session) handleCmdSave2(ctx context.Context) {
 	if s.commandAllowed(ctx, permissionCommandsSaveWithoutDelay) {
 		if err := target.savePlayerState(ctx, 1, false); err != nil {
 			s.sendSysMessage("Failed to save character: " + err.Error())
-			return
+			return true
 		}
 		s.sendSysMessage(misc2PlayerSaved)
-		return
+		return true
 	}
 	if err := s.savePlayerState(ctx, 1, false); err != nil {
 		s.sendSysMessage("Failed to save character: " + err.Error())
 	}
+	return true
 }
 
 // handleCmdSetSkill mirrors HandleSetSkillCommand (cs_misc.cpp:1378-1429,
@@ -2063,31 +2079,27 @@ func (s *session) handleCmdSave2(ctx context.Context) {
 // bonus-aura reapply on the add arm only. Documented fidelity gaps (not
 // stubs): the UpdateSkillEnchantments legs have no Go model, and the
 // LANG_SET_SKILL wording is a plain-English recall.
-func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandSetSkill) {
-		return
+func (s *session) handleCmdSetSkill(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandSetSkill) {
+		return false
 	}
 	if len(args) < 2 || len(args) > 3 {
-		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
-		return
+		return false
 	}
 	skillID, ok := misc2ParseSkillArg(args[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
-		return
+		return false
 	}
 	level, err := strconv.ParseUint(args[1], 10, 32)
 	if err != nil {
-		s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
-		return
+		return false
 	}
 	var maxArg uint32
 	hasMaxArg := false
 	if len(args) > 2 {
 		parsedMax, parseErr := strconv.ParseUint(args[2], 10, 32)
 		if parseErr != nil {
-			s.sendSysMessage("Syntax: .setskill <skill> <level> [max]")
-			return
+			return false
 		}
 		maxArg = uint32(parsedMax)
 		hasMaxArg = true
@@ -2095,18 +2107,18 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 	target := s.guildSelectionOrSelf()
 	if target == nil || target.player == nil {
 		s.sendSysMessage("No character selected.") // LANG_NO_CHAR_SELECTED
-		return
+		return true
 	}
 	// C++ validates against sSkillLineStore unconditionally; with no
 	// DBC store to check against, refuse rather than inventing a skill
 	// entry (the nil-WorldStore -> ITEMIDINVALID precedent in additem).
 	if s.server == nil || s.server.Data == nil {
 		s.sendSysMessage(fmt.Sprintf("Invalid skill ID %d.", skillID))
-		return
+		return true
 	}
 	if _, found, err := s.server.Data.SkillLineCategory(skillID); err == nil && !found {
 		s.sendSysMessage(fmt.Sprintf("Invalid skill ID %d.", skillID))
-		return
+		return true
 	}
 	index := misc2SkillIndex(target.player.Skills, skillID)
 	targetHasSkill := target.playerSkillTotalValue(skillID) != 0
@@ -2120,7 +2132,7 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 		max = uint16(level)
 	}
 	if level == 0 || level > uint64(max) {
-		return
+		return false
 	}
 	applied := true
 	if index >= 0 {
@@ -2153,6 +2165,7 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 	} else {
 		s.sendSysMessage(fmt.Sprintf("Skill %d set to %d (max %d) for %s.", skillID, level, max, target.player.Name))
 	}
+	return true
 }
 
 // handleCmdSummon mirrors HandleSummonCommand (cs_misc.cpp:486-599, RBAC
@@ -2164,29 +2177,30 @@ func (s *session) handleCmdSetSkill(ctx context.Context, args []string) {
 // below ports cs_misc.cpp:540-560; the offline leg
 // (Player::SavePositionInDB) is native via the characters table except the
 // zone column (see commands_tele.go).
-func (s *session) handleCmdSummon(ctx context.Context, args []string) {
+func (s *session) handleCmdSummon(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandSummon) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandSummon) {
-		return
+		return true
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target == s || guid == s.playerGUID {
 		s.sendSysMessage(miscCantTeleportSelf)
-		return
+		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{name: name, guid: guid, online: target}) {
-		return
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if target != nil && target.player != nil {
 		if target.isBeingTeleported() {
 			s.sendSysMessage(fmt.Sprintf(miscIsTeleported, miscPlayerLink(name)))
-			return
+			return true
 		}
 		if s.isDungeonMap(s.player.Map) {
 			gmMapID, gmInstance := s.player.Map, s.player.InstanceID
@@ -2201,11 +2215,11 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 			}
 			if !leaderOnGMInstance && (targetMapID != gmMapID || targetInstance != gmInstance) {
 				s.sendSysMessage(miscCannotSummonToInst)
-				return
+				return true
 			}
 			if targetMapID == gmMapID && targetInstance != gmInstance {
 				s.sendSysMessage(fmt.Sprintf("%s cannot be summoned from an instance to an instance.", miscPlayerLink(name)))
-				return
+				return true
 			}
 		}
 		s.sendSysMessage(fmt.Sprintf(miscSummoning, miscPlayerLink(name), ""))
@@ -2229,7 +2243,7 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 		if target.teleportTo(s.player.Map, cx, cy, s.player.Z, target.player.Orientation) {
 			miscSetPhaseMask(target, gmPhase)
 		}
-		return
+		return true
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
@@ -2237,15 +2251,16 @@ func (s *session) handleCmdSummon(ctx context.Context, args []string) {
 			s.player.Map, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, guid)
 	}
 	s.sendSysMessage(fmt.Sprintf(miscSummoning, miscPlayerLink(name), miscOfflineSuffix))
+	return true
 }
 
 // handleCmdUnFreeze mirrors HandleUnFreezeCommand (cs_misc.cpp:2416-2472,
 // RBAC 531): remove the freeze aura (9454) from the target player. The online
 // path is native (RemoveAurasDueToSpell); the offline path is native via the
 // character_aura table (CHAR_DEL_CHAR_AURA_FROZEN).
-func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandUnFreeze) {
-		return
+func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandUnFreeze) {
+		return false
 	}
 	var name string
 	var target *session
@@ -2263,7 +2278,7 @@ func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) {
 	if target != nil && target.player != nil {
 		s.sendSysMessage(fmt.Sprintf(misc2Unfreezing, miscPlayerLink(name)))
 		target.removeAura(freezeAuraSpellID)
-		return
+		return true
 	}
 	if name != "" && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var guid uint64
@@ -2272,10 +2287,11 @@ func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
 				"DELETE FROM character_aura WHERE guid = ? AND spell = ?", guid, freezeAuraSpellID)
 			s.sendSysMessage(fmt.Sprintf(misc2Unfreezing, miscPlayerLink(name)))
-			return
+			return true
 		}
 	}
 	s.sendSysMessage(miscFreezeWrong)
+	return true
 }
 
 // handleCmdUnmute mirrors HandleUnmuteCommand (cs_misc.cpp:1916-1964, RBAC
@@ -2283,13 +2299,13 @@ func (s *session) handleCmdUnFreeze(ctx context.Context, args []string) {
 // already-enabled message; otherwise the session muteTime clears and the
 // login DB row resets (mutetime 0, reason/by blank). History rows are left
 // in place, as in C++ (unmute never deletes account_muted rows).
-func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandUnMute) {
-		return
+func (s *session) handleCmdUnmute(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandUnMute) {
+		return false
 	}
 	target, guid, name, ok := s.miscResolvePlayerTarget(ctx, args)
 	if !ok {
-		return
+		return true
 	}
 	if target == nil {
 		if accountID := s.misc2AccountForGUID(ctx, guid); accountID != 0 {
@@ -2299,7 +2315,8 @@ func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
 	// C++ HasLowerSecurity(..., true) (cs_misc.cpp:1932): strong — equal
 	// security also fails, no RBAC-47 bypass.
 	if s.characterTargetLowerSecurityStrong(ctx, characterTarget{online: target, guid: guid, name: name}) {
-		return
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	var accountID uint32
 	if target != nil {
@@ -2310,7 +2327,7 @@ func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
 	if target != nil {
 		if !(target.muteTime > time.Now().Unix()) {
 			s.sendSysMessage("Chat is already enabled.")
-			return
+			return true
 		}
 		target.muteTime = 0
 	}
@@ -2321,6 +2338,7 @@ func (s *session) handleCmdUnmute(ctx context.Context, args []string) {
 		target.sendSysMessage("Your chat is enabled.")
 	}
 	s.sendSysMessage(fmt.Sprintf("You enabled chat for %s.", miscPlayerLink(name)))
+	return true
 }
 
 // charmAuraTypes is Unit::RemoveCharmAuras (Unit.cpp:6525-6531) in C++
@@ -2332,32 +2350,33 @@ var charmAuraTypes = []uint32{spellAuraCharm, spellAuraModPossessPet, spellAuraM
 // creature selection runs the creature remove funnel (uncharmCreature plus
 // the client-control release); a player selection runs the session remove
 // funnel. Delta: a selection resolving to neither falls back to self.
-func (s *session) handleCmdUnPossess(ctx context.Context) {
+func (s *session) handleCmdUnPossess(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandUnPossess) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandUnPossess) {
-		return
+		return true
 	}
 	if s.selection != 0 {
 		if target := s.miscSelectedPlayerSession(); target != nil {
 			for _, auraType := range charmAuraTypes {
 				target.removeAurasByType(auraType)
 			}
-			return
+			return true
 		}
 		if motion := s.castCommandSelectedCreature(); motion != nil && s.server != nil {
 			key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
 			for _, auraType := range charmAuraTypes {
 				s.server.removeCreatureAurasByType(key, auraType)
 			}
-			return
+			return true
 		}
 	}
 	for _, auraType := range charmAuraTypes {
 		s.removeAurasByType(auraType)
 	}
+	return true
 }
 
 // handleCmdUnstuck mirrors HandleUnstuckCommand (cs_misc.cpp:916-976, RBAC
@@ -2369,36 +2388,35 @@ func (s *session) handleCmdUnPossess(ctx context.Context) {
 // and the graveyard leg (RepopAtGraveyard via repopAtGraveyard) are
 // native, and the C++ flight/combat refusal is enforced (a sys message
 // stands in for the SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW cast result).
-func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
+func (s *session) handleCmdUnstuck(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandUnstuck) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	if !s.commandAllowed(ctx, permissionCommandsUseUnstuckWithArgs) {
 		s.sendSysMessage("The self-unstuck cast (spell 7355) is not available: spell casting has no Go bridge on this path.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandUnstuck) {
-		return
+		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .unstuck <player> [inn|graveyard|startzone]")
-		return
+		return false
 	}
 	target, _, name, ok := s.miscResolvePlayerTarget(ctx, args[:1])
 	if !ok {
-		return
+		return true
 	}
 	if target == nil || target.player == nil {
 		// C++ extractPlayerTarget fails for offline targets (cs_misc.cpp:937-938).
 		s.sendSysMessage(miscPlayerNotFound)
-		return
+		return true
 	}
 	// C++ HandleUnstuckCommand (cs_misc.cpp:916-976) has no HasLowerSecurity gate.
 
 	if target.inFlight || target.attackTarget != 0 || target.player.UnitFlags&unitFlagInCombat != 0 {
 		s.sendSysMessage(fmt.Sprintf("%s cannot be unstuck while in flight or combat.", miscPlayerLink(name)))
-		return
+		return true
 	}
 	loc := "inn"
 	if len(args) > 1 {
@@ -2413,8 +2431,9 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) {
 	case "startzone":
 		s.sendSysMessage(fmt.Sprintf("The startzone leg of .unstuck for %s is not available: race/class start positions have no Go bridge yet.", miscPlayerLink(name)))
 	default:
-		s.sendSysMessage("Syntax: .unstuck <player> [inn|graveyard|startzone]")
+		return false
 	}
+	return true
 }
 
 // handleCmdChangeWeather mirrors HandleChangeWeather (cs_misc.cpp:1337-1362,
@@ -2469,9 +2488,9 @@ func miscParseWeatherType(token string) (weatherType, bool) {
 	return 0, false
 }
 
-func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandChangeWeather) {
-		return
+func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandChangeWeather) {
+		return false
 	}
 	// The C++ framework parses the (WeatherType, float) args before the
 	// handler runs (ChatCommandArgs.h), so a bad arg is a syntax failure
@@ -2479,47 +2498,46 @@ func (s *session) handleCmdChangeWeather(ctx context.Context, args []string) {
 	// values (std::isfinite, ChatCommandArgs.h:69) — only then does
 	// HandleChangeWeather check CONFIG_WEATHER (cs_misc.cpp:1337).
 	if len(args) < 2 {
-		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
-		return
+		return false
 	}
 	wtype, ok := miscParseWeatherType(args[0])
 	if !ok {
-		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
-		return
+		return false
 	}
 	intensity, err := strconv.ParseFloat(args[1], 32)
 	if err != nil || math.IsNaN(intensity) || math.IsInf(intensity, 0) {
-		s.sendSysMessage("Syntax: .wchange <weathertype> <intensity>")
-		return
+		return false
 	}
 	if s.server == nil || !s.server.Config.WeatherEnabled {
 		s.sendSysMessage("Weather is disabled by config.")
-		return
+		return true
 	}
 	if s.player == nil {
-		return
+		return false
 	}
 	weather := s.server.getOrGenerateZoneWeather(ctx, s.player.Zone)
 	if weather == nil {
 		s.sendSysMessage("There is no weather in this zone.")
-		return
+		return true
 	}
 	s.server.setZoneWeather(ctx, s.player.Zone, wtype, float32(intensity))
+	return true
 }
 
 // handleCmdMailBox mirrors HandleMailBoxCommand (cs_misc.cpp:2566-2574, RBAC
 // 777): SendShowMailBox with the player's own GUID — the exact
 // lua_player.go SMSG_SHOW_MAILBOX packet, with no interactability gate
 // (unlike the mailbox opcode path, which checks canOpenMailBox).
-func (s *session) handleCmdMailBox(ctx context.Context) {
+func (s *session) handleCmdMailBox(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandMailBox) {
+		return false
+	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
-	}
-	if s.miscDeny(ctx, permissionCommandMailBox) {
-		return
+		return true
 	}
 	mailbox := protocol.NewBuffer(8)
 	mailbox.WriteU64(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SHOW_MAILBOX), mailbox.Bytes(), true)
+	return true
 }
