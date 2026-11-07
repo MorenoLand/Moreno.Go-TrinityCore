@@ -32,31 +32,34 @@ import (
 // handleCmdPet dispatches the pet sub-table (cs_pet.cpp:61-75) with Trinity
 // per-level prefix matching. A bare ".pet" prints the syntax line with no
 // permission gate: the root's own 479 is dead in C++ (ChatCommand.h:262
-// deprecated overload).
-func (s *session) handleCmdPet(ctx context.Context, args []string) {
+// deprecated overload). The bool reports C++ handler success: the RBAC
+// denial returns false silently so dispatchCommand shows the node's help
+// listing (ChatCommand.cpp:296-309); paths that print a message return true.
+func (s *session) handleCmdPet(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .pet create|learn|unlearn|level <args>"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("create", sub):
-		s.handlePetCreateCommand(ctx)
+		return s.handlePetCreateCommand(ctx)
 	case strings.HasPrefix("learn", sub):
-		s.handlePetLearnCommand(ctx, rest)
+		return s.handlePetLearnCommand(ctx, rest)
 	case strings.HasPrefix("unlearn", sub):
-		s.handlePetUnlearnCommand(ctx, rest)
+		return s.handlePetUnlearnCommand(ctx, rest)
 	case strings.HasPrefix("level", sub):
-		s.handlePetLevelCommand(ctx, rest)
+		return s.handlePetLevelCommand(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // petTargetOrSelf mirrors GetSelectedPlayerPetOrOwn (cs_pet.cpp:38-48):
@@ -118,17 +121,17 @@ func (s *session) petCommandMotion(ts *session) *creatureMotion {
 // invoker's level). The level-1-then-level visual (SetUInt32Value(level-1),
 // AddToMap, SetUInt32Value(level), cs_pet.cpp:110-116) stays unmodeled:
 // createTamedPetFromEntry spawns at the final level.
-func (s *session) handlePetCreateCommand(ctx context.Context) {
-	if s.miscDeny(ctx, permissionCommandPetCreate) {
-		return
+func (s *session) handlePetCreateCommand(ctx context.Context) bool {
+	if !s.commandAllowed(ctx, permissionCommandPetCreate) {
+		return false
 	}
 	if s.player == nil {
-		return
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motion.OwnerGUID != 0 {
 		s.sendSysMessage("Select a creature.") // LANG_SELECT_CREATURE
-		return
+		return true
 	}
 	entry := motion.Entry
 	if entry == 0 {
@@ -139,20 +142,20 @@ func (s *session) handlePetCreateCommand(ctx context.Context) {
 	}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		s.sendSysMessage("This creature cannot be tamed.")
-		return
+		return true
 	}
 	var family int64
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT family FROM creature_template WHERE entry = ?", entry).Scan(&family); err != nil {
 		s.sendSysMessage("This creature cannot be tamed.")
-		return
+		return true
 	}
 	if family == 0 {
 		s.sendSysMessage("This creature cannot be tamed. Family id: 0 (CREATURE_FAMILY_NONE).")
-		return
+		return true
 	}
 	if s.player.PetGUID != 0 {
 		s.sendSysMessage("You already have a pet")
-		return
+		return true
 	}
 	playerLevel := uint32(s.player.Level)
 	petLevel := playerLevel
@@ -169,13 +172,14 @@ func (s *session) handlePetCreateCommand(ctx context.Context) {
 	destroyBuf.WriteU8(0)
 	s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes())
 	if s.server.CharactersStore == nil {
-		return
+		return true
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return
+		return true
 	}
 	s.createTamedPetFromEntry(ctx, cdb, 0, entry, petLevel)
+	return true
 }
 
 // petCommandLearnTarget resolves the target for learn/unlearn/level,
@@ -273,38 +277,38 @@ func (s *session) petExtractSpellID(arg string) uint32 {
 // spells are assumed structurally valid (same documented gap as the
 // cast/learn ports, so the LANG_COMMAND_SPELL_BROKEN branch is
 // unreachable).
-func (s *session) handlePetLearnCommand(ctx context.Context, args []string) {
+func (s *session) handlePetLearnCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .pet learn <spellid>"
-	if s.miscDeny(ctx, permissionCommandPetLearn) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandPetLearn) {
+		return false
 	}
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	ts, petID, motion, ok := s.petCommandLearnTarget()
 	if !ok {
-		return
+		return true
 	}
 	spellID := s.petExtractSpellID(args[0])
 	if spellID == 0 || s.server == nil || s.server.Data == nil {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if _, found, err := s.server.Data.Spell(spellID); err != nil || !found {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if ts.petKnowsSpell(ctx, motion, spellID) {
 		s.sendSysMessage(fmt.Sprintf("Pet already has spell: %d", spellID))
-		return
+		return true
 	}
 	db := s.server.CharactersStore.DB
 	if db == nil {
-		return
+		return true
 	}
 	if _, err := db.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petID, spellID); err != nil {
-		return
+		return true
 	}
 	learnBuf := protocol.NewBuffer(4)
 	learnBuf.WriteU32(spellID)
@@ -313,6 +317,7 @@ func (s *session) handlePetLearnCommand(ctx context.Context, args []string) {
 		ts.sendPetSpells(ctx, petID, motion.Entry, motion.ReactState)
 	}
 	s.sendSysMessage(fmt.Sprintf("Pet has learned spell %d", spellID))
+	return true
 }
 
 // handlePetUnlearnCommand mirrors HandlePetUnlearnCommand
@@ -321,30 +326,30 @@ func (s *session) handlePetLearnCommand(ctx context.Context, args []string) {
 // spell DBC: an unknown id simply reports "Pet doesn't have that spell"
 // via the HasSpell gate. A known spell is dropped from the pet_spell table
 // with SMSG_PET_UNLEARNED_SPELL, mirroring Pet::removeSpell.
-func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
+func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .pet unlearn <spellid>"
-	if s.miscDeny(ctx, permissionCommandPetUnlearn) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandPetUnlearn) {
+		return false
 	}
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	ts, petID, motion, ok := s.petCommandLearnTarget()
 	if !ok {
-		return
+		return true
 	}
 	spellID := s.petExtractSpellID(args[0])
 	if !ts.petKnowsSpell(ctx, motion, spellID) {
 		s.sendSysMessage("Pet doesn't have that spell")
-		return
+		return true
 	}
 	db := s.server.CharactersStore.DB
 	if db == nil {
-		return
+		return true
 	}
 	if _, err := db.ExecContext(ctx, "DELETE FROM pet_spell WHERE guid = ? AND spell = ?", petID, spellID); err != nil {
-		return
+		return true
 	}
 	// CharmInfo::RemoveSpellFromActionBar (Unit.cpp:10085): the unlearned
 	// spell was the last rank (clear_ab=true, no rank re-learn), so the
@@ -370,6 +375,7 @@ func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
 	if motion != nil {
 		ts.sendPetSpells(ctx, petID, motion.Entry, motion.ReactState)
 	}
+	return true
 }
 
 // handlePetLevelCommand mirrors HandlePetLevelCommand (cs_pet.cpp:184-211):
@@ -381,23 +387,23 @@ func (s *session) handlePetUnlearnCommand(ctx context.Context, args []string) {
 // including its same-level no-op (Pet.cpp:759-762), so a clamped
 // no-change delta returns silently. InitTalentForLevel has no Go bridge
 // (documented gap, see commands.go).
-func (s *session) handlePetLevelCommand(ctx context.Context, args []string) {
+func (s *session) handlePetLevelCommand(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .pet level [<leveldelta>]"
-	if s.miscDeny(ctx, permissionCommandPetLevel) {
-		return
+	if !s.commandAllowed(ctx, permissionCommandPetLevel) {
+		return false
 	}
 	ts, ok := s.petTargetOrSelf()
 	if !ok {
-		return
+		return true
 	}
 	if ts.player.PetGUID == 0 || ts.player.PetNumber == 0 {
 		s.sendSysMessage("Select a player or their pet.") // LANG_SELECT_PLAYER_OR_PET 11016
-		return
+		return true
 	}
 	motion := s.petCommandMotion(ts)
 	if motion == nil {
 		s.sendSysMessage("pet level is not supported: the pet must be currently active to change its level.")
-		return
+		return true
 	}
 	ownerLevel := uint32(ts.player.Level)
 	petLevel := motion.Level
@@ -410,7 +416,7 @@ func (s *session) handlePetLevelCommand(ctx context.Context, args []string) {
 	}
 	if delta == 0 || delta < -strongMaxLevel || delta > strongMaxLevel {
 		s.sendSysMessage("Wrong command value.") // LANG_BAD_VALUE 115
-		return
+		return true
 	}
 	newLevel := int(petLevel) + delta
 	if newLevel < 1 {
@@ -419,7 +425,7 @@ func (s *session) handlePetLevelCommand(ctx context.Context, args []string) {
 		newLevel = int(ownerLevel)
 	}
 	if uint32(newLevel) == petLevel {
-		return
+		return true
 	}
 	nextLevelXP := uint32(0)
 	if s.server != nil {
@@ -428,6 +434,7 @@ func (s *session) handlePetLevelCommand(ctx context.Context, args []string) {
 	if !ts.applyPetLevel(ctx, ts.player.PetNumber, motion.Entry, motion.PetType, petLevel, uint32(newLevel), 0, nextLevelXP) {
 		s.sendSysMessage("pet level change failed.")
 	}
+	return true
 }
 
 // strongMaxLevel mirrors STRONG_MAX_LEVEL (DBCEnums.h:53), the delta

@@ -9217,8 +9217,8 @@ func (s *session) buildCommandTree() *commandNode {
 	npcSetLeaf("spawntime", s.handleNPCSetSpawnTime, permissionCommandNPCSetSpawnTime)
 	npcSetLeaf("data", func(ctx context.Context, args []string) bool { s.handleNPCSetData(ctx, args); return true }, permissionCommandNPCSetData)
 	root.add("npcbot", func(ctx context.Context, args []string) bool { s.handleCmdNpcBot(ctx, args); return true }, []string{"add", "remove", "spawn", "move", "delete", "lookup", "revive", "reloadconfig", "command", "info", "hide", "unhide", "show", "recall", "kill", "suicide", "distance", "order", "set"}, nil)
-	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { s.handleCmdQuest(ctx, args); return true }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
-	root.addWithPerms("pet", func(ctx context.Context, args []string) bool { s.handleCmdPet(ctx, args); return true }, map[string]uint32{"create": permissionCommandPetCreate, "learn": permissionCommandPetLearn, "unlearn": permissionCommandPetUnlearn, "level": permissionCommandPetLevel}, nil).withPerm(permissionCommandPet)
+	root.addWithPerms("quest", func(ctx context.Context, args []string) bool { return s.handleCmdQuest(ctx, args) }, map[string]uint32{"add": permissionCommandQuestAdd, "complete": permissionCommandQuestComplete, "remove": permissionCommandQuestRemove, "reward": permissionCommandQuestReward}, nil).withPerm(permissionCommandQuest)
+	root.addWithPerms("pet", func(ctx context.Context, args []string) bool { return s.handleCmdPet(ctx, args) }, map[string]uint32{"create": permissionCommandPetCreate, "learn": permissionCommandPetLearn, "unlearn": permissionCommandPetUnlearn, "level": permissionCommandPetLevel}, nil).withPerm(permissionCommandPet)
 	root.addWithPerms("rbac", func(ctx context.Context, args []string) bool { s.handleCmdRBAC(ctx, args); return true }, map[string]uint32{"account": permissionCommandRBACAcc, "list": permissionCommandRBACList}, nil).withPerm(permissionCommandRBAC)
 	reloadNode := root.addWithPerms("reload", func(ctx context.Context, args []string) bool { s.handleCmdReload(ctx, args); return true }, map[string]uint32{"all": permissionCommandReloadAll}, nil).withPerm(permissionCommandReload)
 	// R13 depth (cs_reload.cpp:63-73): "all" is a sub-table with
@@ -9252,7 +9252,7 @@ func (s *session) buildCommandTree() *commandNode {
 		}, group.perm)
 	}
 	root.addWithPerms("reset", func(ctx context.Context, args []string) bool { s.handleCmdReset(ctx, args); return true }, map[string]uint32{"achievements": permissionCommandResetAchievements, "honor": permissionCommandResetHonor, "level": permissionCommandResetLevel, "spells": permissionCommandResetSpells, "stats": permissionCommandResetStats, "talents": permissionCommandResetTalents, "all": permissionCommandResetAll}, nil).withPerm(permissionCommandReset)
-	root.addWithPerms("send", func(ctx context.Context, args []string) bool { s.handleCmdSend(ctx, args); return true }, map[string]uint32{"items": permissionCommandSendItems, "mail": permissionCommandSendMail, "message": permissionCommandSendMessage, "money": permissionCommandSendMoney}, nil).withPerm(permissionCommandSend)
+	root.addWithPerms("send", func(ctx context.Context, args []string) bool { return s.handleCmdSend(ctx, args) }, map[string]uint32{"items": permissionCommandSendItems, "mail": permissionCommandSendMail, "message": permissionCommandSendMessage, "money": permissionCommandSendMoney}, nil).withPerm(permissionCommandSend)
 	return root
 }
 

@@ -134,13 +134,16 @@ func sendMailArgs(args []string) (name, subject, text string, rest []string, ok 
 	return toks[0], subject, text, toks[3:], true
 }
 
-// handleCmdSend dispatches the "send" root (cs_send.cpp:43-46).
-func (s *session) handleCmdSend(ctx context.Context, args []string) {
+// handleCmdSend dispatches the "send" root (cs_send.cpp:43-46). The bool
+// reports C++ handler success: the RBAC denial returns false silently so
+// dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
+// paths that print a message return true.
+func (s *session) handleCmdSend(ctx context.Context, args []string) bool {
 	if len(args) == 0 {
 		// The root's own 483 perm is dead (deprecated nullptr+subtable
 		// overload drops it); bare ".send" prints the syntax line ungated.
 		s.sendSysMessage("Syntax: .send items|mail|message|money")
-		return
+		return true
 	}
 	sub := strings.ToLower(args[0])
 	rest := args[1:]
@@ -152,7 +155,7 @@ func (s *session) handleCmdSend(ctx context.Context, args []string) {
 	// inside their handlers, as before.
 	type sendArm struct {
 		name string
-		run  func(context.Context, []string)
+		run  func(context.Context, []string) bool
 	}
 	arms := []sendArm{
 		{"items", s.handleSendItems},
@@ -162,8 +165,7 @@ func (s *session) handleCmdSend(ctx context.Context, args []string) {
 	}
 	for _, arm := range arms {
 		if arm.name == sub {
-			arm.run(ctx, rest)
-			return
+			return arm.run(ctx, rest)
 		}
 	}
 	var matches []sendArm
@@ -177,70 +179,72 @@ func (s *session) handleCmdSend(ctx context.Context, args []string) {
 		for _, arm := range matches {
 			s.sendSysMessage("  " + arm.name)
 		}
-		return
+		return true
 	}
 	if len(matches) == 1 {
-		matches[0].run(ctx, rest)
-		return
+		return matches[0].run(ctx, rest)
 	}
 	s.sendSysMessage("Syntax: .send items|mail|message|money")
+	return true
 }
 
 // handleSendMailCmd mirrors HandleSendMailCommand (cs_send.cpp:57).
-func (s *session) handleSendMailCmd(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandSendMail) {
-		return
+func (s *session) handleSendMailCmd(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandSendMail) {
+		return false
 	}
 	// C++ resolves the receiver first (extractPlayerTarget precedes the
 	// quoted-arg parses), so a bad target reports not-found even when the
 	// subject/text are also malformed (previously the syntax error won).
 	_, guid, targetName, ok := s.sendMailTarget(ctx, sendTargetArgs(args))
 	if !ok {
-		return // miscResolvePlayerTarget already reported LANG 499 == C++
+		return true // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	_, subject, text, _, ok := sendMailArgs(args)
 	if !ok {
 		s.sendSysMessage(`Syntax: .send mail <name> "subject" "text"`)
-		return
+		return true
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, 0, nil) {
-		return
+		return true
 	}
 	// cs_send.cpp HandleSendMailCommand: MailReceiver(target, ...) with an
 	// online target fires AddNewMailDeliverTime(deliver_time) (immediate here),
 	// i.e. SendNewMail()/++unReadMails — the online receiver gets the icon.
 	s.sendMailNotify(guid)
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
+	return true
 }
 
 // handleSendMoney mirrors HandleSendMoneyCommand (cs_send.cpp:210).
-func (s *session) handleSendMoney(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandSendMoney) {
-		return
+func (s *session) handleSendMoney(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandSendMoney) {
+		return false
 	}
 	// Receiver first, as in C++ (see the mail arm): a bad target reports
 	// not-found even when the amount is also invalid (previously a bad
 	// amount silently won).
 	_, guid, targetName, ok := s.sendMailTarget(ctx, sendTargetArgs(args))
 	if !ok {
-		return // miscResolvePlayerTarget already reported LANG 499 == C++
+		return true // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	_, subject, text, rest, ok := sendMailArgs(args)
 	if !ok || len(rest) < 1 {
 		s.sendSysMessage(`Syntax: .send money <name> "subject" "text" <money>`)
-		return
+		return true
 	}
 	money := cAtoi(rest[0])
 	if money <= 0 {
-		return
+		return false
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, uint32(money), nil) {
-		return
+		return true
 	}
 	// Same AddNewMailDeliverTime notify as HandleSendMailCommand: the GM
 	// money mail is delivered immediately (cs_send.cpp HandleSendMoneyCommand).
 	s.sendMailNotify(guid)
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
+	return true
 }
 
 // parseSendItemToken mirrors the C++ strtok parse of one itemN[:countN]
@@ -272,21 +276,21 @@ func parseSendItemToken(tok string) (uint32, int64, bool) {
 // handleSendItems mirrors HandleSendItemsCommand (cs_send.cpp:102): each
 // itemN[:countN] token is validated against item_template, split across max
 // stacks, and capped at MAX_MAIL_ITEMS (12).
-func (s *session) handleSendItems(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandSendItems) {
-		return
+func (s *session) handleSendItems(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandSendItems) {
+		return false
 	}
 	// Receiver first, as in C++ (see the mail arm): a bad target reports
 	// not-found even when an item entry is also invalid (previously the
 	// item error won).
 	_, guid, targetName, ok := s.sendMailTarget(ctx, sendTargetArgs(args))
 	if !ok {
-		return // miscResolvePlayerTarget already reported LANG 499 == C++
+		return true // miscResolvePlayerTarget already reported LANG 499 == C++
 	}
 	_, subject, text, rest, ok := sendMailArgs(args)
 	if !ok {
 		s.sendSysMessage(`Syntax: .send items <name> "subject" "text" <item1[:count1]> ...`)
-		return
+		return true
 	}
 	type itemPair struct{ entry, count uint32 }
 	var items []itemPair
@@ -294,24 +298,24 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 	for _, tok := range rest {
 		itemID, count, ok := parseSendItemToken(tok)
 		if !ok {
-			return
+			return false
 		}
 		if itemID == 0 {
-			return
+			return false
 		}
 		var maxCount, stackable int64
 		if wdb == nil || wdb.QueryRowContext(ctx, "SELECT COALESCE(MaxCount, 0), COALESCE(stackable, 1) FROM item_template WHERE entry = ?", itemID).Scan(&maxCount, &stackable) != nil {
 			s.sendSysMessage(fmt.Sprintf("Item id %d is invalid.", itemID)) // LANG_COMMAND_ITEMIDINVALID 435
-			return
+			return true
 		}
 		itemCount := count
 		if itemCount < 1 {
 			s.sendSysMessage(fmt.Sprintf("Invalid item count %d for item %d.", itemCount, itemID)) // LANG_COMMAND_INVALID_ITEM_COUNT 52
-			return
+			return true
 		}
 		if maxCount > 0 && itemCount > maxCount {
 			s.sendSysMessage(fmt.Sprintf("Invalid item count %d for item %d.", itemCount, itemID)) // LANG_COMMAND_INVALID_ITEM_COUNT 52
-			return
+			return true
 		}
 		maxStack := stackable
 		if maxStack <= 0 || maxStack == 2147483647 {
@@ -324,12 +328,12 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 		items = append(items, itemPair{itemID, uint32(itemCount)})
 		if len(items) > 12 { // MAX_MAIL_ITEMS
 			s.sendSysMessage("You can't send more than 12 items.") // LANG_COMMAND_MAIL_ITEMS_LIMIT 53
-			return
+			return true
 		}
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return
+		return true
 	}
 	var itemGUIDs []uint64
 	for _, it := range items {
@@ -343,25 +347,26 @@ func (s *session) handleSendItems(ctx context.Context, args []string) {
 		itemGUIDs = append(itemGUIDs, uint64(nextItemGUID))
 	}
 	if !s.sendMailInsert(ctx, guid, subject, text, 0, itemGUIDs) {
-		return
+		return true
 	}
 	// Same AddNewMailDeliverTime notify: the GM item mail is delivered
 	// immediately (cs_send.cpp HandleSendItemsCommand).
 	s.sendMailNotify(guid)
 	s.sendSysMessage(fmt.Sprintf("Mail sent to %s.", targetName)) // LANG_MAIL_SENT 169
+	return true
 }
 
 // handleSendMessageCmd mirrors HandleSendMessageCommand (cs_send.cpp:261):
 // the target must be online; the two C++ texts go out as
 // SMSG_AREA_TRIGGER_MESSAGE (== WorldSession::SendAreaTriggerMessage,
 // MiscHandler.cpp:628).
-func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandSendMessage) {
-		return
+func (s *session) handleSendMessageCmd(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandSendMessage) {
+		return false
 	}
 	if len(args) < 2 {
 		s.sendSysMessage("Syntax: .send message <name> <message>")
-		return
+		return true
 	}
 	// C++ resolves the target with extractPlayerTarget (cs_send.cpp:265),
 	// which accepts a |Hplayer link as well as a bare name
@@ -369,7 +374,7 @@ func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 	target := s.sessionForPlayerName(normalizePlayerName(extractPlayerNameFromLink(args[0])))
 	if target == nil || target.player == nil {
 		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+		return true
 	}
 	// WorldSession::isLogingOut (WorldSession.h:456) is _logoutTime or
 	// m_playerLogout: Go's pending-logout countdown (logoutAt) or the
@@ -377,7 +382,7 @@ func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 	// player-not-found, not as a logout notice.
 	if !target.logoutAt.IsZero() || target.loggingOut {
 		s.sendSysMessage("Player not found.") // LANG_PLAYER_NOT_FOUND 499
-		return
+		return true
 	}
 	msg := strings.Join(args[1:], " ")
 	// == WorldSession::SendAreaTriggerMessage (MiscHandler.cpp:628): message
@@ -385,4 +390,5 @@ func (s *session) handleSendMessageCmd(ctx context.Context, args []string) {
 	_ = target.write(uint16(protocol.OpcodeSMSG_AREA_TRIGGER_MESSAGE), protocol.BuildAreaTriggerMessage(msg), true)
 	_ = target.write(uint16(protocol.OpcodeSMSG_AREA_TRIGGER_MESSAGE), protocol.BuildAreaTriggerMessage("|cffff0000[Message from administrator]:|r"), true)
 	s.sendSysMessage(fmt.Sprintf("Message sent to %s: %s.", target.player.Name, msg)) // LANG_SENDMESSAGE 1102
+	return true
 }

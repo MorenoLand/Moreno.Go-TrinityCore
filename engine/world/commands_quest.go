@@ -142,16 +142,19 @@ func (s *session) questTargetPlayer() *session {
 
 // handleCmdQuest dispatches the "quest" root (cs_quest.cpp:47-58). A bare
 // ".quest" prints the syntax line with no permission gate: the root's own
-// 602 is dead in C++ (ChatCommand.h:262 deprecated overload).
-func (s *session) handleCmdQuest(ctx context.Context, args []string) {
+// 602 is dead in C++ (ChatCommand.h:262 deprecated overload). The bool
+// reports C++ handler success: the RBAC denial returns false silently so
+// dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
+// paths that print a message return true.
+func (s *session) handleCmdQuest(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .quest add|complete|remove|reward <entry>"
 	if len(args) == 0 {
 		s.sendSysMessage(syntax)
-		return
+		return true
 	}
 	if s.player == nil {
 		s.sendSysMessage("You must be in game to use that command.")
-		return
+		return true
 	}
 	// The Trinity parser prefix-matches command names at every nesting
 	// level; match the arm the same way here.
@@ -159,123 +162,127 @@ func (s *session) handleCmdQuest(ctx context.Context, args []string) {
 	rest := args[1:]
 	switch {
 	case strings.HasPrefix("add", sub):
-		s.handleQuestAdd(ctx, rest)
+		return s.handleQuestAdd(ctx, rest)
 	case strings.HasPrefix("complete", sub):
-		s.handleQuestComplete(ctx, rest)
+		return s.handleQuestComplete(ctx, rest)
 	case strings.HasPrefix("remove", sub):
-		s.handleQuestRemove(ctx, rest)
+		return s.handleQuestRemove(ctx, rest)
 	case strings.HasPrefix("reward", sub):
-		s.handleQuestReward(ctx, rest)
+		return s.handleQuestReward(ctx, rest)
 	default:
 		s.sendSysMessage(syntax)
 	}
+	return true
 }
 
 // handleQuestAdd mirrors HandleQuestAdd (cs_quest.cpp:61).
-func (s *session) handleQuestAdd(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandQuestAdd) {
-		return
+func (s *session) handleQuestAdd(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandQuestAdd) {
+		return false
 	}
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .quest add <entry>")
-		return
+		return true
 	}
 	target := s.questTargetPlayerOrSelf()
 	if target == nil {
-		return
+		return true
 	}
 	entry, ok := parseQuestLink(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .quest add <entry>")
-		return
+		return true
 	}
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	// Item-start quests must come from the item (cs_quest.cpp:112).
 	if wdb := s.server.WorldStore.DB; wdb != nil {
 		var itemEntry uint32
 		if err := wdb.QueryRowContext(ctx, "SELECT entry FROM item_template WHERE StartQuest = ? LIMIT 1", entry).Scan(&itemEntry); err == nil {
 			s.sendSysMessage(fmt.Sprintf("Quest %d starts from item %d.", entry, itemEntry)) // LANG_COMMAND_QUEST_STARTFROMITEM 472
-			return
+			return true
 		}
 	}
 	if st, err := target.characterQuestStatus(ctx, entry); err == nil && st != int64(questStatusNoneValue) {
-		return // already active: C++ returns false silently
+		return false // already active: C++ returns false silently
 	}
 	// CanAddQuest gate (cs_quest.cpp:105-106): a full log or an
 	// un-storable source item blocks the add; the gate itself sends the
 	// log-full / equip error (msg=true), so the handler stays silent here.
 	if !target.canAddQuest(ctx, entry, true) {
-		return
+		return true
 	}
 	target.addQuestToPlayer(ctx, entry, 0) // AddQuestAndCheckCompletion
+	return true
 }
 
 // handleQuestRemove mirrors HandleQuestRemove (cs_quest.cpp:112).
-func (s *session) handleQuestRemove(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandQuestRemove) {
-		return
+func (s *session) handleQuestRemove(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandQuestRemove) {
+		return false
 	}
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .quest remove <entry>")
-		return
+		return true
 	}
 	target := s.questTargetPlayer()
 	if target == nil {
-		return
+		return true
 	}
 	entry, ok := parseQuestLink(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .quest remove <entry>")
-		return
+		return true
 	}
 	if !s.questTemplateGate(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	st, err := target.characterQuestStatus(ctx, entry)
 	if err != nil || st == int64(questStatusNoneValue) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	target.clearQuestLogEntries(ctx, entry)
 	// The TakeQuestSourceItem, PvP-quest-flag and OnQuestStatusChange legs
 	// ride along in clearQuestLogEntries (Spell::EffectQuestClear arm order).
 	s.sendSysMessage("Quest removed.") // LANG_COMMAND_QUEST_REMOVED 473
+	return true
 }
 
 // handleQuestComplete mirrors HandleQuestComplete (cs_quest.cpp:175): the
 // gates, the objective-fill legs, then the CompleteQuest transition.
-func (s *session) handleQuestComplete(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandQuestComplete) {
-		return
+func (s *session) handleQuestComplete(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandQuestComplete) {
+		return false
 	}
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .quest complete <entry>")
-		return
+		return true
 	}
 	target := s.questTargetPlayerOrSelf()
 	if target == nil {
-		return
+		return true
 	}
 	entry, ok := parseQuestLink(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .quest complete <entry>")
-		return
+		return true
 	}
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	st, err := target.characterQuestStatus(ctx, entry)
 	if err != nil || st == int64(questStatusNoneValue) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	target.fillQuestCompleteObjectives(ctx, entry)
 	target.completeQuest(ctx, entry) // Player::CompleteQuest
+	return true
 }
 
 // fillQuestCompleteObjectives mirrors the objective-fill legs of
@@ -408,42 +415,43 @@ func (s *session) creditQuestPlayerKills(ctx context.Context, questID uint32, re
 
 // handleQuestReward mirrors HandleQuestReward (cs_quest.cpp:285): the quest
 // must be complete, then the RewardQuest path runs with no choice item.
-func (s *session) handleQuestReward(ctx context.Context, args []string) {
-	if s.miscDeny(ctx, permissionCommandQuestReward) {
-		return
+func (s *session) handleQuestReward(ctx context.Context, args []string) bool {
+	if !s.commandAllowed(ctx, permissionCommandQuestReward) {
+		return false
 	}
 	if len(args) == 0 {
 		s.sendSysMessage("Syntax: .quest reward <entry>")
-		return
+		return true
 	}
 	target := s.questTargetPlayer()
 	if target == nil {
-		return
+		return true
 	}
 	entry, ok := parseQuestLink(args[0])
 	if !ok {
 		s.sendSysMessage("Syntax: .quest reward <entry>")
-		return
+		return true
 	}
 	if !s.questTemplateGate(ctx, entry) || s.questDisabled(ctx, entry) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	st, err := target.characterQuestStatus(ctx, entry)
 	if err != nil || st != int64(questStatusComplete) {
 		s.sendSysMessage(fmt.Sprintf("Quest %d not found.", entry)) // LANG_COMMAND_QUEST_NOTFOUND 471
-		return
+		return true
 	}
 	view, err := target.loadQuestRewardView(ctx, entry)
 	if err != nil {
-		return
+		return true
 	}
 	// .quest reward runs the full Player::RewardQuest grant path (cs_quest.cpp:313),
 	// shared with the turn-in packet: items, money, XP, honor, title,
 	// talents, arena points, reputation, mail, and the completion packet.
 	grants, destroyedGUIDs, err := target.commitQuestReward(ctx, view, 0)
 	if err != nil {
-		return
+		return true
 	}
 	target.applyQuestRewardGrants(ctx, view, entry, 0, 0, grants, destroyedGUIDs, true)
+	return true
 }
