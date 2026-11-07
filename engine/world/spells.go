@@ -27485,6 +27485,25 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						baseDmg = 280
 					}
 				}
+				// SpellScript OnHit dispatch (Spell::PreprocessTarget,
+				// Spell.cpp:2350/3557): the OnHit handlers rewrite the
+				// hit damage before the effect loop — the creature-caster
+				// twin rides spellScriptOnHitDamage in
+				// creatureEffectSpellDamage /
+				// creatureEffectSpellDamageCreature (boss_ai.go); this
+				// is the player-caster leg, at the same pre-division
+				// position (C++ divides the rewritten damage in
+				// EffectSchoolDMG). 50811/33671 are cast by the stoned
+				// unit itself (boss_krystallus.cpp:159,
+				// boss_gruul.cpp:287), so a stoned player routes
+				// through this session pipeline.
+				if s.server != nil && s.player != nil {
+					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
+						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, baseDmg); hit {
+							baseDmg = rewritten
+						}
+					}
+				}
 				// The division lands after the missing-data fallbacks above: a
 				// zero here means missing DBC data (C++ divides the computed
 				// damage, SpellEffects.cpp:334-348).

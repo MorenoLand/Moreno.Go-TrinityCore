@@ -1393,6 +1393,39 @@ func (s *Server) unloadTransportCreatureMotions(mapID uint32, transportGUID uint
 	}
 }
 
+// atEngageSetHomePosition mirrors the SetHomePosition leg of
+// Creature::AtEngage (Creature.cpp:3446-3447): when the current
+// movement generator is WAYPOINT_MOTION_TYPE or POINT_MOTION_TYPE,
+// or the AI is escorted (AI()->IsEscorted()), the home position
+// becomes the creature's current position. The generator test reuses
+// the creatureMovementType derivation without taking motionMu (the
+// callers own the motion here): a script spline in flight stamps its
+// type, otherwise a waypoint patrol (MoveType 2 with a loaded path)
+// counts. The waypoint leg is nearly vacuous in Go — the waypoint
+// DoUpdate arm already refreshes home to each leg destination — but
+// the escort leg is live: an escorted creature engages away from its
+// spawn and must evade back to the engage point, not the spawn. The
+// Dismount and pet-speed legs of AtEngage have no Go model (creatures
+// never mount; no speed-step twin).
+func atEngageSetHomePosition(motion *creatureMotion) {
+	if motion == nil {
+		return
+	}
+	homeMotion := false
+	if motion.Moving && time.Now().Before(motion.MoveEnds) &&
+		(motion.ScriptMoveType == movementGeneratorWaypoint || motion.ScriptMoveType == movementGeneratorPoint) {
+		homeMotion = true
+	}
+	if motion.MoveType == 2 && len(motion.Points) > 0 {
+		homeMotion = true
+	}
+	if !homeMotion && !motion.IsEscorted() {
+		return
+	}
+	motion.HomeX, motion.HomeY, motion.HomeZ = motion.X, motion.Y, motion.Z
+	motion.HomeO = motion.Orientation
+}
+
 func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerGUID uint64) {
 	playerSess := s.findSessionByGUID(playerGUID)
 	mapID, instanceID := uint32(0), uint32(0)
@@ -1516,6 +1549,10 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		s.creatureAddThreat(motion, playerGUID, 0.0, true, playerSess, nil)
 		if !motion.InCombat {
 			enteredCombat = true
+			// Creature::AtEngage (Creature.cpp:3446-3447): the home
+			// position becomes the current position on a waypoint /
+			// point generator or an escorted AI.
+			atEngageSetHomePosition(motion)
 			s.broadcastAIReactionAt(motion.Map, motion.InstanceID, creatureGUID, 2, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
 			if playerSess != nil {
@@ -9240,6 +9277,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			// AddThreat registers the new-victim entry and runs the victim
 			// leg on a zero add (ThreatManager::AddThreat new-target arm).
 			motion.InCombat = true
+			// Creature::AtEngage (Creature.cpp:3446-3447): the home
+			// position becomes the current position on a waypoint /
+			// point generator or an escorted AI.
+			atEngageSetHomePosition(motion)
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion)
 			}

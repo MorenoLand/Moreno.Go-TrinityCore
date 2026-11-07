@@ -13545,10 +13545,11 @@ func init() {
 	// 40-phase escort event machine (quest 9759 start,
 	// waypoint kneel/plant/detonate choreography,
 	// draenei-explosives gameobjects, sironas-meeting
-	// phases, post-slay quest credit) and the escort-player
-	// healing-surge arm await the escort / quest-accept /
-	// summon / movement / gameobject bridges — documented
-	// only; the Reset SetCanDualWield arm has no dual-wield
+	// phases, post-slay quest credit) awaits the escort /
+	// quest-accept / summon / movement / gameobject bridges —
+	// documented only; the escort-player healing-surge arm
+	// is PORTED (GetEscortPlayer bridge + legoso Lua, tick
+	// 373); the Reset SetCanDualWield arm has no dual-wield
 	// bridge; no SAY_LEGOSO_* line fires (no talk bridge);
 	// ACTION_LEGOSO_SIRONAS_KILLED: ev38 DoAction dispatch IS bridged
 	// (creature:DoAction, lua_creature_events.go:802); the arm stays out

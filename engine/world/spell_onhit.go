@@ -14,9 +14,11 @@ import (
 // SpellScript registry, so the dispatch is a per-spell table consulted
 // by the creature-caster damage arms (creatureEffectSpellDamage and
 // creatureEffectSpellDamageCreature) right after damage := baseDamage,
-// the position of C++'s SetHitDamage. The player-caster leg is open:
-// 50811/33671 are cast by the stoned unit itself, so a stoned player
-// routes through the session cast pipeline, which has no dispatch yet.
+// the position of C++'s SetHitDamage. The player-caster leg rides the
+// same dispatch from the session SCHOOL_DAMAGE arm
+// (castSpellDirectWithOverrides in spells.go): 50811/33671 are cast by
+// the stoned unit itself, so a stoned player routes through the session
+// cast pipeline.
 func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, baseDamage uint32) (uint32, bool) {
 	var radius float32
 	radiusOK := false

@@ -2325,8 +2325,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// StartEscort is the ScriptedEscortAI::Start producer: it arms the
 	// escort-player GUID the IsEscorted gate reads. The waypoint
 	// machine itself is unported, so this only arms the escort state
-	// the respawn-block exemption (Map.cpp:3066) consumes; the engage
-	// home leg (Creature.cpp:3446) has no AtEngage fire site in Go.
+	// the respawn-block exemption (Map.cpp:3066) and the engage home
+	// leg (Creature.cpp:3446, atEngageSetHomePosition) consume.
 	methods["StartEscort"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("player is required")
@@ -2343,6 +2343,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		motion.EscortPlayerGUID = playerGUID
 		s.motionMu.Unlock()
 		return nil, nil
+	}
+	// GetEscortPlayer is ScriptedEscortAI::GetPlayerForEscort: the
+	// escort player object, nil when no escort runs or the player no
+	// longer resolves (ObjectAccessor::GetPlayer). The legoso
+	// healing-surge arm (zone_bloodmyst_isle.cpp:452-464) consumes it;
+	// the resolution is the GetLootRecipient precedent (findPlayer).
+	methods["GetEscortPlayer"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		playerGUID := motion.EscortPlayerGUID
+		s.motionMu.Unlock()
+		if playerGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.findPlayer(playerGUID); player != nil {
+			return []any{player}, nil
+		}
+		return []any{nil}, nil
 	}
 	// StopEscort clears the escort-player GUID when the escort ends
 	// (quest complete/fail, waypoint end): the escort AI object dies

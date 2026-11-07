@@ -55,9 +55,9 @@
 -- gameobjects, the sironas-meeting phases, the post-slay
 -- quest-credit) is unmodeled (omor / steamrigger
 -- precedents); the escort-player healing-surge arm
--- (GetPlayerForEscort() below 85%) is unmodeled — no
--- escort bridge, so no escort player exists in this
--- model (C++-exact when GetPlayerForEscort is nil);
+-- (GetPlayerForEscort() below 85%) is PORTED via
+-- creature:GetEscortPlayer() (lua_creature_events.go) —
+-- nil escort keeps the self-only behavior C++-exact;
 -- the DoAction bridge (ev38) is live — ACTION_LEGOSO_
 -- SIRONAS_KILLED (the sironas-slain speech cascade) is
 -- PORTED 2026-11-05, called from sironas JustDied
@@ -185,13 +185,21 @@ local function combatTick(creature, guid)
     -- integer-threshold form (maulgar/ironaya only applies to C++
     -- HealthBelowPct). Non-triggered DoCast(self), re-arm 10s; else
     -- re-arm 2s (C++-exact). The escort-
-    -- player arm has no escort bridge — unmodeled.
+    -- player arm rides creature:GetEscortPlayer()
+    -- (lua_creature_events.go) — nil escort falls through
+    -- to the 2s re-arm, C++-exact.
     if st.healingTimer <= 0 then
         if creature:GetHealthPct() < 85 then
             creature:CastSpell(creature, SPELL_HEALING_SURGE)
             st.healingTimer = 10000
         else
-            st.healingTimer = 2000
+            local escort = creature:GetEscortPlayer()
+            if escort ~= nil and escort:GetHealthPct() < 85 then
+                creature:CastSpell(escort, SPELL_HEALING_SURGE)
+                st.healingTimer = 10000
+            else
+                st.healingTimer = 2000
+            end
         end
     end
 end
