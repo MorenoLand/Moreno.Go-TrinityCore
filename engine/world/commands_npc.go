@@ -163,7 +163,10 @@ func (s *session) handleNPCAddFormation(ctx context.Context, args []string) bool
 	}
 	leaderGUID, err := strconv.ParseUint(args[0], 0, 32)
 	if err != nil {
-		return false
+		// Unparseable ObjectGuid::LowType token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage("Invalid leader GUID.")
+		return true
 	}
 	if uint16(s.selection>>48) != 0xF130 {
 		s.sendSysMessage("Select a creature first.")
@@ -250,13 +253,19 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) bool {
 	}
 	itemID, link, ok := npcItemTokenID(args[0])
 	if !ok {
-		return false
+		// Unparseable ItemTemplate token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	var maxcount, incrtime, extendedcost uint32
 	for i, token := range args[1:] {
 		v, ok := npcVendorUintArg(token)
 		if !ok {
-			return false
+			// Unparseable Optional<uint32> token: the framework prints
+			// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 		switch i {
 		case 0:
@@ -280,7 +289,10 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) bool {
 	itemMissing := false
 	if err := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName); err != nil {
 		if !link {
-			return false
+			// A numeric id with no template is a parser error in C++
+			// (LANG_CMDPARSER_* + SetSentErrorMessage).
+			s.sendSysMessage(syntax)
+			return true
 		}
 		itemMissing = true
 	}
@@ -342,10 +354,10 @@ func (s *session) handleNPCAddItem(ctx context.Context, args []string) bool {
 // precedent; success is silent as in C++. No DB row is written, so the
 // summon is temporary by construction, and no npcbot gate runs: C++'s
 // temp arm carries none (unlike the permanent add arm). The bool reports
-// C++ handler success: a non-loot/noloot first token and the unknown
-// template both return false silently (cs_npc.cpp:1025-1038), so
-// dispatchCommand shows the node's help listing (ChatCommand.cpp:296-309);
-// success returns true.
+// C++ handler success: a non-loot/noloot first token with a parseable
+// entry reaches the handler's silent false (cs_npc.cpp:1025-1038), while
+// an unparseable entry token is a framework error (message + true); the
+// unknown template fails silently; success returns true.
 func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandNPCAddTemp) {
 		return false
@@ -361,11 +373,18 @@ func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
 		case "noloot":
 			rest = rest[1:]
 		default:
-			// A first token that is neither loot nor noloot makes
-			// the C++ handler return false silently (the parser
-			// backtracks the optional lootStr onto the entry, so a
-			// lone unknown token stays a parse failure here).
+			// A first token that is neither loot nor noloot fills the
+			// lootStr slot, so C++ parses the entry from the second
+			// token: an unparseable second token is a framework error
+			// (message + true), while a parseable one reaches the
+			// handler's silent false below.
 			if len(rest) > 1 {
+				if _, ok := goParseLinkOrUint(rest[1], "creature_entry"); !ok {
+					// Unparseable CreatureEntry token: the framework
+					// prints LANG_CMDPARSER_STRING_VALUE_INVALID.
+					s.sendSysMessage(syntax)
+					return true
+				}
 				return false
 			}
 		}
@@ -375,7 +394,10 @@ func (s *session) handleNPCAddTemp(ctx context.Context, args []string) bool {
 	}
 	entry, ok := goParseLinkOrUint(rest[0], "creature_entry")
 	if !ok {
-		return false
+		// Unparseable CreatureEntry token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if _, ok := s.npcTemplateGate(ctx, entry); !ok {
 		return false
@@ -405,7 +427,10 @@ func (s *session) handleNPCAddMove(ctx context.Context, args []string) bool {
 	}
 	guid, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
-		return false
+		// Unparseable CreatureSpawnId token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage("Invalid creature GUID.")
+		return true
 	}
 	var exists uint32
 	if err := db.QueryRowContext(ctx, "SELECT guid FROM creature WHERE guid = ?", guid).Scan(&exists); err != nil {
@@ -422,7 +447,10 @@ func (s *session) handleNPCAddMove(ctx context.Context, args []string) bool {
 // handleNPCAdd mirrors HandleNpcAddCommand (cs_npc.cpp:117): the entry must
 // exist in creature_template and must not be an npcbot entry. The live spawn
 // legs (Creature::Create/AddToMap/grid) have no Go bridge, but creature
-// visibility is DB-driven, so the creature row insert IS the spawn.
+// visibility is DB-driven, so the creature row insert IS the spawn. The
+// transport leg (cs_npc.cpp:135-146) is ported: aboard a transport the row
+// takes the transport map id + the player's transport offsets, and the
+// passenger list is reloaded so the new row goes live.
 func (s *session) handleNPCAdd(ctx context.Context, args []string) bool {
 	if !s.commandAllowed(ctx, permissionCommandNPCAdd) {
 		return false
@@ -436,7 +464,10 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) bool {
 	}
 	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
 	if !ok {
-		return false
+		// Unparseable CreatureEntry token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage("Invalid creature entry.")
+		return true
 	}
 	flagsExtra, ok := s.npcTemplateGate(ctx, entry)
 	if !ok {
@@ -445,19 +476,42 @@ func (s *session) handleNPCAdd(ctx context.Context, args []string) bool {
 	if s.npcbotSpawnBlocked(entry, flagsExtra) {
 		return true
 	}
-	var guid uint32
-	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&guid); err != nil {
-		return true
-	}
 	p := s.player
 	// SaveToDB (cs_npc.cpp:163): spawnMask is 1 << Map::GetSpawnMode and
 	// phaseMask is GetPhaseMaskForSpawn (Player.cpp:25279) — a GM reads
 	// the first SPELL_AURA_PHASE aura's misc value, else PHASEMASK_NORMAL;
-	// the result strips the normal bit when another phase bit is set. The
-	// transport leg (CreateNPCPassenger + transport offsets) has no Go
-	// bridge and stays open.
+	// the result strips the normal bit when another phase bit is set.
 	spawnMode := s.playerSpawnMode()
 	phaseMask := s.playerPhaseMaskForSpawn()
+	// Transport leg (cs_npc.cpp:135-146): a player aboard a transport
+	// spawns via CreateNPCPassenger with the transport offsets and
+	// SaveToDB(trans->GetGOInfo()->moTransport.mapID, ...). The row's
+	// position is the transport offset — Go's transport loader reads it
+	// that way (transports.go:229-230) and C++'s in-memory spawnPoint is
+	// the offset too; C++'s SaveToDB INSERT writes the world position
+	// instead (Creature.cpp:1471-1474), a latent upstream quirk Go does
+	// not reproduce (it would misplace the passenger on reload).
+	// AddCreatureToGrid rides the passenger reload below. A TransportGUID
+	// with no loaded transport falls through to the plain leg.
+	if p.TransportGUID != 0 && s.server != nil {
+		if transport, ok := s.server.attachedTransportSnapshot(*p); ok && transport.TransportMapID != 0 {
+			var tguid uint32
+			if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&tguid); err != nil {
+				return true
+			}
+			if _, err := db.ExecContext(ctx,
+				"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 120, 0)",
+				tguid, entry, transport.TransportMapID, 1<<spawnMode, phaseMask, p.TransportX, p.TransportY, p.TransportZ, p.TransportO); err != nil {
+				return true
+			}
+			s.server.reloadTransportPassengers(ctx, transport.Spawn.GUID)
+			return true
+		}
+	}
+	var guid uint32
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&guid); err != nil {
+		return true
+	}
 	// spawntimesecs default mirrors the world DB column default for fresh
 	// rows; the live-spawn respawn-delay legs have no Go bridge.
 	if _, err := db.ExecContext(ctx,
@@ -511,7 +565,10 @@ func (s *session) handleNPCMove(ctx context.Context, args []string) bool {
 		var ok bool
 		guid, ok = goParseLinkOrUint(args[0], "creature")
 		if !ok {
-			return false
+			// Unparseable CreatureSpawnId token: the framework prints
+			// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 	}
 	var rowMap uint32
@@ -612,7 +669,10 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) bool {
 		var ok bool
 		guid, ok = goParseLinkOrUint(args[0], "creature")
 		if !ok {
-			return false
+			// Unparseable CreatureSpawnId token: the framework prints
+			// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+			s.sendSysMessage(syntax)
+			return true
 		}
 	}
 	// Creature::DeleteFromDB (Creature.cpp:1861): the row must exist first,
@@ -723,7 +783,10 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) bool {
 	if len(args) > 0 {
 		d, err := parseNPCFloat(args[0])
 		if err != nil {
-			return false
+			// Unparseable float token: the framework prints
+			// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+			s.sendSysMessage("Invalid distance.")
+			return true
 		}
 		distance = d
 	}
@@ -746,9 +809,13 @@ func (s *session) handleNPCNear(ctx context.Context, args []string) bool {
 		if err := rows.Scan(&guid, &entry, &x, &y, &z, &mapID, &name); err != nil {
 			continue
 		}
-		// LANG_CREATURE_LIST_CHAT 515 (same shape as the list port).
-		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature_entry:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
-			guid, entry, name, x, y, z, mapID, "", ""))
+		// LANG_CREATURE_LIST_CHAT 515 (same shape as the list port):
+		// C++ passes (guid, guid, name, ...) (cs_npc.cpp:588), and the
+		// GO twin passes (guid, entry, guid, ...) into a |Hgameobject:guid|
+		// link (cs_list.cpp:408) — so the link id is the GUID, not the
+		// entry: |Hcreature:guid|, matching the .list creature arm.
+		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
+			guid, guid, name, x, y, z, mapID, "", ""))
 		count++
 	}
 	// LANG_COMMAND_NEAR_NPC_MESSAGE 556.

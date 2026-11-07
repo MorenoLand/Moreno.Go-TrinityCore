@@ -195,7 +195,10 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool 
 		return true
 	}
 	if len(args) < 2 {
-		return false
+		// A lone token that is neither a move type nor a parseable
+		// spawn id fails the framework parse (message + true).
+		s.sendSysMessage(syntax)
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
@@ -203,11 +206,17 @@ func (s *session) handleNPCSetMoveType(ctx context.Context, args []string) bool 
 	}
 	guid, ok := goParseLinkOrUint(args[0], "creature")
 	if !ok {
-		return false
+		// Unparseable CreatureSpawnId token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	moveType, title, ok := parseNPCMoveType(args[1])
 	if !ok {
-		return false
+		// Unparseable move-type token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	nodel := false
 	if len(args) > 2 {
@@ -416,7 +425,10 @@ func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) bool {
 	}
 	itemID, link, ok := npcItemTokenID(args[0])
 	if !ok {
-		return false
+		// Unparseable ItemTemplate token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	db := s.npcWorldDB()
 	if db == nil {
@@ -425,7 +437,10 @@ func (s *session) handleNPCDeleteItem(ctx context.Context, args []string) bool {
 	var itemName string
 	itemFound := db.QueryRowContext(ctx, "SELECT name FROM item_template WHERE entry = ?", itemID).Scan(&itemName) == nil
 	if !link && !itemFound {
-		return false
+		// A numeric id with no template is a parser error in C++
+		// (LANG_CMDPARSER_* + SetSentErrorMessage).
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -482,7 +497,10 @@ func (s *session) handleNPCSetFactionID(ctx context.Context, args []string) bool
 	}
 	faction, ok := npcVendorUintArg(args[0])
 	if !ok {
-		return false
+		// Unparseable uint32 token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if _, found := s.factionTemplateEntry(faction); !found {
 		s.sendSysMessage(fmt.Sprintf("Wrong faction %d.", faction))
@@ -601,7 +619,10 @@ func (s *session) handleNPCSetFlag(ctx context.Context, args []string) bool {
 	}
 	flags, ok := npcSetFlagParse(args[0])
 	if !ok {
-		return false
+		// Unparseable NPCFlags token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -645,7 +666,10 @@ func (s *session) handleNPCSetLevel(ctx context.Context, args []string) bool {
 	}
 	lvl, ok := npcVendorUintArg(args[0])
 	if !ok || lvl > 255 {
-		return false
+		// Unparseable uint8 token (out of range included): the framework
+		// prints LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	maxLevel := uint32(80)
 	if s.server != nil && s.server.Config.MaxPlayerLevel != 0 {
@@ -703,7 +727,10 @@ func (s *session) handleNPCSetModel(ctx context.Context, args []string) bool {
 	}
 	display, ok := npcVendorUintArg(args[0])
 	if !ok {
-		return false
+		// Unparseable uint32 token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil || motionIsPet(motion) {
@@ -756,7 +783,10 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) bool {
 	}
 	mask, ok := npcVendorUintArg(args[0])
 	if !ok {
-		return false
+		// Unparseable uint32 token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if mask == 0 {
 		s.sendSysMessage(misc2BadValue)
@@ -812,7 +842,10 @@ func (s *session) handleNPCSetEntry(ctx context.Context, args []string) bool {
 	}
 	entry, ok := goParseLinkOrUint(args[0], "creature_entry")
 	if !ok {
-		return false
+		// Unparseable CreatureEntry token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if entry == 0 {
 		return false
@@ -864,7 +897,10 @@ func (s *session) handleNPCSetWanderDistance(ctx context.Context, args []string)
 	}
 	dist, err := parseNPCFloat(args[0])
 	if err != nil {
-		return false
+		// Unparseable float token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	if dist < 0 {
 		s.sendSysMessage(misc2BadValue)
@@ -909,7 +945,10 @@ func (s *session) handleNPCSetSpawnTime(ctx context.Context, args []string) bool
 	}
 	secs, ok := npcVendorUintArg(args[0])
 	if !ok {
-		return false
+		// Unparseable uint32 token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -955,7 +994,10 @@ func (s *session) handleNPCSetLink(ctx context.Context, args []string) bool {
 	}
 	link, ok := npcVendorUintArg(args[0])
 	if !ok {
-		return false
+		// Unparseable ObjectGuid::LowType token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -1030,7 +1072,10 @@ func (s *session) handleNPCSetData(ctx context.Context, args []string) bool {
 	data1, ok1 := npcVendorUintArg(args[0])
 	data2, ok2 := npcVendorUintArg(args[1])
 	if !ok1 || !ok2 {
-		return false
+		// Unparseable uint32 token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -1124,6 +1169,15 @@ func (s *session) handleNPCEvade(ctx context.Context, args []string) bool {
 	}
 	force, ok := npcEvadeParse(args)
 	if !ok {
+		// An unknown first token fails the EvadeReason enum parse in
+		// the framework (message + true); leftover tokens after a
+		// parsed reason/force are trailing args (silent false).
+		if len(args) > 0 {
+			if _, good := npcEvadeReasonParse(args[0]); !good && !strings.EqualFold(args[0], "force") {
+				s.sendSysMessage("Syntax: .npc evade [reason] [force]")
+				return true
+			}
+		}
 		return false
 	}
 	motion := s.castCommandSelectedCreature()
@@ -1288,7 +1342,10 @@ func (s *session) handleNPCPlayEmote(ctx context.Context, args []string) bool {
 	}
 	emote, ok := npcVendorUintArg(args[0])
 	if !ok {
-		return false
+		// Unparseable uint32 token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage(syntax)
+		return true
 	}
 	motion := s.castCommandSelectedCreature()
 	if motion == nil {
@@ -1663,8 +1720,11 @@ func (s *session) handleNPCSpawnGroup(ctx context.Context, args []string) bool {
 		return false
 	}
 	groupID, force, ignoreRespawn, ok := parseSpawnGroupArgs(args, true)
-	if !ok {
-		return false
+	if !ok && len(args) > 0 {
+		// Unparseable token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage("Syntax: .npc spawngroup <groupId> [force] [ignorerespawn]")
+		return true
 	}
 	if s.server == nil {
 		return true
@@ -1695,7 +1755,13 @@ func (s *session) handleNPCDespawnGroup(ctx context.Context, args []string) bool
 	}
 	groupID, removeRespawnTime, _, ok := parseSpawnGroupArgs(args, false)
 	if !ok {
-		return false
+		if len(args) == 0 {
+			return false
+		}
+		// Unparseable token: the framework prints
+		// LANG_CMDPARSER_STRING_VALUE_INVALID + SetSentErrorMessage.
+		s.sendSysMessage("Syntax: .npc despawngroup <groupId> [removerespawntime]")
+		return true
 	}
 	if s.server == nil {
 		return true

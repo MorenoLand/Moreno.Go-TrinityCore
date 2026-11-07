@@ -229,8 +229,11 @@ func (s *session) handleListCreatureCommand(ctx context.Context, args []string) 
 		s.sendSysMessage(fmt.Sprintf("%d - |cffffffff|Hcreature:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
 			guid, guid, name, x, y, z, mapID, "", ""))
 	}
-	// LANG_COMMAND_LISTCREATUREMESSAGE (441)
-	s.sendSysMessage(fmt.Sprintf("List of creatures found: %d (entry %d)", creatureCount, entry))
+	// LANG_COMMAND_LISTCREATUREMESSAGE (441): C++ passes (creatureId,
+	// creatureCount) positionally (cs_list.cpp:149) into the recalled
+	// TDB text, so the id leads — the same (id, count) order as the
+	// item/object twins below. Format text unseeded in-tree.
+	s.sendSysMessage(fmt.Sprintf("List of creatures found: %d (entry %d)", entry, creatureCount))
 	return true
 }
 
@@ -295,8 +298,10 @@ func (s *session) handleListObjectCommand(ctx context.Context, args []string) bo
 		s.sendSysMessage(fmt.Sprintf("%d - %d - |cffffffff|Hgameobject:%d|h[%s]|h|r - x: %f y: %f z: %f mapid: %d (GUID %s %s)",
 			guid, entry, guid, name, x, y, z, mapID, "", ""))
 	}
-	// LANG_COMMAND_LISTOBJMESSAGE (439)
-	s.sendSysMessage(fmt.Sprintf("List of gameobjects found: %d (entry %d)", objectCount, entry))
+	// LANG_COMMAND_LISTOBJMESSAGE (439): C++ passes (gameObjectId,
+	// objectCount) positionally (cs_list.cpp:428) into the recalled TDB
+	// text, so the id leads. Format text unseeded in-tree.
+	s.sendSysMessage(fmt.Sprintf("List of gameobjects found: %d (entry %d)", entry, objectCount))
 	return true
 }
 
@@ -471,9 +476,12 @@ func (s *session) handleListItemCommand(ctx context.Context, args []string) bool
 		s.sendSysMessage("No item found.") // LANG_COMMAND_NOITEMFOUND (436)
 		return true
 	}
-	// LANG_COMMAND_LISTITEMMESSAGE (438)
+	// LANG_COMMAND_LISTITEMMESSAGE (438): C++ passes (itemId, total,
+	// inventory, mail, auction, guild) positionally (cs_list.cpp:342)
+	// into the recalled TDB text, so the id leads. Format text unseeded
+	// in-tree.
 	s.sendSysMessage(fmt.Sprintf("List of items found: %d (item %d, inventory: %d, mail: %d, auction: %d, guild bank: %d)",
-		total, itemID, inventoryCount, mailCount, auctionCount, guildCount))
+		itemID, total, inventoryCount, mailCount, auctionCount, guildCount))
 	return true
 }
 
