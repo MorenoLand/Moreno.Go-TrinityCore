@@ -49,8 +49,9 @@
 -- SetBossState(DATA_KOLOGARN 5, DONE) PORTED 2026-11-05 via
 -- creature:SetBossState (lua_creature_events.go:5917; base-last in
 -- C++ cpp:155, so the state leg sits after Talk/SetFlag); the
--- MoveTargetedHome leg and the SetCorpseDelay(604800) leg have no
--- bridges. The DoCast(SPELL_KOLOGARN_PACIFY 63726) leg has a
+-- MoveTargetedHome leg is PORTED tick 386 via creature:MoveHome
+-- (lua_creature_events.go:4680; the old "no bridge" claim is stale)
+-- and the SetCorpseDelay(604800) leg has no bridge. The DoCast(SPELL_KOLOGARN_PACIFY 63726) leg has a
 -- cast bridge (creature:CastSpell, lua_creature_events.go:62) but
 -- stays out as a no-op: corpse-management-cluster self-pacify on
 -- a dead caster — the Go combat tick already gates dead
@@ -363,12 +364,14 @@ end
 
 -- C++ JustDied: Talk(SAY_DEATH) first, then DoCast PACIFY +
 -- MoveTargetedHome + SetFlag + SetCorpseDelay, _JustDied() LAST —
--- the Talk, SetFlag and SetBossState(DONE) arms are ported (the
--- PACIFY cast is bridgeable but a no-op on a dead caster — see
--- header).
+-- the Talk, MoveHome, SetFlag and SetBossState(DONE) arms are
+-- ported (the PACIFY cast is bridgeable but a no-op on a dead
+-- caster — see header).
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ boss_kologarn.cpp:151-152: MoveTargetedHome after Talk.
+    creature:MoveHome()
     -- C++ boss_kologarnAI::JustDied (boss_kologarn.cpp:151): the corpse
     -- stays unselectable (SetCorpseDelay 604800 keeps the corpse a week).
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)

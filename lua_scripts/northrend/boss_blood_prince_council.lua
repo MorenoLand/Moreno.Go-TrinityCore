@@ -838,6 +838,11 @@ local function princesKilledUnit(event, creature, victim)
 end
 
 -- C++ BloodPrincesBossAI::JustDied :466-486:
+-- events.Reset + summons.DespawnAll (ported as the cancelTimers /
+-- despawn*Summons calls below) + instance->SendEncounterUnit
+-- (ENCOUNTER_FRAME_DISENGAGE, me) — PORTED tick 386 via
+-- creature:SendEncounterUnit(1, creature) (lua_creature_events.go:6185;
+-- the controllerLeaveCombat precedent in this file) — then the
 -- switch (me->GetEntry()) Talk(death text) — the sjonnir
 -- JustDied-Talk precedent.
 -- C++ BloodPrincesBossAI SetData legs: Reset :452 instance->SetData(DATA_ORB_WHISPERER_ACHIEVEMENT, true)
@@ -849,6 +854,10 @@ local function princesJustDied(event, creature)
     despawnValanarSummons(creature:GetGUID())
     despawnKelesethSummons(creature:GetGUID())
     despawnTaldaramSummons(creature:GetGUID())
+    -- C++ boss_blood_prince_council.cpp:469: SendEncounterUnit
+    -- (ENCOUNTER_FRAME_DISENGAGE) after the summon despawns,
+    -- before Talk.
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
     creature:Talk(DEATH_TEXT[creature:GetEntry()])
 end
 

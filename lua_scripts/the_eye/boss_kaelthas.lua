@@ -129,7 +129,8 @@
 -- per 2s cycle, and summons NPC_PHOENIX_EGG 21364 on
 -- death); spawned only by the unmodeled SPELL_PHOENIX_
 -- ANIMATION 36723 machine (driver unmodeled — the SummonCreature
--- bridge itself is live) — documented only, no registration.
+-- bridge itself is live) — its JustDied egg summon is PORTED
+-- below (tick 386, dormant until the driver lands).
 -- npc_phoenix_egg_tk (21364) — no Talk arms (15s rebirth timer
 -- summoning NPC_PHOENIX 21362 — driver unmodeled, summon bridge
 -- live); spawned only by the phoenix's
@@ -622,3 +623,15 @@ end)
 RegisterCreatureEvent(ENTRY_TELONICUS, 23, function(_, creature)
     fullReset(creature:GetGUID())
 end)
+
+local ENTRY_PHOENIX_TK = 21362
+local NPC_PHOENIX_EGG = 21364
+-- C++ npc_phoenix_tkAI::JustDied (boss_kaelthas.cpp:1349-1354):
+-- summon the egg at own position, 16s timed despawn.
+-- Dormant until the SPELL_PHOENIX_ANIMATION driver lands
+-- (phoenixes spawn only via that unmodeled machine); entry-keyed
+-- dispatch, no RegisterLuaBoss needed (tick-384 void-sentry precedent).
+local function phoenixDied(event, creature, killer)
+    creature:SummonCreature(NPC_PHOENIX_EGG, 0, 0, 0, 0, 0, 16000)
+end
+RegisterCreatureEvent(ENTRY_PHOENIX_TK, 4, phoenixDied)

@@ -24,10 +24,11 @@
 -- (false) PORTED (bridge added 2026-10-22, lua_creature_events.go) + the
 -- two self casts DoCastSelf(SPELL_FROZEN_CORE_GETS_HIT 46810),
 -- DoCastSelf(SPELL_ICE_SPEAR_AURA 46371). OnDied(4):
--- DoCastSelf(SPELL_SUMMON_LOOT_MISSILE 45941), DoCastSelf
+-- Unit::Kill(me, ahune) FIRST (boss_ahune.cpp:289-296) — PORTED tick
+-- 386 via FindNearestCreature(25740, 100.0) + Kill (baltharus
+-- precedent; the old "cross-creature blocked" claim is stale) —
+-- then DoCastSelf(SPELL_SUMMON_LOOT_MISSILE 45941), DoCastSelf
 -- (SPELL_MINION_DESPAWNER 46843) — C++-exact arm order
--- (the Unit::Kill(me, ahune) arm is cross-creature blocked —
--- instance->GetCreature(DATA_AHUNE), no cross-creature bridge)
 -- + cleanup. OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — the _instance GetCreature arms
@@ -67,10 +68,13 @@ end)
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 2, function(_, creature)
 end)
 
--- C++ JustDied: the two DoCast(spellId) self casts
--- (C++-exact order); the Unit::Kill(me, ahune) arm is
--- cross-creature blocked.
+-- C++ JustDied (boss_ahune.cpp:289-296): Unit::Kill(me, ahune)
+-- FIRST, then the two self casts. Recursion-safe: Kill on the
+-- already-dead Ahune (the normal case — the core dies because Ahune
+-- died) is a Health == 0 no-op (boss_ai.go:9697-9700).
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 4, function(_, creature)
+    local ahune = creature:FindNearestCreature(25740, 100.0)
+    if ahune then ahune:Kill(creature) end
     creature:CastSpell(creature, SPELL_SUMMON_LOOT_MISSILE)
     creature:CastSpell(creature, SPELL_MINION_DESPAWNER)
 end)

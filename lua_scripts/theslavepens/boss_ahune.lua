@@ -35,10 +35,13 @@
 -- lookup, and the 46430 script leg (hit health = caster
 -- health) is modeled directly via SetHealth. The suicide
 -- fallback when the core is absent has no equivalent.
--- OnDied(4): cleanup (the achievement
--- DoCastSpellOnPlayers 62043, the cross-creature Unit::Kill
--- of ahuneBunny/frozenCore, the LFG FinishDungeon arm and the
--- _JustDied arm are instance/cross-creature blocked).
+-- OnDied(4): the cross-creature Unit::Kill of ahuneBunny/frozenCore
+-- is PORTED below (tick 386 — FindNearestCreature + Kill are both
+-- live, baltharus precedent; the old "cross-creature blocked" claim
+-- is stale); the achievement DoCastSpellOnPlayers 62043, the LFG
+-- FinishDungeon arm and the _JustDied arm are instance/cross-creature
+-- blocked — the _JustDied leg is a C++ dead write anyway (no
+-- SetBossNumber in instance_the_slave_pens.cpp).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
 -- per-GUID state (the _Reset arm is instance-blocked). Melee
 -- is engine-driven. The ctor's SetControlled(true, UNIT_STATE_ROOT)
@@ -196,6 +199,17 @@ RegisterCreatureEvent(ENTRY_AHUNE, 2, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 4, function(_, creature)
+    -- C++ JustDied (boss_ahune.cpp:197-201): Unit::Kill(bunny) then
+    -- Unit::Kill(frozenCore); bunny 25745 (NPC_AHUNE_LOC_BUNNY),
+    -- core 25865. FindNearestCreature 100.0 is the in-file
+    -- instance-lookup idiom (:158). Killing the core fires its
+    -- (already ported) ev4 — loot-missile + minion-despawner casts —
+    -- C++-exact cascade. Recursion-safe: Kill on an already-dead
+    -- target is a Health == 0 no-op (boss_ai.go:9697-9700).
+    local bunny = creature:FindNearestCreature(25745, 100.0)
+    if bunny then bunny:Kill(creature) end
+    local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
+    if core then core:Kill(creature) end
     resetBoss(creature:GetGUID())
 end)
 

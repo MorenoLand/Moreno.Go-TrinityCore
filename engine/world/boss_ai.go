@@ -19528,8 +19528,9 @@ func init() {
 	// (33143 ulduar.h — no Talk arms; no registration);
 	// boss_flame_leviathan_safety_container (33218 local enum —
 	// JustDied has no Talk arms; no registration);
-	// npc_mechanolift (33214 local enum — no Talk arms; no
-	// registration); npc_pool_of_tar (33189 local enum — no
+	// npc_mechanolift (33214 local enum — JustDied PORTED tick 386
+	// in lua_scripts/northrend/boss_flame_leviathan.lua; registered
+	// below); npc_pool_of_tar (33189 local enum — no
 	// Talk arms; no registration); npc_colossus (33237 ulduar.h
 	// — JustDied has no Talk arms; no registration);
 	// npc_thorims_hammer / npc_mimirons_inferno /
@@ -19555,6 +19556,7 @@ func init() {
 	// spell_vehicle_throw_passenger — no SpellScript bridge;
 	// all three join the no-SpellScript-bridge queue.
 	RegisterLuaBoss("boss_flame_leviathan", 33113)
+	RegisterLuaBoss("npc_mechanolift", 33214)
 
 	// Ignis the Furnace Master (33118), Ulduar —
 	// lua_scripts/northrend/boss_ignis.lua.

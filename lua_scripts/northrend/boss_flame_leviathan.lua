@@ -67,7 +67,8 @@
 -- and MoveRandom are bridged, but the leg stays out: the summons.size() < 15
 -- gate has no bridge (no summons-count method), DoSummonFlyer spawns at
 -- flightZ 30 / radius 50 (CreatureAI.cpp:448) with no flyer-spawn twin,
--- and the mechanolift's own AI is unmodeled — flagged candidate for a
+-- and the mechanolift's own AI is unmodeled apart from its JustDied
+-- (PORTED below, tick 386) — flagged candidate for a
 -- dedicated tick, not ported here.
 -- EVENT_THORIM_S_HAMMER / EVENT_MIMIRON_S_INFERNO / EVENT_HODIR_S_FURY /
 -- EVENT_FREYA_S_WARD — hardmode tower-state-gated summon + Talk legs
@@ -114,7 +115,8 @@
 -- unregistered-cannon stay-out.
 -- boss_flame_leviathan_defense_turret (33142, ulduar.h line 114) /
 -- boss_flame_leviathan_overload_device (33143, ulduar.h line 115) /
--- boss_flame_leviathan_safety_container (33218) / npc_mechanolift (33214) /
+-- boss_flame_leviathan_safety_container (33218) / npc_mechanolift (33214,
+-- JustDied PORTED below, tick 386 — dust explosion + liquid summon) /
 -- npc_pool_of_tar (33189) / npc_colossus (33237, ulduar.h line 102) /
 -- npc_thorims_hammer (33365/33364) / npc_mimirons_inferno (33370/33369) /
 -- npc_hodirs_fury (33212/33108) / npc_freyas_ward (33367/33366) /
@@ -149,6 +151,11 @@
 
 local ENTRY_FLAME_LEVIATHAN = 33113
 local ENTRY_POOL_OF_TAR = 33189
+local ENTRY_MECHANOLIFT = 33214
+local ENTRY_LIQUID = 33189 -- NPC_LIQUID (boss_flame_leviathan.cpp:90), same entry as the pool of tar
+local SPELL_DUSTY_EXPLOSION = 63360
+local SPELL_LIQUID_PYRITE = 62494
+local SPELL_DUST_CLOUD_IMPACT = 54740
 
 -- DATA_LEVIATHAN = 0 (ulduar.h:36; BOSS_LEVIATHAN bossId).
 local DATA_LEVIATHAN = 0
@@ -360,6 +367,23 @@ RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 1, flameLeviathanEnterCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 2, flameLeviathanLeaveCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 4, flameLeviathanDied)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 23, flameLeviathanReset)
+
+-- C++ npc_mechanoliftAI::JustDied (boss_flame_leviathan.cpp:852-862):
+-- MoveTargetedHome + self-cast DUSTY_EXPLOSION + DoSummon NPC_LIQUID
+-- (type 5 CORPSE_TIMED_DESPAWN, 0ms — the C++ DoSummon(entry, me, 0)
+-- twin) + liquid self-casts LIQUID_PYRITE and DUST_CLOUD_IMPACT,
+-- both triggered. Every leg bridged (MoveHome, CastSpell,
+-- SummonCreature returning the summoned creature).
+local function mechanoliftDied(event, creature, killer)
+    creature:MoveHome()
+    creature:CastSpell(creature, SPELL_DUSTY_EXPLOSION)
+    local liquid = creature:SummonCreature(ENTRY_LIQUID, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 5, 0)
+    if liquid then
+        liquid:CastSpell(liquid, SPELL_LIQUID_PYRITE, true)
+        liquid:CastSpell(liquid, SPELL_DUST_CLOUD_IMPACT, true)
+    end
+end
+RegisterCreatureEvent(ENTRY_MECHANOLIFT, 4, mechanoliftDied)
 
 -- C++ npc_pool_of_tar::DamageTaken (boss_flame_leviathan.cpp:909-912):
 -- damage = 0 unconditionally (NPC_LIQUID 33189 local enum). Event 9's

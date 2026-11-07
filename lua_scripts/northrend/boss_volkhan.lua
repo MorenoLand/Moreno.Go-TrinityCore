@@ -47,7 +47,9 @@
 -- JustDied — Talk(SAY_DEATH 4) (event 4) + DespawnGolem PORTED via a
 -- grid sweep (molten 28695 + brittle 28681 — the C++ GUID list holds
 -- transformed golems too, so the brittle entry is swept as well);
--- the _JustDied boss bookkeeping passthrough has no bridge.
+-- the _JustDied SetBossState(DATA_VOLKHAN 1, DONE) leg is PORTED
+-- tick 386 via creature:SetBossState (lua_creature_events.go:6088);
+-- the old "no bridge" claim is stale (ionar precedent).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 28587):
 -- boss_volkhan Reset / Initialize (m_bIsStriking / m_bHasTemper /
@@ -163,6 +165,7 @@
 local ENTRY_MOLTEN_GOLEM = 28695
 local ENTRY_BRITTLE_GOLEM = 28681 -- boss_volkhan.cpp:30 (NPC_BRITTLE_GOLEM)
 local ENTRY_VOLKHAN = 28587
+local DATA_VOLKHAN = 1 -- halls_of_lightning.h:32
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 3
@@ -232,7 +235,9 @@ local function volkhanTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied: Talk(DEATH) + DespawnGolem + _JustDied() — the Talk
--- arm and the DespawnGolem leg are bridgeable (below).
+-- arm and the DespawnGolem leg are bridgeable (below), and the
+-- _JustDied SetBossState(DATA_VOLKHAN 1, DONE) leg is PORTED tick
+-- 386 (C++ arm order: Talk, DespawnGolem, _JustDied).
 local function volkhanDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     volkhanForgeCancel(creature:GetGUID())
@@ -253,6 +258,7 @@ local function volkhanDied(event, creature, killer)
             golem:Despawn()
         end
     end
+    creature:SetBossState(DATA_VOLKHAN, 3) -- DONE
 end
 
 RegisterCreatureEvent(ENTRY_VOLKHAN, 1, volkhanEnterCombat)

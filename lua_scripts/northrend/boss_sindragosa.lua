@@ -548,9 +548,11 @@ RegisterCreatureEvent(ENTRY_SINDRAGOSA, 24, sindragosaReachHome)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 19, sindragosaJustSummoned)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 1, spinestalkerEnterCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 2, addLeaveCombat)
+RegisterCreatureEvent(ENTRY_SPINESTALKER, 4, addLeaveCombat) -- C++ boss_sindragosa.cpp:678-681: JustDied _events.Reset() only
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 23, addReset)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 1, rimefangEnterCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 2, addLeaveCombat)
+RegisterCreatureEvent(ENTRY_RIMEFANG, 4, addLeaveCombat) -- C++ boss_sindragosa.cpp:805-808: JustDied _events.Reset() only
 RegisterCreatureEvent(ENTRY_RIMEFANG, 23, addReset)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 1, handlerEnterCombat)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 2, addLeaveCombat)
