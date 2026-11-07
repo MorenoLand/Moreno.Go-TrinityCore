@@ -1205,7 +1205,7 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		return true
 	}
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update")
+		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|setitemvalue|setaurastate|itemexpire|moveflags")
 		return true
 	}
 	switch strings.ToLower(args[0]) {
@@ -1213,7 +1213,7 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		// No-arg debug arms take no further tokens (ChatCommand.h:112
 		// whole-string-consumed); the handlers below used to drop them.
 		if len(args) > 1 {
-			s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update")
+			s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|setitemvalue|setaurastate|itemexpire|moveflags")
 			return true
 		}
 		switch strings.ToLower(args[0]) {
@@ -1275,8 +1275,18 @@ func (s *session) handleCmdDebug(ctx context.Context, args []string) bool {
 		return s.handleDebugMod32Value(ctx, args[1:])
 	case "update":
 		return s.handleDebugUpdate(ctx, args[1:])
+	case "getitemvalue":
+		return s.handleDebugGetItemValue(ctx, args[1:])
+	case "setitemvalue":
+		return s.handleDebugSetItemValue(ctx, args[1:])
+	case "setaurastate":
+		return s.handleDebugSetAuraState(ctx, args[1:])
+	case "itemexpire":
+		return s.handleDebugItemExpire(ctx, args[1:])
+	case "moveflags":
+		return s.handleDebugMoveflags(ctx, args[1:])
 	default:
-		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update")
+		s.sendSysMessage("Syntax: .debug areatriggers|anim|worldstate|objectcount|dummy|neargraveyard|lootrecipient|instancespawn|los|play|send|threat|threatinfo|combat|guidlimits|wpgps|transport|arena|bg|questreset|raidreset|spawnvehicle|entervehicle|getvalue|setvalue|setbit|Mod32Value|update|getitemvalue|setitemvalue|setaurastate|itemexpire|moveflags")
 	}
 	return true
 }
@@ -8903,7 +8913,7 @@ func (s *session) buildCommandTree() *commandNode {
 	root := &commandNode{name: "", children: make(map[string]*commandNode)}
 	root.addWithPerms("gm", func(ctx context.Context, args []string) bool { return s.handleCmdGM(ctx, args) }, map[string]uint32{"chat": permissionCommandGMChat, "fly": permissionCommandGMFly, "ingame": permissionCommandGMIngame, "list": permissionCommandGMList, "visible": permissionCommandGMVisible, "on": permissionCommandGM, "off": permissionCommandGM}, map[string]string{"vis": "visible"})
 	root.addWithPerms("cheat", func(ctx context.Context, args []string) bool { return s.handleCmdCheat(ctx, args) }, map[string]uint32{"god": permissionCommandCheatGod, "casttime": permissionCommandCheatCasttime, "cooldown": permissionCommandCheatCooldown, "power": permissionCommandCheatPower, "waterwalk": permissionCommandCheatWaterwalk, "status": permissionCommandCheatStatus, "taxi": permissionCommandCheatTaxi, "explore": permissionCommandCheatExplore}, nil)
-	debugNode := root.addWithPerms("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, map[string]uint32{"areatriggers": permissionCommandDebug, "anim": permissionCommandDebug, "worldstate": permissionCommandDebug, "objectcount": permissionCommandDebug, "dummy": permissionCommandDebug, "neargraveyard": permissionCommandDebug, "lootrecipient": permissionCommandDebug, "instancespawn": permissionCommandDebug, "los": permissionCommandDebug, "play": permissionCommandDebug, "send": permissionCommandDebug, "threat": permissionCommandDebug, "threatinfo": permissionCommandDebug, "combat": permissionCommandDebug, "guidlimits": permissionCommandDebug, "wpgps": permissionCommandDebug, "transport": permissionCommandDebug, "arena": permissionCommandDebug, "bg": permissionCommandDebug, "questreset": permissionCommandDebug, "raidreset": permissionCommandDebug, "spawnvehicle": permissionCommandDebug, "entervehicle": permissionCommandDebug, "getvalue": permissionCommandDebug, "setvalue": permissionCommandDebug, "setbit": permissionCommandDebug, "mod32value": permissionCommandDebug, "update": permissionCommandDebug}, nil)
+	debugNode := root.addWithPerms("debug", func(ctx context.Context, args []string) bool { return s.handleCmdDebug(ctx, args) }, map[string]uint32{"areatriggers": permissionCommandDebug, "anim": permissionCommandDebug, "worldstate": permissionCommandDebug, "objectcount": permissionCommandDebug, "dummy": permissionCommandDebug, "neargraveyard": permissionCommandDebug, "lootrecipient": permissionCommandDebug, "instancespawn": permissionCommandDebug, "los": permissionCommandDebug, "play": permissionCommandDebug, "send": permissionCommandDebug, "threat": permissionCommandDebug, "threatinfo": permissionCommandDebug, "combat": permissionCommandDebug, "guidlimits": permissionCommandDebug, "wpgps": permissionCommandDebug, "transport": permissionCommandDebug, "arena": permissionCommandDebug, "bg": permissionCommandDebug, "questreset": permissionCommandDebug, "raidreset": permissionCommandDebug, "spawnvehicle": permissionCommandDebug, "entervehicle": permissionCommandDebug, "getvalue": permissionCommandDebug, "setvalue": permissionCommandDebug, "setbit": permissionCommandDebug, "mod32value": permissionCommandDebug, "update": permissionCommandDebug, "getitemvalue": permissionCommandDebug, "setitemvalue": permissionCommandDebug, "setaurastate": permissionCommandDebug, "itemexpire": permissionCommandDebug, "moveflags": permissionCommandDebug}, nil)
 	// R13 depth (cs_debug.cpp:63-82): "play" and "send" are
 	// sub-tables, so debug play cinematic / debug send spellfail are
 	// 3-token paths with prefix matching at every level. The arm

@@ -128,6 +128,10 @@ type creatureMotion struct {
 	Hovering              bool                // MOVEMENTFLAG_HOVER live value: Lua CreatureMethods::SetHover (Creature::SetHover twin, Creature.cpp:3105); zero value = not hovering (the C++ default), broadcast leg only
 	Flying                bool                // MOVEMENTFLAG_CAN_FLY live value: Lua CreatureMethods::SetCanFly (Creature::SetCanFly twin, Creature.cpp:3060); zero value = cannot fly (the C++ default), broadcast leg only
 	Swimming              bool                // MOVEMENTFLAG_SWIMMING live value: Lua CreatureMethods::SetSwim (Unit::SetSwim twin, Unit.cpp:13728); zero value = not swimming (the C++ default), broadcast leg only
+	FeatherFalling        bool                // MOVEMENTFLAG_FALLING_SLOW live value: .debug moveflags SetFeatherFall twin (Unit.cpp:13767); zero value = normal fall (the C++ default), broadcast leg only
+	MoveFlagsRaw          uint32              // unhandled movement-flag bits stored by .debug moveflags (cs_debug.cpp:1251): the SetUnitMovementFlags word minus the handled set; folded into the moveflags display, never read by engine gates
+	MoveFlagsExtra        uint32              // MovementFlags2 extra flags stored by .debug moveflags (SetExtraUnitMovementFlags twin); display only
+	DebugAuraStateMask    uint32              // .debug setaurastate override bits (Unit::ModifyAuraState twin): ORed into creatureAuraStateMask except the health-derived bits, which Unit::Update re-derives every tick
 	WaterWalking          bool                // MOVEMENTFLAG_WATERWALKING live value: Lua UnitMethods::SetWaterWalk (Unit::SetWaterWalking twin, Unit.cpp:13755); zero value = not water-walking (the C++ default), broadcast leg only
 	CombatPulseDelaySecs  uint32              // Creature::m_combatPulseDelay (Creature.h:270): Lua CreatureMethods::SetCombatPulseDelay; zero = pulse disabled (the C++ default), delay in seconds
 	CombatPulseTimer      time.Duration       // Creature::m_combatPulseTime remaining (ms); the C++ setter writes the raw secs value into this ms timer, so the first pulse fires on the next tick

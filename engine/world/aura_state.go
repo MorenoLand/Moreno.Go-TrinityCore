@@ -144,6 +144,11 @@ const (
 // flag (Unit::HasAuraState, Unit.cpp:5946).
 const perCasterAuraStateMask = uint32(1<<(auraStateConflagrate-1)) | uint32(1<<(auraStateDeadlyPoison-1))
 
+// auraStateHealthBits covers the states Unit::Update re-derives from
+// health every tick (Unit.cpp:467-469), so a debug-set bit on one of
+// them lives at most a tick in C++ and is never stored by the override.
+const auraStateHealthBits = uint32(1<<(auraStateHealthless20Pct-1)) | uint32(1<<(auraStateHealthless35Pct-1)) | uint32(1<<(auraStateHealthAbove75Pct-1))
+
 // Spell family names used by _LoadAuraState (SharedDefines.h:3585-3589)
 // plus SPELLFAMILY_POTION (SharedDefines.h:3594) for the EffectEnergize
 // power-type gate.
@@ -321,6 +326,7 @@ func (s *session) unitAuraStateMask() uint32 {
 			mask |= uint32(1) << (state - 1)
 		}
 	}
+	mask |= s.debugAuraStateMask &^ auraStateHealthBits
 	return mask
 }
 
@@ -451,6 +457,16 @@ func (s *session) creatureAuraStateMask(key creatureAuraKey, target combatTarget
 		if state := s.lookupAuraState(spellID); state != auraStateNone {
 			mask |= uint32(1) << (state - 1)
 		}
+	}
+	if s.server != nil {
+		s.server.motionMu.Lock()
+		for scope := range s.server.instanceCreatureMotion {
+			if motion := s.server.findCreatureMotionLocked(scope.MapID, scope.InstanceID, key.GUID); motion != nil {
+				mask |= motion.DebugAuraStateMask &^ auraStateHealthBits
+				break
+			}
+		}
+		s.server.motionMu.Unlock()
 	}
 	return mask
 }

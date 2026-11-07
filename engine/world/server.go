@@ -748,6 +748,7 @@ type session struct {
 	// (defense / hunter-parry / overpower / wolverine-bite), each armed for
 	// REACTIVE_TIMER_START (4000ms). Indexed by the reactive* constants.
 	reactiveUntil      [4]time.Time
+	debugAuraStateMask uint32 // .debug setaurastate override bits (Unit::ModifyAuraState twin): ORed into unitAuraStateMask except the health-derived bits, which Unit::Update re-derives every tick; reset by the no-state leg
 	lastPotionId       uint32 // Player::m_lastPotionId (Player.h:2337) — last potion/cooldown-on-event item used in combat; blocks the next potion cast
 	guildInvitedID     uint32
 	guildInviterGUID   uint64
