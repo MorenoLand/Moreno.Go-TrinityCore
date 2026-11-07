@@ -114,8 +114,9 @@
 -- COLLAPSING_STAR (18s+introDelay, :594-599) — Talk 5/6 + SummonCreature x4;
 -- BIG_BANG (90s+introDelay) — Talk 7/8 + DoCastAOE(64443) PORTED
 -- (bigBangTick, Repeat 90.5s); the SetPhase(PHASE_BIG_BANG) /
--- constellation DoAction(ACTION_BIG_BANG) / EVENT_RESUME_UPDATING /
--- no-target ACTION_ASCEND (SpellScript) legs stay out.
+-- constellation DoAction(ACTION_BIG_BANG) / EVENT_RESUME_UPDATING
+-- legs stay out. The no-target ACTION_ASCEND leg is PORTED tick 371
+-- (Go-side count + DoAction 38 fire, algalonDoAction below).
 -- Intro machine: Talk 0/1/2 (:529/:541/:546, EVENT_INTRO_1..3) chained under
 -- PHASE_ROLE_PLAY from DoAction(ACTION_START_INTRO) (:328, Brann-summoned
 -- pre-combat) — pre-combat roleplay, porting on combat-start timers would
@@ -664,8 +665,11 @@ end
 -- The no-target ACTION_ASCEND leg (spell_algalon_big_bang: if zero
 -- EFFECT_0 area-enemy targets, DoAction ACTION_ASCEND — cancels
 -- EVENT_RESUME_UPDATING and schedules EVENT_ASCEND_TO_THE_HEAVENS
--- 1.5s) also stays out: it needs the DBC-radius area-enemy count at
--- cast time plus an after-cast trigger, neither bridged to Lua.
+-- 1.5s) is PORTED tick 371: the count + AfterCast fire live Go-side
+-- (creatureAlgalonBigBangAscend, boss_ai.go) and reach algalonDoAction
+-- below as CREATURE_EVENT_ON_DO_ACTION (38) with action 3; the Lua
+-- model has no resume timer, so the only observable leg is the
+-- 1.5s ascend reschedule.
 local function bigBangTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "bigbang", 500, function()
@@ -679,6 +683,26 @@ local function bigBangTick(creature, guid)
     schedule(guid, "bigbang", 90500, function()
         bigBangTick(creature, guid)
     end)
+end
+
+-- C++ spell_algalon_big_bang::CheckTargets + boss_algalon_the_observerAI::
+-- DoAction(ACTION_ASCEND) (boss_algalon_the_observer.cpp:331-335, :1139-
+-- 1164): when Big Bang (64443) hits zero EFFECT_0 area-enemy targets,
+-- Algalon cancels EVENT_RESUME_UPDATING and schedules
+-- EVENT_ASCEND_TO_THE_HEAVENS in 1.5s. The count + AfterCast fire live
+-- Go-side (creatureAlgalonBigBangAscend, boss_ai.go) and reach here as
+-- CREATURE_EVENT_ON_DO_ACTION (38) with action 3. The Lua model has no
+-- phase machine and no resume timer, so the only observable leg is the
+-- reschedule: schedule() replaces the 360s "ascend" timer like C++
+-- EventMap (keyed by event id). PORTED tick 371.
+local ACTION_ASCEND = 3 -- boss_algalon_the_observer.cpp:169
+
+local function algalonDoAction(event, creature, action)
+    if action == ACTION_ASCEND then
+        schedule(creature:GetGUID(), "ascend", 1500, function()
+            ascendTick(creature, creature:GetGUID())
+        end)
+    end
 end
 
 -- C++ EVENT_SUMMON_COLLAPSING_STAR: Talk(SAY_ALGALON_COLLAPSING_
@@ -866,6 +890,7 @@ end
 RegisterCreatureEvent(ENTRY_ALGALON, 1, algalonTimersStart)
 RegisterCreatureEvent(ENTRY_ALGALON, 2, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_ALGALON, 4, algalonTimersStop)
+RegisterCreatureEvent(ENTRY_ALGALON, 38, algalonDoAction)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 1, constellationEnterCombat)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 2, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 4, algalonTimersStop)

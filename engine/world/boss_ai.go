@@ -2356,6 +2356,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				for _, enemyCreatureGUID := range enemyCreatures {
 					appendAreaGUID(enemyCreatureGUID)
 				}
+				s.creatureAlgalonBigBangAscend(ctx, m, spellInfo, spellID, areaVictim, enemyAreaDestX, enemyAreaDestY, enemyAreaDestZ, enemyAreaHasDest)
 			}
 			if hasFriendlyAreaEffect(spellInfo) {
 				allyOwner := s.spellModOwnerSession(m.Map, m.InstanceID, m.GUID)
@@ -7266,6 +7267,50 @@ func (s *Server) creatureMistressKissArea(ctx context.Context, m *creatureMotion
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, uint32(value), picked, true)
+}
+
+// creatureAlgalonBigBangAscend mirrors spell_algalon_big_bang
+// (boss_algalon_the_observer.cpp:1139-1164): CountTargets stores the
+// EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY list size, and CheckTargets
+// (AfterCast) fires DoAction(ACTION_ASCEND) when it is zero. The hook
+// runs at launch — the deferred-fire invocation, where C++ runs
+// AfterCast — over an EFFECT_0-only copy of the spell, so other area
+// legs cannot inflate the count, and over the uncapped sweeps: C++
+// hooks before RandomResize (Spell.cpp:1288-1297), so the count is
+// pre-cap. The fire reaches the Lua boss AI as
+// CREATURE_EVENT_ON_DO_ACTION (38) with action 3, the DoAction
+// dispatch twin, which reschedules the ascend timer at 1.5s like C++
+// EventMap. Delta: Go's area sweep has no phase filter, so players
+// inside a black hole are counted (the 64445 phase leg is unported);
+// the count is exact within Go's own hit model.
+func (s *Server) creatureAlgalonBigBangAscend(ctx context.Context, m *creatureMotion, spellInfo wotlk.Spell, spellID uint32, victim *playerPos, destX, destY, destZ float32, hasDest bool) {
+	if s == nil || m == nil || s.Features == nil || s.Features.Scripts == nil || spellID != 64443 || len(spellInfo.Effects) == 0 {
+		return
+	}
+	if !effectHasAreaEnemyLeg(spellInfo.Effects[0]) {
+		return
+	}
+	legSpell := spellInfo
+	legEffects := spellInfo.Effects
+	for i := range legEffects {
+		if i != 0 {
+			legEffects[i].ImplicitTargetA = 0
+			legEffects[i].ImplicitTargetB = 0
+		}
+	}
+	legSpell.Effects = legEffects
+	players := s.creatureAIAreaEnemyPlayers(ctx, m, legSpell, victim, destX, destY, destZ, hasDest)
+	creatures := s.creatureAIAreaEnemyCreatures(ctx, m, legSpell, victim, destX, destY, destZ, hasDest)
+	if len(players)+len(creatures) != 0 {
+		return
+	}
+	creature := s.luaMotionCreature(m)
+	if creature == nil {
+		return
+	}
+	doArgs := []any{scripting.CreatureEventOnDoAction, creature, int32(3)}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, m.Entry, scripting.CreatureEventOnDoAction, doArgs...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, m.GUID, m.InstanceID, scripting.CreatureEventOnDoAction, doArgs...)
 }
 
 // creatureEffectScriptEffect mirrors the SPELLFAMILY_GENERIC arms of

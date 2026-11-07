@@ -178,14 +178,18 @@
 -- DATA_MISTRESS_OF_PAIN_COUNT, DECREASE) — instance model absent.
 -- spell_mistress_kiss (AuraScript 66334/67905/67906/67907) —
 -- HandleDummyTick: casting target -> caster casts Mistress' Kiss
--- Damage+Silence 66359 + RemoveAurasDueToSpell — no AuraScript
--- binding bridge (razelikh precedent) — documented-only.
+-- Damage+Silence 66359 + RemoveAurasDueToSpell — PORTED tick 371
+-- via RegisterAuraEvent (AuraEventOnPeriodic = 1), mistressKissAuraTick
+-- below (aura:GetCaster / target:IsCasting / target:RemoveAura bridges;
+-- the old "no AuraScript binding bridge (razelikh precedent)" claim is
+-- STALE — the periodic-dummy hook fires for player auras, shadow-prison
+-- precedent).
 -- spell_mistress_kiss_area (SpellScript 66336/67076/67077/67078) —
 -- area-target filter (mana players) + HandleScript effect-value cast
 -- — PORTED Go-side (creatureMistressKissArea): the cast of 66336 above
 -- now lands the kiss aura on one random non-mana player. The kiss
 -- aura's own periodic tick (spell_mistress_kiss 66334, 66359 on a
--- casting target) stays out — no periodic-dummy arm is wired for it.
+-- casting target) is PORTED tick 371 via RegisterAuraEvent below.
 -- spell_fel_streak_visual (SpellScript 66493) — HandleScript
 -- effect-value cast — no SpellScript binding bridge — documented-only.
 -- The three spell scripts join the SpellScript/AuraScript queue.
@@ -577,3 +581,30 @@ RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 1, mistressEnterCombat)
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 2, mistressLeaveCombat)
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 4, mistressDied)
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 23, mistressReset)
+
+-- C++ spell_mistress_kiss::HandleDummyTick
+-- (boss_lord_jaraxxus.cpp:480-489): on each periodic tick of the
+-- Mistress' Kiss aura (66334/67905/67906/67907, EFFECT_0
+-- SPELL_AURA_PERIODIC_DUMMY), if the aura target is casting, the
+-- caster casts Mistress' Kiss Damage+Silence (66359) on the target,
+-- triggered, and the target's kiss aura is removed. Both actions sit
+-- inside the caster-exists + target-casting gates — a nil caster
+-- skips the removal too. No PreventDefaultAction in C++, so the
+-- handler returns nothing (the default PERIODIC_DUMMY tick is a
+-- no-op in both engines). PORTED tick 371 via RegisterAuraEvent
+-- (AuraEventOnPeriodic = 1); aura:GetAuraId reads the ticking rank
+-- for the removal, so one handler serves all four ranks.
+local SPELL_MISTRESS_KISS_DAMAGE_SILENCE = 66359 -- boss_lord_jaraxxus.cpp:74
+
+local function mistressKissAuraTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and target:IsCasting() then
+        caster:CastSpell(target, SPELL_MISTRESS_KISS_DAMAGE_SILENCE, true)
+        target:RemoveAura(aura:GetAuraId())
+    end
+end
+
+RegisterAuraEvent(66334, 1, mistressKissAuraTick)
+RegisterAuraEvent(67905, 1, mistressKissAuraTick)
+RegisterAuraEvent(67906, 1, mistressKissAuraTick)
+RegisterAuraEvent(67907, 1, mistressKissAuraTick)
