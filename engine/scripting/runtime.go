@@ -166,8 +166,9 @@ const (
 // (LuaEngine/InstanceHooks.cpp START_HOOK). The engine fires ON_UPDATE (3),
 // ON_PLAYER_ENTER (4), ON_CREATURE_CREATE (5), ON_GAMEOBJECT_CREATE (6) and
 // ON_CHECK_ENCOUNTER_IN_PROGRESS (7); ON_INITIALIZE (1) is #ifndef
-// TRINITY-dead in C++ on this fork and ON_LOAD (2) has no Go instance-data
-// load path (documented in engine/world/instance_hooks.go).
+// TRINITY-dead in C++ on this fork and ON_LOAD (2) fires from the
+// worldport entry path (engine/world/instance_hooks.go fireInstanceLoad),
+// once per (map, instance) per server run, before ON_PLAYER_ENTER.
 const (
 	InstanceEventOnInitialize             = 1
 	InstanceEventOnLoad                   = 2

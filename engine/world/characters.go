@@ -1214,6 +1214,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.triggerMapEntryEvent(ctx)
+	s.fireInstanceLoad(ctx)
 	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
 	s.lfgOnMapChanged(ctx, false)
@@ -1815,6 +1816,7 @@ func (s *session) completeWorldPort(ctx context.Context) bool {
 	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventMapChange, s.luaPlayer())
 	s.triggerMapEntryEvent(ctx)
+	s.fireInstanceLoad(ctx)
 	s.fireInstancePlayerEnter(ctx)
 	s.streamDynamicSpellObjects()
 	// MovementHandler.cpp:127-143 (HandleMoveWorldportAck): a fast teleport

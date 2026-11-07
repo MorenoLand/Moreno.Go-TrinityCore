@@ -196,6 +196,11 @@ type Server struct {
 	instanceAdmissionMu       sync.Mutex
 	pendingInstanceAdmissions map[instanceAdmissionKey]uint32
 	instanceEncounters        map[instanceAdmissionKey]map[uint64]struct{}
+	// instanceLoaded marks (map, instance) pairs whose saved data blob
+	// has been read and whose ON_LOAD (2) hook has fired this server
+	// run (fireInstanceLoad); the load runs once per pair, at the
+	// first player entry, matching C++ InstanceMap::LoadInstanceData.
+	instanceLoaded            map[instanceAdmissionKey]struct{}
 	dungeonEncounterMu        sync.Mutex
 	dungeonEncounters         map[dungeonEncounterKey][]dungeonEncounterCredit
 	dungeonEncountersLoaded   bool

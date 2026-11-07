@@ -42,7 +42,10 @@ func instanceDataKey(object *Object) string {
 // pushInstanceDataTable leaves the (map, instance) data table on top of
 // the stack and reports true, or leaves nil and reports false when no
 // table exists and create is false. With create it materializes the
-// store and the instance table first.
+// store and the instance table first. Exactly one value is left in
+// every path: the store table is removed before returning, so direct
+// callers outside a Lua call frame (Marshal/UnmarshalInstanceData)
+// can balance with a single Pop.
 func pushInstanceDataTable(state *lua.State, object *Object, create bool) bool {
 	state.Field(lua.RegistryIndex, instanceDataStoreKey)
 	if !state.IsTable(-1) {
@@ -61,6 +64,7 @@ func pushInstanceDataTable(state *lua.State, object *Object, create bool) bool {
 		state.Pop(1)
 		if !create {
 			state.PushNil()
+			state.Remove(-2)
 			return false
 		}
 		state.NewTable()
@@ -68,6 +72,7 @@ func pushInstanceDataTable(state *lua.State, object *Object, create bool) bool {
 		state.PushValue(-2)
 		state.RawSet(-4)
 	}
+	state.Remove(-2)
 	return true
 }
 

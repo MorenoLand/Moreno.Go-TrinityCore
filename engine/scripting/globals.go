@@ -1144,6 +1144,13 @@ type MapLive struct {
 	// call shape; false means no readable height chunk, and the
 	// method turns that (and the INVALID_HEIGHT sentinel) into nil.
 	Height func(x, y float32) (float32, bool)
+	// SaveInstanceData persists the instance data table
+	// (InstanceScript::SaveToDB, InstanceScript.cpp:60-71): the world
+	// side marshals the registry table (scripting.MarshalInstanceData)
+	// and writes it to instance.data, preserving the
+	// completedEncounters mask. A nil callback leaves the method a
+	// no-op, matching the old behavior for snapshot-only maps.
+	SaveInstanceData func(ctx context.Context) error
 }
 
 // NewMapObject builds the Lua Map object surface for the MAP_EVENT_* and
@@ -1431,11 +1438,19 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 			}
 			return []any{nil}, nil
 		},
-		// SaveInstanceData no-ops: C++ calls the shim's SaveToDB,
-		// which serializes the data table (mar_encode) into
-		// instance.data; Go has no such serialization, so the table
-		// persists in memory for the runtime's lifetime only.
-		"SaveInstanceData": func(context.Context, []any) ([]any, error) {
+		// SaveInstanceData is the MapMethods.h arm of
+		// InstanceScript::SaveToDB (InstanceScript.cpp:60-71): the
+		// world-side live callback marshals the instance data table
+		// and writes instance.data, preserving the completedEncounters
+		// mask. A nil callback drops it, like GetInstanceData's nil
+		// InstanceData gate.
+		"SaveInstanceData": func(ctx context.Context, args []any) ([]any, error) {
+			if live.SaveInstanceData == nil {
+				return nil, nil
+			}
+			if err := live.SaveInstanceData(ctx); err != nil {
+				return nil, err
+			}
 			return nil, nil
 		},
 	}

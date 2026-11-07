@@ -17,9 +17,10 @@ import (
 // across hooks. This cache additionally keeps Lua object identity
 // stable (C++ pushes the same table, so data == data holds) and lets
 // Map:GetInstanceData return the hook argument's object. A nil server
-// yields a keyed handle that still reads the registry table. Documented
-// deltas: ON_LOAD (2) has no instance-data load path and SaveInstanceData
-// does not serialize the table to instance.data (mar_encode unmodeled).
+// yields a keyed handle that still reads the registry table. The table
+// persists to instance.data through Map:SaveInstanceData
+// (scripting.MarshalInstanceData) and loads back on the first entry of
+// a server run (fireInstanceLoad, INSTANCE_EVENT_ON_LOAD).
 func (s *Server) instanceDataObject(mapID, instanceID uint32) *scripting.Object {
 	key := instanceAdmissionKey{MapID: mapID, InstanceID: instanceID}
 	if s == nil {
@@ -91,6 +92,9 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 	}
 	live.InstanceData = func() *scripting.Object {
 		return s.instanceDataForMap(mapID, instanceID)
+	}
+	live.SaveInstanceData = func(ctx context.Context) error {
+		return s.saveInstanceData(ctx, mapID, instanceID)
 	}
 	live.Difficulty = func(ctx context.Context) (int64, bool) {
 		if instanceID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
@@ -269,6 +273,75 @@ func (s *Server) isInstanceScriptMap(mapID uint32) bool {
 	}
 	entry, found, err := s.Data.Map(mapID)
 	return err == nil && found && entry.IsDungeon()
+}
+
+// saveInstanceData is InstanceScript::SaveToDB (Instances/
+// InstanceScript.cpp:60-71) for the Lua data table half: marshal the
+// registry table (Go JSON+base64 format, scripting.MarshalInstanceData)
+// and write it via CHAR_UPD_INSTANCE_DATA, preserving the
+// completedEncounters mask the encounter-credit path owns. A missing
+// instance row is a silent no-op (C++'s UPDATE affects zero rows);
+// non-instance maps never reach it (no shim exists outside dungeons
+// and raids, matching Eluna's instance-only install).
+func (s *Server) saveInstanceData(ctx context.Context, mapID, instanceID uint32) error {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil || instanceID == 0 || !s.isInstanceScriptMap(mapID) {
+		return nil
+	}
+	encoded, err := s.Features.Scripts.MarshalInstanceData(mapID, instanceID)
+	if err != nil {
+		return err
+	}
+	var mask int64
+	if err := s.CharactersStore.DB.QueryRowContext(ctx, "SELECT completedEncounters FROM instance WHERE id = ?", instanceID).Scan(&mask); err != nil {
+		return nil
+	}
+	_, err = s.CharactersStore.ExecStatement(ctx, "CHAR_UPD_INSTANCE_DATA", uint32(mask), encoded, instanceID)
+	return err
+}
+
+// fireInstanceLoad dispatches Eluna INSTANCE_EVENT_ON_LOAD (2), fired
+// from InstanceMap::LoadInstanceData (Maps/Map.cpp:4040-4065) when the
+// instance map loads: (event, instance_data, map). C++ loads the saved
+// data blob first (ElunaInstanceAI::Load base64-decodes + mar_decodes
+// it into a fresh table, or creates an empty table when data is empty)
+// and fires OnLoad on every load, empty or not. Go has no InstanceMap
+// object lifecycle, so the load runs once per (map, instance) per
+// server run, at the first player entry after the instance row is
+// known to exist (persist/ensure run before both entry sites), and
+// fires before ON_PLAYER_ENTER (4). A blob the Go format cannot
+// decode (including any C++-produced mar_encode blob) logs and loads
+// an empty table, mirroring C++'s decode-failure arm; the once-gate
+// is already set, so a later entry does not retry it.
+// Returns mirror the C++ call, which discards them (CallAllFunctions).
+func (s *session) fireInstanceLoad(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return
+	}
+	if s.player.InstanceID == 0 || !s.server.isInstanceScriptMap(s.player.Map) {
+		return
+	}
+	s.server.instanceAdmissionMu.Lock()
+	if s.server.instanceLoaded == nil {
+		s.server.instanceLoaded = make(map[instanceAdmissionKey]struct{})
+	}
+	key := instanceAdmissionKey{MapID: s.player.Map, InstanceID: s.player.InstanceID}
+	if _, loaded := s.server.instanceLoaded[key]; loaded {
+		s.server.instanceAdmissionMu.Unlock()
+		return
+	}
+	s.server.instanceLoaded[key] = struct{}{}
+	s.server.instanceAdmissionMu.Unlock()
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var data string
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT data FROM instance WHERE id = ?", s.player.InstanceID).Scan(&data); err == nil && data != "" {
+			if err := s.server.Features.Scripts.UnmarshalInstanceData(s.player.Map, s.player.InstanceID, data); err != nil {
+				s.debug("lua instance data load failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
+			}
+		}
+	}
+	if _, err := s.server.Features.Scripts.TriggerInstanceEvent(ctx, s.player.Map, s.player.InstanceID, scripting.InstanceEventOnLoad, s.server.instanceDataObject(s.player.Map, s.player.InstanceID), instanceMapObject(s.server, s.player.Map, s.player.InstanceID)); err != nil {
+		s.debug("lua instance load event failed", "map", s.player.Map, "instance", s.player.InstanceID, "error", err)
+	}
 }
 
 // fireInstancePlayerEnter dispatches Eluna INSTANCE_EVENT_ON_PLAYER_ENTER
