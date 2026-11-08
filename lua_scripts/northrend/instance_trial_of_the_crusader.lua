@@ -21,7 +21,12 @@
 -- :206-213 read at DONE); trialCounter (heroic attempts left, default
 -- 50 — instance :303-305 decrement on heroic FAIL, written by the
 -- beasts / jaraxxus / champions / valkyr FAIL writers, read by the
--- Anub'arak tribute-chest tier; tick 406 U2).
+-- Anub'arak tribute-chest tier; tick 406 U2); anyCreature (most
+-- recently created creature, the GetBossState probe for the OnUnitDeath
+-- player leg — the instance_ulduar.lua precedent);
+-- tributeToImmortalityEligible (1 until the first player death while
+-- an encounter is IN_PROGRESS, instance :165-169, read by the Go
+-- TRIBUTE_TO_IMMORTALITY gate).
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: champions controller GUID latch
 --   (instance_trial_of_the_crusader.cpp:50; C++ stores the GUID, Lua
@@ -32,6 +37,14 @@
 --   leg reads it back (tick 408 U1).
 -- - Update: while CrusadersSpecialState and the timer is live, count
 --   it down (instance_trial_of_the_crusader.cpp:564-570).
+-- - OnUnitDeath (instance_trial_of_the_crusader.cpp:165-169, tick 468):
+--   a player death while any of the 6 encounters is IN_PROGRESS clears
+--   tributeToImmortalityEligible (the C++ IsEncounterInProgress twin is
+--   the 0..ENCOUNTER_COUNT-1 GetBossState loop over the anyCreature
+--   probe; DATA_NORTHREND_BEASTS = 0 .. DATA_ANUBARAK = 5,
+--   trial_of_the_crusader.h:32-37). Rides the Go player-death sender
+--   (killPlayer / completeSpiritOfRedemptionDeath ->
+--   INSTANCE_EVENT_ON_UNIT_DEATH 9, tick 467).
 -- The DONE / FAIL / IN_PROGRESS boss-state transitions themselves are
 -- written by the champion files' shared counter helpers (the
 -- controller has no UpdateAI override at all — SetData-only,
@@ -74,6 +87,10 @@
 local MAP_TRIAL_OF_THE_CRUSADER = 649
 local INSTANCE_EVENT_ON_UPDATE = 3
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
+local INSTANCE_EVENT_ON_UNIT_DEATH = 9
+
+local BOSS_STATE_IN_PROGRESS = 1
+local ENCOUNTER_COUNT = 6 -- trial_of_the_crusader.h:27
 
 local NPC_CHAMPIONS_CONTROLLER = 34781 -- trial_of_the_crusader.h:179
 local NPC_ANUBARAK = 34564 -- trial_of_the_crusader.h:219
@@ -89,6 +106,10 @@ RegisterMapEvent(MAP_TRIAL_OF_THE_CRUSADER, INSTANCE_EVENT_ON_CREATURE_CREATE, f
     if creature:GetEntry() == NPC_ANUBARAK then
         creature:SetGuidData(DATA_ANUBARAK)
     end
+    -- Any-creature probe for the OnUnitDeath player leg (the
+    -- instance_ulduar.lua precedent): GetBossState reads Go instance
+    -- state off the creature's map/instance, so any motion works.
+    instanceData.anyCreature = creature
 end)
 
 -- C++ instance Update (instance_trial_of_the_crusader.cpp:564-570):
@@ -100,5 +121,33 @@ RegisterMapEvent(MAP_TRIAL_OF_THE_CRUSADER, INSTANCE_EVENT_ON_UPDATE, function(e
             timer = 0
         end
         instanceData.resilienceTimer = timer
+    end
+end)
+
+-- OnUnitDeath (instance_trial_of_the_crusader.cpp:165-169) — PORTED
+-- 2026-11-08 (tick 468). A player death while any encounter is
+-- IN_PROGRESS clears tributeToImmortalityEligible (1 -> 0); the C++
+-- IsEncounterInProgress twin is the 0..ENCOUNTER_COUNT-1 GetBossState
+-- loop over the anyCreature probe. Rides the Go player-death sender
+-- (tick 467). The latch defaults to 1 in the Go read (num() default),
+-- matching the C++ ctor (:120); no creature leg exists in this
+-- instance's OnUnitDeath. Players carry no GetEntry — the type check
+-- runs first (the DTK precedent).
+RegisterMapEvent(MAP_TRIAL_OF_THE_CRUSADER, INSTANCE_EVENT_ON_UNIT_DEATH, function(event, instanceData, mapObj, unit)
+    if unit == nil or unit:GetObjectType() ~= "Player" then
+        return
+    end
+    if instanceData.tributeToImmortalityEligible == 0 then
+        return
+    end
+    local probe = instanceData.anyCreature or instanceData.controller
+    if not probe then
+        return
+    end
+    for i = 0, ENCOUNTER_COUNT - 1 do
+        if probe:GetBossState(i) == BOSS_STATE_IN_PROGRESS then
+            instanceData.tributeToImmortalityEligible = 0
+            return
+        end
     end
 end)

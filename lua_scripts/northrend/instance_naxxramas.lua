@@ -21,7 +21,11 @@
 -- hadSapphironBirth (set by go_sapphiron_birth.lua on use; read by
 -- sapphiron's ev5 spawn handler — the C++ instance
 -- SetData(DATA_HAD_SAPPHIRON_BIRTH, 1) leg in Lua form);
--- wingTaunt (next SAY_KELTHUZAD wing-taunt id, starts 16).
+-- wingTaunt (next SAY_KELTHUZAD wing-taunt id, starts 16);
+-- anyCreature (most recently created creature, the GetBossState probe
+-- for the OnUnitDeath player leg — the instance_ulduar.lua precedent);
+-- playerDied (1 once a player dies while an encounter is IN_PROGRESS,
+-- instance_naxxramas.cpp:248-254, read by the Go Immortal/Undying gates).
 -- Ported arms (C++-exact unless noted):
 -- - SetBossState DONE legs, re-expressed at DONE time (see below):
 --   wing taunts (maexxna/loatheb/thaddius/horsemen DONE each
@@ -34,6 +38,15 @@
 --   lich king Talk 1, kelthuzad Talk 2, lich king Talk 2,
 --   kelthuzad Talk 4, kelthuzad Talk 20 at 6s/6s/16s/9s/12s/6s,
 --   then the kelthuzad door opens, GO_STATE_ACTIVE 0).
+-- - OnUnitDeath (instance_naxxramas.cpp:248-263, tick 468): player
+--   deaths while any of the 15 encounters is IN_PROGRESS set
+--   playerDied = 1 (the Go player-death sender, tick 467; the
+--   C++ SaveToDB leg has no Lua twin — the table persists for the
+--   runtime lifetime and rides saveInstanceData's marshal when a
+--   save runs); Bigglesworth's death (16998) makes a bound
+--   Kel'Thuzad Talk SAY_KELTHUZAD_CAT_DIED 5 (LoadGrid has no
+--   bridge — an unbound Kel'Thuzad skips the line, the established
+--   delta in this file).
 -- - The quarter-portal / throne / chest flag legs run in the boss
 --   onDied handlers (anchored FindNearestGameObject, entry-unique
 --   so the 1000yd radius cannot pick a wrong GO — the bjarngrim
@@ -61,18 +74,19 @@
 --   (tick 406: FindNearestGameObject(181170) + SetGoState — the
 --   instance SetData is a plain gate->SetGoState twin,
 --   instance_naxxramas.cpp:271-279); no instance-script leg needed.
--- - playerDied latch + Immortal/Undying criteria: no OnUnitDeath
---   map hook, so checkNaxxramasCriteria stays fail-closed for
---   13233-13240/7616/7617 until one lands (same class as ToC's
---   TRIBUTE_TO_IMMORTALITY). The 7600/7601 Four Horsemen credit
---   IS ported: boss_four_horsemen.lua banks <which>DeathMS via
---   GetGameTimeMS, read by the Go check.
+-- - The 7600/7601 Four Horsemen credit IS ported:
+--   boss_four_horsemen.lua banks <which>DeathMS via GetGameTimeMS,
+--   read by the Go check.
 -- - SaveToDB / instance-data persistence across restarts: the
 --   table lives for the runtime lifetime only (black-morass delta).
 
 local MAP_NAXXRAMAS = 533
 local INSTANCE_EVENT_ON_UPDATE = 3
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
+local INSTANCE_EVENT_ON_UNIT_DEATH = 9
+
+local BOSS_STATE_IN_PROGRESS = 1
+local ENCOUNTER_COUNT = 15 -- naxxramas.h:26
 
 local NPC_ANUBREKHAN = 15956
 local NPC_FAERLINA = 15953
@@ -100,6 +114,9 @@ local SAY_DIALOGUE_SAPPHIRON_KELTHUZAD4 = 20
 local SAY_DIALOGUE_SAPPHIRON_LICH_KING = 1
 local SAY_DIALOGUE_SAPPHIRON_LICH_KING2 = 2
 local SAY_KELTHUZAD_FIRST_WING_TAUNT = 16
+local SAY_KELTHUZAD_CAT_DIED = 5 -- naxxramas.h:207
+
+local NPC_BIGGLESWORTH = 16998 -- naxxramas.h:108
 
 local GO_STATE_ACTIVE = 0
 
@@ -127,6 +144,10 @@ RegisterMapEvent(MAP_NAXXRAMAS, INSTANCE_EVENT_ON_CREATURE_CREATE, function(even
     if key then
         instanceData[key] = creature
     end
+    -- Any-creature probe for the OnUnitDeath player leg (the
+    -- instance_ulduar.lua precedent): GetBossState reads Go instance
+    -- state off the creature's map/instance, so any motion works.
+    instanceData.anyCreature = creature
 end)
 
 -- Chained one-shots (temporus idiom): each step guards its speaker
@@ -226,5 +247,46 @@ RegisterMapEvent(MAP_NAXXRAMAS, INSTANCE_EVENT_ON_UPDATE, function(event, instan
     if instanceData.sapphironDone and not instanceData.sapphironProcessed then
         instanceData.sapphironProcessed = true
         sapphironChain(instanceData)
+    end
+end)
+
+-- OnUnitDeath (instance_naxxramas.cpp:248-263) — PORTED 2026-11-08
+-- (tick 468). Player leg (:250-255): a player death while any
+-- encounter is IN_PROGRESS sets playerDied = 1 — the C++ IsEncounterInProgress
+-- twin is the 0..ENCOUNTER_COUNT-1 GetBossState loop over the
+-- anyCreature probe (BOSS_ANUBREKHAN = 0 .. BOSS_KELTHUZAD = 14,
+-- naxxramas.h:30-44). Creature leg (:257-262): Bigglesworth's death
+-- makes Kel'Thuzad Talk SAY_KELTHUZAD_CAT_DIED — the C++ LoadGrid
+-- leg has no bridge, so a not-yet-bound Kel'Thuzad skips the line
+-- (the established delta in this file). The player leg rides the Go
+-- player-death sender (killPlayer / completeSpiritOfRedemptionDeath
+-- -> INSTANCE_EVENT_ON_UNIT_DEATH 9, tick 467); the creature leg
+-- rides the tick-466 creature sender. Players carry no GetEntry —
+-- the type check runs before the entry read (the DTK precedent).
+RegisterMapEvent(MAP_NAXXRAMAS, INSTANCE_EVENT_ON_UNIT_DEATH, function(event, instanceData, mapObj, unit)
+    if unit == nil then
+        return
+    end
+    if unit:GetObjectType() == "Player" then
+        if instanceData.playerDied == 1 then
+            return
+        end
+        local probe = instanceData.anyCreature or instanceData.kelthuzad
+        if not probe then
+            return
+        end
+        for i = 0, ENCOUNTER_COUNT - 1 do
+            if probe:GetBossState(i) == BOSS_STATE_IN_PROGRESS then
+                instanceData.playerDied = 1
+                return
+            end
+        end
+        return
+    end
+    if unit:GetEntry() == NPC_BIGGLESWORTH then
+        local kelthuzad = instanceData.kelthuzad
+        if kelthuzad then
+            kelthuzad:Talk(SAY_KELTHUZAD_CAT_DIED)
+        end
     end
 end)

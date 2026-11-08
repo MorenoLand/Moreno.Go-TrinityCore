@@ -1423,9 +1423,11 @@ func checkTrialOfTheCrusaderCriteria(s *session, criteriaID uint32) bool {
 	case 12358, 12359: // A_TRIBUTE_TO_IMMORTALITY: TrialCounter == 50 && TributeToImmortalityEligible
 		// The eligibility latch (OnUnitDeath clears it when a player
 		// dies while an encounter is in progress, instance :165-169)
-		// has no Go bridge — no instance OnUnitDeath hook — so this
-		// stays fail-closed until one lands.
-		return false
+		// is written by instance_trial_of_the_crusader.lua into the
+		// shared instanceData table (tributeToImmortalityEligible,
+		// 1 until the first in-progress player death) and read here
+		// via num().
+		return num("trialCounter", 50) == 50 && num("tributeToImmortalityEligible", 1) != 0
 	case 12360: // A_TRIBUTE_TO_DEDICATED_INSANITY: C++ returns false (:652)
 		return false
 	default:
@@ -1558,11 +1560,11 @@ func checkNaxxramasCriteria(s *session, criteriaID uint32) bool {
 		// DONE and tolerates exactly one — the boss whose death
 		// is being checked, since this runs before its
 		// SetBossState(DONE). The playerDied latch (OnUnitDeath
-		// clears it when a player dies while an encounter is in
-		// progress, instance :248-254) has no Go bridge — no
-		// instance OnUnitDeath hook — so this stays fail-closed
-		// until one lands, the same class as ToC's
-		// TRIBUTE_TO_IMMORTALITY above.
+		// sets it when a player dies while an encounter is in
+		// progress, instance :248-254) is written by
+		// instance_naxxramas.lua into the shared instanceData
+		// table (playerDied, 1 after the first in-progress
+		// player death) and read here via num().
 		alive := 0
 		for bossID := uint32(0); bossID < 15; bossID++ {
 			if s.server.instanceBossState(mapID, instanceID, bossID) != encounterStateDone {
@@ -1572,7 +1574,7 @@ func checkNaxxramasCriteria(s *session, criteriaID uint32) bool {
 		if alive > 1 {
 			return false
 		}
-		return false
+		return num("playerDied", 0) == 0
 	default:
 		return false
 	}
@@ -1648,8 +1650,10 @@ func checkUlduarCriteria(s *session, criteriaID uint32) bool {
 		// written by instance_ulduar.lua into the shared
 		// instanceData table (coUAchivePlayerDeathMask) and read
 		// here via num(). The Naxxramas playerDied / ToC
-		// TRIBUTE_TO_IMMORTALITY latches stay fail-closed: their
-		// instance scripts have no OnUnitDeath handler yet.
+		// TRIBUTE_TO_IMMORTALITY latches ride the same sender
+		// since tick 468 (instance_naxxramas.lua /
+		// instance_trial_of_the_crusader.lua OnUnitDeath
+		// handlers, read by their own check functions).
 		if boss, ok := ulduarConquerorBoss[criteriaID]; ok {
 			return int64(num("coUAchivePlayerDeathMask", 0))&(int64(1)<<boss) == 0
 		}
