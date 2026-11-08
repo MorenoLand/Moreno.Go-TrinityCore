@@ -158,9 +158,14 @@
 -- viscidus-suicide-cast idiom (the old "no bridge" claim was stale).
 -- spell_freezing_cloud_area_left / right, spell_freezing_cloud_damage,
 -- spell_skadi_reset_check, spell_skadi_launch_harpoon,
--- spell_skadi_poisoned_spear, spell_skadi_ride_vehicle,
--- spell_summon_gauntlet_mobs_periodic — SpellScript / AuraScript hooks
--- only — join the no-SpellScript / no-AuraScript-bridge queues.
+-- spell_skadi_poisoned_spear — SpellScript / AuraScript hooks only —
+-- join the no-SpellScript-bridge queue (freezing_cloud_damage's
+-- DoCheckAreaTarget has no aura-event twin: the RegisterAuraEvent set
+-- is Periodic 1 / Apply 2 / Remove 3 / ChangeAmount 4 / Dispel 5 /
+-- Proc 6 / BeforeDispel 7, engine/scripting/runtime.go:497-503).
+-- spell_skadi_ride_vehicle + spell_summon_gauntlet_mobs_periodic are
+-- PORTED below via RegisterAuraEvent (this run) — the old
+-- "no-AuraScript-bridge" claim for them is retired.
 -- achievement_girl_love_to_skadi (OnCheck: GetData(DATA_LOVE_TO_SKADI)
 -- == 1) — PORTED tick 417: the love latch is mirrored into Skadi's
 -- SetData store (Reset 0 / first harpoon hit 1, graufSpellHit below)
@@ -195,6 +200,14 @@ local SPELL_NET = 49092
 local SPELL_THROW = 49091
 local SPELL_LAUNCH_HARPOON = 48642 -- boss_skadi.cpp:39
 local SPELL_SUMMON_HARPOON = 56789 -- boss_skadi.cpp:62
+local SPELL_RIDE_GRAUF = 61791 -- boss_skadi.cpp:41
+local SPELL_SUMMON_GAUNLET_MOBS_PERIODIC = 59275 -- boss_skadi.cpp:40
+local SPELL_SUMMON_YMIRJAR_WARRIOR_W = 48631 -- boss_skadi.cpp:47
+local SPELL_SUMMON_YMIRJAR_WARRIOR_E = 48632 -- boss_skadi.cpp:48
+local SPELL_SUMMON_YMIRJAR_HARPOONER_W = 48633 -- boss_skadi.cpp:49
+local SPELL_SUMMON_YMIRJAR_HARPOONER_E = 48634 -- boss_skadi.cpp:50
+local SPELL_SUMMON_YMIRJAR_WITCH_DOCTOR_W = 48635 -- boss_skadi.cpp:51
+local SPELL_SUMMON_YMIRJAR_WITCH_DOCTOR_E = 48636 -- boss_skadi.cpp:52
 
 local timers = {}
 local harpoonState = {} -- per-Skadi-GUID { hits, love } for ACTION_HARPOON_HIT
@@ -622,3 +635,88 @@ RegisterCreatureEvent(ENTRY_GRAUF, 14, graufSpellHit)
 RegisterCreatureEvent(ENTRY_GRAUF, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_skadi.cpp:454: custom UpdateAI never calls DoMeleeAttackIfReady (scheduler-only UpdateAI in C++, never melees)
 end)
+
+-- C++ spell_summon_gauntlet_mobs_periodic_AuraScript
+-- (boss_skadi.cpp:871-937): OnPeriodic, EFFECT_0 PERIODIC_DUMMY.
+-- Each tick casts the next two summon spells off the script's
+-- rotating 8-spell deque and rotates it by two more, so the front
+-- advances by four per tick; the RAND branch only swaps which pair
+-- fires first (cast-then-rotate casts positions 1-2, rotate-then-cast
+-- casts positions 3-4). The deque is per-AuraScript-instance in C++;
+-- the Lua twin is per-target-GUID state (the timers-table precedent),
+-- reset by the OnApply handler below — Go ev2 fires only on fresh
+-- applications (engine/world/spells.go:39194), so the reset matches
+-- the fresh-script-instance construction. C++ casts with a nullptr
+-- target (the summon spells resolve at the trigger); Go nil would
+-- fall back to the trigger's (nonexistent) victim and no-op
+-- (lua_creature_events.go:896), so the self-cast is the live twin.
+-- DORMANT until the ACTION_START_ENCOUNTER summon-trigger cast leg
+-- (:254, unported sender) lands and Spell.dbc ships the 59275 aura
+-- record.
+local gauntletSpells = {
+    SPELL_SUMMON_YMIRJAR_WARRIOR_E,
+    SPELL_SUMMON_YMIRJAR_HARPOONER_W,
+    SPELL_SUMMON_YMIRJAR_WARRIOR_W,
+    SPELL_SUMMON_YMIRJAR_HARPOONER_E,
+    SPELL_SUMMON_YMIRJAR_WARRIOR_W,
+    SPELL_SUMMON_YMIRJAR_WITCH_DOCTOR_E,
+    SPELL_SUMMON_YMIRJAR_WARRIOR_E,
+    SPELL_SUMMON_YMIRJAR_WITCH_DOCTOR_W,
+}
+local gauntletIndexByGuid = {}
+
+local function gauntletMobsApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    gauntletIndexByGuid[target:GetGUID()] = 1
+end
+
+local function gauntletMobsPeriodic(event, aura, target)
+    if target == nil then
+        return
+    end
+    local guid = target:GetGUID()
+    local index = gauntletIndexByGuid[guid] or 1
+    local offset = 0
+    if math.random(0, 1) == 0 then
+        offset = 2
+    end
+    local first = gauntletSpells[(index + offset - 1) % 8 + 1]
+    local second = gauntletSpells[(index + offset) % 8 + 1]
+    target:CastSpell(target, first, true)
+    target:CastSpell(target, second, true)
+    gauntletIndexByGuid[guid] = (index + 3) % 8 + 1
+end
+
+RegisterAuraEvent(SPELL_SUMMON_GAUNLET_MOBS_PERIODIC, 2, gauntletMobsApply)
+RegisterAuraEvent(SPELL_SUMMON_GAUNLET_MOBS_PERIODIC, 1, gauntletMobsPeriodic)
+
+-- C++ spell_skadi_ride_vehicle::OnRemoveVehicle (boss_skadi.cpp:848-867):
+-- OnEffectRemove, EFFECT_0 SPELL_AURA_CONTROL_VEHICLE,
+-- AURA_EFFECT_HANDLE_REAL. PreventDefaultAction, then the target's
+-- vehicle kit drops the caster as a passenger and the caster is
+-- un-rooted. The Go control-vehicle remove leg fires the ev3 hook
+-- before its default exit leg (engine/world/spells.go:44661), so
+-- returning true is the PreventDefaultAction twin (the default leg
+-- is a no-op for the creature caster in any case). The kit is
+-- nil-guarded — Go never installs one for the creature-cast ride,
+-- so the leg runs when a kit exists and the un-root still lands.
+-- DORMANT until the 2s ride cast (:247-251, stays out on the vehicle
+-- board) lands and Spell.dbc ships the 61791 aura record.
+local function rideVehicleRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return true
+    end
+    if target ~= nil then
+        local kit = target:GetVehicleKit()
+        if kit ~= nil then
+            kit:RemovePassenger(caster)
+        end
+    end
+    caster:SetRooted(false)
+    return true
+end
+
+RegisterAuraEvent(SPELL_RIDE_GRAUF, 3, rideVehicleRemove)
