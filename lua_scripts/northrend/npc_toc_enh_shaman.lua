@@ -21,7 +21,8 @@
 -- Engage (base boss_faction_championsAI::JustEngagedWith) — DoCast(me,
 -- SPELL_ANTI_AOE 68595, true) triggered, SetCombatPulseDelay(5),
 -- DoZoneInCombat() (boss_faction_champions.cpp:645-649; setActive has
--- no bridge, controller SetData is instance-gated).
+-- no bridge; controller SetData(2, IN_PROGRESS) PORTED 2026-11-07 via
+-- the shared instanceData counter).
 -- KilledUnit relay (base :655-666) — player victim -> faction-leader
 -- bare Talk(SAY_KILLED_PLAYER 6); entry-faction inference per the
 -- npc_toc_druid.lua precedent (champions spawn opposite-faction to the
@@ -38,6 +39,89 @@ local ENTRY_ENH_SHAMAN_ALLIANCE = 34463 -- trial_of_the_crusader.h:190
 local ENTRY_ENH_SHAMAN_HORDE = 34455 -- trial_of_the_crusader.h:205
 
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42
+
+-- Faction-champions controller SetData(2, ...) machine — compact twin
+-- of the canonical helpers in boss_faction_champions.lua (each Lua
+-- file loads in its own state): shared instanceData table from
+-- instance_trial_of_the_crusader.lua (map 649).
+local DATA_FACTION_CRUSADERS = 2 -- trial_of_the_crusader.h:34
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
+
+-- C++ controller SetData(2, IN_PROGRESS) (:537-545): reset counters +
+-- SetBossState IN_PROGRESS once per pull (boss-state guard = C++
+-- !_inProgress gate); total 6 (10-man) / 10 (25-man) per
+-- SelectChampions (:395-461); Is25ManRaid live (lce.go:3783).
+local function championEncounterStart(creature)
+    if creature:GetBossState(DATA_FACTION_CRUSADERS) == BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data.championsKilled = 0
+    data.championsFailed = 0
+    data.championsTotal = creature:Is25ManRaid() and 10 or 6
+    data.championsInProgress = true
+    data.resilienceTimer = 0
+    creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_IN_PROGRESS)
+end
+
+-- C++ controller SetData(2, DONE) (:546-556): 1st kill sets the 60s
+-- Resilience timer + special flag (instance :437-440); at total ->
+-- SetBossState DONE (instance DONE legs — criteria/chest/fordring —
+-- have no bridge; resilienceInMinute records the timer read).
+local function championCountDeath(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local killed = (data.championsKilled or 0) + 1
+    data.championsKilled = killed
+    if killed == 1 then
+        data.resilienceTimer = 60000
+        data.crusadersSpecial = true
+    elseif killed >= (data.championsTotal or 6) then
+        if (data.resilienceTimer or 0) > 0 then
+            data.resilienceInMinute = true
+        end
+        data.championsInProgress = false
+        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_DONE)
+    end
+end
+
+-- C++ controller SetData(2, FAIL) (:526-534) via JustReachedHome
+-- (:596-600): FAIL when failed+killed >= total. ev2 (evade start)
+-- is the closest twin — it fires only on the evade path, never on
+-- death (creaturemotion.go triggerCreatureEvade), so no double-count;
+-- fires earlier than C++ if a champion re-engages mid-evade.
+local function championCountFail(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local failed = (data.championsFailed or 0) + 1
+    data.championsFailed = failed
+    if failed + (data.championsKilled or 0) >= (data.championsTotal or 6) then
+        data.crusadersSpecial = false
+        data.championsInProgress = false
+        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+    end
+end
 
 -- CASTING gate: derived UpdateAI pre-loop return
 -- (boss_faction_champions.cpp:1987) PORTED as a 500ms
@@ -177,10 +261,12 @@ end
 -- C++ base boss_faction_championsAI::JustEngagedWith
 -- (boss_faction_champions.cpp:645-649): DoCast(me, SPELL_ANTI_AOE, true)
 -- triggered, SetCombatPulseDelay(5), setActive (no bridge),
--- DoZoneInCombat() — applies to every champion subclass including
+-- DoZoneInCombat() + controller SetData(2, IN_PROGRESS) via the shared
+-- instanceData counter (PORTED 2026-11-07) — applies to every champion
+-- subclass including
 -- this enhancement shaman AI (npc_toc_enh_shamanAI : public
 -- boss_faction_championsAI, :1916); the npc_toc_druid.lua precedent
--- ports all three bridged arms.
+-- ports the bridged arms.
 -- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
 -- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
 -- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
@@ -235,6 +321,7 @@ local function enhShamanEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
+    championEncounterStart(creature) -- C++ :650-651 SetData(2, IN_PROGRESS)
     scheduleRotation(creature)
     local guid = creature:GetGUID()
     schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
@@ -245,10 +332,12 @@ end
 
 local function enhShamanLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function enhShamanDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 
 local function enhShamanSpawn(event, creature)

@@ -33,8 +33,9 @@
 -- true) triggered self-cast + SetCombatPulseDelay(5) PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go);
 -- the DoZoneInCombat leg is PORTED 2026-10-23 (bridge live,
--- engine/world/lua_creature_events.go); the setActive / controller
--- SetData(2, IN_PROGRESS) legs have no bridges (tharon_ja precedent).
+-- engine/world/lua_creature_events.go); the controller
+-- SetData(2, IN_PROGRESS) leg is PORTED 2026-11-07 via the shared
+-- instanceData counter; setActive alone has no bridge.
 -- EVENT_THREAT UpdatePower + UpdateThreat — per player-victim ScaleThreat(0) +
 -- AddThreat(1000000 * 30000 / (health + 1)) (AI_RANGED, no armor
 -- read); 5s init, 4s repeats (boss_faction_champions.cpp:591,
@@ -71,11 +72,13 @@
 -- npc_toc_boomkin UpdateAI DoSpellAttackIfReady(SPELL_WRATH 65862) —
 -- ranged auto-attack leg; Go melee is engine-driven (deviation: the
 -- champion melees instead of wrath-spamming between casts).
--- base JustDied: controller SetData(2, DONE) (no cross-AI bridge).
+-- base JustDied: controller SetData(2, DONE) — PORTED 2026-11-07 via
+-- the shared instanceData counter (championCountDeath below).
 -- base KilledUnit: varian/garrosh DoAction(ACTION_SAY_KILLED_PLAYER)
 -- (no cross-AI bridge).
--- base JustReachedHome: controller SetData(2, FAIL) + DespawnOrUnsummon
--- (no bridges).
+-- base JustReachedHome: controller SetData(2, FAIL) — PORTED 2026-11-07
+-- via the shared instanceData counter (championCountFail below, ev2
+-- twin); the DespawnOrUnsummon leg stays out (no cross-AI despawn model).
 -- Reset-scan note (2026-10-19): the 16592 SPELL_SHADOWFORM DoCast(me)
 -- flagged against this file belongs to npc_toc_shadow_priestAI::Reset
 -- (boss_faction_champions.cpp:1141-1156), a separate unported champion
@@ -95,6 +98,89 @@ local ENTRY_BOOMKIN_ALLIANCE = 34460
 local ENTRY_BOOMKIN_HORDE = 34451
 
 local SPELL_ANTI_AOE = 68595
+
+-- Faction-champions controller SetData(2, ...) machine — compact twin
+-- of the canonical helpers in boss_faction_champions.lua (each Lua
+-- file loads in its own state): shared instanceData table from
+-- instance_trial_of_the_crusader.lua (map 649).
+local DATA_FACTION_CRUSADERS = 2 -- trial_of_the_crusader.h:34
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
+
+-- C++ controller SetData(2, IN_PROGRESS) (:537-545): reset counters +
+-- SetBossState IN_PROGRESS once per pull (boss-state guard = C++
+-- !_inProgress gate); total 6 (10-man) / 10 (25-man) per
+-- SelectChampions (:395-461); Is25ManRaid live (lce.go:3783).
+local function championEncounterStart(creature)
+    if creature:GetBossState(DATA_FACTION_CRUSADERS) == BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data.championsKilled = 0
+    data.championsFailed = 0
+    data.championsTotal = creature:Is25ManRaid() and 10 or 6
+    data.championsInProgress = true
+    data.resilienceTimer = 0
+    creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_IN_PROGRESS)
+end
+
+-- C++ controller SetData(2, DONE) (:546-556): 1st kill sets the 60s
+-- Resilience timer + special flag (instance :437-440); at total ->
+-- SetBossState DONE (instance DONE legs — criteria/chest/fordring —
+-- have no bridge; resilienceInMinute records the timer read).
+local function championCountDeath(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local killed = (data.championsKilled or 0) + 1
+    data.championsKilled = killed
+    if killed == 1 then
+        data.resilienceTimer = 60000
+        data.crusadersSpecial = true
+    elseif killed >= (data.championsTotal or 6) then
+        if (data.resilienceTimer or 0) > 0 then
+            data.resilienceInMinute = true
+        end
+        data.championsInProgress = false
+        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_DONE)
+    end
+end
+
+-- C++ controller SetData(2, FAIL) (:526-534) via JustReachedHome
+-- (:596-600): FAIL when failed+killed >= total. ev2 (evade start)
+-- is the closest twin — it fires only on the evade path, never on
+-- death (creaturemotion.go triggerCreatureEvade), so no double-count;
+-- fires earlier than C++ if a champion re-engages mid-evade.
+local function championCountFail(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local failed = (data.championsFailed or 0) + 1
+    data.championsFailed = failed
+    if failed + (data.championsKilled or 0) >= (data.championsTotal or 6) then
+        data.crusadersSpecial = false
+        data.championsInProgress = false
+        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+    end
+end
 local SPELL_CYCLONE = 65859
 local SPELL_ENTANGLING_ROOTS = 65857
 local SPELL_FAERIE_FIRE = 65863
@@ -281,7 +367,7 @@ end
 -- SPELL_ANTI_AOE, true) triggered, SetCombatPulseDelay(5), setActive,
 -- DoZoneInCombat() (PORTED 2026-10-23 — bridge live,
 -- engine/world/lua_creature_events.go), controller SetData(2, IN_PROGRESS)
--- (no instance/SetData bridge).
+-- PORTED 2026-11-07 via the shared instanceData counter.
 -- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
 -- (:721-724, Reset init 5s at :591, then 4s repeats): per threat-list
 -- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
@@ -330,6 +416,7 @@ local function boomkinEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:646
     creature:DoZoneInCombat() -- C++ :649, in arm order after pulse delay (bridge live 2026-10-23)
+    championEncounterStart(creature) -- C++ :650-651 SetData(2, IN_PROGRESS)
     schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
     if creature:IsHeroic() then
         schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
@@ -338,10 +425,12 @@ end
 
 local function boomkinLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function boomkinDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 
 local function boomkinSpawn(event, creature)

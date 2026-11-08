@@ -45,8 +45,10 @@
 --   stale — triggered CastSpell and the SetCombatPulseDelay bridge at
 --   engine/world/lua_creature_events.go:902 are both live); :648
 --   setActive(true) has no bridge; the :650-651 SetData(2, IN_PROGRESS)
---   -> summons.DoZoneInCombat() leg stays out (summons-container relay +
---   instance-script model absent). AttackStart model, boundary —
+--   -> summons.DoZoneInCombat() leg is PORTED 2026-11-07 via the
+--   shared instanceData counter (championEncounterStart below;
+--   summons.DoZoneInCombat needs no relay — every champion zones
+--   itself in combat on engage). AttackStart model, boundary —
 --   instance/threat-motion model absent.
 -- - EVENT_HEAL_HAND_OF_PROTECTION / EVENT_DPS_HAND_OF_PROTECTION
 --   (cross-target DoCast(target, ...) friendly-select arms — random-friend
@@ -55,9 +57,13 @@
 --   npc_toc_enh_shaman / pets (npc_toc_pet_warlock, npc_toc_pet_hunter)
 --   have no HealthBelowPct arms — not modeled.
 -- - The ToC instance controller (DATA_FACTION_CRUSADERS / champion
---   spawning, SetData 2 arms) — instance-script model absent; the
---   controller struct (:367-578) has no UpdateAI override at all
---   (SetData-only), so there is no cast gate to port there.
+--   spawning, SetData 2 arms) — the SetData(2, IN_PROGRESS/DONE/FAIL)
+--   counter machine is PORTED 2026-11-07 via the shared instanceData
+--   table (instance_trial_of_the_crusader.lua + the champion* helpers
+--   below); the controller struct (:367-578) has no UpdateAI override
+--   at all (SetData-only), so there is no cast gate to port there.
+--   The champion-summon side (SelectChampions / SummonChampions)
+--   stays out — the announcer machine is unported.
 -- - CASTING gates: base UpdateAI :713 has no HasUnitState hit, so
 --   the EVENT_THREAT / EVENT_REMOVE_CC pumps (powerCheck /
 --   removeCCCheck) stay ungated, exactly as in C++; the derived
@@ -73,6 +79,107 @@ local SPELL_RETALIATION = 65932
 local SPELL_ICEBOUND_FORTITUDE = 66023
 local SPELL_CLOAK = 65961
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42 (JustEngagedWith :646 DoCast(me, ..., true))
+
+local DATA_FACTION_CRUSADERS = 2 -- trial_of_the_crusader.h:34
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2
+local BOSS_STATE_DONE = 3
+
+-- Faction-champions controller SetData(2, ...) machine, shared by all
+-- seven champion files via the instance_trial_of_the_crusader.lua
+-- instanceData table (map 649). Canonical copy; the six npc_toc_*
+-- files carry compact twins of these three helpers (each Lua file
+-- loads in its own state, so they cannot call these directly).
+-- C++ controller SetData(2, IN_PROGRESS) (boss_faction_champions.cpp:
+-- 537-545): reset the counters + SetBossState IN_PROGRESS, once per
+-- pull (gated on !_inProgress in C++; the boss-state guard below is
+-- the Lua twin). The instance IN_PROGRESS leg also zeroes the
+-- Resilience timer (instance_trial_of_the_crusader.cpp:197-199).
+-- The summons.DoZoneInCombat() leg needs no relay: every champion
+-- zones itself in combat on engage (:649, already ported).
+local function championEncounterStart(creature)
+    if creature:GetBossState(DATA_FACTION_CRUSADERS) == BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data.championsKilled = 0
+    data.championsFailed = 0
+    -- SelectChampions (boss_faction_champions.cpp:395-461): 4 healers
+    -- minus 2 (10-man) / 1 (25-man), others 6 + replacements minus 4
+    -- erased (10-man only) -> 6 champions on 10-man, 10 on 25-man.
+    -- Is25ManRaid is live (lua_creature_events.go:3783). Summon-failure
+    -- edge: C++ counts only successful summons; the difficulty total
+    -- is the intended count (documented deviation).
+    data.championsTotal = creature:Is25ManRaid() and 10 or 6
+    data.championsInProgress = true
+    data.resilienceTimer = 0
+    creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_IN_PROGRESS)
+end
+
+-- C++ controller SetData(2, DONE) (boss_faction_champions.cpp:546-556):
+-- _championsKilled++; 1st kill -> instance SetData(DATA_FACTION_
+-- CRUSADERS, 0), i.e. ResilienceWillFixItTimer = 60s +
+-- CrusadersSpecialState = true (instance :437-440); at total ->
+-- SetBossState DONE. The DONE-time achievement criteria, chest
+-- respawn and fordring DoAction (instance :206-213) have no bridge
+-- and stay out; resilienceInMinute records the timer read for them.
+local function championCountDeath(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local killed = (data.championsKilled or 0) + 1
+    data.championsKilled = killed
+    if killed == 1 then
+        data.resilienceTimer = 60000
+        data.crusadersSpecial = true
+    elseif killed >= (data.championsTotal or 6) then
+        if (data.resilienceTimer or 0) > 0 then
+            data.resilienceInMinute = true
+        end
+        data.championsInProgress = false
+        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_DONE)
+    end
+end
+
+-- C++ controller SetData(2, FAIL) (boss_faction_champions.cpp:526-534)
+-- via JustReachedHome (:596-600): _championsFailed++; FAIL when
+-- failed+killed >= total. Go has no reached-home event; ev2
+-- (leave combat, evade start) is the closest signal — ev2 fires
+-- only on the evade path (creaturemotion.go triggerCreatureEvade),
+-- never on death, so a death cannot double-count as a fail; it fires
+-- earlier than C++ if a champion re-engages mid-evade (documented
+-- approximation). The instance FAIL leg clears CrusadersSpecialState
+-- (instance :201-205); the fordring wipe DoAction + despawns stay out.
+local function championCountFail(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local failed = (data.championsFailed or 0) + 1
+    data.championsFailed = failed
+    if failed + (data.championsKilled or 0) >= (data.championsTotal or 6) then
+        data.crusadersSpecial = false
+        data.championsInProgress = false
+        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+    end
+end
 local SPELL_CALL_PET = 67777 -- boss_faction_champions.cpp:130 (hunter JustEngagedWith :1438)
 local SPELL_SEAL_OF_COMMAND = 66004 -- boss_faction_champions.cpp:185 (retro paladin JustEngagedWith :2071)
 local SPELL_WING_CLIP = 66207 -- boss_faction_champions.cpp:128 (npc_toc_hunter)
@@ -486,6 +593,7 @@ local function championEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true) -- C++ :646
     creature:SetCombatPulseDelay(5) -- C++ :647 (live bridge; 2026-10-23)
     creature:DoZoneInCombat()
+    championEncounterStart(creature) -- C++ :650-651 SetData(2, IN_PROGRESS)
     -- C++ subclass JustEngagedWith overrides, base arms first (C++ order):
     -- hunter :1437-1438 DoCast(SPELL_CALL_PET) self-cast (pet AI rides
     -- the unbridged summon strand, warlock felhunter precedent);
@@ -534,10 +642,12 @@ end
 
 local function championLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function championDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 
 -- C++ champion Reset equipment legs (boss_faction_champions.cpp):

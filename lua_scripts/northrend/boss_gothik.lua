@@ -108,9 +108,13 @@
 -- FindEligibleTarget — no bridges; EnterEvadeMode — cross-AI
 -- DoAction(ACTION_MINION_EVADE) on Gothik via DATA_GOTHIK — no
 -- instance / cross-AI bridges; JustDied — DoCastAOE(_deathNotify,
--- triggered) anchor spells (27892/27928/27935) — stays OUT: the
--- entries are local-enum-only (boss_gothik.cpp:94-100), entry-
--- unverifiable, no Go registration (npc_stinky_icc precedent).
+-- triggered) anchor spells (27892/27928/27935) — PORTED 2026-11-07
+-- below (tick 404; tick-388 "entry-unverifiable" bar retracted —
+-- entries are in the C++ enum, boss_gothik.cpp:94-96, and
+-- RegisterCreatureEvent needs no boss_ai.go entry, palehoof-minion
+-- precedent). Dormant until the EVENT_SUMMON wave machine lands
+-- (krik'thir tick-390 dormant precedent); the trigger SpellHit
+-- anchor machine downstream stays out (no spawn-ID bridge).
 -- npc_gothik_minion_livingtrainee (16124): DoCastAOE(SPELL_DEATH_
 -- PLAGUE 55604) 2-arg (non-triggered), urandms(5,20)=5-20s
 -- init/repeat — stays OUT: entry-blocked (same local-enum bar; the
@@ -393,3 +397,37 @@ local function gothikDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_GOTHIK, 9, gothikDamageTaken)
+
+-- C++ npc_gothik_minion_baseAI::JustDied (boss_gothik.cpp:574-577):
+-- if (_deathNotify) DoCastAOE(_deathNotify, true). The three living
+-- minions pass their anchor spell as _deathNotify in their ctors
+-- (:654 trainee 27892, :683 knight 27928, :712 rider 27935; enum
+-- :74-76, entries :94-96); the four spectral minions pass none, so
+-- they get no handler. DoCastAOE self-cast + triggered lowers to
+-- creature:CastSpell(creature, spell, true) (harvestTick precedent
+-- in this file). Dormant until the EVENT_SUMMON wave machine lands
+-- (krik'thir tick-390 dormant precedent); the trigger SpellHit anchor
+-- machine downstream stays out (no spawn-ID bridge).
+local ENTRY_LIVE_TRAINEE = 16124
+local ENTRY_LIVE_KNIGHT = 16125
+local ENTRY_LIVE_RIDER = 16126
+
+local SPELL_ANCHOR_1_TRAINEE = 27892 -- boss_gothik.cpp:74
+local SPELL_ANCHOR_1_DK = 27928 -- boss_gothik.cpp:75
+local SPELL_ANCHOR_1_RIDER = 27935 -- boss_gothik.cpp:76
+
+local function livingTraineeDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_ANCHOR_1_TRAINEE, true)
+end
+
+local function livingKnightDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_ANCHOR_1_DK, true)
+end
+
+local function livingRiderDied(event, creature, killer)
+    creature:CastSpell(creature, SPELL_ANCHOR_1_RIDER, true)
+end
+
+RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 4, livingTraineeDied)
+RegisterCreatureEvent(ENTRY_LIVE_KNIGHT, 4, livingKnightDied)
+RegisterCreatureEvent(ENTRY_LIVE_RIDER, 4, livingRiderDied)
