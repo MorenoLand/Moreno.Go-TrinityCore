@@ -14103,6 +14103,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		castMerged := make(map[uint64]struct{})
 		interruptHandled := false
 		damageEffectSeen := false
+		// spellHitDamageState for this cast: the damage arms below record
+		// the per-target final damage here, and the SpellScript hook fires
+		// below read it through the spell object's GetHitDamage — phase
+		// gated, so the pre-effect hooks read the 0 seed and AfterHit
+		// reads the final value (Spell.cpp:2377/2547). The creature-caster
+		// twin lives in castCreatureSpellInternal (boss_ai.go).
+		hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
 		// Lazily computed once per cast invocation: whether the caster's
 		// usable main-hand weapon is a dagger, for the rogue arm of
 		// Spell::EffectWeaponDmg (SpellEffects.cpp:3237-3245).
@@ -14908,7 +14915,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if aoeCapDivisor > 0 && targetDamage > 0 {
 							targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 						}
-						s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected, false)
+						// Hit-damage record: executeSpellDamageWithFlags returns the
+						// final post-mitigation damage (Spell.cpp:2547 m_damage,
+						// post-split via the CalcAbsorbResist tail); it accumulates
+						// across damage effects for this target, matching C++'s
+						// per-effect m_damage += (SpellEffects.cpp:788). Deltas: a
+						// CHEAT_GOD victim returns 0 (negated after the log, where
+						// C++ still reports the pre-negate damage) and an ev9
+						// DamageTaken rewrite lands in the return (C++ sets m_damage
+						// before DealDamage's hooks).
+						if dealt := s.executeSpellDamageWithFlags(effCtx, effectTarget, spellID, targetDamage, effectIndex, false, isReflected, false); dealt > 0 {
+							hitDamage.damageByTarget[effectTarget] += int32(dealt)
+						}
 					}
 				}
 				// Spell::DoEffectOnLaunchTarget (Spell.cpp:7736-7744): a
@@ -14944,7 +14962,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							reflectedDamage = uint32(float64(reflectedDamage) * avoid)
 						}
 					}
-					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex, false, true, false)
+					if dealt := s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, reflectedDamage, effectIndex, false, true, false); dealt > 0 {
+						hitDamage.damageByTarget[s.playerGUID] += int32(dealt)
+					}
 				}
 				// Spell::AddUnitTarget per-target reflect (Spell.cpp:2152,
 				// 2174-2188): each AoE-selected target that reflected cleanly
@@ -14979,7 +14999,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if aoeCapDivisor > 0 && aoeReflectedDamage > 0 {
 						aoeReflectedDamage = aoeReflectedDamage * 10 / uint32(aoeCapDivisor)
 					}
-					s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true, false)
+					if dealt := s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, aoeReflectedDamage, effectIndex, false, true, false); dealt > 0 {
+						hitDamage.damageByTarget[s.playerGUID] += int32(dealt)
+					}
 				}
 				// Friendly-area damage only: a reflected ally's _spellHitTarget
 				// is the caster (Spell.cpp:2350), so the trip damages the
@@ -15006,7 +15028,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if aoeCapDivisor > 0 && allyReflectedDamage > 0 {
 							allyReflectedDamage = allyReflectedDamage * 10 / uint32(aoeCapDivisor)
 						}
-						s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, allyReflectedDamage, effectIndex, false, true, false)
+						if dealt := s.executeSpellDamageWithFlags(effCtx, s.playerGUID, spellID, allyReflectedDamage, effectIndex, false, true, false); dealt > 0 {
+							hitDamage.damageByTarget[s.playerGUID] += int32(dealt)
+						}
 					}
 				}
 			case spellEffectHeal, spellEffectHealPct: // SPELL_EFFECT_HEAL (10), SPELL_EFFECT_HEAL_PCT (136)
@@ -15540,10 +15564,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// SpellEffects.cpp:1383: the drained power is dealt as
 					// damage scaled by the effect value multiplier. The
 					// Mana Burn cap is burn-only (SpellEffects.cpp:1358);
-					// the m_damage merge into the spell's damage packet is
-					// a documented no-bridge (no cast-wide accumulator in
-					// Go — one executeSpellDamage per effect per target,
-					// the tree-wide convention).
+					// the m_damage merge rides hitDamage now (the per-cast
+					// accumulator); C++ folds the pre-mitigation burn into
+					// the shared m_damage and mitigates once, while Go's
+					// per-effect pipeline mitigates the burn leg on its own
+					// — the standing multi-effect delta.
 					// SpellEffects.cpp:1359: damage < 0 returns before the
 					// log; a zero amount burns nothing but still logs.
 					if amount < 0 || !s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
@@ -15551,7 +15576,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID, true)
 					if burned > 0 {
-						s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
+						if dealt := s.executeSpellDamage(effCtx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex); dealt > 0 {
+							hitDamage.damageByTarget[effectTarget] += int32(dealt)
+						}
 					}
 					// SpellEffects.cpp:1370-1373: the take-target-power log
 					// fires past the gates before the multiplier, even for
@@ -17517,7 +17544,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						leechList = append(joinedKept, explicitAreaJoin)
 					}
 				}
-				s.handleEffectHealthLeech(effCtx, spell, spellID, leechList, effectIndex, eff)
+				s.handleEffectHealthLeech(effCtx, spell, spellID, leechList, effectIndex, eff, hitDamage)
 				// Reflected AoE trips (Spell.cpp:2350-2357, 3554-3563): the
 				// HIT_TARGET arm runs on the caster once per reflected
 				// target — the helper's self-arm (no self skip: C++ has
@@ -17525,12 +17552,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// damages the caster and heals a fraction back, not
 				// idempotent across trips.
 				for range areaEnemyTrips(eff, reflectedAoETrips) {
-					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff)
+					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff, hitDamage)
 				}
 				// Reflected ally trips (Spell.cpp:2350): the trip's unitTarget
 				// is the caster, so the arm runs on the caster once per trip.
 				for range effectAllyTrips(eff, reflectedAllyTrips, refCenteredAllyTrips) {
-					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff)
+					s.handleEffectHealthLeech(effCtx, spell, spellID, []uint64{s.playerGUID}, effectIndex, eff, hitDamage)
 				}
 			case spellEffectPowerDrain: // 8: SPELL_EFFECT_POWER_DRAIN
 				// Spell::EffectPowerDrain (SpellEffects.cpp:1265-1307) name-by-name:
@@ -18774,7 +18801,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// fire with a nil target; the 0 GUID has no TargetInfo and is
 		// skipped. Notification-only: the C++ damage/healing rewrite
 		// has no Go model.
-		spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+		spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, hitDamage: hitDamage})
 		// SpellScript BeforeHit (Spell.cpp:2357,
 		// CallScriptBeforeHitHandlers in
 		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
@@ -18786,18 +18813,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if effectTarget == 0 {
 				continue
 			}
+			hitDamage.phase = spellHitPhaseBeforeHit
+			hitDamage.currentTarget = effectTarget
 			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget), protocol.SpellMissNone)
 		}
 		for _, miss := range missStatus {
+			hitDamage.phase = spellHitPhaseBeforeHit
+			hitDamage.currentTarget = miss.TargetGUID
 			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, miss.TargetGUID), miss.Reason)
 		}
 		for _, effectTarget := range hitTargets {
 			if effectTarget == 0 {
 				continue
 			}
+			hitDamage.phase = spellHitPhaseOnHit
+			hitDamage.currentTarget = effectTarget
 			s.server.fireSpellHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
 		}
-		for range missStatus {
+		for _, miss := range missStatus {
+			hitDamage.phase = spellHitPhaseOnHit
+			hitDamage.currentTarget = miss.TargetGUID
 			s.server.fireSpellHit(effCtx, spellID, spellObj, nil)
 		}
 		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
@@ -18895,9 +18930,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if effectTarget == 0 {
 				continue
 			}
+			hitDamage.phase = spellHitPhaseAfterHit
+			hitDamage.currentTarget = effectTarget
 			s.server.fireSpellAfterHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
 		}
-		for range missStatus {
+		for _, miss := range missStatus {
+			hitDamage.phase = spellHitPhaseAfterHit
+			hitDamage.currentTarget = miss.TargetGUID
 			s.server.fireSpellAfterHit(effCtx, spellID, spellObj, nil)
 		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2611-2617): the
@@ -26553,6 +26592,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// UNK4-only spells and unmodeled for triggered Speed > 0).
 	triggeredDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
 	triggeredLaunchMs := gameTimeMS()
+	// spellHitDamageState for this cast: the damage arms below record
+	// the per-target final damage here, and the SpellScript hook fires
+	// below read it through the spell object's GetHitDamage — phase
+	// gated, so OnHit reads the 0 seed and AfterHit reads the final
+	// value (Spell.cpp:2377/2547). The client-path twin lives in
+	// finishSpellCast above.
+	hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -27232,7 +27278,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// gate.
 				// Chain-jump scaling is not carried (the helper takes
 				// no jump index; leech spells do not chain).
-				s.handleEffectHealthLeech(ctx, spell, spellID, effectGUIDs, effectIndex, eff)
+				s.handleEffectHealthLeech(ctx, spell, spellID, effectGUIDs, effectIndex, eff, hitDamage)
 			}
 		}
 		if eff.Effect == spellEffectSummon {
@@ -27639,7 +27685,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if areaDmgEffect && aoeCapDivisor > 0 && targetDamage > 0 {
 					targetDamage = targetDamage * 10 / uint32(aoeCapDivisor)
 				}
-				s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false)
+				if dealt := s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false); dealt > 0 {
+					hitDamage.damageByTarget[effectTarget] += int32(dealt)
+				}
 			} else if eff.Effect == spellEffectWeaponDamage || eff.Effect == spellEffectWeaponDamageNoschool || eff.Effect == spellEffectWeaponPercentDamage || eff.Effect == spellEffectNormalizedWeaponDmg {
 				// Spell::EffectWeaponDmg (SpellEffects.cpp:3171) runs at
 				// SPELL_EFFECT_HANDLE_LAUNCH_TARGET per unit target; like the
@@ -27741,7 +27789,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 								targetDamage = targetDamage * 10 / uint32(weaponCapDivisor)
 							}
 						}
-						s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false)
+						if dealt := s.executeDirectSpellDamageWithFlags(ctx, effectTarget, spellID, targetDamage, uint8(spell.SchoolMask), false, false, et.reflected, inheritCritBase, false); dealt > 0 {
+							hitDamage.damageByTarget[effectTarget] += int32(dealt)
+						}
 					}
 				}
 			} else if eff.Effect == spellEffectResurrect {
@@ -27867,7 +27917,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if burnAmount >= 0 && s.spellPowerBurnGatesPass(effectTarget, eff.MiscValue) {
 					burned := s.applySpellPowerBurn(ctx, effectTarget, eff.MiscValue, burnAmount, spellID, true)
 					if burned > 0 {
-						s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex)
+						if dealt := s.executeSpellDamage(ctx, effectTarget, spellID, effectValueMultiplied(burned, calcValueMultiplier(spell, effectIndex, s)), effectIndex); dealt > 0 {
+							hitDamage.damageByTarget[effectTarget] += int32(dealt)
+						}
 					}
 					burnLog = append(burnLog, takeTargetPowerEntry{targetGUID: effectTarget, powerTaken: burned, powerType: uint32(eff.MiscValue)})
 				}
@@ -28562,14 +28614,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// target, before damage and before the AI SpellHit leg below, with
 	// args (event, spell, hitTarget); missed targets fire with a nil
 	// target, like the client path. Notification-only.
-	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID})
+	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID, hitDamage: hitDamage})
 	for _, effectTarget := range goHitTargets {
 		if effectTarget == 0 {
 			continue
 		}
+		hitDamage.phase = spellHitPhaseOnHit
+		hitDamage.currentTarget = effectTarget
 		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
 	}
-	for range goMissStatus {
+	for _, miss := range goMissStatus {
+		hitDamage.phase = spellHitPhaseOnHit
+		hitDamage.currentTarget = miss.TargetGUID
 		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, nil)
 	}
 	// Spell::DoDamageAndTriggers AI legs (Spell.cpp:2629-2638, once per
@@ -28606,9 +28662,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		if effectTarget == 0 {
 			continue
 		}
+		hitDamage.phase = spellHitPhaseAfterHit
+		hitDamage.currentTarget = effectTarget
 		s.server.fireSpellAfterHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
 	}
-	for range goMissStatus {
+	for _, miss := range goMissStatus {
+		hitDamage.phase = spellHitPhaseAfterHit
+		hitDamage.currentTarget = miss.TargetGUID
 		s.server.fireSpellAfterHit(ctx, spellID, funnelSpellObj, nil)
 	}
 	// Spell::_cast (Spell.cpp:3442-3450): the CAST_SPELL criterion updates for
@@ -51871,7 +51931,7 @@ func (s *session) sendResurrectLog(spellID uint32, casterGUID uint64, targetGUID
 	}
 }
 
-func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect) {
+func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell, spellID uint32, hitTargets []uint64, effIndex int, eff wotlk.SpellEffect, hitDamage *spellHitDamageState) {
 	if s.playerGUID == 0 {
 		return
 	}
@@ -51904,6 +51964,15 @@ func (s *session) handleEffectHealthLeech(ctx context.Context, spell wotlk.Spell
 			healthBefore = tgt.Health
 		}
 		dealt := s.executeSpellDamage(ctx, target, spellID, damageAmount, effIndex)
+		// Hit-damage record (SpellEffects.cpp:1532 m_damage += damage): the
+		// pre-clamp return — damageInfo.damage is not health-capped
+		// (overkill is tracked separately, Spell.cpp:2547). C++ folds the
+		// pre-absorb leech amount into the shared m_damage and mitigates
+		// once; Go's per-effect pipeline mitigates the leech leg on its
+		// own — the standing multi-effect delta.
+		if hitDamage != nil && dealt > 0 {
+			hitDamage.damageByTarget[target] += int32(dealt)
+		}
 		if dealt > healthBefore {
 			dealt = healthBefore
 		}

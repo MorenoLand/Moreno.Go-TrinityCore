@@ -9497,14 +9497,6 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		if !takenBlockRan && !damageImmune {
 			damage = s.autoBalanceModifyDealDamage(m, vs, damage)
 		}
-		// Hit-damage record point: damage is the final
-		// post-mitigation value here (taken pct, armor, crit, block,
-		// resilience, AutoBalance, resist, absorb — the C++
-		// damageInfo.damage at Spell.cpp:2547), before the split legs
-		// and the health mutation below, which C++ applies after
-		// m_damage is set. Missed/evaded/immune targets never reach
-		// this point (skipped above), so they read 0.
-		perTarget[guid] = int32(damage)
 		overkill := uint32(0)
 		leechDealt := uint32(0)
 		if !damageImmune {
@@ -9518,6 +9510,16 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 			if !godNegated && damage > 0 {
 				damage = s.splitDamageToCaster(ctx, guid, true, creatureAuraKey{}, m.GUID, damage, uint32(schoolMask))
 			}
+			// Hit-damage record point: damage is the final post-mitigation
+			// value here (taken pct, armor, crit, block, resilience,
+			// AutoBalance, resist, absorb, split — the C++ damageInfo.damage
+			// at Spell.cpp:2547; the split legs run inside CalcAbsorbResist,
+			// Unit.cpp:1977-2060, ahead of the m_damage assignment), before
+			// the health mutation below, which C++ applies after m_damage is
+			// set. The leech basis above stays pre-split (its own effect's
+			// actually-lost total); damage-immune targets skip this block
+			// with damage already 0, so they read 0.
+			perTarget[guid] = int32(damage)
 			if !godNegated && damage > 0 {
 				vs.splitShareDamagePct(ctx, guid, true, creatureAuraKey{}, m.GUID, damage, uint32(schoolMask))
 			}
@@ -9755,14 +9757,6 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		} else {
 			damage = 0
 		}
-		// Hit-damage record point: damage is the final
-		// post-mitigation value here (taken pct, armor, crit, block,
-		// resilience, AutoBalance, resist, absorb — the C++
-		// damageInfo.damage at Spell.cpp:2547), before the split legs
-		// and the health mutation below, which C++ applies after
-		// m_damage is set. Missed/evaded/immune/reflected targets
-		// never reach this point (skipped above), so they read 0.
-		perTarget[guid] = int32(damage)
 		leechDealt := uint32(0)
 		if !damageImmune {
 			leechDealt = damage
@@ -9773,6 +9767,15 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		if damage > 0 {
 			damage = s.splitDamageToCaster(ctx, guid, false, victimKey, m.GUID, damage, uint32(schoolMask))
 		}
+		// Hit-damage record point: damage is the final post-mitigation
+		// value here (taken pct, armor, crit, block, resilience,
+		// AutoBalance, resist, absorb, split — the C++ damageInfo.damage
+		// at Spell.cpp:2547; the split legs run inside CalcAbsorbResist,
+		// Unit.cpp:1977-2060, ahead of the m_damage assignment), before
+		// the share leg, the AI-hook rewrites and the health mutation
+		// below, which C++ applies after m_damage is set. The leech basis
+		// above stays pre-split (its own effect's actually-lost total).
+		perTarget[guid] = int32(damage)
 		if damage > 0 && ownerSess != nil {
 			ownerSess.splitShareDamagePct(ctx, guid, false, victimKey, m.GUID, damage, uint32(schoolMask))
 		}
