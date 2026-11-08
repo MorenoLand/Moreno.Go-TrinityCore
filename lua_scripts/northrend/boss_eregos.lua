@@ -71,11 +71,12 @@
 -- the timer bridge is CreateLuaEvent (the stale "no
 -- timer-event / phase bridge" claim is retracted); the ports
 -- seed from OnEnterCombat(1) and cancel on 2/4/23 per the
--- krystallus/bjarngrim/halion convention. The PHASE_NORMAL
--- gating collapses to always-true: the planar-shift machine
--- that leaves NORMAL is unported, and the AuraScript-driven
--- re-arm of this DoAction (spell_eregos_planar_shift
--- AfterEffectRemove, :274-282) is unbridged.
+-- krystallus/bjarngrim/halion convention. The planar-shift
+-- machine that leaves NORMAL is PORTED 2026-11-08 (tick 427,
+-- eregosDamageTaken below) and the AuraScript-driven re-arm of
+-- this DoAction (spell_eregos_planar_shift AfterEffectRemove,
+-- :274-282) is PORTED too (tick 427, planarShiftRemove, ev3);
+-- both share seedNormalEvents below.
 -- UpdateAI — the arcane event machine (boss_eregos.cpp:204-
 -- 239), PORTED arms (all non-triggered):
 -- EVENT_ARCANE_BARRAGE DoCastVictim(SPELL_ARCANE_BARRAGE 50804),
@@ -90,15 +91,12 @@
 -- -> 35s/50s loop — PORTED as CreateLuaEvent {35000,
 -- 50000} + Talk(2) + CastSpell(creature, 51170).
 -- EVENT_SUMMON_LEY_WHELP 3x DoCast(SPELL_SUMMON_LEY_WHELP
--- 51175) self-cast, 15s/30s init -> 15s/30s loop — REMOVED
--- 2026-10-14 (was ported in 65324e59): the "engine/spell-DB-
--- delivered" claim is disproved — the engine's creature-cast path
--- (castCreatureSpellInternal, boss_ai.go) has no SPELL_EFFECT_SUMMON
--- (28) delivery leg (GO packet + effect-50 Transmitted +
--- spell_linked + event hooks only), so the arm was a packet-only
--- no-op — the shazzrah no-op-cast precedent. No summon bridge
--- (summon STRAND absent); joins drakos BOMB_SUMMON in the
--- stay-out queue.
+-- 51175) self-cast, 15s/30s init -> 15s/30s loop — RESTORED
+-- 2026-11-08 (tick 427, leyWhelpTick below): the creature-cast
+-- path carries SPELL_EFFECT_SUMMON via creatureEffectSummonType
+-- (boss_ai.go:3299, DBC-gated), so the arm is dormant-but-exact
+-- until Spell.dbc ships — the Oct-14 removal's "no
+-- SPELL_EFFECT_SUMMON leg" premise is stale.
 -- The UNIT_STATE_CASTING gates are PORTED 2026-11-04 (500ms
 -- IsCasting defer, mal_ganis idiom): own UpdateAI pre-loop :209 +
 -- in-loop :238 gates cover all 3 ported ticks
@@ -111,36 +109,32 @@
 -- 60%..20% -> PHASE_FIRST_PLANAR (or < 20% ->
 -- PHASE_SECOND_PLANAR), events.Reset() + Talk(SAY_SHIELD 5) +
 -- DoCast(SPELL_PLANAR_SHIFT 51162) + summons.DespawnAll() +
--- DoCast(SPELL_PLANAR_ANOMALIES 57959) x6 — stays out on the
--- PHASE MACHINE, not on missing bridges: creature:IsHeroic()
--- (lua_creature_events.go:260) and creature:GetHealthPct()
--- (scripting/object.go:107) ARE bridged now. The blockers are
--- the machine's consumer legs: the 6x anomaly summons have no
--- delivery (no SPELL_EFFECT_SUMMON leg in the creature-cast
--- path — the ley-whelp removal precedent), summons.DespawnAll()
--- has no bridge, and the normal-events re-arm rides the
--- unbridged spell_eregos_planar_shift AfterEffectRemove
--- AuraScript below — porting Talk+cancel alone would leave the
--- normal rotation dead with no re-arm. Documented-only.
+-- DoCast(SPELL_PLANAR_ANOMALIES 57959) x6 — PORTED 2026-11-08
+-- (tick 427, eregosDamageTaken below; dormant until the DBC
+-- ships — see the handler note). creature:IsHeroic()
+-- (lua_creature_events.go:3749) and creature:GetHealthPct()
+-- (scripting/object.go:190) are bridged; the DespawnAll leg is
+-- emulated with Lua-tracked anomalies + DespawnOrUnsummon.
 -- JustSummoned — BossAI::JustSummoned + NPC_PLANAR_ANOMALY
 -- 30879: CombatStop + REACT_PASSIVE ARE bridged 2026-10-24
--- (lua_creature_events.go); MoveRandom(100.0f) still has no bridge
--- — PORTED 2026-10-24 (eregosJustSummoned, ev19, LATENT per the
--- anubrekhan precedent: anomalies are never delivered yet, so the arm
--- fires only if a future path summons via eregos). SummonedCreatureDespawn —
+-- (lua_creature_events.go); the MoveRandom(100.0f) leg is PORTED
+-- 2026-11-08 (tick 427) — creature:MoveRandom is bridged
+-- (lua_creature_events.go:4719), retiring the "no bridge" note
+-- (eregosJustSummoned, ev19, LATENT per the anubrekhan precedent:
+-- anomalies are never delivered yet, so the arm fires only if a
+-- future path summons via eregos). SummonedCreatureDespawn —
 -- NPC_PLANAR_ANOMALY: CastSpell(summon, SPELL_PLANAR_BLAST
--- 57976, true) TRIGGERED self-cast (boss_eregos.cpp:177) — stays
--- out on the missing summon delivery, not on the hook: event 20
+-- 57976, true) TRIGGERED self-cast (boss_eregos.cpp:177) — PORTED
+-- 2026-11-08 (tick 427, eregosSummonedDespawn, ev20); event 20
 -- (SummonedCreatureDespawn) IS bridged (runtime.go:230, fired on
--- timed-summon expiry in pet_combat.go), but the anomaly summons
--- are never delivered — no SPELL_EFFECT_SUMMON leg — so no hook
--- would ever fire.
+-- timed-summon expiry in pet_combat.go and on TempSummon
+-- DespawnOrUnsummon, the UnSummon leg). DORMANT: the anomaly
+-- summons are DBC-side, so no hook fires until the DBC ships.
 -- spell_eregos_planar_shift — AuraScript AfterEffectRemove
 -- (EFFECT_0 SPELL_AURA_SCHOOL_IMMUNITY): target ToCreature
 -- -> AI()->DoAction(ACTION_SET_NORMAL_EVENTS) (the
--- planar-shift end re-arms normal events) — no AuraScript
--- bridge (the keristrasza spell_intense_cold precedent); joins
--- the no-AuraScript-bridge queue.
+-- planar-shift end re-arms normal events) — PORTED 2026-11-08
+-- (tick 427, planarShiftRemove, ev3).
 -- achievement_gen_eregos_void x3 — OnCheck: target->GetAI()->
 -- GetData(DATA_RUBY_VOID / DATA_EMERALD_VOID / DATA_AMBER_VOID)
 -- (the drake-void achievements 2044 / 2045 / 2046) — PORTED tick 417:
@@ -155,10 +149,20 @@ local SAY_AGGRO = 1
 local SAY_KILL = 3
 local SAY_DEATH = 4
 local SAY_ENRAGE = 2
+local SAY_SHIELD = 5 -- boss_eregos.cpp:44
 
 local SPELL_ARCANE_BARRAGE = 50804
 local SPELL_ARCANE_VOLLEY = 51153
 local SPELL_ENRAGED_ASSAULT = 51170
+local SPELL_PLANAR_SHIFT = 51162 -- boss_eregos.cpp:53
+local SPELL_PLANAR_ANOMALIES = 57959 -- boss_eregos.cpp:52
+local SPELL_PLANAR_BLAST = 57976 -- boss_eregos.cpp:56
+local SPELL_SUMMON_LEY_WHELP = 51175 -- boss_eregos.cpp:54
+
+local PHASE_NORMAL = 1 -- boss_eregos.cpp:62
+local PHASE_FIRST_PLANAR = 2 -- boss_eregos.cpp:64
+local PHASE_SECOND_PLANAR = 3 -- boss_eregos.cpp:65
+local ACTION_SET_NORMAL_EVENTS = 1 -- boss_eregos.cpp:69
 
 local NPC_RUBY_DRAKE_VEHICLE = 27756
 local NPC_EMERALD_DRAKE_VEHICLE = 27692
@@ -204,6 +208,8 @@ end
 local voidRuby = {}
 local voidEmerald = {}
 local voidAmber = {}
+local eregosPhase = {} -- per-GUID _phase latch (Initialize PHASE_NORMAL)
+local planarAnomalies = {} -- per-GUID {summon GUID -> anomaly} (DespawnAll emulation)
 
 -- C++ EVENT_ARCANE_BARRAGE (:215-218): DoCastVictim(50804)
 -- non-triggered, 3s/10s init -> 3s/10s loop.
@@ -252,6 +258,47 @@ local function enragedAssaultTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SUMMON_LEY_WHELP (:228-231): 3x DoCast(SPELL_SUMMON_LEY_WHELP
+-- 51175) self-cast, 15s/30s init -> 15s/30s loop. RESTORED 2026-11-08
+-- (tick 427): the creature-cast path carries SPELL_EFFECT_SUMMON via
+-- creatureEffectSummonType (boss_ai.go:3299, gated on the DBC Spell()
+-- lookup), so the arm is dormant-but-exact until Spell.dbc ships —
+-- the Oct-14 removal's "no SPELL_EFFECT_SUMMON leg" premise is
+-- stale. The ley-whelp entry itself is DBC-side (no NPC_LEY_WHELP
+-- in the C++ tree), so no explicit-summon twin is possible.
+local function leyWhelpTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "leywhelp", 500, function()
+            leyWhelpTick(creature, guid)
+        end)
+        return
+    end
+    for _ = 1, 3 do
+        creature:CastSpell(creature, SPELL_SUMMON_LEY_WHELP)
+    end
+    schedule(guid, "leywhelp", {15000, 30000}, function()
+        leyWhelpTick(creature, guid)
+    end)
+end
+
+-- C++ DoAction(ACTION_SET_NORMAL_EVENTS) (boss_eregos.cpp:148-157):
+-- events.SetPhase(PHASE_NORMAL) + the four normal-event schedules.
+-- Shared by the engage seed and the planar-shift re-arm (below).
+local function seedNormalEvents(creature, guid)
+    schedule(guid, "barrage", {3000, 10000}, function()
+        arcaneBarrageTick(creature, guid)
+    end)
+    schedule(guid, "volley", {10000, 25000}, function()
+        arcaneVolleyTick(creature, guid)
+    end)
+    schedule(guid, "enraged", {35000, 50000}, function()
+        enragedAssaultTick(creature, guid)
+    end)
+    schedule(guid, "leywhelp", {15000, 30000}, function()
+        leyWhelpTick(creature, guid)
+    end)
+end
+
 -- C++ boss_eregos.cpp:111-128 boss_eregosAI::JustEngagedWith:
 -- Talk(SAY_AGGRO) unconditional + the drake-vehicle
 -- FindNearestCreature achievement-void legs (:124-128; bridged —
@@ -270,6 +317,7 @@ local function eregosEnterCombat(event, creature, target)
     voidRuby[guid] = true
     voidEmerald[guid] = true
     voidAmber[guid] = true
+    eregosPhase[guid] = PHASE_NORMAL -- C++ Initialize() (:95-99)
     -- Achievement write leg (tick 417): mirror the void latches into
     -- the boss motion's SetData store for achievement_ruby_void /
     -- achievement_emerald_void / achievement_amber_void's GetData
@@ -290,15 +338,7 @@ local function eregosEnterCombat(event, creature, target)
         creature:SetData(DATA_AMBER_VOID, 0)
     end
     cancelTimers(guid)
-    schedule(guid, "barrage", {3000, 10000}, function()
-        arcaneBarrageTick(creature, guid)
-    end)
-    schedule(guid, "volley", {10000, 25000}, function()
-        arcaneVolleyTick(creature, guid)
-    end)
-    schedule(guid, "enraged", {35000, 50000}, function()
-        enragedAssaultTick(creature, guid)
-    end)
+    seedNormalEvents(creature, guid)
 end
 
 local function eregosCombatEnd(event, creature)
@@ -315,6 +355,7 @@ local function eregosReset(event, creature)
         creature:SetBossState(DATA_EREGOS, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(creature:GetGUID())
+    eregosPhase[creature:GetGUID()] = PHASE_NORMAL -- C++ Initialize() (:95-99)
     -- C++ Reset -> Initialize() (boss_eregos.cpp:95-99) re-arms all
     -- three void latches true. IsDead-guarded: ev23 pre-fires on death
     -- (kill.go:1091 -> fireCreatureDied) and an unguarded re-arm would
@@ -350,15 +391,114 @@ local function eregosDied(event, creature, killer)
     end
 end
 
+-- C++ boss_eregosAI::DamageTaken (boss_eregos.cpp:184-202):
+-- heroic-only; health 60%..20% -> PHASE_FIRST_PLANAR (or < 20% ->
+-- PHASE_SECOND_PLANAR), events.Reset() + Talk(SAY_SHIELD 5) +
+-- DoCast(SPELL_PLANAR_SHIFT 51162) + summons.DespawnAll() +
+-- DoCast(SPELL_PLANAR_ANOMALIES 57959) x6. PORTED 2026-11-08
+-- (tick 427). The phase latch is per-GUID (C++ _phase); health
+-- reads are pre-damage on both sides (ev9 fires before damage is
+-- applied), so no postDamage guard — the nefarian-form guard is
+-- for UpdateAI HealthBelowPct arms, not DamageTaken.
+-- summons.DespawnAll() is emulated with the Lua-tracked anomalies
+-- (ev19, below) + DespawnOrUnsummon, the vancleef precedent; each
+-- despawn fires ev20, so each anomaly blasts exactly as C++
+-- summons.DespawnAll() does. DORMANT: the 51162 self-cast and the
+-- 57959 anomaly summons ride the DBC spell path (no Spell.dbc in
+-- tree), so the shift aura never applies and no anomalies arrive
+-- until the DBC ships; the re-arm below fires if the aura ever
+-- expires.
+local function eregosDamageTaken(event, creature, attacker, damage)
+    if not creature:IsHeroic() then
+        return
+    end
+    local guid = creature:GetGUID()
+    local phase = eregosPhase[guid] or PHASE_NORMAL
+    local pct = creature:GetHealthPct()
+    local first = pct < 60 and pct > 20 and phase < PHASE_FIRST_PLANAR
+    local second = pct < 20 and phase < PHASE_SECOND_PLANAR
+    if not first and not second then
+        return
+    end
+    if first then
+        eregosPhase[guid] = PHASE_FIRST_PLANAR
+    else
+        eregosPhase[guid] = PHASE_SECOND_PLANAR
+    end
+    cancelTimers(guid)
+    creature:Talk(SAY_SHIELD)
+    creature:CastSpell(creature, SPELL_PLANAR_SHIFT)
+    local tracked = planarAnomalies[guid]
+    if tracked then
+        for _, anomaly in pairs(tracked) do
+            anomaly:DespawnOrUnsummon()
+        end
+        planarAnomalies[guid] = nil
+    end
+    for _ = 1, 6 do
+        creature:CastSpell(creature, SPELL_PLANAR_ANOMALIES)
+    end
+end
+
+-- C++ spell_eregos_planar_shift::OnRemove (boss_eregos.cpp:274-282):
+-- AfterEffectRemove, EFFECT_0 SPELL_AURA_SCHOOL_IMMUNITY. The
+-- target (Eregos — the shift is a self-cast) re-arms the normal
+-- events via AI()->DoAction(ACTION_SET_NORMAL_EVENTS). PORTED
+-- 2026-11-08 (tick 427) via ev3; the DoAction re-seeds the four
+-- normal timers on the target's GUID (seedNormalEvents, above).
+-- DORMANT: the 51162 aura never applies until the DBC ships (see
+-- eregosDamageTaken).
+local function planarShiftRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    local guid = target:GetGUID()
+    cancelTimers(guid)
+    seedNormalEvents(target, guid)
+end
+
+RegisterAuraEvent(SPELL_PLANAR_SHIFT, 3, planarShiftRemove)
+
 -- C++ JustSummoned NPC_PLANAR_ANOMALY (boss_eregos.cpp:160-170):
 -- CombatStop(true) + SetReactState(REACT_PASSIVE) in C++ order; the
--- MoveRandom(100.0f) leg has no bridge. LATENT: anomalies spawn only
--- from the unported SPELL_PLANAR_ANOMALIES 57959 spell-summon
--- (anubrekhan latent precedent).
+-- MoveRandom(100.0f) leg is PORTED 2026-11-08 (tick 427) —
+-- creature:MoveRandom is bridged (engine/world/lua_creature_events.go:4719),
+-- retiring the "no bridge" note. The anomaly is tracked for the
+-- DespawnAll emulation in eregosDamageTaken (above). LATENT:
+-- anomalies spawn only from the DBC-side SPELL_PLANAR_ANOMALIES
+-- 57959 spell-summon (anubrekhan latent precedent).
 local function eregosJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
         summoned:CombatStop(true)
         summoned:SetReactState(0) -- REACT_PASSIVE
+        summoned:MoveRandom(100)
+        local guid = creature:GetGUID()
+        local tracked = planarAnomalies[guid]
+        if not tracked then
+            tracked = {}
+            planarAnomalies[guid] = tracked
+        end
+        tracked[summoned:GetGUID()] = summoned
+    end
+end
+
+-- C++ SummonedCreatureDespawn (boss_eregos.cpp:173-179):
+-- NPC_PLANAR_ANOMALY: triggered self-cast SPELL_PLANAR_BLAST
+-- 57976 (the C++ @todo "See why the spell is not cast" notes the
+-- cast itself; the hook is exact). PORTED 2026-11-08 (tick 427);
+-- also untracks the anomaly for the DespawnAll emulation.
+-- DespawnOrUnsummon on a TempSummon fires ev20 (the UnSummon
+-- leg), so the DamageTaken DespawnAll above blasts each anomaly
+-- exactly as C++ summons.DespawnAll() does. DORMANT: anomalies
+-- never arrive until the DBC ships.
+local function eregosSummonedDespawn(_, creature, summoned)
+    if summoned ~= nil and summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
+        local guid = creature:GetGUID()
+        local tracked = planarAnomalies[guid]
+        if tracked then
+            tracked[summoned:GetGUID()] = nil
+        end
+        summoned:CastSpell(summoned, SPELL_PLANAR_BLAST, true)
     end
 end
 
@@ -366,5 +506,7 @@ RegisterCreatureEvent(ENTRY_EREGOS, 1, eregosEnterCombat)
 RegisterCreatureEvent(ENTRY_EREGOS, 2, eregosCombatEnd)
 RegisterCreatureEvent(ENTRY_EREGOS, 3, eregosTargetDied)
 RegisterCreatureEvent(ENTRY_EREGOS, 4, eregosDied)
+RegisterCreatureEvent(ENTRY_EREGOS, 9, eregosDamageTaken)
 RegisterCreatureEvent(ENTRY_EREGOS, 23, eregosReset)
 RegisterCreatureEvent(ENTRY_EREGOS, 19, eregosJustSummoned)
+RegisterCreatureEvent(ENTRY_EREGOS, 20, eregosSummonedDespawn)

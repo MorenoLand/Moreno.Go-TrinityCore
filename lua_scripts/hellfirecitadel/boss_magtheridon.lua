@@ -142,9 +142,10 @@
 -- (:187-191) is event-14-side and is ALREADY ported
 -- (magtheridonSpellHit below, registered :364; the muru-portal
 -- precedent). Corrected 2026-10-17.
--- No SpellScript/AuraScript bridge — spell_magtheridon_
--- blaze_target (30541-hit -> 30542 blaze on the hit unit)
--- unmodeled (standing gap); spell_magtheridon_shadow_grasp
+-- No SpellScript bridge — spell_magtheridon_blaze_target
+-- (30541-hit -> 30542 blaze on the hit unit) is PORTED below (tick
+-- 427) via ev15, which covers the OnHit leg without a SpellScript
+-- bridge; spell_magtheridon_shadow_grasp
 -- (30410-remove) and spell_magtheridon_shadow_grasp_visual
 -- (30166-remove) PORTED below (tick 424, RegisterAuraEvent
 -- ev3) — the 30166 OnApply x5-count arm stays out: no
@@ -179,6 +180,7 @@ local SPELL_SHADOW_GRASP_C = 30207
 local SPELL_CLEAVE = 30619
 local SPELL_BLAST_NOVA = 30616
 local SPELL_BLAZE_TARGET = 30541
+local SPELL_BLAZE = 30542 -- boss_magtheridon.cpp:80
 local SPELL_QUAKE = 30657
 local SPELL_BERSERK = 27680
 local SPELL_CAMERA_SHAKE = 36455
@@ -625,6 +627,24 @@ local function magtheridonSpellHit(event, creature, caster, spellId)
     end
 end
 
+-- C++ spell_magtheridon_blaze_target::HandleAura
+-- (boss_magtheridon.cpp:510-517): SpellScript OnHit — the hit unit
+-- self-casts SPELL_BLAZE 30542, non-triggered (no triggered flag in
+-- C++). No SpellScript bridge exists, but ev15 covers the leg:
+-- fireCreatureSpellHitTarget (engine/world/boss_ai.go:4005-4022)
+-- fires CREATURE_EVENT_ON_SPELL_HIT_TARGET on the caster when its
+-- spell lands on a unit, args (event, creature, target, spellID),
+-- and misses/immunes/evades are skipped — the same hit-only firing
+-- as C++ OnHit (gruul precedent, boss_gruul.lua:196). PORTED
+-- 2026-11-08 (tick 427). Residual deviation (pre-existing, at the
+-- cast site): the SPELLVALUE_MAX_TARGETS = 1 mod on the 30541 cast
+-- is dropped, so the ev15 leg may fire on more than one hit unit.
+local function magtheridonBlazeHit(event, creature, target, spellId)
+    if spellId == SPELL_BLAZE_TARGET and target ~= nil then
+        target:CastSpell(target, SPELL_BLAZE, false)
+    end
+end
+
 -- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via GetObjectType() == "Player").
 local function magtheridonTargetDied(event, creature, victim)
     if victim:GetObjectType() == "Player" then
@@ -653,6 +673,7 @@ RegisterCreatureEvent(ENTRY_MAGTHERIDON, 3, magtheridonTargetDied)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 4, magtheridonDied)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 9, magtheridonDamageTaken)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 14, magtheridonSpellHit)
+RegisterCreatureEvent(ENTRY_MAGTHERIDON, 15, magtheridonBlazeHit)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 23, magtheridonReset)
 
 -- ================= Hellfire Channeler (17256) =================

@@ -141,7 +141,8 @@
 -- (tick 194); its OnRemove leg (ally cast) is PORTED below too
 -- (tick 424, RegisterAuraEvent OnRemove, CANCEL gate); its OnApply
 -- (instance boss-state gate) and OnEffectUpdatePeriodic (amount
--- doubling) legs stay out — no instance / update-periodic hooks.
+-- doubling) legs are PORTED below too (tick 427, ev2 + the new
+-- aura:Remove(mode) / aura:SetAmount bridges).
 -- CAST-STATE GATE (ported 2026-11-04): the dragon's own UpdateAI
 -- pre-loop gate (boss_kalecgos.cpp:259) + post-event check (:340),
 -- the human's own UpdateAI gates (:402/:421), and sathrovarr's
@@ -182,6 +183,7 @@ local ENTRY_SATHROVARR = 24892
 local GO_SPECTRAL_RIFT = 187055
 
 local DATA_KALECGOS = 0 -- sunwell_plateau.h:30
+local BOSS_STATE_IN_PROGRESS = 1 -- InstanceScript.h:68-76 (EncounterState)
 
 local SAY_EVIL_AGGRO = 0
 local SAY_EVIL_SLAY = 1
@@ -852,6 +854,17 @@ local function agonyCurseTick(event, aura, target)
         visual = SPELL_AGONY_CURSE_VISUAL_2
     end
     target:CastSpell(target, visual, true)
+    -- C++ HandleEffectPeriodicUpdate (boss_kalecgos.cpp:772-776):
+    -- tick > 1 and tick % 5 == 1 -> SetAmount(GetAmount() * 2).
+    -- PORTED 2026-11-08 (tick 427) via the new aura:SetAmount
+    -- bridge (engine/world/lua_aura.go). Ordering: ev1 fires before
+    -- the default damage tick (spells.go:41918), so the doubled
+    -- amount applies to this tick — C++ runs the update hook around
+    -- the periodic effect in the same tick, so at most one tick of
+    -- ordering difference.
+    if tick > 1 and tick % 5 == 1 then
+        aura:SetAmount(aura:GetAmount() * 2)
+    end
 end
 
 RegisterAuraEvent(SPELL_AGONY_CURSE, 1, agonyCurseTick)
@@ -874,6 +887,28 @@ local function agonyCurseRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_AGONY_CURSE, 3, agonyCurseRemove)
+
+-- C++ spell_kalecgos_curse_of_boundless_agony::OnApply
+-- (boss_kalecgos.cpp:753-760): AfterEffectApply, EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE. If the instance boss state for
+-- DATA_KALECGOS is not IN_PROGRESS, the aura is removed with
+-- AURA_REMOVE_BY_CANCEL. PORTED 2026-11-08 (tick 427) via ev2
+-- (GetBossState is bridged, lua_creature_events.go:6195, reached
+-- via aura:GetCaster()) + the new aura:Remove(mode) bridge
+-- (engine/world/lua_aura.go), which carries mode 2 so the ev3
+-- handler above sees the CANCEL guard — a mode-blind Remove()
+-- would wrongly fire the 45034 ally-cast here.
+local function agonyCurseApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:GetBossState(DATA_KALECGOS) ~= BOSS_STATE_IN_PROGRESS then
+        aura:Remove(AURA_REMOVE_BY_CANCEL)
+    end
+end
+
+RegisterAuraEvent(SPELL_AGONY_CURSE, 2, agonyCurseApply)
 
 -- C++ spell_kalecgos_spectral_realm_aura::OnRemove
 -- (boss_kalecgos.cpp:724-730): AfterEffectRemove, EFFECT_0

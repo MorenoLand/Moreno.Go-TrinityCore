@@ -345,18 +345,21 @@ RegisterAuraEvent(SPELL_MALYGOS_PORTAL_BEAM, 3, portalBeamRemove)
 local SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL = 61023 -- boss_malygos.cpp:157
 local GO_ALEXSTRASZA_S_GIFT_10 = 193905 -- eye_of_eternity.h:69
 local GO_ALEXSTRASZA_S_GIFT_25 = 193967 -- eye_of_eternity.h:70
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent: OBJECT_END 6 + 3 (Go gameObjectFlags twin)
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_FLAG_INTERACT_COND = 4 -- SharedDefines.h:1639
+local DATA_HEART_OF_MAGIC_GUID = 4 -- eye_of_eternity.h:35-44 (EOEInstanceData64)
+local giftBeamGifts = {} -- target GUID -> summoned gift GO GUID (OnRemove leg, below)
 
 -- C++ spell_alexstrasza_gift_beam_visual::OnApply
 -- (boss_malygos.cpp:2380-2391): Load admits creature casters only;
 -- the creature target summons Alexstrasza's Gift at its own position,
--- 10-man or 25-man by raid difficulty. STILL BLOCKED leg: OnRemove
--- clears NOT_SELECTABLE on the stored gift GO and on the Heart of
--- Magic GO via instance GetGuidData(DATA_HEART_OF_MAGIC_GUID) — the
--- instance read is bridged (GetGuidData, lua_creature_events.go:6229),
--- so the leg stays out on the GO side (no GO flag bridge). The outer
--- beam aura's own spell ID is DB-side only
--- (spell_script_names), so its apply (cast 61023) / remove (drop 61023)
--- legs cannot be registered.
+-- 10-man or 25-man by raid difficulty. The OnRemove leg is PORTED
+-- below (tick 427) — the GO RemoveFlag bridge is live
+-- (engine/world/lua_objects.go:4488), retiring the "no GO flag
+-- bridge" stay-out. The outer beam aura's own spell ID is DB-side
+-- only (spell_script_names), so its apply (cast 61023) / remove
+-- (drop 61023) legs cannot be registered.
 local function alexstraszaGiftBeamVisualApply(event, aura, target)
     local caster = aura:GetCaster()
     if caster == nil or caster:GetObjectType() ~= "Creature" then
@@ -369,10 +372,50 @@ local function alexstraszaGiftBeamVisualApply(event, aura, target)
     if target:Is25ManRaid() then
         gift = GO_ALEXSTRASZA_S_GIFT_25
     end
-    target:SummonGameObject(gift, target:GetX(), target:GetY(), target:GetZ(), target:GetO(), 0)
+    local giftGuid = target:SummonGameObject(gift, target:GetX(), target:GetY(), target:GetZ(), target:GetO(), 0)
+    if giftGuid ~= nil then
+        giftBeamGifts[target:GetGUID()] = giftGuid
+    end
 end
 
 RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL, 2, alexstraszaGiftBeamVisualApply)
+
+-- C++ spell_alexstrasza_gift_beam_visual::OnRemove
+-- (boss_malygos.cpp:2393-2406): no remove-mode guard in C++; the
+-- stored gift GO loses GO_FLAG_NOT_SELECTABLE, and the Heart of
+-- Magic GO (instance GetGuidData(DATA_HEART_OF_MAGIC_GUID)) loses
+-- NOT_SELECTABLE + GO_FLAG_INTERACT_COND (the INTERACT_COND clear
+-- is the C++ TO-DO hack line — core lacks flag support; kept, the
+-- C++ text is the behavior). PORTED 2026-11-08 (tick 427). The gift
+-- GUID is the one stored by the apply handler above, keyed by
+-- target GUID; both legs are nil-guarded (the C++ gift pointer is
+-- never nil when OnApply ran, but the Lua table is empty if the
+-- apply leg never fired). DORMANT: the 61023 aura is applied only
+-- by the unported outer beam (DB-side spell id).
+local function alexstraszaGiftBeamVisualRemove(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    local guid = target:GetGUID()
+    local giftGuid = giftBeamGifts[guid]
+    giftBeamGifts[guid] = nil
+    if giftGuid ~= nil then
+        local gift = target:GetGameObjectByGUID(giftGuid)
+        if gift ~= nil then
+            gift:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+        end
+    end
+    local heartGuid = target:GetGuidData(DATA_HEART_OF_MAGIC_GUID)
+    if heartGuid ~= nil and heartGuid ~= 0 then
+        local heart = target:GetGameObjectByGUID(heartGuid)
+        if heart ~= nil then
+            heart:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+            heart:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_INTERACT_COND)
+        end
+    end
+end
+
+RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL, 3, alexstraszaGiftBeamVisualRemove)
 
 -- C++ spell_malygos_destroy_platform_channel_AuraScript::OnRemove
 -- (boss_malygos.cpp:2025-2057): AfterEffectRemove, EFFECT_0,

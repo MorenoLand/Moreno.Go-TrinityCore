@@ -153,9 +153,11 @@
 --   spell_tyrannus_mark_of_rimefang AuraScript OnApply (:474-505) calls
 --   rimefang->AI()->SetGUID(target-guid, GUID_HOARFROST) (:341-347),
 --   scheduling EVENT_HOARFROST at 1s (:373-378: DoCast(target,
---   SPELL_HOARFROST 69246)) — no AuraScript / SetGUID bridge; the 69275
---   cast IS ported, the hoarfrost follow-up is never fabricated (the
---   phase/machine gating rule).
+--   SPELL_HOARFROST 69246)) — PORTED 2026-11-08 (tick 427) via the
+--   ev2 hook + a module-local target latch (markOfRimefangApply
+--   below); no AI-SetGUID bridge exists, but its only consumer is
+--   the 1s-delayed cast, which the latch reproduces. The 69275
+--   cast IS ported.
 -- Rimefang EVENT_MOVE_NEXT (:361-366) — waypoint patrol over rimefangPos
 --   (MovePoint, waypoints 1..9 then wrap) — movement choreography, no
 --   bridge.
@@ -182,6 +184,7 @@
 local ENTRY_TYRANNUS = 36658
 local ENTRY_RIMEFANG = 36661
 local DATA_TYRANNUS = 2 -- pit_of_saron.h:34
+local DATA_RIMEFANG = 3 -- pit_of_saron.h:37
 
 local SAY_AGGRO = 8
 local SAY_SLAY = 9
@@ -195,6 +198,7 @@ local SPELL_OVERLORD_BRAND = 69172
 local SPELL_FORCEFUL_SMASH = 69155
 local SPELL_UNHOLY_POWER = 69167
 local SPELL_MARK_OF_RIMEFANG = 69275
+local SPELL_HOARFROST = 69246 -- boss_scourgelord_tyrannus.cpp:70
 local SPELL_ICY_BLAST = 69232
 
 local timers = {}
@@ -300,6 +304,47 @@ local function markOfRimefangTick(creature, guid)
     end
     schedule(guid, "mark", {24000, 26000}, function() markOfRimefangTick(creature, guid) end)
 end
+
+-- C++ spell_tyrannus_mark_of_rimefang AuraScript OnApply
+-- (boss_scourgelord_tyrannus.cpp:484-494): AfterEffectApply, EFFECT_0
+-- SPELL_AURA_DUMMY. When Mark of Rimefang (69275) applies, Rimefang is
+-- resolved via instance GetGuidData(DATA_RIMEFANG) and its AI gets
+-- SetGUID(marked player's GUID, GUID_HOARFROST) (:341-347), scheduling
+-- EVENT_HOARFROST at 1s (:373-378: DoCast(target, SPELL_HOARFROST
+-- 69246), clears the stored GUID). No AI-SetGUID bridge exists, but
+-- its only consumer is that 1s-delayed cast on the passed GUID, which
+-- the aura hook + a module-local latch reproduces: the latch holds the
+-- marked target, the 1s timer casts on it and clears the latch. PORTED
+-- 2026-11-08 (tick 427).
+-- LIVE-ABLE: the 69275 cast itself is ported (markOfRimefangTick
+-- above). The timer rides the file's schedule helper (cancelled on
+-- 2/4/23), so a double-mark inside 1s fires once, slightly later
+-- than C++ (marks re-arm 24-26s apart, so the edge is unreachable
+-- in practice); the IsDead guard is the Go twin of the C++ cast's
+-- dead-target failure.
+local hoarfrostTarget = nil
+
+local function markOfRimefangApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    local rimefang = caster:GetInstanceCreature(DATA_RIMEFANG)
+    if rimefang == nil then
+        return
+    end
+    hoarfrostTarget = target
+    local guid = caster:GetGUID()
+    schedule(guid, "hoarfrost", 1000, function()
+        local victim = hoarfrostTarget
+        hoarfrostTarget = nil
+        if victim ~= nil and not victim:IsDead() then
+            rimefang:CastSpell(victim, SPELL_HOARFROST)
+        end
+    end)
+end
+
+RegisterAuraEvent(SPELL_MARK_OF_RIMEFANG, 2, markOfRimefangApply)
 
 -- C++ :164 JustEngagedWith: Talk(SAY_AGGRO) — NOTE: unlike the other
 -- BossAI bosses in this strip, tyrannus does NOT call BossAI::

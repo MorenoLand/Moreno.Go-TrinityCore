@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -542,13 +543,78 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return nil, nil
 	}
-	methods["Remove"] = func(_ context.Context, _ []any) ([]any, error) {
+	// Remove([mode]) is Aura::Remove(mode): drops this aura, recording
+	// the remove mode the OnRemove handlers read via GetRemoveMode.
+	// No argument keeps the old mode-blind call (auraRemoveByDefault);
+	// mode is the AuraRemoveMode iota (None 0, Default 1, Cancel 2,
+	// EnemySpell 3, Expire 4, Death 5 — spells.go:34384, the
+	// SpellAuraDefines.h:61-69 twin). The kalecgos
+	// curse-of-boundless-agony OnApply cancel needs mode 2 so the
+	// already-ported ev3 handler's CANCEL guard sees it.
+	methods["Remove"] = func(_ context.Context, args []any) ([]any, error) {
+		mode := auraRemoveByDefault
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if v < 0 || v > 5 {
+				return nil, fmt.Errorf("invalid aura remove mode")
+			}
+			mode = auraRemoveMode(v)
+		}
 		if r.player != nil {
-			r.player.removeAura(r.spellID)
+			r.player.removeAuraWithMode(r.spellID, mode)
 			return nil, nil
 		}
 		if r.server != nil {
-			r.server.removeCreatureAura(r.creatureKey, r.spellID)
+			r.server.removeCreatureAuraWithMode(r.creatureKey, r.spellID, mode)
+		}
+		return nil, nil
+	}
+	// SetAmount(amount[, effectIndex]) is AuraEffect::SetAmount: writes
+	// the live effect amount — Amounts[index] plus the effect-0
+	// Amount the damage/heal ticks read, the rescaleAuraAmountsByStack
+	// twin — and the write side of GetAmount. The kalecgos
+	// curse-of-boundless-agony periodic-update doubling needs it
+	// (boss_kalecgos.cpp:772-776). Default effect 0; an out-of-range
+	// index is a silent no-op, the GetAmount read convention.
+	methods["SetAmount"] = func(_ context.Context, args []any) ([]any, error) {
+		amount, err := luaInt64Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if index < 0 || index >= 3 {
+			return nil, nil
+		}
+		if r.server != nil && r.player == nil {
+			r.server.auraMu.Lock()
+			defer r.server.auraMu.Unlock()
+			aura := r.server.activeCreatureAuras[r.creatureKey][r.spellID]
+			if aura == nil {
+				return nil, nil
+			}
+			aura.Amounts[index] = int32(amount)
+			if index == 0 {
+				aura.Amount = uint32(amount)
+			}
+			return nil, nil
+		}
+		aura := r.resolve()
+		if aura == nil {
+			return nil, nil
+		}
+		aura.Amounts[index] = int32(amount)
+		if index == 0 {
+			aura.Amount = uint32(amount)
 		}
 		return nil, nil
 	}

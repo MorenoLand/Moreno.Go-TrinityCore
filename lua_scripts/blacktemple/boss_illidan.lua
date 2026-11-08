@@ -4,9 +4,9 @@
 -- npc_illidan_db_target, npc_maiev, npc_blade_of_azzinoth,
 -- npc_illidan_generic_fire; npc_parasitic_shadowfiend,
 -- npc_illidari_elite, npc_shadow_demon, npc_cage_trap_trigger and
--- the twenty-one spell/aura scripts documented below, not
--- registered — plus the parasitic-shadowfiend 41917 remove arm,
--- ported below via RegisterAuraEvent ev3); black_temple.h:39 (DATA_ILLIDAN_STORMRAGE = 8, ninth
+-- the spell/aura scripts documented below, not registered — plus
+-- the parasitic-shadowfiend 41917 remove arm and the akama door
+-- channel 41268, ported below via RegisterAuraEvent); black_temple.h:39 (DATA_ILLIDAN_STORMRAGE = 8, ninth
 -- and final boss), :58 (DATA_ILLIDAN_MUSIC_CONTROLLER = 23), :79
 -- (NPC_ILLIDAN_STORMRAGE = 22917), :87 (NPC_AKAMA = 23089),
 -- :100-:101 (NPC_SPIRIT_OF_UDALO = 23410, NPC_SPIRIT_OF_OLUM =
@@ -184,8 +184,9 @@
 -- health strictly below 20% -> non-triggered self-cast 40535
 -- (C++-exact). OnDamageTaken(9): lethal damage rewritten to
 -- health-1 (C++-exact — no self-exclusion in the C++). The entire
--- intro arc (gossip chains, spline movement, door channel 41268,
--- door fail 41271, spirit summons 23410/23411, teleport 41077),
+-- intro arc (gossip chains, spline movement, door fail 41271,
+-- spirit summons 23410/23411, teleport 41077 — the door channel
+-- 41268 leg is PORTED 2026-11-08, tick 427, below),
 -- the minions-phase arms (EVENT_AKAMA_MINIONS chain driven by
 -- illidan's DoAction(ACTION_START_MINIONS)) stay out (the Talk /
 -- emote / passive legs would strand Akama passive without the
@@ -263,12 +264,13 @@
 -- (entries not verifiable from the C++ sources — the ScriptNames
 -- bind DB-side, garr firesworn convention): npc_shadow_demon,
 -- npc_cage_trap_trigger. Not registered (standing script gaps):
--- the twenty-one SpellScripts/AuraScripts (akama teleport, akama
--- door channel, draw soul, parasitic shadowfiend x2, throw
+-- the remaining twenty SpellScripts/AuraScripts (akama teleport,
+-- draw soul, parasitic shadowfiend x2, throw
 -- warglaive, tear of azzinoth channel, flame blast, return
 -- glaives, agonizing flames, demon transform x2, flame burst, find
 -- target, eye blast, cage trap, caged, maiev down, cage teleport,
--- despawn akama).
+-- despawn akama) — the akama door channel is PORTED 2026-11-08
+-- (tick 427, below).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
 -- (boss pre-loop :801 + in-loop :1036, akama :1219/:1358, flame
 -- :1499/:1530, maiev :1679/:1752) are ported as a 500ms IsCasting
@@ -326,6 +328,11 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 -- boss_illidan.cpp:216-222 (IllidanActions enum):
 -- ACTION_START_ENCOUNTER = 5, so ACTION_FLAME_DEAD = 11.
 local ACTION_FLAME_DEAD = 11
+local ACTION_OPEN_DOOR = 4 -- black_temple.h:141
+local GO_ILLIDAN_GATE = 185905 -- black_temple.h:129
+local SAY_AKAMA_SALUTE = 2 -- boss_illidan.cpp:69
+local SPELL_AKAMA_DOOR_CHANNEL = 41268 -- boss_illidan.cpp:94
+local SPELL_ARCANE_EXPLOSION = 35426 -- boss_illidan.cpp:105
 local ENTRY_AKAMA = 23089
 local ENTRY_FLAME_OF_AZZINOTH = 22997
 local ENTRY_DB_TARGET = 23070
@@ -1458,6 +1465,54 @@ RegisterCreatureEvent(ENTRY_AKAMA, 2, akamaCleanup)
 RegisterCreatureEvent(ENTRY_AKAMA, 4, akamaCleanup)
 RegisterCreatureEvent(ENTRY_AKAMA, 9, akamaDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA, 23, akamaCleanup)
+
+-- C++ spell_illidan_akama_door_channel::OnRemoveDummy
+-- (boss_illidan.cpp:1867-1891): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL. On remove the target
+-- (Akama — the channel is a self-cast at EVENT_AKAMA_DOOR_SUCCESS,
+-- :1259) self-casts SPELL_ARCANE_EXPLOSION 35426 triggered, then
+-- instance->GetCreature(DATA_AKAMA) -> AI()->DoAction(
+-- ACTION_OPEN_DOOR). The target IS Akama here, so the DoAction
+-- lands on the target directly (ev38, below). PORTED 2026-11-08
+-- (tick 427). DORMANT: the 41268 self-cast rides the unported
+-- intro machine (EVENT_AKAMA_DOOR_SUCCESS), so the aura never
+-- applies today.
+local function akamaDoorChannelRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_ARCANE_EXPLOSION, true)
+    target:DoAction(ACTION_OPEN_DOOR)
+end
+
+RegisterAuraEvent(SPELL_AKAMA_DOOR_CHANNEL, 3, akamaDoorChannelRemove)
+
+-- C++ npc_akama_illidan::DoAction, ACTION_OPEN_DOOR
+-- (boss_illidan.cpp:1128-1131): instance->SetData(ACTION_OPEN_DOOR, 0)
+-- + ScheduleEvent(EVENT_AKAMA_THANKS, 2s). The instance SetData opens
+-- GO_ILLIDAN_GATE 185905 (instance_black_temple.cpp:163-166:
+-- HandleGameObject(Empty, true, gate)); no instance-SetData bridge
+-- exists, so the gate opens directly: FindNearestGameObject +
+-- SetGoState(0) (GO_STATE_ACTIVE = open, the HandleGameObject(true)
+-- twin; 200yd sweep — Akama channels at the gate, DB positions
+-- unverified). EVENT_AKAMA_THANKS (:1270-1273) Talks
+-- SAY_AKAMA_SALUTE; the spirit-salute/spline tail stays out (no
+-- movement bridge).
+local function akamaDoAction(event, creature, action)
+    if action ~= ACTION_OPEN_DOOR then
+        return
+    end
+    local gate = creature:FindNearestGameObject(GO_ILLIDAN_GATE, 200)
+    if gate ~= nil then
+        gate:SetGoState(0)
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "akamaThanks", 2000, function()
+        creature:Talk(SAY_AKAMA_SALUTE)
+    end)
+end
+
+RegisterCreatureEvent(ENTRY_AKAMA, 38, akamaDoAction)
 
 --
 -- Flame of Azzinoth (22997)
