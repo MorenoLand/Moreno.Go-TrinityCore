@@ -14107,6 +14107,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// usable main-hand weapon is a dagger, for the rogue arm of
 		// Spell::EffectWeaponDmg (SpellEffects.cpp:3237-3245).
 		var mainhandDagger *bool
+		// SpellScript OnEffectHit (Spell.cpp:3722-3730, the HIT-mode
+		// HandleEffects loop in Spell::_handle_immediate_phase, which
+		// runs before the per-target DoProcessTargetContainer loop)
+		// fires once per non-zero effect with no unit target, with the
+		// effect index. Placed ahead of the effects loop below, matching
+		// C++ order (the HIT phase precedes the target loop).
+		{
+			effectSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+			for effectIndex, eff := range spell.Effects {
+				if eff.Effect == 0 {
+					continue
+				}
+				s.server.fireSpellEffectHit(effCtx, spellID, effectSpellObj, effectIndex)
+			}
+		}
 		for effectIndex, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
@@ -18760,6 +18775,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// skipped. Notification-only: the C++ damage/healing rewrite
 		// has no Go model.
 		spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+		// SpellScript BeforeHit (Spell.cpp:2357,
+		// CallScriptBeforeHitHandlers in
+		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+		// target, before OnHit, miss-inclusive — with the unit (not
+		// nil) on a miss, since PreprocessTarget calls it before
+		// nulling _spellHitTarget. The missInfo is the C++
+		// SpellMissInfo number.
+		for _, effectTarget := range hitTargets {
+			if effectTarget == 0 {
+				continue
+			}
+			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget), protocol.SpellMissNone)
+		}
+		for _, miss := range missStatus {
+			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, miss.TargetGUID), miss.Reason)
+		}
 		for _, effectTarget := range hitTargets {
 			if effectTarget == 0 {
 				continue

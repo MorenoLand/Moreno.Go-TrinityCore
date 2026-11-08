@@ -3260,6 +3260,21 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			return evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone
 		})
 	}
+	// SpellScript OnEffectHit (Spell.cpp:3722-3730, the HIT-mode
+	// HandleEffects loop in Spell::_handle_immediate_phase, which runs
+	// after HandleThreatSpells and before DoProcessTargetContainer)
+	// fires once per non-zero effect with no unit target, with the
+	// effect index. Placed after the threat arm above, matching C++
+	// order (threat precedes the HIT loop in _handle_immediate_phase).
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID)
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect == 0 {
+				continue
+			}
+			s.fireSpellEffectHit(ctx, spellID, creatureSpellObj, i)
+		}
+	}
 	// Spell::EffectTransmitted (SpellEffects.cpp:4927-5045) for a creature
 	// caster: the generic arm runs once per cast at SPELL_EFFECT_HANDLE_HIT
 	// (not per hit target), spawning the effect's MiscValue gameobject
@@ -3286,10 +3301,47 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// SpellScript OnEffectHitTarget (Spell.cpp:2909,
+	// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_HIT_TARGET mode
+	// from Spell::DoSpellEffectHit, called per (effect, unit target)
+	// from DoProcessTargetContainer, Spell.cpp:3555-3566) fires once
+	// per (effect, live hit target) in effect-major order, before that
+	// effect's default handler — C++ runs CallScriptEffectHandlers
+	// before the effect handler in Spell::HandleEffects
+	// (Spell.cpp:5168). Go's grouped effect arms run out of C++ phase
+	// order, so this loop sits ahead of the first per-target
+	// HIT_TARGET arm (InstaKill below): every hook fires before every
+	// default, which keeps the per-effect hook-before-default order
+	// exact and only approximates the cross-effect order. Missed,
+	// immune and evaded targets never fire (PreprocessTarget nulls
+	// _spellHitTarget, so DoSpellEffectHit never runs for them); a
+	// landed reflect fires on the caster (the return trip's
+	// _spellHitTarget), a bounced one fires nothing.
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID)
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect == 0 {
+				continue
+			}
+			for _, guid := range bossConeEffectTargets(spellInfo.Effects[i], hitTargets, bossConePart) {
+				if guid == 0 || evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+					continue
+				}
+				if status, isReflected := reflectedTargets[guid]; isReflected {
+					if status != protocol.SpellMissNone {
+						continue
+					}
+					s.fireSpellEffectHitTarget(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m), i)
+					continue
+				}
+				s.fireSpellEffectHitTarget(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), i)
+			}
+		}
+	}
 	// Spell::EffectInstaKill (SpellEffects.cpp:274-296) for a creature
-	// caster: the per-effect HIT_TARGET arm — the only spell-effect arm
-	// bridged on this path, which otherwise runs the no-damage model (all
-	// other effects deal nothing here). Each effect-1 effect kills its hit
+	// caster: a per-effect HIT_TARGET arm — this path otherwise runs
+	// the no-damage model (all other effects deal nothing here). Each
+	// effect-1 effect kills its hit
 	// targets; reflected/evaded targets are skipped like every other
 	// per-hit leg above. The m_caster == unitTarget finish() leg is vacuous
 	// (no client-side interrupt message on this path). Gated on spellKnown
@@ -3802,6 +3854,40 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.standCreatureMotionUp(tm)
 			}
+		}
+	}
+	// SpellScript BeforeHit (Spell.cpp:2357,
+	// CallScriptBeforeHitHandlers in Spell::TargetInfo::PreprocessTarget)
+	// fires once per unit hit target, before OnHit, miss-inclusive:
+	// PreprocessTarget calls it before nulling _spellHitTarget on a
+	// miss, so the handler still sees the unit (unlike OnHit, which
+	// fires nil after the nulling). The missInfo is the C++
+	// SpellMissInfo number. Reflected targets fire twice in C++ (the
+	// original target with REFLECT, the caster return trip with NONE)
+	// — both legs fire here, matching the OnHit loop's single caster
+	// fire below with a second original-target fire carrying REFLECT.
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID)
+		for _, guid := range hitTargets {
+			if guid == 0 {
+				continue
+			}
+			if status, reflected := reflectedTargets[guid]; reflected {
+				s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), protocol.SpellMissReflect)
+				if status == protocol.SpellMissNone {
+					s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m), protocol.SpellMissNone)
+				}
+				continue
+			}
+			missInfo := protocol.SpellMissNone
+			if evadedTargets[guid] {
+				missInfo = protocol.SpellMissEvade
+			} else if immuneTargets[guid] {
+				missInfo = protocol.SpellMissImmune
+			} else if v := missTargets[guid]; v != protocol.SpellMissNone {
+				missInfo = v
+			}
+			s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), missInfo)
 		}
 	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2629-2650): the

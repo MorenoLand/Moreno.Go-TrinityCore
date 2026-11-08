@@ -457,6 +457,9 @@ local LK = {
     SAY_TERENAS_OUTRO_1 = 0, SAY_TERENAS_OUTRO_2 = 1, -- :67-68
     SPELL_LIGHTS_BLESSING = 71797, -- :167
     SPELL_JUMP = 71809, -- :168
+    SPELL_JUMP_2 = 72431, -- :169
+    MOVIE_FALL_OF_THE_LICH_KING = 16, -- :364
+    NPC_WICKED_SPIRIT = 39190, -- icecrown_citadel.h:326
     SPELL_BROKEN_FROSTMOURNE_KNOCK = 72405, -- :175
     SPELL_SUMMON_TERENAS = 72420, -- :177
     SPELL_MASS_RESURRECTION = 72429, -- :178
@@ -2756,5 +2759,121 @@ RegisterAuraEvent(SPELL_DARK_HUNGER, 6, darkHungerProc)
 RegisterSpellEvent(LK.SPELL_TRIGGER_VILE_SPIRIT_HEROIC, 2, function(event, spell, target)
     if target ~= nil and target:GetObjectType() == "Creature" then
         onVileSpiritActivate(target)
+    end
+end)
+
+-- C++ spell_the_lich_king_quake::HandleSendEvent
+-- (boss_the_lich_king.cpp:2185-2191): OnEffectHit EFFECT_1
+-- SEND_EVENT -> caster AI DoAction(ACTION_START_ATTACK), which the
+-- LK ev38 handler turns into the 5s EVENT_START_ATTACK schedule.
+-- The effectIndex == 1 gate mirrors the EFFECT_1 registration (the
+-- Go fire runs once per non-zero effect). The Load() instance-script
+-- gate is always true in ICC; the FilterTargets platform-height
+-- select (OnObjectAreaTargetSelect) stays out — unbridged. Handler
+-- is inline: the file sits at 199 main-chunk locals. DORMANT until
+-- Spell.dbc ships: the 72262 DoCastAOE is DBC-gated (creature path
+-- needs spellKnown).
+RegisterSpellEvent(LK.SPELL_QUAKE, 4, function(event, spell, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Creature" then
+        caster:DoAction(ACTION_START_ATTACK)
+    end
+end)
+
+-- C++ spell_the_lich_king_jump::HandleScript
+-- (boss_the_lich_king.cpp:2749-2758): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> hit unit RemoveAurasDueToSpell(SPELL_RAISE_DEAD)
+-- + cast SPELL_JUMP_2 triggered on nil + hit creature DoAction
+-- (ACTION_BREAK_FROSTMOURNE). RemoveAura is the RemoveAurasDueToSpell
+-- twin (moorabi precedent, tick 443); the DoAction rides the
+-- GetHitCreature gate (GetObjectType check). The effectIndex == 0
+-- gate mirrors the EFFECT_0 registration. Handler is inline: the
+-- file sits at 199 main-chunk locals. DORMANT until Spell.dbc ships:
+-- the 71809 DoCastAOE and the 72431 cast are DBC-gated.
+RegisterSpellEvent(LK.SPELL_JUMP, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    target:RemoveAura(LK.SPELL_RAISE_DEAD)
+    target:CastSpell(nil, LK.SPELL_JUMP_2, true)
+    if target:GetObjectType() == "Creature" then
+        target:DoAction(LK.ACTION_BREAK_FROSTMOURNE)
+    end
+end)
+
+-- C++ spell_the_lich_king_play_movie::HandleScript
+-- (boss_the_lich_king.cpp:2784-2799): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> hit player SendMovieStart
+-- (MOVIE_FALL_OF_THE_LICH_KING). The Validate() movie-store lookup
+-- has no Go twin (the id rides the const). The effectIndex == 0
+-- gate mirrors the EFFECT_0 registration. Handler is inline: the
+-- file sits at 199 main-chunk locals. DORMANT until Spell.dbc ships:
+-- the 73159 DoCastAOE is DBC-gated.
+RegisterSpellEvent(SPELL_PLAY_MOVIE, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    target:SendMovieStart(LK.MOVIE_FALL_OF_THE_LICH_KING)
+end)
+
+-- C++ spell_the_lich_king_restore_soul::HandleScript
+-- (boss_the_lich_king.cpp:2621-2644): OnEffectHit EFFECT_0
+-- APPLY_AURA -> LK DoAction(ACTION_TELEPORT_BACK) + nearest world
+-- trigger (36171, 50yd) RemoveAllAuras + wicked spirits in 200yd:
+-- KillAllEvents + REACT_PASSIVE + EnterEvadeMode. The LK lookup
+-- rides FindNearestCreature (the onTerenasTeleportBack precedent);
+-- KillAllEvents rides the file cancelTimers twin; EnterEvadeMode is
+-- bridged (lua_creature_events.go:4823 — the 2026-10-21 "no bridge"
+-- note is stale). The effectIndex == 0 gate mirrors the EFFECT_0
+-- registration. Handler is inline: the file sits at 199
+-- main-chunk locals. DORMANT until Spell.dbc ships: the 72595 cast
+-- (Terenas ACTION_TELEPORT_BACK, non-triggered) is DBC-gated.
+RegisterSpellEvent(SPELL_RESTORE_SOUL, 4, function(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local lichKing = caster:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
+    if lichKing then
+        lichKing:DoAction(ACTION_TELEPORT_BACK)
+    end
+    local spawner = caster:FindNearestCreature(LK.NPC_WORLD_TRIGGER_INFINITE_AOI, 50.0)
+    if spawner then
+        spawner:RemoveAllAuras()
+    end
+    local spirits = caster:GetCreaturesInRange(200, LK.NPC_WICKED_SPIRIT)
+    if spirits then
+        for _, spirit in ipairs(spirits) do
+            cancelTimers(spirit:GetGUID())
+            spirit:SetReactState(REACT_PASSIVE)
+            spirit:EnterEvadeMode()
+        end
+    end
+end)
+
+-- C++ spell_the_lich_king_restore_soul::RemoveAura
+-- (boss_the_lich_king.cpp:2646-2652): BeforeHit -> on a hit (missInfo
+-- == 0) remove the harvest-souls teleport aura from the hit unit
+-- (heroic 73655, else 72546). The difficulty rides the caster's
+-- IsHeroic (player objects have no IsHeroic; same map/difficulty as
+-- the caster). RemoveAura is the RemoveAurasDueToSpell twin (moorabi
+-- precedent, tick 443). Handler is inline: the file sits at 199
+-- main-chunk locals.
+RegisterSpellEvent(SPELL_RESTORE_SOUL, 6, function(event, spell, target, missInfo)
+    if missInfo ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    local heroic = caster ~= nil and caster:IsHeroic()
+    if heroic then
+        target:RemoveAura(SPELL_HARVEST_SOULS_TELEPORT)
+    else
+        target:RemoveAura(SPELL_HARVEST_SOUL_TELEPORT)
     end
 end)

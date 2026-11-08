@@ -305,3 +305,36 @@ func (s *Server) fireSpellAfterHit(ctx context.Context, spellID uint32, spellObj
 	}
 	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventAfterHit, scripting.SpellEventAfterHit, spellObj, hitTarget)
 }
+
+// fireSpellEffectHit dispatches the RegisterSpellEvent OnEffectHit hook
+// for one effect index (SpellEventOnEffectHit, args (event, spell,
+// effectIndex)). Notification-only like fireSpellCast: the C++
+// PreventHitDefaultEffect veto has no Go model.
+func (s *Server) fireSpellEffectHit(ctx context.Context, spellID uint32, spellObj *scripting.Object, effectIndex int) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnEffectHit, scripting.SpellEventOnEffectHit, spellObj, effectIndex)
+}
+
+// fireSpellEffectHitTarget dispatches the RegisterSpellEvent
+// OnEffectHitTarget hook for one (effect, hit target) pair
+// (SpellEventOnEffectHitTarget, args (event, spell, hitTarget,
+// effectIndex)). Notification-only like fireSpellEffectHit.
+func (s *Server) fireSpellEffectHitTarget(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any, effectIndex int) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnEffectHitTarget, scripting.SpellEventOnEffectHitTarget, spellObj, hitTarget, effectIndex)
+}
+
+// fireSpellBeforeHit dispatches the RegisterSpellEvent BeforeHit hook
+// for one hit target (SpellEventBeforeHit, args (event, spell,
+// hitTarget, missInfo)). Notification-only like fireSpellHit: the
+// missInfo is the C++ SpellMissInfo number, 0 on a hit.
+func (s *Server) fireSpellBeforeHit(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any, missInfo uint8) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventBeforeHit, scripting.SpellEventBeforeHit, spellObj, hitTarget, missInfo)
+}

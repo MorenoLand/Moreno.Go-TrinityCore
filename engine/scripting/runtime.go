@@ -501,21 +501,46 @@ const (
 // per unit hit target before damage, with args (event, spell,
 // hitTarget); AfterHit mirrors CallScriptAfterHitHandlers (Spell.cpp:
 // 2659), fired once per unit hit target after the per-hit trigger
-// consumer, with the same args. All three are notification-only: a
-// handler returning true does NOT veto anything — C++ OnCast has no
-// veto (CheckCast is the gate), and the OnHit damage/healing rewrite
-// (Spell.cpp:2379-2381, SetHitDamage/PreventHitDamage) has no Go model
-// (the cast path carries no m_damage/m_healing; damage lands in the
-// combat tick). The hitTarget is the Lua unit object (player or
-// creature) or nil when the target GUID resolves to nothing; GO, item
-// and corpse TargetInfo legs (Spell.cpp:2661-2707) have no Go model and
-// never fire. BeforeHit, OnEffectHit and OnEffectHitTarget have no Go
-// fire site yet: the per-effect DoTargetSpellHit loop has no Go twin,
-// so those hooks are not defined until one is built.
+// consumer, with the same args. OnEffectHit mirrors
+// CallScriptEffectHandlers in the SPELL_EFFECT_HANDLE_HIT mode
+// (Spell.cpp:5168, called from Spell::HandleEffects; the HIT phase
+// runs in _handle_immediate_phase, Spell.cpp:3722-3730), fired once
+// per non-zero effect with no unit target, with args (event, spell,
+// effectIndex). OnEffectHitTarget mirrors the same call in the
+// SPELL_EFFECT_HANDLE_HIT_TARGET mode (Spell.cpp:2909, called from
+// Spell::DoSpellEffectHit per unit target), fired once per (effect,
+// live hit target) in effect-major order, with args (event, spell,
+// hitTarget, effectIndex). BeforeHit mirrors
+// CallScriptBeforeHitHandlers (Spell.cpp:2357, in
+// Spell::TargetInfo::PreprocessTarget), fired once per unit hit
+// target, miss-inclusive, with args (event, spell, hitTarget,
+// missInfo) where missInfo is the C++ SpellMissInfo number (0 =
+// SPELL_MISS_NONE; the Go protocol values are numerically
+// identical). All six are notification-only: a handler returning
+// true does NOT veto anything — C++ OnCast has no veto (CheckCast
+// is the gate), and the OnHit damage/healing rewrite
+// (Spell.cpp:2379-2381, SetHitDamage/PreventHitDamage) has no Go
+// model (the cast path carries no m_damage/m_healing; damage lands
+// in the combat tick), and PreventHitDefaultEffect has no Go model
+// either (the default effect still runs — for SCRIPT_EFFECT legs
+// the Go default is a per-spell no-op unless a case exists in
+// creatureEffectScriptEffect / handleEffectScriptEffect, so a
+// PreventHitDefaultEffect leg ports as hook-only). The hitTarget is
+// the Lua unit object (player or creature) or nil when the target
+// GUID resolves to nothing; GO, item and corpse TargetInfo legs
+// (Spell.cpp:2661-2707) have no Go model and never fire.
+// OnEffectHitTarget fires on the creature path only: the player
+// path resolves each effect's target list per case inside its
+// effects switch, so there is no clean per-effect list site there
+// yet — a player-cast OnEffectHitTarget leg stays blocked until
+// one is built.
 const (
-	SpellEventOnCast   = 1
-	SpellEventOnHit    = 2
-	SpellEventAfterHit = 3
+	SpellEventOnCast            = 1
+	SpellEventOnHit             = 2
+	SpellEventAfterHit          = 3
+	SpellEventOnEffectHit       = 4
+	SpellEventOnEffectHitTarget = 5
+	SpellEventBeforeHit         = 6
 )
 
 type Hook struct {
