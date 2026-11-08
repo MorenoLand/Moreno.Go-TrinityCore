@@ -2,8 +2,9 @@
 -- src/server/scripts/Northrend/Naxxramas/boss_grobbulus.cpp
 -- (boss_grobbulus (BossAI) + npc_grobbulus_poison_cloud
 -- (ScriptedAI); AddSC_boss_grobbulus also registers
--- spell_grobbulus_mutating_injection and
--- spell_grobbulus_poison_cloud, both unmodeled below).
+-- spell_grobbulus_mutating_injection (unmodeled below) and
+-- spell_grobbulus_poison_cloud (PORTED below: ev1 periodic tick
+-- + CastSpellWithRadiusMod).
 -- Entry: 15931 Grobbulus (creature_template table, cross-checked:
 -- Anub'Rekhan 15956 / Faerlina 15953 / Thaddius 15928 / Maexxna 15952 /
 -- Gluth 15932 / Heigan 15936 / Sapphiron 15989 / Kel'Thuzad 15990 all
@@ -56,9 +57,10 @@
 -- DB-side), so no faithful registration exists (vengeful-shade
 -- precedent: registering without a verified entry would be
 -- fabrication); spell_grobbulus_mutating_injection AuraScript
--- (MUTATING_EXPLOSION 28206 + POISON_CLOUD on remove) and
--- spell_grobbulus_poison_cloud AuraScript (periodic trigger
--- with radius mod) — no SpellScript bridge; SPELL_BOMBARD_SLIME
+-- (MUTATING_EXPLOSION 28206 + POISON_CLOUD on remove) — no
+-- SpellScript bridge; spell_grobbulus_poison_cloud AuraScript
+-- (periodic trigger with radius mod) — PORTED below (ev1 +
+-- CastSpellWithRadiusMod); SPELL_BOMBARD_SLIME
 -- 28280 is enum-only in this file (no arm uses it); melee
 -- engine-driven.
 
@@ -68,6 +70,7 @@ local NPC_FALLOUT_SLIME = 16290
 local SPELL_SLIME_SPRAY = 28157
 local SPELL_MUTATING_INJECTION = 28169
 local SPELL_POISON_CLOUD = 28240
+local SPELL_POISON_CLOUD_PASSIVE = 28158
 local SPELL_BERSERK = 26662
 
 local timers = {}
@@ -198,3 +201,35 @@ RegisterCreatureEvent(ENTRY_GROBBULUS, 2, grobbulusLeaveCombat)
 RegisterCreatureEvent(ENTRY_GROBBULUS, 4, grobbulusDied)
 RegisterCreatureEvent(ENTRY_GROBBULUS, 15, grobbulusSpellHitTarget)
 RegisterCreatureEvent(ENTRY_GROBBULUS, 23, grobbulusReset)
+
+-- C++ spell_grobbulus_poison_cloud::PeriodicTick (boss_grobbulus.cpp:197-209):
+-- EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL on 28158 (normal) /
+-- 54362 (heroic). PreventDefaultAction, so the Go default
+-- trigger-spell cast is skipped (return true); a zero total-tick
+-- count returns early (C++ GetTotalTicks() guard). The trigger spell
+-- id comes from the aura's own Effects[0].TriggerSpell (DBC-side,
+-- read via aura:GetTriggerSpell(0); 0 without Spell.dbc means no
+-- cast). The radius mod grows with the tick: ((tick/total) * 0.9 +
+-- 0.1) * 10000 * 2/3 (C++ int32 truncation). The cloud (which
+-- self-casts 28158 in IsSummonedBy) casts the trigger spell on
+-- itself (C++ CastSpell(nullptr, ...) — self-centered area,
+-- DoCastAOE convention). DORMANT until Spell.dbc ships: the trigger
+-- spell id and the 28158 aura itself are DBC-side.
+local SPELL_POISON_CLOUD_PASSIVE_HEROIC = 54362
+
+local function poisonCloudTick(event, aura, target)
+    local totalTicks = aura:GetTotalTicks()
+    if totalTicks == 0 then
+        return true
+    end
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    local mod = math.floor(((aura:GetTickNumber() / totalTicks) * 0.9 + 0.1) * 10000 * 2 / 3)
+    target:CastSpellWithRadiusMod(target, triggerSpell, true, mod)
+    return true
+end
+
+RegisterAuraEvent(SPELL_POISON_CLOUD_PASSIVE, 1, poisonCloudTick)
+RegisterAuraEvent(SPELL_POISON_CLOUD_PASSIVE_HEROIC, 1, poisonCloudTick)

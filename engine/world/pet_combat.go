@@ -3528,7 +3528,7 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 				return true
 			}
 			bp0 := int32(0.01 * float64(ts.player.MaxHealth) * float64(effect.BasePoints))
-			ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, map[int]int32{0: bp0}, 0, nil)
+			ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, map[int]int32{0: bp0}, 0, nil, 0)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
 			bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(effect.BasePoints))
 			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, map[int]int32{0: bp0}, nil, false, 0)
@@ -3542,7 +3542,7 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 			return true
 		}
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
-			ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, map[int]int32{0: effect.BasePoints}, 0, nil)
+			ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, map[int]int32{0: effect.BasePoints}, 0, nil, 0)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
 			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, map[int]int32{0: effect.BasePoints}, nil, false, 0)
 		}

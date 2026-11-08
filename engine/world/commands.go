@@ -3135,7 +3135,7 @@ func (s *session) handleCmdCastDist(ctx context.Context, args []string) bool {
 		Y: s.player.Y + offset*float32(math.Sin(float64(s.player.Orientation))),
 		Z: s.player.Z,
 	}
-	s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+	s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
 	return true
 }
 
@@ -3186,7 +3186,7 @@ func (s *session) handleCmdCastDest(ctx context.Context, args []string) bool {
 	}
 	if ts := s.lookupSelectedPlayer(); ts != nil {
 		dest := protocol.SpellTargetLocation{X: coords[0], Y: coords[1], Z: coords[2]}
-		ts.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+		ts.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
 		return true
 	}
 	motion := s.castCommandSelectedCreature()

@@ -2472,7 +2472,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
 			wireTarget = target.UnitGUID
 		}
-		s.castSpellDirectWithOverrides(ctx, spellID, wireTarget, false, nil, 0, nil)
+		s.castSpellDirectWithOverrides(ctx, spellID, wireTarget, false, nil, 0, nil, 0)
 		s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "periodic trigger from client")
 		return true
 	}
@@ -23348,12 +23348,12 @@ func (s *session) castFirstLoginSpell(ctx context.Context, spellID uint32, targe
 }
 
 func (s *session) castSpellDirectWithOptions(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil, 0, nil)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, nil, 0, nil, 0)
 }
 
 func (s *session) castSpellDirectWithBasePoint(ctx context.Context, spellID uint32, targetGUID uint64, basePoint uint32) {
 	value := int32(basePoint)
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, map[int]int32{0: value}, 0, nil)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, map[int]int32{0: value}, 0, nil, 0)
 }
 
 // basePointMap converts an indexed base-point slice to the sparse
@@ -23375,7 +23375,7 @@ func basePointMap(points []int32) map[int]int32 {
 // (C++ CastSpellExtraArgs sets SPELLVALUE_BASE_POINT0+i for i in
 // 0..MAX_SPELL_EFFECTS-1, SpellEffects.cpp:989-992, 1037-1040).
 func (s *session) castSpellDirectWithBasePoints(ctx context.Context, spellID uint32, targetGUID uint64, basePoints []int32) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePointMap(basePoints), 0, nil)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePointMap(basePoints), 0, nil, 0)
 }
 
 // castSpellDirectWithItem mirrors the CastSpellExtraArgs(Item*) arm
@@ -23384,7 +23384,7 @@ func (s *session) castSpellDirectWithBasePoints(ctx context.Context, spellID uin
 // triggered and the item rides as the cast item, so auras created by it
 // record the item GUID (Aura::m_castItemGuid).
 func (s *session) castSpellDirectWithItem(ctx context.Context, spellID uint32, targetGUID uint64, castItemGUID uint64) {
-	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, castItemGUID, nil)
+	s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, castItemGUID, nil, 0)
 }
 
 // spellEffectImplicitTargetExplicit reports whether the effect's _data row
@@ -23559,7 +23559,7 @@ func (s *session) triggeredSpellTableResult(ctx context.Context, spell wotlk.Spe
 	}
 }
 
-func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints map[int]int32, castItemGUID uint64, dest *protocol.SpellTargetLocation) {
+func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint32, targetGUID uint64, firstLogin bool, basePoints map[int]int32, castItemGUID uint64, dest *protocol.SpellTargetLocation, radiusMod float32) {
 	if s == nil || s.player == nil || spellID == 0 {
 		return
 	}
@@ -23675,6 +23675,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 			}
 		}
+	}
+	// CastSpellExtraArgs::AddSpellMod(SPELLVALUE_RADIUS_MOD, mod)
+	// (Spell.cpp:7881) rides the local copy, never the shared DBC
+	// record — the store builds a fresh Spell per lookup.
+	if radiusMod > 0 && found {
+		spell.CastRadiusMod = radiusMod
 	}
 
 	castID := uint8(0) // C++ m_cast_count stays 0 for triggered casts (Spell.cpp:602; set nonzero only for client-initiated casts, Player.cpp:8251)
@@ -24605,7 +24611,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			return
 		}
 		if spellAction.castAgain {
-			s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, basePoints, castItemGUID, dest)
+			s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, firstLogin, basePoints, castItemGUID, dest, radiusMod)
 			return
 		}
 	}
@@ -27602,9 +27608,9 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						// fixed_bonus. The nested casts ride the triggered
 						// route, matching C++'s CastSpell(..., true).
 						if spell.SpellFamilyName == spellFamilyWarrior && spell.SpellFamilyFlags[1]&0x40 != 0 {
-							s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0, nil)
+							s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0, nil, 0)
 							if s.hasAura(devastateGlyphSpell) {
-								s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0, nil)
+								s.castSpellDirectWithOverrides(ctx, devastateSunderArmorSpell, effectTarget, false, nil, 0, nil, 0)
 							}
 							if stacks := s.devastateSunderStacks(ctx, effectTarget); stacks > 1 {
 								var eff2 uint32
@@ -28944,7 +28950,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 		// (unitTarget->CastSpell(unitTarget, ...)); every Go cast runs on
 		// the player session, so the heal lands with the right amount but
 		// the caster attribution differs — documented delta.
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, map[int]int32{0: bp0}, 0, nil)
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, effectTarget, false, map[int]int32{0: bp0}, 0, nil, 0)
 		return true
 	case triggerReplenishManaSpell:
 		// SpellEffects.cpp:865-889: Replenish Mana (33394) — cannot target
@@ -28960,7 +28966,7 @@ func (s *session) triggerSpellSpecialCase(ctx context.Context, spellID uint32, e
 			return true
 		}
 		bp0 := eff.BasePoints
-		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, map[int]int32{0: bp0}, 0, nil)
+		s.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, effectTarget, false, map[int]int32{0: bp0}, 0, nil, 0)
 		return true
 	case triggerDemonicEmpowerSuccub:
 		// SpellEffects.cpp:900-908: Demonic Empowerment (succubus) — strip

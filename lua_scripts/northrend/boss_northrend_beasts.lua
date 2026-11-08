@@ -266,7 +266,8 @@
 -- beastsCountDeath (count 0 -> SetBossState DATA_NORTHREND_BEASTS
 -- DONE) + disengage; no Talk arms.
 -- The twelve spell scripts — no SpellScript / AuraScript binding bridge
--- (razelikh precedent); join the SpellScript/AuraScript queue:
+-- (razelikh precedent); eleven join the SpellScript/AuraScript queue
+-- (slime_pool PORTED below, ev1 + CastSpellWithRadiusMod):
 -- spell_gormok_jump_to_hand (AuraScript 66342): OnRemove (snobold
 -- caster) -> gormok SelectTarget(Random,0,SnobolledTargetSelector())
 -- -> gormok->AI()->Talk(EMOTE_SNOBOLLED 0) + caster DoAction(
@@ -280,7 +281,8 @@
 -- slow stacking -> PARALYSIS 66830 + OnRemove removes PARALYSIS;
 -- spell_jormungars_burning_bile (SpellScript 66870): removes
 -- MOD_DECREASE_SPEED auras; spell_jormungars_slime_pool (AuraScript
--- 66882): periodic trigger-spell with radius mod; spell_jormungars_
+-- 66882): periodic trigger-spell with radius mod — PORTED below (ev1 +
+-- CastSpellWithRadiusMod); spell_jormungars_
 -- burning_spray / spell_jormungars_paralytic_spray (SpellScript
 -- 66902 / 66901): cast 66869 Burning Bile / 66823 Paralytic Toxin on
 -- hit unit; spell_jormungars_paralysis (AuraScript 66830): OnApply
@@ -302,6 +304,7 @@ local ENTRY_SNOBOLD_VASSAL = 34800 -- trial_of_the_crusader.h:175 (NPC_SNOBOLD_V
 local SPELL_IMPALE = 66331
 local SPELL_STAGGERING_STOMP = 66330
 local SPELL_ENRAGE = 68335 -- boss_northrend_beasts.cpp:77 (worm DoAction ACTION_ENRAGE)
+local SPELL_SLIME_POOL_EFFECT = 66882 -- boss_northrend_beasts.cpp:96
 
 -- trial_of_the_crusader.h: DATA_ACIDMAW 7 / DATA_DREADSCALE 8 /
 -- DATA_NORTHREND_BEASTS 0 (boss id for the beasts encounter).
@@ -688,3 +691,27 @@ RegisterCreatureEvent(ENTRY_ICEHOWL, 4, icehowlDied)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 5, snoboldSpawned)
 RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 4, snoboldDied)
+
+-- C++ spell_jormungars_slime_pool::PeriodicTick (boss_northrend_beasts.cpp:1221-1228):
+-- EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL on 66882. PreventDefaultAction,
+-- so the Go default trigger-spell cast is skipped (return true). No
+-- total-tick guard in C++ — the radius mod grows off a fixed 60-tick
+-- denominator: ((tick/60) * 0.9 + 0.1) * 10000 * 2/3 (C++ int32
+-- truncation). The trigger spell id comes from the aura's own
+-- Effects[0].TriggerSpell (DBC-side, read via aura:GetTriggerSpell(0);
+-- 0 without Spell.dbc means no cast). The slime pool (which self-casts
+-- 66882 in Reset) casts the trigger spell on itself (C++
+-- CastSpell(nullptr, ...) — self-centered area, DoCastAOE convention).
+-- DORMANT until Spell.dbc ships: the trigger spell id and the 66882
+-- aura itself are DBC-side.
+local function slimePoolTick(event, aura, target)
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    local mod = math.floor(((aura:GetTickNumber() / 60) * 0.9 + 0.1) * 10000 * 2 / 3)
+    target:CastSpellWithRadiusMod(target, triggerSpell, true, mod)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SLIME_POOL_EFFECT, 1, slimePoolTick)

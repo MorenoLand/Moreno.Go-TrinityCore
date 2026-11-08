@@ -1105,7 +1105,7 @@ func (s *Server) fireScriptProcCast(ctx context.Context, holderMap uint32, holde
 		if cast.bp0Set {
 			sess.castSpellDirectWithBasePoint(ctx, cast.spellID, cast.targetGUID, cast.bp0)
 		} else {
-			sess.castSpellDirectWithOverrides(ctx, cast.spellID, cast.targetGUID, false, nil, 0, nil)
+			sess.castSpellDirectWithOverrides(ctx, cast.spellID, cast.targetGUID, false, nil, 0, nil, 0)
 		}
 		return
 	}

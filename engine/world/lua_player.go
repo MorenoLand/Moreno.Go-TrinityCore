@@ -2903,7 +2903,43 @@ func (s *session) luaPlayer() *scripting.Object {
 		if len(args) >= 7 {
 			castItemGUID = luaObjectGUID(args[6])
 		}
-		s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints, castItemGUID, nil)
+		s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, basePoints, castItemGUID, nil, 0)
+		return nil, nil
+	}
+	// CastSpellWithRadiusMod(target, spellId, triggered, radiusMod) is
+	// Unit::CastSpell with CastSpellExtraArgs carrying AddSpellMod(
+	// SPELLVALUE_RADIUS_MOD, radiusMod) (Spell.cpp:7881: RadiusMod =
+	// value/10000; applied at Spell.cpp:1194/1284 as radius *=
+	// RadiusMod) on the player funnel: the session cast path
+	// (castSpellDirectWithOverrides), the player twin of the creature
+	// CastSpellWithRadiusMod bridge. The radiusMod arg is the raw C++
+	// int32 mod value (10000 = 1.0x, unchanged radius); a non-positive
+	// mod leaves the radius unmodified. A nil/unknown target falls
+	// back to the caster itself (the terestian/akilzon self-cast
+	// arms); the triggered arg is accepted but unmodeled — the player
+	// funnel is triggered-only (CastCustomSpell precedent).
+	methods["CastSpellWithRadiusMod"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("CastSpellWithRadiusMod requires a target, a spell id, triggered and a radius mod")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		triggered := false
+		if b, ok := args[2].(bool); ok {
+			triggered = b
+		}
+		_ = triggered
+		mod, err := luaInt64Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			targetGUID = state.GUID
+		}
+		s.castSpellDirectWithOverrides(ctx, spellID, targetGUID, false, nil, 0, nil, float32(mod)/10000)
 		return nil, nil
 	}
 	// CastSpellAoF(x, y, z, spellId[, triggered]) is Unit::CastSpell at
@@ -2934,7 +2970,7 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		dest := protocol.SpellTargetLocation{X: x, Y: y, Z: z}
-		s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest)
+		s.castSpellDirectWithOverrides(ctx, spellID, 0, false, nil, 0, &dest, 0)
 		return nil, nil
 	}
 	// InterruptSpell(spellType[, delayed]) is Unit::InterruptSpell
