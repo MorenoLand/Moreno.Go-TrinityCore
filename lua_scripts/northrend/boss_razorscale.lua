@@ -169,7 +169,9 @@
 -- (tick 454): SummonGameObject IS bridged (lua_creature_events.go:
 -- 3707) — BuildHarpoon + BuildBrokenHarpoons below.
 -- npc_expedition_defender (33816 ulduar.h:92): Reset one-shot
--- DoCastSelf(SPELL_THREAT 65146) PORTED (latent, below);
+-- DoCastSelf(SPELL_THREAT 65146) PORTED (latent, below); ctor
+-- SetRegenerateHealth(false) PORTED 2026-11-08 (tick 470, rides the
+-- ev23 Reset handler — the ctor runs before Reset in C++);
 -- ACTION_START_FIGHT -> MovePoint(DefendersPosition[number]) +
 -- MovementInform -> SetHomePosition + RemoveFlag IMMUNE_TO_NPC
 -- PORTED 2026-11-08 (tick 454) below.
@@ -178,6 +180,10 @@
 -- ACTION_START_FIGHT -> RemoveFlag IMMUNE_TO_NPC PORTED 2026-11-08
 -- (tick 454); ACTION_RETURN_TO_BASE was dead until tick 454
 -- (RS.ACTION_RETURN_TO_BASE was never defined — nil comparison).
+-- Ctor SetCombatMovement(false) + SetReactState(REACT_PASSIVE)
+-- PORTED 2026-11-08 (tick 470, trapperReset ev23 — no Reset
+-- override exists, the ctor is the spawn-time arm; Go defaults
+-- trappers to AGGRESSIVE, so both legs are load-bearing).
 -- npc_expedition_engineer (33287 ulduar.h:91): DoAction machine —
 -- Talk(SAY_AGGRO 0) (engineer-east-gated) and Talk
 -- (SAY_START_REPAIR 1) + spline-chain harpoon walks + MovementInform
@@ -185,7 +191,12 @@
 -- the walks are LATENT (MoveAlongSplineChain bridged,
 -- lua_creature_events.go:4791, but no script_spline_chain rows in
 -- world.db — the call returns false until the deployment DB ships
--- them).
+-- them). Reset SetReactState(REACT_PASSIVE) PORTED 2026-11-08
+-- (tick 470, engineerReset ev23 — Go defaults engineers to
+-- AGGRESSIVE, so the leg is load-bearing); the _scheduler.CancelAll
+-- leg stays out (the 28s harpoon leg is a raw CreateLuaEvent whose id
+-- is discarded at schedule time, so there is no handle to cancel —
+-- the leg is IsAlive-guarded at fire time).
 -- npc_razorscale_spawner (33245 ulduar.h:89): Reset REACT_PASSIVE +
 -- 1s DoCastSelf(SPELL_SUMMON_MOLE_MACHINE 62899) + 6s DoCastSelf
 -- (SummonMinionsSpells[urand(0,3)] 63968/63970/63969/63798) PORTED
@@ -220,12 +231,27 @@
 -- HARPOON_FIRE_STATE 62696) + commander DoAction(
 -- ACTION_DESTROY_HARPOONS) via the grid relay; the 62669 trigger
 -- itself is spell-data-gated (see the handler comment).
--- npc_razorscale_devouring_flame: Reset one-shot DoCastSelf
--- (DEVOURING_FLAME_GROUND 64709/64734, triggered), not
--- timer-driven; no registration — the creature entry is DB-side:
--- whole-tree grep finds no NPC constant for it (summoned by spell
--- 63236's DBC effect), so no entry ID exists in-house to register.
--- Do not fabricate one.
+-- npc_razorscale_devouring_flame (34188, difficulty 34189): Reset
+-- one-shot DoCastSelf (DEVOURING_FLAME_GROUND 64709/64734,
+-- triggered) PORTED 2026-11-08 (tick 470, devouringFlameReset ev23
+-- below). Entry verified this tick: AzerothCore creature_template.sql
+-- row (34188, 'Razorscale Devouring Flame Stalker', level 83, faction
+-- 14) + the 63236 -> 63308 -> 34188 DBC summon chain + the identical
+-- struct/registration in both TC and AC boss_razorscale.cpp. AC's row
+-- carries ScriptName '' (an AC-DB omission — its C++ still registers
+-- the script), so the TDB row itself stays unobserved, but the entry
+-- identity is verified and Go keys handlers by entry, not ScriptName.
+-- The 25-man template 34189 shares the difficulty-0 ScriptName in TC
+-- (ObjectMgr.cpp:966) but Go has no difficulty-entry substitution, so
+-- only 34188 is registered; the 64734 pick rides Is25ManRaid, the
+-- RAID_MODE twin. ev23 only: Go fires ev23 on the temp-summon path
+-- via motionFor/fireCreatureSpawned, and the C++ IsSummonedBy is a
+-- no-op — an ev22 twin would double-cast the ground flame. The empty
+-- C++ EnterEvadeMode override needs no leg: the stalker is
+-- REACT_PASSIVE and never enters combat, so triggerCreatureEvade's
+-- wasInCombat gate never fires ev23/ev2 for it. Dormant until the
+-- 63236 -> 63308 summon chain lands (spell-data-gated) and Spell.dbc
+-- ships 64709/64734.
 -- go_razorscale_harpoon / go_razorscale_mole_machine —
 -- GameObjectScripts — no registrations; no creature-event
 -- handlers fire for GOs. The harpoon Reset arm is PORTED below via
@@ -306,6 +332,9 @@ local RS = {
     EFFECT_MOTION_TYPE = 16,
     SPELL_FIREBALL = 63815,
     SPELL_DEVOURING_FLAME = 63236,
+    ENTRY_DEVOURING_FLAME = 34188,
+    SPELL_DEVOURING_FLAME_GROUND = 64709,
+    SPELL_DEVOURING_FLAME_GROUND_25 = 64734,
     SPELL_WING_BUFFET = 62666,
     SPELL_FIREBOLT = 62669,
     SPELL_FUSE_ARMOR = 64821,
@@ -1690,14 +1719,50 @@ RegisterGameObjectEvent(GO_MOLE_MACHINE, 12, moleMachineAdd)
 -- C++ npc_expedition_defender::Reset (boss_razorscale.cpp:876-878):
 -- DoCastSelf(SPELL_THREAT 65146), non-triggered. Latent until the
 -- expedition adds arrive, same class as the mole-machine GO leg.
+-- The ctor (boss_razorscale.cpp:869-872) runs first:
+-- SetRegenerateHealth(false).
 local ENTRY_EXPEDITION_DEFENDER = 33816 -- ulduar.h:92
 local SPELL_THREAT = 65146
 
 local function expeditionDefenderReset(_, creature)
+    creature:SetRegenerateHealth(false)
     creature:CastSpell(creature, SPELL_THREAT)
 end
 
 RegisterCreatureEvent(ENTRY_EXPEDITION_DEFENDER, 23, expeditionDefenderReset)
+
+-- C++ npc_expedition_engineer::Reset (boss_razorscale.cpp:982-986):
+-- SetReactState(REACT_PASSIVE) + _scheduler.CancelAll(). The
+-- CancelAll leg stays out (see the header note — the 28s harpoon leg
+-- is a raw CreateLuaEvent whose id is discarded at schedule time).
+local function engineerReset(_, creature)
+    creature:SetReactState(RS.REACT_PASSIVE)
+end
+
+RegisterCreatureEvent(ENTRY_EXPEDITION_ENGINEER, 23, engineerReset)
+
+-- C++ npc_expedition_trapper ctor (boss_razorscale.cpp:917-921):
+-- SetCombatMovement(false) + SetReactState(REACT_PASSIVE). No Reset
+-- override exists — the ctor is the spawn-time arm, so it rides ev23.
+local function trapperReset(_, creature)
+    creature:SetCombatMovement(false)
+    creature:SetReactState(RS.REACT_PASSIVE)
+end
+
+RegisterCreatureEvent(RS.ENTRY_EXPEDITION_TRAPPER, 23, trapperReset)
+
+-- C++ npc_razorscale_devouring_flame::Reset (boss_razorscale.cpp:1467-1471):
+-- SetReactState(REACT_PASSIVE) + one-shot DoCastSelf(
+-- DEVOURING_FLAME_GROUND, triggered). The 64734 pick rides
+-- Is25ManRaid, the RAID_MODE twin (see the header note for the
+-- entry-verification chain). Dormant until the 63236 -> 63308 summon
+-- chain lands and Spell.dbc ships 64709/64734.
+local function devouringFlameReset(_, creature)
+    creature:SetReactState(RS.REACT_PASSIVE)
+    creature:CastSpell(creature, creature:Is25ManRaid() and RS.SPELL_DEVOURING_FLAME_GROUND_25 or RS.SPELL_DEVOURING_FLAME_GROUND, true)
+end
+
+RegisterCreatureEvent(RS.ENTRY_DEVOURING_FLAME, 23, devouringFlameReset)
 
 -- C++ go_razorscale_harpoon::Reset (boss_razorscale.cpp:1488-1498),
 -- 1s leg only: FindNearestCreature(NPC_RAZORSCALE_CONTROLLER 33233,
