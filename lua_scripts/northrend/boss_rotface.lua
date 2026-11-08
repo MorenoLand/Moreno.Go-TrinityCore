@@ -109,10 +109,9 @@
 -- land (krick precedent); the three combine SpellScripts themselves
 -- are PORTED 2026-11-08 (tick 457) via ev5 RegisterSpellEvent
 -- (below, dormant until Spell.dbc ships) — the explosion chain
--- (init/suicide) is PORTED this tick (tick 458); only the
--- trigger-missile leg stays out (no GetExplTargetDest bridge,
--- no spell-object GetTriggerSpell, ev4 notification-only — see
--- the explosion note at the end of the file).
+-- (init/suicide/trigger-missile) is PORTED (tick 458 init/suicide,
+-- tick 459 trigger-missile on the new veto bridge); the tick-458
+-- suicide binding is corrected this tick (71441, not 69832).
 -- npc_precious_icc — NOT registered, same entry-block (no
 -- NPC_PRECIOUS constant in-tree): blocked arms EVENT_DECIMATE
 -- DoCastVictim(71123) non-triggered / EVENT_MORTAL_WOUND
@@ -130,18 +129,19 @@
 -- boss_blood_prince_council.lua uses it) — so the arm is now
 -- PORTED with the heroic gate (this run); porting unconditionally
 -- would cast on normal too (unfaithful), so the gate is required.
--- The remaining 7 spell scripts: 6 PORTED 2026-11-08 (tick 458)
--- via RegisterSpellEvent/RegisterAuraEvent (below, dormant until
--- Spell.dbc ships) — ooze_flood (ev7 + ev5), mutated_infection
--- (ev7 + ev3 AfterHit Talk), explosion_init (ev5), vile_gas_trigger
--- (ev7 + ev5), slime_spray (ev2), explosion_suicide (aura ev1).
--- Only spell_rotface_unstable_ooze_explosion stays BLOCKED: its
--- TRIGGER_MISSILE leg needs GetExplTargetDest (no bridge anywhere
--- in engine/) + the effect's TriggerSpell on the spell object
--- (only the aura object has GetTriggerSpell, lua_aura.go:294),
--- and ev4 is notification-only (lua_spell.go:456-460) so the
--- default trigger-missile execution cannot be vetoed or
--- redirected to Rotface. The 3 combine scripts are PORTED
+-- The remaining 7 spell scripts: 7/7 PORTED 2026-11-08 (ticks
+-- 458-459) via RegisterSpellEvent/RegisterAuraEvent (below, dormant
+-- until Spell.dbc ships) — ooze_flood (ev7 + ev5),
+-- mutated_infection (ev7 + ev3 AfterHit Talk), explosion_init (ev5),
+-- vile_gas_trigger (ev7 + ev5), slime_spray (ev2),
+-- explosion_suicide (aura ev1, bound 71441), explosion (ev4, bound
+-- 69832). Bindings verified this tick against spell_script_names:
+-- (69832,'spell_rotface_unstable_ooze_explosion'),
+-- (69839,'spell_rotface_unstable_ooze_explosion_init'),
+-- (71441,'spell_rotface_unstable_ooze_explosion_suicide_aura') —
+-- the tick-458 explosion-on-69839 framing was wrong (69839 carries
+-- the init's force-cast + the 71441 trigger; the trigger-missile
+-- leg lives on 69832). The 3 combine scripts are PORTED
 -- 2026-11-08 (tick 457) via ev5 RegisterSpellEvent (below): the
 -- buff-combine Talk(EMOTE_UNSTABLE_2..4 0..2) +
 -- Talk(EMOTE_UNSTABLE_EXPLOSION 3) + rotface
@@ -214,6 +214,7 @@ local EMOTE_MUTATED_INFECTION = 9 -- boss_rotface.cpp:48
 local OOZE_FLOOD_SPELLS = { 69782, 69796, 69798, 69801 }
 local NPC_UNSTABLE_EXPLOSION_STALKER = 38107 -- icecrown_citadel.h:230
 local SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER = 69832 -- boss_rotface.cpp:70
+local SPELL_UNSTABLE_OOZE_EXPLOSION_SUICIDE = 71441 -- spell_script_names (71441,'spell_rotface_unstable_ooze_explosion_suicide_aura')
 local SPELL_VILE_GAS_TRIGGER_SUMMON = 72287 -- boss_rotface.cpp:57
 local SPELL_GREEN_BLIGHT_RESIDUE = 72145 -- icecrown_citadel.h:42
 local QUEST_RESIDUE_RENDEZVOUS_10 = 24873 -- icecrown_citadel.h:521
@@ -939,16 +940,16 @@ end
 -- SPELL_EFFECT_FORCE_CAST. Summon the explosion stalker
 -- (38107, TEMPSUMMON_TIMED_DESPAWN = type 2, 1min) at the hit
 -- unit's position, then the caster casts the trigger spell
--- (69832) on it, triggered. Deviation: C++ PreventHitEffects the
--- force-cast; ev5 is notification-only (lua_spell.go:467-475) and
--- Go's creatureEffectForceCast (boss_ai.go:6888) still runs the
--- default, so once Spell.dbc ships the ooze ALSO casts the
--- trigger spell on itself — one extra 69832, wrong target, until
--- a PreventHitEffect bridge exists. DORMANT until Spell.dbc ships.
+-- (69832) on it, triggered. PreventHitEffect(0) vetoes the default
+-- force-cast via the tick-459 bridge (lua_spell.go
+-- spellEffectPreventState; the veto collapses to the whole effect —
+-- faithful here, the cast targets the ooze itself). DORMANT until
+-- Spell.dbc ships.
 local function unstableOozeExplosionInit(event, spell, target, effectIndex)
     if effectIndex ~= 0 then
         return
     end
+    spell:PreventHitEffect(0)
     if not target then
         return
     end
@@ -1066,13 +1067,16 @@ end
 
 -- C++ spell_rotface_unstable_ooze_explosion_suicide::DespawnSelf
 -- (boss_rotface.cpp:693-709): AuraScript OnEffectPeriodic EFFECT_2
--- SPELL_AURA_PERIODIC_TRIGGER_SPELL, bound to the trigger spell
--- (69832 — the only spell cast on the stalker; the aura it carries
--- is what hides/despawns it). Creature targets only: strip all
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL, bound to 71441
+-- (spell_script_names (71441,
+-- 'spell_rotface_unstable_ooze_explosion_suicide_aura'); 71441's
+-- effects are Pacify & Silence, Root, Periodic trigger spell).
+-- Creature targets only: strip all
 -- auras, hide, despawn in 60s. `return true` IS the
 -- PreventDefaultAction: fireAuraPeriodicTick (lua_aura.go) treats
 -- a true return as the veto and skips the default tick. DORMANT
--- until Spell.dbc ships (the 69832 cast is DBC-gated).
+-- until Spell.dbc ships (the 71441 aura application rides 69839
+-- effect 1, DBC-gated).
 local function unstableOozeExplosionSuicide(event, aura, target)
     if target ~= nil and target:GetObjectType() == "Creature" then
         target:RemoveAllAuras()
@@ -1084,13 +1088,40 @@ end
 
 -- C++ spell_rotface_unstable_ooze_explosion::CheckTarget
 -- (boss_rotface.cpp:666-685): OnEffectHit EFFECT_0
--- SPELL_EFFECT_TRIGGER_MISSILE — BLOCKED, not ported: no
--- GetExplTargetDest bridge anywhere in engine/ and no
--- TriggerSpell read on the spell object (only the aura object
--- has GetTriggerSpell, lua_aura.go:294); ev4 is notification-only
--- (lua_spell.go:456-460), so the default trigger-missile
--- execution cannot be vetoed and the cast cannot be redirected
--- to Rotface at the dest. No registration below.
+-- SPELL_EFFECT_TRIGGER_MISSILE, bound to 69832 (spell_script_names
+-- (69832,'spell_rotface_unstable_ooze_explosion'); 69832's only DBC
+-- effect is Trigger Missile -> 69839). PreventHitDefaultEffect the
+-- missile, then Rotface casts the effect's TriggerSpell at the
+-- explosion dest, the ooze as original caster. PORTED 2026-11-08
+-- (tick 459) on the new veto bridge (lua_spell.go:
+-- spell:PreventHitDefaultEffect + spell:GetExplTargetDest +
+-- spell:GetTriggerSpell). DORMANT until Spell.dbc ships.
+-- Deviation: Lua CastSpellAoF has no original-caster slot
+-- (tick-425 class), so the cast attributes to Rotface instead of
+-- the ooze.
+local function unstableOozeExplosion(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    spell:PreventHitDefaultEffect(0)
+    local x, y, z = spell:GetExplTargetDest()
+    if x == nil then
+        return
+    end
+    local triggerSpell = spell:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local rotface = caster:GetInstanceCreature(DATA_ROTFACE)
+    if rotface == nil then
+        return
+    end
+    rotface:CastSpellAoF(x, y, z, triggerSpell, true)
+end
 
 for _, spellId in ipairs(OOZE_FLOOD_SPELLS) do
     RegisterSpellEvent(spellId, 7, oozeFloodFilter)
@@ -1101,7 +1132,8 @@ for _, auraId in ipairs(MUTATED_INFECTION_AURAS) do
     RegisterSpellEvent(auraId, 3, mutatedInfectionNotify)
 end
 RegisterSpellEvent(SPELL_UNSTABLE_OOZE_EXPLOSION, 5, unstableOozeExplosionInit)
+RegisterSpellEvent(SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER, 4, unstableOozeExplosion)
 RegisterSpellEvent(SPELL_VILE_GAS_TRIGGER, 7, vileGasTriggerFilter)
 RegisterSpellEvent(SPELL_VILE_GAS_TRIGGER, 5, vileGasTriggerDummy)
 RegisterSpellEvent(SPELL_SLIME_SPRAY, 2, slimeSprayResidue)
-RegisterAuraEvent(SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER, 1, unstableOozeExplosionSuicide)
+RegisterAuraEvent(SPELL_UNSTABLE_OOZE_EXPLOSION_SUICIDE, 1, unstableOozeExplosionSuicide)

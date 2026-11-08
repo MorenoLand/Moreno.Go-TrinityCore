@@ -293,6 +293,56 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 
+// spellEffectPreventState is the per-cast record of SpellScript
+// PreventHitDefaultEffect / PreventHitEffect calls (SpellScript.cpp)
+// for one creature-cast spell. The ev4/ev5 hook fires run before the
+// default effect arms in castCreatureSpellInternalWithBasePoints, so a
+// handler's prevention is recorded here and the arms consult it. Both
+// calls collapse to a per-effect veto: Go's default arms are grouped
+// per effect, not per (effect, target), so a PreventHitEffect veto for
+// one hit target suppresses the arm for every hit target of that
+// effect — faithful when the cast has one hit target per effect (the
+// rotface explosion-init cast targets the ooze itself); a multi-target
+// PreventHitEffect port would over-suppress, and needs per-target
+// keying before it lands.
+type spellEffectPreventState struct {
+	prevented map[int]bool
+}
+
+func (p *spellEffectPreventState) preventDefault(effectIndex int) {
+	if p == nil {
+		return
+	}
+	if p.prevented == nil {
+		p.prevented = make(map[int]bool)
+	}
+	p.prevented[effectIndex] = true
+}
+
+func (p *spellEffectPreventState) preventHit(effectIndex int) {
+	p.preventDefault(effectIndex)
+}
+
+func (p *spellEffectPreventState) defaultPrevented(effectIndex int) bool {
+	if p == nil {
+		return false
+	}
+	return p.prevented[effectIndex]
+}
+
+// creatureSpellObjectOpts carries the optional per-cast state a
+// creature Spell object closes over. hitDamage is the shared damage
+// record (nil outside hit hooks); prevent is the shared veto record
+// (nil where no hook fire can precede a default arm); dest/hasDest is
+// the cast's resolved destination (SpellScript::GetExplTargetDest reads
+// m_targets dst — the cast-level dest, not a per-effect snapshot).
+type creatureSpellObjectOpts struct {
+	hitDamage *spellHitDamageState
+	prevent   *spellEffectPreventState
+	dest      [3]float32
+	hasDest   bool
+}
+
 // luaCreatureSpellObject builds the Eluna Spell object for a creature's
 // current spell (Unit::GetCurrentSpell, UnitMethods.h:785-792), the
 // server-side twin of the session luaSpellObject: creatures have no
@@ -304,13 +354,19 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 // GetCurrentSpell returns the live Spell* regardless of DBC presence,
 // and the DBC-backed reads fall back to 0/-1 like the session builder.
 // GetEffectValue is the session builder's twin (same contract).
-func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targetGUID uint64, hitDamage ...*spellHitDamageState) *scripting.Object {
+func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targetGUID uint64, opts ...creatureSpellObjectOpts) *scripting.Object {
 	if s == nil || m == nil || spellID == 0 {
 		return nil
 	}
 	var hit *spellHitDamageState
-	if len(hitDamage) > 0 {
-		hit = hitDamage[0]
+	var prevent *spellEffectPreventState
+	dest := [3]float32{}
+	hasDest := false
+	if len(opts) > 0 {
+		hit = opts[0].hitDamage
+		prevent = opts[0].prevent
+		dest = opts[0].dest
+		hasDest = opts[0].hasDest
 	}
 	var castTimeMs int32
 	durationMs := int32(0)
@@ -350,6 +406,73 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 		value := spell.Effects[index].CalcValueForLevel(spell, m.Level)
 		effectValues[int(index)] = value
 		return []any{value}, nil
+	}
+	// GetTriggerSpell([effectIndex]) is SpellInfo::Effects[eff].
+	// TriggerSpell (SpellInfo.h, the DBC trigger of an effect): the
+	// spell id the Go default trigger/force-cast arm would fire. Reads
+	// the loaded Spell.dbc record for this spell (the builder's local,
+	// the aura GetTriggerSpell twin at lua_aura.go:294); an unknown
+	// spell, an out-of-range index, or a missing row reads 0, so a Lua
+	// port that casts only on a nonzero id never fires a bogus 0-id
+	// cast. Default effect 0, the C++ GetEffIndex() twin for the
+	// single-effect spells this bridge serves.
+	methods["GetTriggerSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if index < 0 || index >= len(spell.Effects) {
+			return []any{uint32(0)}, nil
+		}
+		return []any{spell.Effects[index].TriggerSpell}, nil
+	}
+	// GetExplTargetDest returns the cast's explosion-target destination
+	// (SpellScript::GetExplTargetDest, SpellScript.cpp:466-471:
+	// m_targets dst when HasDst) as three values, or three nils when
+	// the cast carries no destination. GetTargetDest is the Eluna name
+	// for the same value (the session builder's twin).
+	destTriple := func() []any {
+		if !hasDest {
+			return []any{nil, nil, nil}
+		}
+		return []any{dest[0], dest[1], dest[2]}
+	}
+	methods["GetExplTargetDest"] = func(_ context.Context, _ []any) ([]any, error) {
+		return destTriple(), nil
+	}
+	methods["GetTargetDest"] = func(_ context.Context, _ []any) ([]any, error) {
+		return destTriple(), nil
+	}
+	// PreventHitDefaultEffect(effectIndex) is SpellScript::
+	// PreventHitDefaultEffect (SpellScript.cpp): the default effect
+	// handler for that effect is skipped for this cast. The write
+	// lands in the per-cast veto record the caller threaded in (nil
+	// outside the ev4/ev5 fires: a no-op there, matching C++'s
+	// IsInEffectHook gate).
+	methods["PreventHitDefaultEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		prevent.preventDefault(int(index))
+		return nil, nil
+	}
+	// PreventHitEffect(effectIndex) is SpellScript::PreventHitEffect
+	// (SpellScript.cpp): the effect handler is skipped for the hit
+	// target. Go's default arms are grouped per effect, so the veto
+	// collapses to the whole effect (see spellEffectPreventState);
+	// faithful when the cast has one hit target per effect.
+	methods["PreventHitEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		prevent.preventHit(int(index))
+		return nil, nil
 	}
 	methods["GetPowerCost"] = luaNoArgs(func() any { return uint32(0) })
 	methods["GetCaster"] = luaNoArgs(func() any { return s.luaMotionCreature(m) })

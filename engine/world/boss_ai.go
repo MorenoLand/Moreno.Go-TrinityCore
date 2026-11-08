@@ -1747,6 +1747,12 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		}
 	}
 	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	// spellEffectPreventState for this cast: the ev4/ev5 SpellScript
+	// hook fires below record PreventHitDefaultEffect / PreventHitEffect
+	// calls here, and the default effect arms further below consult it
+	// before running. Declared up here so the launch pre-pass (the
+	// trigger-spell arm, ahead of the hit phase) can consult it too.
+	prevent := &spellEffectPreventState{}
 	// The resolved dest-family destination: evaluated ahead of the LOS
 	// gates below and reused for the GO packet write, so the dest-LOS arm
 	// and the packet carry the same value. Go creature casts carry no
@@ -3260,7 +3266,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectTriggerSpell, spellEffectTriggerSpellWithValue:
-				s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				if !prevent.defaultPrevented(i) {
+					s.creatureEffectTriggerSpell(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				}
 			case spellEffectCharge:
 				s.creatureEffectCharge(ctx, m, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectChargeDest:
@@ -3339,7 +3347,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// effect index. Placed after the threat arm above, matching C++
 	// order (threat precedes the HIT loop in _handle_immediate_phase).
 	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID)
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{prevent: prevent, dest: [3]float32{destX, destY, destZ}, hasDest: hasDest})
 		for i := range spellInfo.Effects {
 			if spellInfo.Effects[i].Effect == 0 {
 				continue
@@ -3390,7 +3398,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// landed reflect fires on the caster (the return trip's
 	// _spellHitTarget), a bounced one fires nothing.
 	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, hitDamage)
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage, prevent: prevent, dest: [3]float32{destX, destY, destZ}, hasDest: hasDest})
 		for i := range spellInfo.Effects {
 			if spellInfo.Effects[i].Effect == 0 {
 				continue
@@ -3701,7 +3709,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 		for i := range spellInfo.Effects {
 			switch spellInfo.Effects[i].Effect {
 			case spellEffectForceCast, spellEffectForceCastWithValue, spellEffectForceCast2:
-				s.creatureEffectForceCast(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				if !prevent.defaultPrevented(i) {
+					s.creatureEffectForceCast(ctx, m, spellInfo, spellID, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				}
 			}
 		}
 	}
@@ -3802,7 +3812,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			case spellEffectSendTaxi, spellEffectDiscoverTaxi:
 				s.creatureEffectTaxi(ctx, m, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 			case spellEffectTriggerMissile, spellEffectTriggerMissileWithValue:
-				s.creatureEffectTriggerMissile(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				if !prevent.defaultPrevented(i) {
+					s.creatureEffectTriggerMissile(ctx, m, spellInfo, spellID, spellInfo.Effects[i], targetGUID, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				}
 			}
 		}
 	}
@@ -3862,7 +3874,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			case spellEffectForceDeselect:
 				s.creatureEffectForceDeselect(ctx, m)
 			case spellEffectScriptEffect:
-				s.creatureEffectScriptEffect(ctx, m, spellID, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				if !prevent.defaultPrevented(i) {
+					s.creatureEffectScriptEffect(ctx, m, spellID, spellInfo.Effects[i], bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+				}
 			}
 		}
 	}
@@ -3949,7 +3963,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// — both legs fire here, matching the OnHit loop's single caster
 	// fire below with a second original-target fire carrying REFLECT.
 	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, hitDamage)
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
 		for _, guid := range hitTargets {
 			if guid == 0 {
 				continue
@@ -3996,7 +4010,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// so firing once per target is exact, not an approximation — same as
 	// the player path (spells.go).
 	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, hitDamage)
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
 		for _, guid := range hitTargets {
 			hitDamage.phase = spellHitPhaseOnHit
 			hitDamage.currentTarget = guid
@@ -4106,7 +4120,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// target, after the per-hit trigger consumer above, with the same
 	// args and the same miss-inclusive firing as OnHit.
 	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, hitDamage)
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
 		for _, guid := range hitTargets {
 			hitDamage.phase = spellHitPhaseAfterHit
 			hitDamage.currentTarget = guid
