@@ -147,11 +147,12 @@
 -- 71797 SPELL_LIGHTS_BLESSING (:1263, case EVENT_OUTRO_BLESS) — cast
 -- by npc_tirion_fordring_tft on itself (outro); tirion not registered
 -- in this file — wrong creature.
--- 74352 SPELL_WINGS_OF_THE_DAMNED (:1455, val'kyr Reset, non-triggered),
+-- 74352 SPELL_WINGS_OF_THE_DAMNED (:1455, val'kyr Reset, non-triggered)
+-- PORTED 2026-11-08 via ev22 IsSummonedBy (valkyrIsSummonedBy below);
 -- 73501 SPELL_VALKYR_TRANSFORM (:1522, val'kyr MovementInform
 -- POINT_SIPHON), 73488 SPELL_LIFE_SIPHON (:1562, val'kyr
 -- EVENT_LIFE_SIPHON DoCastVictim) — cast by npc_valkyr_shadowguard,
--- not the boss; val'kyr not registered in this file — wrong creature.
+-- not the boss; the grab/life-siphon machine stays unported.
 -- 69382 SPELL_LIGHTS_FAVOR (:1704, terenas DoAction
 -- ACTION_FROSTMOURNE_INTRO) — cast by npc_terenas_menethil on itself;
 -- terenas not registered in this file — wrong creature.
@@ -216,8 +217,9 @@
 -- 1-arg DoCast(SPELL_DARK_HUNGER 69383) non-triggered (:1835) —
 -- target resolved from DBC AISpellInfo (UnitAI.cpp:113), kept as
 -- self-cast (self-buff aura).
--- npc_valkyr_shadowguard / npc_spirit_bomb /
--- npc_broken_frostmourne — zero Talk lines —
+-- npc_valkyr_shadowguard IS registered (Reset via ev22 IsSummonedBy,
+-- PORTED 2026-11-08 — the val'kyr never engages, so ev1 would never
+-- fire); npc_spirit_bomb / npc_broken_frostmourne — zero Talk lines —
 -- NOT registered (the bronjahm npc_corrupted_soul_fragment
 -- precedent); the valkyr grab/life-siphon (SpellScript +
 -- MovementInform), bomb and frostmourne UpdateAI
@@ -270,12 +272,18 @@
 -- JustSummoned REACT_PASSIVE + LichKingStartMovementEvent 5s ->
 -- REACT_AGGRESSIVE + AttackStart (:739-741/:447-466, shambling horror /
 -- drudge ghoul): cross-creature timed BasicEvent machine;
--- AttackStart/SelectTarget have no bridge. (VileSpiritActivateEvent
--- REACT_AGGRESSIVE (:472-484) + JustSummoned legs :750/:761/:777/1059
--- (ice-sphere :750 PORTED in lichKingJustSummoned — SelectTarget
--- approximated by the alive same-map/instance random-player pool,
--- MoveFollow PORTED in lichKingJustSummoned; defile :761 PORTED (lichKingJustSummoned);
--- spirit_bomb/valkyr stay unregistered as documented; strangulate
+-- AttackStart/SelectTarget have no bridge. VileSpiritActivateEvent
+-- REACT_AGGRESSIVE (:472-484) + JustSummoned vile-spirit leg (:774-781)
+-- PORTED 2026-11-08 (lichKingJustSummoned + onVileSpiritActivate):
+-- flight-speed leg stays out (SetSpeedRate rejects MOVE_FLIGHT, no
+-- script flight-rate field) and the Frostmourne-phase activate gate
+-- stays out (no phase model); EVENT_VILE_SPIRITS 79.5s/:1034 timer +
+-- DoCastAOE 70498 stays out (PHASE_THREE-gated, gothik counterpoint).
+-- JustSummoned legs :750/:761 (ice-sphere :750 PORTED in
+-- lichKingJustSummoned — SelectTarget approximated by the alive
+-- same-map/instance random-player pool, MoveFollow PORTED in
+-- lichKingJustSummoned; defile :761 PORTED (lichKingJustSummoned);
+-- spirit_bomb stays unregistered as documented; strangulate
 -- PORTED below (ev22 + UpdateAI timers + ev38).
 -- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
 -- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
@@ -335,6 +343,9 @@ local SPELL_PLAGUE_AVOIDANCE = 72846
 local SPELL_RAGING_SPIRIT_VISUAL = 69197
 local SPELL_RAGING_SPIRIT_VISUAL_CLONE = 69198 -- boss_the_lich_king.cpp:109
 local SPELL_BOSS_HITTIN_YA = 73878
+local SPELL_VILE_SPIRIT_MOVE_SEARCH = 70501 -- boss_the_lich_king.cpp:133
+local SPELL_VILE_SPIRIT_DAMAGE_SEARCH = 70502 -- boss_the_lich_king.cpp:134
+local SPELL_WINGS_OF_THE_DAMNED = 74352 -- boss_the_lich_king.cpp:122
 local SPELL_ICE_SPHERE = 69090 -- boss_the_lich_king.cpp:103
 local SPELL_ICE_BURST_TARGET_SEARCH = 69109 -- boss_the_lich_king.cpp:104
 local SPELL_ICE_PULSE = 69091 -- boss_the_lich_king.cpp:105
@@ -357,6 +368,7 @@ local SPELL_HARVEST_SOUL_TELEPORT_BACK = 72597 -- boss_the_lich_king.cpp:142
 local SPELL_HARVEST_SOUL_10H = 74296 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 10H)
 local SPELL_HARVEST_SOUL_25H = 74297 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 25H)
 local ACTION_TELEPORT_BACK = 8 -- boss_the_lich_king.cpp:343 (EncounterActions)
+local ACTION_DISABLE_RAGING = 9 -- boss_the_lich_king.cpp:344
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local EMOTE_ONESHOT_EMERGE = 449 -- SharedDefines.h:2086
@@ -526,6 +538,31 @@ local function randomPlayerAnywhere(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ VileSpiritActivateEvent (boss_the_lich_king.cpp:472-484):
+-- REACT_AGGRESSIVE + self-cast SPELL_VILE_SPIRIT_MOVE_SEARCH 70501
+-- (triggered) + SPELL_VILE_SPIRIT_DAMAGE_SEARCH 70502 (triggered,
+-- nullptr target). The casts are dormant until Spell.dbc ships, and
+-- the searcher spells' script effects (random-target AttackStart +
+-- 100k threat; area target-count DATA_VILE write + Spirit Burst +
+-- 3s despawn) ride the unbridged SpellScript — the neck_deep
+-- achievement writer stays out (its 70502 area radius is a DBC fact).
+-- The 56.5s Harvest-Souls re-arm (:1058-1069) rides the unported
+-- EVENT_HARVEST_SOULS; when it lands it reuses the "vile_activate"
+-- key via schedule(), replacing the pending activate.
+local function onVileSpiritActivate(spirit)
+    spirit:SetReactState(REACT_AGGRESSIVE)
+    spirit:CastSpell(spirit, SPELL_VILE_SPIRIT_MOVE_SEARCH, true)
+    spirit:CastSpell(nil, SPELL_VILE_SPIRIT_DAMAGE_SEARCH, true)
+end
+
+-- No C++ Reset/LeaveCombat arms exist for the vile spirit (it has no
+-- creature script; all behavior is LK-side JustSummoned + BasicEvents),
+-- so only JustDied cancels the pending activate — mirroring the
+-- m_Events teardown when the summon despawns/dies.
+local function vileSpiritDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
+end
+
 local function lichKingJustSummoned(_, creature, summoned)
     -- C++ boss_the_lich_king::JustSummoned (:737-741): horror/ghoul
     -- spawn visual (triggered) + REACT_PASSIVE + emerge emote, in C++
@@ -561,6 +598,20 @@ local function lichKingJustSummoned(_, creature, summoned)
         else
             summoned:Despawn()
         end
+    -- C++ :774-781: vile spirit REACT_PASSIVE + flight speed 0.5 +
+    -- MoveRandom(10.0) + VileSpiritActivateEvent at 15s (unless in the
+    -- Frostmourne phase). The flight-speed leg stays out: SetSpeedRate
+    -- rejects MOVE_FLIGHT and Go models flight speed as a constant 7.0
+    -- with no script-rate field (creaturemotion.go:679), so the spirit
+    -- wanders at base speed; the Go MoveRandom is a single walk spline,
+    -- not the repeating C++ wander generator. The Frostmourne-phase gate
+    -- stays out (no phase model in Lua) — a spirit summoned during
+    -- Frostmourne still gets the 15s activate here, where C++ skips it.
+    elseif summoned:GetEntry() == ENTRY_VILE_SPIRIT then
+        summoned:SetReactState(0) -- REACT_PASSIVE
+        summoned:MoveRandom(10.0)
+        local spiritGuid = summoned:GetGUID()
+        schedule(spiritGuid, "vile_activate", 15000, function() onVileSpiritActivate(summoned) end)
     end
 end
 
@@ -659,9 +710,15 @@ end
 -- Reset REACT_PASSIVE (:1365) -> EVENT_SET_AGRESSIVE 2s (:1424) leg is
 -- PORTED (2026-10-22) via the file's CreateLuaEvent pump.
 -- C++ DoAction(ACTION_DISABLE_RAGING) (:1377-1386, _events.Reset() on
--- Frostmourne-phase entry, issued by the boss AI :1066) has no bridge —
--- the cross-AI DoAction rides the unbridged phase machine, so the Soul
--- Shriek timer keeps firing where C++ goes silent (gothik counterpoint).
+-- Frostmourne-phase entry, issued by the boss AI :1066) PORTED
+-- (2026-11-08, ragingSpiritDoAction, ev38 below): the receiver dispatch
+-- is live in this file (lichKingDoAction/terenasDoAction precedent) —
+-- the earlier "no DoAction bridge" note conflated receiver and sender.
+-- The sender stays out (EVENT_HARVEST_SOULS unported), so the handler
+-- is dormant until the sender lands; until then the Soul Shriek timer
+-- keeps firing where C++ goes silent (gothik counterpoint).
+local ragingFrostmournePhase = {}
+
 local function onSoulShriek(creature, guid)
     -- C++ raging UpdateAI pre-loop gate :1412 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
     if creature:IsCasting() then
@@ -680,11 +737,38 @@ local function onRagingAggressive(creature, guid)
         return
     end
     creature:SetReactState(REACT_AGGRESSIVE)
+    -- C++ EVENT_SET_AGRESSIVE Frostmourne-phase branch (:1427-1430):
+    -- back to PHASE_THREE + re-arm SOUL_SHRIEK {12s,15s}.
+    if ragingFrostmournePhase[guid] then
+        ragingFrostmournePhase[guid] = nil
+        schedule(guid, "soul_shriek", {12000, 15000}, function() onSoulShriek(creature, guid) end)
+    end
+end
+
+-- C++ npc_raging_spirit::DoAction(ACTION_DISABLE_RAGING) (:1377-1386):
+-- _events.Reset() + SetPhase(PHASE_FROSTMOURNE) + EVENT_SET_AGRESSIVE
+-- in 52s + REACT_PASSIVE + AttackStop + InterruptNonMeleeSpells(true),
+-- in C++ order. The Lua InterruptNonMeleeSpells takes no args (the
+-- delayed=true arg is voided by the bridge). cancelTimers is the
+-- _events.Reset() twin; the phase flag drives the EVENT_SET_AGRESSIVE
+-- branch in onRagingAggressive above.
+local function ragingSpiritDoAction(event, creature, action)
+    if action ~= ACTION_DISABLE_RAGING then
+        return
+    end
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    ragingFrostmournePhase[guid] = true
+    schedule(guid, "raging_aggressive", 52000, function() onRagingAggressive(creature, guid) end)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:AttackStop()
+    creature:InterruptNonMeleeSpells()
 end
 
 local function ragingSpiritJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    ragingFrostmournePhase[guid] = nil
     creature:SetReactState(REACT_PASSIVE)
     schedule(guid, "raging_aggressive", 2000, function() onRagingAggressive(creature, guid) end)
     creature:CastSpell(creature, SPELL_PLAGUE_AVOIDANCE, true)
@@ -702,6 +786,7 @@ end
 
 local function ragingSpiritLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    ragingFrostmournePhase[creature:GetGUID()] = nil
 end
 
 -- C++ npc_spirit_warden: Reset — 1-arg DoCast(SPELL_DARK_HUNGER)
@@ -739,6 +824,19 @@ local function spiritWardenDied(event, creature, killer)
     end
 end
 
+-- C++ npc_valkyr_shadowguard::Reset (:1455-1460): REACT_PASSIVE +
+-- DoCastSelf(SPELL_WINGS_OF_THE_DAMNED 74352, non-triggered); the ctor
+-- (:1447) sets combat movement off. Keyed to ev22 IsSummonedBy (the
+-- strangulate precedent — ev22 is live for creature summons): the
+-- val'kyr never engages, so ev1 would never fire. The IsSummonedBy
+-- EVENT_GRAB_PLAYER 2.5s schedule stays out (the grab machine rides
+-- MovementInform + SpellScript, unported).
+local function valkyrIsSummonedBy(event, creature)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:SetCombatMovement(false)
+    creature:CastSpell(creature, SPELL_WINGS_OF_THE_DAMNED)
+end
+
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 1, shamblingHorrorJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 2, shamblingHorrorLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 9, shamblingHorrorDamageTaken)
@@ -746,10 +844,13 @@ RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 23, shamblingHorrorLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 1, ragingSpiritJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 2, ragingSpiritLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 23, ragingSpiritLeaveCombat)
+RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 38, ragingSpiritDoAction)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 1, spiritWardenJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 2, spiritWardenLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 4, spiritWardenDied)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 23, spiritWardenLeaveCombat)
+RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 22, valkyrIsSummonedBy)
+RegisterCreatureEvent(ENTRY_VILE_SPIRIT, 4, vileSpiritDied)
 
 -- C++ npc_terenas_menethil::DamageTaken (:1733-1752): lethal damage
 -- is clamped to health-1 (sara second-return precedent); then, only
