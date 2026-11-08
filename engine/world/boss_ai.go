@@ -20499,13 +20499,21 @@ func init() {
 	// JustEngagedWith is _firstPull-gated (START_TIMER on first pull vs
 	// AGGRO later — no flag bridge, no single C++-exact yell), the 2.5%
 	// _fightWon damage=0 + outro machine are ported (tick 259:
-	// OUTRO_START DONE + OUTRO_1..11 chain), the
-	// collapsing-star summon Talk-only pair and the big-bang phase-machine
-	// choreography are bridge-blocked — documented in the lua header.
+	// OUTRO_START DONE + OUTRO_1..11 chain; tick 480 retires the 7s
+	// walk-time estimate — OUTRO_2 MoveTo + ev28 arrival gate, OUTRO_1
+	// ResetAllThreat, EnterEvadeMode SetImmuneToPC clear); the
+	// collapsing-star DamageTaken + JustSummoned arms (incl. MoveRandom),
+	// the black-hole Reset + SpellHit arms, the constellation SpellHit +
+	// phase-trigger periodic, the remove-phase periodic, the ascend
+	// EVENT_EVADE leg (EnterEvadeMode) and the Brann outro Talk are
+	// ported (tick 480) — the remaining big-bang SetPhase/DoAction/RESUME
+	// legs, the intro/outro spline machines and the GO stay bridge-blocked,
+	// documented in the lua header.
 	// Timer-driven cast ports (CreateLuaEvent): QUANTUM_STRIKE,
 	// PHASE_PUNCH, COSMIC_SMASH (Talk 10 + cast), ASCEND_TO_THE_HEAVENS
-	// (Talk 9 + cast, one-shot — the 2.5s-later EVENT_EVADE leg has no
-	// bridge), BIG_BANG, COLLAPSING_STAR — all non-triggered, all
+	// (Talk 9 + cast, one-shot — the 2.5s-later EVENT_EVADE leg is
+	// ported tick 480 via creature:EnterEvadeMode), BIG_BANG,
+	// COLLAPSING_STAR — all non-triggered, all
 	// 500ms IsCasting-deferred under the boss UpdateAI pre-loop
 	// (:520) + in-loop (:702) CASTING gates, both PHASE_ROLE_PLAY-
 	// exempt, so the intro-timer and start-combat ticks (which fire

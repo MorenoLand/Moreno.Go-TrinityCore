@@ -90,8 +90,9 @@
 -- damage = 0 + the outro event machine (REACT_PASSIVE, AttackStop,
 -- SPELL_SELF_STUN self-cast, summons.DespawnAll, EVENT_OUTRO_START ...)
 -- — PORTED tick 259 (outroStart..outro11 below); the MovePoint arrival
--- gate for OUTRO_3 rides a documented 7s walk-time estimate, and the
--- ResetThreatList / summons.DespawnAll legs stay out (no bridges).
+-- gate for OUTRO_3 is PORTED tick 480 (MoveTo + ev28) and the
+-- ResetThreatList leg is PORTED tick 480 (ResetAllThreat); only
+-- summons.DespawnAll stays out (no bridge).
 -- Timer Talks — 2026-10-14 retraction re-audit (C++ line refs): algalon's
 -- Cast-state gates PORTED 2026-11-04: quantum strike / phase punch /
 -- cosmic smash / ascend / big bang / collapsing star defer 500ms on
@@ -130,9 +131,9 @@
 -- non-first-pull (:372) and EVENT_START_COMBAT (:555, 16s, first-pull
 -- only) — both now ported via the _firstPull latch above.
 -- Outro machine: Talk 12..16 (:664-682, EVENT_OUTRO_6..10) chained from the
--- DamageTaken _fightWon branch (:483-495) via MovementInform spline arrival
--- (:413) and a Brann-summon DoAction(:657-661) — unbridged; a Talk-only
--- port would strand the boss without the outro.
+-- DamageTaken _fightWon branch (:483-495) via the MovementInform arrival
+-- (:413, PORTED tick 480: MoveTo + ev28) and a Brann-summon DoAction
+-- (:657-661, ported tick 259).
 -- Despawn machine: Talk 17..19 (:689-697, 5s/17s/26s) on
 -- DoAction(EVENT_DESPAWN_ALGALON) — fired by the instance script on the
 -- one-hour instance timer (instance_ulduar.cpp:774/1009, ulduar.h:499), not
@@ -141,20 +142,23 @@
 -- 230) — Talk(SAY_BRANN_ALGALON_INTRO_1 0) (EVENT_BRANN_SAY_INTRO_1),
 -- Talk(SAY_BRANN_ALGALON_INTRO_2 1) (DoAction ACTION_INTRO_2),
 -- Talk(SAY_BRANN_ALGALON_OUTRO 2) (EVENT_BRANN_OUTRO_1) — DoAction /
--- MovementInform / timer-gated; the senders are algalon's unported
--- intro/outro scheduler (:553/:660) and brann is unregistered
--- (dispatch IS bridged — ev38); no registration.
--- npc_collapsing_starAI DamageTaken — the _dying latch damage=0 rewrite +
--- SPELL_BLACK_HOLE_SPAWN_VISUAL / SPELL_SUMMON_BLACK_HOLE self-casts —
--- no Talk arm; the casts themselves are bridgeable (triggered
--- self-cast), but the summoned star AI has no registration yet
--- (the summon leg itself IS ported in collapsingStarTick — the stale
--- "no summon bridge" claim is retracted); the star arms stay out on
--- registration grounds (NPC_COLLAPSING_STAR 32955 entry-verifiable,
--- ulduar.h line 234).
--- npc_living_constellation / npc_black_hole — no Talk arms; no
--- registrations (NPC_LIVING_CONSTELLATION 33052 / NPC_BLACK_HOLE 32953
--- entry-verifiable, ulduar.h lines 232 / 235).
+-- MovementInform / timer-gated; the intro senders ride algalon's
+-- unported intro machine. The OUTRO Talk IS ported tick 480
+-- (brannDoAction, ev38 action 4 -> 92.2s one-shot); the 2min spline
+-- leg stays out (no MoveAlongSplineChain bridge).
+-- npc_collapsing_starAI — PORTED tick 480 (NPC_COLLAPSING_STAR 32955
+-- entry-verifiable, ulduar.h line 234): DamageTaken _dying latch +
+-- damage=0 rewrite + SPELL_BLACK_HOLE_SPAWN_VISUAL self-cast (62003)
+-- + black-hole summon (62189 rides an explicit SummonCreature — the
+-- DBC spell-summon path is dead with no Spell.dbc shipped, the
+-- jaraxxus tick-410 precedent) + JustSummoned black-hole relay
+-- (despawn 1ms). No Talk arm in either.
+-- npc_living_constellation / npc_black_hole — no Talk arms.
+-- PORTED tick 480: constellation SpellHit (65509 -> timed-achievement
+-- start + 65312 + 64391 + 500ms despawn); black-hole Reset (four
+-- triggered self-casts) + SpellHit (64391 -> 1ms despawn; the
+-- _summons.DespawnAll leg stays out — no summon-list bridge). NPC_LIVING_CONSTELLATION 33052 /
+-- NPC_BLACK_HOLE 32953 entry-verifiable, ulduar.h lines 232 / 235.
 -- npc_living_constellation DoAction(ACTION_ACTIVATE_STAR) (:745-750):
 -- SetReactState(REACT_AGGRESSIVE) + RemoveFlag(NOT_SELECTABLE) +
 -- AttackStart + DoZoneInCombat — fired by the
@@ -169,16 +173,18 @@
 -- Algalon takes the first-pull intro in Lua where C++ takes the 8s one.
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.
--- The remaining spell scripts (spell_algalon_phase_constellation /
--- spell_algalon_trigger_3_adds / spell_algalon_big_bang /
--- spell_algalon_remove_phase / spell_algalon_cosmic_smash /
--- spell_algalon_cosmic_smash_damage / spell_algalon_supermassive_fail)
--- — SpellScript / AuraScript — no SpellScript / AuraScript bridges;
--- all join the no-SpellScript / no-AuraScript-bridge queues.
--- spell_algalon_phase_punch, spell_algalon_black_hole_phase_shifts
--- and spell_algalon_collapse are PORTED below (RegisterAuraEvent
+-- The remaining spell scripts (spell_algalon_trigger_3_adds /
+-- spell_algalon_big_bang / spell_algalon_cosmic_smash /
+-- spell_algalon_cosmic_smash_damage) — SpellScript — no SpellScript
+-- bridge; they join the no-SpellScript-bridge queue.
+-- spell_algalon_phase_punch, spell_algalon_black_hole_phase_shifts,
+-- spell_algalon_collapse, spell_algalon_phase_constellation and
+-- spell_algalon_remove_phase are PORTED below (RegisterAuraEvent
 -- periodic / apply / remove — the RemoveAura single-application twin
--- covers their RemoveAurasDueToSpell legs).
+-- covers their RemoveAurasDueToSpell legs; the phase-constellation
+-- trigger read rides aura:GetTriggerSpell, the mother_shahraz
+-- precedent). spell_algalon_supermassive_fail is PORTED via ev15
+-- (algalonSupermassiveFail below).
 -- achievement_he_feeds_on_your_tears (OnCheck: GetData
 -- DATA_HAS_FED_ON_TEARS) — PORTED 2026-11-08 (tick 416): the KilledUnit
 -- latch rides algalonTargetDied below; Go case in
@@ -191,6 +197,7 @@ local NPC_BRANN_BRONZEBEARD_ALG = 34064 -- ulduar.h:230
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local UNIT_FLAG_IMMUNE_TO_NPC = 0x200
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h:132
 local UNIT_FLAG_RENAME = 0x00000010
 local FACTION_FRIENDLY = 35
 local UNIT_STAND_STATE_STAND = 0
@@ -303,6 +310,9 @@ end
 -- Forward declarations for the outro chain (tharon_ja/gal_darah
 -- idiom: plain assignments below, never `local function` re-declares).
 local outroStart, outro1, outro2, outro3, outro4, outro5, outro6, outro7, outro8, outro9, outro10, outro11
+
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:36
+local POINT_ALGALON_OUTRO = 4 -- AlgalonMovePoints enum, boss_algalon_the_observer.cpp:196-201
 
 -- C++ DamageTaken: if (!_phaseTwo && me->HealthBelowPctDamaged(20,
 -- damage)) { _phaseTwo = true; Talk(SAY_ALGALON_PHASE_TWO); <unbridgeable
@@ -431,11 +441,13 @@ outroStart = function(creature, guid)
     scanHeraldItemLevels(creature, true) -- C++ DONE weapons recheck (instance_ulduar.cpp:700-709)
 end
 
--- EVENT_OUTRO_1 (:637-642): RemoveAllAuras, ResetThreatList (no
--- bridge — stays out), SetFaction(FRIENDLY), RENAME flag, then
--- OUTRO_2 in 2s.
+-- EVENT_OUTRO_1 (:637-642): RemoveAllAuras, ResetThreatList
+-- (PORTED tick 480 — creature:ResetAllThreat, the
+-- ScriptedAI::ResetThreatList twin, lua_creature_events.go:2071),
+-- SetFaction(FRIENDLY), RENAME flag, then OUTRO_2 in 2s.
 outro1 = function(creature, guid)
     creature:RemoveAllAuras()
+    creature:ResetAllThreat()
     creature:SetFaction(FACTION_FRIENDLY)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_RENAME)
     CreateLuaEvent(function()
@@ -444,18 +456,31 @@ outro1 = function(creature, guid)
 end
 
 -- EVENT_OUTRO_2 (:643-648): SetRegenerateHealth(false), CombatStop,
--- MovePoint(POINT_ALGALON_OUTRO) — no MovePoint bridge, so the
--- MovementInform arrival gate (:405-414, OUTRO_3 1s after arrival)
--- is approximated: LandPos (1632.668, -302.7656) to OutroPos
--- (1633.64, -317.78) is ~15yd at walk 2.5yd/s (~6s) + 1s inform
--- delay = 7s. OUTRO_3 fires from this estimate, not from an
--- arrival — documented timing approximation.
+-- MovePoint(POINT_ALGALON_OUTRO 4, AlgalonOutroPos 1633.64, -317.78,
+-- 417.3211) — PORTED tick 480 (creature:MoveTo,
+-- lua_creature_events.go:4838; the arrival gate below replaces the
+-- old 7s walk-time estimate — both bridges landed after the tick-259
+-- outro port). The MovementInform arrival (:405-414) fires OUTRO_3
+-- 1s after landing.
 outro2 = function(creature, guid)
     creature:SetRegenerateHealth(false)
     creature:CombatStop()
+    creature:MoveTo(POINT_ALGALON_OUTRO, 1633.64, -317.78, 417.3211)
+end
+
+-- C++ boss_algalon_the_observerAI::MovementInform (:405-414):
+-- POINT_MOTION_TYPE (8) + POINT_ALGALON_OUTRO (4) -> SetFacingTo
+-- (1.605703) + EVENT_OUTRO_3 in 1s. The ev28 MovementInform bridge
+-- (creaturemotion.go:5723) fires on the script-spline landing
+-- (razorscale MovementInform precedent).
+local function algalonMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_ALGALON_OUTRO then
+        return
+    end
+    creature:SetFacingTo(1.605703)
     CreateLuaEvent(function()
-        outro3(creature, guid)
-    end, 7000)
+        outro3(creature, creature:GetGUID())
+    end, 1000)
 end
 
 -- EVENT_OUTRO_3 (:649-653): DoCastAOE(SPELL_KILL_CREDIT)
@@ -554,6 +579,9 @@ local function algalonReset(event, creature)
     if creature:IsAlive() then
         creature:SetBossState(BOSS_ALGALON, 2) -- FAIL
         creature:SetBossState(BOSS_ALGALON, 0) -- _Reset() NOT_STARTED
+        -- EnterEvadeMode SetImmuneToPC(false) (boss_algalon_the_observer.cpp:453):
+        -- RemoveFlag(59, 0x100) twin (saurfang / kelthuzad precedent).
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
     end
     -- The SetSheath(UNARMED) leg is ported — Algalon drew his weapon
     -- at the intro timer (:563 MELEE).
@@ -563,6 +591,27 @@ local function algalonReset(event, creature)
     creature:SetReactState(0) -- REACT_PASSIVE
 end
 
+-- C++ npc_brann_bronzebeard_algalonAI::DoAction(ACTION_OUTRO)
+-- (boss_algalon_the_observer.cpp:895-899): spline out + two timers;
+-- EVENT_BRANN_OUTRO_1 (1min+32s+200ms, :950-952) is a pure Talk
+-- (SAY_BRANN_ALGALON_OUTRO 2) and is ported as a one-shot; the 2min
+-- spline leg stays out (no MoveAlongSplineChain bridge). The sender
+-- is outro5's Brann summon + DoAction above; the intro senders
+-- (ACTION_START_INTRO / ACTION_INTRO_2) ride the unported intro
+-- machine.
+local SAY_BRANN_ALGALON_OUTRO = 2
+
+local function brannDoAction(event, creature, action)
+    if action ~= ACTION_OUTRO then
+        return
+    end
+    CreateLuaEvent(function()
+        creature:Talk(SAY_BRANN_ALGALON_OUTRO)
+    end, 92200)
+end
+
+RegisterCreatureEvent(NPC_BRANN_BRONZEBEARD_ALG, 38, brannDoAction)
+RegisterCreatureEvent(ENTRY_ALGALON, 28, algalonMovementInform)
 RegisterCreatureEvent(ENTRY_ALGALON, 3, algalonTargetDied)
 RegisterCreatureEvent(ENTRY_ALGALON, 9, algalonDamageTaken)
 RegisterCreatureEvent(ENTRY_ALGALON, 23, algalonReset)
@@ -598,11 +647,10 @@ RegisterCreatureEvent(ENTRY_ALGALON, 15, algalonSupermassiveFail)
 -- 8s later pulls, :364-386) — the 2026-10-16 "re-pull 8s path always"
 -- deviation is superseded by the latch port above. (2)
 -- EVENT_ASCEND_TO_THE_HEAVENS schedules EVENT_EVADE 2.5s later
--- (EnterEvadeMode); only the Talk+cast arm is ported, so the lua
--- boss stays in combat ~2.5s past enrage — the EVADE trigger itself
--- has no bridge (no EnterEvadeMode binding, event 25 unused). The
--- evade SetBossState FAIL + _Reset NOT_STARTED legs ARE ported in
--- algalonReset (tick 259) for any evade the Go engine does drive.
+-- (EnterEvadeMode) — PORTED tick 480 (creature:EnterEvadeMode,
+-- lua_creature_events.go:5014; the old "no bridge" note is stale).
+-- The evade SetBossState FAIL + _Reset NOT_STARTED legs ARE ported
+-- in algalonReset (tick 259) for any evade the Go engine does drive.
 -- The evade SetSheath(SHEATH_STATE_UNARMED) leg IS ported (algalonReset, bridge
 -- landed 2026-10-20). (3)
 -- (3) EVENT_SUMMON_COLLAPSING_STAR (Talk 5/6 + four SummonCreature legs)
@@ -624,6 +672,19 @@ local SPELL_COLLAPSE = 62018 -- boss_algalon_the_observer.cpp:94
 local SPELL_BIG_BANG = 64443 -- boss_algalon_the_observer.cpp:82
 local SPELL_BLACK_HOLE_PHASE_SHIFTS = 62168
 local SPELL_BLACK_HOLE_DOT = 62169 -- boss_algalon_the_observer.cpp:106
+local SPELL_BLACK_HOLE_SPAWN_VISUAL = 62003 -- boss_algalon_the_observer.cpp:95
+local SPELL_SUMMON_BLACK_HOLE = 62189 -- boss_algalon_the_observer.cpp:96
+local SPELL_BLACK_HOLE_TRIGGER = 62185 -- boss_algalon_the_observer.cpp:99
+local SPELL_BLACK_HOLE_EXPLOSION = 64122 -- boss_algalon_the_observer.cpp:102
+local SPELL_SUMMON_VOID_ZONE_VISUAL = 64470 -- boss_algalon_the_observer.cpp:103
+local SPELL_DESPAWN_BLACK_HOLE = 64391 -- boss_algalon_the_observer.cpp:91
+local SPELL_BLACK_HOLE_CREDIT = 65312 -- boss_algalon_the_observer.cpp:105
+local SPELL_CONSTELLATION_PHASE_TRIGGER = 65508 -- boss_algalon_the_observer.cpp:100
+local SPELL_CONSTELLATION_PHASE_EFFECT = 65509 -- boss_algalon_the_observer.cpp:101
+local SPELL_REMOVE_PHASE = 64445 -- boss_algalon_the_observer.cpp:1170 (spell_algalon_remove_phase)
+local NPC_BLACK_HOLE = 32953 -- ulduar.h:235
+local EVENT_ID_SUPERMASSIVE_START = 21697 -- boss_algalon_the_observer.cpp:183
+local ACHIEVEMENT_TIMED_TYPE_EVENT = 1 -- xt002 precedent (boss_xt002.lua:274)
 
 local ENTRY_LIVING_CONSTELLATION = 33052
 
@@ -725,6 +786,15 @@ local function ascendTick(creature, guid)
     end
     creature:Talk(SAY_ALGALON_ASCEND)
     creature:CastSpell(creature, SPELL_ASCEND_TO_THE_HEAVENS)
+    -- C++ EVENT_ASCEND_TO_THE_HEAVENS (:618-622) schedules EVENT_EVADE
+    -- 2.5s later (:623-625) -> EnterEvadeMode(EVADE_REASON_OTHER)
+    -- (boss_algalon_the_observer.cpp:449-455: FAIL then _Reset
+    -- NOT_STARTED, both ported in algalonReset). Raw one-shot, not in
+    -- the timers table: the evade itself fires ev2/ev23, which cancel
+    -- the table.
+    CreateLuaEvent(function()
+        creature:EnterEvadeMode()
+    end, 2500)
 end
 
 -- C++ EVENT_BIG_BANG: Talk(SAY_ALGALON_BIG_BANG 7) +
@@ -782,11 +852,13 @@ end
 -- Repeat(1min) (:394, :594-600 verified). The stale "no summon
 -- bridge" claim is retracted for this leg. Delta: the star AI's own arms
 -- are unported, but the boss JustSummoned star case is ported below
--- (algalonJustSummoned: PASSIVE + triggered COLLAPSE; MoveRandom out).
+-- (algalonJustSummoned: PASSIVE + MoveRandom + triggered COLLAPSE).
 -- C++ boss_algalon_the_observerAI::JustSummoned (boss_algalon_the_observer.cpp:417-425),
--- collapsing-star case only: SetReactState PASSIVE + triggered COLLAPSE
--- self-cast, in C++ order. MoveRandom(20.0) stays out (no Move* bridge,
--- moverandom census). The other switch cases stay out: void-zone /
+-- collapsing-star case only: SetReactState PASSIVE + MoveRandom(20.0)
+-- + triggered COLLAPSE self-cast, in C++ order. MoveRandom is PORTED
+-- tick 480 (summon:MoveRandom, lua_creature_events.go:4962; Go
+-- launches a single walk spline vs C++'s continuous wander generator
+-- — documented deviation). The other switch cases stay out: void-zone /
 -- asteroid / worm-hole stalkers and dark matter are never summoned by
 -- the Lua (only COLLAPSING_STAR 32955 is), so their arms would be dead
 -- code; summons.Summon bookkeeping has no Go twin.
@@ -795,6 +867,7 @@ local function algalonJustSummoned(event, creature, summon)
         return
     end
     summon:SetReactState(0) -- REACT_PASSIVE
+    summon:MoveRandom(20) -- C++ :423, in arm order before the COLLAPSE cast
     summon:CastSpell(summon, SPELL_COLLAPSE, true)
 end
 
@@ -816,6 +889,76 @@ local function collapsingStarTick(creature, guid)
         collapsingStarTick(creature, guid)
     end)
 end
+
+-- C++ npc_collapsing_starAI::DamageTaken
+-- (boss_algalon_the_observer.cpp:862-879): while _dying, damage = 0;
+-- on lethal damage set _dying, damage = 0, self-cast
+-- SPELL_BLACK_HOLE_SPAWN_VISUAL (62003) triggered + summon the black
+-- hole (SPELL_SUMMON_BLACK_HOLE 62189 — the summon rides an explicit
+-- SummonCreature at the star's position: the DBC spell-summon path
+-- is dead with no Spell.dbc shipped, the jaraxxus tick-410
+-- precedent; the 62189 cast itself still fires for the cast
+-- broadcast). The damage rewrite rides the return-false,0
+-- convention (algalonDamageTaken above; ev9 consumes only the second
+-- return, lua_creature_events.go:6955). The lethal check is
+-- C++-exact (damage >= health).
+local collapsingStarDying = {}
+
+local function collapsingStarDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if collapsingStarDying[guid] then
+        return false, 0
+    end
+    if damage >= creature:GetHealth() then
+        collapsingStarDying[guid] = true
+        creature:CastSpell(creature, SPELL_BLACK_HOLE_SPAWN_VISUAL, true)
+        creature:CastSpell(creature, SPELL_SUMMON_BLACK_HOLE, true)
+        creature:SummonCreature(NPC_BLACK_HOLE, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 7, 0)
+        return false, 0
+    end
+end
+
+-- C++ npc_collapsing_starAI::JustSummoned
+-- (boss_algalon_the_observer.cpp:851-860): when the star's summon is a
+-- black hole, relay to algalon's JustSummoned (a no-op for the black
+-- hole entry — no switch case, :417-445) and despawn in 1ms.
+local function collapsingStarJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= NPC_BLACK_HOLE then
+        return
+    end
+    collapsingStarDying[creature:GetGUID()] = nil
+    creature:DespawnOrUnsummon(1)
+end
+
+RegisterCreatureEvent(NPC_COLLAPSING_STAR, 9, collapsingStarDamageTaken)
+RegisterCreatureEvent(NPC_COLLAPSING_STAR, 19, collapsingStarJustSummoned)
+
+-- C++ npc_black_holeAI::Reset (boss_algalon_the_observer.cpp:818-825):
+-- REACT_PASSIVE + four triggered self-casts in C++ order (62185 AoE,
+-- 65508 self, 64122 AoE, 64470 self). ev23 fires at spawn
+-- (fireCreatureSpawned pre-fire, lua_creature_events.go:7264), so
+-- the Reset arm runs for spell-summoned black holes too. The 64470
+-- void-zone-visual summon rides the dead DBC spell-summon path
+-- (cast broadcast only); the 65508 aura feeds the periodic below.
+local function blackHoleReset(event, creature)
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:CastSpell(creature, SPELL_BLACK_HOLE_TRIGGER, true)
+    creature:CastSpell(creature, SPELL_CONSTELLATION_PHASE_TRIGGER, true)
+    creature:CastSpell(creature, SPELL_BLACK_HOLE_EXPLOSION, true)
+    creature:CastSpell(creature, SPELL_SUMMON_VOID_ZONE_VISUAL, true)
+end
+
+-- C++ npc_black_holeAI::SpellHit (boss_algalon_the_observer.cpp:832-839):
+-- SPELL_DESPAWN_BLACK_HOLE (64391) despawns the hole in 1ms. The
+-- _summons.DespawnAll leg stays out (no summon-list bridge).
+local function blackHoleSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_DESPAWN_BLACK_HOLE then
+        creature:DespawnOrUnsummon(1)
+    end
+end
+
+RegisterCreatureEvent(NPC_BLACK_HOLE, 23, blackHoleReset)
+RegisterCreatureEvent(NPC_BLACK_HOLE, 14, blackHoleSpellHit)
 
 -- C++ JustEngagedWith (boss_algalon_the_observer.cpp:362-386): the
 -- _firstPull latch chooses the arm. First pull (:377-387):
@@ -959,6 +1102,38 @@ local function constellationEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ npc_living_constellationAI::SpellHit
+-- (boss_algalon_the_observer.cpp:768-781): a creature caster of
+-- SPELL_CONSTELLATION_PHASE_EFFECT (65509) starts the supermassive
+-- timed achievement (EVENT_ID_SUPERMASSIVE_START 21697), casts
+-- SPELL_BLACK_HOLE_CREDIT (65312) triggered on itself (C++ nullptr
+-- target — the credit spell is self-targeted; the Go nil-target
+-- form would fall back to the victim, which a black hole has none,
+-- so the DoCastAOE self-cast twin is used), the constellation casts
+-- SPELL_DESPAWN_BLACK_HOLE (64391) triggered on the caster, then
+-- despawns in 500ms. DORMANT until the 65508/65509 chain lands
+-- (black-hole Reset + phase-constellation periodic below): no
+-- 65509 hit, no SpellHit fire.
+local function constellationSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_CONSTELLATION_PHASE_EFFECT then
+        return
+    end
+    if not caster or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, EVENT_ID_SUPERMASSIVE_START)
+        end
+    end
+    caster:CastSpell(caster, SPELL_BLACK_HOLE_CREDIT, true)
+    creature:CastSpell(caster, SPELL_DESPAWN_BLACK_HOLE, true)
+    creature:DespawnOrUnsummon(500)
+end
+
+
 RegisterCreatureEvent(ENTRY_ALGALON, 1, algalonTimersStart)
 RegisterCreatureEvent(ENTRY_ALGALON, 2, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_ALGALON, 4, algalonTimersStop)
@@ -967,6 +1142,7 @@ RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 1, constellationEnterCombat)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 2, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 4, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 23, algalonTimersStop)
+RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 14, constellationSpellHit)
 
 -- C++ spell_algalon_black_hole_phase_shifts::HandleEffectApply
 -- (boss_algalon_the_observer.cpp:1258-1262): EFFECT_0 PHASE. The
@@ -1028,3 +1204,39 @@ local function collapseTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_COLLAPSE, 1, collapseTick)
+
+-- C++ spell_algalon_phase_constellation::HandlePeriodic
+-- (boss_algalon_the_observer.cpp:1069-1092): EFFECT_0
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL. PreventDefaultAction; the target
+-- casts the DBC trigger spell of EFFECT_0 (aura:GetTriggerSpell(0) —
+-- 65509 per the C++ SPELL_CONSTELLATION_PHASE_EFFECT enum pairing,
+-- :100-101) with SPELLVALUE_MAX_TARGETS=1. The max-targets mod is
+-- unbridgeable (same class as arcane barrage); the trigger read is 0
+-- without Spell.dbc, so the handler never fires a bogus cast
+-- (mother_shahraz / broggok precedent). Returns true, the
+-- PreventDefaultAction twin, so the Go default trigger cast does not
+-- double-fire. DORMANT until Spell.dbc ships 65508.
+local function phaseConstellationPeriodic(event, aura, target)
+    local trigger = aura:GetTriggerSpell(0)
+    if trigger ~= 0 then
+        target:CastSpell(target, trigger, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_CONSTELLATION_PHASE_TRIGGER, 1, phaseConstellationPeriodic)
+
+-- C++ spell_algalon_remove_phase::HandlePeriodic
+-- (boss_algalon_the_observer.cpp:1170-1185): EFFECT_0
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL. PreventDefaultAction; the target
+-- removes its SPELL_AURA_PHASE auras (261, SpellAuraDefines.h:341).
+-- The bridge is live on both surfaces (lua_creature_events.go:1625,
+-- lua_player.go:3639). Returns true, the PreventDefaultAction twin.
+local SPELL_AURA_PHASE = 261 -- SpellAuraDefines.h:341
+
+local function removePhasePeriodic(event, aura, target)
+    target:RemoveAurasByType(SPELL_AURA_PHASE)
+    return true
+end
+
+RegisterAuraEvent(SPELL_REMOVE_PHASE, 1, removePhasePeriodic)
