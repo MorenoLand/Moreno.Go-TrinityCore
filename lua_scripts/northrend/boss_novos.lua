@@ -83,7 +83,8 @@
 -- absent — whole machine documented-only.
 -- MoveInLineOfSight — the _ohNovos latch (Initialize/Reset true;
 -- flips false when a HULKING_CORPSE 27597 / RISEN_SHADOWCASTER 27600
--- / FETID_TROLL_CORPSE 27598 crosses y > -771.95f) — no grid/
+-- / FETID_TROLL_CORPSE 27598 enters LOS at y <= -771.95f — C++
+-- returns early above MAX_Y_COORD_OH_NOVOS) — no grid/
 -- MoveInLineOfSight bridge — documented-only.
 -- GetData(DATA_NOVOS_ACHIEV) (type == DATA_NOVOS_ACHIEV && _ohNovos
 -- ? 1 : 0) — no cross-AI GetData bridge; its only caller is

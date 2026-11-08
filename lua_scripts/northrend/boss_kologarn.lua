@@ -28,7 +28,9 @@
 -- The stale "no timer-event / cast bridges" doctrine is
 -- disproved: CreateLuaEvent + CastSpell are real bridges
 -- (the baltharus convention). Timer-driven UNGATED arms port;
--- vehicle/arm-gated arms stay out (the gothik precedent).
+-- vehicle/arm-gated arms port once the PassengerBoarded latches
+-- have a bearer (the gothik precedent still bars ungated
+-- timer ports of gated arms).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 5 OnSpawn, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms):
@@ -91,21 +93,28 @@
 -- (lua_creature_events.go:5917; the maiden_of_grief precedent) +
 -- RemoveFlag(NOT_SELECTABLE) (ported, see kologarnReset);
 -- eyebeamTarget.Clear() has no summon-list bridge.
--- PassengerBoarded — Talk(SAY_LEFT_ARM_GONE 2) (cpp:170) /
--- Talk(SAY_RIGHT_ARM_GONE 3) (cpp:180) on arm detach, arm-damage
--- SPELL_ARM_DEAD_DAMAGE 63629 + rubble-stalker
--- SPELL_FALLING_RUBBLE 63821 / SPELL_SUMMON_RUBBLE 63633,
--- EVENT_STONE_SHOUT scheduling (cpp:200) /
--- CRITERIA_DISARMED timed-achievement start, and the attach
--- branch (EVENT_STONE_SHOUT cancel + DoZoneInCombat) — no
--- PassengerBoarded bridge.
+-- PassengerBoarded — PORTED 2026-11-08 via RegisterVehicleEvent
+-- (5 add / 6 remove; the warhead precedent) + the new
+-- InstanceData:StartTimedAchievement bridge: Talk(SAY_LEFT_ARM_GONE
+-- 2) (cpp:170) / Talk(SAY_RIGHT_ARM_GONE 3) (cpp:180) on arm detach
+-- + 40s respawn schedule, arm-damage SPELL_ARM_DEAD_DAMAGE 63629 +
+-- rubble-stalker SPELL_FALLING_RUBBLE 63821 / SPELL_SUMMON_RUBBLE
+-- 63633 + arm despawn (inside the stalker-found leg, cpp:194-197),
+-- EVENT_STONE_SHOUT scheduling (cpp:200) / CRITERIA_DISARMED 21687
+-- timed-achievement start (type 1), and the attach branch
+-- (EVENT_STONE_SHOUT cancel + DoZoneInCombat on the arm). The
+-- stale "no PassengerBoarded bridge" claim is retracted: the
+-- add/remove fire sites are live (vehicle.go install/remove
+-- paths) and the left/right latches now have a bearer.
 -- JustSummoned — PORTED as kologarnJustSummoned (event 19):
 -- directional visuals 63676/63702 + PERIODIC 63347 + VISUAL 63369
 -- (all triggered) + REACT_PASSIVE for eyebeam 33632/33802 and
 -- rubble 33768; NPC_RUBBLE summon bookkeeping has no Lua summon
 -- list; MoveChase(eyebeamTarget) has no motion bridge and stays out.
--- UpdateAI arms that STAY OUT (gothik precedent: porting gated
--- arms on combat-start timers would fabricate casts):
+-- UpdateAI arms (gothik precedent: porting gated arms on
+-- combat-start timers would fabricate casts — the latch-gated
+-- arms below port ONLY because the PassengerBoarded latches
+-- now have a bearer):
 -- EVENT_MELEE_CHECK (cpp:258-261) — PORTED as meleeCheckTick:
 -- DoCast(SPELL_PETRIFY_BREATH 62030) gated on
 -- !me->IsWithinMeleeRange(me->GetVictim()); the gate rides
@@ -115,25 +124,32 @@
 -- victim cast via AISpellInfo (UnitAI.cpp FillAISpellInfo:
 -- TARGET_UNIT_TARGET_ENEMY -> AITARGET_VICTIM), so the Lua
 -- victim-cast (nil target) matches. 6s init, 1s re-arm.
--- EVENT_SWEEP (cpp:263-266) — DoCast(sweep stalker,
--- SPELL_ARM_SWEEP 63766, true) gated on left-arm presence
--- (the PassengerBoarded `left` flag); no PassengerBoarded
--- bridge (boarded-state has no bearer — arm-creature presence is
--- not equivalent); FindNearestCreature IS bridged
--- (lua_creature_events.go:1154) — the stalker search + triggered
--- DoCast are expressible once the gate has a bearer.
--- EVENT_SMASH (cpp:268-273) —
+-- EVENT_SWEEP (cpp:263-266) — PORTED as sweepTick 2026-11-08:
+-- DoCast(sweep stalker, SPELL_ARM_SWEEP 63766, true) gated on the
+-- left latch; stalker via FindNearestCreature(33661, 500)
+-- (lua_creature_events.go:5959); null-stalker skip (the
+-- focused-eyebeam null-selection precedent — C++ DoCast(null)
+-- falls through to Unit::CastSpell target resolution); re-arm
+-- 25s unconditional. 19s init.
+-- EVENT_SMASH (cpp:268-273) — PORTED as smashTick 2026-11-08:
 -- DoCastVictim(SPELL_TWO_ARM_SMASH 63356 / SPELL_ONE_ARM_SMASH
--- 63573) gated on left/right arm presence; no bridge.
--- EVENT_STONE_SHOUT (cpp:275-277) — scheduled ONLY by
--- PassengerBoarded (cpp:200, +5s, re-arm 2s) when BOTH arms
--- detach; not a combat-start event.
--- EVENT_STONE_GRIP (cpp:294-302) — DoCast(SPELL_STONE_GRIP
--- 62166) + Talk(SAY_GRAB_PLAYER 5) + Talk(EMOTE_STONE_GRIP 8)
--- gated on right-arm presence (cpp:296); no bridge.
+-- 63573) gated on the left/right latches; re-arm 15s. 5s init.
+-- EVENT_STONE_SHOUT (cpp:275-277) — PORTED as stoneShoutTick
+-- 2026-11-08: scheduled ONLY by PassengerBoarded (cpp:200, +5s,
+-- re-arm 2s) when BOTH arms detach; DoCast(SPELL_STONE_SHOUT
+-- 63716) self-cast non-triggered.
+-- EVENT_STONE_GRIP (cpp:294-302) — PORTED as stoneGripTick
+-- 2026-11-08: DoCast(SPELL_STONE_GRIP 62166) + Talk(SAY_GRAB_PLAYER
+-- 5) + Talk(EMOTE_STONE_GRIP 8) gated on the right latch; re-arm
+-- 25s unconditional. 25s init.
 -- EVENT_RESPAWN_LEFT_ARM / EVENT_RESPAWN_RIGHT_ARM
--- (cpp:282-292) — VehicleKit InstallAccessory(NPC_LEFT_ARM /
--- NPC_RIGHT_ARM); no vehicle bridge.
+-- (cpp:282-292) — PORTED as respawnArmTick 2026-11-08 via
+-- SummonCreature (default summonType 7 = TEMPSUMMON_MANUAL_DESPAWN)
+-- + GetVehicleKit():AddPassenger(guid, seat 0/1); the board fires
+-- OnAddPassenger, re-arming the latch exactly like C++
+-- InstallAccessory. Documented deviation: the summon spawns at
+-- Kologarn's position and snaps to the seat offset on board;
+-- C++ summons directly at the accessory offset.
 -- (say-text inventory: all nine yells accounted for — SAY_
 -- AGGRO/SLAY/DEATH ported, SAY_BERSERK ported this run,
 -- SAY_LEFT_ARM_GONE/SAY_RIGHT_ARM_GONE + SAY_GRAB_PLAYER/
@@ -179,20 +195,39 @@ local ENTRY_KOLOGARN = 32930
 
 -- DATA_KOLOGARN = 5 (ulduar.h:41).
 local DATA_KOLOGARN = 5
+local BOSS_STATE_IN_PROGRESS = 1
+local ACHIEVEMENT_TIMED_TYPE_EVENT = 1
+local CRITERIA_DISARMED = 21687
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
+local SAY_LEFT_ARM_GONE = 2
+local SAY_RIGHT_ARM_GONE = 3
+local SAY_GRAB_PLAYER = 5
 local SAY_DEATH = 6
 local SAY_BERSERK = 7
+local EMOTE_STONE_GRIP = 8
 
 local SPELL_SUMMON_FOCUSED_EYEBEAM = 63342
 local SPELL_BERSERK = 47008
 local SPELL_KOLOGARN_REDUCE_PARRY = 64651
 local SPELL_PETRIFY_BREATH = 62030
+local SPELL_ARM_DEAD_DAMAGE = 63629
+local SPELL_TWO_ARM_SMASH = 63356
+local SPELL_ONE_ARM_SMASH = 63573
+local SPELL_ARM_SWEEP = 63766
+local SPELL_STONE_SHOUT = 63716
+local SPELL_STONE_GRIP = 62166
+local SPELL_FALLING_RUBBLE = 63821
+local SPELL_SUMMON_RUBBLE = 63633
 
 local ENTRY_FOCUSED_EYEBEAM = 33632
 local ENTRY_FOCUSED_EYEBEAM_RIGHT = 33802
 local ENTRY_RUBBLE = 33768
+local ENTRY_LEFT_ARM = 32933
+local ENTRY_RIGHT_ARM = 32934
+local ENTRY_RUBBLE_STALKER = 33809
+local ENTRY_ARM_SWEEP_STALKER = 33661
 local SPELL_FOCUSED_EYEBEAM_PERIODIC = 63347
 local SPELL_FOCUSED_EYEBEAM_VISUAL = 63369
 local SPELL_FOCUSED_EYEBEAM_VISUAL_LEFT = 63676
@@ -204,6 +239,23 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
 
+-- PassengerBoarded left/right latches (C++ boss_kologarnAI ctor:
+-- left(false), right(false); set only by the vehicle events).
+-- Keyed by Kologarn GUID like the timers table; cleared on death
+-- (the AI instance dies with the boss — a new spawn gets a fresh
+-- GUID). Reset/leave-combat deliberately do NOT clear them:
+-- C++ Reset() never touches left/right.
+local arms = {}
+
+local function armState(guid)
+    local state = arms[guid]
+    if not state then
+        state = { left = false, right = false }
+        arms[guid] = state
+    end
+    return state
+end
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -211,6 +263,14 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+end
+
+local function cancelTimer(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
     end
 end
 
@@ -296,6 +356,101 @@ local function meleeCheckTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SMASH: DoCastVictim(TWO_ARM_SMASH 63356) when both
+-- arms are boarded, else ONE_ARM_SMASH 63573 when either is
+-- (cpp:268-273); 15s re-arm unconditional. 5s init.
+local function smashTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "smash", 500, function()
+            smashTick(creature, guid)
+        end)
+        return
+    end
+    local state = armState(guid)
+    if state.left and state.right then
+        creature:CastSpell(nil, SPELL_TWO_ARM_SMASH)
+    elseif state.left or state.right then
+        creature:CastSpell(nil, SPELL_ONE_ARM_SMASH)
+    end
+    schedule(guid, "smash", 15000, function()
+        smashTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SWEEP: if (left) DoCast(sweep stalker,
+-- SPELL_ARM_SWEEP 63766, true) (cpp:263-266); 25s re-arm
+-- unconditional. 19s init.
+local function sweepTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sweep", 500, function()
+            sweepTick(creature, guid)
+        end)
+        return
+    end
+    local state = armState(guid)
+    if state.left then
+        local stalker = creature:FindNearestCreature(ENTRY_ARM_SWEEP_STALKER, 500)
+        if stalker then
+            creature:CastSpell(stalker, SPELL_ARM_SWEEP, true)
+        end
+    end
+    schedule(guid, "sweep", 25000, function()
+        sweepTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_STONE_SHOUT: DoCast(SPELL_STONE_SHOUT 63716)
+-- (cpp:275-277); 2s re-arm. Scheduled only by PassengerBoarded.
+local function stoneShoutTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stoneshout", 500, function()
+            stoneShoutTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_STONE_SHOUT)
+    schedule(guid, "stoneshout", 2000, function()
+        stoneShoutTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_STONE_GRIP: if (right) { DoCast(SPELL_STONE_GRIP
+-- 62166); Talk(SAY_GRAB_PLAYER 5); Talk(EMOTE_STONE_GRIP 8) }
+-- (cpp:294-302); 25s re-arm unconditional. 25s init.
+local function stoneGripTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stonegrip", 500, function()
+            stoneGripTick(creature, guid)
+        end)
+        return
+    end
+    local state = armState(guid)
+    if state.right then
+        creature:CastSpell(creature, SPELL_STONE_GRIP)
+        creature:Talk(SAY_GRAB_PLAYER)
+        creature:Talk(EMOTE_STONE_GRIP)
+    end
+    schedule(guid, "stonegrip", 25000, function()
+        stoneGripTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_RESPAWN_LEFT_ARM / EVENT_RESPAWN_RIGHT_ARM
+-- (cpp:282-292): VehicleKit InstallAccessory(entry, seat, true,
+-- TEMPSUMMON_MANUAL_DESPAWN, 0) — seat 0 left, 1 right.
+-- SummonCreature's default summonType 7 is the manual-despawn
+-- twin; the board re-fires OnAddPassenger, re-arming the latch.
+local function respawnArmTick(creature, guid, entry, seat)
+    local kit = creature:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    local arm = creature:SummonCreature(entry, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
+    if arm ~= nil then
+        kit:AddPassenger(arm:GetGUID(), seat)
+    end
+end
+
 -- Constructor (boss_kologarn.cpp:107-117) — RemoveFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true, UNIT_STATE_ROOT)
 -- (creature:SetRooted, lua_creature_events.go) + DoCast(self,
@@ -332,6 +487,15 @@ local function kologarnEnterCombat(event, creature, target)
     end)
     schedule(guid, "meleecheck", 6000, function()
         meleeCheckTick(creature, guid)
+    end)
+    schedule(guid, "smash", 5000, function()
+        smashTick(creature, guid)
+    end)
+    schedule(guid, "sweep", 19000, function()
+        sweepTick(creature, guid)
+    end)
+    schedule(guid, "stonegrip", 25000, function()
+        stoneGripTick(creature, guid)
     end)
     -- BossAI::JustEngagedWith(who) is LAST in C++ (boss_kologarn.cpp:136, after the schedules + vehicle-kit DoZone legs):
     -- _JustEngagedWith base order (ScriptedCreature.cpp:527-544):
@@ -375,6 +539,7 @@ end
 -- caster — see header).
 local function kologarnDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    arms[creature:GetGUID()] = nil
     creature:Talk(SAY_DEATH)
     -- C++ boss_kologarn.cpp:151-152: MoveTargetedHome after Talk.
     creature:MoveHome()
@@ -419,3 +584,77 @@ local function kologarnJustSummoned(event, creature, summon)
     summon:SetReactState(REACT_PASSIVE)
 end
 RegisterCreatureEvent(ENTRY_KOLOGARN, 19, kologarnJustSummoned)
+
+-- C++ boss_kologarnAI::PassengerBoarded (boss_kologarn.cpp:162-212)
+-- via RegisterVehicleEvent 5 (add) / 6 (remove): the warhead
+-- handler shape (event, vehicle, passenger, seatId); the remove
+-- event carries no seat, but apply rides the event id. The
+-- left/right flags set even out of combat (cpp:164-185); the Talk
+-- + 40s respawn schedule only when detaching in progress; the
+-- damage/rubble/despawn/shout/timed-achievement legs only when in
+-- progress; the attach branch cancels the shout and zones the arm
+-- in (DoZoneInCombat is the me-form on the passenger).
+local function kologarnPassengerBoarded(event, vehicle, passenger, seatId)
+    if vehicle:GetEntry() ~= ENTRY_KOLOGARN then
+        return
+    end
+    if passenger == nil then
+        return
+    end
+    local entry = passenger:GetEntry()
+    if entry ~= ENTRY_LEFT_ARM and entry ~= ENTRY_RIGHT_ARM then
+        return
+    end
+    local guid = vehicle:GetGUID()
+    local state = armState(guid)
+    local isLeft = entry == ENTRY_LEFT_ARM
+    local apply = event == 5
+    if isLeft then
+        state.left = apply
+    else
+        state.right = apply
+    end
+    local inProgress = vehicle:GetBossState(DATA_KOLOGARN) == BOSS_STATE_IN_PROGRESS
+    if not apply and inProgress then
+        if isLeft then
+            vehicle:Talk(SAY_LEFT_ARM_GONE)
+            schedule(guid, "respawnleftarm", 40000, function()
+                respawnArmTick(vehicle, guid, ENTRY_LEFT_ARM, 0)
+            end)
+        else
+            vehicle:Talk(SAY_RIGHT_ARM_GONE)
+            schedule(guid, "respawnrightarm", 40000, function()
+                respawnArmTick(vehicle, guid, ENTRY_RIGHT_ARM, 1)
+            end)
+        end
+    end
+    if not inProgress then
+        return
+    end
+    if not apply then
+        passenger:CastSpell(vehicle, SPELL_ARM_DEAD_DAMAGE, true)
+        local stalker = passenger:FindNearestCreature(ENTRY_RUBBLE_STALKER, 70)
+        if stalker then
+            stalker:CastSpell(stalker, SPELL_FALLING_RUBBLE, true)
+            stalker:CastSpell(stalker, SPELL_SUMMON_RUBBLE, true)
+            passenger:DespawnOrUnsummon()
+        end
+        if not state.right and not state.left then
+            schedule(guid, "stoneshout", 5000, function()
+                stoneShoutTick(vehicle, guid)
+            end)
+        end
+        local mapObj = vehicle:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data:StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, CRITERIA_DISARMED)
+            end
+        end
+    else
+        cancelTimer(guid, "stoneshout")
+        passenger:DoZoneInCombat()
+    end
+end
+RegisterVehicleEvent(5, kologarnPassengerBoarded)
+RegisterVehicleEvent(6, kologarnPassengerBoarded)

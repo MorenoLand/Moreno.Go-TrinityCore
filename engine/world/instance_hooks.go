@@ -63,6 +63,40 @@ func (s *Server) instanceDataObject(mapID, instanceID uint32) *scripting.Object 
 			_, err = s.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnSetData, obj, instanceMapObject(s, mapID, instanceID), typ, data)
 			return nil, err
 		},
+		// StartTimedAchievement(timedType, entry) is the
+		// InstanceScript::DoStartTimedAchievement bridge
+		// (InstanceScript.h): C++ starts the timed criteria for
+		// every player in the instance; Go starts the
+		// session-side timer (achievements.go
+		// startTimedAchievement, timedTypeEvent = 1) for every
+		// world-ready session on this map+instance. No-op when
+		// Achievement.dbc ships no matching criteria — the
+		// Kologarn CRITERIA_DISARMED (21687) leg rides it.
+		"StartTimedAchievement": func(ctx context.Context, args []any) ([]any, error) {
+			timedType, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			entry, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if s == nil {
+				return nil, nil
+			}
+			s.sessionsMu.RLock()
+			var targets []*session
+			for sess := range s.sessions {
+				if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+					targets = append(targets, sess)
+				}
+			}
+			s.sessionsMu.RUnlock()
+			for _, target := range targets {
+				target.startTimedAchievement(timedType, entry)
+			}
+			return nil, nil
+		},
 	}
 	s.instanceDataObjects[key] = obj
 	return obj
