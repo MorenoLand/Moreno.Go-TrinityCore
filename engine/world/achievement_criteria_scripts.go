@@ -39,6 +39,24 @@ func bossLatchData(s *Server, victim *creatureMotion, dataID uint32) uint32 {
 	return victim.ScriptData[dataID]
 }
 
+// vehicleCreatureEntry is the Go form of Unit::GetVehicleCreatureBase()->
+// GetEntry(): the entry of the creature vehicle the player is riding.
+// The base GUID is the session's VehicleGUID stamp (vehicle.go boarding
+// path); the kit is created at creature spawn with the template entry
+// (creaturemotion.go:1374/1582). A player base (IsPlayer kit) reads
+// false — C++ ToCreature() on a player base is null — as does a
+// missing kit or a player who is not seated.
+func vehicleCreatureEntry(source *session) (uint32, bool) {
+	if source == nil || source.player == nil || source.server == nil || source.player.VehicleGUID == 0 {
+		return 0, false
+	}
+	kit := source.server.getVehicleKit(source.player.Map, source.player.InstanceID, source.player.VehicleGUID)
+	if kit == nil || kit.IsPlayer {
+		return 0, false
+	}
+	return kit.CreatureEntry, true
+}
+
 // checkAchievementCriteriaScript evaluates one DATA_TYPE_SCRIPT criteria gate.
 // source is the player earning the criteria; target is the kill target when the
 // criteria fires from a kill (nil for creature kills and non-kill criteria),
@@ -338,15 +356,23 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		return bossLatchData(source.server, victim, dataKingDredRaptorsKilled) >= 6
 
-	// The remaining registrations are unportable without their Go state:
-	// - achievement_bg_ic_glaive_grave / achievement_bg_ic_mowed_down /
-	//   achievement_bg_sa_artillery: GetVehicleCreatureBase entry checks; Go has no
-	//   vehicle model. C++ returns false when the checks can't be met; without the
-	//   state, false is the only honest verdict, so these are fail-closed.
-	case "achievement_bg_ic_glaive_grave",
-		"achievement_bg_ic_mowed_down",
-		"achievement_bg_sa_artillery":
-		return false
+	case "achievement_bg_ic_glaive_grave": // achievement_scripts.cpp:81-96
+		// The player is riding a glaive thrower (BattlegroundIC.h:41-42:
+		// NPC_GLAIVE_THROWER_A 34802, NPC_GLAIVE_THROWER_H 35273).
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && (entry == 34802 || entry == 35273)
+
+	case "achievement_bg_ic_mowed_down": // achievement_scripts.cpp:98-113
+		// The player is riding a keep cannon (BattlegroundIC.h:37:
+		// NPC_KEEP_CANNON 34944).
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && entry == 34944
+
+	case "achievement_bg_sa_artillery": // achievement_scripts.cpp:115-130
+		// The player is riding an anti-personnel cannon
+		// (BattlegroundSA.h:85: NPC_ANTI_PERSONNAL_CANNON 27894).
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && entry == 27894
 	}
 	return false
 }
