@@ -4720,6 +4720,62 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, id, true)
 		return nil, nil
 	}
+	// MoveLand is MotionMaster::MoveLand (MotionMaster.cpp:674-684) =
+	// a GenericMovementGenerator (EFFECT_MOTION_TYPE 16) with the
+	// ground animation tier: the landing twin of MoveTo, so the
+	// arrival gate fires MovementInform(EFFECT_MOTION_TYPE, id) on
+	// event 28 (creaturemotion.go:5723), exactly as C++ MovementInform
+	// receives it. Backs the razorscale LAND->GROUND descent
+	// (boss_razorscale.cpp:456-462). The player surface stays out
+	// (client-driven movement).
+	methods["MoveLand"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorEffect, id, true)
+		return nil, nil
+	}
+	// MoveTakeoff is MotionMaster::MoveTakeoff
+	// (MotionMaster.cpp:686-696) = a GenericMovementGenerator
+	// (EFFECT_MOTION_TYPE 16) with the hover animation tier: the
+	// takeoff twin of MoveTo, so the arrival gate fires
+	// MovementInform(EFFECT_MOTION_TYPE, id) on event 28
+	// (creaturemotion.go:5723). Backs the razorscale
+	// RESUME_AIR_PHASE lift (boss_razorscale.cpp:631-640). The
+	// player surface stays out (client-driven movement).
+	methods["MoveTakeoff"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorEffect, id, true)
+		return nil, nil
+	}
 	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain
 	// (MotionMaster.cpp:172-194) = the SplineChainMovementGenerator
 	// (SplineChainMovementGenerator.cpp): walk the DB chain

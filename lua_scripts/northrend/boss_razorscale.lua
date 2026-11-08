@@ -234,8 +234,9 @@
 -- achievement_iron_dwarf_medium_rare — PORTED 2026-11-08 (tick 417,
 -- latent; Go case reads the killed guardian's ScriptData slot
 -- 29232924, fail-closed). achievement_quick_shave — Lua legs PORTED
--- 2026-11-08 (tick 417, razorscaleMovementInform below; LATENT — the
--- flight cycle is unported, latch stays 1; the Go gate stays HELD).
+-- 2026-11-08 (tick 417, razorscaleMovementInform below); flight cycle
+-- PORTED 2026-11-08 (tick 453), latch goes live and the Go gate is
+-- un-held (achievement_criteria_scripts.go).
 
 local ENTRY_RAZORSCALE = 33186
 
@@ -273,6 +274,62 @@ local POINT_RAZORSCALE_FLIGHT_2 = 12
 local POINT_MOTION_TYPE = 8
 local razorscaleFlyCount = {}
 
+-- Flight-cycle kit (tick 453): ONE table local (the LK-table
+-- precedent) — the file sits at 199 main-chunk locals, so every new
+-- constant, per-GUID state table and helper rides RS instead of a
+-- fresh top-level local. All C++ refs are boss_razorscale.cpp unless
+-- noted. Phases (RazorscalePhases enum :242-249): NONE 0, COMBAT 1,
+-- GROUND 2, AIR 3, PERMA_GROUND 4. Points (MovePoints enum :217-234):
+-- SHACKLE 2, TAKEOFF 11, FLIGHT_2 12 (top-level local already),
+-- LAND 13, GROUND 14. Actions (Actions enum :133-149).
+local RS = {
+    PHASE_GROUND = 2,
+    PHASE_AIR = 3,
+    PHASE_PERMA_GROUND = 4,
+    POINT_RAZORSCALE_TAKEOFF = 11,
+    POINT_RAZORSCALE_LAND = 13,
+    POINT_RAZORSCALE_GROUND = 14,
+    POINT_SHACKLE_RAZORSCALE = 2,
+    EFFECT_MOTION_TYPE = 16,
+    SPELL_FIREBALL = 63815,
+    SPELL_DEVOURING_FLAME = 63236,
+    SPELL_WING_BUFFET = 62666,
+    SPELL_FIREBOLT = 62669,
+    SPELL_FUSE_ARMOR = 64821,
+    SPELL_FUSED_ARMOR = 64774,
+    SPELL_STUN_SELF = 62794,
+    SPELL_HARPOON_TRIGGER = 62505,
+    SPELL_SHACKLE = 62646,
+    NPC_RAZORSCALE_SPAWNER = 33245,
+    ENTRY_EXPEDITION_TRAPPER = 33259,
+    ENTRY_EXPEDITION_DEFENDER = 33816,
+    ENTRY_RAZORSCALE_CONTROLLER = 33233,
+    ACTION_FIX_HARPOONS = 2,
+    ACTION_GROUND_PHASE = 3,
+    ACTION_SHACKLE_RAZORSCALE = 5,
+    ACTION_START_PERMA_GROUND = 6,
+    ACTION_STOP_CONTROLLERS = 13,
+    ACTION_STOP_CAST = 14,
+    EMOTE_BREATH = 1,
+    EMOTE_PERMA_GROUND = 0,
+    SAY_COMMANDER_GROUND_PHASE = 1,
+    REACT_PASSIVE = 0,
+    REACT_AGGRESSIVE = 1,
+    RAZORSCALE_LAND = {585.401, -173.543, 408.508},
+    RAZORSCALE_GROUND = {585.401, -173.543, 391.6421},
+    RAZORSCALE_FLIGHT_2 = {619.145, -238.078, 475.18},
+    TRAPPER_POSITIONS = {
+        {574.9293, -184.515, 391.8921},
+        {539.7838, -178.5337, 391.3053},
+        {627.1754, -177.9639, 391.5553},
+    },
+    phase = {},
+    permaGround = {},
+    harpoonHits = {},
+    summonCounts = {},
+    trapperNumber = {},
+}
+
 -- boss_razorscale.cpp:177
 local WORLD_STATE_RAZORSCALE_MUSIC = 4162
 
@@ -298,6 +355,396 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Flight-cycle helpers (tick 453). RS-field fns resolve at call time,
+-- so no forward-declare ordering is needed (malown/tharon_ja rule).
+-- Phase is a Lua-side twin of the C++ EventMap phase: arms check it at
+-- fire time and drop without re-arming out of phase, matching the
+-- phase-grouped schedules (:354-381/:620-640). Repeating arms use the
+-- 500ms IsCasting defer (berserkTick idiom) for the UpdateAI pre-loop
+-- CASTING gate (:565). Random targets ride GetPlayersInRange +
+-- math.random (gothik precedent); C++ SelectTarget(Random) reads the
+-- threat list, so adds/players off-threat are the standing delta.
+RS.cancelKey = function(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
+RS.randomPlayer = function(creature)
+    local players = creature:GetPlayersInRange()
+    if #players == 0 then
+        return nil
+    end
+    return players[math.random(#players)]
+end
+
+RS.scheduleAirPhaseEvents = function(creature, guid)
+    schedule(guid, "fireball", 3000, function() RS.fireballTick(creature, guid) end)
+    schedule(guid, "devouring", 9000, function() RS.devouringFlameTick(creature, guid) end)
+    schedule(guid, "summonMinions", 1000, function() RS.summonMinionsTick(creature, guid) end)
+end
+
+RS.scheduleGroundPhaseEvents = function(creature, guid)
+    schedule(guid, "firebolt", 3000, function() RS.fireboltTick(creature, guid) end)
+    schedule(guid, "fuseArmor", 15000, function() RS.fuseArmorTick(creature, guid) end)
+    schedule(guid, "flameBreathGround", 18000, function() RS.flameBreathGroundTick(creature, guid) end)
+    schedule(guid, "devouring", 22000, function() RS.devouringFlameTick(creature, guid) end)
+end
+
+-- C++ EVENT_FIREBALL (:583-587): random target, SPELL_FIREBALL 63815,
+-- repeat {2s,3s} unconditional.
+RS.fireballTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_AIR then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "fireball", 500, function() RS.fireballTick(creature, guid) end)
+        return
+    end
+    local target = RS.randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, RS.SPELL_FIREBALL)
+    end
+    schedule(guid, "fireball", math.random(2000, 3000), function() RS.fireballTick(creature, guid) end)
+end
+
+-- C++ EVENT_DEVOURING_FLAME (:588-596): random target, 63236; repeat
+-- {6s,12s} in air, {10s,12s} perma-ground.
+RS.devouringFlameTick = function(creature, guid)
+    local phase = RS.phase[guid]
+    if phase ~= RS.PHASE_AIR and phase ~= RS.PHASE_PERMA_GROUND then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "devouring", 500, function() RS.devouringFlameTick(creature, guid) end)
+        return
+    end
+    local target = RS.randomPlayer(creature)
+    if target then
+        creature:CastSpell(target, RS.SPELL_DEVOURING_FLAME)
+    end
+    if phase == RS.PHASE_PERMA_GROUND then
+        schedule(guid, "devouring", math.random(10000, 12000), function() RS.devouringFlameTick(creature, guid) end)
+    else
+        schedule(guid, "devouring", math.random(6000, 12000), function() RS.devouringFlameTick(creature, guid) end)
+    end
+end
+
+-- C++ SummonMinions (:547-553): NPC_RAZORSCALE_SPAWNER 33245 at
+-- frand x 540-640, y -230..-195, z 391.517, TEMPSUMMON_TIMED_DESPAWN
+-- (2) 15s.
+RS.summonMinionsOnce = function(creature)
+    local x = 540 + math.random() * 100
+    local y = -230 + math.random() * 35
+    creature:SummonCreature(RS.NPC_RAZORSCALE_SPAWNER, x, y, 391.517, 0, 2, 15000)
+end
+
+-- C++ EVENT_SUMMON_MINIONS (:597-607): 2 spawns (10-man) or urand
+-- (2,4) (25-man), staggered 5s + urand(2,5) steps; repeat 40s.
+RS.summonMinionsTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_AIR then
+        return
+    end
+    local count = 2
+    if creature:Is25ManRaid() then
+        count = math.random(2, 4)
+    end
+    local delay = 5000
+    for i = 1, count do
+        schedule(guid, "minions2_" .. i, delay, function() RS.summonMinionsOnce(creature) end)
+        delay = delay + math.random(2000, 5000)
+    end
+    schedule(guid, "summonMinions", 40000, function() RS.summonMinionsTick(creature, guid) end)
+end
+
+-- C++ EVENT_FLAME_BREATH (:610-615): RemoveAurasDueToSpell(STUN_SELF),
+-- Talk EMOTE_BREATH, DoCastVictim FLAME_BREATH (63317/64021), then
+-- EVENT_WING_BUFFET 2s (PHASE_GROUND). One-shot, no repeat.
+RS.flameBreathTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_GROUND then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "flameBreath", 500, function() RS.flameBreathTick(creature, guid) end)
+        return
+    end
+    creature:RemoveAura(RS.SPELL_STUN_SELF)
+    creature:Talk(RS.EMOTE_BREATH, creature)
+    creature:CastSpell(nil, creature:Is25ManRaid() and SPELL_FLAME_BREATH_25 or SPELL_FLAME_BREATH)
+    schedule(guid, "wingBuffet", 2000, function() RS.wingBuffetTick(creature, guid) end)
+end
+
+-- C++ EVENT_WING_BUFFET (:620-628): DoCastSelf 62666, EVENT_FIREBOLT
+-- 2s + EVENT_RESUME_AIR_PHASE 4s (PHASE_GROUND), trappers
+-- DoAction(ACTION_STOP_CAST).
+RS.wingBuffetTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_GROUND then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "wingBuffet", 500, function() RS.wingBuffetTick(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, RS.SPELL_WING_BUFFET)
+    schedule(guid, "firebolt", 2000, function() RS.fireboltTick(creature, guid) end)
+    schedule(guid, "resumeAir", 4000, function() RS.resumeAirTick(creature, guid) end)
+    for _, trapper in ipairs(creature:GetCreaturesInGrid(RS.ENTRY_EXPEDITION_TRAPPER, 100)) do
+        if trapper:IsAlive() then
+            trapper:DoAction(RS.ACTION_STOP_CAST)
+        end
+    end
+end
+
+-- C++ EVENT_RESUME_AIR_PHASE (:630-640): SetDisableGravity(true),
+-- phase AIR, REACT_PASSIVE, MoveTakeoff(TAKEOFF, pos.z + 10),
+-- engineers DoAction(ACTION_FIX_HARPOONS). The engineer rebuild
+-- machine is unported — the relay call is live for its handler.
+RS.resumeAirTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_GROUND then
+        return
+    end
+    creature:SetDisableGravity(true)
+    RS.phase[guid] = RS.PHASE_AIR
+    creature:SetReactState(RS.REACT_PASSIVE)
+    creature:MoveTakeoff(RS.POINT_RAZORSCALE_TAKEOFF, creature:GetX(), creature:GetY(), creature:GetZ() + 10)
+    for _, engineer in ipairs(creature:GetCreaturesInGrid(ENTRY_EXPEDITION_ENGINEER, 100)) do
+        if engineer:IsAlive() then
+            engineer:DoAction(RS.ACTION_FIX_HARPOONS)
+        end
+    end
+end
+
+-- C++ EVENT_FIREBOLT (:642-644): DoCastSelf 62669. One-shot, no
+-- repeat — scheduled once per wing-buffet (ground) or per perma-ground
+-- schedule.
+RS.fireboltTick = function(creature, guid)
+    local phase = RS.phase[guid]
+    if phase ~= RS.PHASE_GROUND and phase ~= RS.PHASE_PERMA_GROUND then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "firebolt", 500, function() RS.fireboltTick(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, RS.SPELL_FIREBOLT)
+end
+
+-- C++ EVENT_FUSE_ARMOR (:645-650): victim without FUSED_ARMOR 64774
+-- gets FUSE_ARMOR 64821; repeat {10s,15s}.
+RS.fuseArmorTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_PERMA_GROUND then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "fuseArmor", 500, function() RS.fuseArmorTick(creature, guid) end)
+        return
+    end
+    local victim = creature:GetVictim()
+    if victim and not victim:HasAura(RS.SPELL_FUSED_ARMOR) then
+        creature:CastSpell(victim, RS.SPELL_FUSE_ARMOR)
+    end
+    schedule(guid, "fuseArmor", math.random(10000, 15000), function() RS.fuseArmorTick(creature, guid) end)
+end
+
+-- C++ EVENT_FLAME_BREATH_GROUND (:616-619): Talk EMOTE_BREATH,
+-- DoCastVictim FLAME_BREATH, repeat {15s,18s}.
+RS.flameBreathGroundTick = function(creature, guid)
+    if RS.phase[guid] ~= RS.PHASE_PERMA_GROUND then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "flameBreathGround", 500, function() RS.flameBreathGroundTick(creature, guid) end)
+        return
+    end
+    creature:Talk(RS.EMOTE_BREATH, creature)
+    creature:CastSpell(nil, creature:Is25ManRaid() and SPELL_FLAME_BREATH_25 or SPELL_FLAME_BREATH)
+    schedule(guid, "flameBreathGround", math.random(15000, 18000), function() RS.flameBreathGroundTick(creature, guid) end)
+end
+
+-- C++ EVENT_RESUME_MOVE_CHASE (:651-655): SetCombatMovement(true),
+-- MoveChase(victim). One-shot 1ms.
+RS.resumeMoveChaseTick = function(creature, guid)
+    creature:SetCombatMovement(true)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:MoveChase(victim)
+    end
+end
+
+-- C++ DoAction ACTION_GROUND_PHASE (:392-400): InterruptNonMeleeSpells,
+-- phase GROUND, _harpoonHitCount = 0, SetSpeedRate RUN 3.0, MovePoint
+-- LAND (585.401, -173.543, 408.508). Air-phase timers are cancelled —
+-- the C++ phase-grouped events stop firing out of phase, and the
+-- staggered minions2 spawns must not land while grounded.
+RS.groundPhase = function(creature, guid)
+    creature:InterruptNonMeleeSpells(false)
+    RS.phase[guid] = RS.PHASE_GROUND
+    RS.harpoonHits[guid] = 0
+    creature:SetSpeedRate(1, 3.0)
+    creature:MoveTo(RS.POINT_RAZORSCALE_LAND, RS.RAZORSCALE_LAND[1], RS.RAZORSCALE_LAND[2], RS.RAZORSCALE_LAND[3])
+    RS.cancelKey(guid, "fireball")
+    RS.cancelKey(guid, "devouring")
+    RS.cancelKey(guid, "summonMinions")
+    for i = 1, 4 do
+        RS.cancelKey(guid, "minions2_" .. i)
+    end
+end
+
+-- C++ DoAction ACTION_START_PERMA_GROUND (:401-413): SetDisableGravity
+-- (false), RemoveAurasDueToSpell(STUN_SELF), Talk EMOTE_PERMA_GROUND,
+-- DoCastSelf WING_BUFFET, trappers ACTION_STOP_CAST,
+-- EVENT_RESUME_MOVE_CHASE 1ms, ScheduleGroundPhaseEvents. Ground-phase
+-- keys are cancelled (phase-grouped in C++); the devouring key is
+-- overwritten by the 22s perma schedule via schedule().
+RS.startPermaGround = function(creature, guid)
+    creature:SetDisableGravity(false)
+    creature:RemoveAura(RS.SPELL_STUN_SELF)
+    creature:Talk(RS.EMOTE_PERMA_GROUND, creature)
+    creature:CastSpell(creature, RS.SPELL_WING_BUFFET)
+    for _, trapper in ipairs(creature:GetCreaturesInGrid(RS.ENTRY_EXPEDITION_TRAPPER, 100)) do
+        if trapper:IsAlive() then
+            trapper:DoAction(RS.ACTION_STOP_CAST)
+        end
+    end
+    RS.cancelKey(guid, "flameBreath")
+    RS.cancelKey(guid, "wingBuffet")
+    RS.cancelKey(guid, "resumeAir")
+    RS.cancelKey(guid, "firebolt")
+    schedule(guid, "resumeMoveChase", 1, function() RS.resumeMoveChaseTick(creature, guid) end)
+    RS.scheduleGroundPhaseEvents(creature, guid)
+end
+
+-- C++ SpellHit (:500-506): SPELL_HARPOON_TRIGGER 62505 increments
+-- _harpoonHitCount; at RAID_MODE(2, 4) it fires DoAction
+-- (ACTION_GROUND_PHASE). No phase gate in C++ — mirrored exactly.
+RS.razorscaleSpellHit = function(event, creature, caster, spellId)
+    if spellId ~= RS.SPELL_HARPOON_TRIGGER then
+        return
+    end
+    local guid = creature:GetGUID()
+    local count = (RS.harpoonHits[guid] or 0) + 1
+    RS.harpoonHits[guid] = count
+    local threshold = 2
+    if creature:Is25ManRaid() then
+        threshold = 4
+    end
+    if count == threshold then
+        RS.groundPhase(creature, guid)
+    end
+end
+
+-- C++ DamageTaken (:555-563): !_permaGround + HealthBelowPctDamaged
+-- (50, damage) + phase GROUND -> _permaGround, REACT_AGGRESSIVE,
+-- phase PERMA_GROUND, DoAction(ACTION_START_PERMA_GROUND). DamageTaken
+-- arms fire on lethal hits (nefarian-form rule), so no postDamage > 0
+-- guard; postDamage = GetHealth() - damage (algalon precedent).
+RS.razorscaleDamageTaken = function(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if RS.permaGround[guid] or RS.phase[guid] ~= RS.PHASE_GROUND then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if creature:GetHealth() - damage < math.floor(maxHealth * 50 / 100) then
+        RS.permaGround[guid] = true
+        creature:SetReactState(RS.REACT_AGGRESSIVE)
+        RS.phase[guid] = RS.PHASE_PERMA_GROUND
+        RS.startPermaGround(creature, guid)
+    end
+end
+
+-- C++ JustSummoned (:482-495): defenders/engineers/trappers get
+-- DATA_EXPEDITION_NUMBER from their per-entry counters (first summon
+-- gets 0, then the counter increments). Only the trapper number is
+-- consumed this tick (shackle position); the rest are counted for
+-- C++-exact numbering when the defender/engineer START_FIGHT arms
+-- port. Group summons reach ev19 via the summon funnel
+-- (lua_creature_events.go:190).
+RS.razorscaleJustSummoned = function(event, creature, summon)
+    local guid = creature:GetGUID()
+    local counts = RS.summonCounts[guid]
+    if not counts then
+        counts = {defender = 0, engineer = 0, trapper = 0}
+        RS.summonCounts[guid] = counts
+    end
+    local entry = summon:GetEntry()
+    if entry == RS.ENTRY_EXPEDITION_DEFENDER then
+        counts.defender = counts.defender + 1
+    elseif entry == ENTRY_EXPEDITION_ENGINEER then
+        counts.engineer = counts.engineer + 1
+    elseif entry == RS.ENTRY_EXPEDITION_TRAPPER then
+        RS.trapperNumber[summon:GetGUID()] = counts.trapper
+        counts.trapper = counts.trapper + 1
+    end
+end
+
+-- C++ npc_expedition_commander::DoAction (:773-779/:786-789):
+-- ACTION_GROUND_PHASE -> Talk(SAY_COMMANDER_GROUND_PHASE 1).
+-- Delta: the C++ _building guard (suppresses the Talk during the 18s
+-- harpoon-build windows) is unmodeled — the commander build machine is
+-- unported, so _building is unknowable from Lua.
+RS.commanderDoAction = function(event, creature, action)
+    if action == RS.ACTION_GROUND_PHASE then
+        creature:Talk(RS.SAY_COMMANDER_GROUND_PHASE)
+    elseif action == RS.ACTION_STOP_CONTROLLERS then
+        -- C++ :790-795 + HandleControllersStopCast (:717-726):
+        -- interrupt every NPC_RAZORSCALE_CONTROLLER 33233 in 100 yd.
+        -- The C++ _stopControllers latch is set-then-cleared inside the
+        -- same call (re-entrancy guard only), so no Lua latch is kept.
+        for _, controller in ipairs(creature:GetCreaturesInGrid(RS.ENTRY_RAZORSCALE_CONTROLLER, 100)) do
+            if controller:IsAlive() then
+                controller:InterruptNonMeleeSpells(false)
+            end
+        end
+    end
+end
+
+-- C++ npc_expedition_trapper::DoAction (:905-935): dead-guard first;
+-- ACTION_SHACKLE_RAZORSCALE -> MovePoint(POINT_SHACKLE_RAZORSCALE,
+-- TrapperPosition[number]); ACTION_RETURN_TO_BASE -> MoveTargetedHome;
+-- ACTION_STOP_CAST -> InterruptNonMeleeSpells + MoveTargetedHome 2s
+-- later + commander ACTION_STOP_CONTROLLERS.
+RS.trapperDoAction = function(event, creature, action)
+    if not creature:IsAlive() then
+        return
+    end
+    if action == RS.ACTION_SHACKLE_RAZORSCALE then
+        local pos = RS.TRAPPER_POSITIONS[(RS.trapperNumber[creature:GetGUID()] or 0) + 1]
+        creature:MoveTo(RS.POINT_SHACKLE_RAZORSCALE, pos[1], pos[2], pos[3])
+    elseif action == RS.ACTION_RETURN_TO_BASE then
+        creature:MoveHome()
+    elseif action == RS.ACTION_STOP_CAST then
+        creature:InterruptNonMeleeSpells(false)
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                creature:MoveHome()
+            end
+        end, 2000)
+        for _, commander in ipairs(creature:GetCreaturesInGrid(ENTRY_EXPEDITION_COMMANDER, 100)) do
+            if commander:IsAlive() then
+                commander:DoAction(RS.ACTION_STOP_CONTROLLERS)
+                break
+            end
+        end
+    end
+end
+
+-- C++ npc_expedition_trapper::MovementInform (:943-949): DoCastSelf
+-- (SPELL_SHACKLE 62646) on arrival. C++ gates with && (return only
+-- when type is not POINT *and* id is not SHACKLE) — mirrored
+-- literally; trappers only ever MovePoint to SHACKLE, so it is
+-- equivalent in practice.
+RS.trapperMovementInform = function(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE and id ~= RS.POINT_SHACKLE_RAZORSCALE then
+        return
+    end
+    creature:CastSpell(creature, RS.SPELL_SHACKLE)
 end
 
 -- Boss UpdateAI CASTING gates (boss_razorscale.cpp pre-loop
@@ -338,6 +785,11 @@ local function razorscaleEnterCombat(event, creature, target)
     cancelTimers(guid)
     -- C++ HandleMusic(true) (JustEngagedWith :363) — encounter music on.
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 1)
+    local guid = creature:GetGUID()
+    RS.phase[guid] = RS.PHASE_AIR
+    RS.permaGround[guid] = false
+    RS.harpoonHits[guid] = 0
+    RS.scheduleAirPhaseEvents(creature, guid)
     schedule(guid, "berserk", 900000, function()
         berserkTick(creature, guid)
     end)
@@ -363,6 +815,12 @@ local function cancelCombatTimers(event, creature)
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
     -- _flyCount = 0, so GetData(DATA_QUICK_SHAVE) reads 1 (0 <= 1).
     razorscaleFlyCount[creature:GetGUID()] = 0
+    -- C++ Reset -> Initialize (boss_razorscale.cpp:307-314): phase
+    -- NONE, _permaGround false, _harpoonHitCount 0, summon counters 0.
+    RS.phase[creature:GetGUID()] = 0
+    RS.permaGround[creature:GetGUID()] = false
+    RS.harpoonHits[creature:GetGUID()] = 0
+    RS.summonCounts[creature:GetGUID()] = nil
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time re-arm would clobber the fight's latch before
@@ -472,32 +930,78 @@ end
 -- RazorFlightPosition 585.3610, -173.5592, 456.8430, 1.526665).
 -- MoveTo takes (id, x, y, z) only — no orientation arg.
 local function razorscaleDoAction(event, creature, action)
-    if action ~= 1 then -- ACTION_START_FIGHT
-        return
+    if action == 1 then -- ACTION_START_FIGHT
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:SetSpeedRate(1, 3.0) -- MOVE_RUN
+        creature:StopMoving()
+        creature:MoveTo(POINT_RAZORSCALE_FLIGHT, 585.361, -173.5592, 456.843)
+    elseif action == RS.ACTION_GROUND_PHASE then -- ACTION_GROUND_PHASE
+        RS.groundPhase(creature, creature:GetGUID())
+    elseif action == RS.ACTION_START_PERMA_GROUND then -- ACTION_START_PERMA_GROUND
+        RS.startPermaGround(creature, creature:GetGUID())
     end
-    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
-    creature:SetSpeedRate(1, 3.0) -- MOVE_RUN
-    creature:StopMoving()
-    creature:MoveTo(POINT_RAZORSCALE_FLIGHT, 585.361, -173.5592, 456.843)
 end
 
 -- C++ boss_razorscaleAI::MovementInform (boss_razorscale.cpp:440-475):
--- reaching POINT_RAZORSCALE_FLIGHT_2 ++_flyCount; GetData(
--- DATA_QUICK_SHAVE) returns 1 iff _flyCount <= 1 (:507-512). ev28
--- fires on Lua MoveTo arrival with (type, id) (creaturemotion.go).
--- LATENT, Go gate HELD: only ACTION_START_FIGHT's MoveTo exists in
--- Lua — the takeoff/ground/air cycle that would reach FLIGHT_2 is
--- unported, so the count stays 0 and the latch stays 1 (a gate now
--- would award on every kill).
+-- accepts POINT_MOTION_TYPE (8) and EFFECT_MOTION_TYPE (16) — MoveLand
+-- and MoveTakeoff are GenericMovementGenerator EFFECT legs
+-- (MotionMaster.cpp:674-696), MovePoint legs are POINT. FLIGHT_2
+-- arrival ++_flyCount; GetData(DATA_QUICK_SHAVE) returns 1 iff
+-- _flyCount <= 1 (:507-512). ev28 fires on Lua MoveTo/MoveLand/
+-- MoveTakeoff arrival with (type, id). LIVE this tick: the air/ground
+-- cycle is ported, so the latch can flip and the Go gate is un-held.
 local function razorscaleMovementInform(event, creature, moveType, id)
-    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_RAZORSCALE_FLIGHT_2 then
+    if moveType ~= POINT_MOTION_TYPE and moveType ~= RS.EFFECT_MOTION_TYPE then
         return
     end
     local guid = creature:GetGUID()
-    local count = (razorscaleFlyCount[guid] or 0) + 1
-    razorscaleFlyCount[guid] = count
-    if count > 1 then
-        creature:SetData(DATA_QUICK_SHAVE, 0)
+    if id == POINT_RAZORSCALE_FLIGHT then
+        -- C++ :443-448: UpdateSpeed (no bridge — the run rate was
+        -- already applied by SetSpeedRate in ACTION_START_FIGHT),
+        -- SetFacingTo, DoZoneInCombat.
+        creature:SetFacingTo(1.526665)
+        creature:DoZoneInCombat()
+    elseif id == RS.POINT_RAZORSCALE_TAKEOFF then
+        -- C++ :468-471: SetSpeedRate RUN 3.0, MovePoint FLIGHT_2.
+        creature:SetSpeedRate(1, 3.0)
+        creature:MoveTo(POINT_RAZORSCALE_FLIGHT_2, RS.RAZORSCALE_FLIGHT_2[1], RS.RAZORSCALE_FLIGHT_2[2], RS.RAZORSCALE_FLIGHT_2[3])
+    elseif id == POINT_RAZORSCALE_FLIGHT_2 then
+        -- C++ :472-478: SetFacingTo, SetReactState AGGRESSIVE,
+        -- ScheduleAirPhaseEvents, ++_flyCount; UpdateSpeed skipped
+        -- (no bridge).
+        creature:SetFacingTo(1.423917)
+        creature:SetReactState(RS.REACT_AGGRESSIVE)
+        RS.scheduleAirPhaseEvents(creature, guid)
+        local count = (razorscaleFlyCount[guid] or 0) + 1
+        razorscaleFlyCount[guid] = count
+        if count > 1 then
+            creature:SetData(DATA_QUICK_SHAVE, 0)
+        end
+    elseif id == RS.POINT_RAZORSCALE_LAND then
+        -- C++ :479-483: UpdateSpeed skipped, SetFacingTo, MoveLand
+        -- GROUND (new MoveLand bridge — EFFECT_MOTION_TYPE arrival).
+        creature:SetFacingTo(1.570796)
+        creature:MoveLand(RS.POINT_RAZORSCALE_GROUND, RS.RAZORSCALE_GROUND[1], RS.RAZORSCALE_GROUND[2], RS.RAZORSCALE_GROUND[3])
+    elseif id == RS.POINT_RAZORSCALE_GROUND then
+        -- C++ :484-496: SetDisableGravity(false); if !_permaGround:
+        -- STUN_SELF, trappers shackle, commander ground-phase Talk,
+        -- EVENT_FLAME_BREATH 30s (PHASE_GROUND).
+        creature:SetDisableGravity(false)
+        if not RS.permaGround[guid] then
+            creature:CastSpell(creature, RS.SPELL_STUN_SELF, true)
+            for _, trapper in ipairs(creature:GetCreaturesInGrid(RS.ENTRY_EXPEDITION_TRAPPER, 100)) do
+                if trapper:IsAlive() then
+                    trapper:DoAction(RS.ACTION_SHACKLE_RAZORSCALE)
+                end
+            end
+            for _, commander in ipairs(creature:GetCreaturesInGrid(ENTRY_EXPEDITION_COMMANDER, 100)) do
+                if commander:IsAlive() then
+                    commander:DoAction(RS.ACTION_GROUND_PHASE)
+                    break
+                end
+            end
+            schedule(guid, "flameBreath", 30000, function() RS.flameBreathTick(creature, guid) end)
+        end
     end
 end
 
@@ -508,9 +1012,9 @@ end
 -- ev14 fires on the hit target AFTER the damage loop (boss_ai.go:
 -- DoDamageAndTriggers comment), so the Lua twin inverts the check:
 -- lethal ⟺ the guardian is dead (or at 0 health) at handler time.
--- LATENT: Razorscale never casts flame breath in Lua
--- (EVENT_FLAME_BREATH unported, phase machine), so this cannot fire
--- yet; the latch defaults false, so the Go gate is fail-closed.
+-- LIVE since tick 453: EVENT_FLAME_BREATH / FLAME_BREATH_GROUND are
+-- ported, so breath casts reach guardians; the latch defaults false,
+-- so the Go gate stays fail-closed until a lethal breath lands.
 local function darkRuneGuardianSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_FLAME_BREATH and spellId ~= SPELL_FLAME_BREATH_25 then
         return
@@ -527,6 +1031,12 @@ RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 21, razorscaleSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 38, razorscaleDoAction)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 28, razorscaleMovementInform)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 14, RS.razorscaleSpellHit)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 9, RS.razorscaleDamageTaken)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 19, RS.razorscaleJustSummoned)
+RegisterCreatureEvent(ENTRY_EXPEDITION_COMMANDER, 38, RS.commanderDoAction)
+RegisterCreatureEvent(RS.ENTRY_EXPEDITION_TRAPPER, 38, RS.trapperDoAction)
+RegisterCreatureEvent(RS.ENTRY_EXPEDITION_TRAPPER, 28, RS.trapperMovementInform)
 RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 14, darkRuneGuardianSpellHit)
 RegisterCreatureGossipEvent(ENTRY_EXPEDITION_COMMANDER, 2, onCommanderGossipSelect)
 

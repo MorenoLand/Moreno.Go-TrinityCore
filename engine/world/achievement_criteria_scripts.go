@@ -65,6 +65,7 @@ const (
 	dataIgnisShattered                 = 29252926 // boss_ignis.cpp:86 DATA_SHATTERED
 	dataXT002HardMode                  = 1        // boss_xt002.cpp:111 DATA_HARD_MODE
 	dataRazorscaleIronDwarf            = 29232924 // boss_razorscale.cpp:164 DATA_IRON_DWARF_MEDIUM_RARE
+	dataRazorscaleQuickShave           = 29192921 // boss_razorscale.cpp:163 DATA_QUICK_SHAVE
 	dataBronjahmSoulPower              = 1        // boss_bronjahm.cpp:68 DATA_SOUL_POWER
 	dataAnomalusChaosTheory            = 1        // boss_anomalus.cpp:70 DATA_CHAOS_THEORY
 	dataEregosRubyVoid                 = 0        // boss_eregos.cpp:76 DATA_RUBY_VOID
@@ -1031,11 +1032,26 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		// SpellScript on a lethal breath hit; the Lua twin sets it in the
 		// guardian motion's SetData store (boss_razorscale.lua:
 		// darkRuneGuardianSpellHit ev14, lethal = dead at handler time).
-		// Dormant until EVENT_FLAME_BREATH ports.
+		// Live since tick 453 (EVENT_FLAME_BREATH / FLAME_BREATH_GROUND
+		// ported in boss_razorscale.lua).
 		if source == nil || victim == nil {
 			return false
 		}
 		return bossLatchData(source.server, victim, dataRazorscaleIronDwarf) != 0
+
+	case "achievement_quick_shave": // boss_razorscale.cpp:507-512
+		// OnCheck: Razorscale's GetData(DATA_QUICK_SHAVE 29192921) —
+		// 1 iff _flyCount <= 1, i.e. she took off at most once: the
+		// Lua twin counts FLIGHT_2 arrivals in razorscaleFlyCount
+		// (boss_razorscale.lua razorscaleMovementInform) and writes
+		// the latch 1 on Reset (alive) and 0 when the count passes 1.
+		// No Reset clear needed: the ev23 write is alive-gated, so
+		// the death-time read sees the fight's latch (the neck_deep
+		// ev23-before-ev4 ordering, kill.go:1091).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataRazorscaleQuickShave) != 0
 
 	case "achievement_bronjahm_soul_power": // boss_bronjahm.cpp:390-399
 		// OnCheck: target->GetAI()->GetData(DATA_SOUL_POWER 1) >= 4 — the
