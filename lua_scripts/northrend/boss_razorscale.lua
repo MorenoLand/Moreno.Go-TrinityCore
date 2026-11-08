@@ -51,8 +51,10 @@
 -- has NO Lua bridge) + SetCombatPulseDelay + DoZoneInCombat, the
 -- SendEncounterUnit engage leg ports via creature:SendEncounterUnit
 -- (bridge live 2026-11-05); the ScheduleAirPhaseEvents leg (phase
--- machine) and the summons.DoAction(ACTION_START_FIGHT) leg have no
--- bridges — event 1 models the EVENT_BERSERK timer leg (the auriaya
+-- machine) is PORTED 2026-11-08 (tick 453) and the
+-- summons.DoAction(ACTION_START_FIGHT) leg is PORTED 2026-11-08
+-- (tick 454) as a grid relay to the four expedition entries below;
+-- event 1 models the EVENT_BERSERK timer leg (the auriaya
 -- engage-port precedent) plus the HandleMusic(true) leg
 -- (boss_razorscale.cpp:363) via the new creature:UpdateWorldState
 -- bridge (2026-10-22).
@@ -117,8 +119,9 @@
 -- phase-machine chain.
 -- EVENT_RESUME_AIR_PHASE (:624-634) — SetDisableGravity /
 -- SetPhase(PHASE_AIR) / MoveTakeoff / engineer
--- ACTION_FIX_HARPOONS DoAction — phase machine + motion +
--- DoAction; no bridges.
+-- ACTION_FIX_HARPOONS DoAction — PORTED 2026-11-08 (tick 453 send
+-- leg, tick 454 engineer receiver below); the receiver's spline
+-- movement is DB-gated (no script_spline_chain rows in world.db).
 -- Boss-side SetReactState arms (SetReactState IS bridged — frozen_core
 -- precedent): MovementInform POINT_RAZORSCALE_FLIGHT_2 ->
 -- SetReactState(REACT_AGGRESSIVE) (:448, no MovementInform hook) and
@@ -157,22 +160,32 @@
 -- receiver arm (RemoveFlag IMMUNE_TO_PC + run speed 3.0 +
 -- StopMoving + MoveTo flight position) is PORTED below.
 -- DoAction Talk(SAY_COMMANDER_AGGRO 0) / Talk
--- (SAY_COMMANDER_GROUND_PHASE 1) ride the DoAction machine —
--- Talk riding DoAction stays out. Talk(SAY_COMMANDER_ENGINEERS_DEAD
--- 2) is PORTED 2026-11-03 via the ev21 engineer-death relay below
--- (its sender is a bridged hook, not a DoAction receipt).
--- GO_RAZOR_HARPOON / broken-harpoon summon legs — no GO bridge;
--- no registration.
+-- (SAY_COMMANDER_GROUND_PHASE 1) / Talk(SAY_COMMANDER_ENGINEERS_DEAD
+-- 2) / ACTION_BUILD_HARPOON_1..4 (18s build timers + GO summons) /
+-- ACTION_DESTROY_HARPOONS (_destroy latch + DestroyHarpoons) are all
+-- PORTED 2026-11-08 (tick 454) in RS.commanderDoAction below
+-- (ENGINEER_DEAD rides the ev21 relay, not a direct Talk).
+-- GO_RAZOR_HARPOON / broken-harpoon summon legs PORTED 2026-11-08
+-- (tick 454): SummonGameObject IS bridged (lua_creature_events.go:
+-- 3707) — BuildHarpoon + BuildBrokenHarpoons below.
 -- npc_expedition_defender (33816 ulduar.h:92): Reset one-shot
--- DoCastSelf(SPELL_THREAT 65146), not timer-driven; DoAction /
--- MovementInform machine — no bridges; no registration.
+-- DoCastSelf(SPELL_THREAT 65146) PORTED (latent, below);
+-- ACTION_START_FIGHT -> MovePoint(DefendersPosition[number]) +
+-- MovementInform -> SetHomePosition + RemoveFlag IMMUNE_TO_NPC
+-- PORTED 2026-11-08 (tick 454) below.
 -- npc_expedition_trapper (33259 ulduar.h:93): DoAction machine +
--- MovementInform -> DoCastSelf(SPELL_SHACKLE 62646) — no bridges;
--- no registration.
+-- MovementInform -> DoCastSelf(SPELL_SHACKLE 62646) PORTED below;
+-- ACTION_START_FIGHT -> RemoveFlag IMMUNE_TO_NPC PORTED 2026-11-08
+-- (tick 454); ACTION_RETURN_TO_BASE was dead until tick 454
+-- (RS.ACTION_RETURN_TO_BASE was never defined — nil comparison).
 -- npc_expedition_engineer (33287 ulduar.h:91): DoAction machine —
 -- Talk(SAY_AGGRO 0) (engineer-east-gated) and Talk
--- (SAY_START_REPAIR 1) ride DoAction legs; spline movement
--- legs — no bridges; no registration.
+-- (SAY_START_REPAIR 1) + spline-chain harpoon walks + MovementInform
+-- commander BUILD_HARPOON relay PORTED 2026-11-08 (tick 454) below;
+-- the walks are LATENT (MoveAlongSplineChain bridged,
+-- lua_creature_events.go:4791, but no script_spline_chain rows in
+-- world.db — the call returns false until the deployment DB ships
+-- them).
 -- npc_razorscale_spawner (33245 ulduar.h:89): Reset one-shot
 -- DoCastSelf(SPELL_SUMMON_MOLE_MACHINE 62899) + DoCastSelf
 -- (SummonMinionsSpells[urand(0,3)]) — spawner machine — no
@@ -201,15 +214,10 @@
 -- npc_razorscale_harpoon_fire_state (33282 ulduar.h:95):
 -- SpellHit(SPELL_FIREBOLT 62669) machine — stale "no bridge"
 -- retracted (2026-10-21): ev14 IS bridged (fires from the Go spell
--- path) — but the arm stays out: the DoCastSelf(HARPOON_FIRE_STATE
--- 62696) rides an instance-GetCreature(DATA_EXPEDITION_COMMANDER)
--- -> DoAction(ACTION_DESTROY_HARPOONS) cross-creature relay (dispatch IS
--- bridged, ev38 lua_creature_events.go:802; lookup IS bridged,
--- creature:GetInstanceCreature lua_creature_events.go:5865, but unlatched —
--- no event-5 SetGuidData for the commander in this file; the receiver arm
--- ACTION_DESTROY_HARPOONS is the unported commander DoAction machine,
--- boss_razorscale.cpp:806-810, _destroy latch + DestroyHarpoons()), and
--- 33282 itself has no registration.
+-- path) — PORTED 2026-11-08 (tick 454) below: DoCastSelf(
+-- HARPOON_FIRE_STATE 62696) + commander DoAction(
+-- ACTION_DESTROY_HARPOONS) via the grid relay; the 62669 trigger
+-- itself is spell-data-gated (see the handler comment).
 -- npc_razorscale_devouring_flame: Reset one-shot DoCastSelf
 -- (DEVOURING_FLAME_GROUND 64709/64734, triggered), not
 -- timer-driven; no registration.
@@ -304,12 +312,74 @@ local RS = {
     ENTRY_EXPEDITION_TRAPPER = 33259,
     ENTRY_EXPEDITION_DEFENDER = 33816,
     ENTRY_RAZORSCALE_CONTROLLER = 33233,
+    ACTION_START_FIGHT = 1,
     ACTION_FIX_HARPOONS = 2,
     ACTION_GROUND_PHASE = 3,
+    ACTION_ENGINEER_DEAD = 4,
     ACTION_SHACKLE_RAZORSCALE = 5,
     ACTION_START_PERMA_GROUND = 6,
+    ACTION_RETURN_TO_BASE = 7,
+    ACTION_BUILD_HARPOON_1 = 8,
+    ACTION_BUILD_HARPOON_2 = 9,
+    ACTION_BUILD_HARPOON_3 = 10,
+    ACTION_BUILD_HARPOON_4 = 11,
+    ACTION_DESTROY_HARPOONS = 12,
     ACTION_STOP_CONTROLLERS = 13,
     ACTION_STOP_CAST = 14,
+    SAY_COMMANDER_AGGRO = 0,
+    SAY_COMMANDER_ENGINEERS_DEAD = 2,
+    SAY_ENGINEER_AGGRO = 0,
+    SAY_ENGINEER_START_REPAIR = 1,
+    ENGINEER_NORTH = 0,
+    ENGINEER_EAST = 1,
+    ENGINEER_WEST = 2,
+    SPLINE_CHAIN_MOTION_TYPE = 17,
+    POINT_DEFENDER_ATTACK = 1,
+    POINT_BASE = 3,
+    POINT_HARPOON_1 = 4,
+    POINT_HARPOON_1_25 = 5,
+    POINT_HARPOON_2 = 6,
+    POINT_HARPOON_2_25 = 7,
+    POINT_HARPOON_3 = 8,
+    POINT_HARPOON_4 = 9,
+    EMOTE_STATE_USE_STANDING = 69,
+    UNIT_FLAG_IMMUNE_TO_NPC = 0x200,
+    ENTRY_HARPOON_FIRE_STATE = 33282,
+    SPELL_HARPOON_FIRE_STATE = 62696,
+    GO_HARPOON_1 = 194542,
+    GO_HARPOON_2 = 194541,
+    GO_HARPOON_3 = 194543,
+    GO_HARPOON_4 = 194519,
+    GO_BROKEN_HARPOON = 194565,
+    -- Spline-chain ids (EngineersSplineMovements :235-264):
+    -- [position+1] = {10-man, 25-man}; H3/H4 are 25-man only;
+    -- BASE_25 east (index 2) is 0 — east MovePoints home instead.
+    CHAIN_H1 = {{1, 4}, {9, 12}, {16, 19}},
+    CHAIN_H2 = {{2, 5}, {10, 13}, {17, 20}},
+    CHAIN_H3 = {6, 14, 21},
+    CHAIN_H4 = {7, 15, 22},
+    CHAIN_BASE_10 = {3, 11, 18},
+    CHAIN_BASE_25 = {8, 0, 23},
+    DEFENDER_POSITIONS = {
+        {624.3065, -154.4163, 391.6442},
+        {611.6274, -170.9375, 391.8087},
+        {572.1548, -167.4471, 391.8087},
+        {558.464, -165.0114, 391.8087},
+        {603.3345, -164.4297, 391.8087},
+        {549.1727, -159.118, 391.8087},
+    },
+    POS_HARPOON = {
+        {571.9012, -136.5541, 391.5171, 4.921829},
+        {589.9233, -133.6223, 391.8968, 4.81711},
+        {559.1199, -140.5058, 391.1803, 5.061456},
+        {606.2297, -136.7212, 391.1803, 4.537859},
+    },
+    POS_BROKEN_HARPOON = {
+        {571.9465, -136.0118, 391.5171, 2.286379},
+        {589.9233, -133.6223, 391.8968, 3.298687},
+        {559.1199, -140.5058, 391.1803, 4.049168},
+        {606.2297, -136.7212, 391.1803, 5.131269},
+    },
     EMOTE_BREATH = 1,
     EMOTE_PERMA_GROUND = 0,
     SAY_COMMANDER_GROUND_PHASE = 1,
@@ -328,6 +398,11 @@ local RS = {
     harpoonHits = {},
     summonCounts = {},
     trapperNumber = {},
+    defenderNumber = {},
+    engineerNumber = {},
+    commanderBuilding = {},
+    commanderDestroy = {},
+    commanderHarpoons = {},
 }
 
 -- boss_razorscale.cpp:177
@@ -661,11 +736,10 @@ end
 
 -- C++ JustSummoned (:482-495): defenders/engineers/trappers get
 -- DATA_EXPEDITION_NUMBER from their per-entry counters (first summon
--- gets 0, then the counter increments). Only the trapper number is
--- consumed this tick (shackle position); the rest are counted for
--- C++-exact numbering when the defender/engineer START_FIGHT arms
--- port. Group summons reach ev19 via the summon funnel
--- (lua_creature_events.go:190).
+-- gets 0, then the counter increments). All three numbers are consumed
+-- now: trapper (shackle position), defender (attack position),
+-- engineer (spline-chain position). Group summons reach ev19 via the
+-- summon funnel (lua_creature_events.go:190).
 RS.razorscaleJustSummoned = function(event, creature, summon)
     local guid = creature:GetGUID()
     local counts = RS.summonCounts[guid]
@@ -675,8 +749,10 @@ RS.razorscaleJustSummoned = function(event, creature, summon)
     end
     local entry = summon:GetEntry()
     if entry == RS.ENTRY_EXPEDITION_DEFENDER then
+        RS.defenderNumber[summon:GetGUID()] = counts.defender
         counts.defender = counts.defender + 1
     elseif entry == ENTRY_EXPEDITION_ENGINEER then
+        RS.engineerNumber[summon:GetGUID()] = counts.engineer
         counts.engineer = counts.engineer + 1
     elseif entry == RS.ENTRY_EXPEDITION_TRAPPER then
         RS.trapperNumber[summon:GetGUID()] = counts.trapper
@@ -684,14 +760,42 @@ RS.razorscaleJustSummoned = function(event, creature, summon)
     end
 end
 
--- C++ npc_expedition_commander::DoAction (:773-779/:786-789):
--- ACTION_GROUND_PHASE -> Talk(SAY_COMMANDER_GROUND_PHASE 1).
--- Delta: the C++ _building guard (suppresses the Talk during the 18s
--- harpoon-build windows) is unmodeled — the commander build machine is
--- unported, so _building is unknowable from Lua.
+-- C++ npc_expedition_commander::DoAction (:773-810): the _building
+-- guard (:773-774) suppresses every action except ACTION_ENGINEER_DEAD
+-- while a harpoon build is running; ACTION_START_FIGHT -> Talk(0);
+-- ACTION_GROUND_PHASE -> Talk(1); ACTION_ENGINEER_DEAD -> Talk(2) +
+-- _events.Reset + _building = false; ACTION_BUILD_HARPOON_1..4 ->
+-- _building = true + EVENT_BUILD_HARPOON_N in 18s (builds the GO and
+-- clears _building); ACTION_DESTROY_HARPOONS -> _destroy latch +
+-- DestroyHarpoons + 10s _destroy reset; ACTION_STOP_CONTROLLERS ->
+-- interrupt every NPC_RAZORSCALE_CONTROLLER 33233 in 100 yd (the C++
+-- _stopControllers latch is set-then-cleared inside the same call, so
+-- no Lua latch is kept).
 RS.commanderDoAction = function(event, creature, action)
-    if action == RS.ACTION_GROUND_PHASE then
+    local guid = creature:GetGUID()
+    if RS.commanderBuilding[guid] and action ~= RS.ACTION_ENGINEER_DEAD then
+        return
+    end
+    if action == RS.ACTION_START_FIGHT then
+        creature:Talk(RS.SAY_COMMANDER_AGGRO)
+    elseif action == RS.ACTION_GROUND_PHASE then
         creature:Talk(RS.SAY_COMMANDER_GROUND_PHASE)
+    elseif action == RS.ACTION_ENGINEER_DEAD then
+        creature:Talk(RS.SAY_COMMANDER_ENGINEERS_DEAD)
+        cancelTimers(guid)
+        RS.commanderBuilding[guid] = false
+    elseif action >= RS.ACTION_BUILD_HARPOON_1 and action <= RS.ACTION_BUILD_HARPOON_4 then
+        RS.commanderBuilding[guid] = true
+        local n = action - RS.ACTION_BUILD_HARPOON_1 + 1
+        schedule(guid, "buildHarpoon" .. n, 18000, function()
+            RS.commanderBuildHarpoon(creature, guid, n)
+        end)
+    elseif action == RS.ACTION_DESTROY_HARPOONS then
+        if RS.commanderDestroy[guid] then
+            return
+        end
+        RS.commanderDestroy[guid] = true
+        RS.commanderDestroyHarpoons(creature, guid)
     elseif action == RS.ACTION_STOP_CONTROLLERS then
         -- C++ :790-795 + HandleControllersStopCast (:717-726):
         -- interrupt every NPC_RAZORSCALE_CONTROLLER 33233 in 100 yd.
@@ -719,6 +823,10 @@ RS.trapperDoAction = function(event, creature, action)
         creature:MoveTo(RS.POINT_SHACKLE_RAZORSCALE, pos[1], pos[2], pos[3])
     elseif action == RS.ACTION_RETURN_TO_BASE then
         creature:MoveHome()
+    elseif action == RS.ACTION_START_FIGHT then
+        -- C++ :927-929: RemoveFlag(UNIT_FIELD_FLAGS,
+        -- UNIT_FLAG_IMMUNE_TO_NPC).
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, RS.UNIT_FLAG_IMMUNE_TO_NPC)
     elseif action == RS.ACTION_STOP_CAST then
         creature:InterruptNonMeleeSpells(false)
         CreateLuaEvent(function()
@@ -745,6 +853,313 @@ RS.trapperMovementInform = function(event, creature, moveType, id)
         return
     end
     creature:CastSpell(creature, RS.SPELL_SHACKLE)
+end
+
+-- C++ npc_expedition_defender::DoAction (:905-909): ACTION_START_FIGHT
+-- -> MovePoint(POINT_DEFENDER_ATTACK, DefendersPosition[number]).
+-- No dead-guard in C++ (the boss relay guards instead); the number
+-- rides ev19 (RS.defenderNumber).
+RS.defenderDoAction = function(event, creature, action)
+    if action == RS.ACTION_START_FIGHT then
+        local pos = RS.DEFENDER_POSITIONS[(RS.defenderNumber[creature:GetGUID()] or 0) + 1]
+        creature:MoveTo(RS.POINT_DEFENDER_ATTACK, pos[1], pos[2], pos[3])
+    end
+end
+
+-- C++ npc_expedition_defender::MovementInform (:911-917): the C++
+-- gate is && (return only when type is not POINT *and* id is not
+-- DEFENDER_ATTACK) — mirrored literally; defenders only ever
+-- MovePoint to DEFENDER_ATTACK, so it is arrival-only in practice.
+-- SetHomePosition takes the position's orientation as 0 (the C++
+-- Position has no orientation field); RemoveFlag drops IMMUNE_TO_NPC.
+RS.defenderMovementInform = function(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE and id ~= RS.POINT_DEFENDER_ATTACK then
+        return
+    end
+    local pos = RS.DEFENDER_POSITIONS[(RS.defenderNumber[creature:GetGUID()] or 0) + 1]
+    creature:SetHomePosition(pos[1], pos[2], pos[3], 0)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, RS.UNIT_FLAG_IMMUNE_TO_NPC)
+end
+
+-- C++ npc_expedition_engineer::DoAction (:984-1005): dead-guard;
+-- ACTION_START_FIGHT -> _canUpdateAI (no Lua-visible effect — no
+-- engineer UpdateAI port; the 28s leg below is the scheduled work),
+-- east Talk SAY_AGGRO, 28s scheduler -> HandleHarpoonMovement +
+-- RemoveFlag IMMUNE_TO_NPC; ACTION_FIX_HARPOONS -> east Talk +
+-- 28s scheduler -> HandleHarpoonMovement (no flag leg). The C++
+-- TaskScheduler only ticks while the engineer is alive and updating,
+-- so the Lua leg is IsAlive-guarded at fire time (trapper STOP_CAST
+-- idiom). The east Talk rides both receipts (C++ :990/:1001).
+RS.engineerDoAction = function(event, creature, action)
+    if not creature:IsAlive() then
+        return
+    end
+    if action == RS.ACTION_START_FIGHT or action == RS.ACTION_FIX_HARPOONS then
+        if (RS.engineerNumber[creature:GetGUID()] or 0) == RS.ENGINEER_EAST then
+            creature:Talk(RS.SAY_ENGINEER_AGGRO)
+        end
+        CreateLuaEvent(function()
+            if not creature:IsAlive() then
+                return
+            end
+            RS.engineerHandleHarpoonMovement(creature)
+            if action == RS.ACTION_START_FIGHT then
+                creature:RemoveFlag(UNIT_FIELD_FLAGS, RS.UNIT_FLAG_IMMUNE_TO_NPC)
+            end
+        end, 28000)
+    end
+end
+
+-- C++ npc_expedition_engineer::HandleHarpoonMovement (:1013-1040):
+-- east Talks SAY_START_REPAIR first; the chain id is position x
+-- 10/25-man. MoveAlongSplineChain is bridged
+-- (lua_creature_events.go:4791, spline_chain.go) but DB-driven:
+-- the repo world.db carries no script_spline_chain rows, so the
+-- call returns false and the chain stays LATENT until the deployment
+-- DB ships the rows — same class as the mole-machine GO leg.
+RS.engineerHandleHarpoonMovement = function(creature)
+    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    if pos == RS.ENGINEER_EAST + 1 then
+        creature:Talk(RS.SAY_ENGINEER_START_REPAIR)
+    end
+    local chain, point
+    if creature:Is25ManRaid() then
+        chain = RS.CHAIN_H1[pos][2]
+        point = RS.POINT_HARPOON_1_25
+    else
+        chain = RS.CHAIN_H1[pos][1]
+        point = RS.POINT_HARPOON_1
+    end
+    creature:MoveAlongSplineChain(point, chain, false)
+end
+
+-- C++ HandleSecondHarpoonMovement (:1042-1066), HandleThird (:1068-
+-- 1090), HandleFourth (:1092-1112), HandleBaseMovement (:1114-1136).
+-- Third: 25-man -> harpoon 3, 10-man -> base chain. Fourth: 25-man
+-- only (10-man is a no-op in C++ — no else branch). Base: 25-man
+-- only; north/west walk the base chain, east MovePoints home
+-- (GetHomePosition bridge, lua_creature_events.go:6161).
+RS.engineerHandleSecondHarpoonMovement = function(creature)
+    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    local chain, point
+    if creature:Is25ManRaid() then
+        chain = RS.CHAIN_H2[pos][2]
+        point = RS.POINT_HARPOON_2_25
+    else
+        chain = RS.CHAIN_H2[pos][1]
+        point = RS.POINT_HARPOON_2
+    end
+    creature:MoveAlongSplineChain(point, chain, false)
+end
+
+RS.engineerHandleThirdHarpoonMovement = function(creature)
+    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    if creature:Is25ManRaid() then
+        creature:MoveAlongSplineChain(RS.POINT_HARPOON_3, RS.CHAIN_H3[pos], false)
+    else
+        creature:MoveAlongSplineChain(RS.POINT_BASE, RS.CHAIN_BASE_10[pos], false)
+    end
+end
+
+RS.engineerHandleFourthHarpoonMovement = function(creature)
+    if not creature:Is25ManRaid() then
+        return
+    end
+    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    creature:MoveAlongSplineChain(RS.POINT_HARPOON_4, RS.CHAIN_H4[pos], false)
+end
+
+RS.engineerHandleBaseMovement = function(creature)
+    if not creature:Is25ManRaid() then
+        return
+    end
+    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    if pos == RS.ENGINEER_EAST + 1 then
+        local hx, hy, hz = creature:GetHomePosition()
+        creature:MoveTo(RS.POINT_BASE, hx, hy, hz)
+    else
+        creature:MoveAlongSplineChain(RS.POINT_BASE, RS.CHAIN_BASE_25[pos], false)
+    end
+end
+
+-- C++ npc_expedition_engineer::MovementInform (:1168-1218): gate is
+-- POINT *or* SPLINE_CHAIN (type 17) — mirrored with or (the trapper
+-- handler's &&-literal form is the same gate for a single type).
+-- HARPOON_1 -> commander BUILD_HARPOON_1 + 3s EmoteState
+-- USE_STANDING (69) + 18s second movement; HARPOON_2 -> BUILD_2 +
+-- 18s third; HARPOON_3 -> BUILD_3 + 18s fourth; HARPOON_4 -> BUILD_4
+-- + 18s base; BASE -> ChangeOrientation 1ms -> SetFacingTo 4.61684.
+-- The 3s/18s legs are TaskScheduler tasks in C++ (alive-gated), so
+-- the Lua legs guard IsAlive at fire time.
+RS.engineerMovementInform = function(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE and moveType ~= RS.SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    if id == RS.POINT_HARPOON_1 or id == RS.POINT_HARPOON_1_25 then
+        RS.tellCommander(creature, RS.ACTION_BUILD_HARPOON_1)
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                creature:EmoteState(RS.EMOTE_STATE_USE_STANDING)
+            end
+        end, 3000)
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                RS.engineerHandleSecondHarpoonMovement(creature)
+            end
+        end, 18000)
+    elseif id == RS.POINT_HARPOON_2 or id == RS.POINT_HARPOON_2_25 then
+        RS.tellCommander(creature, RS.ACTION_BUILD_HARPOON_2)
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                RS.engineerHandleThirdHarpoonMovement(creature)
+            end
+        end, 18000)
+    elseif id == RS.POINT_HARPOON_3 then
+        RS.tellCommander(creature, RS.ACTION_BUILD_HARPOON_3)
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                RS.engineerHandleFourthHarpoonMovement(creature)
+            end
+        end, 18000)
+    elseif id == RS.POINT_HARPOON_4 then
+        RS.tellCommander(creature, RS.ACTION_BUILD_HARPOON_4)
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                RS.engineerHandleBaseMovement(creature)
+            end
+        end, 18000)
+    elseif id == RS.POINT_BASE then
+        CreateLuaEvent(function()
+            if creature:IsAlive() then
+                creature:SetFacingTo(4.61684)
+            end
+        end, 1)
+    end
+end
+
+-- C++ commander relay (engineer MovementInform :1177-1180 etc.,
+-- harpoon fire-state SpellHit :1454): _instance->GetCreature(
+-- DATA_EXPEDITION_COMMANDER) -> DoAction. Grid twin (commanderDoAction
+-- precedent above).
+RS.tellCommander = function(creature, action)
+    for _, commander in ipairs(creature:GetCreaturesInGrid(ENTRY_EXPEDITION_COMMANDER, 100)) do
+        if commander:IsAlive() then
+            commander:DoAction(action)
+            break
+        end
+    end
+end
+
+-- C++ npc_expedition_commander::BuildHarpoon (:734-771): the 25-man
+-- mapping is rotated (H1 -> GO_3 at PosHarpoon[3], H2 -> GO_1 at
+-- PosHarpoon[1], H3 -> GO_2 at PosHarpoon[2], H4 -> GO_4 at
+-- PosHarpoon[4]); 10-man is straight (H1 -> GO_1, H2 -> GO_2).
+-- Respawn 7 days (604800s) on 25-man, 0 (persist) on 10-man. The
+-- C++ quaternion rotations match the PosHarpoon orientations, so the
+-- Lua o arg carries the same facing. GUIDs ride
+-- RS.commanderHarpoons for DestroyHarpoons (legoso round-trip).
+RS.commanderBuildHarpoon = function(creature, guid, n)
+    if not creature:IsAlive() then
+        return
+    end
+    local is25 = creature:Is25ManRaid()
+    local entry, pos
+    if is25 then
+        if n == 1 then
+            entry, pos = RS.GO_HARPOON_3, RS.POS_HARPOON[3]
+        elseif n == 2 then
+            entry, pos = RS.GO_HARPOON_1, RS.POS_HARPOON[1]
+        elseif n == 3 then
+            entry, pos = RS.GO_HARPOON_2, RS.POS_HARPOON[2]
+        else
+            entry, pos = RS.GO_HARPOON_4, RS.POS_HARPOON[4]
+        end
+    else
+        if n == 1 then
+            entry, pos = RS.GO_HARPOON_1, RS.POS_HARPOON[1]
+        elseif n == 2 then
+            entry, pos = RS.GO_HARPOON_2, RS.POS_HARPOON[2]
+        else
+            RS.commanderBuilding[guid] = false
+            return
+        end
+    end
+    local goGuid = creature:SummonGameObject(entry, pos[1], pos[2], pos[3], pos[4], is25 and 604800 or 0)
+    if goGuid then
+        local list = RS.commanderHarpoons[guid]
+        if not list then
+            list = {}
+            RS.commanderHarpoons[guid] = list
+        end
+        list[#list + 1] = goGuid
+    end
+    RS.commanderBuilding[guid] = false
+end
+
+-- C++ npc_expedition_commander::BuildBrokenHarpoons (:699-706):
+-- 2 (10-man) or 4 (25-man) broken harpoons at PosBrokenHarpoon,
+-- 7-day respawn. The four C++ calls share one quaternion whose yaw
+-- (~4.049) matches only PosBrokenHarpoon[3]'s orientation — Go takes
+-- no quaternion, so the Position orientation is passed (documented
+-- delta; the harpoon GO's Reset leg removes the nearest broken one
+-- when a built harpoon spawns, so the cycle self-balances).
+RS.commanderBuildBrokenHarpoons = function(creature)
+    local count = creature:Is25ManRaid() and 4 or 2
+    for i = 1, count do
+        local pos = RS.POS_BROKEN_HARPOON[i]
+        creature:SummonGameObject(RS.GO_BROKEN_HARPOON, pos[1], pos[2], pos[3], pos[4], 604800)
+    end
+end
+
+-- C++ npc_expedition_commander::DestroyHarpoons (:708-715): remove
+-- every tracked harpoon GO by GUID (GetGameObjectByGUID bridge,
+-- lua_creature_events.go:3780), clear the list, rebuild broken
+-- harpoons, 10s EVENT_HANDLE_DESTROY_HARPOON -> _destroy = false.
+RS.commanderDestroyHarpoons = function(creature, guid)
+    local list = RS.commanderHarpoons[guid]
+    if list then
+        for _, goGuid in ipairs(list) do
+            local go = creature:GetGameObjectByGUID(goGuid)
+            if go then
+                go:RemoveFromWorld()
+            end
+        end
+        RS.commanderHarpoons[guid] = nil
+    end
+    RS.commanderBuildBrokenHarpoons(creature)
+    schedule(guid, "destroyHarpoonReset", 10000, function()
+        RS.commanderDestroy[guid] = false
+    end)
+end
+
+-- C++ npc_expedition_commander::Reset (:677-682): _events.Reset +
+-- phase NONE + BuildBrokenHarpoons. The timer wipe rides
+-- cancelTimers (the build/destroy schedules share the module table);
+-- the latches reset with it (C++ _building/_destroy are plain
+-- members, re-initialised only by the constructor — Reset does NOT
+-- clear them, but a reset commander is a fresh group spawn, so the
+-- GUID-keyed Lua state is fresh too; the explicit false writes keep
+-- a re-fired ev23 on the same GUID from stranding a build).
+RS.commanderReset = function(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    RS.commanderBuilding[guid] = false
+    RS.commanderDestroy[guid] = false
+    RS.commanderBuildBrokenHarpoons(creature)
+end
+
+-- C++ npc_razorscale_harpoon_fire_state::SpellHit (:1449-1457):
+-- SPELL_FIREBOLT 62669 -> DoCastSelf(SPELL_HARPOON_FIRE_STATE 62696)
+-- + commander DoAction(ACTION_DESTROY_HARPOONS). ev14 is bridged;
+-- the trigger's live-ness rides the 62669 targeting data (the boss
+-- casts firebolt on herself in C++ — the fire-state hit is
+-- spell-data-gated, same class as the DBC-gated spell legs).
+RS.harpoonFireStateSpellHit = function(event, creature, caster, spellId)
+    if spellId ~= RS.SPELL_FIREBOLT then
+        return
+    end
+    creature:CastSpell(creature, RS.SPELL_HARPOON_FIRE_STATE)
+    RS.tellCommander(creature, RS.ACTION_DESTROY_HARPOONS)
 end
 
 -- Boss UpdateAI CASTING gates (boss_razorscale.cpp pre-loop
@@ -790,6 +1205,21 @@ local function razorscaleEnterCombat(event, creature, target)
     RS.permaGround[guid] = false
     RS.harpoonHits[guid] = 0
     RS.scheduleAirPhaseEvents(creature, guid)
+    -- C++ JustEngagedWith (:361): summons.DoAction(ACTION_START_FIGHT)
+    -- to every boss summon (DummyEntryCheckPredicate matches all).
+    -- Lua twin: grid relay to the four expedition entries — the only
+    -- summons with a START_FIGHT arm (fire-state / devouring-flame /
+    -- spawner / darkrune AIs have no DoAction; the relay is range-500
+    -- so the air-phase boss height cannot clip it). Dead-guard mirrors
+    -- the trapper/engineer DoAction guards; a dead defender would take
+    -- no MovePoint in C++ either (its MotionMaster is idle).
+    for _, entry in ipairs({RS.ENTRY_EXPEDITION_DEFENDER, RS.ENTRY_EXPEDITION_TRAPPER, ENTRY_EXPEDITION_ENGINEER, ENTRY_EXPEDITION_COMMANDER}) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 500)) do
+            if add:IsAlive() then
+                add:DoAction(RS.ACTION_START_FIGHT)
+            end
+        end
+    end
     schedule(guid, "berserk", 900000, function()
         berserkTick(creature, guid)
     end)
@@ -868,11 +1298,11 @@ end
 -- C++ boss_razorscale::SummonedCreatureDies (:486-494): an engineer
 -- death decrements _engineersCount (Initialize :307 = 3); at 0 the
 -- commander gets DoAction(ACTION_ENGINEER_DEAD) = Talk(2) +
--- _events.Reset + _building=false (internal commander-machine legs,
--- no-ops here — the commander AI is unported). The stale "no
--- SummonedCreatureDies bridge" header claim is retracted 2026-11-03:
--- ev21 IS bridged (amanitar/loatheb/coren precedent; args are
--- event, creature, summon, killer). The fire-once guard mirrors
+-- _events.Reset + _building=false (the commander ev38 arm above —
+-- the relay, not a direct Talk, so the build-timer reset rides it).
+-- The stale "no SummonedCreatureDies bridge" header claim is retracted
+-- 2026-11-03: ev21 IS bridged (amanitar/loatheb/coren precedent; args
+-- are event, creature, summon, killer). The fire-once guard mirrors
 -- C++: past 0 the counter wraps to 255 and never refires.
 local function razorscaleSummonedCreatureDies(event, creature, summon, killer)
     if summon:GetEntry() ~= ENTRY_EXPEDITION_ENGINEER then
@@ -886,7 +1316,7 @@ local function razorscaleSummonedCreatureDies(event, creature, summon, killer)
         if remaining == 0 then
             for _, commander in ipairs(creature:GetCreaturesInGrid(ENTRY_EXPEDITION_COMMANDER, 100)) do
                 if commander:IsAlive() then
-                    commander:Talk(SAY_COMMANDER_ENGINEERS_DEAD)
+                    commander:DoAction(RS.ACTION_ENGINEER_DEAD)
                     break
                 end
             end
@@ -1035,8 +1465,14 @@ RegisterCreatureEvent(ENTRY_RAZORSCALE, 14, RS.razorscaleSpellHit)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 9, RS.razorscaleDamageTaken)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 19, RS.razorscaleJustSummoned)
 RegisterCreatureEvent(ENTRY_EXPEDITION_COMMANDER, 38, RS.commanderDoAction)
+RegisterCreatureEvent(ENTRY_EXPEDITION_COMMANDER, 23, RS.commanderReset)
 RegisterCreatureEvent(RS.ENTRY_EXPEDITION_TRAPPER, 38, RS.trapperDoAction)
 RegisterCreatureEvent(RS.ENTRY_EXPEDITION_TRAPPER, 28, RS.trapperMovementInform)
+RegisterCreatureEvent(RS.ENTRY_EXPEDITION_DEFENDER, 38, RS.defenderDoAction)
+RegisterCreatureEvent(RS.ENTRY_EXPEDITION_DEFENDER, 28, RS.defenderMovementInform)
+RegisterCreatureEvent(ENTRY_EXPEDITION_ENGINEER, 38, RS.engineerDoAction)
+RegisterCreatureEvent(ENTRY_EXPEDITION_ENGINEER, 28, RS.engineerMovementInform)
+RegisterCreatureEvent(RS.ENTRY_HARPOON_FIRE_STATE, 14, RS.harpoonFireStateSpellHit)
 RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 14, darkRuneGuardianSpellHit)
 RegisterCreatureGossipEvent(ENTRY_EXPEDITION_COMMANDER, 2, onCommanderGossipSelect)
 
