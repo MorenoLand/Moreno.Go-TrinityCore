@@ -38,8 +38,10 @@
 -- boss_faction_champions.cpp:367-578 — so there is no cast gate to
 -- port here). The announcer summon strand has landed
 -- (npc_tirion_fordring.lua EVENT_SUMMON_CHAMPIONS summons the
--- controller, tick 406 U2); the champion roster itself is still
--- unported — no Lua file summons 344xx champion entries today.
+-- controller, tick 406 U2) and the champion roster is PORTED tick 410
+-- (boss_faction_champions.lua controllerReset: SelectChampions /
+-- SummonChampions run on the controller's ev23 Reset, 3s unflag timer
+-- for SetData(1)).
 -- Unmodeled (documented-only, no bridges):
 -- - DONE-time achievement criteria (defeat + killed-in-a-minute) +
 --   crusaders-chest respawn / flag clear (instance :208-213): no

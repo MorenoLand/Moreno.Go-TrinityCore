@@ -124,10 +124,35 @@
 -- non-triggered, 20s init, 30s repeat. The "same random-target bar"
 -- claim is retracted.
 -- boss_jaraxxus EVENT_SUMMON_NETHER_PORTAL — PORTED
--- (netherPortalTick; the summon STRAND stays out — no Lua-surface
--- consumer without summoning — documented-only).
--- boss_jaraxxus EVENT_SUMMON_INFERNAL_ERUPTION — PORTED (infernalTick;
--- the volcano/infernal summon STRANDs stay out — documented-only).
+-- (netherPortalTick; the summon strand is PORTED tick 410 U2 — see
+-- below). EVENT_SUMMON_INFERNAL_ERUPTION — PORTED (infernalTick;
+-- the volcano summon strand is PORTED tick 410 U2 — see below).
+-- Tick-410 U2 DBC finding: the spell-effect summon path is dead in this
+-- deployment — no Spell.dbc ships anywhere in the repo (no data/dbc dir
+-- at all; `find` over ~/workspace returns zero *.dbc), so s.Data.Spell
+-- (store.go:981, via File("Spell"), :423-443) fails, spellKnown stays
+-- false (boss_ai.go:1706-1711), and creatureEffectSummonType
+-- (boss_ai.go:4335) never runs for 66269/66258 — the 2min timer casts
+-- summon nothing. The engine path itself is live and correct when data
+-- exists (summonTempCreature funnel fires ev19 on the caster +
+-- fireCreatureSpawned ev23 Reset on the summoned, so the tick-409
+-- volcano/portal Reset arms would arm), but with no spell data it never
+-- executes. The explicit Lua delivery legs below are therefore the only
+-- delivery: netherPortalTick summons 34825 + infernalTick summons 34813
+-- at the caster's exact position (the engine spell path's own no-dest
+-- fallback, boss_ai.go:4356-4361; GetX/GetY/GetZ/GetO resolve via the
+-- generic object fallback, engine/scripting/object.go:177), default
+-- type 7 MANUAL_DESPAWN (the spell-driven lifetime rides the DBC
+-- duration, unreadable here); the second-order legs ride the same
+-- finding — infernalVolcanoReset summons fel infernal 34815 (66252's
+-- effect, 1:1 per eruption) and netherPortalReset summons mistress
+-- 34826 (66263's effect, 1:1 per portal), each at its caster's position.
+-- The 1:1 counts and the 34815/34826 entries ride the DBC effect rows
+-- (MiscValue), unverifiable in-tree — no Spell.dbc, no sql/ spell data.
+-- Caveat: if Spell.dbc ever ships, the 66269/66258/66252/66263 casts
+-- would ALSO summon, double-spawning — these legs must be revisited then.
+-- The legion-flame strand (66197 -> 34784 at a player target) is a
+-- different spell and stays out of this unit (adjacent, not examined).
 -- npc_legion_flame (34784): Reset — PORTED tick 408
 -- (legionFlameReset): instance->GetBossState(DATA_JARAXXUS) !=
 -- IN_PROGRESS -> DespawnOrUnsummon (GetBossState IS bridged,
@@ -137,8 +162,14 @@
 -- ayamiss Reset-arm precedent) + SetReactState(REACT_PASSIVE)
 -- (:308; :4021) + DoCastSelf(Legion Flame Effect 66201, triggered)
 -- (:309). The cross-AI jaraxxus->AI()->JustSummoned leg (:305-306)
--- stays out (no cross-AI bridge — the summon-registry leg, same bar
--- as summons.DespawnAll).
+-- re-examined tick 410 U2: BossAI::JustSummoned
+-- (ScriptedCreature.cpp:559-564) is summons.Summon (no bridge — the
+-- summon-registry leg, same bar as summons.DespawnAll) + DoZoneInCombat
+-- (summon) when the boss is engaged. The zone leg is bridged
+-- (lua_creature_events.go:1944) but Map.dbc-gated (no Map.dbc ships),
+-- and for the passive flame (no UpdateAI, no attacks) it is
+-- unobservable in any case — skipped deliberately; the fel-infernal /
+-- mistress legs ARE ported (see below) because those summons fight.
 -- npc_infernal_volcano (34813): Reset — PORTED tick 409
 -- (infernalVolcanoReset): ctor SetCombatMovement(false) (:321;
 -- no Lua ctor hook — Reset is the spawn hook, ayamiss precedent)
@@ -151,7 +182,8 @@
 -- The old "rides the unbridged summon gate (burrower precedent)"
 -- bar is retracted: the Reset arm itself uses only bridged
 -- methods, like the tick-408 legion-flame / fel-infernal /
--- mistress Resets; the volcano summon strand stays out.
+-- mistress Resets; the volcano summon strand is PORTED tick 410 U2
+-- (infernalTick summons 34813 explicitly — see above).
 -- npc_fel_infernal (34815): Reset — PORTED tick 408
 -- (felInfernalReset / felStreakTick): instance->GetBossState(
 -- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (GetBossState
@@ -164,9 +196,11 @@
 -- the target check; UpdateAI's UpdateVictim gate (:364) is implicit
 -- — no threat targets means no cast) + DoCastSelf(Lord Jaraxxus'
 -- Hittin' Ya 66327, triggered) (:359). The cross-AI
--- jaraxxus->AI()->JustSummoned leg (:344-345) stays out (no cross-AI
--- bridge). (C++ note carried: Fel Infernals are immune to all CC on
--- Heroic — stuns, banish, interrupt, etc.)
+-- jaraxxus->AI()->JustSummoned leg (:344-345) re-examined tick 410 U2:
+-- leg (a) summons.Summon stays out (no bridge); leg (b) DoZoneInCombat
+-- (boss engaged) is PORTED in felInfernalReset below (IN_PROGRESS gate
+-- is the engaged check). (C++ note carried: Fel Infernals are immune
+-- to all CC on Heroic — stuns, banish, interrupt, etc.)
 -- npc_nether_portal (34825): Reset — PORTED tick 409
 -- (netherPortalReset): ctor SetCombatMovement(false) (:382;
 -- no Lua ctor hook — Reset is the spawn hook, ayamiss precedent)
@@ -178,7 +212,8 @@
 -- STALE). The old "rides the unbridged summon gate (burrower
 -- precedent)" bar is retracted: the Reset arm itself uses only
 -- bridged methods, like the tick-408 legion-flame / fel-infernal
--- / mistress Resets; the portal summon strand stays out.
+-- / mistress Resets; the portal summon strand is PORTED tick 410 U2
+-- (netherPortalTick summons 34825 explicitly — see above).
 -- npc_mistress_of_pain — JustEngagedWith EVENT_SPINNING_SPIKE PORTED:
 -- SelectTarget(Random,0,0.0f,true) -> DoCast(Spinning Spike 66283)
 -- non-triggered, 9s init, 20s repeat (not heroic-gated — scheduled
@@ -188,7 +223,9 @@
 -- bridged, lua_creature_events.go:6174) + DoCastSelf(Hittin' Ya 66327,
 -- triggered) + SetData(DATA_MISTRESS_OF_PAIN_COUNT 302, INCREASE 501)
 -- via the shared instanceData table (same mirror as JustDied below);
--- the cross-AI JustSummoned leg stays out (no cross-AI bridge);
+-- the cross-AI JustSummoned leg (a) stays out (no summon-registry
+-- bridge); leg (b) DoZoneInCombat is PORTED tick 410 U2 in
+-- mistressReset below (IN_PROGRESS gate is the engaged check);
 -- EVENT_MISTRESS_KISS:
 -- DoCastSelf(Mistress' Kiss 66336) non-triggered, 15s init,
 -- 30s repeat — PORTED (IsHeroic-gated at engage; the old "no difficulty
@@ -457,8 +494,8 @@ end
 -- C++ EVENT_SUMMON_NETHER_PORTAL (boss_lord_jaraxxus.cpp:241-245):
 -- Talk(EMOTE_NETHER_PORTAL) + Talk(SAY_MISTRESS_OF_PAIN) + DoCast(
 -- SPELL_NETHER_PORTAL 66269), 20s init (:142), unconditional
--- events.Repeat(2min) (:245); the summon STRAND stays out (no
--- Lua-surface consumer without summoning — documented-only).
+-- events.Repeat(2min) (:245); the summon strand is PORTED tick 410 U2
+-- (explicit SummonCreature below — see header).
 local function netherPortalTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "netherportal", 500, function() netherPortalTick(creature, guid) end)
@@ -467,6 +504,11 @@ local function netherPortalTick(creature, guid)
     creature:Talk(EMOTE_NETHER_PORTAL)
     creature:Talk(SAY_MISTRESS_OF_PAIN)
     creature:CastSpell(creature, SPELL_NETHER_PORTAL)
+    -- Spell-summon delivery — PORTED tick 410 U2 (see header): the DBC
+    -- path is dead (no Spell.dbc ships), so the portal is summoned
+    -- explicitly at the caster's exact position (the engine spell
+    -- path's own no-dest fallback, boss_ai.go:4356-4361).
+    creature:SummonCreature(ENTRY_NETHER_PORTAL, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     schedule(guid, "netherportal", 120000, function()
         netherPortalTick(creature, guid)
     end)
@@ -475,8 +517,8 @@ end
 -- C++ EVENT_SUMMON_INFERNAL_ERUPTION (:247-251): Talk(
 -- EMOTE_INFERNAL_ERUPTION) + Talk(SAY_INFERNAL_ERUPTION) + DoCast(
 -- SPELL_INFERNAL_ERUPTION 66258), 1min20s init (:143), unconditional
--- events.Repeat(2min) (:251); the volcano/infernal summon STRANDs stay
--- out — documented-only.
+-- events.Repeat(2min) (:251); the volcano summon strand is PORTED tick
+-- 410 U2 (explicit SummonCreature below — see header).
 local function infernalTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "infernal", 500, function() infernalTick(creature, guid) end)
@@ -485,6 +527,11 @@ local function infernalTick(creature, guid)
     creature:Talk(EMOTE_INFERNAL_ERUPTION)
     creature:Talk(SAY_INFERNAL_ERUPTION)
     creature:CastSpell(creature, SPELL_INFERNAL_ERUPTION)
+    -- Spell-summon delivery — PORTED tick 410 U2 (see header): the DBC
+    -- path is dead (no Spell.dbc ships), so the volcano is summoned
+    -- explicitly at the caster's exact position (the engine spell
+    -- path's own no-dest fallback, boss_ai.go:4356-4361).
+    creature:SummonCreature(ENTRY_INFERNAL_VOLCANO, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     schedule(guid, "infernal", 120000, function()
         infernalTick(creature, guid)
     end)
@@ -832,11 +879,17 @@ local function mistressReset(event, creature)
     -- in the shared instanceData table like JustDied — creature:SetData
     -- is per-creature ScriptData, lua_creature_events.go:792, not the
     -- instance). The cross-AI jaraxxus->AI()->JustSummoned leg
-    -- (:406-407) stays out (no cross-AI bridge).
+    -- (:406-407) re-examined tick 410 U2: leg (a) summons.Summon
+    -- stays out (no bridge); leg (b) DoZoneInCombat is PORTED below
+    -- (IN_PROGRESS gate is the engaged check — see felInfernalReset).
     if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_IN_PROGRESS then
         creature:DespawnOrUnsummon()
         return
     end
+    -- BossAI::JustSummoned leg (b) (ScriptedCreature.cpp:559-564) — see
+    -- felInfernalReset above: IN_PROGRESS gate is the engaged check,
+    -- the Reset carries the zone leg (Go fires ev19 after Reset).
+    creature:DoZoneInCombat()
     creature:CastSpell(creature, SPELL_HITTIN_YA, true)
     local mapObj = creature:GetMap()
     if mapObj then
@@ -910,6 +963,13 @@ local function felInfernalReset(event, creature)
         creature:DespawnOrUnsummon()
         return
     end
+    -- BossAI::JustSummoned leg (b) (ScriptedCreature.cpp:559-564): the
+    -- boss zones the summon in combat when engaged — the IN_PROGRESS
+    -- gate above IS the engaged check, and Go fires ev19 after the
+    -- summon's Reset, so the Reset carries the leg. DoZoneInCombat is
+    -- bridged (lua_creature_events.go:1944) but Map.dbc-gated (no
+    -- Map.dbc ships), so it is a no-op today, live if DBCs land.
+    creature:DoZoneInCombat()
     schedule(guid, "felstreak", 2000, function()
         felStreakTick(creature, guid)
     end)
@@ -933,6 +993,12 @@ local function infernalVolcanoReset(event, creature)
     creature:SetCombatMovement(false)
     creature:SetReactState(REACT_PASSIVE)
     creature:CastSpell(creature, SPELL_INFERNAL_ERUPTION_EFFECT, true)
+    -- Second-order delivery — PORTED tick 410 U2: 66252's summon effect
+    -- (fel infernal 34815, 1:1 per eruption) rides the same dead DBC
+    -- path, so the infernal is summoned explicitly at the volcano's
+    -- position. The summon runs through summonTempCreature, so the
+    -- infernal's ev23 Reset arms synchronously (felInfernalReset).
+    creature:SummonCreature(ENTRY_FEL_INFERNAL, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     if creature:IsHeroic() then
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     end
@@ -949,6 +1015,12 @@ local function netherPortalReset(event, creature)
     creature:SetCombatMovement(false)
     creature:SetReactState(REACT_PASSIVE)
     creature:CastSpell(creature, SPELL_NETHER_PORTAL_EFFECT, true)
+    -- Second-order delivery — PORTED tick 410 U2: 66263's summon effect
+    -- (mistress of pain 34826, 1:1 per portal) rides the same dead DBC
+    -- path, so the mistress is summoned explicitly at the portal's
+    -- position. The summon runs through summonTempCreature, so the
+    -- mistress's ev23 Reset arms synchronously (mistressReset).
+    creature:SummonCreature(ENTRY_MISTRESS_OF_PAIN, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     if creature:IsHeroic() then
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     end

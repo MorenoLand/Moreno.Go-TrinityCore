@@ -17899,19 +17899,21 @@ func init() {
 	// MoveAlongSplineChain + DoCastSelf 66327, EVENT_TAUNT_GNOME
 	// Talk(SAY_INTRO 0), EVENT_KILL_GNOME DoCastSelf 67888,
 	// MovementInform SPLINE_CHAIN SetFacingToObject, EVENT_CHANGE_
-	// ORIENTATION SetFacingTo, EVENT_START_COMBAT SetImmuneToPC /
-	// SetReactState / DoZoneInCombat, DoAction ACTION_JARAXXUS_ENGAGE,
+	// ORIENTATION SetFacingTo, EVENT_START_COMBAT SetImmuneToPC (no
+	// bridge) / SetReactState + DoZoneInCombat (both bridged; DoZoneInCombat
+	// is Map.dbc-gated), DoAction ACTION_JARAXXUS_ENGAGE,
 	// EnterEvadeMode SetBossState + DespawnOrUnsummon — instance model +
-	// motion / react / immune / zone / despawn bridges absent);
+	// motion / immune bridges absent);
 	// EVENT_FEL_LIGHTNING / INCINERATE_FLESH / LEGION_FLAME /
 	// SUMMON_NETHER_PORTAL / SUMMON_INFERNAL_ERUPTION — PORTED in Lua
-	// (random-target via GetAITargets; summon STRANDs stay out); npc_legion_flame (34784) / npc_infernal_volcano (34813) /
-	// npc_fel_infernal (34815) / npc_nether_portal (34825) — zero
-	// registration, entry-verifiable-but-bridge-blocked (Reset legs ride
-	// the instance gate or the unbridged summon gate — jedoga / burrower
-	// precedents; react / flag / random-target / difficulty bridges
-	// absent); npc_mistress_of_pain Reset / JustDied instance SetData
-	// legs (instance model absent); EVENT_SPINNING_SPIKE (66283) +
+	// (random-target via GetAITargets; summon strands PORTED tick 410 —
+	// explicit SummonCreature, the DBC spell-summon path is dead with
+	// no Spell.dbc shipped); npc_legion_flame (34784) / npc_infernal_volcano (34813) /
+	// npc_fel_infernal (34815) / npc_nether_portal (34825) — Reset legs
+	// PORTED ticks 408/409 in the lua file (react / flag / difficulty
+	// bridges live; the old burrower summon-gate bar is retracted);
+	// npc_mistress_of_pain Reset PORTED tick 408 (shared instanceData
+	// mirror) / JustDied instance SetData legs (instance model absent); EVENT_SPINNING_SPIKE (66283) +
 	// EVENT_MISTRESS_KISS (66336, heroic-gated) — PORTED in Lua
 	// (IsHeroic live; kelidan "no difficulty bridge" claim stale); spell_mistress_kiss, spell_mistress_
 	// kiss_area, spell_fel_streak_visual — no SpellScript / AuraScript

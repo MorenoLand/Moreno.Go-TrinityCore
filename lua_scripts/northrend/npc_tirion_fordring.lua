@@ -59,9 +59,10 @@
 -- ships the rows — palehoof dormant precedent); EVENT_SUMMON_CHAMPIONS
 -- controller SetData(0, team) + EVENT_START_CHAMPIONS SetData(1, 0)
 -- (boss_faction_champions.cpp:505-562: SummonChampions roster machine
--- + aggressive/flag legs — unported; creature:SetData is a per-creature
--- ScriptData store, not a dispatch, so writing it would be a dead
--- write); ACTION_VALKYR_DEFEATED/WIPE _summons.DespawnEntry(essences)
+-- + aggressive/flag legs — PORTED tick 410 in boss_faction_champions.lua
+-- controllerReset; creature:SetData is a per-creature ScriptData store,
+-- not a dispatch, so writing it would be a dead write);
+-- ACTION_VALKYR_DEFEATED/WIPE _summons.DespawnEntry(essences)
 -- rides the grid-sweep twin below (essences are valkyr-summoned, not
 -- Fordring-summoned); boss_lich_king_toc EVENT_BREAK_PLATFORM floor
 -- SetDestructibleState (no GO destructible-state bridge) and the
@@ -417,13 +418,12 @@ local function fordringDoAction(event, creature, action)
             creature:Talk(11)
             schedule(guid, "summonChampions", 7000, function()
                 creature:SummonCreature(ENTRY_CHAMPIONS_CONTROLLER, CHAMPIONS_CONTROLLER_POS[1], CHAMPIONS_CONTROLLER_POS[2], CHAMPIONS_CONTROLLER_POS[3], CHAMPIONS_CONTROLLER_POS[4])
-                -- controller SetData(0, team) stays out: the
-                -- SummonChampions roster machine is unported
-                -- (boss_faction_champions.cpp:505-562); creature:SetData
-                -- is a dead ScriptData write without a receiver.
-                -- EVENT_START_CHAMPIONS 3s (controller SetData(1, 0))
-                -- stays out with it: the aggressive/flag legs ride the
-                -- same unported controller machine.
+                -- controller SetData(0, team) + EVENT_START_CHAMPIONS 3s
+                -- SetData(1, 0) are PORTED tick 410 in
+                -- boss_faction_champions.lua (controllerReset: the
+                -- controller's own ev23 Reset is the SetData(0) twin,
+                -- a 3s timer the SetData(1) twin); creature:SetData
+                -- stays a dead ScriptData write and is not used.
             end)
         end)
     elseif action == ACTION_START_CHAMPIONS_ENGAGE then

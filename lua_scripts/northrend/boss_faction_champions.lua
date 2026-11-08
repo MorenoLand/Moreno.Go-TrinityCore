@@ -62,8 +62,13 @@
 --   table (instance_trial_of_the_crusader.lua + the champion* helpers
 --   below); the controller struct (:367-578) has no UpdateAI override
 --   at all (SetData-only), so there is no cast gate to port there.
---   The champion-summon side (SelectChampions / SummonChampions)
---   stays out — the announcer machine is unported.
+--   The champion-summon side (SelectChampions :394-461 /
+--   SummonChampions :464-501) is PORTED 2026-11-07 in the controller
+--   section below (tick 410 U1): the controller's own ev23 Reset is
+--   the SetData(0, team) twin (fires synchronously inside Fordring's
+--   SummonCreature call) and a 3s timer is the SetData(1) twin.
+--   SetImmuneToPC(false) has no bridge (default-false no-op leg);
+--   SetOrientation(0/3) has no bridge (jump leaves facing untouched).
 -- - CASTING gates: base UpdateAI :713 has no HasUnitState hit, so
 --   the EVENT_THREAT / EVENT_REMOVE_CC pumps (powerCheck /
 --   removeCCCheck) stay ungated, exactly as in C++; the derived
@@ -780,6 +785,223 @@ local function championTargetDied(event, creature, victim)
         break
     end
 end
+
+-- Faction-champions controller (34781) roster delivery — PORTED tick 410 U1.
+-- C++ boss_toc_champion_controllerAI (boss_faction_champions.cpp:367-578)
+-- is SetData-only (no UpdateAI override): SetData(0, team) -> SummonChampions
+-- (:505-510, :464-501) and SetData(1, _) -> aggressive/unflag (:511-522).
+-- Fordring drives both (trial_of_the_crusader.cpp:611-619): EVENT_SUMMON_
+-- CHAMPIONS summons the controller at ToCCommonLoc[1] then calls SetData(0,
+-- team) synchronously, and EVENT_START_CHAMPIONS 3s later calls SetData(1,
+-- NOT_STARTED). Lua has no SetData dispatch (creature:SetData is a
+-- per-creature ScriptData store, not a dispatch — fordring header note), so
+-- the twins are: the controller's own ev23 Reset for SetData(0) — ev23 fires
+-- synchronously inside Fordring's SummonCreature call (fireCreatureSpawned,
+-- lua_creature_events.go:7000-7014, via motionForLocked, creaturemotion.go:
+-- 1262) — and a 3s CreateLuaEvent timer for SetData(1). No boss_ai.go entry
+-- is needed (RegisterCreatureEvent needs none — terestian precedent; the
+-- gothik trigger 16137 and the jaraxxus volcano/portal have none either).
+-- Team derives from the first player on the map (DATA_TEAM, set on first
+-- player enter, instance_trial_of_the_crusader.cpp:135-136; no instance
+-- GetData bridge — fordring deriveFactionLeader precedent).
+-- Bridges (all live, verified this tick): SummonCreature
+-- (lua_creature_events.go:3510, default type 7 = TEMPSUMMON_MANUAL_DESPAWN),
+-- SetReactState (:4021; REACT_PASSIVE 0 / REACT_AGGRESSIVE 2, UnitDefines.h),
+-- SetFlag/RemoveFlag (:5572/:5637; UNIT_FIELD_FLAGS 59, UNIT_FLAG_NON_
+-- ATTACKABLE 0x2), SetHomePosition (:6104), MoveJump (:4879; Lua args
+-- (x,y,z,speedXY,speedZ) map positionally onto C++ MoveJump(pos,20,20) via
+-- launchCreatureJumpSpline, creaturemotion.go:4290), Is25ManRaid (:3783),
+-- SetGuidData (:6193) + GetInstanceCreature (:6224, instance guid store).
+-- No bridge: SetImmuneToPC (default false — no-op leg), SetOrientation
+-- (jump leaves facing untouched; C++ sets 0 Alliance / 3 Horde after the
+-- jump). Evade re-fires ev23 (creaturemotion.go:4698, ev23 then ev2), so
+-- the per-GUID summoned guard below is load-bearing: without it an evade
+-- would re-summon the whole roster (C++ Reset never re-summons — only
+-- SetData(0) does, once per controller).
+local ENTRY_CHAMPIONS_CONTROLLER = 34781 -- trial_of_the_crusader.h:179
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h OBJECT_END + 0x35 (jaraxxus precedent)
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- UnitDefines.h
+local REACT_PASSIVE = 0 -- UnitDefines.h
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h
+local CENTER_X = 563.672974 -- ToCCommonLoc[1].x, trial_of_the_crusader.cpp:187
+
+-- Position const FactionChampionLoc[] (boss_faction_champions.cpp:341-363):
+-- 0-4 Horde initial, 5-9 Alliance initial, 10-19 Horde final (targets).
+local FACTION_CHAMPION_LOC = {
+    {514.231, 105.569, 418.234, 0}, {508.334, 115.377, 418.234, 0},
+    {506.454, 126.291, 418.234, 0}, {506.243, 106.596, 421.592, 0},
+    {499.885, 117.717, 421.557, 0},
+    {613.127, 100.443, 419.74, 0}, {621.126, 128.042, 418.231, 0},
+    {618.829, 113.606, 418.232, 0}, {625.845, 112.914, 421.575, 0},
+    {615.566, 109.653, 418.234, 0},
+    {535.469, 113.012, 394.66, 0}, {526.417, 137.465, 394.749, 0},
+    {528.108, 111.057, 395.289, 0}, {519.92, 134.285, 395.289, 0},
+    {533.648, 119.148, 394.646, 0}, {531.399, 125.63, 394.708, 0},
+    {528.958, 131.47, 394.73, 0}, {526.309, 116.667, 394.833, 0},
+    {524.238, 122.411, 394.819, 0}, {521.901, 128.488, 394.832, 0},
+}
+
+-- trial_of_the_crusader.h:180-208, C++ push order (:398-409): healers
+-- druid-restoration / paladin-holy / priest-discipline / shaman-restoration,
+-- others death-knight / hunter / mage / rogue / warlock / warrior.
+local HEALERS = {
+    [true] = {34459, 34445, 34447, 34444}, -- Horde (Alliance players)
+    [false] = {34469, 34465, 34466, 34470}, -- Alliance (Horde players)
+}
+local OTHERS = {
+    [true] = {34458, 34448, 34449, 34454, 34450, 34453}, -- Horde
+    [false] = {34461, 34467, 34468, 34472, 34474, 34475}, -- Alliance
+}
+-- Dropped-healer replacement (:416-448): balance / retribution / shadow /
+-- enhancement per dropped healer, same faction.
+local HEALER_REPLACEMENT = {
+    [34459] = 34451, [34469] = 34460, [34445] = 34456, [34465] = 34471,
+    [34447] = 34441, [34466] = 34473, [34444] = 34455, [34470] = 34463,
+}
+
+-- C++ SelectChampions (:394-461): 4 healers minus 2 (10-man) / 1 (25-man),
+-- each dropped healer replaced in others by its DPS twin; 10-man then
+-- erases 4 at random from others; result is healers-then-others -> 6 on
+-- 10-man, 10 on 25-man (tick-404 totals). urand(0, n-1) = math.random(n).
+local function selectChampions(isAlliancePlayers, is25Man)
+    local healers = {}
+    for _, e in ipairs(HEALERS[isAlliancePlayers]) do healers[#healers + 1] = e end
+    local others = {}
+    for _, e in ipairs(OTHERS[isAlliancePlayers]) do others[#others + 1] = e end
+    local healersSubtracted = is25Man and 1 or 2
+    for _ = 1, healersSubtracted do
+        local pos = math.random(#healers)
+        others[#others + 1] = HEALER_REPLACEMENT[healers[pos]]
+        table.remove(healers, pos)
+    end
+    if not is25Man then
+        for _ = 1, 4 do
+            table.remove(others, math.random(#others))
+        end
+    end
+    local entries = {}
+    for _, e in ipairs(healers) do entries[#entries + 1] = e end
+    for _, e in ipairs(others) do entries[#entries + 1] = e end
+    return entries
+end
+
+-- Per-controller-GUID summoned rosters (the C++ summons.Summon list twin):
+-- the SetData(1) timer unflags exactly these objects, and the guard in
+-- controllerReset keys off it. Same file state as the champion handlers.
+local controllerChampions = {}
+
+-- C++ SummonChampions (:464-501): origins are the faction initial
+-- positions (Horde 0-4 for Alliance players, Alliance 5-9 for Horde
+-- players), picked at random WITH replacement; targets are the 10 final
+-- positions picked at random WITHOUT replacement (erased after each
+-- summon, even when the summon fails — :499 sits outside the nil check).
+-- Per champion: SummonCreature(entry, origin, TEMPSUMMON_MANUAL_DESPAWN)
+-- + SetReactState(PASSIVE) + SetFlag(NON_ATTACKABLE) + SetImmuneToPC(false)
+-- [no bridge, default-false no-op]; Alliance players (Horde champions):
+-- SetHomePosition(target, 0) + MoveJump(target, 20, 20) + SetOrientation(0)
+-- [no bridge]; Horde players (Alliance champions): mirrored X =
+-- 2*ToCCommonLoc[1].x - target.x, home orientation 3, MoveJump(mirrored,
+-- target.o=0, 20, 20) + SetOrientation(3) [no bridge]. Origin orientations
+-- are all 0, so the Lua o=0 -> summoner-orientation fallback
+-- (lua_creature_events.go:139-141) lands the same 0 the C++ Position
+-- carries (controller itself spawns at o=0).
+local function summonChampions(creature, isAlliancePlayers, is25Man)
+    local origins = {}
+    if isAlliancePlayers then
+        for i = 1, 5 do origins[#origins + 1] = FACTION_CHAMPION_LOC[i] end
+    else
+        for i = 6, 10 do origins[#origins + 1] = FACTION_CHAMPION_LOC[i] end
+    end
+    local targets = {}
+    for i = 11, 20 do targets[#targets + 1] = FACTION_CHAMPION_LOC[i] end
+    local entries = selectChampions(isAlliancePlayers, is25Man)
+    local summoned = {}
+    for _, entry in ipairs(entries) do
+        local origin = origins[math.random(#origins)]
+        local pos = math.random(#targets)
+        local target = targets[pos]
+        local champion = creature:SummonCreature(entry, origin[1], origin[2], origin[3], origin[4])
+        if champion ~= nil then
+            summoned[#summoned + 1] = champion
+            champion:SetReactState(REACT_PASSIVE)
+            champion:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+            if isAlliancePlayers then
+                champion:SetHomePosition(target[1], target[2], target[3], 0)
+                champion:MoveJump(target[1], target[2], target[3], 20, 20)
+            else
+                local mirroredX = CENTER_X * 2 - target[1]
+                champion:SetHomePosition(mirroredX, target[2], target[3], 3)
+                champion:MoveJump(mirroredX, target[2], target[3], 20, 20)
+            end
+        end
+        table.remove(targets, pos)
+    end
+    return summoned
+end
+
+-- DATA_TEAM twin (fordring deriveFactionLeader precedent): first player
+-- on the map; no players yet defaults to Horde (team 1), the C++
+-- TEAM_OTHER default that picks Garrosh — unreachable in practice, the
+-- encounter starts from Barrett gossip.
+local function derivePlayerTeam(creature)
+    local mapObj = creature:GetMap()
+    if mapObj ~= nil then
+        local players = mapObj:GetPlayers()
+        if players ~= nil then
+            for _, player in ipairs(players) do
+                local team = player:GetTeam()
+                if team == 0 or team == 1 then
+                    return team
+                end
+            end
+        end
+    end
+    return 1
+end
+
+-- C++ controller SetData(0, team) twin (trial_of_the_crusader.cpp:611-614):
+-- runs synchronously at controller spawn via ev23 (see section header).
+-- Also latches the controller GUID under DATA_FACTION_CRUSADERS — the C++
+-- OnCreatureCreate binding (instance_trial_of_the_crusader.cpp:50); temp
+-- summons bypass the map-event latch in instance_trial_of_the_crusader.lua,
+-- so the latch has to happen here for GetInstanceCreature(2) readers.
+local function controllerReset(event, creature)
+    local guid = creature:GetGUID()
+    if controllerChampions[guid] ~= nil then
+        return
+    end
+    cancelTimers(guid)
+    creature:SetGuidData(DATA_FACTION_CRUSADERS)
+    local summoned = summonChampions(creature, derivePlayerTeam(creature) == 0, creature:Is25ManRaid())
+    controllerChampions[guid] = summoned
+    -- C++ EVENT_START_CHAMPIONS 3s -> controller SetData(1, NOT_STARTED)
+    -- (:616-619): every summon SetReactState(REACT_AGGRESSIVE) +
+    -- RemoveFlag(NON_ATTACKABLE) + SetImmuneToPC(false) [no bridge,
+    -- default-false no-op]. Same 3s in both Fordring paths (normal Talk
+    -- chain and ACTION_START_CHAMPIONS_ENGAGE).
+    schedule(guid, "start", 3000, function()
+        local list = controllerChampions[guid]
+        if list ~= nil then
+            for _, champion in ipairs(list) do
+                champion:SetReactState(REACT_AGGRESSIVE)
+                champion:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+            end
+        end
+    end)
+end
+
+local function controllerLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+local function controllerDied(event, creature)
+    cancelTimers(creature:GetGUID())
+    controllerChampions[creature:GetGUID()] = nil
+end
+
+RegisterCreatureEvent(ENTRY_CHAMPIONS_CONTROLLER, 2, controllerLeaveCombat)
+RegisterCreatureEvent(ENTRY_CHAMPIONS_CONTROLLER, 4, controllerDied)
+RegisterCreatureEvent(ENTRY_CHAMPIONS_CONTROLLER, 23, controllerReset)
 
 local CHAMPION_ENTRIES = {
     34465, 34445, 34473, 34441, 34468, 34449,
