@@ -344,15 +344,23 @@ end
 -- 4, caster). Dropped as provably inert: Unit::Kill(me,
 -- unitCaster) — the caster is the already-dead add (it cast from
 -- JustDied); C++ Unit::Kill on a dead unit is a no-op. Dropped
--- with no bridged consumer: the _frenzyDispels counter (feeds
--- GetData(DATA_FRENZY_DISPELS) -> the unbridged achievement only).
+-- with no bridged consumer: the _frenzyDispels counter is PORTED
+-- 2026-11-08 (tick 416) in faerlinaSpellHit below.
 -- Firing note: the event-14 bridge fires once per hit target — the true
 -- C++ DoDamageAndTriggers twin — so this is 1:1 with the C++ per-hit
 -- SpellHit regardless of effect count (the earlier per-effect caveat is
 -- retracted).
+local DATA_FRENZY_DISPELS = 1 -- boss_faerlina.cpp:65
+
 local function faerlinaSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_WIDOWS_EMBRACE_10 or spellId == SPELL_WIDOWS_EMBRACE_25 then
         creature:Talk(EMOTE_WIDOW_EMBRACE, caster)
+        -- C++ SpellHit :128-140: ++_frenzyDispels (the
+        -- achievement_momma_said_knock_you_out latch; Go case in
+        -- engine/world/achievement_criteria_scripts.go). The
+        -- Unit::Kill(me, unitCaster) leg stays dropped: the caster is
+        -- the already-dead add, a no-op in C++.
+        creature:SetData(DATA_FRENZY_DISPELS, creature:GetData(DATA_FRENZY_DISPELS) + 1)
     end
 end
 
@@ -390,6 +398,7 @@ local function faerlinaReset(event, creature)
         creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(creature:GetGUID())
+    creature:SetData(DATA_FRENZY_DISPELS, 0) -- C++ Reset :110-113
 end
 
 RegisterCreatureEvent(ENTRY_FAERLINA, 1, faerlinaEnterCombat)

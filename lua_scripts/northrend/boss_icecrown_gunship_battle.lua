@@ -125,7 +125,9 @@
 -- (false) then SetControlled(true) (the "cannon root flags") — no
 -- PassengerBoarded bridge: all stay out.
 -- The 17 spell_igb_* SpellScripts join the no-SpellScript-bridge queue;
--- achievement_im_on_a_boat has no achievement bridge.
+-- achievement_im_on_a_boat — PORTED 2026-11-08 (tick 416): the deck-aura
+-- visit counter rides deckAuraApply below; Go case in
+-- engine/world/achievement_criteria_scripts.go.
 
 local ENTRY_SAURFANG = 36939
 local ENTRY_MURADIN = 36948
@@ -135,6 +137,19 @@ local ENTRY_KOR_KRON_REAVER = 36957
 local ENTRY_SKYBREAKER_MARINE = 36950
 local ENTRY_SKYBREAKER_MORTAR = 36978
 local ENTRY_KOR_KRON_ROCKETEER = 36982
+
+-- spell_igb_on_gunship_deck (boss_icecrown_gunship_battle.cpp:181-182,
+-- :1808-1817): deck-aura ids + the ship each aura's visits count on.
+-- C++-verified mapping (NOT the inverted one in the tick-416 triage
+-- draft): the Skybreaker-deck aura (70120, Horde raid) counts on
+-- Orgrim's Hammer (37215); the Orgrim's Hammer-deck aura (70121,
+-- Alliance raid) counts on the Skybreaker (37540). The visits live on
+-- the raid's OWN ship AI — the criteria target is that ship.
+local SPELL_ON_SKYBREAKER_DECK = 70120
+local SPELL_ON_ORGRIMS_HAMMER_DECK = 70121
+local ENTRY_THE_SKYBREAKER = 37540 -- icecrown_citadel.h:191
+local ENTRY_ORGRIMS_HAMMER = 37215 -- icecrown_citadel.h:192
+local ACTION_SHIP_VISITS = 5 -- boss_icecrown_gunship_battle.cpp:212
 
 local SPELL_BATTLE_FURY = 69637
 local SPELL_CLEAVE = 15284
@@ -374,3 +389,50 @@ RegisterCreatureEvent(ENTRY_SKYBREAKER_MORTAR, 23, rocketeerReset)
 RegisterCreatureEvent(ENTRY_KOR_KRON_ROCKETEER, 1, rocketeerEnterCombat)
 RegisterCreatureEvent(ENTRY_KOR_KRON_ROCKETEER, 2, rocketeerLeaveCombat)
 RegisterCreatureEvent(ENTRY_KOR_KRON_ROCKETEER, 23, rocketeerReset)
+
+-- C++ spell_igb_on_gunship_deck::HandleApply
+-- (boss_icecrown_gunship_battle.cpp:1808-1817): when the enemy-deck aura
+-- applies to a player, the nearest gunship's AI counts one visit for
+-- that player's GUID (SetGUID, ACTION_SHIP_VISITS); GetData returns the
+-- max over players (:815-827). No creature:SetGUID bridge exists, so the
+-- per-player counts live in this Lua table (keyed [gunshipGUID][playerGUID])
+-- and the running max is written into the gunship's ScriptData store —
+-- exactly the store bossLatchData reads for the Go case. Dormant until
+-- the deck auras (70120/70121) are applied by the engine.
+local shipVisits = {}
+
+local function deckAuraApply(event, aura, target)
+    if not target or target:GetObjectType() ~= "Player" then
+        return
+    end
+    -- The aura hook passes (event, aura, target) only — the spell id
+    -- rides the aura object (lua_aura.go GetAuraId).
+    local spellId = aura:GetAuraId()
+    local shipEntry = nil
+    if spellId == SPELL_ON_SKYBREAKER_DECK then
+        shipEntry = ENTRY_ORGRIMS_HAMMER
+    elseif spellId == SPELL_ON_ORGRIMS_HAMMER_DECK then
+        shipEntry = ENTRY_THE_SKYBREAKER
+    else
+        return
+    end
+    local ship = target:FindNearestCreature(shipEntry, 200.0)
+    if not ship then
+        return
+    end
+    local shipGuid = ship:GetGUID()
+    local per = shipVisits[shipGuid]
+    if not per then
+        per = {}
+        shipVisits[shipGuid] = per
+    end
+    local playerGuid = target:GetGUID()
+    local visits = (per[playerGuid] or 0) + 1
+    per[playerGuid] = visits
+    if visits > ship:GetData(ACTION_SHIP_VISITS) then
+        ship:SetData(ACTION_SHIP_VISITS, visits)
+    end
+end
+
+RegisterAuraEvent(SPELL_ON_SKYBREAKER_DECK, 2, deckAuraApply)
+RegisterAuraEvent(SPELL_ON_ORGRIMS_HAMMER_DECK, 2, deckAuraApply)

@@ -128,11 +128,8 @@
 --   owns object cleanup).
 -- CallForHelp(70.0f) (:112) — no bridge.
 -- SpellHitTarget (:174-186) — SPELL_PERMAFROST_HELPER aura-stack
---   capture into _permafrostStack: the hook bridge EXISTS
---   (CREATURE_EVENT_ON_SPELL_HIT_TARGET, event 15 — boss_ai.go,
---   the faerlina SpellHit port), but the arm stays out because its
---   only consumer is GetData -> the achievement leg (the zuramat /
---   devourer_of_souls precedent).
+--   capture into _permafrostStack: PORTED 2026-11-08 (tick 416) in
+--   garfrostSpellHitTarget below (the achievement bridge now exists).
 -- GetData (:187-190) — creature:GetData IS bridged (ScriptData store,
 -- 2026-10-24); the blocker is the achievement bridge (the boss_zuramat
 -- precedent).
@@ -146,8 +143,9 @@
 --   AfterHit immunity restore) — no SpellScript bridge (the
 --   boss_moragg optic-link precedent), stays in the standing queue.
 -- achievement_doesnt_go_to_eleven (:335-353, OnCheck GetData <= 10) —
---   no achievement bridge; joins the unmodeled-achievement queue (the
---   cyanigosa / ichoron precedent).
+--   PORTED 2026-11-08 (tick 416): the SpellHitTarget peak latch rides
+--   garfrostSpellHitTarget below; Go case in
+--   engine/world/achievement_criteria_scripts.go.
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
 -- DelayEvents(8s) (:138/:148): C++ shifts the pending saronite timer's
@@ -193,6 +191,9 @@ local SAY_CAST_DEEP_FREEZE = 6
 local SAY_TYRANNUS_DEATH = 0 -- garfrost's own enum (boss_forgemaster_garfrost.cpp:38), Talked by tyrannus
 
 local SPELL_PERMAFROST = 70326
+local SPELL_PERMAFROST_HELPER_10 = 68786 -- RAID_MODE 10-man
+local SPELL_PERMAFROST_HELPER_25 = 70336 -- RAID_MODE 25-man (heroic falls through)
+local ACHIEV_DOESNT_GO_TO_ELEVEN = 0 -- boss_forgemaster_garfrost.cpp:66
 local SPELL_THROW_SARONITE = 68788
 local SPELL_THUNDERING_STOMP = 68771
 local SPELL_CHILLING_WAVE = 68778
@@ -504,11 +505,37 @@ local function garfrostReset(event, creature)
         creature:SetBossState(DATA_GARFROST, 0)
     end
     clearState(creature:GetGUID())
+    creature:SetData(ACHIEV_DOESNT_GO_TO_ELEVEN, 0) -- C++ Reset -> Initialize :96
 end
 
 RegisterCreatureEvent(ENTRY_GARFROST, 1, garfrostEnterCombat)
 RegisterCreatureEvent(ENTRY_GARFROST, 2, garfrostLeaveCombat)
 RegisterCreatureEvent(ENTRY_GARFROST, 3, garfrostKilledUnit)
 RegisterCreatureEvent(ENTRY_GARFROST, 4, garfrostJustDied)
+-- C++ SpellHitTarget (boss_forgemaster_garfrost.cpp:174-186): when the
+-- Permafrost helper aura hits a unit, _permafrostStack = max(stack of
+-- that aura on the target) — the achievement_doesnt_go_to_eleven latch
+-- (Go case in engine/world/achievement_criteria_scripts.go). Dormant
+-- until the DBC aura trigger (70326 -> helper) runs: without Spell.dbc
+-- the helper hits never occur and the slot stays 0.
+local function garfrostSpellHitTarget(event, creature, target, spellId)
+    local helper = SPELL_PERMAFROST_HELPER_10
+    if creature:Is25ManRaid() then
+        helper = SPELL_PERMAFROST_HELPER_25
+    end
+    if spellId ~= helper or not target then
+        return
+    end
+    local aura = target:GetAura(helper)
+    if not aura then
+        return
+    end
+    local stack = aura:GetStackAmount()
+    if stack > creature:GetData(ACHIEV_DOESNT_GO_TO_ELEVEN) then
+        creature:SetData(ACHIEV_DOESNT_GO_TO_ELEVEN, stack)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_GARFROST, 15, garfrostSpellHitTarget)
 RegisterCreatureEvent(ENTRY_GARFROST, 9, garfrostDamageTaken)
 RegisterCreatureEvent(ENTRY_GARFROST, 23, garfrostReset)

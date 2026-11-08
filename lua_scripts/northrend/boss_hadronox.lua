@@ -46,12 +46,12 @@
 -- motion slot and stays out)
 -- + SetStep(0); SetStep: _lastPlayerCombatState latch, SetReactState(
 -- REACT_PASSIVE), SetHomePosition(hadronoxStep[step]),
--- MotionMaster Clear + MovePoint — motion-master bridge absent; the
+-- MotionMaster Clear + MovePoint — PORTED 2026-11-08 (tick 416) in
+-- hadronoxSetStep below (MoveTo + ev28 MovementInform are bridged;
+-- the old "motion-master bridge absent" claim is stale). The
 -- DoAction(ACTION_HADRONOX_MOVE) driver (sender: crusher JustDied,
 -- boss_hadronox.cpp:556; ev38 dispatch IS bridged,
--- lua_creature_events.go:802) — so the SetStep movement machine
--- stays out as a unit; only its Talk leg ports, as the crusherDied
--- relay below (step-gated, no movement).
+-- lua_creature_events.go:802) rides the crusherDied relay below.
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
@@ -62,13 +62,15 @@
 -- MovementInform: SetReactState(REACT_AGGRESSIVE) on EVERY step
 -- arrival, but DoCastAOE(WEB_FRONT_DOORS 53177) +
 -- DoCastAOE(WEB_SIDE_DOORS 53185) + _doorsWebbed latch + DoZoneInCombat
--- only at the final step — stays out: the whole arm fires on the
--- unbridged motion-master step machine, and both spells' effects are
--- delivered by the spell_hadronox_web_doors SpellScript (aura removal
--- — shazzrah precedent).
--- GetData(DATA_HADRONOX_ENTERED_COMBAT/DATA_HADRONOX_WEBBED_DOORS) +
--- SetGUID(_anubar GUID list) + ObjectAccessor cross-AI — cross-AI
--- GetData/SetGUID bridges absent.
+-- only at the final step — PORTED 2026-11-08 (tick 416) in
+-- hadronoxMovementInform below (ev28 is bridged). Both spells' aura-
+-- removal effects ride the unported spell_hadronox_web_doors
+-- SpellScript (shazzrah precedent) — the casts are the ported arm.
+-- GetData(DATA_HADRONOX_ENTERED_COMBAT) + SetGUID(_anubar GUID list) +
+-- ObjectAccessor cross-AI — cross-AI GetData/SetGUID bridges absent.
+-- GetData(DATA_HADRONOX_WEBBED_DOORS) — PORTED 2026-11-08 (tick 416):
+-- the latch rides hadronoxMovementInform; Go case in
+-- engine/world/achievement_criteria_scripts.go.
 -- CanAIAttack 70.0f home-distance leash — no leash bridge.
 -- JustEngagedWith me->setActive(true) leg — no active-flag bridge.
 -- EVENT_PLAYER_CHECK (1s): GetCombatManager PvE-ref IsControlledByPlayer
@@ -216,6 +218,21 @@ local function leechingPoisonRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_LEECH_POISON, 3, leechingPoisonRemove)
+-- C++ boss_hadronox.cpp:146-152 — the four SetStep waypoints
+-- (0-based _step; Lua tables are 1-based, so index step+1).
+local HADRONOX_STEPS = {
+    { 515.5848, 544.2007, 673.6272 },
+    { 562.191, 514.068, 696.4448 },
+    { 610.3828, 518.6407, 695.9385 },
+    { 530.42, 560.003, 733.0308 },
+}
+local SPELL_WEB_FRONT_DOORS = 53177 -- boss_hadronox.cpp:204
+local SPELL_WEB_SIDE_DOORS = 53185 -- boss_hadronox.cpp:205
+local DATA_HADRONOX_WEBBED_DOORS = 3 -- boss_hadronox.cpp:119
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+
 local SPELL_WEB_GRAB = 57731
 local SPELL_ACID_CLOUD = 53400
 local SPELL_CRUSHER_FRENZY = 53801
@@ -226,6 +243,11 @@ local HADRONOX_EMOTE_MOVE = 1 -- boss_hadronox.cpp:132
 -- Crusher-death step counter for the HADRONOX_MOVE relay below (C++
 -- _step, reset in Reset/ctor; NUM_STEPS = 4, Talk gated on _step < 3).
 local hadronoxStep = {}
+
+-- Engaged latch: the _lastPlayerCombatState twin (C++ EVENT_PLAYER_CHECK
+-- :327-350 flips it on the 1s combat check; SetStep early-returns while
+-- it is set). Set on ev1, cleared on ev2/ev4/ev23.
+local hadronoxEngaged = {}
 
 local timers = {}
 
@@ -349,6 +371,7 @@ end
 
 local function hadronoxEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
+    hadronoxEngaged[guid] = true
     cancelTimers(guid)
     schedule(guid, "piercearmor", math.random(4000, 7000), function()
         pierceArmorTick(creature, guid)
@@ -365,6 +388,7 @@ local function hadronoxEnterCombat(event, creature, target)
 end
 
 local function hadronoxLeaveCombat(event, creature)
+    hadronoxEngaged[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
     -- C++ EnterEvadeMode: _DespawnAtEvade(25s) on self + aura triggers
     -- (cross-creature legs unbridged) + summons.DespawnAll() (moot —
@@ -375,12 +399,54 @@ local function hadronoxLeaveCombat(event, creature)
 end
 
 local function hadronoxDied(event, creature, killer)
+    hadronoxEngaged[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
 end
 
 local function hadronoxReset(event, creature)
     cancelTimers(creature:GetGUID())
+    hadronoxEngaged[creature:GetGUID()] = nil
     hadronoxStep[creature:GetGUID()] = nil -- C++ Reset SetStep(0) twin
+    creature:SetData(DATA_HADRONOX_WEBBED_DOORS, 0) -- C++ InitializeAI :284
+end
+
+-- C++ boss_hadronoxAI::SetStep (boss_hadronox.cpp:173-185): early-return
+-- while engaged (_lastPlayerCombatState); else latch the step, go passive,
+-- re-home to the step waypoint, stop attacking, and MovePoint there.
+-- The arrival leg rides hadronoxMovementInform (ev28) below.
+local function hadronoxSetStep(hadronox, step)
+    if hadronoxEngaged[hadronox:GetGUID()] then
+        return
+    end
+    local pos = HADRONOX_STEPS[step + 1]
+    hadronoxStep[hadronox:GetGUID()] = step
+    hadronox:SetReactState(REACT_PASSIVE)
+    hadronox:SetHomePosition(pos[1], pos[2], pos[3], 0)
+    hadronox:AttackStop()
+    hadronox:MoveTo(0, pos[1], pos[2], pos[3])
+end
+
+-- C++ boss_hadronoxAI::MovementInform (boss_hadronox.cpp:197-208):
+-- SetReactState(AGGRESSIVE) on EVERY step arrival; only at the final
+-- step (_step == NUM_STEPS-1 == 3): web both doors + _doorsWebbed latch
+-- (the achievement_hadronox_denied gate; Go case in
+-- engine/world/achievement_criteria_scripts.go) + DoZoneInCombat. The
+-- web spells' aura-removal effects ride the unported
+-- spell_hadronox_web_doors SpellScript — the casts themselves are the
+-- ported arm (the DoCastAOE self-cast convention).
+local function hadronoxMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    creature:SetReactState(REACT_AGGRESSIVE)
+    local step = hadronoxStep[creature:GetGUID()] or 0
+    if step < 3 then
+        return
+    end
+    creature:CastSpell(creature, SPELL_WEB_FRONT_DOORS)
+    creature:CastSpell(creature, SPELL_WEB_SIDE_DOORS)
+    creature:SetData(DATA_HADRONOX_WEBBED_DOORS, 1)
+    creature:DoZoneInCombat()
 end
 
 -- C++ npc_anub_ar_crusher::DamageTaken (boss_hadronox.cpp:533-540):
@@ -448,7 +514,10 @@ local function crusherDied(event, creature, killer)
         if hadronox:IsAlive() then
             local step = hadronoxStep[hadronox:GetGUID()] or 0
             if step < 3 then
-                hadronoxStep[hadronox:GetGUID()] = step + 1
+                -- C++ DoAction(ACTION_HADRONOX_MOVE) :248-254 — the Talk
+                -- fires even when SetStep early-returns (engaged); only
+                -- the movement is suppressed, so Talk stays outside.
+                hadronoxSetStep(hadronox, step + 1)
                 hadronox:Talk(HADRONOX_EMOTE_MOVE)
             end
             break
@@ -457,6 +526,7 @@ local function crusherDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_HADRONOX, 5, hadronoxSpawn)
+RegisterCreatureEvent(ENTRY_HADRONOX, 28, hadronoxMovementInform)
 RegisterCreatureEvent(ENTRY_HADRONOX, 1, hadronoxEnterCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 2, hadronoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 4, hadronoxDied)

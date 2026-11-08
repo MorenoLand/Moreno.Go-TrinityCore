@@ -180,8 +180,9 @@
 -- periodic / apply / remove — the RemoveAura single-application twin
 -- covers their RemoveAurasDueToSpell legs).
 -- achievement_he_feeds_on_your_tears (OnCheck: GetData
--- DATA_HAS_FED_ON_TEARS) — no GetData / achievement bridges; joins the
--- unmodeled-achievement queue.
+-- DATA_HAS_FED_ON_TEARS) — PORTED 2026-11-08 (tick 416): the KilledUnit
+-- latch rides algalonTargetDied below; Go case in
+-- engine/world/achievement_criteria_scripts.go.
 
 local ENTRY_ALGALON = 32871
 local BOSS_ALGALON = 13 -- ulduar.h:49
@@ -315,10 +316,17 @@ end
 -- — the razuvious player-gated variant precedent; the 1s rate limit is
 -- modeled with an os.time() deadline (the malchezaar os.time-deadline
 -- precedent; re-yell unlocks on the next whole second).
+local DATA_HAS_FED_ON_TEARS = 30043005 -- boss_algalon_the_observer.cpp:184
+
 local function algalonTargetDied(event, creature, victim)
     if not victim or victim:GetObjectType() ~= "Player" then
         return
     end
+    -- C++ KilledUnit :500-510: player victim -> _fedOnTears = true (the
+    -- achievement_he_feeds_on_your_tears latch; ctor-only clear :290, so
+    -- it deliberately survives ev23 Reset — the per-motion ScriptData
+    -- store is fresh only on respawn, the C++ fresh-AI twin).
+    creature:SetData(DATA_HAS_FED_ON_TEARS, 1)
     local state = getState(creature:GetGUID())
     local now = os.time()
     if now >= state.killYellUntil then

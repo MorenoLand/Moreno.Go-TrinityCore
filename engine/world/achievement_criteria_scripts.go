@@ -18,15 +18,21 @@ import "math"
 // CreatureAI::GetData type numbers for the boss-file achievement latches
 // (the AI-local enum values, not instance DATA_* ids).
 const (
-	dataAuriayaCrazyCatLady   = 30063077 // boss_auriaya.cpp:109 DATA_CRAZY_CAT_LADY
-	dataAuriayaNineLives      = 30763077 // boss_auriaya.cpp:108 DATA_NINE_LIVES
-	dataSjonnirAbuseTheOoze   = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
-	dataKingDredRaptorsKilled = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
-	dataBrannSparklinNews     = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
-	dataLichKingPlagueStack   = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
-	dataXT002GravityBomb      = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
-	dataThaddiusPolarity      = 1        // boss_thaddius.cpp:77 DATA_POLARITY_CROSSED
-	dataKelthuzadAbomsKilled  = 1        // boss_kelthuzad.cpp:83 DATA_ABOMINATION_DEATH_COUNT
+	dataAuriayaCrazyCatLady    = 30063007 // boss_auriaya.cpp:109 DATA_CRAZY_CAT_LADY
+	dataAuriayaNineLives       = 30763077 // boss_auriaya.cpp:108 DATA_NINE_LIVES
+	dataSjonnirAbuseTheOoze    = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
+	dataKingDredRaptorsKilled  = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
+	dataBrannSparklinNews      = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
+	dataLichKingPlagueStack    = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
+	dataXT002GravityBomb       = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
+	dataThaddiusPolarity       = 1        // boss_thaddius.cpp:77 DATA_POLARITY_CROSSED
+	dataKelthuzadAbomsKilled   = 1        // boss_kelthuzad.cpp:83 DATA_ABOMINATION_DEATH_COUNT
+	dataAlgalonFedOnTears      = 30043005 // boss_algalon_the_observer.cpp:184 DATA_HAS_FED_ON_TEARS
+	dataFaerlinaFrenzyDispels  = 1        // boss_faerlina.cpp:65 DATA_FRENZY_DISPELS
+	dataSindragosaMysticBuffet = 0        // boss_sindragosa.cpp:141 DATA_MYSTIC_BUFFET_STACK
+	dataGarfrostPermafrost     = 0        // boss_forgemaster_garfrost.cpp:66 ACHIEV_DOESNT_GO_TO_ELEVEN
+	dataGunshipShipVisits      = 5        // boss_icecrown_gunship_battle.cpp:212 ACTION_SHIP_VISITS
+	dataHadronoxWebbedDoors    = 3        // boss_hadronox.cpp:119 DATA_HADRONOX_WEBBED_DOORS
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -305,7 +311,7 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 
 	case "achievement_crazy_cat_lady": // boss_auriaya.cpp:679-695
 		// OnCheck: target->ToCreature()->AI()->GetData(DATA_CRAZY_CAT_LADY
-		// 30063077) — true while no Sanctum Sentry died: the latch starts
+		// 30063007) — true while no Sanctum Sentry died: the latch starts
 		// set (ctor/Reset, boss_auriaya.cpp:137/:142) and the sentry
 		// JustDied relay (boss_auriaya.cpp:301) clears it via DoAction(0);
 		// the Lua port keeps it in the boss motion's SetData store.
@@ -407,6 +413,87 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataKelthuzadAbomsKilled) >= 18
+
+	case "achievement_he_feeds_on_your_tears": // boss_algalon_the_observer.cpp:1270-1280
+		// OnCheck: !GetData(DATA_HAS_FED_ON_TEARS 30043005) — true
+		// while Algalon never killed a player: the latch is set in
+		// KilledUnit (boss_algalon_the_observer.cpp:500-510) and lives
+		// on the AI object (ctor-only clear :290), so it survives
+		// wipes; the Lua twin writes it in algalonTargetDied
+		// (boss_algalon_the_observer.lua) and the per-motion
+		// ScriptData store is fresh only on respawn, the C++ twin.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataAlgalonFedOnTears) == 0
+
+	case "achievement_momma_said_knock_you_out": // boss_faerlina.cpp:256-265
+		// OnCheck: !GetData(DATA_FRENZY_DISPELS 1) — true while
+		// Faerlina's Frenzy was never dispelled: the counter
+		// increments in SpellHit (boss_faerlina.cpp:128-140) when
+		// Widow's Embrace hits her; the Lua twin increments it in
+		// faerlinaSpellHit (boss_faerlina.lua) and zeroes it at Reset.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFaerlinaFrenzyDispels) == 0
+
+	case "achievement_all_you_can_eat": // boss_sindragosa.cpp:1513-1524
+		// OnCheck: GetData(DATA_MYSTIC_BUFFET_STACK 0) <= 5 — the
+		// running peak of the Mystic Buffet aura stack on any player,
+		// tracked in SpellHitTarget (boss_sindragosa.cpp:432-441) off
+		// the difficulty-resolved 70127 hit; the Lua twin keeps the
+		// peak in the boss motion's SetData store
+		// (boss_sindragosa.lua). Dormant until the DBC aura trigger
+		// (70128 -> 70127) runs: without Spell.dbc the helper hits
+		// never occur and the slot stays 0, the fail-closed default.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSindragosaMysticBuffet) <= 5
+
+	case "achievement_doesnt_go_to_eleven": // boss_forgemaster_garfrost.cpp:335-349
+		// OnCheck: GetData(ACHIEV_DOESNT_GO_TO_ELEVEN 0) <= 10 — the
+		// running peak of the Permafrost helper aura stack on any
+		// player, tracked in SpellHitTarget
+		// (boss_forgemaster_garfrost.cpp:174-186) off the
+		// RAID_MODE(68786, 70336) helper hit; the Lua twin keeps the
+		// peak in the boss motion's SetData store
+		// (boss_forgemaster_garfrost.lua). Dormant until the DBC aura
+		// trigger (70326 -> helper) runs: without Spell.dbc the helper
+		// hits never occur and the slot stays 0, the fail-closed
+		// default.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataGarfrostPermafrost) <= 10
+
+	case "achievement_im_on_a_boat": // boss_icecrown_gunship_battle.cpp:2209-2218
+		// OnCheck: GetData(ACTION_SHIP_VISITS 5) <= 2 — the max
+		// visits to the enemy ship over all players, counted per
+		// player GUID in npc_gunshipAI::SetGUID
+		// (boss_icecrown_gunship_battle.cpp:803-813), fed by the
+		// deck-aura apply (spell_igb_on_gunship_deck :1808-1817);
+		// the Lua twin keeps the per-player counts in a table and
+		// writes the running max into the gunship motion's SetData
+		// store (boss_icecrown_gunship_battle.lua). Dormant until the
+		// deck auras (70120/70121) are applied by the engine.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataGunshipShipVisits) <= 2
+
+	case "achievement_hadronox_denied": // boss_hadronox.cpp:1116-1131
+		// OnCheck: !GetData(DATA_HADRONOX_WEBBED_DOORS 3) — true
+		// while Hadronox never webbed the doors: the latch is set in
+		// MovementInform at the final step
+		// (boss_hadronox.cpp:197-208); the Lua twin sets it when the
+		// SetStep machine reaches the final step
+		// (boss_hadronox.lua). Absent reads 0, the C++ member default.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataHadronoxWebbedDoors) == 0
 
 	case "achievement_bg_ic_glaive_grave": // achievement_scripts.cpp:81-96
 		// The player is riding a glaive thrower (BattlegroundIC.h:41-42:

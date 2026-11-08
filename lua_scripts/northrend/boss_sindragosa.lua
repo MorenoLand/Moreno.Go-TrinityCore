@@ -109,9 +109,10 @@
 -- frostwing whelp (37532) carries no timer arms — NOT registered.
 -- at_sindragosa_lair joins the no-AreaTrigger bridge queue (the
 -- boss_anubrekhan at_anubrekhan_entrance precedent);
--- achievement_all_you_can_eat joins the
--- no-achievement-criteria-bridge queue (the lana'thel achievement
--- precedent); the remaining 12 Sindragosa-specific SpellScript /
+-- achievement_all_you_can_eat — PORTED 2026-11-08 (tick 416): the
+-- SpellHitTarget peak latch rides sindragosaSpellHitTarget below; Go
+-- case in engine/world/achievement_criteria_scripts.go. The remaining
+-- 12 Sindragosa-specific SpellScript /
 -- AuraScript legs + the 2 generic spell_trigger_spell_from_caster
 -- with-args legs join the no-SpellScript-bridge /
 -- no-AuraScript-bridge queues (the boss_moragg optic-link
@@ -154,6 +155,10 @@ local BOSS_STATE_DONE = 3
 
 local SPELL_TANK_MARKER = 71039
 local SPELL_MYSTIC_BUFFET = 70128
+local SPELL_MYSTIC_BUFFET_HIT = 70127 -- boss_sindragosa.cpp:437, base id;
+-- the 25-man/heroic difficulty variants live in DBC (spell_difficulty),
+-- not in the C++ tree, so only the base id is filterable here.
+local DATA_MYSTIC_BUFFET_STACK = 0 -- boss_sindragosa.cpp:141
 local SPELL_FROST_BOMB_VISUAL = 70022 -- boss_sindragosa.cpp:74
 local SPELL_BIRTH_NO_VISUAL = 40031 -- boss_sindragosa.cpp:75
 local SPELL_ICE_TOMB_TARGET = 69712
@@ -311,6 +316,7 @@ local function sindragosaReset(event, creature)
     end
     cancelTimers(creature:GetGUID())
     sindragosaThirdPhase[creature:GetGUID()] = nil
+    creature:SetData(DATA_MYSTIC_BUFFET_STACK, 0) -- C++ Reset -> Initialize :233
     -- C++ Reset(): DoCastSelf(SPELL_TANK_MARKER, true) (:241),
     -- unconditional one-shot. The engine fires event 23 on death too
     -- (Eluna reset-then-died order, lua_creature_events.go) but the C++ AI
@@ -542,6 +548,28 @@ RegisterCreatureEvent(ENTRY_SINDRAGOSA, 1, sindragosaJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 2, sindragosaLeaveCombat)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 3, sindragosaKilledUnit)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 4, sindragosaJustDied)
+-- C++ SpellHitTarget (boss_sindragosa.cpp:432-441): when the
+-- difficulty-resolved 70127 hit lands on a unit, _mysticBuffetStack =
+-- max(stack of that aura on the target) — the
+-- achievement_all_you_can_eat latch (Go case in
+-- engine/world/achievement_criteria_scripts.go). Dormant until the DBC
+-- aura trigger (70128 -> 70127) runs: without Spell.dbc the helper hits
+-- never occur and the slot stays 0.
+local function sindragosaSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_MYSTIC_BUFFET_HIT or not target then
+        return
+    end
+    local aura = target:GetAura(spellId)
+    if not aura then
+        return
+    end
+    local stack = aura:GetStackAmount()
+    if stack > creature:GetData(DATA_MYSTIC_BUFFET_STACK) then
+        creature:SetData(DATA_MYSTIC_BUFFET_STACK, stack)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 15, sindragosaSpellHitTarget)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 9, sindragosaDamageTaken)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 24, sindragosaReachHome)
