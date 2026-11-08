@@ -77,6 +77,7 @@ const (
 	dataSapphironHundredClub           = 21462147 // boss_sapphiron.cpp:88 DATA_THE_HUNDRED_CLUB
 	dataTrollgoreConsumptionJunction   = 1        // boss_trollgore.cpp:57 DATA_CONSUMPTION_JUNCTION
 	dataDreamPortalMissed              = 2        // boss_valithria_dreamwalker.cpp:149 MISSED_PORTALS
+	dataMadeAMess                      = 45374613 // boss_deathbringer_saurfang.cpp:207 DATA_MADE_A_MESS
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -669,6 +670,22 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return wasVampire
 		}
 		return !wasVampire
+
+	case "achievement_ive_gone_and_made_a_mess": // boss_deathbringer_saurfang.cpp:1238-1256
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_MADE_A_MESS
+		// 45374613) — true while _fallenChampionCastCount < 3/5
+		// (10/25-man, :540-546): the count increments in DoAction(
+		// ACTION_MARK_OF_THE_FALLEN_CHAMPION) (:580-592), which the
+		// blood-link aura periodic tick (:1028) fires at full energy.
+		// The Lua twin keeps the latch in Saurfang's SetData store
+		// (boss_deathbringer_saurfang.lua): set at engage, cleared
+		// when the count reaches the 3/5 threshold. Dormant clear:
+		// the blood-link tick is an ev1 aura handler, so the count
+		// only moves once Spell.dbc ships.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataMadeAMess) != 0
 
 	case "achievement_less_rabi": // boss_moorabi.cpp:198-215
 		// OnCheck: target->ToCreature()->AI()->GetData(DATA_LESS_RABI 1) —

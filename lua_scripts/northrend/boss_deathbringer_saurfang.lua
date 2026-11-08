@@ -45,7 +45,8 @@
 -- only; this clone carries no sql/ tree, so ScriptName bindings are
 -- DB-side by construction.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill
--- (player-gated), 4 OnDied, 9 OnDamageTaken, 23 OnReset, 24 OnReachHome.
+-- (player-gated), 4 OnDied, 9 OnDamageTaken, 15 OnSpellHitTarget,
+-- 23 OnReset, 24 OnReachHome, 38 OnDoAction.
 -- Timers via CreateLuaEvent (GUID-keyed, cancelled on events 2/4/23); melee is
 -- engine-driven in Go.
 --
@@ -69,8 +70,9 @@
 --   combat scheduler seeds: EVENT_SUMMON_BLOOD_BEAST 30s (:304),
 --   EVENT_BERSERK (:305, see deviation), EVENT_BOILING_BLOOD 15500ms
 --   (:306), EVENT_BLOOD_NOVA 17s (:307), EVENT_RUNE_OF_BLOOD 20s
---   (:308). The _fallenChampionCastCount = 0 latch (:310) is
---   untracked in Lua; instance->DoRemoveAurasDueToSpellOnPlayers(
+--   (:308). The _fallenChampionCastCount = 0 latch (:310) is PORTED
+--   (initState zeroes it; the DATA_MADE_A_MESS SetData latch rides
+--   it — see saurfangDoAction below); instance->DoRemoveAurasDueToSpellOnPlayers(
 --   SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) (:311) is PORTED via
 --   GetPlayersInWorld + mapId/instanceId filter + player:RemoveAura
 --   (the moroes precedent — the stale "no instance bridge" claim
@@ -148,17 +150,15 @@
 --   apply; SAY_DEATH 13 rides the DamageTaken fight-won leg above).
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 37813):
--- boss_deathbringer_saurfang SpellHitTarget (:413-435) —
---   Talk(SAY_MARK_OF_THE_FALLEN_CHAMPION 8) rides the
---   SPELL_MARK_OF_THE_FALLEN_CHAMPION case of the SpellHitTarget
---   switch; the 72255/72444/72445/72446 triggered-mark cases cast
---   SPELL_BLOOD_LINK_DUMMY — stays out on trigger-path grounds: the
---   72293 mark cast rides the unported ACTION_MARK_OF_THE_FALLEN_CHAMPION
---   DoAction machine (dispatch IS bridged — creature:DoAction fires ev38,
---   lua_creature_events.go:802 — but its trigger is the unported
---   spell_deathbringer_blood_link_aura periodic tick, :1028), so event 15
---   never fires for it in Go
---   (event 15 itself is live — boss_ai.go:1904).
+-- boss_deathbringer_saurfang SpellHitTarget (:413-435) — PORTED
+--   via ev15 (saurfangSpellHitTarget below): Talk(SAY_MARK_OF_THE_
+--   FALLEN_CHAMPION 8) on the 72293 case; the 72255/72444/72445/
+--   72446 triggered-mark cases cast SPELL_BLOOD_LINK_DUMMY 72202
+--   (BP0=1, triggered) when power != max. The transport evade leg
+--   (:415-419) stays out — EnterEvadeMode has no bridge.
+--   (event 15 itself is live — boss_ai.go:1904; the old "rides the
+--   unported ACTION machine" note is retired — the machine ports
+--   below via ev38 + the blood-link ev1 tick.)
 -- boss_deathbringer_saurfang intro machine — Talk(
 --   SAY_INTRO_ALLIANCE_2 0 / SAY_INTRO_ALLIANCE_3 1 /
 --   SAY_INTRO_ALLIANCE_6 2 / SAY_INTRO_ALLIANCE_7 3 /
@@ -170,14 +170,18 @@
 --   creature:DoAction fires ev38, lua_creature_events.go:802): the
 --   callers are the unregistered event NPCs' gossip-started intro
 --   scheduler / MovementInform (:670/:726/:870/:916); the
---   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) is a
---   random-target SelectTarget with an aura-exclusion filter +
---   DoCast — out on its unported trigger (the blood-link aura
---   periodic tick, :1028, is an AuraScript, no bridge);
---   random-target itself IS bridgeable (randomPlayer) and the aura
---   exclusion IS bridgeable (creature HasAura, lua_objects.go:228),
---   but the machine stays out. The _fallenChampionCastCount /
---   GetData(DATA_MADE_A_MESS) achievement legs ride with it.
+--   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) PORTED via
+--   ev38 (saurfangDoAction below) + the blood-link ev1 tick
+--   (bloodLinkTick below): random threat-list player, alive, without
+--   the 72293 mark (moragg GetAITargets idiom) -> count++ -> DoCast
+--   72293 non-triggered -> SetPower(ENERGY, 0) -> latch clear at
+--   3/5. The blood-power RecalculateAmountOfEffects leg (:591)
+--   stays out (no bridge); the trigger was the
+--   spell_deathbringer_blood_link_aura periodic tick (:1028), now
+--   PORTED via RegisterAuraEvent ev1 on 72178 — the old "no
+--   AuraScript bridge" claim is retired for this script. The
+--   _fallenChampionCastCount / GetData(DATA_MADE_A_MESS)
+--   achievement legs ride with it (Go gate added this tick).
 -- boss_deathbringer_saurfang JustSummoned (:395-411) — summon
 --   machine: random-target AttackStart, SPELL_BLOOD_LINK_BEAST 72176
 --   + SPELL_RESISTANT_SKIN 72723 triggered casts on the summon,
@@ -224,12 +228,12 @@
 -- spell_deathbringer_blood_nova_targeting /
 -- spell_deathbringer_boiling_blood / spell_deathbringer_remove_marks
 -- join the no-SpellScript-bridge queue (the boss_moragg
--- optic-link precedent); spell_deathbringer_blood_link_aura /
--- spell_deathbringer_blood_power_aura /
+-- optic-link precedent); spell_deathbringer_blood_power_aura /
 -- spell_deathbringer_blood_beast_blood_link join the
--- no-AuraScript-bridge queue.
--- achievement_ive_gone_and_made_a_mess joins the no-achievement
--- bridge queue (the gunship achievement_im_on_a_boat precedent).
+-- no-AuraScript-bridge queue (spell_deathbringer_blood_link_aura is
+-- PORTED this tick via RegisterAuraEvent ev1 on 72178).
+-- achievement_ive_gone_and_made_a_mess PORTED this tick (Lua latch +
+-- Go gate in achievement_criteria_scripts.go).
 -- All 29 Talk() calls in the file accounted for (29 = ported: aggro
 -- 7 + kill 10 + frenzy 11 + death 13 + blood beasts 9 + berserk 12 +
 -- horde outro 11/12/13 + alliance outro 3 (relayStartOutro below);
@@ -254,6 +258,8 @@
 
 local ENTRY_DEATHBRINGER_SAURFANG = 37813
 local DATA_DEATHBRINGER_SAURFANG = 3 -- icecrown_citadel.h:77
+local ACTION_MARK_OF_THE_FALLEN_CHAMPION = -72293 -- boss_deathbringer_saurfang.cpp:202
+local DATA_MADE_A_MESS = 45374613 -- boss_deathbringer_saurfang.cpp:207 (4537, 4613 achievement IDs)
 local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2
@@ -264,6 +270,7 @@ local ENTRY_SE_KOR_KRON_REAVER = 37920 -- icecrown_citadel.h:217
 local ENTRY_SE_SKYBREAKER_MARINE = 37830 -- icecrown_citadel.h:218
 
 local SAY_AGGRO = 7
+local SAY_MARK_OF_THE_FALLEN_CHAMPION = 8
 local SAY_BLOOD_BEASTS = 9
 local SAY_KILL = 10
 local SAY_FRENZY = 11
@@ -288,6 +295,7 @@ local SPELL_PERMANENT_FEIGN_DEATH = 70628
 local SPELL_GRIP_OF_AGONY = 70572 -- boss_deathbringer_saurfang.cpp:95
 local SPELL_ZERO_POWER = 72242
 local SPELL_BLOOD_LINK = 72178
+local SPELL_BLOOD_LINK_DUMMY = 72202 -- boss_deathbringer_saurfang.cpp:107
 local SPELL_BLOOD_POWER = 72371
 local SPELL_MARK_OF_THE_FALLEN_CHAMPION_S = 72256
 local SPELL_MARK_OF_THE_FALLEN_CHAMPION = 72293 -- boss_deathbringer_saurfang.cpp:108
@@ -327,7 +335,7 @@ end
 
 local function initState(guid)
     cancelTimers(guid)
-    saurfangState[guid] = { frenzied = false, dead = false }
+    saurfangState[guid] = { frenzied = false, dead = false, fallenChampionCastCount = 0 }
 end
 
 local function clearState(guid)
@@ -537,7 +545,7 @@ local function saurfangJustEngagedWith(event, creature, target)
     schedule(guid, "nova", 17000, function() onBloodNova(creature, guid) end)
     schedule(guid, "rune", 20000, function() onRuneOfBlood(creature, guid) end)
     -- C++ JustEngagedWith (:310-313): _fallenChampionCastCount = 0
-    -- (no Lua latch — untracked) + instance->
+    -- (initState above zeroes the Lua latch) + instance->
     -- DoRemoveAurasDueToSpellOnPlayers(SPELL_MARK_OF_THE_FALLEN_
     -- CHAMPION 72293) via GetPlayersInWorld + mapId/instanceId filter
     -- + player:RemoveAura (the moroes precedent; the stale "no
@@ -553,6 +561,11 @@ local function saurfangJustEngagedWith(event, creature, target)
     -- C++ :312 — SetBossState IN_PROGRESS, last in JustEngagedWith,
     -- PORTED 2026-11-05 via creature:SetBossState
     -- (lua_creature_events.go:5917).
+    -- C++ GetData(DATA_MADE_A_MESS) (:540-546) returns 1 while
+    -- _fallenChampionCastCount < 3/5 (10/25-man); the count is 0 here,
+    -- so the latch starts set — the Go achievement gate reads this
+    -- slot (bossLatchData, achievement_criteria_scripts.go).
+    creature:SetData(DATA_MADE_A_MESS, 1)
     creature:SetBossState(DATA_DEATHBRINGER_SAURFANG, BOSS_STATE_IN_PROGRESS)
 end
 
@@ -598,7 +611,11 @@ local function doSaurfangReset(creature)
     if creature:GetBossState(DATA_DEATHBRINGER_SAURFANG) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_DEATHBRINGER_SAURFANG, BOSS_STATE_NOT_STARTED)
     end
-    saurfangState[guid] = { frenzied = false, dead = false }
+    -- C++ Reset() never clears _fallenChampionCastCount (only
+    -- JustEngagedWith :310 zeroes it), so the count survives a reset
+    -- exactly as the C++ member does.
+    local oldCount = st and st.fallenChampionCastCount or 0
+    saurfangState[guid] = { frenzied = false, dead = false, fallenChampionCastCount = oldCount }
     -- C++ Reset() :265: me->SetPower(POWER_ENERGY, 0) — the blood-power
     -- meter zeroes on reset (SPELL_ZERO_POWER's aura scripts are
     -- unbridged; the bridge writes the live power field).
@@ -730,10 +747,105 @@ local function saurfangDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ spell_deathbringer_blood_link_aura::HandlePeriodicTick
+-- (boss_deathbringer_saurfang.cpp:1024-1032): OnEffectPeriodic,
+-- EFFECT_1 SPELL_AURA_PERIODIC_DUMMY, PreventDefaultAction first,
+-- then the power gate — owner power type ENERGY and power == max
+-- power — calls the owner's DoAction(ACTION_MARK_OF_THE_FALLEN_
+-- CHAMPION). The aura is SPELL_BLOOD_LINK 72178, self-cast by
+-- Saurfang at Reset (:267); the AuraScript loader name binds to
+-- that spell (the SpellScript twin hooks EFFECT_0 DUMMY of the
+-- same 72178 cast), the fetch-ingredient convention. ev1 args
+-- (event, aura, target); target is the aura owner, built fresh per
+-- tick (luaUnitObjectForGUID), so GetPower/GetMaxPower/GetPowerType
+-- read live motion fields via the object.go fallback. Returns true,
+-- the PreventDefaultAction twin. DORMANT until Spell.dbc ships (the
+-- 72178 cast at Reset is ported; the aura application is DBC-side).
+local function bloodLinkTick(event, aura, target)
+    if target:GetPowerType() == POWER_ENERGY
+            and target:GetPower(POWER_ENERGY) == target:GetMaxPower(POWER_ENERGY) then
+        target:DoAction(ACTION_MARK_OF_THE_FALLEN_CHAMPION)
+    end
+    return true
+end
+
+-- C++ SelectTarget(Random, 1, 0.0f, true, true, -SPELL_MARK_OF_THE_
+-- FALLEN_CHAMPION) (:582): random threat-list player, alive, not
+-- carrying the mark; dist 0.0f = no range filter. The moragg
+-- randomPlayerInRange idiom (GetAITargets + IsAlive), plus the
+-- aura-exclusion filter (player:HasAura, lua_player.go).
+local function randomMarkTarget(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive()
+                and not t:HasAura(SPELL_MARK_OF_THE_FALLEN_CHAMPION) then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ boss_deathbringer_saurfang::DoAction ACTION_MARK_OF_THE_FALLEN_
+-- CHAMPION (:580-592): random mark target (nil = whole arm skipped,
+-- no count increment) -> ++_fallenChampionCastCount -> DoCast(target,
+-- SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) non-triggered -> SetPower(
+-- ENERGY, 0). The blood-power RecalculateAmountOfEffects leg (:591)
+-- stays out: no RecalculateAmountOfEffects bridge (the recalc only
+-- rescales the 72371 aura amount; the mark cast + power zero are the
+-- functional legs). The DATA_MADE_A_MESS latch (:540-546, threshold
+-- RAID_MODE 3/5) clears here via creature:Is25ManRaid() once the
+-- count reaches it; the Go achievement gate reads this slot.
+local function saurfangDoAction(event, creature, action)
+    if action ~= ACTION_MARK_OF_THE_FALLEN_CHAMPION then
+        return
+    end
+    local target = randomMarkTarget(creature)
+    if not target then
+        return
+    end
+    local guid = creature:GetGUID()
+    local st = saurfangState[guid]
+    if not st then
+        st = { frenzied = false, dead = false, fallenChampionCastCount = 0 }
+        saurfangState[guid] = st
+    end
+    st.fallenChampionCastCount = (st.fallenChampionCastCount or 0) + 1
+    creature:CastSpell(target, SPELL_MARK_OF_THE_FALLEN_CHAMPION)
+    creature:SetPower(POWER_ENERGY, 0)
+    local threshold = creature:Is25ManRaid() and 5 or 3
+    if st.fallenChampionCastCount >= threshold then
+        creature:SetData(DATA_MADE_A_MESS, 0)
+    end
+end
+
+-- C++ boss_deathbringer_saurfang::SpellHitTarget (:413-435): case
+-- SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293 -> Talk(SAY_MARK_OF_THE_
+-- FALLEN_CHAMPION 8); cases 72255/72444/72445/72446 (triggered-mark
+-- ids) -> power != max -> target casts SPELL_BLOOD_LINK_DUMMY 72202
+-- on itself, TRIGGERED, BP0=1 (the geddon CastCustomSpell(nil, ...)
+-- precedent). The transport gate (:415-419, EnterEvadeMode) stays
+-- out — EnterEvadeMode has no bridge. The 72255 leg is DORMANT
+-- until Spell.dbc ships (the triggered-mark ids are DBC-side).
+local function saurfangSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_MARK_OF_THE_FALLEN_CHAMPION then
+        creature:Talk(SAY_MARK_OF_THE_FALLEN_CHAMPION)
+    elseif spellId == 72255 or spellId == 72444 or spellId == 72445 or spellId == 72446 then
+        if target and creature:GetPower(POWER_ENERGY) ~= creature:GetMaxPower(POWER_ENERGY) then
+            target:CastCustomSpell(nil, SPELL_BLOOD_LINK_DUMMY, true, 1)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 1, saurfangJustEngagedWith)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 2, saurfangLeaveCombat)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 3, saurfangKilledUnit)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 4, saurfangJustDied)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 9, saurfangDamageTaken)
+RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 15, saurfangSpellHitTarget)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 23, saurfangReset)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 24, saurfangReachHome)
+RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 38, saurfangDoAction)
+RegisterAuraEvent(SPELL_BLOOD_LINK, 1, bloodLinkTick)
