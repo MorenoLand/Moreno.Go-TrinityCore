@@ -20011,77 +20011,54 @@ func init() {
 
 	// Razorscale (33186), Ulduar —
 	// lua_scripts/northrend/boss_razorscale.lua.
-	// Ported arms (C++-exact): EVENT_BERSERK DoCastSelf 47008
-	// TRIGGERED + Talk(EMOTE_BERSERK 2, me) 900s one-shot,
-	// no phase gate, timer-driven via CreateLuaEvent
-	// (maiden/baltharus convention, GUID-keyed timers, cancel on
-	// events 2/4/23; cast-before-Talk order kept); event 1 models
-	// only the berserk timer leg — JustEngagedWith carries no
-	// Talk arms on the boss itself (BossAI passthrough ports via
-	// SetBossState(IN_PROGRESS) PORTED tick 258 +
-	// SetCombatPulseDelay + DoZoneInCombat, the SendEncounterUnit
-	// engage leg ports; phase-machine ScheduleAirPhaseEvents +
-	// summons DoAction legs have no bridges; HandleMusic ports via
-	// UpdateWorldState);
-	// JustDied carries no Talk arms (event 4 models the _JustDied()
-	// SetBossState(DONE) leg PORTED tick 258 + the timer wipe
-	// + HandleMusic(false) + the SendEncounterUnit disengage leg).
-	// Documented-only: the whole air/ground/perma-ground phase
-	// machine (DoAction ACTION_START_FIGHT / ACTION_GROUND_PHASE
-	// / ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE,
-	// MovementInform POINT_RAZORSCALE_*, SetPhase(PHASE_AIR /
-	// PHASE_GROUND / PHASE_PERMA_GROUND), MoveSplineInit /
-	// MovePoint / MoveLand / MoveTakeoff — ev38 dispatch bridged;
-	// ACTION_START_FIGHT PORTED (commander gossip relay,
-	// boss_razorscale.lua:401-402); GROUND_PHASE / PERMA_GROUND /
-	// RETURN_TO_BASE stay out behind the unported phase/motion
-	// machine (no MovementInform / MotionMaster / spline / phase
-	// bridges);
-	// EVENT_FIREBALL (SelectTarget Random + DoCast 63815,
-	// {2s,3s}, PHASE_AIR) / EVENT_DEVOURING_FLAME
-	// (SelectTarget Random + DoCast 63236, {6s,12s}/{10s,12s}) —
-	// random-target + phase legs; EVENT_SUMMON_MINIONS/_2
-	// (NPC_RAZORSCALE_SPAWNER summon leg); EVENT_FLAME_BREATH /
-	// EVENT_FLAME_BREATH_GROUND (Talk EMOTE_BREATH + DoCastVictim
-	// 63317/64021 — phase-gated); EVENT_WING_BUFFET +
-	// EVENT_FIREBOLT + EVENT_RESUME_AIR_PHASE chain (phase /
-	// motion legs); EVENT_FUSE_ARMOR (victim + HasAura 64774 gate,
-	// phase-gated); EVENT_RESUME_MOVE_CHASE (motion leg);
-	// DamageTaken perma-ground latch; SpellHit harpoon-hit
-	// counter -> DoAction(ACTION_GROUND_PHASE); CanAIAttack /
-	// JustSummoned / SummonedCreatureDies / EnterEvadeMode /
-	// HandleMusic / SummonMinions — no bridges;
-	// npc_expedition_commander (33210 — gossip -> DoAction +
-	// DoAction-gated Talks 0/1/2 + GO harpoon summon legs);
-	// npc_expedition_defender (33816 — Reset one-shot 65146,
-	// DoAction/MovementInform machine); npc_expedition_trapper
-	// (33259 — DoAction machine + MovementInform -> SPELL_SHACKLE
-	// 62646); npc_expedition_engineer (33287 — DoAction machine +
-	// spline legs; DoAction-gated Talks 0/1); npc_razorscale_
-	// spawner (33245 — summon chain); npc_darkrune_watcher (33453:
-	// EVENT_LIGHTNING_BOLT DoCastVictim 63809 5s/3s,
-	// EVENT_CHAIN_LIGHTNING DoCastVictim 64758 34s/{9s,15s}),
-	// npc_darkrune_guardian (33388: EVENT_STORMSTRIKE DoCastVictim
-	// 64757 23s/{13s,25s}), npc_darkrune_sentinel (33846:
-	// EVENT_HEROIC_STRIKE DoCastVictim 45026 9s/{5s,9s},
-	// EVENT_BATTLE_SHOUT DoCastSelf 46763 15s/25s, EVENT_WHIRLWIND
-	// DoCastSelf 63808 17s/{10s,13s}) — all three timer-driven but
-	// spawner-machine adds (boss EVENT_SUMMON_MINIONS ->
-	// NPC_RAZORSCALE_SPAWNER -> mole-machine GO ->
-	// SPELL_TRIGGER_SUMMON_IRON_DWARVES -> SPELL_SUMMON_IRON_
-	// DWARF_* — task exclusion: summon/add legs out; no
-	// registrations); npc_razorscale_harpoon_fire_state (33282 —
-	// SpellHit machine); npc_razorscale_devouring_flame (Reset
-	// one-shot 64709/64734 triggered); go_razorscale_harpoon /
-	// go_razorscale_mole_machine — no GO bridge; four spell
-	// scripts (63317/64021 flame_breath, 63968/63970/63969
-	// summon_iron_dwarves, 64821 fuse_armor, 62669 firebolt) — no
-	// SpellScript / AuraScript bridges; two achievements
-	// (iron_dwarf_medium_rare / quick_shave — GetData-based —
-	// no bridges; both join the unmodeled-achievement queue).
-	// Cast-state gate PORTED: boss UpdateAI pre-loop :565 +
-	// in-loop :654 CASTING gates as 500ms IsCasting defer in
-	// berserkTick; darkrune sub-AI gates guard unported arms.
+	// Ported arms (C++-exact, verified 2026-11-08 tick 471):
+	// Reset (_Reset SetBossState NOT_STARTED + Initialize counts
+	// + SetDisableGravity(true) + SummonCreatureGroup 1/2/3 +
+	// SetCombatMovement(false), ev23); JustEngagedWith
+	// (SetBossState IN_PROGRESS + SetCombatPulseDelay +
+	// DoZoneInCombat + SendEncounterUnit engage + HandleMusic +
+	// ScheduleAirPhaseEvents + summons DoAction relay, ev1);
+	// EVENT_BERSERK DoCastSelf 47008 TRIGGERED + Talk(EMOTE_BERSERK
+	// 2, me) 900s one-shot, no phase gate; JustDied (_JustDied DONE
+	// + disengage + HandleMusic(false), ev4); EnterEvadeMode
+	// disengage leg (ev2 — boundary guard vacuous: Go leash evade
+	// is gated !inDungeon, creaturemotion.go:5918); the whole
+	// air/ground/perma-ground phase machine (Lua-side RS.phase
+	// twin; DoAction START_FIGHT / GROUND_PHASE /
+	// START_PERMA_GROUND, ev38; MovementInform FLIGHT / TAKEOFF /
+	// FLIGHT_2 / LAND / GROUND, ev28; MovePoint / MoveLand /
+	// MoveTakeoff); EVENT_FIREBALL 63815 {2s,3s} PHASE_AIR /
+	// EVENT_DEVOURING_FLAME 63236 {6s,12s}/{10s,12s} /
+	// EVENT_SUMMON_MINIONS/_2 spawner summons 40s /
+	// EVENT_FLAME_BREATH (+WING_BUFFET 2s) / FLAME_BREATH_GROUND
+	// {15s,18s} / WING_BUFFET 62666 + FIREBOLT 62669 2s +
+	// RESUME_AIR_PHASE 4s / FUSE_ARMOR 64821 {10s,15s} /
+	// RESUME_MOVE_CHASE (CreateLuaEvent ticks, 500ms IsCasting
+	// defer for the UpdateAI CASTING gates); DamageTaken
+	// perma-ground latch (ev9, HealthBelowPctDamaged 50);
+	// SpellHit harpoon-hit counter -> GROUND_PHASE (ev14, 2/4);
+	// JustSummoned expedition numbers (ev19); SummonedCreatureDies
+	// engineer-death relay (ev21); GetData quick_shave latch
+	// (flyCount) + iron_dwarf_medium_rare latch (lethal breath);
+	// commander gossip + DoAction machine + harpoon GO builds;
+	// defender Reset 65146 + DoAction/MovementInform; trapper
+	// ctor + DoAction machine + MovementInform shackle; engineer
+	// Reset + DoAction machine + spline-chain walks (DB-gated);
+	// spawner Reset; darkrune watcher/guardian/sentinel timers;
+	// harpoon-fire-state SpellHit; devouring-flame Reset;
+	// go_razorscale_harpoon / go_razorscale_mole_machine
+	// (event 12); four spell scripts (RegisterSpellEvent /
+	// RegisterAuraEvent); both achievements (Go criteria cases
+	// live in achievement_criteria_scripts.go).
+	// Documented-only: CanAIAttack (boss + defender — no hook,
+	// vacuous in practice); HandleInitialMovement (dead code —
+	// Reset's MovePoint is commented out in C++);
+	// EnterEvadeMode summons.DespawnAll (no bridge); boss melee
+	// only in PERMA_GROUND (engine-driven); commander
+	// PHASE_COMBAT gate (vacuous); engineer Reset CancelAll (no
+	// handle); spawner setActive/SetFarVisible (no bridge);
+	// devouring-flame / spawner-trigger / darkrune legs dormant
+	// until the summon chain lands and Spell.dbc ships.
 	RegisterLuaBoss("boss_razorscale", 33186)
 
 	// XT-002 Deconstructor (33293), Ulduar —

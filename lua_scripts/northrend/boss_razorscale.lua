@@ -79,79 +79,79 @@
 -- !IsAlive; write only if GetBossState != DONE — GetBossState
 -- bridged lua_creature_events.go:5936, hakkar precedent); the
 -- Initialize engineers=3 + SummonCreatureGroup(1/2/3) + SetCombat-
--- Movement(false) legs were already ported on ev23/ev1.
+-- Movement(false) legs were already ported on ev23/ev1; the
+-- Initialize SetDisableGravity(true) leg is PORTED 2026-11-08
+-- (tick 471, rides ev23).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 33186):
--- The whole air/ground/perma-ground phase machine — DoAction
--- (ACTION_START_FIGHT / ACTION_GROUND_PHASE /
--- ACTION_START_PERMA_GROUND / ACTION_RETURN_TO_BASE — ev38 dispatch
--- IS bridged (creature:DoAction, lua_creature_events.go:802); the arms
--- ride the unported phase machine — START_PERMA_GROUND fires from
--- razorscale's own DamageTaken 50% gate (boss_razorscale.cpp:554)),
--- MovementInform (POINT_RAZORSCALE_FLIGHT /
--- POINT_RAZORSCALE_GROUND / POINT_RAZORSCALE_TAKEOFF /
--- POINT_RAZORSCALE_LAND — no MovementInform bridge; the ground-phase
--- SetCombatMovement(true) :646 stays out — in-combat no-op per the
--- ScriptedAI NOTE, only affects AttackStart),
--- MoveSplineInit / MovePoint / MoveLand / MoveTakeoff legs — no
--- MotionMaster / spline bridges; SetPhase(PHASE_AIR /
--- PHASE_GROUND / PHASE_PERMA_GROUND) gates every other timer arm.
+-- The whole air/ground/perma-ground phase machine — PORTED
+-- 2026-11-08 (ticks 453/454): Lua-side RS.phase twin (RS.phase
+-- table, phase checks at fire time); DoAction ACTION_START_FIGHT /
+-- ACTION_GROUND_PHASE / ACTION_START_PERMA_GROUND (ev38;
+-- ACTION_RETURN_TO_BASE is a trapper arm, not a boss arm);
+-- MovementInform FLIGHT / TAKEOFF / FLIGHT_2 / LAND / GROUND
+-- (ev28; MovePoint / MoveLand / MoveTakeoff legs live);
+-- SetCombatMovement(true) rides EVENT_RESUME_MOVE_CHASE.
+-- HandleInitialMovement stays out: dead code in C++ (Reset's
+-- MovePoint to POINT_START_WAYPOINT is commented out).
 -- EVENT_FIREBALL (:576-580) — SelectTarget(Random) + DoCast
 -- (SPELL_FIREBALL 63815), re-arm {2s,3s}, PHASE_AIR-gated —
--- random-target selection + air-phase machine; no bridges.
+-- PORTED 2026-11-08 (tick 453, RS.fireballTick).
 -- EVENT_DEVOURING_FLAME (:581-588) — SelectTarget(Random) +
 -- DoCast(SPELL_DEVOURING_FLAME 63236), re-arm {6s,12s} /
--- {10s,12s} — random-target selection leg; no bridge.
+-- {10s,12s} — PORTED 2026-11-08 (tick 453,
+-- RS.devouringFlameTick).
 -- EVENT_SUMMON_MINIONS / EVENT_SUMMON_MINIONS_2 (:589-603) —
 -- SummonMinions() (:540-546) SummonCreature(NPC_RAZORSCALE_SPAWNER,
--- frand x/y, 391.517z, TIMED_DESPAWN 15s) re-keyed 2026-10-24:
--- SummonCreature IS bridged; the arm stays out behind the PHASE_AIR
--- gate (phase machine unported) + the spawner AI (spell-data mole-
--- machine/minion casts, freywinn precedent), not the summon bridge.
+-- frand x/y, 391.517z, TIMED_DESPAWN 15s) — PORTED 2026-11-08
+-- (tick 453, RS.summonMinionsTick); the spawner Reset is ported
+-- below, its mole-machine/trigger casts stay DBC-gated.
 -- EVENT_FLAME_BREATH (:604-609) — Talk(EMOTE_BREATH 1, me) +
 -- DoCastVictim(FLAME_BREATH 63317/64021) + EVENT_WING_BUFFET in
--- 2s, PHASE_GROUND-gated 30s one-shot — phase machine.
+-- 2s, PHASE_GROUND-gated 30s one-shot — PORTED 2026-11-08 (tick 453).
 -- EVENT_FLAME_BREATH_GROUND (:610-614) — Talk(EMOTE_BREATH 1, me)
 -- + DoCastVictim(FLAME_BREATH), re-arm {15s,18s},
--- PHASE_PERMA_GROUND-gated — phase machine.
+-- PHASE_PERMA_GROUND-gated — PORTED 2026-11-08 (tick 453).
 -- EVENT_WING_BUFFET (:615-623) — DoCastSelf(SPELL_WING_BUFFET
 -- 62666) + EVENT_FIREBOLT in 2s + EVENT_RESUME_AIR_PHASE in 4s —
--- phase-machine chain.
+-- PORTED 2026-11-08 (tick 453, RS.wingBuffetTick).
 -- EVENT_RESUME_AIR_PHASE (:624-634) — SetDisableGravity /
 -- SetPhase(PHASE_AIR) / MoveTakeoff / engineer
 -- ACTION_FIX_HARPOONS DoAction — PORTED 2026-11-08 (tick 453 send
 -- leg, tick 454 engineer receiver below); the receiver's spline
 -- movement is DB-gated (no script_spline_chain rows in world.db).
--- Boss-side SetReactState arms (SetReactState IS bridged — frozen_core
--- precedent): MovementInform POINT_RAZORSCALE_FLIGHT_2 ->
--- SetReactState(REACT_AGGRESSIVE) (:448, no MovementInform hook) and
--- EVENT_RESUME_AIR_PHASE -> SetReactState(REACT_PASSIVE) (:628, phase
--- machine) both stay out behind the unbridged phase/motion machine.
+-- Boss-side SetReactState arms — PORTED 2026-11-08 (tick 453):
+-- MovementInform POINT_RAZORSCALE_FLIGHT_2 ->
+-- SetReactState(REACT_AGGRESSIVE) and EVENT_RESUME_AIR_PHASE ->
+-- SetReactState(REACT_PASSIVE) both ride the ported phase machine.
 -- DamageTaken (:552) -> SetReactState(REACT_AGGRESSIVE) is vacuous: she is
 -- already AGGRESSIVE since :448, and the Lua port never sets PASSIVE.
 -- EVENT_FIREBOLT (:636-638) — DoCastSelf(SPELL_FIREBOLT 62669)
--- one-shot rides the unbridgeable WING_BUFFET phase leg.
+-- one-shot — PORTED 2026-11-08 (tick 453, RS.fireboltTick).
 -- EVENT_FUSE_ARMOR (:639-643) — GetVictim + !HasAura
 -- (SPELL_FUSED_ARMOR 64774) gate + DoCast(SPELL_FUSE_ARMOR 64821),
--- re-arm {10s,15s}, PHASE_PERMA_GROUND-gated — aura gate + phase
--- machine.
--- EVENT_RESUME_MOVE_CHASE (:645-649) — MotionMaster leg.
+-- re-arm {10s,15s}, PHASE_PERMA_GROUND-gated — PORTED 2026-11-08
+-- (tick 453, RS.fuseArmorTick).
+-- EVENT_RESUME_MOVE_CHASE (:645-649) — SetCombatMovement(true) +
+-- MoveChase(victim) — PORTED 2026-11-08 (tick 453).
 -- DamageTaken (:547-555) — HealthBelowPctDamaged(50) +
 -- PHASE_GROUND-gated perma-ground latch + DoAction
--- (ACTION_START_PERMA_GROUND) — no damage-taken / phase bridges.
--- SpellHit (:497-506) — stale "no SpellHit bridge" retracted
--- (2026-10-21): ev14 IS bridged (fires from the Go spell path) —
--- but the arm stays out: SPELL_HARPOON_TRIGGER 62505 drives a
--- counter whose sole effect is DoAction(ACTION_GROUND_PHASE) — the
--- DoAction bridge is live (ev38, tick 206), but the counter feeds
--- the unbridged air/ground phase machine; a ported counter with no
--- downstream would be an inert no-op.
+-- (ACTION_START_PERMA_GROUND) — PORTED 2026-11-08 (tick 453, ev9).
+-- SpellHit (:497-506) — SPELL_HARPOON_TRIGGER 62505 counter at
+-- RAID_MODE(2, 4) fires DoAction(ACTION_GROUND_PHASE) —
+-- PORTED 2026-11-08 (tick 453, ev14 RS.razorscaleSpellHit);
+-- the ground-phase downstream is ported, so the counter is live.
 -- CanAIAttack / JustSummoned / EnterEvadeMode / SummonMinions —
--- no bridges (the HandleMusic legs are ported; the BOUNDARY-evade
--- early-return nuance in EnterEvadeMode (:516-518) has no evade
--- bridge). SummonedCreatureDies ev21 IS bridged — the stale "no
--- bridge" claim is retracted 2026-11-03 (amanitar/loatheb/coren
--- precedent); the engineer-death relay is PORTED below.
+-- JustSummoned PORTED (ev19 expedition numbers), SummonMinions
+-- PORTED (tick 453), EnterEvadeMode disengage PORTED 2026-11-08
+-- (tick 471, ev2 — the boundary guard is vacuous in Go, see the
+-- leaveCombat comment; summons.DespawnAll stays out, no bridge).
+-- CanAIAttack stays out (no hook — vacuous in practice, the
+-- expedition adds never enter her threat list). The HandleMusic
+-- legs are ported. SummonedCreatureDies ev21 IS bridged — the
+-- stale "no bridge" claim is retracted 2026-11-03
+-- (amanitar/loatheb/coren precedent); the engineer-death relay
+-- is PORTED below.
 -- npc_expedition_commander (33210 ulduar.h:90): OnGossipSelect ->
 -- DoAction (ACTION_START_FIGHT) is PORTED below (tick 213): the
 -- gossip select hook (RegisterCreatureGossipEvent, listID == 0 is
@@ -1309,6 +1309,12 @@ local function cancelCombatTimers(event, creature)
     RS.permaGround[creature:GetGUID()] = false
     RS.harpoonHits[creature:GetGUID()] = 0
     RS.summonCounts[creature:GetGUID()] = nil
+    -- C++ Reset -> Initialize (boss_razorscale.cpp:314):
+    -- SetDisableGravity(true) — the boss hovers again after a wipe;
+    -- without it a perma-ground Reset would leave her gravity-bound
+    -- into the next air phase. PORTED 2026-11-08 (tick 471, rides
+    -- ev23 — the ctor twin fires here too).
+    creature:SetDisableGravity(true)
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time re-arm would clobber the fight's latch before
@@ -1329,15 +1335,21 @@ local function cancelCombatTimers(event, creature)
     end
 end
 
--- C++ EnterEvadeMode (:515-524) handler (event 2): the HandleMusic
--- (false) leg only — no SetBossState leg in the evade path (the state
--- returns to NOT_STARTED via Reset/ev23); the disengage (:519) stays
--- out, gated on the evade reason (boundary evades outside
--- PHASE_PERMA_GROUND return early) with no evade-reason bridge.
+-- C++ EnterEvadeMode (:514-523) handler (event 2): the disengage
+-- (:519) + HandleMusic(false) (:521) legs — no SetBossState leg in
+-- the evade path (the state returns to NOT_STARTED via Reset/ev23).
+-- The boundary early-return needs no evade-reason bridge: Go fires
+-- ev2 only from triggerCreatureEvade (creaturemotion.go:4699), and
+-- the leash (boundary) evade is gated !inDungeon (creaturemotion.go:
+-- 5918) — Ulduar is a dungeon, so every Go evade here is the
+-- no-hostiles kind, for which C++ runs both legs.
+-- summons.DespawnAll (:520) stays out (no Lua bridge).
 -- Split from the died handler 2026-11-05 tick 258 (ev2 leave-combat
 -- does NOT call Reset in C++ — sjonnir precedent).
 local function leaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ SendEncounterUnit disengage (EnterEvadeMode :519).
+    creature:SendEncounterUnit(1, creature)
     -- C++ HandleMusic(false) (EnterEvadeMode :521).
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 0)
 end
