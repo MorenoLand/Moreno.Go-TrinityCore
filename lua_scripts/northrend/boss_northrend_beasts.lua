@@ -97,12 +97,15 @@
 -- count leg now via beastsCountDeath; the Tirion DoAction(
 -- ACTION_START_JORMUNGARS) leg has no Tirion Lua; the combatStalker
 -- DoAction(ACTION_GORMOK_DEAD) leg stays out — no stalker ev38
--- receiver; no Talk arms); EnterEvadeMode — instance->SetData(
--- DATA_DESPAWN_SNOBOLDS) + TYPE_NORTHREND_BEASTS FAIL + combatStalker
--- DespawnOrUnsummon + summons.DespawnAll + me->DespawnOrUnsummon
--- (instance model + cross-AI / summon-lifecycle bridges absent; own-
--- despawn IS bridged (creature:Despawn()), the old "no despawn bridge
--- — terestian precedent" note was stale — anubarak_trial precedent).
+-- receiver; no Talk arms); EnterEvadeMode — PORTED tick 406 U3 via
+-- ev2 (beastsEvaded, all four entries): snobold grid-sweep despawn
+-- (:283) + disengage (:284) + FAIL write (:285-287) + self-despawn
+-- (:291); the combatStalker despawn (:288-289) stays out (no
+-- SetGuidData(24) latch, stalker only exists via the unported
+-- EVENT_ENGAGE summon), summons.DespawnAll (:290) stays out (no
+-- summons-enumeration bridge), and the instance FAIL cascade's
+-- vehicle-removal + Tirion wipe legs stay out (no vehicle bridge /
+-- no Tirion Lua; SnoboldCount = 0 is a dead write).
 -- npc_snobold_vassal (34800 — header constant; instance OnCreatureCreate
 -- tracks NPC_SNOBOLD_VASSAL GUIDs — entry-evidence exists but the
 -- ScriptName binding is DB-side): the whole vehicle mount machine —
@@ -288,6 +291,7 @@ local ENTRY_GORMOK = 34796
 local ENTRY_DREADSCALE = 34799
 local ENTRY_ACIDMAW = 35144
 local ENTRY_ICEHOWL = 34797
+local ENTRY_SNOBOLD_VASSAL = 34800 -- trial_of_the_crusader.h:175 (NPC_SNOBOLD_VASSAL)
 
 local SPELL_IMPALE = 66331
 local SPELL_STAGGERING_STOMP = 66330
@@ -299,6 +303,7 @@ local DATA_ACIDMAW = 7
 local DATA_DREADSCALE = 8
 local DATA_NORTHREND_BEASTS = 0
 local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_FAIL = 2 -- EncounterState FAIL (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3
 
 local EMOTE_ENRAGE = 0 -- boss_northrend_beasts.cpp:37 (Yells; worm Talk)
@@ -424,13 +429,56 @@ local function enterCombat(event, creature, target)
     creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE
 end
 
-local function leaveCombat(event, creature)
-    -- C++ EnterEvadeMode (:284): disengage after the instance
-    -- SetData(DATA_DESPAWN_SNOBOLDS) leg (no bridge); the SetData
-    -- FAIL / stalker-despawn / summons.DespawnAll /
-    -- DespawnOrUnsummon legs stay out.
+-- C++ boss_northrend_beastsAI::EnterEvadeMode
+-- (boss_northrend_beasts.cpp:280-291), shared by all four beasts.
+-- Go's triggerCreatureEvade (engine/world/creaturemotion.go:4664)
+-- fires event 23 then event 2 ahead of the base evade, only when the
+-- creature was in combat, so event 2 IS the EnterEvadeMode hook here;
+-- death never reaches it, so the FAIL leg cannot fire on a kill. The
+-- base legs (CreatureAI.cpp:214-236: MoveTargetedHome + Reset) are
+-- engine-covered and are NOT re-implemented. The handler must return
+-- nothing: returning true vetoes the whole base evade
+-- (creaturemotion.go:4699-4704). Order is C++ order: snobolds, then
+-- disengage, then the FAIL write, then self-despawn last (the
+-- creature object is unusable for map lookups after Despawn).
+-- Caveat: the wasInCombat gate means a pre-combat evade (intro
+-- leash, before any engage) sets FAIL in C++ but fires no ev2 in Lua.
+local function beastsEvaded(event, creature)
+    -- :283 instance->SetData(DATA_DESPAWN_SNOBOLDS, 0)
+    -- (instance_trial_of_the_crusader.cpp:418-422: despawn every
+    -- tracked snobold GUID). Lua mirror: entry-exact grid scan —
+    -- every snobold lives in-arena and no other 34800 exists in the
+    -- instance; 200 yd covers the whole floor, same map+instance only
+    -- (lua_creature_events.go:5949 GetCreaturesInGrid; anubarak
+    -- mass-despawn precedent).
+    for _, snobold in ipairs(creature:GetCreaturesInGrid(ENTRY_SNOBOLD_VASSAL, 200)) do
+        snobold:DespawnOrUnsummon()
+    end
+    -- :284 SendEncounterUnit(ENCOUNTER_FRAME_DISENGAGE, me).
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    -- :285-287 the heroic double-attempt guard + SetData FAIL, whose
+    -- instance cascade (instance :407-413) is SetBossState FAIL.
+    -- Guard mirrors C++ GetData(TYPE_NORTHREND_BEASTS) != FAIL on the
+    -- boss-state store (the Lua instanceData table tracks no TYPE_
+    -- value); DONE-never-backwards is the engine backstop
+    -- (instance_boss_states.go:190-196). The cascade's
+    -- HandlePlayerVehicle(false) leg has no vehicle bridge, the Tirion
+    -- DoAction(ACTION_NORTHREND_BEASTS_WIPE) leg has no Tirion Lua,
+    -- and SnoboldCount = 0 is a dead write (zero C++ readers).
+    if creature:GetBossState(DATA_NORTHREND_BEASTS) ~= BOSS_STATE_FAIL then
+        creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_FAIL)
+    end
+    -- :288-289 combatStalker DespawnOrUnsummon stays out: no
+    -- SetGuidData(24) latch exists and the stalker only ever exists
+    -- via the unported EVENT_ENGAGE summon. :290 summons.DespawnAll
+    -- stays out: no summons-enumeration bridge on the Lua surface.
+    -- :291 me->DespawnOrUnsummon (midnight attumen ev2 precedent).
+    creature:DespawnOrUnsummon()
+end
+
+local function leaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    beastsEvaded(event, creature)
 end
 
 -- C++ boss_northrend_beastsAI::JustDied (:294-306), Gormok branch:
@@ -522,7 +570,10 @@ RegisterCreatureEvent(ENTRY_GORMOK, 23, reset)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 4, wormDied)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 5, wormSpawned)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 38, wormDoAction)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 4, wormDied)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 5, wormSpawned)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 38, wormDoAction)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 4, icehowlDied)
+RegisterCreatureEvent(ENTRY_ICEHOWL, 2, beastsEvaded)

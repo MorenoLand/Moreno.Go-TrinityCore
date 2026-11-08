@@ -57,8 +57,10 @@
 -- - Kel'Thuzad LoadGrid legs: no grid-load bridge; a wing
 --   taunt or chain step whose speaker object is not yet bound
 --   (creature not yet materialized) is skipped, not queued.
--- - Gothik gate SetData legs: the gate state writes ride the
---   unported gothik wave machine (boss_gothik.cpp:322-377).
+-- - Gothik gate SetData legs: driven directly from boss_gothik.lua
+--   (tick 406: FindNearestGameObject(181170) + SetGoState — the
+--   instance SetData is a plain gate->SetGoState twin,
+--   instance_naxxramas.cpp:271-279); no instance-script leg needed.
 -- - playerDied latch + Immortal/Undying + 7600/7601 criteria:
 --   no OnUnitDeath map hook and no achievement-criteria bridge.
 -- - SaveToDB / instance-data persistence across restarts: the
