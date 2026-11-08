@@ -84,11 +84,21 @@
 -- MoveInLineOfSight — the _ohNovos latch (Initialize/Reset true;
 -- flips false when a HULKING_CORPSE 27597 / RISEN_SHADOWCASTER 27600
 -- / FETID_TROLL_CORPSE 27598 enters LOS at y <= -771.95f — C++
--- returns early above MAX_Y_COORD_OH_NOVOS) — no grid/
--- MoveInLineOfSight bridge — documented-only.
+-- returns early above MAX_Y_COORD_OH_NOVOS) — PORTED 2026-11-08
+-- (tick 467) as a 1s Novos-side proximity poll (ohNovosCheck below):
+-- the grid MoveInLineOfSight notification has no Go bridge (ev27
+-- fires only from the engage-only aggro scan, and Novos is in combat
+-- while the adds approach), so Novos scans for the three entries
+-- with FindNearestCreature (fresh objects — the add's live Y rides
+-- the snapshot) inside the Go ev27 sighting distance (45yd, the
+-- aggro-scan cap); the C++ grid visibility range is wider, so the
+-- check errs toward holding the latch — the documented delta.
+-- DORMANT until the unported crystal-channel-target summoner chain
+-- spawns the adds (no Go path summons 27597/27598/27600 today).
 -- GetData(DATA_NOVOS_ACHIEV) (type == DATA_NOVOS_ACHIEV && _ohNovos
 -- ? 1 : 0) — no cross-AI GetData bridge; its only caller is
--- achievement_oh_novos — documented-only.
+-- achievement_oh_novos — documented-only (the latch itself now
+-- lives in this file as the ohNovos local).
 -- JustSummoned — summons.Summon — summon STRAND absent (standing) —
 -- documented-only.
 -- npc_crystal_channel_target — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
@@ -132,6 +142,62 @@ local ACTION_CRYSTAL_HANDLER_DIED = 15
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
 
+-- The _ohNovos latch (boss_novos.cpp:178-189, MoveInLineOfSight):
+-- true until a Hulking Corpse / Risen Shadowcaster / Fetid Troll
+-- Corpse comes within sight of Novos at y <= MAX_Y_COORD_OH_NOVOS.
+local MAX_Y_COORD_OH_NOVOS = -771.95 -- boss_novos.cpp:78
+local OH_NOVOS_SIGHT_YD = 45 -- the Go ev27 sighting distance (aggro-scan cap)
+local ADD_ENTRIES = { 27597, 27600, 27598 } -- drak_tharon_keep.h:70-72
+local ohNovos = true
+
+-- Timers keyed by GUID (the kologarn CreateLuaEvent idiom):
+-- cancelled on death (ev4) and Reset (ev23) like every other
+-- per-creature pump in this tree.
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ boss_novos::MoveInLineOfSight (boss_novos.cpp:178-189) as a
+-- 1s poll: an add of the three entries within OH_NOVOS_SIGHT_YD of
+-- Novos at y <= MAX_Y_COORD_OH_NOVOS clears the latch (the C++
+-- early-returns above the line and for non-unit / non-listed
+-- entries are the FindNearestCreature entry filter + the Y gate).
+-- FindNearestCreature returns a fresh object, so the add's GetY is
+-- its live position. One-way: once false the pump stops (no re-arm).
+local function ohNovosCheck(creature)
+    if not ohNovos then
+        return
+    end
+    for _, entry in ipairs(ADD_ENTRIES) do
+        local add = creature:FindNearestCreature(entry, OH_NOVOS_SIGHT_YD)
+        if add ~= nil and add:GetY() <= MAX_Y_COORD_OH_NOVOS then
+            ohNovos = false
+            return
+        end
+    end
+    schedule(creature:GetGUID(), "oh_novos", 1000, function() ohNovosCheck(creature) end)
+end
+
 -- _crystalHandlerCount (boss_novos.cpp:261-276, CrystalHandlerDied):
 -- counts crystal-handler deaths in this pull; Reset zeroes it
 -- (Initialize, boss_novos.cpp:95-97). It is NOT zeroed at enter
@@ -149,6 +215,9 @@ local function novosEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
+    -- The _ohNovos poll starts at engage: the adds only spawn once
+    -- the summoners activate on JustEngagedWith.
+    schedule(creature:GetGUID(), "oh_novos", 1000, function() ohNovosCheck(creature) end)
 end
 
 local function novosTargetDied(event, creature, victim)
@@ -158,6 +227,7 @@ local function novosTargetDied(event, creature, victim)
 end
 
 local function novosDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
 end
 
@@ -168,6 +238,10 @@ end
 -- absent (the header's Reset note).
 local function novosReset(event, creature)
     crystalHandlerCount = 0
+    -- C++ boss_novos::Initialize (:95-97): _ohNovos resets true; the
+    -- poll stops with the pull.
+    ohNovos = true
+    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_novos::DoAction(ACTION_CRYSTAL_HANDLER_DIED)

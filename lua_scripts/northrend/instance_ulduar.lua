@@ -29,6 +29,17 @@
 -- item-level scan (boss_algalon_the_observer.lua), read by the Go
 -- HERALD_OF_TITANS gate. All are read by checkUlduarCriteria
 -- (engine/world/achievement_criteria_scripts.go, tick 436).
+-- coUAchivePlayerDeathMask — the C++ _CoUAchivePlayerDeathMask
+-- member (instance_ulduar.cpp:528-540), set by the OnUnitDeath
+-- handler below, read by the Go Conqueror-of-Ulduar gates;
+-- anyCreature — the most recently created creature in the
+-- instance (ON_CREATURE_CREATE latch), the GetBossState probe
+-- for that handler (GetBossState reads Go instance state off
+-- the creature's map/instance, lua_creature_events.go:6438 —
+-- any creature in the instance works, so the Yogg-room voice
+-- binding is not required); conSpeedAtoryStarted /
+-- lumberjackedTimedStarted — the one-shot latches for the
+-- OnUnitDeath timed-achievement starts below.
 -- The mimiron keeper object is NOT bound here: YS keepers are
 -- temp summons, which bypass the ON_CREATURE_CREATE funnel
 -- (instance_hooks.go) — the gossip summon latches it instead
@@ -57,19 +68,32 @@
 --   The poll subsumes both C++ sites (SetBossState override for
 --   DONE-while-inside, OnPlayerEnter for DONE-before-entry /
 --   reload) and stops once all five legs have fired.
+-- PORTED (tick 467) — OnUnitDeath (instance_ulduar.cpp:528-574):
+-- the player leg (CoU death mask), the Freya-trash Con Speed
+-- Atory timed start (21597) and the elder Lumberjacked timed
+-- start (21686) — handler at the end of this file. The player
+-- leg rides the Go player-death sender (killPlayer /
+-- completeSpiritOfRedemptionDeath -> INSTANCE_EVENT_ON_UNIT_DEATH
+-- 9); the creature legs ride the tick-466 creature sender.
 -- DOCUMENTED-ONLY: door data / boundaries (no door/boundary
 -- machine), the remaining SetData dispatch (DATA_ILLUSION /
 -- DATA_DRIVE_ME_CRAZY / DATA_KEEPERS_COUNT / the Herald scan are
 -- live via the shared table slots above; the rest rides unbridged
 -- instance hooks), the Algalon summon timer + _algalonTimer
--- world states, OnUnitDeath (the C_O_U death mask stays
--- fail-closed in checkUlduarCriteria until an OnUnitDeath
--- bridge lands), SaveToDB.
+-- world states, SaveToDB (the C++ per-bit SaveToDB in OnUnitDeath
+-- has no Lua twin; the mask persists with the table).
 local MAP_ULDUAR = 603
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 local INSTANCE_EVENT_ON_UPDATE = 3
+local INSTANCE_EVENT_ON_UNIT_DEATH = 9
 
 local BOSS_STATE_DONE = 3
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_ALGALON = 13 -- ulduar.h:49; the C++ mask loop runs i < BOSS_ALGALON
+
+local ACHIEVEMENT_TIMED_TYPE_EVENT = 1
+local CRITERIA_CON_SPEED_ATORY = 21597 -- ulduar.h:348
+local CRITERIA_LUMBERJACKED = 21686 -- ulduar.h:349
 
 local ENTRY_VOICE_OF_YOGG_SARON = 33280 -- ulduar.h:203
 local ENTRY_SARA = 33134 -- ulduar.h:197
@@ -109,6 +133,11 @@ RegisterMapEvent(MAP_ULDUAR, INSTANCE_EVENT_ON_CREATURE_CREATE, function(event, 
     if key then
         instanceData[key] = creature
     end
+    -- Any-creature probe for the OnUnitDeath player leg (see below):
+    -- the most recently created creature in the instance; GetBossState
+    -- reads Go instance state off its map/instance, so any motion
+    -- works (method closures capture the motion pointer).
+    instanceData.anyCreature = creature
     if instanceData.illusion == nil then
         instanceData.illusion = 0
     end
@@ -149,6 +178,68 @@ RegisterMapEvent(MAP_ULDUAR, INSTANCE_EVENT_ON_UPDATE, function(event, instanceD
                 instanceData.lumberjackedDone = true
                 trigger:CastSpell(trigger, SPELL_LUMBERJACKED_CREDIT, true)
             end
+        end
+    end
+end)
+
+-- OnUnitDeath (instance_ulduar.cpp:528-574) — PORTED 2026-11-08
+-- (tick 467). Player leg (:528-540): a player death while a boss
+-- is IN_PROGRESS sets that boss's bit in _CoUAchivePlayerDeathMask,
+-- read by the Go Conqueror-of-Ulduar gates via the shared
+-- coUAchivePlayerDeathMask key (checkUlduarCriteria). Creature leg
+-- (:549-572): the first Freya-trash death starts the Con Speed
+-- Atory timed achievement (21597), the first elder death (Ironbranch
+-- 32913 / Stonebark 32914 / Brightleaf 32915) starts the Lumberjacked
+-- one (21686) — one-shot latches (conSpeedAtory / lumberjacked
+-- members). The timed starts ride instanceData:StartTimedAchievement
+-- (instance_hooks.go; no-op until Achievement.dbc ships the criteria,
+-- the Kologarn 21687 precedent). NOTE: the elder leg's
+-- lumberjackedTimedStarted latch is distinct from lumberjackedDone
+-- above (the SPELL_LUMBERJACKED_CREDIT spell arm).
+local FREYA_TRASH_ENTRIES = {
+    [33354] = true, -- NPC_CORRUPTED_SERVITOR (ulduar.h:159)
+    [33355] = true, -- NPC_MISGUIDED_NYMPH (:160)
+    [33430] = true, -- NPC_GUARDIAN_LASHER (:161)
+    [33431] = true, -- NPC_FOREST_SWARMER (:162)
+    [33525] = true, -- NPC_MANGROVE_ENT (:163)
+    [33526] = true, -- NPC_IRONROOT_LASHER (:164)
+    [33527] = true, -- NPC_NATURES_BLADE (:165)
+    [33528] = true, -- NPC_GUARDIAN_OF_LIFE (:166)
+}
+local ELDER_ENTRIES = {
+    [32913] = true, -- NPC_IRONBRANCH (ulduar.h:136)
+    [32914] = true, -- NPC_STONEBARK (:138)
+    [32915] = true, -- NPC_BRIGHTLEAF (:137)
+}
+
+RegisterMapEvent(MAP_ULDUAR, INSTANCE_EVENT_ON_UNIT_DEATH, function(event, instanceData, mapObj, unit)
+    if unit == nil then
+        return
+    end
+    if unit:GetObjectType() == "Player" then
+        local probe = instanceData.anyCreature or instanceData.voice
+        if not probe then
+            return
+        end
+        local mask = instanceData.coUAchivePlayerDeathMask or 0
+        for i = 0, BOSS_ALGALON - 1 do
+            if probe:GetBossState(i) == BOSS_STATE_IN_PROGRESS then
+                mask = bit32.bor(mask, bit32.lshift(1, i))
+            end
+        end
+        instanceData.coUAchivePlayerDeathMask = mask
+        return
+    end
+    local entry = unit:GetEntry()
+    if FREYA_TRASH_ENTRIES[entry] then
+        if not instanceData.conSpeedAtoryStarted then
+            instanceData.conSpeedAtoryStarted = true
+            instanceData:StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, CRITERIA_CON_SPEED_ATORY)
+        end
+    elseif ELDER_ENTRIES[entry] then
+        if not instanceData.lumberjackedTimedStarted then
+            instanceData.lumberjackedTimedStarted = true
+            instanceData:StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, CRITERIA_LUMBERJACKED)
         end
     end
 end)

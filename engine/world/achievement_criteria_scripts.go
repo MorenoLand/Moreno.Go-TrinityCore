@@ -1578,6 +1578,14 @@ func checkNaxxramasCriteria(s *session, criteriaID uint32) bool {
 	}
 }
 
+// ulduarConquerorBoss maps a Conqueror-of-Ulduar criteria id to its boss
+// index (ulduar.h:32-49, BOSS_LEVIATHAN = 0 .. BOSS_YOGG_SARON = 12;
+// criteria ids ulduar.h:372-398, 10-man then 25-man, same boss order).
+var ulduarConquerorBoss = map[uint32]uint32{
+	10042: 0, 10342: 1, 10340: 2, 10341: 3, 10598: 4, 10348: 5, 10351: 6, 10439: 7, 10403: 8, 10582: 9, 10347: 10, 10349: 11, 10350: 12,
+	10352: 0, 10355: 1, 10353: 2, 10354: 3, 10599: 4, 10357: 5, 10363: 6, 10719: 7, 10404: 8, 10583: 9, 10361: 10, 10362: 11, 10364: 12,
+}
+
 // checkUlduarCriteria mirrors
 // instance_ulduar_InstanceMapScript::
 // CheckAchievementCriteriaMeet (instance_ulduar.cpp:865-936).
@@ -1636,11 +1644,15 @@ func checkUlduarCriteria(s *session, criteriaID uint32) bool {
 		10352, 10355, 10353, 10354, 10599, 10357, 10363, 10719, 10404, 10583, 10361, 10362, 10364: // Conqueror of Ulduar 25-man
 		// C++ :896-933: (_CoUAchivePlayerDeathMask & (1 << boss))
 		// == 0 — the mask is set in OnUnitDeath when a player
-		// dies while a boss is IN_PROGRESS (instance :528-540).
-		// No Go bridge exists for instance OnUnitDeath (the same
-		// gap as Naxxramas playerDied / ToC
-		// TRIBUTE_TO_IMMORTALITY), so these stay fail-closed
-		// until one lands.
+		// dies while a boss is IN_PROGRESS (instance :528-540),
+		// written by instance_ulduar.lua into the shared
+		// instanceData table (coUAchivePlayerDeathMask) and read
+		// here via num(). The Naxxramas playerDied / ToC
+		// TRIBUTE_TO_IMMORTALITY latches stay fail-closed: their
+		// instance scripts have no OnUnitDeath handler yet.
+		if boss, ok := ulduarConquerorBoss[criteriaID]; ok {
+			return int64(num("coUAchivePlayerDeathMask", 0))&(int64(1)<<boss) == 0
+		}
 		return false
 	default:
 		return false

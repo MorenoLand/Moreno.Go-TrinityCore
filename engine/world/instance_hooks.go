@@ -480,6 +480,29 @@ func (s *Server) triggerInstanceUnitDeath(ctx context.Context, motion *creatureM
 	}
 }
 
+// triggerInstanceUnitDeathPlayer is the player-death twin of
+// triggerInstanceUnitDeath: the same Go-only INSTANCE_EVENT_ON_UNIT_DEATH
+// (9) with the dead player as unit (Unit::setDeathState, Unit.cpp:8956,
+// fires for player deaths too — instance scripts read unit->GetTypeId()
+// == TYPEID_PLAYER, e.g. instance_ulduar.cpp:528-540). Fired from
+// session.killPlayer at its setDeathState leg and from
+// completeSpiritOfRedemptionDeath at the deferred setDeathState, the two
+// JUST_DIED arms — never both for one death (the spirit form defers the
+// whole cascade). Only instance-map player deaths reach here; the gate
+// is the triggerInstanceCreatureCreate one.
+func (s *Server) triggerInstanceUnitDeathPlayer(ctx context.Context, sess *session) {
+	if s == nil || sess == nil || sess.player == nil || sess.player.InstanceID == 0 || !s.isInstanceScriptMap(sess.player.Map) || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	unit := sess.luaPlayer()
+	if unit == nil {
+		return
+	}
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(ctx, sess.player.Map, sess.player.InstanceID, scripting.InstanceEventOnUnitDeath, s.instanceDataObject(sess.player.Map, sess.player.InstanceID), instanceMapObject(s, sess.player.Map, sess.player.InstanceID), unit); err != nil {
+		s.debug("lua instance unit-death event failed", "map", sess.player.Map, "instance", sess.player.InstanceID, "error", err)
+	}
+}
+
 // triggerInstanceCreatureCreate dispatches Eluna INSTANCE_EVENT_ON_CREATURE_CREATE
 // (5), fired from Creature::AddToWorld (Creature.cpp:301) via the instance's zone
 // script: (event, instance_data, map, creature). Only dynamically-materialized

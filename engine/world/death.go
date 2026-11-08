@@ -601,6 +601,13 @@ func (s *session) killPlayer(ctx context.Context, killer *session, pvpDeath, dur
 	// still alive, so the threat leg runs at the deferred death.
 	if !spiritOfRedemption && s.server != nil {
 		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+		// Unit::setDeathState(JUST_DIED) (Unit.cpp:8956) fires
+		// zoneScript->OnUnitDeath(this) inside setDeathState, after
+		// the CombatStop leg above — the instance-script player-death
+		// fire lands here, at the same point the creature funnel
+		// fires it. Skipped while the spirit form holds: the
+		// deferred death fires it in completeSpiritOfRedemptionDeath.
+		s.server.triggerInstanceUnitDeathPlayer(ctx, s)
 	}
 	// Unit::setDeathState(JUST_DIED) (Unit.cpp) runs inside Unit::Kill via
 	// InterruptNonMeleeSpells(false): a PREPARING generic cast is cancelled
@@ -931,6 +938,11 @@ func (s *session) completeSpiritOfRedemptionDeath(ctx context.Context) {
 	s.player.Health = 0
 	if s.server != nil {
 		s.server.removeThreatVictimFromAllLists(s.player.Map, s.player.InstanceID, s.playerGUID)
+		// Deferred Unit::setDeathState(JUST_DIED) (Unit.cpp:8956):
+		// the instance-script player-death fire, landing at the
+		// deferred death — the same point killPlayer fires it for
+		// the immediate death.
+		s.server.triggerInstanceUnitDeathPlayer(ctx, s)
 	}
 	// Deferred Unit::setDeathState(JUST_DIED) cascade: the spirit form kept
 	// the player alive, so the cast/channel interrupt (and its GCD refund)

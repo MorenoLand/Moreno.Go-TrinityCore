@@ -15,10 +15,11 @@
 -- legs (GetGuidData GUID latching, InitializeNovosSummoner position
 -- matching, SetBossState bookkeeping) stay out — no Go instance
 -- script model beyond the instanceData table.
--- DOCUMENTED-ONLY: player deaths in instances also fire C++
--- OnUnitDeath (Unit.cpp:8956 comment) but the Go fire covers
--- creature deaths only (the session death path has no fire yet) —
--- no DTK leg reads player deaths, so nothing is lost here.
+-- DOCUMENTED-ONLY: player deaths also fire INSTANCE_EVENT_ON_UNIT_DEATH
+-- (9) now — the Go player-death sender (killPlayer /
+-- completeSpiritOfRedemptionDeath, tick 467) — but no DTK leg reads
+-- player deaths, so the handler below returns early for them (players
+-- carry no GetEntry method; the guard must run before the entry read).
 
 local MAP_DRAK_THARON_KEEP = 600
 
@@ -37,7 +38,7 @@ RegisterMapEvent(MAP_DRAK_THARON_KEEP, INSTANCE_EVENT_ON_CREATURE_CREATE, functi
 end)
 
 RegisterMapEvent(MAP_DRAK_THARON_KEEP, INSTANCE_EVENT_ON_UNIT_DEATH, function(event, instanceData, mapObj, unit)
-    if unit == nil or unit:GetEntry() ~= ENTRY_CRYSTAL_HANDLER then
+    if unit == nil or unit:GetObjectType() == "Player" or unit:GetEntry() ~= ENTRY_CRYSTAL_HANDLER then
         return
     end
     local novos = instanceData.novos
