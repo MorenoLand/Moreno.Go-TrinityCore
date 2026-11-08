@@ -21,15 +21,22 @@
 -- HasItemCount defaults inBankAlso=false — a disruptor sitting only
 -- in the bank suppresses the grant in Lua but not in C++.
 -- Ported: OnGossipHello's GM arm (:301-345) + state-gated menu send
--- (2026-11-07): quest menu first when the creature is a quest giver
+-- (2026-11-07) + EXPLAIN / SKIP / TELEPORT items (2026-11-07, tick
+-- 403): quest menu first when the creature is a quest giver
 -- (player:GossipAddQuests twin); the "[GM] Access instance control
 -- panel" item only when the player IsGM (lua_player.go:1215 — the
 -- CanBeGameMaster twin); progress < PURGE_STARTING sends
--- GOSSIP_TEXT_INITIAL 12939, else GOSSIP_TEXT_TELEPORT 13470 (the
--- EXPLAIN / SKIP / TELEPORT items stay out: their texts live only in
--- DB gossip_menu_option rows — C++ carries no string constants for
--- them, unlike the kalecgos GOSSIP_ITEM_* precedent — and the SKIP
--- achievement scan has no live half without the item it gates).
+-- GOSSIP_TEXT_INITIAL 12939 with the EXPLAIN item (menu 9586 opt 0)
+-- + the SKIP item (menu 9586 opt 2) iff every non-GM player in the
+-- instance has the CoS achievement (479 normal / 500 heroic,
+-- map:IsHeroic + player:HasAchieved, C++ :321-338 scan verbatim),
+-- else GOSSIP_TEXT_TELEPORT 13470 with the TELEPORT item (menu 9586
+-- opt 1). Option texts sourced from TDB 335.26091 (2026-09-09)
+-- gossip_menu_option rows (Wowhead lists no gossip text for any CoS
+-- Chromie — live-browser check 2026-11-07, quotes only); the npc_text
+-- greetings (12939/12949/12950/12952/13470/15704) were verified in the
+-- same dump and resolve from the deployment DB via GossipSendMenu
+-- (gossip.go loadNPCText), so Lua carries no greeting strings.
 -- Ported: OnGossipSelect's GM arms (:378-408) — OPEN_GM_MENU builds
 -- the control panel ("Teleport all players to Arthas" + one item per
 -- progress state, stable -> "Set instance progress to 0x%05X", else
@@ -44,8 +51,12 @@
 -- Ported: OnQuestAccept (:410-413) — accepting quest 13149
 -- (Dispelling Illusions) runs AdvanceDungeon (cratesStart flag,
 -- same JUST_STARTED guard, consumed by the instance pump).
--- Documented-only: the EXPLAIN / SKIP / EXPLAIN_1 menu-nav select
--- arms (their option texts live only in DB gossip_menu_option rows).
+-- Ported: the EXPLAIN / SKIP / EXPLAIN_1 menu-nav select arms
+-- (2026-11-07, tick 403): EXPLAIN (1000) -> menu 9594 opt 0 +
+-- text 12949; SKIP (1001) -> menu 11277 opt 0 + text 15704;
+-- EXPLAIN_1 (1003) -> menu 9595 opt 0 + text 12950; each clears the
+-- menu first (C++ ClearGossipMenuFor, :352). Texts from the same TDB
+-- 335.26091 gossip_menu_option rows.
 -- Documented-only (nearest-creature axis): npc_hearthsinger_forresten_cot
 -- (entry 30551 — inn cinematic, culling_of_stratholme.cpp:118/153/166):
 -- FindNearestCreature(talkerEntry, 80.0f, true) (:153) and
@@ -75,14 +86,15 @@
 -- WhisperDelay one-shot when progress == CRATES_DONE; the UpdateAI fire leg
 -- (:474-487) re-checks progress + Whispered-empty and Talks
 -- WHISPER_CRATES_DONE 0. OnGossipHello (:508-514): quest menu first
--- (player:GossipAddQuests twin) + SendGossipMenu 12992; the STEP1 item add
--- stays out (its text lives only in DB gossip_menu_option row 9610/0 —
--- Wowhead lists no gossip text for any CoS Chromie). OnGossipSelect
--- STEP1/2/3 (:516-543): the menu sends 12993/12994/12995 are ported and
--- STEP3 runs AdvanceDungeon -> instanceData.utherStart (consumed by the
--- instance pump, CRATES_DONE-guarded); the STEP1/2/3 item adds stay out
--- (same DB-text reason), so the chain is dormant until the texts are
--- sourced. MoveInLineOfSight (:489-506) stays out: ev27 fires only from
+-- (player:GossipAddQuests twin) + the STEP1 item (menu 9610 opt 0,
+-- TDB 335.26091 row) when progress == CRATES_DONE + SendGossipMenu
+-- 12992. OnGossipSelect STEP1/2/3 (:516-543): the menu sends
+-- 12993/12994/12995 are ported, the STEP1/2/3 item adds are ported
+-- (2026-11-07, tick 403 — menus 9611/0 "You want me to do what?" and
+-- 9612/0 "Very well, Chromie.", same TDB dump; each arm clears the
+-- menu first per C++ :520), and STEP3 runs AdvanceDungeon ->
+-- instanceData.utherStart (consumed by the instance pump,
+-- CRATES_DONE-guarded), so the chain is live end to end. MoveInLineOfSight (:489-506) stays out: ev27 fires only from
 -- the aggro-engage branch (2026-10-24 note) and Chromie never engages,
 -- so the WHISPER_COME_TALK 15s-per-player whisper has no fire site.
 -- SPAWNGRP_CHROMIE_MID activation (instance :662, state >= CRATES_DONE)
@@ -94,16 +106,24 @@ local ENTRY_CHROMIE_START = 26527
 
 local GOSSIP_ACTION_INFO_DEF = 1000
 local GOSSIP_SENDER_MAIN = 1
+local GOSSIP_ICON_CHAT = 0
 local GOSSIP_ICON_INTERACT_1 = 4
+local GOSSIP_OFFSET_EXPLAIN = 0
+local GOSSIP_OFFSET_SKIP = 1
 local GOSSIP_OFFSET_TELEPORT = 2
+local GOSSIP_OFFSET_EXPLAIN_1 = 3
 local GOSSIP_OFFSET_EXPLAIN_2 = 4
 local GOSSIP_OFFSET_SKIP_1 = 5
 local GOSSIP_OFFSET_OPEN_GM_MENU = 6
 local GOSSIP_OFFSET_GM_INITIAL = 7
 local GOSSIP_TEXT_INITIAL = 12939
 local GOSSIP_TEXT_TELEPORT = 13470
+local GOSSIP_TEXT_EXPLAIN_1 = 12949
+local GOSSIP_TEXT_EXPLAIN_2 = 12950
 local GOSSIP_TEXT_EXPLAIN_3 = 12952
 local GOSSIP_TEXT_SKIP_1 = 15704
+local ACHIEVEMENT_NORMAL = 479
+local ACHIEVEMENT_HEROIC = 500
 local ITEM_ARCANE_DISRUPTOR = 37888
 local SPELL_TELEPORT_PLAYER = 53435
 local QUEST_DISPELLING_ILLUSIONS = 13149
@@ -147,6 +167,32 @@ local function instanceDataOf(creature)
     return mapObj:GetInstanceData()
 end
 
+-- C++ OnGossipHello (culling_of_stratholme.cpp:321-338): the SKIP
+-- item is added only when every non-GM player in the instance has the
+-- Culling of Stratholme achievement (479 normal, 500 heroic by spawn
+-- mode — map:IsHeroic is the GetSpawnMode() == DUNGEON_DIFFICULTY_HEROIC
+-- twin, globals.go:1221). An empty instance passes vacuously, as in C++.
+local function chromieShouldAddSkip(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return false
+    end
+    local achievement = ACHIEVEMENT_NORMAL
+    if mapObj:IsHeroic() then
+        achievement = ACHIEVEMENT_HEROIC
+    end
+    local players = mapObj:GetPlayers()
+    if not players then
+        return true
+    end
+    for _, other in ipairs(players) do
+        if not other:IsGM() and not other:HasAchieved(achievement) then
+            return false
+        end
+    end
+    return true
+end
+
 local function chromieGossipHello(event, player, creature)
     if creature:IsQuestGiver() then
         player:GossipAddQuests(creature)
@@ -157,9 +203,28 @@ local function chromieGossipHello(event, player, creature)
             GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_OPEN_GM_MENU)
     end
     local data = instanceDataOf(creature)
-    if data and (data.progress or JUST_STARTED) >= PURGE_STARTING then
+    if not data then
+        -- C++ fallback (:343): no instance script, plain greeting.
+        player:GossipSendMenu(GOSSIP_TEXT_INITIAL, creature)
+        return
+    end
+    if (data.progress or JUST_STARTED) >= PURGE_STARTING then
+        -- C++ (:342-345): TELEPORT item (menu 9586 opt 1,
+        -- "Yes, please!").
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "Yes, please!",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_TELEPORT)
         player:GossipSendMenu(GOSSIP_TEXT_TELEPORT, creature)
     else
+        -- C++ (:315-339): EXPLAIN (menu 9586 opt 0) always, SKIP
+        -- (menu 9586 opt 2) iff the achievement scan passes.
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT,
+            "Why have I been sent back to this particular place and time?",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN)
+        if chromieShouldAddSkip(creature) then
+            player:GossipMenuAddItem(GOSSIP_ICON_CHAT,
+                "Chromie, you and I both know what's going to happen in this time stream. We've seen this all before. Can you just skip us ahead to all the real action?",
+                GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_SKIP)
+        end
         player:GossipSendMenu(GOSSIP_TEXT_INITIAL, creature)
     end
 end
@@ -178,7 +243,27 @@ local function isGMOverrideAction(action)
 end
 
 local function chromieGossipSelect(event, player, creature, sender, action)
-    if action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_TELEPORT
+    if action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN then
+        -- C++ OnGossipSelect (culling_of_stratholme.cpp:353-356):
+        -- next explain menu (9594 opt 0), text 12949.
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "What was this decision?",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN_1)
+        player:GossipSendMenu(GOSSIP_TEXT_EXPLAIN_1, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_SKIP then
+        -- C++ (:357-360): skip menu (11277 opt 0), text 15704.
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "Yes, please!",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_SKIP_1)
+        player:GossipSendMenu(GOSSIP_TEXT_SKIP_1, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN_1 then
+        -- C++ (:368-371): next explain menu (9595 opt 0), text 12950.
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT,
+            "So how does the Infinite Dragonflight plan to interfere?",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_EXPLAIN_2)
+        player:GossipSendMenu(GOSSIP_TEXT_EXPLAIN_2, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_TELEPORT
         or action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_SKIP_1 then
         player:GossipComplete()
         creature:CastSpell(player, SPELL_TELEPORT_PLAYER)
@@ -321,27 +406,42 @@ RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 23, function(event, creature)
 end)
 
 -- C++ OnGossipHello (culling_of_stratholme.cpp:508-514): quest menu
--- first when the creature is a quest giver, the STEP1 item only when
--- progress == CRATES_DONE (item add stays out — DB text), then
--- SendGossipMenuFor 12992.
+-- first when the creature is a quest giver, the STEP1 item (menu 9610
+-- opt 0, "What do you think they're up to?") only when progress ==
+-- CRATES_DONE, then SendGossipMenuFor 12992.
 local function chromieMiddleGossipHello(event, player, creature)
     if creature:IsQuestGiver() then
         player:GossipAddQuests(creature)
+    end
+    local data = instanceDataOf(creature)
+    if data and (data.progress or JUST_STARTED) == CRATES_DONE then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT,
+            "What do you think they're up to?",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF)
     end
     player:GossipSendMenu(GOSSIP_TEXT_STEP1, creature)
 end
 
 -- C++ OnGossipSelect (culling_of_stratholme.cpp:516-543): STEP1 ->
--- menu 12993, STEP2 -> menu 12994, STEP3 -> menu 12995 + AdvanceDungeon
--- (instanceData.utherStart, consumed by the instance pump). The
--- STEP1/2/3 item adds stay out (DB gossip_menu_option texts); the
--- menu sends + the AdvanceDungeon flag are the live halves.
+-- menu 12993 + STEP2 item (menu 9611 opt 0, "You want me to do
+-- what?"), STEP2 -> menu 12994 + STEP3 item (menu 9612 opt 0, "Very
+-- well, Chromie."), STEP3 -> menu 12995 + AdvanceDungeon
+-- (instanceData.utherStart, consumed by the instance pump). The select
+-- clears the menu first (C++ :520 ClearGossipMenuFor), so the spent
+-- item and quest entries do not carry into the next menu.
 local function chromieMiddleGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF then
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "You want me to do what?",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
         player:GossipSendMenu(GOSSIP_TEXT_STEP2, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 1 then
+        player:GossipClearMenu()
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, "Very well, Chromie.",
+            GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2)
         player:GossipSendMenu(GOSSIP_TEXT_STEP3, creature)
     elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
+        player:GossipClearMenu()
         player:GossipSendMenu(GOSSIP_TEXT_STEP4, creature)
         local data = instanceDataOf(creature)
         if data and (data.progress or JUST_STARTED) == CRATES_DONE then
