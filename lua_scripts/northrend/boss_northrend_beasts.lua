@@ -105,7 +105,8 @@
 -- EVENT_ENGAGE summon), summons.DespawnAll (:290) stays out (no
 -- summons-enumeration bridge), and the instance FAIL cascade's
 -- vehicle-removal leg stays out (no vehicle bridge; SnoboldCount = 0
--- is a dead write) — the Tirion wipe DoAction + heroic TrialCounter
+-- is PORTED tick 411 U3 in beastsEvaded — it resets the achievement
+-- counter mirror) — the Tirion wipe DoAction + heroic TrialCounter
 -- decrement legs are PORTED tick 406 U2 in beastsEvaded
 -- (sendToFordring + instanceData.trialCounter; receiver
 -- npc_tirion_fordring.lua, tick 406 U2).
@@ -131,11 +132,13 @@
 -- jedoga over-cast bar); EVENT_SNOBOLLED — DoCastSelf(
 -- SPELL_SNOBOLLED 66406) (vehicle-gated); EVENT_CHECK_MOUNT —
 -- MountOnBoss() 3s loop; JustDied — instance->SetData(
--- DATA_SNOBOLD_COUNT, DECREASE) stays out: verified 2026-11-07
--- SnoboldCount has ZERO readers in the C++ tree (only ++/-- at
--- :401/:430 + FAIL reset; no GetData case), so even the
--- instanceData-table mirror would be a dead write; the spawn-side
--- INCREASE leg rides the unported vehicle machine; CanAIAttack /
+-- DATA_SNOBOLD_COUNT, DECREASE) PORTED tick 411 U3 (snoboldDied, ev4)
+-- + ctor INCREASE via ev5 (snoboldSpawned) + FAIL reset in
+-- beastsEvaded — the "ZERO readers" claim is STALE: the reader is
+-- CheckAchievementCriteriaMeet (UPPER_BACK_PAIN, instance :626-631),
+-- wired to the Go DATA_TYPE_INSTANCE_SCRIPT gate tick 411 U3. The
+-- mirror is dormant until the vehicle machine lands (snobolds arrive
+-- as Gormok's passengers); CanAIAttack /
 -- AttackStart / AttackStartCaster movement legs (no motion bridges).
 -- npc_beasts_combat_stalker (36549 — kalecgos pass; instance binds
 -- NPC_BEASTS_COMBAT_STALKER -> DATA_BEASTS_COMBAT_STALKER): Reset —
@@ -387,6 +390,48 @@ local function beastsCountDeath(creature)
     end
 end
 
+-- C++ npc_snobold_vassal ctor (:401) / JustDied (:430): instance->
+-- SetData(DATA_SNOBOLD_COUNT, INCREASE/DECREASE). Lua mirror in the
+-- shared instanceData table (snoboldCount, default 0; beastsCountDeath
+-- pattern above) — the reader is the DATA_TYPE_INSTANCE_SCRIPT
+-- achievement gate (Go, checkTrialOfTheCrusaderCriteria): UPPER_BACK_
+-- PAIN needs SnoboldCount >= 2 (10-player) / >= 4 (25-player).
+-- The ctor has no Lua hook; ev5 OnSpawn is the spawn twin (fires on
+-- summon/respawn via fireCreatureSpawned, creaturemotion.go:1262 —
+-- never on evade, unlike ev23, so no double-count on leash). The FAIL
+-- reset (SnoboldCount = 0, instance :412) rides beastsEvaded below.
+-- Dormant until the vehicle machine lands: snobolds arrive as Gormok's
+-- vehicle passengers (boss_northrend_beasts.cpp:378 / EVENT_THROW),
+-- and the intro summon is unported — no snobold materializes in Go
+-- today, so the count stays 0 and the gate stays fail-closed.
+local function snoboldSpawned(event, creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data.snoboldCount = (data.snoboldCount or 0) + 1
+end
+
+local function snoboldDied(event, creature, killer)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local count = (data.snoboldCount or 0) - 1
+    if count < 0 then
+        count = 0
+    end
+    data.snoboldCount = count
+end
+
 -- C++ EVENT_IMPALE: DoCastVictim(Impale), 10s init, 10s repeat.
 local function impaleTick(creature, guid)
     if creature:IsCasting() then
@@ -485,7 +530,9 @@ local function beastsEvaded(event, creature)
     -- value); DONE-never-backwards is the engine backstop
     -- (instance_boss_states.go:190-196). The cascade's
     -- HandlePlayerVehicle(false) leg has no vehicle bridge and
-    -- SnoboldCount = 0 is a dead write (zero C++ readers). The Tirion
+    -- SnoboldCount = 0 is PORTED tick 411 U3 above (it resets the
+    -- achievement counter mirror, whose reader is the
+    -- instance-criteria gate). The Tirion
     -- DoAction(ACTION_NORTHREND_BEASTS_WIPE) leg is PORTED tick 406 U2
     -- via sendToFordring below (ev38; receiver npc_tirion_fordring.lua),
     -- and the heroic TrialCounter decrement of the generic SetBossState
@@ -497,6 +544,17 @@ local function beastsEvaded(event, creature)
     -- PORTED below (tick 408 U1).
     if creature:GetBossState(DATA_NORTHREND_BEASTS) ~= BOSS_STATE_FAIL then
         creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_FAIL)
+        -- SnoboldCount = 0 (instance :412, FAIL cascade; unconditional,
+        -- unlike the heroic-only TrialCounter decrement below). The
+        -- count mirror's reader is the tick-411 instance-criteria gate
+        -- (UPPER_BACK_PAIN), so this is no longer a dead write.
+        local failMap = creature:GetMap()
+        if failMap then
+            local failData = failMap:GetInstanceData()
+            if failData then
+                failData.snoboldCount = 0
+            end
+        end
         sendToFordring(creature, ACTION_NORTHREND_BEASTS_WIPE)
         if creature:IsHeroic() then
             local mapObj = creature:GetMap()
@@ -628,3 +686,5 @@ RegisterCreatureEvent(ENTRY_ACIDMAW, 38, wormDoAction)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 4, icehowlDied)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 2, beastsEvaded)
+RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 5, snoboldSpawned)
+RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 4, snoboldDied)

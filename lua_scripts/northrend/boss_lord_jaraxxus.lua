@@ -122,7 +122,9 @@
 -- Random,1,0.0f,true) (index-1 exclude-victim, akilzon precedent) ->
 -- Talk(EMOTE_LEGION_FLAME 2, target) + DoCast(Legion Flame 66197)
 -- non-triggered, 20s init, 30s repeat. The "same random-target bar"
--- claim is retracted.
+-- claim is retracted. The summon strand (66197 -> 34784 at the target)
+-- is PORTED tick 411 U1 (explicit SummonCreature in legionFlameTick —
+-- see below).
 -- boss_jaraxxus EVENT_SUMMON_NETHER_PORTAL — PORTED
 -- (netherPortalTick; the summon strand is PORTED tick 410 U2 — see
 -- below). EVENT_SUMMON_INFERNAL_ERUPTION — PORTED (infernalTick;
@@ -151,8 +153,9 @@
 -- (MiscValue), unverifiable in-tree — no Spell.dbc, no sql/ spell data.
 -- Caveat: if Spell.dbc ever ships, the 66269/66258/66252/66263 casts
 -- would ALSO summon, double-spawning — these legs must be revisited then.
--- The legion-flame strand (66197 -> 34784 at a player target) is a
--- different spell and stays out of this unit (adjacent, not examined).
+-- The legion-flame strand (66197 -> 34784 at a player target) is PORTED
+-- tick 411 U1 (explicit SummonCreature in legionFlameTick; same
+-- double-spawn caveat applies to 66197).
 -- npc_legion_flame (34784): Reset — PORTED tick 408
 -- (legionFlameReset): instance->GetBossState(DATA_JARAXXUS) !=
 -- IN_PROGRESS -> DespawnOrUnsummon (GetBossState IS bridged,
@@ -237,7 +240,10 @@
 -- creature:SetData is per-creature ScriptData, not the instance, so it
 -- is NOT used); floored at 0 (paired INCREASE ported tick 408 in
 -- mistressReset); the THREE_SIXTY_PAIN_SPIKE achievement read
--- (MistressOfPainCount >= 2) has no Go bridge and stays out.
+-- (MistressOfPainCount >= 2) is PORTED tick 411 U3 via the Go
+-- DATA_TYPE_INSTANCE_SCRIPT gate (checkTrialOfTheCrusaderCriteria
+-- reads data.mistressOfPainCount) — the old "no Go bridge" claim is
+-- STALE.
 -- spell_mistress_kiss (AuraScript 66334/67905/67906/67907) —
 -- HandleDummyTick: casting target -> caster casts Mistress' Kiss
 -- Damage+Silence 66359 + RemoveAurasDueToSpell — PORTED tick 371
@@ -485,6 +491,14 @@ local function legionFlameTick(creature, guid)
     if target then
         creature:Talk(EMOTE_LEGION_FLAME, target)
         creature:CastSpell(target, SPELL_LEGION_FLAME)
+        -- Spell-summon delivery — PORTED tick 411 U1 (same dead-DBC
+        -- class as tick 410 U2): 66197's effect summons 34784 at the
+        -- target, but no Spell.dbc ships so the engine path never runs;
+        -- summon explicitly at the target's position (boss_ignis
+        -- victim:GetX precedent). The flame's ev23 Reset arms on spawn
+        -- (summonTempCreature funnel fires ev19 + ev23); if Spell.dbc
+        -- ever ships, the 66197 cast would ALSO summon — revisit then.
+        creature:SummonCreature(ENTRY_LEGION_FLAME, target:GetX(), target:GetY(), target:GetZ(), target:GetO())
     end
     schedule(guid, "legionflame", 30000, function()
         legionFlameTick(creature, guid)

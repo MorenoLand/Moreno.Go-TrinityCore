@@ -349,6 +349,70 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 	return false
 }
 
+// checkInstanceAchievementCriteria evaluates one DATA_TYPE_INSTANCE_SCRIPT
+// (18) criteria gate, the Go form of InstanceScript::
+// CheckAchievementCriteriaMeet (AchievementMgr.cpp:404-424): the map's
+// instance script evaluates the criteria against its own state, and
+// C++ returns false for criteria its switch does not recognize. Maps
+// with no Go instance gate fail closed, matching the unknown-script
+// default for the type-11 gate above — never auto-passed.
+func (s *session) checkInstanceAchievementCriteria(criteriaID uint32) bool {
+	if s == nil || s.player == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return false
+	}
+	switch s.player.Map {
+	case 649: // Trial of the Crusader
+		return checkTrialOfTheCrusaderCriteria(s, criteriaID)
+	default:
+		return false
+	}
+}
+
+// checkTrialOfTheCrusaderCriteria mirrors
+// instance_trial_of_the_crusader_InstanceMapScript::
+// CheckAchievementCriteriaMeet (instance_trial_of_the_crusader.cpp:621-654).
+// The counters live in the Lua shared instanceData table (boss_northrend_
+// beasts.lua snoboldCount, boss_lord_jaraxxus.lua mistressOfPainCount,
+// the shared trialCounter); absent fields read as the C++ member
+// defaults (0, and 50 for TrialCounter, instance :110/:118/:120).
+// Criteria IDs are the TCRAchievementData enum
+// (trial_of_the_crusader.h:247-269); the 10/25-player split is encoded
+// in the criteria ID itself, so no raid-size check is needed here.
+func checkTrialOfTheCrusaderCriteria(s *session, criteriaID uint32) bool {
+	rt := s.server.Features.Scripts
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	num := func(key string, def float64) float64 {
+		if v, ok := rt.InstanceDataNumber(mapID, instanceID, key); ok {
+			return v
+		}
+		return def
+	}
+	switch criteriaID {
+	case 11779, 11802: // UPPER_BACK_PAIN 10-player (+heroic): SnoboldCount >= 2
+		return num("snoboldCount", 0) >= 2
+	case 11780, 11801: // UPPER_BACK_PAIN 25-player (+heroic): SnoboldCount >= 4
+		return num("snoboldCount", 0) >= 4
+	case 11838, 11861, 11839, 11862: // THREE_SIXTY_PAIN_SPIKE: MistressOfPainCount >= 2
+		return num("mistressOfPainCount", 0) >= 2
+	case 12344, 12338: // A_TRIBUTE_TO_SKILL: TrialCounter >= 25
+		return num("trialCounter", 50) >= 25
+	case 12347, 12341: // A_TRIBUTE_TO_MAD_SKILL: TrialCounter >= 45
+		return num("trialCounter", 50) >= 45
+	case 12349, 12343, 12350: // A_TRIBUTE_TO_INSANITY / REALM_FIRST_GRAND_CRUSADER: TrialCounter == 50
+		return num("trialCounter", 50) == 50
+	case 12358, 12359: // A_TRIBUTE_TO_IMMORTALITY: TrialCounter == 50 && TributeToImmortalityEligible
+		// The eligibility latch (OnUnitDeath clears it when a player
+		// dies while an encounter is in progress, instance :165-169)
+		// has no Go bridge — no instance OnUnitDeath hook — so this
+		// stays fail-closed until one lands.
+		return false
+	case 12360: // A_TRIBUTE_TO_DEDICATED_INSANITY: C++ returns false (:652)
+		return false
+	default:
+		return false
+	}
+}
+
 // sessionInBattlegroundType is the Go form of Player::GetBattleground() != nil
 // for a battleground type: the session has an active, in-progress queue entry
 // for that type. (Arenas are excluded — these checks are all BG-zone checks.)

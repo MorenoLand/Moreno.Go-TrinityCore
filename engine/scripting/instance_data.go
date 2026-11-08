@@ -96,6 +96,35 @@ func (r *Runtime) MarshalInstanceData(mapID, instanceID uint32, bossStates map[u
 	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
+// InstanceDataNumber reads one numeric field of the (map, instance) data
+// table, reporting false when the table or field is absent or not a
+// number — the Go-side read of the Lua shared instanceData table (the
+// ElunaInstanceAI Lua data table), for engine code that must evaluate
+// instance-script state without a Lua call frame (e.g. the
+// DATA_TYPE_INSTANCE_SCRIPT achievement gate, AchievementMgr.cpp:404-424,
+// whose C++ form reads the instance script's members directly). A nil
+// runtime reads absent, matching MarshalInstanceData above.
+func (r *Runtime) InstanceDataNumber(mapID, instanceID uint32, key string) (float64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == nil {
+		return 0, false
+	}
+	obj := &Object{Type: "InstanceData", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID}}
+	if !pushInstanceDataTable(r.state, obj, false) {
+		r.state.Pop(1)
+		return 0, false
+	}
+	defer r.state.Pop(2)
+	r.state.PushString(key)
+	r.state.RawGet(-2)
+	if !r.state.IsNumber(-1) {
+		return 0, false
+	}
+	v, ok := r.state.ToNumber(-1)
+	return v, ok
+}
+
 // UnmarshalInstanceData replaces the (map, instance) data table with
 // the decoded blob and returns the boss states the blob carried (nil
 // when the blob has no bossStates section, as with blobs written before

@@ -954,6 +954,15 @@ func (s *session) meetsCriteriaRequirementsWithTarget(criterion achievementCrite
 			if !checkAchievementCriteriaScript(rule.ScriptName, s, target, victim) {
 				return false
 			}
+		case criteriaDataTypeInstanceScript: // 18
+			// InstanceScript::CheckAchievementCriteriaMeet gate
+			// (AchievementMgr.cpp:404-424): the map's instance script
+			// evaluates the criteria against its own state; without
+			// this, instance-gated criteria were silently auto-passed
+			// (the same bug class as the type-11 gate above).
+			if !s.checkInstanceAchievementCriteria(criterion.ID) {
+				return false
+			}
 		}
 	}
 
