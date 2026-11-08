@@ -45,8 +45,9 @@
 -- (tharon_ja precedent).
 -- EVENT_CHECK_RESISTS — DoCastSelf(Check Resists 60539), 0s init
 -- (fired on combat start), 30s repeat; the SpellHitTarget resist
--- check and GetData(DATA_THE_HUNDRED_CLUB) legs have no bridges —
--- documented, not wired.
+-- check and GetData(DATA_THE_HUNDRED_CLUB) legs are PORTED
+-- 2026-11-08 (tick 419): ev15 clear leg below + player/creature
+-- GetResistance bridges (Unit.h:863) + Go achievement case.
 -- EVENT_CLEAVE — DoCastVictim(Cleave 19983), randtime(5s,15s) init,
 -- randtime(5s,15s) repeat (moroes precedent); PHASE_GROUND-masked,
 -- so the tick latch-skips without re-arm while flying and is
@@ -100,12 +101,14 @@
 -- numeric-return bridge (fireCreatureDamageTaken; tesla/halazzi
 -- precedent), gated on the flight latch. The pre-fix port rewrote
 -- EVERY flight-phase hit to health-1.
--- SpellHitTarget — SPELL_CHECK_RESISTS resist comparison — ev15 IS
--- bridged (caster-side, boss_ai.go:1817/1833; sapphiron self-casts
--- 60539) but the arm stays out on the resistance read alone:
--- no creature:GetResistance bridge (GetArmor exists, resistance
--- does not); the _canTheHundredClub latch feeds an achievement
--- check with no bridge either.
+-- SpellHitTarget — SPELL_CHECK_RESISTS resist comparison — PORTED
+-- 2026-11-08 (tick 419) as sapphironSpellHitTarget (ev15, boss_ai.go:
+-- 4005-4022; caster-side, sapphiron self-casts 60539): a hit target
+-- whose frost resistance exceeds 100 clears the _canTheHundredClub
+-- latch via creature:SetData(DATA_THE_HUNDRED_CLUB 21462147, 0); the
+-- latch is set in Reset (alive-gated) and InitializeAI (ev5) below.
+-- The old "no creature:GetResistance bridge" bar is RETIRED:
+-- player/creature GetResistance are bridged (Unit.h:863).
 -- MovementInform (MovePoint 1 -> liftoff) — no motion bridge;
 -- the flight chain is timer-driven instead (see the port note
 -- above), so the travel leg is approximated away, not ported.
@@ -165,8 +168,10 @@
 -- (AuraScript) / spell_sapphiron_summon_blizzard (SpellScript) still
 -- join the SpellScript/AuraScript queue.
 -- achievement_the_hundred_club (DATA_THE_HUNDRED_CLUB 21462147 /
--- MAX_FROST_RESISTANCE 100) — no achievement-criteria bridge
--- (tharon_ja precedent) — joins that queue.
+-- MAX_FROST_RESISTANCE 100) — PORTED 2026-11-08 (tick 419): Go case
+-- reads the boss motion's SetData slot (bossLatchData); the write
+-- legs are the ev15 clear + ev23/ev5 sets above. The old "no
+-- achievement-criteria bridge" note is RETIRED.
 
 local ENTRY_SAPPHIRON = 15989
 
@@ -187,6 +192,9 @@ local SPELL_FROST_BREATH_ANTICHEAT = 29318
 local SPELL_BERSERK = 26662
 local SPELL_DIES = 29357
 local SPELL_CHECK_RESISTS = 60539
+local DATA_THE_HUNDRED_CLUB = 21462147 -- boss_sapphiron.cpp:88
+local SPELL_SCHOOL_FROST = 4 -- SharedDefines.h:315
+local MAX_FROST_RESISTANCE = 100 -- boss_sapphiron.cpp:89
 
 local REACT_PASSIVE = 0
 local REACT_AGGRESSIVE = 2
@@ -491,6 +499,25 @@ local function sapphironLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ SpellHitTarget (boss_sapphiron.cpp:193-203): SPELL_CHECK_RESISTS
+-- 60539 hitting a unit whose frost resistance exceeds 100 clears the
+-- _canTheHundredClub latch (Initialize/Reset set it). ev15 fires
+-- caster-side with the hit target (boss_ai.go:4005-4022); the target
+-- resolves to a player object for raid members and a creature object
+-- otherwise, and both surfaces now carry GetResistance (Unit.h:863).
+-- PORTED 2026-11-08 (tick 419).
+local function sapphironSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_CHECK_RESISTS then
+        return
+    end
+    if target == nil then
+        return
+    end
+    if target:GetResistance(SPELL_SCHOOL_FROST) > MAX_FROST_RESISTANCE then
+        creature:SetData(DATA_THE_HUNDRED_CLUB, 0)
+    end
+end
+
 -- C++ JustDied: _JustDied() bookkeeping (no bridge) + CastSpell(
 -- me, SPELL_DIES 29357, triggered) self-cast death visual.
 local GAMEOBJECT_FLAGS = 9
@@ -532,6 +559,15 @@ local function sapphironReset(event, creature)
     if creature:GetBossState(BOSS_SAPPHIRON) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_SAPPHIRON, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end
+    -- C++ Reset -> Initialize (boss_sapphiron.cpp:154-168/:131-134):
+    -- _canTheHundredClub = true. Alive-gated: ev23 fires on death too
+    -- (fireCreatureDied runs Reset before the kill-credit criteria
+    -- read, kill.go:1091/:1400), and a death-time re-arm would clobber
+    -- the fight's latch before the achievement gate reads it
+    -- (razorscale precedent). PORTED 2026-11-08 (tick 419).
+    if creature:IsAlive() then
+        creature:SetData(DATA_THE_HUNDRED_CLUB, 1)
+    end
     if wasFlying then
         creature:SetReactState(REACT_AGGRESSIVE)
         creature:PerformEmote(293) -- C++ Reset :162 (EMOTE_ONESHOT_LAND)
@@ -556,6 +592,9 @@ local function sapphironSpawn(event, creature)
     if creature:GetBossState(BOSS_SAPPHIRON) == BOSS_STATE_DONE then
         return
     end
+    -- C++ InitializeAI (boss_sapphiron.cpp:133-149): _canTheHundredClub
+    -- = true (unless DONE, returned above). PORTED 2026-11-08 (tick 419).
+    creature:SetData(DATA_THE_HUNDRED_CLUB, 1)
     local mapObj = creature:GetMap()
     local data = mapObj and mapObj:GetInstanceData() or nil
     if not (data and data.hadSapphironBirth) then
@@ -599,6 +638,7 @@ local function sapphironDamageTaken(event, creature, attacker, damage)
 end
 
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 1, sapphironEnterCombat)
+RegisterCreatureEvent(ENTRY_SAPPHIRON, 15, sapphironSpellHitTarget)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 5, sapphironSpawn)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 38, sapphironDoAction)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 2, sapphironLeaveCombat)

@@ -79,13 +79,18 @@
 -- motion/cast no longer block.
 -- MovementInform POINT_MOTION_TYPE / EVENT_FORGE_CAST (m_uiSummonPhase
 -- 2 -> SetOrientation(2.29f) (SetFacingTo twin bridged; the leg rides
--- MovementInform POINT_MOTION_TYPE, unbridged) -> phase 3).
+-- MovementInform POINT_MOTION_TYPE, ev28 — bridged, runtime.go:371;
+-- the old "unbridged" claim is RETIRED 2026-11-08, tick 419) -> phase 3).
 -- GetData(DATA_SHATTER_RESISTANT 2042) -> GolemsShattered (GetData /
 -- SetData ARE bridged as a per-handler ScriptData store, 2026-11-05
 -- re-check, lua_creature_events.go:771-796 — earlier "no GetData
--- bridge" claim retracted; still stay-out: GolemsShattered is never
--- written because ShatterGolem's chain head is dead, and the consumer
--- is achievement_shatter_resistant below, which has no bridge).
+-- bridge" claim retracted; still no Lua writer: GolemsShattered is
+-- never written because the temper/stomp gate is unreachable in the
+-- C++ snapshot (temper set at the first 80% threshold before the
+-- modifier can reach 3; EVENT_PAUSE, the only temper clear, fires
+-- once at 3.5s and dies) — so the counter is provably always 0 and
+-- achievement_shatter_resistant is PORTED 2026-11-08 (tick 419) as a
+-- bare Go case reading the never-written slot (< 5).
 -- UpdateAI event machine: EVENT_PAUSE (m_bIsStriking resume-chase +
 -- flag clears, 3.5s); EVENT_SHATTERING_STOMP STAYS OUT — verdict
 -- decided 2026-10-14: the arm is gated on !m_bHasTemper &&
@@ -121,7 +126,9 @@
 -- gates :126-129) — 2026-11-05 re-check: MoveTo (MovePoint twin),
 -- MoveChase/MoveFollow and FindNearestCreature (GetClosestCreatureWithEntry
 -- twin) ARE bridged now, so motion/lookup no longer block; the live
--- blockers are the MovementInform arrival (no ev28 in runtime.go)
+-- blockers are the MovementInform arrival (ev28 IS bridged,
+-- runtime.go:371 — the old "no ev28" claim is RETIRED 2026-11-08,
+-- tick 419; the arrival leg itself stays out on the phase machine)
 -- and SelectTarget (MaxThreat, :336) — still unbridged.
 -- npc_molten_golem (NPC_MOLTEN_GOLEM 28695) — TIMER ARMS PORTED
 -- (boss_volkhan.cpp:391-479, npc_molten_golemAI): entry 28695
@@ -159,8 +166,9 @@
 -- same kill-shot transition as the C++).
 -- achievement_shatter_resistant (AchievementCriteriaScript
 -- OnCheck: target->GetAI()->GetData(DATA_SHATTER_RESISTANT 2042) <
--- 5 — no GetData / achievement bridges; joins the
--- unmodeled-achievement queue).
+-- 5) — PORTED 2026-11-08 (tick 419) as a bare Go case: the counter
+-- is provably always 0 in the C++ snapshot (see GetData note above),
+-- so the never-written slot reads 0 < 5.
 
 local ENTRY_MOLTEN_GOLEM = 28695
 local ENTRY_BRITTLE_GOLEM = 28681 -- boss_volkhan.cpp:30 (NPC_BRITTLE_GOLEM)

@@ -1174,6 +1174,22 @@ func (s *session) luaPlayer() *scripting.Object {
 	// damage fold reads for player targets (combat.go). Backs the faction
 	// champions melee UpdateThreat armor leg.
 	methods["GetArmor"] = luaNoArgs(func() any { return state.Armor })
+	// GetResistance is Unit::GetResistance(SpellSchools) (Unit.h:863:
+	// UNIT_FIELD_RESISTANCES+school): the Player::UpdateResistances
+	// result (player_state.go:2503), the same store the update-fields
+	// broadcast reads. School is the SharedDefines.h enum (0 NORMAL,
+	// 1 HOLY, 2 FIRE, 3 NATURE, 4 FROST, 5 SHADOW, 6 ARCANE). Backs
+	// the sapphiron SpellHitTarget frost-resistance leg.
+	methods["GetResistance"] = func(_ context.Context, args []any) ([]any, error) {
+		school, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if school > 6 {
+			return nil, fmt.Errorf("GetResistance requires a spell school 0-6, got %d", school)
+		}
+		return []any{state.Resistances[school]}, nil
+	}
 	methods["GetHealthPct"] = luaNoArgs(func() any {
 		if state.MaxHealth == 0 {
 			return float32(0)

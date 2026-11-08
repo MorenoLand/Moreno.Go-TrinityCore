@@ -2591,6 +2591,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{armor}, nil
 	}
+	// GetResistance is Unit::GetResistance(SpellSchools) (Unit.h:863:
+	// UNIT_FIELD_RESISTANCES+school): the stored template resistances
+	// from the creature motion (lua_creature_events.go:6529); Go has no
+	// creature resistance aura fold, so this is the stored value, the
+	// same limitation class as GetArmor above. School is the
+	// SharedDefines.h enum (0 NORMAL, 1 HOLY, 2 FIRE, 3 NATURE,
+	// 4 FROST, 5 SHADOW, 6 ARCANE). Backs the sapphiron
+	// SpellHitTarget frost-resistance leg.
+	methods["GetResistance"] = func(_ context.Context, args []any) ([]any, error) {
+		school, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if school > 6 {
+			return nil, fmt.Errorf("GetResistance requires a spell school 0-6, got %d", school)
+		}
+		s.motionMu.Lock()
+		resistance := motion.Resistances[school]
+		s.motionMu.Unlock()
+		return []any{resistance}, nil
+	}
 	// SetArmor is Unit::SetArmor (Unit.h:861: SetResistance(SPELL_SCHOOL_NORMAL)):
 	// writes the stored base armor and broadcasts UNIT_FIELD_RESISTANCES,
 	// the same field the aura-change twin (recomputeCreatureArmorOnAuraChange)

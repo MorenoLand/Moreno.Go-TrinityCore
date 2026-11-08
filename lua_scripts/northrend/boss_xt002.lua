@@ -207,8 +207,11 @@
 -- GetData(DATA_HARD_MODE) != 0) — PORTED 2026-11-08 (tick 417, latent;
 -- see DoAction note above); achievement_nerf_gravity_bombs
 -- (OnCheck: !GetData(DATA_GRAVITY_BOMB_CASUALTY)) — the gravity-bomb
--- leg is ported below via RegisterAuraEvent. Go cases in
--- engine/world/achievement_criteria_scripts.go read the killed
+-- leg is ported below via RegisterAuraEvent. achievement_nerf_engineering
+-- is PORTED 2026-11-08 (tick 419) as a bare Go case: the latch is set
+-- only when a scrapbot boards (PassengerBoarded, no bridge) and
+-- scrapbots never spawn in Go, so the never-written slot reads 0.
+-- Go cases in engine/world/achievement_criteria_scripts.go read the killed
 -- XT-002's ScriptData slots (fail-closed: absent reads 0).
 
 local ENTRY_XT002 = 33293

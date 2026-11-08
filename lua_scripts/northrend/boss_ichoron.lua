@@ -124,12 +124,16 @@
 -- 54258/54264/54265/54266/54267, expire -> shrink +10 stacks) — no
 -- SpellScript / AuraScript bridges.
 -- achievement_dehydration (OnCheck AI()->GetData(DATA_DEHYDRATION))
--- — no GetData bridge.
+-- — PORTED 2026-11-08 (tick 419): ev1 write leg below (Reset twin);
+-- the Go case reads the boss motion's SetData slot. Its only clear is
+-- the spell_ichoron_merge DoAction leg (unported globule chain), so
+-- the latch stays 1 in the Go-modeled fight.
 -- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
 -- DATA_ICHORON) leg — no instance-script bridge.
 
 local ENTRY_ICHORON = 29313
 local DATA_ICHORON = 5
+local DATA_DEHYDRATION = 1 -- boss_ichoron.cpp:71
 local ENTRY_ICHOR_GLOBULE = 29321
 local SPELL_SPLASH = 59516
 
@@ -282,6 +286,15 @@ local function ichoronEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
+    -- C++ Reset -> Initialize (boss_ichoron.cpp:92-97): _dehydration
+    -- = true. Written at engage, not Reset: ev23 fires on death too,
+    -- ahead of the kill-credit criteria read, so an ev23 write would
+    -- clobber a future mid-fight clear; ev1 fires only at engage.
+    -- The only clear is DoAction ACTION_WATER_GLOBULE_HIT (:119-125),
+    -- called only from spell_ichoron_merge (:366-371) behind the
+    -- unported globule chain, so the latch stays 1 in the Go-modeled
+    -- fight. PORTED 2026-11-08 (tick 419).
+    creature:SetData(DATA_DEHYDRATION, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     frenzyFired[guid] = nil

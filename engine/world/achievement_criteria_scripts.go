@@ -28,6 +28,9 @@ const (
 	dataBrannSparklinNews              = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
 	dataLichKingPlagueStack            = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
 	dataXT002GravityBomb               = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
+	dataXT002HealthRecovered           = 2        // boss_xt002.cpp:109-114 DATA_HEALTH_RECOVERED
+	dataVolkhanShattered               = 2042     // boss_volkhan.cpp:77 DATA_SHATTER_RESISTANT
+	dataIchoronDehydration             = 1        // boss_ichoron.cpp:71 DATA_DEHYDRATION
 	dataThaddiusPolarity               = 1        // boss_thaddius.cpp:77 DATA_POLARITY_CROSSED
 	dataKelthuzadAbomsKilled           = 1        // boss_kelthuzad.cpp:83 DATA_ABOMINATION_DEATH_COUNT
 	dataAlgalonFedOnTears              = 30043005 // boss_algalon_the_observer.cpp:184 DATA_HAS_FED_ON_TEARS
@@ -70,6 +73,7 @@ const (
 	dataYmironKingsBane                = 2157     // boss_ymiron.cpp:99 DATA_KINGS_BANE
 	dataThorimDontStandInLightning     = 29712972 // boss_thorim.cpp:315 ACHIEVEMENT_DONT_STAND_IN_THE_LIGHTNING
 	dataThorimLoseYourIllusion         = 31763183 // boss_thorim.cpp:317 ACHIEVEMENT_LOSE_YOUR_ILLUSION
+	dataSapphironHundredClub           = 21462147 // boss_sapphiron.cpp:88 DATA_THE_HUNDRED_CLUB
 	dataTrollgoreConsumptionJunction   = 1        // boss_trollgore.cpp:57 DATA_CONSUMPTION_JUNCTION
 )
 
@@ -1140,6 +1144,82 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		id, ok := vehicleID(source)
 		return ok && id == 244
+
+	case "achievement_the_hundred_club": // boss_sapphiron.cpp:637-646
+		// OnCheck: GetData(DATA_THE_HUNDRED_CLUB 21462147) != 0 —
+		// true from Initialize/Reset (:131-134/:154-168) until
+		// SPELL_CHECK_RESISTS 60539 hits a unit with frost resistance
+		// > 100 (SpellHitTarget :193-203); the Lua twin keeps it in
+		// the boss motion's SetData store (boss_sapphiron.lua: ev23
+		// alive-gated set, ev5 set, ev15 clear via the new
+		// player/creature GetResistance bridges).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSapphironHundredClub) != 0
+
+	case "achievement_shatter_resistant": // boss_volkhan.cpp:490-499
+		// OnCheck: GetData(DATA_SHATTER_RESISTANT 2042) < 5 — the
+		// GolemsShattered counter (GetData :221-225, init 0 :108),
+		// incremented only in ShatterGolem() (:188) behind
+		// m_bCanShatterGolem, set only by EVENT_SHATTERING_STOMP
+		// (:256-266) gated on !m_bHasTemper && modifier >= 3. The
+		// gate is unreachable in this snapshot: temper is set at the
+		// first 80% threshold (:302) before the modifier can reach 3
+		// (60% threshold), and EVENT_PAUSE — the only temper clear
+		// (:243-253) — fires once at 3.5s and dies (its reschedule
+		// rides the striking branch, and striking starts only after
+		// temper). The counter is provably always 0, so the bare read
+		// ports the snapshot's behavior exactly, bug included. If
+		// the temper/stomp machine is ever ported/fixed, this case
+		// needs a Lua write leg or it will over-award.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataVolkhanShattered) < 5
+
+	case "achievement_nerf_engineering": // boss_xt002.cpp:980-986
+		// OnCheck: !GetData(DATA_HEALTH_RECOVERED 2) — _healthRecovered
+		// (init false :149) is set only in PassengerBoarded (:268-278)
+		// when a scrapbot (NPC_XS013_SCRAPBOT 33343) boards. No
+		// PassengerBoarded bridge exists and scrapbots never spawn in
+		// Go (the energy-orb / toy-pile / recharge summon chain is
+		// all SpellScript legs), so the latch is never written and
+		// the bare read ports the Go-modeled fight exactly. If the
+		// scrapbot machine is ever ported, the ride leg must write
+		// this slot.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataXT002HealthRecovered) == 0
+
+	case "achievement_unbroken": // boss_flame_leviathan.cpp:1416-1423
+		// OnCheck: instance->GetData(DATA_UNBROKEN 29052906) != 0 —
+		// the instance latch (instance_ulduar.cpp:183 ctor true,
+		// :761-763 SetData, :852-853 GetData). The Lua twin keeps it
+		// in the shared instanceData table (boss_flame_leviathan.lua:
+		// ev5 set). The only clear is spell_auto_repair (:1630-1645,
+		// no SpellScript bridge), so the latch stays 1 in the
+		// Go-modeled fight. Absent key reads false (fail-closed).
+		if source == nil || source.player == nil || source.server == nil || source.server.Features == nil || source.server.Features.Scripts == nil {
+			return false
+		}
+		if v, ok := source.server.Features.Scripts.InstanceDataNumber(source.player.Map, source.player.InstanceID, "unbroken"); ok {
+			return v != 0
+		}
+		return false
+
+	case "achievement_dehydration": // boss_ichoron.cpp:475-484
+		// OnCheck: GetData(DATA_DEHYDRATION 1) != 0 — _dehydration
+		// (init true :92, Reset :93-97) cleared only by DoAction
+		// ACTION_WATER_GLOBULE_HIT (:119-125) from spell_ichoron_merge
+		// (:366-371) behind the unported globule chain; the Lua twin
+		// keeps it in the boss motion's SetData store (boss_ichoron.lua:
+		// ev1 set).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataIchoronDehydration) != 0
 	}
 	return false
 }

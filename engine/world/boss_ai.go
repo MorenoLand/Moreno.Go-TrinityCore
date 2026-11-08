@@ -18276,7 +18276,9 @@ func init() {
 	// TaskScheduler DoCastSelf joins the bridgeable-but-entry-blocked
 	// queue), go_sapphiron_birth (no GO bridge), the three SpellScript/
 	// AuraScript loaders (no binding bridge — razelikh precedent),
-	// achievement_the_hundred_club (no achievement bridge).
+	// achievement_the_hundred_club (PORTED 2026-11-08 tick 419:
+	// Go case + Lua ev15 clear / ev23+ev5 latch sets via the new
+	// GetResistance bridges).
 	// CASTING gates: NONE — boss UpdateAI :273 plain phase event loop,
 	// zero HasUnitState hits; blizzard scheduler-only UpdateAI :454;
 	// Lua pumps stay gateless, C++-exact.

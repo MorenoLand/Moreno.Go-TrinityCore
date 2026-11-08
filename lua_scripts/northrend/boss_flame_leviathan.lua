@@ -105,8 +105,10 @@
 -- the unbridged MovePoint — stays out.
 -- GetData(DATA_UNBROKEN) / SetData(DATA_UNBROKEN) — the instance-script
 -- Unbroken latch is cleared only by the spell_auto_repair SpellScript
--- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), so
--- achievement_unbroken stays fail-closed (see below). The DoAction
+-- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), so the
+-- latch stays 1 in the Go-modeled fight; the instance write leg is
+-- PORTED 2026-11-08 (tick 419, flameLeviathanSpawned below) and the Go
+-- case reads the shared instanceData table. The DoAction
 -- tower-destruction loot-mode ladder stays out (no loot-mode bridge);
 -- the tower-destruction COUNT leg is modeled via the GO-destroyed
 -- handlers below, and the hard-mode activation leg via the lorekeeper
@@ -154,11 +156,12 @@
 -- legs below (spawn init, EVENT_SHUTDOWN clear, lorekeeper
 -- hard-mode activation, tower-destruction decrements); the Go cases
 -- read them off the killed leviathan's SetData store
--- (bossLatchData). achievement_unbroken — BLOCKED: its only clear
--- leg is the spell_auto_repair SpellScript
--- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), and
--- the instance Unbroken latch has no Lua writer, so no Go case may
--- read it (a bare read would award on every kill).
+-- (bossLatchData). achievement_unbroken — PORTED 2026-11-08 (tick 419):
+-- the instance latch write leg is flameLeviathanSpawned below (ev5,
+-- instance ctor twin) and the Go case reads the shared instanceData
+-- table; its only clear leg is the spell_auto_repair SpellScript
+-- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), so the
+-- latch stays 1 in the Go-modeled fight.
 -- spell_overload_circuit (62399) / spell_tar_blaze (62292) /
 -- spell_load_into_catapult / spell_auto_repair / spell_pursue /
 -- spell_vehicle_throw_passenger — AuraScript/SpellScript bridges absent;
@@ -421,6 +424,19 @@ local function flameLeviathanSpawned(event, creature)
     creature:SetGuidData(DATA_LEVIATHAN)
     creature:SetData(DATA_SHUTOUT, 1)
     creature:SetData(DATA_ORBIT_ACHIEVEMENTS, 0)
+    -- C++ instance ctor (instance_ulduar.cpp:183): Unbroken = true;
+    -- the achievement_unbroken OnCheck reads the INSTANCE latch
+    -- (instance->GetData(DATA_UNBROKEN 29052906) != 0,
+    -- boss_flame_leviathan.cpp:1416-1423), so the write rides the
+    -- shared instanceData table (blood-queen precedent). The only
+    -- clear is spell_auto_repair (:1630-1645, no SpellScript
+    -- bridge), so the latch stays 1 in the Go-modeled fight.
+    -- PORTED 2026-11-08 (tick 419).
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data["unbroken"] = 1
+    end
 end
 
 -- C++ DoAction ACTION_START_HARD_MODE
