@@ -18742,9 +18742,16 @@ func init() {
 	// PORTED 2026-11-05. CASTING gates PORTED: own UpdateAI pre-loop
 	// :129 + in-loop :159 gates cover all 4 timer arms (500ms
 	// IsCasting defer, mal_ganis idiom); DamageTaken frenzy latch
-	// ungated per C++ (separate hook). Documented-only: BossAI
-	// setActive/ScheduleTasks legs, crystal-spike trigger AI + AuraScript
-	// (IsSummonedBy / GO-Use / GetData legs, no bridges).
+	// ungated per C++ (separate hook). Crystal-spike trigger AI
+	// PORTED 2026-11-08 (tick 426): ev22 IsSummonedBy entry switch
+	// (initial SetFacingToObject + 47941; trigger 47941 + cross-AI
+	// GetData(DATA_COUNT)+1 latch) + 2s DespawnOrUnsummon with
+	// trigger-only trap Delete + ev4 timer cancel; the 47941
+	// AuraScript periodic (47936/urand 47942/47943 while
+	// GetData < 5) PORTED 2026-11-08 (tick 425). Documented-only:
+	// BossAI setActive/ScheduleTasks legs, and the trigger's GO
+	// Use leg (no generic GameObject::Use bridge; trap spell id
+	// is DB template data, no 188537 row in either tree).
 	RegisterLuaBoss("boss_ormorok", 26794)
 
 	// Keristrasza (26723), The Nexus —

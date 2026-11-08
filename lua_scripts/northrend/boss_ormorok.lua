@@ -63,8 +63,12 @@
 -- npc_crystal_spike_trigger — IsSummonedBy entry switch (initial
 -- 27101: SetFacingToObject + aura 47941; trigger 27079: aura +
 -- GetData(DATA_COUNT)+1 from the owner) + FindNearestGameObject(GO_
--- CRYSTAL_SPIKE_TRAP 188537, 1.0f) Use/Delete + 2s DespawnOrUnsummon
--- — no IsSummonedBy / GO-Use / GetData-cross-AI bridges.
+-- CRYSTAL_SPIKE_TRAP 188537, 1.0f) Delete + 2s DespawnOrUnsummon
+-- — PORTED 2026-11-08 (tick 426, below; ev22 IsSummonedBy,
+-- SetFacingToObject, cross-AI GetData, FindNearestGameObject,
+-- GO Delete and DespawnOrUnsummon all bridged). The GO Use leg
+-- stays out: no generic GameObject::Use bridge, and the trap
+-- spell id is DB template data with no 188537 row in either tree.
 -- spell_crystal_spike — AuraScript periodic: entry-gated summon
 -- spells (47936 / urand 47942/47943) while GetData(DATA_COUNT) <
 -- MAX_COUNT 5 — PORTED 2026-11-08 (tick 425, below; dormant, the
@@ -302,19 +306,15 @@ RegisterCreatureEvent(ENTRY_ORMOROK, 23, ormorokReset)
 -- applied only by npc_crystal_spike_trigger IsSummonedBy
 -- (boss_ormorok.cpp:211-235), which is unported, so the hook cannot
 -- fire yet.
--- SETDATA CO-REQUISITE — MISSING, noted explicitly: the C++ file
--- contains ZERO SetData calls; _count is a private AI member assigned
--- in IsSummonedBy (initial 0; trigger = owner trigger's
--- GetData(DATA_COUNT) + 1) and read via GetData
+-- SETDATA CO-REQUISITE — LANDED 2026-11-08 (tick 426, trigger
+-- port below): the C++ file contains ZERO SetData calls; _count is
+-- a private AI member assigned in IsSummonedBy (initial 0; trigger
+-- = owner trigger's GetData(DATA_COUNT) + 1) and read via GetData
 -- (boss_ormorok.cpp:237-240). The Lua twin is
 -- creature:SetData(DATA_COUNT, n) from the trigger's IsSummonedBy
--- (ev22) — no such registration exists in boss_ormorok.lua (no
--- npc_crystal_spike_trigger port at all). Until it lands, creature
--- GetData reads 0 for an absent key (lua_creature_events.go:809-822),
--- so the < 5 guard would always pass and the chain would never
--- terminate at 5. This draft is exact only once that trigger port
--- lands; the trigger AI itself (IsSummonedBy + GO Use/Delete + 2s
--- despawn) is a separate unit and is NOT included here.
+-- (ev22); creature GetData reads 0 for an absent key
+-- (lua_creature_events.go:809-822), so an unlatched spike reads 0
+-- and the < 5 guard passes until the chain terminates at 5.
 local SPELL_CRYSTAL_SPIKE_AURA = 47941 -- boss_ormorok.cpp:186
 local NPC_CRYSTAL_SPIKE_INITIAL = 27101 -- boss_ormorok.cpp:179
 local NPC_CRYSTAL_SPIKE_TRIGGER = 27079 -- boss_ormorok.cpp:180
@@ -337,3 +337,79 @@ local function crystalSpikePeriodic(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_CRYSTAL_SPIKE_AURA, 1, crystalSpikePeriodic)
+
+-- C++ npc_crystal_spike_triggerAI::IsSummonedBy
+-- (boss_ormorok.cpp:211-235): entry switch on the summoned spike.
+-- INITIAL (27101): _count = 0, SetFacingToObject(owner), self-cast
+-- SPELL_CRYSTAL_SPIKE_AURA (47941) triggered. TRIGGER (27079):
+-- self-cast 47941 triggered, _count = owner trigger's
+-- GetData(DATA_COUNT 1) + 1 (owner->ToCreature() null-gated in C++;
+-- the Lua twin reads summoner:GetData only when the summoner is a
+-- creature — a non-creature owner leaves _count at its ctor 0, and
+-- an absent ScriptData key reads 0). Any other entry (defensive
+-- default, :227-229): _count = MAX_COUNT. TRIGGER only: nearest
+-- GO_CRYSTAL_SPIKE_TRAP (188537, 1.0f) Use — STAYS OUT: no generic
+-- GameObject::Use bridge exists in Go (only UseDoorOrButton, the
+-- door/button arm — wrong for a trap, which casts
+-- goInfo->trap.spellId per GameObject::Use, GameObject.cpp:1484-
+-- 1545) and the trap spell id is DB template data with no
+-- gameobject_template row for 188537 in either tree. Both entries:
+-- _despawntimer = 2000, then UpdateAI (:243-260) despawns at 0,
+-- deleting the trap first for TRIGGER only. PORTED 2026-11-08
+-- (tick 426). DORMANT: the summon spells 47936/47942/47943 are
+-- DBC-side, so no spike spawns in Go yet; the chain goes live when
+-- the spell-effect summon leg lands, and the 47941 handler above
+-- then reads the latched DATA_COUNT. The 2s timer is cancelled on
+-- ev4: C++ UpdateAI stops on death, so a killed spike neither
+-- deletes its trap nor despawns (corpse cleanup handles it) — and
+-- a timer-closure IsAlive check would be vacuous here, since
+-- creature IsAlive/GetHealth read the construction-time snapshot
+-- (lua_creature_events.go:6418, object.go:241).
+local GO_CRYSTAL_SPIKE_TRAP = 188537 -- boss_ormorok.cpp:189
+
+local spikeDespawnTimers = {}
+
+local function crystalSpikeTriggerSummoned(event, creature, summoner)
+    local entry = creature:GetEntry()
+    if entry == NPC_CRYSTAL_SPIKE_INITIAL then
+        creature:SetData(DATA_COUNT, 0)
+        if summoner then
+            creature:SetFacingToObject(summoner)
+        end
+        creature:CastSpell(creature, SPELL_CRYSTAL_SPIKE_AURA, true)
+    elseif entry == NPC_CRYSTAL_SPIKE_TRIGGER then
+        creature:CastSpell(creature, SPELL_CRYSTAL_SPIKE_AURA, true)
+        if summoner and summoner:GetObjectType() == "Creature" then
+            creature:SetData(DATA_COUNT, summoner:GetData(DATA_COUNT) + 1)
+        end
+    else
+        creature:SetData(DATA_COUNT, MAX_COUNT)
+    end
+    local guid = creature:GetGUID()
+    spikeDespawnTimers[guid] = CreateLuaEvent(function()
+        spikeDespawnTimers[guid] = nil
+        if creature:GetEntry() == NPC_CRYSTAL_SPIKE_TRIGGER then
+            local trap = creature:FindNearestGameObject(GO_CRYSTAL_SPIKE_TRAP, 1.0)
+            if trap then
+                trap:Delete()
+            end
+        end
+        creature:DespawnOrUnsummon()
+    end, 2000)
+end
+
+-- C++ UpdateAI stops on death, so the 2s despawn timer dies with
+-- the spike; the trap Delete leg dies with it.
+local function crystalSpikeTriggerDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    local id = spikeDespawnTimers[guid]
+    if id then
+        RemoveEventById(id)
+        spikeDespawnTimers[guid] = nil
+    end
+end
+
+RegisterCreatureEvent(NPC_CRYSTAL_SPIKE_INITIAL, 22, crystalSpikeTriggerSummoned)
+RegisterCreatureEvent(NPC_CRYSTAL_SPIKE_TRIGGER, 22, crystalSpikeTriggerSummoned)
+RegisterCreatureEvent(NPC_CRYSTAL_SPIKE_INITIAL, 4, crystalSpikeTriggerDied)
+RegisterCreatureEvent(NPC_CRYSTAL_SPIKE_TRIGGER, 4, crystalSpikeTriggerDied)

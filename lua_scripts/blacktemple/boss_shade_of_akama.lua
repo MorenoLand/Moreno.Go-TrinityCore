@@ -42,9 +42,13 @@
 -- fire 42023 / lightning bolt 42024), npc_ashtongue_spiritbinder
 -- (spirit heal 42317 / spirit mend 42025 / chain heal 42027) and
 -- npc_ashtongue_broken (outro walk/emote/hail/faction switch).
--- The spell_shade_soul_channel_serverside and spell_shade_soul_
--- channel AuraScripts have no AuraScript bridge (standing AuraScript
--- gap).
+-- The spell_shade_soul_channel_serverside AuraScript (40401
+-- OnRemove -> RemoveAuraFromStack 40520) is PORTED 2026-11-08
+-- (tick 426, below) via the hodir RemoveAuraFromStack twin; the
+-- spell_shade_soul_channel AuraScript (40520 OnApply ChangeAmount
+-- clamp to -99) stays out — no SetAmount/ChangeAmount bridge on
+-- the aura object (lua_aura.go carries GetAmount + the
+-- OnChangeAmount hook only).
 -- C++-exact on cast gating: boss_shade_of_akama::UpdateAI
 -- (boss_shade_of_akama.cpp:297) has no UNIT_STATE_CASTING gate — arms
 -- fire unconditionally in C++ too (the file's only such gate, :756, is
@@ -86,6 +90,8 @@ local SPELL_SHADE_OF_AKAMA_TRIGGER = 40955
 local SPELL_AKAMA_SOUL_CHANNEL = 40447
 local SPELL_AKAMA_SOUL_RETRIEVE = 40902
 local SPELL_AKAMA_SOUL_EXPEL_CHANNEL = 40927
+local SPELL_SHADE_SOUL_CHANNEL = 40401 -- boss_shade_of_akama.cpp:59
+local SPELL_SHADE_SOUL_CHANNEL_2 = 40520 -- boss_shade_of_akama.cpp:60
 
 local ENTRY_ASHTONGUE_CHANNELER = 23421
 
@@ -306,3 +312,34 @@ RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 9, akamaShadeDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)
 RegisterCreatureGossipEvent(ENTRY_AKAMA_SHADE, 2, akamaShadeGossipSelect)
+
+-- C++ spell_shade_soul_channel_serverside::OnRemove
+-- (boss_shade_of_akama.cpp:1094-1097): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL. On any remove the
+-- target drops ONE stack of SPELL_SHADE_SOUL_CHANNEL_2 (40520):
+-- C++ Unit::RemoveAuraFromStack (Unit.cpp:3919) finds the first
+-- aura of that spell and ModStackAmount(-1, DEFAULT) — the aura is
+-- removed only when the count hits 0 (SpellAuras.cpp:1030-1044).
+-- No RemoveAuraFromStack bridge exists in Go, but the hodir
+-- biting-cold precedent (boss_hodir.lua:737-758) is the exact twin:
+-- aura:SetStackAmount(n-1) above the last stack, aura:Remove() at
+-- it (RemoveAura would drop all stacks). GetAura returns nil for
+-- presence-only Lua-added auras, so a missing 40520 record is a
+-- no-op, matching the C++ no-aura leg. PORTED 2026-11-08 (tick
+-- 426). DORMANT: the 40401 sender is the unported channeler
+-- keepalive (soul channel 40401 on the shade while
+-- NOT_SELECTABLE), so the hook cannot fire yet.
+local function shadeSoulChannelRemove(event, aura, target)
+    local channel = target:GetAura(SPELL_SHADE_SOUL_CHANNEL_2)
+    if not channel then
+        return
+    end
+    local stacks = channel:GetStackAmount()
+    if stacks <= 1 then
+        channel:Remove()
+    else
+        channel:SetStackAmount(stacks - 1)
+    end
+end
+
+RegisterAuraEvent(SPELL_SHADE_SOUL_CHANNEL, 3, shadeSoulChannelRemove)

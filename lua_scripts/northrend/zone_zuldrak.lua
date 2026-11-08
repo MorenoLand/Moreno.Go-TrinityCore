@@ -17,11 +17,17 @@
 --   Ingredient spell (51134 / 51105 / 51107), non-triggered.
 --   No PreventDefaultAction in C++ (PERIODIC_DUMMY has no
 --   default tick action to suppress).
+-- PORTED (tick 426, RegisterAuraEvent OnPeriodic = 1):
+--   spell_scourge_disguise_instability (51971,
+--   zone_zuldrak.cpp:984-1012): EFFECT_0 SPELL_AURA_DUMMY. Each
+--   tick the target self-casts Scourge Disguise Expiring (52010),
+--   triggered. DOCUMENTED DEVIATION: C++ CalcPeriodic re-rolls the
+--   amplitude to irand(30, 240)s after every tick
+--   (HandleUpdatePeriodic -> CalculatePeriodic) and no
+--   CalcPeriodic hook exists in Go, so the tick interval here is
+--   whatever the aura engine delivers from the DBC amplitude — the
+--   cast leg is exact, the timing is not.
 -- STILL BLOCKED:
---   spell_scourge_disguise_instability (51971, :984-1012):
---   CalcPeriodic picks a random 30-240s amplitude (no calc-periodic
---   hook) and the periodic tick casts Scourge Disguise Expiring
---   (52010) on the target, triggered.
 -- PORTED (tick 425, RegisterAuraEvent OnRemove = 3):
 --   spell_fetch_ingredient_aura (zone_zuldrak.cpp:866-899): one
 --   shared class covers all 21 fetch auras (51018/51055/51057/51059/
@@ -64,6 +70,21 @@ local function scourgeDisguiseRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SCOURGE_DISGUISE, 3, scourgeDisguiseRemove)
+
+-- C++ spell_scourge_disguise_instability::HandleDummyTick
+-- (zone_zuldrak.cpp:995-998): OnEffectPeriodic, EFFECT_0
+-- SPELL_AURA_DUMMY: the target self-casts Scourge Disguise Expiring
+-- (52010), triggered. No PreventDefaultAction in C++ (DUMMY has no
+-- default tick action to suppress). DOCUMENTED DEVIATION: the
+-- C++ tick interval is re-rolled to irand(30, 240)s after every
+-- tick (CalcPeriodic :989-993 + HandleUpdatePeriodic :1000-1003),
+-- and no CalcPeriodic hook exists in Go — the interval here is
+-- whatever the aura engine delivers from the DBC amplitude.
+local function scourgeDisguiseInstabilityTick(event, aura, target)
+    target:CastSpell(target, SPELL_SCOURGE_DISGUISE_EXPIRING, true)
+end
+
+RegisterAuraEvent(SPELL_SCOURGE_DISGUISE_INSTABILITY, 1, scourgeDisguiseInstabilityTick)
 
 -- C++ spell_scourge_disguise_expiring::OnApply (zone_zuldrak.cpp:1018-1025):
 -- if the player target still has the disguise, whisper the warning text
