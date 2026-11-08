@@ -1649,11 +1649,16 @@ func checkIcecrownCitadelCriteria(s *session, criteriaID uint32) bool {
 		// C++ ctor default true.
 		return num("bonedEligible", 1) >= 1
 	case 12984, 12966, 12985, 12983: // CRITERIA_DANCES_WITH_OOZES_*
-		// C++ :1149-1153 returns IsOozeDanceEligible: set true
-		// by rotface Reset (:155), cleared by the unstable-ooze
-		// 5-stack SpellScript (boss_rotface.cpp:555/615) — no
-		// SpellScript bridge, fail-closed.
-		return false
+		// C++ :1149-1153 returns IsOozeDanceEligible: true at the
+		// instance ctor (instance_icecrown_citadel.cpp:157),
+		// re-armed by rotface JustReachedHome
+		// (boss_rotface.cpp:155), cleared by the large/buff
+		// combine 5-stack legs (boss_rotface.cpp:555/615) —
+		// ported in Lua via the shared instanceData
+		// oozeDanceEligible key (1/0 numbers); absent reads as
+		// the C++ ctor default true. Dormant until Spell.dbc
+		// ships (the combine casts are DBC-gated).
+		return num("oozeDanceEligible", 1) >= 1
 	case 12987, 12968, 12988, 12981: // CRITERIA_NAUSEA_*
 		// C++ :1154-1158 returns IsNauseaEligible: set true by
 		// putricide Reset (:236), cleared by

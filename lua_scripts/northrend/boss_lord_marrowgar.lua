@@ -253,12 +253,16 @@ local function marrowgarReset(event, creature)
     -- (wipe or evade); the Go 12775/12962/13393/13394 check reads
     -- bonedEligible from the shared instanceData table (default 1,
     -- the C++ ctor :156 value), cleared by the bone-spike 8s fail
-    -- timer below.
+    -- timer below. Written as 1/0, not booleans —
+    -- InstanceDataNumber reads numbers only (instance_data.go:107),
+    -- so a boolean write reads absent and the Go default 1 would
+    -- fail-open the gate (the 2026-11-08 fix; the Onyxia 1/0
+    -- precedent).
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()
         if data then
-            data.bonedEligible = true
+            data.bonedEligible = 1
         end
     end
 end
@@ -350,7 +354,7 @@ local function boneSpikeIsSummonedBy(event, creature, summoner)
         if mapObj then
             local data = mapObj:GetInstanceData()
             if data then
-                data.bonedEligible = false
+                data.bonedEligible = 0
             end
         end
     end)
