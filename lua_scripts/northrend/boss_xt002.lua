@@ -48,8 +48,9 @@
 -- ScriptedCreature.cpp) PORTED 2026-11-05 via creature:SetBossState
 -- (lua_creature_events.go:5917; the maiden_of_grief precedent) —
 -- Talk-first per C++ (:188 Talk, :189 base); the phase-gated
--- ScheduleEvent legs and the DoStartTimedAchievement leg have no
--- bridges — the auriaya engage-port precedent).
+-- ScheduleEvent legs stay out — the auriaya engage-port
+-- precedent; the DoStartTimedAchievement leg is PORTED
+-- 2026-11-08 (tick 472, below).
 -- EVENT_ENRAGE (:362-365) — Talk(SAY_BERSERK 5) + DoCastSelf
 -- (SPELL_ENRAGE 26662) 2-arg non-triggered, 600s init (:192), no
 -- re-arm, no phase gate (scheduled bare in JustEngagedWith —
@@ -84,9 +85,11 @@
 -- SetBossState(DATA_XT002, NOT_STARTED) leg PORTED 2026-11-05
 -- (new ev23 handler, split from ev2 — ev2 leave-combat does NOT
 -- call Reset in C++; the sjonnir precedent) via
--- creature:SetBossState (lua_creature_events.go:5917); the rest
+-- creature:SetBossState (lua_creature_events.go:5917); the
+-- DoStopTimedAchievement(MUST_DECONSTRUCT_FASTER 21027) leg is
+-- PORTED 2026-11-08 (tick 472, below, new InstanceData:
+-- StopTimedAchievement Go bridge); the rest
 -- (events.SetPhase(PHASE_1) + SetReactState(REACT_DEFENSIVE) +
--- DoStopTimedAchievement(MUST_DECONSTRUCT_FASTER 21027) +
 -- summons.DespawnAll) stays out: the summons are spell-spawned
 -- (scrapbot/pummeller/boombot/life-spark/void-zone), no Lua summon
 -- tracking exists to drain, and their entries are not verifiable
@@ -102,11 +105,11 @@
 -- producer (:739) is PORTED below via RegisterAuraEvent (tick 194)
 -- — the 2026-10-24 "dead code" claim is superseded by the
 -- violet-hold latent-write precedent (tick 193): the write sits in
--- ScriptData for the unmodeled achievement consumer. The other
--- producers (gravity-bomb damage OnEffectHitTarget :760) and the
--- consumers (achievement_heartbreaker / achievement_nerf_engineering
--- / achievement_nerf_gravity_bombs below, no achievement bridge)
--- stay out; SetData (DATA_TRANSFERED_HEALTH health-transfer +
+-- ScriptData for the achievement consumer (PORTED as a Go case,
+-- ticks 417/419, below). The other producer (gravity-bomb damage
+-- OnEffectHitTarget :760) stays out — its only fire site is the
+-- boss-cone path (boss_ai.go:3417) and the spell is never cast.
+-- SetData (DATA_TRANSFERED_HEALTH health-transfer +
 -- ModifyHealth leg) is bridged on the same store but unwritable
 -- from any Lua-reachable producer.
 -- The heart-exposure phase machine — ExposeHeart
@@ -150,11 +153,16 @@
 -- AddLootMode(LOOT_MODE_HARD_MODE_1) + DisposeHeart(true)) — PORTED
 -- 2026-11-08 (tick 417, xt002DoAction below) except DisposeHeart(true),
 -- which stays out with the phase machine.
--- PassengerBoarded (Talk(EMOTE_SCRAPBOT 11) on scrapbot entry —
--- no vehicle / PassengerBoarded bridge).
+-- PassengerBoarded (Talk(EMOTE_SCRAPBOT 11) on scrapbot entry +
+-- EXPOSED_HEART cast on the seat-1 boarder — RegisterVehicleEvent
+-- exists (kologarn tick 462); stays out because no scrapbot or
+-- heart ever boards: scrapbots never spawn (energy-orb SpellScript
+-- unported) and the heart never rides (phase machine unported)).
 -- npc_xt002_heart (NullCreatureAI — no Talk arms anywhere;
--- DoAction(ACTION_START_PHASE_HEART / ACTION_DISPOSE_HEART)
--- vehicle / cast legs stay out; JustDied -> xt002 DoAction
+-- Reset SetRegenerateHealth(false) PORTED 2026-11-08 (tick 472,
+-- xt002HeartReset below); DoAction(ACTION_START_PHASE_HEART /
+-- ACTION_DISPOSE_HEART) vehicle / cast legs stay out; JustDied
+-- -> xt002 DoAction
 -- (ACTION_ENTER_HARD_MODE) (boss_xt002.cpp:430) — PORTED 2026-11-08
 -- (tick 417, xt002HeartDied below; ev38 dispatch IS bridged,
 -- lua_creature_events.go:802).
@@ -174,16 +182,23 @@
 -- 64208 periodic scheduler leg + SpellInfo BP0 machine — no
 -- bridges — no registration).
 -- spell_xt002_searing_light_spawn_life_spark (63018/65121
--- periodic-trigger AuraScript OnRemove — no AuraScript
--- bridge; joins the no-AuraScript-bridge queue);
+-- periodic-trigger AuraScript OnRemove — fireAuraRemove exists
+-- but fires only ahead of the CONTROL_VEHICLE default leg
+-- (spells.go:35208/44659), so a general remove fire would need
+-- a new bridge; and the aura never exists (EVENT_SEARING_LIGHT
+-- is phase-gated, unported) — doubly dead, stays out);
 -- spell_xt002_gravity_bomb_aura (63024/64234 — OnPeriodic
 -- SetData(DATA_GRAVITY_BOMB_CASUALTY) leg PORTED below via
 -- RegisterAuraEvent (tick 194); the "no AuraScript bridge" block
 -- is stale (tick 188); OnRemove hard-mode void-zone summon stays
--- out — no remove hook);
+-- out — fireAuraRemove fires only ahead of the CONTROL_VEHICLE
+-- default leg (spells.go:35208/44659), and the aura never exists
+-- (EVENT_GRAVITY_BOMB is phase-gated, unported) — doubly dead);
 -- spell_xt002_gravity_bomb_damage (63025/64233 — lethal-hit
--- SetData(DATA_GRAVITY_BOMB_CASUALTY) leg — no SpellScript
--- bridge; joins the no-SpellScript-bridge queue);
+-- SetData(DATA_GRAVITY_BOMB_CASUALTY) leg — RegisterSpellEvent
+-- OnEffectHitTarget exists but its only fire site is the
+-- boss-cone path (boss_ai.go:3417); the spell is never cast
+-- (phase-gated 63024 unported) — doubly dead, stays out);
 -- spell_xt002_heart_overload_periodic (62791 serverside
 -- dummy — random-toy-pile ENERGY_ORB / HEART_LIGHTNING_TETHER
 -- legs — no SpellScript bridge; joins the
@@ -197,11 +212,15 @@
 -- script-effect NOT_SELECTABLE / submerged stand state — no
 -- SpellScript bridge; joins the no-SpellScript-bridge queue);
 -- spell_xt002_321_boombot_aura (65032 — proc CheckProc on
--- scrapbot entry + achievement-credit cast — no AuraScript
--- bridge; joins the no-AuraScript-bridge queue);
+-- scrapbot entry + achievement-credit cast — the OnProc hook
+-- exists (fireAuraProc) but the aura never exists: boombots
+-- never spawn (energy-orb SpellScript unported) — dead, stays
+-- out);
 -- spell_xt002_exposed_heart (63849 — proc damage tally ->
--- SetData(DATA_TRANSFERED_HEALTH) on remove — no AuraScript
--- bridge; joins the no-AuraScript-bridge queue).
+-- SetData(DATA_TRANSFERED_HEALTH) on remove — the OnProc /
+-- OnRemove hooks exist (fireAuraProc / fireAuraRemove) but the
+-- aura never exists: the heart never boards (phase machine
+-- unported) — dead, stays out).
 -- achievement_nerf_engineering (OnCheck: !GetData
 -- (DATA_HEALTH_RECOVERED)); achievement_heartbreaker (OnCheck:
 -- GetData(DATA_HARD_MODE) != 0) — PORTED 2026-11-08 (tick 417, latent;
@@ -249,6 +268,12 @@ local ENTRY_XT002_HEART = 33329
 local ACTION_ENTER_HARD_MODE = 0
 local DATA_HARD_MODE = 1
 
+-- Timed-achievement legs (tick 472): ACHIEVEMENT_TIMED_TYPE_EVENT 1
+-- (DBCEnums.h; kologarn.lua:229 precedent),
+-- ACHIEV_MUST_DECONSTRUCT_FASTER 21027 (boss_xt002.cpp:118).
+local ACHIEVEMENT_TIMED_TYPE_EVENT = 1
+local ACHIEV_MUST_DECONSTRUCT_FASTER = 21027
+
 local timers = {}
 
 local function cancelTimers(guid)
@@ -290,9 +315,10 @@ end
 -- C++ JustEngagedWith (:186-197): Talk(AGGRO) (:188) then
 -- BossAI::JustEngagedWith (:189) — SetBossState(DATA_XT002,
 -- IN_PROGRESS) + SetCombatPulseDelay(5) + me-form DoZoneInCombat —
--- plus the phase-gated ScheduleEvent legs +
--- DoStartTimedAchievement (unbridged); only the Talk arm, the base
--- arms and the phase-free EVENT_ENRAGE timer leg are bridgeable
+-- plus the phase-gated ScheduleEvent legs (unbridged) +
+-- DoStartTimedAchievement (PORTED 2026-11-08, tick 472, below);
+-- only the Talk arm, the base arms, the phase-free EVENT_ENRAGE
+-- timer leg and the timed-achievement leg are bridgeable
 -- (event 1). Talk-first per C++.
 local function xt002EnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
@@ -304,6 +330,18 @@ local function xt002EnterCombat(event, creature, target)
     schedule(guid, "enrage", 600000, function()
         enrageTick(creature, guid)
     end)
+    -- C++ JustEngagedWith (:197): instance->DoStartTimedAchievement
+    -- (ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_MUST_DECONSTRUCT_FASTER
+    -- 21027) — last leg in C++ (after the ScheduleEvent legs, which
+    -- stay out with the phase machine); InstanceData bridge
+    -- (instance_hooks.go; kologarn precedent).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_MUST_DECONSTRUCT_FASTER)
+        end
+    end
 end
 
 -- C++ KilledUnit (:204-208): who->GetTypeId() == TYPEID_PLAYER,
@@ -351,6 +389,17 @@ local function xt002Reset(event, creature)
     if creature:IsAlive() then
         creature:SetData(DATA_HARD_MODE, 0)
     end
+    -- C++ Reset (:177): instance->DoStopTimedAchievement
+    -- (ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_MUST_DECONSTRUCT_FASTER)
+    -- — last leg in C++; InstanceData:StopTimedAchievement bridge
+    -- (instance_hooks.go, tick 472); no-op when no timer runs.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:StopTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_MUST_DECONSTRUCT_FASTER)
+        end
+    end
 end
 
 -- C++ boss_xt002::DoAction(ACTION_ENTER_HARD_MODE)
@@ -389,7 +438,15 @@ RegisterCreatureEvent(ENTRY_XT002, 3, xt002TargetDied)
 RegisterCreatureEvent(ENTRY_XT002, 4, xt002Died)
 RegisterCreatureEvent(ENTRY_XT002, 23, xt002Reset)
 RegisterCreatureEvent(ENTRY_XT002, 38, xt002DoAction)
+
+-- C++ npc_xt002_heart::Reset (boss_xt002.cpp:423-426):
+-- SetRegenerateHealth(false) — the heart never regenerates.
+local function xt002HeartReset(event, creature)
+    creature:SetRegenerateHealth(false)
+end
+
 RegisterCreatureEvent(ENTRY_XT002_HEART, 4, xt002HeartDied)
+RegisterCreatureEvent(ENTRY_XT002_HEART, 23, xt002HeartReset)
 
 -- C++ npc_life_spark::JustEngagedWith (:630-638): DoCastSelf
 -- (SPELL_STATIC_CHARGED 64227) (2-arg non-triggered) at engage,

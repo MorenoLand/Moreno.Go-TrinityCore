@@ -97,6 +97,53 @@ func (s *Server) instanceDataObject(mapID, instanceID uint32) *scripting.Object 
 			}
 			return nil, nil
 		},
+		// StopTimedAchievement(timedType, entry) is the
+		// InstanceScript::DoStopTimedAchievement bridge
+		// (InstanceScript.cpp:611): C++ calls
+		// AchievementMgr::RemoveTimedAchievement per player, which
+		// removes the progress and the timer for every criteria
+		// whose StartEvent/StartAsset match; Go resolves the same
+		// (timedType, entry) pair through byTimedEvent and calls
+		// removeCriteriaProgress per matched criterion, which stops
+		// the timer, deletes the progress row and notifies the
+		// client — the same session-side twin Start uses.
+		"StopTimedAchievement": func(ctx context.Context, args []any) ([]any, error) {
+			timedType, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			entry, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if s == nil {
+				return nil, nil
+			}
+			s.loadAchievementIndex()
+			achievementIndex.mu.RLock()
+			list, ok := achievementIndex.byTimedEvent[typeAssetKey(timedType, entry)]
+			if !ok {
+				achievementIndex.mu.RUnlock()
+				return nil, nil
+			}
+			matched := make([]achievementCriteriaEntry, len(list))
+			copy(matched, list)
+			achievementIndex.mu.RUnlock()
+			s.sessionsMu.RLock()
+			var targets []*session
+			for sess := range s.sessions {
+				if sess.worldReady.Load() && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+					targets = append(targets, sess)
+				}
+			}
+			s.sessionsMu.RUnlock()
+			for _, target := range targets {
+				for _, criterion := range matched {
+					target.removeCriteriaProgress(criterion.ID)
+				}
+			}
+			return nil, nil
+		},
 	}
 	s.instanceDataObjects[key] = obj
 	return obj

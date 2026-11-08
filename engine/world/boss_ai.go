@@ -20066,9 +20066,10 @@ func init() {
 	// Ported arms (C++-exact): JustEngagedWith Talk(SAY_AGGRO 0)
 	// (event 1; the BossAI::JustEngagedWith SetBossState(IN_PROGRESS)
 	// leg PORTED tick 258 via creature:SetBossState; the
-	// phase-gated ScheduleEvent legs and the
-	// DoStartTimedAchievement leg have no bridges — the auriaya
-	// engage-port precedent); EVENT_ENRAGE Talk(SAY_BERSERK 5) +
+	// phase-gated ScheduleEvent legs stay out — the auriaya
+	// engage-port precedent; the DoStartTimedAchievement(21027)
+	// leg PORTED tick 472 via InstanceData:StartTimedAchievement);
+	// EVENT_ENRAGE Talk(SAY_BERSERK 5) +
 	// DoCastSelf(SPELL_ENRAGE 26662) 2-arg non-triggered 600s
 	// one-shot, no phase gate (scheduled bare in JustEngagedWith,
 	// ExposeHeart never cancels it), timer-driven via
@@ -20082,10 +20083,13 @@ func init() {
 	// the enrage timer).
 	// Documented-only: Reset / Initialize / EnterEvadeMode
 	// (_Reset SetBossState NOT_STARTED PORTED tick 258 (ev23);
-	// DoStopTimedAchievement 21027 — no bridges);
+	// DoStopTimedAchievement 21027 PORTED tick 472 via the new
+	// InstanceData:StopTimedAchievement bridge);
 	// DoAction(ACTION_ENTER_HARD_MODE — ev38 dispatch IS bridged,
 	// creature:DoAction, lua_creature_events.go:802; sender is the
-	// unported npc_xt002_heart JustDied, boss_xt002.cpp:430);
+	// npc_xt002_heart JustDied, PORTED tick 417, boss_xt002.cpp:430;
+	// the DoAction leg itself PORTED tick 417 — only
+	// DisposeHeart(true) stays out with the phase machine);
 	// GetData(DATA_HARD_MODE / DATA_HEALTH_RECOVERED /
 	// DATA_GRAVITY_BOMB_CASUALTY — creature GetData is bridged
 	// as a Lua-side ScriptData store, but producers/consumers are
@@ -20111,31 +20115,35 @@ func init() {
 	// would fabricate casts during the 30s PHASE_HEART exposures;
 	// EVENT_PHASE_CHECK / EVENT_SUBMERGE (DoCastSelf 37751 +
 	// Talk EMOTE_HEART_OPENED 8 + heart DoAction) /
-	// EVENT_DISPOSE_HEART / EVENT_ENTER_HARD_MODE (SetFullHealth
-	// + DoCastSelf 65737 TRIGGERED + LOOT_MODE_HARD_MODE_1) /
-	// EVENT_RESUME_ATTACK — phase / hard-mode / DoAction machine;
-	// PassengerBoarded Talk(EMOTE_SCRAPBOT 11) — no vehicle /
-	// PassengerBoarded bridge; npc_xt002_heart (NullCreatureAI —
-	// DoAction vehicle/cast legs; JustDied -> xt002 DoAction —
-	// no bridges; no registration); npc_scrapbot (scheduler /
+	// EVENT_DISPOSE_HEART / EVENT_RESUME_ATTACK — phase /
+	// hard-mode / DoAction machine; EVENT_ENTER_HARD_MODE
+	// (SetFullHealth + DoCastSelf 65737 TRIGGERED +
+	// LOOT_MODE_HARD_MODE_1) PORTED tick 417 via the ev38
+	// DoAction handler — only DisposeHeart(true) stays out.
+	// PassengerBoarded Talk(EMOTE_SCRAPBOT 11) — RegisterVehicleEvent
+	// exists (kologarn tick 462); stays out because no scrapbot or
+	// heart ever boards (never spawn / phase machine unported);
+	// npc_xt002_heart (NullCreatureAI — Reset SetRegenerateHealth
+	// PORTED tick 472; DoAction vehicle/cast legs stay out; JustDied
+	// -> xt002 DoAction PORTED tick 417); npc_scrapbot (scheduler /
 	// vehicle / SPELL_SCRAP_REPAIR machinery); npc_pummeller
 	// (scheduler trample / arcing smash / uppercut legs);
 	// npc_boombot (scheduler + DamageTaken boom leg + SPELL_BOOM
-	// 62834); npc_life_spark (scheduler SPELL_SHOCK 64230 leg);
-	// npc_xt_void_zone (scheduler SPELL_CONSUMPTION 64208 leg +
-	// SpellInfo BP0 machine) — no scheduler / movement / vehicle
-	// / damage-taken bridges; no registrations; the nine spell
-	// scripts (63018/65121 searing_light_spawn_life_spark,
-	// 63024/64234 gravity_bomb_aura, 63025/64233
-	// gravity_bomb_damage, 62791 heart_overload_periodic, 62826
-	// energy_orb (Talk SAY_SUMMON 7 rides the spell script),
-	// 62775 tympanic_tantrum, 37751 submerged, 65032
-	// 321_boombot_aura, 63849 exposed_heart — no SpellScript /
-	// AuraScript bridges; all nine join the no-SpellScript /
-	// no-AuraScript-bridge queues); the three achievements
-	// (nerf_engineering / heartbreaker / nerf_gravity_bombs —
-	// GetData-based OnCheck — no GetData / achievement bridges;
-	// all three join the unmodeled-achievement queue).
+	// 62834); npc_life_spark (Reset + engage + 12s SPELL_SHOCK
+	// 64230 tick PORTED); npc_xt_void_zone (scheduler
+	// SPELL_CONSUMPTION 64208 leg + SpellInfo BP0 machine) — the
+	// four adds never spawn (energy-orb SpellScript unported), so
+	// their legs are dead code; no registrations; the nine spell
+	// scripts — gravity_bomb_aura OnPeriodic PORTED tick 194 via
+	// RegisterAuraEvent; the rest stay out (searing/gravity OnRemove:
+	// fireAuraRemove is CONTROL_VEHICLE-gated only; gravity-bomb
+	// damage OnEffectHitTarget: only the boss-cone path fires it;
+	// exposed-heart / 321-boombot proc legs: auras never exist;
+	// heart-overload / energy-orb / tympanic / submerged: no
+	// SpellScript bridge and their spells are never cast); the three
+	// achievements (nerf_engineering / heartbreaker /
+	// nerf_gravity_bombs — GetData-based OnCheck — all three PORTED
+	// as Go cases in achievement_criteria_scripts.go, ticks 417/419).
 	// Cast-state gates PORTED: boss UpdateAI pre-loop :325 +
 	// in-loop :381 CASTING gates as 500ms IsCasting defer in
 	// enrageTick; life-spark pre-loop :645 gate in shock tick.
