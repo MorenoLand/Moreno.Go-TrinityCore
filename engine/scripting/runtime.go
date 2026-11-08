@@ -190,6 +190,19 @@ const (
 	// script run the SetData switch (e.g. Eye of Eternity
 	// DATA_VORTEX_HANDLING -> VortexHandling).
 	InstanceEventOnSetData = 8
+	// InstanceEventOnUnitDeath is a Go-only extension on the same
+	// free-slot precedent: C++ InstanceScript::OnUnitDeath
+	// (ZoneScript.h) has no Eluna hook, but the C++ instance script
+	// IS the OnUnitDeath consumer (e.g. Drak'Tharon Keep forwards
+	// crystal-handler deaths to Novos). Go has no C++ instance
+	// script, so the creature death path (engine/world/kill.go
+	// clearCreatureDeathState, the Unit::setDeathState twin, plus the
+	// session onCreatureKilled funnel arm) fires this event with
+	// (event, instance_data, map, unit), letting the Lua instance
+	// script run the OnUnitDeath switch. Fires for creature deaths
+	// only; player deaths in instances take a separate session path
+	// with no fire yet.
+	InstanceEventOnUnitDeath = 9
 )
 
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the

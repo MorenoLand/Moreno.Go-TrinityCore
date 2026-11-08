@@ -68,19 +68,19 @@
 -- DoAction-gated) — DoCast(SPELL_SUMMON_MINIONS 59910) — would
 -- over-cast ungated (jedoga precedent) — documented-only.
 -- The DoAction machine — DoAction(ACTION_CRYSTAL_HANDLER_DIED)
--- (drak_tharon_keep.h:52) + CrystalHandlerDied: per-crystal
+-- (drak_tharon_keep.h:52 = 15) + CrystalHandlerDied: per-crystal
 -- SetCrystalStatus(crystal, false) deactivation (instance GetGuidData
--- + ObjectAccessor + GO-state bridges absent), the
--- _crystalHandlerCount latch -> Talk(SAY_ARCANE_FIELD 4) (player-less
--- Talk — bridged in isolation, but gated by the DoAction),
--- SetSummonerStatus(false), SetBubbled(false), the EVENT_ATTACK /
--- EVENT_SUMMON_MINIONS schedules, and the per-handler-death
--- AI()->SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000) re-arm on the
--- DATA_NOVOS_SUMMONER_4 target — ev38 dispatch IS bridged
--- (creature:DoAction, lua_creature_events.go:802); the sender is
--- the instance script OnUnitDeath (instance_drak_tharon_keep.cpp:
--- 153) on NPC_CRYSTAL_HANDLER death, and cross-AI SetData is
--- absent — whole machine documented-only.
+-- + ObjectAccessor + GO-state bridges absent) stays out; the
+-- _crystalHandlerCount latch -> Talk(SAY_ARCANE_FIELD 4) + the
+-- SetBubbled(false) RemoveFlag/CastStop legs are PORTED 2026-11-08
+-- (tick 466) via the ev38 DoAction handler below, driven by the
+-- instance_drak_tharon_keep.lua OnUnitDeath sender (Go-only
+-- INSTANCE_EVENT_ON_UNIT_DEATH 9); the count zeroes on Reset (ev23).
+-- SetSummonerStatus(false), the EVENT_ATTACK / EVENT_SUMMON_MINIONS
+-- schedules, and the per-handler-death AI()->SetData(
+-- SPELL_SUMMON_CRYSTAL_HANDLER, 15000) re-arm on the
+-- DATA_NOVOS_SUMMONER_4 target stay out — cross-AI SetData and the
+-- Novos UpdateAI timers are absent.
 -- MoveInLineOfSight — the _ohNovos latch (Initialize/Reset true;
 -- flips false when a HULKING_CORPSE 27597 / RISEN_SHADOWCASTER 27600
 -- / FETID_TROLL_CORPSE 27598 enters LOS at y <= -771.95f — C++
@@ -125,6 +125,20 @@ local SPELL_SUMMON_COPY_OF_MINIONS = 59933
 local SAY_AGGRO = 0
 local SAY_KILL = 1
 local SAY_DEATH = 2
+local SAY_ARCANE_FIELD = 4
+
+local ACTION_CRYSTAL_HANDLER_DIED = 15
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+
+-- _crystalHandlerCount (boss_novos.cpp:261-276, CrystalHandlerDied):
+-- counts crystal-handler deaths in this pull; Reset zeroes it
+-- (Initialize, boss_novos.cpp:95-97). It is NOT zeroed at enter
+-- combat — the four handlers die while Novos is still bubbled,
+-- before the pull, so the count must survive up to the bubble
+-- clearing at 4.
+local crystalHandlerCount = 0
 
 local function novosEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_novos.cpp:140: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
@@ -147,9 +161,49 @@ local function novosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_novos::Reset (boss_novos.cpp:99-106): _Reset + Initialize
+-- zeroes _crystalHandlerCount. The SetCrystalsStatus(false) /
+-- SetSummonerStatus(false) / SetBubbled(false) legs stay out —
+-- instance GetGuidData + ObjectAccessor cross-AI + GO-state bridges
+-- absent (the header's Reset note).
+local function novosReset(event, creature)
+    crystalHandlerCount = 0
+end
+
+-- C++ boss_novos::DoAction(ACTION_CRYSTAL_HANDLER_DIED)
+-- (boss_novos.cpp:172-175) + CrystalHandlerDied (:261-276), driven by
+-- the instance script OnUnitDeath sender (instance_drak_tharon_keep.lua,
+-- tick 466). The per-crystal deactivation loop (first ACTIVE crystal ->
+-- GO_STATE_READY + channel-target CastStop) stays out — no GO-state
+-- bridge. At 4 deaths: Talk(SAY_ARCANE_FIELD 4) + SetSummonerStatus(false)
+-- (cross-AI, stays out) + SetBubbled(false) (the RemoveFlag NON_ATTACKABLE
+-- + CastStop legs — HasFlag/RemoveFlag and IsCasting/CastStop are
+-- bridged) + the EVENT_ATTACK (3s) / EVENT_SUMMON_MINIONS (15s, heroic)
+-- schedules (no Novos UpdateAI timers are ported — the UpdateAI arms
+-- stay out, so the schedules have nothing to drive). Below 4: the
+-- SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000) re-arm on the
+-- DATA_NOVOS_SUMMONER_4 target stays out — cross-AI SetData absent.
+local function novosDoAction(event, creature, action)
+    if action ~= ACTION_CRYSTAL_HANDLER_DIED then
+        return
+    end
+    crystalHandlerCount = crystalHandlerCount + 1
+    if crystalHandlerCount >= 4 then
+        creature:Talk(SAY_ARCANE_FIELD)
+        if creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        end
+        if creature:IsCasting() then
+            creature:CastStop()
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_NOVOS, 1, novosEnterCombat)
 RegisterCreatureEvent(ENTRY_NOVOS, 3, novosTargetDied)
 RegisterCreatureEvent(ENTRY_NOVOS, 4, novosDied)
+RegisterCreatureEvent(ENTRY_NOVOS, 23, novosReset)
+RegisterCreatureEvent(ENTRY_NOVOS, 38, novosDoAction)
 
 -- C++ spell_novos_summon_minions::HandleScript
 -- (boss_novos.cpp:375-398): OnEffectHitTarget EFFECT_0

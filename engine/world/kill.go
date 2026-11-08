@@ -1017,6 +1017,13 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 			s.server.interruptCreatureCastsOnRemove(motion)
 		}
+		// Unit::setDeathState (Unit.cpp:8956): the JUST_DIED arm calls
+		// zoneScript->OnUnitDeath — the instance fire, ahead of the
+		// JustDied hooks below. This is the owner arm of the single
+		// fire (the no-owner arm fires in clearCreatureDeathState).
+		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
+			s.server.triggerInstanceUnitDeath(ctx, motion)
+		}
 		// Unit::Kill's party-kill broadcast (Unit.cpp:11208-11232): when
 		// the killing blow lands and the creature's player-damage
 		// requirement is satisfied
@@ -1840,6 +1847,12 @@ func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
 	dead.AssistAt = time.Time{}
 	dead.AssistVictim = 0
 	dead.Assistants = nil
+	// Unit::setDeathState (Unit.cpp:8956): the JUST_DIED arm calls
+	// zoneScript->OnUnitDeath — the instance fire, ahead of the
+	// JustDied hooks the callers fire next. Every clearCreatureDeathState
+	// caller skips onCreatureKilled, so this is the no-owner arm of the
+	// single fire (the owner arm fires in onCreatureKilled).
+	s.triggerInstanceUnitDeath(context.Background(), dead)
 }
 
 // firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):

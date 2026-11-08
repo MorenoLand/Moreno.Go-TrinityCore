@@ -3269,6 +3269,141 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (a missing o errors); the Teleport twin defaults it to the
 	// current facing, and the alias inherits that leniency.
 	methods["NearTeleport"] = methods["Teleport"]
+	// ExitVehicle is Unit::ExitVehicle (Unit.cpp:13215-13234, the
+	// _ExitVehicle twin) for creatures: with an explicit position it
+	// unseats the passenger at those coordinates (the Kologarn
+	// stone-grip leg passes the scripted exit position); with no
+	// arguments it unseats at the passenger's current position — the
+	// base-relocated position, the C++ default (base position with the
+	// passenger's orientation). The kit removal rides
+	// luaVehicleRemovePassenger (ev6 on a creature base, the
+	// Vehicle::RemovePassenger twin); the position write rides the
+	// Teleport broadcast above, so nearby clients see the exit at
+	// once. RemovePendingEventsForPassenger has no Go model (vehicle
+	// events are synchronous). A creature that is not seated is a
+	// no-op, matching C++'s early return on a missing vehicle.
+	methods["ExitVehicle"] = func(ctx context.Context, args []any) ([]any, error) {
+		if motion == nil || motion.VehicleGUID == 0 {
+			return nil, nil
+		}
+		s.motionMu.Lock()
+		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
+		if !ok || m.VehicleGUID == 0 {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		baseGUID := m.VehicleGUID
+		x, y, z, o := m.X, m.Y, m.Z, m.Orientation
+		if len(args) > 0 {
+			var err error
+			x, err = luaFloat32Arg(args, 0)
+			if err != nil {
+				s.motionMu.Unlock()
+				return nil, err
+			}
+		}
+		if len(args) > 1 {
+			var err error
+			y, err = luaFloat32Arg(args, 1)
+			if err != nil {
+				s.motionMu.Unlock()
+				return nil, err
+			}
+		}
+		if len(args) > 2 {
+			var err error
+			z, err = luaFloat32Arg(args, 2)
+			if err != nil {
+				s.motionMu.Unlock()
+				return nil, err
+			}
+		}
+		if len(args) > 3 {
+			var err error
+			o, err = luaFloat32Arg(args, 3)
+			if err != nil {
+				s.motionMu.Unlock()
+				return nil, err
+			}
+		}
+		mapID, instanceID, guid := m.Map, m.InstanceID, m.GUID
+		phase := m.PhaseMask
+		s.motionMu.Unlock()
+		s.luaVehicleRemovePassenger(ctx, &luaVehicleRef{server: s, mapID: mapID, instanceID: instanceID, baseGUID: baseGUID}, guid)
+		s.motionMu.Lock()
+		if m2, ok := s.motionMapLocked(mapID, instanceID)[guid]; ok {
+			m2.X, m2.Y, m2.Z, m2.Orientation = x, y, z, o
+			m2.Moving = false
+		}
+		s.motionMu.Unlock()
+		_, nearby := buildTeleportMovementPackets(guid, movementInfo{Time: s.gameTimeMilliseconds(), X: x, Y: y, Z: z, Orientation: o})
+		s.broadcastCreatureTeleportMovement(mapID, instanceID, guid, x, y, z, nearby, phase)
+		s.syncCreatureVehiclePassengers(m)
+		return nil, nil
+	}
+	// Relocate is Object::Relocate (Object.h): a pure position write
+	// with no packet — the client learns the new coordinates from the
+	// next movement broadcast (the Kologarn stone-grip leg's MoveFall
+	// packet). The orientation argument is optional and defaults to
+	// the current facing, the Teleport precedent.
+	methods["Relocate"] = func(_ context.Context, args []any) ([]any, error) {
+		x, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
+		if !ok {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		o := m.Orientation
+		if len(args) > 3 {
+			o, err = luaFloat32Arg(args, 3)
+			if err != nil {
+				s.motionMu.Unlock()
+				return nil, err
+			}
+		}
+		m.X, m.Y, m.Z, m.Orientation = x, y, z, o
+		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// MoveFall is MotionMaster::MoveFall (MotionMaster.cpp:919-955)
+	// for creatures: AddUnitMovementFlag(MOVEMENTFLAG_FALLING) plus a
+	// fall spline to the ground height. Go has no creature spline
+	// sender and no vmap height query, so the spline-to-ground half
+	// stays out; the client-visible leg is the fall-mode packet —
+	// SMSG_SPLINE_MOVE_NORMAL_FALL, the SetFeatherFall(false) leg's
+	// opcode — sent fire-and-forget. MOVEMENTFLAG_FALLING is transient
+	// in C++ (cleared on landing), so no latch is kept on the motion.
+	// Rooted units do not fall in C++ (MotionMaster.cpp:937-939); the
+	// ScriptRooted gate is the Go twin, and the stunned half stays out
+	// (no creature stun-state read on the motion).
+	methods["MoveFall"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil {
+			return nil, nil
+		}
+		s.motionMu.Lock()
+		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
+		if !ok || m.ScriptRooted {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		mapID, instanceID, x, y, guid := m.Map, m.InstanceID, m.X, m.Y, m.GUID
+		phase := m.PhaseMask
+		s.motionMu.Unlock()
+		s.broadcastCreatureSplineMove(mapID, instanceID, x, y, guid, protocol.OpcodeSMSG_SPLINE_MOVE_NORMAL_FALL, phase)
+		return nil, nil
+	}
 	// GetBaseSpellPower is Unit::GetBaseSpellPower (UnitMethods.h:743):
 	// the PLAYER_FIELD_MOD_DAMAGE_DONE_POS + school field, which
 	// creatures do not carry, so it reads 0. The school arg is still

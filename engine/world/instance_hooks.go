@@ -455,6 +455,31 @@ func (s *Server) triggerInstanceGameObjectCreate(dyn *dynamicGameObjectState) {
 	}
 }
 
+// triggerInstanceUnitDeath dispatches the Go-only
+// INSTANCE_EVENT_ON_UNIT_DEATH (9), fired from Unit::setDeathState
+// (Unit.cpp:8956): zoneScript->OnUnitDeath(this) runs inside the
+// JUST_DIED arm, ahead of the JustDied hooks (Unit::Kill :11320
+// setDeathState, :11324+ hooks) — so both kill-funnel arms fire it
+// from their setDeathState leg (clearCreatureDeathState on the
+// no-owner path, the inline legs in onCreatureKilled on the owner
+// path), before any CREATURE_EVENT_ON_DIED handler runs. Signature
+// mirrors ON_CREATURE_CREATE: (event, instance_data, map, unit).
+// Only instance-map creature deaths reach here; the gate is the
+// triggerInstanceCreatureCreate one. Returns mirror the C++ call,
+// which discards them (ZoneScript::OnUnitDeath returns void).
+func (s *Server) triggerInstanceUnitDeath(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || motion.InstanceID == 0 || !s.isInstanceScriptMap(motion.Map) || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	unit := s.luaMotionCreature(motion)
+	if unit == nil {
+		return
+	}
+	if _, err := s.Features.Scripts.TriggerInstanceEvent(ctx, motion.Map, motion.InstanceID, scripting.InstanceEventOnUnitDeath, s.instanceDataObject(motion.Map, motion.InstanceID), instanceMapObject(s, motion.Map, motion.InstanceID), unit); err != nil {
+		s.debug("lua instance unit-death event failed", "map", motion.Map, "instance", motion.InstanceID, "error", err)
+	}
+}
+
 // triggerInstanceCreatureCreate dispatches Eluna INSTANCE_EVENT_ON_CREATURE_CREATE
 // (5), fired from Creature::AddToWorld (Creature.cpp:301) via the instance's zone
 // script: (event, instance_data, map, creature). Only dynamically-materialized

@@ -176,14 +176,14 @@
 -- the fail-closed DBC-absent read); vehicle OnEffectRemove ->
 -- PreventDefaultAction + caster _ExitVehicle at the exit position
 -- + caster RemoveAurasDueToSpell(GetId()) + Relocate/MoveFall/
--- Relocate — PORTED 2026-11-08 (tick 465) via the same ev3 handler:
+-- Relocate — PORTED 2026-11-08 (tick 466) via the same ev3 handler:
 -- the ev3 veto bridge (fireAuraRemove returns the PreventDefaultAction
--- verdict, Go) + caster RemoveAura(GetAuraId()); the exit itself
--- STAYS OUT: no creature ExitVehicle-with-position / Relocate /
--- MoveFall bridges, no RemovePendingEventsForPassenger model
--- (vehicle events are synchronous in Go), and the caster boards
--- only via the creature-caster apply leg (spells.go) — until the
--- exit bridge lands a boarded caster stays seated);
+-- verdict, Go) + caster RemoveAura(GetAuraId()) + the tick-466
+-- creature ExitVehicle-with-position / Relocate / MoveFall bridges
+-- (lua_creature_events.go); the exit runs before the aura strip,
+-- the C++ order. RemovePendingEventsForPassenger has no Go model
+-- (vehicle events are synchronous in Go) and stays out; the caster
+-- boards only via the creature-caster apply leg (spells.go).
 -- spell_ulduar_cancel_stone_grip (SCRIPT_EFFECT SpellScript:
 -- target removes the CalcValue spell id for its difficulty —
 -- PORTED 2026-11-08 (tick 464) via RegisterSpellEvent ev5 below:
@@ -780,19 +780,35 @@ local function stoneGripRemoved(event, aura, target)
     -- at (1750.0, -7.5 +/- 3.0, 457.9322) and drops its same-spell
     -- aura. The veto is the `return true` below (ev3 veto bridge:
     -- the Go pre-leg fire runs the handler before the default leg
-    -- and skips it on a true return). The caster aura strip is this
-    -- leg (aura:GetCaster() + RemoveAura(GetAuraId()), the
-    -- RemoveAurasDueToSpell(GetId()) twin).
-    -- STAYS OUT: the exit itself -- no creature ExitVehicle-with-
-    -- position / Relocate / MoveFall bridges, and the caster is
-    -- only boarded once the creature-caster apply leg runs
-    -- (spells.go) -- until the exit bridge lands a boarded caster
-    -- stays seated; RemovePendingEventsForPassenger has no Go
-    -- model (vehicle events are synchronous). Returning true also
-    -- vetoes the default leg for the stun leg below -- C++-exact,
-    -- the default leg only ever exits the caster.
+    -- and skips it on a true return). C++ order is exit first,
+    -- then the aura strip (RemoveAurasDueToSpell(GetId())), so the
+    -- exit below runs before caster:RemoveAura — the exit-then-strip
+    -- order the tick-465 handler could not yet express. The exit
+    -- position rides the U1 bridges (creature ExitVehicle with
+    -- position + Relocate + MoveFall, tick 466); the orientation is
+    -- the C++ default Position orientation (0 — the C++ exit
+    -- position sets X/Y/Z only). oldPos is read AFTER the exit, so
+    -- it is the exit position, C++-exact (:591-595); the
+    -- Relocate(exit) / MoveFall / Relocate(oldPos) triple is the
+    -- "proper fall movement" leg (:592-595). RemovePendingEventsForPassenger
+    -- has no Go model (vehicle events are synchronous) — stays out.
+    -- Returning true also vetoes the default leg for the stun leg
+    -- below — C++-exact, the default leg only ever exits the caster.
     local caster = aura:GetCaster()
     if caster ~= nil then
+        if caster:GetObjectType() == "Creature" then
+            local exitY = -7.5 + (math.random() * 6.0 - 3.0)
+            caster:ExitVehicle(1750.0, exitY, 457.9322, 0)
+            local oldX, oldY, oldZ = caster:GetX(), caster:GetY(), caster:GetZ()
+            caster:Relocate(1750.0, exitY, 457.9322, 0)
+            caster:MoveFall()
+            caster:Relocate(oldX, oldY, oldZ)
+        end
+        -- A player caster has no ExitVehicle-with-position bridge
+        -- (session.exitVehicle takes no position) — the exit leg
+        -- stays out for that case, which never occurs in this fight
+        -- (the caster is always Kologarn); the aura strip below runs
+        -- for either caster kind, the RemoveAurasDueToSpell twin.
         caster:RemoveAura(aura:GetAuraId())
     end
     local amount = aura:GetAmount(2)
