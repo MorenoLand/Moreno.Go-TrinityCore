@@ -176,10 +176,14 @@
 -- the fail-closed DBC-absent read); vehicle OnEffectRemove ->
 -- PreventDefaultAction + caster _ExitVehicle at the exit position
 -- + caster RemoveAurasDueToSpell(GetId()) + Relocate/MoveFall/
--- Relocate — STAYS OUT: ev3 is notification-only (fireAuraRemove
--- ignores returns, so PreventDefaultAction has no bridge), no
--- RemovePendingEventsForPassenger bridge, no MoveFall bridge,
--- player:ExitVehicle takes no exit position);
+-- Relocate — PORTED 2026-11-08 (tick 465) via the same ev3 handler:
+-- the ev3 veto bridge (fireAuraRemove returns the PreventDefaultAction
+-- verdict, Go) + caster RemoveAura(GetAuraId()); the exit itself
+-- STAYS OUT: no creature ExitVehicle-with-position / Relocate /
+-- MoveFall bridges, no RemovePendingEventsForPassenger model
+-- (vehicle events are synchronous in Go), and the caster boards
+-- only via the creature-caster apply leg (spells.go) — until the
+-- exit bridge lands a boarded caster stays seated);
 -- spell_ulduar_cancel_stone_grip (SCRIPT_EFFECT SpellScript:
 -- target removes the CalcValue spell id for its difficulty —
 -- PORTED 2026-11-08 (tick 464) via RegisterSpellEvent ev5 below:
@@ -768,10 +772,34 @@ local function stoneGripRemoved(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Player" then
         return
     end
+    -- C++ spell_ulduar_stone_grip::OnRemoveVehicle
+    -- (boss_kologarn.cpp:575-599): OnEffectRemove EFFECT_0
+    -- SPELL_AURA_CONTROL_VEHICLE, AURA_EFFECT_HANDLE_REAL --
+    -- PreventDefaultAction() vetoes the default caster-exit +
+    -- dummy-aura drop, then the caster exits the target's vehicle
+    -- at (1750.0, -7.5 +/- 3.0, 457.9322) and drops its same-spell
+    -- aura. The veto is the `return true` below (ev3 veto bridge:
+    -- the Go pre-leg fire runs the handler before the default leg
+    -- and skips it on a true return). The caster aura strip is this
+    -- leg (aura:GetCaster() + RemoveAura(GetAuraId()), the
+    -- RemoveAurasDueToSpell(GetId()) twin).
+    -- STAYS OUT: the exit itself -- no creature ExitVehicle-with-
+    -- position / Relocate / MoveFall bridges, and the caster is
+    -- only boarded once the creature-caster apply leg runs
+    -- (spells.go) -- until the exit bridge lands a boarded caster
+    -- stays seated; RemovePendingEventsForPassenger has no Go
+    -- model (vehicle events are synchronous). Returning true also
+    -- vetoes the default leg for the stun leg below -- C++-exact,
+    -- the default leg only ever exits the caster.
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        caster:RemoveAura(aura:GetAuraId())
+    end
     local amount = aura:GetAmount(2)
     if amount > 0 then
         target:RemoveAura(amount)
     end
+    return true
 end
 RegisterAuraEvent(SPELL_STONE_GRIP, 3, stoneGripRemoved)
 RegisterAuraEvent(SPELL_STONE_GRIP_HEROIC, 3, stoneGripRemoved)

@@ -35195,6 +35195,27 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 		s.server.removeVehicleKit(s.player.Map, s.player.InstanceID, s.playerGUID)
 		s.sendPlayerVehicleData(0)
 	}
+	// AuraScript OnEffectRemove veto (SpellAuraEffects.cpp:727-744):
+	// the script remove handlers run BEFORE the default effect handler,
+	// so a control-vehicle aura with a registered ev3 handler fires
+	// here, ahead of the default exit leg below; a true return is
+	// PreventDefaultAction() and skips that leg, and the late fire
+	// below is skipped so the handler runs exactly once.
+	// Non-control-vehicle auras keep the late fire, so their
+	// AfterEffectRemove legs keep their post-arms timing.
+	removeVetoed := false
+	removeHookFiredEarly := false
+	if wasControlVehicle && auraWasPresent && removedAura != nil && s.server != nil && s.server.hasAuraRemoveHook(spellID) {
+		var tMap, tInst uint32
+		s.playerStateMu.Lock()
+		if s.player != nil {
+			tMap, tInst = s.player.Map, s.player.InstanceID
+		}
+		s.playerStateMu.Unlock()
+		earlyRef := &luaAuraRef{server: s.server, spellID: spellID, player: s, mapID: tMap, instanceID: tInst, snapshot: removedAura, removeMode: mode}
+		removeVetoed = s.server.fireAuraRemove(context.Background(), spellID, earlyRef.luaAuraObject(), s.luaPlayer())
+		removeHookFiredEarly = true
+	}
 	// AuraEffect::HandleAuraControlVehicle remove leg
 	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the target
 	// player's vehicle and a same-spell dummy aura on the caster is
@@ -35202,7 +35223,7 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// the apply leg's C++ no-op; RemovePendingEventsForPassenger has no
 	// Go model, and the 53111 Devour Humanoid kill/despawn arm is vacuous
 	// here (player-target direction, creature-caster only).
-	if wasControlVehicle && removedCasterGUID != 0 && removedCasterGUID != s.playerGUID && s.server != nil {
+	if wasControlVehicle && !removeVetoed && removedCasterGUID != 0 && removedCasterGUID != s.playerGUID && s.server != nil {
 		if caster := s.server.findSessionByGUID(removedCasterGUID); caster != nil && caster.player != nil {
 			if caster.player.VehicleGUID == s.playerGUID {
 				caster.exitVehicle(context.Background())
@@ -35392,8 +35413,10 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// CallScriptEffectRemoveHandlers arm): fires after the erase and the
 	// remove arms above, only when an aura was actually removed. The
 	// handler receives the removed record's snapshot, so GetCaster /
-	// GetAmount / GetTickNumber still resolve.
-	if auraWasPresent && s.server != nil {
+	// GetAmount / GetTickNumber still resolve. Skipped when the hook
+	// already fired ahead of the CONTROL_VEHICLE leg above, so a
+	// control-vehicle handler runs exactly once per removal.
+	if auraWasPresent && s.server != nil && !removeHookFiredEarly {
 		var tMap, tInst uint32
 		s.playerStateMu.Lock()
 		if s.player != nil {
@@ -38120,16 +38143,30 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// (SpellAuraEffects.cpp:2965-2986): the aura's caster boards the
 		// target player's vehicle kit at seat amount-1. The IsVehicle gate
 		// is the kit's presence (the 296 leg above creates player kits);
-		// caster==target is C++'s no-op (SpellAuraEffects.cpp:2975), and a
-		// creature caster has no Go boarding model (AddPassenger is
-		// player-only), so only a live player caster session boards. The
+		// caster==target is C++'s no-op (SpellAuraEffects.cpp:2975). The
 		// same-map/instance gate mirrors the aura's in-world targeting;
 		// seat -1 rides AddPassenger's any-usable-seat fallback, the C++
 		// 0/0-seat convention.
 		if eff.Aura == spellAuraControlVehicle && s.server != nil {
-			if casterSess := s.server.findSessionByGUID(casterGUID); casterSess != nil && casterSess.player != nil && casterSess.playerGUID != targetGUID && casterSess.player.Map == targetSess.player.Map && casterSess.player.InstanceID == targetSess.player.InstanceID {
+			casterSess := s.server.findSessionByGUID(casterGUID)
+			if casterSess != nil && casterSess.player != nil && casterSess.playerGUID != targetGUID && casterSess.player.Map == targetSess.player.Map && casterSess.player.InstanceID == targetSess.player.InstanceID {
 				if kit := s.server.getVehicleKit(targetSess.player.Map, targetSess.player.InstanceID, targetGUID); kit != nil {
 					casterSess.enterVehicle(ctx, targetGUID, int8(int32(amount)-1))
+				}
+			} else if casterSess == nil {
+				// A creature caster boards the same way, via the
+				// Vehicle::AddPassenger twin (luaVehicleAddPassenger:
+				// seat assignment, VehicleGUID stamp, OnAddPassenger
+				// for creature bases, passenger relocation for player
+				// bases). The kit gate rides the resolve inside; the
+				// same-map/instance gate rides the motion lookup on
+				// the target's key. DORMANT until Spell.dbc ships the
+				// control-vehicle effect rows — and the exit half
+				// (creature ExitVehicle with position) is still
+				// unbridged, so a boarded caster stays seated when
+				// the aura leaves until that bridge lands.
+				if motion := s.server.findCreatureMotion(targetSess.player.Map, targetSess.player.InstanceID, casterGUID); motion != nil {
+					s.server.luaVehicleAddPassenger(ctx, &luaVehicleRef{server: s.server, mapID: targetSess.player.Map, instanceID: targetSess.player.InstanceID, baseGUID: targetGUID}, casterGUID, int8(int32(amount)-1))
 				}
 			}
 		}
@@ -44611,13 +44648,26 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 			s.broadcastCreatureValuesUpdateInInstance(key.Map, key.InstanceID, key.GUID, map[int]uint32{unitFieldFlags: m.UnitFlags})
 		}
 	}
+	// AuraScript OnEffectRemove veto (SpellAuraEffects.cpp:727-744),
+	// creature-target twin of the player funnel's pre-leg fire: the
+	// script remove handlers run BEFORE the default effect handler,
+	// so a control-vehicle aura with a registered ev3 handler fires
+	// here and a true return skips the default exit leg below; the
+	// late fire is skipped so the handler runs exactly once.
+	removeVetoed := false
+	removeHookFiredEarly := false
+	if wasControlVehicle && auraWasPresent && removedAura != nil && s.hasAuraRemoveHook(spellID) {
+		earlyRef := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID, snapshot: removedAura, removeMode: mode}
+		removeVetoed = s.fireAuraRemove(context.Background(), spellID, earlyRef.luaAuraObject(), s.luaUnitObjectForGUID(key.Map, key.InstanceID, key.GUID))
+		removeHookFiredEarly = true
+	}
 	// AuraEffect::HandleAuraControlVehicle remove leg
 	// (SpellAuraEffects.cpp:2987-3008): the caster leaves the vehicle and a
 	// same-spell dummy aura on the caster is dropped (RemoveAurasDueToSpell).
 	// RemovePendingEventsForPassenger has no Go model; the 53111 Devour
 	// Humanoid kill/despawn arm is vacuous here (creature-caster direction,
 	// unmodeled).
-	if wasControlVehicle {
+	if wasControlVehicle && !removeVetoed {
 		if caster := s.findSessionByGUID(controlVehicleCaster); caster != nil && caster.player != nil {
 			if caster.player.VehicleGUID == key.GUID {
 				caster.exitVehicle(context.Background())
@@ -44695,8 +44745,10 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// funnel (AuraEffect::HandleEffect's
 	// CallScriptEffectRemoveHandlers arm): fires after the erase and
 	// the remove arms above, only when an aura was actually removed.
-	// The handler receives the removed record's snapshot.
-	if auraWasPresent {
+	// The handler receives the removed record's snapshot. Skipped
+	// when the hook already fired ahead of the CONTROL_VEHICLE leg
+	// above, so a control-vehicle handler runs exactly once.
+	if auraWasPresent && !removeHookFiredEarly {
 		auraRef := &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID, snapshot: removedAura, removeMode: mode}
 		s.fireAuraRemove(context.Background(), spellID, auraRef.luaAuraObject(), s.luaUnitObjectForGUID(key.Map, key.InstanceID, key.GUID))
 	}

@@ -723,14 +723,35 @@ func (s *Server) fireAuraApply(ctx context.Context, spellID uint32, auraObj *scr
 	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnApply, scripting.AuraEventOnApply, auraObj, target)
 }
 
-// fireAuraRemove dispatches the RegisterAuraEvent OnRemove hook for a
-// removed aura (args (event, aura, target)). Notification-only like
-// fireAuraApply; the aura object reads the removed record's snapshot.
-func (s *Server) fireAuraRemove(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any) {
-	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
-		return
+// hasAuraRemoveHook reports whether any RegisterAuraEvent(...,
+// OnRemove, ...) handler is registered for the spell, so the remove
+// funnels can fire the hook before the CONTROL_VEHICLE default leg
+// only when a handler could run (the hasAuraBeforeDispelHook twin).
+func (s *Server) hasAuraRemoveHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
 	}
-	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnRemove, scripting.AuraEventOnRemove, auraObj, target)
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnRemove)
+}
+
+// fireAuraRemove dispatches the RegisterAuraEvent OnRemove hook for a
+// removed aura (args (event, aura, target)) and reports whether any
+// handler returned boolean true. That is the Go model of AuraScript
+// PreventDefaultAction() in an OnEffectRemove handler:
+// AuraEffect::HandleEffect (SpellAuraEffects.cpp:727-744) calls the
+// script remove handlers BEFORE the default effect handler and skips
+// the default when prevented, while AfterEffectRemove handlers run
+// after it — Go fires ev3 once per removal, so the pre-leg fire in
+// the remove funnels carries the veto and the AfterEffectRemove legs
+// ported on ev3 run in the same single fire (their bodies never
+// depend on the default leg). The aura object reads the removed
+// record's snapshot.
+func (s *Server) fireAuraRemove(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return false
+	}
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnRemove, scripting.AuraEventOnRemove, auraObj, target)
+	return luaHookVeto(results)
 }
 
 // fireAuraChangeAmount dispatches the RegisterAuraEvent OnChangeAmount hook
