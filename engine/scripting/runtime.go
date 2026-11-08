@@ -534,13 +534,35 @@ const (
 // effects switch, so there is no clean per-effect list site there
 // yet — a player-cast OnEffectHitTarget leg stays blocked until
 // one is built.
+// OnObjectAreaTargetSelect mirrors the SpellScript hook of the same
+// name (SpellScript.h, fired from Spell::SelectImplicitAreaTargets,
+// Spell.cpp:1227, inside SelectTargets ahead of OnCast at :3432),
+// fired once per effect carrying a selecting leg (area, cone, entry
+// or ref-centered implicit target), with args (event, spell,
+// effectIndex, targets) where targets is a SpellTargetList object.
+// The handler MUTATES the list through its methods — GetTargets()
+// reads the current list as a table of unit objects, GetCount()
+// its size, Remove(unit) drops one unit, Clear() empties it,
+// Add(unit) appends one unit — and the mutated list is that
+// effect's hit list for every effect arm below (the C++
+// std::list<WorldObject*>& mutation model); the return value is
+// ignored. The list a handler sees is the Go per-effect partition
+// (bossConeEffectTargets), i.e. the flat hit list for non-cone
+// spells, minus the caster unless the effect carries a friendly
+// area leg (C++ enemy/entry/ref/cone lists never contain the
+// caster; friendly-area lists do). Creature path only, like
+// OnEffectHitTarget: the player path has no per-effect list site.
+// GO-area legs (51/52/108) never fire it — the list holds units
+// only. The deferred-fire call re-runs the cast function, so a
+// cast-time cast fires it once, at fire time, like OnCast.
 const (
-	SpellEventOnCast            = 1
-	SpellEventOnHit             = 2
-	SpellEventAfterHit          = 3
-	SpellEventOnEffectHit       = 4
-	SpellEventOnEffectHitTarget = 5
-	SpellEventBeforeHit         = 6
+	SpellEventOnCast                   = 1
+	SpellEventOnHit                    = 2
+	SpellEventAfterHit                 = 3
+	SpellEventOnEffectHit              = 4
+	SpellEventOnEffectHitTarget        = 5
+	SpellEventBeforeHit                = 6
+	SpellEventOnObjectAreaTargetSelect = 7
 )
 
 type Hook struct {

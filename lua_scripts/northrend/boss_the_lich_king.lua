@@ -306,12 +306,12 @@
 -- lichKingJustSummoned; defile :761 PORTED (lichKingJustSummoned);
 -- spirit_bomb stays unregistered as documented; strangulate
 -- PORTED below (ev22 + UpdateAI timers + ev38).
--- SpellScript legs: ice_burst_target_search REACT_PASSIVE (:2212-2221)
--- and restore_soul REACT_PASSIVE on wicked spirits (:2632-2641) — no
--- SpellScript bridge; both add AIs unregistered (restore_soul also rides LK-side ACTION_TELEPORT_BACK — ev38 dispatch
--- bridged, but sender restore_soul SpellScript (boss_the_lich_king.cpp:2629)
--- unported, no SpellScript bridge, and the LK-side arm itself unported; cf.
--- terenas-side ACTION_TELEPORT_BACK, ported tick 215 via ev38.)
+-- SpellScript legs: ice_burst_target_search CheckTargetCount (:2212-2221)
+-- PORTED 2026-11-08 (event 7, this file below) and restore_soul
+-- REACT_PASSIVE on wicked spirits (:2632-2641) PORTED tick 446
+-- (event 4); the LK-side ACTION_TELEPORT_BACK arm rides ev38 dispatch
+-- (bridged) with the restore_soul sender ported tick 446; cf.
+-- terenas-side ACTION_TELEPORT_BACK, ported tick 215 via ev38.
 
 -- CAST-STATE GATES PORTED (2026-11-04): boss :900/:1149
 -- (TRANSITION/OUTRO/FROSTMOURNE-exempt in C++; phase-aware in Lua
@@ -319,7 +319,8 @@
 -- only) gates shockwave/enrage; raging :1412 (pre-loop only) gates
 -- soul-shriek + the set-aggressive flip; warden :1843 UpdateAI is a
 -- plain loop (zero CASTING hits) so soul-rip stays ungated;
--- valkyr :1544/:1576 gates cover the unported grab machine only;
+-- valkyr :1544/:1576 gates cover the grab machine (timer + target
+-- search ported tick 447; MovementInform drop legs still out);
 -- tirion :1240 gate covers unported intro/outro talks only;
 -- strangulate/terenas/bomb/frostmourne UpdateAIs ungated (zero hits);
 -- terenas 2s despawns are DespawnOrUnsummon, not scheduler events.
@@ -478,7 +479,27 @@ local LK = {
     LIGHT_SNOWSTORM = 2490, -- :349
     WEATHER_STATE_LIGHT_SNOW = 6, -- Weather.h:53
     UNIT_NPC_FLAG_GOSSIP = 0x00000001, -- UnitDefines.h:186
+    -- Target-select consts (2026-11-08, tick 447), same one-table
+    -- local: the file sits at 199 main-chunk locals.
+    SPELL_ICE_BURST_TARGET_SEARCH = 69109, -- :104
+    SPELL_ICE_BURST = 69108, -- :106
+    SPELL_SHADOW_TRAP_KNOCKBACK = 73529, -- :95
+    SPELL_VALKYR_TARGET_SEARCH = 69030, -- :122
+    SPELL_CHARGE = 74399, -- :124
+    SPELL_SPIRIT_BURST = 70503, -- :135
+    SPELL_DEFILE_GROW = 72756, -- :116
+    DATA_VILE = 45814622, -- :370
 }
+
+-- Target-select state (2026-11-08, tick 447): the SpellScript _target
+-- picks live on the LK table (no new locals — the file sits at 199
+-- main-chunk locals), keyed by caster GUID; vileMoveTarget holds the
+-- picked GUID, valkyrTarget holds the picked unit object (EFFECT_1
+-- ReplaceTarget re-adds it), valkyrGrabbed is the _grabbedPlayer
+-- latch (the AI SetGUID write has no bridge).
+LK.vileMoveTarget = {}
+LK.valkyrTarget = {}
+LK.valkyrGrabbed = {}
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
 local SPELL_RESTORE_SOUL = 72595 -- boss_the_lich_king.cpp:150
@@ -1904,13 +1925,35 @@ end
 -- DoCastSelf(SPELL_WINGS_OF_THE_DAMNED 74352, non-triggered); the ctor
 -- (:1447) sets combat movement off. Keyed to ev22 IsSummonedBy (the
 -- strangulate precedent — ev22 is live for creature summons): the
--- val'kyr never engages, so ev1 would never fire. The IsSummonedBy
--- EVENT_GRAB_PLAYER 2.5s schedule stays out (the grab machine rides
--- MovementInform + SpellScript, unported).
+-- val'kyr never engages, so ev1 would never fire.
+-- C++ npc_valkyr_shadowguard EVENT_GRAB_PLAYER (:1551-1556): every
+-- 2s while no player is grabbed, DoCastAOE(SPELL_VALKYR_TARGET_SEARCH
+-- 69030, self-cast twin per the harvest-souls precedent); the first
+-- arm is the 2500ms IsSummonedBy schedule (:1461). The _grabbedPlayer
+-- latch rides LK.valkyrGrabbed (set by the event-7 SelectTarget
+-- handler when it picks — the AI SetGUID write has no bridge, and
+-- the MovementInform drop legs that clear it stay out). PORTED
+-- 2026-11-08. DORMANT until Spell.dbc ships: the 69030 cast is
+-- DBC-gated (creature path needs spellKnown).
+-- Assigned on the LK table, not a local: the file sits at 199
+-- main-chunk locals and a named local would touch the 200-local
+-- load limit (the tirionFns table-field precedent, tick 443).
+LK.onValkyrGrab = function(creature, guid)
+    if LK.valkyrGrabbed[guid] then
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_VALKYR_TARGET_SEARCH, true)
+    if not LK.valkyrGrabbed[guid] then
+        schedule(guid, "valkyrGrab", 2000, function() LK.onValkyrGrab(creature, guid) end)
+    end
+end
+
 local function valkyrIsSummonedBy(event, creature)
     creature:SetReactState(REACT_PASSIVE)
     creature:SetCombatMovement(false)
     creature:CastSpell(creature, SPELL_WINGS_OF_THE_DAMNED)
+    local guid = creature:GetGUID()
+    schedule(guid, "valkyrGrab", 2500, function() LK.onValkyrGrab(creature, guid) end)
 end
 
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 1, shamblingHorrorJustEngagedWith)
@@ -1926,6 +1969,15 @@ RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 2, spiritWardenLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 4, spiritWardenDied)
 RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 23, spiritWardenLeaveCombat)
 RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 22, valkyrIsSummonedBy)
+-- C++ npc_valkyr_shadowguard death: the EventMap dies with the AI —
+-- cancel the grab timer and drop the target-select state. Inline:
+-- the file sits at 199 main-chunk locals.
+RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 4, function(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    LK.valkyrGrabbed[guid] = nil
+    LK.valkyrTarget[guid] = nil
+end)
 RegisterCreatureEvent(ENTRY_VILE_SPIRIT, 4, vileSpiritDied)
 
 -- C++ EVENT_FROSTMOURNE_TALK_1 (:1776-1780): Talk(SAY_TERENAS_INTRO_1 0)
@@ -2769,7 +2821,9 @@ end)
 -- The effectIndex == 1 gate mirrors the EFFECT_1 registration (the
 -- Go fire runs once per non-zero effect). The Load() instance-script
 -- gate is always true in ICC; the FilterTargets platform-height
--- select (OnObjectAreaTargetSelect) stays out — unbridged. Handler
+-- select (OnObjectAreaTargetSelect) stays out — the event-7 bridge
+-- is live (tick 447) but the leg needs the Arthas-platform GO's Z
+-- (HeightDifferenceCheck, no GO-position bridge in Lua). Handler
 -- is inline: the file sits at 199 main-chunk locals. DORMANT until
 -- Spell.dbc ships: the 72262 DoCastAOE is DBC-gated (creature path
 -- needs spellKnown).
@@ -2875,5 +2929,249 @@ RegisterSpellEvent(SPELL_RESTORE_SOUL, 6, function(event, spell, target, missInf
         target:RemoveAura(SPELL_HARVEST_SOULS_TELEPORT)
     else
         target:RemoveAura(SPELL_HARVEST_SOUL_TELEPORT)
+    end
+end)
+
+-- C++ spell_the_lich_king_ice_burst_target_search::CheckTargetCount
+-- (boss_the_lich_king.cpp:2205-2221): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY -> when the area list is
+-- non-empty, the caster casts SPELL_ICE_BURST (69108, triggered),
+-- goes REACT_PASSIVE, stops attacking and despawns in 500ms. The
+-- effectIndex == 0 gate mirrors the EFFECT_0 registration; the
+-- TYPEID_UNIT guard mirrors the C++ ToCreature() check. Handler is
+-- inline: the file sits at 199 main-chunk locals. DORMANT until
+-- Spell.dbc ships: the 69109 cast (ice sphere :752) is DBC-gated.
+RegisterSpellEvent(LK.SPELL_ICE_BURST_TARGET_SEARCH, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 or targets:GetCount() == 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:CastSpell(caster, LK.SPELL_ICE_BURST, true)
+    caster:SetReactState(REACT_PASSIVE)
+    caster:AttackStop()
+    caster:DespawnOrUnsummon(500)
+end)
+
+-- C++ spell_the_lich_king_shadow_trap_periodic::CheckTargetCount
+-- (boss_the_lich_king.cpp:2156-2168): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY -> when the area list is
+-- non-empty, the caster casts SPELL_SHADOW_TRAP_KNOCKBACK (73529,
+-- triggered, nil target). Registered on SPELL_SHADOW_TRAP_AURA 73525:
+-- the trap's visual OnRemove casts it (ported tick 444), so this
+-- fires at arming time when a player stands in the trap. Handler is
+-- inline: the file sits at 199 main-chunk locals. DORMANT until
+-- Spell.dbc ships: the 73525 cast is DBC-gated.
+RegisterSpellEvent(LK.SPELL_SHADOW_TRAP_AURA, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 or targets:GetCount() == 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(nil, LK.SPELL_SHADOW_TRAP_KNOCKBACK, true)
+    end
+end)
+
+-- C++ spell_the_lich_king_necrotic_plague_jump::SelectTarget
+-- (boss_the_lich_king.cpp:2042-2049): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENTRY -> sort the area list by
+-- distance to the caster, keep only the nearest (resize(1); the
+-- size < 2 early return leaves a 0/1 list untouched). The BeforeHit
+-- CheckAura leg (:2053-2059) is a dead write in C++: _hadAura is
+-- set but never read anywhere in the file, so it is not ported.
+-- Handler is inline: the file sits at 199 main-chunk locals.
+-- DORMANT until Spell.dbc ships: the 70338 cast (plague jump-aura
+-- OnRemove) is DBC-gated.
+RegisterSpellEvent(SPELL_NECROTIC_PLAGUE_JUMP, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local list = targets:GetTargets()
+    if #list < 2 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    table.sort(list, function(a, b) return caster:GetDistance(a) < caster:GetDistance(b) end)
+    for i = 2, #list do
+        targets:Remove(list[i])
+    end
+end)
+
+-- C++ spell_the_lich_king_defile::CorrectRange
+-- (boss_the_lich_king.cpp:2264-2269): OnObjectAreaTargetSelect
+-- EFFECT_0 and EFFECT_1 TARGET_UNIT_SRC_AREA_ENEMY -> drop targets
+-- further than 10.0 * caster scale from the caster, and targets
+-- carrying SPELL_HARVEST_SOUL_VALKYR (68985). No effectIndex gate:
+-- the C++ leg is registered for both effects. GetDistance2d is the
+-- C++ ExactDistanceCheck (2D); GetScale is Unit::GetObjectScale.
+-- Handler is inline: the file sits at 199 main-chunk locals.
+-- DORMANT until Spell.dbc ships: the 72762 cast is DBC-gated.
+RegisterSpellEvent(LK.SPELL_DEFILE, 7, function(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local maxDist = 10.0 * caster:GetScale()
+    for _, target in ipairs(targets:GetTargets()) do
+        if caster:GetDistance2d(target) > maxDist or target:HasAura(LK.SPELL_HARVEST_SOUL_VALKYR) then
+            targets:Remove(target)
+        end
+    end
+end)
+
+-- C++ spell_the_lich_king_defile::ChangeDamageAndGrow
+-- (boss_the_lich_king.cpp:2271-2279): OnHit -> the SetHitDamage leg
+-- (GetHitDamage * caster scale) has no Go model (the cast path
+-- carries no m_damage/m_healing, tick 445 contract), so only the
+-- second leg ports: the caster casts SPELL_DEFILE_GROW (72756,
+-- triggered) on itself. OnHit fires once per hit target in both
+-- C++ and Go, so the grow-cast multiplicity matches. Handler is
+-- inline: the file sits at 199 main-chunk locals. DORMANT until
+-- Spell.dbc ships: the 72762 cast is DBC-gated.
+RegisterSpellEvent(LK.SPELL_DEFILE, 2, function(event, spell, target)
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(caster, LK.SPELL_DEFILE_GROW, true)
+    end
+end)
+
+-- C++ spell_the_lich_king_vile_spirit_move_target_search::SelectTarget
+-- (boss_the_lich_king.cpp:2509-2515): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY -> pick one random target
+-- into _target. The list itself is NOT narrowed (the C++ leg only
+-- records the pick); the OnEffectHitTarget HandleScript below gates
+-- on it. The pick rides LK.vileMoveTarget keyed by caster GUID.
+-- Handler is inline: the file sits at 199 main-chunk locals.
+-- DORMANT until Spell.dbc ships: the 70501 cast (vile-spirit
+-- activate :480) is DBC-gated.
+RegisterSpellEvent(SPELL_VILE_SPIRIT_MOVE_SEARCH, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local list = targets:GetTargets()
+    if #list == 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    LK.vileMoveTarget[caster:GetGUID()] = list[math.random(#list)]:GetGUID()
+end)
+
+-- C++ spell_the_lich_king_vile_spirit_move_target_search::HandleScript
+-- (boss_the_lich_king.cpp:2517-2526): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> only the picked target gets AttackStart + 100000
+-- threat; every other hit target is a no-op. PreventHitDefaultEffect
+-- is a no-op in Go (a SCRIPT_EFFECT default is unhandled unless a
+-- case exists, tick 446 contract). The effectIndex == 0 gate mirrors
+-- the EFFECT_0 registration. Handler is inline: the file sits at 199
+-- main-chunk locals.
+RegisterSpellEvent(SPELL_VILE_SPIRIT_MOVE_SEARCH, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or target:GetGUID() ~= LK.vileMoveTarget[caster:GetGUID()] then
+        return
+    end
+    caster:AttackStart(target)
+    caster:AddThreat(target, 100000)
+end)
+
+-- C++ spell_the_lich_king_vile_spirit_damage_target_search::CheckTargetCount
+-- (boss_the_lich_king.cpp:2539-2557): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY -> when the area list is
+-- non-empty, the summoner AI gets SetData(DATA_VILE, 1), the caster
+-- casts SPELL_SPIRIT_BURST (70503, triggered, nil target), despawns
+-- in 3s and gains UNIT_FLAG_NOT_SELECTABLE. The Load() TYPEID_UNIT
+-- gate holds (the caster is the vile-spirit creature). The summoner
+-- rides FindNearestCreature (no GetSummoner bridge; the LK lookup
+-- is the restore-soul precedent). The DATA_VILE write has no Go
+-- reader yet (neck_deep achievement case unimplemented — the writer
+-- lands now so the reader can follow). Handler is inline: the file
+-- sits at 199 main-chunk locals. DORMANT until Spell.dbc ships: the
+-- 70502 cast (vile-spirit activate :481) is DBC-gated.
+RegisterSpellEvent(SPELL_VILE_SPIRIT_DAMAGE_SEARCH, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 or targets:GetCount() == 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local lichKing = caster:FindNearestCreature(ENTRY_THE_LICH_KING, 200.0)
+    if lichKing ~= nil then
+        lichKing:SetData(LK.DATA_VILE, 1)
+    end
+    caster:CastSpell(nil, LK.SPELL_SPIRIT_BURST, true)
+    caster:DespawnOrUnsummon(3000)
+    caster:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+end)
+
+-- C++ spell_the_lich_king_valkyr_target_search::SelectTarget
+-- (boss_the_lich_king.cpp:2345-2358) + ReplaceTarget (:2360-2365):
+-- OnObjectAreaTargetSelect EFFECT_0 / EFFECT_1
+-- TARGET_UNIT_SRC_AREA_ENEMY -> EFFECT_0 drops targets carrying
+-- the searcher aura itself, picks one random survivor into _target,
+-- narrows the list to it and writes the GUID to the caster AI
+-- (SetGUID has no bridge — the pick rides LK.valkyrTarget and the
+-- _grabbedPlayer latch rides LK.valkyrGrabbed, read by the grab
+-- timer above); EFFECT_1 clears the list and re-adds _target.
+-- Handler is inline: the file sits at 199 main-chunk locals.
+-- DORMANT until Spell.dbc ships: the 69030 cast (val'kyr grab
+-- timer) is DBC-gated.
+RegisterSpellEvent(LK.SPELL_VALKYR_TARGET_SEARCH, 7, function(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local guid = caster:GetGUID()
+    if effectIndex == 0 then
+        for _, target in ipairs(targets:GetTargets()) do
+            if target:HasAura(LK.SPELL_VALKYR_TARGET_SEARCH) then
+                targets:Remove(target)
+            end
+        end
+        local list = targets:GetTargets()
+        if #list == 0 then
+            return
+        end
+        local picked = list[math.random(#list)]
+        LK.valkyrTarget[guid] = picked
+        LK.valkyrGrabbed[guid] = true
+        for _, target in ipairs(list) do
+            if target ~= picked then
+                targets:Remove(target)
+            end
+        end
+    elseif effectIndex == 1 then
+        targets:Clear()
+        local picked = LK.valkyrTarget[guid]
+        if picked ~= nil then
+            targets:Add(picked)
+        end
+    end
+end)
+
+-- C++ spell_the_lich_king_valkyr_target_search::HandleScript
+-- (boss_the_lich_king.cpp:2367-2371): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> the caster casts SPELL_CHARGE (74399, triggered)
+-- on the hit unit. The EFFECT_0 list is narrowed to _target by the
+-- select above, so this fires once with the picked player.
+-- PreventHitDefaultEffect is a no-op in Go (tick 446 contract).
+-- Handler is inline: the file sits at 199 main-chunk locals.
+RegisterSpellEvent(LK.SPELL_VALKYR_TARGET_SEARCH, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(target, LK.SPELL_CHARGE, true)
     end
 end)

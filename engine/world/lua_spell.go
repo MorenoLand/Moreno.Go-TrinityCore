@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -337,4 +338,139 @@ func (s *Server) fireSpellBeforeHit(ctx context.Context, spellID uint32, spellOb
 		return
 	}
 	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventBeforeHit, scripting.SpellEventBeforeHit, spellObj, hitTarget, missInfo)
+}
+
+// spellTargetList is the Go side of the SpellTargetList object handed to
+// OnObjectAreaTargetSelect handlers: the effect's current target GUIDs,
+// mutated in place by the Lua methods (the C++
+// std::list<WorldObject*>& model). GUIDs, not objects, are the state —
+// the Lua objects are rebuilt per GetTargets call from the live
+// motions/sessions, so a stashed object never goes stale for GUID
+// purposes, and Remove/Add take unit objects so no GUID ever crosses
+// Lua as a float64 number (a 64-bit GUID does not survive that trip).
+type spellTargetList struct {
+	guids []uint64
+}
+
+func (s *Server) spellTargetListObject(list *spellTargetList, resolve func(uint64) any) *scripting.Object {
+	methods := map[string]scripting.ObjectMethod{}
+	methods["GetCount"] = luaNoArgs(func() any { return len(list.guids) })
+	methods["GetTargets"] = func(_ context.Context, _ []any) ([]any, error) {
+		objs := make([]any, 0, len(list.guids))
+		for _, guid := range list.guids {
+			if obj := resolve(guid); obj != nil {
+				objs = append(objs, obj)
+			}
+		}
+		return []any{objs}, nil
+	}
+	methods["Remove"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, nil
+		}
+		if guid := luaObjectGUID(args[0]); guid != 0 {
+			for i, kept := range list.guids {
+				if kept == guid {
+					list.guids = append(list.guids[:i], list.guids[i+1:]...)
+					break
+				}
+			}
+		}
+		return nil, nil
+	}
+	methods["Clear"] = func(_ context.Context, _ []any) ([]any, error) {
+		list.guids = list.guids[:0]
+		return nil, nil
+	}
+	methods["Add"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, nil
+		}
+		if guid := luaObjectGUID(args[0]); guid != 0 {
+			for _, kept := range list.guids {
+				if kept == guid {
+					return nil, nil
+				}
+			}
+			list.guids = append(list.guids, guid)
+		}
+		return nil, nil
+	}
+	return &scripting.Object{Type: "SpellTargetList", Fields: map[string]any{}, Methods: methods}
+}
+
+// spellEffectTargetHasLeg reports whether either implicit-target slot of
+// one effect carries a leg of the given family, applying the
+// second-slot skip rule (Spell.cpp:807-830 family) the sweeps use:
+// a skipped B slot selects nothing.
+func spellEffectTargetHasLeg(eff wotlk.SpellEffect, check func(uint32) bool) bool {
+	if check(eff.ImplicitTargetA) {
+		return true
+	}
+	return check(eff.ImplicitTargetB) && !implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB)
+}
+
+// spellEffectHasSelectingLeg reports whether one effect selects area
+// targets at all — the fire gate for OnObjectAreaTargetSelect. GO-area
+// legs (51/52/108) are excluded: the list holds units only, so a
+// GO-only effect has no list to filter.
+func spellEffectHasSelectingLeg(eff wotlk.SpellEffect) bool {
+	if eff.Effect == 0 {
+		return false
+	}
+	if spellEffectTargetHasLeg(eff, isAreaEnemyTargetType) || spellEffectTargetHasLeg(eff, isFriendlyAreaTargetType) {
+		return true
+	}
+	if spellEffectTargetHasLeg(eff, isEntryAreaTargetType) || spellEffectTargetHasLeg(eff, isRefCenteredAreaTargetType) {
+		return true
+	}
+	return effectHasEnemyConeLeg(eff) || effectHasFriendlyConeLeg(eff)
+}
+
+// fireSpellTargetSelects dispatches the RegisterSpellEvent
+// OnObjectAreaTargetSelect hook for every selecting effect of one
+// creature cast, in effect order (C++ fires per effect inside
+// SelectImplicitAreaTargets), and returns the per-effect filtered
+// lists keyed by effect index — nil when no hook is registered for
+// the spell, so callers keep the flat lists untouched. The list each
+// handler sees is the effect's per-effect partition with the caster
+// removed unless the effect carries a friendly-area leg (enemy,
+// entry, ref-centered and cone lists never contain the caster in
+// C++; friendly-area lists do). Handlers run in registration order
+// on the same mutable list object per effect, so each sees the
+// previous handler's edits, like C++ hook chaining on the one list.
+func (s *Server) fireSpellTargetSelects(ctx context.Context, m *creatureMotion, spellID uint32, spellObj *scripting.Object, spell wotlk.Spell, hitTargets []uint64, part bossConePartition) map[int][]uint64 {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil || m == nil {
+		return nil
+	}
+	if !s.Features.Scripts.HasHook("spell:"+strconv.FormatUint(uint64(spellID), 10), scripting.SpellEventOnObjectAreaTargetSelect) {
+		return nil
+	}
+	resolve := func(guid uint64) any { return s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid) }
+	var filtered map[int][]uint64
+	for i := range spell.Effects {
+		eff := spell.Effects[i]
+		if !spellEffectHasSelectingLeg(eff) {
+			continue
+		}
+		list := bossConeEffectTargets(eff, hitTargets, part)
+		if !spellEffectTargetHasLeg(eff, isFriendlyAreaTargetType) && m.GUID != 0 {
+			// Fresh slice: the partition returns hitTargets itself for
+			// non-cone effects, so filtering in place would corrupt it.
+			kept := make([]uint64, 0, len(list))
+			for _, guid := range list {
+				if guid != m.GUID {
+					kept = append(kept, guid)
+				}
+			}
+			list = kept
+		}
+		targetList := &spellTargetList{guids: append([]uint64(nil), list...)}
+		_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnObjectAreaTargetSelect, scripting.SpellEventOnObjectAreaTargetSelect, spellObj, i, s.spellTargetListObject(targetList, resolve))
+		if filtered == nil {
+			filtered = make(map[int][]uint64)
+		}
+		filtered[i] = targetList.guids
+	}
+	return filtered
 }
