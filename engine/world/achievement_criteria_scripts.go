@@ -1282,6 +1282,8 @@ func (s *session) checkInstanceAchievementCriteria(criteriaID uint32) bool {
 		return checkNaxxramasCriteria(s, criteriaID)
 	case 631: // Icecrown Citadel
 		return checkIcecrownCitadelCriteria(s, criteriaID)
+	case 603: // Ulduar
+		return checkUlduarCriteria(s, criteriaID)
 	default:
 		return false
 	}
@@ -1471,6 +1473,75 @@ func checkNaxxramasCriteria(s *session, criteriaID uint32) bool {
 		if alive > 1 {
 			return false
 		}
+		return false
+	default:
+		return false
+	}
+}
+
+// checkUlduarCriteria mirrors
+// instance_ulduar_InstanceMapScript::
+// CheckAchievementCriteriaMeet (instance_ulduar.cpp:865-936).
+// The state lives in the Lua shared instanceData table:
+// illusion is written by the voice's EVENT_ILLUSION arm
+// (boss_yogg_saron.lua illusionTick, urand 0-2), keepersCount is
+// incremented at the observation-ring keeper gossip summon
+// (boss_yogg_saron.lua), driveMeCrazyEligible is set by Yogg's
+// Reset (true) and the sanity OnRemove (false, boss_yogg_saron.lua),
+// maxArmorItemLevel / maxWeaponItemLevel are banked by the Algalon
+// item-level scan (boss_algalon_the_observer.lua). Absent fields
+// read as the C++ member defaults (illusion 0, keepersCount 0,
+// driveMeCrazyEligible true, item levels 0, instance :173-187).
+// Criteria IDs are the UlduarAchievementCriteriaIds enum
+// (ulduar.h:347-398); the 10/25-player split is encoded in the
+// criteria ID itself, so no raid-size check is needed here.
+func checkUlduarCriteria(s *session, criteriaID uint32) bool {
+	rt := s.server.Features.Scripts
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	num := func(key string, def float64) float64 {
+		if v, ok := rt.InstanceDataNumber(mapID, instanceID, key); ok {
+			return v
+		}
+		return def
+	}
+	switch criteriaID {
+	case 10678: // HERALD_OF_TITANS
+		// C++ :869-870: _maxArmorItemLevel <= 226 &&
+		// _maxWeaponItemLevel <= 232 (ulduar.h:487-488).
+		return num("maxArmorItemLevel", 0) <= 226 && num("maxWeaponItemLevel", 0) <= 232
+	case 10321, 10324: // WAITS_DREAMING_STORMWIND 25/10
+		// C++ :871-873: illusion == STORMWIND_ILLUSION (2).
+		return num("illusion", 0) == 2
+	case 10322, 10325: // WAITS_DREAMING_CHAMBER 25/10
+		// C++ :874-876: illusion == CHAMBER_ILLUSION (0).
+		return num("illusion", 0) == 0
+	case 10323, 10326: // WAITS_DREAMING_ICECROWN 25/10
+		// C++ :877-879: illusion == ICECROWN_ILLUSION (1).
+		return num("illusion", 0) == 1
+	case 10185, 10296: // DRIVE_ME_CRAZY 10/25
+		// C++ :880-882: IsDriveMeCrazyEligible.
+		return num("driveMeCrazyEligible", 1) != 0
+	case 10410, 10414: // THREE_LIGHTS_IN_THE_DARKNESS 10/25
+		// C++ :883-885: keepersCount <= 3.
+		return num("keepersCount", 0) <= 3
+	case 10388, 10415: // TWO_LIGHTS_IN_THE_DARKNESS 10/25
+		// C++ :886-888: keepersCount <= 2.
+		return num("keepersCount", 0) <= 2
+	case 10409, 10416: // ONE_LIGHT_IN_THE_DARKNESS 10/25
+		// C++ :889-891: keepersCount <= 1.
+		return num("keepersCount", 0) <= 1
+	case 10412, 10417, 10279: // ALONE_IN_THE_DARKNESS 10/25, REALM_FIRST_DEATHS_DEMISE
+		// C++ :892-895: keepersCount == 0.
+		return num("keepersCount", 0) == 0
+	case 10042, 10342, 10340, 10341, 10598, 10348, 10351, 10439, 10403, 10582, 10347, 10349, 10350, // Conqueror of Ulduar 10-man
+		10352, 10355, 10353, 10354, 10599, 10357, 10363, 10719, 10404, 10583, 10361, 10362, 10364: // Conqueror of Ulduar 25-man
+		// C++ :896-933: (_CoUAchivePlayerDeathMask & (1 << boss))
+		// == 0 — the mask is set in OnUnitDeath when a player
+		// dies while a boss is IN_PROGRESS (instance :528-540).
+		// No Go bridge exists for instance OnUnitDeath (the same
+		// gap as Naxxramas playerDied / ToC
+		// TRIBUTE_TO_IMMORTALITY), so these stay fail-closed
+		// until one lands.
 		return false
 	default:
 		return false

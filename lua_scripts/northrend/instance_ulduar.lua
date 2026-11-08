@@ -19,6 +19,16 @@
 -- (boss_yogg_saron.cpp:599-600/:1104/:1115), initialized to 0,
 -- the C++ member default (instance_ulduar.cpp GetData returns
 -- the `illusion` member, 0 before the first illusion).
+-- keepersCount — the C++ keepersCount member (instance_ulduar.cpp
+-- :180/:357-377, DATA_KEEPERS_COUNT), incremented at the
+-- observation-ring keeper gossip summon (boss_yogg_saron.lua),
+-- read by the Go lights-in-the-darkness gates; driveMeCrazy —
+-- DATA_DRIVE_ME_CRAZY (Yogg Reset true, sanity OnRemove false,
+-- boss_yogg_saron.lua), read by the Go DRIVE_ME_CRAZY gate;
+-- maxArmorItemLevel / maxWeaponItemLevel — the Algalon
+-- item-level scan (boss_algalon_the_observer.lua), read by the Go
+-- HERALD_OF_TITANS gate. All are read by checkUlduarCriteria
+-- (engine/world/achievement_criteria_scripts.go, tick 436).
 -- The mimiron keeper object is NOT bound here: YS keepers are
 -- temp summons, which bypass the ON_CREATURE_CREATE funnel
 -- (instance_hooks.go) — the gossip summon latches it instead
@@ -48,10 +58,13 @@
 --   DONE-while-inside, OnPlayerEnter for DONE-before-entry /
 --   reload) and stops once all five legs have fired.
 -- DOCUMENTED-ONLY: door data / boundaries (no door/boundary
--- machine), SetData dispatch (DATA_ILLUSION is the shared
--- instanceData.illusion slot above; the rest rides unbridged
+-- machine), the remaining SetData dispatch (DATA_ILLUSION /
+-- DATA_DRIVE_ME_CRAZY / DATA_KEEPERS_COUNT / the Herald scan are
+-- live via the shared table slots above; the rest rides unbridged
 -- instance hooks), the Algalon summon timer + _algalonTimer
--- world states, OnUnitDeath, SaveToDB.
+-- world states, OnUnitDeath (the C_O_U death mask stays
+-- fail-closed in checkUlduarCriteria until an OnUnitDeath
+-- bridge lands), SaveToDB.
 local MAP_ULDUAR = 603
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 local INSTANCE_EVENT_ON_UPDATE = 3

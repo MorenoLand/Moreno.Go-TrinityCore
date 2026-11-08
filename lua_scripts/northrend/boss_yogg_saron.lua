@@ -231,6 +231,7 @@ local SPELL_KNOCK_AWAY = 64022
 local SPELL_IN_THE_MAWS_OF_THE_OLD_GOD = 64184
 local SPELL_SANITY = 63050
 local SPELL_INSANE = 63120
+local SPELL_BRAIN_LINK = 63802 -- boss_yogg_saron.cpp:139
 
 local REACT_PASSIVE = 0 -- UnitDefines.h:340
 
@@ -927,13 +928,19 @@ local SPELL_SPEED_OF_INVENTION = 62671
 -- aura's max stack). No PreventDefaultAction in C++, so the handler
 -- returns nothing. PORTED tick 189 via RegisterAuraEvent (63050,
 -- AuraEventOnPeriodic = 1). The sibling OnRemove (:2873-2880)
--- stays out: instance SetData(DATA_DRIVE_ME_CRAZY) + the
--- AURA_REMOVE_BY_ENEMY_SPELL remove-mode gate have no bridge, and
--- there is no AuraEventOnRemove (runtime.go defines only
--- AuraEventOnPeriodic). The sibling SpellScript ModSanityStacks
+-- PORTED 2026-11-08 (tick 436) via RegisterAuraEvent (63050,
+-- AuraEventOnRemove = 3): ENEMY_SPELL-gated (aura:GetRemoveMode,
+-- SpellAuraDefines.h:66) instance DATA_DRIVE_ME_CRAZY false +
+-- RemoveAurasDueToSpell BRAIN_LINK + caster casts INSANE 63120
+-- triggered, C++ order. The stale "no OnRemove / no SetData
+-- bridge" claim is retired: ev3 + GetRemoveMode + the shared
+-- instanceData table (driveMeCrazy slot) are all live. The sibling
+-- SpellScript ModSanityStacks
 -- (BeforeCast, SPELLVALUE_AURA_STACK 100) stays out: no spell
 -- BeforeCast bridge.
 local SPELL_LOW_SANITY_SCREEN_EFFECT = 63752 -- boss_yogg_saron.cpp:277
+
+local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:66
 
 local function sanityTick(event, aura, target)
     if target:HasAura(SPELL_SANITY_WELL) then
@@ -945,6 +952,23 @@ local function sanityTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SANITY, 1, sanityTick)
+
+local function sanityRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_ENEMY_SPELL then
+        return
+    end
+    local data = yoggInstanceData(target)
+    if data then
+        data.driveMeCrazy = 0
+    end
+    target:RemoveAura(SPELL_BRAIN_LINK)
+    local caster = aura:GetCaster()
+    if caster then
+        caster:CastSpell(target, SPELL_INSANE, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SANITY, 3, sanityRemove)
 
 -- C++ boss_voice_of_yogg_saronAI::JustEngagedWith (:518-529):
 -- DoCast(me, SPELL_SANITY_PERIODIC 63786) (2-arg self, non-triggered,
@@ -1025,8 +1049,11 @@ end
 -- _Reset + SetPhase(PHASE_ONE) + instance SetData(DATA_DRIVE_ME_CRAZY) +
 -- DoStopTimedAchievement + Initialize (counters only) +
 -- SummonCreatureGroup(CREATURE_GROUP_CLOUDS 0) + distance-sort +
--- alternating DoAction(0/1) (clockwise) on each cloud. The instance legs
--- have no bridge; the sort + DoAction loop stays out — the cloud DoAction
+-- alternating DoAction(0/1) (clockwise) on each cloud. The
+-- SetData(DATA_DRIVE_ME_CRAZY, true) leg is PORTED 2026-11-08
+-- (tick 436) via the shared instanceData table (driveMeCrazy slot);
+-- DoStopTimedAchievement stays out (no bridge). The sort +
+-- DoAction loop stays out — the cloud DoAction
 -- leg is MoveCirclePath (no bridge). The group spawn itself is the
 -- list-consuming site (creature:SummonCreatureGroup bridged 2026-11-05,
 -- tick 238); the clouds' own Reset visual cast rides ominousCloudReset
@@ -1038,6 +1065,10 @@ local function voiceReset(event, creature)
     voicePhase[creature:GetGUID()] = 1 -- C++ Reset: SetPhase(PHASE_ONE) (:493)
     voiceShattered[creature:GetGUID()] = nil
     voiceYogg[creature:GetGUID()] = nil
+    local data = yoggInstanceData(creature)
+    if data then
+        data.driveMeCrazy = 1 -- C++ Reset: instance->SetData(DATA_DRIVE_ME_CRAZY, true) (:495)
+    end
     creature:SummonCreatureGroup(0) -- CREATURE_GROUP_CLOUDS
 end
 
@@ -1544,13 +1575,30 @@ local function observationKeeperGossipSelect(event, player, creature, sender, ac
     if summoned then
         local data = yoggInstanceData(creature)
         if data then
+            -- C++ keepersCount (instance_ulduar.cpp:357-377,
+            -- OnCreatureCreate per YS keeper, DATA_KEEPERS_COUNT):
+            -- the gossip summon is the only spawn path in Go, so
+            -- count each slot's first summon; the nil guard keeps
+            -- a re-gossip from double-counting.
             if entry == ENTRY_OBSERVATION_RING_KEEPER_FREYA then
+                if data.freya == nil then
+                    data.keepersCount = (data.keepersCount or 0) + 1
+                end
                 data.freya = summoned
             elseif entry == ENTRY_OBSERVATION_RING_KEEPER_HODIR then
+                if data.hodir == nil then
+                    data.keepersCount = (data.keepersCount or 0) + 1
+                end
                 data.hodir = summoned
             elseif entry == ENTRY_OBSERVATION_RING_KEEPER_THORIM then
+                if data.thorim == nil then
+                    data.keepersCount = (data.keepersCount or 0) + 1
+                end
                 data.thorim = summoned
             elseif entry == ENTRY_OBSERVATION_RING_KEEPER_MIMIRON then
+                if data.mimiron == nil then
+                    data.keepersCount = (data.keepersCount or 0) + 1
+                end
                 data.mimiron = summoned
             end
         end

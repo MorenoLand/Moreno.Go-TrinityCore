@@ -239,6 +239,67 @@ end
 
 local timers = {}
 
+-- C++ instance SetBossState(BOSS_ALGALON) item-level scan
+-- (instance_ulduar.cpp:694-730): IN_PROGRESS scans every player in
+-- the instance over EQUIPMENT_SLOT_START..END (0..18), skipping
+-- BODY (3) and TABARD (18); weapon slots (MAINHAND 15..RANGED 17)
+-- feed _maxWeaponItemLevel, the rest _maxArmorItemLevel. DONE
+-- rechecks weapons only (15..17). The maxes never reset (only
+-- Initialize clears them), so the Lua twin takes max(existing,
+-- scanned) into the shared instanceData table, read by the Go
+-- HERALD_OF_TITANS gate (checkUlduarCriteria). Slot constants are
+-- Player.h:540-556. DORMANT without a characters DB: player
+-- GetEquippedItemBySlot reads nil (lua_player.go) and the maxes
+-- stay 0, which passes the gate exactly as the C++ ctor defaults
+-- do before any scan.
+local EQUIPMENT_SLOT_BODY = 3
+local EQUIPMENT_SLOT_MAINHAND = 15
+local EQUIPMENT_SLOT_RANGED = 17
+local EQUIPMENT_SLOT_TABARD = 18
+local EQUIPMENT_SLOT_END = 19
+
+local function scanHeraldItemLevels(creature, weaponsOnly)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if not data then
+        return
+    end
+    local players = mapObj:GetPlayers()
+    if not players then
+        return
+    end
+    local maxArmor = data.maxArmorItemLevel or 0
+    local maxWeapon = data.maxWeaponItemLevel or 0
+    local firstSlot, lastSlot = 0, EQUIPMENT_SLOT_END - 1
+    if weaponsOnly then
+        firstSlot, lastSlot = EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_RANGED
+    end
+    for _, player in ipairs(players) do
+        for slot = firstSlot, lastSlot do
+            if slot ~= EQUIPMENT_SLOT_BODY and slot ~= EQUIPMENT_SLOT_TABARD then
+                local item = player:GetEquippedItemBySlot(slot)
+                if item then
+                    local level = item:GetItemLevel()
+                    if level then
+                        if slot >= EQUIPMENT_SLOT_MAINHAND and slot <= EQUIPMENT_SLOT_RANGED then
+                            if level > maxWeapon then
+                                maxWeapon = level
+                            end
+                        elseif level > maxArmor then
+                            maxArmor = level
+                        end
+                    end
+                end
+            end
+        end
+    end
+    data.maxArmorItemLevel = maxArmor
+    data.maxWeaponItemLevel = maxWeapon
+end
+
 -- Forward declarations for the outro chain (tharon_ja/gal_darah
 -- idiom: plain assignments below, never `local function` re-declares).
 local outroStart, outro1, outro2, outro3, outro4, outro5, outro6, outro7, outro8, outro9, outro10, outro11
@@ -367,6 +428,7 @@ end
 -- EVENT_OUTRO_START (:635): SetBossState(BOSS_ALGALON 13, DONE).
 outroStart = function(creature, guid)
     creature:SetBossState(BOSS_ALGALON, 3)
+    scanHeraldItemLevels(creature, true) -- C++ DONE weapons recheck (instance_ulduar.cpp:700-709)
 end
 
 -- EVENT_OUTRO_1 (:637-642): RemoveAllAuras, ResetThreatList (no
@@ -784,6 +846,7 @@ local function algalonTimersStart(event, creature)
             creature:Talk(SAY_ALGALON_AGGRO)
             creature:PlayMusic(ENGAGE_MUSIC_ID)
             creature:SetBossState(BOSS_ALGALON, 1)
+            scanHeraldItemLevels(creature, false) -- C++ IN_PROGRESS full scan (instance_ulduar.cpp:711-730)
         end)
     else
         -- C++ JustEngagedWith later-pull leg (:370-376):
@@ -794,6 +857,7 @@ local function algalonTimersStart(event, creature)
         creature:Talk(SAY_ALGALON_AGGRO)
         creature:PlayMusic(ENGAGE_MUSIC_ID)
         creature:SetBossState(BOSS_ALGALON, 1)
+        scanHeraldItemLevels(creature, false) -- C++ IN_PROGRESS full scan (instance_ulduar.cpp:711-730)
         creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1, later-pull branch only (boss_algalon_the_observer.cpp:374; ScriptedCreature.cpp:540)
         creature:DoZoneInCombat()
         introDelay = INTRO_DELAY
