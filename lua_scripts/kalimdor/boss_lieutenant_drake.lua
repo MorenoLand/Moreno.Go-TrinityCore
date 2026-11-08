@@ -63,15 +63,22 @@
 --   behavior to port).
 -- - SAY_ENTER 0 is declared in the C++ enum but never Talked in C++
 --   (the archimonde SAY_SOUL_CHARGE case) — no Talk arm exists to port.
--- - go_barrel_old_hillsbrad (GameObjectScript, registered by the same
---   AddSC): OnGossipHello reads instance->GetData(TYPE_BARREL_DIVERSION
---   = 1) and calls instance->SetData(TYPE_BARREL_DIVERSION,
---   IN_PROGRESS) unless DONE, always returning false (gossip not
---   consumed) — no instance-data bridge (stale 'no gameobject-gossip
---   bridge' retracted — RegisterGameObjectGossipEvent bridged), so
---   the script is documented here, not registered (the five-gossip ->
---   DRAKE summon at instance_old_hillsbrad.cpp:149 is quest-10283
---   territory; SD%Complete: 70 flags exactly this as missing).
+-- Ported: go_barrel_old_hillsbrad (GameObjectScript, registered by the same
+-- AddSC): OnGossipHello reads instance->GetData(TYPE_BARREL_DIVERSION
+-- = 1) and calls instance->SetData(TYPE_BARREL_DIVERSION, IN_PROGRESS)
+-- unless DONE, always returning false (gossip not consumed). The
+-- instance SetData leg (instance_old_hillsbrad.cpp:133-157) is
+-- implemented in the handler itself against the shared instanceData
+-- table (tick-395 writer+reader-both-Lua precedent): count < 5 ->
+-- count++, go:UpdateWorldState(WORLD_STATE_OH 2436, count) (new GO
+-- bridge, lua_objects.go), barrelDiversion = IN_PROGRESS; at 5 ->
+-- KilledMonsterCredit(LODGE_QUEST_TRIGGER 20155) to every player in
+-- the map + player:SummonCreature(DRAKE 17848, 2128.43, 71.01, 64.42,
+-- 1.74, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN 0, 30min) + barrelDiversion
+-- = DONE, in C++ order. GO entry 182589 (Wowhead WotLK
+-- object=182589/barrel — sole plain "Barrel" object; Wowhead links it
+-- to neither OH nor quest 10283, "location unknown", so the entry
+-- carries that caveat).
 -- - The SD%Complete: 70 comment's missing proper post-spawn patrol code
 --   needs the movement bridge above.
 
@@ -204,3 +211,56 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ go_barrel_old_hillsbradAI::OnGossipHello (boss_leutenant_drake.cpp
+-- :44-57) + instance SetData TYPE_BARREL_DIVERSION
+-- (instance_old_hillsbrad.cpp:133-157): DONE -> return false with no
+-- SetData; else SetData(IN_PROGRESS) — the instance leg counts (cap 5),
+-- updates world state 2436, and at 5 grants the 20155 kill credit to
+-- every player in the map, summons Drake 17848, and flips DONE, in
+-- C++ order. The shared instanceData table carries barrelCount /
+-- barrelDiversion (the Erozyon + Thrall gossip gates in old_hillsbrad.lua
+-- read barrelDiversion).
+local GO_BARREL = 182589
+local WORLD_STATE_OH = 2436
+local LODGE_QUEST_TRIGGER = 20155
+local STATE_NOT_STARTED = 0
+local STATE_IN_PROGRESS = 1
+local STATE_DONE = 3
+local DRAKE_SUMMON_X = 2128.43
+local DRAKE_SUMMON_Y = 71.01
+local DRAKE_SUMMON_Z = 64.42
+local DRAKE_SUMMON_O = 1.74
+
+local function onBarrelGossip(event, player, go)
+    local mapObj = go:GetMap()
+    local data = mapObj and mapObj:GetInstanceData()
+    if not data then
+        return false
+    end
+    if (data.barrelDiversion or STATE_NOT_STARTED) == STATE_DONE then
+        return false
+    end
+    local count = data.barrelCount or 0
+    if count >= 5 then
+        return false
+    end
+    count = count + 1
+    data.barrelCount = count
+    data.barrelDiversion = STATE_IN_PROGRESS
+    go:UpdateWorldState(WORLD_STATE_OH, count)
+    if count == 5 then
+        local players = mapObj:GetPlayers()
+        if players then
+            for _, p in ipairs(players) do
+                p:KilledMonsterCredit(LODGE_QUEST_TRIGGER)
+            end
+        end
+        player:SummonCreature(ENTRY, DRAKE_SUMMON_X, DRAKE_SUMMON_Y,
+            DRAKE_SUMMON_Z, DRAKE_SUMMON_O, 0, 1800000)
+        data.barrelDiversion = STATE_DONE
+    end
+    return false
+end
+
+RegisterGameObjectGossipEvent(GO_BARREL, 1, onBarrelGossip)

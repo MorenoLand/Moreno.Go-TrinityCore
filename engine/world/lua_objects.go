@@ -3990,6 +3990,25 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{scripting.NewMapObject(state.Map, state.InstanceID, srv.mapLive(state.Map, state.InstanceID))}, nil
 	}
+	// UpdateWorldState(fieldId, value) bridges InstanceScript::DoUpdateWorldState
+	// (InstanceScript.cpp:555-567) for gameobjects, the twin of the
+	// creature-surface method (lua_creature_events.go): it pushes
+	// SMSG_UPDATE_WORLD_STATE to every player in the gameobject's
+	// instance. Backs the Old Hillsbrad barrel counter
+	// (instance_old_hillsbrad.cpp:140), whose sender is the go_barrel
+	// GO gossip hook — no creature is in scope there.
+	methods["UpdateWorldState"] = func(_ context.Context, args []any) ([]any, error) {
+		fieldID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		value, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		srv.updateInstanceWorldState(state.Map, state.InstanceID, fieldID, value)
+		return nil, nil
+	}
 	// IsHolidayActive is GameEventMgr::IsHolidayActive
 	// (GameEventMgr.cpp:1847): true when any currently active game event
 	// carries this holiday id, false for HOLIDAY_NONE. The Go twin reads

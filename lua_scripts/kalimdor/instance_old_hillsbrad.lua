@@ -30,12 +30,15 @@
 --   the ruby-sanctum header settles the same point). No fire site exists
 --   for any SetData arm, so none can be re-expressed here and no
 --   ON_UPDATE poll is added (the instance_icecrown_citadel.lua pattern):
---   - TYPE_BARREL_DIVERSION (:133-157): the 5-barrel counter +
---     DoUpdateWorldState(WORLD_STATE_OH 2436) + UpdateQuestCredit
---     (KilledMonsterCredit(LODGE_QUEST_TRIGGER 20155) to every player
---     in map) + SummonCreature(DRAKE_ENTRY 17848) at count 5; the
---     sender is go_barrel_old_hillsbrad's OnGossipHello, which would
---     itself need the same missing bridge.
+--   - TYPE_BARREL_DIVERSION (:133-157): PORTED 2026-11-07 — the
+--     5-barrel counter + DoUpdateWorldState(WORLD_STATE_OH 2436) +
+--     UpdateQuestCredit (KilledMonsterCredit(LODGE_QUEST_TRIGGER 20155)
+--     to every player in map) + SummonCreature(DRAKE_ENTRY 17848) at
+--     count 5 lives in the go_barrel GO gossip handler
+--     (boss_lieutenant_drake.lua, GO entry 182589), against the shared
+--     instanceData table (barrelCount / barrelDiversion) — the
+--     tick-395 writer+reader-both-Lua precedent retires the "no
+--     instance SetData bridge" stay-out for this leg.
 --   - TYPE_THRALL_EVENT (:158-184): the FAIL leg resets all five
 --     sub-events to NOT_STARTED (fail-count-capped at 20, then FAIL);
 --     the senders are Thrall's JustDied / gossip legs in
@@ -43,13 +46,14 @@
 --   - TYPE_THRALL_PART1..4 (:185-205): plain encounter-array writes
 --     from the Thrall escort WaypointReached / gossip machine.
 -- - GetData (:207-221): no instance GetData bridge; the Lua mirror is
---   the instanceData binds above (GUIDs only — the TYPE_* encounter
---   slots have no writers in Go, see SetData above). The readers are
+--   the instanceData binds above (GUIDs only, plus the barrelDiversion /
+--   barrelCount slots written by the go_barrel handler — see SetData
+--   above). The readers are
 --   the boss files (boss_captain_skarloc.cpp:108,
 --   boss_epoch_hunter.cpp:100, boss_leutenant_drake.cpp:50) and the
 --   Thrall/Taretha gossip gates in old_hillsbrad.cpp — all documented
 --   in their own files, not re-litigated here (GetData/SetData consumer
---   legs are a CLOSED axis).
+--   legs are a CLOSED axis except the barrel leg, ported 2026-11-07).
 -- - The GetGuidData consumers in old_hillsbrad.cpp are all inside the
 --   unported escort/gossip machine (Thrall WaypointReached :332/:354
 --   Taretha Talk; Taretha gossip action 1002 :614/:617 Epoch-empty

@@ -145,9 +145,11 @@
 -- — the "no instance GetData/SetData bridge" claims in the paragraphs
 -- above are retracted for the slots this file now writes/reads via the
 -- shared instanceData table. Still out: Start/StartWP escort legs,
--- the WaypointReached machine, the barrel counter itself (go_barrel GO
--- entry is DB-side), and the boss-file GetData readers (skarloc /
+-- the WaypointReached machine, and the boss-file GetData readers (skarloc /
 -- epoch-hunter / drake), which still read the C++ encounter array.
+-- The barrel counter landed 2026-11-07 (go_barrel GO gossip handler,
+-- boss_lieutenant_drake.lua, GO entry 182589) — barrelDiversion /
+-- barrelCount are now live slots.
 
 local ENTRY = 17876
 
@@ -357,9 +359,9 @@ local function erozionGossipHello(event, player, creature)
     -- (instanceData.barrelDiversion, nil reads as NOT_STARTED) and the
     -- item gate reads player:GetItemCount (lua_player.go:2146) — the
     -- header's "no bridge" note is retracted 2026-11-07. The barrel
-    -- counter itself still has no writer (go_barrel GO entry is DB-side,
-    -- not in the C++ tree), so the gate reads NOT_STARTED until that port
-    -- lands.
+    -- counter now has its writer (go_barrel GO gossip handler,
+    -- boss_lieutenant_drake.lua, GO entry 182589) — the gate reads the
+    -- live barrelDiversion slot.
     local data = instanceDataOf(creature)
     if (not data or (data.barrelDiversion or STATE_NOT_STARTED) ~= STATE_DONE)
         and player:GetItemCount(ITEM_ENTRY_BOMBS) == 0 then

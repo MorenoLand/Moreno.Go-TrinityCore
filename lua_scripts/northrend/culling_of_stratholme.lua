@@ -62,20 +62,29 @@
 -- MovementInform spline-chain events (InitializeAI ->
 -- MoveAlongSplineChain — no movement bridge). The AI is not registered
 -- in boss_ai.go; stays out as unregistered AI.
--- Documented-only (quest-giver axis): npc_chromie_middle
--- (culling_of_stratholme.cpp:474-545 — no entry constant anywhere in the
--- C++ tree; culling_of_stratholme.h names only NPC_CHROMIE = 26527, "we
--- don't need the other two for anything" — DB ScriptName binding only,
--- unverifiable, wounded-skirmisher precedent). OnGossipHello (:508-514):
--- the me->IsQuestGiver() / player->PrepareQuestMenu(me->GetGUID()) pair
--- (:509-510) is inseparable and PrepareQuestMenu has no bridge, so the
--- query result gates an unbridgeable call; the rest of the menu rides
--- instance->GetData(DATA_INSTANCE_PROGRESS) == CRATES_DONE (no instance
--- bridge). OnGossipSelect STEP1/2/3 menu-nav ends in AdvanceDungeon ->
--- instance->SetGuidData(DATA_UTHER_START, ...) (no instance bridge); the
--- MoveInLineOfSight whisper machine rides the same instance
--- GetData/quest-status legs. The AI is not registered in boss_ai.go;
--- stays out as unregistered AI.
+-- Ported (quest-giver axis): npc_chromie_middle (entry 27915, Wowhead
+-- WotLK npc=27915/chromie — Ends "Dispelling Illusions", Starts "A Royal
+-- Escort", whisper "Good work with the crates! ..."; culling_of_stratholme.cpp
+-- :455-549; no entry constant anywhere in the C++ tree — culling_of_stratholme.h
+-- names only NPC_CHROMIE = 26527, "we don't need the other two for anything" —
+-- DB ScriptName binding only). JustAppeared (:468-472) seeds the 18s
+-- WhisperDelay one-shot when progress == CRATES_DONE; the UpdateAI fire leg
+-- (:474-487) re-checks progress + Whispered-empty and Talks
+-- WHISPER_CRATES_DONE 0. OnGossipHello (:508-514): quest menu first
+-- (player:GossipAddQuests twin) + SendGossipMenu 12992; the STEP1 item add
+-- stays out (its text lives only in DB gossip_menu_option row 9610/0 —
+-- Wowhead lists no gossip text for any CoS Chromie). OnGossipSelect
+-- STEP1/2/3 (:516-543): the menu sends 12993/12994/12995 are ported and
+-- STEP3 runs AdvanceDungeon -> instanceData.utherStart (consumed by the
+-- instance pump, CRATES_DONE-guarded); the STEP1/2/3 item adds stay out
+-- (same DB-text reason), so the chain is dormant until the texts are
+-- sourced. MoveInLineOfSight (:489-506) stays out: ev27 fires only from
+-- the aggro-engage branch (2026-10-24 note) and Chromie never engages,
+-- so the WHISPER_COME_TALK 15s-per-player whisper has no fire site.
+-- SPAWNGRP_CHROMIE_MID activation (instance :662, state >= CRATES_DONE)
+-- has no bridge (instance file line 49); she materializes on the
+-- engine-default static spawn, and the JustAppeared arm fires whenever
+-- she does, with the CRATES_DONE guard C++-exact.
 
 local ENTRY_CHROMIE_START = 26527
 
@@ -255,6 +264,91 @@ end
 RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 1, chromieGossipHello)
 RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
 RegisterCreatureEvent(ENTRY_CHROMIE_START, 31, chromieQuestAccept)
+
+local ENTRY_CHROMIE_MIDDLE = 27915
+local CRATES_DONE = 0x00004
+local GOSSIP_TEXT_STEP1 = 12992
+local GOSSIP_TEXT_STEP2 = 12993
+local GOSSIP_TEXT_STEP3 = 12994
+local GOSSIP_TEXT_STEP4 = 12995
+
+-- C++ npc_chromie_middleAI::JustAppeared + UpdateAI WhisperDelay
+-- (culling_of_stratholme.cpp:468-487): at spawn, when progress ==
+-- CRATES_DONE, the 18s one-shot fires Talk(WHISPER_CRATES_DONE 0)
+-- iff progress is still CRATES_DONE and no player has been whispered
+-- yet (Whispered.empty() — the MoveInLineOfSight leg that fills the map
+-- stays out, so the check is vacuous in practice but kept C++-exact).
+local chromieMiddleWhispered = {}
+local chromieMiddleTimers = {}
+
+local function chromieMiddleCancelTimers(guid)
+    local id = chromieMiddleTimers[guid]
+    if id then
+        RemoveEventById(id)
+        chromieMiddleTimers[guid] = nil
+    end
+    chromieMiddleWhispered[guid] = nil
+end
+
+local function onChromieMiddleSpawn(event, creature)
+    local guid = creature:GetGUID()
+    chromieMiddleCancelTimers(guid)
+    chromieMiddleWhispered[guid] = {}
+    local data = instanceDataOf(creature)
+    if data and (data.progress or JUST_STARTED) == CRATES_DONE then
+        chromieMiddleTimers[guid] = CreateLuaEvent(function()
+            chromieMiddleTimers[guid] = nil
+            local live = instanceDataOf(creature)
+            local whispered = chromieMiddleWhispered[guid]
+            if live and (live.progress or JUST_STARTED) == CRATES_DONE
+                and (whispered == nil or next(whispered) == nil) then
+                creature:Talk(0)
+            end
+        end, 18000, 1)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 5, onChromieMiddleSpawn)
+RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 4, function(event, creature)
+    chromieMiddleCancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 23, function(event, creature)
+    chromieMiddleCancelTimers(creature:GetGUID())
+end)
+
+-- C++ OnGossipHello (culling_of_stratholme.cpp:508-514): quest menu
+-- first when the creature is a quest giver, the STEP1 item only when
+-- progress == CRATES_DONE (item add stays out — DB text), then
+-- SendGossipMenuFor 12992.
+local function chromieMiddleGossipHello(event, player, creature)
+    if creature:IsQuestGiver() then
+        player:GossipAddQuests(creature)
+    end
+    player:GossipSendMenu(GOSSIP_TEXT_STEP1, creature)
+end
+
+-- C++ OnGossipSelect (culling_of_stratholme.cpp:516-543): STEP1 ->
+-- menu 12993, STEP2 -> menu 12994, STEP3 -> menu 12995 + AdvanceDungeon
+-- (instanceData.utherStart, consumed by the instance pump). The
+-- STEP1/2/3 item adds stay out (DB gossip_menu_option texts); the
+-- menu sends + the AdvanceDungeon flag are the live halves.
+local function chromieMiddleGossipSelect(event, player, creature, sender, action)
+    if action == GOSSIP_ACTION_INFO_DEF then
+        player:GossipSendMenu(GOSSIP_TEXT_STEP2, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 1 then
+        player:GossipSendMenu(GOSSIP_TEXT_STEP3, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + 2 then
+        player:GossipSendMenu(GOSSIP_TEXT_STEP4, creature)
+        local data = instanceDataOf(creature)
+        if data and (data.progress or JUST_STARTED) == CRATES_DONE then
+            data.utherStart = true
+        end
+    end
+    return false
+end
+
+RegisterCreatureGossipEvent(ENTRY_CHROMIE_MIDDLE, 1, chromieMiddleGossipHello)
+RegisterCreatureGossipEvent(ENTRY_CHROMIE_MIDDLE, 2, chromieMiddleGossipSelect)
 
 -- Ported (crate fluff event #2): npc_bartleby_battson (entry 27907,
 -- culling_of_stratholme.cpp:852-945). InitializeAI schedules the idle
