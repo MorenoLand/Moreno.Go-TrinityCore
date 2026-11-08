@@ -20,14 +20,32 @@
 -- counts character_inventory incl. bank slots, while C++
 -- HasItemCount defaults inBankAlso=false — a disruptor sitting only
 -- in the bank suppresses the grant in Lua but not in C++.
--- Documented-only: the instance-gated OnGossipHello menu (skip /
--- explain arms ride instance->GetStableStateFor / AdvanceDungeon /
--- SetGuidData — no instance bridge), the EXPLAIN / SKIP /
--- EXPLAIN_1 menu-nav select arms (their option texts live only in
+-- Ported: OnGossipHello's GM arm (:301-345) + state-gated menu send
+-- (2026-11-07): quest menu first when the creature is a quest giver
+-- (player:GossipAddQuests twin); the "[GM] Access instance control
+-- panel" item only when the player IsGM (lua_player.go:1215 — the
+-- CanBeGameMaster twin); progress < PURGE_STARTING sends
+-- GOSSIP_TEXT_INITIAL 12939, else GOSSIP_TEXT_TELEPORT 13470 (the
+-- EXPLAIN / SKIP / TELEPORT items stay out: their texts live only in
 -- DB gossip_menu_option rows — C++ carries no string constants for
--- them, unlike the kalecgos GOSSIP_ITEM_* precedent), and the GM
--- instance-control arms (SetData / SetGuidData — no instance
--- bridge).
+-- them, unlike the kalecgos GOSSIP_ITEM_* precedent — and the SKIP
+-- achievement scan has no live half without the item it gates).
+-- Ported: OnGossipSelect's GM arms (:378-408) — OPEN_GM_MENU builds
+-- the control panel ("Teleport all players to Arthas" + one item per
+-- progress state, stable -> "Set instance progress to 0x%05X", else
+-- "Force state to 0x%05X (UNSTABLE)", sent on GOSSIP_TEXT_SKIP_1
+-- 15704); GM_INITIAL (1007) closes + GM-only SetGuidData
+-- (DATA_GM_RECALL, player GUID); the default arm closes + GM-only
+-- SetData (DATA_GM_OVERRIDE, action - INFO_DEF - GM_INITIAL), guarded
+-- to exactly the actions the GM menu can produce (1007 + a
+-- power-of-two state) so quest-menu clicks never land here. Both
+-- writers land as one-shot instanceData flags consumed by the instance
+-- pump (instance_culling_of_stratholme.lua onUpdateTick).
+-- Ported: OnQuestAccept (:410-413) — accepting quest 13149
+-- (Dispelling Illusions) runs AdvanceDungeon (cratesStart flag,
+-- same JUST_STARTED guard, consumed by the instance pump).
+-- Documented-only: the EXPLAIN / SKIP / EXPLAIN_1 menu-nav select
+-- arms (their option texts live only in DB gossip_menu_option rows).
 -- Documented-only (nearest-creature axis): npc_hearthsinger_forresten_cot
 -- (entry 30551 — inn cinematic, culling_of_stratholme.cpp:118/153/166):
 -- FindNearestCreature(talkerEntry, 80.0f, true) (:153) and
@@ -62,12 +80,89 @@
 local ENTRY_CHROMIE_START = 26527
 
 local GOSSIP_ACTION_INFO_DEF = 1000
+local GOSSIP_SENDER_MAIN = 1
+local GOSSIP_ICON_INTERACT_1 = 4
 local GOSSIP_OFFSET_TELEPORT = 2
 local GOSSIP_OFFSET_EXPLAIN_2 = 4
 local GOSSIP_OFFSET_SKIP_1 = 5
+local GOSSIP_OFFSET_OPEN_GM_MENU = 6
+local GOSSIP_OFFSET_GM_INITIAL = 7
+local GOSSIP_TEXT_INITIAL = 12939
+local GOSSIP_TEXT_TELEPORT = 13470
 local GOSSIP_TEXT_EXPLAIN_3 = 12952
+local GOSSIP_TEXT_SKIP_1 = 15704
 local ITEM_ARCANE_DISRUPTOR = 37888
 local SPELL_TELEPORT_PLAYER = 53435
+local QUEST_DISPELLING_ILLUSIONS = 13149
+
+-- COSProgressStates needed by the hello/GM arms
+-- (culling_of_stratholme.h:104-122).
+local JUST_STARTED = 0x00001
+local PURGE_STARTING = 0x00020
+local COMPLETE = 0x10000
+
+-- GetStableStateFor (instance_culling_of_stratholme.cpp:193-224) copy —
+-- the instance file owns the canonical table; this copy serves the GM
+-- menu's stable/unstable split only.
+local StableStateFor = {
+    [0x00001] = 0x00001,
+    [0x00002] = 0x00002,
+    [0x00004] = 0x00004,
+    [0x00008] = 0x00010,
+    [0x00010] = 0x00010,
+    [0x00020] = 0x00010,
+    [0x00040] = 0x00010,
+    [0x00080] = 0x00100,
+    [0x00100] = 0x00100,
+    [0x00200] = 0x00100,
+    [0x00400] = 0x01000,
+    [0x00800] = 0x01000,
+    [0x01000] = 0x01000,
+    [0x02000] = 0x01000,
+    [0x04000] = 0x04000,
+    [0x08000] = 0x04000,
+    [0x10000] = 0x10000,
+}
+
+-- the_black_morass.lua instanceDataOf precedent (shared instanceData
+-- table; nil reads as NOT_STARTED / JUST_STARTED progress).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
+
+local function chromieGossipHello(event, player, creature)
+    if creature:IsQuestGiver() then
+        player:GossipAddQuests(creature)
+    end
+    if player:IsGM() then
+        player:GossipMenuAddItem(GOSSIP_ICON_INTERACT_1,
+            "[GM] Access instance control panel", GOSSIP_SENDER_MAIN,
+            GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_OPEN_GM_MENU)
+    end
+    local data = instanceDataOf(creature)
+    if data and (data.progress or JUST_STARTED) >= PURGE_STARTING then
+        player:GossipSendMenu(GOSSIP_TEXT_TELEPORT, creature)
+    else
+        player:GossipSendMenu(GOSSIP_TEXT_INITIAL, creature)
+    end
+end
+
+-- True iff action is one the GM menu can produce: 1007 + a
+-- power-of-two progress state (1..0x10000).
+local function isGMOverrideAction(action)
+    local state = action - GOSSIP_ACTION_INFO_DEF - GOSSIP_OFFSET_GM_INITIAL
+    if state < 1 or state > COMPLETE then
+        return false
+    end
+    while state % 2 == 0 do
+        state = math.floor(state / 2)
+    end
+    return state == 1
+end
 
 local function chromieGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_TELEPORT
@@ -84,6 +179,59 @@ local function chromieGossipSelect(event, player, creature, sender, action)
         if player:GetItemCount(ITEM_ARCANE_DISRUPTOR) == 0 then
             player:AddItem(ITEM_ARCANE_DISRUPTOR, 1)
         end
+    elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_OPEN_GM_MENU then
+        -- C++ OnGossipSelect (culling_of_stratholme.cpp:378-390):
+        -- "Teleport all players to Arthas" + one item per progress
+        -- state (stable -> "Set instance progress to 0x%05X", else
+        -- "Force state to 0x%05X (UNSTABLE)"), sent on
+        -- GOSSIP_TEXT_SKIP_1 15704.
+        player:GossipMenuAddItem(GOSSIP_ICON_INTERACT_1,
+            "Teleport all players to Arthas", GOSSIP_SENDER_MAIN,
+            GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_GM_INITIAL)
+        local state = 1
+        while state <= COMPLETE do
+            if StableStateFor[state] == state then
+                player:GossipMenuAddItem(GOSSIP_ICON_INTERACT_1,
+                    string.format("Set instance progress to 0x%05X", state),
+                    GOSSIP_SENDER_MAIN,
+                    GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_GM_INITIAL + state)
+            end
+            state = state * 2
+        end
+        state = 1
+        while state <= COMPLETE do
+            if StableStateFor[state] ~= state then
+                player:GossipMenuAddItem(GOSSIP_ICON_INTERACT_1,
+                    string.format("Force state to 0x%05X (UNSTABLE)", state),
+                    GOSSIP_SENDER_MAIN,
+                    GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_GM_INITIAL + state)
+            end
+            state = state * 2
+        end
+        player:GossipSendMenu(GOSSIP_TEXT_SKIP_1, creature)
+    elseif action == GOSSIP_ACTION_INFO_DEF + GOSSIP_OFFSET_GM_INITIAL then
+        -- C++ OnGossipSelect (:392-398): close + GM-only
+        -- SetGuidData(DATA_GM_RECALL, player GUID) — the teleport leg
+        -- runs in the instance pump (instance_culling_of_stratholme.lua
+        -- onUpdateTick).
+        player:GossipComplete()
+        if player:IsGM() then
+            local data = instanceDataOf(creature)
+            if data then
+                data.gmRecall = player:GetGUID()
+            end
+        end
+    elseif isGMOverrideAction(action) then
+        -- C++ OnGossipSelect default arm (:399-408): close + GM-only
+        -- SetData(DATA_GM_OVERRIDE, action - INFO_DEF - GM_INITIAL),
+        -- consumed by the instance pump (forced setProgress).
+        player:GossipComplete()
+        if player:IsGM() then
+            local data = instanceDataOf(creature)
+            if data then
+                data.gmOverride = action - GOSSIP_ACTION_INFO_DEF - GOSSIP_OFFSET_GM_INITIAL
+            end
+        end
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
@@ -91,7 +239,22 @@ local function chromieGossipSelect(event, player, creature, sender, action)
     return false
 end
 
+-- C++ OnQuestAccept (culling_of_stratholme.cpp:410-413): accepting
+-- QUEST_DISPELLING_ILLUSIONS 13149 runs AdvanceDungeon — the
+-- cratesStart flag, consumed by the instance pump with the exact
+-- JUST_STARTED guard.
+local function chromieQuestAccept(event, player, creature, quest)
+    if quest and quest:GetId() == QUEST_DISPELLING_ILLUSIONS then
+        local data = instanceDataOf(creature)
+        if data then
+            data.cratesStart = true
+        end
+    end
+end
+
+RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 1, chromieGossipHello)
 RegisterCreatureGossipEvent(ENTRY_CHROMIE_START, 2, chromieGossipSelect)
+RegisterCreatureEvent(ENTRY_CHROMIE_START, 31, chromieQuestAccept)
 
 -- Ported (crate fluff event #2): npc_bartleby_battson (entry 27907,
 -- culling_of_stratholme.cpp:852-945). InitializeAI schedules the idle

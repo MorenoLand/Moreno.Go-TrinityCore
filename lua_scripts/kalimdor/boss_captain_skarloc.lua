@@ -36,11 +36,12 @@
 --   240s -> 240s.
 -- - Devotion Aura 8258 self-cast (C++ DoCast(me)), non-triggered, init
 --   3s -> {45s,55s}.
+-- - JustDied's instance leg (C++ boss_captain_skarloc.cpp:108-109):
+--   if instance GetData(TYPE_THRALL_EVENT = 2) == IN_PROGRESS then
+--   SetData(TYPE_THRALL_PART1 = 3, DONE) — PORTED 2026-11-07 via the
+--   shared instanceData table (old_hillsbrad.lua writes thrallEvent /
+--   thrallPart1; the "no instance GetData bridge" note is retracted).
 -- Unmodeled (documented-only, no bridges):
--- - JustDied's instance leg: if instance->GetData(TYPE_THRALL_EVENT
---   = 2) == IN_PROGRESS then instance->SetData(TYPE_THRALL_PART1 = 3,
---   DONE) — instance-data bridge blocked (standing); the Thrall escort
---   AI (old_hillsbrad.cpp) is a separate AddSC unit.
 -- - SPELL_CONSECRATION 38385: the C++ cast is COMMENTED OUT
 --   (//DoCastVictim(SPELL_CONSECRATION)) — only the re-arm
 --   urand(5000,10000) executes, so the arm has no observable behavior to
@@ -64,6 +65,19 @@ local SPELL_CLEANSE           = 29380
 local SPELL_HAMMER_OF_JUSTICE = 13005
 local SPELL_HOLY_SHIELD       = 31904
 local SPELL_DEVOTION_AURA     = 8258
+
+local STATE_IN_PROGRESS = 1
+local STATE_DONE = 3
+
+-- the_black_morass.lua instanceDataOf precedent (shared instanceData
+-- table; nil reads as NOT_STARTED).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
 
 local timers = {}
 
@@ -169,6 +183,12 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_captain_skarloc.cpp:108-109): if the Thrall
+    -- event is IN_PROGRESS, mark part 1 DONE.
+    local data = instanceDataOf(creature)
+    if data and (data.thrallEvent or 0) == STATE_IN_PROGRESS then
+        data.thrallPart1 = STATE_DONE
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

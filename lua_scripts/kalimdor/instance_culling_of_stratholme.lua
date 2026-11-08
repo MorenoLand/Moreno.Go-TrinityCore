@@ -91,9 +91,13 @@
 --   twin, lua_player.go:6696) — C++ instance->SummonCreature has no
 --   summoner, and no map-level summon bridge exists.
 -- Unmodeled (documented-only, no bridges / no writers):
--- - SetData DATA_GM_OVERRIDE / DATA_GM_RECALL (chromie GM menu,
---   unported) and DATA_UTHER_START (chromie middle, unregistered AI)
---   still have no writers. The arthas RP SetData legs
+-- - SetData DATA_GM_OVERRIDE / SetGuidData DATA_GM_RECALL (chromie GM
+--   menu) are PORTED 2026-11-07: the writers live in
+--   northrend/culling_of_stratholme.lua (one-shot instanceData flags)
+--   and the consumers above (onUpdateTick). SetGuidData
+--   DATA_UTHER_START's consumer is ported the same way; its writer is
+--   the chromie-middle file, still unregistered (entry unsourced).
+--   The arthas RP SetData legs
 --   (DATA_UTHER_FINISHED / DATA_START_WAVES / DATA_REACH_TOWN_HALL /
 --   DATA_TOWN_HALL_DONE / DATA_GAUNTLET_REACHED / DATA_GAUNTLET_DONE /
 --   DATA_MALGANIS_DONE) ARE ported: npc_arthas_stratholme.lua writes
@@ -680,6 +684,52 @@ local function onUpdateTick(instanceData, mapObj, st, diff)
     if instanceData.arthasGone then
         instanceData.arthasGone = nil
         st.arthas = nil
+    end
+    -- Chromie GM / quest-accept one-shot flags (culling_of_stratholme.cpp
+    -- SetData :321-322/:329-345 + SetGuidData :409-430, written by
+    -- northrend/culling_of_stratholme.lua and the chromie-middle file):
+    -- gmOverride -> SetInstanceProgress(state, true); gmRecall (player
+    -- GUID) -> teleport every non-GM player + that GM near Arthas;
+    -- utherStart -> UTHER_TALK iff CRATES_DONE; cratesStart ->
+    -- CRATES_IN_PROGRESS iff JUST_STARTED; skipToPurge -> PURGE_PENDING
+    -- iff progress <= CRATES_DONE.
+    if instanceData.gmOverride then
+        local state = instanceData.gmOverride
+        instanceData.gmOverride = nil
+        setProgress(instanceData, mapObj, state, true)
+    end
+    if instanceData.gmRecall then
+        local guid = instanceData.gmRecall
+        instanceData.gmRecall = nil
+        local pos = ArthasSnapback[progressOf(instanceData)]
+        if pos then
+            local players = mapObj:GetPlayers()
+            if players then
+                for _, p in ipairs(players) do
+                    if p:GetGUID() == guid or not p:IsGM() then
+                        local angle = math.random() * 2 * math.pi
+                        -- C++ :420-422 uses sin(angle) for BOTH the X and
+                        -- the Y offset (not cos for X) — ported as-written.
+                        -- Deltas: the CombatStop(true) leg has no bridge
+                        -- (no player:CombatStop), and the live-arthas
+                        -- position leg reads the snapback table instead
+                        -- (arthas stands at the snapback point for the
+                        -- current state by construction).
+                        p:TeleportNear(pos[1] + math.sin(angle) * 10,
+                            pos[2] + math.sin(angle) * 10, pos[3],
+                            angle + math.pi)
+                    end
+                end
+            end
+        end
+    end
+    consumeSetDataFlag(instanceData, mapObj, "utherStart", CRATES_DONE, UTHER_TALK)
+    consumeSetDataFlag(instanceData, mapObj, "cratesStart", JUST_STARTED, CRATES_IN_PROGRESS)
+    if instanceData.skipToPurge then
+        instanceData.skipToPurge = nil
+        if progressOf(instanceData) <= CRATES_DONE then
+            setProgress(instanceData, mapObj, PURGE_PENDING, false)
+        end
     end
     consumeSetDataFlag(instanceData, mapObj, "utherFinished", UTHER_TALK, PURGE_PENDING)
     consumeSetDataFlag(instanceData, mapObj, "startWaves", PURGE_STARTING, WAVES_IN_PROGRESS)

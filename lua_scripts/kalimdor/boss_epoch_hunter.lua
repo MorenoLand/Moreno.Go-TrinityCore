@@ -35,13 +35,15 @@
 --   25000 + rand32() % 10000.
 -- - Magic Disruption Aura 33834 self-cast (C++ DoCast(me)), non-triggered,
 --   init 40s -> 15s.
+-- - JustDied's instance leg (C++ boss_epoch_hunter.cpp:100-101):
+--   if instance GetData(TYPE_THRALL_EVENT = 2) == IN_PROGRESS then
+--   SetData(TYPE_THRALL_PART4 = 6, DONE) — PORTED 2026-11-07 via the
+--   shared instanceData table (old_hillsbrad.lua writes thrallEvent /
+--   thrallPart4; the "no instance GetData bridge" note is retracted,
+--   and the old header's "= 5" was a typo for old_hillsbrad.h:33).
 -- Unmodeled (documented-only, no bridges):
 -- - Sand Breath's C++ pre-cast me->InterruptNonMeleeSpells(false) arm
 --   is bridged (no-op twin) and ported in onSandBreath below.
--- - JustDied's instance leg: if instance->GetData(TYPE_THRALL_EVENT
---   = 2) == IN_PROGRESS then instance->SetData(TYPE_THRALL_PART4 = 5,
---   DONE) — instance-data bridge blocked (standing); the Thrall escort
---   AI (old_hillsbrad.cpp) is a separate AddSC unit.
 -- - SAY_ENTER 0 is declared in the C++ enum but never Talked in C++ (the
 --   archimonde SAY_SOUL_CHARGE case) — no Talk arm exists to port.
 -- - The SD%Complete: 60 comment's missing pre-event spawns and the
@@ -60,6 +62,19 @@ local SPELL_SAND_BREATH           = 31914
 local SPELL_IMPENDING_DEATH       = 31916
 local SPELL_WING_BUFFET           = 31475
 local SPELL_MAGIC_DISRUPTION_AURA = 33834
+
+local STATE_IN_PROGRESS = 1
+local STATE_DONE = 3
+
+-- the_black_morass.lua instanceDataOf precedent (shared instanceData
+-- table; nil reads as NOT_STARTED).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
 
 local timers = {}
 
@@ -179,6 +194,12 @@ end
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_epoch_hunter.cpp:100-101): if the Thrall
+    -- event is IN_PROGRESS, mark part 4 DONE.
+    local data = instanceDataOf(creature)
+    if data and (data.thrallEvent or 0) == STATE_IN_PROGRESS then
+        data.thrallPart4 = STATE_DONE
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
