@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -754,6 +755,35 @@ func (s *Server) fireAuraDispel(ctx context.Context, spellID uint32, auraObj *sc
 		return
 	}
 	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnDispel, scripting.AuraEventOnDispel, auraObj, target, dispeller)
+}
+
+// hasAuraProcHook reports whether any RegisterAuraEvent(..., OnProc, ...)
+// handler is registered for the spell, so the proc loop can skip building
+// the aura/actor objects when no handler could run (Runtime.HasHook twin
+// of the Eluna Bindings::HasBindingsFor gate).
+func (s *Server) hasAuraProcHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnProc)
+}
+
+// fireAuraProc dispatches the RegisterAuraEvent OnProc hook for one
+// eligible proc effect (args (event, aura, target, actor, procTarget,
+// damage); target is the aura holder, actor the proc actor, procTarget
+// the proc target, damage the proc event's damage) and reports whether
+// any handler returned boolean true. That is the Go model of AuraScript
+// PreventDefaultAction() in an OnEffectProc handler: the caller skips
+// the effect's default leg. The hook fires after the proc gates and
+// charge/cooldown consumption, like C++ (PrepareProcToTrigger runs
+// before TriggerProcOnEvent), so a veto never refunds a spent charge.
+// Lua errors are logged by the runtime, never propagated.
+func (s *Server) fireAuraProc(ctx context.Context, aura *activeAura, auraObj *scripting.Object, target any, actor any, procTarget any, damage uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || aura == nil || auraObj == nil {
+		return false
+	}
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnProc, scripting.AuraEventOnProc, auraObj, target, actor, procTarget, damage)
+	return luaHookVeto(results)
 }
 
 // dispelAuraSnapshot copies the aura record a dispel is about to

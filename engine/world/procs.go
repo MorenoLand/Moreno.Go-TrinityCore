@@ -3168,6 +3168,18 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
+			// AuraScript OnEffectProc (AuraEventOnProc, lua_aura.go):
+			// fires per eligible effect after the gates and the charge
+			// consume, before the default leg; a true return is
+			// PreventDefaultAction and skips that leg for this effect.
+			// The HasHook gate keeps the aura/actor object builds out
+			// of the hot path when no handler is registered.
+			if s.server.hasAuraProcHook(aura.SpellID) {
+				auraObj := (&luaAuraRef{server: s.server, spellID: aura.SpellID, player: s, mapID: s.player.Map, instanceID: s.player.InstanceID}).luaAuraObject()
+				if s.server.fireAuraProc(ctx, aura, auraObj, s.luaPlayer(), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, ev.actorGUID), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, triggerTargetGUID), ev.damage) {
+					continue
+				}
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)

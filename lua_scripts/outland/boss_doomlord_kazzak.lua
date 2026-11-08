@@ -14,9 +14,10 @@
 -- C++ DoMeleeAttackIfReady.
 -- Deviations from C++ (documented-only legs):
 -- * spell_twisted_reflection is a SpellScriptLoader AuraScript
---   (proc-redirected 21064 heal) — no SpellScript/AuraScript
---   proc bridge exists in Go; the boss casts the base spell
---   21063, the custom aura mechanics are unmodeled.
+--   (proc-redirected 21064 heal) — PORTED below via
+--   RegisterAuraEvent (tick 430, event 6); the boss casts the base
+--   spell 21063, the custom aura mechanics ride the Go
+--   AuraEventOnProc bridge.
 -- * spell_mark_of_kazzak's AuraScript OnPeriodic (mana == 0 ->
 --   32961 self-cast + SetDuration(0)) is PORTED below via
 --   RegisterAuraEvent (tick 194); the CalculateAmount leg (5% of
@@ -248,3 +249,26 @@ local function markOfKazzakTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MARK_OF_KAZZAK, 1, markOfKazzakTick)
+
+-- C++ spell_twisted_reflection::HandleProc
+-- (boss_doomlord_kazzak.cpp:240-246): EFFECT_0 SPELL_AURA_DUMMY
+-- OnEffectProc. PreventDefaultAction (the handler returns true, the
+-- AuraEventOnProc veto) + the damage>0 gate, then the action target
+-- (the aura holder, i.e. the player the boss cast 21063 on) casts
+-- SPELL_TWISTED_REFLECTION_HEAL 21064 on the actor (the damage
+-- dealer), triggered by the aura (the aurEff overload = triggered
+-- cast). Rides the Go AuraEventOnProc bridge (event 6, lua_aura.go /
+-- procs.go); the boss's 21063 cast is ported above, so the leg can
+-- fire live whenever the afflicted player takes damage. The player
+-- CastSpell path ignores the triggered flag (pre-existing, tick 423).
+local SPELL_TWISTED_REFLECTION_HEAL = 21064 -- boss_doomlord_kazzak.cpp:45
+
+local function twistedReflectionProc(event, aura, target, actor, procTarget, damage)
+    if damage == 0 or target == nil or actor == nil then
+        return true
+    end
+    target:CastSpell(actor, SPELL_TWISTED_REFLECTION_HEAL, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_TWISTED_REFLECTION, 6, twistedReflectionProc)

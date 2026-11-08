@@ -440,12 +440,32 @@ const (
 // captured before the decrement, so GetCaster still resolves after a
 // full removal. Steal never fires it (RemoveAurasDueToSpellBySteal,
 // Unit.cpp:3969, has no dispel-hook call).
+// OnProc mirrors AuraScript::OnEffectProc (AuraEffectProcFn,
+// SpellAuras.cpp:2192-2212 via Aura::TriggerProcOnEvent): it fires once
+// per eligible proc effect, after the proc gates (flags, chance roll,
+// charge/cooldown consumption) and before that effect's default leg
+// (the DBC trigger-spell cast, the scriptAuraProcCast dummy arm, or the
+// putricide/vampiric special cases). Args are (event, aura, target,
+// actor, procTarget, damage): target is the aura holder (the
+// periodic-hook convention), actor is the proc actor as a unit object
+// (nil when the event carries no actor GUID), procTarget is the proc
+// target as a unit object (the triggerTargetGUID — the damage victim
+// on the done side, the attacker on the taken side), damage is the
+// proc event's damage (0 for non-damage events — the handler gates on
+// it, like the C++ damageInfo->GetDamage() early return). A handler
+// returning boolean true is PreventDefaultAction(): the default leg
+// for that effect is skipped, matching C++ where the script handler
+// replaces the trigger cast. Only the session-side proc loop fires it
+// today (player and pet mod-owner auras); creature auras have no proc
+// evaluation site in Go, so creature-held proc auras stay out until
+// one is built.
 const (
 	AuraEventOnPeriodic     = 1
 	AuraEventOnApply        = 2
 	AuraEventOnRemove       = 3
 	AuraEventOnChangeAmount = 4
 	AuraEventOnDispel       = 5
+	AuraEventOnProc         = 6
 )
 
 type Hook struct {
