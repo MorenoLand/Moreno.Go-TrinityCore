@@ -3047,6 +3047,33 @@ RegisterSpellEvent(LK.SPELL_JUMP, 5, function(event, spell, target, effectIndex)
     end
 end)
 
+-- C++ spell_the_lich_king_jump_remove_aura::HandleScript
+-- (boss_the_lich_king.cpp:2764-2779): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> PreventHitDefaultEffect + hit unit
+-- RemoveAurasDueToSpell(GetEffectValue()). The C++ class sits
+-- directly after jump in AddSC; 72431 is SPELL_JUMP_2, cast by
+-- the jump leg above (boss_the_lich_king.cpp:2749-2758), and the
+-- live wowhead DBC render shows its single SCRIPT_EFFECT with
+-- Value 72351 (the aura removed). RemoveAura is the
+-- RemoveAurasDueToSpell twin (moorabi precedent, tick 443); the
+-- tick-459 veto bridge carries the PreventHitDefaultEffect, whose
+-- Go arm collapses to the whole effect — faithful here, 72431
+-- targets a single player (Can only target the player). The
+-- effectIndex == 0 gate mirrors the EFFECT_0 registration.
+-- Handler is inline: the file sits at 199 main-chunk locals.
+-- DORMANT until Spell.dbc ships: the 72431 cast is DBC-gated.
+RegisterSpellEvent(LK.SPELL_JUMP_2, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    local value = spell:GetEffectValue(effectIndex)
+    if value <= 0 then
+        return
+    end
+    target:RemoveAura(value)
+end)
+
 -- C++ spell_the_lich_king_play_movie::HandleScript
 -- (boss_the_lich_king.cpp:2784-2799): OnEffectHitTarget EFFECT_0
 -- SCRIPT_EFFECT -> hit player SendMovieStart
@@ -3395,6 +3422,37 @@ RegisterSpellEvent(LK.SPELL_VALKYR_TARGET_SEARCH, 5, function(event, spell, targ
         caster:CastSpell(target, LK.SPELL_CHARGE, true)
     end
 end)
+
+-- C++ spell_the_lich_king_cast_back_to_caster::HandleScript
+-- (boss_the_lich_king.cpp:2380-2394): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> hit unit casts GetEffectValue() on the caster
+-- (triggered). Both spells share the script name, so one
+-- table-field handler serves both registrations (the
+-- onSummonSpiritBomb precedent below); a table field costs no
+-- main-chunk local (file sits at 199). Bindings are
+-- spell_script_names-only; cross-verified this tick against the
+-- live wowhead DBC renders: 68984 and 74445 each carry a single
+-- SCRIPT_EFFECT with Value 68985, and both are cast in-house
+-- (boss_the_lich_king.cpp:1513 val'kyr carry, :1600 harvest-soul
+-- vehicle). The value is the effect-0 DBC BasePoints via
+-- spell:GetEffectValue, 0 until Spell.dbc ships — guarded on
+-- positive. DORMANT until Spell.dbc ships: the 68984/74445 casts
+-- are DBC-gated.
+LK.onCastBackToCaster = function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local value = spell:GetEffectValue(effectIndex)
+    if value <= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        target:CastSpell(caster, value, true)
+    end
+end
+RegisterSpellEvent(SPELL_HARVEST_SOUL_VEHICLE, 5, LK.onCastBackToCaster)
+RegisterSpellEvent(LK.SPELL_VALKYR_CARRY, 5, LK.onCastBackToCaster)
 
 -- C++ spell_the_lich_king_raging_spirit::HandleScript
 -- (boss_the_lich_king.cpp:2229-2243): OnEffectHitTarget EFFECT_0
