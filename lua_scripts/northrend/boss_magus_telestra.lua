@@ -70,13 +70,20 @@
 -- no AI class in the C++ file — their live casts are
 -- DB-side SmartAI, not in this tree); DoAction
 -- ACTION_MAGUS_DEAD + GetData DATA_SPLIT_PERSONALITY
--- (consumed only by achievement_split_personality, no
--- achievement bridge); the 5s split-personality timing
--- window dies with that achievement leg.
+-- — PORTED tick 417 via event 21 (telestraSummonedDied below): each
+-- split magus (26928/26929/26930) dying records os.time() (the C++
+-- GameTime::GetGameTime() leg, boss_magus_telestra.cpp:165-177); when
+-- the third death of a split arrives with both gaps < 5s,
+-- splitPersonality++ and the count is written to the boss motion's
+-- SetData store (the merge leg clears the death times, :260-264).
+-- Reset writes 0 (Initialize, :96-109).
+-- achievement_split_personality — PORTED tick 417 via the SetData
+-- write leg + Go gate (bossLatchData, achievement_criteria_scripts.go).
 
 local ENTRY_TELESTRA = 26731
 
 local DATA_MAGUS_TELESTRA = 1 -- nexus.h:31 (NEXDataTypes)
+local DATA_SPLIT_PERSONALITY = 2 -- boss_magus_telestra.cpp:62
 local BOSS_STATE_NOT_STARTED = 0
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
@@ -293,6 +300,8 @@ local function telestraEnterCombat(event, creature)
         fireDead = false,
         frostDead = false,
         arcaneDead = false,
+        deathTimes = {},
+        splitPersonality = 0,
     }
     creature:Talk(SAY_AGGRO)
     creature:SetBossState(DATA_MAGUS_TELESTRA, BOSS_STATE_IN_PROGRESS) -- C++ JustEngagedWith: Talk, then instance->SetBossState(IN_PROGRESS)
@@ -320,13 +329,54 @@ end
 
 local function telestraReset(event, creature)
     cancelTimers(creature:GetGUID())
+    state[creature:GetGUID()] = nil
+    -- C++ Reset -> Initialize: splitPersonality = 0, time[] zeroed
+    -- (boss_magus_telestra.cpp:96-109) -> GetData(DATA_SPLIT_PERSONALITY)
+    -- = 0; achievement_split_personality read leg (tick 417).
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's count before
+    -- the achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_SPLIT_PERSONALITY, 0)
+    end
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetVisible(true)
     creature:SetBossState(DATA_MAGUS_TELESTRA, BOSS_STATE_NOT_STARTED) -- C++ Reset: instance->SetBossState(NOT_STARTED), unconditional (ScriptedAI direct call)
+end
+
+-- C++ DoAction(ACTION_MAGUS_DEAD) (boss_magus_telestra.cpp:165-177),
+-- fed by SummonedCreatureDespawn (:219-240): each split magus death
+-- records the time; when the third death of a split arrives with both
+-- gaps < 5s, splitPersonality++. Event 21 (SummonedCreatureDied) is
+-- the death-time twin — it fires at the kill, where the C++ despawn
+-- time is death + the temp-summon corpse delay, and the 5s windows
+-- tolerate that shift; a live despawn (e.g. post-merge) never fires
+-- 21, matching the C++ IsAlive() guard. Death times clear at the
+-- merge, mirroring the C++ time[] reset (:260-264).
+local function telestraSummonedDied(event, creature, summon, killer)
+    local entry = summon:GetEntry()
+    if entry ~= NPC_FIRE_MAGUS and entry ~= NPC_FROST_MAGUS and entry ~= NPC_ARCANE_MAGUS then
+        return
+    end
+    local st = state[creature:GetGUID()]
+    if st == nil then
+        return
+    end
+    st.deathTimes[#st.deathTimes + 1] = os.time()
+    if #st.deathTimes == 3 then
+        local t = st.deathTimes
+        if t[3] - t[2] < 5 and t[2] - t[1] < 5 then
+            st.splitPersonality = st.splitPersonality + 1
+            creature:SetData(DATA_SPLIT_PERSONALITY, st.splitPersonality)
+        end
+        st.deathTimes = {}
+    end
 end
 
 RegisterCreatureEvent(ENTRY_TELESTRA, 1, telestraEnterCombat)
 RegisterCreatureEvent(ENTRY_TELESTRA, 2, telestraLeaveCombat)
 RegisterCreatureEvent(ENTRY_TELESTRA, 3, telestraTargetDied)
 RegisterCreatureEvent(ENTRY_TELESTRA, 4, telestraDied)
+RegisterCreatureEvent(ENTRY_TELESTRA, 21, telestraSummonedDied)
 RegisterCreatureEvent(ENTRY_TELESTRA, 23, telestraReset)

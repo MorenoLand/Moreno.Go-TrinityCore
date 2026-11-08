@@ -97,10 +97,12 @@
 -- from ev2 (ev2 leave-combat does NOT call Reset in C++ — the
 -- sjonnir precedent; maiden tick-257 pattern) via
 -- creature:SetBossState (lua_creature_events.go:5917); the
--- shadowDodger / smellSaronite / animusDead / vaporCount
--- Initialize() flags stay out (consumed only by the unported
--- GetData / hard-mode machines — no bridge needed for the flags
--- themselves, their readers are unported).
+-- smellSaronite Initialize() flag is PORTED tick 417 as
+-- creature:SetData(DATA_SMELL_SARONITE 31813188, 1) in vezaxReset
+-- (ev23) + vezaxSpawned (ev5, ctor twin) — the
+-- achievement_smell_saronite write leg, cleared by vezaxDoAction.
+-- shadowDodger / animusDead / vaporCount stay out (consumed only by
+-- the unported GetData / hard-mode machines).
 -- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659
 -- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
 -- achievement_shadowdodger below) — stays out on spell-id-key grounds.
@@ -112,16 +114,20 @@
 -- fire it on casts C++ ignores (a fabrication, not a port). The
 -- achievement consumer has no GetData bridge besides.
 -- Corrected 2026-10-17 (the old "event 15 never fires" rationale was
--- stale).
--- GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
--- 31813188 — no GetData bridge; consumers: the two
--- achievements below); DoAction(ACTION_VAPORS_DIE 1 /
--- ACTION_ANIMUS_DIE 2 — ev38 dispatch IS bridged
--- (creature:DoAction, lua_creature_events.go:802); the senders
--- are the vapors DamageTaken (boss_general_vezax.cpp:436) and
--- the animus JustDied (:338), both on entry-unverifiable,
--- unregistered bearers — producers: npc_saronite_vapors /
--- boss_saronite_animus below).
+-- stale). Re-verified tick 417: Go fires ev15 with the CAST spellId
+-- (62660) once per hit target (boss_ai.go:3789-3845,
+-- fireCreatureSpellHitTarget); 62659 appears nowhere in the C++ tree
+-- outside the spell enum (boss_general_vezax.cpp:56) — it is the
+-- DBC-side triggered sub-spell of 62660, and its target set (primary
+-- only vs. impact AoE incl. bystanders) is a Spell.dbc fact not in
+-- the tree. Keying the clear on 62660 would clear on casts C++
+-- ignores and miss bystander-only 62659 hits, so the shadowdodger
+-- write leg stays BLOCKED (DB fact missing) and no latch is set.
+-- achievement_shadowdodger (OnCheck: GetData
+-- (DATA_SHADOWDODGER)); achievement_smell_saronite (OnCheck:
+-- GetData(DATA_SMELL_SARONITE)) — smell_saronite write leg PORTED
+-- tick 417 (vezaxReset / vezaxSpawned / vezaxDoAction); shadowdodger
+-- stays in the unmodeled-achievement queue (62659 key, above).
 -- CheckShamanisticRage — PORTED at engage (map-player-scan via
 -- GetPlayersInWorld + map/instance filter -> player:HasSpell
 -- (30823) -> player:CastSpell(player, 68415, false) non-triggered
@@ -172,10 +178,9 @@
 -- OnApply: bp * 2^stack mana restore -> SPELL_SARONITE_VAPORS_
 -- ENERGIZE 63337 + DAMAGE 63338 at 2x — no AuraScript bridge;
 -- joins the no-AuraScript-bridge queue).
--- achievement_shadowdodger (OnCheck: GetData
--- (DATA_SHADOWDODGER)); achievement_smell_saronite (OnCheck:
--- GetData(DATA_SMELL_SARONITE)) — no GetData / achievement
--- bridges; both join the unmodeled-achievement queue.
+-- (Achievements: see the SpellHitTarget / Reset notes above —
+-- smell_saronite write leg PORTED tick 417; shadowdodger BLOCKED
+-- on the 62659 spell-id key.)
 
 local ENTRY_GENERAL_VEZAX = 33271
 
@@ -197,6 +202,10 @@ local SPELL_MARK_OF_THE_FACELESS = 63276
 local SPELL_BERSERK = 26662
 local SPELL_SHAMANTIC_RAGE = 30823
 local SPELL_CORRUPTED_RAGE = 68415
+
+local DATA_SHADOWDODGER = 29962997 -- boss_general_vezax.cpp:99 (Misc enum)
+local DATA_SMELL_SARONITE = 31813188 -- boss_general_vezax.cpp:98 (Misc enum)
+local ACTION_VAPORS_DIE = 1 -- boss_general_vezax.cpp:75 (VezaxActions; VAPORS_SPAWN 0, ANIMUS_DIE 2)
 
 local timers = {}
 
@@ -481,10 +490,51 @@ end
 local function vezaxReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:SetBossState(DATA_VEZAX, 0)
+    -- C++ Reset -> Initialize (:110-115, :127-133): smellSaronite =
+    -- true. The achievement_smell_saronite Go gate reads this slot
+    -- off the killed victim's motion
+    -- (achievement_criteria_scripts.go); the clear leg is
+    -- vezaxDoAction below. Alive-gated: ev23 fires on death too
+    -- (fireCreatureDied runs Reset before the kill-credit criteria
+    -- read, kill.go:1091/:1400), and a death-time re-arm would
+    -- clobber the fight's latch before the gate reads it; the
+    -- spawn handler sets the C++ default.
+    if creature:IsAlive() then
+        creature:SetData(DATA_SMELL_SARONITE, 1)
+    end
+end
+
+-- C++ ctor twin (boss_general_vezax.cpp:110-115): smellSaronite =
+-- true. The auriaya spawn-latch precedent: a fresh motion's
+-- ScriptData reads 0, so the spawn handler sets the C++ default
+-- before any engage can occur.
+local function vezaxSpawned(event, creature)
+    creature:SetData(DATA_SMELL_SARONITE, 1)
+end
+
+-- C++ DoAction(ACTION_VAPORS_DIE) (boss_general_vezax.cpp:268-270):
+-- smellSaronite = false. Sent by the vapors DamageTaken lethal leg
+-- (:436) via vezax->AI()->DoAction; the ev38 dispatch is bridged
+-- (lua_creature_events.go:802; elderDoAction precedent in
+-- boss_freya.lua). Dormant until the vapors bearer lands: the sender
+-- is npc_saronite_vapors, spell-summoned via 63081 with no creature
+-- entry anywhere in the C++ tree (ENTRY-BLOCKED), and the vapor
+-- summon machine itself is unported — so in the Go-modeled fight no
+-- vapor can die and the latch stays 1, matching C++ for a
+-- zero-vapor-death fight. shadowDodger deliberately has NO write leg
+-- here: its clear leg keys on SPELL_SHADOW_CRASH_HIT 62659 (see the
+-- SpellHitTarget note above), which Go cannot observe — setting the
+-- latch without a clear would award on every kill.
+local function vezaxDoAction(event, creature, action)
+    if action == ACTION_VAPORS_DIE then
+        creature:SetData(DATA_SMELL_SARONITE, 0)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 1, vezaxEnterCombat)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 3, vezaxTargetDied)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 4, vezaxDied)
+RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 5, vezaxSpawned)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 23, vezaxReset)
+RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 38, vezaxDoAction)

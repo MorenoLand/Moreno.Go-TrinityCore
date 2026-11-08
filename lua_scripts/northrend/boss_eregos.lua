@@ -45,9 +45,9 @@
 -- 27755, 500.0f) — creature-search IS bridged
 -- (lua_creature_events.go:1237); the latches are kept C++-exact
 -- (reseeded true per engage, cleared to false where a vehicle is
--- found — the bridge returns nil when none), and the
--- achievement GetData consumers below stay documented-only (no
--- achievement bridge).
+-- found — the bridge returns nil when none), and mirrored into
+-- the boss motion's SetData store (tick 417) for the Go
+-- achievement gate.
 -- KilledUnit — Talk(SAY_KILL 3) (event 3 — C++-GATED
 -- who->GetTypeId() == TYPEID_PLAYER; the nalorakk / kelthuzad
 -- player-gate variant — tenth ported variant overall, seventh
@@ -143,9 +143,10 @@
 -- the no-AuraScript-bridge queue.
 -- achievement_gen_eregos_void x3 — OnCheck: target->GetAI()->
 -- GetData(DATA_RUBY_VOID / DATA_EMERALD_VOID / DATA_AMBER_VOID)
--- (the drake-void achievements 2044 / 2045 / 2046) — no
--- achievement bridge (the kelthuzad / thaddius precedent);
--- joins the unmodeled-achievement queue.
+-- (the drake-void achievements 2044 / 2045 / 2046) — PORTED tick 417:
+-- the latches are mirrored into the boss motion's SetData store
+-- (engage-time drake checks + Reset re-arm above) and read by the Go
+-- gate via bossLatchData.
 
 local ENTRY_EREGOS = 27656
 local ENTRY_PLANAR_ANOMALY = 30879 -- boss_eregos.cpp:59
@@ -164,6 +165,9 @@ local NPC_EMERALD_DRAKE_VEHICLE = 27692
 local NPC_AMBER_DRAKE_VEHICLE = 27755
 
 local DATA_EREGOS = 3 -- oculus.h:34 (OCDataTypes)
+local DATA_RUBY_VOID = 0 -- boss_eregos.cpp:76
+local DATA_EMERALD_VOID = 1 -- boss_eregos.cpp:77
+local DATA_AMBER_VOID = 2 -- boss_eregos.cpp:78
 local BOSS_STATE_NOT_STARTED = 0
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
@@ -266,14 +270,24 @@ local function eregosEnterCombat(event, creature, target)
     voidRuby[guid] = true
     voidEmerald[guid] = true
     voidAmber[guid] = true
+    -- Achievement write leg (tick 417): mirror the void latches into
+    -- the boss motion's SetData store for achievement_ruby_void /
+    -- achievement_emerald_void / achievement_amber_void's GetData
+    -- reads (Go gate via bossLatchData).
+    creature:SetData(DATA_RUBY_VOID, 1)
+    creature:SetData(DATA_EMERALD_VOID, 1)
+    creature:SetData(DATA_AMBER_VOID, 1)
     if creature:FindNearestCreature(NPC_RUBY_DRAKE_VEHICLE, 500) then
         voidRuby[guid] = false
+        creature:SetData(DATA_RUBY_VOID, 0)
     end
     if creature:FindNearestCreature(NPC_EMERALD_DRAKE_VEHICLE, 500) then
         voidEmerald[guid] = false
+        creature:SetData(DATA_EMERALD_VOID, 0)
     end
     if creature:FindNearestCreature(NPC_AMBER_DRAKE_VEHICLE, 500) then
         voidAmber[guid] = false
+        creature:SetData(DATA_AMBER_VOID, 0)
     end
     cancelTimers(guid)
     schedule(guid, "barrage", {3000, 10000}, function()
@@ -301,6 +315,15 @@ local function eregosReset(event, creature)
         creature:SetBossState(DATA_EREGOS, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize() (boss_eregos.cpp:95-99) re-arms all
+    -- three void latches true. IsDead-guarded: ev23 pre-fires on death
+    -- (kill.go:1091 -> fireCreatureDied) and an unguarded re-arm would
+    -- overwrite the engage-time clears before the gate reads them.
+    if not creature:IsDead() then
+        creature:SetData(DATA_RUBY_VOID, 1)
+        creature:SetData(DATA_EMERALD_VOID, 1)
+        creature:SetData(DATA_AMBER_VOID, 1)
+    end
 end
 
 -- C++ KilledUnit: gated on who->GetTypeId() == TYPEID_PLAYER —

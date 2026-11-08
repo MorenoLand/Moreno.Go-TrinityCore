@@ -24,8 +24,9 @@
 -- 6) + Talk(SAY_DEATH 2) (event 4).
 -- npc_slad_ran_constrictor: JustEngagedWith — Grip of Slad'ran 55093
 -- on the victim (2s init, 3-6s repeat) with the C++-exact 5-stack ->
--- Snake Wrap 55126 leg (gripTick, below; only the boss SetGUID
--- wrap-latch, achievement-only, stays unported).
+-- Snake Wrap 55126 leg (gripTick, below; the boss SetGUID
+-- wrap-latch ports as per-player instanceData keys, recordWrapped
+-- below — the once_bitten_twice_shy precedent).
 -- npc_slad_ran_viper: JustEngagedWith — Venomous Bite 54987 (victim,
 -- 2s init, 10s repeat).
 -- Unmodeled (no bridges — documented, not wired):
@@ -78,7 +79,10 @@ local SAY_SUMMON_CONSTRICTORS = 4
 
 -- Forward declare: sladranLeaveCombat/sladranReset (below) reference this
 -- before its assignment point; plain assignment later (tharon_ja idiom).
+-- clearWrappedMarks is likewise called from sladranEnterCombat (above)
+-- before its assignment point.
 local sladranPhase
+local clearWrappedMarks
 local EMOTE_NOVA = 5
 local EMOTE_ACTIVATE_ALTAR = 6
 
@@ -194,6 +198,12 @@ local function sladranEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
+    -- C++ Reset (boss_slad_ran.cpp:101) _wrappedPlayers.clear() twin,
+    -- at ENGAGE (once_bitten precedent — never in the ev23 Reset
+    -- handler: ev23 pre-fires on death ahead of the kill-credit
+    -- achievement read, so a Reset clear would wipe the fight's
+    -- marks before the criteria check reads them).
+    clearWrappedMarks(creature)
     schedule(guid, "nova", 10000, function()
         novaTick(creature, guid)
     end)
@@ -373,6 +383,46 @@ RegisterCreatureEvent(ENTRY_SLAD_RAN, 19, sladranJustSummoned)
 -- (RemoveAurasDueToSpell -> victim self-cast SNAKE_WRAP 55126 ->
 -- DespawnOrUnsummon); only the boss SetGUID wrap-latch
 -- (achievement-only) stays unported, see header.
+-- C++ _wrappedPlayers GuidSet (boss_slad_ran.cpp:191-201) as
+-- per-player keys in the shared instanceData table (the
+-- boss_blood_queen_lana_thel recordVampire precedent — one real Lua
+-- table per (map, instance), engine/scripting/object.go): the Go gate
+-- reads "wrapped_<guidLow>" via InstanceDataNumber
+-- (engine/world/achievement_criteria_scripts.go). GetGUIDLow is the
+-- low 32 bits of the player GUID (lua_player.go:105); the Go side
+-- formats the same value, so the key agrees exactly.
+local function wrappedKey(guidLow)
+    return "wrapped_" .. guidLow
+end
+
+local function recordWrapped(creature, target)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data[wrappedKey(target:GetGUIDLow())] = 1
+end
+
+clearWrappedMarks = function(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    for key in pairs(data) do
+        if type(key) == "string" and string.sub(key, 1, 8) == "wrapped_" then
+            data[key] = nil
+        end
+    end
+end
+
 local function gripTick(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -383,13 +433,21 @@ local function gripTick(creature, guid)
         -- is bridged. Deltas: C++ reads the caster-filtered aura
         -- (GetAura(55093, me->GetGUID())) while Go holds one record per
         -- spell, so two constrictors gripping one player merge stacks;
-        -- the SetGUID wrap-latch (DATA_SNAKES achievement only) has no
-        -- cross-AI bridge, so the latch is not set — the wrap itself,
-        -- the Grip strip, and the despawn all land.
+        -- the SetGUID wrap-latch (DATA_SNAKES achievement only) lands
+        -- as the per-player instanceData mark (recordWrapped, in the
+        -- stack-5 branch below) — the wrap itself, the Grip strip,
+        -- and the despawn all land.
         local grip = victim:GetAura(SPELL_GRIP_OF_SLAD_RAN)
         if grip and grip:GetStackAmount() == 5 then
             victim:RemoveAura(SPELL_GRIP_OF_SLAD_RAN)
             victim:CastSpell(victim, SPELL_SNAKE_WRAP)
+            -- C++ constrictor stack-5 leg (boss_slad_ran.cpp:223-240):
+            -- the summoner SetGUID(DATA_SNAKES...) hop lands here as
+            -- the per-player instanceData mark (recordWrapped above);
+            -- the Go achievement gate reads it off the shared table.
+            if victim:GetObjectType() == "Player" then
+                recordWrapped(creature, victim)
+            end
             creature:Despawn()
             -- No reschedule: C++ DespawnOrUnsummon kills the
             -- constrictor's scheduler with it.

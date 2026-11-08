@@ -35,9 +35,14 @@
 -- C++-GATED: the Talk fires only when victim->GetTypeId()==
 -- TYPEID_PLAYER — Lua expresses it via victim:GetObjectType() ==
 -- "Player" (nalorakk / kelthuzad player-gate precedent); the
--- _safetyDance=false latch has no GetData bridge — documented
--- below); JustDied Talk(SAY_DEATH 3) (event 4; _JustDied SetBossState
--- DONE PORTED 2026-11-05, moroes precedent).
+-- _safetyDance latch is PORTED tick 417 via creature:SetData
+-- (DATA_SAFETY_DANCE 19962139): set at engage (C++ :127), cleared
+-- on a player kill (C++ KilledUnit :98-104). It is NOT written in
+-- the ev23 Reset handler: ev23 pre-fires on death (fireCreatureDied,
+-- lua_creature_events.go) ahead of the kill-credit achievement read
+-- (kill.go), so a Reset re-arm would clobber the fight's latch
+-- before the criteria check reads it — engage is the re-arm site,
+-- Reset stays latch-free.
 -- EVENT_DISRUPT (init randtime(15s,20s), repeat 11s) —
 -- DoCastAOE(SPELL_SPELL_DISRUPTION 29310) 1-arg (non-triggered) is the
 -- established self-cast: creature:CastSpell(creature, 29310)
@@ -90,8 +95,17 @@
 -- Reset's _Reset() SetBossState NOT_STARTED leg PORTED 2026-11-05
 -- (moroes precedent, != DONE-gated per ScriptedCreature.cpp:509-510);
 -- SetReactState(REACT_AGGRESSIVE) IS ported (event 23).
--- GetData(DATA_SAFETY_DANCE 19962139) + the _safetyDance latch — no
--- GetData bridge (drakkari_colossus precedent).
+-- GetData(DATA_SAFETY_DANCE 19962139) + the _safetyDance latch —
+-- PORTED tick 417 (see above): the "no GetData bridge" claim is
+-- stale — creature:SetData is bridged (lua_creature_events.go:792)
+-- and the Go gate reads it via bossLatchData
+-- (engine/world/achievement_criteria_scripts.go).
+-- FIDELITY DELTA: the eruption lethal-hit relay
+-- (spell_heigan_eruption -> AI()->KilledUnit, :235-245) has no Go
+-- twin — eruptions are unported (GO arm above), so no eruption
+-- damage exists in Go to relay; every death the Go engine can
+-- produce in this fight (melee / fever / plague cloud / disrupt)
+-- is Heigan-attributed and reaches ev3 via kill.go:1081-1089.
 -- spell_heigan_eruption (SpellScriptLoader, eruption lethal-hit ->
 -- instance GetGuidData(DATA_HEIGAN) -> AI()->KilledUnit) — no
 -- SpellScript binding bridge (razelikh precedent) + instance /
@@ -105,6 +119,8 @@ local BOSS_HEIGAN = 4 -- naxxramas.h NAXEncounter (ANUBREKHAN 0 ... HEIGAN 4)
 local BOSS_STATE_NOT_STARTED = 0
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_DONE = 3
+
+local DATA_SAFETY_DANCE = 19962139 -- boss_heigan.cpp:64
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -198,6 +214,8 @@ local function heiganEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (:127): _safetyDance = true.
+    creature:SetData(DATA_SAFETY_DANCE, 1)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "disrupt", {15000, 20000}, function() onDisrupt(creature, guid) end)
@@ -212,6 +230,8 @@ end
 local function heiganTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SLAY)
+        -- C++ KilledUnit (:98-104): _safetyDance = false.
+        creature:SetData(DATA_SAFETY_DANCE, 0)
     end
 end
 

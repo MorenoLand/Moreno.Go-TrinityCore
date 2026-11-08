@@ -121,25 +121,24 @@
 -- no-SpellScript-bridge queue.
 -- The kingsBane SpellHitTarget latch (:153-157): if (target->GetTypeId()
 -- == TYPEID_PLAYER && spellInfo->Id == SPELL_BANE_HIT 59203) kingsBane =
--- false — pure achievement bookkeeping feeding GetData(DATA_KINGS_BANE
--- 2157). GetData/SetData exist as a per-motion ScriptData store
--- (lua_creature_events.go:771-800, tick-261 re-check) and event 15 fires
--- (boss_ai.go:4003), but the achievement OnCheck consumer has no Lua hook
--- and nothing reads the latch — a write-only local would be dead code.
--- Documented only.
+-- false — PORTED tick 417: the latch is mirrored into the boss motion's
+-- SetData store (Reset true below / ymironSpellHitTarget clear) and read
+-- by the Go gate via bossLatchData. Event 15 fires on the caster when
+-- its spell hits a unit (boss_ai.go:4011); the 59203 delivery is
+-- DBC-driven (no Bane SpellScript in the file).
 -- achievement_kings_bane (OnCheck: GetData(DATA_KINGS_BANE 2157) == 1) —
--- the achievement OnCheck consumer has no Lua hook (GetData itself exists
--- as a ScriptData store, lua_creature_events.go:771-800); joins the
--- unmodeled-achievement queue.
+-- PORTED tick 417 (SetData mirror); see the Go gate.
 
 local ENTRY_KING_YMIRON = 26861
 local DATA_KING_YMIRON = 3 -- utgarde_pinnacle.h:34
+local DATA_KINGS_BANE = 2157 -- boss_ymiron.cpp:99
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
 local SAY_DEATH = 2
 
 local SPELL_BANE = 48294
+local SPELL_BANE_HIT = 59203 -- boss_ymiron.cpp:30 (checked for King's Bane)
 local SPELL_FETID_ROT = 48291
 local SPELL_DARK_SLASH = 48292
 local SPELL_ANCESTORS_VENGEANCE = 16939
@@ -293,9 +292,9 @@ end
 -- !IsAlive return (:501) and covers the ev23 death-path pre-fire (23 then 4);
 -- then SetReactState(REACT_AGGRESSIVE) :140. Split from ev2 this tick (the
 -- sjonnir precedent): ev2 leave-combat does not call Reset in C++, so it stays
--- cancel-only. Initialize() legs (kingsBane / ActivedNumber /
+-- cancel-only. Initialize() legs (ActivedNumber /
 -- HealthAmountModifier / GUID clears) have no Lua mirrors — the kingsBane latch
--- is documented-only (see header) and the boat-machine counters ride the
+-- is mirrored into SetData below (tick 417) and the boat-machine counters ride the
 -- unbridged machine.
 local function ymironReset(event, creature)
     cancelTimers(creature:GetGUID())
@@ -305,11 +304,30 @@ local function ymironReset(event, creature)
     if creature:GetBossState(DATA_KING_YMIRON) ~= 3 then
         creature:SetBossState(DATA_KING_YMIRON, 0)
     end
+    -- C++ Reset -> Initialize() (boss_ymiron.cpp:122-130): kingsBane =
+    -- true. The IsDead guard above covers the ev23 death-path pre-fire
+    -- (kill.go:1091); without it the re-arm would overwrite a
+    -- Bane-cleared latch before the gate reads it.
+    creature:SetData(DATA_KINGS_BANE, 1)
     creature:SetReactState(2) -- REACT_AGGRESSIVE
+end
+
+-- C++ boss_ymironAI::SpellHitTarget (boss_ymiron.cpp:153-157): if the
+-- BANE_HIT 59203 hit lands on a player, kingsBane = false. Event 15
+-- fires on the caster when its spell hits a unit (boss_ai.go:4011);
+-- the target player gate is the nalorakk GetObjectType() variant.
+local function ymironSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_BANE_HIT then
+        return
+    end
+    if target and target:GetObjectType() == "Player" then
+        creature:SetData(DATA_KINGS_BANE, 0)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 1, ymironEnterCombat)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 3, ymironKilledUnit)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 4, ymironJustDied)
+RegisterCreatureEvent(ENTRY_KING_YMIRON, 15, ymironSpellHitTarget)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 23, ymironReset)

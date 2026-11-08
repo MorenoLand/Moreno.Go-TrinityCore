@@ -398,7 +398,13 @@ local function faerlinaReset(event, creature)
         creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(creature:GetGUID())
-    creature:SetData(DATA_FRENZY_DISPELS, 0) -- C++ Reset :110-113
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's counter before
+    -- the achievement gate reads it; the wipe re-arm is preserved.
+    if creature:IsAlive() then
+        creature:SetData(DATA_FRENZY_DISPELS, 0) -- C++ Reset :110-113
+    end
 end
 
 RegisterCreatureEvent(ENTRY_FAERLINA, 1, faerlinaEnterCombat)

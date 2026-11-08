@@ -442,7 +442,13 @@ local function kelthuzadReset(event, creature)
         creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end
     despawnKelthuzadSummons(guid, false)
-    creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's counter before
+    -- the achievement gate reads it; the wipe re-arm is preserved.
+    if creature:IsAlive() then
+        creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
+    end
     -- C++ Reset (:223-235) zeroes the spawn-chain counts and _phaseThree;
     -- _guardianCount is NOT reset there (only the phase-three leg zeroes
     -- it), so latch 6 is left alone.

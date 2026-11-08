@@ -89,8 +89,17 @@
 -- bridged, freya/vezax precedent). The SpellScript IsVampire
 -- CheckTarget fizzle leg has no bridge (a re-bite applies where C++
 -- would fizzle the bite cast only; Talk/presence legs still fire in
--- C++ on that path). The _vampires set has no ported consumer
--- (WasVampire feeds SpellScript legs only, :804/:820).
+-- C++ on that path). The _vampires set (GuidSet, :508) is PORTED
+-- tick 417 as per-player "vampire_<guidLow>" keys in the shared
+-- instanceData table (see recordVampire / clearVampireMarks below)
+-- for the achievement_once_bitten_twice_shy_n/_v gates
+-- (WasVampire, :466-469, feeds those scripts at :793-826) — the old
+-- "no ported consumer" note was wrong: the achievement scripts ARE
+-- consumers. The player-cast-bite SetGUID feed (:561,
+-- spell_blood_queen_vampiric_bite::OnCast, caster must be a player)
+-- has no Go path — players cannot cast 71726 in Go (the Frenzied
+-- Bloodthirst bite-or-die chain is unported) — so only boss-cast
+-- bites are recorded.
 -- Talk(SAY_PACT_OF_THE_DARKFALLEN 6) rides
 -- EVENT_PACT_OF_THE_DARKFALLEN (:407-420) — PORTED (2026-10-25, seed
 -- 15s / re-arm 30500ms unconditional): RandomResize(2/3 by
@@ -130,10 +139,11 @@
 -- cross-AI Talk (no cross-AI-Talk bridge); the
 -- spell_blood_queen_pact_of_the_darkfallen_dmg PeriodicTick is
 -- PORTED (tick 193, RegisterAuraEvent — see below); the remaining
--- AuraScript (essence_of_the_blood_queen) + 5 SpellScript + 2
--- AchievementCriteriaScript legs join the no-AuraScript-bridge /
--- no-SpellScript-bridge / no-achievement-criteria-bridge queues
--- (the boss_moragg optic-link precedent).
+-- AuraScript (essence_of_the_blood_queen) + 5 SpellScript legs join
+-- the no-AuraScript-bridge / no-SpellScript-bridge queues
+-- (the boss_moragg optic-link precedent). The 2
+-- AchievementCriteriaScripts are PORTED tick 417 (see the
+-- _vampires note above).
 -- All 13 Talk() calls in the file accounted for (13 =
 -- SAY_AGGRO 0 (1) + SAY_VAMPIRIC_BITE 1 (1, scheduler) +
 -- SAY_MIND_CONTROL 2 (1, cross-AI aura leg) +
@@ -190,6 +200,52 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ _vampires GuidSet (boss_blood_queen_lana_thel.cpp:508) as
+-- per-player keys in the shared instanceData table (the
+-- boss_northrend_beasts snoboldCount precedent — one real Lua table
+-- per (map, instance), engine/scripting/object.go): the Go gate
+-- reads "vampire_<guidLow>" via InstanceDataNumber
+-- (engine/world/achievement_criteria_scripts.go). GetGUIDLow is the
+-- low 32 bits of the player GUID (lua_player.go:105); the Go side
+-- formats the same value, so the key agrees exactly. The marks are
+-- cleared at ENGAGE (clearVampireMarks, the C++ Reset :169
+-- _vampires.clear() twin — Reset precedes engage on every attempt),
+-- NEVER in the ev23 Reset handler: ev23 pre-fires on death
+-- (fireCreatureDied, lua_creature_events.go) ahead of the
+-- kill-credit achievement read (kill.go), so a Reset clear would
+-- wipe the fight's marks before the criteria check reads them.
+local function vampireKey(guidLow)
+    return "vampire_" .. guidLow
+end
+
+local function recordVampire(creature, target)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data[vampireKey(target:GetGUIDLow())] = 1
+end
+
+local function clearVampireMarks(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    for key in pairs(data) do
+        if type(key) == "string" and string.sub(key, 1, 8) == "vampire_" then
+            data[key] = nil
+        end
+    end
 end
 
 -- C++ SelectRandomTarget(false) pool shape
@@ -319,6 +375,8 @@ local function onVampiricBite(creature, guid)
         creature:Talk(SAY_VAMPIRIC_BITE)
         target:CastSpell(target, SPELL_PRESENCE_OF_THE_DARKFALLEN, true)
         target:CastSpell(target, SPELL_PRESENCE_OF_THE_DARKFALLEN_2, true)
+        -- C++ EVENT_VAMPIRIC_BITE (:366): _vampires.insert(target GUID).
+        recordVampire(creature, target)
     end
 end
 
@@ -412,6 +470,9 @@ end
 local function lanaThelJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ Reset (:169): _vampires.clear() (engage is the clear site —
+    -- see the vampireKey note above; never in ev23 Reset).
+    clearVampireMarks(creature)
     -- C++ :184 — me-form DoZoneInCombat after me->setActive(true), before
     -- Talk(SAY_AGGRO) (C++ arm order; the mandokir/algalon event-1 precedent).
     creature:DoZoneInCombat()
@@ -451,8 +512,10 @@ local function lanaThelReset(event, creature)
     end
     cancelTimers(creature:GetGUID())
     -- C++ Reset() ends with CleanAuras() (boss_blood_queen_lana_thel.cpp:168),
-    -- after the timer arms; _vampires.clear()/Initialize() are unported
-    -- internals.
+    -- after the timer arms; the _vampires.clear() leg (:169) ports at
+    -- ENGAGE (clearVampireMarks — see the vampireKey note; a Reset
+    -- clear would be wiped by the death pre-fire before the criteria
+    -- read) and Initialize() has no Lua latch.
     cleanAuras(creature)
 end
 

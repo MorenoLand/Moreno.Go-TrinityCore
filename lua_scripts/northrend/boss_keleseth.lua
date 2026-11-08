@@ -103,8 +103,10 @@
 -- frost-tomb Keleseth, and the player-cast form rides the pet funnel
 -- (effect 28, spells.go:16321 — no temp-summon route on the player
 -- path). JustDied cross-creature SetData (DATA_ON_THE_ROCKS false)
--- via instance GetGuidData (DATA_PRINCE_KELESETH) (:101-105) —
--- instance-GUID leg, no bridge — stays out.
+-- via instance GetGuidData (DATA_PRINCE_KELESETH) (:101-105) — PORTED
+-- tick 417 (frostTombDied below): the boss GUID is latched by the ev5
+-- SetGuidData (sjonnir precedent) and the tomb's ev4 resolves it via
+-- creature:GetInstanceCreature (illidari-council precedent).
 -- npc_vrykul_skeleton (NPC_SKELETON 23970, :247-320) — PORTED this
 -- run (skeletonReset / skeletonDamageTaken / skeletonDecrepifyTick /
 -- skeletonResurrectTick / skeletonShadowFissureTick; the old "no
@@ -125,11 +127,12 @@
 -- AuraScript / SpellScript bridge; joins the no-SpellScript-bridge
 -- queue.
 -- achievement_on_the_rocks (OnCheck: GetAI()->GetData
--- (DATA_ON_THE_ROCKS), :372-380) — no GetData / achievement bridges;
--- joins the unmodeled-achievement queue.
+-- (DATA_ON_THE_ROCKS), :372-380) — PORTED tick 417 via the SetData
+-- write leg + Go gate (bossLatchData, achievement_criteria_scripts.go).
 
 local ENTRY_KELESETH = 23953
 local DATA_PRINCE_KELESETH = 0 -- utgarde_keep.h:31
+local DATA_ON_THE_ROCKS = 8 -- boss_keleseth.cpp:67 (KelsethEncounter enum)
 local ENTRY_FROST_TOMB = 23965 -- NPC_FROSTTOMB (boss_keleseth.cpp:46)
 local ENTRY_SKELETON = 23970 -- NPC_SKELETON (boss_keleseth.cpp:47)
 local ENTRY_RUNEMAGE = 23960 -- NPC_RUNEMAGE (boss_keleseth.cpp:49)
@@ -482,6 +485,36 @@ local function kelesethReset(event, creature)
     creature:SetBossState(DATA_PRINCE_KELESETH, 0)
     despawnSkeletons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize: onTheRocks = true ->
+    -- GetData(DATA_ON_THE_ROCKS) = 1 (boss_keleseth.cpp:131/:140);
+    -- achievement_on_the_rocks read leg (tick 417). Alive-gated:
+    -- ev23 fires on death too (fireCreatureDied runs Reset before
+    -- the kill-credit criteria read, kill.go:1091/:1400), and a
+    -- death-time re-arm would clobber the fight's latch before the
+    -- achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_ON_THE_ROCKS, 1)
+    end
+end
+
+-- C++ boss-keleseth GUID latching (instance_utgarde_keep.cpp:57/:140:
+-- OnCreatureCreate stores PrinceKelesethGUID, GetGuidData returns it)
+-- — the Lua mirror is the ev5 SetGuidData (sjonnir precedent), so the
+-- frost-tomb relay below can resolve the boss.
+local function kelesethSpawned(event, creature)
+    creature:SetGuidData(DATA_PRINCE_KELESETH)
+end
+
+-- C++ npc_frost_tomb::JustDied (boss_keleseth.cpp:99-105): a killed
+-- Frost Tomb clears the latch on Keleseth via instance GetGuidData.
+-- A tomb that despawns via the frost-tomb aura removal (spell_frost_tomb
+-- OnRemove, :341-370) never fires ev4, matching the C++ JustDied-only
+-- leg. Event 4 fires on the tomb with (event, creature, killer).
+local function frostTombDied(event, creature, killer)
+    local keleseth = creature:GetInstanceCreature(DATA_PRINCE_KELESETH)
+    if keleseth then
+        keleseth:SetData(DATA_ON_THE_ROCKS, 0)
+    end
 end
 
 local function kelesethJustSummoned(_, creature, summoned)
@@ -498,6 +531,8 @@ local function kelesethJustSummoned(_, creature, summoned)
 end
 
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
+RegisterCreatureEvent(ENTRY_KELESETH, 5, kelesethSpawned)
+RegisterCreatureEvent(ENTRY_FROST_TOMB, 4, frostTombDied)
 RegisterCreatureEvent(ENTRY_KELESETH, 19, kelesethJustSummoned)
 RegisterCreatureEvent(ENTRY_KELESETH, 2, kelesethLeaveCombat)
 RegisterCreatureEvent(ENTRY_KELESETH, 4, kelesethDied)

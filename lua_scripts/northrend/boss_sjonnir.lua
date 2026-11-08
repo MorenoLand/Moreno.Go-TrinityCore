@@ -378,7 +378,13 @@ end
 local function sjonnirReset(event, creature)
     despawnSjonnirSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
-    creature:SetData(DATA_ABUSE_THE_OOZE, 0)
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's counter before
+    -- the achievement gate reads it; the wipe re-arm is preserved.
+    if creature:IsAlive() then
+        creature:SetData(DATA_ABUSE_THE_OOZE, 0)
+    end
     creature:SetBossState(DATA_SJONNIR, 0)
 end
 

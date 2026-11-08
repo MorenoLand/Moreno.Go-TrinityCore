@@ -34,16 +34,23 @@
 -- group-size proxy misread short 25-man raids). SummonedCreatureDies (event 21, anomalus
 -- precedent: handler args are event, creature, summon, killer):
 -- summon casts FUNGAL_CREEP 29232 on itself, triggered — the
--- _sporeLoser latch itself is unmodeled (its only consumer is the
--- achievement criteria script, no bridge). Reset (event 23):
+-- _sporeLoser latch is PORTED tick 417 via creature:SetData
+-- (DATA_ACHIEVEMENT_SPORE_LOSER 21822183): set at spawn (C++ ctor
+-- :65 twin) + engage (C++ Reset :72 twin — Reset precedes engage on
+-- every attempt), cleared in the ev21 handler (C++
+-- SummonedCreatureDies :84-86). It is NOT written in the ev23 Reset
+-- handler: ev23 pre-fires on death (fireCreatureDied,
+-- lua_creature_events.go) ahead of the kill-credit achievement read
+-- (kill.go), so a Reset re-arm would clobber the fight's latch
+-- before the criteria check reads it — engage is the re-arm site,
+-- Reset stays latch-free. Reset (event 23):
 -- FUNGAL_CREEP 29232 removed from every player on the boss's
 -- map+instance (player:RemoveAura bridge, lua_player.go:299;
 -- apoko map/instance filter precedent) + doomCounter reset.
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired): Reset/
 -- JustEngagedWith/JustDied instance bookkeeping (_Reset/_JustDied);
--- achievement_spore_loser criteria script (GetData consumer — no
--- achievement bridge); spell_loatheb_deathbloom AuraScript
+-- spell_loatheb_deathbloom AuraScript
 -- AfterRemove leg (DEATHBLOOM_FINAL_DAMAGE 55594 on aura expire —
 -- no SpellScript bridge); the spore creature itself has no AI
 -- class in this file (spell-summoned, DB-side); melee
@@ -60,6 +67,8 @@ local SPELL_SUMMON_SPORE = 29234
 local SPELL_DEATHBLOOM = 29865
 local SPELL_INEVITABLE_DOOM = 29204
 local SPELL_FUNGAL_CREEP = 29232
+
+local DATA_ACHIEVEMENT_SPORE_LOSER = 21822183 -- boss_loatheb.cpp:55
 
 local timers = {}
 local doomCounter = {}
@@ -156,6 +165,8 @@ local function loathebEnterCombat(event, creature)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
     local guid = creature:GetGUID()
     doomCounter[guid] = 0
+    -- C++ Reset (:72): _sporeLoser = true (re-arm site — see header).
+    creature:SetData(DATA_ACHIEVEMENT_SPORE_LOSER, 1)
     schedule(guid, "necrotic", 17000, function()
         necroticTick(creature, guid)
     end)
@@ -198,9 +209,20 @@ local function loathebDied(event, creature, killer)
 end
 
 local function loathebSummonedDied(event, creature, summon, killer)
+    -- C++ SummonedCreatureDies (:84-86): _sporeLoser = false.
+    -- Loatheb summons only spores (SPELL_SUMMON_SPORE 29234), so no
+    -- entry filter is needed; the spore death reaches ev21 via the
+    -- spell-summon funnel stamping OwnerGUID (summonTempCreature,
+    -- lua_creature_events.go:96).
+    creature:SetData(DATA_ACHIEVEMENT_SPORE_LOSER, 0)
     if summon ~= nil then
         summon:CastSpell(summon, SPELL_FUNGAL_CREEP, true)
     end
+end
+
+-- C++ ctor (:65): _sporeLoser = true.
+local function loathebSpawned(event, creature)
+    creature:SetData(DATA_ACHIEVEMENT_SPORE_LOSER, 1)
 end
 
 local function loathebReset(event, creature)
@@ -219,5 +241,6 @@ end
 RegisterCreatureEvent(ENTRY_LOATHEB, 1, loathebEnterCombat)
 RegisterCreatureEvent(ENTRY_LOATHEB, 2, loathebLeaveCombat)
 RegisterCreatureEvent(ENTRY_LOATHEB, 4, loathebDied)
+RegisterCreatureEvent(ENTRY_LOATHEB, 5, loathebSpawned)
 RegisterCreatureEvent(ENTRY_LOATHEB, 21, loathebSummonedDied)
 RegisterCreatureEvent(ENTRY_LOATHEB, 23, loathebReset)

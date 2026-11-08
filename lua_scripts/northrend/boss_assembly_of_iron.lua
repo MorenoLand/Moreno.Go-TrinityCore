@@ -207,8 +207,11 @@
 -- RegisterAuraEvent OnRemove); the periodic leg stays out —
 -- no GetSummonerGUID bridge).
 -- achievement_assembly_i_choose_you (OnCheck: target GetAI()
--- -> GetData(DATA_PHASE_3)) — no GetData / achievement
--- bridges; joins the unmodeled-achievement queue.
+-- -> GetData(DATA_PHASE_3)) — PORTED 2026-11-08 (tick 417): the
+-- phase write leg rides the Lua twin above (ev1 phase 1, ev23
+-- phase 0 + SetData 0, superchargeSurvivors SetData 1 at phase 3);
+-- Go case in engine/world/achievement_criteria_scripts.go reads
+-- the killed boss's ScriptData slot 1 (fail-closed: absent reads 0).
 
 local ENTRY_STEELBREAKER = 32867
 local ENTRY_MOLGEIM = 32927
@@ -244,6 +247,18 @@ local SPELL_SHIELD_OF_RUNES = 62274
 local SPELL_OVERLOAD = 61869
 local SPELL_CHAIN_LIGHTNING = 61879
 local SPELL_SUPERCHARGE = 61920
+
+-- DATA_PHASE_3 = 1 (boss_assembly_of_iron.cpp:133, Misc enum).
+-- assemblyPhase is the GUID-keyed twin of the C++ member `phase`
+-- (one per boss AI): Initialize/Reset 0, JustEngagedWith ++ to 1
+-- (events.SetPhase(++phase), :167/:314/:493), each supercharge ++
+-- (:187/:336/:511). GetData(DATA_PHASE_3) returns 1 iff phase >= 3
+-- (:172-177/:320-326/:481-486) — reached only by the last survivor
+-- (engage 1 + two supercharges). The store write lands in
+-- superchargeSurvivors below; the Go gate reads it off the killed
+-- boss (achievement_assembly_i_choose_you).
+local DATA_PHASE_3 = 1
+local assemblyPhase = {}
 
 local timers = {}
 
@@ -340,6 +355,16 @@ local function superchargeSurvivors(creature)
             if add:GetGUID() ~= selfGuid and add:IsAlive() then
                 add:SetHealth(add:GetMaxHealth())
                 add:AddAura(SPELL_SUPERCHARGE)
+                -- C++ DoAction(ACTION_SUPERCHARGE): events.SetPhase
+                -- (++phase) (boss_assembly_of_iron.cpp:187/:336/:511).
+                -- The `or 1` fallback is the post-engage phase (each
+                -- boss's ev1 sets 1 below); at phase 3 the survivor is
+                -- the achievement target (GetData(DATA_PHASE_3) == 1).
+                local phase = (assemblyPhase[add:GetGUID()] or 1) + 1
+                assemblyPhase[add:GetGUID()] = phase
+                if phase >= 3 then
+                    add:SetData(DATA_PHASE_3, 1)
+                end
                 local rearm = rearms[entry]
                 if rearm then
                     rearm(add, add:GetGUID())
@@ -398,6 +423,7 @@ local function steelbreakerEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_HIGH_VOLTAGE)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    assemblyPhase[guid] = 1 -- C++ JustEngagedWith: events.SetPhase(++phase), phase 0 -> 1 (boss_assembly_of_iron.cpp:167)
     schedule(guid, "berserk", 900000, function()
         steelbreakerBerserkTick(creature, guid)
     end)
@@ -424,6 +450,15 @@ local function steelbreakerReset(event, creature)
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
     end
     creature:RemoveAllAuras()
+    -- C++ Reset -> Initialize: phase = 0 (boss_assembly_of_iron.cpp:155-160).
+    assemblyPhase[creature:GetGUID()] = 0
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's phase before
+    -- the achievement gate reads it; engage re-sets it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_PHASE_3, 0)
+    end
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -504,6 +539,7 @@ local function molgeimEnterCombat(event, creature, target)
     creature:Talk(SAY_MOLGEIM_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    assemblyPhase[guid] = 1 -- C++ JustEngagedWith: events.SetPhase(++phase), phase 0 -> 1 (boss_assembly_of_iron.cpp:314)
     schedule(guid, "berserk", 900000, function()
         molgeimBerserkTick(creature, guid)
     end)
@@ -529,6 +565,15 @@ local function molgeimReset(event, creature)
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
     end
     creature:RemoveAllAuras()
+    -- C++ Reset -> Initialize: phase = 0 (boss_assembly_of_iron.cpp:303-308).
+    assemblyPhase[creature:GetGUID()] = 0
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's phase before
+    -- the achievement gate reads it; engage re-sets it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_PHASE_3, 0)
+    end
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -648,6 +693,7 @@ local function brundirEnterCombat(event, creature, target)
     creature:Talk(SAY_BRUNDIR_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    assemblyPhase[guid] = 1 -- C++ JustEngagedWith: events.SetPhase(++phase), phase 0 -> 1 (boss_assembly_of_iron.cpp:493)
     schedule(guid, "berserk", 900000, function()
         brundirBerserkTick(creature, guid)
     end)
@@ -678,6 +724,15 @@ local function brundirReset(event, creature)
     end
     creature:RemoveAllAuras()
     creature:SetHover(false)
+    -- C++ Reset -> Initialize: phase = 0 (boss_assembly_of_iron.cpp:471-483).
+    assemblyPhase[creature:GetGUID()] = 0
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's phase before
+    -- the achievement gate reads it; engage re-sets it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_PHASE_3, 0)
+    end
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk

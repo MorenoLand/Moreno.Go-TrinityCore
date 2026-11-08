@@ -65,12 +65,13 @@
 -- out. Initialize() only clears Lua-absent state (_slagPotGUID / _shattered /
 -- _firstConstructKill) — nothing to port.
 -- GetData(DATA_SHATTERED 29252926) — creature:GetData IS bridged
--- (ScriptData store, 2026-10-24) but the leg stays out: the producer
--- is the DoAction(20) cross-AI relay (dispatch IS bridged — ev38 —
--- but the sender is the unregistered iron construct's DamageTaken,
--- boss_ignis.cpp:333) and the
--- sole consumer is achievement_ignis_shattered below (no achievement
--- bridge), so a Lua-side latch would be dead code.
+-- (ScriptData store, 2026-10-24); the write leg is PORTED 2026-11-08
+-- (tick 417, ignisDoAction + ironConstructDamageTaken below): the
+-- DoAction(20) dispatch rides ev38 and the sender is the iron
+-- construct's DamageTaken (ev9, boss_ignis.cpp:327-335). LATENT: the
+-- BRITTLE aura machine is unported, so the leg cannot fire yet and
+-- the Go gate is fail-closed. The RemoveAuraFromStack leg in the same
+-- DoAction has no bridge and stays out.
 -- JustSummoned — PORTED 2026-11-03 (ignisJustSummoned, event 19):
 -- construct setup (SetFaction/SetReactState/RemoveFlag x4) +
 -- EngageWithTarget(victim) (the AttackStart twin) + DoZoneInCombat +
@@ -80,11 +81,11 @@
 -- constructs now spawn live via the ported EVENT_CONSTRUCT arm
 -- (constructTick, summon type 3), as does the scorch ground via the ported
 -- EVENT_SCORCH summon site.
--- DoAction(ACTION_REMOVE_BUFF 20) — RemoveAuraFromStack(SPELL_
--- STRENGHT 64473) + the GameTime <5s shattered window (producer:
--- npc_iron_construct DamageTaken, boss_ignis.cpp:333 — the construct
--- is unregistered, so no Lua sender exists; dispatch itself IS
--- bridged, ev38) — no aura-stack bridge.
+-- DoAction(ACTION_REMOVE_BUFF 20) — PORTED 2026-11-08 (tick 417,
+-- ignisDoAction below): the GameTime <5s shattered window + SetData
+-- latch; RemoveAuraFromStack(SPELL_STRENGHT 64473) has no bridge and
+-- stays out. The sender is the iron construct's DamageTaken
+-- (boss_ignis.cpp:327-335), ported as ironConstructDamageTaken below.
 -- EVENT_SLAG_POT (:227-:236) — Talk(SAY_SLAG_POT 2) +
 -- SelectTarget(Random,1,100,true) + DoCast(target, SPELL_GRAB
 -- 62707) 2-arg non-triggered + DelayEvents(3s) -> EVENT_GRAB_POT
@@ -114,16 +115,11 @@
 -- construct fires the ported ev19 JustSummoned arm. Its own AI stays
 -- unregistered (DamageTaken shatter leg blocked, see below), so the
 -- construct melees engine-driven without the HEAT/BRITTLE machine.
--- npc_iron_construct (NPC_IRON_CONSTRUCT 33121 local enum —
--- entry-verifiable but bridge-blocked; the npc_spark_of_ionar
--- no-bridgeable-arms precedent — no registration): DamageTaken
--- shatter leg (HasAura(SPELL_BRITTLE 62382 / 67114) && damage
--- >= 5000 -> DoCast(SPELL_SHATTER 62383) self + DoAction(
--- ACTION_REMOVE_BUFF) to Ignis + DespawnOrUnsummon(1s)) — damage-taken IS
--- bridged (creature event 9, engine/world/lua_creature_events.go:286); the
--- leg is blocked by the DoAction cross-AI arm (RemoveAuraFromStack also
--- unbridged) and DespawnOrUnsummon; the NPC now spawns live via the ported
--- EVENT_CONSTRUCT arm but stays unregistered (arms blocked as above).
+-- npc_iron_construct (NPC_IRON_CONSTRUCT 33121 local enum): DamageTaken
+-- shatter leg PORTED 2026-11-08 (tick 417, ironConstructDamageTaken
+-- below; ev9 + DoAction ev38 + DespawnOrUnsummon all bridged) — LATENT
+-- until the BRITTLE aura machine ports (see GetData note). The NPC now
+-- spawns live via the ported EVENT_CONSTRUCT arm.
 -- UpdateAI HEAT-stack / MOLTEN / BRITTLE /
 -- IsInWater machine — aura-stack leg: GetStackAmount is bridged
 -- but self-reads only engine-applied auras (a Lua AddAura reads 0)
@@ -146,8 +142,10 @@
 -- SLAG_IMBUED 62836 when target alive) — no AuraScript bridge;
 -- joins the no-AuraScript-bridge queue.
 -- achievement_ignis_shattered — OnCheck: target AI GetData
--- (DATA_SHATTERED) != 0 — no GetData / achievement bridges;
--- joins the unmodeled-achievement queue.
+-- (DATA_SHATTERED) != 0 — PORTED 2026-11-08 (tick 417, latent; see
+-- GetData note above). Go case in
+-- engine/world/achievement_criteria_scripts.go reads the killed
+-- Ignis's ScriptData slot 29252926 (fail-closed: absent reads 0).
 
 local ENTRY_IGNIS = 33118
 
@@ -167,6 +165,18 @@ local SPELL_BERSERK = 47008
 local SPELL_SCORCH = 62546 -- boss_ignis.cpp:267
 local SPELL_STRENGHT = 64473 -- boss_ignis.cpp:273 (C++ spelling)
 local SPELL_ACTIVATE_CONSTRUCT = 62488 -- boss_ignis.cpp:274
+
+-- Achievement leg (tick 417): SPELL_BRITTLE 62382 / SPELL_BRITTLE_25
+-- 67114 (boss_ignis.cpp:55-56), SPELL_SHATTER 62383 (:57),
+-- ACTION_REMOVE_BUFF 20 (:75), DATA_SHATTERED 29252926 (:86).
+-- ignisFirstShatter is the GUID-keyed twin of C++ _firstConstructKill
+-- (GameTime seconds; os.time() here).
+local SPELL_BRITTLE = 62382
+local SPELL_BRITTLE_25 = 67114
+local SPELL_SHATTER = 62383
+local ACTION_REMOVE_BUFF = 20
+local DATA_SHATTERED = 29252926
+local ignisFirstShatter = {}
 
 local NPC_GROUND_SCORCH = 33221 -- boss_ignis.cpp:266
 local NPC_IRON_CONSTRUCT = 33121 -- boss_ignis.cpp:272
@@ -382,6 +392,11 @@ local function ignisEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ JustEngagedWith -> Initialize (boss_ignis.cpp:154):
+    -- _shattered = false, _firstConstructKill = 0. (C++ Reset does NOT
+    -- re-init them, :135-141, so no clear rides ignisReset below.)
+    creature:SetData(DATA_SHATTERED, 0)
+    ignisFirstShatter[guid] = 0
     schedule(guid, "jet", 30000, function()
         jetTick(creature, guid)
     end)
@@ -426,9 +441,55 @@ local function ignisReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_ignis_AI::DoAction(ACTION_REMOVE_BUFF 20)
+-- (boss_ignis.cpp:194-208): RemoveAuraFromStack(SPELL_STRENGHT 64473)
+-- + the GameTime <5s shattered window — a second construct shattered
+-- within 5s of the first sets _shattered. The aura-stack removal has
+-- no bridge (no RemoveAuraFromStack method in engine/world) and stays
+-- out; the window + latch port here. os.time() is the
+-- GameTime::GetGameTime twin (seconds; archavon precedent).
+local function ignisDoAction(event, creature, action)
+    if action ~= ACTION_REMOVE_BUFF then
+        return
+    end
+    local guid = creature:GetGUID()
+    local now = os.time()
+    local first = ignisFirstShatter[guid] or 0
+    if now - first < 5 then
+        creature:SetData(DATA_SHATTERED, 1)
+    end
+    ignisFirstShatter[guid] = now
+end
+
+-- C++ npc_iron_construct::DamageTaken (boss_ignis.cpp:327-335):
+-- HasAura(RAID_MODE(SPELL_BRITTLE, SPELL_BRITTLE_25)) && damage >= 5000
+-- -> DoCast(SPELL_SHATTER) self + Ignis DoAction(ACTION_REMOVE_BUFF)
+-- + DespawnOrUnsummon(1s). ev9 fires pre-damage
+-- (lua_creature_events.go: fireCreatureDamageTaken); returning nothing
+-- leaves the damage intact. LATENT: the BRITTLE aura is never applied
+-- in Lua (the HEAT/MOLTEN/BRITTLE/IsInWater machine is unported), so
+-- this cannot fire yet; the latch defaults false, so the Go gate is
+-- fail-closed.
+local function ironConstructDamageTaken(event, creature, attacker, damage)
+    if not creature:HasAura(SPELL_BRITTLE) and not creature:HasAura(SPELL_BRITTLE_25) then
+        return
+    end
+    if damage < 5000 then
+        return
+    end
+    creature:CastSpell(creature, SPELL_SHATTER)
+    local ignis = creature:FindNearestCreature(ENTRY_IGNIS, 200)
+    if ignis then
+        ignis:DoAction(ACTION_REMOVE_BUFF)
+    end
+    creature:DespawnOrUnsummon(1000)
+end
+
 RegisterCreatureEvent(ENTRY_IGNIS, 1, ignisEnterCombat)
 RegisterCreatureEvent(ENTRY_IGNIS, 2, ignisLeaveCombat)
 RegisterCreatureEvent(ENTRY_IGNIS, 3, ignisTargetDied)
 RegisterCreatureEvent(ENTRY_IGNIS, 4, ignisDied)
 RegisterCreatureEvent(ENTRY_IGNIS, 19, ignisJustSummoned)
 RegisterCreatureEvent(ENTRY_IGNIS, 23, ignisReset)
+RegisterCreatureEvent(ENTRY_IGNIS, 38, ignisDoAction)
+RegisterCreatureEvent(NPC_IRON_CONSTRUCT, 9, ironConstructDamageTaken)

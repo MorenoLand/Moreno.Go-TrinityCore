@@ -11,6 +11,33 @@
 -- (lua_player.go:2577 -> castSpellDirect), so the wrapped player's
 -- triggered self-cast lands non-triggered; pre-existing bridge gap,
 -- same as all prior player-target ports.
+--
+-- achievement_watch_him_die — PORTED tick 417: the C++ OnCheck
+-- (boss_krikthir_the_gatewatcher.cpp:1036-1061) requires the three
+-- Watchers (Gashra 28730 / Narjil 28729 / Silthik 28731) all ALIVE at
+-- Krik'thir kill time — the loop `continue`s only while each watcher
+-- is alive and returns false on the first dead/missing one, so the
+-- gate passes only with zero watcher deaths. The Go gate therefore
+-- reads a Lua-maintained death counter on Krik'thir's motion and
+-- passes when it is 0 (no Go-side instance-creature-alive reader):
+-- each watcher's ev4 (watcherDied below, the C++ JustDied ->
+-- DoAction relay, :432-434/:510-512/:588-590) increments
+-- SetData(DATA_WATCHERS_DEAD); the boss GUID is latched by the ev5
+-- SetGuidData (sjonnir precedent; C++ instance_azjol_nerub.cpp:36
+-- latches NPC_KRIKTHIR under DATA_KRIKTHIR). DATA_WATCHERS_DEAD is
+-- a Lua-side slot — the C++ boss AI's only SetData slot is
+-- DATA_PET_GROUP = 0 (:105), so 1 is free. No Reset write: dead
+-- watchers stay dead across a wipe (the counter must survive evade),
+-- and a fresh motion reads 0, the C++ all-alive default. (Coordinator
+-- correction tick 417: the worker's first draft read the loop
+-- backwards as "all dead"; the C++ text says all alive.)
+
+local ENTRY_KRIKTHIR = 28684 -- azjol_nerub.h:46
+local DATA_KRIKTHIR = 0 -- azjol_nerub.h:31
+local DATA_WATCHERS_DEAD = 1 -- Lua-side slot (see header note)
+local NPC_WATCHER_NARJIL = 28729 -- azjol_nerub.h:50
+local NPC_WATCHER_GASHRA = 28730 -- azjol_nerub.h:51
+local NPC_WATCHER_SILTHIK = 28731 -- azjol_nerub.h:52
 
 local SPELL_WEB_WRAP = 52086 -- boss_krikthir_the_gatewatcher.cpp:74
 local SPELL_WEB_WRAP_WRAPPED = 52087 -- boss_krikthir_the_gatewatcher.cpp:75
@@ -26,3 +53,30 @@ local function webWrapRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WEB_WRAP, 3, webWrapRemove)
+
+-- C++ boss-krik'thir GUID latching (instance_azjol_nerub.cpp:36:
+-- NPC_KRIKTHIR -> DATA_KRIKTHIR) — the Lua mirror is the ev5
+-- SetGuidData (sjonnir precedent), so the watcher relay below can
+-- resolve the boss.
+local function krikthirSpawned(event, creature)
+    creature:SetGuidData(DATA_KRIKTHIR)
+end
+
+-- C++ npc_watcher_{gashra,narjil,silthik}::JustDied
+-- (boss_krikthir_the_gatewatcher.cpp:432-434/:510-512/:588-590): a
+-- killed Watcher relays DoAction(ACTION_*_DIED) to Krik'thir via
+-- instance GetCreature(DATA_KRIKTHIR). The Lua twin resolves the
+-- boss via creature:GetInstanceCreature (illidari-council precedent)
+-- and increments the dead-watchers counter on his motion. Event 4
+-- fires on the watcher with (event, creature, killer).
+local function watcherDied(event, creature, killer)
+    local krikthir = creature:GetInstanceCreature(DATA_KRIKTHIR)
+    if krikthir then
+        krikthir:SetData(DATA_WATCHERS_DEAD, krikthir:GetData(DATA_WATCHERS_DEAD) + 1)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_KRIKTHIR, 5, krikthirSpawned)
+RegisterCreatureEvent(NPC_WATCHER_NARJIL, 4, watcherDied)
+RegisterCreatureEvent(NPC_WATCHER_GASHRA, 4, watcherDied)
+RegisterCreatureEvent(NPC_WATCHER_SILTHIK, 4, watcherDied)

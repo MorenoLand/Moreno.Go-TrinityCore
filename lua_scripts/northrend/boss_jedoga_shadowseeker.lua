@@ -145,9 +145,14 @@
 -- precedent; C++ despawns immediately, the 15s is respawn-side —
 -- ScriptedCreature.cpp:596-616; stale "no despawn bridge"
 -- retracted),
--- MovementInform (all point choreography — no motion
--- bridges), GetData(DATA_VOLUNTEER_WORK) (no cross-AI GetData
--- bridge — achievement_volunteer_work needs it too).
+-- GetData(DATA_VOLUNTEER_WORK) — PORTED tick 417 via event 21
+-- (jedogaSummonedDied below): a Twilight Volunteer actually dying
+-- writes SetData(DATA_VOLUNTEER_WORK, 0); the spawn-time write of 1
+-- rides event 5 (jedogaSpawned below). A sacrificed volunteer does
+-- NOT die (it kneels and despawns, boss_jedoga_shadowseeker.cpp:428-444),
+-- so the sacrifice path never clears the latch — C++-exact.
+-- achievement_volunteer_work — PORTED tick 417 via the SetData write
+-- leg + Go gate (bossLatchData, achievement_criteria_scripts.go).
 -- npc_twilight_volunteer — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
 -- (30385 — ahnkahet.h NPC_TWILIGHT_VOLUNTEER, kalecgos pass): zero
 -- registration. The entire AI rides the unported phase-two
@@ -179,11 +184,13 @@
 -- DestinationTargetSelect EFFECT_0 relocate -19z): no SpellScript
 -- binding bridge (razelikh precedent) — documented-only.
 -- achievement_volunteer_work (AchievementCriteriaScript — GetAI()->
--- GetData(DATA_VOLUNTEER_WORK)): no achievement-criteria bridge on
--- the Lua surface (snakes precedent) + the cross-AI GetData bridge
--- is absent anyway — documented-only.
+-- GetData(DATA_VOLUNTEER_WORK)) — PORTED tick 417 via the SetData
+-- write leg + Go gate (bossLatchData, achievement_criteria_scripts.go);
+-- the "no bridge" claim is stale (ev21 + the SetData store are live).
 
 local ENTRY_JEDOGA_SHADOWSEEKER = 29310
+local DATA_VOLUNTEER_WORK = 1 -- boss_jedoga_shadowseeker.cpp:137
+local NPC_TWILIGHT_VOLUNTEER = 30385 -- ahnkahet.h:57
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 3
@@ -297,9 +304,30 @@ local function jedogaLeaveCombat(event, creature)
     creature:Despawn()
 end
 
+-- C++ ctor _volunteerWork = true (boss_jedoga_shadowseeker.cpp:145):
+-- the init write rides event 5 (spawn/respawn = fresh motion, the
+-- SetGuidData precedent), NOT event 23 — C++ Reset (:148-160) never
+-- touches _volunteerWork, so a wipe after a volunteer died must keep
+-- the latch cleared.
+local function jedogaSpawned(event, creature)
+    creature:SetData(DATA_VOLUNTEER_WORK, 1)
+end
+
+-- C++ SummonedCreatureDies (boss_jedoga_shadowseeker.cpp:253-260): a
+-- summoned Twilight Volunteer dying sets _volunteerWork = false.
+-- Event 21 fires on the summoner with (event, creature, summon, killer)
+-- (lua_creature_events.go fireCreatureDied; amanitar precedent).
+local function jedogaSummonedDied(event, creature, summon, killer)
+    if summon:GetEntry() == NPC_TWILIGHT_VOLUNTEER then
+        creature:SetData(DATA_VOLUNTEER_WORK, 0)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 1, jedogaEnterCombat)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 2, jedogaLeaveCombat)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 23, jedogaReset)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 19, jedogaJustSummoned)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 3, jedogaTargetDied)
 RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 4, jedogaDied)
+RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 5, jedogaSpawned)
+RegisterCreatureEvent(ENTRY_JEDOGA_SHADOWSEEKER, 21, jedogaSummonedDied)

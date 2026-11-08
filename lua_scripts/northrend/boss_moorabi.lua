@@ -51,11 +51,14 @@
 -- EnterEvadeMode _DespawnAtEvade — the despawn half now rides
 -- creature:Despawn (bridged this tick); the instance
 -- SetBossState(FAIL) half rides the no-instance bridge.
--- GetData(DATA_LESS_RABI) has no cross-AI bridge (zero hits);
--- the SpellHit(55098) latch now lands via event 14 (see transformTick).
+-- GetData(DATA_LESS_RABI) — the _transformed latch now lands in the
+-- boss motion's SetData store (tick 417): Reset/EnterCombat write 1
+-- (untransformed, boss_moorabi.cpp:83/:108-113), the event-14 SpellHit
+-- (55098) landing writes 0 (:128-136); checkAchievementCriteriaScript
+-- reads it for achievement_less_rabi.
 -- achievement_less_rabi (AchievementCriteriaScript, CAST_AI cross-AI
--- OnCheck) — no achievement-criteria bridge on the Lua surface
--- (snakes precedent) — documented-only.
+-- OnCheck) — PORTED tick 417 via the SetData write leg + Go gate
+-- (bossLatchData, achievement_criteria_scripts.go).
 -- spell_moorabi_mojo_frenzy (AuraScript periodic dummy: cast-speed
 -- bonus = (100 - healthPct) * 4 via SPELL_MOJO_FRENZY_CAST_SPEED
 -- 55096) — PORTED below via RegisterAuraEvent.
@@ -64,6 +67,7 @@
 -- bridge.
 
 local ENTRY_MOORABI = 29305
+local DATA_LESS_RABI = 1 -- boss_moorabi.cpp:60 (Misc enum)
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -227,6 +231,10 @@ local function moorabiEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_MOJO_FRENZY, true)
     transformed[guid] = false
+    -- C++ Reset/ctor _transformed = false -> GetData(DATA_LESS_RABI) = 1
+    -- (boss_moorabi.cpp:83/:108-113); the SetData store is the
+    -- achievement_less_rabi read leg (tick 417).
+    creature:SetData(DATA_LESS_RABI, 1)
     schedule(guid, "tremor", 18000, function()
         tremorTick(creature, guid)
     end)
@@ -289,6 +297,15 @@ local function moorabiReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     transformed[guid] = nil
+    -- C++ Reset _transformed = false -> GetData(DATA_LESS_RABI) = 1
+    -- (boss_moorabi.cpp:83/:108-113); achievement_less_rabi read leg.
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time re-arm would clobber the fight's latch before
+    -- the achievement gate reads it; engage re-sets it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_LESS_RABI, 1)
+    end
     -- C++ EVENT_PHANTOM (boss_moorabi.cpp:85 Reset, :173-176 UpdateAI):
     -- Reset-scheduled 21s -> {20s,25s} repeat, triggered self-cast
     -- 55205, phase group PHASE_INTRO only; JustEngagedWith's
@@ -321,6 +338,9 @@ local function moorabiSpellHit(event, creature, caster, spellId)
         local guid = creature:GetGUID()
         local first = not transformed[guid]
         transformed[guid] = true
+        -- C++ SpellHit(55098) _transformed = true -> GetData(DATA_LESS_RABI)
+        -- = 0 (boss_moorabi.cpp:128-136); achievement_less_rabi read leg.
+        creature:SetData(DATA_LESS_RABI, 0)
         if first then
             creature:Talk(EMOTE_TRANSFORMED)
         end

@@ -36,8 +36,10 @@
 -- threshold + aura-removal blocked, interrupt leg now bridged). NOTE: DelayEvents(20s, 0) at :431 is a C++ no-op
 -- (EventMap.cpp:111 early-returns on group 0), so the shutdown arm
 -- is fully C++-exact as ported.
--- The systems_shutdown AuraScript (stun/root + gathering-speed removal) and the
--- Shutout achievement flag have no bridges — documented. The
+-- The systems_shutdown AuraScript (stun/root + gathering-speed removal)
+-- has no AddUnitState bridge — documented. The Shutout achievement
+-- flag IS modeled (tick 417): spawn init (Initialize twin) + the
+-- EVENT_SHUTDOWN clear leg in shutdownTick below. The
 -- ClearUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT) line in EVENT_REPAIR
 -- (:435) is likewise unmodeled (no ClearUnitState bridge); the
 -- UpdateAI CASTING gates (own pre-loop :394 + in-loop :473) are
@@ -101,9 +103,14 @@
 -- gated FindNearestCreature(NPC_CONTAINER, 50) + MovePoint(1) leg rides
 -- the unported vehicle machine (GetVehicleKit/GetVehicle unbridged) and
 -- the unbridged MovePoint — stays out.
--- GetData(DATA_SHUTOUT / DATA_UNBROKEN / DATA_ORBIT_ACHIEVEMENTS) /
--- SetData(DATA_UNBROKEN) / DoAction tower-destruction loot-mode ladder —
--- no GetData/SetData/DoAction bridges.
+-- GetData(DATA_UNBROKEN) / SetData(DATA_UNBROKEN) — the instance-script
+-- Unbroken latch is cleared only by the spell_auto_repair SpellScript
+-- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), so
+-- achievement_unbroken stays fail-closed (see below). The DoAction
+-- tower-destruction loot-mode ladder stays out (no loot-mode bridge);
+-- the tower-destruction COUNT leg is modeled via the GO-destroyed
+-- handlers below, and the hard-mode activation leg via the lorekeeper
+-- gossip select + ev38 DoAction handler.
 -- DoBatteringRamIfReady — _pursueTarget + attack-timer legs — no bridges.
 -- SAY_SLAY 1 is defined but never used in C++ (no KilledUnit override) —
 -- no event 3 arm.
@@ -138,11 +145,20 @@
 -- go_ulduar_tower — GameObjectScript — RegisterGameObjectGossipEvent
 -- exists (runtime.go:802); the arm's legs (tower destruction state)
 -- stay documented-only on the instance/GO-state machine.
--- achievement_three_car_garage_{demolisher,chopper,siege}, achievement_shutout,
--- achievement_unbroken, achievement_orbital_bombardment,
+-- achievement_three_car_garage_{demolisher,chopper,siege} — already
+-- ported Go-side (vehicleCreatureEntry cases in
+-- achievement_criteria_scripts.go); no Lua leg needed.
+-- achievement_shutout, achievement_orbital_bombardment,
 -- achievement_orbital_devastation, achievement_nuked_from_orbit,
--- achievement_orbit_uary — GetData/vehicle-based OnCheck legs — no
--- achievement/GetData bridges; all nine join the unmodeled-achievement queue.
+-- achievement_orbit_uary — PORTED (tick 417): the FL SetData write
+-- legs below (spawn init, EVENT_SHUTDOWN clear, lorekeeper
+-- hard-mode activation, tower-destruction decrements); the Go cases
+-- read them off the killed leviathan's SetData store
+-- (bossLatchData). achievement_unbroken — BLOCKED: its only clear
+-- leg is the spell_auto_repair SpellScript
+-- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), and
+-- the instance Unbroken latch has no Lua writer, so no Go case may
+-- read it (a bare read would award on every kill).
 -- spell_overload_circuit (62399) / spell_tar_blaze (62292) /
 -- spell_load_into_catapult / spell_auto_repair / spell_pursue /
 -- spell_vehicle_throw_passenger — AuraScript/SpellScript bridges absent;
@@ -159,6 +175,30 @@ local SPELL_DUST_CLOUD_IMPACT = 54740
 
 -- DATA_LEVIATHAN = 0 (ulduar.h:36; BOSS_LEVIATHAN bossId).
 local DATA_LEVIATHAN = 0
+
+-- boss_flame_leviathan.cpp:143-144 Misc enum: the boss-AI
+-- GetData slots the achievement OnChecks read.
+local DATA_SHUTOUT = 29112912
+local DATA_ORBIT_ACHIEVEMENTS = 1
+
+-- boss_flame_leviathan.cpp:172 MiscellanousData enum.
+local ACTION_START_HARD_MODE = 5
+
+-- ulduar.h:108 NPC_LORE_KEEPER_OF_NORGANNON; boss_flame_leviathan.cpp
+-- :105-108 GameObject entries for the four destructible towers.
+local ENTRY_LORE_KEEPER_OF_NORGANNON = 33686
+local GO_TOWER_OF_STORMS = 194377
+local GO_TOWER_OF_FLAMES = 194371
+local GO_TOWER_OF_FROST = 194370
+local GO_TOWER_OF_LIFE = 194375
+
+-- Per-tower destroyed flags (C++ towerOfStorms/towerOfLife/
+-- towerOfFlames/towerOfFrost members, :256-261): a tower counts
+-- down the orbit total at most once per hard-mode activation.
+-- Recorded only when the decrement actually fires, so a tower
+-- destroyed before activation (no vehicles exist yet, so
+-- unreachable in practice) does not swallow a later decrement.
+local towerDestroyed = {}
 
 local SAY_TARGET = 3
 local SAY_DEATH  = 2
@@ -291,6 +331,10 @@ shutdownTick = function(creature, guid)
     creature:Talk(SAY_OVERLOAD)
     creature:Talk(EMOTE_OVERLOAD)
     creature:CastSpell(creature, SPELL_SYSTEMS_SHUTDOWN, true)
+    -- C++ UpdateAI EVENT_SHUTDOWN arm (:428-429): the shutdown
+    -- clears the Shutout latch (achievement_shutout gate) — the
+    -- first shutdown ends the shutout, later ones are no-ops.
+    creature:SetData(DATA_SHUTOUT, 0)
     schedule(guid, "repair", 4000, function()
         repairTick(creature, guid)
     end)
@@ -363,10 +407,108 @@ local function flameLeviathanReset(event, creature)
     creature:SetReactState(1) -- REACT_DEFENSIVE
 end
 
+-- C++ Initialize() (boss_flame_leviathan.cpp:228-241, ctor +
+-- InitializeAI twin): ActiveTowersCount = 4, ActiveTowers =
+-- false, Shutout = true, Unbroken = true. The Lua slot holds the
+-- GetData RESULT, so the orbit slot starts at 0 (ActiveTowers
+-- false reads 0, :355-358) and the shutout slot at 1. Reset does
+-- NOT re-run Initialize in C++ (:265-273), so these legs live
+-- only on spawn — a wipe leaves both latches as they were. The
+-- GUID latch is the instance OnCreatureCreate twin
+-- (instance_ulduar.cpp:87), so the lorekeeper gossip relay can
+-- resolve the leviathan via GetInstanceCreature.
+local function flameLeviathanSpawned(event, creature)
+    creature:SetGuidData(DATA_LEVIATHAN)
+    creature:SetData(DATA_SHUTOUT, 1)
+    creature:SetData(DATA_ORBIT_ACHIEVEMENTS, 0)
+end
+
+-- C++ DoAction ACTION_START_HARD_MODE
+-- (boss_flame_leviathan.cpp:549-556): ActiveTowers = true, all
+-- four tower flags true, ActiveTowersCount stays 4 — so GetData
+-- (DATA_ORBIT_ACHIEVEMENTS) starts returning 4. The loot-mode
+-- ladder in the same arm stays out (no loot-mode bridge); the
+-- tower-buff aura/event legs ride the unported ActiveTower()
+-- machine and stay documented-only. Only the achievement latch
+-- ports here.
+local function flameLeviathanDoAction(event, creature, action)
+    if action == ACTION_START_HARD_MODE then
+        creature:SetData(DATA_ORBIT_ACHIEVEMENTS, 4)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 1, flameLeviathanEnterCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 2, flameLeviathanLeaveCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 4, flameLeviathanDied)
+RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 5, flameLeviathanSpawned)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 23, flameLeviathanReset)
+RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 38, flameLeviathanDoAction)
+
+-- C++ npc_lorekeeperAI::OnGossipSelect
+-- (boss_flame_leviathan.cpp:1266-1293): menu 10477, option 0 ->
+-- leviathan DoAction(ACTION_START_HARD_MODE) + vehicle spawns +
+-- SetVisible(false). The lorekeeper has a single gossip option,
+-- so listID == 0 is the C++ gate (razorscale commander
+-- precedent); the menuId itself is not forwarded by the select
+-- hook (gossip.go) and needs no check. The vehicle spawns stay
+-- out: RAID_MODE(2, 5) counts have no raid-size bridge
+-- (creature:IsHeroic() is difficulty, not 10/25). The
+-- Delorah/Brann legs stay out (instance GUID latches + MovePoint
+-- unbridged). Returns true when handled to veto the native arms
+-- after doing the work (uniform Eluna gossip polarity, razorscale
+-- precedent); the C++ `return false` is the AI-hook return, not
+-- the Eluna veto polarity.
+local function loreKeeperGossipSelect(event, player, creature, sender, action, code, listID)
+    if listID ~= 0 then
+        return false
+    end
+    player:GossipClearMenu()
+    player:GossipComplete()
+    creature:RemoveFlag(82, 1) -- UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP (razorscale precedent)
+    local leviathan = creature:GetInstanceCreature(DATA_LEVIATHAN)
+    if leviathan then
+        leviathan:DoAction(ACTION_START_HARD_MODE)
+    end
+    creature:SetVisible(false)
+    return true
+end
+
+RegisterCreatureGossipEvent(ENTRY_LORE_KEEPER_OF_NORGANNON, 2, loreKeeperGossipSelect)
+
+-- C++ go_ulduar_tower::Destroyed (boss_flame_leviathan.cpp:1315-1332)
+-- -> instance ProcessEvent (instance_ulduar.cpp:581-597) ->
+-- leviathan DoAction(ACTION_TOWER_OF_*_DESTROYED 1..4), which
+-- decrements ActiveTowersCount when that tower's flag is true
+-- (:522-547). No instance-ProcessEvent bridge exists, so the leg
+-- rides the GO destroyed hook instead (event 7,
+-- gameobject_destructible.go:334, fired from the
+-- destructible-building state transition): the tower GO resolves
+-- the leviathan by entry in the same instance
+-- (FindNearestCreature, 500 yd — the razorscale 500-yd arena
+-- precedent; the entry filter admits no wrong match) and the
+-- orbit slot drops by one. The slot read (GetData) is the
+-- ActiveTowers gate: 0 while hard mode is off, so a pre-activation
+-- destruction neither decrements nor records.
+local function towerDestroyed(event, go, attacker)
+    local entry = go:GetEntry()
+    if towerDestroyed[entry] then
+        return
+    end
+    local leviathan = go:FindNearestCreature(ENTRY_FLAME_LEVIATHAN, 500)
+    if leviathan == nil then
+        return
+    end
+    local count = leviathan:GetData(DATA_ORBIT_ACHIEVEMENTS)
+    if count > 0 then
+        towerDestroyed[entry] = true
+        leviathan:SetData(DATA_ORBIT_ACHIEVEMENTS, count - 1)
+    end
+end
+
+RegisterGameObjectEvent(GO_TOWER_OF_STORMS, 7, towerDestroyed)
+RegisterGameObjectEvent(GO_TOWER_OF_FLAMES, 7, towerDestroyed)
+RegisterGameObjectEvent(GO_TOWER_OF_FROST, 7, towerDestroyed)
+RegisterGameObjectEvent(GO_TOWER_OF_LIFE, 7, towerDestroyed)
 
 -- C++ npc_mechanoliftAI::JustDied (boss_flame_leviathan.cpp:852-862):
 -- MoveTargetedHome + self-cast DUSTY_EXPLOSION + DoSummon NPC_LIQUID

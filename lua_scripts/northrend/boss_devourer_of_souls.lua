@@ -116,17 +116,18 @@
 -- stay out (no bridges); SetTarget(Empty) :302 is PORTED (2026-10-20,
 -- creature:SetTarget bridge).
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
--- — event 15 IS a live SpellHitTarget bridge (boss_ai.go:1904), but the
--- latch feeds only GetData(DATA_THREE_FACED) (:231-236, bridged
--- ScriptData store, 2026-10-24) and achievement_three_faced (no
--- achievement bridge), so registering 15 would be dead code; does
--- not port.
--- GetData(DATA_THREE_FACED) (:231-236) — bridged but unread (see
--- above), does not port.
+-- — PORTED tick 417 via event 15 (devourerSpellHitTarget below): the
+-- 70322 hit writes SetData(DATA_THREE_FACED, 0); Reset writes 1
+-- (Initialize, :143-146). C++-exact: only the heroic 70322 hit clears
+-- the latch (the Lua cast itself is 68982, :255); if the engine never
+-- delivers a 70322 hit the latch stays set, matching C++-as-written.
+-- achievement_three_faced — PORTED tick 417 via the SetData write leg
+-- + Go gate (bossLatchData, achievement_criteria_scripts.go).
 -- The three spell_devourer_of_souls_mirrored_soul* SpellScript/AuraScript
 -- hooks (:365-473) — no SpellScript / AuraScript bridge (standing
 -- queues), do not port.
--- achievement_three_faced (:475-493) — no achievement bridge, does not port.
+-- achievement_three_faced (:475-493) — PORTED tick 417 via the SetData
+-- write leg + Go gate (bossLatchData, achievement_criteria_scripts.go).
 -- JustDied outro loop (:206-222): 22 outroPositions team-swapped
 -- instance->instance->SummonCreature spawns with MovePoint legs plus
 -- summon->AI()->Talk(SAY_JAINA_OUTRO / SAY_SYLVANAS_OUTRO 0, :218/220) —
@@ -137,6 +138,8 @@
 
 local ENTRY_DEVOURER = 36502
 local DATA_DEVOURER_OF_SOULS = 1 -- forge_of_souls.h:29
+local DATA_THREE_FACED = 1 -- boss_devourer_of_souls.cpp:125
+local H_SPELL_PHANTOM_BLAST = 70322 -- boss_devourer_of_souls.cpp:56
 local ENTRY_CRUCIBLE = 37094 -- NPC_CRUCIBLE_OF_SOULS (forge_of_souls.h:57)
 
 local SAY_FACE_AGGRO = 0
@@ -573,6 +576,16 @@ local function devourerReset(event, creature)
     devourerCancelCombat(event, creature)
     creature:SetRooted(false)
     creature:SetDisplayId(DISPLAY_ANGER)
+    -- C++ Reset -> Initialize: threeFaced = true ->
+    -- GetData(DATA_THREE_FACED) = 1 (boss_devourer_of_souls.cpp:143-146);
+    -- achievement_three_faced read leg (tick 417). Alive-gated:
+    -- ev23 fires on death too (fireCreatureDied runs Reset before
+    -- the kill-credit criteria read, kill.go:1091/:1400), and a
+    -- death-time re-arm would clobber the fight's latch before the
+    -- achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_THREE_FACED, 1)
+    end
     -- C++ :152 SetReactState(REACT_AGGRESSIVE) -- the 13:00 "no bridge"
     -- claim is stale (creature:SetReactState bridged, lua_creature_events.go).
     creature:SetReactState(REACT_AGGRESSIVE)
@@ -600,7 +613,19 @@ local function devourerTargetDied(event, creature, victim)
     end
 end
 
+-- C++ SpellHitTarget (boss_devourer_of_souls.cpp:225-228): the heroic
+-- Phantom Blast (70322) landing on a target clears threeFaced.
+-- Event 15 fires on the caster's bindings with
+-- (event, creature, target, spellId) per hit target
+-- (boss_ai.go fireCreatureSpellHitTarget; sindragosa precedent).
+local function devourerSpellHitTarget(event, creature, target, spellId)
+    if spellId == H_SPELL_PHANTOM_BLAST then
+        creature:SetData(DATA_THREE_FACED, 0)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_DEVOURER, 1, devourerEnterCombat)
+RegisterCreatureEvent(ENTRY_DEVOURER, 15, devourerSpellHitTarget)
 RegisterCreatureEvent(ENTRY_DEVOURER, 2, devourerCancelCombat)
 RegisterCreatureEvent(ENTRY_DEVOURER, 3, devourerTargetDied)
 RegisterCreatureEvent(ENTRY_DEVOURER, 4, devourerJustDied)

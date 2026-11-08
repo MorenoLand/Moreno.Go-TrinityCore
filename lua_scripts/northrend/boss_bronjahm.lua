@@ -79,9 +79,12 @@
 --   PURPLE_BANISH_VISUAL self-cast :135 (triggered); MoveFollow :134
 --   has no motion bridge and stays out, so fragments still will not
 --   follow the boss; summons.Summon has no Lua summon list.
--- GetData(DATA_SOUL_POWER) (:139-154) joins the no-GetData-bridge queue
---   (the boss_zuramat precedent); achievement_bronjahm_soul_power rides it
---   into the unmodeled-achievement queue.
+-- GetData(DATA_SOUL_POWER) (:139-154) counts the live corrupted soul
+-- fragments in the summon list — PORTED tick 417 as a SetData mirror
+-- (JustSummoned +1 / SummonedCreatureDies + SummonedCreatureDespawn
+-- -1, GUID-set guarded; see below), read by the Go gate via
+-- bossLatchData. Delta: the fragment consume-despawn leg stays out
+-- (see below).
 -- npc_corrupted_soul_fragment (36535) is NOT registered: IsSummonedBy
 --   hands off through instance->GetGuidData(DATA_BRONJAHM) (the
 --   no-instance-GetGuidData queue) and MovementInform rides the
@@ -112,6 +115,7 @@
 
 local ENTRY_BRONJAHM = 36497
 local DATA_BRONJAHM = 0 -- forge_of_souls.h:31
+local DATA_SOUL_POWER = 1 -- boss_bronjahm.cpp:68
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -159,9 +163,45 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Achievement write leg (tick 417): C++ GetData(DATA_SOUL_POWER)
+-- (boss_bronjahm.cpp:139-154) counts the ALIVE corrupted soul
+-- fragments in the boss's summon list at check time. Lua keeps the
+-- same count in the boss motion's SetData store, driven by a
+-- per-GUID set of live fragment GUIDs: +1 on JustSummoned (ev19),
+-- -1 on SummonedCreatureDies (ev21, killed) and
+-- SummonedCreatureDespawn (ev20, despawned). The set guards the
+-- count against a death+despawn double-fire. Delta: the consume leg
+-- (npc_corrupted_soul_fragment MovementInform :249 ->
+-- SPELL_CONSUME_SOUL + DespawnOrUnsummon) is unported (no MoveFollow /
+-- MovementInform bridge), so a fragment C++ would consume on arrival
+-- keeps counting in Lua until killed or despawned — the gate
+-- over-awards vs C++ on fights where fragments are left standing.
+-- No ev20-only reliance: C++ reaches 0 via _Reset's DespawnAll
+-- (ScriptedCreature.cpp:507) -> ev20, but ev20 firing for the
+-- _Reset despawn is unverified, and the motion's SetData store
+-- would otherwise hold the previous attempt's count until the
+-- next fragment event — a zero-fragment kill after a >=4-fragment
+-- attempt would read the stale value. The explicit writes below
+-- (alive-gated Reset zero + engage zero) are the reliable leg.
+-- Declared before initState (malown precedent — a later local is NOT
+-- in scope for an earlier-defined closure).
+local soulFragments = {}
+
 local function initState(guid)
     cancelTimers(guid)
     phase2[guid] = nil
+    soulFragments[guid] = nil
+end
+
+local function writeSoulPower(creature)
+    local count = 0
+    local set = soulFragments[creature:GetGUID()]
+    if set then
+        for _ in pairs(set) do
+            count = count + 1
+        end
+    end
+    creature:SetData(DATA_SOUL_POWER, count)
 end
 
 -- C++ :187 SelectTarget(Random, 1, 0.0f, true) — offset 1 pops the
@@ -310,6 +350,9 @@ end
 local function bronjahmEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
+    -- No fragment can be live at engage, so the count is
+    -- definitionally 0 here (the Reset zero below is the wipe leg).
+    creature:SetData(DATA_SOUL_POWER, 0)
     -- BossAI::JustEngagedWith (:98-103, base-first) — SetBossState
     -- (DATA_BRONJAHM 0, IN_PROGRESS) via creature:SetBossState
     -- (lua_creature_events.go:5917), then SetCombatPulseDelay(5)
@@ -378,6 +421,13 @@ local function bronjahmReset(event, creature)
         creature:SetBossState(DATA_BRONJAHM, 0)
     end
     initState(creature:GetGUID())
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's count before
+    -- the achievement gate reads it; the wipe re-arm is preserved.
+    if creature:IsAlive() then
+        creature:SetData(DATA_SOUL_POWER, 0)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_BRONJAHM, 1, bronjahmEnterCombat)
@@ -399,10 +449,47 @@ local function bronjahmJustSummoned(event, creature, summon)
     if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
         return
     end
+    local guid = creature:GetGUID()
+    local set = soulFragments[guid]
+    if not set then
+        set = {}
+        soulFragments[guid] = set
+    end
+    set[summon:GetGUID()] = true
+    writeSoulPower(creature)
     summon:SetReactState(REACT_PASSIVE)
     summon:CastSpell(summon, SPELL_PURPLE_BANISH_VISUAL, true)
 end
 RegisterCreatureEvent(ENTRY_BRONJAHM, 19, bronjahmJustSummoned)
+
+-- C++ GetData(DATA_SOUL_POWER) counts live fragments, so a fragment
+-- leaving the summon list drops the count: killed
+-- (SummonedCreatureDies, ev21, fireCreatureDied summoner-OwnerGUID
+-- link) or despawned (SummonedCreatureDespawn, ev20). The GUID-set
+-- guard makes a death+despawn double-fire a no-op.
+local function bronjahmSummonDied(event, creature, summon, killer)
+    if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
+        return
+    end
+    local set = soulFragments[creature:GetGUID()]
+    if set then
+        set[summon:GetGUID()] = nil
+    end
+    writeSoulPower(creature)
+end
+
+local function bronjahmSummonDespawned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
+        return
+    end
+    local set = soulFragments[creature:GetGUID()]
+    if set then
+        set[summon:GetGUID()] = nil
+    end
+    writeSoulPower(creature)
+end
+RegisterCreatureEvent(ENTRY_BRONJAHM, 21, bronjahmSummonDied)
+RegisterCreatureEvent(ENTRY_BRONJAHM, 20, bronjahmSummonDespawned)
 
 -- C++ boss_bronjahmAI::JustReachedHome (:94-96): _JustReachedHome() is
 -- instance bookkeeping (no bridge); DoCast(me, SPELL_SOULSTORM_CHANNEL,

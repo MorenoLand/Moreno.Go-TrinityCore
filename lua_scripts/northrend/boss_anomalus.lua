@@ -47,14 +47,13 @@
 -- 2026-11-05 (creature:SetBossState bridged).
 -- GetData(DATA_CHAOS_THEORY) — chaosTheory cross-AI data leg consumed
 -- only by achievement_chaos_theory's OnCheck — creature:GetData IS
--- bridged (ScriptData store, 2026-10-24) but there is no achievement
--- bridge, so the latch stays write-only in Lua (see below).
+-- bridged (ScriptData store, 2026-10-24); PORTED tick 417 as a SetData
+-- mirror below, read by the Go gate (see below).
 -- SummonedCreatureDies — PORTED (event 21): chaosTheory=false when a
 -- dead summon has entry NPC_CHAOTIC_RIFT — new engine fire site in
--- fireCreatureDied (summoner OwnerGUID link); the chaosTheory latch is
--- write-only in Lua (its only C++ reader is achievement_chaos_theory's
--- GetData(DATA_CHAOS_THEORY); GetData is bridged but no achievement
--- bridge exists to read it).
+-- fireCreatureDied (summoner OwnerGUID link); the latch is mirrored
+-- into the boss motion's SetData store (tick 417) for the Go
+-- achievement gate.
 -- UpdateAI — the home-position distance >60.0f EnterEvadeMode hack —
 -- no position / EnterEvadeMode bridges; the SPELL_RIFT_SHIELD 47748
 -- HasAura + uiChaoticRiftGUID ObjectAccessor::GetCreature + Rift->
@@ -93,14 +92,15 @@
 -- SelectTarget(Random, 0)) + 5s repeat when Anomalus shielded else 10s
 -- — no summon / instance / random-target bridges.
 -- achievement_chaos_theory — OnCheck: Anomalus->AI()->GetData(DATA_
--- CHAOS_THEORY) != 0 — no achievement bridge (kelthuzad/thaddius
--- precedent) + the GetData leg is cross-AI — joins the
--- no-achievement-bridge queue.
+-- CHAOS_THEORY) != 0 — PORTED tick 417: the latch is mirrored into
+-- the boss motion's SetData store (Reset true / SummonedCreatureDies
+-- false below) and read by the Go gate via bossLatchData.
 
 local ENTRY_ANOMALUS = 26763
 local NPC_CHAOTIC_RIFT = 26918 -- boss_anomalus.cpp:38
 
 local DATA_ANOMALUS = 2 -- nexus.h:32 (NEXDataTypes)
+local DATA_CHAOS_THEORY = 1 -- boss_anomalus.cpp:70 (Misc)
 local BOSS_STATE_NOT_STARTED = 0
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
@@ -118,9 +118,10 @@ local SPELL_SPARK = 47751 -- C++ :182 fires SPELL_SPARK unconditionally
 local timers = {}
 local chaos = {} -- chaosTheory per-GUID latch: C++ Initialize() sets it
 -- true (Reset twin below); SummonedCreatureDies clears it when a dead
--- summon is NPC_CHAOTIC_RIFT. Write-only in Lua — its only C++ reader
--- is achievement_chaos_theory's GetData(DATA_CHAOS_THEORY), and the
--- achievement + GetData legs have no bridges (see header).
+-- summon is NPC_CHAOTIC_RIFT. Mirrored into the boss motion's SetData
+-- store (tick 417) for achievement_chaos_theory's GetData read (the Go
+-- gate reads it via bossLatchData); the per-GUID table stays as the
+-- Lua-local twin.
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -211,6 +212,14 @@ end
 local function anomalusReset(event, creature)
     cancelTimers(creature:GetGUID())
     chaos[creature:GetGUID()] = true -- C++ Initialize(): chaosTheory = true
+    -- Achievement write leg (tick 417): mirror the latch into the boss
+    -- motion's SetData store for achievement_chaos_theory's GetData
+    -- (DATA_CHAOS_THEORY 1). IsDead-guarded: ev23 pre-fires on death
+    -- (kill.go:1091 -> fireCreatureDied) and an unguarded re-arm would
+    -- overwrite a rift-cleared latch before the gate reads it.
+    if not creature:IsDead() then
+        creature:SetData(DATA_CHAOS_THEORY, 1)
+    end
     creature:SetBossState(DATA_ANOMALUS, BOSS_STATE_NOT_STARTED) -- C++ Reset (boss_anomalus.cpp:101-106), unconditional (ScriptedAI direct call)
 end
 
@@ -221,6 +230,7 @@ end
 local function anomalusSummonedDied(event, creature, summon, killer)
     if summon:GetEntry() == NPC_CHAOTIC_RIFT then
         chaos[creature:GetGUID()] = false
+        creature:SetData(DATA_CHAOS_THEORY, 0)
     end
 end
 

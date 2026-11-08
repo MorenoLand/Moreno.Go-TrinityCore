@@ -1,6 +1,9 @@
 package world
 
-import "math"
+import (
+	"math"
+	"strconv"
+)
 
 // Achievement criteria scripts mirroring TrinityCore
 // src/server/scripts/World/achievement_scripts.cpp (AddSC_achievement_scripts).
@@ -18,21 +21,53 @@ import "math"
 // CreatureAI::GetData type numbers for the boss-file achievement latches
 // (the AI-local enum values, not instance DATA_* ids).
 const (
-	dataAuriayaCrazyCatLady    = 30063007 // boss_auriaya.cpp:109 DATA_CRAZY_CAT_LADY
-	dataAuriayaNineLives       = 30763077 // boss_auriaya.cpp:108 DATA_NINE_LIVES
-	dataSjonnirAbuseTheOoze    = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
-	dataKingDredRaptorsKilled  = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
-	dataBrannSparklinNews      = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
-	dataLichKingPlagueStack    = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
-	dataXT002GravityBomb       = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
-	dataThaddiusPolarity       = 1        // boss_thaddius.cpp:77 DATA_POLARITY_CROSSED
-	dataKelthuzadAbomsKilled   = 1        // boss_kelthuzad.cpp:83 DATA_ABOMINATION_DEATH_COUNT
-	dataAlgalonFedOnTears      = 30043005 // boss_algalon_the_observer.cpp:184 DATA_HAS_FED_ON_TEARS
-	dataFaerlinaFrenzyDispels  = 1        // boss_faerlina.cpp:65 DATA_FRENZY_DISPELS
-	dataSindragosaMysticBuffet = 0        // boss_sindragosa.cpp:141 DATA_MYSTIC_BUFFET_STACK
-	dataGarfrostPermafrost     = 0        // boss_forgemaster_garfrost.cpp:66 ACHIEV_DOESNT_GO_TO_ELEVEN
-	dataGunshipShipVisits      = 5        // boss_icecrown_gunship_battle.cpp:212 ACTION_SHIP_VISITS
-	dataHadronoxWebbedDoors    = 3        // boss_hadronox.cpp:119 DATA_HADRONOX_WEBBED_DOORS
+	dataAuriayaCrazyCatLady            = 30063007 // boss_auriaya.cpp:109 DATA_CRAZY_CAT_LADY
+	dataAuriayaNineLives               = 30763077 // boss_auriaya.cpp:108 DATA_NINE_LIVES
+	dataSjonnirAbuseTheOoze            = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
+	dataKingDredRaptorsKilled          = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
+	dataBrannSparklinNews              = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
+	dataLichKingPlagueStack            = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
+	dataXT002GravityBomb               = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
+	dataThaddiusPolarity               = 1        // boss_thaddius.cpp:77 DATA_POLARITY_CROSSED
+	dataKelthuzadAbomsKilled           = 1        // boss_kelthuzad.cpp:83 DATA_ABOMINATION_DEATH_COUNT
+	dataAlgalonFedOnTears              = 30043005 // boss_algalon_the_observer.cpp:184 DATA_HAS_FED_ON_TEARS
+	dataFaerlinaFrenzyDispels          = 1        // boss_faerlina.cpp:65 DATA_FRENZY_DISPELS
+	dataSindragosaMysticBuffet         = 0        // boss_sindragosa.cpp:141 DATA_MYSTIC_BUFFET_STACK
+	dataGarfrostPermafrost             = 0        // boss_forgemaster_garfrost.cpp:66 ACHIEV_DOESNT_GO_TO_ELEVEN
+	dataGunshipShipVisits              = 5        // boss_icecrown_gunship_battle.cpp:212 ACTION_SHIP_VISITS
+	dataHadronoxWebbedDoors            = 3        // boss_hadronox.cpp:119 DATA_HADRONOX_WEBBED_DOORS
+	dataFreyaGettingBackToNature       = 1        // boss_freya.cpp:210 DATA_GETTING_BACK_TO_NATURE
+	dataFreyaKnockOnWood               = 2        // boss_freya.cpp:211 DATA_KNOCK_ON_WOOD
+	dataVezaxSmellSaronite             = 31813188 // boss_general_vezax.cpp:98 DATA_SMELL_SARONITE
+	dataHeiganSafetyDance              = 19962139 // boss_heigan.cpp:64 DATA_SAFETY_DANCE
+	dataLoathebSporeLoser              = 21822183 // boss_loatheb.cpp:55 DATA_ACHIEVEMENT_SPORE_LOSER
+	dataSartharionTwilightAchievements = 5        // obsidian_sanctum.h:35 TWILIGHT_ACHIEVEMENTS
+	dataMoorabiLessRabi                = 1        // boss_moorabi.cpp:60 DATA_LESS_RABI
+	dataKelesethOnTheRocks             = 8        // boss_keleseth.cpp:67 DATA_ON_THE_ROCKS
+	dataNadoxRespectElders             = 6        // boss_elder_nadox.cpp:54 DATA_RESPECT_YOUR_ELDERS
+	dataGalDarahShareTheLove           = 1        // boss_gal_darah.cpp:81 DATA_SHARE_THE_LOVE
+	dataTelestraSplit                  = 2        // boss_magus_telestra.cpp:62 DATA_SPLIT_PERSONALITY
+	dataDevourerThreeFaced             = 1        // boss_devourer_of_souls.cpp:125 DATA_THREE_FACED
+	dataZuramatVoidDance               = 2153     // boss_zuramat.cpp:48 DATA_VOID_DANCE
+	dataJedogaVolunteerWork            = 1        // boss_jedoga_shadowseeker.cpp:137 DATA_VOLUNTEER_WORK
+	dataKrikthirWatchersDead           = 1        // Lua-side slot; boss_krikthir_the_gatewatcher.cpp:1036-1061 reads instance watcher liveness
+	dataMimironSetupBomb               = 1        // boss_mimiron.cpp:187 DATA_SETUP_BOMB
+	dataMimironSetupMine               = 0        // boss_mimiron.cpp:186 DATA_SETUP_MINE
+	dataMimironSetupRocket             = 2        // boss_mimiron.cpp:188 DATA_SETUP_ROCKET
+	dataFlameLeviathanShutout          = 29112912 // boss_flame_leviathan.cpp:143 DATA_SHUTOUT
+	dataFlameLeviathanOrbit            = 1        // boss_flame_leviathan.cpp:144 DATA_ORBIT_ACHIEVEMENTS
+	dataAssemblyPhase3                 = 1        // boss_assembly_of_iron.cpp:133 DATA_PHASE_3
+	dataIgnisShattered                 = 29252926 // boss_ignis.cpp:86 DATA_SHATTERED
+	dataXT002HardMode                  = 1        // boss_xt002.cpp:111 DATA_HARD_MODE
+	dataRazorscaleIronDwarf            = 29232924 // boss_razorscale.cpp:164 DATA_IRON_DWARF_MEDIUM_RARE
+	dataBronjahmSoulPower              = 1        // boss_bronjahm.cpp:68 DATA_SOUL_POWER
+	dataAnomalusChaosTheory            = 1        // boss_anomalus.cpp:70 DATA_CHAOS_THEORY
+	dataEregosRubyVoid                 = 0        // boss_eregos.cpp:76 DATA_RUBY_VOID
+	dataEregosEmeraldVoid              = 1        // boss_eregos.cpp:77 DATA_EMERALD_VOID
+	dataEregosAmberVoid                = 2        // boss_eregos.cpp:78 DATA_AMBER_VOID
+	dataSkadiLoveToSkadi               = 0        // boss_skadi.cpp:112 DATA_LOVE_TO_SKADI
+	dataSvalaIncredibleHulk            = 2043     // boss_svala.cpp:125 DATA_INCREDIBLE_HULK
+	dataYmironKingsBane                = 2157     // boss_ymiron.cpp:99 DATA_KINGS_BANE
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -494,6 +529,494 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataHadronoxWebbedDoors) == 0
+
+	case "achievement_getting_back_to_nature": // boss_freya.cpp:1612-1621
+		// OnCheck: target->GetAI()->GetData(DATA_GETTING_BACK_TO_NATURE
+		// 1) >= 25 — the attuned-to-nature stack, 150 at engage
+		// (:386-388), lowered only by the REMOVE_*STACK hits
+		// (:520/:678/:684); the Lua twin keeps the counter in the
+		// boss motion's SetData store (boss_freya.lua). The
+		// decrement legs are dormant until the wave/elemental legs
+		// land; in the Go-modeled fight no trio can be defeated, so
+		// the counter stays 150 — matching C++ for a zero-trio-
+		// defeat fight.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFreyaGettingBackToNature) >= 25
+
+	case "achievement_knock_on_wood": // boss_freya.cpp:1623-1632
+		// OnCheck: GetData(DATA_KNOCK_ON_WOOD 2) >= 1 — the
+		// alive-at-pull elder count; the Lua twin writes it at engage
+		// (boss_freya.lua) and zeroes it at Reset.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFreyaKnockOnWood) >= 1
+
+	case "achievement_knock_knock_on_wood": // boss_freya.cpp:1634-1643
+		// OnCheck: GetData(DATA_KNOCK_ON_WOOD 2) >= 2, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFreyaKnockOnWood) >= 2
+
+	case "achievement_knock_knock_knock_on_wood": // boss_freya.cpp:1645-1655
+		// OnCheck: GetData(DATA_KNOCK_ON_WOOD 2) == 3, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFreyaKnockOnWood) == 3
+
+	case "achievement_smell_saronite": // boss_general_vezax.cpp:575-595
+		// OnCheck: Vezax->AI()->GetData(DATA_SMELL_SARONITE
+		// 31813188) — true from ctor/Reset until a Saronite Vapor
+		// dies (DoAction(ACTION_VAPORS_DIE) :268-270); the Lua twin
+		// keeps it in the boss motion's SetData store
+		// (boss_general_vezax.lua: ev5/ev23 set, ev38 clear). The
+		// clear leg is dormant: the vapor summon machine is unported,
+		// so in the Go-modeled fight no vapor can die and the latch
+		// stays 1, matching C++ for a zero-vapor-death fight.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataVezaxSmellSaronite) != 0
+
+	case "achievement_safety_dance": // boss_heigan.cpp:259-278
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_SAFETY_DANCE
+		// 19962139) — true while no player died: the latch is set at
+		// JustEngagedWith (boss_heigan.cpp:127) and cleared in
+		// KilledUnit on a player kill (:98-104); the Lua twin keeps
+		// it in the boss motion's SetData store (boss_heigan.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataHeiganSafetyDance) != 0
+
+	case "achievement_spore_loser": // boss_loatheb.cpp:154-166
+		// OnCheck: target->GetAI()->GetData(DATA_ACHIEVEMENT_SPORE_LOSER
+		// 21822183) — true while no spore died: the latch starts set
+		// (ctor/Reset, boss_loatheb.cpp:65/:72) and the spore death
+		// (SummonedCreatureDies :84-86) clears it; the Lua twin keeps
+		// it in the boss motion's SetData store (boss_loatheb.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataLoathebSporeLoser) != 0
+
+	case "achievement_twilight_assist": // obsidian_sanctum.cpp:1021-1031
+		// OnCheck: target->GetAI()->GetData(TWILIGHT_ACHIEVEMENTS) >= 1 —
+		// the drake count from FetchDragons (boss_sartharion.cpp:283-347);
+		// the Lua twin writes it into the Sartharion motion's SetData
+		// store at engage (boss_sartharion.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSartharionTwilightAchievements) >= 1
+
+	case "achievement_twilight_duo": // obsidian_sanctum.cpp:1032-1042
+		// OnCheck: GetData(TWILIGHT_ACHIEVEMENTS) >= 2, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSartharionTwilightAchievements) >= 2
+
+	case "achievement_twilight_zone": // obsidian_sanctum.cpp:1043-1053
+		// OnCheck: GetData(TWILIGHT_ACHIEVEMENTS) == 3, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSartharionTwilightAchievements) == 3
+
+	case "achievement_once_bitten_twice_shy_n", "achievement_once_bitten_twice_shy_v": // boss_blood_queen_lana_thel.cpp:793-826
+		// OnCheck: WasVampire(source GUID) over the _vampires GuidSet
+		// (boss_blood_queen_lana_thel.cpp:466-469/:508) — _n is
+		// !WasVampire, _v is WasVampire. The Lua twin records each
+		// boss-cast bite as a "vampire_<guidLow>" key in the shared
+		// instanceData table (boss_blood_queen_lana_thel.lua),
+		// cleared at engage; GetGUIDLow is the low 32 bits of the
+		// player GUID on both sides (lua_player.go:105).
+		if source == nil || source.player == nil || source.server == nil || source.server.Features == nil || source.server.Features.Scripts == nil {
+			return false
+		}
+		v, ok := source.server.Features.Scripts.InstanceDataNumber(631, source.player.InstanceID, "vampire_"+strconv.FormatUint(uint64(uint32(source.player.GUID)), 10))
+		wasVampire := ok && v >= 1
+		if name == "achievement_once_bitten_twice_shy_v" {
+			return wasVampire
+		}
+		return !wasVampire
+
+	case "achievement_less_rabi": // boss_moorabi.cpp:198-215
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_LESS_RABI 1) —
+		// true while Moorabi never transformed: the latch starts set
+		// (ctor/Reset, boss_moorabi.cpp:83) and the SpellHit(55098) landing
+		// (:128-136) clears it; the Lua twin writes it in the boss
+		// motion's SetData store (boss_moorabi.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataMoorabiLessRabi) != 0
+
+	case "achievement_on_the_rocks": // boss_keleseth.cpp:372-380
+		// OnCheck: target->GetAI()->GetData(DATA_ON_THE_ROCKS 8) — true
+		// while no frost tomb died: the latch starts set (ctor/Reset,
+		// boss_keleseth.cpp:131/:140) and the frost-tomb JustDied relay
+		// (:99-105) clears it; the Lua twin keeps it in the boss
+		// motion's SetData store (boss_keleseth.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataKelesethOnTheRocks) != 0
+
+	case "achievement_respect_your_elders": // boss_elder_nadox.cpp:287-296
+		// OnCheck: target->GetAI()->GetData(DATA_RESPECT_YOUR_ELDERS 6) —
+		// true while no Ahn'kahar Guardian died: the latch starts set
+		// (Reset, boss_elder_nadox.cpp:66-70) and SummonedCreatureDies
+		// (:94-100) clears it on a guardian death; the Lua twin keeps
+		// it in the boss motion's SetData store (boss_elder_nadox.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataNadoxRespectElders) != 0
+
+	case "achievement_share_the_love": // boss_gal_darah.cpp:341-358
+		// OnCheck: GalDarah->AI()->GetData(DATA_SHARE_THE_LOVE 1) >= 5 —
+		// the count of distinct impaled players, fed by the impaling
+		// charge SpellScript (boss_gal_darah.cpp:259-276); the Lua twin
+		// counts distinct spell-hit targets in the boss motion's
+		// SetData store (boss_gal_darah.lua) and zeroes it at Reset.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataGalDarahShareTheLove) >= 5
+
+	case "achievement_split_personality": // boss_magus_telestra.cpp:362-381
+		// OnCheck: Telestra->AI()->GetData(DATA_SPLIT_PERSONALITY 2) == 2 —
+		// the split counter, incremented when the 3rd death of a split
+		// arrives with both gaps < 5s (boss_magus_telestra.cpp:165-177);
+		// the Lua twin tracks magus deaths in the boss motion's
+		// SetData store (boss_magus_telestra.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataTelestraSplit) == 2
+
+	case "achievement_three_faced": // boss_devourer_of_souls.cpp:475-493
+		// OnCheck: Devourer->AI()->GetData(DATA_THREE_FACED 1) — true
+		// while no Phantom Blast hit a player: the latch starts set
+		// (Initialize, boss_devourer_of_souls.cpp:143-146; Reset
+		// :147-149 calls only _Reset(), never re-arms — ctor-only) and
+		// SpellHitTarget (:225-228) clears it on a 70322 hit; the Lua
+		// twin keeps it in the boss motion's SetData store
+		// (boss_devourer_of_souls.lua). Dormant until the engine ever
+		// delivers a 70322 hit (the Lua cast is 68982).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataDevourerThreeFaced) != 0
+
+	case "achievement_void_dance": // boss_zuramat.cpp:209-227
+		// OnCheck: Zuramat->AI()->GetData(DATA_VOID_DANCE 2153) — true
+		// while no Void Sentry died: the latch starts set
+		// (Initialize/Reset, boss_zuramat.cpp:62-66) and
+		// SummonedCreatureDies (:86-90) clears it; the Lua twin keeps
+		// it in the boss motion's SetData store (boss_zuramat.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataZuramatVoidDance) != 0
+
+	case "achievement_volunteer_work": // boss_jedoga_shadowseeker.cpp:481-495
+		// OnCheck: Jedoga->AI()->GetData(DATA_VOLUNTEER_WORK 1) == 1 —
+		// true while no Twilight Volunteer died: the latch is set in
+		// the ctor only (:145) and SummonedCreatureDies (:253-260)
+		// clears it; a sacrificed volunteer does not die (:428-444),
+		// so sacrifice never clears it. The Lua twin writes it at
+		// spawn and clears it on the ev21 leg
+		// (boss_jedoga_shadowseeker.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataJedogaVolunteerWork) == 1
+
+	case "achievement_watch_him_die": // boss_krikthir_the_gatewatcher.cpp:1036-1061
+		// OnCheck: all three Watchers alive at Krik'thir kill time —
+		// the loop `continue`s only while each watcher is alive and
+		// returns false on the first dead/missing one, so the gate
+		// passes only with zero watcher deaths. The Lua twin counts
+		// watcher deaths in a Lua-side slot on Krik'thir's motion
+		// (boss_krikthir_the_gatewatcher.lua); absent reads 0, the
+		// all-alive default. Edge: C++ returns false when a watcher
+		// is missing from the instance (:1049-1052), but the Lua
+		// counter cannot see a never-spawned watcher, so the gate
+		// passes in that case.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataKrikthirWatchersDead) == 0
+
+	case "achievement_snakes_whyd_it_have_to_be_snakes": // boss_slad_ran.cpp:284-296
+		// OnCheck: !WasWrapped(source GUID) over the _wrappedPlayers
+		// GuidSet (boss_slad_ran.cpp:191-201), fed by the constrictor's
+		// stack-5 wrap leg (:223-240). The Lua twin records each wrap
+		// as a "wrapped_<guidLow>" key in the shared instanceData
+		// table (boss_slad_ran.lua), cleared at engage; GetGUIDLow is
+		// the low 32 bits of the player GUID on both sides
+		// (lua_player.go:105). Coordinator port tick 417: the per-
+		// player set is expressible via the once_bitten_twice_shy
+		// instanceData pattern, not the scalar bossLatchData store.
+		if source == nil || source.player == nil || source.server == nil || source.server.Features == nil || source.server.Features.Scripts == nil {
+			return false
+		}
+		v, ok := source.server.Features.Scripts.InstanceDataNumber(604, source.player.InstanceID, "wrapped_"+strconv.FormatUint(uint64(uint32(source.player.GUID)), 10))
+		wasWrapped := ok && v >= 1
+		return !wasWrapped
+
+	case "achievement_setup_boom": // boss_mimiron.cpp:2789-2798
+		// OnCheck: target->GetAI()->GetData(DATA_SETUP_BOMB 1) — true
+		// while no bomb-bot explosion hit a player: the latch starts
+		// set (MK II ctor/Reset, boss_mimiron.cpp:692-695/:832-835)
+		// and the bomb-bot SpellScript (:1717-1718) clears it; the Lua
+		// twin keeps it in the MK II motion's SetData store
+		// (boss_leviathan_mk_ii.lua). Dormant clear: bomb bots never
+		// spawn in Go (ACU summon arm unported), so 63801 never fires.
+		// The latch lives on the Leviathan MK II AI (33432);
+		// boss_mimironAI has no GetData override, so the kill target
+		// here is the MK II.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataMimironSetupBomb) != 0
+
+	case "achievement_setup_mine": // boss_mimiron.cpp:2800-2809
+		// OnCheck: target->GetAI()->GetData(DATA_SETUP_MINE 0) — true
+		// while no proximity-mine explosion hit a player: the latch
+		// starts set (MK II ctor/Reset) and the mine ev15 leg
+		// (npc_mimiron_proximity_mine.lua, spell 66351) clears it; the
+		// Lua twin keeps it in the MK II motion's SetData store.
+		// Dormant until MK II's proximity-mine summon arm lands.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataMimironSetupMine) != 0
+
+	case "achievement_setup_rocket": // boss_mimiron.cpp:2811-2820
+		// OnCheck: target->GetAI()->GetData(DATA_SETUP_ROCKET 2) —
+		// true while no rocket strike hit a player: the latch starts
+		// set (MK II ctor/Reset) and the rocket-strike SpellScript
+		// (:2303-2304) clears it; the Lua twin keeps it in the MK II
+		// motion's SetData store (boss_leviathan_mk_ii.lua). Dormant
+		// clear: VX-001 rocket-strike arm unported, so 63041 never fires.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataMimironSetupRocket) != 0
+
+	case "achievement_shutout": // boss_flame_leviathan.cpp:1395-1409
+		// OnCheck: leviathan->AI()->GetData(DATA_SHUTOUT) — true
+		// while no shutdown happened: the latch starts set
+		// (Initialize :238) and the EVENT_SHUTDOWN arm (:428-429)
+		// clears it; the Lua twin keeps it in the leviathan motion's
+		// SetData store (boss_flame_leviathan.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFlameLeviathanShutout) != 0
+
+	case "achievement_orbital_bombardment": // boss_flame_leviathan.cpp:1426-1442
+		// OnCheck: GetData(DATA_ORBIT_ACHIEVEMENTS) >= 1 — the active
+		// tower count: 4 at hard-mode activation (lorekeeper gossip ->
+		// DoAction(5)), minus one per destroyed tower (GO destroyed
+		// legs); 0 while hard mode is off. Lua twin in
+		// boss_flame_leviathan.lua, read off the killed leviathan.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFlameLeviathanOrbit) >= 1
+
+	case "achievement_orbital_devastation": // boss_flame_leviathan.cpp:1444-1460
+		// OnCheck: GetData(DATA_ORBIT_ACHIEVEMENTS) >= 2, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFlameLeviathanOrbit) >= 2
+
+	case "achievement_nuked_from_orbit": // boss_flame_leviathan.cpp:1462-1478
+		// OnCheck: GetData(DATA_ORBIT_ACHIEVEMENTS) >= 3, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFlameLeviathanOrbit) >= 3
+
+	case "achievement_orbit_uary": // boss_flame_leviathan.cpp:1480-1499
+		// OnCheck: GetData(DATA_ORBIT_ACHIEVEMENTS) == 4, same latch as above.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFlameLeviathanOrbit) == 4
+
+	case "achievement_assembly_i_choose_you": // boss_assembly_of_iron.cpp:765-773
+		// OnCheck: target->GetAI()->GetData(DATA_PHASE_3 1) — 1 once the
+		// killed boss reached phase 3 (engage 1 + two supercharges); the
+		// Lua twin keeps the phase in the boss motion's SetData store
+		// (boss_assembly_of_iron.lua: ev1/ev23/superchargeSurvivors).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataAssemblyPhase3) != 0
+
+	case "achievement_i_ll_take_you_all_on": // boss_thorim.cpp:2151-2162
+		// OnCheck: OutOfArenaCheck(source) — !IsInBounds(ArenaBoundaries).
+		// In-bounds = inside the arena circle AND outside the inverted
+		// lightning-field circle; no Lua latch exists by design, this is
+		// a pure position check on the earning player.
+		if source == nil || source.player == nil {
+			return false
+		}
+		dx := float64(source.player.X) - 2134.77
+		dy := float64(source.player.Y) - (-262.307)
+		inArena := dx*dx+dy*dy <= 45.4*45.4
+		dx2 := float64(source.player.X) - 2135.178
+		dy2 := float64(source.player.Y) - (-321.122)
+		outsideField := dx2*dx2+dy2*dy2 > 32.0*32.0
+		return !(inArena && outsideField)
+
+	case "achievement_ignis_shattered": // boss_ignis.cpp:491-501
+		// OnCheck: GetData(DATA_SHATTERED 29252926) != 0 — true once two
+		// iron constructs shatter within 5s; the Lua twin keeps it in the
+		// boss motion's SetData store (boss_ignis.lua: ignisDoAction +
+		// ironConstructDamageTaken; cleared at engage). Dormant until the
+		// BRITTLE aura machine ports — the latch defaults false.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataIgnisShattered) != 0
+
+	case "achievement_heartbreaker": // boss_xt002.cpp:989-1001
+		// OnCheck: GetData(DATA_HARD_MODE 1) != 0 — true once the heart
+		// died and EVENT_ENTER_HARD_MODE fired; the Lua twin sets it in
+		// the boss motion's SetData store (boss_xt002.lua: xt002HeartDied
+		// ev4 -> xt002DoAction ev38; ev23 zeroes it). Dormant until the
+		// heart-exposure machine ports — defaults false.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataXT002HardMode) != 0
+
+	case "achievement_iron_dwarf_medium_rare": // boss_razorscale.cpp:1702-1711
+		// OnCheck: the killed Dark Rune Guardian's GetData(
+		// DATA_IRON_DWARF_MEDIUM_RARE 29232924) — set by the flame-breath
+		// SpellScript on a lethal breath hit; the Lua twin sets it in the
+		// guardian motion's SetData store (boss_razorscale.lua:
+		// darkRuneGuardianSpellHit ev14, lethal = dead at handler time).
+		// Dormant until EVENT_FLAME_BREATH ports.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataRazorscaleIronDwarf) != 0
+
+	case "achievement_bronjahm_soul_power": // boss_bronjahm.cpp:390-399
+		// OnCheck: target->GetAI()->GetData(DATA_SOUL_POWER 1) >= 4 — the
+		// count of live Corrupted Soul Fragments in the boss's summon
+		// list (boss_bronjahm.cpp:139-154); the Lua twin keeps the count
+		// in the boss motion's SetData store (boss_bronjahm.lua:
+		// JustSummoned +1, SummonedCreatureDies/Despawn -1). Known
+		// delta: the consume leg (fragment MovementInform :249) is
+		// unported, so fragments C++ would consume keep counting
+		// until killed/despawned — over-awards vs C++.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataBronjahmSoulPower) >= 4
+
+	case "achievement_chaos_theory": // boss_anomalus.cpp:272-291
+		// OnCheck: Anomalus->AI()->GetData(DATA_CHAOS_THEORY 1) — true
+		// while no Chaotic Rift died: the latch starts set (ctor/Reset,
+		// boss_anomalus.cpp:86-90) and the rift SummonedCreatureDies
+		// relay (:130-134) clears it; the Lua twin keeps it in the boss
+		// motion's SetData store (boss_anomalus.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataAnomalusChaosTheory) != 0
+
+	case "achievement_ruby_void", "achievement_emerald_void", "achievement_amber_void": // boss_eregos.cpp:292-312
+		// OnCheck: target->GetAI()->GetData(DATA_*_VOID) — true while no
+		// drake vehicle of that type was present at engage: the latches
+		// start set (Initialize, boss_eregos.cpp:95-99) and
+		// JustEngagedWith (:124-128) clears each whose drake vehicle
+		// (27756/27692/27755) is within 500y; the Lua twin keeps them
+		// in the boss motion's SetData store (boss_eregos.lua). The
+		// three names share one C++ class (achievement_gen_eregos_void)
+		// with a per-name _data slot.
+		if source == nil || victim == nil {
+			return false
+		}
+		switch name {
+		case "achievement_ruby_void":
+			return bossLatchData(source.server, victim, dataEregosRubyVoid) != 0
+		case "achievement_emerald_void":
+			return bossLatchData(source.server, victim, dataEregosEmeraldVoid) != 0
+		default:
+			return bossLatchData(source.server, victim, dataEregosAmberVoid) != 0
+		}
+
+	case "achievement_girl_love_to_skadi": // boss_skadi.cpp:936-952
+		// OnCheck: skadi->AI()->GetData(DATA_LOVE_TO_SKADI 0) == 1 —
+		// true between the first harpoon hit (ACTION_HARPOON_HIT,
+		// boss_skadi.cpp:291-295) and the next drake breath (:259-262);
+		// the Lua twin keeps the love latch in the boss motion's
+		// SetData store (boss_skadi.lua: Reset 0 / graufSpellHit 1).
+		// Known delta: the drake-breath 1->2 leg is unported
+		// (spline-chain MovementInform), so the latch never returns
+		// to 2 in Lua.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSkadiLoveToSkadi) == 1
+
+	case "achievement_incredible_hulk": // boss_svala.cpp:602-611
+		// OnCheck: target->GetAI()->GetData(DATA_INCREDIBLE_HULK 2043)
+		// — true when the killed Scourge Hulk took lethal damage from
+		// Svala (DamageTaken, boss_svala.cpp:560-564); the Lua twin
+		// writes it in hulkDamageTaken (boss_svala.lua) and zeroes it
+		// at Reset. The kill target is the hulk, so victim is its
+		// motion here.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataSvalaIncredibleHulk) != 0
+
+	case "achievement_kings_bane": // boss_ymiron.cpp:332-345
+		// OnCheck: Ymiron->AI()->GetData(DATA_KINGS_BANE 2157) — true
+		// while no player was hit by Bane: the latch starts set
+		// (Initialize/Reset, boss_ymiron.cpp:122-130) and SpellHitTarget
+		// (:153-157) clears it when SPELL_BANE_HIT 59203 lands on a
+		// player; the Lua twin keeps it in the boss motion's SetData
+		// store (boss_ymiron.lua).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataYmironKingsBane) != 0
+
+	case "achievement_defenseless": // boss_cyanigosa.cpp:129-145
+		// OnCheck: instance->GetData(DATA_DEFENSELESS 14) != 0 — the
+		// Violet Hold latch (instance_violet_hold.cpp:474-475; ctor
+		// default true, cleared by door damage :385 and crystal
+		// activation :928-936). The Lua twin is the shared instanceData
+		// defenseless key (npc_violet_hold_activation_crystal.lua
+		// writes 0 on gossip); absent reads as the C++ ctor default.
+		// Known deltas: the door-damage clear is unported (Destroy
+		// Door Seal AuraScript) and the wipe re-arm is unported (no
+		// instance Update hook) — after a wipe following crystal use
+		// the key stays 0 until a fresh instance.
+		if source == nil || source.player == nil || source.server == nil || source.server.Features == nil || source.server.Features.Scripts == nil {
+			return false
+		}
+		if v, ok := source.server.Features.Scripts.InstanceDataNumber(source.player.Map, source.player.InstanceID, "defenseless"); ok {
+			return v >= 1
+		}
+		return true
 
 	case "achievement_bg_ic_glaive_grave": // achievement_scripts.cpp:81-96
 		// The player is riding a glaive thrower (BattlegroundIC.h:41-42:

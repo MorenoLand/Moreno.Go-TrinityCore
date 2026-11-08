@@ -162,10 +162,11 @@
 -- spell_summon_gauntlet_mobs_periodic — SpellScript / AuraScript hooks
 -- only — join the no-SpellScript / no-AuraScript-bridge queues.
 -- achievement_girl_love_to_skadi (OnCheck: GetData(DATA_LOVE_TO_SKADI)
--- == 1) — GetData/SetData exist as a per-motion ScriptData store
--- (lua_creature_events.go:771-800, tick-261 re-check) but the achievement
--- OnCheck consumer has no Lua hook; joins the unmodeled-achievement
--- queue. The love counter itself is kept in harpoonState (see below).
+-- == 1) — PORTED tick 417: the love latch is mirrored into Skadi's
+-- SetData store (Reset 0 / first harpoon hit 1, graufSpellHit below)
+-- and read by the Go gate via bossLatchData. Delta: the drake-breath
+-- 1->2 leg stays out (spline-chain MovementInform, no bridge) — see
+-- below. The love counter itself is kept in harpoonState (see below).
 -- at_skadi_gaunlet — AreaTriggerScript, no bridge; documented only.
 
 local ENTRY_SKADI_THE_RUTHLESS = 26693
@@ -174,6 +175,7 @@ local ENTRY_YMIRJAR_WITCH_DOCTOR = 26691
 local ENTRY_YMIRJAR_HARPOONER = 26692
 local ENTRY_GRAUF = 26893 -- utgarde_pinnacle.h:70
 local DATA_SKADI_THE_RUTHLESS = 2 -- utgarde_pinnacle.h:33
+local DATA_LOVE_TO_SKADI = 0 -- boss_skadi.cpp:112 (MiscData)
 local NPC_TRIGGER_RESET = 23472 -- utgarde_pinnacle.h:74
 local SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK = 49308 -- boss_skadi.cpp:54
 
@@ -294,6 +296,7 @@ local function skadiReset(event, creature)
     end
     -- C++ Initialize (:157-158) via Reset (:166-172): counters re-zeroed.
     harpoonState[creature:GetGUID()] = nil
+    creature:SetData(DATA_LOVE_TO_SKADI, 0)
     -- C++ Reset (:166-172): _Reset() (DespawnAll) before re-summoning.
     despawnSkadiSummons(creature:GetGUID())
     creature:SetReactState(0) -- REACT_PASSIVE
@@ -604,6 +607,15 @@ local function graufSpellHit(event, creature, caster, spellId)
     if st.hits == 1 then
         st.love = 1
     end
+    -- Achievement write leg (tick 417): mirror the love latch into
+    -- Skadi's SetData store for achievement_girl_love_to_skadi's
+    -- GetData read (Go gate via bossLatchData). Delta: the
+    -- ACTION_DRAKE_BREATH 1->2 leg (boss_skadi.cpp:259-262, grauf
+    -- spline-chain MovementInform) is unported, so love never returns
+    -- to 2 in Lua — the gate awards on any kill after the first
+    -- harpoon hit instead of only inside the first-hit-to-next-breath
+    -- window.
+    skadi:SetData(DATA_LOVE_TO_SKADI, st.love)
 end
 
 RegisterCreatureEvent(ENTRY_GRAUF, 14, graufSpellHit)

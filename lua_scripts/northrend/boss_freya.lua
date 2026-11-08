@@ -216,11 +216,14 @@
 -- Talk(SAY_DEATH) itself is ported via event 9.
 -- Freya UpdateAI body legs — Touch-of-Eonar aura
 -- maintenance (every-tick, not timer-driven); attuned-stack
--- achievement sampling; elemental 12s revive / trio-defeated
+-- achievement sampling PORTED tick 417 as the Lua counter in
+-- freyaEnterCombat (150 at engage) + freyaHitBySpell (REMOVE_*STACK
+-- decrements) + freyaReset (0); elemental 12s revive / trio-defeated
 -- GUID logic; DoMeleeAttackIfReady (engine-driven in Go).
 -- Freya GetData(DATA_GETTING_BACK_TO_NATURE /
--- DATA_KNOCK_ON_WOOD) — no GetData bridge (consumers: the four
--- achievements below); the elder DoAction
+-- DATA_KNOCK_ON_WOOD) — the Lua write legs are PORTED tick 417 (see
+-- above); the Go read side is the coordinator's
+-- checkAchievementCriteriaScript case. The elder DoAction
 -- (ACTION_ELDER_FREYA_KILLED -> DespawnOrUnsummon(10s)) is PORTED
 -- into freyaDied (see above).
 -- Elder DamageTaken — stonebark petrified-bark reflect
@@ -250,8 +253,9 @@
 -- achievement_getting_back_to_nature /
 -- achievement_knock_on_wood / achievement_knock_knock_on_wood /
 -- achievement_knock_knock_knock_on_wood (OnCheck: GetData
--- legs) — no GetData / achievement bridges; all four join
--- the unmodeled-achievement queue.
+-- legs) — Lua write legs PORTED tick 417 (SetData slots 1/2 in
+-- freyaEnterCombat / freyaReset / freyaHitBySpell above); Go cases
+-- are the coordinator's (checkAchievementCriteriaScript).
 
 local ENTRY_FREYA = 32906
 local ENTRY_BRIGHTLEAF = 32915
@@ -266,6 +270,8 @@ local ELDER_BOSS_DATA = {
     [ENTRY_STONEBARK] = 16,
 }
 local ACTION_ELDER_FREYA_KILLED = 1 -- boss_freya.cpp:176
+local DATA_GETTING_BACK_TO_NATURE = 1 -- boss_freya.cpp:210
+local DATA_KNOCK_ON_WOOD = 2 -- boss_freya.cpp:211
 local ENTRY_ANCIENT_CONSERVATOR = 33203
 local ENTRY_IRON_ROOTS = 33088 -- boss_freya.cpp:168
 local ENTRY_UNSTABLE_SUN_BEAM = 33050 -- boss_freya.cpp:167
@@ -322,6 +328,10 @@ local SAY_ELDER_SLAY = 1
 local SAY_ELDER_DEATH = 2
 
 local SPELL_KNOCK_ON_WOOD_CREDIT = 65074 -- boss_freya.cpp:92
+local SPELL_ATTUNED_TO_NATURE = 62519 -- boss_freya.cpp:60
+local SPELL_REMOVE_25STACK = 62521 -- boss_freya.cpp:86
+local SPELL_REMOVE_10STACK = 62525 -- boss_freya.cpp:87
+local SPELL_REMOVE_2STACK = 62524 -- boss_freya.cpp:88
 local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
 local REACT_PASSIVE = 0 -- UnitDefines.h:340
 
@@ -510,6 +520,21 @@ local function freyaEnterCombat(event, creature, target)
             end
         end
     end
+    -- C++ GetData(DATA_KNOCK_ON_WOOD 2) returns elderCount
+    -- (boss_freya.cpp:400-401), counted at engage (:357); the
+    -- achievement_knock_*_on_wood Go gates read this slot off the
+    -- killed victim's motion (achievement_criteria_scripts.go).
+    creature:SetData(DATA_KNOCK_ON_WOOD, eldersAlive)
+    -- C++ JustEngagedWith (:386-388) casts SPELL_ATTUNED_TO_NATURE
+    -- 62519 with a 150-stack spell-mod; the mod has no bridge, so the
+    -- Lua counter models the C++ attunedToNature member (GetData
+    -- DATA_GETTING_BACK_TO_NATURE 1, :398-399), sampled from the aura
+    -- stack every UpdateAI tick (:471-475). It starts at 150 here;
+    -- only the REMOVE_*STACK hits in freyaHitBySpell below can lower
+    -- it. The aura itself is never applied in Go, so polling
+    -- creature:GetStackAmount(62519) would read 0 forever — the
+    -- counter is the live leg, not the poll.
+    creature:SetData(DATA_GETTING_BACK_TO_NATURE, 150)
     -- C++ JustEngagedWith elder loop (:347-358, Brightleaf/Stonebark/
     -- Ironbranch order; instance GuidData in C++, the grid scan above
     -- is the engage-time precedent): per alive elder — drained aura
@@ -612,6 +637,17 @@ local function freyaReset(event, creature)
     end
     creature:SetBossState(BOSS_FREYA, 0) -- _Reset() SetBossState(DATA_FREYA 9, NOT_STARTED), PORTED tick 259 (the tick-258 auriaya convention)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize (:285) zeroes elderCount; the attuned
+    -- half mirrors the no-aura -> 0 sampling (:471-475). A fresh
+    -- motion reads 0 anyway; this is the wipe twin. Alive-gated:
+    -- ev23 fires on death too (fireCreatureDied runs Reset before
+    -- the kill-credit criteria read, kill.go:1091/:1400), and a
+    -- death-time zero would clobber the fight's latch before the
+    -- achievement gate reads it; engage re-sets both.
+    if creature:IsAlive() then
+        creature:SetData(DATA_KNOCK_ON_WOOD, 0)
+        creature:SetData(DATA_GETTING_BACK_TO_NATURE, 0)
+    end
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then
@@ -674,6 +710,38 @@ local function freyaDamageTaken(event, creature, attacker, damage)
         creature:SetBossState(BOSS_FREYA, 3) -- _JustDied() SetBossState(DATA_FREYA 9, DONE), PORTED tick 259 (C++ JustDied :628, after the credit cast, before the elder sweep)
         freyaElderShutdown(creature)
         return false, 0
+    end
+end
+
+-- C++ Freya UpdateAI attuned sampling (:471-475) reads the
+-- SPELL_ATTUNED_TO_NATURE 62519 aura stack; the stack only falls via
+-- the REMOVE_*STACK casts onto Freya, each handled by the
+-- dose-reduction SpellScript (:1547-1568, removes N stacks of 62519
+-- when the aura is present): trio elementals cast
+-- SPELL_REMOVE_10STACK 62525 on trio defeat (:520, one per elemental,
+-- 30 per trio), a dying Detonating Lasher casts SPELL_REMOVE_2STACK
+-- 62524 (SummonedCreatureDies :678), a dying Ancient Conservator casts
+-- SPELL_REMOVE_25STACK 62521 (:684). Event 14 (OnHitBySpell) is the
+-- target-side twin (faerlina ev14 precedent); the counter>0 guard is
+-- the SpellScript's HasAura check. Dormant until the wave/elemental
+-- legs land (the casters are unregistered wave adds), but C++-exact:
+-- in the Go-modeled fight no trio can be defeated, so the counter
+-- stays 150 and the >= 25 gate reads true, matching C++ for a
+-- zero-trio-defeat fight.
+local function freyaHitBySpell(event, creature, caster, spellId)
+    local remove = nil
+    if spellId == SPELL_REMOVE_10STACK then
+        remove = 10
+    elseif spellId == SPELL_REMOVE_2STACK then
+        remove = 2
+    elseif spellId == SPELL_REMOVE_25STACK then
+        remove = 25
+    else
+        return
+    end
+    local current = creature:GetData(DATA_GETTING_BACK_TO_NATURE)
+    if current > 0 then
+        creature:SetData(DATA_GETTING_BACK_TO_NATURE, math.max(0, current - remove))
     end
 end
 
@@ -931,6 +999,7 @@ RegisterCreatureEvent(ENTRY_FREYA, 2, freyaLeaveCombat)
 RegisterCreatureEvent(ENTRY_FREYA, 3, freyaTargetDied)
 RegisterCreatureEvent(ENTRY_FREYA, 4, freyaDied)
 RegisterCreatureEvent(ENTRY_FREYA, 9, freyaDamageTaken)
+RegisterCreatureEvent(ENTRY_FREYA, 14, freyaHitBySpell)
 RegisterCreatureEvent(ENTRY_FREYA, 23, freyaReset)
 
 RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 1, brightleafEnterCombat)

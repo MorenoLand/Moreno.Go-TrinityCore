@@ -92,8 +92,10 @@
 -- tracking exists to drain, and their entries are not verifiable
 -- from boss_xt002.cpp; the arm also rides _DespawnAtEvade.
 -- DoAction(ACTION_ENTER_HARD_MODE — ev38 dispatch IS bridged
--- (creature:DoAction, lua_creature_events.go:802); the sender is
--- the unported heart JustDied, boss_xt002.cpp:430).
+-- (creature:DoAction, lua_creature_events.go:802); PORTED 2026-11-08
+-- (tick 417, xt002DoAction + xt002HeartDied below): the sender is the
+-- heart JustDied, boss_xt002.cpp:428-431. LATENT until the
+-- heart-exposure machine ports; latch defaults false (fail-closed).
 -- GetData(DATA_HARD_MODE 1 / DATA_HEALTH_RECOVERED 2 /
 -- DATA_GRAVITY_BOMB_CASUALTY 3 — creature:GetData IS bridged
 -- (ScriptData store, 2026-10-24). The gravity-bomb aura OnPeriodic
@@ -142,19 +144,20 @@
 -- + Talk(EMOTE_HEART_OPENED 8) + heart DoAction
 -- (ACTION_START_PHASE_HEART) + EVENT_DISPOSE_HEART in 30s —
 -- phase / DoAction / instance machine; left out.
--- EVENT_DISPOSE_HEART / EVENT_ENTER_HARD_MODE (SetFullHealth +
+-- EVENT_DISPOSE_HEART / EVENT_RESUME_ATTACK — hard-mode / phase /
+-- DoAction machine; left out. EVENT_ENTER_HARD_MODE (SetFullHealth +
 -- DoCastSelf(SPELL_HEARTBREAK 65737, TRIGGERED) +
--- AddLootMode(LOOT_MODE_HARD_MODE_1) + DisposeHeart(true)) /
--- EVENT_RESUME_ATTACK — hard-mode / phase / DoAction machine;
--- left out.
+-- AddLootMode(LOOT_MODE_HARD_MODE_1) + DisposeHeart(true)) — PORTED
+-- 2026-11-08 (tick 417, xt002DoAction below) except DisposeHeart(true),
+-- which stays out with the phase machine.
 -- PassengerBoarded (Talk(EMOTE_SCRAPBOT 11) on scrapbot entry —
 -- no vehicle / PassengerBoarded bridge).
 -- npc_xt002_heart (NullCreatureAI — no Talk arms anywhere;
 -- DoAction(ACTION_START_PHASE_HEART / ACTION_DISPOSE_HEART)
--- vehicle / cast legs; JustDied -> xt002 DoAction
--- (ACTION_ENTER_HARD_MODE) (boss_xt002.cpp:430) — ev38 dispatch
--- IS bridged (lua_creature_events.go:802); the heart itself is
--- unregistered, so no sender exists in Go — no registration).
+-- vehicle / cast legs stay out; JustDied -> xt002 DoAction
+-- (ACTION_ENTER_HARD_MODE) (boss_xt002.cpp:430) — PORTED 2026-11-08
+-- (tick 417, xt002HeartDied below; ev38 dispatch IS bridged,
+-- lua_creature_events.go:802).
 -- npc_scrapbot (no Talk arms; TaskScheduler MoveFollow /
 -- SPELL_SCRAPBOT_RIDE_VEHICLE / SPELL_SCRAP_REPAIR machinery —
 -- no scheduler / movement / vehicle bridges — no registration);
@@ -201,10 +204,12 @@
 -- bridge; joins the no-AuraScript-bridge queue).
 -- achievement_nerf_engineering (OnCheck: !GetData
 -- (DATA_HEALTH_RECOVERED)); achievement_heartbreaker (OnCheck:
--- GetData(DATA_HARD_MODE) != 0); achievement_nerf_gravity_bombs
--- (OnCheck: !GetData(DATA_GRAVITY_BOMB_CASUALTY)) — no GetData
--- / achievement bridges; all three join the
--- unmodeled-achievement queue.
+-- GetData(DATA_HARD_MODE) != 0) — PORTED 2026-11-08 (tick 417, latent;
+-- see DoAction note above); achievement_nerf_gravity_bombs
+-- (OnCheck: !GetData(DATA_GRAVITY_BOMB_CASUALTY)) — the gravity-bomb
+-- leg is ported below via RegisterAuraEvent. Go cases in
+-- engine/world/achievement_criteria_scripts.go read the killed
+-- XT-002's ScriptData slots (fail-closed: absent reads 0).
 
 local ENTRY_XT002 = 33293
 local ENTRY_LIFE_SPARK = 34004
@@ -227,6 +232,19 @@ local SPELL_ENRAGE = 26662
 local SPELL_ARCANE_POWER_STATE = 49411
 local SPELL_STATIC_CHARGED = 64227
 local SPELL_SHOCK = 64230
+
+-- Achievement leg (tick 417): SPELL_HEARTBREAK 65737
+-- (boss_xt002.cpp:40), LOOT_MODE_HARD_MODE_1 0x2 (SharedDefines.h:43;
+-- sartharion precedent), ENTRY_XT002_HEART 33329
+-- (NPC_HEART_OF_DECONSTRUCTOR, ulduar.h:99; instance_ulduar.cpp:117),
+-- ACTION_ENTER_HARD_MODE 0 (boss_xt002.cpp:104, Actions enum first),
+-- DATA_HARD_MODE 1 (:110-114 XT002Data enum: TRANSFERED_HEALTH 0,
+-- HARD_MODE 1, HEALTH_RECOVERED 2, GRAVITY_BOMB_CASUALTY 3).
+local SPELL_HEARTBREAK = 65737
+local LOOT_MODE_HARD_MODE_1 = 0x2
+local ENTRY_XT002_HEART = 33329
+local ACTION_ENTER_HARD_MODE = 0
+local DATA_HARD_MODE = 1
 
 local timers = {}
 
@@ -321,6 +339,45 @@ end
 local function xt002Reset(event, creature)
     creature:SetBossState(DATA_XT002, 0)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize (boss_xt002.cpp:169-177/:149-155):
+    -- _hardMode = false (also _healthRecovered/_gravityBombCasualty).
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's latch before
+    -- the achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_HARD_MODE, 0)
+    end
+end
+
+-- C++ boss_xt002::DoAction(ACTION_ENTER_HARD_MODE)
+-- (boss_xt002.cpp:198-202) schedules EVENT_ENTER_HARD_MODE (1ms); the
+-- event (:366-372) sets _hardMode = true + SetFullHealth + DoCastSelf
+-- (SPELL_HEARTBREAK 65737, TRIGGERED) + AddLootMode(
+-- LOOT_MODE_HARD_MODE_1) + DisposeHeart(true). The 1ms delay collapses
+-- here (the kill-credit check runs at XT-002's death, long after).
+-- DisposeHeart(true) stays out (phase machine; header). The sender is
+-- the heart's JustDied below.
+local function xt002DoAction(event, creature, action)
+    if action ~= ACTION_ENTER_HARD_MODE then
+        return
+    end
+    creature:SetHealth(creature:GetMaxHealth()) -- SetFullHealth twin (assembly precedent)
+    creature:CastSpell(creature, SPELL_HEARTBREAK, true)
+    creature:AddLootMode(LOOT_MODE_HARD_MODE_1)
+    creature:SetData(DATA_HARD_MODE, 1)
+end
+
+-- C++ npc_xt002_heart::JustDied (boss_xt002.cpp:428-431): the heart's
+-- death sends XT-002 DoAction(ACTION_ENTER_HARD_MODE). LATENT: the
+-- heart-exposure phase machine is unported, so whether players can
+-- reach/kill the heart in Go is unverified; the latch defaults false,
+-- so the Go gate is fail-closed.
+local function xt002HeartDied(event, creature, killer)
+    local xt002 = creature:FindNearestCreature(ENTRY_XT002, 100)
+    if xt002 then
+        xt002:DoAction(ACTION_ENTER_HARD_MODE)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_XT002, 1, xt002EnterCombat)
@@ -328,6 +385,8 @@ RegisterCreatureEvent(ENTRY_XT002, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XT002, 3, xt002TargetDied)
 RegisterCreatureEvent(ENTRY_XT002, 4, xt002Died)
 RegisterCreatureEvent(ENTRY_XT002, 23, xt002Reset)
+RegisterCreatureEvent(ENTRY_XT002, 38, xt002DoAction)
+RegisterCreatureEvent(ENTRY_XT002_HEART, 4, xt002HeartDied)
 
 -- C++ npc_life_spark::JustEngagedWith (:630-638): DoCastSelf
 -- (SPELL_STATIC_CHARGED 64227) (2-arg non-triggered) at engage,

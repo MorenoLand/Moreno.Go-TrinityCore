@@ -90,16 +90,17 @@
 -- prune, ev4 DespawnAll) — the old "sentry AI unbridged" claim was
 -- stale; a sentry only exists in-game once the boss-side summon leg
 -- lands. The boss-side SummonedCreatureDies
--- _voidDance = false flip (boss_zuramat.cpp) is dispatch-bridgeable via
--- event-21 (2026-10-24), but _voidDance's only C++ consumer is
--- GetData(DATA_VOID_DANCE) for achievement_void_dance (unbridged) — the
--- latch would be write-only, so it stays documented-only.
+-- _voidDance = false flip (boss_zuramat.cpp:86-90) — PORTED tick 417
+-- via event 21 (zuramatSummonedDied below); Reset writes 1
+-- (Initialize, :62-66). The old "write-only" rationale is stale —
+-- the SetData store is the achievement_void_dance read leg.
 -- achievement_void_dance (OnCheck AI()->GetData(DATA_VOID_DANCE))
--- joins the unmodeled-achievement / no-GetData-bridge queue (the
--- cyanigosa / ichoron precedent).
+-- — PORTED tick 417 via the SetData write leg + Go gate
+-- (bossLatchData, achievement_criteria_scripts.go).
 
 local ENTRY_ZURAMAT = 29314
 local DATA_ZURAMAT = 8
+local DATA_VOID_DANCE = 2153 -- boss_zuramat.cpp:48 (Misc enum)
 local NPC_VOID_SENTRY = 29364 -- violet_hold.h:102
 local NPC_VOID_SENTRY_BALL = 29365 -- violet_hold.h:103
 local SPELL_SUMMON_VOID_SENTRY_BALL = 58650 -- boss_zuramat.cpp:32
@@ -252,6 +253,28 @@ local function zuramatReset(event, creature)
         creature:SetBossState(DATA_ZURAMAT, 0)
     end
     cancelTimers(creature:GetGUID())
+    -- C++ Reset -> Initialize: _voidDance = true ->
+    -- GetData(DATA_VOID_DANCE) = 1 (boss_zuramat.cpp:62-66/:99-103);
+    -- achievement_void_dance read leg (tick 417). Alive-gated:
+    -- ev23 fires on death too (fireCreatureDied runs Reset before
+    -- the kill-credit criteria read, kill.go:1091/:1400), and a
+    -- death-time re-arm would clobber the fight's latch before the
+    -- achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_VOID_DANCE, 1)
+    end
+end
+
+-- C++ SummonedCreatureDies (boss_zuramat.cpp:86-90): a summoned Void
+-- Sentry dying clears _voidDance -> GetData returns 0. Event 21 fires
+-- on the summoner with (event, creature, summon, killer)
+-- (lua_creature_events.go fireCreatureDied; amanitar precedent). The
+-- sentry ball (29365) is summoned by the sentry, not Zuramat, so the
+-- entry check also excludes it.
+local function zuramatSummonedDied(event, creature, summon, killer)
+    if summon:GetEntry() == NPC_VOID_SENTRY then
+        creature:SetData(DATA_VOID_DANCE, 0)
+    end
 end
 
 -- npc_void_sentry (boss_zuramat.cpp:164-197): ctor REACT_PASSIVE;
@@ -314,6 +337,7 @@ RegisterCreatureEvent(NPC_VOID_SENTRY, 20, sentryBallDespawned)
 RegisterCreatureEvent(NPC_VOID_SENTRY, 4, sentryDied)
 
 RegisterCreatureEvent(ENTRY_ZURAMAT, 1, zuramatEnterCombat)
+RegisterCreatureEvent(ENTRY_ZURAMAT, 21, zuramatSummonedDied)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 2, zuramatCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 3, zuramatKilledUnit)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 4, zuramatJustDied)

@@ -76,9 +76,15 @@
 -- SPELL_EFFECT_SUMMON delivery on creature casts — eregos precedent).
 -- spell_gal_darah_impaling_charge (SpellScript 54956/59827: charge hit ->
 -- target casts Impaling Charge Control Vehicle 54958 on the boss +
--- caster AI()->SetGUID(target, DATA_SHARE_THE_LOVE)) — no SpellScript
--- binding bridge (razelikh precedent) + cross-AI SetGUID bridge absent
--- — documented-only; the cast of 54956 itself is ported.
+-- caster AI()->SetGUID(target, DATA_SHARE_THE_LOVE)) — the SetGUID leg
+-- is PORTED tick 417 via event 15 (galDarahSpellHitTarget below): the
+-- charge landing on a target records the target GUID in the per-GUID
+-- impaled set and writes the distinct count into the boss motion's
+-- SetData store (the C++ _impaledPlayers set, boss_gal_darah.cpp:147-160).
+-- No SpellScript binding is needed — ev15 is the SpellHitTarget twin
+-- (boss_ai.go fireCreatureSpellHitTarget; sindragosa precedent). The
+-- 54958 control-vehicle cast itself stays out (no vehicle-possess
+-- bridge); the cast of 54956 itself is ported.
 -- spell_gal_darah_stampede_charge (SpellScript 55220/59823: rhino spirit
 -- despawns 1s after its charge hits) — no SpellScript binding bridge
 -- (standing; the old "no despawn bridge" parenthetical was stale —
@@ -88,10 +94,8 @@
 -- 55276 / heroic 59826) — PORTED engine-side in creatureEffectScriptEffect
 -- (boss_ai.go); the JustDied cast of 60022 itself was already ported.
 -- achievement_share_the_love (AchievementCriteriaScript: GetData
--- (DATA_SHARE_THE_LOVE) >= 5) — no achievement-criteria bridge on the
--- Lua surface (snakes precedent) + cross-AI GetData bridge absent
--- (SetGUID leg: ObjectAccessor::GetUnit + _impaledPlayers latch, :147-:155)
--- — documented-only.
+-- (DATA_SHARE_THE_LOVE) >= 5) — PORTED tick 417 via the SetData write
+-- leg + Go gate (bossLatchData, achievement_criteria_scripts.go).
 -- SpellHit(SPELL_TRANSFORM_BACK 55299) -> RemoveAurasDueToSpell(55297)
 -- (:177-:181) — PORTED: the victim-side arm rides event 14
 -- (CREATURE_EVENT_ON_HIT_BY_SPELL, faerlina precedent) and the aura
@@ -111,6 +115,7 @@
 -- now draws the same pool via GetAITargets (see randomThreatPlayerInRange).
 
 local ENTRY_GAL_DARAH = 29306
+local DATA_SHARE_THE_LOVE = 1 -- boss_gal_darah.cpp:81 (Misc enum)
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -120,6 +125,7 @@ local SAY_TRANSFORM_1 = 4
 local SAY_TRANSFORM_2 = 5
 
 local SPELL_IMPALING_CHARGE = 54956
+local H_SPELL_IMPALING_CHARGE = 59827 -- boss_gal_darah.cpp:247
 local SPELL_STOMP = 55292
 local SPELL_PUNCTURE = 55276
 local SPELL_STAMPEDE = 55218
@@ -135,6 +141,8 @@ local PHASE_RHINO = 2
 
 local timers = {}
 local phaseState = {}
+local impaledPlayers = {} -- [boss guid] = { [player guid] = true }
+local impaledCount = {} -- [boss guid] = distinct impaled player count
 
 local transformTick
 
@@ -398,6 +406,8 @@ local function galDarahEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:InterruptNonMeleeSpells(false)
     phaseState[guid] = { phase = PHASE_TROLL, counter = 0 }
+    impaledPlayers[guid] = {}
+    impaledCount[guid] = 0
     scheduleTrollPhase(creature, guid)
 end
 
@@ -440,6 +450,18 @@ end
 -- self-cast is bridgeable.
 local function galDarahReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ Reset(): _impaledPlayers.clear() + _phaseCounter = 0
+    -- (boss_gal_darah.cpp:93-99) -> GetData(DATA_SHARE_THE_LOVE) = 0;
+    -- achievement_share_the_love read leg (tick 417).
+    impaledPlayers[creature:GetGUID()] = nil
+    impaledCount[creature:GetGUID()] = nil
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's count before
+    -- the achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_SHARE_THE_LOVE, 0)
+    end
     -- C++ Reset(): DoCastAOE(SPELL_HEARTH_BEAM_VISUAL, true) is Reset-only
     -- (boss_gal_darah.cpp). Alive-gated; the timer cancel rides the death
     -- leg deliberately.
@@ -448,9 +470,39 @@ local function galDarahReset(event, creature)
     end
 end
 
+-- C++ spell_gal_darah_impaling_charge::HandleScript
+-- (boss_gal_darah.cpp:259-276): the Impaling Charge (54956 / heroic
+-- 59827) landing on a target records the target GUID in
+-- _impaledPlayers. Event 15 fires on the caster's bindings with
+-- (event, creature, target, spellId) per hit target
+-- (boss_ai.go fireCreatureSpellHitTarget; sindragosa precedent); the
+-- distinct-player count is the GetData(DATA_SHARE_THE_LOVE) value.
+local function galDarahSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_IMPALING_CHARGE and spellId ~= H_SPELL_IMPALING_CHARGE then
+        return
+    end
+    if target == nil then
+        return
+    end
+    local guid = creature:GetGUID()
+    local set = impaledPlayers[guid]
+    if set == nil then
+        set = {}
+        impaledPlayers[guid] = set
+        impaledCount[guid] = 0
+    end
+    local pguid = target:GetGUID()
+    if pguid ~= nil and not set[pguid] then
+        set[pguid] = true
+        impaledCount[guid] = impaledCount[guid] + 1
+        creature:SetData(DATA_SHARE_THE_LOVE, impaledCount[guid])
+    end
+end
+
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 1, galDarahEnterCombat)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 2, galDarahLeaveCombat)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 3, galDarahTargetDied)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 4, galDarahDied)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 14, galDarahSpellHit)
+RegisterCreatureEvent(ENTRY_GAL_DARAH, 15, galDarahSpellHitTarget)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 23, galDarahReset)

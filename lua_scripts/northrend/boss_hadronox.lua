@@ -407,7 +407,13 @@ local function hadronoxReset(event, creature)
     cancelTimers(creature:GetGUID())
     hadronoxEngaged[creature:GetGUID()] = nil
     hadronoxStep[creature:GetGUID()] = nil -- C++ Reset SetStep(0) twin
-    creature:SetData(DATA_HADRONOX_WEBBED_DOORS, 0) -- C++ InitializeAI :284
+    -- No SetData(DATA_HADRONOX_WEBBED_DOORS) write here: C++ has no
+    -- Reset() override at all — _doorsWebbed is cleared only in the
+    -- ctor (:162) and InitializeAI (:284, spawn-time), and
+    -- EnterEvadeMode (:258-270) never resets it, so a webbed wipe
+    -- keeps "Hadronox Denied" failed until respawn/instance reset.
+    -- A per-attempt re-arm here would invent attainability C++
+    -- denies; a fresh motion reads 0, the ctor default.
 end
 
 -- C++ boss_hadronoxAI::SetStep (boss_hadronox.cpp:173-185): early-return

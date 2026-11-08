@@ -505,7 +505,13 @@ local function garfrostReset(event, creature)
         creature:SetBossState(DATA_GARFROST, 0)
     end
     clearState(creature:GetGUID())
-    creature:SetData(ACHIEV_DOESNT_GO_TO_ELEVEN, 0) -- C++ Reset -> Initialize :96
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time zero would clobber the fight's peak before
+    -- the achievement gate reads it; the wipe re-arm is preserved.
+    if creature:IsAlive() then
+        creature:SetData(ACHIEV_DOESNT_GO_TO_ELEVEN, 0) -- C++ Reset -> Initialize :96
+    end
 end
 
 RegisterCreatureEvent(ENTRY_GARFROST, 1, garfrostEnterCombat)

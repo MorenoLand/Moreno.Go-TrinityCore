@@ -496,8 +496,14 @@ local function auriayaReset(event, creature)
     creature:SetBossState(BOSS_AURIAYA_DATA, 0)
     cancelCombatTimers(event, creature)
     -- C++ Reset (:139-145): _crazyCatLady = true, _nineLives = false.
-    creature:SetData(DATA_CRAZY_CAT_LADY, 1)
-    creature:SetData(DATA_NINE_LIVES, 0)
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time re-arm would clobber the fight's latch before
+    -- the achievement gate reads it; the spawn handler sets both.
+    if creature:IsAlive() then
+        creature:SetData(DATA_CRAZY_CAT_LADY, 1)
+        creature:SetData(DATA_NINE_LIVES, 0)
+    end
     for _, sentry in ipairs(creature:GetCreaturesInGrid(ENTRY_SANCTUM_SENTRY, 500)) do
         if sentry:IsDead() then
             sentry:Respawn()

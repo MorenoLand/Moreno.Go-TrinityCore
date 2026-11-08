@@ -316,7 +316,13 @@ local function sindragosaReset(event, creature)
     end
     cancelTimers(creature:GetGUID())
     sindragosaThirdPhase[creature:GetGUID()] = nil
-    creature:SetData(DATA_MYSTIC_BUFFET_STACK, 0) -- C++ Reset -> Initialize :233
+    -- Alive-gated like the tank-marker cast below: ev23 fires on
+    -- death too (fireCreatureDied runs Reset before the kill-credit
+    -- criteria read, kill.go:1091/:1400), and a death-time zero
+    -- would clobber the fight's peak before the gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_MYSTIC_BUFFET_STACK, 0) -- C++ Reset -> Initialize :233
+    end
     -- C++ Reset(): DoCastSelf(SPELL_TANK_MARKER, true) (:241),
     -- unconditional one-shot. The engine fires event 23 on death too
     -- (Eluna reset-then-died order, lua_creature_events.go) but the C++ AI

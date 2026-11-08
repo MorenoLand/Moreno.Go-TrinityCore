@@ -215,21 +215,21 @@
 -- are not) stays out.
 -- npc_spectator (26667) — MovementInform flee machine, no Talk arms,
 -- no MovementInform bridge. Stay out.
--- spell_paralyze_pinnacle (SpellScript target filter) and
 -- achievement_incredible_hulk (GetData(DATA_INCREDIBLE_HULK 2043))
--- — no SpellScript / GetData / achievement bridges. Stay out.
+-- — PORTED tick 417: the hulk DamageTaken latch below is mirrored
+-- into the hulk's SetData store and read by the Go gate via
+-- bossLatchData (the kill target IS the hulk).
 -- npc_scourge_hulk DamageTaken — PORTED: lethal damage from Svala
 -- (attacker:GetEntry() == NPC_SVALA_SORROWGRAVE 26668) latches
 -- killedByRitualStrike (boss_svala.cpp:560-564). Pure bool latch —
 -- no damage rewrite (thekal convention: no return), fires on lethal
--- hits so no postDamage guard. The C++ latch is read only by
--- GetData(DATA_INCREDIBLE_HULK) for the achievement script, which
--- has no bridge — the latch is kept per-GUID in a Lua local so a
--- future bridge lands on real state.
+-- hits so no postDamage guard. The latch is mirrored into SetData
+-- (tick 417) for the Go achievement gate.
 
 local ENTRY_SVALA_SORROWGRAVE = 26668
 local DATA_SVALA_SORROWGRAVE = 0 -- utgarde_pinnacle.h:31
 local ENTRY_SCOURGE_HULK = 26555
+local DATA_INCREDIBLE_HULK = 2043 -- boss_svala.cpp:125
 local ENTRY_RITUAL_CHANNELER = 27281
 local GO_UTGARDE_MIRROR = 191745
 
@@ -608,6 +608,11 @@ local function hulkDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() and attacker ~= nil
             and attacker:GetEntry() == ENTRY_SVALA_SORROWGRAVE then
         hulkRitualStrike[creature:GetGUID()] = true
+        -- Achievement write leg (tick 417): mirror the latch into the
+        -- hulk's SetData store for achievement_incredible_hulk's
+        -- GetData read (Go gate via bossLatchData; the kill target
+        -- IS the hulk).
+        creature:SetData(DATA_INCREDIBLE_HULK, 1)
     end
 end
 
@@ -630,6 +635,20 @@ local function hulkCancelCombatTimers(event, creature)
     hulkRitualStrike[guid] = nil
 end
 
+-- C++ npc_scourge_hulkAI::Initialize (boss_svala.cpp:540-545, via
+-- ctor/Reset): killedByRitualStrike = false. Split from the shared
+-- hulkCancelCombatTimers (2/4/23): ev23 pre-fires on death
+-- (kill.go:1091) and an unguarded zero would wipe the latch before
+-- the gate reads it, and ev4 must never write the latch.
+local function hulkReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    hulkRitualStrike[guid] = nil
+    if not creature:IsDead() then
+        creature:SetData(DATA_INCREDIBLE_HULK, 0)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 1, svalaEnterCombat)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 2, svalaWipeCombat)
 RegisterCreatureEvent(ENTRY_SVALA_SORROWGRAVE, 3, svalaKilledUnit)
@@ -642,7 +661,7 @@ RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 1, hulkEnterCombat)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 2, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 4, hulkCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 9, hulkDamageTaken)
-RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 23, hulkCancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SCOURGE_HULK, 23, hulkReset)
 RegisterCreatureEvent(ENTRY_RITUAL_CHANNELER, 23, channelerReset)
 RegisterCreatureEvent(ENTRY_RITUAL_CHANNELER, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_svala.cpp:435: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)

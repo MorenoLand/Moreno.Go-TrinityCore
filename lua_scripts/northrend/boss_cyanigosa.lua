@@ -81,8 +81,11 @@
 -- OnEffectHitTarget (:161): GetCaster()->CastSpell(GetHitUnit(),
 -- SPELL_SUMMON_PLAYER 21150, true): no SpellScript bridge.
 -- achievement_defenseless (:129-145) — AchievementCriteriaScript
--- OnCheck (:134): instance->GetData(DATA_DEFENSELESS): no
--- achievement-criteria bridge.
+-- OnCheck (:134): instance->GetData(DATA_DEFENSELESS): PORTED tick 417
+-- — the latch lives in the shared instanceData table as
+-- defenseless (1 default / 0 on crystal activation, see
+-- npc_violet_hold_activation_crystal.lua) and the Go gate reads it
+-- via InstanceDataNumber.
 -- MoveInLineOfSight (:73) — empty override: ported as the ev27
 -- engage veto below (the vashj precedent).
 -- DoMeleeAttackIfReady (:80) — melee is engine-driven in Go (the

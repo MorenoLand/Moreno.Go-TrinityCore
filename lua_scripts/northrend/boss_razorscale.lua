@@ -223,14 +223,19 @@
 -- controller:IsCasting() gate (constant-false twin, caststate axiom;
 -- double-click race unmodeled, halazzi precedent) + controller
 -- CastSpell(nil, entry spell, true).
--- spell_razorscale_flame_breath (63317/64021),
+-- spell_razorscale_flame_breath (63317/64021) — the lethal-hit latch
+-- leg is PORTED 2026-11-08 (tick 417, darkRuneGuardianSpellHit below;
+-- ev14 post-damage inversion, LATENT until EVENT_FLAME_BREATH ports;
+-- fail-closed);
 -- spell_razorscale_summon_iron_dwarves (63968/63970/63969),
 -- spell_razorscale_fuse_armor (64821), spell_razorscale_firebolt
--- (62669) — no SpellScript / AuraScript bridges; all four join
+-- (62669) — no SpellScript / AuraScript bridges; all three join
 -- the no-SpellScript / no-AuraScript-bridge queues;
--- achievement_iron_dwarf_medium_rare /
--- achievement_quick_shave (GetData-based OnCheck — no GetData /
--- achievement bridges; both join the unmodeled-achievement queue).
+-- achievement_iron_dwarf_medium_rare — PORTED 2026-11-08 (tick 417,
+-- latent; Go case reads the killed guardian's ScriptData slot
+-- 29232924, fail-closed). achievement_quick_shave — Lua legs PORTED
+-- 2026-11-08 (tick 417, razorscaleMovementInform below; LATENT — the
+-- flight cycle is unported, latch stays 1; the Go gate stays HELD).
 
 local ENTRY_RAZORSCALE = 33186
 
@@ -249,6 +254,24 @@ local engineersRemaining = {}
 local EMOTE_BERSERK = 2
 
 local SPELL_BERSERK = 47008
+
+-- Achievement legs (tick 417): DATA_QUICK_SHAVE 29192921 and
+-- DATA_IRON_DWARF_MEDIUM_RARE 29232924 (boss_razorscale.cpp:163-164,
+-- Misc enum); SPELL_FLAME_BREATH 63317 / 64021 (:103, RAID_MODE);
+-- ENTRY_DARK_RUNE_GUARDIAN 33388 (ulduar.h:86);
+-- POINT_RAZORSCALE_FLIGHT_2 12 (MovePoints enum: DEFENDER_ATTACK 1,
+-- SHACKLE 2, BASE 3, HARPOON_1 4, HARPOON_1_25 5, HARPOON_2 6,
+-- HARPOON_2_25 7, HARPOON_3 8, HARPOON_4 9, FLIGHT 10, TAKEOFF 11,
+-- FLIGHT_2 12); POINT_MOTION_TYPE 8 (hadronox precedent).
+-- razorscaleFlyCount is the GUID-keyed twin of C++ _flyCount.
+local DATA_QUICK_SHAVE = 29192921
+local DATA_IRON_DWARF_MEDIUM_RARE = 29232924
+local SPELL_FLAME_BREATH = 63317
+local SPELL_FLAME_BREATH_25 = 64021
+local ENTRY_DARK_RUNE_GUARDIAN = 33388
+local POINT_RAZORSCALE_FLIGHT_2 = 12
+local POINT_MOTION_TYPE = 8
+local razorscaleFlyCount = {}
 
 -- boss_razorscale.cpp:177
 local WORLD_STATE_RAZORSCALE_MUSIC = 4162
@@ -337,6 +360,17 @@ local function cancelCombatTimers(event, creature)
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
     -- _engineersCount = 3.
     engineersRemaining[creature:GetGUID()] = 3
+    -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
+    -- _flyCount = 0, so GetData(DATA_QUICK_SHAVE) reads 1 (0 <= 1).
+    razorscaleFlyCount[creature:GetGUID()] = 0
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
+    -- and a death-time re-arm would clobber the fight's latch before
+    -- the achievement gate reads it. (Gate HELD this tick — the air/
+    -- ground machine is unported — so this guards the future unblock.)
+    if creature:IsAlive() then
+        creature:SetData(DATA_QUICK_SHAVE, 1)
+    end
     -- C++ Reset (boss_razorscale.cpp:322-325): SummonCreatureGroup(
     -- RAZORSCALE_EXPEDITION_GROUP 1) + SummonCreatureGroup(
     -- RAZORSCALE_FIRE_STATE_10_GROUP 2) + 25-man SummonCreatureGroup(
@@ -447,12 +481,53 @@ local function razorscaleDoAction(event, creature, action)
     creature:MoveTo(POINT_RAZORSCALE_FLIGHT, 585.361, -173.5592, 456.843)
 end
 
+-- C++ boss_razorscaleAI::MovementInform (boss_razorscale.cpp:440-475):
+-- reaching POINT_RAZORSCALE_FLIGHT_2 ++_flyCount; GetData(
+-- DATA_QUICK_SHAVE) returns 1 iff _flyCount <= 1 (:507-512). ev28
+-- fires on Lua MoveTo arrival with (type, id) (creaturemotion.go).
+-- LATENT, Go gate HELD: only ACTION_START_FIGHT's MoveTo exists in
+-- Lua — the takeoff/ground/air cycle that would reach FLIGHT_2 is
+-- unported, so the count stays 0 and the latch stays 1 (a gate now
+-- would award on every kill).
+local function razorscaleMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_RAZORSCALE_FLIGHT_2 then
+        return
+    end
+    local guid = creature:GetGUID()
+    local count = (razorscaleFlyCount[guid] or 0) + 1
+    razorscaleFlyCount[guid] = count
+    if count > 1 then
+        creature:SetData(DATA_QUICK_SHAVE, 0)
+    end
+end
+
+-- C++ spell_razorscale_flame_breath::CheckDamage
+-- (boss_razorscale.cpp:1583-1600): a flame-breath hit that kills a Dark
+-- Rune Guardian (GetHitDamage() >= target health, target alive at
+-- script time) sets the guardian's DATA_IRON_DWARF_MEDIUM_RARE latch.
+-- ev14 fires on the hit target AFTER the damage loop (boss_ai.go:
+-- DoDamageAndTriggers comment), so the Lua twin inverts the check:
+-- lethal ⟺ the guardian is dead (or at 0 health) at handler time.
+-- LATENT: Razorscale never casts flame breath in Lua
+-- (EVENT_FLAME_BREATH unported, phase machine), so this cannot fire
+-- yet; the latch defaults false, so the Go gate is fail-closed.
+local function darkRuneGuardianSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_FLAME_BREATH and spellId ~= SPELL_FLAME_BREATH_25 then
+        return
+    end
+    if not creature:IsAlive() or creature:GetHealth() == 0 then
+        creature:SetData(DATA_IRON_DWARF_MEDIUM_RARE, 1)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 1, razorscaleEnterCombat)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 2, leaveCombat)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 4, razorscaleDied)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 23, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 21, razorscaleSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_RAZORSCALE, 38, razorscaleDoAction)
+RegisterCreatureEvent(ENTRY_RAZORSCALE, 28, razorscaleMovementInform)
+RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 14, darkRuneGuardianSpellHit)
 RegisterCreatureGossipEvent(ENTRY_EXPEDITION_COMMANDER, 2, onCommanderGossipSelect)
 
 -- C++ go_razorscale_mole_machine::Reset (boss_razorscale.cpp:1559-1566):

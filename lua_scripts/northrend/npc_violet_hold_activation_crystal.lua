@@ -18,15 +18,31 @@
 -- (instance_violet_hold.cpp:932 ProcessEvent EVENT_ACTIVATE_CRYSTAL
 -- summoning the defense system) has no instance-script bridge, so the
 -- cast fires but summons nothing — the same latent class as the
--- defense system itself. GO_INTRO_ACTIVATION_CRYSTAL 193615 is NOT
+-- defense system itself. The Defenseless=false leg of that ProcessEvent
+-- DOES ride this handler (tick 417): the gossip IS the crystal
+-- activation, so instanceData.defenseless = 0 is written here; absent
+-- reads as the C++ ctor default true. GO_INTRO_ACTIVATION_CRYSTAL 193615 is NOT
 -- registered: no C++ consumer references it (header enum only), so
 -- its ScriptName binding is unverifiable from the C++ text.
 
 local GO_ACTIVATION_CRYSTAL = 193611 -- violet_hold.h:135
 local SPELL_CRYSTAL_ACTIVATION = 57804 -- violet_hold.cpp:1352
 
-local function activationCrystalGossip(_, player, _go)
+local function activationCrystalGossip(_, player, go)
     player:CastSpell(player, SPELL_CRYSTAL_ACTIVATION, true)
+    -- Achievement write leg (tick 417): C++ ProcessEvent
+    -- EVENT_ACTIVATE_CRYSTAL (instance_violet_hold.cpp:928-936) clears
+    -- the instance Defenseless latch; the gossip is the activation, so
+    -- the clear rides this handler. The door-integrity clear (Destroy
+    -- Door Seal 58040 AuraScript) and the wipe re-arm (instance :893)
+    -- have no bridge and stay out — see instance_violet_hold.lua.
+    local mapObj = go and go:GetMap() or nil
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.defenseless = 0
+        end
+    end
     return false
 end
 

@@ -258,7 +258,7 @@ end
 local function kingDredLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
     -- C++ EnterEvadeMode ends with Reset() (CreatureAI.cpp:237);
-    -- Reset (:70): raptorsKilled = 0.
+    -- Reset (:73-76): raptorsKilled = 0.
     creature:SetData(DATA_RAPTORS_KILLED, 0)
 end
 
@@ -268,8 +268,14 @@ end
 
 local function kingDredReset(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ Reset (:70): raptorsKilled = 0.
-    creature:SetData(DATA_RAPTORS_KILLED, 0)
+    -- C++ Reset (:73-76): raptorsKilled = 0. Alive-gated: ev23 fires on
+    -- death too (fireCreatureDied runs Reset before the kill-credit
+    -- criteria read, kill.go:1091/:1400), and a death-time zero would
+    -- clobber the fight's counter before the achievement gate reads
+    -- it; the wipe re-arm is preserved.
+    if creature:IsAlive() then
+        creature:SetData(DATA_RAPTORS_KILLED, 0)
+    end
 end
 
 -- C++ npc_drakkari_gutripperAI / npc_drakkari_scytheclawAI

@@ -54,12 +54,12 @@
 -- timer arms (swarmer / plague / rage / enrage-check) fire ungated;
 -- the DamageTaken guardian leg is not an UpdateAI event arm either.
 -- Unmodeled (no bridges — documented, not wired):
--- SummonedCreatureDies(NPC_AHNKAHAR_GUARDIAN 30176) -> GuardianDied latch:
--- the event-21 dispatch IS bridged now (2026-10-24), but GuardianDied's
--- only C++ consumer is GetData(DATA_RESPECT_YOUR_ELDERS) for the
--- achievement (boss_elder_nadox.cpp:105) behind the absent
--- achievement-criteria/cross-AI-GetData bridges — the latch would be
--- write-only, so the arm stays documented-only.
+-- SummonedCreatureDies(NPC_AHNKAHAR_GUARDIAN 30176) -> GuardianDied latch
+-- — PORTED tick 417 via event 21 (nadoxSummonedDied below): the
+-- guardian death writes SetData(DATA_RESPECT_YOUR_ELDERS, 0) on the
+-- boss motion; Reset writes 1 (boss_elder_nadox.cpp:66-70/:96-100).
+-- The old "write-only" rationale is stale — the SetData store is the
+-- achievement_respect_your_elders read leg.
 -- npc_ahnkahar_nerubian — ENTRY UNVERIFIABLE (no NPC_AHNKAHAR_
 -- NERUBIAN constant in ahnkahet.h or anywhere in the C++ sources;
 -- the file enums name only the guardian 30176 / swarmer 30178 —
@@ -74,11 +74,13 @@
 -- SPELL_SWARM_BUFF 56281) — no SpellScript binding bridge on the
 -- Lua surface (razelikh precedent) — documented-only.
 -- achievement_respect_your_elders — AchievementCriteriaScript
--- (GetAI()->GetData(DATA_RESPECT_YOUR_ELDERS)) — no
--- achievement-criteria bridge on the Lua surface (snakes precedent)
--- + cross-AI GetData bridge absent — documented-only.
+-- (GetAI()->GetData(DATA_RESPECT_YOUR_ELDERS)) — PORTED tick 417 via
+-- the SetData write leg + Go gate (bossLatchData,
+-- achievement_criteria_scripts.go).
 
 local ENTRY_ELDER_NADOX = 29309
+local DATA_RESPECT_YOUR_ELDERS = 6 -- boss_elder_nadox.cpp:54 (Events enum)
+local NPC_AHNKAHAR_GUARDIAN = 30176 -- ahnkahet.h:52
 
 local SAY_AGGRO   = 0
 local SAY_SLAY    = 1
@@ -237,6 +239,26 @@ local function nadoxReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     clearState(guid)
+    -- C++ Reset -> Initialize: GuardianDied = false ->
+    -- GetData(DATA_RESPECT_YOUR_ELDERS) = 1 (boss_elder_nadox.cpp:66-70);
+    -- achievement_respect_your_elders read leg (tick 417). Alive-gated:
+    -- ev23 fires on death too (fireCreatureDied runs Reset before
+    -- the kill-credit criteria read, kill.go:1091/:1400), and a
+    -- death-time re-arm would clobber the fight's latch before the
+    -- achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_RESPECT_YOUR_ELDERS, 1)
+    end
+end
+
+-- C++ SummonedCreatureDies (boss_elder_nadox.cpp:94-100): a summoned
+-- Ahn'kahar Guardian dying sets GuardianDied -> GetData returns 0.
+-- Event 21 fires on the summoner with (event, creature, summon, killer)
+-- (lua_creature_events.go fireCreatureDied; amanitar precedent).
+local function nadoxSummonedDied(event, creature, summon, killer)
+    if summon:GetEntry() == NPC_AHNKAHAR_GUARDIAN then
+        creature:SetData(DATA_RESPECT_YOUR_ELDERS, 0)
+    end
 end
 
 -- C++ UpdateAI GuardianSummoned latch (every-tick HealthBelowPct(50)
@@ -264,4 +286,5 @@ RegisterCreatureEvent(ENTRY_ELDER_NADOX, 2, nadoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 3, nadoxTargetDied)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 4, nadoxDied)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 9, nadoxDamageTaken)
+RegisterCreatureEvent(ENTRY_ELDER_NADOX, 21, nadoxSummonedDied)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 23, nadoxReset)

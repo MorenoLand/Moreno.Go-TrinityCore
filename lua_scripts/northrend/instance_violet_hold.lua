@@ -10,6 +10,13 @@
 -- xevozz / lavanthor / ichoron / zuramat / erekem / moragg /
 -- cyanigosa / sinclari / sinclariTrigger — the nine creatureData
 -- binds (instance_violet_hold.cpp:196-208, LoadObjectData).
+-- defenseless — 1/0 number (instance_violet_hold.cpp:474-475
+-- DATA_DEFENSELESS 14, C++ ctor default true): cleared to 0 by the
+-- activation-crystal gossip handler
+-- (npc_violet_hold_activation_crystal.lua, tick 417); the
+-- door-integrity clear (Destroy Door Seal 58040 AuraScript,
+-- violet_hold.cpp:1385) and the wipe re-arm (instance :893) stay out
+-- (no AuraScript / instance-Update bridges).
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: the nine boss/Sinclari binds above. Fires on
 --   materialization (motionFor funnel, instance_hooks.go:311-320); a
@@ -81,7 +88,9 @@
 --   instance SetData legs have no bridges.
 -- - ProcessEvent (:907-916, EVENT_ACTIVATE_CRYSTAL 20001 -> summon
 --   defense system): no instance-script bridge (the activation
---   crystal header documents the same gap).
+--   crystal header documents the same gap). The Defenseless=false leg
+--   rides the crystal gossip handler instead (tick 417); only the
+--   defense-system summon stays out.
 -- - SetHeaders(DataHeader "VH") / SetBossNumber(EncounterCount 9) /
 --   LoadObjectData / LoadMinionData: no bridges; the boss-state store
 --   is written via creature:SetBossState

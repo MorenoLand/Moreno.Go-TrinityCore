@@ -107,16 +107,18 @@
 -- registered since C++ never calls Talk(SAY_DEATH) from JustDied.
 -- boss_thorimAI SpellHit (SPELL_TOUCH_OF_DOMINION_TRIGGERED 62565 — sif
 -- despawn): stale "no SpellHit bridge" retracted (2026-10-21) — ev14
--- CreatureEventOnHitBySpell is bridged; the arm stays out: its payload is
--- a cross-creature relay (instance->GetCreature(DATA_SIF) -> sif
--- Talk(SAY_SIF_DESPAWN)/DespawnOrUnsummon) with no instance/cross-AI
--- bridge. SpellHitTarget (SPELL_LIGHTNING_RELEASE 62466 -> player target
--- -> _dontStandInTheLightning = false) stays out: ev15 IS bridged
--- (caster-side; thorim casts 62466 on the pillar and the spell's
--- player hits fire thorim's ev15) but the latch's only consumer is
--- the Don't-Stand-in-the-Lightning achievement check (no achievement
--- bridge) and the triggering Lightning Release cast itself rides the
--- unported pillar machine.
+-- CreatureEventOnHitBySpell is bridged; the _hardMode = false latch leg
+-- is PORTED 2026-11-08 (tick 417, thorimSpellHit below; LATENT — Sif is
+-- unregistered and EVENT_START_SIF_CHANNEL is unported, so 62565 never
+-- lands yet; the Go gate stays HELD). The Sif Talk(SAY_SIF_DESPAWN) /
+-- DespawnOrUnsummon cross-creature relay in the same arm stays out.
+-- SpellHitTarget (SPELL_LIGHTNING_RELEASE 62466 -> player target ->
+-- _dontStandInTheLightning = false) — ev15 IS bridged (caster-side;
+-- thorim casts 62466 on the pillar and the spell's player hits fire
+-- thorim's ev15); the latch leg is PORTED 2026-11-08 (tick 417,
+-- thorimSpellHitTarget below; LATENT — the 62466 cast rides the unported
+-- phase-2 / pillar machine, so the clear never fires yet; the Go gate
+-- stays HELD).
 -- npc_runic_colossusAI EVENT_RUNIC_SMASH (lines 1480-1483) — PORTED
 -- 2026-11-05 (tick 214), see PORTED ARMS.
 -- npc_runic_colossusAI / npc_ancient_rune_giantAI Reset + JustDied — GO door legs
@@ -173,6 +175,18 @@ local SPELL_CREDIT_KILL = 64985
 local FACTION_FRIENDLY = 35
 
 local SPELL_SHEATH_OF_LIGHTNING = 62276
+
+-- Achievement latches (boss_thorim.cpp:318-321, Data enum):
+-- ACHIEVEMENT_DONT_STAND_IN_THE_LIGHTNING = 29712972,
+-- ACHIEVEMENT_LOSE_YOUR_ILLUSION = 31763183. Both start true
+-- (Initialize :460/:462, called by ctor + Reset) and are cleared by
+-- their SpellHit arms below (tick 417; the Go gates stay HELD — both
+-- clear triggers ride unported machines, so a gate now would award
+-- on every kill).
+local DATA_DONT_STAND_IN_THE_LIGHTNING = 29712972
+local DATA_LOSE_YOUR_ILLUSION = 31763183
+local SPELL_TOUCH_OF_DOMINION_TRIGGERED = 62565 -- boss_thorim.cpp:47
+local SPELL_LIGHTNING_RELEASE = 62466 -- boss_thorim.cpp:51
 
 local EMOTE_RUNIC_BARRIER = 0
 local SPELL_RUNIC_BARRIER = 62338
@@ -301,6 +315,18 @@ local function thorimReset(event, creature)
     creature:SetRooted(true)
     cancelTimers(creature:GetGUID())
     thorimKilledCount[creature:GetGUID()] = nil
+    -- C++ Reset -> Initialize (boss_thorim.cpp:456-461): _hardMode
+    -- = true, _dontStandInTheLightning = true. Alive-gated: ev23
+    -- fires on death too (fireCreatureDied runs Reset before the
+    -- kill-credit criteria read, kill.go:1091/:1400), and a
+    -- death-time re-arm would clobber the fight's latches before
+    -- the achievement gates read them. (Both gates are HELD this
+    -- tick — their clear legs are dormant — so this guards the
+    -- future unblock, not a live gate.)
+    if creature:IsAlive() then
+        creature:SetData(DATA_DONT_STAND_IN_THE_LIGHTNING, 1)
+        creature:SetData(DATA_LOSE_YOUR_ILLUSION, 1)
+    end
     if creature:IsAlive() then
         creature:SummonCreature(ENTRY_JORMUNGAR_BEHEMOTH, 2149.68, -263.477, 419.679, 3.120, 5, 3000)
         creature:SummonCreature(ENTRY_MERCENARY_CAPTAIN_A, 2131.31, -271.640, 419.840, 2.188, 5, 3000)
@@ -669,11 +695,47 @@ local function thorimJustSummoned(_, creature, summoned)
     end
 end
 
+-- C++ boss_thorimAI::SpellHit (boss_thorim.cpp:548-556): on
+-- SPELL_TOUCH_OF_DOMINION_TRIGGERED 62565 (Sif's Touch of Dominion,
+-- :703-705) _hardMode = false — the lose-your-illusion latch (the
+-- same slot doubles as DATA_THORIM_HARDMODE, :531-533) — but ONLY
+-- inside `if (Creature* sif = instance->GetCreature(DATA_SIF))`:
+-- no Sif in the instance, no clear. The Lua twin is the
+-- FindNearestCreature sweep (colossusDied precedent): Sif is
+-- summoned at engage (2148.301, -297.8453), well inside 200yd of
+-- Thorim. The Sif Talk(SAY_SIF_DESPAWN)/DespawnOrUnsummon relay in
+-- the same arm stays out (header). LATENT, Go gate HELD: Sif is
+-- unregistered and EVENT_START_SIF_CHANNEL is unported, so 62565
+-- never lands in Lua yet and the latch stays 1 (a gate now would
+-- award on every kill).
+local function thorimSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_TOUCH_OF_DOMINION_TRIGGERED then
+        if creature:FindNearestCreature(ENTRY_SIF, 200) then
+            creature:SetData(DATA_LOSE_YOUR_ILLUSION, 0)
+        end
+    end
+end
+
+-- C++ boss_thorimAI::SpellHitTarget (boss_thorim.cpp:560-562): on
+-- SPELL_LIGHTNING_RELEASE 62466 hitting a player,
+-- _dontStandInTheLightning = false. ev15 fires caster-side with the
+-- hit target (gruul precedent). LATENT, Go gate HELD: the 62466 cast
+-- rides EVENT_LIGHTNING_CHARGE (:746-749) behind the unported phase-2
+-- / pillar machine, so the clear never fires in Lua yet and the latch
+-- stays 1 (a gate now would award on every kill).
+local function thorimSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_LIGHTNING_RELEASE and target and target:GetObjectType() == "Player" then
+        creature:SetData(DATA_DONT_STAND_IN_THE_LIGHTNING, 0)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_THORIM, 1, thorimEnterCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 2, thorimLeaveCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 3, thorimTargetDied)
 RegisterCreatureEvent(ENTRY_THORIM, 4, thorimDied)
 RegisterCreatureEvent(ENTRY_THORIM, 9, thorimDamageTaken)
+RegisterCreatureEvent(ENTRY_THORIM, 14, thorimSpellHit)
+RegisterCreatureEvent(ENTRY_THORIM, 15, thorimSpellHitTarget)
 RegisterCreatureEvent(ENTRY_THORIM, 23, thorimReset)
 RegisterCreatureEvent(ENTRY_THORIM, 19, thorimJustSummoned)
 RegisterCreatureEvent(ENTRY_THORIM, 38, thorimDoAction)

@@ -90,8 +90,17 @@
 -- MoveTo(200, land); the LAND-arrival engage (MoveChase + AddThreat)
 -- is PORTED 2026-11-07 (tick 394, dragonMovementInform in
 -- obsidian_sanctum.lua).
--- GetData TWILIGHT_ACHIEVEMENTS (drakeCount) — no achievement
--- bridge; joins the unmodeled-achievement queue.
+-- GetData TWILIGHT_ACHIEVEMENTS (drakeCount) — PORTED tick 417:
+-- fetchDragons below writes the count into the motion's SetData
+-- store (creature:SetData bridged, lua_creature_events.go:792) for
+-- the Go gate (engine/world/achievement_criteria_scripts.go); the
+-- ctor-default 0 is written at spawn, and the ev23 Reset handler
+-- writes an alive-gated 0 (C++ Reset :148-150 calls Initialize(),
+-- which zeroes drakeCount). The alive gate matters: ev23 pre-fires
+-- on death (fireCreatureDied, lua_creature_events.go) ahead of the
+-- kill-credit achievement read (kill.go), so an ungated Reset zero
+-- would clobber the engage-time count before the criteria check
+-- reads it.
 -- CastLavaStrikeOnTarget — Cell::VisitAllObjects fire-cyclone
 -- search (NPC_FIRE_CYCLONE 30648) + random-cyclone CastSpell
 -- (SPELL_LAVA_STRIKE 57571) on target (GetCreaturesInGrid IS
@@ -127,6 +136,7 @@ local DATA_SARTHARION = 0
 local DATA_TENEBRON = 1
 local DATA_SHADRON = 2
 local DATA_VESPERON = 3
+local TWILIGHT_ACHIEVEMENTS = 5 -- obsidian_sanctum.h:35
 local DATA_PORTAL_OPEN = 4
 local DATA_CAN_LOOT = 0
 local BOSS_STATE_NOT_STARTED = 0
@@ -357,8 +367,10 @@ local DRAKE_INIT = {
 -- to its init point (MoveTo is the MovePoint twin) and gains
 -- UNIT_FLAG_NON_ATTACKABLE if absent. Ends with WILL_OF_SARTHARION
 -- (61254) on self when any drake was pulled. drakeCount is stored per
--- GUID for the latent GetData(TWILIGHT_ACHIEVEMENTS) arm (no achievement
--- bridge yet). The INIT-arrival MovementInform free-movement machine
+-- GUID for the GetData(TWILIGHT_ACHIEVEMENTS) arm (the count is
+-- also written to the motion's SetData store in fetchDragons below,
+-- tick 417, for the Go achievement gate). The INIT-arrival
+-- MovementInform free-movement machine
 -- is PORTED 2026-11-07 (tick 394, dragonMovementInform in
 -- obsidian_sanctum.lua).
 local function fetchDragons(creature, guid)
@@ -382,6 +394,9 @@ local function fetchDragons(creature, guid)
         end
     end
     drakeCount[guid] = count
+    -- C++ GetData(TWILIGHT_ACHIEVEMENTS) (:386-390) returns this
+    -- count; the Go gate reads it off the motion's SetData store.
+    creature:SetData(TWILIGHT_ACHIEVEMENTS, count)
     if canUseWill then
         creature:CastSpell(creature, SPELL_WILL_OF_SARTHARION)
     end
@@ -545,6 +560,13 @@ local function sartharionReset(event, creature)
     creature:SetHomePosition(3246.57, 551.263, 58.6164, 4.66003)
     drakeRespawn(creature) -- C++ :157
     creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED) -- C++ :158
+    -- C++ Reset :148-150 calls Initialize(), zeroing drakeCount.
+    -- Alive-gated: ev23 pre-fires on death, and a death-time zero
+    -- would clobber the engage-time count before the kill-credit
+    -- criteria read (kill.go:1091/:1400).
+    if creature:IsAlive() then
+        creature:SetData(TWILIGHT_ACHIEVEMENTS, 0)
+    end
 end
 
 -- C++ instance OnCreatureCreate latches the Sartharion GUID (DATA 0).
@@ -553,6 +575,8 @@ end
 -- for dynamically-materialized spawns.
 local function sartharionSpawn(event, creature)
     creature:SetGuidData(DATA_SARTHARION)
+    -- C++ ctor/Initialize (:145): drakeCount = 0.
+    creature:SetData(TWILIGHT_ACHIEVEMENTS, 0)
 end
 
 -- C++ JustReachedHome: _Reset() bookkeeping — SetBossState(NOT_STARTED)
