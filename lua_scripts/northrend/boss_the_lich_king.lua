@@ -422,6 +422,9 @@ local LK = {
     SPELL_INFEST = 70541, -- :89
     SPELL_SOUL_REAPER = 69409, -- :120
     SPELL_VILE_SPIRITS = 70498, -- :132
+    SPELL_SHADOW_TRAP_AURA = 73525, -- :94
+    SPELL_SOUL_RIP_DAMAGE = 69398, -- :156
+    SPELL_DARK_HUNGER_HEAL = 69384, -- :153
     SPELL_HARVEST_SOUL = 68980, -- :136
     SPELL_FURY_OF_FROSTMOURNE = 72350, -- :163
     SPELL_FURY_OF_FROSTMOURNE_NO_REZ = 72351, -- :164
@@ -2644,3 +2647,98 @@ RegisterAuraEvent(SPELL_HARVEST_SOUL_25N, 3, harvestSoulRemove)
 RegisterAuraEvent(SPELL_HARVEST_SOUL_10H, 3, harvestSoulRemove)
 RegisterAuraEvent(SPELL_HARVEST_SOUL_25H, 3, harvestSoulRemove)
 RegisterAuraEvent(SPELL_IN_FROSTMOURNE_ROOM, 3, harvestSoulRemove)
+
+-- C++ spell_the_lich_king_necrotic_plague::OnRemove
+-- (boss_the_lich_king.cpp:2003-2027): AfterEffectRemove, EFFECT_0
+-- PERIODIC_DAMAGE, REAL. On remove by enemy spell, expire, or death
+-- the target casts the jump (70338) on itself with the caster GUID
+-- (TRIGGERED_FULL_MASK via the ObjectGuid ctor, SpellDefines.h:167)
+-- and the caster (Lich King) self-casts Plague Siphon (74074),
+-- triggered. PORTED 2026-11-08. DELTA: the SPELLVALUE_MAX_TARGETS 1
+-- mod has no bridge — the jump SpellScript target-select (nearest,
+-- resize 1) is unbridged, so the DBC target selection applies; same
+-- delta as the jump-aura remove above.
+local function necroticPlagueRemove(event, aura, target)
+    local mode = aura:GetRemoveMode()
+    if mode ~= AURA_REMOVE_BY_ENEMY_SPELL and mode ~= AURA_REMOVE_BY_EXPIRE and mode ~= AURA_REMOVE_BY_DEATH then
+        return
+    end
+    target:CastSpell(target, SPELL_NECROTIC_PLAGUE_JUMP, true)
+    local caster = aura:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Creature" then
+        caster:CastSpell(caster, SPELL_PLAGUE_SIPHON, true)
+    end
+end
+
+RegisterAuraEvent(LK.SPELL_NECROTIC_PLAGUE, 3, necroticPlagueRemove)
+
+-- C++ spell_the_lich_king_shadow_trap_visual::OnRemove
+-- (boss_the_lich_king.cpp:2141-2146): AfterEffectRemove, EFFECT_0
+-- DUMMY, REAL. On remove by expire only, the trap casts the shadow
+-- trap aura (73525) on itself, triggered. PORTED 2026-11-08. LIVE:
+-- the trap spawn-visual cast (73530, lichKingJustSummoned :743-745)
+-- is ported above, so the hook fires once the visual expires; the
+-- 73525 effect resolution rides Spell.dbc.
+local function shadowTrapVisualRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_EXPIRE then
+        target:CastSpell(target, LK.SPELL_SHADOW_TRAP_AURA, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SHADOW_TRAP_VISUAL, 3, shadowTrapVisualRemove)
+
+-- C++ spell_the_lich_king_vile_spirits::OnPeriodic
+-- (boss_the_lich_king.cpp:2436-2441): EFFECT_0 PERIODIC_DUMMY. On
+-- every tick in 25-man, or every 5th tick ((tick-1)%5==0) otherwise,
+-- the target (Lich King) casts the effect's trigger spell on nil
+-- with the aura-effect + caster-GUID args (triggered). PORTED
+-- 2026-11-08. DORMANT until Spell.dbc ships (the trigger-spell id
+-- rides the DBC effect; GetTriggerSpell(0) reads 0 without it) and
+-- until the EVENT_VILE_SPIRITS cast lands the aura (timer PORTED
+-- 2026-11-08, tick 441).
+local function vileSpiritsTick(event, aura, target)
+    local tick = aura:GetTickNumber()
+    if not target:Is25ManRaid() and (tick - 1) % 5 ~= 0 then
+        return
+    end
+    local trigger = aura:GetTriggerSpell(0)
+    if trigger ~= 0 then
+        target:CastSpell(nil, trigger, true)
+    end
+end
+
+RegisterAuraEvent(LK.SPELL_VILE_SPIRITS, 1, vileSpiritsTick)
+
+-- C++ spell_the_lich_king_soul_rip::OnPeriodic
+-- (boss_the_lich_king.cpp:2591-2605): EFFECT_0 PERIODIC_DUMMY.
+-- PreventDefaultAction, then the caster (spirit warden) casts Soul
+-- Rip Damage (69398) on the target with BP0 = 5000 * tick number
+-- (aurEff args: triggered, original caster = caster GUID). PORTED
+-- 2026-11-08. LIVE: the warden's Reset + EVENT_SOUL_RIP casts are
+-- ported above, so the aura lands and the hook fires.
+local function soulRipTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        caster:CastCustomSpell(target, LK.SPELL_SOUL_RIP_DAMAGE, true, 5000 * aura:GetTickNumber())
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_SOUL_RIP, 1, soulRipTick)
+
+-- C++ spell_the_lich_king_dark_hunger::HandleProc
+-- (boss_the_lich_king.cpp:2672-2683): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction, then the holder (spirit warden) self-casts
+-- Dark Hunger Heal (69384) with BP0 = damage dealt / 2 (integer
+-- division; zero damage returns after the prevent). PORTED
+-- 2026-11-08. LIVE: the warden's Reset self-cast is ported above,
+-- so the aura is live and the proc hook (ev6) fires from the
+-- creature proc loop (boss_ai.go:10233).
+local function darkHungerProc(event, aura, target, actor, procTarget, damage)
+    if damage ~= nil and damage ~= 0 then
+        target:CastCustomSpell(target, LK.SPELL_DARK_HUNGER_HEAL, true, math.floor(damage / 2))
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_DARK_HUNGER, 6, darkHungerProc)
