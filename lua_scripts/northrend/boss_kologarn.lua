@@ -163,26 +163,31 @@
 -- filters: EFFECT_0 removes the main tank + non-player targets,
 -- EFFECT_1/2 subsequential fill — no SpellScript bridge;
 -- joins the no-SpellScript-bridge queue);
+-- spell_ulduar_stone_grip (AuraScript: vehicle OnRemove ->
+-- owner removes aurEff-amount spell; stun AfterEffectRemove ->
+-- caster RemoveAurasDueToSpell(GetId()) — stays out: ev3 fires
+-- per-aura, not per-effect, so the EFFECT_0 vehicle leg (needs
+-- _ExitVehicle/Relocate/MoveFall, no bridge) cannot be split from
+-- the EFFECT_2 stun leg; joins the no-AuraScript-bridge queue);
 -- spell_ulduar_cancel_stone_grip (SCRIPT_EFFECT SpellScript:
--- target removes the two CalcValue spell ids — no SpellScript
--- bridge; joins the no-SpellScript-bridge queue);
+-- target removes the two CalcValue spell ids — stays out: no row
+-- in AC's current spell_script_names (binding unverifiable) and
+-- target->GetVehicle() has no Lua bridge);
+-- spell_ulduar_stone_grip_absorb (AuraScript AfterEffectRemove
+-- school-absorb: ENEMY_SPELL removal only (boss_kologarn.cpp:537-544)
+-- -> rubble stalker casts SPELL_STONE_GRIP_CANCEL 65594 — PORTED
+-- 2026-11-08 (tick 463) via RegisterAuraEvent ev3 below: the binding
+-- is 64224/64225, verified this tick against live Wowhead 3.3.5 DBC
+-- renders ("Stone Grip Absorb", effect 1 absorb 80000/380000) which
+-- corroborate the historical TrinityCore spell_script_names row;
+-- AC's current DB carries no absorb row (script deleted upstream)
+-- and no 64224 row at all, so there is no competing binding. The
+-- ev3 remove hook fires with the removal mode (absorption.go
+-- removes depleted absorbs with auraRemoveByEnemySpell, mode 3),
+-- so the C++ ENEMY_SPELL gate ports as aura:GetRemoveMode() == 3.
 -- spell_ulduar_squeezed_lifeless (SpellScript INSTAKILL
 -- handler — no SpellScript bridge; joins the
 -- no-SpellScript-bridge queue);
--- spell_ulduar_stone_grip_absorb (AuraScript AfterEffectRemove
--- school-absorb: ENEMY_SPELL removal only (boss_kologarn.cpp:537-544)
--- -> rubble stalker casts SPELL_STONE_GRIP_CANCEL 65594. STAYS OUT:
--- the absorb aura's spell ID is DB-only (spell_script_names, zero
--- hits in either tree). It is not 62166 on the C++ evidence: the two
--- scripts hook different EFFECT_0 aura types (SCHOOL_ABSORB here vs
--- CONTROL_VEHICLE + MOD_STUN in spell_ulduar_stone_grip), so they
--- attach to different spells, and the vehicle/stun shape matches the
--- 62166 grip cast on the player. The ev3 remove hook + GetRemoveMode
--- bridge now exist, so only the ID blocks the port.
--- spell_ulduar_stone_grip (AuraScript: vehicle OnRemove ->
--- owner removes aurEff-amount spell; stun AfterEffectRemove ->
--- caster RemoveAurasDueToSpell(GetId()) — no AuraScript
--- bridge; joins the no-AuraScript-bridge queue);
 -- spell_kologarn_stone_shout (SpellScript area-target filter
 -- on EFFECT_0 — no SpellScript bridge; joins the
 -- no-SpellScript-bridge queue);
@@ -218,6 +223,9 @@ local SPELL_ONE_ARM_SMASH = 63573
 local SPELL_ARM_SWEEP = 63766
 local SPELL_STONE_SHOUT = 63716
 local SPELL_STONE_GRIP = 62166
+local SPELL_STONE_GRIP_ABSORB = 64224
+local SPELL_STONE_GRIP_ABSORB_HEROIC = 64225
+local SPELL_STONE_GRIP_CANCEL = 65594
 local SPELL_FALLING_RUBBLE = 63821
 local SPELL_SUMMON_RUBBLE = 63633
 
@@ -227,6 +235,7 @@ local ENTRY_RUBBLE = 33768
 local ENTRY_LEFT_ARM = 32933
 local ENTRY_RIGHT_ARM = 32934
 local ENTRY_RUBBLE_STALKER = 33809
+local ENTRY_RUBBLE_STALKER_HEROIC = 33942
 local ENTRY_ARM_SWEEP_STALKER = 33661
 local SPELL_FOCUSED_EYEBEAM_PERIODIC = 63347
 local SPELL_FOCUSED_EYEBEAM_VISUAL = 63369
@@ -658,3 +667,31 @@ local function kologarnPassengerBoarded(event, vehicle, passenger, seatId)
 end
 RegisterVehicleEvent(5, kologarnPassengerBoarded)
 RegisterVehicleEvent(6, kologarnPassengerBoarded)
+
+-- C++ spell_ulduar_stone_grip_absorb::OnRemove
+-- (boss_kologarn.cpp:526-549): AfterEffectRemove EFFECT_0
+-- SPELL_AURA_SCHOOL_ABSORB, AURA_EFFECT_HANDLE_REAL — fires when
+-- the Right Arm's absorb aura is removed by an enemy spell (the
+-- raid breaking through it); the nearest rubble stalker (33809
+-- normal / 33942 heroic, 200yd) casts SPELL_STONE_GRIP_CANCEL
+-- 65594 on itself, triggered. Bound 64224/64225 (see header).
+-- DORMANT until Spell.dbc ships: 64224/64225 are applied by the
+-- grip DBC chain, never cast in-house.
+local function stoneGripAbsorbRemoved(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    if aura:GetRemoveMode() ~= 3 then
+        return
+    end
+    local entry = ENTRY_RUBBLE_STALKER
+    if target:Is25ManRaid() then
+        entry = ENTRY_RUBBLE_STALKER_HEROIC
+    end
+    local stalker = target:FindNearestCreature(entry, 200)
+    if stalker then
+        stalker:CastSpell(stalker, SPELL_STONE_GRIP_CANCEL, true)
+    end
+end
+RegisterAuraEvent(SPELL_STONE_GRIP_ABSORB, 3, stoneGripAbsorbRemoved)
+RegisterAuraEvent(SPELL_STONE_GRIP_ABSORB_HEROIC, 3, stoneGripAbsorbRemoved)

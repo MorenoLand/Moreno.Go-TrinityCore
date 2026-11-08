@@ -103,9 +103,12 @@
 -- entry-verifiable-but-bridge-blocked queue.
 -- spell_novos_summon_minions (59910 SpellScript:
 -- OnEffectHitTarget EFFECT_0 SCRIPT_EFFECT -> caster double-cast
--- SPELL_SUMMON_COPY_OF_MINIONS 59933, triggered) — no SpellScript
--- binding bridge on the Lua surface (razelikh precedent) —
--- documented-only.
+-- SPELL_SUMMON_COPY_OF_MINIONS 59933, triggered) — PORTED
+-- 2026-11-08 (tick 463) via RegisterSpellEvent ev5 below (the
+-- razelikh "no SpellScript bridge" stay-out is retired: ev5 is
+-- the live SpellScript hook). DORMANT until the unported instance
+-- DoAction machine clears the bubble and EVENT_SUMMON_MINIONS
+-- casts 59910; 59933's own summon is a DBC effect.
 -- achievement_oh_novos — AchievementCriteriaScript (target
 -- ToCreature -> AI()->GetData(DATA_NOVOS_ACHIEV)) — no
 -- achievement-criteria bridge (snakes precedent) + cross-AI GetData
@@ -115,6 +118,9 @@
 -- file — nothing to port.
 
 local ENTRY_NOVOS = 26631
+
+local SPELL_SUMMON_MINIONS = 59910
+local SPELL_SUMMON_COPY_OF_MINIONS = 59933
 
 local SAY_AGGRO = 0
 local SAY_KILL = 1
@@ -144,3 +150,25 @@ end
 RegisterCreatureEvent(ENTRY_NOVOS, 1, novosEnterCombat)
 RegisterCreatureEvent(ENTRY_NOVOS, 3, novosTargetDied)
 RegisterCreatureEvent(ENTRY_NOVOS, 4, novosDied)
+
+-- C++ spell_novos_summon_minions::HandleScript
+-- (boss_novos.cpp:375-398): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the caster casts
+-- SPELL_SUMMON_COPY_OF_MINIONS 59933 twice, triggered. The C++
+-- target is nullptr (the DBC targeting resolves it); Lua passes
+-- the caster explicitly, the kologarn stalker self-cast
+-- precedent. The effectIndex gate is load-bearing: Go fires ev5
+-- once per effect (razorscale summon_iron_dwarves precedent).
+local function novosSummonMinions(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    for _ = 1, 2 do
+        caster:CastSpell(caster, SPELL_SUMMON_COPY_OF_MINIONS, true)
+    end
+end
+RegisterSpellEvent(SPELL_SUMMON_MINIONS, 5, novosSummonMinions)
