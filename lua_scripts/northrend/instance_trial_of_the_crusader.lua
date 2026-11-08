@@ -52,6 +52,18 @@
 --   (tick 406 U2); the controller / summons despawn legs
 --   (boss_faction_champions.cpp:530-534, :553-555) stay out: no cross-AI
 --   despawn model in Lua.
+-- - GetCreatureEntry TrialCounter == 0 summon prevention
+--   (instance_trial_of_the_crusader.cpp:150-155): no Go hook —
+--   C++ fires it in Creature::CreateFromProto (Creature.cpp:1626)
+--   only for DB-data spawns, and Go has no spawn-entry override
+--   point (zero GetCreatureEntry hits in engine/); static template
+--   spawns never materialize server-side (instance_hooks.go
+--   triggerInstanceCreatureCreate doc), so there is no object to
+--   gate or despawn. Vacuous at load in any case: TrialCounter
+--   resets to 50 in the instance-script ctor (:110), and the only
+--   post-wipe spawns are scripted summons, which bypass the data
+--   path; Anub'arak itself is covered by the tick-408 FAIL-arm
+--   despawn. Revisit only if a Go spawn-entry hook lands.
 -- - SaveToDB / WriteSaveDataMore / ReadSaveDataMore
 --   (ResilienceWillFixItTimer, CrusadersSpecialState): the
 --   instanceData table lives for the runtime lifetime only (the

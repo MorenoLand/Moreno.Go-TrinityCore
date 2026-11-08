@@ -66,8 +66,12 @@
 -- (ev19: DoAction(GATE_OPENED/ACQUIRE_TARGET) + SetCombatPulseDelay(5),
 -- else DespawnOrUnsummon; summons.Summon bookkeeping has no twin and
 -- no observable effect); SummonedCreatureDespawn stays out
--- (summons.Despawn bookkeeping only); EVENT_SUMMON — PORTED tick 406
--- below (waves10/waves25 verbatim + CGUID_TRIGGER 127618 offsets +
+-- (summons.Despawn bookkeeping only — Lua OpenGate/DoorsUnlock use
+-- grid sweeps, not the summons list, so the forward has no Lua-visible
+-- effect); npc_gothik_trigger JustSummoned forwarding — PORTED tick
+-- 409 below (ev19: GetInstanceCreature(DATA_GOTHIK) + Gothik's own
+-- JustSummoned arm; ev5 SetGuidData(3) latch feeds the store).
+-- EVENT_SUMMON — PORTED tick 406 below (waves10/waves25 verbatim + CGUID_TRIGGER 127618 offsets +
 -- DoSummon via GetCreaturesInGrid(16137, 150) + trigger:GetGUIDLow()
 -- == targetDBGuid — GetGUIDLow IS the GetSpawnId() twin
 -- (creatureWorldGUID packs the DB guid in the low 24 bits,
@@ -164,12 +168,18 @@
 -- ANCHOR_2_x -> SKULLS_x -> DoSummon) — PORTED tick 408 below (event 14;
 -- SelectRandomSkullPile via GetCreaturesInGrid + GetGUIDLow, the
 -- GetSpawnId() twin — the tick-404 blocker is retired).
+-- npc_gothik_trigger JustSummoned forwarding — PORTED tick 409 below
+-- (ev19: GetInstanceCreature(DATA_GOTHIK) + Gothik's own JustSummoned
+-- arm; the ev20 SummonedCreatureDespawn forward stays out — Gothik's
+-- arm is summons.Despawn bookkeeping only, no Lua-visible effect).
 -- spell_gothik_shadow_bolt_volley (SpellScript 27831: FilterTargets
 -- removes shadow-marked targets) — no SpellScript binding bridge
 -- (razelikh precedent) — joins the SpellScript/AuraScript queue.
 
 local ENTRY_GOTHIK = 16060
 local ENTRY_GOTHIK_TRIGGER = 16137
+
+local DATA_GOTHIK = 3 -- naxxramas.h NAXData64 (ANUBREKHAN 0, FAERLINA 1, RAZUVIOUS 2, GOTHIK 3)
 
 local BOSS_GOTHIK = 11 -- naxxramas.h NAXEncounter (ANUBREKHAN 0 ... GOTHIK 11)
 local BOSS_STATE_NOT_STARTED = 0
@@ -433,6 +443,18 @@ RegisterCreatureEvent(ENTRY_GOTHIK, 2, gothikLeaveCombat)
 RegisterCreatureEvent(ENTRY_GOTHIK, 3, gothikTargetDied)
 RegisterCreatureEvent(ENTRY_GOTHIK, 4, gothikDied)
 RegisterCreatureEvent(ENTRY_GOTHIK, 23, gothikReset)
+
+-- C++ instance_naxxramas OnCreatureCreate latching (naxxramas.h
+-- NAXData64 DATA_GOTHIK 3): Gothik latches its own GUID under
+-- DATA_GOTHIK on spawn (CREATURE_EVENT_ON_SPAWN 5, fired on first
+-- spawn + respawn — illidari-council precedent), feeding the
+-- instance guid store the trigger's ev19 forward reads back via
+-- creature:GetInstanceCreature(3).
+local function gothikSpawn(event, creature)
+    creature:SetGuidData(DATA_GOTHIK)
+end
+
+RegisterCreatureEvent(ENTRY_GOTHIK, 5, gothikSpawn)
 
 -- C++ npc_gothik_trigger::DamageTaken (boss_gothik.cpp:904):
 -- damage = 0 unconditionally (the trigger is the SpellHit anchor —
@@ -723,6 +745,26 @@ local function gothikDoAction(event, creature, action)
 end
 
 RegisterCreatureEvent(ENTRY_GOTHIK, 19, gothikJustSummoned)
+
+-- C++ npc_gothik_triggerAI::JustSummoned (boss_gothik.cpp:957-960):
+-- forward to gothik->AI()->JustSummoned(summon) via the instance
+-- GetGuidData(DATA_GOTHIK) latch (nil-guard = C++ nullptr check).
+-- The forward runs Gothik's own JustSummoned arm above with Gothik
+-- as the creature, so the dead minions the anchor machine summons
+-- (SKULLS_x DoSummon, tick 408) get the gate/acquire-target arming
+-- + SetCombatPulseDelay(5), or despawn when Gothik is not in combat.
+-- ev19 fires on the trigger for its SummonCreature calls
+-- (summonTempCreature, lua_creature_events.go:190). C++ :962-966
+-- SummonedCreatureDespawn forward stays out: Gothik's arm is
+-- summons.Despawn bookkeeping only (boss_gothik.cpp:354-357).
+local function gothikTriggerJustSummoned(event, creature, summon)
+    if not summon then return end
+    local gothik = creature:GetInstanceCreature(DATA_GOTHIK)
+    if not gothik then return end
+    gothikJustSummoned(event, gothik, summon)
+end
+
+RegisterCreatureEvent(ENTRY_GOTHIK_TRIGGER, 19, gothikTriggerJustSummoned)
 RegisterCreatureEvent(ENTRY_GOTHIK, 38, gothikDoAction)
 
 -- C++ livingSide/deadSide (:134-135) + GetSide (:141-151, living checked

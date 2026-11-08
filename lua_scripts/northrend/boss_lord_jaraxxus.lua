@@ -139,15 +139,19 @@
 -- (:309). The cross-AI jaraxxus->AI()->JustSummoned leg (:305-306)
 -- stays out (no cross-AI bridge — the summon-registry leg, same bar
 -- as summons.DespawnAll).
--- npc_infernal_volcano (34813): Reset — SetReactState(REACT_PASSIVE)
--- (SetReactState IS bridged — frozen_core precedent; the arm stays
--- out behind the unbridged summon gate) +
--- DoCastSelf(Infernal Eruption Effect 66252) +
--- heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (flag bridge exists
--- (IsHeroic() is bridged — the "no difficulty bridge" leg of the
--- kelidan precedent is STALE) but the arm still rides the unbridged
--- summon gate (burrower precedent) — documented-only;
--- joins the entry-verifiable-but-bridge-blocked queue.
+-- npc_infernal_volcano (34813): Reset — PORTED tick 409
+-- (infernalVolcanoReset): ctor SetCombatMovement(false) (:321;
+-- no Lua ctor hook — Reset is the spawn hook, ayamiss precedent)
+-- + SetReactState(REACT_PASSIVE) (:324; SetReactState IS bridged,
+-- frozen_core precedent) + DoCastSelf(Infernal Eruption Effect
+-- 66252, triggered) (:326) + heroic RemoveFlag(
+-- UNIT_FLAG_NOT_SELECTABLE) (:327-328; flag bridge exists,
+-- lua_creature_events.go:5637; IsHeroic() is bridged — the
+-- "no difficulty bridge" leg of the kelidan precedent is STALE).
+-- The old "rides the unbridged summon gate (burrower precedent)"
+-- bar is retracted: the Reset arm itself uses only bridged
+-- methods, like the tick-408 legion-flame / fel-infernal /
+-- mistress Resets; the volcano summon strand stays out.
 -- npc_fel_infernal (34815): Reset — PORTED tick 408
 -- (felInfernalReset / felStreakTick): instance->GetBossState(
 -- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (GetBossState
@@ -163,14 +167,18 @@
 -- jaraxxus->AI()->JustSummoned leg (:344-345) stays out (no cross-AI
 -- bridge). (C++ note carried: Fel Infernals are immune to all CC on
 -- Heroic — stuns, banish, interrupt, etc.)
--- npc_nether_portal (34825): Reset — SetReactState(REACT_PASSIVE) +
--- DoCastSelf(Nether Portal Effect 66263) + heroic RemoveFlag(
--- UNIT_FLAG_NOT_SELECTABLE) — SetReactState IS bridged
--- (frozen_core precedent; the flag bridge exists and the
--- "no difficulty bridge" claim is STALE — IsHeroic() is bridged)
--- but the arm rides the unbridged summon gate (burrower
--- precedent) — documented-only; joins the
--- entry-verifiable-but-bridge-blocked queue.
+-- npc_nether_portal (34825): Reset — PORTED tick 409
+-- (netherPortalReset): ctor SetCombatMovement(false) (:382;
+-- no Lua ctor hook — Reset is the spawn hook, ayamiss precedent)
+-- + SetReactState(REACT_PASSIVE) (:386; SetReactState IS bridged,
+-- frozen_core precedent) + DoCastSelf(Nether Portal Effect 66263,
+-- triggered) (:388) + heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE)
+-- (:389-390; flag bridge exists, lua_creature_events.go:5637;
+-- IsHeroic() is bridged — the "no difficulty bridge" claim is
+-- STALE). The old "rides the unbridged summon gate (burrower
+-- precedent)" bar is retracted: the Reset arm itself uses only
+-- bridged methods, like the tick-408 legion-flame / fel-infernal
+-- / mistress Resets; the portal summon strand stays out.
 -- npc_mistress_of_pain — JustEngagedWith EVENT_SPINNING_SPIKE PORTED:
 -- SelectTarget(Random,0,0.0f,true) -> DoCast(Spinning Spike 66283)
 -- non-triggered, 9s init, 20s repeat (not heroic-gated — scheduled
@@ -213,7 +221,9 @@
 
 local ENTRY_JARAXXUS = 34780
 local ENTRY_LEGION_FLAME = 34784 -- Summons enum
+local ENTRY_INFERNAL_VOLCANO = 34813 -- Summons enum
 local ENTRY_FEL_INFERNAL = 34815 -- Summons enum
+local ENTRY_NETHER_PORTAL = 34825 -- Summons enum
 local ENTRY_MISTRESS_OF_PAIN = 34826
 local DATA_JARAXXUS = 1 -- trial_of_the_crusader.h:33
 local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
@@ -232,6 +242,9 @@ local ACTION_JARAXXUS_WIPE = 24
 
 local REACT_PASSIVE = 0 -- UnitDefines.h
 local REACT_AGGRESSIVE = 2
+
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h OBJECT_END + 0x35
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h
 
 local SPLINE_CHAIN_MOTION_TYPE = 17
 local POINT_SUMMONED = 1 -- boss_lord_jaraxxus.cpp Misc enum
@@ -253,6 +266,8 @@ local SPELL_FEL_LIGHTNING = 66528
 local SPELL_INCINERATE_FLESH = 66237
 local SPELL_LEGION_FLAME = 66197
 local SPELL_LEGION_FLAME_EFFECT = 66201 -- BossSpells enum
+local SPELL_INFERNAL_ERUPTION_EFFECT = 66252 -- BossSpells enum
+local SPELL_NETHER_PORTAL_EFFECT = 66263 -- BossSpells enum
 local SPELL_FEL_STREAK_VISUAL = 66493 -- BossSpells enum, Felflame Infernal
 local SPELL_SPINNING_SPIKE = 66283
 local SPELL_MISTRESS_KISS = 66336
@@ -907,6 +922,39 @@ end
 
 RegisterCreatureEvent(ENTRY_FEL_INFERNAL, 2, felInfernalLeaveCombat)
 RegisterCreatureEvent(ENTRY_FEL_INFERNAL, 23, felInfernalReset)
+
+-- C++ npc_infernal_volcano::Reset (boss_lord_jaraxxus.cpp:323-329):
+-- ctor SetCombatMovement(false) (:321) + SetReactState(REACT_PASSIVE)
+-- (:324) + DoCastSelf(Infernal Eruption Effect 66252, triggered)
+-- (:326) + heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (:327-328).
+-- No instance gate in C++ (unlike legion-flame / fel-infernal /
+-- mistress); no UpdateAI, no timers.
+local function infernalVolcanoReset(event, creature)
+    creature:SetCombatMovement(false)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:CastSpell(creature, SPELL_INFERNAL_ERUPTION_EFFECT, true)
+    if creature:IsHeroic() then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_INFERNAL_VOLCANO, 23, infernalVolcanoReset)
+
+-- C++ npc_nether_portal::Reset (boss_lord_jaraxxus.cpp:378-390):
+-- ctor SetCombatMovement(false) (:380) + SetReactState(REACT_PASSIVE)
+-- (:386) + DoCastSelf(Nether Portal Effect 66263, triggered) (:388)
+-- + heroic RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) (:389-390).
+-- No instance gate in C++; no UpdateAI, no timers.
+local function netherPortalReset(event, creature)
+    creature:SetCombatMovement(false)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:CastSpell(creature, SPELL_NETHER_PORTAL_EFFECT, true)
+    if creature:IsHeroic() then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_NETHER_PORTAL, 23, netherPortalReset)
 
 -- C++ spell_mistress_kiss::HandleDummyTick
 -- (boss_lord_jaraxxus.cpp:480-489): on each periodic tick of the
