@@ -23,6 +23,10 @@ const (
 	dataSjonnirAbuseTheOoze   = 2        // boss_sjonnir.cpp:54 DATA_ABUSE_THE_OOZE
 	dataKingDredRaptorsKilled = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
 	dataBrannSparklinNews     = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
+	dataLichKingPlagueStack   = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
+	dataXT002GravityBomb      = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
+	dataThaddiusPolarity      = 1        // boss_thaddius.cpp:77 DATA_POLARITY_CROSSED
+	dataKelthuzadAbomsKilled  = 1        // boss_kelthuzad.cpp:83 DATA_ABOMINATION_DEATH_COUNT
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -356,6 +360,54 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		return bossLatchData(source.server, victim, dataKingDredRaptorsKilled) >= 6
 
+	case "achievement_been_waiting_long_time": // boss_the_lich_king.cpp:2827-2832
+		// OnCheck: target->GetAI()->GetData(DATA_PLAGUE_STACK 70337)
+		// >= 30 — the running peak: C++ SetData is max() (:674-677)
+		// and the Lua twin keeps the peak in the boss motion's SetData
+		// store (boss_the_lich_king.lua:1011-1012/:1044-1045). Known
+		// pre-existing Lua delta (header :988-997): the peak freezes
+		// after the first plague jump (jump-aura caster attribution),
+		// so this may under-fire on multi-jump fights.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataLichKingPlagueStack) >= 30
+
+	case "achievement_nerf_gravity_bombs": // boss_xt002.cpp:1009-1014
+		// OnCheck: !GetData(DATA_GRAVITY_BOMB_CASUALTY 3) — true
+		// while nobody died to a gravity bomb: the latch starts clear
+		// (ctor) and the gravity-bomb aura periodic
+		// (boss_xt002.cpp:739) sets it; the Lua twin writes it at
+		// boss_xt002.lua:401. Absent reads 0, the C++ member default.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataXT002GravityBomb) == 0
+
+	case "achievement_thaddius_shocking": // boss_thaddius.cpp:1241-1243
+		// OnCheck: GetData(DATA_POLARITY_CROSSED 1) — the
+		// shockingEligibility latch, true in the ctor (:164) and
+		// cleared (:286) / re-armed (:241) by the polarity legs; the
+		// Lua twin keeps it in the boss motion's SetData store
+		// (boss_thaddius.lua:501/:543/:562).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataThaddiusPolarity) != 0
+
+	case "achievement_just_cant_get_enough": // boss_kelthuzad.cpp:1014-1024
+		// OnCheck: the instance's Kel'Thuzad (GetGuidData
+		// DATA_KELTHUZAD) AI GetData(DATA_ABOMINATION_DEATH_COUNT 1)
+		// >= 18. On the Go kill-credit path the victim IS Kel'Thuzad
+		// (creditQuestKills resolves the killed creature), so the
+		// latch read is the same slot; the Lua twin increments it on
+		// ACTION_ABOMINATION_DIED (boss_kelthuzad.lua:1073) and zeroes
+		// it at Reset (:445/:464).
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataKelthuzadAbomsKilled) >= 18
+
 	case "achievement_bg_ic_glaive_grave": // achievement_scripts.cpp:81-96
 		// The player is riding a glaive thrower (BattlegroundIC.h:41-42:
 		// NPC_GLAIVE_THROWER_A 34802, NPC_GLAIVE_THROWER_H 35273).
@@ -373,6 +425,30 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		// (BattlegroundSA.h:85: NPC_ANTI_PERSONNAL_CANNON 27894).
 		entry, ok := vehicleCreatureEntry(source)
 		return ok && entry == 27894
+
+	case "achievement_three_car_garage_demolisher": // boss_flame_leviathan.cpp:1350-1358
+		// The player is riding a demolisher (VEHICLE_DEMOLISHER 33109,
+		// boss_flame_leviathan.cpp:138).
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && entry == 33109
+
+	case "achievement_three_car_garage_chopper": // boss_flame_leviathan.cpp:1367-1375
+		// The player is riding a chopper (VEHICLE_CHOPPER 33062, :137).
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && entry == 33062
+
+	case "achievement_three_car_garage_siege": // boss_flame_leviathan.cpp:1384-1392
+		// The player is riding a siege engine (VEHICLE_SIEGE 33060, :136).
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && entry == 33060
+
+	case "achievement_denyin_the_scion": // boss_malygos.cpp:2429-2436
+		// The player is riding a melee hover disk (eye_of_eternity.h:53:
+		// NPC_HOVER_DISK_MELEE 30234). C++ reads GetVehicleBase(), not
+		// GetVehicleCreatureBase(); a player base reads entry 0 there,
+		// so the IsPlayer exclusion in vehicleCreatureEntry is the twin.
+		entry, ok := vehicleCreatureEntry(source)
+		return ok && entry == 30234
 	}
 	return false
 }
