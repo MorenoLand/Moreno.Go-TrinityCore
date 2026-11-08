@@ -54,14 +54,18 @@
 -- are scheduled from MoveInLineOfSight / SetData (:166 is the
 -- unbridged SetGUID hook) — and the :118 arm ends in a cross-creature
 -- DoAction leg. The AI is not registered in boss_ai.go; stays out as
--- unregistered AI.
--- Documented-only (nearest-creature axis): npc_malcolm_moore (entry
--- 27891 — crate event #3 cinematic, culling_of_stratholme.cpp:1042-1081):
--- the FindNearestCreature(NPC_SCRUFFY, 100.0f, true) arms sit in
--- npc_malcolm_mooreAI::UpdateAI event cases that only fire from
--- MovementInform spline-chain events (InitializeAI ->
--- MoveAlongSplineChain — no movement bridge). The AI is not registered
--- in boss_ai.go; stays out as unregistered AI.
+-- unregistered AI. RE-CHECKED 2026-11-07 (tick 402) against the
+-- tick-398 spline-chain bridge: Forresten has no spline chain at all
+-- (Belfast's waypoint walk is DB SmartAI, not C++), and none of its
+-- three triggers is bridged — ev27 is engage-only (Forresten never
+-- engages), SetGUID has no dispatch, and the SetData sender is
+-- Belfast's SmartAI — so the stay-out stands.
+-- Ported (crate fluff event #3, tick 402): npc_malcolm_moore (entry
+-- 27891 — crate event #3 cinematic, culling_of_stratholme.cpp:945-1081):
+-- the FindNearestCreature(NPC_SCRUFFY, 100.0f, true) arms now ride the
+-- tick-398 spline-chain bridge (MoveAlongSplineChain + ev28 type 17);
+-- see the malcolm section below. The AI is registered here, not in
+-- boss_ai.go (Lua registration).
 -- Ported (quest-giver axis): npc_chromie_middle (entry 27915, Wowhead
 -- WotLK npc=27915/chromie — Ends "Dispelling Illusions", Starts "A Royal
 -- Escort", whisper "Good work with the crates! ..."; culling_of_stratholme.cpp
@@ -350,58 +354,108 @@ end
 RegisterCreatureGossipEvent(ENTRY_CHROMIE_MIDDLE, 1, chromieMiddleGossipHello)
 RegisterCreatureGossipEvent(ENTRY_CHROMIE_MIDDLE, 2, chromieMiddleGossipSelect)
 
--- Ported (crate fluff event #2): npc_bartleby_battson (entry 27907,
--- culling_of_stratholme.cpp:852-945). InitializeAI schedules the idle
--- Talk loop (EVENT_BARTLEBY_IDLE, {60,120}s seed, Repeat {120,240}s);
--- seeded here on event 5 (spawn — the AddToWorld funnel fires 5 after
--- 36, creaturemotion.go). The DoAction ACTION_START_FLUFF leg is
--- ported via the crate_helper event-14 relay at the end of this file
--- (ev38 DoAction dispatch exists but is bypassed: the relay calls
+-- Ported (crate fluff event #2, chain legs tick 402): npc_bartleby_battson
+-- (entry 27907, culling_of_stratholme.cpp:852-945). InitializeAI schedules
+-- the idle Talk loop (EVENT_BARTLEBY_IDLE, {60,120}s seed, Repeat
+-- {120,240}s); seeded here on event 5 (spawn — the AddToWorld funnel
+-- fires 5 after 36, creaturemotion.go). The DoAction ACTION_START_FLUFF
+-- leg is ported via the crate_helper event-14 relay at the end of this
+-- file (ev38 DoAction dispatch exists but is bypassed: the relay calls
 -- bartlebyStartFluff directly): the once-guard + idle-loop cancel are
--- ported, and the
--- BARTLEBY1 {15,30}s Talk(1) is ported as a one-shot timer in
--- bartlebyStartFluff: the Talk is separable from the
--- MoveAlongSplineChain leg in the same C++ case, which stays out, so
--- bartleby says line 1 at {15,30}s and then stays put instead of
--- walking/kneeling/talking lines 2-3/despawning (documented
--- deviation). The
--- MovementInform spline-chain legs (BARTLEBY2/2_2/3, despawn) stay out
--- (no MoveAlongSplineChain/MovementInform bridge).
--- Ported (crate fluff event #4): npc_sergeant_morigan (entry 27877,
--- culling_of_stratholme.cpp:1131-1280) idle Q&A loop. InitializeAI
--- Reschedules IDLE1 {5,15}s; IDLE1 Talks the question (urand(0,1):
--- 1 -> ASK_NO 0, 0 -> ASK_YES 1; Started -> START 2) and schedules
--- IDLE2 10s; IDLE2 answers via the nearest perelli (entry 27876,
--- 10yd, FindNearestCreature bridge) with the sergeant as Talk target
--- (Question truthy -> PERELLI_NO 0, else PERELLI_YES 1) and
--- reschedules IDLE1 {15,30}s — except Question == 2, whose CHAIN1
--- spline leg stays out, ending the loop. Started is per-GUID state
--- flipped by the crate_helper event-14 relay at the end of this file
--- (nearest sergeant, 15yd): the next IDLE1 then Talks START (2) and
--- IDLE2 answers, ending the loop as in C++ minus the spline chain.
--- Documented-only (crate fluff events #1/#3/#5, spline-only):
--- npc_martha_goslin (27884) JustAppeared/MovementInform arms only
--- move along spline chains and set UNIT_NPC_EMOTESTATE (no spline /
--- emotestate bridge); npc_jena_anderson (27885) UpdateAI/MovementInform
--- arms are spline chains + cross-creature DoAction/Talk legs gated on
--- them; npc_malcolm_moore (27891) + scruffy (27892) are
--- InitializeAI/MovementInform spline chains (+ SummonCreature leg for
--- scruffy, whose chain is likewise spline-gated); npc_roger_owens
--- (27903) starts only on DoAction ACTION_START_FLUFF: the
--- EVENT_ROGER_START stand/facing/Talk(0) case is ported via the relay
--- below, and the MOVE1+ spline-chain legs stay out.
+-- ported, and BARTLEBY1 {15,30}s Talks line 1 AND launches the spline
+-- chain (MOVEID_EVENT1, CHAIN_BARTLEBY1). MovementInform (ev28, type
+-- 17) EVENT1 kneels + schedules BARTLEBY2/2_2/3 (Talk 2, one-shot TALK
+-- emote, Talk 3 + stand + CHAIN_BARTLEBY2); EVENT2 despawns in 1s.
+-- Ported (crate fluff event #4, chain legs tick 402): npc_sergeant_morigan
+-- (entry 27877, culling_of_stratholme.cpp:1131-1280) idle Q&A loop.
+-- InitializeAI Reschedules IDLE1 {5,15}s; IDLE1 Talks the question
+-- (urand(0,1): 1 -> ASK_NO 0, 0 -> ASK_YES 1; Started -> START 2) and
+-- schedules IDLE2 10s; IDLE2 answers via the nearest perelli (entry
+-- 27876, 10yd, FindNearestCreature bridge) with the sergeant as Talk
+-- target (Question truthy -> PERELLI_NO 0, else PERELLI_YES 1) and
+-- reschedules IDLE1 {15,30}s — except Question == 2, which schedules
+-- CHAIN1 2s: MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_SERGEANT1).
+-- MovementInform (ev28, type 17) EVENT1 kneels + schedules SERGEANT1 /
+-- STAND / PERELLI1 / SERGEANT2 / PERELLI2 / SERGEANT3 / LEAVE at
+-- 1/3/7/12/20/26/31s (Talk 3, facing 2.617994 + stand, Perelli Talk 2 +
+-- facing 5.916666, Talk 4, Perelli Talk 3, Talk 5, CHAIN_SERGEANT2);
+-- EVENT2 despawns in 1s. Started is per-GUID state flipped by the
+-- crate_helper event-14 relay at the end of this file (nearest
+-- sergeant, 15yd).
+-- Ported (crate fluff event #1, tick 402): npc_martha_goslin (27884,
+-- culling_of_stratholme.cpp:607-700) + npc_jena_anderson (27885,
+-- :702-831) on the tick-398 spline-chain bridge (MoveAlongSplineChain
+-- + ev28 type 17). Martha: JustAppeared emotestate USE_STANDING (69)
+-- + IDLE2 {5,10}s; IDLE1/IDLE2 clear the emotestate and walk
+-- CHAIN_MARTHA_IDLE1/2; arrivals set emotestate + facing (3.159046 /
+-- 4.764749) and schedule the next idle {9,15}s. DoAction(0) — the
+-- 12s motion interrupt Jena calls at MARTHA1/LEAVE — is delivered
+-- directly as marthaInterrupt (same direct-call pattern as the relay):
+-- the running chain is superseded in place (MoveTo to the current
+-- position — Go's MoveClear does NOT cancel a chain run) and the
+-- pending idle timer frozen; after 12s the chain re-launches from its
+-- first link (C++ resumes mid-link via SplineChainResumeInfo; Go has
+-- no resume primitive) and the idle timer re-rolls {9,15}s (C++
+-- preserves its remaining time). Jena: InitializeAI walks
+-- CHAIN_JENA_INITIAL (isMoving guard); arrivals drive the fluff
+-- chain (IDLE1: Started -> JENA_START {1,3}s else IDLE2 {200,700}ms;
+-- IDLE2 -> IDLE1 {200,700}ms; MOVE1 arrival -> face martha + Talk 5
+-- + MARTHA1 5.5s / JENA7 11s / MOVE2 16s; MOVE2 arrival -> kneel +
+-- JENA8 2s / LEAVE 8s; LEAVE arrival -> DespawnOrUnsummon 1s).
+-- MARTHA1/LEAVE interrupt martha (DoAction 0) + face her + Talk 0/1;
+-- JENA7 Talks 6, JENA8 stands + Talks 7/8 + faces her. DoAction
+-- ACTION_START_FLUFF flips Started, delivered directly by the relay
+-- (jenaStartFluff): Started is read ONLY at the INITIAL-chain arrival,
+-- so a crate reveal after that arrival is a no-op in practice — the
+-- flag is ported faithfully anyway. C++ SetFacingTo(o, true) calls
+-- land as SetFacingTo(o): the Go bridge always turns in place.
+-- Ported (crate fluff event #3, tick 402): npc_malcolm_moore (27891,
+-- culling_of_stratholme.cpp:945-1081) on the same bridge.
+-- InitializeAI walks CHAIN_MALCOLM1 and summons scruffy (27892) at
+-- (1601.1030, 805.3391, 123.7677, 5.471561, MANUAL_DESPAWN default)
+-- walking CHAIN_SCRUFFY1 (id 0). Arrivals: EVENT1 Talk 0 + CHAIN 2;
+-- EVENT2 schedules SCRUFFY1 1ms (C++ 0s; CreateLuaEvent needs >= 1ms)
+-- / MALCOLM2 1s / SCRUFFY_MOVE 4s / MALCOLM_MOVE 8s; EVENT3 schedules
+-- FACE3 1ms / MALCOLM3 1s / MALCOLM4 6s / MOVE2 12s; EVENT4 despawns.
+-- SCRUFFY1 faces scruffy (5.734883) + scruffy Talks 0; MALCOLM2 Talks
+-- 1 to scruffy + faces it; SCRUFFY_MOVE walks scruffy on
+-- CHAIN_SCRUFFY2 (id MOVEID_EVENT5, walk=false); MALCOLM_MOVE walks
+-- CHAIN_MALCOLM3; FACE3 faces 2.303835; MALCOLM3 Talks 2 to scruffy;
+-- MALCOLM4 faces scruffy + Talks 3; MOVE2 walks CHAIN_MALCOLM4 +
+-- faces scruffy 5.445427. MOVEID_EVENT5 has NO case here by design:
+-- scruffy's CHAIN_SCRUFFY2 arrival informs scruffy's own (default)
+-- AI in C++ (SplineChainMovementGenerator::Finalize informs the
+-- owner), never Malcolm's — the SCRUFFY_EMOTE leg is dead code in
+-- C++ and is not ported.
+-- Ported (crate fluff event #5, chain legs tick 402): npc_roger_owens
+-- (27903, culling_of_stratholme.cpp:1283-1352). DoAction
+-- ACTION_START_FLUFF schedules EVENT_ROGER_START {5,12}s (stand +
+-- facing 1.53589 + Talk 0 + MOVE1 at +6s). MovementInform (ev28,
+-- type 17): EVENT1 Talks 1 + schedules FACE3 5s / ROGER3 6s / FACE4
+-- 12s / ROGER4 14s / MOVE2 18s; EVENT2 faces 1.134464 + Talks 4 +
+-- schedules the EXCLAMATION emote 3s / LEAVE 8s; EVENT3 despawns
+-- in 1s. The START case's MOVE1 leg + all chain legs are now ported;
+-- only the relay delivery stays direct-call (see below).
 -- npc_crate_helper (crate_helper_cot,
 -- entry 27827): the SpellHit event-14 relay IS ported at the end of
 -- this file — on spell 49590 it picks the closest fluff creature by
 -- the C++ Find radii (jena 45yd, bartleby 5yd, morigan 15yd, roger
 -- 30yd; ReplaceIfCloser order, strict-closest wins) and delivers the
--- in-scope legs directly (bartleby idle-cancel/Started flip + BARTLEBY1
--- Talk(1) timer, morigan Started flip, roger START stand/facing/
--- Talk(0) timer); jena's Started flag is never read in C++ (no
--- observable leg), roger's MOVE1+ chain legs stay out (spline-gated),
--- and the malcolm Spawn fallback stays out (spline machine). The instance
--- SetData (DATA_CRATE_REVEALED) and GO crate swap legs stay out (no
--- instance bridge; GO Delete has no bridge).
+-- in-scope legs directly (bartleby idle-cancel/Started flip +
+-- BARTLEBY1 Talk(1) + chain timer, morigan Started flip, roger START
+-- stand/facing/Talk(0) timer + MOVE1 chain, jena Started flip — read
+-- at her INITIAL-chain arrival only, see above); the malcolm Spawn
+-- fallback IS ported (tick 402): with no fluff candidate in range the
+-- relay summons malcolm at malcolmSpawn + walks his CHAIN_MALCOLM1,
+-- the npc_malcolm_moore::Spawn twin (map->SummonCreature, default
+-- MANUAL_DESPAWN). The instance SetData (DATA_CRATE_REVEALED) and GO
+-- crate swap legs stay out (no instance/GO-Delete bridge).
+-- NOTE: the spline-chain bridge is live but idle until the deployment
+-- DB ships script_spline_chain rows (the repo world.db carries no such
+-- tables); MoveAlongSplineChain returns false with no chain, the C++
+-- error-and-return, so the fluff NPCs stand still instead of walking
+-- until then. The chain legs above are the C++-exact arms for when
+-- the rows land.
 -- Documented-only: at_stratholme_inn_stairs_cot (area trigger, no
 -- RegisterAreaTrigger binding in-tree) — instance GetData gate +
 -- cross-creature SetGUID leg, both unbridged; forresten's SetGUID /
@@ -410,12 +464,62 @@ RegisterCreatureGossipEvent(ENTRY_CHROMIE_MIDDLE, 2, chromieMiddleGossipSelect)
 local ENTRY_BARTLEBY = 27907
 local ENTRY_SERGEANT = 27877
 local ENTRY_PERELLI = 27876
+local ENTRY_MARTHA = 27884
+local ENTRY_JENA = 27885
+local ENTRY_MALCOLM = 27891
+local ENTRY_SCRUFFY = 27892
+local ENTRY_ROGER = 27903
 local UNIT_STAND_STATE_STAND = 0
+local UNIT_STAND_STATE_KNEEL = 8
+local EMOTE_ONESHOT_NONE = 0
+local EMOTE_ONESHOT_TALK = 1
+local EMOTE_ONESHOT_EXCLAMATION = 5
+local EMOTE_STATE_USE_STANDING = 69
+local ACTION_START_FLUFF = 9001
+-- CrateGenericMisc (culling_of_stratholme.cpp:556-561): shared
+-- spline-chain MovementInform ids; SPLINE_CHAIN_MOTION_TYPE is 17
+-- (MovementDefines.h / creaturemotion.go:4026).
+local SPLINE_CHAIN_MOTION_TYPE = 17
+local MOVEID_EVENT1 = 4200
+local MOVEID_EVENT2 = 4201
+local MOVEID_EVENT3 = 4202
+local MOVEID_EVENT4 = 4203
+local MOVEID_EVENT5 = 4204
+-- CrateEvent1Misc chain ids (culling_of_stratholme.cpp:588-600).
+local CHAIN_MARTHA_IDLE1 = 1
+local CHAIN_MARTHA_IDLE2 = 2
+local CHAIN_JENA_INITIAL = 1
+local CHAIN_JENA_IDLE1 = 3
+local CHAIN_JENA_IDLE2 = 2
+local CHAIN_JENA_MOVE1 = 70
+local CHAIN_JENA_MOVE2 = 71
+local CHAIN_JENA_LEAVE = 72
+-- CrateEvent2Misc chain ids (:849-851).
+local CHAIN_BARTLEBY1 = 1
+local CHAIN_BARTLEBY2 = 2
+-- CrateEvent3Misc chain ids (:964-971).
+local CHAIN_MALCOLM1 = 1
+local CHAIN_MALCOLM2 = 2
+local CHAIN_MALCOLM3 = 3
+local CHAIN_MALCOLM4 = 4
+local CHAIN_SCRUFFY1 = 1
+local CHAIN_SCRUFFY2 = 2
+-- CrateEvent4Misc chain ids (:1126-1127).
+local CHAIN_SERGEANT1 = 1
+local CHAIN_SERGEANT2 = 2
+-- CrateEvent5Misc chain ids (:1305-1307).
+local CHAIN_ROGER1 = 1
+local CHAIN_ROGER2 = 2
+local CHAIN_ROGER3 = 3
 
 local timers = {}
 local moriganQuestion = {}
 local moriganStarted = {}
 local bartlebyStarted = {}
+local jenaStarted = {}
+local marthaChain = {}
+local marthaIdleKey = {}
+local marthaInterruptState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -428,6 +532,10 @@ local function cancelTimers(guid)
     moriganQuestion[guid] = nil
     moriganStarted[guid] = nil
     bartlebyStarted[guid] = nil
+    jenaStarted[guid] = nil
+    marthaChain[guid] = nil
+    marthaIdleKey[guid] = nil
+    marthaInterruptState[guid] = nil
 end
 
 local function schedule(guid, key, delay, fn)
@@ -442,6 +550,14 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay, 1)
 end
 
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
 -- C++ EVENT_BARTLEBY_IDLE: Talk(LINE_BARTLEBY_IDLE 0), Repeat
 -- {120,240}s (new random range each firing).
 local function onBartlebyIdle(creature, guid)
@@ -452,7 +568,9 @@ local function onBartlebyIdle(creature, guid)
 end
 
 -- C++ npc_bartleby_battsonAI::DoAction(ACTION_START_FLUFF): once-guard
--- + idle cancel + BARTLEBY1 Talk(1) one-shot; only the spline leg stays out.
+-- + idle cancel + BARTLEBY1 Talk(1) one-shot + CHAIN_BARTLEBY1 launch
+-- (tick 402 — the spline leg is now ported with the arrival handler
+-- below).
 -- Called directly by the crate_helper relay below — ev38 DoAction
 -- dispatch exists but is bypassed: the relay already holds the
 -- bartleby object, so no GUID-to-creature lookup is needed.
@@ -467,22 +585,21 @@ local function bartlebyStartFluff(creature)
         RemoveEventById(per["idle"])
         per["idle"] = nil
     end
-    -- C++ EVENT_BARTLEBY1: Talk(LINE_BARTLEBY1 1) at {15,30}s; the
-    -- MoveAlongSplineChain leg in the same case stays out (no bridge).
+    -- C++ EVENT_BARTLEBY1: Talk(LINE_BARTLEBY1 1) at {15,30}s +
+    -- MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_BARTLEBY1, true).
     schedule(guid, "fluff1", math.random(15000, 30000), function()
         creature:Talk(1)
+        creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_BARTLEBY1, true)
     end)
 end
 
 -- C++ npc_roger_owensAI::DoAction(ACTION_START_FLUFF) + EVENT_ROGER_START
 -- (culling_of_stratholme.cpp:1296-1297, 1336-1342): the START case's
--- stand/facing/Talk(0) legs are ported as a one-shot {5,12}s timer --
--- the Talk is separable from the EVENT_ROGER_MOVE1 spline leg it
--- schedules, which stays out (no MoveAlongSplineChain/MovementInform
--- bridge), so roger says line 0 at {5,12}s and then stays put instead
--- of walking the chain/talking lines 1-4/despawning. No Started latch
--- in C++; schedule() replaces a pending fluff timer if a second
--- helper reveals roger (C++ would stack a second START event).
+-- stand/facing/Talk(0) legs are ported as a one-shot {5,12}s timer +
+-- the EVENT_ROGER_MOVE1 chain leg at +6s (tick 402); the arrival
+-- handler below ports the MOVE1+ chain legs. No Started latch in C++;
+-- schedule() replaces a pending fluff timer if a second helper
+-- reveals roger (C++ would stack a second START event).
 -- Called directly by the crate_helper relay below.
 local function rogerStartFluff(creature)
     local guid = creature:GetGUID()
@@ -490,6 +607,11 @@ local function rogerStartFluff(creature)
         creature:SetStandState(UNIT_STAND_STATE_STAND)
         creature:SetFacingTo(1.53589)
         creature:Talk(0)
+        -- C++ EVENT_ROGER_START also schedules EVENT_ROGER_MOVE1 at
+        -- +6s (chain leg, tick 402).
+        schedule(guid, "move1", 6000, function()
+            creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_ROGER1, true)
+        end)
     end)
 end
 
@@ -513,11 +635,14 @@ end)
 -- C++ Perelli(line[, ori]): nearest perelli Talks line to the
 -- sergeant; the idle path calls Perelli without ori (default 0 = no
 -- facing change) — the 5.916666f facing belongs to the chain leg
--- (EVENT_PERELLI1), not the idle loop.
-local function moriganPerelli(creature, line)
+-- (EVENT_PERELLI1, tick 402).
+local function moriganPerelli(creature, line, ori)
     local perelli = creature:FindNearestCreature(ENTRY_PERELLI, 10)
     if perelli then
         perelli:Talk(line, creature)
+        if ori then
+            perelli:SetFacingTo(ori)
+        end
     end
 end
 
@@ -544,7 +669,11 @@ onMoriganIdle2 = function(creature, guid)
     local question = moriganQuestion[guid] or 0
     moriganPerelli(creature, question == 0 and 1 or 0)
     if question == 2 then
-        -- EVENT_SERGEANT_CHAIN1 spline leg stays out; loop ends.
+        -- EVENT_SERGEANT_CHAIN1 (tick 402): the fluff chain starts 2s
+        -- after the answer.
+        schedule(guid, "chain1", 2000, function()
+            creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_SERGEANT1, true)
+        end)
     else
         schedule(guid, "idle1", math.random(15000, 30000), function()
             onMoriganIdle1(creature, guid)
@@ -569,6 +698,552 @@ RegisterCreatureEvent(ENTRY_SERGEANT, 23, function(event, creature)
     cancelTimers(creature:GetGUID())
 end)
 
+-- C++ npc_martha_goslin (culling_of_stratholme.cpp:607-700, tick 402).
+-- JustAppeared: emotestate USE_STANDING + IDLE2 {5,10}s. UpdateAI
+-- IDLE1/IDLE2: emotestate NONE + walk CHAIN_MARTHA_IDLE1/2.
+-- MovementInform (ev28, type 17): EVENT1/2 set emotestate USE_STANDING
+-- + facing (3.159046 / 4.764749) + schedule the next idle {9,15}s.
+-- DoAction(0): the 12s motion interrupt — see marthaInterrupt below.
+local function marthaScheduleIdle(creature, guid, key, delay)
+    marthaIdleKey[guid] = key
+    schedule(guid, key, delay, function()
+        marthaIdleKey[guid] = nil
+        creature:EmoteState(EMOTE_ONESHOT_NONE)
+        local pointID = MOVEID_EVENT1
+        local chainID = CHAIN_MARTHA_IDLE1
+        if key == "idle2" then
+            pointID = MOVEID_EVENT2
+            chainID = CHAIN_MARTHA_IDLE2
+        end
+        marthaChain[guid] = pointID
+        creature:MoveAlongSplineChain(pointID, chainID, true)
+    end)
+end
+
+local function marthaResume(creature, guid)
+    local saved = marthaInterruptState[guid]
+    marthaInterruptState[guid] = nil
+    if saved == nil then
+        return
+    end
+    -- C++ resumes the chain MID-link (SplineChainResumeInfo link/point
+    -- + remaining wait); Go has no resume primitive, so the interrupted
+    -- chain restarts from its first link with the same point id — the
+    -- arrival re-schedules the next idle event exactly as C++.
+    if saved.chain ~= nil then
+        marthaChain[guid] = saved.chain
+        local chainID = CHAIN_MARTHA_IDLE1
+        if saved.chain == MOVEID_EVENT2 then
+            chainID = CHAIN_MARTHA_IDLE2
+        end
+        creature:MoveAlongSplineChain(saved.chain, chainID, true)
+    end
+    -- C++ freezes the EventMap for the 12s, preserving the idle
+    -- timer's remaining time; Lua re-rolls the full {9,15}s range —
+    -- ambient-only timing delta on the idle loop.
+    if saved.idleKey ~= nil then
+        marthaScheduleIdle(creature, guid, saved.idleKey, math.random(9000, 15000))
+    end
+end
+
+-- C++ npc_martha_goslinAI::DoAction(0) (culling_of_stratholme.cpp:611-617):
+-- InterruptTimer = 12s + GetResumeInfo + MotionMaster::Clear() +
+-- emotestate NONE; UpdateAI resumes the chain when the timer expires
+-- (and freezes the EventMap meanwhile). Delivered directly by Jena's
+-- MARTHA1/LEAVE legs (same direct-call pattern as the crate_helper
+-- relay). A second interrupt during the first only re-arms the 12s
+-- timer: C++ re-saves ResumeInfo, but with no active generator the
+-- saved info is unchanged, so the first interrupt's chain/idle are
+-- kept here too.
+local function marthaInterrupt(creature)
+    local guid = creature:GetGUID()
+    local chain = marthaChain[guid]
+    local idleKey = marthaIdleKey[guid]
+    if chain ~= nil then
+        -- MotionMaster::Clear() twin: a fresh non-chain Move* launch
+        -- supersedes the running chain (launchCreatureScriptSplineSpeed
+        -- nils motion.SplineChain); MoveTo to the current position
+        -- halts Martha in place with no displacement. Go's MoveClear
+        -- does NOT cancel a chain run (advanceSplineChain re-sends the
+        -- interrupted leg), so it cannot serve here. The supersede
+        -- lands as a POINT inform (type 8, id 0), ignored by the
+        -- arrival handler below, matching C++ Clear (no inform).
+        creature:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
+        marthaChain[guid] = nil
+    end
+    if idleKey ~= nil then
+        cancelKey(guid, idleKey)
+        marthaIdleKey[guid] = nil
+    end
+    creature:EmoteState(EMOTE_ONSHOT_NONE)
+    if chain ~= nil or idleKey ~= nil then
+        marthaInterruptState[guid] = { chain = chain, idleKey = idleKey }
+    end
+    schedule(guid, "interrupt", 12000, function()
+        marthaResume(creature, guid)
+    end)
+end
+
+local function onMarthaSpawn(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:EmoteState(EMOTE_STATE_USE_STANDING)
+    marthaScheduleIdle(creature, guid, "idle2", math.random(5000, 10000))
+end
+
+local function onMarthaMovementInform(event, creature, type, id)
+    if type ~= SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    marthaChain[guid] = nil
+    if id == MOVEID_EVENT1 then
+        creature:EmoteState(EMOTE_STATE_USE_STANDING)
+        creature:SetFacingTo(3.159046)
+        marthaScheduleIdle(creature, guid, "idle2", math.random(9000, 15000))
+    elseif id == MOVEID_EVENT2 then
+        creature:EmoteState(EMOTE_STATE_USE_STANDING)
+        creature:SetFacingTo(4.764749)
+        marthaScheduleIdle(creature, guid, "idle1", math.random(9000, 15000))
+    end
+end
+
+RegisterCreatureEvent(ENTRY_MARTHA, 5, onMarthaSpawn)
+RegisterCreatureEvent(ENTRY_MARTHA, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_MARTHA, 23, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_MARTHA, 28, onMarthaMovementInform)
+
+-- C++ npc_jena_anderson (culling_of_stratholme.cpp:702-831, tick 402).
+-- InitializeAI walks CHAIN_JENA_INITIAL (isMoving guard); the
+-- MovementInform arrivals drive the whole fluff chain; DoAction
+-- ACTION_START_FLUFF flips Started (delivered directly by the relay
+-- as jenaStartFluff — Started is read only at the INITIAL-chain
+-- arrival, so a late reveal is a no-op in practice).
+local function jenaStartFluff(creature)
+    jenaStarted[creature:GetGUID()] = true
+end
+
+local function jenaFindMartha(creature)
+    return creature:FindNearestCreature(ENTRY_MARTHA, 100)
+end
+
+local function jenaIdle1(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_JENA_IDLE1, true)
+end
+
+local function jenaIdle2(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT2, CHAIN_JENA_IDLE2, true)
+end
+
+local function jenaStart(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT3, CHAIN_JENA_MOVE1, true)
+end
+
+local function jenaMartha1(creature, guid)
+    local martha = jenaFindMartha(creature)
+    if martha then
+        marthaInterrupt(martha)
+        martha:SetFacingToObject(creature)
+        martha:Talk(0, creature)
+    end
+end
+
+local function jenaTalk7(creature, guid)
+    creature:Talk(6, jenaFindMartha(creature))
+end
+
+local function jenaMove2(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT4, CHAIN_JENA_MOVE2, true)
+end
+
+local function jenaTalk8(creature, guid)
+    creature:SetStandState(UNIT_STAND_STATE_STAND)
+    local martha = jenaFindMartha(creature)
+    creature:Talk(7, martha)
+    creature:Talk(8, martha)
+    if martha then
+        creature:SetFacingToObject(martha)
+    end
+end
+
+local function jenaLeave(creature, guid)
+    local martha = jenaFindMartha(creature)
+    if martha then
+        marthaInterrupt(martha)
+        martha:SetFacingToObject(creature)
+        martha:Talk(1, creature)
+    end
+    creature:MoveAlongSplineChain(MOVEID_EVENT5, CHAIN_JENA_LEAVE, true)
+end
+
+local function onJenaMovementInform(event, creature, type, id)
+    if type ~= SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == MOVEID_EVENT1 then
+        if jenaStarted[guid] then
+            schedule(guid, "start", math.random(1000, 3000), function()
+                jenaStart(creature, guid)
+            end)
+        else
+            schedule(guid, "idle2", math.random(200, 700), function()
+                jenaIdle2(creature, guid)
+            end)
+        end
+    elseif id == MOVEID_EVENT2 then
+        schedule(guid, "idle1", math.random(200, 700), function()
+            jenaIdle1(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT3 then
+        local martha = jenaFindMartha(creature)
+        if martha then
+            creature:SetFacingToObject(martha)
+            creature:Talk(5, martha)
+        end
+        schedule(guid, "martha1", 5500, function()
+            jenaMartha1(creature, guid)
+        end)
+        schedule(guid, "jena7", 11000, function()
+            jenaTalk7(creature, guid)
+        end)
+        schedule(guid, "move2", 16000, function()
+            jenaMove2(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT4 then
+        creature:SetStandState(UNIT_STAND_STATE_KNEEL)
+        schedule(guid, "jena8", 2000, function()
+            jenaTalk8(creature, guid)
+        end)
+        schedule(guid, "leave", 8000, function()
+            jenaLeave(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT5 then
+        creature:DespawnOrUnsummon(1000)
+    end
+end
+
+local function onJenaSpawn(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    jenaStarted[guid] = false
+    if creature:IsMoving() then
+        return
+    end
+    creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_JENA_INITIAL, true)
+end
+
+RegisterCreatureEvent(ENTRY_JENA, 5, onJenaSpawn)
+RegisterCreatureEvent(ENTRY_JENA, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_JENA, 23, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_JENA, 28, onJenaMovementInform)
+
+-- C++ npc_malcolm_moore (culling_of_stratholme.cpp:945-1081, tick 402).
+-- InitializeAI walks CHAIN_MALCOLM1 and summons scruffy walking
+-- CHAIN_SCRUFFY1 (id 0). MovementInform arrivals drive the scene;
+-- MOVEID_EVENT5 has no case (dead in C++ — see the arrival handler).
+local MALCOLM_SPAWN = { 1605.2420, 805.4160, 122.9956, 5.284148 }
+local SCRUFFY_SPAWN = { 1601.1030, 805.3391, 123.7677, 5.471561 }
+
+local function malcolmFindScruffy(creature)
+    return creature:FindNearestCreature(ENTRY_SCRUFFY, 100)
+end
+
+local function malcolmScruffy1(creature, guid)
+    local scruffy = malcolmFindScruffy(creature)
+    if scruffy then
+        scruffy:SetFacingTo(5.734883)
+        scruffy:Talk(0)
+    end
+end
+
+local function malcolmTalk2(creature, guid)
+    local scruffy = malcolmFindScruffy(creature)
+    if scruffy then
+        creature:Talk(1, scruffy)
+        creature:SetFacingToObject(scruffy)
+    end
+end
+
+local function malcolmScruffyMove(creature, guid)
+    local scruffy = malcolmFindScruffy(creature)
+    if scruffy then
+        scruffy:MoveAlongSplineChain(MOVEID_EVENT5, CHAIN_SCRUFFY2, false)
+    end
+end
+
+local function malcolmMove(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT3, CHAIN_MALCOLM3, true)
+end
+
+local function malcolmFace3(creature, guid)
+    creature:SetFacingTo(2.303835)
+end
+
+local function malcolmTalk3(creature, guid)
+    creature:Talk(2, malcolmFindScruffy(creature))
+end
+
+local function malcolmTalk4(creature, guid)
+    local scruffy = malcolmFindScruffy(creature)
+    if scruffy then
+        creature:SetFacingToObject(scruffy)
+        creature:Talk(3, scruffy)
+    end
+end
+
+local function malcolmMove2(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT4, CHAIN_MALCOLM4, true)
+    local scruffy = malcolmFindScruffy(creature)
+    if scruffy then
+        scruffy:SetFacingTo(5.445427)
+    end
+end
+
+local function onMalcolmMovementInform(event, creature, type, id)
+    if type ~= SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == MOVEID_EVENT1 then
+        creature:Talk(0)
+        creature:MoveAlongSplineChain(MOVEID_EVENT2, CHAIN_MALCOLM2, true)
+    elseif id == MOVEID_EVENT2 then
+        -- C++ Seconds(0) -> 1ms here: CreateLuaEvent needs delay >= 1.
+        schedule(guid, "scruffy1", 1, function()
+            malcolmScruffy1(creature, guid)
+        end)
+        schedule(guid, "malcolm2", 1000, function()
+            malcolmTalk2(creature, guid)
+        end)
+        schedule(guid, "scruffyMove", 4000, function()
+            malcolmScruffyMove(creature, guid)
+        end)
+        schedule(guid, "malcolmMove", 8000, function()
+            malcolmMove(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT3 then
+        schedule(guid, "face3", 1, function()
+            malcolmFace3(creature, guid)
+        end)
+        schedule(guid, "malcolm3", 1000, function()
+            malcolmTalk3(creature, guid)
+        end)
+        schedule(guid, "malcolm4", 6000, function()
+            malcolmTalk4(creature, guid)
+        end)
+        schedule(guid, "move2", 12000, function()
+            malcolmMove2(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT4 then
+        creature:DespawnOrUnsummon()
+    end
+    -- No MOVEID_EVENT5 case: scruffy's CHAIN_SCRUFFY2 arrival informs
+    -- scruffy's own (default) AI in C++
+    -- (SplineChainMovementGenerator::Finalize informs the owner), never
+    -- Malcolm's — the SCRUFFY_EMOTE leg is dead code in C++.
+end
+
+local function onMalcolmSpawn(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_MALCOLM1, true)
+    local scruffy = creature:SummonCreature(ENTRY_SCRUFFY, SCRUFFY_SPAWN[1], SCRUFFY_SPAWN[2], SCRUFFY_SPAWN[3], SCRUFFY_SPAWN[4])
+    if scruffy then
+        scruffy:MoveAlongSplineChain(0, CHAIN_SCRUFFY1, true)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_MALCOLM, 5, onMalcolmSpawn)
+RegisterCreatureEvent(ENTRY_MALCOLM, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_MALCOLM, 23, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_MALCOLM, 28, onMalcolmMovementInform)
+
+-- C++ npc_roger_owens MovementInform (culling_of_stratholme.cpp:1300-1323,
+-- tick 402): the chain legs behind the START case ported above.
+local function rogerFace3(creature, guid)
+    creature:SetFacingTo(6.265732)
+end
+
+local function rogerTalk3(creature, guid)
+    creature:Talk(2)
+end
+
+local function rogerFace4(creature, guid)
+    creature:SetFacingTo(4.520403)
+end
+
+local function rogerTalk4(creature, guid)
+    creature:Talk(3)
+end
+
+local function rogerMove2(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT2, CHAIN_ROGER2, true)
+end
+
+local function rogerEmote52(creature, guid)
+    creature:PerformEmote(EMOTE_ONESHOT_EXCLAMATION)
+end
+
+local function rogerLeave(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT3, CHAIN_ROGER3, true)
+end
+
+local function onRogerMovementInform(event, creature, type, id)
+    if type ~= SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == MOVEID_EVENT1 then
+        creature:Talk(1)
+        schedule(guid, "face3", 5000, function()
+            rogerFace3(creature, guid)
+        end)
+        schedule(guid, "roger3", 6000, function()
+            rogerTalk3(creature, guid)
+        end)
+        schedule(guid, "face4", 12000, function()
+            rogerFace4(creature, guid)
+        end)
+        schedule(guid, "roger4", 14000, function()
+            rogerTalk4(creature, guid)
+        end)
+        schedule(guid, "move2", 18000, function()
+            rogerMove2(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT2 then
+        creature:SetFacingTo(1.134464)
+        creature:Talk(4)
+        schedule(guid, "emote52", 3000, function()
+            rogerEmote52(creature, guid)
+        end)
+        schedule(guid, "leave", 8000, function()
+            rogerLeave(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT3 then
+        creature:DespawnOrUnsummon(1000)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ROGER, 28, onRogerMovementInform)
+
+-- C++ npc_bartleby_battson MovementInform (culling_of_stratholme.cpp:887-905,
+-- tick 402): the arrival legs behind the BARTLEBY1 chain launch above.
+local function bartlebyTalk2(creature, guid)
+    creature:Talk(2)
+end
+
+local function bartlebyEmote22(creature, guid)
+    creature:PerformEmote(EMOTE_ONESHOT_TALK)
+end
+
+local function bartlebyTalk3(creature, guid)
+    creature:Talk(3)
+    creature:SetStandState(UNIT_STAND_STATE_STAND)
+    creature:MoveAlongSplineChain(MOVEID_EVENT2, CHAIN_BARTLEBY2, true)
+end
+
+local function onBartlebyMovementInform(event, creature, type, id)
+    if type ~= SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == MOVEID_EVENT1 then
+        creature:SetStandState(UNIT_STAND_STATE_KNEEL)
+        schedule(guid, "fluff2", 4000, function()
+            bartlebyTalk2(creature, guid)
+        end)
+        schedule(guid, "fluff22", 6000, function()
+            bartlebyEmote22(creature, guid)
+        end)
+        schedule(guid, "fluff3", 12000, function()
+            bartlebyTalk3(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT2 then
+        creature:DespawnOrUnsummon(1000)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_BARTLEBY, 28, onBartlebyMovementInform)
+
+-- C++ npc_sergeant_morigan MovementInform (culling_of_stratholme.cpp:1155-1179,
+-- tick 402): the arrival legs behind the CHAIN1 launch in onMoriganIdle2.
+local function moriganSergeant1(creature, guid)
+    creature:Talk(3)
+end
+
+local function moriganStand(creature, guid)
+    creature:SetFacingTo(2.617994)
+    creature:SetStandState(UNIT_STAND_STATE_STAND)
+end
+
+local function moriganPerelli1(creature, guid)
+    moriganPerelli(creature, 2, 5.916666)
+end
+
+local function moriganSergeant2(creature, guid)
+    creature:Talk(4)
+end
+
+local function moriganPerelli2(creature, guid)
+    moriganPerelli(creature, 3)
+end
+
+local function moriganSergeant3(creature, guid)
+    creature:Talk(5)
+end
+
+local function moriganLeave(creature, guid)
+    creature:MoveAlongSplineChain(MOVEID_EVENT2, CHAIN_SERGEANT2, true)
+end
+
+local function onMoriganMovementInform(event, creature, type, id)
+    if type ~= SPLINE_CHAIN_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == MOVEID_EVENT1 then
+        creature:SetStandState(UNIT_STAND_STATE_KNEEL)
+        schedule(guid, "sergeant1", 1000, function()
+            moriganSergeant1(creature, guid)
+        end)
+        schedule(guid, "stand", 3000, function()
+            moriganStand(creature, guid)
+        end)
+        schedule(guid, "perelli1", 7000, function()
+            moriganPerelli1(creature, guid)
+        end)
+        schedule(guid, "sergeant2", 12000, function()
+            moriganSergeant2(creature, guid)
+        end)
+        schedule(guid, "perelli2", 20000, function()
+            moriganPerelli2(creature, guid)
+        end)
+        schedule(guid, "sergeant3", 26000, function()
+            moriganSergeant3(creature, guid)
+        end)
+        schedule(guid, "leave", 31000, function()
+            moriganLeave(creature, guid)
+        end)
+    elseif id == MOVEID_EVENT2 then
+        creature:DespawnOrUnsummon(1000)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SERGEANT, 28, onMoriganMovementInform)
+
 -- C++ npc_crate_helperAI::SpellHit (culling_of_stratholme.cpp:1410-
 -- 1443): on SPELL_ARCANE_DISRUPTION 49590, once per helper (the
 -- _crateRevealed latch), the instance SetData + GO crate swap legs
@@ -579,10 +1254,9 @@ end)
 -- 30yd — and ReplaceIfCloser keeps the strict-closest candidate in
 -- that order (first wins ties). Lua GetDistance is the 3D metric vs
 -- C++ 2D-squared, same winner on flat Stratholme ground. The
--- no-candidate malcolm Spawn fallback stays out (spline machine).
+-- no-candidate malcolm Spawn fallback is ported (tick 402): the relay
+-- summons malcolm and his own ev5 walks the chain + summons scruffy.
 local ENTRY_CRATE_HELPER = 27827
-local ENTRY_JENA = 27885
-local ENTRY_ROGER = 27903
 local SPELL_ARCANE_DISRUPTION = 49590
 
 local crateRevealed = {}
@@ -615,6 +1289,11 @@ local function onCrateHelperSpellHit(event, creature, caster, spellId)
         end
     end
     if closest == nil then
+        -- C++ npc_malcolm_moore::Spawn fallback (tick 402): no fluff
+        -- candidate in range — summon malcolm at malcolmSpawn
+        -- (MANUAL_DESPAWN default); his own ev5 (InitializeAI twin)
+        -- walks CHAIN_MALCOLM1 + summons scruffy.
+        creature:SummonCreature(ENTRY_MALCOLM, MALCOLM_SPAWN[1], MALCOLM_SPAWN[2], MALCOLM_SPAWN[3], MALCOLM_SPAWN[4])
         return
     end
     local entry = closest:GetEntry()
@@ -624,10 +1303,9 @@ local function onCrateHelperSpellHit(event, creature, caster, spellId)
         moriganStarted[closest:GetGUID()] = true
     elseif entry == ENTRY_ROGER then
         rogerStartFluff(closest)
+    elseif entry == ENTRY_JENA then
+        jenaStartFluff(closest)
     end
-    -- jena: Started is set but never read in C++ (no observable leg).
-    -- roger: only the EVENT_ROGER_START case is ported (stand/facing/
-    -- Talk 0); the MOVE1+ spline-chain legs stay out.
 end
 
 RegisterCreatureEvent(ENTRY_CRATE_HELPER, 14, onCrateHelperSpellHit)
