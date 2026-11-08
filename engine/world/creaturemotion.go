@@ -205,6 +205,13 @@ type creatureMotion struct {
 	// (FollowMovementGenerator.cpp:98-104), so the standing branch
 	// fires once per MoveFollow assignment.
 	ScriptFollowInformed bool
+	// SplineChain is the live SplineChainMovementGenerator run
+	// (spline_chain.go): the DB chain being walked, its next
+	// link/point, and the msUntilNext wait between links. A fresh
+	// non-chain script spline clears it (the generator is removed
+	// when the MotionMaster takes a new one), so a superseded chain
+	// never informs; nil when no chain is running.
+	SplineChain *splineChainRun
 	// ScriptChaseTargetGUID/Dist/Angle are the MotionMaster::MoveChase
 	// (MotionMaster.cpp:594-602) ACTIVE-slot ChaseMovementGenerator:
 	// ChaseRange(dist) stop distance and ChaseAngle(angle, pi/4
@@ -4016,6 +4023,7 @@ const (
 	movementGeneratorTimedFleeing = 13
 	movementGeneratorFollow       = 14
 	movementGeneratorEffect       = 16
+	movementGeneratorSplineChain  = 17
 	movementGeneratorFormation    = 18
 )
 
@@ -4039,6 +4047,17 @@ const (
 // priority (ACTIVE chase over DEFAULT point) is unmodeled, so the
 // tick resumes pursuit only once the spline lands.
 func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool) bool {
+	return s.launchCreatureScriptSplineSpeed(motion, destX, destY, destZ, walk, moveType, pointID, allowDead, creatureSplineVelocity(motion, walk))
+}
+
+// launchCreatureScriptSplineSpeed is the speed-taking core of
+// launchCreatureScriptSpline: spline-chain links carry their own DB
+// velocity (SplineChainMovementGenerator::SendPathSpline: velocity >
+// 0 wins over the creature speed), so the chain walker launches
+// through here while every other script leg uses the wrapper above.
+// A non-chain launch clears a running chain (MotionMaster takes a
+// new generator, the old one finalizes without informing).
+func (s *Server) launchCreatureScriptSplineSpeed(motion *creatureMotion, destX, destY, destZ float32, walk bool, moveType uint32, pointID uint32, allowDead bool, speed float32) bool {
 	if s == nil || motion == nil {
 		return false
 	}
@@ -4047,10 +4066,12 @@ func (s *Server) launchCreatureScriptSpline(motion *creatureMotion, destX, destY
 		s.motionMu.Unlock()
 		return false
 	}
-	speed := creatureSplineVelocity(motion, walk)
 	if speed < 0.001 {
 		s.motionMu.Unlock()
 		return false
+	}
+	if moveType != movementGeneratorSplineChain {
+		motion.SplineChain = nil
 	}
 	dist := distance3D(motion.X, motion.Y, motion.Z, destX, destY, destZ)
 	duration := splineDurationMs(float64(dist), speed)
@@ -5695,7 +5716,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// finalize arm here: Go's chase re-paths instead of
 		// finalizing, and no in-tree consumer needs the chase inform.
 		scriptSpline := motion.ScriptMoveType != 0
+		chainSpline := motion.ScriptMoveType == movementGeneratorSplineChain
 		switch motion.ScriptMoveType {
+		case movementGeneratorSplineChain:
+			s.landSplineChainLink(ctx, motion, now)
 		case movementGeneratorPoint, movementGeneratorEffect:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnMovementInform, motion.ScriptMoveType, motion.ScriptMovePointID)
@@ -5705,14 +5729,24 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 			}
 		}
-		motion.ScriptMoveType = 0
-		motion.ScriptMovePointID = 0
-		motion.ScriptMoveDestX = 0
-		motion.ScriptMoveDestY = 0
-		motion.ScriptMoveDestZ = 0
-		if !scriptSpline && motion.MoveType == 2 {
-			s.waypointNodeArrival(ctx, motion, motion.MoveEnds)
+		if !chainSpline {
+			motion.ScriptMoveType = 0
+			motion.ScriptMovePointID = 0
+			motion.ScriptMoveDestX = 0
+			motion.ScriptMoveDestY = 0
+			motion.ScriptMoveDestZ = 0
+			if !scriptSpline && motion.MoveType == 2 {
+				s.waypointNodeArrival(ctx, motion, motion.MoveEnds)
+			}
 		}
+	}
+	// SplineChainMovementGenerator::Update
+	// (SplineChainMovementGenerator.cpp:147-175): a chain run waiting
+	// out its msUntilNext gap sends its next link once the wait
+	// expires; the run only advances while the creature is not
+	// moving, so a link never launches over a live spline.
+	if motion.SplineChain != nil && !motion.Moving {
+		s.advanceSplineChain(ctx, motion, now)
 	}
 
 	// CritterAI flee (PassiveAI.cpp:76-93): while the flee timer runs the

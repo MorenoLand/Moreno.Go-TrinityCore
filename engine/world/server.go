@@ -74,6 +74,8 @@ type Server struct {
 	ipLocations             *iplocation.Store
 	worldstatesMu           sync.RWMutex
 	worldstates             map[uint32]uint64
+	splineChainsOnce        sync.Once
+	splineChains            map[splineChainKey][]splineChainLink
 	guildResetMu            sync.Mutex
 	nextGuildReset          int64
 	sessionsMu              sync.RWMutex

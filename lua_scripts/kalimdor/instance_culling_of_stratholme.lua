@@ -18,7 +18,11 @@
 -- progress (COSProgressStates bitmask, nil reads as JUST_STARTED),
 -- guardianTimeout (unix seconds, 0 = none), arthasDied (transient flag
 -- set by npc_arthas_stratholme.lua onDied, consumed by the ON_UPDATE
--- pump). Per-instance runtime state (binds, wave spawns, event queue,
+-- pump), plus the transient one-shot arthas RP flags (utherFinished,
+-- startWaves, reachTownHall, townHallDone, gauntletReached, gauntletDone,
+-- malganisDone, arthasGone; gossip flags startPurge, startTownHall,
+-- toGauntlet, startGauntlet, startMalganis), all consumed by the
+-- ON_UPDATE pump below. Per-instance runtime state (binds, wave spawns, event queue,
 -- sent world states, crate reveals) lives in the file-local `per`
 -- table, weak-keyed by the instanceData table object itself — the
 -- runtime keeps Lua object identity stable across hooks
@@ -39,12 +43,12 @@
 -- - OnUpdate (3): the C++ EventMap pump (events.Update(diff) +
 --   ExecuteEvent loop) with diff in ms — guardian tick, respawn
 --   arthas, crier call-to-gates, scourge wave, crier announce-wave
---   (:465-594).
+--   (:465-594) — plus the arthas RP flag consumption below (SetData
+--   guards + InitiateArthasEvent legs).
 -- - SetInstanceProgress(state, force) (:649-792): spawn-group legs stay
 --   out (no SpawnGroupSpawn/Despawn bridge — engine-wide grep); the
 --   arthas leg issues DoAction(-ACTION_PROGRESS_UPDATE) (ev38 dispatch
---   exists; npc_arthas_stratholme.lua has no ev38 handler yet, so the
---   call is a faithful no-op until the RP port lands) or despawns /
+--   into npc_arthas_stratholme.lua's RP machine) or despawns /
 --   respawns him 1s later at the snapback position
 --   (npc_arthas.cpp:521-547 ArthasSnapbackPositions); world states per
 --   :730-752; CRATES_DONE bunny credit cast (58109, triggered) + 5s
@@ -88,16 +92,16 @@
 --   summoner, and no map-level summon bridge exists.
 -- Unmodeled (documented-only, no bridges / no writers):
 -- - SetData DATA_GM_OVERRIDE / DATA_GM_RECALL (chromie GM menu,
---   unported), DATA_UTHER_START (chromie middle, unregistered AI),
---   DATA_START_PURGE / DATA_START_WAVES / DATA_REACH_TOWN_HALL /
---   DATA_START_TOWN_HALL / DATA_TOWN_HALL_DONE / DATA_TO_GAUNTLET /
---   DATA_GAUNTLET_REACHED / DATA_START_GAUNTLET / DATA_GAUNTLET_DONE /
---   DATA_START_MALGANIS / DATA_MALGANIS_DONE / DATA_UTHER_FINISHED
---   (all written by the unported arthas RP machine, npc_arthas.cpp) —
---   no fire site exists for any of them; SetGuidData InitiateArthasEvent
---   legs ride the same unported machine (arthas SetGUID has no Lua
---   dispatch — creature:SetGuidData is the generic ScriptData store,
---   not AI dispatch).
+--   unported) and DATA_UTHER_START (chromie middle, unregistered AI)
+--   still have no writers. The arthas RP SetData legs
+--   (DATA_UTHER_FINISHED / DATA_START_WAVES / DATA_REACH_TOWN_HALL /
+--   DATA_TOWN_HALL_DONE / DATA_GAUNTLET_REACHED / DATA_GAUNTLET_DONE /
+--   DATA_MALGANIS_DONE) ARE ported: npc_arthas_stratholme.lua writes
+--   one-shot instanceData flags and the ON_UPDATE pump below consumes
+--   them with the exact SetData guards; the SetGuidData
+--   InitiateArthasEvent legs are ported the same way (gossip flags +
+--   arthas:DoAction(-ACTION_START_RP_EVENTn) — the SetGUID legs arrive
+--   as negative DoAction values, since no SetGUID Lua dispatch exists).
 -- - DATA_ARTHAS_DIED: PORTED via the arthasDied flag — arthas onDied in
 --   npc_arthas_stratholme.lua sets instanceData.arthasDied and the pump
 --   regresses to the stable state with force (the _arthasGUID clear is
@@ -196,6 +200,11 @@ local CHROMIE_WHISPER_GUARDIAN_3 = 2
 
 local ACTION_PROGRESS_UPDATE = 1
 local ACTION_CORRUPTOR_LEAVE = 2
+local ACTION_START_RP_EVENT2 = 4
+local ACTION_START_RP_EVENT3 = 5
+local ACTION_START_RP_EVENT4_1 = 6
+local ACTION_START_RP_EVENT4_2 = 7
+local ACTION_START_RP_EVENT5 = 8
 
 local SUMMON_MANUAL_DESPAWN = 7
 
@@ -625,6 +634,36 @@ local function scourgeWave(instanceData, mapObj, st)
     st.currentSpawnLoc = spawnLoc
 end
 
+-- Arthas RP SetData legs (instance_culling_of_stratholme.cpp SetData
+-- :317-403): one-shot instanceData flags written by
+-- npc_arthas_stratholme.lua, consumed here with the exact C++ from-state
+-- guards; each flag is cleared whether or not its guard passed.
+local function consumeSetDataFlag(instanceData, mapObj, name, from, to)
+    if instanceData[name] then
+        instanceData[name] = nil
+        if progressOf(instanceData) == from then
+            setProgress(instanceData, mapObj, to, false)
+        end
+    end
+end
+
+-- InitiateArthasEvent legs (instance_culling_of_stratholme.cpp
+-- SetGuidData :405-448 + InitiateArthasEvent :647-654): the gossip
+-- AdvanceDungeon flags, consumed with the exact from->to guard;
+-- setProgress runs first (AdvanceToState via DoAction(-1)), then the
+-- RP-start leg arrives as arthas:DoAction(-ACTION_START_RP_EVENTn).
+local function consumeGossipFlag(instanceData, mapObj, st, name, from, to, rpAction)
+    if instanceData[name] then
+        instanceData[name] = nil
+        if progressOf(instanceData) == from then
+            setProgress(instanceData, mapObj, to, false)
+            if st.arthas then
+                st.arthas:DoAction(rpAction)
+            end
+        end
+    end
+end
+
 local function onUpdateTick(instanceData, mapObj, st, diff)
     -- DATA_ARTHAS_DIED (npc_arthas_stratholme.lua onDied flag): regress
     -- to the last stable state, forced.
@@ -635,6 +674,25 @@ local function onUpdateTick(instanceData, mapObj, st, diff)
             StableStateFor[progressOf(instanceData)] or JUST_STARTED, true)
         return
     end
+    -- Arthas RP despawn legs set arthasGone (npc_arthas_stratholme.lua):
+    -- drop the stale bind so setProgress below schedules
+    -- EVENT_RESPAWN_ARTHAS 1s later at the new state's snapback.
+    if instanceData.arthasGone then
+        instanceData.arthasGone = nil
+        st.arthas = nil
+    end
+    consumeSetDataFlag(instanceData, mapObj, "utherFinished", UTHER_TALK, PURGE_PENDING)
+    consumeSetDataFlag(instanceData, mapObj, "startWaves", PURGE_STARTING, WAVES_IN_PROGRESS)
+    consumeSetDataFlag(instanceData, mapObj, "reachTownHall", WAVES_DONE, TOWN_HALL_PENDING)
+    consumeSetDataFlag(instanceData, mapObj, "townHallDone", TOWN_HALL, TOWN_HALL_COMPLETE)
+    consumeSetDataFlag(instanceData, mapObj, "gauntletReached", GAUNTLET_TRANSITION, GAUNTLET_PENDING)
+    consumeSetDataFlag(instanceData, mapObj, "gauntletDone", GAUNTLET_IN_PROGRESS, GAUNTLET_COMPLETE)
+    consumeSetDataFlag(instanceData, mapObj, "malganisDone", MALGANIS_IN_PROGRESS, COMPLETE)
+    consumeGossipFlag(instanceData, mapObj, st, "startPurge", PURGE_PENDING, PURGE_STARTING, -ACTION_START_RP_EVENT2)
+    consumeGossipFlag(instanceData, mapObj, st, "startTownHall", TOWN_HALL_PENDING, TOWN_HALL, -ACTION_START_RP_EVENT3)
+    consumeGossipFlag(instanceData, mapObj, st, "toGauntlet", TOWN_HALL_COMPLETE, GAUNTLET_TRANSITION, -ACTION_START_RP_EVENT4_1)
+    consumeGossipFlag(instanceData, mapObj, st, "startGauntlet", GAUNTLET_PENDING, GAUNTLET_IN_PROGRESS, -ACTION_START_RP_EVENT4_2)
+    consumeGossipFlag(instanceData, mapObj, st, "startMalganis", GAUNTLET_COMPLETE, MALGANIS_IN_PROGRESS, -ACTION_START_RP_EVENT5)
     local due = {}
     for _, ev in ipairs(st.events) do
         ev.remainingMs = ev.remainingMs - diff

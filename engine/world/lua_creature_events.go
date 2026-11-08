@@ -4640,6 +4640,44 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorPoint, id, true)
 		return nil, nil
 	}
+	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain
+	// (MotionMaster.cpp:172-194) = the SplineChainMovementGenerator
+	// (SplineChainMovementGenerator.cpp): walk the DB chain
+	// (entry, chainId) link by link (spline_chain.go), firing
+	// MovementInform(SPLINE_CHAIN_MOTION_TYPE 17, pointId) on event
+	// 28 at the final landing. The optional 4th arg overrides the
+	// lookup entry — the MoveInfiniteOnSpawn twin
+	// (npc_arthas.cpp): the infinite chains are keyed by
+	// NPC_INFINITE_ADVERSARY whatever spawned them. Returns false
+	// when no such chain exists (the C++ error-and-return), so callers
+	// can fall back; a running chain is superseded by any fresh
+	// non-chain Move* launch or evade and then never informs.
+	methods["MoveAlongSplineChain"] = func(ctx context.Context, args []any) ([]any, error) {
+		pointID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		chainID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		walk := false
+		if len(args) >= 3 {
+			b, ok := args[2].(bool)
+			if !ok {
+				return nil, fmt.Errorf("MoveAlongSplineChain requires a bool walk flag")
+			}
+			walk = b
+		}
+		var entryOverride uint32
+		if len(args) >= 4 {
+			entryOverride, err = luaUint32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return []any{s.moveAlongSplineChain(ctx, motion, pointID, uint16(chainID), walk, entryOverride)}, nil
+	}
 	// MoveRandom is UnitMethods::MoveRandom (UnitMethods.h:2178-2198) =
 	// MotionMaster::MoveRandom(radius): a RandomMovementGenerator whose
 	// reference is the creature's current position
