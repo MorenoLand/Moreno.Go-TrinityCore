@@ -2373,11 +2373,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// StopEscort clears the escort-player GUID when the escort ends
 	// (quest complete/fail, waypoint end): the escort AI object dies
 	// with the escort in C++, so in Go the state needs an explicit
-	// clear — respawn also clears it (kill.go).
+	// clear — respawn also clears it (kill.go). It also halts the
+	// waypoint generator: EscortAI::UpdateAI at the last node runs
+	// MoveIdle and drops STATE_ESCORT_ESCORTING (ScriptedEscortAI.cpp),
+	// while Go paths repeat by default (creaturemotion.go), so without
+	// the halt an ended escort would loop back to node 0 — the Thrall
+	// Old Hillsbrad waypoint-108 end rides this.
 	methods["StopEscort"] = func(_ context.Context, _ []any) ([]any, error) {
 		s.motionMu.Lock()
 		motion.EscortPlayerGUID = 0
 		motion.EscortPaused = false
+		motion.MoveType = 0
+		motion.Moving = false
 		s.motionMu.Unlock()
 		return nil, nil
 	}
