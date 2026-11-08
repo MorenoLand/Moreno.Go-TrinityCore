@@ -1490,8 +1490,8 @@ end
 -- nullptr target). The casts are dormant until Spell.dbc ships, and
 -- the searcher spells' script effects (random-target AttackStart +
 -- 100k threat; area target-count DATA_VILE write + Spirit Burst +
--- 3s despawn) ride the unbridged SpellScript — the neck_deep
--- achievement writer stays out (its 70502 area radius is a DBC fact).
+-- 3s despawn) ride the event-7 SpellScript bridge (tick 447); the
+-- DATA_VILE writer is ported below (:3330).
 -- The 56.5s Harvest-Souls re-arm (:1058-1069) is PORTED 2026-11-08
 -- (onHarvestSouls below); it reuses the "vile_activate" key via
 -- schedule(), replacing the pending activate.
@@ -3312,9 +3312,9 @@ end)
 -- in 3s and gains UNIT_FLAG_NOT_SELECTABLE. The Load() TYPEID_UNIT
 -- gate holds (the caster is the vile-spirit creature). The summoner
 -- rides FindNearestCreature (no GetSummoner bridge; the LK lookup
--- is the restore-soul precedent). The DATA_VILE write has no Go
--- reader yet (neck_deep achievement case unimplemented — the writer
--- lands now so the reader can follow). Handler is inline: the file
+-- is the restore-soul precedent). The DATA_VILE write is read by
+-- the neck_deep Go gate (achievement_criteria_scripts.go:
+-- achievement_neck_deep_in_vile, == 0). Handler is inline: the file
 -- sits at 199 main-chunk locals. DORMANT until Spell.dbc ships: the
 -- 70502 cast (vile-spirit activate :481) is DBC-gated.
 RegisterSpellEvent(SPELL_VILE_SPIRIT_DAMAGE_SEARCH, 7, function(event, spell, effectIndex, targets)

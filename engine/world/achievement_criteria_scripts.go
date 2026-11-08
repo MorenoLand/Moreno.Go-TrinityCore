@@ -27,6 +27,7 @@ const (
 	dataKingDredRaptorsKilled          = 2        // boss_king_dred.cpp:43 DATA_RAPTORS_KILLED
 	dataBrannSparklinNews              = 1        // halls_of_stone.cpp:121 DATA_BRANN_SPARKLIN_NEWS
 	dataLichKingPlagueStack            = 70337    // boss_the_lich_king.cpp:369 DATA_PLAGUE_STACK
+	dataLichKingVileSpiritExplosions   = 45814622 // boss_the_lich_king.cpp:370 DATA_VILE
 	dataXT002GravityBomb               = 3        // boss_xt002.cpp:114 DATA_GRAVITY_BOMB_CASUALTY
 	dataXT002HealthRecovered           = 2        // boss_xt002.cpp:109-114 DATA_HEALTH_RECOVERED
 	dataVolkhanShattered               = 2042     // boss_volkhan.cpp:77 DATA_SHATTER_RESISTANT
@@ -438,6 +439,23 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataLichKingPlagueStack) >= 30
+
+	case "achievement_neck_deep_in_vile": // boss_the_lich_king.cpp:2835-2846
+		// OnCheck: !target->GetAI()->GetData(DATA_VILE 45814622) —
+		// the vile-spirit explosion counter: C++ SetData adds
+		// (:677-679) and Reset zeroes it (:525). The Lua twin
+		// writes 1 per non-empty 70502 damage-select
+		// (boss_the_lich_king.lua:3330); the Go SetData store
+		// overwrites, so any explosion reads 1. No Reset clear:
+		// Go fires ev23 before ev4 in the kill paths
+		// (lua_creature_events.go:6954, kill.go:1091), so a
+		// Reset-time clear would zero the latch before this
+		// kill-credit read — the same wipe-persistence delta as
+		// the plague-stack peak freeze.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataLichKingVileSpiritExplosions) == 0
 
 	case "achievement_nerf_gravity_bombs": // boss_xt002.cpp:1009-1014
 		// OnCheck: !GetData(DATA_GRAVITY_BOMB_CASUALTY 3) — true
