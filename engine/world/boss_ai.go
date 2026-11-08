@@ -20788,11 +20788,12 @@ func init() {
 	// (75s/45s), EVENT_FLAME_CINDER 66684 (30s/30s, SPELL_FLAME_CINDER_B
 	// never cast) — all 2-arg non-triggered, timer-driven
 	// (CreateLuaEvent, GUID-keyed timers, wipe on events 2/4/23).
-	// Zero Talk lines in the C++. The three SpellScript/AuraScript
-	// loaders (spell_koralon_meteor_fists,
-	// spell_koralon_meteor_fists_damage, spell_flame_warder_meteor_fists)
-	// and the UNIT_STATE_CASTING gates are ported as the 500ms
-	// IsCasting defer — documented in the lua header. SetBossState legs
+	// Zero Talk lines in the C++. spell_koralon_meteor_fists AuraScript
+	// ported (RegisterAuraEvent 66725/OnProc — holder casts 66765 on
+	// the proc target, triggered, PreventDefaultAction); the
+	// meteor-fists-damage split SpellScript and the flame-warder
+	// AuraScript stay out (no SpellScript bridge; warder aura id not
+	// in the C++) — documented in the lua header. SetBossState legs
 	// (tick 262): engage DATA_KORALON 2 IN_PROGRESS (base-last), died
 	// DONE + instance-override KoralonDeath + DoCastSpellOnPlayers
 	// 68308, reset NOT_STARTED (!= DONE-gated, new ev23).
@@ -20808,10 +20809,12 @@ func init() {
 	// 72090 (random player — the SelectTarget position-1 tank-exclusion
 	// is unbridged, 7s/Repeat 38s). Timer-driven (CreateLuaEvent,
 	// GUID-keyed timers, wipe on events 2/4/23). Zero Talk lines in the
-	// C++. The npc_frozen_orb_stalker Reset leg, the npc_frozen_orb
-	// IsSummonedBy instance leg, the spell_toravon_random_aggro
-	// SpellScript and the UNIT_STATE_CASTING gates are ported (500ms
-	// IsCasting defer) — documented in the lua header.
+	// C++. The npc_frozen_orb_stalker Reset leg and the npc_frozen_orb
+	// IsSummonedBy legs stay out (orb/stalker entry ids live in
+	// Spell.dbc summon effects / creature_template, neither in-tree —
+	// verified by web search this tick, no id resolved, not guessed);
+	// the spell_toravon_random_aggro SpellScript stays out (no
+	// SpellScript bridge) — documented in the lua header.
 	// Cast-state gates (2026-11-04): all 3 timer arms carry the
 	// 500ms IsCasting defer (own UpdateAI pre-loop + in-loop gates);
 	// the engage-time frozen-mallet cast stays ungated per C++.

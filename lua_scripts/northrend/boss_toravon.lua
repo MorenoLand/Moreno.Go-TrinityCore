@@ -75,13 +75,16 @@
 -- registration):
 -- npc_frozen_orb_stalker::Reset (:104-108) — DoCastSelf
 -- (FROZEN_ORB_STALKER_AURA 72094): Reset-hook self-cast, no entry
--- wiring (the stalker entry id is not named in this file).
+-- wiring (the stalker entry id is not named in this file; a web
+-- search 2026-11-08 resolved no id — not guessed).
 -- npc_frozen_orb::IsSummonedBy (:111-133) — the three triggered
 -- DoCastSelf legs (SPELL_FROZEN_ORB_AURA 72067, SPELL_FROZEN_ORB_DMG
 -- 72081, SPELL_RANDOM_AGGRO 72084) plus the instance->
 -- GetCreature(DATA_TORAVON) leg (JustSummoned passthrough /
--- DoZoneInCombat / DespawnOrUnsummon): instance-script bridge
--- missing.
+-- DoZoneInCombat / DespawnOrUnsummon): the orb entry id lives in the
+-- Spell.dbc summon effect of 72091 / creature_template, neither
+-- in-tree — no RegisterCreatureEvent binding can be written without
+-- guessing it.
 -- spell_toravon_random_aggro (SpellScript :137-160 — 46523 Random
 -- Aggro: ResetAllThreat + 1M threat on a random non-tank player) —
 -- no SpellScript bridge.

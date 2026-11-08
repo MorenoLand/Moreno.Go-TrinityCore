@@ -52,6 +52,18 @@
 -- 66684) (:96, non-triggered) -> CastSpell(creature, 66684); re-arm
 -- 30s (:97). SPELL_FLAME_CINDER_B 66681 sits in the enum but is never
 -- cast anywhere in the file.
+-- spell_koralon_meteor_fists AuraScript (:133-159; OnEffectProc
+-- SPELL_AURA_DUMMY hook firing SPELL_METEOR_FISTS_DAMAGE 66765) —
+-- PORTED (meteorFistsProc, RegisterAuraEvent(66725, 6)): the
+-- beast-mark precedent (utgarde_pinnacle.lua) — fireAuraProc
+-- (lua_aura.go) passes (event, aura, target, actor, procTarget,
+-- damage); target is the aura holder (Koralon), procTarget is
+-- eventInfo.GetProcTarget(); PreventDefaultAction = return true; the
+-- aurEff trigger arg = triggered cast. No CheckProc gates in C++ —
+-- the engine proc gates (DBC proc flags on 66725) decide when it
+-- fires. Binding rides the DB spell_script_names mapping of the
+-- loader name to the 66725 aura spell. DORMANT until Spell.dbc ships
+-- the 66725 aura + proc records.
 -- DOCUMENTED DEVIATIONS:
 -- Cast-state gates (2026-11-04): the UpdateAI CASTING gates
 -- (pre-check :77 + per-event :102 return) are PORTED as the 500ms
@@ -60,14 +72,14 @@
 -- lua_creature_events.go:1950).
 -- DOCUMENTED-ONLY (in this header; entry 35013 is the sole
 -- registration):
--- spell_koralon_meteor_fists (AuraScript :133-159; OnEffectProc
--- SPELL_AURA_DUMMY hook firing SPELL_METEOR_FISTS_DAMAGE 66765) —
--- no SpellScript/AuraScript bridge.
 -- spell_koralon_meteor_fists_damage (SpellScript :161-196; split
--- damage over chain targets) — no SpellScript bridge.
+-- damage over chain targets) — no SpellScript bridge; the 66765 casts
+-- from meteorFistsProc therefore do not split.
 -- spell_flame_warder_meteor_fists (AuraScript :198-225; firing
 -- SPELL_FW_METEOR_FISTS_DAMAGE 66809) — no SpellScript/AuraScript
--- bridge.
+-- bridge, and the warder aura spell id is not named in the C++ file
+-- (no spell_script_names data in-tree to resolve the loader binding),
+-- so no RegisterAuraEvent binding can be written without guessing.
 -- DoMeleeAttackIfReady() (:103) — no bridge.
 
 local ENTRY_KORALON = 35013
@@ -77,6 +89,7 @@ local SPELL_BURNING_BREATH = 66665
 local SPELL_BURNING_FURY = 66721
 local SPELL_FLAME_CINDER_A = 66684
 local SPELL_METEOR_FISTS = 66725
+local SPELL_METEOR_FISTS_DAMAGE = 66765
 
 local SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK = 68308
 
@@ -243,3 +256,19 @@ RegisterCreatureEvent(ENTRY_KORALON, 1, koralonEnterCombat)
 RegisterCreatureEvent(ENTRY_KORALON, 2, koralonCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_KORALON, 4, koralonJustDied)
 RegisterCreatureEvent(ENTRY_KORALON, 23, koralonReset)
+
+-- C++ spell_koralon_meteor_fists_AuraScript::TriggerFists
+-- (boss_koralon.cpp:144-148): PreventDefaultAction() +
+-- GetTarget()->CastSpell(eventInfo.GetProcTarget(),
+-- SPELL_METEOR_FISTS_DAMAGE 66765, aurEff). Hook args (event, aura,
+-- target, actor, procTarget, damage) per fireAuraProc (lua_aura.go);
+-- target is the aura holder, procTarget the proc target.
+local function meteorFistsProc(event, aura, target, actor, procTarget, damage)
+    if target == nil or procTarget == nil then
+        return false
+    end
+    target:CastSpell(procTarget, SPELL_METEOR_FISTS_DAMAGE, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_METEOR_FISTS, 6, meteorFistsProc)
