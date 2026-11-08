@@ -75,11 +75,12 @@
 -- and ApplySpellImmune arms stay out — the immunity bridge exists
 -- (creature:ApplySpellImmune) but the recv is cross-creature via the
 -- instance lookup, with no GUID-to-creature bridge. The
--- spell_teron_gorefiend_shadow_of_death AuraScript (damage absorb
--- nullified, on-expire summons the spirit + 4 skeletrons + 40282 +
--- 40268) and spell_teron_gorefiend_spiritual_vengeance AuraScript
--- (on-remove KillSelf) have no AuraScript bridge (standing
--- AuraScript gap).
+-- spell_teron_gorefiend_shadow_of_death AuraScript: the EFFECT_0
+-- absorb arm (PreventDefaultAction) has no bridge and stays out;
+-- the on-expire remove arm (summons the spirit + 4 skeletrons +
+-- 40282 + 40268) is PORTED below via RegisterAuraEvent ev3, as is
+-- the spell_teron_gorefiend_spiritual_vengeance AuraScript
+-- (on-remove KillSelf).
 -- Cast gating PORTED (mal_ganis idiom): the C++ UpdateAI queue gate
 -- (boss_teron_gorefiend.cpp:174) and post-event check (:247) are modeled
 -- on every timer tick via the live creature:IsCasting() bridge
@@ -112,6 +113,12 @@ local ENTRY_DOOM_BLOSSOM = 23123
 local SPELL_SPIRITUAL_VENGEANCE = 40268
 local SPELL_POSSESS_SPIRIT_IMMUNE = 40282
 local SPELL_SHADOW_OF_DEATH_REMOVE = 41999
+local SPELL_SUMMON_SPIRIT = 40266 -- boss_teron_gorefiend.cpp:58
+local SPELL_SUMMON_SKELETRON_1 = 40270 -- boss_teron_gorefiend.cpp:61
+local SPELL_SUMMON_SKELETRON_2 = 41948 -- boss_teron_gorefiend.cpp:62
+local SPELL_SUMMON_SKELETRON_3 = 41949 -- boss_teron_gorefiend.cpp:63
+local SPELL_SUMMON_SKELETRON_4 = 41950 -- boss_teron_gorefiend.cpp:64
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
 
 local timers = {}
 
@@ -390,3 +397,35 @@ local function teronJustSummoned(event, creature, summon)
 end
 
 RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 19, teronJustSummoned)
+
+-- C++ spell_teron_gorefiend_shadow_of_death::OnRemove
+-- (boss_teron_gorefiend.cpp:360-375): AfterEffectRemove, EFFECT_1
+-- SPELL_AURA_OVERRIDE_CLASS_SCRIPTS, AURA_EFFECT_HANDLE_REAL,
+-- expire-only. The target self-casts 40266 + the four skeletron
+-- summons (40270/41948/41949/41950) + 40282 + 40268, all triggered,
+-- C++ order. The EFFECT_0 absorb arm (PreventDefaultAction) has no
+-- bridge and stays out.
+local function shadowOfDeathRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_EXPIRE then
+        target:CastSpell(target, SPELL_SUMMON_SPIRIT, true)
+        target:CastSpell(target, SPELL_SUMMON_SKELETRON_1, true)
+        target:CastSpell(target, SPELL_SUMMON_SKELETRON_2, true)
+        target:CastSpell(target, SPELL_SUMMON_SKELETRON_3, true)
+        target:CastSpell(target, SPELL_SUMMON_SKELETRON_4, true)
+        target:CastSpell(target, SPELL_POSSESS_SPIRIT_IMMUNE, true)
+        target:CastSpell(target, SPELL_SPIRITUAL_VENGEANCE, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SHADOW_OF_DEATH, 3, shadowOfDeathRemove)
+
+-- C++ spell_teron_gorefiend_spiritual_vengeance::OnRemove
+-- (boss_teron_gorefiend.cpp:386-391): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_MOD_POSSESS, AURA_EFFECT_HANDLE_REAL, any remove mode
+-- -> KillSelf (creature:Kill() twin, bridged for player and
+-- creature targets, lua_player.go:3426).
+local function spiritualVengeanceRemove(event, aura, target)
+    target:Kill()
+end
+
+RegisterAuraEvent(SPELL_SPIRITUAL_VENGEANCE, 3, spiritualVengeanceRemove)

@@ -143,12 +143,13 @@
 -- (magtheridonSpellHit below, registered :364; the muru-portal
 -- precedent). Corrected 2026-10-17.
 -- No SpellScript/AuraScript bridge — spell_magtheridon_
--- blaze_target (30541-hit -> 30542 blaze on the hit unit),
--- spell_magtheridon_shadow_grasp (30410-remove -> interrupt +
--- triggered 44032 mind exhaustion) and spell_magtheridon_
--- shadow_grasp_visual (30166-apply x5 -> triggered 30168
--- shadow cage; -remove -> remove 30168) unmodeled (standing
--- gap); the stale "no live UNIT_STATE_CASTING read bridge
+-- blaze_target (30541-hit -> 30542 blaze on the hit unit)
+-- unmodeled (standing gap); spell_magtheridon_shadow_grasp
+-- (30410-remove) and spell_magtheridon_shadow_grasp_visual
+-- (30166-remove) PORTED below (tick 424, RegisterAuraEvent
+-- ev3) — the 30166 OnApply x5-count arm stays out: no
+-- GetAuraCount bridge (boss_magtheridon.cpp:587 count gate,
+-- documented only); the stale "no live UNIT_STATE_CASTING read bridge
 -- (IsCasting constant-false)" claim is retracted — IsCasting is
 -- live (lua_creature_events.go:1950) and both UpdateAI gates
 -- are ported (above). go_
@@ -159,7 +160,8 @@
 -- OnGossipHello arm ports (boss_magtheridon.cpp:469-491) — the
 -- player's triggered self-cast of 30410 lands as player:AddAura
 -- (player:CastSpell bridged 2026-10-24, AddAura stands — pure-aura
--- effect; the 30410-remove SpellScript legs stay unmodeled, standing gap). The GO AI itself
+-- effect; the 30410-remove AuraScript legs are PORTED below,
+-- tick 424). The GO AI itself
 -- has no registered handler, but the arm is a gossip arm, not an
 -- AI-update arm, so no stub is registered.
 
@@ -916,3 +918,37 @@ local function onManticronCubeGossip(_, player, go)
 end
 
 RegisterGameObjectGossipEvent(GO_MANTICRON_CUBE, 1, onManticronCubeGossip)
+
+-- ================= Shadow Grasp auras (30410 / 30166) =================
+
+-- C++ spell_magtheridon_shadow_grasp::OnRemove
+-- (boss_magtheridon.cpp:546-551): EFFECT_0 SPELL_AURA_DUMMY.
+-- On removal the target interrupts non-melee spells and the
+-- caster self-casts Mind Exhaustion 44032, triggered. The
+-- interrupt leg is omitted: InterruptNonMeleeSpells is bridged
+-- on the creature surface only (lua_creature_events.go:2201)
+-- and the grasp target is a player (no player-surface bridge).
+local function shadowGraspRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(caster, SPELL_MIND_EXHAUSTION, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SHADOW_GRASP, 3, shadowGraspRemove)
+
+-- C++ spell_magtheridon_shadow_grasp_visual::OnRemove
+-- (boss_magtheridon.cpp:591-594): EFFECT_0 SPELL_AURA_DUMMY.
+-- On removal the target drops Shadow Cage 30168. No
+-- RemoveAurasDueToSpell bridge — target:RemoveAura is the
+-- single-aura twin (30168 never stacks: it is applied once,
+-- when the visual count reaches 5, boss_magtheridon.cpp:587).
+-- The OnApply arm (boss_magtheridon.cpp:585-589) stays out: the
+-- GetAuraCount(30166) == 5 gate has no bridge.
+local function shadowGraspVisualRemove(event, aura, target)
+    if target ~= nil then
+        target:RemoveAura(SPELL_SHADOW_CAGE)
+    end
+end
+
+RegisterAuraEvent(SPELL_SHADOW_GRASP_VISUAL, 3, shadowGraspVisualRemove)

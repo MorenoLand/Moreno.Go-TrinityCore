@@ -10,6 +10,13 @@
 --   "no AuraScript bridge — documented-only" note in
 --   npc_storm_cloud.lua, which predates the tick-196
 --   RegisterAuraEvent hook.
+-- PORTED (tick 424, RegisterAuraEvent OnPeriodic = 1):
+--   spell_random_ingredient_aura (51015 / 51154 / 51157,
+--   zone_zuldrak.cpp:657-671): EFFECT_0 SPELL_AURA_PERIODIC_
+--   DUMMY. Each tick the target self-casts the matching Random
+--   Ingredient spell (51134 / 51105 / 51107), non-triggered.
+--   No PreventDefaultAction in C++ (PERIODIC_DUMMY has no
+--   default tick action to suppress).
 -- STILL BLOCKED:
 --   spell_scourge_disguise_instability (51971, :984-1012):
 --   CalcPeriodic picks a random 30-240s amplitude (no calc-periodic
@@ -28,6 +35,12 @@ local SPELL_SCOURGE_DISGUISE = 51966 -- zone_zuldrak.cpp:957
 local SPELL_SCOURGE_DISGUISE_INSTABILITY = 51971 -- zone_zuldrak.cpp:958
 local SPELL_SCOURGE_DISGUISE_EXPIRING = 52010 -- zone_zuldrak.cpp:959
 local TEXT_DISGUISE_WARNING = 28891 -- zone_zuldrak.cpp:961
+local SPELL_RANDOM_INGREDIENT_EASY_AURA = 51015 -- zone_zuldrak.cpp:368
+local SPELL_RANDOM_INGREDIENT_MEDIUM_AURA = 51154 -- zone_zuldrak.cpp:369
+local SPELL_RANDOM_INGREDIENT_HARD_AURA = 51157 -- zone_zuldrak.cpp:370
+local SPELL_RANDOM_INGREDIENT_EASY = 51134 -- zone_zuldrak.cpp:371
+local SPELL_RANDOM_INGREDIENT_MEDIUM = 51105 -- zone_zuldrak.cpp:372
+local SPELL_RANDOM_INGREDIENT_HARD = 51107 -- zone_zuldrak.cpp:373
 
 -- C++ spell_scourge_disguise::ApplyEffect (zone_zuldrak.cpp:969-972).
 local function scourgeDisguiseApply(event, aura, target)
@@ -58,3 +71,27 @@ local function scourgeDisguiseExpiringApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SCOURGE_DISGUISE_EXPIRING, 2, scourgeDisguiseExpiringApply)
+
+-- C++ spell_random_ingredient_aura::PeriodicTick
+-- (zone_zuldrak.cpp:657-671): EFFECT_0 SPELL_AURA_PERIODIC_DUMMY.
+-- Each tick the target self-casts the matching Random Ingredient
+-- spell, non-triggered, keyed on the aura's own spell id
+-- (C++ switch on GetSpellInfo()->Id; aura:GetAuraId() is the twin).
+local function randomIngredientTick(event, aura, target)
+    local cast = nil
+    local spellId = aura:GetAuraId()
+    if spellId == SPELL_RANDOM_INGREDIENT_EASY_AURA then
+        cast = SPELL_RANDOM_INGREDIENT_EASY
+    elseif spellId == SPELL_RANDOM_INGREDIENT_MEDIUM_AURA then
+        cast = SPELL_RANDOM_INGREDIENT_MEDIUM
+    elseif spellId == SPELL_RANDOM_INGREDIENT_HARD_AURA then
+        cast = SPELL_RANDOM_INGREDIENT_HARD
+    end
+    if cast ~= nil and target ~= nil then
+        target:CastSpell(target, cast)
+    end
+end
+
+RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_EASY_AURA, 1, randomIngredientTick)
+RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_MEDIUM_AURA, 1, randomIngredientTick)
+RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_HARD_AURA, 1, randomIngredientTick)

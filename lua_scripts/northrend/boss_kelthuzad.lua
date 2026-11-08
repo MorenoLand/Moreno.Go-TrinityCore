@@ -179,11 +179,11 @@
 -- handlers — no AuraScript binding bridge (razelikh precedent) — joins
 -- the SpellScript/AuraScript queue.
 -- spell_kelthuzad_detonate_mana (AuraScript 27819): periodic mana-drain
--- -> SPELL_MANA_DETONATION_DAMAGE 27820 — no AuraScript binding bridge
--- — joins the SpellScript/AuraScript queue.
+-- -> SPELL_MANA_DETONATION_DAMAGE 27820 — PORTED below via
+-- RegisterAuraEvent ev1 (detonateManaTick).
 -- spell_kelthuzad_frost_blast (AuraScript 27808): PeriodicTick ->
--- SPELL_FROST_BLAST_DMG 29879 with 26%-max-health scaling — no
--- AuraScript binding bridge — joins the SpellScript/AuraScript queue.
+-- SPELL_FROST_BLAST_DMG 29879 with 26%-max-health scaling — PORTED
+-- below via RegisterAuraEvent ev1 (frostBlastAuraTick).
 -- at_kelthuzad_center (AreaTriggerScript): NOT_STARTED-gated
 -- DoAction(ACTION_BEGIN_ENCOUNTER) via DATA_KELTHUZAD — no
 -- area-trigger bridge (anubrekhan precedent) — documented-only; the
@@ -215,7 +215,9 @@ local SPELL_FROSTBOLT_SINGLE = 28478 -- boss_kelthuzad.cpp:92
 local SPELL_FROSTBOLT_VOLLEY = 28479 -- boss_kelthuzad.cpp:93
 local SPELL_SHADOW_FISSURE = 27810 -- boss_kelthuzad.cpp:94
 local SPELL_DETONATE_MANA = 27819 -- boss_kelthuzad.cpp:95
+local SPELL_MANA_DETONATION_DAMAGE = 27820 -- boss_kelthuzad.cpp:96
 local SPELL_FROST_BLAST = 27808 -- boss_kelthuzad.cpp:97
+local SPELL_FROST_BLAST_DMG = 29879 -- boss_kelthuzad.cpp:98
 local SPELL_CHAINS = 28410 -- boss_kelthuzad.cpp:99
 local SPELL_CHAINS_DUMMY = 28408 -- boss_kelthuzad.cpp:100
 local SAY_CHAINS = 10 -- boss_kelthuzad.cpp:37
@@ -1237,3 +1239,51 @@ RegisterCreatureEvent(ENTRY_GUARDIAN, 2, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 4, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 23, kelthuzadGuardianReset)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 38, kelthuzadGuardianDoAction)
+
+-- C++ spell_kelthuzad_detonate_mana_AuraScript::HandleScript
+-- (boss_kelthuzad.cpp:930-942): OnEffectPeriodic, EFFECT_0,
+-- PreventDefaultAction. Drains maxMana/10 (integer division; the
+-- arm is skipped when that is 0); BP0 is the actually-drained mana
+-- x10 — C++ Unit::ModifyPower returns the signed applied gain
+-- (Unit.cpp:8577-8605), so -gain*10 is drain*10. The Go creature
+-- bridge returns the NEW power instead (lua_creature_events.go:
+-- 2743-2771, whose comment claims C++ parity — it does not) and
+-- the player bridge returns nil (lua_player.go:3287), so the drain
+-- is measured with GetPower(0) before/after; the player and
+-- creature ModifyPower arg orders also differ ((delta, type) vs
+-- (type, delta)), hence the GetTypeId() == 4 branch (vashj
+-- precedent). Returns true, the PreventDefaultAction twin.
+local function detonateManaTick(event, aura, target)
+    local drain = math.floor(target:GetMaxPower(0) / 10)
+    if drain > 0 then
+        local before = target:GetPower(0)
+        if target:GetTypeId() == 4 then
+            target:ModifyPower(-drain, 0)
+        else
+            target:ModifyPower(0, -drain)
+        end
+        local drained = before - target:GetPower(0)
+        target:CastCustomSpell(target, SPELL_MANA_DETONATION_DAMAGE, true, drained * 10)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_DETONATE_MANA, 1, detonateManaTick)
+
+-- C++ spell_kelthuzad_frost_blast::PeriodicTick
+-- (boss_kelthuzad.cpp:965-975): OnEffectPeriodic, EFFECT_1,
+-- PreventDefaultAction. The caster casts SPELL_FROST_BLAST_DMG
+-- 29879 on the aura target with BP0 = 26% of the target's max
+-- health (CountPctFromMaxHealth, object.go fallback). Returns true,
+-- the PreventDefaultAction twin. Triggered=true follows the vezax
+-- mark-of-the-faceless precedent (C++ passes no triggered flag,
+-- but Lua periodic damage casts ride triggered).
+local function frostBlastAuraTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        caster:CastCustomSpell(target, SPELL_FROST_BLAST_DMG, true, target:CountPctFromMaxHealth(26))
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_FROST_BLAST, 1, frostBlastAuraTick)

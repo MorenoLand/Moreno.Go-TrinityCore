@@ -135,9 +135,10 @@
 -- trigger, spell_kalecgos_spectral_realm_aura (standing
 -- SpellScript/AuraScript gaps). spell_kalecgos_curse_of_boundless_
 -- agony's OnPeriodic leg is PORTED below via RegisterAuraEvent
--- (tick 194); its OnApply (instance boss-state gate), OnEffect-
--- UpdatePeriodic (amount doubling) and OnRemove (ally cast) legs
--- stay out — no instance / update-periodic / remove hooks.
+-- (tick 194); its OnRemove leg (ally cast) is PORTED below too
+-- (tick 424, RegisterAuraEvent OnRemove, CANCEL gate); its OnApply
+-- (instance boss-state gate) and OnEffectUpdatePeriodic (amount
+-- doubling) legs stay out — no instance / update-periodic hooks.
 -- CAST-STATE GATE (ported 2026-11-04): the dragon's own UpdateAI
 -- pre-loop gate (boss_kalecgos.cpp:259) + post-event check (:340),
 -- the human's own UpdateAI gates (:402/:421), and sathrovarr's
@@ -851,3 +852,22 @@ local function agonyCurseTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_AGONY_CURSE, 1, agonyCurseTick)
+
+-- C++ spell_kalecgos_curse_of_boundless_agony::OnRemove
+-- (boss_kalecgos.cpp:777-785): EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE.
+-- On removal, unless the mode is CANCEL, the target casts
+-- SPELL_AGONY_CURSE_ALLY 45034 on itself, triggered. Deviation:
+-- the C++ CastSpellExtraArgs SPELLVALUE_MAX_TARGETS = 1 mod is
+-- dropped — CastSpell has no spell-mod bridge.
+local AURA_REMOVE_BY_CANCEL = 2 -- SpellAuraDefines.h:66
+
+local function agonyCurseRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_CANCEL then
+        return
+    end
+    if target ~= nil then
+        target:CastSpell(target, SPELL_AGONY_CURSE_ALLY, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_AGONY_CURSE, 3, agonyCurseRemove)

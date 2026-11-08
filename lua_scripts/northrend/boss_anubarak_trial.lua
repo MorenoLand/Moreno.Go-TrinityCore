@@ -153,9 +153,9 @@
 -- phase gate reduces to the latch; the UpdateAI post-damage health
 -- semantics are kept via the postDamage > 0 guard (nefarian form).
 -- The spell_anubarak_leeching_swarm AuraScript periodic life-leech
--- (66240 / 66125) has no AuraScript bridge — the cast ports, the
--- scripted periodic effect is a documented deviation (gurtogg bloodboil
--- precedent). The old "no health-pct bridge (doomwalker precedent)"
+-- (66240 / 66125) — PORTED tick 424 below via RegisterAuraEvent
+-- (66118, 1); the old "no AuraScript bridge" claim is stale.
+-- The old "no health-pct bridge (doomwalker precedent)"
 -- and "PHASE_MELEE-gated (no phase bridge)" claims were stale —
 -- GetHealthPct is bridged (engine/scripting/object.go:107) and the
 -- default-phase gate is trivially satisfied.
@@ -237,7 +237,8 @@
 -- precedent) — documented-only.
 -- spell_anubarak_leeching_swarm (AuraScript 66118) —
 -- HandleEffectPeriodic life-leeched damage/heal fan-out (66240 /
--- 66125) — no AuraScript binding bridge — documented-only.
+-- 66125) — PORTED tick 424 below via RegisterAuraEvent (66118, 1);
+-- the old "no AuraScript binding bridge" claim is stale.
 -- C++ "Known Issues" note carried: none in this file (the boss
 -- works around the scarab-summon spell with a comment block
 -- noting missing sniff info).
@@ -483,9 +484,9 @@ end
 -- (C++ integer form: postDamage < floor(maxHealth*30/100) — strict <,
 -- Unit.h:872 + HealthBelowPctDamaged int64 form; the cross-multiplied
 -- real-number form fired 1 HP early when maxHealth*30 mod 100 != 0).
--- spell_anubarak_leeching_swarm AuraScript periodic life-leech has no
--- AuraScript bridge — the cast ports, the scripted periodic effect is
--- a documented deviation (gurtogg bloodboil precedent).
+-- spell_anubarak_leeching_swarm AuraScript periodic life-leech —
+-- PORTED tick 424 below via RegisterAuraEvent (66118, 1); the old
+-- "no AuraScript bridge" claim is stale.
 local function anubarakDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUID()
     local st = anubarakState[guid]
@@ -641,6 +642,36 @@ end
 RegisterAuraEvent(65920, 1, pursuingSpikesTick)
 RegisterAuraEvent(65922, 1, pursuingSpikesTick)
 RegisterAuraEvent(65923, 1, pursuingSpikesTick)
+
+-- C++ spell_anubarak_leeching_swarm::HandleEffectPeriodic
+-- (boss_anubarak_trial.cpp:929-945): EFFECT_0 PERIODIC_DUMMY —
+-- lifeLeeched = floor(target curHealth * effect amount / 100)
+-- (CountPctFromCurHealth, Util.h:66 truncating float form), min
+-- 250; the caster casts SPELL_LEECHING_SWARM_DMG 66240 on the
+-- aura target and SPELL_LEECHING_SWARM_HEAL 66125 on itself, both
+-- triggered (TRIGGERED_FULL_MASK) with bp0 = lifeLeeched. No
+-- PreventDefaultAction (PERIODIC_DUMMY has no default tick), so
+-- the handler returns nothing. PORTED tick 424 via
+-- RegisterAuraEvent (66118, 1); aura:GetAmount/GetCaster are live
+-- (lua_aura.go), CastCustomSpell bp0 is the SPELLVALUE_BASE_POINT0
+-- twin (vezax mark-of-the-faceless precedent).
+local SPELL_LEECHING_SWARM_DMG = 66240 -- boss_anubarak_trial.cpp:64
+local SPELL_LEECHING_SWARM_HEAL = 66125 -- boss_anubarak_trial.cpp:63
+
+local function leechingSwarmTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    local lifeLeeched = math.floor(target:GetHealth() * aura:GetAmount() / 100)
+    if lifeLeeched < 250 then
+        lifeLeeched = 250
+    end
+    caster:CastCustomSpell(target, SPELL_LEECHING_SWARM_DMG, true, lifeLeeched)
+    caster:CastCustomSpell(caster, SPELL_LEECHING_SWARM_HEAL, true, lifeLeeched)
+end
+
+RegisterAuraEvent(SPELL_LEECHING_SWARM, 1, leechingSwarmTick)
 
 -- C++ npc_frost_sphereAI::DamageTaken (boss_anubarak_trial.cpp:635-665):
 -- lethal damage is zeroed in both branches (ground: MoveIdle +

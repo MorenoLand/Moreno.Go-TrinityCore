@@ -4,8 +4,9 @@
 -- npc_illidan_db_target, npc_maiev, npc_blade_of_azzinoth,
 -- npc_illidan_generic_fire; npc_parasitic_shadowfiend,
 -- npc_illidari_elite, npc_shadow_demon, npc_cage_trap_trigger and
--- the twenty-two spell/aura scripts documented below, not
--- registered); black_temple.h:39 (DATA_ILLIDAN_STORMRAGE = 8, ninth
+-- the twenty-one spell/aura scripts documented below, not
+-- registered — plus the parasitic-shadowfiend 41917 remove arm,
+-- ported below via RegisterAuraEvent ev3); black_temple.h:39 (DATA_ILLIDAN_STORMRAGE = 8, ninth
 -- and final boss), :58 (DATA_ILLIDAN_MUSIC_CONTROLLER = 23), :79
 -- (NPC_ILLIDAN_STORMRAGE = 22917), :87 (NPC_AKAMA = 23089),
 -- :100-:101 (NPC_SPIRIT_OF_UDALO = 23410, NPC_SPIRIT_OF_OLUM =
@@ -262,8 +263,8 @@
 -- (entries not verifiable from the C++ sources — the ScriptNames
 -- bind DB-side, garr firesworn convention): npc_shadow_demon,
 -- npc_cage_trap_trigger. Not registered (standing script gaps):
--- the twenty-two SpellScripts/AuraScripts (akama teleport, akama
--- door channel, draw soul, parasitic shadowfiend x3, throw
+-- the twenty-one SpellScripts/AuraScripts (akama teleport, akama
+-- door channel, draw soul, parasitic shadowfiend x2, throw
 -- warglaive, tear of azzinoth channel, flame blast, return
 -- glaives, agonizing flames, demon transform x2, flame burst, find
 -- target, eye blast, cage trap, caged, maiev down, cage teleport,
@@ -370,6 +371,9 @@ local SPELL_FLAME_CRASH = 40832
 local SPELL_DRAW_SOUL = 40904
 local SPELL_SHEAR = 41032
 local SPELL_PARASITIC_SHADOWFIEND = 41917
+local SPELL_SUMMON_PARASITIC_SHADOWFIENDS = 41915 -- boss_illidan.cpp:136
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
 local SPELL_BERSERK = 45078
 local SPELL_AGONIZING_FLAMES_SELECTOR = 40834
 local SPELL_DEMON_TRANSFORM_1 = 40511
@@ -1989,3 +1993,18 @@ end
 
 RegisterAuraEvent(SPELL_MAIEV_DOWN, 2, maievDownApply)
 RegisterAuraEvent(SPELL_MAIEV_DOWN, 3, maievDownRemove)
+
+-- C++ spell_illidan_parasitic_shadowfiend::HandleEffectRemove
+-- (boss_illidan.cpp:1926-1934): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL. Expire or
+-- death remove only -> the target self-casts SPELL_SUMMON_PARASITIC_
+-- SHADOWFIENDS (41915) triggered. The proc (41913) and
+-- remove-parasitic (41923 apply) AuraScripts stay out.
+local function parasiticShadowfiendRemove(event, aura, target)
+    local mode = aura:GetRemoveMode()
+    if mode == AURA_REMOVE_BY_EXPIRE or mode == AURA_REMOVE_BY_DEATH then
+        target:CastSpell(target, SPELL_SUMMON_PARASITIC_SHADOWFIENDS, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_PARASITIC_SHADOWFIEND, 3, parasiticShadowfiendRemove)

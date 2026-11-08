@@ -7,9 +7,8 @@
 -- reads GetInstanceCreature(4), nil when unlatched (C++-exact
 -- per the tick-292 spec correction); spawned by the ported
 -- phase-3 machine; the spell_astromancer_wrath_of_the_
--- astromancer AuraScript has no AuraScript bridge — AuraScript
--- check handlers are not modeled, standing blocker,
--- documented only).
+-- astromancer AuraScript is PORTED below (tick 424,
+-- RegisterAuraEvent ev3, expire-only).
 -- Fourth boss in The Eye set per outland_script_loader.cpp
 -- order (boss_alar, boss_kaelthas, boss_void_reaver, boss_
 -- high_astromancer_solarian).
@@ -161,9 +160,9 @@
 -- precedent); the wrath arms now pick from the threat list
 -- (GetAITargets), including the non-player 1s re-arm;
 -- npc_solarium_priest
--- (18806) PORTED in npc_solarium_priest.lua (tick 292); no
--- AuraScript bridge — spell_astromancer_wrath_of_the_
--- astromancer documented only (standing blocker).
+-- (18806) PORTED in npc_solarium_priest.lua (tick 292); the
+-- spell_astromancer_wrath_of_the_astromancer AuraScript is
+-- PORTED below (tick 424, RegisterAuraEvent ev3, expire-only).
 
 local SPELL_ARCANE_MISSILES = 33031
 local SPELL_WRATH_OF_THE_ASTROMANCER = 42783
@@ -677,3 +676,29 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
     creature:SetDisplayId(MODEL_HUMAN)
     fullReset(creature:GetGUID())
 end)
+
+-- ================= Wrath of the Astromancer aura (42783) =================
+
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+
+-- C++ spell_astromancer_wrath_of_the_astromancer::AfterRemove
+-- (boss_astromancer.cpp:522-530): EFFECT_0 SPELL_AURA_PERIODIC_
+-- TRIGGER_SPELL. On expiry only, the target self-casts
+-- Effects[EFFECT_1].CalcValue(), non-triggered. The DBC-only
+-- spell id is guarded: with no Spell.dbc loaded the read is 0
+-- and the handler no-ops instead of casting spell 0
+-- (GetSpellEffectCalcValue convention, spell_generic.lua).
+local function wrathOfTheAstromancerRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    if target == nil then
+        return
+    end
+    local finalSpell = aura:GetSpellEffectCalcValue(SPELL_WRATH_OF_THE_ASTROMANCER, 1)
+    if finalSpell ~= 0 then
+        target:CastSpell(target, finalSpell)
+    end
+end
+
+RegisterAuraEvent(SPELL_WRATH_OF_THE_ASTROMANCER, 3, wrathOfTheAstromancerRemove)

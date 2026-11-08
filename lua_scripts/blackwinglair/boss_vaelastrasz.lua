@@ -80,8 +80,8 @@
 -- SelectTarget filter drops (candidates are players only, never
 -- pets); the
 -- spell_vael_burning_adrenaline AuraScript (OnAuraRemove of EFFECT_2
--- -> self-cast SPELL_BURNINGADRENALINE_EXPLOSION 23478) is not modeled
--- (standing AuraScript gap).
+-- -> self-cast SPELL_BURNINGADRENALINE_EXPLOSION 23478) is PORTED
+-- at the tail (tick 424, RegisterAuraEvent OnRemove, unconditional).
 
 local ENTRY_VAELASTRAZ = 13020
 
@@ -96,6 +96,7 @@ local SPELL_FLAMEBREATH = 23461
 local SPELL_FIRENOVA = 23462
 local SPELL_TAILSWIPE = 15847 -- inert upstream: only the re-arm is C++-exact
 local SPELL_BURNINGADRENALINE = 18173
+local SPELL_BURNINGADRENALINE_EXPLOSION = 23478 -- boss_vaelastrasz.cpp:48
 local SPELL_CLEAVE = 19983
 
 local POWER_MANA = 0
@@ -427,3 +428,16 @@ RegisterCreatureEvent(ENTRY_VAELASTRAZ, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_VAELASTRAZ, 23, onReset)
 RegisterCreatureGossipEvent(ENTRY_VAELASTRAZ, 1, onGossipHello)
 RegisterCreatureGossipEvent(ENTRY_VAELASTRAZ, 2, onGossipSelect)
+
+-- C++ spell_vael_burning_adrenaline::OnAuraRemoveHandler
+-- (boss_vaelastrasz.cpp:257-263): EFFECT_2 SPELL_AURA_PERIODIC_
+-- TRIGGER_SPELL. On removal the target casts
+-- SPELL_BURNINGADRENALINE_EXPLOSION 23478 on itself, triggered,
+-- unconditionally (fires whether the bearer lives or dies).
+local function burningAdrenalineRemove(event, aura, target)
+    if target ~= nil then
+        target:CastSpell(target, SPELL_BURNINGADRENALINE_EXPLOSION, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_BURNINGADRENALINE, 3, burningAdrenalineRemove)

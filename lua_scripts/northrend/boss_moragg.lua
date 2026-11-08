@@ -61,9 +61,9 @@
 -- DOCUMENTED-ONLY (in this header; entry 29316):
 -- spell_moragg_ray (AuraScript: OnEffectPeriodic on the ray auras —
 -- picks SelectTarget(Random, 0, 45.0f, true) and CastSpell(target,
--- triggerSpell, aurEff)) — no AuraScript bridge. Fidelity gap: the
--- ported RAY_OF_PAIN / RAY_OF_SUFFERING auras apply but their
--- scripted periodic triggers will not fire.
+-- triggerSpell, aurEff)) — PORTED tick 424 below via
+-- RegisterAuraEvent (54438 + 54442, 1); the "no AuraScript bridge"
+-- block is stale (tick 188).
 -- spell_moragg_optic_link (AuraScript OnPeriodic: tick >= 4 ->
 -- OPTIC_LINK_LEVEL_2 54394, tick >= 8 -> OPTIC_LINK_LEVEL_3
 -- 54395, always OPTIC_LINK_LEVEL_1 54393) — PORTED below via
@@ -251,3 +251,31 @@ local function opticLinkTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_OPTIC_LINK, 1, opticLinkTick)
+
+-- C++ spell_moragg_ray::OnPeriodic (boss_moragg.cpp:110-121):
+-- EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL — PreventDefaultAction;
+-- the aura target (Moragg, who self-cast the ray) picks a random
+-- alive threat-list player within 45 yd (SelectTarget Random, 0,
+-- 45.0f, true) and casts the DBC trigger of EFFECT_0
+-- (aura:GetTriggerSpell(0)) triggered on them. Returns true, the
+-- PreventDefaultAction twin, so the Go default trigger cast does
+-- not also fire. One handler for both ray auras (54438 Ray of Pain,
+-- 54442 Ray of Suffering); the nonzero gate is the GetTriggerSpell
+-- convention — with no Spell.dbc in tree the read is 0 and the
+-- handler no-ops instead of firing a bogus 0-id cast. PORTED tick
+-- 424 via RegisterAuraEvent (54438 + 54442, 1); randomPlayerInRange
+-- is the shared threat-list helper above (shahraz generic-periodic
+-- precedent for the trigger + return-true form).
+local function moraggRayTick(event, aura, target)
+    local picked = randomPlayerInRange(target, 45)
+    if picked then
+        local trigger = aura:GetTriggerSpell(0)
+        if trigger ~= 0 then
+            target:CastSpell(picked, trigger, true)
+        end
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_RAY_OF_PAIN, 1, moraggRayTick)
+RegisterAuraEvent(SPELL_RAY_OF_SUFFERING, 1, moraggRayTick)

@@ -194,8 +194,8 @@
 -- gothik precedent).
 -- spell_shield_of_runes (62274 — AuraScript
 -- AfterEffectRemove: on non-expire removal the caster casts
--- SPELL_SHIELD_OF_RUNES_BUFF 62277 — no AuraScript bridge;
--- joins the no-AuraScript-bridge queue);
+-- SPELL_SHIELD_OF_RUNES_BUFF 62277 — PORTED at the tail (tick 424,
+-- RegisterAuraEvent OnRemove, mode gate via aura:GetRemoveMode));
 -- spell_assembly_meltdown (SPELL_EFFECT_INSTAKILL handler:
 -- instance GetGuidData(DATA_STEELBREAKER) ->
 -- DoAction(ACTION_ADD_CHARGE) — no SpellScript bridge; joins
@@ -799,3 +799,22 @@ local function runeOfSummoningRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_RUNE_OF_SUMMONING, 3, runeOfSummoningRemove)
+
+-- C++ spell_shield_of_runes::OnRemove
+-- (boss_assembly_of_iron.cpp:678-683): EFFECT_0 SPELL_AURA_SCHOOL_
+-- ABSORB. On removal, unless the mode is EXPIRE, the caster casts
+-- SPELL_SHIELD_OF_RUNES_BUFF 62277 on itself, non-triggered.
+local SPELL_SHIELD_OF_RUNES_BUFF = 62277 -- boss_assembly_of_iron.cpp:52
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+
+local function shieldOfRunesRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(caster, SPELL_SHIELD_OF_RUNES_BUFF)
+    end
+end
+
+RegisterAuraEvent(SPELL_SHIELD_OF_RUNES, 3, shieldOfRunesRemove)
