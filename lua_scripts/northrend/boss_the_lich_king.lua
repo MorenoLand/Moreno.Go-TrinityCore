@@ -61,17 +61,19 @@
 -- this run (engine/world/lua_objects.go:623) and the evade leg ported
 -- 2026-10-16; the !events.IsInPhase(PHASE_OUTRO) leg still has no
 -- bridge).
--- DOCUMENTED-ONLY (in this header; only entry 36597 registered):
+-- DOCUMENTED-ONLY (in this header): registered entries are 36597 (boss),
+-- 38995 (tirion), 38584 (broken frostmourne), 36823/39217 (terenas),
+-- 37698/36701/36824/36609/37799/39137/38757/36598 (adds).
 -- boss_the_lich_king DoAction — PORTED 2026-11-06 (lichKingDoAction,
 -- ev38): ACTION_START_ENCOUNTER writes IN_PROGRESS + Talk(SAY_LK_INTRO_1 0)
 -- + SetStandState(STAND) + EVENT_INTRO_MOVE_1 4s (intro machine
 -- PORTED 2026-11-08); ACTION_START_ATTACK schedules EVENT_START_ATTACK
 -- 5s (PORTED 2026-11-08; sender is the unported Quake SpellScript);
+-- the START_ENCOUNTER sender (Tirion MovementInform POINT_TIRION_INTRO)
+-- is PORTED 2026-11-08 — the receiver is live end-to-end now.
 -- Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic) rides
 -- ACTION_TELEPORT_BACK (sender terenas EVENT_TELEPORT_BACK PORTED
--- 2026-11-08). The START_ENCOUNTER receiver is dormant — the sender
--- chain (Tirion intro) is unported — the krick ACTION_OUTRO receiver
--- precedent. SetZoneMusic has no bridge; the strangulate-vehicle
+-- 2026-11-08). SetZoneMusic has no bridge; the strangulate-vehicle
 -- summons relay has no summon-list bridge (the vehicle ev38 receiver
 -- IS ported).
 -- No FAIL leg exists in C++ for the boss: no JustReachedHome override
@@ -97,19 +99,18 @@
 -- (OnSpellHitTarget) fires on the CASTER's bindings and was never the
 -- right hook for this boss-side arm. Corrected 2026-10-17.
 -- The second SpellHit arm (:818-820, REMORSELESS_WINTER_1/2 68981/
--- 72259 —> SetZoneOverrideLight + LIGHT_SNOW weather) also stays out
--- on trigger-path grounds: the casts that would hit the boss ride
--- MovementInform POINT_CENTER_1/2 (unported, see the MISSING-CAST
--- triage below), so event 14 would never fire for them in Go. Both
--- legs are now bridged (map:SetZoneOverrideLight +
--- map:SetZoneWeather); porting the arm without its trigger would
--- fabricate it.
+-- 72259 —> SetZoneOverrideLight + LIGHT_SNOW weather + shadow-trap
+-- despawn) is PORTED 2026-11-08 (lichKingSpellHit, ev14): the trigger
+-- path is live via MovementInform POINT_CENTER_1/2 (ported tick 441),
+-- and both map legs are bridged (map:SetZoneOverrideLight +
+-- map:SetZoneWeather — the JustDied FOG legs in this file).
 -- boss_the_lich_king MovementInform — Talk(SAY_LK_REMORSELESS_WINTER
 -- 4) on POINT_CENTER_1 / POINT_CENTER_2 PORTED 2026-11-08 via ev28
 -- (lua_creature_events.go:4699/:5725); tirion->AI()->
--- Talk(SAY_TIRION_OUTRO_2) is cross-AI Talk on POINT_LK_OUTRO_2 and
--- stays out (no cross-AI-Talk bridge; the outro movement machine is
--- unported).
+-- Talk(SAY_TIRION_OUTRO_2) on POINT_LK_OUTRO_2 PORTED 2026-11-08
+-- (FindNearestCreature sweep + :Talk on the found creature — the
+-- stale "no cross-AI-Talk bridge" claim is retired; the mandokir
+-- jindo:Talk precedent).
 -- boss_the_lich_king UpdateAI scheduler Talk legs — Talk(SAY_LK_INTRO_2
 -- 1) (EVENT_INTRO_TALK_1); Talk(SAY_LK_INTRO_3 2)
 -- (EVENT_INTRO_CAST_FREEZE); Talk(EMOTE_NECROTIC_PLAGUE_WARNING 13,
@@ -154,8 +155,8 @@
 -- onSoulReaper, phase-gated on the lkPhase model — no invented
 -- phase-agnostic timers).
 -- 71797 SPELL_LIGHTS_BLESSING (:1263, case EVENT_OUTRO_BLESS) — cast
--- by npc_tirion_fordring_tft on itself (outro); tirion not registered
--- in this file — wrong creature.
+-- by npc_tirion_fordring_tft on itself (outro); PORTED 2026-11-08
+-- (tirionFns.outroBless, PHASE_OUTRO-gated on the tirionPhase model).
 -- 74352 SPELL_WINGS_OF_THE_DAMNED (:1455, val'kyr Reset, non-triggered)
 -- PORTED 2026-11-08 via ev22 IsSummonedBy (valkyrIsSummonedBy below);
 -- 73501 SPELL_VALKYR_TRANSFORM (:1522, val'kyr MovementInform
@@ -166,17 +167,18 @@
 -- ACTION_FROSTMOURNE_INTRO) — cast by npc_terenas_menethil on itself;
 -- PORTED 2026-11-08 (terenasDoAction below).
 -- npc_tirion_fordring_tft (NPC_HIGHLORD_TIRION_FORDRING_LK 38995) —
--- NOT registered: Talk(SAY_TIRION_INTRO_1 0) rides DoAction
--- ACTION_CONTINUE_INTRO (ev38 dispatch bridged; sender LK MovementInform POINT_LK_INTRO_3 (boss_the_lich_king.cpp:839-843) PORTED 2026-11-08
--- via ev28, but the receiver tirion is unregistered, so the send
--- stays out); Talk(SAY_TIRION_INTRO_2
--- 1) (EVENT_INTRO_TALK_1) and Talk(SAY_TIRION_OUTRO_1 2)
--- (EVENT_OUTRO_TALK_1) are scheduler-driven on the PHASE_INTRO /
--- PHASE_OUTRO machines (CreateLuaEvent exists; the PHASE_OUTRO talk
--- chain PORTED 2026-11-08 off the 10% DamageTaken leg — the intro
--- machine drivers still gate the intro talks); the
--- OnGossipSelect intro kick, MovementInform, and SpellHit legs have no
--- bridges (the bronjahm npc_corrupted_soul_fragment precedent).
+-- REGISTERED 2026-11-08 (tirionFns table: Reset ev23, JustReachedHome
+-- ev24, MovementInform ev28, DoAction ev38, SpellHit ev14, gossip
+-- select; the intro/outro scheduler arms ride the tirionPhase model +
+-- CreateLuaEvent). Talk(SAY_TIRION_INTRO_1 0) rides DoAction
+-- ACTION_CONTINUE_INTRO (sender LK MovementInform POINT_LK_INTRO_3,
+-- PORTED 2026-11-08); Talk(SAY_TIRION_INTRO_2 1) (EVENT_INTRO_TALK_1)
+-- and Talk(SAY_TIRION_OUTRO_1 2) (EVENT_OUTRO_TALK_1) are
+-- scheduler-driven on the PHASE_INTRO / PHASE_OUTRO machines; the
+-- OnGossipSelect intro kick gates on listID == 0 (the Go hook does not
+-- forward menuId — the barrettGossipSelect precedent). Stay-outs:
+-- SpellHit BROKEN_FROSTMOURNE_KNOCK LoadEquipment(1) (no bridge);
+-- UpdateAI DoMeleeAttackIfReady (no victim model for a non-combat NPC).
 -- npc_terenas_menethil (NPC_TERENAS_MENETHIL_FROSTMOURNE 36823,
 -- NPC_TERENAS_MENETHIL_FROSTMOURNE_H 39217) — DamageTaken PORTED
 -- (terenasDamageTaken, ev9, this tick); DoAction ACTION_TELEPORT_BACK
@@ -190,15 +192,14 @@
 -- ported; the normal sender (instance EVENT_TELEPORT_TO_FROSTMOURNE,
 -- instance_icecrown_citadel.cpp:1463) is unported.
 -- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
--- IsSummonedBy hook) — outro talks gated on the unported outro summon
--- chain (broken-frostmourne ACTION_SUMMON_TERENAS, :883/:1931) — ev22
--- IsSummonedBy dispatch IS live for creature summons
--- (lua_creature_events.go:191-199 + :6799-6820; the "fires only for
--- player pets (pet_cooldowns.go:73)" claim was stale — corrected by
--- the strangulate-vehicle ev22 port below); a bare ev22 port
--- would fabricate outro Talks in the Frostmourne room (the FROSTMOURNE_INTRO
--- cancel never fires in Lua)
--- (gothik counterpoint).
+-- IsSummonedBy hook) PORTED 2026-11-08 (terenasIsSummonedBy, ev22 +
+-- onTerenasOutroTalk1/2): the outro summon chain is live —
+-- LK POINT_LK_OUTRO_2 -> frostmourne DoAction ACTION_SUMMON_TERENAS
+-- -> 6s DoCastAOE SPELL_SUMMON_TERENAS 72420 (DBC summon effect,
+-- dormant until Spell.dbc ships). The Frostmourne-room summon fires
+-- the same ev22, but the FROSTMOURNE_INTRO DoAction cancelTimers the
+-- guid right after — the C++ _events.Reset() twin — so no outro Talk
+-- is fabricated there (the old gothik-counterpoint worry is retired).
 -- PORTED (2026-10-17 timer re-sweep; in-house spot-verified vs C++
 -- :1308-1313 + runtime before applying; delegated audit reconciled):
 -- npc_shambling_horror_icc's heroic-only DamageTaken frenzy latch —
@@ -232,10 +233,12 @@
 -- self-cast (self-buff aura).
 -- npc_valkyr_shadowguard IS registered (Reset via ev22 IsSummonedBy,
 -- PORTED 2026-11-08 — the val'kyr never engages, so ev1 would never
--- fire); npc_spirit_bomb / npc_broken_frostmourne — zero Talk lines —
--- NOT registered (the bronjahm npc_corrupted_soul_fragment
--- precedent); the valkyr grab/life-siphon (SpellScript +
--- MovementInform), bomb and frostmourne UpdateAI
+-- fire); npc_spirit_bomb — zero Talk lines — NOT registered (the
+-- bronjahm npc_corrupted_soul_fragment precedent); npc_broken_frostmourne
+-- IS registered (IsSummonedBy ev22 + DoAction ev38, PORTED 2026-11-08
+-- — knock-back + summon-terenas arms; the JUMP SpellScript sender of
+-- ACTION_BREAK_FROSTMOURNE stays unported); the valkyr
+-- grab/life-siphon (SpellScript + MovementInform) and bomb UpdateAI
 -- machines ride unbridged legs. npc_strangulate_vehicle IS
 -- registered — IsSummonedBy + UpdateAI timer legs + DoAction
 -- ACTION_TELEPORT_BACK PORTED 2026-11-05 (see below).
@@ -249,8 +252,8 @@
 -- (1, PORTED — the only bridgeable arm) + SAY_LK_INTRO_1 0 (1,
 -- DoAction) + SAY_LK_FROSTMOURNE_ESCAPE 8 (1, DoAction) +
 -- SAY_LK_FROSTMOURNE_KILL 9 (1, SpellHit) + SAY_LK_REMORSELESS_WINTER 4
--- (2, MovementInform) + SAY_TIRION_OUTRO_2 (1, cross-AI MovementInform)
--- + SAY_LK_INTRO_2 1 (1, scheduler) + SAY_LK_INTRO_3 2 (1,
+-- (2, MovementInform) + SAY_TIRION_OUTRO_2 (1, cross-AI MovementInform,
+-- PORTED 2026-11-08) + SAY_LK_INTRO_2 1 (1, scheduler) + SAY_LK_INTRO_3 2 (1,
 -- scheduler) + EMOTE_NECROTIC_PLAGUE_WARNING 13 (1, scheduler) +
 -- EMOTE_DEFILE_WARNING 12 (1, scheduler) + SAY_LK_HARVEST_SOUL 7 (2,
 -- scheduler) + SAY_LK_QUAKE 5 (2, scheduler) + SAY_LK_SUMMON_VALKYR 6
@@ -434,7 +437,41 @@ local LK = {
     EMOTE_NECROTIC_PLAGUE_WARNING = 13, -- :50
     SAY_LK_OUTRO_1 = 14, SAY_LK_OUTRO_2 = 15, SAY_LK_OUTRO_3 = 16,
     SAY_LK_OUTRO_4 = 17, SAY_LK_OUTRO_5 = 18,
+    SAY_LK_OUTRO_6 = 19, SAY_LK_OUTRO_7 = 20, SAY_LK_OUTRO_8 = 21, -- :52-54
     EMOTE_ONESHOT_TALK_NO_SHEATHE = 396, -- SharedDefines.h:2034
+    -- Tirion TFT + outro-chain consts (2026-11-08, tick 443), same one-table
+    -- local: the file sits near Lua's 200-local main-chunk limit.
+    POINT_TIRION_INTRO = 3, -- :318
+    POINT_TIRION_CHARGE = 7, -- :322
+    POINT_TIRION_OUTRO_1 = 10, -- :325
+    POINT_LK_OUTRO_2 = 12, -- :327
+    TIRION_INTRO_X = 489.2970, TIRION_INTRO_Y = -2124.840, TIRION_INTRO_Z = 840.8569, -- :300
+    TIRION_CHARGE_X = 482.9019, TIRION_CHARGE_Y = -2124.479, TIRION_CHARGE_Z = 840.8570, -- :301
+    OUTRO_POS_1_X = 493.6286, OUTRO_POS_1_Y = -2124.569, OUTRO_POS_1_Z = 840.8569, -- :308
+    OUTRO_FLYING_X = 508.9897, OUTRO_FLYING_Y = -2124.561, OUTRO_FLYING_Z = 845.3565, -- :309
+    SAY_TIRION_INTRO_1 = 0, SAY_TIRION_INTRO_2 = 1, -- :62-63
+    SAY_TIRION_OUTRO_1 = 2, SAY_TIRION_OUTRO_2 = 3, -- :64-65
+    SAY_TERENAS_OUTRO_1 = 0, SAY_TERENAS_OUTRO_2 = 1, -- :67-68
+    SPELL_LIGHTS_BLESSING = 71797, -- :167
+    SPELL_JUMP = 71809, -- :168
+    SPELL_BROKEN_FROSTMOURNE_KNOCK = 72405, -- :175
+    SPELL_SUMMON_TERENAS = 72420, -- :177
+    SPELL_MASS_RESURRECTION = 72429, -- :178
+    SPELL_SUMMON_BROKEN_FROSTMOURNE = 74081, -- :171
+    SPELL_SUMMON_BROKEN_FROSTMOURNE_2 = 72406, -- :172
+    SPELL_SUMMON_BROKEN_FROSTMOURNE_3 = 73017, -- :173
+    SPELL_SOUL_BARRAGE = 72305, -- :176
+    EQUIP_ASHBRINGER_GLOWING = 50442, -- :361
+    EQUIP_BROKEN_FROSTMOURNE = 50840, -- :362
+    EQUIP_UNEQUIP = 0, -- CreatureAI.h:76
+    ACTION_CONTINUE_INTRO = 1, ACTION_OUTRO = 3, -- :336/:338
+    ACTION_PLAY_MUSIC = 4, ACTION_BREAK_FROSTMOURNE = 5, -- :339-340
+    ACTION_SUMMON_TERENAS = 6, ACTION_FINISH_OUTRO = 7, -- :341-342
+    EMOTE_STATE_READY2H = 375, -- SharedDefines.h:2013
+    EMOTE_ONESHOT_NONE = 0, -- SharedDefines.h:1937
+    LIGHT_SNOWSTORM = 2490, -- :349
+    WEATHER_STATE_LIGHT_SNOW = 6, -- Weather.h:53
+    UNIT_NPC_FLAG_GOSSIP = 0x00000001, -- UnitDefines.h:186
 }
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
@@ -455,6 +492,14 @@ local SAY_TERENAS_INTRO_1 = 0 -- :71
 local SAY_TERENAS_INTRO_2 = 1 -- :72
 local SAY_TERENAS_INTRO_3 = 2 -- :73
 local ENTRY_TIRION_LK = 38995 -- icecrown_citadel.h:315 (NPC_HIGHLORD_TIRION_FORDRING_LK)
+-- POINT_MOTION_TYPE was a NIL global in this file until 2026-11-08:
+-- lichKingMovementInform compared moveType against it, so the guard
+-- always returned and every ev28 arm (CENTER_1/2, INTRO_1..3,
+-- OUTRO_1 — ticks 441/442) was dead at runtime. MovementDefines.h:36.
+local POINT_MOTION_TYPE = 8
+-- Tirion's own EventMap phase (Phases enum, boss_the_lich_king.cpp:287-293,
+-- shared with the boss): INTRO 1 / OUTRO 7. The lkPhase-model twin.
+local tirionPhase = {}
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local EMOTE_ONESHOT_EMERGE = 449 -- SharedDefines.h:2086
@@ -983,9 +1028,14 @@ local function onOutroTalk2(creature, guid)
 end
 
 -- C++ EVENT_OUTRO_TALK_3 (:1099-1103, PHASE_OUTRO): Talk(SAY_LK_OUTRO_3 16).
--- The SetFacingToObject(tirion) leg stays out (instance GetGuidData
--- has no Lua creature fetch).
+-- The SetFacingToObject(tirion) leg is PORTED 2026-11-08 (FindNearestCreature
+-- sweep twin; the stale "instance GetGuidData has no Lua creature fetch"
+-- claim is retired — the sweep is the spiritWardenDied precedent).
 local function onOutroTalk3(creature, guid)
+    local tirion = creature:FindNearestCreature(ENTRY_TIRION_LK, 500)
+    if tirion then
+        creature:SetFacingToObject(tirion)
+    end
     creature:Talk(LK.SAY_LK_OUTRO_3)
 end
 
@@ -1017,10 +1067,56 @@ local function onOutroRaiseDead(creature, guid)
 end
 
 -- C++ EVENT_OUTRO_TALK_5 (:1116-1120, PHASE_OUTRO): Talk(SAY_LK_OUTRO_5 18).
--- The tirion->AI()->DoAction(ACTION_OUTRO) leg stays out (tirion
--- unregistered; no cross-AI DoAction send bridge).
+-- The tirion->AI()->DoAction(ACTION_OUTRO) leg is PORTED 2026-11-08
+-- (tirion 38995 registered this tick; the FindNearestCreature sweep
+-- is the spiritWardenDied precedent).
 local function onOutroTalk5(creature, guid)
     creature:Talk(LK.SAY_LK_OUTRO_5)
+    local tirion = creature:FindNearestCreature(ENTRY_TIRION_LK, 500)
+    if tirion then
+        tirion:DoAction(LK.ACTION_OUTRO)
+    end
+end
+
+-- C++ EVENT_OUTRO_TALK_6 (:1121-1127, PHASE_OUTRO, scheduled by
+-- ACTION_BREAK_FROSTMOURNE 2500ms): Talk(SAY_LK_OUTRO_6 19) +
+-- tirion SetFacingToObject(me) (sweep twin) + CastSpell(nil,
+-- SPELL_SUMMON_BROKEN_FROSTMOURNE_3 73017, triggered) +
+-- SetEquipmentSlots(false, EQUIP_UNEQUIP) (all three slots 0).
+-- PORTED 2026-11-08.
+local function onOutroTalk6(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_6)
+    local tirion = creature:FindNearestCreature(ENTRY_TIRION_LK, 500)
+    if tirion then
+        tirion:SetFacingToObject(creature)
+    end
+    creature:CastSpell(nil, LK.SPELL_SUMMON_BROKEN_FROSTMOURNE_3, true)
+    creature:SetEquipmentSlots(0, 0, 0)
+end
+
+-- C++ EVENT_OUTRO_TALK_7 (:1135-1137, PHASE_OUTRO, scheduled by
+-- ACTION_FINISH_OUTRO 7s): Talk(SAY_LK_OUTRO_7 20). PORTED 2026-11-08.
+local function onOutroTalk7(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_7)
+end
+
+-- C++ EVENT_OUTRO_TALK_8 (:1138-1140, PHASE_OUTRO, scheduled by
+-- ACTION_FINISH_OUTRO 17s): Talk(SAY_LK_OUTRO_8 21). PORTED 2026-11-08.
+local function onOutroTalk8(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_8)
+end
+
+-- C++ EVENT_OUTRO_SOUL_BARRAGE (:1128-1134, PHASE_OUTRO, scheduled
+-- 5s by the frostmourne-trigger JustSummoned): CastSpell(nil,
+-- SPELL_SOUL_BARRAGE 72305, triggered) + SendSound SOUND_PAIN (no
+-- bridge, stays out) + SetDisableGravity(true) + MovePoint
+-- POINT_LK_OUTRO_2 to OutroFlying; arrival continues the chain via
+-- MovementInform (tirion OUTRO_2 + frostmourne SUMMON_TERENAS).
+-- PORTED 2026-11-08.
+local function onOutroSoulBarrage(creature, guid)
+    creature:CastSpell(nil, LK.SPELL_SOUL_BARRAGE, true)
+    creature:SetDisableGravity(true)
+    creature:MoveTo(LK.POINT_LK_OUTRO_2, LK.OUTRO_FLYING_X, LK.OUTRO_FLYING_Y, LK.OUTRO_FLYING_Z)
 end
 
 -- C++ boss_the_lich_king::DoAction ACTION_START_ENCOUNTER (:615-622):
@@ -1037,6 +1133,18 @@ end
 -- bridge — the vehicle ev38 receiver IS ported); the sender is the
 -- terenas EVENT_TELEPORT_BACK (PORTED 2026-11-08, onTerenasTeleportBack
 -- below) / restore_soul SpellScript chain (unported).
+-- ACTION_BREAK_FROSTMOURNE (:630-636): CastSpell(nil,
+-- SPELL_SUMMON_BROKEN_FROSTMOURNE 74081 + _2 72406, triggered) +
+-- SetEquipmentSlots(false, EQUIP_BROKEN_FROSTMOURNE 50840) +
+-- EVENT_OUTRO_TALK_6 2500ms (PHASE_OUTRO). PORTED 2026-11-08; the
+-- sender is the unported spell_the_lich_king_jump SpellScript (:2755),
+-- so the receiver is dormant — the START_ATTACK precedent.
+-- ACTION_FINISH_OUTRO (:642-645): EVENT_OUTRO_TALK_7 7s +
+-- EVENT_OUTRO_TALK_8 17s (PHASE_OUTRO). PORTED 2026-11-08; the sender
+-- is the terenas EVENT_OUTRO_TERENAS_TALK_2 (PORTED 2026-11-08,
+-- onTerenasOutroTalk2 below).
+-- ACTION_PLAY_MUSIC (:626-628) is SetZoneMusic only (no bridge) — no
+-- Lua arm; the sender (Tirion EVENT_OUTRO_REMOVE_ICE) still sends it.
 -- Forward declaration (the tharon_ja/gal_darah idiom): onIntroMove1
 -- is defined with the intro handlers below but is referenced by the
 -- START_ENCOUNTER arm above it; plain assignment at the definition
@@ -1058,6 +1166,16 @@ local function lichKingDoAction(event, creature, action)
         if not creature:IsHeroic() then
             creature:Talk(SAY_LK_FROSTMOURNE_ESCAPE)
         end
+    elseif action == LK.ACTION_BREAK_FROSTMOURNE then
+        local guid = creature:GetGUID()
+        creature:CastSpell(nil, LK.SPELL_SUMMON_BROKEN_FROSTMOURNE, true)
+        creature:CastSpell(nil, LK.SPELL_SUMMON_BROKEN_FROSTMOURNE_2, true)
+        creature:SetEquipmentSlots(LK.EQUIP_BROKEN_FROSTMOURNE, 0xFFFFFFFF, 0xFFFFFFFF)
+        schedule(guid, "outro_talk_6", 2500, function() onOutroTalk6(creature, guid) end)
+    elseif action == LK.ACTION_FINISH_OUTRO then
+        local guid = creature:GetGUID()
+        schedule(guid, "outro_talk_7", 7000, function() onOutroTalk7(creature, guid) end)
+        schedule(guid, "outro_talk_8", 17000, function() onOutroTalk8(creature, guid) end)
     end
 end
 
@@ -1276,6 +1394,33 @@ local function lichKingKilledUnit(event, creature, victim)
     end
 end
 
+-- C++ boss_the_lich_king::SpellHit (:818-820): on REMORSELESS_WINTER_1
+-- 68981 / REMORSELESS_WINTER_2 72259 — SetZoneOverrideLight
+-- (LIGHT_SNOWSTORM 2490, 5000ms) + SetZoneWeather (LIGHT_SNOW 6,
+-- 0.5) + summons.DespawnEntry(NPC_SHADOW_TRAP 39137). PORTED
+-- 2026-11-08 (ev14, the attumenSpellHit precedent): the trigger path
+-- is live — the casts ride MovementInform POINT_CENTER_1/2 (ported
+-- tick 441, self-cast, so ev14 fires on the boss) — and both map legs
+-- are bridged (the JustDied FOG legs in this file). The shadow-trap
+-- despawn rides the 500yd GetCreaturesInRange sweep (the onHarvestSouls
+-- summon-list twin; C++ iterates the LK summons list, which has no Lua
+-- twin). The HARVESTED_SOUL arm (:813-816) stays out: its 72679 cast
+-- targets via originalCaster + DBC implicit targets, so it cannot reach
+-- the boss in Go (header note, harvestSoulRemove above).
+local function lichKingSpellHit(event, creature, caster, spellId)
+    if spellId ~= LK.SPELL_REMORSELESS_WINTER_1 and spellId ~= LK.SPELL_REMORSELESS_WINTER_2 then
+        return
+    end
+    creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, LK.LIGHT_SNOWSTORM, 5000)
+    creature:GetMap():SetZoneWeather(AREA_ICECROWN_CITADEL, LK.WEATHER_STATE_LIGHT_SNOW, 0.5)
+    local traps = creature:GetCreaturesInRange(500, ENTRY_SHADOW_TRAP)
+    if traps then
+        for _, trap in ipairs(traps) do
+            trap:Despawn()
+        end
+    end
+end
+
 -- C++ boss_the_lich_king::JustSummoned NPC_ICE_SPHERE case
 -- (boss_the_lich_king.cpp:746-756): random-player gate, then
 -- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_ICE_SPHERE)
@@ -1343,11 +1488,14 @@ local function lichKingJustSummoned(_, creature, summoned)
     -- C++ :766-772: broken-frostmourne visual (triggered; the C++
     -- nullptr target reads as a self-cast) + soulstorm light +
     -- BLACKSNOW zone weather, in C++ order; the 5s PHASE_OUTRO
-    -- soul-barrage schedule stays out (phase machine).
+    -- soul-barrage schedule is PORTED 2026-11-08 (onOutroSoulBarrage,
+    -- the phase model landed tick 441).
     elseif summoned:GetEntry() == NPC_FROSTMOURNE_TRIGGER then
         summoned:CastSpell(summoned, SPELL_BROKEN_FROSTMOURNE, true)
         creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, LIGHT_SOULSTORM, 10000)
         creature:GetMap():SetZoneWeather(AREA_ICECROWN_CITADEL, WEATHER_STATE_BLACKSNOW, 0.5)
+        local guid = creature:GetGUID()
+        schedule(guid, "outro_soul_barrage", 5000, function() onOutroSoulBarrage(creature, guid) end)
     elseif summoned:GetEntry() == ENTRY_ICE_SPHERE then
         local target = randomPlayerAnywhere(creature)
         if target then
@@ -1457,8 +1605,12 @@ end
 -- POINT_LK_OUTRO_1 — EVENT_OUTRO_TALK_4 1ms / EVENT_OUTRO_RAISE_DEAD 1s /
 -- EVENT_OUTRO_TALK_5 29s (PHASE_OUTRO). SetZoneMusic + CENTER_2
 -- summons.DespawnEntry(VALKYR) stay out (no bridge); POINT_LK_INTRO_1..3
--- PORTED 2026-11-08 (onIntroMove1..3 arms below); POINT_LK_OUTRO_2 rides
--- the unported outro movement machine. PORTED 2026-11-08 via ev28 (POINT_MOTION_TYPE 8).
+-- PORTED 2026-11-08 (onIntroMove1..3 arms below); POINT_LK_OUTRO_2
+-- PORTED 2026-11-08 (tirion Talk SAY_TIRION_OUTRO_2 3 via the
+-- FindNearestCreature sweep — the stale "no cross-AI-Talk bridge" claim
+-- is retired: :Talk runs on any creature object, the mandokir
+-- jindo:Talk precedent — + frostmourne DoAction ACTION_SUMMON_TERENAS).
+-- PORTED 2026-11-08 via ev28 (POINT_MOTION_TYPE 8).
 local function lichKingMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE then
         return
@@ -1473,8 +1625,13 @@ local function lichKingMovementInform(event, creature, moveType, id)
         schedule(guid, "intro_move_3", 1, function() onIntroMove3(creature, guid) end)
     elseif id == LK.POINT_LK_INTRO_3 then
         -- C++ :840-844: tirion->AI()->DoAction(ACTION_CONTINUE_INTRO)
-        -- stays out (Tirion 38995 unregistered) + EVENT_INTRO_TALK_1 9s.
-        -- PORTED 2026-11-08 (talk schedule only).
+        -- PORTED 2026-11-08 (tirion 38995 registered this tick; the
+        -- FindNearestCreature sweep is the spiritWardenDied precedent)
+        -- + EVENT_INTRO_TALK_1 9s.
+        local tirion = creature:FindNearestCreature(ENTRY_TIRION_LK, 500)
+        if tirion then
+            tirion:DoAction(LK.ACTION_CONTINUE_INTRO)
+        end
         schedule(guid, "intro_talk_1", 9000, function() onIntroTalk1(creature, guid) end)
     elseif id == LK.POINT_CENTER_1 then
         creature:SetFacingTo(0.0)
@@ -1509,6 +1666,19 @@ local function lichKingMovementInform(event, creature, moveType, id)
         schedule(guid, "outro_talk_4", 1, function() onOutroTalk4(creature, guid) end)
         schedule(guid, "outro_raise_dead", 1000, function() onOutroRaiseDead(creature, guid) end)
         schedule(guid, "outro_talk_5", 29000, function() onOutroTalk5(creature, guid) end)
+    elseif id == LK.POINT_LK_OUTRO_2 then
+        -- C++ :879-884: tirion->AI()->Talk(SAY_TIRION_OUTRO_2 3) +
+        -- frostmourne->AI()->DoAction(ACTION_SUMMON_TERENAS), both via
+        -- the FindNearestCreature sweep (50yd for the trigger).
+        -- PORTED 2026-11-08.
+        local tirion = creature:FindNearestCreature(ENTRY_TIRION_LK, 500)
+        if tirion then
+            tirion:Talk(LK.SAY_TIRION_OUTRO_2)
+        end
+        local frostmourne = creature:FindNearestCreature(NPC_FROSTMOURNE_TRIGGER, 50.0)
+        if frostmourne then
+            frostmourne:DoAction(LK.ACTION_SUMMON_TERENAS)
+        end
     end
 end
 
@@ -1521,6 +1691,7 @@ RegisterCreatureEvent(ENTRY_THE_LICH_KING, 9, lichKingDamageTaken)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 28, lichKingMovementInform)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 38, lichKingDoAction)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 14, lichKingSpellHit)
 
 -- C++ boss_the_lich_king::SummonedCreatureDies (:795-808): the six add
 -- entries flip to TEMPSUMMON_CORPSE_DESPAWN on death so the corpse
@@ -1873,6 +2044,302 @@ end
 
 RegisterCreatureEvent(ENTRY_TERENAS, 38, terenasDoAction)
 RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 38, terenasDoAction)
+
+-- C++ npc_terenas_menethil::IsSummonedBy (:1763-1773): _events.Reset()
+-- + SetPhase(PHASE_OUTRO) + SetFacingToObject(lichKing) +
+-- EVENT_OUTRO_TERENAS_TALK_1 2s / EVENT_OUTRO_TERENAS_TALK_2 14s
+-- (PHASE_OUTRO). PORTED 2026-11-08 (ev22, the val'kyr / strangulate
+-- precedent). No phase table: the Frostmourne-room summon fires this
+-- hook too, but the FROSTMOURNE_INTRO DoAction (terenasDoAction
+-- above) cancelTimers the guid immediately after the summon — the
+-- C++ _events.Reset() twin — so the outro talks never fire there.
+-- The summon itself rides the DBC effect of SPELL_SUMMON_TERENAS
+-- 72420 (frostmourne trigger), dormant until Spell.dbc ships.
+local function onTerenasOutroTalk1(creature, guid)
+    creature:Talk(LK.SAY_TERENAS_OUTRO_1)
+end
+
+-- C++ EVENT_OUTRO_TERENAS_TALK_2 (:1786-1800): Talk
+-- SAY_TERENAS_OUTRO_2 1 + DoCastAOE(SPELL_MASS_RESURRECTION 72429) +
+-- lichKing DoAction(ACTION_FINISH_OUTRO) + SetImmuneToNPC(false) (no
+-- bridge, stays out) + tirion AttackStart(lichKing).
+local function onTerenasOutroTalk2(creature, guid)
+    creature:Talk(LK.SAY_TERENAS_OUTRO_2)
+    creature:CastSpell(creature, LK.SPELL_MASS_RESURRECTION)
+    local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
+    if lichKing then
+        lichKing:DoAction(LK.ACTION_FINISH_OUTRO)
+        local tirion = creature:FindNearestCreature(ENTRY_TIRION_LK, 500)
+        if tirion then
+            tirion:AttackStart(lichKing)
+        end
+    end
+end
+
+local function terenasIsSummonedBy(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
+    if lichKing then
+        creature:SetFacingToObject(lichKing)
+    end
+    schedule(guid, "terenas_outro_talk_1", 2000, function() onTerenasOutroTalk1(creature, guid) end)
+    schedule(guid, "terenas_outro_talk_2", 14000, function() onTerenasOutroTalk2(creature, guid) end)
+end
+
+RegisterCreatureEvent(ENTRY_TERENAS, 22, terenasIsSummonedBy)
+RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 22, terenasIsSummonedBy)
+
+-- C++ npc_tirion_fordring_tft (boss_the_lich_king.cpp:1161-1300,
+-- entry 38995) — REGISTERED 2026-11-08. The 13 handlers ride ONE
+-- table local (tirionFns): the file sits near Lua's 200-local
+-- main-chunk limit, and table-field lookup happens at call time, so
+-- the malown-class forward-reference time-bomb cannot occur here.
+-- The sender chain is live end-to-end now: LK Reset summons Tirion
+-- (lichKingReset above) -> gossip kick -> MovementInform INTRO ->
+-- LK DoAction START_ENCOUNTER -> LK MovementInform INTRO_3 ->
+-- Tirion DoAction CONTINUE_INTRO -> intro scheduler; outro: LK
+-- OUTRO_TALK_5 -> Tirion DoAction ACTION_OUTRO -> outro scheduler.
+local tirionFns = {}
+
+-- C++ Reset (:1166-1171): _events.Reset() + remove the gossip flag
+-- when the Lich King is DONE. Keyed to ev23 (the lichKingReset twin).
+tirionFns.reset = function(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    tirionPhase[guid] = nil
+    if creature:GetBossState(DATA_THE_LICH_KING) == BOSS_STATE_DONE then
+        creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(LK.UNIT_NPC_FLAG_GOSSIP)))
+    end
+end
+
+-- C++ MovementInform (:1173-1190, POINT_MOTION_TYPE only):
+-- POINT_TIRION_INTRO -> EmoteState(READY2H 375) + LK DoAction
+-- ACTION_START_ENCOUNTER (sweep twin); POINT_TIRION_OUTRO_1 ->
+-- EVENT_OUTRO_JUMP 1ms (PHASE_OUTRO).
+tirionFns.movementInform = function(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if id == LK.POINT_TIRION_INTRO then
+        creature:EmoteState(LK.EMOTE_STATE_READY2H)
+        local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
+        if lichKing then
+            lichKing:DoAction(ACTION_START_ENCOUNTER)
+        end
+    elseif id == LK.POINT_TIRION_OUTRO_1 then
+        local guid = creature:GetGUID()
+        schedule(guid, "tirion_outro_jump", 1, function() tirionFns.outroJump(creature, guid) end)
+    end
+end
+
+-- C++ DoAction (:1192-1209): ACTION_CONTINUE_INTRO -> Talk
+-- SAY_TIRION_INTRO_1 0 + EVENT_INTRO_TALK_1 34s (PHASE_INTRO);
+-- ACTION_OUTRO -> SetPhase(PHASE_OUTRO) + EVENT_OUTRO_TALK_1 7s /
+-- EVENT_OUTRO_BLESS 18s / EVENT_OUTRO_REMOVE_ICE 23s /
+-- EVENT_OUTRO_MOVE_1 25s (PHASE_OUTRO).
+tirionFns.doAction = function(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == LK.ACTION_CONTINUE_INTRO then
+        creature:Talk(LK.SAY_TIRION_INTRO_1)
+        schedule(guid, "tirion_intro_talk_1", 34000, function() tirionFns.introTalk1(creature, guid) end)
+    elseif action == LK.ACTION_OUTRO then
+        tirionPhase[guid] = LK.PHASE_OUTRO
+        schedule(guid, "tirion_outro_talk_1", 7000, function() tirionFns.outroTalk1(creature, guid) end)
+        schedule(guid, "tirion_outro_bless", 18000, function() tirionFns.outroBless(creature, guid) end)
+        schedule(guid, "tirion_outro_remove_ice", 23000, function() tirionFns.outroRemoveIce(creature, guid) end)
+        schedule(guid, "tirion_outro_move_1", 25000, function() tirionFns.outroMove1(creature, guid) end)
+    end
+end
+
+-- C++ SpellHit (:1211-1216): SPELL_ICE_LOCK 71614 -> SetFacingTo
+-- (3.085098). The SPELL_BROKEN_FROSTMOURNE_KNOCK 72405 leg
+-- (LoadEquipment(1), remove Ashbringer glow) stays out: no
+-- LoadEquipment bridge (only a comment mention,
+-- lua_creature_events.go:6557).
+tirionFns.spellHit = function(event, creature, caster, spellId)
+    if spellId == LK.SPELL_ICE_LOCK then
+        creature:SetFacingTo(3.085098)
+    end
+end
+
+-- C++ OnGossipSelect (:1218-1227): template GossipMenuId == menuId
+-- && !gossipListId -> SetPhase(PHASE_INTRO) + remove the gossip flag
+-- + SetWalk(true) + MovePoint(POINT_TIRION_INTRO). The Go hook does
+-- not forward menuId (gossip.go:1305); per-entry recovery (the
+-- barrettGossipSelect precedent — Tirion carries exactly one menu)
+-- gates on listID == 0. The GossipComplete close packet is the
+-- barrett sendActionToTirion twin (C++ returns false with the menu
+-- cleared server-side).
+tirionFns.gossipSelect = function(event, player, creature, sender, action, code, listID)
+    if listID ~= 0 then
+        return
+    end
+    local guid = creature:GetGUID()
+    tirionPhase[guid] = LK.PHASE_INTRO
+    creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(LK.UNIT_NPC_FLAG_GOSSIP)))
+    creature:SetWalk(true)
+    creature:MoveTo(LK.POINT_TIRION_INTRO, LK.TIRION_INTRO_X, LK.TIRION_INTRO_Y, LK.TIRION_INTRO_Z)
+    player:GossipComplete()
+end
+
+-- C++ JustReachedHome (:1229-1232): EmoteState(EMOTE_ONESHOT_NONE 0).
+-- Keyed to ev24 (the anubarak tribute ev24 precedent).
+tirionFns.reachedHome = function(event, creature)
+    creature:EmoteState(LK.EMOTE_ONESHOT_NONE)
+end
+
+-- C++ EVENT_INTRO_TALK_1 (:1240-1244, PHASE_INTRO): Talk
+-- SAY_TIRION_INTRO_2 1 + EVENT_INTRO_EMOTE_1 2s +
+-- EVENT_INTRO_CHARGE 5s.
+tirionFns.introTalk1 = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:Talk(LK.SAY_TIRION_INTRO_2)
+    schedule(guid, "tirion_intro_emote_1", 2000, function() tirionFns.introEmote1(creature, guid) end)
+    schedule(guid, "tirion_intro_charge", 5000, function() tirionFns.introCharge(creature, guid) end)
+end
+
+-- C++ EVENT_INTRO_EMOTE_1 (:1245-1247, PHASE_INTRO):
+-- HandleEmoteCommand(EMOTE_ONESHOT_POINT_NO_SHEATHE 397).
+tirionFns.introEmote1 = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:PerformEmote(LK.EMOTE_ONESHOT_POINT_NO_SHEATHE)
+end
+
+-- C++ EVENT_INTRO_CHARGE (:1248-1251, PHASE_INTRO): SetWalk(false) +
+-- MovePoint(POINT_TIRION_CHARGE); arrival triggers the LK
+-- START_ATTACK chain via the unported Quake SpellScript.
+tirionFns.introCharge = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:SetWalk(false)
+    creature:MoveTo(LK.POINT_TIRION_CHARGE, LK.TIRION_CHARGE_X, LK.TIRION_CHARGE_Y, LK.TIRION_CHARGE_Z)
+end
+
+-- C++ EVENT_OUTRO_TALK_1 (:1259-1261, PHASE_OUTRO): Talk
+-- SAY_TIRION_OUTRO_1 2.
+tirionFns.outroTalk1 = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_OUTRO then
+        return
+    end
+    creature:Talk(LK.SAY_TIRION_OUTRO_1)
+end
+
+-- C++ EVENT_OUTRO_BLESS (:1262-1264, PHASE_OUTRO): DoCastSelf
+-- SPELL_LIGHTS_BLESSING 71797. 500ms IsCasting defer (the :1294
+-- UpdateAI casting gate; mal_ganis idiom).
+tirionFns.outroBless = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_OUTRO then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "tirion_outro_bless", 500, function() tirionFns.outroBless(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_LIGHTS_BLESSING)
+end
+
+-- C++ EVENT_OUTRO_REMOVE_ICE (:1265-1272, PHASE_OUTRO):
+-- RemoveAurasDueToSpell(SPELL_ICE_LOCK 71614) — creature:RemoveAura
+-- is the bridged twin (the moorabi precedent; RemoveAurasDueToSpell
+-- has no binding, boss_mimiron.lua:81) +
+-- SetEquipmentSlots(false, EQUIP_ASHBRINGER_GLOWING 50442; off-hand /
+-- ranged EQUIP_NO_CHANGE) + SetFacingToObject(lichKing) + lichKing
+-- DoAction(ACTION_PLAY_MUSIC) — the LK receiver is SetZoneMusic only
+-- (no bridge), the send itself is the ported leg.
+tirionFns.outroRemoveIce = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_OUTRO then
+        return
+    end
+    creature:RemoveAura(LK.SPELL_ICE_LOCK)
+    creature:SetEquipmentSlots(LK.EQUIP_ASHBRINGER_GLOWING, 0xFFFFFFFF, 0xFFFFFFFF)
+    local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
+    if lichKing then
+        creature:SetFacingToObject(lichKing)
+        lichKing:DoAction(LK.ACTION_PLAY_MUSIC)
+    end
+end
+
+-- C++ EVENT_OUTRO_MOVE_1 (:1273-1276, PHASE_OUTRO): MovePoint
+-- POINT_TIRION_OUTRO_1 to OutroPosition1; arrival schedules
+-- EVENT_OUTRO_JUMP 1ms (MovementInform above).
+tirionFns.outroMove1 = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_OUTRO then
+        return
+    end
+    creature:MoveTo(LK.POINT_TIRION_OUTRO_1, LK.OUTRO_POS_1_X, LK.OUTRO_POS_1_Y, LK.OUTRO_POS_1_Z)
+end
+
+-- C++ EVENT_OUTRO_JUMP (:1277-1279, PHASE_OUTRO): DoCastAOE
+-- SPELL_JUMP 71809 (self-cast per the DoCastAOE convention).
+-- 500ms IsCasting defer (the :1294 gate).
+tirionFns.outroJump = function(creature, guid)
+    if tirionPhase[guid] ~= LK.PHASE_OUTRO then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "tirion_outro_jump", 500, function() tirionFns.outroJump(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_JUMP)
+end
+
+RegisterCreatureEvent(ENTRY_TIRION_LK, 23, tirionFns.reset)
+RegisterCreatureEvent(ENTRY_TIRION_LK, 24, tirionFns.reachedHome)
+RegisterCreatureEvent(ENTRY_TIRION_LK, 28, tirionFns.movementInform)
+RegisterCreatureEvent(ENTRY_TIRION_LK, 38, tirionFns.doAction)
+RegisterCreatureEvent(ENTRY_TIRION_LK, 14, tirionFns.spellHit)
+RegisterCreatureGossipEvent(ENTRY_TIRION_LK, 2, tirionFns.gossipSelect)
+
+-- C++ npc_broken_frostmourne (boss_the_lich_king.cpp:1916-1967,
+-- entry NPC_FROSTMOURNE_TRIGGER 38584) — REGISTERED 2026-11-08.
+-- One table local (frostmourneFns), same 200-local-budget reason as
+-- tirionFns above. The summon itself rides the DBC effect of
+-- SPELL_SUMMON_BROKEN_FROSTMOURNE_3 73017 (LK EVENT_OUTRO_TALK_6),
+-- so the ev22/ev38 arms are dormant until Spell.dbc ships — the
+-- val'kyr / strangulate summoned-arms-ahead-of-the-cast precedent.
+local frostmourneFns = {}
+
+-- C++ IsSummonedBy (:1923-1927): SetPhase(PHASE_OUTRO) +
+-- EVENT_OUTRO_KNOCK_BACK 3s (PHASE_OUTRO).
+frostmourneFns.isSummonedBy = function(event, creature)
+    local guid = creature:GetGUID()
+    schedule(guid, "frostmourne_knock_back", 3000, function() frostmourneFns.knockBack(creature, guid) end)
+end
+
+-- C++ DoAction (:1930-1934): ACTION_SUMMON_TERENAS ->
+-- EVENT_OUTRO_SUMMON_TERENAS 6s (PHASE_OUTRO). The sender is the LK
+-- POINT_LK_OUTRO_2 arrival (lichKingMovementInform above).
+frostmourneFns.doAction = function(event, creature, action)
+    if action ~= LK.ACTION_SUMMON_TERENAS then
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "frostmourne_summon_terenas", 6000, function() frostmourneFns.summonTerenas(creature, guid) end)
+end
+
+-- C++ EVENT_OUTRO_KNOCK_BACK (:1948-1950): DoCastAOE
+-- SPELL_BROKEN_FROSTMOURNE_KNOCK 72405 (self-cast per the DoCastAOE
+-- convention; hits Tirion, whose SpellHit arm faces him — the
+-- LoadEquipment leg there stays out, no bridge).
+frostmourneFns.knockBack = function(creature, guid)
+    creature:CastSpell(creature, LK.SPELL_BROKEN_FROSTMOURNE_KNOCK)
+end
+
+-- C++ EVENT_OUTRO_SUMMON_TERENAS (:1951-1953): DoCastAOE
+-- SPELL_SUMMON_TERENAS 72420 (self-cast per the DoCastAOE
+-- convention; DBC summon effect, dormant until Spell.dbc ships).
+frostmourneFns.summonTerenas = function(creature, guid)
+    creature:CastSpell(creature, LK.SPELL_SUMMON_TERENAS)
+end
+
+RegisterCreatureEvent(NPC_FROSTMOURNE_TRIGGER, 22, frostmourneFns.isSummonedBy)
+RegisterCreatureEvent(NPC_FROSTMOURNE_TRIGGER, 38, frostmourneFns.doAction)
 
 -- C++ npc_strangulate_vehicle (boss_the_lich_king.cpp:1590-1680,
 -- entry 36598) — PORTED 2026-11-05 (ev22 shape-2): IsSummonedBy +

@@ -21319,19 +21319,24 @@ func init() {
 	// victim->GetTypeId() == TYPEID_PLAYER (event 3, the razuvious
 	// player-gated variant precedent; the !me->IsInEvadeMode() and
 	// !events.IsInPhase(PHASE_OUTRO) legs have no bridges). No other
-	// bridgeable arm in the file: ev38 dispatch bridged; senders tirion MovementInform
-	// (boss_the_lich_king.cpp:1182) + terenas UpdateAI / jump SpellScript (:1809,
-	// :2629) unported; SpellHit
+	// bridgeable arm in the file: ev38 dispatch bridged; the tirion MovementInform
+	// sender (boss_the_lich_king.cpp:1182) is PORTED 2026-11-08, while the
+	// terenas UpdateAI / jump SpellScript senders (:1809, :2629) stay unported; SpellHit
 	// Talk(SAY_LK_FROSTMOURNE_KILL 9) is event 15 (never fires);
-	// MovementInform Talk(SAY_LK_REMORSELESS_WINTER 4 ×2) and the
-	// cross-AI tirion->AI()->Talk(SAY_TIRION_OUTRO_2) have no
-	// MovementInform / cross-AI-Talk bridges; all scheduler Talk legs
+	// MovementInform Talk(SAY_LK_REMORSELESS_WINTER 4 ×2) PORTED
+	// 2026-11-08 via ev28, as is the cross-AI tirion Talk
+	// (SAY_TIRION_OUTRO_2) on POINT_LK_OUTRO_2 (FindNearestCreature
+	// sweep + :Talk on the found creature); the tirion intro/outro
+	// chain (38995) + broken-frostmourne trigger (38584) + terenas
+	// outro IsSummonedBy all PORTED 2026-11-08 in the same file — the
+	// "no bridges" claims for those legs are retired, and the file's
+	// POINT_MOTION_TYPE nil-global bug (which silently disabled every
+	// ev28 arm) was fixed the same tick; all scheduler Talk legs
 	// (SAY_LK_INTRO_2 1 / SAY_LK_INTRO_3 2 / EMOTE_NECROTIC_PLAGUE_WARNING
 	// 13 / EMOTE_DEFILE_WARNING 12 / SAY_LK_HARVEST_SOUL 7 ×2 /
 	// SAY_LK_QUAKE 5 ×2 / SAY_LK_SUMMON_VALKYR 6 / SAY_LK_OUTRO_1..8
 	// 14..21 / SAY_LK_BERSERK 11) have no-timer-bridge (the boss_toravon
-	// precedent); npc_tirion_fordring_tft (38995) Talk legs ride DoAction
-	// / scheduler (no bridges); npc_terenas_menethil (36823/39217) Talk
+	// precedent); npc_terenas_menethil (36823/39217) Talk
 	// legs are scheduler-driven (no bridges); the 7 remaining NPC AIs
 	// have zero Talk lines (NOT registered, the bronjahm
 	// npc_corrupted_soul_fragment precedent); the 31 spell/aura legs +
