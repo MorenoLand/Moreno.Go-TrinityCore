@@ -64,12 +64,16 @@
 -- DOCUMENTED-ONLY (in this header; only entry 36597 registered):
 -- boss_the_lich_king DoAction — PORTED 2026-11-06 (lichKingDoAction,
 -- ev38): ACTION_START_ENCOUNTER writes IN_PROGRESS + Talk(SAY_LK_INTRO_1 0)
--- + SetStandState(STAND); Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic)
--- rides ACTION_TELEPORT_BACK. Both receivers are dormant — the sender
--- chains (Tirion intro / terenas EVENT_TELEPORT_BACK + restore_soul
--- SpellScript) are unported — the krick ACTION_OUTRO receiver precedent.
--- SetZoneMusic has no bridge; the strangulate-vehicle summons relay has
--- no summon-list bridge (the vehicle ev38 receiver IS ported).
+-- + SetStandState(STAND) + EVENT_INTRO_MOVE_1 4s (intro machine
+-- PORTED 2026-11-08); ACTION_START_ATTACK schedules EVENT_START_ATTACK
+-- 5s (PORTED 2026-11-08; sender is the unported Quake SpellScript);
+-- Talk(SAY_LK_FROSTMOURNE_ESCAPE 8, non-heroic) rides
+-- ACTION_TELEPORT_BACK (sender terenas EVENT_TELEPORT_BACK PORTED
+-- 2026-11-08). The START_ENCOUNTER receiver is dormant — the sender
+-- chain (Tirion intro) is unported — the krick ACTION_OUTRO receiver
+-- precedent. SetZoneMusic has no bridge; the strangulate-vehicle
+-- summons relay has no summon-list bridge (the vehicle ev38 receiver
+-- IS ported).
 -- No FAIL leg exists in C++ for the boss: no JustReachedHome override
 -- (the :1228 one belongs to npc_tirion_fordring_tft) and the
 -- EnterEvadeMode override (:594) calls _DespawnAtEvade() directly
@@ -123,8 +127,8 @@
 -- bridge (the gothik counterpoint: no invented phase-agnostic
 -- timers) — the model LANDED 2026-11-08 (lkPhase, ev9 DamageTaken
 -- transitions, ev28 MovementInform, EVENT_QUAKE phase sets); the
--- intro/outro movement machines, DoCast summon legs, and the
--- FROSTMOURNE phase set ride bridges that do not exist; the JustDied
+-- intro machine + FROSTMOURNE phase set PORTED 2026-11-08
+-- (onIntroMove1..3 / onHarvestSouls); the JustDied
 -- MoveFall leg still does,
 -- while the SPELL_PLAY_MOVIE (73159), SetDisableGravity(false), and
 -- zone-light + zone-weather JustDied legs ARE ported (ev4
@@ -139,8 +143,8 @@
 -- was stale (ev28 landed, lua_creature_events.go:4699/:5725).
 -- 73213 SPELL_EMOTE_SHOUT_NO_SHEATH (:929) — DoCastSelf non-triggered
 -- in case EVENT_EMOTE_CAST_SHOUT, scheduled +7s/+18s in PHASE_INTRO;
--- porting on a bare engage timer would fabricate intro-phase casts
--- mid-combat (no phase machine).
+-- PORTED 2026-11-08 (onEmoteCastShout, PHASE_INTRO-gated on the
+-- lkPhase model — no invented phase-agnostic timers).
 -- 70372 SPELL_SUMMON_SHAMBLING_HORROR (:947, PHASE_ONE, 1min re-arm),
 -- 70358 SPELL_SUMMON_DRUDGE_GHOULS (:952, PHASE_ONE, 30s re-arm),
 -- 70541 SPELL_INFEST (:956, PHASE_ONE seeded, re-arms PHASE_ONE or
@@ -160,10 +164,12 @@
 -- not the boss; the grab/life-siphon machine stays unported.
 -- 69382 SPELL_LIGHTS_FAVOR (:1704, terenas DoAction
 -- ACTION_FROSTMOURNE_INTRO) — cast by npc_terenas_menethil on itself;
--- terenas not registered in this file — wrong creature.
+-- PORTED 2026-11-08 (terenasDoAction below).
 -- npc_tirion_fordring_tft (NPC_HIGHLORD_TIRION_FORDRING_LK 38995) —
 -- NOT registered: Talk(SAY_TIRION_INTRO_1 0) rides DoAction
--- ACTION_CONTINUE_INTRO (ev38 dispatch bridged; sender LK MovementInform POINT_LK_INTRO_3 (boss_the_lich_king.cpp:839-843) unported — no MovementInform bridge — and receiver tirion unregistered); Talk(SAY_TIRION_INTRO_2
+-- ACTION_CONTINUE_INTRO (ev38 dispatch bridged; sender LK MovementInform POINT_LK_INTRO_3 (boss_the_lich_king.cpp:839-843) PORTED 2026-11-08
+-- via ev28, but the receiver tirion is unregistered, so the send
+-- stays out); Talk(SAY_TIRION_INTRO_2
 -- 1) (EVENT_INTRO_TALK_1) and Talk(SAY_TIRION_OUTRO_1 2)
 -- (EVENT_OUTRO_TALK_1) are scheduler-driven on the PHASE_INTRO /
 -- PHASE_OUTRO machines (CreateLuaEvent exists; the PHASE_OUTRO talk
@@ -175,17 +181,18 @@
 -- NPC_TERENAS_MENETHIL_FROSTMOURNE_H 39217) — DamageTaken PORTED
 -- (terenasDamageTaken, ev9, this tick); DoAction ACTION_TELEPORT_BACK
 -- PORTED 2026-11-05 (tick 215) via terenasDoAction (ev38) + the
--- spiritWardenDied JustDied relay (ev4). Talks/scheduler legs below
--- remain NOT registered as stated:
--- Talk(SAY_TERENAS_INTRO_1..3 0..2) (EVENT_FROSTMOURNE_TALK_1..3,
--- DoAction ACTION_FROSTMOURNE_INTRO scheduler) and
+-- spiritWardenDied JustDied relay (ev4); DoAction
+-- ACTION_FROSTMOURNE_INTRO + EVENT_FROSTMOURNE_TALK_1..3 +
+-- EVENT_DESTROY_SOUL + EVENT_TELEPORT_BACK PORTED 2026-11-08
+-- (terenasDoAction / onTerenasFrostmourneTalk1..3 /
+-- onTerenasDestroySoul / onTerenasTeleportBack). The heroic sender
+-- (LK EVENT_FROSTMOURNE_HEROIC, boss_the_lich_king.cpp:1073) is
+-- ported; the normal sender (instance EVENT_TELEPORT_TO_FROSTMOURNE,
+-- instance_icecrown_citadel.cpp:1463) is unported.
 -- Talk(SAY_TERENAS_OUTRO_1..2 0..1) (EVENT_OUTRO_TERENAS_TALK_1..2,
--- IsSummonedBy hook) — ev38 dispatch bridged; intro talks gated on
--- ACTION_FROSTMOURNE_INTRO senders LK EVENT_FROSTMOURNE_HEROIC
--- (boss_the_lich_king.cpp:1073) + instance EVENT_TELEPORT_TO_FROSTMOURNE
--- (instance_icecrown_citadel.cpp:1463), both unported; outro talks gated on the
--- unported outro summon chain (broken-frostmourne ACTION_SUMMON_TERENAS,
--- :883/:1931) — ev22 IsSummonedBy dispatch IS live for creature summons
+-- IsSummonedBy hook) — outro talks gated on the unported outro summon
+-- chain (broken-frostmourne ACTION_SUMMON_TERENAS, :883/:1931) — ev22
+-- IsSummonedBy dispatch IS live for creature summons
 -- (lua_creature_events.go:191-199 + :6799-6820; the "fires only for
 -- player pets (pet_cooldowns.go:73)" claim was stale — corrected by
 -- the strangulate-vehicle ev22 port below); a bare ev22 port
@@ -262,20 +269,23 @@
 -- PORTED: npc_raging_spirit Reset REACT_PASSIVE (:1365) +
 -- EVENT_SET_AGRESSIVE 2s -> REACT_AGGRESSIVE (:1424) — see the
 -- ragingSpiritJustEngagedWith comment above; the DoAction
--- ACTION_DISABLE_RAGING REACT_PASSIVE leg (:1377-1386) stays out (no
--- DoAction bridge, documented above).
+-- ACTION_DISABLE_RAGING REACT_PASSIVE leg (:1377-1386) PORTED
+-- 2026-11-08 (ragingSpiritDoAction, ev38) and its sender
+-- (EVENT_HARVEST_SOULS summon sweep) PORTED 2026-11-08
+-- (onHarvestSouls below).
 -- STAYS OUT (no new bridges built):
--- LK Reset REACT_PASSIVE (:529-532) — pairs with EVENT_FINISH_INTRO
--- REACT_AGGRESSIVE (:941-946); the intro machine (SetImmuneToPC,
--- DoZoneInCombat, phase SetPhase, MovementInform-driven) is unported,
--- so Reset PASSIVE alone would strand the boss passive permanently.
+-- LK Reset REACT_PASSIVE (:529-532) + SetImmuneToPC (:530) PORTED
+-- 2026-11-08 (lichKingReset — SetImmuneToPC rides SetImmuneToAll,
+-- the mandokir twin); the EVENT_FINISH_INTRO REACT_AGGRESSIVE
+-- (:941-946) leg PORTED 2026-11-08 (onFinishIntro below).
 -- LK DamageTaken REACT_PASSIVE legs (:690/:700/:709, 70%/40%/10%
 -- phase transitions) PORTED 2026-11-08 (lichKingDamageTaken, ev9 +
 -- ev28 MovementInform — the "no MovementInform bridge" claim was
 -- stale).
 -- LK EVENT_HARVEST_SOULS REACT_PASSIVE (:1044) + EVENT_START_ATTACK
--- REACT_AGGRESSIVE (:1028-1031) — unported PHASE_FROSTMOURNE/PHASE_THREE
--- machine + unported Harvest Souls cast.
+-- REACT_AGGRESSIVE (:1028-1031) PORTED 2026-11-08 (onHarvestSouls /
+-- onStartAttack, PHASE_FROSTMOURNE/PHASE_THREE-gated on the lkPhase
+-- model).
 -- JustSummoned REACT_PASSIVE + LichKingStartMovementEvent 5s ->
 -- REACT_AGGRESSIVE + AttackStart (:739-741/:447-466, shambling horror /
 -- drudge ghoul): cross-creature timed BasicEvent machine;
@@ -341,6 +351,7 @@ local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2
 local BOSS_STATE_DONE = 3
 local ACTION_START_ENCOUNTER = 0 -- boss_the_lich_king.cpp:335 (EncounterActions)
+local ACTION_START_ATTACK = 2 -- boss_the_lich_king.cpp:337
 
 local SPELL_BERSERK2 = 47008
 local SPELL_HORROR_SHOCKWAVE = 72149
@@ -373,6 +384,24 @@ local LK = {
     PHASE_TRANSITION = 5, PHASE_FROSTMOURNE = 6, PHASE_OUTRO = 7,
     POINT_CENTER_1 = 1, -- boss_the_lich_king.cpp:316
     POINT_CENTER_2 = 2, -- boss_the_lich_king.cpp:317
+    POINT_LK_INTRO_1 = 4, -- :319
+    POINT_LK_INTRO_2 = 5, -- :320
+    POINT_LK_INTRO_3 = 6, -- :321
+    INTRO_1_X = 432.0851, INTRO_1_Y = -2123.673, INTRO_1_Z = 864.6582, -- :302-306
+    INTRO_2_X = 457.8351, INTRO_2_Y = -2123.423, INTRO_2_Z = 841.1582,
+    INTRO_3_X = 465.0730, INTRO_3_Y = -2123.470, INTRO_3_Z = 840.8569,
+    TIRION_SPAWN_X = 505.2118, TIRION_SPAWN_Y = -2124.353, TIRION_SPAWN_Z = 840.9403, TIRION_SPAWN_O = 3.141593, -- :299
+    TERENAS_HEROIC_X = 495.7080, TERENAS_HEROIC_Y = -2523.760, TERENAS_HEROIC_Z = 1050.0, TERENAS_HEROIC_O = 0.0, -- :311
+    SAY_LK_INTRO_2 = 1, SAY_LK_INTRO_3 = 2, -- :37-38
+    SPELL_ICE_LOCK = 71614, -- :83
+    SPELL_EMOTE_SIT_NO_SHEATH = 73220, -- :80
+    SPELL_HARVEST_SOULS = 73654, -- :137
+    SPELL_SUMMON_SPIRIT_BOMB_1 = 73581, -- :158
+    SPELL_SUMMON_SPIRIT_BOMB_2 = 74299, -- :159
+    SPELL_TRIGGER_VILE_SPIRIT_HEROIC = 73582, -- :146
+    NPC_WORLD_TRIGGER_INFINITE_AOI = 36171, -- icecrown_citadel.h:329
+    EMOTE_ONESHOT_POINT_NO_SHEATHE = 397, -- SharedDefines.h:2035
+    SHEATH_STATE_MELEE = 1,
     POINT_LK_OUTRO_1 = 9, -- boss_the_lich_king.cpp:324
     CENTER_X = 503.6282, CENTER_Y = -2124.655, CENTER_Z = 840.8569, -- :298
     SPELL_REMORSELESS_WINTER_1 = 68981, -- :84
@@ -419,6 +448,13 @@ local SPELL_HARVEST_SOUL_10H = 74296 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL
 local SPELL_HARVEST_SOUL_25H = 74297 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 25H)
 local ACTION_TELEPORT_BACK = 8 -- boss_the_lich_king.cpp:343 (EncounterActions)
 local ACTION_DISABLE_RAGING = 9 -- boss_the_lich_king.cpp:344
+local ACTION_FROSTMOURNE_INTRO = -36823 -- icecrown_citadel.h:512
+local SPELL_LIGHTS_FAVOR = 69382 -- boss_the_lich_king.cpp:149
+local SPELL_RESTORE_SOULS = 73650 -- :151
+local SAY_TERENAS_INTRO_1 = 0 -- :71
+local SAY_TERENAS_INTRO_2 = 1 -- :72
+local SAY_TERENAS_INTRO_3 = 2 -- :73
+local ENTRY_TIRION_LK = 38995 -- icecrown_citadel.h:315 (NPC_HIGHLORD_TIRION_FORDRING_LK)
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local EMOTE_ONESHOT_EMERGE = 449 -- SharedDefines.h:2086
@@ -460,10 +496,26 @@ end
 -- handlers check lkPhase and drop without re-arming — the C++
 -- EventMap::ExecuteEvent phase-mismatch erase (EventMap.cpp:81-82:
 -- a due event whose phase bits miss the current phase is erased,
--- not deferred). The FROSTMOURNE phase is only set by the unported
--- EVENT_HARVEST_SOULS (:1043), so the value exists but is never
--- written yet; the vile-spirit activate gate reads it.
+-- not deferred). The FROSTMOURNE phase is set by onHarvestSouls
+-- (:1043, PORTED 2026-11-08) and cleared by onStartAttack (:1030);
+-- the vile-spirit activate gate reads it.
 local lkPhase = {}
+
+-- Forward declaration (the tharon_ja/gal_darah idiom): onVileSpiritActivate
+-- is defined with the JustSummoned section below but is referenced by
+-- onHarvestSouls above it; plain assignment at the definition site,
+-- never a second `local function` (the malown shadowing time-bomb).
+local onVileSpiritActivate
+
+-- C++ EventMap::DelayEvents(50s, EVENT_GROUP_VILE_SPIRITS) twin
+-- (boss_the_lich_king.cpp:1050): the group holds only
+-- EVENT_VILE_SPIRITS, so the delay is a remaining-time shift of the
+-- pending "vile_spirits" timer. The due time is recorded at each arm
+-- (CENTER_2 seed + re-arm, the thekal delayTimers precedent,
+-- wall-clock ms via GetCurrTime); delayVileSpirits below no-ops when
+-- the timer is not armed (C++ DelayEvents on an empty group is
+-- likewise a no-op).
+local vileSpiritsDue = {}
 
 -- Random alive player from the threat list (the file's
 -- randomPlayerAnywhere idiom, threat-ordered); skipFirst drops the
@@ -743,22 +795,30 @@ end
 -- SetZoneMusic stays out (no bridge).
 local function onVileSpirits(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_THREE then
+        vileSpiritsDue[guid] = nil
         return
     end
     if creature:IsCasting() then
+        vileSpiritsDue[guid] = GetCurrTime() + 500
         schedule(guid, "vile_spirits", 500, function() onVileSpirits(creature, guid) end)
         return
     end
     creature:CastSpell(creature, LK.SPELL_VILE_SPIRITS)
-    schedule(guid, "vile_spirits", {35000, 40000}, function() onVileSpirits(creature, guid) end)
+    -- The {35s, 40s} re-arm is rolled here (not inside CreateLuaEvent)
+    -- The {35s, 40s} re-arm is rolled here (not inside CreateLuaEvent)
+    -- so the due time is known for DelayEvents (vileSpiritsDue above).
+    local delay = math.random(35000, 40000)
+    vileSpiritsDue[guid] = GetCurrTime() + delay
+    schedule(guid, "vile_spirits", delay, function() onVileSpirits(creature, guid) end)
 end
 
 -- C++ EVENT_HARVEST_SOUL (:984-989, PHASE_THREE, non-heroic):
 -- Talk(SAY_LK_HARVEST_SOUL 7) + random target (SpellTargetSelector,
 -- approximated by the alive random-player pool) + DoCast
 -- SPELL_HARVEST_SOUL 68980, re-arm 75s. The heroic
--- EVENT_HARVEST_SOULS arm sets PHASE_FROSTMOURNE (:1039-1069) and
--- rides the unported Frostmourne machine — never seeded on heroic.
+-- EVENT_HARVEST_SOULS arm sets PHASE_FROSTMOURNE (:1039-1069,
+-- PORTED 2026-11-08, onHarvestSouls below) and is seeded on heroic
+-- from the POINT_CENTER_2 MovementInform arm.
 local function onHarvestSoul(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_THREE then
         return
@@ -773,6 +833,133 @@ local function onHarvestSoul(creature, guid)
         creature:CastSpell(target, LK.SPELL_HARVEST_SOUL)
     end
     schedule(guid, "harvest_soul", 75000, function() onHarvestSoul(creature, guid) end)
+end
+
+-- C++ EventMap::DelayEvents(50s, EVENT_GROUP_VILE_SPIRITS)
+-- (boss_the_lich_king.cpp:1050): shift the pending "vile_spirits"
+-- timer out by extraMs, preserving its remaining time (the thekal
+-- delayTimers precedent). No-ops when the timer is not armed.
+local function delayVileSpirits(guid, creature, extraMs)
+    local per = timers[guid]
+    if not per or not per["vile_spirits"] then
+        return
+    end
+    local due = vileSpiritsDue[guid]
+    if not due then
+        return
+    end
+    local remaining = due - GetCurrTime()
+    if remaining < 0 then
+        remaining = 0
+    end
+    local delay = remaining + extraMs
+    vileSpiritsDue[guid] = GetCurrTime() + delay
+    schedule(guid, "vile_spirits", delay, function() onVileSpirits(creature, guid) end)
+end
+
+-- C++ EVENT_START_ATTACK (:1029-1032): REACT_AGGRESSIVE + if in
+-- PHASE_FROSTMOURNE, SetPhase(PHASE_THREE). No phase bits on the
+-- schedule (fires in any phase); the 49s schedule only exists via
+-- EVENT_HARVEST_SOULS, the 5s one via DoAction ACTION_START_ATTACK
+-- (ported below; its sender is the unported Quake SpellScript).
+-- PORTED 2026-11-08.
+local function onStartAttack(creature, guid)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    if lkPhase[guid] == LK.PHASE_FROSTMOURNE then
+        lkPhase[guid] = LK.PHASE_THREE
+    end
+end
+
+-- C++ TriggerWickedSpirit (boss_the_lich_king.cpp:489-516): a
+-- BasicEvent on the world-trigger spawner, counter 13: every 3s it
+-- casts SPELL_TRIGGER_VILE_SPIRIT_HEROIC 73582 on nil target with
+-- SPELLVALUE_MAX_TARGETS 1 (no bridge for the clamp — the
+-- mother_shahraz fatal-attraction precedent casts without it and
+-- documents the delta), re-arming while the counter lasts (13 casts
+-- total). PORTED 2026-11-08.
+local function onTriggerWickedSpirit(spawner, guid, remaining)
+    spawner:CastSpell(nil, LK.SPELL_TRIGGER_VILE_SPIRIT_HEROIC)
+    if remaining > 1 then
+        schedule(guid, "wicked_spirit", 3000, function() onTriggerWickedSpirit(spawner, guid, remaining - 1) end)
+    end
+end
+
+-- C++ EVENT_FROSTMOURNE_HEROIC (:1070-1087): summon Terenas
+-- (heroic entry 39217) at TerenasSpawnHeroic, 50s timed despawn +
+-- DoAction(ACTION_FROSTMOURNE_INTRO), then the nearest world trigger
+-- (36171) in 100yd casts SPELL_SUMMON_SPIRIT_BOMB_1/2 (triggered)
+-- and starts the 3s TriggerWickedSpirit chain. The C++ sorts all
+-- triggers in range by distance and takes the front — the nearest,
+-- which is what FindNearestCreature returns. setActive(true) on
+-- Terenas and on the spawner has no bridge. PORTED 2026-11-08.
+local function onFrostmourneHeroic(creature, guid)
+    local terenas = creature:SummonCreature(ENTRY_TERENAS_HEROIC, LK.TERENAS_HEROIC_X, LK.TERENAS_HEROIC_Y, LK.TERENAS_HEROIC_Z, LK.TERENAS_HEROIC_O, 2, 50000)
+    if terenas then
+        terenas:DoAction(ACTION_FROSTMOURNE_INTRO)
+        local spawner = terenas:FindNearestCreature(LK.NPC_WORLD_TRIGGER_INFINITE_AOI, 100.0)
+        if spawner then
+            spawner:SetFarVisible(true)
+            spawner:CastSpell(spawner, LK.SPELL_SUMMON_SPIRIT_BOMB_1, true)
+            spawner:CastSpell(spawner, LK.SPELL_SUMMON_SPIRIT_BOMB_2, true)
+            local spawnerGuid = spawner:GetGUID()
+            schedule(spawnerGuid, "wicked_spirit", 3000, function() onTriggerWickedSpirit(spawner, spawnerGuid, 13) end)
+        end
+    end
+end
+
+-- C++ EVENT_HARVEST_SOULS (:1039-1069, PHASE_THREE, heroic only):
+-- Talk(SAY_LK_HARVEST_SOUL 7) + DoCastAOE(SPELL_HARVEST_SOULS 73654)
+-- + re-arm {100s, 110s} + SetPhase(PHASE_FROSTMOURNE) +
+-- REACT_PASSIVE + AttackStop + DelayEvents(50s, vile-spirits group)
+-- + RescheduleEvent(DEFILE, 50s) + RescheduleEvent(SOUL_REAPER,
+-- {57s, 62s}) + EVENT_START_ATTACK 49s + EVENT_FROSTMOURNE_HEROIC
+-- 6.5s + the summon sweep (vile spirits: kill events + 56.5s
+-- activate re-arm + REACT_PASSIVE + CombatStop(true) +
+-- RemoveAurasDueToSpell(70501/70502) + MoveTargetedHome; raging
+-- spirits: DoAction(ACTION_DISABLE_RAGING)). The IsCasting defer
+-- applies (phase is still PHASE_THREE at fire time; the :900 gate
+-- exempts FROSTMOURNE only after the set). SetZoneMusic stays out
+-- (no bridge). The sweep rides GetCreaturesInRange (500yd, the
+-- frozen-throne platform; C++ iterates the LK summons list, which
+-- has no Lua twin). PORTED 2026-11-08.
+local function onHarvestSouls(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "harvest_souls", 500, function() onHarvestSouls(creature, guid) end)
+        return
+    end
+    creature:Talk(LK.SAY_LK_HARVEST_SOUL)
+    creature:CastSpell(creature, LK.SPELL_HARVEST_SOULS)
+    schedule(guid, "harvest_souls", {100000, 110000}, function() onHarvestSouls(creature, guid) end)
+    lkPhase[guid] = LK.PHASE_FROSTMOURNE
+    creature:SetReactState(REACT_PASSIVE)
+    creature:AttackStop()
+    delayVileSpirits(guid, creature, 50000)
+    schedule(guid, "defile", 50000, function() onDefile(creature, guid) end)
+    schedule(guid, "soul_reaper", {57000, 62000}, function() onSoulReaper(creature, guid) end)
+    schedule(guid, "start_attack", 49000, function() onStartAttack(creature, guid) end)
+    schedule(guid, "frostmourne_heroic", 6500, function() onFrostmourneHeroic(creature, guid) end)
+    local spirits = creature:GetCreaturesInRange(500, ENTRY_VILE_SPIRIT)
+    if spirits then
+        for _, spirit in ipairs(spirits) do
+            local spiritGuid = spirit:GetGUID()
+            cancelTimers(spiritGuid)
+            schedule(spiritGuid, "vile_activate", 56500, function() onVileSpiritActivate(spirit) end)
+            spirit:SetReactState(REACT_PASSIVE)
+            spirit:CombatStop(true)
+            spirit:RemoveAura(SPELL_VILE_SPIRIT_MOVE_SEARCH)
+            spirit:RemoveAura(SPELL_VILE_SPIRIT_DAMAGE_SEARCH)
+            spirit:MoveHome()
+        end
+    end
+    local ragings = creature:GetCreaturesInRange(500, ENTRY_RAGING_SPIRIT)
+    if ragings then
+        for _, raging in ipairs(ragings) do
+            raging:DoAction(ACTION_DISABLE_RAGING)
+        end
+    end
 end
 
 -- C++ EVENT_OUTRO_TALK_1 (:1088-1091, PHASE_OUTRO): Talk(SAY_LK_OUTRO_1 14)
@@ -839,19 +1026,34 @@ end
 -- C++ boss_the_lich_king::DoAction ACTION_START_ENCOUNTER (:615-622):
 -- SetBossState IN_PROGRESS + Talk(SAY_LK_INTRO_1) + SetZoneMusic
 -- (no bridge) + SetStandState(STAND) + EVENT_INTRO_MOVE_1 4s (the
--- unported intro-movement machine). The sender is Tirion's intro
--- chain (unregistered), so the receiver is dormant until that chain
--- lands — the krick ACTION_OUTRO receiver precedent. PORTED 2026-11-06.
+-- intro-movement machine, PORTED 2026-11-08 below). The sender is
+-- Tirion's intro chain (unregistered), so the receiver is dormant
+-- until that chain lands — the krick ACTION_OUTRO receiver precedent.
+-- ACTION_START_ATTACK (:623-625): EVENT_START_ATTACK 5s (the
+-- onStartAttack arm, PORTED 2026-11-08; its sender is the unported
+-- Quake SpellScript, so this arm is dormant too).
 -- ACTION_TELEPORT_BACK (:654-661): Talk(SAY_LK_FROSTMOURNE_ESCAPE 8,
 -- non-heroic) + strangulate-vehicle summons relay (no summon-list
 -- bridge — the vehicle ev38 receiver IS ported); the sender is the
--- terenas EVENT_TELEPORT_BACK / restore_soul SpellScript chain, both
--- unported, so this arm is dormant too.
+-- terenas EVENT_TELEPORT_BACK (PORTED 2026-11-08, onTerenasTeleportBack
+-- below) / restore_soul SpellScript chain (unported).
+-- Forward declaration (the tharon_ja/gal_darah idiom): onIntroMove1
+-- is defined with the intro handlers below but is referenced by the
+-- START_ENCOUNTER arm above it; plain assignment at the definition
+-- site, never a second `local function` (the malown shadowing
+-- time-bomb).
+local onIntroMove1
+
 local function lichKingDoAction(event, creature, action)
     if action == ACTION_START_ENCOUNTER then
+        local guid = creature:GetGUID()
         creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_IN_PROGRESS)
         creature:Talk(SAY_LK_INTRO_1)
         creature:SetStandState(UNIT_STAND_STATE_STAND)
+        schedule(guid, "intro_move_1", 4000, function() onIntroMove1(creature, guid) end)
+    elseif action == ACTION_START_ATTACK then
+        local guid = creature:GetGUID()
+        schedule(guid, "start_attack", 5000, function() onStartAttack(creature, guid) end)
     elseif action == ACTION_TELEPORT_BACK then
         if not creature:IsHeroic() then
             creature:Talk(SAY_LK_FROSTMOURNE_ESCAPE)
@@ -885,6 +1087,120 @@ local function lichKingJustEngagedWith(event, creature, target)
     end
 end
 
+-- C++ EVENT_FINISH_INTRO (:939-946, PHASE_INTRO): SetWalk(false) +
+-- SetImmuneToPC(false) + SetReactState(REACT_AGGRESSIVE) +
+-- SetPhase(PHASE_ONE) + DoZoneInCombat(). The Go DoZoneInCombat twin
+-- seeds threat but does not fire ev1 (lua_creature_events.go:1996),
+-- so the engage seeding runs here directly — the C++ FINISH_INTRO
+-- -> DoZoneInCombat -> JustEngagedWith chain; a later first attack
+-- re-fires ev1 and re-seeds (the file's existing ev1 cancel+reseed
+-- behavior). SetImmuneToPC rides SetImmuneToAll (the mandokir twin;
+-- sets 0x100|0x200 vs C++ 0x100 only — no NPC attacks the Lich King
+-- during the intro). PORTED 2026-11-08.
+local function onFinishIntro(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:SetWalk(false)
+    creature:SetImmuneToAll(false)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    lkPhase[guid] = LK.PHASE_ONE
+    lichKingJustEngagedWith(1, creature, nil)
+end
+
+-- C++ EVENT_EMOTE_CAST_SHOUT (:928-930, PHASE_INTRO):
+-- DoCastSelf(SPELL_EMOTE_SHOUT_NO_SHEATH 73213). 500ms IsCasting
+-- defer (the :900 gate; INTRO is not exempt). PORTED 2026-11-08.
+local function onEmoteCastShout(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "intro_shout_defer", 500, function() onEmoteCastShout(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_EMOTE_SHOUT_NO_SHEATH)
+end
+
+-- C++ EVENT_INTRO_EMOTE_1 (:931-933, PHASE_INTRO):
+-- HandleEmoteCommand(EMOTE_ONESHOT_POINT_NO_SHEATHE 397).
+-- PORTED 2026-11-08.
+local function onIntroEmote1(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:PerformEmote(LK.EMOTE_ONESHOT_POINT_NO_SHEATHE)
+end
+
+-- C++ EVENT_INTRO_CAST_FREEZE (:934-938, PHASE_INTRO):
+-- Talk(SAY_LK_INTRO_3 2) + DoCastAOE(SPELL_ICE_LOCK 71614) +
+-- EVENT_FINISH_INTRO 1s. 500ms IsCasting defer (the :900 gate).
+-- PORTED 2026-11-08.
+local function onIntroCastFreeze(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "intro_freeze_defer", 500, function() onIntroCastFreeze(creature, guid) end)
+        return
+    end
+    creature:Talk(LK.SAY_LK_INTRO_3)
+    creature:CastSpell(creature, LK.SPELL_ICE_LOCK)
+    schedule(guid, "finish_intro", 1000, function() onFinishIntro(creature, guid) end)
+end
+
+-- C++ EVENT_INTRO_TALK_1 (:919-927, PHASE_INTRO):
+-- Talk(SAY_LK_INTRO_2 1) + HandleEmoteCommand(
+-- EMOTE_ONESHOT_TALK_NO_SHEATHE) + EVENT_EMOTE_CAST_SHOUT 7s +
+-- EVENT_INTRO_EMOTE_1 13s + EVENT_EMOTE_CAST_SHOUT 18s +
+-- EVENT_INTRO_CAST_FREEZE 31s. The two shouts share one handler
+-- under distinct keys (schedule keys must be unique). PORTED 2026-11-08.
+local function onIntroTalk1(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:Talk(LK.SAY_LK_INTRO_2)
+    creature:PerformEmote(LK.EMOTE_ONESHOT_TALK_NO_SHEATHE)
+    schedule(guid, "intro_shout_1", 7000, function() onEmoteCastShout(creature, guid) end)
+    schedule(guid, "intro_emote_1", 13000, function() onIntroEmote1(creature, guid) end)
+    schedule(guid, "intro_shout_2", 18000, function() onEmoteCastShout(creature, guid) end)
+    schedule(guid, "intro_cast_freeze", 31000, function() onIntroCastFreeze(creature, guid) end)
+end
+
+-- C++ EVENT_INTRO_MOVE_2 (:913-915, PHASE_INTRO):
+-- MovePoint(POINT_LK_INTRO_2, LichKingIntro[1]). PORTED 2026-11-08.
+local function onIntroMove2(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:MoveTo(LK.POINT_LK_INTRO_2, LK.INTRO_2_X, LK.INTRO_2_Y, LK.INTRO_2_Z)
+end
+
+-- C++ EVENT_INTRO_MOVE_3 (:916-918, PHASE_INTRO):
+-- MovePoint(POINT_LK_INTRO_3, LichKingIntro[2]). PORTED 2026-11-08.
+local function onIntroMove3(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:MoveTo(LK.POINT_LK_INTRO_3, LK.INTRO_3_X, LK.INTRO_3_Y, LK.INTRO_3_Z)
+end
+
+-- C++ EVENT_INTRO_MOVE_1 (:907-912, PHASE_INTRO): SetSheath(MELEE)
+-- + RemoveAurasDueToSpell(SPELL_EMOTE_SIT_NO_SHEATH 73220) +
+-- SetWalk(true) + MovePoint(POINT_LK_INTRO_1, LichKingIntro[0]).
+-- The phase gate is the C++ PHASE_INTRO event bit (the phase model
+-- landed 2026-11-08); no IsCasting defer (no cast in the arm).
+-- PORTED 2026-11-08.
+onIntroMove1 = function(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    creature:SetSheath(LK.SHEATH_STATE_MELEE)
+    creature:RemoveAura(LK.SPELL_EMOTE_SIT_NO_SHEATH)
+    creature:SetWalk(true)
+    creature:MoveTo(LK.POINT_LK_INTRO_1, LK.INTRO_1_X, LK.INTRO_1_Y, LK.INTRO_1_Z)
+end
+
 -- C++ _Reset() timer machinery — cancel/re-arm on combat events
 -- (the maiden convention). C++ boss_the_lich_king::EnterEvadeMode
 -- (:594): DoCastAOE(SPELL_KILL_FROSTMOURNE_PLAYERS 75127) non-triggered,
@@ -906,9 +1222,17 @@ local function lichKingReset(event, creature)
         creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(creature:GetGUID())
+    creature:SetImmuneToAll(true) -- C++ Reset :530 SetImmuneToPC(true) (mandokir twin; 0x100|0x200 vs C++ 0x100 only)
+    creature:SetReactState(REACT_PASSIVE) -- C++ Reset :531
     lkPhase[creature:GetGUID()] = LK.PHASE_INTRO -- C++ Reset :533 SetPhase(PHASE_INTRO)
     -- C++ Reset :543: clear any light override (0, 5000ms).
     creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, 0, 5000)
+    -- C++ Reset :547-548: summon Tirion (38995) at TirionSpawn when
+    -- the instance holds none — FindNearestCreature proxy (the
+    -- terenasDamageTaken precedent); TEMPSUMMON_MANUAL_DESPAWN.
+    if not creature:FindNearestCreature(ENTRY_TIRION_LK, 100.0) then
+        creature:SummonCreature(ENTRY_TIRION_LK, LK.TIRION_SPAWN_X, LK.TIRION_SPAWN_Y, LK.TIRION_SPAWN_Z, LK.TIRION_SPAWN_O, 7, 0)
+    end
 end
 
 -- C++ boss_the_lich_king::JustDied (boss_the_lich_king.cpp:549-562):
@@ -983,10 +1307,10 @@ end
 -- 100k threat; area target-count DATA_VILE write + Spirit Burst +
 -- 3s despawn) ride the unbridged SpellScript — the neck_deep
 -- achievement writer stays out (its 70502 area radius is a DBC fact).
--- The 56.5s Harvest-Souls re-arm (:1058-1069) rides the unported
--- EVENT_HARVEST_SOULS; when it lands it reuses the "vile_activate"
--- key via schedule(), replacing the pending activate.
-local function onVileSpiritActivate(spirit)
+-- The 56.5s Harvest-Souls re-arm (:1058-1069) is PORTED 2026-11-08
+-- (onHarvestSouls below); it reuses the "vile_activate" key via
+-- schedule(), replacing the pending activate.
+onVileSpiritActivate = function(spirit)
     spirit:SetReactState(REACT_AGGRESSIVE)
     spirit:CastSpell(spirit, SPELL_VILE_SPIRIT_MOVE_SEARCH, true)
     spirit:CastSpell(nil, SPELL_VILE_SPIRIT_DAMAGE_SEARCH, true)
@@ -1129,18 +1453,30 @@ end
 -- EVENT_SUMMON_RAGING_SPIRIT_2 5s (PHASE_TRANSITION) + EVENT_DEFILE 95500ms /
 -- EVENT_SOUL_REAPER 99500ms / EVENT_VILE_SPIRITS 79500ms /
 -- EVENT_HARVEST_SOUL(S) 73500ms (PHASE_THREE; heroic seeds HARVEST_SOULS,
--- never scheduled here — the Frostmourne machine is unported).
+-- PORTED 2026-11-08, onHarvestSouls below).
 -- POINT_LK_OUTRO_1 — EVENT_OUTRO_TALK_4 1ms / EVENT_OUTRO_RAISE_DEAD 1s /
 -- EVENT_OUTRO_TALK_5 29s (PHASE_OUTRO). SetZoneMusic + CENTER_2
--- summons.DespawnEntry(VALKYR) stay out (no bridge); intro/outro
--- point ids (LK_INTRO_1..3, LK_OUTRO_2) ride the unported intro/outro
--- movement machines. PORTED 2026-11-08 via ev28 (POINT_MOTION_TYPE 8).
+-- summons.DespawnEntry(VALKYR) stay out (no bridge); POINT_LK_INTRO_1..3
+-- PORTED 2026-11-08 (onIntroMove1..3 arms below); POINT_LK_OUTRO_2 rides
+-- the unported outro movement machine. PORTED 2026-11-08 via ev28 (POINT_MOTION_TYPE 8).
 local function lichKingMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE then
         return
     end
     local guid = creature:GetGUID()
-    if id == LK.POINT_CENTER_1 then
+    if id == LK.POINT_LK_INTRO_1 then
+        -- C++ :833-836: schedule for next update cycle, current update
+        -- must finalize movement (1ms, PHASE_INTRO). PORTED 2026-11-08.
+        schedule(guid, "intro_move_2", 1, function() onIntroMove2(creature, guid) end)
+    elseif id == LK.POINT_LK_INTRO_2 then
+        -- C++ :837-839: same 1ms next-cycle schedule. PORTED 2026-11-08.
+        schedule(guid, "intro_move_3", 1, function() onIntroMove3(creature, guid) end)
+    elseif id == LK.POINT_LK_INTRO_3 then
+        -- C++ :840-844: tirion->AI()->DoAction(ACTION_CONTINUE_INTRO)
+        -- stays out (Tirion 38995 unregistered) + EVENT_INTRO_TALK_1 9s.
+        -- PORTED 2026-11-08 (talk schedule only).
+        schedule(guid, "intro_talk_1", 9000, function() onIntroTalk1(creature, guid) end)
+    elseif id == LK.POINT_CENTER_1 then
         creature:SetFacingTo(0.0)
         creature:Talk(LK.SAY_LK_REMORSELESS_WINTER)
         creature:CastSpell(creature, LK.SPELL_REMORSELESS_WINTER_1)
@@ -1163,8 +1499,11 @@ local function lichKingMovementInform(event, creature, moveType, id)
         schedule(guid, "defile", 95500, function() onDefile(creature, guid) end)
         schedule(guid, "soul_reaper", 99500, function() onSoulReaper(creature, guid) end)
         schedule(guid, "vile_spirits", 79500, function() onVileSpirits(creature, guid) end)
+        vileSpiritsDue[guid] = GetCurrTime() + 79500
         if not creature:IsHeroic() then
             schedule(guid, "harvest_soul", 73500, function() onHarvestSoul(creature, guid) end)
+        else
+            schedule(guid, "harvest_souls", 73500, function() onHarvestSouls(creature, guid) end)
         end
     elseif id == LK.POINT_LK_OUTRO_1 then
         schedule(guid, "outro_talk_4", 1, function() onOutroTalk4(creature, guid) end)
@@ -1274,9 +1613,9 @@ end
 -- (2026-11-08, ragingSpiritDoAction, ev38 below): the receiver dispatch
 -- is live in this file (lichKingDoAction/terenasDoAction precedent) —
 -- the earlier "no DoAction bridge" note conflated receiver and sender.
--- The sender stays out (EVENT_HARVEST_SOULS unported), so the handler
--- is dormant until the sender lands; until then the Soul Shriek timer
--- keeps firing where C++ goes silent (gothik counterpoint).
+-- The sender (EVENT_HARVEST_SOULS summon sweep) PORTED 2026-11-08
+-- (onHarvestSouls below); until it fires, the Soul Shriek timer keeps
+-- firing where C++ goes silent (gothik counterpoint).
 local ragingFrostmournePhase = {}
 
 local function onSoulShriek(creature, guid)
@@ -1412,16 +1751,63 @@ RegisterCreatureEvent(ENTRY_SPIRIT_WARDEN, 23, spiritWardenLeaveCombat)
 RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 22, valkyrIsSummonedBy)
 RegisterCreatureEvent(ENTRY_VILE_SPIRIT, 4, vileSpiritDied)
 
+-- C++ EVENT_FROSTMOURNE_TALK_1 (:1776-1780): Talk(SAY_TERENAS_INTRO_1 0)
+-- + heroic DoCastAOE(SPELL_RESTORE_SOULS 73650). PORTED 2026-11-08.
+local function onTerenasFrostmourneTalk1(creature, guid)
+    creature:Talk(SAY_TERENAS_INTRO_1)
+    if creature:IsHeroic() then
+        creature:CastSpell(creature, SPELL_RESTORE_SOULS)
+    end
+end
+
+-- C++ EVENT_FROSTMOURNE_TALK_2 (:1781-1783):
+-- Talk(SAY_TERENAS_INTRO_2 1). PORTED 2026-11-08.
+local function onTerenasFrostmourneTalk2(creature, guid)
+    creature:Talk(SAY_TERENAS_INTRO_2)
+end
+
+-- C++ EVENT_FROSTMOURNE_TALK_3 (:1784-1785, non-heroic only):
+-- Talk(SAY_TERENAS_INTRO_3 2). PORTED 2026-11-08.
+local function onTerenasFrostmourneTalk3(creature, guid)
+    creature:Talk(SAY_TERENAS_INTRO_3)
+end
+
+-- C++ EVENT_TELEPORT_BACK (:1807-1810): lichKing->AI()->
+-- DoAction(ACTION_TELEPORT_BACK) — LK resolved via FindNearestCreature
+-- (the terenasDamageTaken precedent) instead of instance GetGuidData.
+-- The old "no cross-AI DoAction send bridge" claim is stale:
+-- creature:DoAction sends ev38 (spiritWardenDied precedent).
+-- PORTED 2026-11-08.
+local function onTerenasTeleportBack(creature)
+    local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
+    if lichKing then
+        lichKing:DoAction(ACTION_TELEPORT_BACK)
+    end
+end
+
+-- C++ EVENT_DESTROY_SOUL (:1800-1806, non-heroic only): SetFlag
+-- NOT_SELECTABLE + nearest spirit warden (20yd) casts DESTROY_SOUL
+-- (non-triggered) + DoCast(SPELL_TERENAS_LOSES_INSIDE) +
+-- EVENT_TELEPORT_BACK 1s. PORTED 2026-11-08.
+local function onTerenasDestroySoul(creature, guid)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    local warden = creature:FindNearestCreature(ENTRY_SPIRIT_WARDEN, 20.0)
+    if warden then
+        warden:CastSpell(nil, SPELL_DESTROY_SOUL)
+    end
+    creature:CastSpell(creature, SPELL_TERENAS_LOSES_INSIDE)
+    schedule(guid, "terenas_teleport_back", 1000, function() onTerenasTeleportBack(creature) end)
+end
+
 -- C++ npc_terenas_menethil::DamageTaken (:1733-1752): lethal damage
 -- is clamped to health-1 (sara second-return precedent); then, only
 -- when not heroic and without SPELL_TERENAS_LOSES_INSIDE, SetFlag
 -- NOT_SELECTABLE + DoCast(TERENAS_LOSES_INSIDE, self-cast per the
--- warden 1-arg precedent) + nearest spirit warden (20yd) casts
--- DESTROY_SOUL (non-triggered) + 2s despawn + terenas 2s despawn.
--- The 1s EVENT_TELEPORT_BACK leg stays out (boss DoAction cross-AI,
--- no bridge); the EVENT_DESTROY_SOUL 1min leg rides the unported
--- DoAction/summon machine. Terenas Talks stay DoAction/scheduler
--- gated as documented in the header.
+-- warden 1-arg precedent) + EVENT_TELEPORT_BACK 1s (PORTED
+-- 2026-11-08, onTerenasTeleportBack below) + nearest spirit warden
+-- (20yd) casts DESTROY_SOUL (non-triggered) + 2s despawn + terenas
+-- 2s despawn. The EVENT_DESTROY_SOUL 1min leg rides the
+-- DoAction/summon machine (PORTED 2026-11-08 for the heroic sender).
 local function terenasDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     local newDamage = damage
@@ -1431,6 +1817,7 @@ local function terenasDamageTaken(event, creature, attacker, damage)
             creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             creature:CastSpell(creature, SPELL_TERENAS_LOSES_INSIDE)
             local guid = creature:GetGUID()
+            schedule(guid, "terenas_teleport_back", 1000, function() onTerenasTeleportBack(creature) end)
             local warden = creature:FindNearestCreature(ENTRY_SPIRIT_WARDEN, 20.0)
             if warden then
                 warden:CastSpell(nil, SPELL_DESTROY_SOUL)
@@ -1445,14 +1832,38 @@ end
 RegisterCreatureEvent(ENTRY_TERENAS, 9, terenasDamageTaken)
 RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 9, terenasDamageTaken)
 
--- C++ npc_terenas_menethil::DoAction ACTION_TELEPORT_BACK
--- (boss_the_lich_king.cpp:1714-1717): CastSpell(nullptr,
+-- C++ npc_terenas_menethil::DoAction ACTION_FROSTMOURNE_INTRO
+-- (:1699-1713): setActive(true) (no bridge) + SetFarVisible(false) +
+-- non-heroic SetHealth(max/2) + DoCastSelf(SPELL_LIGHTS_FAVOR 69382)
+-- + _events.Reset() + EVENT_FROSTMOURNE_TALK_1 2s +
+-- EVENT_FROSTMOURNE_TALK_2 11s + non-heroic EVENT_DESTROY_SOUL 1min
+-- + EVENT_FROSTMOURNE_TALK_3 25s. The sender is LK
+-- EVENT_FROSTMOURNE_HEROIC (PORTED 2026-11-08, onFrostmourneHeroic
+-- above) on heroic; on normal it rides the unported instance
+-- EVENT_TELEPORT_TO_FROSTMOURNE. PORTED 2026-11-08.
+-- ACTION_TELEPORT_BACK (:1714-1717): CastSpell(nullptr,
 -- SPELL_RESTORE_SOUL, TRIGGERED_NONE) + DespawnOrUnsummon(3s).
 -- PORTED 2026-11-05 (tick 215), census row 159, via the
 -- spiritWardenDied JustDied relay above. (The terenas UpdateAI
--- EVENT_TELEPORT_BACK leg that sends the Lich King DoAction stays
--- out — LK-side instance-GUID + phase machine.)
+-- EVENT_TELEPORT_BACK leg that sends the Lich King DoAction is
+-- PORTED 2026-11-08, onTerenasTeleportBack above.)
 local function terenasDoAction(event, creature, action)
+    if action == ACTION_FROSTMOURNE_INTRO then
+        local guid = creature:GetGUID()
+        creature:SetFarVisible(false)
+        if not creature:IsHeroic() then
+            creature:SetHealth(math.floor(creature:GetMaxHealth() / 2))
+        end
+        creature:CastSpell(creature, SPELL_LIGHTS_FAVOR)
+        cancelTimers(guid)
+        schedule(guid, "frostmourne_talk_1", 2000, function() onTerenasFrostmourneTalk1(creature, guid) end)
+        schedule(guid, "frostmourne_talk_2", 11000, function() onTerenasFrostmourneTalk2(creature, guid) end)
+        if not creature:IsHeroic() then
+            schedule(guid, "destroy_soul", 60000, function() onTerenasDestroySoul(creature, guid) end)
+            schedule(guid, "frostmourne_talk_3", 25000, function() onTerenasFrostmourneTalk3(creature, guid) end)
+        end
+        return
+    end
     if action ~= ACTION_TELEPORT_BACK then
         return
     end
@@ -1568,8 +1979,8 @@ end
 -- SummonedCreatureDespawn bookkeeping leg (no Lua equivalent) +
 -- DespawnOrUnsummon. The sender is the LK-side ACTION_TELEPORT_BACK
 -- relay (LK DoAction :642-646, unported) via EnterEvadeMode (:599-600)
--- or terenas EVENT_TELEPORT_BACK (:1807-1810, unported), so this
--- fires once that relay lands.
+-- or terenas EVENT_TELEPORT_BACK (:1807-1810, PORTED 2026-11-08,
+-- onTerenasTeleportBack above), so this fires once that relay lands.
 local function strangulateVehicleDoAction(event, creature, action)
     if action ~= ACTION_TELEPORT_BACK then
         return
