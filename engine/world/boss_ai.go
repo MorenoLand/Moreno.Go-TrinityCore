@@ -20399,14 +20399,19 @@ func init() {
 	// Talk(SAY_DEATH 7) lives in FinishEncounter() (called
 	// from the event machine, not from JustDied) — event 4
 	// is registered cancel-only plus a true-kill DONE fallback
-	// (tick 259; base BossAI::JustDied). Timer Talks, the pre-phase
-	// DamageTaken SAY_JUMPDOWN arm (phase + instance-state
-	// condition), cross-creature Talk(SAY_SPECIAL),
-	// DoAction/SpellHit Talks (incl. cross-creature
-	// Talk(SAY_SIF_DESPAWN 1) in the pre-phase SpellHit leg),
+	// (tick 259; base BossAI::JustDied). Phase-1 timer arms
+	// (SAY_AGGRO_2 / STORMHAMMER / CHARGE_ORB, tick 478) and the
+	// DamageTaken SAY_JUMPDOWN transition + EVENT_JUMPDOWN
+	// partial + UNBALANCING_STRIKE / CHAIN_LIGHTNING + EVENT_BERSERK
+	// (timer + DoAction receiver, tick 478) are ported on the
+	// thorimPhase latch. Still bridge-blocked — documented in
+	// the lua header: SAY_SIF_START / START_SIF_CHANNEL,
+	// SUMMON_ADDS, ACTIVATE_LIGHTNING_FIELD, START_PERIODIC_CHARGE,
+	// LIGHTNING_CHARGE, JUMPDOWN MoveJump, the berserk sender
+	// (EnterEvadeMode, no EvadeReason in Go ev2), cross-creature
+	// Talk(SAY_SIF_DESPAWN 1) in the pre-phase SpellHit leg,
 	// the ten spell scripts, the condition script and the
-	// three achievements are bridge-blocked — documented in
-	// the lua header.
+	// three achievements.
 	// Cast-state gates (2026-11-04): runic-colossus ticks
 	// (barrier / smash / charge) and rune-giant ticks (stomp /
 	// detonation / fortification one-shot) defer 500ms on
@@ -20414,7 +20419,9 @@ func init() {
 	// pre-loop :1456 + in-loop :1488, giant pre-loop :1552 +
 	// in-loop :1576. Boss-thorim gates (:690/:814), trash
 	// gates (:1107/:1114) and sif gates (:1640/:1673) cover
-	// unported arms only; boss has zero ported timer ticks.
+	// unported arms only; the ported boss timer ticks (tick 478:
+	// stormhammer / charge-orb / unbalancing-strike / chain-lightning /
+	// berserk) carry the same 500ms defer.
 	RegisterLuaBoss("boss_thorim", 32865)
 
 	// boss_yogg_saron.lua (lua_scripts/northrend/boss_yogg_saron.lua):

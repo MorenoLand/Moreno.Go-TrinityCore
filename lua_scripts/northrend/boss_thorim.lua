@@ -65,15 +65,33 @@
 -- (lines 835-840) ++_killedCount >= 6 -> SetImmuneToPC(false) +
 -- DoZoneInCombat — PORTED 2026-11-05 (tick 214) via preAddDied (ev4
 -- on the 4 pre-add entries) + thorimDoAction (ev38).
+-- boss_thorimAI phase-1 timer arms PORTED 2026-11-08 (tick 478) on the
+-- thorimPhase latch (1 at engage, 2 at the DamageTaken transition):
+-- EVENT_SAY_AGGRO_2 (9s one-shot Talk 1), EVENT_STORMHAMMER (62042
+-- DoCastVictim, 40s init, Repeat {15s,20s}), EVENT_CHARGE_ORB (62016
+-- DoCastAOE, 30s init, Repeat {15s,20s}); each tick stops re-arming
+-- once the latch flips (EventMap phase filter twin). EVENT_BERSERK
+-- (369s, no phase group; phase-conditional body) + the DoAction
+-- (ACTION_BERSERK 5) receiver (phase-2 guard + _orbSummoned latch +
+-- 1s reschedule) PORTED the same tick.
+-- boss_thorimAI DamageTaken phase-2 transition PORTED 2026-11-08
+-- (tick 478): CanStartPhase2 (player attacker within 10yd, reach-
+-- subtracted strict <, + colossus/giant ev4 death latches) -> Talk
+-- SAY_JUMPDOWN 3 + phase latch 2 + EVENT_JUMPDOWN 8s + berserk
+-- reschedule 300s + Sif InterruptNonMeleeSpells + hard-mode
+-- SPELL_CREDIT_SIFFED 64980 (triggered AoE, DATA_LOSE_YOUR_ILLUSION
+-- latch read). EVENT_JUMPDOWN partial: RemoveAura SHEATH +
+-- SetReactState AGGRESSIVE + SetDisableGravity(false) + SetRooted(false)
+-- (SetControlled ROOT twin) + UNBALANCING_STRIKE (62130 DoCastVictim,
+-- 15s, Repeat {15s,20s}) + CHAIN_LIGHTNING (62131 random player 100y,
+-- 20s, Repeat {7s,15s}); MoveJump leg stays out (no bridge).
 --
 -- DOCUMENTED-ONLY (no bridge; not registered):
 -- boss_thorimAI EVENT_SAY_SIF_START (lines 700-702) / EVENT_START_SIF_CHANNEL
 -- (lines 703-705) — cross-creature sif Talk / cast; no cross-creature bridge.
--- boss_thorimAI EVENT_SAY_AGGRO_2 (lines 621/697-699), EVENT_STORMHAMMER
--- (62042, lines 625/708-710) and EVENT_CHARGE_ORB (62016, lines 626/712-714) —
--- all ScheduleEvent(..., 0, PHASE_1): phase-1-gated, and the phase machine
--- (events.SetPhase(PHASE_2) at phase 2) has no bridge; porting on
--- combat-start timers would fabricate phase-2 casts — gothik precedent.
+-- (The phase-1 arms around them — SAY_AGGRO_2 / STORMHAMMER / CHARGE_ORB /
+-- BERSERK — are PORTED 2026-11-08, tick 478, on the thorimPhase latch; the
+-- gothik stay-out is retired where the phase IS modeled.)
 -- boss_thorimAI EVENT_SUMMON_ADDS (lines 716-718) — SummonWave() summon leg.
 -- The SummonWave summon-time SetReactState arms ride the same unported
 -- leg: JustSummoned -> summon->SetReactState(REACT_PASSIVE) (lines 651
@@ -90,17 +108,16 @@
 -- _owner->AI()->DoZoneInCombat(_owner)) stays out because it is a
 -- cross-creature call inside the unbridged BasicEvent machine, not a
 -- plain me->DoZoneInCombat() in a ported JustEngagedWith arm.)
--- boss_thorimAI EVENT_BERSERK (lines 750+) — phase-conditional Talk(SAY_WIPE
--- 6 / SAY_BERSERK 5) + triggered casts; DoAction(ACTION_BERSERK)-gated
--- reschedule. ev38 IS bridged (tick 206); the sender is EnterEvadeMode,
--- which has no bridge (event 25 unused) — the arm stays out on the sender.
--- boss_thorimAI phase-2 machine (DamageTaken CanStartPhase2, lines ~925-951:
--- Talk(SAY_JUMPDOWN 3) + EVENT_JUMPDOWN / EVENT_ACTIVATE_LIGHTNING_FIELD /
--- EVENT_UNBALANCING_STRIKE (DoCastVictim 62130, 15s, Repeat(15s,20s)) /
--- EVENT_CHAIN_LIGHTNING (random target, 20s, Repeat(7s,15s)) /
--- EVENT_START_PERIODIC_CHARGE / EVENT_LIGHTNING_CHARGE (SetGUID-gated)) —
--- phase gating is the real blocker; no phase / instance-GuidData / distance /
--- cross-creature bridges. MoveJump leg in EVENT_JUMPDOWN has no bridge.
+-- boss_thorimAI EVENT_BERSERK sender (npc_thorim_arena_phaseAI::
+-- EnterEvadeMode, lines 1285-1292) stays out: Go ev2 carries no EvadeReason,
+-- so the NO_HOSTILES/BOUNDARY gate cannot be modeled; the timer arm and the
+-- DoAction receiver are PORTED (tick 478).
+-- boss_thorimAI phase-2 machine, remainder: EVENT_ACTIVATE_LIGHTNING_FIELD
+-- (bunny grid sweep + per-bunny LightningFieldEvent BasicEvent, no bridge) /
+-- EVENT_START_PERIODIC_CHARGE (unregistered controller cast) /
+-- EVENT_LIGHTNING_CHARGE (SetGUID-gated pillar cast, no instance-GUID bridge).
+-- The transition itself + EVENT_JUMPDOWN (minus MoveJump) + UNBALANCING_STRIKE
+-- + CHAIN_LIGHTNING are PORTED 2026-11-08, tick 478.
 -- boss_thorimAI FinishEncounter / EVENT_OUTRO_1..3 (lines 598-601: Talks
 -- SAY_END_NORMAL/HARD 8-13, hard-mode SPELL_STORMHAMMER_SIF cast) — rides
 -- the 1%-hp pseudo-death, not a hook; event 4 is deliberately NOT
@@ -164,17 +181,30 @@ local ENTRY_IRON_HONOR_GUARD = 32875 -- ulduar.h:182
 local ENTRY_DARK_RUNE_ACOLYTE = 33110 -- ulduar.h:187
 local ACTION_INCREASE_PREADDS_COUNT = 0 -- boss_thorim.cpp:268
 local ACTION_ACTIVATE_RUNIC_SMASH = 1 -- boss_thorim.cpp:269
+local ACTION_BERSERK = 5 -- boss_thorim.cpp:273
 local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
+local SAY_AGGRO_2 = 1 -- boss_thorim.cpp:145
 local SAY_SPECIAL = 2
+local SAY_JUMPDOWN = 3 -- boss_thorim.cpp:147
 local SAY_SLAY = 4
+local SAY_BERSERK = 5 -- boss_thorim.cpp:149
+local SAY_WIPE = 6 -- boss_thorim.cpp:150
 local SAY_DEATH = 7
 
 local SPELL_CREDIT_KILL = 64985
 local FACTION_FRIENDLY = 35
 
 local SPELL_SHEATH_OF_LIGHTNING = 62276
+local SPELL_STORMHAMMER = 62042 -- boss_thorim.cpp:39
+local SPELL_CHARGE_ORB = 62016 -- boss_thorim.cpp:43
+local SPELL_UNBALANCING_STRIKE = 62130 -- boss_thorim.cpp:54
+local SPELL_CHAIN_LIGHTNING = 62131 -- boss_thorim.cpp:48
+local SPELL_BERSERK_PHASE_1 = 62560 -- boss_thorim.cpp:55
+local SPELL_BERSERK_PHASE_2 = 62555 -- boss_thorim.cpp:56
+local SPELL_SUMMON_LIGHTNING_ORB = 62391 -- boss_thorim.cpp:44
+local SPELL_CREDIT_SIFFED = 64980 -- boss_thorim.cpp:60
 
 -- Achievement latches (boss_thorim.cpp:318-321, Data enum):
 -- ACHIEVEMENT_DONT_STAND_IN_THE_LIGHTNING = 29712972,
@@ -218,6 +248,15 @@ end
 local thorimFinished = {}
 local thorimKilledCount = {}
 local colossusRunicActive = {}
+-- Phase machine, modeled as a GUID-keyed latch (assembly precedent):
+-- 1 from engage (events.SetPhase(PHASE_1), :619), 2 at the DamageTaken
+-- transition (:923-929). Cleared in thorimReset (C++ Initialize in
+-- Reset, :456-461). Phase-1 ticks check it and stop re-arming when it
+-- flips — the EventMap phase-group filter twin.
+local thorimPhase = {}
+local thorimOrbSummoned = {}
+local thorimColossusDead = {}
+local thorimGiantDead = {}
 
 local function schedule(guid, key, delay, fn)
     local per = timers[guid]
@@ -253,13 +292,150 @@ local function randomPlayerInRange(creature, minDist, maxDist)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ EVENT_SAY_AGGRO_2 (boss_thorim.cpp:697-699): one-shot Talk(SAY_AGGRO_2 1),
+-- 9s init, PHASE_1 group. Phase-gated: no Talk once the latch flips
+-- (EventMap phase filter twin).
+local function thorimSayAggro2Tick(creature, guid)
+    if thorimPhase[guid] ~= 1 then
+        return
+    end
+    creature:Talk(SAY_AGGRO_2)
+end
+
+-- C++ EVENT_STORMHAMMER (boss_thorim.cpp:708-710): DoCast(SPELL_STORMHAMMER
+-- 62042) = DoCastVictim, non-triggered, 40s init, Repeat(15s, 20s), PHASE_1.
+local function thorimStormhammerTick(creature, guid)
+    if thorimPhase[guid] ~= 1 then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "stormhammer", 500, function()
+            thorimStormhammerTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_STORMHAMMER)
+    schedule(guid, "stormhammer", {15000, 20000}, function()
+        thorimStormhammerTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CHARGE_ORB (boss_thorim.cpp:712-714): DoCastAOE(SPELL_CHARGE_ORB
+-- 62016), non-triggered, 30s init, Repeat(15s, 20s), PHASE_1.
+local function thorimChargeOrbTick(creature, guid)
+    if thorimPhase[guid] ~= 1 then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "chargeOrb", 500, function()
+            thorimChargeOrbTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_CHARGE_ORB)
+    schedule(guid, "chargeOrb", {15000, 20000}, function()
+        thorimChargeOrbTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_BERSERK (boss_thorim.cpp:751-762): one-shot, 369s init, NO phase
+-- group — the body branches on the latch: phase 1 -> Talk(SAY_WIPE 6) +
+-- DoCastAOE(SPELL_BERSERK_PHASE_1 62560, triggered) + DoCast(me,
+-- SPELL_SUMMON_LIGHTNING_ORB 62391, triggered); phase 2 -> Talk(SAY_BERSERK 5)
+-- + DoCast(me, SPELL_BERSERK_PHASE_2 62555, triggered). Rescheduled to 300s
+-- by the DamageTaken transition and to 1s by DoAction(ACTION_BERSERK).
+local function thorimBerserkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function()
+            thorimBerserkTick(creature, guid)
+        end)
+        return
+    end
+    if thorimPhase[guid] == 1 then
+        creature:Talk(SAY_WIPE)
+        creature:CastSpell(creature, SPELL_BERSERK_PHASE_1, true)
+        creature:CastSpell(creature, SPELL_SUMMON_LIGHTNING_ORB, true)
+    else
+        creature:Talk(SAY_BERSERK)
+        creature:CastSpell(creature, SPELL_BERSERK_PHASE_2, true)
+    end
+end
+
+-- Forward declarations: thorimJumpdownTick schedules both ticks below, so
+-- the names must be in scope at its definition (malown idiom — plain
+-- assignment defs, never a second `local function`).
+local thorimUnbalancingStrikeTick, thorimChainLightningTick
+
+-- C++ EVENT_JUMPDOWN (boss_thorim.cpp:720-732): 8s after the DamageTaken
+-- transition. PORTED legs in C++ order: hard-mode Sif DoAction stays out
+-- (Sif unregistered); RemoveAurasDueToSpell(SPELL_SHEATH_OF_LIGHTNING);
+-- SetReactState(REACT_AGGRESSIVE); SetDisableGravity(false);
+-- SetControlled(false, UNIT_STATE_ROOT) — the SetRooted(false) twin
+-- (thorimReset uses SetRooted(true) for the same leg); MoveJump stays out
+-- (no bridge — deviation: the boss stays on the balcony, but the combat
+-- arms below still land); then the PHASE_2 schedules.
+local function thorimJumpdownTick(creature, guid)
+    creature:RemoveAura(SPELL_SHEATH_OF_LIGHTNING)
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    creature:SetDisableGravity(false)
+    creature:SetRooted(false)
+    schedule(guid, "unbalancingStrike", 15000, function()
+        thorimUnbalancingStrikeTick(creature, guid)
+    end)
+    schedule(guid, "chainLightning", 20000, function()
+        thorimChainLightningTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_UNBALANCING_STRIKE (boss_thorim.cpp:733-735): DoCastVictim(
+-- SPELL_UNBALANCING_STRIKE 62130), non-triggered, 15s init, Repeat(15s, 20s),
+-- PHASE_2.
+thorimUnbalancingStrikeTick = function(creature, guid)
+    if thorimPhase[guid] ~= 2 then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "unbalancingStrike", 500, function()
+            thorimUnbalancingStrikeTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_UNBALANCING_STRIKE)
+    schedule(guid, "unbalancingStrike", {15000, 20000}, function()
+        thorimUnbalancingStrikeTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_CHAIN_LIGHTNING (boss_thorim.cpp:736-740): random player 100y,
+-- DoCast(target, SPELL_CHAIN_LIGHTNING 62131), non-triggered, 20s init,
+-- Repeat(7s, 15s), PHASE_2.
+thorimChainLightningTick = function(creature, guid)
+    if thorimPhase[guid] ~= 2 then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "chainLightning", 500, function()
+            thorimChainLightningTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomPlayerInRange(creature, 0, 100)
+    if target then
+        creature:CastSpell(target, SPELL_CHAIN_LIGHTNING)
+    end
+    schedule(guid, "chainLightning", {7000, 15000}, function()
+        thorimChainLightningTick(creature, guid)
+    end)
+end
+
 -- C++ boss_thorimAI::JustEngagedWith: Talk(SAY_AGGRO_1) + DoCast(me,
 -- SPELL_SHEATH_OF_LIGHTNING 62276) 2-arg = non-triggered self-cast, both
 -- ungated (line 630). The PHASE_1-grouped schedules (EVENT_SAY_AGGRO_2 /
--- EVENT_STORMHAMMER / EVENT_CHARGE_ORB, lines 621/625/626) are
--- phase-gated — gothik precedent, see header. Deviation: the
--- SHEATH_OF_LIGHTNING removal rides the unbridged phase-2 machine, so the
--- aura persists in Lua.
+-- EVENT_STORMHAMMER / EVENT_CHARGE_ORB / EVENT_BERSERK, lines 621/625/626/
+-- 628) are PORTED 2026-11-08 (tick 478) below, gated on the thorimPhase
+-- latch — the phase machine IS modeled now (assembly precedent), so the
+-- gothik stay-out is retired for these arms. The SHEATH_OF_LIGHTNING
+-- removal rides the ported EVENT_JUMPDOWN leg below.
 local function thorimEnterCombat(event, creature, target)
     creature:SetBossState(BOSS_THORIM, 1) -- BossAI::JustEngagedWith SetBossState(DATA_THORIM 8, IN_PROGRESS), base-first (boss_thorim.cpp:616; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_thorim.cpp:616)
@@ -267,6 +443,21 @@ local function thorimEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO_1)
     creature:CastSpell(creature, SPELL_SHEATH_OF_LIGHTNING)
     cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    thorimPhase[guid] = 1
+    thorimOrbSummoned[guid] = false
+    schedule(guid, "sayAggro2", 9000, function()
+        thorimSayAggro2Tick(creature, guid)
+    end)
+    schedule(guid, "stormhammer", 40000, function()
+        thorimStormhammerTick(creature, guid)
+    end)
+    schedule(guid, "chargeOrb", 30000, function()
+        thorimChargeOrbTick(creature, guid)
+    end)
+    schedule(guid, "berserk", 369000, function()
+        thorimBerserkTick(creature, guid)
+    end)
     -- C++ JustEngagedWith (:632-636): runicColossus->SetImmuneToPC(false)
     -- + DoAction(ACTION_ACTIVATE_ADDS) — the miniboss base iterates the
     -- colossus's own summons (ColossusAddLocations: 4x Iron Ring Guard +
@@ -299,12 +490,12 @@ end
 -- new GUID, so the latch never leaks across spawns), then
 -- SetReactState(REACT_PASSIVE) + SetDisableGravity(true) +
 -- SetControlled(true, UNIT_STATE_ROOT) (PORTED as SetRooted; the root is
--- lifted only by the unported EVENT_JUMPDOWN). The pre-phase-add summon
+-- lifted by the ported EVENT_JUMPDOWN leg, tick 478). The pre-phase-add summon
 -- loop (:487, TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s) is PORTED below,
 -- IsAlive-guarded: Go event 23 also fires on death, and C++ Reset never
--- runs on death. SetImmuneToPC(true), the phase machine and the
--- mini-boss respawn stay out (balcony-phase gating; no instance bridge
--- for the respawn).
+-- runs on death. The phase/orb/dead latches clear here (tick 478).
+-- SetImmuneToPC(true) and the mini-boss respawn stay out (balcony-phase
+-- gating; no instance bridge for the respawn).
 local function thorimReset(event, creature)
     if thorimFinished[creature:GetGUID()] then
         return
@@ -327,6 +518,11 @@ local function thorimReset(event, creature)
         creature:SetData(DATA_DONT_STAND_IN_THE_LIGHTNING, 1)
         creature:SetData(DATA_LOSE_YOUR_ILLUSION, 1)
     end
+    local guid = creature:GetGUID()
+    thorimPhase[guid] = nil
+    thorimOrbSummoned[guid] = nil
+    thorimColossusDead[guid] = nil
+    thorimGiantDead[guid] = nil
     if creature:IsAlive() then
         creature:SummonCreature(ENTRY_JORMUNGAR_BEHEMOTH, 2149.68, -263.477, 419.679, 3.120, 5, 3000)
         creature:SummonCreature(ENTRY_MERCENARY_CAPTAIN_A, 2131.31, -271.640, 419.840, 2.188, 5, 3000)
@@ -355,15 +551,33 @@ end
 -- The RemoveFlag leg is currently a no-op: Lua never sets Thorim immune
 -- (header), but it is the C++ arm, kept verbatim.
 local function thorimDoAction(event, creature, action)
-    if action ~= ACTION_INCREASE_PREADDS_COUNT then
+    local guid = creature:GetGUID()
+    if action == ACTION_INCREASE_PREADDS_COUNT then
+        local count = (thorimKilledCount[guid] or 0) + 1
+        thorimKilledCount[guid] = count
+        if count >= 6 then
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+            creature:DoZoneInCombat()
+        end
         return
     end
-    local guid = creature:GetGUID()
-    local count = (thorimKilledCount[guid] or 0) + 1
-    thorimKilledCount[guid] = count
-    if count >= 6 then
-        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
-        creature:DoZoneInCombat()
+    -- C++ boss_thorimAI::DoAction ACTION_BERSERK (boss_thorim.cpp:825-833):
+    -- phase-2 guard first (events.IsInPhase(PHASE_2) -> return), then the
+    -- _orbSummoned latch: first send only, RescheduleEvent(EVENT_BERSERK, 1s).
+    -- The sender (npc_thorim_arena_phaseAI::EnterEvadeMode, :1285-1292) stays
+    -- out: Go ev2 carries no EvadeReason, so the NO_HOSTILES/BOUNDARY gate
+    -- cannot be modeled — an ev2 send would over-fire on any add evade.
+    if action == ACTION_BERSERK then
+        if thorimPhase[guid] == 2 then
+            return
+        end
+        if not thorimOrbSummoned[guid] then
+            thorimOrbSummoned[guid] = true
+            schedule(guid, "berserk", 1000, function()
+                thorimBerserkTick(creature, guid)
+            end)
+        end
+        return
     end
 end
 
@@ -396,14 +610,47 @@ end
 -- RENAME flag -> Talk(SAY_DEATH). The _JustDied() SetBossState
 -- (DATA_THORIM 8, DONE) leg PORTED tick 259 between the RENAME flag
 -- and Talk (C++ FinishEncounter order :597-599). The phase-1 jumpdown branch is the
--- else-if's guard in C++, but it cannot fire this arm: Thorim enters
+-- else-if's guard in C++ and is PORTED above (tick 478): Thorim enters
 -- phase 1 at full health, so no single hit can cross 99% of max
 -- health — the arm is effectively phase-2-only. Controller/pillar
 -- aura clears, hard-mode Sif despawn and the outro Talks 8-13
 -- (hard-mode branch timing) stay out.
 local function thorimDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
     local postDamage = creature:GetHealth() - damage
-    if postDamage < math.floor(creature:GetMaxHealth() / 100) then
+    -- C++ boss_thorimAI::DamageTaken phase-1 branch (boss_thorim.cpp:921-936):
+    -- if (IsInPhase(PHASE_1) && CanStartPhase2(attacker)): Talk(SAY_JUMPDOWN 3)
+    -- + SetPhase(PHASE_2) + ScheduleEvent(EVENT_JUMPDOWN, 8s) +
+    -- RescheduleEvent(EVENT_BERSERK, 300s, PHASE_2) + Sif
+    -- InterruptNonMeleeSpells + hard-mode DoCastAOE(SPELL_CREDIT_SIFFED 64980,
+    -- triggered). CanStartPhase2 (:911-919): attacker is a player within 10yd
+    -- (IsWithinDistInMap — strict <, reach-subtracted, randomPlayerInRange
+    -- idiom) AND the runic colossus + rune giant are both dead (latched in
+    -- colossusDied/giantDied below; the FindNearestCreature sweep is
+    -- live-only, so a dead mini-boss is unreadable — the ev4 latch is the
+    -- twin). EVENT_ACTIVATE_LIGHTNING_FIELD (15s) stays out (bunny
+    -- BasicEvent machine). The hard-mode read rides the
+    -- DATA_LOSE_YOUR_ILLUSION latch (Reset 1 / SpellHit 62565 clear —
+    -- the same slot C++ uses for _hardMode, :531-533).
+    if thorimPhase[guid] == 1 and attacker and attacker:GetObjectType() == "Player"
+        and creature:GetDistance(attacker) - creature:GetCombatReach() - 1.5 < 10
+        and thorimColossusDead[guid] and thorimGiantDead[guid] then
+        creature:Talk(SAY_JUMPDOWN)
+        thorimPhase[guid] = 2
+        schedule(guid, "jumpdown", 8000, function()
+            thorimJumpdownTick(creature, guid)
+        end)
+        schedule(guid, "berserk", 300000, function()
+            thorimBerserkTick(creature, guid)
+        end)
+        local sif = creature:FindNearestCreature(ENTRY_SIF, 200)
+        if sif then
+            sif:InterruptNonMeleeSpells()
+        end
+        if creature:GetData(DATA_LOSE_YOUR_ILLUSION) == 1 then
+            creature:CastSpell(creature, SPELL_CREDIT_SIFFED, true)
+        end
+    elseif postDamage < math.floor(creature:GetMaxHealth() / 100) then
         if thorimFinished[creature:GetGUID()] then
             return false, 0
         end
@@ -570,6 +817,12 @@ local function colossusDied(event, creature, killer)
     -- the colossus-cluster acolytes sit ~90yd from the giant's adds.
     local thorim = creature:FindNearestCreature(ENTRY_THORIM, 500)
     if thorim then thorim:Talk(SAY_SPECIAL) end
+    -- CanStartPhase2 latch (boss_thorim.cpp:911-919): the colossus is dead.
+    -- Keyed by Thorim's GUID — the sweep is the same 500yd fetch as the
+    -- Talk leg above.
+    if thorim then
+        thorimColossusDead[thorim:GetGUID()] = true
+    end
     local giant = creature:FindNearestCreature(ENTRY_ANCIENT_RUNE_GIANT, 500)
     if giant then
         giant:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
@@ -675,6 +928,11 @@ local function giantDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     local stoneDoor = creature:FindNearestGameObject(GO_THORIM_STONE_DOOR, 100)
     if stoneDoor then stoneDoor:SetGoState(0) end
+    -- CanStartPhase2 latch (boss_thorim.cpp:911-919): the rune giant is dead.
+    local thorim = creature:FindNearestCreature(ENTRY_THORIM, 500)
+    if thorim then
+        thorimGiantDead[thorim:GetGUID()] = true
+    end
 end
 
 -- C++ JustSummoned NPC_LIGHTNING_ORB (boss_thorim.cpp:649-663):
