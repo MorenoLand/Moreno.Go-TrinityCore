@@ -101,9 +101,11 @@
 -- map:SetZoneWeather); porting the arm without its trigger would
 -- fabricate it.
 -- boss_the_lich_king MovementInform — Talk(SAY_LK_REMORSELESS_WINTER
--- 4) on POINT_CENTER_1 / POINT_CENTER_2; tirion->AI()->
--- Talk(SAY_TIRION_OUTRO_2) is cross-AI Talk on POINT_LK_OUTRO_2 (no
--- MovementInform bridge; no cross-AI-Talk bridge).
+-- 4) on POINT_CENTER_1 / POINT_CENTER_2 PORTED 2026-11-08 via ev28
+-- (lua_creature_events.go:4699/:5725); tirion->AI()->
+-- Talk(SAY_TIRION_OUTRO_2) is cross-AI Talk on POINT_LK_OUTRO_2 and
+-- stays out (no cross-AI-Talk bridge; the outro movement machine is
+-- unported).
 -- boss_the_lich_king UpdateAI scheduler Talk legs — Talk(SAY_LK_INTRO_2
 -- 1) (EVENT_INTRO_TALK_1); Talk(SAY_LK_INTRO_3 2)
 -- (EVENT_INTRO_CAST_FREEZE); Talk(EMOTE_NECROTIC_PLAGUE_WARNING 13,
@@ -117,11 +119,13 @@
 -- the timer bridge (CreateLuaEvent) exists and is used in this file;
 -- the gated arms stay unported because the phase machine
 -- (PHASE_INTRO/PHASE_ONE/PHASE_TWO/PHASE_TRANSITION/PHASE_OUTRO/
--- PHASE_FROSTMOURNE) has no Lua model, not because timers lack a
+-- PHASE_FROSTMOURNE) had no Lua model, not because timers lack a
 -- bridge (the gothik counterpoint: no invented phase-agnostic
--- timers); the intro/outro
--- movement machines, DoCast summon legs, and phase SetPhase legs ride
--- bridges that do not exist; the JustDied MoveFall leg still does,
+-- timers) — the model LANDED 2026-11-08 (lkPhase, ev9 DamageTaken
+-- transitions, ev28 MovementInform, EVENT_QUAKE phase sets); the
+-- intro/outro movement machines, DoCast summon legs, and the
+-- FROSTMOURNE phase set ride bridges that do not exist; the JustDied
+-- MoveFall leg still does,
 -- while the SPELL_PLAY_MOVIE (73159), SetDisableGravity(false), and
 -- zone-light + zone-weather JustDied legs ARE ported (ev4
 -- lichKingJustDied).
@@ -130,8 +134,9 @@
 -- 68981 SPELL_REMORSELESS_WINTER_1 (:849) / 72259
 -- SPELL_REMORSELESS_WINTER_2 (:863) — DoCastSelf in MovementInform
 -- case POINT_CENTER_1 / POINT_CENTER_2 (Remorseless Winter channel
--- opener, transition-phase entry); no MovementInform bridge — same
--- unbridged arm as the documented SAY_LK_REMORSELESS_WINTER legs.
+-- opener, transition-phase entry) PORTED 2026-11-08 via ev28
+-- (lichKingMovementInform) — the "no MovementInform bridge" claim
+-- was stale (ev28 landed, lua_creature_events.go:4699/:5725).
 -- 73213 SPELL_EMOTE_SHOUT_NO_SHEATH (:929) — DoCastSelf non-triggered
 -- in case EVENT_EMOTE_CAST_SHOUT, scheduled +7s/+18s in PHASE_INTRO;
 -- porting on a bare engage timer would fabricate intro-phase casts
@@ -141,9 +146,9 @@
 -- 70541 SPELL_INFEST (:956, PHASE_ONE seeded, re-arms PHASE_ONE or
 -- PHASE_TWO by current phase), 69409 SPELL_SOUL_REAPER (:973,
 -- DoCastVictim, PHASE_TWO_THREE, 33-35s re-arm) — phase-gated timer
--- arms (JustEngagedWith :578-581 seeds the PHASE_ONE set); a
--- phase-agnostic engage timer would fabricate phase-2/3/transition
--- casts — the gothik counterpoint, no invented phase machines.
+-- arms PORTED 2026-11-08 (onSummonHorror / onSummonGhoul / onInfest /
+-- onSoulReaper, phase-gated on the lkPhase model — no invented
+-- phase-agnostic timers).
 -- 71797 SPELL_LIGHTS_BLESSING (:1263, case EVENT_OUTRO_BLESS) — cast
 -- by npc_tirion_fordring_tft on itself (outro); tirion not registered
 -- in this file — wrong creature.
@@ -161,8 +166,9 @@
 -- ACTION_CONTINUE_INTRO (ev38 dispatch bridged; sender LK MovementInform POINT_LK_INTRO_3 (boss_the_lich_king.cpp:839-843) unported — no MovementInform bridge — and receiver tirion unregistered); Talk(SAY_TIRION_INTRO_2
 -- 1) (EVENT_INTRO_TALK_1) and Talk(SAY_TIRION_OUTRO_1 2)
 -- (EVENT_OUTRO_TALK_1) are scheduler-driven on the PHASE_INTRO /
--- PHASE_OUTRO machines (CreateLuaEvent exists, but the unbridged
--- phase/machine drivers gate them — gothik counterpoint); the
+-- PHASE_OUTRO machines (CreateLuaEvent exists; the PHASE_OUTRO talk
+-- chain PORTED 2026-11-08 off the 10% DamageTaken leg — the intro
+-- machine drivers still gate the intro talks); the
 -- OnGossipSelect intro kick, MovementInform, and SpellHit legs have no
 -- bridges (the bronjahm npc_corrupted_soul_fragment precedent).
 -- npc_terenas_menethil (NPC_TERENAS_MENETHIL_FROSTMOURNE 36823,
@@ -264,8 +270,9 @@
 -- DoZoneInCombat, phase SetPhase, MovementInform-driven) is unported,
 -- so Reset PASSIVE alone would strand the boss passive permanently.
 -- LK DamageTaken REACT_PASSIVE legs (:690/:700/:709, 70%/40%/10%
--- phase transitions) — gated on the unported phase machine and paired
--- with MovePoint/AttackStop movement legs (no MovementInform bridge).
+-- phase transitions) PORTED 2026-11-08 (lichKingDamageTaken, ev9 +
+-- ev28 MovementInform — the "no MovementInform bridge" claim was
+-- stale).
 -- LK EVENT_HARVEST_SOULS REACT_PASSIVE (:1044) + EVENT_START_ATTACK
 -- REACT_AGGRESSIVE (:1028-1031) — unported PHASE_FROSTMOURNE/PHASE_THREE
 -- machine + unported Harvest Souls cast.
@@ -276,9 +283,10 @@
 -- REACT_AGGRESSIVE (:472-484) + JustSummoned vile-spirit leg (:774-781)
 -- PORTED 2026-11-08 (lichKingJustSummoned + onVileSpiritActivate):
 -- flight-speed leg stays out (SetSpeedRate rejects MOVE_FLIGHT, no
--- script flight-rate field) and the Frostmourne-phase activate gate
--- stays out (no phase model); EVENT_VILE_SPIRITS 79.5s/:1034 timer +
--- DoCastAOE 70498 stays out (PHASE_THREE-gated, gothik counterpoint).
+-- script flight-rate field); the Frostmourne-phase activate gate is
+-- PORTED 2026-11-08 (lkPhase read in lichKingJustSummoned);
+-- EVENT_VILE_SPIRITS 79.5s/:1034 timer + DoCastAOE 70498 PORTED
+-- 2026-11-08 (onVileSpirits, PHASE_THREE-gated on the lkPhase model).
 -- JustSummoned legs :750/:761 (ice-sphere :750 PORTED in
 -- lichKingJustSummoned — SelectTarget approximated by the alive
 -- same-map/instance random-player pool, MoveFollow PORTED in
@@ -293,8 +301,8 @@
 -- terenas-side ACTION_TELEPORT_BACK, ported tick 215 via ev38.)
 
 -- CAST-STATE GATES PORTED (2026-11-04): boss :900/:1149
--- (TRANSITION/OUTRO/FROSTMOURNE-exempt in C++, unconditional in Lua —
--- no phase model) gates the berserk one-shot; horror :1323 (pre-loop
+-- (TRANSITION/OUTRO/FROSTMOURNE-exempt in C++; phase-aware in Lua
+-- since the 2026-11-08 phase model) gates the berserk one-shot; horror :1323 (pre-loop
 -- only) gates shockwave/enrage; raging :1412 (pre-loop only) gates
 -- soul-shriek + the set-aggressive flip; warden :1843 UpdateAI is a
 -- plain loop (zero CASTING hits) so soul-rip stays ungated;
@@ -357,6 +365,48 @@ local SPELL_RISEN_WITCH_DOCTOR_SPAWN = 69639 -- boss_the_lich_king.cpp:87
 local SPELL_SHADOW_TRAP_VISUAL = 73530 -- boss_the_lich_king.cpp:96
 local SPELL_DEFILE_AURA = 72743 -- boss_the_lich_king.cpp:115
 local SPELL_BROKEN_FROSTMOURNE = 72398 -- boss_the_lich_king.cpp:174
+-- Phase-model + timer-arm constants (2026-11-08, tick 441), grouped in
+-- ONE table: the file sits at Lua's 200-local main-chunk limit, so
+-- these 48 ids ride a single local (the algalon table-const precedent).
+local LK = {
+    PHASE_INTRO = 1, PHASE_ONE = 2, PHASE_TWO = 3, PHASE_THREE = 4,
+    PHASE_TRANSITION = 5, PHASE_FROSTMOURNE = 6, PHASE_OUTRO = 7,
+    POINT_CENTER_1 = 1, -- boss_the_lich_king.cpp:316
+    POINT_CENTER_2 = 2, -- boss_the_lich_king.cpp:317
+    POINT_LK_OUTRO_1 = 9, -- boss_the_lich_king.cpp:324
+    CENTER_X = 503.6282, CENTER_Y = -2124.655, CENTER_Z = 840.8569, -- :298
+    SPELL_REMORSELESS_WINTER_1 = 68981, -- :84
+    SPELL_REMORSELESS_WINTER_2 = 72259, -- :85
+    SPELL_QUAKE = 72262, -- :111
+    SPELL_SUMMON_SHAMBLING_HORROR = 70372, -- :86
+    SPELL_SUMMON_DRUDGE_GHOULS = 70358, -- :88
+    SPELL_NECROTIC_PLAGUE = 70337, -- :90
+    SPELL_SHADOW_TRAP = 73539, -- :93
+    SPELL_PAIN_AND_SUFFERING = 72133, -- :101
+    SPELL_SUMMON_ICE_SPHERE = 69104, -- :102
+    SPELL_RAGING_SPIRIT = 69200, -- :107
+    SPELL_DEFILE = 72762, -- :114
+    SPELL_SUMMON_VALKYR = 69037, -- :117
+    SPELL_INFEST = 70541, -- :89
+    SPELL_SOUL_REAPER = 69409, -- :120
+    SPELL_VILE_SPIRITS = 70498, -- :132
+    SPELL_HARVEST_SOUL = 68980, -- :136
+    SPELL_FURY_OF_FROSTMOURNE = 72350, -- :163
+    SPELL_FURY_OF_FROSTMOURNE_NO_REZ = 72351, -- :164
+    SPELL_EMOTE_SHOUT_NO_SHEATH = 73213, -- :82
+    SPELL_EMOTE_QUESTION_NO_SHEATH = 73330, -- :165
+    SPELL_RAISE_DEAD = 71769, -- :166
+    SPELL_HARVEST_SOUL_VALKYR = 68985, -- :119
+    SAY_LK_REMORSELESS_WINTER = 4, -- :40
+    SAY_LK_QUAKE = 5, -- :41
+    SAY_LK_SUMMON_VALKYR = 6, -- :43
+    SAY_LK_HARVEST_SOUL = 7, -- :44
+    EMOTE_DEFILE_WARNING = 12, -- :49
+    EMOTE_NECROTIC_PLAGUE_WARNING = 13, -- :50
+    SAY_LK_OUTRO_1 = 14, SAY_LK_OUTRO_2 = 15, SAY_LK_OUTRO_3 = 16,
+    SAY_LK_OUTRO_4 = 17, SAY_LK_OUTRO_5 = 18,
+    EMOTE_ONESHOT_TALK_NO_SHEATHE = 396, -- SharedDefines.h:2034
+}
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
 local SPELL_RESTORE_SOUL = 72595 -- boss_the_lich_king.cpp:150
@@ -401,17 +451,389 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ EventMap phases (boss_the_lich_king.cpp:287-293): INTRO 1, ONE 2,
+-- TWO 3, THREE 4, TRANSITION 5, FROSTMOURNE 6, OUTRO 7. The Lua phase
+-- model (PORTED 2026-11-08): lkPhase[guid] is set to PHASE_ONE at
+-- engage (:578), to PHASE_TRANSITION by DamageTaken (:687-705), to
+-- PHASE_TWO/PHASE_THREE by EVENT_QUAKE/EVENT_QUAKE_2 (:1009/:1016),
+-- to PHASE_OUTRO by the 10% DamageTaken leg (:707-728). Phase-gated
+-- handlers check lkPhase and drop without re-arming — the C++
+-- EventMap::ExecuteEvent phase-mismatch erase (EventMap.cpp:81-82:
+-- a due event whose phase bits miss the current phase is erased,
+-- not deferred). The FROSTMOURNE phase is only set by the unported
+-- EVENT_HARVEST_SOULS (:1043), so the value exists but is never
+-- written yet; the vile-spirit activate gate reads it.
+local lkPhase = {}
+
+-- Random alive player from the threat list (the file's
+-- randomPlayerAnywhere idiom, threat-ordered); skipFirst drops the
+-- tank (C++ SelectTarget offset 1), excludeAuras drops carriers of
+-- any listed aura. Returns nil when the pool is empty.
+local function randomAlivePlayer(creature, skipFirst, excludeAuras)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    local start = 1
+    if skipFirst then
+        start = 2
+    end
+    if #candidates < start then
+        return nil
+    end
+    local pool = {}
+    for i = start, #candidates do
+        local t = candidates[i]
+        local excluded = false
+        if excludeAuras then
+            for _, aura in ipairs(excludeAuras) do
+                if t:HasAura(aura) then
+                    excluded = true
+                    break
+                end
+            end
+        end
+        if not excluded then
+            pool[#pool + 1] = t
+        end
+    end
+    if #pool == 0 then
+        return nil
+    end
+    return pool[math.random(#pool)]
+end
+
 -- C++ EVENT_BERSERK: 15min single-fire — Talk(SAY_LK_BERSERK) +
 -- DoCastSelf(SPELL_BERSERK2) non-triggered (:583/:1141-1143), bare
 -- timer across all phases (EVENT_GROUP_BERSERK carries no phase).
 local function onBerserk(creature, guid)
-    -- C++ boss UpdateAI pre-loop gate :900 (+ in-loop :1149, TRANSITION/OUTRO/FROSTMOURNE-exempt — no phase model in Lua, gate applies unconditionally): 500ms IsCasting defer, cast not consumed (mal_ganis idiom).
-    if creature:IsCasting() then
+    -- C++ boss UpdateAI pre-loop gate :900 (+ in-loop :1149): 500ms
+    -- IsCasting defer, cast not consumed (mal_ganis idiom) — exempt
+    -- while in TRANSITION/OUTRO/FROSTMOURNE, where C++ keeps
+    -- executing events while channeling (phase model landed 2026-11-08).
+    local phase = lkPhase[guid]
+    if creature:IsCasting() and phase ~= LK.PHASE_TRANSITION and phase ~= LK.PHASE_OUTRO and phase ~= LK.PHASE_FROSTMOURNE then
         schedule(guid, "berserk", 500, function() onBerserk(creature, guid) end)
         return
     end
     creature:Talk(SAY_LK_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK2)
+end
+
+-- C++ EVENT_SUMMON_SHAMBLING_HORROR (:947, PHASE_ONE): DoCastSelf
+-- SPELL_SUMMON_SHAMBLING_HORROR 70372, re-arm 1min. Casting defers
+-- 500ms (the :900 gate, mal_ganis idiom); a phase mismatch drops
+-- without re-arm (EventMap erase).
+local function onSummonHorror(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_ONE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "horror", 500, function() onSummonHorror(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_SUMMON_SHAMBLING_HORROR)
+    schedule(guid, "horror", 60000, function() onSummonHorror(creature, guid) end)
+end
+
+-- C++ EVENT_SUMMON_DRUDGE_GHOUL (:952, PHASE_ONE): DoCastSelf
+-- SPELL_SUMMON_DRUDGE_GHOULS 70358, re-arm 30s.
+local function onSummonGhoul(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_ONE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "ghoul", 500, function() onSummonGhoul(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_SUMMON_DRUDGE_GHOULS)
+    schedule(guid, "ghoul", 30000, function() onSummonGhoul(creature, guid) end)
+end
+
+-- C++ EVENT_INFEST (:956, PHASE_ONE seeded, re-arms PHASE_ONE or
+-- PHASE_TWO by current phase): DoCastSelf SPELL_INFEST 70541,
+-- re-arm {21s, 24s}. The aura leg (infestTick) is ported below.
+local function onInfest(creature, guid)
+    local phase = lkPhase[guid]
+    if phase ~= LK.PHASE_ONE and phase ~= LK.PHASE_TWO then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "infest", 500, function() onInfest(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_INFEST)
+    schedule(guid, "infest", {21000, 24000}, function() onInfest(creature, guid) end)
+end
+
+-- C++ NECROTIC_PLAGUE_LK/PLR RAID_MODE ids (:188-189); the player
+-- aura is what the target check excludes (the boss-side id never
+-- lands on a player candidate).
+local NECROTIC_PLAGUE_PLR_IDS = {70338, 73785, 73786, 73787}
+
+-- C++ EVENT_NECROTIC_PLAGUE (:960-963, PHASE_ONE): random target,
+-- offset 1 (tank skipped), NecroticPlagueTargetCheck (:373-390) —
+-- player, targetable, no PLAGUE_AVOIDANCE 72846, no plague aura —
+-- Talk(EMOTE_NECROTIC_PLAGUE_WARNING 13, target) + DoCast
+-- SPELL_NECROTIC_PLAGUE 70337, re-arm {30s, 33s} regardless of
+-- target found.
+local function onNecroticPlague(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_ONE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "necrotic", 500, function() onNecroticPlague(creature, guid) end)
+        return
+    end
+    local exclude = {SPELL_PLAGUE_AVOIDANCE, NECROTIC_PLAGUE_PLR_IDS[1], NECROTIC_PLAGUE_PLR_IDS[2], NECROTIC_PLAGUE_PLR_IDS[3], NECROTIC_PLAGUE_PLR_IDS[4]}
+    local target = randomAlivePlayer(creature, true, exclude)
+    if target then
+        creature:Talk(LK.EMOTE_NECROTIC_PLAGUE_WARNING, target)
+        creature:CastSpell(target, LK.SPELL_NECROTIC_PLAGUE)
+    end
+    schedule(guid, "necrotic", {30000, 33000}, function() onNecroticPlague(creature, guid) end)
+end
+
+-- C++ EVENT_SHADOW_TRAP (:967-971, PHASE_ONE, heroic-only seed):
+-- random target (SpellTargetSelector, approximated by the alive
+-- same-map random-player pool) + DoCast SPELL_SHADOW_TRAP 73539,
+-- re-arm 15500ms.
+local function onShadowTrap(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_ONE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "shadow_trap", 500, function() onShadowTrap(creature, guid) end)
+        return
+    end
+    local target = randomAlivePlayer(creature, false, nil)
+    if target then
+        creature:CastSpell(target, LK.SPELL_SHADOW_TRAP)
+    end
+    schedule(guid, "shadow_trap", 15500, function() onShadowTrap(creature, guid) end)
+end
+
+-- C++ EVENT_PAIN_AND_SUFFERING (:990-994, PHASE_TRANSITION): random
+-- player + CastSpell SPELL_PAIN_AND_SUFFERING 72133, re-arm
+-- {1500ms, 4s}. No IsCasting defer — C++ keeps executing events
+-- while channeling Remorseless Winter in TRANSITION (:900 gate).
+local function onPainAndSuffering(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_TRANSITION then
+        return
+    end
+    local target = randomAlivePlayer(creature, false, nil)
+    if target then
+        creature:CastSpell(target, LK.SPELL_PAIN_AND_SUFFERING)
+    end
+    schedule(guid, "pain_suffering", {1500, 4000}, function() onPainAndSuffering(creature, guid) end)
+end
+
+-- C++ EVENT_SUMMON_ICE_SPHERE (:995-998, PHASE_TRANSITION):
+-- DoCastAOE SPELL_SUMMON_ICE_SPHERE 69104, re-arm {7500ms, 8500ms}.
+-- No IsCasting defer (TRANSITION-exempt, :900).
+local function onSummonIceSphere(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_TRANSITION then
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_SUMMON_ICE_SPHERE)
+    schedule(guid, "ice_sphere", {7500, 8500}, function() onSummonIceSphere(creature, guid) end)
+end
+
+-- C++ EVENT_SUMMON_RAGING_SPIRIT (:999-1003, PHASE_TRANSITION):
+-- random player + CastSpell SPELL_RAGING_SPIRIT 69200, re-arm
+-- {22s, 23s}. No IsCasting defer (TRANSITION-exempt, :900).
+local function onSummonRagingSpirit(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_TRANSITION then
+        return
+    end
+    local target = randomAlivePlayer(creature, false, nil)
+    if target then
+        creature:CastSpell(target, LK.SPELL_RAGING_SPIRIT)
+    end
+    schedule(guid, "raging_spirit", {22000, 23000}, function() onSummonRagingSpirit(creature, guid) end)
+end
+
+-- C++ EVENT_SUMMON_RAGING_SPIRIT_2 (:1004-1008, PHASE_TRANSITION,
+-- CENTER_2 seed): same cast, then schedules the base
+-- EVENT_SUMMON_RAGING_SPIRIT at 18s (not itself).
+local function onSummonRagingSpirit2(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_TRANSITION then
+        return
+    end
+    local target = randomAlivePlayer(creature, false, nil)
+    if target then
+        creature:CastSpell(target, LK.SPELL_RAGING_SPIRIT)
+    end
+    schedule(guid, "raging_spirit", 18000, function() onSummonRagingSpirit(creature, guid) end)
+end
+
+-- C++ EVENT_QUAKE / EVENT_QUAKE_2 (:1009-1022, PHASE_TRANSITION):
+-- SetPhase(PHASE_TWO / PHASE_THREE) + DoCastAOE SPELL_QUAKE 72262 +
+-- Talk(SAY_LK_QUAKE 5). No IsCasting defer (TRANSITION-exempt,
+-- :900); the C++ ClearUnitState(UNIT_STATE_CASTING) leg has no
+-- bridge. SetZoneMusic stays out (no bridge).
+local function onQuake(creature, guid, nextPhase)
+    if lkPhase[guid] ~= LK.PHASE_TRANSITION then
+        return
+    end
+    lkPhase[guid] = nextPhase
+    creature:CastSpell(creature, LK.SPELL_QUAKE)
+    creature:Talk(LK.SAY_LK_QUAKE)
+end
+
+-- C++ EVENT_SUMMON_VALKYR (:1023-1028, PHASE_TWO): Talk(SAY_LK_SUMMON_VALKYR 6)
+-- + DoCastAOE(SUMMON_VALKYR 69037, triggered), re-arm {45s, 50s}.
+local function onSummonValkyr(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_TWO then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "valkyr", 500, function() onSummonValkyr(creature, guid) end)
+        return
+    end
+    creature:Talk(LK.SAY_LK_SUMMON_VALKYR)
+    creature:CastSpell(creature, LK.SPELL_SUMMON_VALKYR, true)
+    schedule(guid, "valkyr", {45000, 50000}, function() onSummonValkyr(creature, guid) end)
+end
+
+-- C++ EVENT_DEFILE (:976-983, PHASE_TWO_THREE): random player
+-- excluding SPELL_HARVEST_SOUL_VALKYR 68985 carriers (val'kyr-held)
+-- + Talk(EMOTE_DEFILE_WARNING 12) + DoCast SPELL_DEFILE 72762,
+-- re-arm {32s, 35s}.
+local function onDefile(creature, guid)
+    local phase = lkPhase[guid]
+    if phase ~= LK.PHASE_TWO and phase ~= LK.PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "defile", 500, function() onDefile(creature, guid) end)
+        return
+    end
+    local target = randomAlivePlayer(creature, false, {LK.SPELL_HARVEST_SOUL_VALKYR})
+    if target then
+        creature:Talk(LK.EMOTE_DEFILE_WARNING)
+        creature:CastSpell(target, LK.SPELL_DEFILE)
+    end
+    schedule(guid, "defile", {32000, 35000}, function() onDefile(creature, guid) end)
+end
+
+-- C++ EVENT_SOUL_REAPER (:972-975, PHASE_TWO_THREE): DoCastVictim
+-- SPELL_SOUL_REAPER 69409, re-arm {33s, 35s}. The aura leg
+-- (soulReaperTick) is ported below.
+local function onSoulReaper(creature, guid)
+    local phase = lkPhase[guid]
+    if phase ~= LK.PHASE_TWO and phase ~= LK.PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "soul_reaper", 500, function() onSoulReaper(creature, guid) end)
+        return
+    end
+    local victim = creature:GetVictim()
+    if victim then
+        creature:CastSpell(victim, LK.SPELL_SOUL_REAPER)
+    end
+    schedule(guid, "soul_reaper", {33000, 35000}, function() onSoulReaper(creature, guid) end)
+end
+
+-- C++ EVENT_VILE_SPIRITS (:1034-1038, PHASE_THREE): DoCastAOE
+-- SPELL_VILE_SPIRITS 70498, re-arm {35s, 40s} (EVENT_GROUP_VILE_SPIRITS).
+-- SetZoneMusic stays out (no bridge).
+local function onVileSpirits(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "vile_spirits", 500, function() onVileSpirits(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, LK.SPELL_VILE_SPIRITS)
+    schedule(guid, "vile_spirits", {35000, 40000}, function() onVileSpirits(creature, guid) end)
+end
+
+-- C++ EVENT_HARVEST_SOUL (:984-989, PHASE_THREE, non-heroic):
+-- Talk(SAY_LK_HARVEST_SOUL 7) + random target (SpellTargetSelector,
+-- approximated by the alive random-player pool) + DoCast
+-- SPELL_HARVEST_SOUL 68980, re-arm 75s. The heroic
+-- EVENT_HARVEST_SOULS arm sets PHASE_FROSTMOURNE (:1039-1069) and
+-- rides the unported Frostmourne machine — never seeded on heroic.
+local function onHarvestSoul(creature, guid)
+    if lkPhase[guid] ~= LK.PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "harvest_soul", 500, function() onHarvestSoul(creature, guid) end)
+        return
+    end
+    creature:Talk(LK.SAY_LK_HARVEST_SOUL)
+    local target = randomAlivePlayer(creature, false, nil)
+    if target then
+        creature:CastSpell(target, LK.SPELL_HARVEST_SOUL)
+    end
+    schedule(guid, "harvest_soul", 75000, function() onHarvestSoul(creature, guid) end)
+end
+
+-- C++ EVENT_OUTRO_TALK_1 (:1088-1091, PHASE_OUTRO): Talk(SAY_LK_OUTRO_1 14)
+-- + DoCastAOE(SPELL_FURY_OF_FROSTMOURNE_NO_REZ 72351, triggered).
+local function onOutroTalk1(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_1)
+    creature:CastSpell(creature, LK.SPELL_FURY_OF_FROSTMOURNE_NO_REZ, true)
+end
+
+-- C++ EVENT_OUTRO_EMOTE_TALK (:1096-1098, PHASE_OUTRO):
+-- HandleEmoteCommand(EMOTE_ONESHOT_TALK_NO_SHEATHE 396).
+local function onOutroEmoteTalk(creature, guid)
+    creature:PerformEmote(LK.EMOTE_ONESHOT_TALK_NO_SHEATHE)
+end
+
+-- C++ EVENT_OUTRO_TALK_2 (:1092-1095, PHASE_OUTRO): Talk(SAY_LK_OUTRO_2 15)
+-- + DoCastAOE(SPELL_EMOTE_QUESTION_NO_SHEATH 73330).
+local function onOutroTalk2(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_2)
+    creature:CastSpell(creature, LK.SPELL_EMOTE_QUESTION_NO_SHEATH)
+end
+
+-- C++ EVENT_OUTRO_TALK_3 (:1099-1103, PHASE_OUTRO): Talk(SAY_LK_OUTRO_3 16).
+-- The SetFacingToObject(tirion) leg stays out (instance GetGuidData
+-- has no Lua creature fetch).
+local function onOutroTalk3(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_3)
+end
+
+-- C++ EVENT_EMOTE_CAST_SHOUT (:928, PHASE_OUTRO; scheduled :724): DoCastSelf
+-- SPELL_EMOTE_SHOUT_NO_SHEATH 73213.
+local function onOutroShout(creature, guid)
+    creature:CastSpell(creature, LK.SPELL_EMOTE_SHOUT_NO_SHEATH)
+end
+
+-- C++ EVENT_OUTRO_MOVE_CENTER (:1104-1106, PHASE_OUTRO): MovePoint
+-- POINT_LK_OUTRO_1 to CenterPosition; arrival continues the chain
+-- via MovementInform (onOutroTalk4 / onOutroRaiseDead / onOutroTalk5).
+local function onOutroMoveCenter(creature, guid)
+    creature:MoveTo(LK.POINT_LK_OUTRO_1, LK.CENTER_X, LK.CENTER_Y, LK.CENTER_Z)
+end
+
+-- C++ EVENT_OUTRO_TALK_4 (:1107-1110, PHASE_OUTRO): SetFacingTo
+-- (0.01745329) + Talk(SAY_LK_OUTRO_4 17).
+local function onOutroTalk4(creature, guid)
+    creature:SetFacingTo(0.01745329)
+    creature:Talk(LK.SAY_LK_OUTRO_4)
+end
+
+-- C++ EVENT_OUTRO_RAISE_DEAD (:1111-1115, PHASE_OUTRO): DoCastAOE
+-- SPELL_RAISE_DEAD 71769 + ClearUnitState (no bridge) + SetZoneMusic
+-- (no bridge).
+local function onOutroRaiseDead(creature, guid)
+    creature:CastSpell(creature, LK.SPELL_RAISE_DEAD)
+end
+
+-- C++ EVENT_OUTRO_TALK_5 (:1116-1120, PHASE_OUTRO): Talk(SAY_LK_OUTRO_5 18).
+-- The tirion->AI()->DoAction(ACTION_OUTRO) leg stays out (tirion
+-- unregistered; no cross-AI DoAction send bridge).
+local function onOutroTalk5(creature, guid)
+    creature:Talk(LK.SAY_LK_OUTRO_5)
 end
 
 -- C++ boss_the_lich_king::DoAction ACTION_START_ENCOUNTER (:615-622):
@@ -437,18 +859,30 @@ local function lichKingDoAction(event, creature, action)
     end
 end
 
--- C++ boss_the_lich_king::JustEngagedWith schedules EVENT_BERSERK
--- (:583); the phase-one machine arms are unbridged. No C++ Talk on
--- engage, and JustEngagedWith writes NO boss state — IN_PROGRESS rides
--- DoAction ACTION_START_ENCOUNTER (ported above), so no state leg is
--- added here (the fabricated-leg trap). Event 1 registered for the
--- berserk timer only.
+-- C++ boss_the_lich_king::JustEngagedWith (:570-588): SetPhase
+-- (PHASE_ONE) + EVENT_SUMMON_SHAMBLING_HORROR 20s / EVENT_SUMMON_DRUDGE_GHOUL
+-- 10s / EVENT_INFEST 5s / EVENT_NECROTIC_PLAGUE {30s, 33s} (all
+-- PHASE_ONE) + EVENT_BERSERK 15min + EVENT_SHADOW_TRAP 15500ms
+-- (heroic only, PHASE_ONE). PORTED 2026-11-08 (phase model). No C++
+-- Talk on engage, and JustEngagedWith writes NO boss state —
+-- IN_PROGRESS rides DoAction ACTION_START_ENCOUNTER (ported above),
+-- so no state leg is added here (the fabricated-leg trap). The
+-- CheckRequiredBosses evade + LIGHT_S_HAMMER_TELEPORT legs stay out
+-- (no bridge).
 local function lichKingJustEngagedWith(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_the_lich_king.cpp:575 (JustEngagedWith arm; the setActive leg still has no bridge)
     creature:DoZoneInCombat() -- boss_the_lich_king.cpp:576 (JustEngagedWith arm; bridge live engine/world/lua_creature_events.go, 2026-10-23)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    lkPhase[guid] = LK.PHASE_ONE
+    schedule(guid, "horror", 20000, function() onSummonHorror(creature, guid) end)
+    schedule(guid, "ghoul", 10000, function() onSummonGhoul(creature, guid) end)
+    schedule(guid, "infest", 5000, function() onInfest(creature, guid) end)
+    schedule(guid, "necrotic", {30000, 33000}, function() onNecroticPlague(creature, guid) end)
     schedule(guid, "berserk", 900000, function() onBerserk(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "shadow_trap", 15500, function() onShadowTrap(creature, guid) end)
+    end
 end
 
 -- C++ _Reset() timer machinery — cancel/re-arm on combat events
@@ -459,6 +893,7 @@ end
 -- DespawnAll / _DespawnAtEvade legs have no bridge — documented.
 local function lichKingLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    lkPhase[creature:GetGUID()] = nil
     creature:CastSpell(creature, SPELL_KILL_FROSTMOURNE_PLAYERS)
 end
 
@@ -471,6 +906,7 @@ local function lichKingReset(event, creature)
         creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(creature:GetGUID())
+    lkPhase[creature:GetGUID()] = LK.PHASE_INTRO -- C++ Reset :533 SetPhase(PHASE_INTRO)
     -- C++ Reset :543: clear any light override (0, 5000ms).
     creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, 0, 5000)
 end
@@ -485,6 +921,7 @@ end
 -- order (map:SetZoneOverrideLight, then map:SetZoneWeather).
 local function lichKingJustDied(event, creature)
     cancelTimers(creature:GetGUID())
+    lkPhase[creature:GetGUID()] = nil
     -- C++ :551 — _JustDied() first: SetBossState DONE, before the
     -- PLAY_MOVIE cast (C++ order). PORTED 2026-11-06 via
     -- creature:SetBossState.
@@ -510,7 +947,7 @@ end
 --     Talk(SAY_LK_KILL) — the razuvious player-gated variant precedent
 -- (the evade leg ported 2026-10-16; the phase leg has no bridge).
 local function lichKingKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" and not creature:IsInEvadeMode() then
+    if victim:GetObjectType() == "Player" and not creature:IsInEvadeMode() and lkPhase[creature:GetGUID()] ~= LK.PHASE_OUTRO then
         creature:Talk(SAY_LK_KILL)
     end
 end
@@ -605,13 +1042,134 @@ local function lichKingJustSummoned(_, creature, summoned)
     -- with no script-rate field (creaturemotion.go:679), so the spirit
     -- wanders at base speed; the Go MoveRandom is a single walk spline,
     -- not the repeating C++ wander generator. The Frostmourne-phase gate
-    -- stays out (no phase model in Lua) — a spirit summoned during
-    -- Frostmourne still gets the 15s activate here, where C++ skips it.
+    -- is PORTED 2026-11-08 (lkPhase read below — a spirit summoned
+    -- during Frostmourne gets no 15s activate, per C++ :780).
     elseif summoned:GetEntry() == ENTRY_VILE_SPIRIT then
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:MoveRandom(10.0)
-        local spiritGuid = summoned:GetGUID()
-        schedule(spiritGuid, "vile_activate", 15000, function() onVileSpiritActivate(summoned) end)
+        -- C++ :780: no VileSpiritActivateEvent while in PHASE_FROSTMOURNE
+        -- (phase model landed 2026-11-08; the phase is only ever written
+        -- by the unported EVENT_HARVEST_SOULS, so the gate is dormant).
+        if lkPhase[creature:GetGUID()] ~= LK.PHASE_FROSTMOURNE then
+            local spiritGuid = summoned:GetGUID()
+            schedule(spiritGuid, "vile_activate", 15000, function() onVileSpiritActivate(summoned) end)
+        end
+    end
+end
+
+-- C++ boss_the_lich_king::DamageTaken (:685-728): health thresholds
+-- on PRE-damage health — ev9 fires pre-application
+-- (lua_creature_events.go:303; C++ Unit::DealDamage calls
+-- DamageTaken at Unit.cpp:701, before ModifyHealth) — so
+-- GetHealth() here IS the C++ HealthAbovePct operand; no
+-- post-damage guard (C++ DamageTaken arms fire on lethal hits too,
+-- the killing blow then runs JustDied's cancelTimers). 70% in
+-- PHASE_ONE / 40% in PHASE_TWO: SetPhase(PHASE_TRANSITION) +
+-- REACT_PASSIVE + AttackStop + InterruptNonMeleeSpells +
+-- MovePoint(POINT_CENTER_1/2, CenterPosition). 10% in PHASE_THREE:
+-- REACT_PASSIVE + AttackStop + events.Reset() (cancelTimers) +
+-- SetPhase(PHASE_OUTRO) + CastSpell(SPELL_FURY_OF_FROSTMOURNE
+-- 72350) + SetWalk(true) + the outro-talk schedule (:707-728);
+-- summons.DespawnAll + SetZoneMusic stay out (no bridge). PORTED
+-- 2026-11-08 (phase model; the "no MovementInform bridge" claim
+-- below is stale — ev28 landed, lua_creature_events.go:4699/:5725).
+local function lichKingDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local phase = lkPhase[guid]
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    local health = creature:GetHealth()
+    if phase == LK.PHASE_ONE and health <= math.floor(maxHealth * 70 / 100) then
+        lkPhase[guid] = LK.PHASE_TRANSITION
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        creature:InterruptNonMeleeSpells()
+        creature:MoveTo(LK.POINT_CENTER_1, LK.CENTER_X, LK.CENTER_Y, LK.CENTER_Z)
+        return
+    end
+    if phase == LK.PHASE_TWO and health <= math.floor(maxHealth * 40 / 100) then
+        lkPhase[guid] = LK.PHASE_TRANSITION
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        creature:InterruptNonMeleeSpells()
+        creature:MoveTo(LK.POINT_CENTER_2, LK.CENTER_X, LK.CENTER_Y, LK.CENTER_Z)
+        return
+    end
+    if phase == LK.PHASE_THREE and health <= math.floor(maxHealth * 10 / 100) then
+        lkPhase[guid] = LK.PHASE_OUTRO
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        cancelTimers(guid)
+        creature:InterruptNonMeleeSpells()
+        creature:CastSpell(creature, LK.SPELL_FURY_OF_FROSTMOURNE)
+        creature:SetWalk(true)
+        schedule(guid, "outro_talk_1", 2600, function() onOutroTalk1(creature, guid) end)
+        schedule(guid, "outro_emote_1", 6600, function() onOutroEmoteTalk(creature, guid) end)
+        schedule(guid, "outro_emote_2", 17600, function() onOutroEmoteTalk(creature, guid) end)
+        schedule(guid, "outro_emote_3", 27600, function() onOutroEmoteTalk(creature, guid) end)
+        schedule(guid, "outro_talk_2", 34600, function() onOutroTalk2(creature, guid) end)
+        schedule(guid, "outro_talk_3", 43600, function() onOutroTalk3(creature, guid) end)
+        schedule(guid, "outro_shout", 54600, function() onOutroShout(creature, guid) end)
+        schedule(guid, "outro_emote_4", 58600, function() onOutroEmoteTalk(creature, guid) end)
+        schedule(guid, "outro_move_center", 69600, function() onOutroMoveCenter(creature, guid) end)
+        return
+    end
+end
+
+-- C++ boss_the_lich_king::MovementInform (:826-890, POINT_MOTION_TYPE
+-- only): POINT_CENTER_1 — SetFacingTo(0) + Talk(SAY_LK_REMORSELESS_WINTER 4)
+-- + DoCastSelf(SPELL_REMORSELESS_WINTER_1 68981) + EVENT_QUAKE 62500ms /
+-- EVENT_PAIN_AND_SUFFERING 4s / EVENT_SUMMON_ICE_SPHERE 8s /
+-- EVENT_SUMMON_RAGING_SPIRIT 6s (PHASE_TRANSITION) + EVENT_SUMMON_VALKYR 78s /
+-- EVENT_INFEST 70s / EVENT_DEFILE 97s / EVENT_SOUL_REAPER 94s (PHASE_TWO).
+-- POINT_CENTER_2 — same Talk + SPELL_REMORSELESS_WINTER_2 72259 +
+-- EVENT_QUAKE_2 62500ms / PAIN_AND_SUFFERING 6s / ICE_SPHERE 8s /
+-- EVENT_SUMMON_RAGING_SPIRIT_2 5s (PHASE_TRANSITION) + EVENT_DEFILE 95500ms /
+-- EVENT_SOUL_REAPER 99500ms / EVENT_VILE_SPIRITS 79500ms /
+-- EVENT_HARVEST_SOUL(S) 73500ms (PHASE_THREE; heroic seeds HARVEST_SOULS,
+-- never scheduled here — the Frostmourne machine is unported).
+-- POINT_LK_OUTRO_1 — EVENT_OUTRO_TALK_4 1ms / EVENT_OUTRO_RAISE_DEAD 1s /
+-- EVENT_OUTRO_TALK_5 29s (PHASE_OUTRO). SetZoneMusic + CENTER_2
+-- summons.DespawnEntry(VALKYR) stay out (no bridge); intro/outro
+-- point ids (LK_INTRO_1..3, LK_OUTRO_2) ride the unported intro/outro
+-- movement machines. PORTED 2026-11-08 via ev28 (POINT_MOTION_TYPE 8).
+local function lichKingMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == LK.POINT_CENTER_1 then
+        creature:SetFacingTo(0.0)
+        creature:Talk(LK.SAY_LK_REMORSELESS_WINTER)
+        creature:CastSpell(creature, LK.SPELL_REMORSELESS_WINTER_1)
+        schedule(guid, "quake", 62500, function() onQuake(creature, guid, LK.PHASE_TWO) end)
+        schedule(guid, "pain_suffering", 4000, function() onPainAndSuffering(creature, guid) end)
+        schedule(guid, "ice_sphere", 8000, function() onSummonIceSphere(creature, guid) end)
+        schedule(guid, "raging_spirit", 6000, function() onSummonRagingSpirit(creature, guid) end)
+        schedule(guid, "valkyr", 78000, function() onSummonValkyr(creature, guid) end)
+        schedule(guid, "infest", 70000, function() onInfest(creature, guid) end)
+        schedule(guid, "defile", 97000, function() onDefile(creature, guid) end)
+        schedule(guid, "soul_reaper", 94000, function() onSoulReaper(creature, guid) end)
+    elseif id == LK.POINT_CENTER_2 then
+        creature:SetFacingTo(0.0)
+        creature:Talk(LK.SAY_LK_REMORSELESS_WINTER)
+        creature:CastSpell(creature, LK.SPELL_REMORSELESS_WINTER_2)
+        schedule(guid, "quake", 62500, function() onQuake(creature, guid, LK.PHASE_THREE) end)
+        schedule(guid, "pain_suffering", 6000, function() onPainAndSuffering(creature, guid) end)
+        schedule(guid, "ice_sphere", 8000, function() onSummonIceSphere(creature, guid) end)
+        schedule(guid, "raging_spirit_2", 5000, function() onSummonRagingSpirit2(creature, guid) end)
+        schedule(guid, "defile", 95500, function() onDefile(creature, guid) end)
+        schedule(guid, "soul_reaper", 99500, function() onSoulReaper(creature, guid) end)
+        schedule(guid, "vile_spirits", 79500, function() onVileSpirits(creature, guid) end)
+        if not creature:IsHeroic() then
+            schedule(guid, "harvest_soul", 73500, function() onHarvestSoul(creature, guid) end)
+        end
+    elseif id == LK.POINT_LK_OUTRO_1 then
+        schedule(guid, "outro_talk_4", 1, function() onOutroTalk4(creature, guid) end)
+        schedule(guid, "outro_raise_dead", 1000, function() onOutroRaiseDead(creature, guid) end)
+        schedule(guid, "outro_talk_5", 29000, function() onOutroTalk5(creature, guid) end)
     end
 end
 
@@ -620,7 +1178,9 @@ RegisterCreatureEvent(ENTRY_THE_LICH_KING, 2, lichKingLeaveCombat)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 3, lichKingKilledUnit)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 4, lichKingJustDied)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 19, lichKingJustSummoned)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 9, lichKingDamageTaken)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 23, lichKingReset)
+RegisterCreatureEvent(ENTRY_THE_LICH_KING, 28, lichKingMovementInform)
 RegisterCreatureEvent(ENTRY_THE_LICH_KING, 38, lichKingDoAction)
 
 -- C++ boss_the_lich_king::SummonedCreatureDies (:795-808): the six add
@@ -1034,8 +1594,8 @@ RegisterCreatureEvent(ENTRY_STRANGULATE_VEHICLE, 38, strangulateVehicleDoAction)
 -- is the PreventDefaultAction twin; aura:Remove() is the Remove
 -- twin). The OnUpdate leg (amount * 1.15 from the 2nd tick) stays
 -- out — no OnEffectUpdatePeriodic bridge. The boss-side Infest
--- cast (70541, PHASE_ONE timer) stays out — phase machine.
-local SPELL_INFEST = 70541
+-- cast (70541, PHASE_ONE timer) PORTED 2026-11-08 (onInfest,
+-- phase-gated on the lkPhase model; const moved to the top block).
 
 local function infestTick(event, aura, target)
     if target:HealthAbovePct(90) then
@@ -1044,7 +1604,7 @@ local function infestTick(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_INFEST, 1, infestTick)
+RegisterAuraEvent(LK.SPELL_INFEST, 1, infestTick)
 
 -- C++ spell_the_lich_king_soul_reaper::OnPeriodic
 -- (boss_the_lich_king.cpp:2321-2326): EFFECT_1 SPELL_AURA_
@@ -1052,8 +1612,8 @@ RegisterAuraEvent(SPELL_INFEST, 1, infestTick)
 -- damage tick still fires. The aura target casts SPELL_SOUL_
 -- REAPER_BUFF 69410 on the caster (the Lich King), triggered.
 -- The boss-side Soul Reaper cast (69409, PHASE_TWO_THREE timer)
--- stays out — phase machine.
-local SPELL_SOUL_REAPER = 69409
+-- PORTED 2026-11-08 (onSoulReaper, phase-gated on the lkPhase model;
+-- const moved to the top block).
 local SPELL_SOUL_REAPER_BUFF = 69410
 
 local function soulReaperTick(event, aura, target)
@@ -1063,7 +1623,7 @@ local function soulReaperTick(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_SOUL_REAPER, 1, soulReaperTick)
+RegisterAuraEvent(LK.SPELL_SOUL_REAPER, 1, soulReaperTick)
 
 -- C++ spell_the_lich_king_necrotic_plague_jump_aura::OnApply
 -- (boss_the_lich_king.cpp:2078-2083): EFFECT_0 PERIODIC_DAMAGE,
@@ -1189,7 +1749,6 @@ RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 3, necroticPlagueJumpRemove)
 -- boss_the_lich_king.cpp:193); the one C++ class covers all four,
 -- so all four register the same handler (the rotface 4-variant
 -- precedent). AURA_REMOVE_BY_DEATH = 5 already defined above.
-local SPELL_HARVEST_SOUL = 68980 -- boss_the_lich_king.cpp:136
 local SPELL_HARVEST_SOUL_25N = 74325 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 25N)
 -- SPELL_HARVEST_SOUL_10H = 74296 and SPELL_HARVEST_SOUL_25H = 74297
 -- already defined above.
@@ -1202,7 +1761,7 @@ local function harvestSoulRemove(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_HARVEST_SOUL, 3, harvestSoulRemove)
+RegisterAuraEvent(LK.SPELL_HARVEST_SOUL, 3, harvestSoulRemove)
 RegisterAuraEvent(SPELL_HARVEST_SOUL_25N, 3, harvestSoulRemove)
 RegisterAuraEvent(SPELL_HARVEST_SOUL_10H, 3, harvestSoulRemove)
 RegisterAuraEvent(SPELL_HARVEST_SOUL_25H, 3, harvestSoulRemove)
