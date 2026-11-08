@@ -10,8 +10,10 @@
 -- malygos / alexstraszaBunny / giftBoxBunny — the creature
 -- objects bound by ON_CREATURE_CREATE (the C++ OnCreatureCreate
 -- GUID latches); vortexTriggers / portalTriggers — the trigger
--- lists (GUIDs in C++, live objects here); platform / iris /
--- exitPortal / heartOfMagic — the GO objects bound by
+-- lists (GUIDs in C++, live objects here); lastPortalGUID — the
+-- PowerSparksHandling rotation cursor (a trigger GUID; C++
+-- lastPortalGUID, instance_eye_of_eternity.cpp:274); platform /
+-- iris / exitPortal / heartOfMagic — the GO objects bound by
 -- ON_GAMEOBJECT_CREATE (dynamic spawns only, see below);
 -- exitPortalPosition / focusingIrisPosition — the latched GO
 -- positions; malygosDone — written by the Malygos onDied
@@ -20,9 +22,9 @@
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: vortex/portal trigger lists + malygos /
 --   alexstrasza-bunny / gift-box-bunny binds (the C++ GUID
---   latches; no live consumer reads the trigger lists yet —
---   VortexHandling / PowerSparksHandling stay out, see below —
---   they mirror the C++ latch set, naxxramas precedent).
+--   latches; the trigger lists feed the SetData handlers below —
+--   VortexHandling / PowerSparksHandling — they mirror the C++
+--   latch set, naxxramas precedent).
 -- - OnGameObjectCreate: platform / iris / exit-portal /
 --   heart-of-magic binds + iris/exit-portal positions. Static
 --   template GOs never pass the Go GO-create funnel
@@ -56,12 +58,13 @@
 --   ProcessEvent bridge (oculus precedent); the receiver
 --   (Malygos DoAction(0), ACTION_LAND_ENCOUNTER_START) sits
 --   in the unported DoAction machine in boss_malygos.lua.
--- - SetData dispatch (DATA_VORTEX_HANDLING): PORTED 2026-11-08
---   (tick 431, below) via the Go-only InstanceEventOnSetData bridge
---   (event 8, InstanceData:SetData) — VortexHandling runs in Lua.
---   DATA_POWER_SPARKS_HANDLING / DATA_RESPAWN_IRIS stay out (no
---   writer yet: PowerSparksHandling needs the portal-trigger
---   rotation, the iris respawn needs the difficulty-gated GO spawn).
+-- - SetData dispatch: PORTED 2026-11-08 (tick 431 + tick 432,
+--   below) via the Go-only InstanceEventOnSetData bridge
+--   (event 8, InstanceData:SetData) — DATA_VORTEX_HANDLING runs
+--   VortexHandling, DATA_POWER_SPARKS_HANDLING runs
+--   PowerSparksHandling, DATA_RESPAWN_IRIS respawns the
+--   focusing iris (the iris leg is dormant — its writer is
+--   FAIL-gated, see boss_malygos.lua).
 -- - OnUnitDeath player root (SetControlled ROOT on player
 --   death, the EoE falling fix): no player-death hook —
 --   PlayerEventKilledByCreature (8) fires only for
@@ -170,39 +173,126 @@ RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_UPDATE, function(event, 
     end
 end)
 
--- C++ instance_eye_of_eternity::SetData DATA_VORTEX_HANDLING
--- (instance_eye_of_eternity.cpp:234-236) -> VortexHandling (:180-207):
--- for each vortex trigger, up to 5 threat-list players each cast
--- SPELL_VORTEX_4 on the trigger to enter the vehicle (the GM skip
--- has no bridge — the player surface exposes no IsGameMaster; same
--- documented deviation as the vortexLand handler in
--- boss_malygos.lua). Rides the Go-only InstanceEventOnSetData bridge
--- (event 8, InstanceData:SetData); the writer is the
--- ACTION_EXECUTE_VORTEX leg in boss_malygos.lua, emulating the
--- 56105 SpellScript's HandleScript (boss_malygos.cpp:1765), which
--- does only the SetData write. PORTED 2026-11-08 (tick 431).
+-- C++ instance_eye_of_eternity::SetData
+-- (instance_eye_of_eternity.cpp:230-244): DATA_VORTEX_HANDLING
+-- (2) -> VortexHandling (:180-207), PORTED 2026-11-08 (tick 431);
+-- DATA_POWER_SPARKS_HANDLING (3) -> PowerSparksHandling (:209-226),
+-- PORTED 2026-11-08 (tick 432, below);
+-- DATA_RESPAWN_IRIS (4) -> SpawnGameObject the focusing iris
+-- (:240-242), PORTED 2026-11-08 (tick 432, below). All three ride
+-- the Go-only InstanceEventOnSetData bridge (event 8,
+-- InstanceData:SetData); the writers live in boss_malygos.lua
+-- (EVENT_POWER_SPARKS timer, ACTION_HANDLE_RESPAWN, and the
+-- ACTION_EXECUTE_VORTEX leg from tick 431).
 local INSTANCE_EVENT_ON_SET_DATA = 8
 local DATA_VORTEX_HANDLING = 2 -- eye_of_eternity.h:31
+local DATA_POWER_SPARKS_HANDLING = 3 -- eye_of_eternity.h:32
+local DATA_RESPAWN_IRIS = 4 -- eye_of_eternity.h:33
 local SPELL_VORTEX_4 = 55853 -- eye_of_eternity.h:82
+local SPELL_PORTAL_OPENED = 61236 -- eye_of_eternity.h:84
 
 RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_SET_DATA, function(event, instanceData, mapObj, type, data)
-    if type ~= DATA_VORTEX_HANDLING then
-        return
-    end
-    local malygos = instanceData.malygos
-    if not malygos or not instanceData.vortexTriggers then
-        return
-    end
-    for _, trigger in ipairs(instanceData.vortexTriggers) do
-        local counter = 0
-        for _, target in ipairs(malygos:GetAITargets()) do
-            if counter >= 5 then
-                break
-            end
-            if target:GetObjectType() == "Player" and not target:HasAura(SPELL_VORTEX_4) then
-                target:CastSpell(trigger, SPELL_VORTEX_4, true)
-                counter = counter + 1
+    if type == DATA_VORTEX_HANDLING then
+        -- C++ instance_eye_of_eternity::SetData DATA_VORTEX_HANDLING
+        -- (instance_eye_of_eternity.cpp:234-236) -> VortexHandling
+        -- (:180-207): for each vortex trigger, up to 5 threat-list
+        -- players each cast SPELL_VORTEX_4 on the trigger to enter
+        -- the vehicle (the GM skip has no bridge — the player
+        -- surface exposes no IsGameMaster; same documented deviation
+        -- as the vortexLand handler in boss_malygos.lua). Rides the
+        -- Go-only InstanceEventOnSetData bridge (event 8,
+        -- InstanceData:SetData); the writer is the
+        -- ACTION_EXECUTE_VORTEX leg in boss_malygos.lua, emulating
+        -- the 56105 SpellScript's HandleScript
+        -- (boss_malygos.cpp:1765), which does only the SetData
+        -- write. PORTED 2026-11-08 (tick 431).
+        local malygos = instanceData.malygos
+        if not malygos or not instanceData.vortexTriggers then
+            return
+        end
+        for _, trigger in ipairs(instanceData.vortexTriggers) do
+            local counter = 0
+            for _, target in ipairs(malygos:GetAITargets()) do
+                if counter >= 5 then
+                    break
+                end
+                if target:GetObjectType() == "Player" and not target:HasAura(SPELL_VORTEX_4) then
+                    target:CastSpell(trigger, SPELL_VORTEX_4, true)
+                    counter = counter + 1
+                end
             end
         end
+    elseif type == DATA_POWER_SPARKS_HANDLING then
+        -- C++ PowerSparksHandling (instance_eye_of_eternity.cpp:209-226):
+        -- the next portal trigger after lastPortalGUID (or the first
+        -- when none / the last was the list tail) casts
+        -- SPELL_PORTAL_OPENED on itself, triggered; lastPortalGUID
+        -- advances to it and the handler returns. The writer is
+        -- EVENT_POWER_SPARKS in boss_malygos.lua (tick 432). The
+        -- cast itself lands (the creature-cast path needs no DBC
+        -- row); the trigger's SpellHit response (npc_portal_eoe.lua)
+        -- is dormant until Spell.dbc ships — the hit tail is
+        -- spellKnown-gated (boss_ai.go:3805). PORTED 2026-11-08
+        -- (tick 432).
+        local triggers = instanceData.portalTriggers
+        if not triggers or #triggers == 0 then
+            return
+        end
+        local lastGuid = instanceData.lastPortalGUID
+        local tail = triggers[#triggers]
+        local next = false
+        if lastGuid == nil or (tail ~= nil and tail:GetGUID() == lastGuid) then
+            next = true
+        end
+        for _, trigger in ipairs(triggers) do
+            if next then
+                instanceData.lastPortalGUID = trigger:GetGUID()
+                trigger:CastSpell(trigger, SPELL_PORTAL_OPENED, true)
+                return
+            end
+            if trigger:GetGUID() == lastGuid then
+                next = true
+            end
+        end
+    elseif type == DATA_RESPAWN_IRIS then
+        -- C++ SetData DATA_RESPAWN_IRIS (instance_eye_of_eternity.cpp:240-242):
+        -- SpawnGameObject the focusing iris (10-man 193958 / 25-man
+        -- 193960 by raid difficulty) at the latched iris position.
+        -- The Go twin spawns via the bound Malygos (the exit-portal
+        -- DONE-leg precedent, above); difficulty reads off Malygos
+        -- (creature:Is25ManRaid). The position is the
+        -- OnGameObjectCreate latch when a dynamic iris spawn fired
+        -- it; the static iris never passes the Go GO-create funnel,
+        -- so the fallback reads the live static iris via
+        -- FindNearestGameObject (the exit-portal position fallback,
+        -- above). DORMANT: the writer (ACTION_HANDLE_RESPAWN,
+        -- boss_malygos.lua) is FAIL-gated and FAIL is unobservable
+        -- in Go (boss_ai.go:195); also the iris is never deleted in
+        -- Go (the land machine that deletes it is unported), so a
+        -- live respawn would duplicate the static iris — the
+        -- handler is exact for the C++ state, dormant in Go.
+        -- PORTED 2026-11-08 (tick 432).
+        local malygos = instanceData.malygos
+        if not malygos then
+            return
+        end
+        local pos = instanceData.focusingIrisPosition
+        if not pos then
+            local iris = malygos:FindNearestGameObject(GO_FOCUSING_IRIS_10, 1000)
+            if not iris then
+                iris = malygos:FindNearestGameObject(GO_FOCUSING_IRIS_25, 1000)
+            end
+            if iris then
+                pos = { iris:GetX(), iris:GetY(), iris:GetZ(), iris:GetO() }
+            end
+        end
+        if not pos then
+            return
+        end
+        local entry = GO_FOCUSING_IRIS_10
+        if malygos:Is25ManRaid() then
+            entry = GO_FOCUSING_IRIS_25
+        end
+        malygos:SummonGameObject(entry, pos[1], pos[2], pos[3], pos[4], 0)
     end
 end)

@@ -116,13 +116,14 @@
 -- (no immune surface, no speed literal, no phase bridge).
 -- DoAction (the ~60-action event/phase
 -- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
--- intro, surge-of-power legs, respawn handling — all gated on
+-- intro, surge-of-power legs — all gated on
 -- MotionMaster / instance GUIDs / timed events) — dispatch IS
 -- bridged (creature:DoAction fires ev38,
 -- lua_creature_events.go:802); the VORTEX actions are PORTED
--- (ACTION_EXECUTE_VORTEX + ACTION_LIFT_IN_AIR, below); the rest
--- of the machine stays out on its unported drivers (motion /
--- instance), not dispatch. MovementInform
+-- (ACTION_EXECUTE_VORTEX + ACTION_LIFT_IN_AIR, below) and
+-- ACTION_HANDLE_RESPAWN is PORTED 2026-11-08 (tick 432, below —
+-- dormant, FAIL-gated); the rest of the machine stays out on its
+-- unported drivers (motion / instance), not dispatch. MovementInform
 -- (POINT_LAND_P_ONE / cyclic movement points) — the vortex
 -- takeoff-land points are PORTED (below); the rest has no motion
 -- bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
@@ -131,9 +132,9 @@
 -- below). DamageTaken (surge-of-power and destroy-platform
 -- health gates, immune flag flips) — no health / timer-event
 -- bridges. UpdateAI (phase-one arcane event machine,
--- power-spark handling, phase-three disk/scion machine) — no
--- timer-event / cast / phase bridges; EVENT_VORTEX is PORTED
--- (CreateLuaEvent timer + DoAction, below).
+-- phase-three disk/scion machine) — no timer-event / cast /
+-- phase bridges; EVENT_VORTEX + EVENT_POWER_SPARKS are PORTED
+-- (CreateLuaEvent timers + DoAction / instance SetData, below).
 -- SpellHit — SPELL_POWER_SPARK_MALYGOS 56152
 -- (Talk SAY_BUFF_SPARK 14 + despawn the spark) stays out: the
 -- trigger is Malygos's MoveInLineOfSight arm (event 27 exists,
@@ -154,11 +155,11 @@
 -- re-triage; the stale "no LOS bridge" wording is retracted).
 -- npc_portal_eoe (NPC_PORTAL_TRIGGER 30118) — SpellHit
 -- SPELL_PORTAL_OPENED -> phase-one-gated DoCast
--- SPELL_SUMMON_POWER_PARK; UpdateAI per-tick aura maintenance —
--- HasAura/RemoveAura/CastSpell are bridged (stale "no aura bridge"
--- re-keyed) but there is no per-tick UpdateAI bridge and the
--- DATA_PHASE gate is instance-bound (no instance bridge) —
--- documented-only. npc_power_spark
+-- SPELL_SUMMON_POWER_PARK is PORTED 2026-11-08 (tick 432, own
+-- file npc_portal_eoe.lua, ev14 — DORMANT until Spell.dbc ships,
+-- the hit tail is spellKnown-gated; the phase gate rides the
+-- in-combat + >50% health proxy); UpdateAI per-tick aura
+-- maintenance stays out (no per-tick UpdateAI bridge). npc_power_spark
 -- (NPC_POWER_SPARK 30084) — UpdateAI despawn-when-reached legs
 -- documented-only (no motion bridge); JustDied casts
 -- SPELL_POWER_SPARK_DEATH 55852 triggered self-cast PORTED as
@@ -233,6 +234,9 @@
 local ENTRY_MALYGOS = 28859
 local DATA_MALYGOS_EVENT = 0 -- eye_of_eternity.h:28
 local DATA_VORTEX_HANDLING = 2 -- eye_of_eternity.h:31
+local DATA_POWER_SPARKS_HANDLING = 3 -- eye_of_eternity.h:32
+local DATA_RESPAWN_IRIS = 4 -- eye_of_eternity.h:33
+local BOSS_STATE_FAILED = 2 -- EncounterState (InstanceScript.h:68-76)
 local BOSS_STATE_NOT_STARTED = 0 -- EncounterState (InstanceScript.h:68-76)
 local BOSS_STATE_IN_PROGRESS = 1 -- EncounterState (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
@@ -259,6 +263,7 @@ local POINT_LAND_AFTER_VORTEX_P_ONE = 4
 local POINT_LIFT_IN_AIR_P_ONE = 5
 local ACTION_EXECUTE_VORTEX = 1 -- Actions enum (boss_malygos.cpp:183-185)
 local ACTION_LIFT_IN_AIR = 3
+local ACTION_HANDLE_RESPAWN = 4 -- Actions enum (boss_malygos.cpp:186)
 local SPELL_VORTEX_1 = 56237 -- boss_malygos.cpp:113 (freeze-object animation)
 local SPELL_VORTEX_2 = 55873 -- boss_malygos.cpp:114 (visual effect)
 local SPELL_VORTEX_3 = 56105 -- boss_malygos.cpp:115 (dummy; the vortex script)
@@ -374,6 +379,31 @@ local function vortexTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_POWER_SPARKS (boss_malygos.cpp:786-789): instance
+-- SetData(DATA_POWER_SPARKS_HANDLING, 0) + re-arm 30-35s in
+-- PHASE_ONE. The phase-one gate is the same Lua-side health latch
+-- as vortexTick (the C++ UpdateAI flips to PHASE_TWO at 50%
+-- health, dropping the pending phase-one event), so the tick
+-- no-ops and stops re-arming at or below 50%. The SetData write
+-- rides the InstanceData:SetData bridge (event 8); the rotation
+-- runs in instance_eye_of_eternity.lua. PORTED 2026-11-08
+-- (tick 432).
+local function powerSparksTick(creature, guid)
+    if creature:GetHealthPct() <= 50 then
+        return
+    end
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local instanceData = mapObj:GetInstanceData()
+        if instanceData then
+            instanceData:SetData(DATA_POWER_SPARKS_HANDLING, 0)
+        end
+    end
+    schedule(guid, "powerSparks", math.random(30000, 35000), function()
+        powerSparksTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_MOVE_TO_VORTEX_POINT (boss_malygos.cpp:781-785):
 -- REACT_PASSIVE + AttackStop + MovePoint(POINT_VORTEX_P_ONE,
 -- MalygosPositions[1]).
@@ -425,6 +455,29 @@ local function malygosDoAction(event, creature, action)
         if creature:GetHealthPct() > 50 then
             local x, y, z = creature:GetX(), creature:GetY(), creature:GetZ()
             creature:MoveTo(POINT_LIFT_IN_AIR_P_ONE, x, y, z + 20.0)
+        end
+    elseif action == ACTION_HANDLE_RESPAWN then
+        -- C++ boss_malygosAI::DoAction ACTION_HANDLE_RESPAWN
+        -- (boss_malygos.cpp:512-520): teleport to the respawn
+        -- position (GetRespawnPosition — the spawn/home position;
+        -- the Go twin is creature:GetHomePosition,
+        -- lua_creature_events.go:6053; home is never re-set by the
+        -- ported arms, so it is the spawn position) + instance
+        -- SetData(DATA_RESPAWN_IRIS, 0) + _despawned = false (the
+        -- flag is re-read from boss state on each Reset in Lua, so
+        -- no latch is kept). PORTED 2026-11-08 (tick 432).
+        -- DORMANT: the caller (Reset, below) fires it only when the
+        -- boss state is FAIL, and FAIL is unobservable in Go
+        -- (boss_ai.go:195 — evade clears the encounter, never sets
+        -- FAIL), so the arm never runs today.
+        local hx, hy, hz, ho = creature:GetHomePosition()
+        creature:NearTeleport(hx, hy, hz, ho)
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local instanceData = mapObj:GetInstanceData()
+            if instanceData then
+                instanceData:SetData(DATA_RESPAWN_IRIS, 0)
+            end
         end
     end
 end
@@ -496,6 +549,14 @@ local function malygosEnterCombat(event, creature, target)
     schedule(guid, "vortex", math.random(30000, 35000), function()
         vortexTick(creature, guid)
     end)
+    -- C++ SetPhaseEvents PHASE_ONE (boss_malygos.cpp:548): first
+    -- EVENT_POWER_SPARKS 20-30s after the phase-one start; same
+    -- engage-as-phase-one-start proxy (and the same ~7s-early
+    -- deviation) as the vortex seed above. PORTED 2026-11-08
+    -- (tick 432).
+    schedule(guid, "powerSparks", math.random(20000, 30000), function()
+        powerSparksTick(creature, guid)
+    end)
 end
 
 -- C++ JustDied (boss_malygos.cpp:979-987): _JustDied() +
@@ -558,12 +619,25 @@ local function malygosReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     vortexState[guid] = nil
+    -- C++ Reset (boss_malygos.cpp:345/:371/:381): _despawned is the
+    -- boss state == FAIL read at AI construction (the ctor; the AI
+    -- is rebuilt on respawn, so the read below is the ctor's read);
+    -- when true, _Reset() is skipped and
+    -- DoAction(ACTION_HANDLE_RESPAWN) runs instead. FAIL is
+    -- unobservable in Go (boss_ai.go:195), so despawned is always
+    -- false today and the DoAction leg is dormant — the NOT_STARTED
+    -- leg keeps its established != DONE gate. PORTED 2026-11-08
+    -- (tick 432).
+    local despawned = creature:GetBossState(DATA_MALYGOS_EVENT) == BOSS_STATE_FAILED
     if creature:GetBossState(DATA_MALYGOS_EVENT) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_NOT_STARTED)
     end
     creature:SetDisableGravity(true)
     creature:SetFlag(59, 0x300) -- SetImmuneToAll(true), C++ order before the NOT_SELECTABLE clear
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    if despawned then
+        creature:DoAction(ACTION_HANDLE_RESPAWN)
+    end
     creature:SetReactState(0) -- REACT_PASSIVE
 end
 

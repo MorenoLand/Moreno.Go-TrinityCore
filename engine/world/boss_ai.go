@@ -19047,8 +19047,10 @@ func init() {
 	// delivers); zero ev15 arms on the boss AI); MoveInLineOfSight (power-spark
 	// proximity cast — IsWithinLOS bridged, but ev27 is
 	// engage-only, so the sighting arm stays out); npc_portal_eoe (NPC_PORTAL_TRIGGER
-	// 30118 — SpellHit / aura-maintenance UpdateAI — no SpellHit / cast /
-	// aura bridges); npc_power_spark (NPC_POWER_SPARK 30084 —
+	// 30118 — SpellHit SPELL_PORTAL_OPENED -> SPELL_SUMMON_POWER_PARK PORTED
+	// (event 14, lua_scripts/northrend/npc_portal_eoe.lua — DORMANT until
+	// Spell.dbc ships, the hit tail is spellKnown-gated); aura-maintenance
+	// UpdateAI stays out, no per-tick UpdateAI bridge); npc_power_spark (NPC_POWER_SPARK 30084 —
 	// despawn-when-reached UpdateAI + MoveFollow legs
 	// documented-only, no motion bridge; JustDied me->CastSpell(me,
 	// SPELL_POWER_SPARK_DEATH 55852, true) PORTED as
@@ -19111,6 +19113,19 @@ func init() {
 	// gates (phase / instance / vortex-aura despawn legs only) — the
 	// ported JustDied arm is ungated per C++; no gate ported.
 	RegisterLuaBoss("npc_power_spark", 30084)
+
+	// npc_portal_eoe (Eye of Eternity) — fight logic in
+	// lua_scripts/northrend/npc_portal_eoe.lua.
+	// Ported arms (C++-exact): SpellHit SPELL_PORTAL_OPENED 61236 ->
+	// phase-one-gated DoCast SPELL_SUMMON_POWER_PARK 56142 (triggered)
+	// (event 14, gated on the trigger spell ID; the DATA_PHASE gate
+	// rides the in-combat + >50% health proxy, the vortexTick latch
+	// in boss_malygos.lua). DORMANT until Spell.dbc ships — the ev14
+	// hit tail is spellKnown-gated (boss_ai.go:3805).
+	// Documented-only: UpdateAI per-tick aura maintenance
+	// (SPELL_PORTAL_VISUAL_CLOSED re-cast + non-phase-one
+	// SPELL_PORTAL_OPENED removal — no per-tick UpdateAI bridge).
+	RegisterLuaBoss("npc_portal_eoe", 30118)
 
 	// Sartharion (28860), Obsidian Sanctum —
 	// lua_scripts/northrend/boss_sartharion.lua.
