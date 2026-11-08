@@ -136,10 +136,17 @@
 -- DespawnOrUnsummon) — MotionMaster / despawn legs, no bridges; no
 -- registration.
 -- spell_ingvar_summon_banshee (SpellScript OnDestinationTargetSelect,
--- lines 407-427) / spell_ingvar_woe_strike (AuraScript proc,
--- SPELL_WOE_STRIKE_EFFECT 42739, lines 430-476) — no SpellScript /
--- AuraScript bridges; join the no-SpellScript / no-AuraScript-bridge
--- queues.
+-- lines 407-427) — no spell-destination-target bridge; stays in the
+-- no-SpellScript-bridge queue.
+-- spell_ingvar_woe_strike (AuraScript proc, SPELL_WOE_STRIKE_EFFECT
+-- 42739, lines 430-476) — PORTED this run (woeStrikeProc below,
+-- RegisterAuraEvent event 6; the anetheron OnProc precedent). The
+-- CheckProc heal > 0 gate is carried by the Go heal proc legs
+-- (procs.go procSpellHealTakenAuraTriggers early-returns on heal == 0),
+-- so the handler casts unconditionally and returns true
+-- (PreventDefaultAction); the hook's damage arg is always 0 on heal
+-- events, so no damage gate. DORMANT until the phase-2 EVENT_WOE_STRIKE
+-- arm applies the aura and the DBC proc entry for 42730 ships.
 
 local ENTRY_INGVAR = 23954
 local ENTRY_INGVAR_UNDEAD = 23980
@@ -154,6 +161,8 @@ local SPELL_SMASH = 42669
 local SPELL_STAGGERING_ROAR = 42708
 local SPELL_ENRAGE = 42705
 local SPELL_INGVAR_FEIGN_DEATH = 42795 -- boss_ingvar_the_plunderer.cpp (DamageTaken, triggered self-cast)
+local SPELL_WOE_STRIKE = 42730 -- boss_ingvar_the_plunderer.cpp:85
+local SPELL_WOE_STRIKE_EFFECT = 42739 -- boss_ingvar_the_plunderer.cpp:86
 
 local UNIT_FIELD_FLAGS = 59 -- UnitDefines.h
 local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h
@@ -381,6 +390,22 @@ local function ingvarReset(event, creature)
     -- C++ order (Reset body :113-117 runs before _Reset() :119).
     creature:SetBossState(DATA_INGVAR, 0)
 end
+
+-- C++ spell_ingvar_woe_strike::HandleProc
+-- (boss_ingvar_the_plunderer.cpp:460-467): OnEffectProc, EFFECT_1
+-- SPELL_AURA_PROC_TRIGGER_SPELL. CheckProc requires a heal event with
+-- heal > 0; HandleProc PreventDefaultActions and the aura holder casts
+-- SPELL_WOE_STRIKE_EFFECT 42739 on the healer (eventInfo.GetActor()),
+-- triggered (the aurEff overload).
+local function woeStrikeProc(event, aura, target, actor, procTarget, damage)
+    if target == nil or actor == nil then
+        return true
+    end
+    target:CastSpell(actor, SPELL_WOE_STRIKE_EFFECT, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WOE_STRIKE, 6, woeStrikeProc)
 
 RegisterCreatureEvent(ENTRY_INGVAR, 1, ingvarEnterCombat)
 RegisterCreatureEvent(ENTRY_INGVAR, 2, ingvarLeaveCombat)

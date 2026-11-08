@@ -20546,9 +20546,12 @@ func init() {
 	// in-loop :323; frost-tomb AI UpdateAI is empty, no gate). The
 	// EVENT_SUMMON_SKELETONS Talk is fused with the summon (zarithrian
 	// precedent), npc_frost_tomb / npc_vrykul_skeleton ride summon /
-	// DoAction / instance legs, the spell_frost_tomb AuraScript and the
-	// achievement_on_the_rocks GetData check are bridge-blocked —
-	// documented in the lua header.
+	// DoAction / instance legs, the spell_frost_tomb AuraScript OnRemove
+	// (RegisterAuraEvent 48400 ev3, DEATH-mode gate + caster
+	// DespawnOrUnsummon 1s, tick 481; dormant until Spell.dbc ships the
+	// 48400 aura record) and the achievement_on_the_rocks GetData check
+	// (Go gate + SetData write legs, tick 417) are ported — see the lua
+	// header.
 	RegisterLuaBoss("boss_keleseth", 23953)
 	// Skarvald the Constructor and Dalronn the Controller (Utgarde Keep)
 	// — boss_skarvald_dalronn.cpp, AddSC_boss_skarvald_dalronn() (loader
@@ -20608,8 +20611,13 @@ func init() {
 	// shadow axe), EVENT_SUMMON_BANSHEE, EVENT_JUST_TRANSFORMED, the
 	// DoAction(ACTION_START_PHASE_2) machine, npc_annhylde_the_caller
 	// (MovementInform / instance-GuidData / cross-creature resurrect
-	// machine) and the two spell scripts are bridge-blocked — documented
-	// in the lua header.
+	// machine) and spell_ingvar_summon_banshee (SpellScript
+	// OnDestinationTargetSelect, no spell-destination bridge) are
+	// bridge-blocked — documented in the lua header. The
+	// spell_ingvar_woe_strike AuraScript proc is ported
+	// (RegisterAuraEvent 42730 ev6, tick 481; dormant until the phase-2
+	// EVENT_WOE_STRIKE arm applies the aura and the DBC proc entry for
+	// 42730 ships).
 	// Cast-state gates (2026-11-04): own UpdateAI pre-loop :206 +
 	// in-loop :262 CASTING returns ported as 500ms IsCasting defer on all
 	// four PHASE_HUMAN timer arms; DamageTaken feign latch ungated per C++

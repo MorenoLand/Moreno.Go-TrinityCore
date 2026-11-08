@@ -123,9 +123,14 @@
 -- the motion funnel, so event 23 may never fire for them); event 23
 -- covers any respawn-path Reset.
 -- spell_frost_tomb (AuraScript OnRemove: despawn-or-unsummon the tomb
--- caster when the stun aura is removed by non-death, :341-370) — no
--- AuraScript / SpellScript bridge; joins the no-SpellScript-bridge
--- queue.
+-- caster when the aura is removed by non-death, :341-370) — PORTED
+-- this run (frostTombAuraRemove below, RegisterAuraEvent event 3;
+-- the mandokir / teron OnRemove precedent). The script binds to
+-- SPELL_FROST_TOMB 48400, not the 42672 stun: 48400 is cast by the
+-- tomb on the summoner (IsSummonedBy, :91-97), so GetCaster() is the
+-- tomb; bound to 42672 (cast by Keleseth) the leg would despawn the
+-- boss on every frost tomb. Dormant until Spell.dbc ships the 48400
+-- aura record, like the tomb's inline 48400 cast.
 -- achievement_on_the_rocks (OnCheck: GetAI()->GetData
 -- (DATA_ON_THE_ROCKS), :372-380) — PORTED tick 417 via the SetData
 -- write leg + Go gate (bossLatchData, achievement_criteria_scripts.go).
@@ -156,6 +161,8 @@ local SPELL_BONE_ARMOR = 59386
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
 
 local timers = {}
 
@@ -529,6 +536,23 @@ local function kelesethJustSummoned(_, creature, summoned)
     end
     list[summoned:GetGUID()] = summoned
 end
+
+-- C++ spell_frost_tomb::OnRemove (boss_keleseth.cpp:353-360):
+-- AfterEffectRemove, EFFECT_0 SPELL_AURA_MOD_STUN,
+-- AURA_EFFECT_HANDLE_REAL. Unless the remove mode is BY_DEATH, the
+-- aura's caster — the frost tomb — despawns 1s later if alive and a
+-- creature (GetCaster + IsAlive + ToCreature gates, in C++ order).
+local function frostTombAuraRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_DEATH then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Creature" and caster:IsAlive() then
+        caster:DespawnOrUnsummon(1000)
+    end
+end
+
+RegisterAuraEvent(SPELL_FROST_TOMB, 3, frostTombAuraRemove)
 
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
 RegisterCreatureEvent(ENTRY_KELESETH, 5, kelesethSpawned)
