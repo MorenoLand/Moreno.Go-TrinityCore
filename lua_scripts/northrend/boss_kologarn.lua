@@ -39,10 +39,11 @@
 -- PORTED 2026-11-05 via creature:SetBossState
 -- (lua_creature_events.go:5917; the maiden_of_grief precedent) —
 -- the stale "no instance bridge" claim is retracted; the
--- vehicle-kit DoZoneInCombat arms leg and the CheckRequiredBosses
--- gate (EnterEvadeMode has no bridge) stay out. Base-last in C++
--- (cpp:136), so the state leg sits after the schedules with
--- SetCombatPulseDelay/DoZoneInCombat.
+-- vehicle-kit DoZoneInCombat arms leg is PORTED this run (tick
+-- 474, GetPassenger bridge, lua_vehicle.go:74) and the
+-- CheckRequiredBosses gate (EnterEvadeMode has no bridge) stays
+-- out. Base-last in C++ (cpp:136), so the state leg sits after
+-- the schedules with SetCombatPulseDelay/DoZoneInCombat.
 -- KilledUnit — player-gated Talk(SAY_SLAY 1) (cpp:159, event
 -- 3; who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
@@ -85,8 +86,8 @@
 -- 32930):
 -- Constructor (cpp:107-117) — RemoveFlag(NOT_SELECTABLE) +
 -- SetControlled(ROOT) + DoCast(SPELL_KOLOGARN_REDUCE_PARRY
--- 64651) — PORTED (see kologarnSpawn below; SetCombatMovement(false)
--- has no bridge — the root arm alone keeps him stationary via the
+-- 64651) + SetCombatMovement(false) — PORTED (see kologarnSpawn
+-- below; the root arm alone keeps him stationary via the
 -- Go chase-pause gate, the documented turret deviation).
 -- Reset — _Reset() SetBossState(DATA_KOLOGARN 5, NOT_STARTED)
 -- PORTED 2026-11-05 via creature:SetBossState
@@ -498,7 +499,8 @@ end
 -- (creature:SetRooted, lua_creature_events.go) + DoCast(self,
 -- SPELL_KOLOGARN_REDUCE_PARRY 64651) non-triggered, in C++ arm order;
 -- SetCombatMovement(false) is bridged (lua_creature_events.go:759) and
--- PORTED in kologarnEnterCombat below (event 1); the root arm (SetRooted,
+-- rides this handler too (moved here from enterCombat, tick 474 —
+-- the ctor arm runs at spawn); the root arm (SetRooted,
 -- bridged) would alone keep him stationary (Go's chase-pause NOT_MOVE
 -- gate, creaturemotion.go), the documented turret deviation. Go event 5
 -- fires once per spawn (grid/respawn funnel, creaturemotion.go:713) —
@@ -507,17 +509,22 @@ local function kologarnSpawn(event, creature)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetRooted(true)
     creature:CastSpell(creature, SPELL_KOLOGARN_REDUCE_PARRY)
+    -- C++ ctor :114: SetCombatMovement(false) — moved here from
+    -- kologarnEnterCombat this run (tick 474): the ctor arm runs
+    -- at spawn, and ev5 is the ctor analog; the root arm alone
+    -- already kept him stationary, this is the C++-exact seat.
+    creature:SetCombatMovement(false)
 end
 
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + the bridgeable
 -- event-scheduling legs (EVENT_MELEE_CHECK 6s, EVENT_FOCUSED_EYEBEAM
--- 21s, EVENT_ENRAGE 10min); the vehicle-kit DoZoneInCombat arms leg
--- and the CheckRequiredBosses gate (EnterEvadeMode has no bridge)
--- stay out; BossAI::JustEngagedWith is LAST (cpp:136) and its
+-- 21s, EVENT_ENRAGE 10min) + the vehicle-kit DoZoneInCombat arms
+-- leg (:132-135, seats 0/1, before the base call); the
+-- CheckRequiredBosses gate (EnterEvadeMode has no bridge) stays
+-- out; BossAI::JustEngagedWith is LAST (cpp:136) and its
 -- SetBossState/SetCombatPulseDelay/DoZoneInCombat arms are ported
 -- below in base order (ScriptedCreature.cpp:527-544).
 local function kologarnEnterCombat(event, creature, target)
-    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_kologarn.cpp:114 (ranged AI stands and casts)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -539,6 +546,20 @@ local function kologarnEnterCombat(event, creature, target)
     schedule(guid, "stonegrip", 25000, function()
         stoneGripTick(creature, guid)
     end)
+    -- C++ JustEngagedWith :132-135: the vehicle-kit arms enter
+    -- combat with the zone (seats 0/1) before the BossAI base
+    -- call — GetPassenger is bridged (lua_vehicle.go:74,
+    -- warhead precedent) and the arm-side DoZoneInCombat is
+    -- the attach-branch precedent in this file.
+    local kit = creature:GetVehicleKit()
+    if kit ~= nil then
+        for seat = 0, 1 do
+            local arm = kit:GetPassenger(seat)
+            if arm ~= nil then
+                arm:DoZoneInCombat()
+            end
+        end
+    end
     -- BossAI::JustEngagedWith(who) is LAST in C++ (boss_kologarn.cpp:136, after the schedules + vehicle-kit DoZone legs):
     -- _JustEngagedWith base order (ScriptedCreature.cpp:527-544):
     -- SetBossState(IN_PROGRESS) first, then SetCombatPulseDelay(5)
