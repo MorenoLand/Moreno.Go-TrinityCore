@@ -104,8 +104,11 @@
 -- SetGuidData(24) latch, stalker only exists via the unported
 -- EVENT_ENGAGE summon), summons.DespawnAll (:290) stays out (no
 -- summons-enumeration bridge), and the instance FAIL cascade's
--- vehicle-removal + Tirion wipe legs stay out (no vehicle bridge /
--- no Tirion Lua; SnoboldCount = 0 is a dead write).
+-- vehicle-removal leg stays out (no vehicle bridge; SnoboldCount = 0
+-- is a dead write) — the Tirion wipe DoAction + heroic TrialCounter
+-- decrement legs are PORTED tick 406 U2 in beastsEvaded
+-- (sendToFordring + instanceData.trialCounter; receiver
+-- npc_tirion_fordring.lua, tick 406 U2).
 -- npc_snobold_vassal (34800 — header constant; instance OnCreatureCreate
 -- tracks NPC_SNOBOLD_VASSAL GUIDs — entry-evidence exists but the
 -- ScriptName binding is DB-side): the whole vehicle mount machine —
@@ -308,6 +311,10 @@ local BOSS_STATE_DONE = 3
 
 local EMOTE_ENRAGE = 0 -- boss_northrend_beasts.cpp:37 (Yells; worm Talk)
 local ACTION_ENRAGE = 4 -- boss_northrend_beasts.cpp:119 (MyActions)
+local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
+local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h:156 (NPC_TIRION_FORDRING)
+local ACTION_NORTHREND_BEASTS_WIPE = 5 -- trial_of_the_crusader.h:102 (TCRActions)
+local ACTION_NORTHREND_BEASTS_DEFEATED = 6 -- trial_of_the_crusader.h:103
 
 -- boss_jormungarAI cross-refs (boss_northrend_beasts.cpp:696-698,
 -- :897/:921): each worm resolves the OTHER via the instance GUID
@@ -339,15 +346,28 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Fordring relay: C++ instance arms call tirion->AI()->DoAction(n)
+-- (instance_trial_of_the_crusader.cpp:343/:411); GetInstanceCreature +
+-- creature:DoAction(n) are bridged (DoAction fires ev38 on the
+-- target, lua_creature_events.go:827/:6224). Receiver
+-- npc_tirion_fordring.lua registers Fordring 34996 with an ev38 DoAction
+-- handler (tick 406 U2).
+local function sendToFordring(creature, action)
+    local fordring = creature:GetInstanceCreature(DATA_FORDRING)
+    if fordring == nil then fordring = creature:FindNearestCreature(ENTRY_FORDRING, 200) end
+    if fordring ~= nil then fordring:DoAction(action) end
+end
+
 -- C++ instance SetData(TYPE_NORTHREND_BEASTS, ...) machine
 -- (instance_trial_of_the_crusader.cpp:376-413): NorthrendBeastsCount
 -- starts at 4 on GORMOK_IN_PROGRESS (:380-383) and
 -- HandleNorthrendBeastsDone (:330-345) decrements once per
 -- GORMOK_DONE / SNAKES_SPECIAL / SNAKES_DONE / ICEHOWL_DONE, firing
 -- SetBossState(DATA_NORTHREND_BEASTS, DONE) at 0. The DONE-time
--- stalker-despawn / vehicle-removal / Tirion DoAction(
--- ACTION_NORTHREND_BEASTS_DEFEATED) legs have no Lua reader and stay
--- out. Counter lives in the shared instanceData table (the
+-- stalker-despawn / vehicle-removal legs stay out (no bridges); the
+-- Tirion DoAction(ACTION_NORTHREND_BEASTS_DEFEATED) leg is PORTED
+-- tick 406 U2 via sendToFordring in the count-0 branch below.
+-- Counter lives in the shared instanceData table (the
 -- boss_faction_champions.lua championsKilled pattern, same instance).
 local function beastsCountDeath(creature)
     local mapObj = creature:GetMap()
@@ -362,6 +382,7 @@ local function beastsCountDeath(creature)
     data.northrendBeastsRemaining = remaining
     if remaining <= 0 then
         creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_DONE)
+        sendToFordring(creature, ACTION_NORTHREND_BEASTS_DEFEATED)
     end
 end
 
@@ -462,11 +483,33 @@ local function beastsEvaded(event, creature)
     -- boss-state store (the Lua instanceData table tracks no TYPE_
     -- value); DONE-never-backwards is the engine backstop
     -- (instance_boss_states.go:190-196). The cascade's
-    -- HandlePlayerVehicle(false) leg has no vehicle bridge, the Tirion
-    -- DoAction(ACTION_NORTHREND_BEASTS_WIPE) leg has no Tirion Lua,
-    -- and SnoboldCount = 0 is a dead write (zero C++ readers).
+    -- HandlePlayerVehicle(false) leg has no vehicle bridge and
+    -- SnoboldCount = 0 is a dead write (zero C++ readers). The Tirion
+    -- DoAction(ACTION_NORTHREND_BEASTS_WIPE) leg is PORTED tick 406 U2
+    -- via sendToFordring below (ev38; receiver npc_tirion_fordring.lua),
+    -- and the heroic TrialCounter decrement of the generic SetBossState
+    -- FAIL arm (instance :301-311, --TrialCounter at :305) is PORTED
+    -- as the shared instanceData.trialCounter field (default 50,
+    -- floored at 0; one of four FAIL writers — jaraxxus / champions /
+    -- valkyr also decrement it).
+    -- The TrialCounter == 0 -> despawn-Anubarak leg (:318-322) stays
+    -- out (not requested this tick).
     if creature:GetBossState(DATA_NORTHREND_BEASTS) ~= BOSS_STATE_FAIL then
         creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_FAIL)
+        sendToFordring(creature, ACTION_NORTHREND_BEASTS_WIPE)
+        if creature:IsHeroic() then
+            local mapObj = creature:GetMap()
+            if mapObj then
+                local data = mapObj:GetInstanceData()
+                if data then
+                    local counter = (data.trialCounter or 50) - 1
+                    if counter < 0 then
+                        counter = 0
+                    end
+                    data.trialCounter = counter
+                end
+            end
+        end
     end
     -- :288-289 combatStalker DespawnOrUnsummon stays out: no
     -- SetGuidData(24) latch exists and the stalker only ever exists

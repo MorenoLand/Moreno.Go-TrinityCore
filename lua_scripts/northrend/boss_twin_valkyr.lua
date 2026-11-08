@@ -58,7 +58,7 @@
 -- C++ arm order)); KilledUnit Talk(SAY_KILL_PLAYER 6)
 -- player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
 -- precedent); JustDied Talk(SAY_DEATH 8) (event 4) + the sister-gated
--- lootable legs (boss_twin_valkyr.cpp:237-259) — PORTED via the
+-- lootable legs (boss_twin_valkyr.cpp:237-258) — PORTED via the
 -- creature:SetFlag(79)/RemoveFlag(79) dynamic-flag bridge
 -- (lua_creature_events.go, luaMotionCreature): a sister-alive death clears LOOTABLE on me
 -- (Go's lethal path had already set it); a both-dead death sets it on
@@ -110,12 +110,15 @@
 -- (no achievement bridge — fjola only); JustReachedHome:
 -- instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL) + HandleRemoveAuras
 -- + summons.DespawnAll + DespawnOrUnsummon + DoUseDoorOrButton(
--- DATA_MAIN_GATE): the RemoveAllAuras + DespawnOrUnsummon arms are PORTED
--- on event 24 below (both twins); the instance SetBossState leg has no
--- bridge, and the door legs ride the missing JustReachedHome /
--- EnterEvadeMode events (no evade/home event — the door bridge itself,
--- FindNearestGameObject + SetGoState, exists) — fjola's EnterEvadeMode
--- adds another DoUseDoorOrButton leg.
+-- DATA_MAIN_GATE): the SetBossState FAIL + RemoveAllAuras +
+-- DespawnOrUnsummon arms are PORTED on event 24 below (both twins);
+-- the Fordring wipe relay (ACTION_VALKYR_WIPE 26, instance :228-230)
+-- + heroic TrialCounter decrement (instance :303-305) ride the same
+-- ev24 site, guarded ~= FAIL/DONE so the second twin's ev24 cannot
+-- double-fire (tick 406 U2). The door legs stay out (fjola's
+-- EnterEvadeMode adds another DoUseDoorOrButton leg). The
+-- instance-side crusaders-chest Delete() (instance :224-225, fires on
+-- any TWIN_VALKIRIES state change) stays out: no GO bridge.
 -- EVENT_SPECIAL_ABILITY (fjola only, 45s) — PORTED (specialTick
 -- below): the shuffled stage machine with cross-AI sister DoAction
 -- arms inlined (dispatch IS bridged — creature:DoAction fires ev38,
@@ -273,6 +276,23 @@ local function stripHelperAuras(creature)
             end
         end
     end
+end
+
+-- Trial of the Crusader Fordring relay (tick 406 U2): the instance
+-- SetBossState(DATA_TWIN_VALKIRIES, ...) cascade
+-- (instance_trial_of_the_crusader.cpp:222-235) forwards DONE/FAIL to
+-- Tirion Fordring via DoAction; creature:DoAction(n) fires ev38 on the
+-- target. DATA_FORDRING = 12, ENTRY_FORDRING = 34996
+-- (trial_of_the_crusader.h:46, :156); ACTION_VALKYR_DEFEATED = 19,
+-- ACTION_VALKYR_WIPE = 26 (trial_of_the_crusader.h:116, :123 — enum
+-- counted from ACTION_START_GORMOK = 1).
+local DATA_FORDRING = 12
+local ENTRY_FORDRING = 34996
+
+local function sendToFordring(creature, action)
+    local fordring = creature:GetInstanceCreature(DATA_FORDRING)
+    if fordring == nil then fordring = creature:FindNearestCreature(ENTRY_FORDRING, 200) end
+    if fordring ~= nil then fordring:DoAction(action) end
 end
 
 local timers = {}
@@ -550,16 +570,17 @@ local function died(event, creature, killer)
         -- path already set it) and on the sister.
         creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
         sister:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
-        -- C++ JustDied :248 — events.Reset() is the cancelTimers(guid)
+        -- C++ JustDied :246-249 — events.Reset() is the cancelTimers(guid)
         -- at the top; HandleRemoveAuras() ports via stripHelperAuras
         -- (C++ order kept), then SetBossState(DATA_TWIN_VALKIRIES, DONE).
         stripHelperAuras(creature)
-        creature:SetBossState(3, 3) -- DATA_TWIN_VALKIRIES, DONE (boss_twin_valkyr.cpp:248)
+        creature:SetBossState(3, 3) -- DATA_TWIN_VALKIRIES, DONE (boss_twin_valkyr.cpp:249)
+        sendToFordring(creature, 19) -- ACTION_VALKYR_DEFEATED (instance_trial_of_the_crusader.cpp:232-234)
     elseif sister ~= nil then
         -- Sister still fighting: not lootable (clears the lethal path's
         -- auto-set).
         creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
-        creature:SetBossState(3, 4) -- DATA_TWIN_VALKIRIES, SPECIAL (boss_twin_valkyr.cpp:255)
+        creature:SetBossState(3, 4) -- DATA_TWIN_VALKIRIES, SPECIAL (boss_twin_valkyr.cpp:254)
     end
     -- Sister not found: C++ takes neither flag branch (Talk only).
     -- C++ JustDied's trailing unconditional summons.DespawnAll()
@@ -594,7 +615,12 @@ RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
 
 -- C++ boss_twin_baseAI::JustReachedHome (boss_twin_valkyr.cpp:203-208,
 -- shared by both twins): instance->SetBossState(DATA_TWIN_VALKIRIES, FAIL)
--- has no instance bridge; HandleRemoveAuras() (:228-235) is PORTED via
+-- is PORTED via creature:SetBossState below (bridge live); the
+-- instance-side Fordring wipe relay + heroic TrialCounter decrement
+-- ride the same site (tick 406 U2), guarded ~= FAIL/DONE so the second
+-- twin's ev24 cannot double-fire the relay or the counter — C++ fires
+-- the cascade once per SetBossState call, and both twins reach home on
+-- a wipe. HandleRemoveAuras() (:228-235) is PORTED via
 -- stripHelperAuras (GetPlayersInWorld + mapId/instanceId filter +
 -- player:RemoveAura — the moroes precedent; the stale
 -- "no separable bridgeable arm" claim is retracted — player:RemoveAura
@@ -602,13 +628,38 @@ RegisterCreatureEvent(ENTRY_EYDIS, 23, reset)
 -- (no summon model, adds unregistered). The other bridgeable arm is
 -- me->DespawnOrUnsummon() -> creature:Despawn() (respawns DB-spawned
 -- creatures on their normal spawntimesecs, opera precedent). Event 24 fires
--- at the home-move completion.
+-- at the home-move completion. NOTE: this is ev24 (JustReachedHome),
+-- not ev2 — the ev2 leave-combat handler writes no boss state, and
+-- fjola's EnterEvadeMode (boss_twin_valkyr.cpp:450-454) only adds a
+-- door leg; death reaches neither ev2 nor ev24.
 local function reachHome(event, creature)
     -- C++ JustReachedHome :203-208 — instance->SetBossState(
     -- DATA_TWIN_VALKIRIES, FAIL) PORTED below (bridge live);
     -- HandleRemoveAuras() ports via stripHelperAuras (C++ order kept);
-    -- summons.DespawnAll() is a no-op.
-    creature:SetBossState(3, 2) -- DATA_TWIN_VALKIRIES, FAIL
+    -- summons.DespawnAll() is a no-op. The FAIL write + Fordring relay
+    -- + TrialCounter decrement are guarded ~= FAIL/DONE (beasts ev2
+    -- precedent, extended with DONE: a DONE encounter must never flip
+    -- back to FAIL); strip + Despawn stay unconditional — each twin
+    -- still strips auras and despawns itself.
+    local state = creature:GetBossState(3) -- DATA_TWIN_VALKIRIES
+    if state ~= 2 and state ~= 3 then -- FAIL / DONE
+        creature:SetBossState(3, 2) -- DATA_TWIN_VALKIRIES, FAIL
+        sendToFordring(creature, 26) -- ACTION_VALKYR_WIPE (instance_trial_of_the_crusader.cpp:228-230)
+        -- C++ instance SetBossState generic FAIL block (:301-305):
+        -- heroic-only --TrialCounter, floor 0, shared instanceData
+        -- table (trialCounter, default 50). The world-state UI push
+        -- (:307-310) and the zero-attempt Anub'arak despawn (:312-317)
+        -- have no bridges and stay out.
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data and creature:IsHeroic() then
+                local c = (data.trialCounter or 50) - 1
+                if c < 0 then c = 0 end
+                data.trialCounter = c
+            end
+        end
+    end
     stripHelperAuras(creature)
     creature:Despawn()
 end

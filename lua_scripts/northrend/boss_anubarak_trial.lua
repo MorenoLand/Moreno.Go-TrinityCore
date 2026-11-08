@@ -41,7 +41,14 @@
 -- scheduler.CancelAll() as cancelTimers, and summons.DespawnAll()
 -- PORTED tick 405 U2 as GetCreaturesInGrid sweeps (baltharus/faerlina
 -- precedent) for burrows / spikes / scarabs (frost spheres via the
--- explicit leg below); EVENT_BERSERK — DoCastSelf(Berserk 26662), 600s,
+-- explicit leg below); the instance DONE arm's tribute chest is
+-- PORTED tick 406 U2 in anubarakDied (heroic only; tier from the
+-- shared instanceData.trialCounter, raid size from Map:GetDifficulty;
+-- Tirion summoner with nearest-Fordring / self fallback) — the
+-- chest->SetRespawnTime(chest->GetRespawnDelay()) leg stays out
+-- (SummonGameObject returns a packed GUID, no GO object bridge) and
+-- EventStage = 6000 stays out with the event-stage machine;
+-- EVENT_BERSERK — DoCastSelf(Berserk 26662), 600s,
 -- phase-independent (fires once, 10min after combat start —
 -- phase_hunter self-cast precedent), 500ms IsCasting defer while
 -- casting (own UpdateAI pre-loop + in-loop gates, mal_ganis
@@ -261,6 +268,13 @@ local SPELL_LEECHING_SWARM = 66118 -- boss_anubarak_trial.cpp:62
 local SPELL_TRAITOR_KING = 68186
 local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
+local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
+local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h:156 (NPC_TIRION_FORDRING)
+-- Tribute chest entries (trial_of_the_crusader.h:231-239):
+-- 10H: >=50 195665, >=45 195666, >=25 195667, else 195668;
+-- 25H: >=50 195669, >=45 195670, >=25 195671, else 195672.
+local TRIBUTE_CHEST_10H = { 195668, 195667, 195666, 195665 } -- tier 1..4: <25, 25-44, 45-49, 50
+local TRIBUTE_CHEST_25H = { 195672, 195671, 195670, 195669 }
 
 local timers = {}
 local anubarakState = {}
@@ -371,6 +385,55 @@ local function anubarakDied(event, creature, killer)
     -- the sweep converges to the same end state (that UpdateAI leg
     -- stays unported).
     creature:SetBossState(DATA_ANUBARAK, BOSS_STATE_DONE)
+    -- C++ instance SetBossState(DATA_ANUBARAK, DONE) arm
+    -- (instance_trial_of_the_crusader.cpp:242-290): heroic only —
+    -- non-heroic spawn modes leave tributeChest 0 (:248) and summon
+    -- nothing. Tier reads TrialCounter (:249-279, >=50 / >=45 / >=25
+    -- bands) from the shared instanceData.trialCounter field
+    -- (default 50; decremented by the heroic FAIL writers); raid size
+    -- from the per-instance spawn mode — Map:GetDifficulty
+    -- (engine/scripting/globals.go:1229-1231, instance_hooks.go:99-108:
+    -- the instance table's difficulty column, 0 10N / 1 25N / 2 10H /
+    -- 3 25H; missing row reads 0) — 25-man is difficulty bit 0
+    -- (lua_creature_events.go:3783 Is25ManRaid twin, difficulty&1==1;
+    -- % 2 == 1 is the in-tree Lua form, loatheb precedent). C++
+    -- summoner is Tirion (GetCreature(DATA_FORDRING), :284-286);
+    -- fallback is the nearest Fordring, else the dying creature —
+    -- the position is absolute so the summoner only fixes map/instance.
+    -- SummonGameObject(entry, x, y, z, o, respawnSecs)
+    -- (lua_creature_events.go:3634) returns a packed GUID, not an
+    -- object, so the C++ chest->SetRespawnTime(chest->GetRespawnDelay())
+    -- leg (:287) has no bridge and stays out. EventStage = 6000 (:244)
+    -- stays out with the rest of the unported event-stage machine.
+    if creature:IsHeroic() then
+        local mapObj = creature:GetMap()
+        local counter = 50
+        local difficulty = 0
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                counter = data.trialCounter or 50
+            end
+            difficulty = mapObj:GetDifficulty() or 0
+        end
+        local tier = 1
+        if counter >= 50 then
+            tier = 4
+        elseif counter >= 45 then
+            tier = 3
+        elseif counter >= 25 then
+            tier = 2
+        end
+        local chestEntry = (difficulty % 2 == 1) and TRIBUTE_CHEST_25H[tier] or TRIBUTE_CHEST_10H[tier]
+        local summoner = creature:GetInstanceCreature(DATA_FORDRING)
+        if summoner == nil then
+            summoner = creature:FindNearestCreature(ENTRY_FORDRING, 200)
+        end
+        if summoner == nil then
+            summoner = creature
+        end
+        summoner:SummonGameObject(chestEntry, 805.62, 134.87, 142.16, 3.27, 604800)
+    end
     for _, burrow in ipairs(creature:GetCreaturesInGrid(NPC_BURROW, 150)) do
         burrow:Despawn()
     end

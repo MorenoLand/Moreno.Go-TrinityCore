@@ -85,6 +85,18 @@ local BOSS_STATE_NOT_STARTED = 0
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2
 local BOSS_STATE_DONE = 3
+local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
+local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h:156 NPC_TIRION_FORDRING
+local ACTION_CHAMPIONS_DEFEATED = 13 -- trial_of_the_crusader.h:110
+local ACTION_FACTION_WIPE = 25 -- trial_of_the_crusader.h:122
+
+-- Fordring relay (tick 406 U2): GetInstanceCreature + creature:DoAction(n)
+-- are bridged; DoAction fires ev38 on the target.
+local function sendToFordring(creature, action)
+    local fordring = creature:GetInstanceCreature(DATA_FORDRING)
+    if fordring == nil then fordring = creature:FindNearestCreature(ENTRY_FORDRING, 200) end
+    if fordring ~= nil then fordring:DoAction(action) end
+end
 
 -- Faction-champions controller SetData(2, ...) machine, shared by all
 -- seven champion files via the instance_trial_of_the_crusader.lua
@@ -128,9 +140,15 @@ end
 -- _championsKilled++; 1st kill -> instance SetData(DATA_FACTION_
 -- CRUSADERS, 0), i.e. ResilienceWillFixItTimer = 60s +
 -- CrusadersSpecialState = true (instance :437-440); at total ->
--- SetBossState DONE. The DONE-time achievement criteria, chest
--- respawn and fordring DoAction (instance :206-213) have no bridge
--- and stay out; resilienceInMinute records the timer read for them.
+-- SetBossState DONE (instance :553) + summons.DespawnAll /
+-- controller DespawnOrUnsummon (:554-555, stay out — no cross-AI
+-- despawn model). Instance DONE legs (instance :207-216): achievement
+-- criteria :208-210, chest respawn :211 + flag-clear :212-213, fordring
+-- DoAction(ACTION_CHAMPIONS_DEFEATED 13) :214-215, EventStage :216.
+-- The fordring relay is PORTED below (sendToFordring, tick 406 U2);
+-- the achievement criteria + chest legs stay out (no
+-- achievement/GO bridges); resilienceInMinute records the timer read
+-- for them.
 local function championCountDeath(creature)
     local mapObj = creature:GetMap()
     if mapObj == nil then
@@ -151,18 +169,29 @@ local function championCountDeath(creature)
         end
         data.championsInProgress = false
         creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_DONE)
+        sendToFordring(creature, ACTION_CHAMPIONS_DEFEATED) -- instance :214-215
     end
 end
 
 -- C++ controller SetData(2, FAIL) (boss_faction_champions.cpp:526-534)
 -- via JustReachedHome (:596-600): _championsFailed++; FAIL when
--- failed+killed >= total. Go has no reached-home event; ev2
+-- failed+killed >= total (SetBossState FAIL :530 + summons.DespawnAll
+-- / controller DespawnOrUnsummon :531-532, stay out — no cross-AI
+-- despawn model). Go has no reached-home event; ev2
 -- (leave combat, evade start) is the closest signal — ev2 fires
 -- only on the evade path (creaturemotion.go triggerCreatureEvade),
 -- never on death, so a death cannot double-count as a fail; it fires
 -- earlier than C++ if a champion re-engages mid-evade (documented
--- approximation). The instance FAIL leg clears CrusadersSpecialState
--- (instance :201-205); the fordring wipe DoAction + despawns stay out.
+-- approximation). Instance FAIL legs (instance :202-206):
+-- CrusadersSpecialState = false :203 + fordring DoAction(
+-- ACTION_FACTION_WIPE 25) :204-205. The fordring relay is PORTED below
+-- (sendToFordring, tick 406 U2) with the heroic TrialCounter decrement
+-- (instance :303-305, shared instanceData trialCounter, default 50,
+-- floor 0; the world-state broadcast + Anub'arak-at-zero legs stay
+-- out). Guard: C++ cannot re-fire FAIL (summons + controller are
+-- despawned at :531-532), but Lua has no despawn, so repeated evades
+-- would re-fire the relay + decrement — the ~= FAIL / ~= DONE guard
+-- (beasts precedent) fires the transition once only.
 local function championCountFail(creature)
     local mapObj = creature:GetMap()
     if mapObj == nil then
@@ -177,7 +206,16 @@ local function championCountFail(creature)
     if failed + (data.championsKilled or 0) >= (data.championsTotal or 6) then
         data.crusadersSpecial = false
         data.championsInProgress = false
-        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+        local state = creature:GetBossState(DATA_FACTION_CRUSADERS)
+        if state ~= BOSS_STATE_FAIL and state ~= BOSS_STATE_DONE then
+            creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+            sendToFordring(creature, ACTION_FACTION_WIPE) -- instance :204-205
+            if creature:IsHeroic() then
+                local c = (data.trialCounter or 50) - 1
+                if c < 0 then c = 0 end
+                data.trialCounter = c
+            end
+        end
     end
 end
 local SPELL_CALL_PET = 67777 -- boss_faction_champions.cpp:130 (hunter JustEngagedWith :1438)

@@ -18,7 +18,10 @@
 -- SetData(2, ...) machine, boss_faction_champions.cpp:505-562);
 -- resilienceTimer (ms) / crusadersSpecial / resilienceInMinute
 -- (Resilience Will Fix It, instance :437-440 set, :564-570 tick,
--- :206-213 read at DONE).
+-- :206-213 read at DONE); trialCounter (heroic attempts left, default
+-- 50 — instance :303-305 decrement on heroic FAIL, written by the
+-- beasts / jaraxxus / champions / valkyr FAIL writers, read by the
+-- Anub'arak tribute-chest tier; tick 406 U2).
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: champions controller GUID latch
 --   (instance_trial_of_the_crusader.cpp:50; C++ stores the GUID, Lua
@@ -29,18 +32,21 @@
 -- written by the champion files' shared counter helpers (the
 -- controller has no UpdateAI override at all — SetData-only,
 -- boss_faction_champions.cpp:367-578 — so there is no cast gate to
--- port here). Dormant until the announcer summon strand lands
--- (trial_of_the_crusader.cpp:613 EVENT_SUMMON_CHAMPIONS); no Lua file
--- summons 344xx champion entries today.
+-- port here). The announcer summon strand has landed
+-- (npc_tirion_fordring.lua EVENT_SUMMON_CHAMPIONS summons the
+-- controller, tick 406 U2); the champion roster itself is still
+-- unported — no Lua file summons 344xx champion entries today.
 -- Unmodeled (documented-only, no bridges):
--- - DONE-time achievement criteria (defeat + killed-in-a-minute),
---   crusaders-chest respawn / flag clear, fordring DoAction
---   (ACTION_CHAMPIONS_DEFEATED) (instance :206-213): no achievement /
---   chest-respawn / cross-AI DoAction reader in Lua; resilienceInMinute
---   records the timer read for them.
--- - FAIL-time fordring wipe DoAction (ACTION_FACTION_WIPE)
---   (instance :201-205) + controller / summons despawn legs
---   (boss_faction_champions.cpp:530-534, :553-555): no cross-AI
+-- - DONE-time achievement criteria (defeat + killed-in-a-minute) +
+--   crusaders-chest respawn / flag clear (instance :208-213): no
+--   achievement / chest-respawn bridge; the fordring DoAction
+--   (ACTION_CHAMPIONS_DEFEATED 13, instance :214-215) is PORTED in
+--   the champion files' shared counter helpers (tick 406 U2);
+--   resilienceInMinute records the timer read for them.
+-- - FAIL-time fordring wipe DoAction (ACTION_FACTION_WIPE 25)
+--   (instance :204-205) is PORTED in the same counter helpers
+--   (tick 406 U2); the controller / summons despawn legs
+--   (boss_faction_champions.cpp:530-534, :553-555) stay out: no cross-AI
 --   despawn model in Lua.
 -- - SaveToDB / WriteSaveDataMore / ReadSaveDataMore
 --   (ResilienceWillFixItTimer, CrusadersSpecialState): the

@@ -50,6 +50,19 @@ local BOSS_STATE_DONE = 3
 -- SetBossState IN_PROGRESS once per pull (boss-state guard = C++
 -- !_inProgress gate); total 6 (10-man) / 10 (25-man) per
 -- SelectChampions (:395-461); Is25ManRaid live (lce.go:3783).
+local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
+local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h:156 NPC_TIRION_FORDRING
+local ACTION_CHAMPIONS_DEFEATED = 13 -- trial_of_the_crusader.h:110
+local ACTION_FACTION_WIPE = 25 -- trial_of_the_crusader.h:122
+
+-- Fordring relay (tick 406 U2): GetInstanceCreature + creature:DoAction(n)
+-- are bridged; DoAction fires ev38 on the target.
+local function sendToFordring(creature, action)
+    local fordring = creature:GetInstanceCreature(DATA_FORDRING)
+    if fordring == nil then fordring = creature:FindNearestCreature(ENTRY_FORDRING, 200) end
+    if fordring ~= nil then fordring:DoAction(action) end
+end
+
 local function championEncounterStart(creature)
     if creature:GetBossState(DATA_FACTION_CRUSADERS) == BOSS_STATE_IN_PROGRESS then
         return
@@ -72,8 +85,9 @@ end
 
 -- C++ controller SetData(2, DONE) (:546-556): 1st kill sets the 60s
 -- Resilience timer + special flag (instance :437-440); at total ->
--- SetBossState DONE (instance DONE legs — criteria/chest/fordring —
--- have no bridge; resilienceInMinute records the timer read).
+-- SetBossState DONE (instance DONE legs: criteria/chest stay out — no
+-- achievement/GO bridges — fordring DoAction(13) is PORTED below,
+-- tick 406 U2; resilienceInMinute records the timer read).
 local function championCountDeath(creature)
     local mapObj = creature:GetMap()
     if mapObj == nil then
@@ -94,6 +108,7 @@ local function championCountDeath(creature)
         end
         data.championsInProgress = false
         creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_DONE)
+        sendToFordring(creature, ACTION_CHAMPIONS_DEFEATED) -- instance :214-215
     end
 end
 
@@ -116,7 +131,19 @@ local function championCountFail(creature)
     if failed + (data.championsKilled or 0) >= (data.championsTotal or 6) then
         data.crusadersSpecial = false
         data.championsInProgress = false
-        creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+        -- Guard (beasts precedent): C++ cannot re-fire FAIL (summons +
+        -- controller despawned), but Lua has no despawn, so repeated
+        -- evades would re-fire the relay + decrement — fire once only.
+        local state = creature:GetBossState(DATA_FACTION_CRUSADERS)
+        if state ~= BOSS_STATE_FAIL and state ~= BOSS_STATE_DONE then
+            creature:SetBossState(DATA_FACTION_CRUSADERS, BOSS_STATE_FAIL)
+            sendToFordring(creature, ACTION_FACTION_WIPE) -- instance :204-205
+            if creature:IsHeroic() then
+                local c = (data.trialCounter or 50) - 1
+                if c < 0 then c = 0 end
+                data.trialCounter = c
+            end
+        end
     end
 end
 

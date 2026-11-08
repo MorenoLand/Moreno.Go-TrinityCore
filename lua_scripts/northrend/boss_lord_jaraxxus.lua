@@ -70,39 +70,42 @@
 -- (terestian precedent: Kil'rek 17229 / fiendish imp 17267;
 -- npc_swarm_scarab 34605).
 -- Unmodeled (no bridges — documented, not wired):
--- boss_jaraxxus intro machine — Reset: instance->GetBossState(
--- DATA_JARAXXUS) NOT_STARTED -> DoAction(ACTION_JARAXXUS_INTRO)
--- (SetReactState(REACT_PASSIVE) + events.SetPhase(PHASE_INTRO) +
--- EVENT_INTRO 1s); FAIL -> DoCastSelf(SPELL_JARAXXUS_CHAINS 67924,
--- trial_of_the_crusader.h) + SetImmuneToPC(true) +
--- SetReactState(REACT_PASSIVE) (instance model absent, standing — the
--- FAIL gate has no bridge; SetReactState/SetImmuneToPC bridges exist);
--- EVENT_INTRO: DoCastSelf(Lord Jaraxxus'
--- Hittin' Ya 66327) + MoveAlongSplineChain(POINT_SUMMONED,
--- SPLINE_INITIAL_MOVEMENT) (no motion bridge — the self-cast is
--- port-pattern-ready in isolation (phase_hunter precedent) but rides
--- the unbridged intro machine); EVENT_TAUNT_GNOME: Talk(SAY_INTRO 0),
--- 9s (rides the intro machine); EVENT_KILL_GNOME: DoCastSelf(Fel
--- Lightning Intro 67888) (rides the intro machine); MovementInform
--- SPLINE_CHAIN_POINT_SUMMONED -> SetFacingToObject(wilfred via
--- instance->GetCreature(DATA_FIZZLEBANG)) — the facing leg itself is
--- bridgeable via the atan2 twin (devourer_of_souls precedent), but the
--- arm stays documented-only: no MovementInform hook, and the faced
--- target (wilfred via instance->GetCreature(DATA_FIZZLEBANG)) rides the
--- absent instance model; EVENT_CHANGE_ORIENTATION: SetFacingTo(
--- 4.729842f) (SetFacingTo is bridged — lua_creature_events.go:711 —
--- but the arm rides the unported intro machine); EVENT_START_COMBAT:
--- SetImmuneToPC(false) + SetReactState(REACT_AGGRESSIVE) +
--- DoZoneInCombat (bridges exist; the arm rides the unported intro
--- machine — no MovementInform / intro-event hook);
--- DoAction(ACTION_JARAXXUS_ENGAGE): RemoveAurasDueToSpell(
--- SPELL_JARAXXUS_CHAINS) + SetImmuneToPC(false) +
--- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat (no cross-AI
--- DoAction / aura-removal / immune / react / zone bridges);
--- EnterEvadeMode: _EnterEvadeMode + instance->SetBossState(
--- DATA_JARAXXUS, FAIL) + DespawnOrUnsummon (instance model is the
--- true bar; the old "no despawn bridge" was stale —
--- creature:Despawn() is bridged, lua_creature_events.go:214).
+-- boss_jaraxxus intro machine — PORTED tick 406 (the "no
+-- MovementInform hook" / "instance model absent" bars are STALE):
+-- Reset (:116-130): GetBossState==NOT_STARTED -> DoAction(INTRO)
+-- (SetReactState PASSIVE + EVENT_INTRO 1s; events.SetPhase(PHASE_INTRO)
+-- has no bridge — the intro timers are the phase); FAIL ->
+-- DoCastSelf(SPELL_JARAXXUS_CHAINS 67924) + SetReactState PASSIVE
+-- (SetImmuneToPC(true) stays out — no bridge, verified: no such method
+-- in engine/); EVENT_INTRO (:253-255): DoCastSelf(Hittin' Ya 66327,
+-- triggered) + MoveAlongSplineChain(POINT_SUMMONED 1,
+-- SPLINE_INITIAL_MOVEMENT 1, walk=true); MovementInform (:171-178):
+-- SPLINE_CHAIN_MOTION_TYPE 17 + POINT_SUMMONED -> SetFacingToObject(
+-- wilfred via GetInstanceCreature(DATA_FIZZLEBANG 16)) +
+-- EVENT_TAUNT_GNOME 9s (nil wilfred schedules nothing, C++ if-guard);
+-- EVENT_TAUNT_GNOME (:257-259): Talk(SAY_INTRO 0) + KILL_GNOME 9s;
+-- EVENT_KILL_GNOME (:261-263): DoCastSelf(Fel Lightning Intro 67888) +
+-- CHANGE_ORIENTATION 3s; EVENT_CHANGE_ORIENTATION (:265-267):
+-- SetFacingTo(4.729842) + START_COMBAT 7s; EVENT_START_COMBAT
+-- (:269-272): SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat
+-- (SetImmuneToPC(false) stays out — no bridge). Intro timers ride the
+-- per-GUID timers table, cancelled on 2/4/23 like the combat arms;
+-- DoAction(INTRO 15) is also receivable via ev38.
+-- DoAction(ACTION_JARAXXUS_ENGAGE 21, :162-168) — PORTED tick 406 via
+-- ev38: RemoveAura(SPELL_JARAXXUS_CHAINS 67924) + SetReactState(
+-- REACT_AGGRESSIVE) + DoZoneInCombat (SetImmuneToPC(false) stays out —
+-- no bridge). The old "no cross-AI DoAction / aura-removal / immune /
+-- react / zone bridges" claim is STALE — DoAction fires ev38,
+-- RemoveAura / SetReactState / DoZoneInCombat are all bridged. This is
+-- the Barrett Jaraxxus-fail branch receiver.
+-- EnterEvadeMode (:147-151) — PORTED tick 406 via ev2 (the evade hook;
+-- death never reaches ev2, tick-406 beasts precedent): cancelTimers +
+-- SetBossState(DATA_JARAXXUS, FAIL) + fordring DoAction(
+-- ACTION_JARAXXUS_WIPE 24) + heroic TrialCounter decrement + shared
+-- mistressOfPainCount = 0 (instance :182-187) + DespawnOrUnsummon last.
+-- The FAIL relay/counter fire once per wipe (guarded on state ~= FAIL
+-- and ~= DONE). The old "instance model is the true bar" claim is
+-- STALE — GetBossState / SetBossState / GetInstanceData are bridged.
 -- boss_jaraxxus EVENT_FEL_LIGHTNING — PORTED: SelectTarget(
 -- Random,0,0.0f,true) (any-range -> 100, curator precedent) ->
 -- DoCast(Fel Lightning 66528) non-triggered, 17s init, urand(10s,30s)
@@ -207,8 +210,26 @@
 local ENTRY_JARAXXUS = 34780
 local ENTRY_MISTRESS_OF_PAIN = 34826
 local DATA_JARAXXUS = 1 -- trial_of_the_crusader.h:33
+local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
+local DATA_FIZZLEBANG = 16 -- trial_of_the_crusader.h:50
+local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h NPC_TIRION_FORDRING
+local BOSS_STATE_NOT_STARTED = 0 -- EncounterState NOT_STARTED (InstanceScript.h:68-76)
+local BOSS_STATE_FAIL = 2 -- EncounterState FAIL (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
+local ACTION_JARAXXUS_DEFEATED = 9 -- trial_of_the_crusader.h TCRActions (1-based from ACTION_START_GORMOK = 1)
+local ACTION_JARAXXUS_INTRO = 15
+local ACTION_JARAXXUS_ENGAGE = 21
+local ACTION_JARAXXUS_WIPE = 24
+
+local REACT_PASSIVE = 0 -- UnitDefines.h
+local REACT_AGGRESSIVE = 2
+
+local SPLINE_CHAIN_MOTION_TYPE = 17
+local POINT_SUMMONED = 1 -- boss_lord_jaraxxus.cpp Misc enum
+local SPLINE_INITIAL_MOVEMENT = 1
+
+local SAY_INTRO = 0
 local SAY_AGGRO = 1
 local SAY_KILL_PLAYER = 9
 local SAY_DEATH = 10
@@ -217,6 +238,9 @@ local SAY_BERSERK = 11
 local SPELL_FEL_FIREBALL = 66532
 local SPELL_NETHER_POWER = 66228
 local SPELL_BERSERK = 64238
+local SPELL_JARAXXUS_CHAINS = 67924 -- trial_of_the_crusader.h TCRSpellIds
+local SPELL_HITTIN_YA = 66327 -- SPELL_LORD_JARAXXUS_HITTIN_YA
+local SPELL_FEL_LIGHTNING_INTRO = 67888
 local SPELL_FEL_LIGHTNING = 66528
 local SPELL_INCINERATE_FLESH = 66237
 local SPELL_LEGION_FLAME = 66197
@@ -257,6 +281,18 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Fordring relay: the ToC instance script's SetBossState hook fires
+-- fordring->AI()->DoAction(action) (instance_trial_of_the_crusader.cpp:
+-- :185-186 FAIL, :191-192 DONE); there is no Go ToC instance script, so
+-- the relay is Lua-side. GetInstanceCreature(DATA_FORDRING) is the
+-- latched path; the FindNearestCreature grid fallback covers an
+-- unlatched DATA_FORDRING. DoAction fires ev38 on the target.
+local function sendToFordring(creature, action)
+    local fordring = creature:GetInstanceCreature(DATA_FORDRING)
+    if fordring == nil then fordring = creature:FindNearestCreature(ENTRY_FORDRING, 200) end
+    if fordring ~= nil then fordring:DoAction(action) end
 end
 
 -- C++ SelectTarget(Random, idx, 0.0f, true) playerOnly=true arms ride the
@@ -443,6 +479,66 @@ local function berserkTick(creature, guid)
     creature:CastSpell(creature, SPELL_BERSERK, true)
 end
 
+-- Intro machine (boss_lord_jaraxxus.cpp UpdateAI intro events,
+-- :253-272). Forward declarations with plain assignment (never re-
+-- `local function` after a forward declare — malown shadowing bug):
+-- the taunt/kill/orientation ticks reference the next leg in the chain.
+local introTick, tauntTick, killGnomeTick, orientationTick, startCombatTick
+
+-- C++ EVENT_INTRO (:253-255): DoCastSelf(Hittin' Ya 66327, triggered) +
+-- MoveAlongSplineChain(POINT_SUMMONED 1, SPLINE_INITIAL_MOVEMENT 1,
+-- walk=true). The 500ms IsCasting defer is the UpdateAI pre-loop /
+-- in-loop casting gate (:200, :282) per ported arm (mal_ganis idiom).
+introTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "intro", 500, function() introTick(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_HITTIN_YA, true)
+    creature:MoveAlongSplineChain(POINT_SUMMONED, SPLINE_INITIAL_MOVEMENT, true)
+end
+
+-- C++ EVENT_TAUNT_GNOME (:257-259): Talk(SAY_INTRO 0) + KILL_GNOME 9s.
+tauntTick = function(creature, guid)
+    creature:Talk(SAY_INTRO)
+    schedule(guid, "killgnome", 9000, function() killGnomeTick(creature, guid) end)
+end
+
+-- C++ EVENT_KILL_GNOME (:261-263): DoCastSelf(Fel Lightning Intro
+-- 67888) + CHANGE_ORIENTATION 3s.
+killGnomeTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "killgnome", 500, function() killGnomeTick(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_FEL_LIGHTNING_INTRO)
+    schedule(guid, "orientation", 3000, function() orientationTick(creature, guid) end)
+end
+
+-- C++ EVENT_CHANGE_ORIENTATION (:265-267): SetFacingTo(4.729842) +
+-- START_COMBAT 7s.
+orientationTick = function(creature, guid)
+    creature:SetFacingTo(4.729842)
+    schedule(guid, "startcombat", 7000, function() startCombatTick(creature, guid) end)
+end
+
+-- C++ EVENT_START_COMBAT (:269-272): SetImmuneToPC(false) [no bridge,
+-- stays out] + SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat.
+startCombatTick = function(creature, guid)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:DoZoneInCombat()
+end
+
+-- C++ DoAction(ACTION_JARAXXUS_INTRO 15, :155-161): SetReactState(
+-- REACT_PASSIVE) + events.SetPhase(PHASE_INTRO) (no phase bridge — the
+-- intro timers above are the phase) + EVENT_INTRO 1s. Called from
+-- jaraxxusReset (C++ Reset calls DoAction(INTRO)) and from the ev38
+-- handler below.
+local function startIntro(creature, guid)
+    creature:SetReactState(REACT_PASSIVE)
+    schedule(guid, "intro", 1000, function() introTick(creature, guid) end)
+end
+
 local function jaraxxusEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_lord_jaraxxus.cpp:135 (BossAI base arm; setActive/instance legs have no bridge)
     creature:DoZoneInCombat() -- boss_lord_jaraxxus.cpp:135 (BossAI base arm)
@@ -478,7 +574,38 @@ local function jaraxxusEnterCombat(event, creature, target)
 end
 
 local function jaraxxusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ boss_jaraxxus::EnterEvadeMode (:147-151): _EnterEvadeMode
+    -- (reset legs ride jaraxxusReset ev23, which Go fires first) +
+    -- instance->SetBossState(DATA_JARAXXUS, FAIL) +
+    -- me->DespawnOrUnsummon() (:151 — the despawn IS in C++, so it
+    -- ports, last). The FAIL relay is the instance script's SetBossState
+    -- hook (instance_trial_of_the_crusader.cpp:182-187): fordring
+    -- DoAction(ACTION_JARAXXUS_WIPE 24) (:185-186) +
+    -- MistressOfPainCount = 0 (:187). The TrialCounter decrement is the
+    -- generic heroic-wipe leg (:303-305). Guard: C++ sets FAIL
+    -- unconditionally, but ev2 can fire twice on a re-evade — the
+    -- relay/counter must fire once per wipe, so skip when already FAIL
+    -- or DONE.
+    if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_FAIL
+            and creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_DONE then
+        creature:SetBossState(DATA_JARAXXUS, BOSS_STATE_FAIL)
+        sendToFordring(creature, ACTION_JARAXXUS_WIPE)
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                if creature:IsHeroic() then
+                    local c = (data.trialCounter or 50) - 1
+                    if c < 0 then c = 0 end
+                    data.trialCounter = c
+                end
+                data.mistressOfPainCount = 0
+            end
+        end
+    end
+    creature:DespawnOrUnsummon()
 end
 
 local function jaraxxusTargetDied(event, creature, victim)
@@ -496,21 +623,70 @@ local function jaraxxusDied(event, creature, killer)
     -- / infernal summons are spell-spawned, not Lua-tracked);
     -- instance->SetBossState(DATA_JARAXXUS 1, DONE 3) ports via
     -- creature:SetBossState (lua_creature_events.go:6155; curator/archavon
-    -- precedent). The instance-script DONE legs (fordring
-    -- ACTION_JARAXXUS_DEFEATED + EventStage 2000,
-    -- instance_trial_of_the_crusader.cpp:182-193) stay out — no Go ToC
-    -- instance script.
+    -- precedent). The instance-script DONE legs
+    -- (instance_trial_of_the_crusader.cpp:189-194) port tick 406:
+    -- fordring ACTION_JARAXXUS_DEFEATED (9) (:191-192) via sendToFordring;
+    -- EventStage = 2000 (:193) stays out — no instance-stage bridge.
     creature:SetBossState(DATA_JARAXXUS, BOSS_STATE_DONE)
+    sendToFordring(creature, ACTION_JARAXXUS_DEFEATED)
 end
 
 local function jaraxxusReset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_lord_jaraxxus.cpp:118 (Reset arm 1; pulse disable, ResetLootMode leg has no bridge)
     cancelTimers(creature:GetGUID())
-    -- C++ boss_jaraxxus::Reset FAIL branch (boss_lord_jaraxxus.cpp:115-116):
-    -- DoCastSelf(SPELL_JARAXXUS_CHAINS 67924) + SetImmuneToPC(true) +
-    -- SetReactState(REACT_PASSIVE) is gated on instance->GetBossState(
-    -- DATA_JARAXXUS) == FAIL — the instance boss-state read has no Lua
-    -- bridge (same blocker as mistressReset below), so the arms stay out.
+    -- C++ boss_jaraxxus::Reset (:116-130): events.Reset() /
+    -- summons.DespawnAll() ride cancelTimers above (DespawnAll itself
+    -- stays out — no summon-registry bridge); NOT_STARTED ->
+    -- DoAction(ACTION_JARAXXUS_INTRO 15); FAIL -> DoCastSelf(
+    -- SPELL_JARAXXUS_CHAINS 67924) + SetImmuneToPC(true) [no bridge,
+    -- stays out — verified: no such method in engine/] +
+    -- SetReactState(REACT_PASSIVE). GetBossState IS bridged
+    -- (lua_creature_events.go:6174) — the old "FAIL gate has no bridge"
+    -- claim is STALE. On evade ev23 fires before ev2 sets FAIL, so the
+    -- state here is still IN_PROGRESS and neither branch fires.
+    local guid = creature:GetGUID()
+    local state = creature:GetBossState(DATA_JARAXXUS)
+    if state == BOSS_STATE_NOT_STARTED then
+        startIntro(creature, guid)
+    elseif state == BOSS_STATE_FAIL then
+        creature:CastSpell(creature, SPELL_JARAXXUS_CHAINS)
+        creature:SetReactState(REACT_PASSIVE)
+    end
+end
+
+-- C++ boss_jaraxxus::MovementInform (:171-178): type ==
+-- SPLINE_CHAIN_MOTION_TYPE (17) and pointId == POINT_SUMMONED (1) ->
+-- SetFacingToObject(wilfred via instance->GetCreature(DATA_FIZZLEBANG
+-- 16)) + EVENT_TAUNT_GNOME 9s. Nil wilfred schedules nothing (the C++
+-- if-guard). ev28 args are (event, creature, type, id)
+-- (npc_nether_drake.lua precedent); SetFacingToObject is bridged
+-- (lua_creature_events.go:4534) — the old atan2-twin note is superseded.
+local function jaraxxusMovementInform(event, creature, moveType, pointId)
+    if moveType ~= SPLINE_CHAIN_MOTION_TYPE or pointId ~= POINT_SUMMONED then
+        return
+    end
+    local wilfred = creature:GetInstanceCreature(DATA_FIZZLEBANG)
+    if wilfred ~= nil then
+        creature:SetFacingToObject(wilfred)
+        local guid = creature:GetGUID()
+        schedule(guid, "taunt", 9000, function() tauntTick(creature, guid) end)
+    end
+end
+
+-- C++ boss_jaraxxus::DoAction (:153-168), ev38. INTRO (15) re-enters
+-- startIntro (same arm Reset calls); ENGAGE (21) is the Barrett
+-- Jaraxxus-fail branch receiver: RemoveAurasDueToSpell(
+-- SPELL_JARAXXUS_CHAINS 67924) + SetImmuneToPC(false) [no bridge,
+-- stays out] + SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat.
+-- DoAction fires ev38 on the target (lua_creature_events.go:827).
+local function jaraxxusDoAction(event, creature, action)
+    if action == ACTION_JARAXXUS_INTRO then
+        startIntro(creature, creature:GetGUID())
+    elseif action == ACTION_JARAXXUS_ENGAGE then
+        creature:RemoveAura(SPELL_JARAXXUS_CHAINS)
+        creature:SetReactState(REACT_AGGRESSIVE)
+        creature:DoZoneInCombat()
+    end
 end
 
 RegisterCreatureEvent(ENTRY_JARAXXUS, 1, jaraxxusEnterCombat)
@@ -518,6 +694,8 @@ RegisterCreatureEvent(ENTRY_JARAXXUS, 2, jaraxxusLeaveCombat)
 RegisterCreatureEvent(ENTRY_JARAXXUS, 3, jaraxxusTargetDied)
 RegisterCreatureEvent(ENTRY_JARAXXUS, 4, jaraxxusDied)
 RegisterCreatureEvent(ENTRY_JARAXXUS, 23, jaraxxusReset)
+RegisterCreatureEvent(ENTRY_JARAXXUS, 28, jaraxxusMovementInform)
+RegisterCreatureEvent(ENTRY_JARAXXUS, 38, jaraxxusDoAction)
 
 -- C++ npc_mistress_of_pain JustEngagedWith EVENT_SHIVAN_SLASH:
 -- DoCastVictim(Shivan Slash 66378), 4s init, urand(3s,10s) repeat.
