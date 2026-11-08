@@ -2053,9 +2053,9 @@ RegisterAuraEvent(SPELL_MAIEV_DOWN, 3, maievDownRemove)
 -- (boss_illidan.cpp:1926-1934): AfterEffectRemove, EFFECT_0
 -- SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL. Expire or
 -- death remove only -> the target self-casts SPELL_SUMMON_PARASITIC_
--- SHADOWFIENDS (41915) triggered. The proc (41913) AuraScript
--- stays out; the remove-parasitic (41923 apply) AuraScript is PORTED
--- 2026-11-08 (tick 425, below).
+-- SHADOWFIENDS (41915) triggered. The proc (41913) CheckProc veto
+-- is PORTED 2026-11-08 (tick 431, below); the remove-parasitic
+-- (41923 apply) AuraScript is PORTED 2026-11-08 (tick 425, below).
 local function parasiticShadowfiendRemove(event, aura, target)
     local mode = aura:GetRemoveMode()
     if mode == AURA_REMOVE_BY_EXPIRE or mode == AURA_REMOVE_BY_DEATH then
@@ -2087,6 +2087,33 @@ local function removeParasiticShadowfiendApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_REMOVE_PARASITIC_SHADOWFIEND, 2, removeParasiticShadowfiendApply)
+
+-- C++ spell_illidan_parasitic_shadowfiend_proc::CheckProc
+-- (boss_illidan.cpp:1955-1958): DoCheckProc, EFFECT_0 SPELL_AURA_DUMMY.
+-- The proc fires only when the proc target carries neither parasitic
+-- shadowfiend aura (41917 nor 41914) — otherwise the DBC trigger leg
+-- (summon 41915) must not run. Go maps the veto onto the
+-- AuraEventOnProc hook (event 6, fireCreatureAuraProcLoop,
+-- boss_ai.go): true return = PreventDefaultAction, skipping the
+-- effect's default leg. DEVIATION (documented): C++ CheckProc gates
+-- before the chance roll and charge consume (GetProcEffectMask),
+-- while the Go hook fires after them (session-side precedent,
+-- procs.go) — a vetoed proc still rolls and spends a charge; 41913
+-- carries no charges in DBC, so no live deviation today. PORTED
+-- 2026-11-08 (tick 431). DORMANT: the 41913 aura application is
+-- DBC-side (no C++ cast site in this tree; SpellMgr.cpp:3616 only
+-- fixes EFFECT_0 to DUMMY), so the leg fires only once the aura is
+-- applied.
+local SPELL_PARASITIC_SHADOWFIEND_PROC = 41913 -- boss_illidan.cpp:1942
+
+local function parasiticShadowfiendProc(event, aura, target, actor, procTarget, damage)
+    if procTarget ~= nil and (procTarget:HasAura(SPELL_PARASITIC_SHADOWFIEND) or procTarget:HasAura(SPELL_PARASITIC_SHADOWFIEND_2)) then
+        return true
+    end
+    return false
+end
+
+RegisterAuraEvent(SPELL_PARASITIC_SHADOWFIEND_PROC, 6, parasiticShadowfiendProc)
 
 -- C++ spell_illidan_eye_blast::HandleEffectRemove
 -- (boss_illidan.cpp:2233-2236): AfterEffectRemove, EFFECT_0

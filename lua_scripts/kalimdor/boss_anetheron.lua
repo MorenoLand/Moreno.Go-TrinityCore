@@ -83,9 +83,10 @@
 --   instance's DATA_ANETHERON GUID is missing/dead (instance GUID bridge
 --   blocked, standing).
 -- - spell_anetheron_vampiric_aura AuraScript: OnEffectProc HandleProc
---   (PreventDefaultAction; heal = damage taken * 3 via
---   SPELLVALUE_BASE_POINT0 into SPELL_VAMPIRIC_AURA_HEAL 31285) — AuraScript
---   check/proc handlers not modeled (blocked, standing).
+--   (PreventDefaultAction; heal = damage * 3 via SPELLVALUE_BASE_POINT0
+--   into SPELL_VAMPIRIC_AURA_HEAL 31285) — PORTED 2026-11-08 (tick 431,
+--   below) via the creature-side AuraEventOnProc bridge (event 6,
+--   fireCreatureAuraProcLoop, boss_ai.go).
 
 local ENTRY = 17808
 
@@ -239,3 +240,28 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ spell_anetheron_vampiric_aura::HandleProc
+-- (boss_anetheron.cpp:280-292): OnEffectProc, EFFECT_0 SPELL_AURA_DUMMY.
+-- PreventDefaultAction (the handler returns true, the AuraEventOnProc
+-- veto) + the damage>0 gate, then the actor (the damage dealer, i.e.
+-- Anetheron on the done side) self-casts SPELL_VAMPIRIC_AURA_HEAL
+-- 31285 with SPELLVALUE_BASE_POINT0 = damage * 3, via the aurEff
+-- overload (triggered cast). Rides the Go AuraEventOnProc bridge
+-- (event 6, fireCreatureAuraProcLoop, boss_ai.go); the 38196
+-- self-cast is ported above (5s -> {10s,20s} timer), so the leg can
+-- fire live whenever Anetheron deals damage. PORTED 2026-11-08
+-- (tick 431). DORMANT until the DBC proc entry for 38196 ships
+-- (serverSpellProcEntryFor needs Spell.dbc ProcTypeMask).
+local SPELL_VAMPIRIC_AURA = 38196 -- boss_anetheron.cpp:29
+local SPELL_VAMPIRIC_AURA_HEAL = 31285 -- boss_anetheron.cpp:30
+
+local function vampiricAuraProc(event, aura, target, actor, procTarget, damage)
+    if damage == 0 or actor == nil then
+        return true
+    end
+    actor:CastCustomSpell(actor, SPELL_VAMPIRIC_AURA_HEAL, true, damage * 3)
+    return true
+end
+
+RegisterAuraEvent(SPELL_VAMPIRIC_AURA, 6, vampiricAuraProc)

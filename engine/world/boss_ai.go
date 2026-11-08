@@ -10085,7 +10085,12 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 // (Unit.cpp:10385-10408) for the creature path — each aura with a generated
 // spell_proc entry runs the CanSpellTriggerProcOnEvent gate against the
 // event; on pass, the chance roll fires each eligible aura effect's trigger
-// spell on triggerTargetGUID. A zero trigger target mirrors C++'s null
+// spell on triggerTargetGUID. Before each effect's default leg the
+// AuraEventOnProc hook fires (lua_aura.go fireAuraProc, holder =
+// luaMotionCreature); a true return is PreventDefaultAction and skips
+// that effect's leg — the creature-side twin of the session loop's
+// fire site (procs.go), unblocking the illidan 41913 CheckProc veto
+// and the anetheron 38196 heal proc. A zero trigger target mirrors C++'s null
 // _procTarget (Unit::ProcSkillsAndAuras passes actionTarget as _procTarget,
 // Unit.cpp:10388): the trigger spell resolves its own implicit targets, and
 // the CheckExplicitTarget twin fizzles the spells that need an explicit unit
@@ -10190,6 +10195,22 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		}
 		for _, i := range eligible {
 			eff := &auraSpell.Effects[i]
+			// AuraScript OnEffectProc (AuraEventOnProc, lua_aura.go): the
+			// creature-side twin of the session loop's fire site
+			// (procs.go) — fires per eligible effect after the gates
+			// and the charge consume, before the default leg; a true
+			// return is PreventDefaultAction and skips that leg for
+			// this effect. The HasHook gate keeps the aura/holder/
+			// actor object builds out of the hot path when no handler
+			// is registered. The holder is the creature motion
+			// (luaMotionCreature twin of the session's luaPlayer);
+			// the aura ref carries the creature key.
+			if s.hasAuraProcHook(aura.SpellID) {
+				auraObj := (&luaAuraRef{server: s, spellID: aura.SpellID, creatureKey: key, mapID: m.Map, instanceID: m.InstanceID}).luaAuraObject()
+				if s.fireAuraProc(ctx, aura, auraObj, s.luaMotionCreature(m), s.luaUnitObjectForGUID(m.Map, m.InstanceID, ev.actorGUID), s.luaUnitObjectForGUID(m.Map, m.InstanceID, triggerTargetGUID), ev.damage) {
+					continue
+				}
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)
@@ -16050,8 +16071,9 @@ func init() {
 	// escort machine and DATA_ANETHERONEVENT Reset/engage/death instance
 	// legs have no bridges; npc_towering_infernal is unregistered (zero
 	// C++ entry evidence, gelihast precedent) and the vampiric-aura
-	// AuraScript proc has no AuraScript-handler bridge; see
-	// lua_scripts/kalimdor/boss_anetheron.lua.
+	// AuraScript proc is PORTED 2026-11-08 (tick 431) via the
+	// creature-side AuraEventOnProc bridge (fireCreatureAuraProcLoop);
+	// see lua_scripts/kalimdor/boss_anetheron.lua.
 	RegisterLuaBoss("boss_anetheron", 17808)
 
 	// boss_kazrogal (Kazrogal, entry 17888 — C++-verified via hyjal.h
