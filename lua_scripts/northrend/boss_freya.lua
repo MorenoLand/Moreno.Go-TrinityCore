@@ -49,6 +49,33 @@
 --     100.0f playerOnly), DoCast(target, SPELL_SUNBEAM
 --     62623), non-triggered; bridged via the
 --     threat-list candidate-selection below.
+--   EVENT_UNSTABLE_ENERGY (:434-438, init 10s-20s :364,
+--     repeat 15s-20s) / EVENT_GROUND_TREMOR (:457-461, init
+--     10s-20s :370, repeat 25s-28s) /
+--     EVENT_STRENGTHENED_IRON_ROOTS (:451-456, init 10s-20s
+--     :376, repeat 12s-20s) — elder-alive-gated at engage
+--     (Brightleaf / Stonebark / Ironbranch; the grid-scan
+--     gate in freyaEnterCombat), PORTED 2026-11-08 (the
+--     header used to list them as staying out; the body
+--     port predates this tick).
+--   EVENT_WAVE (:439-445) + SpawnWave (:579-600) +
+--     GetWaveId (:563-577) + EVENT_NATURE_BOMB (:430-433)
+--     — PORTED 2026-11-08: 10s init, 60s waves while
+--     waveCount <= 6 (7 waves), then nature bombs 10s-20s
+--     init / 10s-12s repeat; GetWaveId is the C++-exact
+--     non-repeating urand(0,2) with reset; lashers x10 /
+--     trio / conservator summon casts + SAY + EMOTE.
+-- Freya JustSummoned (ev19) + SummonedCreatureDies (ev21)
+-- — PORTED 2026-11-08: trio GUID tracking (pendingTrioSlot),
+-- AttackStart random player 250y + 250 threat + DoZoneInCombat
+-- on every summon; lasher REMOVE_2STACK + DETONATE on killer
+-- + 5s despawn, conservator REMOVE_25STACK + 5s despawn.
+-- Elemental revive (UpdateAI :480-531) + LasherDead
+-- deforestation (:533-560) — PORTED 2026-11-08: 12s window
+-- from first trio death (all three dead defeats the trio now:
+-- 5s despawn + 3x REMOVE_10STACK; otherwise heal-to-full /
+-- Respawn); 6-death window, masks 1/2/4, <10s + sum 14 ->
+-- credit 65015 on threat-list players.
 -- Freya KilledUnit — player-gated Talk(SAY_SLAY 2) (event 3;
 -- who->GetTypeId() == TYPEID_PLAYER — the razuvious
 -- player-gated variant precedent).
@@ -142,8 +169,9 @@
 --   in-loop (:776/:885/:979) CASTING gates. Elder ticks keep
 --   the drained-aura check first (C++ UpdateAI order). The
 --   stale "timers fire unconditionally" deviation is retracted
---   for these arms. Wave / nature-bomb stay wave-machine-gated
---   (unported), so no gate applies to them.
+--   for these arms. The wave / nature-bomb arms ported
+--   2026-11-08 defer the same way (they sit under the same
+--   :414/:464 gates in C++).
 -- - EVENT_SOLAR_FLARE: C++ passes SPELLVALUE_MAX_TARGETS =
 --   the FLUX_AURA stack count (1-8) via CastSpellExtraArgs;
 --   creature:GetStackAmount is live now (2026-10-23) but the chain
@@ -178,21 +206,6 @@
 -- SAY_AGGRO_WITH_ELDER 1) was already ported. Still out: the
 -- CastSpell SPELL_ATTUNED_TO_NATURE 62519 with 150-stack spell-mod
 -- (no spell-mod bridge).
--- Freya timer arms staying out:
---   EVENT_NATURE_BOMB (:430-433, DoCastAOE 64604 triggered)
---     — init scheduled only from the EVENT_WAVE arm after
---     waveCount > 6 (:439-444); wave-machine-gated.
---   EVENT_UNSTABLE_ENERGY (:434-438) — random target + init
---     gated on Brightleaf alive at engage (:360-365,
---     hard-mode leg).
---   EVENT_WAVE (:439-445) — SpawnWave() summon/adds leg
---     (elemental GUID bookkeeping).
---   EVENT_STRENGTHENED_IRON_ROOTS (:451-456) — random
---     target + init gated on Ironbranch alive (:372-377,
---     hard-mode leg).
---   EVENT_GROUND_TREMOR (:457-461, Talk EMOTE_GROUND_TREMOR
---     10 + DoCastAOE 62437) — init gated on Stonebark alive
---     (:366-371, hard-mode leg); blocked on the gate alone.
 -- Freya JustDied companion legs (:602-~640) — chest summon
 -- (summonSpell[2][4]: 62950/62952/62953/62954 10-man,
 -- 62955/62956/62957/62958 25-man, indexed by
@@ -235,15 +248,18 @@
 -- npc_storm_lasher / npc_ancient_water_spirit /
 -- npc_detonating_lasher / npc_sun_beam / npc_nature_bomb /
 -- npc_eonars_gift / npc_healthy_spore /
--- npc_iron_roots — wave/summon
--- creatures: instance-coupled (ENSURE_AI Freya-AI callbacks,
+-- npc_iron_roots — wave/summon creatures: their own AIs stay
+-- out (instance-coupled ENSURE_AI Freya-AI callbacks,
 -- waveCount from Freya's AI, GetCreature(BOSS_FREYA)),
 -- random-target legs (tidal wave, stormbolt, nature fury),
 -- threat/AttackStart legs, summon/despawn/RemoveFromWorld/
 -- DisappearAndDie legs, SetReactState / SetFlag /
 -- SetImmuneToPC / SetCombatMovement legs,
 -- FindNearestGameObject leg — no spawn / movement /
--- threat bridges; no registrations. (npc_ancient_conservator
+-- threat bridges; no registrations. The FREYA-side legs are
+-- PORTED 2026-11-08 (ev19 JustSummoned, ev21
+-- SummonedCreatureDies, elemental revive, LasherDead) —
+-- see PORTED ARMS above. (npc_ancient_conservator
 -- is registered for its engage arm only — see PORTED ARMS;
 -- its Reset/UpdateAI/summon legs stay out for the same
 -- reasons.)
@@ -289,6 +305,18 @@ local SPELL_FREYA_UNSTABLE_SUNBEAM = 62450
 local SPELL_FREYA_GROUND_TREMOR = 62437
 local SPELL_ROOTS_FREYA = 62283
 
+-- Freya wave machine (SpawnWave / EVENT_WAVE / EVENT_NATURE_BOMB)
+local SPELL_SUMMON_LASHERS = 62687 -- boss_freya.cpp:95
+local SPELL_SUMMON_TRIO = 62686 -- boss_freya.cpp:96
+local SPELL_SUMMON_ANCIENT_CONSERVATOR = 62685 -- boss_freya.cpp:97
+local SPELL_SUMMON_NATURE_BOMB = 64604 -- boss_freya.cpp:137
+local SPELL_DETONATE = 62598 -- boss_freya.cpp:100
+local SPELL_DEFORESTATION_CREDIT = 65015 -- boss_freya.cpp:91
+local ENTRY_SNAPLASHER = 32916 -- boss_freya.cpp:163
+local ENTRY_STORM_LASHER = 32919 -- boss_freya.cpp:162
+local ENTRY_ANCIENT_WATER_SPIRIT = 33202 -- boss_freya.cpp:161
+local ENTRY_DETONATING_LASHER = 32918 -- boss_freya.cpp:159
+
 -- Elder Brightleaf
 local SPELL_UNSTABLE_SUN_BEAM_SUMMON = 62207
 local SPELL_SOLAR_FLARE = 62240
@@ -317,6 +345,10 @@ local SPELL_UNSTABLE_SUN_BEAM_TRIGGERED = 62243 -- boss_freya.cpp:143
 local SAY_SLAY = 2
 local SAY_DEATH = 3
 local SAY_BERSERK = 4
+local SAY_SUMMON_CONSERVATOR = 5 -- boss_freya.cpp:37
+local SAY_SUMMON_TRIO = 6 -- boss_freya.cpp:38
+local SAY_SUMMON_LASHERS = 7 -- boss_freya.cpp:39
+local EMOTE_ALLIES_OF_NATURE = 9 -- boss_freya.cpp:41
 local SAY_AGGRO = 0 -- boss_freya.cpp:32
 local SAY_AGGRO_WITH_ELDER = 1 -- boss_freya.cpp:33
 local EMOTE_LIFEBINDERS_GIFT = 8
@@ -493,6 +525,261 @@ local function onFreyaEnrage(creature, guid)
     creature:CastSpell(creature, SPELL_ENRAGE)
 end
 
+-- Freya wave state, per Freya GUID (fresh each engage; the C++
+-- members Initialize() zeroes: waveCount / trioWaveCount /
+-- trioWaveController / random[3] / checkElementalAlive[2] /
+-- trioDefeated[2] / deforestation[6][2] / diffTimer,
+-- boss_freya.cpp:280-301). elementals[slot] is the Lua twin of
+-- ElementalGUID[3][2] (:300): per-trio-slot list of
+-- { guid, obj, entry, alive }; the trioWaveController index is
+-- the list position. C++ writes ElementalGUID[][trioWaveCount]
+-- with no bound check — a third trio wave would index [x][2]
+-- out of bounds; Lua tracks only slots 1-2 and lets a third
+-- trio wave's elementals run untracked (engage legs only).
+local freyaWave = {}
+
+local function newWaveState()
+    return {
+        waveCount = 0,
+        trioWaveCount = 0,
+        random = { false, false, false },
+        pendingTrioSlot = nil,
+        checkElementalAlive = { true, true },
+        trioDefeated = { false, false },
+        elementals = { {}, {} },
+        revivePending = { false, false },
+        deforestation = {},
+        fightStart = 0,
+    }
+end
+
+-- C++ GetWaveId (boss_freya.cpp:563-577): non-repeating
+-- urand(0, 2) over { lashers, trio, conservator }, reset when
+-- all three have fired. Lua table is 1-based; the returned id
+-- stays 0-based to match the SpawnWave switch.
+local function getWaveId(st)
+    if st.random[1] and st.random[2] and st.random[3] then
+        st.random = { false, false, false }
+    end
+    local id = math.random(0, 2)
+    while st.random[id + 1] do
+        id = math.random(0, 2)
+    end
+    st.random[id + 1] = true
+    return id
+end
+
+-- C++ EVENT_NATURE_BOMB (boss_freya.cpp:430-433): DoCastAOE
+-- (self-cast) SPELL_SUMMON_NATURE_BOMB 64604, triggered;
+-- repeat 10s-12s. Scheduled from the EVENT_WAVE arm once
+-- waveCount > 6 (:439-444).
+local function onNatureBomb(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "nature_bomb", 500, function() onNatureBomb(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_NATURE_BOMB, true)
+    schedule(guid, "nature_bomb", {10000, 12000}, function() onNatureBomb(creature, guid) end)
+end
+
+-- C++ EVENT_WAVE (boss_freya.cpp:439-445) + SpawnWave
+-- (:579-600): Talk + summon casts per GetWaveId, then Talk
+-- (EMOTE_ALLIES_OF_NATURE 9) + waveCount++; while waveCount
+-- <= 6 the next wave comes in FREYA_WAVE_TIME 60s (:214),
+-- else EVENT_NATURE_BOMB 10s-20s. 7 waves total. The trio
+-- slot is captured BEFORE the summon cast (pendingTrioSlot):
+-- C++ reads the pre-increment trioWaveCount in JustSummoned,
+-- and the Go spell cast may resolve after the increment line.
+local function onFreyaWave(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "wave", 500, function() onFreyaWave(creature, guid) end)
+        return
+    end
+    local st = freyaWave[guid]
+    if not st then
+        return
+    end
+    local waveId = getWaveId(st)
+    if waveId == 0 then
+        creature:Talk(SAY_SUMMON_LASHERS)
+        for _ = 1, 10 do
+            creature:CastSpell(creature, SPELL_SUMMON_LASHERS)
+        end
+    elseif waveId == 1 then
+        creature:Talk(SAY_SUMMON_TRIO)
+        st.pendingTrioSlot = st.trioWaveCount
+        creature:CastSpell(creature, SPELL_SUMMON_TRIO)
+        st.trioWaveCount = st.trioWaveCount + 1
+    else
+        creature:Talk(SAY_SUMMON_CONSERVATOR)
+        creature:CastSpell(creature, SPELL_SUMMON_ANCIENT_CONSERVATOR)
+    end
+    creature:Talk(EMOTE_ALLIES_OF_NATURE)
+    st.waveCount = st.waveCount + 1
+    if st.waveCount <= 6 then
+        schedule(guid, "wave", 60000, function() onFreyaWave(creature, guid) end)
+    else
+        schedule(guid, "nature_bomb", {10000, 20000}, function() onNatureBomb(creature, guid) end)
+    end
+end
+
+-- C++ UpdateAI elemental revive (boss_freya.cpp:495-524, the
+-- >12000 branch): past 12s with the trio not defeated, living
+-- elementals heal to full and dead ones respawn; the
+-- checkElementalAlive flag re-arms for the next death. The
+-- all-dead defeat check runs on every tick below 12s, so it
+-- lives in freyaSummonedDied, not here.
+local function onTrioRevive(creature, guid, slot)
+    local st = freyaWave[guid]
+    if not st then
+        return
+    end
+    st.revivePending[slot] = false
+    st.checkElementalAlive[slot] = true
+    if st.trioDefeated[slot] then
+        return
+    end
+    local trio = st.elementals[slot]
+    if #trio ~= 3 then
+        return
+    end
+    for _, el in ipairs(trio) do
+        if el.alive then
+            el.obj:SetHealth(el.obj:GetMaxHealth())
+        else
+            el.obj:Respawn()
+            el.alive = true
+        end
+    end
+end
+
+-- C++ LasherDead (boss_freya.cpp:533-560): sliding window of
+-- the last 6 trio-elemental deaths (time, binary mask); when
+-- the window spans <10s and the masks sum to 14, the
+-- deforestation credit 65015 is cast on the players. Masks:
+-- water spirit 1, storm lasher 2, snaplasher 4 (the detonating
+-- lasher never calls LasherDead). Time is os.time() seconds
+-- from engage (the boss_ignis precedent); C++ diffTimer is
+-- millisecond UpdateAI accumulation. Deviation: C++ casts on
+-- every player in the instance; Lua casts on the threat-list
+-- players (the raid in combat) — no instance-wide cast bridge.
+local function lasherDead(creature, st, mask)
+    local window = st.deforestation
+    window[#window + 1] = { time = os.time() - st.fightStart, mask = mask }
+    if #window > 6 then
+        table.remove(window, 1)
+    end
+    if #window == 6 then
+        local sum = 0
+        for _, w in ipairs(window) do
+            sum = sum + w.mask
+        end
+        if sum == 14 and (window[6].time - window[1].time) < 10 then
+            for _, unit in ipairs(creature:GetAITargets()) do
+                if unit:GetObjectType() == "Player" and not unit:IsDead() then
+                    creature:CastSpell(unit, SPELL_DEFORESTATION_CREDIT, true)
+                end
+            end
+        end
+    end
+end
+
+-- C++ JustSummoned (boss_freya.cpp:643-671): trio elementals
+-- are tracked in ElementalGUID (the pendingTrioSlot captured
+-- at cast time); every summon then attacks a random player in
+-- 250y with 250 threat + a zone engage. The target pick reads
+-- FREYA's threat list (C++ SelectTarget runs on Freya's AI),
+-- not the fresh summon's empty one. summons.Summon has no Lua
+-- twin (ev21 dispatch rides the OwnerGUID stamp, not the
+-- BossAI summons list).
+local function freyaJustSummoned(event, creature, summoned)
+    local guid = creature:GetGUID()
+    local st = freyaWave[guid]
+    local entry = summoned:GetEntry()
+    if st ~= nil and (entry == ENTRY_SNAPLASHER or entry == ENTRY_ANCIENT_WATER_SPIRIT or entry == ENTRY_STORM_LASHER) then
+        local slot = st.pendingTrioSlot
+        if slot ~= nil and slot <= 1 then
+            local trio = st.elementals[slot + 1]
+            trio[#trio + 1] = { guid = summoned:GetGUID(), obj = summoned, entry = entry, alive = true }
+        end
+    end
+    local target = randomPlayerInRange(creature, 0, 250)
+    if target then
+        summoned:EngageWithTarget(target)
+        summoned:AddThreat(target, 250)
+        summoned:DoZoneInCombat()
+    end
+end
+
+-- C++ SummonedCreatureDies (boss_freya.cpp:674-688): a dying
+-- detonating lasher casts REMOVE_2STACK 62524 on Freya +
+-- DETONATE 62598 on its killer and despawns in 5s; a dying
+-- ancient conservator casts REMOVE_25STACK 62521 on Freya and
+-- despawns in 5s. The REMOVE casts land via freyaHitBySpell
+-- (ev14). The trio elementals' death legs are NOT here in C++
+-- (their own JustDied :1119/:1193/:1242 sets
+-- checkElementalAlive[slot] = false + LasherDead(mask)); the
+-- elementals carry no Lua registration, so ev21 drives those
+-- legs here, keyed by the ev19-tracked GUID. The defeat check
+-- is the C++ UpdateAI :505-521 else-branch: all three dead
+-- inside the 12s window defeats the trio now (5s despawn +
+-- one REMOVE_10STACK 62525 cast per elemental, -30 via
+-- freyaHitBySpell); otherwise a 12s revive timer starts on
+-- the first death of the trio (revivePending — the C++
+-- elementalTimer accumulates from the first death, it does
+-- not reset on later deaths).
+local function freyaSummonedDied(event, creature, summoned, killer)
+    local guid = creature:GetGUID()
+    local st = freyaWave[guid]
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_DETONATING_LASHER then
+        summoned:CastSpell(creature, SPELL_REMOVE_2STACK, true)
+        if killer then
+            summoned:CastSpell(killer, SPELL_DETONATE, true)
+        end
+        summoned:DespawnOrUnsummon(5000)
+    elseif entry == ENTRY_ANCIENT_CONSERVATOR then
+        summoned:CastSpell(creature, SPELL_REMOVE_25STACK, true)
+        summoned:DespawnOrUnsummon(5000)
+    elseif st ~= nil and (entry == ENTRY_SNAPLASHER or entry == ENTRY_ANCIENT_WATER_SPIRIT or entry == ENTRY_STORM_LASHER) then
+        local slot = nil
+        for s = 1, 2 do
+            for _, el in ipairs(st.elementals[s]) do
+                if el.guid == summoned:GetGUID() then
+                    slot = s
+                    el.alive = false
+                    break
+                end
+            end
+            if slot then
+                break
+            end
+        end
+        if slot ~= nil and not st.trioDefeated[slot] then
+            st.checkElementalAlive[slot] = false
+            local mask = 1
+            if entry == ENTRY_STORM_LASHER then
+                mask = 2
+            elseif entry == ENTRY_SNAPLASHER then
+                mask = 4
+            end
+            lasherDead(creature, st, mask)
+            local trio = st.elementals[slot]
+            if #trio == 3 and not trio[1].alive and not trio[2].alive and not trio[3].alive then
+                st.trioDefeated[slot] = true
+                st.checkElementalAlive[slot] = true
+                for _, el in ipairs(trio) do
+                    el.obj:DespawnOrUnsummon(5000)
+                    el.obj:CastSpell(creature, SPELL_REMOVE_10STACK, true)
+                end
+            elseif not st.revivePending[slot] then
+                st.revivePending[slot] = true
+                schedule(guid, "revive_" .. slot, 12000, function() onTrioRevive(creature, guid, slot) end)
+            end
+        end
+    end
+end
+
 local function freyaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -592,10 +879,20 @@ local function freyaEnterCombat(event, creature, target)
     if elderAlive[3] then
         schedule(guid, "strengthened_iron_roots", {10000, 20000}, function() onStrengthenedIronRoots(creature, guid) end)
     end
+    -- C++ JustEngagedWith (:390): EVENT_WAVE init 10s; the wave
+    -- machine (SpawnWave :579-600, GetWaveId :563-577,
+    -- FREYA_WAVE_TIME 60s :214) is ported above — see
+    -- onFreyaWave. Fresh wave state each engage (C++ Reset ->
+    -- Initialize :280-301).
+    freyaWave[guid] = newWaveState()
+    freyaWave[guid].fightStart = os.time()
+    schedule(guid, "wave", 10000, function() onFreyaWave(creature, guid) end)
 end
 
 local function freyaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    freyaWave[guid] = nil
 end
 
 -- C++ Freya JustDied elder shutdown sweep (boss_freya.cpp:630-641):
@@ -628,6 +925,7 @@ end
 local function freyaDied(event, creature, killer)
     creature:SetBossState(BOSS_FREYA, 3) -- _JustDied() SetBossState(DATA_FREYA 9, DONE), PORTED tick 259 (C++ JustDied :628)
     cancelTimers(creature:GetGUID())
+    freyaWave[creature:GetGUID()] = nil
     freyaElderShutdown(creature)
 end
 
@@ -637,6 +935,7 @@ local function freyaReset(event, creature)
     end
     creature:SetBossState(BOSS_FREYA, 0) -- _Reset() SetBossState(DATA_FREYA 9, NOT_STARTED), PORTED tick 259 (the tick-258 auriaya convention)
     cancelTimers(creature:GetGUID())
+    freyaWave[creature:GetGUID()] = nil
     -- C++ Reset -> Initialize (:285) zeroes elderCount; the attuned
     -- half mirrors the no-aura -> 0 sampling (:471-475). A fresh
     -- motion reads 0 anyway; this is the wipe twin. Alive-gated:
@@ -723,11 +1022,10 @@ end
 -- 62524 (SummonedCreatureDies :678), a dying Ancient Conservator casts
 -- SPELL_REMOVE_25STACK 62521 (:684). Event 14 (OnHitBySpell) is the
 -- target-side twin (faerlina ev14 precedent); the counter>0 guard is
--- the SpellScript's HasAura check. Dormant until the wave/elemental
--- legs land (the casters are unregistered wave adds), but C++-exact:
--- in the Go-modeled fight no trio can be defeated, so the counter
--- stays 150 and the >= 25 gate reads true, matching C++ for a
--- zero-trio-defeat fight.
+-- the SpellScript's HasAura check. The casters are the ev19/ev21 wave
+-- legs ported 2026-11-08, so the counter now decrements live; in a
+-- zero-trio-defeat fight it stays 150 and the >= 25 gate reads true,
+-- matching C++.
 local function freyaHitBySpell(event, creature, caster, spellId)
     local remove = nil
     if spellId == SPELL_REMOVE_10STACK then
@@ -1000,6 +1298,8 @@ RegisterCreatureEvent(ENTRY_FREYA, 3, freyaTargetDied)
 RegisterCreatureEvent(ENTRY_FREYA, 4, freyaDied)
 RegisterCreatureEvent(ENTRY_FREYA, 9, freyaDamageTaken)
 RegisterCreatureEvent(ENTRY_FREYA, 14, freyaHitBySpell)
+RegisterCreatureEvent(ENTRY_FREYA, 19, freyaJustSummoned)
+RegisterCreatureEvent(ENTRY_FREYA, 21, freyaSummonedDied)
 RegisterCreatureEvent(ENTRY_FREYA, 23, freyaReset)
 
 RegisterCreatureEvent(ENTRY_BRIGHTLEAF, 1, brightleafEnterCombat)

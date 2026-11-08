@@ -20369,9 +20369,14 @@ func init() {
 	// repeat re-arm (boss pre-loop :414 + in-loop :464;
 	// elder pre-loop :745/:863/:957 + in-loop :776/:885/:979;
 	// drained-aura check first on elder ticks). Wave /
-	// nature-bomb, wave/summon NPC scripts, two spell scripts
-	// and the four achievement scripts are bridge-blocked —
-	// documented in the lua header.
+	// nature-bomb (7 waves, 60s, then bombs 10s-12s),
+	// JustSummoned (ev19) + SummonedCreatureDies (ev21),
+	// the elemental 12s revive / trio-defeat legs and the
+	// LasherDead deforestation tracker are ported (tick 477).
+	// Wave/summon NPC scripts, two spell scripts, the chest
+	// summon (difficulty index) and the four achievement
+	// scripts stay bridge-blocked — documented in the lua
+	// header.
 	RegisterLuaBoss("boss_freya", 32906)
 	RegisterLuaBoss("boss_freya", 32915)
 	RegisterLuaBoss("boss_freya", 32914)
