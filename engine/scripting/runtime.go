@@ -518,14 +518,25 @@ const (
 // SPELL_MISS_NONE; the Go protocol values are numerically
 // identical). All six are notification-only: a handler returning
 // true does NOT veto anything — C++ OnCast has no veto (CheckCast
-// is the gate), and the OnHit damage/healing rewrite
-// (Spell.cpp:2379-2381, SetHitDamage/PreventHitDamage) has no Go
-// model (the cast path carries no m_damage/m_healing; damage lands
-// in the combat tick), and PreventHitDefaultEffect has no Go model
-// either (the default effect still runs — for SCRIPT_EFFECT legs
-// the Go default is a per-spell no-op unless a case exists in
+// is the gate). The hit-damage legs are modeled through the
+// per-cast spellHitDamageState (lua_spell.go): spell:GetHitDamage()
+// reads the pre-effect seed (0 on a fresh target, Spell.cpp:2344)
+// in BeforeHit/OnHit/OnEffectHitTarget and the final
+// post-mitigation damage (Spell.cpp:2547) at AfterHit, and
+// spell:SetHitDamage() writes the seed in the modifiable hooks
+// (SpellScript.cpp:421-434) — a recorded write only, since Go's
+// damage arms already ran by the time those hooks fire; it never
+// rescales dealt damage. The record is threaded from the creature
+// damage arms (creatureEffectSpellDamage /
+// creatureEffectSpellDamageCreature); the player path does not
+// thread it yet (its Spell objects read 0), and the inline
+// victim-spell path fires no SpellScript hooks at all, so no
+// hit-damage model is needed there. GetHitHeal/SetHitHeal and
+// PreventHitDamage/PreventHitDefaultEffect have no Go model: the
+// default effect still runs — for SCRIPT_EFFECT legs the Go default
+// is a per-spell no-op unless a case exists in
 // creatureEffectScriptEffect / handleEffectScriptEffect, so a
-// PreventHitDefaultEffect leg ports as hook-only). The hitTarget is
+// PreventHitDefaultEffect leg ports as hook-only. The hitTarget is
 // the Lua unit object (player or creature) or nil when the target
 // GUID resolves to nothing; GO, item and corpse TargetInfo legs
 // (Spell.cpp:2661-2707) have no Go model and never fire.

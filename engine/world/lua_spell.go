@@ -44,6 +44,85 @@ type spellObjectParams struct {
 	dest           protocol.SpellTargetLocation
 	hasDest        bool
 	action         *spellScriptAction
+	hitDamage      *spellHitDamageState
+}
+
+// spellHitPhase identifies which SpellScript hook a spell object's
+// GetHitDamage/SetHitDamage call runs in. C++ reads m_damage through
+// the hook: the PreprocessTarget hooks (BeforeHit, OnHit) see the
+// pre-effect seed (TargetInfo::Damage, 0 on a fresh target —
+// Spell.cpp:2344/2377-2380), OnEffectHitTarget sees the seed plus the
+// damage of the effects already run for that target (Spell.cpp:2409),
+// and AfterHit sees the final post-mitigation damage (Spell.cpp:2547,
+// m_damage = damageInfo.damage after CalculateSpellDamageTaken).
+// Go fires the OnHit/AfterHit hooks after its damage arms have run,
+// so the phase gate — not the fire order — reproduces the C++
+// values: GetHitDamage returns the seed before AfterHit and the
+// recorded final damage at AfterHit.
+const (
+	spellHitPhaseNone = iota
+	spellHitPhaseBeforeHit
+	spellHitPhaseOnHit
+	spellHitPhaseEffectHitTarget
+	spellHitPhaseAfterHit
+)
+
+// spellHitDamageState is the per-cast hit-damage record threaded from
+// the damage arms to the SpellScript hook fires. damageByTarget holds
+// the final post-mitigation damage per hit target (the C++ m_damage at
+// AfterHit: post-resist/absorb/block, pre-split, pre-overkill-cap —
+// Spell.cpp:2547), written by creatureEffectSpellDamage and
+// creatureEffectSpellDamageCreature. seedByTarget holds OnHit /
+// BeforeHit / OnEffectHitTarget SetHitDamage writes (the C++ m_damage
+// seed the effect loop adds to, Spell.cpp:2380/2425); Go's damage is
+// already dealt by the time those hooks fire, so a seed write is
+// recorded for in-hook read-back only and never rescales dealt
+// damage. currentTarget is the hit target of the fire in progress
+// (the fire loops set it synchronously before each trigger); a nil
+// state means no damage was threaded for this cast (player path —
+// not yet threaded — and non-hit hooks), and both methods then read 0.
+type spellHitDamageState struct {
+	damageByTarget map[uint64]int32
+	seedByTarget   map[uint64]int32
+	currentTarget  uint64
+	phase          int
+}
+
+// attachSpellHitDamageMethods adds spell:GetHitDamage() /
+// spell:SetHitDamage() (SpellScript::GetHitDamage/SetHitDamage,
+// SpellScript.cpp:574-592) to a Spell object's methods. GetHitDamage
+// returns the final damage at AfterHit and the seed (0 unless the
+// handler wrote it) in the earlier hooks; SetHitDamage writes the
+// seed in the modifiable hooks (BeforeHit, OnHit, OnEffectHitTarget —
+// SpellScript::IsInModifiableHook, SpellScript.cpp:421-434) and is a
+// no-op at AfterHit, where C++ logs and ignores it.
+func attachSpellHitDamageMethods(methods map[string]scripting.ObjectMethod, hit *spellHitDamageState) {
+	methods["GetHitDamage"] = luaNoArgs(func() any {
+		if hit == nil {
+			return int32(0)
+		}
+		if hit.phase == spellHitPhaseAfterHit {
+			return hit.damageByTarget[hit.currentTarget]
+		}
+		return hit.seedByTarget[hit.currentTarget]
+	})
+	methods["SetHitDamage"] = func(_ context.Context, args []any) ([]any, error) {
+		value, err := luaInt32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if hit == nil {
+			return nil, nil
+		}
+		switch hit.phase {
+		case spellHitPhaseBeforeHit, spellHitPhaseOnHit, spellHitPhaseEffectHitTarget:
+			if hit.seedByTarget == nil {
+				hit.seedByTarget = map[uint64]int32{}
+			}
+			hit.seedByTarget[hit.currentTarget] = value
+		}
+		return nil, nil
+	}
 }
 
 func nilSpellObject(object *scripting.Object) any {
@@ -210,6 +289,7 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return []any{p.dest.X, p.dest.Y, p.dest.Z}, nil
 	}
+	attachSpellHitDamageMethods(methods, p.hitDamage)
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 
@@ -224,9 +304,13 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 // GetCurrentSpell returns the live Spell* regardless of DBC presence,
 // and the DBC-backed reads fall back to 0/-1 like the session builder.
 // GetEffectValue is the session builder's twin (same contract).
-func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targetGUID uint64) *scripting.Object {
+func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targetGUID uint64, hitDamage ...*spellHitDamageState) *scripting.Object {
 	if s == nil || m == nil || spellID == 0 {
 		return nil
+	}
+	var hit *spellHitDamageState
+	if len(hitDamage) > 0 {
+		hit = hitDamage[0]
 	}
 	var castTimeMs int32
 	durationMs := int32(0)
@@ -275,6 +359,7 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 		}
 		return s.luaUnitObjectForGUID(m.Map, m.InstanceID, targetGUID)
 	})
+	attachSpellHitDamageMethods(methods, hit)
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
 

@@ -500,6 +500,7 @@ local LK = {
     SPELL_VALKYR_CARRY = 74445, -- :125
     SPELL_VALKYR_TRANSFORM = 73501, -- :129
     SPELL_LIFE_SIPHON = 73488, -- :126
+    SPELL_LIFE_SIPHON_HEAL = 73489, -- :127
 }
 
 -- Target-select state (2026-11-08, tick 447): the SpellScript _target
@@ -3214,8 +3215,15 @@ end)
 
 -- C++ spell_the_lich_king_defile::ChangeDamageAndGrow
 -- (boss_the_lich_king.cpp:2271-2279): OnHit -> the SetHitDamage leg
--- (GetHitDamage * caster scale) has no Go model (the cast path
--- carries no m_damage/m_healing, tick 445 contract), so only the
+-- is a NO-OP in C++ and ports as nothing: OnHit fires in
+-- PreprocessTarget (Spell.cpp:2377, DoProcessTargetContainer pass
+-- 1, before the effect loop) with TargetInfo::Damage = 0 (Spell.h),
+-- so GetHitDamage() returns 0 and SetHitDamage(0 * caster scale)
+-- leaves the seed at 0; EffectSchoolDamage then ADDS the rolled
+-- damage on top (m_damage += damage, SpellEffects.cpp:788). No
+-- scaling call is added — the Go bridge now models GetHitDamage
+-- (0 at OnHit), and a ported SetHitDamage(GetHitDamage() * scale)
+-- would write 0 and change nothing, exactly like C++. Only the
 -- second leg ports: the caster casts SPELL_DEFILE_GROW (72756,
 -- triggered) on itself. OnHit fires once per hit target in both
 -- C++ and Go, so the grow-cast multiplicity matches. Handler is
@@ -3226,6 +3234,30 @@ RegisterSpellEvent(LK.SPELL_DEFILE, 2, function(event, spell, target)
     if caster ~= nil then
         caster:CastSpell(caster, LK.SPELL_DEFILE_GROW, true)
     end
+end)
+
+-- C++ spell_the_lich_king_life_siphon::TriggerHeal
+-- (boss_the_lich_king.cpp:2405-2411): AfterHit -> the hit unit casts
+-- SPELL_LIFE_SIPHON_HEAL (73489) on the caster, TRIGGERED, BP0 =
+-- GetHitDamage() * 10. GetHitDamage is the final post-mitigation
+-- damage (C++ m_damage = damageInfo.damage, Spell.cpp:2547), which
+-- the Go hit-damage bridge threads from the damage arms. No damage
+-- guard: C++ casts unconditionally on a hit (a 0-damage hit heals
+-- 0). The nil-target guard covers the miss fires (C++ fires
+-- AfterHit with a nil hit unit on misses, Spell.cpp:2659 outside
+-- the _spellHitTarget if). CastCustomSpell is the AddSpellBP0 twin
+-- (saurfang 72202 precedent). Handler is inline: the file sits at
+-- 199 main-chunk locals. DORMANT until Spell.dbc ships: the 73488
+-- cast is DBC-gated.
+RegisterSpellEvent(LK.SPELL_LIFE_SIPHON, 3, function(event, spell, target)
+    if target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    target:CastCustomSpell(caster, LK.SPELL_LIFE_SIPHON_HEAL, true, spell:GetHitDamage() * 10)
 end)
 
 -- C++ spell_the_lich_king_vile_spirit_move_target_search::SelectTarget
