@@ -54,6 +54,11 @@
 -- victim:GetObjectType()=="Player" — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 4) (event 4; _JustDied instance
 -- bookkeeping has no bridge).
+-- The _consumptionJunction latch — Initialize/Reset true, UpdateAI
+-- flips false when the Consume-buff stack exceeds 9 — PORTED tick 418
+-- as a SetData mirror (see consumptionJunctionTick below): the Go
+-- achievement gate reads the motion's SetData store (bossLatchData),
+-- so the old "write-only / dead code" verdict is superseded.
 -- Unmodeled (no bridges — documented, not wired):
 -- The consume-buff leg of EVENT_CONSUME (SPELL_CONSUME_BUFF 49381
 -- stacking via spell_trollgore_consume SpellScript) and the
@@ -69,15 +74,18 @@
 -- instance model absent (standing).
 -- The _consumptionJunction latch (Initialize/Reset true; UpdateAI
 -- flips it false when GetAura(SPELL_CONSUME_BUFF_HELPER 49381 /
--- 59805)->GetStackAmount() > 9) — stays out NOT for lack of a bridge
--- (creature:GetStackAmount is bridged since the emalon run,
--- engine/world/lua_creature_events.go): the latch is write-only from
--- Lua's perspective — its only reader is GetData
--- (DATA_CONSUMPTION_JUNCTION 1), whose only caller is
--- achievement_consumption_junction (no cross-AI GetData bridge).
--- Porting the write would be dead code.
--- GetData(DATA_CONSUMPTION_JUNCTION 1) — no cross-AI GetData bridge
--- (its only caller is achievement_consumption_junction — see below).
+-- 59805)->GetStackAmount() > 9) — PORTED tick 418 as a SetData mirror
+-- (see consumptionJunctionTick below): the old "write-only / dead
+-- code" verdict is superseded by the Go achievement dispatch, which
+-- reads the Lua SetData store via bossLatchData
+-- (achievement_criteria_scripts.go) instead of a cross-AI GetData
+-- call. Known delta (bronjahm class): the Consume buff itself is
+-- applied by the unported spell_trollgore_consume SpellScript, so if
+-- Go never stacks the buff the poll never flips and the gate
+-- over-awards vs C++ on slow kills.
+-- GetData(DATA_CONSUMPTION_JUNCTION 1) — no cross-AI GetData bridge;
+-- its only caller is achievement_consumption_junction, whose Go case
+-- reads the Lua SetData store instead — see below.
 -- JustSummoned — summon->GetMotionMaster()->MovePoint(POINT_LANDING,
 -- Landing) + summons.Summon — motion-master bridge absent (summon
 -- STRAND absent — standing).
@@ -85,8 +93,9 @@
 -- PORTED: all 4 ported timer arms defer 500ms while casting (no
 -- repeat re-arm — the event stays queued in C++); KilledUnit/JustDied
 -- Talk ungated per C++ (outside UpdateAI); the post-loop
--- _consumptionJunction latch stays out (write-only, sole reader is the
--- unbridged achievement GetData leg).
+-- _consumptionJunction latch is PORTED tick 418 (1s poll, see
+-- consumptionJunctionTick below) — the old "stays out (write-only)"
+-- verdict is superseded by the Go bossLatchData dispatch.
 -- npc_drakkari_invader — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (27709 /
 -- 27753 / 27754 — drak_tharon_keep.h NPC_DRAKKARI_INVADER_A/B/C,
 -- kalecgos pass): zero registration. The whole AI is MovementInform(
@@ -110,9 +119,11 @@
 -- ToCreature DespawnOrUnsummon) — no SpellScript/AuraScript binding
 -- bridge on the Lua surface (razelikh precedent) — documented-only.
 -- achievement_consumption_junction — AchievementCriteriaScript
--- (target ToCreature -> AI()->GetData(DATA_CONSUMPTION_JUNCTION))
--- — no achievement-criteria bridge (snakes precedent) + cross-AI
--- GetData bridge absent — documented-only.
+-- (target ToCreature -> AI()->GetData(DATA_CONSUMPTION_JUNCTION)) —
+-- the Go case reads the Lua SetData store via bossLatchData
+-- (achievement_criteria_scripts.go); the Lua write leg is ported
+-- tick 418 (see consumptionJunctionTick below). No cross-AI GetData
+-- bridge is needed for the Go gate.
 
 local ENTRY_TROLLGORE = 26630
 
@@ -126,8 +137,17 @@ local SPELL_CRUSH = 49639
 local SPELL_INFECTED_WOUND = 49637
 local SPELL_CONSUME = 49380
 local SPELL_CORPSE_EXPLODE = 49555
+local SPELL_CONSUME_BUFF = 49381 -- boss_trollgore.cpp:34
+local SPELL_CONSUME_BUFF_HEROIC = 59805 -- boss_trollgore.cpp:35
+local DATA_CONSUMPTION_JUNCTION = 1 -- boss_trollgore.cpp:57
 
 local timers = {}
+
+-- C++ _consumptionJunction latch (boss_trollgore.cpp:84-87, 89-93,
+-- 154-159): per-GUID, true until the Consume-buff stack check flips
+-- it false; the Go achievement gate reads it from the motion's
+-- SetData store (bossLatchData).
+local consumptionJunction = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -218,9 +238,44 @@ local function corpseExplodeTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI post-loop latch (boss_trollgore.cpp:154-159): while
+-- _consumptionJunction, if GetAura(SPELL_CONSUME_BUFF_HELPER)->
+-- GetStackAmount() > 9, _consumptionJunction = false. The per-tick
+-- UpdateAI check rides a 1s re-armed CreateLuaEvent poll seeded on
+-- combat start (ichoron frenzy / sindragosa 1s convention); the poll
+-- stops re-arming once the latch flips. creature:GetStackAmount
+-- (lua_creature_events.go:1493) reads engine-applied auras and
+-- returns 0 when absent, subsuming the C++ null-Aura leg.
+-- SPELL_CONSUME_BUFF_HELPER is DUNGEON_MODE(49381, 59805)
+-- (boss_trollgore.cpp:44); creature:IsHeroic() picks the mode
+-- (lua_creature_events.go:3728).
+local function consumptionJunctionTick(creature, guid)
+    if not consumptionJunction[guid] then
+        return
+    end
+    local buff = creature:IsHeroic() and SPELL_CONSUME_BUFF_HEROIC or SPELL_CONSUME_BUFF
+    if creature:GetStackAmount(buff) > 9 then
+        consumptionJunction[guid] = false
+        creature:SetData(DATA_CONSUMPTION_JUNCTION, 0)
+        return
+    end
+    schedule(guid, "consumptionjunction", 1000, function()
+        consumptionJunctionTick(creature, guid)
+    end)
+end
+
 local function trollgoreEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    -- C++ Initialize/Reset (boss_trollgore.cpp:84-87/:89-93):
+    -- _consumptionJunction starts true; mirror it into the motion's
+    -- SetData store for the achievement gate (bossLatchData) and seed
+    -- the stack poll.
+    consumptionJunction[guid] = true
+    creature:SetData(DATA_CONSUMPTION_JUNCTION, 1)
+    schedule(guid, "consumptionjunction", 1000, function()
+        consumptionJunctionTick(creature, guid)
+    end)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
@@ -254,7 +309,17 @@ local function trollgoreDied(event, creature, killer)
 end
 
 local function trollgoreReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    consumptionJunction[guid] = nil
+    -- C++ Reset (boss_trollgore.cpp:89-93) re-arms _consumptionJunction
+    -- to true. Alive-gated (tick-417 bronjahm/sartharion): ev23 fires
+    -- on death too (fireCreatureDied runs Reset before the kill-credit
+    -- criteria read, kill.go:1091/:1400), and a death-time re-arm to 1
+    -- would clobber a flipped latch before the achievement gate reads it.
+    if creature:IsAlive() then
+        creature:SetData(DATA_CONSUMPTION_JUNCTION, 1)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_TROLLGORE, 1, trollgoreEnterCombat)

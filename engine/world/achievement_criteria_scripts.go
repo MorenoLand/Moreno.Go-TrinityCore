@@ -68,6 +68,9 @@ const (
 	dataSkadiLoveToSkadi               = 0        // boss_skadi.cpp:112 DATA_LOVE_TO_SKADI
 	dataSvalaIncredibleHulk            = 2043     // boss_svala.cpp:125 DATA_INCREDIBLE_HULK
 	dataYmironKingsBane                = 2157     // boss_ymiron.cpp:99 DATA_KINGS_BANE
+	dataThorimDontStandInLightning     = 29712972 // boss_thorim.cpp:315 ACHIEVEMENT_DONT_STAND_IN_THE_LIGHTNING
+	dataThorimLoseYourIllusion         = 31763183 // boss_thorim.cpp:317 ACHIEVEMENT_LOSE_YOUR_ILLUSION
+	dataTrollgoreConsumptionJunction   = 1        // boss_trollgore.cpp:57 DATA_CONSUMPTION_JUNCTION
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -100,6 +103,21 @@ func vehicleCreatureEntry(source *session) (uint32, bool) {
 		return 0, false
 	}
 	return kit.CreatureEntry, true
+}
+
+// vehicleID is the Go form of Unit::GetVehicle()->GetVehicleInfo()->ID:
+// the DBC vehicle ID of the vehicle the player is riding (VehicleKit.VehicleID,
+// vehicle.go:68). A player base reads false, as does a missing kit or a
+// player who is not seated — the same lookup vehicleCreatureEntry uses.
+func vehicleID(source *session) (uint32, bool) {
+	if source == nil || source.player == nil || source.server == nil || source.player.VehicleGUID == 0 {
+		return 0, false
+	}
+	kit := source.server.getVehicleKit(source.player.Map, source.player.InstanceID, source.player.VehicleGUID)
+	if kit == nil || kit.IsPlayer {
+		return 0, false
+	}
+	return kit.VehicleID, true
 }
 
 // checkAchievementCriteriaScript evaluates one DATA_TYPE_SCRIPT criteria gate.
@@ -679,6 +697,22 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		return bossLatchData(source.server, victim, dataNadoxRespectElders) != 0
 
+	case "achievement_consumption_junction": // boss_trollgore.cpp:342-354
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_CONSUMPTION_JUNCTION 1)
+		// — true while the boss never stacked Consume to 10: the latch starts
+		// set (Initialize/Reset, boss_trollgore.cpp:84-87/:89-93) and the
+		// UpdateAI stack check (:154-159) clears it when the Consume-buff
+		// (49381/59805) stack exceeds 9; the Lua twin keeps it in the boss
+		// motion's SetData store (boss_trollgore.lua: consumptionJunctionTick
+		// 1s poll, engage set, alive-gated ev23 re-arm). Known delta: the
+		// buff itself is applied by the unported spell_trollgore_consume
+		// SpellScript, so if Go never stacks it the gate over-awards vs
+		// C++ on slow kills.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataTrollgoreConsumptionJunction) != 0
+
 	case "achievement_share_the_love": // boss_gal_darah.cpp:341-358
 		// OnCheck: GalDarah->AI()->GetData(DATA_SHARE_THE_LOVE 1) >= 5 —
 		// the count of distinct impaled players, fed by the impaling
@@ -864,6 +898,36 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataAssemblyPhase3) != 0
+
+	case "achievement_dont_stand_in_the_lightning": // boss_thorim.cpp:2129-2138
+		// OnCheck: GetData(ACHIEVEMENT_DONT_STAND_IN_THE_LIGHTNING
+		// 29712972) != 0 — true from Reset/Initialize (:456-461) until
+		// SPELL_LIGHTNING_RELEASE 62466 hits a player (SpellHitTarget
+		// :560-562); the Lua twin keeps it in the boss motion's SetData
+		// store (boss_thorim.lua: ev23 set, ev15 clear). The clear leg
+		// is dormant: the 62466 cast rides the unported phase-2 / pillar
+		// machine, so in the Go-modeled fight the latch stays 1,
+		// matching C++ for a zero-lightning-release-hit fight.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataThorimDontStandInLightning) != 0
+
+	case "achievement_lose_your_illusion": // boss_thorim.cpp:2140-2149
+		// OnCheck: GetData(ACHIEVEMENT_LOSE_YOUR_ILLUSION 31763183)
+		// != 0 — the same slot doubles as DATA_THORIM_HARDMODE
+		// (:531-533); true from Reset/Initialize until
+		// SPELL_TOUCH_OF_DOMINION_TRIGGERED 62565 lands with Sif in
+		// the instance (SpellHit :548-556); the Lua twin keeps it in
+		// the boss motion's SetData store (boss_thorim.lua: ev23 set,
+		// ev14 Sif-gated clear). The clear leg is dormant: Sif is
+		// unregistered and the Sif-channel machine is unported, so in
+		// the Go-modeled fight the latch stays 1, matching C++ for a
+		// fight where Sif never despawned.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataThorimLoseYourIllusion) != 0
 
 	case "achievement_i_ll_take_you_all_on": // boss_thorim.cpp:2151-2162
 		// OnCheck: OutOfArenaCheck(source) — !IsInBounds(ArenaBoundaries).
@@ -1059,6 +1123,23 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		// so the IsPlayer exclusion in vehicleCreatureEntry is the twin.
 		entry, ok := vehicleCreatureEntry(source)
 		return ok && entry == 30234
+
+	case "achievement_wg_didnt_stand_a_chance": // zone_wintergrasp.cpp:467-490
+		// OnCheck: target->ToPlayer() must be mounted, and
+		// source->GetVehicle()->GetVehicleInfo()->ID == 244 (Wintergrasp
+		// Tower Cannon). The Go vehicle kit carries the DBC vehicle ID as
+		// VehicleID (vehicle.go:68), stamped from creature_template.VehicleId
+		// at spawn (creaturemotion.go:1372-1374); vehicleID reads it off the
+		// same kit vehicleCreatureEntry uses. isPlayerMounted is nil-safe
+		// and false for non-player targets (commands_misc.go:1685).
+		if source == nil || target == nil {
+			return false
+		}
+		if !target.isPlayerMounted() {
+			return false
+		}
+		id, ok := vehicleID(source)
+		return ok && id == 244
 	}
 	return false
 }
