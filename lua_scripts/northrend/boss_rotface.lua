@@ -141,7 +141,12 @@
 -- (71441,'spell_rotface_unstable_ooze_explosion_suicide_aura') —
 -- the tick-458 explosion-on-69839 framing was wrong (69839 carries
 -- the init's force-cast + the 71441 trigger; the trigger-missile
--- leg lives on 69832). The 3 combine scripts are PORTED
+-- leg lives on 69832). 69839 effect 0 RESOLVED tick 461: 140
+-- FORCE_CAST -> 69840 (Wago SpellEffect 3.4.4 + C++ :662 registers
+-- the init on EFFECT_0 SPELL_EFFECT_FORCE_CAST; the 163 hypothesis
+-- is refuted — 163 is EffectNULL in 3.3.5) — vetoed by the init
+-- leg's PreventHitEffect(0), so 69840 never fires; effect 1 is 64
+-- TRIGGER_SPELL -> 71441, covered by the Go default arm. The 3 combine scripts are PORTED
 -- 2026-11-08 (tick 457) via ev5 RegisterSpellEvent (below): the
 -- buff-combine Talk(EMOTE_UNSTABLE_2..4 0..2) +
 -- Talk(EMOTE_UNSTABLE_EXPLOSION 3) + rotface

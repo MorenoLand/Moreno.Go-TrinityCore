@@ -43,6 +43,8 @@ const (
 	dataFreyaGettingBackToNature       = 1        // boss_freya.cpp:210 DATA_GETTING_BACK_TO_NATURE
 	dataFreyaKnockOnWood               = 2        // boss_freya.cpp:211 DATA_KNOCK_ON_WOOD
 	dataVezaxSmellSaronite             = 31813188 // boss_general_vezax.cpp:98 DATA_SMELL_SARONITE
+	dataVezaxShadowdodger              = 29962997 // boss_general_vezax.cpp:99 DATA_SHADOWDODGER
+	dataFestergutInoculatedStack       = 69291    // boss_festergut.cpp:81 DATA_INOCULATED_STACK
 	dataHeiganSafetyDance              = 19962139 // boss_heigan.cpp:64 DATA_SAFETY_DANCE
 	dataLoathebSporeLoser              = 21822183 // boss_loatheb.cpp:55 DATA_ACHIEVEMENT_SPORE_LOSER
 	dataSartharionTwilightAchievements = 5        // obsidian_sanctum.h:35 TWILIGHT_ACHIEVEMENTS
@@ -458,6 +460,19 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		return bossLatchData(source.server, victim, dataLichKingVileSpiritExplosions) == 0
 
+	case "achievement_flu_shot_shortage": // boss_festergut.cpp:440-450
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_INOCULATED_STACK
+		// 69291) < 3 — the running peak: C++ SetData is max() (:261-264)
+		// and the Lua twin keeps the peak in the boss motion's SetData
+		// store (boss_festergut.lua, blightedSporesRemove). Dormant until
+		// Spell.dbc ships the Gas Spore 69278 -> Blighted Spores 69290
+		// trigger link, so no aura can apply yet and the latch reads 0
+		// (< 3) — matching C++ for a zero-spore fight.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataFestergutInoculatedStack) < 3
+
 	case "achievement_nerf_gravity_bombs": // boss_xt002.cpp:1009-1014
 		// OnCheck: !GetData(DATA_GRAVITY_BOMB_CASUALTY 3) — true
 		// while nobody died to a gravity bomb: the latch starts clear
@@ -625,6 +640,21 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataVezaxSmellSaronite) != 0
+
+	case "achievement_shadowdodger": // boss_general_vezax.cpp:555-573
+		// OnCheck: Vezax->AI()->GetData(DATA_SHADOWDODGER
+		// 29962997) — true from ctor/Reset until a player is hit by
+		// SPELL_SHADOW_CRASH_HIT 62659 (SpellHitTarget :222-226); the
+		// Lua twin keeps it in the boss motion's SetData store
+		// (boss_general_vezax.lua: vezaxReset/vezaxSpawned set, ev15
+		// clear). Dormant until Spell.dbc ships the 62660 -> 62659
+		// trigger link, so in the Go-modeled fight no 62659 hit can
+		// occur and the latch stays 1, matching C++ for a zero-hit
+		// fight — the same dormancy as the LK spell-script legs.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataVezaxShadowdodger) != 0
 
 	case "achievement_safety_dance": // boss_heigan.cpp:259-278
 		// OnCheck: target->ToCreature()->AI()->GetData(DATA_SAFETY_DANCE

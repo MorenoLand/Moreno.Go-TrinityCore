@@ -101,33 +101,27 @@
 -- creature:SetData(DATA_SMELL_SARONITE 31813188, 1) in vezaxReset
 -- (ev23) + vezaxSpawned (ev5, ctor twin) — the
 -- achievement_smell_saronite write leg, cleared by vezaxDoAction.
--- shadowDodger / animusDead / vaporCount stay out (consumed only by
--- the unported GetData / hard-mode machines).
--- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659
--- TYPEID_PLAYER leg -> shadowDodger = false (consumer:
--- achievement_shadowdodger below) — stays out on spell-id-key grounds.
--- Event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) IS bridged
--- (boss_ai.go:2097-2115; the arugal precedent) and the EVENT_SHADOW_CRASH
--- 62660 cast itself IS ported above, but Go fires event 15 with the CAST
--- spellId (62660) while the C++ arm keys on 62659, the triggered
--- sub-spell applied by 62660's effect — keying the arm on 62660 would
--- fire it on casts C++ ignores (a fabrication, not a port). The
--- achievement consumer has no GetData bridge besides.
--- Corrected 2026-10-17 (the old "event 15 never fires" rationale was
--- stale). Re-verified tick 417: Go fires ev15 with the CAST spellId
--- (62660) once per hit target (boss_ai.go:3789-3845,
--- fireCreatureSpellHitTarget); 62659 appears nowhere in the C++ tree
--- outside the spell enum (boss_general_vezax.cpp:56) — it is the
--- DBC-side triggered sub-spell of 62660, and its target set (primary
--- only vs. impact AoE incl. bystanders) is a Spell.dbc fact not in
--- the tree. Keying the clear on 62660 would clear on casts C++
--- ignores and miss bystander-only 62659 hits, so the shadowdodger
--- write leg stays BLOCKED (DB fact missing) and no latch is set.
+-- animusDead / vaporCount stay out (consumed only by the unported
+-- GetData / hard-mode machines).
+-- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659 TYPEID_PLAYER leg
+-- -> shadowDodger = false (consumer: achievement_shadowdodger
+-- below) PORTED tick 461 via RegisterCreatureEvent (15): ev15 fires
+-- once per hit target with the HITTING spell's id (boss_ai.go:4039 /
+-- :4069, fireCreatureSpellHitTarget; arugal precedent), so keying on
+-- 62659 — not the 62660 cast — is exact. The tick-417 block is
+-- retired: it assumed the only keyable id was 62660; the 62659-keyed
+-- leg fires only on real 62659 hits. DORMANT until Spell.dbc ships
+-- the 62660 -> 62659 trigger link: Go's trigger arm routes the
+-- sub-spell through castCreatureSpellInternal (boss_ai.go:6705), whose
+-- hit loop fires ev15 with 62659; nothing casts 62659 today, so the
+-- latch stays 1 until then — the same dormancy as the LK spell-script
+-- legs (ticks 456-460).
 -- achievement_shadowdodger (OnCheck: GetData
 -- (DATA_SHADOWDODGER)); achievement_smell_saronite (OnCheck:
 -- GetData(DATA_SMELL_SARONITE)) — smell_saronite write leg PORTED
 -- tick 417 (vezaxReset / vezaxSpawned / vezaxDoAction); shadowdodger
--- stays in the unmodeled-achievement queue (62659 key, above).
+-- write leg PORTED tick 461 (vezaxReset / vezaxSpawned set, ev15
+-- clear) + Go case in achievement_criteria_scripts.go.
 -- CheckShamanisticRage — PORTED at engage (map-player-scan via
 -- GetPlayersInWorld + map/instance filter -> player:HasSpell
 -- (30823) -> player:CastSpell(player, 68415, false) non-triggered
@@ -199,6 +193,7 @@ local EMOTE_SURGE_OF_DARKNESS = 8
 local SPELL_AURA_OF_DESPAIR = 62692
 local SPELL_SURGE_OF_DARKNESS = 62662
 local SPELL_SHADOW_CRASH = 62660
+local SPELL_SHADOW_CRASH_HIT = 62659 -- boss_general_vezax.cpp:56
 local SPELL_SEARING_FLAMES = 62661
 local SPELL_MARK_OF_THE_FACELESS = 63276
 local SPELL_BERSERK = 26662
@@ -493,25 +488,29 @@ local function vezaxReset(event, creature)
     cancelTimers(creature:GetGUID())
     creature:SetBossState(DATA_VEZAX, 0)
     -- C++ Reset -> Initialize (:110-115, :127-133): smellSaronite =
-    -- true. The achievement_smell_saronite Go gate reads this slot
-    -- off the killed victim's motion
-    -- (achievement_criteria_scripts.go); the clear leg is
-    -- vezaxDoAction below. Alive-gated: ev23 fires on death too
-    -- (fireCreatureDied runs Reset before the kill-credit criteria
-    -- read, kill.go:1091/:1400), and a death-time re-arm would
-    -- clobber the fight's latch before the gate reads it; the
-    -- spawn handler sets the C++ default.
+    -- true, shadowDodger = true. The achievement_smell_saronite /
+    -- achievement_shadowdodger Go gates read these slots off the
+    -- killed victim's motion (achievement_criteria_scripts.go); the
+    -- smellSaronite clear leg is vezaxDoAction below, the
+    -- shadowDodger clear leg is the ev15 SpellHitTarget handler.
+    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
+    -- Reset before the kill-credit criteria read,
+    -- kill.go:1091/:1400), and a death-time re-arm would clobber the
+    -- fight's latch before the gate reads it; the spawn handler
+    -- sets the C++ default.
     if creature:IsAlive() then
         creature:SetData(DATA_SMELL_SARONITE, 1)
+        creature:SetData(DATA_SHADOWDODGER, 1)
     end
 end
 
 -- C++ ctor twin (boss_general_vezax.cpp:110-115): smellSaronite =
--- true. The auriaya spawn-latch precedent: a fresh motion's
--- ScriptData reads 0, so the spawn handler sets the C++ default
--- before any engage can occur.
+-- true, shadowDodger = true. The auriaya spawn-latch precedent: a
+-- fresh motion's ScriptData reads 0, so the spawn handler sets the
+-- C++ default before any engage can occur.
 local function vezaxSpawned(event, creature)
     creature:SetData(DATA_SMELL_SARONITE, 1)
+    creature:SetData(DATA_SHADOWDODGER, 1)
 end
 
 -- C++ DoAction(ACTION_VAPORS_DIE) (boss_general_vezax.cpp:268-270):
@@ -524,9 +523,8 @@ end
 -- summon machine itself is unported — so in the Go-modeled fight no
 -- vapor can die and the latch stays 1, matching C++ for a
 -- zero-vapor-death fight. shadowDodger deliberately has NO write leg
--- here: its clear leg keys on SPELL_SHADOW_CRASH_HIT 62659 (see the
--- SpellHitTarget note above), which Go cannot observe — setting the
--- latch without a clear would award on every kill.
+-- here: its clear leg is the ev15 SpellHitTarget handler below
+-- (SPELL_SHADOW_CRASH_HIT 62659, player-gated).
 local function vezaxDoAction(event, creature, action)
     if action == ACTION_VAPORS_DIE then
         creature:SetData(DATA_SMELL_SARONITE, 0)
@@ -540,6 +538,18 @@ RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 4, vezaxDied)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 5, vezaxSpawned)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 23, vezaxReset)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 38, vezaxDoAction)
+
+-- C++ SpellHitTarget (boss_general_vezax.cpp:222-226): a player hit
+-- by SPELL_SHADOW_CRASH_HIT 62659 clears shadowDodger. PORTED tick
+-- 461 via RegisterCreatureEvent (15); the player gate is the
+-- GetObjectType() == "Player" idiom (maiden/moroes precedent).
+local function vezaxSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_SHADOW_CRASH_HIT and target ~= nil and target:GetObjectType() == "Player" then
+        creature:SetData(DATA_SHADOWDODGER, 0)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 15, vezaxSpellHitTarget)
 
 -- C++ spell_general_vezax_mark_of_the_faceless (boss_general_vezax.cpp:451-485):
 -- OnEffectPeriodic EFFECT_0 PERIODIC_DUMMY — the caster casts

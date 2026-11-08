@@ -83,10 +83,11 @@
 -- boss_moragg optic-link precedent);
 -- spell_festergut_gastric_bloat joins the same queue.
 -- spell_festergut_blighted_spores (AuraScript, cross-AI
--- festergut->AI()->SetData(DATA_INOCULATED_STACK) leg) joins the
--- no-AuraScript-bridge queue. achievement_flu_shot_shortage joins
--- the no-achievement bridge queue (the gunship
--- achievement_im_on_a_boat precedent).
+-- festergut->AI()->SetData(DATA_INOCULATED_STACK) leg) PORTED tick
+-- 461 via RegisterAuraEvent (ev3) below; achievement_flu_shot_shortage
+-- PORTED tick 461 via the Go case in achievement_criteria_scripts.go.
+-- Both dormant until Spell.dbc ships the Gas Spore 69278 ->
+-- Blighted Spores 69290 trigger link.
 -- boss_festergut JustEngagedWith legs —
 -- instance->CheckRequiredBosses / DoCastSpellOnPlayers /
 -- FindNearestCreature(NPC_GAS_DUMMY) stay out (no instance bridge);
@@ -137,6 +138,13 @@ local SPELL_BERSERK2 = 47008
 local SPELL_INHALE_BLIGHT = 69165
 local SPELL_PUNGENT_BLIGHT = 69195
 local SPELL_GAS_SPORE = 69278
+local SPELL_INOCULATED = 69291 -- boss_festergut.cpp:52
+local SPELL_ORANGE_BLIGHT_RESIDUE = 72144 -- icecrown_citadel.h:41
+local DATA_INOCULATED_STACK = 69291 -- boss_festergut.cpp:81
+local QUEST_RESIDUE_RENDEZVOUS_10 = 24873 -- icecrown_citadel.h:521
+local QUEST_RESIDUE_RENDEZVOUS_25 = 24878 -- icecrown_citadel.h:522
+local QUEST_STATUS_INCOMPLETE = 3 -- lua_player.go GetQuestStatus: NONE 0, COMPLETE 1, INCOMPLETE 3
+local BLIGHTED_SPORES_AURAS = { 69290, 71222, 73033, 73034 } -- spell_script_names: spell_festergut_blighted_spores_aura (four raid-mode variants; 69290 verified on Wowhead WotLK, "Triggered by Gas Spore" 69278)
 local SPELL_VILE_GAS = 69240
 local EMOTE_WARN_PUNGENT_BLIGHT = 5
 local EMOTE_PUNGENT_BLIGHT = 6
@@ -495,6 +503,59 @@ end
 -- (13:28 verified map+gates but not the target correspondence): a
 -- self-target strip fabricates a leg the C++ arm never performs.
 -- RemoveAura stays bridged (lua_creature_events.go:157).
+
+-- C++ spell_festergut_blighted_spores::ExtraEffect
+-- (boss_festergut.cpp:403-419): OnEffectRemove EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL — the target
+-- casts SPELL_INOCULATED 69291 on itself, triggered, then
+-- festergut->AI()->SetData(DATA_INOCULATED_STACK 69291,
+-- GetStackAmount()) with max() semantics (:261-264), then
+-- HandleResidue (:421-438): a player without the Orange Blight
+-- Residue aura (72144) whose Residue Rendezvous quest (24873 10-man /
+-- 24878 25-man) is INCOMPLETE casts 72144 on itself, triggered.
+-- PORTED tick 461 via RegisterAuraEvent (3, OnRemove — the mandokir /
+-- vaelastrasz precedent). The C++ festergut lookup rides the instance
+-- guid store; the Lua twin uses the aura's caster — Gas Spore is cast
+-- only by Festergut, so both resolve to the same creature — and the
+-- 25-man quest read rides the caster too (Is25ManRaid is a
+-- creature-only bridge; the map difficulty is the same value C++
+-- reads via GetMap()). The residue leg mirrors the rotface
+-- slime-spray residue handler (quest ids, caster 25-man read,
+-- player CastSpell form). Dormant until Spell.dbc ships the Gas
+-- Spore -> Blighted Spores trigger link: no aura can apply yet, so
+-- the latch reads 0 and the achievement gate stays true, matching
+-- C++ for a zero-spore fight.
+local function blightedSporesRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_INOCULATED, true)
+    local festergut = aura:GetCaster()
+    if festergut ~= nil then
+        local stack = aura:GetStackAmount()
+        if stack > festergut:GetData(DATA_INOCULATED_STACK) then
+            festergut:SetData(DATA_INOCULATED_STACK, stack)
+        end
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    if target:HasAura(SPELL_ORANGE_BLIGHT_RESIDUE) then
+        return
+    end
+    local questId = QUEST_RESIDUE_RENDEZVOUS_10
+    if festergut ~= nil and festergut:Is25ManRaid() then
+        questId = QUEST_RESIDUE_RENDEZVOUS_25
+    end
+    if target:GetQuestStatus(questId) ~= QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    target:CastSpell(target, SPELL_ORANGE_BLIGHT_RESIDUE, true)
+end
+
+for _, auraId in ipairs(BLIGHTED_SPORES_AURAS) do
+    RegisterAuraEvent(auraId, 3, blightedSporesRemove)
+end
 
 RegisterCreatureEvent(ENTRY_FESTERGUT, 1, festergutJustEngagedWith)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 2, festergutLeaveCombat)
