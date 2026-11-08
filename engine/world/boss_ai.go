@@ -7105,6 +7105,15 @@ func (s *Server) creatureEffectCharge(ctx context.Context, m *creatureMotion, hi
 		s.motionMu.Unlock()
 		s.broadcastMonsterMoveStopInInstance(mapID, instanceID, m.GUID, destX, destY, tz, phase, transportGUID)
 		// MoveCharge (MotionMaster.cpp:698) runs a PointMovementGenerator
+		// spline whose arrival finalizes as AI()->MovementInform(
+		// POINT_MOTION_TYPE, EVENT_CHARGE) (PointMovementGenerator.cpp:153-163,
+		// SharedDefines.h:3342: EVENT_CHARGE = 1003). Go snaps instead of
+		// splining, so the inform fires here at the snap — the val'kyr drop
+		// machine (boss_the_lich_king.cpp:1500) rides it, and the other
+		// ev28 handlers in-tree switch on id, so the charge id passes
+		// them through.
+		s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnMovementInform, uint32(movementGeneratorPoint), uint32(1003))
+		// MoveCharge (MotionMaster.cpp:698) runs a PointMovementGenerator
 		// spline, whose ticks land in UpdateSplinePosition ->
 		// UpdatePosition -> CreatureRelocation (Map.cpp:1136), so a
 		// charging vehicle base fans its passengers out like the

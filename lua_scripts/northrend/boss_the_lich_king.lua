@@ -162,7 +162,8 @@
 -- 73501 SPELL_VALKYR_TRANSFORM (:1522, val'kyr MovementInform
 -- POINT_SIPHON), 73488 SPELL_LIFE_SIPHON (:1562, val'kyr
 -- EVENT_LIFE_SIPHON DoCastVictim) — cast by npc_valkyr_shadowguard,
--- not the boss; the grab/life-siphon machine stays unported.
+-- not the boss; the grab/life-siphon machine PORTED 2026-11-08
+-- (valkyrMovementInform ev28 + valkyrDamageTaken ev9 below).
 -- 69382 SPELL_LIGHTS_FAVOR (:1704, terenas DoAction
 -- ACTION_FROSTMOURNE_INTRO) — cast by npc_terenas_menethil on itself;
 -- PORTED 2026-11-08 (terenasDoAction below).
@@ -238,8 +239,8 @@
 -- IS registered (IsSummonedBy ev22 + DoAction ev38, PORTED 2026-11-08
 -- — knock-back + summon-terenas arms; the JUMP SpellScript sender of
 -- ACTION_BREAK_FROSTMOURNE stays unported); the valkyr
--- grab/life-siphon (SpellScript + MovementInform) and bomb UpdateAI
--- machines ride unbridged legs. npc_strangulate_vehicle IS
+-- grab/life-siphon machine PORTED 2026-11-08 (see below) and the bomb
+-- UpdateAI machine rides unbridged legs. npc_strangulate_vehicle IS
 -- registered — IsSummonedBy + UpdateAI timer legs + DoAction
 -- ACTION_TELEPORT_BACK PORTED 2026-11-05 (see below).
 -- The 31 spell/aura legs + the generic spell_trigger_spell_from_caster
@@ -489,6 +490,16 @@ local LK = {
     SPELL_SPIRIT_BURST = 70503, -- :135
     SPELL_DEFILE_GROW = 72756, -- :116
     DATA_VILE = 45814622, -- :370
+    -- Val'kyr drop-machine + quake consts (2026-11-08, tick 448), same
+    -- one-table local: the file sits at 199 main-chunk locals.
+    GO_ARTHAS_PLATFORM = 202161, -- icecrown_citadel.h:431
+    POINT_DROP_PLAYER = 8, -- :323
+    POINT_SIPHON = 14, -- :329
+    POINT_CHARGE = 1003, -- :330
+    SPELL_EJECT_ALL_PASSENGERS = 68576, -- :128
+    SPELL_VALKYR_CARRY = 74445, -- :125
+    SPELL_VALKYR_TRANSFORM = 73501, -- :129
+    SPELL_LIFE_SIPHON = 73488, -- :126
 }
 
 -- Target-select state (2026-11-08, tick 447): the SpellScript _target
@@ -500,6 +511,7 @@ local LK = {
 LK.vileMoveTarget = {}
 LK.valkyrTarget = {}
 LK.valkyrGrabbed = {}
+LK.valkyrDropPoint = {}
 local SPELL_TERENAS_LOSES_INSIDE = 72572 -- boss_the_lich_king.cpp:157
 local SPELL_DESTROY_SOUL = 74086 -- boss_the_lich_king.cpp:154
 local SPELL_RESTORE_SOUL = 72595 -- boss_the_lich_king.cpp:150
@@ -1977,7 +1989,135 @@ RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 4, function(event, creature)
     cancelTimers(guid)
     LK.valkyrGrabbed[guid] = nil
     LK.valkyrTarget[guid] = nil
+    LK.valkyrDropPoint[guid] = nil
 end)
+
+-- C++ npc_valkyr_shadowguard::MovementInform
+-- (boss_the_lich_king.cpp:1486-1534) + DamageTaken (:1464-1477) +
+-- ScheduleHeroicEvents (:1479-1484) + UpdateAI EVENT_MOVE_TO_DROP_POS
+-- (:1558-1560) / EVENT_MOVE_TO_CENTER (:1565-1570) / EVENT_LIFE_SIPHON
+-- (:1561-1564). PORTED 2026-11-08. The POINT_CHARGE arrival rides the
+-- creatureEffectCharge MovementInform bridge (boss_ai.go, tick 448:
+-- the Go charge snaps, so the (POINT_MOTION_TYPE 8, EVENT_CHARGE
+-- 1003) inform fires at the snap).
+-- POINT_CHARGE: if the grabbed player still resolves, strip
+-- NOT_SELECTABLE, take the nearest world trigger (36171) within 150yd
+-- more than 5yd above the Arthas platform (HeightDifferenceCheck,
+-- reverse=true: keep triggerZ - platformZ > 5), cast VALKYR_CARRY
+-- (74445) on the player, stash the trigger as the drop point, and
+-- schedule the drop move 1.5s out; no player -> despawn (the platform
+-- / trigger-miss early returns are C++-exact). GetCreaturesInRange
+-- (range, entry) is the GetCreatureListWithEntryInGrid twin; the
+-- nearest pick is the necrotic-jump sort idiom.
+-- POINT_DROP_PLAYER: EJECT_ALL_PASSENGERS (68576, DoCastAOE twin) +
+-- heroic ScheduleHeroicEvents (reset + MOVE_TO_CENTER 1ms; the
+-- ClearUnitState(UNIT_STATE_EVADE) leg has no bridge) else despawn
+-- 1s. The grab latch clears on the drop: it doubles as the
+-- DamageTaken passenger proxy (the C++ HasAuraType(CONTROL_VEHICLE)
+-- gate), and after the eject there is no passenger.
+-- POINT_SIPHON: VALKYR_TRANSFORM (73501) self-cast +
+-- REACT_AGGRESSIVE + DoZoneInCombat + LIFE_SIPHON (73488,
+-- victim-cast) 2s, repeating every 2.5s; the 73489 heal leg stays
+-- out — its AfterHit BP0 needs hit damage, no Go model.
+-- DamageTaken: heroic-only, while a player is grabbed, pre-damage
+-- health below 50% (the shambling-horror HealthBelowPctDamaged
+-- idiom) -> eject + ScheduleHeroicEvents. The passenger gate rides
+-- the valkyrGrabbed latch, set at pick time (one charge-flight
+-- window early — noted, not fabricated).
+-- Assigned on the LK table, not locals: the file sits at 199
+-- main-chunk locals.
+LK.valkyrMovementInform = function(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == LK.POINT_CHARGE then
+        local target = LK.valkyrTarget[guid]
+        if target == nil then
+            creature:DespawnOrUnsummon(0)
+            return
+        end
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        local platform = creature:FindNearestGameObject(LK.GO_ARTHAS_PLATFORM, 150)
+        if platform == nil then
+            return
+        end
+        local platformZ = platform:GetZ()
+        local triggers = creature:GetCreaturesInRange(150, LK.NPC_WORLD_TRIGGER_INFINITE_AOI)
+        local nearest = nil
+        local nearestDist = nil
+        for _, trigger in ipairs(triggers) do
+            if trigger:GetZ() - platformZ > 5.0 then
+                local dist = creature:GetDistance(trigger)
+                if nearest == nil or dist < nearestDist then
+                    nearest = trigger
+                    nearestDist = dist
+                end
+            end
+        end
+        if nearest == nil then
+            return
+        end
+        creature:CastSpell(target, LK.SPELL_VALKYR_CARRY)
+        LK.valkyrDropPoint[guid] = {x = nearest:GetX(), y = nearest:GetY(), z = nearest:GetZ()}
+        schedule(guid, "valkyrMoveToDrop", 1500, function()
+            local drop = LK.valkyrDropPoint[guid]
+            if drop ~= nil then
+                creature:MoveTo(LK.POINT_DROP_PLAYER, drop.x, drop.y, drop.z)
+            end
+        end)
+    elseif id == LK.POINT_DROP_PLAYER then
+        creature:CastSpell(creature, LK.SPELL_EJECT_ALL_PASSENGERS)
+        LK.valkyrGrabbed[guid] = nil
+        LK.valkyrTarget[guid] = nil
+        LK.valkyrDropPoint[guid] = nil
+        if creature:IsHeroic() then
+            cancelTimers(guid)
+            schedule(guid, "valkyrMoveToCenter", 1, function() LK.onValkyrMoveToCenter(creature, guid) end)
+        else
+            creature:DespawnOrUnsummon(1000)
+        end
+    elseif id == LK.POINT_SIPHON then
+        creature:CastSpell(creature, LK.SPELL_VALKYR_TRANSFORM)
+        creature:SetReactState(REACT_AGGRESSIVE)
+        creature:DoZoneInCombat()
+        schedule(guid, "valkyrLifeSiphon", 2000, function() LK.onValkyrLifeSiphon(creature, guid) end)
+    end
+end
+
+LK.onValkyrMoveToCenter = function(creature, guid)
+    local angle = math.random() * 2 * math.pi
+    local r = math.random() * 4.0
+    local _, _, homeZ = creature:GetHomePosition()
+    creature:MoveTo(LK.POINT_SIPHON, LK.CENTER_X + r * math.cos(angle), LK.CENTER_Y + r * math.sin(angle), homeZ)
+end
+
+LK.onValkyrLifeSiphon = function(creature, guid)
+    creature:CastSpell(nil, LK.SPELL_LIFE_SIPHON)
+    schedule(guid, "valkyrLifeSiphon", 2500, function() LK.onValkyrLifeSiphon(creature, guid) end)
+end
+
+LK.valkyrDamageTaken = function(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    if not creature:IsHeroic() or LK.valkyrGrabbed[guid] == nil then
+        return
+    end
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if (creature:GetHealth() - damage) < math.floor(maxHealth * 50 / 100) then
+        creature:CastSpell(creature, LK.SPELL_EJECT_ALL_PASSENGERS)
+        LK.valkyrGrabbed[guid] = nil
+        LK.valkyrTarget[guid] = nil
+        LK.valkyrDropPoint[guid] = nil
+        cancelTimers(guid)
+        schedule(guid, "valkyrMoveToCenter", 1, function() LK.onValkyrMoveToCenter(creature, guid) end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 28, LK.valkyrMovementInform)
+RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 9, LK.valkyrDamageTaken)
 RegisterCreatureEvent(ENTRY_VILE_SPIRIT, 4, vileSpiritDied)
 
 -- C++ EVENT_FROSTMOURNE_TALK_1 (:1776-1780): Talk(SAY_TERENAS_INTRO_1 0)
@@ -2781,6 +2921,24 @@ end
 
 RegisterAuraEvent(SPELL_SOUL_RIP, 1, soulRipTick)
 
+-- C++ spell_the_lich_king_lights_favor::OnPeriodic + CalculateBonus
+-- (boss_the_lich_king.cpp:2564-2579): EFFECT_0 PERIODIC_HEAL tick ->
+-- EFFECT_1 (MOD_DAMAGE_PERCENT_DONE) RecalculateAmount(caster), and
+-- CalculateBonus sets the amount to the caster's health pct
+-- (canBeRecalculated = true). The Go aura object carries SetAmount
+-- (lua_aura.go, the write side of GetAmount), so the periodic leg
+-- ports as a direct write of effect 1; the creature damage fold
+-- reads MOD_DAMAGE_PERCENT_DONE amounts (creature_auras.go:485), so
+-- the leg is LIVE once the 69382 aura lands (cast ported at :1704).
+-- No PreventDefault: the C++ periodic heal still ticks. Handler is
+-- inline: the file sits at 199 main-chunk locals.
+RegisterAuraEvent(SPELL_LIGHTS_FAVOR, 1, function(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        aura:SetAmount(caster:GetHealthPct(), 1)
+    end
+end)
+
 -- C++ spell_the_lich_king_dark_hunger::HandleProc
 -- (boss_the_lich_king.cpp:2672-2683): OnEffectProc, EFFECT_0 DUMMY.
 -- PreventDefaultAction, then the holder (spirit warden) self-casts
@@ -2834,6 +2992,36 @@ RegisterSpellEvent(LK.SPELL_QUAKE, 4, function(event, spell, effectIndex)
     local caster = spell:GetCaster()
     if caster ~= nil and caster:GetObjectType() == "Creature" then
         caster:DoAction(ACTION_START_ATTACK)
+    end
+end)
+
+-- C++ spell_the_lich_king_quake::FilterTargets
+-- (boss_the_lich_king.cpp:2180-2184): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENTRY -> drop targets more than 5yd
+-- above the Arthas platform (HeightDifferenceCheck, reverse=false:
+-- remove when unitZ - platformZ > 5). The platform GO rides
+-- FindNearestGameObject(GO_ARTHAS_PLATFORM 202161) — the instance
+-- GetGuidData(DATA_ARTHAS_PLATFORM 38) GUID has no Lua fetch, and the
+-- GO object carries its Z via the object.go GetZ fallback. Handler is
+-- inline: the file sits at 199 main-chunk locals. DORMANT until
+-- Spell.dbc ships: the 72262 cast is DBC-gated.
+RegisterSpellEvent(LK.SPELL_QUAKE, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local platform = caster:FindNearestGameObject(LK.GO_ARTHAS_PLATFORM, 150)
+    if platform == nil then
+        return
+    end
+    local platformZ = platform:GetZ()
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetZ() - platformZ > 5.0 then
+            targets:Remove(target)
+        end
     end
 end)
 
