@@ -39,13 +39,11 @@
 -- Unmodeled (documented-only, no bridges):
 -- - CheckAchievementCriteriaMeet (instance_vault_of_archavon.cpp:
 --   85-110, criteria 12018/12019 Earth, Wind & Fire — all three deaths
---   within 60s of each other): the Go criteria pipeline has no
---   criteriaDataTypeInstanceScript (18) case
---   (engine/world/achievements.go meetsCriteriaRequirementsWithTarget)
---   and no spell-cast criteria trigger, so the 68308 cast is inert
---   until the pipeline grows a type-18 dispatch; the death times are
---   banked in instanceData.archavonDeath / emalonDeath / koralonDeath
---   for it. The achievement can neither fire nor mis-fire today.
+--   within 60s of each other): PORTED this tick as the Go type-18
+--   dispatch (engine/world/achievement_criteria_scripts.go
+--   checkVaultOfArchavonCriteria), reading the death times banked in
+--   instanceData.archavonDeath / emalonDeath / koralonDeath by the
+--   three boss onDied handlers.
 -- - SetHeaders(DataHeader "VA") / SetBossNumber(EncounterCount 4) /
 --   LoadObjectData: no bridges; the boss-state store is written via
 --   creature:SetBossState (lua_creature_events.go:5908) and read via

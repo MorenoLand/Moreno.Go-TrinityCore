@@ -12,8 +12,14 @@
 -- Shared instanceData keys (one table per (map, instance)):
 -- onyxia — the creature object bound by ON_CREATURE_CREATE (the C++
 -- OnCreatureCreate GUID latch, :67-76); manyWhelpsCounter — the
--- whelp-spawner hatch count (C++ :92, :163, :210; mirror only, the
--- achievement consumer has no bridge, see below).
+-- whelp-spawner hatch count (C++ :92, :163, :210); manyWhelpsHandleIt
+-- (1/0) — the Many Whelps latch, set by the Update pump below;
+-- sheDeepBreathMore (1/0, default 1) — the Deep Breath latch, cleared
+-- by the boss ev15 SpellHitTarget leg; onyxiaLiftoffTimer (ms) — the
+-- 10s liftoff countdown, set by the boss phase-2 leg. The two latches
+-- are read as numbers by the Go type-18 dispatch
+-- (engine/world/achievement_criteria_scripts.go
+-- checkOnyxiasLairCriteria, criteria 12565/12566/12568/12569).
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate (:67-76): NPC_ONYXIA (10184) binds
 --   instanceData.onyxia. The C++ GetGuidData override (:192-201)
@@ -55,10 +61,14 @@
 --   Do NOT "port" the secondary write — Go's setInstanceBossState
 --   takes any boss id (instance_boss_states.go), so writing id 1
 --   would fabricate state C++ never has.
--- - SetData (:155-177) / Load / Update liftoff timer (:203-213) /
---   CheckAchievementCriteriaMeet (:244-257): no instance SetData
---   bridge (closed axis, hyjal header settles it) and no achievement
---   bridge; the manyWhelpsCounter mirror above has no consumer.
+-- - SetData (:155-177): no instance SetData bridge (closed axis,
+--   hyjal header settles it) — the boss file writes the SetData legs
+--   straight into this shared table instead (the VoA precedent:
+--   boss_onyxia.lua enterPhase2 writes the PHASE_BREATH reset leg,
+--   the boss ev15 leg writes the SHE_DEEP_BREATH_MORE FAIL leg). The
+--   Update liftoff timer (:203-213) IS ported below
+--   (INSTANCE_EVENT_ON_UPDATE pump) and CheckAchievementCriteriaMeet
+--   (:244-257) IS the Go type-18 dispatch (checkOnyxiasLairCriteria).
 -- - Boss boundaries (CircleBoundary around DATA_ONYXIA,
 --   instance_onyxias_lair.cpp:29-32): no boundary bridge.
 -- - The boss-state writes themselves live in the boss file:
@@ -69,7 +79,10 @@
 local MAP_ONYXIAS_LAIR = 249
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 local INSTANCE_EVENT_ON_GAMEOBJECT_CREATE = 6
+local INSTANCE_EVENT_ON_UPDATE = 3
 
+local DATA_ONYXIA = 0 -- onyxias_lair.h:28
+local BOSS_STATE_IN_PROGRESS = 1
 local NPC_ONYXIA = 10184 -- onyxias_lair.h:62
 local NPC_WHELP = 11262 -- onyxias_lair.h:60
 local GO_WHELP_SPAWNER = 176510 -- onyxias_lair.h:66
@@ -93,5 +106,36 @@ RegisterMapEvent(MAP_ONYXIAS_LAIR, INSTANCE_EVENT_ON_GAMEOBJECT_CREATE, function
     if summoned then
         summoned:DoZoneInCombat()
         instanceData.manyWhelpsCounter = (instanceData.manyWhelpsCounter or 0) + 1
+    end
+end)
+
+-- C++ Update liftoff leg (instance_onyxias_lair.cpp:203-213): while
+-- the boss is IN_PROGRESS the 10s liftoff timer counts down, and on
+-- expiry the Many Whelps latch sets when 50+ eggs hatched in the
+-- window. The timer is armed by the boss phase-2 leg (boss_onyxia.lua
+-- enterPhase2, the SetData(DATA_ONYXIA_PHASE, PHASE_BREATH) twin)
+-- and frozen while the boss is not IN_PROGRESS — the onyxia bind
+-- carries the GetBossState read (creature:GetBossState,
+-- lua_creature_events.go:5932); an unbound fight runs the timer
+-- ungated. C++ quirk NOT replicated: a spent (0) timer underflows
+-- its uint32 on the next tick (else-branch `timer -= diff` with
+-- timer == 0) and counts down from ~2^32 ms — behaviorally inert,
+-- since the latch is only evaluated in the expiry branch, which
+-- never re-fires; the Lua pump returns early on a spent timer
+-- instead. (event, instanceData, mapObj, diff) is the naxxramas
+-- pump signature; diff is the world-tick delta in ms.
+RegisterMapEvent(MAP_ONYXIAS_LAIR, INSTANCE_EVENT_ON_UPDATE, function(event, instanceData, mapObj, diff)
+    local timer = instanceData.onyxiaLiftoffTimer
+    if not timer or timer <= 0 then
+        return
+    end
+    local onyxia = instanceData.onyxia
+    if onyxia and onyxia:GetBossState(DATA_ONYXIA) ~= BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    timer = timer - diff
+    instanceData.onyxiaLiftoffTimer = timer
+    if timer <= 0 and (instanceData.manyWhelpsCounter or 0) >= 50 then
+        instanceData.manyWhelpsHandleIt = 1
     end
 end)

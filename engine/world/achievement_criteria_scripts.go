@@ -1,5 +1,7 @@
 package world
 
+import "math"
+
 // Achievement criteria scripts mirroring TrinityCore
 // src/server/scripts/World/achievement_scripts.cpp (AddSC_achievement_scripts).
 //
@@ -361,8 +363,12 @@ func (s *session) checkInstanceAchievementCriteria(criteriaID uint32) bool {
 		return false
 	}
 	switch s.player.Map {
+	case 624: // Vault of Archavon
+		return checkVaultOfArchavonCriteria(s, criteriaID)
 	case 649: // Trial of the Crusader
 		return checkTrialOfTheCrusaderCriteria(s, criteriaID)
+	case 249: // Onyxia's Lair
+		return checkOnyxiasLairCriteria(s, criteriaID)
 	default:
 		return false
 	}
@@ -408,6 +414,74 @@ func checkTrialOfTheCrusaderCriteria(s *session, criteriaID uint32) bool {
 		return false
 	case 12360: // A_TRIBUTE_TO_DEDICATED_INSANITY: C++ returns false (:652)
 		return false
+	default:
+		return false
+	}
+}
+
+// checkVaultOfArchavonCriteria mirrors
+// instance_vault_of_archavon_InstanceMapScript::
+// CheckAchievementCriteriaMeet (instance_vault_of_archavon.cpp:86-105).
+// The death timestamps live in the Lua shared instanceData table
+// (boss_archavon.lua / boss_emalon.lua / boss_koralon.lua write
+// os.time() seconds into archavonDeath / emalonDeath / koralonDeath
+// at DONE time, the GameTime::GetGameTime twin); absent fields read
+// as the C++ member default 0. Criteria IDs are the
+// VAAchievementCriteriaIds enum (vault_of_archavon.h:44-48); the
+// 10/25-player split is encoded in the criteria ID itself, so no
+// raid-size check is needed here.
+func checkVaultOfArchavonCriteria(s *session, criteriaID uint32) bool {
+	rt := s.server.Features.Scripts
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	num := func(key string, def float64) float64 {
+		if v, ok := rt.InstanceDataNumber(mapID, instanceID, key); ok {
+			return v
+		}
+		return def
+	}
+	switch criteriaID {
+	case 12018, 12019: // CRITERIA_EARTH_WIND_FIRE_10 / _25
+		archavon := num("archavonDeath", 0)
+		emalon := num("emalonDeath", 0)
+		koralon := num("koralonDeath", 0)
+		if archavon == 0 || emalon == 0 || koralon == 0 {
+			return false
+		}
+		// C++ :97-101: all three pairwise |diffs| < MINUTE (60s).
+		return math.Abs(archavon-emalon) < 60 &&
+			math.Abs(emalon-koralon) < 60 &&
+			math.Abs(koralon-archavon) < 60
+	default:
+		return false
+	}
+}
+
+// checkOnyxiasLairCriteria mirrors
+// instance_onyxias_lair_InstanceMapScript::
+// CheckAchievementCriteriaMeet (instance_onyxias_lair.cpp:244-257).
+// Both latches live in the Lua shared instanceData table as 1/0
+// numbers (InstanceDataNumber reads numbers only): manyWhelpsHandleIt
+// (set by the instance Update liftoff pump, instance_onyxias_lair.lua)
+// and sheDeepBreathMore (cleared by the boss ev15 SpellHitTarget leg,
+// boss_onyxia.lua). Absent fields read as the C++ member defaults
+// (false for the whelps latch, true for the deep-breath latch,
+// instance :66-70). Criteria IDs are the OLAchievementData enum
+// (onyxias_lair.h:71-76); the 10/25-player split is encoded in the
+// criteria ID itself.
+func checkOnyxiasLairCriteria(s *session, criteriaID uint32) bool {
+	rt := s.server.Features.Scripts
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	num := func(key string, def float64) float64 {
+		if v, ok := rt.InstanceDataNumber(mapID, instanceID, key); ok {
+			return v
+		}
+		return def
+	}
+	switch criteriaID {
+	case 12565, 12568: // ACHIEV_CRITERIA_MANY_WHELPS_10/25_PLAYER
+		return num("manyWhelpsHandleIt", 0) >= 1
+	case 12566, 12569: // ACHIEV_CRITERIA_DEEP_BREATH_10/25_PLAYER
+		return num("sheDeepBreathMore", 1) >= 1
 	default:
 		return false
 	}

@@ -95,18 +95,23 @@
 -- - SpellHit (breath-direction redirect, ev14 live) stays out on the
 --   flight machine (MovePoint-8 redirect, no motion bridge).
 --   SpellHitTarget (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL)
---   on player eruption-spell hits) is dead in C++: eruption spells
---   are cast by floor-eruption gameobjects (instance_onyxias_lair.cpp
---   FloorEruption), never by onyxia, so onyxia's caster-side ev15
---   arm never fires — not an instance-bridge gap.
+--   on player breath-spell hits) IS ported (onyxiaSpellHitTarget,
+--   ev15): the ranges are Onyxia's own SPELL_BREATH_* direction
+--   arrays, cast by her (DoCast(me, spellId), EVENT_DEEP_BREATH), so
+--   the caster-side arm is live. The old "dead in C++" note is
+--   retracted — the eruption spells the floor GOs cast are the 17731
+--   trap, never these IDs.
 -- - Initialize / Reset legs: SetCombatMovement(true) (:154-155) and
 --   the _Reset() SetBossState(DATA_ONYXIA, NOT_STARTED) leg (:157,
 --   BossAI::_Reset ScriptedCreature.cpp:499-511 — alive-gated and
 --   != DONE-gated) are PORTED in onReset (bridges live,
---   lua_creature_events.go:4070/5917); instance SetData
---   (DATA_ONYXIA_PHASE) + DoStartTimedAchievement /
---   DoStopTimedAchievement ACHIEV_TIMED_START_EVENT 6601 stay out
---   (no instance / achievement bridges). The unconditional
+--   lua_creature_events.go:4070/5917); the instance SetData
+--   (DATA_ONYXIA_PHASE, PHASE_BREATH) leg is PORTED at the phase-2
+--   latch (enterPhase2, shared-table write — the Reset call is a
+--   C++ no-op, SetData only acts on PHASE_BREATH); the
+--   DoStartTimedAchievement / DoStopTimedAchievement
+--   ACHIEV_TIMED_START_EVENT 6601 legs stay out (no creature
+--   timed-achievement bridge). The unconditional
 --   SetReactState(REACT_AGGRESSIVE) leg (:158) IS ported in onReset,
 --   and Reset re-rolls MovePoint = urand(0, 5) for the deep-breath row.
 --   No JustDied override exists in C++ — but base BossAI::JustDied
@@ -126,12 +131,13 @@
 --   SetBossState override, liftoff / whelp-counter / eruption Update,
 --   both achievement criteria checks) — the bridgeable binds live in
 --   lua_scripts/kalimdor/instance_onyxias_lair.lua (OnCreatureCreate
---   onyxia bind + whelp-spawner GO leg); the SetBossState override is
---   a dead no-op in C++ (it re-calls SetBossState(1, IN_PROGRESS) and
---   EncounterCount = 1, so id 1 >= bosses.size() 1 — InstanceScript::
---   SetBossState returns false, InstanceScript.cpp); the floor-trap /
---   eruption / Update / achievement legs have no bridges, DOCUMENTED
---   in that file, not wired here.
+--   onyxia bind + whelp-spawner GO leg + the Update liftoff pump and
+--   both achievement latches, ported this tick); the SetBossState
+--   override is a dead no-op in C++ (it re-calls SetBossState(1,
+--   IN_PROGRESS) and EncounterCount = 1, so id 1 >= bosses.size() 1 —
+--   InstanceScript::SetBossState returns false, InstanceScript.cpp);
+--   the floor-trap / eruption legs have no bridges, DOCUMENTED in
+--   that file, not wired here.
 
 local ENTRY = 10184
 
@@ -476,8 +482,11 @@ end
 -- travel; the Lua model has no travel leg, so the Talk lands at
 -- the latch), phase-1 timers cancelled (C++ consumes them as
 -- no-ops in the BREATH branch), phase-2 timers seeded at their
--- C++ takeoff values. MovePoint-10/11 travel, the trigger summon
--- and facing, and instance SetData(DATA_ONYXIA_PHASE) stay out.
+-- C++ takeoff values. The instance SetData(DATA_ONYXIA_PHASE,
+-- PHASE_BREATH) leg IS ported at this latch (the liftoff reset:
+-- latch false, counter 0, timer 10000 — the Lua model has no
+-- MovePoint-10 travel leg, so the latch is the arrival twin);
+-- MovePoint-10/11 travel, the trigger summon and facing stay out.
 local function enterPhase2(creature, guid)
     local st = stateFor(guid)
     st.phase2 = true
@@ -491,6 +500,21 @@ local function enterPhase2(creature, guid)
     creature:SetCanFly(true)
     creature:SetDisableGravity(true)
     creature:Talk(SAY_PHASE_2_TRANS)
+    -- C++ MovementInform-10 SetData(DATA_ONYXIA_PHASE, PHASE_BREATH)
+    -- (instance_onyxias_lair.cpp:163-168): the whelp latch clears,
+    -- the hatch counter resets, the 10s liftoff timer starts. The
+    -- instance Update pump consumes the timer
+    -- (instance_onyxias_lair.lua); the shared-table write is the VoA
+    -- precedent (no instance SetData bridge).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.manyWhelpsHandleIt = 0
+            data.manyWhelpsCounter = 0
+            data.onyxiaLiftoffTimer = 10000
+        end
+    end
     schedule(guid, "whelpspawn", 5000, function()
         onWhelpSpawn(creature, guid)
     end)
@@ -616,8 +640,10 @@ local function onReset(event, creature)
     clearState(guid)
     -- C++ boss_onyxiaAI::Reset (boss_onyxia.cpp:150-160): Initialize() +
     -- SetCombatMovement(true) + _Reset() + SetReactState(REACT_AGGRESSIVE)
-    -- (:158) + instance DATA_ONYXIA_PHASE / achievement legs (no
-    -- instance / achievement bridges). The react leg restores
+    -- (:158) + the instance SetData(DATA_ONYXIA_PHASE, PHASE_START) call
+    -- (:159), a no-op in C++ (SetData only acts on PHASE_BREATH), and
+    -- the DoStopTimedAchievement(6601) leg, which stays out (no
+    -- creature timed-achievement bridge). The react leg restores
     -- AGGRESSIVE after the phase-2 PASSIVE latch (or is vacuous
     -- before any phase transition).
     -- Initialize() also re-rolls MovePoint = urand(0, 5) for the
@@ -649,6 +675,42 @@ local function onDied(event, creature, killer)
     creature:SetBossState(DATA_ONYXIA, BOSS_STATE_DONE)
 end
 
+-- C++ SpellHitTarget (boss_onyxia.cpp:276-294): a breath spell
+-- hitting a player fails the She Deep Breaths More latch
+-- (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL)). The ranges
+-- are the SPELL_BREATH_* direction arrays (17086 N->S, 18351 S->N,
+-- 18576 E->W, 18609 W->E, 18564 SE->NW, 18584 NW->SE, 18596 SW->NE,
+-- 18617 NE->SW, boss_onyxia.cpp:56-79) plus their array variants;
+-- Onyxia casts them herself (DoCast(me, spellId), EVENT_DEEP_BREATH
+-- :420-428), so the caster-side ev15 arm is live. The latch lives in
+-- the shared instanceData table (1/0; default 1 = C++ ctor true)
+-- for the Go type-18 dispatch (checkOnyxiasLairCriteria); it is
+-- never set back — C++ has no live writer for the IN_PROGRESS arm
+-- (the SetBossState override re-call is a dead no-op, instance
+-- header settles it).
+local function onyxiaSpellHitTarget(event, creature, target, spellId)
+    if not target or target:GetTypeId() ~= 4 then -- TYPEID_PLAYER
+        return
+    end
+    if (spellId >= 17086 and spellId <= 17095) or spellId == 17097 or
+        (spellId >= 18351 and spellId <= 18361) or
+        (spellId >= 18564 and spellId <= 18576) or
+        (spellId >= 18578 and spellId <= 18607) or spellId == 18609 or
+        (spellId >= 18611 and spellId <= 18628) or
+        (spellId >= 21132 and spellId <= 21133) or
+        (spellId >= 21135 and spellId <= 21139) or
+        (spellId >= 22191 and spellId <= 22202) or
+        (spellId >= 22267 and spellId <= 22268) then
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data.sheDeepBreathMore = 0
+            end
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
@@ -656,4 +718,5 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
+RegisterCreatureEvent(ENTRY, 15, onyxiaSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 23, onReset)
