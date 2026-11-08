@@ -58,17 +58,24 @@
 -- C++ arm order)); KilledUnit Talk(SAY_KILL_PLAYER 6)
 -- player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
 -- precedent); JustDied Talk(SAY_DEATH 8) (event 4) + the sister-gated
--- lootable legs (boss_twin_valkyr.cpp:238-262) — PORTED via the
+-- lootable legs (boss_twin_valkyr.cpp:237-259) — PORTED via the
 -- creature:SetFlag(79)/RemoveFlag(79) dynamic-flag bridge
--- (lua_creature_events.go): a sister-alive death clears LOOTABLE on me
+-- (lua_creature_events.go, luaMotionCreature): a sister-alive death clears LOOTABLE on me
 -- (Go's lethal path had already set it); a both-dead death sets it on
 -- me (redundant with the lethal path) and on the sister via
 -- GetCreaturesInGrid (150y — same arena; no cross-creature GUID
--- bridge). The instance SetBossState DONE/SPECIAL legs have no
--- bridge (documented); HandleRemoveAuras() is PORTED via
+-- bridge). The instance SetBossState DONE/SPECIAL legs are PORTED via
+-- creature:SetBossState (lua_creature_events.go:6155, luaMotionCreature;
+-- DATA_TWIN_VALKIRIES=3, DONE 3 / SPECIAL 4 — the stale "no bridge"
+-- claim is retracted, verified 2026-11-07); HandleRemoveAuras() is PORTED via
 -- stripHelperAuras (GetPlayersInWorld + mapId/instanceId filter +
 -- player:RemoveAura — the moroes precedent); summons.DespawnAll()
--- is a no-op (documented);
+-- is PORTED via despawnController (the bullet-controller model; Eydis
+-- summons nothing, so a no-op for her). HandleRemoveAuras()'s
+-- OrbsDespawner leg (:234 — 100ms-delayed despawn of NPC_BULLET_DARK /
+-- NPC_BULLET_LIGHT orbs) stays out: orbs only spawn via the unported
+-- spell_bullet_controller AuraScript, so no orb creatures exist in the
+-- Lua model (unblocker: AuraScript binding bridge + orb summon machine);
 -- EVENT_TWIN_SPIKE — DoCastVictim(Light Twin Spike 66075
 -- / Dark Twin Spike 66069), 20s init, 20s repeat (moroes precedent;
 -- C++ UpdateAI runs combat events whenever UpdateVictim() holds —
@@ -182,7 +189,7 @@ local ENTRY_EYDIS = 34496
 local NPC_BULLET_CONTROLLER = 34743
 local controllers = {}
 
--- C++ JustDied (:238-262) ends with the unconditional
+-- C++ JustDied (:237-259) ends with the unconditional
 -- summons.DespawnAll(): Fjola's list holds the bullet controller
 -- summoned on engage (boss_twin_baseAI latch); Eydis summons
 -- nothing, so this is a no-op for her. BossAI Reset (:499-507)
@@ -530,7 +537,7 @@ end
 local function died(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
-    -- C++ JustDied (boss_twin_valkyr.cpp:238-262): Talk(SAY_DEATH), then
+    -- C++ JustDied (boss_twin_valkyr.cpp:237-259): Talk(SAY_DEATH), then
     -- the sister-gated lootable legs, in C++ order.
     local sisterEntry = creature:GetEntry() == ENTRY_FJOLA and ENTRY_EYDIS or ENTRY_FJOLA
     local sister = nil

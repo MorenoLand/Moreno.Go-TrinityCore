@@ -21,7 +21,7 @@
 -- :580, :732, :893, :1019): instance->SetBossState(BOSS_GRAND_CHAMPIONS,
 -- DONE). BOSS_GRAND_CHAMPIONS = 0 (trial_of_the_champion.h TCData),
 -- DONE = 3 (InstanceScript.h EncounterState). Bridged via
--- creature:SetBossState (engine/world/lua_creature_events.go:6088).
+-- creature:SetBossState (engine/world/lua_creature_events.go:6155).
 -- C++-exact note: the instance override
 -- (instance_trial_of_the_champion.cpp SetBossState BOSS_GRAND_CHAMPIONS
 -- DONE) increments uiGrandChampionsDeaths and spawns the loot chest at

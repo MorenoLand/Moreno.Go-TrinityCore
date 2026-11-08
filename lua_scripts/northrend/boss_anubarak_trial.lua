@@ -33,9 +33,15 @@
 -- the BossAI::JustEngagedWith instance-bookkeeping leg has no
 -- bridge — tharon_ja precedent); KilledUnit Talk(SAY_KILL_PLAYER
 -- 7) player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER —
--- nalorakk precedent); JustDied Talk(SAY_DEATH 8) (event 4;
--- _JustDied instance bookkeeping has no bridge — tharon_ja
--- precedent); EVENT_BERSERK — DoCastSelf(Berserk 26662), 600s,
+-- nalorakk precedent); JustDied Talk(SAY_DEATH 8) (event 4) +
+-- _JustDied (BossAI, ScriptedCreature.cpp:513-520): SetBossState(
+-- DATA_ANUBARAK 5, DONE 3) PORTED tick 405 U2 via creature:SetBossState
+-- (lua_creature_events.go:6146; anomalus/algalon precedent — the old
+-- "no bridge — tharon_ja precedent" claim was stale), events.Reset() /
+-- scheduler.CancelAll() as cancelTimers, and summons.DespawnAll()
+-- PORTED tick 405 U2 as GetCreaturesInGrid sweeps (baltharus/faerlina
+-- precedent) for burrows / spikes / scarabs (frost spheres via the
+-- explicit leg below); EVENT_BERSERK — DoCastSelf(Berserk 26662), 600s,
 -- phase-independent (fires once, 10min after combat start —
 -- phase_hunter self-cast precedent), 500ms IsCasting defer while
 -- casting (own UpdateAI pre-loop + in-loop gates, mal_ganis
@@ -155,7 +161,9 @@
 -- and burrowers — PORTED via the GetCreaturesInGrid bridge
 -- (engine/world/lua_creature_events.go); creature:Despawn() was
 -- already bridged (the old "no despawn bridge (terestian
--- precedent)" claim was stale).
+-- precedent)" claim was stale). The _JustDied summons.DespawnAll()
+-- legs (burrows / spikes / scarabs) are PORTED tick 405 U2 in
+-- anubarakDied as grid sweeps, same bridges.
 -- boss_anubarak_trial Reset's grid despawn of frost spheres (150yd)
 -- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE) — PORTED (same
 -- bridges); the Reset timer arms stay phase-gated (see below).
@@ -251,6 +259,8 @@ local SAY_DEATH = 8
 local SPELL_BERSERK = 26662
 local SPELL_LEECHING_SWARM = 66118 -- boss_anubarak_trial.cpp:62
 local SPELL_TRAITOR_KING = 68186
+local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local timers = {}
 local anubarakState = {}
@@ -346,6 +356,30 @@ end
 
 local function anubarakDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ JustDied (boss_anubarak_trial.cpp:235-237): _JustDied()
+    -- (BossAI, ScriptedCreature.cpp:513-520) — events.Reset() +
+    -- scheduler.CancelAll() are the cancelTimers above; SetBossState(
+    -- DATA_ANUBARAK 5, DONE 3) PORTED this run via the SetBossState
+    -- bridge (the old "no bridge — tharon_ja precedent" claim was
+    -- stale); summons.DespawnAll() PORTED this run as grid sweeps
+    -- (baltharus/faerlina precedent): burrows (34862) + spikes
+    -- (34660) + scarabs (34605) within 150yd — the frost-sphere share
+    -- is subsumed by the explicit leg below. Scarab note: only the
+    -- neutral JustReachedHome scarabs sit in Anubarak's summons list;
+    -- combat scarabs (burrow-summoned) die in C++ via their own
+    -- UpdateAI DisappearAndDie once the state leaves IN_PROGRESS, so
+    -- the sweep converges to the same end state (that UpdateAI leg
+    -- stays unported).
+    creature:SetBossState(DATA_ANUBARAK, BOSS_STATE_DONE)
+    for _, burrow in ipairs(creature:GetCreaturesInGrid(NPC_BURROW, 150)) do
+        burrow:Despawn()
+    end
+    for _, spike in ipairs(creature:GetCreaturesInGrid(ENTRY_SPIKE, 150)) do
+        spike:Despawn()
+    end
+    for _, scarab in ipairs(creature:GetCreaturesInGrid(ENTRY_SWARM_SCARAB, 150)) do
+        scarab:Despawn()
+    end
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_anubarak_trial.cpp:238-246): despawn
     -- leftover frost spheres and burrowers within 150yd via the

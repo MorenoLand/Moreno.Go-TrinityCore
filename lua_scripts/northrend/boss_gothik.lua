@@ -117,30 +117,37 @@
 -- anchor machine downstream stays out (no spawn-ID bridge).
 -- npc_gothik_minion_livingtrainee (16124): DoCastAOE(SPELL_DEATH_
 -- PLAGUE 55604) 2-arg (non-triggered), urandms(5,20)=5-20s
--- init/repeat — stays OUT: entry-blocked (same local-enum bar; the
--- Oct-12 "no DoCastAOE bridge" claim is superseded).
+-- init/repeat — PORTED tick 405 below (ev1 arming, dormant until
+-- the EVENT_SUMMON wave machine lands; the entry bar is retracted,
+-- same as the tick-404 death anchors).
 -- npc_gothik_minion_livingknight (16125): DoCastAOE(SPELL_SHADOW_MARK
 -- 27825) 2-arg (non-triggered), urandms(5,10)=5-10s init,
--- urandms(15,20)=15-20s repeat — stays OUT: entry-blocked.
+-- urandms(15,20)=15-20s repeat — PORTED tick 405 below (ev1 arming,
+-- dormant; entry bar retracted).
 -- npc_gothik_minion_livingrider (16126): DoCastAOE(SPELL_SHADOW_BOLT_
 -- VOLLEY 27831) 2-arg (non-triggered), urandms(5,10)=5-10s init,
--- urandms(10,15)=10-15s repeat — stays OUT: entry-blocked.
+-- urandms(10,15)=10-15s repeat — PORTED tick 405 below (ev1 arming,
+-- dormant; entry bar retracted).
 -- npc_gothik_minion_spectraltrainee (16127): DoCastAOE(SPELL_ARCANE_
--- EXPLOSION 27989) 2-arg (non-triggered), 2s init/repeat — stays OUT:
--- entry-blocked.
+-- EXPLOSION 27989) 2-arg (non-triggered), 2s init/repeat — PORTED
+-- tick 405 below (ev1 arming, dormant; entry bar retracted — the
+-- same dormant class as the living kits, same strip).
 -- npc_gothik_minion_spectralknight (16148): DoCastAOE(SPELL_WHIRLWIND
 -- 56408) 2-arg (non-triggered), urandms(15,25)=15-25s init,
--- urandms(20,25)=20-25s repeat — stays OUT: entry-blocked.
+-- urandms(20,25)=20-25s repeat — PORTED tick 405 below (ev1 arming,
+-- dormant; entry bar retracted).
 -- npc_gothik_minion_spectralrider (16150): Unholy Frenzy (55648/
 -- RAID_MODE 27995) priority cast on a friendly knight > rider > horse
--- > Gothik without the buff (DoFindFriendlyMissingBuff) — no
--- targeted-friendly-cast bridge; DoCastVictim(SPELL_DRAIN_LIFE 27994),
--- urandms(8,12) = 8-12s init, urandms(10,15) = 10-15s repeat —
--- moroes-ready in isolation but entry-blocked — joins the
--- bridgeable-but-entry-blocked queue.
+-- > Gothik without the buff (DoFindFriendlyMissingBuff) — PORTED
+-- tick 405 below via GetFriendlyUnitsInRange + HasAura (the
+-- DoFindFriendlyMissingBuff twin); DoCastVictim(SPELL_DRAIN_LIFE
+-- 27994), urandms(8,12) = 8-12s init, urandms(10,15) = 10-15s
+-- repeat — PORTED tick 405 below (ev1 arming, dormant; entry bar
+-- retracted).
 -- npc_gothik_minion_spectralhorse (16149): DoCastAOE(SPELL_STOMP
 -- 27993) 2-arg (non-triggered), urandms(10,15)=10-15s init,
--- urandms(14,18)=14-18s repeat — stays OUT: entry-blocked.
+-- urandms(14,18)=14-18s repeat — PORTED tick 405 below (ev1 arming,
+-- dormant; entry bar retracted).
 -- npc_gothik_trigger (16137): SpellHit anchor machine (ANCHOR_1_x ->
 -- ANCHOR_2_x -> SKULLS_x -> DoSummon) — event 14 fires but the arm
 -- roots at the ANCHOR_2_x skull-pile selection via CGUID_TRIGGER +
@@ -418,16 +425,305 @@ local SPELL_ANCHOR_1_RIDER = 27935 -- boss_gothik.cpp:76
 
 local function livingTraineeDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_TRAINEE, true)
+    cancelTimers(creature:GetGUID())
 end
 
 local function livingKnightDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_DK, true)
+    cancelTimers(creature:GetGUID())
 end
 
 local function livingRiderDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_RIDER, true)
+    cancelTimers(creature:GetGUID())
 end
 
 RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 4, livingTraineeDied)
 RegisterCreatureEvent(ENTRY_LIVE_KNIGHT, 4, livingKnightDied)
 RegisterCreatureEvent(ENTRY_LIVE_RIDER, 4, livingRiderDied)
+
+-- C++ minion timer arms (tick 405): the tick-404 entry bar is
+-- retracted for the timer legs too — the entries are in the C++
+-- enum (boss_gothik.cpp:94-100) and RegisterCreatureEvent needs no
+-- boss_ai.go entry (palehoof-minion precedent). All seven kits arm
+-- on ev1: the minion base UpdateAI only runs _UpdateAI while the
+-- minion has a victim (boss_gothik.cpp:619-624), so ev1 arming is
+-- the C++-exact vehicle (palehoof-minion precedent); the 500ms
+-- IsCasting defer is the timer-arm convention (palehoof miniboss
+-- arms). Dormant until the EVENT_SUMMON wave machine lands (same
+-- dormant class as the tick-404 death anchors above).
+local SPELL_DEATH_PLAGUE = 55604
+local SPELL_SHADOW_MARK = 27825
+local SPELL_SHADOW_BOLT_VOLLEY = 27831
+local SPELL_ARCANE_EXPLOSION = 27989
+local SPELL_WHIRLWIND = 56408
+local SPELL_DRAIN_LIFE = 27994
+local SPELL_UNHOLY_FRENZY = 55648
+local SPELL_UNHOLY_FRENZY_H = 27995
+local SPELL_STOMP = 27993
+
+local ENTRY_DEAD_TRAINEE = 16127
+local ENTRY_DEAD_KNIGHT = 16148
+local ENTRY_DEAD_RIDER = 16150
+local ENTRY_DEAD_HORSE = 16149
+
+-- C++ npc_gothik_minion_livingtraineeAI::_UpdateAI (:656-666):
+-- _deathPlagueTimer urandms(5,20) from the ctor (:654);
+-- DoCastAOE(SPELL_DEATH_PLAGUE 55604) 2-arg = non-triggered,
+-- re-roll urandms(5,20).
+local function deathPlagueTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "deathplague", 500, function()
+            deathPlagueTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_DEATH_PLAGUE)
+    schedule(guid, "deathplague", {5000, 20000}, function()
+        deathPlagueTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_livingknightAI::_UpdateAI (:685-695):
+-- _whirlwindTimer urandms(5,10) from the ctor (:683); the fired
+-- cast is DoCastAOE(SPELL_SHADOW_MARK 27825) — the timer variable
+-- is named for whirlwind but the arm casts Shadow Mark, ported as
+-- written — re-roll urandms(15,20).
+local function shadowMarkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowmark", 500, function()
+            shadowMarkTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SHADOW_MARK)
+    schedule(guid, "shadowmark", {15000, 20000}, function()
+        shadowMarkTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_livingriderAI::_UpdateAI (:714-726):
+-- _boltVolleyTimer urandms(5,10) from the ctor (:712);
+-- DoCastAOE(SPELL_SHADOW_BOLT_VOLLEY 27831) re-roll urandms(10,15);
+-- the !UNIT_STATE_CASTING melee gate is engine-driven in Go.
+local function boltVolleyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "boltvolley", 500, function()
+            boltVolleyTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SHADOW_BOLT_VOLLEY)
+    schedule(guid, "boltvolley", {10000, 15000}, function()
+        boltVolleyTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_spectraltraineeAI::_UpdateAI (:744-752):
+-- _explosionTimer 2s fixed from the ctor (:742); DoCastAOE
+-- (SPELL_ARCANE_EXPLOSION 27989) re-roll 2s.
+local function arcaneExplosionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneexplosion", 500, function()
+            arcaneExplosionTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
+    schedule(guid, "arcaneexplosion", 2000, function()
+        arcaneExplosionTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_spectralknightAI::_UpdateAI (:773-781):
+-- _whirlwindTimer urandms(15,25) from the ctor (:771);
+-- DoCastAOE(SPELL_WHIRLWIND 56408) re-roll urandms(20,25).
+local function whirlwindTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function()
+            whirlwindTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_WHIRLWIND)
+    schedule(guid, "whirlwind", {20000, 25000}, function()
+        whirlwindTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_spectralhorseAI::_UpdateAI (:867-875):
+-- _stompTimer urandms(10,15) from the ctor (:865); DoCastAOE
+-- (SPELL_STOMP 27993) re-roll urandms(14,18).
+local function stompTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stomp", 500, function()
+            stompTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_STOMP)
+    schedule(guid, "stomp", {14000, 18000}, function()
+        stompTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_spectralriderAI::_UpdateAI drain leg
+-- (:840-847): _drainTimer urandms(8,12) from the ctor (:800);
+-- DoCastVictim(SPELL_DRAIN_LIFE 27994) re-roll urandms(10,15).
+local function drainLifeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "drainlife", 500, function()
+            drainLifeTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_DRAIN_LIFE)
+    schedule(guid, "drainlife", {10000, 15000}, function()
+        drainLifeTick(creature, guid)
+    end)
+end
+
+-- C++ npc_gothik_minion_spectralriderAI::_UpdateAI frenzy leg
+-- (:802-838): _frenzyTimer urandms(2,5) from the ctor (:800), 20s
+-- cycle; while casting the timer resets to 0 (retry next tick —
+-- the 500ms defer twin); else target priority knight > other rider
+-- > horse > Gothik among friendlies within 30.0 missing
+-- SPELLHELPER_UNHOLY_FRENZY (RAID_MODE 55648 / 27995, :90),
+-- DoCast(target, ...) 2-arg = non-triggered. GetFriendlyUnitsInRange
+-- is the DoFindFriendlyMissingBuff twin
+-- (lua_creature_events.go:5905; alive, IsFriendlyTo, self
+-- excluded); the HasAura filter is the missing-buff check
+-- (creature:HasAura bridged, lua_creature_events.go:1309). The C++
+-- early-break on first knight is folded into the priority pick
+-- (same outcome; grid order vs GUID-sorted order may pick a
+-- different knight when several qualify — documented).
+local function frenzyTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frenzy", 500, function()
+            frenzyTick(creature, guid)
+        end)
+        return
+    end
+    local frenzy = SPELL_UNHOLY_FRENZY
+    if creature:IsHeroic() then
+        frenzy = SPELL_UNHOLY_FRENZY_H
+    end
+    local knightTarget = nil
+    local riderTarget = nil
+    local horseTarget = nil
+    local gothikTarget = nil
+    for _, unit in ipairs(creature:GetFriendlyUnitsInRange(30.0)) do
+        if unit:GetObjectType() == "Creature" and not unit:HasAura(frenzy) then
+            local entry = unit:GetEntry()
+            if entry == ENTRY_DEAD_KNIGHT then
+                knightTarget = unit
+            elseif entry == ENTRY_DEAD_RIDER then
+                riderTarget = unit
+            elseif entry == ENTRY_DEAD_HORSE then
+                horseTarget = unit
+            elseif entry == ENTRY_GOTHIK then
+                gothikTarget = unit
+            end
+        end
+    end
+    local target = knightTarget or riderTarget or horseTarget or gothikTarget
+    if target then
+        creature:CastSpell(target, frenzy)
+    end
+    schedule(guid, "frenzy", 20000, function()
+        frenzyTick(creature, guid)
+    end)
+end
+
+-- Shared ev1 arming per minion entry (ctor inits above).
+local function livingTraineeEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "deathplague", {5000, 20000}, function()
+        deathPlagueTick(creature, guid)
+    end)
+end
+
+local function livingKnightEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "shadowmark", {5000, 10000}, function()
+        shadowMarkTick(creature, guid)
+    end)
+end
+
+local function livingRiderEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "boltvolley", {5000, 10000}, function()
+        boltVolleyTick(creature, guid)
+    end)
+end
+
+local function spectralTraineeEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "arcaneexplosion", 2000, function()
+        arcaneExplosionTick(creature, guid)
+    end)
+end
+
+local function spectralKnightEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "whirlwind", {15000, 25000}, function()
+        whirlwindTick(creature, guid)
+    end)
+end
+
+local function spectralRiderEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "frenzy", {2000, 5000}, function()
+        frenzyTick(creature, guid)
+    end)
+    schedule(guid, "drainlife", {8000, 12000}, function()
+        drainLifeTick(creature, guid)
+    end)
+end
+
+local function spectralHorseEnterCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "stomp", {10000, 15000}, function()
+        stompTick(creature, guid)
+    end)
+end
+
+-- Shared timer wipe for events 2/4/23 on timer-carrying minions
+-- (the gothikLeaveCombat twin; the spectral JustDied is a no-op in
+-- C++ — base passes no _deathNotify — so ev4 rides this wipe).
+local function minionCancelTimers(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 1, livingTraineeEnterCombat)
+RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 23, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_LIVE_KNIGHT, 1, livingKnightEnterCombat)
+RegisterCreatureEvent(ENTRY_LIVE_KNIGHT, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_LIVE_KNIGHT, 23, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_LIVE_RIDER, 1, livingRiderEnterCombat)
+RegisterCreatureEvent(ENTRY_LIVE_RIDER, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_LIVE_RIDER, 23, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_TRAINEE, 1, spectralTraineeEnterCombat)
+RegisterCreatureEvent(ENTRY_DEAD_TRAINEE, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_TRAINEE, 4, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_TRAINEE, 23, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_KNIGHT, 1, spectralKnightEnterCombat)
+RegisterCreatureEvent(ENTRY_DEAD_KNIGHT, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_KNIGHT, 4, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_KNIGHT, 23, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_RIDER, 1, spectralRiderEnterCombat)
+RegisterCreatureEvent(ENTRY_DEAD_RIDER, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_RIDER, 4, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_RIDER, 23, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_HORSE, 1, spectralHorseEnterCombat)
+RegisterCreatureEvent(ENTRY_DEAD_HORSE, 2, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_HORSE, 4, minionCancelTimers)
+RegisterCreatureEvent(ENTRY_DEAD_HORSE, 23, minionCancelTimers)

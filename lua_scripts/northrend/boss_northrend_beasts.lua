@@ -45,8 +45,9 @@
 -- apothecary_hanes precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_gormok: JustEngagedWith -> ScheduleTasks() (event 1; the
--- boss_northrend_beastsAI::JustEngagedWith instance-bookkeeping leg,
--- setActive and the heroic
+-- boss_northrend_beastsAI::JustEngagedWith HandleInstanceProgress leg
+-- is PORTED tick 405 U2 (GORMOK_IN_PROGRESS count init +
+-- SetBossState IN_PROGRESS in enterCombat); setActive and the heroic
 -- HandleWithHeroicEvents (cross-AI combatStalker DoAction
 -- ACTION_START_JORMUNGARS) have no bridge — tharon_ja precedent;
 -- the base Reset's SetCombatPulseDelay(0) arm and JustEngagedWith's
@@ -92,9 +93,11 @@
 -- SPELL_JUMP_TO_HAND 66342)) (no vehicle / cross-AI DoAction bridges);
 -- PassengerBoarded seat GORMOK_HAND_SEAT (4) -> CastSpell(
 -- SPELL_RISING_ANGER 66636) (no vehicle bridge); JustDied —
--- instance->SetData(TYPE_NORTHREND_BEASTS, GORMOK_DONE) +
--- cross-AI combatStalker DoAction(ACTION_GORMOK_DEAD) (no instance /
--- cross-AI bridges; no Talk); EnterEvadeMode — instance->SetData(
+-- PORTED tick 405 U2 (disengage was already ported; GORMOK_DONE
+-- count leg now via beastsCountDeath; the Tirion DoAction(
+-- ACTION_START_JORMUNGARS) leg has no Tirion Lua; the combatStalker
+-- DoAction(ACTION_GORMOK_DEAD) leg stays out — no stalker ev38
+-- receiver; no Talk arms); EnterEvadeMode — instance->SetData(
 -- DATA_DESPAWN_SNOBOLDS) + TYPE_NORTHREND_BEASTS FAIL + combatStalker
 -- DespawnOrUnsummon + summons.DespawnAll + me->DespawnOrUnsummon
 -- (instance model + cross-AI / summon-lifecycle bridges absent; own-
@@ -122,7 +125,11 @@
 -- jedoga over-cast bar); EVENT_SNOBOLLED — DoCastSelf(
 -- SPELL_SNOBOLLED 66406) (vehicle-gated); EVENT_CHECK_MOUNT —
 -- MountOnBoss() 3s loop; JustDied — instance->SetData(
--- DATA_SNOBOLD_COUNT, DECREASE) (instance model); CanAIAttack /
+-- DATA_SNOBOLD_COUNT, DECREASE) stays out: verified 2026-11-07
+-- SnoboldCount has ZERO readers in the C++ tree (only ++/-- at
+-- :401/:430 + FAIL reset; no GetData case), so even the
+-- instanceData-table mirror would be a dead write; the spawn-side
+-- INCREASE leg rides the unported vehicle machine; CanAIAttack /
 -- AttackStart / AttackStartCaster movement legs (no motion bridges).
 -- npc_beasts_combat_stalker (36549 — kalecgos pass; instance binds
 -- NPC_BEASTS_COMBAT_STALKER -> DATA_BEASTS_COMBAT_STALKER): Reset —
@@ -133,8 +140,12 @@
 -- IsHeroic() IS bridged, lua_creature_events.go:260 — the arm stays
 -- out behind the instance/combat-stalker model, not difficulty);
 -- DoAction ACTION_START_JORMUNGARS / ACTION_GORMOK_DEAD /
--- ACTION_START_ICEHOWL / ACTION_JORMUNGARS_DEAD (no cross-AI DoAction
--- bridge); EVENT_BERSERK — instance->GetCreature(gormok / dreadscale /
+-- ACTION_START_ICEHOWL / ACTION_JORMUNGARS_DEAD (stale "no cross-AI
+-- DoAction bridge" retracted tick 405 U2: DoAction IS bridged,
+-- lua_creature_events.go:827, event 38 — the stalker has no ev38
+-- receiver in Lua and its arms only cancel timers of the unported
+-- Tirion machine, so the stay-out is receiver-side, not bridge-side);
+-- EVENT_BERSERK — instance->GetCreature(gormok / dreadscale /
 -- acidmaw / icehowl)->CastSpell(Berserk 26662) (instance model);
 -- EVENT_START_JORGMUNGARS / EVENT_START_ICEHOWL — cross-AI tirion
 -- DoAction(ACTION_START_JORMUNGARS / ACTION_START_ICEHOWL) (no
@@ -182,15 +193,18 @@
 -- MovementInform — no hook; no door / immune / phase / zone
 -- bridges); EVENT_SUMMON_ACIDMAW — SummonCreature(NPC_ACIDMAW) (summon
 -- leg bridged; blocked by the submerge/phase machine, not the bridge);
--- JustSummoned summons bookkeeping (no summon bridge); JustDied — instance->SetData(TYPE_NORTHREND_BEASTS,
--- SNAKES_DONE / SNAKES_SPECIAL) + DespawnOrUnsummon(x2) +
--- cross-AI otherWorm DoAction(ACTION_ENRAGE) + cross-AI combatStalker
--- DoAction(ACTION_JORMUNGARS_DEAD) (stale "no despawn" wording:
--- creature:Despawn() IS bridged, but both despawns ride the
--- instance-GUID machine paired with cross-AI DoAction arms —
--- paired-arm rule); DoAction ACTION_ENRAGE — DoCastSelf(
--- SPELL_ENRAGE 68335, triggered) + Talk(EMOTE_ENRAGE 0) +
--- RescheduleEvent(EVENT_EMERGE) — cross-AI DoAction-gated (no bridge);
+-- JustSummoned summons bookkeeping (no summon bridge); JustDied —
+-- PORTED tick 405 U2 (shared boss_jormungarAI :701-720, both worm
+-- entries via wormDied + ev5 SetGuidData latches): disengage +
+-- SNAKES_SPECIAL / SNAKES_DONE count legs via beastsCountDeath +
+-- surviving-worm DoAction(ACTION_ENRAGE) relay via the live event-38
+-- bridge + both-corpses DespawnOrUnsummon; the combatStalker DoAction(
+-- ACTION_JORMUNGARS_DEAD) leg stays out (no stalker ev38 receiver)
+-- and the 10s NotOneButTwoJormungarsTimer gates only unbridged
+-- achievement criteria; DoAction ACTION_ENRAGE — PORTED tick 405 U2
+-- (ev38 wormDoAction: DoCastSelf(SPELL_ENRAGE 68335, triggered) +
+-- Talk(EMOTE_ENRAGE 0); the RescheduleEvent(EVENT_EMERGE) leg rides
+-- the unbridged submerge machine and stays out);
 -- UpdateAI stationary leg DoCastVictim(spitSpell: 66796 Fire Spit /
 -- 66880 Acid Spit) (phase-gated, jedoga bar).
 -- npc_jormungars_slime_pool — entry-unverifiable (summoned by
@@ -237,7 +251,11 @@
 -- + DelayEvents(15s) — same gate; MovementInform POINT_INITIAL_MOVEMENT
 -- -> EVENT_ENGAGE 3s: DoCloseDoorOrButton + SetImmuneToPC(false) +
 -- SetPhase(PHASE_COMBAT) + SetReactState(AGGRESSIVE) + DoZoneInCombat
--- (no hook; no door / immune / phase / zone bridges).
+-- (no hook; no door / immune / phase / zone bridges). JustDied —
+-- PORTED tick 405 U2: boss_icehowl has NO JustDied override, it
+-- inherits the base (:294-306) else-branch SetData ICEHOWL_DONE ->
+-- beastsCountDeath (count 0 -> SetBossState DATA_NORTHREND_BEASTS
+-- DONE) + disengage; no Talk arms.
 -- The twelve spell scripts — no SpellScript / AuraScript binding bridge
 -- (razelikh precedent); join the SpellScript/AuraScript queue:
 -- spell_gormok_jump_to_hand (AuraScript 66342): OnRemove (snobold
@@ -267,9 +285,30 @@
 -- aura bridges).
 
 local ENTRY_GORMOK = 34796
+local ENTRY_DREADSCALE = 34799
+local ENTRY_ACIDMAW = 35144
+local ENTRY_ICEHOWL = 34797
 
 local SPELL_IMPALE = 66331
 local SPELL_STAGGERING_STOMP = 66330
+local SPELL_ENRAGE = 68335 -- boss_northrend_beasts.cpp:77 (worm DoAction ACTION_ENRAGE)
+
+-- trial_of_the_crusader.h: DATA_ACIDMAW 7 / DATA_DREADSCALE 8 /
+-- DATA_NORTHREND_BEASTS 0 (boss id for the beasts encounter).
+local DATA_ACIDMAW = 7
+local DATA_DREADSCALE = 8
+local DATA_NORTHREND_BEASTS = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
+
+local EMOTE_ENRAGE = 0 -- boss_northrend_beasts.cpp:37 (Yells; worm Talk)
+local ACTION_ENRAGE = 4 -- boss_northrend_beasts.cpp:119 (MyActions)
+
+-- boss_jormungarAI cross-refs (boss_northrend_beasts.cpp:696-698,
+-- :897/:921): each worm resolves the OTHER via the instance GUID
+-- store, and latches its own GUID under its own DATA_ id on spawn.
+local WORM_DATA = { [ENTRY_DREADSCALE] = DATA_DREADSCALE, [ENTRY_ACIDMAW] = DATA_ACIDMAW }
+local OTHER_WORM_DATA = { [ENTRY_DREADSCALE] = DATA_ACIDMAW, [ENTRY_ACIDMAW] = DATA_DREADSCALE }
 
 local timers = {}
 
@@ -293,6 +332,32 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ instance SetData(TYPE_NORTHREND_BEASTS, ...) machine
+-- (instance_trial_of_the_crusader.cpp:376-413): NorthrendBeastsCount
+-- starts at 4 on GORMOK_IN_PROGRESS (:380-383) and
+-- HandleNorthrendBeastsDone (:330-345) decrements once per
+-- GORMOK_DONE / SNAKES_SPECIAL / SNAKES_DONE / ICEHOWL_DONE, firing
+-- SetBossState(DATA_NORTHREND_BEASTS, DONE) at 0. The DONE-time
+-- stalker-despawn / vehicle-removal / Tirion DoAction(
+-- ACTION_NORTHREND_BEASTS_DEFEATED) legs have no Lua reader and stay
+-- out. Counter lives in the shared instanceData table (the
+-- boss_faction_champions.lua championsKilled pattern, same instance).
+local function beastsCountDeath(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    local remaining = (data.northrendBeastsRemaining or 4) - 1
+    data.northrendBeastsRemaining = remaining
+    if remaining <= 0 then
+        creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_DONE)
+    end
 end
 
 -- C++ EVENT_IMPALE: DoCastVictim(Impale), 10s init, 10s repeat.
@@ -328,7 +393,23 @@ end
 -- (C++ EVENT_THROW, the third scheduled task, is vehicle-bound —
 -- documented-only above.)
 local function enterCombat(event, creature, target)
-    creature:SetCombatPulseDelay(5) -- boss_northrend_beasts.cpp:251 (base JustEngagedWith arm 1; setActive/HandleInstanceProgress legs have no bridge)
+    creature:SetCombatPulseDelay(5) -- boss_northrend_beasts.cpp:251 (base JustEngagedWith arm 1; setActive leg has no bridge)
+    -- C++ HandleInstanceProgress GORMOK_IN_PROGRESS
+    -- (boss_northrend_beasts.cpp:264-266 -> instance :380-383):
+    -- NorthrendBeastsCount = 4 + SetBossState(DATA_NORTHREND_BEASTS,
+    -- IN_PROGRESS). The HandlePlayerVehicle(true) leg has no bridge.
+    -- Re-init on every Gormok engage, exactly like C++ (each
+    -- GORMOK_IN_PROGRESS re-arms the count); Go's DONE-never-backwards
+    -- guard keeps a finished encounter DONE. This init is the
+    -- prerequisite for the JustDied count machine (beastsCountDeath).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.northrendBeastsRemaining = 4
+        end
+    end
+    creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_IN_PROGRESS)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     schedule(guid, "impale", 10000, function()
@@ -352,13 +433,19 @@ local function leaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
--- C++ boss_northrend_beastsAI::JustDied (:296): disengage is the
--- first arm; the SetData(TYPE_NORTHREND_BEASTS, GORMOK_DONE) leg
--- has no bridge. The worm JustDied disengage (:719) stays out —
--- the Acidmaw/Dreadscale AI is unported (no Lua handlers).
+-- C++ boss_northrend_beastsAI::JustDied (:294-306), Gormok branch:
+-- disengage (:295) + instance->SetData(TYPE_NORTHREND_BEASTS,
+-- GORMOK_DONE) (:299) + combatStalker DoAction(ACTION_GORMOK_DEAD)
+-- (:300-301). The SetData leg is PORTED tick 405 U2 via
+-- beastsCountDeath (count 4 -> 3; the instance-side Tirion DoAction(
+-- ACTION_START_JORMUNGARS) leg has no Tirion Lua and stays out).
+-- The stalker DoAction leg stays out: no stalker ev38 receiver, and
+-- its arms only cancel EVENT_START_JORMUNGARS timers of the unported
+-- Tirion machine.
 local function gormokDied(event, creature, killer)
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
     cancelTimers(creature:GetGUID())
+    beastsCountDeath(creature)
 end
 
 local function reset(event, creature)
@@ -366,7 +453,76 @@ local function reset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm; SetReactState leg stays out on the paired-arm rule — see header)
 end
 
+-- C++ instance OnCreatureCreate latching
+-- (instance_trial_of_the_crusader.cpp:44-45): NPC_ACIDMAW ->
+-- DATA_ACIDMAW, NPC_DREADSCALE -> DATA_DREADSCALE, so each worm's
+-- JustDied can resolve the other via GetInstanceCreature
+-- (auriaya/sartharion ev5 SetGuidData precedent).
+local function wormSpawned(event, creature)
+    creature:SetGuidData(WORM_DATA[creature:GetEntry()])
+end
+
+-- C++ boss_jormungarAI::DoAction ACTION_ENRAGE (:723-731):
+-- DoCastSelf(SPELL_ENRAGE, triggered) + Talk(EMOTE_ENRAGE). The
+-- PHASE_SUBMERGED EVENT_EMERGE reschedule leg rides the unbridged
+-- submerge machine (no phase bridge) and stays out.
+local function wormDoAction(event, creature, action)
+    if action ~= ACTION_ENRAGE then
+        return
+    end
+    creature:CastSpell(creature, SPELL_ENRAGE, true)
+    creature:Talk(EMOTE_ENRAGE)
+end
+
+-- C++ boss_jormungarAI::JustDied (:701-720), shared by
+-- boss_dreadscale (otherWormEntry NPC_ACIDMAW, :897) and boss_acidmaw
+-- (otherWormEntry NPC_DREADSCALE, :921). Disengage first (gormokDied
+-- precedent — C++ has it last at :719, but the despawns below would
+-- strand the Go motion lookup); the nil-otherWorm path is C++-exact
+-- (GetCreature nil -> disengage only). The NotOneButTwoJormungarsTimer
+-- (10s, instance :394/:556) gates only the SNAKES_DONE achievement
+-- criteria, which has no bridge, so the timer itself stays out.
+local function wormDied(event, creature, killer)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    local otherWorm = creature:GetInstanceCreature(OTHER_WORM_DATA[creature:GetEntry()])
+    if otherWorm == nil then
+        return
+    end
+    if otherWorm:IsAlive() then
+        -- SNAKES_SPECIAL (:715-716): the surviving worm enrages via
+        -- the live cross-AI DoAction bridge (event 38; the
+        -- illidari-council / selin precedent).
+        beastsCountDeath(creature)
+        otherWorm:DoAction(ACTION_ENRAGE)
+    else
+        -- SNAKES_DONE (:706-711): both corpses despawn (self first,
+        -- then the other worm); the combatStalker DoAction(
+        -- ACTION_JORMUNGARS_DEAD) leg stays out (no stalker ev38
+        -- receiver; its arms only cancel EVENT_START_ICEHOWL timers
+        -- of the unported Tirion machine).
+        beastsCountDeath(creature)
+        creature:DespawnOrUnsummon()
+        otherWorm:DespawnOrUnsummon()
+    end
+end
+
+-- C++ boss_icehowl has NO JustDied override — it inherits
+-- boss_northrend_beastsAI::JustDied (:294-306), else-branch:
+-- instance->SetData(TYPE_NORTHREND_BEASTS, ICEHOWL_DONE) (:304).
+-- No Talk arms. The count hits 0 here, firing SetBossState DONE.
+local function icehowlDied(event, creature, killer)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    beastsCountDeath(creature)
+end
+
 RegisterCreatureEvent(ENTRY_GORMOK, 1, enterCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 2, leaveCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 4, gormokDied)
 RegisterCreatureEvent(ENTRY_GORMOK, 23, reset)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 4, wormDied)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 5, wormSpawned)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 38, wormDoAction)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 4, wormDied)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 5, wormSpawned)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 38, wormDoAction)
+RegisterCreatureEvent(ENTRY_ICEHOWL, 4, icehowlDied)

@@ -40,8 +40,12 @@
 -- BossAI::JustEngagedWith instance-bookkeeping leg has no bridge —
 -- tharon_ja precedent); KilledUnit Talk(SAY_KILL_PLAYER 9)
 -- player-gated (event 3, who->GetTypeId()==TYPEID_PLAYER — nalorakk
--- precedent); JustDied Talk(SAY_DEATH 10) (event 4; _JustDied instance
--- bookkeeping has no bridge — tharon_ja precedent); EVENT_FEL_FIREBALL
+-- precedent); JustDied Talk(SAY_DEATH 10) (event 4) + _JustDied
+-- SetBossState(DATA_JARAXXUS 1, DONE 3) PORTED tick 405
+-- (creature:SetBossState bridge live; the _JustDied "no bridge" claim
+-- is STALE — curator/archavon precedent); events.Reset() /
+-- scheduler.CancelAll() ride cancelTimers; summons.DespawnAll() stays
+-- out (no summon-registry bridge); EVENT_FEL_FIREBALL
 -- — DoCastVictim(Fel Fireball 66532), 6s init, urand(11s,13s) repeat
 -- (moroes precedent; Jaraxxus has no submerge/phase machine gating it
 -- — UpdateAI runs combat events whenever UpdateVictim() holds);
@@ -174,8 +178,14 @@
 -- DoCastSelf(Mistress' Kiss 66336) non-triggered, 15s init,
 -- 30s repeat — PORTED (IsHeroic-gated at engage; the old "no difficulty
 -- bridge (kelidan precedent)" claim is STALE — lavanthor heroic-flames
--- port); JustDied: SetData(
--- DATA_MISTRESS_OF_PAIN_COUNT, DECREASE) — instance model absent.
+-- port); JustDied: SetData(DATA_MISTRESS_OF_PAIN_COUNT 302, DECREASE
+-- 502) PORTED tick 405 via the shared instanceData table
+-- (data.mistressOfPainCount, faction-champions precedent; the
+-- "instance model absent" claim is STALE for the count leg —
+-- creature:SetData is per-creature ScriptData, not the instance, so it
+-- is NOT used); floored at 0 (paired INCREASE rides the unported
+-- Reset); the THREE_SIXTY_PAIN_SPIKE achievement read
+-- (MistressOfPainCount >= 2) has no Go bridge and stays out.
 -- spell_mistress_kiss (AuraScript 66334/67905/67906/67907) —
 -- HandleDummyTick: casting target -> caster casts Mistress' Kiss
 -- Damage+Silence 66359 + RemoveAurasDueToSpell — PORTED tick 371
@@ -196,6 +206,8 @@
 
 local ENTRY_JARAXXUS = 34780
 local ENTRY_MISTRESS_OF_PAIN = 34826
+local DATA_JARAXXUS = 1 -- trial_of_the_crusader.h:33
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local SAY_AGGRO = 1
 local SAY_KILL_PLAYER = 9
@@ -478,6 +490,17 @@ end
 local function jaraxxusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
     creature:Talk(SAY_DEATH)
+    -- C++ _JustDied() (ScriptedCreature.cpp:513-519): events.Reset() +
+    -- scheduler.CancelAll() ride cancelTimers above; summons.DespawnAll()
+    -- stays out (no summon-registry/DespawnAll bridge — the nether-portal
+    -- / infernal summons are spell-spawned, not Lua-tracked);
+    -- instance->SetBossState(DATA_JARAXXUS 1, DONE 3) ports via
+    -- creature:SetBossState (lua_creature_events.go:6155; curator/archavon
+    -- precedent). The instance-script DONE legs (fordring
+    -- ACTION_JARAXXUS_DEFEATED + EventStage 2000,
+    -- instance_trial_of_the_crusader.cpp:182-193) stay out — no Go ToC
+    -- instance script.
+    creature:SetBossState(DATA_JARAXXUS, BOSS_STATE_DONE)
 end
 
 local function jaraxxusReset(event, creature)
@@ -565,6 +588,26 @@ end
 
 local function mistressDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_mistress_of_pain::JustDied (boss_lord_jaraxxus.cpp:421-424):
+    -- _instance->SetData(DATA_MISTRESS_OF_PAIN_COUNT 302, DECREASE 502)
+    -- (trial_of_the_crusader.h:73, :76); instance SetData decrements
+    -- MistressOfPainCount (instance_trial_of_the_crusader.cpp:431-436),
+    -- read only by the THREE_SIXTY_PAIN_SPIKE achievement check (:636,
+    -- MistressOfPainCount >= 2 — no Go achievement-criteria bridge, stays
+    -- out). Mirror: bank the count in the shared instanceData table
+    -- (boss_faction_champions.lua championCountDeath precedent).
+    -- Floored at 0: the paired INCREASE leg rides the unported Reset
+    -- (:394-406), so an unconditional decrement could drive the field
+    -- negative — C++ MistressOfPainCount is uint8 and never goes below 0.
+    -- creature:SetData is NOT used: it is per-creature ScriptData
+    -- (lua_creature_events.go:792), not the instance script's SetData.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data and (data.mistressOfPainCount or 0) > 0 then
+            data.mistressOfPainCount = data.mistressOfPainCount - 1
+        end
+    end
 end
 
 local function mistressReset(event, creature)
