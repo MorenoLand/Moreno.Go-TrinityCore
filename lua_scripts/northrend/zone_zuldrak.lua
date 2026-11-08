@@ -22,6 +22,15 @@
 --   CalcPeriodic picks a random 30-240s amplitude (no calc-periodic
 --   hook) and the periodic tick casts Scourge Disguise Expiring
 --   (52010) on the target, triggered.
+-- PORTED (tick 425, RegisterAuraEvent OnRemove = 3):
+--   spell_fetch_ingredient_aura (zone_zuldrak.cpp:866-899): one
+--   shared class covers all 21 fetch auras (51018/51055/51057/51059/
+--   51062/51064/51067/51069/51072/51077/51079 easy, 51081/51083/51085/
+--   51087/51091 medium, 51093/51095/51097/51100/51102 hard).
+--   Expire-only + invisbuff 51216 + Finklestein 28205 within 100yd ->
+--   drop the invisbuff, Finklestein Talk(SAY_RUINED 4). DORMANT: the
+--   sender spell_random_ingredient (:676-755) is an unported
+--   SpellScript, so no fetch aura lands yet.
 --   spell_scourge_disguise_expiring (52010, :1014-1030): OnApply
 --   whispers TEXT_DISGUISE_WARNING (28891) to the player target —
 --   PORTED (tick 204, below) via the new player:WhisperText bridge
@@ -95,3 +104,64 @@ end
 RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_EASY_AURA, 1, randomIngredientTick)
 RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_MEDIUM_AURA, 1, randomIngredientTick)
 RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_HARD_AURA, 1, randomIngredientTick)
+
+-- C++ spell_fetch_ingredient_aura_AuraScript::OnRemove
+-- (zone_zuldrak.cpp:878-889): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL. Expire-only, and only
+-- while the target still carries the apprentice invisbuff (51216)
+-- and Finklestein (28205) is within 100yd: drop the invisbuff and
+-- have Finklestein Talk(SAY_RUINED) to the target. C++ arm order
+-- (expire gate, invisbuff gate, creature-found gate) preserved.
+-- PORTED 2026-11-08 (tick 425). DORMANT-BY-CONSTRUCTION: the sender,
+-- spell_random_ingredient (zone_zuldrak.cpp:676-755, Finklestein
+-- casting FetchIngredients[i][0] on the player), is an unported
+-- SpellScript, so no fetch aura lands in Go yet; this handler is
+-- exact and goes live when the sender ports. The expire-only gate
+-- also depends on the aura duration, which comes from Spell.dbc
+-- (absent here).
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67; teron_gorefiend.lua:121 precedent
+local NPC_FINKLESTEIN = 28205 -- zone_zuldrak.cpp:340
+local SPELL_ALCHEMIST_APPRENTICE_INVISBUFF = 51216 -- zone_zuldrak.cpp:365
+local SAY_RUINED = 4 -- zone_zuldrak.cpp:447
+
+local function fetchIngredientRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    if not target:HasAura(SPELL_ALCHEMIST_APPRENTICE_INVISBUFF) then
+        return
+    end
+    local finklestein = target:FindNearestCreature(NPC_FINKLESTEIN, 100.0)
+    if finklestein == nil then
+        return
+    end
+    target:RemoveAura(SPELL_ALCHEMIST_APPRENTICE_INVISBUFF)
+    finklestein:Talk(SAY_RUINED, target)
+end
+
+-- The 21 FETCH spell ids (zone_zuldrak.cpp:378-402, in
+-- FetchIngredients table order :610-632): 11 easy, 5 medium, 5 hard.
+-- Easy
+RegisterAuraEvent(51018, 3, fetchIngredientRemove) -- SPELL_FETCH_KNOTROOT
+RegisterAuraEvent(51055, 3, fetchIngredientRemove) -- SPELL_FETCH_PICKLED_EAGLE_EGG
+RegisterAuraEvent(51057, 3, fetchIngredientRemove) -- SPELL_FETCH_SPECKLED_GUANO
+RegisterAuraEvent(51059, 3, fetchIngredientRemove) -- SPELL_FETCH_WITHERED_BATWING
+RegisterAuraEvent(51062, 3, fetchIngredientRemove) -- SPELL_FETCH_SEASONED_SLIDER_CIDER
+RegisterAuraEvent(51064, 3, fetchIngredientRemove) -- SPELL_FETCH_PULVERIZED_GARGOYLE_TEETH
+RegisterAuraEvent(51067, 3, fetchIngredientRemove) -- SPELL_FETCH_MUDDY_MIRE_MAGGOT
+RegisterAuraEvent(51069, 3, fetchIngredientRemove) -- SPELL_FETCH_SPIKY_SPIDER_EGG
+RegisterAuraEvent(51072, 3, fetchIngredientRemove) -- SPELL_FETCH_HAIRY_HERRING_HEAD
+RegisterAuraEvent(51077, 3, fetchIngredientRemove) -- SPELL_FETCH_PUTRID_PIRATE_PERSPIRATION
+RegisterAuraEvent(51079, 3, fetchIngredientRemove) -- SPELL_FETCH_ICECROWN_BOTTLED_WATER
+-- Medium
+RegisterAuraEvent(51081, 3, fetchIngredientRemove) -- SPELL_FETCH_WASPS_WINGS
+RegisterAuraEvent(51083, 3, fetchIngredientRemove) -- SPELL_FETCH_PRISMATIC_MOJO
+RegisterAuraEvent(51085, 3, fetchIngredientRemove) -- SPELL_FETCH_RAPTOR_CLAW
+RegisterAuraEvent(51087, 3, fetchIngredientRemove) -- SPELL_FETCH_AMBERSEED
+RegisterAuraEvent(51091, 3, fetchIngredientRemove) -- SPELL_FETCH_SHRUNKEN_DRAGONS_CLAW
+-- Hard
+RegisterAuraEvent(51093, 3, fetchIngredientRemove) -- SPELL_FETCH_CHILLED_SERPENT_MUCUS
+RegisterAuraEvent(51095, 3, fetchIngredientRemove) -- SPELL_FETCH_CRYSTALLIZED_HOGSNOT
+RegisterAuraEvent(51097, 3, fetchIngredientRemove) -- SPELL_FETCH_CRUSHED_BASILISK_CRYSTALS
+RegisterAuraEvent(51100, 3, fetchIngredientRemove) -- SPELL_FETCH_TROLLBANE
+RegisterAuraEvent(51102, 3, fetchIngredientRemove) -- SPELL_FETCH_FROZEN_SPIDER_ICHOR

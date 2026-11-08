@@ -84,8 +84,10 @@
 -- bridge" correction was itself wrong and is retracted here). But the
 -- SOLE caster of 72679 is the harvest-soul / in-frostmourne-room
 -- AuraScript OnRemove (C++ :2547-2552 / :2692-2697: the dead
--- Frostmourne-room player casts it on the LK) — no AuraScript bridge
--- exists, so event 14 would never fire for it in Go (the rotface /
+-- Frostmourne-room player casts it on the LK) — the OnRemove legs
+-- are PORTED 2026-11-08 (tick 425, below, dormant: the Harvest Soul
+-- cast itself is unported), so the trigger path now exists in dormant
+-- form and event 14 would fire once the cast ports (the rotface /
 -- infinite-corruptor trigger-path precedent). The old "event 15 never
 -- fires" rationale conflated the two events: event 15
 -- (OnSpellHitTarget) fires on the CASTER's bindings and was never the
@@ -1049,3 +1051,58 @@ local function necroticPlagueJumpRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 3, necroticPlagueJumpRemove)
+
+-- C++ spell_the_lich_king_harvest_soul::OnRemove
+-- (boss_the_lich_king.cpp:2538-2558) and
+-- spell_the_lich_king_in_frostmourne_room::OnRemove
+-- (boss_the_lich_king.cpp:2688-2709): identical bodies, both
+-- AfterEffectRemove, EFFECT_0, AURA_EFFECT_HANDLE_REAL
+-- (PERIODIC_DAMAGE for 68980, DUMMY for 74276). On remove by
+-- death only, the target casts SPELL_HARVESTED_SOUL 72679 on
+-- nil target with the Lich King GUID as original caster.
+-- PORTED 2026-11-08 (tick 425). DORMANT: the senders are unported —
+-- the LK phase-3 Harvest Soul cast (phase machine timer) for 68980
+-- and the Frostmourne-room teleport chain for 74276 — so neither aura
+-- is ever applied and the hook cannot fire yet. The remove hook fires
+-- on the player funnel (spells.go:35238) with the harvested player as
+-- target, and aura:GetRemoveMode() reads the removed record's
+-- snapshot (lua_aura.go:244, DEATH = 5).
+-- DELTAS, all exactness-preserving: (1) the C++ cast IS triggered —
+-- the LK GUID passes through the CastSpellExtraArgs (ObjectGuid) ctor,
+-- which sets TRIGGERED_FULL_MASK (SpellDefines.h:167) — so the Lua
+-- cast passes true; but the player session path ignores the triggered
+-- arg (lua_player.go:2857) and a nil target falls back to self
+-- (:2867-2870), so the cast still fires. (2) The original-caster LK
+-- GUID has no Lua twin: plain CastSpell takes only (target, spell,
+-- triggered), and CastCustomSpell accepts an 8th originalCaster arg
+-- but both paths ignore it, so it is omitted rather than passed as
+-- dead text; the player target has no GetGuidData bridge either. The
+-- 72679 targeting rides that originalCaster + DBC implicit targets
+-- (no Spell.dbc), so the boss-side SAY_LK_FROSTMOURNE_KILL arm still
+-- can't fire from this cast in Go — as the file header already
+-- documents. (3) Both C++ Load() guards (instance script non-null)
+-- have no twin and are omitted; both auras are only ever applied
+-- inside ICC / the Frostmourne room. No power drain exists in
+-- either C++ body, so ModifyPower is not needed for this port.
+-- HARVEST_SOUL is RAID_MODE (68980, 74325, 74296, 74297,
+-- boss_the_lich_king.cpp:193); the one C++ class covers all four,
+-- so all four register the same handler (the rotface 4-variant
+-- precedent). AURA_REMOVE_BY_DEATH = 5 already defined above.
+local SPELL_HARVEST_SOUL = 68980 -- boss_the_lich_king.cpp:136
+local SPELL_HARVEST_SOUL_25N = 74325 -- boss_the_lich_king.cpp:193 (HARVEST_SOUL RAID_MODE, 25N)
+-- SPELL_HARVEST_SOUL_10H = 74296 and SPELL_HARVEST_SOUL_25H = 74297
+-- already defined above.
+local SPELL_IN_FROSTMOURNE_ROOM = 74276 -- boss_the_lich_king.cpp:143
+local SPELL_HARVESTED_SOUL = 72679 -- boss_the_lich_king.cpp:145
+
+local function harvestSoulRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_DEATH then
+        target:CastSpell(nil, SPELL_HARVESTED_SOUL, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_HARVEST_SOUL, 3, harvestSoulRemove)
+RegisterAuraEvent(SPELL_HARVEST_SOUL_25N, 3, harvestSoulRemove)
+RegisterAuraEvent(SPELL_HARVEST_SOUL_10H, 3, harvestSoulRemove)
+RegisterAuraEvent(SPELL_HARVEST_SOUL_25H, 3, harvestSoulRemove)
+RegisterAuraEvent(SPELL_IN_FROSTMOURNE_ROOM, 3, harvestSoulRemove)

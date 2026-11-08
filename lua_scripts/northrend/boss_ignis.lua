@@ -139,8 +139,9 @@
 -- be bridgeable alone; no Talk arms anywhere.
 -- spell_ignis_slag_pot (62717) — periodic-dummy AuraScript
 -- (SPELL_SLAG_POT_DAMAGE 65722 on tick; OnRemove casts SPELL_
--- SLAG_IMBUED 62836 when target alive) — no AuraScript bridge;
--- joins the no-AuraScript-bridge queue.
+-- SLAG_IMBUED 62836 when target alive) — PORTED 2026-11-08
+-- (tick 425, below; dormant, the slag vehicle sender chain is
+-- unported).
 -- achievement_ignis_shattered — OnCheck: target AI GetData
 -- (DATA_SHATTERED) != 0 — PORTED 2026-11-08 (tick 417, latent; see
 -- GetData note above). Go case in
@@ -493,3 +494,36 @@ RegisterCreatureEvent(ENTRY_IGNIS, 19, ignisJustSummoned)
 RegisterCreatureEvent(ENTRY_IGNIS, 23, ignisReset)
 RegisterCreatureEvent(ENTRY_IGNIS, 38, ignisDoAction)
 RegisterCreatureEvent(NPC_IRON_CONSTRUCT, 9, ironConstructDamageTaken)
+
+-- C++ spell_ignis_slag_pot_AuraScript (boss_ignis.cpp:454-490):
+-- OnEffectPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY (caster casts
+-- SPELL_SLAG_POT_DAMAGE on the target, triggered) + AfterEffectRemove,
+-- EFFECT_0, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL
+-- (target, if alive, self-casts SPELL_SLAG_IMBUED, triggered). No
+-- remove-mode guard in C++: the remove leg fires on ANY remove.
+-- PORTED 2026-11-08 (tick 425). DORMANT: the sender is the unported
+-- vehicle chain (EVENT_SLAG_POT Talk + DoCast GRAB 62707 ->
+-- EVENT_GRAB_POT EnterVehicle -> EVENT_CHANGE_POT DoCast SLAG_POT
+-- 62717 triggered -> EVENT_END_POT ExitVehicle; no vehicle bridge),
+-- so 62717 is never applied and neither hook can fire yet. Both legs
+-- are exact and fail-closed (nil caster guard on tick, IsAlive guard
+-- on remove).
+local SPELL_SLAG_POT = 62717 -- boss_ignis.cpp:44
+local SPELL_SLAG_POT_DAMAGE = 65722 -- boss_ignis.cpp:47
+local SPELL_SLAG_IMBUED = 62836 -- boss_ignis.cpp:48
+
+local function slagPotPeriodic(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster then
+        caster:CastSpell(target, SPELL_SLAG_POT_DAMAGE, true)
+    end
+end
+
+local function slagPotRemove(event, aura, target)
+    if target:IsAlive() then
+        target:CastSpell(target, SPELL_SLAG_IMBUED, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SLAG_POT, 1, slagPotPeriodic)
+RegisterAuraEvent(SPELL_SLAG_POT, 3, slagPotRemove)

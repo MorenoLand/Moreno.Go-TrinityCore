@@ -135,8 +135,8 @@
 -- SpellScripts; spell_rotface_unstable_ooze_explosion_init carries
 -- zero Talk calls; the remaining 7 join the
 -- same queue on their caster / targeting legs.
--- spell_rotface_mutated_infection_aura joins the no-AuraScript-bridge
--- queue.
+-- spell_rotface_mutated_infection_aura PORTED 2026-11-08 (tick 425,
+-- below; dormant on the Spell.dbc CalcValue trigger id).
 -- All 14 Talk() calls in the file accounted for (14 =
 -- SAY_PRECIOUS_DIES 0 (1, cross-AI from npc_precious_icc JustDied)
 -- + SAY_AGGRO 1 (1) + EMOTE_SLIME_SPRAY 2 (1, scheduler) +
@@ -516,10 +516,11 @@ end
 -- DoCastSelf(LITTLE_OOZE_COMBINE 69537 + WEAK_RADIATING_OOZE 69750 +
 -- GREEN_ABOMINATION_HITTIN__YA_PROC 70001, all triggered) +
 -- AddThreat(summoner, 500000) + EVENT_STICKY_OOZE 5s init. LATENT:
--- the producer is the unported spell_rotface_mutated_infection_aura
--- OnRemove (target casts the EFFECT_2 summon spell on aura removal;
--- no AuraScript bridge), so ev22 fires only when that path lands
--- (krick precedent). The summoner is the formerly infected player.
+-- the producer is the spell_rotface_mutated_infection_aura OnRemove
+-- (target casts the EFFECT_2 summon spell on aura removal; PORTED
+-- 2026-11-08 tick 425, dormant on the Spell.dbc CalcValue trigger
+-- id), so ev22 fires only when that path lands (krick precedent).
+-- The summoner is the formerly infected player.
 local function littleOozeSummoned(event, creature, summoner)
     creature:CastSpell(creature, SPELL_LITTLE_OOZE_COMBINE, true)
     creature:CastSpell(creature, SPELL_WEAK_RADIATING_OOZE, true)
@@ -612,3 +613,26 @@ RegisterCreatureEvent(ENTRY_LITTLE_OOZE, 22, littleOozeSummoned)
 RegisterCreatureEvent(ENTRY_BIG_OOZE, 4, bigOozeDied)
 RegisterCreatureEvent(ENTRY_BIG_OOZE, 22, bigOozeSummoned)
 RegisterCreatureEvent(ENTRY_BIG_OOZE, 38, bigOozeDoAction)
+
+-- C++ spell_rotface_mutated_infection_aura::HandleEffectRemove
+-- (boss_rotface.cpp:485-504): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL. No remove-mode
+-- guard in C++: fires on ANY remove (expire, dispel, death). The
+-- trigger spell id is Effects[EFFECT_2].CalcValue() of the aura's own
+-- spell, read via aura:GetSpellEffectCalcValue (lua_aura.go) — it reads
+-- 0 with no Spell.dbc in the Go repo, so the ~= 0 guard no-ops until
+-- Spell.dbc lands. PORTED 2026-11-08 (tick 425).
+-- Deviation: C++ passes {aurEff, GetCasterGUID()} (original caster) —
+-- Lua CastSpell has no original-caster slot, so the cast attributes to
+-- the target. Triggered flag kept; on the player session path the
+-- triggered arg is ignored but the cast fires.
+local function mutatedInfectionRemove(event, aura, target)
+    local triggerSpell = aura:GetSpellEffectCalcValue(aura:GetAuraId(), 2)
+    if triggerSpell ~= 0 then
+        target:CastSpell(target, triggerSpell, true)
+    end
+end
+
+for _, auraId in ipairs(MUTATED_INFECTION_AURAS) do
+    RegisterAuraEvent(auraId, 3, mutatedInfectionRemove)
+end

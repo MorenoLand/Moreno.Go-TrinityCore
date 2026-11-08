@@ -67,7 +67,9 @@
 -- — no IsSummonedBy / GO-Use / GetData-cross-AI bridges.
 -- spell_crystal_spike — AuraScript periodic: entry-gated summon
 -- spells (47936 / urand 47942/47943) while GetData(DATA_COUNT) <
--- MAX_COUNT 5 — no AuraScript bridge.
+-- MAX_COUNT 5 — PORTED 2026-11-08 (tick 425, below; dormant, the
+-- npc_crystal_spike_trigger IsSummonedBy sender is unported, and
+-- the < 5 guard reads 0 until that trigger port latches DATA_COUNT).
 
 local ENTRY_ORMOROK = 26794
 
@@ -289,3 +291,49 @@ RegisterCreatureEvent(ENTRY_ORMOROK, 3, ormorokTargetDied)
 RegisterCreatureEvent(ENTRY_ORMOROK, 4, ormorokDied)
 RegisterCreatureEvent(ENTRY_ORMOROK, 9, ormorokDamageTaken)
 RegisterCreatureEvent(ENTRY_ORMOROK, 23, ormorokReset)
+
+-- C++ spell_crystal_spike_AuraScript (boss_ormorok.cpp:273-294):
+-- OnEffectPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY. Entry-gated
+-- (INITIAL 27101 / TRIGGER 27079): initial casts crystalSpikeSummon[0]
+-- 47936, trigger casts crystalSpikeSummon[urand(0, 2)] (47936/47942/
+-- 47943), triggered, self-cast, only while AI GetData(DATA_COUNT
+-- 1) < MAX_COUNT 5. No PreventDefaultAction in C++, so the handler
+-- returns nothing. PORTED 2026-11-08 (tick 425). DORMANT: 47941 is
+-- applied only by npc_crystal_spike_trigger IsSummonedBy
+-- (boss_ormorok.cpp:211-235), which is unported, so the hook cannot
+-- fire yet.
+-- SETDATA CO-REQUISITE — MISSING, noted explicitly: the C++ file
+-- contains ZERO SetData calls; _count is a private AI member assigned
+-- in IsSummonedBy (initial 0; trigger = owner trigger's
+-- GetData(DATA_COUNT) + 1) and read via GetData
+-- (boss_ormorok.cpp:237-240). The Lua twin is
+-- creature:SetData(DATA_COUNT, n) from the trigger's IsSummonedBy
+-- (ev22) — no such registration exists in boss_ormorok.lua (no
+-- npc_crystal_spike_trigger port at all). Until it lands, creature
+-- GetData reads 0 for an absent key (lua_creature_events.go:809-822),
+-- so the < 5 guard would always pass and the chain would never
+-- terminate at 5. This draft is exact only once that trigger port
+-- lands; the trigger AI itself (IsSummonedBy + GO Use/Delete + 2s
+-- despawn) is a separate unit and is NOT included here.
+local SPELL_CRYSTAL_SPIKE_AURA = 47941 -- boss_ormorok.cpp:186
+local NPC_CRYSTAL_SPIKE_INITIAL = 27101 -- boss_ormorok.cpp:179
+local NPC_CRYSTAL_SPIKE_TRIGGER = 27079 -- boss_ormorok.cpp:180
+local DATA_COUNT = 1 -- boss_ormorok.cpp:182
+local MAX_COUNT = 5 -- boss_ormorok.cpp:183
+local CRYSTAL_SPIKE_SUMMON = {47936, 47942, 47943} -- boss_ormorok.cpp:191-196
+
+local function crystalSpikePeriodic(event, aura, target)
+    local entry = target:GetEntry()
+    if entry ~= NPC_CRYSTAL_SPIKE_INITIAL and entry ~= NPC_CRYSTAL_SPIKE_TRIGGER then
+        return
+    end
+    local spell = CRYSTAL_SPIKE_SUMMON[1]
+    if entry == NPC_CRYSTAL_SPIKE_TRIGGER then
+        spell = CRYSTAL_SPIKE_SUMMON[math.random(3)]
+    end
+    if target:GetData(DATA_COUNT) < MAX_COUNT then
+        target:CastSpell(target, spell, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_CRYSTAL_SPIKE_AURA, 1, crystalSpikePeriodic)

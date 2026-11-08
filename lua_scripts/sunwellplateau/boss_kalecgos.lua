@@ -3,9 +3,11 @@
 -- (boss_kalecgos, boss_kalecgos_human, boss_sathrovarr;
 -- go_kalecgos_spectral_rift and the spell_kalecgos_tap_check /
 -- spell_kalecgos_spectral_blast / spell_kalecgos_spectral_realm_
--- trigger / spell_kalecgos_spectral_realm_aura / spell_kalecgos_
--- curse_of_boundless_agony SpellScript/AuraScript classes documented
--- below, not registered); sunwell_plateau.h:30 (DATA_KALECGOS = 0,
+-- trigger / spell_kalecgos_spectral_realm_aura (OnRemove PORTED
+-- 2026-11-08 tick 425, below; the trigger SpellScript stays out) /
+-- spell_kalecgos_curse_of_boundless_agony SpellScript/AuraScript
+-- classes documented below, not registered); sunwell_plateau.h:30
+-- (DATA_KALECGOS = 0,
 -- first boss), :41 (DATA_KALECGOS_DRAGON), :42 (DATA_KALECGOS_HUMAN),
 -- :43 (DATA_SATHROVARR), :89 (NPC_KALECGOS = 24850), :90 (NPC_
 -- KALECGOS_HUMAN = 24891), :91 (NPC_SATHROVARR = 24892), :135 (GO_
@@ -132,8 +134,9 @@
 -- Not registered: go_kalecgos_spectral_rift (GO 187055 — no
 -- GameObjectAI bridge); spell_kalecgos_tap_check,
 -- spell_kalecgos_spectral_blast, spell_kalecgos_spectral_realm_
--- trigger, spell_kalecgos_spectral_realm_aura (standing
--- SpellScript/AuraScript gaps). spell_kalecgos_curse_of_boundless_
+-- trigger (standing SpellScript gaps; the spectral_realm_aura
+-- OnRemove leg is PORTED below, tick 425).
+-- spell_kalecgos_curse_of_boundless_
 -- agony's OnPeriodic leg is PORTED below via RegisterAuraEvent
 -- (tick 194); its OnRemove leg (ally cast) is PORTED below too
 -- (tick 424, RegisterAuraEvent OnRemove, CANCEL gate); its OnApply
@@ -871,3 +874,39 @@ local function agonyCurseRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_AGONY_CURSE, 3, agonyCurseRemove)
+
+-- C++ spell_kalecgos_spectral_realm_aura::OnRemove
+-- (boss_kalecgos.cpp:724-730): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_MOD_INVISIBILITY_DETECT, AURA_EFFECT_HANDLE_REAL, any
+-- remove mode (no mode guard in C++). On removal the target drops
+-- the spectral-realm reaction aura, then self-casts teleport back
+-- (46020) and spectral exhaustion (44867), all triggered, C++ order.
+-- PORTED 2026-11-08 (tick 425). DORMANT-BY-CONSTRUCTION (partly):
+-- the sender, spell_kalecgos_spectral_realm_trigger
+-- (boss_kalecgos.cpp:680-707, casting 46019/46021/44845/44852 on the
+-- hit unit), is an unported SpellScript, so the 46021 aura currently
+-- never lands in Go. The handler goes live the moment the trigger
+-- ports — and it ALSO fires today through the sathrovarr JustDied
+-- strip: stripSpectralRealmAuras calls player:RemoveAura(46021), and
+-- the Go session remove path fires fireAuraRemove (spells.go:35238),
+-- so any player carrying 46021 gets the teleport-back + exhaustion
+-- legs on Sathrovarr's death, exactly as C++
+-- RemoveAurasDueToSpellOnPlayers would.
+-- Deviation (pre-existing, same as the zone_zuldrak.lua header note):
+-- player:CastSpell ignores the triggered flag (session path), so the
+-- player's 46020/44867 casts land non-triggered.
+local SPELL_SPECTRAL_REALM_REACTION = 44852 -- boss_kalecgos.cpp:87
+local SPELL_SPECTRAL_EXHAUSTION = 44867 -- boss_kalecgos.cpp:88
+-- SPELL_TELEPORT_BACK = 46020 already defined above;
+-- SPELL_SPECTRAL_REALM_AURA = 46021 already defined above.
+
+local function spectralRealmRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:RemoveAura(SPELL_SPECTRAL_REALM_REACTION)
+    target:CastSpell(target, SPELL_TELEPORT_BACK, true)
+    target:CastSpell(target, SPELL_SPECTRAL_EXHAUSTION, true)
+end
+
+RegisterAuraEvent(SPELL_SPECTRAL_REALM_AURA, 3, spectralRealmRemove)

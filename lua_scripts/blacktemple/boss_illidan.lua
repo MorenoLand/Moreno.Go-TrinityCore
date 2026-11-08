@@ -1998,8 +1998,9 @@ RegisterAuraEvent(SPELL_MAIEV_DOWN, 3, maievDownRemove)
 -- (boss_illidan.cpp:1926-1934): AfterEffectRemove, EFFECT_0
 -- SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL. Expire or
 -- death remove only -> the target self-casts SPELL_SUMMON_PARASITIC_
--- SHADOWFIENDS (41915) triggered. The proc (41913) and
--- remove-parasitic (41923 apply) AuraScripts stay out.
+-- SHADOWFIENDS (41915) triggered. The proc (41913) AuraScript
+-- stays out; the remove-parasitic (41923 apply) AuraScript is PORTED
+-- 2026-11-08 (tick 425, below).
 local function parasiticShadowfiendRemove(event, aura, target)
     local mode = aura:GetRemoveMode()
     if mode == AURA_REMOVE_BY_EXPIRE or mode == AURA_REMOVE_BY_DEATH then
@@ -2008,3 +2009,49 @@ local function parasiticShadowfiendRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PARASITIC_SHADOWFIEND, 3, parasiticShadowfiendRemove)
+
+-- C++ spell_illidan_remove_parasitic_shadowfiend::HandleApply
+-- (boss_illidan.cpp:1976-1980): AfterEffectApply, EFFECT_0
+-- SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL. On apply the target
+-- drops both parasitic shadowfiend auras (41917 and 41914). No
+-- guards, no mode check, no BP values in C++. PORTED 2026-11-08
+-- (tick 425). LIVE-ABLE (not dormant): the sender is already ported
+-- — illidanDamageTaken casts SPELL_REMOVE_PARASITIC_SHADOWFIEND
+-- (41923) triggered on self at the lethal transition
+-- (boss_illidan.lua ~:1210, boss_illidan.cpp:729).
+local SPELL_PARASITIC_SHADOWFIEND_2 = 41914 -- boss_illidan.cpp:166
+-- SPELL_PARASITIC_SHADOWFIEND = 41917 and
+-- SPELL_REMOVE_PARASITIC_SHADOWFIEND = 41923 already defined above.
+
+local function removeParasiticShadowfiendApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:RemoveAura(SPELL_PARASITIC_SHADOWFIEND)
+    target:RemoveAura(SPELL_PARASITIC_SHADOWFIEND_2)
+end
+
+RegisterAuraEvent(SPELL_REMOVE_PARASITIC_SHADOWFIEND, 2, removeParasiticShadowfiendApply)
+
+-- C++ spell_illidan_eye_blast::HandleEffectRemove
+-- (boss_illidan.cpp:2233-2236): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL, any remove mode (no
+-- mode guard in C++). On removal the target creature despawns
+-- itself. The C++ GetTarget()->ToCreature() nil-check is the
+-- GetObjectType() guard below. PORTED 2026-11-08 (tick 425).
+-- DORMANT-BY-CONSTRUCTION: the sender, EVENT_EYE_BLAST
+-- (boss_illidan.cpp:899-909, Illidan summoning the db-target 23070
+-- and casting 39908 on it), stays out per the boss_illidan.lua
+-- header (the db-target summon + MovePoint sweep have no movement
+-- bridge), so 39908 never lands in Go yet; this handler is exact
+-- and goes live if that arm ever ports.
+local SPELL_EYE_BLAST = 39908 -- boss_illidan.cpp:192
+
+local function eyeBlastRemove(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:DespawnOrUnsummon()
+end
+
+RegisterAuraEvent(SPELL_EYE_BLAST, 3, eyeBlastRemove)

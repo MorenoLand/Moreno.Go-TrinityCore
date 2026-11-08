@@ -19634,8 +19634,9 @@ func init() {
 	// registration); npc_scorch_ground (33221 local enum —
 	// entry-verifiable but bridge-blocked: MoveInLineOfSight /
 	// AddAura(SPELL_HEAT 65667) machine; no Talk arms — no
-	// registration); spell_ignis_slag_pot (62717) — no
-	// AuraScript bridge; joins the no-AuraScript-bridge queue;
+	// registration); spell_ignis_slag_pot (62717) — PORTED
+	// 2026-11-08 (tick 425, RegisterAuraEvent; dormant, the slag
+	// vehicle sender chain is unported);
 	// achievement_ignis_shattered (GetData-based OnCheck — no
 	// achievement consumer (creature-target criteria gate absent; GetData read bridged); joins the
 	// unmodeled-achievement queue).
@@ -20864,8 +20865,8 @@ func init() {
 	// Talk(EMOTE_UNSTABLE_2..4) / Talk(EMOTE_UNSTABLE_EXPLOSION),
 	// rotface->AI()->Talk(SAY_UNSTABLE_EXPLOSION 5)) join the
 	// no-SpellScript-bridge queue and
-	// spell_rotface_mutated_infection_aura the no-AuraScript-bridge
-	// queue — documented in the lua header. Sixth group of the
+	// spell_rotface_mutated_infection_aura PORTED 2026-11-08
+	// (tick 425, RegisterAuraEvent in the lua header). Sixth group of the
 	// "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_rotface", 36627)
 

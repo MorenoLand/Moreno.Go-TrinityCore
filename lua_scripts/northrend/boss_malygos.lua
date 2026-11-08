@@ -351,8 +351,10 @@ local GO_ALEXSTRASZA_S_GIFT_25 = 193967 -- eye_of_eternity.h:70
 -- the creature target summons Alexstrasza's Gift at its own position,
 -- 10-man or 25-man by raid difficulty. STILL BLOCKED leg: OnRemove
 -- clears NOT_SELECTABLE on the stored gift GO and on the Heart of
--- Magic GO via instance GetGuidData(DATA_HEART_OF_MAGIC_GUID) — no
--- instance bridge. The outer beam aura's own spell ID is DB-side only
+-- Magic GO via instance GetGuidData(DATA_HEART_OF_MAGIC_GUID) — the
+-- instance read is bridged (GetGuidData, lua_creature_events.go:6229),
+-- so the leg stays out on the GO side (no GO flag bridge). The outer
+-- beam aura's own spell ID is DB-side only
 -- (spell_script_names), so its apply (cast 61023) / remove (drop 61023)
 -- legs cannot be registered.
 local function alexstraszaGiftBeamVisualApply(event, aura, target)
@@ -371,3 +373,38 @@ local function alexstraszaGiftBeamVisualApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL, 2, alexstraszaGiftBeamVisualApply)
+
+-- C++ spell_malygos_destroy_platform_channel_AuraScript::OnRemove
+-- (boss_malygos.cpp:2025-2057): AfterEffectRemove, EFFECT_0,
+-- SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL. No remove-mode guard in
+-- C++: fires on ANY remove. Load() admits creature casters only
+-- (:2030-2033); target must be a creature (ToCreature); the
+-- Alexstrasza bunny is resolved via instance GetGuidData +
+-- map GetCreature and self-casts SPELL_DESTROY_PLATFORM_BOOM_VISUAL,
+-- NON-triggered (C++ passes no triggered flag). PORTED 2026-11-08
+-- (tick 425). DORMANT twice over: (1) the sender DoCast(me, 58842) at
+-- boss_malygos.cpp:716 (POINT_DESTROY_PLATFORM_P_TWO) is unported, so
+-- the aura never applies; (2) DATA_ALEXSTRASZA_BUNNY_GUID is never
+-- latched in the Go instance guid store — instance_eye_of_eternity.lua
+-- binds the bunny to its own Lua table (instanceData.alexstraszaBunny),
+-- not via SetGuidData — so GetInstanceCreature(3) reads nil until a
+-- latch lands. Nil-guarded, fail-closed.
+local SPELL_DESTROY_PLATFORM_CHANNEL = 58842 -- boss_malygos.cpp:139
+local SPELL_DESTROY_PLATFORM_BOOM_VISUAL = 59084 -- boss_malygos.cpp:140
+local DATA_ALEXSTRASZA_BUNNY_GUID = 3 -- eye_of_eternity.h:35-41, EOEInstanceData64 (DATA_TRIGGER 0, DATA_MALYGOS 1, DATA_PLATFORM 2)
+
+local function destroyPlatformChannelRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    local platformTrigger = target:GetInstanceCreature(DATA_ALEXSTRASZA_BUNNY_GUID)
+    if platformTrigger then
+        platformTrigger:CastSpell(platformTrigger, SPELL_DESTROY_PLATFORM_BOOM_VISUAL)
+    end
+end
+
+RegisterAuraEvent(SPELL_DESTROY_PLATFORM_CHANNEL, 3, destroyPlatformChannelRemove)
