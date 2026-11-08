@@ -81,6 +81,7 @@ local SPELL_CLOAK = 65961
 local SPELL_ANTI_AOE = 68595 -- boss_faction_champions.cpp:42 (JustEngagedWith :646 DoCast(me, ..., true))
 
 local DATA_FACTION_CRUSADERS = 2 -- trial_of_the_crusader.h:34
+local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 local BOSS_STATE_NOT_STARTED = 0
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2
@@ -214,6 +215,13 @@ local function championCountFail(creature)
                 local c = (data.trialCounter or 50) - 1
                 if c < 0 then c = 0 end
                 data.trialCounter = c
+                -- TrialCounter == 0 -> despawn Anub'arak (instance :313-317).
+                if c == 0 then
+                    local anubarak = creature:GetInstanceCreature(DATA_ANUBARAK)
+                    if anubarak then
+                        anubarak:DespawnOrUnsummon()
+                    end
+                end
             end
         end
     end

@@ -128,20 +128,17 @@
 -- consumer without summoning — documented-only).
 -- boss_jaraxxus EVENT_SUMMON_INFERNAL_ERUPTION — PORTED (infernalTick;
 -- the volcano/infernal summon STRANDs stay out — documented-only).
--- npc_legion_flame (34784): Reset — instance->GetBossState(
--- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (the instance
--- gate is the true bar — instance-script model absent; the old "no
--- despawn bridge" parenthetical was stale, creature:Despawn() is
--- bridged, lua_creature_events.go:236); else cross-AI
--- jaraxxus->AI()->JustSummoned
--- (no cross-AI bridge) + SetReactState(REACT_PASSIVE)
--- (SetReactState IS bridged — frozen_core precedent; the arm stays
--- out on the instance gate + cross-AI JustSummoned) +
--- DoCastSelf(Legion Flame Effect 66201) — self-cast bridged in
--- isolation but instance-gated in C++: ungated emulation would fire
--- outside the encounter window (jedoga over-cast bar) —
--- documented-only; joins the entry-verifiable-but-bridge-blocked
--- queue.
+-- npc_legion_flame (34784): Reset — PORTED tick 408
+-- (legionFlameReset): instance->GetBossState(DATA_JARAXXUS) !=
+-- IN_PROGRESS -> DespawnOrUnsummon (GetBossState IS bridged,
+-- lua_creature_events.go:6174; DespawnOrUnsummon :6373 — the old
+-- "instance gate is the true bar" claim is STALE); else ctor
+-- SetCombatMovement(false) (:294; lua_creature_events.go:4202,
+-- ayamiss Reset-arm precedent) + SetReactState(REACT_PASSIVE)
+-- (:308; :4021) + DoCastSelf(Legion Flame Effect 66201, triggered)
+-- (:309). The cross-AI jaraxxus->AI()->JustSummoned leg (:305-306)
+-- stays out (no cross-AI bridge — the summon-registry leg, same bar
+-- as summons.DespawnAll).
 -- npc_infernal_volcano (34813): Reset — SetReactState(REACT_PASSIVE)
 -- (SetReactState IS bridged — frozen_core precedent; the arm stays
 -- out behind the unbridged summon gate) +
@@ -151,17 +148,21 @@
 -- kelidan precedent is STALE) but the arm still rides the unbridged
 -- summon gate (burrower precedent) — documented-only;
 -- joins the entry-verifiable-but-bridge-blocked queue.
--- npc_fel_infernal (34815): Reset — instance-gated DespawnOrUnsummon
--- + cross-AI JustSummoned (instance / cross-AI bridges absent) +
+-- npc_fel_infernal (34815): Reset — PORTED tick 408
+-- (felInfernalReset / felStreakTick): instance->GetBossState(
+-- DATA_JARAXXUS) != IN_PROGRESS -> DespawnOrUnsummon (GetBossState
+-- IS bridged, lua_creature_events.go:6174 — the old "instance /
+-- cross-AI bridges absent" claim is STALE for the gate); else
 -- scheduler SelectTarget(Random,0,0.0f,true) -> DoCast(Fel Streak
--- Visual 66493) every 15s (random-target is bridged in isolation but
--- the scheduler rides the unbridged summon gate — jedoga bar) +
--- DoCastSelf(
--- Lord Jaraxxus' Hittin' Ya 66327) (rides the instance gate — jedoga
--- bar) — documented-only; joins the
--- entry-verifiable-but-bridge-blocked queue. (C++ note carried: Fel
--- Infernals are immune to all CC on Heroic — stuns, banish,
--- interrupt, etc.)
+-- Visual 66493) non-triggered, 2s init, 15s repeat (:352-357; the
+-- scheduler validator !UNIT_STATE_CASTING (:347-350) rides the 500ms
+-- IsCasting defer, mal_ganis idiom; repeat unconditional, outside
+-- the target check; UpdateAI's UpdateVictim gate (:364) is implicit
+-- — no threat targets means no cast) + DoCastSelf(Lord Jaraxxus'
+-- Hittin' Ya 66327, triggered) (:359). The cross-AI
+-- jaraxxus->AI()->JustSummoned leg (:344-345) stays out (no cross-AI
+-- bridge). (C++ note carried: Fel Infernals are immune to all CC on
+-- Heroic — stuns, banish, interrupt, etc.)
 -- npc_nether_portal (34825): Reset — SetReactState(REACT_PASSIVE) +
 -- DoCastSelf(Nether Portal Effect 66263) + heroic RemoveFlag(
 -- UNIT_FLAG_NOT_SELECTABLE) — SetReactState IS bridged
@@ -174,10 +175,13 @@
 -- SelectTarget(Random,0,0.0f,true) -> DoCast(Spinning Spike 66283)
 -- non-triggered, 9s init, 20s repeat (not heroic-gated — scheduled
 -- unconditionally; the "no random-target bridge" claim is retracted);
--- Shivan Slash arm stays ported; Reset — instance-gated
--- DespawnOrUnsummon + cross-AI JustSummoned + DoCastSelf(66327) +
--- SetData(DATA_MISTRESS_OF_PAIN_COUNT, INCREASE) (instance / cross-AI
--- bridges absent); EVENT_MISTRESS_KISS:
+-- Shivan Slash arm stays ported; Reset — PORTED tick 408
+-- (mistressReset): instance-gated DespawnOrUnsummon (GetBossState IS
+-- bridged, lua_creature_events.go:6174) + DoCastSelf(Hittin' Ya 66327,
+-- triggered) + SetData(DATA_MISTRESS_OF_PAIN_COUNT 302, INCREASE 501)
+-- via the shared instanceData table (same mirror as JustDied below);
+-- the cross-AI JustSummoned leg stays out (no cross-AI bridge);
+-- EVENT_MISTRESS_KISS:
 -- DoCastSelf(Mistress' Kiss 66336) non-triggered, 15s init,
 -- 30s repeat — PORTED (IsHeroic-gated at engage; the old "no difficulty
 -- bridge (kelidan precedent)" claim is STALE — lavanthor heroic-flames
@@ -186,8 +190,8 @@
 -- (data.mistressOfPainCount, faction-champions precedent; the
 -- "instance model absent" claim is STALE for the count leg —
 -- creature:SetData is per-creature ScriptData, not the instance, so it
--- is NOT used); floored at 0 (paired INCREASE rides the unported
--- Reset); the THREE_SIXTY_PAIN_SPIKE achievement read
+-- is NOT used); floored at 0 (paired INCREASE ported tick 408 in
+-- mistressReset); the THREE_SIXTY_PAIN_SPIKE achievement read
 -- (MistressOfPainCount >= 2) has no Go bridge and stays out.
 -- spell_mistress_kiss (AuraScript 66334/67905/67906/67907) —
 -- HandleDummyTick: casting target -> caster casts Mistress' Kiss
@@ -208,12 +212,16 @@
 -- The three spell scripts join the SpellScript/AuraScript queue.
 
 local ENTRY_JARAXXUS = 34780
+local ENTRY_LEGION_FLAME = 34784 -- Summons enum
+local ENTRY_FEL_INFERNAL = 34815 -- Summons enum
 local ENTRY_MISTRESS_OF_PAIN = 34826
 local DATA_JARAXXUS = 1 -- trial_of_the_crusader.h:33
+local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
 local DATA_FIZZLEBANG = 16 -- trial_of_the_crusader.h:50
 local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h NPC_TIRION_FORDRING
 local BOSS_STATE_NOT_STARTED = 0 -- EncounterState NOT_STARTED (InstanceScript.h:68-76)
+local BOSS_STATE_IN_PROGRESS = 1 -- EncounterState IN_PROGRESS (InstanceScript.h:68-76)
 local BOSS_STATE_FAIL = 2 -- EncounterState FAIL (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
@@ -244,6 +252,8 @@ local SPELL_FEL_LIGHTNING_INTRO = 67888
 local SPELL_FEL_LIGHTNING = 66528
 local SPELL_INCINERATE_FLESH = 66237
 local SPELL_LEGION_FLAME = 66197
+local SPELL_LEGION_FLAME_EFFECT = 66201 -- BossSpells enum
+local SPELL_FEL_STREAK_VISUAL = 66493 -- BossSpells enum, Felflame Infernal
 local SPELL_SPINNING_SPIKE = 66283
 local SPELL_MISTRESS_KISS = 66336
 local SPELL_NETHER_PORTAL = 66269
@@ -600,6 +610,13 @@ local function jaraxxusLeaveCombat(event, creature)
                     local c = (data.trialCounter or 50) - 1
                     if c < 0 then c = 0 end
                     data.trialCounter = c
+                    -- TrialCounter == 0 -> despawn Anub'arak (instance :313-317).
+                    if c == 0 then
+                        local anubarak = creature:GetInstanceCreature(DATA_ANUBARAK)
+                        if anubarak then
+                            anubarak:DespawnOrUnsummon()
+                        end
+                    end
                 end
                 data.mistressOfPainCount = 0
             end
@@ -774,9 +791,9 @@ local function mistressDied(event, creature, killer)
     -- MistressOfPainCount >= 2 — no Go achievement-criteria bridge, stays
     -- out). Mirror: bank the count in the shared instanceData table
     -- (boss_faction_champions.lua championCountDeath precedent).
-    -- Floored at 0: the paired INCREASE leg rides the unported Reset
-    -- (:394-406), so an unconditional decrement could drive the field
-    -- negative — C++ MistressOfPainCount is uint8 and never goes below 0.
+    -- Floored at 0: the paired INCREASE leg is ported tick 408 in
+    -- mistressReset below, so the field only decrements after a real
+    -- increment — C++ MistressOfPainCount is uint8 and never goes below 0.
     -- creature:SetData is NOT used: it is per-creature ScriptData
     -- (lua_creature_events.go:792), not the instance script's SetData.
     local mapObj = creature:GetMap()
@@ -790,18 +807,106 @@ end
 
 local function mistressReset(event, creature)
     cancelTimers(creature:GetGUID())
-    -- C++ npc_mistress_of_pain::Reset (boss_lord_jaraxxus.cpp:394-406):
+    -- C++ npc_mistress_of_pain::Reset (boss_lord_jaraxxus.cpp:398-411):
     -- instance->GetBossState(DATA_JARAXXUS) != IN_PROGRESS ->
-    -- DespawnOrUnsummon. The instance boss-state read has no Lua bridge
-    -- (setdata_write axis 2026-10-22: no instance:SetData/GetData bridge),
-    -- and no Lua-side jaraxxus IN_PROGRESS latch exists, so the gated
-    -- despawn stays out (same as npc_legion_flame, header :117-118).
+    -- DespawnOrUnsummon (:400-404; GetBossState IS bridged,
+    -- lua_creature_events.go:6174 — the old "no instance boss-state
+    -- read bridge" claim is STALE); else DoCastSelf(Hittin' Ya 66327,
+    -- triggered) (:409) + _instance->SetData(
+    -- DATA_MISTRESS_OF_PAIN_COUNT 302, INCREASE 501) (:410, mirrored
+    -- in the shared instanceData table like JustDied — creature:SetData
+    -- is per-creature ScriptData, lua_creature_events.go:792, not the
+    -- instance). The cross-AI jaraxxus->AI()->JustSummoned leg
+    -- (:406-407) stays out (no cross-AI bridge).
+    if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_IN_PROGRESS then
+        creature:DespawnOrUnsummon()
+        return
+    end
+    creature:CastSpell(creature, SPELL_HITTIN_YA, true)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.mistressOfPainCount = (data.mistressOfPainCount or 0) + 1
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 1, mistressEnterCombat)
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 2, mistressLeaveCombat)
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 4, mistressDied)
 RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 23, mistressReset)
+
+-- C++ npc_legion_flame::Reset (boss_lord_jaraxxus.cpp:297-310):
+-- instance->GetBossState(DATA_JARAXXUS) != IN_PROGRESS ->
+-- DespawnOrUnsummon (:299-303); else ctor SetCombatMovement(false)
+-- (:294; no Lua ctor hook — Reset is the spawn hook, ayamiss
+-- precedent) + SetReactState(REACT_PASSIVE) (:308) + DoCastSelf(
+-- Legion Flame Effect 66201, triggered) (:309). The cross-AI
+-- jaraxxus->AI()->JustSummoned leg (:305-306) stays out (no cross-AI
+-- bridge). No UpdateAI in C++ — the flame has no combat ticks.
+local function legionFlameReset(event, creature)
+    cancelTimers(creature:GetGUID())
+    if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_IN_PROGRESS then
+        creature:DespawnOrUnsummon()
+        return
+    end
+    creature:SetCombatMovement(false)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:CastSpell(creature, SPELL_LEGION_FLAME_EFFECT, true)
+end
+
+RegisterCreatureEvent(ENTRY_LEGION_FLAME, 23, legionFlameReset)
+
+-- C++ npc_fel_infernal Reset scheduler (boss_lord_jaraxxus.cpp:
+-- :352-357) + UpdateAI (:362-371): _scheduler.Schedule(2s,
+-- SelectTarget(Random,0,0.0f,true) -> DoCast(Fel Streak Visual 66493)
+-- non-triggered, Repeat(15s) outside the target check (re-arm
+-- unconditional); the scheduler validator !UNIT_STATE_CASTING
+-- (:347-350) rides the 500ms IsCasting defer (mal_ganis idiom).
+-- UpdateAI's UpdateVictim gate (:364) is implicit: with no threat
+-- targets the cast is skipped and the re-arm still fires. Melee is
+-- engine-driven in Go, like C++ DoMeleeAttackIfReady (:369).
+local function felStreakTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "felstreak", 500, function() felStreakTick(creature, guid) end)
+        return
+    end
+    local target = randomThreatPlayer(creature)
+    if target then
+        creature:CastSpell(target, SPELL_FEL_STREAK_VISUAL)
+    end
+    schedule(guid, "felstreak", 15000, function()
+        felStreakTick(creature, guid)
+    end)
+end
+
+-- C++ npc_fel_infernal::Reset (boss_lord_jaraxxus.cpp:336-360):
+-- instance->GetBossState(DATA_JARAXXUS) != IN_PROGRESS ->
+-- DespawnOrUnsummon (:338-342); else the Fel Streak scheduler above
+-- (2s init) + DoCastSelf(Lord Jaraxxus' Hittin' Ya 66327, triggered)
+-- (:359). The cross-AI jaraxxus->AI()->JustSummoned leg (:344-345)
+-- stays out (no cross-AI bridge). No JustEngagedWith in C++ — the
+-- scheduler starts in Reset, not on engage.
+local function felInfernalReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_IN_PROGRESS then
+        creature:DespawnOrUnsummon()
+        return
+    end
+    schedule(guid, "felstreak", 2000, function()
+        felStreakTick(creature, guid)
+    end)
+    creature:CastSpell(creature, SPELL_HITTIN_YA, true)
+end
+
+local function felInfernalLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RegisterCreatureEvent(ENTRY_FEL_INFERNAL, 2, felInfernalLeaveCombat)
+RegisterCreatureEvent(ENTRY_FEL_INFERNAL, 23, felInfernalReset)
 
 -- C++ spell_mistress_kiss::HandleDummyTick
 -- (boss_lord_jaraxxus.cpp:480-489): on each periodic tick of the

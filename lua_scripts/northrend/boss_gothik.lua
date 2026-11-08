@@ -126,7 +126,7 @@
 -- RegisterCreatureEvent needs no boss_ai.go entry, palehoof-minion
 -- precedent). Dormant until the EVENT_SUMMON wave machine lands
 -- (krik'thir tick-390 dormant precedent); the trigger SpellHit
--- anchor machine downstream stays out (no spawn-ID bridge).
+-- anchor machine downstream is PORTED tick 408 below.
 -- npc_gothik_minion_livingtrainee (16124): DoCastAOE(SPELL_DEATH_
 -- PLAGUE 55604) 2-arg (non-triggered), urandms(5,20)=5-20s
 -- init/repeat — PORTED tick 405 below (ev1 arming, dormant until
@@ -161,13 +161,9 @@
 -- urandms(14,18)=14-18s repeat — PORTED tick 405 below (ev1 arming,
 -- dormant; entry bar retracted).
 -- npc_gothik_trigger (16137): SpellHit anchor machine (ANCHOR_1_x ->
--- ANCHOR_2_x -> SKULLS_x -> DoSummon) — event 14 fires but the arm
--- roots at the ANCHOR_2_x skull-pile selection via CGUID_TRIGGER +
--- urand(8,12) (the GetGUIDLow discovery retires its stated blocker —
--- same GetCreaturesInGrid+GetGUIDLow lookup; follow-up unit); the SKULLS_x ->
--- DoSummon(NPC_DEAD_TRAINEE/KNIGHT/RIDER/HORSE, me, 0.0f, 15s) legs
--- (:941-952) and the ANCHOR_1_x -> DoCastAOE(ANCHOR_2_x, true) legs
--- are bridgeable in isolation but unreachable — stays OUT.
+-- ANCHOR_2_x -> SKULLS_x -> DoSummon) — PORTED tick 408 below (event 14;
+-- SelectRandomSkullPile via GetCreaturesInGrid + GetGUIDLow, the
+-- GetSpawnId() twin — the tick-404 blocker is retired).
 -- spell_gothik_shadow_bolt_volley (SpellScript 27831: FilterTargets
 -- removes shadow-marked targets) — no SpellScript binding bridge
 -- (razelikh precedent) — joins the SpellScript/AuraScript queue.
@@ -440,8 +436,8 @@ RegisterCreatureEvent(ENTRY_GOTHIK, 23, gothikReset)
 
 -- C++ npc_gothik_trigger::DamageTaken (boss_gothik.cpp:904):
 -- damage = 0 unconditionally (the trigger is the SpellHit anchor —
--- immune to damage; the SpellHit anchor machine itself stays
--- documented-only). Event 9's second return rewrites damage
+-- immune to damage; the SpellHit anchor machine is PORTED tick 408
+-- below). Event 9's second return rewrites damage
 -- (fireCreatureDamageTaken; halazzi precedent).
 local function gothikTriggerDamageTaken(event, creature, attacker, damage)
     return false, 0
@@ -488,6 +484,14 @@ local SPELL_ANCHOR_1_TRAINEE = 27892 -- boss_gothik.cpp:74
 local SPELL_ANCHOR_1_DK = 27928 -- boss_gothik.cpp:75
 local SPELL_ANCHOR_1_RIDER = 27935 -- boss_gothik.cpp:76
 
+local SPELL_ANCHOR_2_TRAINEE = 27893 -- boss_gothik.cpp:78
+local SPELL_ANCHOR_2_DK = 27929 -- boss_gothik.cpp:79
+local SPELL_ANCHOR_2_RIDER = 27936 -- boss_gothik.cpp:80
+
+local SPELL_SKULLS_TRAINEE = 27915 -- boss_gothik.cpp:82
+local SPELL_SKULLS_DK = 27931 -- boss_gothik.cpp:83
+local SPELL_SKULLS_RIDER = 27937 -- boss_gothik.cpp:84
+
 local function livingTraineeDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_TRAINEE, true)
     cancelTimers(creature:GetGUID())
@@ -531,6 +535,64 @@ local ENTRY_DEAD_TRAINEE = 16127
 local ENTRY_DEAD_KNIGHT = 16148
 local ENTRY_DEAD_RIDER = 16150
 local ENTRY_DEAD_HORSE = 16149
+
+-- C++ npc_gothik_triggerAI::SelectRandomSkullPile (boss_gothik.cpp:
+-- 906-916): grid list of NPC_TRIGGER (16137) within 150.0f, return the
+-- trigger whose GetSpawnId() == CGUID_TRIGGER + urand(8, 12); the DB
+-- guids are unique so the scan is a key lookup (GetGUIDLow is the
+-- GetSpawnId() twin, creatures.go:846; waveTick precedent).
+local function selectRandomSkullPile(creature)
+    local targetDBGuid = CGUID_TRIGGER + math.random(8, 12)
+    for _, trigger in ipairs(creature:GetCreaturesInGrid(ENTRY_GOTHIK_TRIGGER, 150)) do
+        if trigger:GetGUIDLow() == targetDBGuid then
+            return trigger
+        end
+    end
+    return nil
+end
+
+-- C++ npc_gothik_triggerAI::SpellHit (boss_gothik.cpp:918-954):
+-- ANCHOR_1_x hits re-cast ANCHOR_2_x on self (DoCastAOE, triggered);
+-- ANCHOR_2_x hits cast the SKULLS_x spell (triggered) at the
+-- skull-pile trigger picked by SelectRandomSkullPile; SKULLS_x hits
+-- summon the dead minion(s) at the hit trigger (DoSummon, 0.0f radius,
+-- 15s TEMPSUMMON_CORPSE_TIMED_DESPAWN — SummonCreature type 5,
+-- 15000ms, waveTick precedent). Event 14 args (event, creature,
+-- caster, spellid) (boss_ai.go:3787-3790; midnight attumenSpellHit
+-- precedent); the caster arg is unused (C++ ignores it).
+local function gothikTriggerSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_ANCHOR_1_TRAINEE then
+        creature:CastSpell(creature, SPELL_ANCHOR_2_TRAINEE, true)
+    elseif spellId == SPELL_ANCHOR_1_DK then
+        creature:CastSpell(creature, SPELL_ANCHOR_2_DK, true)
+    elseif spellId == SPELL_ANCHOR_1_RIDER then
+        creature:CastSpell(creature, SPELL_ANCHOR_2_RIDER, true)
+    elseif spellId == SPELL_ANCHOR_2_TRAINEE then
+        local target = selectRandomSkullPile(creature)
+        if target then
+            creature:CastSpell(target, SPELL_SKULLS_TRAINEE, true)
+        end
+    elseif spellId == SPELL_ANCHOR_2_DK then
+        local target = selectRandomSkullPile(creature)
+        if target then
+            creature:CastSpell(target, SPELL_SKULLS_DK, true)
+        end
+    elseif spellId == SPELL_ANCHOR_2_RIDER then
+        local target = selectRandomSkullPile(creature)
+        if target then
+            creature:CastSpell(target, SPELL_SKULLS_RIDER, true)
+        end
+    elseif spellId == SPELL_SKULLS_TRAINEE then
+        creature:SummonCreature(ENTRY_DEAD_TRAINEE, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 5, 15000)
+    elseif spellId == SPELL_SKULLS_DK then
+        creature:SummonCreature(ENTRY_DEAD_KNIGHT, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 5, 15000)
+    elseif spellId == SPELL_SKULLS_RIDER then
+        creature:SummonCreature(ENTRY_DEAD_RIDER, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 5, 15000)
+        creature:SummonCreature(ENTRY_DEAD_HORSE, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 5, 15000)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_GOTHIK_TRIGGER, 14, gothikTriggerSpellHit)
 
 -- C++ EVENT_SUMMON wave machine (boss_gothik.cpp:444-490).
 -- Waves transcribed verbatim (:175-294); each wave is { { {entry,count}, ... },

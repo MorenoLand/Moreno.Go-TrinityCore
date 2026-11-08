@@ -287,6 +287,7 @@ end
 -- ACTION_VALKYR_WIPE = 26 (trial_of_the_crusader.h:116, :123 — enum
 -- counted from ACTION_START_GORMOK = 1).
 local DATA_FORDRING = 12
+local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 local ENTRY_FORDRING = 34996
 
 local function sendToFordring(creature, action)
@@ -648,8 +649,8 @@ local function reachHome(event, creature)
         -- C++ instance SetBossState generic FAIL block (:301-305):
         -- heroic-only --TrialCounter, floor 0, shared instanceData
         -- table (trialCounter, default 50). The world-state UI push
-        -- (:307-310) and the zero-attempt Anub'arak despawn (:312-317)
-        -- have no bridges and stay out.
+        -- (:307-311) has no bridge and stays out; the zero-attempt
+        -- Anub'arak despawn (:313-317) is PORTED below (tick 408 U1).
         local mapObj = creature:GetMap()
         if mapObj then
             local data = mapObj:GetInstanceData()
@@ -657,6 +658,13 @@ local function reachHome(event, creature)
                 local c = (data.trialCounter or 50) - 1
                 if c < 0 then c = 0 end
                 data.trialCounter = c
+                -- TrialCounter == 0 -> despawn Anub'arak (instance :313-317).
+                if c == 0 then
+                    local anubarak = creature:GetInstanceCreature(DATA_ANUBARAK)
+                    if anubarak then
+                        anubarak:DespawnOrUnsummon()
+                    end
+                end
             end
         end
     end

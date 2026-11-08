@@ -305,6 +305,7 @@ local SPELL_ENRAGE = 68335 -- boss_northrend_beasts.cpp:77 (worm DoAction ACTION
 local DATA_ACIDMAW = 7
 local DATA_DREADSCALE = 8
 local DATA_NORTHREND_BEASTS = 0
+local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2 -- EncounterState FAIL (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3
@@ -492,8 +493,8 @@ local function beastsEvaded(event, creature)
     -- as the shared instanceData.trialCounter field (default 50,
     -- floored at 0; one of four FAIL writers — jaraxxus / champions /
     -- valkyr also decrement it).
-    -- The TrialCounter == 0 -> despawn-Anubarak leg (:318-322) stays
-    -- out (not requested this tick).
+    -- The TrialCounter == 0 -> despawn-Anubarak leg (:313-317) is
+    -- PORTED below (tick 408 U1).
     if creature:GetBossState(DATA_NORTHREND_BEASTS) ~= BOSS_STATE_FAIL then
         creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_FAIL)
         sendToFordring(creature, ACTION_NORTHREND_BEASTS_WIPE)
@@ -507,6 +508,13 @@ local function beastsEvaded(event, creature)
                         counter = 0
                     end
                     data.trialCounter = counter
+                    -- TrialCounter == 0 -> despawn Anub'arak (instance :313-317).
+                    if counter == 0 then
+                        local anubarak = creature:GetInstanceCreature(DATA_ANUBARAK)
+                        if anubarak then
+                            anubarak:DespawnOrUnsummon()
+                        end
+                    end
                 end
             end
         end

@@ -26,6 +26,10 @@
 -- - OnCreatureCreate: champions controller GUID latch
 --   (instance_trial_of_the_crusader.cpp:50; C++ stores the GUID, Lua
 --   stores the object — the black-morass Medivh precedent).
+-- - OnCreatureCreate: Anub'arak GUID latch (DATA_ANUBARAK 5,
+--   creatureData :54 / LoadObjectData :108) via
+--   creature:SetGuidData — the FAIL-arm TrialCounter == 0 despawn
+--   leg reads it back (tick 408 U1).
 -- - Update: while CrusadersSpecialState and the timer is live, count
 --   it down (instance_trial_of_the_crusader.cpp:564-570).
 -- The DONE / FAIL / IN_PROGRESS boss-state transitions themselves are
@@ -58,10 +62,18 @@ local INSTANCE_EVENT_ON_UPDATE = 3
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 
 local NPC_CHAMPIONS_CONTROLLER = 34781 -- trial_of_the_crusader.h:179
+local NPC_ANUBARAK = 34564 -- trial_of_the_crusader.h:219
+local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 
 RegisterMapEvent(MAP_TRIAL_OF_THE_CRUSADER, INSTANCE_EVENT_ON_CREATURE_CREATE, function(event, instanceData, mapObj, creature)
     if creature:GetEntry() == NPC_CHAMPIONS_CONTROLLER then
         instanceData.controller = creature
+    end
+    -- C++ OnCreatureCreate latches NPC_ANUBARAK under DATA_ANUBARAK
+    -- (creatureData :54, LoadObjectData :108); the FAIL-arm despawn
+    -- leg reads it back via creature:GetInstanceCreature(5).
+    if creature:GetEntry() == NPC_ANUBARAK then
+        creature:SetGuidData(DATA_ANUBARAK)
     end
 end)
 
