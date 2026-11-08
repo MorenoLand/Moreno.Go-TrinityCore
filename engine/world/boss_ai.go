@@ -20155,61 +20155,59 @@ func init() {
 	// + DoCast(me, SPELL_AURA_OF_DESPAIR 62692) 2-arg
 	// non-triggered self-cast at engage (event 1; the
 	// BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg PORTED
-	// tick 258 via creature:SetBossState; the
-	// CheckShamanisticRage map-player-scan leg and the four
-	// unbridgeable ScheduleEvent legs have no bridges — the
-	// malygos engage-aura precedent); timer-driven casts via
-	// CreateLuaEvent (maiden/baltharus convention, GUID-keyed
-	// timers, cancel on events 2/4/23): EVENT_SURGE_OF_DARKNESS
+	// tick 258 via creature:SetBossState; CheckShamanisticRage
+	// map-player-scan leg PORTED via GetPlayersInWorld +
+	// player:HasSpell/CastSpell; all six ScheduleEvent legs
+	// ported); timer-driven casts via CreateLuaEvent
+	// (maiden/baltharus convention, GUID-keyed timers, cancel on
+	// events 2/4/23): EVENT_SURGE_OF_DARKNESS
 	// Talk(EMOTE_SURGE_OF_DARKNESS 8) + Talk(SAY_SURGE_OF_DARKNESS
 	// 2) + DoCast(me, SPELL_SURGE_OF_DARKNESS 62662) 2-arg
-	// non-triggered, 60s init, re-arm {50s,70s} (no phase/machine
-	// leg touches it — the vapor hard-mode leg only cancels
-	// EVENT_SARONITE_VAPORS and EVENT_SEARING_FLAMES; Talk order
-	// kept); EVENT_BERSERK Talk(SAY_BERSERK 4) + DoCast(me,
+	// non-triggered, 60s init, re-arm {50s,70s} (Talk order kept);
+	// EVENT_BERSERK Talk(SAY_BERSERK 4) + DoCast(me,
 	// SPELL_BERSERK 26662) 2-arg non-triggered 600s one-shot
-	// (Talk-before-cast order kept); KilledUnit player-gated
-	// Talk(SAY_SLAY 1) (event 3 — the razuvious player-gated
-	// variant precedent); JustDied Talk(SAY_DEATH 3) (event 4;
-	// the _JustDied() SetBossState(DONE) leg PORTED tick 258 +
-	// DoRemoveAurasDueToSpellOn Players(62692) leg has no bridge
-	// — the sjonnir JustDied-Talk
-	// precedent; also wipes the surge/berserk timers).
+	// (Talk-before-cast order kept); EVENT_SHADOW_CRASH
+	// (CheckPlayersInRange / SelectTarget Random + DoCast 62660,
+	// init {8s,10s}, re-arm {8s,12s}) / EVENT_MARK_OF_THE_FACELESS
+	// (same selection + DoCast 63276, init {35s,40s}, re-arm
+	// {35s,45s}) via the vezaxRandomTarget helper (ring count gate
+	// + threat-list fallback, reach-exact); EVENT_SEARING_FLAMES
+	// (DoCastAOE 62661, 12s init, re-arm {14s,17500ms}); KilledUnit
+	// player-gated Talk(SAY_SLAY 1) (event 3 — the razuvious
+	// player-gated variant precedent); JustDied Talk(SAY_DEATH 3)
+	// (event 4; the _JustDied() SetBossState(DONE) leg PORTED tick
+	// 258 + DoRemoveAurasDueToSpellOnPlayers(62692) player leg
+	// PORTED via stripDespairAuras; also wipes the timers).
 	// CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:157) +
 	// in-loop (:215) CASTING gates PORTED as a 500ms IsCasting
-	// defer at the top of all 5 ported timer ticks (surge /
-	// shadow_crash / searing_flames / mark / berserk — defer
-	// precedes Talk + target pick, no re-arm consumed);
-	// saronite_animus gates (:348/:363) guard only the unported
-	// profound-of-darkness machine.
+	// defer at the top of all 6 ported timer ticks (surge /
+	// shadow_crash / searing_flames / mark / berserk /
+	// saronite_vapors — defer precedes Talk + target pick, no
+	// re-arm consumed); saronite_animus gates (:348/:363) guard
+	// only the unported profound-of-darkness machine.
+	// EVENT_SARONITE_VAPORS PORTED tick 473 (DoCast 63081
+	// self-cast, 30s init, re-arm {30s,35s} + hard-mode machine:
+	// Talk SAY_HARDMODE 5 + Talk EMOTE_BARRIER 7 + DoCast 63364 +
+	// DoCast 63145 + AddLootMode(0x2) + CancelEvent vapors /
+	// searing; summons.DespawnAll stays out — no bridge for
+	// spell-summoned summons; dormant until Spell.dbc ships
+	// 63081/63364/63145); DoAction(ACTION_VAPORS_DIE — smellSaronite
+	// clear, PORTED tick 417; ACTION_ANIMUS_DIE — RemoveAura(63364)
+	// + searing re-arm {7s,12s}, PORTED tick 473; ev38 dispatch IS
+	// bridged, creature:DoAction, lua_creature_events.go:802;
+	// senders unported: vapors DamageTaken :436 / animus JustDied
+	// :338, boss_general_vezax.cpp).
 	// Documented-only: Reset / Initialize (_Reset SetBossState
 	// NOT_STARTED PORTED tick 258 (ev23); shadowDodger /
-	// smellSaronite / animusDead / vaporCount init — no bridges);
+	// smellSaronite inits PORTED ticks 417/461 as SetData legs
+	// (ev23/ev5); vaporCount PORTED tick 473 as a GUID-keyed
+	// module table; animusDead written only, never read in C++);
 	// SpellHitTarget (SPELL_SHADOW_CRASH_HIT 62659 player leg ->
-	// shadowDodger = false — ev15 bridge live, but the flag's
-	// reader machine stays unported, so the arm stays out);
-	// GetData(DATA_SHADOWDODGER 29962997 / DATA_SMELL_SARONITE
-	// 31813188 — no GetData bridge); DoAction(ACTION_VAPORS_DIE
-	// / ACTION_ANIMUS_DIE — ev38 dispatch IS bridged, creature:
-	// DoAction, lua_creature_events.go:802; senders unported:
-	// vapors DamageTaken :436 / animus JustDied :338,
-	// boss_general_vezax.cpp);
-	// CheckShamanisticRage map-player scan — no bridge;
-	// EVENT_SHADOW_CRASH (CheckPlayersInRange / SelectTarget
-	// Random + DoCast 62660, init {8s,10s}, re-arm {8s,12s}) /
-	// EVENT_MARK_OF_THE_FACELESS (CheckPlayersInRange /
-	// SelectTarget Random + DoCast 63276, init {35s,40s}, re-arm
-	// {35s,45s}) — random-target selection legs; no target-search
-	// bridge; EVENT_SEARING_FLAMES (DoCastAOE 62661, re-arm
-	// {14s,17500ms} — canceled by the unbridgeable vapor
-	// hard-mode leg and rescheduled by the unbridgeable
-	// ACTION_ANIMUS_DIE DoAction leg — animus phases stay out);
-	// EVENT_SARONITE_VAPORS (DoCast 63081 self-cast, 30s init,
-	// re-arm {30s,35s} + hard-mode machine: Talk SAY_HARDMODE 5 +
-	// Talk EMOTE_BARRIER 7 + summons.DespawnAll + DoCast 63364 +
-	// DoCast 63145 + LOOT_MODE_HARD_MODE_1 + CancelEvents) —
-	// summon leg + hard-mode phase machine; boss_saronite_animus
-	// (no creature-entry enum in C++ — spell-summoned via 63145;
+	// shadowDodger = false — PORTED tick 461 via ev15, keyed on
+	// the 62659 hit); GetData(DATA_SHADOWDODGER 29962997 /
+	// DATA_SMELL_SARONITE 31813188 — bridged,
+	// lua_creature_events.go:809); boss_saronite_animus (no
+	// creature-entry enum in C++ — spell-summoned via 63145;
 	// entry-unverifiable — no registration; Reset one-shot 63319
 	// + EVENT_PROFOUND_OF_DARKNESS DoCastAOE(63420, TRIGGERED)
 	// 3s/3s timer leg rides the unbridged summon machine —
@@ -20219,16 +20217,16 @@ func init() {
 	// JustDied, boss_general_vezax.cpp:338); npc_saronite_vapors (no
 	// entry enum — spell-summoned via 63081; entry-unverifiable
 	// — no registration; constructor Talk(EMOTE_VAPORS 0) —
-	// no spawn bridge; MoveRandom / DamageTaken machine — no
-	// movement / damage-taken / DoAction bridges); the three
-	// spell scripts (63276 mark_of_the_faceless periodic +
-	// 63323 saronite_vapors apply — PORTED tick 422 via
-	// RegisterAuraEvent, boss_general_vezax.lua; the
-	// mark_of_the_faceless_leech target-select filter stays in
-	// the no-SpellScript-bridge queue); the two
-	// achievements (shadowdodger / smell_saronite — GetData-based
-	// OnCheck — no achievement consumer (creature-target criteria gate absent; GetData read bridged); both join the
-	// unmodeled-achievement queue).
+	// no spawn bridge; MoveRandom / DamageTaken machine — the
+	// DamageTaken (ev9) + DoAction (ev38) bridges are live, the
+	// bearer entry is the blocker); the three spell scripts
+	// (63276 mark_of_the_faceless periodic + 63323 saronite_vapors
+	// apply — PORTED tick 422 via RegisterAuraEvent,
+	// boss_general_vezax.lua; the mark_of_the_faceless_leech
+	// target-select filter stays in the no-SpellScript-bridge
+	// queue); the two achievements (shadowdodger / smell_saronite
+	// — GetData-based OnCheck — PORTED ticks 417/461 as Go cases
+	// in achievement_criteria_scripts.go).
 	RegisterLuaBoss("boss_general_vezax", 33271)
 
 	// Assembly of Iron (Steelbreaker 32867 / Runemaster Molgeim

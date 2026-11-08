@@ -51,8 +51,8 @@
 -- CheckShamanisticRage (PORTED this run —
 -- gal_darah GetPlayersInWorld precedent + player:HasSpell /
 -- player:CastSpell bridges, no longer "no map-player-scan
--- bridge"), and the four unbridgeable ScheduleEvent legs are
--- the vapor summon legs — the malygos engage-aura precedent).
+-- bridge"), and all six ScheduleEvent legs are ported below
+-- (the vapors leg rides saroniteVaporsTick).
 -- EVENT_SURGE_OF_DARKNESS (:188-193) — Talk
 -- (EMOTE_SURGE_OF_DARKNESS 8) + Talk(SAY_SURGE_OF_DARKNESS 2) +
 -- DoCast(me, SPELL_SURGE_OF_DARKNESS 62662) 2-arg non-triggered,
@@ -101,8 +101,9 @@
 -- creature:SetData(DATA_SMELL_SARONITE 31813188, 1) in vezaxReset
 -- (ev23) + vezaxSpawned (ev5, ctor twin) — the
 -- achievement_smell_saronite write leg, cleared by vezaxDoAction.
--- animusDead / vaporCount stay out (consumed only by the unported
--- GetData / hard-mode machines).
+-- vaporCount is PORTED tick 473 as a GUID-keyed module table
+-- (reset ev23/ev5, drives the hard-mode machine below);
+-- animusDead stays out (written only, never read in C++).
 -- SpellHitTarget — SPELL_SHADOW_CRASH_HIT 62659 TYPEID_PLAYER leg
 -- -> shadowDodger = false (consumer: achievement_shadowdodger
 -- below) PORTED tick 461 via RegisterCreatureEvent (15): ev15 fires
@@ -136,7 +137,16 @@
 -- SPELL_SARONITE_BARRIER 63364) + DoCast
 -- (SPELL_SUMMON_SARONITE_ANIMUS 63145) + LOOT_MODE_HARD_MODE_1 +
 -- CancelEvent(EVENT_SARONITE_VAPORS/EVENT_SEARING_FLAMES)) —
--- summon leg + hard-mode phase machine; left out.
+-- PORTED tick 473 via saroniteVaporsTick: the cast + count +
+-- Talk/barrier/animus-cast/AddLootMode(0x2)/CancelEvent legs are
+-- all bridged (AddLootMode lua_creature_events.go:2272;
+-- GetData read of the smellSaronite slot, :809); only
+-- summons.DespawnAll() stays out (no bridge for spell-summoned
+-- summons — the razorscale evade precedent; the vapor adds
+-- themselves never spawn until the 63081 summon effect lands,
+-- so nothing exists to despawn in the Go model). DORMANT until
+-- Spell.dbc ships 63081/63364/63145: the 30s cast fires on
+-- schedule but the summon effect resolves only with the DBC row.
 -- boss_saronite_animus (no creature-entry enum in C++ —
 -- spell-summoned via 63145; entry-unverifiable — no
 -- registration): Reset one-shot DoCast(me,
@@ -187,7 +197,9 @@ local SAY_SLAY = 1
 local SAY_SURGE_OF_DARKNESS = 2
 local SAY_DEATH = 3
 local SAY_BERSERK = 4
+local SAY_HARDMODE = 5
 
+local EMOTE_BARRIER = 7
 local EMOTE_SURGE_OF_DARKNESS = 8
 
 local SPELL_AURA_OF_DESPAIR = 62692
@@ -199,10 +211,16 @@ local SPELL_MARK_OF_THE_FACELESS = 63276
 local SPELL_BERSERK = 26662
 local SPELL_SHAMANTIC_RAGE = 30823
 local SPELL_CORRUPTED_RAGE = 68415
+local SPELL_SUMMON_SARONITE_VAPORS = 63081 -- boss_general_vezax.cpp:61
+local SPELL_SARONITE_BARRIER = 63364 -- boss_general_vezax.cpp:53
+local SPELL_SUMMON_SARONITE_ANIMUS = 63145 -- boss_general_vezax.cpp:64
+
+local LOOT_MODE_HARD_MODE_1 = 0x2 -- SharedDefines.h:43
 
 local DATA_SHADOWDODGER = 29962997 -- boss_general_vezax.cpp:99 (Misc enum)
 local DATA_SMELL_SARONITE = 31813188 -- boss_general_vezax.cpp:98 (Misc enum)
 local ACTION_VAPORS_DIE = 1 -- boss_general_vezax.cpp:75 (VezaxActions; VAPORS_SPAWN 0, ANIMUS_DIE 2)
+local ACTION_ANIMUS_DIE = 2 -- boss_general_vezax.cpp:76
 
 local timers = {}
 
@@ -226,6 +244,18 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ vaporCount (boss_general_vezax.cpp:116, Initialize/Reset) —
+-- GUID-keyed, zeroed on ev23/ev5, cleared on death.
+local vaporCounts = {}
+
+local function cancelTimerKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
 end
 
 -- C++ EVENT_SURGE_OF_DARKNESS (:188-193): Talk
@@ -252,8 +282,8 @@ end
 -- no re-arm — Talk-before-cast order kept.
 -- CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:157) + in-loop
 -- (:215) CASTING gates PORTED as a 500ms IsCasting defer at the top
--- of all 5 ported timer ticks (surge / shadow_crash / searing_flames /
--- mark / berserk; mal_ganis idiom, IsCasting live
+-- of all 6 ported timer ticks (surge / shadow_crash / searing_flames /
+-- mark / berserk / saronite_vapors; mal_ganis idiom, IsCasting live
 -- lua_creature_events.go:1950) — defer precedes Talk + target pick,
 -- so a deferred tick re-fires intact and consumes no re-arm. The
 -- engage / slay / died hooks are ungated per C++ (separate hooks);
@@ -373,6 +403,43 @@ local function markOfTheFacelessTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SARONITE_VAPORS (:194-208): DoCast
+-- (SPELL_SUMMON_SARONITE_VAPORS 63081) 2-arg self-cast, 30s init
+-- (:145), re-arm {30s,35s} (:196) — then ++vaporCount == 6 &&
+-- smellSaronite -> Talk(SAY_HARDMODE 5) + Talk(EMOTE_BARRIER 7) +
+-- DoCast(me, SPELL_SARONITE_BARRIER 63364) + DoCast
+-- (SPELL_SUMMON_SARONITE_ANIMUS 63145) + AddLootMode
+-- (LOOT_MODE_HARD_MODE_1 0x2) + CancelEvent(EVENT_SARONITE_VAPORS
+-- / EVENT_SEARING_FLAMES). C++ re-arms before the count check
+-- (:196) and cancels after (:205-206); net effect at hard mode is
+-- cancel, so the Lua leg re-arms only on the non-hard-mode path.
+-- summons.DespawnAll() stays out (no bridge for spell-summoned
+-- summons). IsCasting 500ms defer per the UpdateAI gates (:157/:215).
+local function saroniteVaporsTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "saronite_vapors", 500, function()
+            saroniteVaporsTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_SARONITE_VAPORS)
+    local count = (vaporCounts[guid] or 0) + 1
+    vaporCounts[guid] = count
+    if count == 6 and creature:GetData(DATA_SMELL_SARONITE) ~= 0 then
+        creature:Talk(SAY_HARDMODE)
+        creature:Talk(EMOTE_BARRIER)
+        creature:CastSpell(creature, SPELL_SARONITE_BARRIER)
+        creature:CastSpell(creature, SPELL_SUMMON_SARONITE_ANIMUS)
+        creature:AddLootMode(LOOT_MODE_HARD_MODE_1)
+        cancelTimerKey(guid, "saronite_vapors")
+        cancelTimerKey(guid, "searing_flames")
+        return
+    end
+    schedule(guid, "saronite_vapors", {30000, 35000}, function()
+        saroniteVaporsTick(creature, guid)
+    end)
+end
+
 -- C++ CheckShamanisticRage (boss_general_vezax.cpp:244-251): map
 -- player scan -> player:HasSpell(SPELL_SHAMANTIC_RAGE 30823) ->
 -- player->CastSpell(player, SPELL_CORRUPTED_RAGE 68415) 2-arg
@@ -427,6 +494,9 @@ local function vezaxEnterCombat(event, creature, target)
     schedule(guid, "mark", {35000, 40000}, function()
         markOfTheFacelessTick(creature, guid)
     end)
+    schedule(guid, "saronite_vapors", 30000, function()
+        saroniteVaporsTick(creature, guid)
+    end)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)
     end)
@@ -464,6 +534,7 @@ local function vezaxDied(event, creature, killer)
     creature:SetBossState(DATA_VEZAX, 3)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    vaporCounts[creature:GetGUID()] = nil
     -- C++ JustDied (boss_general_vezax.cpp:234-239 — arm order: _JustDied,
     -- Talk(SAY_DEATH), DoRemoveAurasDueToSpellOnPlayers): the player leg
     -- is PORTED via stripDespairAuras above (C++ arm order; the
@@ -486,6 +557,7 @@ end
 -- GetData / hard-mode machines).
 local function vezaxReset(event, creature)
     cancelTimers(creature:GetGUID())
+    vaporCounts[creature:GetGUID()] = 0
     creature:SetBossState(DATA_VEZAX, 0)
     -- C++ Reset -> Initialize (:110-115, :127-133): smellSaronite =
     -- true, shadowDodger = true. The achievement_smell_saronite /
@@ -509,6 +581,7 @@ end
 -- fresh motion's ScriptData reads 0, so the spawn handler sets the
 -- C++ default before any engage can occur.
 local function vezaxSpawned(event, creature)
+    vaporCounts[creature:GetGUID()] = 0
     creature:SetData(DATA_SMELL_SARONITE, 1)
     creature:SetData(DATA_SHADOWDODGER, 1)
 end
@@ -520,14 +593,35 @@ end
 -- boss_freya.lua). Dormant until the vapors bearer lands: the sender
 -- is npc_saronite_vapors, spell-summoned via 63081 with no creature
 -- entry anywhere in the C++ tree (ENTRY-BLOCKED), and the vapor
--- summon machine itself is unported — so in the Go-modeled fight no
+-- summon effect is DBC-gated — so in the Go-modeled fight no
 -- vapor can die and the latch stays 1, matching C++ for a
 -- zero-vapor-death fight. shadowDodger deliberately has NO write leg
 -- here: its clear leg is the ev15 SpellHitTarget handler below
 -- (SPELL_SHADOW_CRASH_HIT 62659, player-gated).
+-- C++ DoAction(ACTION_ANIMUS_DIE) (boss_general_vezax.cpp:271-276):
+-- RemoveAurasDueToSpell(SPELL_SARONITE_BARRIER 63364) +
+-- ScheduleEvent(EVENT_SEARING_FLAMES, 7s, 12s) + animusDead = true.
+-- PORTED tick 473: RemoveAura(63364) (lua_creature_events.go:1504)
+-- + schedule(guid, "searing_flames", {7000, 12000}); animusDead
+-- stays out (written only, never read in C++). Dormant until the
+-- animus bearer lands: the sender is the animus JustDied (:338),
+-- entry-unverifiable (spell-summoned via 63145, no creature entry
+-- in the C++ tree), so no ANIMUS_DIE ever fires in the Go model.
 local function vezaxDoAction(event, creature, action)
     if action == ACTION_VAPORS_DIE then
         creature:SetData(DATA_SMELL_SARONITE, 0)
+    elseif action == ACTION_ANIMUS_DIE then
+        -- C++ DoAction(ACTION_ANIMUS_DIE) (:271-276):
+        -- RemoveAurasDueToSpell(SPELL_SARONITE_BARRIER 63364) +
+        -- ScheduleEvent(EVENT_SEARING_FLAMES, 7s, 12s); animusDead
+        -- stays out (written only, never read in C++). schedule()
+        -- cancels any pending searing_flames key first, so this
+        -- re-arms cleanly after the hard-mode cancel.
+        creature:RemoveAura(SPELL_SARONITE_BARRIER)
+        local guid = creature:GetGUID()
+        schedule(guid, "searing_flames", {7000, 12000}, function()
+            searingFlamesTick(creature, guid)
+        end)
     end
 end
 
