@@ -3195,7 +3195,7 @@ func (s *session) handleCmdCastDest(ctx context.Context, args []string) bool {
 		return true
 	}
 	dest := [3]float32{coords[0], coords[1], coords[2]}
-	s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false)
+	s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0)
 	return true
 }
 

@@ -103,8 +103,9 @@ func isGOConeSpell(spell wotlk.Spell) bool {
 // (Spell.cpp:1279): max CalcRadius over the matched effects, with the
 // Spell.cpp:1281 workaround — an unset radius falls back to
 // GetMaxRange(IsPositiveEffect) (Go: the SpellRange MaxHostile/MaxFriendly
-// split via isHarmfulSpell, like the 7/8 path). The C++ RadiusMod
-// multiplier (m_spellValue) has no Go equivalent.
+// split via isHarmfulSpell, like the 7/8 path). The cast-scoped
+// SPELLVALUE_RADIUS_MOD multiplier (m_spellValue) folds in below via
+// applyCastRadiusMod64, after the range fallback (Spell.cpp:1194/1284).
 func (s *session) spellGOAreaRadius(spell wotlk.Spell, effectMask uint32) float64 {
 	radius := float64(0)
 	for i, eff := range spell.Effects {
@@ -128,7 +129,7 @@ func (s *session) spellGOAreaRadius(spell wotlk.Spell, effectMask uint32) float6
 			}
 		}
 	}
-	return radius
+	return applyCastRadiusMod64(spell, radius)
 }
 
 // spellGOAreaTargets ports Spell::SelectImplicitAreaTargets (Spell.cpp:1227)
@@ -407,7 +408,8 @@ func (s *session) spellGOConeTargetsWithMasks(ctx context.Context, spell wotlk.S
 // max CalcRadius over the matched effects at the caster's level, with the
 // Spell.cpp:1281 range fallback (GetMaxRange split by isHarmfulSpell). No
 // SPELLMOD_RADIUS fold: a creature caster carries no spellmod owner session
-// to fold through, so the raw DBC radius stands.
+// to fold through, so the raw DBC radius stands; the cast-scoped
+// SPELLVALUE_RADIUS_MOD multiplier folds in below (Spell.cpp:1194/1284).
 func (s *Server) creatureGOAreaRadius(m *creatureMotion, spell wotlk.Spell, effectMask uint32) float64 {
 	radius := float64(0)
 	for i, eff := range spell.Effects {
@@ -428,7 +430,7 @@ func (s *Server) creatureGOAreaRadius(m *creatureMotion, spell wotlk.Spell, effe
 			}
 		}
 	}
-	return radius
+	return applyCastRadiusMod64(spell, radius)
 }
 
 // creatureGOAreaDestCenter resolves the DEST-area center for a creature

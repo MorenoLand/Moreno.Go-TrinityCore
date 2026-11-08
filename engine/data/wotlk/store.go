@@ -256,6 +256,12 @@ type Spell struct {
 	Speed                  float32
 	SpellVisual            [2]uint32 // Spell.dbc fields 131-132 = SpellVisualID (DBCStructure.h:1464)
 	Effects                [3]SpellEffect
+	// CastRadiusMod is cast-scoped, not DBC: the SPELLVALUE_RADIUS_MOD
+	// multiplier (Spell.cpp:7881: value/10000) for this cast, set by the
+	// cast funnel from the Lua CastSpellWithRadiusMod arg. 0 = unset
+	// (1.0x); the area/cone selection legs fold it after the
+	// CalcRadius/range-fallback arm (Spell.cpp:1194/1284).
+	CastRadiusMod float32
 }
 
 type SpellRangeEntry struct {

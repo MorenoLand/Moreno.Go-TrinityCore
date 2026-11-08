@@ -6,7 +6,7 @@
 -- registered alongside in this file; go_broggok_lever is a
 -- GameObjectScript — gossip handler PORTED below (ev38 PREPARE
 -- arm + lever flag/state legs); spell_broggok_poison_cloud is an AuraScript —
--- no AuraScript bridge, documented only, not registered).
+-- PeriodicTick PORTED below (ev1 + CastSpellWithRadiusMod).
 -- First boss in the Blood Furnace set per
 -- outland_script_loader.cpp order (instance_blood_furnace.
 -- cpp stays blocked on the instance-script model).
@@ -89,8 +89,8 @@
 -- OnUnitDeath prisoner-counter -> ActivateCell chain and the
 -- ResetPrisons/ResetPrisoners/ActivatePrisoners/
 -- HandleGameObject arms are instance-gated; spell_broggok_
--- poison_cloud (AuraScript on 30914/38462) has no AuraScript
--- bridge (standing gap); no SpellScript scripts in this file.
+-- poison_cloud (AuraScript on 30914/38462) PeriodicTick is PORTED
+-- below (ev1 + CastSpellWithRadiusMod); no SpellScript scripts in this file.
 
 local SPELL_SLIME_SPRAY = 30913
 local SPELL_POISON_BOLT = 30917
@@ -281,3 +281,35 @@ end)
 RegisterCreatureEvent(ENTRY_BROGGOK, 23, function(_, creature)
     resetBoss(creature:GetGUID())
 end)
+
+-- C++ spell_broggok_poison_cloud::PeriodicTick (boss_broggok.cpp:293-304):
+-- EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL on 30914 (normal) /
+-- 38462 (heroic). PreventDefaultAction, so the Go default
+-- trigger-spell cast is skipped (return true); a zero total-tick
+-- count returns early (C++ GetTotalTicks() guard). The trigger spell
+-- id comes from the aura's own Effects[0].TriggerSpell (DBC-side,
+-- read via aura:GetTriggerSpell(0); 0 without Spell.dbc means no
+-- cast). The radius mod grows with the tick: ((tick/total) * 0.9 +
+-- 0.1) * 10000 * 2/3 (C++ int32 truncation). The cloud trigger
+-- (NPC_POISON_CLOUD 17662, which self-casts 30914 in JustSummoned)
+-- casts the trigger spell on itself (C++ CastSpell(nullptr, ...) —
+-- self-centered area, DoCastAOE convention). DORMANT until Spell.dbc
+-- ships: the trigger spell id and the 30914 aura itself are DBC-side.
+local SPELL_POISON_CLOUD_PASSIVE_HEROIC = 38462
+
+local function poisonCloudTick(event, aura, target)
+    local totalTicks = aura:GetTotalTicks()
+    if totalTicks == 0 then
+        return true
+    end
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    local mod = math.floor(((aura:GetTickNumber() / totalTicks) * 0.9 + 0.1) * 10000 * 2 / 3)
+    target:CastSpellWithRadiusMod(target, triggerSpell, true, mod)
+    return true
+end
+
+RegisterAuraEvent(SPELL_POISON_CLOUD_PASSIVE, 1, poisonCloudTick)
+RegisterAuraEvent(SPELL_POISON_CLOUD_PASSIVE_HEROIC, 1, poisonCloudTick)

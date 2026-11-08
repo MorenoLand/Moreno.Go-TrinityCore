@@ -138,6 +138,9 @@ func (s *session) spellEntryAreaTargetsWithCenters(ctx context.Context, spell wo
 				}
 			}
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		r = applyCastRadiusMod64(spell, r)
 		if r <= 0 {
 			continue
 		}

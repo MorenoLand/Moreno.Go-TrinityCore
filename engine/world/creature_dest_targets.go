@@ -1487,6 +1487,11 @@ func (s *Server) creatureFriendlyConeTargets(ctx context.Context, m *creatureMot
 			}
 		}
 	}
+	// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped radius
+	// multiplier folds into the max after the CalcRadius/range-fallback
+	// arm — a positive multiplier preserves the max, so folding the
+	// final max equals folding each per-effect radius.
+	radius = applyCastRadiusMod(spell, radius)
 	if radius <= 0 || len(checks) == 0 {
 		return nil, nil
 	}

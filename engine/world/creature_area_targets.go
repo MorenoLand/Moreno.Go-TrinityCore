@@ -84,6 +84,9 @@ func (s *Server) creatureAIAreaLegGroups(motion *creatureMotion, spell wotlk.Spe
 				legRadius = effMaxRange
 			}
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		legRadius = applyCastRadiusMod(spell, legRadius)
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				continue
@@ -427,6 +430,9 @@ func (s *Server) creatureAIAreaEntryTargetsWithCenters(ctx context.Context, moti
 				}
 			}
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		radius = applyCastRadiusMod(spell, radius)
 		if radius <= 0 {
 			continue
 		}
@@ -680,6 +686,9 @@ func (s *Server) creatureAIAreaEnemyPlayers(ctx context.Context, motion *creatur
 				legRadius = effMaxRange
 			}
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		legRadius = applyCastRadiusMod(spell, legRadius)
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				continue
@@ -921,6 +930,9 @@ func (s *Server) creatureAIAreaAllyLegGroups(motion *creatureMotion, spell wotlk
 				}
 			}
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		legRadius = applyCastRadiusMod(spell, legRadius)
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				continue
@@ -1602,6 +1614,11 @@ func (s *Server) creatureRefCenteredAreaTargets(ctx context.Context, motion *cre
 			}
 		}
 	}
+	// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped radius
+	// multiplier folds into the max after the CalcRadius/range-fallback
+	// arm — a positive multiplier preserves the max, so folding the
+	// final max equals folding each per-effect radius.
+	radius = applyCastRadiusMod(spell, radius)
 	if radius <= 0 {
 		return nil, nil, nil
 	}

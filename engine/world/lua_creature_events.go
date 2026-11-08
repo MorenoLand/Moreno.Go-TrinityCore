@@ -961,7 +961,45 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				triggered = b
 			}
 		}
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false)
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false, 0)
+		return nil, nil
+	}
+	// CastSpellWithRadiusMod(target, spellId, triggered, radiusMod) is
+	// Unit::CastSpell with CastSpellExtraArgs carrying AddSpellMod(
+	// SPELLVALUE_RADIUS_MOD, radiusMod) (Spell.cpp:7881: RadiusMod =
+	// value/10000; applied at Spell.cpp:1194/1284 as radius *=
+	// RadiusMod). The radiusMod arg is the raw C++ int32 mod value
+	// (10000 = 1.0x, unchanged radius); a non-positive mod leaves the
+	// radius unmodified. The target is the explicit unit target —
+	// self-cast for the self-centered area casts this serves (the
+	// DoCastAOE convention); the area selection itself runs off the
+	// caster position.
+	methods["CastSpellWithRadiusMod"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("CastSpellWithRadiusMod requires a target, a spell id, triggered and a radius mod")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		triggered := false
+		if b, ok := args[2].(bool); ok {
+			triggered = b
+		}
+		mod, err := luaInt64Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			s.motionMu.Lock()
+			targetGUID = motion.TargetGUID
+			s.motionMu.Unlock()
+		}
+		if targetGUID == 0 {
+			return nil, nil
+		}
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, nil, nil, false, float32(mod)/10000)
 		return nil, nil
 	}
 	// CastSpellAoF(x, y, z, spellId[, triggered]) is Unit::CastSpell at
@@ -998,7 +1036,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 		}
 		dest := [3]float32{x, y, z}
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false)
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0)
 		return nil, nil
 	}
 	// InterruptSpell(spellType[, delayed]) is Unit::InterruptSpell

@@ -237,6 +237,9 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 				legRadius = maxRangePositive
 			}
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		legRadius = applyCastRadiusMod(spell, legRadius)
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				continue

@@ -427,6 +427,28 @@ func (s *session) applySpellModNoTakingLocked(spell wotlk.Spell, op uint8, basev
 	return int32(float64(basevalue+totalFlat) * totalMul)
 }
 
+// applyCastRadiusMod folds the cast-scoped SPELLVALUE_RADIUS_MOD
+// multiplier (Spell.cpp:7881: RadiusMod = value/10000; applied at
+// Spell.cpp:1194/1284 as radius *= m_spellValue->RadiusMod) into a
+// resolved area/cone radius. It runs after the CalcRadius /
+// range-fallback arm, matching C++ order. A cast that set no radius
+// mod reads 0 and passes the radius through unchanged.
+func applyCastRadiusMod(spell wotlk.Spell, radius float32) float32 {
+	if spell.CastRadiusMod > 0 {
+		return radius * spell.CastRadiusMod
+	}
+	return radius
+}
+
+// applyCastRadiusMod64 is the float64 twin for the GO-area radius
+// helpers, which carry their radius in float64.
+func applyCastRadiusMod64(spell wotlk.Spell, radius float64) float64 {
+	if spell.CastRadiusMod > 0 {
+		return radius * float64(spell.CastRadiusMod)
+	}
+	return radius
+}
+
 // applySpellModFloat mirrors the float instantiation of
 // Player::ApplySpellMod (Player.cpp:21309-21370): the base value stays in
 // the float domain through the whole computation, matching basevalue =

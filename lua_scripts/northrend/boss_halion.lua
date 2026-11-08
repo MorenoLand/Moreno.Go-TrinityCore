@@ -1215,3 +1215,34 @@ RegisterAuraEvent(SPELL_MARK_OF_COMBUSTION, 7, markOfCombustionBeforeDispel)
 RegisterAuraEvent(SPELL_MARK_OF_COMBUSTION, 3, markOfCombustionOnRemove)
 RegisterAuraEvent(SPELL_MARK_OF_CONSUMPTION, 7, markOfConsumptionBeforeDispel)
 RegisterAuraEvent(SPELL_MARK_OF_CONSUMPTION, 3, markOfConsumptionOnRemove)
+
+-- C++ spell_halion_combustion_consumption_periodic::HandleTick
+-- (boss_halion.cpp:1502-1519): EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL
+-- on SPELL_FIERY_COMBUSTION 74562 / SPELL_SOUL_CONSUMPTION 74792.
+-- PreventDefaultAction, so the Go default trigger-spell cast is skipped
+-- (return true). The caster (Halion) casts the trigger spell — the
+-- aura's own Effects[0].TriggerSpell (DBC-side, read via
+-- aura:GetTriggerSpell(0); 0 without Spell.dbc means no cast) — on
+-- itself (C++ CastSpell(nullptr, ...) — self-centered area, DoCastAOE
+-- convention), with the radius mod from the caster's object scale:
+-- scale * pi * 10000 / 3 (C++ int32 truncation). The C++
+-- OriginalCaster = caster leg has no Go model (CastCustomSpell
+-- precedent) and is moot here — the caster IS the original caster.
+-- DORMANT until Spell.dbc ships: the trigger spell id and the
+-- 74562/74792 auras themselves are DBC-side.
+local function combustionConsumptionTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return true
+    end
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    local radius = math.floor(caster:GetScale() * math.pi * 10000 / 3)
+    caster:CastSpellWithRadiusMod(caster, triggerSpell, true, radius)
+    return true
+end
+
+RegisterAuraEvent(SPELL_FIERY_COMBUSTION, 1, combustionConsumptionTick)
+RegisterAuraEvent(SPELL_SOUL_CONSUMPTION, 1, combustionConsumptionTick)

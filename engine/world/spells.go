@@ -1435,6 +1435,9 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			}
 			legRadius = effMaxRange
 		}
+		// SPELLVALUE_RADIUS_MOD (Spell.cpp:1194/1284): the cast-scoped
+		// radius multiplier folds in after the CalcRadius/range-fallback arm.
+		legRadius = applyCastRadiusMod(spell, legRadius)
 		for slot, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
 			if slot == 1 && implicitTargetSecondSlotSkipped(eff.ImplicitTargetA, eff.ImplicitTargetB) {
 				continue
@@ -39798,9 +39801,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// cast below.
 			if aura.AuraType == spellAuraPeriodicTriggerSpellWithValue {
 				withValue := int32(aura.Amount)
-				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, map[int]int32{0: withValue, 1: withValue, 2: withValue}, nil, false)
+				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, map[int]int32{0: withValue, 1: withValue, 2: withValue}, nil, false, 0)
 			} else {
-				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, nil, nil, false)
+				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, nil, nil, false, 0)
 			}
 			return
 		}
@@ -41832,13 +41835,13 @@ func (s *session) castPeriodicTriggerFromCreature(ctx context.Context, key creat
 			return
 		}
 		if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, casterMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, casterMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false, 0)
 			return
 		}
 		return
 	}
 	if targetMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); targetMotion != nil {
-		s.server.castCreatureSpellInternalWithBasePoints(ctx, targetMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false)
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, targetMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false, 0)
 	}
 }
 
