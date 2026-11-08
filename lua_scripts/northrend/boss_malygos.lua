@@ -80,6 +80,28 @@
 -- DespawnOrUnsummon IS ported (malygosDied below — stale
 -- "no despawn bridge" retracted; creature:Despawn() is bridged,
 -- lua_objects.go).
+-- Vortex machine (PORTED tick 429, below): EVENT_VORTEX
+-- CreateLuaEvent timer (30-35s first, 60-80s re-arm, C++
+-- boss_malygos.cpp:547/:776-779) seeded at engage — engage is
+-- the earliest observable phase-one start in Go (the intro land
+-- machine is unported), so the first vortex fires ~7s early
+-- vs C++; the phase-one latch is Lua-side (the tick no-ops and
+-- stops re-arming at 50% health, the C++ UpdateAI phase-two
+-- flip — the transition itself stays out). ACTION_LIFT_IN_AIR
+-- (z + 20 MoveTo twin of MoveTakeoff) + EVENT_MOVE_TO_VORTEX_POINT
+-- (REACT_PASSIVE + AttackStop + MoveTo vortex point) +
+-- ACTION_EXECUTE_VORTEX (56237/55873/56105 triggered self-casts,
+-- C++ order) run through ev38/ev28 (POINT_LIFT_IN_AIR_P_ONE 5 /
+-- POINT_VORTEX_P_ONE 3 / POINT_LAND_AFTER_VORTEX_P_ONE 4).
+-- spell_malygos_vortex_visual::OnRemove (55873, ev3) is PORTED
+-- (threat-list players -> vortex trigger casts 73040, triggered;
+-- MoveLand twin + RemoveAura 56237) but DORMANT until the aura
+-- system applies 55873 (no Spell.dbc); the 10s fallback land timer
+-- (fight-documented vortex duration, wowpedia/guiaswow) carries
+-- the land until then, latch-guarded against double-run. GM skip
+-- has no bridge (no IsGameMaster on the player surface).
+-- spell_malygos_vortex_dummy (56105) stays out: its HandleScript
+-- writes instance SetData(DATA_VORTEX_HANDLING) — no bridge.
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset / Initialize (gravity / immunity / flags / flight-speed
 -- legs, SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE,
@@ -91,20 +113,25 @@
 -- (no immune surface, no speed literal, no phase bridge).
 -- DoAction (the ~60-action event/phase
 -- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
--- intro, vortex legs, surge-of-power legs, respawn handling —
--- all gated on MotionMaster / instance GUIDs / timed events) —
--- dispatch IS bridged (creature:DoAction fires ev38,
--- lua_creature_events.go:802); the machine stays out on its unported
--- drivers (motion / instance), not dispatch. MovementInform
--- (POINT_LAND_P_ONE / vortex takeoff-land / cyclic movement
--- points) — no motion bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
+-- intro, surge-of-power legs, respawn handling — all gated on
+-- MotionMaster / instance GUIDs / timed events) — dispatch IS
+-- bridged (creature:DoAction fires ev38,
+-- lua_creature_events.go:802); the VORTEX actions are PORTED
+-- (ACTION_EXECUTE_VORTEX + ACTION_LIFT_IN_AIR, below); the rest
+-- of the machine stays out on its unported drivers (motion /
+-- instance), not dispatch. MovementInform
+-- (POINT_LAND_P_ONE / cyclic movement points) — the vortex
+-- takeoff-land points are PORTED (below); the rest has no motion
+-- bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
 -- SetControlled(true, UNIT_STATE_ROOT) rides that same unbridged
--- MovementInform: stays out. DamageTaken (surge-of-power and
--- destroy-platform health gates, immune flag flips) — no
--- health / timer-event bridges. UpdateAI (phase-one arcane
--- event machine, vortex handling, power-spark handling,
--- phase-three disk/scion machine) — no timer-event / cast /
--- phase bridges. SpellHit — SPELL_POWER_SPARK_MALYGOS 56152
+-- MovementInform: stays out, except the vortex points (PORTED
+-- below). DamageTaken (surge-of-power and destroy-platform
+-- health gates, immune flag flips) — no health / timer-event
+-- bridges. UpdateAI (phase-one arcane event machine,
+-- power-spark handling, phase-three disk/scion machine) — no
+-- timer-event / cast / phase bridges; EVENT_VORTEX is PORTED
+-- (CreateLuaEvent timer + DoAction, below).
+-- SpellHit — SPELL_POWER_SPARK_MALYGOS 56152
 -- (Talk SAY_BUFF_SPARK 14 + despawn the spark) stays out: the
 -- trigger is Malygos's MoveInLineOfSight arm (event 27 exists,
 -- but the arm is PHASE_ONE-gated with no phase model in Lua —
@@ -191,8 +218,11 @@
 -- + gift beam visual) — no SpellScript bridge (the varos
 -- precedents) and no AuraScript bridge (the keristrasza
 -- precedent); all 17 join the standing queues, except the gift
--- beam visual OnApply (PORTED tick 204, below) and the portal
--- beam (ported, below).
+-- beam visual OnApply (PORTED tick 204, below), the portal
+-- beam (ported, below), and the vortex visual OnRemove
+-- (PORTED tick 429, below); the vortex dummy (56105) stays out
+-- — its HandleScript is an instance SetData write with no
+-- bridge (next unit after the proc bridge).
 -- achievement_denyin_the_scion — OnCheck: player's vehicle
 -- base entry == NPC_HOVER_DISK_MELEE (30234) — no achievement
 -- bridge (the kelthuzad / thaddius precedent); joins the
@@ -221,6 +251,205 @@ local SAY_DEATH = 17
 local SPELL_BERSERK = 60670
 local SPELL_MALYGOS_PORTAL_BEAM = 56046 -- boss_malygos.cpp:102
 local SPELL_PORTAL_OPENED = 61236 -- eye_of_eternity.h:84
+local POINT_VORTEX_P_ONE = 3 -- Movements enum (boss_malygos.cpp:164-166)
+local POINT_LAND_AFTER_VORTEX_P_ONE = 4
+local POINT_LIFT_IN_AIR_P_ONE = 5
+local ACTION_EXECUTE_VORTEX = 1 -- Actions enum (boss_malygos.cpp:183-185)
+local ACTION_LIFT_IN_AIR = 3
+local SPELL_VORTEX_1 = 56237 -- boss_malygos.cpp:113 (freeze-object animation)
+local SPELL_VORTEX_2 = 55873 -- boss_malygos.cpp:114 (visual effect)
+local SPELL_VORTEX_3 = 56105 -- boss_malygos.cpp:115 (dummy; the vortex script)
+local SPELL_VORTEX_6 = 73040 -- boss_malygos.cpp:116 (teleport, cast by vortex bunnies)
+local VORTEX_POINT_X = 754.393 -- MalygosPositions[1] (boss_malygos.cpp:283)
+local VORTEX_POINT_Y = 1301.27
+local VORTEX_POINT_Z = 292.91
+local LAND_AFTER_VORTEX_X = 754.362 -- MalygosPositions[2] (boss_malygos.cpp:284)
+local LAND_AFTER_VORTEX_Y = 1301.61
+local LAND_AFTER_VORTEX_Z = 266.17
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+-- Vortex fallback land delay: the C++ land rides the SPELL_VORTEX_2
+-- removal (see vortexLand below), whose DBC duration is not in the
+-- repo; the fight-documented vortex lasts 10s (wowpedia Malygos
+-- tactics: 2000 damage every second for 10 seconds, "When Vortex
+-- ends, everyone will be dropped"; guiaswow concurs). The timer is
+-- the expiry emulation until the aura system lands; the ev3 handler
+-- is authoritative then and the landed latch makes the timer a no-op.
+local VORTEX_LAND_FALLBACK_MS = 10000
+
+local timers = {} -- per-GUID {key -> CreateLuaEvent id} (eregos idiom)
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Per-GUID vortex machine state: executing is the C++ _executingVortex
+-- latch (set at EVENT_VORTEX, cleared at the land-after-vortex
+-- arrival); landed guards the land body so the ev3 removal handler
+-- and the fallback timer can never run it twice.
+local vortexState = {}
+
+local function getVortexState(guid)
+    local state = vortexState[guid]
+    if not state then
+        state = { executing = false, landed = false }
+        vortexState[guid] = state
+    end
+    return state
+end
+
+-- C++ spell_malygos_vortex_visual::OnRemove (boss_malygos.cpp:1800-1829,
+-- AfterEffectRemove EFFECT_0 SPELL_AURA_DUMMY): every threat-list
+-- player (the GM skip has no bridge — the player surface exposes no
+-- IsGameMaster; documented deviation) is teleported by the vortex
+-- trigger (instance GetGuidData(DATA_TRIGGER); the Go guid store is
+-- never latched for it, so the live twin is the instanceData
+-- vortexTriggers list bound by instance_eye_of_eternity.lua), then
+-- Malygos lands (MoveLand twin: MoveTo + the arrival leg below) and
+-- drops SPELL_VORTEX_1. Shared by the ev3 handler and the fallback
+-- timer; the landed latch makes the second caller a no-op.
+local function vortexLand(caster)
+    local guid = caster:GetGUID()
+    local state = getVortexState(guid)
+    if state.landed then
+        return
+    end
+    state.landed = true
+    local trigger = nil
+    local mapObj = caster:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data and data.vortexTriggers then
+            trigger = data.vortexTriggers[1]
+        end
+    end
+    if trigger ~= nil then
+        for _, target in ipairs(caster:GetAITargets()) do
+            if target:GetObjectType() == "Player" then
+                trigger:CastSpell(target, SPELL_VORTEX_6, true)
+            end
+        end
+    end
+    caster:MoveTo(POINT_LAND_AFTER_VORTEX_P_ONE, LAND_AFTER_VORTEX_X, LAND_AFTER_VORTEX_Y, LAND_AFTER_VORTEX_Z)
+    caster:RemoveAura(SPELL_VORTEX_1)
+end
+
+-- C++ EVENT_VORTEX (boss_malygos.cpp:776-779): _executingVortex =
+-- true + DoAction(ACTION_LIFT_IN_AIR) + re-arm 60-80s in PHASE_ONE.
+-- The phase-one gate is the Lua-side latch (no phase model in Lua):
+-- the C++ UpdateAI flips to PHASE_TWO at 50% health, dropping the
+-- pending phase-one event, so the tick no-ops and stops re-arming
+-- once health is at or below 50% (the phase-two transition itself —
+-- Talk SAY_END_P_ONE, REACT_PASSIVE, AttackStop — stays out).
+local function vortexTick(creature, guid)
+    if creature:GetHealthPct() <= 50 then
+        return
+    end
+    local state = getVortexState(guid)
+    state.executing = true
+    creature:DoAction(ACTION_LIFT_IN_AIR)
+    schedule(guid, "vortex", math.random(60000, 80000), function()
+        vortexTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_MOVE_TO_VORTEX_POINT (boss_malygos.cpp:781-785):
+-- REACT_PASSIVE + AttackStop + MovePoint(POINT_VORTEX_P_ONE,
+-- MalygosPositions[1]).
+local function moveToVortexPoint(creature, guid)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:AttackStop()
+    creature:MoveTo(POINT_VORTEX_P_ONE, VORTEX_POINT_X, VORTEX_POINT_Y, VORTEX_POINT_Z)
+end
+
+-- C++ boss_malygosAI::DoAction (boss_malygos.cpp:473-491): the
+-- vortex actions only. ACTION_EXECUTE_VORTEX casts the three vortex
+-- spells on self, all triggered, in C++ order; the landed latch is
+-- reset and the fallback land timer seeded (see
+-- VORTEX_LAND_FALLBACK_MS). ACTION_LIFT_IN_AIR, phase-one leg only
+-- (z + 20 takeoff; the phase-two z = 300.1 leg rides the unported
+-- phase machine) — MoveTo is the MoveTakeoff twin (no takeoff
+-- bridge); the gravity leg rides the arrival handler below. The
+-- phase-one gate is the health latch (vortexTick is the only live
+-- caller and already checked it).
+local function malygosDoAction(event, creature, action)
+    if action == ACTION_EXECUTE_VORTEX then
+        creature:CastSpell(creature, SPELL_VORTEX_1, true)
+        creature:CastSpell(creature, SPELL_VORTEX_2, true)
+        creature:CastSpell(creature, SPELL_VORTEX_3, true)
+        local guid = creature:GetGUID()
+        local state = getVortexState(guid)
+        state.landed = false
+        schedule(guid, "land", VORTEX_LAND_FALLBACK_MS, function()
+            vortexLand(creature)
+        end)
+    elseif action == ACTION_LIFT_IN_AIR then
+        if creature:GetHealthPct() > 50 then
+            local x, y, z = creature:GetX(), creature:GetY(), creature:GetZ()
+            creature:MoveTo(POINT_LIFT_IN_AIR_P_ONE, x, y, z + 20.0)
+        end
+    end
+end
+
+-- C++ boss_malygosAI::MovementInform (boss_malygos.cpp:673-685):
+-- POINT_LIFT_IN_AIR_P_ONE -> SetDisableGravity(true) + schedule
+-- EVENT_MOVE_TO_VORTEX_POINT in 1ms (the 1ms deferral is C++-exact:
+-- new movement cannot start from MovementInform);
+-- POINT_VORTEX_P_ONE -> MoveIdle (no bridge; the spline already
+-- ended) + DoAction(ACTION_EXECUTE_VORTEX);
+-- POINT_LAND_AFTER_VORTEX_P_ONE -> SetDisableGravity(false) +
+-- _executingVortex = false + REACT_AGGRESSIVE.
+local function malygosMovementInform(_, creature, moveType, id)
+    if moveType ~= 8 then
+        return
+    end
+    local guid = creature:GetGUID()
+    if id == POINT_LIFT_IN_AIR_P_ONE then
+        creature:SetDisableGravity(true)
+        schedule(guid, "moveToVortex", 1, function()
+            moveToVortexPoint(creature, guid)
+        end)
+    elseif id == POINT_VORTEX_P_ONE then
+        creature:DoAction(ACTION_EXECUTE_VORTEX)
+    elseif id == POINT_LAND_AFTER_VORTEX_P_ONE then
+        creature:SetDisableGravity(false)
+        local state = getVortexState(guid)
+        state.executing = false
+        creature:SetReactState(REACT_AGGRESSIVE)
+    end
+end
+
+-- C++ spell_malygos_vortex_visual::OnRemove (boss_malygos.cpp:1795-1829,
+-- AfterEffectRemove): Load admits creature casters only; the body is
+-- vortexLand above. PORTED 2026-11-08 (tick 429). DORMANT until the
+-- aura system applies 55873 from creature casts (no Spell.dbc): the
+-- fallback timer in malygosDoAction carries the land until then.
+local function vortexVisualRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    vortexLand(caster)
+end
+
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
@@ -235,6 +464,18 @@ local function malygosEnterCombat(event, creature, target)
     creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_IN_PROGRESS)
     creature:Talk(SAY_START_P_ONE)
     creature:CastSpell(creature, SPELL_BERSERK)
+    local guid = creature:GetGUID()
+    local state = getVortexState(guid)
+    state.executing = false
+    state.landed = false
+    -- C++ SetPhaseEvents PHASE_ONE (boss_malygos.cpp:547): first
+    -- EVENT_VORTEX 30-35s after the phase-one start; engage is the
+    -- earliest observable phase-one start in Go (the intro land
+    -- machine is unported), so the first vortex fires ~7s early
+    -- vs C++ (phase one starts 7s after the land in C++).
+    schedule(guid, "vortex", math.random(30000, 35000), function()
+        vortexTick(creature, guid)
+    end)
 end
 
 -- C++ JustDied (boss_malygos.cpp:979-987): _JustDied() +
@@ -253,6 +494,9 @@ end
 -- is needed (C++ DespawnOrUnsummon rides the creature's own
 -- despawn timer, not the EventMap).
 local function malygosDied(event, creature, killer)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    vortexState[guid] = nil
     creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     -- C++ arm order: the gift-box-bunny SummonGameObject leg
@@ -291,6 +535,9 @@ end
 -- bits have no Go consumer today, so the Reset apply below is a
 -- faithful write with no behavior change until one lands.
 local function malygosReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    vortexState[guid] = nil
     if creature:GetBossState(DATA_MALYGOS_EVENT) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_NOT_STARTED)
     end
@@ -303,6 +550,8 @@ end
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
 RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)
 RegisterCreatureEvent(ENTRY_MALYGOS, 23, malygosReset)
+RegisterCreatureEvent(ENTRY_MALYGOS, 28, malygosMovementInform)
+RegisterCreatureEvent(ENTRY_MALYGOS, 38, malygosDoAction)
 
 -- C++ spell_malygos_portal_beam::OnApply
 -- (boss_malygos.cpp:1607-1611): the Load() gate (:1597-1600)
@@ -451,3 +700,4 @@ local function destroyPlatformChannelRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DESTROY_PLATFORM_CHANNEL, 3, destroyPlatformChannelRemove)
+RegisterAuraEvent(SPELL_VORTEX_2, 3, vortexVisualRemove)
