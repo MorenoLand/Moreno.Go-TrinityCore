@@ -14,9 +14,8 @@
 -- The boss spawns NPC_TEMP_TRIGGER 23920 as the Siphon Soul vehicle; no
 -- CreatureScript exists for it in this file (same entry as Jan'alai's
 -- fire bomb, a different TDB ScriptName slot) and no combat events fire
--- for it — it is not registered. spell_hexlord_unstable_affliction is an
--- AuraScript; AuraScript handlers are not modeled (standing gap) and it
--- is not registered.
+-- for it — it is not registered. spell_hexlord_unstable_affliction's
+-- AfterDispel leg is ported below via RegisterAuraEvent (event 5).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven
 -- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
@@ -740,3 +739,19 @@ for _, entry in ipairs(ADD_ENTRIES) do
     RegisterCreatureEvent(entry, 4, addDied)
     RegisterCreatureEvent(entry, 23, addReset)
 end
+
+-- spell_hexlord_unstable_affliction (boss_hexlord.cpp:1006-1033,
+-- AuraScript AfterDispel): when the warlock add's Unstable Affliction
+-- 43522 is dispelled, its caster casts 43523 on the dispeller (the C++
+-- CastSpell with the aura effect rides triggered). Rides the Go
+-- AuraEventOnDispel bridge (event 5, lua_aura.go); the warlock add's
+-- 43522 cast is ported above, so the leg can fire live.
+local SPELL_WL_UNSTABLE_AFFL = 43522 -- boss_hexlord.cpp:97
+local SPELL_WL_UNSTABLE_AFFL_DISPEL = 43523 -- boss_hexlord.cpp:98
+local function hexlordUnstableAfflictionDispel(event, aura, target, dispeller)
+    local caster = aura:GetCaster()
+    if caster ~= nil and dispeller ~= nil then
+        caster:CastSpell(dispeller, SPELL_WL_UNSTABLE_AFFL_DISPEL, true)
+    end
+end
+RegisterAuraEvent(SPELL_WL_UNSTABLE_AFFL, 5, hexlordUnstableAfflictionDispel)

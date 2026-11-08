@@ -1016,3 +1016,23 @@ for _, entry in ipairs(CHAMPION_ENTRIES) do
     RegisterCreatureEvent(entry, 4, championDied)
     RegisterCreatureEvent(entry, 23, championReset)
 end
+
+-- spell_faction_champion_warl_unstable_affliction
+-- (boss_faction_champions.cpp:2256-2284, AuraScript AfterDispel): when
+-- the warlock champion's Unstable Affliction 65812 is dispelled, its
+-- caster casts 65813 on the dispeller (the C++ CastSpell with the aura
+-- effect rides triggered). Rides the Go AuraEventOnDispel bridge
+-- (event 5, lua_aura.go); the warlock's 65812 cast is ported in
+-- npc_toc_warlock.lua, so the leg can fire live. The class-rank
+-- Unstable Affliction backlash (31117 + silence) stays in the Go dispel
+-- funnel (dispel.go) — 65812 is not a class rank, so it never fires
+-- there.
+local SPELL_TOC_UNSTABLE_AFFLICTION = 65812 -- boss_faction_champions.cpp:105
+local SPELL_TOC_UNSTABLE_AFFLICTION_DISPEL = 65813 -- boss_faction_champions.cpp:106
+local function tocWarlockUnstableAfflictionDispel(event, aura, target, dispeller)
+    local caster = aura:GetCaster()
+    if caster ~= nil and dispeller ~= nil then
+        caster:CastSpell(dispeller, SPELL_TOC_UNSTABLE_AFFLICTION_DISPEL, true)
+    end
+end
+RegisterAuraEvent(SPELL_TOC_UNSTABLE_AFFLICTION, 5, tocWarlockUnstableAfflictionDispel)

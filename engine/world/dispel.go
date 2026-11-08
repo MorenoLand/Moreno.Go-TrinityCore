@@ -1495,15 +1495,55 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 			}
 			// Charge auras stay in the roll list until their last charge is
 			// gone (Spell::EffectDispel DecrementCharge loop, SpellEffects.cpp:2458).
+			// OnDispel snapshot (Unit::RemoveAurasDueToSpellByDispel,
+			// Unit.cpp:3936-3967): the AfterDispel hook fires after the
+			// decrement below, which may erase the record, so the aura
+			// is copied first.
+			var dispelSnap *activeAura
+			var dispelKey creatureAuraKey
+			if isTargetPlayer {
+				dispelSnap = s.server.dispelAuraSnapshot(targetSess, dispelKey, cand.SpellID)
+			} else if s.server != nil {
+				dispelKey = creatureAuraKeyForPlayer(*s.player, targetGUID)
+				dispelSnap = s.server.dispelAuraSnapshot(nil, dispelKey, cand.SpellID)
+			}
 			fullyRemoved := true
 			if isTargetPlayer {
 				fullyRemoved = targetSess.dispelPlayerAuraCharge(cand.SpellID)
 			} else {
-				fullyRemoved = s.dispelCreatureAuraCharge(creatureAuraKeyForPlayer(*s.player, targetGUID), cand.SpellID, cand.Slot)
+				fullyRemoved = s.dispelCreatureAuraCharge(dispelKey, cand.SpellID, cand.Slot)
 			}
 			if fullyRemoved {
 				candidates[idx] = candidates[len(candidates)-1]
 				candidates = candidates[:len(candidates)-1]
+			}
+
+			// RegisterAuraEvent OnDispel (Aura::CallScriptAfterDispel,
+			// Unit.cpp:3955): fires on every successful dispel
+			// application, like the UA/VT backlash legs below — not
+			// only on full removal.
+			if dispelSnap != nil && s.server != nil {
+				dispellerGUID := casterGUID
+				if petCaster != nil {
+					dispellerGUID = petCaster.GUID
+				}
+				var tMap, tInst uint32
+				var target any
+				if isTargetPlayer {
+					target = targetSess.luaPlayer()
+					if targetSess.player != nil {
+						tMap, tInst = targetSess.player.Map, targetSess.player.InstanceID
+					}
+				} else {
+					tMap, tInst = dispelKey.Map, dispelKey.InstanceID
+					target = s.server.luaUnitObjectForGUID(tMap, tInst, targetGUID)
+				}
+				var dMap, dInst uint32
+				if s.player != nil {
+					dMap, dInst = s.player.Map, s.player.InstanceID
+				}
+				ref := s.server.dispelAuraRef(targetSess, dispelKey, cand.SpellID, dispelSnap, tMap, tInst)
+				s.server.fireAuraDispel(ctx, cand.SpellID, ref.luaAuraObject(), target, s.server.luaUnitObjectForGUID(dMap, dInst, dispellerGUID))
 			}
 
 			// Dispel Backfire / Backlash Mechanics.
@@ -2704,7 +2744,12 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 
 		for _, spID := range toRemove {
 			// Mass-dispel removal: AURA_REMOVE_BY_ENEMY_SPELL.
+			snap := s.server.dispelAuraSnapshot(targetSess, creatureAuraKey{}, spID)
 			targetSess.dispelPlayerAura(spID)
+			if snap != nil && s.server != nil {
+				ref := s.server.dispelAuraRef(targetSess, creatureAuraKey{}, spID, snap, mapID, instanceID)
+				s.server.fireAuraDispel(ctx, spID, ref.luaAuraObject(), targetSess.luaPlayer(), s.server.luaUnitObjectForGUID(mapID, instanceID, s.playerGUID))
+			}
 		}
 	} else if targetGUID != 0 && s.server != nil {
 		// SpellEffects.cpp:4749 keys offensiveness on IsFriendlyTo(m_caster)
@@ -2758,7 +2803,12 @@ func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uin
 
 		for _, item := range toRemove {
 			// Mass-dispel removal: AURA_REMOVE_BY_ENEMY_SPELL.
+			snap := s.server.dispelAuraSnapshot(nil, key, item.spellID)
 			s.dispelCreatureAura(key, item.spellID, item.slot)
+			if snap != nil && s.server != nil {
+				ref := s.server.dispelAuraRef(nil, key, item.spellID, snap, key.Map, key.InstanceID)
+				s.server.fireAuraDispel(ctx, item.spellID, ref.luaAuraObject(), s.server.luaUnitObjectForGUID(key.Map, key.InstanceID, targetGUID), s.server.luaUnitObjectForGUID(key.Map, key.InstanceID, s.playerGUID))
+			}
 		}
 	}
 }

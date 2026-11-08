@@ -5027,9 +5027,22 @@ func (s *Server) creatureDispelPlayerTarget(m *creatureMotion, spell wotlk.Spell
 			if !alreadyLogged {
 				successList = append(successList, cand.SpellID)
 			}
+			// OnDispel snapshot (Unit::RemoveAurasDueToSpellByDispel,
+			// Unit.cpp:3936-3967): the AfterDispel hook fires after the
+			// decrement below, which may erase the record, so the aura
+			// is copied first.
+			dispelSnap := s.dispelAuraSnapshot(targetSess, creatureAuraKey{}, cand.SpellID)
 			if fullyRemoved := targetSess.dispelPlayerAuraCharge(cand.SpellID); fullyRemoved {
 				candidates[idx] = candidates[len(candidates)-1]
 				candidates = candidates[:len(candidates)-1]
+			}
+			// RegisterAuraEvent OnDispel (Aura::CallScriptAfterDispel,
+			// Unit.cpp:3955): fires on every successful dispel
+			// application, not only on full removal. The dispeller is
+			// the wild creature.
+			if dispelSnap != nil {
+				ref := s.dispelAuraRef(targetSess, creatureAuraKey{}, cand.SpellID, dispelSnap, mapID, instanceID)
+				s.fireAuraDispel(context.Background(), cand.SpellID, ref.luaAuraObject(), targetSess.luaPlayer(), s.luaUnitObjectForGUID(m.Map, m.InstanceID, m.GUID))
 			}
 		} else {
 			failList = append(failList, cand.SpellID)
@@ -5143,7 +5156,14 @@ func (s *Server) creatureDispelMechanicPlayerTarget(m *creatureMotion, eff wotlk
 		}
 	}
 	for _, spID := range toRemove {
+		snap := s.dispelAuraSnapshot(targetSess, creatureAuraKey{}, spID)
 		targetSess.dispelPlayerAura(spID)
+		// RegisterAuraEvent OnDispel (Aura::CallScriptAfterDispel,
+		// Unit.cpp:3955): the dispeller is the wild creature.
+		if snap != nil {
+			ref := s.dispelAuraRef(targetSess, creatureAuraKey{}, spID, snap, mapID, instanceID)
+			s.fireAuraDispel(context.Background(), spID, ref.luaAuraObject(), targetSess.luaPlayer(), s.luaUnitObjectForGUID(m.Map, m.InstanceID, m.GUID))
+		}
 	}
 }
 

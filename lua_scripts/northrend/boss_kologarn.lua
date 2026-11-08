@@ -154,9 +154,15 @@
 -- handler — no SpellScript bridge; joins the
 -- no-SpellScript-bridge queue);
 -- spell_ulduar_stone_grip_absorb (AuraScript AfterEffectRemove
--- school-absorb: non-enemy-spell removal -> rubble stalker
--- casts SPELL_STONE_GRIP_CANCEL 65594 — no AuraScript bridge;
--- joins the no-AuraScript-bridge queue);
+-- school-absorb: ENEMY_SPELL removal only (boss_kologarn.cpp:537-544)
+-- -> rubble stalker casts SPELL_STONE_GRIP_CANCEL 65594. STAYS OUT:
+-- the absorb aura's spell ID is DB-only (spell_script_names, zero
+-- hits in either tree). It is not 62166 on the C++ evidence: the two
+-- scripts hook different EFFECT_0 aura types (SCHOOL_ABSORB here vs
+-- CONTROL_VEHICLE + MOD_STUN in spell_ulduar_stone_grip), so they
+-- attach to different spells, and the vehicle/stun shape matches the
+-- 62166 grip cast on the player. The ev3 remove hook + GetRemoveMode
+-- bridge now exist, so only the ID blocks the port.
 -- spell_ulduar_stone_grip (AuraScript: vehicle OnRemove ->
 -- owner removes aurEff-amount spell; stun AfterEffectRemove ->
 -- caster RemoveAurasDueToSpell(GetId()) — no AuraScript

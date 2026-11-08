@@ -743,3 +743,59 @@ func (s *Server) fireAuraChangeAmount(ctx context.Context, spellID uint32, auraO
 	}
 	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnChangeAmount, scripting.AuraEventOnChangeAmount, auraObj, target)
 }
+
+// fireAuraDispel dispatches the RegisterAuraEvent OnDispel hook for a
+// dispelled aura (args (event, aura, target, dispeller)). Notification-only
+// like fireAuraApply: the C++ AfterDispel handlers run after the dispel
+// resolves and cannot veto it, and the dispeller is already fixed by the
+// time the hook fires.
+func (s *Server) fireAuraDispel(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any, dispeller any) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnDispel, scripting.AuraEventOnDispel, auraObj, target, dispeller)
+}
+
+// dispelAuraSnapshot copies the aura record a dispel is about to
+// decrement, so the OnDispel hook's aura object still resolves GetCaster
+// and the amounts after a full removal erases the live record
+// (Unit::RemoveAurasDueToSpellByDispel, Unit.cpp:3936-3967, calls the
+// AfterDispel hook after ModCharges/ModStackAmount). A nil session reads
+// the creature-aura map under auraMu; a non-nil session reads the
+// target's activeAuras under its castMu. Returns nil when no live
+// record exists (already gone, e.g. a concurrent expiry).
+func (s *Server) dispelAuraSnapshot(ts *session, key creatureAuraKey, spellID uint32) *activeAura {
+	if ts != nil {
+		ts.castMu.Lock()
+		defer ts.castMu.Unlock()
+		if aura := ts.activeAuras[spellID]; aura != nil {
+			snap := *aura
+			return &snap
+		}
+		return nil
+	}
+	if s == nil {
+		return nil
+	}
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if auras := s.activeCreatureAuras[key]; auras != nil {
+		if aura := auras[spellID]; aura != nil {
+			snap := *aura
+			return &snap
+		}
+	}
+	return nil
+}
+
+// dispelAuraRef builds the luaAuraRef for the OnDispel hook from a
+// snapshot captured before the charge decrement (see
+// dispelAuraSnapshot). The snapshot is what resolve() returns, so the
+// handler reads the dispelled aura's last values even when the live
+// record is gone.
+func (s *Server) dispelAuraRef(ts *session, key creatureAuraKey, spellID uint32, snap *activeAura, mapID, instanceID uint32) *luaAuraRef {
+	if ts != nil {
+		return &luaAuraRef{server: s, spellID: spellID, player: ts, mapID: mapID, instanceID: instanceID, snapshot: snap}
+	}
+	return &luaAuraRef{server: s, spellID: spellID, creatureKey: key, mapID: mapID, instanceID: instanceID, snapshot: snap}
+}

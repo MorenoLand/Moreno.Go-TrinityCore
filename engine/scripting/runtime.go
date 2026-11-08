@@ -425,11 +425,27 @@ const (
 // does not fire it — C++ ChangeAmount returns early when the amount is
 // unchanged. Notification-only like OnApply; handlers read the new stack
 // count via aura:GetStackAmount().
+// OnDispel mirrors Aura::CallScriptAfterDispel (Unit.cpp:3955): it fires
+// once per successful dispel application, after the charge/stack
+// decrement (ModCharges/ModStackAmount, Unit.cpp:3949-3952), with args
+// (event, aura, target, dispeller) — the dispeller is
+// DispelInfo::GetDispeller(). It fires whether or not the aura is fully
+// removed, like C++; a charge/stack aura that survives the decrement
+// still fires it. Notification-only like OnApply: there is no OnDispel
+// (before) hook and no SetRemovedCharges veto, so the halion-marks
+// BeforeDispel leg (which zeroes the removed charges) stays out. The
+// hook fires from the SPELL_EFFECT_DISPEL funnel (player, pet, and
+// owned-creature casters), the SPELL_EFFECT_DISPEL_MECHANIC funnel, and
+// the wild-creature dispel funnels; the aura object reads a snapshot
+// captured before the decrement, so GetCaster still resolves after a
+// full removal. Steal never fires it (RemoveAurasDueToSpellBySteal,
+// Unit.cpp:3969, has no dispel-hook call).
 const (
 	AuraEventOnPeriodic     = 1
 	AuraEventOnApply        = 2
 	AuraEventOnRemove       = 3
 	AuraEventOnChangeAmount = 4
+	AuraEventOnDispel       = 5
 )
 
 type Hook struct {
