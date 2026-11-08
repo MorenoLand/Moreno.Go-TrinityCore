@@ -45544,6 +45544,11 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// Unit::HandleSpellClick (Unit.cpp:12984,13065): spellClickHandled starts
+	// false and is set once a row's cast runs; the player-targeted rows are
+	// collected for the BE_SPELL_TARGET criteria update after the loop.
+	handled := false
+	var playerTargetSpells []uint32
 	for _, click := range clicks {
 		// SpellClickInfo::IsFitToRequirements (ObjectMgr.cpp:194). C++ skips
 		// userType >= SPELL_CLICK_USER_MAX (4, SharedDefines.h:718) at DB load;
@@ -45580,6 +45585,16 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 		// unit as target 1; missing rows pass, query errors fail closed.
 		if meets, err := s.meetSpellClickConditions(ctx, clickEntry, click.spellID, targetGUID); err != nil || !meets {
 			continue
+		}
+		// Unit::HandleSpellClick (Unit.cpp:13065): spellClickHandled is set
+		// once a row's cast runs — i.e. once the row passes every gate
+		// above. Go's cast arms may no-op without DBC data (no Spell.dbc
+		// ships), but the row still counts as handled, the C++ twin of a
+		// cast that always executes. The player-targeted rows are collected
+		// for the BE_SPELL_TARGET criteria update below.
+		handled = true
+		if click.castFlags&0x01 == 0 && click.castFlags&0x02 != 0 {
+			playerTargetSpells = append(playerTargetSpells, click.spellID)
 		}
 		// Unit::HandleSpellClick (Unit.cpp:12982,12999): the caster is the
 		// clicker only under NPC_CLICK_CAST_CASTER_CLICKER (0x01,
@@ -45621,6 +45636,26 @@ func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 				}
 				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData, targetUnit, 0, 0, nil)
 			}
+		}
+	}
+	// Unit::HandleSpellClick (Unit.cpp:13069-13070): the AI hook runs after
+	// every row, with the handled flag above. Pets resolve no Creature
+	// (motion is nil on the pet arm), matching C++'s ToCreature gate.
+	if motion != nil {
+		s.server.fireCreatureSpellClick(ctx, motion, s.luaPlayer(), handled)
+	}
+	// Spell::PreprocessSpellHit (Spell.cpp:2726-2728): a player hit by a
+	// spell fires ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET with the caster
+	// as the target. The click spell's hit lands after HandleSpellClick
+	// returns (only TRIGGERED_CAST_DIRECTLY casts synchronously,
+	// Spell.cpp:3174, and the click cast uses default args), so the
+	// OnSpellClick latch above is set before the criteria gate reads it.
+	// Go has no general spell-hit criteria funnel, so the click path fires
+	// the update for its player-targeted creature-cast rows here, threading
+	// the clicked creature as the C++ m_caster twin.
+	if motion != nil {
+		for _, spellID := range playerTargetSpells {
+			s.updateAchievementCriteriaWithCreatureTarget(criteriaTypeBeSpellTarget, spellID, 1, motion)
 		}
 	}
 	return true

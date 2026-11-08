@@ -7067,6 +7067,29 @@ func (s *Server) fireCreatureSummoned(ctx context.Context, owner *creatureMotion
 	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, owner.GUID, owner.InstanceID, event, args...)
 }
 
+// fireCreatureSpellClick dispatches the Go-side CREATURE_EVENT_ON_SPELL_CLICK (39)
+// hook on the clicked creature. C++ (Unit::HandleSpellClick, Unit.cpp:12982-13070)
+// calls CreatureAI::OnSpellClick(clicker, spellClickHandled) after the click-spell
+// rows, with handled true when any row cast; Eluna has no spell-click hook, so this
+// is a Go-side extension on the free slot 39 (the DoAction-38 precedent), fired
+// from the spell-click funnel with (event, creature, clicker, handled). C++
+// OnSpellClick returns void, so returns are discarded. Only creatures fire it:
+// pets resolve no Creature (Unit.cpp ToCreature is null for pets), matching the
+// C++ `creature && IsAIEnabled` gate. Must be called with motionMu released:
+// the Lua handlers' object methods lock it on demand.
+func (s *Server) fireCreatureSpellClick(ctx context.Context, motion *creatureMotion, clicker any, handled bool) {
+	if s == nil || motion == nil || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	creature := s.luaMotionCreature(motion)
+	if creature == nil {
+		return
+	}
+	args := []any{scripting.CreatureEventOnSpellClick, creature, clicker, handled}
+	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnSpellClick, args...)
+	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnSpellClick, args...)
+}
+
 // fireCreaturePetSummoned dispatches Eluna CREATURE_EVENT_ON_SUMMONED (22)
 // on the summoned creature itself, with the summoner as the extra argument.
 // C++ (Eluna::OnSummoned, CreatureHooks.cpp:86-94, reached from

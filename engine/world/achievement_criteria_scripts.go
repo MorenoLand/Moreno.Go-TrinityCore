@@ -75,6 +75,7 @@ const (
 	dataThorimLoseYourIllusion         = 31763183 // boss_thorim.cpp:317 ACHIEVEMENT_LOSE_YOUR_ILLUSION
 	dataSapphironHundredClub           = 21462147 // boss_sapphiron.cpp:88 DATA_THE_HUNDRED_CLUB
 	dataTrollgoreConsumptionJunction   = 1        // boss_trollgore.cpp:57 DATA_CONSUMPTION_JUNCTION
+	dataDreamPortalMissed              = 2        // boss_valithria_dreamwalker.cpp:149 MISSED_PORTALS
 )
 
 // bossLatchData reads one CreatureAI::SetData slot off the killed
@@ -1176,6 +1177,22 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		v, ok := source.server.Features.Scripts.InstanceDataNumber(source.player.Map, source.player.InstanceID, "intenseCold_"+strconv.FormatUint(uint64(uint32(source.player.GUID)), 10))
 		return !(ok && v != 0)
+
+	case "achievement_portal_jockey": // boss_valithria_dreamwalker.cpp:1231-1239
+		// OnCheck: target && !target->GetAI()->GetData(MISSED_PORTALS) —
+		// the portal's GetData returns 0 only once used (npc_dream_portal
+		// _used, :913-930); the Lua twin keeps it in the portal motion's
+		// SetData store (boss_valithria_dreamwalker.lua: ev22 writes 1 at
+		// summon, ev39 writes 0 on a handled click). The update only fires
+		// from handleSpellClick on a real clicked portal motion, whose ev22
+		// init ran — so an absent slot (never summoned) never reaches this
+		// read. Dormant until the pre-effect summon leg lands: the boss
+		// EVENT_DREAM_PORTAL pre-summon targeting is DBC-side, so no portal
+		// exists for a player to click yet.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataDreamPortalMissed) == 0
 
 	case "achievement_shatter_resistant": // boss_volkhan.cpp:490-499
 		// OnCheck: GetData(DATA_SHATTER_RESISTANT 2042) < 5 — the

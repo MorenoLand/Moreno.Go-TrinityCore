@@ -21152,8 +21152,12 @@ func init() {
 	// npc_blazing_skeleton / npc_suppresser / npc_blistering_zombie /
 	// npc_gluttonous_abomination / npc_dream_portal / npc_dream_cloud
 	// have zero Talk lines (NOT registered); the 9 spell scripts join
-	// the no-SpellScript-bridge queue and achievement_portal_jockey the
-	// no-achievement-criteria queue — documented in the lua header.
+	// the no-SpellScript-bridge queue — documented in the lua header.
+	// achievement_portal_jockey PORTED 2026-11-08 (Go case +
+	// npc_dream_portal ev22/ev39 legs + Valithria ev20 missed-counter
+	// + event-39 OnSpellClick bridge; dormant until the pre-effect
+	// summon leg lands — the boss EVENT_DREAM_PORTAL pre-summon
+	// targeting is DBC-side).
 	// UpdateAI CASTING gates PORTED (500ms IsCasting defer, see lua
 	// header): boss :420/:447 gate the ported EVENT_DREAM_SLIP one-shot;
 	// archmage :703/:728, skeleton :759/:779, abomination :890 (pre-loop

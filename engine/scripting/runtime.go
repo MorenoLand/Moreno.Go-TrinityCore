@@ -383,6 +383,14 @@ const (
 	// events (C++ DoAction returns void, so returns are discarded). 38
 	// is unused in the TrinityCore LuaEngine CreatureEvents numbering.
 	CreatureEventOnDoAction = 38
+	// CreatureEventOnSpellClick is a Go-side extension (no C++ Eluna hook):
+	// CreatureAI::OnSpellClick dispatches through the AI virtual table, which
+	// Lua-ported AIs have no bearer for, so the spell-click funnel fires
+	// (event, creature, clicker, handled) on the entry then unique bindings,
+	// the void-hook twin of the other creature events (C++ OnSpellClick
+	// returns void, so returns are discarded). 39 is unused in the
+	// TrinityCore LuaEngine CreatureEvents numbering.
+	CreatureEventOnSpellClick = 39
 )
 
 // AuraEvents contract for RegisterAuraEvent(spellID, event, fn). There is

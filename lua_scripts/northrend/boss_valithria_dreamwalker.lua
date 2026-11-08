@@ -133,14 +133,15 @@
 -- UpdateAIs have zero CASTING hits; JustDied/JustSummoned/SpellHit legs
 -- ungated per C++ (separate hooks / BasicEvents, not the scheduler).
 -- npc_dream_portal (37945) / npc_dream_cloud (entry DB-side, no header
--- constant) — zero Talk lines; portal JustSummoned delayed-cast event
--- legs (ValithriaDelayedCastEvent / ValithriaAuraRemoveEvent — no
--- event-machine bridge), MISSED_PORTALS GetData leg (no bridge) — NOT
--- registered.
+-- constant) — zero Talk lines. PORTED 2026-11-08: npc_dream_portal
+-- OnSpellClick (ev39 bridge) + _used/MISSED_PORTALS GetData leg (ev22
+-- init, ev39 clear) + the pre-effect delayed-cast summon leg in
+-- valithriaJustSummoned + the boss ev20 missed-counter;
+-- achievement_portal_jockey PORTED the same tick (Go case reads the
+-- portal slot; dormant until a pre-effect is summoned — the boss
+-- EVENT_DREAM_PORTAL pre-summon targeting is DBC-side).
 -- The 9 spell scripts join the no-SpellScript-bridge queue (the
--- boss_moragg optic-link precedent); achievement_portal_jockey joins the
--- no-achievement-criteria bridge queue (the lana'thel achievement
--- precedent).
+-- boss_moragg optic-link precedent).
 
 local ENTRY_LICH_KING_VALITHRIA = 16980
 local ENTRY_VALITHRIA_DREAMWALKER = 36789
@@ -173,6 +174,9 @@ local SPELL_DREAM_PORTAL_VISUAL_PRE = 71304
 local SPELL_NIGHTMARE_PORTAL_VISUAL_PRE = 71986
 local ENTRY_DREAM_PORTAL_PRE_EFFECT = 38186
 local ENTRY_NIGHTMARE_PORTAL_PRE_EFFECT = 38429
+local ENTRY_DREAM_PORTAL = 37945 -- icecrown_citadel.h:300 (NPC_DREAM_PORTAL)
+local ENTRY_NIGHTMARE_PORTAL = 38430 -- icecrown_citadel.h:301 (NPC_NIGHTMARE_PORTAL)
+local MISSED_PORTALS = 2 -- boss_valithria_dreamwalker.cpp:149
 
 local SPELL_ACID_BURST = 70744
 local SPELL_ROT_WORM_SPAWNER = 70675
@@ -839,24 +843,90 @@ RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 38, valithriaDoAction)
 RegisterCreatureEvent(ENTRY_SUPPRESSER, 22, suppresserIsSummonedBy)
 
 -- C++ boss_valithria::JustSummoned (boss_valithria_dreamwalker.cpp:390-403):
--- each portal pre-effect summon gets a 15s ValithriaAuraRemoveEvent for its
--- pre visual. The paired 15s delayed portal-summon cast stays out (its
--- summon leg is a separate arm); only the aura strip ports here.
+-- each portal pre-effect summon gets a 15s ValithriaDelayedCastEvent
+-- (SPELL_SUMMON_DREAM_PORTAL 71305 / NIGHTMARE 71987, despawn 6s) + a 15s
+-- ValithriaAuraRemoveEvent for its pre visual. PORTED 2026-11-08: the
+-- aura strip + the delayed summon as an explicit Valithria-side
+-- SummonCreature (the 71305/71987 cast itself stays out — no Spell.dbc).
 local function valithriaJustSummoned(_, creature, summoned)
     local visual = nil
+    local portalEntry = nil
     if summoned:GetEntry() == ENTRY_DREAM_PORTAL_PRE_EFFECT then
         visual = SPELL_DREAM_PORTAL_VISUAL_PRE
+        portalEntry = ENTRY_DREAM_PORTAL
     elseif summoned:GetEntry() == ENTRY_NIGHTMARE_PORTAL_PRE_EFFECT then
         visual = SPELL_NIGHTMARE_PORTAL_VISUAL_PRE
+        portalEntry = ENTRY_NIGHTMARE_PORTAL
     end
     if visual then
         CreateLuaEvent(function()
             summoned:RemoveAura(visual)
         end, 15000)
     end
+    if portalEntry then
+        -- C++ :393-396 + :204-207 — the delayed cast summons the real
+        -- portal at the pre-effect's position, then despawns the
+        -- pre-effect 6s later. Twinned as an explicit summon from
+        -- Valithria (the legion-flame precedent) so the portal's
+        -- summoner is Valithria and ev20 fires on her; the 71305/71987
+        -- cast itself stays out (no Spell.dbc, same class as the
+        -- EVENT_DREAM_PORTAL pre-summon cast).
+        CreateLuaEvent(function()
+            creature:SummonCreature(portalEntry, summoned:GetX(), summoned:GetY(), summoned:GetZ(), summoned:GetO())
+        end, 15000)
+        CreateLuaEvent(function()
+            summoned:DespawnOrUnsummon()
+        end, 21000)
+    end
+end
+
+-- C++ npc_dream_portal::OnSpellClick (boss_valithria_dreamwalker.cpp:913-930):
+-- if !spellClickHandled return; _used = true; DespawnOrUnsummon(). The
+-- _used latch is the portal's GetData(MISSED_PORTALS) (:924-930): 0 once
+-- used, 1 otherwise — so the slot is initialized to 1 at summon (ev22,
+-- the temp-summon IsSummonedBy hook; ev5 never fires for temp summons,
+-- fireCreatureSpawned is respawn-only) and cleared to 0 here. Fired via
+-- the Go-side event-39 OnSpellClick bridge (handleSpellClick fires after
+-- the click-spell rows, Unit.cpp:13069-13070). Both portal entries share
+-- this AI (boss SummonedCreatureDespawn :406-409 reads GetData(
+-- MISSED_PORTALS) on both), so both register the same legs.
+local function dreamPortalSummoned(event, creature, summoner)
+    creature:SetData(MISSED_PORTALS, 1)
+end
+
+local function dreamPortalSpellClick(event, creature, clicker, handled)
+    if not handled then
+        return
+    end
+    creature:SetData(MISSED_PORTALS, 0)
+    creature:DespawnOrUnsummon()
+end
+
+-- C++ boss_valithria_dreamwalker::SummonedCreatureDespawn
+-- (:405-409): a dream/nightmare portal despawning with GetData(
+-- MISSED_PORTALS) still 1 (never clicked) increments _missedPortals;
+-- a used portal reads 0 and is not missed. The counter lives in
+-- Valithria's own SetData slot (the boss GetData :453-455 mirror);
+-- write-only in C++ too (no reader outside the boss's own GetData).
+-- Fires via ev20 on the summoner — the portal's OwnerGUID is Valithria
+-- (the delayed cast passes her as original caster, SpellEffects.cpp
+-- :2210-2212, so the summon attributes to her).
+local function valithriaSummonedCreatureDespawn(event, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry ~= ENTRY_DREAM_PORTAL and entry ~= ENTRY_NIGHTMARE_PORTAL then
+        return
+    end
+    if summoned:GetData(MISSED_PORTALS) ~= 0 then
+        creature:SetData(MISSED_PORTALS, creature:GetData(MISSED_PORTALS) + 1)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 19, valithriaJustSummoned)
+RegisterCreatureEvent(ENTRY_VALITHRIA_DREAMWALKER, 20, valithriaSummonedCreatureDespawn)
+RegisterCreatureEvent(ENTRY_DREAM_PORTAL, 22, dreamPortalSummoned)
+RegisterCreatureEvent(ENTRY_DREAM_PORTAL, 39, dreamPortalSpellClick)
+RegisterCreatureEvent(ENTRY_NIGHTMARE_PORTAL, 22, dreamPortalSummoned)
+RegisterCreatureEvent(ENTRY_NIGHTMARE_PORTAL, 39, dreamPortalSpellClick)
 RegisterCreatureEvent(ENTRY_BLISTERING_ZOMBIE, 4, blisteringZombieJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 4, gluttonousAbominationJustDied)
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 1, gluttonousAbominationJustEngagedWith)
