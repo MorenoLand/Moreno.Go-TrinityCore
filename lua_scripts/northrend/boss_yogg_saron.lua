@@ -102,23 +102,22 @@
 -- DoAction(ACTION_PHASE_TWO) legs (:831/:833) are PORTED below
 -- (saraDamageTaken / saratransform3, via the shared instanceData
 -- table; the voice/mimiron receivers are ported in this file).
--- Yogg-Saron timer Talks — EVENT_YELL_BOW_DOWN (:993-995, Talk id 0,
--- one-shot 3s) fires from Reset (:935) on the voice's cross-creature
--- summon-driven Reset with SetPhase(PHASE_TWO) (:935-945; yogg is
--- PassiveAI, never enters combat) — no summon-driven-Reset bridge.
--- EVENT_SHADOW_BEACON (:996-1000, DoCastAOE 64465 + Emote 7, 45s
--- repeat) + EVENT_DEAFENING_ROAR (:1006-1011, DoCastAOE 64189 +
--- Talk 4/Emote 5, {20s,25s} repeat) — scheduled from cross-creature
--- DoAction(ACTION_PHASE_THREE) (:1024/:1027, PHASE_THREE), deafening
--- roar additionally gated on Is25ManRaid + instance DATA_KEEPERS_COUNT
--- (:1026) — dispatch IS bridged (ev38); stranded on the unported
--- brain DamageTaken cascade (:1082-1090) + instance data (difficulty
--- leg now bridged, lua_creature_events.go).
--- Yogg-Saron DoAction(ACTION_PHASE_THREE) —
--- Talk(SAY_YOGG_SARON_PHASE_3) — dispatch IS bridged (ev38); the arm
--- stays out because its sender, the brain's below-30% DamageTaken
--- cascade (:1082-1090), is unported; joins the unported-DoAction-sender
--- queue.
+-- Yogg-Saron timer Talks — EVENT_YELL_BOW_DOWN (Talk id 0, one-shot
+-- 3s) fires from Reset (:933) with SetPhase(PHASE_TWO) (:932; yogg is
+-- PassiveAI, never enters combat) — PORTED below (yoggSaronReset,
+-- event 23; the summon-driven Reset fires on the temp-summon path).
+-- EVENT_SHADOW_BEACON (DoCastAOE 64465 + Emote 7, 45s repeat) +
+-- EVENT_LUNATIC_GAZE (DoCast 64163, 12s repeat) + EVENT_DEAFENING_ROAR
+-- (DoCastAOE 64189 + Talk 4/Emote 5, {20s,25s} repeat) — scheduled
+-- from DoAction(ACTION_PHASE_THREE) (:1020-1035, PHASE_THREE),
+-- deafening roar additionally gated on Is25ManRaid + instance
+-- DATA_KEEPERS_COUNT (:1026, read from the shared instanceData
+-- keepersCount) — PORTED below (yoggDoAction, event 38) with the
+-- brain DamageTaken cascade as sender. The lunatic-gaze SendSound
+-- leg stays out (no SendSound bridge).
+-- Yogg-Saron DoAction(ACTION_PHASE_THREE) — Talk(SAY_YOGG_SARON_PHASE_3)
+-- + DoCast PHASE_3_TRANSFORM + barrier-aura removal +
+-- ResetPlayerDamageReq — PORTED below (yoggDoAction, event 38).
 -- Yogg-Saron SpellHit — Val'anyr loot-mode leg (no Talk) —
 -- PORTED via event 14 (yoggSaronSpellHit below); the Reset
 -- ResetLootMode leg (:939) rides the unbridged scheduler
@@ -129,11 +128,12 @@
 -- (2-arg self, non-triggered, ungated, :525) + the 15s
 -- EVENT_LOCK_DOOR DoCast(me, SPELL_INSANE_PERIODIC 64554)
 -- one-shot (:556-557, no phase arg on the schedule) — both ride
--- event 1 with the SetInCombatWith keeper / DoCastAOE(
--- SPELL_SUMMON_GUARDIAN_2, spellvalue) / EVENT_EXTINGUISH_ALL_LIFE /
--- EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON schedule legs left
--- documented-only (no instance / summon / spellvalue bridges —
--- the assembly_of_iron keeper-combat precedent); JustDied has no
+-- event 1 with the SetInCombatWith keeper leg left documented-only
+-- (no instance bridge — the assembly_of_iron keeper-combat
+-- precedent); the DoCastAOE(SPELL_SUMMON_GUARDIAN_2, spellvalue) /
+-- EVENT_EXTINGUISH_ALL_LIFE / EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON
+-- schedule legs are PORTED below (voiceEnterCombat + guardianTick /
+-- extinguishTick); JustDied has no
 -- Talk arm (summons.Despawn + _JustDied() only); EnterEvadeMode
 -- Talk(WHISPER_VOICE_PHASE_1_WIPE, player) rides a
 -- player-loop wipe leg (RemoveAurasDueToSpell SPELL_SANITY
@@ -141,21 +141,20 @@
 -- player:RemoveAura in yoggSaronReset/yoggSaronDied; the removals
 -- are ungated in C++, only the whisper is PHASE_ONE-gated, and the
 -- whisper keeps no phase bridge); timer Talk EMOTE_YOGG_SARON_
--- EXTINGUISH_ALL_LIFE on EVENT_EXTINGUISH_ALL_LIFE rides the
--- unported voice event machine (the mimiron cross-creature
--- precedent); EMOTE_YOGG_SARON_MADNESS + SAY_YOGG_SARON_MADNESS
+-- EXTINGUISH_ALL_LIFE on EVENT_EXTINGUISH_ALL_LIFE is PORTED below
+-- (extinguishTick, event-1-seeded timer); EMOTE_YOGG_SARON_MADNESS + SAY_YOGG_SARON_MADNESS
 -- on EVENT_ILLUSION are PORTED below (illusionTick, event-38-
 -- seeded timer) with the tentacle summon arms and the brain
 -- ACTION_INDUCE_MADNESS dispatch.
 -- Brain of Yogg-Saron (33890, ulduar.h line 218) — Reset
 -- DoCast(me, SPELL_MATCH_HEALTH 64066) PORTED below (event 23);
--- DamageTaken below-30% cascade (:1068-1093): DoCastAOE(
+-- DamageTaken below-30% cascade (:1070-1090): DoCastAOE(
 -- SPELL_SHATTERED_ILLUSION_REMOVE 65238, triggered) + DoCast(me,
 -- SPELL_MATCH_HEALTH_2 64069, triggered) + DoCast(me,
--- SPELL_BRAIN_HURT_VISUAL 64361, triggered) — stays out with the
--- InterruptNonMeleeSpells / cross-creature DoAction / instance legs
--- (no bridges; the HasAura(64361) gate is bridged but the cascade
--- cannot be split); DoAction ACTION_INDUCE_MADNESS /
+-- SPELL_BRAIN_HURT_VISUAL 64361, triggered) + DoAction(
+-- ACTION_PHASE_THREE) to voice/sara/yogg/thorim/mimiron — PORTED
+-- below (brainDamageTaken, event 9); the SetImmuneToPC(true) leg
+-- stays out (no bridge). DoAction ACTION_INDUCE_MADNESS /
 -- ACTION_TENTACLE_KILLED are PORTED below (brainDoAction, event
 -- 38; the GO-door legs stay out — no HandleGameObject bridge)
 -- with the influence JustDied sender.
@@ -232,6 +231,34 @@ local SPELL_IN_THE_MAWS_OF_THE_OLD_GOD = 64184
 local SPELL_SANITY = 63050
 local SPELL_INSANE = 63120
 local SPELL_BRAIN_LINK = 63802 -- boss_yogg_saron.cpp:139
+
+-- Phase-3 machine consts (boss_yogg_saron.cpp:365-367 actions,
+-- :282-287 phases, :112-169/:222 spells, :36-60 yells) — grouped in
+-- one table: the file is at 187 top-level locals (limit 200, the
+-- LK-table precedent). The brain DamageTaken cascade (:1070-1090)
+-- sends ACTION_PHASE_THREE to the voice, sara, yogg and the
+-- thorim/mimiron keepers; the receivers are ported this run.
+local ACTION_PHASE_THREE = 2
+local PHASE_THREE = 4
+local PHASE3 = {
+    SPELL_SHATTERED_ILLUSION_REMOVE = 65238, -- :169
+    SPELL_MATCH_HEALTH_2 = 64069, -- :165
+    SPELL_BRAIN_HURT_VISUAL = 64361, -- :167
+    SPELL_IMMORTAL_GUARDIAN = 64158, -- :124
+    SPELL_EXTINGUISH_ALL_LIFE = 64166, -- :154
+    SPELL_SHADOW_BEACON = 64465, -- :161
+    SPELL_LUNATIC_GAZE = 64163, -- :159
+    SPELL_DEAFENING_ROAR = 64189, -- :158
+    SPELL_PHASE_3_TRANSFORM = 63895, -- :157
+    SPELL_TITANIC_STORM = 64171, -- :222
+    SAY_YOGG_SARON_SPAWN = 0, -- :52
+    SAY_YOGG_SARON_PHASE_3 = 3, -- :56
+    SAY_YOGG_SARON_DEAFENING_ROAR = 4, -- :57
+    EMOTE_YOGG_SARON_DEAFENING_ROAR = 5, -- :58
+    EMOTE_YOGG_SARON_EMPOWERING_SHADOWS = 7, -- :59
+    EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE = 8, -- :60
+}
+local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
 local REACT_PASSIVE = 0 -- UnitDefines.h:340
 
@@ -310,20 +337,57 @@ local function yoggSaronDied(event, creature, killer)
     clearSanityAuras(creature)
 end
 
+local timers = {}
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
 -- C++ boss_yogg_saronAI::Reset :931-945 — DoCast(me,
 -- SPELL_SHADOWY_BARRIER_YOGG) + DoCast(me, SPELL_KNOCK_AWAY), both
--- non-triggered and ungated (the urom evocate-reset precedent); the
--- _events Reset/SetPhase(PHASE_TWO)/ScheduleEvent(EVENT_YELL_BOW_DOWN)
--- and phase/timer legs ride unbridged phase/timer machines (the
--- gothik phase-gating precedent; the loot-mode bridge is live —
+-- non-triggered and ungated (the urom evocate-reset precedent) +
+-- ScheduleEvent(EVENT_YELL_BOW_DOWN, 3s) — all PORTED below; the
+-- keeper-count loot-mode legs stay out (the loot-mode bridge is live —
 -- keepers instance-data is the blocker, not the bridge).
 local function yoggSaronReset(event, creature)
-    -- C++ boss_yogg_saronAI::Reset(): DoCast(me, SHADOWY_BARRIER_YOGG);
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ boss_yogg_saronAI::Reset(): _events.Reset + SetPhase(PHASE_TWO)
+    -- (:931-932) — the Lua phase latch only tracks PHASE_THREE, so Reset
+    -- clears it.
+    yoggPhase[guid] = nil
+    -- C++ Reset: DoCast(me, SHADOWY_BARRIER_YOGG);
     -- DoCast(me, KNOCK_AWAY) (boss_yogg_saron.cpp:931-937). Alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_YOGG)
         creature:CastSpell(creature, SPELL_KNOCK_AWAY)
     end
+    -- C++ Reset: ScheduleEvent(EVENT_YELL_BOW_DOWN, 3s, PHASE_TWO)
+    -- (:933) — Talk(SAY_YOGG_SARON_SPAWN 0) one-shot; the phase is
+    -- PHASE_TWO by construction at Reset, so no gate is needed.
+    schedule(guid, "bowdown", 3000, function()
+        if creature:IsAlive() then
+            creature:Talk(PHASE3.SAY_YOGG_SARON_SPAWN)
+        end
+    end)
     clearSanityAuras(creature)
 end
 
@@ -373,14 +437,13 @@ RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
 -- returns, crusher :1378 aura arm) are out of family scope: Lua timers
 -- are wall-clock, the C++ pre-Update timer freeze is unmodeled. The blocked arms — all of Sara's
 -- EVENT_SARAS_* timer casts (phase-arg PHASE_ONE + spellvalue
--- target-selector legs on no-bridge SpellScripts), every Yogg-Saron
--- body timer arm (PHASE_TWO/PHASE_THREE-gated), the voice
--- EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON / EVENT_EXTINGUISH_ALL_LIFE
--- schedules (instance-GUID/phase legs) — stay documented-only in
--- the header above (the gothik precedent); the voice phase-two
--- tentacle + illusion timer arms and the keeper
--- ACTION_PHASE_TWO destabilization arm are PORTED below
--- (voiceDoAction / keeperDoAction, event 38).
+-- target-selector legs on no-bridge SpellScripts) — stay
+-- documented-only in the header above (the gothik precedent); the
+-- Yogg-Saron body phase-three arms, the voice guardian /
+-- extinguish / immortal-guardian schedules and the keeper
+-- ACTION_PHASE_TWO destabilization + ACTION_PHASE_THREE arms are
+-- PORTED below (yoggDoAction / voiceDoAction / keeperDoAction,
+-- event 38, + brainDamageTaken, event 9).
 -- voice EVENT_LOCK_DOOR + JustEngagedWith one-shots, constrictor /
 -- influence / ominous-cloud / brain / turned-champion / observation-ring
 -- and yogg-keeper Reset one-shots, and keeper JustEnteredCombat entry-gated one-shots are ungated (not
@@ -406,30 +469,6 @@ local SPELL_ERUPT = 64144
 local SPELL_EMPOWERED = 64161
 local SPELL_RECENTLY_SPAWNED = 64497
 local SPELL_DRAIN_LIFE = 64159
-
-local timers = {}
-
-local function cancelTimers(guid)
-    local per = timers[guid]
-    if per then
-        for _, id in pairs(per) do
-            RemoveEventById(id)
-        end
-        timers[guid] = nil
-    end
-end
-
-local function schedule(guid, key, delay, fn)
-    local per = timers[guid]
-    if not per then
-        per = {}
-        timers[guid] = per
-    end
-    if per[key] then
-        RemoveEventById(per[key])
-    end
-    per[key] = CreateLuaEvent(fn, delay)
-end
 
 -- EVENT_ILLUSION chain (boss_yogg_saron.cpp:587-641 voice
 -- EVENT_ILLUSION + ACTION_PHASE_TWO receiver, :1096-1130 brain
@@ -480,6 +519,78 @@ local voiceYogg = {}
 local brainTentaclesKilled = {}
 local brainSummons = {}
 local keeperPhase = {}
+local voiceGuardians = {} -- GUID -> { count, timer }, voice guardian arm
+
+-- C++ boss_yogg_saronAI::UpdateAI phase-3 arms, seeded by yoggDoAction
+-- below: EVENT_SHADOW_BEACON (:996-1000, DoCastAOE 64465 + Talk EMOTE 7,
+-- 45s repeat), EVENT_LUNATIC_GAZE (:1002-1005, DoCast 64163, 12s repeat;
+-- the SendSound leg stays out — no SendSound bridge) and
+-- EVENT_DEAFENING_ROAR (:1006-1011, DoCastAOE 64189 + Talk SAY 4 +
+-- Talk EMOTE 5, {20s,25s} repeat). One generic tick: Yogg UpdateAI has
+-- the CASTING pre-loop return (:984-985), so all three carry the 500ms
+-- IsCasting defer (mal_ganis idiom); the phase gate is the Lua yoggPhase
+-- latch; talk1/talk2 are optional Talk ids, delay the re-arm (number or
+-- {min,max} table).
+local function yoggPhase3Tick(creature, guid, key, spellId, talk1, talk2, delay)
+    if not creature:IsAlive() or yoggPhase[guid] ~= PHASE_THREE then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, key, 500, function()
+            yoggPhase3Tick(creature, guid, key, spellId, talk1, talk2, delay)
+        end)
+        return
+    end
+    creature:CastSpell(creature, spellId)
+    if talk1 then
+        creature:Talk(talk1)
+    end
+    if talk2 then
+        creature:Talk(talk2)
+    end
+    schedule(guid, key, delay, function()
+        yoggPhase3Tick(creature, guid, key, spellId, talk1, talk2, delay)
+    end)
+end
+
+-- C++ boss_yogg_saronAI::DoAction(ACTION_PHASE_THREE) (:1020-1035),
+-- the ev38 receiver. C++ order: SetPhase, seed the three timer arms
+-- (deafening roar only on 25-man with <4 keepers, :1026), Talk
+-- SAY_PHASE_3, DoCast PHASE_3_TRANSFORM, RemoveAurasDueToSpell
+-- SHADOWY_BARRIER_YOGG (RemoveAura twin — the spell id is the whole
+-- leg), ResetPlayerDamageReq. The sender is the brain DamageTaken
+-- cascade (brainDamageTaken below).
+local function yoggDoAction(event, creature, action)
+    if action ~= ACTION_PHASE_THREE then
+        return
+    end
+    local guid = creature:GetGUID()
+    yoggPhase[guid] = PHASE_THREE
+    schedule(guid, "shadowbeacon", 45000, function()
+        yoggPhase3Tick(creature, guid, "shadowbeacon", PHASE3.SPELL_SHADOW_BEACON, PHASE3.EMOTE_YOGG_SARON_EMPOWERING_SHADOWS, nil, 45000)
+    end)
+    schedule(guid, "lunaticgaze", 12000, function()
+        yoggPhase3Tick(creature, guid, "lunaticgaze", PHASE3.SPELL_LUNATIC_GAZE, nil, nil, 12000)
+    end)
+    local data = yoggInstanceData(creature)
+    if creature:Is25ManRaid() and (data and data.keepersCount or 0) < 4 then
+        schedule(guid, "deafeningroar", {20000, 25000}, function()
+            yoggPhase3Tick(creature, guid, "deafeningroar", PHASE3.SPELL_DEAFENING_ROAR, PHASE3.SAY_YOGG_SARON_DEAFENING_ROAR, PHASE3.EMOTE_YOGG_SARON_DEAFENING_ROAR, {20000, 25000})
+        end)
+    end
+    creature:Talk(PHASE3.SAY_YOGG_SARON_PHASE_3)
+    creature:CastSpell(creature, PHASE3.SPELL_PHASE_3_TRANSFORM)
+    creature:RemoveAura(SPELL_SHADOWY_BARRIER_YOGG)
+    creature:ResetPlayerDamageReq()
+end
+
+local function yoggCancelAll(event, creature)
+    cancelTimers(creature:GetGUID())
+    yoggPhase[creature:GetGUID()] = nil
+end
+
+RegisterCreatureEvent(ENTRY_YOGG_SARON, 2, yoggCancelAll)
+RegisterCreatureEvent(ENTRY_YOGG_SARON, 38, yoggDoAction)
 
 -- C++ SelectTarget(Random) draws the threat list (UnitAI.h), never the
 -- whole instance player pool — GetAITargets is the bridged threat list
@@ -882,7 +993,7 @@ RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 23, immortalReset)
 -- All arms below are ungated in C++: no phase args on their schedules; the
 -- ported one-shots are not DoAction-driven (sibling DoAction arms stay out on
 -- unported senders — influence JustDied :1428, cloud voice-Reset :506, champion
--- illusions :1799, brain DamageTaken :1082); no instance legs — the stale "no-timer bridge" / "no random-target
+-- illusions :1799); no instance legs — the stale "no-timer bridge" / "no random-target
 -- bridge" / DoCastAOE doctrines retracted under the
 -- CreateLuaEvent / DoCastAOE≡self-cast conventions (the gothik
 -- phase-gating precedent).
@@ -985,15 +1096,75 @@ end
 
 RegisterAuraEvent(SPELL_SANITY, 3, sanityRemove)
 
+-- C++ boss_voice_of_yogg_saronAI::UpdateAI EVENT_SUMMON_GUARDIAN_OF_
+-- YOGG_SARON (:567-573): DoCastAOE(SPELL_SUMMON_GUARDIAN_2,
+-- {SPELLVALUE_MAX_TARGETS, 1}) — self-cast, max-targets clamp dropped
+-- (voiceEnterCombat precedent) — PHASE_ONE-gated, _guardianTimer
+-- 20s init; ++_guardiansCount, and while count <= 6 every 3rd
+-- guardian shortens the timer by 5s. Voice UpdateAI has no CASTING
+-- gate, so no IsCasting defer (unlike the tentacle ticks).
+local function guardianTick(creature, guid)
+    if not creature:IsAlive() or voicePhase[guid] ~= PHASE_ONE then
+        return
+    end
+    local st = voiceGuardians[guid]
+    if not st then
+        st = { count = 0, timer = 20000 }
+        voiceGuardians[guid] = st
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_GUARDIAN_2)
+    st.count = st.count + 1
+    if st.count <= 6 and st.count % 3 == 0 then
+        st.timer = st.timer - 5000
+    end
+    schedule(guid, "guardian", st.timer, function()
+        guardianTick(creature, guid)
+    end)
+end
+
+-- C++ boss_voice_of_yogg_saronAI::UpdateAI EVENT_EXTINGUISH_ALL_LIFE
+-- (:559-565): yogg Talk(EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE) +
+-- yogg CastSpell(nullptr, SPELL_EXTINGUISH_ALL_LIFE, triggered),
+-- 15min first fire, 10s repeat, no phase arg. The C++ nullptr target
+-- has no Go form (a nil CastSpell target falls back to the victim,
+-- and PassiveAI yogg has none — a no-op); the wipe spell rides the
+-- self-cast DoCastAOE convention. The C++ Talk target is the voice
+-- itself, so the Talk rides without a whisper target.
+local function extinguishTick(creature, guid)
+    local yogg = voiceYogg[guid]
+    if yogg and yogg:IsAlive() then
+        yogg:Talk(PHASE3.EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE)
+        yogg:CastSpell(yogg, PHASE3.SPELL_EXTINGUISH_ALL_LIFE, true)
+    end
+    schedule(guid, "extinguish", 10000, function()
+        extinguishTick(creature, guid)
+    end)
+end
+
+-- C++ boss_voice_of_yogg_saronAI::UpdateAI EVENT_SUMMON_IMMORTAL_
+-- GUARDIAN (:605-608): DoCastAOE(SPELL_IMMORTAL_GUARDIAN),
+-- PHASE_THREE-gated, 15s repeat — seeded 1s by voiceDoAction
+-- ACTION_PHASE_THREE below. No CASTING gate on the voice UpdateAI.
+local function immortalGuardianTick(creature, guid)
+    if not creature:IsAlive() or voicePhase[guid] ~= PHASE_THREE then
+        return
+    end
+    creature:CastSpell(creature, PHASE3.SPELL_IMMORTAL_GUARDIAN)
+    schedule(guid, "immortal", 15000, function()
+        immortalGuardianTick(creature, guid)
+    end)
+end
+
 -- C++ boss_voice_of_yogg_saronAI::JustEngagedWith (:518-529):
 -- DoCast(me, SPELL_SANITY_PERIODIC 63786) (2-arg self, non-triggered,
 -- ungated, :523) + DoCastAOE(SPELL_SUMMON_GUARDIAN_2 62978,
 -- {SPELLVALUE_MAX_TARGETS, 1}, :522) + events.ScheduleEvent(
 -- EVENT_LOCK_DOOR, 15s) (no phase arg, :525). The SetInCombatWith
--- keeper machine (:518-519) and the EVENT_EXTINGUISH_ALL_LIFE /
--- EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON schedules ride unbridged
--- instance/summon/phase machines (assembly_of_iron / gothik
--- precedents) — documented-only. DoCastAOE(62978) is a plain
+-- keeper machine (:518-519) rides unbridged instance legs
+-- (assembly_of_iron precedent) — documented-only; the
+-- EVENT_EXTINGUISH_ALL_LIFE / EVENT_SUMMON_GUARDIAN_OF_YOGG_SARON
+-- schedules are PORTED below (guardianTick / extinguishTick, seeded
+-- in voiceEnterCombat). DoCastAOE(62978) is a plain
 -- straight-line arm (no machine state consumed), so the cast ports
 -- as self-cast (DoCastAOE convention); the max-targets clamp has
 -- no bridge and is dropped. Non-triggered: the SpellValueMod-only
@@ -1025,6 +1196,19 @@ local function voiceEnterCombat(event, creature, target)
             creature:CastSpell(creature, SPELL_INSANE_PERIODIC)
             creature:SetBossState(BOSS_YOGG_SARON, 1)
         end
+    end)
+    -- C++ JustEngagedWith: ScheduleEvent(EVENT_SUMMON_GUARDIAN_OF_
+    -- YOGG_SARON, _guardianTimer 20s, PHASE_ONE) (:526) — seeded
+    -- here; the count/timer decrement lives in guardianTick below.
+    schedule(guid, "guardian", 20000, function()
+        guardianTick(creature, guid)
+    end)
+    -- C++ JustEngagedWith: ScheduleEvent(EVENT_EXTINGUISH_ALL_LIFE,
+    -- 15min) (:527) — no phase arg; the yogg Talk + cast legs are
+    -- nil-guarded inside extinguishTick (yogg does not exist until
+    -- phase two), matching the C++ GetCreature null check.
+    schedule(guid, "extinguish", 900000, function()
+        extinguishTick(creature, guid)
     end)
 end
 
@@ -1080,6 +1264,7 @@ local function voiceReset(event, creature)
     voicePhase[creature:GetGUID()] = 1 -- C++ Reset: SetPhase(PHASE_ONE) (:493)
     voiceShattered[creature:GetGUID()] = nil
     voiceYogg[creature:GetGUID()] = nil
+    voiceGuardians[creature:GetGUID()] = nil -- C++ Reset: Initialize() _guardianTimer = 20s (:467)
     local data = yoggInstanceData(creature)
     if data then
         data.driveMeCrazy = 1 -- C++ Reset: instance->SetData(DATA_DRIVE_ME_CRAZY, true) (:495)
@@ -1184,7 +1369,10 @@ end
 -- EVENT_ILLUSION Talk legs), pulls the brain into combat and
 -- seeds the tentacle + illusion timers (initials 5s / 7s /
 -- 5s / 60s, :630-633). ACTION_TOGGLE_SHATTERED_ILLUSION flips
--- the shattered flag the tentacle ticks poll on.
+-- the shattered flag the tentacle ticks poll on. ACTION_PHASE_THREE
+-- sets the phase latch and seeds the immortal-guardian timer (1s,
+-- :637-640); the phase-two summon also latches data.yogg for the
+-- brain DamageTaken cascade below.
 local function voiceDoAction(event, creature, action)
     local guid = creature:GetGUID()
     if action == ACTION_PHASE_TRANSFORM then
@@ -1197,6 +1385,12 @@ local function voiceDoAction(event, creature, action)
         voiceYogg[guid] = creature:SummonCreature(ENTRY_YOGG_SARON,
             YOGG_SARON_SPAWN_X, YOGG_SARON_SPAWN_Y, YOGG_SARON_SPAWN_Z, YOGG_SARON_SPAWN_O)
         local data = yoggInstanceData(creature)
+        if data then
+            -- Yogg-Saron himself is stored from the voice's SummonCreature
+            -- return (temp summons bypass the ON_CREATURE_CREATE funnel —
+            -- instance_hooks.go); the brain cascade reads him from here.
+            data.yogg = voiceYogg[guid]
+        end
         if data and data.brain then
             -- C++ :629: DoZoneInCombat(brain) — the bridge takes no
             -- argument and applies to the receiver object.
@@ -1216,6 +1410,13 @@ local function voiceDoAction(event, creature, action)
         end)
     elseif action == ACTION_TOGGLE_SHATTERED_ILLUSION then
         voiceShattered[guid] = not voiceShattered[guid]
+    elseif action == ACTION_PHASE_THREE then
+        -- C++ DoAction (:637-640): SetPhase(PHASE_THREE) +
+        -- ScheduleEvent(EVENT_SUMMON_IMMORTAL_GUARDIAN, 1s, PHASE_THREE).
+        voicePhase[guid] = PHASE_THREE
+        schedule(guid, "immortal", 1000, function()
+            immortalGuardianTick(creature, guid)
+        end)
     end
 end
 
@@ -1332,6 +1533,54 @@ local function brainJustSummoned(event, creature, summoned)
         brainSummons[guid] = list
     end
     list[#list + 1] = summoned
+end
+
+-- C++ boss_brain_of_yogg_saronAI::DamageTaken (:1070-1090): the
+-- below-30% cascade, the phase-3 sender. Gate: HealthBelowPctDamaged(
+-- 30, damage) (Unit.h:873 — health after the hit strictly below 30%
+-- of max) && !HasAura(SPELL_BRAIN_HURT_VISUAL 64361). DamageTaken
+-- arms fire on lethal hits, so no postDamage>0 guard (nefarian
+-- form). C++ order: RemoveAllAuras; InterruptNonMeleeSpells(true);
+-- DoCastAOE(SHATTERED_ILLUSION_REMOVE 65238, triggered); DoCast(
+-- MATCH_HEALTH_2 64069, triggered); DoCast(BRAIN_HURT_VISUAL 64361,
+-- triggered); SetFlag(NOT_SELECTABLE); SetImmuneToPC(true) — the
+-- last leg stays out (no SetImmuneToPC bridge); the flag + the
+-- hurt-visual aura gate carry the one-shot behavior. Then DoAction(
+-- ACTION_PHASE_THREE) to the voice, sara, yogg and the thorim /
+-- mimiron keepers (C++ loop DATA_THORIM_YS..DATA_MIMIRON_YS, :1087)
+-- via the shared instanceData table (sara is bound by
+-- instance_ulduar.lua ON_CREATURE_CREATE; yogg is latched by the
+-- voice's phase-two summon above; keepers by the gossip summon).
+-- The damage is not rewritten (C++ touches no damage here).
+local function brainDamageTaken(event, creature, attacker, damage)
+    if creature:GetHealth() - damage < creature:GetMaxHealth() * 30 / 100
+        and not creature:HasAura(PHASE3.SPELL_BRAIN_HURT_VISUAL) then
+        creature:RemoveAllAuras()
+        creature:InterruptNonMeleeSpells(true)
+        creature:CastSpell(creature, PHASE3.SPELL_SHATTERED_ILLUSION_REMOVE, true)
+        creature:CastSpell(creature, PHASE3.SPELL_MATCH_HEALTH_2, true)
+        creature:CastSpell(creature, PHASE3.SPELL_BRAIN_HURT_VISUAL, true)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        local data = yoggInstanceData(creature)
+        if data then
+            if data.voice then
+                data.voice:DoAction(ACTION_PHASE_THREE)
+            end
+            if data.sara then
+                data.sara:DoAction(ACTION_PHASE_THREE)
+            end
+            if data.yogg then
+                data.yogg:DoAction(ACTION_PHASE_THREE)
+            end
+            if data.thorim then
+                data.thorim:DoAction(ACTION_PHASE_THREE)
+            end
+            if data.mimiron then
+                data.mimiron:DoAction(ACTION_PHASE_THREE)
+            end
+        end
+    end
+    return false, damage
 end
 
 -- C++ boss_brain_of_yogg_saronAI::DoAction (:1096-1130): the
@@ -1489,10 +1738,11 @@ end
 -- notes the phase set is only meaningful for Thorim and
 -- Mimiron, but the class serves all four keepers, so the
 -- handler is registered on all four entries; the sender
--- (sara TRANSFORM_3) targets mimiron only. ACTION_PHASE_THREE
--- stays out (sender is the unported brain DamageTaken cascade,
--- :1082-1090); ACTION_SANITY_WELLS / ACTION_FLASH_FREEZE stay
--- out (unported senders).
+-- (sara TRANSFORM_3) targets mimiron only. ACTION_PHASE_THREE is
+-- PORTED below (phase latch + Thorim-only TITANIC_STORM); its sender
+-- is the brain DamageTaken cascade (brainDamageTaken, :1082-1090).
+-- ACTION_SANITY_WELLS / ACTION_FLASH_FREEZE stay out (unported
+-- senders).
 local function keeperDoAction(event, creature, action)
     if action == ACTION_PHASE_TWO then
         local guid = creature:GetGUID()
@@ -1500,6 +1750,15 @@ local function keeperDoAction(event, creature, action)
         schedule(guid, "destabilization", {5000, 15000}, function()
             destabilizationMatrixTick(creature, guid)
         end)
+    elseif action == ACTION_PHASE_THREE then
+        -- C++ DoAction (:1681-1684): SetPhase(PHASE_THREE) — the latch
+        -- flip stops the phase-two destabilization ticks (they gate on
+        -- keeperPhase == PHASE_TWO) — plus a Thorim-only DoCast(
+        -- SPELL_TITANIC_STORM 64171).
+        keeperPhase[creature:GetGUID()] = PHASE_THREE
+        if creature:GetEntry() == ENTRY_KEEPER_THORIM then
+            creature:CastSpell(creature, PHASE3.SPELL_TITANIC_STORM)
+        end
     end
 end
 
@@ -1533,6 +1792,7 @@ RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_OMINOUS_CLOUD, 23, ominousCloudReset)
 RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 2, brainCancelAll)
 RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 4, brainCancelAll)
+RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 9, brainDamageTaken)
 RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 19, brainJustSummoned)
 RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 23, brainReset)
 RegisterCreatureEvent(ENTRY_BRAIN_OF_YOGG_SARON, 38, brainDoAction)
