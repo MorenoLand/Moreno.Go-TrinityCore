@@ -93,15 +93,20 @@
 -- Melee stays engine-driven, like C++ DoMeleeAttackIfReady.
 -- Ungated per C++: flash-freeze add UpdateAI (:210, no gate),
 -- icicle add UpdateAI (:583, plain timer), snowpacked-icicle
--- UpdateAI (:638, plain expiry), toasty-fire (no UpdateAI);
--- priest/shaman/druid/mage add gates (:683/:765/:830/:908)
--- cover unported add arms only (no registrations).
+-- UpdateAI (:638, plain expiry), toasty-fire (no UpdateAI).
+-- Priest/shaman/druid/mage add gates are PORTED tick 476 (IsInCombat
+-- + HasFlag stun twin, 1s poll while gated; CASTING gates ride the
+-- 500ms IsCasting defer) — see the helper block below.
 -- DOCUMENTED-ONLY (in this header; no registration beyond
 -- entry 32845):
 -- JustEngagedWith achievement flags (gettingColdInHereTimer
 -- / gettingColdInHere / cheeseTheFreeze /
 -- iHaveTheCoolestFriends / iCouldSayThatThisCacheWasRare,
--- lines 373-377) — DoAction/SetData-gated, no bridges.
+-- lines 373-377) — the four booleans ARE modeled as per-GUID
+-- hodirLatches (set true at engage, cleared at Reset/leave/die
+-- and by the DoAction receiver, tick 476); the
+-- gettingColdInHereTimer poll and the instance-SetData readers
+-- have no bridges.
 -- DamageTaken lethal companion legs still documented-only:
 -- MoveIdle / SetControlled stun / MotionMaster Clear /
 -- instance->SetData(DATA_HODIR_RARE_CACHE) (line 400) — no
@@ -125,37 +130,33 @@
 -- PvE-combat-ref iteration, SPELL_BITING_COLD_TRIGGERED
 -- 62039 aura-stack check, SetData(DATA_GETTING_COLD_IN_HERE))
 -- — achievement / instance-data leg, no bridges.
--- DoAction arms (lines 503-515:
+-- DoAction arms (lines 511-522:
 -- ACTION_I_HAVE_THE_COOLEST_FRIENDS /
--- ACTION_CHEESE_THE_FREEZE) — DoAction-gated achievement
--- flags, no bridge.
+-- ACTION_CHEESE_THE_FREEZE) — PORTED tick 476 (hodirDoAction, ev38):
+-- per-GUID latch clears in hodirLatches (set true at engage,
+-- cleared at Reset/leave/die); the latch readers are the future Go
+-- criteria cases (2963/2965 + 2961/2962).
 -- Reset (lines 359-366): _Reset() + SetReactState REACT_PASSIVE
 -- + the frozen-helper summon loop (PORTED in hodirReset, below;
 -- the stale "no bridge" claim is retracted); the ctor's
 -- SetReactState(REACT_PASSIVE) (line 336) rides the same ev23
 -- hook (Eluna On_Reset fires at spawn).
 -- npc_hodir_priest / npc_hodir_shaman / npc_hodir_druid /
--- npc_hodir_mage — adds legs, BLOCKED: EVENT_HEAL
--- DoCastAOE(SPELL_GREATER_HEAL 62809) (lines 696-698,
--- priest add); EVENT_DISPEL_MAGIC grid search +
--- DoCast(SPELL_DISPEL_MAGIC 63499, true) (lines 700-709);
--- HealthBelowPct(30) DoCast(62809) (line 687);
--- EVENT_STORM_CLOUD random-target DoCast(SPELL_STORM_CLOUD
--- 65123, true) (lines 772-774); EVENT_STARLIGHT
--- DoCast(me, SPELL_STARLIGHT 62807, true) (lines 837-838,
--- plain timer self-cast but on the druid add);
--- EVENT_CONJURE_FIRE summon-list-size gate +
--- DoCast(SPELL_CONJURE_FIRE 62823, true) (lines 915-919);
--- EVENT_MELT_ICE FindNearestCreature(NPC_FLASH_FREEZE)
--- + DoCast(SPELL_MELT_ICE 64528, true) (lines 921-923);
--- all four JustDied -> hodir DoAction
--- (ACTION_I_HAVE_THE_COOLEST_FRIENDS) — ev38 dispatch IS bridged
--- (creature:DoAction, lua_creature_events.go:802); sender is the
--- unported add JustDied legs (boss_hodir.cpp:726/791/855/938);
--- their DoSpellAttackIfReady combat legs
--- (SPELL_SMITE 61923 / SPELL_LAVA_BURST 61924 /
--- SPELL_WRATH 62793 / SPELL_FIREBALL 61909) have no cast
--- bridges — no registrations.
+-- npc_hodir_mage — PORTED tick 476 (helper block below):
+-- priest EVENT_HEAL DoCastAOE 62809 (lines 696-698) +
+-- HealthBelowPct(30) self-heal poll (line 687) + JustDied -> hodir
+-- DoAction(1) (:723); shaman EVENT_STORM_CLOUD random-player
+-- triggered 65123 (:772-774) + JustDied send (:788); druid
+-- EVENT_STARLIGHT self-cast triggered 62807 (:837-838) + JustDied
+-- send (:852); mage EVENT_CONJURE_FIRE summon-list-size gate +
+-- triggered 62823 (:915-919) + EVENT_MELT_ICE
+-- FindNearestCreature(FLASH_FREEZE 32926, 50yd) + triggered 64528
+-- (:921-923) + JustDied send (:935). STAY-OUTS: priest
+-- EVENT_DISPEL_MAGIC grid search + DoCast(SPELL_DISPEL_MAGIC 63499,
+-- true) (lines 700-709 — no friendly-grid bridge); all four
+-- DoSpellAttackIfReady combat legs (SPELL_SMITE 61923 /
+-- SPELL_LAVA_BURST 61924 / SPELL_WRATH 62793 / SPELL_FIREBALL 61909 —
+-- engine combat, no bridge).
 -- npc_flash_freezeAI — PORTED (flashFreezeSummoned, below):
 -- IsSummonedBy (lines 232-249): AddThreat(summoner, 250) +
 -- DoCast(target, SPELL_BLOCK_OF_ICE 61969, true) (line 243) +
@@ -215,12 +216,13 @@
 -- ACTION_CHEESE_THE_FREEZE / ACTION_I_HAVE_THE_COOLEST_FRIENDS —
 -- still join the unmodeled-achievement queue).
 -- Achievement data legs (DATA_GETTING_COLD_IN_HERE /
--- ACTION_CHEESE_THE_FREEZE /
--- ACTION_I_HAVE_THE_COOLEST_FRIENDS /
 -- DATA_HODIR_RARE_CACHE — the C++ @todo names Storm
--- Cloud and Toasty Fires) — no GetData / DoAction /
--- achievement bridges; all join the unmodeled-achievement
--- queue.
+-- Cloud and Toasty Fires) — no GetData / instance-SetData /
+-- achievement bridges; they join the unmodeled-achievement
+-- queue. The ACTION_CHEESE_THE_FREEZE /
+-- ACTION_I_HAVE_THE_COOLEST_FRIENDS DoAction legs ARE ported
+-- (hodirDoAction receiver, per-GUID hodirLatches); only the Go
+-- criteria cases reading them (2961/2962 + 2963/2965) are missing.
 
 local ENTRY_HODIR = 32845
 local BOSS_HODIR = 7 -- ulduar.h:43 (moved above first use, tick 259: Lua local scope starts after its declaration — uses above it bind the nil global)
@@ -262,6 +264,14 @@ local SPELL_ICE_SHARD = 62457 -- boss_hodir.cpp:70
 local SPELL_ICE_SHARD_HIT = 65370 -- boss_hodir.cpp:71
 
 local timers = {}
+
+-- Per-GUID Hodir achievement latches (C++ boss_hodirAI members,
+-- boss_hodir.cpp:340-348): set true by JustEngagedWith (:374-377),
+-- cleared by Reset/Initialize (:339-345) and by the DoAction receiver
+-- (:511-522, hodirDoAction below); the Go criteria readers
+-- (2961-2968/3182-3184/2963-2965) are future work — the latches are
+-- dormant state until they land.
+local hodirLatches = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -389,6 +399,12 @@ local function onRareCache(creature, guid)
         return
     end
     creature:Talk(SAY_HARD_MODE_FAILED)
+    -- C++ EVENT_RARE_CACHE :481: iCouldSayThatThisCacheWasRare = false
+    -- (before the SetData leg, which has no bridge).
+    local latches = hodirLatches[guid]
+    if latches then
+        latches.rareCache = false
+    end
 end
 
 local function onBerserk(creature, guid)
@@ -414,6 +430,10 @@ local function hodirEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_BITING_COLD, true)
+    -- C++ JustEngagedWith :373-377: gettingColdInHereTimer = 1000,
+    -- gettingColdInHere / cheeseTheFreeze / iHaveTheCoolestFriends /
+    -- iCouldSayThatThisCacheWasRare = true (before the ScheduleEvents).
+    hodirLatches[guid] = {gettingCold = true, cheeseTheFreeze = true, coolestFriends = true, rareCache = true}
     schedule(guid, "icicle", 2000, function() onIcicle(creature, guid) end)
     schedule(guid, "freeze", 25000, function() onFreeze(creature, guid) end)
     schedule(guid, "blows", {60000, 65000}, function() onBlows(creature, guid) end)
@@ -432,11 +452,13 @@ end
 
 local function hodirLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    hodirLatches[creature:GetGUID()] = nil
 end
 
 local function hodirDied(event, creature, killer)
     creature:SetBossState(BOSS_HODIR, 3) -- true-kill fallback: BossAI::JustDied -> _JustDied() DONE; the lethal path writes DONE in hodirDamageTaken below (C++ :420)
     cancelTimers(creature:GetGUID())
+    hodirLatches[creature:GetGUID()] = nil
 end
 
 -- C++ Reset (lines 359-366): _Reset() (cancelTimers twin) +
@@ -446,8 +468,9 @@ end
 -- (boss_hodir.cpp Entry/SummonPositions tables), TEMPSUMMON_MANUAL_
 -- DESPAWN (Eluna type 7, 0ms), each self-casting
 -- SPELL_SUMMON_FLASH_FREEZE_HELPER 61989 triggered (the stale "no
--- summon bridge" claim is retracted). Delta: summoned add AIs are
--- unported — the helpers are inert.
+-- summon bridge" claim is retracted). The helper AIs are PORTED tick
+-- 476 (helper block below); dormant until the helpers enter combat
+-- (see there).
 local FROZEN_HELPER_ENTRIES = {32897, 33325, 33328, 32893, 33326, 32901, 32900, 33327}
 local FROZEN_HELPER_POSITIONS = {
     {1983.75, -243.36, 432.767, 1.57},
@@ -460,7 +483,8 @@ local FROZEN_HELPER_POSITIONS = {
     {1976.60, -233.53, 432.767, 1.57},
 }
 local function hodirReset(event, creature)
-    creature:SetBossState(BOSS_HODIR, 0) -- _Reset() SetBossState(DATA_HODIR 7, NOT_STARTED), first per C++ :359-360 (Initialize() only resets latch booleans, no Lua state) — the tick-258 auriaya convention (unconditional; the death-path ev23 pre-fire is overwritten by the ev4 DONE write in the same tick)
+    hodirLatches[creature:GetGUID()] = nil -- C++ Reset :359-360: Initialize() first (latch booleans false)
+    creature:SetBossState(BOSS_HODIR, 0) -- _Reset() SetBossState(DATA_HODIR 7, NOT_STARTED), first per C++ :359-360 — the tick-258 auriaya convention (unconditional; the death-path ev23 pre-fire is overwritten by the ev4 DONE write in the same tick)
     cancelTimers(creature:GetGUID())
     creature:SetReactState(REACT_PASSIVE)
     local helperCount = 4
@@ -635,8 +659,9 @@ RegisterCreatureEvent(ENTRY_TOASTY_FIRE, 14, toastyFireSpellHit)
 -- summoner -> CastSpell(summoner, 61969, true); NearTeleportTo the
 -- summoner's position; if the target is a player, Hodir (instance
 -- GetCreature(BOSS_HODIR)) -> DoAction(ACTION_CHEESE_THE_FREEZE 2)
--- (ev38 dispatch; Hodir's DoAction arm itself is an unported
--- achievement flag, documented-only above).
+-- (ev38 dispatch; Hodir's DoAction arm is PORTED tick 476 as the
+-- hodirLatches receiver — the latch readers are future Go criteria
+-- cases).
 local ENTRY_FLASH_FREEZE = 32926 -- boss_hodir.cpp:98
 local ENTRY_ICE_BLOCK = 32938 -- boss_hodir.cpp:97
 local SPELL_FLASH_FREEZE_HELPER = 61990 -- boss_hodir.cpp:64
@@ -691,6 +716,318 @@ end
 
 RegisterCreatureEvent(ENTRY_FLASH_FREEZE, 22, flashFreezeSummoned)
 RegisterCreatureEvent(ENTRY_ICE_BLOCK, 22, iceBlockSummoned)
+
+-- C++ npc_hodir_priest / npc_hodir_shaman / npc_hodir_druid /
+-- npc_hodir_mage (boss_hodir.cpp:657-955) — PORTED tick 476 (this
+-- tick): Reset-seeded event timers + HealthBelowPct poll + JustDied
+-- DoAction senders. The C++ UpdateAI gate (!UpdateVictim() ||
+-- HasUnitState(STUNNED) || HasFlag(UNIT_FLAG_STUNNED), priest :678,
+-- shaman :760, druid :825, mage :903) returns before events.Update,
+-- so the timers freeze while the helper has no victim or is frozen;
+-- the Go twin gates every tick on IsInCombat() (the ev9 precedent in
+-- this file) + HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+-- (lua_creature_events.go:5761; the ice-block summon sets the flag
+-- via summoner:SetFlag). The HasUnitState half has no bridge. While
+-- gated the tick re-arms after 1s (the maulgar phasecheck poll)
+-- instead of consuming the event. The CASTING gates (priest :683,
+-- shaman :765, druid :830, mage :908) ride the file's 500ms IsCasting defer. STAY-OUTS:
+-- priest EVENT_DISPEL_MAGIC (:700-709, friendly-grid search +
+-- HasAura(SPELL_FREEZE) + DoCast DISPEL_MAGIC — GetAITargets is
+-- threat-list only, no friendly-grid bridge); all four
+-- DoSpellAttackIfReady combat legs (SMITE 61923 / LAVA_BURST 61924 /
+-- WRATH 62793 / FIREBALL 61909 — engine combat, no bridge).
+-- Dormant until the helpers enter combat (the spell chain 61989 ->
+-- flash freeze -> block of ice -> ice block, plus the unported
+-- ice-block DamageTaken freeing leg); the ticks poll harmlessly
+-- until then. Entry->role bindings verified this tick from the AC
+-- creature_template.sql rows (names + npc_ulduar_hodir_* ScriptName
+-- role suffixes; TC's C++ classes are npc_hodir_* — same roles, fork
+-- naming differs; all eight rows carry difficulty_entry_1/2/3 = 0,
+-- so no difficulty-entry swap); the C++ Entry[8] array
+-- (boss_hodir.cpp:166-175) + ulduar.h:143-156 agree.
+local SPELL_GREATER_HEAL = 62809 -- boss_hodir.cpp:91
+local SPELL_DISPEL_MAGIC = 63499 -- boss_hodir.cpp:92 (stay-out, see above)
+local SPELL_STORM_CLOUD = 65123 -- boss_hodir.cpp:81
+local SPELL_STARLIGHT = 62807 -- boss_hodir.cpp:76
+local SPELL_CONJURE_FIRE = 62823 -- boss_hodir.cpp:85
+local SPELL_MELT_ICE = 64528 -- boss_hodir.cpp:86
+
+local ENTRY_PRIEST_A = 32897 -- boss_hodir.cpp:168 (ulduar.h:155 NPC_FIELD_MEDIC_PENNY)
+local ENTRY_PRIEST_B = 33326 -- boss_hodir.cpp:172 (ulduar.h:156 NPC_FIELD_MEDIC_JESSI)
+local ENTRY_SHAMAN_A = 33328 -- boss_hodir.cpp:170 (ulduar.h:147 NPC_ELEMENTALIST_MAHFUUN)
+local ENTRY_SHAMAN_B = 32900 -- boss_hodir.cpp:174 (ulduar.h:148 NPC_ELEMENTALIST_AVUUN)
+local ENTRY_DRUID_A = 33325 -- boss_hodir.cpp:169 (ulduar.h:143 NPC_EIVI_NIGHTFEATHER)
+local ENTRY_DRUID_B = 32901 -- boss_hodir.cpp:173 (ulduar.h:144 NPC_ELLIE_NIGHTFEATHER)
+local ENTRY_MAGE_A = 32893 -- boss_hodir.cpp:171 (ulduar.h:151 NPC_MISSY_FLAMECUFFS)
+local ENTRY_MAGE_B = 33327 -- boss_hodir.cpp:175 (ulduar.h:152 NPC_SISSY_FLAMECUFFS)
+
+local ACTION_I_HAVE_THE_COOLEST_FRIENDS = 1 -- boss_hodir.cpp:139
+
+-- C++ HealthBelowPct(pct) = GetHealth() < floor(maxHealth*pct/100)
+-- (ironaya convention, boss_high_king_maulgar.lua).
+local function healthBelowPct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() < math.floor(max * pct / 100)
+end
+
+local function helperGated(creature, guid, key, fn)
+    if not creature:IsInCombat() or creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED) then
+        schedule(guid, key, 1000, fn)
+        return true
+    end
+    return false
+end
+
+-- C++ priest EVENT_HEAL (:696-698): DoCastAOE(SPELL_GREATER_HEAL),
+-- 1-arg = non-triggered -> self-cast (the selin_fireheart /
+-- mr_smite DoCastAOE lowering); repeat {7500ms, 10s} (:698).
+local function priestHealTick(creature, guid)
+    if helperGated(creature, guid, "priestHeal", function() priestHealTick(creature, guid) end) then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "priestHeal", 500, function() priestHealTick(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_GREATER_HEAL)
+    schedule(guid, "priestHeal", {7500, 10000}, function() priestHealTick(creature, guid) end)
+end
+
+-- C++ priest UpdateAI :686-688: HealthBelowPct(30) -> DoCast(me,
+-- SPELL_GREATER_HEAL), non-triggered, checked every UpdateAI tick
+-- before the event loop (after the first CASTING gate). Go twin: a
+-- 1s poll (the maulgar phasecheck idiom) with the same gates.
+local function priestHealthPoll(creature, guid)
+    if helperGated(creature, guid, "priestHealth", function() priestHealthPoll(creature, guid) end) then
+        return
+    end
+    if not creature:IsCasting() and healthBelowPct(creature, 30) then
+        creature:CastSpell(creature, SPELL_GREATER_HEAL)
+    end
+    schedule(guid, "priestHealth", 1000, function() priestHealthPoll(creature, guid) end)
+end
+
+-- C++ priest Reset (:669-673): events.Reset() + EVENT_HEAL {4s,8s} +
+-- EVENT_DISPEL_MAGIC {15s,20s} (dispel leg stays out, see above).
+local function priestReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "priestHeal", {4000, 8000}, function() priestHealTick(creature, guid) end)
+    schedule(guid, "priestHealth", 1000, function() priestHealthPoll(creature, guid) end)
+end
+
+-- C++ JustDied (:723/:788/:852/:935, identical all four): Hodir
+-- (instance GetCreature(BOSS_HODIR)) -> DoAction(1) — the
+-- flash-freeze idiom in this file (GetInstanceCreature +
+-- creature:DoAction, ev38 dispatch lua_creature_events.go:827).
+local function helperDied(_, creature)
+    cancelTimers(creature:GetGUID())
+    local hodir = creature:GetInstanceCreature(BOSS_HODIR)
+    if hodir then
+        hodir:DoAction(ACTION_I_HAVE_THE_COOLEST_FRIENDS)
+    end
+end
+
+-- C++ shaman EVENT_STORM_CLOUD (:772-774): SelectTarget(Random, 0,
+-- 100.0f, true) playerOnly -> DoCast(target, 65123, true); repeat
+-- {15s,20s}, re-arm unconditional (outside the target check).
+local function shamanStormTick(creature, guid)
+    if helperGated(creature, guid, "shamanStorm", function() shamanStormTick(creature, guid) end) then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "shamanStorm", 500, function() shamanStormTick(creature, guid) end)
+        return
+    end
+    local target = randomPlayerInRange(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_STORM_CLOUD, true)
+    end
+    schedule(guid, "shamanStorm", {15000, 20000}, function() shamanStormTick(creature, guid) end)
+end
+
+-- C++ shaman Reset (:752-756): EVENT_STORM_CLOUD {10s,12500ms}.
+local function shamanReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "shamanStorm", {10000, 12500}, function() shamanStormTick(creature, guid) end)
+end
+
+-- C++ druid EVENT_STARLIGHT (:837-838): DoCast(me, 62807, true);
+-- repeat {25s,35s}.
+local function druidStarlightTick(creature, guid)
+    if helperGated(creature, guid, "druidStarlight", function() druidStarlightTick(creature, guid) end) then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "druidStarlight", 500, function() druidStarlightTick(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_STARLIGHT, true)
+    schedule(guid, "druidStarlight", {25000, 35000}, function() druidStarlightTick(creature, guid) end)
+end
+
+-- C++ druid Reset (:817-821): EVENT_STARLIGHT {15s,17500ms}.
+local function druidReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    schedule(guid, "druidStarlight", {15000, 17500}, function() druidStarlightTick(creature, guid) end)
+end
+
+-- C++ mage SummonList (boss_hodir.cpp:876, :889-897): JustSummoned
+-- tracks toasty fires (entry 33342), SummonedCreatureDespawn drops
+-- them, Reset summons.DespawnAll(), the CONJURE_FIRE arm reads
+-- summons.size(). Go twins: ev19 (CreatureEventOnJustSummonedCreature,
+-- runtime.go:381 — the gothik/kelthuzad precedent) + ev20
+-- (CreatureEventOnSummonedCreatureDespawn, runtime.go:382 — the
+-- kelthuzad/ichoron precedent), both summoner-side with
+-- (event, creature, summon). No ev21 leg: C++ has no
+-- SummonedCreatureDies override, so a dead toasty stays counted until
+-- it despawns. The table holds the toasty objects (the mimiron
+-- summon-ref precedent) so Reset can DespawnAll them.
+local mageToasties = {} -- mageGUID -> { [toastyGUID] = toastyCreature }
+
+local function mageJustSummoned(event, creature, summon)
+    if not summon or summon:GetEntry() ~= ENTRY_TOASTY_FIRE then
+        return
+    end
+    local guid = creature:GetGUID()
+    local list = mageToasties[guid]
+    if not list then
+        list = {}
+        mageToasties[guid] = list
+    end
+    list[summon:GetGUID()] = summon
+end
+
+local function mageSummonDespawned(event, creature, summon)
+    if not summon or summon:GetEntry() ~= ENTRY_TOASTY_FIRE then
+        return
+    end
+    local list = mageToasties[creature:GetGUID()]
+    if list then
+        list[summon:GetGUID()] = nil
+    end
+end
+
+local function mageToastyCount(guid)
+    local n = 0
+    local list = mageToasties[guid]
+    if list then
+        for _ in pairs(list) do
+            n = n + 1
+        end
+    end
+    return n
+end
+
+-- C++ mage EVENT_CONJURE_FIRE (:915-919): if (summons.size() >=
+-- RAID_MODE(2,4)) break — NO re-arm, the event dies at cap; else
+-- DoCast(me, 62823, true) + re-arm {15s,20s}.
+local function mageConjureFireTick(creature, guid)
+    if helperGated(creature, guid, "mageConjureFire", function() mageConjureFireTick(creature, guid) end) then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "mageConjureFire", 500, function() mageConjureFireTick(creature, guid) end)
+        return
+    end
+    local cap = 2
+    if isRaidMode25(creature) then
+        cap = 4
+    end
+    if mageToastyCount(guid) >= cap then
+        return
+    end
+    creature:CastSpell(creature, SPELL_CONJURE_FIRE, true)
+    schedule(guid, "mageConjureFire", {15000, 20000}, function() mageConjureFireTick(creature, guid) end)
+end
+
+-- C++ mage EVENT_MELT_ICE (:921-923): FindNearestCreature(NPC_FLASH_FREEZE,
+-- 50.0f, true) -> DoCast(FlashFreeze, 64528, true); re-arm {10s,15s}
+-- unconditional (outside the null check).
+local function mageMeltIceTick(creature, guid)
+    if helperGated(creature, guid, "mageMeltIce", function() mageMeltIceTick(creature, guid) end) then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "mageMeltIce", 500, function() mageMeltIceTick(creature, guid) end)
+        return
+    end
+    local flashFreeze = creature:FindNearestCreature(ENTRY_FLASH_FREEZE, 50.0)
+    if flashFreeze then
+        creature:CastSpell(flashFreeze, SPELL_MELT_ICE, true)
+    end
+    schedule(guid, "mageMeltIce", {10000, 15000}, function() mageMeltIceTick(creature, guid) end)
+end
+
+-- C++ mage Reset (:881-886): events.Reset() + summons.DespawnAll() +
+-- EVENT_CONJURE_FIRE {10s,12500ms} + EVENT_MELT_ICE 5s. Go fires ev23
+-- on death too (fireCreatureDiedByCreature 23+4 pair), and C++ does NOT
+-- despawn on death — the DespawnAll leg is IsDead-guarded (IsDead reads
+-- Health == 0, zeroed before the 23+4 fire).
+local function mageReset(_, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    if not creature:IsDead() then
+        local list = mageToasties[guid]
+        if list then
+            local snapshot = {}
+            for _, toasty in pairs(list) do
+                snapshot[#snapshot + 1] = toasty
+            end
+            mageToasties[guid] = nil
+            for _, toasty in ipairs(snapshot) do
+                toasty:Despawn()
+            end
+        end
+    end
+    schedule(guid, "mageConjureFire", {10000, 12500}, function() mageConjureFireTick(creature, guid) end)
+    schedule(guid, "mageMeltIce", 5000, function() mageMeltIceTick(creature, guid) end)
+end
+
+-- C++ boss_hodirAI::DoAction (:511-522): ACTION_I_HAVE_THE_COOLEST_FRIENDS
+-- (1) clears iHaveTheCoolestFriends, ACTION_CHEESE_THE_FREEZE (2)
+-- clears cheeseTheFreeze; other actions ignored (default break).
+-- PORTED tick 476 (event 38; the mimiron DoAction-receiver precedent).
+-- The latches are achievement-only (read by the future Go criteria
+-- cases for 2963/2965 + 2961/2962); the receiver is live now that the
+-- four add JustDied senders land above.
+local function hodirDoAction(event, creature, action)
+    local latches = hodirLatches[creature:GetGUID()]
+    if not latches then
+        return
+    end
+    if action == ACTION_I_HAVE_THE_COOLEST_FRIENDS then
+        latches.coolestFriends = false
+    elseif action == ACTION_CHEESE_THE_FREEZE then
+        latches.cheeseTheFreeze = false
+    end
+end
+
+RegisterCreatureEvent(ENTRY_PRIEST_A, 23, priestReset)
+RegisterCreatureEvent(ENTRY_PRIEST_A, 4, helperDied)
+RegisterCreatureEvent(ENTRY_PRIEST_B, 23, priestReset)
+RegisterCreatureEvent(ENTRY_PRIEST_B, 4, helperDied)
+RegisterCreatureEvent(ENTRY_SHAMAN_A, 23, shamanReset)
+RegisterCreatureEvent(ENTRY_SHAMAN_A, 4, helperDied)
+RegisterCreatureEvent(ENTRY_SHAMAN_B, 23, shamanReset)
+RegisterCreatureEvent(ENTRY_SHAMAN_B, 4, helperDied)
+RegisterCreatureEvent(ENTRY_DRUID_A, 23, druidReset)
+RegisterCreatureEvent(ENTRY_DRUID_A, 4, helperDied)
+RegisterCreatureEvent(ENTRY_DRUID_B, 23, druidReset)
+RegisterCreatureEvent(ENTRY_DRUID_B, 4, helperDied)
+RegisterCreatureEvent(ENTRY_MAGE_A, 23, mageReset)
+RegisterCreatureEvent(ENTRY_MAGE_A, 4, helperDied)
+RegisterCreatureEvent(ENTRY_MAGE_A, 19, mageJustSummoned)
+RegisterCreatureEvent(ENTRY_MAGE_A, 20, mageSummonDespawned)
+RegisterCreatureEvent(ENTRY_MAGE_B, 23, mageReset)
+RegisterCreatureEvent(ENTRY_MAGE_B, 4, helperDied)
+RegisterCreatureEvent(ENTRY_MAGE_B, 19, mageJustSummoned)
+RegisterCreatureEvent(ENTRY_MAGE_B, 20, mageSummonDespawned)
 
 -- C++ spell_biting_cold::HandleEffectPeriodic
 -- (boss_hodir.cpp:996-1027, EFFECT_0 SPELL_AURA_PERIODIC_DUMMY,
@@ -765,3 +1102,4 @@ RegisterCreatureEvent(ENTRY_HODIR, 3, hodirTargetDied)
 RegisterCreatureEvent(ENTRY_HODIR, 4, hodirDied)
 RegisterCreatureEvent(ENTRY_HODIR, 9, hodirDamageTaken)
 RegisterCreatureEvent(ENTRY_HODIR, 23, hodirReset)
+RegisterCreatureEvent(ENTRY_HODIR, 38, hodirDoAction)

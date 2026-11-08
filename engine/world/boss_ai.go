@@ -20323,12 +20323,17 @@ func init() {
 	// SetBossState DONE (event 9, tick 259).
 	// Timer-event Talks (flash freeze / stalactite /
 	// hard-mode-failed / berserk), the DamageTaken companion
-	// legs (faction flip, despawn, kill credit), helper-NPC
-	// DoAction legs and both spell scripts are bridge-blocked
-	// — documented in the lua header. Snowpacked-icicle
-	// (33174) Reset/despawn + toasty-fire (33342) Reset/SpellHit
-	// add arms are ported in the same file (ev23/ev4/ev14;
-	// summoned adds need no separate registration).
+	// legs (faction flip, despawn, kill credit) and both spell
+	// scripts are bridge-blocked — documented in the lua header.
+	// Helper-NPC arms are PORTED tick 476 in the same file:
+	// priest heal + HealthBelowPct(30) poll, shaman storm cloud,
+	// druid starlight, mage conjure-fire (ev19/ev20 toasty-count
+	// gate) + melt ice, all four JustDied -> Hodir DoAction(1),
+	// and the Hodir-side DoAction receiver (ev38, per-GUID
+	// achievement latches). Snowpacked-icicle (33174)
+	// Reset/despawn + toasty-fire (33342) Reset/SpellHit add arms
+	// are ported in the same file (ev23/ev4/ev14; summoned adds
+	// need no separate registration).
 	// Cast-state gates (2026-11-04): the six boss timer arms
 	// (icicle / freeze / blows / flash-freeze / rare-cache /
 	// berserk) defer 500ms on creature:IsCasting(), no repeat
