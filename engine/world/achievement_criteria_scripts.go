@@ -1158,6 +1158,25 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		}
 		return bossLatchData(source.server, victim, dataSapphironHundredClub) != 0
 
+	case "achievement_intense_cold": // boss_keristrasza.cpp:290-308
+		// OnCheck: the player's GUID must NOT be in the boss's
+		// _intenseColdList — pushed by the spell_intense_cold
+		// AuraScript periodic tick (EFFECT_1, :263-278) when the
+		// 48094 aura's stack reaches 2 (the C++ @todo notes the
+		// caster should be the boss). The Lua twin keeps the set
+		// as per-player "intenseCold_<guidLow>" keys in the shared
+		// instanceData table (the blood-queen vampire_ precedent),
+		// cleared at engage; a missing key reads 0, the C++
+		// empty-list default. Dormant until the DBC aura triggers
+		// run (no Spell.dbc in tree): the 48094 periodic ticks
+		// never fire, so the set stays empty and the check passes
+		// — the sindragosa/garfrost peak-stack dormancy class.
+		if source == nil || victim == nil || source.player == nil || source.server == nil || source.server.Features == nil || source.server.Features.Scripts == nil {
+			return false
+		}
+		v, ok := source.server.Features.Scripts.InstanceDataNumber(source.player.Map, source.player.InstanceID, "intenseCold_"+strconv.FormatUint(uint64(uint32(source.player.GUID)), 10))
+		return !(ok && v != 0)
+
 	case "achievement_shatter_resistant": // boss_volkhan.cpp:490-499
 		// OnCheck: GetData(DATA_SHATTER_RESISTANT 2042) < 5 — the
 		// GolemsShattered counter (GetData :221-225, init 0 :108),

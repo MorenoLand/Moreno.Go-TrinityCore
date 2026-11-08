@@ -85,8 +85,10 @@
 -- "no IsHeroic bridge" claims were wrong, retracted — the heroic
 -- crystallize leg is ported above.)
 -- SetGUID(DATA_INTENSE_COLD) — _intenseColdList push, consumed only by
--- achievement_intense_cold's OnCheck — no SetGUID / GetData bridge and
--- no achievement bridge.
+-- achievement_intense_cold's OnCheck — PORTED tick 420 via
+-- RegisterAuraEvent(48094, 1) + per-player "intenseCold_<guidLow>"
+-- instanceData keys (recordIntenseCold / clearIntenseColdMarks below)
+-- + the "achievement_intense_cold" Go case.
 -- containment_sphere — GameObjectScript: OnGossipHello — PORTED
 -- (RegisterGameObjectGossipEvent, kirtonos-brazier precedent): boss
 -- alive gate via go:FindNearestCreature(26723, 1000) (C++
@@ -107,11 +109,11 @@
 -- spell_intense_cold — AuraScript HandlePeriodicTick (EFFECT_1
 -- SPELL_AURA_PERIODIC_DAMAGE): stack < 2 early-return; caster AI ->
 -- SetGUID(target GUID, DATA_INTENSE_COLD) (caster should be the boss
--- but is the player in practice — the C++ @todo) — no AuraScript
--- bridge.
+-- but is the player in practice — the C++ @todo) — PORTED tick 420
+-- (RegisterAuraEvent 48094 OnPeriodic; see recordIntenseCold below).
 -- achievement_intense_cold — OnCheck: ENSURE_AI(boss_keristraszaAI)->
--- _intenseColdList not containing the player's GUID — no achievement
--- bridge (kelthuzad/thaddius precedent).
+-- _intenseColdList not containing the player's GUID — PORTED tick 420
+-- (Go case reads the "intenseCold_<guidLow>" instanceData keys).
 
 local ENTRY_KERISTRASZA = 26723
 
@@ -167,6 +169,56 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ spell_intense_cold AuraScript HandlePeriodicTick
+-- (boss_keristrasza.cpp:263-278): EFFECT_1 SPELL_AURA_PERIODIC_DAMAGE,
+-- stack < 2 early-return; otherwise caster AI -> SetGUID(target GUID,
+-- DATA_INTENSE_COLD 1), pushing the target into _intenseColdList,
+-- consumed only by achievement_intense_cold's OnCheck (:290-308).
+-- RegisterAuraEvent is global by spellID (engine/scripting/runtime.go
+-- TriggerAuraEvent): the handler sees every 48094 periodic tick
+-- regardless of owner. 48094 is cast only by Keristrasza (DoCastAOE
+-- :98), so no caster check is needed. The set rides per-player
+-- "intenseCold_<guidLow>" keys in the shared instanceData table (the
+-- blood-queen vampire_ precedent); cleared at ENGAGE, never in ev23
+-- (ev23 pre-fires on death ahead of the kill-credit achievement read).
+local function intenseColdKey(guidLow)
+    return "intenseCold_" .. guidLow
+end
+
+local function recordIntenseCold(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    if aura:GetStackAmount() < 2 then
+        return
+    end
+    local mapObj = target:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    data[intenseColdKey(target:GetGUIDLow())] = 1
+end
+
+local function clearIntenseColdMarks(creature)
+    local mapObj = creature:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil then
+        return
+    end
+    for key in pairs(data) do
+        if type(key) == "string" and string.sub(key, 1, 12) == "intenseCold_" then
+            data[key] = nil
+        end
+    end
 end
 
 -- C++ SelectTarget(Random, 0, range, true) draws the threat list
@@ -282,11 +334,13 @@ end
 -- bridge" claim was wrong, retracted in a prior run). The three
 -- ScheduleEvent legs (cpp:101-103) ride CreateLuaEvent timers
 -- (maiden_of_virtue precedent). The AuraScript (spell_intense_cold)
--- periodic SetGUID leg has no bridge — documented below, not wired.
+-- periodic SetGUID leg is PORTED below via RegisterAuraEvent(48094, 1,
+-- recordIntenseCold) + clearIntenseColdMarks at engage (helper above).
 local function keristraszaEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     keristraszaEnraged[guid] = false
+    clearIntenseColdMarks(creature) -- C++ Initialize :78-87 _intenseColdList.clear(), engage twin (blood-queen precedent)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_INTENSE_COLD)
     -- C++ JustEngagedWith base call (boss_keristrasza.cpp:99),
@@ -396,6 +450,7 @@ RegisterCreatureEvent(ENTRY_KERISTRASZA, 3, keristraszaTargetDied)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 4, keristraszaDied)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 9, keristraszaDamageTaken)
 RegisterCreatureEvent(ENTRY_KERISTRASZA, 23, keristraszaReset)
+RegisterAuraEvent(SPELL_INTENSE_COLD, 1, recordIntenseCold)
 
 RegisterGameObjectGossipEvent(GO_ANOMALUS_CONTAINMENT_SPHERE, 1, onContainmentSphereGossip)
 RegisterGameObjectGossipEvent(GO_ORMOROKS_CONTAINMENT_SPHERE, 1, onContainmentSphereGossip)
