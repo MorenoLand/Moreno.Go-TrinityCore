@@ -169,15 +169,17 @@
 -- spell_general_vezax_mark_of_the_faceless (63276 — periodic
 -- dummy AuraScript: caster casts
 -- SPELL_MARK_OF_THE_FACELESS_DAMAGE 63278 with bp1 =
--- aurEff amount — no AuraScript bridge; joins the
--- no-AuraScript-bridge queue);
+-- aurEff amount — PORTED tick 422 below via RegisterAuraEvent
+-- (63276, 1); the "no AuraScript bridge" claim is retired —
+-- RegisterAuraEvent + aura:GetCaster/GetAmount are live);
 -- spell_general_vezax_mark_of_the_faceless_leech (63276/63134
 -- target filter removing expl target, FinishCast on empty —
 -- no SpellScript bridge; joins the no-SpellScript-bridge
 -- queue); spell_general_vezax_saronite_vapors (63323 —
 -- OnApply: bp * 2^stack mana restore -> SPELL_SARONITE_VAPORS_
--- ENERGIZE 63337 + DAMAGE 63338 at 2x — no AuraScript bridge;
--- joins the no-AuraScript-bridge queue).
+-- ENERGIZE 63337 + DAMAGE 63338 at 2x — PORTED tick 422 below
+-- via RegisterAuraEvent (63323, 2 + 4); the "no AuraScript
+-- bridge" claim is retired).
 -- (Achievements: see the SpellHitTarget / Reset notes above —
 -- smell_saronite write leg PORTED tick 417; shadowdodger BLOCKED
 -- on the 62659 spell-id key.)
@@ -538,3 +540,54 @@ RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 4, vezaxDied)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 5, vezaxSpawned)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 23, vezaxReset)
 RegisterCreatureEvent(ENTRY_GENERAL_VEZAX, 38, vezaxDoAction)
+
+-- C++ spell_general_vezax_mark_of_the_faceless (boss_general_vezax.cpp:451-485):
+-- OnEffectPeriodic EFFECT_0 PERIODIC_DUMMY — the caster casts
+-- SPELL_MARK_OF_THE_FACELESS_DAMAGE 63278 on the aura target,
+-- triggered, bp1 = effect amount. PORTED tick 422 via
+-- RegisterAuraEvent (63276, 1); aura:GetCaster/GetAmount are live
+-- (lua_aura.go). Dormant until the DBC aura triggers run (no
+-- Spell.dbc in tree — the intense_cold precedent): 63276 is cast
+-- by the EVENT_MARK_OF_THE_FACELESS leg above, but without DBC
+-- effect rows Go applies no periodic aura, so no tick fires yet.
+local SPELL_MARK_OF_THE_FACELESS_DAMAGE = 63278 -- boss_general_vezax.cpp:52
+
+local function markOfTheFacelessPeriodic(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    caster:CastCustomSpell(target, SPELL_MARK_OF_THE_FACELESS_DAMAGE, true, nil, aura:GetAmount())
+end
+
+RegisterAuraEvent(SPELL_MARK_OF_THE_FACELESS, 1, markOfTheFacelessPeriodic)
+
+-- C++ spell_general_vezax_saronite_vapors (boss_general_vezax.cpp:516-553):
+-- AfterEffectApply EFFECT_0 DUMMY, REAL_OR_REAPPLY — the caster
+-- casts SPELL_SARONITE_VAPORS_ENERGIZE 63337 (bp0 = amount *
+-- 2^stack) + SPELL_SARONITE_VAPORS_DAMAGE 63338 (bp0 = mana * 2)
+-- on the aura target, triggered. PORTED tick 422 via
+-- RegisterAuraEvent (63323, 2) + (63323, 4): event 4
+-- (OnChangeAmount) is the Go twin of the C++ REAPPLY arm —
+-- REAPPLY fires only from AuraEffect::ChangeAmount with
+-- onStackOrReapply (SpellAuraEffects.cpp:662-672), i.e. on stack
+-- change, never on a pure duration refresh (RefreshDuration calls
+-- no HandleEffect, SpellAuras.cpp:905-927). Fully dormant: 63323
+-- is cast only by the unported vapors DamageTaken leg (:436) on an
+-- entry-unverifiable bearer, so no aura can apply yet.
+local SPELL_SARONITE_VAPORS = 63323 -- boss_general_vezax.cpp:58
+local SPELL_SARONITE_VAPORS_ENERGIZE = 63337 -- boss_general_vezax.cpp:59
+local SPELL_SARONITE_VAPORS_DAMAGE = 63338 -- boss_general_vezax.cpp:60
+
+local function saroniteVaporsApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    local mana = math.floor(aura:GetAmount() * (2 ^ aura:GetStackAmount()))
+    caster:CastCustomSpell(target, SPELL_SARONITE_VAPORS_ENERGIZE, true, mana)
+    caster:CastCustomSpell(target, SPELL_SARONITE_VAPORS_DAMAGE, true, mana * 2)
+end
+
+RegisterAuraEvent(SPELL_SARONITE_VAPORS, 2, saroniteVaporsApply)
+RegisterAuraEvent(SPELL_SARONITE_VAPORS, 4, saroniteVaporsApply)

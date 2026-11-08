@@ -19871,10 +19871,11 @@ func init() {
 	// — no registration; constructor Talk(EMOTE_VAPORS 0) —
 	// no spawn bridge; MoveRandom / DamageTaken machine — no
 	// movement / damage-taken / DoAction bridges); the three
-	// spell scripts (63276 mark_of_the_faceless /
-	// mark_of_the_faceless_leech, 63323 saronite_vapors — no
-	// SpellScript / AuraScript bridges; all three join the
-	// no-SpellScript / no-AuraScript-bridge queues); the two
+	// spell scripts (63276 mark_of_the_faceless periodic +
+	// 63323 saronite_vapors apply — PORTED tick 422 via
+	// RegisterAuraEvent, boss_general_vezax.lua; the
+	// mark_of_the_faceless_leech target-select filter stays in
+	// the no-SpellScript-bridge queue); the two
 	// achievements (shadowdodger / smell_saronite — GetData-based
 	// OnCheck — no achievement consumer (creature-target criteria gate absent; GetData read bridged); both join the
 	// unmodeled-achievement queue).
