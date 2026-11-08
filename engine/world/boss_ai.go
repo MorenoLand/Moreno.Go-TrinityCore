@@ -3060,6 +3060,17 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			sendGoPacket = false
 		}
 	}
+	// SpellScript OnCast (Spell.cpp:3432, CallScriptOnCastHandlers):
+	// the hook fires once per cast, after target selection and before
+	// SendSpellGo, with args (event, spell). It fires even when the GO
+	// packet is suppressed (IsNeedSendToClient is a packet flag, not a
+	// cast abort); the deferred-fire call re-runs this function, so a
+	// cast-time cast fires it once, at fire time. Gated on spellKnown
+	// like the rest of the _cast tail: C++ never reaches _cast without
+	// a SpellInfo.
+	if spellKnown {
+		s.fireSpellCast(ctx, spellID, s.luaCreatureSpellObject(m, spellID, targetGUID))
+	}
 	if sendGoPacket {
 		packetHits := hitTargets
 		var missStatus []protocol.SpellMissStatus
@@ -3814,6 +3825,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// so firing once per target is exact, not an approximation — same as
 	// the player path (spells.go).
 	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID)
 		for _, guid := range hitTargets {
 			if status, reflected := reflectedTargets[guid]; reflected {
 				// Reflect return trip (Spell.cpp:2350): a landed reflect
@@ -3830,19 +3842,32 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				// model delta); only the AI notification legs are
 				// modeled.
 				if status == protocol.SpellMissNone {
+					// SpellScript OnHit (Spell.cpp:2377) precedes the
+					// AI legs per TargetInfo; a landed reflect fires
+					// it on the caster, a bounced one with a nil hit
+					// unit (2377 sits outside the _spellHitTarget if).
+					s.fireSpellHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m))
 					s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
 					s.fireCreatureSpellHitTarget(ctx, m, m.GUID, spellID)
+				} else {
+					s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				}
 				continue
 			}
 			if evadedTargets[guid] {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				continue
 			}
 			if immuneTargets[guid] {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				continue
 			}
 			if missTargets[guid] != protocol.SpellMissNone {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				continue
+			}
+			if guid != 0 {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid))
 			}
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
@@ -3901,6 +3926,31 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 		s.fireCreatureHitTriggers(ctx, m, spellInfo, spellID, unreflectedHits)
+	}
+	// SpellScript AfterHit (Spell.cpp:2659, CallScriptAfterHitHandlers
+	// in Spell::TargetInfo::DoDamageAndTriggers) fires once per unit hit
+	// target, after the per-hit trigger consumer above, with the same
+	// args and the same miss-inclusive firing as OnHit.
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID)
+		for _, guid := range hitTargets {
+			if status, reflected := reflectedTargets[guid]; reflected {
+				if status == protocol.SpellMissNone {
+					s.fireSpellAfterHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m))
+				} else {
+					s.fireSpellAfterHit(ctx, spellID, creatureSpellObj, nil)
+				}
+				continue
+			}
+			if evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+				s.fireSpellAfterHit(ctx, spellID, creatureSpellObj, nil)
+				continue
+			}
+			if guid == 0 {
+				continue
+			}
+			s.fireSpellAfterHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid))
+		}
 	}
 	// Spell::_cast "Handle procs on cast" tail (Spell.cpp:3525-3545): the
 	// PHASE_CAST proc leg fires after the spell_linked tail for creature

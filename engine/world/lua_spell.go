@@ -271,3 +271,37 @@ func (s *session) firePlayerSpellCast(ctx context.Context, p spellObjectParams, 
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventSpellCast, player, spell, skipCheck)
 	return action
 }
+
+// fireSpellCast dispatches the RegisterSpellEvent OnCast hook for the
+// spell (SpellEventOnCast, args (event, spell)). Notification-only:
+// C++ OnCast handlers cannot veto the cast. The spell object is the
+// caller's Lua Spell object (player path: luaSpellObject, creature
+// path: luaCreatureSpellObject); a nil object fires nothing.
+func (s *Server) fireSpellCast(ctx context.Context, spellID uint32, spellObj *scripting.Object) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnCast, scripting.SpellEventOnCast, spellObj)
+}
+
+// fireSpellHit dispatches the RegisterSpellEvent OnHit hook for one hit
+// target (SpellEventOnHit, args (event, spell, hitTarget)).
+// Notification-only like fireSpellCast: the C++ damage/healing rewrite
+// has no Go model. The hitTarget is the Lua unit object or nil.
+func (s *Server) fireSpellHit(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnHit, scripting.SpellEventOnHit, spellObj, hitTarget)
+}
+
+// fireSpellAfterHit dispatches the RegisterSpellEvent AfterHit hook for
+// one hit target (SpellEventAfterHit, args (event, spell, hitTarget)).
+// Notification-only like fireSpellHit: C++ AfterHit handlers run after
+// damage and cannot veto it.
+func (s *Server) fireSpellAfterHit(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventAfterHit, scripting.SpellEventAfterHit, spellObj, hitTarget)
+}

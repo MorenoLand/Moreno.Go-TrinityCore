@@ -2742,3 +2742,19 @@ local function darkHungerProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_DARK_HUNGER, 6, darkHungerProc)
+
+-- C++ spell_the_lich_king_trigger_vile_spirit::ActivateSpirit
+-- (boss_the_lich_king.cpp:2732-2742): OnHit. GetHitCreature() nil-guard,
+-- then VileSpiritActivateEvent(target).Execute(0, 0) — the activate is
+-- the already-ported onVileSpiritActivate (:1461). PORTED 2026-11-08 on
+-- the new RegisterSpellEvent bridge (SpellEventOnHit = 2, fired from
+-- the creature cast path's DoDamageAndTriggers twin). The handler is
+-- inline: the file sits at 199 main-chunk locals and a named local
+-- would touch the 200-local load limit. DORMANT until Spell.dbc ships:
+-- the 73582 cast is DBC-gated (creature path needs spellKnown), and
+-- the Frostmourne-phase 3s re-cast sender (C++ :499) is still TODO.
+RegisterSpellEvent(LK.SPELL_TRIGGER_VILE_SPIRIT_HEROIC, 2, function(event, spell, target)
+    if target ~= nil and target:GetObjectType() == "Creature" then
+        onVileSpiritActivate(target)
+    end
+end)

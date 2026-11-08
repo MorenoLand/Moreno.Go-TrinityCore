@@ -490,6 +490,34 @@ const (
 	AuraEventOnBeforeDispel = 7
 )
 
+// SpellEvents contract for RegisterSpellEvent(spellID, event, fn). There
+// is no C++ Eluna RegisterSpellEvent: this is a Go-side extension
+// mirroring the AuraEvents one, over the SpellScript hooks in
+// SpellScript.h. Only the hooks Go can fire exist here: OnCast mirrors
+// Spell::CallScriptOnCastHandlers (Spell.cpp:3432, :7951), fired once
+// per cast after target selection and before SendSpellGo, with args
+// (event, spell); OnHit mirrors the CallScriptOnHitHandlers arm of
+// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2377), fired once
+// per unit hit target before damage, with args (event, spell,
+// hitTarget); AfterHit mirrors CallScriptAfterHitHandlers (Spell.cpp:
+// 2659), fired once per unit hit target after the per-hit trigger
+// consumer, with the same args. All three are notification-only: a
+// handler returning true does NOT veto anything — C++ OnCast has no
+// veto (CheckCast is the gate), and the OnHit damage/healing rewrite
+// (Spell.cpp:2379-2381, SetHitDamage/PreventHitDamage) has no Go model
+// (the cast path carries no m_damage/m_healing; damage lands in the
+// combat tick). The hitTarget is the Lua unit object (player or
+// creature) or nil when the target GUID resolves to nothing; GO, item
+// and corpse TargetInfo legs (Spell.cpp:2661-2707) have no Go model and
+// never fire. BeforeHit, OnEffectHit and OnEffectHitTarget have no Go
+// fire site yet: the per-effect DoTargetSpellHit loop has no Go twin,
+// so those hooks are not defined until one is built.
+const (
+	SpellEventOnCast   = 1
+	SpellEventOnHit    = 2
+	SpellEventAfterHit = 3
+)
+
 type Hook struct {
 	Kind  string
 	Event int
@@ -891,6 +919,14 @@ func (r *Runtime) TriggerPlayerEventUpdated(ctx context.Context, event int, args
 	return r.triggerNUpdated(ctx, "player", event, 1, args, update)
 }
 
+// TriggerSpellEvent fires hooks registered with
+// RegisterSpellEvent(spellID, event, fn) for the given spell. Callers
+// pass the Eluna-style leading event number in args, like
+// TriggerAuraEvent.
+func (r *Runtime) TriggerSpellEvent(ctx context.Context, spellID uint32, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "spell:"+strconv.FormatUint(uint64(spellID), 10), event, args...)
+}
+
 // TriggerAuraEvent fires hooks registered with
 // RegisterAuraEvent(spellID, event, fn) for the given spell. Callers pass
 // the Eluna-style leading event number in args, like TriggerCreatureEvent.
@@ -1193,6 +1229,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("RegisterVehicleEvent", r.registerVehicleEvent)
 	r.state.Register("RegisterCreatureEvent", r.registerCreatureEvent)
 	r.state.Register("RegisterAuraEvent", r.registerAuraEvent)
+	r.state.Register("RegisterSpellEvent", r.registerSpellEvent)
 	r.state.Register("RegisterUniqueCreatureEvent", r.registerUniqueCreatureEvent)
 	r.state.Register("RegisterCreatureGossipEvent", r.registerCreatureGossipEvent)
 	r.state.Register("RegisterGameObjectEvent", r.registerGameObjectEvent)
@@ -1209,6 +1246,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("ClearBattleGroundEvents", r.clearBattleGroundEvents)
 	r.state.Register("ClearCreatureEvents", r.clearCreatureEvents)
 	r.state.Register("ClearAuraEvents", r.clearAuraEvents)
+	r.state.Register("ClearSpellEvents", r.clearSpellEvents)
 	r.state.Register("ClearUniqueCreatureEvents", r.clearUniqueCreatureEvents)
 	r.state.Register("ClearCreatureGossipEvents", r.clearCreatureGossipEvents)
 	r.state.Register("ClearGameObjectEvents", r.clearGameObjectEvents)
@@ -1911,8 +1949,16 @@ func (r *Runtime) registerAuraEvent(state *lua.State) int {
 	return r.registerEntryHook(state, "aura", 1, 2, 3, 4)
 }
 
+func (r *Runtime) registerSpellEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "spell", 1, 2, 3, 4)
+}
+
 func (r *Runtime) clearAuraEvents(state *lua.State) int {
 	return r.clearEntryEvents(state, "aura")
+}
+
+func (r *Runtime) clearSpellEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "spell")
 }
 
 func (r *Runtime) registerCreatureEvent(state *lua.State) int {

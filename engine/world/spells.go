@@ -10449,8 +10449,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Spell::_cast (Spell.cpp:3431-3470) remaining legs:
-	//   - CallScriptOnCastHandlers: no SpellScript bridge in Go, so there is
-	//     no consumer to call (no-op, like the other script legs).
+	//   - CallScriptOnCastHandlers (Spell.cpp:3432): the SpellScript
+	//     OnCast hook fires here, after the completion rechecks and
+	//     before target selection, via fireSpellCast.
+	s.server.fireSpellCast(ctx, spellID, s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0}))
 	//   - UpdateTradeSlotItem: the trade-slot sentinel (TRADE_SLOT_NONTRADED,
 	//     set server-side by SetTradeItemTarget) only exists for the deferred
 	//     trade spell; Go resolves the trader's non-traded item directly in
@@ -18748,6 +18750,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
 		}
+		// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
+		// Spell::TargetInfo::DoDamageAndTriggers) fires once per unit hit
+		// target, before damage and before the AI SpellHit leg below
+		// (2377 precedes 2629), with args (event, spell, hitTarget).
+		// C++ fires it for missed targets too (2377 sits outside the
+		// _spellHitTarget if) with a null hit unit, so the miss entries
+		// fire with a nil target; the 0 GUID has no TargetInfo and is
+		// skipped. Notification-only: the C++ damage/healing rewrite
+		// has no Go model.
+		spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+		for _, effectTarget := range hitTargets {
+			if effectTarget == 0 {
+				continue
+			}
+			s.server.fireSpellHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
+		}
+		for range missStatus {
+			s.server.fireSpellHit(effCtx, spellID, spellObj, nil)
+		}
 		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
 		// once per hit creature target, after the effects loop: C++ runs
 		// the per-effect DoTargetSpellHit loop (Spell.cpp:2384) for damage
@@ -18788,11 +18809,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// and the linked-hit leg both fire from the same call even when the
 		// snapshot is empty, matching C++.
 		// The SpellScript OnHit/AfterHit legs around the same point
-		// (Spell.cpp:2377 CallScriptOnHitHandlers; Spell.cpp:2659/2682-2707
-		// CallScriptOnHitHandlers/CallScriptAfterHitHandlers in
-		// DoTargetSpellHit) are document-only: there is no SpellScript
-		// bridge (matching the no-SpellScript-bridge legs elsewhere), so
-		// these handlers have nothing to invoke.
+		// (Spell.cpp:2377 CallScriptOnHitHandlers; Spell.cpp:2659
+		// CallScriptAfterHitHandlers in DoTargetSpellHit) fire from the
+		// OnHit loop above and the AfterHit loop below; the GO/item/corpse
+		// TargetInfo legs (Spell.cpp:2682-2707) have no Go model and stay
+		// out, like the per-effect OnEffectHit hooks.
 		if completedCast != nil {
 			var hitEffMask uint8
 			for effectIndex, eff := range spell.Effects {
@@ -18834,6 +18855,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					break
 				}
 			}
+		}
+		// SpellScript AfterHit (Spell.cpp:2659, CallScriptAfterHitHandlers
+		// in Spell::TargetInfo::DoDamageAndTriggers) fires once per unit
+		// hit target, after DoTriggersOnSpellHit and the PvP flag above,
+		// with the same args and the same miss-inclusive firing as OnHit.
+		for _, effectTarget := range hitTargets {
+			if effectTarget == 0 {
+				continue
+			}
+			s.server.fireSpellAfterHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
+		}
+		for range missStatus {
+			s.server.fireSpellAfterHit(effCtx, spellID, spellObj, nil)
 		}
 		// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2611-2617): the
 		// AtTargetAttacked half fires per hit target under the
@@ -26147,6 +26181,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		}
 		goHitTargets = append(goHitTargets, guid)
 	}
+	// SpellScript OnCast (Spell.cpp:3432, CallScriptOnCastHandlers):
+	// the triggered path shares _cast with the client path, so the hook
+	// fires here too — after target selection, before SendSpellGo.
+	s.server.fireSpellCast(ctx, spellID, s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID}))
 	goTarget := spellGoPacketTarget(spell, spellTarget)
 	// Per-effect GO mask (Spell.cpp:2193, :4512), triggered-path twin of
 	// the finishSpellCast filter.
@@ -28488,6 +28526,21 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.stopAttackOnSpellFinish(spell)
 	}
 
+	// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
+	// Spell::TargetInfo::DoDamageAndTriggers) fires once per unit hit
+	// target, before damage and before the AI SpellHit leg below, with
+	// args (event, spell, hitTarget); missed targets fire with a nil
+	// target, like the client path. Notification-only.
+	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID})
+	for _, effectTarget := range goHitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
+	}
+	for range goMissStatus {
+		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, nil)
+	}
 	// Spell::DoDamageAndTriggers AI legs (Spell.cpp:2629-2638, once per
 	// target): a triggered player cast never entered finishSpellCast, so
 	// its hit creatures never got the Eluna SpellHit leg
@@ -28513,6 +28566,19 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				s.server.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnHitBySpell, s.luaPlayer(), spellID)
 			}
 		}
+	}
+	// SpellScript AfterHit (Spell.cpp:2659, CallScriptAfterHitHandlers
+	// in Spell::TargetInfo::DoDamageAndTriggers) fires once per unit hit
+	// target, after the per-hit triggers in the effect loop above, with
+	// the same args and the same miss-inclusive firing as OnHit.
+	for _, effectTarget := range goHitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		s.server.fireSpellAfterHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
+	}
+	for range goMissStatus {
+		s.server.fireSpellAfterHit(ctx, spellID, funnelSpellObj, nil)
 	}
 	// Spell::_cast (Spell.cpp:3442-3450): the CAST_SPELL criterion updates for
 	// player casters with no triggered gate — a triggered cast counts as a
