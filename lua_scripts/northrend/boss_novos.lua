@@ -96,9 +96,13 @@
 -- DORMANT until the unported crystal-channel-target summoner chain
 -- spawns the adds (no Go path summons 27597/27598/27600 today).
 -- GetData(DATA_NOVOS_ACHIEV) (type == DATA_NOVOS_ACHIEV && _ohNovos
--- ? 1 : 0) — no cross-AI GetData bridge; its only caller is
--- achievement_oh_novos — documented-only (the latch itself now
--- lives in this file as the ohNovos local).
+-- ? 1 : 0) — PORTED 2026-11-08 (tick 469): the latch is mirrored into
+-- the SetData store (Reset writes 1, the poll writes 0), and the Go
+-- achievement_oh_novos criteria check reads it via bossLatchData off
+-- the killed creature — no cross-AI GetData bridge is needed, the
+-- target IS Novos. The stale "no cross-AI GetData bridge" claim is
+-- retired: the only caller is achievement_oh_novos and it reads the
+-- target's own AI.
 -- JustSummoned — summons.Summon — summon STRAND absent (standing) —
 -- documented-only.
 -- npc_crystal_channel_target — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
@@ -120,9 +124,12 @@
 -- DoAction machine clears the bubble and EVENT_SUMMON_MINIONS
 -- casts 59910; 59933's own summon is a DBC effect.
 -- achievement_oh_novos — AchievementCriteriaScript (target
--- ToCreature -> AI()->GetData(DATA_NOVOS_ACHIEV)) — no
--- achievement-criteria bridge (snakes precedent) + cross-AI GetData
--- bridge absent — documented-only.
+-- ToCreature -> AI()->GetData(DATA_NOVOS_ACHIEV)) — PORTED 2026-11-08
+-- (tick 469): Go case in achievement_criteria_scripts.go reads the
+-- SetData mirror via bossLatchData (whole-server type-11 census this
+-- tick: the last missing script name). The stale "no
+-- achievement-criteria bridge (snakes precedent)" claim is retired —
+-- the type-11 dispatch + bossLatchData bridge cover it.
 -- NOTE: SAY_SUMMONING_ADDS (3) / EMOTE_SUMMONING_ADDS (5) are
 -- marked unused in the Yells enum and never fired by any code in the
 -- file — nothing to port.
@@ -138,6 +145,8 @@ local SAY_DEATH = 2
 local SAY_ARCANE_FIELD = 4
 
 local ACTION_CRYSTAL_HANDLER_DIED = 15
+
+local DATA_NOVOS_ACHIEV = 5 -- boss_novos.cpp:62 (Misc enum)
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -192,6 +201,9 @@ local function ohNovosCheck(creature)
         local add = creature:FindNearestCreature(entry, OH_NOVOS_SIGHT_YD)
         if add ~= nil and add:GetY() <= MAX_Y_COORD_OH_NOVOS then
             ohNovos = false
+            -- Mirror the latch into the SetData store for the
+            -- achievement_oh_novos Go criteria check (GetData twin).
+            creature:SetData(DATA_NOVOS_ACHIEV, 0)
             return
         end
     end
@@ -241,6 +253,9 @@ local function novosReset(event, creature)
     -- C++ boss_novos::Initialize (:95-97): _ohNovos resets true; the
     -- poll stops with the pull.
     ohNovos = true
+    -- Mirror the latch into the SetData store (ev23 fires on spawn
+    -- too, so the initial true is written before any kill can read it).
+    creature:SetData(DATA_NOVOS_ACHIEV, 1)
     cancelTimers(creature:GetGUID())
 end
 

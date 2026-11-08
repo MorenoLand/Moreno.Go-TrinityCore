@@ -80,6 +80,7 @@ const (
 	dataThorimLoseYourIllusion         = 31763183 // boss_thorim.cpp:317 ACHIEVEMENT_LOSE_YOUR_ILLUSION
 	dataSapphironHundredClub           = 21462147 // boss_sapphiron.cpp:88 DATA_THE_HUNDRED_CLUB
 	dataTrollgoreConsumptionJunction   = 1        // boss_trollgore.cpp:57 DATA_CONSUMPTION_JUNCTION
+	dataNovosOhNovosAchiev             = 5        // boss_novos.cpp:62 DATA_NOVOS_ACHIEV
 	dataDreamPortalMissed              = 2        // boss_valithria_dreamwalker.cpp:149 MISSED_PORTALS
 	dataMadeAMess                      = 45374613 // boss_deathbringer_saurfang.cpp:207 DATA_MADE_A_MESS
 )
@@ -429,6 +430,22 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataKingDredRaptorsKilled) >= 6
+
+	case "achievement_oh_novos": // boss_novos.cpp:359-367
+		// OnCheck: target->ToCreature()->AI()->GetData(DATA_NOVOS_ACHIEV 5)
+		// — type == DATA_NOVOS_ACHIEV && _ohNovos ? 1 : 0
+		// (boss_novos.cpp:190-193). The Lua twin mirrors the latch into
+		// Novos' SetData store (boss_novos.lua: Reset writes 1 — ev23
+		// fires on spawn too — and the oh_novos poll writes 0 when an
+		// add comes in sight); the kill path (kill.go:2943) passes the
+		// killed creature as victim, so no cross-AI GetData bridge is
+		// needed — the target IS Novos. DORMANT until the summoner
+		// chain spawns the adds, so the latch reads 1 — matching C++
+		// for a no-add-in-sight fight.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataNovosOhNovosAchiev) != 0
 
 	case "achievement_been_waiting_long_time": // boss_the_lich_king.cpp:2827-2832
 		// OnCheck: target->GetAI()->GetData(DATA_PLAGUE_STACK 70337)
