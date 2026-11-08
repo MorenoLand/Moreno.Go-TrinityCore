@@ -108,8 +108,11 @@
 -- the combine SpellScripts), so ev22/ev38 fire only when those paths
 -- land (krick precedent); the three combine SpellScripts themselves
 -- are PORTED 2026-11-08 (tick 457) via ev5 RegisterSpellEvent
--- (below, dormant until Spell.dbc ships) — only the
--- unstable-explosion chain (init/suicide/trigger) stays out.
+-- (below, dormant until Spell.dbc ships) — the explosion chain
+-- (init/suicide) is PORTED this tick (tick 458); only the
+-- trigger-missile leg stays out (no GetExplTargetDest bridge,
+-- no spell-object GetTriggerSpell, ev4 notification-only — see
+-- the explosion note at the end of the file).
 -- npc_precious_icc — NOT registered, same entry-block (no
 -- NPC_PRECIOUS constant in-tree): blocked arms EVENT_DECIMATE
 -- DoCastVictim(71123) non-triggered / EVENT_MORTAL_WOUND
@@ -127,17 +130,24 @@
 -- boss_blood_prince_council.lua uses it) — so the arm is now
 -- PORTED with the heroic gate (this run); porting unconditionally
 -- would cast on normal too (unfaithful), so the gate is required.
--- The remaining 7 spell scripts join the no-SpellScript-bridge queue
--- (the boss_moragg optic-link precedent): spell_rotface_mutated_infection
--- Talk(EMOTE_MUTATED_INFECTION 9) is cross-AI Talk riding a
--- SpellScript (NotifyTargets); spell_rotface_unstable_ooze_explosion_init
--- carries zero Talk calls; the other 5 join the same queue on their
--- caster / targeting legs. The 3 combine scripts are PORTED 2026-11-08
--- (tick 457) via ev5 RegisterSpellEvent (below): the buff-combine
--- Talk(EMOTE_UNSTABLE_2..4 0..2) + Talk(EMOTE_UNSTABLE_EXPLOSION 3)
--- + rotface Talk(SAY_UNSTABLE_EXPLOSION 5) (:597-:618) and the
--- large-combine rotface Talk(SAY_UNSTABLE_EXPLOSION 5) (:557) ride
--- the ev5 handlers now, dormant until Spell.dbc ships.
+-- The remaining 7 spell scripts: 6 PORTED 2026-11-08 (tick 458)
+-- via RegisterSpellEvent/RegisterAuraEvent (below, dormant until
+-- Spell.dbc ships) — ooze_flood (ev7 + ev5), mutated_infection
+-- (ev7 + ev3 AfterHit Talk), explosion_init (ev5), vile_gas_trigger
+-- (ev7 + ev5), slime_spray (ev2), explosion_suicide (aura ev1).
+-- Only spell_rotface_unstable_ooze_explosion stays BLOCKED: its
+-- TRIGGER_MISSILE leg needs GetExplTargetDest (no bridge anywhere
+-- in engine/) + the effect's TriggerSpell on the spell object
+-- (only the aura object has GetTriggerSpell, lua_aura.go:294),
+-- and ev4 is notification-only (lua_spell.go:456-460) so the
+-- default trigger-missile execution cannot be vetoed or
+-- redirected to Rotface. The 3 combine scripts are PORTED
+-- 2026-11-08 (tick 457) via ev5 RegisterSpellEvent (below): the
+-- buff-combine Talk(EMOTE_UNSTABLE_2..4 0..2) +
+-- Talk(EMOTE_UNSTABLE_EXPLOSION 3) + rotface
+-- Talk(SAY_UNSTABLE_EXPLOSION 5) (:597-:618) and the large-combine
+-- rotface Talk(SAY_UNSTABLE_EXPLOSION 5) (:557) ride the ev5
+-- handlers now, dormant until Spell.dbc ships.
 -- spell_rotface_mutated_infection_aura PORTED 2026-11-08 (tick 425,
 -- below; dormant on the Spell.dbc CalcValue trigger id).
 -- All 14 Talk() calls in the file accounted for (14 =
@@ -199,6 +209,16 @@ local EMOTE_UNSTABLE_2 = 0 -- boss_rotface.cpp:44
 local EMOTE_UNSTABLE_3 = 1 -- boss_rotface.cpp:45
 local EMOTE_UNSTABLE_4 = 2 -- boss_rotface.cpp:46
 local EMOTE_UNSTABLE_EXPLOSION = 3 -- boss_rotface.cpp:47
+local EMOTE_MUTATED_INFECTION = 9 -- boss_rotface.cpp:48
+-- Ooze-flood variants the professor cycles (boss_professor_putricide.cpp:168).
+local OOZE_FLOOD_SPELLS = { 69782, 69796, 69798, 69801 }
+local NPC_UNSTABLE_EXPLOSION_STALKER = 38107 -- icecrown_citadel.h:230
+local SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER = 69832 -- boss_rotface.cpp:70
+local SPELL_VILE_GAS_TRIGGER_SUMMON = 72287 -- boss_rotface.cpp:57
+local SPELL_GREEN_BLIGHT_RESIDUE = 72145 -- icecrown_citadel.h:42
+local QUEST_RESIDUE_RENDEZVOUS_10 = 24873 -- icecrown_citadel.h:521
+local QUEST_RESIDUE_RENDEZVOUS_25 = 24878 -- icecrown_citadel.h:522
+local QUEST_STATUS_INCOMPLETE = 3 -- lua_player.go GetQuestStatus: NONE 0, COMPLETE 1, INCOMPLETE 3
 
 local timers = {}
 
@@ -804,3 +824,284 @@ end
 RegisterSpellEvent(SPELL_LITTLE_OOZE_COMBINE, 5, littleOozeCombine)
 RegisterSpellEvent(SPELL_LARGE_OOZE_COMBINE, 5, largeOozeCombine)
 RegisterSpellEvent(SPELL_LARGE_OOZE_BUFF_COMBINE, 5, largeOozeBuffCombine)
+
+-- 3D distance between two units. No GetDistance bridge exists
+-- anywhere in engine/ (verified this tick), so the reach
+-- subtraction in C++ WorldObject::GetDistance (Object.cpp:1175-1179)
+-- is not replicated: orderings match except near-ties within
+-- combined combat reach, and the 5.0yd melee/ranged split below can
+-- flip a target sitting within reach of the boundary.
+local function dist3d(a, b)
+    local dx = a:GetX() - b:GetX()
+    local dy = a:GetY() - b:GetY()
+    local dz = a:GetZ() - b:GetZ()
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+-- C++ spell_rotface_ooze_flood::FilterTargets
+-- (boss_rotface.cpp:437-447): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENTRY. Sort by distance from the caster,
+-- keep the 5 nearest (resize pops the farthest), then drop the
+-- nearest until 2 remain — the 2 farthest of the 5 nearest. Go
+-- hands the effect's per-effect partition
+-- (lua_spell.go fireSpellTargetSelects); DORMANT until Spell.dbc
+-- ships (the flood cast is DBC-gated, professor DoAction leg
+-- unported).
+local function oozeFloodFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local list = targets:GetTargets()
+    table.sort(list, function(a, b) return dist3d(a, caster) < dist3d(b, caster) end)
+    while #list > 5 do
+        targets:Remove(list[#list])
+        table.remove(list)
+    end
+    while #list > 2 do
+        targets:Remove(list[1])
+        table.remove(list, 1)
+    end
+end
+
+-- C++ spell_rotface_ooze_flood::HandleScript
+-- (boss_rotface.cpp:419-435): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT. The hit unit casts the effect value
+-- (spell:GetEffectValue(0), the DBC CalcValue twin — 0 until
+-- Spell.dbc ships, fail-closed) on the farthest same-entry
+-- creature within 12.5yd. Deviation: C++ passes the original
+-- caster's GUID (the professor); Lua CastSpell has no
+-- original-caster slot, so the cast attributes to the hit unit
+-- (same class as the tick-425 aura-port deviation).
+local function oozeFloodScript(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if not target or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    local effectValue = spell:GetEffectValue(0)
+    if effectValue == 0 then
+        return
+    end
+    local triggers = target:GetCreaturesInGrid(target:GetEntry(), 12.5)
+    if #triggers == 0 then
+        return
+    end
+    table.sort(triggers, function(a, b) return dist3d(a, target) < dist3d(b, target) end)
+    target:CastSpell(triggers[#triggers], effectValue)
+end
+
+-- C++ spell_rotface_mutated_infection::FilterTargets
+-- (boss_rotface.cpp:458-471): OnObjectAreaTargetSelect EFFECT_ALL
+-- TARGET_UNIT_SRC_AREA_ENEMY. Drop every target already carrying
+-- the aura (UnitAuraCheck, spell's own id), then keep one random
+-- survivor. No effectIndex gate: C++ registers EFFECT_ALL and the
+-- Go fire hands each selecting effect its own list, so the filter
+-- runs per effect exactly like C++. DORMANT until Spell.dbc ships.
+local function mutatedInfectionFilter(event, spell, effectIndex, targets)
+    local spellId = spell:GetEntry()
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:HasAura(spellId) then
+            targets:Remove(target)
+        end
+    end
+    local kept = targets:GetTargets()
+    if #kept == 0 then
+        return
+    end
+    local pick = kept[math.random(#kept)]
+    local pickGuid = pick:GetGUID()
+    for _, target in ipairs(kept) do
+        if target:GetGUID() ~= pickGuid then
+            targets:Remove(target)
+        end
+    end
+end
+
+-- C++ spell_rotface_mutated_infection::NotifyTargets
+-- (boss_rotface.cpp:473-478): AfterHit — the caster creature's AI
+-- Talks EMOTE_MUTATED_INFECTION (9) at the hit unit. DORMANT
+-- until Spell.dbc ships (same cast as the filter).
+local function mutatedInfectionNotify(event, spell, target)
+    local caster = spell:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    caster:Talk(EMOTE_MUTATED_INFECTION, target)
+end
+
+-- C++ spell_rotface_unstable_ooze_explosion_init::HandleCast
+-- (boss_rotface.cpp:645-658): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_FORCE_CAST. Summon the explosion stalker
+-- (38107, TEMPSUMMON_TIMED_DESPAWN = type 2, 1min) at the hit
+-- unit's position, then the caster casts the trigger spell
+-- (69832) on it, triggered. Deviation: C++ PreventHitEffects the
+-- force-cast; ev5 is notification-only (lua_spell.go:467-475) and
+-- Go's creatureEffectForceCast (boss_ai.go:6888) still runs the
+-- default, so once Spell.dbc ships the ooze ALSO casts the
+-- trigger spell on itself — one extra 69832, wrong target, until
+-- a PreventHitEffect bridge exists. DORMANT until Spell.dbc ships.
+local function unstableOozeExplosionInit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if not target then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local dummy = caster:SummonCreature(NPC_UNSTABLE_EXPLOSION_STALKER,
+        target:GetX(), target:GetY(), target:GetZ(), 0, 2, 60000)
+    if dummy ~= nil then
+        caster:CastSpell(dummy, SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER, true)
+    end
+end
+
+-- C++ spell_rotface_vile_gas_trigger::FilterTargets
+-- (boss_rotface.cpp:718-760): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY. Distance-sorted split into melee
+-- (< 5.0yd) and ranged; top the ranged pool up to 8 (25-man) / 3
+-- (10-man) with random melee picks, then RandomResize the ranged
+-- pool to 3 / 1 — the kept targets are the ranged pool only.
+-- DORMANT until Spell.dbc ships.
+local function vileGasTriggerFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local is25 = caster:Is25ManRaid()
+    local list = targets:GetTargets()
+    table.sort(list, function(a, b) return dist3d(a, caster) < dist3d(b, caster) end)
+    local ranged = {}
+    local melee = {}
+    for _, target in ipairs(list) do
+        if dist3d(target, caster) < 5.0 then
+            melee[#melee + 1] = target
+        else
+            ranged[#ranged + 1] = target
+        end
+    end
+    local minTargets = 3
+    if is25 then
+        minTargets = 8
+    end
+    while #ranged < minTargets and #melee > 0 do
+        local i = math.random(#melee)
+        ranged[#ranged + 1] = melee[i]
+        table.remove(melee, i)
+    end
+    local keep = 1
+    if is25 then
+        keep = 3
+    end
+    while #ranged > keep do
+        table.remove(ranged, math.random(#ranged))
+    end
+    local keepGuids = {}
+    for _, target in ipairs(ranged) do
+        keepGuids[target:GetGUID()] = true
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if not keepGuids[target:GetGUID()] then
+            targets:Remove(target)
+        end
+    end
+end
+
+-- C++ spell_rotface_vile_gas_trigger::HandleDummy
+-- (boss_rotface.cpp:766-770): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY. The caster casts the summon spell (72287)
+-- on the hit unit, NON-triggered (C++ has no triggered flag).
+-- PreventHitDefaultEffect is a no-op here: SPELL_EFFECT_DUMMY has
+-- no default arm on the creature path (boss_ai.go:3527 skips dummy
+-- effects). DORMANT until Spell.dbc ships.
+local function vileGasTriggerDummy(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if not target then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_VILE_GAS_TRIGGER_SUMMON)
+end
+
+-- C++ spell_rotface_slime_spray::HandleResidue
+-- (boss_rotface.cpp:773-787): OnHit. Players only; skip bearers of
+-- the residue aura (72145) and anyone whose Residue Rendezvous
+-- quest (24873 10-man / 24878 25-man) is not INCOMPLETE; the rest
+-- cast the residue on themselves, triggered. DORMANT until
+-- Spell.dbc ships — and the self-cast hit list carries only the
+-- caster until area/cone hit resolution lands (boss_ai.go:1181),
+-- so the player arm is unreachable before that.
+local function slimeSprayResidue(event, spell, target)
+    if not target or target:GetObjectType() ~= "Player" then
+        return
+    end
+    if target:HasAura(SPELL_GREEN_BLIGHT_RESIDUE) then
+        return
+    end
+    local caster = spell:GetCaster()
+    local questId = QUEST_RESIDUE_RENDEZVOUS_10
+    if caster ~= nil and caster:Is25ManRaid() then
+        questId = QUEST_RESIDUE_RENDEZVOUS_25
+    end
+    if target:GetQuestStatus(questId) ~= QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    target:CastSpell(target, SPELL_GREEN_BLIGHT_RESIDUE, true)
+end
+
+-- C++ spell_rotface_unstable_ooze_explosion_suicide::DespawnSelf
+-- (boss_rotface.cpp:693-709): AuraScript OnEffectPeriodic EFFECT_2
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL, bound to the trigger spell
+-- (69832 — the only spell cast on the stalker; the aura it carries
+-- is what hides/despawns it). Creature targets only: strip all
+-- auras, hide, despawn in 60s. `return true` IS the
+-- PreventDefaultAction: fireAuraPeriodicTick (lua_aura.go) treats
+-- a true return as the veto and skips the default tick. DORMANT
+-- until Spell.dbc ships (the 69832 cast is DBC-gated).
+local function unstableOozeExplosionSuicide(event, aura, target)
+    if target ~= nil and target:GetObjectType() == "Creature" then
+        target:RemoveAllAuras()
+        target:SetVisible(false)
+        target:DespawnOrUnsummon(60000)
+    end
+    return true
+end
+
+-- C++ spell_rotface_unstable_ooze_explosion::CheckTarget
+-- (boss_rotface.cpp:666-685): OnEffectHit EFFECT_0
+-- SPELL_EFFECT_TRIGGER_MISSILE — BLOCKED, not ported: no
+-- GetExplTargetDest bridge anywhere in engine/ and no
+-- TriggerSpell read on the spell object (only the aura object
+-- has GetTriggerSpell, lua_aura.go:294); ev4 is notification-only
+-- (lua_spell.go:456-460), so the default trigger-missile
+-- execution cannot be vetoed and the cast cannot be redirected
+-- to Rotface at the dest. No registration below.
+
+for _, spellId in ipairs(OOZE_FLOOD_SPELLS) do
+    RegisterSpellEvent(spellId, 7, oozeFloodFilter)
+    RegisterSpellEvent(spellId, 5, oozeFloodScript)
+end
+for _, auraId in ipairs(MUTATED_INFECTION_AURAS) do
+    RegisterSpellEvent(auraId, 7, mutatedInfectionFilter)
+    RegisterSpellEvent(auraId, 3, mutatedInfectionNotify)
+end
+RegisterSpellEvent(SPELL_UNSTABLE_OOZE_EXPLOSION, 5, unstableOozeExplosionInit)
+RegisterSpellEvent(SPELL_VILE_GAS_TRIGGER, 7, vileGasTriggerFilter)
+RegisterSpellEvent(SPELL_VILE_GAS_TRIGGER, 5, vileGasTriggerDummy)
+RegisterSpellEvent(SPELL_SLIME_SPRAY, 2, slimeSprayResidue)
+RegisterAuraEvent(SPELL_UNSTABLE_OOZE_EXPLOSION_TRIGGER, 1, unstableOozeExplosionSuicide)
