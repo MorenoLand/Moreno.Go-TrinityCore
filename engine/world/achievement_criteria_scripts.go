@@ -57,6 +57,7 @@ const (
 	dataMimironSetupBomb               = 1        // boss_mimiron.cpp:187 DATA_SETUP_BOMB
 	dataMimironSetupMine               = 0        // boss_mimiron.cpp:186 DATA_SETUP_MINE
 	dataMimironSetupRocket             = 2        // boss_mimiron.cpp:188 DATA_SETUP_ROCKET
+	dataMimironFirefighter             = 4        // boss_mimiron.cpp:190 DATA_FIREFIGHTER
 	dataFlameLeviathanShutout          = 29112912 // boss_flame_leviathan.cpp:143 DATA_SHUTOUT
 	dataFlameLeviathanOrbit            = 1        // boss_flame_leviathan.cpp:144 DATA_ORBIT_ACHIEVEMENTS
 	dataAssemblyPhase3                 = 1        // boss_assembly_of_iron.cpp:133 DATA_PHASE_3
@@ -850,6 +851,23 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 			return false
 		}
 		return bossLatchData(source.server, victim, dataMimironSetupRocket) != 0
+
+	case "achievement_firefighter": // boss_mimiron.cpp:2822-2832
+		// OnCheck: target->GetAI()->GetData(DATA_FIREFIGHTER 4) —
+		// the MK II _fireFighter latch (boss_leviathan_mk_iiAI
+		// GetData :766-786; boss_mimironAI has no GetData override,
+		// so the kill target here is the MK II, the setup_boom/mine/
+		// rocket precedent). The latch starts clear (ctor/Reset) and
+		// is set only by the hard-mode button chain (go_mimiron_
+		// hardmode_button -> computer -> controller DoAction,
+		// boss_mimiron.cpp:1688/:1427/:1453/:415/:738, unported);
+		// the Lua twin writes 0 at spawn/reset
+		// (boss_leviathan_mk_ii.lua) and the set leg stays out, so
+		// the gate is fail-closed until the button chain ports.
+		if source == nil || victim == nil {
+			return false
+		}
+		return bossLatchData(source.server, victim, dataMimironFirefighter) != 0
 
 	case "achievement_shutout": // boss_flame_leviathan.cpp:1395-1409
 		// OnCheck: leviathan->AI()->GetData(DATA_SHUTOUT) — true
