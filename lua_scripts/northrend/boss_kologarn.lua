@@ -160,19 +160,40 @@
 -- GetGuidData(BOSS_KOLOGARN) — no SpellScript bridge; joins
 -- the no-SpellScript-bridge queue);
 -- spell_ulduar_stone_grip_cast_target (SpellScript area-target
--- filters: EFFECT_0 removes the main tank + non-player targets,
--- EFFECT_1/2 subsequential fill — no SpellScript bridge;
--- joins the no-SpellScript-bridge queue);
--- spell_ulduar_stone_grip (AuraScript: vehicle OnRemove ->
--- owner removes aurEff-amount spell; stun AfterEffectRemove ->
--- caster RemoveAurasDueToSpell(GetId()) — stays out: ev3 fires
--- per-aura, not per-effect, so the EFFECT_0 vehicle leg (needs
--- _ExitVehicle/Relocate/MoveFall, no bridge) cannot be split from
--- the EFFECT_2 stun leg; joins the no-AuraScript-bridge queue);
+-- filters: EFFECT_0 removes the main tank (only when the threat
+-- list holds > 1) + non-player targets and caps to 1 (62166) / 3
+-- (63981) random targets, EFFECT_1/2 refill from the saved list —
+-- PORTED 2026-11-08 (tick 464) via RegisterSpellEvent ev7 below:
+-- the Go fire hands each effect its own per-effect list in effect
+-- order (lua_spell.go fireSpellTargetSelects), so the saved list
+-- rides a module table keyed by caster GUID (one Kologarn per
+-- instance, one cast at a time). DORMANT until Spell.dbc ships:
+-- the 62166/63981 casts are DBC-gated.);
+-- spell_ulduar_stone_grip (AuraScript: stun AfterEffectRemove ->
+-- owner player removes aurEff-amount spell — PORTED 2026-11-08
+-- (tick 464) via RegisterAuraEvent ev3 below (aura:GetAmount(2)
+-- reads the removed record's snapshot amounts; the > 0 guard is
+-- the fail-closed DBC-absent read); vehicle OnEffectRemove ->
+-- PreventDefaultAction + caster _ExitVehicle at the exit position
+-- + caster RemoveAurasDueToSpell(GetId()) + Relocate/MoveFall/
+-- Relocate — STAYS OUT: ev3 is notification-only (fireAuraRemove
+-- ignores returns, so PreventDefaultAction has no bridge), no
+-- RemovePendingEventsForPassenger bridge, no MoveFall bridge,
+-- player:ExitVehicle takes no exit position);
 -- spell_ulduar_cancel_stone_grip (SCRIPT_EFFECT SpellScript:
--- target removes the two CalcValue spell ids — stays out: no row
--- in AC's current spell_script_names (binding unverifiable) and
--- target->GetVehicle() has no Lua bridge);
+-- target removes the CalcValue spell id for its difficulty —
+-- PORTED 2026-11-08 (tick 464) via RegisterSpellEvent ev5 below:
+-- target->GetVehicle() ports as target:IsOnVehicle() ~= nil (the
+-- player/creature arms push the vehicle object or nil, the exact
+-- GetVehicle() truthiness twin); the binding is the in-house enum
+-- SPELL_STONE_GRIP_CANCEL 65594 (boss_kologarn.cpp:46, the rotface
+-- in-house-enum precedent — AC's current spell_script_names
+-- carries no row, the same deleted-upstream class as the absorb
+-- 64224/64225 binding); difficulty reads the caster stalker
+-- (Is25ManRaid is creature-only); values read dynamically via
+-- spell:GetEffectValue(0/1), the CalcValue twin. DORMANT until
+-- Spell.dbc ships: 65594 is cast only by the absorb leg's
+-- stalker, itself DBC-gated.);
 -- spell_ulduar_stone_grip_absorb (AuraScript AfterEffectRemove
 -- school-absorb: ENEMY_SPELL removal only (boss_kologarn.cpp:537-544)
 -- -> rubble stalker casts SPELL_STONE_GRIP_CANCEL 65594 — PORTED
@@ -223,6 +244,7 @@ local SPELL_ONE_ARM_SMASH = 63573
 local SPELL_ARM_SWEEP = 63766
 local SPELL_STONE_SHOUT = 63716
 local SPELL_STONE_GRIP = 62166
+local SPELL_STONE_GRIP_HEROIC = 63981
 local SPELL_STONE_GRIP_ABSORB = 64224
 local SPELL_STONE_GRIP_ABSORB_HEROIC = 64225
 local SPELL_STONE_GRIP_CANCEL = 65594
@@ -247,6 +269,13 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
+
+-- Per-cast shared target list for the stone-grip cast-target filter
+-- (C++ spell_ulduar_stone_grip_cast_target::_unitList): effect 0
+-- stores the filtered list, effects 1/2 refill from it. Keyed by
+-- caster GUID; one Kologarn per instance and one cast at a time, so
+-- no two casts share the slot; cleared by the effect-2 leg.
+local stoneGripTargets = {}
 
 -- PassengerBoarded left/right latches (C++ boss_kologarnAI ctor:
 -- left(false), right(false); set only by the vehicle events).
@@ -695,3 +724,114 @@ local function stoneGripAbsorbRemoved(event, aura, target)
 end
 RegisterAuraEvent(SPELL_STONE_GRIP_ABSORB, 3, stoneGripAbsorbRemoved)
 RegisterAuraEvent(SPELL_STONE_GRIP_ABSORB_HEROIC, 3, stoneGripAbsorbRemoved)
+
+-- C++ spell_ulduar_cancel_stone_grip::HandleScript
+-- (boss_kologarn.cpp:448-476): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit, if it rides a
+-- vehicle, removes the aura whose id is the effect's CalcValue:
+-- EFFECT_0 on 10-man, EFFECT_1 on 25-man. Bound 65594 (in-house
+-- enum SPELL_STONE_GRIP_CANCEL, boss_kologarn.cpp:46; the
+-- spell_script_names row is absent upstream, see header).
+-- DORMANT until Spell.dbc ships: 65594 is cast only by the
+-- absorb leg's rubble stalker, itself DBC-gated.
+local function cancelStoneGrip(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:IsOnVehicle() == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    local valueIndex = 0
+    if caster ~= nil and caster:Is25ManRaid() then
+        valueIndex = 1
+    end
+    local value = spell:GetEffectValue(valueIndex)
+    if value > 0 then
+        target:RemoveAura(value)
+    end
+end
+RegisterSpellEvent(SPELL_STONE_GRIP_CANCEL, 5, cancelStoneGrip)
+
+-- C++ spell_ulduar_stone_grip::OnRemoveStun
+-- (boss_kologarn.cpp:568-573): AfterEffectRemove EFFECT_2
+-- SPELL_AURA_MOD_STUN, AURA_EFFECT_HANDLE_REAL — the gripped
+-- player removes the auras due to the stun effect's amount when
+-- the grip aura is removed, whatever the remove mode (no mode
+-- gate in C++). The Go ev3 fires once per aura removal, the
+-- same granularity; aura:GetAmount(2) reads the removed
+-- record's snapshot amounts. Bound 62166/63981 (the two grip
+-- variants; the cast-target script branches on 63981).
+-- DORMANT until Spell.dbc ships: the amount read is 0 without
+-- the DBC row (the fuse-armor fail-closed precedent).
+local function stoneGripRemoved(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    local amount = aura:GetAmount(2)
+    if amount > 0 then
+        target:RemoveAura(amount)
+    end
+end
+RegisterAuraEvent(SPELL_STONE_GRIP, 3, stoneGripRemoved)
+RegisterAuraEvent(SPELL_STONE_GRIP_HEROIC, 3, stoneGripRemoved)
+
+-- C++ spell_ulduar_stone_grip_cast_target (boss_kologarn.cpp:
+-- 363-440): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY -> drop the main tank (only when
+-- the threat list holds more than 1) and every non-player,
+-- then trim to a random maxTargets (1 for 62166, 3 for 63981);
+-- EFFECT_1/2 refill their lists from the saved one. The Go ev7
+-- fire hands each effect its own list in effect order
+-- (lua_spell.go fireSpellTargetSelects), so the saved list rides
+-- the stoneGripTargets module table keyed by caster GUID. The
+-- Load() caster-is-creature gate is structurally satisfied: the
+-- Go fire runs only on the creature cast path. DORMANT until
+-- Spell.dbc ships: the 62166/63981 casts are DBC-gated.
+local function stoneGripTargetSelect(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local guid = caster:GetGUID()
+    if effectIndex == 0 then
+        local victim = caster:GetVictim()
+        local victimGuid = 0
+        if victim ~= nil then
+            victimGuid = victim:GetGUID()
+        end
+        local threatSize = #caster:GetAITargets()
+        for _, target in ipairs(targets:GetTargets()) do
+            if target:GetObjectType() ~= "Player" then
+                targets:Remove(target)
+            elseif victimGuid ~= 0 and target:GetGUID() == victimGuid and threatSize > 1 then
+                targets:Remove(target)
+            end
+        end
+        local maxTargets = 1
+        if spell:GetEntry() == SPELL_STONE_GRIP_HEROIC then
+            maxTargets = 3
+        end
+        while targets:GetCount() > maxTargets do
+            local list = targets:GetTargets()
+            if #list == 0 then
+                break
+            end
+            targets:Remove(list[math.random(#list)])
+        end
+        stoneGripTargets[guid] = targets:GetTargets()
+    elseif effectIndex == 1 or effectIndex == 2 then
+        local saved = stoneGripTargets[guid]
+        if saved ~= nil then
+            targets:Clear()
+            for _, target in ipairs(saved) do
+                targets:Add(target)
+            end
+            if effectIndex == 2 then
+                stoneGripTargets[guid] = nil
+            end
+        end
+    end
+end
+RegisterSpellEvent(SPELL_STONE_GRIP, 7, stoneGripTargetSelect)
+RegisterSpellEvent(SPELL_STONE_GRIP_HEROIC, 7, stoneGripTargetSelect)
