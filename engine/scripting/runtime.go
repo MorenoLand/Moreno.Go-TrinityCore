@@ -444,15 +444,23 @@ const (
 // (event, aura, target, dispeller) — the dispeller is
 // DispelInfo::GetDispeller(). It fires whether or not the aura is fully
 // removed, like C++; a charge/stack aura that survives the decrement
-// still fires it. Notification-only like OnApply: there is no OnDispel
-// (before) hook and no SetRemovedCharges veto, so the halion-marks
-// BeforeDispel leg (which zeroes the removed charges) stays out. The
-// hook fires from the SPELL_EFFECT_DISPEL funnel (player, pet, and
-// owned-creature casters), the SPELL_EFFECT_DISPEL_MECHANIC funnel, and
-// the wild-creature dispel funnels; the aura object reads a snapshot
+// still fires it. Notification-only like OnApply. The hook fires from
+// the SPELL_EFFECT_DISPEL funnel (player, pet, and owned-creature
+// casters), the SPELL_EFFECT_DISPEL_MECHANIC funnel, and the
+// wild-creature dispel funnels; the aura object reads a snapshot
 // captured before the decrement, so GetCaster still resolves after a
 // full removal. Steal never fires it (RemoveAurasDueToSpellBySteal,
 // Unit.cpp:3969, has no dispel-hook call).
+// OnBeforeDispel mirrors Aura::CallScriptDispel (Unit.cpp:3947): it fires
+// once per successful dispel application, before the charge/stack
+// decrement, with the same args (event, aura, target, dispeller) and the
+// same snapshot aura object as OnDispel. A handler returning boolean
+// true is DispelInfo::SetRemovedCharges(0): the decrement is skipped
+// and the aura keeps its charges, like C++; the AfterDispel hook still
+// fires afterwards. It fires only from the SPELL_EFFECT_DISPEL funnels
+// (session and wild-creature casters) — EffectDispelMechanic removes
+// via Unit::RemoveAura (SpellEffects.cpp:4761), which calls no dispel
+// hook, so the mechanic funnels never fire it.
 // OnProc mirrors AuraScript::OnEffectProc (AuraEffectProcFn,
 // SpellAuras.cpp:2192-2212 via Aura::TriggerProcOnEvent): it fires once
 // per eligible proc effect, after the proc gates (flags, chance roll,
@@ -479,6 +487,7 @@ const (
 	AuraEventOnChangeAmount = 4
 	AuraEventOnDispel       = 5
 	AuraEventOnProc         = 6
+	AuraEventOnBeforeDispel = 7
 )
 
 type Hook struct {

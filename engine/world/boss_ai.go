@@ -5028,21 +5028,33 @@ func (s *Server) creatureDispelPlayerTarget(m *creatureMotion, spell wotlk.Spell
 				successList = append(successList, cand.SpellID)
 			}
 			// OnDispel snapshot (Unit::RemoveAurasDueToSpellByDispel,
-			// Unit.cpp:3936-3967): the AfterDispel hook fires after the
-			// decrement below, which may erase the record, so the aura
-			// is copied first.
+			// Unit.cpp:3936-3967): both dispel hooks fire from the aura
+			// copied before the decrement below, which may erase the
+			// record — CallScriptDispel first, then the decrement
+			// (skipped when a BeforeDispel handler vetoes,
+			// SetRemovedCharges(0)), then CallScriptAfterDispel.
 			dispelSnap := s.dispelAuraSnapshot(targetSess, creatureAuraKey{}, cand.SpellID)
-			if fullyRemoved := targetSess.dispelPlayerAuraCharge(cand.SpellID); fullyRemoved {
-				candidates[idx] = candidates[len(candidates)-1]
-				candidates = candidates[:len(candidates)-1]
+			var dispelRef *luaAuraRef
+			if dispelSnap != nil {
+				dispelRef = s.dispelAuraRef(targetSess, creatureAuraKey{}, cand.SpellID, dispelSnap, mapID, instanceID)
+			}
+			vetoed := false
+			if dispelRef != nil && s.hasAuraBeforeDispelHook(cand.SpellID) {
+				vetoed = s.fireAuraBeforeDispel(context.Background(), cand.SpellID, dispelRef.luaAuraObject(), targetSess.luaPlayer(), s.luaUnitObjectForGUID(m.Map, m.InstanceID, m.GUID))
+			}
+			if !vetoed {
+				if fullyRemoved := targetSess.dispelPlayerAuraCharge(cand.SpellID); fullyRemoved {
+					candidates[idx] = candidates[len(candidates)-1]
+					candidates = candidates[:len(candidates)-1]
+				}
 			}
 			// RegisterAuraEvent OnDispel (Aura::CallScriptAfterDispel,
 			// Unit.cpp:3955): fires on every successful dispel
-			// application, not only on full removal. The dispeller is
-			// the wild creature.
-			if dispelSnap != nil {
-				ref := s.dispelAuraRef(targetSess, creatureAuraKey{}, cand.SpellID, dispelSnap, mapID, instanceID)
-				s.fireAuraDispel(context.Background(), cand.SpellID, ref.luaAuraObject(), targetSess.luaPlayer(), s.luaUnitObjectForGUID(m.Map, m.InstanceID, m.GUID))
+			// application, not only on full removal, and still fires
+			// when a BeforeDispel handler vetoed the decrement. The
+			// dispeller is the wild creature.
+			if dispelRef != nil {
+				s.fireAuraDispel(context.Background(), cand.SpellID, dispelRef.luaAuraObject(), targetSess.luaPlayer(), s.luaUnitObjectForGUID(m.Map, m.InstanceID, m.GUID))
 			}
 		} else {
 			failList = append(failList, cand.SpellID)

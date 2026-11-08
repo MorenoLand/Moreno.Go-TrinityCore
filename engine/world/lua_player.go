@@ -3569,12 +3569,29 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{spell.Effects[index].ItemType}, nil
 	}
+	// RemoveAura(spell[, mode]) is Unit::RemoveAurasDueToSpell
+	// (Unit.cpp:3910): the optional mode is the AuraRemoveMode
+	// (SpellAuraDefines.h:61-69) the removal carries — 4 is
+	// AURA_REMOVE_BY_EXPIRE, which the halion-marks OnRemove leg
+	// gates on. Omitted, it removes with AURA_REMOVE_BY_DEFAULT,
+	// the pre-existing behaviour.
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		s.removeAura(spell)
+		mode := auraRemoveByDefault
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if v < 0 || v > 5 {
+				return nil, fmt.Errorf("invalid aura remove mode")
+			}
+			mode = auraRemoveMode(v)
+		}
+		s.removeAuraWithMode(spell, mode)
 		return nil, nil
 	}
 	// RemoveAurasByType is Unit::RemoveAurasByType (Unit.cpp:3884) for

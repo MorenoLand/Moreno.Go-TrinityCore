@@ -1106,8 +1106,9 @@ RegisterGameObjectGossipEvent(GO_HALION_PORTAL_EXIT, 1, onTwilightPortalGossip)
 -- aura 74803, and "spell_halion_fiery_combustion" with SPELL_MARK_
 -- OF_COMBUSTION 74567 on the combustion damage aura 74629. The
 -- OnApply leg (same self-cast once) and the OnRemove leg (strip
--- the mark unless removed by death) stay out — no apply/remove
--- hooks.
+-- the mark unless removed by death) are ported below (ev2/ev3;
+-- the old "no apply/remove hooks" claim was stale — the kalecgos
+-- port already uses both).
 local SPELL_COMBUSTION_DAMAGE_AURA = 74629
 local SPELL_MARK_OF_COMBUSTION = 74567
 local SPELL_CONSUMPTION_DAMAGE_AURA = 74803
@@ -1123,3 +1124,94 @@ end
 
 RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 1, combustionTick)
 RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 1, consumptionTick)
+
+-- C++ spell_halion_combustion_consumption::OnApply /
+-- OnRemove (boss_halion.cpp:1456-1473): EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE. OnApply the target casts its mark
+-- spell on itself, triggered. OnRemove, unless the removal is by
+-- death, the target's mark is stripped with AURA_REMOVE_BY_EXPIRE —
+-- which is what arms the mark's own expire-only OnRemove summon
+-- leg below. Same loader pairing as the periodic tick above.
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
+
+local function combustionDamageOnApply(event, aura, target)
+    target:CastSpell(target, SPELL_MARK_OF_COMBUSTION, true)
+end
+
+local function combustionDamageOnRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_DEATH then
+        return
+    end
+    if target:HasAura(SPELL_MARK_OF_COMBUSTION) then
+        target:RemoveAura(SPELL_MARK_OF_COMBUSTION, AURA_REMOVE_BY_EXPIRE)
+    end
+end
+
+local function consumptionDamageOnApply(event, aura, target)
+    target:CastSpell(target, SPELL_MARK_OF_CONSUMPTION, true)
+end
+
+local function consumptionDamageOnRemove(event, aura, target)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_DEATH then
+        return
+    end
+    if target:HasAura(SPELL_MARK_OF_CONSUMPTION) then
+        target:RemoveAura(SPELL_MARK_OF_CONSUMPTION, AURA_REMOVE_BY_EXPIRE)
+    end
+end
+
+RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 2, combustionDamageOnApply)
+RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 3, combustionDamageOnRemove)
+RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 2, consumptionDamageOnApply)
+RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 3, consumptionDamageOnRemove)
+
+-- C++ spell_halion_marks (boss_halion.cpp:1530-1589): the mark auras
+-- themselves. BeforeDispel (:1551-1559) zeroes the removed charges
+-- (the mark survives the dispel) and strips the matching
+-- combustion/consumption debuff with AURA_REMOVE_BY_EXPIRE; OnRemove
+-- (:1561-1570) fires only on expiry and casts the summon spell on
+-- the target with BP1 = the mark's stack amount. The loader is
+-- instantiated twice (boss_halion.cpp:1925-1926):
+-- "spell_halion_mark_of_combustion" (summon 74610, remove 74562) and
+-- "spell_halion_mark_of_consumption" (summon 74800, remove 74792).
+-- DORMANT until Spell.dbc ships (no aura-engine application of
+-- 74567/74795 yet); the BeforeDispel veto rides the new event-7
+-- bridge (engine/world/lua_aura.go). Residual: the summon cast
+-- carries no original-caster slot (Go has none), so it originates
+-- from the target rather than the mark's caster.
+local SPELL_FIERY_COMBUSTION_SUMMON = 74610 -- C++ enum :70
+local SPELL_SOUL_CONSUMPTION_SUMMON = 74800 -- C++ enum :83
+
+local function markOfCombustionBeforeDispel(event, aura, target, dispeller)
+    if target:HasAura(SPELL_FIERY_COMBUSTION) then
+        target:RemoveAura(SPELL_FIERY_COMBUSTION, AURA_REMOVE_BY_EXPIRE)
+    end
+    return true
+end
+
+local function markOfCombustionOnRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    target:CastCustomSpell(target, SPELL_FIERY_COMBUSTION_SUMMON, false, nil, aura:GetStackAmount())
+end
+
+local function markOfConsumptionBeforeDispel(event, aura, target, dispeller)
+    if target:HasAura(SPELL_SOUL_CONSUMPTION) then
+        target:RemoveAura(SPELL_SOUL_CONSUMPTION, AURA_REMOVE_BY_EXPIRE)
+    end
+    return true
+end
+
+local function markOfConsumptionOnRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    target:CastCustomSpell(target, SPELL_SOUL_CONSUMPTION_SUMMON, false, nil, aura:GetStackAmount())
+end
+
+RegisterAuraEvent(SPELL_MARK_OF_COMBUSTION, 7, markOfCombustionBeforeDispel)
+RegisterAuraEvent(SPELL_MARK_OF_COMBUSTION, 3, markOfCombustionOnRemove)
+RegisterAuraEvent(SPELL_MARK_OF_CONSUMPTION, 7, markOfConsumptionBeforeDispel)
+RegisterAuraEvent(SPELL_MARK_OF_CONSUMPTION, 3, markOfConsumptionOnRemove)

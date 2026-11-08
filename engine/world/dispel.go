@@ -1496,9 +1496,11 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 			// Charge auras stay in the roll list until their last charge is
 			// gone (Spell::EffectDispel DecrementCharge loop, SpellEffects.cpp:2458).
 			// OnDispel snapshot (Unit::RemoveAurasDueToSpellByDispel,
-			// Unit.cpp:3936-3967): the AfterDispel hook fires after the
-			// decrement below, which may erase the record, so the aura
-			// is copied first.
+			// Unit.cpp:3936-3967): both dispel hooks fire from the aura
+			// copied before the decrement below, which may erase the
+			// record — CallScriptDispel first, then the decrement (skipped
+			// when a BeforeDispel handler vetoes, SetRemovedCharges(0)),
+			// then CallScriptAfterDispel.
 			var dispelSnap *activeAura
 			var dispelKey creatureAuraKey
 			if isTargetPlayer {
@@ -1507,11 +1509,41 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 				dispelKey = creatureAuraKeyForPlayer(*s.player, targetGUID)
 				dispelSnap = s.server.dispelAuraSnapshot(nil, dispelKey, cand.SpellID)
 			}
-			fullyRemoved := true
-			if isTargetPlayer {
-				fullyRemoved = targetSess.dispelPlayerAuraCharge(cand.SpellID)
-			} else {
-				fullyRemoved = s.dispelCreatureAuraCharge(dispelKey, cand.SpellID, cand.Slot)
+			var dispelTarget any
+			var dispelRef *luaAuraRef
+			var dispellerGUID uint64
+			var dispelMap, dispelInst uint32
+			if dispelSnap != nil && s.server != nil {
+				dispellerGUID = casterGUID
+				if petCaster != nil {
+					dispellerGUID = petCaster.GUID
+				}
+				var tMap, tInst uint32
+				if isTargetPlayer {
+					dispelTarget = targetSess.luaPlayer()
+					if targetSess.player != nil {
+						tMap, tInst = targetSess.player.Map, targetSess.player.InstanceID
+					}
+				} else {
+					tMap, tInst = dispelKey.Map, dispelKey.InstanceID
+					dispelTarget = s.server.luaUnitObjectForGUID(tMap, tInst, targetGUID)
+				}
+				if s.player != nil {
+					dispelMap, dispelInst = s.player.Map, s.player.InstanceID
+				}
+				dispelRef = s.server.dispelAuraRef(targetSess, dispelKey, cand.SpellID, dispelSnap, tMap, tInst)
+			}
+			vetoed := false
+			if dispelRef != nil && s.server.hasAuraBeforeDispelHook(cand.SpellID) {
+				vetoed = s.server.fireAuraBeforeDispel(ctx, cand.SpellID, dispelRef.luaAuraObject(), dispelTarget, s.server.luaUnitObjectForGUID(dispelMap, dispelInst, dispellerGUID))
+			}
+			fullyRemoved := false
+			if !vetoed {
+				if isTargetPlayer {
+					fullyRemoved = targetSess.dispelPlayerAuraCharge(cand.SpellID)
+				} else {
+					fullyRemoved = s.dispelCreatureAuraCharge(dispelKey, cand.SpellID, cand.Slot)
+				}
 			}
 			if fullyRemoved {
 				candidates[idx] = candidates[len(candidates)-1]
@@ -1521,29 +1553,10 @@ func (s *session) dispelEffectAsCaster(ctx context.Context, casterGUID uint64, t
 			// RegisterAuraEvent OnDispel (Aura::CallScriptAfterDispel,
 			// Unit.cpp:3955): fires on every successful dispel
 			// application, like the UA/VT backlash legs below — not
-			// only on full removal.
-			if dispelSnap != nil && s.server != nil {
-				dispellerGUID := casterGUID
-				if petCaster != nil {
-					dispellerGUID = petCaster.GUID
-				}
-				var tMap, tInst uint32
-				var target any
-				if isTargetPlayer {
-					target = targetSess.luaPlayer()
-					if targetSess.player != nil {
-						tMap, tInst = targetSess.player.Map, targetSess.player.InstanceID
-					}
-				} else {
-					tMap, tInst = dispelKey.Map, dispelKey.InstanceID
-					target = s.server.luaUnitObjectForGUID(tMap, tInst, targetGUID)
-				}
-				var dMap, dInst uint32
-				if s.player != nil {
-					dMap, dInst = s.player.Map, s.player.InstanceID
-				}
-				ref := s.server.dispelAuraRef(targetSess, dispelKey, cand.SpellID, dispelSnap, tMap, tInst)
-				s.server.fireAuraDispel(ctx, cand.SpellID, ref.luaAuraObject(), target, s.server.luaUnitObjectForGUID(dMap, dInst, dispellerGUID))
+			// only on full removal — and still fires when a
+			// BeforeDispel handler vetoed the decrement.
+			if dispelRef != nil {
+				s.server.fireAuraDispel(ctx, cand.SpellID, dispelRef.luaAuraObject(), dispelTarget, s.server.luaUnitObjectForGUID(dispelMap, dispelInst, dispellerGUID))
 			}
 
 			// Dispel Backfire / Backlash Mechanics.

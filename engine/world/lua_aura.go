@@ -757,6 +757,36 @@ func (s *Server) fireAuraDispel(ctx context.Context, spellID uint32, auraObj *sc
 	_, _ = s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnDispel, scripting.AuraEventOnDispel, auraObj, target, dispeller)
 }
 
+// hasAuraBeforeDispelHook reports whether any RegisterAuraEvent(...,
+// OnBeforeDispel, ...) handler is registered for the spell, so the
+// dispel funnels can skip the before-dispel fire when no handler could
+// run (the hasAuraProcHook twin).
+func (s *Server) hasAuraBeforeDispelHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnBeforeDispel)
+}
+
+// fireAuraBeforeDispel dispatches the RegisterAuraEvent OnBeforeDispel
+// hook for an aura about to be dispelled (args (event, aura, target,
+// dispeller)) and reports whether any handler returned boolean true.
+// That is the Go model of DispelInfo::SetRemovedCharges(0) in an
+// AuraScript BeforeDispel handler: the caller skips the charge/stack
+// decrement for that dispel application, matching C++
+// (Unit::RemoveAurasDueToSpellByDispel, Unit.cpp:3936-3967, calls
+// CallScriptDispel before ModCharges/ModStackAmount and
+// CallScriptAfterDispel after). The hook fires from the snapshot taken
+// before the decrement, so the aura object still resolves GetCaster.
+// Lua errors are logged by the runtime, never propagated.
+func (s *Server) fireAuraBeforeDispel(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any, dispeller any) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return false
+	}
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnBeforeDispel, scripting.AuraEventOnBeforeDispel, auraObj, target, dispeller)
+	return luaHookVeto(results)
+}
+
 // hasAuraProcHook reports whether any RegisterAuraEvent(..., OnProc, ...)
 // handler is registered for the spell, so the proc loop can skip building
 // the aura/actor objects when no handler could run (Runtime.HasHook twin

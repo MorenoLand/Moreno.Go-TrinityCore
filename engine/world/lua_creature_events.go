@@ -1460,12 +1460,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{creatureImmuneToDamage(s, auraKey(), mask)}, nil
 	}
+	// RemoveAura(spell[, mode]) is the handler-creature twin of the
+	// player method above: the optional AuraRemoveMode rides
+	// removeCreatureAuraWithMode instead of the default-mode helper.
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		s.removeCreatureAura(auraKey(), spell)
+		mode := auraRemoveByDefault
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if v < 0 || v > 5 {
+				return nil, fmt.Errorf("invalid aura remove mode")
+			}
+			mode = auraRemoveMode(v)
+		}
+		s.removeCreatureAuraWithMode(auraKey(), spell, mode)
 		return nil, nil
 	}
 	// RemoveMovementImpairingAuras is Unit::RemoveMovementImpairingAuras
