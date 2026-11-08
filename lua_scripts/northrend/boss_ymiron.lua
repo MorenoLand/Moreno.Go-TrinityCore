@@ -28,11 +28,14 @@
 -- selin_fireheart / mr_smite / boss_ai.go DoCastAOE lowering precedent);
 -- the 3rd CastSpell arg is the C++ DoCast 3rd arg (2-arg / 1-arg
 -- overloads = non-triggered); {minMs, maxMs} table delay = randtime
--- range. The 2026-10-02 "no-timer-bridge" header doctrine is RETRACTED
+-- range, resolved in schedule() so the concrete due time is recorded
+-- for the DelayEvents twin (thekal armEntry idiom). The 2026-10-02
+-- "no-timer-bridge" header doctrine is RETRACTED
 -- for this file: CreateLuaEvent is a real registered bridge, so the
 -- ungated timer arms below are ported rather than parked.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill,
--- 4 OnDied, 23 OnReset.
+-- 4 OnDied, 9 OnDamageTaken, 19 OnSummoned, 23 OnReset, 28
+-- OnMovementInform.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_ymiron.cpp):
 -- JustEngagedWith (:141-149, base-first) — BossAI::JustEngagedWith
@@ -74,49 +77,45 @@
 -- have no Lua mirrors (see ymironReset).
 -- KilledUnit (:283) — Talk(SAY_SLAY 1) player-gated (event 3 — the
 -- razuvious player-gated variant precedent).
--- DOCUMENTED DEVIATION: the ancestor phase machine is unbridged — the
--- DamageTaken health-threshold latch (100 - DUNGEON_MODE(20,25) *
--- HealthAmountModifier pct, :208-230): InterruptNonMeleeSpells +
--- DoCast(me, SPELL_SCREAMS_OF_THE_DEAD 51750) + AttackStop +
--- REACT_PASSIVE + MovePoint(POINT_BOAT) + boat-ghost despawns +
--- events.CancelEvent(prev ancestor event) +
--- events.DelayEvents(10s, EVENT_GROUP_BASE_SPELLS) have no MotionMaster /
--- MovementInform bridge (the health-threshold latch itself is bridgeable
--- via event 9 + GetHealthPct — boss_nethekurse.lua uses GetHealthPct()
--- <= 20 at event 9 — but the blocker is the MovePoint(POINT_BOAT) leg,
--- :218 (InterruptNonMeleeSpells / SetReactState are bridged;
--- the blocker is the MovePoint leg — Despawn IS bridged, but the arm is
--- DespawnBoatGhosts — it despawns OTHER creatures, not
--- the handler; calling creature:Despawn() on Ymiron would
--- target the wrong creature); the MovementInform(POINT_BOAT) ->
--- Talk(summon say 3-6) -> SummonCreature(ancestor visual) ->
--- DoCast(ancestor, SPELL_CHANNEL_YMIRON_TO_SPIRIT 48307) +
--- ancestor->CastSpell(me, SPELL_CHANNEL_SPIRIT_TO_YMIRON 48316, true) ->
--- EVENT_RESUME_COMBAT (REACT_AGGRESSIVE + ancestor event 5s later,
--- :252-255; MovementInform :165-184, DamageTaken latch :208-230)
--- chain has no bridges — so timers keep their combat-start
--- schedules through the ancestor phases (the assembly_of_iron
--- DoAction-reschedule deviation precedent).
+-- PORTED (tick 483) — the ancestor phase machine (:165-271, :208-230),
+-- unblocked by the MoveTo + ev28 MovementInform bridges that landed
+-- after the tick-261 header was written (MoveTo lua_creature_events.go:
+-- 4838 fires MovementInform(POINT_MOTION_TYPE 8, id) on ev28,
+-- creaturemotion.go:5725; movementGeneratorPoint = 8,
+-- creaturemotion.go:4020; algalon outro2 is the live ev28 precedent):
+-- DamageTaken health-threshold latch (ev9, nefarian postDamage > 0
+-- guard form) -> InterruptNonMeleeSpells + SCREAMS self-cast +
+-- AttackStop + REACT_PASSIVE + MoveTo(POINT_BOAT 0, boat coords) +
+-- DespawnBoatGhosts (Lua-kept summon refs, mimiron precedent) +
+-- CancelEvent(prev ancestor event) + DelayEvents(10s, base group) via
+-- the thekal armEntry/delayTimers twin (entries carry due/fn; nowMs =
+-- GetCurrTime) + ActivedNumber = Order; MovementInform (ev28, type 8 /
+-- id 0, IsInCombat + inBoat stale-arrival guards) -> Talk(summon say
+-- 3-6) + SummonCreature(ancestor visual, TEMPSUMMON_CORPSE_DESPAWN 4)
+-- + DoCast(ancestor, CHANNEL_YMIRON_TO_SPIRIT 48307) +
+-- ancestor->CastSpell(me, CHANNEL_SPIRIT_TO_YMIRON 48316, triggered)
+-- + SetFlag(59, NON_ATTACKABLE | NOT_SELECTABLE) + SetDisableGravity +
+-- EVENT_RESUME_COMBAT 5s later (REACT_AGGRESSIVE + ancestor event 5s
+-- later); the four ancestor events — BJORN one-shot SUMMON_SPIRIT_
+-- FOUNT 48386, HALDOR DoCastVictim SPIRIT_STRIKE 48423 5s, RANULF
+-- DoCast self SPIRIT_BURST 48529 10s, TORGYN 4x SUMMON_AVENGING_
+-- SPIRIT 48592 15s — all with the 500ms IsCasting defer (BossAI base
+-- gates); JustSummoned (ev19 — spell summons ride summonTempCreature,
+-- which fires ev19, lua_creature_events.go:190): SPIRIT_FOUNT ->
+-- self-cast 48380 triggered + SetDisplayId 11686 + GUID latch,
+-- AVENGING_SPIRIT -> random-threat-target AddThreat(0) + AttackStart
+-- (archavon randomThreatTarget precedent); ActiveOrder shuffled once
+-- per AI instance (ctor :116-130, NOT on Reset — Fisher-Yates via
+-- math.random, kept across ev23, dropped on ev4); Reset/JustDied
+-- despawn the boat ghosts (_Reset/_JustDied summons.DespawnAll(),
+-- ScriptedCreature.cpp:507/:516) and reset modifier/active.
+-- Heroic gives 3 boat phases (75/50/25 — the 4th threshold, 0, can
+-- never fire on non-lethal damage); normal gives 4 (80/60/40/20).
+-- DORMANT until Spell.dbc ships the channel/summon spell records +
+-- creature_template rows for the visual/fount/spirit entries (the
+-- summons return nil without them, like every other spell-summon
+-- leg in this tree).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 26861):
--- The four ancestor events — EVENT_BJORN_SPIRIT_FOUNT
--- (SPELL_SUMMON_SPIRIT_FOUNT 48386), EVENT_HALDOR_SPIRIT_STRIKE
--- (DoCastVictim SPELL_SPIRIT_STRIKE 48423, 5s), EVENT_RANULF_SPIRIT_
--- BURST (DoCast(me, SPELL_SPIRIT_BURST 48529), 10s), EVENT_TORGYN_
--- SUMMON_AVENGING_SPIRITS (4x DoCast(SPELL_SUMMON_AVENGING_SPIRIT
--- 48592), 15s) (:256-271) — fire only after the unbridged
--- MovementInform/EVENT_RESUME_COMBAT machine (the gothik precedent).
--- Stay out.
--- Talk(SAY_SUMMON_BJORN 3 / SAY_SUMMON_HALDOR 4 / SAY_SUMMON_RANULF 5 /
--- SAY_SUMMON_TORGYN 6) ride the MovementInform POINT_BOAT leg, fused
--- with the ancestor summon — no MovementInform / summon bridges (the
--- zarithrian Talk-fused-with-summon precedent). Stay out.
--- The JustSummoned legs (NPC_SPIRIT_FOUNT 48380 self-cast + SetDisplayId
--- 11686; NPC_AVENGING_SPIRIT random-target AddThreat/AttackStart) stay out —
--- the methods ARE bridged (SetDisplayId lua_creature_events.go:4170,
--- AddThreat :2058, AttackStart :6125, tick-261 re-check) but the legs can
--- never fire in the Lua model: their trigger summons come from the ancestor
--- events, which ride the unbridged boat machine. A JustSummoned handler
--- would be dead code.
 -- spell_dark_slash — SpellScript OnHit damage hook only; joins the
 -- no-SpellScript-bridge queue.
 -- The kingsBane SpellHitTarget latch (:153-157): if (target->GetTypeId()
@@ -143,15 +142,71 @@ local SPELL_FETID_ROT = 48291
 local SPELL_DARK_SLASH = 48292
 local SPELL_ANCESTORS_VENGEANCE = 16939
 
+local SPELL_SCREAMS_OF_THE_DEAD = 51750
+local SPELL_CHANNEL_YMIRON_TO_SPIRIT = 48307
+local SPELL_CHANNEL_SPIRIT_TO_YMIRON = 48316
+local SPELL_SUMMON_SPIRIT_FOUNT = 48386
+local SPELL_SPIRIT_FOUNT = 48380
+local SPELL_SPIRIT_STRIKE = 48423
+local SPELL_SPIRIT_BURST = 48529
+local SPELL_SUMMON_AVENGING_SPIRIT = 48592
+
+local NPC_SPIRIT_FOUNT = 27339
+local NPC_AVENGING_SPIRIT = 27386
+
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:36
+local POINT_BOAT = 0 -- boss_ymiron.cpp enum MovePoints (sole member)
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
+
+-- C++ ActiveBoat[4] (boss_ymiron.cpp:105-111): {npc, say, MoveX/Y/Z,
+-- SpawnX/Y/Z/O, event}. Lua 1-based array; the order values below are
+-- the C++ 0-based boat indices (ActiveOrder entries).
+local ACTIVE_BOAT = {
+    { npc = 27304, say = 3, mx = 404.379, my = -335.335, mz = 104.756, sx = 413.594, sy = -335.408, sz = 107.995, so = 3.157, key = "bjorn" }, -- Bjorn
+    { npc = 27310, say = 4, mx = 380.813, my = -335.069, mz = 104.756, sx = 369.994, sy = -334.771, sz = 107.995, so = 6.232, key = "haldor" }, -- Haldor
+    { npc = 27311, say = 5, mx = 381.546, my = -314.362, mz = 104.756, sx = 370.841, sy = -314.426, sz = 107.995, so = 6.232, key = "ranulf" }, -- Ranulf
+    { npc = 27312, say = 6, mx = 404.310, my = -314.761, mz = 104.756, sx = 413.992, sy = -314.703, sz = 107.995, so = 3.157, key = "torgyn" }, -- Torgyn
+}
+
 local timers = {}
+
+-- GetCurrTime is wall-clock ms (Eluna global, engine globals.go:941);
+-- os.clock() is CPU time and stalls while the server idles, which would
+-- corrupt the due/remaining math used by delayTimers (thekal idiom).
+local function nowMs()
+    return GetCurrTime()
+end
+
+local function armEntry(guid, key, delayMs, fn)
+    local entry = { due = nowMs() + delayMs, fn = fn }
+    entry.id = CreateLuaEvent(function()
+        local per = timers[guid]
+        if per and per[key] == entry then
+            per[key] = nil
+        end
+        fn()
+    end, delayMs)
+    return entry
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
-        for _, id in pairs(per) do
-            RemoveEventById(id)
+        for _, entry in pairs(per) do
+            RemoveEventById(entry.id)
         end
         timers[guid] = nil
+    end
+end
+
+local function cancelTimerKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key].id)
+        per[key] = nil
     end
 end
 
@@ -162,9 +217,85 @@ local function schedule(guid, key, delay, fn)
         timers[guid] = per
     end
     if per[key] then
-        RemoveEventById(per[key])
+        RemoveEventById(per[key].id)
     end
-    per[key] = CreateLuaEvent(fn, delay)
+    -- {minMs, maxMs} table delay = randtime range, resolved here so the
+    -- concrete due time is recorded for delayTimers.
+    local delayMs = delay
+    if type(delay) == "table" then
+        delayMs = math.random(delay[1], delay[2])
+    end
+    per[key] = armEntry(guid, key, delayMs, fn)
+end
+
+-- C++ EventMap::DelayEvents (thekal idiom): push the named armed timers
+-- out by extraMs, preserving each timer's remaining time.
+local function delayTimers(guid, keys, extraMs)
+    local per = timers[guid]
+    if not per then
+        return
+    end
+    local now = nowMs()
+    for _, key in ipairs(keys) do
+        local entry = per[key]
+        if entry then
+            RemoveEventById(entry.id)
+            local remaining = entry.due - now
+            if remaining < 0 then
+                remaining = 0
+            end
+            per[key] = armEntry(guid, key, remaining + extraMs, entry.fn)
+        end
+    end
+end
+
+local boat = {}
+
+-- C++ boss_ymironAI ctor (:116-130): ActiveOrder is a random permutation
+-- of {0,1,2,3} shuffled ONCE per AI instance (the comment leaves it out
+-- of Initialize() deliberately — it does NOT reshuffle on Reset). Lua:
+-- shuffle lazily on first sight of a GUID, keep across ev23 resets,
+-- drop on death (ev4) so the next spawn reshuffles. modifier =
+-- HealthAmountModifier (starts 1), mult = DUNGEON_MODE(20,25),
+-- active = ActivedNumber+1 (1-based slot into order), ancestor/fount =
+-- Lua-kept summon refs (mimiron precedent), ancestorKey = armed
+-- ancestor-event key (or nil), inBoat = spline in flight.
+local function boatStateFor(guid, heroic)
+    local st = boat[guid]
+    if st then
+        return st
+    end
+    local order = { 0, 1, 2, 3 }
+    for i = 1, 3 do
+        local r = math.random(i, 4)
+        order[i], order[r] = order[r], order[i]
+    end
+    st = {
+        order = order,
+        modifier = 1,
+        mult = heroic and 25 or 20,
+        active = 1,
+        ancestor = nil,
+        fount = nil,
+        ancestorKey = nil,
+        inBoat = false,
+    }
+    boat[guid] = st
+    return st
+end
+
+local function despawnBoatGhosts(st)
+    -- C++ DespawnBoatGhosts (:290-297): DisappearAndDie on the stored
+    -- GUIDs, then clear. Twin: DespawnOrUnsummon(1) on the Lua-kept
+    -- refs (algalon black-hole precedent).
+    if st.ancestor then
+        st.ancestor:DespawnOrUnsummon(1)
+        st.ancestor = nil
+    end
+    if st.fount then
+        st.fount:DespawnOrUnsummon(1)
+        st.fount = nil
+    end
 end
 
 -- Shared timer wipe for events 2/23/4.
@@ -235,6 +366,200 @@ local function ancestorsVengeanceTick(creature, guid, heroic)
     end)
 end
 
+-- C++ EVENT_BJORN_SPIRIT_FOUNT (:256-258): DoCast(SPELL_SUMMON_SPIRIT_
+-- FOUNT 48386) — self-cast; one-shot, no re-arm. 500ms IsCasting defer
+-- (BossAI base gates, as the base spells).
+local function bjornTick(creature, guid, st)
+    if creature:IsCasting() then
+        schedule(guid, "bjorn", 500, function()
+            bjornTick(creature, guid, st)
+        end)
+        return
+    end
+    st.ancestorKey = nil
+    creature:CastSpell(creature, SPELL_SUMMON_SPIRIT_FOUNT)
+end
+
+-- C++ EVENT_HALDOR_SPIRIT_STRIKE (:259-262): DoCastVictim(SPELL_SPIRIT_
+-- STRIKE 48423); re-arm 5s.
+local function haldorTick(creature, guid, st)
+    if creature:IsCasting() then
+        schedule(guid, "haldor", 500, function()
+            haldorTick(creature, guid, st)
+        end)
+        return
+    end
+    creature:CastSpell(nil, SPELL_SPIRIT_STRIKE)
+    schedule(guid, "haldor", 5000, function()
+        haldorTick(creature, guid, st)
+    end)
+end
+
+-- C++ EVENT_RANULF_SPIRIT_BURST (:263-266): DoCast(me, SPELL_SPIRIT_
+-- BURST 48529); re-arm 10s.
+local function ranulfTick(creature, guid, st)
+    if creature:IsCasting() then
+        schedule(guid, "ranulf", 500, function()
+            ranulfTick(creature, guid, st)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SPIRIT_BURST)
+    schedule(guid, "ranulf", 10000, function()
+        ranulfTick(creature, guid, st)
+    end)
+end
+
+-- C++ EVENT_TORGYN_SUMMON_AVENGING_SPIRITS (:267-271): 4x DoCast
+-- (SPELL_SUMMON_AVENGING_SPIRIT 48592); re-arm 15s.
+local function torgynTick(creature, guid, st)
+    if creature:IsCasting() then
+        schedule(guid, "torgyn", 500, function()
+            torgynTick(creature, guid, st)
+        end)
+        return
+    end
+    for _ = 1, 4 do
+        creature:CastSpell(creature, SPELL_SUMMON_AVENGING_SPIRIT)
+    end
+    schedule(guid, "torgyn", 15000, function()
+        torgynTick(creature, guid, st)
+    end)
+end
+
+local ANCESTOR_TICKS = {
+    bjorn = bjornTick,
+    haldor = haldorTick,
+    ranulf = ranulfTick,
+    torgyn = torgynTick,
+}
+
+-- C++ EVENT_RESUME_COMBAT (:252-255): REACT_AGGRESSIVE + the active
+-- ancestor's event 5s later.
+local function resumeCombat(creature, guid, st)
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    local b = ACTIVE_BOAT[st.order[st.active] + 1]
+    st.ancestorKey = b.key
+    schedule(guid, b.key, 5000, function()
+        ANCESTOR_TICKS[b.key](creature, guid, st)
+    end)
+end
+
+-- C++ boss_ymironAI::DamageTaken (:208-230): the health-threshold latch.
+-- HealthBelowPctDamaged(100 - DUNGEON_MODE(20,25) * HealthAmountModifier,
+-- damage) is strict less-than (Unit.h:873) on post-damage health, and the
+-- latch never fires on the killing blow (!(damage >= GetHealth())) — the
+-- nefarian postDamage > 0 guard form. Order = HealthAmountModifier - 1,
+-- then the modifier increments; the next latch reads the next threshold.
+-- Heroic mult 25 gives thresholds 75/50/25 (the 4th, 0, can never fire —
+-- post-damage health is > 0); normal mult 20 gives 80/60/40/20.
+-- C++ order: InterruptNonMeleeSpells + SCREAMS self-cast + AttackStop +
+-- REACT_PASSIVE + MovePoint(POINT_BOAT) + DespawnBoatGhosts x2 +
+-- CancelEvent(prev ancestor event) + DelayEvents(10s, base group) +
+-- ActivedNumber = Order.
+local function ymironDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUID()
+    local st = boatStateFor(guid, creature:IsHeroic())
+    local postDamage = creature:GetHealth() - damage
+    if postDamage <= 0 then
+        return
+    end
+    local thresholdPct = 100 - st.mult * st.modifier
+    if postDamage * 100 >= thresholdPct * creature:GetMaxHealth() then
+        return
+    end
+    local order = st.modifier - 1
+    st.modifier = st.modifier + 1
+    local b = ACTIVE_BOAT[st.order[order + 1] + 1]
+    creature:InterruptNonMeleeSpells(true)
+    creature:CastSpell(creature, SPELL_SCREAMS_OF_THE_DEAD)
+    creature:AttackStop()
+    creature:SetReactState(0) -- REACT_PASSIVE
+    st.inBoat = true
+    creature:MoveTo(POINT_BOAT, b.mx, b.my, b.mz)
+    despawnBoatGhosts(st)
+    if st.ancestorKey then
+        cancelTimerKey(guid, st.ancestorKey)
+        st.ancestorKey = nil
+    end
+    delayTimers(guid, { "bane", "fetidrot", "darkslash", "ancestorsvengeance" }, 10000)
+    st.active = order + 1
+end
+
+-- C++ boss_ymironAI::MovementInform (:165-184): POINT_MOTION_TYPE +
+-- POINT_BOAT gate; Talk(summon say) + SummonCreature(ancestor visual,
+-- TEMPSUMMON_CORPSE_DESPAWN) + DoCast(ancestor, CHANNEL_YMIRON_TO_
+-- SPIRIT 48307) + ancestor->CastSpell(me, CHANNEL_SPIRIT_TO_YMIRON
+-- 48316, triggered) + SetFlag(NON_ATTACKABLE | NOT_SELECTABLE) +
+-- SetDisableGravity(true); EVENT_RESUME_COMBAT in 5s. The IsInCombat +
+-- inBoat guards drop stale arrivals (evade mid-spline: C++ evade
+-- clears the motion, so no arrival fires).
+local function ymironMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_BOAT then
+        return
+    end
+    local guid = creature:GetGUID()
+    local st = boat[guid]
+    if not st or not st.inBoat or not creature:IsInCombat() then
+        return
+    end
+    st.inBoat = false
+    local b = ACTIVE_BOAT[st.order[st.active] + 1]
+    creature:Talk(b.say)
+    local ancestor = creature:SummonCreature(b.npc, b.sx, b.sy, b.sz, b.so, 4)
+    if ancestor then
+        creature:CastSpell(ancestor, SPELL_CHANNEL_YMIRON_TO_SPIRIT)
+        ancestor:CastSpell(creature, SPELL_CHANNEL_SPIRIT_TO_YMIRON, true)
+        ancestor:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+        ancestor:SetDisableGravity(true)
+        st.ancestor = ancestor
+    end
+    schedule(guid, "resume", 5000, function()
+        resumeCombat(creature, guid, st)
+    end)
+end
+
+-- C++ SelectTarget(Random, 0) (UnitAI.h:170): random over the threat
+-- list, any unit, alive-filtered (the archavon randomThreatTarget
+-- precedent — pets/totems eligible, no distance filter, no
+-- player-only filter).
+local function randomThreatTarget(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ boss_ymironAI::JustSummoned (:186-206): NPC_SPIRIT_FOUNT ->
+-- self-cast SPELL_SPIRIT_FOUNT 48380 (triggered) + SetDisplayId(11686)
+-- + GUID latch; NPC_AVENGING_SPIRIT -> random-target AddThreat(0) +
+-- AttackStart. Spell summons ride summonTempCreature, which fires
+-- ev19 (lua_creature_events.go:190); the ancestor visuals fall
+-- through the default case.
+local function ymironJustSummoned(event, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry == NPC_SPIRIT_FOUNT then
+        summoned:CastSpell(summoned, SPELL_SPIRIT_FOUNT, true)
+        summoned:SetDisplayId(11686)
+        local st = boat[creature:GetGUID()]
+        if st then
+            st.fount = summoned
+        end
+    elseif entry == NPC_AVENGING_SPIRIT then
+        local target = randomThreatTarget(creature)
+        if target then
+            summoned:AddThreat(target, 0)
+            summoned:AttackStart(target)
+        end
+    end
+end
+
 -- C++ boss_ymironAI::JustEngagedWith (:141-149): BossAI::JustEngagedWith
 -- base-first (pulse + me-DoZone ported above Talk; instance/setActive
 -- legs out); Talk(SAY_AGGRO) — unconditional (the auriaya engage-port
@@ -280,9 +605,17 @@ end
 -- tick 261 via creature:SetBossState (lua_creature_events.go:5917);
 -- Talk(SAY_DEATH) — unconditional — the sjonnir JustDied-Talk precedent.
 local function ymironJustDied(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    -- C++ _JustDied() (ScriptedCreature.cpp:513-520): summons.DespawnAll();
+    -- the boat state dies with the AI instance (ctor reshuffles on respawn).
+    local st = boat[guid]
+    if st then
+        despawnBoatGhosts(st)
+        boat[guid] = nil
+    end
     creature:SetBossState(DATA_KING_YMIRON, 3) -- DONE
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
 end
 
 -- C++ boss_ymironAI::Reset (:134-141): _Reset() — SetBossState(DATA_KING_YMIRON 3,
@@ -301,6 +634,15 @@ local function ymironReset(event, creature)
     if creature:IsDead() then
         return
     end
+    -- C++ Reset -> Initialize() (:122-130) + _Reset() summons.DespawnAll()
+    -- (ScriptedCreature.cpp:507): modifier/active reset, boat ghosts
+    -- despawned; ActiveOrder is NOT reshuffled (ctor-only).
+    local st = boatStateFor(creature:GetGUID(), creature:IsHeroic())
+    despawnBoatGhosts(st)
+    st.modifier = 1
+    st.active = 1
+    st.ancestorKey = nil
+    st.inBoat = false
     if creature:GetBossState(DATA_KING_YMIRON) ~= 3 then
         creature:SetBossState(DATA_KING_YMIRON, 0)
     end
@@ -329,5 +671,8 @@ RegisterCreatureEvent(ENTRY_KING_YMIRON, 1, ymironEnterCombat)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 3, ymironKilledUnit)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 4, ymironJustDied)
+RegisterCreatureEvent(ENTRY_KING_YMIRON, 9, ymironDamageTaken)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 15, ymironSpellHitTarget)
+RegisterCreatureEvent(ENTRY_KING_YMIRON, 19, ymironJustSummoned)
 RegisterCreatureEvent(ENTRY_KING_YMIRON, 23, ymironReset)
+RegisterCreatureEvent(ENTRY_KING_YMIRON, 28, ymironMovementInform)
