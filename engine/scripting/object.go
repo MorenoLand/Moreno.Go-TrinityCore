@@ -106,8 +106,16 @@ func objectIndex(state *lua.State) int {
 	object := lua.CheckUserData(state, 1, objectMetaTable).(*Object)
 	name := lua.CheckString(state, 2)
 	if object.Type == "InstanceData" {
-		pushInstanceDataField(state, object, name)
-		return 1
+		// Explicitly attached methods (InstanceData:SetData, the
+		// instance SetData write bridge) dispatch through the shared
+		// method path below; everything else reads the data-table
+		// field, exactly as before. Generic object methods are not
+		// consulted here — a GetMapId read on instance data stays a
+		// (nil) field read.
+		if _, ok := object.Methods[name]; !ok {
+			pushInstanceDataField(state, object, name)
+			return 1
+		}
 	}
 	method, ok := object.Methods[name]
 	if !ok {

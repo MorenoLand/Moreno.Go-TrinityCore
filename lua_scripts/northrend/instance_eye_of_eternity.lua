@@ -56,11 +56,12 @@
 --   ProcessEvent bridge (oculus precedent); the receiver
 --   (Malygos DoAction(0), ACTION_LAND_ENCOUNTER_START) sits
 --   in the unported DoAction machine in boss_malygos.lua.
--- - SetData dispatch (DATA_VORTEX_HANDLING /
---   DATA_POWER_SPARKS_HANDLING / DATA_RESPAWN_IRIS): no
---   instance SetData bridge, so VortexHandling (needs the
---   threat list — no bridge) and PowerSparksHandling never
---   start; the iris respawn never fires.
+-- - SetData dispatch (DATA_VORTEX_HANDLING): PORTED 2026-11-08
+--   (tick 431, below) via the Go-only InstanceEventOnSetData bridge
+--   (event 8, InstanceData:SetData) — VortexHandling runs in Lua.
+--   DATA_POWER_SPARKS_HANDLING / DATA_RESPAWN_IRIS stay out (no
+--   writer yet: PowerSparksHandling needs the portal-trigger
+--   rotation, the iris respawn needs the difficulty-gated GO spawn).
 -- - OnUnitDeath player root (SetControlled ROOT on player
 --   death, the EoE falling fix): no player-death hook —
 --   PlayerEventKilledByCreature (8) fires only for
@@ -164,6 +165,43 @@ RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_UPDATE, function(event, 
             end
             if pos then
                 instanceData.malygos:SummonGameObject(GO_EXIT_PORTAL, pos[1], pos[2], pos[3], pos[4], 0)
+            end
+        end
+    end
+end)
+
+-- C++ instance_eye_of_eternity::SetData DATA_VORTEX_HANDLING
+-- (instance_eye_of_eternity.cpp:234-236) -> VortexHandling (:180-207):
+-- for each vortex trigger, up to 5 threat-list players each cast
+-- SPELL_VORTEX_4 on the trigger to enter the vehicle (the GM skip
+-- has no bridge — the player surface exposes no IsGameMaster; same
+-- documented deviation as the vortexLand handler in
+-- boss_malygos.lua). Rides the Go-only InstanceEventOnSetData bridge
+-- (event 8, InstanceData:SetData); the writer is the
+-- ACTION_EXECUTE_VORTEX leg in boss_malygos.lua, emulating the
+-- 56105 SpellScript's HandleScript (boss_malygos.cpp:1765), which
+-- does only the SetData write. PORTED 2026-11-08 (tick 431).
+local INSTANCE_EVENT_ON_SET_DATA = 8
+local DATA_VORTEX_HANDLING = 2 -- eye_of_eternity.h:31
+local SPELL_VORTEX_4 = 55853 -- eye_of_eternity.h:82
+
+RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_SET_DATA, function(event, instanceData, mapObj, type, data)
+    if type ~= DATA_VORTEX_HANDLING then
+        return
+    end
+    local malygos = instanceData.malygos
+    if not malygos or not instanceData.vortexTriggers then
+        return
+    end
+    for _, trigger in ipairs(instanceData.vortexTriggers) do
+        local counter = 0
+        for _, target in ipairs(malygos:GetAITargets()) do
+            if counter >= 5 then
+                break
+            end
+            if target:GetObjectType() == "Player" and not target:HasAura(SPELL_VORTEX_4) then
+                target:CastSpell(trigger, SPELL_VORTEX_4, true)
+                counter = counter + 1
             end
         end
     end

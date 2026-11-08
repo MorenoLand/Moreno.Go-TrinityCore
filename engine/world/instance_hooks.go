@@ -35,6 +35,35 @@ func (s *Server) instanceDataObject(mapID, instanceID uint32) *scripting.Object 
 		s.instanceDataObjects = make(map[instanceAdmissionKey]*scripting.Object)
 	}
 	obj := &scripting.Object{Type: "InstanceData", Fields: map[string]any{"MapId": mapID, "InstanceId": instanceID}}
+	obj.Methods = map[string]scripting.ObjectMethod{
+		// SetData(type, data) is the InstanceScript::SetData write bridge
+		// (Instances/InstanceScript.h): C++ routes the write through the
+		// instance script's SetData switch, and Go has no C++ instance
+		// script — the Lua instance script is the consumer. The write
+		// fires the Go-only INSTANCE_EVENT_ON_SET_DATA (8) hook with
+		// (event, instance_data, map, type, data); the handler runs the
+		// switch leg (e.g. Eye of Eternity DATA_VORTEX_HANDLING ->
+		// VortexHandling). No table write happens here: the C++ default
+		// SetData stores nothing, and persistence is the handler's job.
+		// Nested dispatch is safe: the runtime lock is re-entrant and
+		// triggerNUpdated merges nested consumption (DoAction fires
+		// CreatureEventOnDoAction from a Lua call frame the same way).
+		"SetData": func(ctx context.Context, args []any) ([]any, error) {
+			typ, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			data, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if s.Features == nil || s.Features.Scripts == nil {
+				return nil, nil
+			}
+			_, err = s.Features.Scripts.TriggerInstanceEvent(ctx, mapID, instanceID, scripting.InstanceEventOnSetData, obj, instanceMapObject(s, mapID, instanceID), typ, data)
+			return nil, err
+		},
+	}
 	s.instanceDataObjects[key] = obj
 	return obj
 }
@@ -46,7 +75,7 @@ func (s *Server) instanceDataObject(mapID, instanceID uint32) *scripting.Object 
 // nil for non-instance maps (ToInstanceMap fails) and for C++-scripted
 // instances. Go mirrors both gates: instanceID 0 reads nil, and a map
 // with no map-level or instance-level binding for any instance event
-// (1-7) reads nil.
+// (1-8, including the Go-only OnSetData) reads nil.
 func (s *Server) instanceDataForMap(mapID, instanceID uint32) *scripting.Object {
 	if s == nil || instanceID == 0 || s.Features == nil || s.Features.Scripts == nil {
 		return nil
@@ -54,7 +83,7 @@ func (s *Server) instanceDataForMap(mapID, instanceID uint32) *scripting.Object 
 	scripts := s.Features.Scripts
 	mapKind := "map:" + strconv.FormatUint(uint64(mapID), 10)
 	instKind := "instance:" + strconv.FormatUint(uint64(instanceID), 10)
-	for event := scripting.InstanceEventOnInitialize; event <= scripting.InstanceEventOnCheckEncounterProgress; event++ {
+	for event := scripting.InstanceEventOnInitialize; event <= scripting.InstanceEventOnSetData; event++ {
 		if scripts.HasHook(mapKind, event) || scripts.HasHook(instKind, event) {
 			return s.instanceDataObject(mapID, instanceID)
 		}

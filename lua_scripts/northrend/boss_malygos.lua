@@ -100,8 +100,11 @@
 -- (fight-documented vortex duration, wowpedia/guiaswow) carries
 -- the land until then, latch-guarded against double-run. GM skip
 -- has no bridge (no IsGameMaster on the player surface).
--- spell_malygos_vortex_dummy (56105) stays out: its HandleScript
--- writes instance SetData(DATA_VORTEX_HANDLING) — no bridge.
+-- spell_malygos_vortex_dummy (56105) is PORTED 2026-11-08
+-- (tick 431, below): its HandleScript writes instance
+-- SetData(DATA_VORTEX_HANDLING) — the Go-only InstanceData:SetData
+-- bridge (event 8) carries it to instance_eye_of_eternity.lua,
+-- which runs VortexHandling in Lua.
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset / Initialize (gravity / immunity / flags / flight-speed
 -- legs, SetPhase(PHASE_NOT_STARTED), REACT_PASSIVE,
@@ -220,9 +223,8 @@
 -- precedent); all 17 join the standing queues, except the gift
 -- beam visual OnApply (PORTED tick 204, below), the portal
 -- beam (ported, below), and the vortex visual OnRemove
--- (PORTED tick 429, below); the vortex dummy (56105) stays out
--- — its HandleScript is an instance SetData write with no
--- bridge (next unit after the proc bridge).
+-- (PORTED tick 429, below); the vortex dummy (56105) is PORTED
+-- 2026-11-08 (tick 431, below) via the InstanceData:SetData bridge.
 -- achievement_denyin_the_scion — OnCheck: player's vehicle
 -- base entry == NPC_HOVER_DISK_MELEE (30234) — no achievement
 -- bridge (the kelthuzad / thaddius precedent); joins the
@@ -230,6 +232,7 @@
 
 local ENTRY_MALYGOS = 28859
 local DATA_MALYGOS_EVENT = 0 -- eye_of_eternity.h:28
+local DATA_VORTEX_HANDLING = 2 -- eye_of_eternity.h:31
 local BOSS_STATE_NOT_STARTED = 0 -- EncounterState (InstanceScript.h:68-76)
 local BOSS_STATE_IN_PROGRESS = 1 -- EncounterState (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
@@ -395,6 +398,23 @@ local function malygosDoAction(event, creature, action)
         creature:CastSpell(creature, SPELL_VORTEX_1, true)
         creature:CastSpell(creature, SPELL_VORTEX_2, true)
         creature:CastSpell(creature, SPELL_VORTEX_3, true)
+        -- C++ spell_malygos_vortex_dummy::HandleScript
+        -- (boss_malygos.cpp:1760-1770): OnEffectHitTarget, EFFECT_0
+        -- SPELL_EFFECT_DUMMY — the 56105 cast above has no Go
+        -- SpellScript bridge, so its only leg (instance SetData
+        -- DATA_VORTEX_HANDLING, 0) is emulated here via the
+        -- InstanceData:SetData bridge; instance_eye_of_eternity.lua
+        -- runs VortexHandling on the write. PORTED 2026-11-08
+        -- (tick 431). DORMANT until the 56105 cast lands (no
+        -- Spell.dbc); the write itself fires whenever the machine
+        -- executes.
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local instanceData = mapObj:GetInstanceData()
+            if instanceData then
+                instanceData:SetData(DATA_VORTEX_HANDLING, 0)
+            end
+        end
         local guid = creature:GetGUID()
         local state = getVortexState(guid)
         state.landed = false

@@ -169,6 +169,8 @@ const (
 // TRINITY-dead in C++ on this fork and ON_LOAD (2) fires from the
 // worldport entry path (engine/world/instance_hooks.go fireInstanceLoad),
 // once per (map, instance) per server run, before ON_PLAYER_ENTER.
+// ON_SET_DATA (8) is the Go-only extension above, fired from the
+// InstanceData:SetData write path.
 const (
 	InstanceEventOnInitialize             = 1
 	InstanceEventOnLoad                   = 2
@@ -177,6 +179,17 @@ const (
 	InstanceEventOnCreatureCreate         = 5
 	InstanceEventOnGameObjectCreate       = 6
 	InstanceEventOnCheckEncounterProgress = 7
+	// InstanceEventOnSetData is a Go-only extension: the fork's Eluna
+	// InstanceEvents enum ends at 7 (LuaEngine/Hooks.h
+	// INSTANCE_EVENT_COUNT), and C++ InstanceScript::SetData has no
+	// Eluna hook — the C++ instance script IS the SetData consumer.
+	// Go has no C++ instance script (the instance script is Lua), so
+	// the InstanceData:SetData write path (engine/world/
+	// instance_hooks.go) fires this event with (event,
+	// instance_data, map, type, data), letting the Lua instance
+	// script run the SetData switch (e.g. Eye of Eternity
+	// DATA_VORTEX_HANDLING -> VortexHandling).
+	InstanceEventOnSetData = 8
 )
 
 // Eluna ServerEvents contract for RegisterServerEvent. Numbering is the
