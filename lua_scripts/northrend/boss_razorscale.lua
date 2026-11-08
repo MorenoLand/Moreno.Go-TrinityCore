@@ -359,6 +359,14 @@ local RS = {
     ENTRY_DARK_RUNE_SENTINEL = 33846,
     SPELL_SUMMON_MOLE_MACHINE = 62899,
     SUMMON_MINIONS_SPELLS = {63968, 63970, 63969, 63798},
+    -- Summon-irondwarf trigger fan-out (tick 456): trigger ids :81-83,
+    -- summon spells :80/:85 (SPELL_SUMMON_IRON_DWARF_GUARDIAN 62926,
+    -- SPELL_SUMMON_IRON_DWARF_WATCHER 63135).
+    SPELL_TRIGGER_SUMMON_IRON_DWARVES = 63968,
+    SPELL_TRIGGER_SUMMON_IRON_DWARVES_2 = 63970,
+    SPELL_TRIGGER_SUMMON_IRON_DWARVES_3 = 63969,
+    SPELL_SUMMON_IRON_DWARF_GUARDIAN = 62926,
+    SPELL_SUMMON_IRON_DWARF_WATCHER = 63135,
     SPELL_LIGHTNING_BOLT = 63809,
     SPELL_LIGHTNING_BOLT_25 = 64696,
     SPELL_CHAIN_LIGHTNING = 64758,
@@ -1755,3 +1763,131 @@ end
 for _, entry in ipairs(GO_RAZOR_HARPOONS) do
     RegisterGameObjectGossipEvent(entry, 1, onHarpoonGossip)
 end
+
+-- SpellScript/AuraScript legs (boss_razorscale.cpp:1583-1700; PORTED
+-- 2026-11-08 tick 456). The head's "spell scripts (no SpellScript
+-- bridge)" stay-out is RETIRED: the RegisterSpellEvent bridge (ev2/4/5/7,
+-- ticks 445-447) and the RegisterAuraEvent bridge (ev1, tick 439) are live,
+-- and all four scripts below ride them. The flame-breath CheckDamage OnHit
+-- leg is NOT re-ported here: the ev14 darkRuneGuardianSpellHit above (tick
+-- 417) already carries the lethal-breath latch with the inverted
+-- post-damage check. Handlers are inline (zero new top-level locals).
+
+-- C++ spell_razorscale_summon_iron_dwarves::HandleScriptEffect
+-- (boss_razorscale.cpp:1621-1660): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT. The trigger spell id selects the fan-out:
+-- 63968 -> 2x guardian summon (62926) + 1x watcher summon (63135);
+-- 63970/63969 -> 1x guardian + 2x watcher; anything else (e.g. the
+-- spawner's 63798 cast) hits default: break. spell:GetEntry() is the
+-- GetSpellInfo()->Id twin (lua_spell.go). The effectIndex == 0 gate
+-- mirrors the EFFECT_0 registration: the Go fire runs once per (effect,
+-- hit target) for every non-zero effect (boss_ai.go), so without it a
+-- second effect would re-run the fan-out. DORMANT until Spell.dbc ships:
+-- the trigger casts are DBC-gated (creature path needs spellKnown).
+RegisterSpellEvent(RS.SPELL_TRIGGER_SUMMON_IRON_DWARVES, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_GUARDIAN, true)
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_GUARDIAN, true)
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_WATCHER, true)
+end)
+
+RegisterSpellEvent(RS.SPELL_TRIGGER_SUMMON_IRON_DWARVES_2, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_GUARDIAN, true)
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_WATCHER, true)
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_WATCHER, true)
+end)
+
+RegisterSpellEvent(RS.SPELL_TRIGGER_SUMMON_IRON_DWARVES_3, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_GUARDIAN, true)
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_WATCHER, true)
+    caster:CastSpell(caster, RS.SPELL_SUMMON_IRON_DWARF_WATCHER, true)
+end)
+
+-- C++ spell_razorscale_firebolt::FilterTargets (boss_razorscale.cpp:1687-1700):
+-- OnObjectAreaTargetSelect EFFECT_0 TARGET_UNIT_SRC_AREA_ENTRY (7) -> drop
+-- every target whose entry is not NPC_RAZORSCALE_HARPOON_FIRE_STATE (33282).
+-- The Go fire (lua_spell.go fireSpellTargetSelects) opens for entry-area legs
+-- (isEntryAreaTargetType, 7/8) and hands the effect's list; target:GetEntry()
+-- reads 0 for players via the generic fallback (object.go), exactly the C++
+-- Object::GetEntry() value, so players are dropped like in C++. DORMANT until
+-- Spell.dbc ships: the 62669 cast is DBC-gated.
+RegisterSpellEvent(RS.SPELL_FIREBOLT, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetEntry() ~= RS.ENTRY_HARPOON_FIRE_STATE then
+            targets:Remove(target)
+        end
+    end
+end)
+
+-- C++ spell_razorscale_flame_breath::FilterTargets (boss_razorscale.cpp:1602-1614):
+-- OnObjectAreaTargetSelect EFFECT_1 TARGET_UNIT_CONE_ENTRY (60) -> drop trigger
+-- creatures from the cone list. The Go fire opens for cone-entry legs
+-- (isFriendlyConeTargetType covers 59/60, friendly_nearby_cone_targets.go:77;
+-- C++ SpellInfo.cpp:280 classifies 60 as CONE/ENTRY) and hands the effect's
+-- per-effect partition. The GetObjectType gate is the ToCreature() nil-guard
+-- twin: players have no IsTrigger method. DORMANT until Spell.dbc ships: the
+-- 63317/64021 casts are DBC-gated (and the fire depends on the DBC carrying
+-- target 60 on effect 1, as the C++ registration states).
+RegisterSpellEvent(SPELL_FLAME_BREATH, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 1 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetObjectType() == "Creature" and target:IsTrigger() then
+            targets:Remove(target)
+        end
+    end
+end)
+
+RegisterSpellEvent(SPELL_FLAME_BREATH_25, 7, function(event, spell, effectIndex, targets)
+    if effectIndex ~= 1 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetObjectType() == "Creature" and target:IsTrigger() then
+            targets:Remove(target)
+        end
+    end
+end)
+
+-- C++ spell_razorscale_fuse_armor::HandleFused (boss_razorscale.cpp:1662-1685):
+-- AuraScript OnEffectPeriodic EFFECT_0 SPELL_AURA_PERIODIC_DUMMY (64821).
+-- At full stacks the bearer casts SPELL_FUSED_ARMOR (64774) on itself (C++
+-- CastSpell(nullptr, ...) = self-targeted spell, the DoCastSelf twin) and the
+-- aura removes itself. aura:GetSpellStackAmount() is the
+-- GetSpellInfo()->StackAmount twin (lua_aura.go:356, DBC field 49); it reads 0
+-- until Spell.dbc ships, so the gate stays fail-closed and the cast never fires
+-- early. No PreventDefault: the C++ handler has none (no true return).
+-- DORMANT until Spell.dbc ships: the 64821 cast is DBC-gated (victim cast :642).
+RegisterAuraEvent(RS.SPELL_FUSE_ARMOR, 1, function(event, aura, target)
+    if aura:GetStackAmount() ~= aura:GetSpellStackAmount() then
+        return
+    end
+    if target ~= nil then
+        target:CastSpell(target, RS.SPELL_FUSED_ARMOR, true)
+    end
+    aura:Remove()
+end)
