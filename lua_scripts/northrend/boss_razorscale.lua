@@ -186,31 +186,33 @@
 -- lua_creature_events.go:4791, but no script_spline_chain rows in
 -- world.db — the call returns false until the deployment DB ships
 -- them).
--- npc_razorscale_spawner (33245 ulduar.h:89): Reset one-shot
--- DoCastSelf(SPELL_SUMMON_MOLE_MACHINE 62899) + DoCastSelf
--- (SummonMinionsSpells[urand(0,3)]) — spawner machine — no
--- bridge; no registration.
--- npc_darkrune_watcher (33453 ulduar.h:88 — entry-verifiable but
--- spawner-machine-blocked): EVENT_LIGHTNING_BOLT — DoCastVictim
--- (LIGHTNING_BOLT 63809 10-man) 5s init, 3s repeat; EVENT_CHAIN_
--- LIGHTNING — DoCastVictim(CHAIN_LIGHTNING 64758 10-man) 34s
--- init, re-arm {9s,15s}; both timer-driven and phase-free, but
--- the add exists only via the unbridged spawner chain (boss
--- EVENT_SUMMON_MINIONS -> NPC_RAZORSCALE_SPAWNER -> mole-machine
--- GO -> SPELL_TRIGGER_SUMMON_IRON_DWARVES 63968/63970/63969 ->
--- SPELL_SUMMON_IRON_DWARF_WATCHER 63135) — task exclusion:
--- summon/add legs out; no registration.
--- npc_darkrune_guardian (33388 ulduar.h:86 — entry-verifiable but
--- spawner-machine-blocked): EVENT_STORMSTRIKE — DoCastVictim
--- (SPELL_STORMSTRIKE 64757) 23s init, re-arm {13s,25s} —
--- same blocker; no registration.
--- npc_darkrune_sentinel (33846 ulduar.h:87 — entry-verifiable but
--- spawner-machine-blocked): EVENT_HEROIC_STRIKE — DoCastVictim
--- (SPELL_HEROIC_STRIKE 45026) 9s init, re-arm {5s,9s};
--- EVENT_BATTLE_SHOUT — DoCastSelf(SPELL_BATTLE_SHOUT 46763)
--- 15s init, 25s repeat; EVENT_WHIRLWIND — DoCastSelf
--- (SPELL_WHIRLWIND 63808) 17s init, re-arm {10s,13s} —
--- same blocker; no registration.
+-- npc_razorscale_spawner (33245 ulduar.h:89): Reset REACT_PASSIVE +
+-- 1s DoCastSelf(SPELL_SUMMON_MOLE_MACHINE 62899) + 6s DoCastSelf
+-- (SummonMinionsSpells[urand(0,3)] 63968/63970/63969/63798) PORTED
+-- 2026-11-08 (RS.spawnerReset below, ev23); setActive/SetFarVisible
+-- have no bridge; the 6s trigger cast is dormant until a SpellScript
+-- bridge lands.
+-- npc_darkrune_watcher (33453 ulduar.h:88): Reset REACT_PASSIVE +
+-- EVENT_START_COMBAT 2s (ev1-scheduled twin) + JustEngagedWith
+-- EVENT_LIGHTNING_BOLT (LIGHTNING_BOLT 63809/64696) 5s init, 3s
+-- repeat + EVENT_CHAIN_LIGHTNING (64758/64759) 34s init, re-arm
+-- {9s,15s} PORTED 2026-11-08 (RS.darkRuneWatcherEngaged below);
+-- dormant until the spawner trigger SpellScript lands (63968/63970/
+-- 63969 -> 63135) — the AI itself is fully bridged, the old
+-- "spawner-machine-blocked / no registration" stay-out is retired.
+-- npc_darkrune_guardian (33388 ulduar.h:86): Reset REACT_PASSIVE +
+-- EVENT_START_COMBAT 2s (ev1-scheduled twin) + JustEngagedWith
+-- EVENT_STORMSTRIKE — DoCastVictim (SPELL_STORMSTRIKE 64757) 23s init,
+-- re-arm {13s,25s} PORTED 2026-11-08 (RS.darkRuneGuardianEngaged
+-- below); same dormant summon-chain note as the watcher.
+-- npc_darkrune_sentinel (33846 ulduar.h:87): Reset REACT_PASSIVE +
+-- EVENT_START_COMBAT 2s (ev1-scheduled twin) + JustEngagedWith
+-- EVENT_HEROIC_STRIKE — DoCastVictim (SPELL_HEROIC_STRIKE 45026) 9s
+-- init, re-arm {5s,9s}; EVENT_BATTLE_SHOUT — DoCastSelf
+-- (SPELL_BATTLE_SHOUT 46763) 15s init, 25s repeat; EVENT_WHIRLWIND —
+-- DoCastSelf (SPELL_WHIRLWIND 63808) 17s init, re-arm {10s,13s}
+-- PORTED 2026-11-08 (RS.darkRuneSentinelEngaged below); same dormant
+-- summon-chain note as the watcher.
 -- npc_razorscale_harpoon_fire_state (33282 ulduar.h:95):
 -- SpellHit(SPELL_FIREBOLT 62669) machine — stale "no bridge"
 -- retracted (2026-10-21): ev14 IS bridged (fires from the Go spell
@@ -220,7 +222,10 @@
 -- itself is spell-data-gated (see the handler comment).
 -- npc_razorscale_devouring_flame: Reset one-shot DoCastSelf
 -- (DEVOURING_FLAME_GROUND 64709/64734, triggered), not
--- timer-driven; no registration.
+-- timer-driven; no registration — the creature entry is DB-side:
+-- whole-tree grep finds no NPC constant for it (summoned by spell
+-- 63236's DBC effect), so no entry ID exists in-house to register.
+-- Do not fabricate one.
 -- go_razorscale_harpoon / go_razorscale_mole_machine —
 -- GameObjectScripts — no registrations; no creature-event
 -- handlers fire for GOs. The harpoon Reset arm is PORTED below via
@@ -346,6 +351,22 @@ local RS = {
     UNIT_FLAG_IMMUNE_TO_NPC = 0x200,
     ENTRY_HARPOON_FIRE_STATE = 33282,
     SPELL_HARPOON_FIRE_STATE = 62696,
+    -- Darkrune kit (tick 455): watcher 33453 / sentinel 33846
+    -- (ulduar.h:88/:87); guardian reuses the top-level
+    -- ENTRY_DARK_RUNE_GUARDIAN 33388. Spells: spawner :79/:268-274,
+    -- watcher RAID_MODE :102-103, guardian :85, sentinel :96-98.
+    ENTRY_DARK_RUNE_WATCHER = 33453,
+    ENTRY_DARK_RUNE_SENTINEL = 33846,
+    SPELL_SUMMON_MOLE_MACHINE = 62899,
+    SUMMON_MINIONS_SPELLS = {63968, 63970, 63969, 63798},
+    SPELL_LIGHTNING_BOLT = 63809,
+    SPELL_LIGHTNING_BOLT_25 = 64696,
+    SPELL_CHAIN_LIGHTNING = 64758,
+    SPELL_CHAIN_LIGHTNING_25 = 64759,
+    SPELL_STORMSTRIKE = 64757,
+    SPELL_HEROIC_STRIKE = 45026,
+    SPELL_BATTLE_SHOUT = 46763,
+    SPELL_WHIRLWIND = 63808,
     GO_HARPOON_1 = 194542,
     GO_HARPOON_2 = 194541,
     GO_HARPOON_3 = 194543,
@@ -1474,6 +1495,166 @@ RegisterCreatureEvent(ENTRY_EXPEDITION_ENGINEER, 38, RS.engineerDoAction)
 RegisterCreatureEvent(ENTRY_EXPEDITION_ENGINEER, 28, RS.engineerMovementInform)
 RegisterCreatureEvent(RS.ENTRY_HARPOON_FIRE_STATE, 14, RS.harpoonFireStateSpellHit)
 RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 14, darkRuneGuardianSpellHit)
+
+-- C++ npc_razorscale_spawner::Reset (boss_razorscale.cpp:1227-1243):
+-- setActive(true) + SetFarVisible(true) (no bridge) + REACT_PASSIVE +
+-- 1s DoCastSelf(SPELL_SUMMON_MOLE_MACHINE 62899) + 6s DoCastSelf(
+-- SummonMinionsSpells[urand(0,3)] :268-274 — 63968/63970/63969 trigger
+-- spells + 63798 vrykul trigger). The spawner arrives via the ported
+-- boss summon leg (RS.summonMinionsOnce, TEMPSUMMON_TIMED_DESPAWN 15s),
+-- so this Reset is live: the mole-machine cast summons the GO via its
+-- DBC effect (GO leg ported below via event 12) and the 6s trigger
+-- cast is dormant until a SpellScript bridge lands (its script effect
+-- casts 62926/63135). PORTED 2026-11-08.
+RS.spawnerReset = function(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:SetReactState(RS.REACT_PASSIVE)
+    schedule(guid, "mole_machine", 1000, function()
+        creature:CastSpell(creature, RS.SPELL_SUMMON_MOLE_MACHINE)
+    end)
+    schedule(guid, "summon_minions", 6000, function()
+        creature:CastSpell(creature, RS.SUMMON_MINIONS_SPELLS[math.random(1, 4)])
+    end)
+end
+
+-- C++ darkrune EVENT_START_COMBAT (watcher :1284-1286, guardian
+-- :1355-1357, sentinel :1408-1410 — identical bodies):
+-- REACT_AGGRESSIVE + DoZoneInCombat. Reset schedules it 2s out, but
+-- the C++ EventMap only ticks once UpdateVictim() succeeds, so the 2s
+-- runs from first victim acquisition — the Lua twin schedules it from
+-- ev1 (JustEngagedWith), never from Reset, so an untouched add stays
+-- passive. The shared Reset below is the identical C++ body for all
+-- three AIs (REACT_PASSIVE + EVENT_START_COMBAT 2s; the
+-- razorscale->AI()->JustSummoned(me) leg is a no-op — boss
+-- JustSummoned :463-479 is BossAI::JustSummoned + expedition-only
+-- SetData, darkrune entries hit default). PORTED 2026-11-08.
+RS.darkRuneReset = function(event, creature)
+    cancelTimers(creature:GetGUID())
+    creature:SetReactState(RS.REACT_PASSIVE)
+end
+
+RS.darkRuneLeaveCombat = function(event, creature)
+    cancelTimers(creature:GetGUID())
+end
+
+RS.darkRuneStartCombat = function(creature, guid)
+    creature:SetReactState(RS.REACT_AGGRESSIVE)
+    creature:DoZoneInCombat()
+end
+
+-- C++ npc_darkrune_watcher (boss_razorscale.cpp:1251-1310, entry 33453
+-- ulduar.h:88): JustEngagedWith (:1264-1268) EVENT_LIGHTNING_BOLT 5s +
+-- EVENT_CHAIN_LIGHTNING 34s. EVENT_LIGHTNING_BOLT (:1288-1290):
+-- DoCastVictim(LIGHTNING_BOLT 63809/64696 RAID_MODE :102-103), repeat
+-- 3s. EVENT_CHAIN_LIGHTNING (:1292-1294): DoCastVictim(CHAIN_LIGHTNING
+-- 64758/64759), re-arm {9s,15s}. UpdateAI pre-loop CASTING gate rides
+-- the 500ms IsCasting defer (mal_ganis idiom); melee is engine-side.
+-- DORMANT until the spawner trigger SpellScript lands (63968/63970/
+-- 63969 -> 63135); the AI itself is fully bridged. PORTED 2026-11-08.
+RS.darkRuneWatcherEngaged = function(event, creature, target)
+    local guid = creature:GetGUID()
+    schedule(guid, "start_combat", 2000, function() RS.darkRuneStartCombat(creature, guid) end)
+    schedule(guid, "lightning_bolt", 5000, function() RS.darkRuneWatcherLightningBolt(creature, guid) end)
+    schedule(guid, "chain_lightning", 34000, function() RS.darkRuneWatcherChainLightning(creature, guid) end)
+end
+
+RS.darkRuneWatcherLightningBolt = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "lightning_bolt", 500, function() RS.darkRuneWatcherLightningBolt(creature, guid) end)
+        return
+    end
+    creature:CastSpell(nil, creature:Is25ManRaid() and RS.SPELL_LIGHTNING_BOLT_25 or RS.SPELL_LIGHTNING_BOLT)
+    schedule(guid, "lightning_bolt", 3000, function() RS.darkRuneWatcherLightningBolt(creature, guid) end)
+end
+
+RS.darkRuneWatcherChainLightning = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chain_lightning", 500, function() RS.darkRuneWatcherChainLightning(creature, guid) end)
+        return
+    end
+    creature:CastSpell(nil, creature:Is25ManRaid() and RS.SPELL_CHAIN_LIGHTNING_25 or RS.SPELL_CHAIN_LIGHTNING)
+    schedule(guid, "chain_lightning", math.random(9000, 15000), function() RS.darkRuneWatcherChainLightning(creature, guid) end)
+end
+
+-- C++ npc_darkrune_guardian (boss_razorscale.cpp:1312-1378, entry 33388
+-- ulduar.h:86): JustEngagedWith (:1324-1327) EVENT_STORMSTRIKE 23s.
+-- EVENT_STORMSTRIKE (:1359-1361): DoCastVictim(SPELL_STORMSTRIKE
+-- 64757 :85), re-arm {13s,25s}. GetData/SetData
+-- DATA_IRON_DWARF_MEDIUM_RARE (:1330-1339) need no leg here: the
+-- SetData writer is darkRuneGuardianSpellHit above (flame-breath
+-- lethal-hit latch, tick 417) and the GetData reader is the Go
+-- achievement case (ScriptData slot 29232924). Same dormant
+-- summon-chain note as the watcher. PORTED 2026-11-08.
+RS.darkRuneGuardianEngaged = function(event, creature, target)
+    local guid = creature:GetGUID()
+    schedule(guid, "start_combat", 2000, function() RS.darkRuneStartCombat(creature, guid) end)
+    schedule(guid, "stormstrike", 23000, function() RS.darkRuneGuardianStormstrike(creature, guid) end)
+end
+
+RS.darkRuneGuardianStormstrike = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "stormstrike", 500, function() RS.darkRuneGuardianStormstrike(creature, guid) end)
+        return
+    end
+    creature:CastSpell(nil, RS.SPELL_STORMSTRIKE)
+    schedule(guid, "stormstrike", math.random(13000, 25000), function() RS.darkRuneGuardianStormstrike(creature, guid) end)
+end
+
+-- C++ npc_darkrune_sentinel (boss_razorscale.cpp:1380-1445, entry 33846
+-- ulduar.h:87): JustEngagedWith (:1392-1397) EVENT_HEROIC_STRIKE 9s +
+-- EVENT_BATTLE_SHOUT 15s + EVENT_WHIRLWIND 17s. EVENT_HEROIC_STRIKE
+-- (:1411-1414): DoCastVictim(SPELL_HEROIC_STRIKE 45026 :97), re-arm
+-- {5s,9s}. EVENT_BATTLE_SHOUT (:1415-1418): DoCastSelf(
+-- SPELL_BATTLE_SHOUT 46763 :96), repeat 25s. EVENT_WHIRLWIND
+-- (:1419-1422): DoCastSelf(SPELL_WHIRLWIND 63808 :98), re-arm
+-- {10s,13s}. Same dormant summon-chain note as the watcher.
+-- PORTED 2026-11-08.
+RS.darkRuneSentinelEngaged = function(event, creature, target)
+    local guid = creature:GetGUID()
+    schedule(guid, "start_combat", 2000, function() RS.darkRuneStartCombat(creature, guid) end)
+    schedule(guid, "heroic_strike", 9000, function() RS.darkRuneSentinelHeroicStrike(creature, guid) end)
+    schedule(guid, "battle_shout", 15000, function() RS.darkRuneSentinelBattleShout(creature, guid) end)
+    schedule(guid, "whirlwind", 17000, function() RS.darkRuneSentinelWhirlwind(creature, guid) end)
+end
+
+RS.darkRuneSentinelHeroicStrike = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "heroic_strike", 500, function() RS.darkRuneSentinelHeroicStrike(creature, guid) end)
+        return
+    end
+    creature:CastSpell(nil, RS.SPELL_HEROIC_STRIKE)
+    schedule(guid, "heroic_strike", math.random(5000, 9000), function() RS.darkRuneSentinelHeroicStrike(creature, guid) end)
+end
+
+RS.darkRuneSentinelBattleShout = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "battle_shout", 500, function() RS.darkRuneSentinelBattleShout(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, RS.SPELL_BATTLE_SHOUT)
+    schedule(guid, "battle_shout", 25000, function() RS.darkRuneSentinelBattleShout(creature, guid) end)
+end
+
+RS.darkRuneSentinelWhirlwind = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwind", 500, function() RS.darkRuneSentinelWhirlwind(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, RS.SPELL_WHIRLWIND)
+    schedule(guid, "whirlwind", math.random(10000, 13000), function() RS.darkRuneSentinelWhirlwind(creature, guid) end)
+end
+
+RegisterCreatureEvent(RS.NPC_RAZORSCALE_SPAWNER, 23, RS.spawnerReset)
+RegisterCreatureEvent(RS.ENTRY_DARK_RUNE_WATCHER, 23, RS.darkRuneReset)
+RegisterCreatureEvent(RS.ENTRY_DARK_RUNE_WATCHER, 1, RS.darkRuneWatcherEngaged)
+RegisterCreatureEvent(RS.ENTRY_DARK_RUNE_WATCHER, 2, RS.darkRuneLeaveCombat)
+RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 23, RS.darkRuneReset)
+RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 1, RS.darkRuneGuardianEngaged)
+RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 2, RS.darkRuneLeaveCombat)
+RegisterCreatureEvent(RS.ENTRY_DARK_RUNE_SENTINEL, 23, RS.darkRuneReset)
+RegisterCreatureEvent(RS.ENTRY_DARK_RUNE_SENTINEL, 1, RS.darkRuneSentinelEngaged)
+RegisterCreatureEvent(RS.ENTRY_DARK_RUNE_SENTINEL, 2, RS.darkRuneLeaveCombat)
 RegisterCreatureGossipEvent(ENTRY_EXPEDITION_COMMANDER, 2, onCommanderGossipSelect)
 
 -- C++ go_razorscale_mole_machine::Reset (boss_razorscale.cpp:1559-1566):
