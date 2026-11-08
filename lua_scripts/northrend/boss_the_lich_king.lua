@@ -3363,3 +3363,49 @@ RegisterSpellEvent(LK.SPELL_VALKYR_TARGET_SEARCH, 5, function(event, spell, targ
         caster:CastSpell(target, LK.SPELL_CHARGE, true)
     end
 end)
+
+-- C++ spell_the_lich_king_raging_spirit::HandleScript
+-- (boss_the_lich_king.cpp:2229-2243): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> hit unit casts GetEffectValue() on itself
+-- (triggered). The value is the effect-0 DBC BasePoints of 69200
+-- via the new spell:GetEffectValue bridge (CalcValueForLevel
+-- twin of SpellEffectInfo::CalcValue); it is 0 until Spell.dbc
+-- ships, so the port guards on a positive value and fires nothing
+-- meanwhile. PreventHitDefaultEffect is a no-op in Go (tick 446
+-- contract). Handler is inline: the file sits at 199 main-chunk
+-- locals. DORMANT until Spell.dbc ships: the 69200 cast (raging
+-- spirit schedule) is DBC-gated.
+RegisterSpellEvent(LK.SPELL_RAGING_SPIRIT, 5, function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local value = spell:GetEffectValue(effectIndex)
+    if value <= 0 then
+        return
+    end
+    target:CastSpell(target, value, true)
+end)
+
+-- C++ spell_the_lich_king_summon_spirit_bomb::HandleScript
+-- (boss_the_lich_king.cpp:2710-2724): OnEffectHitTarget EFFECT_0
+-- SCRIPT_EFFECT -> hit unit casts GetEffectValue() on nil
+-- (triggered). Both bomb spells (73581/74299) share the script
+-- name, so one table-field handler serves both registrations; a
+-- table field costs no main-chunk local (file sits at 199). The
+-- value is the effect-0 DBC BasePoints via spell:GetEffectValue,
+-- 0 until Spell.dbc ships — guarded on positive.
+-- PreventHitDefaultEffect is a no-op in Go (tick 446 contract).
+-- DORMANT until Spell.dbc ships: the 73581/74299 casts (world
+-- trigger 36171) are DBC-gated.
+LK.onSummonSpiritBomb = function(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local value = spell:GetEffectValue(effectIndex)
+    if value <= 0 then
+        return
+    end
+    target:CastSpell(nil, value, true)
+end
+RegisterSpellEvent(LK.SPELL_SUMMON_SPIRIT_BOMB_1, 5, LK.onSummonSpiritBomb)
+RegisterSpellEvent(LK.SPELL_SUMMON_SPIRIT_BOMB_2, 5, LK.onSummonSpiritBomb)

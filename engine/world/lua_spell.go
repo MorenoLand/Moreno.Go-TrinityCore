@@ -79,7 +79,10 @@ func nilSpellObject(object *scripting.Object) any {
 // effect. IsAutoRepeat otherwise reads the session auto-repeat slot
 // (Unit::_UpdateAutoRepeatSpell model): true only when this spell id
 // is the active auto-repeat spell, matching Spell::m_autoRepeat
-// (Spell.h:533) for the spell whose object this is.
+// (Spell.h:533) for the spell whose object this is. GetEffectValue
+// (effectIndex) is SpellScript::GetEffectValue (m_spell->damage) via
+// SpellEffect.CalcValueForLevel at the caster's level, memoized per
+// index, 0 without a DBC row — see the method.
 func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 	if s == nil {
 		return nil
@@ -105,6 +108,41 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 	methods["GetCastTime"] = luaNoArgs(func() any { return castTimeMs })
 	methods["GetPowerCost"] = luaNoArgs(func() any { return powerCost })
 	methods["GetDuration"] = luaNoArgs(func() any { return durationMs })
+	// GetEffectValue(effectIndex) is SpellScript::GetEffectValue
+	// (SpellScript.cpp:666-677): m_spell->damage, the per-effect value
+	// HandleEffects computes as damage = CalculateDamage(i)
+	// (Spell.cpp:5165) before the script-effect handlers run, i.e.
+	// SpellEffectInfo::CalcValue (SpellInfo.cpp:402), whose Go twin
+	// is SpellEffect.CalcValueForLevel (store.go). C++ returns 0
+	// outside effect hooks (IsInEffectHook); the Go object carries no
+	// hook context, so ports call this only from OnEffectHit /
+	// OnEffectHitTarget (events 4/5) handlers, where the value is
+	// live. Memoized per effect index: C++ computes the value once
+	// per effect handling, so a second call in the same handler must
+	// return the same roll (DieSides). A spell with no DBC row, or an
+	// out-of-range index, returns 0; Lua ports guard on a positive
+	// value. The custom-base-points leg (m_spellValue) has no Go
+	// model: the DBC value is the twin for the standard path.
+	casterLevel := uint32(0)
+	if s.player != nil {
+		casterLevel = uint32(s.player.Level)
+	}
+	effectValues := map[int]int32{}
+	methods["GetEffectValue"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index >= uint32(len(p.spell.Effects)) {
+			return []any{int32(0)}, nil
+		}
+		if value, ok := effectValues[int(index)]; ok {
+			return []any{value}, nil
+		}
+		value := p.spell.Effects[index].CalcValueForLevel(p.spell, casterLevel)
+		effectValues[int(index)] = value
+		return []any{value}, nil
+	}
 	methods["IsAutoRepeat"] = luaNoArgs(func() any {
 		if p.action != nil && p.action.autoRepeatSet {
 			return p.action.autoRepeat
@@ -185,14 +223,17 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 // player path. A spell with no DBC row still reports its entry —
 // GetCurrentSpell returns the live Spell* regardless of DBC presence,
 // and the DBC-backed reads fall back to 0/-1 like the session builder.
+// GetEffectValue is the session builder's twin (same contract).
 func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targetGUID uint64) *scripting.Object {
 	if s == nil || m == nil || spellID == 0 {
 		return nil
 	}
 	var castTimeMs int32
 	durationMs := int32(0)
+	spell := wotlk.Spell{}
 	if s.Data != nil {
-		if spell, found, err := s.Data.Spell(spellID); err == nil && found {
+		if row, found, err := s.Data.Spell(spellID); err == nil && found {
+			spell = row
 			castTimeMs = int32(s.aiSpellCastTimeMs(spell))
 			if dur, found, err := s.Data.SpellDurationBase(spell.DurationIndex); err == nil && found {
 				durationMs = dur
@@ -206,6 +247,26 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 	methods["GetEntry"] = luaNoArgs(func() any { return spellID })
 	methods["GetCastTime"] = luaNoArgs(func() any { return castTimeMs })
 	methods["GetDuration"] = luaNoArgs(func() any { return durationMs })
+	// GetEffectValue(effectIndex) is the creature-path twin of the
+	// session builder's method (same contract: SpellScript::
+	// GetEffectValue, m_spell->damage via CalcValueForLevel at the
+	// caster's level, memoized per index, 0 without a DBC row).
+	effectValues := map[int]int32{}
+	methods["GetEffectValue"] = func(_ context.Context, args []any) ([]any, error) {
+		index, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if index >= uint32(len(spell.Effects)) {
+			return []any{int32(0)}, nil
+		}
+		if value, ok := effectValues[int(index)]; ok {
+			return []any{value}, nil
+		}
+		value := spell.Effects[index].CalcValueForLevel(spell, m.Level)
+		effectValues[int(index)] = value
+		return []any{value}, nil
+	}
 	methods["GetPowerCost"] = luaNoArgs(func() any { return uint32(0) })
 	methods["GetCaster"] = luaNoArgs(func() any { return s.luaMotionCreature(m) })
 	methods["GetTarget"] = luaNoArgs(func() any {
