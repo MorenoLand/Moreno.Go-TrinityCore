@@ -87,9 +87,9 @@
 -- (bridged 2026-11-05, below); the IsSummonedBy DoCast(summoner,
 -- SPELL_IMPALED) + summoner->CastSpell(me, SPELL_RIDE_VEHICLE, true)
 -- legs PORT (event 22, below — player:CastSpell live, lua_player.go:
--- 2752); the rest (8s EVENT_FAIL_BONED timer leg — its only effect is
--- instance SetData(DATA_BONED_ACHIEVEMENT 14, false), no instance
--- SetData bridge; PassengerBoarded spline leg; UpdateAI machine)
+-- 2752); the 8s EVENT_FAIL_BONED timer leg PORTS via the shared
+-- instanceData bonedEligible key (below, Go 12775/12962/13393/13394
+-- read it); PassengerBoarded spline leg; UpdateAI machine)
 -- has no bridges.
 -- boss_lord_marrowgar Reset scheduler legs (:148-152) — only
 -- EVENT_ENRAGE ports (above); EVENT_ENABLE_BONE_SLICE /
@@ -123,9 +123,10 @@
 -- DoMeleeAttackIfReady have no bridge. JustReachedHome
 -- instance-SetBossState(FAIL) (:175) PORTED 2026-11-05 via
 -- creature:SetBossState on ev24 OnReachHome (the opera ev24
--- precedent); the DATA_BONED_ACHIEVEMENT-reset leg stays out (no
--- instance SetData bridge). DoAction(ACTION_CLEAR_SPIKE_IMMUNITIES)
--- and MovementInform have no bridge.
+-- precedent); the DATA_BONED_ACHIEVEMENT-reset leg PORTS via the
+-- shared instanceData bonedEligible key (marrowgarReset, below).
+-- DoAction(ACTION_CLEAR_SPIKE_IMMUNITIES) and MovementInform have
+-- no bridge.
 -- Talk(SAY_ENTER_ZONE 0) rides DoAction(ACTION_TALK_ENTER_ZONE),
 -- which only fires from at_lord_marrowgar_entrance — ev38 dispatch bridged;
 -- sender area-trigger TryHandleOnce (boss_lord_marrowgar.cpp:675-681) unported,
@@ -247,6 +248,19 @@ local function marrowgarReset(event, creature)
     creature:SetSpeedRate(1, 0)
     creature:RemoveAura(SPELL_BONE_STORM)
     creature:RemoveAura(SPELL_BERSERK)
+    -- C++ Reset() :177: instance->SetData(DATA_BONED_ACHIEVEMENT 14,
+    -- true) — re-arms the Boned eligibility latch on every reset
+    -- (wipe or evade); the Go 12775/12962/13393/13394 check reads
+    -- bonedEligible from the shared instanceData table (default 1,
+    -- the C++ ctor :156 value), cleared by the bone-spike 8s fail
+    -- timer below.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.bonedEligible = true
+        end
+    end
 end
 
 -- C++ boss_lord_marrowgar::KilledUnit:
@@ -272,8 +286,8 @@ end
 -- (setActive(false), unmodeled) then SetBossState(FAIL) PORTED
 -- 2026-11-05 via creature:SetBossState on ev24 OnReachHome
 -- (creaturemotion.go home-move finalize, the opera ev24 precedent).
--- The SetData(DATA_BONED_ACHIEVEMENT 14, true) reset leg stays out —
--- no instance SetData bridge.
+-- The SetData(DATA_BONED_ACHIEVEMENT 14, true) reset leg PORTS via
+-- the shared instanceData bonedEligible key (marrowgarReset, above).
 local function marrowgarReachHome(event, creature)
     creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_FAIL)
 end
@@ -292,6 +306,7 @@ RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 24, marrowgarReachHome)
 -- player); me->DespawnOrUnsummon() ports (creature:Despawn, bridged).
 -- C++ order kept: aura removal, then despawn.
 local function boneSpikeJustDied(event, creature, killer)
+    cancelTimers(creature:GetGUID())
     local summoner = creature:GetSummonerUnit()
     if summoner then
         summoner:RemoveAura(SPELL_IMPALED)
@@ -303,6 +318,7 @@ end
 -- victim->RemoveAurasDueToSpell(SPELL_IMPALED), C++ order kept;
 -- victim:RemoveAura is the player/creature RemoveAura bridge.
 local function boneSpikeKilledUnit(event, creature, victim)
+    cancelTimers(creature:GetGUID())
     creature:Despawn()
     victim:RemoveAura(SPELL_IMPALED)
 end
@@ -315,9 +331,12 @@ end
 -- summonTempCreature player-summoner fire site,
 -- lua_creature_events.go:200-201; player:CastSpell live at
 -- lua_player.go:2752, inside luaPlayer()). C++ order kept: impaled,
--- then ride-vehicle (triggered). The 8s EVENT_FAIL_BONED timer stays
--- out — its only effect is instance SetData(DATA_BONED_ACHIEVEMENT
--- 14, false), no instance SetData bridge. Dormant until the graveyard
+-- then ride-vehicle (triggered). The 8s EVENT_FAIL_BONED timer PORTS
+-- (:444-445 schedule, :470-475 fire while a unit is trapped, only
+-- effect instance SetData(DATA_BONED_ACHIEVEMENT 14, false) — the
+-- shared instanceData bonedEligible key is the Go-side twin; the
+-- timer is cancelled on spike death/kill above because in C++ the
+-- EventMap dies with the spike AI. Dormant until the graveyard
 -- summon chain lands: no 69057/69062 handling in Go and
 -- SPELL_EFFECT_SUMMON has no session-path executor yet.
 local function boneSpikeIsSummonedBy(event, creature, summoner)
@@ -326,6 +345,15 @@ local function boneSpikeIsSummonedBy(event, creature, summoner)
     end
     creature:CastSpell(summoner, SPELL_IMPALED)
     summoner:CastSpell(creature, SPELL_RIDE_VEHICLE, true)
+    schedule(creature:GetGUID(), "failBoned", 8000, function()
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data.bonedEligible = false
+            end
+        end
+    end)
 end
 
 RegisterCreatureEvent(ENTRY_BONE_SPIKE, 3, boneSpikeKilledUnit)

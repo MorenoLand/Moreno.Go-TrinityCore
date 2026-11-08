@@ -71,6 +71,16 @@ func (r *Runtime) getGameTime(state *lua.State) int {
 	return 1
 }
 
+// getGameTimeMS is the GameTime::GetGameTimeMS twin (milliseconds
+// since the Unix epoch; only diffs are ever read, so the epoch base
+// is irrelevant): the ms clock the 15s Four Horsemen death-spread
+// check needs — GetGameTime/os.time() are seconds, which would put
+// up to a 1s boundary error on a 15000ms window.
+func (r *Runtime) getGameTimeMS(state *lua.State) int {
+	state.PushUnsigned(uint(time.Now().UnixMilli()))
+	return 1
+}
+
 func (r *Runtime) getQuest(state *lua.State) int {
 	questID := checkLuaUint64(state, 1)
 	if r.config.WorldDatabase == nil || questID > math.MaxUint32 {

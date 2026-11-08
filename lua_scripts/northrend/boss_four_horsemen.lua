@@ -97,9 +97,10 @@
 -- ResetEncounter unbridged); lady/sir have no BeginFighting
 -- AttackStart leg in C++ (their threat-empty EnterEvadeMode
 -- legs stay unbridged);
--- JustDied instance legs (boss-state check, death-time
--- latches, CheckIsMovementFinished, timed-kill achievement
--- data — the EncounterCleared credit cast itself IS ported,
+-- JustDied instance legs (boss-state check, CheckIsMovementFinished
+-- — the death-time latches ARE ported: <which>DeathMS via
+-- GetGameTimeMS, read by the Go 7600/7601 credit check, cleared by
+-- Reset; the EncounterCleared credit cast itself IS ported,
 -- see above); SpellHitTarget on lady voidzone
 -- (C++ has no SpellHitTarget arm for lady — only the
 -- direct Talk on cast, ported above); the mark
@@ -391,6 +392,18 @@ local function makeHandlers(which)
         if mapObj then
             local data = mapObj:GetInstanceData()
             if data then
+                -- C++ JustDied (boss_four_horsemen.cpp:328):
+                -- _timeDied = GameTime::GetGameTimeMS(), set only on
+                -- the IN_PROGRESS path (:321-323 — the NOT_STARTED
+                -- one-shot path calls BeginEncounter and returns
+                -- without banking); the Go 7600/7601 credit check
+                -- reads the four <which>DeathMS stamps and requires
+                -- max-min <= 15000ms (DATA_HORSEMEN_IS_TIMED_KILL
+                -- :140-164, read by the instance script via the
+                -- baron's GetData, instance_naxxramas.cpp:530-533).
+                if creature:GetBossState(BOSS_HORSEMEN) == BOSS_STATE_IN_PROGRESS then
+                    data[which .. "DeathMS"] = GetGameTimeMS()
+                end
                 data[which .. "Done"] = true
                 if data.baronDone and data.thaneDone and data.ladyDone and data.sirDone and not data.horsemenDone then
                     data.horsemenDone = true
@@ -415,6 +428,14 @@ local function makeHandlers(which)
     end
     local function reset(event, creature)
         cancelTimers(creature:GetGUID())
+        -- C++ Reset (boss_four_horsemen.cpp:303): _timeDied = 0.
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data[which .. "DeathMS"] = 0
+            end
+        end
         if creature:GetBossState(BOSS_HORSEMEN) ~= BOSS_STATE_DONE then
             creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
         end

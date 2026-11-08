@@ -1164,6 +1164,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetRealmID", r.getRealmID)
 	r.state.Register("GetCoreVersion", r.getCoreVersion)
 	r.state.Register("GetGameTime", r.getGameTime)
+	r.state.Register("GetGameTimeMS", r.getGameTimeMS)
 	r.state.Register("GetQuest", r.getQuest)
 	r.state.Register("GetGuildByName", r.getGuildByName)
 	r.state.Register("GetItemLink", r.getItemLink)

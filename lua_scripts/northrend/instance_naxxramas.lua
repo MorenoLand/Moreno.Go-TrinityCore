@@ -61,8 +61,12 @@
 --   (tick 406: FindNearestGameObject(181170) + SetGoState — the
 --   instance SetData is a plain gate->SetGoState twin,
 --   instance_naxxramas.cpp:271-279); no instance-script leg needed.
--- - playerDied latch + Immortal/Undying + 7600/7601 criteria:
---   no OnUnitDeath map hook and no achievement-criteria bridge.
+-- - playerDied latch + Immortal/Undying criteria: no OnUnitDeath
+--   map hook, so checkNaxxramasCriteria stays fail-closed for
+--   13233-13240/7616/7617 until one lands (same class as ToC's
+--   TRIBUTE_TO_IMMORTALITY). The 7600/7601 Four Horsemen credit
+--   IS ported: boss_four_horsemen.lua banks <which>DeathMS via
+--   GetGameTimeMS, read by the Go check.
 -- - SaveToDB / instance-data persistence across restarts: the
 --   table lives for the runtime lifetime only (black-morass delta).
 

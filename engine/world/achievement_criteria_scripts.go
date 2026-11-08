@@ -369,6 +369,10 @@ func (s *session) checkInstanceAchievementCriteria(criteriaID uint32) bool {
 		return checkTrialOfTheCrusaderCriteria(s, criteriaID)
 	case 249: // Onyxia's Lair
 		return checkOnyxiasLairCriteria(s, criteriaID)
+	case 533: // Naxxramas
+		return checkNaxxramasCriteria(s, criteriaID)
+	case 631: // Icecrown Citadel
+		return checkIcecrownCitadelCriteria(s, criteriaID)
 	default:
 		return false
 	}
@@ -482,6 +486,143 @@ func checkOnyxiasLairCriteria(s *session, criteriaID uint32) bool {
 		return num("manyWhelpsHandleIt", 0) >= 1
 	case 12566, 12569: // ACHIEV_CRITERIA_DEEP_BREATH_10/25_PLAYER
 		return num("sheDeepBreathMore", 1) >= 1
+	default:
+		return false
+	}
+}
+
+// checkNaxxramasCriteria mirrors
+// instance_naxxramas_InstanceMapScript::
+// CheckAchievementCriteriaMeet (instance_naxxramas.cpp:522-553).
+// The death timestamps live in the Lua shared instanceData table
+// (boss_four_horsemen.lua writes GetGameTimeMS() into
+// <which>DeathMS at JustDied time, the GameTime::GetGameTimeMS
+// twin, cleared by Reset); absent fields read as the C++ member
+// default 0, which fails the credit check exactly as a horseman
+// reporting not dead does (boss_four_horsemen.cpp:146-152).
+// EncounterCount is 15 (naxxramas.h:27); the boss states come from
+// the Go instanceBossState reader, which reports TO_BE_DECIDED
+// for never-touched encounters, so a fresh instance counts all 15
+// alive. Criteria IDs are the raw numbers from the C++ switch —
+// the C++ comments (:524-525) label 7600 25-man / 7601 10-man,
+// but the arithmetic says otherwise, and Naxxramas has no heroic
+// modes (spawn mode is 0 for 10-man, 1 for 25-man): 7600 passes
+// only at mode 0 and 7601 only at mode 1, so 7600 is the 10-man
+// criteria and 7601 the 25-man one; the arithmetic is ported
+// verbatim, labels notwithstanding.
+func checkNaxxramasCriteria(s *session, criteriaID uint32) bool {
+	rt := s.server.Features.Scripts
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	num := func(key string, def float64) float64 {
+		if v, ok := rt.InstanceDataNumber(mapID, instanceID, key); ok {
+			return v
+		}
+		return def
+	}
+	switch criteriaID {
+	case 7600, 7601: // And They Would All Go Down Together
+		// C++ :528-529: criteria_id + GetSpawnMode() == 7601
+		// rejects the wrong raid size.
+		if criteriaID+uint32(s.playerSpawnMode()) == 7601 {
+			return false
+		}
+		// C++ :530-533: the baron's GetData(
+		// DATA_HORSEMEN_CHECK_ACHIEVEMENT_CREDIT) — the timed-kill
+		// read (boss_four_horsemen.cpp:140-164) over all four
+		// death times: every horseman dead, max-min spread <=
+		// 15 * IN_MILLISECONDS.
+		baron := num("baronDeathMS", 0)
+		thane := num("thaneDeathMS", 0)
+		lady := num("ladyDeathMS", 0)
+		sir := num("sirDeathMS", 0)
+		if baron == 0 || thane == 0 || lady == 0 || sir == 0 {
+			return false
+		}
+		minTime := math.Min(math.Min(baron, thane), math.Min(lady, sir))
+		maxTime := math.Max(math.Max(baron, thane), math.Max(lady, sir))
+		return maxTime-minTime <= 15000
+	case 13233, 13234, 13235, 13236, 7616, // The Immortal (25-man)
+		13237, 13238, 13239, 13240, 7617: // The Undying (10-man)
+		// C++ :545-548: AreAllEncountersDone() && !playerDied.
+		// AreAllEncountersDone (:511-520) counts encounters not
+		// DONE and tolerates exactly one — the boss whose death
+		// is being checked, since this runs before its
+		// SetBossState(DONE). The playerDied latch (OnUnitDeath
+		// clears it when a player dies while an encounter is in
+		// progress, instance :248-254) has no Go bridge — no
+		// instance OnUnitDeath hook — so this stays fail-closed
+		// until one lands, the same class as ToC's
+		// TRIBUTE_TO_IMMORTALITY above.
+		alive := 0
+		for bossID := uint32(0); bossID < 15; bossID++ {
+			if s.server.instanceBossState(mapID, instanceID, bossID) != encounterStateDone {
+				alive++
+			}
+		}
+		if alive > 1 {
+			return false
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// checkIcecrownCitadelCriteria mirrors
+// instance_icecrown_citadel_InstanceMapScript::
+// CheckAchievementCriteriaMeet (instance_icecrown_citadel.cpp:
+// 1140-1178). Criteria IDs are the ICCAchievementData enum
+// (icecrown_citadel.h:448-477). The four eligibility latches live
+// in the C++ instance script (ctor :156-159 sets all true); only
+// Boned has a bridged write path — the other three clear legs are
+// a SpellScript (Nausea, Ooze Dance) or a DamageDealt hook (Orb
+// Whisperer), neither of which Go exposes, so they stay
+// fail-closed. The max-players legs read
+// instance->ToInstanceMap()->GetMaxPlayers(); the spawn mode is
+// the twin (0/2 = 10-man, 1/3 = 25-man).
+func checkIcecrownCitadelCriteria(s *session, criteriaID uint32) bool {
+	rt := s.server.Features.Scripts
+	mapID, instanceID := s.player.Map, s.player.InstanceID
+	num := func(key string, def float64) float64 {
+		if v, ok := rt.InstanceDataNumber(mapID, instanceID, key); ok {
+			return v
+		}
+		return def
+	}
+	is10Man := s.playerSpawnMode()%2 == 0
+	switch criteriaID {
+	case 12775, 12962, 13393, 13394: // CRITERIA_BONED_*
+		// C++ :1144-1148 returns IsBonedEligible: set true by
+		// marrowgar Reset (boss_lord_marrowgar.cpp:177), cleared
+		// by the bone-spike 8s EVENT_FAIL_BONED timer
+		// (:470-475). Both legs port in Lua via the shared
+		// instanceData bonedEligible key; absent reads as the
+		// C++ ctor default true.
+		return num("bonedEligible", 1) >= 1
+	case 12984, 12966, 12985, 12983: // CRITERIA_DANCES_WITH_OOZES_*
+		// C++ :1149-1153 returns IsOozeDanceEligible: set true
+		// by rotface Reset (:155), cleared by the unstable-ooze
+		// 5-stack SpellScript (boss_rotface.cpp:555/615) — no
+		// SpellScript bridge, fail-closed.
+		return false
+	case 12987, 12968, 12988, 12981: // CRITERIA_NAUSEA_*
+		// C++ :1154-1158 returns IsNauseaEligible: set true by
+		// putricide Reset (:236), cleared by
+		// spell_putricide_regurgitated_ooze (boss_professor_
+		// putricide.cpp:1382) — no SpellScript bridge,
+		// fail-closed.
+		return false
+	case 13033, 12969, 13034, 13032: // CRITERIA_ORB_WHISPERER_*
+		// C++ :1159-1163 returns IsOrbWhispererEligible: set
+		// true by blood-prince Reset (:452), cleared when a
+		// prince deals >23000/25000 direct spell damage
+		// (boss_blood_prince_council.cpp:549/965) — no
+		// DamageDealt hook in Go, fail-closed.
+		return false
+	case 13340, 12780, 13011: // CRITERIA_KILL_LANA_THEL_10M / ONCE_BITTEN_10N/10V
+		return is10Man
+	case 13360, 13012, 13013: // CRITERIA_KILL_LANA_THEL_25M / ONCE_BITTEN_25N/25V
+		return !is10Man
 	default:
 		return false
 	}

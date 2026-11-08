@@ -18625,8 +18625,10 @@ func init() {
 	// static GOs never fire GO-create in Go), kelthuzad door close/open.
 	// Stay out: boundaries/door-data (no models), GO_BIRTH delete (no
 	// loot-state fire site), gothik gate (wave machine), playerDied +
-	// Immortal/Undying/7600/7601 (no unit-death map hook, no
-	// achievement bridge), chest respawn leg (no GO GetRespawnDelay).
+	// Immortal/Undying (no unit-death map hook — the 7600/7601
+	// Four Horsemen credit IS ported now: boss_four_horsemen.lua
+	// banks <which>DeathMS via GetGameTimeMS, read by
+	// checkNaxxramasCriteria), chest respawn leg (no GO GetRespawnDelay).
 
 	// Commander Stoutbeard (26796), Commander Kolurg (26798), The
 	// Nexus — lua_scripts/northrend/boss_nexus_commanders.lua.
