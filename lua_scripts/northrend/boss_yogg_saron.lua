@@ -206,12 +206,12 @@
 -- empoweredTick below) and spell_yogg_saron_sanity DummyTick
 -- (63050, sanityTick below); spell_yogg_saron_brain_link
 -- DummyTick (63802) stays out — the linked player resolves
--- only via SaraAI.GetLinkedPlayerGUID (no bridge) and the
--- distance threshold reads aurEff->GetAmount() (the Aura
--- object has no GetAmount, lua_aura.go). Residuals: empowered
--- OnApply (stack-9 buff, no AuraEventOnApply) and sanity
--- OnRemove (instance SetData + remove-mode gate, no
--- AuraEventOnRemove).
+-- only via SaraAI.GetLinkedPlayerGUID (no bridge); the distance
+-- threshold reads aurEff->GetAmount(), which IS bridged now
+-- (lua_aura.go) but is moot without the link. Residuals
+-- retired: empowered OnApply (stack-9 buff) ported tick 438
+-- via ev2 (empoweredApply below); sanity OnRemove ported
+-- tick 436 via ev3 (sanityRemove below).
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -704,9 +704,9 @@ RegisterCreatureEvent(ENTRY_IMMORTAL_GUARDIAN, 9, immortalDamageTaken)
 -- negative stack count has no Lua expression). No
 -- PreventDefaultAction in C++, so the handler returns nothing.
 -- PORTED tick 189 via RegisterAuraEvent (64161, AuraEventOnPeriodic
--- = 1). The sibling OnApply (buff with stack 9, :2516-2521) stays
--- out: there is no AuraEventOnApply (runtime.go defines only
--- AuraEventOnPeriodic).
+-- = 1). The sibling OnApply (buff with stack 9, :2516-2521) is
+-- PORTED tick 438 via ev2 (empoweredApply below): same cast-then-
+-- SetStackAmount idiom as the tick leg.
 local SPELL_EMPOWERED_BUFF = 65294 -- boss_yogg_saron.cpp:195
 local SPELL_WEAKENED = 64162 -- boss_yogg_saron.cpp:196
 
@@ -726,6 +726,21 @@ local function empoweredTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_EMPOWERED, 1, empoweredTick)
+
+-- C++ spell_yogg_saron_empowered::OnApply (boss_yogg_saron.cpp:2516-2521):
+-- AfterEffectApply, EFFECT_0 PERIODIC_DUMMY, REAL: the target casts
+-- SPELL_EMPOWERED_BUFF (65294) on itself, triggered, with
+-- SPELLVALUE_AURA_STACK = 9. Same cast-then-SetStackAmount idiom as
+-- the tick leg above (CastCustomSpell sets base points, not stacks).
+local function empoweredApply(event, aura, target)
+    target:CastSpell(target, SPELL_EMPOWERED_BUFF, true)
+    local buff = target:GetAura(SPELL_EMPOWERED_BUFF)
+    if buff then
+        buff:SetStackAmount(9)
+    end
+end
+
+RegisterAuraEvent(SPELL_EMPOWERED, 2, empoweredApply)
 
 local function cancelAll(event, creature)
     cancelTimers(creature:GetGUID())

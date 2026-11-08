@@ -14,7 +14,9 @@
 -- Also in this C++ file but unrelated to Adrianna: spell_icc_stoneform
 -- (icecrown_citadel.cpp:1306-1335) — AuraScript whose OnApply/OnRemove
 -- set REACT_PASSIVE/REACT_AGGRESSIVE + NOT_SELECTABLE/ImmuneToPC/emote
--- legs on the aura target; no AuraScript bridge — stays out.
+-- legs on the aura target; PORTED tick-203 in
+-- lua_scripts/northrend/spell_icecrown_citadel.lua (ev2/ev3, 70733) —
+-- the "no AuraScript bridge" note here is stale.
 
 local ENTRY_ALCHEMIST_ADRIANNA = 38501
 
