@@ -9,10 +9,11 @@
 -- ARCANE_LIGHTNING_INSTAKILL 58152 instead of re-arming. DoCastAOE
 -- ports as self-cast (boss_ai.go convention). No instance reference,
 -- movement, gossip, or cross-AI call in this AI.
--- Latent until a summoner exists: the defense system arrives via the
--- unported Sinclari intro / activation-crystal ProcessEvent arms
--- (violet_hold.cpp:459, instance_violet_hold.cpp:932) — the handler
--- only runs if the creature exists, so nothing is fabricated.
+-- Summoned by the activation-crystal gossip handler
+-- (npc_violet_hold_activation_crystal.lua, tick 487 — the
+-- ProcessEvent twin); the Sinclari-intro summon stays out with the
+-- intro (violet_hold.cpp:459). The handler only runs if the creature
+-- exists, so nothing is fabricated.
 
 local ENTRY_DEFENSE_SYSTEM = 30837 -- violet_hold.h:121
 local SPELL_ARCANE_LIGHTNING_DAMAGE = 57912

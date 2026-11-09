@@ -20838,8 +20838,10 @@ func init() {
 	// IN_PROGRESS (base-first), died DONE (after the death Talk),
 	// reset NOT_STARTED (!= DONE-gated, new ev23); the instance
 	// SetBossState-override leg (DATA_CYANIGOSA DONE -> SetData
-	// MAIN_EVENT_STATE DONE) stays out — no Lua twin for the
-	// main-event state machine, documented in
+	// MAIN_EVENT_STATE DONE) rides the instance file's OnUnitDeath
+	// arm (tick 487: main door + SHOW 0 + crystal flags from the
+	// dying unit); the Sinclari-outro DoAction stays dormant (no
+	// receiver) and the wave machine stays out, documented in
 	// instance_violet_hold.lua.
 	RegisterLuaBoss("boss_cyanigosa", 31134)
 	// AddSC_boss_erekem: Erekem (Violet Hold) — timer-driven cast ports
