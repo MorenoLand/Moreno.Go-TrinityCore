@@ -84,8 +84,9 @@
 --   creature:DoZoneInCombat bridge — C++ arm order, after
 --   me->setActive(true)); the !_introDone branch (:293-298) PORTS via
 --   relayInterruptIntro below: DoCastSelf(SPELL_GRIP_OF_AGONY 70572) +
---   the ACTION_INTERRUPT_INTRO guard-despawn relay (the event NPC's
---   own _events.Reset leg is a Lua no-op); the latch lives outside
+--   the ACTION_INTERRUPT_INTRO guard-despawn + NPC-timer-cancel relay
+--   (the event NPC's _events.Reset leg ports as cancelTimers on the NPC
+--   GUID + phase-mirror clear); the latch lives outside
 --   saurfangState because C++ Reset never clears _introDone.
 -- EVENT_SUMMON_BLOOD_BEAST (:493-502) — DoCastSelf(
 --   SPELL_SUMMON_BLOOD_BEAST+i10 72172/72173) = 2x non-triggered
@@ -159,36 +160,50 @@
 --   (event 15 itself is live — boss_ai.go:1904; the old "rides the
 --   unported ACTION machine" note is retired — the machine ports
 --   below via ev38 + the blood-link ev1 tick.)
--- boss_deathbringer_saurfang intro machine — tick-556 verdict
---   (2026-11-09): all three DoAction arms STAY OUT (no code change);
---   the "Talk legs ride the DoAction legs" phrasing is retired — the
---   Talk lines (SAY_INTRO_ALLIANCE_2 0 / _3 1 / _6 2 / _7 3 /
---   SAY_INTRO_HORDE_2 4 / _4 5 / _9 6) ride the EVENT_INTRO_*
---   scheduler (:463-492), which is itself driven by the unported
---   DoAction arms; neither layer ports. Arm by arm: PHASE_INTRO_A
---   (1) / PHASE_INTRO_H (2) (:552-565) — events.SetPhase (no bridge)
---   + SetHomePosition(deathbringerPos -496.3542, 2211.33, 541.1138,
---   :558; bridged, lua_creature_events.go:6405) + MovePoint(
---   POINT_SAURFANG 3781300, :559; unbridged — no MovePoint on the
---   creature surface) + schedules EVENT_INTRO_ALLIANCE_2 (2.5s) / _3
---   (20s) / HORDE_2 (5s); ACTION_CONTINUE_INTRO (-3781301, :567-579)
---   — _introDone-gated schedules EVENT_INTRO_ALLIANCE_6 (7s) /
---   FINISH (8s) / HORDE_4 (6.5s) / HORDE_9 (48.2s) / FINISH (55.7s).
---   No Lua sender for any of the three: dispatched only by the
---   unregistered event NPCs (horde :670/:726, alliance :870/:916 —
---   gossip-started scheduler / MovementInform POINT_FIRST_STEP); the
---   scheduled EVENT_INTRO_* have zero Lua handlers, so even a
---   dispatched arm would schedule dead events. No SetHomePosition-only
---   fragment ports — the home-position leg has no other live trigger.
---   The EVENT_INTRO_* bodies (:463-492) stay out with the machine
---   (ALLIANCE_2/HORDE_2: RemoveFlag(NOT_SELECTABLE) + SetFaction
---   (bridged :6079) + Talk; ALLIANCE_6: Talk x2 + GRIP self-cast;
---   HORDE_9: GRIP + Talk; FINISH: SetPhase(PHASE_COMBAT) + _introDone
---   + SetImmuneToPC(false)). Corrects the old ":548-590" cite —
---   intro arms are :548-579; :580-592 is the MARK arm, ported.
+-- boss_deathbringer_saurfang intro machine — PORTED 2026-11-09 (this tick):
+--   the tick-556 "all three DoAction arms STAY OUT" verdict is retired —
+--   all three blockers fell: RegisterCreatureGossipEvent is a live bridge
+--   (runtime.go:1316, barada precedent), MoveTo/MoveCharge are bridged
+--   (lua_creature_events.go:4947/:5037, ev28 POINT_MOTION_TYPE arrival),
+--   and events.SetPhase is mirrored by the saurfangIntroPhase /
+--   eventNpcPhase tables (the assembly_of_iron phase-mirror precedent).
+--   PHASE_INTRO_A (1) / PHASE_INTRO_H (2) (:548-565) port via ev38
+--   (saurfangDoAction below): SetHomePosition(deathbringerPos, live
+--   orientation via GetO) + MoveTo(POINT_SAURFANG 3781300) + faction
+--   intro schedules (ALLIANCE_2 2.5s / _3 20s; HORDE_2 5s).
+--   ACTION_CONTINUE_INTRO (-3781301, :567-579) ports via ev38:
+--   _introDone-gated (saurfangIntroDone, now also set by EVENT_INTRO_
+--   FINISH so a post-intro engage skips the GRIP/interrupt leg exactly
+--   as C++ :293-298); faction schedules (ALLIANCE_6 7s / FINISH 8s;
+--   HORDE_4 6.5s / HORDE_9 48.2s / FINISH 55.7s). EVENT_INTRO_* bodies
+--   (:463-492) port as the schedule closures: ALLIANCE_2/HORDE_2
+--   RemoveFlag(NOT_SELECTABLE) + SetFaction(974) + Talk; ALLIANCE_6
+--   Talk x2 + GRIP self-cast; HORDE_9 GRIP + Talk; FINISH _introDone +
+--   SetImmuneToPC(false) (RemoveFlag(59, 0x100) twin).
+--   The event NPCs (37187/37200) register gossip select (event 2) +
+--   ev23/ev28: OnGossipSelect -> DoAction(ACTION_START_EVENT) (:629/
+--   :829; menuId 10952/10934 is NOT forwarded by the Go hook and C++
+--   ignores gossipListId, so any select on the entry's menu starts the
+--   event); START_EVENT (:651-670/:851-870): distance-sorted guard
+--   SetData(0, x) 1..5 (guardSortIndex table — guards unregistered),
+--   gossip-flag clear (SetNPCFlags twin), Talk INTRO_1, phase set,
+--   EVENT_INTRO_HORDE_3 18.5s / ALLIANCE_4 29.5s (SetWalk + MoveTo
+--   POINT_FIRST_STEP), deathbringer DoAction(PHASE_INTRO_*).
+--   MovementInform POINT_FIRST_STEP (ev28) ports: SetWalk(false) +
+--   Talk INTRO_3/4 + HORDE_5/6/7/8 / ALLIANCE_5 schedules +
+--   deathbringer DoAction(ACTION_CONTINUE_INTRO); HORDE_8/ALLIANCE_5
+--   also broadcast ACTION_CHARGE (guard MoveCharge to chargePos[index]
+--   at 13.0, self MoveCharge to chargePos[0] at 8.5).
+--   Stay-outs: GO_SAURFANG_S_DOOR HandleGameObject (:669/:868, no
+--   instance-GO bridge); SpellHit GRIP legs (event NPC + guards MovePoint
+--   CHOKE, :700-706/:908-914/:970-976) — ev14 exists but the GRIP hit
+--   path is DBC-targeting-side, unverifiable from in-tree sources;
+--   the WAYPOINT outro chain (POINT_EXIT guards, :763-771/:933-940).
+--   The ACTION_INTERRUPT_INTRO relay (relayInterruptIntro below) now
+--   also cancels the event NPC's pending intro timers (C++ _events.
+--   Reset, :689/:898) — the pre-existing relay only despawned guards.
 --   (DoAction dispatch itself IS bridged — creature:DoAction fires
---   ev38, lua_creature_events.go:802 — the block is the sender +
---   the handlers, not dispatch.) The
+--   ev38, lua_creature_events.go:802.) The
 --   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) PORTED via
 --   ev38 (saurfangDoAction below) + the blood-link ev1 tick
 --   (bloodLinkTick below): random threat-list player, alive, without
@@ -223,29 +238,29 @@
 --   (ev19/ev20/ev21); one-shot, never re-armed. The old "no summon-list
 --   bridge" stay-out is retired by ev19+ev20+ev21.
 -- npc_high_overlord_saurfang_icc / npc_muradin_bronzebeard_icc —
---   NOT registered (the bronjahm npc_corrupted_soul_fragment
---   precedent); the outro arms port via the deathbringer-side relay
---   below, not via registration: gossip -> DoAction(
---   ACTION_START_EVENT) (gossip is instance-model-blocked and the
---   NPCs are unregistered — dispatch itself IS bridged, ev38);
---   Talk(SAY_INTRO_HORDE_1 0 /
---   SAY_INTRO_ALLIANCE_1 0) ride the DoAction legs; Talk(
---   SAY_INTRO_HORDE_3 1 / SAY_INTRO_ALLIANCE_4 1) ride
---   MovementInform POINT_FIRST_STEP (no-motion bridge); Talk(
---   SAY_INTRO_HORDE_5..8 2..5 / SAY_INTRO_ALLIANCE_5 2) ride the
---   intro scheduler machine; Talk(SAY_OUTRO_HORDE_2/3 12/13) PORT via
---   relayStartOutro below, Talk(SAY_OUTRO_HORDE_4 14) rides the
---   OUTRO_6 move-arrival chain (no ev28); Talk(SAY_OUTRO_HORDE_1 11 /
---   SAY_OUTRO_ALLIANCE_1 3) PORT via relayStartOutro below (receiver
---   legs of the deathbringer DamageTaken relay); SpellHit(SPELL_GRIP_OF_AGONY)
---   movement legs — SpellHit never fires; the cross-AI
---   deathbringer->AI()->DoAction(PHASE_INTRO_*/ACTION_CONTINUE_INTRO)
---   legs ride the unregistered event NPCs' intro scheduler
---   (dispatch IS bridged — creature:DoAction fires ev38).
+--   REGISTERED this tick (gossip select event 2 + ev23 + ev28; the
+--   bronjahm npc_corrupted_soul_fragment precedent no longer applies —
+--   the gossip bridge is live): gossip -> DoAction(ACTION_START_EVENT)
+--   (eventNpcStartEvent below); Talk(SAY_INTRO_HORDE_1 0 /
+--   SAY_INTRO_ALLIANCE_1 0) ride the START_EVENT legs; Talk(
+--   SAY_INTRO_HORDE_3 1 / SAY_INTRO_ALLIANCE_4 1) ride the
+--   MovementInform POINT_FIRST_STEP arrival; Talk(SAY_INTRO_HORDE_5..8
+--   2..5 / SAY_INTRO_ALLIANCE_5 2) ride the intro scheduler machine.
+--   The outro arms still port via the deathbringer-side relay below
+--   (relayStartOutro); Talk(SAY_OUTRO_HORDE_4 14) rides the OUTRO_6
+--   move-arrival chain (not ported — needs the GetClosePoint leg);
+--   the muradin outro chain rides waypoint/movement events (no bridge).
+--   SpellHit(SPELL_GRIP_OF_AGONY) movement legs stay out (see intro
+--   machine note above). The cross-AI deathbringer->AI()->DoAction(
+--   PHASE_INTRO_*/ACTION_CONTINUE_INTRO) legs are live receivers in
+--   saurfangDoAction below (dispatch IS bridged — creature:DoAction
+--   fires ev38).
 -- npc_saurfang_event (guards) — zero own Talk lines; NOT registered
 --   (the bronjahm npc_corrupted_soul_fragment precedent):
 --   DoAction(ACTION_DESPAWN) ports via the relay guard sweeps below;
---   SpellHit / DoAction(ACTION_CHARGE) movement legs only stay out.
+--   DoAction(ACTION_CHARGE) ports via the intro charge broadcast
+--   (chargeEventGuards below — the _index sort lives in guardSortIndex,
+--   guards unregistered); SpellHit GRIP legs stay out.
 -- spell_deathbringer_blood_link / spell_deathbringer_blood_power /
 -- spell_deathbringer_rune_of_blood / spell_deathbringer_blood_nova /
 -- spell_deathbringer_blood_nova_targeting /
@@ -257,12 +272,14 @@
 -- PORTED this tick via RegisterAuraEvent ev1 on 72178).
 -- achievement_ive_gone_and_made_a_mess PORTED this tick (Lua latch +
 -- Go gate in achievement_criteria_scripts.go).
--- All 29 Talk() calls in the file accounted for (29 = ported: aggro
--- 7 + kill 10 + frenzy 11 + death 13 + blood beasts 9 + berserk 12 +
--- horde outro 11/12/13 + alliance outro 3 (relayStartOutro below);
--- documented-only: boss intro alliance 0-3 (4) + boss intro horde
--- 4-6 (3) + mark 8 (1) + emote 14 (1) + horde saurfang 0/1/2..5/14
--- (7) + muradin 0/1/2 (3)).
+-- Talk accounting (C++ call sites in this file): newly ported this
+--   tick — boss intro 0/1/2/3/4/5/6 (8 calls: ALLIANCE_6 Talks twice)
+--   + horde event-NPC 0/1/2/3/4/5 (6) + muradin 0/1/2 (3);
+--   previously ported — aggro 7 + kill 10 + frenzy 11 + death 13 +
+--   blood beasts 9 + berserk 12 + horde outro 11/12/13 + alliance
+--   outro 3 (relayStartOutro below); still documented-only — mark 8
+--   (1) + emote 14 (1) + horde outro 14 (OUTRO_6 chain) + muradin
+--   outro 4..12 (waypoint chain).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
 -- EVENT_SCENT_OF_BLOOD (:520-526) PORTED 2026-11-08 (tick 493): the
@@ -289,6 +306,55 @@ local ENTRY_SE_HIGH_OVERLORD_SAURFANG = 37187 -- icecrown_citadel.h:216
 local ENTRY_SE_MURADIN_BRONZEBEARD = 37200 -- icecrown_citadel.h:214
 local ENTRY_SE_KOR_KRON_REAVER = 37920 -- icecrown_citadel.h:217
 local ENTRY_SE_SKYBREAKER_MARINE = 37830 -- icecrown_citadel.h:218
+
+local PHASE_INTRO_A = 1 -- boss_deathbringer_saurfang.cpp:187-192
+local PHASE_INTRO_H = 2
+local ACTION_START_EVENT = -3781300 -- boss_deathbringer_saurfang.cpp:194-203
+local ACTION_CONTINUE_INTRO = -3781301
+local POINT_SAURFANG = 3781300 -- boss_deathbringer_saurfang.cpp:213-222
+local POINT_FIRST_STEP = 3781301
+local POINT_CHARGE = 3781302
+local FACTION_UNDEAD_SCOURGE = 974 -- SharedDefines.h:253
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h (OBJECT_END + 0x35; the FL precedent)
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
+local UNIT_NPC_FLAG_GOSSIP = 0x00000001 -- UnitDefines.h:186
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:36 (the barada precedent)
+-- Boss Talk ids, boss_deathbringer_saurfang.cpp:30-46.
+local SAY_INTRO_ALLIANCE_2 = 0
+local SAY_INTRO_ALLIANCE_3 = 1
+local SAY_INTRO_ALLIANCE_6 = 2
+local SAY_INTRO_ALLIANCE_7 = 3
+local SAY_INTRO_HORDE_2 = 4
+local SAY_INTRO_HORDE_4 = 5
+local SAY_INTRO_HORDE_9 = 6
+-- High Overlord Saurfang Talk ids, boss_deathbringer_saurfang.cpp:48-64.
+local SAY_H_INTRO_1 = 0
+local SAY_H_INTRO_3 = 1
+local SAY_H_INTRO_5 = 2
+local SAY_H_INTRO_6 = 3
+local SAY_H_INTRO_7 = 4
+local SAY_H_INTRO_8 = 5
+-- Muradin Talk ids, boss_deathbringer_saurfang.cpp:65-80.
+local SAY_A_INTRO_1 = 0
+local SAY_A_INTRO_4 = 1
+local SAY_A_INTRO_5 = 2
+local DEATHBRINGER_X = -496.3542 -- deathbringerPos, boss_deathbringer_saurfang.cpp:223
+local DEATHBRINGER_Y = 2211.33
+local DEATHBRINGER_Z = 541.1138
+local FIRST_STEP_X = -541.3177 -- firstStepPos, boss_deathbringer_saurfang.cpp:224
+local FIRST_STEP_Y = 2211.365
+local FIRST_STEP_Z = 539.2921
+-- chargePos[1] is the event NPC's own slot; [2..6] are the guards'
+-- (C++ chargePos[0..5], boss_deathbringer_saurfang.cpp:226-234;
+-- guard _index 1..5 -> Lua slots 2..6).
+local CHARGE_POS = {
+    { -509.6505, 2211.377, 539.2872 },
+    { -508.7480, 2211.897, 539.2870 },
+    { -509.2929, 2211.411, 539.2870 },
+    { -506.6607, 2211.367, 539.2870 },
+    { -506.1137, 2213.306, 539.2870 },
+    { -509.0040, 2211.743, 539.2870 },
+}
 
 local SAY_AGGRO = 7
 local SAY_MARK_OF_THE_FALLEN_CHAMPION = 8
@@ -335,6 +401,9 @@ local timers = {}
 local saurfangState = {}
 local saurfangLiveBeasts = {} -- boss GUID -> set of live blood-beast GUIDs (ev19/ev20/ev21)
 local saurfangIntroDone = {} -- C++ _introDone: set on first engage, never cleared by Reset
+local saurfangIntroPhase = {} -- boss GUID -> "A"/"H": C++ events phase mirror for the intro (Reset sets COMBAT; cleared in doSaurfangReset)
+local eventNpcPhase = {} -- event-NPC GUID -> "A"/"H": C++ _events phase mirror (START_EVENT guard + scheduler gating); cleared on ev23
+local guardSortIndex = {} -- guard GUID -> 1..5: C++ npc_saurfang_event _index (SetData(0, x), :963); guards unregistered, so the index lives here
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -590,18 +659,25 @@ local function relayInterruptIntro(creature, guid)
     creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
     local eventNpc = findEventNpc(creature)
     if eventNpc then
+        -- C++ ACTION_INTERRUPT_INTRO (:688-695/:897-902): _events.Reset()
+        -- cancels the NPC's pending intro timers before the guard despawn.
+        local npcGuid = eventNpc:GetGUIDLow()
+        cancelTimers(npcGuid)
+        eventNpcPhase[npcGuid] = nil
         despawnEventGuards(eventNpc)
     end
 end
 
 -- C++ DamageTaken :375-376 -> event-NPC DoAction(ACTION_START_OUTRO).
 -- Horde (:673-685): RemoveAura(GRIP) + Talk(OUTRO_1 11) + Talk(OUTRO_2
--- 12) at 10s + Talk(OUTRO_3 13) at 18s + guard despawn; the OUTRO_4
--- corpse move (GetClosePoint-derived position) and the OUTRO_5 final
--- move (arrival-gated despawn chain, no ev28) stay out, as do the
--- SetDisableGravity(false) + MoveFall legs (no MoveFall bridge).
--- Alliance (muradin :873): RemoveAura(GRIP) + Talk(OUTRO_1 3) + guard
--- despawn + deathbringer DespawnOrUnsummon(5s); muradin schedules no
+-- 12) at 10s + Talk(OUTRO_3 13) at 18s + SetDisableGravity(false) +
+-- MoveFall + guard despawn; the OUTRO_4 corpse move
+-- (GetClosePoint-derived position) and the OUTRO_5 final move
+-- (arrival-gated despawn chain) stay out — the chain needs the OUTRO_4
+-- move to produce its arrival.
+-- Alliance (muradin :873): RemoveAura(GRIP) + Talk(OUTRO_1 3) +
+-- SetDisableGravity(false) + MoveFall + guard despawn + deathbringer
+-- DespawnOrUnsummon(5s); muradin schedules no
 -- outro Talks (its chain rides waypoint/movement events, no bridge).
 -- Delayed legs ride schedule() keyed on the event NPC's GUID (C++
 -- ownership: the timers live on the event NPC's EventMap).
@@ -620,8 +696,15 @@ local function relayStartOutro(creature)
         schedule(npcGuid, "outro3", 18000, function()
             eventNpc:Talk(SAY_OUTRO_HORDE_3)
         end)
+        -- C++ :681-682: SetDisableGravity(false) + MoveFall, after the
+        -- schedules (both bridged now — the "no MoveFall bridge" note is stale).
+        eventNpc:SetDisableGravity(false)
+        eventNpc:MoveFall()
     else
         eventNpc:Talk(SAY_OUTRO_ALLIANCE_1)
+        -- C++ muradin :876-877: SetDisableGravity(false) + MoveFall.
+        eventNpc:SetDisableGravity(false)
+        eventNpc:MoveFall()
         schedule(npcGuid, "outroDespawn", 5000, function()
             creature:Despawn()
         end)
@@ -703,6 +786,7 @@ end
 local function doSaurfangReset(creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
+    saurfangIntroPhase[guid] = nil
     local st = saurfangState[guid]
     if st and st.dead then
         return
@@ -910,7 +994,82 @@ end
 -- functional legs). The DATA_MADE_A_MESS latch (:540-546, threshold
 -- RAID_MODE 3/5) clears here via creature:Is25ManRaid() once the
 -- count reaches it; the Go achievement gate reads this slot.
+-- C++ boss_deathbringer_saurfang::DoAction PHASE_INTRO_A (1) /
+-- PHASE_INTRO_H (2) (:548-565): events.SetPhase (mirrored by
+-- saurfangIntroPhase) + SetHomePosition(deathbringerPos, live
+-- orientation via GetO — the object.go fallback) + MovePoint(
+-- POINT_SAURFANG 3781300, via the bridged MoveTo twin) + faction
+-- intro schedules (ALLIANCE_2 2.5s / _3 20s; HORDE_2 5s). The
+-- EVENT_INTRO_* bodies (:463-492) port as the schedule closures:
+-- ALLIANCE_2/HORDE_2 RemoveFlag(NOT_SELECTABLE) + SetFaction(974) +
+-- Talk; ALLIANCE_3 Talk; HORDE_2 Talk.
+local function saurfangIntroPhaseAction(creature, guid, action)
+    saurfangIntroPhase[guid] = action == PHASE_INTRO_A and "A" or "H"
+    creature:SetHomePosition(DEATHBRINGER_X, DEATHBRINGER_Y, DEATHBRINGER_Z, creature:GetO())
+    creature:MoveTo(POINT_SAURFANG, DEATHBRINGER_X, DEATHBRINGER_Y, DEATHBRINGER_Z)
+    if action == PHASE_INTRO_A then
+        schedule(guid, "introA2", 2500, function()
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:SetFaction(FACTION_UNDEAD_SCOURGE)
+            creature:Talk(SAY_INTRO_ALLIANCE_2)
+        end)
+        schedule(guid, "introA3", 20000, function()
+            creature:Talk(SAY_INTRO_ALLIANCE_3)
+        end)
+    else
+        schedule(guid, "introH2", 5000, function()
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:SetFaction(FACTION_UNDEAD_SCOURGE)
+            creature:Talk(SAY_INTRO_HORDE_2)
+        end)
+    end
+end
+
+-- C++ ACTION_CONTINUE_INTRO (-3781301, :567-579): _introDone-gated
+-- schedules (ALLIANCE_6 7s / FINISH 8s; HORDE_4 6.5s / HORDE_9 48.2s
+-- / FINISH 55.7s). Only the live faction's events schedule — the C++
+-- phase gates on the other faction's are vacuous. FINISH (:488-492):
+-- SetPhase(PHASE_COMBAT) + _introDone (saurfangIntroDone — set here
+-- so a post-intro engage skips the GRIP/interrupt leg exactly as C++
+-- :293-298) + SetImmuneToPC(false) (RemoveFlag(59, 0x100) twin).
+-- ALLIANCE_6: Talk x2 + GRIP self-cast; HORDE_9: GRIP + Talk.
+local function saurfangContinueIntroAction(creature, guid)
+    if saurfangIntroDone[guid] then
+        return
+    end
+    local function onIntroFinish()
+        saurfangIntroDone[guid] = true
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, 0x100)
+    end
+    if saurfangIntroPhase[guid] == "A" then
+        schedule(guid, "introA6", 7000, function()
+            creature:Talk(SAY_INTRO_ALLIANCE_6)
+            creature:Talk(SAY_INTRO_ALLIANCE_7)
+            creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
+        end)
+        schedule(guid, "introFinish", 8000, onIntroFinish)
+    elseif saurfangIntroPhase[guid] == "H" then
+        schedule(guid, "introH4", 6500, function()
+            creature:Talk(SAY_INTRO_HORDE_4)
+        end)
+        schedule(guid, "introH9", 48200, function()
+            creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
+            creature:Talk(SAY_INTRO_HORDE_9)
+        end)
+        schedule(guid, "introFinish", 55700, onIntroFinish)
+    end
+end
+
 local function saurfangDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == PHASE_INTRO_A or action == PHASE_INTRO_H then
+        saurfangIntroPhaseAction(creature, guid, action)
+        return
+    end
+    if action == ACTION_CONTINUE_INTRO then
+        saurfangContinueIntroAction(creature, guid)
+        return
+    end
     if action ~= ACTION_MARK_OF_THE_FALLEN_CHAMPION then
         return
     end
@@ -918,7 +1077,6 @@ local function saurfangDoAction(event, creature, action)
     if not target then
         return
     end
-    local guid = creature:GetGUIDLow()
     local st = saurfangState[guid]
     if not st then
         st = { frenzied = false, dead = false, fallenChampionCastCount = 0 }
@@ -962,6 +1120,148 @@ local function saurfangSpellHitTarget(event, creature, target, spellId)
         end
     end
 end
+
+-- C++ GuardBroadcast (event-NPC-centered, 100.0f, :644-649/:842-847):
+-- every guard gets DoAction(ACTION_CHARGE); the guard AI gates on
+-- _index (npc_saurfang_event :978-980) and charges to chargePos[_index]
+-- at 13.0. Guards are unregistered, so the _index lives in
+-- guardSortIndex and the broadcast calls MoveCharge directly.
+local function chargeEventGuards(eventNpc, isHorde)
+    local guardEntry = isHorde and ENTRY_SE_KOR_KRON_REAVER or ENTRY_SE_SKYBREAKER_MARINE
+    for _, guard in ipairs(eventNpc:GetCreaturesInGrid(guardEntry, 100)) do
+        local idx = guardSortIndex[guard:GetGUIDLow()]
+        if idx then
+            local p = CHARGE_POS[idx + 1]
+            guard:MoveCharge(POINT_CHARGE, p[1], p[2], p[3], 13.0)
+        end
+    end
+end
+
+-- C++ npc_high_overlord_saurfang_icc / npc_muradin_bronzebeard_icc
+-- DoAction(ACTION_START_EVENT) (:651-670/:851-870). Horde order:
+-- phase guard -> guard sort + SetData -> gossip-flag clear -> Talk
+-- INTRO_1 -> SetPhase -> schedule INTRO_HORDE_3 (18.5s) -> door ->
+-- deathbringer DoAction(PHASE_INTRO_H). Alliance order: phase guard
+-- -> SetPhase -> guard sort + SetData -> gossip-flag clear -> Talk
+-- INTRO_1 -> schedule INTRO_ALLIANCE_4 (29.5s) -> door -> deathbringer
+-- DoAction(PHASE_INTRO_A). The door leg (_instance->HandleGameObject(
+-- GO_SAURFANG_S_DOOR 201825, true)) stays out: no instance-GO bridge.
+-- The deathbringer lookup is the FindNearestCreature twin of the
+-- instance GUID ref (mimiron precedent, 100yd like findEventNpc).
+local function eventNpcStartEvent(creature)
+    local guid = creature:GetGUIDLow()
+    local isHorde = creature:GetEntry() == ENTRY_SE_HIGH_OVERLORD_SAURFANG
+    if eventNpcPhase[guid] == "A" or eventNpcPhase[guid] == "H" then
+        return
+    end
+    local guardEntry = isHorde and ENTRY_SE_KOR_KRON_REAVER or ENTRY_SE_SKYBREAKER_MARINE
+    local function sortGuards()
+        local guards = creature:GetCreaturesInGrid(guardEntry, 20)
+        table.sort(guards, function(a, b) return creature:GetDistance(a) < creature:GetDistance(b) end)
+        for x, guard in ipairs(guards) do
+            if x < 6 then -- C++ SetData gate: type 0, data 1..5 (:963-968)
+                guardSortIndex[guard:GetGUIDLow()] = x
+            end
+        end
+    end
+    local function clearGossipFlag()
+        -- C++ RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) — the
+        -- SetNPCFlags twin (zulaman/barada precedent).
+        creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
+    end
+    local function walkToFirstStep(key, delay)
+        schedule(guid, key, delay, function()
+            creature:SetWalk(true)
+            creature:MoveTo(POINT_FIRST_STEP, FIRST_STEP_X, FIRST_STEP_Y, FIRST_STEP_Z)
+        end)
+    end
+    local function sendPhaseIntro()
+        local deathbringer = creature:FindNearestCreature(ENTRY_DEATHBRINGER_SAURFANG, 100)
+        if deathbringer then
+            deathbringer:DoAction(isHorde and PHASE_INTRO_H or PHASE_INTRO_A)
+        end
+    end
+    if isHorde then
+        sortGuards()
+        clearGossipFlag()
+        creature:Talk(SAY_H_INTRO_1)
+        eventNpcPhase[guid] = "H"
+        walkToFirstStep("introH3", 18500)
+    else
+        eventNpcPhase[guid] = "A"
+        sortGuards()
+        clearGossipFlag()
+        creature:Talk(SAY_A_INTRO_1)
+        walkToFirstStep("introA4", 29500)
+    end
+    sendPhaseIntro()
+end
+
+-- C++ OnGossipSelect (:629-636/:829-836): menuId gate (10952 horde /
+-- 10934 alliance) -> CloseGossipMenuFor + DoAction(ACTION_START_EVENT);
+-- returns false. The Go hook forwards listID (gossipListId), NOT
+-- menuId, and C++ ignores gossipListId — so any select on this entry's
+-- menu starts the event (the menu is DB-side, single-option). Close +
+-- return-false order follows the barada precedent.
+local function eventNpcGossipSelect(event, player, creature, sender, action, code, listID)
+    player:GossipClearMenu()
+    player:GossipComplete()
+    eventNpcStartEvent(creature)
+    return false
+end
+
+-- C++ npc_high_overlord_saurfang_icc / npc_muradin_bronzebeard_icc
+-- MovementInform POINT_FIRST_STEP (:708-726/:906-916): SetWalk(false)
+-- + Talk INTRO_3/4 + HORDE_5/6/7/8 (15.5s/29.5s/43.8s/47s) or
+-- ALLIANCE_5 (5s) schedules + deathbringer DoAction(
+-- ACTION_CONTINUE_INTRO). HORDE_8 / ALLIANCE_5 also broadcast
+-- ACTION_CHARGE (guards + self MoveCharge to chargePos[0] at 8.5).
+local function eventNpcMovementInform(event, creature, motionType, id)
+    if motionType ~= POINT_MOTION_TYPE or id ~= POINT_FIRST_STEP then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local isHorde = creature:GetEntry() == ENTRY_SE_HIGH_OVERLORD_SAURFANG
+    creature:SetWalk(false)
+    if isHorde then
+        creature:Talk(SAY_H_INTRO_3)
+        schedule(guid, "introH5", 15500, function() creature:Talk(SAY_H_INTRO_5) end)
+        schedule(guid, "introH6", 29500, function() creature:Talk(SAY_H_INTRO_6) end)
+        schedule(guid, "introH7", 43800, function() creature:Talk(SAY_H_INTRO_7) end)
+        schedule(guid, "introH8", 47000, function()
+            creature:Talk(SAY_H_INTRO_8)
+            chargeEventGuards(creature, isHorde)
+            local p = CHARGE_POS[1]
+            creature:MoveCharge(POINT_CHARGE, p[1], p[2], p[3], 8.5)
+        end)
+    else
+        creature:Talk(SAY_A_INTRO_4)
+        schedule(guid, "introA5", 5000, function()
+            creature:Talk(SAY_A_INTRO_5)
+            chargeEventGuards(creature, isHorde)
+            local p = CHARGE_POS[1]
+            creature:MoveCharge(POINT_CHARGE, p[1], p[2], p[3], 8.5)
+        end)
+    end
+    local deathbringer = creature:FindNearestCreature(ENTRY_DEATHBRINGER_SAURFANG, 100)
+    if deathbringer then
+        deathbringer:DoAction(ACTION_CONTINUE_INTRO)
+    end
+end
+
+-- C++ Reset (:624-627/:823-826): _events.Reset() only.
+local function eventNpcReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    eventNpcPhase[guid] = nil
+end
+
+RegisterCreatureEvent(ENTRY_SE_HIGH_OVERLORD_SAURFANG, 23, eventNpcReset)
+RegisterCreatureEvent(ENTRY_SE_HIGH_OVERLORD_SAURFANG, 28, eventNpcMovementInform)
+RegisterCreatureEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 23, eventNpcReset)
+RegisterCreatureEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 28, eventNpcMovementInform)
+RegisterCreatureGossipEvent(ENTRY_SE_HIGH_OVERLORD_SAURFANG, 2, eventNpcGossipSelect)
+RegisterCreatureGossipEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 2, eventNpcGossipSelect)
 
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 1, saurfangJustEngagedWith)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 2, saurfangLeaveCombat)
