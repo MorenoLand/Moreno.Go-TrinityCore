@@ -24,11 +24,17 @@ func extractM2(data []byte) ([]byte, error) {
 	indices := make([]uint16, nIndices)
 	for index := range indices {
 		indices[index] = binary.LittleEndian.Uint16(data[int(indicesOffset)+index*2:])
-		if index%3 == 1 {
-			indices[index], indices[index+1] = indices[index+1], indices[index]
-		}
 		if uint32(indices[index]) >= nVertices {
 			return nil, errors.New("M2 bounding index is out of range")
+		}
+	}
+	// C++ owner: model.cpp ConvertToVMAPModel swaps indices[i] and
+	// indices[i+1] when (i%3)-1==0, i.e. i%3==1, in a separate pass AFTER
+	// all indices are read. Swapping inside the read loop corrupts the
+	// array (the i+1 slot is still unread), so the pass stays separate.
+	for index := 0; index < len(indices); index++ {
+		if index%3 == 1 && index+1 < len(indices) {
+			indices[index], indices[index+1] = indices[index+1], indices[index]
 		}
 	}
 	vertices := make([][3]float32, nVertices)
@@ -37,7 +43,15 @@ func extractM2(data []byte) ([]byte, error) {
 		x := math.Float32frombits(binary.LittleEndian.Uint32(data[base:]))
 		y := math.Float32frombits(binary.LittleEndian.Uint32(data[base+4:]))
 		z := math.Float32frombits(binary.LittleEndian.Uint32(data[base+8:]))
-		vertices[index] = [3]float32{x, -z, y}
+		// C++ owner: model.cpp applies fixCoordSystem (x, z, -y) at load
+		// and then the ConvertToVMAPModel swap (y=-z, z=old y); the two
+		// steps cancel out, so the written vertices are the raw ones.
+		// Applying only the second step (x, -z, y) diverges from C++.
+		v := fixCoordSystem(vec3{x, y, z})
+		tmp := v.Y
+		v.Y = -v.Z
+		v.Z = tmp
+		vertices[index] = [3]float32{v.X, v.Y, v.Z}
 	}
 	var output bytes.Buffer
 	output.WriteString("VMAP047")

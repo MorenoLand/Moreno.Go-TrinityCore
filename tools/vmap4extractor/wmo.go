@@ -9,16 +9,26 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mpq"
 )
 
 type wmoRootInfo struct {
 	Groups      uint32
 	ID          uint32
+	Flags       uint32
 	DoodadNames map[uint32]string
 	DoodadSets  []wmoDoodadSet
 	Doodads     []wmoDoodad
+}
+
+// wmoLiquidHeader mirrors C++ WMOLiquidHeader (wmo.h, packed, 30 bytes).
+type wmoLiquidHeader struct {
+	Raw       []byte // 30 raw bytes as read, written back verbatim
+	XVerts    int32
+	YVerts    int32
+	XTiles    int32
+	YTiles    int32
+	Heights   []float32 // LiquEx heights only (C++ writes height per vert)
+	TileBytes []byte
 }
 
 type wmoDoodadSet struct {
@@ -44,45 +54,17 @@ type wmoGroupInfo struct {
 	DoodadRefs []uint16
 	Indices    []uint16
 	Vertices   [][3]float32
+	// C++ owner: wmo.cpp WMOGroup::open + ConvertToVMAPGroupWmo. Liquid is
+	// the MOGP groupLiquid field after GetLiquidTypeId mapping; LiquFlags
+	// bit 1 = MLIQ chunk present, bit 2 = Liquid != 0.
+	Liquid     uint32
+	LiquFlags  uint32
+	LiquidData *wmoLiquidHeader
 }
 
 type wmoChunk struct {
 	Name string
 	Data []byte
-}
-
-func extractWMO(archive *mpq.Archive, rootName string, files []string) ([]byte, error) {
-	rootData, err := archive.ReadFile(rootName)
-	if err != nil {
-		return nil, fmt.Errorf("read WMO root %s: %w", rootName, err)
-	}
-	root, err := parseWMORoot(rootData)
-	if err != nil {
-		return nil, fmt.Errorf("parse WMO root %s: %w", rootName, err)
-	}
-	groupNames := make(map[string]string, len(files))
-	for _, name := range files {
-		groupNames[normalizeWMOName(name)] = name
-	}
-	base := strings.TrimSuffix(rootName, filepath.Ext(rootName))
-	groups := make([]wmoGroupInfo, 0, root.Groups)
-	for index := uint32(0); index < root.Groups; index++ {
-		wanted := fmt.Sprintf("%s_%03d.wmo", base, index)
-		actual, ok := groupNames[normalizeWMOName(wanted)]
-		if !ok {
-			return nil, fmt.Errorf("WMO group %s is missing", wanted)
-		}
-		data, err := archive.ReadFile(actual)
-		if err != nil {
-			return nil, fmt.Errorf("read WMO group %s: %w", actual, err)
-		}
-		group, err := parseWMOGroup(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse WMO group %s: %w", actual, err)
-		}
-		groups = append(groups, group)
-	}
-	return writeRawWMO(root, groups)
 }
 
 func normalizeWMOName(name string) string {
@@ -104,7 +86,7 @@ func isWMOGroupName(name string) bool {
 
 func parseWMORoot(data []byte) (wmoRootInfo, error) {
 	var root wmoRootInfo
-	chunks, err := parseWMOChunks(data)
+	chunks, err := parseWMOChunks(data, false)
 	if err != nil {
 		return root, err
 	}
@@ -116,6 +98,12 @@ func parseWMORoot(data []byte) (wmoRootInfo, error) {
 			}
 			root.Groups = binary.LittleEndian.Uint32(chunk.Data[4:8])
 			root.ID = binary.LittleEndian.Uint32(chunk.Data[32:36])
+			// C++ owner: wmo.cpp WMORoot::open reads the full 64-byte
+			// MOHD (fields, bbcorn1/2, flags at offset 60). flags feeds
+			// the WMOGroup::open groupLiquid rule.
+			if len(chunk.Data) >= 64 {
+				root.Flags = binary.LittleEndian.Uint32(chunk.Data[60:64])
+			}
 			if root.Groups > 65535 {
 				return root, errors.New("WMO group count is unreasonable")
 			}
@@ -195,9 +183,13 @@ func parseWMODoodads(data []byte) ([]wmoDoodad, error) {
 	return doodads, nil
 }
 
-func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
+// parseWMOGroup mirrors C++ WMOGroup::open (wmo.cpp). precise selects the
+// C++ -l (large) conversion path: all triangles and vertices are kept
+// verbatim. The default (false) path is C++ -s (small): only collision /
+// render-face triangles survive, vertices are compacted and remapped.
+func parseWMOGroup(data []byte, rootFlags uint32, precise bool) (wmoGroupInfo, error) {
 	var group wmoGroupInfo
-	chunks, err := parseWMOChunks(data)
+	chunks, err := parseWMOChunks(data, true)
 	if err != nil {
 		return group, err
 	}
@@ -205,6 +197,8 @@ func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
 	var movi []byte
 	var movt []byte
 	var moba []byte
+	var rawLiquid uint32
+	var liquid *wmoLiquidHeader
 	for _, chunk := range chunks {
 		switch chunk.Name {
 		case "MOGP":
@@ -217,6 +211,8 @@ func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
 				group.High[i] = mathFloat32(chunk.Data[24+i*4:])
 			}
 			group.ID = binary.LittleEndian.Uint32(chunk.Data[56:60])
+			// C++ owner: wmo.cpp MOGP arm reads groupLiquid at offset 52.
+			rawLiquid = binary.LittleEndian.Uint32(chunk.Data[52:56])
 		case "MOPY":
 			mopy = chunk.Data
 		case "MOVI":
@@ -233,6 +229,62 @@ func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
 			for index := range group.DoodadRefs {
 				group.DoodadRefs[index] = binary.LittleEndian.Uint16(chunk.Data[index*2:])
 			}
+		case "MLIQ":
+			// C++ owner: wmo.cpp MLIQ arm. Packed header is 30 bytes
+			// (4 int32 + 3 float32 + int16), then xverts*yverts 8-byte
+			// verts (only heights are kept), then xtiles*ytiles bytes.
+			if len(chunk.Data) < 30 {
+				return group, errors.New("truncated MLIQ chunk")
+			}
+			liquid = &wmoLiquidHeader{Raw: chunk.Data[:30]}
+			liquid.XVerts = int32(binary.LittleEndian.Uint32(chunk.Data[0:4]))
+			liquid.YVerts = int32(binary.LittleEndian.Uint32(chunk.Data[4:8]))
+			liquid.XTiles = int32(binary.LittleEndian.Uint32(chunk.Data[8:12]))
+			liquid.YTiles = int32(binary.LittleEndian.Uint32(chunk.Data[12:16]))
+			if liquid.XVerts < 0 || liquid.YVerts < 0 || liquid.XTiles < 0 || liquid.YTiles < 0 ||
+				liquid.XVerts > 1024 || liquid.YVerts > 1024 || liquid.XTiles > 1024 || liquid.YTiles > 1024 {
+				return group, errors.New("unreasonable MLIQ dimensions")
+			}
+			vertCount := int(liquid.XVerts) * int(liquid.YVerts)
+			need := 30 + vertCount*8 + int(liquid.XTiles)*int(liquid.YTiles)
+			if len(chunk.Data) < need {
+				return group, errors.New("truncated MLIQ chunk")
+			}
+			liquid.Heights = make([]float32, vertCount)
+			for i := range liquid.Heights {
+				// WMOLiquidVert is 8 bytes: unk1 u16, unk2 u16, height f32.
+				liquid.Heights[i] = mathFloat32(chunk.Data[30+i*8+4:])
+			}
+			liquid.TileBytes = chunk.Data[30+vertCount*8 : need]
+		}
+	}
+	// C++ owner: wmo.cpp MOGP arm, applied after the chunk walk (MOGP is
+	// first in practice, MLIQ may still refine it below).
+	if rootFlags&4 != 0 {
+		group.Liquid = getLiquidTypeID(rawLiquid, group.Flags)
+	} else if rawLiquid == 15 {
+		group.Liquid = 0
+	} else {
+		group.Liquid = getLiquidTypeID(rawLiquid+1, group.Flags)
+	}
+	if group.Liquid != 0 {
+		group.LiquFlags |= 2
+	}
+	if liquid != nil {
+		group.LiquFlags |= 1
+		group.LiquidData = liquid
+		// C++ owner: wmo.cpp MLIQ arm — only when the MOGP-derived
+		// liquid is still 0, the first non-15 tile byte decides it.
+		if group.Liquid == 0 {
+			for _, b := range liquid.TileBytes {
+				if b&0xF != 15 {
+					group.Liquid = getLiquidTypeID(uint32(b&0xF)+1, group.Flags)
+					break
+				}
+			}
+			if group.Liquid != 0 {
+				group.LiquFlags |= 2
+			}
 		}
 	}
 	if len(mopy) < 2 || len(movi) == 0 || len(movi)%2 != 0 || len(movt) == 0 || len(movt)%12 != 0 {
@@ -248,37 +300,44 @@ func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
 	for i := range indices {
 		indices[i] = binary.LittleEndian.Uint16(movi[i*2:])
 	}
-	used := make([]bool, len(vertices))
-	filtered := make([]uint16, 0, len(indices))
-	triangleCount := len(indices) / 3
-	for triangle := 0; triangle < triangleCount && triangle*2+1 < len(mopy); triangle++ {
-		flags := mopy[triangle*2]
-		render := flags&0x20 != 0 && flags&0x04 == 0
-		if flags&0x08 == 0 && !render {
-			continue
-		}
-		for corner := 0; corner < 3; corner++ {
-			index := indices[triangle*3+corner]
-			if int(index) >= len(vertices) {
-				return wmoGroupInfo{}, errors.New("WMO triangle index is out of range")
+	if precise {
+		// C++ owner: wmo.cpp ConvertToVMAPGroupWmo precise arm — every
+		// triangle and vertex is written verbatim, no filtering.
+		group.Vertices = vertices
+		group.Indices = indices
+	} else {
+		used := make([]bool, len(vertices))
+		filtered := make([]uint16, 0, len(indices))
+		triangleCount := len(indices) / 3
+		for triangle := 0; triangle < triangleCount && triangle*2+1 < len(mopy); triangle++ {
+			flags := mopy[triangle*2]
+			render := flags&0x20 != 0 && flags&0x04 == 0
+			if flags&0x08 == 0 && !render {
+				continue
 			}
-			used[index] = true
-			filtered = append(filtered, index)
+			for corner := 0; corner < 3; corner++ {
+				index := indices[triangle*3+corner]
+				if int(index) >= len(vertices) {
+					return wmoGroupInfo{}, errors.New("WMO triangle index is out of range")
+				}
+				used[index] = true
+				filtered = append(filtered, index)
+			}
 		}
-	}
-	remap := make([]uint16, len(vertices))
-	compact := make([][3]float32, 0)
-	for index, present := range used {
-		if present {
-			remap[index] = uint16(len(compact))
-			compact = append(compact, vertices[index])
+		remap := make([]uint16, len(vertices))
+		compact := make([][3]float32, 0)
+		for index, present := range used {
+			if present {
+				remap[index] = uint16(len(compact))
+				compact = append(compact, vertices[index])
+			}
 		}
+		for index := range filtered {
+			filtered[index] = remap[filtered[index]]
+		}
+		group.Vertices = compact
+		group.Indices = filtered
 	}
-	for index := range filtered {
-		filtered[index] = remap[filtered[index]]
-	}
-	group.Vertices = compact
-	group.Indices = filtered
 	if len(moba)%24 == 0 {
 		group.Branches = make([]uint32, len(moba)/24)
 		for index := range group.Branches {
@@ -288,7 +347,33 @@ func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
 	return group, nil
 }
 
-func parseWMOChunks(data []byte) ([]wmoChunk, error) {
+// getLiquidTypeID mirrors C++ WMOGroup::GetLiquidTypeId (wmo.cpp). The
+// (liquidTypeId-1)&3 switch maps legacy liquid ids onto the 13/14/19/20
+// set; the 0x80000 mogp flag picks 14 over 13 for the first case.
+func getLiquidTypeID(liquidTypeID, mogpFlags uint32) uint32 {
+	if liquidTypeID < 21 && liquidTypeID != 0 {
+		switch (uint8(liquidTypeID) - 1) & 3 {
+		case 0:
+			if mogpFlags&0x80000 != 0 {
+				return 14
+			}
+			return 13
+		case 1:
+			return 14
+		case 2:
+			return 19
+		case 3:
+			return 20
+		}
+	}
+	return liquidTypeID
+}
+
+// parseWMOChunks walks fourcc+size chunks. groupFile selects the C++
+// WMOGroup::open quirk (wmo.cpp): a MOGP chunk's declared size is ignored
+// and forced to 68 ("Fix sizeoff = Data size"), so the walk advances 68
+// bytes past the MOGP header regardless of what the size field says.
+func parseWMOChunks(data []byte, groupFile bool) ([]wmoChunk, error) {
 	chunks := make([]wmoChunk, 0)
 	for offset := 0; offset < len(data); {
 		if len(data)-offset < 8 {
@@ -296,6 +381,9 @@ func parseWMOChunks(data []byte) ([]wmoChunk, error) {
 		}
 		name := canonicalWMOChunk(data[offset : offset+4])
 		size := int(binary.LittleEndian.Uint32(data[offset+4:]))
+		if groupFile && name == "MOGP" {
+			size = 68
+		}
 		offset += 8
 		if size < 0 || size > len(data)-offset {
 			return nil, fmt.Errorf("invalid WMO chunk %q size %d", name, size)
@@ -331,7 +419,16 @@ func writeRawWMO(root wmoRootInfo, groups []wmoGroupInfo) ([]byte, error) {
 	var output bytes.Buffer
 	output.WriteString("VMAP047")
 	output.WriteByte(0)
-	_ = binary.Write(&output, binary.LittleEndian, uint32(0))
+	// C++ owner: vmapexport.cpp ExtractSingleWmo patches this slot (offset
+	// 8) with the total triangle count across all groups once the groups
+	// are written; ConvertToVMAPGroupWmo returns nColTriangles per group
+	// (all triangles in precise mode). Writing 0 here starves the reader
+	// of the count, so the patch is applied inline.
+	totalTriangles := uint32(0)
+	for _, group := range groups {
+		totalTriangles += uint32(len(group.Indices) / 3)
+	}
+	_ = binary.Write(&output, binary.LittleEndian, totalTriangles)
 	_ = binary.Write(&output, binary.LittleEndian, uint32(len(groups)))
 	_ = binary.Write(&output, binary.LittleEndian, root.ID)
 	for _, group := range groups {
@@ -339,7 +436,7 @@ func writeRawWMO(root wmoRootInfo, groups []wmoGroupInfo) ([]byte, error) {
 		_ = binary.Write(&output, binary.LittleEndian, group.ID)
 		_ = binary.Write(&output, binary.LittleEndian, group.Low)
 		_ = binary.Write(&output, binary.LittleEndian, group.High)
-		_ = binary.Write(&output, binary.LittleEndian, uint32(0))
+		_ = binary.Write(&output, binary.LittleEndian, group.LiquFlags)
 		writeRawChunk(&output, "GRP ", uint32(4+len(group.Branches)*4))
 		_ = binary.Write(&output, binary.LittleEndian, uint32(len(group.Branches)))
 		_ = binary.Write(&output, binary.LittleEndian, group.Branches)
@@ -349,6 +446,25 @@ func writeRawWMO(root wmoRootInfo, groups []wmoGroupInfo) ([]byte, error) {
 		writeRawChunk(&output, "VERT", uint32(4+len(group.Vertices)*12))
 		_ = binary.Write(&output, binary.LittleEndian, uint32(len(group.Vertices)))
 		_ = binary.Write(&output, binary.LittleEndian, group.Vertices)
+		// C++ owner: wmo.cpp ConvertToVMAPGroupWmo LIQU arm — written
+		// whenever either liquflag bit is set. Total size is 4 (liquid
+		// id) plus, when an MLIQ chunk was present, the 30-byte header,
+		// one height float per liquid vert, and the tile bytes.
+		if group.LiquFlags&3 != 0 {
+			totalSize := uint32(4)
+			if group.LiquFlags&1 != 0 && group.LiquidData != nil {
+				totalSize += uint32(30 + len(group.LiquidData.Heights)*4 + len(group.LiquidData.TileBytes))
+			}
+			writeRawChunk(&output, "LIQU", totalSize)
+			_ = binary.Write(&output, binary.LittleEndian, group.Liquid)
+			if group.LiquFlags&1 != 0 && group.LiquidData != nil {
+				_, _ = output.Write(group.LiquidData.Raw)
+				for _, height := range group.LiquidData.Heights {
+					_ = binary.Write(&output, binary.LittleEndian, height)
+				}
+				_, _ = output.Write(group.LiquidData.TileBytes)
+			}
+		}
 	}
 	var metadata bytes.Buffer
 	metadata.WriteString("MCWM")
