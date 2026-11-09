@@ -87,8 +87,14 @@
 -- :426/:442, DoAction ACTION_CHANGE_PHASE :483) ride the unported
 -- phase machine — the SetSpeedRate
 -- bridge exists (lua_creature_events.go) but the machine gates it.
--- DamageTaken 80%/35% latches (:512-528) OUT: machine-free in form
--- but feed the full tear-gas/MovementInform phase machine.
+-- DamageTaken 80%/35% latches (:347-367) PORTED 2026-11-09: ev9 +
+-- HealthAbovePct + SetReactState(PASSIVE) + DoAction(
+-- ACTION_CHANGE_PHASE -366780), local phase flip in the latch (C++
+-- flips _phase inside DoAction :523-531; the old ":512-528" cite was
+-- wrong — that range is the heroic variable-cast block + phase
+-- switch). The downstream tear-gas/MovementInform machine stays out;
+-- the latch trigger itself is portable (the header's "feeds the full
+-- machine" classification is split: trigger PORT, machine STAY-OUT).
 -- Header corrected 2026-10-14: the old "no-timer-bridge" blanket
 -- was disproved (CreateLuaEvent is a real registered bridge,
 -- engine/scripting/runtime.go:798); each arm is now classified
@@ -102,9 +108,11 @@
 -- boss_professor_putricide.cpp:378, still unported); ROTFACE_OOZE Talk stays out —
 -- ev38 dispatch bridged, senders MovementInform POINT_ROTFACE (:385) + own
 -- EVENT_ROTFACE_OOZE_FLOOD self-DoAction (:595) inside the unported PHASE_ROTFACE
--- machine; CHANGE_PHASE Talk stays out — ev38 dispatch bridged, sender own
--- DamageTaken latches (:356,362) feeding the unported tear-gas/MovementInform phase
--- machine.
+-- machine; CHANGE_PHASE PORTED 2026-11-09 via the ev38 receiver:
+-- heroic Talk(6) + double triggered Unstable Experiment + 25-man
+-- variable split; the non-heroic tear-gas leg, DelayEvents, AttackStop,
+-- SetSpeedRate, MovePoint(POINT_TABLE) and scheduler changes stay out
+-- with the phase machine.
 -- boss_professor_putricide JustEngagedWith instance legs —
 -- instance->DoCastSpellOnPlayers(LIGHT_S_HAMMER_TELEPORT) stays out
 -- (no bridge); instance->SetBossState(DATA_PROFESSOR_PUTRICIDE,
@@ -124,9 +132,20 @@
 -- 718–810) — zero Talk lines — NOT registered (the bronjahm
 -- npc_corrupted_soul_fragment precedent); the aura-application /
 -- explode legs have no bridge.
--- The 20 spell scripts join the no-SpellScript-bridge queue (the
--- boss_moragg optic-link precedent) and the 5 aura scripts the
--- no-AuraScript-bridge queue.
+-- The 20 spell scripts / 5 aura scripts: the blanket
+-- "no-SpellScript-bridge / no-AuraScript-bridge" queue claims are
+-- STALE as of 2026-11-09 — RegisterSpellEvent exists
+-- (engine/scripting/runtime.go:994,1303; GetCaster/GetEffectValue/
+-- PreventHitDefaultEffect on the spell object) and RegisterAuraEvent
+-- exists (runtime.go:1002,1302; OnPeriodic/OnApply/OnRemove/OnProc).
+-- Each script is now judged per-hook, not blanket-blocked; the
+-- per-hook verdicts from the tick-496 triage (unstable-experiment
+-- ev5, volatile-ooze AI, slime-puddle / clear-aura-effect-value /
+-- ooze-eruption-searcher / stinky-precious-decimate candidates) are
+-- recorded in the checkpoint — the gate checks (ev5 fire for a
+-- self-cast SCRIPT_EFFECT spell, 70351 default-case double-fire,
+-- ev14/ev15 for non-boss creatures) still need running before they
+-- land.
 -- DOCUMENTED-ENTRY EVIDENCE (not registered): icecrown_citadel.h —
 -- NPC_VOLATILE_OOZE = 37697 (line 238); NPC_GAS_CLOUD = 37562
 -- (line 237); instance_icecrown_citadel.cpp OnCreatureCreate binds
@@ -165,6 +184,11 @@ local SPELL_SHADOWS_FATE = 71169
 local SPELL_UNHOLY_INFUSION_CREDIT = 71518
 local SPELL_BERSERK2 = 47008
 local SPELL_SLIME_PUDDLE_TRIGGER = 70341
+local SPELL_UNSTABLE_EXPERIMENT = 70351 -- boss_professor_putricide.cpp:71
+local SPELL_OOZE_VARIABLE = 74118 -- boss_professor_putricide.cpp:81
+local SPELL_GAS_VARIABLE = 74119 -- boss_professor_putricide.cpp:82
+local ACTION_CHANGE_PHASE = -366780 -- boss_professor_putricide.cpp:498
+local SAY_PHASE_TRANSITION_HEROIC = 6
 local SPELL_MALLEABLE_GOO_H = 72296
 local SPELL_GROW_STACKER = 70345
 local SPELL_SLIME_PUDDLE_AURA = 70343
@@ -181,6 +205,13 @@ local NPC_MUTATED_ABOMINATION_10 = 37672
 local NPC_MUTATED_ABOMINATION_25 = 38285
 
 local timers = {}
+
+-- Per-GUID combat phase (PHASE_COMBAT_1/2/3 = 1/2/3): the Lua model
+-- of C++ _phase for the DamageTaken latches only — the downstream
+-- tear-gas/MovementInform machine is unported, so the latch itself
+-- flips the phase (C++ flips it inside DoAction ACTION_CHANGE_PHASE
+-- :523-531), which also stops the latch re-firing on every hit.
+local phase = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -265,6 +296,7 @@ end
 local function putricideJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    phase[guid] = 1 -- C++ :271 SetPhase(PHASE_COMBAT_1)
     creature:Talk(SAY_AGGRO)
     -- C++ :274 — DoCast(me, SPELL_OOZE_TANK_PROTECTION, true)
     -- (triggered self-cast).
@@ -283,7 +315,9 @@ end
 -- C++ Reset/_Reset() timer machinery — cancel/re-arm on combat
 -- events (the maiden convention).
 local function putricideLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    phase[guid] = nil
 end
 
 -- C++ boss_professor_putricide::JustReachedHome (:282-286):
@@ -294,6 +328,10 @@ end
 -- creature:SetBossState on ev24 OnReachHome (the marrowgar ev24
 -- precedent).
 local function putricideReachHome(event, creature)
+    -- C++ :283 — me->SetWalk(false), after _JustReachedHome and
+    -- before the SetBossState(FAIL) gate. PORTED 2026-11-09
+    -- (lua_creature_events.go:3577).
+    creature:SetWalk(false)
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_FAIL)
 end
 
@@ -311,9 +349,13 @@ local function putricideReset(event, creature)
     -- gate: the C++ call is explicit, not _Reset().
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_NOT_STARTED)
     cancelTimers(creature:GetGUID())
+    phase[creature:GetGUID()] = 1 -- C++ :240 SetPhase(PHASE_COMBAT_1)
     -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset: flip follows events.Reset).
     creature:SetReactState(1) -- REACT_DEFENSIVE
+    -- C++ :243 — me->SetWalk(false), after SetReactState. PORTED
+    -- 2026-11-09 (lua_creature_events.go:3577).
+    creature:SetWalk(false)
     -- C++ :246-249: the RemoveFlag(NOT_SELECTABLE) + SetImmuneToPC(false)
     -- arms ride the Rotface+Festergut DONE instance boss-state gate —
     -- PORTED 2026-11-06: creature:GetBossState is live
@@ -345,6 +387,7 @@ local function putricideJustDied(event, creature, killer)
     -- would keep firing on the corpse (festergut/rotface death-cancel
     -- precedent).
     cancelTimers(creature:GetGUID())
+    phase[creature:GetGUID()] = nil
     -- C++ JustDied :296 — _JustDied() sets DONE, first arm (before
     -- Talk). PORTED 2026-11-06 via creature:SetBossState.
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_DONE)
@@ -410,10 +453,82 @@ local function putricideJustSummoned(event, creature, summon)
     end
 end
 
+-- C++ boss_professor_putricide::DamageTaken (:347-367): while casting
+-- return; PHASE_COMBAT_1 + !HealthAbovePct(80) -> SetReactState(
+-- REACT_PASSIVE) + DoAction(ACTION_CHANGE_PHASE); PHASE_COMBAT_2 +
+-- !HealthAbovePct(35) -> same. ev9 fires pre-damage
+-- (lua_creature_events.go:6955-6972), so HealthAbovePct reads the C++
+-- value and NO postDamage guard applies — C++ has none (the
+-- HealthAbovePct arm fires on lethal hits too, unlike UpdateAI
+-- HealthBelowPct arms). The local phase flips here because C++ flips
+-- _phase inside DoAction (:523-531) and the downstream machine is
+-- unported; the flip also stops the latch re-firing on every hit.
+-- Damage untouched: the handler returns nothing (curator precedent).
+local function putricideDamageTaken(event, creature, attacker, damage)
+    if creature:IsCasting() then
+        return
+    end
+    local guid = creature:GetGUID()
+    local ph = phase[guid] or 1
+    if ph == 1 then
+        if creature:HealthAbovePct(80) then
+            return
+        end
+        creature:SetReactState(0) -- REACT_PASSIVE
+        phase[guid] = 2
+        creature:DoAction(ACTION_CHANGE_PHASE)
+    elseif ph == 2 then
+        if creature:HealthAbovePct(35) then
+            return
+        end
+        creature:SetReactState(0) -- REACT_PASSIVE
+        phase[guid] = 3
+        creature:DoAction(ACTION_CHANGE_PHASE)
+    end
+end
+
+-- C++ DoAction ACTION_CHANGE_PHASE (:482-534) receiver. The
+-- non-heroic tear-gas leg, DelayEvents, AttackStop, SetSpeedRate,
+-- MovePoint(POINT_TABLE) and the scheduler changes ride the unported
+-- phase machine and stay out. The heroic legs port: Talk(
+-- SAY_PHASE_TRANSITION_HEROIC 6) + two triggered Unstable Experiment
+-- self-casts + the 25-man variable split — threat-list players, a
+-- random ceil(half) cast Ooze Variable on themselves, the rest Gas
+-- Variable (:493-519, GetAITargets + math.random twin).
+local function putricideDoAction(event, creature, action)
+    if action ~= ACTION_CHANGE_PHASE then
+        return
+    end
+    if not creature:IsHeroic() then
+        return
+    end
+    creature:Talk(SAY_PHASE_TRANSITION_HEROIC)
+    creature:CastSpell(creature, SPELL_UNSTABLE_EXPERIMENT, true)
+    creature:CastSpell(creature, SPELL_UNSTABLE_EXPERIMENT, true)
+    if creature:Is25ManRaid() then
+        local targets = {}
+        for _, unit in ipairs(creature:GetAITargets()) do
+            if unit:GetObjectType() == "Player" and not unit:IsDead() then
+                targets[#targets + 1] = unit
+            end
+        end
+        local half = math.floor(#targets / 2)
+        while half < #targets do
+            local target = table.remove(targets, math.random(#targets))
+            target:CastSpell(target, SPELL_OOZE_VARIABLE, true)
+        end
+        for _, target in ipairs(targets) do
+            target:CastSpell(target, SPELL_GAS_VARIABLE, true)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 1, putricideJustEngagedWith)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 2, putricideLeaveCombat)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 3, putricideKilledUnit)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 4, putricideJustDied)
+RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 9, putricideDamageTaken)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 23, putricideReset)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 24, putricideReachHome)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 19, putricideJustSummoned)
+RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 38, putricideDoAction)

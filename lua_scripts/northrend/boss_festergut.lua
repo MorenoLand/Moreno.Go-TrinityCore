@@ -63,10 +63,11 @@
 -- PORTED (2026-10-21): EVENT_VILE_GAS (:209-233, first fire from the
 -- gas-spore arm's RescheduleEvent :240) — alive-player pools split by
 -- reach-adjusted 5.0yd (raw dist minus boss combat reach), melee top-up
--- to 10-man minTargets 3 (25-man 8 has no bridge,
--- hodir precedent), 1 random target (25-man 3), DoCast 69240
--- non-triggered, re-arm {28s,35s} unconditional; GetAITargets +
--- GetDistance bridges (putricide/moroes precedents).
+-- to minTargets (RAID_MODE 3/8) -> RandomResize (RAID_MODE 1/3) ->
+-- DoCast 69240 non-triggered, re-arm {28s,35s} unconditional;
+-- 25-man scaling PORTED 2026-11-09 via creature:Is25ManRaid()
+-- (lua_creature_events.go:3991). GetAITargets + GetDistance bridges
+-- (putricide/moroes precedents).
 -- npc_stinky_icc::JustDied — festergut->AI()->Talk(SAY_STINKY_DEAD
 -- 0) is cross-AI Talk with no bridge; NOT registered. Bridgeable-
 -- in-principle but ENTRY-BLOCKED (the pit_of_saron flamebearer
@@ -81,7 +82,14 @@
 -- festergut->AI()->Talk(EMOTE_PUNGENT_BLIGHT 6) is cross-AI Talk
 -- riding a SpellScript — no-SpellScript-bridge queue (the
 -- boss_moragg optic-link precedent);
--- spell_festergut_gastric_bloat joins the same queue.
+-- spell_festergut_gastric_bloat PORTED 2026-11-09 via
+-- RegisterAuraEvent(72219, 4 OnChangeAmount): the kind-4 hook fires
+-- when the aura's stack count rises on a merge re-cast
+-- (lua_aura.go:757-766), the exact twin of the C++ OnEffectHitTarget
+-- stack check — stack 10 -> RemoveAura + triggered self-cast
+-- SPELL_GASTRIC_EXPLOSION 72227. Dormant until Go's cast path
+-- actually stacks the bloat aura (each re-cast merging to a higher
+-- stack); a refresh-to-1 path never fires kind 4.
 -- spell_festergut_blighted_spores (AuraScript, cross-AI
 -- festergut->AI()->SetData(DATA_INOCULATED_STACK) leg) PORTED tick
 -- 461 via RegisterAuraEvent (ev3) below; achievement_flu_shot_shortage
@@ -100,8 +108,8 @@
 -- handler. Cross-AI relays PORTED 2026-11-03 via the grid-sweep
 -- relayProfessor: ACTION_FESTERGUT_GAS (Talk + triggered visual,
 -- in onInhaleBlight) and the ACTION_FESTERGUT_DEATH Talk leg at 4s
--- (in festergutJustDied; its EnterEvadeMode leg stays out, no
--- bridge). JustReachedHome instance->SetBossState(FAIL) (:141-144)
+-- (in festergutJustDied; its EnterEvadeMode leg PORTED 2026-11-09,
+-- creature:EnterEvadeMode lua_creature_events.go:5014). JustReachedHome instance->SetBossState(FAIL) (:141-144)
 -- PORTED 2026-11-05 via creature:SetBossState on ev24 OnReachHome
 -- (the opera ev24 precedent); the EnterEvadeMode cross-AI professor
 -- EnterEvadeMode leg stays out (no bridge). NO engage IN_PROGRESS
@@ -146,6 +154,11 @@ local QUEST_RESIDUE_RENDEZVOUS_25 = 24878 -- icecrown_citadel.h:522
 local QUEST_STATUS_INCOMPLETE = 3 -- lua_player.go GetQuestStatus: NONE 0, COMPLETE 1, INCOMPLETE 3
 local BLIGHTED_SPORES_AURAS = { 69290, 71222, 73033, 73034 } -- spell_script_names: spell_festergut_blighted_spores_aura (four raid-mode variants; 69290 verified on Wowhead WotLK, "Triggered by Gas Spore" 69278)
 local SPELL_VILE_GAS = 69240
+local SPELL_GASTRIC_EXPLOSION = 72227 -- boss_festergut.cpp:55
+-- PUNGENT_BLIGHT_HELPER -> INOCULATED_HELPER, same RAID_MODE index
+-- (boss_festergut.cpp:63/:160-168): 69195/71219/73031/73032 ->
+-- 69291/72101/72102/72103.
+local PUNGENT_TO_INOCULATED = { [69195] = 69291, [71219] = 72101, [73031] = 72102, [73032] = 72103 }
 local EMOTE_WARN_PUNGENT_BLIGHT = 5
 local EMOTE_PUNGENT_BLIGHT = 6
 local SAY_PUNGENT_BLIGHT = 4
@@ -340,10 +353,8 @@ end
 -- ranged = alive players OUTSIDE IsWithinCombatRange(5.0f) — raw distance
 -- minus boss + player (1.5) reaches >= 5.0 — melee = inside; top ranged up from
 -- melee to RAID_MODE minTargets(3,8,3,8)
--- -> 10-man 3 (no 10/25-man bridge — the hodir icicle precedent;
--- 25-man 8 documented in header); RandomResize(ranged,
--- RAID_MODE(1,3,1,3) -> 10-man 1) -> DoCast(target, SPELL_VILE_GAS)
--- non-triggered. Re-arm {28s,35s} unconditional (:232); first fire
+-- -> RandomResize(ranged, RAID_MODE(1,3,1,3)) -> DoCast(target, SPELL_VILE_GAS)
+-- non-triggered per pick. Re-arm {28s,35s} unconditional (:232); first fire
 -- comes from the gas-spore arm's RescheduleEvent(:240) 28s..35s after
 -- the first gas spore. Threat-list pool via creature:GetAITargets()
 -- (the putricide slime-puddle precedent).
@@ -371,10 +382,20 @@ local function vileGasTick(creature, guid)
             end
         end
     end
-    while #ranged < 3 and #melee > 0 do
+    -- C++ :211/:228 — RAID_MODE minTargets (3, 8, 3, 8) and
+    -- RandomResize (1, 3, 1, 3); Is25ManRaid picks the 25-man column
+    -- (lua_creature_events.go:3991).
+    local minTargets, pickCount = 3, 1
+    if creature:Is25ManRaid() then
+        minTargets, pickCount = 8, 3
+    end
+    while #ranged < minTargets and #melee > 0 do
         ranged[#ranged + 1] = table.remove(melee, math.random(#melee))
     end
-    if #ranged > 0 then
+    for _ = 1, pickCount do
+        if #ranged == 0 then
+            break
+        end
         creature:CastSpell(table.remove(ranged, math.random(#ranged)), SPELL_VILE_GAS)
     end
     schedule(guid, "vile_gas", {28000, 35000}, function() vileGasTick(creature, guid) end)
@@ -422,6 +443,15 @@ local function festergutLeaveCombat(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     inhale[guid] = nil
+    -- C++ boss_festergut::EnterEvadeMode (:146-152): ScriptedAI base
+    -- (Go's evade machine) then professor->AI()->EnterEvadeMode().
+    -- ev2 fires only from triggerCreatureEvade, the evade path
+    -- (creaturemotion.go:4699), so this is the override's exact fire
+    -- site; Go's EnterEvadeMode no-ops on an already-evading/dead
+    -- professor (lua_creature_events.go:5014-5024).
+    relayProfessor(creature, function(professor)
+        professor:EnterEvadeMode()
+    end)
 end
 
 local function festergutReset(event, creature)
@@ -468,13 +498,15 @@ local function festergutJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     -- C++ :136 — professor DoAction(ACTION_FESTERGUT_DEATH) schedules
     -- EVENT_FESTERGUT_DIES at 4s: Talk(SAY_FESTERGUT_DEATH 1) +
-    -- EnterEvadeMode (no bridge — stays out). The Talk leg rides a
-    -- 4s timer on the festergut GUID (cancelled on reset like the
+    -- EnterEvadeMode (putricide.cpp:579-581, in that order). The Talk leg
+    -- rides a 4s timer on the festergut GUID (cancelled on reset like the
     -- other festergut timers); C++ order between SAY_DEATH and
-    -- RemoveBlight.
+    -- RemoveBlight. Go's EnterEvadeMode no-ops if the professor is
+    -- already evading or dead (lua_creature_events.go:5014-5024).
     schedule(guid, "professor_death_talk", 4000, function()
         relayProfessor(creature, function(professor)
             professor:Talk(SAY_FESTERGUT_DEATH)
+            professor:EnterEvadeMode()
         end)
     end)
     -- C++ order (:130-136): Talk(SAY_DEATH), then RemoveBlight().
@@ -485,8 +517,13 @@ end
 -- (setActive(false), unmodeled) then SetBossState(FAIL) PORTED
 -- 2026-11-05 via creature:SetBossState on ev24 OnReachHome
 -- (creaturemotion.go home-move finalize, the opera ev24 precedent).
--- The EnterEvadeMode cross-AI professor EnterEvadeMode leg stays out
--- (no bridge — EnterEvadeMode has no Lua bridge, boss_ai.go:5753-5754).
+-- The EnterEvadeMode override (:146-152, professor EnterEvadeMode)
+-- PORTED 2026-11-09 in festergutLeaveCombat (ev2): Go fires ev2 only
+-- from triggerCreatureEvade (creaturemotion.go:4699), the evade path,
+-- never on death — so ev2 is the override's exact fire site, and
+-- creature:EnterEvadeMode is bridged (lua_creature_events.go:5014).
+-- The 4s EVENT_FESTERGUT_DIES leg (putricide.cpp:579-581, Talk +
+-- EnterEvadeMode) PORTED 2026-11-09 in the JustDied timer below.
 local function festergutReachHome(event, creature)
     creature:SetBossState(DATA_FESTERGUT, BOSS_STATE_FAIL)
 end
@@ -494,14 +531,15 @@ end
 -- C++ boss_festergut::SpellHitTarget (boss_festergut.cpp:160-168):
 -- PUNGENT_BLIGHT_HELPER (RAID_MODE 69195/71219/73031/73032) ->
 -- unitTarget:RemoveAurasDueToSpell(INOCULATED_HELPER) (RAID_MODE
--- 69291/72101/72102/72103, same raid-mode index). STAYS OUT:
--- trigger-path blocked — the C++ arm strips INOCULATED from each PLAYER
--- hit by the blight AoE, but Go's creature cast path carries only the
--- explicit target (boss_ai.go:1497, no area fan-out); the 3rd-inhale
--- trigger is a self-cast, so event 15 would deliver target = the boss
--- himself, whom the C++ arm never strips. Retracts the 11:55 ev15 port
--- (13:28 verified map+gates but not the target correspondence): a
--- self-target strip fabricates a leg the C++ arm never performs.
+-- 69291/72101/72102/72103, same raid-mode index). PORTED 2026-11-09
+-- as a guarded ev15 handler: Go fires ev15 per hit target — the
+-- self-cast delivers target=self (boss_ai.go:4039) and the AoE fan-out
+-- delivers players (creature_area_targets.go:2207) — and the handler
+-- strips only PLAYER targets, raid-mode-mapped, so the self-cast leg
+-- is a no-op exactly as C++ (the boss is never a blight hit target)
+-- while any player hit Go delivers is stripped. Retracts the
+-- 2026-10-20 stay-out: the "Go carries only the explicit target"
+-- claim missed the AoE fan-out site.
 -- RemoveAura stays bridged (lua_creature_events.go:157).
 
 -- C++ spell_festergut_blighted_spores::ExtraEffect
@@ -557,9 +595,46 @@ for _, auraId in ipairs(BLIGHTED_SPORES_AURAS) do
     RegisterAuraEvent(auraId, 3, blightedSporesRemove)
 end
 
+-- C++ boss_festergut::SpellHitTarget (:160-168): a hit by
+-- PUNGENT_BLIGHT_HELPER strips INOCULATED_HELPER (same raid-mode
+-- index) from the hit unit. Player targets only — the boss himself is
+-- never a blight hit target (see header); the self-cast ev15 delivery
+-- (target=self) is a no-op by construction.
+local function festergutSpellHitTarget(event, creature, target, spellId)
+    local inoculated = PUNGENT_TO_INOCULATED[spellId]
+    if inoculated == nil or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    target:RemoveAura(inoculated)
+end
+
+-- C++ spell_festergut_gastric_bloat::HandleScript (:366-382):
+-- OnEffectHitTarget EFFECT_2 — when the hit unit's Gastric Bloat
+-- aura (72219) sits at 10 stacks, remove the aura and trigger
+-- Gastric Explosion (72227) on the unit. RegisterAuraEvent kind 4
+-- (OnChangeAmount) fires when the stack count rises on a merge
+-- re-cast (lua_aura.go:757-766), the Go twin of the C++ hit-time
+-- stack check; the aura object reads the stored stack.
+local function gastricBloatStackRise(event, aura, target)
+    if target == nil or aura == nil then
+        return
+    end
+    if aura:GetStackAmount() ~= 10 then
+        return
+    end
+    target:RemoveAura(SPELL_GASTRIC_BLOAT)
+    target:CastSpell(target, SPELL_GASTRIC_EXPLOSION, true)
+end
+
+RegisterAuraEvent(SPELL_GASTRIC_BLOAT, 4, gastricBloatStackRise)
+
 RegisterCreatureEvent(ENTRY_FESTERGUT, 1, festergutJustEngagedWith)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 2, festergutLeaveCombat)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 3, festergutKilledUnit)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 4, festergutJustDied)
+RegisterCreatureEvent(ENTRY_FESTERGUT, 15, festergutSpellHitTarget)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 23, festergutReset)
 RegisterCreatureEvent(ENTRY_FESTERGUT, 24, festergutReachHome)

@@ -253,6 +253,7 @@ local ENTRY_BALL_OF_INFERNO_FLAME = 38451 -- icecrown_citadel.h:251 (NPC_BALL_OF
 local SPELL_KINETIC_BOMB = 72080 -- boss_blood_prince_council.cpp:107
 local SPELL_KINETIC_BOMB_EXPLOSION = 72052 -- boss_blood_prince_council.cpp:115
 local SPELL_KINETIC_BOMB_VISUAL = 72054 -- boss_blood_prince_council.cpp:114
+local SPELL_UNSTABLE = 72059 -- boss_blood_prince_council.cpp:113
 local SPELL_SHOCK_VORTEX_DUMMY = 72633 -- boss_blood_prince_council.cpp:120
 local SPELL_SHOCK_VORTEX_PERIODIC = 71945 -- boss_blood_prince_council.cpp:119
 local EMOTE_TALDARAM_FLAME = 3 -- boss_blood_prince_council.cpp:51
@@ -695,8 +696,9 @@ end
 -- (:1018-1022, SetVisible(false) + DespawnOrUnsummon(5s)) runs on the
 -- file's GUID-keyed schedule. ACTION_KINETIC_BOMB_JUMP stays OUT
 -- (MoveCharge — no bridge; caller is the unported knockback
--- SpellScript, :1262). Without the despawn leg the bomb lingers
--- until its 60s Reset despawn (:990, Reset arms not ported).
+-- SpellScript, :1262). The 60s Reset despawn (:991) PORTED 2026-11-09
+-- via kineticBombReset (ev23) below, so an unexploded bomb now
+-- despawns at 60s instead of lingering.
 local function kineticBombAuraTick(event, aura, target)
     local bomb = target:FindNearestCreature(ENTRY_KINETIC_BOMB, 1.0)
     if bomb then
@@ -739,6 +741,28 @@ local function kineticBombDoAction(event, creature, action)
         creature:SetVisible(false)
         creature:DespawnOrUnsummon(5000)
     end)
+end
+
+-- C++ npc_kinetic_bomb::Reset (:983-994): _events.Reset() (cancel
+-- the bomb's timers — cancelTimers, the file's GUID-keyed idiom; the
+-- bomb only ever holds the bombdespawn key) + SetWalk(true)
+-- + triggered self-casts SPELL_UNSTABLE 72059 + SPELL_KINETIC_BOMB_
+-- VISUAL 72054 + SetReactState(REACT_PASSIVE) + DespawnOrUnsummon(
+-- 60s). The GetPosition/GetHeight ground-Z legs stay out — dead in
+-- Lua, consumed only by the unported MoveCharge legs. The 60s
+-- despawn and the explosion's 5s despawn do not conflict: Go's
+-- DespawnOrUnsummon is a plain time.AfterFunc
+-- (lua_creature_events.go:6637-6656) and a later fire on an
+-- already-despawned motion is a no-op, so an exploded bomb still
+-- despawns at 5s and an unexploded one at 60s, exactly like C++.
+local function kineticBombReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    creature:SetWalk(true)
+    creature:CastSpell(creature, SPELL_UNSTABLE, true)
+    creature:CastSpell(creature, SPELL_KINETIC_BOMB_VISUAL, true)
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:DespawnOrUnsummon(60000)
 end
 
 -- C++ :826-838 valanar EVENT_SHOCK_VORTEX base leg (else branch,
@@ -1235,6 +1259,7 @@ RegisterCreatureEvent(ENTRY_VALANAR, 23, princesReset)
 RegisterCreatureEvent(ENTRY_KELESETH, 5, princeSpawn)
 RegisterCreatureEvent(ENTRY_TALDARAM, 5, princeSpawn)
 RegisterCreatureEvent(ENTRY_VALANAR, 5, princeSpawn)
+RegisterCreatureEvent(ENTRY_KINETIC_BOMB, 23, kineticBombReset)
 RegisterCreatureEvent(ENTRY_KINETIC_BOMB, 38, kineticBombDoAction)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 1, controllerEnterCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 2, controllerLeaveCombat)
