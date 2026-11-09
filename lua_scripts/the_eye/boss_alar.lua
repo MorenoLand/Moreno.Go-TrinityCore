@@ -515,7 +515,7 @@ end
 -- berserk 1200000 / platforms-move 0 / phase = 1 (the BossAI
 -- ctor DATA_ALAR = 1 arm is instance-blocked, unbridgeable).
 RegisterCreatureEvent(ENTRY_ALAR, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     -- Native-display capture for the Reset()/WE_SUMMON restore arms
     -- (boss_alar.cpp:164/:340 — the black-knight idiom).
@@ -546,7 +546,7 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_ALAR, 2, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     -- boss_alar.cpp:170 — evade runs C++ Reset
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
@@ -564,7 +564,7 @@ end)
 -- blocked; the C++ does not override KilledUnit, so no
 -- event 3 — laj precedent).
 RegisterCreatureEvent(ENTRY_ALAR, 4, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     alarNative[guid] = nil
 end)
@@ -578,7 +578,7 @@ end)
 -- UNIT_FLAG_NON_ATTACKABLE arm is PORTED (2026-10-20,
 -- documented above).
 RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = alarState[guid]
     if not st then
         return
@@ -627,7 +627,7 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     -- C++ Reset() :164: SetDisplayId(GetNativeDisplayId()) — ported
     -- via the alarNative capture.

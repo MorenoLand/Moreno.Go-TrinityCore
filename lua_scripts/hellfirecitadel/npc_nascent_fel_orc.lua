@@ -131,7 +131,7 @@ local function mobTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetMob(guid)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
@@ -140,23 +140,23 @@ RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 2, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetMob(guid)
     startEmoteLoop(creature, guid)
 end)
 
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 4, function(_, creature)
-    resetMob(creature:GetGUID())
+    resetMob(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 23, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetMob(guid)
     startEmoteLoop(creature, guid)
 end)
 
 -- Event 5 (On Spawn): C++ Reset() arms the emote loop.
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 5, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     startEmoteLoop(creature, guid)
 end)

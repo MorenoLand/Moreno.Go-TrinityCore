@@ -308,7 +308,7 @@ end
 -- C++ Reset: non-triggered self-cast 30205, phase BANISH,
 -- channelers 5, taunt {4min,5min} repeat.
 local function magtheridonReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     magState[guid] = nil
     -- The cast and the taunt scheduling are Reset-only arms
@@ -433,7 +433,7 @@ end
 -- 0x100), C++ order after the NOT_SELECTABLE clear),
 -- phase released, the C++ timer set.
 local function magtheridonEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- The channeler relay may already have released the boss
     -- (channeler pull -> 2min -> CombatStart -> RELEASED): the
     -- engage then runs only the BossAI base arms, never a second
@@ -576,7 +576,7 @@ local function magtheridonDoAction(event, creature, action)
     if action ~= ACTION_START_CHANNELERS_EVENT then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = magState[guid]
     if not st or st.phase ~= "banish" then
         return
@@ -598,7 +598,7 @@ RegisterCreatureEvent(ENTRY_MAGTHERIDON, 38, magtheridonDoAction)
 -- int64(health) - int64(damage) < CountPctFromMaxHealth(30), so killing
 -- and overkill blows fire the arms too) -> collapse arms, once.
 local function magtheridonDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = magState[guid]
     if not st or st.phase == "collapsed" then
         return
@@ -657,12 +657,12 @@ end
 local function magtheridonDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(0, 3) -- DATA_MAGTHERIDON, DONE (boss_magtheridon.cpp:207-212)
-    cancelTimers(creature:GetGUID())
-    magState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    magState[creature:GetGUIDLow()] = nil
 end
 
 local function magtheridonLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     magState[guid] = nil
 end
@@ -727,7 +727,7 @@ end
 -- C++ Reset: non-triggered self-cast 30207 (the REACT_DEFENSIVE
 -- arm is PORTED 2026-10-20 — creature:SetReactState).
 local function channelerReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     chanState[guid] = nil
     chanCanMend[guid] = nil
@@ -819,7 +819,7 @@ local function channelerEnterCombat(event, creature)
     if magtheridon then
         magtheridon:DoAction(ACTION_START_CHANNELERS_EVENT)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     chanState[guid] = true
     chanCanMend[guid] = true
@@ -848,7 +848,7 @@ local function channelerDied(event, creature, killer)
     local magtheridon = creature:FindNearestCreature(ENTRY_MAGTHERIDON, 100.0)
     if magtheridon then
         magtheridon:DoAction(ACTION_START_CHANNELERS_EVENT)
-        local magGuid = magtheridon:GetGUID()
+        local magGuid = magtheridon:GetGUIDLow()
         local st = magState[magGuid]
         if st and st.phase == "phase1" then
             st.channelers = (st.channelers or 5) - 1
@@ -857,14 +857,14 @@ local function channelerDied(event, creature, killer)
             end
         end
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     chanState[guid] = nil
     chanCanMend[guid] = nil
 end
 
 local function channelerLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     chanState[guid] = nil
     chanCanMend[guid] = nil
@@ -892,7 +892,7 @@ RegisterCreatureEvent(ENTRY_CHANNELER, 19, channelerJustSummoned)
 -- non-triggered DoCastAOE self-cast 30631 (kalecgos
 -- convention).
 local function roomReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local per = roomTimers[guid]
     if per then
         RemoveEventById(per)

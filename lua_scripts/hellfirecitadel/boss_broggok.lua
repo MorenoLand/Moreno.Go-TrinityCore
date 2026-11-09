@@ -245,8 +245,8 @@ RegisterCreatureEvent(ENTRY_BROGGOK, 38, broggokDoAction)
 -- boss cell, so the grid twin (unique 17380) finds him.
 local function onBroggokLeverGossip(event, player, go)
     local broggok = player:FindNearestCreature(ENTRY_BROGGOK, 100.0)
-    if broggok and not prepared[broggok:GetGUID()] then
-        prepared[broggok:GetGUID()] = true
+    if broggok and not prepared[broggok:GetGUIDLow()] then
+        prepared[broggok:GetGUIDLow()] = true
         broggok:DoAction(ACTION_PREPARE_BROGGOK)
     end
     go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_IN_USE + GO_FLAG_NOT_SELECTABLE)
@@ -257,7 +257,7 @@ end
 RegisterGameObjectGossipEvent(GO_BROGGOK_LEVER, 1, onBroggokLeverGossip)
 
 RegisterCreatureEvent(ENTRY_BROGGOK, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -269,17 +269,17 @@ RegisterCreatureEvent(ENTRY_BROGGOK, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_BROGGOK, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_BROGGOK, 4, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     prepared[guid] = true -- boss death = DONE: the lever stays blocked (C++ OnGossipHello gate)
 end)
 
 RegisterCreatureEvent(ENTRY_BROGGOK, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 -- C++ spell_broggok_poison_cloud::PeriodicTick (boss_broggok.cpp:293-304):

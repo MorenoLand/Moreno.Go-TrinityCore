@@ -592,7 +592,7 @@ end
 -- subsumed by GetScale's template-base read now that the scale
 -- bridge exists).
 RegisterCreatureEvent(ENTRY_SOLARIAN, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     if solarianDefaultArmor[guid] == nil then
         solarianDefaultArmor[guid] = creature:GetArmor()
@@ -623,7 +623,7 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_SOLARIAN, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ KilledUnit: Talk(SAY_KILL) unconditionally (no player
@@ -647,7 +647,7 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 4, function(_, creature)
     creature:SetDisplayId(MODEL_HUMAN)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_HIGH_ASTROMANCER_SOLARIAN, 3) -- DONE
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
@@ -661,7 +661,7 @@ end)
 RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
     -- C++ Reset() arm order (boss_astromancer.cpp:151-155):
     -- SetArmor(defaultarmor) first, then RemoveFlag + SetVisible.
-    local defaultArmor = solarianDefaultArmor[creature:GetGUID()]
+    local defaultArmor = solarianDefaultArmor[creature:GetGUIDLow()]
     if defaultArmor then
         creature:SetArmor(defaultArmor)
     end
@@ -674,7 +674,7 @@ RegisterCreatureEvent(ENTRY_SOLARIAN, 23, function(_, creature)
     creature:SetVisible(true)
     creature:SetScale(0)
     creature:SetDisplayId(MODEL_HUMAN)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- ================= Wrath of the Astromancer aura (42783) =================

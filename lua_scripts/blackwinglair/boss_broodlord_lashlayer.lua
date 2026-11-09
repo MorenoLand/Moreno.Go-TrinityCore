@@ -180,7 +180,7 @@ local function broodlordEnterCombat(event, creature, target)
     -- sets the boss state IN_PROGRESS; DATA_BROODLORD_LASHLAYER=2
     -- (blackwing_lair.h:33). C++ calls the base first (:68).
     creature:SetBossState(2, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "cleave", 8000, function()
@@ -206,7 +206,7 @@ local function broodlordResetState(guid)
 end
 
 local function broodlordLeaveCombat(event, creature)
-    broodlordResetState(creature:GetGUID())
+    broodlordResetState(creature:GetGUIDLow())
 end
 
 local function broodlordDied(event, creature, killer)
@@ -222,7 +222,7 @@ local function broodlordDied(event, creature, killer)
         device:SetGoState(GO_STATE_ACTIVE)
         device:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
     end
-    broodlordResetState(creature:GetGUID())
+    broodlordResetState(creature:GetGUIDLow())
 end
 
 local function broodlordReset(event, creature)
@@ -234,7 +234,7 @@ local function broodlordReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
         creature:SetBossState(2, 0)
     end
-    broodlordResetState(creature:GetGUID())
+    broodlordResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_BROODLORD, 1, broodlordEnterCombat)

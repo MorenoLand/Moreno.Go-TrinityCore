@@ -404,7 +404,7 @@ local function beginEvent(creature, guid)
 end
 
 local function onNefariusGossipHello(event, player, creature)
-    local st = nefariusState[creature:GetGUID()]
+    local st = nefariusState[creature:GetGUIDLow()]
     if not (st and st.eventStarted) then
         player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_GAMES_BEGIN,
             GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
@@ -419,7 +419,7 @@ local function onNefariusGossipSelect(event, player, creature, sender, action)
     player:GossipComplete()
     if sender == GOSSIP_SENDER_MAIN and action == GOSSIP_ACTION_INFO_DEF + 1 then
         creature:Talk(SAY_GAMESBEGIN_1)
-        beginEvent(creature, creature:GetGUID())
+        beginEvent(creature, creature:GetGUIDLow())
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
@@ -428,7 +428,7 @@ local function onNefariusGossipSelect(event, player, creature, sender, action)
 end
 
 local function onNefariusReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nefariusInit(guid)
     -- C++ boss_victor_nefariusAI::Reset (boss_nefarian.cpp:182-197):
@@ -469,8 +469,8 @@ end
 -- onNefariusReset — the throne arms on the death path were unfaithful).
 local function onNefariusDied(event, creature)
     creature:SetBossState(7, 3)
-    cancelTimers(creature:GetGUID())
-    nefariusInit(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    nefariusInit(creature:GetGUIDLow())
 end
 
 -- Nefarian: C++ EVENT_SHADOWFLAME — non-triggered DoCastVictim 12s.
@@ -601,7 +601,7 @@ local function nefarianEnterCombat(event, creature, target)
     -- (boss_nefarian.cpp:428) never calls the base, so the boss state
     -- is not written on engage (the Nefarius BeginEvent leg already
     -- wrote IN_PROGRESS for id 7).
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nefarianState[guid] = { phase3 = false }
     creature:Talk(SAY_RANDOM)
@@ -634,7 +634,7 @@ end
 -- decides (moroes convention); strictly below 20 like C++; once.
 -- The bone-construct respawn loop has no bearer.
 local function nefarianDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = nefarianState[guid]
     if st == nil or st.phase3 then
         return
@@ -660,7 +660,7 @@ local function nefarianClear(guid)
 end
 
 local function nefarianLeaveCombat(event, creature)
-    nefarianClear(creature:GetGUID())
+    nefarianClear(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_nefarian.cpp:439-441): _JustDied() writes
@@ -668,7 +668,7 @@ end
 local function nefarianDied(event, creature, killer)
     creature:SetBossState(7, 3)
     creature:Talk(SAY_DEATH)
-    nefarianClear(creature:GetGUID())
+    nefarianClear(creature:GetGUIDLow())
 end
 
 local nefarianDespawn = {}
@@ -701,7 +701,7 @@ end
 -- C++ boss_nefarianAI::JustReachedHome (boss_nefarian.cpp:423-426):
 -- canDespawn = true.
 local function nefarianReachedHome(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = nefarianDespawn[guid]
     if not st then
         st = { gen = 0, ready = false, home = false }
@@ -717,8 +717,8 @@ end
 -- (boss_nefarian.cpp:423-426) is canDespawn = true, feeding the
 -- DespawnTimer/FAIL arm ported below (ev24 registration, tick 236).
 local function nefarianReset(event, creature)
-    nefarianClear(creature:GetGUID())
-    local guid = creature:GetGUID()
+    nefarianClear(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
     local prev = nefarianDespawn[guid]
     local gen = (prev and prev.gen or 0) + 1
     nefarianDespawn[guid] = { gen = gen, ready = false, home = false }

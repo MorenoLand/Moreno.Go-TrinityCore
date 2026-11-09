@@ -128,7 +128,7 @@ local function aoesilenceTick(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "heal", 9000, function()
         healTick(creature, guid)
     end)
@@ -141,11 +141,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_NPC_SOLARIUM_PRIEST, 1, onEnterCombat)

@@ -100,7 +100,7 @@ local function mobTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_CRYSTALCORE_DEVASTATOR, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetDevastator(guid)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
@@ -109,13 +109,13 @@ RegisterCreatureEvent(ENTRY_CRYSTALCORE_DEVASTATOR, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_CRYSTALCORE_DEVASTATOR, 2, function(_, creature)
-    resetDevastator(creature:GetGUID())
+    resetDevastator(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_CRYSTALCORE_DEVASTATOR, 4, function(_, creature)
-    resetDevastator(creature:GetGUID())
+    resetDevastator(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_CRYSTALCORE_DEVASTATOR, 23, function(_, creature)
-    resetDevastator(creature:GetGUID())
+    resetDevastator(creature:GetGUIDLow())
 end)

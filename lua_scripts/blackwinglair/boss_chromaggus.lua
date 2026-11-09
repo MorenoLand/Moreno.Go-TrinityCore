@@ -279,7 +279,7 @@ local function chromaggusEnterCombat(event, creature, target)
     -- sets the boss state IN_PROGRESS; DATA_CHROMAGGUS=6
     -- (blackwing_lair.h:37). C++ calls the base first (:199).
     creature:SetBossState(6, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state(guid).enraged = false
     state(guid).currentVuln = 0
@@ -307,7 +307,7 @@ end
 -- floored integer threshold (ironaya convention); UpdateAI never runs
 -- on the killing blow, so post-damage health 0 never fires it.
 local function chromaggusDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = chromaggusState[guid]
     if st == nil or st.enraged then
         return
@@ -324,7 +324,7 @@ local function chromaggusDamageTaken(event, creature, attacker, damage)
 end
 
 local function chromaggusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function chromaggusDied(event, creature, killer)
@@ -333,7 +333,7 @@ local function chromaggusDied(event, creature, killer)
     -- SetBossState(DATA_CHROMAGGUS 6, DONE). (The old "state
     -- untouched" claim was wrong: the base runs by virtual dispatch.)
     creature:SetBossState(6, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function chromaggusReset(event, creature)
@@ -344,8 +344,8 @@ local function chromaggusReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
         creature:SetBossState(6, 0)
     end
-    cancelTimers(creature:GetGUID())
-    local st = chromaggusState[creature:GetGUID()]
+    cancelTimers(creature:GetGUIDLow())
+    local st = chromaggusState[creature:GetGUIDLow()]
     if st then
         st.enraged = false
         st.currentVuln = 0

@@ -122,7 +122,7 @@ local function firemawEnterCombat(event, creature, target)
     -- sets the boss state IN_PROGRESS; DATA_FIREMAW=3 (blackwing_lair.h:34).
     -- C++ calls the base first (:47).
     creature:SetBossState(3, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowflame", math.random(10000, 20000), function()
         onShadowflame(creature, guid)
@@ -140,7 +140,7 @@ local function firemawResetState(guid)
 end
 
 local function firemawLeaveCombat(event, creature)
-    firemawResetState(creature:GetGUID())
+    firemawResetState(creature:GetGUIDLow())
 end
 
 local function firemawDied(event, creature, killer)
@@ -148,7 +148,7 @@ local function firemawDied(event, creature, killer)
     -- (ScriptedCreature.h:330) runs _JustDied(), writing
     -- SetBossState(DATA_FIREMAW 3, DONE).
     creature:SetBossState(3, 3)
-    firemawResetState(creature:GetGUID())
+    firemawResetState(creature:GetGUIDLow())
 end
 
 local function firemawReset(event, creature)
@@ -160,7 +160,7 @@ local function firemawReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0)
     end
-    firemawResetState(creature:GetGUID())
+    firemawResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_FIREMAW, 1, firemawEnterCombat)

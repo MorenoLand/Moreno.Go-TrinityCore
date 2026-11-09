@@ -121,7 +121,7 @@ local function ebonrocEnterCombat(event, creature, target)
     -- sets the boss state IN_PROGRESS; DATA_EBONROC=4 (blackwing_lair.h:35).
     -- C++ calls the base first (:47).
     creature:SetBossState(4, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowflame", math.random(10000, 20000), function()
         onShadowflame(creature, guid)
@@ -139,7 +139,7 @@ local function ebonrocResetState(guid)
 end
 
 local function ebonrocLeaveCombat(event, creature)
-    ebonrocResetState(creature:GetGUID())
+    ebonrocResetState(creature:GetGUIDLow())
 end
 
 local function ebonrocDied(event, creature, killer)
@@ -147,7 +147,7 @@ local function ebonrocDied(event, creature, killer)
     -- (ScriptedCreature.h:330) runs _JustDied(), writing
     -- SetBossState(DATA_EBONROC 4, DONE).
     creature:SetBossState(4, 3)
-    ebonrocResetState(creature:GetGUID())
+    ebonrocResetState(creature:GetGUIDLow())
 end
 
 local function ebonrocReset(event, creature)
@@ -159,7 +159,7 @@ local function ebonrocReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
         creature:SetBossState(4, 0)
     end
-    ebonrocResetState(creature:GetGUID())
+    ebonrocResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_EBONROC, 1, ebonrocEnterCombat)

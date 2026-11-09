@@ -259,7 +259,7 @@ local kaelPreEncounter = {}
 -- (lua_creature_events.go:2046); only SetInCombatWith has no bridge —
 -- documented).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if kaelPreEncounter[guid] == false then
         return
     end
@@ -279,7 +279,7 @@ end)
 -- (the 50% transition machine — MovePoint / AttackStop legs —
 -- has no bearer; documented in the header).
 RegisterCreatureEvent(ENTRY_KAELTHAS, 9, function(_, creature, attacker)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if kaelPreEncounter[guid] == false then
         return
     end
@@ -307,7 +307,7 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
     creature:SetDisableGravity(false)
     creature:SetTarget()
     creature:SetScale(1.0)
-    kaelPreEncounter[creature:GetGUID()] = nil
+    kaelPreEncounter[creature:GetGUIDLow()] = nil
 end)
 
 -- Thaladred the Darkener (20064): C++ UpdateAI in arm order
@@ -368,7 +368,7 @@ end
 -- talks SAY_THALADRED_AGGRO + AddThreat(who, 5000000.0f) PORTED
 -- (C++ JustEngagedWith order: Talk then AddThreat).
 RegisterCreatureEvent(ENTRY_THALADRED, 1, function(_, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         gaze = 100,
@@ -387,7 +387,7 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_THALADRED, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ JustDied: SAY_THALADRED_DEATH fires only after the
@@ -399,13 +399,13 @@ end)
 -- boss_kaelthas.cpp:509-544 — is the unported phase machine, so the call
 -- would fire into no handler).
 RegisterCreatureEvent(ENTRY_THALADRED, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_THALADRED, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Lord Sanguinar (20060): C++ UpdateAI arm — the
@@ -430,7 +430,7 @@ end
 -- C++ ctor / Initialize() values: fear 20000. The C++
 -- JustEngagedWith talks SAY_SANGUINAR_AGGRO.
 RegisterCreatureEvent(ENTRY_SANGUINAR, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         fear = 20000,
@@ -443,20 +443,20 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_SANGUINAR, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ JustDied: SAY_SANGUINAR_DEATH fires only after the
 -- unmodeled resurrection (_hasRessurrected gate) — never
 -- fires in this model (solarian precedent); cleanup only.
 RegisterCreatureEvent(ENTRY_SANGUINAR, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_SANGUINAR, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Grand Astromancer Capernian (20062): C++ UpdateAI in arm
@@ -528,7 +528,7 @@ end
 -- — unmodeled). No melee in C++ (no DoMeleeAttackIfReady).
 RegisterCreatureEvent(ENTRY_CAPERNIAN, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_kaelthas.cpp:1109: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         fireball = 2000,
@@ -543,20 +543,20 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_CAPERNIAN, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ JustDied: SAY_CAPERNIAN_DEATH fires only after the
 -- unmodeled resurrection (_hasRessurrected gate) — never
 -- fires in this model (solarian precedent); cleanup only.
 RegisterCreatureEvent(ENTRY_CAPERNIAN, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_CAPERNIAN, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Master Engineer Telonicus (20063): C++ UpdateAI in arm
@@ -594,7 +594,7 @@ end
 -- C++ ctor / Initialize() values: bomb 10000 / remote toy
 -- 5000. The C++ JustEngagedWith talks SAY_TELONICUS_AGGRO.
 RegisterCreatureEvent(ENTRY_TELONICUS, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         bomb = 10000,
@@ -608,20 +608,20 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_TELONICUS, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ JustDied: SAY_TELONICUS_DEATH fires only after the
 -- unmodeled resurrection (_hasRessurrected gate) — never
 -- fires in this model (solarian precedent); cleanup only.
 RegisterCreatureEvent(ENTRY_TELONICUS, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_TELONICUS, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 local ENTRY_PHOENIX_TK = 21362

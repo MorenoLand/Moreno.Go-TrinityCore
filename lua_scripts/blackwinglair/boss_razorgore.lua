@@ -191,7 +191,7 @@ local function razorgoreEnterCombat(event, creature, target)
     -- (blackwing_lair.h:31). No JustEngagedWith override in C++ — the
     -- base runs by virtual dispatch (ScriptedCreature.h:329).
     creature:SetBossState(0, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     secondPhase[guid] = nil
     -- C++ phase one schedules nothing: the mind-controlled orb
@@ -205,13 +205,13 @@ end
 -- (thekal convention — return false, 0). No adjustment needed: the
 -- zeroing is C++-exact as shipped (the @todo is noted in the header).
 local function razorgoreDamageTaken(event, creature, attacker, damage)
-    if not secondPhase[creature:GetGUID()] then
+    if not secondPhase[creature:GetGUIDLow()] then
         return false, 0
     end
 end
 
 local function razorgoreLeaveCombat(event, creature)
-    razorgoreResetState(creature:GetGUID())
+    razorgoreResetState(creature:GetGUIDLow())
 end
 
 local function razorgoreDied(event, creature, killer)
@@ -223,7 +223,7 @@ local function razorgoreDied(event, creature, killer)
     -- boss's own ev4 leg covers a normal kill.
     creature:SetBossState(0, 3)
     creature:Talk(3) -- SAY_DEATH
-    razorgoreResetState(creature:GetGUID())
+    razorgoreResetState(creature:GetGUIDLow())
 end
 
 local function razorgoreReset(event, creature)
@@ -235,7 +235,7 @@ local function razorgoreReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
         creature:SetBossState(0, 0)
     end
-    razorgoreResetState(creature:GetGUID())
+    razorgoreResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_RAZORGORE, 1, razorgoreEnterCombat)

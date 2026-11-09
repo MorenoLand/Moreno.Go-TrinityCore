@@ -144,7 +144,7 @@ local function addTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_CHANNELER, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetAdd(guid)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
@@ -153,13 +153,13 @@ RegisterCreatureEvent(ENTRY_CHANNELER, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_CHANNELER, 2, function(_, creature)
-    resetAdd(creature:GetGUID())
+    resetAdd(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_CHANNELER, 4, function(_, creature)
-    resetAdd(creature:GetGUID())
+    resetAdd(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_CHANNELER, 23, function(_, creature)
-    resetAdd(creature:GetGUID())
+    resetAdd(creature:GetGUIDLow())
 end)

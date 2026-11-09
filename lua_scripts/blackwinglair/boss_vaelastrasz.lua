@@ -321,7 +321,7 @@ local function onGossipSelect(event, player, creature, sender, action)
         -- one-shot; the player GUID record (ObjectGuid) has no bridge.
         -- Then the speech machine arms.
         creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
-        armSpeech(creature, creature:GetGUID(), player)
+        armSpeech(creature, creature:GetGUIDLow(), player)
     end
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
@@ -336,7 +336,7 @@ local function onEnterCombat(event, creature, target)
     -- sets the boss state IN_PROGRESS; DATA_VAELASTRAZ_THE_CORRUPT=1
     -- (blackwing_lair.h:32). C++ calls the base first (:98).
     creature:SetBossState(1, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- Entering combat drops pending speech events C++-exact (the C++
     -- combat branch consumes unmatched speech events without acting).
     cancelTimers(guid)
@@ -367,7 +367,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onTargetDied(event, creature, victim)
@@ -382,7 +382,7 @@ local function onDied(event, creature, killer)
     -- (ScriptedCreature.h:330) runs _JustDied(), writing
     -- SetBossState(DATA_VAELASTRAZ_THE_CORRUPT 1, DONE).
     creature:SetBossState(1, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
@@ -390,7 +390,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     -- once. Post-damage math (moroes/nefarian convention): C++ checks
     -- post-damage health every UpdateAI tick, and the killing blow never
     -- yells because UpdateAI stops on death, hence the > 0 floor guard.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not hasYelled[guid] then
         local max = creature:GetMaxHealth()
         local postDamage = creature:GetHealth() - damage
@@ -414,7 +414,7 @@ local function onReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
         creature:SetBossState(1, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetStandState(7)
     hasYelled[guid] = false
     cancelTimers(guid)

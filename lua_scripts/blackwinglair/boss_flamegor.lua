@@ -126,7 +126,7 @@ local function flamegorEnterCombat(event, creature, target)
     -- sets the boss state IN_PROGRESS; DATA_FLAMEGOR=5 (blackwing_lair.h:36).
     -- C++ calls the base first (:52).
     creature:SetBossState(5, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowflame", math.random(10000, 20000), function()
         onShadowflame(creature, guid)
@@ -144,7 +144,7 @@ local function flamegorResetState(guid)
 end
 
 local function flamegorLeaveCombat(event, creature)
-    flamegorResetState(creature:GetGUID())
+    flamegorResetState(creature:GetGUIDLow())
 end
 
 local function flamegorDied(event, creature, killer)
@@ -152,7 +152,7 @@ local function flamegorDied(event, creature, killer)
     -- (ScriptedCreature.h:330) runs _JustDied(), writing
     -- SetBossState(DATA_FLAMEGOR 5, DONE).
     creature:SetBossState(5, 3)
-    flamegorResetState(creature:GetGUID())
+    flamegorResetState(creature:GetGUIDLow())
 end
 
 local function flamegorReset(event, creature)
@@ -164,7 +164,7 @@ local function flamegorReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
         creature:SetBossState(5, 0)
     end
-    flamegorResetState(creature:GetGUID())
+    flamegorResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_FLAMEGOR, 1, flamegorEnterCombat)
