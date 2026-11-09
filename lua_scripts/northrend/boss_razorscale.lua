@@ -263,17 +263,22 @@
 -- double-click race unmodeled, halazzi precedent) + controller
 -- CastSpell(nil, entry spell, true).
 -- spell_razorscale_flame_breath (63317/64021) — the lethal-hit latch
--- leg is PORTED 2026-11-08 (tick 417, darkRuneGuardianSpellHit below;
--- ev14 post-damage inversion, LATENT until EVENT_FLAME_BREATH ports;
--- fail-closed);
+-- leg is PORTED 2026-11-09 (tick 566): the live leg is the Go
+-- spellScriptOnHitLatch arm (spell_onhit.go), set in the damage arm's
+-- lethal branch before the kill credit reads it — the ev14 handler
+-- below (darkRuneGuardianSpellHit) fires after the credit and is a
+-- backstop only; the tick-417 "LATENT until EVENT_FLAME_BREATH ports"
+-- note is retired (breath ticks are ported, breath is DBC-gated);
 -- spell_razorscale_summon_iron_dwarves (63968/63970/63969),
 -- spell_razorscale_fuse_armor (64821), spell_razorscale_firebolt
 -- (62669) — no SpellScript / AuraScript bridges; all three join
 -- the no-SpellScript / no-AuraScript-bridge queues;
 -- achievement_iron_dwarf_medium_rare — PORTED 2026-11-08 (tick 417,
--- latent; Go case reads the killed guardian's ScriptData slot
--- 29232924, fail-closed). achievement_quick_shave — Lua legs PORTED
--- 2026-11-08 (tick 417, razorscaleMovementInform below); flight cycle
+-- Go case reads the killed guardian's ScriptData slot
+-- 29232924, fail-closed; live leg is the Go spellScriptOnHitLatch
+-- arm, set pre-credit — see the flame-breath note above).
+-- achievement_quick_shave — Lua legs PORTED 2026-11-08 (tick 417,
+-- razorscaleMovementInform below); flight cycle
 -- PORTED 2026-11-08 (tick 453), latch goes live and the Go gate is
 -- un-held (achievement_criteria_scripts.go).
 
@@ -1512,9 +1517,12 @@ end
 -- ev14 fires on the hit target AFTER the damage loop (boss_ai.go:
 -- DoDamageAndTriggers comment), so the Lua twin inverts the check:
 -- lethal ⟺ the guardian is dead (or at 0 health) at handler time.
--- LIVE since tick 453: EVENT_FLAME_BREATH / FLAME_BREATH_GROUND are
--- ported, so breath casts reach guardians; the latch defaults false,
--- so the Go gate stays fail-closed until a lethal breath lands.
+-- BACKSTOP ONLY since tick 566: the kill credit in the damage arm
+-- reads the latch BEFORE ev14 fires, so this handler alone can never
+-- credit the achievement — the live leg is the Go
+-- spellScriptOnHitLatch arm (spell_onhit.go), set in the lethal
+-- branch ahead of the credit. This handler re-asserts the same latch
+-- for any breath kill that reaches ev14 through another path.
 local function darkRuneGuardianSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_FLAME_BREATH and spellId ~= SPELL_FLAME_BREATH_25 then
         return

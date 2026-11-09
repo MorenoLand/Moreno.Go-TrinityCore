@@ -9840,6 +9840,11 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 			s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, m.Map, m.InstanceID, m.X, m.Y, m.Z, m.PhaseMask)
 		}
 		if killed {
+			// spell_razorscale_flame_breath::CheckDamage latch
+			// (spell_onhit.go spellScriptOnHitLatch): set before the
+			// kill-credit legs below read it — the Lua ev14 handler
+			// fires after this arm, too late for the criteria read.
+			s.spellScriptOnHitLatch(spell, live)
 			s.procCreatureLethalDamageAuras(victimKey, spell.ID, damage, maxHealth)
 			s.stopCreatureMotionInInstance(m.Map, m.InstanceID, guid, liveX, liveY, liveZ)
 			s.broadcastCreatureValuesUpdateInInstance(m.Map, m.InstanceID, guid, map[int]uint32{unitFieldHealth: 0, unitFieldDynamicFlags: liveFlags})

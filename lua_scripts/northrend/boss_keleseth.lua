@@ -96,8 +96,8 @@
 -- DoCast(summoner, SPELL_FROST_TOMB 48400, true) (:91-97) PORTED
 -- 2026-11-05 inline in frostTombTick: the arm summons the tomb
 -- directly at the target (5-arg SummonCreature = MANUAL_DESPAWN —
--- the tomb lives until killed, its despawn riding the unported
--- AuraScript OnRemove) and casts 48400 on the target off the returned
+-- the tomb lives until killed, its despawn riding the ported
+-- frostTombAuraRemove (RegisterAuraEvent ev3) and casts 48400 on the target off the returned
 -- object (zuljin-spirit precedent). No ev22 registration: the
 -- boss-cast 42714 form would deliver summoner = the boss and
 -- frost-tomb Keleseth, and the player-cast form rides the pet funnel
@@ -252,8 +252,8 @@ end
 -- 28, spells.go:16321 — no temp-summon route on the player path).
 -- Instead the arm summons the tomb directly at the target (5-arg
 -- SummonCreature = TEMPSUMMON_MANUAL_DESPAWN, the faithful type:
--- the tomb lives until killed, its despawn riding the unported
--- AuraScript OnRemove) and executes the IsSummonedBy leg inline off
+-- the tomb lives until killed, its despawn riding the ported
+-- frostTombAuraRemove (RegisterAuraEvent ev3) and executes the IsSummonedBy leg inline off
 -- the returned object (zuljin-spirit precedent): tomb:CastSpell
 -- (target, SPELL_FROST_TOMB 48400, true) — same order as C++.
 local function frostTombTick(creature, guid)
@@ -279,8 +279,8 @@ local function frostTombTick(creature, guid)
 end
 
 -- C++ JustEngagedWith (:144-164): Talk(SAY_START_COMBAT 1) fires
--- unconditionally (:146-147); the guard AttackStart leg has no bridges
--- (the auriaya engage-port precedent). C++ Reset inits (:137-139) are
+-- unconditionally (:146-147); the guard AttackStart leg is PORTED
+-- in kelesethEnterCombat (the auriaya engage-port precedent). C++ Reset inits (:137-139) are
 -- scheduled here on the xt002 precedent.
 -- C++ EVENT_SUMMON_SKELETONS (id 3; init 6s :139, arm :199-202):
 -- Talk(SAY_SUMMON_SKELETONS 2) + SummonSkeletons() — 4x
@@ -349,9 +349,9 @@ end
 -- SPELL_SHADOW_FISSURE, true) + DoCastAOE(SPELL_BONE_ARMOR, true) ->
 -- self-cast + RemoveFlag(NOT_SELECTABLE) + SetStandState(STAND) +
 -- melee resume (UpdateAI :326 gate lifts with the flag) +
--- re-arm DECREPIFY {4s,6s}, in C++ order. MoveChase(victim) stays out
--- (no motion bridge); MoveIdle at fake-death likewise — the add keeps
--- its motion state through the fake-death window.
+-- re-arm DECREPIFY {4s,6s}, in C++ order. MoveChase(victim) is PORTED
+-- in skeletonShadowFissureTick; MoveIdle at fake-death is PORTED in
+-- skeletonDamageTaken (StopMoving halt twin).
 local function skeletonShadowFissureTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "shadowfissure", 500, function()

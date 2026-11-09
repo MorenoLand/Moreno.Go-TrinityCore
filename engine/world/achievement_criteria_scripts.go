@@ -1076,11 +1076,14 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 	case "achievement_iron_dwarf_medium_rare": // boss_razorscale.cpp:1702-1711
 		// OnCheck: the killed Dark Rune Guardian's GetData(
 		// DATA_IRON_DWARF_MEDIUM_RARE 29232924) — set by the flame-breath
-		// SpellScript on a lethal breath hit; the Lua twin sets it in the
-		// guardian motion's SetData store (boss_razorscale.lua:
-		// darkRuneGuardianSpellHit ev14, lethal = dead at handler time).
-		// Live since tick 453 (EVENT_FLAME_BREATH / FLAME_BREATH_GROUND
-		// ported in boss_razorscale.lua).
+		// SpellScript on a lethal breath hit. The live leg is the Go
+		// spellScriptOnHitLatch arm (spell_onhit.go), set in the
+		// damage arm's lethal branch before the kill credit reads it;
+		// the Lua ev14 handler (boss_razorscale.lua:
+		// darkRuneGuardianSpellHit) fires after the credit and is a
+		// backstop only — the tick-453 "live" note was wrong on
+		// ordering (C++ OnHit runs pre-damage, Spell.cpp:2377, Go's
+		// fireSpellHit twin runs post-damage).
 		if source == nil || victim == nil {
 			return false
 		}

@@ -37,6 +37,41 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 	return onHitDamageRewrite(spell.ID, radius, radiusOK, distance2D(casterX, casterY, victimX, victimY), victimHealth, victimMaxHealth, baseDamage)
 }
 
+// spellScriptOnHitLatch runs the SpellScript OnHit arms that set a
+// creature ScriptData latch on a lethal hit. C++ runs the OnHit
+// handlers in Spell::PreprocessTarget (Spell.cpp:2377), before the
+// effect loop deals the damage — so the latch is set before the kill
+// credit reads it. Go's fireSpellHit twin fires after the damage arm
+// (boss_ai.go DoDamageAndTriggers block), so a latch set there lands
+// after the criteria read in grantCreatureKillReward. Callers invoke
+// this from the lethal branch of the creature-caster damage arm, once
+// the final damage is known and before the kill-credit legs run.
+func (s *Server) spellScriptOnHitLatch(spell wotlk.Spell, victim *creatureMotion) {
+	if s == nil || victim == nil {
+		return
+	}
+	switch spell.ID {
+	case 63317, 64021:
+		// spell_razorscale_flame_breath::CheckDamage
+		// (boss_razorscale.cpp:1589-1600): a flame-breath hit that
+		// kills a Dark Rune Guardian (GetHitDamage() >= target
+		// health, target alive at script time) sets the guardian's
+		// DATA_IRON_DWARF_MEDIUM_RARE latch (29232924). The caller
+		// only invokes this on a lethal hit, which is the C++
+		// condition; the guardian-entry gate is the C++
+		// GetEntry() != NPC_DARK_RUNE_GUARDIAN early return.
+		if victim.Entry != 33388 {
+			return
+		}
+		s.motionMu.Lock()
+		if victim.ScriptData == nil {
+			victim.ScriptData = map[uint32]uint32{}
+		}
+		victim.ScriptData[29232924] = 1
+		s.motionMu.Unlock()
+	}
+}
+
 // onHitDamageRewrite is the pure per-spell rewrite table behind
 // spellScriptOnHitDamage: (rewritten damage, true) when the spell has
 // an OnHit SetHitDamage arm, (baseDamage, false) otherwise. Distances
