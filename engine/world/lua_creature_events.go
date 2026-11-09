@@ -6479,6 +6479,24 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{s.instanceGuidData(mapID, instanceID, dataID)}, nil
 	}
+	// GetGuidDataLow(dataID) is the numeric twin of GetGuidData for
+	// MovementInform id comparisons: the low 32 bits of the stored
+	// GUID as a Lua number — the C++ ObjectGuid::GetCounter() mirror
+	// (boss_bronjahm.cpp:247, boss_ichoron.cpp:277 compare it against
+	// the uint32 id the Go engine passes to ev28). A plain
+	// GetGuidData(...) % 2^32 cannot work: the stored GUID arrives as
+	// UInt64 userdata whose metatable defines no __mod, so the modulo
+	// raises and the handler aborts.
+	methods["GetGuidDataLow"] = func(_ context.Context, args []any) ([]any, error) {
+		dataID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		return []any{uint32(s.instanceGuidData(mapID, instanceID, dataID))}, nil
+	}
 	// GetInstanceCreature(dataID) bridges InstanceScript::GetCreature
 	// (InstanceScript.cpp:117-120) over the instance guid store: the
 	// creature object for the stored GUID, or nil when the type is

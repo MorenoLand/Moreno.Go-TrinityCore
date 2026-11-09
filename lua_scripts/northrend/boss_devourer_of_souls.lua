@@ -519,7 +519,7 @@ end
 -- event-19 handler on the devourer consumes the JustSummoned ping.
 -- Coordinates/entry verified against CrucibleSummonPos (:121).
 local function devourerEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     devourerState[guid] = {}
     -- BossAI::JustEngagedWith (:158-161, base-first) — SetBossState
@@ -556,7 +556,7 @@ end
 -- Shared timer/state wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function devourerCancelCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     devourerState[guid] = nil
 end

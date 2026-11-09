@@ -87,8 +87,8 @@
 -- (see below).
 -- npc_corrupted_soul_fragment (36535) MovementInform (:241-251) is
 --   PORTED as soulFragmentMovementInform (event 28, tick 489):
---   FOLLOW_MOTION_TYPE 14 + DATA_BRONJAHM counter check (the ichoron
---   % 2^32 idiom) -> triggered CONSUME_SOUL 68861 self-cast +
+--   FOLLOW_MOTION_TYPE 14 + DATA_BRONJAHM counter check (the
+--   GetGuidDataLow bridge, tick 523) -> triggered CONSUME_SOUL 68861 self-cast +
 --   DespawnOrUnsummon; the ev5 spawn latch (bronjahmSpawn) feeds the
 --   instance GetGuidData store. Its IsSummonedBy relay (:235-239) needs
 --   no registration — the summon funnel already delivers JustSummoned
@@ -200,7 +200,7 @@ end
 
 local function writeSoulPower(creature)
     local count = 0
-    local set = soulFragments[creature:GetGUID()]
+    local set = soulFragments[creature:GetGUIDLow()]
     if set then
         for _ in pairs(set) do
             count = count + 1
@@ -353,7 +353,7 @@ end
 -- RemoveAurasDueToSpell(SOULSTORM_CHANNEL) pre-fight-channel removal via
 -- the RemoveAura bridge. C++ :86-89 Reset schedule lands here.
 local function bronjahmEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     -- No fragment can be live at engage, so the count is
     -- definitionally 0 here (the Reset zero below is the wipe leg).
@@ -379,7 +379,7 @@ end
 -- Self-cast TELEPORT 68988 (:122); schedule EVENT_FEAR {12000,16000}ms
 -- (:123) and the EVENT_SOULSTORM one-shot at 100ms (:124), both phase-2.
 local function bronjahmDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if phase2[guid] then
         return
     end
@@ -407,13 +407,13 @@ end
 -- (DATA_BRONJAHM 0, DONE) via creature:SetBossState — then
 -- Talk(SAY_DEATH) (:108) unconditional.
 local function bronjahmJustDied(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     creature:SetBossState(DATA_BRONJAHM, 3)
     creature:Talk(SAY_DEATH)
 end
 
 local function bronjahmLeaveCombat(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:83-90): _Reset() first — SetBossState(DATA_BRONJAHM 0,
@@ -425,7 +425,7 @@ local function bronjahmReset(event, creature)
     if creature:GetBossState(DATA_BRONJAHM) ~= 3 then
         creature:SetBossState(DATA_BRONJAHM, 0)
     end
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's count before
@@ -466,13 +466,13 @@ local function bronjahmJustSummoned(event, creature, summon)
     if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local set = soulFragments[guid]
     if not set then
         set = {}
         soulFragments[guid] = set
     end
-    set[summon:GetGUID()] = true
+    set[summon:GetGUIDLow()] = true
     writeSoulPower(creature)
     summon:SetReactState(REACT_PASSIVE)
     summon:MoveFollow(creature, creature:GetCombatReach(), 0)
@@ -489,9 +489,9 @@ local function bronjahmSummonDied(event, creature, summon, killer)
     if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
         return
     end
-    local set = soulFragments[creature:GetGUID()]
+    local set = soulFragments[creature:GetGUIDLow()]
     if set then
-        set[summon:GetGUID()] = nil
+        set[summon:GetGUIDLow()] = nil
     end
     writeSoulPower(creature)
 end
@@ -500,9 +500,9 @@ local function bronjahmSummonDespawned(event, creature, summon)
     if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
         return
     end
-    local set = soulFragments[creature:GetGUID()]
+    local set = soulFragments[creature:GetGUIDLow()]
     if set then
-        set[summon:GetGUID()] = nil
+        set[summon:GetGUIDLow()] = nil
     end
     writeSoulPower(creature)
 end
@@ -513,9 +513,10 @@ RegisterCreatureEvent(ENTRY_BRONJAHM, 20, bronjahmSummonDespawned)
 -- FOLLOW_MOTION_TYPE only, and only when the followed target is Bronjahm —
 -- the instance DATA_BRONJAHM object GUID's counter (GetCounter() = low 32
 -- bits) must equal the inform id. Go passes uint32(targetGUID) as the id
--- (creaturemotion.go:4406-4410), so the Lua mirror compares against
--- GetGuidData(DATA_BRONJAHM) % 2^32 (GUIDs stay below 2^53, so the modulo
--- is exact) — the ichoron-globule idiom (tick 485). On match: triggered
+-- (creaturemotion.go:4406-4410), so the Lua mirror compares via
+-- GetGuidDataLow(DATA_BRONJAHM) — the low-32-bits numeric bridge
+-- (lua_creature_events.go); a GetGuidData(...) % 2^32 cannot work
+-- (UInt64 userdata has no __mod, tick 523). On match: triggered
 -- self-cast CONSUME_SOUL 68861 (the C++ CastSpell(nullptr, ...) leg, per
 -- the spirit-shade self-cast precedent) + immediate despawn
 -- (DespawnOrUnsummon() with no args = ms 0, C++-exact). The fragment's
@@ -531,7 +532,7 @@ local function soulFragmentMovementInform(event, creature, type, id)
     if type ~= FOLLOW_MOTION_TYPE then
         return
     end
-    if id ~= creature:GetGuidData(DATA_BRONJAHM) % 4294967296 then
+    if id ~= creature:GetGuidDataLow(DATA_BRONJAHM) then
         return
     end
     creature:CastSpell(creature, SPELL_CONSUME_SOUL, true)

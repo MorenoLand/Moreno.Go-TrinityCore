@@ -71,7 +71,7 @@ local function introStep(creature, guid, delays, index)
 end
 
 local function startIntro(creature, delays)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelIntro(guid)
     creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
     introTimers[guid] = CreateLuaEvent(function()
@@ -94,7 +94,7 @@ local function onGossipSelect(event, player, creature, sender, action, code, lis
 end
 
 local function onReset(event, creature)
-    cancelIntro(creature:GetGUID())
+    cancelIntro(creature:GetGUIDLow())
 end
 
 RegisterCreatureGossipEvent(ENTRY_JAINA_PART1, 2, onGossipSelect)

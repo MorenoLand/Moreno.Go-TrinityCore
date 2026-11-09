@@ -693,14 +693,15 @@ end
 -- Ichoron — the instance DATA_ICHORON object GUID's counter
 -- (GetCounter() = low 32 bits) must equal the inform id. Go passes
 -- uint32(targetGUID) as the id (creaturemotion.go:4406-4410), so the
--- Lua mirror compares against GetGuidData(DATA_ICHORON) % 2^32
--- (GUIDs stay below 2^53, so the modulo is exact). On match:
+-- Lua mirror compares via GetGuidDataLow(DATA_ICHORON) — the low-32-bits
+-- numeric bridge (lua_creature_events.go); a GetGuidData(...) % 2^32
+-- cannot work (UInt64 userdata has no __mod, tick 523). On match:
 -- CastSpell(me, SPELL_MERGE) + DespawnOrUnsummon(1ms).
 local function ichorGlobuleMovementInform(event, creature, type, id)
     if type ~= FOLLOW_MOTION_TYPE then
         return
     end
-    if id ~= creature:GetGuidData(DATA_ICHORON) % 4294967296 then
+    if id ~= creature:GetGuidDataLow(DATA_ICHORON) then
         return
     end
     creature:CastSpell(creature, SPELL_MERGE)
