@@ -361,7 +361,7 @@ local function flameLeviathanEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SetMeleeAttack(false) -- boss_flame_leviathan.cpp:372: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ boss_flame_leviathan.cpp:278: me->SetReactState(REACT_PASSIVE)
     -- (JustEngagedWith: flip before EVENT_PURSUE).
@@ -384,7 +384,7 @@ local function flameLeviathanEnterCombat(event, creature, target)
 end
 
 local function flameLeviathanLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_flame_leviathan.cpp:325-331): _JustDied() then
@@ -393,7 +393,7 @@ end
 local function flameLeviathanDied(event, creature, killer)
     creature:SetBossState(DATA_LEVIATHAN, 3)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_flame_leviathan.cpp:265-273): _Reset() —
@@ -403,7 +403,7 @@ end
 -- shutdown-threshold / SpellHitTarget legs) and SetReactState
 -- (REACT_DEFENSIVE) last.
 local function flameLeviathanReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_LEVIATHAN, 0)
     -- C++ boss_flame_leviathan.cpp:272: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset last leg).

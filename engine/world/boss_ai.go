@@ -19824,6 +19824,15 @@ func init() {
 	// lua_scripts/northrend/npc_tribuna_controller.lua (tick 515);
 	// Kaddrak glare arm dead in C++ (list never populated), omitted.
 	RegisterLuaBoss("npc_tribuna_controller", 28234)
+	// npc_brann_hos: Brann Bronzebeard, entry 28070
+	// (halls_of_stone.cpp) — gossip + low-HP yell + sparklin-news
+	// latch + full 50-step escort machine (WaypointReached 7/13/17/18,
+	// SpawnDwarf, controller DoAction 1/2/3, step-29 DONE + 59046,
+	// step-49 quest credit) in
+	// lua_scripts/northrend/npc_brann_hos.lua (tick 516). Registered
+	// this tick: the file carried handlers since tick 257 with no
+	// registration line (unregistered-but-ported gap).
+	RegisterLuaBoss("npc_brann_hos", 28070)
 
 	// Auriaya (33515), Ulduar —
 	// lua_scripts/northrend/boss_auriaya.lua.

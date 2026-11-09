@@ -356,7 +356,7 @@ local function ignisJustSummoned(event, creature, summon)
     if not summon then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local latched = ignisSummons[guid]
     if not latched then
         latched = {}
@@ -391,7 +391,7 @@ local function ignisEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_ignis.cpp:146)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustEngagedWith -> Initialize (boss_ignis.cpp:154):
     -- _shattered = false, _firstConstructKill = 0. (C++ Reset does NOT
@@ -415,8 +415,8 @@ local function ignisEnterCombat(event, creature, target)
 end
 
 local function ignisLeaveCombat(event, creature)
-    despawnIgnisSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnIgnisSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then Talk
@@ -431,15 +431,15 @@ end
 -- 2026-11-05, base-first) + Talk(SAY_DEATH).
 local function ignisDied(event, creature, killer)
     creature:SetBossState(DATA_IGNIS, 3) -- C++ JustDied: _JustDied() first (boss_ignis.cpp:160), before Talk
-    despawnIgnisSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnIgnisSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
 end
 
 local function ignisReset(event, creature)
     creature:SetBossState(DATA_IGNIS, 0) -- C++ Reset: _Reset() first (boss_ignis.cpp:137)
-    despawnIgnisSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnIgnisSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_ignis_AI::DoAction(ACTION_REMOVE_BUFF 20)
@@ -453,7 +453,7 @@ local function ignisDoAction(event, creature, action)
     if action ~= ACTION_REMOVE_BUFF then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local now = os.time()
     local first = ignisFirstShatter[guid] or 0
     if now - first < 5 then

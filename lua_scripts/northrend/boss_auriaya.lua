@@ -361,7 +361,7 @@ local function auriayaEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
     creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_auriaya.cpp:164)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "sonic", 48000, function()
         sonicScreechTick(creature, guid)
@@ -394,7 +394,7 @@ end
 -- disengages first). Auriaya JustDied :206-212 carries no Talk arms,
 -- so event 4 models only the wipe.
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- npc_sanctum_sentry — C++ EVENT_RIP (:318-320):
@@ -454,7 +454,7 @@ end
 -- EVENT_SAVAGE_POUNCE 1ms + SetWalk(false) — the SetWalk leg has
 -- no movement bridge (separable).
 local function sentryEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "rip", 6000, function()
         ripTick(creature, guid)

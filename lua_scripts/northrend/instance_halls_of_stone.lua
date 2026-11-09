@@ -33,13 +33,11 @@
 --   vacuous here.
 -- - SetBossState DATA_TRIBUNAL_OF_AGES DONE -> tribunal chest
 --   RemoveFlag(GO_FLAG_NOT_SELECTABLE) (instance_halls_of_stone.cpp:
---   134-155 + the OnGameObjectCreate DONE-time leg :86-89): unreachable
---   — the only writer of DATA_TRIBUNAL_OF_AGES DONE is Brann's escort
---   step 29 (halls_of_stone.cpp:563-567), and the escort machine is
---   unported, so no ON_UPDATE poll (unlike the Loken globe in
---   instance_halls_of_lightning.lua, nothing ever writes a
---   tribunalDone flag). The chest leg re-activates the moment the
---   escort machine lands.
+--   134-155 + the OnGameObjectCreate DONE-time leg :86-89): still
+--   blocked — Brann's escort machine landed (tick 516) and now writes
+--   DONE at step 29, but the GO latch itself is vacuous (static GOs
+--   never land in the store), so no chest object is reachable; the
+--   leg re-activates only when a GO GuidData route exists.
 -- - CheckRequiredBosses DATA_SJONNIR gate (instance_halls_of_stone.cpp:
 --   157-174): no required-bosses bridge; Sjonnir's JustEngagedWith
 --   gate leg stays out in boss_sjonnir.lua (EnterEvadeMode has no
