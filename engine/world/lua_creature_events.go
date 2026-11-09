@@ -4948,6 +4948,44 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorEffect, id, true)
 		return nil, nil
 	}
+	// MoveCharge is MotionMaster::MoveCharge (MotionMaster.cpp:698-720)
+	// = a PointMovementGenerator (POINT_MOTION_TYPE 8), the same
+	// generator type MovePoint runs, so it shares the script-spline
+	// launch and the arrival gate fires MovementInform
+	// (POINT_MOTION_TYPE, id) on event 28 (creaturemotion.go:5723),
+	// exactly as C++ MovementInform receives it. The C++ charge
+	// speed rides launchCreatureScriptSplineSpeed (the spline-chain
+	// speed-taking core); the spline itself is straight-line like
+	// every other script launch — Go has no PathGenerator. Arg
+	// order follows the Lua MoveTo family (id first), not the C++
+	// (x, y, z, speed, id) order. Backs the flame leviathan
+	// ACTION_MOVE_TO_CENTER_POSITION leg (boss_flame_leviathan.cpp
+	// :557-565) and the blood-prince-council kinetic-bomb jump. The
+	// player surface stays out (client-driven movement).
+	methods["MoveCharge"] = func(_ context.Context, args []any) ([]any, error) {
+		id, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		x, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		y, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		z, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		speed, err := luaFloat32Arg(args, 4)
+		if err != nil {
+			return nil, err
+		}
+		s.launchCreatureScriptSplineSpeed(motion, x, y, z, false, movementGeneratorPoint, id, true, speed)
+		return nil, nil
+	}
 	// MoveAlongSplineChain is MotionMaster::MoveAlongSplineChain
 	// (MotionMaster.cpp:172-194) = the SplineChainMovementGenerator
 	// (SplineChainMovementGenerator.cpp): walk the DB chain

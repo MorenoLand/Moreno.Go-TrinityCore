@@ -95,10 +95,10 @@
 -- RAID_MODE 2/4-seat threshold (no raid-size bridge) and the
 -- unbridged RemoveAurasDueToSpell leg, so the counter alone
 -- stays dead state.
--- MovementInform (boss_flame_leviathan.cpp:570-576) — the
+-- MovementInform (boss_flame_leviathan.cpp:567-576) — the
 -- ACTION_MOVE_TO_CENTER_POSITION arrival leg (SetReactState(REACT_AGGRESSIVE)
--- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE | STUNNED)) rides the
--- unbridged MovementInform hook; the boss stays REACT_DEFENSIVE in Lua.
+-- + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE | STUNNED)) is PORTED this
+-- tick via the MoveCharge bridge (ev28, id 10).
 -- UpdateAI MoveTimer arm (:871-881) — GetVehicleKit()->HasEmptySeat(-1)
 -- gated FindNearestCreature(NPC_CONTAINER, 50) + MovePoint(1) leg rides
 -- the unported vehicle machine (GetVehicleKit/GetVehicle unbridged) and
@@ -197,6 +197,12 @@ local ACTION_TOWER_OF_FROST_DESTROYED = 2
 local ACTION_TOWER_OF_FLAMES_DESTROYED = 3
 local ACTION_TOWER_OF_LIFE_DESTROYED = 4
 local ACTION_MOVE_TO_CENTER_POSITION = 10
+local POINT_MOTION_TYPE = 8
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END + 0x35)
+local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h:125
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 
 -- SharedDefines.h:42-46.
 local LOOT_MODE_DEFAULT = 0x1
@@ -497,11 +503,13 @@ end
 -- documented-only. PORTED tick 558: the SetLootMode leg
 -- (lua_creature_events.go:2310) alongside the achievement latch.
 -- C++ DoAction ACTION_MOVE_TO_CENTER_POSITION (:557-565): gated on
--- !isDead() + REACT_PASSIVE — SetHomePosition(Center) ports, the
--- MoveCharge(42.0) leg stays out (no MoveCharge bridge), so the
--- ev28 arrival leg (:571-576) has no sender in Lua and is not
--- registered. PORTED tick 558 (receiver only; sender is the
--- unported instance EVENT_LEVIATHAN_BREAK_DOOR).
+-- !isDead() + REACT_PASSIVE — SetHomePosition(Center) + MoveCharge to
+-- Center at 42.0 with id 10 via the MoveCharge bridge
+-- (lua_creature_events.go); the ev28 arrival leg below fires on
+-- landing. PORTED this tick; the sender stays out (instance
+-- EVENT_LEVIATHAN_BREAK_DOOR, instance_ulduar.cpp:1019-1021,
+-- unported instance script), so the leg fires only if that
+-- sender ever lands.
 local function flameLeviathanDoAction(event, creature, action)
     if action == ACTION_START_HARD_MODE then
         creature:SetData(DATA_ORBIT_ACHIEVEMENTS, 4)
@@ -509,7 +517,23 @@ local function flameLeviathanDoAction(event, creature, action)
     elseif action == ACTION_MOVE_TO_CENTER_POSITION then
         if creature:IsAlive() and creature:GetReactState() == 0 then
             creature:SetHomePosition(CENTER_POS[1], CENTER_POS[2], CENTER_POS[3], CENTER_POS[4])
+            creature:MoveCharge(ACTION_MOVE_TO_CENTER_POSITION, CENTER_POS[1], CENTER_POS[2], CENTER_POS[3], 42.0)
         end
+    end
+end
+
+-- C++ boss_flame_leviathanAI::MovementInform (:567-576): the
+-- ACTION_MOVE_TO_CENTER_POSITION arrival (id 10, POINT_MOTION_TYPE)
+-- sets REACT_AGGRESSIVE and clears NON_ATTACKABLE | NOT_SELECTABLE |
+-- STUNNED. Fires via the MoveCharge bridge (lua_creature_events.go);
+-- the four_horsemen ev28 form. PORTED this tick.
+local function flameLeviathanMovementInform(event, creature, motionType, id)
+    if motionType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if id == ACTION_MOVE_TO_CENTER_POSITION then
+        creature:SetReactState(REACT_AGGRESSIVE)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_STUNNED)
     end
 end
 
@@ -518,6 +542,7 @@ RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 2, flameLeviathanLeaveCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 4, flameLeviathanDied)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 5, flameLeviathanSpawned)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 23, flameLeviathanReset)
+RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 28, flameLeviathanMovementInform)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 38, flameLeviathanDoAction)
 
 -- C++ npc_lorekeeperAI::OnGossipSelect
@@ -651,8 +676,6 @@ RegisterCreatureEvent(ENTRY_POOL_OF_TAR, 9, poolOfTarDamageTaken)
 -- OnRemove the flag is cleared. The AddUnitState leg has no bridge and
 -- stays out (the flag is the client-visible half); the flag and
 -- RemoveAura legs ride the bridged SetFlag/RemoveFlag and RemoveAura.
-local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END + 0x35)
-local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
 
 local function systemsShutdownApply(event, aura, target)
     target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
