@@ -325,7 +325,7 @@ local function xt002EnterCombat(event, creature, target)
     creature:SetBossState(DATA_XT002, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- Talk-then-base (boss_xt002.cpp:189)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "enrage", 600000, function()
         enrageTick(creature, guid)
@@ -360,7 +360,7 @@ end
 local function xt002Died(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_XT002, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_xt002::JustDied (boss_xt002.cpp:214): the heart-phase
     -- NOT_SELECTABLE is cleared on death.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -369,7 +369,7 @@ end
 -- Shared timer wipe for events 2/4 (leave-combat / died — C++
 -- ev2 does NOT call Reset).
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:171-178): _Reset() first —
@@ -379,7 +379,7 @@ end
 -- state unconditionally on ev23.
 local function xt002Reset(event, creature)
     creature:SetBossState(DATA_XT002, 0)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset -> Initialize (boss_xt002.cpp:169-177/:149-155):
     -- _hardMode = false (also _healthRecovered/_gravityBombCasualty).
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
@@ -460,7 +460,7 @@ RegisterCreatureEvent(ENTRY_XT002_HEART, 23, xt002HeartReset)
 -- the engage static-charged one-shot is ungated per C++
 -- (JustEngagedWith, separate hook).
 local function lifeSparkShockTick(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if creature:IsCasting() then
         schedule(guid, "shock", 500, function()
             lifeSparkShockTick(creature)
@@ -475,7 +475,7 @@ end
 
 local function lifeSparkEnterCombat(event, creature, target)
     creature:CastSpell(creature, SPELL_STATIC_CHARGED)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shock", 12000, function()
         lifeSparkShockTick(creature)
@@ -487,7 +487,7 @@ end
 -- scheduler wipe.
 local function lifeSparkReset(event, creature)
     creature:CastSpell(creature, SPELL_ARCANE_POWER_STATE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_LIFE_SPARK, 1, lifeSparkEnterCombat)

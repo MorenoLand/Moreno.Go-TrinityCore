@@ -423,7 +423,7 @@ end
 -- true); the six ScheduleEvent legs become CreateLuaEvent
 -- timers below.
 local function hodirEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetBossState(BOSS_HODIR, 1) -- BossAI::JustEngagedWith SetBossState(DATA_HODIR 7, IN_PROGRESS), base-first (boss_hodir.cpp:369)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_hodir.cpp:369)
@@ -451,14 +451,14 @@ local function hodirEnterCombat(event, creature, target)
 end
 
 local function hodirLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    hodirLatches[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    hodirLatches[creature:GetGUIDLow()] = nil
 end
 
 local function hodirDied(event, creature, killer)
     creature:SetBossState(BOSS_HODIR, 3) -- true-kill fallback: BossAI::JustDied -> _JustDied() DONE; the lethal path writes DONE in hodirDamageTaken below (C++ :420)
-    cancelTimers(creature:GetGUID())
-    hodirLatches[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    hodirLatches[creature:GetGUIDLow()] = nil
 end
 
 -- C++ Reset (lines 359-366): _Reset() (cancelTimers twin) +
@@ -483,9 +483,9 @@ local FROZEN_HELPER_POSITIONS = {
     {1976.60, -233.53, 432.767, 1.57},
 }
 local function hodirReset(event, creature)
-    hodirLatches[creature:GetGUID()] = nil -- C++ Reset :359-360: Initialize() first (latch booleans false)
+    hodirLatches[creature:GetGUIDLow()] = nil -- C++ Reset :359-360: Initialize() first (latch booleans false)
     creature:SetBossState(BOSS_HODIR, 0) -- _Reset() SetBossState(DATA_HODIR 7, NOT_STARTED), first per C++ :359-360 — the tick-258 auriaya convention (unconditional; the death-path ev23 pre-fire is overwritten by the ev4 DONE write in the same tick)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetReactState(REACT_PASSIVE)
     local helperCount = 4
     if isRaidMode25(creature) then
@@ -547,7 +547,7 @@ local function hodirDamageTaken(event, creature, attacker, damage)
         CreateLuaEvent(function()
             creature:Despawn()
         end, 10000)
-        cancelTimers(creature:GetGUID())
+        cancelTimers(creature:GetGUIDLow())
         creature:SetBossState(BOSS_HODIR, 3) -- _JustDied() SetBossState(DATA_HODIR 7, DONE), last per C++ :420 (PORTED tick 259)
         return false, 0
     elseif not creature:IsInCombat() then
@@ -571,7 +571,7 @@ local function snowpackedIcicleReset(_, creature)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
     creature:SetRooted(true)
     creature:SetReactState(REACT_PASSIVE)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "snowpacked", 12000, function()
         local drift = creature:FindNearestGameObject(GO_SNOWDRIFT, 2.0)
         if drift then
@@ -582,7 +582,7 @@ local function snowpackedIcicleReset(_, creature)
 end
 
 local function snowpackedIcicleDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function toastyFireReset(_, creature)
@@ -634,13 +634,13 @@ local function icicleReset(_, creature)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
     creature:SetRooted(true)
     creature:SetReactState(REACT_PASSIVE)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "icicle", 2500, function() icicleTick(creature, guid) end)
 end
 
 local function icicleDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ICICLE, 23, icicleReset)
@@ -813,7 +813,7 @@ end
 -- C++ priest Reset (:669-673): events.Reset() + EVENT_HEAL {4s,8s} +
 -- EVENT_DISPEL_MAGIC {15s,20s} (dispel leg stays out, see above).
 local function priestReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "priestHeal", {4000, 8000}, function() priestHealTick(creature, guid) end)
     schedule(guid, "priestHealth", 1000, function() priestHealthPoll(creature, guid) end)
@@ -824,7 +824,7 @@ end
 -- flash-freeze idiom in this file (GetInstanceCreature +
 -- creature:DoAction, ev38 dispatch lua_creature_events.go:827).
 local function helperDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local hodir = creature:GetInstanceCreature(BOSS_HODIR)
     if hodir then
         hodir:DoAction(ACTION_I_HAVE_THE_COOLEST_FRIENDS)
@@ -851,7 +851,7 @@ end
 
 -- C++ shaman Reset (:752-756): EVENT_STORM_CLOUD {10s,12500ms}.
 local function shamanReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shamanStorm", {10000, 12500}, function() shamanStormTick(creature, guid) end)
 end
@@ -872,7 +872,7 @@ end
 
 -- C++ druid Reset (:817-821): EVENT_STARLIGHT {15s,17500ms}.
 local function druidReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "druidStarlight", {15000, 17500}, function() druidStarlightTick(creature, guid) end)
 end
@@ -894,22 +894,22 @@ local function mageJustSummoned(event, creature, summon)
     if not summon or summon:GetEntry() ~= ENTRY_TOASTY_FIRE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = mageToasties[guid]
     if not list then
         list = {}
         mageToasties[guid] = list
     end
-    list[summon:GetGUID()] = summon
+    list[summon:GetGUIDLow()] = summon
 end
 
 local function mageSummonDespawned(event, creature, summon)
     if not summon or summon:GetEntry() ~= ENTRY_TOASTY_FIRE then
         return
     end
-    local list = mageToasties[creature:GetGUID()]
+    local list = mageToasties[creature:GetGUIDLow()]
     if list then
-        list[summon:GetGUID()] = nil
+        list[summon:GetGUIDLow()] = nil
     end
 end
 
@@ -970,7 +970,7 @@ end
 -- despawn on death — the DespawnAll leg is IsDead-guarded (IsDead reads
 -- Health == 0, zeroed before the 23+4 fire).
 local function mageReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if not creature:IsDead() then
         local list = mageToasties[guid]
@@ -997,7 +997,7 @@ end
 -- cases for 2963/2965 + 2961/2962); the receiver is live now that the
 -- four add JustDied senders land above.
 local function hodirDoAction(event, creature, action)
-    local latches = hodirLatches[creature:GetGUID()]
+    local latches = hodirLatches[creature:GetGUIDLow()]
     if not latches then
         return
     end
@@ -1044,7 +1044,7 @@ RegisterCreatureEvent(ENTRY_MAGE_B, 20, mageSummonDespawned)
 local bitingColdCounters = {}
 
 local function bitingColdTick(event, aura, target)
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     local count = bitingColdCounters[guid]
     if not count then
         bitingColdCounters[guid] = 1
@@ -1063,7 +1063,7 @@ end
 -- C++ AuraScript destruction drops the per-instance list with the
 -- aura; the remove hook is the exact twin.
 local function bitingColdRemove(event, aura, target)
-    bitingColdCounters[target:GetGUID()] = nil
+    bitingColdCounters[target:GetGUIDLow()] = nil
 end
 
 -- C++ spell_biting_cold_dot::HandleEffectPeriodic

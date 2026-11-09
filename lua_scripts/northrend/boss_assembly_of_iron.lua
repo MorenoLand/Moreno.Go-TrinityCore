@@ -341,7 +341,7 @@ end
 -- Range 200 covers the room (CircleBoundary radius 90,
 -- instance_ulduar.cpp:39 — max separation under 180).
 local function assemblyBossesAlive(creature)
-    local selfGuid = creature:GetGUID()
+    local selfGuid = creature:GetGUIDLow()
     for _, entry in ipairs({ENTRY_STEELBREAKER, ENTRY_MOLGEIM, ENTRY_BRUNDIR}) do
         for _, other in ipairs(creature:GetCreaturesInGrid(entry, 200)) do
             if other:GetGUID() ~= selfGuid and other:IsAlive() then
@@ -436,7 +436,7 @@ local function superchargeSurvivors(creature)
             end
         end,
     }
-    local selfGuid = creature:GetGUID()
+    local selfGuid = creature:GetGUIDLow()
     for _, entry in ipairs({ENTRY_STEELBREAKER, ENTRY_MOLGEIM, ENTRY_BRUNDIR}) do
         for _, add in ipairs(creature:GetCreaturesInGrid(entry, 100)) do
             if add:GetGUID() ~= selfGuid and add:IsAlive() then
@@ -447,14 +447,14 @@ local function superchargeSurvivors(creature)
                 -- The `or 1` fallback is the post-engage phase (each
                 -- boss's ev1 sets 1 below); at phase 3 the survivor is
                 -- the achievement target (GetData(DATA_PHASE_3) == 1).
-                local phase = (assemblyPhase[add:GetGUID()] or 1) + 1
-                assemblyPhase[add:GetGUID()] = phase
+                local phase = (assemblyPhase[add:GetGUIDLow()] or 1) + 1
+                assemblyPhase[add:GetGUIDLow()] = phase
                 if phase >= 3 then
                     add:SetData(DATA_PHASE_3, 1)
                 end
                 local rearm = rearms[entry]
                 if rearm then
-                    rearm(add, add:GetGUID(), phase)
+                    rearm(add, add:GetGUIDLow(), phase)
                 end
             end
         end
@@ -551,7 +551,7 @@ local function steelbreakerEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_STEELBREAKER_AGGRO)
     creature:CastSpell(creature, SPELL_HIGH_VOLTAGE)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     assemblyPhase[guid] = 1 -- C++ JustEngagedWith: events.SetPhase(++phase), phase 0 -> 1 (boss_assembly_of_iron.cpp:167)
     schedule(guid, "berserk", 900000, function()
@@ -563,7 +563,7 @@ local function steelbreakerEnterCombat(event, creature, target)
 end
 
 local function steelbreakerLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:155-160): _Reset() + phase = 0 + me->RemoveAllAuras()
@@ -575,13 +575,13 @@ end
 -- the handler twin (engine/world/lua_creature_events.go:166, the
 -- evade-leg twin).
 local function steelbreakerReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) ~= 3 then
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
     end
     creature:RemoveAllAuras()
     -- C++ Reset -> Initialize: phase = 0 (boss_assembly_of_iron.cpp:155-160).
-    assemblyPhase[creature:GetGUID()] = 0
+    assemblyPhase[creature:GetGUIDLow()] = 0
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's phase before
@@ -601,7 +601,7 @@ local function steelbreakerTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
         creature:Talk(SAY_STEELBREAKER_SLAY)
     end
-    if assemblyPhase[creature:GetGUID()] == 3 then
+    if assemblyPhase[creature:GetGUIDLow()] == 3 then
         creature:CastSpell(creature, SPELL_ELECTRICAL_CHARGE)
     end
 end
@@ -617,7 +617,7 @@ end
 -- live (lua_creature_events.go:3932); GetBossState bridge live
 -- (lua_creature_events.go).
 local function steelbreakerDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if not assemblyBossesAlive(creature) then
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 3)
     end
@@ -745,7 +745,7 @@ local function molgeimEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:312)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_MOLGEIM_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     assemblyPhase[guid] = 1 -- C++ JustEngagedWith: events.SetPhase(++phase), phase 0 -> 1 (boss_assembly_of_iron.cpp:314)
     schedule(guid, "berserk", 900000, function()
@@ -760,7 +760,7 @@ local function molgeimEnterCombat(event, creature, target)
 end
 
 local function molgeimLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:303-308): _Reset() + phase = 0 + me->RemoveAllAuras()
@@ -771,13 +771,13 @@ end
 -- the handler twin (engine/world/lua_creature_events.go:166, the
 -- evade-leg twin).
 local function molgeimReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) ~= 3 then
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
     end
     creature:RemoveAllAuras()
     -- C++ Reset -> Initialize: phase = 0 (boss_assembly_of_iron.cpp:303-308).
-    assemblyPhase[creature:GetGUID()] = 0
+    assemblyPhase[creature:GetGUIDLow()] = 0
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's phase before
@@ -804,7 +804,7 @@ end
 -- Talk(SAY_DEATH 4) + supercharge DoAction cascade to survivors
 -- (grid-sweep relay superchargeSurvivors).
 local function molgeimDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if not assemblyBossesAlive(creature) then
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 3)
     end
@@ -919,7 +919,7 @@ local function brundirEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_assembly_of_iron.cpp:491)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_BRUNDIR_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     assemblyPhase[guid] = 1 -- C++ JustEngagedWith: events.SetPhase(++phase), phase 0 -> 1 (boss_assembly_of_iron.cpp:493)
     schedule(guid, "berserk", 900000, function()
@@ -934,7 +934,7 @@ local function brundirEnterCombat(event, creature, target)
 end
 
 local function brundirLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:471-483): _Reset() + phase = 0 + me->RemoveAllAuras() +
@@ -946,7 +946,7 @@ end
 -- (engine/world/lua_creature_events.go:166, the evade-leg twin),
 -- and SetHover(false) follows in C++ arm order.
 local function brundirReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(DATA_ASSEMBLY_OF_IRON) ~= 3 then
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 0)
     end
@@ -958,7 +958,7 @@ local function brundirReset(event, creature)
     creature:ApplySpellImmune(0, 5, MECHANIC_INTERRUPT, false)
     creature:ApplySpellImmune(0, 5, MECHANIC_STUN, false)
     -- C++ Reset -> Initialize: phase = 0 (boss_assembly_of_iron.cpp:471-483).
-    assemblyPhase[creature:GetGUID()] = 0
+    assemblyPhase[creature:GetGUIDLow()] = 0
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's phase before
@@ -985,7 +985,7 @@ end
 -- Talk(SAY_DEATH 4) + supercharge DoAction cascade to survivors
 -- (grid-sweep relay superchargeSurvivors).
 local function brundirDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if not assemblyBossesAlive(creature) then
         creature:SetBossState(DATA_ASSEMBLY_OF_IRON, 3)
     end

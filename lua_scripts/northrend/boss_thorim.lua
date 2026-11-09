@@ -442,8 +442,8 @@ local function thorimEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO_1)
     creature:CastSpell(creature, SPELL_SHEATH_OF_LIGHTNING)
-    cancelTimers(creature:GetGUID())
-    local guid = creature:GetGUID()
+    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
     thorimPhase[guid] = 1
     thorimOrbSummoned[guid] = false
     schedule(guid, "sayAggro2", 9000, function()
@@ -482,7 +482,7 @@ local function thorimEnterCombat(event, creature, target)
 end
 
 local function thorimLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_thorimAI::Reset (boss_thorim.cpp:465-477): early-return if
@@ -497,15 +497,15 @@ end
 -- SetImmuneToPC(true) and the mini-boss respawn stay out (balcony-phase
 -- gating; no instance bridge for the respawn).
 local function thorimReset(event, creature)
-    if thorimFinished[creature:GetGUID()] then
+    if thorimFinished[creature:GetGUIDLow()] then
         return
     end
     creature:SetBossState(BOSS_THORIM, 0) -- _Reset() SetBossState(DATA_THORIM 8, NOT_STARTED), first after the _encounterFinished guard per C++ :465-471 (PORTED tick 259)
     creature:SetReactState(0)
     creature:SetDisableGravity(true)
     creature:SetRooted(true)
-    cancelTimers(creature:GetGUID())
-    thorimKilledCount[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    thorimKilledCount[creature:GetGUIDLow()] = nil
     -- C++ Reset -> Initialize (boss_thorim.cpp:456-461): _hardMode
     -- = true, _dontStandInTheLightning = true. Alive-gated: ev23
     -- fires on death too (fireCreatureDied runs Reset before the
@@ -518,7 +518,7 @@ local function thorimReset(event, creature)
         creature:SetData(DATA_DONT_STAND_IN_THE_LIGHTNING, 1)
         creature:SetData(DATA_LOSE_YOUR_ILLUSION, 1)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     thorimPhase[guid] = nil
     thorimOrbSummoned[guid] = nil
     thorimColossusDead[guid] = nil
@@ -551,7 +551,7 @@ end
 -- The RemoveFlag leg is currently a no-op: Lua never sets Thorim immune
 -- (header), but it is the C++ arm, kept verbatim.
 local function thorimDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_INCREASE_PREADDS_COUNT then
         local count = (thorimKilledCount[guid] or 0) + 1
         thorimKilledCount[guid] = count
@@ -588,7 +588,7 @@ end
 -- outright (boss_thorimAI overrides no JustDied).
 local function thorimDied(event, creature, killer)
     creature:SetBossState(BOSS_THORIM, 3) -- true-kill fallback: BossAI::JustDied -> _JustDied() DONE (PORTED tick 259)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_thorimAI::KilledUnit: who->GetTypeId() == TYPEID_PLAYER, then
@@ -616,7 +616,7 @@ end
 -- aura clears, hard-mode Sif despawn and the outro Talks 8-13
 -- (hard-mode branch timing) stay out.
 local function thorimDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local postDamage = creature:GetHealth() - damage
     -- C++ boss_thorimAI::DamageTaken phase-1 branch (boss_thorim.cpp:921-936):
     -- if (IsInPhase(PHASE_1) && CanStartPhase2(attacker)): Talk(SAY_JUMPDOWN 3)
@@ -651,10 +651,10 @@ local function thorimDamageTaken(event, creature, attacker, damage)
             creature:CastSpell(creature, SPELL_CREDIT_SIFFED, true)
         end
     elseif postDamage < math.floor(creature:GetMaxHealth() / 100) then
-        if thorimFinished[creature:GetGUID()] then
+        if thorimFinished[creature:GetGUIDLow()] then
             return false, 0
         end
-        thorimFinished[creature:GetGUID()] = true
+        thorimFinished[creature:GetGUIDLow()] = true
         creature:CastSpell(creature, SPELL_CREDIT_KILL, true)
         creature:SetReactState(0)
         creature:InterruptNonMeleeSpells()
@@ -749,7 +749,7 @@ local function colossusDoAction(event, creature, action)
     if action ~= ACTION_ACTIVATE_RUNIC_SMASH then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if colossusRunicActive[guid] then
         return
     end
@@ -766,7 +766,7 @@ end
 -- DoAction(ACTION_ACTIVATE_RUNIC_SMASH) — PORTED 2026-11-05, tick 214.)
 local function colossusEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- C++ :1444, first arm (bridge live 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "runicbarrier", {12000, 15000}, function()
         colossusRunicBarrierTick(creature, guid)
@@ -780,7 +780,7 @@ local function colossusEnterCombat(event, creature, target)
 end
 
 local function colossusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_runic_colossusAI::Reset (:1395-1406): _summons.DespawnAll (no
@@ -789,8 +789,8 @@ end
 -- summon loop (TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s), PORTED below,
 -- IsAlive-guarded like thorimReset. The runic-door instance leg stays out.
 local function colossusReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    colossusRunicActive[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    colossusRunicActive[creature:GetGUIDLow()] = nil
     local runicDoor = creature:FindNearestGameObject(GO_THORIM_RUNIC_DOOR, 100)
     if runicDoor then runicDoor:SetGoState(1) end
     if creature:IsAlive() then
@@ -804,7 +804,7 @@ local function colossusReset(event, creature)
 end
 
 local function colossusDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local runicDoor = creature:FindNearestGameObject(GO_THORIM_RUNIC_DOOR, 100)
     if runicDoor then runicDoor:SetGoState(0) end
     -- C++ npc_runic_colossusAI::JustDied (boss_thorim.cpp:1429-1441), in
@@ -821,7 +821,7 @@ local function colossusDied(event, creature, killer)
     -- Keyed by Thorim's GUID — the sweep is the same 500yd fetch as the
     -- Talk leg above.
     if thorim then
-        thorimColossusDead[thorim:GetGUID()] = true
+        thorimColossusDead[thorim:GetGUIDLow()] = true
     end
     local giant = creature:FindNearestCreature(ENTRY_ANCIENT_RUNE_GIANT, 500)
     if giant then
@@ -890,7 +890,7 @@ end
 
 local function giantEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- C++ :1532, first arm (bridge live 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "runicfortification", 1, function()
         giantRunicFortificationTick(creature, guid)
@@ -904,7 +904,7 @@ local function giantEnterCombat(event, creature, target)
 end
 
 local function giantLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_ancient_rune_giantAI::Reset (:1517-1529): same shape as
@@ -912,7 +912,7 @@ end
 -- summon loop (TEMPSUMMON_CORPSE_TIMED_DESPAWN 3s) PORTED below,
 -- IsAlive-guarded. The stone-door instance leg stays out.
 local function giantReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local stoneDoor = creature:FindNearestGameObject(GO_THORIM_STONE_DOOR, 100)
     if stoneDoor then stoneDoor:SetGoState(1) end
     if creature:IsAlive() then
@@ -925,13 +925,13 @@ local function giantReset(event, creature)
 end
 
 local function giantDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local stoneDoor = creature:FindNearestGameObject(GO_THORIM_STONE_DOOR, 100)
     if stoneDoor then stoneDoor:SetGoState(0) end
     -- CanStartPhase2 latch (boss_thorim.cpp:911-919): the rune giant is dead.
     local thorim = creature:FindNearestCreature(ENTRY_THORIM, 500)
     if thorim then
-        thorimGiantDead[thorim:GetGUID()] = true
+        thorimGiantDead[thorim:GetGUIDLow()] = true
     end
 end
 

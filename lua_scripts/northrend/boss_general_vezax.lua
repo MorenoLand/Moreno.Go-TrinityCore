@@ -480,7 +480,7 @@ local function vezaxEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_AURA_OF_DESPAIR)
     checkShamanisticRage(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "surge", 60000, function()
         surgeOfDarknessTick(creature, guid)
@@ -533,8 +533,8 @@ local function vezaxDied(event, creature, killer)
     -- (maiden tick-257 precedent).
     creature:SetBossState(DATA_VEZAX, 3)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
-    vaporCounts[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    vaporCounts[creature:GetGUIDLow()] = nil
     -- C++ JustDied (boss_general_vezax.cpp:234-239 — arm order: _JustDied,
     -- Talk(SAY_DEATH), DoRemoveAurasDueToSpellOnPlayers): the player leg
     -- is PORTED via stripDespairAuras above (C++ arm order; the
@@ -546,7 +546,7 @@ end
 -- Shared timer wipe for event 2 (leave-combat does NOT call Reset
 -- in C++ — the sjonnir precedent; ev23 below is the Reset handler).
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_general_vezax.cpp:127-133): _Reset() —
@@ -556,8 +556,8 @@ end
 -- Initialize() flag inits stay out (consumed only by the unported
 -- GetData / hard-mode machines).
 local function vezaxReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    vaporCounts[creature:GetGUID()] = 0
+    cancelTimers(creature:GetGUIDLow())
+    vaporCounts[creature:GetGUIDLow()] = 0
     creature:SetBossState(DATA_VEZAX, 0)
     -- C++ Reset -> Initialize (:110-115, :127-133): smellSaronite =
     -- true, shadowDodger = true. The achievement_smell_saronite /
@@ -581,7 +581,7 @@ end
 -- fresh motion's ScriptData reads 0, so the spawn handler sets the
 -- C++ default before any engage can occur.
 local function vezaxSpawned(event, creature)
-    vaporCounts[creature:GetGUID()] = 0
+    vaporCounts[creature:GetGUIDLow()] = 0
     creature:SetData(DATA_SMELL_SARONITE, 1)
     creature:SetData(DATA_SHADOWDODGER, 1)
 end
@@ -618,7 +618,7 @@ local function vezaxDoAction(event, creature, action)
         -- cancels any pending searing_flames key first, so this
         -- re-arms cleanly after the hard-mode cancel.
         creature:RemoveAura(SPELL_SARONITE_BARRIER)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "searing_flames", {7000, 12000}, function()
             searingFlamesTick(creature, guid)
         end)

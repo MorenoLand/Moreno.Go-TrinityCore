@@ -220,7 +220,7 @@ local outtro1, outtro2, outtro3, intro1
 -- C++ constructor (:391): SetReactState(REACT_PASSIVE), _fireFighter false.
 local function mimironSpawn(event, creature)
     creature:SetReactState(REACT_PASSIVE)
-    stateFor(creature:GetGUID())
+    stateFor(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:456), creature-local legs in C++ order: DONE
@@ -234,9 +234,9 @@ local function mimironReset(event, creature)
         return
     end
     creature:SetBossState(BOSS_MIMIRON, 0)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
-    stateFor(creature:GetGUID()).fireFighter = false
+    stateFor(creature:GetGUIDLow()).fireFighter = false
     creature:CastSpell(creature, SPELL_WELD)
 end
 
@@ -249,7 +249,7 @@ local function mimironEnterCombat(event, creature, target)
     creature:SetBossState(BOSS_MIMIRON, 1)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     creature:RemoveAura(SPELL_WELD)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "intro1", 1500, function()
         intro1(creature, guid)
     end)
@@ -316,7 +316,7 @@ end
 -- no-op when unseated (see DEVIATIONS) -- then OUTTRO_1 in 7s. The
 -- _fireFighter latch is NOT cleared here (OUTTRO_2 reads it).
 local function mimironDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetBossState(BOSS_MIMIRON, 3)
     cancelTimers(guid)
     creature:CombatStop(true)
@@ -534,7 +534,7 @@ end
 -- :1229, computer self-destruct :1453), so the receiver is dormant until
 -- those senders land -- the vezax ANIMUS_DIE precedent.
 local function mimironDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == DO_ACTIVATE_VX001 then
         schedule(guid, "vx001act1", 1000, function()
             vx001Activation1(creature, guid)

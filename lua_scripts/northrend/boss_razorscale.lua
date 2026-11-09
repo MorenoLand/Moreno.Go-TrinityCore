@@ -758,7 +758,7 @@ RS.razorscaleSpellHit = function(event, creature, caster, spellId)
     if spellId ~= RS.SPELL_HARPOON_TRIGGER then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local count = (RS.harpoonHits[guid] or 0) + 1
     RS.harpoonHits[guid] = count
     local threshold = 2
@@ -776,7 +776,7 @@ end
 -- arms fire on lethal hits (nefarian-form rule), so no postDamage > 0
 -- guard; postDamage = GetHealth() - damage (algalon precedent).
 RS.razorscaleDamageTaken = function(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if RS.permaGround[guid] or RS.phase[guid] ~= RS.PHASE_GROUND then
         return
     end
@@ -799,7 +799,7 @@ end
 -- engineer (spline-chain position). Group summons reach ev19 via the
 -- summon funnel (lua_creature_events.go:190).
 RS.razorscaleJustSummoned = function(event, creature, summon)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local counts = RS.summonCounts[guid]
     if not counts then
         counts = {defender = 0, engineer = 0, trapper = 0}
@@ -807,13 +807,13 @@ RS.razorscaleJustSummoned = function(event, creature, summon)
     end
     local entry = summon:GetEntry()
     if entry == RS.ENTRY_EXPEDITION_DEFENDER then
-        RS.defenderNumber[summon:GetGUID()] = counts.defender
+        RS.defenderNumber[summon:GetGUIDLow()] = counts.defender
         counts.defender = counts.defender + 1
     elseif entry == ENTRY_EXPEDITION_ENGINEER then
-        RS.engineerNumber[summon:GetGUID()] = counts.engineer
+        RS.engineerNumber[summon:GetGUIDLow()] = counts.engineer
         counts.engineer = counts.engineer + 1
     elseif entry == RS.ENTRY_EXPEDITION_TRAPPER then
-        RS.trapperNumber[summon:GetGUID()] = counts.trapper
+        RS.trapperNumber[summon:GetGUIDLow()] = counts.trapper
         counts.trapper = counts.trapper + 1
     end
 end
@@ -830,7 +830,7 @@ end
 -- _stopControllers latch is set-then-cleared inside the same call, so
 -- no Lua latch is kept).
 RS.commanderDoAction = function(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if RS.commanderBuilding[guid] and action ~= RS.ACTION_ENGINEER_DEAD then
         return
     end
@@ -877,7 +877,7 @@ RS.trapperDoAction = function(event, creature, action)
         return
     end
     if action == RS.ACTION_SHACKLE_RAZORSCALE then
-        local pos = RS.TRAPPER_POSITIONS[(RS.trapperNumber[creature:GetGUID()] or 0) + 1]
+        local pos = RS.TRAPPER_POSITIONS[(RS.trapperNumber[creature:GetGUIDLow()] or 0) + 1]
         creature:MoveTo(RS.POINT_SHACKLE_RAZORSCALE, pos[1], pos[2], pos[3])
     elseif action == RS.ACTION_RETURN_TO_BASE then
         creature:MoveHome()
@@ -919,7 +919,7 @@ end
 -- rides ev19 (RS.defenderNumber).
 RS.defenderDoAction = function(event, creature, action)
     if action == RS.ACTION_START_FIGHT then
-        local pos = RS.DEFENDER_POSITIONS[(RS.defenderNumber[creature:GetGUID()] or 0) + 1]
+        local pos = RS.DEFENDER_POSITIONS[(RS.defenderNumber[creature:GetGUIDLow()] or 0) + 1]
         creature:MoveTo(RS.POINT_DEFENDER_ATTACK, pos[1], pos[2], pos[3])
     end
 end
@@ -934,7 +934,7 @@ RS.defenderMovementInform = function(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE and id ~= RS.POINT_DEFENDER_ATTACK then
         return
     end
-    local pos = RS.DEFENDER_POSITIONS[(RS.defenderNumber[creature:GetGUID()] or 0) + 1]
+    local pos = RS.DEFENDER_POSITIONS[(RS.defenderNumber[creature:GetGUIDLow()] or 0) + 1]
     creature:SetHomePosition(pos[1], pos[2], pos[3], 0)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, RS.UNIT_FLAG_IMMUNE_TO_NPC)
 end
@@ -953,7 +953,7 @@ RS.engineerDoAction = function(event, creature, action)
         return
     end
     if action == RS.ACTION_START_FIGHT or action == RS.ACTION_FIX_HARPOONS then
-        if (RS.engineerNumber[creature:GetGUID()] or 0) == RS.ENGINEER_EAST then
+        if (RS.engineerNumber[creature:GetGUIDLow()] or 0) == RS.ENGINEER_EAST then
             creature:Talk(RS.SAY_ENGINEER_AGGRO)
         end
         CreateLuaEvent(function()
@@ -976,7 +976,7 @@ end
 -- call returns false and the chain stays LATENT until the deployment
 -- DB ships the rows — same class as the mole-machine GO leg.
 RS.engineerHandleHarpoonMovement = function(creature)
-    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    local pos = (RS.engineerNumber[creature:GetGUIDLow()] or 0) + 1
     if pos == RS.ENGINEER_EAST + 1 then
         creature:Talk(RS.SAY_ENGINEER_START_REPAIR)
     end
@@ -998,7 +998,7 @@ end
 -- only; north/west walk the base chain, east MovePoints home
 -- (GetHomePosition bridge, lua_creature_events.go:6161).
 RS.engineerHandleSecondHarpoonMovement = function(creature)
-    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    local pos = (RS.engineerNumber[creature:GetGUIDLow()] or 0) + 1
     local chain, point
     if creature:Is25ManRaid() then
         chain = RS.CHAIN_H2[pos][2]
@@ -1011,7 +1011,7 @@ RS.engineerHandleSecondHarpoonMovement = function(creature)
 end
 
 RS.engineerHandleThirdHarpoonMovement = function(creature)
-    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    local pos = (RS.engineerNumber[creature:GetGUIDLow()] or 0) + 1
     if creature:Is25ManRaid() then
         creature:MoveAlongSplineChain(RS.POINT_HARPOON_3, RS.CHAIN_H3[pos], false)
     else
@@ -1023,7 +1023,7 @@ RS.engineerHandleFourthHarpoonMovement = function(creature)
     if not creature:Is25ManRaid() then
         return
     end
-    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    local pos = (RS.engineerNumber[creature:GetGUIDLow()] or 0) + 1
     creature:MoveAlongSplineChain(RS.POINT_HARPOON_4, RS.CHAIN_H4[pos], false)
 end
 
@@ -1031,7 +1031,7 @@ RS.engineerHandleBaseMovement = function(creature)
     if not creature:Is25ManRaid() then
         return
     end
-    local pos = (RS.engineerNumber[creature:GetGUID()] or 0) + 1
+    local pos = (RS.engineerNumber[creature:GetGUIDLow()] or 0) + 1
     if pos == RS.ENGINEER_EAST + 1 then
         local hx, hy, hz = creature:GetHomePosition()
         creature:MoveTo(RS.POINT_BASE, hx, hy, hz)
@@ -1199,7 +1199,7 @@ end
 -- GUID-keyed Lua state is fresh too; the explicit false writes keep
 -- a re-fired ev23 on the same GUID from stranding a build).
 RS.commanderReset = function(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     RS.commanderBuilding[guid] = false
     RS.commanderDestroy[guid] = false
@@ -1254,11 +1254,11 @@ local function razorscaleEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SendEncounterUnit(0, creature) -- ENCOUNTER_FRAME_ENGAGE (boss_razorscale.cpp:359)
     creature:SetCombatMovement(false) -- Reset arm, boss_razorscale.cpp:329 (no AttackStart chase in air phase)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ HandleMusic(true) (JustEngagedWith :363) — encounter music on.
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     RS.phase[guid] = RS.PHASE_AIR
     RS.permaGround[guid] = false
     RS.harpoonHits[guid] = 0
@@ -1292,23 +1292,23 @@ end
 -- SetCombatMovement(false) (:329, modeled on ev1 where it persists
 -- into the air phase). Event 23 never calls HandleMusic.
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ _Reset state leg (boss_razorscale.cpp:319, ScriptedCreature.cpp:499-511).
     if creature:IsAlive() and creature:GetBossState(DATA_RAZORSCALE) ~= 3 then
         creature:SetBossState(DATA_RAZORSCALE, 0)
     end
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
     -- _engineersCount = 3.
-    engineersRemaining[creature:GetGUID()] = 3
+    engineersRemaining[creature:GetGUIDLow()] = 3
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307/317-319):
     -- _flyCount = 0, so GetData(DATA_QUICK_SHAVE) reads 1 (0 <= 1).
-    razorscaleFlyCount[creature:GetGUID()] = 0
+    razorscaleFlyCount[creature:GetGUIDLow()] = 0
     -- C++ Reset -> Initialize (boss_razorscale.cpp:307-314): phase
     -- NONE, _permaGround false, _harpoonHitCount 0, summon counters 0.
-    RS.phase[creature:GetGUID()] = 0
-    RS.permaGround[creature:GetGUID()] = false
-    RS.harpoonHits[creature:GetGUID()] = 0
-    RS.summonCounts[creature:GetGUID()] = nil
+    RS.phase[creature:GetGUIDLow()] = 0
+    RS.permaGround[creature:GetGUIDLow()] = false
+    RS.harpoonHits[creature:GetGUIDLow()] = 0
+    RS.summonCounts[creature:GetGUIDLow()] = nil
     -- C++ Reset -> Initialize (boss_razorscale.cpp:314):
     -- SetDisableGravity(true) — the boss hovers again after a wipe;
     -- without it a perma-ground Reset would leave her gravity-bound
@@ -1347,7 +1347,7 @@ end
 -- Split from the died handler 2026-11-05 tick 258 (ev2 leave-combat
 -- does NOT call Reset in C++ — sjonnir precedent).
 local function leaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ SendEncounterUnit disengage (EnterEvadeMode :519).
     creature:SendEncounterUnit(1, creature)
     -- C++ HandleMusic(false) (EnterEvadeMode :521).
@@ -1359,7 +1359,7 @@ end
 -- disengage (:529) + HandleMusic(false) (:530); no Talk arms.
 local function razorscaleDied(event, creature)
     creature:SetBossState(DATA_RAZORSCALE, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_razorscale.cpp:529)
     -- C++ HandleMusic(false) (JustDied :530).
     creature:UpdateWorldState(WORLD_STATE_RAZORSCALE_MUSIC, 0)
@@ -1378,7 +1378,7 @@ local function razorscaleSummonedCreatureDies(event, creature, summon, killer)
     if summon:GetEntry() ~= ENTRY_EXPEDITION_ENGINEER then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local remaining = engineersRemaining[guid] or 3
     if remaining > 0 then
         remaining = remaining - 1
@@ -1436,9 +1436,9 @@ local function razorscaleDoAction(event, creature, action)
         creature:StopMoving()
         creature:MoveTo(POINT_RAZORSCALE_FLIGHT, 585.361, -173.5592, 456.843)
     elseif action == RS.ACTION_GROUND_PHASE then -- ACTION_GROUND_PHASE
-        RS.groundPhase(creature, creature:GetGUID())
+        RS.groundPhase(creature, creature:GetGUIDLow())
     elseif action == RS.ACTION_START_PERMA_GROUND then -- ACTION_START_PERMA_GROUND
-        RS.startPermaGround(creature, creature:GetGUID())
+        RS.startPermaGround(creature, creature:GetGUIDLow())
     end
 end
 
@@ -1454,7 +1454,7 @@ local function razorscaleMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE and moveType ~= RS.EFFECT_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == POINT_RAZORSCALE_FLIGHT then
         -- C++ :443-448: UpdateSpeed (no bridge — the run rate was
         -- already applied by SetSpeedRate in ACTION_START_FIGHT),
@@ -1556,7 +1556,7 @@ RegisterCreatureEvent(ENTRY_DARK_RUNE_GUARDIAN, 14, darkRuneGuardianSpellHit)
 -- cast is dormant until a SpellScript bridge lands (its script effect
 -- casts 62926/63135). PORTED 2026-11-08.
 RS.spawnerReset = function(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetReactState(RS.REACT_PASSIVE)
     schedule(guid, "mole_machine", 1000, function()
@@ -1579,12 +1579,12 @@ end
 -- JustSummoned :463-479 is BossAI::JustSummoned + expedition-only
 -- SetData, darkrune entries hit default). PORTED 2026-11-08.
 RS.darkRuneReset = function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetReactState(RS.REACT_PASSIVE)
 end
 
 RS.darkRuneLeaveCombat = function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RS.darkRuneStartCombat = function(creature, guid)
@@ -1602,7 +1602,7 @@ end
 -- DORMANT until the spawner trigger SpellScript lands (63968/63970/
 -- 63969 -> 63135); the AI itself is fully bridged. PORTED 2026-11-08.
 RS.darkRuneWatcherEngaged = function(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "start_combat", 2000, function() RS.darkRuneStartCombat(creature, guid) end)
     schedule(guid, "lightning_bolt", 5000, function() RS.darkRuneWatcherLightningBolt(creature, guid) end)
     schedule(guid, "chain_lightning", 34000, function() RS.darkRuneWatcherChainLightning(creature, guid) end)
@@ -1636,7 +1636,7 @@ end
 -- achievement case (ScriptData slot 29232924). Same dormant
 -- summon-chain note as the watcher. PORTED 2026-11-08.
 RS.darkRuneGuardianEngaged = function(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "start_combat", 2000, function() RS.darkRuneStartCombat(creature, guid) end)
     schedule(guid, "stormstrike", 23000, function() RS.darkRuneGuardianStormstrike(creature, guid) end)
 end
@@ -1660,7 +1660,7 @@ end
 -- {10s,13s}. Same dormant summon-chain note as the watcher.
 -- PORTED 2026-11-08.
 RS.darkRuneSentinelEngaged = function(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "start_combat", 2000, function() RS.darkRuneStartCombat(creature, guid) end)
     schedule(guid, "heroic_strike", 9000, function() RS.darkRuneSentinelHeroicStrike(creature, guid) end)
     schedule(guid, "battle_shout", 15000, function() RS.darkRuneSentinelBattleShout(creature, guid) end)

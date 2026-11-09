@@ -526,7 +526,7 @@ end
 -- below in base order (ScriptedCreature.cpp:527-544).
 local function kologarnEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "focusedeyebeam", 21000, function()
         focusedEyebeamTick(creature, guid)
@@ -570,11 +570,11 @@ local function kologarnEnterCombat(event, creature, target)
 end
 
 local function kologarnLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function kologarnReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset (boss_kologarn.cpp:140-144): _Reset() first —
     -- SetBossState(DATA_KOLOGARN, NOT_STARTED)
     -- (ScriptedCreature.cpp:499-511; the maiden_of_grief precedent
@@ -601,8 +601,8 @@ end
 -- ported (the PACIFY cast is bridgeable but a no-op on a dead
 -- caster — see header).
 local function kologarnDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    arms[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    arms[creature:GetGUIDLow()] = nil
     creature:Talk(SAY_DEATH)
     -- C++ boss_kologarn.cpp:151-152: MoveTargetedHome after Talk.
     creature:MoveHome()
@@ -668,7 +668,7 @@ local function kologarnPassengerBoarded(event, vehicle, passenger, seatId)
     if entry ~= ENTRY_LEFT_ARM and entry ~= ENTRY_RIGHT_ARM then
         return
     end
-    local guid = vehicle:GetGUID()
+    local guid = vehicle:GetGUIDLow()
     local state = armState(guid)
     local isLeft = entry == ENTRY_LEFT_ARM
     local apply = event == 5
@@ -858,7 +858,7 @@ local function stoneGripTargetSelect(event, spell, effectIndex, targets)
     if caster == nil or caster:GetObjectType() ~= "Creature" then
         return
     end
-    local guid = caster:GetGUID()
+    local guid = caster:GetGUIDLow()
     if effectIndex == 0 then
         local victim = caster:GetVictim()
         local victimGuid = 0

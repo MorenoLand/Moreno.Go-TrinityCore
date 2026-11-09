@@ -693,7 +693,7 @@ end
 -- twin (ev21 dispatch rides the OwnerGUID stamp, not the
 -- BossAI summons list).
 local function freyaJustSummoned(event, creature, summoned)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = freyaWave[guid]
     local entry = summoned:GetEntry()
     if st ~= nil and (entry == ENTRY_SNAPLASHER or entry == ENTRY_ANCIENT_WATER_SPIRIT or entry == ENTRY_STORM_LASHER) then
@@ -729,7 +729,7 @@ end
 -- elementalTimer accumulates from the first death, it does
 -- not reset on later deaths).
 local function freyaSummonedDied(event, creature, summoned, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = freyaWave[guid]
     local entry = summoned:GetEntry()
     if entry == ENTRY_DETONATING_LASHER then
@@ -781,7 +781,7 @@ local function freyaSummonedDied(event, creature, summoned, killer)
 end
 
 local function freyaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetBossState(BOSS_FREYA, 1) -- BossAI::JustEngagedWith SetBossState(DATA_FREYA 9, IN_PROGRESS), base-first (boss_freya.cpp:344; PORTED tick 259)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:344; me-form DoZone already ported below as the :345 arm)
@@ -890,7 +890,7 @@ local function freyaEnterCombat(event, creature, target)
 end
 
 local function freyaLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     freyaWave[guid] = nil
 end
@@ -911,7 +911,7 @@ local function freyaElderShutdown(creature)
             if elder:IsAlive() then
                 elder:RemoveAllAuras()
                 elder:CombatStop(true)
-                cancelTimers(elder:GetGUID())
+                cancelTimers(elder:GetGUIDLow())
                 elder:DoAction(ACTION_ELDER_FREYA_KILLED)
             end
         end
@@ -924,18 +924,18 @@ end
 -- event-4 fallback.
 local function freyaDied(event, creature, killer)
     creature:SetBossState(BOSS_FREYA, 3) -- _JustDied() SetBossState(DATA_FREYA 9, DONE), PORTED tick 259 (C++ JustDied :628)
-    cancelTimers(creature:GetGUID())
-    freyaWave[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    freyaWave[creature:GetGUIDLow()] = nil
     freyaElderShutdown(creature)
 end
 
 local function freyaReset(event, creature)
-    if freyaFinished[creature:GetGUID()] then
+    if freyaFinished[creature:GetGUIDLow()] then
         return -- C++ Reset early-returns when _encounterFinished (:318-322): no _Reset(), no NOT_STARTED write
     end
     creature:SetBossState(BOSS_FREYA, 0) -- _Reset() SetBossState(DATA_FREYA 9, NOT_STARTED), PORTED tick 259 (the tick-258 auriaya convention)
-    cancelTimers(creature:GetGUID())
-    freyaWave[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    freyaWave[creature:GetGUIDLow()] = nil
     -- C++ Reset -> Initialize (:285) zeroes elderCount; the attuned
     -- half mirrors the no-aura -> 0 sampling (:471-475). A fresh
     -- motion reads 0 anyway; this is the wipe twin. Alive-gated:
@@ -989,7 +989,7 @@ end
 -- latch is deliberately NOT cleared on Reset; a respawned Freya is
 -- a new GUID.
 local function freyaDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if damage >= creature:GetHealth() then
         if freyaFinished[guid] then
             return false, 0
@@ -1109,7 +1109,7 @@ local function brightleafEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:733)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "solar_flare", {5000, 7000}, function() onSolarFlare(creature, guid) end)
     schedule(guid, "unstable_sun_beam", {7000, 12000}, function() onUnstableSunBeam(creature, guid) end)
@@ -1163,7 +1163,7 @@ local function stonebarkEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:836)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "tremor", {10000, 12000}, function() onTremor(creature, guid) end)
     schedule(guid, "fists", {25000, 35000}, function() onFists(creature, guid) end)
@@ -1224,7 +1224,7 @@ local function ironbranchEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base-first (boss_freya.cpp:945)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     elderAggroTalk(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "impale", {18000, 22000}, function() onImpale(creature, guid) end)
     schedule(guid, "thorn_swarm", {7500, 12500}, function() onThornSwarm(creature, guid) end)
@@ -1232,7 +1232,7 @@ local function ironbranchEnterCombat(event, creature, target)
 end
 
 local function elderLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ elder Reset (:709-713 / :812-816 / :921-925): if
@@ -1242,7 +1242,7 @@ end
 -- elders (one handler, three registrations).
 local function elderReset(event, creature)
     creature:SetBossState(ELDER_BOSS_DATA[creature:GetEntry()], 0) -- _Reset() SetBossState(elder DATA, NOT_STARTED), first per C++ :711/:814/:923 (PORTED tick 259)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:HasAura(SPELL_DRAINED_OF_POWER) then
         creature:RemoveAura(SPELL_DRAINED_OF_POWER)
     end
@@ -1262,7 +1262,7 @@ end
 -- precedent.
 local function elderDied(event, creature, killer)
     creature:SetBossState(ELDER_BOSS_DATA[creature:GetEntry()], 3) -- _JustDied() SetBossState(elder DATA, DONE), first per C++ :725/:828/:937 (PORTED tick 259)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_ELDER_DEATH)
 end
 

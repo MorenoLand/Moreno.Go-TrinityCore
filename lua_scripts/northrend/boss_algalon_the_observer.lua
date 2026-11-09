@@ -334,7 +334,7 @@ local POINT_ALGALON_OUTRO = 4 -- AlgalonMovePoints enum, boss_algalon_the_observ
 -- branch. The if/else-if is C++-exact: a hit crossing both the 20%
 -- and 2.5% thresholds fires phase-two only.
 local function algalonDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = getState(guid)
     if state.fightWon then
         return false, 0
@@ -398,7 +398,7 @@ local function algalonTargetDied(event, creature, victim)
     -- it deliberately survives ev23 Reset — the per-motion ScriptData
     -- store is fresh only on respawn, the C++ fresh-AI twin).
     creature:SetData(DATA_HAS_FED_ON_TEARS, 1)
-    local state = getState(creature:GetGUID())
+    local state = getState(creature:GetGUIDLow())
     local now = os.time()
     if now >= state.killYellUntil then
         state.killYellUntil = now + 1
@@ -479,7 +479,7 @@ local function algalonMovementInform(event, creature, moveType, id)
     end
     creature:SetFacingTo(1.605703)
     CreateLuaEvent(function()
-        outro3(creature, creature:GetGUID())
+        outro3(creature, creature:GetGUIDLow())
     end, 1000)
 end
 
@@ -567,8 +567,8 @@ outro11 = function(creature, guid)
 end
 
 local function algalonReset(event, creature)
-    algalonState[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    algalonState[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
     -- EnterEvadeMode (boss_algalon_the_observer.cpp:449-455):
     -- SetBossState(FAIL) then BossAI::EnterEvadeMode -> Reset() ->
     -- _Reset() NOT_STARTED — PORTED tick 259 (FAIL first, then
@@ -839,8 +839,8 @@ local ACTION_ASCEND = 3 -- boss_algalon_the_observer.cpp:169
 
 local function algalonDoAction(event, creature, action)
     if action == ACTION_ASCEND then
-        schedule(creature:GetGUID(), "ascend", 1500, function()
-            ascendTick(creature, creature:GetGUID())
+        schedule(creature:GetGUIDLow(), "ascend", 1500, function()
+            ascendTick(creature, creature:GetGUIDLow())
         end)
     end
 end
@@ -905,7 +905,7 @@ end
 local collapsingStarDying = {}
 
 local function collapsingStarDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if collapsingStarDying[guid] then
         return false, 0
     end
@@ -926,7 +926,7 @@ local function collapsingStarJustSummoned(event, creature, summon)
     if summon:GetEntry() ~= NPC_BLACK_HOLE then
         return
     end
-    collapsingStarDying[creature:GetGUID()] = nil
+    collapsingStarDying[creature:GetGUIDLow()] = nil
     creature:DespawnOrUnsummon(1)
 end
 
@@ -967,7 +967,7 @@ RegisterCreatureEvent(NPC_BLACK_HOLE, 14, blackHoleSpellHit)
 -- Talk(SAY_ALGALON_AGGRO 4), introDelay = 8s. The combat timer arms
 -- below ride the same introDelay (the maiden CreateLuaEvent convention).
 local function algalonTimersStart(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local introDelay
     if algalonFirstPull[guid] == nil then
@@ -1069,14 +1069,14 @@ local function algalonTimersStart(event, creature)
 end
 
 local function algalonTimersStop(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ _firstPull lives on the AI object: death -> despawn -> respawn
     -- constructs a fresh AI with _firstPull = true (boss_algalon_the_
     -- observer.cpp:291). Wipes (event 2) keep the latch; only death
     -- re-arms the first-pull intro. Gated on entry — the shared handler
     -- also serves the living constellation.
     if event == 4 and creature:GetEntry() == ENTRY_ALGALON then
-        algalonFirstPull[creature:GetGUID()] = nil
+        algalonFirstPull[creature:GetGUIDLow()] = nil
     end
 end
 
@@ -1095,7 +1095,7 @@ local function arcaneBarrageTick(creature, guid)
 end
 
 local function constellationEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arcanebarrage", 2500, function()
         arcaneBarrageTick(creature, guid)

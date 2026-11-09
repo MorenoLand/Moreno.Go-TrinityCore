@@ -368,7 +368,7 @@ end
 -- keeper-count loot-mode legs stay out (the loot-mode bridge is live —
 -- keepers instance-data is the blocker, not the bridge).
 local function yoggSaronReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ boss_yogg_saronAI::Reset(): _events.Reset + SetPhase(PHASE_TWO)
     -- (:931-932) — the Lua phase latch only tracks PHASE_THREE, so Reset
@@ -564,7 +564,7 @@ local function yoggDoAction(event, creature, action)
     if action ~= ACTION_PHASE_THREE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     yoggPhase[guid] = PHASE_THREE
     schedule(guid, "shadowbeacon", 45000, function()
         yoggPhase3Tick(creature, guid, "shadowbeacon", PHASE3.SPELL_SHADOW_BEACON, PHASE3.EMOTE_YOGG_SARON_EMPOWERING_SHADOWS, nil, 45000)
@@ -585,8 +585,8 @@ local function yoggDoAction(event, creature, action)
 end
 
 local function yoggCancelAll(event, creature)
-    cancelTimers(creature:GetGUID())
-    yoggPhase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    yoggPhase[creature:GetGUIDLow()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 2, yoggCancelAll)
@@ -628,7 +628,7 @@ local function darkVolleyTick(creature, guid)
 end
 
 local function guardianEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "darkvolley", {10000, 15000}, function()
         darkVolleyTick(creature, guid)
@@ -661,7 +661,7 @@ local function corruptorTick(creature, guid)
 end
 
 local function corruptorEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "randomspell", 1, function()
         corruptorTick(creature, guid)
@@ -672,7 +672,7 @@ end
 -- one-shots DoCast(me, SPELL_TENTACLE_VOID_ZONE 64017) +
 -- DoCastAOE(SPELL_ERUPT 64144) ride event 23.
 local function corruptorReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_corruptor_tentacleAI ctor (:1257): SetCombatMovement(false).
     creature:SetCombatMovement(false)
     -- C++ npc_corruptor_tentacleAI::Reset(): DoCast(me, TENTACLE_VOID_ZONE);
@@ -703,7 +703,7 @@ local function diminishPowerTick(creature, guid)
 end
 
 local function crusherEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "diminishpower", {6000, 8000}, function()
         diminishPowerTick(creature, guid)
@@ -717,7 +717,7 @@ end
 -- ride event 23 (halion Reset one-shot precedent); the SetCombatMovement
 -- (false) ctor arm (:1359) rides the same handler below.
 local function crusherReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_crusher_tentacleAI ctor (:1359): SetCombatMovement(false).
     creature:SetCombatMovement(false)
     -- C++ npc_crusher_tentacleAI::Reset(): DoCast(me, CRUSH/TENTACLE_VOID_ZONE/
@@ -750,7 +750,7 @@ local function drainLifeTick(creature, guid)
 end
 
 local function immortalEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "drainlife", {3000, 13000}, function()
         drainLifeTick(creature, guid)
@@ -764,7 +764,7 @@ end
 -- claim was stale — creature:GetHealth/GetMaxHealth are bridged,
 -- object.go fallback, sindragosa precedent).
 local function immortalReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_immortal_guardianAI::Reset(): DoCast(me, EMPOWERED);
     -- DoCast(me, RECENTLY_SPAWNED) (boss_yogg_saron.cpp). Alive-gated;
     -- cancelTimers rides the death leg deliberately.
@@ -854,7 +854,7 @@ end
 RegisterAuraEvent(SPELL_EMPOWERED, 2, empoweredApply)
 
 local function cancelAll(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_saraAI::DamageTaken (:719-740): lethal damage is NOT a death
@@ -891,7 +891,7 @@ local function saraDamageTaken(event, creature, attacker, damage)
     local newDamage = damage
     if health > 0 and damage >= health then
         newDamage = health - 1
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         if not saraTransformed[guid] then
             saraTransformed[guid] = true
             -- C++ DamageTaken (:728-729): voice DoAction(
@@ -943,8 +943,8 @@ local function saraDamageTaken(event, creature, attacker, damage)
 end
 
 local function saraCancelTransform(event, creature)
-    cancelTimers(creature:GetGUID())
-    saraTransformed[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    saraTransformed[creature:GetGUIDLow()] = nil
 end
 
 -- C++ boss_saraAI::Reset (:783-790): RemoveAllAuras + SetReactState
@@ -969,7 +969,7 @@ RegisterCreatureEvent(ENTRY_SARA, 23, saraReset)
 local function guardianDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_SHADOW_NOVA)
     creature:CastSpell(creature, SPELL_SHADOW_NOVA_2)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GUARDIAN_OF_YOGG_SARON, 1, guardianEnterCombat)
@@ -1173,7 +1173,7 @@ end
 local function voiceEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_yogg_saron.cpp:539: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_yogg_saron.cpp:452 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustEngagedWith: DoCastAOE(SPELL_SUMMON_GUARDIAN_2 62978,
     -- {SPELLVALUE_MAX_TARGETS, 1}) (boss_yogg_saron.cpp:522) — plain
@@ -1260,11 +1260,11 @@ end
 -- shattered flag and the stored Yogg object (voiceDoAction state).
 local function voiceReset(event, creature)
     creature:SetBossState(BOSS_YOGG_SARON, 0) -- _Reset() SetBossState(BOSS_YOGG_SARON 12, NOT_STARTED), first per C++ :490-492 (PORTED tick 259)
-    cancelTimers(creature:GetGUID())
-    voicePhase[creature:GetGUID()] = 1 -- C++ Reset: SetPhase(PHASE_ONE) (:493)
-    voiceShattered[creature:GetGUID()] = nil
-    voiceYogg[creature:GetGUID()] = nil
-    voiceGuardians[creature:GetGUID()] = nil -- C++ Reset: Initialize() _guardianTimer = 20s (:467)
+    cancelTimers(creature:GetGUIDLow())
+    voicePhase[creature:GetGUIDLow()] = 1 -- C++ Reset: SetPhase(PHASE_ONE) (:493)
+    voiceShattered[creature:GetGUIDLow()] = nil
+    voiceYogg[creature:GetGUIDLow()] = nil
+    voiceGuardians[creature:GetGUIDLow()] = nil -- C++ Reset: Initialize() _guardianTimer = 20s (:467)
     local data = yoggInstanceData(creature)
     if data then
         data.driveMeCrazy = 1 -- C++ Reset: instance->SetData(DATA_DRIVE_ME_CRAZY, true) (:495)
@@ -1374,7 +1374,7 @@ end
 -- :637-640); the phase-two summon also latches data.yogg for the
 -- brain DamageTaken cascade below.
 local function voiceDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_PHASE_TRANSFORM then
         voicePhase[guid] = PHASE_TRANSFORM
         for _, cloud in ipairs(creature:GetCreaturesInGrid(ENTRY_OMINOUS_CLOUD, 200)) do
@@ -1427,7 +1427,7 @@ end
 -- (the halion/corruptor/crusher Reset precedent). The JustSummoned
 -- LUNGE leg rides voiceJustSummoned above (triggered, voice-side :658).
 local function constrictorReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_constrictor_tentacleAI ctor (:1314): SetCombatMovement(false).
     creature:SetCombatMovement(false)
     -- C++ Reset: DoCast(me, TENTACLE_VOID_ZONE_2); DoCastAOE(ERUPT)
@@ -1446,7 +1446,7 @@ end
 -- JustDied DoAction(ACTION_TENTACLE_KILLED) is PORTED below
 -- (influenceJustDied, event 4).
 local function influenceReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset: DoCast(me, GetEntry()==NPC_SUIT_OF_ARMOR ?
     -- NONDESCRIPT_1 : NONDESCRIPT_2) (boss_yogg_saron.cpp:1422).
     -- Alive-gated.
@@ -1468,14 +1468,14 @@ local function influenceJustDied(event, creature, killer)
     if data and data.brain then
         data.brain:DoAction(ACTION_TENTACLE_KILLED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_ominous_cloudAI::Reset (:1158-1162): DoCast(me,
 -- SPELL_OMINOUS_CLOUD_VISUAL 63084) (2-arg, non-triggered, ungated)
 -- — event 23. The DoAction MoveCirclePath leg stays out.
 local function ominousCloudReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset: DoCast(me, OMINOUS_CLOUD_VISUAL)
     -- (boss_yogg_saron.cpp:1160). Alive-gated.
     if creature:IsAlive() then
@@ -1491,12 +1491,12 @@ end
 -- the DamageTaken legs (:1070-1080, triggered casts + DoAction
 -- machine) stay out.
 local function brainDespawnSummons(creature)
-    local list = brainSummons[creature:GetGUID()]
+    local list = brainSummons[creature:GetGUIDLow()]
     if list then
         for _, summon in ipairs(list) do
             summon:DespawnOrUnsummon()
         end
-        brainSummons[creature:GetGUID()] = nil
+        brainSummons[creature:GetGUIDLow()] = nil
     end
 end
 
@@ -1504,8 +1504,8 @@ end
 -- despawns the summons — the same three legs as brainReset
 -- minus the flag/cast arms).
 local function brainCancelAll(event, creature)
-    cancelTimers(creature:GetGUID())
-    brainTentaclesKilled[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    brainTentaclesKilled[creature:GetGUIDLow()] = nil
     brainDespawnSummons(creature)
 end
 
@@ -1526,7 +1526,7 @@ end
 -- here as stored objects (herald guards precedent) for the
 -- DespawnAll legs in Reset and ACTION_TENTACLE_KILLED.
 local function brainJustSummoned(event, creature, summoned)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = brainSummons[guid]
     if not list then
         list = {}
@@ -1595,7 +1595,7 @@ end
 -- SHATTERED_ILLUSION (triggered) and toggles the voice's
 -- shattered flag; the GO-door open leg (:1121) stays out.
 local function brainDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_INDUCE_MADNESS then
         brainTentaclesKilled[guid] = 0
         local data = yoggInstanceData(creature)
@@ -1626,7 +1626,7 @@ end
 -- ungated) — event 23. MovementInform emote + DoAction(
 -- ACTION_START_ROLEPLAY) stay out.
 local function turnedChampionReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset: DoCast(VERTEX_COLOR_BLACK)
     -- (boss_yogg_saron.cpp:1911). Alive-gated.
     if creature:IsAlive() then
@@ -1640,7 +1640,7 @@ end
 -- — event 23 for all four entries (33213/33241/33242/33244,
 -- ulduar.h:199-202). OnGossipSelect summon + Talk legs stay out.
 local function observationKeeperReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset: DoCast(SIMPLE_TELEPORT_KEEPERS);
     -- DoCast(KEEPER_ACTIVE) (boss_yogg_saron.cpp:1546-1547).
     -- Alive-gated.
@@ -1658,8 +1658,8 @@ end
 -- (react-state bridge retraction; RemoveAllAuras ported 2026-10-19,
 -- passive ported this run).
 local function yoggKeeperReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    keeperPhase[creature:GetGUID()] = nil -- C++ Reset: SetPhase(PHASE_ONE) (:1606)
+    cancelTimers(creature:GetGUIDLow())
+    keeperPhase[creature:GetGUIDLow()] = nil -- C++ Reset: SetPhase(PHASE_ONE) (:1606)
     -- C++ npc_yogg_saron_keeperAI::Reset (boss_yogg_saron.cpp:1607):
     -- me->SetReactState(REACT_PASSIVE), ungated, before RemoveAllAuras.
     creature:SetReactState(REACT_PASSIVE)
@@ -1745,7 +1745,7 @@ end
 -- senders).
 local function keeperDoAction(event, creature, action)
     if action == ACTION_PHASE_TWO then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         keeperPhase[guid] = PHASE_TWO
         schedule(guid, "destabilization", {5000, 15000}, function()
             destabilizationMatrixTick(creature, guid)
@@ -1755,7 +1755,7 @@ local function keeperDoAction(event, creature, action)
         -- flip stops the phase-two destabilization ticks (they gate on
         -- keeperPhase == PHASE_TWO) — plus a Thorim-only DoCast(
         -- SPELL_TITANIC_STORM 64171).
-        keeperPhase[creature:GetGUID()] = PHASE_THREE
+        keeperPhase[creature:GetGUIDLow()] = PHASE_THREE
         if creature:GetEntry() == ENTRY_KEEPER_THORIM then
             creature:CastSpell(creature, PHASE3.SPELL_TITANIC_STORM)
         end
@@ -1770,7 +1770,7 @@ RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
 -- DONE). PORTED tick 259. Fires when Yogg's own JustDied kills the voice
 -- (boss_yogg_saron.cpp:962-963) and on any direct voice kill.
 local function voiceDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_YOGG_SARON, 3)
 end
 
@@ -1823,7 +1823,7 @@ local function observationKeeperGossipSelect(event, player, creature, sender, ac
         return false
     end
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "keeper_despawn", 2000, function()
         creature:Despawn()
     end)
