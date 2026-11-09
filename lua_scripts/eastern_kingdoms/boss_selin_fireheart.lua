@@ -227,7 +227,7 @@ local function onFelExplosion(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     drainScheduled[guid] = nil
     creature:Talk(SAY_AGGRO)
@@ -241,7 +241,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onLeaveCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     drainScheduled[guid] = nil
 end
@@ -252,7 +252,7 @@ end
 -- death path before ev4 (maiden precedent), so both gates are live
 -- here; the ev4 shatter below still runs after the respawn.
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     drainScheduled[guid] = nil
     -- C++ Reset (:81-84): every fel crystal within 250.0f respawns
@@ -272,7 +272,7 @@ local function onTargetDied(_, creature, victim)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (:163-166): Talk, then _JustDied() ->
     -- SetBossState(DONE) (ScriptedCreature.cpp:513-520), then
@@ -316,7 +316,7 @@ local function onSelinDoAction(_, creature, action)
     if action ~= 1 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "fel_explosion", 2000, function() onFelExplosion(creature, guid) end)
     local victim = creature:GetVictim()
     if victim then

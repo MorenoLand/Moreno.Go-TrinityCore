@@ -238,7 +238,7 @@ end
 
 -- C++ JustEngagedWith: 1s / 11s / 13s / 20s-30s random.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "banshee_wail", 1000, function() onBansheeWail(creature, guid) end)
     schedule(guid, "banshee_curse", 11000, function() onBansheeCurse(creature, guid) end)
@@ -247,11 +247,11 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset(): latch clear (timer-state wipe) +
@@ -261,7 +261,7 @@ end
 -- lua_player.go:219; GetPlayersInWorld + mapId/instanceId filter
 -- reproduces the instance-player set, C++-exact — no alive gate).
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:RemoveAura(SPELL_POSSESS_INV)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, p in ipairs(GetPlayersInWorld()) do

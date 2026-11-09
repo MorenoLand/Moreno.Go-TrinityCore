@@ -265,7 +265,7 @@ end
 -- (creaturemotion.go:2747) and this handler returns nothing, so it
 -- never vetoes the engine AI step (razuvious precedent).
 local function onAIUpdate(event, creature, diff)
-    local st = getState(creature:GetGUID())
+    local st = getState(creature:GetGUIDLow())
     if st.transformed then
         return
     end
@@ -274,7 +274,7 @@ local function onAIUpdate(event, creature, diff)
     end
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 40 / 100) then
-        doTransform(creature, creature:GetGUID())
+        doTransform(creature, creature:GetGUIDLow())
     end
 end
 
@@ -283,7 +283,7 @@ end
 -- mindcontrol 10000, transformed = false. The Balnazzar-only timers
 -- stay frozen until doTransform schedules them at those initials.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getState(guid)
     st.transformed = false
     schedule(guid, "mindblast", 6000,
@@ -297,7 +297,7 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_dathrohan_balnazzar.cpp:119-129): 8x
@@ -319,11 +319,11 @@ local function onDied(event, creature)
     for _, p in ipairs(ZOMBIE_POINTS) do
         creature:SummonCreature(10698, p[1], p[2], p[3], p[4], 2, 3600000)
     end
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     if creature:GetEntry() == ENTRY_BALNAZZAR then
         creature:UpdateEntry(ENTRY_DATHROHAN)
     end

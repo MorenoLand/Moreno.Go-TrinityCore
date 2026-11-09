@@ -160,7 +160,7 @@ end
 
 -- C++ Reset -> Initialize(): both timers back to C++ initials.
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "haunting", 8000, function()
         onHauntingPhantom(creature, guid)
@@ -171,8 +171,8 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    tagged[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    tagged[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- onReset clears timers only: the tagged latch is death-gated
@@ -181,13 +181,13 @@ end
 -- untagged citizen and skip the summon. Evade clears it via
 -- onCombatEnd (event 2); death consumes it in onDied.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ SpellHit (stratholme.cpp:243-247) + UpdateAI Die_Timer:
 -- EGAN_BLASTER tags the citizen; 5000ms later KillSelf fires.
 local function onSpellHit(_, creature, _, spellId)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if spellId ~= SPELL_EGAN_BLASTER or tagged[guid] then
         return
     end
@@ -202,7 +202,7 @@ end
 -- within 20f (uniform angle and radius around the citizen's
 -- position, same Z); then the latch is consumed.
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if tagged[guid] then
         local cx, cy, cz, co = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
         for i = 1, 4 do

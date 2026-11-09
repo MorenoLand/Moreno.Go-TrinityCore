@@ -100,7 +100,7 @@ end
 -- cleared in Reset, but the chain can only be pending while
 -- surrendered, and a reset while surrendered only fires at respawn.
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     playerGuid[guid] = nil
     surrendered[guid] = nil
@@ -110,7 +110,7 @@ local function onReset(_, creature)
 end
 
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     playerGuid[guid] = nil
     surrendered[guid] = nil
@@ -120,7 +120,7 @@ end
 -- can change it, so the Reset/RestoreFaction substitute has the
 -- C++-exact value.
 local function onSpawn(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     nativeFaction[guid] = creature:GetFaction()
 end
 
@@ -135,7 +135,7 @@ local function onQuestAccept(_, player, creature, quest)
     if not player then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     playerGuid[guid] = player:GetGUID()
     creature:SetFaction(FACTION_ENEMY)
     creature:AttackStart(player)
@@ -150,7 +150,7 @@ end
 -- postDamage > 0 guard. The surrender latch + the no-quest-player
 -- zero-damage return replicate the C++ immunity arms (see header).
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if surrendered[guid] or not playerGuid[guid] then
         return false, 0
     end

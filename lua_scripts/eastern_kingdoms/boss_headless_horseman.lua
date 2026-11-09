@@ -254,13 +254,13 @@ end
 
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- boss_headless_horseman.cpp:382 (arm 1 of JustEngagedWith; setActive leg has no bridge)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "cleave", 13000, function() onCleave(creature, guid) end)
     schedule(guid, "laugh", math.random(30000, 60000), function() onLaugh(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onTargetDied(_, creature, victim)
@@ -270,7 +270,7 @@ local function onTargetDied(_, creature, victim)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:CastSpell(creature, SPELL_BURNING_COSMETIC)
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_headless_horseman.cpp:442-456) arm order:
@@ -334,7 +334,7 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 19, onJustSummoned)
 -- RemoveGameObject. 7_days = 604800s. QuaternionData rotation is
 -- cosmetic and dropped (Go bridge uses identity rotation).
 local function onHeadDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "raintreats", 11000, function()
         creature:CastSpell(creature, SPELL_RAIN_OF_TREATS)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -379,14 +379,14 @@ local function sirThomasReset(event, creature)
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:CastSpell(creature, SPELL_WISP_INVIS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "wispFlight", 9000, function()
         creature:CastSpell(creature, SPELL_WISP_FLIGHT_MISSILE)
     end)
 end
 
 local function sirThomasClear(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 23, sirThomasReset)
@@ -432,7 +432,7 @@ end
 -- The 42281 self-cast triggers the DoAction sprout chain, so both
 -- chain timers start here.
 local function pumpkinResetArms(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetReactState(0)
     creature:CastSpell(creature, SPELL_PUMPKIN_LIFE_CYCLE)
     creature:CastSpell(creature, SPELL_PUMPKIN_AURA)
@@ -454,7 +454,7 @@ local function onPumpkinReset(_, creature)
 end
 
 local function onPumpkinDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_PULSING_PUMPKIN, 5, onPumpkinSpawn)
@@ -472,7 +472,7 @@ local function onBunnyGrow(creature, guid, count)
 end
 
 local function bunnyResetArms(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "burn", 1000, function()
         creature:CastSpell(creature, SPELL_BURNING_COSMETIC_BASE)
     end)
@@ -491,7 +491,7 @@ local function onBunnyReset(_, creature)
 end
 
 local function onBunnyDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_FLAME_BUNNY, 5, onBunnySpawn)

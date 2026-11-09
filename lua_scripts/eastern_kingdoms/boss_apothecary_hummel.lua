@@ -321,7 +321,7 @@ end
 
 -- C++ DoAction(ACTION_START_EVENT): PHASE_ALL -> PHASE_INTRO, SAY_0 at 1ms.
 local function startEvent(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getState(guid)
     if st.phase ~= PHASE_ALL then
         return
@@ -381,7 +381,7 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: summons.DespawnAll() (moot — nothing modeled)
     -- + _EnterEvadeMode() + _DespawnAtEvade(Seconds(10))
     -- (boss_apothecary_hummel.cpp:124-130); the 10s is respawn-side, the
@@ -390,7 +390,7 @@ local function onLeaveCombat(event, creature)
 end
 
 local function onDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if not st or not st.isDead then
         creature:Talk(SAY_HUMMEL_DEATH)
@@ -406,7 +406,7 @@ local function onDied(event, creature)
 end
 
 local function onReset(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     -- C++ Reset (boss_apothecary_hummel.cpp:121): SetFaction(FACTION_FRIENDLY);
     -- SummonCreatureGroup(1) PORTED 2026-11-05 (bridge landed, :123).
     creature:SetFaction(FACTION_FRIENDLY)
@@ -419,7 +419,7 @@ end
 -- damage (opera precedent); nothing is returned on non-lethal hits
 -- (thekal convention).
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getState(guid)
     if damage >= creature:GetHealth() and st.deadCount < 2 then
         if not st.isDead then

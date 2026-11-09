@@ -186,7 +186,7 @@ local function doanResetState(guid)
 end
 
 local function doanEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     doanResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_arcanist_doan.cpp:60 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_arcanist_doan.cpp:60 base call first)
@@ -203,15 +203,15 @@ local function doanEnterCombat(event, creature, target)
 end
 
 local function doanLeaveCombat(event, creature)
-    doanResetState(creature:GetGUID())
+    doanResetState(creature:GetGUIDLow())
 end
 
 local function doanDied(event, creature, killer)
-    doanResetState(creature:GetGUID())
+    doanResetState(creature:GetGUIDLow())
 end
 
 local function doanReset(event, creature)
-    doanResetState(creature:GetGUID())
+    doanResetState(creature:GetGUIDLow())
 end
 
 -- C++ UpdateAI below-50% arm: post-damage current health strictly
@@ -260,7 +260,7 @@ local function checkBubbleLatch(creature, guid, postDamageHealth)
 end
 
 local function doanDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if bubbleLatched[guid] then
         return
     end

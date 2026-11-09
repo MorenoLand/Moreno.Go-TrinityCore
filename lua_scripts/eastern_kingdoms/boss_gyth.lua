@@ -142,7 +142,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_GYTH=11 (blackrock_spire.h:41).
     creature:SetBossState(11, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     rendFired[guid] = nil
     schedule(guid, "acid", {8000, 16000}, function() onCorrosiveAcid(creature, guid) end)
@@ -152,7 +152,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_gyth.cpp:71-80): _Reset() bookkeeping (timer cancel
@@ -161,7 +161,7 @@ end
 -- ev23 on the death path too, and C++ Reset never runs on death
 -- (JustDied owns the DONE set and never despawns).
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(11) == 1 then
         creature:SetBossState(11, 3)
         creature:DespawnOrUnsummon()
@@ -171,12 +171,12 @@ end
 -- C++ JustDied (boss_gyth.cpp:91-94): _JustDied() bookkeeping (timer
 -- cancel) + SetBossState(DATA_GYTH=11, DONE).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(11, 3)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if rendFired[guid] then
         return
     end

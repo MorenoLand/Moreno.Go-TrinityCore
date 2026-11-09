@@ -603,12 +603,12 @@ local function scourgeWave(instanceData, mapObj, st)
     if st.waveCount == WAVE_MEATHOOK then
         local spawn = summonAt(st, mapObj, NPC_MEATHOOK, location.points[1])
         if spawn then
-            st.waveSpawns[spawn:GetGUID()] = spawn
+            st.waveSpawns[spawn:GetGUIDLow()] = spawn
         end
     elseif st.waveCount == WAVE_SALRAMM then
         local spawn = summonAt(st, mapObj, NPC_SALRAMM, location.points[1])
         if spawn then
-            st.waveSpawns[spawn:GetGUID()] = spawn
+            st.waveSpawns[spawn:GetGUIDLow()] = spawn
         end
     elseif mapObj and mapObj:IsHeroic() then
         local wave = HeroicWaves[st.waveCount]
@@ -617,7 +617,7 @@ local function scourgeWave(instanceData, mapObj, st)
             if entry and entry ~= 0 then
                 local spawn = summonAt(st, mapObj, entry, location.points[i])
                 if spawn then
-                    st.waveSpawns[spawn:GetGUID()] = spawn
+                    st.waveSpawns[spawn:GetGUIDLow()] = spawn
                 end
             end
         end
@@ -626,7 +626,7 @@ local function scourgeWave(instanceData, mapObj, st)
             local spawn = summonAt(st, mapObj, NPC_DEVOURING_GHOUL,
                 location.points[i])
             if spawn then
-                st.waveSpawns[spawn:GetGUID()] = spawn
+                st.waveSpawns[spawn:GetGUIDLow()] = spawn
             end
         end
     end
@@ -784,7 +784,7 @@ local function onWaveMobDied(event, creature)
     if progressOf(data) ~= WAVES_IN_PROGRESS then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not st.waveSpawns[guid] then
         return
     end
@@ -828,7 +828,7 @@ RegisterCreatureEvent(NPC_CRATE_HELPER, 14, function(event, creature, caster, sp
         return
     end
     local st = stFor(data)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if st.revealedCrates[guid] then
         return
     end

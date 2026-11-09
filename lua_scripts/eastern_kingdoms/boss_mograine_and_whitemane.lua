@@ -188,7 +188,7 @@ local function onTargetDied(event, creature, victim, sayKill)
     if victim:GetObjectType() ~= "Player" then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if killYellOnCooldown[guid] then
         return
     end
@@ -207,7 +207,7 @@ end
 -- alias) ported below; BossAI::JustEngagedWith bookkeeping documented-only
 -- (no bridge).
 local function mograineEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_mograine_and_whitemane.cpp:108 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_mograine_and_whitemane.cpp:108 base call first)
@@ -234,7 +234,7 @@ local function mograineTargetDied(event, creature, victim)
     if victim:GetObjectType() ~= "Player" then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if mograineKillYellDone[guid] then
         return
     end
@@ -243,11 +243,11 @@ local function mograineTargetDied(event, creature, victim)
 end
 
 local function mograineLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function mograineDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: Initialize + _Reset + _killYellTimer.Reset(0s) +
@@ -255,7 +255,7 @@ end
 -- (PORTED below — all three surfaces bridged; the DamageTaken
 -- fake-death SET side stays out with the unported resurrection machine).
 local function mograineReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     mograineKillYellDone[guid] = nil
     mograineDoorOpened[guid] = nil
@@ -283,7 +283,7 @@ end
 -- the unported resurrection machine (header above); the door leg is
 -- observable on its own and fires once per combat via the latch.
 local function mograineDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if mograineDoorOpened[guid] then
         return
     end
@@ -356,7 +356,7 @@ end
 -- gate, then EVENT_HEAL at 10s, EVENT_POWER_WORD_SHIELD at 15s,
 -- EVENT_HOLY_SMITE at 6s.
 local function whitemaneEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_WH_INTRO)
     schedule(guid, "startup", 5000, function()
@@ -377,11 +377,11 @@ local function whitemaneTargetDied(event, creature, victim)
 end
 
 local function whitemaneLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function whitemaneDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: _events.Reset + _scheduler.CancelAll +
@@ -389,7 +389,7 @@ end
 -- SetReactState(REACT_AGGRESSIVE) — bridged (same surface as
 -- mograineReset above).
 local function whitemaneReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     killYellOnCooldown[guid] = nil
     -- C++ Reset: non-triggered self-cast (Reset-only arm); ev23 fires on

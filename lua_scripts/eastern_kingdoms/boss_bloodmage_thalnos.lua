@@ -157,7 +157,7 @@ local function thalnosResetState(guid)
 end
 
 local function thalnosEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     thalnosResetState(guid)
     creature:Talk(SAY_AGGRO)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_bloodmage_thalnos.cpp:61 base call after Talk)
@@ -177,15 +177,15 @@ local function thalnosEnterCombat(event, creature, target)
 end
 
 local function thalnosLeaveCombat(event, creature)
-    thalnosResetState(creature:GetGUID())
+    thalnosResetState(creature:GetGUIDLow())
 end
 
 local function thalnosDied(event, creature, killer)
-    thalnosResetState(creature:GetGUID())
+    thalnosResetState(creature:GetGUIDLow())
 end
 
 local function thalnosReset(event, creature)
-    thalnosResetState(creature:GetGUID())
+    thalnosResetState(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 2) only when the victim is a player
@@ -201,7 +201,7 @@ end
 -- the incoming damage IS subtracted here): Talk(SAY_HEALTH 1). Modeled
 -- on the pre-damage hook (event 9); the C++ arm casts no spell.
 local function thalnosDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if healthYellDone[guid] then
         return
     end

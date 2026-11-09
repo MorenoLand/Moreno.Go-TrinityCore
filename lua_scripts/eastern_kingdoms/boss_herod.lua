@@ -133,7 +133,7 @@ local function herodResetState(guid)
 end
 
 local function herodEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     herodResetState(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ DoCast(me, SPELL_RUSHINGCHARGE) — non-triggered self cast.
@@ -149,7 +149,7 @@ local function herodEnterCombat(event, creature, target)
 end
 
 local function herodLeaveCombat(event, creature)
-    herodResetState(creature:GetGUID())
+    herodResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_herod.cpp:83-93): 20x SummonCreature(NPC_SCARLET_
@@ -161,7 +161,7 @@ end
 -- summoner-orientation default). The trainee EscortAI itself stays
 -- documented-only below, so summoned trainees idle in Go.
 local function herodDied(event, creature, killer)
-    herodResetState(creature:GetGUID())
+    herodResetState(creature:GetGUIDLow())
     for _ = 1, 20 do
         local a = math.random() * 2 * math.pi
         local r = math.random() + math.random()
@@ -177,7 +177,7 @@ local function herodDied(event, creature, killer)
 end
 
 local function herodReset(event, creature)
-    herodResetState(creature:GetGUID())
+    herodResetState(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 3) only when the victim is a player
@@ -194,7 +194,7 @@ end
 -- Talk(EMOTE_ENRAGE 4) + Talk(SAY_ENRAGE 2) + non-triggered
 -- self-cast frenzy 8269. Modeled on the pre-damage hook (event 9).
 local function herodDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if enrageDone[guid] then
         return
     end

@@ -130,7 +130,7 @@ local function azshirResetState(guid)
 end
 
 local function azshirEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     azshirResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_azshir_the_sleepless.cpp:51 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_azshir_the_sleepless.cpp:51 base call first)
@@ -143,15 +143,15 @@ local function azshirEnterCombat(event, creature, target)
 end
 
 local function azshirLeaveCombat(event, creature)
-    azshirResetState(creature:GetGUID())
+    azshirResetState(creature:GetGUIDLow())
 end
 
 local function azshirDied(event, creature, killer)
-    azshirResetState(creature:GetGUID())
+    azshirResetState(creature:GetGUIDLow())
 end
 
 local function azshirReset(event, creature)
-    azshirResetState(creature:GetGUID())
+    azshirResetState(creature:GetGUIDLow())
 end
 
 -- C++ DamageTaken arm: once, when post-damage health drops strictly
@@ -160,7 +160,7 @@ end
 -- DoCastVictim(soul siphon 7290) + 20s re-arming timer. Modeled on
 -- the pre-damage hook (event 9).
 local function azshirDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if siphonLatched[guid] then
         return
     end

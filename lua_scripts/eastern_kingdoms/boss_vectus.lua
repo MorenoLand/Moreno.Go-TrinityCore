@@ -135,7 +135,7 @@ local function vectusResetState(guid)
 end
 
 local function vectusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     vectusResetState(guid)
     schedule(guid, "fire_shield", 2000, function()
         onFireShield(creature, guid)
@@ -146,15 +146,15 @@ local function vectusEnterCombat(event, creature, target)
 end
 
 local function vectusLeaveCombat(event, creature)
-    vectusResetState(creature:GetGUID())
+    vectusResetState(creature:GetGUIDLow())
 end
 
 local function vectusDied(event, creature, killer)
-    vectusResetState(creature:GetGUID())
+    vectusResetState(creature:GetGUIDLow())
 end
 
 local function vectusReset(event, creature)
-    vectusResetState(creature:GetGUID())
+    vectusResetState(creature:GetGUIDLow())
 end
 
 -- C++ DamageTaken arm: no once-guard — fires on every DamageTaken
@@ -171,7 +171,7 @@ local function vectusDamageTaken(event, creature, attacker, damage)
     if (creature:GetHealth() - damage) < math.floor(maxHealth * 25 / 100) then
         creature:CastSpell(creature, SPELL_FRENZY)
         creature:Talk(EMOTE_FRENZY)
-        scheduleFrenzyChain(creature, creature:GetGUID())
+        scheduleFrenzyChain(creature, creature:GetGUIDLow())
     end
 end
 

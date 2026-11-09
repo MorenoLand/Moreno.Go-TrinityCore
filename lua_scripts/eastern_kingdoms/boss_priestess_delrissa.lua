@@ -361,7 +361,7 @@ local function onSwPain(creature, guid)
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = nil
     playersKilled[guid] = nil
@@ -369,7 +369,7 @@ local function onReset(_, creature)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     playersKilled[guid] = 0
     usedPotion[guid] = false
@@ -386,7 +386,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = nil
     playersKilled[guid] = nil
@@ -398,7 +398,7 @@ end
 -- arm never fires on the killing blow. Integer floor threshold
 -- (C++-exact), per-guid latch cleared on 2/4/23.
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if usedPotion[guid] then
         return
     end
@@ -415,7 +415,7 @@ end
 
 local function onTargetDied(_, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local n = playersKilled[guid] or 0
         if n > MAX_PLAYER_DEATH_TALK then
             n = MAX_PLAYER_DEATH_TALK
@@ -431,7 +431,7 @@ end
 -- the only readers are the unported lackey AIs (boss_priestess_lackey_commonAI :242/:409) — no
 -- instance SetData/GetData bridge, and no cross-AI bridge to the unported lackeys. Dropped, documented.
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = nil
     playersKilled[guid] = nil

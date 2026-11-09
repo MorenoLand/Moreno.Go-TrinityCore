@@ -98,14 +98,14 @@ local function onWarstomp(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     schedule(guid, "fieryburst", 5000, function() onFieryBurst(creature, guid) end)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = magmusState[guid]
     if state == nil or state.phaseTwo then
         return
@@ -130,7 +130,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: throne-door open (HandleGameObject(DATA_THRONE_DOOR,
@@ -138,17 +138,17 @@ end
 -- TYPE_IRON_HALL DONE (no instance-data bridge). The door leg must NOT
 -- ride onCombatEnd: evade (event 2) never opens it in C++.
 local function onJustDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local door = creature:FindNearestGameObject(GO_THRONE_ROOM, 100.0)
     if door then door:SetGoState(0) end
 end
 
 local function onSpawn(_, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
 end

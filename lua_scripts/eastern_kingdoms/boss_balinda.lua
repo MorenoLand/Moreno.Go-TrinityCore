@@ -175,7 +175,7 @@ local function onCheckReset(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     creature:Talk(SAY_AGGRO)
@@ -187,7 +187,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = balindaState[guid]
     if state == nil or state.iceblock then
         return
@@ -203,15 +203,15 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onSpawn(_, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
 end

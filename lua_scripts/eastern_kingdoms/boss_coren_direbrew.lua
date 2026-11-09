@@ -208,7 +208,7 @@ end
 local function onEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; inherited base, no override in boss_coren_direbrew.cpp)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; inherited base, no override)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     sisterFlags[guid] = nil
     schedule(guid, "molemachine", 15000, function()
         onSummonMoleMachine(creature, guid)
@@ -231,7 +231,7 @@ local function despawnCorenSisters(guid)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     sisterFlags[guid] = nil
     cancelTimers(guid)
     -- C++ EnterEvadeMode (boss_coren_direbrew.cpp:148-152): _EnterEvadeMode()
@@ -245,7 +245,7 @@ local function onLeaveCombat(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     sisterFlags[guid] = nil
     cancelTimers(guid)
     -- C++ JustDied (boss_coren_direbrew.cpp:204-206) calls _JustDied(),
@@ -264,7 +264,7 @@ local function summonSister(creature, entry)
         TEMPSUMMON_DEAD_DESPAWN)
     if sister then
         sister:DoZoneInCombat()
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local list = corenSisters[guid]
         if not list then
             list = {}
@@ -286,7 +286,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     -- ported in onSummonedCreatureDies below (event-21 bridge).
     -- Damage is never modified (thekal convention returns nothing when
     -- the hook does not alter it).
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local flags = sisterFlags[guid]
     if not flags then
         flags = {}
@@ -304,12 +304,12 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onReset(event, creature)
-    sisterFlags[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    sisterFlags[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset (boss_coren_direbrew.cpp:137-139) calls _Reset(), whose
     -- summons.DespawnAll() (ScriptedCreature.cpp:499-507) drops the sisters;
     -- Go fires 23 ahead of 2/4, so this also covers evade and death.
-    despawnCorenSisters(creature:GetGUID())
+    despawnCorenSisters(creature:GetGUIDLow())
     -- C++ Reset() (boss_coren_direbrew.cpp:138-141): SetImmuneToPC(true) +
     -- SetFaction(FACTION_FRIENDLY) — both bridged (ingvar precedent).
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
@@ -371,7 +371,7 @@ local function respawnSister(creature, guid, key, entry)
 end
 
 local function onSummonedCreatureDies(event, creature, summon, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local entry = summon:GetEntry()
     -- These re-arms sit inside the same gated C++ event loop
     -- (boss_coren_direbrew.cpp:230 pre-loop gate), so they defer

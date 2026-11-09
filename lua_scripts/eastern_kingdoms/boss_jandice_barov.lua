@@ -153,7 +153,7 @@ local function jandiceBarovResetState(guid)
 end
 
 local function jandiceBarovEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     jandiceBarovResetState(guid)
     schedule(guid, "curse_of_blood", 15000, function()
         onCurseOfBlood(creature, guid)
@@ -164,19 +164,19 @@ local function jandiceBarovEnterCombat(event, creature, target)
 end
 
 local function jandiceBarovLeaveCombat(event, creature)
-    jandiceBarovResetState(creature:GetGUID())
+    jandiceBarovResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: Summons.DespawnAll() PORTED via the latched-object
 -- table in jandiceBarovResetState (ionar idiom) + triggered
 -- DoCastSelf(drop journal 26096).
 local function jandiceBarovDied(event, creature, killer)
-    jandiceBarovResetState(creature:GetGUID())
+    jandiceBarovResetState(creature:GetGUIDLow())
     creature:CastSpell(creature, SPELL_DROP_JOURNAL, true)
 end
 
 local function jandiceBarovReset(event, creature)
-    jandiceBarovResetState(creature:GetGUID())
+    jandiceBarovResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustSummoned (boss_jandice_barov.cpp:52-58): illusion
@@ -199,13 +199,13 @@ local function jandiceJustSummoned(event, creature, summon)
         summon:EngageWithTarget(alive[math.random(#alive)])
     end
     summon:ApplySpellImmune(0, IMMUNITY_OP_DAMAGE, SPELL_SCHOOL_MASK_MAGIC, true)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = illusions[guid]
     if not list then
         list = {}
         illusions[guid] = list
     end
-    list[summon:GetGUID()] = summon
+    list[summon:GetGUIDLow()] = summon
 end
 
 RegisterCreatureEvent(ENTRY_JANDICE_BAROV, 1, jandiceBarovEnterCombat)

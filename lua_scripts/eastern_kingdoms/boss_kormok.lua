@@ -135,7 +135,7 @@ local function kormokResetState(guid)
 end
 
 local function kormokEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     kormokResetState(guid)
     schedule(guid, "shadowbolt_volley", 10000, function()
         onShadowboltVolley(creature, guid)
@@ -149,15 +149,15 @@ local function kormokEnterCombat(event, creature, target)
 end
 
 local function kormokLeaveCombat(event, creature)
-    kormokResetState(creature:GetGUID())
+    kormokResetState(creature:GetGUIDLow())
 end
 
 local function kormokDied(event, creature, killer)
-    kormokResetState(creature:GetGUID())
+    kormokResetState(creature:GetGUIDLow())
 end
 
 local function kormokReset(event, creature)
-    kormokResetState(creature:GetGUID())
+    kormokResetState(creature:GetGUIDLow())
 end
 
 -- C++ DamageTaken arm: once, when post-damage health drops strictly
@@ -166,7 +166,7 @@ end
 -- DoCast(me, summon bone mages 27695). Modeled on the pre-damage
 -- hook (event 9) with a per-GUID once-guard (C++ bool Mages).
 local function kormokDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if magesLatched[guid] then
         return
     end

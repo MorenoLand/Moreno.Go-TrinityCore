@@ -109,7 +109,7 @@ end
 
 -- C++ Reset's SummonBlackguards() (boss_vancleef.cpp:86-90).
 local function summonBlackguards(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if blackguards[guid] then
         return
     end
@@ -129,7 +129,7 @@ end
 -- C++ EnterEvadeMode's summons.DespawnAll() (boss_vancleef.cpp:78-84)
 -- + BossAI::_JustDied's summons.DespawnAll() (ScriptedCreature.cpp:516).
 local function despawnBlackguards(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = blackguards[guid]
     if not list then
         return
@@ -141,7 +141,7 @@ local function despawnBlackguards(creature)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
@@ -178,7 +178,7 @@ local function onTargetDied(_, creature, victim)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_vancleef.cpp:68 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_vancleef.cpp:68 base call first)
@@ -186,7 +186,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onLeaveCombat(_, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 local function onDied(_, creature)
@@ -194,11 +194,11 @@ local function onDied(_, creature)
     -- (ScriptedCreature.cpp:516); the 23-ahead-of-4 despawn in onReset
     -- already ran, so this is a guard.
     despawnBlackguards(creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 local function onSpawn(_, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     -- C++ Reset runs at spawn (Creature::Respawn -> ai->Reset(),
     -- Creature.cpp:2198); Go fires 23 ahead of 5 on the spawn funnel
     -- (fireCreatureSpawned, initial + respawn), so the Reset arms
@@ -213,7 +213,7 @@ local function onSpawn(_, creature)
 end
 
 local function onReset(_, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     -- Despawn-only: Go fires 23 ahead of 2 (evade) and ahead of 4
     -- (death), so the C++ EnterEvadeMode/_JustDied summon-despawn
     -- arms ride here — but NOT the Reset casts/summons (see

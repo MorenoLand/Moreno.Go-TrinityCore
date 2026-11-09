@@ -253,7 +253,7 @@ local function onKalecgosCheck(creature, guid)
 end
 
 local function onKalecgosCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     creature:Talk(0)
@@ -266,7 +266,7 @@ local function onKalecgosCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
 end
@@ -342,7 +342,7 @@ local function onSathCheck(creature, guid)
 end
 
 local function onSathCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     creature:Talk(0)
@@ -368,7 +368,7 @@ local function onHumanStrike(creature, guid)
 end
 
 local function onHumanCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     schedule(guid, "revitalize", 5000, function() onHumanRevitalize(creature, guid) end)
@@ -376,7 +376,7 @@ local function onHumanCombat(_, creature)
 end
 
 local function onHumanDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local stage = sayStage[guid]
     if stage == nil or stage >= 4 then
         return
@@ -401,7 +401,7 @@ local function onHumanDamageTaken(_, creature, _, damage)
 end
 
 local function onHumanDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     creature:Talk(3)

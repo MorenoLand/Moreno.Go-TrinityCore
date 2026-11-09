@@ -179,7 +179,7 @@ local function onImmolate(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "volley", 10000, function()
         onShadowBoltVolley(creature, guid)
     end)
@@ -195,11 +195,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
@@ -207,7 +207,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     -- triggered DoCastVictim(15092), once. Pre-damage health
     -- approximation (vael precedent). Flag clears on Reset(23)
     -- C++-exact (Reset calls Initialize()).
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not voidwalkersSummoned[guid] and creature:GetHealth() <= math.floor(creature:GetMaxHealth() * 50 / 100) then
         voidwalkersSummoned[guid] = true
         local victim = creature:GetVictim()
@@ -226,7 +226,7 @@ local function onReset(event, creature)
     -- ported (coren_direbrew onReset precedent — same arm shape); the
     -- UNIT_NPC_FLAGS gossip-flag machine is gated on instance
     -- DATA_GHOSTKILL >= 7 — no instance bridge, stays out.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     voidwalkersSummoned[guid] = false
     creature:SetFaction(FACTION_FRIENDLY)
     creature:SetFlag(59, 0x100)

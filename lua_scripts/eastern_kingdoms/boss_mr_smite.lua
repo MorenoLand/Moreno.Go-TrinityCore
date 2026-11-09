@@ -138,7 +138,7 @@ local function onSlam(creature, guid)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local stage = phaseStage[guid]
     if stage == nil or stage >= 2 then
         return
@@ -176,7 +176,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     schedule(guid, "trash", math.random(5000, 9000), function() onTrash(creature, guid) end)
@@ -184,11 +184,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onSpawn(_, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     creature:SetEquipmentSlots(EQUIP_SWORD, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
     -- C++ Reset (boss_mr_smite.cpp:101): Creature::Respawn calls
     -- AI()->Reset() (Creature.cpp:2198), so spawn gets the same arm.
@@ -196,7 +196,7 @@ local function onSpawn(_, creature)
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     -- C++ Reset arms (boss_mr_smite.cpp:99-103): equipment (see

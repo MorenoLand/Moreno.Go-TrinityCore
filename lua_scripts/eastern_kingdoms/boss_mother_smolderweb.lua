@@ -104,7 +104,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_MOTHER_SMOLDERWEB=3 (blackrock_spire.h:33).
     creature:SetBossState(3, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     summonFired[guid] = nil
     schedule(guid, "crystalize", 20000, function() onCrystalize(creature, guid) end)
@@ -112,7 +112,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_mother_smolderweb.cpp:49-52): _Reset() bookkeeping (timer cancel
@@ -120,7 +120,7 @@ end
 -- and state != DONE (ScriptedCreature.cpp:499-511). Alive-gated: Go fires
 -- ev23 on the death path too, and C++ Reset never runs on death.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0)
     end
@@ -129,12 +129,12 @@ end
 -- C++ JustDied (boss_mother_smolderweb.cpp:61-64): _JustDied() bookkeeping (timer
 -- cancel) + SetBossState(DATA_MOTHER_SMOLDERWEB=3, DONE).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(3, 3)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if summonFired[guid] then
         return
     end

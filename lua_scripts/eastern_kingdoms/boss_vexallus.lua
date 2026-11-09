@@ -207,7 +207,7 @@ local function onOverload(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     dischargeStage[guid] = 1
     enraged[guid] = false
@@ -223,14 +223,14 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- No JustDied override in boss_vexallus.cpp, so base BossAI::JustDied
 -- (ScriptedCreature.h:330) runs _JustDied() -> SetBossState(DONE)
 -- (ScriptedCreature.cpp:513-520).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(1, 3) -- DATA_VEXALLUS, DONE
 end
 
@@ -241,7 +241,7 @@ end
 -- ev23 on the death path before ev4 (maiden precedent), so both
 -- gates are live here.
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     dischargeStage[guid] = 1
     enraged[guid] = false
@@ -255,7 +255,7 @@ local function onTargetDied(_, creature)
 end
 
 local function onDamageTaken(_, creature, _, _damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if enraged[guid] then
         return
     end

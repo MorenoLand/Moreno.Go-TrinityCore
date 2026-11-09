@@ -231,7 +231,7 @@ local function fairbanksResetState(guid)
 end
 
 local function fairbanksEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fairbanksResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_high_inquisitor_fairbanks.cpp:78 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_high_inquisitor_fairbanks.cpp:78 base call first)
@@ -253,15 +253,15 @@ local function fairbanksEnterCombat(event, creature, target)
 end
 
 local function fairbanksLeaveCombat(event, creature)
-    fairbanksResetState(creature:GetGUID())
+    fairbanksResetState(creature:GetGUIDLow())
 end
 
 local function fairbanksDied(event, creature, killer)
-    fairbanksResetState(creature:GetGUID())
+    fairbanksResetState(creature:GetGUIDLow())
 end
 
 local function fairbanksReset(event, creature)
-    fairbanksResetState(creature:GetGUID())
+    fairbanksResetState(creature:GetGUIDLow())
     -- boss_high_inquisitor_fairbanks.cpp:73 — Reset ends with
     -- SetStandState(DEAD), the secret-chamber corpse visual.
     creature:SetStandState(7)
@@ -304,7 +304,7 @@ local function checkFairbanksHeal(creature, guid)
     end
 end
 local function fairbanksDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return

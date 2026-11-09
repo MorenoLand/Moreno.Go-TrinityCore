@@ -181,7 +181,7 @@ local function onWingClip(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = false
     schedule(guid, "aimedshot", 6000, function() onAimedShot(creature, guid) end)
@@ -192,7 +192,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_garaxxasAI::Reset (boss_priestess_delrissa.cpp:1050-1057):
@@ -201,14 +201,14 @@ end
 -- nothing: a true return would veto the whole evade (creaturemotion
 -- evade path), and C++ Reset never vetoes.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:FindNearestCreature(NPC_SLIVER, 100.0) == nil then
         creature:SummonCreature(NPC_SLIVER, 0.0, 0.0, 0.0, 0.0, 4)
     end
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if usedPotion[guid] then
         return
     end
@@ -224,7 +224,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GARAXXAS, 1, onEnterCombat)

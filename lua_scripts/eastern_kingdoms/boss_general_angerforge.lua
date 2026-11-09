@@ -150,7 +150,7 @@ local function onAdds(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
     -- boss_general_angerforge.cpp JustEngagedWith schedule
@@ -167,7 +167,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = angerforgeState[guid]
     if state == nil or state.phaseTwo then
         return
@@ -196,15 +196,15 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onSpawn(_, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     initState(guid)
 end

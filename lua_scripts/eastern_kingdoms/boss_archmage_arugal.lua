@@ -215,7 +215,7 @@ local function onTargetDied(_, creature, victim)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; shadowfang_keep.cpp:255 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; shadowfang_keep.cpp:255 base call first)
@@ -231,17 +231,17 @@ end
 -- (4) clears it: a respawned Arugal gets a fresh AI object, whose
 -- array starts [SPAWN, UPPER, STAIRS] again.
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     lastTeleport[guid] = nil
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ SpellHitTarget: SPELL_ARUGAL_CURSE (7621) lands on a target ->

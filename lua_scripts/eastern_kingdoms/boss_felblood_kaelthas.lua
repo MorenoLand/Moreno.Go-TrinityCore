@@ -410,7 +410,7 @@ end
 
 local function onEnterCombat(_, creature)
     creature:SetMeleeAttack(false) -- boss_felblood_kaelthas.cpp:131: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
@@ -435,7 +435,7 @@ end
 -- Event 2 gets a dedicated handler (the urom split precedent) so the cast
 -- fires on evade only, not on death/reset.
 local function onLeaveCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:CastSpell(creature, SPELL_CLEAR_FLIGHT, true)
     cancelTimers(guid)
     phaseTwo[guid] = nil
@@ -447,7 +447,7 @@ end
 -- call (the comment: it would re-trigger the death sequence). The outro
 -- chain already ran on lethal DamageTaken; the DONE write lands here.
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
@@ -460,7 +460,7 @@ end
 -- counters, mirrored by the per-guid flag clears. Go fires ev23 on the
 -- death path before ev4 (maiden precedent), so both gates are live here.
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
@@ -470,7 +470,7 @@ local function onReset(_, creature)
 end
 
 local function onDamageTaken(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local health = creature:GetHealth()
     local newDamage = damage
     if not outroFired[guid] and damage >= health then

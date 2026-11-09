@@ -178,7 +178,7 @@ end
 -- C++ reads post-damage health in UpdateAI, so the arm never fires on the
 -- killing blow (nefarian postDamage > 0 rule).
 local function wyrmthalakDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if summoned[guid] then
         return false, damage
     end
@@ -214,7 +214,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_OVERLORD_WYRMTHALAK=8 (blackrock_spire.h:38).
     creature:SetBossState(8, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     summoned[guid] = false
     schedule(guid, "blastwave", 20000, function() onBlastWave(creature, guid) end)
@@ -224,7 +224,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_overlord_wyrmthalak.cpp:72-76): _Reset() bookkeeping
@@ -233,7 +233,7 @@ end
 -- alive-gated, state != DONE). Alive gate is load-bearing: Go fires
 -- ev23 on the death path too, and C++ Reset never runs on death.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(8) ~= 3 then
         creature:SetBossState(8, 0)
     end
@@ -242,7 +242,7 @@ end
 -- C++ JustDied (boss_overlord_wyrmthalak.cpp:87-90): _JustDied()
 -- bookkeeping (timer cancel) + SetBossState(DATA_OVERLORD_WYRMTHALAK=8, DONE).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(8, 3)
 end
 
