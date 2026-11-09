@@ -139,7 +139,7 @@ end
 
 -- C++ Reset (:86-91): stand + ogre faction, latch/timers reset.
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     canDoQuest[guid] = false
     cancelTimers(guid)
     creature:SetStandState(UNIT_STAND_STATE_STAND)
@@ -147,14 +147,14 @@ local function onReset(_, creature)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "pulverize", 3000, function()
         pulverizeTick(creature, guid)
     end)
 end
 
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     canDoQuest[guid] = false
     cancelTimers(guid)
 end
@@ -164,7 +164,7 @@ end
 -- member (same map+instance, quest INCOMPLETE, 10 invaders
 -- slain) or the solo attacker; latch flips once for the submit.
 local function onDamageTaken(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local player = attacker and attacker:ToPlayer() or nil
     if not player then
         return

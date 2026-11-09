@@ -298,7 +298,7 @@ end
 -- STORM 15s + EVENT_SONIC_SHOCK 10s; sets health to 40% max
 -- (CountPctFromMaxHealth(40) → SetHealth — bridged).
 local function scheduleReset(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetHealth(math.floor(creature:GetMaxHealth() * 40 / 100))
     creature:ResetPlayerDamageReq()
@@ -337,17 +337,17 @@ local function murmurEnterCombat(event, creature, target)
     scheduleReset(creature)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    schedule(creature:GetGUID(), "meleerange", 1000, function()
-        meleeRangeTick(creature, creature:GetGUID())
+    schedule(creature:GetGUIDLow(), "meleerange", 1000, function()
+        meleeRangeTick(creature, creature:GetGUIDLow())
     end)
 end
 
 local function murmurLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function murmurDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MURMUR, 1, murmurEnterCombat)

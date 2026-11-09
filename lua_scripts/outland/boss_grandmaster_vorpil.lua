@@ -334,7 +334,7 @@ local function vorpilEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     for i = 1, 5 do
         local c = VOID_PORTAL_COORDS[i]
@@ -369,7 +369,7 @@ local function vorpilEnterCombat(event, creature, target)
 end
 
 local function vorpilLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 
@@ -390,7 +390,7 @@ end
 local function vorpilDied(event, creature, killer)
     creature:SetBossState(2, 3) -- DATA_GRANDMASTER_VORPIL, DONE (boss_grandmaster_vorpil.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     introSeen[guid] = nil
 end
@@ -406,7 +406,7 @@ local function vorpilReset(event, creature)
     if creature:IsDead() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     helpYellSeen[guid] = nil
 end
@@ -421,7 +421,7 @@ end
 -- nil so the engage proceeds — C++ calls the base, the
 -- depth_charge return-true precedent does not apply.
 local function vorpilMoveInLOS(event, creature, player)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not introSeen[guid]
             and creature:IsWithinDistInMap(player, 100.0) then
         introSeen[guid] = true

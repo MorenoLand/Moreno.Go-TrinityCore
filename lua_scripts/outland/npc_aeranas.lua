@@ -104,7 +104,7 @@ local function windsPump(creature, guid)
 end
 
 local function aeranasReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
     creature:SetFaction(FACTION_FRIENDLY)
@@ -115,7 +115,7 @@ local function aeranasReset(event, creature)
 end
 
 local function aeranasEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "shock", 5000, function()
         shockPump(creature, guid)
     end)
@@ -125,15 +125,15 @@ local function aeranasEnterCombat(event, creature)
 end
 
 local function aeranasLeaveCombat(event, creature)
-    cancelKeys(creature:GetGUID(), { "shock", "winds" })
+    cancelKeys(creature:GetGUIDLow(), { "shock", "winds" })
 end
 
 local function aeranasDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function aeranasDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 or health == 0 then

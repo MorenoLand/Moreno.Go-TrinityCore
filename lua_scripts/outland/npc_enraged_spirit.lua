@@ -209,7 +209,7 @@ end
 -- the timer re-latch lands on OnEnterCombat, gargolmar
 -- precedent).
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     local entry = creature:GetEntry()
     local st = { entry = entry }
@@ -256,7 +256,7 @@ end
 -- observable reset is the pump cancel + state drop, which
 -- JustEngagedWith re-latches on re-engage.
 local function onLeaveCombat(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (zone_shadowmoon_valley.cpp:1434-1491): the soul spawn
@@ -271,7 +271,7 @@ end
 -- the totem + totem-owner KilledMonsterCredit + DoCast(totem,
 -- SPELL_SOUL_CAPTURED 36115), C++ order.
 local function onDied(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
     local soulEntry = SOUL_ENTRY[creature:GetEntry()]
     if not soulEntry then
         return
@@ -304,7 +304,7 @@ end
 -- "no aura-state bridge" era (golemagg precedent).
 for _, entry in ipairs({ ENTRY_ENRAGED_FIRE_SPIRIT, ENTRY_ENRAGED_AIR_SPIRIT }) do
     RegisterCreatureEvent(entry, 9, function(_, creature, attacker, damage)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local st = spiritState[guid]
         if not st then
             return

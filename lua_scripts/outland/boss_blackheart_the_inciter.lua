@@ -204,7 +204,7 @@ local function blackheartEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "war_stomp", 15000, function()
         warStompTick(creature, guid)
@@ -218,7 +218,7 @@ end
 
 -- Events 2 (OnLeaveCombat): cancelTimers only.
 local function blackheartLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_blackheart_the_inciter::Reset (lines 76-80):
@@ -226,7 +226,7 @@ end
 -- REACT_AGGRESSIVE = 2, UnitDefines.h) + _Reset() (no instance bridge —
 -- documented-only). cancelTimers mirrors _Reset()'s events.Reset().
 local function blackheartReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetReactState(2)
 end
 
@@ -247,7 +247,7 @@ end
 local function blackheartDied(event, creature, killer)
     creature:SetBossState(1, 3) -- DATA_BLACKHEART_THE_INCITER, DONE (boss_blackheart_the_inciter.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_blackheart_the_inciter_mc_dummy::IsSummonedBy (:168-173):

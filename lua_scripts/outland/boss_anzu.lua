@@ -211,7 +211,7 @@ end
 -- integer-floor projection form is outcome-identical, overkill
 -- included; C++ checks 33 BEFORE 66 — order kept.
 local function anzuDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- Lazy init: C++ Initialize() runs in the constructor too, so a
     -- fresh spawn has all-false latches even if the engine never
     -- fired 23 for it (syth precedent).
@@ -247,7 +247,7 @@ end
 local function anzuEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "paralyzing_screech", 14000, function()
         paralyzingScreechTick(creature, guid)
@@ -262,7 +262,7 @@ end
 -- leg); merged with event 2 (blackheart precedent —
 -- ScriptedAI::EnterEvadeMode calls Reset()).
 local function anzuLeaveCombatOrReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     anzuState[guid] = { under33 = false, under66 = false }
 end
@@ -273,8 +273,8 @@ end
 -- stops on death). Anzu has no death Talk in C++.
 local function anzuDied(event, creature, killer)
     creature:SetBossState(2, 3) -- DATA_ANZU, DONE (boss_anzu.cpp:95-98)
-    cancelTimers(creature:GetGUID())
-    anzuState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    anzuState[creature:GetGUIDLow()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_ANZU, 1, anzuEnterCombat)

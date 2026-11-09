@@ -170,7 +170,7 @@ end
 
 -- C++ boss_pandemoniusAI::JustEngagedWith (:76-84).
 local function pandemoniusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     clearState(guid)
     blastCounters[guid] = 0
     shellShifts[guid] = 0
@@ -186,11 +186,11 @@ local function pandemoniusEnterCombat(event, creature, target)
 end
 
 local function pandemoniusLeaveCombat(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 local function pandemoniusReset(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ boss_pandemoniusAI::KilledUnit (:66-69): Talk(SAY_KILL).
@@ -201,7 +201,7 @@ end
 -- C++ boss_pandemoniusAI::JustDied (:61-64): Talk(SAY_DEATH).
 local function pandemoniusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_PANDEMONIUS, 1, pandemoniusEnterCombat)
