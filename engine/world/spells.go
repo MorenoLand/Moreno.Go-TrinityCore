@@ -9897,6 +9897,24 @@ func (s *session) fireSpellScriptPreprocessTwins(ctx context.Context, spell wotl
 	return spellObj
 }
 
+// fireSpellScriptEffectHitNoTarget fires the SpellScript OnEffectHit hook
+// once per non-zero effect (Spell.cpp:3722-3730, the HIT-mode HandleEffects
+// loop in Spell::_handle_immediate_phase). C++ runs that loop for every
+// cast before the target container, so the all-miss early returns call it
+// here, ahead of the twins, instead of dropping it with the effects loop.
+func (s *session) fireSpellScriptEffectHitNoTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64) {
+	if s.server == nil {
+		return
+	}
+	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+	for effectIndex, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		s.server.fireSpellEffectHit(ctx, spellID, spellObj, effectIndex)
+	}
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -13824,7 +13842,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// the 0 seed like C++. Twins precede the nodmg procs below:
 		// pass 1 (:2334-2381) runs before the DoDamageAndTriggers
 		// no-damage arm (Spell.cpp:2560-2575), the same order as
-		// the normal path (twins, then effects, then procs).
+		// the normal path (twins, then effects, then procs). OnEffectHit
+		// precedes the twins: the HIT-mode loop (:3722-3730) runs before
+		// the target container (:3601).
+		s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID)
 		s.fireSpellScriptPreprocessTwins(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
 		fireLaunchMissNodmgProcs(ctx)
 		return
@@ -14025,7 +14046,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// the 0 seed like C++. Twins precede the nodmg procs below:
 			// pass 1 (:2334-2381) runs before the DoDamageAndTriggers
 			// no-damage arm (Spell.cpp:2560-2575), the same order as
-			// the normal path (twins, then effects, then procs).
+			// the normal path (twins, then effects, then procs). OnEffectHit
+			// precedes the twins: the HIT-mode loop (:3722-3730) runs before
+			// the target container (:3601).
+			s.fireSpellScriptEffectHitNoTarget(effCtx, spell, spellID, castTimeMs, target, castItemGUID)
 			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
 			fireLaunchMissNodmgProcs(effCtx)
 			return
