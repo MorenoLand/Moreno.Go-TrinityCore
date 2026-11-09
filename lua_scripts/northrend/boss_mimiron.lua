@@ -89,6 +89,10 @@
 --   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode,
 --     elevator/button GO legs, computer DoAction, SEAT_3 cast on MKII via
 --     instance GUID -- all out.
+--   Bomb/rocket/mine SpellHitTarget legs live in the npc files, not
+--     here: npc_mimiron_bomb_bot.lua / npc_mimiron_rocket_visual.lua /
+--     npc_mimiron_proximity_mine.lua register ev15 (the frost-bomb has
+--     no ev15 leg — seed/cancel only, npc_mimiron_frost_bomb.lua).
 --
 -- DEVIATIONS (checked against the CURRENT runtime, not memory):
 --   * JustEngagedWith's `if (!me->GetVehicleBase()) return` gate is not

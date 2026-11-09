@@ -35,6 +35,13 @@
 -- counter stays out — faithfully, not as a gap.
 -- The combat rotations (UpdateAI timers, mounted-vehicle legs) stay out:
 -- this file ports the JustDied census arm only.
+-- The waypoint legs stay out too: SetData cases 1/2/3 (AddWaypoint +
+-- Start) and WaypointReached :220/:223 (instance SetData
+-- DATA_MOVEMENT_DONE, GetData+1) have no waypoint bridge; the instance
+-- consumer (instance_trial_of_the_champion.cpp:210: at 3 the announcer
+-- gets SetData(DATA_IN_POSITION, 0)) stays out with them — the
+-- announcer escort machine is documented in
+-- instance_trial_of_the_champion.lua.
 
 local BOSS_GRAND_CHAMPIONS = 0
 local DONE = 3

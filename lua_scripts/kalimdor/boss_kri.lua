@@ -8,16 +8,18 @@
 -- GetVictim + CastSpell convention); Toxic Volley 25812 on victim
 -- (6-12s -> 10-15s); Poison Cloud 38718 on victim at <5% health
 -- (event 9, latched — C++ Death flag).
--- Documented-only: Vem-dead Enrage 34624 (instance DATA_VEMISDEAD
--- — the vemDead slot below backs the read, the enrage arm itself is
--- a separate port); JustDied loot-flag + instance
--- DATA_BUG_TRIO_DEATH legs PORTED below (argent-soldier precedent).
+-- Ported: Vem-dead Enrage 34624 (boss_bug_trio.cpp:113-130 — 2s
+-- poll of instance DATA_VEMISDEAD, latched self-cast; the vemDead
+-- slot is written by Vem's onDied in boss_vem.lua); JustDied
+-- loot-flag + instance DATA_BUG_TRIO_DEATH legs PORTED below
+-- (argent-soldier precedent).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15511
 
 local SPELL_CLEAVE = 26350
 local SPELL_TOXIC_VOLLEY = 25812
 local SPELL_POISON_CLOUD = 38718
+local SPELL_ENRAGE = 34624
 
 -- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136) / UNIT_DYNFLAG_LOOTABLE
 -- (SharedDefines.h:3128) — eredar-twins precedent.
@@ -74,6 +76,22 @@ local function onVolley(creature, guid)
     end)
 end
 
+local function onVemCheck(creature, guid)
+    local state = kriState[guid]
+    if state == nil or state.vemDead then
+        return
+    end
+    local data = getInstanceData(creature)
+    if data and data.vemDead then
+        state.vemDead = true
+        creature:CastSpell(creature, SPELL_ENRAGE)
+        return
+    end
+    schedule(guid, "vemcheck", 2000, function()
+        onVemCheck(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -83,12 +101,15 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_BUG_TRIO, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    kriState[guid] = { deathCloud = false }
+    kriState[guid] = { deathCloud = false, vemDead = false }
     schedule(guid, "cleave", math.random(4000, 8000), function()
         onCleave(creature, guid)
     end)
     schedule(guid, "volley", math.random(6000, 12000), function()
         onVolley(creature, guid)
+    end)
+    schedule(guid, "vemcheck", 2000, function()
+        onVemCheck(creature, guid)
     end)
 end
 
@@ -101,7 +122,7 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    kriState[guid] = { deathCloud = false }
+    kriState[guid] = { deathCloud = false, vemDead = false }
     -- C++ Reset _Reset() leg (boss_bug_trio.cpp:80-84): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
     if creature:IsAlive() and creature:GetBossState(DATA_BUG_TRIO) ~= BOSS_STATE_DONE then

@@ -19,8 +19,8 @@
 -- Documented-only: JustDied instance DATA_VEM_DEATH +
 -- DATA_BUG_TRIO_DEATH + loot flag legs PORTED below (argent-soldier
 -- precedent); the vemDead slot also backs the Kri/Yauj enrage-arm
--- read of DATA_VEMISDEAD (11) — the enrage arms themselves are a
--- separate port.
+-- read of DATA_VEMISDEAD (11) — ported in boss_kri.lua /
+-- boss_yauj.lua (2s poll, latched self-cast 34624).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15544
 

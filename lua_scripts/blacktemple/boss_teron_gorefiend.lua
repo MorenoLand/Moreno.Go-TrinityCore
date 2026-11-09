@@ -55,7 +55,11 @@
 -- GetCreature(DATA_TERON_GOREFIEND) -> DoAction) has no
 -- area-trigger bridge and the intro arms are
 -- blocked on the instance-script model (standing gaps), so the
--- fight starts on pull, ragnaros-intro convention. The
+-- fight starts on pull, ragnaros-intro convention. The :147
+-- SetData(DATA_TERON_GOREFIEND_INTRO, 0) inside that DoAction stays out
+-- with it — the instance stores the value with no side effect
+-- (instance_black_temple.cpp:167) and its only reader is Teron's own
+-- Reset gate (:117), itself unported. The
 -- EnterEvadeMode arms: summons.DespawnAll — creature:SummonCreature IS
 -- bridged but the summon-list model is absent (stays out); the
 -- DoCast(41999) self-cast arm is ported (teronDied precedent); the

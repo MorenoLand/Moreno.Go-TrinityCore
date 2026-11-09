@@ -12,15 +12,17 @@
 -- creature:SummonCreature + summoned:AttackStart, both bridged)
 -- + the instance DATA_BUG_TRIO_DEATH + lootable-flag legs
 -- (boss_bug_trio.cpp:264-268, ported below).
+-- Ported: Vem-dead Enrage 34624 (boss_bug_trio.cpp:321-332 — 2s
+-- poll of instance DATA_VEMISDEAD, latched self-cast; the vemDead
+-- slot is written by Vem's onDied in boss_vem.lua).
 -- Documented-only: Heal 25807 (target selection via instance
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
--- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
--- DATA_VEMISDEAD — the vemDead slot in boss_vem.lua backs the read,
--- the enrage arm itself is a separate port).
+-- would misrepresent the random 1-of-3).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15543
 
 local SPELL_FEAR = 19408
+local SPELL_ENRAGE = 34624
 
 -- boss_bug_trio.cpp:274 summon target (no name constant in the C++
 -- tree — the entry comes from the summon call site itself).
@@ -37,6 +39,7 @@ local function getInstanceData(creature)
 end
 
 local timers = {}
+local yaujState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -73,6 +76,28 @@ local function onFear(creature, guid)
     end)
 end
 
+-- C++ boss_bug_trio.cpp:321-332: Check_Timer (2s) polls instance
+-- GetData(DATA_VEMISDEAD); on true, self-cast Enrage 34624 and
+-- latch VemDead. The outer poll keeps re-arming in C++ even once
+-- latched — no observable effect, so the Lua stops polling after
+-- the latch. The vemDead slot is written by Vem's onDied
+-- (boss_vem.lua) — the same instanceData table.
+local function onVemCheck(creature, guid)
+    local state = yaujState[guid]
+    if state == nil or state.vemDead then
+        return
+    end
+    local data = getInstanceData(creature)
+    if data and data.vemDead then
+        state.vemDead = true
+        creature:CastSpell(creature, SPELL_ENRAGE)
+        return
+    end
+    schedule(guid, "vemcheck", 2000, function()
+        onVemCheck(creature, guid)
+    end)
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -82,17 +107,25 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_BUG_TRIO, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
+    yaujState[guid] = { vemDead = false }
     schedule(guid, "fear", math.random(12000, 24000), function()
         onFear(creature, guid)
+    end)
+    schedule(guid, "vemcheck", 2000, function()
+        onVemCheck(creature, guid)
     end)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    yaujState[guid] = nil
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    yaujState[guid] = { vemDead = false }
     -- No _Reset() in C++ Reset (boss_bug_trio.cpp:259-262, Initialize
     -- only) — this leg models base BossAI::JustReachedHome ->
     -- _JustReachedHome (NOT_STARTED, alive-gated and != DONE-gated,
@@ -103,7 +136,9 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    yaujState[guid] = nil
     -- C++ JustDied (boss_bug_trio.cpp:264-268, before the summon
     -- loop): GetData(DATA_BUG_TRIO_DEATH) < 2 clears the lootable
     -- flag, then SetData(1) increments the shared bugTrioDeathCount
