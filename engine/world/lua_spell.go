@@ -55,12 +55,12 @@ type spellObjectParams struct {
 // damage of the effects already run for that target (Spell.cpp:2409),
 // and AfterHit sees the final post-mitigation damage (Spell.cpp:2547,
 // m_damage = damageInfo.damage after CalculateSpellDamageTaken).
-// The creature path fires the OnHit hook pre-damage (pass-1 position,
-// boss_ai.go) and the AfterHit hook after its damage arms have run;
-// the player path and the triggered funnel still fire OnHit
-// post-damage (spells.go), so the phase gate — not the fire order —
-// reproduces the C++ values: GetHitDamage returns the seed before
-// AfterHit and the recorded final damage at AfterHit.
+// All three paths fire the OnHit hook pre-damage (pass-1 position:
+// boss_ai.go creature path; spells.go client path and triggered
+// funnel, moved 2026-11-09) and the AfterHit hook after their damage
+// arms have run; the phase gate — not the fire order — reproduces
+// the C++ values: GetHitDamage returns the seed before AfterHit and
+// the recorded final damage at AfterHit.
 const (
 	spellHitPhaseNone = iota
 	spellHitPhaseBeforeHit

@@ -523,15 +523,13 @@ const (
 // (event, spell); OnHit mirrors the CallScriptOnHitHandlers arm
 // (Spell.cpp:2377, in Spell::TargetInfo::PreprocessTarget, before the
 // effect loop deals damage in C++), fired once per unit hit target,
-// with args (event, spell, hitTarget). The creature twin fires
-// pre-damage (boss_ai.go pass-1 position), so a handler there sees
-// the target alive on a lethal hit, like C++; the player twins still
-// fire AFTER the damage arms (finishSpellCast/direct paths), so a Lua
-// OnHit handler on those paths must never depend on pre-damage state:
-// the damage-rewrite legs ride the pre-damage spellScriptOnHitDamage
-// table and the lethal-latch legs ride spellScriptOnHitLatch
-// (spell_onhit.go) instead — GetHitDamage() still reads the
-// pre-effect seed at OnHit, matching C++. AfterHit
+// with args (event, spell, hitTarget). All three twins fire
+// pre-damage (boss_ai.go pass-1 position; spells.go client path and
+// triggered funnel, moved 2026-11-09), so a handler sees the target
+// alive on a lethal hit, like C++; the damage-rewrite legs ride the
+// pre-damage spellScriptOnHitDamage table and the lethal-latch legs
+// ride spellScriptOnHitLatch (spell_onhit.go) instead — GetHitDamage()
+// still reads the pre-effect seed at OnHit, matching C++. AfterHit
 // mirrors CallScriptAfterHitHandlers (Spell.cpp:
 // 2659), fired once per unit hit target after the per-hit trigger
 // consumer, with the same args. OnEffectHit mirrors
@@ -559,10 +557,10 @@ const (
 // spell:SetHitDamage() writes the seed in the modifiable hooks
 // (SpellScript.cpp:421-434) — a recorded write only, since Go's
 // damage arms never consult the seed; it never rescales dealt damage.
-// The record is threaded from the creature
-// damage arms (creatureEffectSpellDamage /
-// creatureEffectSpellDamageCreature); the player path does not
-// thread it yet (its Spell objects read 0), and the inline
+// The record is threaded from the damage arms on all three paths
+// (creatureEffectSpellDamage / creatureEffectSpellDamageCreature;
+// the player paths write damageByTarget in their damage arms), so
+// AfterHit reads the recorded final damage everywhere; the inline
 // victim-spell path fires no SpellScript hooks at all, so no
 // hit-damage model is needed there. GetHitHeal/SetHitHeal and
 // PreventHitDamage/PreventHitDefaultEffect have no Go model: the

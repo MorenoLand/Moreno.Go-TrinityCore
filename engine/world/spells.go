@@ -14129,6 +14129,64 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.server.fireSpellEffectHit(effCtx, spellID, effectSpellObj, effectIndex)
 			}
 		}
+		// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
+		// its SpellScript hooks before the per-effect DoTargetSpellHit
+		// loop (Spell.cpp:2384) deals any damage — pass 1 of
+		// DoProcessTargetContainer (Spell.cpp:3555-3566). The BeforeHit
+		// (:2357) and OnHit (:2377) twins below therefore fire here,
+		// ahead of the damage arms, not after the effects loop where
+		// they used to sit (moved 2026-11-09; the creature-caster twin
+		// moved the same day in boss_ai.go): a handler sees the target
+		// alive on a lethal hit, and GetHitDamage() reads the pre-effect
+		// seed (0 — TargetInfo::Damage defaults 0, Spell.h:681) like C++.
+		// The AI ev14 leg stays in the DoDamageAndTriggers block below
+		// (:2629-2638, post-damage). The damage-rewrite table is NOT
+		// consulted here — the damage arms consult spellScriptOnHitDamage
+		// at damage := baseDamage, the C++ SetHitDamage position
+		// (Spell.cpp:2377-2380); the twins below are notification-only.
+		// SpellScript BeforeHit (Spell.cpp:2357,
+		// CallScriptBeforeHitHandlers in
+		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+		// target, before OnHit, miss-inclusive — with the unit (not
+		// nil) on a miss, since PreprocessTarget calls it before
+		// nulling _spellHitTarget. The missInfo is the C++
+		// SpellMissInfo number.
+		spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, hitDamage: hitDamage})
+		for _, effectTarget := range hitTargets {
+			if effectTarget == 0 {
+				continue
+			}
+			hitDamage.phase = spellHitPhaseBeforeHit
+			hitDamage.currentTarget = effectTarget
+			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget), protocol.SpellMissNone)
+		}
+		for _, miss := range missStatus {
+			hitDamage.phase = spellHitPhaseBeforeHit
+			hitDamage.currentTarget = miss.TargetGUID
+			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, miss.TargetGUID), miss.Reason)
+		}
+		// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
+		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+		// target in C++, before damage and before the AI SpellHit leg
+		// below (2377 precedes 2629), with args (event, spell,
+		// hitTarget). C++ fires it for missed targets too (2377 sits
+		// outside the _spellHitTarget if) with a null hit unit, so the
+		// miss entries fire with a nil target; the 0 GUID has no
+		// TargetInfo and is skipped. Notification-only: the C++
+		// damage/healing rewrite has no Go model.
+		for _, effectTarget := range hitTargets {
+			if effectTarget == 0 {
+				continue
+			}
+			hitDamage.phase = spellHitPhaseOnHit
+			hitDamage.currentTarget = effectTarget
+			s.server.fireSpellHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
+		}
+		for _, miss := range missStatus {
+			hitDamage.phase = spellHitPhaseOnHit
+			hitDamage.currentTarget = miss.TargetGUID
+			s.server.fireSpellHit(effCtx, spellID, spellObj, nil)
+		}
 		for effectIndex, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
@@ -18792,53 +18850,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.debug("unhandled spell effect", "spell", spellID, "effect", eff.Effect, "index", effectIndex)
 			}
 		}
-		// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
-		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
-		// target in C++, before damage and before the AI SpellHit leg
-		// below (2377 precedes 2629), with args (event, spell,
-		// hitTarget). Go fires this twin after the effects loop on
-		// this path — the phase gate (lua_spell.go) still reproduces
-		// the C++ GetHitDamage values, and the creature path now fires
-		// it pre-damage (boss_ai.go pass-1 position).
-		// C++ fires it for missed targets too (2377 sits outside the
-		// _spellHitTarget if) with a null hit unit, so the miss entries
-		// fire with a nil target; the 0 GUID has no TargetInfo and is
-		// skipped. Notification-only: the C++ damage/healing rewrite
-		// has no Go model.
-		spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, hitDamage: hitDamage})
-		// SpellScript BeforeHit (Spell.cpp:2357,
-		// CallScriptBeforeHitHandlers in
-		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
-		// target, before OnHit, miss-inclusive — with the unit (not
-		// nil) on a miss, since PreprocessTarget calls it before
-		// nulling _spellHitTarget. The missInfo is the C++
-		// SpellMissInfo number.
-		for _, effectTarget := range hitTargets {
-			if effectTarget == 0 {
-				continue
-			}
-			hitDamage.phase = spellHitPhaseBeforeHit
-			hitDamage.currentTarget = effectTarget
-			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget), protocol.SpellMissNone)
-		}
-		for _, miss := range missStatus {
-			hitDamage.phase = spellHitPhaseBeforeHit
-			hitDamage.currentTarget = miss.TargetGUID
-			s.server.fireSpellBeforeHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, miss.TargetGUID), miss.Reason)
-		}
-		for _, effectTarget := range hitTargets {
-			if effectTarget == 0 {
-				continue
-			}
-			hitDamage.phase = spellHitPhaseOnHit
-			hitDamage.currentTarget = effectTarget
-			s.server.fireSpellHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
-		}
-		for _, miss := range missStatus {
-			hitDamage.phase = spellHitPhaseOnHit
-			hitDamage.currentTarget = miss.TargetGUID
-			s.server.fireSpellHit(effCtx, spellID, spellObj, nil)
-		}
 		// Eluna::SpellHit (CREATURE_EVENT_ON_HIT_BY_SPELL, event 14) fires
 		// once per hit creature target, after the effects loop: C++ runs
 		// the per-effect DoTargetSpellHit loop (Spell.cpp:2384) for damage
@@ -18882,7 +18893,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// (Spell.cpp:2377 CallScriptOnHitHandlers in PreprocessTarget;
 		// Spell.cpp:2659 CallScriptAfterHitHandlers in
 		// DoDamageAndTriggers) fire from the
-		// OnHit loop above and the AfterHit loop below; the GO/item/corpse
+		// pre-damage OnHit loop above the effects loop and the AfterHit loop below; the GO/item/corpse
 		// TargetInfo legs (Spell.cpp:2682-2707) have no Go model and stay
 		// out, like the per-effect OnEffectHit hooks.
 		if completedCast != nil {
@@ -26604,6 +26615,60 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// value (Spell.cpp:2377/2547). The client-path twin lives in
 	// finishSpellCast above.
 	hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
+	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
+	// its SpellScript hooks before the per-effect DoTargetSpellHit
+	// loop (Spell.cpp:2384) deals any damage — pass 1 of
+	// DoProcessTargetContainer (Spell.cpp:3555-3566). The BeforeHit
+	// (:2357) and OnHit (:2377) twins below therefore fire here,
+	// ahead of the damage arms, not at the finish tail where the OnHit
+	// twin used to sit (moved 2026-11-09; the creature-caster and
+	// client-path twins moved the same day): a handler sees the target
+	// alive on a lethal hit, and GetHitDamage() reads the pre-effect
+	// seed (0 — TargetInfo::Damage defaults 0, Spell.h:681) like C++.
+	// The AI ev14 leg stays in the DoDamageAndTriggers block below
+	// (:2629-2638, post-damage). The damage-rewrite table is NOT
+	// consulted here — the damage arms consult spellScriptOnHitDamage
+	// at damage := baseDamage, the C++ SetHitDamage position
+	// (Spell.cpp:2377-2380); the twins below are notification-only.
+	// SpellScript BeforeHit (Spell.cpp:2357,
+	// CallScriptBeforeHitHandlers in
+	// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+	// target, before OnHit, miss-inclusive — with the unit (not nil)
+	// on a miss, since PreprocessTarget calls it before nulling
+	// _spellHitTarget. The missInfo is the C++ SpellMissInfo number.
+	// This twin is new on the funnel: the old tail fired OnHit only.
+	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID, hitDamage: hitDamage})
+	for _, effectTarget := range goHitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		hitDamage.phase = spellHitPhaseBeforeHit
+		hitDamage.currentTarget = effectTarget
+		s.server.fireSpellBeforeHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget), protocol.SpellMissNone)
+	}
+	for _, miss := range goMissStatus {
+		hitDamage.phase = spellHitPhaseBeforeHit
+		hitDamage.currentTarget = miss.TargetGUID
+		s.server.fireSpellBeforeHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, miss.TargetGUID), miss.Reason)
+	}
+	// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
+	// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+	// target in C++, before damage and before the AI SpellHit leg
+	// below, with args (event, spell, hitTarget); missed targets fire
+	// with a nil target, like the client path. Notification-only.
+	for _, effectTarget := range goHitTargets {
+		if effectTarget == 0 {
+			continue
+		}
+		hitDamage.phase = spellHitPhaseOnHit
+		hitDamage.currentTarget = effectTarget
+		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
+	}
+	for _, miss := range goMissStatus {
+		hitDamage.phase = spellHitPhaseOnHit
+		hitDamage.currentTarget = miss.TargetGUID
+		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, nil)
+	}
 	for effectIndex, eff := range spell.Effects {
 		if eff.Effect == 0 && eff.Aura == 0 {
 			continue
@@ -28614,28 +28679,6 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		s.stopAttackOnSpellFinish(spell)
 	}
 
-	// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
-	// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
-	// target in C++, before damage and before the AI SpellHit leg
-	// below, with args (event, spell, hitTarget); missed targets fire
-	// with a nil target, like the client path. Go fires this twin
-	// after the damage funnel on this path — the phase gate
-	// (lua_spell.go) still reproduces the C++ GetHitDamage values.
-	// Notification-only.
-	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID, hitDamage: hitDamage})
-	for _, effectTarget := range goHitTargets {
-		if effectTarget == 0 {
-			continue
-		}
-		hitDamage.phase = spellHitPhaseOnHit
-		hitDamage.currentTarget = effectTarget
-		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
-	}
-	for _, miss := range goMissStatus {
-		hitDamage.phase = spellHitPhaseOnHit
-		hitDamage.currentTarget = miss.TargetGUID
-		s.server.fireSpellHit(ctx, spellID, funnelSpellObj, nil)
-	}
 	// Spell::DoDamageAndTriggers AI legs (Spell.cpp:2629-2638, once per
 	// target): a triggered player cast never entered finishSpellCast, so
 	// its hit creatures never got the Eluna SpellHit leg
