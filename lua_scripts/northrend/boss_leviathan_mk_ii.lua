@@ -20,10 +20,26 @@
 -- GUID (tick 557 fix — C++ :639 loops DATA 32..34).
 -- SetPhase legs (PHASE_LEVIATHAN_MK_II / PHASE_VOL7RON) have no Lua
 -- mirror; the phase-1-only re-arm legs are covered by the action-12
--- cancels below. The DamageTaken lethal clamp stays OUT: phase-gated
--- (phase-1 turret kill + MovePoint to idle vs phase-4 stand-dead
--- + self-repair) behind the unbridged phase machine plus
--- the vehicle-kit and MovePoint legs. The GetData/SetData
+-- cancels below. DamageTaken (:698-731) PORTED tick 561 below: lethal
+-- clamp (return false, health - 1), NON_ATTACKABLE flag, triggered
+-- VEHICLE_DAMAGED 63415, AttackStop, react passive; phase-1
+-- (mkiiAssembled unset = PHASE_LEVIATHAN_MK_II mirror): CastStop,
+-- turret KillSelf via GetVehicleKit()->GetPassenger(3) (bridged,
+-- lua_vehicle.go:74), SetSpeedRate RUN 1.5, MoveTo(1, idle) — the
+-- MovePoint twin (lua_creature_events.go:4875), which fires the ev28
+-- arrival below; VOL7RON (assembled): SetStandState DEAD,
+-- IsEncounterFinished cross-creature stand-state check (all three
+-- DEAD -> Kill + DespawnOrUnsummon 120s each + controller Kill to run
+-- its JustDied outtro, the frozen-core Kill-to-deliver-JustDied twin —
+-- C++ calls JustDied directly without killing, so the controller death
+-- is the documented deviation), else CastStop + SELF_REPAIR 64383.
+-- RemoveAllAurasExceptType has NO bridge — leg skipped (auras persist;
+-- the component is passive/non-attackable at 1 HP).
+-- MovementInform (:795-807) WP_MKII_P1_IDLE arrival PORTED tick 561:
+-- SetFlag NOT_SELECTABLE, HALF_HEAL 64188, controller
+-- DoAction(DO_ACTIVATE_VX001). The P4-position arrival legs (:808-822)
+-- stay out — the V0L7R0N chain that drives them is a separate unit.
+-- The GetData/SetData
 -- setup-mine/bomb/rocket/firefighter latches ARE modeled below
 -- (tick 417): the ctor/Reset defaults + the proximity-mine
 -- SpellHitTarget clear leg (npc_mimiron_proximity_mine.lua, ev15);
@@ -85,7 +101,21 @@ local SPELL_SCRIPT_EFFECT_PLASMA_BLAST = 64542
 local SPELL_PROXIMITY_MINES = 63027
 local SPELL_SHOCK_BLAST = 63631
 local SPELL_FLAME_SUPPRESSANT_MK = 64570
+local SPELL_VEHICLE_DAMAGED = 63415 -- boss_mimiron.cpp:172
+local SPELL_SELF_REPAIR = 64383 -- boss_mimiron.cpp:175
+local SPELL_HALF_HEAL = 64188 -- boss_mimiron.cpp:178
 
+local NPC_VX_001 = 33651
+local NPC_AERIAL_COMMAND_UNIT = 33670
+
+local UNIT_STAND_STATE_DEAD = 7 -- UnitDefines.h:40
+local MKII_SEAT_CANNON = 3 -- boss_mimiron.cpp:329
+local WP_MKII_P1_IDLE = 1 -- boss_mimiron.cpp:318
+local MOVE_RUN = 1
+local DO_ACTIVATE_VX001 = 2 -- boss_mimiron.cpp:283
+local POINT_MOTION_TYPE = 8
+-- VehicleRelocation[WP_MKII_P1_IDLE], boss_mimiron.cpp:345.
+local MKII_P1_IDLE_POS = { 2792.070, 2596.320, 364.3136 }
 local timers = {}
 
 -- Per-GUID assembled latch: the Lua mirror of the EventMap phase
@@ -394,6 +424,107 @@ local function leviathanMkIITargetDied(event, creature, victim)
     end
 end
 
+-- C++ IsEncounterFinished (boss_mimiron.cpp:357-382): all three
+-- components at UNIT_STAND_STATE_DEAD -> Unit::Kill(who) each,
+-- DespawnOrUnsummon 120s each, then the controller's JustDied arm.
+-- Lua twin: the controller JustDied is delivered by killing the
+-- controller (the frozen-core Kill-to-deliver-JustDied precedent);
+-- C++ calls JustDied directly without killing, so the controller death
+-- is the documented deviation. The two non-self components are killed
+-- first; self is killed last so the rest of this handler still runs.
+-- FindNearestCreature is the twin of the C++ instance GUID lookups
+-- (all three stand in the same room); a missing component reads as
+-- not-finished, matching the C++ nil-GUID early-out.
+local function isEncounterFinished(creature, attacker)
+    local mkii = creature:FindNearestCreature(NPC_LEVIATHAN_MKII, 500)
+    local vx001 = creature:FindNearestCreature(NPC_VX_001, 500)
+    local aerial = creature:FindNearestCreature(NPC_AERIAL_COMMAND_UNIT, 500)
+    if mkii == nil or vx001 == nil or aerial == nil then
+        return false
+    end
+    if mkii:GetStandState() ~= UNIT_STAND_STATE_DEAD or vx001:GetStandState() ~= UNIT_STAND_STATE_DEAD or aerial:GetStandState() ~= UNIT_STAND_STATE_DEAD then
+        return false
+    end
+    local selfGuid = creature:GetGUIDLow()
+    for _, part in ipairs({ mkii, vx001, aerial }) do
+        if part:GetGUIDLow() ~= selfGuid then
+            part:Kill(attacker)
+        end
+    end
+    for _, part in ipairs({ mkii, vx001, aerial }) do
+        part:DespawnOrUnsummon(120000)
+    end
+    creature:Kill(attacker)
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        mimiron:Kill(attacker)
+    end
+    return true
+end
+
+-- C++ boss_leviathan_mk_iiAI::DamageTaken (:698-731), in C++ order.
+-- The health > 0 guard is the midnight form (ev9 can fire on an
+-- already-dead creature). RemoveAllAurasExceptType has no bridge — leg
+-- skipped, see header. The VOL7RON early-return skips events.Reset()
+-- exactly as in C++ (the kills above fire the components' JustDied
+-- arms, which cancel their timers).
+local function leviathanMkIIDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    if health == 0 or damage < health then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    creature:CastSpell(creature, SPELL_VEHICLE_DAMAGED, true)
+    creature:AttackStop()
+    creature:SetReactState(REACT_PASSIVE)
+    if not mkiiAssembled[guid] then
+        -- :707-717 PHASE_LEVIATHAN_MK_II: CastStop; turret KillSelf;
+        -- SetSpeedRate RUN 1.5; MovePoint to the idle position (MoveTo
+        -- twin; the arrival leg below fires on ev28).
+        creature:StopSpellCast()
+        local kit = creature:GetVehicleKit()
+        local turret = nil
+        if kit ~= nil then
+            turret = kit:GetPassenger(MKII_SEAT_CANNON)
+        end
+        if turret ~= nil then
+            turret:Kill()
+        end
+        creature:SetSpeedRate(MOVE_RUN, 1.5)
+        creature:MoveTo(WP_MKII_P1_IDLE, MKII_P1_IDLE_POS[1], MKII_P1_IDLE_POS[2], MKII_P1_IDLE_POS[3])
+    else
+        -- :718-728 PHASE_VOL7RON: stand dead; if the encounter is
+        -- finished return early (no Reset, no self-repair); else
+        -- CastStop + SELF_REPAIR.
+        creature:SetStandState(UNIT_STAND_STATE_DEAD)
+        if isEncounterFinished(creature, attacker) then
+            return false, health - 1
+        end
+        creature:StopSpellCast()
+        creature:CastSpell(creature, SPELL_SELF_REPAIR)
+    end
+    cancelTimers(guid)
+    return false, health - 1
+end
+
+-- C++ boss_leviathan_mk_iiAI::MovementInform (:802-807), WP_MKII_P1_IDLE
+-- arrival only (the P4-position legs stay out — see header). Event 28
+-- args: (event, creature, motionType, id); the four_horsemen ev28 form.
+local function leviathanMkIIMovementInform(event, creature, motionType, id)
+    if motionType ~= POINT_MOTION_TYPE or id ~= WP_MKII_P1_IDLE then
+        return
+    end
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:CastSpell(creature, SPELL_HALF_HEAL)
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        mimiron:DoAction(DO_ACTIVATE_VX001)
+    end
+end
+
+RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 9, leviathanMkIIDamageTaken)
+RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 28, leviathanMkIIMovementInform)
 RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 3, leviathanMkIITargetDied)
 RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 4, leviathanMkIIJustDied)
 RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 5, leviathanMkIISpawned)

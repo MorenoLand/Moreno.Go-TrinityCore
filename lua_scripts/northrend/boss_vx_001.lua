@@ -76,11 +76,12 @@
 --   The AfterRemove arm (:2207-2210, target TempSummon DespawnOrUnsummon)
 --   stays out: no aura apply/remove hook exists on the Lua surface.
 --
--- STAY-OUT: DamageTaken (:943-975) — the 1-HP latch, vehicle-kit
--- SPELL_VEHICLE_DAMAGED / TORSO_DISABLED / SELF_REPAIR legs and the
--- DoAction relays to Mimiron (DO_ACTIVATE_AERIAL) all ride the
--- unbridged vehicle kit / MovePoint machine; EnterEvadeMode
--- (:1013-1016, summons.DespawnAll) — no summon list is kept here.
+-- DamageTaken (:943-975) PORTED tick 561 below: the 1-HP latch, the
+-- PHASE_VX_001 branch (HALF_HEAL / TORSO_DISABLED / DO_ACTIVATE_AERIAL
+-- relay) and the PHASE_VOL7RON branch (stand-DEAD, IsEncounterFinished
+-- finish path, SELF_REPAIR). Stay-outs inside it: RemoveAllAurasExceptType
+-- (no bridge) and EnterEvadeMode (:1013-1016, summons.DespawnAll) — no
+-- summon list is kept here.
 -- The rapid-burst arms stay dormant until the EVENT_RAPID_BURST
 -- timer lands, since burst targets are created only by it.
 -- KilledUnit (:1030-1034) PORTED tick 559 below: player-gated, the
@@ -115,6 +116,17 @@ local SPELL_SCRIPT_EFFECT_FROST_BOMB = 64623
 local SPELL_FLAME_SUPPRESSANT_VX = 65192
 local SPELL_HAND_PULSE_LEFT = 64348
 local SPELL_HAND_PULSE_RIGHT = 64352
+local SPELL_VEHICLE_DAMAGED = 63415
+local SPELL_HALF_HEAL = 64188
+local SPELL_TORSO_DISABLED = 64120
+local SPELL_SELF_REPAIR = 64383
+
+-- boss_mimiron.cpp:280-299 Actions enum: DO_ACTIVATE_AERIAL = 5 (the
+-- Mimiron-controller relay the PHASE_VX_001 DamageTaken branch sends).
+local DO_ACTIVATE_AERIAL = 5
+
+local NPC_LEVIATHAN_MKII = 33432
+local NPC_AERIAL_COMMAND_UNIT = 33670
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -123,6 +135,7 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local EMOTE_ONESHOT_NONE = 0
 local EMOTE_STATE_SPECIAL_UNARMED = 451
 local UNIT_STAND_STATE_STAND = 0
+local UNIT_STAND_STATE_DEAD = 7 -- UnitDefines.h:40
 local REACT_PASSIVE = 0
 
 local timers = {}
@@ -439,6 +452,98 @@ local function vx001JustDied(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ IsEncounterFinished (boss_mimiron.cpp:352-377): all three
+-- vehicles stand-DEAD -> Kill + DespawnOrUnsummon(120s) each, then the
+-- Mimiron controller's JustDied. FindNearestCreature(500) is the twin
+-- of the C++ instance GUID reads; GetStandState is bridged
+-- (lua_creature_events.go:1168). The caller's own stand state must
+-- already be DEAD when this runs (C++ sets it before the check).
+local function isEncounterFinished(creature, attacker)
+    local mkii = creature:FindNearestCreature(NPC_LEVIATHAN_MKII, 500)
+    local vx001 = creature:FindNearestCreature(NPC_VX_001, 500)
+    local aerial = creature:FindNearestCreature(NPC_AERIAL_COMMAND_UNIT, 500)
+    if mkii == nil or vx001 == nil or aerial == nil then
+        return false
+    end
+    if mkii:GetStandState() ~= UNIT_STAND_STATE_DEAD or vx001:GetStandState() ~= UNIT_STAND_STATE_DEAD or aerial:GetStandState() ~= UNIT_STAND_STATE_DEAD then
+        return false
+    end
+    local killer = attacker or creature
+    -- The two non-self components are killed first; self is killed
+    -- last so the rest of this handler still runs.
+    local selfGuid = creature:GetGUIDLow()
+    for _, part in ipairs({ mkii, vx001, aerial }) do
+        if part:GetGUIDLow() ~= selfGuid then
+            part:Kill(killer)
+        end
+    end
+    for _, part in ipairs({ mkii, vx001, aerial }) do
+        part:DespawnOrUnsummon(120000)
+    end
+    creature:Kill(killer)
+    -- C++ calls mimiron->AI()->JustDied(who) directly while Mimiron
+    -- lives; Lua has no cross-creature JustDied call, so Kill fires
+    -- the ev4 handler (boss_mimiron.lua mimironDied), which IS the C++
+    -- JustDied port (kiljaeden precedent). OUTTRO_3 despawns him 21s
+    -- later, matching the C++ end state.
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        mimiron:Kill(killer)
+    end
+    return true
+end
+
+-- C++ boss_vx_001AI::DamageTaken (:944-975), event 9 args:
+-- (event, creature, attacker, damage). Only lethal hits act (damage
+-- >= health); the lich-king damage-rewrite form returns false,
+-- health - 1. Common legs in C++ order: AttackStop, triggered
+-- self-cast VEHICLE_DAMAGED 63415. RemoveAllAurasExceptType
+-- (CONTROL_VEHICLE, MOD_INCREASE_HEALTH_PERCENT) has NO bridge --
+-- leg skipped (the RemoveAllAuras bridge would strip the
+-- vehicle-control aura too). PHASE_VX_001 (:953-961): CastStop,
+-- NON_ATTACKABLE flag, HALF_HEAL 64188 + TORSO_DISABLED 64120
+-- self-casts, Mimiron DoAction DO_ACTIVATE_AERIAL (5) -- the
+-- aerialActivation chain in boss_mimiron.lua is live. PHASE_VOL7RON
+-- (:962-975): stand-DEAD, NON_ATTACKABLE, IsEncounterFinished
+-- (returns early when the encounter is finished), CastStop,
+-- SELF_REPAIR 64383. The C++ arm ends with events.Reset, so the
+-- pumps are cancelled on a lethal hit -- except on the VOL7RON
+-- finish-path early return, where C++ returns before the Reset (the
+-- kills fire the components' JustDied arms, which cancel theirs).
+-- The health > 0 guard is the midnight form (ev9 can fire on an
+-- already-dead creature).
+local function vx001DamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    if health == 0 or damage < health then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    creature:AttackStop()
+    creature:CastSpell(creature, SPELL_VEHICLE_DAMAGED, true)
+    local st = vxState[guid]
+    local phase = st and st.phase
+    if phase == "VX_001" then
+        creature:StopSpellCast()
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:CastSpell(creature, SPELL_HALF_HEAL)
+        creature:CastSpell(creature, SPELL_TORSO_DISABLED)
+        local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+        if mimiron ~= nil then
+            mimiron:DoAction(DO_ACTIVATE_AERIAL)
+        end
+    elseif phase == "VOL7RON" then
+        creature:SetStandState(UNIT_STAND_STATE_DEAD)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        if isEncounterFinished(creature, attacker) then
+            return false, health - 1
+        end
+        creature:StopSpellCast()
+        creature:CastSpell(creature, SPELL_SELF_REPAIR)
+    end
+    cancelTimers(guid)
+    return false, health - 1
+end
+
 -- C++ JustSummoned (1022-1027): a summoned burst target casts
 -- RAPID_BURST_TARGET_ME on VX-001. Event 19 args: (event, creature, summoned);
 -- the summoned object is a full handler creature, so it can cast.
@@ -489,6 +594,7 @@ local function rapidBurstTick(event, aura, target)
 end
 
 RegisterCreatureEvent(NPC_VX_001, 5, vx001Spawn)
+RegisterCreatureEvent(NPC_VX_001, 9, vx001DamageTaken)
 RegisterCreatureEvent(NPC_VX_001, 38, vx001DoAction)
 RegisterCreatureEvent(NPC_VX_001, 23, vx001Reset)
 RegisterCreatureEvent(NPC_VX_001, 3, vx001TargetDied)
