@@ -224,7 +224,7 @@ local function onAreaTrigger(_, player, _triggerID)
     if not dawnforge then
         return
     end
-    local guid = dawnforge:GetGUID()
+    local guid = dawnforge:GetGUIDLow()
     local state = states[guid]
     if state and state.isEvent then
         return
@@ -249,7 +249,7 @@ end
 
 -- C++ Reset (:131-134) via Initialize: latch + GUIDs cleared.
 local function onReset(_, creature)
-    resetEvent(creature, creature:GetGUID())
+    resetEvent(creature, creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_COMMANDER_DAWNFORGE, 5, onReset)

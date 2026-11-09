@@ -257,7 +257,7 @@ end
 -- combat tick. The C++ JustEngagedWith override is empty —
 -- no talk, C++-exact.
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     spawnState[guid] = {
         timers = false,
@@ -272,7 +272,7 @@ end
 
 -- C++ Reset() (called on evade): fullReset — see above.
 local function onLeaveCombat(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (:1092-1097): me->DespawnOrUnsummon() — immediate,
@@ -280,7 +280,7 @@ end
 -- cross-creature bridge; stays documented-only).
 local function onDied(_, creature)
     creature:Despawn()
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 -- The C++ CreatureScript binds one AI class to all three

@@ -87,7 +87,7 @@ local function scannerReset(event, creature)
     if creature:IsDead() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:FindNearestCreature(NPC_TOP_BUNNY, 25.0) then
         creature:Despawn()
@@ -113,12 +113,12 @@ local function scannerSummoned(event, creature, summoner)
     end
     local player = summoner:ToPlayer()
     if player ~= nil then
-        playerGuid[creature:GetGUID()] = player:GetGUID()
+        playerGuid[creature:GetGUIDLow()] = player:GetGUID()
     end
 end
 
 local function scannerDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     playerGuid[guid] = nil
 end

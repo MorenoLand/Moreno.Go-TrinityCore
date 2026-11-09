@@ -165,7 +165,7 @@ end
 
 local function hellmawEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "acid", {5000, 10000}, function()
         corrosiveAcidTick(creature, guid)
@@ -185,7 +185,7 @@ local function hellmawEnterCombat(event, creature, target)
 end
 
 local function hellmawLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_ambassador_hellmawAI::KilledUnit:
@@ -205,7 +205,7 @@ end
 local function hellmawDied(event, creature, killer)
     creature:SetBossState(0, 3) -- DATA_AMBASSADOR_HELLMAW, DONE (boss_ambassador_hellmaw.cpp: SetBossState precedes Talk)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 1, hellmawEnterCombat)

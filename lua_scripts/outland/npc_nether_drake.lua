@@ -245,7 +245,7 @@ end
 -- 15000 (IsNihil false at creation). The C++ JustEngagedWith
 -- override is empty — no talk, C++-exact.
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     -- Entering combat means not NIHIL (C++ UpdateAI runs the
     -- IsNihil branch or the combat branch, never both) — a
@@ -263,7 +263,7 @@ end
 
 -- C++ Reset() (called on evade): fullReset — see above.
 local function onLeaveCombat(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 -- C++ MoveInLineOfSight (zone_blades_edge_mountains.cpp:104-
@@ -297,7 +297,7 @@ local function onSpellHit(_, creature, caster, spellId)
         return
     end
 
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local current = creature:GetEntry()
     local cid = math.random(0, 2)
     if PHASE_ENTRY_LIST[cid + 1] == current then

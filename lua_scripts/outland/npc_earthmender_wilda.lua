@@ -131,7 +131,7 @@ end
 -- attacker, then urand(0,1) -> Talk(1). The heal pump starts on
 -- every enter-combat, ungated by the Talk gates.
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not healTimer[guid] then
         local remaining = 0
         local function tick()
@@ -163,7 +163,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelHeal(creature:GetGUID())
+    cancelHeal(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_WILDA, 31, onQuestAccept)

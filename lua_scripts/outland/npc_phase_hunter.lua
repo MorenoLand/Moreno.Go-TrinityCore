@@ -221,7 +221,7 @@ end
 -- passes the engager as target; non-player engagers store
 -- nil, C++-exact) and feeds the Weak latch arm in the pump.
 local function onEnterCombat(_, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     hunterState[guid] = {
         materialized = false,
@@ -243,7 +243,7 @@ end
 -- (creaturemotion.go triggerCreatureEvade; Eluna EnterEvadeMode
 -- calls On_Reset first), so the restore gates on event == 23.
 local function onLeaveCombat(event, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
     if event == 23 and creature:GetEntry() == 19595 then
         creature:UpdateEntry(18879)
     end
