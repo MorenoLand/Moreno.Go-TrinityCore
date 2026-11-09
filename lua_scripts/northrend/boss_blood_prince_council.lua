@@ -148,11 +148,8 @@
 -- machine itself is unbridged — bronjahm npc_corrupted_soul_fragment
 -- precedent).
 -- BloodPrincesBossAI::DamageTaken (:494-501) — non-empowered damage
--- nullification (damage = 0 unless _isEmpowered) is gated on the
--- unbridged invocation machine — unmodeled (event 9 is NOT read-only:
--- numeric-return damage rewrite exists, halazzi precedent — the arm
--- stays out for the invocation-machine gate); all three princes take
--- full damage in the port (deviation, documented below).
+-- nullification (damage = 0 unless _isEmpowered) — PORTED via ev9
+-- (princesDamageTaken, numeric-return rewrite, halazzi precedent).
 -- keleseth "// does not melee" (:676) — melee is engine-driven in Go
 -- (deviation, documented below).
 -- keleseth EVENT_SHADOW_LANCE empowered variant
@@ -239,12 +236,11 @@
 -- (the boss_anubrekhan at_anubrekhan_entrance precedent).
 --
 -- DEVIATIONS FROM C++ (documented; every modeled value C++-exact):
--- _isEmpowered never flips (invocation machine unbridged): keleseth
--- shadow lance always casts the base 71405 (never empowered 71815);
--- taldaram conjure flame always casts base 71718 with the base re-arm
--- {20000,30000}ms (never empowered 72040 / {15000,25000}ms).
--- BloodPrincesBossAI::DamageTaken's non-empowered nullification is
--- unmodeled — all three princes take full damage in the port.
+-- _isEmpowered flips on the invocation rotation (46.5s, ported this
+-- tick): keleseth shadow lance casts empowered 71815 while empowered,
+-- taldaram conjure flame casts empowered 72040 with the {15000,25000}ms
+-- re-arm, valanar shock vortex casts empowered 72039 + Talk(3) with the
+-- 30s repeat; DamageTaken nullifies non-empowered damage (ev9).
 -- keleseth's C++ "// does not melee" is unmodeled — Go melees.
 
 local ENTRY_KELESETH = 37972
@@ -336,6 +332,31 @@ local DATA_PRINCE_TALDARAM = 20 -- icecrown_citadel.h:96
 local DATA_PRINCE_VALANAR = 21 -- icecrown_citadel.h:97
 local PRINCES_DATA = { DATA_PRINCE_KELESETH, DATA_PRINCE_TALDARAM, DATA_PRINCE_VALANAR } -- boss_blood_prince_council.cpp:212-217
 local SPELL_INVOCATION_OF_BLOOD_VALANAR = 70952 -- boss_blood_prince_council.cpp:105
+local SPELL_INVOCATION_OF_BLOOD_KELESETH = 70981 -- boss_blood_prince_council.cpp:78
+local SPELL_INVOCATION_OF_BLOOD_TALDARAM = 70982 -- boss_blood_prince_council.cpp:88
+local SPELL_INVOCATION_VISUAL_ACTIVE = 71596 -- boss_blood_prince_council.cpp:70
+local SPELL_INVOCATION_VISUAL_VALANAR = 71070 -- boss_blood_prince_council.cpp:123
+local SPELL_INVOCATION_VISUAL_TALDARAM = 71081 -- boss_blood_prince_council.cpp:124
+local SPELL_INVOCATION_VISUAL_KELESETH = 71080 -- boss_blood_prince_council.cpp:125
+local SPELL_EMPOWERED_SHADOW_LANCE = 71815 -- boss_blood_prince_council.cpp:80
+local SPELL_CONJURE_EMPOWERED_FLAME = 72040 -- boss_blood_prince_council.cpp:97
+local SPELL_EMPOWERED_SHOCK_VORTEX = 72039 -- boss_blood_prince_council.cpp:109
+local ACTION_CAST_INVOCATION = 4 -- boss_blood_prince_council.cpp:156
+local ACTION_REMOVE_INVOCATION = 5 -- boss_blood_prince_council.cpp:157
+local EMOTE_VALANAR_SHOCK_VORTEX = 3 -- boss_blood_prince_council.cpp:56
+-- Per-prince invocation spell, for the ACTION_REMOVE_INVOCATION aura
+-- strip (C++ SelectInvocationSpell :596-606).
+local INVOCATION_SPELL = {
+    [ENTRY_KELESETH] = SPELL_INVOCATION_OF_BLOOD_KELESETH,
+    [ENTRY_TALDARAM] = SPELL_INVOCATION_OF_BLOOD_TALDARAM,
+    [ENTRY_VALANAR] = SPELL_INVOCATION_OF_BLOOD_VALANAR,
+}
+-- BloodPrincesBossAI::_isEmpowered (:431/:612), per prince GUID —
+-- flipped only by the invocation rotation's ev38 dispatches below.
+local empowered = {}
+-- boss_blood_council_controller::_invocationOrder + _invocationStage
+-- (:291-301/:373-398), per controller GUID.
+local invocationState = {}
 -- Instance guid store (engine/world/instance_guid_store.go): each prince
 -- latches its own GUID under its DATA_X on spawn (CREATURE_EVENT_ON_SPAWN
 -- 5) — the Lua mirror of instance_icecrown_citadel.cpp:255-261.
@@ -501,7 +522,11 @@ local function onKelesethLance(creature, guid)
         schedule(guid, "lance", 500, function() onKelesethLance(creature, guid) end)
         return
     end
-    creature:CastSpell(nil, SPELL_SHADOW_LANCE)
+    if empowered[guid] then
+        creature:CastSpell(nil, SPELL_EMPOWERED_SHADOW_LANCE)
+    else
+        creature:CastSpell(nil, SPELL_SHADOW_LANCE)
+    end
     schedule(guid, "lance", 2000, function() onKelesethLance(creature, guid) end)
 end
 
@@ -549,9 +574,15 @@ local function onTaldaramConjure(creature, guid)
         schedule(guid, "conjure", 500, function() onTaldaramConjure(creature, guid) end)
         return
     end
-    creature:CastSpell(creature, SPELL_CONJURE_FLAME)
-    creature:Talk(SAY_TALDARAM_SPECIAL)
-    schedule(guid, "conjure", {20000, 30000}, function() onTaldaramConjure(creature, guid) end)
+    if empowered[guid] then
+        creature:CastSpell(creature, SPELL_CONJURE_EMPOWERED_FLAME)
+        creature:Talk(SAY_TALDARAM_SPECIAL)
+        schedule(guid, "conjure", {15000, 25000}, function() onTaldaramConjure(creature, guid) end)
+    else
+        creature:CastSpell(creature, SPELL_CONJURE_FLAME)
+        creature:Talk(SAY_TALDARAM_SPECIAL)
+        schedule(guid, "conjure", {20000, 30000}, function() onTaldaramConjure(creature, guid) end)
+    end
 end
 
 -- C++ :814-817 valanar EVENT_BERSERK: DoCastSelf(SPELL_BERSERK) +
@@ -725,11 +756,17 @@ local function onValanarShockVortex(creature, guid)
         schedule(guid, "shockvortex", 500, function() onValanarShockVortex(creature, guid) end)
         return
     end
-    local target = randomNonTankPlayerAnywhere(creature)
-    if target ~= nil then
-        creature:CastSpell(target, SPELL_SHOCK_VORTEX)
+    if empowered[guid] then
+        creature:CastSpell(creature, SPELL_EMPOWERED_SHOCK_VORTEX)
+        creature:Talk(EMOTE_VALANAR_SHOCK_VORTEX)
+        schedule(guid, "shockvortex", 30000, function() onValanarShockVortex(creature, guid) end)
+    else
+        local target = randomNonTankPlayerAnywhere(creature)
+        if target ~= nil then
+            creature:CastSpell(target, SPELL_SHOCK_VORTEX)
+        end
+        schedule(guid, "shockvortex", {18000, 23000}, function() onValanarShockVortex(creature, guid) end)
     end
-    schedule(guid, "shockvortex", {18000, 23000}, function() onValanarShockVortex(creature, guid) end)
 end
 
 -- C++ boss_prince_valanar_icc::ScheduleEvents :761-765 —
@@ -831,6 +868,47 @@ end
 -- C++ BloodPrincesBossAI::KilledUnit :505-521:
 -- if (victim->GetTypeId() == TYPEID_PLAYER) switch (me->GetEntry())
 -- Talk(kill text) — the razuvious player-gated variant precedent.
+-- C++ BloodPrincesBossAI::DoAction (:549-580): ACTION_CAST_INVOCATION
+-- (Talk(SelectInvocationSay()) + DoCastSelf(SPELL_INVOCATION_VISUAL_ACTIVE
+-- 71596, true) + _isEmpowered = true) and ACTION_REMOVE_INVOCATION
+-- (SetHealth(_spawnHealth = 1, InitializeAI :437) + RemoveAuras 71596 +
+-- invocation spell + _isEmpowered = false). SelectInvocationSay returns
+-- 0 for all three entries (the valanar SAY_KELESETH_INVOCATION quirk
+-- :585-590). Arrives via ev38 from the controller rotation below
+-- (the C++ SpellHit relay :535-539 is folded into the direct dispatch:
+-- the visual/invocation casts carry no Lua-visible payload beyond it).
+local function princesDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_CAST_INVOCATION then
+        creature:Talk(0)
+        creature:CastSpell(creature, SPELL_INVOCATION_VISUAL_ACTIVE, true)
+        empowered[guid] = true
+    elseif action == ACTION_REMOVE_INVOCATION then
+        creature:SetHealth(1)
+        creature:RemoveAura(SPELL_INVOCATION_VISUAL_ACTIVE)
+        local inv = INVOCATION_SPELL[creature:GetEntry()]
+        if inv then
+            creature:RemoveAura(inv)
+        end
+        empowered[guid] = false
+    end
+end
+
+-- C++ BloodPrincesBossAI::DamageTaken (:494-501): a non-empowered prince
+-- nullifies the damage but still takes threat from it. ev9 numeric-return
+-- rewrite (lua_creature_events.go fireCreatureDamageTaken, halazzi
+-- precedent): the boolean only gates the no-op base, the second return
+-- rewrites the damage.
+local function princesDamageTaken(event, creature, attacker, damage)
+    if empowered[creature:GetGUID()] then
+        return
+    end
+    if attacker ~= nil then
+        creature:AddThreat(attacker, damage)
+    end
+    return false, 0
+end
+
 local function princesKilledUnit(event, creature, victim)
     if victim:GetObjectType() == "Player" then
         creature:Talk(KILL_TEXT[creature:GetEntry()])
@@ -862,6 +940,7 @@ local function princesJustDied(event, creature)
 end
 
 local function princesLeaveCombat(event, creature)
+    empowered[creature:GetGUID()] = false
     cancelTimers(creature:GetGUID())
     despawnValanarSummons(creature:GetGUID())
     despawnKelesethSummons(creature:GetGUID())
@@ -869,6 +948,7 @@ local function princesLeaveCombat(event, creature)
 end
 
 local function princesReset(event, creature)
+    empowered[creature:GetGUID()] = false
     cancelTimers(creature:GetGUID())
     despawnValanarSummons(creature:GetGUID())
     despawnKelesethSummons(creature:GetGUID())
@@ -957,11 +1037,49 @@ end
 -- IN_PROGRESS once-guard (:267-268) via the instance boss-state store;
 -- CheckRequiredBosses (:270-275) has no bridge — the sequence-break
 -- evade leg stays out; SetCombatPulseDelay(5), DoZoneInCombat,
+-- C++ boss_blood_council_controller::UpdateAI EVENT_INVOCATION_OF_BLOOD
+-- (:373-398): old prince DoAction(ACTION_REMOVE_INVOCATION), old casts
+-- the new prince's visual spell on the new prince, new prince takes the
+-- controller's health + Talk(textId), controller DoCastSelf(spellId),
+-- re-arm 46.5s. The C++ SpellHit relay (:535-539) is folded into direct
+-- ev38 dispatches (creature:DoAction, lua_creature_events.go:827): the
+-- new prince's ACTION_CAST_INVOCATION is sent here instead of relying
+-- on the spell hit, which carries no Lua-visible payload beyond it.
+local function onInvocationOfBlood(controller, guid)
+    local st = invocationState[guid]
+    if not st then
+        return
+    end
+    local oldEntry = st.order[st.stage]
+    st.stage = st.stage % 3 + 1
+    local newEntry = st.order[st.stage]
+    local oldPrince = controller:GetInstanceCreature(oldEntry.data)
+    local newPrince = controller:GetInstanceCreature(newEntry.data)
+    if oldPrince then
+        oldPrince:DoAction(ACTION_REMOVE_INVOCATION)
+        if newPrince then
+            oldPrince:CastSpell(newPrince, newEntry.visual, true)
+        end
+    end
+    if newPrince then
+        newPrince:SetHealth(controller:GetHealth())
+        newPrince:Talk(newEntry.text)
+        newPrince:DoAction(ACTION_CAST_INVOCATION)
+    end
+    controller:CastSpell(controller, newEntry.spell)
+    schedule(guid, "invocation", 46500, function() onInvocationOfBlood(controller, guid) end)
+end
+
 -- SetBossState(IN_PROGRESS), DoCastSelf INVOCATION_OF_BLOOD_VALANAR
--- 70952, then the PrincesData ENGAGE loop (C++ order). The
--- EVENT_INVOCATION_OF_BLOOD seed (:289) and the _invocationOrder build
--- (:291-301) stay out — the invocation rotation machine is unported,
--- so the order would be a dead store. setActive has no bridge.
+-- 70952, then the PrincesData ENGAGE loop (C++ order), then the
+-- _invocationOrder build (:291-301: valanar first, taldaram/keleseth
+-- by a 50/50 roll) + the EVENT_INVOCATION_OF_BLOOD seed (:289, 46.5s)
+-- + the initial empowerment of valanar (the net effect of the
+-- controller's 70952 self-cast, whose SpellHit leg has no Lua bearer).
+-- setActive has no bridge. The CheckRequiredBosses sequence-break leg
+-- (:270-275) stays out — no DoCastSpellOnPlayers bridge (the
+-- GetPlayersInWorld + per-player 70781 workaround is not C++-exact
+-- and is not applied to festergut/rotface/putricide either).
 local function controllerEnterCombat(event, creature)
     if creature:GetBossState(DATA_BLOOD_PRINCE_COUNCIL) == 1 then -- IN_PROGRESS
         return
@@ -977,6 +1095,23 @@ local function controllerEnterCombat(event, creature)
             prince:DoZoneInCombat()
         end
     end
+    local order = {
+        { data = DATA_PRINCE_VALANAR, spell = SPELL_INVOCATION_OF_BLOOD_VALANAR, text = 1, visual = SPELL_INVOCATION_VISUAL_VALANAR },
+    }
+    if math.random(2) == 1 then
+        order[2] = { data = DATA_PRINCE_TALDARAM, spell = SPELL_INVOCATION_OF_BLOOD_TALDARAM, text = 1, visual = SPELL_INVOCATION_VISUAL_TALDARAM }
+        order[3] = { data = DATA_PRINCE_KELESETH, spell = SPELL_INVOCATION_OF_BLOOD_KELESETH, text = 1, visual = SPELL_INVOCATION_VISUAL_KELESETH }
+    else
+        order[2] = { data = DATA_PRINCE_KELESETH, spell = SPELL_INVOCATION_OF_BLOOD_KELESETH, text = 1, visual = SPELL_INVOCATION_VISUAL_KELESETH }
+        order[3] = { data = DATA_PRINCE_TALDARAM, spell = SPELL_INVOCATION_OF_BLOOD_TALDARAM, text = 1, visual = SPELL_INVOCATION_VISUAL_TALDARAM }
+    end
+    local guid = creature:GetGUID()
+    invocationState[guid] = { order = order, stage = 1 }
+    local valanar = creature:GetInstanceCreature(DATA_PRINCE_VALANAR)
+    if valanar then
+        valanar:DoAction(ACTION_CAST_INVOCATION)
+    end
+    schedule(guid, "invocation", 46500, function() onInvocationOfBlood(creature, guid) end)
 end
 
 -- C++ EnterEvadeMode (boss_blood_prince_council.cpp:252-260): the
@@ -986,6 +1121,8 @@ end
 -- creature:SetBossState on ev2 (the deathwhisper ev2 evade-FAIL
 -- precedent).
 local function controllerLeaveCombat(event, creature)
+    invocationState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUID())
     for _, bossData in ipairs(PRINCES_DATA) do
         local prince = creature:GetInstanceCreature(bossData)
         if prince then
@@ -1004,6 +1141,8 @@ end
 -- valanar SetHealth(max) + CastSpell(REMOVE_EMPOWERED_BLOOD)) stays out —
 -- no instance GetData bridge (creature:GetData is the per-motion latch).
 local function controllerReset(event, creature)
+    invocationState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUID())
     -- C++ boss_blood_council_controller::Reset :235 — _Reset() first:
     -- SetBossState NOT_STARTED only when the stored state != DONE
     -- (BossAI::_Reset, ScriptedCreature.cpp:499-509; the falric
@@ -1074,6 +1213,13 @@ end)
 RegisterCreatureEvent(ENTRY_KELESETH, 2, princesLeaveCombat)
 RegisterCreatureEvent(ENTRY_TALDARAM, 2, princesLeaveCombat)
 RegisterCreatureEvent(ENTRY_VALANAR, 2, princesLeaveCombat)
+
+RegisterCreatureEvent(ENTRY_KELESETH, 38, princesDoAction)
+RegisterCreatureEvent(ENTRY_TALDARAM, 38, princesDoAction)
+RegisterCreatureEvent(ENTRY_VALANAR, 38, princesDoAction)
+RegisterCreatureEvent(ENTRY_KELESETH, 9, princesDamageTaken)
+RegisterCreatureEvent(ENTRY_TALDARAM, 9, princesDamageTaken)
+RegisterCreatureEvent(ENTRY_VALANAR, 9, princesDamageTaken)
 
 RegisterCreatureEvent(ENTRY_KELESETH, 3, princesKilledUnit)
 RegisterCreatureEvent(ENTRY_TALDARAM, 3, princesKilledUnit)

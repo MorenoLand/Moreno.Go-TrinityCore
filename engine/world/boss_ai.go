@@ -21330,12 +21330,12 @@ func init() {
 	// controller :366/:401 covers only the unported invocation event;
 	// nucleus UpdateAI :1082 carries no gate). Out legs:
 	// Talk(SelectInvocationSay()) rides ACTION_CAST_INVOCATION (ev38 dispatch
-	// bridged; sender controller EVENT_INVOCATION_OF_BLOOD rotation unported
-	// (boss_blood_prince_council.cpp:373-398), via prince's own SpellHit
-	// (:535-539)); the controller's EVENT_INVOCATION_OF_BLOOD
-	// Talk(textId) is cross-AI Talk on a scheduler leg (no bridge);
-	// the _isEmpowered variants (keleseth 71815, taldaram 72040,
-	// valanar 72039) ride the unbridged invocation machine; valanar
+	// bridged; sender controller EVENT_INVOCATION_OF_BLOOD rotation PORTED
+	// tick 495 (boss_blood_prince_council.cpp:373-398), via direct ev38
+	// dispatch — the C++ SpellHit relay (:535-539) is folded in); the
+	// controller's EVENT_INVOCATION_OF_BLOOD Talk(textId) rides the same
+	// rotation timer; the _isEmpowered variants (keleseth 71815, taldaram
+	// 72040, valanar 72039) ride the ported invocation machine; valanar
 	// EVENT_KINETIC_BOMB and the base EVENT_SHOCK_VORTEX leg are
 	// random-target SelectTarget casts, PORTED in lua; the heroic-gated
 	// shadow-prison engage casts are PORTED in boss_blood_prince_council.lua

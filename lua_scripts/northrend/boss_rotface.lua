@@ -720,7 +720,7 @@ local function explodeUnstableOoze(caster)
         end
     end
     caster:DoAction(EVENT_STICKY_OOZE)
-    caster:CastSpell(caster, SPELL_UNSTABLE_OOZE_EXPLOSION, true)
+    caster:CastSpell(caster, SPELL_UNSTABLE_OOZE_EXPLOSION)
 end
 
 -- C++ spell_rotface_little_ooze_combine::HandleScript
@@ -1125,7 +1125,7 @@ local function unstableOozeExplosion(event, spell, effectIndex)
     if rotface == nil then
         return
     end
-    rotface:CastSpellAoF(x, y, z, triggerSpell, true)
+    rotface:CastSpellAoF(x, y, z, triggerSpell)
 end
 
 for _, spellId in ipairs(OOZE_FLOOD_SPELLS) do
