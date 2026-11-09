@@ -80,14 +80,14 @@
 --   tyrannusReset (ev23): FAIL on the evade path (state was
 --   IN_PROGRESS), NOT_STARTED otherwise (!= DONE); the REACT_PASSIVE
 --   + NON_ATTACKABLE arms stay out (see documented-only note).
--- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — the EVENT_ICY_BLAST
---   seed (15s, :335) lands on Rimefang's own Eluna event 1 (engine aggro —
---   the faithful anchor for the unported DoAction relay): the :332 phase
---   flip and :333 DoZoneInCombat stay out behind the unported intro
---   machine — rimefang->AI()->DoAction is called from tyrannus's
---   EVENT_COMBAT_START (:244), itself driven by the area-trigger intro
---   machine (dispatch IS bridged, ev38; DoZoneInCombat bridge live
---   2026-10-23, but the relay has no bearer).
+-- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — PORTED
+--   2026-11-08 (tick 490) on the ev38 receiver below: the :335
+--   EVENT_ICY_BLAST seed (15s) lands on Rimefang's own Eluna event 1
+--   (DoZoneInCombat :333 fires it, the faithful anchor); the :332
+--   phase flip is the chain's existence (the patrol only runs once the
+--   receiver starts it). The receiver has no live sender yet — its
+--   only caller is tyrannus's EVENT_COMBAT_START (:244), itself driven
+--   by the dormant intro machine above.
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0)
 -- (playerOnly=false default, UnitAI.h:170) -> random threat-listed unit
 -- (GetAITargets pick, no Player filter); DoCast(target, 69232);
@@ -111,38 +111,59 @@
 -- GetAITargets (the midnight precedent; C++ SelectTargetList skips
 -- offline refs), no Player filter.
 -- DOCUMENTED-ONLY (in this header; registrations: 36658 + 36661):
--- Tyrannus intro machine — DoAction(ACTION_START_INTRO) (:207-217:
---   Talk(SAY_TYRANNUS_INTRO_1 6) + EVENT_INTRO_1..3 / EVENT_COMBAT_START
---   scheduling) rides the unported at_tyrannus_event_starter area trigger
---   (:541-560, trigger :555) — dispatch IS bridged (ev38); the
---   area-trigger sender has no bridge (the krick ACTION_OUTRO
---   precedent); the EVENT_INTRO_1 dead case (:232-234, commented-out
---   Talk(SAY_GORKUN_INTRO_2)), the EVENT_INTRO_2 Talk(SAY_TYRANNUS_INTRO_3
---   7) (:235-236), the EVENT_INTRO_3 ExitVehicle + MovePoint(miscPos)
---   (:238-240), and the EVENT_COMBAT_START DoZoneInCombat /
---   SPELL_FULL_HEAL 43979 / rimefang->AI()->DoAction(ACTION_START_RIMEFANG)
---   legs (:242-249) ride it out with the machine.
+-- Tyrannus DoAction(ACTION_START_INTRO) (:207-217) + intro machine
+--   (:219-252) — PORTED 2026-11-08 (tick 490) on the ev38 receiver
+--   (dispatch IS bridged; the ick DoAction receiver precedent):
+--   Talk(SAY_TYRANNUS_INTRO_1 6) + SetBossState(IN_PROGRESS) (:217),
+--   EVENT_INTRO_2 Talk(SAY_TYRANNUS_INTRO_3 7) at 22s (:235-236),
+--   EVENT_INTRO_3 ExitVehicle + MovePoint(miscPos) at 34s (:238-240,
+--   ExitVehicle is bridged, lua_creature_events.go:3285, and no-ops
+--   when not on a vehicle), EVENT_COMBAT_START at 36s (:242-252:
+--   rimefang DoAction(ACTION_START_RIMEFANG), RemoveFlag(
+--   NON_ATTACKABLE), SetReactState(REACT_AGGRESSIVE), DoCast(
+--   SPELL_FULL_HEAL 43979), DoZoneInCombat — which fires ev1, where
+--   the brand/smash/mark seeds already live, so COMBAT_START does
+--   NOT re-seed). DORMANT: the only sender is the unported
+--   at_tyrannus_event_starter area trigger (see below), so the
+--   receiver has no live sender in Go yet (the terenas DoAction
+--   precedent: receiver ported, sender unported). EVENT_INTRO_1
+--   (:232-234) is a dead case — its only leg is a commented-out
+--   Talk(SAY_GORKUN_INTRO_2) — so nothing is scheduled for it.
 -- Tyrannus Reset / InitializeAI (:142-162) — the SetBossState legs
 --   are PORTED in tyrannusReset below (Reset :156 NOT_STARTED direct
 --   instance call; EnterEvadeMode :180 FAIL on the evade path; the
 --   skadi / palehoof ev23 idiom). REACT_PASSIVE + UNIT_FLAG_NON_
---   ATTACKABLE stay out: the intro DoAction/area-trigger machine is
---   unported, so the PASSIVE arm stays out (porting it alone would
---   strand the boss passive). InitializeAI (:142-148: GetBossState
---   != DONE -> Reset, else DespawnOrUnsummon) has no spawn-hook fire
---   site in Go. DespawnOrUnsummon (evade :185) stays out — the Go
---   evade funnel owns evade-despawn timing.
--- Tyrannus AttackStart NON_ATTACKABLE gate (:169-176) — no bridge.
+--   ATTACKABLE stay out: the intro DoAction/area-trigger machine has
+--   no live sender, and players engage by attacking — setting
+--   NON_ATTACKABLE on spawn would block the only engage path and
+--   strand the boss passive (the header's old "intro unported" note
+--   understated this: it is a soft-lock, not a cosmetic gap).
+--   InitializeAI (:142-148: GetBossState != DONE -> Reset, else
+--   DespawnOrUnsummon) has no spawn-hook fire site in Go — ev23's
+--   spawn pre-fire is a Reset, not InitializeAI, and a spawn-time
+--   DespawnOrUnsummon on a static spawn cannot be verified against
+--   Go's grid re-materialization, so the DONE-despawn leg stays out.
+-- Tyrannus AttackStart NON_ATTACKABLE gate (:169-176) — no AttackStart
+--   hook in Go (engage is Eluna event 1); the engine owns
+--   attack-start, and the flag legs that would make the gate
+--   observable stay out above.
 -- EnterEvadeMode (:178-186): the SetBossState(FAIL) leg is PORTED
--- in tyrannusReset (ev23 evade path); the rimefang EnterEvadeMode
--- leg is covered by rimefang's own ev2 (rimefangCancelCombat = its
--- Reset arms); DespawnOrUnsummon stays out (see Reset note above).
+--   in tyrannusReset (ev23 evade path), and the rimefang->AI()->
+--   EnterEvadeMode() leg is PORTED 2026-11-08 (tick 490) in the same
+--   FAIL branch (creature:EnterEvadeMode, lua_creature_events.go:5014,
+--   via the instanceData.rimefang bind); DespawnOrUnsummon stays out
+--   (the Go evade funnel owns evade-despawn timing — boss_ai.go
+--   despawnAtEvade).
 -- Tyrannus JustDied instance legs (:193-206) — SetBossState(DONE)
--- is PORTED in tyrannusJustDied below (after Talk, C++ order);
--- TEMPSUMMON_DEAD_DESPAWN + rimefang->AI()->DoAction(
--- ACTION_END_COMBAT) stay out (no temp-summon-type / cross-AI
--- DoAction bearer on the death path; the DoAction dispatch IS
--- bridged, ev38).
+--   is PORTED in tyrannusJustDied below (after Talk, C++ order); the
+--   SetBossState-override DONE-spawn leg (instance_pit_of_saron.cpp
+--   :175-190: Jaina part 2 / Sylvanas part 2 at EventLeaderPos2) is
+--   PORTED 2026-11-08 (tick 490) in tyrannusJustDied below, C++ order
+--   (inside SetBossState, before the rimefang leg); the rimefang->AI()->
+--   DoAction(ACTION_END_COMBAT) leg is PORTED 2026-11-08 (tick 490)
+--   via the rimefang ev38 receiver below; TEMPSUMMON_DEAD_DESPAWN
+--   stays out — C++ gates it on ToTempSummon(), which is null for the
+--   static-spawn boss, so the leg is vacuous in the real instance.
 -- The Overlord Brand aura chain — spell_tyrannus_overlord_brand
 --   AuraScript OnApply pushes player_overlord_brandAI (:398-428) onto the
 --   victim (DamageDealt -> SPELL_OVERLORD_BRAND_DAMAGE 69189, HealDone ->
@@ -159,21 +180,38 @@
 --   the 1s-delayed cast, which the latch reproduces. The 69275
 --   cast IS ported.
 -- Rimefang EVENT_MOVE_NEXT (:361-366) — waypoint patrol over rimefangPos
---   (MovePoint, waypoints 1..9 then wrap) — movement choreography, no
---   bridge.
+--   (MovePoint, waypoints 1..9 then wrap) — PORTED 2026-11-08 (tick 490)
+--   via the DoAction(ACTION_START_RIMEFANG) receiver below: the patrol
+--   re-schedules every 2s PHASE_COMBAT (the chain only exists once the
+--   receiver starts it, and ev2/4/23 cancel it); waypoint index 0 is
+--   never flown in C++ (the first tick bumps 0 -> 1), so the Lua index
+--   starts at 1 the same way.
 -- Rimefang Reset (:306-320: waypoint/GUID init + SetCanFly / REACT_PASSIVE
 --   / NON_ATTACKABLE), JustReachedHome InstallAllAccessories (:322-326,
 --   vehicle), DoAction legs (:328-340: ACTION_START_RIMEFANG /
---   ACTION_END_COMBAT) — no movement/vehicle/flag bridges (the
---   REACT_PASSIVE and SetCanFly(true) arms are PORTED 2026-10-20/22 —
---   creature:SetReactState / creature:SetCanFly).
---   The :319 SetFlag(NON_ATTACKABLE) is never cleared live anywhere in
---   the rimefang AI (permanent vehicle-dragon property; flags re-affirm
---   to template on the creature sweep) — VACUOUS, not ported.
+--   ACTION_END_COMBAT) — the REACT_PASSIVE and SetCanFly(true) arms are
+--   PORTED 2026-10-20/22 (creature:SetReactState / creature:SetCanFly);
+--   the DoAction legs are PORTED 2026-11-08 (tick 490) on the ev38
+--   receiver below (ACTION_START_RIMEFANG schedules the patrol +
+--   DoZoneInCombat, which fires ev1 for the icy-blast seed; ACTION_END_
+--   COMBAT is the _EnterEvadeMode twin, creature:EnterEvadeMode);
+--   JustReachedHome stays out — CREATURE_EVENT_ON_REACH_HOME (24)
+--   exists, but InstallAllAccessories has no bridge and no vehicle
+--   bridge exists to mount accessories on. The :319 SetFlag(
+--   NON_ATTACKABLE) is never cleared live anywhere in the rimefang AI
+--   (permanent vehicle-dragon property; flags re-affirm to template on
+--   the creature sweep) — VACUOUS, not ported.
 -- spell_tyrannus_rimefang_icy_blast SpellScript (:507-539: EFFECT_1
 --   SPELL_EFFECT_TRIGGER_MISSILE -> SummonCreature(NPC_ICY_BLAST 36731) +
 --   triggered SPELL_ICY_BLAST_AURA 69238) — no SpellScript / summon bridge.
--- at_tyrannus_event_starter (:541-560) — unbridged area-trigger queue.
+-- at_tyrannus_event_starter (:541-560) — the area-trigger SENDER stays
+--   out: server event 24 IS bridged (areatrigger.go:64, the
+--   at_scripts.lua precedent), but the trigger ID lives only in
+--   AreaTrigger.dbc / the DB areatrigger_template — neither is in-tree,
+--   and this clone carries no sql/ tree — so no handler can dispatch
+--   on it; player:IsGameMaster has no bridge either, so the GM veto
+--   (:545) could not be expressed. The DoAction receiver it would
+--   trigger is ported above (dormant).
 -- Upstream C++ findings: EVENT_INTRO_1 (:232-234) is a dead case — its only
 -- leg is a commented-out Talk(SAY_GORKUN_INTRO_2); the SAY_GORKUN_*
 -- (:34-36), SAY_JAYNA_OUTRO_* (:53-55) and SAY_SYLVANAS_OUTRO_* (:58-59)
@@ -193,6 +231,8 @@ local SAY_MARK_RIMEFANG_1 = 11
 local SAY_MARK_RIMEFANG_2 = 12
 local SAY_DARK_MIGHT_1 = 13
 local SAY_DARK_MIGHT_2 = 14
+local SAY_TYRANNUS_INTRO_1 = 6
+local SAY_TYRANNUS_INTRO_3 = 7
 
 local SPELL_OVERLORD_BRAND = 69172
 local SPELL_FORCEFUL_SMASH = 69155
@@ -200,6 +240,51 @@ local SPELL_UNHOLY_POWER = 69167
 local SPELL_MARK_OF_RIMEFANG = 69275
 local SPELL_HOARFROST = 69246 -- boss_scourgelord_tyrannus.cpp:70
 local SPELL_ICY_BLAST = 69232
+local SPELL_FULL_HEAL = 43979 -- boss_scourgelord_tyrannus.cpp:77
+
+-- boss_scourgelord_tyrannus.cpp:122-131 rimefangPos[0..9], verbatim
+-- (Lua index = C++ index + 1); index 0 is never flown — the first
+-- MOVE_NEXT tick bumps 0 -> 1 and the wrap is >= 10 -> 1, so the
+-- patrol flies C++ 1..9 only (rimefangMoveNext below).
+local RIMEFANG_POS = {
+    {1017.299, 168.9740, 642.9259},
+    {1047.868, 126.4931, 665.0453},
+    {1069.828, 138.3837, 665.0453},
+    {1063.042, 164.5174, 665.0453},
+    {1031.158, 195.1441, 665.0453},
+    {1019.087, 197.8038, 665.0453},
+    {967.6233, 168.9670, 665.0453},
+    {969.1198, 140.4722, 665.0453},
+    {986.7153, 141.6424, 665.0453},
+    {1012.601, 142.4965, 665.0453},
+}
+
+-- boss_scourgelord_tyrannus.cpp:110 miscPos (tyrannus combat start).
+local MISC_POS_X = 1018.376
+local MISC_POS_Y = 167.2495
+local MISC_POS_Z = 628.2811
+
+-- boss_scourgelord_tyrannus.cpp:117-122 Actions enum.
+local ACTION_START_INTRO = 1
+local ACTION_START_RIMEFANG = 2
+local ACTION_END_COMBAT = 4
+
+-- UnitDefines.h / UpdateFields.h: UNIT_FIELD_FLAGS = 59,
+-- UNIT_FLAG_NON_ATTACKABLE = 0x00000002; REACT_AGGRESSIVE = 2.
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
+local REACT_AGGRESSIVE = 2
+
+-- instance_pit_of_saron.cpp:31 EventLeaderPos2; pit_of_saron.h:60.
+local NPC_JAINA_PART2 = 38188
+local NPC_SYLVANAS_PART2 = 38189
+local EVENT_LEADER_X = 1054.368
+local EVENT_LEADER_Y = 107.14620
+local EVENT_LEADER_Z = 628.4467
+local ALLIANCE = 0 -- TeamId TEAM_ALLIANCE; player:GetTeam() returns it
+
+-- Rimefang waypoint index keyed by GUID (the _currentWaypoint twin).
+local rimefangWaypoint = {}
 
 local timers = {}
 
@@ -346,15 +431,65 @@ end
 
 RegisterAuraEvent(SPELL_MARK_OF_RIMEFANG, 2, markOfRimefangApply)
 
+-- C++ :242-252 EVENT_COMBAT_START: rimefang DoAction(
+-- ACTION_START_RIMEFANG); phase flip; RemoveFlag(NON_ATTACKABLE);
+-- REACT_AGGRESSIVE; DoCast(FULL_HEAL 43979); DoZoneInCombat (fires
+-- ev1, where the brand/smash/mark seeds already live, so COMBAT_START
+-- does NOT re-seed them).
+local function tyrannusCombatStart(creature, guid)
+    local mapObj = creature:GetMap()
+    local data = nil
+    if mapObj then
+        data = mapObj:GetInstanceData()
+    end
+    if data and data.rimefang then
+        data.rimefang:DoAction(ACTION_START_RIMEFANG)
+    end
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:CastSpell(creature, SPELL_FULL_HEAL)
+    creature:DoZoneInCombat()
+end
+
+-- C++ boss_tyrannus::DoAction (boss_scourgelord_tyrannus.cpp:207-217)
+-- + intro machine (:219-252), on the ev38 receiver (dispatch IS
+-- bridged; the ick DoAction receiver precedent): Talk(
+-- SAY_TYRANNUS_INTRO_1 6) + SetBossState(IN_PROGRESS) (:217);
+-- EVENT_INTRO_2 Talk(SAY_TYRANNUS_INTRO_3 7) at 22s (:235-236);
+-- EVENT_INTRO_3 ExitVehicle + MovePoint(miscPos) at 34s (:238-240,
+-- ExitVehicle is bridged, lua_creature_events.go:3285, and no-ops
+-- when not on a vehicle); EVENT_COMBAT_START at 36s (:242-252, the
+-- tyrannusCombatStart leg above). EVENT_INTRO_1 (:232-234) is a dead
+-- case — its only leg is a commented-out Talk — so nothing is
+-- scheduled for it. DORMANT: the only sender is the unported
+-- at_tyrannus_event_starter area trigger, so the receiver has no live
+-- sender in Go yet (the terenas DoAction precedent: receiver ported,
+-- sender unported).
+local function tyrannusDoAction(event, creature, action)
+    if action ~= ACTION_START_INTRO then
+        return
+    end
+    local guid = creature:GetGUID()
+    creature:Talk(SAY_TYRANNUS_INTRO_1)
+    creature:SetBossState(DATA_TYRANNUS, 1) -- IN_PROGRESS (:217)
+    schedule(guid, "intro2", 22000, function()
+        creature:Talk(SAY_TYRANNUS_INTRO_3)
+    end)
+    schedule(guid, "intro3", 34000, function()
+        creature:ExitVehicle()
+        creature:MoveTo(0, MISC_POS_X, MISC_POS_Y, MISC_POS_Z)
+    end)
+    schedule(guid, "combatstart", 36000, function() tyrannusCombatStart(creature, guid) end)
+end
+
 -- C++ :164 JustEngagedWith: Talk(SAY_AGGRO) — NOTE: unlike the other
 -- BossAI bosses in this strip, tyrannus does NOT call BossAI::
 -- JustEngagedWith here, so NO SetBossState(IN_PROGRESS) lands on
 -- engage (the trap a naive port would fall into). IN_PROGRESS is set
--- only by DoAction(ACTION_START_INTRO) (:217), which rides the
--- unported area-trigger intro machine — see the intro-machine note
--- in the header. The :250-252 EVENT_COMBAT_START seed legs land here
--- — Eluna event 1 fires at the same combat-start moment
--- (DoZoneInCombat :249).
+-- only by DoAction(ACTION_START_INTRO) (:217) — the receiver above
+-- (its only sender, the area trigger, stays out; see the header).
+-- The :250-252 EVENT_COMBAT_START seed legs land here — Eluna event 1
+-- fires at the same combat-start moment (DoZoneInCombat :249).
 local function tyrannusEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
@@ -389,10 +524,12 @@ end
 -- EnterEvadeMode leg (:180); anything else (!= DONE) is the Reset
 -- leg (:156, direct instance call, no _Reset() — hence no DONE-gate
 -- in C++ either, but the spawn pre-fire must not revive a DONE boss,
--- so the != DONE guard stands). The EnterEvadeMode rimefang leg is
--- covered by rimefang's own ev2 (rimefangCancelCombat = its Reset
--- arms); the DespawnOrUnsummon leg stays out — the Go evade funnel
--- owns evade-despawn timing (boss_ai.go despawnAtEvade).
+-- so the != DONE guard stands). The EnterEvadeMode rimefang leg
+-- (:181-182) is PORTED in the FAIL branch below (creature:
+-- EnterEvadeMode, lua_creature_events.go:5014, via the
+-- instanceData.rimefang bind); the DespawnOrUnsummon leg stays out
+-- — the Go evade funnel owns evade-despawn timing (boss_ai.go
+-- despawnAtEvade).
 local function tyrannusReset(event, creature)
     if not creature:IsAlive() then
         initState(creature:GetGUID())
@@ -400,6 +537,14 @@ local function tyrannusReset(event, creature)
     end
     if creature:GetBossState(DATA_TYRANNUS) == 1 then
         creature:SetBossState(DATA_TYRANNUS, 2) -- FAIL: evade path
+        -- C++ :181-182 EnterEvadeMode: rimefang->AI()->EnterEvadeMode().
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data and data.rimefang then
+                data.rimefang:EnterEvadeMode()
+            end
+        end
     elseif creature:GetBossState(DATA_TYRANNUS) ~= 3 then
         creature:SetBossState(DATA_TYRANNUS, 0) -- NOT_STARTED: Reset / spawn path
     end
@@ -408,11 +553,38 @@ end
 
 -- C++ :193 JustDied: Talk(SAY_DEATH) FIRST (:194), then SetBossState
 -- (DATA_TYRANNUS 2, DONE) (:196) — the opposite order from bronjahm /
--- garfrost / ick, where _JustDied() leads. Timers cancelled.
+-- garfrost / ick, where _JustDied() leads. Timers cancelled. Then the
+-- instance SetBossState-override DONE-spawn leg
+-- (instance_pit_of_saron.cpp:175-190, fired inside SetBossState in
+-- C++): Jaina part 2 (38188, Alliance) / Sylvanas part 2 (38189,
+-- Horde) at EventLeaderPos2, TEMPSUMMON_MANUAL_DESPAWN (7) — team
+-- read as instanceData.teamInInstance or 0 (the C++ ctor default);
+-- the instanceData.tyrannus nil-guard mirrors the C++ instance->
+-- GetCreature(_tyrannusGUID) check. Then the rimefang->AI()->
+-- DoAction(ACTION_END_COMBAT) leg (:201-206) via the ev38 receiver
+-- below. TEMPSUMMON_DEAD_DESPAWN stays out — C++ gates it on
+-- ToTempSummon(), which is null for the static-spawn boss, so the leg
+-- is vacuous in the real instance.
 local function tyrannusJustDied(event, creature)
     initState(creature:GetGUID())
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_TYRANNUS, 3)
+    local mapObj = creature:GetMap()
+    local data = nil
+    if mapObj then
+        data = mapObj:GetInstanceData()
+    end
+    if data and data.tyrannus then
+        local team = data.teamInInstance or ALLIANCE
+        local entry = NPC_SYLVANAS_PART2
+        if team == ALLIANCE then
+            entry = NPC_JAINA_PART2
+        end
+        creature:SummonCreature(entry, EVENT_LEADER_X, EVENT_LEADER_Y, EVENT_LEADER_Z, 0.0, 7, 0)
+    end
+    if data and data.rimefang then
+        data.rimefang:DoAction(ACTION_END_COMBAT)
+    end
 end
 
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0) with
@@ -444,6 +616,43 @@ local function icyBlastTick(creature, guid)
     schedule(guid, "icyblast", 15000, function() icyBlastTick(creature, guid) end)
 end
 
+-- C++ :361-366 Rimefang EVENT_MOVE_NEXT: if (_currentWaypoint >= 10
+-- || _currentWaypoint == 0) _currentWaypoint = 1; MovePoint(0,
+-- rimefangPos[_currentWaypoint]); ++_currentWaypoint; re-arm 2s
+-- PHASE_COMBAT. Lua index = C++ index + 1 (RIMEFANG_POS[1] is C++
+-- rimefangPos[0], never flown), so the flight sequence is C++ 1..9
+-- wrapping to 1, like C++. The chain only exists once the DoAction
+-- receiver starts it, and ev2/4/23 cancel it (rimefangCancelCombat).
+local function rimefangMoveNext(creature, guid)
+    local wp = rimefangWaypoint[guid] or 0
+    if wp >= 10 or wp == 0 then
+        wp = 1
+    end
+    local pos = RIMEFANG_POS[wp + 1]
+    creature:MoveTo(0, pos[1], pos[2], pos[3])
+    rimefangWaypoint[guid] = wp + 1
+    schedule(guid, "movenext", 2000, function() rimefangMoveNext(creature, guid) end)
+end
+
+-- C++ boss_rimefangAI::DoAction (boss_scourgelord_tyrannus.cpp:328-340)
+-- on the ev38 receiver (dispatch IS bridged; the ick DoAction
+-- receiver precedent): ACTION_START_RIMEFANG sets PHASE_COMBAT +
+-- DoZoneInCombat (fires ev1, where the 15s EVENT_ICY_BLAST seed
+-- lives) + the EVENT_MOVE_NEXT 500ms seed (:335); ACTION_END_COMBAT
+-- is the _EnterEvadeMode twin (creature:EnterEvadeMode,
+-- lua_creature_events.go:5014). The receiver has no live sender yet
+-- — its only callers are tyrannus's EVENT_COMBAT_START (:244, the
+-- intro machine above) and JustDied (:204, above).
+local function rimefangDoAction(event, creature, action)
+    local guid = creature:GetGUID()
+    if action == ACTION_START_RIMEFANG then
+        creature:DoZoneInCombat()
+        schedule(guid, "movenext", 500, function() rimefangMoveNext(creature, guid) end)
+    elseif action == ACTION_END_COMBAT then
+        creature:EnterEvadeMode()
+    end
+end
+
 -- C++ :328-336 DoAction(ACTION_START_RIMEFANG): the :335 EVENT_ICY_BLAST
 -- seed (15s) lands on Rimefang's own Eluna event 1 — DoZoneInCombat() (:333)
 -- puts Rimefang in combat at the same moment.
@@ -455,7 +664,9 @@ local function rimefangEnterCombat(event, creature, target)
 end
 
 local function rimefangCancelCombat(event, creature)
-    initState(creature:GetGUID())
+    local guid = creature:GetGUID()
+    initState(guid)
+    rimefangWaypoint[guid] = nil -- C++ Initialize(): _currentWaypoint = 0 on Reset
     -- C++ boss_scourgelord_tyrannus.cpp:317-318: me->SetCanFly(true) then
     -- me->SetReactState(REACT_PASSIVE) (rimefang Reset: PASSIVE is the
     -- permanent baseline, no flip in C++).
@@ -468,8 +679,10 @@ RegisterCreatureEvent(ENTRY_TYRANNUS, 2, tyrannusCancelCombat)
 RegisterCreatureEvent(ENTRY_TYRANNUS, 3, tyrannusKilledUnit)
 RegisterCreatureEvent(ENTRY_TYRANNUS, 4, tyrannusJustDied)
 RegisterCreatureEvent(ENTRY_TYRANNUS, 23, tyrannusReset)
+RegisterCreatureEvent(ENTRY_TYRANNUS, 38, tyrannusDoAction)
 
 RegisterCreatureEvent(ENTRY_RIMEFANG, 1, rimefangEnterCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 2, rimefangCancelCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 4, rimefangCancelCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 23, rimefangCancelCombat)
+RegisterCreatureEvent(ENTRY_RIMEFANG, 38, rimefangDoAction)

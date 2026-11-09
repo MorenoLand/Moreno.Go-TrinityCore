@@ -53,8 +53,9 @@
 -- JustEngagedWith (:107-114) — BossAI base first: SetBossState
 --   (DATA_GARFROST 0, IN_PROGRESS) via creature:SetBossState, then
 --   Talk(SAY_AGGRO 0) (:110) unconditional; non-triggered self-cast
---   DoCast(me, SPELL_PERMAFROST 70326) (:111);
---   EVENT_THROW_SARONITE seed at 7000ms (:113).
+--   DoCast(me, SPELL_PERMAFROST 70326) (:111); CallForHelp(70.0f)
+--   (:112, bridged — see header); EVENT_THROW_SARONITE seed at
+--   7000ms (:113).
 -- KilledUnit (:116-120) — Talk(SAY_SLAY 4) player-gated (:119), the
 --   razuvious player-gated variant precedent.
 -- JustDied (:122-130) — _JustDied() first: SetBossState
@@ -94,23 +95,26 @@
 --   player, Talk(6, target) (:221), non-triggered cast 70381 on the target
 --   (:222); re-arm 35000ms phase-3-gated (:224).
 -- EVENT_FORGE_JUMP (:226-232) / EVENT_RESUME_ATTACK (:233-239) —
---   timer skeleton ported C++-exact: forge-jump fires at 1500ms
---   (:140/:150), schedules the resume leg at 5000ms (the
---   MovementInform -> EVENT_RESUME_ATTACK delay, :171); resume fires
---   the first phase arm at 5000ms chilling (:235) / 10000ms
---   deep-freeze (:237), phase-gated. The physical jump does not port;
---   its MovementInform landing legs (blade/mace casts + equipment)
---   fire in onForgeJump at the collapsed landing point; only the jump
---   flight time is collapsed (landing assumed at forge-jump fire).
+-- PORTED 2026-11-08 (tick 490) on the real MoveJump bridge
+-- (lua_creature_events.go:5143; MoveJump(x, y, z, speedXY, speedZ, id)
+-- maps positionally onto C++ MoveJump(pos, 25.0f, 15.0f, POINT_FORGE),
+-- the faction-champions precedent): the jump fires at 1500ms
+-- (:140/:150) as AttackStop + MoveJump to the phase forge, and the
+-- MovementInform landing legs fire on Eluna event 28
+-- (EFFECT_MOTION_TYPE 16, creaturemotion.go:4310/:5723-5726 — the jump
+-- spline stamps the effect type and the arrival fires ev28 with
+-- (type, id)); the 5000ms MovementInform -> EVENT_RESUME_ATTACK delay
+-- (:171) is preserved, and resume seeds the first phase arm at 5000ms
+-- chilling (:235) / 10000ms deep-freeze (:237), phase-gated. The old
+-- forge-jump collapse is retired — the flight time is now real.
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 36494):
 -- MovementInform (:155-172) — the EFFECT_MOTION_TYPE / POINT_FORGE (0)
---   landing of the unbridged MoveJump (:79-80 forge positions, 25.0f
---   speed, 15.0f height) is PORTED in onForgeJump at the collapsed
---   landing point (see the forge-jump collapse deviation): PHASE_TWO
---   DoCast(me, SPELL_FORGE_BLADE 68774) + sword 49345 (:160-164);
---   PHASE_THREE RemoveAurasDueToSpell(SPELL_FORGE_BLADE_HELPER) +
---   DoCast(me, SPELL_FORGE_MACE 68785) + mace 49344 (:165-170).
+-- landing of the bridged MoveJump is PORTED on event 28
+-- (garfrostMovementInform below): PHASE_TWO DoCast(me,
+-- SPELL_FORGE_BLADE 68774) + sword 49345 (:160-164); PHASE_THREE
+-- RemoveAurasDueToSpell(SPELL_FORGE_BLADE_HELPER) +
+-- DoCast(me, SPELL_FORGE_MACE 68785) + mace 49344 (:165-170).
 --   (FORGE_BLADE_HELPER is RAID_MODE(68774, 70334); the shared
 --   Difficulty enum maps dungeon normal 0 -> 68774 and heroic 1 ->
 --   70334, so IsHeroic selects it exactly. The old "no-equipment
@@ -120,13 +124,20 @@
 --   form (creature_equip_template default set); the Go bridge only takes
 --   explicit IDs, so the form has no expressible mapping — that is the
 --   sole blocker (the old "arm is inert" clause is stale: the
---   forge-sword/forge-mace landing legs ARE ported in onForgeJump, so
---   equipment can diverge from template after a phase flip; the
---   template IDs themselves are DB-side). Documented-only;
---   SetPhase(PHASE_ONE) (:102) is the phase init.
+--   forge-sword/forge-mace landing legs ARE ported in
+--   garfrostMovementInform, so equipment can diverge from template
+--   after a phase flip; the template IDs themselves are DB-side).
+--   Documented-only; SetPhase(PHASE_ONE) (:102) is the phase init.
 -- JustDied :126 me->RemoveAllGameObjects() — no bridge (Go engine
---   owns object cleanup).
--- CallForHelp(70.0f) (:112) — no bridge.
+--   owns object cleanup; whole-engine grep, 2026-11-08 tick 490).
+-- CallForHelp(70.0f) (:112) — PORTED 2026-11-08 (tick 490):
+--   creature:CallForHelp is bridged (lua_creature_events.go:1781,
+--   Creature.cpp:2432-2456 via callCreatureForHelp).
+-- JustDied SetBossState DONE-spawn leg (instance_pit_of_saron.cpp
+--   :157-172) — PORTED 2026-11-08 (tick 490) in garfrostJustDied
+--   below, C++ order (inside SetBossState, before Talk(DEATH)):
+--   Martin Victus 1 (37591, Alliance) / Gorkun Ironskull 1 (37592,
+--   Horde) at SlaveLeaderPos, TEMPSUMMON_MANUAL_DESPAWN (7).
 -- SpellHitTarget (:174-186) — SPELL_PERMAFROST_HELPER aura-stack
 --   capture into _permafrostStack: PORTED 2026-11-08 (tick 416) in
 --   garfrostSpellHitTarget below (the achievement bridge now exists).
@@ -155,12 +166,6 @@
 --   flip with the C++-exact {12500,20000} re-arm — throws stay
 --   suppressed through the intermission, beat phase may differ by up
 --   to one period (the devourer 18s-beat deviation precedent).
--- Forge-jump collapse: EVENT_FORGE_JUMP (:226-232) is AttackStop +
---   MoveJump in C++; with no movement bridge the jump flight time is
---   collapsed (landing assumed at forge-jump fire) while every timer
---   value stays C++-exact (1500 / 5000 / 5000 / 10000ms). The
---   MovementInform landing legs fire at the same collapsed point, in
---   C++ order, so the 5s landing -> resume gap is preserved.
 -- Double-flip corner: two phase flips inside 1.5s would queue two
 --   FORGE_JUMP events in C++; the replace-per-key timer convention
 --   (bronjahm) collapses them to one chain.
@@ -208,6 +213,24 @@ local EQUIP_ID_MACE = 49344
 local PHASE_ONE = 1
 local PHASE_TWO = 2
 local PHASE_THREE = 3
+
+-- boss_forgemaster_garfrost.cpp:79-80 forge positions; :66 POINT_FORGE.
+local NORTH_FORGE_X = 722.5643
+local NORTH_FORGE_Y = -234.1615
+local NORTH_FORGE_Z = 527.182
+local SOUTH_FORGE_X = 639.257
+local SOUTH_FORGE_Y = -210.1198
+local SOUTH_FORGE_Z = 529.015
+local EFFECT_MOTION_TYPE = 16 -- MotionMaster.h: EFFECT_MOTION_TYPE
+local POINT_FORGE = 0
+
+-- instance_pit_of_saron.cpp:29 SlaveLeaderPos; pit_of_saron.h:97-98.
+local NPC_MARTIN_VICTUS_1 = 37591
+local NPC_GORKUN_IRONSKULL_1 = 37592
+local SLAVE_LEADER_X = 689.7158
+local SLAVE_LEADER_Y = -104.8736
+local SLAVE_LEADER_Z = 513.7360
+local ALLIANCE = 0 -- TeamId TEAM_ALLIANCE; player:GetTeam() returns it
 
 local timers = {}
 local garfrostState = {}
@@ -334,11 +357,14 @@ local function onDeepFreeze(creature, guid)
     schedule(guid, "deepfreeze", 35000, function() onDeepFreeze(creature, guid) end)
 end
 
--- C++ :226-232 EVENT_FORGE_JUMP is AttackStop + MoveJump (no movement
--- bridge): the physical jump does not port, but its MovementInform
--- POINT_FORGE landing legs (:160-170) fire below at the collapsed
--- landing point (forge-jump fire); the C++-exact 5000ms MovementInform ->
--- EVENT_RESUME_ATTACK delay (:171) is preserved.
+-- C++ :226-232 EVENT_FORGE_JUMP: me->AttackStop() then
+-- GetMotionMaster()->MoveJump(north/southForgePos, 25.0f, 15.0f,
+-- POINT_FORGE) — the bridged MoveJump (lua_creature_events.go:5143),
+-- phase-gated like C++. The landing legs live in
+-- garfrostMovementInform (event 28) below, not here: the jump spline
+-- stamps EFFECT_MOTION_TYPE and the arrival fires ev28 with
+-- (type, id), so the 5s landing -> resume gap is real flight +
+-- real delay, not a collapse.
 -- Forward declaration: onForgeJump's resume closure references
 -- onResumeAttack before its local def below; without this the
 -- closure would bind a nil global (festergut/moam nil-call class).
@@ -353,16 +379,33 @@ local function onForgeJump(creature, guid)
         return
     end
     -- C++ boss_forgemaster_garfrost.cpp:227: me->AttackStop() on
-    -- EVENT_FORGE_JUMP (the MoveJump leg has no motion bridge; the
-    -- 5s resume models the jump landing, AttackStart re-arm rides
-    -- the engine per the EVENT_RESUME_ATTACK note below).
+    -- EVENT_FORGE_JUMP, then the phase forge MoveJump (:229/:231).
     creature:AttackStop()
-    -- C++ :160-170 MovementInform POINT_FORGE landing legs in C++ order:
-    -- PHASE_TWO DoCast(FORGE_BLADE) + sword; PHASE_THREE
-    -- RemoveAuras(helper) + DoCast(FORGE_MACE) + mace. The helper is
-    -- RAID_MODE(68774, 70334): dungeon difficulty 0 = 10MAN_NORMAL
-    -- and 1 = 25MAN_NORMAL (shared Difficulty enum), so IsHeroic
-    -- selects it exactly; 0xFFFFFFFF leaves a slot untouched.
+    if st.phase == PHASE_TWO then
+        creature:MoveJump(NORTH_FORGE_X, NORTH_FORGE_Y, NORTH_FORGE_Z, 25.0, 15.0, POINT_FORGE)
+    elseif st.phase == PHASE_THREE then
+        creature:MoveJump(SOUTH_FORGE_X, SOUTH_FORGE_Y, SOUTH_FORGE_Z, 25.0, 15.0, POINT_FORGE)
+    end
+end
+
+-- C++ :155-172 MovementInform, event 28: EFFECT_MOTION_TYPE /
+-- POINT_FORGE landing. Phase is read at LANDING time, like C++
+-- (events.IsInPhase at :160/:164). PHASE_TWO DoCast(FORGE_BLADE) +
+-- sword; PHASE_THREE RemoveAuras(helper) + DoCast(FORGE_MACE) +
+-- mace. The helper is RAID_MODE(68774, 70334): dungeon difficulty
+-- 0 = 10MAN_NORMAL and 1 = 25MAN_NORMAL (shared Difficulty enum),
+-- so IsHeroic selects it exactly; 0xFFFFFFFF leaves a slot
+-- untouched. Then the C++-exact 5000ms MovementInform ->
+-- EVENT_RESUME_ATTACK delay (:171).
+local function garfrostMovementInform(event, creature, moveType, id)
+    local guid = creature:GetGUID()
+    local st = garfrostState[guid]
+    if not st then
+        return
+    end
+    if moveType ~= EFFECT_MOTION_TYPE or id ~= POINT_FORGE then
+        return
+    end
     if st.phase == PHASE_TWO then
         creature:CastSpell(creature, SPELL_FORGE_BLADE)
         creature:SetEquipmentSlots(EQUIP_ID_SWORD, 0xFFFFFFFF, 0xFFFFFFFF)
@@ -414,9 +457,9 @@ local function doPhaseFlip(creature, guid, newPhase, sayId)
 end
 
 -- C++ :107-114 JustEngagedWith: Talk(SAY_AGGRO) unconditional; the
--- non-triggered self-cast DoCast(me, SPELL_PERMAFROST) (:111); the
--- EVENT_THROW_SARONITE seed at 7000ms (:113). CallForHelp(70.0f)
--- (:112) has no bridge.
+-- non-triggered self-cast DoCast(me, SPELL_PERMAFROST) (:111);
+-- CallForHelp(70.0f) (:112, bridged — lua_creature_events.go:1781);
+-- the EVENT_THROW_SARONITE seed at 7000ms (:113).
 local function garfrostEnterCombat(event, creature, target)
     local guid = creature:GetGUID()
     initState(guid)
@@ -429,6 +472,7 @@ local function garfrostEnterCombat(event, creature, target)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_PERMAFROST)
+    creature:CallForHelp(70.0)
     schedule(guid, "saronite", 7000, function() onThrowSaronite(creature, guid) end)
 end
 
@@ -470,8 +514,15 @@ local function garfrostKilledUnit(event, creature, victim)
 end
 
 -- C++ :122-130 JustDied: _JustDied() first — SetBossState
--- (DATA_GARFROST 0, DONE) via creature:SetBossState — then
--- Talk(SAY_DEATH) (:125) unconditional. The tyrannus->AI()->Talk
+-- (DATA_GARFROST 0, DONE) via creature:SetBossState — then the
+-- instance SetBossState-override DONE-spawn leg
+-- (instance_pit_of_saron.cpp:157-172, fired inside SetBossState in
+-- C++): Martin Victus 1 (37591, Alliance) / Gorkun Ironskull 1
+-- (37592, Horde) at SlaveLeaderPos, TEMPSUMMON_MANUAL_DESPAWN (7) —
+-- team read as instanceData.teamInInstance or 0 (the C++ ctor
+-- default); the instanceData.garfrost nil-guard mirrors the C++
+-- instance->GetCreature(_garfrostGUID) check. Then Talk(SAY_DEATH)
+-- (:125) unconditional. The tyrannus->AI()->Talk
 -- (SAY_TYRANNUS_DEATH 0) leg (:128-129) is PORTED via the instance
 -- GetGuidData mirror (instance_pit_of_saron.lua binds tyrannus;
 -- kelthuzad GetInstanceData precedent), nil-guarded like the C++
@@ -480,13 +531,22 @@ end
 local function garfrostJustDied(event, creature)
     clearState(creature:GetGUID())
     creature:SetBossState(DATA_GARFROST, 3)
-    creature:Talk(SAY_DEATH)
     local mapObj = creature:GetMap()
+    local data = nil
     if mapObj then
-        local data = mapObj:GetInstanceData()
-        if data and data.tyrannus then
-            data.tyrannus:Talk(SAY_TYRANNUS_DEATH)
+        data = mapObj:GetInstanceData()
+    end
+    if data and data.garfrost then
+        local team = data.teamInInstance or ALLIANCE
+        local entry = NPC_GORKUN_IRONSKULL_1
+        if team == ALLIANCE then
+            entry = NPC_MARTIN_VICTUS_1
         end
+        creature:SummonCreature(entry, SLAVE_LEADER_X, SLAVE_LEADER_Y, SLAVE_LEADER_Z, 0.0, 7, 0)
+    end
+    creature:Talk(SAY_DEATH)
+    if data and data.tyrannus then
+        data.tyrannus:Talk(SAY_TYRANNUS_DEATH)
     end
 end
 
@@ -518,6 +578,7 @@ RegisterCreatureEvent(ENTRY_GARFROST, 1, garfrostEnterCombat)
 RegisterCreatureEvent(ENTRY_GARFROST, 2, garfrostLeaveCombat)
 RegisterCreatureEvent(ENTRY_GARFROST, 3, garfrostKilledUnit)
 RegisterCreatureEvent(ENTRY_GARFROST, 4, garfrostJustDied)
+RegisterCreatureEvent(ENTRY_GARFROST, 28, garfrostMovementInform)
 -- C++ SpellHitTarget (boss_forgemaster_garfrost.cpp:174-186): when the
 -- Permafrost helper aura hits a unit, _permafrostStack = max(stack of
 -- that aura on the target) — the achievement_doesnt_go_to_eleven latch

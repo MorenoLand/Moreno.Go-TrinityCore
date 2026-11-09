@@ -96,9 +96,12 @@
 -- bridged, ModifyThreatByPercent(-100) = ResetThreat twin); both
 -- senders ride unported SpellScript/AuraScript (boss_krickandick.cpp:608,
 -- :630), so the receiver has no live sender in Go yet.
--- boss_krick JustSummoned (:332-340) — _summons.Summon plus the
---   NPC_EXPLODING_ORB triggered self-casts (SPELL_EXPLODING_ORB 69017,
---   SPELL_AUTO_GROW 69020): no summon-list bridge.
+-- boss_krick JustSummoned (:332-340) — _summons.Summon (no
+--   summon-list bridge) plus the NPC_EXPLODING_ORB triggered
+--   self-casts (SPELL_EXPLODING_ORB 69017, SPELL_AUTO_GROW 69020):
+--   PORTED 2026-11-08 (tick 490) via CREATURE_EVENT_ON_JUST_SUMMONED
+--   (19, lua_creature_events.go:190: args (event, summoner, summoned),
+--   fired from the summon path); the summon-list leg stays out.
 -- boss_krick Reset (:315-322) — SetReactState(REACT_PASSIVE) +
 --   SetFlag(UNIT_FLAG_NON_ATTACKABLE): PORTED via creature:SetReactState /
 --   creature:SetFlag(59, ...) (2026-10-21; the intro-outro machine does NOT
@@ -106,28 +109,53 @@
 -- boss_krick DoAction(ACTION_OUTRO) (:342-367) — tyrannus NearTeleportTo /
 --   SummonCreature choreography + MovePoint(POINT_KRICK_INTRO): PORTED via
 --   ickDied (the relay host); the MovementInform landing ports on event
---   28 (krickMovementInform) — the EVENT_OUTRO_1..13 chain stays out
---   (instance team-data + movement-flag bridges, see below).
+--   28 (krickMovementInform) — the EVENT_OUTRO_1..13 chain is PORTED
+--   2026-11-08 (tick 490) on the live team latch (instanceData.
+--   teamInInstance, instance_pit_of_saron.lua tick 490) + the
+--   SetStandState / SetHealth / DespawnOrUnsummon bridges; see below.
 -- boss_krick MovementInform (:358-367) — POINT_KRICK_INTRO landing ->
 --   Talk(SAY_KRICK_OUTRO_1 6) + PHASE_OUTRO flip: PORTED on event 28;
---   the _events.Reset() leg is vacuous (krick holds no Lua timers).
+--   the _events.Reset() leg is vacuous (krick holds no Lua timers);
+--   the landing now also schedules EVENT_OUTRO_1 at 1s (:367).
 -- boss_krick UpdateAI outro machine (:379-514) — EVENT_OUTRO_1..13 /
---   EVENT_OUTRO_END: the timer-driven Talk(SAY_KRICK_OUTRO_3 7 /
---   SAY_KRICK_OUTRO_5 8 / SAY_KRICK_OUTRO_8 9) legs ride the unbridged
---   PHASE_OUTRO machine (MovementInform-gated, so the phase/machine gating
---   rule keeps them out); the jainaOrSylvanas->AI()->Talk(SAY_JAYNA_OUTRO_2/4/10)
---   / Talk(SAY_SYLVANAS_OUTRO_2/4/10) and
---   tyrannus->AI()->Talk(SAY_TYRANNUS_OUTRO_7/9) legs are instance-driven
---   Talk on other creatures' AI; the SummonCreature / MovePoint /
---   MOVEMENTFLAG_FLYING / SPELL_STRANGULATING / SPELL_KRICK_KILL_CREDIT /
---   SetStandState(dead) legs ride the unbridged outro machine (SetStandState
---   bridge live — the machine keeps them out).
+--   EVENT_OUTRO_END: PORTED 2026-11-08 (tick 490) as a CreateLuaEvent
+--   chain (one live timer at a time, the C++ one-event-at-a-time flow),
+--   phase-gated on krickPhaseOutro (the MovementInform flip):
+--   OUTRO_1 despawns the bound part-1 leader (instanceData.
+--   jainaOrSylvanas1) and summons the team part-1 at outroPos[2]
+--   (TEMPSUMMON_MANUAL_DESPAWN 7), MovePoint(0, outroPos[3]);
+--   OUTRO_2 facing both ways (the atan2 + SetFacingTo twin — no
+--   SetFacingToObject bridge) + Talk(SAY_JAYNA/SYLVANAS_OUTRO_2 0);
+--   OUTRO_3 Talk(SAY_KRICK_OUTRO_3 7); OUTRO_4 Talk(OUTRO_4 1);
+--   OUTRO_5 Talk(SAY_KRICK_OUTRO_5 8); OUTRO_6 tyrannus MovePoint(1,
+--   outroPos[4]); OUTRO_7 tyrannus Talk(SAY_TYRANNUS_OUTRO_7 1);
+--   OUTRO_8 MovePoint(0, outroPos[5]) + DoCast(SPELL_STRANGULATING
+--   69413); OUTRO_9 Talk(SAY_KRICK_OUTRO_8 9) + tyrannus triggered
+--   CastSpell(SPELL_NECROMANTIC_POWER 69753); OUTRO_10 MovePoint(0,
+--   outroPos[6]); OUTRO_11 DoCast(SPELL_KRICK_KILL_CREDIT 71308) +
+--   SetStandState(7, UNIT_STAND_STATE_DEAD) + SetHealth(0);
+--   OUTRO_12 tyrannus Talk(SAY_TYRANNUS_OUTRO_9 2); OUTRO_13 Talk
+--   (OUTRO_10 2) + tyrannus MovePoint(0, outroPos[7]); OUTRO_END
+--   tyrannus DespawnOrUnsummon + krick DespawnOrUnsummon (the
+--   DisappearAndDie twin — no DisappearAndDie bridge, whole-engine
+--   grep). Stays out inside the chain: OUTRO_6 SetSpeedRate(
+--   MOVE_FLIGHT, 3.5) — the bridge takes MOVE_RUN=1 only
+--   (lua_creature_events.go:5455, lua_objects.go:1534); OUTRO_8/10
+--   Add/RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING/FALLING_FAR) — no
+--   bridge (whole-engine grep); the team reads use
+--   instanceData.teamInInstance or 0 (the C++ ctor default).
 -- The six SpellScript / AuraScript hooks (spell_krick_explosive_barrage,
 --   spell_ick_explosive_barrage, spell_exploding_orb_hasty_grow,
 --   spell_krick_pursuit + spell_krick_pursuit_AuraScript,
 --   spell_krick_pursuit_confusion) join the no-SpellScript / no-AuraScript
 --   bridge queues, except spell_krick_explosive_barrage, PORTED below
---   (tick 190, RegisterAuraEvent); ick->AI()->Talk(SAY_ICK_CHASE_1 1, target) inside
+--   (tick 190, RegisterAuraEvent); spell_ick_explosive_barrage,
+--   PORTED 2026-11-08 (tick 490) via RegisterAuraEvent apply/remove
+--   (kinds 2/3, lua_aura.go:723/:753: MoveIdle on apply, MoveChase on
+--   remove); spell_exploding_orb_hasty_grow, PORTED 2026-11-08
+--   (tick 490) via RegisterAuraEvent change-amount (kind 4,
+--   lua_aura.go:766: stack 15 -> 69019 cast + aura strips +
+--   DespawnOrUnsummon); ick->AI()->Talk(SAY_ICK_CHASE_1 1, target) inside
 --   spell_krick_pursuit is spell-driven Talk with no bridge by construction.
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts are
@@ -168,9 +196,56 @@ local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
 local REACT_PASSIVE = 0
 
 local SAY_KRICK_OUTRO_1 = 6
+local SAY_KRICK_OUTRO_3 = 7
+local SAY_KRICK_OUTRO_5 = 8
+local SAY_KRICK_OUTRO_8 = 9
+local SAY_JAYNA_OUTRO_2 = 0
+local SAY_JAYNA_OUTRO_4 = 1
+local SAY_JAYNA_OUTRO_10 = 2
+local SAY_SYLVANAS_OUTRO_2 = 0
+local SAY_SYLVANAS_OUTRO_4 = 1
+local SAY_SYLVANAS_OUTRO_10 = 2
+local SAY_TYRANNUS_OUTRO_7 = 1
+local SAY_TYRANNUS_OUTRO_9 = 2
 local POINT_KRICK_INTRO = 364770
 
+-- boss_krickandick.cpp:128-135 outroPos[2..7] (outroPos[0..1] are in
+-- ickDied above): [2] Jaina/Sylvanas outro spawn, [3] their move-1
+-- target, [4] tyrannus fly-down, [5] krick choke, [6] krick death,
+-- [7] tyrannus fly-up.
+local OUTRO_SPAWN_X = 777.2274
+local OUTRO_SPAWN_Y = 119.5521
+local OUTRO_SPAWN_Z = 510.0363
+local OUTRO_SPAWN_O = 6.0562930
+local OUTRO_MOVE1_X = 823.3984
+local OUTRO_MOVE1_Y = 114.4907
+local OUTRO_MOVE1_Z = 509.4899
+local OUTRO_FLYDOWN_X = 835.5887
+local OUTRO_FLYDOWN_Y = 139.4345
+local OUTRO_FLYDOWN_Z = 530.9526
+local OUTRO_CHOKE_X = 828.9342
+local OUTRO_CHOKE_Y = 118.6247
+local OUTRO_CHOKE_Z = 514.5190
+local OUTRO_DEATH_X = 828.9342
+local OUTRO_DEATH_Y = 118.6247
+local OUTRO_DEATH_Z = 509.4958
+local OUTRO_FLYUP_X = 914.4820
+local OUTRO_FLYUP_Y = 143.1602
+local OUTRO_FLYUP_Z = 633.3624
+
+local ENTRY_EXPLODING_ORB = 36610 -- pit_of_saron.h:96
+local ENTRY_JAINA_PART1 = 36993 -- pit_of_saron.h:60
+local ENTRY_SYLVANAS_PART1 = 36990 -- pit_of_saron.h:58
+local ALLIANCE = 0 -- TeamId TEAM_ALLIANCE; player:GetTeam() returns it
+local UNIT_STAND_STATE_DEAD = 7
+
 local krickPhaseOutro = {}
+-- Outro-run state keyed by krick GUID: npc = the OUTRO_1 part-1
+-- summon (a fresh summon, not an instance bind — the C++ _outroNpcGUID
+-- twin, held as the object like the instance binds). The tyrannus
+-- events NPC rides instanceData.tyrannusEvents instead (bound by the
+-- instance OnCreatureCreate, or by ickDied when it summons it).
+local outroState = {}
 
 local SAY_KRICK_SLAY = 1
 local SAY_KRICK_BARRAGE_1 = 2
@@ -192,6 +267,13 @@ local SPELL_EXPLOSIVE_BARRAGE_KRICK = 69012
 local SPELL_EXPLOSIVE_BARRAGE_SUMMON = 69015 -- boss_krickandick.cpp:41
 local SPELL_TOXIC_WASTE = 69024
 local SPELL_SHADOW_BOLT = 69028
+local SPELL_EXPLODING_ORB = 69017 -- boss_krickandick.cpp:38
+local SPELL_AUTO_GROW = 69020 -- boss_krickandick.cpp:39
+local SPELL_HASTY_GROW = 44851 -- boss_krickandick.cpp:40
+local SPELL_EXPLOSIVE_BARRAGE_DAMAGE = 69019 -- boss_krickandick.cpp:42
+local SPELL_STRANGULATING = 69413 -- boss_krickandick.cpp:44
+local SPELL_NECROMANTIC_POWER = 69753 -- boss_krickandick.cpp:47
+local SPELL_KRICK_KILL_CREDIT = 71308 -- boss_krickandick.cpp:46
 
 local timers = {}
 
@@ -501,11 +583,13 @@ end
 -- teleported to outroPos[1], else summoned there (TEMPSUMMON_MANUAL_
 -- DESPAWN = 7) with SetCanFly + atan2 facing to krick (the
 -- SetFacingToObject twin); then krick MoveTo outroPos[0] (the
--- MovePoint(POINT_KRICK_INTRO) twin, C++ order). STAYS OUT: the
+-- MovePoint(POINT_KRICK_INTRO) twin, C++ order). The resolved
+-- tyrannus-events object is stored into instanceData.tyrannusEvents
+-- (the instance bind, or the summon when no static spawn bound it)
+-- so the outro chain (advanceOutro below) can reach it. STAYS OUT: the
 -- MovementInform landing (Talk SAY_KRICK_OUTRO_1 + PHASE_OUTRO flip)
--- ports on event 28 (krickMovementInform below); the whole
--- EVENT_OUTRO_1..13 chain stays out (instance team-data + movement-flag
--- bridges, see the file header).
+-- ports on event 28 (krickMovementInform below); the EVENT_OUTRO_1..13
+-- chain ports in advanceOutro below.
 local function ickDied(event, creature)
     initState(creature:GetGUID())
     creature:SetBossState(DATA_ICK, 3)
@@ -525,6 +609,16 @@ local function ickDied(event, creature)
                 face = face + 2 * math.pi
             end
             summoned:SetFacingTo(face)
+            tyrannus = summoned
+        end
+    end
+    if tyrannus ~= nil then
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data.tyrannusEvents = tyrannus
+            end
         end
     end
     krick:MoveTo(POINT_KRICK_INTRO, KRICK_OUTRO_X, KRICK_OUTRO_Y, KRICK_OUTRO_Z)
@@ -616,25 +710,224 @@ RegisterCreatureEvent(ENTRY_ICK, 23, ickReset)
 -- me->SetReactState(REACT_PASSIVE) + SetFlag(UNIT_FIELD_FLAGS,
 -- UNIT_FLAG_NON_ATTACKABLE). The C++ never clears either (no RemoveFlag /
 -- REACT_AGGRESSIVE in the file — krick is the scripted outro NPC riding
--- Ick), so the one-sided port is C++-verbatim, not fabricated.
+-- Ick), so the one-sided port is C++-verbatim, not fabricated. The
+-- outro cleanup below is Lua-only hygiene: a reset mid-chain stops the
+-- advanceOutro timers (the C++ _events.Reset() twin) and drops the
+-- phase flag, so a later MovementInform cannot resume a stale chain.
 local function krickReset(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    outroState[guid] = nil
+    krickPhaseOutro[guid] = nil
     creature:SetReactState(REACT_PASSIVE)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+end
+
+-- C++ boss_krickAI::JustSummoned (boss_krickandick.cpp:332-340): the
+-- _summons.Summon leg has no bridge; the NPC_EXPLODING_ORB triggered
+-- self-casts (SPELL_EXPLODING_ORB 69017, SPELL_AUTO_GROW 69020) port
+-- on CREATURE_EVENT_ON_JUST_SUMMONED (19): the summoner is krick, the
+-- summoned orb is the third arg (lua_creature_events.go:190).
+local function krickJustSummoned(event, creature, summon)
+    if summon == nil or summon:GetEntry() ~= ENTRY_EXPLODING_ORB then
+        return
+    end
+    summon:CastSpell(summon, SPELL_EXPLODING_ORB, true)
+    summon:CastSpell(summon, SPELL_AUTO_GROW, true)
+end
+
+-- C++ boss_krick UpdateAI outro machine (boss_krickandick.cpp:379-514),
+-- one CreateLuaEvent step at a time (the C++ one-event-at-a-time flow):
+-- each case schedules exactly the next step, so the single "outro" timer
+-- key is exact. Phase-gated on krickPhaseOutro (the MovementInform flip):
+-- C++ UpdateAI returns unless _phase == PHASE_OUTRO, so a reset
+-- mid-chain stops it. Team reads use instanceData.teamInInstance or 0
+-- (the C++ ctor default); the tyrannus-events NPC is read fresh from
+-- instanceData.tyrannusEvents each step (bound by the instance
+-- OnCreatureCreate, or by ickDied when it summons it).
+local function advanceOutro(creature, guid, step)
+    if not krickPhaseOutro[guid] then
+        return
+    end
+    local mapObj = creature:GetMap()
+    local data = nil
+    if mapObj then
+        data = mapObj:GetInstanceData()
+    end
+    local team = ALLIANCE
+    if data and data.teamInInstance ~= nil then
+        team = data.teamInInstance
+    end
+    local function scheduleNext(delay, nextStep)
+        schedule(guid, "outro", delay, function() advanceOutro(creature, guid, nextStep) end)
+    end
+    if step == 1 then
+        -- C++ :383-399 EVENT_OUTRO_1: despawn the bound part-1 leader,
+        -- summon the team part-1 at outroPos[2] (TEMPSUMMON_MANUAL_
+        -- DESPAWN 7), MovePoint(0, outroPos[3]); schedule OUTRO_2 6s.
+        if data and data.jainaOrSylvanas1 then
+            data.jainaOrSylvanas1:DespawnOrUnsummon()
+        end
+        local entry = ENTRY_SYLVANAS_PART1
+        if team == ALLIANCE then
+            entry = ENTRY_JAINA_PART1
+        end
+        local npc = creature:SummonCreature(entry, OUTRO_SPAWN_X, OUTRO_SPAWN_Y, OUTRO_SPAWN_Z, OUTRO_SPAWN_O, 7, 0)
+        if npc then
+            npc:MoveTo(0, OUTRO_MOVE1_X, OUTRO_MOVE1_Y, OUTRO_MOVE1_Z)
+            outroState[guid] = { npc = npc }
+        end
+        scheduleNext(6000, 2)
+    elseif step == 2 then
+        -- C++ :400-412 EVENT_OUTRO_2: face each other (the atan2 +
+        -- SetFacingTo twin — no SetFacingToObject bridge), Talk
+        -- SAY_JAYNA/SYLVANAS_OUTRO_2 (0); schedule OUTRO_3 5s.
+        local st = outroState[guid]
+        if st and st.npc then
+            local npc = st.npc
+            local faceNpc = math.atan2(creature:GetY() - npc:GetY(), creature:GetX() - npc:GetX())
+            if faceNpc < 0 then
+                faceNpc = faceNpc + 2 * math.pi
+            end
+            npc:SetFacingTo(faceNpc)
+            local faceKrick = math.atan2(npc:GetY() - creature:GetY(), npc:GetX() - creature:GetX())
+            if faceKrick < 0 then
+                faceKrick = faceKrick + 2 * math.pi
+            end
+            creature:SetFacingTo(faceKrick)
+            if team == ALLIANCE then
+                npc:Talk(SAY_JAYNA_OUTRO_2)
+            else
+                npc:Talk(SAY_SYLVANAS_OUTRO_2)
+            end
+        end
+        scheduleNext(5000, 3)
+    elseif step == 3 then
+        -- C++ :413-416 EVENT_OUTRO_3: Talk(SAY_KRICK_OUTRO_3 7);
+        -- schedule OUTRO_4 18s.
+        creature:Talk(SAY_KRICK_OUTRO_3)
+        scheduleNext(18000, 4)
+    elseif step == 4 then
+        -- C++ :417-426 EVENT_OUTRO_4: Talk SAY_JAYNA/SYLVANAS_OUTRO_4
+        -- (1); schedule OUTRO_5 5s.
+        local st = outroState[guid]
+        if st and st.npc then
+            if team == ALLIANCE then
+                st.npc:Talk(SAY_JAYNA_OUTRO_4)
+            else
+                st.npc:Talk(SAY_SYLVANAS_OUTRO_4)
+            end
+        end
+        scheduleNext(5000, 5)
+    elseif step == 5 then
+        -- C++ :427-430 EVENT_OUTRO_5: Talk(SAY_KRICK_OUTRO_5 8);
+        -- schedule OUTRO_6 1s.
+        creature:Talk(SAY_KRICK_OUTRO_5)
+        scheduleNext(1000, 6)
+    elseif step == 6 then
+        -- C++ :431-438 EVENT_OUTRO_6: tyrannus MovePoint(1,
+        -- outroPos[4]); schedule OUTRO_7 5s. The SetSpeedRate(
+        -- MOVE_FLIGHT, 3.5) leg stays out — the bridge takes
+        -- MOVE_RUN=1 only (lua_creature_events.go:5455).
+        if data and data.tyrannusEvents then
+            data.tyrannusEvents:MoveTo(1, OUTRO_FLYDOWN_X, OUTRO_FLYDOWN_Y, OUTRO_FLYDOWN_Z)
+        end
+        scheduleNext(5000, 7)
+    elseif step == 7 then
+        -- C++ :439-443 EVENT_OUTRO_7: tyrannus Talk(
+        -- SAY_TYRANNUS_OUTRO_7 1); schedule OUTRO_8 5s.
+        if data and data.tyrannusEvents then
+            data.tyrannusEvents:Talk(SAY_TYRANNUS_OUTRO_7)
+        end
+        scheduleNext(5000, 8)
+    elseif step == 8 then
+        -- C++ :444-450 EVENT_OUTRO_8: MovePoint(0, outroPos[5]) +
+        -- DoCast(me, SPELL_STRANGULATING 69413) non-triggered
+        -- self-cast; schedule OUTRO_9 2s. The AddUnitMovementFlag(
+        -- MOVEMENTFLAG_FLYING) leg stays out — no bridge.
+        creature:MoveTo(0, OUTRO_CHOKE_X, OUTRO_CHOKE_Y, OUTRO_CHOKE_Z)
+        creature:CastSpell(creature, SPELL_STRANGULATING)
+        scheduleNext(2000, 9)
+    elseif step == 9 then
+        -- C++ :451-459 EVENT_OUTRO_9: Talk(SAY_KRICK_OUTRO_8 9) +
+        -- tyrannus triggered CastSpell(me, SPELL_NECROMANTIC_POWER
+        -- 69753); schedule OUTRO_10 1s.
+        creature:Talk(SAY_KRICK_OUTRO_8)
+        if data and data.tyrannusEvents then
+            data.tyrannusEvents:CastSpell(creature, SPELL_NECROMANTIC_POWER, true)
+        end
+        scheduleNext(1000, 10)
+    elseif step == 10 then
+        -- C++ :460-466 EVENT_OUTRO_10: MovePoint(0, outroPos[6]);
+        -- schedule OUTRO_11 2s. The RemoveUnitMovementFlag(FLYING)
+        -- + AddUnitMovementFlag(FALLING_FAR) legs stay out — no bridge.
+        creature:MoveTo(0, OUTRO_DEATH_X, OUTRO_DEATH_Y, OUTRO_DEATH_Z)
+        scheduleNext(2000, 11)
+    elseif step == 11 then
+        -- C++ :467-473 EVENT_OUTRO_11: DoCast(me,
+        -- SPELL_KRICK_KILL_CREDIT 71308) non-triggered self-cast +
+        -- SetStandState(UNIT_STAND_STATE_DEAD) + SetHealth(0);
+        -- schedule OUTRO_12 3s. SetHealth(0) only writes the field
+        -- (lua_creature_events.go:2598) — no death fires, the chain
+        -- continues to 12/13/END like C++.
+        creature:CastSpell(creature, SPELL_KRICK_KILL_CREDIT)
+        creature:SetStandState(UNIT_STAND_STATE_DEAD)
+        creature:SetHealth(0)
+        scheduleNext(3000, 12)
+    elseif step == 12 then
+        -- C++ :474-478 EVENT_OUTRO_12: tyrannus Talk(
+        -- SAY_TYRANNUS_OUTRO_9 2); schedule OUTRO_13 2s.
+        if data and data.tyrannusEvents then
+            data.tyrannusEvents:Talk(SAY_TYRANNUS_OUTRO_9)
+        end
+        scheduleNext(2000, 13)
+    elseif step == 13 then
+        -- C++ :479-494 EVENT_OUTRO_13: Talk SAY_JAYNA/SYLVANAS_
+        -- OUTRO_10 (2); schedule OUTRO_END 3s; tyrannus MovePoint(0,
+        -- outroPos[7]).
+        local st = outroState[guid]
+        if st and st.npc then
+            if team == ALLIANCE then
+                st.npc:Talk(SAY_JAYNA_OUTRO_10)
+            else
+                st.npc:Talk(SAY_SYLVANAS_OUTRO_10)
+            end
+        end
+        if data and data.tyrannusEvents then
+            data.tyrannusEvents:MoveTo(0, OUTRO_FLYUP_X, OUTRO_FLYUP_Y, OUTRO_FLYUP_Z)
+        end
+        scheduleNext(3000, 14)
+    elseif step == 14 then
+        -- C++ :495-501 EVENT_OUTRO_END: tyrannus DespawnOrUnsummon +
+        -- me->DisappearAndDie(). The DisappearAndDie leg rides
+        -- DespawnOrUnsummon (no DisappearAndDie bridge); the outro
+        -- state is cleared so a later reset cannot resume the chain.
+        if data and data.tyrannusEvents then
+            data.tyrannusEvents:DespawnOrUnsummon()
+        end
+        creature:DespawnOrUnsummon()
+        outroState[guid] = nil
+        krickPhaseOutro[guid] = nil
+        cancelTimers(guid)
+    end
 end
 
 -- C++ boss_krick MovementInform (boss_krickandick.cpp:358-367,
 -- event 28): POINT_KRICK_INTRO arrival -> Talk(SAY_KRICK_OUTRO_1 6)
 -- + PHASE_OUTRO flip + _events.Reset() (vacuous in Lua) + schedule
--- EVENT_OUTRO_1 (stays out — chain needs the team-data bridge).
+-- EVENT_OUTRO_1 at 1s (:367, the advanceOutro chain above).
 local function krickMovementInform(_, creature, moveType, id)
     if moveType ~= 8 or id ~= POINT_KRICK_INTRO then
         return
     end
+    local guid = creature:GetGUID()
     creature:Talk(SAY_KRICK_OUTRO_1)
-    krickPhaseOutro[creature:GetGUID()] = true
+    krickPhaseOutro[guid] = true
+    schedule(guid, "outro", 1000, function() advanceOutro(creature, guid, 1) end)
 end
 
 RegisterCreatureEvent(ENTRY_KRICK, 3, krickKilledUnit)
+RegisterCreatureEvent(ENTRY_KRICK, 19, krickJustSummoned)
 RegisterCreatureEvent(ENTRY_KRICK, 23, krickReset)
 RegisterCreatureEvent(ENTRY_KRICK, 28, krickMovementInform)
 
@@ -656,3 +949,59 @@ local function krickExplosiveBarrageTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_EXPLOSIVE_BARRAGE_KRICK, 1, krickExplosiveBarrageTick)
+
+-- C++ spell_ick_explosive_barrage (boss_krickandick.cpp:540-568):
+-- HandleEffectApply (EFFECT_0 SPELL_AURA_DUMMY, HANDLE_REAL):
+-- caster->GetMotionMaster()->MoveIdle() + Clear(MOTION_PRIORITY_NORMAL)
+-- — the MoveIdle leg ports (lua_creature_events.go:3010, the StopMoving
+-- twin; the Clear leg has no separate twin, StopMoving clears the
+-- motion). HandleEffectRemove: if the caster still has a victim,
+-- MoveChase(victim). Both fire via RegisterAuraEvent on the 69263 aura
+-- ick casts on itself (kinds 2/3, lua_aura.go:723/:753; the remove
+-- handler returns nothing — C++ AfterEffectRemove does not prevent).
+-- PORTED 2026-11-08 (tick 490).
+local function ickExplosiveBarrageApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and caster:GetTypeId() == 3 then
+        caster:MoveIdle()
+    end
+end
+
+local function ickExplosiveBarrageRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster and caster:GetTypeId() == 3 then
+        local victim = caster:GetVictim()
+        if victim then
+            caster:MoveChase(victim)
+        end
+    end
+end
+
+RegisterAuraEvent(SPELL_EXPLOSIVE_BARRAGE_ICK, 2, ickExplosiveBarrageApply)
+RegisterAuraEvent(SPELL_EXPLOSIVE_BARRAGE_ICK, 3, ickExplosiveBarrageRemove)
+
+-- C++ spell_exploding_orb_hasty_grow::OnStackChange
+-- (boss_krickandick.cpp:572-590): AfterEffectApply, EFFECT_0
+-- SPELL_AURA_MOD_SCALE, HANDLE_REAPPLY — when the stack amount hits
+-- 15, the orb casts SPELL_EXPLOSIVE_BARRAGE_DAMAGE (69019) on itself
+-- non-triggered, strips the hasty-grow / auto-grow / exploding-orb
+-- auras, and despawns. Ports via RegisterAuraEvent change-amount
+-- (kind 4, lua_aura.go:766 — fires when the stack rises on a merge
+-- re-cast; the shadowmourne stack precedent reads
+-- aura:GetStackAmount() the same way). DORMANT until the DBC aura
+-- (44851) actually stacks in Go — the stack source is spell data,
+-- not in the C++ text. PORTED 2026-11-08 (tick 490).
+local function explodingOrbHastyGrow(event, aura, target)
+    if aura:GetStackAmount() ~= 15 or target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_EXPLOSIVE_BARRAGE_DAMAGE)
+    target:RemoveAura(SPELL_HASTY_GROW)
+    target:RemoveAura(SPELL_AUTO_GROW)
+    target:RemoveAura(SPELL_EXPLODING_ORB)
+    if target:GetObjectType() == "Creature" then
+        target:DespawnOrUnsummon()
+    end
+end
+
+RegisterAuraEvent(SPELL_HASTY_GROW, 4, explodingOrbHastyGrow)
