@@ -56,12 +56,14 @@
 -- outside the target check), non-triggered DoCast(target). The old
 -- "no SelectTarget bridge" claim (doomwalker / kazzak / doomrel
 -- precedent — this file was the cited unit) is retracted.
--- Unmodeled: Reset's UNIT_NPC_FLAG_GOSSIP flag machine (gated on
--- instance DATA_GHOSTKILL >= 7), EnterEvadeMode's instance
--- SetGuidData(DATA_EVENSTARTER), JustDied's instance
--- SetData(DATA_GHOSTKILL, 1) — no flag/instance-script bridges
--- (instance_blackrock_depths.cpp stays blocked on the
--- instance-script model). Reset's SetFaction(FACTION_FRIENDLY) /
+-- Unmodeled: EnterEvadeMode's instance SetGuidData(DATA_EVENSTARTER)
+-- (no SetGuidData bridge on the instance surface). Reset's
+-- UNIT_NPC_FLAG_GOSSIP flag machine (gated on instance
+-- DATA_GHOSTKILL >= 7) and JustDied's instance SetData(DATA_GHOSTKILL,
+-- 1) are PORTED (instance_blackrock_depths.lua event-8 consumer +
+-- onReset/onDied above) — the old "no flag/instance-script bridges"
+-- claim is retracted: the InstanceData:SetData bridge (event 8) and
+-- SetNPCFlags both exist. Reset's SetFaction(FACTION_FRIENDLY) /
 -- SetImmuneToPC(true) legs are unconditional and PORTED in onReset
 -- below (coren_direbrew precedent); the old "no faction/immune
 -- bridges" claim is retracted.
@@ -78,6 +80,9 @@
 -- (maiden convention).
 
 local ENTRY_DOOMREL = 9039
+
+local DATA_GHOSTKILL = 20 -- blackrock_depths.h:48
+local UNIT_NPC_FLAG_GOSSIP = 1 -- SharedDefines.h (UNIT_NPC_FLAG_GOSSIP)
 
 local FACTION_FRIENDLY = 35 -- SharedDefines.h:231 (coren_direbrew precedent)
 
@@ -178,6 +183,18 @@ local function onImmolate(creature, guid)
     schedule(guid, "immolate", 25000, function() onImmolate(creature, guid) end)
 end
 
+-- The shared instanceData table for this creature's map instance
+-- (boss_malygos.lua precedent); nil until the map carries an
+-- instance-event binding (instance_blackrock_depths.lua registers
+-- map 230 event 8, which opens the gate).
+local function instanceData(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     schedule(guid, "volley", 10000, function()
@@ -200,6 +217,15 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ JustDied (boss_tomb_of_seven.cpp:193): instance->
+    -- SetData(DATA_GHOSTKILL, 1) — the instance switch ADDS
+    -- (instance_blackrock_depths.cpp:255-257 GhostKillCount += data),
+    -- so the write rides the InstanceData:SetData bridge (event 8)
+    -- and the accumulation lives in instance_blackrock_depths.lua.
+    local data = instanceData(creature)
+    if data then
+        data:SetData(DATA_GHOSTKILL, 1)
+    end
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
@@ -225,11 +251,19 @@ local function onReset(event, creature)
     -- SetImmuneToPC(true) [SetFlag(59, 0x100)] are unconditional and
     -- ported (coren_direbrew onReset precedent — same arm shape); the
     -- UNIT_NPC_FLAGS gossip-flag machine is gated on instance
-    -- DATA_GHOSTKILL >= 7 — no instance bridge, stays out.
+    -- DATA_GHOSTKILL >= 7 — PORTED via the shared instanceData table
+    -- (instance_blackrock_depths.lua): whole-value SetNPCFlags
+    -- (UNIT_NPC_FLAG_GOSSIP 1 or NONE 0), C++-exact.
     local guid = creature:GetGUIDLow()
     voidwalkersSummoned[guid] = false
     creature:SetFaction(FACTION_FRIENDLY)
     creature:SetFlag(59, 0x100)
+    local data = instanceData(creature)
+    if data and (data.ghostKillCount or 0) >= 7 then
+        creature:SetNPCFlags(0)
+    else
+        creature:SetNPCFlags(UNIT_NPC_FLAG_GOSSIP)
+    end
     cancelTimers(guid)
 end
 
