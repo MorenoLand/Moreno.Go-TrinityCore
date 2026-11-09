@@ -167,7 +167,7 @@ end
 -- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the four events +
 -- GO_GATE_GANDLING SetGoState(READY) PORTED below (FindNearestGameObject).
 local function gandlingEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_darkmaster_gandling.cpp:81 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_darkmaster_gandling.cpp:81 base call first)
@@ -188,18 +188,18 @@ local function gandlingEnterCombat(event, creature, target)
 end
 
 local function gandlingLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function gandlingDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local gate = creature:FindNearestGameObject(GO_GATE_GANDLING, 100.0)
     if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
 end
 
 -- C++ Reset: _Reset + GO_GATE_GANDLING SetGoState(ACTIVE) PORTED below.
 local function gandlingReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local gate = creature:FindNearestGameObject(GO_GATE_GANDLING, 100.0)
     if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
 end

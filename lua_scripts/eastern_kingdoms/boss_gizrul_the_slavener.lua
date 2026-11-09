@@ -110,21 +110,21 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_GIZRUL_THE_SLAVENER=6 (blackrock_spire.h:36).
     creature:SetBossState(6, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fatalbite", {17000, 20000}, function() onFatalBite(creature, guid) end)
     schedule(guid, "infectedbite", {10000, 12000}, function() onInfectedBite(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_gizrul_the_slavener.cpp:52-55): _Reset() writes
 -- NOT_STARTED when alive and the state is not DONE (ScriptedCreature.cpp:499-512).
 -- Alive-gated: Go fires ev23 on the death path too (AQ40/RFD convention).
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
         creature:SetBossState(6, 0)
     end
@@ -133,7 +133,7 @@ end
 -- C++ JustDied (boss_gizrul_the_slavener.cpp:69-72): _JustDied() writes DONE
 -- (ScriptedCreature.cpp:513-520).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(6, 3)
 end
 

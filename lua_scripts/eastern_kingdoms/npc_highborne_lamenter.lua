@@ -86,7 +86,7 @@ local function fullReset(guid)
 end
 
 RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 5, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     states[guid] = true
     -- C++ UpdateAI EventCast arm — non-triggered self-cast
@@ -99,7 +99,7 @@ RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 5, function(_, creature)
 end)
 
 RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 1, function(_, creature)
@@ -107,9 +107,9 @@ RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(HIGHBORNE_LAMENTER_ENTRY, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)

@@ -101,7 +101,7 @@ local function onShadowWordPain(creature, guid)
 end
 
 local function vishasEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_interrogator_vishas.cpp:63 base call after Talk)
@@ -112,7 +112,7 @@ local function vishasEnterCombat(event, creature, target)
 end
 
 local function vishasCombatEnd(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function vishasTargetDied(event, creature, victim)
@@ -125,7 +125,7 @@ end
 -- HealthBelowPctDamaged semantics (post-damage, strictly below,
 -- floored integer threshold).
 local function vishasDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local count = yellCounts[guid] or 0
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -144,7 +144,7 @@ local function vishasDamageTaken(event, creature, attacker, damage)
 end
 
 local function vishasReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     yellCounts[guid] = nil
 end

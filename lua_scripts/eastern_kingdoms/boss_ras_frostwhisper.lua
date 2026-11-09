@@ -167,7 +167,7 @@ end
 
 -- C++ Reset: events.Reset() + non-triggered DoCast(me, 18100).
 local function rasFrostwhisperReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     rasFrostwhisperResetState(guid)
     -- C++ Reset: non-triggered DoCast(me, 18100) (Reset-only arm); ev23
     -- fires on death too (engine reset-then-died order) but C++ Reset()
@@ -178,7 +178,7 @@ local function rasFrostwhisperReset(event, creature)
 end
 
 local function rasFrostwhisperEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     rasFrostwhisperResetState(guid)
     schedule(guid, "ice_armor", 2000, function()
         onIceArmor(creature, guid)
@@ -198,11 +198,11 @@ local function rasFrostwhisperEnterCombat(event, creature, target)
 end
 
 local function rasFrostwhisperLeaveCombat(event, creature)
-    rasFrostwhisperResetState(creature:GetGUID())
+    rasFrostwhisperResetState(creature:GetGUIDLow())
 end
 
 local function rasFrostwhisperDied(event, creature, killer)
-    rasFrostwhisperResetState(creature:GetGUID())
+    rasFrostwhisperResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_RAS_FROSTWHISPER, 1, rasFrostwhisperEnterCombat)

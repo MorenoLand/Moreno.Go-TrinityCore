@@ -147,7 +147,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_LORD_VALTHALAK=14 (blackrock_spire.h:44).
     creature:SetBossState(14, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     frenzy40[guid] = nil
     frenzy15[guid] = nil
@@ -156,7 +156,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_lord_valthalak.cpp:61-65): _Reset() first, then
@@ -166,14 +166,14 @@ end
 -- ev4 stays onCombatEnd (cancel only): JustDied writes no DONE — see
 -- header Unmodeled note.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(14) ~= 3 then
         creature:SetBossState(14, 0)
     end
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not frenzy40[guid] then
         local postDamage = creature:GetHealth() - damage
         if postDamage > 0 and postDamage < math.floor(creature:GetMaxHealth() * 40 / 100) then

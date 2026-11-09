@@ -144,7 +144,7 @@ end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the four events.
 local function illuciaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_illucia_barov.cpp:56 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_illucia_barov.cpp:56 base call first)
@@ -163,16 +163,16 @@ local function illuciaEnterCombat(event, creature, target)
 end
 
 local function illuciaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function illuciaDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: _Reset (no extra legs in this script).
 local function illuciaReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ILLUCIA, 1, illuciaEnterCombat)

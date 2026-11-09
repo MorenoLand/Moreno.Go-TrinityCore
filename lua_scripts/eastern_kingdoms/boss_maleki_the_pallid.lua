@@ -127,7 +127,7 @@ end
 -- C++ JustEngagedWith(): FROSTBOLT 1000ms, ICETOMB 16000ms,
 -- DRAINLIFE 31000ms.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "frostbolt", 1000, function() onFrostbolt(creature, guid) end)
     schedule(guid, "icetomb", 16000, function() onIcetomb(creature, guid) end)
@@ -135,15 +135,15 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MALEKI, 1, onEnterCombat)

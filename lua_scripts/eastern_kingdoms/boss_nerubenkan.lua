@@ -131,7 +131,7 @@ end
 -- CRYPTSCARABS 3000ms, RAISEUNDEADSCARAB 3000ms. JustEngagedWith is
 -- empty in C++ — no Talk, no immediate casts.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "encasing_webs", 7000, function() onEncasingWebs(creature, guid) end)
     schedule(guid, "pierce_armor", 19000, function() onPierceArmor(creature, guid) end)
@@ -140,15 +140,15 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_NERUBENKAN, 1, onEnterCombat)

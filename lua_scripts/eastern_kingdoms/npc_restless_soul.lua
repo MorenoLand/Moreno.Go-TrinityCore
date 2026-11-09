@@ -121,7 +121,7 @@ end
 -- C++ SpellHit: tag only on EGAN_BLASTER from a player whose quest
 -- 5282 is incomplete; first tag wins (Tagged latch).
 local function onSpellHit(event, creature, caster, spellId)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if tagged[guid] or spellId ~= SPELL_EGAN_BLASTER then
         return
     end
@@ -145,7 +145,7 @@ end
 local function onJustSummoned(event, creature, summoned)
     if summoned and summoned:GetEntry() == ENTRY_FREED_SOUL then
         summoned:CastSpell(summoned, SPELL_SOUL_FREED)
-        local taggerPlayer = findTagger(creature, creature:GetGUID())
+        local taggerPlayer = findTagger(creature, creature:GetGUIDLow())
         if taggerPlayer then
             summoned:MoveFollow(taggerPlayer, 0, 0)
         end
@@ -154,7 +154,7 @@ end
 
 -- C++ JustDied: tagged souls free one soul at their own position.
 local function onDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if tagged[guid] then
         local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
         creature:SummonCreature(ENTRY_FREED_SOUL, x, y, z, o, 2, 300000)
@@ -167,14 +167,14 @@ end
 -- Evade clears the latch (C++ Reset semantics); Reset itself must
 -- NOT (kill funnel fires 23 before 4 — see header).
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     tagged[guid] = nil
     tagger[guid] = nil
     cancelTimers(guid)
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_RESTLESS_SOUL, 2, onLeaveCombat)

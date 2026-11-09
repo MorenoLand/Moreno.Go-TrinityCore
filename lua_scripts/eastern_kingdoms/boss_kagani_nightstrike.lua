@@ -194,7 +194,7 @@ local function onThreatReset(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = false
     creature:SetMeleeAttack(true)
@@ -206,7 +206,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset override (boss_priestess_delrissa.cpp:511-517):
     -- Initialize() + SetVisible(true) + commonAI::Reset(); the
     -- Initialize leg is the cancel/re-arm above, the visible leg is
@@ -217,7 +217,7 @@ local function onCombatEnd(_, creature)
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if usedPotion[guid] then
         return
     end
@@ -230,7 +230,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_KAGANI_NIGHTSTRIKE, 1, onEnterCombat)

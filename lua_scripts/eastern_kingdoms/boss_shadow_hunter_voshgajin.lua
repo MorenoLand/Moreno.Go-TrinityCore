@@ -139,7 +139,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_SHADOW_HUNTER_VOSHGAJIN=1 (blackrock_spire.h:31).
     creature:SetBossState(1, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "curseofblood", 2000, function() onCurseOfBlood(creature, guid) end)
     schedule(guid, "cleave", 14000, function() onCleave(creature, guid) end)
@@ -147,7 +147,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_shadow_hunter_voshgajin.cpp:51-55): _Reset() writes
@@ -155,7 +155,7 @@ end
 -- 499-511). Alive-gated: Go fires ev23 on the death path too, and
 -- C++ Reset never runs on death.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
         creature:SetBossState(1, 0)
     end
@@ -164,7 +164,7 @@ end
 -- C++ JustDied (boss_shadow_hunter_voshgajin.cpp:65-68): _JustDied()
 -- writes DONE (ScriptedCreature.cpp:513-520).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(1, 3)
 end
 

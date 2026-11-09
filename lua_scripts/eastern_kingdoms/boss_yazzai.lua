@@ -199,7 +199,7 @@ local function onBlink(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = false
     hasIceBlocked[guid] = false
@@ -212,11 +212,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local postDamageHealth = creature:GetHealth() - damage
     if not usedPotion[guid] then
         if postDamageHealth > 0 and postDamageHealth < math.floor(creature:GetMaxHealth() * 25 / 100) then
@@ -233,7 +233,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_YAZZAI, 1, onEnterCombat)

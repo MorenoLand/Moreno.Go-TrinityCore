@@ -90,7 +90,7 @@ local function onBloodlust(creature, guid)
 end
 
 local function lokseyEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_houndmaster_loksey.cpp:44 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_houndmaster_loksey.cpp:44 base call first)
@@ -102,15 +102,15 @@ local function lokseyEnterCombat(event, creature, target)
 end
 
 local function lokseyLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function lokseyDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function lokseyReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_HOUNDMASTER_LOKSEY, 1, lokseyEnterCombat)

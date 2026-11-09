@@ -114,7 +114,7 @@ end
 -- only if !me->HasAura(SPELL_UNHOLY_AURA). creature:HasAura bridge
 -- (lua_objects.go:228) — no latch needed; re-applies after dispel.
 local function lordAlexeiBarovReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Reset: non-triggered DoCast(me, SPELL_UNHOLY_AURA) only if
     -- !HasAura (Reset-only arm). Event 23 fires on death too (engine
@@ -127,7 +127,7 @@ end
 
 -- C++ JustEngagedWith: schedule immolate 7s / veil of shadow 15s.
 local function lordAlexeiBarovEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_lord_alexei_barov.cpp:60 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_lord_alexei_barov.cpp:60 base call first)
     schedule(guid, "immolate", 7000, function()
@@ -139,11 +139,11 @@ local function lordAlexeiBarovEnterCombat(event, creature, target)
 end
 
 local function lordAlexeiBarovLeaveCombat(event, creature)
-    lordAlexeiBarovResetState(creature:GetGUID())
+    lordAlexeiBarovResetState(creature:GetGUIDLow())
 end
 
 local function lordAlexeiBarovDied(event, creature, killer)
-    lordAlexeiBarovResetState(creature:GetGUID())
+    lordAlexeiBarovResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_LORD_ALEXEI_BAROV, 1, lordAlexeiBarovEnterCombat)

@@ -106,23 +106,23 @@ local function onChainReaction(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "cologne", 7000, function() onCologneSpray(creature, guid) end)
     schedule(guid, "chain", 12000, function() onChainReaction(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_BAXTER_DEATH)
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_APOTHECARY_BAXTER, 1, onEnterCombat)

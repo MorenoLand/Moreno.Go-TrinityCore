@@ -117,7 +117,7 @@ local function onAvatarOfFlame(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "handofthaurissan", 4000, function() onHandOfThaurissan(creature, guid) end)
@@ -125,7 +125,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_emperor_dagran_thaurissan.cpp:78-85):
@@ -133,7 +133,7 @@ end
 -- moira->SetFaction(FACTION_FRIENDLY) + moira->AI()->
 -- Talk(EMOTE_SHAKEN); nil moira skips all three arms.
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local moira = creature:FindNearestCreature(ENTRY_MOIRA, 100.0)
     if moira then
         moira:SetFaction(FACTION_FRIENDLY)
@@ -142,7 +142,7 @@ local function onDied(_, creature)
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onTargetDied(_, creature, victim)

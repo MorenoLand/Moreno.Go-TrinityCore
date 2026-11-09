@@ -192,7 +192,7 @@ end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the five events.
 local function maliciaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_instructor_malicia.cpp:75 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_instructor_malicia.cpp:75 base call first)
@@ -214,16 +214,16 @@ local function maliciaEnterCombat(event, creature, target)
 end
 
 local function maliciaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function maliciaDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: _Reset + Initialize() (counters to 0).
 local function maliciaReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MALICIA, 1, maliciaEnterCombat)

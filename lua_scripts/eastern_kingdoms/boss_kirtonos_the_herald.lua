@@ -230,7 +230,7 @@ local function onTransform(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "swoop", 8000, function() onSwoop(creature, guid) end)
     schedule(guid, "wingflap", 15000, function() onWingFlap(creature, guid) end)
@@ -245,7 +245,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_kirtonos_the_herald.cpp:106-113): gate ACTIVE,
     -- brazier READY (ResetDoorOrButton leg unbridged, skipped).
     local gate = creature:FindNearestGameObject(GO_GATE_KIRTONOS, 100.0)
@@ -255,7 +255,7 @@ local function onCombatEnd(_, creature)
 end
 
 local function onEvade(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ EnterEvadeMode (:115-124): gate ACTIVE, brazier READY, then
     -- the 5s self-despawn below (ResetDoorOrButton leg unbridged).
@@ -273,7 +273,7 @@ local function onEvade(_, creature)
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 

@@ -178,7 +178,7 @@ local function onShadowBolt(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = false
     schedule(guid, "immolate", 6000, function() onImmolate(creature, guid) end)
@@ -189,11 +189,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if usedPotion[guid] then
         return
     end
@@ -213,7 +213,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ELLRIS_DUSKHALLOW, 1, onEnterCombat)

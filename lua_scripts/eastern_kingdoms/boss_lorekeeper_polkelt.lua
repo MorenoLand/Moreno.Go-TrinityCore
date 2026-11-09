@@ -127,7 +127,7 @@ local function lorekeeperPolkeltResetState(guid)
 end
 
 local function lorekeeperPolkeltEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     lorekeeperPolkeltResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_lorekeeper_polkelt.cpp:55 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_lorekeeper_polkelt.cpp:55 base call first)
@@ -146,15 +146,15 @@ local function lorekeeperPolkeltEnterCombat(event, creature, target)
 end
 
 local function lorekeeperPolkeltLeaveCombat(event, creature)
-    lorekeeperPolkeltResetState(creature:GetGUID())
+    lorekeeperPolkeltResetState(creature:GetGUIDLow())
 end
 
 local function lorekeeperPolkeltDied(event, creature, killer)
-    lorekeeperPolkeltResetState(creature:GetGUID())
+    lorekeeperPolkeltResetState(creature:GetGUIDLow())
 end
 
 local function lorekeeperPolkeltReset(event, creature)
-    lorekeeperPolkeltResetState(creature:GetGUID())
+    lorekeeperPolkeltResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_LOREKEEPER_POLKELT, 1, lorekeeperPolkeltEnterCombat)

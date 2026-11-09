@@ -161,7 +161,7 @@ end
 -- 11000ms, SUMMONRIFLEMAN 15000ms. JustEngagedWith is empty in C++ —
 -- no Talk, no immediate casts.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shoot", 1000, function() onShoot(creature, guid) end)
     schedule(guid, "pummel", 7000, function() onPummel(creature, guid) end)
@@ -170,11 +170,11 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_cannon_master_willey.cpp:119-126): 7x
     -- SummonCreature(11054, positions 1,2,3,4,5,7,9 — C++ skips 6 and 8
     -- here, all Z 125.001015 / O 0.592007, TEMPSUMMON_TIMED_DESPAWN
@@ -187,7 +187,7 @@ local function onDied(event, creature)
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_CANNON_MASTER_WILLEY, 1, onEnterCombat)

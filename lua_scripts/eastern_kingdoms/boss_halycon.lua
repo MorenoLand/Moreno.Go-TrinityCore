@@ -110,21 +110,21 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_HALYCON=7 (blackrock_spire.h:37).
     creature:SetBossState(7, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
     schedule(guid, "thrash", {10000, 12000}, function() onThrash(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_halycon.cpp:58-62): _Reset() writes NOT_STARTED when
 -- alive and the state is not DONE (ScriptedCreature.cpp:499-512).
 -- Alive-gated: Go fires ev23 on the death path too (AQ40/RFD convention).
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
         creature:SetBossState(7, 0)
     end
@@ -133,7 +133,7 @@ end
 -- C++ JustDied (boss_halycon.cpp:71-77): summon + Talk only — no
 -- _JustDied() call, so NO SetBossState(DONE) leg (C'Thun / bug-trio precedent).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SummonCreature(ENTRY_GIZRUL_THE_SLAVENER, -167.9561, -411.7844, 76.23057, 1.53589, 2, 300000)
     creature:Talk(EMOTE_DEATH)
 end

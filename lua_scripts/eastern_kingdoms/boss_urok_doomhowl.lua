@@ -115,7 +115,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_UROK_DOOMHOWL=4 (blackrock_spire.h:34).
     creature:SetBossState(4, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "rend", {17000, 20000}, function() onRend(creature, guid) end)
@@ -123,7 +123,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_urok_doomhowl.cpp:51-55): _Reset() only, no
@@ -131,7 +131,7 @@ end
 -- alive-gated, writes NOT_STARTED only when state != DONE. The alive
 -- gate is load-bearing: Go fires ev23 on the death path too.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
         creature:SetBossState(4, 0)
     end
@@ -140,7 +140,7 @@ end
 -- C++ JustDied (boss_urok_doomhowl.cpp:64-67): _JustDied() only.
 -- BossAI::_JustDied (ScriptedCreature.cpp:513-521) writes DONE.
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(4, 3)
 end
 

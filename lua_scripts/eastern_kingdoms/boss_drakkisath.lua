@@ -126,7 +126,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_GENERAL_DRAKKISATH=13 (blackrock_spire.h:43).
     creature:SetBossState(13, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "firenova", 6000, function() onFireNova(creature, guid) end)
     schedule(guid, "cleave", 8000, function() onCleave(creature, guid) end)
@@ -135,13 +135,13 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_drakkisath.cpp:61-64): _JustDied() bookkeeping
 -- (timer cancel) + SetBossState(DATA_GENERAL_DRAKKISATH=13, DONE).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(13, 3)
 end
 
@@ -149,7 +149,7 @@ end
 -- (Go fires ev23 on the death path too) and skipped when already DONE
 -- (ScriptedCreature.cpp:499-511).
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(13) ~= 3 then
         creature:SetBossState(13, 0)
     end

@@ -103,14 +103,14 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_QUARTERMASTER_ZIGRIS=5 (blackrock_spire.h:35).
     creature:SetBossState(5, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shoot", 1000, function() onShoot(creature, guid) end)
     schedule(guid, "stunbomb", 16000, function() onStunBomb(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_quartermaster_zigris.cpp:45-49): _Reset() only, no
@@ -118,7 +118,7 @@ end
 -- alive-gated, writes NOT_STARTED only when state != DONE. The alive
 -- gate is load-bearing: Go fires ev23 on the death path too.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
         creature:SetBossState(5, 0)
     end
@@ -127,7 +127,7 @@ end
 -- C++ JustDied (boss_quartermaster_zigris.cpp:57-61): _JustDied() only.
 -- BossAI::_JustDied (ScriptedCreature.cpp:513-521) writes DONE.
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(5, 3)
 end
 

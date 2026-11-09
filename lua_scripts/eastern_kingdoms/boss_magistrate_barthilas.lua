@@ -133,7 +133,7 @@ end
 -- C++ Initialize(): DrainingBlow 20000, CrowdPummel 15000,
 -- MightyBlow 10000, FuriousAnger 5000, AngerCount = 0.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getState(guid)
     st.angerCount = 0
     schedule(guid, "anger", 5000, function() onFuriousAnger(creature, guid) end)
@@ -143,18 +143,18 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     -- C++ JustDied: SetDisplayId(MODEL_HUMAN 3637) — PORTED
     -- 2026-10-20 (display bridge live).
     creature:SetDisplayId(3637)
 end
 
 local function onReset(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     -- C++ Reset(): SetDisplayId(MODEL_NORMAL 10433) when alive,
     -- MODEL_HUMAN 3637 when dead — PORTED 2026-10-20.
     if creature:IsDead() then

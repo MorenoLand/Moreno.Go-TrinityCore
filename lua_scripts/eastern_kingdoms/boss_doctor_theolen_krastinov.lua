@@ -108,7 +108,7 @@ end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith pulse/zone arms PORTED + the three events.
 local function krastinovEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_doctor_theolen_krastinov.cpp:58 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_doctor_theolen_krastinov.cpp:58 base call first)
@@ -124,16 +124,16 @@ local function krastinovEnterCombat(event, creature, target)
 end
 
 local function krastinovLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function krastinovDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: _Reset (no extra legs in this script).
 local function krastinovReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_KRASTINOV, 1, krastinovEnterCombat)

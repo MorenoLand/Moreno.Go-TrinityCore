@@ -202,7 +202,7 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_THE_BEAST=12 (blackrock_spire.h:42).
     creature:SetBossState(12, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "flamebreak", 12000, function() onFlameBreak(creature, guid) end)
     schedule(guid, "terrifyingroar", 23000, function() onTerrifyingRoar(creature, guid) end)
@@ -213,7 +213,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_the_beast.cpp:81-86): _Reset() bookkeeping (timer
@@ -222,7 +222,7 @@ end
 -- out (no MotionMaster bridge). Alive gate is load-bearing: Go fires
 -- ev23 on the death path too, and C++ Reset never runs on death.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(12) ~= 3 then
         creature:SetBossState(12, 0)
     end
@@ -233,7 +233,7 @@ end
 -- -> _JustDied() (ScriptedCreature.cpp:513-518) bookkeeping (timer
 -- cancel) + SetBossState(DATA_THE_BEAST=12, DONE).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(12, 3)
 end
 

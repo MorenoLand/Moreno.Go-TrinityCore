@@ -99,14 +99,14 @@ local function onEnterCombat(_, creature)
     -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537): the base call
     -- sets the boss state IN_PROGRESS; DATA_HIGHLORD_OMOKK=0 (blackrock_spire.h:30).
     creature:SetBossState(0, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "frenzy", 20000, function() onFrenzy(creature, guid) end)
     schedule(guid, "knockaway", 18000, function() onKnockAway(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_highlord_omokk.cpp:51-54): _Reset() writes
@@ -114,7 +114,7 @@ end
 -- 499-511). Alive-gated: Go fires ev23 on the death path too, and
 -- C++ Reset never runs on death.
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
         creature:SetBossState(0, 0)
     end
@@ -123,7 +123,7 @@ end
 -- C++ JustDied (boss_highlord_omokk.cpp:63-66): _JustDied() writes
 -- DONE (ScriptedCreature.cpp:513-520).
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(0, 3)
 end
 

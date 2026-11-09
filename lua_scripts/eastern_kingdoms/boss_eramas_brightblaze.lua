@@ -114,7 +114,7 @@ local function onSnapKick(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     usedPotion[guid] = false
     schedule(guid, "knockdown", 6000, function() onKnockdown(creature, guid) end)
@@ -122,11 +122,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if usedPotion[guid] then
         return
     end
@@ -146,7 +146,7 @@ local function onDamageTaken(_, creature, _, damage)
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ERAMAS_BRIGHTBLAZE, 1, onEnterCombat)

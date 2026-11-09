@@ -90,11 +90,11 @@ local function theRavenianResetState(guid)
 end
 
 local function theRavenianReset(event, creature)
-    theRavenianResetState(creature:GetGUID())
+    theRavenianResetState(creature:GetGUIDLow())
 end
 
 local function theRavenianEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     theRavenianResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_the_ravenian.cpp:55 base call first)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; boss_the_ravenian.cpp:55 base call first)
@@ -113,11 +113,11 @@ local function theRavenianEnterCombat(event, creature, target)
 end
 
 local function theRavenianLeaveCombat(event, creature)
-    theRavenianResetState(creature:GetGUID())
+    theRavenianResetState(creature:GetGUIDLow())
 end
 
 local function theRavenianDied(event, creature, killer)
-    theRavenianResetState(creature:GetGUID())
+    theRavenianResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_THE_RAVENIAN, 1, theRavenianEnterCombat)

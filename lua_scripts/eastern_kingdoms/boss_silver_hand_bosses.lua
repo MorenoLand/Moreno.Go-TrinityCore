@@ -99,7 +99,7 @@ local function onDivineShield(creature, guid)
 end
 
 local function armTimers(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "holyLight", 20000, function()
         onHolyLight(creature, guid)
@@ -117,18 +117,18 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset calls Initialize(): both timer VALUES back to 20s, but values are
 -- inert until combat (timers tick only behind UpdateVictim()); cancel-only
 -- here, EnterCombat arms.
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local SH_ENTRIES = { 17910, 17911, 17912, 17913, 17914 }

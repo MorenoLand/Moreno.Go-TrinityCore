@@ -86,7 +86,7 @@ local function onRavenousClaw(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if not yelled[guid] then
         creature:Talk(SAY_SPAWN)
@@ -96,12 +96,12 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(_, creature)
-    yelled[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    yelled[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_TIMMY_THE_CRUEL, 1, onEnterCombat)

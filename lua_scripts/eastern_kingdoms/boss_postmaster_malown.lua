@@ -213,7 +213,7 @@ end
 -- C++ JustEngagedWith schedules: WAILINGDEAD 19s / BACKHAND 8s /
 -- CURSEOFWEAKNESS 20s / CURSEOFTONGUES 22s / CALLOFTHEGRAVE 25s.
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     wailingDeadSeq[guid] = nil
     scheduleWailingDeadStream(guid, creature, 19000)
@@ -230,15 +230,15 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_POSTMASTER_MALOWN, 1, onEnterCombat)
