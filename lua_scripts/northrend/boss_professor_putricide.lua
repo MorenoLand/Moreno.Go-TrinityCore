@@ -131,9 +131,20 @@
 -- cross-boss IN_PROGRESS legs (:376/:383, festergut/rotface delayed
 -- gate close) stay out — the MovementInform sender is unported.
 -- npc_volatile_ooze / npc_gas_cloud (npc_putricide_oozeAI, lines
--- 718–810) — zero Talk lines — NOT registered (the bronjahm
--- npc_corrupted_soul_fragment precedent); the aura-application /
--- explode legs have no bridge.
+-- 718-810) — zero Talk lines — REGISTERED 2026-11-09 (tick 498):
+-- the bronjahm no-Talk precedent is retracted for AI-bearing adds
+-- (the ball-of-flame precedent, tick 497). Base legs PORTED below:
+-- Reset (ev23 GetBossState gate + DoZoneInCombat + triggered
+-- DoCastAOE aura twin), SpellHitTarget ev15 (hit -> 1s timer +
+-- REACT_PASSIVE), SpellHit ev14 (71618 hit -> 1s timer), 1s poller
+-- (HasAura(71618) freeze, IsCasting() approx for IsNonMeleeSpellCast
+-- — no bridge), volatile CastMainSpell self-cast 70447. Gas-cloud
+-- CastMainSpell stays out: 70672 with SPELLVALUE_AURA_STACK 10 has
+-- no cast-mod bridge (zero hits; boss_ai.go:18227 precedent). Evade
+-- rides ev23 (Go fires ev23 before ev2 on the evade path,
+-- creaturemotion.go:4699 — C++ EnterEvadeMode ends in Reset(),
+-- CreatureAI.cpp:214-236), so no separate ev2 handler; the poller is
+-- cancelled on ev4.
 -- The 20 spell scripts / 5 aura scripts: the blanket
 -- "no-SpellScript-bridge / no-AuraScript-bridge" queue claims are
 -- STALE as of 2026-11-09 — RegisterSpellEvent exists
@@ -148,7 +159,19 @@
 -- PASSED tick 497 (boss_ai.go:3417 fire site, no 70351 default case,
 -- GetEffectValue/GetCreaturesInGrid twins live) and the chain is
 -- ported below; the ev14/ev15 gate check for non-boss creatures
--- (volatile-ooze AI) still needs running before it lands.
+-- PASSED tick 498 (general creature cast path, boss_ai.go:3996-4069;
+-- ev14 args (event, creature, caster, spellId), ev15 (event,
+-- creature, target, spellId)) and the ooze AI is ported below.
+-- The four spell-script candidates, one hook-fire check each,
+-- tick 498: slime-puddle PORTED (ev7 OnObjectAreaTargetSelect,
+-- lua_spell.go:738, spellKnown-gated — dormant until Spell.dbc
+-- ships; binding 70341 is the TC name-match, spell_script_names
+-- is DB-side in this clone); clear-aura-effect-value PORTED on
+-- 71620 only (the sole C++-verifiable binding — other bindings
+-- DB-side); stinky-precious-decimate PORTED on 71123 (festergut
+-- :56 / rotface :77); ooze-eruption-searcher STAYS OUT — ev5 has
+-- no fire site for aura-periodic dummy effects (fireSpellEffectHitTarget
+-- callers are the cast path only, boss_ai.go:3417/3420).
 -- DOCUMENTED-ENTRY EVIDENCE (not registered): icecrown_citadel.h —
 -- NPC_VOLATILE_OOZE = 37697 (line 238); NPC_GAS_CLOUD = 37562
 -- (line 237); instance_icecrown_citadel.cpp OnCreatureCreate binds
@@ -205,7 +228,9 @@ local SPELL_OOZE_ERUPTION_SEARCH_PERIODIC = 70457 -- boss_professor_putricide.cp
 local SPELL_OOZE_ERUPTION = 70492 -- boss_professor_putricide.cpp:102
 local SPELL_VOLATILE_OOZE_ADHESIVE = 70447 -- boss_professor_putricide.cpp:103
 local SPELL_GASEOUS_BLOAT_PROC = 70215 -- boss_professor_putricide.cpp:99
+local SPELL_GASEOUS_BLOAT = 70672 -- boss_professor_putricide.cpp:97
 local SPELL_EXPUNGED_GAS = 70701 -- boss_professor_putricide.cpp:100
+local SPELL_DECIMATE = 71123 -- boss_festergut.cpp:56 / boss_rotface.cpp:77
 local NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER = 37824 -- icecrown_citadel.h:235
 
 local NPC_MALLEABLE_OOZE_STALKER = 38556
@@ -644,3 +669,188 @@ local function unstableExperimentScript(event, spell, hitTarget, effectIndex)
     caster:CastSpell(target, value, true)
 end
 RegisterSpellEvent(SPELL_UNSTABLE_EXPERIMENT, 5, unstableExperimentScript)
+
+-- C++ npc_putricide_oozeAI (boss_professor_putricide.cpp:718-781),
+-- shared base of npc_volatile_ooze (:783-791, aura 70457, hit-target
+-- 70492, CastMainSpell self-cast 70447 non-triggered) and
+-- npc_gas_cloud (:793-810, aura 70215, hit-target 70701, CastMainSpell
+-- 70672 with SPELLVALUE_AURA_STACK 10 — no cast-mod bridge, stays
+-- out). Per-GUID _newTargetSelectTimer: the 1s poller below is the
+-- UpdateAI model (1000ms timer, 1s granularity — the escape-trash
+-- precedent); DoMeleeAttackIfReady has no bridge and is a no-op.
+local oozeSelect = {}
+
+local oozeAuraSpell = {
+    [NPC_VOLATILE_OOZE] = SPELL_OOZE_ERUPTION_SEARCH_PERIODIC,
+    [NPC_GAS_CLOUD] = SPELL_GASEOUS_BLOAT_PROC,
+}
+
+local oozeHitTargetSpell = {
+    [NPC_VOLATILE_OOZE] = SPELL_OOZE_ERUPTION,
+    [NPC_GAS_CLOUD] = SPELL_EXPUNGED_GAS,
+}
+
+local function oozePollTick(creature, guid, entry)
+    -- C++ UpdateAI (:757-779): no victim and no pending timer ->
+    -- return; no pending timer and not casting a non-melee spell ->
+    -- timer = 1000 (IsCasting() is the approx twin — IsNonMeleeSpellCast
+    -- has no bridge); pending timer + tear-gas aura -> frozen, no
+    -- decrement; timer expiry -> CastMainSpell.
+    if not oozeSelect[guid] then
+        if creature:GetVictim() == nil then
+            schedule(guid, "oozepoll", 1000, function() oozePollTick(creature, guid, entry) end)
+            return
+        end
+        if not creature:IsCasting() then
+            oozeSelect[guid] = true
+        end
+    end
+    if not oozeSelect[guid] then
+        schedule(guid, "oozepoll", 1000, function() oozePollTick(creature, guid, entry) end)
+        return
+    end
+    if creature:HasAura(SPELL_TEAR_GAS_CREATURE) then
+        schedule(guid, "oozepoll", 1000, function() oozePollTick(creature, guid, entry) end)
+        return
+    end
+    oozeSelect[guid] = false
+    if entry == NPC_VOLATILE_OOZE then
+        -- C++ npc_volatile_ooze::CastMainSpell (:787-790).
+        creature:CastSpell(creature, SPELL_VOLATILE_OOZE_ADHESIVE)
+    end
+    -- Gas-cloud CastMainSpell (:803-807) stays out (SPELLVALUE_AURA_STACK).
+    schedule(guid, "oozepoll", 1000, function() oozePollTick(creature, guid, entry) end)
+end
+
+-- C++ npc_putricide_oozeAI::Reset (:739-746): boss not IN_PROGRESS ->
+-- DespawnOrUnsummon (the fall-through DoZoneInCombat/DoCastAOE arms
+-- are dead-on-despawn, dropped); else DoZoneInCombat + triggered
+-- DoCastAOE(aura) via the self-cast twin + start the 1s poller.
+-- Evade rides this same handler (Go fires ev23 before ev2 on the
+-- evade path; C++ EnterEvadeMode ends in Reset()).
+local function oozeReset(event, creature)
+    local guid = creature:GetGUID()
+    local entry = creature:GetEntry()
+    local aura = oozeAuraSpell[entry]
+    if aura == nil then
+        return
+    end
+    if creature:GetBossState(DATA_PROFESSOR_PUTRICIDE) ~= BOSS_STATE_IN_PROGRESS then
+        cancelTimers(guid)
+        oozeSelect[guid] = nil
+        creature:DespawnOrUnsummon()
+        return
+    end
+    oozeSelect[guid] = nil
+    creature:DoZoneInCombat()
+    creature:CastSpell(creature, aura, true)
+    schedule(guid, "oozepoll", 1000, function() oozePollTick(creature, guid, entry) end)
+end
+
+-- C++ npc_putricide_oozeAI::JustDied — no override in C++; the
+-- poller is a Lua artifact, cancelled here so it never fires on the
+-- corpse (the putricide death-cancel precedent).
+local function oozeJustDied(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    oozeSelect[guid] = nil
+end
+
+-- C++ npc_putricide_oozeAI::SpellHit (:748-752): tear-gas-creature
+-- hit -> _newTargetSelectTimer = 1000 (unconditional reset).
+local function oozeSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_TEAR_GAS_CREATURE then
+        oozeSelect[creature:GetGUID()] = true
+    end
+end
+
+-- C++ npc_putricide_oozeAI::SpellHitTarget (:727-737): no pending
+-- timer and the hit spell is the entry's hit-target spell ->
+-- _newTargetSelectTimer = 1000 + REACT_PASSIVE until next selection.
+local function oozeSpellHitTarget(event, creature, target, spellId)
+    local guid = creature:GetGUID()
+    if not oozeSelect[guid] and spellId == oozeHitTargetSpell[creature:GetEntry()] then
+        oozeSelect[guid] = true
+        creature:SetReactState(0) -- REACT_PASSIVE
+    end
+end
+
+RegisterCreatureEvent(NPC_VOLATILE_OOZE, 23, oozeReset)
+RegisterCreatureEvent(NPC_VOLATILE_OOZE, 4, oozeJustDied)
+RegisterCreatureEvent(NPC_VOLATILE_OOZE, 14, oozeSpellHit)
+RegisterCreatureEvent(NPC_VOLATILE_OOZE, 15, oozeSpellHitTarget)
+RegisterCreatureEvent(NPC_GAS_CLOUD, 23, oozeReset)
+RegisterCreatureEvent(NPC_GAS_CLOUD, 4, oozeJustDied)
+RegisterCreatureEvent(NPC_GAS_CLOUD, 14, oozeSpellHit)
+RegisterCreatureEvent(NPC_GAS_CLOUD, 15, oozeSpellHitTarget)
+
+-- C++ spell_putricide_slime_puddle::ScaleRange (:927-935):
+-- OnObjectAreaTargetSelect EFFECT_0 TARGET_UNIT_DEST_AREA_ENEMY +
+-- EFFECT_1 TARGET_UNIT_DEST_AREA_ENTRY — remove targets farther than
+-- 2.5x the caster's scale (2D exact distance; the file-local
+-- ExactDistanceCheck :911-923 returns dist > _dist, and remove_if
+-- drops those). Go ev7 fires per selecting effect (lua_spell.go:738),
+-- spellKnown-gated — dormant until Spell.dbc ships. Binding 70341 is
+-- the TC name-match (spell_script_names is DB-side in this clone).
+local function slimePuddleFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 and effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local limit = 2.5 * caster:GetScale()
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetExactDistance2d(caster) > limit then
+            targets:Remove(target)
+        end
+    end
+end
+RegisterSpellEvent(SPELL_SLIME_PUDDLE_TRIGGER, 7, slimePuddleFilter)
+
+-- C++ spell_putricide_clear_aura_effect_value::HandleScript
+-- (:1392-1409): OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT
+-- — remove the aura whose id is the effect-0 value (difficulty-mapped;
+-- no bridge, raw value used), plus the effect-1 value when the script
+-- spell is SPELL_TEAR_GAS_CANCEL (71620 — the sole C++-verifiable
+-- binding; other bindings are DB-side). Dormant until Spell.dbc ships
+-- (values 0 -> guarded no-op). No 71620 case in
+-- creatureEffectScriptEffect (boss_ai.go:7642), so no double-fire.
+local function clearAuraEffectValue(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value <= 0 then
+        return
+    end
+    hitTarget:RemoveAura(value)
+    local value2 = spell:GetEffectValue(1)
+    if value2 > 0 then
+        hitTarget:RemoveAura(value2)
+    end
+end
+RegisterSpellEvent(SPELL_TEAR_GAS_CANCEL, 5, clearAuraEffectValue)
+
+-- C++ spell_stinky_precious_decimate::HandleScript (:1416-1430):
+-- OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT — if the hit
+-- unit's health % is above the effect-0 value, set its health to
+-- maxHealth * value / 100. Spell 71123 from boss_festergut.cpp:56 /
+-- boss_rotface.cpp:77 (DoCastVictim SPELL_DECIMATE). Dormant until
+-- Spell.dbc ships (value 0 -> guarded no-op; without the guard a 0
+-- value would zero the target's health). No 71123 case in
+-- creatureEffectScriptEffect (boss_ai.go:7642), so no double-fire.
+local function stinkyPreciousDecimate(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value <= 0 then
+        return
+    end
+    if hitTarget:GetHealthPct() > value then
+        hitTarget:SetHealth(math.floor(hitTarget:GetMaxHealth() * value / 100))
+    end
+end
+RegisterSpellEvent(SPELL_DECIMATE, 5, stinkyPreciousDecimate)

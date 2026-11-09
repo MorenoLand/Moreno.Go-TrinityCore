@@ -21291,15 +21291,24 @@ func init() {
 	// bridged; senders unported — festergut scheduler machine + own MovementInform
 	// / DamageTaken phase machine
 	// (boss_professor_putricide.cpp:378/:385/:356/:362; boss_festergut.cpp:193)). npc_volatile_ooze / npc_gas_cloud have
-	// zero Talk lines — not registered (the bronjahm
-	// npc_corrupted_soul_fragment precedent). The 20 spell scripts
-	// join the no-SpellScript-bridge queue and the 5 aura scripts
-	// the no-AuraScript-bridge queue — documented in the lua
-	// header. Seventh group of the "// Icecrown Citadel" block.
+	// zero Talk lines — REGISTERED tick 498 for their npc_putricide_oozeAI
+	// base legs (Reset / SpellHit / SpellHitTarget / 1s poller; volatile
+	// CastMainSpell 70447; gas-cloud CastMainSpell stays out,
+	// SPELLVALUE_AURA_STACK has no cast-mod bridge). The 20 spell
+	// scripts / 5 aura scripts are judged per-hook, not blanket-blocked
+	// (RegisterSpellEvent / RegisterAuraEvent exist) — slime-puddle (ev7),
+	// clear-aura-effect-value (ev5, 71620), stinky-precious-decimate (ev5,
+	// 71123) ported tick 498; ooze-eruption-searcher stays out (no
+	// aura-periodic ev5 fire site) — documented in the lua header.
+	// Seventh group of the "// Icecrown Citadel" block.
 	// boss_professor_putricide: UpdateAI UNIT_STATE_CASTING gates
 	// (:572 pre-loop, :697 in-loop) PORTED via 500ms IsCasting defer
 	// (mal_ganis idiom) — see lua_scripts/northrend/boss_professor_putricide.lua.
 	RegisterLuaBoss("boss_professor_putricide", 36678)
+	// npc_volatile_ooze (37697) / npc_gas_cloud (37562) — see
+	// lua_scripts/northrend/boss_professor_putricide.lua (tick 498).
+	RegisterLuaBoss("npc_volatile_ooze", 37697)
+	RegisterLuaBoss("npc_gas_cloud", 37562)
 
 	// Blood Prince Council (Icecrown Citadel) — bridgeable Talk arms
 	// ported from boss_blood_prince_council.cpp; see
