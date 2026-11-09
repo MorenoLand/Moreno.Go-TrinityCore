@@ -18,9 +18,14 @@
 -- ScriptName binding is DB-side as usual). DATA_SKARVALD = 3 /
 -- DATA_DALRONN = 4 (utgarde_keep.h lines 36-37). Ghosts 27390
 -- (NPC_SKARVALD_GHOST) / 27389 (NPC_DALRONN_GHOST, lines 52-53) share
--- the script names DB-side but carry no bridgeable arms — no
--- registrations; the !IsInGhostForm gates below are satisfied
--- structurally (only non-ghost entries run this lua).
+-- the script names DB-side and PORTED this tick (ghost handlers below):
+-- ghost Reset DoZoneInCombat (:108-116), ghost JustEngagedWith schedule
+-- legs (charge/stone-strike :192-201, shadow-bolt/debilitate/skeletons
+-- :244-254 — only the Talk / delayed aggro say are !IsInGhostForm
+-- gated), and the shared generic JustDied machine (:119-137, incl. the
+-- triggered ghost re-summon). KilledUnit (:165-169) and the Skarvald
+-- DamageTaken enrage (:218-227) stay ghost-gated in C++ — no ghost
+-- registrations for events 3 / 9.
 -- Sole-source verified: whole-server-tree grep for both script names
 -- hits boss_skarvald_dalronn.cpp only (+ the loader decl/call lines for
 -- AddSC_boss_skarvald_dalronn); this clone carries an (empty) sql/ tree
@@ -97,39 +102,39 @@
 -- one-shot 5s.
 -- DOCUMENTED-ONLY (in this header; no registrations beyond entries
 -- 24200 / 24201):
--- generic_boss_controllerAI::JustDied (lines 119-137) — when the other
--- boss is alive: Talk(SAY_DIED_FIRST 2) + RemoveFlag(UNIT_DYNFLAG_LOOTABLE)
--- + cross-creature DoAction(ACTION_OTHER_JUST_DIED) + TRIGGERED
--- DoCast(me, SPELL_SUMMON_SKARVALD_GHOST 48613 / SPELL_SUMMON_DALRONN_GHOST
--- 48612, true) (line 128); when both are dead: Talk(SAY_DEATH 1) +
--- cross-creature DoAction(ACTION_DESPAWN_SUMMONS) + _JustDied().
--- PORTED 2026-10-21: the Talk + RemoveFlag legs are C++-exact under the
--- twin_valkyr per-pull death-counter model (first ev4 of the pull takes
--- the other-alive branch, second the both-dead branch; counter reset on
--- engage since ev23 fires ahead of ev4 on the death path). PORTED
--- 2026-10-24: the ACTION_OTHER_JUST_DIED leg — first-death handler relays
--- via relayDeathResponse (FindNearestCreature survivor + 2s timer keyed by
--- the survivor's GUID, maulgar precedent). PORTED tick 260: the
--- both-dead branch _JustDied() SetBossState(DATA_SKARVALD_DALRONN 1,
--- DONE) leg via creature:SetBossState (lua_creature_events.go:5917) —
--- C++ order :131 Talk, :132 DoAction, :133 _JustDied, so DONE lands
--- after the death Talk, not before it. STILL OUT: the triggered
--- ghost summon (summon leg) and the summons-despawn leg.
+-- generic_boss_controllerAI::JustDied (lines 119-137) — PORTED this tick
+-- as genericBossDied, shared by the real bosses and their ghosts: the
+-- branch is the C++ instance GetGuidData(OtherBossData) liveness check
+-- (the per-pull death-counter model is retired — the ev5 SetGuidData
+-- latches below feed it; nil other falls through to the both-dead
+-- branch). First death: Talk(SAY_DIED_FIRST 2) + RemoveFlag
+-- (UNIT_DYNFLAG_LOOTABLE) + ACTION_OTHER_JUST_DIED relay (2s death-
+-- response Talk on the other boss) + TRIGGERED DoCast(me,
+-- SPELL_SUMMON_SKARVALD_GHOST 48613 / SPELL_SUMMON_DALRONN_GHOST 48612,
+-- true) (:128) as a direct SummonCreature at the dying boss (the
+-- summon spell has no Lua arm; the keleseth tomb precedent). Both
+-- dead: Talk(SAY_DEATH 1) + ACTION_DESPAWN_SUMMONS (despawn the other
+-- boss's latched ghost) + _JustDied() SetBossState(DATA_SKARVALD_DALRONN
+-- 1, DONE) (tick 260) — C++ order :131 Talk, :132 DoAction, :133
+-- _JustDied, so DONE lands after the death Talk.
 -- DoAction(ACTION_OTHER_JUST_DIED) (lines 144-157) — schedules
 -- EVENT_DEATH_RESPONSE (2s) -> Talk(SAY_DEATH_RESPONSE 4) (lines
 -- 159-163); ports via relayDeathResponse (ev38 dispatch IS bridged,
 -- lua_creature_events.go:802, but no dispatch is needed — the sender
--- is the ported JustDied hook and the receiver is a bare Talk +
--- bridged FindNearestCreature lookup).
--- ACTION_DESPAWN_SUMMONS (summons.DespawnAll()) — no bridge.
+-- is the ported JustDied hook and the receiver is a bare Talk on the
+-- instance-GUID-resolved other boss, no range limit).
+-- ACTION_DESPAWN_SUMMONS (summons.DespawnAll()) — PORTED this tick via
+-- the per-boss ghost latch (ghostSummons).
 -- Dalronn EVENT_SUMMON_SKELETONS (lines 272-275): DoCast(me,
 -- SPELL_SUMMON_SKELETONS 52611) self-cast summon, heroic-gated init
 -- 10s, repeat {10s,30s} — PORTED 2026-10-25: creature:IsHeroic() is
 -- bridged (lua_creature_events.go:1806); the stale "BLOCKED per
 -- doctrine" claim is corrected.
--- Ghost-form Reset DoZoneInCombat (lines 108-116) — no bridge needed:
--- ghost entries 27390 / 27389 are not registered, so the gate is
--- structural. BossAI JustEngagedWith / _Reset / _JustDied passthroughs
+-- Ghost-form Reset DoZoneInCombat (lines 108-116) — PORTED this tick
+-- (ghostReset below: DoZoneInCombat + engage arms, alive-guarded since
+-- ev23 pre-fires on death; the ghost JustEngagedWith schedule legs ride
+-- ghostEnterCombat, Talk/State gated per C++). BossAI JustEngagedWith /
+-- _Reset / _JustDied passthroughs
 -- PORTED tick 260 via creature:SetBossState (lua_creature_events.go:5917)
 -- in the engage / reset / both-dead-died handlers below; the stale
 -- "no bridges" claim is retracted.
@@ -150,6 +155,13 @@ local SPELL_ENRAGE = 48193
 local SPELL_SHADOW_BOLT = 43649
 local SPELL_DEBILITATE = 43650
 local SPELL_SUMMON_SKELETONS = 52611
+local SPELL_SUMMON_SKARVALD_GHOST = 48613 -- boss_skarvald_dalronn.cpp:46
+local SPELL_SUMMON_DALRONN_GHOST = 48612 -- boss_skarvald_dalronn.cpp:55
+
+local ENTRY_SKARVALD_GHOST = 27390 -- utgarde_keep.h NPC_SKARVALD_GHOST
+local ENTRY_DALRONN_GHOST = 27389 -- utgarde_keep.h NPC_DALRONN_GHOST
+local DATA_SKARVALD = 3 -- utgarde_keep.h:36
+local DATA_DALRONN = 4 -- utgarde_keep.h:37
 
 local timers = {}
 local enraged = {}
@@ -159,12 +171,20 @@ local enraged = {}
 local UNIT_DYNAMIC_FLAGS = 79
 local UNIT_DYNFLAG_LOOTABLE = 0x0001
 
--- Both bosses share this module scope, so the C++ otherBoss->IsAlive()
--- liveness check is modeled as a per-pull death count: the first death of
--- a pull takes the other-alive branch, the second the both-dead branch
--- (twin_valkyr precedent). Reset on engage — ev23 also fires on the death
--- path (ahead of ev4), so the counter cannot live in reset().
-local bossDeaths = 0
+-- Ghost latch: the live ghost summoned by each boss, keyed by that
+-- boss's DATA id (DATA_SKARVALD 3 / DATA_DALRONN 4) — the Lua mirror of
+-- the BossAI summons list the C++ ACTION_DESPAWN_SUMMONS leg clears.
+-- The old per-pull death-counter model is retired this tick: the branch
+-- is the C++ instance-GUID liveness check (genericBossDied below), which
+-- has no range limit (the old FindNearestCreature 100yd relay could miss
+-- a survivor across the room).
+local ghostSummons = {}
+
+-- Forward declarations (tharon_ja / gal_darah idiom): genericBossDied
+-- below references the ghost engage arms, defined after it — a later
+-- `local function` re-declare would shadow this slot and nil-call, so
+-- the definitions below are plain assignments, never re-local.
+local ghostSkarvaldEngage, ghostDalronnEngage
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -273,9 +293,8 @@ end
 -- ported into skarvaldEnterCombat, base-first); if (!IsInGhostForm) Talk(SAY_AGGRO) —
 -- gate satisfied structurally (ghost entry 27390 not registered).
 local function skarvaldEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    bossDeaths = 0
     -- generic_boss_controllerAI::JustEngagedWith (:192, base-first;
     -- generic base gates on !IsInGhostForm, structural: ghost entries
     -- unregistered) — SetBossState(DATA_SKARVALD_DALRONN 1, IN_PROGRESS)
@@ -291,7 +310,7 @@ local function skarvaldEnterCombat(event, creature, target)
 end
 
 local function skarvaldLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ generic_boss_controllerAI::JustDied (lines 119-137) + DoAction
@@ -319,34 +338,71 @@ local function deathResponseTick(creature, guid)
     creature:Talk(SAY_DEATH_RESPONSE)
 end
 
-local function relayDeathResponse(creature, otherEntry)
-    local survivor = creature:FindNearestCreature(otherEntry, 100.0)
-    if survivor ~= nil then
-        schedule(survivor:GetGUID(), "deathresponse", 2000, function() deathResponseTick(survivor, survivor:GetGUID()) end)
+-- C++ DoAction(ACTION_OTHER_JUST_DIED) (:144-157) schedules
+-- EVENT_DEATH_RESPONSE (2s) on the OTHER boss's EventMap — resolved via
+-- the instance GUID store, no range limit (the old FindNearestCreature
+-- 100yd relay could miss a survivor across the room).
+local function relayDeathResponse(creature, otherData)
+    local other = creature:GetInstanceCreature(otherData)
+    if other ~= nil and other:IsAlive() then
+        local guid = other:GetGUIDLow()
+        schedule(guid, "deathresponse", 2000, function() deathResponseTick(other, other:GetGUIDLow()) end)
+    end
+end
+
+-- C++ generic_boss_controllerAI::JustDied (:119-137), shared by the real
+-- bosses and their ghosts (same AI class, same script name): otherBoss =
+-- instance GetGuidData(OtherBossData); alive -> Talk SAY_DIED_FIRST +
+-- RemoveFlag lootable + DoAction(OTHER_JUST_DIED) on the other boss +
+-- triggered ghost summon of SELF; dead -> Talk SAY_DEATH +
+-- DoAction(DESPAWN_SUMMONS) on the other boss + _JustDied()
+-- (SetBossState DONE). Nil other (unlatched GUID — cannot happen in UK,
+-- both bosses spawn at instance load) falls through to the both-dead
+-- branch so the encounter stays completable. A ghost dying while the
+-- other real boss lives re-summons its own ghost — C++-exact per :128.
+local function genericBossDied(creature, selfData, otherData, ghostEntry)
+    cancelTimers(creature:GetGUIDLow())
+    local other = creature:GetInstanceCreature(otherData)
+    if other ~= nil and other:IsAlive() then
+        creature:Talk(SAY_DIED_FIRST)
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        relayDeathResponse(creature, otherData)
+        -- C++ :128 triggered DoCast(me, SPELL_SUMMON_*_GHOST, true): the
+        -- summon spell has no Lua arm, so the ghost is summoned directly
+        -- at the dying boss (the keleseth tomb precedent); 5-arg
+        -- SummonCreature = MANUAL_DESPAWN, the ghost lives until killed
+        -- or despawned by the both-dead leg below.
+        local ghost = creature:SummonCreature(ghostEntry, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
+        if ghost ~= nil then
+            ghostSummons[selfData] = ghost
+            -- C++ ghost Reset (:108-116) DoZoneInCombat + schedule legs:
+            -- armed off the returned object (temp summons may never fire
+            -- ev23; the keleseth decrepify precedent); the ghost ev1/ev23
+            -- handlers re-arm idempotently via schedule() key replace.
+            ghost:DoZoneInCombat()
+            if ghostEntry == ENTRY_SKARVALD_GHOST then
+                ghostSkarvaldEngage(ghost)
+            else
+                ghostDalronnEngage(ghost)
+            end
+        end
+    else
+        creature:Talk(SAY_DEATH)
+        -- C++ :132 DoAction(ACTION_DESPAWN_SUMMONS) on the other boss:
+        -- its summons.DespawnAll() drops the other boss's ghost.
+        local otherGhost = ghostSummons[otherData]
+        if otherGhost ~= nil then
+            otherGhost:Despawn()
+            ghostSummons[otherData] = nil
+        end
+        -- C++ :133 _JustDied() — SetBossState(DATA_SKARVALD_DALRONN 1,
+        -- DONE) PORTED tick 260; after the Talk per C++ order.
+        creature:SetBossState(DATA_SKARVALD_DALRONN, 3)
     end
 end
 
 local function skarvaldDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    -- C++ generic_boss_controllerAI::JustDied (lines 119-137): first death
-    -- of the pull takes the other-alive branch — Talk(SAY_DIED_FIRST),
-    -- then RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE); second
-    -- death takes the both-dead branch — Talk(SAY_DEATH). The ghost-summon
-    -- DoCast and the summons-despawn leg stay out (no summon bridges);
-    -- the OTHER_JUST_DIED leg ports via relayDeathResponse.
-    bossDeaths = bossDeaths + 1
-    if bossDeaths >= 2 then
-        creature:Talk(SAY_DEATH)
-        -- C++ both-dead branch (:131-133): Talk, DoAction
-        -- (ACTION_DESPAWN_SUMMONS, stays out), then _JustDied() —
-        -- SetBossState(DATA_SKARVALD_DALRONN 1, DONE) PORTED tick 260 via
-        -- creature:SetBossState (lua_creature_events.go:5917), after the Talk.
-        creature:SetBossState(DATA_SKARVALD_DALRONN, 3)
-    else
-        creature:Talk(SAY_DIED_FIRST)
-        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
-        relayDeathResponse(creature, ENTRY_DALRONN)
-    end
+    genericBossDied(creature, DATA_SKARVALD, DATA_DALRONN, ENTRY_SKARVALD_GHOST)
 end
 
 local function skarvaldReset(event, creature)
@@ -356,9 +412,15 @@ local function skarvaldReset(event, creature)
     -- first per the auriaya/ignis precedent; the ghost-form
     -- DoZoneInCombat leg is structural (ghosts unregistered).
     creature:SetBossState(DATA_SKARVALD_DALRONN, 0)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     enraged[guid] = nil
+    -- C++ _Reset() summons.DespawnAll(): the latched ghost goes with it.
+    local ghost = ghostSummons[DATA_SKARVALD]
+    if ghost ~= nil then
+        ghost:Despawn()
+        ghostSummons[DATA_SKARVALD] = nil
+    end
 end
 
 -- C++ generic_boss_controllerAI::KilledUnit (lines 165-169):
@@ -376,7 +438,7 @@ end
 -- non-triggered) — the algalon threshold+latch precedent. Damage is
 -- not rewritten.
 local function skarvaldDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not enraged[guid] then
         local maxHealth = creature:GetMaxHealth()
         if maxHealth > 0 and (creature:GetHealth() - damage) < math.floor(maxHealth * 15 / 100) then
@@ -447,9 +509,8 @@ local function summonSkeletonsTick(creature, guid)
 end
 
 local function dalronnEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    bossDeaths = 0
     -- generic_boss_controllerAI::JustEngagedWith (:252, base-first;
     -- generic base gates on !IsInGhostForm, structural: ghost entries
     -- unregistered) — SetBossState(DATA_SKARVALD_DALRONN 1, IN_PROGRESS)
@@ -473,28 +534,11 @@ local function dalronnEnterCombat(event, creature, target)
 end
 
 local function dalronnLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function dalronnDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    -- Same C++ generic_boss_controllerAI::JustDied model as skarvaldDied:
-    -- first death of the pull takes the other-alive branch, second the
-    -- both-dead branch; summon legs stay out, OTHER_JUST_DIED ports via
-    -- relayDeathResponse.
-    bossDeaths = bossDeaths + 1
-    if bossDeaths >= 2 then
-        creature:Talk(SAY_DEATH)
-        -- C++ both-dead branch (:131-133): Talk, DoAction
-        -- (ACTION_DESPAWN_SUMMONS, stays out), then _JustDied() —
-        -- SetBossState(DATA_SKARVALD_DALRONN 1, DONE) PORTED tick 260 via
-        -- creature:SetBossState (lua_creature_events.go:5917), after the Talk.
-        creature:SetBossState(DATA_SKARVALD_DALRONN, 3)
-    else
-        creature:Talk(SAY_DIED_FIRST)
-        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
-        relayDeathResponse(creature, ENTRY_SKARVALD)
-    end
+    genericBossDied(creature, DATA_DALRONN, DATA_SKARVALD, ENTRY_DALRONN_GHOST)
 end
 
 local function dalronnReset(event, creature)
@@ -504,7 +548,13 @@ local function dalronnReset(event, creature)
     -- first per the auriaya/ignis precedent; the ghost-form
     -- DoZoneInCombat leg is structural (ghosts unregistered).
     creature:SetBossState(DATA_SKARVALD_DALRONN, 0)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    -- C++ _Reset() summons.DespawnAll(): the latched ghost goes with it.
+    local ghost = ghostSummons[DATA_DALRONN]
+    if ghost ~= nil then
+        ghost:Despawn()
+        ghostSummons[DATA_DALRONN] = nil
+    end
 end
 
 local function dalronnKilledUnit(event, creature, victim)
@@ -524,3 +574,93 @@ RegisterCreatureEvent(ENTRY_DALRONN, 2, dalronnLeaveCombat)
 RegisterCreatureEvent(ENTRY_DALRONN, 3, dalronnKilledUnit)
 RegisterCreatureEvent(ENTRY_DALRONN, 4, dalronnDied)
 RegisterCreatureEvent(ENTRY_DALRONN, 23, dalronnReset)
+
+-- C++ instance_utgarde_keep.cpp:57/:140 OnCreatureCreate latches the
+-- boss GUIDs; the Lua mirror is the ev5 SetGuidData (sjonnir precedent)
+-- so the other-boss lookups (genericBossDied / relayDeathResponse)
+-- resolve via the instance GUID store.
+local function skarvaldSpawned(event, creature)
+    creature:SetGuidData(DATA_SKARVALD)
+end
+
+local function dalronnSpawned(event, creature)
+    creature:SetGuidData(DATA_DALRONN)
+end
+
+-- C++ boss_skarvald_the_constructorAI::JustEngagedWith (:192-201) for
+-- the GHOST (entry 27390): the Talk is !IsInGhostForm-gated, but the
+-- charge 5s + stone strike 10s schedules run unconditionally.
+ghostSkarvaldEngage = function(creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    schedule(guid, "charge", 5000, function() chargeTick(creature, guid) end)
+    schedule(guid, "stonestrike", 10000, function() stoneStrikeTick(creature, guid) end)
+end
+
+-- C++ boss_dalronn_the_controllerAI::JustEngagedWith (:244-254) for the
+-- GHOST (entry 27389): shadow bolt 1s + debilitate 5s run
+-- unconditionally; summon skeletons 10s if heroic; the delayed aggro
+-- say is !IsInGhostForm-gated and never schedules.
+ghostDalronnEngage = function(creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    schedule(guid, "shadowbolt", 1000, function() shadowBoltTick(creature, guid) end)
+    schedule(guid, "debilitate", 5000, function() debilitateTick(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "summonskeletons", 10000, function() summonSkeletonsTick(creature, guid) end)
+    end
+end
+
+-- C++ ghost JustEngagedWith: the BossAI passthrough (SetBossState /
+-- SetCombatPulseDelay / DoZoneInCombat) and the SAY_AGGRO Talk are
+-- !IsInGhostForm-gated — only the schedule legs run. No Talk, no state.
+local function ghostEnterCombat(event, creature, target)
+    if creature:GetEntry() == ENTRY_SKARVALD_GHOST then
+        ghostSkarvaldEngage(creature)
+    else
+        ghostDalronnEngage(creature)
+    end
+end
+
+local function ghostLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+-- C++ generic_boss_controllerAI::Reset (:108-116): ghost form calls
+-- DoZoneInCombat(me) — ghosts aren't set in combat as they spawn.
+-- Alive-guarded: ev23 pre-fires on death (fireCreatureDied runs Reset
+-- before the ev4 JustDied leg), and a dead ghost must not re-engage.
+local function ghostReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:DoZoneInCombat()
+    if creature:GetEntry() == ENTRY_SKARVALD_GHOST then
+        ghostSkarvaldEngage(creature)
+    else
+        ghostDalronnEngage(creature)
+    end
+end
+
+-- C++ generic_boss_controllerAI::JustDied (:119-137) runs for ghosts
+-- too (same AI class): a ghost dying while the other real boss lives
+-- re-summons its own ghost (:128); both real bosses dead -> SAY_DEATH
+-- + despawn the other ghost + DONE.
+local function ghostDied(event, creature, killer)
+    if creature:GetEntry() == ENTRY_SKARVALD_GHOST then
+        genericBossDied(creature, DATA_SKARVALD, DATA_DALRONN, ENTRY_SKARVALD_GHOST)
+    else
+        genericBossDied(creature, DATA_DALRONN, DATA_SKARVALD, ENTRY_DALRONN_GHOST)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SKARVALD, 5, skarvaldSpawned)
+RegisterCreatureEvent(ENTRY_DALRONN, 5, dalronnSpawned)
+RegisterCreatureEvent(ENTRY_SKARVALD_GHOST, 1, ghostEnterCombat)
+RegisterCreatureEvent(ENTRY_SKARVALD_GHOST, 2, ghostLeaveCombat)
+RegisterCreatureEvent(ENTRY_SKARVALD_GHOST, 4, ghostDied)
+RegisterCreatureEvent(ENTRY_SKARVALD_GHOST, 23, ghostReset)
+RegisterCreatureEvent(ENTRY_DALRONN_GHOST, 1, ghostEnterCombat)
+RegisterCreatureEvent(ENTRY_DALRONN_GHOST, 2, ghostLeaveCombat)
+RegisterCreatureEvent(ENTRY_DALRONN_GHOST, 4, ghostDied)
+RegisterCreatureEvent(ENTRY_DALRONN_GHOST, 23, ghostReset)

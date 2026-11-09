@@ -17,13 +17,14 @@
 --   LoadGrid delta).
 -- - GetGuidData (instance_utgarde_keep.cpp:120-139): the Lua mirror is
 --   the instanceData binds above, read as instanceData.<boss> by the
---   boss files (oculus precedent); the C++ consumers ride unported
---   machines — the frost-tomb JustDied cross-creature SetData
---   (boss_keleseth.cpp:101-105), the skarvald/dalronn otherBoss lookup
---   (ported via the per-pull death counter + FindNearestCreature in
---   boss_skarvald_dalronn.lua, not via GUIDs), the Annhylde resurrect
---   machine (boss_ingvar_the_plunderer.cpp:302-316) — so the GUID legs
---   as consumed stay out there.
+--   boss files (oculus precedent). The C++ consumers: the frost-tomb
+--   JustDied cross-creature SetData (boss_keleseth.cpp:101-105) rides
+--   the ev5 SetGuidData latch; the skarvald/dalronn otherBoss lookup
+--   rides the instance GUID store (ev5 SetGuidData latches in
+--   boss_skarvald_dalronn.lua, replacing the retired per-pull death
+--   counter + FindNearestCreature relay); the Annhylde resurrect
+--   machine (boss_ingvar_the_plunderer.cpp:302-316) rides the same
+--   store via the ingvar ev5 latch.
 -- Unmodeled (documented-only, no bridges):
 -- - Door data (GO_GIANT_PORTCULLIS_1 186756 / GO_GIANT_PORTCULLIS_2
 --   186694, DOOR_TYPE_PASSAGE tied to DATA_INGVAR,

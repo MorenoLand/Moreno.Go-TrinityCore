@@ -116,9 +116,10 @@
 -- re-arm, lethal-damage zero + fake-death (NOT_SELECTABLE + STAND_DEAD
 -- + RESURRECT {18s,22s}), resurrect chain (FULL_HEAL + SHADOW_FISSURE
 -- + BONE_ARMOR self-cast + flag clear + STAND + decrepify re-arm).
--- Deviations: MotionMaster Clear/MoveIdle (fake-death) and MoveChase
--- (resurrect) stay out — no motion bridge; the add keeps its motion
--- state through the fake-death window. The decrepify init is armed
+-- Deviations: the C++ Clear + MoveIdle (fake-death, :279-280) collapse
+-- to the MoveIdle halt twin in Go (no generator stack — the standing
+-- collapse delta, lua_creature_events.go:3007-3010); MoveChase(victim)
+-- at resurrect (:316) is ported. The decrepify init is armed
 -- from skeletonTick's returned summon object (temp summons bypass
 -- the motion funnel, so event 23 may never fire for them); event 23
 -- covers any respawn-path Reset.
@@ -310,7 +311,7 @@ local function skeletonTick(creature, guid)
         -- schedule() replaces the same key, so a double-arm is a
         -- harmless re-init, not a double timer.
         if skeleton then
-            local skelGuid = skeleton:GetGUID()
+            local skelGuid = skeleton:GetGUIDLow()
             schedule(skelGuid, "decrepify", {4000, 6000}, function()
                 skeletonDecrepifyTick(skeleton, skelGuid)
             end)
@@ -363,6 +364,12 @@ local function skeletonShadowFissureTick(creature, guid)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetStandState(0) -- UNIT_STAND_STATE_STAND
     creature:SetMeleeAttack(true) -- UpdateAI :326 gate lifts with the flag: swings resume
+    -- C++ :316 MoveChase(me->GetVictim()): the add resumes chasing its
+    -- victim (GetVictim bridge, lua_creature_events.go:376).
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        creature:MoveChase(victim)
+    end
     schedule(guid, "decrepify", {4000, 6000}, function()
         skeletonDecrepifyTick(creature, guid)
     end)
@@ -399,7 +406,7 @@ end
 -- C++ npc_vrykul_skeleton::Reset (:256-260): events.Reset() +
 -- EVENT_DECREPIFY init {4s,6s}.
 local function skeletonReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "decrepify", {4000, 6000}, function()
         skeletonDecrepifyTick(creature, guid)
@@ -420,7 +427,11 @@ local function skeletonDamageTaken(event, creature, attacker, damage)
             creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             creature:SetStandState(7) -- UNIT_STAND_STATE_DEAD
             creature:SetMeleeAttack(false) -- C++ UpdateAI :326: no DoMeleeAttackIfReady while NOT_SELECTABLE; Go swings are engine-driven, so suppress them for the fake-death window
-            local guid = creature:GetGUID()
+            -- C++ :279-280 MotionMaster Clear + MoveIdle: Go has no
+            -- movement-generator stack, so both collapse to the
+            -- StopMoving halt twin (MoveIdle alias, lua_creature_events.go:3010).
+            creature:MoveIdle()
+            local guid = creature:GetGUIDLow()
             cancelTimers(guid)
             schedule(guid, "resurrect", {18000, 22000}, function()
                 skeletonResurrectTick(creature, guid)
@@ -453,7 +464,7 @@ local function kelesethEnterCombat(event, creature, target)
             end
         end
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowbolt", {2000, 3000}, function()
         shadowboltTick(creature, guid)
@@ -473,9 +484,9 @@ end
 -- creature:SetBossState (lua_creature_events.go:5917).
 local function kelesethDied(event, creature, killer)
     creature:SetBossState(DATA_PRINCE_KELESETH, 3)
-    despawnSkeletons(creature:GetGUID())
+    despawnSkeletons(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:134-136): _Reset() — SetBossState(DATA_PRINCE_KELESETH 0,
@@ -485,13 +496,13 @@ end
 -- Split from ev2 this tick (the sjonnir precedent): ev2 leave-combat
 -- does not call Reset in C++, so it stays cancel-only.
 local function kelesethLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function kelesethReset(event, creature)
     creature:SetBossState(DATA_PRINCE_KELESETH, 0)
-    despawnSkeletons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnSkeletons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset -> Initialize: onTheRocks = true ->
     -- GetData(DATA_ON_THE_ROCKS) = 1 (boss_keleseth.cpp:131/:140);
     -- achievement_on_the_rocks read leg (tick 417). Alive-gated:
@@ -528,13 +539,13 @@ local function kelesethJustSummoned(_, creature, summoned)
     if summoned:GetEntry() ~= ENTRY_SKELETON then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = skeletons[guid]
     if not list then
         list = {}
         skeletons[guid] = list
     end
-    list[summoned:GetGUID()] = summoned
+    list[summoned:GetGUIDLow()] = summoned
 end
 
 -- C++ spell_frost_tomb::OnRemove (boss_keleseth.cpp:353-360):

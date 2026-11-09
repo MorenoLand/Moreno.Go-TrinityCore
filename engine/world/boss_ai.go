@@ -20612,7 +20612,9 @@ func init() {
 	// aggro Talk and the death-response relay; DamageTaken enrage /
 	// KilledUnit / JustDied hooks ungated per C++ (separate hooks).
 	RegisterLuaBoss("boss_skarvald_the_constructor", 24200)
+	RegisterLuaBoss("boss_skarvald_the_constructor", 27390)
 	RegisterLuaBoss("boss_dalronn_the_controller", 24201)
+	RegisterLuaBoss("boss_dalronn_the_controller", 27389)
 	// Ingvar the Plunderer (Utgarde Keep) — boss_ingvar_the_plunderer.cpp,
 	// AddSC_boss_ingvar_the_plunderer() (loader decl 128 / call 323) — the
 	// THIRD group of the "// Utgarde Keep - Utgarde Keep" block
@@ -20651,6 +20653,7 @@ func init() {
 	// (separate hook); stale "timers fire unconditionally" header retracted.
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23954)
 	RegisterLuaBoss("boss_ingvar_the_plunderer", 23980)
+	RegisterLuaBoss("npc_annhylde_the_caller", 24068)
 	// npc_enslaved_proto_drake (Utgarde Keep) — ported arms in
 	// lua_scripts/northrend/npc_enslaved_proto_drake.lua: EnterCombat-seeded
 	// rend/flame-breath/knockaway timers (utgarde_keep.cpp:274-280, :300-330).
