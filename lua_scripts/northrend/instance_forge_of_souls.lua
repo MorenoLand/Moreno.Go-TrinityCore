@@ -16,13 +16,16 @@
 --   bound (naxxramas LoadGrid delta).
 -- - GetGuidData (instance_forge_of_souls.cpp:121-136): the Lua mirror
 --   is the instanceData binds above, read as instanceData.bronjahm /
---   instanceData.devourerOfSouls (oculus precedent); the C++ consumers
---   ride unported machines in the boss files — the fragment
---   IsSummonedBy relay (boss_bronjahm.cpp:238-242, no
---   instance-GetGuidData bridge on the fragment side) and the
+--   instanceData.devourerOfSouls (oculus precedent); the C++
+--   GetGuidData consumers: the fragment IsSummonedBy relay
+--   (boss_bronjahm.cpp:238-242) needs no separate registration — the
+--   summon funnel already delivers JustSummoned to Bronjahm via ev19
+--   (boss_bronjahm.lua) — and the fragment MovementInform leg
+--   (boss_bronjahm.cpp:241-251) is PORTED tick 489 in
+--   boss_bronjahm.lua via the creature:GetGuidData store (fed by the
+--   ev5 SetGuidData latch there, illidari-council precedent); the
 --   devourer outro loop (boss_devourer_of_souls.cpp:215-235, instance
---   GetData team + map summons) — so the GUID legs as consumed stay
---   out there.
+--   GetData team + map summons) stays out.
 -- - SetBossState: the C++ instance script has NO boss-state override
 --   (no OnBossStateChange / SetBossState call anywhere in the file) —
 --   the IN_PROGRESS / DONE / NOT_STARTED legs run at engage / death /

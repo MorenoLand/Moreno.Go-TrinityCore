@@ -26,13 +26,32 @@
 -- DOCUMENTED DEVIATIONS: the TaskScheduler UNIT_STATE_CASTING validator
 -- has no bridge — timers fire unconditionally (hodir precedent);
 -- UpdateEscortAI's DATA_MAIN_EVENT_STATE != IN_PROGRESS CastStop leg is
--- instance-gated and unmodeled; the EscortAI waypoint machine
--- (SetData(DATA_PORTAL_LOCATION) paths, CreatureStartAttackDoor's
--- DoCastAOE(SPELL_DESTROY_DOOR_SEAL 58040)) has no bridge; random/nearest
--- target picks are threat-list picks via GetAITargets (corrected
--- 2026-10-25 — the C++ SelectTarget calls pass no playerOnly flag, so
--- the pool is threat-list any-unit, not instance players; the moragg /
--- lavanthor precedent); DoMeleeAttackIfReady is engine-driven.
+-- unmodeled (it would need a per-tick instance-state poll; the door-seal
+-- cast is a one-shot at arrival, so the leg only matters if the event
+-- ends mid-path); random/nearest target picks are threat-list picks via
+-- GetAITargets (corrected 2026-10-25 — the C++ SelectTarget calls pass
+-- no playerOnly flag, so the pool is threat-list any-unit, not instance
+-- players; the moragg / lavanthor precedent); DoMeleeAttackIfReady is
+-- engine-driven.
+-- WAYPOINT MACHINE (ported tick 489, below): SetData(DATA_PORTAL_LOCATION
+-- 12) paths ride ev22 (IsSummonedBy) — the portal's ev19 writes
+-- SetData(12, location) BEFORE the summon's ev22 fires
+-- (summonTempCreature: fireCreatureSummoned then fireCreaturePetSummoned,
+-- lua_creature_events.go:190/:198), so GetData(12) is already set; the
+-- commented-out final waypoint ({1825.7, 807.3, 44.36}) is commented out
+-- in C++ too and stays out. Each leg is a MoveTo(id, x, y, z) whose
+-- arrival fires ev28 (type 8 POINT_MOTION_TYPE, id) — MoveTo
+-- (lua_creature_events.go:4838) + the ymiron precedent; the last
+-- arrival runs CreatureStartAttackDoor (SetReactState REACT_DEFENSIVE 1
+-- + DoCastAOE 58040 as self-cast). SetHomePosition (bridged,
+-- lua_creature_events.go:6368) takes the raw last point + M_PI, exactly
+-- as C++ (the AddWaypoint jitter applies to the walked points only).
+-- COMBAT DEVIATION: Go script splines are not paused by combat (chase
+-- is a derived state, not a spline supersede — creaturemotion.go:5715),
+-- so unlike C++ EscortAI the trash keeps walking while fighting and the
+-- door-attack can fire mid-combat; ev2 re-issues the next leg as the
+-- evade-resume approximation (C++ resumes from the paused waypoint after
+-- JustReachedHome; Go has no home-arrival resume leg).
 -- DOCUMENTED-ONLY (this file's entries): npc_sinclari_vh — gossip
 -- select arms gate on menuId (GOSSIP_MENU_START_ENCOUNTER 9998 /
 -- GOSSIP_MENU_SEND_ME_IN 10275), which the Lua select hook never
@@ -88,6 +107,171 @@ local SPELL_MAGIC_REFLECTION = 60158
 
 local SPELL_BACKSTAB = 58471
 local SPELL_TACTICAL_BLINK = 58470
+
+local DATA_PORTAL_LOCATION = 12 -- violet_hold.h:64 (VHData: MAIN_EVENT_STATE 9, WAVE_COUNT 10, DOOR_INTEGRITY 11, PORTAL_LOCATION 12)
+local SPELL_DESTROY_DOOR_SEAL = 58040
+local POINT_MOTION_TYPE = 8 -- movementGeneratorPoint (creaturemotion.go:4020)
+local REACT_DEFENSIVE = 1 -- UnitDefines.h: REACT_PASSIVE 0, REACT_DEFENSIVE 1, REACT_AGGRESSIVE 2
+
+local NPC_TELEPORTATION_PORTAL = 30679
+local NPC_TELEPORTATION_PORTAL_ELITE = 32174
+local NPC_TELEPORTATION_PORTAL_INTRO = 31011
+
+-- violet_hold_trashAI::SetData (violet_hold.cpp:1006-1053): the path
+-- array per portal location. Location 7 picks one of the two
+-- SecondPortal arrays at random (urand(0, 1)); any other location
+-- falls through to DefaultPortalWPs. Coords are C++-exact; the
+-- commented-out final waypoint in every array is commented out in C++
+-- too and stays out.
+local FIRST_PORTAL_WPS = {
+    {1877.670288, 842.280273, 43.333591},
+    {1877.338867, 834.615356, 38.762287},
+    {1872.161011, 823.854309, 38.645401},
+    {1864.860474, 815.787170, 38.784843},
+    {1858.953735, 810.048950, 44.008759},
+    {1843.707153, 805.807739, 44.135197},
+}
+local SECOND_PORTAL_FIRST_WPS = {
+    {1902.561401, 853.334656, 47.106117},
+    {1895.486084, 855.376404, 44.334591},
+    {1882.805176, 854.993286, 43.333591},
+    {1877.670288, 842.280273, 43.333591},
+    {1877.338867, 834.615356, 38.762287},
+    {1872.161011, 823.854309, 38.645401},
+    {1864.860474, 815.787170, 38.784843},
+    {1858.953735, 810.048950, 44.008759},
+    {1843.707153, 805.807739, 44.135197},
+}
+local SECOND_PORTAL_SECOND_WPS = {
+    {1929.392212, 837.614990, 47.136166},
+    {1928.290649, 824.750427, 45.474411},
+    {1915.544922, 826.919373, 38.642811},
+    {1900.933960, 818.855652, 38.801647},
+    {1886.810547, 813.536621, 38.490490},
+    {1869.079712, 808.701538, 38.689003},
+    {1860.843384, 806.645020, 44.008789},
+    {1843.707153, 805.807739, 44.135197},
+}
+local THIRD_PORTAL_WPS = {
+    {1934.049438, 815.778503, 52.408699},
+    {1928.290649, 824.750427, 45.474411},
+    {1915.544922, 826.919373, 38.642811},
+    {1900.933960, 818.855652, 38.801647},
+    {1886.810547, 813.536621, 38.490490},
+    {1869.079712, 808.701538, 38.689003},
+    {1860.843384, 806.645020, 44.008789},
+    {1843.707153, 805.807739, 44.135197},
+}
+local FOURTH_PORTAL_WPS = {
+    {1921.658447, 761.657043, 50.866741},
+    {1910.559814, 755.780457, 47.701447},
+    {1896.664673, 752.920898, 47.667004},
+    {1887.398804, 763.633240, 47.666851},
+    {1879.020386, 775.396973, 38.705990},
+    {1872.439087, 782.568604, 38.808292},
+    {1863.573364, 791.173584, 38.743660},
+    {1857.811890, 796.765564, 43.950329},
+    {1845.577759, 800.681152, 44.104248},
+}
+local FIFTH_PORTAL_WPS = {
+    {1887.398804, 763.633240, 47.666851},
+    {1879.020386, 775.396973, 38.705990},
+    {1872.439087, 782.568604, 38.808292},
+    {1863.573364, 791.173584, 38.743660},
+    {1857.811890, 796.765564, 43.950329},
+    {1845.577759, 800.681152, 44.104248},
+}
+local SIXTH_PORTAL_WPS = {
+    {1888.861084, 805.074768, 38.375790},
+    {1869.793823, 804.135804, 38.647018},
+    {1861.541504, 804.149780, 43.968292},
+    {1843.567017, 804.288208, 44.139091},
+}
+local DEFAULT_PORTAL_WPS = {
+    {1843.567017, 804.288208, 44.139091},
+}
+
+-- Per-GUID escort state: pts = jittered waypoints (C++ AddWaypoint
+-- adds irand(-1, 1) to X/Y once, at path selection), next = id of the
+-- MoveTo currently in flight (0-based, the C++ waypoint id), last =
+-- id of the final waypoint.
+local paths = {}
+
+local function selectPath(location)
+    if location == 0 then
+        return FIRST_PORTAL_WPS
+    elseif location == 7 then
+        if math.random(0, 1) == 0 then
+            return SECOND_PORTAL_FIRST_WPS
+        end
+        return SECOND_PORTAL_SECOND_WPS
+    elseif location == 2 then
+        return THIRD_PORTAL_WPS
+    elseif location == 6 then
+        return FOURTH_PORTAL_WPS
+    elseif location == 1 then
+        return FIFTH_PORTAL_WPS
+    elseif location == 5 then
+        return SIXTH_PORTAL_WPS
+    end
+    return DEFAULT_PORTAL_WPS
+end
+
+-- violet_hold_trashAI::SetData(DATA_PORTAL_LOCATION) + Start(true, true)
+-- (violet_hold.cpp:1006-1053): rides ev22, which fires on the summoned
+-- creature after the portal's ev19 wrote SetData(12, location). The
+-- summoner-entry gate keeps GM-spawned or otherwise unsummoned trash
+-- (which C++ never starts an escort for) from walking a default path.
+-- MoveTo runs at run speed (walk=false in the bridge), matching
+-- Start(true, true)'s run=true.
+local function trashSummoned(event, creature, summoner)
+    if not summoner then
+        return
+    end
+    local summonerEntry = summoner:GetEntry()
+    if summonerEntry ~= NPC_TELEPORTATION_PORTAL and summonerEntry ~= NPC_TELEPORTATION_PORTAL_ELITE and summonerEntry ~= NPC_TELEPORTATION_PORTAL_INTRO then
+        return
+    end
+    local guid = creature:GetGUID()
+    local raw = selectPath(creature:GetData(DATA_PORTAL_LOCATION))
+    local pts = {}
+    for i, pt in ipairs(raw) do
+        pts[i] = {pt[1] + math.random(-1, 1), pt[2] + math.random(-1, 1), pt[3]}
+    end
+    local lastPt = raw[#raw]
+    creature:SetHomePosition(lastPt[1], lastPt[2], lastPt[3], math.pi)
+    paths[guid] = {pts = pts, next = 0, last = #raw - 1}
+    creature:MoveTo(0, pts[1][1], pts[1][2], pts[1][3])
+end
+
+-- violet_hold_trashAI::WaypointReached (violet_hold.cpp:1055-1059) via
+-- the ev28 MovementInform arrival: stale arrivals (an id that is not
+-- the leg in flight — a superseded spline never informs, and the gate
+-- drops anything else) are ignored; the last waypoint runs
+-- CreatureStartAttackDoor, every other arrival chains the next leg.
+local function trashMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUID()
+    local st = paths[guid]
+    if not st or id ~= st.next then
+        return
+    end
+    if id == st.last then
+        paths[guid] = nil
+        creature:SetReactState(REACT_DEFENSIVE)
+        creature:CastSpell(creature, SPELL_DESTROY_DOOR_SEAL)
+        return
+    end
+    st.next = id + 1
+    local pt = st.pts[st.next + 1]
+    creature:MoveTo(st.next, pt[1], pt[2], pt[3])
+end
+
+local function clearPath(guid)
+    paths[guid] = nil
+end
 
 local timers = {}
 
@@ -366,7 +550,24 @@ local function trashEnterCombat(event, creature)
 end
 
 local function trashCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    clearPath(guid)
+end
+
+-- EscortAI evade-resume approximation (see header): leaving combat
+-- re-issues the leg in flight. When combat merely interrupted a
+-- still-running leg this restarts that leg from the current position;
+-- after an evade it resumes the path instead of stranding the trash
+-- at its home point (the door, per SetHomePosition above).
+local function trashLeaveCombat(event, creature)
+    local guid = creature:GetGUID()
+    cancelTimers(guid)
+    local st = paths[guid]
+    if st and not creature:IsDead() then
+        local pt = st.pts[st.next + 1]
+        creature:MoveTo(st.next, pt[1], pt[2], pt[3])
+    end
 end
 
 local TRASH_ENTRIES = {
@@ -382,7 +583,9 @@ local TRASH_ENTRIES = {
 
 for _, entry in ipairs(TRASH_ENTRIES) do
     RegisterCreatureEvent(entry, 1, trashEnterCombat)
-    RegisterCreatureEvent(entry, 2, trashCancelCombatTimers)
+    RegisterCreatureEvent(entry, 2, trashLeaveCombat)
     RegisterCreatureEvent(entry, 4, trashCancelCombatTimers)
+    RegisterCreatureEvent(entry, 22, trashSummoned)
     RegisterCreatureEvent(entry, 23, trashCancelCombatTimers)
+    RegisterCreatureEvent(entry, 28, trashMovementInform)
 end

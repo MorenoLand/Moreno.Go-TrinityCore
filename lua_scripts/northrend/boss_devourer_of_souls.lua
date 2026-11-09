@@ -103,18 +103,18 @@
 -- PORTED (the stale "no display-ID bridge" claim retracted — the bridge
 -- went live 2026-10-20, lua_creature_events.go).
 -- EVENT_WAILING_SOULS SetDisplayId(DISPLAY_DESIRE) (:282) PORTED at the
--- arm position; the phase-end restore (:321-323) ports the
+-- arm position; the phase-end restore (:321-324) ports the
 -- SetReactState(REACT_AGGRESSIVE) + SetDisplayId(DISPLAY_ANGER) +
 -- SetControlled(false, ROOT) legs (creature:SetReactState +
--- creature:SetDisplayId + SetRooted) — MoveChase (:324) has no bridge
--- and stays out.
+-- creature:SetDisplayId + SetRooted) + MoveChase(GetVictim()) (:324,
+-- PORTED tick 489 — the "no bridge" claim was stale).
 -- The wailing beam choreography ports on the live bridges: SetFacingToObject
 -- :288 via the atan2 idiom + SetFacingTo (zuljin precedent), beamAngle
 -- SetFacingTo :314 per tick, SetReactState(REACT_PASSIVE) :299; the 13:00
 -- "no facing/react bridge" claims are stale (both bridges live since
--- 2026-10-20). InterruptNonMeleeSpells (:297) and motion Clear (:304)
--- stay out (no bridges); SetTarget(Empty) :302 is PORTED (2026-10-20,
--- creature:SetTarget bridge).
+-- 2026-10-20). InterruptNonMeleeSpells (:297) PORTED (2026-10-24, no-op
+-- twin) and motion Clear (:304) PORTED (tick 489, creature:MoveClear);
+-- SetTarget(Empty) :302 is PORTED (2026-10-20, creature:SetTarget bridge).
 -- SpellHitTarget (:225-228): H_SPELL_PHANTOM_BLAST -> threeFaced = false
 -- — PORTED tick 417 via event 15 (devourerSpellHitTarget below): the
 -- 70322 hit writes SetData(DATA_THREE_FACED, 0); Reset writes 1
@@ -375,7 +375,11 @@ local wailingSoulsTick
 local wailingSoulsEvent
 -- facing sweep (:313-314) ports on the SetFacingTo bridge (live since
 -- 2026-10-20); the phase-end restore legs (REACT_AGGRESSIVE + DISPLAY_ANGER
--- + unroot, :321-323) port; MoveChase (:324) has no bridge and stays out.
+-- + unroot, :321-323) port; MoveChase (:324) PORTED (tick 489 — the "no
+-- bridge" claim was stale; creature:MoveChase is bridged,
+-- lua_creature_events.go:5055, and GetVictim() is the moroes precedent;
+-- the bridge no-ops on a nil victim, matching C++'s missing-target
+-- early-return).
 wailingSoulsTick = function(creature, guid, remaining)
     local state = devourerState[guid]
     if state ~= nil and creature:IsCasting() then
@@ -403,10 +407,12 @@ wailingSoulsTick = function(creature, guid, remaining)
         -- C++ phase-end (:320-326): SetReactState(REACT_AGGRESSIVE) first
         -- (:321 -- the 13:00 "no bridge" claim is stale), then
         -- SetDisplayId(DISPLAY_ANGER) (:322) + SetControlled(false,
-        -- UNIT_STATE_ROOT) (:323); MoveChase (:324) has no bridge, stays out.
+        -- UNIT_STATE_ROOT) (:323) + MoveChase(GetVictim()) (:324, PORTED
+        -- tick 489 — see the forward-declare comment above).
         creature:SetReactState(REACT_AGGRESSIVE)
         creature:SetDisplayId(DISPLAY_ANGER)
         creature:SetRooted(false)
+        creature:MoveChase(creature:GetVictim())
         schedule(guid, "wailing", {60000, 70000}, function()
             wailingSoulsEvent(creature, guid)
         end)
@@ -423,7 +429,8 @@ end
 -- 3000ms (:309). The beam choreography ports: SetFacingToObject :288
 -- (atan2 idiom + SetFacingTo), beamAngle SetFacingTo :314 per tick,
 -- SetReactState (REACT_PASSIVE) :299; InterruptNonMeleeSpells :297 PORTED
--- 2026-10-24 (no-op twin) and motion Clear :304 has no bridge, stays out.
+-- 2026-10-24 (no-op twin) and motion Clear :304 PORTED (tick 489,
+-- creature:MoveClear — see the call site below for the collapse delta).
 -- SetTarget(Empty) :302 is
 -- PORTED (2026-10-20, creature:SetTarget bridge) and
 -- SetControlled(true, UNIT_STATE_ROOT) :305 via creature:SetRooted.
@@ -477,9 +484,16 @@ wailingSoulsEvent = function(creature, guid)
     -- beam, before the motion Clear; ported 2026-10-20 via the
     -- creature:SetTarget bridge (0 = ObjectGuid::Empty).
     creature:SetTarget(0)
-    -- C++ :305 SetControlled(true, UNIT_STATE_ROOT) — after the
-    -- unbridged :304 motion Clear; the root leg alone keeps the boss
-    -- stationary via the chase-pause ScriptRooted gate (creaturemotion.go).
+    -- C++ :304 GetMotionMaster()->Clear() — PORTED (tick 489) via
+    -- creature:MoveClear (lua_creature_events.go:3008, the StopMoving
+    -- collapse twin); the standing collapse delta is that the halt legs
+    -- never clear the chase/follow slots, but the boss is rooted on the
+    -- next line and MoveChase is re-armed explicitly at phase end, so
+    -- nothing resumes from the stale slot.
+    creature:MoveClear()
+    -- C++ :305 SetControlled(true, UNIT_STATE_ROOT) — after the :304
+    -- motion Clear; the root leg keeps the boss stationary via the
+    -- chase-pause ScriptRooted gate (creaturemotion.go).
     creature:SetRooted(true)
     -- C++ :307 events.DelayEvents(18s) — push every other armed timer out
     -- 18s (no other events during wailing souls); the tick chain is

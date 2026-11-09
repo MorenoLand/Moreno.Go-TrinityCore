@@ -76,21 +76,24 @@
 --   clears exactly like C++.
 -- The JustSummoned soul-fragment machine (:128-136) is PORTED as
 --   bronjahmJustSummoned (event 19): REACT_PASSIVE :133 +
---   PURPLE_BANISH_VISUAL self-cast :135 (triggered); MoveFollow :134
---   has no motion bridge and stays out, so fragments still will not
---   follow the boss; summons.Summon has no Lua summon list.
+--   MoveFollow(me, GetCombatReach(), 0.0f) :134 (PORTED tick 489 —
+--   the "no motion bridge" claim was stale) + PURPLE_BANISH_VISUAL
+--   self-cast :135 (triggered); summons.Summon has no Lua summon list.
 -- GetData(DATA_SOUL_POWER) (:139-154) counts the live corrupted soul
 -- fragments in the summon list — PORTED tick 417 as a SetData mirror
 -- (JustSummoned +1 / SummonedCreatureDies + SummonedCreatureDespawn
 -- -1, GUID-set guarded; see below), read by the Go gate via
 -- bossLatchData. Delta: the fragment consume-despawn leg stays out
 -- (see below).
--- npc_corrupted_soul_fragment (36535) is NOT registered: IsSummonedBy
---   hands off through instance->GetGuidData(DATA_BRONJAHM) (the
---   no-instance-GetGuidData queue) and MovementInform rides the
---   no-MovementInform bridge (:249 CastSpell(nullptr, SPELL_CONSUME_SOUL,
---   true) + DespawnOrUnsummon fire only on FOLLOW arrival) — zero
---   standalone bridgeable arms (the moroes/valithria add-registration rule).
+-- npc_corrupted_soul_fragment (36535) MovementInform (:241-251) is
+--   PORTED as soulFragmentMovementInform (event 28, tick 489):
+--   FOLLOW_MOTION_TYPE 14 + DATA_BRONJAHM counter check (the ichoron
+--   % 2^32 idiom) -> triggered CONSUME_SOUL 68861 self-cast +
+--   DespawnOrUnsummon; the ev5 spawn latch (bronjahmSpawn) feeds the
+--   instance GetGuidData store. Its IsSummonedBy relay (:235-239) needs
+--   no registration — the summon funnel already delivers JustSummoned
+--   to Bronjahm via ev19. The consume_soul SpellScript redirect
+--   (:302-310) stays out (no SpellScript bridge).
 -- The four SpellScript/AuraScript hooks (magic_bane mana-power damage
 --   recalc :284, consume_soul script-effect redirect :311, soulstorm_visual
 --   8-spell periodic ring :345/:350, soulstorm_targeting 10yd exclusion)
@@ -134,6 +137,8 @@ local SPELL_SOULSTORM_VISUAL = 68870
 
 local ENTRY_CORRUPTED_SOUL_FRAGMENT = 36535
 local SPELL_PURPLE_BANISH_VISUAL = 68862
+local SPELL_CONSUME_SOUL = 68861 -- boss_bronjahm.cpp:42
+local FOLLOW_MOTION_TYPE = 14 -- movementGeneratorFollow (creaturemotion.go:4024)
 local REACT_PASSIVE = 0
 
 local timers = {}
@@ -170,12 +175,12 @@ end
 -- per-GUID set of live fragment GUIDs: +1 on JustSummoned (ev19),
 -- -1 on SummonedCreatureDies (ev21, killed) and
 -- SummonedCreatureDespawn (ev20, despawned). The set guards the
--- count against a death+despawn double-fire. Delta: the consume leg
+-- count against a death+despawn double-fire. The consume leg
 -- (npc_corrupted_soul_fragment MovementInform :249 ->
--- SPELL_CONSUME_SOUL + DespawnOrUnsummon) is unported (no MoveFollow /
--- MovementInform bridge), so a fragment C++ would consume on arrival
--- keeps counting in Lua until killed or despawned — the gate
--- over-awards vs C++ on fights where fragments are left standing.
+-- SPELL_CONSUME_SOUL + DespawnOrUnsummon) is PORTED tick 489
+-- (soulFragmentMovementInform, ev28), so a fragment consumed on
+-- arrival despawns -> ev20 -> -1, and the gate no longer over-awards
+-- on fights where fragments are left standing.
 -- No ev20-only reliance: C++ reaches 0 via _Reset's DespawnAll
 -- (ScriptedCreature.cpp:507) -> ev20, but ev20 firing for the
 -- _Reset despawn is unverified, and the motion's SetData store
@@ -437,14 +442,26 @@ RegisterCreatureEvent(ENTRY_BRONJAHM, 4, bronjahmJustDied)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 9, bronjahmDamageTaken)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 23, bronjahmReset)
 
+-- C++ instance_forge_of_souls::OnCreatureCreate (instance_forge_of_souls.cpp:54-76)
+-- latches the boss GUID under DATA_BRONJAHM for GetGuidData consumers.
+-- The Lua mirror is creature:SetGuidData from the ev5 spawn handler
+-- (illidari-council precedent); motionFor fires ev5 on first spawn and
+-- on respawn. The fragment's MovementInform leg below reads it.
+local function bronjahmSpawn(event, creature)
+    creature:SetGuidData(DATA_BRONJAHM)
+end
+RegisterCreatureEvent(ENTRY_BRONJAHM, 5, bronjahmSpawn)
+
 -- C++ boss_bronjahmAI::JustSummoned (boss_bronjahm.cpp:128-136):
 -- entry NPC_CORRUPTED_SOUL_FRAGMENT 36535 -> summons.Summon (no Lua
--- summon list) + SetReactState(REACT_PASSIVE) + triggered self-cast
--- PURPLE_BANISH_VISUAL 68862. MoveFollow (:134) has no motion bridge
--- and stays out; the fragment IsSummonedBy instance-GetGuidData leg
--- stays out. Event 19 fires on the summoner for spell-effect summons
--- through the shared summonTempCreature funnel (boss_ai.go:1734),
--- so the ported CORRUPT_SOUL cast delivers this arm.
+-- summon list) + SetReactState(REACT_PASSIVE) + MoveFollow(me,
+-- GetCombatReach(), 0.0f) + triggered self-cast PURPLE_BANISH_VISUAL
+-- 68862. MoveFollow PORTED (tick 489 — the "no motion bridge" claim
+-- was stale; creature:MoveFollow is bridged, lua_creature_events.go:5097,
+-- boss_midnight.lua precedent). The fragment IsSummonedBy
+-- instance-GetGuidData leg stays out. Event 19 fires on the summoner
+-- for spell-effect summons through the shared summonTempCreature funnel
+-- (boss_ai.go:1734), so the ported CORRUPT_SOUL cast delivers this arm.
 local function bronjahmJustSummoned(event, creature, summon)
     if summon:GetEntry() ~= ENTRY_CORRUPTED_SOUL_FRAGMENT then
         return
@@ -458,6 +475,7 @@ local function bronjahmJustSummoned(event, creature, summon)
     set[summon:GetGUID()] = true
     writeSoulPower(creature)
     summon:SetReactState(REACT_PASSIVE)
+    summon:MoveFollow(creature, creature:GetCombatReach(), 0)
     summon:CastSpell(summon, SPELL_PURPLE_BANISH_VISUAL, true)
 end
 RegisterCreatureEvent(ENTRY_BRONJAHM, 19, bronjahmJustSummoned)
@@ -490,6 +508,36 @@ local function bronjahmSummonDespawned(event, creature, summon)
 end
 RegisterCreatureEvent(ENTRY_BRONJAHM, 21, bronjahmSummonDied)
 RegisterCreatureEvent(ENTRY_BRONJAHM, 20, bronjahmSummonDespawned)
+
+-- C++ npc_corrupted_soul_fragmentAI::MovementInform (boss_bronjahm.cpp:241-251):
+-- FOLLOW_MOTION_TYPE only, and only when the followed target is Bronjahm —
+-- the instance DATA_BRONJAHM object GUID's counter (GetCounter() = low 32
+-- bits) must equal the inform id. Go passes uint32(targetGUID) as the id
+-- (creaturemotion.go:4406-4410), so the Lua mirror compares against
+-- GetGuidData(DATA_BRONJAHM) % 2^32 (GUIDs stay below 2^53, so the modulo
+-- is exact) — the ichoron-globule idiom (tick 485). On match: triggered
+-- self-cast CONSUME_SOUL 68861 (the C++ CastSpell(nullptr, ...) leg, per
+-- the spirit-shade self-cast precedent) + immediate despawn
+-- (DespawnOrUnsummon() with no args = ms 0, C++-exact). The fragment's
+-- IsSummonedBy leg (:235-239, relaying JustSummoned to Bronjahm) needs
+-- no registration: the summon funnel already delivers JustSummoned to
+-- Bronjahm via ev19 (see bronjahmJustSummoned above), and the Lua
+-- GUID-set absorbs C++'s double delivery. The consume_soul SpellScript
+-- itself (script-effect redirect :302-310) stays out — no SpellScript
+-- bridge — so the cast fires its DBC effect only. Dormant until the
+-- DATA_BRONJAHM latch lands (ev5 spawn, above); an unlatched store
+-- reads 0 and the id check fails closed.
+local function soulFragmentMovementInform(event, creature, type, id)
+    if type ~= FOLLOW_MOTION_TYPE then
+        return
+    end
+    if id ~= creature:GetGuidData(DATA_BRONJAHM) % 4294967296 then
+        return
+    end
+    creature:CastSpell(creature, SPELL_CONSUME_SOUL, true)
+    creature:DespawnOrUnsummon()
+end
+RegisterCreatureEvent(ENTRY_CORRUPTED_SOUL_FRAGMENT, 28, soulFragmentMovementInform)
 
 -- C++ boss_bronjahmAI::JustReachedHome (:94-96): _JustReachedHome() is
 -- instance bookkeeping (no bridge); DoCast(me, SPELL_SOULSTORM_CHANNEL,

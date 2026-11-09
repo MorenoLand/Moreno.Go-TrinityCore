@@ -54,10 +54,10 @@
 -- - spell_violet_hold_teleport_player (62138 SpellScript): no
 --   SpellScript bridge.
 -- - Trash EscortAI waypoint machine (SetData(DATA_PORTAL_LOCATION)
---   paths, CreatureStartAttackDoor): no AddWaypoint bridge — the
---   portal JustSummoned -> summon:SetData(12, location) write IS
---   ported below, so the trash reads its location via GetData(12)
---   once the path machine lands (next unit).
+--   paths, CreatureStartAttackDoor): ported in violet_hold_trash.lua
+--   (tick 489 — ev22 path start, MoveTo + ev28 leg chain, door-seal
+--   cast on the last arrival); the portal JustSummoned ->
+--   summon:SetData(12, location) write below feeds it.
 -- - instance_violet_hold AddWave / StartBossEncounter /
 --   ScheduleCyanigosaIntro / SpawnPortal: MoveSmoothPath + portal
 --   intros; the portal AIs below are live and waiting for AddWave's
