@@ -338,13 +338,13 @@ local function onGutSpray(creature, guid)
 end
 
 local function gluttonousAbominationJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "gut_spray", {10000, 13000}, function() onGutSpray(creature, guid) end)
 end
 
 local function gluttonousAbominationLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_risen_archmage::Reset — EVENT_FROSTBOLT_VOLLEY {5s,15s},
@@ -406,7 +406,7 @@ local corruptionTick
 -- InterruptNonMeleeSpells is a live bridge (lua_creature_events.go:1995,
 -- cancels pending/channel casts) and StopSpellCast interrupts too (:985).
 local function risenArchmageJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:InterruptNonMeleeSpells(false)
     -- C++ JustEnteredCombat (:659-668): if _isInitialArchmage,
@@ -427,7 +427,7 @@ local function risenArchmageJustEngagedWith(event, creature, target)
 end
 
 local function risenArchmageLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ UpdateAI :695 keeps polling out of combat after an evade while
     -- _isInitialArchmage stands (the flag survives Reset — only DoAction
@@ -462,7 +462,7 @@ local function risenArchmageDoAction(event, creature, action)
     if action == ACTION_ENTER_COMBAT then
         creature:DoZoneInCombat()
     elseif action == ACTION_SETUP_ARCHMAGES then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         initialArchmage[guid] = true
         schedule(guid, "corruption", 1000, function() corruptionTick(creature, guid) end)
     end
@@ -635,14 +635,14 @@ local function onLeyWaste(creature, guid)
 end
 
 local function blazingSkeletonJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fireball", {2000, 4000}, function() onFireball(creature, guid) end)
     schedule(guid, "ley_waste", {15000, 20000}, function() onLeyWaste(creature, guid) end)
 end
 
 local function blazingSkeletonLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_the_lich_king_controller::JustEngagedWith:
@@ -663,7 +663,7 @@ local valithriaState = {}
 -- bridge), but the no-death + Talk behavior is exactly bridgeable
 -- (return false, 0 — julianne/curator damage-negation precedent).
 local function valithriaDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = valithriaState[guid] or {}
     valithriaState[guid] = st
     local maxHealth = creature:GetMaxHealth()
@@ -719,7 +719,7 @@ end
 -- _done/_over75PercentTalkDone latches live in valithriaState, so the
 -- event-23 reset clears them (C++ Initialize()).
 local function valithriaHealReceived(_, creature, healer, heal)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = valithriaState[guid] or {}
     valithriaState[guid] = st
     -- C++ :317-318 — first heal taps the healer as loot recipient,
@@ -871,7 +871,7 @@ local function valithriaDoAction(event, creature, action)
     if action ~= ACTION_ENTER_COMBAT then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:CastSpell(creature, SPELL_COPY_DAMAGE)
     creature:SendEncounterUnit(0, creature)
     schedule(guid, "intro_talk", 15000, function() onValithriaIntroTalk(creature, guid) end)
@@ -882,8 +882,8 @@ local function valithriaDoAction(event, creature, action)
 end
 
 local function valithriaReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    valithriaState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    valithriaState[creature:GetGUIDLow()] = nil
     -- C++ boss_valithria_dreamwalker.cpp:288: me->SetReactState(REACT_PASSIVE)
     -- (Reset init arm; no flip anywhere in C++).
     creature:SetReactState(0) -- REACT_PASSIVE

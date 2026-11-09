@@ -406,7 +406,7 @@ local function ballOfFlameDoAction(event, creature, action)
     if action ~= ACTION_FLAME_BALL_CHASE then
         return
     end
-    local target = ballChaseTarget[creature:GetGUID()]
+    local target = ballChaseTarget[creature:GetGUIDLow()]
     if target == nil then
         return
     end
@@ -708,7 +708,7 @@ local function kelesethEnterCombat(event, creature)
     for _, controller in ipairs(creature:GetCreaturesInGrid(ENTRY_BLOOD_ORB_CONTROLLER, 100)) do
         controller:DoZoneInCombat()
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsHeroic() then
         creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
@@ -732,7 +732,7 @@ local function taldaramEnterCombat(event, creature)
     for _, controller in ipairs(creature:GetCreaturesInGrid(ENTRY_BLOOD_ORB_CONTROLLER, 100)) do
         controller:DoZoneInCombat()
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsHeroic() then
         creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
@@ -829,7 +829,7 @@ local function kineticBombDoAction(event, creature, action)
     if action ~= SPELL_KINETIC_BOMB_EXPLOSION then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "bombdespawn", 1000, function()
         creature:SetVisible(false)
         creature:DespawnOrUnsummon(5000)
@@ -849,7 +849,7 @@ end
 -- already-despawned motion is a no-op, so an exploded bomb still
 -- despawns at 5s and an unexploded one at 60s, exactly like C++.
 local function kineticBombReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetWalk(true)
     creature:CastSpell(creature, SPELL_UNSTABLE, true)
@@ -925,7 +925,7 @@ local function onNucleusAuraCheck(creature, guid)
 end
 
 local function nucleusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ npc_dark_nucleus::JustEngagedWith immediate leg
     -- (boss_blood_prince_council.cpp:1061-1066): >= 15.0f ->
@@ -955,7 +955,7 @@ local function nucleusDamageTaken(event, creature, attacker, damage)
 end
 
 local function nucleusReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_dark_nucleus::Reset (boss_blood_prince_council.cpp:
     -- 1045-1048): REACT_DEFENSIVE = 1 (lua_creature_events.go:524)
     -- + triggered self-cast 72980.
@@ -972,7 +972,7 @@ local function valanarEnterCombat(event, creature)
     for _, controller in ipairs(creature:GetCreaturesInGrid(ENTRY_BLOOD_ORB_CONTROLLER, 100)) do
         controller:DoZoneInCombat()
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsHeroic() then
         creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
@@ -995,7 +995,7 @@ end
 -- (the C++ SpellHit relay :535-539 is folded into the direct dispatch:
 -- the visual/invocation casts carry no Lua-visible payload beyond it).
 local function princesDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_CAST_INVOCATION then
         creature:Talk(0)
         creature:CastSpell(creature, SPELL_INVOCATION_VISUAL_ACTIVE, true)
@@ -1017,7 +1017,7 @@ end
 -- precedent): the boolean only gates the no-op base, the second return
 -- rewrites the damage.
 local function princesDamageTaken(event, creature, attacker, damage)
-    if empowered[creature:GetGUID()] then
+    if empowered[creature:GetGUIDLow()] then
         return
     end
     if attacker ~= nil then
@@ -1045,10 +1045,10 @@ end
 -- controller->AI()->SetData(DATA_PRINCE_EVADE, 1) — cross-AI write into the unported BloodPrinceController;
 -- no cross-AI SetData bridge. All three dropped, documented.
 local function princesJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
-    despawnValanarSummons(creature:GetGUID())
-    despawnKelesethSummons(creature:GetGUID())
-    despawnTaldaramSummons(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnValanarSummons(creature:GetGUIDLow())
+    despawnKelesethSummons(creature:GetGUIDLow())
+    despawnTaldaramSummons(creature:GetGUIDLow())
     -- C++ boss_blood_prince_council.cpp:469: SendEncounterUnit
     -- (ENCOUNTER_FRAME_DISENGAGE) after the summon despawns,
     -- before Talk.
@@ -1057,19 +1057,19 @@ local function princesJustDied(event, creature)
 end
 
 local function princesLeaveCombat(event, creature)
-    empowered[creature:GetGUID()] = false
-    cancelTimers(creature:GetGUID())
-    despawnValanarSummons(creature:GetGUID())
-    despawnKelesethSummons(creature:GetGUID())
-    despawnTaldaramSummons(creature:GetGUID())
+    empowered[creature:GetGUIDLow()] = false
+    cancelTimers(creature:GetGUIDLow())
+    despawnValanarSummons(creature:GetGUIDLow())
+    despawnKelesethSummons(creature:GetGUIDLow())
+    despawnTaldaramSummons(creature:GetGUIDLow())
 end
 
 local function princesReset(event, creature)
-    empowered[creature:GetGUID()] = false
-    cancelTimers(creature:GetGUID())
-    despawnValanarSummons(creature:GetGUID())
-    despawnKelesethSummons(creature:GetGUID())
-    despawnTaldaramSummons(creature:GetGUID())
+    empowered[creature:GetGUIDLow()] = false
+    cancelTimers(creature:GetGUIDLow())
+    despawnValanarSummons(creature:GetGUIDLow())
+    despawnKelesethSummons(creature:GetGUIDLow())
+    despawnTaldaramSummons(creature:GetGUIDLow())
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
     creature:SetHealth(1) -- boss_blood_prince_council.cpp:451 (base Reset arm; SetHealth(_spawnHealth), _spawnHealth = 1 per InitializeAI :438)
@@ -1096,7 +1096,7 @@ local function controllerDoAction(event, creature, action)
     if action ~= ACTION_PRINCE_EVADE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local count = (evadeCounter[guid] or 0) + 1
     evadeCounter[guid] = count
     if count == 3 then
@@ -1114,7 +1114,7 @@ end
 local function princesReachHome(event, creature)
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
     creature:SetHealth(1)
-    empowered[creature:GetGUID()] = false
+    empowered[creature:GetGUIDLow()] = false
     local controller = creature:GetInstanceCreature(DATA_BLOOD_PRINCES_CONTROL)
     if controller ~= nil then
         creature:SetFlag(59, 0x2) -- UNIT_FLAG_NON_ATTACKABLE
@@ -1143,7 +1143,7 @@ local function valanarJustSummoned(_, creature, summoned)
         -- triggered dummy self-cast + VortexEvent at 5s (periodic
         -- self-cast, :198-202).
         summoned:CastSpell(summoned, SPELL_SHOCK_VORTEX_DUMMY, true)
-        vortexTimers[summoned:GetGUID()] = CreateLuaEvent(function()
+        vortexTimers[summoned:GetGUIDLow()] = CreateLuaEvent(function()
             summoned:CastSpell(summoned, SPELL_SHOCK_VORTEX_PERIODIC, true)
         end, 5000)
     end
@@ -1151,13 +1151,13 @@ local function valanarJustSummoned(_, creature, summoned)
         summoned:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
     end
     if entry == ENTRY_KINETIC_BOMB_TARGET or entry == ENTRY_KINETIC_BOMB or entry == ENTRY_SHOCK_VORTEX then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local list = valanarSummons[guid]
         if not list then
             list = {}
             valanarSummons[guid] = list
         end
-        list[summoned:GetGUID()] = summoned
+        list[summoned:GetGUIDLow()] = summoned
     end
 end
 
@@ -1269,7 +1269,7 @@ local function controllerEnterCombat(event, creature)
         order[2] = { data = DATA_PRINCE_KELESETH, spell = SPELL_INVOCATION_OF_BLOOD_KELESETH, text = 1, visual = SPELL_INVOCATION_VISUAL_KELESETH }
         order[3] = { data = DATA_PRINCE_TALDARAM, spell = SPELL_INVOCATION_OF_BLOOD_TALDARAM, text = 1, visual = SPELL_INVOCATION_VISUAL_TALDARAM }
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     invocationState[guid] = { order = order, stage = 1 }
     local valanar = creature:GetInstanceCreature(DATA_PRINCE_VALANAR)
     if valanar then
@@ -1285,8 +1285,8 @@ end
 -- creature:SetBossState on ev2 (the deathwhisper ev2 evade-FAIL
 -- precedent).
 local function controllerLeaveCombat(event, creature)
-    invocationState[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    invocationState[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
     for _, bossData in ipairs(PRINCES_DATA) do
         local prince = creature:GetInstanceCreature(bossData)
         if prince then
@@ -1305,9 +1305,9 @@ end
 -- valanar SetHealth(max) + CastSpell(REMOVE_EMPOWERED_BLOOD)) stays out —
 -- no instance GetData bridge (creature:GetData is the per-motion latch).
 local function controllerReset(event, creature)
-    invocationState[creature:GetGUID()] = nil
-    evadeCounter[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    invocationState[creature:GetGUIDLow()] = nil
+    evadeCounter[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_blood_council_controller::Reset :235 — _Reset() first:
     -- SetBossState NOT_STARTED only when the stored state != DONE
     -- (BossAI::_Reset, ScriptedCreature.cpp:499-509; the falric
@@ -1362,26 +1362,26 @@ RegisterCreatureEvent(ENTRY_KELESETH, 19, function(_, creature, summoned)
     summoned:NearTeleport(creature:GetX() + dist * math.cos(angle),
         creature:GetY() + dist * math.sin(angle), summoned:GetZ(),
         creature:GetO())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = kelesethSummons[guid]
     if not list then
         list = {}
         kelesethSummons[guid] = list
     end
-    list[summoned:GetGUID()] = summoned
+    list[summoned:GetGUIDLow()] = summoned
 end)
 RegisterCreatureEvent(ENTRY_TALDARAM, 19, function(_, creature, summoned)
     local entry = summoned:GetEntry()
     if entry ~= ENTRY_BALL_OF_INFERNO_FLAME and entry ~= ENTRY_BALL_OF_FLAME then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = taldaramSummons[guid]
     if not list then
         list = {}
         taldaramSummons[guid] = list
     end
-    list[summoned:GetGUID()] = summoned
+    list[summoned:GetGUIDLow()] = summoned
     -- C++ JustSummoned (:697-710): random-target pick + (inferno
     -- flame only) Talk emote + SetGUID, in that order (latch above is
     -- the summons.Summon leg). The base ball (38332, Conjure Flame
@@ -1399,8 +1399,8 @@ RegisterCreatureEvent(ENTRY_TALDARAM, 19, function(_, creature, summoned)
             per = {}
             ballTargets[guid] = per
         end
-        per[summoned:GetGUID()] = target
-        ballChaseTarget[summoned:GetGUID()] = target
+        per[summoned:GetGUIDLow()] = target
+        ballChaseTarget[summoned:GetGUIDLow()] = target
     end
 end)
 

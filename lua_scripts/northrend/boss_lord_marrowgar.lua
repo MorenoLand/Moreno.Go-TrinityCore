@@ -456,7 +456,7 @@ end
 -- auriaya engage-port precedent. The EventMap seeds (:148-152) —
 -- all five port 2026-11-08 (tick 493, below).
 local function marrowgarJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ :162 — me-form DoZoneInCombat after Talk(SAY_AGGRO) and
@@ -486,11 +486,11 @@ end
 -- C++ Reset() event machinery — cancel/re-arm on combat events (the
 -- maiden convention).
 local function marrowgarLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function marrowgarReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset() :144 — _Reset() first: SetBossState NOT_STARTED
     -- only when the stored state != DONE (BossAI::_Reset,
     -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
@@ -510,7 +510,7 @@ local function marrowgarReset(event, creature)
     creature:RemoveAura(SPELL_BONE_STORM)
     creature:RemoveAura(SPELL_BERSERK)
     -- C++ Reset() :153-154: _boneSlice = false, _boneSpikeImmune.clear().
-    local rst = getMarrowgarState(creature:GetGUID())
+    local rst = getMarrowgarState(creature:GetGUIDLow())
     rst.boneSlice = false
     rst.spikeImmune = {}
     -- C++ Reset() :177: instance->SetData(DATA_BONED_ACHIEVEMENT 14,
@@ -546,7 +546,7 @@ end
 -- creature:SetBossState DONE, in C++ order AFTER Talk. cancelTimers
 -- stops the 10-min berserk timer from firing on the corpse.
 local function marrowgarJustDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_DONE)
 end
@@ -575,7 +575,7 @@ RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 24, marrowgarReachHome)
 -- player); me->DespawnOrUnsummon() ports (creature:Despawn, bridged).
 -- C++ order kept: aura removal, then despawn.
 local function boneSpikeJustDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local summoner = creature:GetSummonerUnit()
     if summoner then
         summoner:RemoveAura(SPELL_IMPALED)
@@ -587,7 +587,7 @@ end
 -- victim->RemoveAurasDueToSpell(SPELL_IMPALED), C++ order kept;
 -- victim:RemoveAura is the player/creature RemoveAura bridge.
 local function boneSpikeKilledUnit(event, creature, victim)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Despawn()
     victim:RemoveAura(SPELL_IMPALED)
 end
@@ -615,7 +615,7 @@ local function boneSpikeIsSummonedBy(event, creature, summoner)
     end
     creature:CastSpell(summoner, SPELL_IMPALED)
     summoner:CastSpell(creature, SPELL_RIDE_VEHICLE, true)
-    schedule(creature:GetGUID(), "failBoned", 8000, function()
+    schedule(creature:GetGUIDLow(), "failBoned", 8000, function()
         local mapObj = creature:GetMap()
         if mapObj then
             local data = mapObj:GetInstanceData()

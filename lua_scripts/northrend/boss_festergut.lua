@@ -424,7 +424,7 @@ end
 -- SetBossState leg: C++ JustEngagedWith (:113-129) writes no state
 -- (IN_PROGRESS rides Putricide's MovementInform, see header).
 local function festergutJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ :128 — me-form DoZoneInCombat last in JustEngagedWith (after
@@ -440,7 +440,7 @@ end
 -- C++ Reset/JustDied _Reset()/_JustDied() timer machinery —
 -- cancel/re-arm on combat events (the maiden convention).
 local function festergutLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inhale[guid] = nil
     -- C++ boss_festergut::EnterEvadeMode (:146-152): ScriptedAI base
@@ -455,7 +455,7 @@ local function festergutLeaveCombat(event, creature)
 end
 
 local function festergutReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inhale[guid] = nil
     -- C++ Reset() :94 — _Reset() first: SetBossState NOT_STARTED
@@ -491,7 +491,7 @@ end
 -- self-re-arming inhale/gas-spore/gastric-bloat legs would keep
 -- firing on the corpse (the devourer death-cancel precedent).
 local function festergutJustDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inhale[guid] = nil
     creature:SetBossState(DATA_FESTERGUT, BOSS_STATE_DONE)

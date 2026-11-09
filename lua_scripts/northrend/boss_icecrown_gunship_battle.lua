@@ -200,7 +200,7 @@ end
 -- GetData DATA_TEAM_IN_INSTANCE) has no bridge. The SetPhase(PHASE_COMBAT)
 -- leg has no phase bridge; EVENT_CLEAVE is not phase-gated.
 local function captainEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_BATTLE_FURY, true)
     schedule(guid, "cleave", {2000, 10000}, function() onCleave(creature, guid) end)
@@ -235,7 +235,7 @@ local function captainDamageTaken(event, creature, attacker, damage)
 end
 
 local function captainLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_high_overlord_saurfang_igb / npc_muradin_bronzebeard_igb
     -- EnterEvadeMode (:875-885 / :1128-1138): IsAlive gate + CombatStop(true)
     -- + EngagementOver() + MoveTargetedHome() + Reset(). The Reset() leg
@@ -253,7 +253,7 @@ end
 
 local function captainReset(event, creature)
     creature:SetRegenerateHealth(false)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ :1544-1546 EVENT_BLADESTORM: DoCastAOE(SPELL_BLADESTORM)
@@ -297,25 +297,25 @@ end
 -- npc_gunship_boarding_addAI::JustEngagedWith call resolves to
 -- ScriptedAI's (no cast arms); the two ScheduleEvent seeds port below.
 local function leaderEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "bladestorm", {13000, 18000}, function() onBladestorm(creature, guid) end)
     schedule(guid, "wounding", {8000, 10000}, function() onWoundingStrike(creature, guid) end)
 end
 
 local function leaderLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function leaderReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_gunship_boarding_add DamageTaken (:1455-1464):
 -- SPELL_DESPERATE_RESOLVE at 25%, one-shot _usedDesperateResolve latch
 -- (the moroes-frenzy pattern).
 local function boardingAddDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if desperateUsed[guid] then
         return
     end
@@ -336,7 +336,7 @@ end
 -- is keyed per creature spawn (fresh GUID per respawn), so it is never
 -- cleared here — event 2/23 only cancel timers.
 local function boardingAddReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_gunship_rocketeer UpdateAI (:1619-1632): DoCastAOE(entry == 36978
@@ -361,17 +361,17 @@ local function rocketeerEnterCombat(event, creature, target)
     -- 9s; the SpellHistory cooldown has no bridge. Emulated as
     -- engage-immediate + 9s repeat — documented deviation (cooldown vs
     -- timer).
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     onRocketArtillery(creature, guid)
 end
 
 local function rocketeerLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function rocketeerReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SAURFANG, 1, captainEnterCombat)
@@ -433,13 +433,13 @@ local function deckAuraApply(event, aura, target)
     if not ship then
         return
     end
-    local shipGuid = ship:GetGUID()
+    local shipGuid = ship:GetGUIDLow()
     local per = shipVisits[shipGuid]
     if not per then
         per = {}
         shipVisits[shipGuid] = per
     end
-    local playerGuid = target:GetGUID()
+    local playerGuid = target:GetGUIDLow()
     local visits = (per[playerGuid] or 0) + 1
     per[playerGuid] = visits
     if visits > ship:GetData(ACTION_SHIP_VISITS) then

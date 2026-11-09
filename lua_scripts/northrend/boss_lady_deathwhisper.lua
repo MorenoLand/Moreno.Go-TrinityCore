@@ -430,7 +430,7 @@ local function onImproveCultist(creature, guid)
     local pool = {}
     for _, entry in ipairs({ ENTRY_CULT_FANATIC, ENTRY_CULT_ADHERENT }) do
         for _, add in ipairs(creature:GetCreaturesInGrid(entry, 80.0)) do
-            if not add:IsDead() and not improved[add:GetGUID()] then
+            if not add:IsDead() and not improved[add:GetGUIDLow()] then
                 pool[#pool + 1] = add
             end
         end
@@ -438,7 +438,7 @@ local function onImproveCultist(creature, guid)
     if #pool > 0 then
         -- C++ :564-565 uniform pick + removal from the queue; Lua latch.
         local cultist = pool[math.random(#pool)]
-        improved[cultist:GetGUID()] = true
+        improved[cultist:GetGUIDLow()] = true
         improvedCultists[guid] = improved
         -- C++ :571-575: RAND(0,1) martyrdom vs triggered
         -- transformation (fanatic) / empowerment (adherent) + Talk.
@@ -611,7 +611,7 @@ local function summonSpiritsTick(creature, guid)
 end
 
 local function deathwhisperDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if deathwhisperPhase[guid] == 3 then
         return
     end
@@ -687,7 +687,7 @@ end
 -- Talk(SAY_AGGRO)
 -- (:338) then DoCastSelf(SPELL_MANA_BARRIER, true) TRIGGERED (:340).
 local function deathwhisperJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     improvedCultists[guid] = {}
     deathwhisperPhase[guid] = 2 -- PHASE_ONE (:290)
@@ -719,7 +719,7 @@ local function deathwhisperJustEngagedWith(event, creature, target)
 end
 
 local function deathwhisperLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     improvedCultists[guid] = nil
     deathwhisperPhase[guid] = nil
@@ -744,7 +744,7 @@ local function deathwhisperLeaveCombat(event, creature)
 end
 
 local function deathwhisperReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ Reset() :223 — _Reset() first: SetBossState NOT_STARTED
     -- only when the stored state != DONE (BossAI::_Reset,
     -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
@@ -812,8 +812,8 @@ local function darnavanCredit(creature, killer)
 end
 
 local function deathwhisperJustDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    improvedCultists[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    improvedCultists[creature:GetGUIDLow()] = nil
     creature:Talk(SAY_DEATH)
     local darnavan = creature:FindNearestCreature(ENTRY_DARNAVAN_10, 100.0)
     if darnavan == nil then
@@ -828,7 +828,7 @@ local function deathwhisperJustDied(event, creature, killer)
         -- SummonPositions[6]) = (-524.248, 2211.92, 62.9096); the arrival
         -- despawns via npc_darnavan::MovementInform (:868-875), ported in
         -- darnavanMovementInform below (tick 493).
-        schedule(creature:GetGUID(), "darnavanMove", 10000, function()
+        schedule(creature:GetGUIDLow(), "darnavanMove", 10000, function()
             darnavan:MoveTo(POINT_DESPAWN, -524.248, 2211.92, 62.9096)
         end)
         darnavan:Talk(SAY_DARNAVAN_RESCUED)
@@ -907,7 +907,7 @@ local function onNecroticStrike(creature, guid)
 end
 
 local function fanaticEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "vampiric", 17000, function() onVampiricMight(creature, guid) end)
     schedule(guid, "cleave", 12000, function() onShadowCleave(creature, guid) end)
@@ -915,11 +915,11 @@ local function fanaticEnterCombat(event, creature, target)
 end
 
 local function fanaticLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function fanaticReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_cult_fanatic::SpellHit (:618-646) — bridged as event 14
@@ -1018,7 +1018,7 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         -- SAY_ANIMATE_DEAD 13) leg is PORTED in the reanimate6 arm below —
         -- boss Talk via FindNearestCreature (darnavan precedent; nil-guard
         -- mirrors the C++ instance GetCreature lookup).
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "reanimate2", 2000, function() fanaticReanimate2(creature, guid) end)
         schedule(guid, "reanimate6", 6000, function() fanaticReanimate6(creature, guid) end)
     end
@@ -1105,7 +1105,7 @@ local function onCurseOfTorpor(creature, guid)
 end
 
 local function adherentEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "deathchill", 5000, function() onDeathchill(creature, guid) end)
     schedule(guid, "shroud", 15000, function() onShroudOfTheOccult(creature, guid) end)
@@ -1113,11 +1113,11 @@ local function adherentEnterCombat(event, creature, target)
 end
 
 local function adherentLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function adherentReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_darnavan::JustEngagedWith: Talk(SAY_DARNAVAN_AGGRO) — the
@@ -1208,7 +1208,7 @@ local function onDarnavanSunderArmor(creature, guid)
 end
 
 local function darnavanJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_DARNAVAN_AGGRO)
     schedule(guid, "bladestorm", 10000, function() onDarnavanBladestorm(creature, guid) end)
@@ -1221,14 +1221,14 @@ local function darnavanJustEngagedWith(event, creature, target)
 end
 
 local function darnavanLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     darnavanCanCharge[guid] = nil
     darnavanCanShatter[guid] = nil
 end
 
 local function darnavanReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     darnavanCanCharge[guid] = nil
     darnavanCanShatter[guid] = nil
@@ -1314,7 +1314,7 @@ local function adherentSpellHit(event, creature, caster, spellId)
         -- + DoCastSelf(SHROUD_OF_THE_OCCULT) + DoZoneInCombat(me).
         -- The boss Talk(SAY_ANIMATE_DEAD) leg is PORTED in the reanimate6
         -- arm below (FindNearestCreature boss Talk, darnavan precedent).
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "reanimate2", 2000, function() adherentReanimate2(creature, guid) end)
         schedule(guid, "reanimate6", 6000, function() adherentReanimate6(creature, guid) end)
     end

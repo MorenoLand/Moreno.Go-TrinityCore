@@ -508,7 +508,7 @@ local function onSvalnaImpalingSpear(creature, guid)
 end
 
 local function svalnaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustEngagedWith base call first (boss_sister_svalna.cpp:355):
     -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:527-544) —
@@ -536,7 +536,7 @@ local function svalnaEnterCombat(event, creature, target)
 end
 
 local function svalnaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_sister_svalna::KilledUnit :364-388:
@@ -565,7 +565,7 @@ end
 -- Talk(SAY_SVALNA_DEATH) — the sjonnir JustDied-Talk precedent;
 -- the CaptainSurviveTalk cross-AI legs have no bridge.
 local function svalnaJustDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied :336 — _JustDied() sets DONE, first arm (before
     -- Talk). PORTED 2026-11-06 via creature:SetBossState.
     creature:SetBossState(DATA_SISTER_SVALNA, BOSS_STATE_DONE)
@@ -586,7 +586,7 @@ local function svalnaReset(event, creature)
     if creature:GetBossState(DATA_SISTER_SVALNA) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_SISTER_SVALNA, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetReactState(1) -- REACT_DEFENSIVE
 end
 
@@ -680,7 +680,7 @@ end
 -- EscortAI, no override); the scourge/death-strike seeds below re-key
 -- the DoAction gauntlet arms (:547-548) to combat start (svalna precedent).
 local function crokEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "scourge", {7500, 12500},
         function() onCrokScourgeStrike(creature, guid) end)
@@ -689,15 +689,15 @@ local function crokEnterCombat(event, creature, target)
 end
 
 local function crokLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function crokDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function crokReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 1, crokEnterCombat)
@@ -901,7 +901,7 @@ local function onYmirjarBanish(creature, guid)
 end
 
 local function ymirjarEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:InterruptNonMeleeSpells(false)
     local entry = creature:GetEntry()
@@ -939,21 +939,21 @@ local function ymirjarEnterCombat(event, creature, target)
 end
 
 local function ymirjarLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_frostwing_ymirjar_vrykul::JustDied :1215-1220 — only
 -- the warlord does anything: RemoveAurasDueToSpell(
 -- SPELL_WARLORDS_PRESENCE).
 local function ymirjarDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetEntry() == ENTRY_YMIRJAR_WARLORD then
         creature:RemoveAura(SPELL_WARLORDS_PRESENCE)
     end
 end
 
 local function ymirjarReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- cpp:1196-1199 — Reset entry-gated RemoveAurasDueToSpell(SPELL_ARCTIC_CHILL)
     -- (ungated in C++ — no HasAura query); the stale "no aura bridge on this
     -- path" claim is retracted — creature:RemoveAura is bridged. The C++
@@ -1069,7 +1069,7 @@ local function brandonEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859):
     -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "crusader", {6000, 10000},
         function() onBrandonCrusaderStrike(creature, guid) end)
@@ -1159,7 +1159,7 @@ local function grondelEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859):
     -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "charge", 500,
         function() onGrondelCharge(creature, guid) end)
@@ -1174,11 +1174,11 @@ local function grondelEnterCombat(event, creature, target)
 end
 
 local function captainCombatLeave(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function captainCombatReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_argent_captainAI::KilledUnit :832-835 — victim player ->
@@ -1201,8 +1201,8 @@ end
 local captainFirstDeath = {}
 
 local function captainDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    local guid = creature:GetGUID()
+    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
     if captainFirstDeath[guid] ~= false then
         captainFirstDeath[guid] = false
         creature:Talk(SAY_CAPTAIN_DEATH)
@@ -1327,7 +1327,7 @@ local function arnathEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859):
     -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "smite", {3000, 6000},
         function() onArnathSmite(creature, guid) end)
@@ -1466,7 +1466,7 @@ local function rupertEnterCombat(event, creature, target)
     -- C++ npc_argent_captainAI::JustEngagedWith (:859):
     -- SetHomePosition(*me) — base-AI engage arm, first in C++ order.
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "bomb", {15000, 20000},
         function() onRupertFelIronBomb(creature, guid) end)

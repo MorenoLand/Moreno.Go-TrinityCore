@@ -366,7 +366,7 @@ end
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch (:126-130) has no bridge.
 local function rotfaceJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     infection[guid] = nil
     creature:Talk(SAY_AGGRO)
@@ -405,7 +405,7 @@ local function despawnRotfaceSummons(guid)
             if summon then
                 -- A despawned creature's C++ EventMap dies with it;
                 -- cancel its Lua timers too (big-ooze sticky ticks).
-                cancelTimers(summon:GetGUID())
+                cancelTimers(summon:GetGUIDLow())
                 summon:Despawn()
             end
         end
@@ -417,7 +417,7 @@ local function rotfaceJustSummoned(event, creature, summon)
     if not summon then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local latched = rotfaceSummons[guid]
     if not latched then
         latched = {}
@@ -427,14 +427,14 @@ local function rotfaceJustSummoned(event, creature, summon)
 end
 
 local function rotfaceLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnRotfaceSummons(guid)
     cancelTimers(guid)
     infection[guid] = nil
 end
 
 local function rotfaceReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ Reset() :111 — _Reset() first: SetBossState NOT_STARTED
     -- only when the stored state != DONE (BossAI::_Reset,
     -- ScriptedCreature.cpp:499-509; the falric precedent — ev23
@@ -505,7 +505,7 @@ end
 -- timers must be cancelled here (CreateLuaEvent timers have no death
 -- auto-cancel — the devourer/festergut death-cancel precedent).
 local function rotfaceJustDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnRotfaceSummons(guid)
     -- C++ JustDied (:141-148): instance->
     -- DoRemoveAurasDueToSpellOnPlayers(MUTATED_INFECTION) is the
@@ -586,7 +586,7 @@ local function littleOozeSummoned(event, creature, summoner)
     if summoner then
         creature:AddThreat(summoner, 500000)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "sticky_ooze", 5000, function()
         stickyOozeTick(creature, guid)
     end)
@@ -594,7 +594,7 @@ end
 
 -- C++ npc_little_ooze::JustDied (:258-261): DespawnOrUnsummon.
 local function littleOozeDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Despawn()
 end
 
@@ -614,13 +614,13 @@ local function bigOozeSummoned(event, creature, summoner)
     creature:CastSpell(creature, SPELL_RADIATING_OOZE, true)
     creature:CastSpell(creature, SPELL_UNSTABLE_OOZE, true)
     creature:CastSpell(creature, SPELL_GREEN_ABOMINATION, true)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "sticky_ooze", 5000, function()
         stickyOozeTick(creature, guid)
     end)
     for _, boss in ipairs(creature:GetCreaturesInGrid(ENTRY_ROTFACE, 100)) do
         if boss:IsAlive() then
-            local bossGuid = boss:GetGUID()
+            local bossGuid = boss:GetGUIDLow()
             local latched = rotfaceSummons[bossGuid]
             if not latched then
                 latched = {}
@@ -639,14 +639,15 @@ local function bigOozeDoAction(event, creature, action)
     if action ~= EVENT_STICKY_OOZE then
         return
     end
-    cancelKey(creature:GetGUID(), "sticky_ooze")
+    cancelKey(creature:GetGUIDLow(), "sticky_ooze")
 end
 
 -- C++ npc_big_ooze::JustDied (:301-305): SummonedCreatureDespawn
 -- (remove from Rotface's summons) + DespawnOrUnsummon.
 local function bigOozeDied(event, creature, killer)
     local guid = creature:GetGUID()
-    cancelTimers(guid)
+    local guidLow = creature:GetGUIDLow()
+    cancelTimers(guidLow)
     for _, latched in pairs(rotfaceSummons) do
         for i, summon in ipairs(latched) do
             if summon and summon:GetGUID() == guid then
@@ -1014,10 +1015,10 @@ local function vileGasTriggerFilter(event, spell, effectIndex, targets)
     end
     local keepGuids = {}
     for _, target in ipairs(ranged) do
-        keepGuids[target:GetGUID()] = true
+        keepGuids[target:GetGUIDLow()] = true
     end
     for _, target in ipairs(targets:GetTargets()) do
-        if not keepGuids[target:GetGUID()] then
+        if not keepGuids[target:GetGUIDLow()] then
             targets:Remove(target)
         end
     end

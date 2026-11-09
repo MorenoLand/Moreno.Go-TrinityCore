@@ -390,12 +390,12 @@ local function saurfangJustSummoned(event, creature, summon)
     end
     summon:CastSpell(summon, SPELL_BLOOD_LINK_BEAST, true)
     summon:CastSpell(summon, SPELL_RESISTANT_SKIN, true)
-    local beasts = saurfangLiveBeasts[creature:GetGUID()]
+    local beasts = saurfangLiveBeasts[creature:GetGUIDLow()]
     if beasts == nil then
         beasts = {}
-        saurfangLiveBeasts[creature:GetGUID()] = beasts
+        saurfangLiveBeasts[creature:GetGUIDLow()] = beasts
     end
-    beasts[summon:GetGUID()] = true
+    beasts[summon:GetGUIDLow()] = true
     summon:DoZoneInCombat()
 end
 
@@ -403,16 +403,16 @@ end
 -- set twin, kept in step by the despawn (ev20) and death (ev21) legs
 -- (ichoron / bronjahm precedents). PORTED 2026-11-08 (tick 493).
 local function saurfangSummonDespawned(_, creature, summon)
-    local beasts = saurfangLiveBeasts[creature:GetGUID()]
+    local beasts = saurfangLiveBeasts[creature:GetGUIDLow()]
     if beasts then
-        beasts[summon:GetGUID()] = nil
+        beasts[summon:GetGUIDLow()] = nil
     end
 end
 
 local function saurfangSummonDied(_, creature, summon)
-    local beasts = saurfangLiveBeasts[creature:GetGUID()]
+    local beasts = saurfangLiveBeasts[creature:GetGUIDLow()]
     if beasts then
-        beasts[summon:GetGUID()] = nil
+        beasts[summon:GetGUIDLow()] = nil
     end
 end
 
@@ -592,7 +592,7 @@ local function relayStartOutro(creature)
         return
     end
     eventNpc:RemoveAura(SPELL_GRIP_OF_AGONY)
-    local npcGuid = eventNpc:GetGUID()
+    local npcGuid = eventNpc:GetGUIDLow()
     if isHorde then
         eventNpc:Talk(SAY_OUTRO_HORDE_1)
         schedule(npcGuid, "outro2", 10000, function()
@@ -611,7 +611,7 @@ local function relayStartOutro(creature)
 end
 
 local function saurfangJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = saurfangState[guid]
     if st and st.dead then
         return
@@ -657,14 +657,14 @@ local function saurfangJustEngagedWith(event, creature, target)
 end
 
 local function saurfangLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_deathbringer_saurfang::EnterEvadeMode (:327-331):
     -- ScriptedAI base + SetImmuneToPC(false) when _introDone — the
     -- UNIT_FLAG_IMMUNE_TO_PC (0x100) clear twin, already used in the
     -- engage handler (:293). Gated on the intro latch AND not-dead:
     -- the fight-won path calls _EnterEvadeMode() (non-virtual), which
     -- bypasses this virtual override, so a won fight stays immune.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = saurfangState[guid]
     if saurfangIntroDone[guid] and not (st and st.dead) then
         creature:RemoveFlag(59, 0x100)
@@ -682,7 +682,7 @@ end
 -- event-23 Reset arm and the JustReachedHome arm (which calls Reset() in
 -- C++ arm order).
 local function doSaurfangReset(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local st = saurfangState[guid]
     if st and st.dead then
@@ -744,7 +744,7 @@ end
 -- clears state (the sjonnir JustDied-Talk precedent does NOT apply;
 -- SAY_DEATH 13 rides the DamageTaken fight-won leg below).
 local function saurfangJustDied(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ JustReachedHome (:334-342): the _dead guard; _JustReachedHome()
@@ -755,7 +755,7 @@ end
 -- SPELL_MARK_OF_THE_FALLEN_CHAMPION 72293) via GetPlayersInWorld +
 -- mapId/instanceId filter + player:RemoveAura (the moroes precedent).
 local function saurfangReachHome(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = saurfangState[guid]
     if st and st.dead then
         return
@@ -790,7 +790,7 @@ end
 -- (dispatch IS bridged — creature:DoAction fires ev38); the SetImmuneToPC(true)
 -- (:368) leg is ported flag-only above via the SetFlag(59, 0x100) twin.
 local function saurfangDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = saurfangState[guid]
     if not st then
         -- C++ _frenzied/_dead default false; a DamageTaken before any
@@ -899,7 +899,7 @@ local function saurfangDoAction(event, creature, action)
     if not target then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = saurfangState[guid]
     if not st then
         st = { frenzied = false, dead = false, fallenChampionCastCount = 0 }

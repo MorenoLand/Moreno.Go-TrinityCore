@@ -1001,7 +1001,7 @@ local function onFrostmourneHeroic(creature, guid)
             spawner:SetFarVisible(true)
             spawner:CastSpell(spawner, LK.SPELL_SUMMON_SPIRIT_BOMB_1, true)
             spawner:CastSpell(spawner, LK.SPELL_SUMMON_SPIRIT_BOMB_2, true)
-            local spawnerGuid = spawner:GetGUID()
+            local spawnerGuid = spawner:GetGUIDLow()
             schedule(spawnerGuid, "wicked_spirit", 3000, function() onTriggerWickedSpirit(spawner, spawnerGuid, 13) end)
         end
     end
@@ -1044,7 +1044,7 @@ local function onHarvestSouls(creature, guid)
     local spirits = creature:GetCreaturesInRange(500, ENTRY_VILE_SPIRIT)
     if spirits then
         for _, spirit in ipairs(spirits) do
-            local spiritGuid = spirit:GetGUID()
+            local spiritGuid = spirit:GetGUIDLow()
             cancelTimers(spiritGuid)
             schedule(spiritGuid, "vile_activate", 56500, function() onVileSpiritActivate(spirit) end)
             spirit:SetReactState(REACT_PASSIVE)
@@ -1211,13 +1211,13 @@ local onIntroMove1
 
 local function lichKingDoAction(event, creature, action)
     if action == ACTION_START_ENCOUNTER then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_IN_PROGRESS)
         creature:Talk(SAY_LK_INTRO_1)
         creature:SetStandState(UNIT_STAND_STATE_STAND)
         schedule(guid, "intro_move_1", 4000, function() onIntroMove1(creature, guid) end)
     elseif action == ACTION_START_ATTACK then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "start_attack", 5000, function() onStartAttack(creature, guid) end)
     elseif action == ACTION_TELEPORT_BACK then
         if not creature:IsHeroic() then
@@ -1229,13 +1229,13 @@ local function lichKingDoAction(event, creature, action)
         -- instance script lands.
         creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, 0, 5000)
     elseif action == LK.ACTION_BREAK_FROSTMOURNE then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         creature:CastSpell(nil, LK.SPELL_SUMMON_BROKEN_FROSTMOURNE, true)
         creature:CastSpell(nil, LK.SPELL_SUMMON_BROKEN_FROSTMOURNE_2, true)
         creature:SetEquipmentSlots(LK.EQUIP_BROKEN_FROSTMOURNE, 0xFFFFFFFF, 0xFFFFFFFF)
         schedule(guid, "outro_talk_6", 2500, function() onOutroTalk6(creature, guid) end)
     elseif action == LK.ACTION_FINISH_OUTRO then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "outro_talk_7", 7000, function() onOutroTalk7(creature, guid) end)
         schedule(guid, "outro_talk_8", 17000, function() onOutroTalk8(creature, guid) end)
     end
@@ -1254,7 +1254,7 @@ end
 local function lichKingJustEngagedWith(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_the_lich_king.cpp:575 (JustEngagedWith arm; the setActive leg still has no bridge)
     creature:DoZoneInCombat() -- boss_the_lich_king.cpp:576 (JustEngagedWith arm; bridge live engine/world/lua_creature_events.go, 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     lkPhase[guid] = LK.PHASE_ONE
     schedule(guid, "horror", 20000, function() onSummonHorror(creature, guid) end)
@@ -1388,8 +1388,8 @@ end
 -- The tirion-despawn / strangulate-vehicle teleport-back / summons
 -- DespawnAll / _DespawnAtEvade legs have no bridge — documented.
 local function lichKingLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    lkPhase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    lkPhase[creature:GetGUIDLow()] = nil
     creature:CastSpell(creature, SPELL_KILL_FROSTMOURNE_PLAYERS)
 end
 
@@ -1401,10 +1401,10 @@ local function lichKingReset(event, creature)
     if creature:GetBossState(DATA_THE_LICH_KING) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetImmuneToAll(true) -- C++ Reset :530 SetImmuneToPC(true) (mandokir twin; 0x100|0x200 vs C++ 0x100 only)
     creature:SetReactState(REACT_PASSIVE) -- C++ Reset :531
-    lkPhase[creature:GetGUID()] = LK.PHASE_INTRO -- C++ Reset :533 SetPhase(PHASE_INTRO)
+    lkPhase[creature:GetGUIDLow()] = LK.PHASE_INTRO -- C++ Reset :533 SetPhase(PHASE_INTRO)
     -- C++ Reset :534 Initialize(): zero the plague-stack peak and the
     -- vile-spirit explosion count — a wipe must not inherit the last
     -- attempt's counters (the neck-deep / been-waiting latches read
@@ -1444,8 +1444,8 @@ end
 -- the FOG zone-light + zone-weather legs are ported below, in C++
 -- order (map:SetZoneOverrideLight, then map:SetZoneWeather).
 local function lichKingJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
-    lkPhase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    lkPhase[creature:GetGUIDLow()] = nil
     -- C++ :551 — _JustDied() first: SetBossState DONE, before the
     -- PLAY_MOVIE cast (C++ order). PORTED 2026-11-06 via
     -- creature:SetBossState.
@@ -1472,7 +1472,7 @@ end
 --     Talk(SAY_LK_KILL) — the razuvious player-gated variant precedent
 -- (the evade leg ported 2026-10-16; the phase leg has no bridge).
 local function lichKingKilledUnit(event, creature, victim)
-    if victim:GetObjectType() == "Player" and not creature:IsInEvadeMode() and lkPhase[creature:GetGUID()] ~= LK.PHASE_OUTRO then
+    if victim:GetObjectType() == "Player" and not creature:IsInEvadeMode() and lkPhase[creature:GetGUIDLow()] ~= LK.PHASE_OUTRO then
         creature:Talk(SAY_LK_KILL)
     end
 end
@@ -1549,7 +1549,7 @@ end
 -- so only JustDied cancels the pending activate — mirroring the
 -- m_Events teardown when the summon despawns/dies.
 local function vileSpiritDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function lichKingJustSummoned(_, creature, summoned)
@@ -1566,7 +1566,7 @@ local function lichKingJustSummoned(_, creature, summoned)
         summoned:CastSpell(summoned, SPELL_RISEN_WITCH_DOCTOR_SPAWN, true)
         summoned:SetReactState(0)
         summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
-        local summonedGuid = summoned:GetGUID()
+        local summonedGuid = summoned:GetGUIDLow()
         schedule(summonedGuid, "start_movement", 5000, function()
             if summoned:IsDead() then
                 return
@@ -1593,7 +1593,7 @@ local function lichKingJustSummoned(_, creature, summoned)
         summoned:CastSpell(summoned, SPELL_BROKEN_FROSTMOURNE, true)
         creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, LIGHT_SOULSTORM, 10000)
         creature:GetMap():SetZoneWeather(AREA_ICECROWN_CITADEL, WEATHER_STATE_BLACKSNOW, 0.5)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "outro_soul_barrage", 5000, function() onOutroSoulBarrage(creature, guid) end)
     elseif summoned:GetEntry() == ENTRY_ICE_SPHERE then
         local target = randomPlayerAnywhere(creature)
@@ -1621,8 +1621,8 @@ local function lichKingJustSummoned(_, creature, summoned)
         -- C++ :780: no VileSpiritActivateEvent while in PHASE_FROSTMOURNE
         -- (phase model landed 2026-11-08; the phase is only ever written
         -- by the unported EVENT_HARVEST_SOULS, so the gate is dormant).
-        if lkPhase[creature:GetGUID()] ~= LK.PHASE_FROSTMOURNE then
-            local spiritGuid = summoned:GetGUID()
+        if lkPhase[creature:GetGUIDLow()] ~= LK.PHASE_FROSTMOURNE then
+            local spiritGuid = summoned:GetGUIDLow()
             schedule(spiritGuid, "vile_activate", 15000, function() onVileSpiritActivate(summoned) end)
         end
     end
@@ -1645,7 +1645,7 @@ end
 -- 2026-11-08 (phase model; the "no MovementInform bridge" claim
 -- below is stale — ev28 landed, lua_creature_events.go:4699/:5725).
 local function lichKingDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local phase = lkPhase[guid]
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -1714,7 +1714,7 @@ local function lichKingMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == LK.POINT_LK_INTRO_1 then
         -- C++ :833-836: schedule for next update cycle, current update
         -- must finalize movement (1ms, PHASE_INTRO). PORTED 2026-11-08.
@@ -1835,14 +1835,14 @@ local function onHorrorEnrage(creature, guid)
 end
 
 local function shamblingHorrorJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "horror_shockwave", {20000, 25000}, function() onHorrorShockwave(creature, guid) end)
     schedule(guid, "horror_enrage", {11000, 14000}, function() onHorrorEnrage(creature, guid) end)
 end
 
 local function shamblingHorrorLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_shambling_horror_icc DamageTaken (:1308-1313): first time,
@@ -1853,7 +1853,7 @@ end
 local horrorFrenzied = {}
 
 local function shamblingHorrorDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if horrorFrenzied[guid] then
         return
     end
@@ -1925,7 +1925,7 @@ local function ragingSpiritDoAction(event, creature, action)
     if action ~= ACTION_DISABLE_RAGING then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ragingFrostmournePhase[guid] = true
     schedule(guid, "raging_aggressive", 52000, function() onRagingAggressive(creature, guid) end)
@@ -1935,7 +1935,7 @@ local function ragingSpiritDoAction(event, creature, action)
 end
 
 local function ragingSpiritJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ragingFrostmournePhase[guid] = nil
     creature:SetReactState(REACT_PASSIVE)
@@ -1954,8 +1954,8 @@ local function ragingSpiritJustEngagedWith(event, creature, target)
 end
 
 local function ragingSpiritLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    ragingFrostmournePhase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    ragingFrostmournePhase[creature:GetGUIDLow()] = nil
 end
 
 -- C++ npc_spirit_warden: Reset — 1-arg DoCast(SPELL_DARK_HUNGER)
@@ -1968,14 +1968,14 @@ local function onSoulRip(creature, guid)
 end
 
 local function spiritWardenJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_DARK_HUNGER)
     schedule(guid, "soul_rip", {12000, 15000}, function() onSoulRip(creature, guid) end)
 end
 
 local function spiritWardenLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_spirit_warden::JustDied (boss_the_lich_king.cpp:1838-1841):
@@ -2026,7 +2026,7 @@ local function valkyrIsSummonedBy(event, creature)
     creature:SetReactState(REACT_PASSIVE)
     creature:SetCombatMovement(false)
     creature:CastSpell(creature, SPELL_WINGS_OF_THE_DAMNED)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "valkyrGrab", 2500, function() LK.onValkyrGrab(creature, guid) end)
 end
 
@@ -2038,10 +2038,10 @@ RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 23, shamblingHorrorLeaveCombat)
 -- m_Events die with it, so cancel the timer on death. Inline: the
 -- file sits at 199 main-chunk locals.
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_DRUDGE_GHOUL, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 1, ragingSpiritJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 2, ragingSpiritLeaveCombat)
@@ -2056,7 +2056,7 @@ RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 22, valkyrIsSummonedBy)
 -- cancel the grab timer and drop the target-select state. Inline:
 -- the file sits at 199 main-chunk locals.
 RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 4, function(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     LK.valkyrGrabbed[guid] = nil
     LK.valkyrTarget[guid] = nil
@@ -2101,7 +2101,7 @@ LK.valkyrMovementInform = function(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == LK.POINT_CHARGE then
         local target = LK.valkyrTarget[guid]
         if target == nil then
@@ -2169,7 +2169,7 @@ LK.onValkyrLifeSiphon = function(creature, guid)
 end
 
 LK.valkyrDamageTaken = function(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not creature:IsHeroic() or LK.valkyrGrabbed[guid] == nil then
         return
     end
@@ -2211,7 +2211,7 @@ LK.spiritBombMovementInform = function(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE or id ~= LK.POINT_GROUND then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "bombExplosion", 3000, function() LK.spiritBombExplode(creature, guid) end)
 end
 
@@ -2227,7 +2227,7 @@ end
 RegisterCreatureEvent(LK.ENTRY_SPIRIT_BOMB, 22, LK.spiritBombIsSummonedBy)
 RegisterCreatureEvent(LK.ENTRY_SPIRIT_BOMB, 28, LK.spiritBombMovementInform)
 RegisterCreatureEvent(LK.ENTRY_SPIRIT_BOMB, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 -- C++ EVENT_FROSTMOURNE_TALK_1 (:1776-1780): Talk(SAY_TERENAS_INTRO_1 0)
@@ -2295,7 +2295,7 @@ local function terenasDamageTaken(event, creature, attacker, damage)
         if not creature:HasAura(SPELL_TERENAS_LOSES_INSIDE) and not creature:IsHeroic() then
             creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             creature:CastSpell(creature, SPELL_TERENAS_LOSES_INSIDE)
-            local guid = creature:GetGUID()
+            local guid = creature:GetGUIDLow()
             schedule(guid, "terenas_teleport_back", 1000, function() onTerenasTeleportBack(creature) end)
             local warden = creature:FindNearestCreature(ENTRY_SPIRIT_WARDEN, 20.0)
             if warden then
@@ -2328,7 +2328,7 @@ RegisterCreatureEvent(ENTRY_TERENAS_HEROIC, 9, terenasDamageTaken)
 -- PORTED 2026-11-08, onTerenasTeleportBack above.)
 local function terenasDoAction(event, creature, action)
     if action == ACTION_FROSTMOURNE_INTRO then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         creature:SetFarVisible(false)
         if not creature:IsHeroic() then
             creature:SetHealth(math.floor(creature:GetMaxHealth() / 2))
@@ -2385,7 +2385,7 @@ local function onTerenasOutroTalk2(creature, guid)
 end
 
 local function terenasIsSummonedBy(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
     if lichKing then
@@ -2413,7 +2413,7 @@ local tirionFns = {}
 -- C++ Reset (:1166-1171): _events.Reset() + remove the gossip flag
 -- when the Lich King is DONE. Keyed to ev23 (the lichKingReset twin).
 tirionFns.reset = function(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     tirionPhase[guid] = nil
     if creature:GetBossState(DATA_THE_LICH_KING) == BOSS_STATE_DONE then
@@ -2436,7 +2436,7 @@ tirionFns.movementInform = function(event, creature, moveType, id)
             lichKing:DoAction(ACTION_START_ENCOUNTER)
         end
     elseif id == LK.POINT_TIRION_OUTRO_1 then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "tirion_outro_jump", 1, function() tirionFns.outroJump(creature, guid) end)
     end
 end
@@ -2447,7 +2447,7 @@ end
 -- EVENT_OUTRO_BLESS 18s / EVENT_OUTRO_REMOVE_ICE 23s /
 -- EVENT_OUTRO_MOVE_1 25s (PHASE_OUTRO).
 tirionFns.doAction = function(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == LK.ACTION_CONTINUE_INTRO then
         creature:Talk(LK.SAY_TIRION_INTRO_1)
         schedule(guid, "tirion_intro_talk_1", 34000, function() tirionFns.introTalk1(creature, guid) end)
@@ -2483,7 +2483,7 @@ tirionFns.gossipSelect = function(event, player, creature, sender, action, code,
     if listID ~= 0 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     tirionPhase[guid] = LK.PHASE_INTRO
     creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(), bit32.bnot(LK.UNIT_NPC_FLAG_GOSSIP)))
     creature:SetWalk(true)
@@ -2616,7 +2616,7 @@ local frostmourneFns = {}
 -- C++ IsSummonedBy (:1923-1927): SetPhase(PHASE_OUTRO) +
 -- EVENT_OUTRO_KNOCK_BACK 3s (PHASE_OUTRO).
 frostmourneFns.isSummonedBy = function(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "frostmourne_knock_back", 3000, function() frostmourneFns.knockBack(creature, guid) end)
 end
 
@@ -2627,7 +2627,7 @@ frostmourneFns.doAction = function(event, creature, action)
     if action ~= LK.ACTION_SUMMON_TERENAS then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "frostmourne_summon_terenas", 6000, function() frostmourneFns.summonTerenas(creature, guid) end)
 end
 
@@ -2738,14 +2738,14 @@ local function strangulateVehicleSummoned(_, creature, summoner)
     end
     creature:SetFacingToObject(summoner)
     creature:CastSpell(summoner, SPELL_HARVEST_SOUL_VEHICLE)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "vehicle_move_to_lich_king", 2000, function() onVehicleMoveToLichKing(creature, guid) end)
     schedule(guid, "vehicle_teleport", 6000, function() onVehicleTeleport(creature, guid) end)
 end
 
 local function strangulateVehicleLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_strangulate_vehicle::DoAction ACTION_TELEPORT_BACK
@@ -3274,7 +3274,7 @@ RegisterSpellEvent(SPELL_RESTORE_SOUL, 4, function(event, spell, effectIndex)
     local spirits = caster:GetCreaturesInRange(200, LK.NPC_WICKED_SPIRIT)
     if spirits then
         for _, spirit in ipairs(spirits) do
-            cancelTimers(spirit:GetGUID())
+            cancelTimers(spirit:GetGUIDLow())
             spirit:SetReactState(REACT_PASSIVE)
             spirit:EnterEvadeMode()
         end
@@ -3462,7 +3462,7 @@ RegisterSpellEvent(SPELL_VILE_SPIRIT_MOVE_SEARCH, 7, function(event, spell, effe
     if caster == nil then
         return
     end
-    LK.vileMoveTarget[caster:GetGUID()] = list[math.random(#list)]:GetGUID()
+    LK.vileMoveTarget[caster:GetGUIDLow()] = list[math.random(#list)]:GetGUID()
 end)
 
 -- C++ spell_the_lich_king_vile_spirit_move_target_search::HandleScript
@@ -3478,7 +3478,7 @@ RegisterSpellEvent(SPELL_VILE_SPIRIT_MOVE_SEARCH, 5, function(event, spell, targ
         return
     end
     local caster = spell:GetCaster()
-    if caster == nil or target:GetGUID() ~= LK.vileMoveTarget[caster:GetGUID()] then
+    if caster == nil or target:GetGUID() ~= LK.vileMoveTarget[caster:GetGUIDLow()] then
         return
     end
     caster:AttackStart(target)
@@ -3532,7 +3532,7 @@ RegisterSpellEvent(LK.SPELL_VALKYR_TARGET_SEARCH, 7, function(event, spell, effe
     if caster == nil then
         return
     end
-    local guid = caster:GetGUID()
+    local guid = caster:GetGUIDLow()
     if effectIndex == 0 then
         for _, target in ipairs(targets:GetTargets()) do
             if target:HasAura(LK.SPELL_VALKYR_TARGET_SEARCH) then

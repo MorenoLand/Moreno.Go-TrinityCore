@@ -526,7 +526,7 @@ end
 -- fly/gravity off + REACT_DEFENSIVE + _isInAirPhase = false. The
 -- asphyxiation summons.DoAction leg stays out (no summon-set bridge).
 local function sindragosaMovementInform(event, creature, moveType, id)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if moveType == EFFECT_MOTION_TYPE and id == POINT_TAKEOFF then
         schedule(guid, "air_movement", 1, function() onAirMovement(creature, guid) end)
     elseif moveType == POINT_MOTION_TYPE and id == POINT_AIR_PHASE then
@@ -590,7 +590,7 @@ end
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch (:269-275) has no bridge.
 local function sindragosaJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ :277-278 — DoCastSelf(SPELL_FROST_AURA) +
     -- DoCastSelf(SPELL_PERMAEATING_CHILL), non-triggered.
@@ -624,7 +624,7 @@ end
 -- phase machine is unported), so the suppression stays out; the base
 -- evade path rides ev24 FAIL (ported above).
 local function sindragosaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function sindragosaReset(event, creature)
@@ -635,9 +635,9 @@ local function sindragosaReset(event, creature)
     if creature:GetBossState(DATA_SINDRAGOSA) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_SINDRAGOSA, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
-    sindragosaThirdPhase[creature:GetGUID()] = nil
-    sindragosaAirPhase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    sindragosaThirdPhase[creature:GetGUIDLow()] = nil
+    sindragosaAirPhase[creature:GetGUIDLow()] = nil
     -- Alive-gated like the tank-marker cast below: ev23 fires on
     -- death too (fireCreatureDied runs Reset before the kill-credit
     -- criteria read, kill.go:1091/:1400), and a death-time zero
@@ -684,7 +684,7 @@ end
 -- — single-flip latch (gothik precedent); schedules
 -- EVENT_THIRD_PHASE_CHECK 1s (:403-410).
 local function sindragosaDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not sindragosaThirdPhase[guid] and creature:GetHealthPct() <= 35 then
         sindragosaThirdPhase[guid] = true
         -- C++ DamageTaken (:403-410): CancelEvent(EVENT_AIR_PHASE) on the
@@ -716,7 +716,7 @@ local function sindragosaJustDied(event, creature, killer)
     -- legs would keep firing on the corpse (festergut/rotface
     -- death-cancel precedent); drop the per-GUID third-phase latch
     -- like Reset does.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sindragosaThirdPhase[guid] = nil
     sindragosaAirPhase[guid] = nil
@@ -779,7 +779,7 @@ local function onSpinestalkerTailSweep(creature, guid)
 end
 
 local function spinestalkerEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "roar", {20000, 25000}, function() onSpinestalkerRoar(creature, guid) end)
     schedule(guid, "cleave", {10000, 15000}, function() onSpinestalkerCleave(creature, guid) end)
@@ -868,13 +868,13 @@ local function rimefangMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE or id ~= POINT_FROSTWYRM_FLY_IN then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "icy_blast_cast", 250, function() onRimefangIcyBlastCast(creature, guid) end)
     schedule(guid, "icy_blast", {60000, 70000}, function() onRimefangIcyBlast(creature, guid) end)
 end
 
 local function rimefangEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     rimefangBlastCounter[guid] = nil
     creature:CastSpell(creature, SPELL_FROST_AURA_RIMEFANG, true)
@@ -914,18 +914,18 @@ local function onHandlerConcussiveShock(creature, guid)
 end
 
 local function handlerEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "orderwhelp", 3000, function() onHandlerOrderWhelp(creature, guid) end)
     schedule(guid, "concussive", {8000, 10000}, function() onHandlerConcussiveShock(creature, guid) end)
 end
 
 local function addLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function addReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ spinestalker Reset (:657-670) / rimefang Reset (:795-808):
@@ -933,7 +933,7 @@ end
 -- DoAction that sets _summoned is unported (senders unported), so the
 -- adds are perpetually pre-intro in this port and Reset always sets fly.
 local function frostwyrmReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetCanFly(true)
     creature:SetDisableGravity(true)
 end

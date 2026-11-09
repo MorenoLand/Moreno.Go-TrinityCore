@@ -468,7 +468,7 @@ local function cleanAuras(creature)
 end
 
 local function lanaThelJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Reset (:169): _vampires.clear() (engage is the clear site —
     -- see the vampireKey note above; never in ev23 Reset).
@@ -499,7 +499,7 @@ end
 -- C++ Reset() timer machinery — cancel/re-arm on combat events
 -- (the maiden convention).
 local function lanaThelLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function lanaThelReset(event, creature)
@@ -510,7 +510,7 @@ local function lanaThelReset(event, creature)
     if creature:GetBossState(DATA_BLOOD_QUEEN_LANA_THEL) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset() ends with CleanAuras() (boss_blood_queen_lana_thel.cpp:168),
     -- after the timer arms; the _vampires.clear() leg (:169) ports at
     -- ENGAGE (clearVampireMarks — see the vampireKey note; a Reset
@@ -532,7 +532,7 @@ end
 -- Talk(SAY_DEATH) — the sjonnir JustDied-Talk precedent.
 
 local function lanaThelJustDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied :196 — _JustDied() sets DONE, first arm (before
     -- Talk). PORTED 2026-11-06 via creature:SetBossState.
     creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_DONE)

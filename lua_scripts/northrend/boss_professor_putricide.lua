@@ -363,7 +363,7 @@ end
 -- Talk(SAY_AGGRO) — the auriaya engage-port precedent; the
 -- CheckRequiredBosses evade branch has no bridge.
 local function putricideJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phase[guid] = 1 -- C++ :271 SetPhase(PHASE_COMBAT_1)
     creature:Talk(SAY_AGGRO)
@@ -386,7 +386,7 @@ end
 -- C++ Reset/_Reset() timer machinery — cancel/re-arm on combat
 -- events (the maiden convention).
 local function putricideLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phase[guid] = nil
 end
@@ -422,9 +422,9 @@ local function putricideReset(event, creature)
     -- :238). PORTED 2026-11-06 via creature:SetBossState. No != DONE
     -- gate: the C++ call is explicit, not _Reset().
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_NOT_STARTED)
-    cancelTimers(creature:GetGUID())
-    phase[creature:GetGUID()] = 1 -- C++ :240 SetPhase(PHASE_COMBAT_1)
-    experimentStage[creature:GetGUID()] = nil -- C++ :241 _experimentState = EXPERIMENT_STATE_OOZE (0)
+    cancelTimers(creature:GetGUIDLow())
+    phase[creature:GetGUIDLow()] = 1 -- C++ :240 SetPhase(PHASE_COMBAT_1)
+    experimentStage[creature:GetGUIDLow()] = nil -- C++ :241 _experimentState = EXPERIMENT_STATE_OOZE (0)
     -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset: flip follows events.Reset).
     creature:SetReactState(1) -- REACT_DEFENSIVE
@@ -461,8 +461,8 @@ local function putricideJustDied(event, creature, killer)
     -- have no death auto-cancel, so the self-re-arming slime-puddle leg
     -- would keep firing on the corpse (festergut/rotface death-cancel
     -- precedent).
-    cancelTimers(creature:GetGUID())
-    phase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    phase[creature:GetGUIDLow()] = nil
     -- C++ JustDied :296 — _JustDied() sets DONE, first arm (before
     -- Talk). PORTED 2026-11-06 via creature:SetBossState.
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_DONE)
@@ -543,7 +543,7 @@ local function putricideDamageTaken(event, creature, attacker, damage)
     if creature:IsCasting() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local ph = phase[guid] or 1
     if ph == 1 then
         if creature:HealthAbovePct(80) then
@@ -577,8 +577,8 @@ local function putricideDoAction(event, creature, action)
     -- C++ :531 — entering PHASE_COMBAT_3 cancels EVENT_UNSTABLE_
     -- EXPERIMENT; the latch flips phase[guid] to 3 before dispatching
     -- this DoAction, so the gate reads the new phase.
-    if (phase[creature:GetGUID()] or 1) == 3 then
-        cancelTimer(creature:GetGUID(), "unstable")
+    if (phase[creature:GetGUIDLow()] or 1) == 3 then
+        cancelTimer(creature:GetGUIDLow(), "unstable")
     end
     if not creature:IsHeroic() then
         return
@@ -644,7 +644,7 @@ local function unstableExperimentScript(event, spell, hitTarget, effectIndex)
     if caster == nil or caster:GetObjectType() ~= "Creature" then
         return
     end
-    local guid = caster:GetGUID()
+    local guid = caster:GetGUIDLow()
     local stage = experimentStage[guid] or 0
     experimentStage[guid] = 1 - stage
     local stalkers = caster:GetCreaturesInGrid(NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER, 200)
@@ -729,7 +729,7 @@ end
 -- Evade rides this same handler (Go fires ev23 before ev2 on the
 -- evade path; C++ EnterEvadeMode ends in Reset()).
 local function oozeReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local entry = creature:GetEntry()
     local aura = oozeAuraSpell[entry]
     if aura == nil then
@@ -751,7 +751,7 @@ end
 -- poller is a Lua artifact, cancelled here so it never fires on the
 -- corpse (the putricide death-cancel precedent).
 local function oozeJustDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     oozeSelect[guid] = nil
 end
@@ -760,7 +760,7 @@ end
 -- hit -> _newTargetSelectTimer = 1000 (unconditional reset).
 local function oozeSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TEAR_GAS_CREATURE then
-        oozeSelect[creature:GetGUID()] = true
+        oozeSelect[creature:GetGUIDLow()] = true
     end
 end
 
@@ -768,7 +768,7 @@ end
 -- timer and the hit spell is the entry's hit-target spell ->
 -- _newTargetSelectTimer = 1000 + REACT_PASSIVE until next selection.
 local function oozeSpellHitTarget(event, creature, target, spellId)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not oozeSelect[guid] and spellId == oozeHitTargetSpell[creature:GetEntry()] then
         oozeSelect[guid] = true
         creature:SetReactState(0) -- REACT_PASSIVE
