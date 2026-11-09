@@ -532,12 +532,15 @@ local function rotfaceJustDied(event, creature, killer)
     -- C++ :148 + boss_professor_putricide.cpp:479-480,590-592 —
     -- professor DoAction(ACTION_ROTFACE_DEATH) schedules
     -- EVENT_ROTFACE_DIES at 4500ms: Talk(SAY_ROTFACE_DEATH 3) +
-    -- EnterEvadeMode (no bridge — stays out). The Talk leg rides a
-    -- 4500ms timer on the rotface GUID, after cancelTimers above
-    -- (the festergut death-talk precedent).
+    -- EnterEvadeMode. Both legs ride a 4500ms timer on the rotface
+    -- GUID, after cancelTimers above (the festergut death-talk
+    -- precedent); the EnterEvadeMode leg ports 2026-11-09 (tick 556)
+    -- on the bridged method (lua_creature_events.go:5051) — the old
+    -- "no bridge" note was stale.
     schedule(guid, "professor_death_talk", 4500, function()
         relayProfessor(creature, function(professor)
             professor:Talk(SAY_PROFESSOR_ROTFACE_DEATH)
+            professor:EnterEvadeMode()
         end)
     end)
 end

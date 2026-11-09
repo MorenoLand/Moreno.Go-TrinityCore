@@ -1772,8 +1772,8 @@ end
 
 -- C++ DamageTaken: lethal while _canDown -> health-1, triggered
 -- self-cast 40409, Talk(SAY_MAIEV_SHADOWSONG_DOWN), _canDown=false
--- (the ACTION_MAIEV_DOWN_FADE re-arm lives in the unmodeled
--- maiev-down AuraScript — standing AuraScript gap).
+-- (the ACTION_MAIEV_DOWN_FADE re-arm is ported in maievDownRemove
+-- below, tick 556).
 local function maievDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUIDLow()
     local state = getMaievState(guid)
@@ -2037,13 +2037,17 @@ RegisterAuraEvent(SPELL_DEMON_TRANSFORM_2, 1, demonTransform2Tick)
 -- UNIT_FLAG_NOT_SELECTABLE; AfterEffectRemove clears the flag and
 -- calls the target AI's DoAction(ACTION_MAIEV_DOWN_FADE). The flag
 -- legs ride the bridged SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59);
--- the DoAction leg has no bridge and stays out.
+-- the DoAction leg ports as a direct state re-arm — its only C++
+-- effect is _canDown = true (boss_illidan.cpp:1659-1660), which is
+-- Lua-local maievState, so no DoAction dispatch bridge is needed.
+-- PORTED 2026-11-09 (tick 556).
 local function maievDownApply(event, aura, target)
     target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
 
 local function maievDownRemove(event, aura, target)
     target:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    getMaievState(target:GetGUIDLow()).canDown = true
 end
 
 RegisterAuraEvent(SPELL_MAIEV_DOWN, 2, maievDownApply)

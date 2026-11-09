@@ -159,17 +159,36 @@
 --   (event 15 itself is live — boss_ai.go:1904; the old "rides the
 --   unported ACTION machine" note is retired — the machine ports
 --   below via ev38 + the blood-link ev1 tick.)
--- boss_deathbringer_saurfang intro machine — Talk(
---   SAY_INTRO_ALLIANCE_2 0 / SAY_INTRO_ALLIANCE_3 1 /
---   SAY_INTRO_ALLIANCE_6 2 / SAY_INTRO_ALLIANCE_7 3 /
---   SAY_INTRO_HORDE_2 4 / SAY_INTRO_HORDE_4 5 /
---   SAY_INTRO_HORDE_9 6) ride the EVENT_INTRO_* scheduler machine
---   (:463-492, intro phase machine — the gothik precedent); the
---   DoAction(PHASE_INTRO_A/H / ACTION_CONTINUE_INTRO) legs (:548-590)
---   stay out on the sender, not dispatch (DoAction IS bridged —
---   creature:DoAction fires ev38, lua_creature_events.go:802): the
---   callers are the unregistered event NPCs' gossip-started intro
---   scheduler / MovementInform (:670/:726/:870/:916); the
+-- boss_deathbringer_saurfang intro machine — tick-556 verdict
+--   (2026-11-09): all three DoAction arms STAY OUT (no code change);
+--   the "Talk legs ride the DoAction legs" phrasing is retired — the
+--   Talk lines (SAY_INTRO_ALLIANCE_2 0 / _3 1 / _6 2 / _7 3 /
+--   SAY_INTRO_HORDE_2 4 / _4 5 / _9 6) ride the EVENT_INTRO_*
+--   scheduler (:463-492), which is itself driven by the unported
+--   DoAction arms; neither layer ports. Arm by arm: PHASE_INTRO_A
+--   (1) / PHASE_INTRO_H (2) (:552-565) — events.SetPhase (no bridge)
+--   + SetHomePosition(deathbringerPos -496.3542, 2211.33, 541.1138,
+--   :558; bridged, lua_creature_events.go:6405) + MovePoint(
+--   POINT_SAURFANG 3781300, :559; unbridged — no MovePoint on the
+--   creature surface) + schedules EVENT_INTRO_ALLIANCE_2 (2.5s) / _3
+--   (20s) / HORDE_2 (5s); ACTION_CONTINUE_INTRO (-3781301, :567-579)
+--   — _introDone-gated schedules EVENT_INTRO_ALLIANCE_6 (7s) /
+--   FINISH (8s) / HORDE_4 (6.5s) / HORDE_9 (48.2s) / FINISH (55.7s).
+--   No Lua sender for any of the three: dispatched only by the
+--   unregistered event NPCs (horde :670/:726, alliance :870/:916 —
+--   gossip-started scheduler / MovementInform POINT_FIRST_STEP); the
+--   scheduled EVENT_INTRO_* have zero Lua handlers, so even a
+--   dispatched arm would schedule dead events. No SetHomePosition-only
+--   fragment ports — the home-position leg has no other live trigger.
+--   The EVENT_INTRO_* bodies (:463-492) stay out with the machine
+--   (ALLIANCE_2/HORDE_2: RemoveFlag(NOT_SELECTABLE) + SetFaction
+--   (bridged :6079) + Talk; ALLIANCE_6: Talk x2 + GRIP self-cast;
+--   HORDE_9: GRIP + Talk; FINISH: SetPhase(PHASE_COMBAT) + _introDone
+--   + SetImmuneToPC(false)). Corrects the old ":548-590" cite —
+--   intro arms are :548-579; :580-592 is the MARK arm, ported.
+--   (DoAction dispatch itself IS bridged — creature:DoAction fires
+--   ev38, lua_creature_events.go:802 — the block is the sender +
+--   the handlers, not dispatch.) The
 --   ACTION_MARK_OF_THE_FALLEN_CHAMPION leg (:580-592) PORTED via
 --   ev38 (saurfangDoAction below) + the blood-link ev1 tick
 --   (bloodLinkTick below): random threat-list player, alive, without

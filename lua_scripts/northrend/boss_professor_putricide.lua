@@ -63,9 +63,12 @@
 -- Talk(EMOTE_CHOKING_GAS_BOMB 10) rides EVENT_CHOKING_GAS_BOMB
 -- (:652-655) — OUT: P2/P3 phase-gated (:526). Talk(
 -- SAY_FESTERGUT_DEATH 1) rides EVENT_FESTERGUT_DIES (:579-581)
--- and Talk(SAY_ROTFACE_DEATH 3) rides EVENT_ROTFACE_DIES
--- (:590-592) — OUT: Talk-only + EnterEvadeMode, DoAction-phase
--- driven. Talk(SAY_TRANSFORM_1 7) / Talk(SAY_TRANSFORM_2 8) ride
+-- — relay-PORTED from festergut JustDied (Talk + EnterEvadeMode,
+-- boss_festergut.lua:499-509); Talk(SAY_ROTFACE_DEATH 3) rides
+-- EVENT_ROTFACE_DIES (:590-592) — relay-PORTED Talk-only from rotface
+-- JustDied (boss_rotface.lua:533-541); its EnterEvadeMode leg is
+-- missing there on a stale "no bridge" claim (see DoAction above).
+-- Talk(SAY_TRANSFORM_1 7) / Talk(SAY_TRANSFORM_2 8) ride
 -- the EVENT_PHASE_TRANSITION legs (:669-690) — OUT: phase machine.
 -- EVENT_SLIME_PUDDLE (:602-609) PORTED 2026-10-14: SelectTargetList(
 -- 2, Random, 0, 0.0f, playerOnly=TRUE) -> up to 2 random players x
@@ -101,16 +104,52 @@
 -- was disproved (CreateLuaEvent is a real registered bridge,
 -- engine/scripting/runtime.go:798); each arm is now classified
 -- individually against the C++.
--- boss_professor_putricide DoAction — Talk(
--- SAY_FESTERGUT_GASEOUS_BLIGHT 0) rides ACTION_FESTERGUT_GAS,
--- Talk(SAY_ROTFACE_OOZE_FLOOD 2) rides ACTION_ROTFACE_OOZE, and
--- Talk(SAY_PHASE_TRANSITION_HEROIC 6) rides ACTION_CHANGE_PHASE — GAS Talk
--- already relay-ported via festergut onInhaleBlight (boss_festergut.lua:290-296,
--- krick pattern; arrival-path sender MovementInform POINT_FESTERGUT,
--- boss_professor_putricide.cpp:378, still unported); ROTFACE_OOZE Talk stays out —
--- ev38 dispatch bridged, senders MovementInform POINT_ROTFACE (:385) + own
--- EVENT_ROTFACE_OOZE_FLOOD self-DoAction (:595) inside the unported PHASE_ROTFACE
--- machine; CHANGE_PHASE PORTED 2026-11-09 via the ev38 receiver:
+-- boss_professor_putricide DoAction — tick-556 verdict (2026-11-09):
+-- all six FESTERGUT/ROTFACE arms STAY OUT of the ev38 receiver (no
+-- code change); only ACTION_CHANGE_PHASE ports (below). A receiver
+-- branch for any of the six would be dead code: no Lua sender
+-- dispatches ev38 to Putricide with any of them (festergut/rotface
+-- engage, death and inhale handlers relay directly or dispatch
+-- nothing — verified in boss_festergut.lua / boss_rotface.lua this
+-- tick; no "-36626x" DoAction exists anywhere in lua_scripts/).
+-- ACTION_FESTERGUT_COMBAT (-366260, icecrown_citadel.h:490; :424-432):
+-- SetPhase (no bridge) + MovePoint(POINT_FESTERGUT :427, unbridged)
+-- + EngagementStart (no Lua method) gate it; SetSpeedRate (:426,
+-- bridged lua_creature_events.go:5492) + SetReactState(PASSIVE :429,
+-- bridged :4266) serve only the unported watch-position move, and
+-- the heroic EVENT_FESTERGUT_GOO schedule (:431) rides the OUT
+-- handler — no live leg.
+-- ACTION_FESTERGUT_GAS (-366261; :433-436): BOTH legs already
+-- relay-ported from festergut onInhaleBlight 3rd (boss_festergut.lua:
+-- 320-326: Talk(SAY_FESTERGUT_GASEOUS_BLIGHT 0) + triggered self-cast
+-- SPELL_RELEASE_GAS_VISUAL 69125); the MovementInform POINT_FESTERGUT
+-- arrival sender (:378) is moot. (Corrects the old ":290-296" cite.)
+-- ACTION_FESTERGUT_DEATH (-366262; :437-439): downstream
+-- EVENT_FESTERGUT_DIES (:579-581, Talk(1) + EnterEvadeMode) already
+-- relay-ported from festergut JustDied (boss_festergut.lua:499-509,
+-- 4s timer on the festergut GUID).
+-- ACTION_ROTFACE_COMBAT (-366270; :440-471): SetPhase + MovePoint
+-- (POINT_ROTFACE :443) + EngagementStart gate it; the ooze-flood
+-- dummy selection (:448-469) is individually bridgeable —
+-- GetCreaturesInGrid(NPC_PUDDLE_STALKER 37013, 50) + GetZ height
+-- filter (stalker Z > rotface Z + 5.0, :210-221) + GetDistance sort
+-- (object.go generic fallback) + math.random pick without
+-- replacement into _oozeFloodDummyGUIDs[0..3] — but its sole
+-- consumer ACTION_ROTFACE_OOZE is unreachable (below), so the array
+-- would be dead state.
+-- ACTION_ROTFACE_OOZE (-366271; :472-478): Talk(SAY_ROTFACE_OOZE_FLOOD
+-- 2) + dummy self-cast oozeFloodSpells[stage] {69782, 69796, 69798,
+-- 69801} (:168); senders unported — MovementInform POINT_ROTFACE
+-- arrival (:385, no ev28) + EVENT_ROTFACE_OOZE_FLOOD self-DoAction
+-- (:594-596, scheduled only from :386).
+-- ACTION_ROTFACE_DEATH (-366272; :479-481): downstream
+-- EVENT_ROTFACE_DIES (:590-592, Talk(3) + EnterEvadeMode)
+-- relay-ported in part from rotface JustDied (boss_rotface.lua:
+-- 533-541, 4500ms timer, Talk only) — the EnterEvadeMode leg is
+-- MISSING there on a stale "no bridge" claim: EnterEvadeMode IS
+-- bridged (lua_creature_events.go:5051; festergut's relay already
+-- uses it). Flag: rotface.lua needs that leg added (not this file).
+-- ACTION_CHANGE_PHASE (-366780) PORTED 2026-11-09 via the ev38 receiver:
 -- heroic Talk(6) + double triggered Unstable Experiment + 25-man
 -- variable split; the non-heroic tear-gas leg, DelayEvents, AttackStop,
 -- SetSpeedRate, MovePoint(POINT_TABLE) and scheduler changes stay out
