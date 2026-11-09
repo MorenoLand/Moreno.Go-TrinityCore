@@ -1,12 +1,8 @@
 // Terrain data loading port: TerrainBuilder (src/tools/mmaps_generator/
 // TerrainBuilder.cpp/.h) — .map tile parsing into triangle soup, hole and
-// liquid handling, vertex cleaning, off-mesh connections.
-//
-// loadVMap is NOT ported yet: it needs a Go StaticMapTree/.vmtree reader
-// plus WorldModel/GroupModel parsing (VMapManager2, MapTree, ModelInstance),
-// which belongs with the vmap4extractor parity work (checkpoint unit 3).
-// LoadVMap currently reports no data; the pipeline proceeds with terrain
-// only until that reader lands.
+// liquid handling, vertex cleaning, off-mesh connections. The vmap half
+// (loadVMap) lives in vmap.go: StaticMapTree/.vmtree + .vmtile + .vmo
+// reading, WorldModel/GroupModel triangles, WMO liquid.
 package main
 
 import (
@@ -16,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Map grid constants (TerrainBuilder.h).
@@ -95,12 +92,83 @@ func newTerrainBuilder(skipLiquid bool, mapsDir, vmapsDir string) *TerrainBuilde
 // UsesLiquids mirrors TerrainBuilder::usesLiquids.
 func (tb *TerrainBuilder) UsesLiquids() bool { return !tb.skipLiquid }
 
-// LoadVMap is the vmap half of TerrainBuilder::loadVMap. NOT ported yet: it
-// needs a Go StaticMapTree/.vmtree reader plus WorldModel/GroupModel parsing
-// (VMapManager2, MapTree, ModelInstance in the C++ tree). Returns false so
-// callers proceed with terrain-only data.
+// LoadVMap mirrors TerrainBuilder::loadVMap (TerrainBuilder.cpp): loads
+// the tile's vmap models (.vmtree + .vmtile + the referenced .vmo files)
+// and appends their transformed triangles to md, in the same coordinate
+// convention loadMap uses. Returns true when at least one model was found
+// and loaded, false when no vmap data exists for the tile — the caller then
+// proceeds with terrain only. A missing or unreadable .vmtree, or a corrupt
+// .vmtile, also returns false with nothing appended, mirroring
+// VMapManager2::loadMap reporting VMAP_LOAD_RESULT_ERROR. A single .vmo
+// that fails to load only skips that instance (acquireModelInstance
+// returning null). Per-model BIH culling is NOT done: like C++, every
+// loaded instance contributes all of its group triangles.
 func (tb *TerrainBuilder) LoadVMap(mapID, tileX, tileY uint32, md *MeshData) bool {
-	return false
+	tree, err := loadStaticMapTree(tb.vmapsDir, mapID)
+	if err != nil {
+		return false
+	}
+	spawns, err := loadVMapTileSpawns(tb.vmapsDir, mapID, tileX, tileY, tree.primCount)
+	if err != nil {
+		return false
+	}
+	if !tree.tiled && tree.globalSpawn != nil {
+		spawns[0] = *tree.globalSpawn
+	}
+
+	retval := false
+	models := make(map[string]*worldModel)
+	for idx := uint32(0); idx < tree.primCount; idx++ {
+		spawn, ok := spawns[idx]
+		if !ok {
+			continue
+		}
+		wm, ok := models[spawn.name]
+		if !ok {
+			wm, err = readWorldModelFile(filepath.Join(tb.vmapsDir, spawn.name+".vmo"))
+			if err != nil {
+				continue
+			}
+			models[spawn.name] = wm
+		}
+
+		// Now we have a model to add to the mesh data.
+		retval = true
+
+		// All M2s need to have triangle indices reversed.
+		isM2 := strings.Contains(spawn.name, ".m2") || strings.Contains(spawn.name, ".M2")
+
+		// Transform data.
+		rotation := matrix3FromEulerAnglesXYZ(
+			float32(math.Pi)*spawn.rot[2]/-180,
+			float32(math.Pi)*spawn.rot[0]/-180,
+			float32(math.Pi)*spawn.rot[1]/-180)
+		position := spawn.pos
+		position[0] -= 32 * moveMapGridSize
+		position[1] -= 32 * moveMapGridSize
+
+		for _, group := range wm.groups {
+			transformed := make([]vec3, len(group.vertices))
+			for i, v := range group.vertices {
+				transformed[i] = transformVec(v, rotation, spawn.scale, position)
+			}
+
+			offset := int32(len(md.SolidVerts) / 3)
+			for _, v := range transformed {
+				md.SolidVerts = append(md.SolidVerts, v[1], v[2], v[0])
+			}
+			for _, tri := range group.triangles {
+				if isM2 {
+					md.SolidTris = append(md.SolidTris, int32(tri[2])+offset, int32(tri[1])+offset, int32(tri[0])+offset)
+				} else {
+					md.SolidTris = append(md.SolidTris, int32(tri[0])+offset, int32(tri[1])+offset, int32(tri[2])+offset)
+				}
+			}
+
+			appendVMapLiquid(group.liquid, rotation, spawn.scale, position, md)
+		}
+	}
+	return retval
 }
 
 // LoadMap mirrors TerrainBuilder::loadMap(mapID, tileX, tileY, meshData):
