@@ -32,10 +32,14 @@
 --       SetStandState STAND, all four summon pumps cancelled (phase-3-only
 --       in C++; the cancel is the Lua twin of the C++ phase change to
 --       PHASE_VOL7RON, which has no Lua read).
---     SENDER GAP: actions 8/9 are sent only by the C++ magnetic-core
---     AuraScript (OnApply/OnRemove, boss_mimiron.cpp:1934/1943), a
---     SpellScript leg with no Lua twin -- those two arms are ported and
---     correct but undelivered until that aura is ported.
+--     Actions 8/9 are now SENT by the magnetic-core aura handlers
+--     ported tick 561 below (RegisterAuraEvent ev2/ev3 + RegisterSpellEvent
+--     ev7 filter on SPELL_MAGNETIC_CORE 64436). DORMANT: the aura is
+--     applied only by the npc_mimiron_magnetic_core Reset DoCastAOE
+--     (boss_mimiron.cpp:1661-1674), whose entry has no C++ constant and
+--     whose spawn path is not in boss_mimiron.cpp -- the core NPC file
+--     waits on a verified entry (devouring-flame standard: never
+--     register on an unverified entry).
 --   UpdateAI summon pumps (:1233, self-re-arming; C++ delays exact):
 --     firebots: DoCastAOE SUMMON_FIRE_BOT_TRIGGER 64620, triggered,
 --       re-arm 45s. junkbot: DoCastAOE SUMMON_JUNK_BOT_TRIGGER 63820,
@@ -115,6 +119,8 @@ local SPELL_SUMMON_ASSAULT_BOT_TRIGGER = 64425
 local SPELL_SUMMON_BOMB_BOT = 63811
 local SPELL_SELF_REPAIR = 64383 -- boss_mimiron.cpp:175
 local SPELL_CLEAR_ALL_DEBUFFS = 34098 -- boss_mimiron.cpp:179
+local SPELL_MAGNETIC_CORE = 64436 -- boss_mimiron.cpp:176
+local SPELL_MAGNETIC_CORE_VISUAL = 64438 -- boss_mimiron.cpp:177
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -492,6 +498,55 @@ local function aerialDied(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ spell_mimiron_magnetic_core_AuraScript (boss_mimiron.cpp:1920-1952).
+-- OnApply (EFFECT_1, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, REAL):
+-- creature target -> AI()->DoAction(DO_DISABLE_AERIAL) + self-cast
+-- MAGNETIC_CORE_VISUAL 64438 triggered. PORTED tick 561 via
+-- RegisterAuraEvent ev2 (runtime.go:422-500; the illidan
+-- akamaDoorChannelRemove precedent: target:DoAction on the aura
+-- target). The hook fires on the player and creature funnels, so the
+-- C++ ToCreature() gate is the GetObjectType() check below.
+local function magneticCoreApply(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:DoAction(DO_DISABLE_AERIAL)
+    target:CastSpell(target, SPELL_MAGNETIC_CORE_VISUAL, true)
+end
+
+-- C++ OnRemove (EFFECT_1, same effect): DoAction(DO_ENABLE_AERIAL) +
+-- RemoveAurasDueToSpell(VISUAL) -- the bridged RemoveAura(spellID)
+-- twin. The OnRemoveSelf EFFECT_0 DUMMY leg (TempSummon
+-- DespawnOrUnsummon) stays out: no IsTempSummon bridge. The Go ev3
+-- hook fires once per removal (not per effect), so both C++
+-- AfterEffectRemove arms share this one fire.
+local function magneticCoreRemove(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:DoAction(DO_ENABLE_AERIAL)
+    target:RemoveAura(SPELL_MAGNETIC_CORE_VISUAL)
+end
+
+-- C++ spell_mimiron_magnetic_core_SpellScript::FilterTargets
+-- (:1901-1913, EFFECT_1): drop targets with a vehicle base or the
+-- NON_ATTACKABLE flag. PORTED tick 561 via RegisterSpellEvent ev7
+-- (the skadi freezing-cloud precedent: targets:GetTargets() /
+-- targets:Remove). The vehicle-base half stays out: GetVehicleBase
+-- has no Lua twin (verified by grep of the creature/player/object
+-- surfaces); the flag half is C++-exact via HasFlag on either unit
+-- type (players carry HasFlag too, lua_player.go:866).
+local function magneticCoreTargetSelect(event, spell, effectIndex, targets)
+    if effectIndex ~= 1 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
+            targets:Remove(target)
+        end
+    end
+end
+
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 5, aerialSpawn)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 9, aerialDamageTaken)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 28, aerialMovementInform)
@@ -500,3 +555,7 @@ RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 23, aerialReset)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 3, aerialTargetDied)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 4, aerialDied)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 38, aerialDoAction)
+
+RegisterAuraEvent(SPELL_MAGNETIC_CORE, 2, magneticCoreApply)
+RegisterAuraEvent(SPELL_MAGNETIC_CORE, 3, magneticCoreRemove)
+RegisterSpellEvent(SPELL_MAGNETIC_CORE, 7, magneticCoreTargetSelect)
