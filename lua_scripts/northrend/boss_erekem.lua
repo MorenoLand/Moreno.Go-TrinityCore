@@ -96,8 +96,11 @@
 -- replacement is a documented deviation).
 -- GetChainHealTarget (:149-166) — dead helper: zero call sites in the
 -- file (the chain-heal arm uses DoSelectLowestHpFriendly).
--- JustReachedHome (:84-88) — instance->SetData(DATA_HANDLE_CELLS,
--- DATA_EREKEM): no instance SetData bridge.
+-- JustReachedHome (:84-88) is PORTED tick 486 via ev24 +
+-- FindNearestGameObject + SetGoState(1) for GO_EREKEM_DOOR 191564
+-- and the two guard doors 191563/191562 (HandleCells(4, false),
+-- InstanceScript.cpp:479-487); the instance-SetData bridge itself
+-- stays unported.
 -- SAY_SPAWN (3) / SAY_ADD_KILLED (4) / SAY_BOTH_ADDS_KILLED (5) —
 -- never Talk()ed anywhere in the file (grep -c "Talk(" = 3, all
 -- ported above): dead enum text.
@@ -140,6 +143,7 @@
 
 local ENTRY_EREKEM = 29315
 local DATA_EREKEM = 4
+local GO_EREKEM_DOORS = { 191564, 191563, 191562 } -- violet_hold.h:131-133, C++ HandleCells order
 local DATA_EREKEM_GUARD_1 = 15
 local DATA_EREKEM_GUARD_2 = 16
 
@@ -375,10 +379,25 @@ local function erekemMovementInform(event, creature, type, id)
     end
 end
 
+-- C++ boss_erekemAI::JustReachedHome (:84-88): BossAI base +
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_EREKEM) ->
+-- HandleCells(4, false) -> HandleGameObject(GO_EREKEM_DOOR +
+-- GO_EREKEM_GUARD_1_DOOR + GO_EREKEM_GUARD_2_DOOR, false) ->
+-- GO_STATE_READY (1). Boss-side mirror via ev24.
+local function erekemReachedHome(event, creature)
+    for _, entry in ipairs(GO_EREKEM_DOORS) do
+        local door = creature:FindNearestGameObject(entry, 50)
+        if door then
+            door:SetGoState(1)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_EREKEM, 1, erekemEnterCombat)
 RegisterCreatureEvent(ENTRY_EREKEM, 2, erekemCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EREKEM, 3, erekemKilledUnit)
 RegisterCreatureEvent(ENTRY_EREKEM, 4, erekemCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EREKEM, 4, erekemJustDied)
 RegisterCreatureEvent(ENTRY_EREKEM, 23, erekemReset)
+RegisterCreatureEvent(ENTRY_EREKEM, 24, erekemReachedHome)
 RegisterCreatureEvent(ENTRY_EREKEM, 28, erekemMovementInform)

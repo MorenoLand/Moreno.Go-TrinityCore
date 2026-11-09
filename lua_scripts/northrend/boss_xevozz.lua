@@ -70,29 +70,29 @@
 -- SAY_SPAWN (3) and SAY_CHARGED (4) are never Talk()ed anywhere in the
 -- file (dead enum text, the cyanigosa precedent).
 -- Talk(SAY_SUMMON_ENERGY 6) rides the SpellHit SPELL_ARCANE_POWER
--- (54160) / H_SPELL_ARCANE_POWER (59474) leg — stale "no SpellHit
--- bridge" retracted (2026-10-21): ev14 IS bridged (fires from the Go
--- spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 +
--- spells.go:11765) — but the arm stays out: the only in-instance
--- source of these IDs is the unregistered npc_ethereal_sphere's
--- 3.0f-proximity DoCastAOE (boss_xevozz.cpp:227-241), and that
--- proximity cast itself is unported, so ev14 can never fire
--- with 54160/59474 even once the ported summon casts spawn spheres.
+-- (54160) / H_SPELL_ARCANE_POWER (59474) leg — PORTED tick 486 via
+-- ev14 (fires on each hit-target creature, boss_ai.go:4061); the
+-- sphere proximity cast that feeds it is ported in
+-- npc_ethereal_sphere.lua the same tick.
 -- The ScheduleTasks ethereal-sphere summon leg (Talk(SAY_REPEAT_
 -- SUMMON 5), 5s init / 45-47s Repeat, random summon-spell pick from
 -- {54102, 54137, 54138} via DoCast(me, ...), heroic 2.5s delayed
 -- second cast) is PORTED in summonTick below — the casts are ordinary
 -- creature casts and the Go cast path implements SPELL_EFFECT_SUMMON
 -- (boss_ai.go creatureEffectSummonType), so the old "whole event out"
--- (emalon EVENT_OVERCHARGE precedent) over-blocked. Still out: the
--- 33-35s delayed summons.DoAction(ACTION_SUMMON) leg (dispatch IS
--- bridged — ev38 — but the receivers, the summoned spheres, carry no
--- registered AI) and the summoned sphere's own AI (npc_ethereal_sphere
--- ARCANE_POWER proximity machine / SAY_ETHEREAL_SPHERE_SUMMON DoAction
--- Talk leg, unregistered). The JustSummoned MoveFollow leg
--- joins the no-MovementInform bridge queue; the JustReachedHome
--- instance->SetData(DATA_HANDLE_CELLS, DATA_XEVOZZ) leg joins the
--- no-instance-SetData bridge queue.
+-- (emalon EVENT_OVERCHARGE precedent) over-blocked. The 33-35s
+-- delayed summons.DoAction(ACTION_SUMMON) leg is PORTED tick 486 as
+-- a per-sphere self-timer seeded in npc_ethereal_sphere.lua Reset
+-- (deviation: roll origin is sphere spawn vs the boss's cast-issue;
+-- identical when the summon spell is instant — and the boss-side
+-- shared-roll shape is unmodelable without a summon list). The
+-- summoned sphere's own AI (npc_ethereal_sphere ARCANE_POWER
+-- proximity machine / SAY_ETHEREAL_SPHERE_SUMMON DoAction Talk leg)
+-- is PORTED tick 486 in npc_ethereal_sphere.lua. The JustSummoned
+-- MoveFollow leg (boss_xevozz.cpp:105-109) is PORTED tick 486 via
+-- ev19; the JustReachedHome leg (:98-102) is PORTED tick 486 via
+-- ev24 + FindNearestGameObject(GO_XEVOZZ_DOOR 191556, 50) +
+-- SetGoState(1) (HandleCells(7, false)).
 -- spell_xevozz_summon_players (SpellScript: OnEffectHitTarget
 -- SPELL_EFFECT_DUMMY -> SPELL_MAGIC_PULL 50770) joins the
 -- no-SpellScript-bridge queue. The file carries a TODO ("Implement
@@ -100,11 +100,13 @@
 
 local ENTRY_XEVOZZ = 29266
 local DATA_XEVOZZ = 7
+local GO_XEVOZZ_DOOR = 191556 -- violet_hold.h:127
 
 local SAY_AGGRO = 0
 local SAY_REPEAT_SUMMON = 5
 local SAY_SLAY = 1
 local SAY_DEATH = 2
+local SAY_SUMMON_ENERGY = 6
 
 local SPELL_ARCANE_BARRAGE_VOLLEY = 54202
 local SPELL_ARCANE_BUFFET = 54226
@@ -292,10 +294,44 @@ end
 -- (the keleseth/svala precedent): ev2 leave-combat does not call
 -- Reset in C++, so it stays wipe-only.
 local function xevozzReset(event, creature)
+    -- Latch Xevozz's GUID under DATA_XEVOZZ for the sphere proximity
+    -- poll (boss_xevozz.cpp:229 reads the instance DATA_XEVOZZ
+    -- object GUID). ev23 fires on spawn as well as evade
+    -- (creaturemotion.go:1262 + lua_creature_events.go:7264), so the latch lands at spawn;
+    -- re-latching the same GUID on evade is a no-op (ichoron idiom).
+    creature:SetGuidData(DATA_XEVOZZ)
     if creature:GetBossState(DATA_XEVOZZ) ~= 3 then
         creature:SetBossState(DATA_XEVOZZ, 0)
     end
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ boss_xevozzAI::JustSummoned (:105-109): BossAI base, then
+-- summon->GetMotionMaster()->MoveFollow(me, 0, 0) — unconditional;
+-- the spheres are the only summons. ev19 fires for spell summons
+-- (lua_creature_events.go:190).
+local function xevozzJustSummoned(event, creature, summon)
+    summon:MoveFollow(creature, 0, 0)
+end
+
+-- C++ boss_xevozzAI::SpellHit (:123-127): SPELL_ARCANE_POWER
+-- (54160) / H_SPELL_ARCANE_POWER (59474) -> Talk(SAY_SUMMON_ENERGY
+-- 6). ev14 fires on each hit-target creature (boss_ai.go:4061).
+local function xevozzSpellHit(event, creature, caster, spellId)
+    if spellId == 54160 or spellId == 59474 then
+        creature:Talk(SAY_SUMMON_ENERGY)
+    end
+end
+
+-- C++ boss_xevozzAI::JustReachedHome (:98-102): BossAI base +
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_XEVOZZ) ->
+-- HandleCells(7, false) -> HandleGameObject(GO_XEVOZZ_DOOR, false)
+-- -> GO_STATE_READY (1). Boss-side mirror via ev24.
+local function xevozzReachedHome(event, creature)
+    local door = creature:FindNearestGameObject(GO_XEVOZZ_DOOR, 50)
+    if door then
+        door:SetGoState(1)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_XEVOZZ, 1, xevozzEnterCombat)
@@ -304,3 +340,6 @@ RegisterCreatureEvent(ENTRY_XEVOZZ, 3, xevozzKilledUnit)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 4, xevozzJustDied)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 4, xevozzCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 23, xevozzReset)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 19, xevozzJustSummoned)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 14, xevozzSpellHit)
+RegisterCreatureEvent(ENTRY_XEVOZZ, 24, xevozzReachedHome)

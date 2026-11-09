@@ -62,12 +62,18 @@
 -- The UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-check has no
 -- bridge — casts fire unconditionally on their timers (the hodir
 -- precedent).
--- DOCUMENTED-ONLY (in this header; entry 29312):
--- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
--- DATA_LAVANTHOR) leg — no instance-script bridge.
+-- PORTED (tick 486): the JustReachedHome leg
+-- (boss_lavanthor.cpp:51-55) — instance->SetData(DATA_HANDLE_CELLS,
+-- DATA_LAVANTHOR) -> HandleCells(6, false) -> HandleGameObject
+-- (GO_LAVANTHOR_DOOR 191566, false) -> GO_STATE_READY (1)
+-- (InstanceScript.cpp:479-487) — rides ev24 (CreatureEventOnReachHome)
+-- + creature:FindNearestGameObject + go:SetGoState(1) boss-side;
+-- the instance-SetData bridge itself stays unported. Inert until
+-- StartBossEncounter opens the door (unported).
 
 local ENTRY_LAVANTHOR = 29312
 local DATA_LAVANTHOR = 6
+local GO_LAVANTHOR_DOOR = 191566 -- violet_hold.h:128
 
 local SPELL_FIREBOLT = 54235
 local SPELL_FLAME_BREATH = 54282
@@ -258,8 +264,21 @@ local function lavanthorCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_lavanthorAI::JustReachedHome (:51-55): BossAI base +
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_LAVANTHOR) ->
+-- HandleCells(6, false) -> HandleGameObject(GO_LAVANTHOR_DOOR,
+-- false) -> GO_STATE_READY (1) (InstanceScript.cpp:479-487).
+-- Boss-side mirror via ev24 + FindNearestGameObject + SetGoState.
+local function lavanthorReachedHome(event, creature)
+    local door = creature:FindNearestGameObject(GO_LAVANTHOR_DOOR, 50)
+    if door then
+        door:SetGoState(1)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 1, lavanthorEnterCombat)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 2, lavanthorCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 4, lavanthorJustDied)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 4, lavanthorCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 23, lavanthorReset)
+RegisterCreatureEvent(ENTRY_LAVANTHOR, 24, lavanthorReachedHome)

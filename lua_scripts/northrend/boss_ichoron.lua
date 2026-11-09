@@ -32,11 +32,11 @@
 -- 61732, true) (:100, triggered) -> CastSpell(creature, 61732, true);
 -- fires on event 23 (evade/reset — and on spawn too, since
 -- fireCreatureSpawned dispatches 23 then 5 on the spawn funnel,
--- lua_creature_events.go:3733 + creaturemotion.go:755; the old
+-- creaturemotion.go:1262 + lua_creature_events.go:7264; the old
 -- "no spawn-event bridge" note was stale); the BossAI::Reset
 -- passthrough leg — _Reset() (ScriptedCreature.cpp:499-511) —
 -- SetBossState(DATA_ICHORON 5, NOT_STARTED), != DONE-gated, via
--- creature:SetBossState (lua_creature_events.go:5917) — is ported in
+-- creature:SetBossState (lua_creature_events.go:6419) — is ported in
 -- ichoronReset BEFORE the threat-proc cast, per the C++ Reset order
 -- (Initialize :95-97, BossAI::Reset :98, DoCast :100).
 -- boss_ichoronAI::JustEngagedWith (:103-107) — Talk(SAY_AGGRO 0)
@@ -142,11 +142,14 @@
 -- the Go case reads the boss motion's SetData slot. Its only clear is
 -- the spell_ichoron_merge DoAction leg (unported globule chain), so
 -- the latch stays 1 in the Go-modeled fight.
--- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
--- DATA_ICHORON) leg — no instance-script bridge.
+-- The JustReachedHome leg (boss_ichoron.cpp:109-113) is PORTED tick
+-- 486 via ev24 + FindNearestGameObject(GO_ICHORON_DOOR 191722, 50)
+-- + SetGoState(1) (HandleCells(5, false), InstanceScript.cpp:479-487);
+-- the instance-SetData bridge itself stays unported.
 
 local ENTRY_ICHORON = 29313
 local DATA_ICHORON = 5
+local GO_ICHORON_DOOR = 191722 -- violet_hold.h:129
 local DATA_DEHYDRATION = 1 -- boss_ichoron.cpp:71
 local ENTRY_ICHOR_GLOBULE = 29321
 local SPELL_SPLASH = 59516
@@ -405,7 +408,7 @@ local function ichoronReset(event, creature)
     -- Latch Ichoron's GUID under DATA_ICHORON for the globule merge
     -- gate (boss_ichoron.cpp:261-263 reads the instance
     -- DATA_ICHORON object GUID). ev23 fires on spawn as well as
-    -- evade (lua_creature_events.go:3733), so the latch lands at
+    -- evade (creaturemotion.go:1262 + lua_creature_events.go:7264), so the latch lands at
     -- spawn; re-latching the same GUID on evade is a no-op.
     creature:SetGuidData(DATA_ICHORON)
     if creature:GetBossState(DATA_ICHORON) ~= 3 then
@@ -459,12 +462,24 @@ local function ichoronJustSummoned(_, creature, summoned)
     end
 end
 
+-- C++ boss_ichoronAI::JustReachedHome (:109-113): BossAI base +
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_ICHORON) ->
+-- HandleCells(5, false) -> HandleGameObject(GO_ICHORON_DOOR, false)
+-- -> GO_STATE_READY (1). Boss-side mirror via ev24.
+local function ichoronReachedHome(event, creature)
+    local door = creature:FindNearestGameObject(GO_ICHORON_DOOR, 50)
+    if door then
+        door:SetGoState(1)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ICHORON, 1, ichoronEnterCombat)
 RegisterCreatureEvent(ENTRY_ICHORON, 2, ichoronCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ICHORON, 3, ichoronKilledUnit)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronJustDied)
 RegisterCreatureEvent(ENTRY_ICHORON, 4, ichoronCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ICHORON, 23, ichoronReset)
+RegisterCreatureEvent(ENTRY_ICHORON, 24, ichoronReachedHome)
 RegisterCreatureEvent(ENTRY_ICHORON, 19, ichoronJustSummoned)
 
 -- C++ SummonedCreatureDespawn (boss_ichoron.cpp:181-186): BossAI drops the

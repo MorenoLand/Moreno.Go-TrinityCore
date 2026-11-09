@@ -69,13 +69,19 @@
 -- 54395, always OPTIC_LINK_LEVEL_1 54393) — PORTED below via
 -- RegisterAuraEvent (tick 194); the "no AuraScript bridge" block
 -- is stale (tick 188). The OnUpdate damage ramp (750 -> 1500 ->
--- 3000 at ticks 1/4/8) stays out — no OnEffectUpdatePeriodic
--- bridge.
--- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
--- DATA_MORAGG) leg — no instance-script bridge.
+-- 3000 at ticks 1/4/8) is PORTED tick 486 inside opticLinkTick:
+-- no OnEffectUpdatePeriodic event exists, but Go runs the ev1 hook
+-- at the head of PeriodicTick before the damage switch reads
+-- aura.Amount (spells.go:42121), and SetAmount writes the live
+-- amount (lua_aura.go:583) — same-tick damage matches C++ exactly.
+-- The JustReachedHome leg (boss_moragg.cpp:57-61) is PORTED tick
+-- 486 via ev24 + FindNearestGameObject(GO_MORAGG_DOOR 191606, 50)
+-- + SetGoState(1) (HandleCells(3, false), InstanceScript.cpp:479-487);
+-- the instance-SetData bridge itself stays unported.
 
 local ENTRY_MORAGG = 29316
 local DATA_MORAGG = 3
+local GO_MORAGG_DOOR = 191606 -- violet_hold.h:134
 
 local SPELL_CORROSIVE_SALIVA = 54527
 local SPELL_OPTIC_LINK = 54396
@@ -217,11 +223,24 @@ local function moraggCancelCombatTimers(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_moraggAI::JustReachedHome (:57-61): BossAI base +
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_MORAGG) ->
+-- HandleCells(3, false) -> HandleGameObject(GO_MORAGG_DOOR, false)
+-- -> GO_STATE_READY (1) (InstanceScript.cpp:479-487).
+-- Boss-side mirror via ev24 + FindNearestGameObject + SetGoState.
+local function moraggReachedHome(event, creature)
+    local door = creature:FindNearestGameObject(GO_MORAGG_DOOR, 50)
+    if door then
+        door:SetGoState(1)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_MORAGG, 1, moraggEnterCombat)
 RegisterCreatureEvent(ENTRY_MORAGG, 2, moraggCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggJustDied)
 RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MORAGG, 23, moraggReset)
+RegisterCreatureEvent(ENTRY_MORAGG, 24, moraggReachedHome)
 
 -- C++ spell_moragg_optic_link::OnPeriodic
 -- (boss_moragg.cpp:199-210): EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE.
@@ -241,6 +260,14 @@ local function opticLinkTick(event, aura, target)
         return
     end
     local tick = aura:GetTickNumber()
+    -- C++ OnUpdate (boss_moragg.cpp:157-172): tick 1 +250 (base 500
+    -- -> 750), tick 4 x2 (-> 1500), tick 8 x2 (-> 3000). The ev1
+    -- hook runs before the same tick's damage read (see header).
+    if tick == 1 then
+        aura:SetAmount(aura:GetAmount() + 250)
+    elseif tick == 4 or tick == 8 then
+        aura:SetAmount(aura:GetAmount() * 2)
+    end
     if tick >= 8 then
         caster:CastSpell(target, SPELL_OPTIC_LINK_LEVEL_3, true)
     end

@@ -20881,7 +20881,8 @@ func init() {
 	// random-player 54235 1s/{5s,13s}, flame-breath DoCastVictim 54282
 	// 5s/{10s,15s}, lava-burn random-target 54249 10s/{15s,23s}; zero
 	// Talk lines in C++. The heroic cauterizing-flames leg is ported under IsHeroic
-	// (bridged) — documented in the lua header.
+	// (bridged) — documented in the lua header. JustReachedHome cell-door
+	// leg ported tick 486 (ev24 + FindNearestGameObject + SetGoState).
 	// All four scheduler ticks carry the 500ms IsCasting defer (BossAI
 	// ctor scheduler validator, ScriptedCreature.cpp:493-496).
 	// SetBossState legs: engage DATA_LAVANTHOR 6 IN_PROGRESS
@@ -20894,11 +20895,13 @@ func init() {
 	// pain 54438 + ray of suffering 54442 self-casts, optic-link
 	// random-player 54396 15s/25s, corrosive-saliva DoCastVictim 54527
 	// 5s/10s; zero Talk lines in C++. The spell_moragg_ray AuraScript
-	// stays out (no AuraScript bridge — the ray periodic triggers are
-	// a documented gap); the spell_moragg_optic_link OnPeriodic leg IS
-	// ported via RegisterAuraEvent (tick 194 — the stale "no AuraScript
-	// bridge" claim for it is corrected) and only the OnUpdate damage
-	// ramp stays out — documented in the lua header.
+	// IS ported via RegisterAuraEvent (tick 424 — the stale "no
+	// AuraScript bridge" claim for it is corrected); the
+	// spell_moragg_optic_link OnPeriodic leg IS ported via
+	// RegisterAuraEvent (tick 194) and the OnUpdate damage ramp is
+	// ported tick 486 (SetAmount inside the ev1 hook — the hook runs
+	// before the same tick's damage read). JustReachedHome cell-door
+	// leg ported tick 486 (ev24 + FindNearestGameObject + SetGoState).
 	// The optic-link/saliva scheduler ticks carry the 500ms IsCasting
 	// defer (BossAI ctor scheduler validator,
 	// ScriptedCreature.cpp:493-496); the engage ray Async casts fire at
@@ -20913,11 +20916,13 @@ func init() {
 	// player 45y 54226 {10s,11s}/{15s,20s}; Talk 0/1/2 retained. The
 	// ethereal-sphere summon leg IS ported (summonTick — random
 	// {54102,54137,54138} DoCast + heroic 2.5s second pick; the stale
-	// "whole summon leg stays out" claim is corrected) and only the
-	// 33-35s DoAction leg and the summoned sphere's own AI stay out;
-	// SpellHit SAY_SUMMON_ENERGY, MoveFollow/JustReachedHome instance
-	// legs and the SpellScript hook stay out — documented in the lua
-	// header.
+	// "whole summon leg stays out" claim is corrected); the 33-35s
+	// DoAction leg and the summoned sphere's own AI are ported tick 486
+	// (npc_ethereal_sphere.lua — per-sphere self-timer + 1s proximity
+	// poll + Reset casts + 40s despawn), as are SpellHit
+	// SAY_SUMMON_ENERGY (ev14), MoveFollow (ev19 JustSummoned) and the
+	// JustReachedHome cell-door leg (ev24); only the SpellScript hook
+	// stays out — documented in the lua header.
 	// The barrage/buffet/summon scheduler ticks carry the 500ms
 	// IsCasting defer (BossAI ctor scheduler validator,
 	// ScriptedCreature.cpp:493-496; defer precedes the summon Talk+cast,
@@ -20931,9 +20936,11 @@ func init() {
 	// (lua_scripts/northrend/boss_zuramat.lua): void-shift random-
 	// player 60y 54361 9s/15s, shroud-of-darkness DoCastSelf 54524
 	// {18s,20s}/{18s,20s}; Talk 0/1/2 retained. The summon-void-sentry
-	// leg (unbridged sentry AI), the void_dance achievement and the
-	// JustReachedHome instance leg stay out — documented in the lua
-	// header. The void-shift/shroud ticks carry the 500ms IsCasting
+	// leg IS ported tick 486 (4s/{7s,10s} tick + ev20 despawn relay +
+	// sentry ev38 receiver); the void_dance achievement was ported tick
+	// 417 and the JustReachedHome cell-door leg is ported tick 486
+	// (ev24 + FindNearestGameObject + SetGoState). The
+	// void-shift/shroud ticks carry the 500ms IsCasting
 	// defer (BossAI ctor scheduler validator, ScriptedCreature.cpp:
 	// 493-496; Zuramat's own UpdateAI calls scheduler.Update directly
 	// but the validator lives on the scheduler object, so it gates

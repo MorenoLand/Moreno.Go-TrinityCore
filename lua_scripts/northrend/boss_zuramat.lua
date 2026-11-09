@@ -77,19 +77,22 @@
 -- registration):
 -- SAY_SPAWN (3), SAY_SHIELD (4) and SAY_WHISPER (5) are never Talk()ed
 -- anywhere in the file (dead enum text, the cyanigosa precedent).
--- The JustReachedHome instance->SetData(DATA_HANDLE_CELLS,
--- DATA_ZURAMAT) leg joins the no-instance-SetData bridge queue (the
--- erekem/ichoron/lavanthor precedent).
+-- The JustReachedHome leg (boss_zuramat.cpp:82-85) is PORTED tick
+-- 486 via ev24 + FindNearestGameObject(GO_ZURAMAT_DOOR 191565, 50)
+-- + SetGoState(1) (HandleCells(8, false), InstanceScript.cpp:479-487);
+-- the instance-SetData bridge itself stays unported.
 -- The ScheduleTasks SUMMON_VOID_SENTRY leg (DoCast(me, SPELL_SUMMON_
--- VOID_SENTRY 54369), 4s init / 7-10s Repeat) stays out: it is a
--- summon leg, and casting it would spawn sentries whose boss-side
--- SummonedCreatureDespawn relay (boss_zuramat.cpp:89-96, ev21) is
--- unported in Lua. Joins the no-SummonList bridge queue. The sentry
--- class itself IS ported below (ev5 REACT_PASSIVE, ev22 IsSummonedBy
--- triggered self-cast 58650, ev19 ball latch + REACT_PASSIVE, ev20
--- prune, ev4 DespawnAll) — the old "sentry AI unbridged" claim was
--- stale; a sentry only exists in-game once the boss-side summon leg
--- lands. The boss-side SummonedCreatureDies
+-- VOID_SENTRY 54369), 4s init / 7-10s Repeat) is PORTED tick 486 in
+-- summonSentryTick below, with the boss-side SummonedCreatureDespawn
+-- relay (boss_zuramat.cpp:89-96) ported as an ev20 handler that
+-- DoActions the despawned sentry (ev20 fires on the summoner,
+-- lua_creature_events.go:3055) and the ev38 receiver on the sentry
+-- below. SPELL_EFFECT_SUMMON is implemented (xevozz summon
+-- precedent). The sentry class itself IS ported below (ev5
+-- REACT_PASSIVE, ev22 IsSummonedBy triggered self-cast 58650, ev19
+-- ball latch + REACT_PASSIVE, ev20 prune, ev4 DespawnAll) — the old
+-- "sentry AI unbridged" claim was stale. The boss-side
+-- SummonedCreatureDies
 -- _voidDance = false flip (boss_zuramat.cpp:86-90) — PORTED tick 417
 -- via event 21 (zuramatSummonedDied below); Reset writes 1
 -- (Initialize, :62-66). The old "write-only" rationale is stale —
@@ -111,6 +114,9 @@ local SAY_DEATH = 2
 
 local SPELL_VOID_SHIFT = 54361
 local SPELL_SHROUD_OF_DARKNESS = 54524
+local SPELL_SUMMON_VOID_SENTRY = 54369 -- boss_zuramat.cpp:26
+local ACTION_DESPAWN_VOID_SENTRY_BALL = 1 -- boss_zuramat.cpp:47
+local GO_ZURAMAT_DOOR = 191565 -- violet_hold.h:130
 
 local timers = {}
 
@@ -197,6 +203,22 @@ local function shroudTick(creature, guid)
     end)
 end
 
+-- C++ ScheduleTasks SUMMON_VOID_SENTRY (boss_zuramat.cpp:130-138):
+-- DoCast(me, SPELL_SUMMON_VOID_SENTRY 54369), 2-arg = non-triggered;
+-- init 4s, re-arm {7s,10s} — unconditional re-arm.
+local function summonSentryTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sentry", 500, function()
+            summonSentryTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_VOID_SENTRY)
+    schedule(guid, "sentry", {7000, 10000}, function()
+        summonSentryTick(creature, guid)
+    end)
+end
+
 -- C++ boss_zuramatAI::JustEngagedWith: Talk(SAY_AGGRO) — unconditional
 -- (the auriaya engage-port precedent); the two ScheduleTasks timers
 -- seed their combat timers below; the BossAI::JustEngagedWith
@@ -216,6 +238,9 @@ local function zuramatEnterCombat(event, creature, target)
     end)
     schedule(guid, "shroud", {18000, 20000}, function()
         shroudTick(creature, guid)
+    end)
+    schedule(guid, "sentry", 4000, function()
+        summonSentryTick(creature, guid)
     end)
 end
 
@@ -336,10 +361,53 @@ RegisterCreatureEvent(NPC_VOID_SENTRY, 19, sentrySummoned)
 RegisterCreatureEvent(NPC_VOID_SENTRY, 20, sentryBallDespawned)
 RegisterCreatureEvent(NPC_VOID_SENTRY, 4, sentryDied)
 
+-- C++ npc_void_sentryAI::DoAction (:189-192): ACTION_DESPAWN_VOID_
+-- SENTRY_BALL (1) despawns all latched balls (SummonList::DespawnAll
+-- twin — the sentryBalls table); JustDied reuses it via sentryDied.
+local function sentryDoAction(event, creature, action)
+    if action == ACTION_DESPAWN_VOID_SENTRY_BALL then
+        local guid = creature:GetGUID()
+        local balls = sentryBalls[guid]
+        if balls then
+            for _, ball in ipairs(balls) do
+                ball:Despawn()
+            end
+        end
+        sentryBalls[guid] = nil
+    end
+end
+
+RegisterCreatureEvent(NPC_VOID_SENTRY, 38, sentryDoAction)
+
+-- C++ boss_zuramatAI::SummonedCreatureDespawn (:89-96): a despawned
+-- Void Sentry gets DoAction(ACTION_DESPAWN_VOID_SENTRY_BALL) on its
+-- own AI; BossAI base is a no-op passthrough. ev20 fires on the
+-- summoner with (event, creature, summon)
+-- (lua_creature_events.go:3055). The ball (29365) is summoned by the
+-- sentry, not Zuramat, so the entry check excludes it.
+local function zuramatSummonedDespawned(event, creature, summon)
+    if summon:GetEntry() == NPC_VOID_SENTRY then
+        summon:DoAction(ACTION_DESPAWN_VOID_SENTRY_BALL)
+    end
+end
+
+-- C++ boss_zuramatAI::JustReachedHome (:82-85): BossAI base +
+-- instance->SetData(DATA_HANDLE_CELLS, DATA_ZURAMAT) ->
+-- HandleCells(8, false) -> HandleGameObject(GO_ZURAMAT_DOOR, false)
+-- -> GO_STATE_READY (1). Boss-side mirror via ev24.
+local function zuramatReachedHome(event, creature)
+    local door = creature:FindNearestGameObject(GO_ZURAMAT_DOOR, 50)
+    if door then
+        door:SetGoState(1)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ZURAMAT, 1, zuramatEnterCombat)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 21, zuramatSummonedDied)
+RegisterCreatureEvent(ENTRY_ZURAMAT, 20, zuramatSummonedDespawned)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 2, zuramatCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 3, zuramatKilledUnit)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 4, zuramatJustDied)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 4, zuramatCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_ZURAMAT, 23, zuramatReset)
+RegisterCreatureEvent(ENTRY_ZURAMAT, 24, zuramatReachedHome)
