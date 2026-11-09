@@ -36,11 +36,18 @@
 -- the controller-side _fireFighter latch rides boss_mimiron.lua's
 -- st.fireFighter, which picks DO_HARDMODE_MKII at intro3), so the
 -- latch below reads 1 on hard mode and achievement_firefighter can
--- pass. KilledUnit talks into the boss_mimiron controller (ported in
--- boss_mimiron.lua; the arm itself stays out — separate axis);
+-- pass. KilledUnit (boss_mimiron.cpp:788-793) PORTED tick 559 below:
+-- player-gated, the controller Talks SAY_MKII_SLAY 3 in phase 1,
+-- SAY_V07TRON_SLAY 12 once assembled (mkiiAssembled latch = the
+-- EventMap PHASE_VOL7RON mirror);
 -- MovementInform drives the same cross-creature activation chain.
 
 local NPC_LEVIATHAN_MKII = 33432
+local NPC_MIMIRON = 33350 -- ulduar.h (controller, KilledUnit Talk target)
+
+-- boss_mimiron.cpp:36-47 Yells (controller Talk ids).
+local SAY_MKII_SLAY = 3
+local SAY_V07TRON_SLAY = 12
 
 local SPELL_FREEZE_ANIM = 16245
 
@@ -80,6 +87,11 @@ local SPELL_SHOCK_BLAST = 63631
 local SPELL_FLAME_SUPPRESSANT_MK = 64570
 
 local timers = {}
+
+-- Per-GUID assembled latch: the Lua mirror of the EventMap phase
+-- (PHASE_LEVIATHAN_MK_II -> PHASE_VOL7RON on DO_ASSEMBLED_COMBAT),
+-- read by the KilledUnit arm; cleared on Reset/spawn/death.
+local mkiiAssembled = {}
 
 -- GetCurrTime is wall-clock ms (Eluna global, engine globals.go:941);
 -- os.clock() is CPU time and stalls while the server idles, which would
@@ -299,10 +311,8 @@ local function leviathanMkIIDoAction(event, creature, action)
     elseif action == DO_ASSEMBLED_COMBAT then
         -- :752-760: SetStandState STAND; RemoveFlag NON_ATTACKABLE |
         -- NOT_SELECTABLE; SetReactState aggressive; SetPhase(PHASE_VOL7RON)
-        -- has no Lua mirror. C++ ScheduleEvent replaces the pending mine /
-        -- shock (phase-less, so they survive the phase change); the
-        -- phase-1-only napalm / plasma / flameSuppressant re-arms die
-        -- with the phase group in C++ — cancelled here explicitly.
+        -- mirrored by the mkiiAssembled latch (KilledUnit phase read).
+        mkiiAssembled[guid] = true
         creature:SetStandState(0) -- UNIT_STAND_STATE_STAND
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
         creature:SetReactState(REACT_AGGRESSIVE)
@@ -331,6 +341,7 @@ local function leviathanMkIIReset(event, creature)
     -- C++ Reset -> _Reset() (ScriptedCreature.cpp:507): events.Reset()
     -- cancels all scheduled pumps.
     cancelTimers(creature:GetGUIDLow())
+    mkiiAssembled[creature:GetGUIDLow()] = nil
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
     creature:SetReactState(REACT_PASSIVE)
     creature:CastSpell(creature, SPELL_FREEZE_ANIM)
@@ -353,6 +364,7 @@ end
 -- (auriaya ev5 precedent).
 local function leviathanMkIISpawned(event, creature)
     creature:SetGuidData(DATA_LEVIATHAN_MK_II)
+    mkiiAssembled[creature:GetGUIDLow()] = nil
     creature:SetData(DATA_SETUP_MINE, 1)
     creature:SetData(DATA_SETUP_BOMB, 1)
     creature:SetData(DATA_SETUP_ROCKET, 1)
@@ -362,8 +374,27 @@ end
 -- C++ _JustDied / events.Reset: the pumps die with the AI instance.
 local function leviathanMkIIJustDied(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    mkiiAssembled[creature:GetGUIDLow()] = nil
 end
 
+-- C++ boss_leviathan_mk_iiAI::KilledUnit (:788-793): player-gated; the
+-- Mimiron controller Talks SAY_MKII_SLAY 3 while this AI's EventMap is
+-- in PHASE_LEVIATHAN_MK_II, else SAY_V07TRON_SLAY 12 once assembled
+-- (DO_ASSEMBLED_COMBAT, phase VOL7RON). FindNearestCreature is the
+-- twin of the C++ instance->GetCreature(BOSS_MIMIRON) ref — the
+-- controller stands in the same room.
+local function leviathanMkIITargetDied(event, creature, victim)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        local assembled = mkiiAssembled[creature:GetGUIDLow()]
+        mimiron:Talk(assembled and SAY_V07TRON_SLAY or SAY_MKII_SLAY)
+    end
+end
+
+RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 3, leviathanMkIITargetDied)
 RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 4, leviathanMkIIJustDied)
 RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 5, leviathanMkIISpawned)
 RegisterCreatureEvent(NPC_LEVIATHAN_MKII, 23, leviathanMkIIReset)

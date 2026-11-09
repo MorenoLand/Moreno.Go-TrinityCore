@@ -24,10 +24,12 @@
 -- SetCombatMovement(false) + SetCombatPulseDelay(0)
 -- (C++ Reset order; ResetLootMode / summons.DespawnAll
 -- have no bridge — see below); JustEngagedWith Talk
--- (SAY_AGGRO 0) + SetCombatPulseDelay(5) (the DoAction
--- BEGIN_FIGHTING pulse leg) + per-horseman BeginFighting
--- schedules (see below — the corner-run gating is
--- unmodeled, so the fight starts on engage instead);
+-- (SAY_AGGRO 0, once per encounter via the boss-state
+-- gate) + BeginEncounter; DoAction BEGIN_MOVEMENT (1) +
+-- MovementInform corner chain + CheckIsMovementFinished
+-- + DoAction BEGIN_FIGHTING (2) ported tick 559 (see
+-- below) — the four run to their corners before the
+-- per-horseman BeginFighting schedules arm;
 -- Baron BeginFighting: SetCombatMovement(true) +
 -- SetReactState(2) + EVENT_BERSERK 10min one-shot
 -- (DoCastAOE BERSERK 26662, triggered, self-cast) +
@@ -79,29 +81,23 @@
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Distance filters use creature:GetDistance (amanitar /
 -- bpc precedent); the 45yd/20yd bounds are C++-exact.
--- Unmodeled (no bridges — documented, not wired): the
--- whole encounter choreography — BeginEncounter
--- (instance boss state + required-boss check, all four
--- PASSIVE + AttackStop + SetFarVisible + AddThreat 0 to
--- every alive non-GM player, DoAction BEGIN_MOVEMENT),
--- the MovePoint corner paths + MovementInform chain
--- (no motion bridge), CheckIsMovementFinished /
--- BEGIN_FIGHTING gating (no cross-AI DoAction/GetData
--- bridge — the fight therefore starts on engage rather
--- than after the run, a timing deviation, not a spell
--- deviation); BeginFighting AttackStart legs: baron/thane
--- threat-nonempty AttackStart(current victim) ported
--- 2026-10-24 via EngageWithTarget(GetVictim()) in C++
--- order; threat-empty nearest-player + AddThreat leg stays
--- out (no player-search bridge on an empty threat list;
--- ResetEncounter unbridged); lady/sir have no BeginFighting
--- AttackStart leg in C++ (their threat-empty EnterEvadeMode
--- legs stay unbridged);
--- JustDied instance legs (boss-state check, CheckIsMovementFinished
--- — the death-time latches ARE ported: <which>DeathMS via
--- GetGameTimeMS, read by the Go 7600/7601 credit check, cleared by
--- Reset; the EncounterCleared credit cast itself IS ported,
--- see above); SpellHitTarget on lady voidzone
+-- Unmodeled (no bridges — documented, not wired):
+-- BeginEncounter's CheckRequiredBosses gate, setActive /
+-- SetFarVisible legs; BeginFighting AttackStart legs:
+-- baron/thane threat-nonempty AttackStart(current victim)
+-- ported 2026-10-24 via EngageWithTarget(GetVictim()) in
+-- C++ order; threat-empty nearest-player + AddThreat leg
+-- stays out (no player-search bridge on an empty threat
+-- list; ResetEncounter unbridged); lady/sir have no
+-- BeginFighting AttackStart leg in C++ (their threat-empty
+-- EnterEvadeMode legs stay unbridged);
+-- JustDied: the one-shot BeginEncounter path + the
+-- CheckIsMovementFinished call (another horseman alive)
+-- ported tick 559; the death-time latches ARE ported:
+-- <which>DeathMS via GetGameTimeMS, read by the Go
+-- 7600/7601 credit check, cleared by Reset; the
+-- EncounterCleared credit cast itself IS ported, see
+-- above; SpellHitTarget on lady voidzone
 -- (C++ has no SpellHitTarget arm for lady — only the
 -- direct Talk on cast, ported above); the mark
 -- AuraScript stack-damage table (SPELL_MARK_DAMAGE
@@ -111,9 +107,8 @@
 -- in 10s while the encounter is not DONE — instance-state-gated,
 -- no bridge); EnterEvadeMode -> ResetEncounter (instance
 -- NOT_STARTED + despawn all — no bridge); C++ Talk(SAY_AGGRO)
--- fires once for the
--- whole encounter (instance-gated) — Lua has no instance
--- state, so each horseman Talks on its own engage.
+-- fires once for the whole encounter (instance-gated) —
+-- ported tick 559 via the boss-state gate in enterCombat.
 
 local ENTRY_THANE = 16064
 local ENTRY_LADY = 16065
@@ -141,8 +136,37 @@ local SPELL_HOLY_BOLT = 57376
 local SPELL_CONDEMNATION = 57377
 local SPELL_ENCOUNTER_CREDIT = 59450
 
+-- boss_four_horsemen.cpp:78-80 Actions; :96-100 HorsemenData
+-- (DATA_HORSEMEN_IS_TIMED_KILL = NAXData 2, naxxramas.h:52,
+-- so DATA_MOVEMENT_FINISHED = 3). POINT_MOTION_TYPE = 8
+-- (runtime.go:389-397, the ev28 type arg).
+local ACTION_BEGIN_MOVEMENT = 1
+local ACTION_BEGIN_FIGHTING = 2
+local DATA_MOVEMENT_FINISHED = 3
+local POINT_MOTION_TYPE = 8
+
+-- C++ :117-120 corner paths, one per horseman (3 waypoints each).
+local PATHS = {
+    baron = {{2552.427, -2969.737, 241.3021}, {2566.759, -2972.535, 241.3217}, {2584.32, -2971.96, 241.3489}},
+    thane = {{2540.095, -2983.192, 241.3344}, {2546.005, -2999.826, 241.3665}, {2542.697, -3014.055, 241.3371}},
+    lady = {{2507.94, -2961.444, 242.4557}, {2488.763, -2960.007, 241.2757}, {2468.26, -2947.499, 241.2753}},
+    sir = {{2533.141, -2922.14, 241.2764}, {2525.254, -2905.907, 241.2761}, {2517.636, -2897.253, 241.2758}},
+}
+local HORSEMEN = {
+    { entry = ENTRY_BARON, which = "baron" },
+    { entry = ENTRY_THANE, which = "thane" },
+    { entry = ENTRY_LADY, which = "lady" },
+    { entry = ENTRY_SIR, which = "sir" },
+}
+
 local timers = {}
 local shouldSay = {}
+-- C++ baseAI members: _nextMovement (banked arrival id) and
+-- _ourMovementFinished (BEGIN_FIGHTING already received), per GUID.
+-- _myMovementFinished itself lives in the engine ScriptData store
+-- (SetData/GetData twin) so other horsemen can read it cross-AI.
+local nextMovement = {}
+local ourMovementFinished = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -364,16 +388,78 @@ local GO_NAXX_PORTAL_MILITARY = 181578 -- naxxramas.h:168
 local GO_HORSEMEN_CHEST = 181366 -- naxxramas.h:117
 local GO_HORSEMEN_CHEST_HERO = 193426 -- naxxramas.h:116
 
+-- C++ CheckIsMovementFinished (:197-214): every alive horseman must
+-- report GetData(DATA_MOVEMENT_FINISHED); a missing handle resets the
+-- encounter (ResetEncounter leg — instance despawn, no bridge, so a
+-- missing handle just aborts the check here). When all four finished,
+-- each gets DoAction(ACTION_BEGIN_FIGHTING).
+local function checkIsMovementFinished(creature)
+    local handles = {}
+    for _, h in ipairs(HORSEMEN) do
+        local boss = creature:FindNearestCreature(h.entry, 500)
+        if boss == nil then
+            return
+        end
+        handles[#handles + 1] = boss
+    end
+    for _, boss in ipairs(handles) do
+        if boss:IsAlive() and boss:GetData(DATA_MOVEMENT_FINISHED) ~= 1 then
+            return
+        end
+    end
+    for _, boss in ipairs(handles) do
+        boss:DoAction(ACTION_BEGIN_FIGHTING)
+    end
+end
+
+-- C++ BeginEncounter (:216-260): boss state IN_PROGRESS (the
+-- CheckRequiredBosses gate has no bridge and stays out), all four
+-- PASSIVE + AttackStop + AddThreat 0 to every alive non-GM player in
+-- range, then DoAction(ACTION_BEGIN_MOVEMENT) each. setActive /
+-- SetFarVisible have no bridge.
+local function beginEncounter(creature)
+    if creature:GetBossState(BOSS_HORSEMEN) == BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_IN_PROGRESS)
+    local players = creature:GetPlayersInRange(500)
+    for _, h in ipairs(HORSEMEN) do
+        local boss = creature:FindNearestCreature(h.entry, 500)
+        if boss ~= nil and boss:IsAlive() then
+            boss:SetReactState(0) -- REACT_PASSIVE
+            boss:AttackStop()
+            for _, player in ipairs(players) do
+                if not player:IsGM() and not player:IsDead() then
+                    boss:AddThreat(player, 0)
+                end
+            end
+            boss:DoAction(ACTION_BEGIN_MOVEMENT)
+        end
+    end
+end
+
 local function makeHandlers(which)
     local function enterCombat(event, creature)
-        creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith via BeginEncounter (boss_four_horsemen.cpp:217), idempotent across the four engages
+        -- C++ JustEngagedWith (:284-289): another horseman already
+        -- started the encounter (IN_PROGRESS/DONE) -> return without
+        -- Talk; else Talk(SAY_AGGRO) + BeginEncounter.
+        if creature:GetBossState(BOSS_HORSEMEN) == BOSS_STATE_IN_PROGRESS
+                or creature:GetBossState(BOSS_HORSEMEN) == BOSS_STATE_DONE then
+            return
+        end
         local guid = creature:GetGUIDLow()
         shouldSay[guid] = (which == "thane" or which == "sir")
         creature:Talk(SAY_AGGRO)
-        beginFighting(creature, guid, which)
+        beginEncounter(creature)
     end
     local function leaveCombat(event, creature)
-        cancelTimers(creature:GetGUIDLow())
+        local guid = creature:GetGUIDLow()
+        cancelTimers(guid)
+        -- C++ evade despawns all four (ResetEncounter) and the respawn
+        -- brings fresh AI state; Lua has no despawn leg, so the
+        -- movement latches clear here instead.
+        nextMovement[guid] = nil
+        ourMovementFinished[guid] = nil
     end
     local function targetDied(event, creature, victim)
         if victim ~= nil and victim:GetObjectType() == "Player" then
@@ -381,8 +467,16 @@ local function makeHandlers(which)
         end
     end
     local function died(event, creature, killer)
+        local guid = creature:GetGUIDLow()
+        cancelTimers(guid)
+        -- C++ JustDied (:319-323): killed before the encounter started
+        -- (one-shot) -> BeginEncounter and return, no Talk, no _timeDied.
+        if creature:GetBossState(BOSS_HORSEMEN) ~= BOSS_STATE_IN_PROGRESS
+                and creature:GetBossState(BOSS_HORSEMEN) ~= BOSS_STATE_DONE then
+            beginEncounter(creature)
+            return
+        end
         creature:Talk(SAY_DEATH)
-        cancelTimers(creature:GetGUIDLow())
         -- C++ SetBossState(BOSS_HORSEMEN, DONE) legs
         -- (instance_naxxramas.cpp): when the fourth horseman dies,
         -- the chest flag clear (respawn leg stays out — no GO
@@ -423,11 +517,24 @@ local function makeHandlers(which)
                     -- DoCastAOE(ENCOUNTER_CREDIT 59450, triggered).
                     creature:CastSpell(creature, SPELL_ENCOUNTER_CREDIT, true)
                 end
+                if not (data.baronDone and data.thaneDone and data.ladyDone and data.sirDone) then
+                    -- C++ JustDied (:330-337): another horseman still
+                    -- alive (possibly still running to its corner) ->
+                    -- CheckIsMovementFinished.
+                    checkIsMovementFinished(creature)
+                end
             end
         end
     end
     local function reset(event, creature)
-        cancelTimers(creature:GetGUIDLow())
+        local guid = creature:GetGUIDLow()
+        cancelTimers(guid)
+        -- C++ Reset (boss_four_horsemen.cpp:303): _myMovementFinished =
+        -- false (ScriptData clear), _nextMovement = 0, _timeDied = 0,
+        -- _ourMovementFinished = false.
+        creature:SetData(DATA_MOVEMENT_FINISHED, 0)
+        nextMovement[guid] = nil
+        ourMovementFinished[guid] = nil
         -- C++ Reset (boss_four_horsemen.cpp:303): _timeDied = 0.
         local mapObj = creature:GetMap()
         if mapObj then
@@ -443,7 +550,53 @@ local function makeHandlers(which)
         creature:SetCombatMovement(false)
         creature:SetCombatPulseDelay(0)
     end
-    return enterCombat, leaveCombat, targetDied, died, reset
+    local function doAction(event, creature, action)
+        local guid = creature:GetGUIDLow()
+        if action == ACTION_BEGIN_MOVEMENT then
+            -- C++ DoAction (:173-176): MovePoint(1, _initialPath[0],
+            -- true); MoveTo fires the ev28 POINT_MOTION_TYPE arrival
+            -- (lua_creature_events.go:4867).
+            local p = PATHS[which]
+            creature:MoveTo(1, p[1][1], p[1][2], p[1][3])
+        elseif action == ACTION_BEGIN_FIGHTING then
+            -- C++ DoAction (:177-183): already-finished guard, then
+            -- SetCombatPulseDelay(5) (inside beginFighting) + BeginFighting.
+            if ourMovementFinished[guid] then
+                return
+            end
+            beginFighting(creature, guid, which)
+            ourMovementFinished[guid] = true
+        end
+    end
+    local function movementInform(event, creature, motionType, id)
+        if motionType ~= POINT_MOTION_TYPE then
+            return
+        end
+        local guid = creature:GetGUIDLow()
+        if id < 3 then
+            -- C++ MovementInform (:336-347): id < 3 banks _nextMovement
+            -- and the next UpdateAI tick issues MovePoint(id + 1,
+            -- _initialPath[id]). Lua has no UpdateAI hook, so the next
+            -- leg is re-issued after a 100ms pump (one server-tick delay).
+            nextMovement[guid] = id
+            schedule(guid, "nextmove", 100, function()
+                local step = nextMovement[guid]
+                nextMovement[guid] = nil
+                if step ~= nil then
+                    local p = PATHS[which]
+                    creature:MoveTo(step + 1, p[step + 1][1], p[step + 1][2], p[step + 1][3])
+                end
+            end)
+        else
+            -- C++ :344-347: _myMovementFinished = true, then
+            -- CheckIsMovementFinished. The flag lives in the engine
+            -- ScriptData store (GetData/SetData twin) so the other
+            -- horsemen's checks can read it cross-AI.
+            creature:SetData(DATA_MOVEMENT_FINISHED, 1)
+            checkIsMovementFinished(creature)
+        end
+    end
+    return enterCombat, leaveCombat, targetDied, died, reset, doAction, movementInform
 end
 
 local function spellHitTarget(event, creature, target, spellId)
@@ -459,14 +612,14 @@ local function spellHitTarget(event, creature, target, spellId)
     end
 end
 
-local baronEnter, baronLeave, baronTargetDied, baronDied, baronReset =
-    makeHandlers("baron")
-local thaneEnter, thaneLeave, thaneTargetDied, thaneDied, thaneReset =
-    makeHandlers("thane")
-local ladyEnter, ladyLeave, ladyTargetDied, ladyDied, ladyReset =
-    makeHandlers("lady")
-local sirEnter, sirLeave, sirTargetDied, sirDied, sirReset =
-    makeHandlers("sir")
+local baronEnter, baronLeave, baronTargetDied, baronDied, baronReset,
+    baronDoAction, baronMovementInform = makeHandlers("baron")
+local thaneEnter, thaneLeave, thaneTargetDied, thaneDied, thaneReset,
+    thaneDoAction, thaneMovementInform = makeHandlers("thane")
+local ladyEnter, ladyLeave, ladyTargetDied, ladyDied, ladyReset,
+    ladyDoAction, ladyMovementInform = makeHandlers("lady")
+local sirEnter, sirLeave, sirTargetDied, sirDied, sirReset,
+    sirDoAction, sirMovementInform = makeHandlers("sir")
 
 RegisterCreatureEvent(ENTRY_BARON, 1, baronEnter)
 RegisterCreatureEvent(ENTRY_BARON, 2, baronLeave)
@@ -474,6 +627,8 @@ RegisterCreatureEvent(ENTRY_BARON, 3, baronTargetDied)
 RegisterCreatureEvent(ENTRY_BARON, 4, baronDied)
 RegisterCreatureEvent(ENTRY_BARON, 15, spellHitTarget)
 RegisterCreatureEvent(ENTRY_BARON, 23, baronReset)
+RegisterCreatureEvent(ENTRY_BARON, 28, baronMovementInform)
+RegisterCreatureEvent(ENTRY_BARON, 38, baronDoAction)
 
 RegisterCreatureEvent(ENTRY_THANE, 1, thaneEnter)
 RegisterCreatureEvent(ENTRY_THANE, 2, thaneLeave)
@@ -481,12 +636,16 @@ RegisterCreatureEvent(ENTRY_THANE, 3, thaneTargetDied)
 RegisterCreatureEvent(ENTRY_THANE, 4, thaneDied)
 RegisterCreatureEvent(ENTRY_THANE, 15, spellHitTarget)
 RegisterCreatureEvent(ENTRY_THANE, 23, thaneReset)
+RegisterCreatureEvent(ENTRY_THANE, 28, thaneMovementInform)
+RegisterCreatureEvent(ENTRY_THANE, 38, thaneDoAction)
 
 RegisterCreatureEvent(ENTRY_LADY, 1, ladyEnter)
 RegisterCreatureEvent(ENTRY_LADY, 2, ladyLeave)
 RegisterCreatureEvent(ENTRY_LADY, 3, ladyTargetDied)
 RegisterCreatureEvent(ENTRY_LADY, 4, ladyDied)
 RegisterCreatureEvent(ENTRY_LADY, 23, ladyReset)
+RegisterCreatureEvent(ENTRY_LADY, 28, ladyMovementInform)
+RegisterCreatureEvent(ENTRY_LADY, 38, ladyDoAction)
 
 RegisterCreatureEvent(ENTRY_SIR, 1, sirEnter)
 RegisterCreatureEvent(ENTRY_SIR, 2, sirLeave)
@@ -494,3 +653,5 @@ RegisterCreatureEvent(ENTRY_SIR, 3, sirTargetDied)
 RegisterCreatureEvent(ENTRY_SIR, 4, sirDied)
 RegisterCreatureEvent(ENTRY_SIR, 15, spellHitTarget)
 RegisterCreatureEvent(ENTRY_SIR, 23, sirReset)
+RegisterCreatureEvent(ENTRY_SIR, 28, sirMovementInform)
+RegisterCreatureEvent(ENTRY_SIR, 38, sirDoAction)

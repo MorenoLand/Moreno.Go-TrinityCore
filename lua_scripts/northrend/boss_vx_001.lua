@@ -79,15 +79,21 @@
 -- STAY-OUT: DamageTaken (:943-975) — the 1-HP latch, vehicle-kit
 -- SPELL_VEHICLE_DAMAGED / TORSO_DISABLED / SELF_REPAIR legs and the
 -- DoAction relays to Mimiron (DO_ACTIVATE_AERIAL) all ride the
--- unbridged vehicle kit / MovePoint machine; KilledUnit (:1030-1034)
--- talks via the Mimiron instance ref, which this file has no twin
--- of; EnterEvadeMode (:1013-1016, summons.DespawnAll) — no summon
--- list is kept here. The rapid-burst arms stay dormant until the
--- EVENT_RAPID_BURST timer lands, since burst targets are created
--- only by it.
+-- unbridged vehicle kit / MovePoint machine; EnterEvadeMode
+-- (:1013-1016, summons.DespawnAll) — no summon list is kept here.
+-- The rapid-burst arms stay dormant until the EVENT_RAPID_BURST
+-- timer lands, since burst targets are created only by it.
+-- KilledUnit (:1030-1034) PORTED tick 559 below: player-gated, the
+-- controller (FindNearestCreature twin of the instance ref) Talks
+-- SAY_VX001_SLAY 6 in PHASE_VX_001, SAY_V07TRON_SLAY 12 in VOL7RON.
 
 local NPC_VX_001 = 33651
 local NPC_BURST_TARGET = 34211
+local NPC_MIMIRON = 33350 -- ulduar.h (controller, KilledUnit Talk target)
+
+-- boss_mimiron.cpp:36-47 Yells (controller Talk ids).
+local SAY_VX001_SLAY = 6
+local SAY_V07TRON_SLAY = 12
 
 local DO_START_VX001 = 3
 local DO_HARDMODE_VX001 = 4
@@ -442,6 +448,24 @@ local function vx001JustSummoned(event, creature, summoned)
     end
 end
 
+-- C++ boss_vx_001AI::KilledUnit (:1030-1034): player-gated; the Mimiron
+-- controller Talks SAY_VX001_SLAY 6 while this AI's EventMap is in
+-- PHASE_VX_001, else SAY_V07TRON_SLAY 12 (VOL7RON). Lua phase mirror
+-- is vxState[guid].phase (nil before START reads as not-VX_001, matching
+-- C++ IsInPhase false before SetPhase). FindNearestCreature is the twin
+-- of the C++ instance->GetCreature(BOSS_MIMIRON) ref.
+local function vx001TargetDied(event, creature, victim)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        local st = vxState[creature:GetGUIDLow()]
+        local inPhase = st ~= nil and st.phase == "VX_001"
+        mimiron:Talk(inPhase and SAY_VX001_SLAY or SAY_V07TRON_SLAY)
+    end
+end
+
 -- C++ SpellHit (1036-1040): if the hitting caster is a burst target and
 -- VX-001 is not casting, VX-001 casts RAPID_BURST on it. Event 14 args:
 -- (event, creature, caster, spellId); GetEntry resolves via the generic
@@ -467,6 +491,7 @@ end
 RegisterCreatureEvent(NPC_VX_001, 5, vx001Spawn)
 RegisterCreatureEvent(NPC_VX_001, 38, vx001DoAction)
 RegisterCreatureEvent(NPC_VX_001, 23, vx001Reset)
+RegisterCreatureEvent(NPC_VX_001, 3, vx001TargetDied)
 RegisterCreatureEvent(NPC_VX_001, 4, vx001JustDied)
 RegisterCreatureEvent(NPC_VX_001, 19, vx001JustSummoned)
 RegisterCreatureEvent(NPC_VX_001, 14, vx001SpellHit)

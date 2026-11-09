@@ -72,9 +72,10 @@
 --     leash twin, creaturemotion.go:4664) -- but that is the invoke side,
 --     not a callback for the C++ override, so the arm still stays out.
 --   KilledUnit (:1213, SAY_AERIAL_SLAY 9 / SAY_V07TRON_SLAY 12 via the
---     mimiron controller) -- out: the arm itself is unported (follow-up
---     axis; the controller IS ported in boss_mimiron.lua and
---     GetInstanceCreature is bridged).
+--     mimiron controller) PORTED tick 559 below: player-gated, the
+--     controller (FindNearestCreature twin of the instance ref) Talks
+--     per the Lua phase mirror in acuState (AERIAL_COMMAND_UNIT vs
+--     VOL7RON, set in DoAction 6/12).
 --   MovementInform (:1220, WP_AERIAL_P4_POS facing + NOT_SELECTABLE flag
 --     + CLEAR_ALL_DEBUFFS + DO_ACTIVATE_V0L7R0N_1) -- out: unreachable
 --     without the unbridged DamageTaken MovePoint leg, and its tail is a
@@ -95,6 +96,11 @@
 local NPC_AERIAL_COMMAND_UNIT = 33670
 local NPC_ASSAULT_BOT = 34057
 local NPC_JUNK_BOT = 33855
+local NPC_MIMIRON = 33350 -- ulduar.h (controller, KilledUnit Talk target)
+
+-- boss_mimiron.cpp:36-47 Yells (controller Talk ids).
+local SAY_AERIAL_SLAY = 9
+local SAY_V07TRON_SLAY = 12
 
 local SPELL_VEHICLE_DAMAGED = 63415
 local SPELL_EMERGENCY_MODE = 64582
@@ -264,7 +270,7 @@ end
 -- fireFighter latch is a per-instance member in C++; Lua resets it per
 -- spawn (the ACU is summoned fresh on each phase-3 activation).
 local function aerialSpawn(event, creature)
-    acuState[creature:GetGUIDLow()] = { fireFighter = false }
+    acuState[creature:GetGUIDLow()] = { fireFighter = false, phase = nil }
     creature:SetReactState(REACT_PASSIVE)
     creature:SetDisableGravity(true)
 end
@@ -304,6 +310,13 @@ local function aerialDoAction(event, creature, action)
         end)
     end
     if action == DO_HARDMODE_AERIAL or action == DO_START_AERIAL then
+        local st = acuState[guid]
+        if not st then
+            st = { fireFighter = false, phase = nil }
+            acuState[guid] = st
+        end
+        -- SetPhase(PHASE_AERIAL_COMMAND_UNIT) mirror, read by KilledUnit.
+        st.phase = "AERIAL_COMMAND_UNIT"
         creature:SetDisableGravity(false)
         creature:SetHover(true)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
@@ -333,6 +346,13 @@ local function aerialDoAction(event, creature, action)
         return
     end
     if action == DO_ASSEMBLED_COMBAT then
+        local st = acuState[guid]
+        if not st then
+            st = { fireFighter = false, phase = nil }
+            acuState[guid] = st
+        end
+        -- SetPhase(PHASE_VOL7RON) mirror, read by KilledUnit.
+        st.phase = "VOL7RON"
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
         creature:SetReactState(REACT_AGGRESSIVE)
         creature:SetStandState(UNIT_STAND_STATE_STAND)
@@ -359,6 +379,28 @@ end
 -- C++ Reset / death: cancel all Lua timers (events.Reset twin).
 local function aerialReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    local st = acuState[creature:GetGUIDLow()]
+    if st then
+        st.phase = nil
+    end
+end
+
+-- C++ boss_aerial_command_unitAI::KilledUnit (:1213-1218): player-gated;
+-- the Mimiron controller Talks SAY_AERIAL_SLAY 9 while this AI's EventMap
+-- is in PHASE_AERIAL_COMMAND_UNIT, else SAY_V07TRON_SLAY 12 (VOL7RON).
+-- Lua phase mirror is acuState[guid].phase (nil before START reads as
+-- not-AERIAL, matching C++ IsInPhase false before SetPhase).
+-- FindNearestCreature is the twin of the C++ instance->GetCreature(BOSS_MIMIRON) ref.
+local function aerialTargetDied(event, creature, victim)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        local st = acuState[creature:GetGUIDLow()]
+        local inPhase = st ~= nil and st.phase == "AERIAL_COMMAND_UNIT"
+        mimiron:Talk(inPhase and SAY_AERIAL_SLAY or SAY_V07TRON_SLAY)
+    end
 end
 
 local function aerialDied(event, creature)
@@ -369,5 +411,6 @@ RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 5, aerialSpawn)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 9, aerialDamageTaken)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 19, aerialJustSummoned)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 23, aerialReset)
+RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 3, aerialTargetDied)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 4, aerialDied)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 38, aerialDoAction)
