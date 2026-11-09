@@ -117,15 +117,13 @@
 -- SetGUID(DATA_NEW_TARGET) -> AttackStart + EVENT_BATTER /
 -- EVENT_SNOBOLLED / EVENT_HEAD_CRACK (no SetGUID hook); DoAction
 -- ACTION_ENABLE_FIRE_BOMB / ACTION_DISABLE_FIRE_BOMB /
--- ACTION_ACTIVE_SNOBOLD — cross-AI DoAction-gated (no bridge);
--- EVENT_FIRE_BOMB — SelectTarget(Random,0,0.0f,true) -> CastSpell(
--- SPELL_FIRE_BOMB 66313), 12s/25s init, 20s/30s repeat — the
--- random-target leg is bridged (GetPlayersInWorld + math.random,
--- nightbane/midnight precedent); it stays out on the true blockers:
--- the MountOnBoss vehicle mount machine (no vehicle bridge) and the
--- cross-AI DoAction ENABLE/DISABLE cancel-rearm
--- (boss_northrend_beasts.cpp:441) — porting it alone would
--- over-cast (jedoga bar); EVENT_BATTER /
+-- ACTION_ACTIVE_SNOBOLD — PORTED tick 558 as snoboldDoAction (ev38,
+-- receiver only; senders are the unported vehicle MountOnBoss and
+-- spell_gormok_snobolled); EVENT_FIRE_BOMB — SelectTarget(Random,
+-- 0,0.0f,true) -> CastSpell(SPELL_FIRE_BOMB 66313), 12s/25s init,
+-- 20s/30s repeat — the random-target leg rides GetAITarget(0, true)
+-- (mother_shahraz precedent), armed only by the DoAction(1) gate so
+-- it cannot over-cast; EVENT_BATTER /
 -- EVENT_HEAD_CRACK — DoCast(vehicleBase, 66408 / 66407) else
 -- DoCastVictim (DoCastVictim legs port-pattern-ready in isolation but
 -- fire only via the vehicle/SetGUID/SetCombatMovement machine —
@@ -254,10 +252,12 @@
 -- unbridged charge phase by the phase switch — jedoga over-cast bar;
 -- stale "no random-target bridge" retracted; DoAction ACTION_ENRAGE
 -- — DoCastSelf(SPELL_FROTHING_RAGE 66759) + Talk(EMOTE_TRAMPLE_ENRAGE
--- 2) — gated via spell_icehowl_trample CheckTargets -> DoAction (no
--- SpellScript binding bridge); DoAction ACTION_TRAMPLE_FAIL —
--- DoCastSelf(SPELL_STAGGERED_DAZE 66758) + Talk(EMOTE_TRAMPLE_FAIL 1)
--- + DelayEvents(15s) — same gate; MovementInform POINT_INITIAL_MOVEMENT
+-- 2) — PORTED tick 558 as icehowlDoAction (ev38, receiver only;
+-- sender is the unported spell_icehowl_trample SpellScript);
+-- DoAction ACTION_TRAMPLE_FAIL — DoCastSelf(SPELL_STAGGERED_DAZE
+-- 66758) + Talk(EMOTE_TRAMPLE_FAIL 1) + DelayEvents(15s) — same
+-- handler; the DelayEvents leg is vacuous (no Lua-armed icehowl
+-- timers); MovementInform POINT_INITIAL_MOVEMENT
 -- -> EVENT_ENGAGE 3s: DoCloseDoorOrButton + SetImmuneToPC(false) +
 -- SetPhase(PHASE_COMBAT) + SetReactState(AGGRESSIVE) + DoZoneInCombat
 -- (no hook; no door / immune / phase / zone bridges). JustDied —
@@ -305,6 +305,9 @@ local SPELL_IMPALE = 66331
 local SPELL_STAGGERING_STOMP = 66330
 local SPELL_ENRAGE = 68335 -- boss_northrend_beasts.cpp:77 (worm DoAction ACTION_ENRAGE)
 local SPELL_SLIME_POOL_EFFECT = 66882 -- boss_northrend_beasts.cpp:96
+local SPELL_FIRE_BOMB = 66313 -- boss_northrend_beasts.cpp:65
+local SPELL_FROTHING_RAGE = 66759 -- :105
+local SPELL_STAGGERED_DAZE = 66758 -- :106
 
 -- trial_of_the_crusader.h: DATA_ACIDMAW 7 / DATA_DREADSCALE 8 /
 -- DATA_NORTHREND_BEASTS 0 (boss id for the beasts encounter).
@@ -318,6 +321,12 @@ local BOSS_STATE_DONE = 3
 
 local EMOTE_ENRAGE = 0 -- boss_northrend_beasts.cpp:37 (Yells; worm Talk)
 local ACTION_ENRAGE = 4 -- boss_northrend_beasts.cpp:119 (MyActions)
+local ACTION_ENABLE_FIRE_BOMB = 1 -- :116
+local ACTION_DISABLE_FIRE_BOMB = 2 -- :117
+local ACTION_ACTIVE_SNOBOLD = 3 -- :118
+local ACTION_TRAMPLE_FAIL = 5 -- :120
+local EMOTE_TRAMPLE_FAIL = 1 -- :42
+local EMOTE_TRAMPLE_ENRAGE = 2 -- :43
 local DATA_FORDRING = 12 -- trial_of_the_crusader.h:46
 local ENTRY_FORDRING = 34996 -- trial_of_the_crusader.h:156 (NPC_TIRION_FORDRING)
 local ACTION_NORTHREND_BEASTS_WIPE = 5 -- trial_of_the_crusader.h:102 (TCRActions)
@@ -338,6 +347,14 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+    end
+end
+
+local function cancelTimer(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
     end
 end
 
@@ -433,6 +450,49 @@ local function snoboldDied(event, creature, killer)
         count = 0
     end
     data.snoboldCount = count
+end
+
+-- C++ npc_snobold_vassalAI::UpdateAI EVENT_FIRE_BOMB (:517-521):
+-- SelectTarget(Random, 0, 0.0f, true) -> CastSpell(SPELL_FIRE_BOMB),
+-- Repeat(20s, 30s). The random-player pick rides GetAITarget(0, true)
+-- (mother_shahraz precedent); the C++ UpdateAI CASTING pre-loop gate
+-- rides the file's 500ms defer idiom (impaleTick above).
+local function fireBombTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firebomb", 500, function()
+            fireBombTick(creature, guid)
+        end)
+        return
+    end
+    local target = creature:GetAITarget(0, true, 0, 0, 0)
+    if target then
+        creature:CastSpell(target, SPELL_FIRE_BOMB)
+    end
+    schedule(guid, "firebomb", {20000, 30000}, function()
+        fireBombTick(creature, guid)
+    end)
+end
+
+-- C++ npc_snobold_vassalAI::DoAction (:433-447), PORTED tick 558
+-- (receiver only; senders are the unported vehicle MountOnBoss
+-- (:480) and spell_gormok_snobolled (:1085)): ENABLE_FIRE_BOMB
+-- schedules EVENT_FIRE_BOMB at {12s,25s}; DISABLE_FIRE_BOMB cancels
+-- it; ACTIVE_SNOBOLD sets the _mountedOnPlayer latch (its readers —
+-- CanAIAttack / AttackStart — ride the unported vehicle machine, so
+-- the latch is write-only in Lua).
+local snoboldMounted = {}
+
+local function snoboldDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_ENABLE_FIRE_BOMB then
+        schedule(guid, "firebomb", {12000, 25000}, function()
+            fireBombTick(creature, guid)
+        end)
+    elseif action == ACTION_DISABLE_FIRE_BOMB then
+        cancelTimer(guid, "firebomb")
+    elseif action == ACTION_ACTIVE_SNOBOLD then
+        snoboldMounted[guid] = true
+    end
 end
 
 -- C++ EVENT_IMPALE: DoCastVictim(Impale), 10s init, 10s repeat.
@@ -675,6 +735,25 @@ local function icehowlDied(event, creature, killer)
     beastsCountDeath(creature)
 end
 
+-- C++ boss_icehowl::DoAction (:990-1004), PORTED tick 558 (receiver
+-- only; senders are the unported spell_icehowl_trample SpellScript
+-- and the worm-death cascade): ENRAGE — DoCastSelf(SPELL_FROTHING_RAGE,
+-- triggered) + Talk(EMOTE_TRAMPLE_ENRAGE 2); TRAMPLE_FAIL —
+-- DoCastSelf(SPELL_STAGGERED_DAZE, triggered) +
+-- Talk(EMOTE_TRAMPLE_FAIL 1) + DelayEvents(15s). The DelayEvents leg
+-- is vacuous in the Lua model: Icehowl has no armed timers here
+-- (FEROCIOUS_BUTT / WHIRL / ARCTIC_BREATH stay out, phase-gated on
+-- the unbridged charge machine), so there is nothing to delay.
+local function icehowlDoAction(event, creature, action)
+    if action == ACTION_ENRAGE then
+        creature:CastSpell(creature, SPELL_FROTHING_RAGE, true)
+        creature:Talk(EMOTE_TRAMPLE_ENRAGE)
+    elseif action == ACTION_TRAMPLE_FAIL then
+        creature:CastSpell(creature, SPELL_STAGGERED_DAZE, true)
+        creature:Talk(EMOTE_TRAMPLE_FAIL)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_GORMOK, 1, enterCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 2, leaveCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 4, gormokDied)
@@ -689,8 +768,10 @@ RegisterCreatureEvent(ENTRY_ACIDMAW, 38, wormDoAction)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 4, icehowlDied)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 2, beastsEvaded)
+RegisterCreatureEvent(ENTRY_ICEHOWL, 38, icehowlDoAction)
 RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 5, snoboldSpawned)
 RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 4, snoboldDied)
+RegisterCreatureEvent(ENTRY_SNOBOLD_VASSAL, 38, snoboldDoAction)
 
 -- C++ spell_jormungars_slime_pool::PeriodicTick (boss_northrend_beasts.cpp:1221-1228):
 -- EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL on 66882. PreventDefaultAction,

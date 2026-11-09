@@ -109,10 +109,13 @@
 -- latch stays 1 in the Go-modeled fight; the instance write leg is
 -- PORTED 2026-11-08 (tick 419, flameLeviathanSpawned below) and the Go
 -- case reads the shared instanceData table. The DoAction
--- tower-destruction loot-mode ladder stays out (no loot-mode bridge);
--- the tower-destruction COUNT leg is modeled via the GO-destroyed
--- handlers below, and the hard-mode activation leg via the lorekeeper
--- gossip select + ev38 DoAction handler.
+-- tower-destruction loot-mode ladder is PORTED tick 558 (HasLootMode /
+-- RemoveLootMode, lua_creature_events.go:2297/2324) inside the
+-- GO-destroyed handler below, which is the live dispatch path for
+-- DoAction(1..4) (no instance-ProcessEvent bridge); the
+-- tower-destruction COUNT leg is modeled in the same handler, and the
+-- hard-mode activation leg via the lorekeeper gossip select + ev38
+-- DoAction handler.
 -- DoBatteringRamIfReady — _pursueTarget + attack-timer legs — no bridges.
 -- SAY_SLAY 1 is defined but never used in C++ (no KilledUnit override) —
 -- no event 3 arm.
@@ -186,6 +189,51 @@ local DATA_ORBIT_ACHIEVEMENTS = 1
 
 -- boss_flame_leviathan.cpp:172 MiscellanousData enum.
 local ACTION_START_HARD_MODE = 5
+local ACTION_SPAWN_VEHICLES = 6
+
+-- ulduar.h:339-343 LeviathanActions enum.
+local ACTION_TOWER_OF_STORM_DESTROYED = 1
+local ACTION_TOWER_OF_FROST_DESTROYED = 2
+local ACTION_TOWER_OF_FLAMES_DESTROYED = 3
+local ACTION_TOWER_OF_LIFE_DESTROYED = 4
+local ACTION_MOVE_TO_CENTER_POSITION = 10
+
+-- SharedDefines.h:42-46.
+local LOOT_MODE_DEFAULT = 0x1
+local LOOT_MODE_HARD_MODE_1 = 0x2
+local LOOT_MODE_HARD_MODE_2 = 0x4
+local LOOT_MODE_HARD_MODE_3 = 0x8
+local LOOT_MODE_HARD_MODE_4 = 0x10
+
+-- boss_flame_leviathan.cpp:179 Position const Center.
+local CENTER_POS = {354.8771, -12.9024, 409.80365, 0.0}
+
+-- boss_flame_leviathan.cpp:136-138 entries + :182-209 spawn
+-- positions (VEHICLE_SPAWNS = 5).
+local VEHICLE_SIEGE = 33060
+local VEHICLE_CHOPPER = 33062
+local VEHICLE_DEMOLISHER = 33109
+local POS_SIEGE = {
+    {-814.59, -64.54, 429.92, 5.969},
+    {-784.37, -33.31, 429.92, 5.096},
+    {-808.99, -52.10, 429.92, 5.668},
+    {-798.59, -44.00, 429.92, 5.663},
+    {-812.83, -77.71, 429.92, 0.046},
+}
+local POS_CHOPPER = {
+    {-717.83, -106.56, 430.02, 0.122},
+    {-717.83, -114.23, 430.44, 0.122},
+    {-717.83, -109.70, 430.22, 0.122},
+    {-718.45, -118.24, 430.26, 0.052},
+    {-718.45, -123.58, 430.41, 0.085},
+}
+local POS_DEMOLISHER = {
+    {-724.12, -176.64, 430.03, 2.543},
+    {-766.70, -225.03, 430.50, 1.710},
+    {-729.54, -186.26, 430.12, 1.902},
+    {-756.01, -219.23, 430.50, 2.369},
+    {-798.01, -227.24, 429.84, 1.446},
+}
 
 -- ulduar.h:108 NPC_LORE_KEEPER_OF_NORGANNON; boss_flame_leviathan.cpp
 -- :105-108 GameObject entries for the four destructible towers.
@@ -442,14 +490,26 @@ end
 -- C++ DoAction ACTION_START_HARD_MODE
 -- (boss_flame_leviathan.cpp:549-556): ActiveTowers = true, all
 -- four tower flags true, ActiveTowersCount stays 4 — so GetData
--- (DATA_ORBIT_ACHIEVEMENTS) starts returning 4. The loot-mode
--- ladder in the same arm stays out (no loot-mode bridge); the
--- tower-buff aura/event legs ride the unported ActiveTower()
--- machine and stay documented-only. Only the achievement latch
--- ports here.
+-- (DATA_ORBIT_ACHIEVEMENTS) starts returning 4 — plus
+-- SetLootMode(DEFAULT | HARD_MODE_1..4), which the tower-destruction
+-- ladder below strips one mode at a time. The tower-buff aura/event
+-- legs ride the unported ActiveTower() machine and stay
+-- documented-only. PORTED tick 558: the SetLootMode leg
+-- (lua_creature_events.go:2310) alongside the achievement latch.
+-- C++ DoAction ACTION_MOVE_TO_CENTER_POSITION (:557-565): gated on
+-- !isDead() + REACT_PASSIVE — SetHomePosition(Center) ports, the
+-- MoveCharge(42.0) leg stays out (no MoveCharge bridge), so the
+-- ev28 arrival leg (:571-576) has no sender in Lua and is not
+-- registered. PORTED tick 558 (receiver only; sender is the
+-- unported instance EVENT_LEVIATHAN_BREAK_DOOR).
 local function flameLeviathanDoAction(event, creature, action)
     if action == ACTION_START_HARD_MODE then
         creature:SetData(DATA_ORBIT_ACHIEVEMENTS, 4)
+        creature:SetLootMode(LOOT_MODE_DEFAULT + LOOT_MODE_HARD_MODE_1 + LOOT_MODE_HARD_MODE_2 + LOOT_MODE_HARD_MODE_3 + LOOT_MODE_HARD_MODE_4)
+    elseif action == ACTION_MOVE_TO_CENTER_POSITION then
+        if creature:IsAlive() and creature:GetReactState() == 0 then
+            creature:SetHomePosition(CENTER_POS[1], CENTER_POS[2], CENTER_POS[3], CENTER_POS[4])
+        end
     end
 end
 
@@ -466,14 +526,17 @@ RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 38, flameLeviathanDoAction)
 -- SetVisible(false). The lorekeeper has a single gossip option,
 -- so listID == 0 is the C++ gate (razorscale commander
 -- precedent); the menuId itself is not forwarded by the select
--- hook (gossip.go) and needs no check. The vehicle spawns stay
--- out: RAID_MODE(2, 5) counts have no raid-size bridge
--- (creature:IsHeroic() is difficulty, not 10/25). The
--- Delorah/Brann legs stay out (instance GUID latches + MovePoint
--- unbridged). Returns true when handled to veto the native arms
--- after doing the work (uniform Eluna gossip polarity, razorscale
--- precedent); the C++ `return false` is the AI-hook return, not
--- the Eluna veto polarity.
+-- hook (gossip.go) and needs no check. The vehicle spawns ride
+-- creature:Is25ManRaid() on the leviathan (lua_creature_events.go:
+-- 4028 — the RAID_MODE(2, 5) count twin; the lorekeeper gossip
+-- creature has no Is25ManRaid binding) + SummonCreature type 5
+-- TEMPSUMMON_CORPSE_TIMED_DESPAWN, 3000ms (mechanolift precedent).
+-- C++ order (:1276-1281): DoAction(5), hide, DoAction(6) spawns.
+-- PORTED tick 558. The Delorah/Brann legs stay out (instance GUID
+-- latches + MovePoint unbridged). Returns true when handled to veto
+-- the native arms after doing the work (uniform Eluna gossip
+-- polarity, razorscale precedent); the C++ `return false` is the
+-- AI-hook return, not the Eluna veto polarity.
 local function loreKeeperGossipSelect(event, player, creature, sender, action, code, listID)
     if listID ~= 0 then
         return false
@@ -486,6 +549,17 @@ local function loreKeeperGossipSelect(event, player, creature, sender, action, c
         leviathan:DoAction(ACTION_START_HARD_MODE)
     end
     creature:SetVisible(false)
+    if leviathan then
+        local count = 2
+        if leviathan:Is25ManRaid() then
+            count = 5
+        end
+        for i = 1, count do
+            creature:SummonCreature(VEHICLE_SIEGE, POS_SIEGE[i][1], POS_SIEGE[i][2], POS_SIEGE[i][3], POS_SIEGE[i][4], 5, 3000)
+            creature:SummonCreature(VEHICLE_CHOPPER, POS_CHOPPER[i][1], POS_CHOPPER[i][2], POS_CHOPPER[i][3], POS_CHOPPER[i][4], 5, 3000)
+            creature:SummonCreature(VEHICLE_DEMOLISHER, POS_DEMOLISHER[i][1], POS_DEMOLISHER[i][2], POS_DEMOLISHER[i][3], POS_DEMOLISHER[i][4], 5, 3000)
+        end
+    end
     return true
 end
 
@@ -504,10 +578,17 @@ RegisterCreatureGossipEvent(ENTRY_LORE_KEEPER_OF_NORGANNON, 2, loreKeeperGossipS
 -- precedent; the entry filter admits no wrong match) and the
 -- orbit slot drops by one. The slot read (GetData) is the
 -- ActiveTowers gate: 0 while hard mode is off, so a pre-activation
--- destruction neither decrements nor records.
+-- destruction neither decrements nor records. The C++ DoAction
+-- loot-mode ladder (:504-521) runs here before the decrement, in
+-- C++ order (ladder first, then the tower-flag decrement). The
+-- per-tower record table is a separate local: the pre-558 code
+-- indexed the handler function itself (towerDestroyed[entry] on a
+-- function value), which errors on the first tower destruction.
+local towersDestroyed = {}
+
 local function towerDestroyed(event, go, attacker)
     local entry = go:GetEntry()
-    if towerDestroyed[entry] then
+    if towersDestroyed[entry] then
         return
     end
     local leviathan = go:FindNearestCreature(ENTRY_FLAME_LEVIATHAN, 500)
@@ -516,7 +597,17 @@ local function towerDestroyed(event, go, attacker)
     end
     local count = leviathan:GetData(DATA_ORBIT_ACHIEVEMENTS)
     if count > 0 then
-        towerDestroyed[entry] = true
+        towersDestroyed[entry] = true
+        local allModes = LOOT_MODE_DEFAULT + LOOT_MODE_HARD_MODE_1 + LOOT_MODE_HARD_MODE_2 + LOOT_MODE_HARD_MODE_3 + LOOT_MODE_HARD_MODE_4
+        if count == 4 and leviathan:HasLootMode(allModes) then
+            leviathan:RemoveLootMode(LOOT_MODE_HARD_MODE_4)
+        elseif count == 3 and leviathan:HasLootMode(allModes) then
+            leviathan:RemoveLootMode(LOOT_MODE_HARD_MODE_3)
+        elseif count == 2 and leviathan:HasLootMode(allModes) then
+            leviathan:RemoveLootMode(LOOT_MODE_HARD_MODE_2)
+        elseif count == 1 and leviathan:HasLootMode(allModes) then
+            leviathan:RemoveLootMode(LOOT_MODE_HARD_MODE_1)
+        end
         leviathan:SetData(DATA_ORBIT_ACHIEVEMENTS, count - 1)
     end
 end

@@ -1741,8 +1741,19 @@ end
 -- (sara TRANSFORM_3) targets mimiron only. ACTION_PHASE_THREE is
 -- PORTED below (phase latch + Thorim-only TITANIC_STORM); its sender
 -- is the brain DamageTaken cascade (brainDamageTaken, :1082-1090).
--- ACTION_SANITY_WELLS / ACTION_FLASH_FREEZE stay out (unported
--- senders).
+-- ACTION_SANITY_WELLS / ACTION_FLASH_FREEZE PORTED tick 558 below
+-- (receiver only; senders are the unported instance events
+-- EVENT_ACTIVATE_SANITY_WELL / EVENT_HODIRS_PROTECTIVE_GAZE_PROC,
+-- instance_ulduar.cpp:602/606).
+-- Grouped into one table local: the file sits at the 200-local
+-- main-chunk limit, so new keeper DoAction ids share a table
+-- (LK-table precedent).
+local KEEPER_DO_ACTION = {
+    SANITY_WELLS = 4, -- boss_yogg_saron.cpp:370
+    FLASH_FREEZE = 5, -- :371
+    FLASH_FREEZE_VISUAL = 64176, -- boss_yogg_saron.cpp:227
+}
+
 local function keeperDoAction(event, creature, action)
     if action == ACTION_PHASE_TWO then
         local guid = creature:GetGUIDLow()
@@ -1759,6 +1770,28 @@ local function keeperDoAction(event, creature, action)
         if creature:GetEntry() == ENTRY_KEEPER_THORIM then
             creature:CastSpell(creature, PHASE3.SPELL_TITANIC_STORM)
         end
+    elseif action == KEEPER_DO_ACTION.SANITY_WELLS then
+        -- C++ DoAction (:1689-1699): grid-cast SANITY_WELL +
+        -- SANITY_WELL_VISUAL on every sanity well in 200 yd, self-cast
+        -- (no triggered flag). GetCreaturesInGrid is the
+        -- GetCreatureListWithEntryInGrid twin
+        -- (lua_creature_events.go:6250).
+        local wells = creature:GetCreaturesInGrid(ENTRY_SANITY_WELL, 200)
+        if wells then
+            for _, well in ipairs(wells) do
+                well:CastSpell(well, SPELL_SANITY_WELL)
+                well:CastSpell(well, SPELL_SANITY_WELL_VISUAL)
+            end
+        end
+    elseif action == KEEPER_DO_ACTION.FLASH_FREEZE then
+        -- C++ DoAction (:1700-1704): DoCast(FLASH_FREEZE_VISUAL) +
+        -- EVENT_HODIRS_PROTECTIVE_GAZE in {25s,30s}, whose UpdateAI
+        -- arm (:1668-1670) is a plain DoCast(HODIRS_PROTECTIVE_GAZE).
+        creature:CastSpell(creature, KEEPER_DO_ACTION.FLASH_FREEZE_VISUAL)
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "hodirsprotectivegaze", {25000, 30000}, function()
+            creature:CastSpell(creature, SPELL_HODIRS_PROTECTIVE_GAZE)
+        end)
     end
 end
 

@@ -114,10 +114,12 @@
 -- PrincesData ENGAGE loop) and EnterEvadeMode DISENGAGE loop (:252-260)
 -- are PORTED via the instance guid store; the CheckRequiredBosses
 -- sequence-break leg, the roll_chance_i(50) _invocationOrder build +
--- EVENT_INVOCATION_OF_BLOOD seed, and the intro legs stay out
+-- EVENT_INVOCATION_OF_BLOOD seed, and the START_INTRO leg stay out
 -- (instance GetData(DATA_BLOOD_PRINCE_COUNCIL_INTRO 43) gate — no
 -- instance GetData bridge; creature:GetData is the per-motion latch,
--- not instance data). The Reset SummonCreatureGroup leg is PORTED
+-- not instance data — plus the unregistered queen relay). The
+-- INTRO_DONE relay is PORTED tick 558 (controllerDoAction, ev38).
+-- The Reset SummonCreatureGroup leg is PORTED
 -- below (controllerReset, event 23). UpdateAI EVENT_INVOCATION_OF_BLOOD
 -- (:373-398) cross-AI DoAction + Talk(textId) on the rotated prince is
 -- the invocation rotation machine, driven by the unregistered council
@@ -136,12 +138,12 @@
 -- controller's unbridged invocation cast (no bridge); the
 -- ACTION_REMOVE_INVOCATION health/aura reset rides the controller's
 -- cross-AI DoAction (dispatch IS bridged, ev38 — the controller
--- itself is unregistered). ACTION_STAND_UP (:552-563) rides the
--- same unregistered-controller machine: its 1s StandUpEvent (HandleEmoteCommand +
--- SetReactState(REACT_AGGRESSIVE), :177-189) is the un-gating of the
--- unported feign-death intro machine (JustAppeared :488), so the
--- AGGRESSIVE arm is vacuous in the Lua model too — nothing ever sets
--- the princes passive here.
+-- itself is unregistered). ACTION_STAND_UP (:552-563) is PORTED tick
+-- 558 as a receiver (princesDoAction, ev38; sender is the controller
+-- INTRO_DONE relay above) — aura/flag strips + 1s StandUpEvent
+-- (PerformEmote ROAR + SetReactState AGGRESSIVE, :177-189). It is a
+-- no-op until the feign-death intro machine lands (JustAppeared
+-- :488): nothing ever sets the princes passive in Lua today.
 -- BloodPrincesBossAI::JustAppeared (:488) — instance DATA_INTRO gate
 -- (feign-death 71598 self-cast while the intro is not done) + SetHealth
 -- (_spawnHealth) has no instance bridge; NOT registered (the intro
@@ -437,6 +439,18 @@ local SPELL_CONJURE_EMPOWERED_FLAME = 72040 -- boss_blood_prince_council.cpp:97
 local SPELL_EMPOWERED_SHOCK_VORTEX = 72039 -- boss_blood_prince_council.cpp:109
 local ACTION_CAST_INVOCATION = 4 -- boss_blood_prince_council.cpp:156
 local ACTION_REMOVE_INVOCATION = 5 -- boss_blood_prince_council.cpp:157
+local ACTION_START_INTRO = 1 -- boss_blood_prince_council.cpp:154
+local ACTION_INTRO_DONE = 2 -- :155
+local ACTION_STAND_UP = 3 -- :156
+local ACTION_KINETIC_BOMB_JUMP = 6 -- :159
+local SPELL_FEIGN_DEATH = 71598 -- boss_blood_prince_council.cpp:68
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FIELD_FLAGS_2 = 60
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local UNIT_FLAG2_FEIGN_DEATH = 0x1 -- UnitDefines.h:161
+local UNIT_DYNFLAG_DEAD = 0x20 -- SharedDefines.h:3133
+local EMOTE_ONESHOT_ROAR = 15 -- SharedDefines.h:1950
 local EMOTE_VALANAR_SHOCK_VORTEX = 3 -- boss_blood_prince_council.cpp:56
 -- Per-prince invocation spell, for the ACTION_REMOVE_INVOCATION aura
 -- strip (C++ SelectInvocationSpell :596-606).
@@ -994,6 +1008,15 @@ end
 -- :585-590). Arrives via ev38 from the controller rotation below
 -- (the C++ SpellHit relay :535-539 is folded into the direct dispatch:
 -- the visual/invocation casts carry no Lua-visible payload beyond it).
+-- ACTION_STAND_UP (:552-563) PORTED tick 558 below (receiver only;
+-- sender is the controller INTRO_DONE relay, ported in
+-- controllerDoAction): RemoveAurasDueToSpell(FEIGN_DEATH) +
+-- RemoveFlag(NOT_SELECTABLE) + RemoveFlag(DYNFLAG_DEAD) +
+-- RemoveFlag(FLAG2_FEIGN_DEATH) + 1s StandUpEvent (PerformEmote
+-- ROAR + SetReactState AGGRESSIVE, :177-189). The SetImmuneToPC(false)
+-- and ForceValuesUpdateAtIndex legs stay out (no bridges). The arm is
+-- a no-op until the feign-death intro machine lands — nothing ever
+-- sets the princes passive/feign-death in Lua today.
 local function princesDoAction(event, creature, action)
     local guid = creature:GetGUIDLow()
     if action == ACTION_CAST_INVOCATION then
@@ -1008,6 +1031,15 @@ local function princesDoAction(event, creature, action)
             creature:RemoveAura(inv)
         end
         empowered[guid] = false
+    elseif action == ACTION_STAND_UP then
+        creature:RemoveAura(SPELL_FEIGN_DEATH)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_FEIGN_DEATH)
+        schedule(guid, "standup", 1000, function()
+            creature:PerformEmote(EMOTE_ONESHOT_ROAR)
+            creature:SetReactState(2) -- REACT_AGGRESSIVE
+        end)
     end
 end
 
@@ -1092,15 +1124,31 @@ end
 -- :228-232).
 local evadeCounter = {}
 
+-- C++ boss_blood_council_controller::DoAction (:338-360), PORTED
+-- tick 558 (receiver only; sender is the queen's EVENT_INTRO_1,
+-- unported): ACTION_INTRO_DONE relays ACTION_STAND_UP to all three
+-- princes (via the instance GUID store) and heals Valanar to full.
+-- ACTION_START_INTRO stays out: its gate reads instance
+-- GetData(DATA_BLOOD_PRINCE_COUNCIL_INTRO 43) (no instance GetData
+-- bridge) and its leg relays to the unregistered blood queen.
 local function controllerDoAction(event, creature, action)
-    if action ~= ACTION_PRINCE_EVADE then
-        return
-    end
     local guid = creature:GetGUIDLow()
-    local count = (evadeCounter[guid] or 0) + 1
-    evadeCounter[guid] = count
-    if count == 3 then
-        creature:EnterEvadeMode()
+    if action == ACTION_PRINCE_EVADE then
+        local count = (evadeCounter[guid] or 0) + 1
+        evadeCounter[guid] = count
+        if count == 3 then
+            creature:EnterEvadeMode()
+        end
+    elseif action == ACTION_INTRO_DONE then
+        for _, bossData in ipairs(PRINCES_DATA) do
+            local prince = creature:GetInstanceCreature(bossData)
+            if prince then
+                prince:DoAction(ACTION_STAND_UP)
+                if bossData == DATA_PRINCE_VALANAR then
+                    prince:SetHealth(prince:GetMaxHealth())
+                end
+            end
+        end
     end
 end
 

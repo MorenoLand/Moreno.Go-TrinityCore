@@ -120,8 +120,9 @@
 -- (Go-side count + DoAction 38 fire, algalonDoAction below).
 -- Intro machine: Talk 0/1/2 (:529/:541/:546, EVENT_INTRO_1..3) chained under
 -- PHASE_ROLE_PLAY from DoAction(ACTION_START_INTRO) (:328, Brann-summoned
--- pre-combat) — pre-combat roleplay, porting on combat-start timers would
--- fabricate them mid-fight. EVENT_INTRO_TIMER_DONE (:560-584) has NO Talk
+-- pre-combat) — pre-combat roleplay, PORTED tick 558 on the ev38
+-- DoAction(0) receiver itself (algalonDoAction), not on combat-start
+-- timers, which would fabricate them mid-fight. EVENT_INTRO_TIMER_DONE (:560-584) has NO Talk
 -- arm (header correction this run) — pure machinery (SetPhase(NORMAL),
 -- constellation summons) except the SetReactState(REACT_DEFENSIVE) (:566)
 -- leg, which IS ported on the introDelay timer in algalonTimersStart,
@@ -137,14 +138,16 @@
 -- Despawn machine: Talk 17..19 (:689-697, 5s/17s/26s) on
 -- DoAction(EVENT_DESPAWN_ALGALON) — fired by the instance script on the
 -- one-hour instance timer (instance_ulduar.cpp:774/1009, ulduar.h:499), not
--- combat — no bridge.
+-- combat — PORTED tick 558 in algalonDoAction (ascend-if-combat + talks
+-- + 34s despawn + NOT_SELECTABLE flag; SetImmuneToNPC leg stays out).
 -- npc_brann_bronzebeard_algalon (34064 entry-verifiable, ulduar.h line
 -- 230) — Talk(SAY_BRANN_ALGALON_INTRO_1 0) (EVENT_BRANN_SAY_INTRO_1),
 -- Talk(SAY_BRANN_ALGALON_INTRO_2 1) (DoAction ACTION_INTRO_2),
 -- Talk(SAY_BRANN_ALGALON_OUTRO 2) (EVENT_BRANN_OUTRO_1) — DoAction /
 -- MovementInform / timer-gated; the intro senders ride algalon's
 -- unported intro machine. The OUTRO Talk IS ported tick 480
--- (brannDoAction, ev38 action 4 -> 92.2s one-shot); the 2min spline
+-- (brannDoAction, ev38 action 4 -> 92.2s one-shot); the INTRO_2 Talk
+-- IS ported tick 558 (same handler, action 5); the 2min spline
 -- leg stays out (no MoveAlongSplineChain bridge).
 -- npc_collapsing_starAI — PORTED tick 480 (NPC_COLLAPSING_STAR 32955
 -- entry-verifiable, ulduar.h line 234): DamageTaken _dying latch +
@@ -162,15 +165,17 @@
 -- npc_living_constellation DoAction(ACTION_ACTIVATE_STAR) (:745-750):
 -- SetReactState(REACT_AGGRESSIVE) + RemoveFlag(NOT_SELECTABLE) +
 -- AttackStart + DoZoneInCombat — fired by the
--- spell_algalon_trigger_3_adds SpellScript (:1106-1112); dispatch IS
--- bridged (ev38) but the SpellScript sender is unported, so the
--- constellation's react flip stays out
--- (its Arcane Barrage enter-combat timer above is the only modeled arm).
+-- spell_algalon_trigger_3_adds SpellScript (:1106-1112); PORTED tick
+-- 558 as constellationDoAction (ev38, receiver only — the SpellScript
+-- sender is unported), along with ACTION_BIG_BANG (:758-762, barrage
+-- delay twin). The Arcane Barrage enter-combat timer above is the
+-- only other modeled arm.
 -- boss DoAction(ACTION_INIT_ALGALON 6, ulduar.h:501 — instance
 -- OnPlayerEnter timed-summon path, instance_ulduar.cpp:245, sets
--- _firstPull=false) — dispatch IS bridged (ev38) but the sender is
--- the unported instance script path; stays out, so a timed-summon
--- Algalon takes the first-pull intro in Lua where C++ takes the 8s one.
+-- _firstPull=false) — PORTED tick 558 in algalonDoAction (the
+-- _firstPull latch flip; the SetImmuneToPC(false) leg stays out, no
+-- bridge). The sender is the unported instance script path, so the
+-- receiver is dormant until it lands.
 -- go_celestial_planetarium_access (GameObjectScript) — no GO bridge;
 -- documented only.
 -- The remaining spell scripts (spell_algalon_trigger_3_adds /
@@ -196,6 +201,8 @@ local NPC_BRANN_BRONZEBEARD_ALG = 34064 -- ulduar.h:230
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local UNIT_FIELD_FLAGS_2 = 60
+local UNIT_FLAG2_INSTANTLY_APPEAR_MODEL = 0x20 -- UnitDefines.h:166
 local UNIT_FLAG_IMMUNE_TO_NPC = 0x200
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h:132
 local UNIT_FLAG_RENAME = 0x00000010
@@ -205,6 +212,17 @@ local UNIT_STAND_STATE_KNEEL = 8 -- UnitDefines.h:41
 
 local SAY_ALGALON_START_TIMER = 3
 local SAY_ALGALON_AGGRO = 4
+local SAY_ALGALON_INTRO_1 = 0 -- boss_algalon_the_observer.cpp:41
+local SAY_ALGALON_INTRO_2 = 1 -- :42
+local SAY_ALGALON_INTRO_3 = 2 -- :43
+local SAY_ALGALON_DESPAWN_1 = 17 -- :58
+local SAY_ALGALON_DESPAWN_2 = 18 -- :59
+local SAY_ALGALON_DESPAWN_3 = 19 -- :60
+local SAY_BRANN_ALGALON_INTRO_2 = 1
+local SPELL_ARRIVAL = 64997 -- boss_algalon_the_observer.cpp:70
+local SPELL_RIDE_THE_LIGHTNING = 64986 -- :71
+local SPELL_SUMMON_AZEROTH = 64994 -- :72
+local SPELL_REORIGINATION = 64996 -- :73
 local SAY_ALGALON_PHASE_TWO = 11
 local SAY_ALGALON_OUTRO_1 = 12
 local SAY_ALGALON_OUTRO_2 = 13
@@ -217,6 +235,12 @@ local SPELL_KILL_CREDIT = 65184 -- boss_algalon_the_observer.cpp:83
 local SPELL_TELEPORT = 62940 -- boss_algalon_the_observer.cpp:84
 local SPELL_SUPERMASSIVE_FAIL = 65311 -- boss_algalon_the_observer.cpp:79 (moved above first use, tick 259)
 local ACTION_OUTRO = 4 -- Actions enum, boss_algalon_the_observer.cpp:170-175
+local ACTION_START_INTRO = 0 -- :165
+local ACTION_ACTIVATE_STAR = 1 -- :166
+local ACTION_BIG_BANG = 2 -- :167
+local ACTION_INTRO_2 = 5 -- :170
+local ACTION_INIT_ALGALON = 6 -- ulduar.h:501
+local EVENT_DESPAWN_ALGALON = 1 -- ulduar.h:499 (boss-class value; collides numerically with ACTION_ACTIVATE_STAR, different class)
 -- C++ ENGAGE_MUSIC_ID (boss_algalon_the_observer.cpp:64) — engage music,
 -- played via PlayDirectMusic on every engage (:373 later pulls, :557
 -- first-pull EVENT_START_COMBAT); creature:PlayMusic is the bridged twin
@@ -599,15 +623,22 @@ end
 -- is outro5's Brann summon + DoAction above; the intro senders
 -- (ACTION_START_INTRO / ACTION_INTRO_2) ride the unported intro
 -- machine.
+-- C++ npc_brann_bronzebeard_algalonAI::DoAction(ACTION_INTRO_2)
+-- (:901-904): Talk(SAY_BRANN_ALGALON_INTRO_2 1) + despawn spline.
+-- The Talk ports tick 558 (receiver only; sender is algalon's
+-- EVENT_INTRO_FINISH, ported in algalonDoAction below); the spline
+-- leg stays out (no MoveAlongSplineChain bridge). ACTION_START_INTRO
+-- (:892-895) is spline-only and stays out.
 local SAY_BRANN_ALGALON_OUTRO = 2
 
 local function brannDoAction(event, creature, action)
-    if action ~= ACTION_OUTRO then
-        return
+    if action == ACTION_OUTRO then
+        CreateLuaEvent(function()
+            creature:Talk(SAY_BRANN_ALGALON_OUTRO)
+        end, 92200)
+    elseif action == ACTION_INTRO_2 then
+        creature:Talk(SAY_BRANN_ALGALON_INTRO_2)
     end
-    CreateLuaEvent(function()
-        creature:Talk(SAY_BRANN_ALGALON_OUTRO)
-    end, 92200)
 end
 
 RegisterCreatureEvent(NPC_BRANN_BRONZEBEARD_ALG, 38, brannDoAction)
@@ -837,11 +868,88 @@ end
 -- EventMap (keyed by event id). PORTED tick 371.
 local ACTION_ASCEND = 3 -- boss_algalon_the_observer.cpp:169
 
+-- C++ boss_algalon_the_observerAI::DoAction (:313-351), PORTED tick
+-- 558 (receiver only; senders are the unported Brann intro machine
+-- and instance paths, documented per arm):
+-- ACTION_START_INTRO (:313-329): SetFlag(UNIT_FLAG2_INSTANTLY_APPEAR_MODEL)
+-- + SetDisableGravity(true) + triggered ARRIVAL + RIDE_THE_LIGHTNING
+-- casts + SetHomePosition(AlgalonLandPos) + EVENT_INTRO_1 in 3.5s.
+-- The MoveSpline leg stays out (no spline bridge). INTRO_1 (:529-532):
+-- RemoveAurasDueToSpell(RIDE_THE_LIGHTNING) + Talk(0) + SUMMON_AZEROTH
+-- in 6s. SUMMON_AZEROTH (:534-539): DoCastAOE(SUMMON_AZEROTH, true)
+-- + INTRO_2 in 4s; the azeroth TempSummon-type leg stays out (no
+-- instance DATA_AZEROTH latch in Lua). INTRO_2 (:541-545):
+-- SetDisableGravity(false) + Talk(1) + DoCastAOE(REORIGINATION,
+-- true) + INTRO_3 in 8.5s. INTRO_3 (:547-550): Talk(2) +
+-- INTRO_FINISH in 11.5s. INTRO_FINISH (:552-556): events.Reset() +
+-- Brann DoAction(ACTION_INTRO_2); the SetImmuneToPC(false) leg stays
+-- out (no bridge). Brann resolves via FindNearestCreature (200 yd —
+-- the FL tower-handler precedent): the instance DATA_BRANN latch is
+-- not populated in Lua, and Brann is not spawned in Go until the
+-- outro, so the relay is dormant until the console machine lands.
+-- EVENT_DESPAWN_ALGALON = 1 (:336-347, ulduar.h:499): events.Reset()
+-- + ascend in 1ms if in combat + Talk 17/18/19 at 5s/17s/26s +
+-- DespawnOrUnsummon(34s) + NOT_SELECTABLE flag; the SetImmuneToNPC
+-- leg stays out (no bridge). Sender is the instance one-hour timer
+-- (instance_ulduar.cpp:1008-1009).
+-- ACTION_INIT_ALGALON = 6 (:348-351, ulduar.h:501): _firstPull=false
+-- (the algalonFirstPull latch above); the SetImmuneToPC(false) leg
+-- stays out (no bridge). Sender is the instance OnPlayerEnter
+-- timed-summon path (instance_ulduar.cpp:245).
 local function algalonDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
     if action == ACTION_ASCEND then
-        schedule(creature:GetGUIDLow(), "ascend", 1500, function()
-            ascendTick(creature, creature:GetGUIDLow())
+        schedule(guid, "ascend", 1500, function()
+            ascendTick(creature, guid)
         end)
+    elseif action == ACTION_START_INTRO then
+        creature:SetFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_INSTANTLY_APPEAR_MODEL)
+        creature:SetDisableGravity(true)
+        creature:CastSpell(creature, SPELL_ARRIVAL, true)
+        creature:CastSpell(creature, SPELL_RIDE_THE_LIGHTNING, true)
+        creature:SetHomePosition(1632.668, -302.7656, 417.3211, 1.530165)
+        schedule(guid, "intro1", 3500, function()
+            creature:RemoveAura(SPELL_RIDE_THE_LIGHTNING)
+            creature:Talk(SAY_ALGALON_INTRO_1)
+            schedule(guid, "summonazeroth", 6000, function()
+                creature:CastSpell(creature, SPELL_SUMMON_AZEROTH, true)
+                schedule(guid, "intro2", 4000, function()
+                    creature:SetDisableGravity(false)
+                    creature:Talk(SAY_ALGALON_INTRO_2)
+                    creature:CastSpell(creature, SPELL_REORIGINATION, true)
+                    schedule(guid, "intro3", 8500, function()
+                        creature:Talk(SAY_ALGALON_INTRO_3)
+                        schedule(guid, "introfinish", 11500, function()
+                            cancelTimers(guid)
+                            local brann = creature:FindNearestCreature(NPC_BRANN_BRONZEBEARD_ALG, 200)
+                            if brann then
+                                brann:DoAction(ACTION_INTRO_2)
+                            end
+                        end)
+                    end)
+                end)
+            end)
+        end)
+    elseif action == EVENT_DESPAWN_ALGALON then
+        cancelTimers(guid)
+        if creature:IsInCombat() then
+            schedule(guid, "ascend", 1, function()
+                ascendTick(creature, guid)
+            end)
+        end
+        schedule(guid, "despawn1", 5000, function()
+            creature:Talk(SAY_ALGALON_DESPAWN_1)
+        end)
+        schedule(guid, "despawn2", 17000, function()
+            creature:Talk(SAY_ALGALON_DESPAWN_2)
+        end)
+        schedule(guid, "despawn3", 26000, function()
+            creature:Talk(SAY_ALGALON_DESPAWN_3)
+        end)
+        creature:DespawnOrUnsummon(34000)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    elseif action == ACTION_INIT_ALGALON then
+        algalonFirstPull[guid] = false
     end
 end
 
@@ -1102,6 +1210,42 @@ local function constellationEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ npc_living_constellationAI::DoAction
+-- (boss_algalon_the_observer.cpp:743-766), PORTED tick 558
+-- (receiver only; senders are the unported SpellScripts):
+-- ACTION_ACTIVATE_STAR (:745-750): algalon SelectTarget(Random, 0,
+-- NonTankTargetSelector) -> SetReactState(REACT_AGGRESSIVE) +
+-- RemoveFlag(NOT_SELECTABLE) + AttackStart + DoZoneInCombat +
+-- _isActive = true. The target pick rides GetAITarget(0, true)
+-- (random player — the NonTank selector has no twin, so the tank
+-- can be picked; documented deviation); the _isActive latch stays
+-- out (its only reader is the unported trigger SpellScript).
+-- ACTION_BIG_BANG (:758-762): SetPhase(PHASE_BIG_BANG) +
+-- DelayEvents(9.5s) + EVENT_RESUME_UPDATING in 9.5s. The phase
+-- machine has no Lua twin, so the observable leg is the barrage
+-- delay: the pending arcane-barrage fire is re-armed at {9.5s,
+-- 14.5s} (C++ remaining-time + 9.5s, remaining uniform in [0,5s]);
+-- the resume event itself is a phase flip with no Lua observable.
+local function constellationDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_ACTIVATE_STAR then
+        local algalon = creature:GetInstanceCreature(BOSS_ALGALON)
+        if algalon then
+            local target = algalon:GetAITarget(0, true, 0, 0, 0)
+            if target then
+                creature:SetReactState(2) -- REACT_AGGRESSIVE
+                creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+                creature:AttackStart(target)
+                creature:DoZoneInCombat()
+            end
+        end
+    elseif action == ACTION_BIG_BANG then
+        schedule(guid, "arcanebarrage", {9500, 14500}, function()
+            arcaneBarrageTick(creature, guid)
+        end)
+    end
+end
+
 -- C++ npc_living_constellationAI::SpellHit
 -- (boss_algalon_the_observer.cpp:768-781): a creature caster of
 -- SPELL_CONSTELLATION_PHASE_EFFECT (65509) starts the supermassive
@@ -1143,6 +1287,7 @@ RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 2, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 4, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 23, algalonTimersStop)
 RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 14, constellationSpellHit)
+RegisterCreatureEvent(ENTRY_LIVING_CONSTELLATION, 38, constellationDoAction)
 
 -- C++ spell_algalon_black_hole_phase_shifts::HandleEffectApply
 -- (boss_algalon_the_observer.cpp:1258-1262): EFFECT_0 PHASE. The
