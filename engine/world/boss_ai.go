@@ -21677,7 +21677,10 @@ func init() {
 	// precedent); npc_terenas_menethil (36823/39217) Talk
 	// legs are scheduler-driven (no bridges); the 7 remaining NPC AIs
 	// have zero Talk lines (NOT registered, the bronjahm
-	// npc_corrupted_soul_fragment precedent); the 31 spell/aura legs +
+	// npc_corrupted_soul_fragment precedent) — except npc_spirit_bomb
+	// (39189), REGISTERED tick 501 (ev22/ev28/ev4 machine ported in
+	// the lua file; the bronjahm precedent is retracted for AI-bearing
+	// adds, the tick-498 volatile-ooze precedent); the 31 spell/aura legs +
 	// the with-args trigger leg join the no-SpellScript-bridge /
 	// no-AuraScript-bridge queues and the 2 achievements the
 	// no-achievement-criteria-bridge queue — documented in the lua
@@ -21688,6 +21691,7 @@ func init() {
 	// set-aggressive; warden :1843 is a plain loop, soul-rip ungated.
 	// Thirteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("boss_the_lich_king", 36597)
+	RegisterLuaBoss("npc_spirit_bomb", 39189)
 
 	// npc_rotting_frost_giant (Icecrown Citadel instance script):
 	// Reset() three-timer seed + UpdateAI combat rotation — death

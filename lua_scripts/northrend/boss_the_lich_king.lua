@@ -130,7 +130,7 @@
 -- transitions, ev28 MovementInform, EVENT_QUAKE phase sets); the
 -- intro machine + FROSTMOURNE phase set PORTED 2026-11-08
 -- (onIntroMove1..3 / onHarvestSouls); the JustDied
--- MoveFall leg still does,
+-- MoveFall leg is PORTED tick 501 (below),
 -- while the SPELL_PLAY_MOVIE (73159), SetDisableGravity(false), and
 -- zone-light + zone-weather JustDied legs ARE ported (ev4
 -- lichKingJustDied).
@@ -234,8 +234,10 @@
 -- self-cast (self-buff aura).
 -- npc_valkyr_shadowguard IS registered (Reset via ev22 IsSummonedBy,
 -- PORTED 2026-11-08 — the val'kyr never engages, so ev1 would never
--- fire); npc_spirit_bomb — zero Talk lines — NOT registered (the
--- bronjahm npc_corrupted_soul_fragment precedent); npc_broken_frostmourne
+-- fire); npc_spirit_bomb — zero Talk lines — REGISTERED tick 501
+-- (RegisterLuaBoss 39189; ev22/ev28/ev4 machine ported below — the
+-- bronjahm no-Talk precedent is retracted for AI-bearing adds, the
+-- tick-498 volatile-ooze precedent); npc_broken_frostmourne
 -- IS registered (IsSummonedBy ev22 + DoAction ev38, PORTED 2026-11-08
 -- — knock-back + summon-terenas arms; the JUMP SpellScript sender of
 -- ACTION_BREAK_FROSTMOURNE stays unported); the valkyr
@@ -243,9 +245,11 @@
 -- UpdateAI machine rides unbridged legs. npc_strangulate_vehicle IS
 -- registered — IsSummonedBy + UpdateAI timer legs + DoAction
 -- ACTION_TELEPORT_BACK PORTED 2026-11-05 (see below).
--- The 31 spell/aura legs + the generic spell_trigger_spell_from_caster
--- with-args leg join the no-SpellScript-bridge / no-AuraScript-bridge
--- queues (the boss_moragg optic-link precedent);
+-- The 31 spell/aura legs join the no-SpellScript-bridge /
+-- no-AuraScript-bridge queues (the boss_moragg optic-link precedent);
+-- the generic spell_trigger_spell_from_caster with-args leg
+-- ("spell_the_lich_king_mass_resurrection") is PORTED tick 501
+-- (RegisterSpellEvent ev3, below), not queued;
 -- achievement_been_waiting_long_time and
 -- achievement_neck_deep_in_vile join the no-achievement-criteria-bridge
 -- queue (the lana'thel achievement precedent).
@@ -292,8 +296,9 @@
 -- model).
 -- JustSummoned REACT_PASSIVE + LichKingStartMovementEvent 5s ->
 -- REACT_AGGRESSIVE + AttackStart (:739-741/:447-466, shambling horror /
--- drudge ghoul): cross-creature timed BasicEvent machine;
--- AttackStart/SelectTarget have no bridge. VileSpiritActivateEvent
+-- drudge ghoul) PORTED tick 501 (lichKingJustSummoned — AttackStart IS
+-- bridged, lua_creature_events.go:6627; SelectTarget rides the file's
+-- randomAlivePlayer skipFirst idiom). VileSpiritActivateEvent
 -- REACT_AGGRESSIVE (:472-484) + JustSummoned vile-spirit leg (:774-781)
 -- PORTED 2026-11-08 (lichKingJustSummoned + onVileSpiritActivate):
 -- flight-speed leg stays out (SetSpeedRate rejects MOVE_FLIGHT, no
@@ -305,7 +310,7 @@
 -- lichKingJustSummoned — SelectTarget approximated by the alive
 -- same-map/instance random-player pool, MoveFollow PORTED in
 -- lichKingJustSummoned; defile :761 PORTED (lichKingJustSummoned);
--- spirit_bomb stays unregistered as documented; strangulate
+-- spirit_bomb PORTED tick 501 (see below); strangulate
 -- PORTED below (ev22 + UpdateAI timers + ev38).
 -- SpellScript legs: ice_burst_target_search CheckTargetCount (:2212-2221)
 -- PORTED 2026-11-08 (event 7, this file below) and restore_soul
@@ -465,6 +470,7 @@ local LK = {
     SPELL_BROKEN_FROSTMOURNE_KNOCK = 72405, -- :175
     SPELL_SUMMON_TERENAS = 72420, -- :177
     SPELL_MASS_RESURRECTION = 72429, -- :178
+    SPELL_MASS_RESURRECTION_REAL = 72423, -- :179
     SPELL_SUMMON_BROKEN_FROSTMOURNE = 74081, -- :171
     SPELL_SUMMON_BROKEN_FROSTMOURNE_2 = 72406, -- :172
     SPELL_SUMMON_BROKEN_FROSTMOURNE_3 = 73017, -- :173
@@ -475,6 +481,7 @@ local LK = {
     ACTION_CONTINUE_INTRO = 1, ACTION_OUTRO = 3, -- :336/:338
     ACTION_PLAY_MUSIC = 4, ACTION_BREAK_FROSTMOURNE = 5, -- :339-340
     ACTION_SUMMON_TERENAS = 6, ACTION_FINISH_OUTRO = 7, -- :341-342
+    ACTION_RESTORE_LIGHT = -72262, -- icecrown_citadel.h:511
     EMOTE_STATE_READY2H = 375, -- SharedDefines.h:2013
     EMOTE_ONESHOT_NONE = 0, -- SharedDefines.h:1937
     LIGHT_SNOWSTORM = 2490, -- :349
@@ -493,6 +500,11 @@ local LK = {
     -- Val'kyr drop-machine + quake consts (2026-11-08, tick 448), same
     -- one-table local: the file sits at 199 main-chunk locals.
     GO_ARTHAS_PLATFORM = 202161, -- icecrown_citadel.h:431
+    GO_DOODAD_ICECROWN_THRONEFROSTYWIND01 = 202188, -- icecrown_citadel.h:433
+    GO_DOODAD_ICECROWN_THRONEFROSTYEDGE01 = 202189, -- icecrown_citadel.h:434
+    POINT_GROUND = 13, -- :328
+    ENTRY_SPIRIT_BOMB = 39189, -- icecrown_citadel.h:330
+    SPELL_EXPLOSION = 73576, -- :160 (Spirit Bomb, Heroic)
     POINT_DROP_PLAYER = 8, -- :323
     POINT_SIPHON = 14, -- :329
     POINT_CHARGE = 1003, -- :330
@@ -809,13 +821,16 @@ end
 -- C++ EVENT_QUAKE / EVENT_QUAKE_2 (:1009-1022, PHASE_TRANSITION):
 -- SetPhase(PHASE_TWO / PHASE_THREE) + DoCastAOE SPELL_QUAKE 72262 +
 -- Talk(SAY_LK_QUAKE 5). No IsCasting defer (TRANSITION-exempt,
--- :900); the C++ ClearUnitState(UNIT_STATE_CASTING) leg has no
--- bridge. SetZoneMusic stays out (no bridge).
+-- :900); the C++ ClearUnitState(UNIT_STATE_CASTING) leg is PORTED
+-- tick 501 below (bridge lua_creature_events.go:2239; net no-op in
+-- Go — casts are fire-and-forget — kept for exactness). SetZoneMusic
+-- stays out (no bridge).
 local function onQuake(creature, guid, nextPhase)
     if lkPhase[guid] ~= LK.PHASE_TRANSITION then
         return
     end
     lkPhase[guid] = nextPhase
+    creature:ClearUnitState(0x8000) -- C++ :1011/:1018, before the cast (UNIT_STATE_CASTING, Unit.h:226)
     creature:CastSpell(creature, LK.SPELL_QUAKE)
     creature:Talk(LK.SAY_LK_QUAKE)
 end
@@ -1100,10 +1115,12 @@ local function onOutroTalk4(creature, guid)
 end
 
 -- C++ EVENT_OUTRO_RAISE_DEAD (:1111-1115, PHASE_OUTRO): DoCastAOE
--- SPELL_RAISE_DEAD 71769 + ClearUnitState (no bridge) + SetZoneMusic
--- (no bridge).
+-- SPELL_RAISE_DEAD 71769 + ClearUnitState (PORTED tick 501, bridge
+-- lua_creature_events.go:2239; after the cast, C++ :1113) +
+-- SetZoneMusic (no bridge).
 local function onOutroRaiseDead(creature, guid)
     creature:CastSpell(creature, LK.SPELL_RAISE_DEAD)
+    creature:ClearUnitState(0x8000) -- C++ :1113, after the cast (UNIT_STATE_CASTING, Unit.h:226)
 end
 
 -- C++ EVENT_OUTRO_TALK_5 (:1116-1120, PHASE_OUTRO): Talk(SAY_LK_OUTRO_5 18).
@@ -1206,6 +1223,11 @@ local function lichKingDoAction(event, creature, action)
         if not creature:IsHeroic() then
             creature:Talk(SAY_LK_FROSTMOURNE_ESCAPE)
         end
+    elseif action == LK.ACTION_RESTORE_LIGHT then
+        -- C++ :629-631: instance EVENT_QUAKE_SHATTER sender
+        -- (instance_icecrown_citadel.cpp:1403); dormant until the
+        -- instance script lands.
+        creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, 0, 5000)
     elseif action == LK.ACTION_BREAK_FROSTMOURNE then
         local guid = creature:GetGUID()
         creature:CastSpell(nil, LK.SPELL_SUMMON_BROKEN_FROSTMOURNE, true)
@@ -1383,6 +1405,25 @@ local function lichKingReset(event, creature)
     creature:SetImmuneToAll(true) -- C++ Reset :530 SetImmuneToPC(true) (mandokir twin; 0x100|0x200 vs C++ 0x100 only)
     creature:SetReactState(REACT_PASSIVE) -- C++ Reset :531
     lkPhase[creature:GetGUID()] = LK.PHASE_INTRO -- C++ Reset :533 SetPhase(PHASE_INTRO)
+    -- C++ Reset :534 Initialize(): zero the plague-stack peak and the
+    -- vile-spirit explosion count — a wipe must not inherit the last
+    -- attempt's counters (the neck-deep / been-waiting latches read
+    -- them). DATA_PLAGUE_STACK is a file-local defined below (:2737),
+    -- so the literal rides here (a forward local would read nil).
+    creature:SetData(70337, 0)
+    creature:SetData(LK.DATA_VILE, 0)
+    -- C++ Reset :538-540 + FrozenThroneResetWorker (:415-444): the
+    -- wind GO goes ACTIVE and the edge GO READY (333yd visit). The
+    -- platform (SetDestructibleState) + ice-shard (ResetDoorOrButton)
+    -- legs stay out — no Lua bridges for either write.
+    local wind = creature:FindNearestGameObject(LK.GO_DOODAD_ICECROWN_THRONEFROSTYWIND01, 333)
+    if wind then
+        wind:SetGoState(0) -- GO_STATE_ACTIVE
+    end
+    local edge = creature:FindNearestGameObject(LK.GO_DOODAD_ICECROWN_THRONEFROSTYEDGE01, 333)
+    if edge then
+        edge:SetGoState(1) -- GO_STATE_READY
+    end
     -- C++ Reset :543: clear any light override (0, 5000ms).
     creature:GetMap():SetZoneOverrideLight(AREA_ICECROWN_CITADEL, LIGHT_DEFAULT, 0, 5000)
     -- C++ Reset :547-548: summon Tirion (38995) at TirionSpawn when
@@ -1398,7 +1439,8 @@ end
 -- creature:SetBossState) then DoCastAOE(SPELL_PLAY_MOVIE 73159, false).
 -- DoCastAOE is self-cast per UnitAI.h:322, so
 -- creature:CastSpell(creature, SPELL_PLAY_MOVIE).
--- The MoveFall and 25-man quest-credit legs ride unbridged machines;
+-- The 25-man quest-credit leg rides an unbridged machine (no
+-- RewardPlayerAndGroupAtEvent bridge); MoveFall PORTED tick 501.
 -- the FOG zone-light + zone-weather legs are ported below, in C++
 -- order (map:SetZoneOverrideLight, then map:SetZoneWeather).
 local function lichKingJustDied(event, creature)
@@ -1410,6 +1452,7 @@ local function lichKingJustDied(event, creature)
     creature:SetBossState(DATA_THE_LICH_KING, BOSS_STATE_DONE)
     creature:CastSpell(creature, SPELL_PLAY_MOVIE)
     creature:SetDisableGravity(false) -- C++ :553, after the movie cast
+    creature:MoveFall() -- C++ :554 (bridge lua_creature_events.go:3391; the spline-to-ground half stays out per the bridge comment)
     -- C++ :555-556: FindNearestCreature(NPC_FROSTMOURNE_TRIGGER, 50.0f)
     -- -> DespawnOrUnsummon (FindNearestCreature and Despawn both bridged;
     -- stale "unbridged machines" claim retracted).
@@ -1512,12 +1555,28 @@ end
 local function lichKingJustSummoned(_, creature, summoned)
     -- C++ boss_the_lich_king::JustSummoned (:737-741): horror/ghoul
     -- spawn visual (triggered) + REACT_PASSIVE + emerge emote, in C++
-    -- order. The 5s LichKingStartMovementEvent leg stays out (timed
-    -- BasicEvent + AttackStart/SelectTarget have no bridge).
+    -- order. The 5s LichKingStartMovementEvent leg (:447-466) is
+    -- PORTED tick 501 below: REACT_AGGRESSIVE + random non-tank
+    -- AttackStart — AttackStart IS bridged
+    -- (lua_creature_events.go:6627, = EngageWithTarget); the
+    -- NonTankTargetSelector rides randomAlivePlayer(creature, true)
+    -- (threat-ordered, tank skipped — the file's SelectTarget offset-1
+    -- idiom), since SelectTarget itself has no bridge.
     if summoned:GetEntry() == ENTRY_SHAMBLING_HORROR or summoned:GetEntry() == ENTRY_DRUDGE_GHOUL then
         summoned:CastSpell(summoned, SPELL_RISEN_WITCH_DOCTOR_SPAWN, true)
         summoned:SetReactState(0)
         summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
+        local summonedGuid = summoned:GetGUID()
+        schedule(summonedGuid, "start_movement", 5000, function()
+            if summoned:IsDead() then
+                return
+            end
+            summoned:SetReactState(REACT_AGGRESSIVE)
+            local target = randomAlivePlayer(creature, true)
+            if target ~= nil then
+                summoned:AttackStart(target)
+            end
+        end)
     -- C++ :743-745: shadow trap spawn visual (triggered).
     elseif summoned:GetEntry() == ENTRY_SHADOW_TRAP then
         summoned:CastSpell(summoned, SPELL_SHADOW_TRAP_VISUAL, true)
@@ -1955,7 +2014,9 @@ LK.onValkyrGrab = function(creature, guid)
     if LK.valkyrGrabbed[guid] then
         return
     end
-    creature:CastSpell(creature, LK.SPELL_VALKYR_TARGET_SEARCH, true)
+    -- C++ :1554 DoCastAOE(SPELL_VALKYR_TARGET_SEARCH) — no triggered
+    -- arg (false); the true here was a deviation (tick 501).
+    creature:CastSpell(creature, LK.SPELL_VALKYR_TARGET_SEARCH, false)
     if not LK.valkyrGrabbed[guid] then
         schedule(guid, "valkyrGrab", 2000, function() LK.onValkyrGrab(creature, guid) end)
     end
@@ -1973,6 +2034,15 @@ RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 1, shamblingHorrorJustEngagedWith)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 2, shamblingHorrorLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 9, shamblingHorrorDamageTaken)
 RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 23, shamblingHorrorLeaveCombat)
+-- C++ LichKingStartMovementEvent 5s timer (tick 501): the summon's
+-- m_Events die with it, so cancel the timer on death. Inline: the
+-- file sits at 199 main-chunk locals.
+RegisterCreatureEvent(ENTRY_SHAMBLING_HORROR, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
+RegisterCreatureEvent(ENTRY_DRUDGE_GHOUL, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 1, ragingSpiritJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 2, ragingSpiritLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAGING_SPIRIT, 23, ragingSpiritLeaveCombat)
@@ -2120,6 +2190,45 @@ end
 RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 28, LK.valkyrMovementInform)
 RegisterCreatureEvent(ENTRY_VALKYR_SHADOWGUARD, 9, LK.valkyrDamageTaken)
 RegisterCreatureEvent(ENTRY_VILE_SPIRIT, 4, vileSpiritDied)
+
+-- C++ npc_spirit_bomb (boss_the_lich_king.cpp:1867-1914, entry 39189,
+-- Heroic): IsSummonedBy moves to the ground point (destZ 1055.0f
+-- hardcoded — the unbridged UpdateGroundPositionZ leg is non-blocking)
+-- + MovementInform POINT_GROUND schedules EVENT_BOMB_EXPLOSION 3s +
+-- UpdateAI explodes (RemoveAllAuras + DoCastAOE SPELL_EXPLOSION
+-- 73576 + DespawnOrUnsummon 1s). AttackStart is an empty override —
+-- REACT_PASSIVE is the available twin (valkyr precedent above).
+-- PORTED tick 501; the "rides unbridged legs" header stay-out is
+-- retired. DORMANT until Spell.dbc ships (the 73581/74299 summon
+-- casts are DBC-gated) and the bomb summon lands. Table fields, not
+-- locals: the file sits at 199 main-chunk locals.
+LK.spiritBombIsSummonedBy = function(event, creature)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:MoveTo(LK.POINT_GROUND, creature:GetX(), creature:GetY(), 1055.0)
+end
+
+LK.spiritBombMovementInform = function(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= LK.POINT_GROUND then
+        return
+    end
+    local guid = creature:GetGUID()
+    schedule(guid, "bombExplosion", 3000, function() LK.spiritBombExplode(creature, guid) end)
+end
+
+LK.spiritBombExplode = function(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    creature:RemoveAllAuras()
+    creature:CastSpell(creature, LK.SPELL_EXPLOSION)
+    creature:DespawnOrUnsummon(1000)
+end
+
+RegisterCreatureEvent(LK.ENTRY_SPIRIT_BOMB, 22, LK.spiritBombIsSummonedBy)
+RegisterCreatureEvent(LK.ENTRY_SPIRIT_BOMB, 28, LK.spiritBombMovementInform)
+RegisterCreatureEvent(LK.ENTRY_SPIRIT_BOMB, 4, function(event, creature)
+    cancelTimers(creature:GetGUID())
+end)
 
 -- C++ EVENT_FROSTMOURNE_TALK_1 (:1776-1780): Talk(SAY_TERENAS_INTRO_1 0)
 -- + heroic DoCastAOE(SPELL_RESTORE_SOULS 73650). PORTED 2026-11-08.
@@ -2765,6 +2874,14 @@ local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:66
 -- re-casts the jump on itself with stack + 1 and the caster (Lich
 -- King) self-casts Plague Siphon, triggered. The AfterDispel leg
 -- (:2107-2125) re-casts with the same stack on a genuine dispel.
+-- OPEN GAP (tick 501): on a PARTIAL dispel (multi-stack, aura
+-- survives) Go fires only the ev5 OnDispel hook, never ev3, so no
+-- re-cast/siphon happens; C++ AfterDispel re-casts with the current
+-- (decremented) stack + siphons + removes. The ev3 ENEMY_SPELL
+-- branch below covers only a stack-1 full removal. The ev5 fix needs
+-- the dispel-snapshot semantics check first (the ev5 aura snapshot
+-- is pre-decrement, lua_aura.go dispelAuraRef; a stack-1 dispel
+-- would double-fire with this ev3 branch).
 local function necroticPlagueJumpRemove(event, aura, target)
     local mode = aura:GetRemoveMode()
     local stack = aura:GetStackAmount()
@@ -2885,16 +3002,19 @@ RegisterAuraEvent(SPELL_SHADOW_TRAP_VISUAL, 3, shadowTrapVisualRemove)
 
 -- C++ spell_the_lich_king_vile_spirits::OnPeriodic
 -- (boss_the_lich_king.cpp:2436-2441): EFFECT_0 PERIODIC_DUMMY. On
--- every tick in 25-man, or every 5th tick ((tick-1)%5==0) otherwise,
--- the target (Lich King) casts the effect's trigger spell on nil
--- with the aura-effect + caster-GUID args (triggered). PORTED
+-- every tick in 25-man, or every tick except every 5th
+-- ((tick-1)%5==0 skips ticks 1, 6, 11...) otherwise — C++ casts
+-- when `_is25Man || ((tick-1)%5)`, i.e. the 5th-tick gate is a SKIP,
+-- not a trigger (tick 501 correction of the inverted gate). The
+-- target (Lich King) casts the effect's trigger spell on nil, with
+-- the aura-effect + caster-GUID args (triggered). PORTED
 -- 2026-11-08. DORMANT until Spell.dbc ships (the trigger-spell id
 -- rides the DBC effect; GetTriggerSpell(0) reads 0 without it) and
 -- until the EVENT_VILE_SPIRITS cast lands the aura (timer PORTED
 -- 2026-11-08, tick 441).
 local function vileSpiritsTick(event, aura, target)
     local tick = aura:GetTickNumber()
-    if not target:Is25ManRaid() and (tick - 1) % 5 ~= 0 then
+    if not target:Is25ManRaid() and (tick - 1) % 5 == 0 then
         return
     end
     local trigger = aura:GetTriggerSpell(0)
@@ -3499,3 +3619,24 @@ LK.onSummonSpiritBomb = function(event, spell, target, effectIndex)
 end
 RegisterSpellEvent(LK.SPELL_SUMMON_SPIRIT_BOMB_1, 5, LK.onSummonSpiritBomb)
 RegisterSpellEvent(LK.SPELL_SUMMON_SPIRIT_BOMB_2, 5, LK.onSummonSpiritBomb)
+
+-- C++ spell_trigger_spell_from_caster::HandleTrigger
+-- (icecrown_citadel.cpp:1504-1512, registered
+-- "spell_the_lich_king_mass_resurrection" with trigger
+-- SPELL_MASS_RESURRECTION_REAL 72423, TRIGGERED_FULL_MASK):
+-- AfterHit -> caster casts 72423 on the hit unit, triggered. The
+-- outer spell 72429 is cast by Terenas on himself (onTerenasOutroTalk2
+-- above, DoCastAOE), so the hit unit is Terenas. PORTED tick 501;
+-- the no-SpellScript-bridge queue filing for this leg is retired.
+-- Handler is inline: the file sits at 199 main-chunk locals.
+-- DORMANT until Spell.dbc ships (the 72429 cast is DBC-gated).
+RegisterSpellEvent(LK.SPELL_MASS_RESURRECTION, 3, function(event, spell, target)
+    if target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, LK.SPELL_MASS_RESURRECTION_REAL, true)
+end)
