@@ -167,7 +167,7 @@ local function onEnterCombat(event, creature, target)
     -- lua_creature_events.go:5917). The CheckRequiredBosses gate is
     -- vacuous (no instance override in instance_ruins_of_ahnqiraj.cpp).
     creature:SetBossState(DATA_MOAM, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
@@ -183,14 +183,14 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     cancelPump(guid)
     moamState[guid] = nil
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     cancelPump(guid)
     moamState[guid] = { stonePhase = false }
@@ -212,7 +212,7 @@ end
 -- before damage is applied per engine lua_creature_events.go —
 -- kurinnaxx/a1d74e6 convention), so no damage subtraction.
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = moamState[guid]
     -- (The mana-full eruption leg lives in the UpdateAI pump above, not
     -- here — C++ boss_moam.cpp :121-127 is inside UpdateAI, after
@@ -230,7 +230,7 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     cancelPump(guid)
     moamState[guid] = nil

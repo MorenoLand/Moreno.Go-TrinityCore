@@ -221,7 +221,7 @@ local function onSpellHitTarget(event, creature, target, spellId)
     if not creature:IsHostileTo(target) then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = stepState[guid]
     if not st then
         st = { targets = {}, index = 1 }
@@ -290,7 +290,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_EPOCH, 1) -- IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_chrono_lord_epoch.cpp:66-68)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     stepState[guid] = { targets = {}, index = 1 }
     if creature:IsHeroic() then
@@ -310,13 +310,13 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     stepState[guid] = nil
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     stepState[guid] = nil
     if creature:IsDead() then
@@ -332,7 +332,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ JustDied (boss_chrono_lord_epoch.cpp:140-143): _JustDied()
     -- only -> SetBossState(DONE).
     creature:SetBossState(DATA_EPOCH, 3) -- DONE

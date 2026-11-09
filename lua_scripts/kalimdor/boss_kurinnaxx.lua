@@ -200,7 +200,7 @@ local function onEnterCombat(event, creature, target)
     -- CheckRequiredBosses gate is vacuous (no instance override in
     -- instance_ruins_of_ahnqiraj.cpp).
     creature:SetBossState(DATA_KURINNAXX, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
@@ -220,11 +220,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     kurinnaxxState[guid] = { enraged = false }
     -- C++ Reset _Reset() leg (boss_kurinnaxx.cpp:67;
@@ -243,7 +243,7 @@ end
 -- damage subtraction — unlike moroes, whose C++ uses
 -- HealthBelowPctDamaged and correctly subtracts.
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = kurinnaxxState[guid]
     if state == nil or state.enraged then
         return
@@ -264,7 +264,7 @@ end
 -- writes SetBossState(DATA_KURINNAXX, DONE); the events.Reset /
 -- summons / scheduler legs need no bridge.
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_KURINNAXX, BOSS_STATE_DONE)
 end
 

@@ -188,7 +188,7 @@ onPoisonBolt = function(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     st(guid)
     -- C++ has no JustEngagedWith override (boss_huhuran.cpp:82-86 is
@@ -218,11 +218,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset _Reset() leg (boss_huhuran.cpp:82-86): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
     if creature:IsAlive() and creature:GetBossState(DATA_HUHURAN) ~= BOSS_STATE_DONE then
@@ -236,7 +236,7 @@ end
 -- header claim is retired this run.
 local function onDied(event, creature, killer)
     creature:SetBossState(DATA_HUHURAN, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ UpdateAI per-tick: !Berserk && HealthBelowPct(31) ->
@@ -245,7 +245,7 @@ end
 -- pre-damage, so projected-health check (jeklik/aku_mai convention).
 -- HealthBelowPct(31) is floored strict-< (ironaya convention).
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local s = st(guid)
     if s.berserk then
         return

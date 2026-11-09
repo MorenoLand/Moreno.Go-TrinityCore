@@ -100,24 +100,24 @@ end
 
 -- C++ Reset: Initialize() (IsEnraged = false) + _Reset() (no bridge).
 local function akuMaiOnReset(event, creature)
-    akuMaiResetState(creature:GetGUID())
+    akuMaiResetState(creature:GetGUIDLow())
 end
 
 local function akuMaiLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
 -- re-arming poison-cloud timer must be cancelled on death or it keeps
 -- casting from the corpse forever (ouro precedent).
 local function akuMaiOnDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (no bridge) +
 -- ScheduleEvent(EVENT_POISON_CLOUD, 5s, 9s).
 local function akuMaiEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     akuMaiResetState(guid)
     schedule(guid, "poisoncloud", math.random(5000, 9000), function()
         onPoisonCloud(creature, guid)
@@ -132,7 +132,7 @@ end
 -- floored integer threshold (ironaya convention) — the fractional
 -- (health - damage) * 100 < 30 * maxHealth form fired up to 1 HP early.
 local function akuMaiDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = akuMaiState(guid)
     if st.enraged then
         return

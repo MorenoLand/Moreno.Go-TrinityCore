@@ -114,7 +114,7 @@ local function landslidePump(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "knockaway", 8000, function()
         onKnockAway(creature, guid)
@@ -129,7 +129,7 @@ end
 -- health drops below half. Eluna event 9 is pre-damage, so the crossing
 -- is projected with (health - damage) (huhuran berserk precedent).
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if landslide[guid] then
         return
     end
@@ -151,15 +151,15 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

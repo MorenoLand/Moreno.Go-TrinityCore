@@ -326,7 +326,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:SetCombatMovement(false) -- Reset arm, boss_ayamiss.cpp:98 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ayamissState[guid] = { phase = PHASE_AIR, enraged = false }
     schedule(guid, "stinger", math.random(20000, 30000), function()
@@ -352,13 +352,13 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ayamissState[guid] = nil
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ayamissState[guid] = { phase = PHASE_AIR, enraged = false }
     -- C++ Reset _Reset() leg (boss_ayamiss.cpp:96;
@@ -371,13 +371,13 @@ local function onReset(event, creature)
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     checkGroundPhase(creature, guid, damage)
     checkFrenzy(creature, guid, damage)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ayamissState[guid] = nil
     -- C++ has no JustDied override for boss_ayamissAI, so base
