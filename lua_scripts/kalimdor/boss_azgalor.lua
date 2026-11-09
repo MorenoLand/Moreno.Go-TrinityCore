@@ -234,7 +234,7 @@ local function onEnrage(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustEngagedWith (:94-98): SetData(DATA_AZGALOREVENT,
     -- IN_PROGRESS) first, then Talk.
@@ -258,11 +258,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset (:88-91): Initialize() then SetData(NOT_STARTED).
     -- Alive-gated: Go fires ev23 on the death path before ev4
     -- (moroes/algalon precedent) and C++ Reset never runs on death.
@@ -274,7 +274,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (:117-121): hyjal_trashAI::JustDied first, then
     -- SetData(DONE), then Talk.
     creature:SetBossState(DATA_AZGALOR, BOSS_STATE_DONE)

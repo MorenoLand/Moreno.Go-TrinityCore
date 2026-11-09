@@ -442,7 +442,7 @@ end
 local rp = {}
 
 local function rpFor(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = rp[guid]
     if not st then
         st = { progressRP = true, afterCombat = ACTION_NONE, events = {},
@@ -466,7 +466,7 @@ local function cancelRpPump(creature, st)
         RemoveEventById(st.pumpId)
         st.pumpId = nil
     end
-    rp[creature:GetGUID()] = nil
+    rp[creature:GetGUIDLow()] = nil
 end
 
 local fireRpEvent -- forward: the pump closure below calls it
@@ -1425,18 +1425,18 @@ local function onEnterCombat(event, creature, target)
     st.inCombat = true
     creature:SetHomePosition(creature:GetX(), creature:GetY(),
         creature:GetZ(), creature:GetO())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     startCombatPump(creature, guid)
 end
 
 local function onLeaveCombat(event, creature)
     rpFor(creature).inCombat = false
-    cancelPump(creature:GetGUID())
+    cancelPump(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelPump(creature:GetGUID())
+    cancelPump(creature:GetGUIDLow())
 end
 
 -- C++ JustReachedHome (npc_arthas.cpp:1566-1584): devotion aura if
@@ -1457,7 +1457,7 @@ local function onReachHome(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelPump(creature:GetGUID())
+    cancelPump(creature:GetGUIDLow())
     cancelRpPump(creature, rpFor(creature))
     -- C++ JustDied (npc_arthas.cpp:1578-1582): DespawnOrUnsummon(5000) +
     -- instance SetData(DATA_ARTHAS_DIED) — the SetData leg rides the

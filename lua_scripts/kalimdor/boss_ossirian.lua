@@ -255,7 +255,7 @@ local function onEnterCombat(event, creature, target)
     -- lua_creature_events.go:5917). The CheckRequiredBosses gate is
     -- vacuous (no instance override in instance_ruins_of_ahnqiraj.cpp).
     creature:SetBossState(DATA_OSSIRIAN, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
@@ -305,11 +305,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Initialize (Reset, boss_ossirian.cpp:108-113): the crystal
     -- iterator restarts at 0 on every evade/reset.
@@ -352,14 +352,14 @@ local function onSpellHit(event, creature, caster, spellId)
                 end
                 caster:Despawn()
             end
-            spawnNextCrystal(creature, creature:GetGUID())
+            spawnNextCrystal(creature, creature:GetGUIDLow())
             return
         end
     end
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_ossirian.cpp:193-196): Cleanup() first, then
     -- _JustDied(). Cleanup's crystal-GO Use leg stays out (no bridge);
     -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
@@ -373,7 +373,7 @@ end
 local ossirianSaidIntro = {}
 
 local function onMoveInLOS(event, creature, unit)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not ossirianSaidIntro[guid] then
         ossirianSaidIntro[guid] = true
         creature:Talk(1)

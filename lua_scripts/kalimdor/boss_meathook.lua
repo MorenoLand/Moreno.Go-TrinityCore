@@ -208,7 +208,7 @@ local function onFrenzy(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (boss_meathook.cpp:61-64): Talk, then
@@ -230,11 +230,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
@@ -253,7 +253,7 @@ end
 local function onDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_MEATHOOK, 3) -- DONE
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ InitializeAI (boss_meathook.cpp:55-60): Talk SAY_SPAWN +

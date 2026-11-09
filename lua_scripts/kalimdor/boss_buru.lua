@@ -176,7 +176,7 @@ local function onEnterCombat(event, creature, target)
     -- The CheckRequiredBosses gate is vacuous (no instance override
     -- in instance_ruins_of_ahnqiraj.cpp).
     creature:SetBossState(DATA_BURU, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     buruState[guid] = { phase = PHASE_EGG }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -192,13 +192,13 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     buruState[guid] = nil
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     buruState[guid] = { phase = PHASE_EGG }
     -- C++ Reset: no Reset() override in boss_buru.cpp, so base
@@ -219,7 +219,7 @@ local function onTargetDied(event, creature, victim)
     if victim == nil or victim:GetObjectType() ~= "Player" then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = buruState[guid]
     if state == nil or state.phase ~= PHASE_EGG then
         return
@@ -243,11 +243,11 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
-    checkTransform(creature, creature:GetGUID(), damage)
+    checkTransform(creature, creature:GetGUIDLow(), damage)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     buruState[guid] = nil
     -- C++ has no JustDied override for boss_buruAI (the JustDied at

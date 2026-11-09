@@ -205,7 +205,7 @@ end
 -- combat timers + 60% aggro talk (Talk broadcasts; the C++ targeted-
 -- player variant has no bridge).
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ Reset() skips everything once eventInProgress latches true,
     -- so the quest-accept latch survives engage/evade; never wipe state
     -- here (C++ JustEngagedWith re-arms the timers unconditionally).
@@ -231,7 +231,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: only the !eventInProgress branch is reachable here —
@@ -239,7 +239,7 @@ end
 -- event/channeling state (the gossip-questgiver flag re-set has no
 -- bridge).
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getState(guid)
     cancelTimers(guid)
     if not st.eventInProgress then
@@ -267,7 +267,7 @@ local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_EXTINGUISHING_THE_IDOL then
         return
     end
-    local st = getState(creature:GetGUID())
+    local st = getState(creature:GetGUIDLow())
     st.eventInProgress = true
     creature:Talk(SAY_QUEST_ACCEPTED)
     -- C++ npc_belnistraszAI::OnQuestAccept (razorfen_downs.cpp:137):
@@ -279,7 +279,7 @@ local function onQuestAccept(event, player, creature, quest)
 end
 
 local function onDied(event, creature, killer)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     -- C++ npc_belnistraszAI::JustDied (razorfen_downs.cpp:125-128):
     -- instance->SetBossState(DATA_EXTINGUISHING_THE_IDOL, DONE) is a
     -- dead write in C++ (id 6 >= bosses.size() 5, EncounterCount = 5 —

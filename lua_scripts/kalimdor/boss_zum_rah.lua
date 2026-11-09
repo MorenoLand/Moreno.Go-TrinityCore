@@ -136,7 +136,7 @@ end
 -- DamageTaken's (health - damage) equals the post-hit health the C++
 -- UpdateAI tick would read, so HealthBelowPct matches exactly.
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local flags = hpFlags[guid]
     if flags == nil then
         return
@@ -178,7 +178,7 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hpFlags[guid] = { ward80 = false, ward40 = false, heal30 = false }
     creature:Talk(SAY_SANCT_INVADE)
@@ -191,7 +191,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onTargetDied(event, creature, victim)
@@ -199,13 +199,13 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hpFlags[guid] = nil
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hpFlags[guid] = { ward80 = false, ward40 = false, heal30 = false }
     -- C++ Reset (boss_zum_rah.cpp:72): SetFaction(FACTION_FRIENDLY = 35);

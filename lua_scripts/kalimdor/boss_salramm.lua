@@ -308,7 +308,7 @@ local function onCurseFlesh(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (boss_salramm_the_fleshcrafter.cpp:73-76):
@@ -336,11 +336,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
@@ -354,7 +354,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_salramm_the_fleshcrafter.cpp:123-128): Talk
     -- SAY_DEATH, then _JustDied() -> SetBossState(DONE), then the
     -- unbridged instance SetData(DATA_NOTIFY_DEATH, 1).

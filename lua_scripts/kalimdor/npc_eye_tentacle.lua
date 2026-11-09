@@ -78,7 +78,7 @@ end
 local function onSpawn(event, creature)
     -- C++ ctor order (boss_cthun.cpp:899-905): portal summon first,
     -- then SetCombatMovement(false).
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local portal = creature:SummonCreature(ENTRY_SMALL_PORTAL,
         creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
     if portal then
@@ -91,7 +91,7 @@ end
 local function onEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- boss_cthun.cpp:927-930 (eye_tentacleAI::JustEngagedWith — sole arm; bridge live 2026-10-23)
     creature:SetMeleeAttack(false) -- boss_cthun.cpp:932: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     timers[guid] = {}
     timers[guid]["flay"] = CreateLuaEvent(function()
@@ -103,12 +103,12 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    killPortal(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    killPortal(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 5, onSpawn)

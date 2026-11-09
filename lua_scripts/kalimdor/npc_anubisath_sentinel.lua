@@ -67,7 +67,7 @@ local function onEnterCombat(event, creature, target)
     -- Latch the dying sentinel's own ability (C++ member `ability`,
     -- set in GetOtherSentinels) + its engage-time buddy list so
     -- onDied can transfer it (mob_anubisath_sentinel.cpp:246-257).
-    sentinelState[creature:GetGUID()] = { ability = ability, buddies = latchBuddies(creature) }
+    sentinelState[creature:GetGUIDLow()] = { ability = ability, buddies = latchBuddies(creature) }
     -- mob_anubisath_sentinel.cpp:243: JustEngagedWith tail — me-form
     -- DoZoneInCombat() on the live bridge (algalon/mandokir precedent;
     -- 2026-10-23 re-triage). The old "buddy machinery" blocker is
@@ -79,7 +79,7 @@ end
 
 local function onReset(event, creature)
     -- C++ Reset -> Initialize -> ClearBuddyList.
-    sentinelState[creature:GetGUID()] = nil
+    sentinelState[creature:GetGUIDLow()] = nil
 end
 
 -- C++ npc_anubisath_sentinelAI::JustDied
@@ -93,7 +93,7 @@ end
 -- leaves 70yd before the death is missed by the re-query — C++
 -- would still find it by GUID (ObjectAccessor has no range limit).
 local function sentinelDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = sentinelState[guid]
     sentinelState[guid] = nil
     if st == nil or st.ability == nil then

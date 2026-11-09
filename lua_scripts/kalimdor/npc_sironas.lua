@@ -143,7 +143,7 @@ end
 -- C++ JustEngagedWith values land on OnEnterCombat: uppercut
 -- 15s, immolate 10s, curse of blood 5s.
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     sironasState[guid] = {
         uppercutTimer = 15000,
@@ -170,7 +170,7 @@ end
 -- (illidari_spawn precedent) either way.
 local function onDied(_, creature, killer)
     creature:SetScale(1.0)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
     if not killer then
         return
     end
@@ -196,7 +196,7 @@ end
 
 -- C++ Reset() (called on evade): fullReset — see above.
 local function onLeaveCombat(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
     -- C++ npc_sironasAI::Reset() (zone_bloodmyst_isle.cpp:258-262):
     -- _events.Reset() then SetDisplayId(Modelid2) — ported
     -- 2026-10-22 via creature:GetTemplateModelId(2).
