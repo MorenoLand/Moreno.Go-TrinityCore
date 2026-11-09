@@ -42,10 +42,13 @@
 -- AuraScript AfterEffectRemove machine on a script-only bearer —
 -- razelikh precedent); yell + cast cadence
 -- ported C++-exact, damage leg stays out (documented-only below);
--- EVENT_SPAWN 30-40s (invader-summoner trigger casts — ObjectAccessor
--- ::GetCreature(*me, instance->GetGuidData(DATA_TROLLGORE_INVADER_
--- SUMMONER_1+i)) + instance GUID-data + cross-AI bridges absent;
--- instance model absent anyway) — documented-only below;
+-- EVENT_SPAWN 30-40s (invader-summoner trigger casts) — PORTED tick 510
+-- (see spawnTick below): the three summoners ride the instanceData
+-- latch (instance_drak_tharon_keep.lua); the original-caster GUID
+-- (Trollgore) has no Lua arm, so each trigger casts as its own caster
+-- (CastCustomSpell's originalCaster arg is accepted-and-ignored in Go);
+-- the invader landing AI (MovementInform -> dismount/taunt) stays out
+-- (motion-master bridge absent).
 -- EVENT_CRUSH DoCastVictim(Crush 49639), randtime(1s,5s) init,
 -- 10-15s repeat (math.random — slad_ran precedent);
 -- EVENT_INFECTED_WOUND DoCastVictim(Infected Wound 49637),
@@ -66,12 +69,6 @@
 -- spell_trollgore_corpse_explode AuraScript) — no SpellScript/
 -- AuraScript binding bridge (razelikh precedent); the yells + cast
 -- cadence are ported, these effect legs stay out.
--- EVENT_SPAWN — the invader-summoner world-trigger casts (
--- trigger->CastSpell(trigger, RAND(SPELL_SUMMON_INVADER_A 49456 /
--- _B 49457 / _C 49458), me->GetGUID()) over the three
--- DATA_TROLLGORE_INVADER_SUMMONER_1..3 GUIDs), 30-40s repeat —
--- instance GetGuidData + ObjectAccessor cross-AI bridges absent +
--- instance model absent (standing).
 -- The _consumptionJunction latch (Initialize/Reset true; UpdateAI
 -- flips it false when GetAura(SPELL_CONSUME_BUFF_HELPER 49381 /
 -- 59805)->GetStackAmount() > 9) — PORTED tick 418 as a SetData mirror
@@ -139,6 +136,9 @@ local SPELL_CONSUME = 49380
 local SPELL_CORPSE_EXPLODE = 49555
 local SPELL_CONSUME_BUFF = 49381 -- boss_trollgore.cpp:34
 local SPELL_CONSUME_BUFF_HEROIC = 59805 -- boss_trollgore.cpp:35
+local SPELL_SUMMON_INVADER_A = 49456 -- boss_trollgore.cpp:40
+local SPELL_SUMMON_INVADER_B = 49457 -- boss_trollgore.cpp:41
+local SPELL_SUMMON_INVADER_C = 49458 -- boss_trollgore.cpp:42
 local DATA_CONSUMPTION_JUNCTION = 1 -- boss_trollgore.cpp:57
 
 local timers = {}
@@ -264,8 +264,44 @@ local function consumptionJunctionTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_SPAWN (boss_trollgore.cpp:143-151): every 30-40s each of
+-- the three latched invader summoners (instanceData
+-- .trollgoreInvaderSummoners, position-classified world triggers
+-- 22515) casts a random summon spell (RAND 49456/49457/49458) on
+-- itself. Same UpdateAI CASTING gate as the other arms: 500ms defer,
+-- no repeat re-arm. Deviation: the C++ cast carries Trollgore as the
+-- original caster (me->GetGUID()); Lua CastSpell has no original-caster
+-- arm, so the trigger is its own caster — the summon still spawns the
+-- invader at the trigger. The invader landing AI (MovementInform ->
+-- dismount/taunt) stays out (motion-master bridge absent). A nil
+-- summoners table (summoners not yet latched) skips the cast but still
+-- re-arms, exactly like the C++ event re-schedule.
+local function spawnTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spawn", 500, function()
+            spawnTick(creature, guid)
+        end)
+        return
+    end
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    local summoners = data and data.trollgoreInvaderSummoners or nil
+    if summoners ~= nil then
+        local spells = { SPELL_SUMMON_INVADER_A, SPELL_SUMMON_INVADER_B, SPELL_SUMMON_INVADER_C }
+        for i = 1, 3 do
+            local summoner = summoners[i]
+            if summoner ~= nil then
+                summoner:CastSpell(summoner, spells[math.random(1, 3)])
+            end
+        end
+    end
+    schedule(guid, "spawn", math.random(30000, 40000), function()
+        spawnTick(creature, guid)
+    end)
+end
+
 local function trollgoreEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Initialize/Reset (boss_trollgore.cpp:84-87/:89-93):
     -- _consumptionJunction starts true; mirror it into the motion's
@@ -291,10 +327,13 @@ local function trollgoreEnterCombat(event, creature, target)
     schedule(guid, "corpseexplode", 3000, function()
         corpseExplodeTick(creature, guid)
     end)
+    schedule(guid, "spawn", math.random(30000, 40000), function()
+        spawnTick(creature, guid)
+    end)
 end
 
 local function trollgoreLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function trollgoreTargetDied(event, creature, victim)
@@ -304,12 +343,12 @@ local function trollgoreTargetDied(event, creature, victim)
 end
 
 local function trollgoreDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
 end
 
 local function trollgoreReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     consumptionJunction[guid] = nil
     -- C++ Reset (boss_trollgore.cpp:89-93) re-arms _consumptionJunction

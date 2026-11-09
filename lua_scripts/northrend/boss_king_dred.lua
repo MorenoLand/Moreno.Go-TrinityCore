@@ -22,8 +22,9 @@
 -- default is triggered=false (vaelastrasz convention):
 -- creature:CastSpell(nil, spell) = DoCastVictim (moroes precedent).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler
--- (gargolmar precedent); BossAI _Reset/_JustDied instance bookkeeping
--- has no bridge.
+-- (gargolmar precedent); BossAI _Reset/_JustDied bookkeeping rides the
+-- bridged creature:SetBossState (IN_PROGRESS/NOT_STARTED/DONE, tick 510)
+-- + the live-raptor despawn sweep (summons.DespawnAll twin).
 -- Ported arms (C++-exact for the modeled arms — the three
 -- JustEngagedWith schedules are independent, none of the unmodeled
 -- events gate them):
@@ -38,8 +39,8 @@
 -- 10s,20s) init, 10-20s repeat (sulfuron convention). Both roars
 -- carry no SpellScript and are not phase-gated, so the stale "no
 -- DoCastAOE bridge" claim was wrong (selin_fireheart convention).
--- No Talk, no JustDied legs —
--- C++ JustDied is only _JustDied() (instance bookkeeping, no bridge).
+-- No Talk legs; JustDied is _JustDied() — the SetBossState(DONE) +
+-- raptor-despawn legs are ported (tick 510).
 -- EVENT_RAPTOR_CALL — DoCastVictim(SPELL_RAPTOR_CALL 59416, dummy) +
 -- me->SummonCreature(RAND(NPC_DRAKKARI_GUTRIPPER 26641 /
 -- NPC_DRAKKARI_SCYTHECLAW 26628), GetClosePoint(combatReach/3, 10.0f),
@@ -91,6 +92,12 @@ local NPC_DRAKKARI_SCYTHECLAW = 26628
 local DATA_KING_DRED = 2
 local DATA_RAPTORS_KILLED = 2
 local ACTION_RAPTOR_KILLED = 1
+
+-- EncounterState (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1,
+-- DONE 3 (the boss_anomalus.lua precedent).
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local timers = {}
 
@@ -210,6 +217,21 @@ end
 -- (Object.cpp:2061-2062 twin); DEAD_DESPAWN is type 6 in the engine's
 -- 0-based summon-type scheme (lua_creature_events.go:936). Same boss
 -- UpdateAI CASTING gates: 500ms defer (the summon leg rides the cast).
+-- Live raptor summons (boss_king_dred.cpp:144-152 RAPTOR_CALL): C++
+-- BossAI::_Reset/_JustDied call summons.DespawnAll(); the Lua twin
+-- stores the SummonCreature returns and despawns them on leave/died/
+-- reset. Despawn never fires ev4 (lua_creature_events.go Despawn fires
+-- only event 20 on the summoner), so the sweep cannot inflate the
+-- raptor-kill counter through the raptorDied relay.
+local liveRaptors = {}
+
+local function despawnRaptors()
+    for _, raptor in ipairs(liveRaptors) do
+        raptor:Despawn()
+    end
+    liveRaptors = {}
+end
+
 local function raptorCallTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "raptorcall", 500, function()
@@ -224,17 +246,23 @@ local function raptorCallTick(creature, guid)
     if math.random(2) == 2 then
         entry = NPC_DRAKKARI_SCYTHECLAW
     end
-    creature:SummonCreature(entry, x, y, z, 0, 6, 1000)
+    local raptor = creature:SummonCreature(entry, x, y, z, 0, 6, 1000)
+    if raptor ~= nil then
+        liveRaptors[#liveRaptors + 1] = raptor
+    end
     schedule(guid, "raptorcall", {20000, 25000}, function()
         raptorCallTick(creature, guid)
     end)
 end
 
 local function kingDredEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-539):
+    -- instance->SetBossState(DATA_KING_DRED, IN_PROGRESS).
+    creature:SetBossState(DATA_KING_DRED, BOSS_STATE_IN_PROGRESS)
     schedule(guid, "raptorcall", {20000, 25000}, function()
         raptorCallTick(creature, guid)
     end)
@@ -256,25 +284,37 @@ local function kingDredEnterCombat(event, creature, target)
 end
 
 local function kingDredLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnRaptors()
     -- C++ EnterEvadeMode ends with Reset() (CreatureAI.cpp:237);
-    -- Reset (:73-76): raptorsKilled = 0.
+    -- Reset (:73-76): raptorsKilled = 0; _Reset (ScriptedCreature.cpp:
+    -- 499-511): summons.DespawnAll() + SetBossState NOT_STARTED (the
+    -- != DONE gate is vacuous: a DONE boss never evades).
     creature:SetData(DATA_RAPTORS_KILLED, 0)
+    creature:SetBossState(DATA_KING_DRED, BOSS_STATE_NOT_STARTED)
 end
 
 local function kingDredDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnRaptors()
+    -- C++ JustDied (:105-108) is _JustDied() (ScriptedCreature.cpp:
+    -- 513-520): summons.DespawnAll() + SetBossState DONE.
+    creature:SetBossState(DATA_KING_DRED, BOSS_STATE_DONE)
 end
 
 local function kingDredReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnRaptors()
     -- C++ Reset (:73-76): raptorsKilled = 0. Alive-gated: ev23 fires on
     -- death too (fireCreatureDied runs Reset before the kill-credit
     -- criteria read, kill.go:1091/:1400), and a death-time zero would
     -- clobber the fight's counter before the achievement gate reads
-    -- it; the wipe re-arm is preserved.
+    -- it; the wipe re-arm is preserved. The _Reset SetBossState
+    -- (NOT_STARTED) leg rides the same guard (ScriptedCreature.cpp:
+    -- 499-502); the != DONE gate is vacuous (a DONE boss never resets).
     if creature:IsAlive() then
         creature:SetData(DATA_RAPTORS_KILLED, 0)
+        creature:SetBossState(DATA_KING_DRED, BOSS_STATE_NOT_STARTED)
     end
 end
 
@@ -282,12 +322,21 @@ end
 -- (boss_king_dred.cpp:179-222 / 227-270): ctor/Reset arm
 -- GutRipTimer/uiRendTimer = urand(10s,15s); UpdateAI fires
 -- DoCastVictim(SPELL_GUT_RIP 49710 / SPELL_REND 13738, non-triggered)
--- with urand(10s,15s) re-arm; melee is engine-driven. JustSummoned
--- (event 19) is the spawn twin (the shirrak precedent); the cross-AI
--- JustDied DoAction(ACTION_RAPTOR_KILLED) leg is portable-but-latent —
--- dispatch IS bridged (ev38), lookup IS bridged (GetInstanceCreature :5865,
--- unlatched); sole consumer is the unported achievement_king_dred
--- (counter documented-only above).
+-- with urand(10s,15s) re-arm; melee is engine-driven. The spawn hook is
+-- event 22 (CREATURE_EVENT_ON_SUMMONED — the summoned creature's own
+-- IsSummonedBy hook, lua_creature_events.go fireCreaturePetSummoned;
+-- event 19 fires on the SUMMONER, so a registration on the raptor
+-- entries could never fire — tick-510 audit correction of the
+-- shirrak-precedent claim; the rotation was dead until this fix). The
+-- cross-AI JustDied DoAction(ACTION_RAPTOR_KILLED) leg is portable —
+-- dispatch IS bridged (ev38), lookup IS bridged (GetInstanceCreature
+-- :5865, unlatched); sole consumer is the PORTED achievement_king_dred
+-- (counter ported above).
+-- GUID keys are GetGUIDLow() throughout (tick-510 GUID-key fix — the
+-- GetGUID() userdata keys missed across handlers, so every cancel from
+-- another handler was a no-op and chains leaked past evade/death).
+local raptorRotation = {}
+
 local function raptorRotationTick(creature, guid, key, spell)
     creature:CastSpell(nil, spell)
     schedule(guid, key, math.random(10000, 15000), function()
@@ -295,24 +344,43 @@ local function raptorRotationTick(creature, guid, key, spell)
     end)
 end
 
-local function gutripperSummoned(event, creature)
-    local guid = creature:GetGUID()
+local function startRaptorRotation(creature, key, spell)
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    schedule(guid, "gutrip", math.random(10000, 15000), function()
-        raptorRotationTick(creature, guid, "gutrip", SPELL_GUT_RIP)
+    raptorRotation[guid] = true
+    schedule(guid, key, math.random(10000, 15000), function()
+        raptorRotationTick(creature, guid, key, spell)
     end)
+end
+
+local function gutripperSummoned(event, creature)
+    startRaptorRotation(creature, "gutrip", SPELL_GUT_RIP)
 end
 
 local function scytheclawSummoned(event, creature)
-    local guid = creature:GetGUID()
-    cancelTimers(guid)
-    schedule(guid, "rend", math.random(10000, 15000), function()
-        raptorRotationTick(creature, guid, "rend", SPELL_REND)
-    end)
+    startRaptorRotation(creature, "rend", SPELL_REND)
+end
+
+-- C++ Reset (:196-199 / :252-255) re-inits the rotation timer on evade.
+-- Fires only when no rotation is live: a live rotation keeps its ctor
+-- countdown (a plain re-schedule here would restart it whenever the
+-- raptor re-engages mid-fight).
+local function gutripperEnterCombat(event, creature)
+    if not raptorRotation[creature:GetGUIDLow()] then
+        startRaptorRotation(creature, "gutrip", SPELL_GUT_RIP)
+    end
+end
+
+local function scytheclawEnterCombat(event, creature)
+    if not raptorRotation[creature:GetGUIDLow()] then
+        startRaptorRotation(creature, "rend", SPELL_REND)
+    end
 end
 
 local function raptorGone(event, creature)
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    raptorRotation[guid] = nil
 end
 
 -- C++ instance OnCreatureCreate latching (InstanceScript::AddObject):
@@ -339,7 +407,9 @@ local function raptorDied(event, creature)
     if dred then
         dred:DoAction(ACTION_RAPTOR_KILLED)
     end
-    cancelTimers(creature:GetGUID())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    raptorRotation[guid] = nil
 end
 
 RegisterCreatureEvent(ENTRY_KING_DRED, 1, kingDredEnterCombat)
@@ -349,9 +419,11 @@ RegisterCreatureEvent(ENTRY_KING_DRED, 5, kingDredSpawned)
 RegisterCreatureEvent(ENTRY_KING_DRED, 23, kingDredReset)
 RegisterCreatureEvent(ENTRY_KING_DRED, 38, kingDredDoAction)
 
-RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 19, gutripperSummoned)
+RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 22, gutripperSummoned)
+RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 1, gutripperEnterCombat)
 RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 2, raptorGone)
 RegisterCreatureEvent(NPC_DRAKKARI_GUTRIPPER, 4, raptorDied)
-RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 19, scytheclawSummoned)
+RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 22, scytheclawSummoned)
+RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 1, scytheclawEnterCombat)
 RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 2, raptorGone)
 RegisterCreatureEvent(NPC_DRAKKARI_SCYTHECLAW, 4, raptorDied)

@@ -70,15 +70,18 @@
 -- emulation + phase-1 re-arm (decay_flesh 20s, curse_of_life 1s,
 -- rain_of_fire {14s,18s}, shadow_volley {8s,10s}).
 -- Unmodeled (no bridges — documented, not wired):
--- Reset's _Reset() — instance bookkeeping, no bridge; UpdateAI
--- HasUnitState pre-loop (:126) + in-loop (:197) CASTING gates
--- PORTED (all 10 ported arms defer 500ms while casting, no repeat
+-- Reset's _Reset() instance bookkeeping rides the bridged
+-- creature:SetBossState (NOT_STARTED leg ported tick 510, alive-guarded
+-- below); UpdateAI HasUnitState pre-loop (:126) + in-loop (:197) CASTING
+-- gates PORTED (all 10 ported arms defer 500ms while casting, no repeat
 -- re-arm; stale "constant-false IsCasting" claim retracted);
 -- spell_tharon_ja_clear_gift_of_tharon_ja SpellScript (53242
 -- EFFECT_0 SCRIPT_EFFECT ->
 -- RemoveAura(52509)) — no SpellScript binding bridge (razelikh
--- precedent); achievement criteria script — no achievement bridge
--- (kelthuzad precedent).
+-- precedent). There is no AchievementCriteriaScript class in
+-- boss_tharon_ja.cpp at all — the achievement leg is the JustDied
+-- DoCastAOE(61863), which is ported (the old "no achievement bridge
+-- (kelthuzad precedent)" header note was misleading).
 -- C++ "Known Issues" note carried: spells 49356 (Decay Flesh) and
 -- 53463 (Return Flesh) will be interrupted for an unknown reason.
 
@@ -107,6 +110,15 @@ local SPELL_DUMMY = 49551
 -- MODEL_FLESH: boss_tharon_ja.cpp enum (line ~75), the flesh-form
 -- display for EVENT_GOING_FLESH's SetDisplayId arm.
 local MODEL_FLESH = 27073
+
+-- DATA_THARON_JA = 3 (drak_tharon_keep.h:35).
+local DATA_THARON_JA = 3
+
+-- EncounterState (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1,
+-- DONE 3 (the boss_anomalus.lua precedent).
+local BOSS_STATE_NOT_STARTED = 0
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 -- GUID-keyed native-display table: captured via creature:GetDisplayId()
 -- at engage; implements me->RestoreDisplayId() as
@@ -390,14 +402,17 @@ local function tharonJaEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
-    local guid = creature:GetGUID()
+    -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-539):
+    -- instance->SetBossState(DATA_THARON_JA, IN_PROGRESS).
+    creature:SetBossState(DATA_THARON_JA, BOSS_STATE_IN_PROGRESS)
+    local guid = creature:GetGUIDLow()
     nativeDisplay[guid] = creature:GetDisplayId()
     cancelTimers(guid)
     schedulePhaseOne(creature, guid)
 end
 
 local function tharonJaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 1) only when victim->GetTypeId() ==
@@ -408,23 +423,33 @@ local function tharonJaTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH 4) (the _JustDied leg is instance
--- bookkeeping, no bridge) + the two DoCastAOE arms as triggered
--- self-casts.
+-- C++ JustDied: _JustDied() (ScriptedCreature.cpp:513-520:
+-- SetBossState DONE) + Talk(SAY_DEATH 4) + the two DoCastAOE arms as
+-- triggered self-casts.
 local function tharonJaDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    creature:SetBossState(DATA_THARON_JA, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     creature:CastSpell(creature, SPELL_CLEAR_GIFT_OF_THARON_JA, true)
     creature:CastSpell(creature, SPELL_ACHIEVEMENT_CHECK, true)
 end
 
--- C++ Reset: _Reset() (instance bookkeeping, no bridge) +
--- me->RestoreDisplayId(); the event-table reset is the timer cancel.
+-- C++ Reset: _Reset() (ScriptedCreature.cpp:499-511: alive-gated,
+-- SetBossState NOT_STARTED when != DONE) + me->RestoreDisplayId(); the
+-- event-table reset is the timer cancel. The display restore and the
+-- boss-state leg ride the alive guard: ev23 fires on death too
+-- (fireCreatureDied runs Reset before ev4), and a death-time restore
+-- would put the native display back on a flesh-form corpse — C++ leaves
+-- the flesh display (27073). The != DONE gate is vacuous (a DONE boss
+-- never resets). cancelTimers stays unconditional.
 local function tharonJaReset(event, creature)
-    local guid = creature:GetGUID()
-    if nativeDisplay[guid] then
-        creature:SetDisplayId(nativeDisplay[guid])
-        nativeDisplay[guid] = nil
+    local guid = creature:GetGUIDLow()
+    if creature:IsAlive() then
+        if nativeDisplay[guid] then
+            creature:SetDisplayId(nativeDisplay[guid])
+            nativeDisplay[guid] = nil
+        end
+        creature:SetBossState(DATA_THARON_JA, BOSS_STATE_NOT_STARTED)
     end
     cancelTimers(guid)
 end
