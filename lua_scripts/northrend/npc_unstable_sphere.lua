@@ -8,11 +8,12 @@
 -- entry is the summon's template by construction — the old
 -- "entry-unverifiable, no registration" note in boss_drakos.lua and
 -- boss_ai.go is retracted.
--- Deviations from C++: MoveRandom(40.0f) stays out (no motion
--- bridge); the sphere holds position instead of wandering. The
--- C++ Reset re-run on evade is modeled as the event-23 re-seed
--- below (alive-gated, prowlerReset convention); the sphere is
--- passive and never enters combat, so the evade path is inert.
+-- Deviations from C++: none. The C++ Reset re-run on evade is modeled
+-- as the event-23 re-seed below (alive-gated, prowlerReset
+-- convention); the sphere is passive and never enters combat, so the
+-- evade path is inert. MoveRandom(40.0f) PORTED 2026-11-09 (tick 512)
+-- — creature:MoveRandom is bridged (lua_creature_events.go:4962),
+-- retiring the "no motion bridge" note.
 
 local ENTRY_UNSTABLE_SPHERE = 28166
 
@@ -58,11 +59,12 @@ local function pulseTick(creature, guid)
 end
 
 -- C++ Reset (boss_drakos.cpp:173-186): SetReactState(REACT_PASSIVE) +
--- MoveRandom(40.0f, stays out) + AddAura(50756, self) + AddAura(50758,
+-- MoveRandom(40.0f) + AddAura(50756, self) + AddAura(50758,
 -- self) + DespawnOrUnsummon(19s); ctor Initialize() seeds the 3s
 -- pulse timer, so the pulse starts at spawn too.
 local function sphereReset(creature, guid)
     creature:SetReactState(REACT_PASSIVE)
+    creature:MoveRandom(40)
     creature:AddAura(SPELL_UNSTABLE_SPHERE_PASSIVE)
     creature:AddAura(SPELL_UNSTABLE_SPHERE_TIMER)
     schedule(guid, "pulse", 3000, function()
@@ -76,13 +78,13 @@ local function sphereReset(creature, guid)
 end
 
 local function sphereSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sphereReset(creature, guid)
 end
 
 local function sphereResetEvent(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsAlive() then
         sphereReset(creature, guid)
@@ -90,7 +92,7 @@ local function sphereResetEvent(event, creature)
 end
 
 local function sphereLeaveOrDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_UNSTABLE_SPHERE, 5, sphereSpawn)

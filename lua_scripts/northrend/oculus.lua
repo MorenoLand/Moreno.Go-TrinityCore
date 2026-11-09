@@ -44,9 +44,14 @@
 -- - Drake PassengerBoarded + UpdateAI whisper machine
 --   (oculus.cpp:345-423: WELCOME 10s / ABILITIES +5s /
 --   SPECIAL_ATTACK 10s / LOW_HEALTH 40% + 25s reset / TAKE_OFF
---   +2s despawn + takeoff spline): no PassengerBoarded bridge,
---   so the board trigger — and everything gated on it — stays
---   out.
+--   +2s despawn + takeoff spline): PORTED 2026-11-09 (tick 512)
+--   via RegisterVehicleEvent 5 (add) / 6 (remove), kologarn
+--   precedent; the UpdateAI health check rides a 1s CreateLuaEvent
+--   pump (no UpdateAI tick surface — check granularity is the one
+--   deviation). SetSpeedRate(MOVE_FLIGHT, 1.0) stays out (the
+--   bridge rejects non-RUN types; 1.0 is the default flight rate,
+--   so the leg is a no-op); SetOrientation(2.5) rides
+--   SetFacingTo(2.5), the absolute-facing twin.
 -- - The remaining SpellScripts/AuraScripts: call-drake dest
 --   select (49345/49461/49462, SpellScript), shock lance
 --   damage calc (49840, SpellScript), touch the nightmare
@@ -117,7 +122,14 @@ local WHISPER_GPS_UROM = 8 -- oculus.cpp:132
 local WHISPER_GPS_EREGOS = 9 -- oculus.cpp:133
 local WHISPER_GPS_END = 10 -- oculus.cpp:134
 
+local SAY_DRAKES_TAKEOFF = 0 -- oculus.cpp:109
+local WHISPER_DRAKES_WELCOME = 1 -- oculus.cpp:110
+local WHISPER_DRAKES_ABILITIES = 2 -- oculus.cpp:111
+local WHISPER_DRAKES_SPECIAL = 3 -- oculus.cpp:112
+local WHISPER_DRAKES_LOWHEALTH = 4 -- oculus.cpp:113
+
 local POINT_LAND = 2 -- oculus.cpp:121
+local POINT_TAKE_OFF = 3 -- oculus.cpp:121
 
 -- C++ OnGossipSelect (oculus.cpp:150-191). StoreEssence is
 -- player:AddItem (the CanStoreNewItem gate reads nil on failure,
@@ -169,6 +181,73 @@ RegisterCreatureGossipEvent(NPC_BELGARISTRASZ, 2, dragonGossipSelect)
 -- per drake GUID; ev14 reads it back for the GPS whisper target.
 local drakeCreators = {}
 
+-- Drake event timers (PassengerBoarded / UpdateAI machine,
+-- oculus.cpp:345-423), keyed on GetGUIDLow() (stable uint32 — the
+-- GUID-key rule: GetGUID() userdata never matches across handlers).
+local drakeTimers = {}
+local drakeHealthWarning = {}
+local drakeHealthPump = {}
+
+local function drakeCancelTimers(guid)
+    local per = drakeTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        drakeTimers[guid] = nil
+    end
+end
+
+local function drakeSchedule(guid, key, delay, fn)
+    local per = drakeTimers[guid]
+    if not per then
+        per = {}
+        drakeTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function drakeCancelHealthPump(guid)
+    local id = drakeHealthPump[guid]
+    if id then
+        RemoveEventById(id)
+        drakeHealthPump[guid] = nil
+    end
+end
+
+-- C++ UpdateAI health leg (oculus.cpp:352-356): _healthWarning
+-- gates a <= 40% check every AI tick. No UpdateAI tick surface
+-- exists in Lua, so a 1s CreateLuaEvent pump is the twin (check
+-- granularity is the one deviation); the pump is NOT part of the
+-- event map, so PassengerBoarded-remove does not cancel it — only
+-- leave/died/reset do.
+local function drakeHealthCheckTick(creature, guid)
+    if drakeHealthWarning[guid] and creature:GetHealthPct() <= 40 then
+        local creator = drakeCreators[guid]
+        if creator then
+            creature:Talk(WHISPER_DRAKES_LOWHEALTH, creator)
+        end
+        drakeHealthWarning[guid] = false
+        drakeSchedule(guid, "resetLowHealth", 25000, function()
+            drakeHealthWarning[guid] = true
+        end)
+    end
+    drakeHealthPump[guid] = CreateLuaEvent(function()
+        drakeHealthCheckTick(creature, guid)
+    end, 1000)
+end
+
+local function drakeSeedHealthPump(creature, guid)
+    drakeCancelHealthPump(guid)
+    drakeHealthWarning[guid] = true
+    drakeHealthPump[guid] = CreateLuaEvent(function()
+        drakeHealthCheckTick(creature, guid)
+    end, 1000)
+end
+
 -- C++ SpellHit (oculus.cpp:289-310): creator must exist, spell
 -- must be GPS; the whisper chain reads boss states first, then
 -- the construct kill-state (GetData(DATA_CONSTRUCTS) — 0 while
@@ -178,7 +257,7 @@ local function drakeSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_GPS then
         return
     end
-    local creator = drakeCreators[creature:GetGUID()]
+    local creator = drakeCreators[creature:GetGUIDLow()]
     if not creator then
         return
     end
@@ -217,12 +296,110 @@ local function drakeLandInform(_, creature, moveType, id)
     end
 end
 
+-- C++ npc_ruby_emerald_amber_drakeAI::PassengerBoarded +
+-- UpdateAI (oculus.cpp:322-423) via RegisterVehicleEvent 5 (add) /
+-- 6 (remove), kologarn precedent. The handler shape is
+-- (event, vehicle, passenger, seatId); apply rides the event id.
+-- The C++ passenger gate is TYPEID_PLAYER; the Lua twin is
+-- GetObjectType() == "Player".
+local function drakeWelcomeTick(vehicle, guid)
+    local creator = drakeCreators[guid]
+    if creator then
+        vehicle:Talk(WHISPER_DRAKES_WELCOME, creator)
+    end
+    drakeSchedule(guid, "abilities", 5000, function()
+        local creator2 = drakeCreators[guid]
+        if creator2 then
+            vehicle:Talk(WHISPER_DRAKES_ABILITIES, creator2)
+        end
+    end)
+end
+
+local function drakeSpecialTick(vehicle, guid)
+    local creator = drakeCreators[guid]
+    if creator then
+        vehicle:Talk(WHISPER_DRAKES_SPECIAL, creator)
+    end
+end
+
+local function drakeTakeOffTick(vehicle, guid)
+    -- C++ EVENT_TAKE_OFF (oculus.cpp:397-410) in C++ order:
+    -- DespawnOrUnsummon(2050ms), SetOrientation(2.5) via the
+    -- absolute-facing twin SetFacingTo, Talk, position + offset
+    -- (10, 10, 12), SetDisableGravity(true), MovePoint.
+    -- SetSpeedRate(MOVE_FLIGHT, 1.0) stays out: the bridge rejects
+    -- non-RUN types, and 1.0 is the default flight rate (no-op).
+    vehicle:DespawnOrUnsummon(2050)
+    vehicle:SetFacingTo(2.5)
+    vehicle:Talk(SAY_DRAKES_TAKEOFF)
+    vehicle:SetDisableGravity(true)
+    vehicle:MoveTo(POINT_TAKE_OFF, vehicle:GetX() + 10, vehicle:GetY() + 10, vehicle:GetZ() + 12)
+end
+
+local function drakePassengerBoarded(event, vehicle, passenger, seatId)
+    local entry = vehicle:GetEntry()
+    if entry ~= NPC_RUBY_DRAKE_VEHICLE and entry ~= NPC_EMERALD_DRAKE_VEHICLE and entry ~= NPC_AMBER_DRAKE_VEHICLE then
+        return
+    end
+    if passenger == nil or passenger:GetObjectType() ~= "Player" then
+        return
+    end
+    local guid = vehicle:GetGUIDLow()
+    local apply = event == 5
+    if apply then
+        if vehicle:GetBossState(DATA_VAROS) ~= BOSS_STATE_DONE then
+            drakeSchedule(guid, "welcome", 10000, function()
+                drakeWelcomeTick(vehicle, guid)
+            end)
+        elseif vehicle:GetBossState(DATA_UROM) == BOSS_STATE_DONE then
+            drakeSchedule(guid, "special", 10000, function()
+                drakeSpecialTick(vehicle, guid)
+            end)
+        end
+    else
+        -- C++ PassengerBoarded apply=false: _events.Reset() +
+        -- EVENT_TAKE_OFF in 2s. The health pump is not part of the
+        -- event map and keeps running until leave/died/reset.
+        drakeCancelTimers(guid)
+        drakeSchedule(guid, "takeoff", 2000, function()
+            drakeTakeOffTick(vehicle, guid)
+        end)
+    end
+end
+
+RegisterVehicleEvent(5, drakePassengerBoarded)
+RegisterVehicleEvent(6, drakePassengerBoarded)
+
+-- C++ Reset (oculus.cpp:263-267): _events.Reset() + Initialize()
+-- (_healthWarning = true). ev23 pre-fires on death, so the pump
+-- re-seed is alive-guarded (prowlerReset convention).
+local function drakeReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    drakeCancelTimers(guid)
+    drakeCancelHealthPump(guid)
+    if creature:IsAlive() then
+        drakeSeedHealthPump(creature, guid)
+    else
+        drakeHealthWarning[guid] = nil
+    end
+end
+
+local function drakeLeaveOrDied(event, creature)
+    local guid = creature:GetGUIDLow()
+    drakeCancelTimers(guid)
+    drakeCancelHealthPump(guid)
+    drakeHealthWarning[guid] = nil
+end
+
 -- C++ IsSummonedBy (oculus.cpp:312-343).
 local function drakeSummoned(event, creature, summoner)
     if not summoner then
         return
     end
-    drakeCreators[creature:GetGUID()] = summoner
+    drakeCreators[creature:GetGUIDLow()] = summoner
+    -- C++ ctor Initialize() (oculus.cpp:256-260): _healthWarning
+    -- starts true; the UpdateAI health leg rides the 1s pump.
+    drakeSeedHealthPump(creature, creature:GetGUIDLow())
     if creature:GetBossState(DATA_EREGOS) == BOSS_STATE_IN_PROGRESS then
         local eregos = creature:FindNearestCreature(NPC_EREGOS, 450)
         if eregos then
@@ -248,6 +425,9 @@ for _, entry in ipairs(DRAKE_ENTRIES) do
     RegisterCreatureEvent(entry, 14, drakeSpellHit)
     RegisterCreatureEvent(entry, 22, drakeSummoned)
     RegisterCreatureEvent(entry, 28, drakeLandInform)
+    RegisterCreatureEvent(entry, 23, drakeReset)
+    RegisterCreatureEvent(entry, 2, drakeLeaveOrDied)
+    RegisterCreatureEvent(entry, 4, drakeLeaveOrDied)
 end
 
 -- C++ spell_oculus_stop_time::Apply (oculus.cpp:560-583):

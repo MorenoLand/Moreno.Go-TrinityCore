@@ -74,9 +74,13 @@
 -- bridge).
 -- EnterEvadeMode — gated on _platform > 2 (center only): _EnterEvade-
 -- Mode + NearTeleportTo(1118.3101, 1080.3800, 508.3610, 4.25) or
--- MoveTargetedHome + Reset + events.Reset — EnterEvadeMode itself
--- and MoveTargetedHome have no bridge (the Teleport/StopMoving legs
--- are bridged but never fire without the evade trigger).
+-- MoveTargetedHome + Reset + events.Reset — creature:EnterEvadeMode
+-- IS bridged (lua_creature_events.go:5014) and the MoveTargetedHome
+-- twin creature:MoveHome IS bridged (:4989); the stay-out holds on
+-- different grounds: no ev25 hook exists (runtime.go CreatureEvents:
+-- 25 unused, no Go constant — engine-initiated evade has no Lua
+-- hook), and the _platform > 2 / _isInCenter gates ride the unported
+-- platform machine (boss_urom.cpp:114-130, :189-219).
 -- AttackStart — z-position-gated DoStartNoMovement vs BossAI::
 -- AttackStart — creature:AttackStart IS bridged (lua_creature_events.go:5984,
 -- EngageWithTarget alias); DoStartNoMovement itself has no bridge, and

@@ -313,7 +313,7 @@ local function eregosEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     voidRuby[guid] = true
     voidEmerald[guid] = true
     voidAmber[guid] = true
@@ -342,7 +342,7 @@ local function eregosEnterCombat(event, creature, target)
 end
 
 local function eregosCombatEnd(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_eregos.cpp:105-110): _Reset() FIRST —
@@ -354,8 +354,8 @@ local function eregosReset(event, creature)
     if creature:GetBossState(DATA_EREGOS) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_EREGOS, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
-    eregosPhase[creature:GetGUID()] = PHASE_NORMAL -- C++ Initialize() (:95-99)
+    cancelTimers(creature:GetGUIDLow())
+    eregosPhase[creature:GetGUIDLow()] = PHASE_NORMAL -- C++ Initialize() (:95-99)
     -- C++ Reset -> Initialize() (boss_eregos.cpp:95-99) re-arms all
     -- three void latches true. IsDead-guarded: ev23 pre-fires on death
     -- (kill.go:1091 -> fireCreatureDied) and an unguarded re-arm would
@@ -381,7 +381,7 @@ end
 local function eregosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_EREGOS, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()
@@ -412,7 +412,7 @@ local function eregosDamageTaken(event, creature, attacker, damage)
     if not creature:IsHeroic() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local phase = eregosPhase[guid] or PHASE_NORMAL
     local pct = creature:GetHealthPct()
     local first = pct < 60 and pct > 20 and phase < PHASE_FIRST_PLANAR
@@ -452,7 +452,7 @@ local function planarShiftRemove(event, aura, target)
     if target == nil then
         return
     end
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     cancelTimers(guid)
     seedNormalEvents(target, guid)
 end
@@ -472,13 +472,13 @@ local function eregosJustSummoned(_, creature, summoned)
         summoned:CombatStop(true)
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:MoveRandom(100)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local tracked = planarAnomalies[guid]
         if not tracked then
             tracked = {}
             planarAnomalies[guid] = tracked
         end
-        tracked[summoned:GetGUID()] = summoned
+        tracked[summoned:GetGUIDLow()] = summoned
     end
 end
 
@@ -493,10 +493,10 @@ end
 -- never arrive until the DBC ships.
 local function eregosSummonedDespawn(_, creature, summoned)
     if summoned ~= nil and summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local tracked = planarAnomalies[guid]
         if tracked then
-            tracked[summoned:GetGUID()] = nil
+            tracked[summoned:GetGUIDLow()] = nil
         end
         summoned:CastSpell(summoned, SPELL_PLANAR_BLAST, true)
     end

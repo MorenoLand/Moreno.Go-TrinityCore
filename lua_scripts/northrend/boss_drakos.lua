@@ -75,8 +75,9 @@
 -- superseded).
 -- npc_unstable_sphere — PORTED 2026-10-24 in
 -- lua_scripts/northrend/npc_unstable_sphere.lua (Reset self-auras
--- 50756/50758 + 3s pulse 50757 + 19s despawn; MoveRandom stays out,
--- no motion bridge). The old "entry-unverifiable" note is retracted:
+-- 50756/50758 + MoveRandom(40) + 3s pulse 50757 + 19s despawn; the
+-- MoveRandom leg PORTED 2026-11-09, tick 512 — creature:MoveRandom
+-- is bridged, lua_creature_events.go:4962). The old "entry-unverifiable" note is retracted:
 -- 28166 is NPC_UNSTABLE_SPHERE in this file's enum and the boss
 -- port summons it live, so the entry is the summon's template.
 -- UpdateAI UNIT_STATE_CASTING gates PORTED 2026-11-04 (500ms
@@ -206,7 +207,7 @@ local function drakosEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "pull", 15000, function()
         magicPullTick(creature, guid)
@@ -220,7 +221,7 @@ local function drakosEnterCombat(event, creature, target)
 end
 
 local function drakosLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_drakos.cpp:73-81): _Reset() FIRST —
@@ -232,7 +233,7 @@ local function drakosReset(event, creature)
     if creature:GetBossState(DATA_DRAKOS) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_DRAKOS, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL) — C++-UNCONDITIONAL: the Talk fires
@@ -242,14 +243,14 @@ local function drakosTargetDied(event, creature, victim)
     creature:Talk(SAY_KILL)
 end
 
--- C++ JustDied: _JustDied() first (boss_drakos.cpp:110-114) —
+-- C++ JustDied: _JustDied() first (boss_drakos.cpp:134-143) —
 -- SetBossState(DONE) (ScriptedCreature.cpp:519), then Talk(SAY_DEATH);
 -- the instance->DoStartTimedAchievement (ACHIEV_TIMED_START_EVENT
 -- 18153) leg has no achievement bridge — kelthuzad/thaddius precedent.
 local function drakosDied(event, creature, killer)
     creature:SetBossState(DATA_DRAKOS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()

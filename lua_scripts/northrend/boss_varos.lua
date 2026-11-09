@@ -232,7 +232,7 @@ local function varosEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "amplify", {20000, 25000}, function()
         amplifyTick(creature, guid)
@@ -246,7 +246,7 @@ local function varosEnterCombat(event, creature, target)
 end
 
 local function varosCombatEnd(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_varos.cpp:88-97): _Reset() FIRST —
@@ -257,7 +257,7 @@ local function varosReset(event, creature)
     if creature:GetBossState(DATA_VAROS) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_VAROS, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: _JustDied() first (boss_varos.cpp:158-162) —
@@ -268,7 +268,7 @@ end
 local function varosDied(event, creature, killer)
     creature:SetBossState(DATA_VAROS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()
