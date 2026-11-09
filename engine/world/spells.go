@@ -13823,6 +13823,41 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 	}
+	// Spell::handle_immediate (Spell.cpp:3568-3591) starts the channel
+	// BEFORE any target processing — SendChannelStart runs ahead of
+	// PrepareTargetProcessing and the _handle_immediate_phase HIT loop,
+	// unconditionally for channeled spells with a nonzero (or -1)
+	// duration, so a cast whose every target missed still channels in
+	// C++. This closure is that arm: it runs at the top of the all-miss
+	// early return below (channel, then OnEffectHit, then the twins,
+	// then the nodmg procs — the C++ order) and again on the normal
+	// path, where the early return never fires.
+	startChannelIfChanneled := func() {
+		// Reference Spell::handle_immediate: channeled spells begin their timed
+		// channel lifecycle after the cast completes. The resolved destination is
+		// recorded with the channel (C++ channeledSpell->m_targets dest), so
+		// spells triggered during the channel can resolve TARGET_DEST_CHANNEL_TARGET.
+		if isChanneledSpell(spell) {
+			hasDest := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+			// Spell::SendChannelStart (Spell.cpp:4669-4681): the channel-object
+			// target is the caster's own GUID when the cast has a destination,
+			// else the explicit unit target (GetObjectTargetGUID — Go carries
+			// only the unit half of SpellCastTargets; gameobject targets are
+			// unmodeled), else, for spells needing no explicit unit target, the
+			// single unique target (the TARGET_SELECT_CATEGORY_NEARBY arm).
+			channelObjectGUID := uint64(0)
+			if hasDest {
+				channelObjectGUID = s.playerGUID
+			} else {
+				channelObjectGUID = target.UnitGUID
+			}
+			if channelObjectGUID == 0 && !spellNeedsExplicitUnitTarget(spell) && len(hitTargets)+len(missGUIDs) == 1 {
+				channelObjectGUID = targetGUID
+			}
+			channelHits := append(append(append([]uint64(nil), hitTargets...), friendlyEffectTargets...), refCenteredFriendlyTargets...)
+			s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z, channelHits)
+		}
+	}
 	if len(hitTargets) == 0 && len(friendlyEffectTargets) == 0 {
 		// Spell::DoProcessTargetContainer(m_UniqueItemInfo) (Spell.cpp:3734):
 		// an item-target open-lock cast holds no unit or GO target, so the
@@ -13833,7 +13868,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectOpenLockItem(ctx, target, spell, eff, castItemGUID != 0 || castItemEntry != 0)
 			}
 		}
-		// Spell missed, do not trigger channel or effects
+		// Spell missed, do not trigger effects — but the channel still
+		// starts: handle_immediate (Spell.cpp:3568-3591) runs
+		// SendChannelStart ahead of the HIT loop, before any target
+		// processing, so an all-miss channeled cast channels in C++.
 		// PreprocessTarget still runs in C++ for the miss entries
 		// (Spell.cpp:2334-2381): the BeforeHit/OnHit twins fire here
 		// for them before the return — hitTargets is empty so only
@@ -13844,37 +13882,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// no-damage arm (Spell.cpp:2560-2575), the same order as
 		// the normal path (twins, then effects, then procs). OnEffectHit
 		// precedes the twins: the HIT-mode loop (:3722-3730) runs before
-		// the target container (:3601).
+		// the target container (:3601). The channel starts first (above).
+		startChannelIfChanneled()
 		s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID)
 		s.fireSpellScriptPreprocessTwins(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
 		fireLaunchMissNodmgProcs(ctx)
 		return
 	}
 
-	// Reference Spell::handle_immediate: channeled spells begin their timed
-	// channel lifecycle after the cast completes. The resolved destination is
-	// recorded with the channel (C++ channeledSpell->m_targets dest), so
-	// spells triggered during the channel can resolve TARGET_DEST_CHANNEL_TARGET.
-	if isChanneledSpell(spell) {
-		hasDest := target.Flags&protocol.SpellTargetFlagDestLocation != 0
-		// Spell::SendChannelStart (Spell.cpp:4669-4681): the channel-object
-		// target is the caster's own GUID when the cast has a destination,
-		// else the explicit unit target (GetObjectTargetGUID — Go carries
-		// only the unit half of SpellCastTargets; gameobject targets are
-		// unmodeled), else, for spells needing no explicit unit target, the
-		// single unique target (the TARGET_SELECT_CATEGORY_NEARBY arm).
-		channelObjectGUID := uint64(0)
-		if hasDest {
-			channelObjectGUID = s.playerGUID
-		} else {
-			channelObjectGUID = target.UnitGUID
-		}
-		if channelObjectGUID == 0 && !spellNeedsExplicitUnitTarget(spell) && len(hitTargets)+len(missGUIDs) == 1 {
-			channelObjectGUID = targetGUID
-		}
-		channelHits := append(append(append([]uint64(nil), hitTargets...), friendlyEffectTargets...), refCenteredFriendlyTargets...)
-		s.startChannel(castID, spellID, spell, targetGUID, channelObjectGUID, hasDest, target.Destination.X, target.Destination.Y, target.Destination.Z, channelHits)
-	}
+	startChannelIfChanneled()
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
@@ -27352,6 +27368,35 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		aoeSchoolMask := uint32(spell.SchoolMask)
 		if aoeSchoolMask == 0 {
 			aoeSchoolMask = 1
+		}
+		// SpellScript OnEffectHitTarget (Spell.cpp:2909,
+		// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_HIT_TARGET mode
+		// from Spell::DoSpellEffectHit, called per (effect, unit target)
+		// from DoProcessTargetContainer, Spell.cpp:3555-3566) fires once
+		// per (effect, live hit target) in effect-major order, before that
+		// effect's default handler — C++ runs CallScriptEffectHandlers
+		// before the effect handler in Spell::HandleEffects
+		// (Spell.cpp:5168). The funnel's effectTargets are already the
+		// miss/immune/evaded-filtered live hit list (the fan-out above
+		// drops every non-NONE miss), and a landed reflect resolves to
+		// the caster (the return trip's _spellHitTarget), so this loop
+		// fires over them as-is; GO guids never fire (the GO TargetInfo
+		// legs have no Go model, runtime.go). It sits ahead of the first
+		// per-target HIT_TARGET arm below (dummy/health-leech), the
+		// funnel's mirror of the creature path's loop (boss_ai.go), which
+		// fires every hook before every default — the per-effect
+		// hook-before-default order is exact here, only the cross-effect
+		// order is approximated the same way. A zero effect carries no
+		// hook (same skip as the creature path).
+		if eff.Effect != 0 {
+			for _, et := range effectTargets {
+				if et.guid == 0 || uint16(et.guid>>48) == 0xF110 {
+					continue
+				}
+				hitDamage.phase = spellHitPhaseEffectHitTarget
+				hitDamage.currentTarget = et.guid
+				s.server.fireSpellEffectHitTarget(ctx, spellID, funnelSpellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, et.guid), effectIndex)
+			}
 		}
 		if len(effectTargets) > 0 && (eff.Effect == spellEffectDummy || eff.Effect == spellEffectHealthLeech) {
 			effectGUIDs := make([]uint64, 0, len(effectTargets))

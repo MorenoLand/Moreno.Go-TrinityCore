@@ -571,11 +571,11 @@ const (
 // the Lua unit object (player or creature) or nil when the target
 // GUID resolves to nothing; GO, item and corpse TargetInfo legs
 // (Spell.cpp:2661-2707) have no Go model and never fire.
-// OnEffectHitTarget fires on the creature path only: the player
-// path resolves each effect's target list per case inside its
-// effects switch, so there is no clean per-effect list site there
-// yet — a player-cast OnEffectHitTarget leg stays blocked until
-// one is built.
+// OnEffectHitTarget fires on the creature path and on the triggered
+// (funnel) path: the player path resolves each effect's target list per
+// case inside its effects switch, so there is no clean per-effect list
+// site there yet — a player-cast OnEffectHitTarget leg stays blocked
+// until one is built.
 // OnObjectAreaTargetSelect mirrors the SpellScript hook of the same
 // name (SpellScript.h, fired from Spell::SelectImplicitAreaTargets,
 // Spell.cpp:1227, inside SelectTargets ahead of OnCast at :3432),
