@@ -70,7 +70,7 @@ local function despawnSweep(creature, guid)
 end
 
 local function spotlightReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimer(guid)
     if not creature:IsAlive() then
         return
@@ -81,11 +81,11 @@ local function spotlightReset(_, creature)
 end
 
 local function spotlightLeaveCombat(_, creature)
-    cancelTimer(creature:GetGUID())
+    cancelTimer(creature:GetGUIDLow())
 end
 
 local function spotlightDied(_, creature)
-    cancelTimer(creature:GetGUID())
+    cancelTimer(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GIANT_SPOTLIGHT, 23, spotlightReset)

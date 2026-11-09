@@ -141,7 +141,7 @@ local function onSwingCheck(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ Reset() is effectively empty (body commented out): Bomb_Timer
     -- is NOT re-armed on evade, it freezes and resumes. Preserve a
     -- pending bomb timer across re-engages instead of restarting 10s.
@@ -165,7 +165,7 @@ end
 -- The swing poll has no C++ timer state — it is evaluated only while a
 -- victim exists — so leave-combat cancels it and re-engage restarts it.
 local function onLeaveCombat(event, creature)
-    local per = timers[creature:GetGUID()]
+    local per = timers[creature:GetGUIDLow()]
     if per and per["swing"] then
         RemoveEventById(per["swing"])
         per["swing"] = nil
@@ -180,7 +180,7 @@ end
 -- bomb timer: otherwise it re-arms forever post-death and the stale
 -- per["bomb"] blocks the fresh 10s ctor re-arm on the next engage.
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

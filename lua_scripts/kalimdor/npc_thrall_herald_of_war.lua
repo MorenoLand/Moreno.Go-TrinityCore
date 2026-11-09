@@ -155,7 +155,7 @@ end
 -- (scene-machine state, cleared below) -> the once-per-lifetime guard
 -- summons below, C++ order.
 local function heraldReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sceneInProgress[guid] = nil
     heraldScene[guid] = nil
@@ -172,7 +172,7 @@ local function heraldReset(event, creature)
 end
 
 local function heraldDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sceneInProgress[guid] = nil
     heraldScene[guid] = nil
@@ -323,7 +323,7 @@ end
 
 -- C++ npc_thrall_herald_of_warAI::DoAction (zone_orgrimmar.cpp:632-665).
 local function heraldDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action ~= ACTION_START_SCENE or sceneInProgress[guid] then
         return
     end

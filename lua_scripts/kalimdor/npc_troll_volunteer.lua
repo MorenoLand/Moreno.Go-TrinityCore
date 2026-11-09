@@ -63,7 +63,7 @@ local function stateFor(guid)
 end
 
 local function volunteerReset(_, creature)
-    local state = stateFor(creature:GetGUID())
+    local state = stateFor(creature:GetGUIDLow())
     state.complete = false
     creature:AddAura(SPELL_VOLUNTEER_AURA)
     creature:AddAura(SPELL_MOUNTING_CHECK)
@@ -82,7 +82,7 @@ local function volunteerSpawn(_, creature)
         return
     end
     volunteerReset(_, creature)
-    local state = stateFor(creature:GetGUID())
+    local state = stateFor(creature:GetGUIDLow())
     state.mountModel = MOUNT_MODELS[math.random(1, 4)]
     creature:SetDisplayId(TROLL_MODELS[math.random(1, 40)])
     creature:MoveFollow(owner, 5.0, (math.random() + 1.0) * math.pi / 3.0 * 4.0)
@@ -95,7 +95,7 @@ local function volunteerSpellHit(_, creature, caster, spellId)
     if caster == nil or caster:GetEntry() ~= NPC_URUZIN then
         return
     end
-    local state = stateFor(creature:GetGUID())
+    local state = stateFor(creature:GetGUIDLow())
     if state.complete then
         return
     end

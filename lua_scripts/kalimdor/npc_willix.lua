@@ -60,7 +60,7 @@ local function onQuestAccept(event, player, creature, quest)
     creature:Talk(SAY_READY)
     creature:SetFaction(113)
     if player then
-        willixEscortPlayer[creature:GetGUID()] = player:GetGUID()
+        willixEscortPlayer[creature:GetGUIDLow()] = player:GetGUID()
     end
 end
 
@@ -71,7 +71,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local playerGuid = willixEscortPlayer[guid]
     willixEscortPlayer[guid] = nil
     if not playerGuid then

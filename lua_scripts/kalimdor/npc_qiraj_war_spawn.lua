@@ -231,7 +231,7 @@ end
 -- (no summon-path spawn event in Go); the latch keeps later engages
 -- from restarting them.
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not armed[guid] then
         armTimers(creature, guid)
     end
@@ -244,14 +244,14 @@ local function onReset(event, creature)
     if creature:IsDead() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     armed[guid] = nil
     armTimers(creature, guid)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     armed[guid] = nil
     -- C++ JustDied: me->DespawnOrUnsummon() first (illidari_spawn

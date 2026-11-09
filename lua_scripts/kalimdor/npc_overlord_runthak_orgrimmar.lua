@@ -105,14 +105,14 @@ end
 -- C++ npc_overlord_runthak_orgrimmarAI::Reset
 -- (zone_orgrimmar.cpp:350-356).
 local function runthakReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inProgress[guid] = nil
     creature:MoveWaypoint()
 end
 
 local function runthakDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inProgress[guid] = nil
     citizens[guid] = nil
@@ -197,7 +197,7 @@ end
 -- C++ MoveInLineOfSight twin (zone_orgrimmar.cpp:358-366): ev7 poll,
 -- a player within 20yd starts the scene once.
 local function runthakAIUpdate(event, creature, diff)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if inProgress[guid] then
         return
     end
