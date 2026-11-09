@@ -21552,12 +21552,12 @@ func init() {
 	// so its ported heal legs ride creature events regardless of
 	// BossAI — Talk(SAY_VALITHRIA_SUCCESS 7 /
 	// SAY_VALITHRIA_75_PERCENT 2) ride HealReceived legs (event 11); Talk(SAY_VALITHRIA_25_PERCENT 3 /
-	// SAY_VALITHRIA_DEATH 4) ride DamageTaken legs (no DamageTaken
-	// bridge — she never actually dies, damage is negated); Talk
+	// SAY_VALITHRIA_DEATH 4) ride DamageTaken legs (event 9; she never
+	// actually dies, damage is negated — return false, 0); Talk
 	// (SAY_VALITHRIA_ENTER_COMBAT 0 / SAY_VALITHRIA_BERSERK 6 /
-	// SAY_VALITHRIA_DREAM_PORTAL 1) ride scheduler legs (no-timer-bridge;
-	// ev38 dispatch bridged; sender npc_green_dragon_combat_trigger
-	// JustEnteredCombat unported (boss_valithria_dreamwalker.cpp:510); trigger
+	// SAY_VALITHRIA_DREAM_PORTAL 1) ride scheduler legs (CreateLuaEvent
+	// scheduler; sender npc_green_dragon_combat_trigger
+	// JustEnteredCombat PORTED 2026-11-06 (boss_valithria_dreamwalker.cpp:510); trigger
 	// Reset SummonCreatureGroup legs + ACTION_SETUP_ARCHMAGES relay PORTED
 	// 2026-11-05 in the lua (event 23) + npc_risen_archmage ev38 receiver;
 	// valithria herself unregistered);
@@ -21565,12 +21565,21 @@ func init() {
 	// Talk() call (dead text evidence); InitializeAI's _spawnHealth arm
 	// (curhealth via GetCreatureData(spawnId)) rides the unbridged
 	// InitializeAI + DB legs; the lich king controller's Reset
-	// scheduler / JustSummoned / UpdateAI summoner machine legs have no
-	// bridges; npc_green_dragon_combat_trigger / npc_risen_archmage /
+	// scheduler / JustSummoned / UpdateAI summoner machine legs stay out
+	// (2026-11-09 re-audit: DBC trigger-spell wiring unknown in-tree +
+	// the LK-GUID originalCaster has no Go model — see lua header);
+	// npc_green_dragon_combat_trigger / npc_risen_archmage /
 	// npc_blazing_skeleton / npc_suppresser / npc_blistering_zombie /
 	// npc_gluttonous_abomination / npc_dream_portal / npc_dream_cloud
-	// have zero Talk lines (NOT registered); the 9 spell scripts join
-	// the no-SpellScript-bridge queue — documented in the lua header.
+	// have zero Talk lines (NOT registered); the 9 spell scripts are
+	// triaged per-hook in the lua header (RegisterSpellEvent ev5/ev7 +
+	// RegisterAuraEvent exist — the blanket no-SpellScript-bridge claim
+	// is stale; mana_void is ported, the rest are dormant/blocked there).
+	// 2026-11-09 re-audit ports in the lua: archmage JustSummoned ev19
+	// (column-of-frost / mana-void), Valithria heal-100% + trigger
+	// ACTION_DEATH lichKing EnterEvadeMode legs, SpellHit chest cast
+	// 71207, EVENT_DREAM_PORTAL pre-summon casts (dormant until
+	// Spell.dbc).
 	// achievement_portal_jockey PORTED 2026-11-08 (Go case +
 	// npc_dream_portal ev22/ev39 legs + Valithria ev20 missed-counter
 	// + event-39 OnSpellClick bridge; dormant until the pre-effect

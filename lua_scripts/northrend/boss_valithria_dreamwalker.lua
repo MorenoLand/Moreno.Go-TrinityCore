@@ -78,16 +78,23 @@
 -- rides EVENT_DREAM_PORTAL — all three schedules fire from DoAction
 -- ACTION_ENTER_COMBAT (:305-313), now received via valithriaDoAction
 -- (ev38) from the trigger engage leg; the SUMMON_PORTAL DoCast legs
--- stay out (no-cast bridge);
+-- (72224/72480 x3/8) are PORTED 2026-11-09 below, dormant until
+-- Spell.dbc ships (the old "no-cast bridge" claim was stale);
 -- SAY_VALITHRIA_PLAYER_DEATH 5 is declared in the text enum but never
 -- referenced by a Talk() call — dead text evidence (no KilledUnit arm
 -- exists in the file).
 -- npc_the_lich_king_controller Reset scheduler legs (5 summon-timer
 -- schedules), JustSummoned phase-mask / DoZoneInCombat legs, UpdateAI
 -- summoner machine and the 5 DoCastSelf SPELL_TIMER_* legs
--- (70915/70912/70914/70916/70913) — the whole summon effect rides the
--- spell_dreamwalker_summoner SpellScript + instance-GUID force-cast
--- machine (no-SpellScript bridge; the summon-machine rule);
+-- (70915/70912/70914/70916/70913) — stay out (2026-11-09 re-audit):
+-- the timer-spell DBC trigger wiring is unknown in-tree, the ev5
+-- force-cast leg needs the LK-GUID originalCaster (CastCustomSpell
+-- accepts and ignores it — no Go model), and the ev7 filter binding
+-- is a 5-spell DB inference; casting the timer spells raw would run
+-- Go's default force-cast (boss_ai.go:6902, C++-exact except the
+-- originalCaster) unfiltered. The JustSummoned legs are dormant
+-- behind the same machine (bridges exist: SetPhaseMask/GetPhaseMask,
+-- AttackStart = EngageWithTarget).
 -- JustReachedHome me->setActive(false) (no bridge).
 -- npc_green_dragon_combat_trigger (38752) — no Talk; the Reset
 -- SummonCreatureGroup legs + ACTION_SETUP_ARCHMAGES relay are PORTED
@@ -109,14 +116,18 @@
 -- COLUMN_OF_FROST 70704 random-player {10s,20s}/{15s,25s},
 -- dist>10.0f (:646-648/:705-721); the pre-combat SPELL_CORRUPTION
 -- 70602 self-channel (:695) is PORTED below (corruptionTick, 1s poll
--- seeded by the ACTION_SETUP_ARCHMAGES DoAction relay); npc_blazing_skeleton (36791) —
+-- seeded by the ACTION_SETUP_ARCHMAGES DoAction relay); JustSummoned
+-- column-of-frost / mana-void legs PORTED 2026-11-09 below (ev19,
+-- risenArchmageJustSummoned); npc_blazing_skeleton (36791) —
 -- FIREBALL 70754 victim-cast {2s,4s}/{2s,4s}, !IsWithinMeleeRange
 -- gated (5-yd check, the venoxis precedent); LEY_WASTE 69325
 -- self-cast {15s,20s}/{15s,20s} (:745-749/:760-773).
 -- npc_suppresser (37863) — zero Talk lines; IsSummonedBy PORTED
 -- 2026-11-05 (ev22 suppresserIsSummonedBy + ev5 valithriaSpawn latch
 -- below); SUPPRESSION 70588 is MovementInform CHASE_MOTION_TYPE-driven
--- (no bridge) — stays out.
+-- and stays out — Go's chase re-paths instead of finalizing, so ev28
+-- never fires for chase (creaturemotion.go:5715-5718); no in-tree
+-- consumer needs the chase inform.
 -- PORTED (2026-10-13): npc_blistering_zombie (37934) JustDied —
 -- DoCastSelf(SPELL_ACID_BURST 70744, triggered); npc_gluttonous_abomination
 -- (37886) JustDied — DoCastSelf(SPELL_ROT_WORM_SPAWNER 70675, triggered)
@@ -133,15 +144,37 @@
 -- UpdateAIs have zero CASTING hits; JustDied/JustSummoned/SpellHit legs
 -- ungated per C++ (separate hooks / BasicEvents, not the scheduler).
 -- npc_dream_portal (37945) / npc_dream_cloud (entry DB-side, no header
--- constant) — zero Talk lines. PORTED 2026-11-08: npc_dream_portal
+-- constant) — zero Talk lines. npc_dream_cloud stays out (2026-11-09
+-- re-audit): no cloud entry constant exists anywhere in the C++ tree,
+-- so the AI cannot be registered, and no spawn path exists in Go
+-- (clouds come only from the unported portal-spell chain); the body
+-- bridges exist (GetPlayersInRange, MoveIdle = StopMoving,
+-- DespawnOrUnsummon(ms), GetBossState) except SetCorpseDelay(0) and
+-- the original-caster arg (accepted-and-ignored by CastCustomSpell).
+-- PORTED 2026-11-08: npc_dream_portal
 -- OnSpellClick (ev39 bridge) + _used/MISSED_PORTALS GetData leg (ev22
 -- init, ev39 clear) + the pre-effect delayed-cast summon leg in
 -- valithriaJustSummoned + the boss ev20 missed-counter;
 -- achievement_portal_jockey PORTED the same tick (Go case reads the
 -- portal slot; dormant until a pre-effect is summoned — the boss
 -- EVENT_DREAM_PORTAL pre-summon targeting is DBC-side).
--- The 9 spell scripts join the no-SpellScript-bridge queue (the
--- boss_moragg optic-link precedent).
+-- The 9 spell scripts (2026-11-09 re-audit; the blanket
+-- "no-SpellScript-bridge" claim is STALE — RegisterSpellEvent ev5/ev7
+-- + RegisterAuraEvent exist, runtime.go:422-560): mana_void PORTED
+-- (RegisterAuraEvent 71085 kind 1, below); summon_dream_portal /
+-- summon_nightmare_portal (ev5 SCRIPT_EFFECT on 71305/71987) stay out
+-- — no live cast path in Go (the pre-effect cast is twinned as an
+-- explicit SummonCreature in valithriaJustSummoned), so a handler
+-- would be dead code; summoner (ev7 filter + ev5 force-cast on the
+-- 70912-70916 timer spells), summon_suppresser_effect (ev5 on 70936)
+-- and twisted_nightmares (ev5 EFFECT_2) stay out — DBC trigger-spell
+-- ids unknown in-tree + the LK/Valithria-GUID originalCaster has no
+-- Go model; summon_suppresser (aura 70912 OnApply/periodic) stays out
+-- — dormant behind the unported controller machine (no live aura
+-- source); decay_periodic_timer stays out — no update-periodic aura
+-- event exists (runtime.go enum is 1-7); nightmare_cloud (aura 71970
+-- periodic, boss-state gate) stays out — no live aura source (cloud
+-- entries are DB-side, clouds never spawn).
 
 local ENTRY_LICH_KING_VALITHRIA = 16980
 local ENTRY_VALITHRIA_DREAMWALKER = 36789
@@ -203,6 +236,13 @@ local SPELL_FROSTBOLT_VOLLEY = 70759
 local SPELL_MANA_VOID = 71179
 local SPELL_MANA_VOID_AURA = 71085
 local SPELL_COLUMN_OF_FROST = 70704
+local SPELL_COLUMN_OF_FROST_AURA = 70715 -- boss_valithria_dreamwalker.cpp:64
+local SPELL_COLUMN_OF_FROST_DAMAGE = 70702 -- boss_valithria_dreamwalker.cpp:81
+local ENTRY_COLUMN_OF_FROST = 37918 -- icecrown_citadel.h:295 (NPC_COLUMN_OF_FROST)
+local ENTRY_MANA_VOID = 38068 -- icecrown_citadel.h:294 (NPC_MANA_VOID)
+local SPELL_SPAWN_CHEST = 71207 -- boss_valithria_dreamwalker.cpp:74
+local SPELL_PRE_SUMMON_DREAM_PORTAL = 72224 -- boss_valithria_dreamwalker.cpp:54
+local SPELL_PRE_SUMMON_NIGHTMARE_PORTAL = 72480 -- boss_valithria_dreamwalker.cpp:55
 local SPELL_FIREBALL = 70754
 local SPELL_LEY_WASTE = 69325
 
@@ -428,6 +468,31 @@ local function risenArchmageDoAction(event, creature, action)
     end
 end
 
+-- C++ npc_risen_archmage::JustSummoned (boss_valithria_dreamwalker.cpp:678-690):
+-- COLUMN_OF_FROST summon self-casts SPELL_COLUMN_OF_FROST_AURA 70715
+-- (triggered) + a 2s ValithriaDelayedCastEvent for
+-- SPELL_COLUMN_OF_FROST_DAMAGE 70702 (plain self-cast, originalCaster
+-- empty) that despawns the summon 8s after the cast; MANA_VOID summon
+-- self-casts SPELL_MANA_VOID_AURA 71085 (triggered) +
+-- DespawnOrUnsummon(36s). PORTED 2026-11-09: the archmage's own 70704 /
+-- 71179 casts were already ported, so both summons land in Go today and
+-- were inert until now (no 36s mana-void / 10s column despawn legs).
+local function risenArchmageJustSummoned(event, creature, summoned)
+    local entry = summoned:GetEntry()
+    if entry == ENTRY_COLUMN_OF_FROST then
+        summoned:CastSpell(summoned, SPELL_COLUMN_OF_FROST_AURA, true)
+        CreateLuaEvent(function()
+            summoned:CastSpell(summoned, SPELL_COLUMN_OF_FROST_DAMAGE)
+            CreateLuaEvent(function()
+                summoned:DespawnOrUnsummon()
+            end, 8000)
+        end, 2000)
+    elseif entry == ENTRY_MANA_VOID then
+        summoned:CastSpell(summoned, SPELL_MANA_VOID_AURA, true)
+        summoned:DespawnOrUnsummon(36000)
+    end
+end
+
 -- C++ npc_green_dragon_combat_trigger::Reset (boss_valithria_dreamwalker.cpp:476-489):
 -- _Reset + SetReactState(REACT_PASSIVE) + summons.DespawnAll() +
 -- SummonCreatureGroup(SUMMON_GROUP_ALL 1) + 25-man SummonCreatureGroup(
@@ -471,12 +536,17 @@ end
 -- C++ npc_green_dragon_combat_trigger::DoAction ACTION_DEATH
 -- (boss_valithria_dreamwalker.cpp:529-537): SetBossState NOT_STARTED
 -- + 5s ValithriaDespawner + lichKing EnterEvadeMode. The despawner
--- (BasicEvent grid sweep, :215-250) has no bridge and the
--- cross-creature EnterEvadeMode has none either — both stay out;
--- the state leg is the portable arm, shared by the ev2 (alive
--- JustExitedCombat) and ev38 (cross-AI DoAction) paths below.
+-- (BasicEvent grid sweep, :215-250) has no bridge and stays out; the
+-- EnterEvadeMode leg is PORTED 2026-11-09 below (bridged,
+-- lua_creature_events.go:5004). The state leg is the portable arm,
+-- shared by the ev2 (alive JustExitedCombat) and ev38 (cross-AI
+-- DoAction) paths below.
 local function triggerActionDeath(creature)
     creature:SetBossState(DATA_VALITHRIA_DREAMWALKER, BOSS_STATE_NOT_STARTED)
+    local lichKing = creature:GetInstanceCreature(DATA_VALITHRIA_LICH_KING)
+    if lichKing then
+        lichKing:EnterEvadeMode()
+    end
 end
 
 local function greenDragonCombatTriggerDoAction(event, creature, action)
@@ -674,6 +744,14 @@ local function valithriaHealReceived(_, creature, healer, heal)
         creature:CastSpell(creature, SPELL_ACHIEVEMENT_CHECK)
         creature:CastSpell(creature, SPELL_DREAMWALKERS_RAGE)
         schedule(guid, "dream_slip", 3500, function() onDreamSlip(creature, guid) end)
+        -- C++ :338-339 — the Lich King controller evades on the
+        -- successful heal (EnterEvadeMode bridged,
+        -- lua_creature_events.go:5004; the 2026-10-21 "no bridge"
+        -- note is stale — AGENTS.md 2026-11-08). PORTED 2026-11-09.
+        local lichKing = creature:GetInstanceCreature(DATA_VALITHRIA_LICH_KING)
+        if lichKing then
+            lichKing:EnterEvadeMode()
+        end
     elseif healed > math.floor(maxHealth * 75 / 100) and not st.over75Done then
         st.over75Done = true
         creature:Talk(SAY_VALITHRIA_75_PERCENT)
@@ -693,7 +771,7 @@ end
 -- + SetDisplayId(11686) + SetFlag(NOT_SELECTABLE) +
 -- DespawnOrUnsummon(4s, lich_king_escape one-shot CreateLuaEvent
 -- precedent). Trigger Kill PORTED 2026-11-06 below; the lichKing chest
--- cast stays out (cross-AI spell, no bridge). If ev14 never fires for this cast
+-- cast (SPELL_SPAWN_CHEST 71207, :387) is PORTED 2026-11-09 below. If ev14 never fires for this cast
 -- (spell-data gap), the arm is inert — no regression vs the old
 -- cast-only timer.
 local function valithriaSpellHit(event, creature, caster, spellId)
@@ -713,6 +791,15 @@ local function valithriaSpellHit(event, creature, caster, spellId)
     if trigger then
         trigger:Kill(creature)
     end
+    -- C++ :387 — the Lich King controller casts SPELL_SPAWN_CHEST
+    -- 71207 on himself (cross-creature CastSpell via the instance
+    -- GUID, the trigger:Kill precedent above; the "no bridge" header
+    -- claim is stale — CastSpell is generic,
+    -- lua_creature_events.go:896). PORTED 2026-11-09.
+    local lichKing = creature:GetInstanceCreature(DATA_VALITHRIA_LICH_KING)
+    if lichKing then
+        lichKing:CastSpell(lichKing, SPELL_SPAWN_CHEST)
+    end
     CreateLuaEvent(function()
         creature:Despawn()
     end, 4000)
@@ -731,15 +818,34 @@ end
 
 -- C++ UpdateAI EVENT_DREAM_PORTAL (:431-440): non-heroic Talk(
 -- SAY_VALITHRIA_DREAM_PORTAL 1) + _portalCount DoCastSelf(SUMMON_PORTAL)
--- + {45s,48s} re-arm. The portal-cast legs stay out (RAID_MODE
--- spell-script summons, no-cast bridge — header triage); the Talk +
--- re-arm port, gated on IN_PROGRESS (:420).
+-- + {45s,48s} re-arm. PORTED 2026-11-09: the casts ride the
+-- CreateLuaEvent scheduler (the "no-cast bridge" header claim is
+-- stale); the pre-summon spell's scatter positions are DBC-side, so
+-- the casts are dormant until Spell.dbc ships, and the pre-effect
+-- legs already ride valithriaJustSummoned. The UpdateAI gate
+-- (:420) is the re-check below.
 local function onValithriaDreamPortal(creature, guid)
     if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_IN_PROGRESS then
         return
     end
+    -- C++ UpdateAI pre-loop gate :420 (+ in-loop :447): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "dream_portal", 500, function() onValithriaDreamPortal(creature, guid) end)
+        return
+    end
     if not creature:IsHeroic() then
         creature:Talk(SAY_VALITHRIA_DREAM_PORTAL)
+    end
+    -- C++ :436-438 + :104-105 — SUMMON_PORTAL is RAID_MODE 72224
+    -- (10-man) / 72480 (25-man); _portalCount is RAID_MODE 3 / 8.
+    local portalSpell = SPELL_PRE_SUMMON_DREAM_PORTAL
+    local portalCount = 3
+    if creature:Is25ManRaid() then
+        portalSpell = SPELL_PRE_SUMMON_NIGHTMARE_PORTAL
+        portalCount = 8
+    end
+    for _ = 1, portalCount do
+        creature:CastSpell(creature, portalSpell)
     end
     schedule(guid, "dream_portal", {45000, 48000}, function() onValithriaDreamPortal(creature, guid) end)
 end
@@ -934,6 +1040,7 @@ RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 2, gluttonousAbominationLeav
 RegisterCreatureEvent(ENTRY_GLUTTONOUS_ABOMINATION, 23, gluttonousAbominationLeaveCombat)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 1, risenArchmageJustEngagedWith)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 2, risenArchmageLeaveCombat)
+RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 19, risenArchmageJustSummoned)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 23, risenArchmageLeaveCombat)
 RegisterCreatureEvent(ENTRY_RISEN_ARCHMAGE, 38, risenArchmageDoAction)
 RegisterCreatureEvent(ENTRY_GREEN_DRAGON_COMBAT_TRIGGER, 1, greenDragonCombatTriggerJustEngagedWith)
