@@ -1,14 +1,12 @@
 package world
 
 import (
-	"math"
-
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
 // spellScriptOnHitDamage is the pre-damage SpellScript OnHit dispatch:
 // C++ runs the OnHit handlers in Spell::PreprocessTarget, before the
-// effect loop applies the hit damage (Spell.cpp:2350), so a handler's
+// effect loop applies the hit damage (Spell.cpp:2377), so a handler's
 // SetHitDamage rewrites the DBC base damage while the taken/crit/
 // resist/absorb legs below still run on the rewritten value. Go has no
 // SpellScript registry, so the dispatch is a per-spell table consulted
@@ -16,36 +14,33 @@ import (
 // creatureEffectSpellDamageCreature) right after damage := baseDamage,
 // the position of C++'s SetHitDamage. The player-caster leg rides the
 // same dispatch from the session SCHOOL_DAMAGE arm
-// (castSpellDirectWithOverrides in spells.go): 50811/33671 are cast by
-// the stoned unit itself, so a stoned player routes through the session
-// cast pipeline.
+// (castSpellDirectWithOverrides in spells.go). Only absolute-value
+// arms live here: at OnHit time GetHitDamage() is always 0
+// (TargetInfo::Damage defaults 0, Spell.h:681; PreprocessSpellHit
+// never writes m_damage, Spell.cpp:2710-2839), so any arm that
+// multiplies GetHitDamage() is a C++ no-op and is NOT in the table:
+// loken 52961 (GetHitDamage() * distance), krystallus/gruul shatter
+// 50811/33671 (GetHitDamage() * falloff) — both removed 2026-11-09,
+// their tick-372 "ported scaling" notes were wrong.
 func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, baseDamage uint32) (uint32, bool) {
-	var radius float32
-	radiusOK := false
-	switch spell.ID {
-	case 50811, 33671:
-		// spell_krystallus_shatter_effect / spell_gruul_shatter_effect
-		// (boss_krystallus.cpp:184-195, boss_gruul.cpp:311-323): the
-		// falloff needs EFFECT_0 CalcRadius(caster); C++ returns early
-		// on a zero radius, so a failed DBC lookup leaves the damage.
-		if s != nil && s.Data != nil {
-			if value, ok, err := s.Data.SpellRadius(spell.Effects[0].RadiusIndex, casterLevel); err == nil && ok {
-				radius, radiusOK = value, true
-			}
-		}
-	}
-	return onHitDamageRewrite(spell.ID, radius, radiusOK, distance2D(casterX, casterY, victimX, victimY), victimHealth, victimMaxHealth, baseDamage)
+	return onHitDamageRewrite(spell.ID, victimHealth, victimMaxHealth, baseDamage)
 }
 
 // spellScriptOnHitLatch runs the SpellScript OnHit arms that set a
-// creature ScriptData latch on a lethal hit. C++ runs the OnHit
-// handlers in Spell::PreprocessTarget (Spell.cpp:2377), before the
-// effect loop deals the damage — so the latch is set before the kill
-// credit reads it. Go's fireSpellHit twin fires after the damage arm
-// (boss_ai.go DoDamageAndTriggers block), so a latch set there lands
-// after the criteria read in grantCreatureKillReward. Callers invoke
-// this from the lethal branch of the creature-caster damage arm, once
-// the final damage is known and before the kill-credit legs run.
+// creature ScriptData latch on a lethal hit. Go's fireSpellHit twin
+// fires after the damage arm (boss_ai.go DoDamageAndTriggers block),
+// so a latch set there lands after the criteria read in
+// grantCreatureKillReward. Callers invoke this from the lethal branch
+// of the creature-caster damage arm, once the final damage is known
+// and before the kill-credit legs run. DELIBERATE DIVERGENCE from
+// C++-as-written: spell_razorscale_flame_breath::CheckDamage
+// (boss_razorscale.cpp:1589-1600) is an OnHit arm testing
+// GetHitDamage() >= target health, but GetHitDamage() is 0 at OnHit
+// (Spell.cpp:2377; see spellScriptOnHitDamage above), so C++ NEVER
+// sets the latch and the achievement is unobtainable there. Go sets
+// it on a lethal hit anyway (the designed behaviour) so the
+// achievement can be earned; do not "fix" this back to the C++
+// no-op without a user call.
 func (s *Server) spellScriptOnHitLatch(spell wotlk.Spell, victim *creatureMotion) {
 	if s == nil || victim == nil {
 		return
@@ -54,11 +49,11 @@ func (s *Server) spellScriptOnHitLatch(spell wotlk.Spell, victim *creatureMotion
 	case 63317, 64021:
 		// spell_razorscale_flame_breath::CheckDamage
 		// (boss_razorscale.cpp:1589-1600): a flame-breath hit that
-		// kills a Dark Rune Guardian (GetHitDamage() >= target
-		// health, target alive at script time) sets the guardian's
+		// kills a Dark Rune Guardian sets the guardian's
 		// DATA_IRON_DWARF_MEDIUM_RARE latch (29232924). The caller
-		// only invokes this on a lethal hit, which is the C++
-		// condition; the guardian-entry gate is the C++
+		// only invokes this on a lethal hit, matching the C++
+		// condition's intent (GetHitDamage() >= target health);
+		// the guardian-entry gate is the C++
 		// GetEntry() != NPC_DARK_RUNE_GUARDIAN early return.
 		if victim.Entry != 33388 {
 			return
@@ -74,10 +69,13 @@ func (s *Server) spellScriptOnHitLatch(spell wotlk.Spell, victim *creatureMotion
 
 // onHitDamageRewrite is the pure per-spell rewrite table behind
 // spellScriptOnHitDamage: (rewritten damage, true) when the spell has
-// an OnHit SetHitDamage arm, (baseDamage, false) otherwise. Distances
-// are the C++ GetDistance2d values; the float products truncate toward
-// zero on the int32 conversion, matching SetHitDamage(int32(...)).
-func onHitDamageRewrite(spellID uint32, radius float32, radiusOK bool, distance float64, victimHealth, victimMaxHealth, baseDamage uint32) (uint32, bool) {
+// an OnHit SetHitDamage arm, (baseDamage, false) otherwise. Only
+// absolute-value arms qualify (see spellScriptOnHitDamage above for
+// why GetHitDamage()-relative arms are C++ no-ops). C++
+// EffectSchoolDamage ADDS the rolled DBC base on top of the rewritten
+// Damage (SpellEffects.cpp:788), so these entries replace the base
+// only where the DBC base is 0 — unverified without Spell.dbc.
+func onHitDamageRewrite(spellID uint32, victimHealth, victimMaxHealth, baseDamage uint32) (uint32, bool) {
 	switch spellID {
 	case 48292:
 		// spell_dark_slash (boss_ymiron.cpp:315-334): the OnHit handler
@@ -92,46 +90,6 @@ func onHitDamageRewrite(spellID uint32, radius float32, radiusOK bool, distance 
 		// Util.h:66-69). The class header binds both the normal (33666)
 		// and heroic (38795) effect ids.
 		return uint32(float32(victimMaxHealth) * 80.0 / 100.0), true
-	case 52961:
-		// spell_loken_pulsing_shockwave (boss_loken.cpp:222-230):
-		// OnEffectHitTarget EFFECT_0 SCHOOL_DAMAGE scales the hit
-		// damage by the caster-to-target 2D distance past 1 yard.
-		if distance > 1.0 {
-			return clampOnHitDamage(float64(baseDamage) * distance), true
-		}
-		return baseDamage, false
-	case 50811, 33671:
-		// spell_krystallus_shatter_effect (boss_krystallus.cpp:184-195)
-		// and spell_gruul_shatter_effect (boss_gruul.cpp:311-323):
-		// damage falls off linearly from the EFFECT_0 radius past 1
-		// yard. The factor clamps at zero: hit targets are selected
-		// inside the radius, so C++ never produces a negative factor
-		// in practice, and Go damage is unsigned.
-		if !radiusOK || radius <= 0 {
-			return baseDamage, false
-		}
-		if distance > 1.0 {
-			factor := (float64(radius) - distance) / float64(radius)
-			if factor < 0 {
-				factor = 0
-			}
-			return clampOnHitDamage(float64(baseDamage) * factor), true
-		}
-		return baseDamage, false
 	}
 	return baseDamage, false
-}
-
-// clampOnHitDamage bounds a rewritten float damage to the int32 range
-// before the unsigned conversion: C++ stores the hit damage as int32,
-// and the distance/falloff products stay far below the bound in
-// practice, so this only guards the conversion, never live values.
-func clampOnHitDamage(value float64) uint32 {
-	if value > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	if value < 0 {
-		return 0
-	}
-	return uint32(int32(value))
 }

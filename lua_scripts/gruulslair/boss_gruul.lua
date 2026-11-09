@@ -69,11 +69,10 @@
 -- shatter-effect damage leg:
 -- spell_gruul_shatter (33525-hit -> RemoveAurasDueToSpell(stoned
 -- 33652) + triggered 33671 shatter effect) and spell_gruul_
--- shatter_effect (distance-scaled 33671 damage — PORTED 2026-11-07
--- (tick 372) for the creature-caster leg via the pre-damage OnHit
--- dispatch in engine/world/spell_onhit.go; the stoned-player caster
--- leg is open — a stoned player routes through the session cast
--- pipeline, which has no dispatch yet).
+-- shatter_effect (NOT a scaling: the OnHit arm multiplies
+-- GetHitDamage(), which is 0 at the hook (Spell.cpp:2377), so C++
+-- deals the unmodified base — the tick-372 table entry that scaled
+-- it down was removed 2026-11-09, engine/world/spell_onhit.go).
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
 -- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL SetBossState

@@ -90,10 +90,11 @@
 -- (tick 374) into creatureEffectScriptEffect + the session twin;
 -- the "no SpellScript bridge" claim is retracted for this arm).
 -- spell_krystallus_shatter_effect (SpellScriptLoader: OnHit
--- CalculateDamage — radius-scaled SetHitDamage via CalcRadius —
--- PORTED 2026-11-07 for the creature-caster leg (tick 372) via the
--- pre-damage OnHit dispatch in engine/world/spell_onhit.go and for
--- the stoned-player caster leg (tick 373) via the session dispatch).
+-- CalculateDamage — radius-scaled SetHitDamage via CalcRadius) —
+-- NOT a scaling: the arm multiplies GetHitDamage(), which is 0 at
+-- the hook (Spell.cpp:2377), so C++ deals the unmodified base; the
+-- tick-372/373 table entries were removed 2026-11-09,
+-- engine/world/spell_onhit.go.
 
 local ENTRY_KRYSTALLUS = 27977
 

@@ -27628,10 +27628,10 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// creatureEffectSpellDamageCreature (boss_ai.go); this
 				// is the player-caster leg, at the same pre-division
 				// position (C++ divides the rewritten damage in
-				// EffectSchoolDMG). 50811/33671 are cast by the stoned
-				// unit itself (boss_krystallus.cpp:159,
-				// boss_gruul.cpp:287), so a stoned player routes
-				// through this session pipeline.
+				// EffectSchoolDMG). The loken 52961 / shatter
+				// 50811/33671 scalings are NOT in the table: both
+				// multiply GetHitDamage(), which is 0 at the hook
+				// (Spell.cpp:2377), so C++ deals the unmodified base.
 				if s.server != nil && s.player != nil {
 					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
 						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, baseDmg); hit {

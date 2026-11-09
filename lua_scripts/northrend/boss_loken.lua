@@ -101,11 +101,12 @@
 -- no-op).
 
 -- spell_loken_pulsing_shockwave (SpellScript OnEffectHitTarget
--- CalculateDamage: damage *= distance2d when > 1.0f,
--- SPELL_PULSING_SHOCKWAVE 52961 EFFECT_0) — PORTED 2026-11-07 (tick
--- 372): the pre-damage OnHit dispatch in engine/world/spell_onhit.go
--- (spellScriptOnHitDamage) rewrites the hit damage in the
--- creature-caster damage arms; the cast itself was already ported.
+-- CalculateDamage: SetHitDamage(GetHitDamage() * distance2d),
+-- SPELL_PULSING_SHOCKWAVE 52961 EFFECT_0) — NOT a scaling:
+-- GetHitDamage() is 0 at the hook (Spell.cpp:2377/HandleEffects),
+-- so C++ deals the unmodified base; the tick-372 table entry that
+-- multiplied it by distance was removed 2026-11-09,
+-- engine/world/spell_onhit.go. The cast itself was already ported.
 
 local ENTRY_LOKEN = 28923
 
