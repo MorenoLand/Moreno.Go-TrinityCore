@@ -238,14 +238,14 @@ end
 -- SPELL_WELL_OF_SOULS + _events.Reset() (the timer cancel).
 local function trashReset(event, creature)
     creature:CastSpell(creature, SPELL_WELL_OF_SOULS, true)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_gauntlet_trash::EnterEvadeMode :1476-1480: _events.Reset()
 -- (the timer cancel) + the wave-count wipe write. Death (ev4) does
 -- NOT run this — C++ JustDied never calls EnterEvadeMode.
 local function trashEvade(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     setWaveCountWipe(creature)
 end
 
@@ -294,7 +294,7 @@ end
 
 -- C++ JustEngagedWith :1512-1518.
 local function priestEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "swp", {6000, 15000}, function() priestShadowWordPain(creature, guid) end)
     schedule(guid, "cod", 12000, function() priestCircleOfDestruction(creature, guid) end)
@@ -373,7 +373,7 @@ end
 
 -- C++ JustEngagedWith :1588-1595.
 local function mageEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fireball", 3000, function() mageFireball(creature, guid) end)
     schedule(guid, "flamestrike", 6000, function() mageFlamestrike(creature, guid) end)
@@ -396,7 +396,7 @@ local function mageEvade(event, creature)
         end
         return
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ :1583-1587: without the aura, the base EnterEvadeMode runs.
     setWaveCountWipe(creature)
 end
@@ -466,7 +466,7 @@ end
 
 -- C++ JustEngagedWith :1690-1696.
 local function mercenaryEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowstep", 23000, function() mercenaryShadowStep(creature, guid) end)
     schedule(guid, "deadlypoison", 5000, function() mercenaryDeadlyPoison(creature, guid) end)
@@ -510,7 +510,7 @@ end
 
 -- C++ JustEngagedWith :1751-1756.
 local function footmanEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "strike", 14000, function() footmanSpectralStrike(creature, guid) end)
     schedule(guid, "bash", 10000, function() footmanShieldBash(creature, guid) end)
@@ -573,7 +573,7 @@ end
 
 -- C++ JustEngagedWith :1805-1811.
 local function riflemanEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shoot", 1, function() riflemanShoot(creature, guid) end)
     schedule(guid, "cursedarrow", 7000, function() riflemanCursedArrow(creature, guid) end)
@@ -582,7 +582,7 @@ local function riflemanEngaged(event, creature, target)
 end
 
 local function onLeaveOrDiedOrReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 1, priestEngaged)

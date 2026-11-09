@@ -106,19 +106,19 @@ end
 
 -- C++ JustEngagedWith :1991-1994.
 local function reflectionEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "baleful", 3000, function() balefulStrikeTick(creature, guid) end)
 end
 
 -- C++ JustDied :1996-1999 — DoCastAOE(SPELL_SPIRIT_BURST) is self-cast.
 local function reflectionDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:CastSpell(creature, SPELL_SPIRIT_BURST)
 end
 
 local function reflectionReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SPIRITUAL_REFLECTION, 1, reflectionEngaged)

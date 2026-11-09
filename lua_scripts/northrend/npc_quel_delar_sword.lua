@@ -136,7 +136,7 @@ end
 
 -- C++ JustEngagedWith :2622-2627.
 local function swordEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "heroic", 4000, function() heroicStrikeTick(creature, guid) end)
     schedule(guid, "bladestorm", 6000, function() bladestormTick(creature, guid) end)
@@ -144,7 +144,7 @@ local function swordEngaged(event, creature, target)
 end
 
 local function swordReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied :2629-2633 — uther->AI()->DoAction(ACTION_UTHER_OUTRO).

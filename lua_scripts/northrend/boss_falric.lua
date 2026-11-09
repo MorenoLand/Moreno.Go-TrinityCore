@@ -291,7 +291,7 @@ end
 -- creature:SetBossState, in C++ arm order after DoZoneInCombat and
 -- before the seeds (garfrost precedent).
 local function falricEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ :79, in arm order after Talk (2026-10-23)
@@ -309,7 +309,7 @@ end
 -- removed via the RemoveAura bridge and HopelessnessHelper[N] is cast
 -- non-triggered on self.
 local function falricDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = falricState[guid]
     if not st then
         return
@@ -347,7 +347,7 @@ end
 -- whose _JustDied runs first).
 local function falricJustDied(event, creature)
     creature:Talk(SAY_DEATH)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     creature:SetBossState(DATA_FALRIC, BOSS_STATE_DONE)
     -- C++ instance_halls_of_reflection.cpp:342-348 SetBossState-override
     -- leg: ++_waveCount + EVENT_NEXT_WAVE in 1min. creature:SetBossState
@@ -363,7 +363,7 @@ local function falricJustDied(event, creature)
 end
 
 local function falricLeaveCombat(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ boss_horAI::DoAction (boss_horAI.cpp:36-48): ACTION_ENTER_COMBAT
@@ -407,7 +407,7 @@ local function falricReset(event, creature)
             data:SetData(DATA_WAVE_COUNT, 0)
         end
     end
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_FALRIC, 1, falricEnterCombat)

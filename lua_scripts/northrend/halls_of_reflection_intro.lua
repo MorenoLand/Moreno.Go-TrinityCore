@@ -142,7 +142,7 @@ local function runSteps(creature, guid, steps, index)
 end
 
 local function scheduleChain(creature, steps, delay)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelChain(guid)
     chainState[guid] = {
         creature = creature,
@@ -394,7 +394,7 @@ for _, step in ipairs(LK_STEPS) do
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelChain(guid)
     creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
         bit32.bnot(UNIT_NPC_FLAGS_MASK)))
@@ -412,7 +412,7 @@ local function onReset(event, creature)
 end
 
 local function onDeath(event, creature)
-    cancelChain(creature:GetGUID())
+    cancelChain(creature:GetGUIDLow())
 end
 
 local function summonLKPassive(st)

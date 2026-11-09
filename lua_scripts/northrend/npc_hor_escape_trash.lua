@@ -204,7 +204,7 @@ local function despawnPoll(creature, guid)
 end
 
 local function startDespawnPoll(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelDespawnPoll(guid)
     despawnPolls[guid] = CreateLuaEvent(function() despawnPoll(creature, guid) end, 1000)
 end
@@ -256,7 +256,7 @@ local function ghoulJump(creature, guid)
 end
 
 local function ghoulEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "jump", 5000, function() ghoulJump(creature, guid) end)
 end
@@ -266,7 +266,7 @@ local function ghoulSpawn(event, creature)
     creature:CastSpell(creature, SPELL_RAGING_GHOUL_SPAWN, true)
     creature:SetReactState(REACT_PASSIVE)
     creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
-    spawnTail(creature, creature:GetGUID())
+    spawnTail(creature, creature:GetGUIDLow())
     startDespawnPoll(creature)
 end
 
@@ -314,7 +314,7 @@ end
 
 -- C++ JustEngagedWith via Reset seeds :2274-2279.
 local function witchDoctorEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "bolt", 6000, function() witchDoctorBolt(creature, guid) end)
     schedule(guid, "volley", 15000, function() witchDoctorVolley(creature, guid) end)
@@ -326,7 +326,7 @@ local function witchDoctorSpawn(event, creature)
     creature:CastSpell(creature, SPELL_RISEN_WITCH_DOCTOR_SPAWN, true)
     creature:SetReactState(REACT_PASSIVE)
     creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
-    spawnTail(creature, creature:GetGUID())
+    spawnTail(creature, creature:GetGUIDLow())
     startDespawnPoll(creature)
 end
 
@@ -355,7 +355,7 @@ end
 
 -- C++ JustEngagedWith via Reset seeds :2343-2347.
 local function abominationEngaged(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "vomit", 15000, function() abominationVomit(creature, guid) end)
     schedule(guid, "cleave", 6000, function() abominationCleave(creature, guid) end)
@@ -371,7 +371,7 @@ end
 -- the despawn poller are UpdateAI twins and survive evade/reset,
 -- cleared only on death.
 local function onLeaveOrDiedOrReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if event == 4 then
         if wakes[guid] then

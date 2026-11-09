@@ -160,6 +160,8 @@ local REACT_PASSIVE = 0 -- UnitDefines.h:340
 local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
 
 local SPELL_START_HALLS_OF_REFLECTION_QUEST_AE = 72900 -- halls_of_reflection.h:158
+local SPELL_START_HALLS_OF_REFLECTION_QUEST_A = 71351 -- halls_of_reflection.h:156
+local SPELL_START_HALLS_OF_REFLECTION_QUEST_H = 71542 -- halls_of_reflection.h:157
 local WORLD_STATE_HOR_WAVES_ENABLED = 4884 -- halls_of_reflection.h:170
 local UNIT_NPC_FLAGS = 82 -- UpdateFields.h:139 (baltharus precedent)
 local UNIT_NPC_FLAG_QUESTGIVER = 0x00000002 -- UnitDefines.h:187
@@ -309,7 +311,7 @@ end
 -- 2026-11-05 via creature:SetBossState, in C++ arm order after
 -- DoZoneInCombat and before the seeds (garfrost precedent).
 local function marwynJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ :68
@@ -343,7 +345,7 @@ end
 -- (instance_halls_of_reflection.lua binds) and are nil-guarded like
 -- the C++ GetCreature checks.
 local function marwynJustDied(event, creature, killer)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_MARWYN, BOSS_STATE_DONE)
     local mapObj = creature:GetMap()
@@ -379,7 +381,7 @@ local function marwynDoAction(event, creature, action)
 end
 
 local function marwynLeaveCombat(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:26-34 + boss_horAI.cpp:26-34): _Reset() first —
@@ -407,8 +409,28 @@ local function marwynReset(event, creature)
             data:SetData(DATA_WAVE_COUNT, 0)
         end
     end
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
+
+-- C++ spell_hor_start_halls_of_reflection_quest_ae (72900,
+-- halls_of_reflection.cpp:2753-2784): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT — the hit player casts the faction quest
+-- starter (71351 Alliance / 71542 Horde) on self, triggered. The
+-- caster is the frostmourne altar bunny (creature path, so the ev5
+-- hook fires). DORMANT until Spell.dbc ships 72900.
+RegisterSpellEvent(SPELL_START_HALLS_OF_REFLECTION_QUEST_AE, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if not hitTarget or hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    if hitTarget:GetTeam() == 0 then
+        hitTarget:CastSpell(hitTarget, SPELL_START_HALLS_OF_REFLECTION_QUEST_A, true)
+    else
+        hitTarget:CastSpell(hitTarget, SPELL_START_HALLS_OF_REFLECTION_QUEST_H, true)
+    end
+end)
 
 RegisterCreatureEvent(ENTRY_MARWYN, 1, marwynJustEngagedWith)
 RegisterCreatureEvent(ENTRY_MARWYN, 2, marwynLeaveCombat)

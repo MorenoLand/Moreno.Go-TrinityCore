@@ -106,7 +106,7 @@ end
 -- PORTED 2026-11-05 via creature:SetBossState (garfrost precedent);
 -- the old "no bridge" claim is retracted.
 local function lichKingEscapeLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if evadeFired[guid] then
         return
     end

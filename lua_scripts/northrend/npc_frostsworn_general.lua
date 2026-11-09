@@ -283,7 +283,7 @@ end
 local function frostswornGeneralJustEngagedWith(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ halls_of_reflection.cpp:1908, in arm order after Talk (bridge live 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shield", 5000, function() generalShieldTick(creature, guid) end)
     schedule(guid, "spike", 14000, function() generalSpikeTick(creature, guid) end)
@@ -297,7 +297,7 @@ end
 -- covered by the timer cancel.
 local function frostswornGeneralJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ :1907: SetData(DONE) after Talk.
     setFrostswornState(creature, BOSS_STATE_DONE)
 end
@@ -312,7 +312,7 @@ local function frostswornGeneralTargetDied(event, creature, victim)
 end
 
 local function frostswornGeneralReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ :1894: SetData(NOT_STARTED).
     setFrostswornState(creature, BOSS_STATE_NOT_STARTED)
 end

@@ -530,6 +530,28 @@ RegisterMapEvent(MAP_HALLS_OF_REFLECTION, INSTANCE_EVENT_ON_SET_DATA, function(e
     -- Other types fall through, the C++ default arm.
 end)
 
+-- C++ spell_hor_gunship_cannon_fire (70017,
+-- halls_of_reflection.cpp:2823-2858): AuraScript OnEffectPeriodic
+-- EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL — 1-in-3 (urand(0, 2)
+-- == 0) the cannon casts its faction missile triggered (70246 Horde
+-- cannon 37593, else 70021 Alliance) with no target (C++ CastSpell
+-- (nullptr, ...), the nil-target twin). DORMANT twice over: the aura
+-- has no applier in Go (SpawnGunship rides CreateTransport, no
+-- bridge) and Spell.dbc must ship 70017.
+RegisterAuraEvent(70017, 1, function(event, aura, target)
+    if math.random(0, 2) ~= 0 then
+        return
+    end
+    if not target then
+        return
+    end
+    if target:GetEntry() == NPC_GUNSHIP_CANNON_HORDE then
+        target:CastSpell(nil, 70246, true)
+    else
+        target:CastSpell(nil, 70021, true)
+    end
+end)
+
 -- C++ OnUnitDeath wave-clear check (:530-556) via the Go-only
 -- InstanceEventOnUnitDeath bridge (event 9, fired from setDeathState
 -- ahead of the JustDied hooks). Player deaths reach here too and are
