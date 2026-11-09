@@ -20,7 +20,8 @@
 -- the creature entry itself binds DB-side. BossAI's ctor leg
 -- DATA_INFINITE_CORRUPTOR is culling_of_stratholme.h:120.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
+-- 23 OnReset, 28 OnMovementInform, 38 OnDoAction. Timers via
+-- CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- BossAI::UpdateAI CASTING gates PORTED (ScriptedCreature.cpp:578/:584, thalnos precedent): each timer arm defers 500ms while creature:IsCasting(), no re-arm consumed.
 -- Ported arms (the self-contained in-combat legs; instance legs below):
@@ -72,27 +73,22 @@
 --   (netherspite precedent), + 5s one-shot Despawn (valithria
 --   precedent; C++ DespawnOrUnsummon(5s)); NPC_TIME_RIFT 28409
 --   within 100.0f -> immediate Despawn (C++ DespawnOrUnsummon()).
---   The DoAction LEAVE leg below stays out (MovePoint unbridged).
+--   The DoAction LEAVE leg is PORTED tick 555 below (ev38 + ev28).
 -- - EnterEvadeMode's HasReactState(REACT_PASSIVE) early-return — no
 --   react-state bridge (standing).
 -- - MovementInform(POINT_MOTION_TYPE, MOVEMENT_TIME_RIFT 1) ->
 --   DespawnOrUnsummon(2s) + SetBossState(DATA_INFINITE_CORRUPTOR, FAIL)
---   — no MovementInform bridge; the FAIL write itself is bridged, but
---   the arrival event has no Lua fire site.
+--   — PORTED tick 555 on ev28 (MoveTo bridge fires the arrival,
+--   lua_creature_events.go:4876; POINT_MOTION_TYPE 8, runtime.go:397).
 -- - DoAction(-ACTION_CORRUPTOR_LEAVE) (culling_of_stratholme.h:150,
---   ACTION_CORRUPTOR_LEAVE = 2, so the action id is -2): SetReactState
---   (REACT_PASSIVE, live lua_creature_events.go:3883) + Talk SAY_FAIL
---   (2) + FindNearestCreature(NPC_TIME_RIFT 28409, 300.0f) (live) are
---   all bridged, but the leg body stays out: the common branch is
---   MovePoint to the rift (no methods["MovePoint"] anywhere in
---   lua_creature_events.go — MoveChase/MoveFollow are not MovePoint),
---   and its completion is the unbridged MovementInform arrival above,
---   so the boss would walk to the rift and stand there instead of
---   despawning + FAIL; the sender is the unported instance
---   guardian-timeout tick (instance_culling_of_stratholme.cpp:495),
---   so the receiver would be dormant even if ported. The within-5.0f
---   and no-rift branches (inline MovementInform body) are severable
---   but ride the same dormant sender — documented, not registered.
+--   ACTION_CORRUPTOR_LEAVE = 2, so the action id is -2) — PORTED tick
+--   555 on ev38 + ev28: SetReactState(REACT_PASSIVE) + Talk SAY_FAIL
+--   (2) + FindNearestCreature(NPC_TIME_RIFT 28409, 300.0f), then
+--   MoveTo (the MovePoint bridge, lua_creature_events.go:4876) to the
+--   rift, with the within-5.0f / no-rift branches running the
+--   MovementInform body inline (boss_midnight GetDistance2d-reach
+--   idiom for IsWithinDist2d). Sender is live:
+--   instance_culling_of_stratholme.lua:562.
 -- - SAY_AGGRO (0) / SAY_DEATH (1) / SAY_FAIL (2) are the only Talked
 --   lines.
 
@@ -107,6 +103,11 @@ local WORLDSTATE_TIME_GUARDIAN_SHOW = 3932
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
+local SAY_FAIL = 2
+
+local ACTION_CORRUPTOR_LEAVE = 2
+local MOVEMENT_TIME_RIFT = 1
+local POINT_MOTION_TYPE = 8
 
 local SPELL_CORRUPTING_BLIGHT = 60588
 local SPELL_VOID_STRIKE       = 60590
@@ -271,8 +272,50 @@ local function onDied(event, creature, killer)
     end
 end
 
+-- C++ MovementInform (boss_infinite_corruptor.cpp:126-133): arrival at
+-- the rift despawns the corruptor after 2s and FAILs the encounter
+-- (C++ order: DespawnOrUnsummon(2s) scheduled, then SetBossState).
+local function leaveFailed(creature)
+    CreateLuaEvent(function()
+        creature:Despawn()
+    end, 2000)
+    creature:SetBossState(DATA_INFINITE_CORRUPTOR, 2) -- FAIL
+end
+
+local function onMovementInform(event, creature, type, id)
+    if type ~= POINT_MOTION_TYPE or id ~= MOVEMENT_TIME_RIFT then
+        return
+    end
+    leaveFailed(creature)
+end
+
+-- C++ DoAction (boss_infinite_corruptor.cpp:135-151): action
+-- -ACTION_CORRUPTOR_LEAVE (-2) — SetReactState PASSIVE + Talk SAY_FAIL,
+-- then walk to the nearest time rift; already at the rift (within
+-- 5.0f, boss_midnight GetDistance2d-reach idiom) or no rift at all
+-- runs the MovementInform body inline.
+local function onDoAction(event, creature, action)
+    if action ~= -ACTION_CORRUPTOR_LEAVE then
+        return
+    end
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:Talk(SAY_FAIL)
+    local rift = creature:FindNearestCreature(NPC_TIME_RIFT, 300)
+    if not rift then
+        leaveFailed(creature)
+        return
+    end
+    if creature:GetDistance2d(rift) - rift:GetCombatReach() < 5.0 then
+        leaveFailed(creature)
+        return
+    end
+    creature:MoveTo(MOVEMENT_TIME_RIFT, rift:GetX(), rift:GetY(), rift:GetZ())
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 15, onSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 28, onMovementInform)
+RegisterCreatureEvent(ENTRY, 38, onDoAction)

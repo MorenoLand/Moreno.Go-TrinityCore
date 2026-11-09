@@ -96,8 +96,8 @@
 -- NON_ATTACKABLE | NOT_SELECTABLE) PORTED via the RemoveFlag bridge
 -- (engine/world/lua_creature_events.go; the old "no flag bridge —
 -- drakkari_colossus precedent" claim was stale); summons.DoAction(
--- ACTION_SCARAB_SUBMERGE) stays out (cross-AI DoAction bridge
--- absent); the engage SummonCreature(NPC_BURROW) x4 +
+-- ACTION_SCARAB_SUBMERGE) PORTED tick 555 (ev38 + sender sweep in
+-- anubarakEnterCombat); the engage SummonCreature(NPC_BURROW) x4 +
 -- SummonCreature(NPC_FROST_SPHERE) x6 arms are PORTED in
 -- anubarakEnterCombat (the later GUID-latch respawn leg stays out).
 -- boss_anubarak_trial EVENT_FREEZE_SLASH — DoCastVictim(Freeze
@@ -177,9 +177,9 @@
 -- npc_swarm_scarab — zero registration beyond the JustDied arm.
 -- Reset: DoCast(me, Acid Mandible 65774) + DoZoneInCombat +
 -- cross-AI JustSummoned — no zone-in-combat / cross-AI / instance
--- bridges; DoAction(ACTION_SCARAB_SUBMERGE): DoCast(
--- Submerge Effect 68394) + DespawnOrUnsummon(1s) — no cross-AI
--- DoAction / despawn bridges; UpdateAI determination timer:
+-- bridges; DoAction(ACTION_SCARAB_SUBMERGE): DoCast(Submerge Effect
+-- 68394) + DespawnOrUnsummon(1s) — PORTED tick 555 (ev38 +
+-- sender sweep in anubarakEnterCombat); UpdateAI determination timer:
 -- DoCast(me, Determination 66092), urand(5s,60s) init, urand(
 -- 10s,60s) repeat — self-cast bridged in isolation but gated on
 -- _instance->GetBossState(DATA_ANUBARAK) == IN_PROGRESS with a
@@ -245,6 +245,8 @@
 
 local ENTRY_ANUBARAK = 34564
 local ENTRY_SWARM_SCARAB = 34605
+local ACTION_SCARAB_SUBMERGE = 1
+local SPELL_SUBMERGE_EFFECT = 68394
 local ENTRY_SPIKE = 34660
 local NPC_FROST_SPHERE = 34606
 local NPC_BURROWER = 34607
@@ -328,10 +330,18 @@ local function anubarakEnterCombat(event, creature, target)
     -- ported via the RemoveFlag bridge; the burrow x4 (AnubarakLoc[2..5])
     -- + frost-sphere x6 (SphereSpawn) summons are ported via the
     -- SummonCreature bridge (their ev19 JustSummoned arms already live
-    -- in anubarakJustSummoned); the scarab DoAction leg stays out
-    -- (cross-AI DoAction bridge absent) and the _sphereGUID latch is
-    -- unneeded (Reset/JustDied walk the grid, not GUIDs).
+    -- in anubarakJustSummoned); the scarab DoAction leg is PORTED tick
+    -- 555 below (creature:DoAction bridge live,
+    -- lua_creature_events.go:827; the old "cross-AI DoAction bridge
+    -- absent" claim was stale) and the _sphereGUID latch is unneeded
+    -- (Reset/JustDied walk the grid, not GUIDs).
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
+    -- C++ JustEngagedWith (boss_anubarak_trial.cpp:281):
+    -- summons.DoAction(ACTION_SCARAB_SUBMERGE) on his scarab summons
+    -- (grid sweep, anubarakDied precedent; NPC_SCARAB 34605 = :54).
+    for _, scarab in ipairs(creature:GetCreaturesInGrid(ENTRY_SWARM_SCARAB, 150)) do
+        scarab:DoAction(ACTION_SCARAB_SUBMERGE)
+    end
     for _, pos in ipairs({
         {694.886353, 102.484665, 142.119614},
         {694.500671, 185.363968, 142.117905},
@@ -580,7 +590,20 @@ local function scarabDied(event, creature, killer)
     end
 end
 
+-- C++ npc_swarm_scarabAI::DoAction (boss_anubarak_trial.cpp:474-483):
+-- ACTION_SCARAB_SUBMERGE (1) self-casts Submerge Effect 68394 and
+-- despawns after 1s. Sender: Anub'arak JustEngagedWith (:281), swept
+-- in anubarakEnterCombat above.
+local function scarabDoAction(event, creature, action)
+    if action ~= ACTION_SCARAB_SUBMERGE then
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUBMERGE_EFFECT)
+    creature:DespawnOrUnsummon(1000)
+end
+
 RegisterCreatureEvent(ENTRY_SWARM_SCARAB, 4, scarabDied)
+RegisterCreatureEvent(ENTRY_SWARM_SCARAB, 38, scarabDoAction)
 
 -- C++ npc_anubarak_spike::DamageTaken (boss_anubarak_trial.cpp:729-732):
 -- uiDamage = 0 unconditionally — spikes are damage-immune in all phases.
