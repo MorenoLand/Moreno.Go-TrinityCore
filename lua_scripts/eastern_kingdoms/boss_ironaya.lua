@@ -125,7 +125,7 @@ local function onHealthCheck(creature, guid)
 end
 
 local function onIronayaCombatStart(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { knockaway = false, wstomp = false }
     schedule(guid, "arcing", 3000, function() onArcingSmash(creature, guid) end)
@@ -133,7 +133,7 @@ local function onIronayaCombatStart(event, creature)
 end
 
 local function onIronayaCombatEnd(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_IRONAYA, 1, onIronayaCombatStart)

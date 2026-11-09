@@ -369,7 +369,7 @@ end
 -- entire purpose is the unbridged SetInCombatWith relay; summoning
 -- without it guts the arm.
 local function kalecgosEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     kalecgosState[guid] = { enraged = false, banished = false }
     creature:Talk(SAY_EVIL_AGGRO)
@@ -414,7 +414,7 @@ local function kalecgosResetState(guid)
 end
 
 local function kalecgosLeaveCombat(event, creature)
-    kalecgosResetState(creature:GetGUID())
+    kalecgosResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_kalecgos.cpp:169): disengage before
     -- DespawnPortals; DoRemoveAurasDueToSpellOnPlayers /
     -- summons.DespawnAll / _DespawnAtEvade legs stay out (no bridges).
@@ -436,7 +436,7 @@ local function kalecgosDied(event, creature, killer)
     -- SetBossState(DATA_KALECGOS 0, DONE). The dragon dies only
     -- via the outro KillSelf (MovementInform POINT_OUTRO_2).
     creature:SetBossState(DATA_KALECGOS, 3)
-    kalecgosResetState(creature:GetGUID())
+    kalecgosResetState(creature:GetGUIDLow())
 end
 
 local function kalecgosReset(event, creature)
@@ -447,7 +447,7 @@ local function kalecgosReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(DATA_KALECGOS) ~= 3 then
         creature:SetBossState(DATA_KALECGOS, 0)
     end
-    kalecgosResetState(creature:GetGUID())
+    kalecgosResetState(creature:GetGUIDLow())
 end
 
 -- C++ kalecgos DoAction(ACTION_START_OUTRO) (boss_kalecgos.cpp:192-194)
@@ -535,8 +535,8 @@ end
 -- C++ JustDied: Talk(SAY_GOOD_DEATH).
 local function humanDied(event, creature, killer)
     creature:Talk(SAY_GOOD_DEATH)
-    cancelTimers(creature:GetGUID())
-    humanSayPhase[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    humanSayPhase[creature:GetGUIDLow()] = nil
 end
 
 local function humanResetState(guid)
@@ -545,11 +545,11 @@ local function humanResetState(guid)
 end
 
 local function humanLeaveCombat(event, creature)
-    humanResetState(creature:GetGUID())
+    humanResetState(creature:GetGUIDLow())
 end
 
 local function humanReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     humanResetState(guid)
     humanSayPhase[guid] = 1
 end
@@ -558,7 +558,7 @@ end
 -- bridge for the spawn/summon or the cross-creature combat setup) —
 -- the fight arms start on pull, like the boss-side convention.
 local function humanEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     humanSayPhase[guid] = 1
     schedule(guid, "revitalize", 5000, function()
@@ -578,7 +578,7 @@ local function humanDamageTaken(event, creature, attacker, damage)
     if attacker == nil or attacker:GetEntry() ~= ENTRY_SATHROVARR then
         return false, 0
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local phase = humanSayPhase[guid] or 1
     if belowPct(creature, 75) and phase == 1 then
         creature:Talk(SAY_GOOD_NEAR_DEATH_0)
@@ -688,7 +688,7 @@ local function sathrovarrCheckTimer(creature, guid)
         -- in C++ (the relay does not check the dragon's latch); the
         -- dragon's own check timer then skips via the shared latch.
         for _, dragon in ipairs(creature:GetCreaturesInGrid(ENTRY_KALECGOS, 500)) do
-            local dstate = kalecgosState[dragon:GetGUID()]
+            local dstate = kalecgosState[dragon:GetGUIDLow()]
             if dstate then
                 dstate.enraged = true
             end
@@ -708,7 +708,7 @@ end
 
 -- C++ JustEngagedWith: Talk(SAY_SATH_AGGRO) + the four initial arms.
 local function sathrovarrEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sathrovarrState[guid] = { enraged = false, banished = false }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -774,7 +774,7 @@ local function sathrovarrDied(event, creature, killer)
     -- (C++ arm order; the kalecgos ACTION_START_OUTRO relay ports
     -- below via grid sweep + 1s outro-start).
     stripSpectralRealmAuras(creature)
-    sathrovarrResetState(creature:GetGUID())
+    sathrovarrResetState(creature:GetGUIDLow())
     -- C++ sathrovarr JustDied relay (boss_kalecgos.cpp:513-514):
     -- kalecgos DoAction(ACTION_START_OUTRO) -> EVENT_OUTRO_START 1s.
     -- Sweep is the instance-lookup twin (rotface relayProfessor idiom:
@@ -783,7 +783,7 @@ local function sathrovarrDied(event, creature, killer)
     -- distance, no phase filter). The outro movement chain stays out.
     for _, kalecgos in ipairs(creature:GetCreaturesInGrid(ENTRY_KALECGOS, 500)) do
         if kalecgos:IsAlive() then
-            local kguid = kalecgos:GetGUID()
+            local kguid = kalecgos:GetGUIDLow()
             schedule(kguid, "outro_start", 1000, function() kalecgosOutroStart(kalecgos, kguid) end)
             break
         end
@@ -793,7 +793,7 @@ end
 -- C++ EnterEvadeMode: the kalecgos EnterEvadeMode relay has no
 -- bridge — modeled as timer/state cleanup only.
 local function sathrovarrLeaveCombat(event, creature)
-    sathrovarrResetState(creature:GetGUID())
+    sathrovarrResetState(creature:GetGUIDLow())
 end
 
 local function sathrovarrReset(event, creature)
@@ -804,7 +804,7 @@ local function sathrovarrReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(DATA_KALECGOS) ~= 3 then
         creature:SetBossState(DATA_KALECGOS, 0)
     end
-    sathrovarrResetState(creature:GetGUID())
+    sathrovarrResetState(creature:GetGUIDLow())
 end
 
 -- C++ DamageTaken: lethal from anyone but self -> damage = 0

@@ -186,7 +186,7 @@ local function onEnterCombat(_, creature)
     -- incarcerator grid-loop DoZoneInCombat leg is npc_blackhand_incarceratorAI::JustEngagedWith
     -- (boss_pyroguard_emberseer.cpp:318-328), ported in npc_blackhand_incarcerator.lua
     -- (bridge live 2026-10-23); 817bd0cc had misattributed it to this handler — moved.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fireshield", 3000, function() onFireShield(creature, guid) end)
     schedule(guid, "firenova", 6000, function() onFireNova(creature, guid) end)
@@ -200,7 +200,7 @@ local function onCombatEnd(event, creature)
     -- first in arm order, before events.Reset and the aura cleanup.
     creature:SetFlag(59, 0x2000000)
     creature:SetFlag(59, 0x100)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if event == 4 then
         -- C++ JustDied (boss_pyroguard_emberseer.cpp:118-124):

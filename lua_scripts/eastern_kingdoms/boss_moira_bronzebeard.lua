@@ -86,7 +86,7 @@ end
 
 local function onEnterCombat(_, creature)
     creature:SetMeleeAttack(false) -- boss_moira_bronzebeard.cpp:62: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "mindblast", 16000, function() onMindBlast(creature, guid) end)
     schedule(guid, "shadowwordpain", 2000, function() onShadowWordPain(creature, guid) end)
@@ -94,7 +94,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MOIRA, 1, onEnterCombat)

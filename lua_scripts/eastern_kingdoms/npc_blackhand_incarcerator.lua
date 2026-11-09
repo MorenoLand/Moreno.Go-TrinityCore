@@ -123,14 +123,14 @@ local function onEnterCombat(_, creature)
     for _, fellow in ipairs(creature:GetCreaturesInGrid(ENTRY_BLACKHAND_INCARCERATOR, 60.0)) do
         fellow:DoZoneInCombat()
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "strike", {8000,16000}, function() onStrike(creature, guid) end)
     schedule(guid, "encage", {10000, 20000}, function() onEncage(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_blackhand_incarceratorAI::JustReachedHome: DoCast(SPELL_ENCAGE_EMBERSEER) = 15281

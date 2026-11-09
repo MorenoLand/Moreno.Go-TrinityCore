@@ -163,7 +163,7 @@ end
 -- C++ JustEngagedWith: Talk(YELL_AGGRO) + SetBossState(DATA_BRUTALLUS=1,
 -- IN_PROGRESS) (boss_brutallus.cpp:118-123) + the four initial arms.
 local function brutallusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     brutallusState[guid] = { enraged = false }
     creature:Talk(YELL_AGGRO)
@@ -197,7 +197,7 @@ local function brutallusDied(event, creature, killer)
     creature:SetBossState(1, 3)
     creature:SummonCreature(25038, creature:GetX(), creature:GetY(),
         creature:GetZ() + 30, creature:GetO(), 7, 0)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     brutallusState[guid] = nil
 end
@@ -208,14 +208,14 @@ local function brutallusResetState(guid)
 end
 
 local function brutallusLeaveCombat(event, creature)
-    brutallusResetState(creature:GetGUID())
+    brutallusResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset: Initialize (Enraged=false) + triggered self-cast
 -- dual wield 42459 (C++-exact) + SetBossState(DATA_BRUTALLUS=1,
 -- NOT_STARTED) (boss_brutallus.cpp:109-116).
 local function brutallusReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     brutallusResetState(guid)
     brutallusState[guid] = { enraged = false }
     -- C++ boss_brutallusAI::Reset(): DoCast(me, SPELL_DUAL_WIELD, true)

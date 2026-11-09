@@ -245,7 +245,7 @@ end
 -- (bridge live 2026-11-05); the DoZoneInCombat arm is ported below
 -- (bridge live 2026-10-23).
 local function felmystEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ boss_felmyst.cpp:160-169: berserk schedule, setActive(true),
     -- DoZoneInCombat() (bridge live 2026-10-23), then the two aura self-casts.
@@ -284,11 +284,11 @@ end
 local function felmystDied(event, creature, killer)
     creature:Talk(YELL_DEATH)
     creature:SetBossState(2, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function felmystResetState(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_felmyst::Reset (boss_felmyst.cpp:143-156): Initialize()
     -- -> events.Reset() (both internal; timer cancel above is the Lua
     -- twin) -> me->SetDisableGravity(true) (:149) ->
