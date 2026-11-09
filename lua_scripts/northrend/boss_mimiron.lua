@@ -101,7 +101,7 @@
 --     unit (lua_player.go IsOnVehicle, lua_vehicle.go GetOwner) — is
 --     live. The boss's own vehicle-base gate stays unmodeled.)
 --   * RemoveAurasDueToSpell has no binding; creature:RemoveAura (bridged,
---     lua_creature_events.go:1307) is the single-spell removal twin and
+--     lua_creature_events.go:1504) is the single-spell removal twin and
 --     is used for the WELD / SLEEP_VISUAL_1 removals.
 --   * The OUTTRO chain runs ungated: C++ UpdateAI's CASTING gate is not
 --     modeled -- mimiron casts nothing else during the outtro, so the
@@ -137,6 +137,8 @@ local SPELL_SEAT_6 = 63344
 local SPELL_SEAT_7 = 63345
 local SPELL_FREEZE_ANIM = 16245
 local SPELL_MOUNT_VX_001 = 64388
+local SPELL_MOUNT_MKII = 64387 -- boss_mimiron.cpp:100
+local SPELL_TORSO_DISABLED = 64120 -- boss_mimiron.cpp:101
 local SPELL_HALF_HEAL = 64188
 
 local NPC_VX_001 = 33651
@@ -519,12 +521,15 @@ end
 
 -- C++ DoAction DO_ACTIVATE_V0L7R0N_2 (:413-415) schedules
 -- EVENT_VOL7RON_ACTIVATION_1 in 1s. Step 1 (MKII SetFacingTo PI) PORTED
--- this tick (SetFacingTo bridged, instance-resolved MKII); step 2 stays
--- out -- vx001 RemoveAurasDueToSpell(TORSO_DISABLED) has no bridge and
--- the SPELL_MOUNT_MKII cast without the aura removal would fabricate;
--- step 3 (MKII MovePoint P4_POS_4) PORTED this tick via the MoveTo twin;
--- steps 4 (aerial on the stored VX-001 ref) and 7 (DO_ASSEMBLED_COMBAT
--- to MKII via the instance GUID + the stored VX-001 / ACU refs) are ported.
+-- this tick (SetFacingTo bridged, instance-resolved MKII); step 2 PORTED
+-- this tick -- vx001 drops TORSO_DISABLED via creature:RemoveAura, the
+-- single-spell removal twin of RemoveAurasDueToSpell (bridged,
+-- lua_creature_events.go:1504; WELD/SLEEP precedent in this file), then
+-- casts SPELL_MOUNT_MKII 64387 on MKII (cross-creature CastSpell
+-- precedent: vol7ronActivation4); step 3 (MKII MovePoint P4_POS_4)
+-- PORTED this tick via the MoveTo twin; steps 4 (aerial on the stored
+-- VX-001 ref) and 7 (DO_ASSEMBLED_COMBAT to MKII via the instance GUID
+-- + the stored VX-001 / ACU refs) are ported.
 local function vol7ronActivation7(creature, guid)
     local st = bossState[guid]
     if not st then
@@ -588,6 +593,16 @@ local function vol7ronActivation3(creature, guid)
 end
 
 local function vol7ronActivation2(creature, guid)
+    -- C++ :600-609: MKII + VX-001 both required (nested instance-GUID
+    -- lookups; the VX-001 ref is the stored summon ref, the DATA_VX_001
+    -- twin). VX-001 drops TORSO_DISABLED, then mounts MKII.
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    local st = bossState[guid]
+    local vx001 = st and st.vx001
+    if mkii and vx001 then
+        vx001:RemoveAura(SPELL_TORSO_DISABLED)
+        vx001:CastSpell(mkii, SPELL_MOUNT_MKII)
+    end
     schedule(guid, "vol7ronact3", 4500, function()
         vol7ronActivation3(creature, guid)
     end)
