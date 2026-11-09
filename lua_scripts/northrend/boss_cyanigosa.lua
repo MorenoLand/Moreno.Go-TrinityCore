@@ -42,7 +42,8 @@
 -- 1-arg = non-triggered) = self-cast per the in-tree DoCastAOE
 -- convention (boss_ai.go) -> CastSpell(creature, 58694); 10s init /
 -- Repeat() 10s. (The arcane-vacuum SpellScript's
--- SPELL_SUMMON_PLAYER 21150 leg stays out — documented below.)
+-- SPELL_SUMMON_PLAYER 21150 leg is ported via RegisterSpellEvent
+-- ev5 below.)
 -- BLIZZARD (:92-97) — SelectTarget(Random, 0, 45.0f, true) (:94,
 -- random alive threat-list player within 45y, playerOnly, tank
 -- included) -> DoCast(target, SPELL_BLIZZARD 58693) (:95, 2-arg =
@@ -79,7 +80,10 @@
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry 31134):
 -- spell_cyanigosa_arcane_vacuum (:147-176) — SpellScript
 -- OnEffectHitTarget (:161): GetCaster()->CastSpell(GetHitUnit(),
--- SPELL_SUMMON_PLAYER 21150, true): no SpellScript bridge.
+-- SPELL_SUMMON_PLAYER 21150, true) — PORTED this tick via
+-- RegisterSpellEvent ev5 below (the gal_darah precedent); the
+-- stale "no SpellScript bridge" claim is retired. DORMANT until
+-- Spell.dbc ships the 58694 record.
 -- achievement_defenseless (:129-145) — AchievementCriteriaScript
 -- OnCheck (:134): instance->GetData(DATA_DEFENSELESS): PORTED tick 417
 -- — the latch lives in the shared instanceData table as
@@ -103,6 +107,7 @@ local SAY_SLAY = 1
 local SAY_DEATH = 2
 
 local SPELL_ARCANE_VACUUM = 58694
+local SPELL_SUMMON_PLAYER = 21150
 local SPELL_BLIZZARD = 58693
 local SPELL_TAIL_SWEEP = 58690
 local SPELL_UNCONTROLLABLE_ENERGY = 58688
@@ -330,3 +335,23 @@ RegisterCreatureEvent(ENTRY_CYANIGOSA, 4, cyanigosaCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 4, cyanigosaJustDied)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 23, cyanigosaReset)
 RegisterCreatureEvent(ENTRY_CYANIGOSA, 27, cyanigosaMoveInLOS)
+
+-- C++ spell_cyanigosa_arcane_vacuum (:147-176): OnEffectHitTarget
+-- (EFFECT_0, SPELL_EFFECT_DUMMY) — GetCaster()->CastSpell
+-- (GetHitUnit(), SPELL_SUMMON_PLAYER 21150, true). ev5 fires once
+-- per (effect, live hit target) from the creature cast path
+-- (lua_spell.go:590-598); the caster is Cyanigosa
+-- (spell:GetCaster, lua_spell.go:478 — the gal_darah precedent).
+-- DORMANT until Spell.dbc ships the 58694 record.
+local function cyanigosaArcaneVacuum(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_SUMMON_PLAYER, true)
+end
+
+RegisterSpellEvent(SPELL_ARCANE_VACUUM, 5, cyanigosaArcaneVacuum)

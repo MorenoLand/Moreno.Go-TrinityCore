@@ -98,9 +98,10 @@
 -- as a RegisterAuraEvent remove hook.
 -- ACTION_WATER_GLOBULE_HIT (3% max-health heal, _dehydration = false)
 -- — PORTED 2026-11-08 (tick 485) as the ev38 receiver below; the
--- sender stays out (spell_ichoron_merge SpellScript, :370 — no
--- SpellScript bridge), so the receiver is dormant until the merge
--- leg lands (the thorim ACTION_BERSERK dormant-receiver precedent).
+-- sender (spell_ichoron_merge SpellScript, :370) is PORTED this tick
+-- via RegisterSpellEvent ev5 below (the gal_darah precedent), so the
+-- receiver is live once the merge cast reaches the hook (DORMANT
+-- until Spell.dbc ships the 54269 record).
 -- The ScheduleTasks Async leg (:207-211: SHRINK 54297 +
 -- PROTECTIVE_BUBBLE 54306 self-casts) seeds the bubble phase machine
 -- — PORTED 2026-11-08 (tick 485) as engage casts in
@@ -114,14 +115,15 @@
 -- followed target's GUID counter as id (creaturemotion.go:4406-4410), the instance DATA_ICHORON object-GUID
 -- read (creature:GetGuidData, lua_creature_events.go:6472 — Ichoron latches its own GUID in ichoronReset),
 -- SPELL_MERGE 54269 self-cast + DespawnOrUnsummon(1ms) (lua_creature_events.go:6637). The merge SpellScript
--- itself (shrink stack -1 + DoAction WATER_GLOBULE_HIT) stays out — no SpellScript bridge — so the merge cast
--- is a dormant trigger and the heal/dehydration legs ride the ported ev38 receiver. The DamageTaken SPLASH
+-- itself (shrink stack -1 + DoAction WATER_GLOBULE_HIT) is PORTED
+-- this tick via RegisterSpellEvent ev5 below, so the merge cast
+-- feeds the ported ev38 receiver (DORMANT until Spell.dbc ships
+-- the 54269 record). The DamageTaken SPLASH
 -- 59516 arm IS bridged (event 9, registered 2026-10-19 — the stale "no DamageTaken bridges" claim retracted).
 -- The npc_ichor_globule ctor SetReactState(REACT_PASSIVE)
--- (boss_ichoron.cpp:248) stays out: globules spawn only from the unported
--- spell_ichoron_splatter AuraScript, and this runtime's event-5 spawn hook
--- never fires for temp summons — no construction-time hook (halion
--- precedent).
+-- (boss_ichoron.cpp:248) — PORTED this tick in ichoronJustSummoned
+-- (ev19, the earliest hook that sees a temp summon — ev5 never
+-- fires for one, lua_creature_events.go:7250-7264).
 -- spell_ichoron_drained (59820 AuraScript) — PORTED 2026-11-08 (tick 485) via RegisterAuraEvent: apply (mode 2)
 -- sets NOT_SELECTABLE + FEIGN_DEATH flags (:322-326), remove (mode 3) clears them and, on
 -- AURA_REMOVE_BY_EXPIRE (4), fires DoAction ACTION_DRAINED (:332). Load() gate (owner entry 29313 or 32234,
@@ -135,8 +137,9 @@
 -- (mode 1) casts a random globule-summon spell (54258/54264/54265/54266/54267) triggered on the target and
 -- returns true = PreventDefaultAction (:447-452); remove (mode 3) on EXPIRE adds 10 shrink stacks (:458-461)
 -- via creature:GetAura + Aura:SetStackAmount.
--- spell_ichoron_merge (54269 SpellScript: shrink stack -1 + DoAction ACTION_WATER_GLOBULE_HIT :370) — no
--- SpellScript bridge, stays out.
+-- spell_ichoron_merge (54269 SpellScript: shrink stack -1 + DoAction ACTION_WATER_GLOBULE_HIT :370) — PORTED
+-- this tick via RegisterSpellEvent ev5 below (the gal_darah
+-- precedent); the stale "no SpellScript bridge" claim is retired.
 -- achievement_dehydration (OnCheck AI()->GetData(DATA_DEHYDRATION))
 -- — PORTED 2026-11-08 (tick 419): ev1 write leg below (Reset twin);
 -- the Go case reads the boss motion's SetData slot. Its only clear is
@@ -192,6 +195,7 @@ local ACTION_DRAINED = 3
 local NPC_DUMMY_ICHORON = 32234
 local AURA_REMOVE_BY_EXPIRE = 4
 local FOLLOW_MOTION_TYPE = 14
+local REACT_PASSIVE = 0
 
 local timers = {}
 local timerFns = {}
@@ -374,9 +378,10 @@ local function ichoronEnterCombat(event, creature, target)
     -- ahead of the kill-credit criteria read, so an ev23 write would
     -- clobber a future mid-fight clear; ev1 fires only at engage.
     -- The only clear is DoAction ACTION_WATER_GLOBULE_HIT (:119-125),
-    -- called only from spell_ichoron_merge (:366-371) behind the
-    -- unported globule chain, so the latch stays 1 in the Go-modeled
-    -- fight. PORTED 2026-11-08 (tick 419).
+    -- called only from spell_ichoron_merge (:366-371), ported this
+    -- tick via RegisterSpellEvent ev5 (DORMANT until Spell.dbc ships
+    -- the 54269 record), so the latch stays 1 until the merge leg
+    -- fires. PORTED 2026-11-08 (tick 419).
     creature:SetData(DATA_DEHYDRATION, 1)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -458,6 +463,14 @@ end
 local function ichoronJustSummoned(_, creature, summoned)
     ichoronSummons[summoned:GetGUIDLow()] = true
     if summoned:GetEntry() == ENTRY_ICHOR_GLOBULE then
+        -- C++ npc_ichor_globuleAI ctor (boss_ichoron.cpp:248):
+        -- creature->SetReactState(REACT_PASSIVE). No construction-time
+        -- hook exists for temp summons — ev5 (fireCreatureSpawned)
+        -- fires only on respawn paths (lua_creature_events.go:7250-
+        -- 7264) — so the ctor leg rides ev19, the earliest hook that
+        -- sees the summon (the tick-521 NEXT's "via ev5" is
+        -- corrected: ev5 never fires for a temp summon).
+        summoned:SetReactState(REACT_PASSIVE)
         creature:CastSpell(summoned, SPELL_WATER_GLOBULE_VISUAL)
     end
 end
@@ -497,7 +510,9 @@ RegisterCreatureEvent(ENTRY_ICHORON, 20, ichoronSummonDespawned)
 -- dispatch (creature:DoAction, lua_creature_events.go:802). The
 -- SHATTERED and DRAINED senders are the ported aura hooks below;
 -- the WATER_GLOBULE_HIT sender (spell_ichoron_merge SpellScript)
--- stays out, so action 1 is dormant until the merge leg lands.
+-- is ported this tick via RegisterSpellEvent ev5 below, so action 1
+-- is live once the merge cast reaches the hook (DORMANT until
+-- Spell.dbc ships the 54269 record).
 local function ichoronDoAction(event, creature, action)
     if action == ACTION_WATER_GLOBULE_HIT then
         -- :119-125: !IsAlive break, +3% max-health heal,
@@ -701,3 +716,36 @@ RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 28, ichorGlobuleMovementInform)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_ichoron.cpp:291: empty UpdateAI in C++ (never melees)
 end)
+
+-- C++ spell_ichoron_merge (boss_ichoron.cpp:352-380): OnEffectHitTarget
+-- (EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT) — if the hit creature has
+-- the SHRINK aura, ModStackAmount(-1), then its AI gets DoAction
+-- (ACTION_WATER_GLOBULE_HIT). ev5 fires once per (effect, live hit
+-- target) from the creature cast path (lua_spell.go:590-598); the
+-- Creature gate mirrors GetHitCreature() (nil for non-creatures).
+-- ModStackAmount(-1) removes the aura at 0 stacks — Go's
+-- SetStackAmount only writes the counter (lua_aura.go:509), so a
+-- 1-stack aura is Remove()d instead (default mode, the
+-- ModStackAmount removal twin). The DoAction rides the ported ev38
+-- receiver above, so the heal/dehydration legs are live once the
+-- merge cast reaches this hook. DORMANT until Spell.dbc ships the
+-- 54269 record (and the Go hit list yields Ichoron, the C++
+-- GetHitCreature target).
+local function ichoronMerge(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil
+            or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local shrink = hitTarget:GetAura(SPELL_SHRINK)
+    if shrink then
+        local stacks = shrink:GetStackAmount()
+        if stacks <= 1 then
+            shrink:Remove()
+        else
+            shrink:SetStackAmount(stacks - 1)
+        end
+    end
+    hitTarget:DoAction(ACTION_WATER_GLOBULE_HIT)
+end
+
+RegisterSpellEvent(SPELL_MERGE, 5, ichoronMerge)

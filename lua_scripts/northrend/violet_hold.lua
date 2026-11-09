@@ -51,8 +51,12 @@
 -- - npc_azure_saboteur: StartMovement rides MoveSmoothPath — no Go
 --   bridge (whole-tree grep this tick); MovementInform ev28 is
 --   bridged but its sender is the unported smooth path.
--- - spell_violet_hold_teleport_player (62138 SpellScript): no
---   SpellScript bridge.
+-- - spell_violet_hold_teleport_player (62138 SpellScript) — PORTED
+--   this tick via RegisterSpellEvent ev5 below (the gal_darah
+--   precedent); the stale "no SpellScript bridge" claim is retired.
+--   DORMANT twice over: the trigger (Sinclari gossip select,
+--   :419-421) is still a stay-out above, and Spell.dbc must ship the
+--   62138 record.
 -- - Trash EscortAI waypoint machine (SetData(DATA_PORTAL_LOCATION)
 --   paths, CreatureStartAttackDoor): ported in violet_hold_trash.lua
 --   (tick 489 — ev22 path start, MoveTo + ev28 leg chain, door-seal
@@ -75,6 +79,8 @@ local NPC_PORTAL_KEEPER = 30695
 local SPELL_PORTAL_PERIODIC = 58008
 local SPELL_PORTAL_CHANNEL = 58012
 local SPELL_DESTROY_DOOR_SEAL = 58040
+local SPELL_TELEPORT_PLAYER = 62138
+local SPELL_TELEPORT_PLAYER_EFFECT = 62139
 
 local DATA_MAIN_EVENT_STATE = 9
 local DATA_WAVE_COUNT = 10
@@ -431,6 +437,22 @@ end
 
 RegisterAuraEvent(SPELL_PORTAL_PERIODIC, 1, portalPeriodicTick)
 RegisterAuraEvent(SPELL_DESTROY_DOOR_SEAL, 1, destroyDoorSealTick)
+
+-- C++ spell_violet_hold_teleport_player (violet_hold.cpp:1432-1461):
+-- OnEffectHitTarget (EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT) — the
+-- hit unit casts SPELL_TELEPORT_PLAYER_EFFECT 62139 on itself,
+-- triggered. ev5 fires once per (effect, live hit target) from the
+-- creature cast path (lua_spell.go:590-598); the caster is Sinclari
+-- (me->CastSpell(player, 62138, true), :421). DORMANT until the
+-- gossip-select trigger lands and Spell.dbc ships the 62138 record.
+local function violetHoldTeleportPlayer(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_TELEPORT_PLAYER_EFFECT, true)
+end
+
+RegisterSpellEvent(SPELL_TELEPORT_PLAYER, 5, violetHoldTeleportPlayer)
 
 RegisterCreatureEvent(NPC_SINCLARI, 23, sinclariReset)
 RegisterCreatureEvent(NPC_SINCLARI, 38, sinclariDoAction)

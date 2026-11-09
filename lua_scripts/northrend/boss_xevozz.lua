@@ -94,9 +94,14 @@
 -- ev24 + FindNearestGameObject(GO_XEVOZZ_DOOR 191556, 50) +
 -- SetGoState(1) (HandleCells(7, false)).
 -- spell_xevozz_summon_players (SpellScript: OnEffectHitTarget
--- SPELL_EFFECT_DUMMY -> SPELL_MAGIC_PULL 50770) joins the
--- no-SpellScript-bridge queue. The file carries a TODO ("Implement
--- Ethereal Summon Target").
+-- SPELL_EFFECT_DUMMY -> SPELL_MAGIC_PULL 50770) — PORTED this tick
+-- via RegisterSpellEvent ev5 below (the gal_darah precedent); the
+-- stale "no-SpellScript-bridge" claim is retired. The caster is the
+-- ethereal sphere (DoCastAOE 54164 rides its DoAction, :213-222,
+-- npc_ethereal_sphere.lua), reached via spell:GetCaster()
+-- (lua_spell.go:478). DORMANT until Spell.dbc ships the 54164
+-- record. The file carries a TODO ("Implement Ethereal Summon
+-- Target").
 
 local ENTRY_XEVOZZ = 29266
 local DATA_XEVOZZ = 7
@@ -110,6 +115,8 @@ local SAY_SUMMON_ENERGY = 6
 
 local SPELL_ARCANE_BARRAGE_VOLLEY = 54202
 local SPELL_ARCANE_BUFFET = 54226
+local SPELL_SUMMON_PLAYERS = 54164
+local SPELL_MAGIC_PULL = 50770
 
 local SPHERE_SUMMON_SPELLS = { 54102, 54137, 54138 }
 
@@ -343,3 +350,23 @@ RegisterCreatureEvent(ENTRY_XEVOZZ, 23, xevozzReset)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 19, xevozzJustSummoned)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 14, xevozzSpellHit)
 RegisterCreatureEvent(ENTRY_XEVOZZ, 24, xevozzReachedHome)
+
+-- C++ spell_xevozz_summon_players (boss_xevozz.cpp:258-281):
+-- OnEffectHitTarget (EFFECT_0, SPELL_EFFECT_DUMMY) —
+-- GetCaster()->CastSpell(GetHitUnit(), SPELL_MAGIC_PULL 50770,
+-- true). ev5 fires once per (effect, live hit target) from the
+-- creature cast path (lua_spell.go:590-598); the caster is the
+-- ethereal sphere (spell:GetCaster, lua_spell.go:478). DORMANT
+-- until Spell.dbc ships the 54164 record.
+local function xevozzSummonPlayers(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_MAGIC_PULL, true)
+end
+
+RegisterSpellEvent(SPELL_SUMMON_PLAYERS, 5, xevozzSummonPlayers)
