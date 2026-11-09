@@ -901,8 +901,10 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		// set (MK II ctor/Reset, boss_mimiron.cpp:692-695/:832-835)
 		// and the bomb-bot SpellScript (:1717-1718) clears it; the Lua
 		// twin keeps it in the MK II motion's SetData store
-		// (boss_leviathan_mk_ii.lua). Dormant clear: bomb bots never
-		// spawn in Go (ACU summon arm unported), so 63801 never fires.
+		// (boss_leviathan_mk_ii.lua). Clear leg ported: the ACU summon
+		// arm is live (63811, tick 557) and npc_mimiron_bomb_bot.lua
+		// applies the 63767 addon aura at spawn + clears on 63801
+		// player hits (ev15); DBC-gated only (Spell.dbc ships).
 		// The latch lives on the Leviathan MK II AI (33432);
 		// boss_mimironAI has no GetData override, so the kill target
 		// here is the MK II.
@@ -917,7 +919,9 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		// starts set (MK II ctor/Reset) and the mine ev15 leg
 		// (npc_mimiron_proximity_mine.lua, spell 66351) clears it; the
 		// Lua twin keeps it in the MK II motion's SetData store.
-		// Dormant until MK II's proximity-mine summon arm lands.
+		// Clear leg live: MK II's mine summon arm is ported (mineTick
+		// casts 63027, tick 557) and the engine summon arm spawns the
+		// mines; DBC-gated only.
 		if source == nil || victim == nil {
 			return false
 		}
@@ -928,8 +932,11 @@ func checkAchievementCriteriaScript(name string, source, target *session, victim
 		// true while no rocket strike hit a player: the latch starts
 		// set (MK II ctor/Reset) and the rocket-strike SpellScript
 		// (:2303-2304) clears it; the Lua twin keeps it in the MK II
-		// motion's SetData store (boss_leviathan_mk_ii.lua). Dormant
-		// clear: VX-001 rocket-strike arm unported, so 63041 never fires.
+		// motion's SetData store (boss_leviathan_mk_ii.lua). Clear leg
+		// ported: the 64402/65034 -> 63681 -> 63036 -> visual 34050 ->
+		// 63041 chain is ported via RegisterSpellEvent (boss_vx_001.lua)
+		// + npc_mimiron_rocket_visual.lua (ev15); DBC-gated only
+		// (Spell.dbc ships).
 		if source == nil || victim == nil {
 			return false
 		}

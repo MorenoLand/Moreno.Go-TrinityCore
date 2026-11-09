@@ -37,10 +37,16 @@
 --   cast SPELL_SUMMON_BURST_TARGET 64840 on them; re-arm 3s.
 --   ROCKET_STRIKE (:1066-1069): DoCastAOE phase-dependent — VX phase
 --   SPELL_ROCKET_STRIKE_SINGLE 64402, VOL7RON phase
---   SPELL_ROCKET_STRIKE_BOTH 65034; re-arm {20s,25s}. EVENT_RELOAD
---   (10s) is NOT scheduled: its legs read the vehicle kit
---   (GetVehicleKit()->GetPassenger + SetDisplayId), which has no
---   bridge — display-only, no combat effect.
+--   SPELL_ROCKET_STRIKE_BOTH 65034; re-arm {20s,25s}. The
+--   spell_mimiron_rocket_strike SpellScript chain is PORTED via
+--   RegisterSpellEvent below (ev7 passenger FilterTargets, ev5
+--   HandleDummy casting 63681; 63681's ev7 range-preferring filter
+--   + ev5 HandleScript casting 63036 + SetDisplayId 11686) — the
+--   63041 damage leg lands in npc_mimiron_rocket_visual.lua.
+--   EVENT_RELOAD (10s) is NOT scheduled: its legs are display-only
+--   (GetVehicleKit()->GetPassenger + SetDisplayId, both bridged —
+--   the passenger pick is used by the FilterTargets port above),
+--   no combat effect.
 --   HAND_PULSE (:1077-1079): random alive player within 120yd; cast
 --   RAND(SPELL_HAND_PULSE_LEFT 64348, SPELL_HAND_PULSE_RIGHT 64352);
 --   re-arm {1500ms,3s}.
@@ -111,6 +117,17 @@ local SPELL_FREEZE_ANIM = 16245
 local SPELL_HEAT_WAVE_AURA = 63679
 local SPELL_ROCKET_STRIKE_SINGLE = 64402
 local SPELL_ROCKET_STRIKE_BOTH = 65034
+-- boss_mimiron.cpp:124-126, :2326-2370: 63681 (cast by the 64402/65034
+-- hit unit) selects the strike target and casts 63036, summoning the
+-- rocket visual (34050); 64064 is the visual's template-addon aura,
+-- never cast directly. 63041 is the visual's damage spell.
+local SPELL_SCRIPT_EFFECT_ROCKET_STRIKE = 63681
+local SPELL_SUMMON_ROCKET_STRIKE = 63036
+local SPELL_ROCKET_STRIKE_DAMAGE = 63041
+local DISPLAY_ROCKET_STRIKE = 11686
+-- boss_mimiron.cpp:330-331: rocket seats for the SINGLE passenger pick.
+local ROCKET_SEAT_LEFT = 5
+local ROCKET_SEAT_RIGHT = 6
 local SPELL_SPINNING_UP = 63414
 local SPELL_SCRIPT_EFFECT_FROST_BOMB = 64623
 local SPELL_FLAME_SUPPRESSANT_VX = 65192
@@ -296,6 +313,108 @@ local function rocketStrikeTick(creature, guid)
     schedule(guid, "rocketStrike", {20000, 25000}, function()
         rocketStrikeTick(creature, guid)
     end)
+end
+
+-- C++ spell_mimiron_rocket_strike::FilterTargets
+-- (boss_mimiron.cpp:2251-2258): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENTRY — only for SPELL_ROCKET_STRIKE_SINGLE
+-- while the caster is a vehicle, the list narrows to one random
+-- passenger of the rocket seats (LEFT 5 / RIGHT 6); an empty picked
+-- seat leaves the DBC list untouched. RegisterSpellEvent ev7 hands
+-- the effect's list; Clear/Add are the targets.clear/push_back
+-- twins (razorscale ev7 precedent).
+local function rocketStrikeFilterTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    if spell:GetEntry() ~= SPELL_ROCKET_STRIKE_SINGLE then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or not caster:IsVehicle() then
+        return
+    end
+    local kit = caster:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    local seat = ROCKET_SEAT_LEFT
+    if math.random(2) == 2 then
+        seat = ROCKET_SEAT_RIGHT
+    end
+    local passenger = kit:GetPassenger(seat)
+    if passenger ~= nil then
+        targets:Clear()
+        targets:Add(passenger)
+    end
+end
+
+-- C++ spell_mimiron_rocket_strike::HandleDummy
+-- (boss_mimiron.cpp:2260-2263): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY — the hit unit casts
+-- SPELL_SCRIPT_EFFECT_ROCKET_STRIKE 63681 on itself (nil target in
+-- C++; the self-targeted cast is the DoCastAOE twin), with VX-001's
+-- GUID as original caster — the originalCaster leg has no Go model
+-- (lua_creature_events.go CastCustomSpell note), so the cast fires
+-- with the hit unit as caster. DORMANT until Spell.dbc ships: the
+-- 64402/65034 casts are DBC-gated.
+local function rocketStrikeDummy(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if target ~= nil then
+        target:CastSpell(target, SPELL_SCRIPT_EFFECT_ROCKET_STRIKE)
+    end
+end
+
+-- C++ spell_mimiron_rocket_strike_target_select::FilterTargets
+-- (boss_mimiron.cpp:2340-2351): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY — one random target, preferring one
+-- more than 15yd from the caster (in-range targets are removed
+-- first; if none remain, the original random pick stands).
+local function rocketTargetFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local list = targets:GetTargets()
+    if #list == 0 then
+        return
+    end
+    local pick = list[math.random(#list)]
+    local far = {}
+    for _, t in ipairs(list) do
+        if caster:GetDistance(t) > 15 then
+            far[#far + 1] = t
+        end
+    end
+    if #far > 0 then
+        pick = far[math.random(#far)]
+    end
+    targets:Clear()
+    targets:Add(pick)
+end
+
+-- C++ spell_mimiron_rocket_strike_target_select::HandleScript
+-- (boss_mimiron.cpp:2353-2358): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT — the caster casts
+-- SPELL_SUMMON_ROCKET_STRIKE 63036 on the hit unit (original caster
+-- VX-001's GUID, no Go model — see rocketStrikeDummy) and takes
+-- display 11686. The 63036 summon effect spawns the rocket visual
+-- (NPC_ROCKET_MIMIRON_VISUAL 34050) via the engine summon arm.
+local function rocketTargetScript(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_SUMMON_ROCKET_STRIKE)
+    caster:SetDisplayId(DISPLAY_ROCKET_STRIKE)
 end
 
 -- C++ EVENT_SPINNING_UP arm (:1085-1088): DoCastAOE(SPELL_SPINNING_UP
@@ -602,3 +721,9 @@ RegisterCreatureEvent(NPC_VX_001, 4, vx001JustDied)
 RegisterCreatureEvent(NPC_VX_001, 19, vx001JustSummoned)
 RegisterCreatureEvent(NPC_VX_001, 14, vx001SpellHit)
 RegisterAuraEvent(SPELL_RAPID_BURST, 1, rapidBurstTick)
+RegisterSpellEvent(SPELL_ROCKET_STRIKE_SINGLE, 7, rocketStrikeFilterTargets)
+RegisterSpellEvent(SPELL_ROCKET_STRIKE_BOTH, 7, rocketStrikeFilterTargets)
+RegisterSpellEvent(SPELL_ROCKET_STRIKE_SINGLE, 5, rocketStrikeDummy)
+RegisterSpellEvent(SPELL_ROCKET_STRIKE_BOTH, 5, rocketStrikeDummy)
+RegisterSpellEvent(SPELL_SCRIPT_EFFECT_ROCKET_STRIKE, 7, rocketTargetFilter)
+RegisterSpellEvent(SPELL_SCRIPT_EFFECT_ROCKET_STRIKE, 5, rocketTargetScript)

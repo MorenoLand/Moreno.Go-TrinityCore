@@ -78,14 +78,14 @@ end
 -- C++ spell_mimiron_proximity_explosion::OnHit
 -- (boss_mimiron.cpp:2090-2099, spell 66351): when the explosion
 -- hits a player, the MK II's DATA_SETUP_MINE latch clears (the
--- achievement_setup_mine gate). No SpellScript bridge exists, so
--- the leg rides the creature SpellHitTarget hook instead (ev15,
--- onyxia breath precedent): the mine is the caster, the handler
--- fires per hit player, and the MK II resolves via the instance
--- GUID store (latched by boss_leviathan_mk_ii.lua ev5).
--- Dormant in Go until MK II's proximity-mine summon arm lands
--- (EVENT_PROXIMITY_MINE is DoAction-scheduled, unported), so no
--- mine can spawn and 66351 can never fire today.
+-- achievement_setup_mine gate). The leg rides the creature
+-- SpellHitTarget hook (ev15, onyxia breath precedent): the mine is
+-- the caster, the handler fires per hit player, and the MK II
+-- resolves via the instance GUID store (latched by
+-- boss_leviathan_mk_ii.lua ev5). LIVE: MK II's proximity-mine
+-- summon arm is ported (mineTick casts 63027, tick 557) and the
+-- engine summon arm spawns the mines, so 66351 fires through this
+-- file's arm/detonation legs — DBC-gated only (Spell.dbc ships).
 local function mineSpellHitTarget(event, creature, target, spellId)
     if spellId ~= SPELL_PROXIMITY_MINE_EXPLOSION then
         return
