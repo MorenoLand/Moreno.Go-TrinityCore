@@ -374,15 +374,15 @@ end
 -- Died, or Reset.
 local function supremusJustSummoned(event, creature, summon)
     if summon:GetEntry() == ENTRY_VOLCANO then
-        local key = "volcanoEruption:" .. summon:GetGUID()
-        schedule(creature:GetGUID(), key, 3000, function()
+        local key = "volcanoEruption:" .. summon:GetGUIDLow()
+        schedule(creature:GetGUIDLow(), key, 3000, function()
             summon:CastSpell(summon, SPELL_VOLCANIC_ERUPTION)
         end)
     end
 end
 
 local function supremusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { phase = PHASE_INITIAL }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base me-form DoZone already fires on engage via the ported ChangePhase tail (mandokir convention)
@@ -401,7 +401,7 @@ local function supremusResetState(guid)
 end
 
 local function supremusLeaveCombat(event, creature)
-    supremusResetState(creature:GetGUID())
+    supremusResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: summons.DespawnAll() before _DespawnAtEvade().
     for _, volcano in ipairs(creature:GetCreaturesInGrid(ENTRY_VOLCANO, 100)) do
         volcano:Despawn()
@@ -412,11 +412,11 @@ local function supremusLeaveCombat(event, creature)
 end
 
 local function supremusDied(event, creature, killer)
-    supremusResetState(creature:GetGUID())
+    supremusResetState(creature:GetGUIDLow())
 end
 
 local function supremusReset(event, creature)
-    supremusResetState(creature:GetGUID())
+    supremusResetState(creature:GetGUIDLow())
     -- C++ Reset (supremus.cpp:73-75): drop the taunt-immune rows.
     creature:ApplySpellImmune(0, 1, 11, false)
     creature:ApplySpellImmune(0, 0, 114, false)

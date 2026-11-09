@@ -377,7 +377,7 @@ local function arlokkEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first: SetBossState(DATA_ARLOKK 3,
     -- IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(3, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     arlokkResetState(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
@@ -397,14 +397,14 @@ local function arlokkEnterCombat(event, creature, target)
 end
 
 local function arlokkLeaveCombat(event, creature)
-    arlokkResetState(creature:GetGUID())
+    arlokkResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_arlokk.cpp:121-123): _JustDied() first, writing
 -- SetBossState(DATA_ARLOKK 3, DONE) (ScriptedCreature.cpp:513-519),
 -- then Talk SAY_DEATH.
 local function arlokkDied(event, creature, killer)
-    arlokkResetState(creature:GetGUID())
+    arlokkResetState(creature:GetGUIDLow())
     creature:SetBossState(3, 3)
     creature:Talk(SAY_DEATH)
 end
@@ -415,8 +415,8 @@ end
 -- gate restores C++ Reset-never-runs-on-death: Go fires 23 before 4
 -- on death, so an ungated rollback would leak into the next life.
 local function arlokkReset(event, creature)
-    local wasPanther = arlokkState(creature:GetGUID()).panther
-    arlokkResetState(creature:GetGUID())
+    local wasPanther = arlokkState(creature:GetGUIDLow()).panther
+    arlokkResetState(creature:GetGUIDLow())
     if wasPanther and creature:IsAlive() then
         creature:ApplyDamagePctModifier(100 / 1.35 - 100)
     end
@@ -454,7 +454,7 @@ end
 -- C++ Reset (boss_arlokk.cpp:353-370): the sneak casts are spawn/evade-only,
 -- never run on death; they do not belong on the corpse.
 local function prowlerReset(event, creature)
-    cancelTimers(timers, creature:GetGUID())
+    cancelTimers(timers, creature:GetGUIDLow())
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_SNEAK_1)
         creature:CastSpell(creature, SPELL_SNEAK_2)
@@ -468,7 +468,7 @@ end
 -- file's timers idiom and is cancelled on 2/4/23 (prowlerReset covers
 -- 23; a dead prowler cannot leave combat, so 2 never fires here).
 local function prowlerDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     schedule(timers, guid, "despawn", 4000, function()
         creature:Despawn()

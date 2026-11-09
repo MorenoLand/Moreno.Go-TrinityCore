@@ -296,7 +296,7 @@ local function jeklikEnterCombat(event, creature, target)
     creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { phase = PHASE_ONE }
     creature:Talk(SAY_AGGRO)
@@ -325,7 +325,7 @@ end
 -- health -- no damage projection, so the arm fires when the health is
 -- already at or under the floored threshold (Unit.h:874).
 local function jeklikDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = jeklikState(guid)
     if st.phase ~= PHASE_ONE then
         return
@@ -369,11 +369,11 @@ local function jeklikDamageTaken(event, creature, attacker, damage)
 end
 
 local function jeklikLeaveCombat(event, creature)
-    jeklikResetState(creature:GetGUID())
+    jeklikResetState(creature:GetGUIDLow())
 end
 
 local function jeklikDied(event, creature, killer)
-    jeklikResetState(creature:GetGUID())
+    jeklikResetState(creature:GetGUIDLow())
     -- C++ JustDied (boss_jeklik.cpp:93-95): _JustDied() first, writing
     -- SetBossState(DATA_JEKLIK 0, DONE) (ScriptedCreature.cpp:513-519),
     -- then Talk(SAY_DEATH).
@@ -388,7 +388,7 @@ local function jeklikReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
         creature:SetBossState(0, 0)
     end
-    jeklikResetState(creature:GetGUID())
+    jeklikResetState(creature:GetGUIDLow())
     -- C++ Reset (:88-91) is _Reset() only — no SetCanFly leg exists
     -- (the old "SetCanFly restore / no bridge" note was stale twice
     -- over: the bridge exists and the C++ arm never calls it).
@@ -430,7 +430,7 @@ local function batriderResetState(guid)
 end
 
 local function batriderEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     batriderResetState(guid)
     batTimers[guid] = CreateLuaEvent(function()
         batriderBomb(creature, guid)
@@ -438,11 +438,11 @@ local function batriderEnterCombat(event, creature, target)
 end
 
 local function batriderLeaveCombat(event, creature)
-    batriderResetState(creature:GetGUID())
+    batriderResetState(creature:GetGUIDLow())
 end
 
 local function batriderDied(event, creature, killer)
-    batriderResetState(creature:GetGUID())
+    batriderResetState(creature:GetGUIDLow())
 end
 
 local function batriderReset(event, creature)
@@ -456,7 +456,7 @@ local function batriderReset(event, creature)
     if not creature:IsDead() then
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     end
-    batriderResetState(creature:GetGUID())
+    batriderResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_FRENZIED_BAT, 1, batriderEnterCombat)

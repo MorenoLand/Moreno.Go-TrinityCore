@@ -340,7 +340,7 @@ end
 -- arm in this file already Talks through creature objects gathered
 -- via GetCreaturesInGrid).
 local function councilEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local st = bossState(guid)
     if st.inCombat then
@@ -428,7 +428,7 @@ local function councilDied(event, creature, killer)
             council:CastSpell(council, SPELL_QUIET_SUICIDE, true)
         end
     end
-    councilResetState(creature:GetGUID())
+    councilResetState(creature:GetGUIDLow())
 end
 
 -- C++ EnterEvadeMode (boss_illidari_council.cpp:168-179): disengage each
@@ -443,7 +443,7 @@ local function councilLeaveCombat(event, creature)
             creature:SendEncounterUnit(1, council) -- ENCOUNTER_FRAME_DISENGAGE
         end
     end
-    councilResetState(creature:GetGUID())
+    councilResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_illidari_council.cpp:141-145): _Reset +
@@ -451,7 +451,7 @@ end
 -- (:113, :143) — PORTED 2026-11-05, SummonCreatureGroup bridge landed.
 local function councilReset(event, creature)
     creature:SummonCreatureGroup(1)
-    councilResetState(creature:GetGUID())
+    councilResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ILLIDARI_COUNCIL, 1, councilEnterCombat)
@@ -508,18 +508,18 @@ end
 -- C++ JustDied: Talk(SAY_COUNCIL_DEATH).
 local function memberDied(event, creature, killer)
     creature:Talk(SAY_COUNCIL_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function memberLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ IllidariCouncilBossAI::Reset: events reset (cancelTimers),
 -- triggered self-cast 41341 balance of power.
 local function memberReset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_illidari_council.cpp:251 (base Reset arm 1; pulse disable)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ IllidariCouncilBossAI::Reset(): DoCastSelf(BALANCE_OF_POWER,
     -- true) is Reset-only (boss_illidari_council.cpp). Alive-gated; the
@@ -655,7 +655,7 @@ local function gathiosEnterCombat(event, creature, target)
     for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
         illidari:DoZoneInCombat()
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_SEAL_OF_BLOOD)
     schedule(guid, "gathios_bless", 20000, function()
@@ -781,7 +781,7 @@ local function zerevorEnterCombat(event, creature, target)
         illidari:DoZoneInCombat()
     end
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:368: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     bossState(guid).canUseArcaneExplosion = true
     creature:CastSpell(creature, SPELL_DAMPEN_MAGIC)
@@ -800,7 +800,7 @@ end
 -- non-triggered self-cast 41478.
 local function zerevorReset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_illidari_council.cpp:251 (base Reset arm 1, chained; pulse disable)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     bossState(guid).canUseArcaneExplosion = true
     -- C++ zerevor Reset(): base (BALANCE_OF_POWER, true) + DoCastSelf
@@ -834,7 +834,7 @@ local function zerevorDoAction(event, creature, action)
     if action ~= 2 then -- ACTION_REFRESH_DAMPEN
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "zerevor_dampen", 50000, function()
         zerevorDampen(creature, guid)
     end)
@@ -919,7 +919,7 @@ local function malandeEnterCombat(event, creature, target)
         illidari:DoZoneInCombat()
     end
     creature:SetMeleeAttack(false) -- boss_illidari_council.cpp:451: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "malande_circle", 20000, function()
         malandeCircle(creature, guid)
@@ -976,7 +976,7 @@ local function verasEnterCombat(event, creature, target)
     for _, illidari in ipairs(creature:GetCreaturesInGrid(ENTRY_ILLIDARI_COUNCIL, 60)) do
         illidari:DoZoneInCombat()
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "veras_vanish", 18000, function()
         verasVanish(creature, guid)

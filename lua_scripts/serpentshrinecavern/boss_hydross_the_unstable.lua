@@ -424,7 +424,7 @@ end
 -- latch therefore fires only while hydrossState[guid] is nil, i.e.
 -- pre-pull / post-evade; in-combat switches summon/despawn directly.
 local function hydrossAIUpdate(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if hydrossState[guid] then
         return
     end
@@ -434,7 +434,7 @@ local function hydrossAIUpdate(event, creature)
 end
 
 local function hydrossEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(guid)
     hydrossState[guid] = freshHydrossState()
     creature:Talk(SAY_AGGRO)
@@ -452,16 +452,16 @@ local function hydrossEnterCombat(event, creature)
 end
 
 local function hydrossLeaveCombat(event, creature)
-    despawnBeams(creature:GetGUID())
-    despawnAdds(creature:GetGUID())
-    resetState(creature:GetGUID())
+    despawnBeams(creature:GetGUIDLow())
+    despawnAdds(creature:GetGUIDLow())
+    resetState(creature:GetGUIDLow())
     -- C++ Reset() :143 runs on evade: restore the clean model.
     creature:SetDisplayId(20162)
 end
 
 -- C++ KilledUnit: per-form slay line, no TYPEID gate.
 local function hydrossTargetDied(event, creature, victim)
-    local st = hydrossState[creature:GetGUID()]
+    local st = hydrossState[creature:GetGUIDLow()]
     local corrupted = st and st.corrupted or false
     if corrupted then
         creature:Talk(SAY_CORRUPT_SLAY)
@@ -471,21 +471,21 @@ local function hydrossTargetDied(event, creature, victim)
 end
 
 local function hydrossDied(event, creature, killer)
-    local st = hydrossState[creature:GetGUID()]
+    local st = hydrossState[creature:GetGUIDLow()]
     local corrupted = st and st.corrupted or false
     if corrupted then
         creature:Talk(SAY_CORRUPT_DEATH)
     else
         creature:Talk(SAY_CLEAN_DEATH)
     end
-    despawnAdds(creature:GetGUID())
-    resetState(creature:GetGUID())
+    despawnAdds(creature:GetGUIDLow())
+    resetState(creature:GetGUIDLow())
 end
 
 local function hydrossReset(event, creature)
-    despawnBeams(creature:GetGUID())
-    despawnAdds(creature:GetGUID())
-    resetState(creature:GetGUID())
+    despawnBeams(creature:GetGUIDLow())
+    despawnAdds(creature:GetGUIDLow())
+    resetState(creature:GetGUIDLow())
     -- C++ Reset() :140-141: clean-form school immunities (frost-school
     -- immune, nature explicitly not) — the creature:ApplySpellImmune
     -- bridge (lua_creature_events.go).

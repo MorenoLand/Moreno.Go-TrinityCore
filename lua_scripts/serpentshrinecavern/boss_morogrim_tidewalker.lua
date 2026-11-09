@@ -275,7 +275,7 @@ local function morogrimTick(creature, guid)
 end
 
 local function morogrimEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetMorogrim(guid)
     morogrimState[guid] = freshMorogrimState()
     creature:Talk(SAY_AGGRO)
@@ -288,7 +288,7 @@ local function morogrimEnterCombat(event, creature)
 end
 
 local function morogrimLeaveCombat(event, creature)
-    resetMorogrim(creature:GetGUID())
+    resetMorogrim(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: NO TYPEID gate -> Talk(SAY_SLAY), C++-exact.
@@ -298,11 +298,11 @@ end
 
 local function morogrimDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    resetMorogrim(creature:GetGUID())
+    resetMorogrim(creature:GetGUIDLow())
 end
 
 local function morogrimReset(event, creature)
-    resetMorogrim(creature:GetGUID())
+    resetMorogrim(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MOROGRIM, 1, morogrimEnterCombat)
@@ -337,7 +337,7 @@ end
 
 local function globuleEnterCombat(event, creature)
     creature:SetMeleeAttack(false) -- boss_morogrim_tidewalker.cpp:344: custom UpdateAI never calls DoMeleeAttackIfReady (C++ comments "do NOT deal any melee damage to the target")
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(globuleTimers, guid)
     globuleTimers[guid] = CreateLuaEvent(function()
         globuleTick(creature, guid)
@@ -345,7 +345,7 @@ local function globuleEnterCombat(event, creature)
 end
 
 local function globuleCleanup(event, creature)
-    cancelPump(globuleTimers, creature:GetGUID())
+    cancelPump(globuleTimers, creature:GetGUIDLow())
 end
 
 -- C++ npc_water_globuleAI::Reset (boss_morogrim_tidewalker.cpp:319-326):

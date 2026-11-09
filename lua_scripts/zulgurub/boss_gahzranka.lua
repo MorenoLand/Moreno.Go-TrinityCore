@@ -99,7 +99,7 @@ local function gahzrankaEnterCombat(event, creature, target)
     creature:SetBossState(8, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "frostbreath", 8000, function()
         onFrostBreath(creature, guid)
@@ -113,14 +113,14 @@ local function gahzrankaEnterCombat(event, creature, target)
 end
 
 local function gahzrankaLeaveCombat(event, creature)
-    gahzrankaResetState(creature:GetGUID())
+    gahzrankaResetState(creature:GetGUIDLow())
 end
 
 local function gahzrankaDied(event, creature, killer)
     -- C++ JustDied (boss_gahzranka.cpp:50-52): _JustDied() only, writing
     -- SetBossState(DATA_GAHZRANKA 8, DONE) (ScriptedCreature.cpp:513-519).
     creature:SetBossState(8, 3)
-    gahzrankaResetState(creature:GetGUID())
+    gahzrankaResetState(creature:GetGUIDLow())
 end
 
 local function gahzrankaReset(event, creature)
@@ -130,7 +130,7 @@ local function gahzrankaReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(8) ~= 3 then
         creature:SetBossState(8, 0)
     end
-    gahzrankaResetState(creature:GetGUID())
+    gahzrankaResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GAHZRANKA, 1, gahzrankaEnterCombat)

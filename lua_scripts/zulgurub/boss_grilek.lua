@@ -93,7 +93,7 @@ local function grilekEnterCombat(event, creature, target)
     creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "avatar", math.random(15000, 25000), function()
         onAvatar(creature, guid)
@@ -104,7 +104,7 @@ local function grilekEnterCombat(event, creature, target)
 end
 
 local function grilekLeaveCombat(event, creature)
-    grilekResetState(creature:GetGUID())
+    grilekResetState(creature:GetGUIDLow())
 end
 
 local function grilekDied(event, creature, killer)
@@ -112,7 +112,7 @@ local function grilekDied(event, creature, killer)
     -- SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
     -- (ScriptedCreature.cpp:513-519).
     creature:SetBossState(9, 3)
-    grilekResetState(creature:GetGUID())
+    grilekResetState(creature:GetGUIDLow())
 end
 
 local function grilekReset(event, creature)
@@ -122,7 +122,7 @@ local function grilekReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
         creature:SetBossState(9, 0)
     end
-    grilekResetState(creature:GetGUID())
+    grilekResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GRILEK, 1, grilekEnterCombat)

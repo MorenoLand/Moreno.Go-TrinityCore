@@ -458,14 +458,14 @@ end
 -- Damage pulls bypass the scan, so the veto never blocks a Go pull;
 -- the radius/valid-target legs are Go's aggro-scan guards.
 local function lurkerMoveInLOS(event, creature, unit)
-    if not lurkerStarted[creature:GetGUID()] then
+    if not lurkerStarted[creature:GetGUIDLow()] then
         return true
     end
 end
 
 local function lurkerEnterCombat(event, creature)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:99 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetLurker(guid)
     lurkerState[guid] = freshLurkerState()
     lurkerStarted[guid] = true
@@ -477,20 +477,20 @@ local function lurkerEnterCombat(event, creature)
 end
 
 local function lurkerLeaveCombat(event, creature)
-    despawnLurkerAdds(creature:GetGUID())
-    resetLurker(creature:GetGUID())
-    lurkerStarted[creature:GetGUID()] = nil
+    despawnLurkerAdds(creature:GetGUIDLow())
+    resetLurker(creature:GetGUIDLow())
+    lurkerStarted[creature:GetGUIDLow()] = nil
 end
 
 local function lurkerDied(event, creature, killer)
-    despawnLurkerAdds(creature:GetGUID())
-    resetLurker(creature:GetGUID())
-    lurkerStarted[creature:GetGUID()] = nil
+    despawnLurkerAdds(creature:GetGUIDLow())
+    resetLurker(creature:GetGUIDLow())
+    lurkerStarted[creature:GetGUIDLow()] = nil
 end
 
 local function lurkerReset(event, creature)
-    lurkerStarted[creature:GetGUID()] = nil
-    despawnLurkerAdds(creature:GetGUID())
+    lurkerStarted[creature:GetGUIDLow()] = nil
+    despawnLurkerAdds(creature:GetGUIDLow())
     -- C++ boss_the_lurker_below::Reset (boss_lurker_below.cpp:147-156):
     -- me->SetSwim(true) -> me->SetDisableGravity(true) (:150), both
     -- ported via their creature bridges, in C++ arm order ->
@@ -558,7 +558,7 @@ end
 local function ambusherEnterCombat(event, creature)
     creature:SetMeleeAttack(false) -- boss_lurker_below.cpp:427: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:400 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetAmbusher(guid)
     ambusherState[guid] = freshAmbusherState()
     ambusherTimers[guid] = CreateLuaEvent(function()
@@ -567,7 +567,7 @@ local function ambusherEnterCombat(event, creature)
 end
 
 local function ambusherCleanup(event, creature)
-    resetAmbusher(creature:GetGUID())
+    resetAmbusher(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_AMBUSHER, 1, ambusherEnterCombat)

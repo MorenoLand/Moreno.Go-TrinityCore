@@ -347,7 +347,7 @@ local function karathressTick(creature, guid)
 end
 
 local function karathressEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(karathressState, guid)
     karathressState[guid] = freshKarathressState()
     creature:Talk(SAY_AGGRO)
@@ -357,7 +357,7 @@ local function karathressEnterCombat(event, creature)
 end
 
 local function karathressLeaveCombat(event, creature)
-    resetState(karathressState, creature:GetGUID())
+    resetState(karathressState, creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: unconditional Talk(SAY_SLAY) — no TYPEID gate.
@@ -372,11 +372,11 @@ end
 local function karathressDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SummonCreature(22820, 446.78, -542.76, -7.54773, 0.401581, 2, 3600000)
-    resetState(karathressState, creature:GetGUID())
+    resetState(karathressState, creature:GetGUIDLow())
 end
 
 local function karathressReset(event, creature)
-    resetState(karathressState, creature:GetGUID())
+    resetState(karathressState, creature:GetGUIDLow())
 end
 
 -- C++ Initialize(): leeching throw 20000, beast within 30000,
@@ -454,7 +454,7 @@ local function sharkkisTick(creature, guid)
 end
 
 local function sharkkisEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(sharkkisState, guid)
     sharkkisState[guid] = freshSharkkisState()
     pumpTimers[guid] = CreateLuaEvent(function()
@@ -463,7 +463,7 @@ local function sharkkisEnterCombat(event, creature)
 end
 
 local function sharkkisLeaveCombat(event, creature)
-    resetState(sharkkisState, creature:GetGUID())
+    resetState(sharkkisState, creature:GetGUIDLow())
 end
 
 -- C++ advisor JustDied (boss_fathomlord_karathress.cpp:355/:487/:609):
@@ -483,12 +483,12 @@ local function relayAdvisorDeath(creature, say, spell)
 end
 
 local function sharkkisDied(event, creature, killer)
-    resetState(sharkkisState, creature:GetGUID())
+    resetState(sharkkisState, creature:GetGUIDLow())
     relayAdvisorDeath(creature, SAY_GAIN_ABILITY1, SPELL_POWER_OF_SHARKKIS)
 end
 
 local function sharkkisReset(event, creature)
-    resetState(sharkkisState, creature:GetGUID())
+    resetState(sharkkisState, creature:GetGUIDLow())
 end
 
 -- C++ Initialize(): frost shock 25000, spitfire 60000, poison
@@ -548,7 +548,7 @@ local function tidalvessTick(creature, guid)
 end
 
 local function tidalvessEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(tidalvessState, guid)
     tidalvessState[guid] = freshTidalvessState()
     creature:CastSpell(creature, SPELL_WINDFURY_WEAPON)
@@ -558,16 +558,16 @@ local function tidalvessEnterCombat(event, creature)
 end
 
 local function tidalvessLeaveCombat(event, creature)
-    resetState(tidalvessState, creature:GetGUID())
+    resetState(tidalvessState, creature:GetGUIDLow())
 end
 
 local function tidalvessDied(event, creature, killer)
-    resetState(tidalvessState, creature:GetGUID())
+    resetState(tidalvessState, creature:GetGUIDLow())
     relayAdvisorDeath(creature, SAY_GAIN_ABILITY2, SPELL_POWER_OF_TIDALVESS)
 end
 
 local function tidalvessReset(event, creature)
-    resetState(tidalvessState, creature:GetGUID())
+    resetState(tidalvessState, creature:GetGUIDLow())
 end
 
 -- C++ Initialize(): water bolt volley 35000, tidal surge 15000
@@ -621,7 +621,7 @@ local function caribdisTick(creature, guid)
 end
 
 local function caribdisEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(caribdisState, guid)
     caribdisState[guid] = freshCaribdisState()
     pumpTimers[guid] = CreateLuaEvent(function()
@@ -630,16 +630,16 @@ local function caribdisEnterCombat(event, creature)
 end
 
 local function caribdisLeaveCombat(event, creature)
-    resetState(caribdisState, creature:GetGUID())
+    resetState(caribdisState, creature:GetGUIDLow())
 end
 
 local function caribdisDied(event, creature, killer)
-    resetState(caribdisState, creature:GetGUID())
+    resetState(caribdisState, creature:GetGUIDLow())
     relayAdvisorDeath(creature, SAY_GAIN_ABILITY3, SPELL_POWER_OF_CARIBDIS)
 end
 
 local function caribdisReset(event, creature)
-    resetState(caribdisState, creature:GetGUID())
+    resetState(caribdisState, creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_KARATHRESS, 1, karathressEnterCombat)

@@ -208,7 +208,7 @@ end
 
 -- C++ JustEngagedWith: Talk(SAY_AGGRO) + the six initial arms.
 local function shahrazEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     enraged[guid] = false
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -250,14 +250,14 @@ end
 -- Talk(SAY_DEATH).
 local function shahrazDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    shahrazResetState(creature:GetGUID())
+    shahrazResetState(creature:GetGUIDLow())
 end
 
 -- C++ DamageTaken: !_enraged and HealthBelowPctDamaged(10, damage)
 -- -> _enraged=true, triggered DoCastSelf(40867), Talk(EMOTE_ENRAGE)
 -- + Talk(SAY_ENRAGE).
 local function shahrazDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if enraged[guid] then
         return
     end
@@ -274,14 +274,14 @@ local function shahrazDamageTaken(event, creature, attacker, damage)
 end
 
 local function shahrazLeaveCombat(event, creature)
-    shahrazResetState(creature:GetGUID())
+    shahrazResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: _DespawnAtEvade() -> DespawnOrUnsummon()
     -- (supremus precedent).
     creature:Despawn()
 end
 
 local function shahrazReset(event, creature)
-    shahrazResetState(creature:GetGUID())
+    shahrazResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MOTHER_SHAHRAZ, 1, shahrazEnterCombat)

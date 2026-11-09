@@ -355,7 +355,7 @@ local function marliEnterCombat(event, creature, target)
     creature:SetBossState(2, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     marliState(guid).phase = 1
     creature:Talk(SAY_AGGRO)
@@ -365,7 +365,7 @@ local function marliEnterCombat(event, creature, target)
 end
 
 local function marliWipe(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
 end
@@ -384,7 +384,7 @@ local function marliReset(event, creature)
     -- summons.DespawnAll (:102) is vacuous here: no Lua arm summons
     -- (hatch casts spawn nothing, spawn-of-marli never spawns), so
     -- the summons list is always empty in this model.
-    local wasPhaseThree = marliState(creature:GetGUID()).phase == PHASE_THREE
+    local wasPhaseThree = marliState(creature:GetGUIDLow()).phase == PHASE_THREE
     marliWipe(event, creature)
     if creature:IsAlive() then
         if wasPhaseThree then
@@ -426,18 +426,18 @@ local function onSpawnLevelUp(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_SPAWN, 1, function(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "levelup", 3000, function()
         onSpawnLevelUp(creature, guid)
     end)
 end)
 RegisterCreatureEvent(ENTRY_SPAWN, 2, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_SPAWN, 4, function(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_SPAWN, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)

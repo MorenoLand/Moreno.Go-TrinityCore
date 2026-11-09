@@ -573,7 +573,7 @@ local function leotherasTick(creature, guid)
 end
 
 local function leotherasEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetCreature(leotherasTimers, leotherasState, guid)
     leotherasState[guid] = freshLeotherasState()
     creature:Talk(SAY_AGGRO)
@@ -583,12 +583,12 @@ local function leotherasEnterCombat(event, creature)
 end
 
 local function leotherasLeaveCombat(event, creature)
-    resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
+    resetCreature(leotherasTimers, leotherasState, creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: TYPEID_PLAYER gate -> per-form slay line.
 local function leotherasTargetDied(event, creature, victim)
-    local st = leotherasState[creature:GetGUID()]
+    local st = leotherasState[creature:GetGUIDLow()]
     if victim:GetObjectType() == "Player" then
         if st and st.demonForm then
             creature:Talk(SAY_DEMON_SLAY)
@@ -603,11 +603,11 @@ end
 -- instance SetData(DONE) (blocked).
 local function leotherasDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    local st = leotherasState[creature:GetGUID()]
+    local st = leotherasState[creature:GetGUIDLow()]
     if st and st.demonCopy then
         st.demonCopy:Despawn()
     end
-    resetCreature(leotherasTimers, leotherasState, creature:GetGUID())
+    resetCreature(leotherasTimers, leotherasState, creature:GetGUIDLow())
 end
 
 -- C++ boss_leotheras_the_blind.cpp:280-297 MoveInLineOfSight: the
@@ -624,7 +624,7 @@ local function leotherasMoveInLOS(event, creature, unit)
 end
 
 local function leotherasReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ Reset() :249 CheckChannelers() — first arm, before
     -- Initialize() (C++ arm order).
     if not creature:IsDead() then
@@ -691,7 +691,7 @@ end
 
 local function demonEnterCombat(event, creature)
     creature:SetMeleeAttack(false) -- boss_leotheras_the_blind.cpp:660: custom UpdateAI never calls DoMeleeAttackIfReady (C++ comments "Do NOT deal any melee damage to the target")
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetCreature(demonTimers, demonState, guid)
     demonState[guid] = freshDemonState()
     creature:Talk(SAY_FREE)
@@ -701,7 +701,7 @@ local function demonEnterCombat(event, creature)
 end
 
 local function demonCleanup(event, creature)
-    resetCreature(demonTimers, demonState, creature:GetGUID())
+    resetCreature(demonTimers, demonState, creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: TYPEID_PLAYER gate -> Talk(SAY_DEMON_SLAY).
@@ -773,7 +773,7 @@ end
 
 local function binderEnterCombat(event, creature)
     creature:InterruptNonMeleeSpells(false) -- boss_leotheras_the_blind.cpp:731
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetCreature(binderTimers, binderState, guid)
     binderState[guid] = freshBinderState()
     binderTimers[guid] = CreateLuaEvent(function()
@@ -782,7 +782,7 @@ local function binderEnterCombat(event, creature)
 end
 
 local function binderCleanup(event, creature)
-    resetCreature(binderTimers, binderState, creature:GetGUID())
+    resetCreature(binderTimers, binderState, creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SPELLBINDER, 1, binderEnterCombat)
@@ -839,7 +839,7 @@ local function innerTick(creature, guid)
 end
 
 local function innerEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetCreature(innerTimers, innerState, guid)
     innerState[guid] = freshInnerState()
     innerTimers[guid] = CreateLuaEvent(function()
@@ -848,7 +848,7 @@ local function innerEnterCombat(event, creature)
 end
 
 local function innerCleanup(event, creature)
-    resetCreature(innerTimers, innerState, creature:GetGUID())
+    resetCreature(innerTimers, innerState, creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_INNER_DEMON, 1, innerEnterCombat)

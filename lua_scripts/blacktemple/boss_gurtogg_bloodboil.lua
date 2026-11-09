@@ -536,7 +536,7 @@ function onChangePhase(creature, guid)
 end
 
 local function gurtoggEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { phase = PHASE_1 }
     creature:Talk(SAY_AGGRO)
@@ -556,7 +556,7 @@ local function gurtoggResetState(guid)
 end
 
 local function gurtoggLeaveCombat(event, creature)
-    gurtoggResetState(creature:GetGUID())
+    gurtoggResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: _DespawnAtEvade() (boss_gurtogg_bloodboil.cpp:140).
     creature:Despawn()
 end
@@ -573,11 +573,11 @@ end
 -- PlayDirectSound (SMSG_PLAY_SOUND). Death cleanup + sound.
 local function gurtoggDied(event, creature, killer)
     creature:PlayDirectSound(11439)
-    gurtoggResetState(creature:GetGUID())
+    gurtoggResetState(creature:GetGUIDLow())
 end
 
 local function gurtoggReset(event, creature)
-    gurtoggResetState(creature:GetGUID())
+    gurtoggResetState(creature:GetGUIDLow())
     -- C++ Reset() :105-106: remove the fel-rage taunt immunities
     -- (IMMUNITY_STATE/SPELL_AURA_MOD_TAUNT=11,
     -- IMMUNITY_EFFECT/SPELL_EFFECT_ATTACK_ME=114, both apply=false) —

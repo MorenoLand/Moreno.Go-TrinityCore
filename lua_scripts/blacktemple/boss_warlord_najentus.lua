@@ -249,7 +249,7 @@ local function onYell(creature, guid)
 end
 
 local function najentusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
@@ -276,7 +276,7 @@ local function najentusResetState(guid)
 end
 
 local function najentusLeaveCombat(event, creature)
-    najentusResetState(creature:GetGUID())
+    najentusResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: _EnterEvadeMode() + _DespawnAtEvade()
     -- (boss_warlord_najentus.cpp:77-80).
     creature:Despawn()
@@ -292,11 +292,11 @@ end
 -- C++ JustDied: Talk(SAY_DEATH).
 local function najentusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    najentusResetState(creature:GetGUID())
+    najentusResetState(creature:GetGUIDLow())
 end
 
 local function najentusReset(event, creature)
-    najentusResetState(creature:GetGUID())
+    najentusResetState(creature:GetGUIDLow())
 end
 
 -- C++ SpellHit: hit by 39948 (hurl spine) while carrying 39872
@@ -308,7 +308,7 @@ local function najentusSpellHit(event, creature, caster, spellId)
             and creature:HasAura(SPELL_TIDAL_SHIELD) then
         creature:RemoveAura(SPELL_TIDAL_SHIELD)
         creature:CastSpell(creature, SPELL_TIDAL_BURST, true)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelTimer(guid, "spine")
         schedule(guid, "spine", 2000, function()
             onSpine(creature, guid)

@@ -464,7 +464,7 @@ local function thekalEnterCombat(event, creature, target)
     creature:SetBossState(4, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local e = encounterState(creature)
     cancelTimers(guid)
     clearEncounter(e)
@@ -481,7 +481,7 @@ end
 -- C++ DamageTaken fires pre-damage (Unit::DealDamage calls it before
 -- ModifyHealth), so both checks below are C++-exact with no adjustment.
 local function thekalDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local e = encounterState(creature)
     e.thekalGuid = guid
     e.thekal = creature
@@ -639,7 +639,7 @@ local function lorkhanReset(e, creature, guid)
 end
 
 local function lorkhanEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local e = encounterState(creature)
     cancelTimers(guid)
     e.lorkhanDead = false
@@ -660,7 +660,7 @@ local function lorkhanEnterCombat(event, creature, target)
 end
 
 local function lorkhanDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local e = encounterState(creature)
     e.lorkhanGuid = guid
     e.lorkhan = creature
@@ -676,16 +676,16 @@ end
 RegisterCreatureEvent(ENTRY_LORKHAN, 1, lorkhanEnterCombat)
 RegisterCreatureEvent(ENTRY_LORKHAN, 2, function(event, creature)
     local e = encounterState(creature)
-    lorkhanReset(e, creature, creature:GetGUID())
+    lorkhanReset(e, creature, creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_LORKHAN, 4, function(event, creature, killer)
     local e = encounterState(creature)
-    lorkhanReset(e, creature, creature:GetGUID())
+    lorkhanReset(e, creature, creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_LORKHAN, 9, lorkhanDamageTaken)
 RegisterCreatureEvent(ENTRY_LORKHAN, 23, function(event, creature)
     local e = encounterState(creature)
-    lorkhanReset(e, creature, creature:GetGUID())
+    lorkhanReset(e, creature, creature:GetGUIDLow())
 end)
 
 -- Zealot Zath (npc_zealot_zath, C++ ScriptName for 11348).
@@ -750,7 +750,7 @@ local function zathReset(e, creature, guid)
 end
 
 local function zathEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local e = encounterState(creature)
     cancelTimers(guid)
     e.zathDead = false
@@ -774,7 +774,7 @@ local function zathEnterCombat(event, creature, target)
 end
 
 local function zathDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local e = encounterState(creature)
     e.zathGuid = guid
     e.zath = creature
@@ -790,14 +790,14 @@ end
 RegisterCreatureEvent(ENTRY_ZATH, 1, zathEnterCombat)
 RegisterCreatureEvent(ENTRY_ZATH, 2, function(event, creature)
     local e = encounterState(creature)
-    zathReset(e, creature, creature:GetGUID())
+    zathReset(e, creature, creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_ZATH, 4, function(event, creature, killer)
     local e = encounterState(creature)
-    zathReset(e, creature, creature:GetGUID())
+    zathReset(e, creature, creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_ZATH, 9, zathDamageTaken)
 RegisterCreatureEvent(ENTRY_ZATH, 23, function(event, creature)
     local e = encounterState(creature)
-    zathReset(e, creature, creature:GetGUID())
+    zathReset(e, creature, creature:GetGUIDLow())
 end)

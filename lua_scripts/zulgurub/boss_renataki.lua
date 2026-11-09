@@ -196,7 +196,7 @@ RegisterCreatureEvent(ENTRY_RENATAKI, 1, function(event, creature)
     creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(guid)
     schedule(guid, "invisible", math.random(8000, 18000), function()
         onInvisible(creature, guid)
@@ -216,7 +216,7 @@ RegisterCreatureEvent(ENTRY_RENATAKI, 1, function(event, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 2, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 4, function(event, creature)
@@ -224,7 +224,7 @@ RegisterCreatureEvent(ENTRY_RENATAKI, 4, function(event, creature)
     -- writing SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
     -- (ScriptedCreature.cpp:513-519).
     creature:SetBossState(9, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_RENATAKI, 23, function(event, creature)
@@ -234,5 +234,5 @@ RegisterCreatureEvent(ENTRY_RENATAKI, 23, function(event, creature)
     if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
         creature:SetBossState(9, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)

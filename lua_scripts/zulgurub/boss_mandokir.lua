@@ -244,7 +244,7 @@ local function mandokirEnterCombat(event, creature, target)
     -- IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(6, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; me-form DoZone already ported at handler tail)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     creature:Talk(SAY_AGGRO)
@@ -293,7 +293,7 @@ local function mandokirTargetDied(event, creature, victim)
     if victim:GetObjectType() ~= "Player" then
         return
     end
-    local st = mandokirState(creature:GetGUID())
+    local st = mandokirState(creature:GetGUIDLow())
     st.killCount = st.killCount + 1
     if st.killCount >= 3 then
         creature:Talk(SAY_DING_KILL)
@@ -331,7 +331,7 @@ end
 -- on its 35s out-of-combat timer. Despawn is not death, so no
 -- Ohgan-frenzy relay fires.
 local function mandokirLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnMandokirSpirits(guid)
     local ohgan = mandokirOhgan[guid]
     if ohgan then
@@ -350,7 +350,7 @@ end
 -- mandokirLeaveCombat above (ev2-only: ev23 also fires on death,
 -- where Ohgan must linger).
 local function mandokirDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnMandokirSpirits(guid)
     creature:SetBossState(6, 3)
     mandokirResetState(guid)
@@ -372,7 +372,7 @@ local function mandokirReset(event, creature)
     -- (ev23 also fires on death, where C++ JustDied keeps Ohgan). The
     -- EVENT_STARTED clear rides the unported intro machine; the
     -- JustReachedHome clear is ported below.
-    mandokirResetState(creature:GetGUID())
+    mandokirResetState(creature:GetGUIDLow())
     if creature:GetZ() > 140.0 then
         if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
             creature:SetBossState(6, 0)
@@ -409,7 +409,7 @@ local function onSunderArmor(creature, guid)
 end
 
 local function ohganEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "sunder", 5000, function()
         onSunderArmor(creature, guid)
@@ -418,10 +418,10 @@ end
 
 RegisterCreatureEvent(ENTRY_OHGAN, 1, ohganEnterCombat)
 RegisterCreatureEvent(ENTRY_OHGAN, 2, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_OHGAN, 4, function(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ SummonedCreatureDies (boss_mandokir.cpp:184-190): frenzy
     -- self-cast + Talk on the boss; relayed via FindNearestCreature
     -- (garaxxas/delrissa liveness twin — the boss object is not
@@ -435,7 +435,7 @@ RegisterCreatureEvent(ENTRY_OHGAN, 4, function(event, creature, killer)
     end
 end)
 RegisterCreatureEvent(ENTRY_OHGAN, 23, function(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "sunder", 5000, function()
         onSunderArmor(creature, guid)
@@ -482,18 +482,18 @@ local function speakerArmTimers(creature, guid)
 end
 
 local function speakerReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     speakerArmTimers(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_SPEAKER, 1, function(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     speakerArmTimers(creature, guid)
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 2, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 4, function(event, creature, killer)
     -- C++ npc_vilebranch_speakerAI::JustDied (boss_mandokir.cpp:377-380):
@@ -501,7 +501,7 @@ RegisterCreatureEvent(ENTRY_SPEAKER, 4, function(event, creature, killer)
     -- separate creature (entry 11391, ScriptedAI) but the write is
     -- keyed by map+instance, so it lands on the same encounter id.
     creature:SetBossState(6, 4)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_SPEAKER, 23, speakerReset)
 

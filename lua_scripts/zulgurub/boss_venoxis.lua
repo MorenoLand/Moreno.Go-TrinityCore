@@ -318,7 +318,7 @@ end
 -- adjustment. The if/else-if chain is C++-exact: a single hit cannot arm
 -- both the transform and the frenzy.
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = venoxisState[guid]
     if not st then
         return
@@ -343,7 +343,7 @@ RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
     -- IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(1, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; me-form DoZone already ported at handler tail, C++ :141)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ boss_venoxisAI::JustEngagedWith (boss_venoxis.cpp:125-141):
     -- SetReactState(REACT_AGGRESSIVE); BossAI::JustEngagedWith base
@@ -374,7 +374,7 @@ RegisterCreatureEvent(ENTRY_VENOXIS, 1, function(event, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 2, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 4, function(event, creature)
@@ -384,7 +384,7 @@ RegisterCreatureEvent(ENTRY_VENOXIS, 4, function(event, creature)
     creature:SetBossState(1, 3)
     creature:Talk(TALK_VENOXIS_DEATH)
     creature:RemoveAllAuras()
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_VENOXIS, 9, onDamageTaken)
@@ -399,7 +399,7 @@ RegisterCreatureEvent(ENTRY_VENOXIS, 23, function(event, creature)
     if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
         creature:SetBossState(1, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:RemoveAllAuras()
     creature:SetReactState(REACT_PASSIVE)

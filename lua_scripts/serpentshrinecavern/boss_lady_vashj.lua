@@ -515,7 +515,7 @@ local function despawnStoredSummons(guid, withChannels)
 end
 
 local function vashjEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetVashj(guid)
     vashjState[guid] = freshVashjState()
     -- C++ JustEngagedWith tainted-core sweep (D5): every map player
@@ -537,8 +537,8 @@ end
 local function vashjLeaveCombat(event, creature)
     -- C++ elementals KillSelf when vashj leaves combat; channels are
     -- Reset-only (not leave-combat), so only enchanted despawn here.
-    despawnStoredSummons(creature:GetGUID(), false)
-    resetVashj(creature:GetGUID())
+    despawnStoredSummons(creature:GetGUIDLow(), false)
+    resetVashj(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY), no TYPEID gate.
@@ -550,8 +550,8 @@ local function vashjDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     -- C++ elementals KillSelf on vashj death; channels are untouched
     -- by JustDied (CORPSE_DESPAWN is engine-side).
-    despawnStoredSummons(creature:GetGUID(), false)
-    resetVashj(creature:GetGUID())
+    despawnStoredSummons(creature:GetGUIDLow(), false)
+    resetVashj(creature:GetGUIDLow())
 end
 
 local vashjCanAttack = {}
@@ -559,10 +559,10 @@ local vashjCanAttack = {}
 local function vashjReset(event, creature)
     -- C++ Reset kills each stored shield channel (JUST_DIED) and the
     -- elementals KillSelf once vashj is out of combat (D3/D7).
-    despawnStoredSummons(creature:GetGUID(), true)
-    resetVashj(creature:GetGUID())
+    despawnStoredSummons(creature:GetGUIDLow(), true)
+    resetVashj(creature:GetGUIDLow())
     -- C++ Reset: non-JustCreated -> CanAttack true (wipe case).
-    vashjCanAttack[creature:GetGUID()] = true
+    vashjCanAttack[creature:GetGUIDLow()] = true
     -- C++ boss_lady_vashjAI::Reset has no speed leg: the MOVE_WALK /
     -- MOVE_RUN 0.6f pair (:591-592) belongs to npc_enchanted_elementalAI::
     -- Reset, and the elemental is unregistered (movement-driven, header).
@@ -582,7 +582,7 @@ end
 local vashjSaidIntro = {}
 
 local function vashjMoveInLOS(event, creature, unit)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not vashjSaidIntro[guid] then
         vashjSaidIntro[guid] = true
         vashjCanAttack[guid] = false
@@ -677,7 +677,7 @@ local function elementalEnterCombat(event, creature, target)
     if target ~= nil then
         creature:AddThreat(target, 0.1)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetElemental(guid)
     elementalState[guid] = freshElementalState()
     elementalTimers[guid] = CreateLuaEvent(function()
@@ -686,7 +686,7 @@ local function elementalEnterCombat(event, creature, target)
 end
 
 local function elementalCleanup(event, creature)
-    resetElemental(creature:GetGUID())
+    resetElemental(creature:GetGUIDLow())
 end
 
 -- C++ npc_tainted_elemental::JustDied (boss_lady_vashj.cpp:685):
@@ -697,10 +697,10 @@ end
 -- vashj, nil when dead or absent; vashjState is shared in-file, so the
 -- clamp lands directly on the pump's countdown.
 local function elementalDied(event, creature)
-    resetElemental(creature:GetGUID())
+    resetElemental(creature:GetGUIDLow())
     local vashj = creature:FindNearestCreature(ENTRY_LADY_VASHJ, 100.0)
     if vashj ~= nil then
-        local st = vashjState[vashj:GetGUID()]
+        local st = vashjState[vashj:GetGUIDLow()]
         if st ~= nil and st.taintedElemental ~= nil and st.taintedElemental > 50000 then
             st.taintedElemental = 50000
         end

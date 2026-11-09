@@ -194,7 +194,7 @@ local function hakkarEnterCombat(event, creature, target)
     creature:SetBossState(5, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "bloodsiphon", 90000, function()
@@ -233,14 +233,14 @@ local function hakkarEnterCombat(event, creature, target)
 end
 
 local function hakkarLeaveCombat(event, creature)
-    hakkarResetState(creature:GetGUID())
+    hakkarResetState(creature:GetGUIDLow())
 end
 
 local function hakkarDied(event, creature, killer)
     -- C++ JustDied (boss_hakkar.cpp:80-82): _JustDied() only, writing
     -- SetBossState(DATA_HAKKAR 5, DONE) (ScriptedCreature.cpp:513-519).
     creature:SetBossState(5, 3)
-    hakkarResetState(creature:GetGUID())
+    hakkarResetState(creature:GetGUIDLow())
 end
 
 local function hakkarReset(event, creature)
@@ -250,7 +250,7 @@ local function hakkarReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
         creature:SetBossState(5, 0)
     end
-    hakkarResetState(creature:GetGUID())
+    hakkarResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_HAKKAR, 1, hakkarEnterCombat)

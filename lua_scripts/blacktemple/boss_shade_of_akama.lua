@@ -110,7 +110,7 @@ local ENTRY_AKAMA_SHADE = 23191 -- black_temple.h:88 (NPC_AKAMA_SHADE)
 local akamaYelledOnce = {}
 
 local function akamaShadeDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ DamageTaken HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407,
     -- pre-damage): strict-< against the floored integer threshold (the
     -- old GetHealthPct() < 20 fired up to 1 HP early — maulgar/ironaya
@@ -256,7 +256,7 @@ end
 local SAY_DEAD = 4
 
 local function akamaShadeDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEAD)
 end
 
@@ -270,8 +270,8 @@ local function akamaShadeReset(event, creature)
     -- gossip-select port below depends on (without it the hook can
     -- never fire after the first SHADE_START removal).
     -- SetFaction is bridged (lua_creature_events.go:1125).
-    akamaYelledOnce[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    akamaYelledOnce[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() then
         creature:SetFaction(1820)
         creature:CastSpell(creature, SPELL_STEALTH)
@@ -292,7 +292,7 @@ local function akamaShadeGossipSelect(event, player, creature, sender, action, c
     end
     player:GossipClearMenu()
     player:GossipComplete()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "shade_start", 500, function()
         -- C++ EVENT_SHADE_START (boss_shade_of_akama.cpp:460-467):
         -- SetBossState IN_PROGRESS (no bridge) + RemoveFlag(UNIT_NPC_FLAGS,

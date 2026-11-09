@@ -1158,7 +1158,7 @@ onQuietSuicide = function(creature, guid)
     if akama then
         akama:SetReactState(0)
         akama:AttackStop()
-        cancelTimers(akama:GetGUID())
+        cancelTimers(akama:GetGUIDLow())
     end
 end
 
@@ -1167,7 +1167,7 @@ end
 -- convention). Berserk 25min one-shot, phase-1 schedule, taunt
 -- {30s,60s}. The 10s evade check has no boundary bridge.
 local function illidanEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     illidanState[guid] = { phase = PHASE_1, dead = false,
                            isDemon = false, pillarIndex = 0,
                            flameCount = 0 }
@@ -1191,11 +1191,11 @@ end
 -- path. Then the 90%/65%/30% phase arms (strictly-below-pct on
 -- current health, C++ HealthBelowPct — pre-damage value).
 local function illidanDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = getIllidanState(guid)
     local health = creature:GetHealth()
     if health > 0 and damage >= health
-            and (attacker == nil or attacker:GetGUID() ~= guid) then
+            and (attacker == nil or attacker:GetGUIDLow() ~= guid) then
         damage = health - 1
         if not state.dead then
             if state.isDemon then
@@ -1240,7 +1240,7 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                 local maiev = creature:FindNearestCreature(
                     ENTRY_MAIEV, 100.0)
                 if maiev then
-                    cancelTimers(maiev:GetGUID())
+                    cancelTimers(maiev:GetGUIDLow())
                     maiev:SetReactState(0)
                     maiev:AttackStop()
                     local face = math.atan2(creature:GetY()
@@ -1249,9 +1249,9 @@ local function illidanDamageTaken(event, creature, attacker, damage)
                     if face < 0 then face = face + 2 * math.pi end
                     maiev:SetFacingTo(face)
                     maiev:Talk(SAY_MAIEV_FINISHED)
-                    schedule(maiev:GetGUID(), "outroText",
+                    schedule(maiev:GetGUIDLow(), "outroText",
                         28000, function()
-                            onMaievOutroText(maiev, maiev:GetGUID())
+                            onMaievOutroText(maiev, maiev:GetGUIDLow())
                         end)
                 end
             end
@@ -1347,7 +1347,7 @@ local function illidanDoAction(event, creature, action)
     if action ~= ACTION_FLAME_DEAD then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = getIllidanState(guid)
     state.flameCount = state.flameCount + 1
     if state.flameCount < 2 then
@@ -1382,7 +1382,7 @@ local function illidanDoAction(event, creature, action)
 end
 
 local function illidanCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     illidanState[guid] = nil
     if event == 2 or event == 23 then
@@ -1441,7 +1441,7 @@ local function onHealingPotion(creature, guid)
 end
 
 local function akamaEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "healingPotion", 1000, function()
         onHealingPotion(creature, guid)
     end)
@@ -1457,7 +1457,7 @@ local function akamaDamageTaken(event, creature, attacker, damage)
 end
 
 local function akamaCleanup(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_AKAMA, 1, akamaEnterCombat)
@@ -1506,7 +1506,7 @@ local function akamaDoAction(event, creature, action)
     if gate ~= nil then
         gate:SetGoState(0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "akamaThanks", 2000, function()
         creature:Talk(SAY_AKAMA_SALUTE)
     end)
@@ -1594,7 +1594,7 @@ local function onEngage(creature, guid)
 end
 
 local function flameEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "engage", 3000, function()
         onEngage(creature, guid)
     end)
@@ -1608,7 +1608,7 @@ end
 -- timer arming is redundant
 -- with the EnterCombat arming — modeled on combat only.
 local function flameReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ flame Reset(): DoCastSelf(SPELL_FLAME_TEAR_OF_AZZINOTH, true)
     -- is Reset-only (boss_illidan.cpp; the REACT_PASSIVE arm is PORTED
@@ -1624,7 +1624,7 @@ local function flameReset(event, creature)
 end
 
 local function flameCleanup(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if event == 4 then
         -- C++ npc_flame_of_azzinoth::JustDied (boss_illidan.cpp:1537-1541):
         -- illidan->AI()->DoAction(ACTION_FLAME_DEAD); the instance-GUID
@@ -1753,7 +1753,7 @@ end
 -- (the taunt arm is relocated here from JustAppeared —
 -- documented).
 local function maievEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     maievState[guid] = { canDown = true }
     schedule(guid, "cageTrap", 30000, function()
         onCageTrap(creature, guid)
@@ -1775,7 +1775,7 @@ end
 -- (the ACTION_MAIEV_DOWN_FADE re-arm lives in the unmodeled
 -- maiev-down AuraScript — standing AuraScript gap).
 local function maievDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = getMaievState(guid)
     local health = creature:GetHealth()
     if health > 0 and damage >= health and state.canDown then
@@ -1787,7 +1787,7 @@ local function maievDamageTaken(event, creature, attacker, damage)
 end
 
 local function maievCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     maievState[guid] = nil
 end
@@ -1892,7 +1892,7 @@ local function bladeReset(event, creature)
         -- AZZINOTH_CHANNEL leg on the flame GUID stays out: the
         -- flame GUID capture rides the blade's JustSummoned, and
         -- the spell-effect-summon capture is unverified.
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "bladeTear", 3000, function()
             creature:CastSpell(creature, SPELL_SUMMON_TEAR_OF_AZZINOTH)
         end)
@@ -1900,7 +1900,7 @@ local function bladeReset(event, creature)
 end
 
 local function bladeClear(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 23, bladeReset)
@@ -1917,7 +1917,7 @@ RegisterCreatureEvent(ENTRY_BLADE_OF_AZZINOTH, 4, bladeClear)
 -- boss_illidan.cpp:1002, summons.DoAction fan-out — no bridge); its 2s
 -- re-arm effect is already covered by the ported Reset leg above.
 local function parasiticShadowfiendReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "shadowfiendAggressive", 2000, function()
         creature:SetReactState(2) -- REACT_AGGRESSIVE
         creature:DoZoneInCombat()
@@ -1925,7 +1925,7 @@ local function parasiticShadowfiendReset(event, creature)
 end
 
 local function parasiticShadowfiendClear(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_PARASITIC_SHADOWFIEND, 23, parasiticShadowfiendReset)

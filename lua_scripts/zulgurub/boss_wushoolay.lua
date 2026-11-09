@@ -111,7 +111,7 @@ local function wushoolayEnterCombat(event, creature, target)
     creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "cloud", math.random(5000, 10000), function()
         onLightningCloud(creature, guid)
@@ -122,7 +122,7 @@ local function wushoolayEnterCombat(event, creature, target)
 end
 
 local function wushoolayLeaveCombat(event, creature)
-    wushoolayResetState(creature:GetGUID())
+    wushoolayResetState(creature:GetGUIDLow())
 end
 
 local function wushoolayDied(event, creature, killer)
@@ -130,7 +130,7 @@ local function wushoolayDied(event, creature, killer)
     -- writing SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
     -- (ScriptedCreature.cpp:513-519).
     creature:SetBossState(9, 3)
-    wushoolayResetState(creature:GetGUID())
+    wushoolayResetState(creature:GetGUIDLow())
 end
 
 local function wushoolayReset(event, creature)
@@ -140,7 +140,7 @@ local function wushoolayReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
         creature:SetBossState(9, 0)
     end
-    wushoolayResetState(creature:GetGUID())
+    wushoolayResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_WUSHOOLAY, 1, wushoolayEnterCombat)

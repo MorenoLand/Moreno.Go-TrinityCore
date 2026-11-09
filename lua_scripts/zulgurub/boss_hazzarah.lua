@@ -136,7 +136,7 @@ local function hazzarahEnterCombat(event, creature, target)
     creature:SetBossState(9, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "manaburn", math.random(4000, 10000), function()
         onManaBurn(creature, guid)
@@ -150,7 +150,7 @@ local function hazzarahEnterCombat(event, creature, target)
 end
 
 local function hazzarahLeaveCombat(event, creature)
-    hazzarahResetState(creature:GetGUID())
+    hazzarahResetState(creature:GetGUIDLow())
 end
 
 local function hazzarahDied(event, creature, killer)
@@ -158,7 +158,7 @@ local function hazzarahDied(event, creature, killer)
     -- SetBossState(DATA_EDGE_OF_MADNESS 9, DONE)
     -- (ScriptedCreature.cpp:513-519).
     creature:SetBossState(9, 3)
-    hazzarahResetState(creature:GetGUID())
+    hazzarahResetState(creature:GetGUIDLow())
 end
 
 local function hazzarahReset(event, creature)
@@ -168,7 +168,7 @@ local function hazzarahReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(9) ~= 3 then
         creature:SetBossState(9, 0)
     end
-    hazzarahResetState(creature:GetGUID())
+    hazzarahResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_HAZZARAH, 1, hazzarahEnterCombat)

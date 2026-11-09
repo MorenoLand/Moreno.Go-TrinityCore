@@ -219,7 +219,7 @@ local function jindoEnterCombat(event, creature, target)
     creature:SetBossState(7, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(1)
     schedule(guid, "brainwash", 20000, function()
@@ -240,14 +240,14 @@ local function jindoEnterCombat(event, creature, target)
 end
 
 local function jindoLeaveCombat(event, creature)
-    jindoResetState(creature:GetGUID())
+    jindoResetState(creature:GetGUIDLow())
 end
 
 local function jindoDied(event, creature, killer)
     -- C++ JustDied (boss_jindo.cpp:84-86): _JustDied() only, writing
     -- SetBossState(DATA_JINDO 7, DONE) (ScriptedCreature.cpp:513-519).
     creature:SetBossState(7, 3)
-    jindoResetState(creature:GetGUID())
+    jindoResetState(creature:GetGUIDLow())
 end
 
 local function jindoReset(event, creature)
@@ -257,7 +257,7 @@ local function jindoReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
         creature:SetBossState(7, 0)
     end
-    jindoResetState(creature:GetGUID())
+    jindoResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_JINDO, 1, jindoEnterCombat)
@@ -279,7 +279,7 @@ local function onShadowShock(creature, guid)
 end
 
 local function shadeEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shock", 1000, function()
         onShadowShock(creature, guid)
@@ -287,15 +287,15 @@ local function shadeEnterCombat(event, creature, target)
 end
 
 local function shadeLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function shadeDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function shadeReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_shade_of_jindoAI::Reset (boss_jindo.cpp): re-arm the shadow
     -- shock timer (Initialize) and self-cast invisibility 24307 triggered.
     -- Reset runs at spawn and on evade, never on death; the cast does NOT
@@ -330,7 +330,7 @@ end
 
 local function wardEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_jindo.cpp:199: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "heal", 2000, function()
         onWardHeal(creature, guid)
@@ -338,15 +338,15 @@ local function wardEnterCombat(event, creature, target)
 end
 
 local function wardLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function wardDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function wardReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_WARD, 1, wardEnterCombat)
@@ -366,7 +366,7 @@ RegisterCreatureEvent(ENTRY_WARD, 23, wardReset)
 local function jindoSummoned(_, _, summoned)
     local entry = summoned:GetEntry()
     if entry == ENTRY_WARD then
-        local guid = summoned:GetGUID()
+        local guid = summoned:GetGUIDLow()
         schedule(guid, "heal", 2000, function()
             onWardHeal(summoned, guid)
         end)

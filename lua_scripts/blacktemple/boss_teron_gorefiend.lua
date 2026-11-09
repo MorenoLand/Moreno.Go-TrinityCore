@@ -284,7 +284,7 @@ local function onCrushingShadows(creature, guid)
 end
 
 local function teronEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
@@ -311,7 +311,7 @@ local function teronResetState(guid)
 end
 
 local function teronLeaveCombat(event, creature)
-    teronResetState(creature:GetGUID())
+    teronResetState(creature:GetGUIDLow())
     -- C++ EnterEvadeMode arm order: DoCast(SPELL_SHADOW_OF_DEATH_
     -- REMOVE 41999) self-cast (same AITARGET_SELF bridge as teronDied)
     -- -> summons.DespawnAll() (no summon-list bridge) -> _DespawnAtEvade()
@@ -346,11 +346,11 @@ local function teronDied(event, creature, killer)
     creature:RemoveAura(SPELL_POSSESS_SPIRIT_IMMUNE)
     creature:RemoveAura(SPELL_SPIRITUAL_VENGEANCE)
     creature:RemoveAura(SPELL_SHADOW_OF_DEATH)
-    teronResetState(creature:GetGUID())
+    teronResetState(creature:GetGUIDLow())
 end
 
 local function teronReset(event, creature)
-    teronResetState(creature:GetGUID())
+    teronResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 1, teronEnterCombat)
@@ -380,8 +380,8 @@ end
 
 local function teronJustSummoned(event, creature, summon)
     if summon:GetEntry() == ENTRY_DOOM_BLOSSOM then
-        local bossGuid = creature:GetGUID()
-        local blossomGuid = summon:GetGUID()
+        local bossGuid = creature:GetGUIDLow()
+        local blossomGuid = summon:GetGUIDLow()
         -- C++ npc_doom_blossom::Reset (boss_teron_gorefiend.cpp:225-236):
         -- MoveTakeoff +8z -> non-triggered self-cast 40186 -> DoZoneInCombat,
         -- C++ order. The +8z lift itself stays out (no MovePoint bridge);

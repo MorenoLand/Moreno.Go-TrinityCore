@@ -236,7 +236,7 @@ local function reliquaryEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:SetMeleeAttack(false) -- boss_reliquary_of_souls.cpp:140: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     reliquaryState[guid] = { phase = PHASE_SUFFERING }
     schedule(guid, "submerge", 10000, function()
@@ -250,17 +250,17 @@ local function reliquaryClear(guid)
 end
 
 local function reliquaryLeaveCombat(event, creature)
-    reliquaryClear(creature:GetGUID())
+    reliquaryClear(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: events.Reset + instance SetBossState(DONE) — the
 -- instance arm is blocked on the instance-script model.
 local function reliquaryDied(event, creature, killer)
-    reliquaryClear(creature:GetGUID())
+    reliquaryClear(creature:GetGUIDLow())
 end
 
 local function reliquaryReset(event, creature)
-    reliquaryClear(creature:GetGUID())
+    reliquaryClear(creature:GetGUIDLow())
     -- C++ boss_reliquary_of_souls.cpp:147: me->SetReactState(REACT_PASSIVE)
     -- (Reset: _Reset -> flip -> _inCombat = false).
     creature:SetReactState(0) -- REACT_PASSIVE
@@ -272,7 +272,7 @@ end
 -- JustSummoned link has no instance bridge; the DoZoneInCombat
 -- scheduler arm is PORTED (self-call, bridge live).
 local function soulReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     soulState[guid] = nil
     -- C++ boss_reliquary_of_souls.cpp:595: me->SetReactState(REACT_PASSIVE)
@@ -301,11 +301,11 @@ local function soulClear(guid)
 end
 
 local function soulLeaveCombat(event, creature)
-    soulClear(creature:GetGUID())
+    soulClear(creature:GetGUIDLow())
 end
 
 local function soulDied(event, creature, killer)
-    soulClear(creature:GetGUID())
+    soulClear(creature:GetGUIDLow())
 end
 
 -- C++ npc_enslaved_soul::DamageTaken (:625-634): lethal damage is zeroed
@@ -320,7 +320,7 @@ end
 local function soulDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local state = soulState[guid]
         if state == nil then
             state = {}
