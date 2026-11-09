@@ -42,8 +42,9 @@
 -- failure legs ride the same absent bridge) — documented-only below);
 -- KilledUnit Talk(SAY_SLAY 1) player-gated (event 3,
 -- victim:GetTypeId() == TYPEID_PLAYER — nalorakk precedent);
--- JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
--- bookkeeping has no bridge).
+-- JustDied Talk(SAY_DEATH 2) (event 4; the BossAI _JustDied
+-- SetBossState(DATA_ANUBARAK, DONE) + instanceData.anubarakDone
+-- flag is PORTED in anubarakDied below, tick 509).
 -- SAY_INTRO (5) is defined in the Yells enum but never fired by any
 -- C++ code in this file — nothing to port.
 -- Unmodeled (no bridges — documented, not wired):
@@ -173,6 +174,8 @@
 -- bridge on the Lua surface (razelikh precedent) — documented-only.
 
 local ENTRY_ANUBARAK = 29120
+local DATA_ANUBARAK = 2 -- azjol_nerub.h ANDataTypes
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 -- UnitDefines.h:125/149; RemoveFlag on UNIT_FIELD_FLAGS (59) is
 -- bridged (engine/world/lua_creature_events.go:725).
@@ -209,7 +212,25 @@ local function anubarakTargetDied(event, creature, victim)
 end
 
 local function anubarakDied(event, creature, killer)
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_ANUBARAK, DONE). The instance
+    -- flag is the ahnkahet-precedent twin (no boss-state-change
+    -- event exists).
+    creature:SetBossState(DATA_ANUBARAK, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.anubarakDone = true
+    end
     creature:Talk(SAY_DEATH)
+end
+
+-- C++ creatureData latching (instance_azjol_nerub.cpp:34:
+-- NPC_ANUBARAK -> DATA_ANUBARAK) — the instance-side
+-- OnCreatureCreate route is dead for static spawns
+-- (instance_hooks.go:553-562), so the latch rides ev5 here.
+local function anubarakSpawned(event, creature)
+    creature:SetGuidData(DATA_ANUBARAK)
 end
 
 -- C++ boss_anub_arak::Reset (boss_anubarak.cpp:120): clear the
@@ -235,5 +256,6 @@ RegisterCreatureEvent(ENTRY_ANUBARAK, 1, anubarakEnterCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 2, anubarakLeaveCombat)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 3, anubarakTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 4, anubarakDied)
+RegisterCreatureEvent(ENTRY_ANUBARAK, 5, anubarakSpawned)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 9, anubarakDamageTaken)
 RegisterCreatureEvent(ENTRY_ANUBARAK, 23, anubarakReset)

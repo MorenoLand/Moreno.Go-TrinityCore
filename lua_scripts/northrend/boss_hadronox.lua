@@ -13,7 +13,11 @@
 -- C++ DoCast default is triggered=false (vaelastrasz convention):
 -- creature:CastSpell(nil, spell) = DoCastVictim (moroes precedent).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler (gargolmar
--- precedent); BossAI _Reset/_JustDied instance bookkeeping has no bridge.
+-- precedent); the BossAI _JustDied SetBossState(DATA_HADRONOX,
+-- DONE) + instanceData.hadronoxDone flag is PORTED in hadronoxDied
+-- below (tick 509; the old "no bridge" claim is stale —
+-- creature:SetBossState, lua_creature_events.go:6419). The ev5
+-- SetGuidData(DATA_HADRONOX) latch is ported in hadronoxSpawn.
 -- Ported arms (C++-exact for the modeled arms):
 -- boss_hadronox: EVENT_PIERCE_ARMOR DoCastVictim(Pierce Armor 53418),
 -- randtime(4s,7s) init (C++ JustEngagedWith schedule), 10-15s repeat
@@ -193,6 +197,8 @@
 
 local ENTRY_HADRONOX = 28921
 local ENTRY_CRUSHER = 28922
+local DATA_HADRONOX = 1 -- azjol_nerub.h ANDataTypes
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local SPELL_PIERCE_ARMOR = 53418
 local SPELL_LEECH_POISON = 53030
@@ -366,11 +372,16 @@ end
 -- stays out (no creature motion slot, SetCombatReach comment).
 local function hadronoxSpawn(event, creature)
     creature:SetCombatReach(9)
-    hadronoxStep[creature:GetGUID()] = nil -- C++ ctor _step(0) twin
+    -- C++ creatureData latching (instance_azjol_nerub.cpp:33:
+    -- NPC_HADRONOX -> DATA_HADRONOX) — the instance-side
+    -- OnCreatureCreate route is dead for static spawns
+    -- (instance_hooks.go:553-562), so the latch rides ev5 here.
+    creature:SetGuidData(DATA_HADRONOX)
+    hadronoxStep[creature:GetGUIDLow()] = nil -- C++ ctor _step(0) twin
 end
 
 local function hadronoxEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     hadronoxEngaged[guid] = true
     cancelTimers(guid)
     schedule(guid, "piercearmor", math.random(4000, 7000), function()
@@ -388,8 +399,8 @@ local function hadronoxEnterCombat(event, creature, target)
 end
 
 local function hadronoxLeaveCombat(event, creature)
-    hadronoxEngaged[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    hadronoxEngaged[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode: _DespawnAtEvade(25s) on self + aura triggers
     -- (cross-creature legs unbridged) + summons.DespawnAll() (moot —
     -- nothing modeled) (boss_hadronox.cpp:258-268); the 25s is
@@ -399,14 +410,24 @@ local function hadronoxLeaveCombat(event, creature)
 end
 
 local function hadronoxDied(event, creature, killer)
-    hadronoxEngaged[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    hadronoxEngaged[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_HADRONOX, DONE). The instance
+    -- flag is the ahnkahet-precedent twin (no boss-state-change
+    -- event exists).
+    creature:SetBossState(DATA_HADRONOX, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.hadronoxDone = true
+    end
 end
 
 local function hadronoxReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    hadronoxEngaged[creature:GetGUID()] = nil
-    hadronoxStep[creature:GetGUID()] = nil -- C++ Reset SetStep(0) twin
+    cancelTimers(creature:GetGUIDLow())
+    hadronoxEngaged[creature:GetGUIDLow()] = nil
+    hadronoxStep[creature:GetGUIDLow()] = nil -- C++ Reset SetStep(0) twin
     -- No SetData(DATA_HADRONOX_WEBBED_DOORS) write here: C++ has no
     -- Reset() override at all — _doorsWebbed is cleared only in the
     -- ctor (:162) and InitializeAI (:284, spawn-time), and
@@ -421,11 +442,11 @@ end
 -- re-home to the step waypoint, stop attacking, and MovePoint there.
 -- The arrival leg rides hadronoxMovementInform (ev28) below.
 local function hadronoxSetStep(hadronox, step)
-    if hadronoxEngaged[hadronox:GetGUID()] then
+    if hadronoxEngaged[hadronox:GetGUIDLow()] then
         return
     end
     local pos = HADRONOX_STEPS[step + 1]
-    hadronoxStep[hadronox:GetGUID()] = step
+    hadronoxStep[hadronox:GetGUIDLow()] = step
     hadronox:SetReactState(REACT_PASSIVE)
     hadronox:SetHomePosition(pos[1], pos[2], pos[3], 0)
     hadronox:AttackStop()
@@ -445,7 +466,7 @@ local function hadronoxMovementInform(event, creature, moveType, id)
         return
     end
     creature:SetReactState(REACT_AGGRESSIVE)
-    local step = hadronoxStep[creature:GetGUID()] or 0
+    local step = hadronoxStep[creature:GetGUIDLow()] or 0
     if step < 3 then
         return
     end
@@ -466,7 +487,7 @@ end
 local crusherFrenzy = {}
 
 local function crusherDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if crusherFrenzy[guid] then
         return false, damage
     end
@@ -491,7 +512,7 @@ local function crusherSmashTick(creature, guid)
 end
 
 local function crusherEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "smash", math.random(8000, 12000), function()
         crusherSmashTick(creature, guid)
@@ -499,16 +520,16 @@ local function crusherEnterCombat(event, creature, target)
 end
 
 local function crusherLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function crusherReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function crusherDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    crusherFrenzy[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    crusherFrenzy[creature:GetGUIDLow()] = nil
     -- C++ npc_anub_ar_crusherAI::JustDied (boss_hadronox.cpp:554-557) ->
     -- hadronox DoAction(ACTION_HADRONOX_MOVE) (:248-254): if _step <
     -- NUM_STEPS-1 (3), SetStep(_step + 1) + Talk(HADRONOX_EMOTE_MOVE).
@@ -518,7 +539,7 @@ local function crusherDied(event, creature, killer)
     -- first alive match), step-gated exactly like C++.
     for _, hadronox in ipairs(creature:GetCreaturesInGrid(ENTRY_HADRONOX, 250)) do
         if hadronox:IsAlive() then
-            local step = hadronoxStep[hadronox:GetGUID()] or 0
+            local step = hadronoxStep[hadronox:GetGUIDLow()] or 0
             if step < 3 then
                 -- C++ DoAction(ACTION_HADRONOX_MOVE) :248-254 — the Talk
                 -- fires even when SetStep early-returns (engaged); only

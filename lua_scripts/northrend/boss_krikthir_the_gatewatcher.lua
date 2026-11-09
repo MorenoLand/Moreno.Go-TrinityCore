@@ -35,6 +35,13 @@
 local ENTRY_KRIKTHIR = 28684 -- azjol_nerub.h:46
 local DATA_KRIKTHIR = 0 -- azjol_nerub.h:31
 local DATA_WATCHERS_DEAD = 1 -- Lua-side slot (see header note)
+local DATA_WATCHER_NARJIL = 3 -- azjol_nerub.h ANDataTypes
+local DATA_WATCHER_GASHRA = 4 -- azjol_nerub.h ANDataTypes
+local DATA_WATCHER_SILTHIK = 5 -- azjol_nerub.h ANDataTypes
+local DATA_GATEWATCHER_GREET = 8 -- azjol_nerub.h ANDataTypes
+local ACTION_GATEWATCHER_GREET = 1 -- azjol_nerub.h InstanceActions
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
+local SAY_PREFIGHT = 4 -- boss_krikthir_the_gatewatcher.cpp:124
 local NPC_WATCHER_NARJIL = 28729 -- azjol_nerub.h:50
 local NPC_WATCHER_GASHRA = 28730 -- azjol_nerub.h:51
 local NPC_WATCHER_SILTHIK = 28731 -- azjol_nerub.h:52
@@ -76,7 +83,68 @@ local function watcherDied(event, creature, killer)
     end
 end
 
+-- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+-- instance->SetBossState(DATA_KRIKTHIR, DONE). The instance
+-- script's OnUnitDeath gate reads the flag below (no
+-- boss-state-change event exists — ahnkahet precedent).
+local function krikthirDied(event, creature, killer)
+    creature:SetBossState(DATA_KRIKTHIR, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.krikthirDone = true
+    end
+end
+
+-- C++ boss_krik_thir::DoAction(-ACTION_GATEWATCHER_GREET)
+-- (boss_krikthir_the_gatewatcher.cpp:214-219): if the greet flag
+-- is unset and the boss is alive, out of combat and its pets are
+-- not in combat, set the flag and Talk(SAY_PREFIGHT). The flag
+-- write rides instanceData:SetData (instance_azjol_nerub.lua
+-- OnSetData stores it); the read is the stored field.
+-- DEVIATION: _petsInCombat is boss-AI state with no Lua twin, so
+-- the greet can fire while pets are in combat; C++ suppresses it
+-- then. The flag still caps it at one Talk.
+local function krikthirDoAction(event, creature, action)
+    if action ~= -ACTION_GATEWATCHER_GREET then
+        return
+    end
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data == nil then
+        return
+    end
+    if (data.gatewatcherGreet or 0) ~= 0 then
+        return
+    end
+    if not creature:IsAlive() or creature:IsInCombat() then
+        return
+    end
+    data:SetData(DATA_GATEWATCHER_GREET, 1)
+    creature:Talk(SAY_PREFIGHT)
+end
+
+-- C++ creatureData latching (instance_azjol_nerub.cpp:36-41):
+-- the watcher rows carry the ROTATED mapping (narjil->GASHRA,
+-- gashra->SILTHIK, silthik->NARJIL) — ported verbatim. The
+-- instance-side OnCreatureCreate route is dead for static spawns
+-- (instance_hooks.go:553-562), so the latches ride ev5 here.
+local WATCHER_GUID_DATA = {
+    [NPC_WATCHER_NARJIL] = DATA_WATCHER_GASHRA,
+    [NPC_WATCHER_GASHRA] = DATA_WATCHER_SILTHIK,
+    [NPC_WATCHER_SILTHIK] = DATA_WATCHER_NARJIL,
+}
+
+local function watcherSpawned(event, creature)
+    creature:SetGuidData(WATCHER_GUID_DATA[creature:GetEntry()])
+end
+
 RegisterCreatureEvent(ENTRY_KRIKTHIR, 5, krikthirSpawned)
+RegisterCreatureEvent(ENTRY_KRIKTHIR, 4, krikthirDied)
+RegisterCreatureEvent(ENTRY_KRIKTHIR, 38, krikthirDoAction)
 RegisterCreatureEvent(NPC_WATCHER_NARJIL, 4, watcherDied)
 RegisterCreatureEvent(NPC_WATCHER_GASHRA, 4, watcherDied)
 RegisterCreatureEvent(NPC_WATCHER_SILTHIK, 4, watcherDied)
+RegisterCreatureEvent(NPC_WATCHER_NARJIL, 5, watcherSpawned)
+RegisterCreatureEvent(NPC_WATCHER_GASHRA, 5, watcherSpawned)
+RegisterCreatureEvent(NPC_WATCHER_SILTHIK, 5, watcherSpawned)

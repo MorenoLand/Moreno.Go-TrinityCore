@@ -17745,8 +17745,9 @@ func init() {
 	// precedent — + DoCastSelf 28747 + DoCastAOE 52592) ported as
 	// self-cast, the whole
 	// DoAction machine (ev38 dispatch IS bridged, creature:DoAction —
-	// lua_creature_events.go:802; senders unported: instance greet
-	// (instance_azjol_nerub.cpp:88), watcher-died bookkeeping
+	// lua_creature_events.go:802; instance greet sender PORTED tick
+	// 509 (instance_azjol_nerub.lua OnUnitDeath + ev38 below);
+	// watcher-died bookkeeping
 	// (boss_krikthir_the_gatewatcher.cpp:434/512/590), watcher/pet
 	// engaged (:333/:349), pet evade (:395)), EnterEvadeMode
 	// (summons.DespawnAll — terestian precedent), SpellHit/SpellHitTarget
