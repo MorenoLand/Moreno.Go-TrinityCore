@@ -37,7 +37,7 @@ local warheadState = {}
 local zCheckZ = {}
 
 local function finishQuest(warhead, success)
-    local guid = warhead:GetGUID()
+    local guid = warhead:GetGUIDLow()
     local st = warheadState[guid]
     if st == nil then
         st = { finished = false, faction = TEAM_ALLIANCE, passengerGuid = nil }
@@ -93,7 +93,7 @@ local function warheadPassengerBoarded(event, vehicle, passenger, seatId)
     if passenger == nil or passenger:GetObjectType() ~= "Player" then
         return
     end
-    local guid = vehicle:GetGUID()
+    local guid = vehicle:GetGUIDLow()
     warheadState[guid] = {
         finished = false,
         faction = passenger:GetTeam(),
@@ -129,7 +129,7 @@ end
 -- the finished latch and re-shows the warhead (motion Clear is vacuous
 -- once home).
 local function warheadReachHome(event, creature)
-    warheadState[creature:GetGUID()] = nil
+    warheadState[creature:GetGUIDLow()] = nil
     creature:SetVisible(true)
 end
 
@@ -139,11 +139,11 @@ end
 -- NOT updated on fire, so later ticks keep firing and the FinishQuest
 -- finished-latch absorbs the repeats, exactly like C++.
 local function zCheckApply(event, aura, target)
-    zCheckZ[target:GetGUID()] = target:GetZ()
+    zCheckZ[target:GetGUIDLow()] = target:GetZ()
 end
 
 local function zCheckPeriodic(event, aura, target)
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     local lastZ = zCheckZ[guid]
     local curZ = target:GetZ()
     if lastZ == nil then
@@ -157,7 +157,7 @@ local function zCheckPeriodic(event, aura, target)
 end
 
 local function zCheckRemove(event, aura, target)
-    zCheckZ[target:GetGUID()] = nil
+    zCheckZ[target:GetGUIDLow()] = nil
 end
 
 -- spell_warhead_fuse (:1092-1126): on remove, the target's vehicle base

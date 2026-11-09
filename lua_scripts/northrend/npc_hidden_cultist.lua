@@ -137,7 +137,7 @@ local function hiddenCultistSpawnOrReset(event, creature)
     if event == 23 and creature:IsDead() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if event == 5 then
         -- Template proxy for the C++ ctor-captured values and
         -- RestoreFaction(): spawn-time faction/flags; nothing
@@ -157,7 +157,7 @@ local function hiddenCultistSpawnOrReset(event, creature)
 end
 
 local function hiddenCultistDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelChain(guid)
     templateState[guid] = nil
 end
@@ -188,7 +188,7 @@ local function hiddenCultistGossipSelect(event, player, creature, sender, action
         player:GossipComplete()
         -- C++ DoAction (:1519-1530): stop, clear gossip flag +
         -- emote state, face the player, 3000ms to phase 1.
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelChain(guid)
         creature:StopMoving()
         creature:SetNPCFlags(0)

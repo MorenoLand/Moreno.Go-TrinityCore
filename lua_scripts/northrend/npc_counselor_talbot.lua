@@ -130,7 +130,7 @@ end
 -- the gate once at combat start is C++-exact (formally; behaviorally
 -- nil — he cannot fight outside the staging area).
 local function onEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:GetAreaId() == 4125 then
         schedule(guid, "shadow_bolt", math.random(5000, 12000), function() onShadowBolt(creature, guid) end)
@@ -140,15 +140,15 @@ local function onEnterCombat(event, creature)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_COUNSELOR_TALBOT, 1, onEnterCombat)

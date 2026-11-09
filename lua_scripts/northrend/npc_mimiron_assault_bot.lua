@@ -46,7 +46,7 @@ end
 
 -- C++ JustEngagedWith: EVENT_MAGNETIC_FIELD in 14s.
 local function assaultBotEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "magnetic", 14000, function()
         magneticFieldTick(creature, guid)
@@ -54,15 +54,15 @@ local function assaultBotEnterCombat(event, creature, target)
 end
 
 local function assaultBotLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function assaultBotDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function assaultBotReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_MIMIRON_ASSAULT_BOT, 1, assaultBotEnterCombat)

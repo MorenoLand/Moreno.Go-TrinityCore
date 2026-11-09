@@ -195,7 +195,7 @@ local function enrageCheckTick(creature, guid)
 end
 
 local function nadoxEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nadoxState[guid] = { guardianSummoned = false }
     -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
@@ -220,7 +220,7 @@ local function nadoxEnterCombat(event, creature, target)
 end
 
 local function nadoxLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
 end
@@ -232,7 +232,7 @@ local function nadoxTargetDied(event, creature, victim)
 end
 
 local function nadoxDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
@@ -257,7 +257,7 @@ local function nadoxSpawned(event, creature)
 end
 
 local function nadoxReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     -- C++ Reset -> Initialize: GuardianDied = false ->
@@ -289,7 +289,7 @@ end
 -- 4, me) + DoCast(me, SPELL_SUMMON_SWARM_GUARD) + latch; the per-GUID
 -- latch replaces the C++ bool.
 local function nadoxDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = nadoxState[guid]
     if st and not st.guardianSummoned then
         local health = creature:GetHealth()

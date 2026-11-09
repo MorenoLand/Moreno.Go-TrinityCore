@@ -170,14 +170,14 @@ end
 
 local function brannGossipSelect(event, player, creature)
     player:GossipComplete()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelChain(guid)
     brannState[guid] = { playerGUID = player:GetGUID() }
     scheduleStep(creature, guid, 1, 100)
 end
 
 local function brannCancel(_, creature)
-    cancelChain(creature:GetGUID())
+    cancelChain(creature:GetGUIDLow())
 end
 
 RegisterCreatureGossipEvent(ENTRY_BRANN, 2, brannGossipSelect)

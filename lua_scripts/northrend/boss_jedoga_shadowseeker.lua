@@ -229,7 +229,7 @@ local function jedogaJustSummoned(event, creature, summon)
     if not summon then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local latched = jedogaSummons[guid]
     if not latched then
         latched = {}
@@ -266,7 +266,7 @@ end
 
 local function jedogaDied(event, creature, killer)
     -- C++ JustDied (:195-198): _JustDied() (DespawnAll) before Talk.
-    despawnJedogaSummons(creature:GetGUID())
+    despawnJedogaSummons(creature:GetGUIDLow())
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
     -- instance->SetBossState(DATA_JEDOGA_SHADOWSEEKER, DONE); the
     -- flag rides the same instance-consumer pattern as
@@ -289,7 +289,7 @@ end
 local function jedogaReset(event, creature)
     if creature:IsAlive() then
         -- C++ Reset (:148-160): _Reset() (DespawnAll) before re-summoning.
-        despawnJedogaSummons(creature:GetGUID())
+        despawnJedogaSummons(creature:GetGUIDLow())
         -- C++ :152 SummonCreatureGroup(SUMMON_GROUP_INITIATES = 1),
         -- PORTED 2026-11-05 (bridge landed) — C++ order, before the
         -- controller summons.
@@ -312,7 +312,7 @@ local function jedogaLeaveCombat(event, creature)
     -- (ScriptedCreature.cpp:596-616); drakkari precedent.
     -- C++ EnterEvadeMode (:182-186): summons.DespawnAll() before the
     -- evade despawn.
-    despawnJedogaSummons(creature:GetGUID())
+    despawnJedogaSummons(creature:GetGUIDLow())
     creature:Despawn()
 end
 

@@ -139,7 +139,7 @@ local function begTick(creature, guid)
 end
 
 local function armEmote(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelEmote(guid)
     hanesEmote[guid] = CreateLuaEvent(function()
         begTick(creature, guid)
@@ -150,7 +150,7 @@ local function armEmote(creature)
 end
 
 local function armPump(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     hanesState[guid] = { potTimer = 10000 }
     hanesPump[guid] = CreateLuaEvent(function()
@@ -175,7 +175,7 @@ local function onSpawn(_, creature)
 end
 
 local function onReset(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = hanesState[guid]
     if st then
         st.potTimer = 10000
@@ -195,7 +195,7 @@ local function onQuestAccept(_, player, creature, quest)
         return
     end
     if player then
-        hanesEscortPlayer[creature:GetGUID()] = player:GetGUID()
+        hanesEscortPlayer[creature:GetGUIDLow()] = player:GetGUID()
     end
 end
 
@@ -205,7 +205,7 @@ end
 -- ends the machine: cancel the pump + emote event and drop per-GUID
 -- state (mushroom precedent).
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local playerGuid = hanesEscortPlayer[guid]
     hanesEscortPlayer[guid] = nil
     if playerGuid then

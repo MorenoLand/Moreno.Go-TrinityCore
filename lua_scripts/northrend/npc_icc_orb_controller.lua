@@ -90,7 +90,7 @@ local function visualTick(creature, guid)
     local live = {}
     for _, entry in ipairs(DARKFALLEN_ENTRIES) do
         for _, c in ipairs(creature:GetCreaturesInGrid(entry, 10.0)) do
-            if wanted[c:GetGUID()] then
+            if wanted[c:GetGUIDLow()] then
                 live[#live + 1] = c
             end
         end
@@ -107,7 +107,7 @@ local function visualTick(creature, guid)
 end
 
 local function orbReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
     schedule(guid, "init", 1000, function()
@@ -115,7 +115,7 @@ local function orbReset(event, creature)
         for _, entry in ipairs(DARKFALLEN_ENTRIES) do
             for _, c in ipairs(creature:GetCreaturesInGrid(entry, 10.0)) do
                 if c:IsAlive() then
-                    minions[#minions + 1] = c:GetGUID()
+                    minions[#minions + 1] = c:GetGUIDLow()
                 end
             end
         end
@@ -130,7 +130,7 @@ local function orbReset(event, creature)
 end
 
 local function orbDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
 end

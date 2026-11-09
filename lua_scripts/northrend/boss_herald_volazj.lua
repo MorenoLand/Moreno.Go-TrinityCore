@@ -260,7 +260,7 @@ local function shiverTick(creature, guid)
 end
 
 local function volazjEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
     -- instance/setActive/achievement legs out.
@@ -279,7 +279,7 @@ local function volazjEnterCombat(event, creature, target)
 end
 
 local function volazjLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function volazjTargetDied(event, creature, victim)
@@ -289,7 +289,7 @@ local function volazjTargetDied(event, creature, victim)
 end
 
 local function volazjDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
     -- instance->SetBossState(DATA_HERALD_VOLAZJ, DONE); the flag
     -- rides the same instance-consumer pattern as
@@ -314,7 +314,7 @@ local function volazjSpawned(event, creature)
 end
 
 local function volazjReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:80, C++
                                      -- arm order (after the SetPhaseMask
                                      -- leg, whose bridge is absent)

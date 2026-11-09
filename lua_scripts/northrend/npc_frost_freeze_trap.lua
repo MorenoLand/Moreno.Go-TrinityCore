@@ -45,7 +45,7 @@ local function activateTrap(creature)
         return
     end
     creature:CastSpell(creature, SPELL_COLDFLAME_JETS)
-    schedule(creature:GetGUID(), "activate", 22000, function()
+    schedule(creature:GetGUIDLow(), "activate", 22000, function()
         activateTrap(creature)
     end)
 end
@@ -54,14 +54,14 @@ end
 -- action 1000/11000 schedules the activation after that many ms.
 local function frostFreezeTrapDoAction(event, creature, action)
     if action == 1000 or action == 11000 then
-        schedule(creature:GetGUID(), "activate", action, function()
+        schedule(creature:GetGUIDLow(), "activate", action, function()
             activateTrap(creature)
         end)
     end
 end
 
 local function frostFreezeTrapReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetCombatMovement(false)
 end
 

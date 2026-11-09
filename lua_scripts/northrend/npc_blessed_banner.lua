@@ -425,7 +425,7 @@ end
 -- Halof dies, and the phaseCount + entry gates reproduce the C++
 -- condition. Once-latch: C++ would re-fire per tick until ENDED.
 local function onSummonedDied(event, creature, summon, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = bannerState[guid]
     if not st or st.victoryFired then
         return
@@ -523,7 +523,7 @@ local function onSpawnOrReset(_, creature)
         creature:CastSpell(creature, SPELL_THREAT_PULSE)
         creature:Talk(BANNER_SAY)
         -- C++ Reset: events.ScheduleEvent(EVENT_SPAWN, 3s) (:442).
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelTimers(guid)
         schedule(guid, "spawn", 3000, function()
             spawnBannerCrew(creature, guid)
@@ -539,7 +539,7 @@ RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 23, onSpawnOrReset)
 -- self-Despawn, C++ order); me->DespawnOrUnsummon() ports
 -- (creature:Despawn, bridged).
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustDied order (:455-459): Summons.DespawnAll() first, then
     -- me->DespawnOrUnsummon().
@@ -553,7 +553,7 @@ RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 4, onDied)
 -- Leave combat (event 2): no C++ evade drain for the banner (Reset
 -- re-schedules EVENT_SPAWN on ev23); cancel the pending crew only.
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 2, onLeaveCombat)

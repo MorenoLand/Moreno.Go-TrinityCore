@@ -56,7 +56,7 @@ end
 
 -- C++ Reset: EVENT_FROST_BOMB_EXPLOSION in 10s.
 local function frostBombSeed(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "explosion", 10000, function()
         explosionTick(creature, guid)
@@ -64,7 +64,7 @@ local function frostBombSeed(event, creature)
 end
 
 local function frostBombCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_MIMIRON_FROST_BOMB, 5, frostBombSeed)

@@ -64,7 +64,7 @@ end
 
 -- C++ Reset: EVENT_PROXIMITY_MINE_ARM in 1500ms.
 local function mineSeed(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arm", 1500, function()
         armTick(creature, guid)
@@ -72,7 +72,7 @@ local function mineSeed(event, creature)
 end
 
 local function mineCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ spell_mimiron_proximity_explosion::OnHit

@@ -118,7 +118,7 @@ local function berylSorcererSpawnOrReset(event, creature)
     -- no-op when already passive); arm order matches C++ (passive leg
     -- before the rebuff Initialize).
     creature:SetReactState(0) -- REACT_PASSIVE
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     onRebuff(creature, guid)
 end
@@ -128,7 +128,7 @@ end
 -- and out of combat — no LeaveCombat cancel. Death stops the C++
 -- UpdateAI, so the timer dies with the creature (event 4 only).
 local function berylSorcererDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ SpellHit :1232-1240 -> GotStinged :1242-1261: player-caster gate,
@@ -149,7 +149,7 @@ local function berylSorcererSpellHit(event, creature, caster, spellId)
     else
         creature:CastSpell(creature, SPELL_PROTOTYPE_NEURAL_NEEDLE_IMPACT)
     end
-    local key = caster:GetGUID() .. ":" .. spellId
+    local key = caster:GetGUIDLow() .. ":" .. spellId
     local step = stingCounts[key] or 0
     stingCounts[key] = step + 1
     if caster:GetQuestStatus(QUEST_THE_ART_OF_PERSUASION) == 0 then

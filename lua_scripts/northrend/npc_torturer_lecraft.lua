@@ -146,7 +146,7 @@ end
 -- in the C++ latch — the pump is cancelled first, gargolmar
 -- precedent).
 local function onEnterCombat(_, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     if target and target:GetObjectType() == "Player" then
         creature:Talk(SAY_AGGRO, target)
@@ -170,7 +170,7 @@ end
 -- re-latches on the next hit). The C++ death path runs Reset
 -- too, so OnDied lands here as well (mushroom precedent).
 local function onReset(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 -- C++ SpellHit arm (:628-650) — the High Executor's Branding
@@ -188,7 +188,7 @@ local function onSpellHit(event, creature, caster, spellId)
     if caster:GetTypeId() ~= 4 then -- TYPEID_PLAYER
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = lecraftState[guid]
     if not st then
         st = { textCounter = 1 }

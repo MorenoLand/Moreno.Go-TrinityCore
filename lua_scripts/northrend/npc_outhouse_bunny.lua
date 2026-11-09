@@ -41,7 +41,7 @@ local counters = {}
 local function bunnyReset(_, creature)
     -- zone_grizzly_hills.cpp:290-293: Reset re-initializes _counter and
     -- _gender to 0.
-    counters[creature:GetGUID()] = nil
+    counters[creature:GetGUIDLow()] = nil
     creature:SetData(1, GENDER_MALE)
 end
 
@@ -52,7 +52,7 @@ local function bunnySpellHit(_, creature, caster, spellId)
     -- zone_grizzly_hills.cpp:298-323: counter / camera-shake / dust-field arm.
     -- C++ SpellHit drops a non-unit caster (caster->ToUnit() nil); the Go
     -- event-14 fire path only ever passes a player or creature caster.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local counter = counters[guid] or 0
     counter = counter + 1
     if counter < 5 then

@@ -210,7 +210,7 @@ end
 local function finklesteinGossipSelect(event, player, creature, sender, action)
     player:GossipComplete()
     creature:CastSpell(player, SPELL_ALCHEMIST_APPRENTICE_INVISBUFF)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     finklesteinSchedule(guid, "easy123", 100, function()
         finklesteinEasy123(creature, player)
     end)
@@ -221,7 +221,7 @@ local function finklesteinGossipSelect(event, player, creature, sender, action)
 end
 
 local function finklesteinCancel(event, creature)
-    finklesteinCancelTimers(creature:GetGUID())
+    finklesteinCancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset() (zone_zuldrak.cpp:482-484) seeds EVENT_TURN_TO_POT at
@@ -260,7 +260,7 @@ end
 -- the first TURN_TO_POT at 15-26s. Spawn (5) and reset (23) both
 -- run Reset in C++; leave-combat (2) / death (4) stay cancel-only.
 local function finklesteinReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     finklesteinCancelTimers(guid)
     finklesteinSchedule(guid, "turnpot", {15000, 26000}, function()
         finklesteinTurnToPot(creature, guid)

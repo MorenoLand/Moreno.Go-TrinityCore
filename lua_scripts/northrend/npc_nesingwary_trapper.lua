@@ -142,7 +142,7 @@ local function trapperSpawnOrReset(event, creature)
     if event == 23 and creature:IsDead() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelAll(guid)
     creature:SetVisible(false)
     timers[guid] = CreateLuaEvent(function() advancePhase(creature, guid, 1) end, 2500)
@@ -154,7 +154,7 @@ end
 -- the creature. The credit leg is NOT inside the GO guard — C++ runs
 -- it on its own summoner chain, so it fires even with no latch.
 local function trapperDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local trap = trapGOs[guid]
     if trap then
         trap:SetLootState(GO_LOOT_JUST_DEACTIVATED)

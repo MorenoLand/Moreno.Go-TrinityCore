@@ -81,13 +81,13 @@ local function frostArmorTick(creature, guid)
 end
 
 local function wgQueueSeed(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     frostArmorTick(creature, guid)
 end
 
 local function wgQueueCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs({NPC_WG_QUEUE_ALLIANCE, NPC_WG_QUEUE_HORDE, NPC_WG_QUEUE_IRONFORGE, NPC_WG_QUEUE_EXODAR, NPC_WG_QUEUE_ORGRIMMAR, NPC_WG_QUEUE_SHATTRATH_A, NPC_WG_QUEUE_SHATTRATH_H, NPC_WG_QUEUE_UNDERCITY, NPC_WG_QUEUE_STORMWIND, NPC_WG_QUEUE_DARNASSUS, NPC_WG_QUEUE_THUNDERBLUFF, NPC_WG_QUEUE_SILVERMOON}) do

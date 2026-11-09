@@ -56,13 +56,13 @@ local function spiritHealTick(creature, guid)
 end
 
 local function spiritGuideSeed(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     spiritHealTick(creature, guid)
 end
 
 local function spiritGuideCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs({NPC_WG_SPIRIT_GUIDE_HORDE, NPC_WG_SPIRIT_GUIDE_ALLIANCE}) do

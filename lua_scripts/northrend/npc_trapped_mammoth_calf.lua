@@ -60,7 +60,7 @@ end
 -- Initialize() (timer/latch state) -> trap scan in enum order, first hit
 -- activated, then return.
 local function calfReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
@@ -94,12 +94,12 @@ local function onCalfDoAction(event, creature, action)
     if action ~= 1 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "calf_run", 1500, function() calfRun(creature, guid) end)
 end
 
 local function onCalfCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_CALF, 23, calfReset)

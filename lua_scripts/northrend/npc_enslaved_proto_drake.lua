@@ -90,7 +90,7 @@ end
 -- as 500ms IsCasting defer (live, lua_creature_events.go:1950) on all
 -- three timer arms — the stale caststate-axiom skip is retracted.
 local function protoDrakeEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "rend", {2000, 3000}, function()
         rendTick(creature, guid)
@@ -104,7 +104,7 @@ local function protoDrakeEnterCombat(event, creature)
 end
 
 local function protoDrakeCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_PROTO_DRAKE, 1, protoDrakeEnterCombat)

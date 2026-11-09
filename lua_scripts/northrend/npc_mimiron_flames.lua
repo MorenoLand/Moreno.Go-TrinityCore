@@ -46,7 +46,7 @@ end
 -- C++ UpdateAI EVENT_SPREAD_FLAMES: DoCastAOE(64562), one-shot
 -- (no re-arm in C++).
 local function flamesSeed(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "spread", 4000, function()
         creature:CastSpell(creature, SPELL_SUMMON_FLAMES_SPREAD_TRIGGER)
@@ -54,7 +54,7 @@ local function flamesSeed(event, creature)
 end
 
 local function flamesCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs({NPC_MIMIRON_FLAMES_INITIAL, NPC_MIMIRON_FLAMES_SPREAD}) do

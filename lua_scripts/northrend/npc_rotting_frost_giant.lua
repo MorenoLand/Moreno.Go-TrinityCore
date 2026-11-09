@@ -146,7 +146,7 @@ end
 -- C++ Reset (:452-457): the three initial schedules (15s / {5s,8s} /
 -- {10s,15s}).
 local function frostGiantEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "deathplague", 15000, function()
         deathPlagueTick(creature, guid)
@@ -160,7 +160,7 @@ local function frostGiantEnterCombat(event, creature, target)
 end
 
 local function frostGiantLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (:459-464): _events.Reset() + instance->
@@ -169,7 +169,7 @@ end
 -- the Go twin is the in-tree idiom: GetPlayersInWorld filtered to the
 -- boss's map/instance + player:RemoveAura (lua_player.go; bridged).
 local function frostGiantDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, plr in ipairs(GetPlayersInWorld()) do
@@ -180,7 +180,7 @@ local function frostGiantDied(event, creature, killer)
 end
 
 local function frostGiantReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs({NPC_ROTTING_FROST_GIANT_10, NPC_ROTTING_FROST_GIANT_25}) do

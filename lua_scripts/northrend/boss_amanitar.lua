@@ -376,7 +376,7 @@ local function amanitarJustSummoned(_, creature, summoned)
     else
         summoned:CastSpell(summoned, SPELL_POISONOUS_MUSHROOM_VISUAL_AURA)
     end
-    local sguid = summoned:GetGUID()
+    local sguid = summoned:GetGUIDLow()
     schedule(sguid, "grow", 800, function()
         if not summoned:IsDead() then
             summoned:CastSpell(summoned, SPELL_GROW, true)
@@ -406,7 +406,7 @@ local function amanitarSummonedDied(event, creature, summon, killer)
     if entry ~= NPC_HEALTHY_MUSHROOM and entry ~= NPC_POISONOUS_MUSHROOM then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local deque = mushroomDeque[guid]
     if not deque then
         deque = {}
@@ -437,7 +437,7 @@ local function respawnTick(creature, guid)
 end
 
 local function amanitarEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
     -- instance/setActive/ScheduleTasks legs out.
@@ -484,7 +484,7 @@ local function stripMiniAuras(creature)
 end
 
 local function amanitarLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_amanitar.cpp:103-109): summons.DespawnAll()
     -- (moot — nothing modeled) + instance DoRemoveAurasDueToSpellOnPlayers(
     -- SPELL_MINI 57055, true, true) — the player leg is PORTED via
@@ -505,7 +505,7 @@ local function amanitarSpawned(event, creature)
 end
 
 local function amanitarDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
     -- instance->SetBossState(DATA_AMANITAR, DONE); the flag rides
     -- the same instance-consumer pattern as instance_ahnkahet.lua
@@ -527,7 +527,7 @@ local function amanitarDied(event, creature, killer)
 end
 
 local function amanitarReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_AMANITAR, 1, amanitarEnterCombat)

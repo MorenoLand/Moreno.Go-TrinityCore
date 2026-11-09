@@ -130,7 +130,7 @@ local function webWrapTick(creature, guid)
 end
 
 local function broodkeeperEngage(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "scarabs", {1000, 3000}, function()
         scarabsTick(creature, guid)
@@ -144,7 +144,7 @@ local function broodkeeperEngage(event, creature)
 end
 
 local function broodkeeperLeave(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 5, broodkeeperSpawn)

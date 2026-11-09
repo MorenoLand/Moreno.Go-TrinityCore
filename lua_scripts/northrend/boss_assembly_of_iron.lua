@@ -344,7 +344,7 @@ local function assemblyBossesAlive(creature)
     local selfGuid = creature:GetGUIDLow()
     for _, entry in ipairs({ENTRY_STEELBREAKER, ENTRY_MOLGEIM, ENTRY_BRUNDIR}) do
         for _, other in ipairs(creature:GetCreaturesInGrid(entry, 200)) do
-            if other:GetGUID() ~= selfGuid and other:IsAlive() then
+            if other:GetGUIDLow() ~= selfGuid and other:IsAlive() then
                 return true
             end
         end
@@ -439,7 +439,7 @@ local function superchargeSurvivors(creature)
     local selfGuid = creature:GetGUIDLow()
     for _, entry in ipairs({ENTRY_STEELBREAKER, ENTRY_MOLGEIM, ENTRY_BRUNDIR}) do
         for _, add in ipairs(creature:GetCreaturesInGrid(entry, 100)) do
-            if add:GetGUID() ~= selfGuid and add:IsAlive() then
+            if add:GetGUIDLow() ~= selfGuid and add:IsAlive() then
                 add:SetHealth(add:GetMaxHealth())
                 add:AddAura(SPELL_SUPERCHARGE)
                 -- C++ DoAction(ACTION_SUPERCHARGE): events.SetPhase

@@ -102,7 +102,7 @@ end
 -- header for the deviation). ev23 fires at spawn as well as evade
 -- (creaturemotion.go:1262 + lua_creature_events.go:7264).
 local function sphereReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_POWER_BALL_VISUAL)
     creature:CastSpell(creature, SPELL_POWER_BALL_DAMAGE_TRIGGER)
@@ -117,7 +117,7 @@ end
 
 -- Shared timer wipe for event 4 (the svala / yogg_saron convention).
 local function sphereCancelTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_ETHEREAL_SPHERE, 23, sphereReset)

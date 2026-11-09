@@ -127,7 +127,7 @@ local function emoteTick(creature, guid)
 end
 
 local function startEmoteMachine(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     emoteActive[guid] = true
     schedule(guid, "emote", {1000, 10000}, 0, function()
         emoteTick(creature, guid)
@@ -166,7 +166,7 @@ end
 -- machine + class ScheduleSpells; the TriggerGuid ACTION_COMBAT signal to
 -- the orb controller has no cross-creature AI bridge — documented.
 local function darkfallenEngage(entry, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     stopEmoteMachine(guid)
     if entry == NPC_DARKFALLEN_BLOOD_KNIGHT then
         -- C++ npc_darkfallen_blood_knight::ScheduleSpells (:864-881):
@@ -395,7 +395,7 @@ local function darkfallenEngage(entry, creature)
 end
 
 local function darkfallenLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     emoteActive[guid] = false
     -- C++ EnterEvadeMode legs (ACTION_EVADE signal, orb GO-flag leg,
@@ -406,7 +406,7 @@ local function darkfallenLeaveCombat(event, creature)
 end
 
 local function darkfallenDied(event, creature, killer)
-    stopEmoteMachine(creature:GetGUID())
+    stopEmoteMachine(creature:GetGUIDLow())
 end
 
 local function darkfallenReset(event, creature)
@@ -435,7 +435,7 @@ end
 -- DoCastVictim(LEECHING_ROOT 70671), 38s one-shot DespawnOrUnsummon;
 -- EnterEvadeMode -> cancel + despawn (ev2 per the teron precedent).
 local function fiendEngage(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_DISEASE_CLOUD)
     schedule(guid, "root", 9000, 0, function()
@@ -447,13 +447,13 @@ local function fiendEngage(event, creature, target)
 end
 
 local function fiendLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Despawn()
 end
 
 local function fiendDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs(DARKFALLEN_ENTRIES) do
