@@ -17,12 +17,25 @@
 -- per tick). If the upstream/local C++ is fixed, re-add a latched
 -- 120s self-cast 34624 (akilzon precedent).
 -- Documented-only: JustDied instance DATA_VEM_DEATH +
--- DATA_BUG_TRIO_DEATH + loot flag (no bridge).
+-- DATA_BUG_TRIO_DEATH + loot flag legs PORTED below (argent-soldier
+-- precedent); the vemDead slot also backs the Kri/Yauj enrage-arm
+-- read of DATA_VEMISDEAD (11) — the enrage arms themselves are a
+-- separate port.
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15544
 
 local SPELL_CHARGE = 26561
 local SPELL_KNOCKBACK = 26027
+
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136) / UNIT_DYNFLAG_LOOTABLE
+-- (SharedDefines.h:3128) — eredar-twins precedent.
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
+
+local function getInstanceData(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local timers = {}
 
@@ -114,10 +127,23 @@ end
 -- C++ JustDied (boss_bug_trio.cpp:178-184) overrides WITHOUT calling
 -- _JustDied() — SetData(DATA_VEM_DEATH) + lootable-flag + SetData
 -- (DATA_BUG_TRIO_DEATH) only — so base DONE never runs: NO ev4
--- SetBossState leg (cthun precedent).
+-- SetBossState leg (cthun precedent). The instance legs are PORTED
+-- below in C++ order: SetData(DATA_VEM_DEATH, 0) sets
+-- IsBossDied[0] (instance temple_of_ahnqiraj.cpp:122-125) — the
+-- same slot backs GetData(DATA_VEMISDEAD, 11); then the < 2
+-- lootable-flag clear, then the bugTrioDeathCount increment.
 local function onDied(event, creature, killer)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
+    local data = getInstanceData(creature)
+    if data then
+        data.vemDead = true
+        local count = data.bugTrioDeathCount or 0
+        if count < 2 then
+            creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        end
+        data.bugTrioDeathCount = count + 1
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

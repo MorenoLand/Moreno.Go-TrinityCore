@@ -9,14 +9,25 @@
 -- (6-12s -> 10-15s); Poison Cloud 38718 on victim at <5% health
 -- (event 9, latched — C++ Death flag).
 -- Documented-only: Vem-dead Enrage 34624 (instance DATA_VEMISDEAD
--- — no bridge); JustDied loot-flag + instance DATA_BUG_TRIO_DEATH
--- (no bridge).
+-- — the vemDead slot below backs the read, the enrage arm itself is
+-- a separate port); JustDied loot-flag + instance
+-- DATA_BUG_TRIO_DEATH legs PORTED below (argent-soldier precedent).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15511
 
 local SPELL_CLEAVE = 26350
 local SPELL_TOXIC_VOLLEY = 25812
 local SPELL_POISON_CLOUD = 38718
+
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136) / UNIT_DYNFLAG_LOOTABLE
+-- (SharedDefines.h:3128) — eredar-twins precedent.
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
+
+local function getInstanceData(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local timers = {}
 local kriState = {}
@@ -126,10 +137,23 @@ end
 -- C++ JustDied (boss_bug_trio.cpp:87-92) overrides WITHOUT calling
 -- _JustDied() — lootable-flag + SetData(DATA_BUG_TRIO_DEATH) only —
 -- so base DONE never runs: NO ev4 SetBossState leg (cthun precedent).
+-- The instance legs are PORTED below: GetData < 2 clears the
+-- lootable flag, then SetData(1) increments the shared
+-- bugTrioDeathCount (instance temple_of_ahnqiraj.cpp:127-129) in
+-- the instanceData table — no instance_temple_of_ahnqiraj.lua
+-- exists, so the counter lives here (argent-soldier precedent).
 local function onDied(event, creature, killer)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     kriState[guid] = nil
+    local data = getInstanceData(creature)
+    if data then
+        local count = data.bugTrioDeathCount or 0
+        if count < 2 then
+            creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        end
+        data.bugTrioDeathCount = count + 1
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

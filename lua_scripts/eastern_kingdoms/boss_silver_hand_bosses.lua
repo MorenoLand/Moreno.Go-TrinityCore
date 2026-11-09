@@ -9,6 +9,14 @@
 -- (creature combat tick), like C++ DoMeleeAttackIfReady. No Talk lines.
 --
 -- Modeled arms (C++-exact where bridges exist):
+-- Reset/JustDied instance->SetData(TYPE_SH_* , 0/2) legs PORTED
+-- below via the shared instanceData table (argent-soldier
+-- precedent): each member writes its own dead flag, and
+-- TYPE_SH_QUEST (= all five dead, instance_stratholme.cpp:449-454)
+-- is computed in JustDied before the quest-credit leg. No
+-- instance_stratholme.lua exists, so the flags live as table fields
+-- (runtime lifetime only; the C++ SaveToDB on data == DONE fires
+-- on every JustDied since 2 == DONE — persistence delta).
 -- Initialize() runs in the AI ctor AND Reset() — the timer VALUES reset to
 -- 20s, but they tick only while UpdateVictim() returns true, i.e. in
 -- combat; modeled by cancelling on events 2/4/23 and arming on
@@ -25,15 +33,27 @@
 -- nil-victim n/a (self-cast).
 --
 -- Documented-unmodeled (no bridges):
--- Reset/JustDied instance->SetData(TYPE_SH_AELMAR=25/TYPE_SH_CATHELA=21/
--- TYPE_SH_GREGOR=22/TYPE_SH_NEMAS=23/TYPE_SH_VICAR=24, 0/2) legs (no
--- instance-script bridge, shadowfang instance precedent); JustDied quest
--- credit leg: instance->GetData(TYPE_SH_QUEST=20) && killer->ToPlayer()
--- -> KilledMonsterCredit(SH_QUEST_CREDIT=17915) (no instance data bridge);
 -- GetStratholmeAI factory template (no logic, dathrohan precedent);
 -- UpdateAI UNIT_STATE_CASTING queue gate (timers fire unconditionally,
 -- jeklik convention); the C++ header's TODO (Aurius/eternal-flame event
 -- 11206) is C++ commentary, not scripted arms.
+
+-- stratholme.h:40-45 (TYPE_SH_*) + boss_order_of_silver_hand.cpp:39
+-- (SH_QUEST_CREDIT). IsSilverHandDead[i] in instance_stratholme.cpp
+-- is (data != 0), so Reset (0) clears and JustDied (2) sets.
+local SH_QUEST_CREDIT = 17915
+local SH_DEAD_KEY = {
+    [17910] = "shGregorDead", -- TYPE_SH_GREGOR = 22
+    [17911] = "shCathelaDead", -- TYPE_SH_CATHELA = 21
+    [17912] = "shNemasDead", -- TYPE_SH_NEMAS = 23
+    [17913] = "shAelmarDead", -- TYPE_SH_AELMAR = 25
+    [17914] = "shVicarDead", -- TYPE_SH_VICAR = 24
+}
+
+local function getInstanceData(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local SPELL_HOLY_LIGHT = 25263
 local SPELL_DIVINE_SHIELD = 13874
@@ -122,6 +142,18 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ JustDied (boss_order_of_silver_hand.cpp:108-134): write this
+    -- member's flag (2 -> dead), then the quest-credit leg reads
+    -- instance->GetData(TYPE_SH_QUEST) — 1 iff all five are dead.
+    local data = getInstanceData(creature)
+    if data then
+        data[SH_DEAD_KEY[creature:GetEntry()]] = true
+        if data.shGregorDead and data.shCathelaDead and data.shNemasDead
+            and data.shAelmarDead and data.shVicarDead
+            and killer ~= nil and killer:GetObjectType() == "Player" then
+            killer:KilledMonsterCredit(SH_QUEST_CREDIT)
+        end
+    end
 end
 
 -- C++ Reset calls Initialize(): both timer VALUES back to 20s, but values are
@@ -129,6 +161,12 @@ end
 -- here, EnterCombat arms.
 local function onReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ Reset (boss_order_of_silver_hand.cpp:88-106): write this
+    -- member's flag (0 -> alive).
+    local data = getInstanceData(creature)
+    if data then
+        data[SH_DEAD_KEY[creature:GetEntry()]] = false
+    end
 end
 
 local SH_ENTRIES = { 17910, 17911, 17912, 17913, 17914 }

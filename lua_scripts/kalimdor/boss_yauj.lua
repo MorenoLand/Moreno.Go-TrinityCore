@@ -9,12 +9,14 @@
 -- Ported: Fear 19408 on victim (12-24s -> 20s) + the ResetThreatList leg
 -- (2026-10-21, creature:ResetAllThreat — fires ungated C++-exact).
 -- Ported: JustDied 10x summon (boss_bug_trio.cpp:270-279 —
--- creature:SummonCreature + summoned:AttackStart, both bridged;
--- the instance DATA_BUG_TRIO_DEATH + lootable-flag legs stay out).
+-- creature:SummonCreature + summoned:AttackStart, both bridged)
+-- + the instance DATA_BUG_TRIO_DEATH + lootable-flag legs
+-- (boss_bug_trio.cpp:264-268, ported below).
 -- Documented-only: Heal 25807 (target selection via instance
 -- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
 -- would misrepresent the random 1-of-3); Vem-dead Enrage (instance
--- DATA_VEMISDEAD — no bridge).
+-- DATA_VEMISDEAD — the vemDead slot in boss_vem.lua backs the read,
+-- the enrage arm itself is a separate port).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
 local ENTRY = 15543
 
@@ -23,6 +25,16 @@ local SPELL_FEAR = 19408
 -- boss_bug_trio.cpp:274 summon target (no name constant in the C++
 -- tree — the entry comes from the summon call site itself).
 local ENTRY_DEATH_SPAWN = 15621
+
+-- UNIT_DYNAMIC_FLAGS (UpdateFields.h:136) / UNIT_DYNFLAG_LOOTABLE
+-- (SharedDefines.h:3128) — eredar-twins precedent.
+local UNIT_DYNAMIC_FLAGS = 79
+local UNIT_DYNFLAG_LOOTABLE = 0x0001
+
+local function getInstanceData(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local timers = {}
 
@@ -92,6 +104,21 @@ end
 
 local function onDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ JustDied (boss_bug_trio.cpp:264-268, before the summon
+    -- loop): GetData(DATA_BUG_TRIO_DEATH) < 2 clears the lootable
+    -- flag, then SetData(1) increments the shared bugTrioDeathCount
+    -- (instance temple_of_ahnqiraj.cpp:127-129) in the instanceData
+    -- table — no instance_temple_of_ahnqiraj.lua exists
+    -- (argent-soldier precedent). NO ev4 DONE leg: JustDied
+    -- overrides WITHOUT calling _JustDied() (cthun precedent).
+    local data = getInstanceData(creature)
+    if data then
+        local count = data.bugTrioDeathCount or 0
+        if count < 2 then
+            creature:RemoveFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE)
+        end
+        data.bugTrioDeathCount = count + 1
+    end
     -- C++ JustDied (boss_bug_trio.cpp:270-279): 10 iterations, each
     -- picking a random threat-list target (SelectTarget Random, no
     -- playerOnly/dist args) and summoning one 15621 at the boss's
@@ -100,10 +127,7 @@ local function onDied(event, creature, killer)
     -- iteration; an empty threat list therefore summons nothing,
     -- exactly like C++. The Go death path clears no threat state
     -- before event 4 fires (kill.go), so GetAITargets still reads
-    -- the fight's threat list here. The instance legs (RemoveFlag
-    -- lootable + SetData DATA_BUG_TRIO_DEATH) stay out — no
-    -- instance bridge. NO ev4 DONE leg either: JustDied (:264-268)
-    -- overrides WITHOUT calling _JustDied() (cthun precedent).
+    -- the fight's threat list here.
     local targets = creature:GetAITargets()
     if #targets > 0 then
         local x, y, z = creature:GetX(), creature:GetY(), creature:GetZ()

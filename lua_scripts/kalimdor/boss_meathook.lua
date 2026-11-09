@@ -35,7 +35,9 @@
 -- - Death (C++ JustDied): Talk SAY_DEATH (3) + _JustDied() ->
 --   SetBossState(DONE) PORTED 2026-11-06 on ev4 (C++ order: Talk,
 --   _JustDied, SetData); the instance->SetData(DATA_NOTIFY_DEATH, 1)
---   leg stays blocked (no instance SetData bridge, standing).
+--   leg is a C++-dead write (no consumer: zero SetData-case or
+--   GetData hits for DATA_NOTIFY_DEATH in the CoS tree) — closed,
+--   no port.
 -- - InitializeAI (C++ :55-60): Talk SAY_SPAWN (2) + GetBossState ==
 --   DONE -> RemoveLootMode(LOOT_MODE_DEFAULT 1, SharedDefines.h:42),
 --   both PORTED 2026-11-06 on ev5 (ev5 fires at the C++ JustAppeared
