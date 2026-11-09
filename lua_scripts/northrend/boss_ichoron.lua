@@ -378,7 +378,7 @@ local function ichoronEnterCombat(event, creature, target)
     -- unported globule chain, so the latch stays 1 in the Go-modeled
     -- fight. PORTED 2026-11-08 (tick 419).
     creature:SetData(DATA_DEHYDRATION, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     frenzyFired[guid] = nil
     schedule(guid, "volley", {10000, 15000}, function()
@@ -399,7 +399,7 @@ end
 -- BossAI::Reset, DoCast); DoCast(me, SPELL_THREAT_PROC, true) —
 -- triggered self-cast.
 local function ichoronReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     for key in pairs(ichoronSummons) do
         ichoronSummons[key] = nil
     end
@@ -424,7 +424,7 @@ end
 
 -- Shared timer wipe for events 2/4.
 local function ichoronCancelCombatTimers(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     frenzyFired[guid] = nil
 end
@@ -456,7 +456,7 @@ end
 -- periodic summon -- the arm fires correctly if a future path summons
 -- via ichoron (anubrekhan latent precedent).
 local function ichoronJustSummoned(_, creature, summoned)
-    ichoronSummons[summoned:GetGUID()] = true
+    ichoronSummons[summoned:GetGUIDLow()] = true
     if summoned:GetEntry() == ENTRY_ICHOR_GLOBULE then
         creature:CastSpell(summoned, SPELL_WATER_GLOBULE_VISUAL)
     end
@@ -485,7 +485,7 @@ RegisterCreatureEvent(ENTRY_ICHORON, 19, ichoronJustSummoned)
 -- C++ SummonedCreatureDespawn (boss_ichoron.cpp:181-186): BossAI drops the
 -- summon, then if summons.empty() -> me->RemoveAurasDueToSpell(SPELL_DRAINED).
 local function ichoronSummonDespawned(_, creature, summon)
-    ichoronSummons[summon:GetGUID()] = nil
+    ichoronSummons[summon:GetGUIDLow()] = nil
     if next(ichoronSummons) == nil then
         creature:RemoveAura(SPELL_DRAINED)
     end
@@ -526,7 +526,7 @@ local function ichoronDoAction(event, creature, action)
         local maxHealth = creature:GetMaxHealth()
         local damage = math.floor(maxHealth * 30 / 100)
         creature:SetHealth(math.max(1, creature:GetHealth() - damage))
-        delayAllTimers(creature:GetGUID(), 15000, { frenzy = true })
+        delayAllTimers(creature:GetGUIDLow(), 15000, { frenzy = true })
     elseif action == ACTION_DRAINED then
         -- :141-149: HealthAbovePct(30) (strict > the floored 30%
         -- threshold, the frenzy strict-< twin) -> Talk SAY_BUBBLE +
@@ -641,7 +641,7 @@ RegisterAuraEvent(SPELL_SPLATTER, 3, splatterAuraRemove)
 local ichorSplashLatch = {}
 
 local function ichorGlobuleDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if ichorSplashLatch[guid] then
         return false, damage
     end
@@ -653,7 +653,7 @@ local function ichorGlobuleDamageTaken(event, creature, attacker, damage)
 end
 
 local function ichorGlobuleCleanup(event, creature)
-    ichorSplashLatch[creature:GetGUID()] = nil
+    ichorSplashLatch[creature:GetGUIDLow()] = nil
 end
 
 -- C++ npc_ichor_globuleAI::SpellHit (boss_ichoron.cpp:253-264):

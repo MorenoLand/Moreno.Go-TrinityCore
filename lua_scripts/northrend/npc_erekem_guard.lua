@@ -42,3 +42,12 @@ local function erekemGuardSpawn(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_EREKEM_GUARD, 5, erekemGuardSpawn)
+
+-- C++ npc_erekem_guardAI::JustEngagedWith (boss_erekem.cpp:274-277):
+-- DoZoneInCombat() only (DoZoneInCombat bridged,
+-- engine/world/lua_creature_events.go:1996).
+local function erekemGuardEngaged(event, creature, target)
+    creature:DoZoneInCombat()
+end
+
+RegisterCreatureEvent(ENTRY_EREKEM_GUARD, 1, erekemGuardEngaged)

@@ -259,7 +259,7 @@ local function cyanigosaEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arcanevacuum", 10000, function()
         arcaneVacuumTick(creature, guid)
@@ -305,13 +305,13 @@ local function cyanigosaReset(event, creature)
     if creature:GetBossState(DATA_CYANIGOSA) ~= 3 then
         creature:SetBossState(DATA_CYANIGOSA, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function cyanigosaCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ MoveInLineOfSight (:73) is an EMPTY override — it suppresses the

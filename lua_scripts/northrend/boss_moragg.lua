@@ -187,7 +187,7 @@ local function moraggEnterCombat(event, creature)
     creature:DoZoneInCombat()
     creature:CastSpell(creature, SPELL_RAY_OF_PAIN)
     creature:CastSpell(creature, SPELL_RAY_OF_SUFFERING)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "opticlink", 15000, function()
         opticLinkTick(creature, guid)
@@ -201,7 +201,7 @@ end
 -- _JustDied() (ScriptedCreature.cpp:513-520) — SetBossState
 -- (DATA_MORAGG 3, DONE).
 local function moraggJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_MORAGG, 3)
 end
 
@@ -214,13 +214,13 @@ local function moraggReset(event, creature)
     if creature:GetBossState(DATA_MORAGG) ~= 3 then
         creature:SetBossState(DATA_MORAGG, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- Shared timer wipe for events 2/4 (the svala / yogg_saron
 -- convention).
 local function moraggCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_moraggAI::JustReachedHome (:57-61): BossAI base +

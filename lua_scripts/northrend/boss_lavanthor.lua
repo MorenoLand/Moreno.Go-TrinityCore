@@ -216,7 +216,7 @@ local function lavanthorEnterCombat(event, creature)
     creature:SetBossState(DATA_LAVANTHOR, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "firebolt", 1000, function()
         fireboltTick(creature, guid)
@@ -242,7 +242,7 @@ end
 -- _JustDied() (ScriptedCreature.cpp:513-520) — SetBossState
 -- (DATA_LAVANTHOR 6, DONE).
 local function lavanthorJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_LAVANTHOR, 3)
 end
 
@@ -255,13 +255,13 @@ local function lavanthorReset(event, creature)
     if creature:GetBossState(DATA_LAVANTHOR) ~= 3 then
         creature:SetBossState(DATA_LAVANTHOR, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- Shared timer wipe for events 2/4 (the svala / yogg_saron
 -- convention).
 local function lavanthorCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_lavanthorAI::JustReachedHome (:51-55): BossAI base +

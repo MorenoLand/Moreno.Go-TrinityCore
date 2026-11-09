@@ -232,7 +232,7 @@ local function trashSummoned(event, creature, summoner)
     if summonerEntry ~= NPC_TELEPORTATION_PORTAL and summonerEntry ~= NPC_TELEPORTATION_PORTAL_ELITE and summonerEntry ~= NPC_TELEPORTATION_PORTAL_INTRO then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local raw = selectPath(creature:GetData(DATA_PORTAL_LOCATION))
     local pts = {}
     for i, pt in ipairs(raw) do
@@ -253,7 +253,7 @@ local function trashMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = paths[guid]
     if not st or id ~= st.next then
         return
@@ -505,7 +505,7 @@ local function manaDetonationTick(creature, guid)
 end
 
 local function trashEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local entry = creature:GetEntry()
     if entry == ENTRY_INVADER_1 then
@@ -550,7 +550,7 @@ local function trashEnterCombat(event, creature)
 end
 
 local function trashCancelCombatTimers(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearPath(guid)
 end
@@ -561,7 +561,7 @@ end
 -- after an evade it resumes the path instead of stranding the trash
 -- at its home point (the door, per SetHomePosition above).
 local function trashLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local st = paths[guid]
     if st and not creature:IsDead() then

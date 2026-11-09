@@ -283,7 +283,7 @@ local function sinclariDoAction(event, creature, action)
         return
     end
     creature:SetVisible(true)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "outro", 4000, function()
         creature:Talk(SAY_SINCLARI_OUTRO)
         creature:MoveTo(0, SINCLARI_OUTRO_POS[1], SINCLARI_OUTRO_POS[2], SINCLARI_OUTRO_POS[3])
@@ -299,7 +299,7 @@ end
 -- Also the elite/intro _summons counts.
 local function portalJustSummoned(event, creature, summon)
     summon:SetData(DATA_PORTAL_LOCATION, creature:GetData(DATA_PORTAL_LOCATION))
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local entry = creature:GetEntry()
     if entry == NPC_TELEPORTATION_PORTAL_ELITE then
         local set = eliteSummons[guid]
@@ -307,14 +307,14 @@ local function portalJustSummoned(event, creature, summon)
             set = {}
             eliteSummons[guid] = set
         end
-        set[summon:GetGUID()] = true
+        set[summon:GetGUIDLow()] = true
     elseif entry == NPC_TELEPORTATION_PORTAL_INTRO then
         local set = introSummons[guid]
         if not set then
             set = {}
             introSummons[guid] = set
         end
-        set[summon:GetGUID()] = true
+        set[summon:GetGUIDLow()] = true
     end
 end
 
@@ -331,7 +331,7 @@ local function portalSummonedDied(event, creature, summon)
     if data then
         data:SetData(DATA_WAVE_COUNT, waveCountOf(creature) + 1)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:DespawnOrUnsummon()
 end
 
@@ -339,7 +339,7 @@ end
 -- from the _summons set; the elite portal advances the wave and
 -- despawns once its set empties after the 15s task fired.
 local function portalSummonLost(event, creature, summon)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local entry = creature:GetEntry()
     local set = nil
     if entry == NPC_TELEPORTATION_PORTAL_ELITE then
@@ -348,7 +348,7 @@ local function portalSummonLost(event, creature, summon)
         set = introSummons[guid]
     end
     if set then
-        set[summon:GetGUID()] = nil
+        set[summon:GetGUIDLow()] = nil
     end
     if entry == NPC_TELEPORTATION_PORTAL_ELITE and eliteFired[guid] and set and next(set) == nil then
         local data = instanceDataOf(creature)
@@ -365,7 +365,7 @@ end
 -- SetData poll (see header). Only the base portal casts 58008;
 -- elite/intro do not.
 local function portalSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_PORTAL_PERIODIC, true)
     schedule(guid, "poll", 1000, function() portalPoll(creature, guid) end)
@@ -393,7 +393,7 @@ local function eliteTask(creature, guid)
 end
 
 local function eliteSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "elite", 15000, function() eliteTask(creature, guid) end)
 end
@@ -416,7 +416,7 @@ local function introTick(creature, guid)
 end
 
 local function introSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local data = instanceDataOf(creature)
     if data and (data.eventState or 0) ~= ENCOUNTER_NOT_STARTED then
@@ -426,7 +426,7 @@ local function introSpawn(event, creature)
 end
 
 local function portalCancel(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterAuraEvent(SPELL_PORTAL_PERIODIC, 1, portalPeriodicTick)

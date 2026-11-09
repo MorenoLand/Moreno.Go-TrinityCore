@@ -224,7 +224,7 @@ end
 -- seed their combat timers below; the BossAI::JustEngagedWith
 -- base arms (:76) ported base-first below.
 local function zuramatEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- BossAI::JustEngagedWith (:76, base-first) — SetBossState
     -- (DATA_ZURAMAT 8, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
@@ -247,7 +247,7 @@ end
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function zuramatCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: if (victim->GetTypeId() == TYPEID_PLAYER)
@@ -277,7 +277,7 @@ local function zuramatReset(event, creature)
     if creature:GetBossState(DATA_ZURAMAT) ~= 3 then
         creature:SetBossState(DATA_ZURAMAT, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset -> Initialize: _voidDance = true ->
     -- GetData(DATA_VOID_DANCE) = 1 (boss_zuramat.cpp:62-66/:99-103);
     -- achievement_void_dance read leg (tick 417). Alive-gated:
@@ -326,17 +326,17 @@ end
 local function sentrySummoned(event, creature, summoned)
     if summoned:GetEntry() == NPC_VOID_SENTRY_BALL then
         summoned:SetReactState(0) -- REACT_PASSIVE
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         sentryBalls[guid] = sentryBalls[guid] or {}
         sentryBalls[guid][#sentryBalls[guid] + 1] = summoned
     end
 end
 
 local function sentryBallDespawned(event, creature, summon)
-    local balls = sentryBalls[creature:GetGUID()]
+    local balls = sentryBalls[creature:GetGUIDLow()]
     if balls then
         for i, ball in ipairs(balls) do
-            if ball == summon then
+            if ball:GetGUIDLow() == summon:GetGUIDLow() then
                 table.remove(balls, i)
                 break
             end
@@ -345,7 +345,7 @@ local function sentryBallDespawned(event, creature, summon)
 end
 
 local function sentryDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local balls = sentryBalls[guid]
     if balls then
         for _, ball in ipairs(balls) do
@@ -366,7 +366,7 @@ RegisterCreatureEvent(NPC_VOID_SENTRY, 4, sentryDied)
 -- twin — the sentryBalls table); JustDied reuses it via sentryDied.
 local function sentryDoAction(event, creature, action)
     if action == ACTION_DESPAWN_VOID_SENTRY_BALL then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local balls = sentryBalls[guid]
         if balls then
             for _, ball in ipairs(balls) do

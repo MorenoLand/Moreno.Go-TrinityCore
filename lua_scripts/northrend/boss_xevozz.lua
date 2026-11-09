@@ -246,7 +246,7 @@ end
 -- seed their combat timers below; the BossAI::JustEngagedWith
 -- base arms (:96) ported base-first below.
 local function xevozzEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- BossAI::JustEngagedWith (:96, base-first) — SetBossState
     -- (DATA_XEVOZZ 7, IN_PROGRESS) first (ScriptedCreature.cpp:527-542),
@@ -269,7 +269,7 @@ end
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function xevozzCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: if (victim->GetTypeId() == TYPEID_PLAYER)
@@ -303,7 +303,7 @@ local function xevozzReset(event, creature)
     if creature:GetBossState(DATA_XEVOZZ) ~= 3 then
         creature:SetBossState(DATA_XEVOZZ, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_xevozzAI::JustSummoned (:105-109): BossAI base, then

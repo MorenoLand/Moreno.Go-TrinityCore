@@ -315,7 +315,7 @@ local function erekemEnterCombat(event, creature)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_EARTH_SHIELD)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseOne[guid] = nil
     schedule(guid, "bloodlust", 2000, function()
@@ -359,15 +359,15 @@ local function erekemReset(event, creature)
     if creature:GetBossState(DATA_EREKEM) ~= 3 then
         creature:SetBossState(DATA_EREKEM, 0)
     end
-    phaseOne[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    phaseOne[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function erekemCancelCombatTimers(event, creature)
-    phaseOne[creature:GetGUID()] = nil
-    cancelTimers(creature:GetGUID())
+    phaseOne[creature:GetGUIDLow()] = nil
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ MovementInform (:78-82): EFFECT_MOTION_TYPE (16) +
