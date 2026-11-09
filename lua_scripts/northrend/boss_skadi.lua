@@ -236,7 +236,7 @@ end
 
 -- Shared timer wipe for events 2/23/4 on timer-carrying entries.
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_skadi::JustSummoned (:183-197): ymirjar entries MovePoint
@@ -266,7 +266,7 @@ local function skadiJustSummoned(event, creature, summon)
     if not summon then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local latched = skadiSummons[guid]
     if not latched then
         latched = {}
@@ -278,8 +278,8 @@ end
 -- C++ EnterEvadeMode (:177-179): summons.DespawnAll() before the
 -- evade despawn; timers wipe rides along (cancelCombatTimers idiom).
 local function skadiLeaveCombat(event, creature)
-    despawnSkadiSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnSkadiSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_skadi::Reset (:166-172): REACT_PASSIVE + SummonCreature
@@ -298,7 +298,7 @@ end
 -- above. PORTED tick 261 via creature:SetBossState
 -- (lua_creature_events.go:5917).
 local function skadiReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
@@ -308,10 +308,10 @@ local function skadiReset(event, creature)
         creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 0) -- NOT_STARTED: spawn path
     end
     -- C++ Initialize (:157-158) via Reset (:166-172): counters re-zeroed.
-    harpoonState[creature:GetGUID()] = nil
+    harpoonState[creature:GetGUIDLow()] = nil
     creature:SetData(DATA_LOVE_TO_SKADI, 0)
     -- C++ Reset (:166-172): _Reset() (DespawnAll) before re-summoning.
-    despawnSkadiSummons(creature:GetGUID())
+    despawnSkadiSummons(creature:GetGUIDLow())
     creature:SetReactState(0) -- REACT_PASSIVE
     if not creature:FindNearestCreature(ENTRY_GRAUF, 500) then
         creature:SummonCreature(ENTRY_GRAUF, 341.7411, -516.9545, 104.6695, 3.124139)
@@ -366,9 +366,9 @@ end
 -- tick 261 via creature:SetBossState (lua_creature_events.go:5917).
 local function skadiJustDied(event, creature)
     creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 3) -- DONE
-    despawnSkadiSummons(creature:GetGUID())
+    despawnSkadiSummons(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ DoAction(ACTION_START_ENCOUNTER) reset-check scheduler
@@ -386,7 +386,11 @@ local function skadiEnterCombat(event, creature)
     -- The area-trigger DoAction sender is unported, so the event-1 hook is
     -- the only available one (same proxy as the reset-check pump below).
     creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 1)
-    local guid = creature:GetGUID()
+    -- C++ DoAction(ACTION_START_ENCOUNTER) :231: SetFlag
+    -- UNIT_FLAG_NOT_SELECTABLE (SetFlag bridged,
+    -- lua_creature_events.go:5836); cleared at GAUNTLET_END below.
+    creature:SetFlag(59, 0x02000000)
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local function resetCheckTick()
     if creature:IsCasting() then
@@ -416,7 +420,7 @@ end
 -- DoCastVictim(SPELL_STRIKE 48640) non-triggered, init 9s,
 -- Repeat({10s,13s}).
 local function warriorEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local function hamstringTick()
     if creature:IsCasting() then
@@ -444,7 +448,7 @@ end
 -- {20s,34s} — the randtime pick is made ONCE at Schedule; arg-less
 -- Repeat() reuses that fixed duration (TaskScheduler.h:483-486).
 local function witchDoctorEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local function shadowBoltTick()
     if creature:IsCasting() then
@@ -472,7 +476,7 @@ end
 -- 49092) non-triggered, init 13s, Repeat() = 13s; DoCastVictim
 -- (SPELL_THROW 49091) non-triggered, init 2s, Repeat() = 2s.
 local function harpoonerEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local function netTick()
     if creature:IsCasting() then
@@ -537,10 +541,10 @@ end
 
 RegisterCreatureEvent(ENTRY_GRAUF, 23, graufReset)
 
--- C++ npc_graufAI::JustDied (boss_skadi.cpp:350-356): the
--- skadi->ExitVehicle() leg is cross-creature (no bridge, stays out);
--- me->DespawnOrUnsummon(Seconds(6)) ports via the freya
--- delayed-despawn idiom (CreateLuaEvent one-shot).
+-- C++ npc_graufAI::JustDied (boss_skadi.cpp:350-356): skadi->
+-- ExitVehicle() (bridged, lua_creature_events.go:3285) then
+-- me->DespawnOrUnsummon(Seconds(6)) via the freya delayed-despawn
+-- idiom (CreateLuaEvent one-shot).
 local function graufJustDied(event, creature, killer)
     CreateLuaEvent(function()
         creature:Despawn()
@@ -551,6 +555,7 @@ local function graufJustDied(event, creature, killer)
     -- her events 2/4/23.
     local skadi = creature:FindNearestCreature(ENTRY_SKADI_THE_RUTHLESS, 200.0)
     if skadi then
+        skadi:ExitVehicle()
         -- C++ ACTION_GAUNTLET_END (:264-272, in order; the
         -- summons.DespawnEntry(NPC_WORLD_TRIGGER) leg is a no-op here —
         -- Lua never summons the trigger): Talk + self-teleport +
@@ -560,7 +565,7 @@ local function graufJustDied(event, creature, killer)
         skadi:RemoveFlag(59, 0x02000000) -- UNIT_FIELD_FLAGS NOT_SELECTABLE
         skadi:RemoveFlag(59, 0x100) -- SetImmuneToPC(false)
         skadi:SetReactState(2) -- REACT_AGGRESSIVE
-        local skadiGuid = skadi:GetGUID()
+        local skadiGuid = skadi:GetGUIDLow()
         local function crushTick()
             if skadi:IsCasting() then
                 schedule(skadiGuid, "crush", 500, crushTick)
@@ -610,7 +615,7 @@ local function graufSpellHit(event, creature, caster, spellId)
     if not skadi then
         return
     end
-    local guid = skadi:GetGUID()
+    local guid = skadi:GetGUIDLow()
     local st = harpoonState[guid]
     if not st then
         st = { hits = 0, love = 0 }
@@ -669,14 +674,14 @@ local function gauntletMobsApply(event, aura, target)
     if target == nil then
         return
     end
-    gauntletIndexByGuid[target:GetGUID()] = 1
+    gauntletIndexByGuid[target:GetGUIDLow()] = 1
 end
 
 local function gauntletMobsPeriodic(event, aura, target)
     if target == nil then
         return
     end
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     local index = gauntletIndexByGuid[guid] or 1
     local offset = 0
     if math.random(0, 1) == 0 then

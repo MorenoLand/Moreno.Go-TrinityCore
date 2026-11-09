@@ -278,6 +278,7 @@ local function boatStateFor(guid, heroic)
         ancestor = nil,
         fount = nil,
         ancestorKey = nil,
+        spirits = {},
         inBoat = false,
     }
     boat[guid] = st
@@ -296,11 +297,17 @@ local function despawnBoatGhosts(st)
         st.fount:DespawnOrUnsummon(1)
         st.fount = nil
     end
+    -- C++ summons.DespawnAll on _Reset/_JustDied
+    -- (ScriptedCreature.cpp:507/516): every summon rides the list.
+    for _, spirit in ipairs(st.spirits) do
+        spirit:DespawnOrUnsummon(1)
+    end
+    st.spirits = {}
 end
 
 -- Shared timer wipe for events 2/23/4.
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ EVENT_BANE arm (:236-238): DoCast(SPELL_BANE 48294), 1-arg =
@@ -458,14 +465,17 @@ end
 -- CancelEvent(prev ancestor event) + DelayEvents(10s, base group) +
 -- ActivedNumber = Order.
 local function ymironDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = boatStateFor(guid, creature:IsHeroic())
     local postDamage = creature:GetHealth() - damage
     if postDamage <= 0 then
         return
     end
     local thresholdPct = 100 - st.mult * st.modifier
-    if postDamage * 100 >= thresholdPct * creature:GetMaxHealth() then
+    -- C++ HealthBelowPctDamaged (Unit.h:873): postDamage <
+    -- CountPctFromMaxHealth(pct), truncating; the real-valued form
+    -- fired at the exact floor boundary (svala floor precedent).
+    if postDamage >= math.floor(thresholdPct * creature:GetMaxHealth() / 100) then
         return
     end
     local order = st.modifier - 1
@@ -498,7 +508,7 @@ local function ymironMovementInform(event, creature, moveType, id)
     if moveType ~= POINT_MOTION_TYPE or id ~= POINT_BOAT then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = boat[guid]
     if not st or not st.inBoat or not creature:IsInCombat() then
         return
@@ -547,11 +557,15 @@ local function ymironJustSummoned(event, creature, summoned)
     if entry == NPC_SPIRIT_FOUNT then
         summoned:CastSpell(summoned, SPELL_SPIRIT_FOUNT, true)
         summoned:SetDisplayId(11686)
-        local st = boat[creature:GetGUID()]
+        local st = boat[creature:GetGUIDLow()]
         if st then
             st.fount = summoned
         end
     elseif entry == NPC_AVENGING_SPIRIT then
+        local st = boat[creature:GetGUIDLow()]
+        if st then
+            st.spirits[#st.spirits + 1] = summoned
+        end
         local target = randomThreatTarget(creature)
         if target then
             summoned:AddThreat(target, 0)
@@ -575,7 +589,7 @@ local function ymironEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local heroic = creature:IsHeroic()
     cancelTimers(guid)
     schedule(guid, "bane", {18000, 23000}, function()
@@ -605,7 +619,7 @@ end
 -- tick 261 via creature:SetBossState (lua_creature_events.go:5917);
 -- Talk(SAY_DEATH) — unconditional — the sjonnir JustDied-Talk precedent.
 local function ymironJustDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ _JustDied() (ScriptedCreature.cpp:513-520): summons.DespawnAll();
     -- the boat state dies with the AI instance (ctor reshuffles on respawn).
@@ -630,14 +644,14 @@ end
 -- is mirrored into SetData below (tick 417) and the boat-machine counters ride the
 -- unbridged machine.
 local function ymironReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
     -- C++ Reset -> Initialize() (:122-130) + _Reset() summons.DespawnAll()
     -- (ScriptedCreature.cpp:507): modifier/active reset, boat ghosts
     -- despawned; ActiveOrder is NOT reshuffled (ctor-only).
-    local st = boatStateFor(creature:GetGUID(), creature:IsHeroic())
+    local st = boatStateFor(creature:GetGUIDLow(), creature:IsHeroic())
     despawnBoatGhosts(st)
     st.modifier = 1
     st.active = 1

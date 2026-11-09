@@ -21,13 +21,13 @@
 --   (motionFor funnel, instance_hooks.go:311-320); a static template
 --   spawn never materializes server-side and is never bound (naxxramas
 --   LoadGrid delta).
--- - GetGuidData (instance_utgarde_pinnacle.cpp:93-99): the Lua mirror is
---   the instanceData binds above, read as instanceData.<boss> by the
---   boss files (oculus precedent); the C++ consumers ride unported
---   cross-creature machines in those boss files — the Skadi Grauf
---   lookup (boss_skadi.cpp:171/:249), the Svala mirror
---   (boss_svala.cpp:196/:339) and sacrificed-player GUID
---   (boss_svala.cpp:442/:495), the Palehoof sphere
+-- - GetGuidData (instance_utgarde_pinnacle.cpp:93-99): the binds
+--   above are write-only (tick 519 correction: zero instanceData /
+--   GetInstanceData references exist in the four boss files) — the
+--   C++ consumers ride unported cross-creature machines in those
+--   boss files — the Skadi Grauf lookup (boss_skadi.cpp:171/:249),
+--   the Svala mirror (boss_svala.cpp:196/:339) and sacrificed-player
+--   GUID (boss_svala.cpp:442/:495), the Palehoof sphere
 --   (boss_palehoof.cpp:207) and self-lookup from the miniboss AIs
 --   (boss_palehoof.cpp:355/:361/:571) — so the GUID legs as consumed
 --   stay out there, re-expressed via FindNearestCreature /
@@ -54,11 +54,14 @@
 --   delta as above; the mirror is resolved via FindNearestGameObject
 --   in boss_svala.lua.
 -- - SetGuidData DATA_SACRIFICED_PLAYER
---   (instance_utgarde_pinnacle.cpp:85-91, :102): no instance-side
---   GUID store in Lua — the sacrificed latch lives in boss_svala.lua's
---   per-GUID state table (boss_svala.cpp:170/:362 writes, :442/:495
---   reads); the GetGuidData stay-out is documented in that file's
---   header.
+--   (instance_utgarde_pinnacle.cpp:85-91, :102): the instance-side
+--   GUID store exists and is bridged (SetGuidData/GetGuidData/
+--   GetInstanceCreature, lua_creature_events.go:6448-6490) but has no
+--   bearer — SetGuidData latches only the caller's GUID and players
+--   expose no SetGuidData, so Svala cannot latch the sacrifice
+--   target's player GUID; the sacrificed latch lives in
+--   boss_svala.lua's per-GUID state table (boss_svala.cpp:170/:362
+--   writes, :442/:495 reads).
 -- - SetHeaders(DataHeader "UP") / SetBossNumber(EncounterCount 4) /
 --   LoadDoorData / LoadObjectData: no bridges; the boss-state store is
 --   written via creature:SetBossState (lua_creature_events.go:5908) and

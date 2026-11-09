@@ -403,7 +403,7 @@ end
 -- (false) models the C++ stand-down (done in the 0s-scheduled
 -- EVENT_RITUAL_PREPARATION).
 local function svalaDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = svalaState[guid]
     if not st or st.sacrificed then
         return
@@ -433,7 +433,7 @@ local function svalaSpellHitTarget(event, creature, target, spellId)
     if spellId ~= SPELL_RITUAL_STRIKE_EFF_1 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = svalaState[guid]
     if not st or not st.sacrificed then
         return
@@ -447,7 +447,7 @@ end
 -- pulse + me-DoZone ported above Talk; setActive/ScheduleTasks legs out;
 -- Talk(SAY_AGGRO) — unconditional (the auriaya engage-port precedent).
 local function svalaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     svalaState[guid] = { sacrificed = false }
     -- BossAI::JustEngagedWith (:174, base-first) — SetBossState
@@ -495,7 +495,7 @@ end
 -- (emote :218 -> _JustDied :219 -> Talk :220); Talk(SAY_DEATH) —
 -- unconditional — the sjonnir JustDied-Talk precedent.
 local function svalaJustDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = svalaState[guid]
     -- C++ JustDied (:217): the SACRIFICING-gated SetEquipmentSlots
     -- (false, EQUIP_UNEQUIP, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE) = (0,
@@ -522,7 +522,15 @@ end
 -- lua_creature_events.go:784; C++ Reset with _introCompleted ->
 -- NORMAL -> true).
 local function svalaWipeCombat(event, creature)
-    local guid = creature:GetGUID()
+    -- Death-path guard (tick 519): Go fireCreatureDied fires ev23
+    -- before ev4, so an unguarded wipe nils svalaState before
+    -- svalaJustDied reads the sacrificed latch (C++ JustDied :214-221
+    -- checks IsInPhase(SACRIFICING) before _JustDied); ev4 does the
+    -- cleanup itself. Evade-path ev2/ev23 (alive) still wipes.
+    if creature:IsDead() then
+        return
+    end
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     svalaState[guid] = nil
     creature:SetCombatMovement(true)
@@ -562,10 +570,12 @@ end
 -- C++ npc_scourge_hulkAI mightyBlow arm (:571-577): DoCast(victim,
 -- SPELL_MIGHTY_BLOW 48697), 2-arg = non-triggered; init urand(4s,9s),
 -- re-arm urand(12s,17s). The !HasUnitState(UNIT_STATE_STUNNED) gate is
--- unmodeled (documented in the header).
+-- ported (tick 519; HasUnitState bridged, lua_creature_events.go:2217;
+-- UNIT_STATE_STUNNED = 0x8, Unit.h:214; constant unexposed to Lua).
+-- C++ re-arms unconditionally, so the gate wraps only the cast.
 local function mightyBlowTick(creature, guid)
     local victim = creature:GetVictim()
-    if victim then
+    if victim and not victim:HasUnitState(8) then -- UNIT_STATE_STUNNED
         creature:CastSpell(victim, SPELL_MIGHTY_BLOW)
     end
     schedule(guid, "mightyblow", {12000, 17000}, function()
@@ -580,7 +590,11 @@ end
 -- referenced in the C++ (56785 fires both modes, anomalus
 -- precedent).
 local function volatileInfectionTick(creature, guid)
-    creature:CastSpell(nil, SPELL_VOLATILE_INFECTION)
+    -- C++ only casts when UpdateVictim() succeeds (mightyBlowTick
+    -- precedent); the re-arm below stays unconditional.
+    if creature:GetVictim() then
+        creature:CastSpell(nil, SPELL_VOLATILE_INFECTION)
+    end
     schedule(guid, "volatileinfection", {13000, 17000}, function()
         volatileInfectionTick(creature, guid)
     end)
@@ -590,7 +604,7 @@ end
 -- :540-544) — the xt002 precedent: combat-start scheduling carries the
 -- Reset inits.
 local function hulkEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "mightyblow", {4000, 9000}, function()
         mightyBlowTick(creature, guid)
@@ -607,7 +621,7 @@ local hulkRitualStrike = {}
 local function hulkDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() and attacker ~= nil
             and attacker:GetEntry() == ENTRY_SVALA_SORROWGRAVE then
-        hulkRitualStrike[creature:GetGUID()] = true
+        hulkRitualStrike[creature:GetGUIDLow()] = true
         -- Achievement write leg (tick 417): mirror the latch into the
         -- hulk's SetData store for achievement_incredible_hulk's
         -- GetData read (Go gate via bossLatchData; the kill target
@@ -630,7 +644,7 @@ local function svalaJustSummoned(_, creature, summoned)
 end
 
 local function hulkCancelCombatTimers(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hulkRitualStrike[guid] = nil
 end
@@ -641,7 +655,7 @@ end
 -- (kill.go:1091) and an unguarded zero would wipe the latch before
 -- the gate reads it, and ev4 must never write the latch.
 local function hulkReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hulkRitualStrike[guid] = nil
     if not creature:IsDead() then

@@ -194,6 +194,7 @@ local GO_GORTOK_PALEHOOF_SPHERE = 188593 -- utgarde_pinnacle.h:94
 local ENTRY_FRENZIED_WORGEN = 26683
 local ENTRY_RAVENOUS_FURBOLG = 26684
 local ENTRY_MASSIVE_JORMUNGAR = 26685
+local NPC_JORMUNGAR_WORM = 27228 -- utgarde_pinnacle.h:67
 local ENTRY_FEROCIOUS_RHINO = 26686
 
 local SAY_AGGRO = 0
@@ -233,6 +234,7 @@ local SPELL_AWAKEN_GORTOK = 47670
 -- (the anubrekhan triggered-self-cast precedent); removed at
 -- ACTION_START_FIGHT (:341-345) via RemoveAurasDueToSpell.
 local SPELL_FREEZE = 16245
+local SPELL_ORB_CHANNEL = 48048 -- boss_palehoof.cpp:40
 
 local timers = {}
 
@@ -320,7 +322,57 @@ end
 
 -- Shared timer wipe for events 2/23/4 on timer-carrying entries.
 local function cancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+end
+
+-- C++ PalehoofMinionsBossAI::EnterEvadeMode (:359-362): a miniboss
+-- evade cascades to palehoof. EnterEvadeMode bridged
+-- (lua_creature_events.go:5014).
+local function minibossLeaveCombat(event, creature)
+    cancelCombatTimers(event, creature)
+    local palehoof = creature:FindNearestCreature(ENTRY_GORTOK_PALEHOOF, 100.0)
+    if palehoof then
+        palehoof:EnterEvadeMode()
+    end
+end
+
+local jormungarWorms = {}
+
+-- C++ boss_massive_jormungarAI::EnterEvadeMode (:545-548): worms
+-- despawn first (summons.DespawnAll), then the cascade above.
+local function jormungarLeaveCombat(event, creature)
+    local guid = creature:GetGUIDLow()
+    local worms = jormungarWorms[guid]
+    if worms then
+        for _, worm in ipairs(worms) do
+            worm:DespawnOrUnsummon()
+        end
+        jormungarWorms[guid] = nil
+    end
+    minibossLeaveCombat(event, creature)
+end
+
+-- C++ boss_massive_jormungarAI::JustSummoned (:514-520): worm entry
+-- 27228 -> WormAttackEvent at 2s (SetReactState(REACT_AGGRESSIVE) +
+-- SetTempSummonType(CORPSE_DESPAWN = 5) + DoZoneInCombat) +
+-- MoveRandom(5.0) now.
+local function jormungarJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= NPC_JORMUNGAR_WORM then
+        return
+    end
+    summoned:MoveRandom(5.0)
+    local guid = creature:GetGUIDLow()
+    local worms = jormungarWorms[guid]
+    if worms == nil then
+        worms = {}
+        jormungarWorms[guid] = worms
+    end
+    worms[#worms + 1] = summoned
+    CreateLuaEvent(function()
+        summoned:SetReactState(2) -- REACT_AGGRESSIVE
+        summoned:SetTempSummonType(5) -- TEMPSUMMON_CORPSE_DESPAWN
+        summoned:DoZoneInCombat()
+    end, 2000)
 end
 
 -- C++ PalehoofMinionsBossAI::Reset (:329-335) — DoCastSelf(SPELL_FREEZE
@@ -328,9 +380,13 @@ end
 -- (event 23 fires first on the Go respawn/death/evade paths; no 23 fire
 -- at first grid spawn, so the spawn-time freeze visual stays unmodeled).
 local function minibossReset(event, creature)
+    -- C++ Reset never runs on death; Go ev23 pre-fires on death.
+    if not creature:IsAlive() then
+        return
+    end
     creature:SetCombatPulseDelay(0) -- boss_palehoof.cpp:331 (base Reset arm 1; pulse disable)
     creature:CastSpell(creature, SPELL_FREEZE, true)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ EVENT_ARCING_SMASH arm (:236-239): DoCastVictim(SPELL_ARCING_SMASH
@@ -402,7 +458,7 @@ local function palehoofEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arcingsmash", 7000, function()
         arcingSmashTick(creature, guid)
@@ -431,7 +487,7 @@ end
 -- carried here on event 1.
 local function furbolgEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ PalehoofMinionsBossAI::DoAction(ACTION_START_FIGHT) (:341-345):
     -- RemoveAurasDueToSpell(SPELL_FREEZE) — the unfreeze leg (the
@@ -471,7 +527,7 @@ end
 -- carried here on event 1.
 local function worgenEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
     local function mortalWoundTick()
@@ -506,7 +562,7 @@ end
 -- carried here on event 1.
 local function rhinoEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
     local function goreTick()
@@ -545,7 +601,7 @@ end
 -- carried here on event 1.
 local function jormungarEnterCombat(event, creature)
     creature:SetCombatPulseDelay(5) -- boss_palehoof.cpp:338 (base JustEngagedWith arm 1; setActive leg has no bridge)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:RemoveAura(SPELL_FREEZE)
     local function acidSpitTick()
@@ -618,7 +674,7 @@ local function palehoofReset(event, creature)
     -- already gone). Alive-gated: Go ev23 fires on death too (the
     -- magtheridon reset-then-died order), and C++ Reset never runs on
     -- death.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     orbs[guid] = nil
     encounters[guid] = 0
     if creature:IsAlive() then
@@ -655,7 +711,7 @@ end
 -- file's equivalent.
 local function palehoofJustSummoned(event, creature, summon)
     if summon:GetEntry() == ENTRY_PALEHOOF_ORB then
-        orbs[creature:GetGUID()] = summon
+        orbs[creature:GetGUIDLow()] = summon
     end
 end
 
@@ -671,7 +727,7 @@ end
 -- bridge), so the awakened miniboss never unfreezes via this path;
 -- its timer kit still arms on ev1 combat as before.
 local function nextPhase(palehoof)
-    local guid = palehoof:GetGUID()
+    local guid = palehoof:GetGUIDLow()
     local count = (encounters[guid] or 0) + 1
     encounters[guid] = count
     local orb = orbs[guid]
@@ -718,22 +774,26 @@ end
 -- unexpressible, see nextPhase above). MoveTo is the MovePoint twin
 -- (lua_creature_events.go:4623).
 local function startEncounter(palehoof)
-    local orb = orbs[palehoof:GetGUID()]
+    local orb = orbs[palehoof:GetGUIDLow()]
     if orb == nil then
         return
     end
+    -- Guid-keyed schedule() (tick 519): bare CreateLuaEvent timers
+    -- were never cancelled on ev2/4/23, so a second sphere gossip
+    -- stacked duplicates; C++ BasicEvents die with the orb.
+    local guid = palehoof:GetGUIDLow()
     orb:CastSpell(orb, SPELL_ORB_VISUAL, true)
-    CreateLuaEvent(function()
+    schedule(guid, "orbAir", 3000, function()
         orb:SetWalk(true)
         orb:MoveTo(0, 238.6077, -460.7103, 112.5671)
-    end, 3000)
-    CreateLuaEvent(function()
+    end)
+    schedule(guid, "orbFly", 6000, function()
         orb:SetWalk(false)
         orb:MoveTo(0, 279.26, -452.1, 110.0)
-    end, 6000)
-    CreateLuaEvent(function()
+    end)
+    schedule(guid, "orbFinal", 16000, function()
         orb:CastSpell(orb, SPELL_AWAKEN_SUBBOSS, true)
-    end, 16000)
+    end)
 end
 
 -- C++ go_palehoof_sphereAI::OnGossipHello (:571-585): palehoof alive
@@ -743,18 +803,73 @@ end
 -- precedent; handler args (event, player, go)). The palehoof lookup
 -- re-expresses instance->GetCreature via FindNearestCreature.
 local function onSphereGossip(event, player, go)
+    -- C++ returns true unconditionally (:585); false lets native GO
+    -- Use arms proceed (gameobjects.go:825-836). Only run the
+    -- encounter when palehoof is alive and state != DONE.
     local palehoof = go:FindNearestCreature(ENTRY_GORTOK_PALEHOOF, 100.0)
-    if palehoof == nil or not palehoof:IsAlive() then
-        return false
+    if palehoof ~= nil and palehoof:IsAlive()
+            and palehoof:GetBossState(DATA_GORTOK_PALEHOOF) ~= 3 then
+        go:SetFlag(9, 16) -- GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE
+        go:SetGoState(0) -- GO_STATE_ACTIVE
+        startEncounter(palehoof)
     end
-    if palehoof:GetBossState(DATA_GORTOK_PALEHOOF) == 3 then
-        return false
-    end
-    go:SetFlag(9, 16) -- GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE
-    go:SetGoState(0) -- GO_STATE_ACTIVE
-    startEncounter(palehoof)
     return true
 end
+
+-- C++ spell_palehoof_crazed_effect (:630-633): the hit unit casts
+-- SPELL_CRAZED_TAUNT 48147 on the caster, triggered. RegisterSpellEvent
+-- ev5 = OnEffectHitTarget (lua_spell.go:592); the blanket
+-- "no-SpellScript-bridge" header claim is stale (gal_darah/novos
+-- precedent).
+RegisterSpellEvent(48139, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex == 0 and hitTarget ~= nil then
+        local caster = spell:GetCaster()
+        if caster ~= nil then
+            hitTarget:CastSpell(caster, SPELL_CRAZED_TAUNT, true)
+        end
+    end
+end)
+
+-- C++ spell_palehoof_awaken_subboss (:662-668): caster casts
+-- SPELL_ORB_CHANNEL 48048 on the hit unit; the hit unit drops
+-- NOT_SELECTABLE; CombatStartEvent at 8500ms runs DoAction
+-- (ACTION_START_FIGHT) = RemoveAurasDueToSpell(SPELL_FREEZE) +
+-- SetImmuneToPC(false) + DoZoneInCombat + orb DespawnOrUnsummon(1s)
+-- (:292-299). SetImmuneToPC has no bridge (stays out).
+RegisterSpellEvent(47669, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        caster:CastSpell(hitTarget, SPELL_ORB_CHANNEL)
+    end
+    hitTarget:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
+    CreateLuaEvent(function()
+        hitTarget:RemoveAura(16245) -- SPELL_FREEZE
+        hitTarget:DoZoneInCombat()
+        if caster ~= nil then
+            caster:DespawnOrUnsummon(1000)
+        end
+    end, 8500)
+end)
+
+-- C++ spell_palehoof_awaken_gortok (:692-696): same START_FIGHT
+-- machine at 8000ms (orb = caster, despawns at 1s).
+RegisterSpellEvent(47670, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
+    local orb = spell:GetCaster()
+    CreateLuaEvent(function()
+        hitTarget:RemoveAura(16245) -- SPELL_FREEZE
+        hitTarget:DoZoneInCombat()
+        if orb ~= nil then
+            orb:DespawnOrUnsummon(1000)
+        end
+    end, 8000)
+end)
 
 -- C++ boss_palehoofAI::JustDied (:254-260): events.Reset() +
 -- instance->SetBossState(DATA_GORTOK_PALEHOOF, DONE) + DoPlaySoundToSet(me, PALEHOOF_SOUND_DEATH 13467) +
@@ -791,21 +906,22 @@ RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 4, palehoofDied)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 19, palehoofJustSummoned)
 RegisterCreatureEvent(ENTRY_GORTOK_PALEHOOF, 23, palehoofReset)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 1, furbolgEnterCombat)
-RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 2, minibossLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 4, minibossDied)
 RegisterCreatureEvent(ENTRY_RAVENOUS_FURBOLG, 23, minibossReset)
 RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 1, worgenEnterCombat)
-RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 2, minibossLeaveCombat)
 RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 4, minibossDied)
 RegisterCreatureEvent(ENTRY_FRENZIED_WORGEN, 23, minibossReset)
 RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 1, rhinoEnterCombat)
-RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 2, minibossLeaveCombat)
 RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 4, minibossDied)
 RegisterCreatureEvent(ENTRY_FEROCIOUS_RHINO, 23, minibossReset)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 1, jormungarEnterCombat)
-RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 2, jormungarLeaveCombat)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 4, minibossDied)
 RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 23, minibossReset)
+RegisterCreatureEvent(ENTRY_MASSIVE_JORMUNGAR, 19, jormungarJustSummoned)
 
 RegisterGameObjectGossipEvent(GO_GORTOK_PALEHOOF_SPHERE, 1, onSphereGossip)
 
