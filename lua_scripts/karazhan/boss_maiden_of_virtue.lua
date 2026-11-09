@@ -89,7 +89,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(2, 1) -- DATA_MAIDEN_OF_VIRTUE, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     creature:CastSpell(creature, SPELL_HOLYGROUND, true)
@@ -100,11 +100,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- No Reset override in boss_maiden_of_virtue.cpp, so base
     -- BossAI::Reset (ScriptedCreature.h:328) runs _Reset()
     -- (ScriptedCreature.cpp:499-511): alive-gated and != DONE-gated
@@ -122,7 +122,7 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++-exact arm order: Talk, then _JustDied()
     -- (boss_maiden_of_virtue.cpp:64-65) -> SetBossState(DONE)

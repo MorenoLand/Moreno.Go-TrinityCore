@@ -168,8 +168,8 @@ local function curatorJustSummoned(event, creature, summon)
         return
     end
     summon:SetReactState(REACT_PASSIVE)
-    local bossGuid = creature:GetGUID()
-    schedule(bossGuid, "flareAggro:" .. summon:GetGUID(), 2000, function()
+    local bossGuid = creature:GetGUIDLow()
+    schedule(bossGuid, "flareAggro:" .. summon:GetGUIDLow(), 2000, function()
         summon:SetReactState(REACT_AGGRESSIVE)
         summon:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         summon:DoZoneInCombat()
@@ -184,7 +184,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(5, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { infused = false }
     creature:Talk(SAY_AGGRO)
@@ -197,11 +197,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset (boss_curator.cpp:61-63): _Reset() writes
     -- SetBossState(DATA_CURATOR 5, NOT_STARTED), alive-gated and skipped
     -- when already DONE (ScriptedCreature.cpp:499-511); Go fires ev23 on
@@ -222,7 +222,7 @@ local function onTargetDied(event, creature, victim)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_curator.cpp:74-78): _JustDied() first, writing
     -- SetBossState(DATA_CURATOR 5, DONE) (ScriptedCreature.cpp:513-519),
     -- then Talk(SAY_DEATH).
@@ -231,7 +231,7 @@ local function onDied(event, creature, killer)
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if st == nil then
         st = { infused = false }

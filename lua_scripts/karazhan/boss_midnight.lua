@@ -174,7 +174,7 @@ local function midnightEnterCombat(event, creature, target)
     creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     midnightInitState(guid)
     schedule(guid, "knockdown", {15000, 25000}, function() onMidnightKnockdown(creature, guid) end)
@@ -237,7 +237,7 @@ local function midnightJustSummoned(event, creature, summon)
 end
 
 local function midnightDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = midnightState[guid]
     if state == nil then
         state = { phase = PHASE_NONE }
@@ -268,7 +268,7 @@ local function midnightDamageTaken(event, creature, attacker, damage)
 end
 
 local function midnightTargetDied(event, creature, victim)
-    local state = midnightState[creature:GetGUID()]
+    local state = midnightState[creature:GetGUIDLow()]
     if state ~= nil and state.phase == PHASE_ATTUMEN_ENGAGES then
         creature:Talk(SAY_MIDNIGHT_KILL)
     end
@@ -284,7 +284,7 @@ local function midnightDied(event, creature, killer)
 end
 
 local function midnightLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     midnightState[guid] = nil
     -- C++ boss_midnightAI::EnterEvadeMode: _DespawnAtEvade(Seconds(10))
@@ -294,7 +294,7 @@ local function midnightLeaveCombat(event, creature)
 end
 
 local function midnightReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     midnightInitState(guid)
     -- C++ Reset (boss_midnight.cpp:300-303): Initialize() then
@@ -372,7 +372,7 @@ local function attumenEnterCombat(event, creature, target)
     creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local state = { phase = PHASE_NONE }
     attumenState[guid] = state
@@ -402,7 +402,7 @@ local function attumenEnterCombat(event, creature, target)
 end
 
 local function attumenDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = attumenState[guid]
     if state == nil then
         state = { phase = PHASE_NONE }
@@ -442,11 +442,11 @@ local function attumenSpellHit(event, creature, caster, spellId)
     -- "no GUID->creature bridge" claim is retracted: the caster IS the
     -- midnight creature that cast SPELL_MOUNT.
     if spellId == SPELL_MOUNT then
-        local state = attumenState[creature:GetGUID()]
+        local state = attumenState[creature:GetGUIDLow()]
         if state ~= nil then
             state.phase = PHASE_NONE
         end
-        cancelTimers(creature:GetGUID())
+        cancelTimers(creature:GetGUIDLow())
         if caster ~= nil then
             caster:AttackStop()
             caster:RemoveAllAttackers()
@@ -469,7 +469,7 @@ end
 local function attumenDied(event, creature, killer)
     -- C++ JustDied -> _JustDied -> scheduler.CancelAll(): the timers must
     -- not keep firing on the corpse.
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_midnight.cpp:201-209), C++ order: Talk, then
     -- midnight->KillSelf() via the stored _midnightGUID (set at :332,
@@ -488,7 +488,7 @@ local function attumenDied(event, creature, killer)
 end
 
 local function attumenLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     attumenState[guid] = nil
     -- C++ boss_attumenAI::EnterEvadeMode: me->DespawnOrUnsummon()
@@ -498,7 +498,7 @@ local function attumenLeaveCombat(event, creature)
 end
 
 local function attumenReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     attumenInitState(guid)
     -- C++ Reset (boss_midnight.cpp:88-92): Initialize() then

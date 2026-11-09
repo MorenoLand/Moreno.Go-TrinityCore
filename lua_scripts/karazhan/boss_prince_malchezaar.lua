@@ -483,7 +483,7 @@ local function startPhaseThree(creature, guid)
 end
 
 local function malchezaarEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     malchezaarInitState(guid)
     -- C++ JustEngagedWith: Talk(SAY_AGGRO) + nether-door close
@@ -503,7 +503,7 @@ local function malchezaarEnterCombat(event, creature, target)
 end
 
 local function malchezaarLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     despawnInfernals(creature)
     malchezaarInitState(guid)
@@ -521,13 +521,13 @@ local function malchezaarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     local netherDoor = creature:FindNearestGameObject(GO_NETHERSPACE_DOOR, 100.0)
     if netherDoor then netherDoor:SetGoState(0) end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     despawnInfernals(creature)
-    malchezaarInitState(creature:GetGUID())
+    malchezaarInitState(creature:GetGUIDLow())
 end
 
 local function malchezaarReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     despawnInfernals(creature)
     malchezaarInitState(guid)
@@ -537,7 +537,7 @@ local function malchezaarReset(event, creature)
 end
 
 local function malchezaarDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = malchezaarState[guid]
     if st == nil then
         malchezaarInitState(guid)
@@ -597,7 +597,7 @@ local function infernalSpellHit(event, creature, caster, spellId)
         creature:SetDisplayId(native)
     end
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     infernalSchedule(guid, "hellfire", 4000, function()
         creature:CastSpell(creature, SPELL_HELLFIRE)
     end)

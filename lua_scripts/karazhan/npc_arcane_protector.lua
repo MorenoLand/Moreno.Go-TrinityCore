@@ -87,7 +87,7 @@ local function onAstralSpark(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fist", 1000, function() onFistOfStone(creature, guid) end)
     schedule(guid, "astralspark", math.random(3000, 8000), function()
@@ -99,11 +99,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Reset(): DoCast(me, SPELL_INVI) is Reset-only (karazhan.cpp).
     -- Alive-gated; the timer cancel rides the death leg deliberately.

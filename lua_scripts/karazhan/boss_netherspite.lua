@@ -431,7 +431,7 @@ local function netherspiteInitState(guid)
 end
 
 local function netherspiteEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     netherspiteInitState(guid)
     -- C++ JustEngagedWith: HandleDoors(false) then SwitchToPortalPhase.
@@ -443,14 +443,14 @@ local function netherspiteEnterCombat(event, creature, target)
 end
 
 local function netherspiteLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     destroyPortals(creature, guid)
     netherspiteInitState(guid)
 end
 
 local function netherspiteDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustDied: HandleDoors(true) then DestroyPortals (order kept).
     local door = creature:FindNearestGameObject(GO_MASSIVE_DOOR, 100.0)
@@ -459,7 +459,7 @@ local function netherspiteDied(event, creature, killer)
 end
 
 local function netherspiteReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     netherspiteInitState(guid)
     -- C++ Reset: HandleDoors(true) then DestroyPortals (order kept).

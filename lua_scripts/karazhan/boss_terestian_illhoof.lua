@@ -176,7 +176,7 @@ local function terestianEnterCombat(event, creature, target)
     creature:SetBossState(7, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     -- C++ Reset arms the timers (also on evade); the luaBossAI shim binds
     -- the instance encounter. JustEngagedWith: Talk(SAY_AGGRO).
@@ -220,8 +220,8 @@ local function terestianJustSummoned(event, creature, summon)
     if summon:GetEntry() ~= ENTRY_FIENDISH_PORTAL then
         return
     end
-    local bossGuid = creature:GetGUID()
-    local key = "portalImp:" .. summon:GetGUID()
+    local bossGuid = creature:GetGUIDLow()
+    local key = "portalImp:" .. summon:GetGUIDLow()
     schedule(timers, bossGuid, key, 2400, function()
         portalImpPump(summon, bossGuid, key)
     end)
@@ -246,13 +246,13 @@ local function despawnPortalMachine(creature)
 end
 
 local function terestianLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     despawnPortalMachine(creature)
 end
 
 local function terestianDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     -- C++ JustDied (boss_terestian_illhoof.cpp:107-113): Talk(SAY_DEATH),
     -- then the portal-imp despawn arm (sweep above), then _JustDied()
@@ -266,7 +266,7 @@ end
 -- (EventMap::ScheduleEvent overwrites the pending timer).
 local function terestianSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_BROKEN_PACT then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelTimer(timers, guid, "kilrek")
         schedule(timers, guid, "kilrek", 32000, function()
             onSummonKilrek(creature, guid)
@@ -275,7 +275,7 @@ local function terestianSpellHit(event, creature, caster, spellId)
 end
 
 local function terestianReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     despawnPortalMachine(creature)
     -- C++ Reset (boss_terestian_illhoof.cpp:75-88): the imp despawn above,
@@ -320,7 +320,7 @@ local function onAmplifyFlames(creature, guid)
 end
 
 local function kilrekEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(kilrekTimers, guid)
     schedule(kilrekTimers, guid, "amplify", 8000, function()
         onAmplifyFlames(creature, guid)
@@ -328,12 +328,12 @@ local function kilrekEnterCombat(event, creature, target)
 end
 
 local function kilrekLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(kilrekTimers, guid)
 end
 
 local function kilrekDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(kilrekTimers, guid)
     creature:CastSpell(creature, SPELL_BROKEN_PACT, true)
     -- C++ JustDied: DespawnOrUnsummon(Seconds(15)) after the broken-pact
@@ -364,7 +364,7 @@ local function onFirebolt(creature, guid)
 end
 
 local function impEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(impTimers, guid)
     schedule(impTimers, guid, "firebolt", 2000, function()
         onFirebolt(creature, guid)
@@ -372,7 +372,7 @@ local function impEnterCombat(event, creature, target)
 end
 
 local function impLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(impTimers, guid)
     -- C++ npc_fiendish_imp::Reset() :298: ApplySpellImmune(0,
     -- IMMUNITY_SCHOOL, SPELL_SCHOOL_MASK_FIRE=4, true) — fire-school

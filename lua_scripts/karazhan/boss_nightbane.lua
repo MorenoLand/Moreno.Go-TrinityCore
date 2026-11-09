@@ -355,7 +355,7 @@ local function nightbaneEnterCombat(event, creature, target)
     creature:SetBossState(11, 1) -- DATA_NIGHTBANE, IN_PROGRESS
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nightbaneInitState(guid)
     -- The intro (ACTION_SUMMON spline chain, IMMUNE_TO_PC, DoZoneInCombat)
@@ -369,7 +369,7 @@ local function nightbaneEnterCombat(event, creature, target)
 end
 
 local function nightbaneLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nightbaneInitState(guid)
     -- C++ EnterEvadeMode (boss_nightbane.cpp:138): SetDisableGravity(true);
@@ -378,7 +378,7 @@ local function nightbaneLeaveCombat(event, creature)
 end
 
 local function nightbaneDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (:147-151): _JustDied() first (:149), writing
     -- SetBossState(DATA_NIGHTBANE 11, DONE) (ScriptedCreature.cpp:513-520),
     -- then HandleTerraceDoors(true).
@@ -401,7 +401,7 @@ end
 -- respawns DB-spawned creatures on their normal spawntimesecs (opera
 -- precedent). C++ order kept: despawn first, then FAIL.
 local function nightbaneReachHome(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nightbaneInitState(guid)
     creature:Despawn()
@@ -409,7 +409,7 @@ local function nightbaneReachHome(event, creature)
 end
 
 local function nightbaneReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nightbaneInitState(guid)
     -- C++ Reset (:126-133): _Reset() first (:128), writing
@@ -434,7 +434,7 @@ local function nightbaneReset(event, creature)
 end
 
 local function nightbaneDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = nightbaneState[guid]
     if st == nil then
         st = { phase = PHASE_GROUND, flyCount = 0 }

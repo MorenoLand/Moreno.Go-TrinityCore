@@ -391,7 +391,7 @@ onBerserk = function(creature, guid)
 end
 
 local function aranEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     aranInitState(guid)
     -- C++ JustEngagedWith (boss_shade_of_aran.cpp:176-182): Talk(SAY_AGGRO),
@@ -418,13 +418,13 @@ local function aranEnterCombat(event, creature, target)
 end
 
 local function aranLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     aranInitState(guid)
 end
 
 local function aranDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     -- C++ JustDied (boss_shade_of_aran.cpp:168-174): Talk(SAY_DEATH),
     -- SetBossState(DONE), library-door re-open
@@ -436,7 +436,7 @@ local function aranDied(event, creature, killer)
 end
 
 local function aranReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     aranInitState(guid)
     -- C++ Reset (boss_shade_of_aran.cpp:154-161): Initialize(),
@@ -467,7 +467,7 @@ local onWaterbolt
 
 local function elementalEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_shade_of_aran.cpp:536: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(elementalTimers, guid)
     -- C++ water_elementalAI Reset: CastTimer = 2000 + rand32() % 3000
     -- ([2000,4999], exclusive top); combat re-arms at urand(2000, 5000).
@@ -487,7 +487,7 @@ onWaterbolt = function(creature, guid)
 end
 
 local function elementalLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(elementalTimers, guid)
 end
 

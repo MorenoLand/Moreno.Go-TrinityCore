@@ -239,7 +239,7 @@ end
 -- skips the 5s CheckAdds schedule, since C++ UpdateAI (and its
 -- CheckAdds_Timer) does not run while evading.
 local function addsAttack(creature)
-    local state = moroesState[creature:GetGUID()]
+    local state = moroesState[creature:GetGUIDLow()]
     if state == nil or state.addIds == nil then
         return false
     end
@@ -295,7 +295,7 @@ local function onCheckAdds(creature, guid)
 end
 
 local function moroesEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     moroesInitState(guid)
     -- C++ boss_moroes.cpp:155+164: JustEngagedWith calls StartEvent()
@@ -329,7 +329,7 @@ end
 -- the postDamage > 0 guard (nefarian rule) keeps the port from frenzying
 -- while dying.
 local function moroesDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = moroesState[guid]
     if state == nil or state.enrage then
         return
@@ -346,11 +346,11 @@ local function moroesDamageTaken(event, creature, attacker, damage)
 end
 
 local function moroesLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function moroesReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     moroesInitState(guid)
     -- Go fires event 23 on evade and on the death path (before event 4);
@@ -397,7 +397,7 @@ local function moroesTargetDied(event, creature, victim)
 end
 
 local function moroesDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     moroesInitState(guid)
     creature:Talk(SAY_DEATH)
@@ -440,11 +440,11 @@ local function guestHealTarget(creature)
 end
 
 local function guestReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function guestEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 
@@ -480,7 +480,7 @@ local function dorotheaSwPain(creature, guid)
 end
 
 local function dorotheaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     guestEnterCombat(event, creature, target)
     schedule(guid, "mindflay", 1000, function() dorotheaMindFlay(creature, guid) end)
     schedule(guid, "manaburn", 7000, function() dorotheaManaBurn(creature, guid) end)
@@ -520,7 +520,7 @@ local function rafeSeal(creature, guid)
 end
 
 local function rafeEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     guestEnterCombat(event, creature, target)
     schedule(guid, "hammer", 1000, function() rafeHammer(creature, guid) end)
     schedule(guid, "seal", 7000, function() rafeSeal(creature, guid) end)
@@ -561,7 +561,7 @@ local function catrionaDispel(creature, guid)
 end
 
 local function catrionaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     guestEnterCombat(event, creature, target)
     schedule(guid, "pwshield", 1000, function() catrionaPwShield(creature, guid) end)
     schedule(guid, "greaterheal", 1500, function() catrionaGreaterHeal(creature, guid) end)
@@ -596,7 +596,7 @@ local function keiraDivineShield(creature, guid)
 end
 
 local function keiraEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     guestEnterCombat(event, creature, target)
     schedule(guid, "cleanse", 13000, function() keiraCleanse(creature, guid) end)
     schedule(guid, "bless", 1000, function() keiraBless(creature, guid) end)
@@ -626,7 +626,7 @@ local function robinWhirlwind(creature, guid)
 end
 
 local function robinEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     guestEnterCombat(event, creature, target)
     schedule(guid, "hamstring", 7000, function() robinHamstring(creature, guid) end)
     schedule(guid, "mortalstrike", 10000, function() robinMortalStrike(creature, guid) end)
@@ -660,7 +660,7 @@ local function crispinShieldWall(creature, guid)
 end
 
 local function crispinEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     guestEnterCombat(event, creature, target)
     schedule(guid, "disarm", 6000, function() crispinDisarm(creature, guid) end)
     schedule(guid, "heroicstrike", 10000, function() crispinHeroicStrike(creature, guid) end)

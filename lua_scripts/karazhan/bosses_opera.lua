@@ -275,13 +275,13 @@ local function dorotheeSummonTito(creature, guid)
     local tito = creature:SummonCreature(ENTRY_TITO, 0, 0, 0, 0, 3, 30000)
     if tito ~= nil then
         creature:Talk(DOROTHEE_SAY_SUMMON)
-        titoDorothee[tito:GetGUID()] = guid
+        titoDorothee[tito:GetGUIDLow()] = guid
         dorotheeTitoDied[guid] = false
     end
 end
 
 local function dorotheeEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     dorotheeByGuid[guid] = creature
     dorotheeTitoDied[guid] = false
@@ -300,7 +300,7 @@ local function dorotheeEnterCombat(event, creature, target)
 end
 
 local function dorotheeLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     dorotheeByGuid[guid] = nil
     dorotheeTitoDied[guid] = nil
@@ -310,7 +310,7 @@ end
 -- 0.5s after spawn/evade the template-set NON_ATTACKABLE flag is
 -- cleared (AggroTimer=500 in Initialize, :138; no SetFlag in file).
 local function dorotheeReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Initialize (Reset): SummonedTito = false, TitoDied = false.
     dorotheeTitoDied[guid] = false
@@ -318,7 +318,7 @@ local function dorotheeReset(event, creature)
 end
 
 local function dorotheeDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     dorotheeByGuid[guid] = nil
     dorotheeTitoDied[guid] = nil
@@ -361,7 +361,7 @@ local function titoYip(creature, guid)
 end
 
 local function titoEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "yip", 10000, function()
         titoYip(creature, guid)
@@ -369,7 +369,7 @@ local function titoEnterCombat(event, creature, target)
 end
 
 local function titoLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_titoAI::JustDied (bosses_opera.cpp:271-281): if the linked
@@ -377,7 +377,7 @@ end
 -- latch sets — her waterbolt re-arms at 1500ms — and Tito Talks
 -- SAY_DOROTHEE_TITO_DEATH.
 local function titoDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local dorGuid = titoDorothee[guid]
     titoDorothee[guid] = nil
@@ -426,7 +426,7 @@ local function strawmanBrainWipe(creature, guid)
 end
 
 local function strawmanEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(STRAWMAN_SAY_AGGRO)
     schedule(guid, "bash", 5000, function()
@@ -438,14 +438,14 @@ local function strawmanEnterCombat(event, creature, target)
 end
 
 local function strawmanLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_strawmanAI::UpdateAI AggroTimer (bosses_opera.cpp:402-408):
 -- 13s after spawn/evade the template-set NON_ATTACKABLE flag is
 -- cleared (AggroTimer=13000 in Initialize, :332; no SetFlag in file).
 local function strawmanReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     scheduleIntroReset(guid, creature, 13000)
 end
@@ -458,7 +458,7 @@ local function strawmanTargetDied(event, creature, victim)
 end
 
 local function strawmanDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(STRAWMAN_SAY_DEATH)
     -- C++ JustDied arm order: Talk, then SummonCroneIfReady.
     summonCroneIfReady(creature)
@@ -517,7 +517,7 @@ local function tinheadRust(creature, guid)
 end
 
 local function tinheadEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     tinheadState[guid] = { rustCount = 0 }
     creature:Talk(TINHEAD_SAY_AGGRO)
@@ -530,7 +530,7 @@ local function tinheadEnterCombat(event, creature, target)
 end
 
 local function tinheadLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     tinheadState[guid] = nil
 end
@@ -539,7 +539,7 @@ end
 -- 15s after spawn/evade the template-set NON_ATTACKABLE flag is
 -- cleared (AggroTimer=15000 in Initialize, :452; no SetFlag in file).
 local function tinheadReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     tinheadState[guid] = nil
     scheduleIntroReset(guid, creature, 15000)
@@ -553,7 +553,7 @@ local function tinheadTargetDied(event, creature, victim)
 end
 
 local function tinheadDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     tinheadState[guid] = nil
     creature:Talk(TINHEAD_SAY_DEATH)
@@ -619,7 +619,7 @@ local function roarScream(creature, guid)
 end
 
 local function roarEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(ROAR_SAY_AGGRO)
     schedule(guid, "mangle", 5000, function()
@@ -634,14 +634,14 @@ local function roarEnterCombat(event, creature, target)
 end
 
 local function roarLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_roarAI::UpdateAI AggroTimer (bosses_opera.cpp:628-632):
 -- 20s after spawn/evade the template-set NON_ATTACKABLE flag is
 -- cleared (AggroTimer=20000 in Initialize, :567; no SetFlag in file).
 local function roarReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     scheduleIntroReset(guid, creature, 20000)
 end
@@ -654,7 +654,7 @@ local function roarTargetDied(event, creature, victim)
 end
 
 local function roarDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(ROAR_SAY_DEATH)
     -- C++ JustDied arm order: Talk, then SummonCroneIfReady.
     summonCroneIfReady(creature)
@@ -697,7 +697,7 @@ local function croneChainLightning(creature, guid)
 end
 
 local function croneEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(CRONE_SAY_AGGRO)
     schedule(guid, "chain", 10000, function()
@@ -706,7 +706,7 @@ local function croneEnterCombat(event, creature, target)
 end
 
 local function croneLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_crone::Initialize (bosses_opera.cpp:686-687): the spawn-hack
     -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) +
     -- SetImmuneToPC(false) (= RemoveFlag(59, 0x100), Unit.cpp:8440-8449)
@@ -724,7 +724,7 @@ local function croneTargetDied(event, creature, victim)
 end
 
 local function croneDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(CRONE_SAY_DEATH)
     -- C++ JustDied (bosses_opera.cpp:717-721): Talk, then
     -- SetBossState(DATA_OPERA_PERFORMANCE, DONE).
@@ -882,7 +882,7 @@ local function wolfChase(creature, guid)
 end
 
 local function wolfEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     wolfState[guid] = { chasing = false }
     creature:Talk(WOLF_SAY_AGGRO)
@@ -894,7 +894,7 @@ local function wolfEnterCombat(event, creature, target)
 end
 
 local function wolfLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     wolfState[guid] = nil
 end
@@ -911,7 +911,7 @@ end
 -- creature:PlayDirectSound (SMSG_PLAY_SOUND), then
 -- SetBossState(DATA_OPERA_PERFORMANCE, DONE). Cleanup.
 local function wolfDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:PlayDirectSound(9275)
     creature:SetBossState(4, 3)
     cancelTimers(guid)
@@ -1176,8 +1176,8 @@ local function julianneEnterCombat(event, creature, target)
     -- DoMeleeAttackIfReady(); julianne swings in C++. A 2026-10-22 port added
     -- SetMeleeAttack(false) citing the declaration; removed — it suppressed a real
     -- C++ swing (romulo's UpdateAI also swings; neither gets the no-melee flag).
-    local guid = creature:GetGUID()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     raj.julianne = creature
     raj.julianneGuid = guid
@@ -1185,7 +1185,7 @@ local function julianneEnterCombat(event, creature, target)
 end
 
 local function julianneLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     rajDeadlines[guid] = nil
     raj.julianneFrozen = nil
@@ -1213,7 +1213,7 @@ local function julianneTargetDied(event, creature, victim)
 end
 
 local function julianneDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     rajDeadlines[guid] = nil
     raj.julianneFrozen = nil
@@ -1232,7 +1232,7 @@ end
 -- and the second return rewrites the damage (consumed by
 -- fireCreatureDamageTaken).
 local function julianneDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ DamageTaken checks damage < GetHealth() FIRST: non-lethal hits
     -- pass through even while faking; only lethal blows take the branches.
     if damage < creature:GetHealth() then
@@ -1274,7 +1274,7 @@ local function julianneDamageTaken(event, creature, attacker, damage)
                     summon:DoZoneInCombat()
                     summon:SetFaction(FACTION_MONSTER_2)
                     raj.romulo = summon
-                    raj.romuloGuid = summon:GetGUID()
+                    raj.romuloGuid = summon:GetGUIDLow()
                 end
                 raj.romuloSummoned = true
                 raj.phase = PHASE_ROMULO
@@ -1553,7 +1553,7 @@ local function romuloPretendDie(creature, guid)
 end
 
 local function romuloEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     raj.romulo = creature
     raj.romuloGuid = guid
@@ -1562,7 +1562,7 @@ local function romuloEnterCombat(event, creature, target)
 end
 
 local function romuloLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     rajDeadlines[guid] = nil
     raj.romuloFrozen = nil
@@ -1581,7 +1581,7 @@ local function romuloTargetDied(event, creature, victim)
 end
 
 local function romuloDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(ROMULO_SAY_DEATH)
     -- C++ JustDied (bosses_opera.cpp:1302-1306): Talk, then
@@ -1595,7 +1595,7 @@ end
 
 -- C++ boss_romuloAI::DamageTaken, same event-9 second-return convention.
 local function romuloDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ checks damage < GetHealth() first: non-lethal hits pass through
     -- even while faking.
     if damage < creature:GetHealth() then
