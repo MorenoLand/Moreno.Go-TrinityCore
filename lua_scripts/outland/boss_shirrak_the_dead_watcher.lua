@@ -234,7 +234,7 @@ local function focusFireSummoned(event, creature, summon)
         summon:SetFaction(creature:GetFaction())
         summon:SetLevel(creature:GetLevel())
         summon:SetRooted(true)
-        local tguid = focusedTarget[creature:GetGUID()]
+        local tguid = focusedTarget[creature:GetGUIDLow()]
         if tguid ~= nil then
             local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
             for _, p in ipairs(GetPlayersInWorld()) do
@@ -266,7 +266,7 @@ local function fieryTick(creature, guid)
 end
 
 local function focusFireEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fiery", 3000 + math.random(0, 999), function()
         fieryTick(creature, guid)
@@ -274,7 +274,7 @@ local function focusFireEnterCombat(event, creature)
 end
 
 local function focusFireCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     fieryCount[guid] = nil
 end
@@ -297,7 +297,7 @@ local combatKeys = { "attract", "carnivorous", "focusfire" }
 -- C++ JustEngagedWith body is empty. The inhibit timer is
 -- spawn-owned (event 5), not combat-owned — it keeps running.
 local function shirrakEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelKeys(guid, combatKeys)
     schedule(guid, "attract", 28000, function()
         attractTick(creature, guid)
@@ -312,18 +312,18 @@ local function shirrakEnterCombat(event, creature, target)
 end
 
 local function shirrakLeaveCombat(event, creature)
-    cancelKeys(creature:GetGUID(), combatKeys)
+    cancelKeys(creature:GetGUIDLow(), combatKeys)
 end
 
 local function shirrakDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_shirrak_the_dead_watcherAI::Reset -> Initialize():
 -- timers re-latched; the inhibit timer restarts with an immediate
 -- fire (C++ Inhibitmagic_Timer = 0).
 local function shirrakReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inhibitTick(creature, guid)
 end
@@ -331,13 +331,13 @@ end
 -- C++ ctor -> Initialize(): the inhibit loop starts at spawn
 -- (UpdateAI runs pre-combat in C++).
 local function shirrakSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     inhibitTick(creature, guid)
 end
 
 local function shirrakRemove(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SHIRRAK, 1, shirrakEnterCombat)

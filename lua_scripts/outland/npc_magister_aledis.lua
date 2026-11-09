@@ -107,11 +107,11 @@ local function frostnovaPump(creature, guid)
 end
 
 local function aledisSpawn(event, creature)
-    factionNorm[creature:GetGUID()] = creature:GetFaction()
+    factionNorm[creature:GetGUIDLow()] = creature:GetFaction()
 end
 
 local function aledisReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     defeated[guid] = nil
     duelPlayer[guid] = nil
@@ -139,7 +139,7 @@ local function aledisGossipSelect(event, player, creature, sender, action)
         creature:SetFacingTo(angle)
     end
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     duelPlayer[guid] = player:GetGUID()
     schedule(guid, "talk", 2000, function()
         creature:Talk(SAY_CHALLENGE)
@@ -173,17 +173,17 @@ local function aledisGossipSelect(event, player, creature, sender, action)
 end
 
 local function aledisLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function aledisDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     defeated[guid] = nil
 end
 
 local function aledisDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 or health == 0 or defeated[guid] then

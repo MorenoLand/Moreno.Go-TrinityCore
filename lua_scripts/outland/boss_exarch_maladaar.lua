@@ -218,7 +218,7 @@ local function stolenSoulTick(creature, guid)
             soul:CastSpell(soul, SPELL_STOLEN_SOUL_VISUAL, false)
             soul:SetDisplayId(target:GetDisplayId())
             soul:SetFaction(creature:GetFaction())
-            soulClass[soul:GetGUID()] = target:GetClass()
+            soulClass[soul:GetGUIDLow()] = target:GetClass()
             soul:EngageWithTarget(target)
         end
         schedule(guid, "stolen_soul", {20000, 29999}, function()
@@ -277,7 +277,7 @@ end
 
 -- C++ boss_exarch_maladaarAI::JustEngagedWith (:185-188).
 local function maladaarEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     clearState(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "fear", {15000, 19999}, function()
@@ -295,11 +295,11 @@ local function maladaarEnterCombat(event, creature, target)
 end
 
 local function maladaarLeaveCombat(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 local function maladaarReset(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ boss_exarch_maladaarAI::KilledUnit (:211-217): 50% gate.
@@ -318,13 +318,13 @@ end
 local function maladaarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SummonCreature(ENTRY_DORE, -4.40722, -387.277, 40.6294, 6.26573, 7)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ boss_exarch_maladaarAI::MoveInLineOfSight (:192-202).
 -- No veto: the C++ calls the base AI, so aggro proceeds.
 local function maladaarMoveInLOS(event, creature, player)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not taunted[guid]
             and creature:IsWithinDistInMap(player, 150.0) then
         taunted[guid] = true
@@ -356,7 +356,7 @@ local function stolenSoulClassTick(creature, guid)
 end
 
 local function stolenSoulEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "class", 1000, function()
         stolenSoulClassTick(creature, guid)
@@ -364,7 +364,7 @@ local function stolenSoulEnterCombat(event, creature)
 end
 
 local function stolenSoulCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     soulClass[guid] = nil
 end

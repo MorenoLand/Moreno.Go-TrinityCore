@@ -296,7 +296,7 @@ end
 -- Initialize() values, start the combat pump where the
 -- AI has timers (gargolmar precedent).
 RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     states[guid] = {
         missiles = 0,
         chains = 3000 + math.random(0, 3000),
@@ -307,7 +307,7 @@ RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_KIL_SORROW_CULTIST, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     states[guid] = {
         mindSear = 4500,
     }
@@ -315,15 +315,15 @@ RegisterCreatureEvent(ENTRY_KIL_SORROW_CULTIST, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_KIL_SORROW_DEATHSWORN, 1, function(_, creature)
-    states[creature:GetGUID()] = { usedBloodthirst = false }
+    states[creature:GetGUIDLow()] = { usedBloodthirst = false }
 end)
 
 RegisterCreatureEvent(ENTRY_GISELDA_THE_CRONE, 1, function(_, creature)
-    states[creature:GetGUID()] = { usedTransform = false }
+    states[creature:GetGUIDLow()] = { usedTransform = false }
 end)
 
 RegisterCreatureEvent(ENTRY_WARMAUL_SHAMAN, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     states[guid] = {
         usedHealing = false,
         totem = 2000,
@@ -337,7 +337,7 @@ end)
 -- int64(health)-damage strictly below floor(maxHealth*pct/100),
 -- skipped on killing/overkill blows (health > damage).
 RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = states[guid]
     if not st or st.hasFled then
         return
@@ -353,7 +353,7 @@ RegisterCreatureEvent(ENTRY_KIL_SORROW_SPELLBINDER, 9, function(_, creature, att
 end)
 
 RegisterCreatureEvent(ENTRY_KIL_SORROW_DEATHSWORN, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = states[guid]
     if not st or st.usedBloodthirst then
         return
@@ -369,7 +369,7 @@ RegisterCreatureEvent(ENTRY_KIL_SORROW_DEATHSWORN, 9, function(_, creature, atta
 end)
 
 RegisterCreatureEvent(ENTRY_GISELDA_THE_CRONE, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = states[guid]
     if not st or st.usedTransform then
         return
@@ -385,7 +385,7 @@ RegisterCreatureEvent(ENTRY_GISELDA_THE_CRONE, 9, function(_, creature, attacker
 end)
 
 RegisterCreatureEvent(ENTRY_WARMAUL_SHAMAN, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = states[guid]
     if not st or st.usedHealing then
         return
@@ -412,15 +412,15 @@ local cleanupEntries = {
 }
 for _, entry in ipairs(cleanupEntries) do
     RegisterCreatureEvent(entry, 2, function(_, creature)
-        fullReset(creature:GetGUID())
+        fullReset(creature:GetGUIDLow())
     end)
     -- Eluna's On_Reset fires ahead of OnDied and OnSpawn,
     -- so this lands the same Reset() reset as the evade
     -- hook (millhouse note).
     RegisterCreatureEvent(entry, 4, function(_, creature)
-        fullReset(creature:GetGUID())
+        fullReset(creature:GetGUIDLow())
     end)
     RegisterCreatureEvent(entry, 23, function(_, creature)
-        fullReset(creature:GetGUID())
+        fullReset(creature:GetGUIDLow())
     end)
 end

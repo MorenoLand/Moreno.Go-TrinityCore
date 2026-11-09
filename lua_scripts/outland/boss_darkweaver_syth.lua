@@ -199,7 +199,7 @@ end
 local function sythEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustEngagedWith does NOT touch the summon latches (they
     -- live in Reset/Initialize); state is created lazily on first
@@ -223,11 +223,11 @@ local function sythEnterCombat(event, creature, target)
 end
 
 local function sythLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function sythReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sythState[guid] = {summon90 = false, summon50 = false, summon10 = false}
 end
@@ -267,8 +267,8 @@ local function sythDied(event, creature, killer)
     if lakka then
         lakka:Talk(SAY_LAKKA_FREE)
     end
-    cancelTimers(creature:GetGUID())
-    sythState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    sythState[creature:GetGUIDLow()] = nil
 end
 
 -- C++ boss_darkweaver_sythAI::DamageTaken (:179-196):
@@ -276,7 +276,7 @@ end
 -- SythSummoning(). Event 9 fires pre-damage (moroes precedent), so
 -- the moroes-verified integer-floor projection form is used.
 local function sythDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- Lazy init: C++ Initialize() runs in the constructor too, so a
     -- fresh spawn has all-false latches even if the engine never
     -- fired 23 (OnReset) for it.

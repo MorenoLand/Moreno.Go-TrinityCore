@@ -293,7 +293,7 @@ local function shaffarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "beacon", 10000, function()
         beaconTick(creature, guid)
@@ -310,12 +310,12 @@ local function shaffarEnterCombat(event, creature, target)
 end
 
 local function shaffarLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 
 local function shaffarReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Reset (boss_nexusprince_shaffar.cpp:86-97): three initial
     -- beacon SummonCreature(NPC_BEACON, home±8, TEMPSUMMON_CORPSE_TIMED_
@@ -342,7 +342,7 @@ end
 local function shaffarDied(event, creature, killer)
     creature:Talk(SAY_DEAD)
     creature:SetBossState(2, 3) -- DATA_NEXUSPRINCE_SHAFFAR, DONE (boss_nexusprince_shaffar.cpp:140-141)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 
@@ -356,7 +356,7 @@ end
 -- a player), so both gates hold at fire time. Return true to veto
 -- the default engage — the depth_charge precedent — matching C++.
 local function shaffarMoveInLOS(event, creature, player)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not taunted[guid]
             and creature:IsWithinDistInMap(player, 100.0) then
         taunted[guid] = true
@@ -425,7 +425,7 @@ local function beaconEnterCombat(event, creature, target)
     if shaffar and not shaffar:IsInCombat() then
         shaffar:EngageWithTarget(target)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local apprenticeDelay = 20000
     if creature:IsHeroic() then
@@ -440,15 +440,15 @@ local function beaconEnterCombat(event, creature, target)
 end
 
 local function beaconLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function beaconDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function beaconReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_ethereal_beaconAI::JustSummoned (:223-226):
@@ -496,7 +496,7 @@ apprenticeFrostTick = function(creature, guid)
 end
 
 local function apprenticeEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "appr_fire", 3000, function()
         apprenticeFireTick(creature, guid)
@@ -504,15 +504,15 @@ local function apprenticeEnterCombat(event, creature, target)
 end
 
 local function apprenticeLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function apprenticeDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function apprenticeReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SHAFFAR, 19, shaffarJustSummoned)

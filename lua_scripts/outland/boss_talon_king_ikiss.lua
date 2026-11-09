@@ -248,7 +248,7 @@ end
 -- handler MUST NOT return true (that vetoes the engage —
 -- lua_creature_events.go:509-524).
 local function ikissMoveInLOS(event, creature, unit)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- Lazy init: the C++ constructor sets Intro = false, so a spawn
     -- the engine never fired 23 for still gets its one intro.
     local state = ikissState[guid]
@@ -271,7 +271,7 @@ end
 local function ikissEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "arcane_volley", 5000, function()
@@ -291,14 +291,14 @@ local function ikissEnterCombat(event, creature, target)
 end
 
 local function ikissLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:96-101): Intro = false, ManaShield = false. The
 -- constructor does the same, so lazy-init on 27/9 covers a spawn
 -- the engine never fired 23 for.
 local function ikissReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ikissState[guid] = {intro = false, manaShield = false}
 end
@@ -318,8 +318,8 @@ end
 local function ikissDied(event, creature, killer)
     creature:SetBossState(1, 3) -- DATA_TALON_KING_IKISS, DONE (boss_talon_king_ikiss.cpp: _JustDied precedes Talk)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
-    ikissState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    ikissState[creature:GetGUIDLow()] = nil
 end
 
 -- C++ boss_talon_king_ikissAI::DamageTaken (:155-161):
@@ -328,7 +328,7 @@ end
 -- pre-damage (moroes precedent); moroes-verified integer-floor
 -- projection form.
 local function ikissDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = ikissState[guid]
     if state == nil then
         state = {intro = false, manaShield = false}
