@@ -269,7 +269,7 @@ end
 -- the BossAI base arms (pulse + me-zone) ride the handler tail below
 -- (base call is last in C++); instance legs stay out.
 local function archavonEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "rockshards", 15000, function()
         rockShardsTick(creature, guid)
@@ -295,7 +295,7 @@ end
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function archavonCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ BossAI::JustDied (no override in boss_archavon.cpp): _JustDied()
@@ -308,7 +308,7 @@ end
 -- the loken GetPlayersInWorld idiom; the death time is banked in
 -- instanceData.archavonDeath for the criteria check).
 local function archavonJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_ARCHAVON, 3)
     local mapObj = creature:GetMap()
     if mapObj then
@@ -334,7 +334,7 @@ local function archavonReset(event, creature)
     if creature:GetBossState(DATA_ARCHAVON) ~= 3 then
         creature:SetBossState(DATA_ARCHAVON, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ARCHAVON, 1, archavonEnterCombat)

@@ -490,7 +490,7 @@ local function respawnArmTick(creature, guid, entry, seat)
     end
     local arm = creature:SummonCreature(entry, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO())
     if arm ~= nil then
-        kit:AddPassenger(arm:GetGUID(), seat)
+        kit:AddPassenger(arm, seat) -- unit object, not GUID: luaVehicleUnitArg errors on a number (lua_vehicle.go:142)
     end
 end
 

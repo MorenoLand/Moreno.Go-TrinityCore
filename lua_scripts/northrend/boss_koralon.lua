@@ -183,7 +183,7 @@ end
 -- (pulse + me-zone) ride the handler tail below (base call last
 -- in C++); instance legs stay out.
 local function koralonEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_BURNING_FURY)
     schedule(guid, "burningfury", 20000, function()
@@ -210,7 +210,7 @@ end
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function koralonCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ BossAI::JustDied (no override in boss_koralon.cpp): _JustDied()
@@ -223,7 +223,7 @@ end
 -- the loken GetPlayersInWorld idiom; the death time is banked in
 -- instanceData.koralonDeath for the criteria check).
 local function koralonJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_KORALON, 3)
     local mapObj = creature:GetMap()
     if mapObj then
@@ -249,7 +249,7 @@ local function koralonReset(event, creature)
     if creature:GetBossState(DATA_KORALON) ~= 3 then
         creature:SetBossState(DATA_KORALON, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_KORALON, 1, koralonEnterCombat)

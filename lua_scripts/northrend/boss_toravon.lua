@@ -216,7 +216,7 @@ end
 -- (pulse + me-zone) ride the handler tail below (base call last
 -- in C++); instance legs stay out.
 local function toravonEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_FROZEN_MALLET)
     schedule(guid, "frozenorb", 12000, function()
@@ -240,7 +240,7 @@ end
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function toravonCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ BossAI::JustDied (no override in boss_toravon.cpp): _JustDied()
@@ -249,7 +249,7 @@ end
 -- SetBossState override default-returns for DATA_TORAVON
 -- (instance_vault_of_archavon.cpp:57-83).
 local function toravonJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_TORAVON, 3)
 end
 
@@ -262,7 +262,7 @@ local function toravonReset(event, creature)
     if creature:GetBossState(DATA_TORAVON) ~= 3 then
         creature:SetBossState(DATA_TORAVON, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_TORAVON, 1, toravonEnterCombat)

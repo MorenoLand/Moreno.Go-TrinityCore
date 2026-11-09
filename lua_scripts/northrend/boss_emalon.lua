@@ -33,8 +33,9 @@
 -- (lua_creature_events.go:5917), then pulse + me-zone at the handler
 -- tail; the CheckRequiredBosses gate has no bridge and stays out.
 -- BossAI::JustDied (no override in this file): _JustDied()
--- (ScriptedCreature.cpp:513-520) — SetBossState(DATA_EMALON 1, DONE)
--- PORTED tick 262 in emalonJustDied, with the instance
+-- (ScriptedCreature.cpp:513-520) — summons.DespawnAll() (:516) PORTED
+-- via despawnMinions in emalonJustDied, then SetBossState(DATA_EMALON
+-- 1, DONE) PORTED tick 262 in emalonJustDied, with the instance
 -- SetBossState-override DONE legs (instance_vault_of_archavon.cpp:
 -- 57-83: EmalonDeath record + DoCastSpellOnPlayers(68308)) in the
 -- same handler, C++ order (state first, then the override legs).
@@ -85,6 +86,8 @@
 -- DOCUMENTED-ONLY (in this header; entries 33993 / 33998):
 -- boss_emalonAI::Reset (:85-91) — _Reset() SetBossState(DATA_EMALON
 -- 1, NOT_STARTED) PORTED tick 262 (!= DONE-gated, first per C++ order)
+-- + summons.DespawnAll() (ScriptedCreature.cpp:507) PORTED via
+-- despawnMinions before the fresh summons
 -- + four SummonCreature (NPC_TEMPEST_MINION, TEMPSUMMON_CORPSE_DESPAWN)
 -- at TempestMinions[] positions PORTED (emalonReset, event 23 — the old
 -- "no SummonCreature bridge" claim is re-keyed): summonType 4 /
@@ -225,6 +228,18 @@ local TEMPEST_MINION_SPAWNS = {
     { -203.842529, -297.097015, 91.745163, 1.598807 },
 }
 
+-- C++ BossAI::_Reset() / _JustDied() (ScriptedCreature.cpp:499-511 /
+-- 513-520) both call summons.DespawnAll() (:507 / :516) — Reset before
+-- the four fresh summons, JustDied before SetBossState DONE.
+-- creature:Despawn() (lua_creature_events.go:3024) removes the motion
+-- without firing event 4 on the minion (no respawn loop); it fires
+-- event 20 on the summoner, for which no handler is registered here.
+local function despawnMinions(creature)
+    for _, minion in ipairs(creature:GetCreaturesInGrid(ENTRY_TEMPEST_MINION, 100)) do
+        minion:Despawn()
+    end
+end
+
 -- C++ boss_emalonAI::Reset (boss_emalon.cpp:85-91): _Reset()
 -- (ScriptedCreature.cpp:499-511: timer clear + SetBossState
 -- (DATA_EMALON 1, NOT_STARTED), != DONE-gated — PORTED tick 262,
@@ -239,7 +254,8 @@ local function emalonReset(event, creature)
     if creature:GetBossState(DATA_EMALON) ~= 3 then
         creature:SetBossState(DATA_EMALON, 0)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnMinions(creature) -- C++ _Reset summons.DespawnAll() (ScriptedCreature.cpp:507)
     for _, p in ipairs(TEMPEST_MINION_SPAWNS) do
         creature:SummonCreature(ENTRY_TEMPEST_MINION, p[1], p[2], p[3], p[4], 4, 0)
     end
@@ -296,7 +312,7 @@ local function emalonEnterCombat(event, creature, target)
             end
         end
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "chainlightning", 5000, function()
         chainLightningTick(creature, guid)
@@ -322,7 +338,7 @@ end
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function emalonCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ BossAI::JustDied (no override in boss_emalon.cpp): _JustDied()
@@ -335,7 +351,8 @@ end
 -- the loken GetPlayersInWorld idiom; the death time is banked in
 -- instanceData.emalonDeath for the criteria check).
 local function emalonJustDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnMinions(creature) -- C++ _JustDied summons.DespawnAll() (ScriptedCreature.cpp:516)
     creature:SetBossState(DATA_EMALON, 3)
     local mapObj = creature:GetMap()
     if mapObj then
@@ -393,7 +410,7 @@ end
 -- scheduled at 20s (:222). The instance leg is unmodeled (documented
 -- in the header).
 local function minionEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:DoZoneInCombat() -- C++ :221
     -- C++ npc_tempest_minionAI::JustEngagedWith (:227-229): Emalon
@@ -416,7 +433,7 @@ local function minionEnterCombat(event, creature, target)
 end
 
 local function minionCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_tempest_minionAI::JustDied (boss_emalon.cpp:207-217): if
