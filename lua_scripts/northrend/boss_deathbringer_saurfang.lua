@@ -182,23 +182,27 @@
 --   AuraScript bridge" claim is retired for this script. The
 --   _fallenChampionCastCount / GetData(DATA_MADE_A_MESS)
 --   achievement legs ride with it (Go gate added this tick).
--- boss_deathbringer_saurfang JustSummoned (:395-411) — summon
---   machine: random-target AttackStart, SPELL_BLOOD_LINK_BEAST 72176
---   + SPELL_RESISTANT_SKIN 72723 triggered casts on the summon,
---   summons.Summon, DoZoneInCombat — no summon / cross-creature
---   bridge. SummonedCreatureDies (:400-404), MovementInform
---   (:406-411, instance GO leg), AttackStart/CanAIAttack transport
---   legs. EnterEvadeMode (:327-331) — the SetImmuneToPC(false) leg
---   PORTS in ev2 (RemoveFlag 0x100 twin, intro-done + not-dead
---   gated, 2026-11-05); the ScriptedAI base leg has no bridge.
+-- boss_deathbringer_saurfang JustSummoned (:380-399) — PORTED
+--   2026-11-08 (tick 493, below): random-target AttackStart,
+--   SPELL_BLOOD_LINK_BEAST 72176 + SPELL_RESISTANT_SKIN 72723 triggered
+--   casts on the summon, summons.Summon (the live-beast set), DoZoneInCombat,
+--   and the transport evade leg. ev19 fires from the summonTempCreature
+--   funnel, which the spell-cast summons reach via creatureEffectSummonType
+--   (boss_ai.go:3456/:4587) — the old "no summon / cross-creature bridge"
+--   claim is retracted. SummonedCreatureDies (:400-404) ports via the
+--   ev20/ev21 set legs below. MovementInform (:406-411, instance GO leg),
+--   AttackStart/CanAIAttack transport legs stay out. EnterEvadeMode
+--   (:327-331) — the SetImmuneToPC(false) leg PORTS in ev2 (RemoveFlag
+--   0x100 twin, intro-done + not-dead gated, 2026-11-05); the ScriptedAI
+--   base leg rides the full-evade bridge (lua_creature_events.go:5014).
 --   JustReachedHome (:334-342) — SetBossState FAIL + Reset() +
 --   DoRemoveAurasDueToSpellOnPlayers all PORT in the ev24 handler
 --   (the old "no instance / motion bridges" claim is retracted);
 --   MovementInform (:406-411, instance GO leg) stays out.
--- EVENT_SCENT_OF_BLOOD (:520-526) — heroic-gated via creature:IsHeroic()
---   (bridged — the berserk port in this file uses it) AND gated on
---   !summons.empty() (no summon-list bridge); one-shot, never re-armed —
---   out on the summon-list gate alone.
+-- EVENT_SCENT_OF_BLOOD (:520-526) — PORTED 2026-11-08 (tick 493, below):
+--   heroic-gated via creature:IsHeroic() AND gated on the live-beast set
+--   (ev19/ev20/ev21); one-shot, never re-armed. The old "no summon-list
+--   bridge" stay-out is retired by ev19+ev20+ev21.
 -- npc_high_overlord_saurfang_icc / npc_muradin_bronzebeard_icc —
 --   NOT registered (the bronjahm npc_corrupted_soul_fragment
 --   precedent); the outro arms port via the deathbringer-side relay
@@ -242,11 +246,9 @@
 -- (7) + muradin 0/1/2 (3)).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
--- EVENT_SCENT_OF_BLOOD (:520-526) not ported at all: the arm body is
---   gated on !summons.empty() (no summon-list bridge) — scheduling
---   it on heroic via IsHeroic() would fire EMOTE_SCENT_OF_BLOOD and
---   the AoE unconditionally, wrong on 10-man and wrong whenever the
---   beast wave is fully dead.
+-- EVENT_SCENT_OF_BLOOD (:520-526) PORTED 2026-11-08 (tick 493): the
+--   !summons.empty() gate reads the ev19/ev20/ev21 live-beast set, so the
+--   emote + AoE fire only while a beast is alive.
 -- EVENT_SUMMON_BLOOD_BEAST 25-man trio (72356/72357/72358) PORTED
 --   via creature:Is25ManRaid() (C++ :495-497, cast order kept).
 -- The UNIT_STATE_CASTING gate in UpdateAI (pre-loop :456 + in-loop
@@ -284,6 +286,11 @@ local SAY_OUTRO_ALLIANCE_1 = 3
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_SUMMON_BLOOD_BEAST = 72172
 local SPELL_SUMMON_BLOOD_BEAST_25_MAN = 72356
+local SPELL_BLOOD_LINK_BEAST = 72176 -- boss_deathbringer_saurfang.cpp:113
+local SPELL_RESISTANT_SKIN = 72723 -- boss_deathbringer_saurfang.cpp:114
+local SPELL_SCENT_OF_BLOOD = 72769 -- boss_deathbringer_saurfang.cpp:115 (heroic only)
+local EMOTE_SCENT_OF_BLOOD = 14 -- boss_deathbringer_saurfang.cpp:46
+local ENTRY_BLOOD_BEAST = 38508 -- boss_deathbringer_saurfang.cpp:212
 local SPELL_FRENZY = 72737
 local SPELL_BLOOD_NOVA_TRIGGER = 72378
 local SPELL_BOILING_BLOOD = 72385
@@ -307,6 +314,7 @@ local FIGHT_WON_VALUE = 100000 -- boss_deathbringer_saurfang.cpp:614
 
 local timers = {}
 local saurfangState = {}
+local saurfangLiveBeasts = {} -- boss GUID -> set of live blood-beast GUIDs (ev19/ev20/ev21)
 local saurfangIntroDone = {} -- C++ _introDone: set on first engage, never cleared by Reset
 
 local function cancelTimers(guid)
@@ -341,16 +349,92 @@ end
 local function clearState(guid)
     cancelTimers(guid)
     saurfangState[guid] = nil
+    saurfangLiveBeasts[guid] = nil
+end
+
+-- C++ SelectTarget(Random, 1, 0.0f, true) (:381): random living player
+-- (the file's randomMarkTarget shape, without the mark filter).
+local function randomBeastTarget(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ boss_deathbringer_saurfang::JustSummoned (:380-399): random living
+-- player target; a target on a transport despawns the beast (1ms) and
+-- evades the boss (EnterEvadeMode — the virtual override's SetImmuneToPC
+-- leg rides the ev2 handler and JustReachedHome rides ev24); otherwise
+-- AttackStart on the target; then triggered self-casts BLOOD_LINK_BEAST
+-- 72176 + RESISTANT_SKIN 72723, summons.Summon (the live-beast set
+-- below) and DoZoneInCombat. PORTED 2026-11-08 (tick 493). Dormant
+-- until the 72172/72173/72356-8 summon spells execute in Go.
+local function saurfangJustSummoned(event, creature, summon)
+    if summon == nil or summon:GetEntry() ~= ENTRY_BLOOD_BEAST then
+        return
+    end
+    local target = randomBeastTarget(creature)
+    if target ~= nil and target:GetTransport() then
+        summon:DespawnOrUnsummon(1)
+        creature:EnterEvadeMode()
+        return
+    end
+    if target ~= nil then
+        summon:AttackStart(target)
+    end
+    summon:CastSpell(summon, SPELL_BLOOD_LINK_BEAST, true)
+    summon:CastSpell(summon, SPELL_RESISTANT_SKIN, true)
+    local beasts = saurfangLiveBeasts[creature:GetGUID()]
+    if beasts == nil then
+        beasts = {}
+        saurfangLiveBeasts[creature:GetGUID()] = beasts
+    end
+    beasts[summon:GetGUID()] = true
+    summon:DoZoneInCombat()
+end
+
+-- C++ SummonedCreatureDies (:400-404): summons.Despawn — the live-beast
+-- set twin, kept in step by the despawn (ev20) and death (ev21) legs
+-- (ichoron / bronjahm precedents). PORTED 2026-11-08 (tick 493).
+local function saurfangSummonDespawned(_, creature, summon)
+    local beasts = saurfangLiveBeasts[creature:GetGUID()]
+    if beasts then
+        beasts[summon:GetGUID()] = nil
+    end
+end
+
+local function saurfangSummonDied(_, creature, summon)
+    local beasts = saurfangLiveBeasts[creature:GetGUID()]
+    if beasts then
+        beasts[summon:GetGUID()] = nil
+    end
+end
+
+-- C++ EVENT_SCENT_OF_BLOOD (:520-526): one-shot, never re-armed; gated
+-- on !summons.empty() — the live-beast set above — then Talk
+-- (EMOTE_SCENT_OF_BLOOD 14) + DoCastAOE(SPELL_SCENT_OF_BLOOD 72769)
+-- self-cast. PORTED 2026-11-08 (tick 493).
+local function onScentOfBlood(creature, guid)
+    local beasts = saurfangLiveBeasts[guid]
+    if beasts and next(beasts) ~= nil then
+        creature:Talk(EMOTE_SCENT_OF_BLOOD)
+        creature:CastSpell(creature, SPELL_SCENT_OF_BLOOD)
+    end
 end
 
 -- C++ :493-502 EVENT_SUMMON_BLOOD_BEAST: 2x DoCastSelf(
 -- SPELL_SUMMON_BLOOD_BEAST+i10 72172/72173) non-triggered, then
 -- Talk(SAY_BLOOD_BEASTS 9); re-arm 40s unconditional. The 25-man
 -- trio (72356+i25, :495-497) PORTED via creature:Is25ManRaid().
--- The heroic-only EVENT_SCENT_OF_BLOOD schedule (:500-501) stays
--- out on the !summons.empty() gate (no summon-list bridge); the
--- IsHeroic() schedule gate is bridgeable but the arm body would fire
--- unconditional otherwise.
+-- The heroic-only EVENT_SCENT_OF_BLOOD schedule (:500-501) PORTS
+-- 2026-11-08 (tick 493): scheduled 10s after each beast wave on heroic,
+-- gated on the live-beast set in onScentOfBlood below.
 local function onSummonBloodBeast(creature, guid)
     -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
     -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
@@ -368,6 +452,9 @@ local function onSummonBloodBeast(creature, guid)
     end
     creature:Talk(SAY_BLOOD_BEASTS)
     schedule(guid, "beasts", 40000, function() onSummonBloodBeast(creature, guid) end)
+    if creature:IsHeroic() then
+        schedule(guid, "scent", 10000, function() onScentOfBlood(creature, guid) end)
+    end
 end
 
 -- C++ :516-519 EVENT_BERSERK: DoCastSelf(SPELL_BERSERK 26662)
@@ -616,6 +703,12 @@ local function doSaurfangReset(creature)
     -- exactly as the C++ member does.
     local oldCount = st and st.fallenChampionCastCount or 0
     saurfangState[guid] = { frenzied = false, dead = false, fallenChampionCastCount = oldCount }
+    -- C++ Reset() :261 — _Reset() first: summons.DespawnAll()
+    -- (BossAI::_Reset, ScriptedCreature.cpp:499-509) empties the summon
+    -- list, so the live-beast set clears here too; without it a stale
+    -- GUID from the wiped fight would let a later scent check fire
+    -- after the new wave's beasts all died.
+    saurfangLiveBeasts[guid] = nil
     -- C++ Reset() :265: me->SetPower(POWER_ENERGY, 0) — the blood-power
     -- meter zeroes on reset (SPELL_ZERO_POWER's aura scripts are
     -- unbridged; the bridge writes the live power field).
@@ -826,10 +919,22 @@ end
 -- FALLEN_CHAMPION 8); cases 72255/72444/72445/72446 (triggered-mark
 -- ids) -> power != max -> target casts SPELL_BLOOD_LINK_DUMMY 72202
 -- on itself, TRIGGERED, BP0=1 (the geddon CastCustomSpell(nil, ...)
--- precedent). The transport gate (:415-419, EnterEvadeMode) stays
--- out — EnterEvadeMode has no bridge. The 72255 leg is DORMANT
+-- precedent). The transport gate (:415-419, EnterEvadeMode) PORTS
+-- 2026-11-08 (tick 493, below); the old "EnterEvadeMode has no bridge"
+-- note is stale (bridged Nov 7, lua_creature_events.go:5014). The 72255
+-- leg is DORMANT
 -- until Spell.dbc ships (the triggered-mark ids are DBC-side).
 local function saurfangSpellHitTarget(event, creature, target, spellId)
+    -- C++ SpellHitTarget transport gate (:415-419): a target on a
+    -- transport evades the boss (EnterEvadeMode — the virtual override's
+    -- legs ride the ev2/ev24 handlers). PORTED 2026-11-08 (tick 493).
+    -- Player-typed: GetTransport lives on the player surface only
+    -- (lua_player.go:2825); C++ GetTransport() is nil for non-players,
+    -- and the mark spells only hit players.
+    if target ~= nil and target:GetObjectType() == "Player" and target:GetTransport() then
+        creature:EnterEvadeMode()
+        return
+    end
     if spellId == SPELL_MARK_OF_THE_FALLEN_CHAMPION then
         creature:Talk(SAY_MARK_OF_THE_FALLEN_CHAMPION)
     elseif spellId == 72255 or spellId == 72444 or spellId == 72445 or spellId == 72446 then
@@ -845,6 +950,9 @@ RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 3, saurfangKilledUnit)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 4, saurfangJustDied)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 9, saurfangDamageTaken)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 15, saurfangSpellHitTarget)
+RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 19, saurfangJustSummoned)
+RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 20, saurfangSummonDespawned)
+RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 21, saurfangSummonDied)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 23, saurfangReset)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 24, saurfangReachHome)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 38, saurfangDoAction)

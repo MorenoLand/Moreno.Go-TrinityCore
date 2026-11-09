@@ -236,6 +236,19 @@ end
 
 local function captainLeaveCombat(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ npc_high_overlord_saurfang_igb / npc_muradin_bronzebeard_igb
+    -- EnterEvadeMode (:875-885 / :1128-1138): IsAlive gate + CombatStop(true)
+    -- + EngagementOver() + MoveTargetedHome() + Reset(). The Reset() leg
+    -- rides ev23 (captainReset below; Go's evade funnel fires On_Reset
+    -- before On_LeaveCombat); EngagementOver() has no bridge. PORTED
+    -- 2026-11-08 (tick 493): CombatStop + MoveHome are live
+    -- (lua_creature_events.go:2887 / :4989). Not extended to the boarding
+    -- adds/gunners/rocketeers: the base gunship_npc_AI::EnterEvadeMode
+    -- (:577-585) is gated on alive AND in-combat, undecidable at ev2 time.
+    if creature:IsAlive() then
+        creature:CombatStop(true)
+        creature:MoveHome()
+    end
 end
 
 local function captainReset(event, creature)

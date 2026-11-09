@@ -190,8 +190,12 @@
 -- bridge) + npc_darnavan JustDied FailQuest loop (player:FailQuest bridge).
 -- The _JustDied() DONE leg (:387) PORTED 2026-11-05 via
 -- creature:SetBossState, last in the handler after the darnavan block.
--- Stay out: Full House achievement legs (instance), DaranavanMoveEvent +
--- MoveIdle (no motion bridge).
+-- Stay out: Full House achievement legs (instance). DaranavanMoveEvent
+-- PORTED 2026-11-08 (tick 493): MoveTo(POINT_DESPAWN) + ev28 arrival
+-- despawn below; the MoveIdle leg rides darnavan:StopMoving (the MoveIdle
+-- twin) already in the handler. The Nov-3 movepoint strip's "POINT_DESPAWN
+-- has no MovementInform consumer" claim was wrong — the consumer is at
+-- boss_lady_deathwhisper.cpp:868-875.
 -- Talk(SAY_ANIMATE_DEAD 13) is called by
 -- ladyDeathwhisper->AI()->Talk from inside the npc_cult_fanatic /
 -- npc_cult_adherent summon-death scheduler legs — PORTED in both
@@ -253,6 +257,7 @@ local ENTRY_REANIMATED_FANATIC = 38009 -- icecrown_citadel.h:177
 local ENTRY_REANIMATED_ADHERENT = 38010 -- icecrown_citadel.h:180
 local ENTRY_DARNAVAN_10 = 38472
 local ENTRY_DARNAVAN_25 = 38485
+local POINT_DESPAWN = 384721 -- boss_lady_deathwhisper.cpp:160
 local NPC_DARNAVAN_CREDIT_10 = 39091 -- icecrown_citadel.h:156
 local NPC_DARNAVAN_CREDIT_25 = 39092 -- icecrown_citadel.h:157
 local QUEST_DEPROGRAMMING_10 = 24869 -- icecrown_citadel.h:517
@@ -819,8 +824,12 @@ local function deathwhisperJustDied(event, creature, killer)
         darnavan:CombatStop(true)
         darnavan:StopMoving()
         darnavan:SetReactState(REACT_PASSIVE)
+        -- C++ DaranavanMoveEvent (:185-194, 10s): MovePoint(POINT_DESPAWN,
+        -- SummonPositions[6]) = (-524.248, 2211.92, 62.9096); the arrival
+        -- despawns via npc_darnavan::MovementInform (:868-875), ported in
+        -- darnavanMovementInform below (tick 493).
         schedule(creature:GetGUID(), "darnavanMove", 10000, function()
-            darnavan:MoveTo(0, -524.248, 2211.92, 62.9096)
+            darnavan:MoveTo(POINT_DESPAWN, -524.248, 2211.92, 62.9096)
         end)
         darnavan:Talk(SAY_DARNAVAN_RESCUED)
         if killer ~= nil and killer:GetObjectType() == "Player" then
@@ -1321,6 +1330,20 @@ RegisterCreatureEvent(ENTRY_DARNAVAN_25, 2, darnavanLeaveCombat)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 23, darnavanReset)
 RegisterCreatureEvent(ENTRY_DARNAVAN_10, 4, darnavanJustDied)
 RegisterCreatureEvent(ENTRY_DARNAVAN_25, 4, darnavanJustDied)
+
+-- C++ npc_darnavan::MovementInform (:868-875): POINT_MOTION_TYPE +
+-- POINT_DESPAWN arrival -> DespawnOrUnsummon. Type 8 = POINT_MOTION_TYPE
+-- (kelthuzad precedent); the id gate keeps other darnavan moves from
+-- despawning. PORTED 2026-11-08 (tick 493).
+local function darnavanMovementInform(event, creature, moveType, id)
+    if moveType ~= 8 or id ~= POINT_DESPAWN then
+        return
+    end
+    creature:DespawnOrUnsummon()
+end
+
+RegisterCreatureEvent(ENTRY_DARNAVAN_10, 28, darnavanMovementInform)
+RegisterCreatureEvent(ENTRY_DARNAVAN_25, 28, darnavanMovementInform)
 
 -- C++ spell_deathwhisper_mana_barrier::HandlePeriodicTick
 -- (boss_lady_deathwhisper.cpp:967-977): PreventDefaultAction; the
