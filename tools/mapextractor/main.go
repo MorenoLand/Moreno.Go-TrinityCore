@@ -21,7 +21,8 @@ func main() {
 	mapID := flag.Uint("map-id", 0, "map ID written to dir_bin records")
 	tileX := flag.Uint("tile-x", 0, "ADT tile X coordinate written to dir_bin records")
 	tileY := flag.Uint("tile-y", 0, "ADT tile Y coordinate written to dir_bin records")
-	extractMask := flag.Int("extract", 6, "extract select bitmask, mirrors the C++ -e flag: MAP(1)/DBC(2)/Camera(4)")
+	extractMask := flag.Int("extract", 7, "extract select bitmask, mirrors the C++ -e flag: MAP(1)/DBC(2)/Camera(4)")
+	floatToInt := flag.Bool("float-to-int", true, "store heights as int (less map size but lost some accuracy), mirrors the C++ -f flag, 1 by default")
 	flag.Parse()
 	if *extractMask <= 0 || *extractMask >= 8 {
 		fmt.Fprintln(os.Stderr, "invalid -extract mask: use MAP(1)/DBC(2)/Camera(4) bits (1-7)")
@@ -109,19 +110,12 @@ func main() {
 	// C++ owner: src/tools/map_extractor/System.cpp main() (System.cpp:1118-1195)
 	// + HandleArgs -e (System.cpp:155-163): the extract-select bitmask
 	// MAP(1)/DBC(2)/Camera(4), validated to 1-7 (Usage -> exit 1 otherwise).
-	// DELTAS: the default is 6 (DBC|Camera), not the C++ 7 — the MAP bit has
-	// no .map writer behind it (parked multi-tick feature), so requesting it
-	// fails loudly instead of silently skipping; when the writer lands the
-	// default moves to 7. The C++ -f float-to-int flag rides the .map writer
-	// too and stays parked with it. C++ also runs the ReadBuild fatal check
+	// The C++ default is 7 and the phases run DBC, then Camera, then MAP;
+	// Go follows the same order. C++ also runs the ReadBuild fatal check
 	// (exit 1 on a missing/invalid component.wow-<lang>.txt) even for
 	// camera-only extraction; Go's camera phase never consumes the build
-	// number (only the parked .map writer would), so the strict check lives
-	// in the DBC phase only (wowdata.ExtractDBC).
-	if *extractMask&1 != 0 {
-		fmt.Fprintln(os.Stderr, "MAP extraction (-extract bit 1) is not implemented: the .map writer is a parked multi-tick feature")
-		os.Exit(1)
-	}
+	// number (only the .map writer does), so the strict check lives in
+	// the MAP phase (readClientBuild) and the DBC phase (wowdata.ExtractDBC).
 	if *extractMask&2 != 0 {
 		count, err := wowdata.ExtractDBC(*input, *output)
 		if err != nil {
@@ -137,6 +131,14 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Extracted %d camera files into %s\n", camCount, filepath.Join(*output, "Cameras"))
+	}
+	if *extractMask&1 != 0 {
+		mapCount, err := extractMaps(*input, *output, *floatToInt)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "MAP extraction failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Extracted %d map files into %s\n", mapCount, filepath.Join(*output, "maps"))
 	}
 }
 

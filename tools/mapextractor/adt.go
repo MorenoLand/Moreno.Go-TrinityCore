@@ -9,6 +9,7 @@ import (
 
 type adtInfo struct {
 	HasMHDR           bool
+	MHDRFlags         uint32
 	HasMCIN           bool
 	HasMTEX           bool
 	HasMMDX           bool
@@ -35,11 +36,26 @@ type adtInfo struct {
 	LiquidVertexBytes int
 	MCLQBytes         int
 	Cells             []adtCellInfo
-	Doodads           []adtDoodadInstance
-	WorldModels       []adtWorldModelInstance
-	DoodadNames       []string
-	WorldModelNames   []string
-	InstanceOrder     []adtModelInstanceRef
+	// Grid is the per-cell view of Cells, indexed [iy][ix] (row, column)
+	// — the MCNK ix/iy fields place each cell, matching C++
+	// adt_MCNK::getMCNK(i, j) indexing in ConvertADT.
+	Grid [16][16]*adtCellInfo
+	// Liquid holds the first MH2O instance per cell, indexed [iy][ix];
+	// a zero value means the cell has no liquid instance. ConvertADT
+	// reads only the first instance (adt_MH2O::GetLiquidInstance).
+	Liquid [16][16]adtLiquidInstance
+	// FlightBounds is the MFBO data (adt_MFBO, adt.h), valid when
+	// HasMFBO is set and MHDRFlags bit 0 is set (adt_MFBO::getMFBO
+	// gate): Max/Min are the two int16[9] flight-bound planes, file
+	// order.
+	HasMFBO         bool
+	FlightMax       [9]int16
+	FlightMin       [9]int16
+	Doodads         []adtDoodadInstance
+	WorldModels     []adtWorldModelInstance
+	DoodadNames     []string
+	WorldModelNames []string
+	InstanceOrder   []adtModelInstanceRef
 }
 
 type adtDoodadInstance struct {
@@ -75,6 +91,40 @@ type adtCellInfo struct {
 	DoodadRefs uint32
 	AreaID     uint32
 	Holes      uint32
+	// YPos is the MCNK base height (adt_MCNK.ypos, map_extractor/adt.h):
+	// ConvertADT seeds every V9/V8 sample of the cell with it before
+	// adding MCVT deltas.
+	YPos float32
+	// Heights holds the 145 MCVT samples (adt_MCVT.height_map, adt.h),
+	// valid when HasMCVT is set. MCVT must be exactly 145 floats.
+	Heights [145]float32
+	HasMCVT bool
+	// MCLQ (old liquid) data, valid when HasMCLQ is set. MCLQSize is the
+	// MCNK sizeMCLQ field; ConvertADT skips the cell's MCLQ leg when the
+	// chunk is absent or sizeMCLQ <= 8.
+	HasMCLQ    bool
+	MCLQSize   uint32
+	MCLQLiquid [9][9]float32
+	MCLQFlags  [8][8]uint8
+}
+
+// adtLiquidInstance is one MH2O liquid instance (adt_liquid_instance,
+// map_extractor/adt.h:188-200) — ConvertADT reads only the FIRST instance
+// per cell (adt_MH2O::GetLiquidInstance). VertexHeights holds the
+// (Width+1)*(Height+1) height samples in row-major order, present only
+// for HeightDepth/HeightTextureCoord formats with a vertex-data offset;
+// Depth-format instances have no heights (GetLiquidHeight returns 0).
+type adtLiquidInstance struct {
+	HasInstance   bool
+	LiquidType    uint16
+	Format        uint16
+	OffsetX       uint8
+	OffsetY       uint8
+	Width         uint8
+	Height        uint8
+	ExistsBitmap  uint64
+	VertexHeights []float32
+	Deep          bool
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -93,6 +143,22 @@ func parseADT(data []byte) (adtInfo, error) {
 		switch name {
 		case "MHDR":
 			info.HasMHDR = true
+			// C++ owner: adt_MHDR flags (map_extractor/adt.h) — bit 0
+			// gates the MFBO flight-bounds leg in ConvertADT.
+			if len(chunk) >= 4 {
+				info.MHDRFlags = binary.LittleEndian.Uint32(chunk[0:])
+			}
+		case "MFBO":
+			// C++ owner: adt_MFBO (map_extractor/adt.h) — max plane
+			// then min plane, each int16[9]; 36 payload bytes.
+			if len(chunk) < 36 {
+				return adtInfo{}, fmt.Errorf("truncated ADT MFBO chunk: got %d, want %d", len(chunk), 36)
+			}
+			info.HasMFBO = true
+			for index := 0; index < 9; index++ {
+				info.FlightMax[index] = int16(binary.LittleEndian.Uint16(chunk[index*2:]))
+				info.FlightMin[index] = int16(binary.LittleEndian.Uint16(chunk[18+index*2:]))
+			}
 		case "MCIN":
 			info.HasMCIN = true
 		case "MTEX":
@@ -267,6 +333,57 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 				}
 				info.LiquidVertexBytes += int(vertexBytes)
 			}
+			if layer == 0 {
+				// ConvertADT reads only the FIRST instance per cell
+				// (adt_MH2O::GetLiquidInstance, map_extractor/adt.h).
+				// The MH2O header array is liquid[16][16] in file
+				// order, so header index maps to cell (index/16,
+				// index%16), the same (i, j) ConvertADT passes to
+				// GetLiquidInstance.
+				inst := &info.Liquid[index/16][index%16]
+				inst.HasInstance = true
+				inst.LiquidType = binary.LittleEndian.Uint16(chunk[base:])
+				inst.Format = lvf
+				inst.OffsetX = chunk[base+12]
+				inst.OffsetY = chunk[base+13]
+				inst.Width = width
+				inst.Height = height
+				existsOffset := binary.LittleEndian.Uint32(chunk[base+16:])
+				if existsOffset == 0 {
+					// adt_MH2O::GetLiquidExistsBitmap returns the
+					// all-ones mask when OffsetExistsBitmap is 0.
+					inst.ExistsBitmap = 0xFFFFFFFFFFFFFFFF
+				} else {
+					if uint64(existsOffset)+8 > uint64(len(chunk)) {
+						return fmt.Errorf("invalid ADT MH2O exists bitmap offset %d", existsOffset)
+					}
+					inst.ExistsBitmap = binary.LittleEndian.Uint64(chunk[existsOffset:])
+				}
+				if vertexOffset != 0 && (lvf == 0 || lvf == 1) {
+					// adt_MH2O::GetLiquidHeight reads the heights as
+					// a contiguous float array at OffsetVertexData;
+					// Depth format (2) has no heights (returns 0).
+					count := int(width+1) * int(height+1)
+					if uint64(vertexOffset)+uint64(count)*4 > uint64(len(chunk)) {
+						return fmt.Errorf("invalid ADT MH2O vertex offset %d", vertexOffset)
+					}
+					inst.VertexHeights = make([]float32, count)
+					for pos := range inst.VertexHeights {
+						inst.VertexHeights[pos] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[int(vertexOffset)+pos*4:]))
+					}
+				}
+				// adt_MH2O::GetLiquidAttributes: used cells with no
+				// attribute offset get all-ones (Deep set); the Deep
+				// flag is the second uint64 of the attributes block.
+				if offsetAttributes != 0 {
+					if uint64(offsetAttributes)+16 > uint64(len(chunk)) {
+						return fmt.Errorf("invalid ADT MH2O attribute offset %d", offsetAttributes)
+					}
+					inst.Deep = binary.LittleEndian.Uint64(chunk[int(offsetAttributes)+8:]) != 0
+				} else {
+					inst.Deep = true
+				}
+			}
 		}
 		if offsetAttributes != 0 {
 			if uint64(offsetAttributes)+16 > uint64(len(chunk)) {
@@ -280,17 +397,24 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 
 func countADTSubchunks(chunk []byte, info *adtInfo) error {
 	const mcnkHeaderSize = 128
-	// The cell fields read below run through Holes at payload offset 60;
-	// a shorter chunk cannot hold them (C++ owner: adt_MCNK field layout in
-	// map_extractor/adt.h, holes at struct offset 68 = payload offset 60).
-	if len(chunk) < 64 {
-		return fmt.Errorf("truncated ADT MCNK chunk: got %d, want at least %d", len(chunk), 64)
+	// The cell fields read below run through ypos at payload offset 112
+	// (C++ owner: adt_MCNK field layout in map_extractor/adt.h — ypos at
+	// struct offset 120 = payload offset 112, sizeMCLQ at 108/100,
+	// offsMCLQ at 104/96, holes at struct offset 68 = payload offset 60).
+	if len(chunk) < 116 {
+		return fmt.Errorf("truncated ADT MCNK chunk: got %d, want at least %d", len(chunk), 116)
 	}
-	cell := adtCellInfo{Flags: binary.LittleEndian.Uint32(chunk[0:]), X: binary.LittleEndian.Uint32(chunk[4:]), Y: binary.LittleEndian.Uint32(chunk[8:]), Layers: binary.LittleEndian.Uint32(chunk[12:]), DoodadRefs: binary.LittleEndian.Uint32(chunk[16:]), AreaID: binary.LittleEndian.Uint32(chunk[52:]), Holes: binary.LittleEndian.Uint32(chunk[60:])}
+	cell := adtCellInfo{Flags: binary.LittleEndian.Uint32(chunk[0:]), X: binary.LittleEndian.Uint32(chunk[4:]), Y: binary.LittleEndian.Uint32(chunk[8:]), Layers: binary.LittleEndian.Uint32(chunk[12:]), DoodadRefs: binary.LittleEndian.Uint32(chunk[16:]), AreaID: binary.LittleEndian.Uint32(chunk[52:]), Holes: binary.LittleEndian.Uint32(chunk[60:]), MCLQSize: binary.LittleEndian.Uint32(chunk[100:]), YPos: math.Float32frombits(binary.LittleEndian.Uint32(chunk[112:]))}
 	if cell.X >= 16 || cell.Y >= 16 {
 		return fmt.Errorf("invalid ADT MCNK cell coordinates %d,%d", cell.X, cell.Y)
 	}
+	// offsMCLQ gates the MCLQ leg in ConvertADT (adt_MCNK::getMCLQ
+	// returns nil when it is 0); keep it on the stack for the subchunk
+	// loop below.
+	offsMCLQ := binary.LittleEndian.Uint32(chunk[96:])
 	info.Cells = append(info.Cells, cell)
+	cellPtr := &info.Cells[len(info.Cells)-1]
+	info.Grid[cell.Y][cell.X] = cellPtr
 	if len(chunk) <= mcnkHeaderSize {
 		return nil
 	}
@@ -313,6 +437,9 @@ func countADTSubchunks(chunk []byte, info *adtInfo) error {
 			info.MCVTHeights += size / 4
 			for index := 0; index < 145; index++ {
 				value := math.Float32frombits(binary.LittleEndian.Uint32(chunk[offset+index*4:]))
+				// ConvertADT adds MCVT deltas onto the ypos-seeded
+				// V9/V8 grids; retain the samples on the cell.
+				cellPtr.Heights[index] = value
 				if previousHeights == 0 && index == 0 {
 					info.HeightMin, info.HeightMax = value, value
 				} else {
@@ -324,6 +451,7 @@ func countADTSubchunks(chunk []byte, info *adtInfo) error {
 					}
 				}
 			}
+			cellPtr.HasMCVT = true
 		case "MCLY":
 			info.MCLYCount++
 		case "MCAL":
@@ -334,6 +462,23 @@ func countADTSubchunks(chunk []byte, info *adtInfo) error {
 			}
 			info.MCLQCount++
 			info.MCLQBytes += size
+			if offsMCLQ != 0 {
+				// C++ owner: adt_MCLQ (map_extractor/adt.h) — liquid
+				// [9][9] of {light uint32, height float32} at payload
+				// offset 8, flags [8][8] at offset 656. ConvertADT
+				// reads only the heights and the flags.
+				cellPtr.HasMCLQ = true
+				for y := 0; y < 9; y++ {
+					for x := 0; x < 9; x++ {
+						cellPtr.MCLQLiquid[y][x] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[offset+8+(y*9+x)*8+4:]))
+					}
+				}
+				for y := 0; y < 8; y++ {
+					for x := 0; x < 8; x++ {
+						cellPtr.MCLQFlags[y][x] = chunk[offset+656+y*8+x]
+					}
+				}
+			}
 		}
 		offset += size
 	}
