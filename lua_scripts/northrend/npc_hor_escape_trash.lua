@@ -79,9 +79,11 @@
 --   AddThreat(leader, 0): no instance bridge, and SetInCombatWith
 --   has no Lua bridge (engine-internal CombatManager only, the
 --   2026-10-22 SetInCombatWith sweep).
--- npc_escape_event_trash::UpdateAI despawn (:2176-2180) — despawns
---   when instance DATA_THE_LICH_KING_ESCAPE is FAIL/NOT_STARTED:
---   no instance boss-state bridge.
+-- npc_escape_event_trash::UpdateAI despawn (:2176-2180) — PORTED
+--   2026-11-08 (tick 492) as the 1s boss-state poller below:
+--   creature:GetBossState is bridged (lua_creature_events.go:6438)
+--   and returns TO_BE_DECIDED (5) for an unset boss, so the
+--   FAIL/NOT_STARTED gate is C++-exact.
 -- npc_escape_event_trash::Reset (:2172-2174) — EventMap reset only;
 --   covered by the event-2/4/23 timer cancel.
 --
@@ -111,8 +113,13 @@ local SPELL_VOMIT_SPRAY = 70176
 
 local EMOTE_ONESHOT_EMERGE = 449
 
+local DATA_THE_LICH_KING_ESCAPE = 2 -- halls_of_reflection.h:39
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_FAIL = 2
+
 local timers = {}
 local wakes = {}
+local despawnPolls = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -167,6 +174,39 @@ local function maxThreatPlayerInRange(creature, dist)
         end
     end
     return nil
+end
+
+-- C++ npc_escape_event_trash::UpdateAI :2176-2180: despawn when the
+-- escape encounter is FAIL or NOT_STARTED (TO_BE_DECIDED does not
+-- despawn — GetBossState returns 5 for an unset boss). UpdateAI ticks
+-- every frame in C++; the Lua twin is a 1s poller started on spawn
+-- (ev5), cancelled only on death (ev4) — it survives evade/reset
+-- like the C++ UpdateAI, mirroring the wakes table's lifetime.
+local function cancelDespawnPoll(guid)
+    local id = despawnPolls[guid]
+    if id then
+        RemoveEventById(id)
+        despawnPolls[guid] = nil
+    end
+end
+
+local function despawnPoll(creature, guid)
+    if despawnPolls[guid] == nil then
+        return
+    end
+    local state = creature:GetBossState(DATA_THE_LICH_KING_ESCAPE)
+    if state == BOSS_STATE_NOT_STARTED or state == BOSS_STATE_FAIL then
+        despawnPolls[guid] = nil
+        creature:DespawnOrUnsummon()
+        return
+    end
+    despawnPolls[guid] = CreateLuaEvent(function() despawnPoll(creature, guid) end, 1000)
+end
+
+local function startDespawnPoll(creature)
+    local guid = creature:GetGUID()
+    cancelDespawnPoll(guid)
+    despawnPolls[guid] = CreateLuaEvent(function() despawnPoll(creature, guid) end, 1000)
 end
 
 -- Shared spawn tail: 5s aggressive flip (HoRStartMovementEvent) plus
@@ -227,6 +267,7 @@ local function ghoulSpawn(event, creature)
     creature:SetReactState(REACT_PASSIVE)
     creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
     spawnTail(creature, creature:GetGUID())
+    startDespawnPoll(creature)
 end
 
 -- Risen witch doctor ---------------------------------------------------
@@ -286,6 +327,7 @@ local function witchDoctorSpawn(event, creature)
     creature:SetReactState(REACT_PASSIVE)
     creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
     spawnTail(creature, creature:GetGUID())
+    startDespawnPoll(creature)
 end
 
 -- Lumbering abomination ------------------------------------------------
@@ -322,16 +364,21 @@ end
 -- C++ base IsSummonedBy only (no derived override): DoZoneInCombat.
 local function abominationSpawn(event, creature)
     creature:DoZoneInCombat()
+    startDespawnPoll(creature)
 end
 
--- Shared teardown: combat timers cancel on 2/4/23; the wake flip is
--- a BasicEvent twin and survives evade/reset, cleared only on death.
+-- Shared teardown: combat timers cancel on 2/4/23; the wake flip and
+-- the despawn poller are UpdateAI twins and survive evade/reset,
+-- cleared only on death.
 local function onLeaveOrDiedOrReset(event, creature)
     local guid = creature:GetGUID()
     cancelTimers(guid)
-    if event == 4 and wakes[guid] then
-        RemoveEventById(wakes[guid])
-        wakes[guid] = nil
+    if event == 4 then
+        if wakes[guid] then
+            RemoveEventById(wakes[guid])
+            wakes[guid] = nil
+        end
+        cancelDespawnPoll(guid)
     end
 end
 

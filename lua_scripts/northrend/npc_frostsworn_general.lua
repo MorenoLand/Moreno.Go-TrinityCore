@@ -63,10 +63,12 @@
 --   without consuming their re-arm (the mal_ganis idiom); Talk hooks
 --   (JustEngagedWith/JustDied/KilledUnit) are separate hooks and stay
 --   ungated per C++.
+-- PORTED (2026-11-08, tick 492): the Reset / JustEngagedWith /
+-- JustDied instance legs — _instance->SetData(DATA_FROSTSWORN_GENERAL,
+-- NOT_STARTED / IN_PROGRESS / DONE) via the Go-only instance event-8
+-- bridge (instance_hooks.go:51; the instance handler stores
+-- frostswornGeneralState, the Shadow Throne door leg stays out).
 -- DOCUMENTED-ONLY (in this header; only entry 36723 registered):
--- npc_frostsworn_general Reset / JustEngagedWith / JustDied instance
--- legs — _instance->SetData(DATA_FROSTSWORN_GENERAL, NOT_STARTED /
--- IN_PROGRESS / DONE) — no instance bridge.
 -- npc_frostsworn_general UpdateAI - EVENT_CLONE (:1939-1942)
 -- SummonClones machine (:1950-1964) is PORTED below (2026-11-03):
 -- SelectTargetList(MaxThreat, 5) + SummonCreature(NPC_REFLECTION) +
@@ -122,6 +124,11 @@
 -- boss_moragg optic-link precedent).
 
 local ENTRY_FROSTSWORN_GENERAL = 36723
+
+local DATA_FROSTSWORN_GENERAL = 4 -- halls_of_reflection.h:42
+local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
+local BOSS_STATE_DONE = 3
 
 local SAY_AGGRO = 0
 local SAY_DEATH = 1
@@ -260,6 +267,19 @@ end
 -- (PORTED 2026-10-23 — bridge live, engine/world/lua_creature_events.go),
 -- EVENT_SHIELD at 5000ms, EVENT_SPIKE at 14000ms
 -- (EVENT_CLONE's SummonClones leg is ported below).
+-- C++ _instance->SetData(DATA_FROSTSWORN_GENERAL, state) — the
+-- instance event-8 handler stores it (instance_halls_of_reflection.lua);
+-- the Shadow Throne door leg stays out (door model).
+local function setFrostswornState(creature, state)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:SetData(DATA_FROSTSWORN_GENERAL, state)
+        end
+    end
+end
+
 local function frostswornGeneralJustEngagedWith(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- C++ halls_of_reflection.cpp:1908, in arm order after Talk (bridge live 2026-10-23)
@@ -268,6 +288,8 @@ local function frostswornGeneralJustEngagedWith(event, creature, target)
     schedule(guid, "shield", 5000, function() generalShieldTick(creature, guid) end)
     schedule(guid, "spike", 14000, function() generalSpikeTick(creature, guid) end)
     schedule(guid, "clone", 22000, function() generalCloneTick(creature, guid) end)
+    -- C++ :1914: SetData(IN_PROGRESS) last, after the schedules.
+    setFrostswornState(creature, BOSS_STATE_IN_PROGRESS)
 end
 
 -- C++ npc_frostsworn_generalAI::JustDied :1903-1908: Talk(SAY_DEATH)
@@ -276,6 +298,8 @@ end
 local function frostswornGeneralJustDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     cancelTimers(creature:GetGUID())
+    -- C++ :1907: SetData(DONE) after Talk.
+    setFrostswornState(creature, BOSS_STATE_DONE)
 end
 
 local function frostswornGeneralTargetDied(event, creature, victim)
@@ -289,6 +313,8 @@ end
 
 local function frostswornGeneralReset(event, creature)
     cancelTimers(creature:GetGUID())
+    -- C++ :1894: SetData(NOT_STARTED).
+    setFrostswornState(creature, BOSS_STATE_NOT_STARTED)
 end
 
 RegisterCreatureEvent(ENTRY_FROSTSWORN_GENERAL, 1, frostswornGeneralJustEngagedWith)

@@ -96,21 +96,27 @@
 --   moroes/valithria add-registration rule). Its Reset's
 --   DoZoneInCombat (:1655-1658) and the owner-aura EnterEvadeMode
 --   guard (:1660-1665) have no bridges.
--- npc_gauntlet_trash::Reset (C++ :1470-1474) — the triggered self-cast
---   SPELL_WELL_OF_SOULS 72630 (halls_of_reflection.h :157) fires on
---   the C++ spawn path, but Go fires events 23/5 only on the respawn
---   path (engine/world/lua_creature_events.go:368-395: "Go fires this
---   only on the respawn path; C++ also fires it on first grid
---   activation of a fresh spawn, which has no Go fire site"), so the
---   leg is unmodeled rather than fabricated on a wrong hook.
--- npc_gauntlet_trash::EnterEvadeMode (C++ :1476-1480) — the
---   instance->SetData(DATA_WAVE_COUNT, NOT_STARTED) leg has no
---   instance bridge; the _events.Reset() half is covered by the
---   event-2 timer cancel. phantom_mage's HasAura(AURA_HALLUCINATION
---   72343) evade guard (:1583-1587) IS bridged — creature:HasAura
---   (engine/world/lua_objects.go) — so mageEvade skips the evade
---   (event 2 returns true to veto the Go base evade, event 23 keeps
---   the timers) while the hallucination aura is up.
+-- npc_gauntlet_trash::Reset (C++ :1470-1474) — PORTED 2026-11-08
+--   (tick 492): the triggered self-cast SPELL_WELL_OF_SOULS 72630
+--   (halls_of_reflection.h :157) rides ev23 (trashReset below). The
+--   old "Go fires 23/5 only on the respawn path" claim is STALE —
+--   fireCreatureSpawned fires ev23+ev5 on first spawn too
+--   (creaturemotion.go:1240-1262, Eluna initial-spawn leg). Go ev23
+--   also fires on evade (triggerCreatureEvade, the Eluna
+--   EnterEvadeMode On_Reset-first order), where the re-cast is a
+--   harmless re-application of the spawn visual.
+-- npc_gauntlet_trash::EnterEvadeMode (C++ :1476-1480) — PORTED
+--   2026-11-08 (tick 492): the instance->SetData(DATA_WAVE_COUNT,
+--   NOT_STARTED) leg rides ev2 (trashEvade below) as an unconditional
+--   write — the C++ GetData gate has no Lua bridge (no instance
+--   GetData), and the instance event-8 handler carries the
+--   _waveCount != 0 guard (tick 491). The _events.Reset() half is
+--   covered by the event-2 timer cancel. phantom_mage's
+--   HasAura(AURA_HALLUCINATION 72343) evade guard (:1583-1587) IS
+--   bridged — creature:HasAura (engine/world/lua_objects.go) — so
+--   mageEvade skips the evade (event 2 returns true to veto the Go
+--   base evade, event 23 keeps the timers) while the hallucination
+--   aura is up.
 -- ghostly_priest EVENT_DARK_MENDING (:1547-1559) —
 --   DoSelectLowestHpFriendly(40, ...) (:1550) targets a missing-HP
 --   friendly CREATURE ally; Lua exposes only GetPlayersInWorld, no
@@ -137,6 +143,10 @@ local ENTRY_PHANTOM_MAGE      = 38172
 local ENTRY_SHADOWY_MERCENARY = 38177
 local ENTRY_SPECTRAL_FOOTMAN  = 38173
 local ENTRY_TORTURED_RIFLEMAN = 38176
+
+local SPELL_WELL_OF_SOULS         = 72630
+local DATA_WAVE_COUNT             = 6 -- halls_of_reflection.h:45
+local BOSS_STATE_NOT_STARTED      = 0 -- InstanceScript.h:68-76
 
 local SPELL_SHADOW_WORD_PAIN      = 72318
 local SPELL_CIRCLE_OF_DESTRUCTION = 72320
@@ -209,6 +219,34 @@ end
 
 local function alive(guid)
     return timers[guid] ~= nil
+end
+
+-- C++ npc_gauntlet_trash::EnterEvadeMode :1476-1480: the wave-count
+-- wipe write; the instance event-8 handler runs DO_WIPE only when
+-- the stored count is non-zero (tick 491).
+local function setWaveCountWipe(creature)
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:SetData(DATA_WAVE_COUNT, BOSS_STATE_NOT_STARTED)
+        end
+    end
+end
+
+-- C++ npc_gauntlet_trash::Reset :1470-1474: triggered self-cast
+-- SPELL_WELL_OF_SOULS + _events.Reset() (the timer cancel).
+local function trashReset(event, creature)
+    creature:CastSpell(creature, SPELL_WELL_OF_SOULS, true)
+    cancelTimers(creature:GetGUID())
+end
+
+-- C++ npc_gauntlet_trash::EnterEvadeMode :1476-1480: _events.Reset()
+-- (the timer cancel) + the wave-count wipe write. Death (ev4) does
+-- NOT run this — C++ JustDied never calls EnterEvadeMode.
+local function trashEvade(event, creature)
+    cancelTimers(creature:GetGUID())
+    setWaveCountWipe(creature)
 end
 
 -- Ghostly priest -------------------------------------------------------
@@ -359,6 +397,20 @@ local function mageEvade(event, creature)
         return
     end
     cancelTimers(creature:GetGUID())
+    -- C++ :1583-1587: without the aura, the base EnterEvadeMode runs.
+    setWaveCountWipe(creature)
+end
+
+-- C++ npc_phantom_mageAI::Reset is the base Reset (:1470-1474): the
+-- hallucination-aura guard (:1583-1587) covers EnterEvadeMode only,
+-- so on spawn the cast always runs; on evade the C++ override skips
+-- the whole evade (Reset included) while the aura is up, so mageReset
+-- returns early with the aura up and casts otherwise.
+local function mageReset(event, creature)
+    if creature:HasAura(AURA_HALLUCINATION) then
+        return
+    end
+    trashReset(event, creature)
 end
 
 -- Shadowy mercenary ----------------------------------------------------
@@ -534,26 +586,26 @@ local function onLeaveOrDiedOrReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 1, priestEngaged)
-RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 2, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 2, trashEvade)
 RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 4, onLeaveOrDiedOrReset)
-RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 23, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_GHOSTLY_PRIEST, 23, trashReset)
 
 RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 1, mageEngaged)
 RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 2, mageEvade)
 RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 4, onLeaveOrDiedOrReset)
-RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 23, mageEvade)
+RegisterCreatureEvent(ENTRY_PHANTOM_MAGE, 23, mageReset)
 
 RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 1, mercenaryEngaged)
-RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 2, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 2, trashEvade)
 RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 4, onLeaveOrDiedOrReset)
-RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 23, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_SHADOWY_MERCENARY, 23, trashReset)
 
 RegisterCreatureEvent(ENTRY_SPECTRAL_FOOTMAN, 1, footmanEngaged)
-RegisterCreatureEvent(ENTRY_SPECTRAL_FOOTMAN, 2, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_SPECTRAL_FOOTMAN, 2, trashEvade)
 RegisterCreatureEvent(ENTRY_SPECTRAL_FOOTMAN, 4, onLeaveOrDiedOrReset)
-RegisterCreatureEvent(ENTRY_SPECTRAL_FOOTMAN, 23, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_SPECTRAL_FOOTMAN, 23, trashReset)
 
 RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 1, riflemanEngaged)
-RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 2, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 2, trashEvade)
 RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 4, onLeaveOrDiedOrReset)
-RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 23, onLeaveOrDiedOrReset)
+RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 23, trashReset)

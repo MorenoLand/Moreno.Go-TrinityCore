@@ -61,20 +61,24 @@
 -- (takeFrostmourne) at +15s, reusing the LK_STEPS tail from index 4.
 -- All MovePoint legs (intro walks, LK walk-away, Falric/Marwyn
 -- intro walks, Koreln/Loralen moves): no movement bridge.
--- Koreln/Loralen arms (MovePoint + feign-death 29266): instance
--- GetGuidData, no bridge. Frostmourne / impenetrable-door GO legs
--- (HandleGameObject, phase mask): instance GetGuidData, no bridge.
+-- Koreln/Loralen arms: the feign-death 29266 leg is PORTED 2026-11-08
+--   (tick 492) via the instanceData mirror (korelnOrLoralen bind);
+--   the MovePoint legs stay out (no movement bridge). Frostmourne /
+--   impenetrable-door GO legs (HandleGameObject, phase mask): instance
+--   GetGuidData, no bridge.
 -- Falric/Marwyn aura (72712) + visible + Talk legs: PORTED 2026-11-05
 --   via the instanceData mirror (instance_halls_of_reflection.lua
 --   binds falric/marwyn; the old "instance GetGuidData, no bridge"
 --   claim is retracted — the mirror IS the GetGuidData bridge, and
 --   the fetch rule is the C++ GUID fetch, not a proximity lookup).
 --   The MovePoint legs in the same steps stay out (no movement
---   bridge), as does ProcessEvent(EVENT_SPAWN_WAVES) in LK_9 (the
---   unported instance wave machine).
--- Instance SetData(DATA_INTRO_EVENT, DONE) + ProcessEvent
--- (EVENT_SPAWN_WAVES): no instance bridge. LK SetWalk(true):
--- no SetWalk bridge, moot without movement.
+--   bridge). ProcessEvent(EVENT_SPAWN_WAVES) in LK_9 is PORTED
+--   2026-11-08 (tick 492) via the Go-only signal
+--   instanceData:SetData(HOR_SETDATA_SPAWN_WAVES 1001, 0), run by the
+--   instance event-8 handler (tick 491).
+-- Instance SetData(DATA_INTRO_EVENT, DONE) is PORTED 2026-11-08
+--   (tick 492) in introEnd via the same event-8 bridge. LK
+--   SetWalk(true): no SetWalk bridge, moot without movement.
 
 local ENTRY_JAINA_INTRO = 37221
 local ENTRY_SYLVANAS_INTRO = 37223
@@ -98,6 +102,11 @@ local SPELL_UTHER_DESPAWN = 70693
 local SPELL_TAKE_FROSTMOURNE = 72729
 local SPELL_FROSTMOURNE_VISUAL = 73220
 local SPELL_BOSS_SPAWN_AURA = 72712 -- halls_of_reflection.cpp:181
+local SPELL_FEIGN_DEATH = 29266 -- halls_of_reflection.cpp:254
+
+local DATA_INTRO_EVENT = 3 -- halls_of_reflection.h:41
+local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
+local HOR_SETDATA_SPAWN_WAVES = 1001 -- Go-only signal, instance_halls_of_reflection.lua
 
 local SAY_MARWYN_INTRO_1 = 4 -- halls_of_reflection.cpp:112
 local SAY_FALRIC_INTRO_1 = 5 -- halls_of_reflection.cpp:110
@@ -223,12 +232,16 @@ end
 -- mirror (instance_halls_of_reflection.lua binds falric/marwyn; the
 -- kelthuzad GetInstanceData precedent). Every fetch is nil-guarded
 -- like the C++ GetCreature checks.
-local function instanceBoss(st, key)
+local function instanceDataTable(st)
     local mapObj = st.creature:GetMap()
     if not mapObj then
         return nil
     end
-    local data = mapObj:GetInstanceData()
+    return mapObj:GetInstanceData()
+end
+
+local function instanceBoss(st, key)
+    local data = instanceDataTable(st)
     if not data then
         return nil
     end
@@ -271,17 +284,38 @@ local function talkFalricIntro1(st)
     end
 end
 
--- C++ EVENT_INTRO_LK_9 (:699-704): Falric Talk(SAY_FALRIC_INTRO_2 6);
--- the ProcessEvent(EVENT_SPAWN_WAVES) leg stays out (unported
--- instance wave machine).
+-- C++ EVENT_INTRO_LK_9 (:699-704): Falric Talk(SAY_FALRIC_INTRO_2 6),
+-- then ProcessEvent(EVENT_SPAWN_WAVES) — the Go-only signal
+-- instanceData:SetData(HOR_SETDATA_SPAWN_WAVES 1001, 0), run by the
+-- instance event-8 handler (tick 491).
 local function talkFalricIntro2(st)
     local falric = instanceBoss(st, "falric")
     if falric then
         falric:Talk(SAY_FALRIC_INTRO_2)
     end
+    local data = instanceDataTable(st)
+    if data then
+        data:SetData(HOR_SETDATA_SPAWN_WAVES, 0)
+    end
 end
 
+-- C++ EVENT_INTRO_END (:736-747): SetData(DATA_INTRO_EVENT, DONE),
+-- KORELN_LORALEN_DEATH in 8s, LK despawn 5s, me despawn 10s; the
+-- CLOSE_IMPENETRABLE_DOOR leg stays out (door model).
 local function introEnd(st)
+    local data = instanceDataTable(st)
+    if data then
+        data:SetData(DATA_INTRO_EVENT, BOSS_STATE_DONE)
+    end
+    -- C++ :741/:776-778: Koreln/Loralen self-cast SPELL_FEIGN_DEATH
+    -- 29266 (non-triggered); fetched at fire time like the C++
+    -- GetGuidData check.
+    CreateLuaEvent(function()
+        local korelnOrLoralen = instanceBoss(st, "korelnOrLoralen")
+        if korelnOrLoralen then
+            korelnOrLoralen:CastSpell(korelnOrLoralen, SPELL_FEIGN_DEATH)
+        end
+    end, 8000)
     local lk = st.lk
     if lk then
         CreateLuaEvent(function()
