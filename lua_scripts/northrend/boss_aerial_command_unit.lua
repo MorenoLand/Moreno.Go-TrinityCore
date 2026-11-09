@@ -5,38 +5,54 @@
 --
 -- PORTED (engine-fired hooks only, C++-exact spell IDs / semantics):
 --   constructor (:1120): SetReactState(REACT_PASSIVE) + SetDisableGravity
---     (true), on spawn (event 5).
+--     (true), on spawn (event 5); per-GUID fireFighter latch reset here.
 --   DamageTaken (:1127) phase-independent legs: on a lethal hit, clamp
 --     damage to health-1 (Lua `return false, health - 1`, the lich-king
 --     damage-rewrite form), SetReactState passive, AttackStop,
 --     SetDisableGravity(true), triggered self-cast VEHICLE_DAMAGED.
+--   DoAction (:1159) whole switch (event 38, `aerialDoAction`): the
+--     6/7/12 senders are LIVE in boss_mimiron.lua -- aerialActivation6
+--     sends DO_START_AERIAL (6) / DO_HARDMODE_AERIAL (7),
+--     vol7ronActivation7 sends DO_ASSEMBLED_COMBAT (12). Arms, in C++
+--     order:
+--     7 DO_HARDMODE_AERIAL: fireFighter latch + self-cast EMERGENCY_MODE
+--       64582 + EVENT_SUMMON_FIRE_BOTS in 1s, then falls through to the
+--       START legs below (same order as C++).
+--     6 DO_START_AERIAL: SetDisableGravity(false), SetHover(true),
+--       RemoveFlag NON_ATTACKABLE|NOT_SELECTABLE, react aggressive,
+--       JUNK_BOT 5s / ASSAULT_BOT 9s / BOMB_BOT 9s. SetImmuneToPC(false)
+--       has NO binding -- leg skipped (deviation, see below).
+--     8 DO_DISABLE_AERIAL: StopSpellCast, react passive, AttackStop,
+--       MoveFall (bridged, lua_creature_events.go:3391), DelayEvents 23s
+--       on the four armed summon keys (ymiron delayTimers idiom).
+--     9 DO_ENABLE_AERIAL: react aggressive.
+--     12 DO_ASSEMBLED_COMBAT: RemoveFlag as above, react aggressive,
+--       SetStandState STAND, all four summon pumps cancelled (phase-3-only
+--       in C++; the cancel is the Lua twin of the C++ phase change to
+--       PHASE_VOL7RON, which has no Lua read).
+--     SENDER GAP: actions 8/9 are sent only by the C++ magnetic-core
+--     AuraScript (OnApply/OnRemove, boss_mimiron.cpp:1934/1943), a
+--     SpellScript leg with no Lua twin -- those two arms are ported and
+--     correct but undelivered until that aura is ported.
+--   UpdateAI summon pumps (:1233, self-re-arming; C++ delays exact):
+--     firebots: DoCastAOE SUMMON_FIRE_BOT_TRIGGER 64620, triggered,
+--       re-arm 45s. junkbot: DoCastAOE SUMMON_JUNK_BOT_TRIGGER 63820,
+--       triggered, re-arm {11s,12s}. assaultbot: DoCastAOE
+--       SUMMON_ASSAULT_BOT_TRIGGER 64425, triggered, re-arm 30s. bombbot:
+--       self-cast SUMMON_BOMB_BOT 63811, re-arm {15s,20s}. C++ UpdateAI
+--       CASTING gate: on IsCasting, re-schedule the same key in 500ms
+--       WITHOUT taking the re-arm decision (amanitar/razorscale idiom).
+--     DELTA: C++ adds SPELLVALUE_MAX_TARGETS (3 fire / 1 junk / 1
+--       assault) via CastSpellExtraArgs -- no Lua twin; the triggers
+--       cast without the cap.
+--   JustSummoned (:1206, ev19 `aerialJustSummoned`): if the per-GUID
+--     fireFighter latch is set and the summoned entry is NPC_ASSAULT_BOT
+--     34057 or NPC_JUNK_BOT 33855, summoned self-casts EMERGENCY_MODE
+--     64582. (BossAI summon-tracking leg is engine-side.)
+--   Reset (ev23) / JustDied (ev4): cancel all Lua timers (C++
+--     events.Reset twin; the C++ Reset arm is otherwise engine-side).
 --
 -- DOCUMENTED-ONLY (no behavior fabricated):
---   DoAction (:1159) whole switch -- the sender chains are unported
---     (event-38 dispatch itself is bridged, creature:DoAction,
---     lua_creature_events.go:802), so every arm stays out even
---     where its legs alone would be bridgeable (DO_ENABLE_AERIAL is just
---     SetReactState aggressive; it can never be delivered in Lua):
---     DO_HARDMODE_AERIAL (firefighter latch + self-cast EMERGENCY_MODE +
---       EVENT_SUMMON_FIRE_BOTS 1s), DO_START_AERIAL (gravity off, hover on,
---       flag removal, SetImmuneToPC(false) -- no binding -- react
---       aggressive, phase set, JUNK 5s / ASSAULT 9s / BOMB 9s timers),
---     DO_DISABLE_AERIAL (CastStop -- bridged as StopSpellCast,
---       lua_creature_events.go:1010, vacuous here: no Lua cast state --
---       passive, AttackStop, MoveFall -- no binding -- DelayEvents 23s),
---     DO_ASSEMBLED_COMBAT
---       (flag removal, react aggressive, stand STAND, phase VOL7RON).
---   UpdateAI summon timers (:1233): EVENT_SUMMON_FIRE_BOTS (AOE trigger
---     64620, TRIGGERED_FULL_MASK, max targets 3, 45s re-arm),
---     EVENT_SUMMON_JUNK_BOT (AOE trigger 63820, max targets 1, 11-12s
---     re-arm), EVENT_SUMMON_ASSAULT_BOT (AOE trigger 64425, max targets 1,
---     30s re-arm), EVENT_SUMMON_BOMB_BOT (self 63811, 15-20s re-arm) --
---     all scheduled ONLY by the unbridged DoAction arms above. They are
---     NOT seeded on enter-combat: the vx_001/leviathan precedent is that
---     DoAction-scheduled timers stay out, and seeding a phase-3-only
---     summon scheduler on plain engage would fabricate phase-3 behavior
---     on any earlier aggro. (Contrast npc_mimiron_assault_bot, where
---     engage-seeding is exact because C++ schedules on JustEngagedWith.)
 --   UpdateAI plasma-ball attack: DoSpellAttackIfReady (PLASMA_BALL_P1
 --     63689 in phase 3, PLASMA_BALL_P2 65647 in phase 4) -- no bridge.
 --   DamageTaken phase branches: PHASE_AERIAL_COMMAND_UNIT MovePoint to
@@ -45,17 +61,20 @@
 --     stand-state reads/kills/despawns + SELF_REPAIR 64383 -- out (phase
 --     is EventMap state with no Lua read, and the finish check reads two
 --     other creatures via the instance). SetAnimationTier(Ground) -- out
---     (no binding). events.Reset is moot in Lua (no Lua timers exist).
---   EnterEvadeMode (:1201, summons.DespawnAll) -- out: no DespawnAll
---     binding, and EnterEvadeMode itself has no Lua bridge (event 25
---     unused).
---   JustSummoned (:1206, firefighter EMERGENCY_MODE 64582 on summoned
---     assault/junk bots) -- out: the fireFigther latch is set only by the
---     unbridged DO_HARDMODE_AERIAL, so the arm's gate can never be true
---     in Lua; the BossAI summon-tracking leg is engine-side.
+--     (no binding). The C++ lethal leg also runs events.Reset; the
+--     Lua arm cancels the summon pumps on the lethal hit (tick 557)
+--     to match.
+--   EnterEvadeMode (:1201, summons.DespawnAll) -- out: DespawnAll has no
+--     binding, and there is NO engine-fired evade event hook (the
+--     creature-event list has no OnEvade; 25 is unassigned). CORRECTION
+--     of the old header note: creature:EnterEvadeMode() as a callable
+--     method IS bridged (lua_creature_events.go:5051, triggerCreatureEvade
+--     leash twin, creaturemotion.go:4664) -- but that is the invoke side,
+--     not a callback for the C++ override, so the arm still stays out.
 --   KilledUnit (:1213, SAY_AERIAL_SLAY 9 / SAY_V07TRON_SLAY 12 via the
---     mimiron controller) -- out: talks into the unported boss_mimiron
---     controller through the instance (no instance bridge).
+--     mimiron controller) -- out: the arm itself is unported (follow-up
+--     axis; the controller IS ported in boss_mimiron.lua and
+--     GetInstanceCreature is bridged).
 --   MovementInform (:1220, WP_AERIAL_P4_POS facing + NOT_SELECTABLE flag
 --     + CLEAR_ALL_DEBUFFS + DO_ACTIVATE_V0L7R0N_1) -- out: unreachable
 --     without the unbridged DamageTaken MovePoint leg, and its tail is a
@@ -63,22 +82,189 @@
 --
 -- BRIDGE NOTES (checked against the CURRENT runtime, not memory):
 --   SetDisableGravity, SetHover, SetReactState, AttackStop, SetStandState,
---   SetFacingTo, Talk, CastSpell(..., triggered) are all bound on the
---   handler surface -- their absence above is a dispatch/phase problem,
---   not a method problem. Unbound, verified by grep of
---   lua_creature_events.go / lua_objects.go / scripting/object.go:
---   SetImmuneToPC, SetAnimationTier, MoveFall, MovePoint, GetMotionMaster,
---   DespawnAll, GetVehicleBase, RemoveAurasDueToSpell. (CastStop's twin
---   creature:StopSpellCast IS bridged, lua_creature_events.go:1010.)
+--   SetFacingTo, Talk, CastSpell(..., triggered), StopSpellCast
+--   (lua_creature_events.go:1073), MoveFall (lua_creature_events.go:3391),
+--   IsCasting, GetGUIDLow, GetEntry are all bound on the handler
+--   surface. Unbound, verified by grep of lua_creature_events.go /
+--   lua_objects.go / scripting/object.go: SetImmuneToPC,
+--   SetAnimationTier, MovePoint, GetMotionMaster, DespawnAll,
+--   GetVehicleBase, RemoveAurasDueToSpell, SPELLVALUE_MAX_TARGETS.
+--   DoAction dispatch itself is event 38 (runtime.go:411,
+--   lua_creature_events.go:827).
 
 local NPC_AERIAL_COMMAND_UNIT = 33670
+local NPC_ASSAULT_BOT = 34057
+local NPC_JUNK_BOT = 33855
 
 local SPELL_VEHICLE_DAMAGED = 63415
+local SPELL_EMERGENCY_MODE = 64582
+local SPELL_SUMMON_FIRE_BOT_TRIGGER = 64620
+local SPELL_SUMMON_JUNK_BOT_TRIGGER = 63820
+local SPELL_SUMMON_ASSAULT_BOT_TRIGGER = 64425
+local SPELL_SUMMON_BOMB_BOT = 63811
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
 
 local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h: REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 (tick 557 fix: was 1)
+local UNIT_STAND_STATE_STAND = 0
 
--- C++ constructor (:1120): react passive + disable gravity.
+-- enum Actions (boss_mimiron.cpp:283-298): DO_START_MKII 0,
+-- DO_HARDMODE_MKII 1, DO_ACTIVATE_VX001 2, DO_START_VX001 3,
+-- DO_HARDMODE_VX001 4, DO_ACTIVATE_AERIAL 5, then the ACU actions.
+local DO_START_AERIAL = 6
+local DO_HARDMODE_AERIAL = 7
+local DO_DISABLE_AERIAL = 8
+local DO_ENABLE_AERIAL = 9
+local DO_ASSEMBLED_COMBAT = 12
+
+local timers = {}
+local acuState = {}
+
+-- Timer block copied from boss_ymiron.lua: GetCurrTime is wall-clock ms
+-- (Eluna global, engine globals.go:941); os.clock() is CPU time and stalls
+-- while the server idles, which would corrupt the due/remaining math used
+-- by delayTimers (thekal idiom).
+local function nowMs()
+    return GetCurrTime()
+end
+
+local function armEntry(guid, key, delayMs, fn)
+    local entry = { due = nowMs() + delayMs, fn = fn }
+    entry.id = CreateLuaEvent(function()
+        local per = timers[guid]
+        if per and per[key] == entry then
+            per[key] = nil
+        end
+        fn()
+    end, delayMs)
+    return entry
+end
+
+local function cancelTimers(guid)
+    local per = timers[guid]
+    if per then
+        for _, entry in pairs(per) do
+            RemoveEventById(entry.id)
+        end
+        timers[guid] = nil
+    end
+end
+
+local function cancelTimerKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key].id)
+        per[key] = nil
+    end
+end
+
+local function schedule(guid, key, delay, fn)
+    local per = timers[guid]
+    if not per then
+        per = {}
+        timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key].id)
+    end
+    -- {minMs, maxMs} table delay = randtime range, resolved here so the
+    -- concrete due time is recorded for delayTimers.
+    local delayMs = delay
+    if type(delay) == "table" then
+        delayMs = math.random(delay[1], delay[2])
+    end
+    per[key] = armEntry(guid, key, delayMs, fn)
+end
+
+-- C++ EventMap::DelayEvents (thekal idiom): push the named armed timers
+-- out by extraMs, preserving each timer's remaining time.
+local function delayTimers(guid, keys, extraMs)
+    local per = timers[guid]
+    if not per then
+        return
+    end
+    local now = nowMs()
+    for _, key in ipairs(keys) do
+        local entry = per[key]
+        if entry then
+            RemoveEventById(entry.id)
+            local remaining = entry.due - now
+            if remaining < 0 then
+                remaining = 0
+            end
+            per[key] = armEntry(guid, key, remaining + extraMs, entry.fn)
+        end
+    end
+end
+
+-- C++ UpdateAI (:1248): DoCastAOE SUMMON_FIRE_BOT_TRIGGER, triggered,
+-- max targets 3 (no Lua twin -- see header delta); re-arm 45s.
+local function summonFireBots(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firebots", 500, function()
+            summonFireBots(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_FIRE_BOT_TRIGGER, true)
+    schedule(guid, "firebots", 45000, function()
+        summonFireBots(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI (:1252): DoCastAOE SUMMON_JUNK_BOT_TRIGGER, triggered,
+-- max targets 1 (no Lua twin); re-arm {11s,12s}.
+local function summonJunkBot(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "junkbot", 500, function()
+            summonJunkBot(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_JUNK_BOT_TRIGGER, true)
+    schedule(guid, "junkbot", { 11000, 12000 }, function()
+        summonJunkBot(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI (:1256): DoCastAOE SUMMON_ASSAULT_BOT_TRIGGER, triggered,
+-- max targets 1 (no Lua twin); re-arm 30s.
+local function summonAssaultBot(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "assaultbot", 500, function()
+            summonAssaultBot(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_ASSAULT_BOT_TRIGGER, true)
+    schedule(guid, "assaultbot", 30000, function()
+        summonAssaultBot(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI (:1260): self-cast SUMMON_BOMB_BOT (not triggered, not
+-- AOE); re-arm {15s,20s}.
+local function summonBombBot(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "bombbot", 500, function()
+            summonBombBot(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_BOMB_BOT)
+    schedule(guid, "bombbot", { 15000, 20000 }, function()
+        summonBombBot(creature, guid)
+    end)
+end
+
+-- C++ constructor (:1120): react passive + disable gravity. The
+-- fireFighter latch is a per-instance member in C++; Lua resets it per
+-- spawn (the ACU is summoned fresh on each phase-3 activation).
 local function aerialSpawn(event, creature)
+    acuState[creature:GetGUIDLow()] = { fireFighter = false }
     creature:SetReactState(REACT_PASSIVE)
     creature:SetDisableGravity(true)
 end
@@ -87,10 +273,12 @@ end
 -- clamp (damage = health - 1), react passive, AttackStop, gravity on,
 -- triggered self-cast VEHICLE_DAMAGED. The phase branches (MovePoint /
 -- stand-dead / self-repair) stay out -- see header. The C++ arm also
--- runs events.Reset, moot here (no Lua timers).
+-- runs events.Reset, so the summon pumps are cancelled here too (tick
+-- 557 fix: they previously kept running after a lethal hit).
 local function aerialDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if damage >= health then
+        cancelTimers(creature:GetGUIDLow())
         creature:SetReactState(REACT_PASSIVE)
         creature:AttackStop()
         creature:SetDisableGravity(true)
@@ -99,5 +287,87 @@ local function aerialDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ DoAction (:1159) whole switch, in C++ order. Action 7 falls
+-- through to the action-6 legs exactly as in C++ ([[fallthrough]]).
+local function aerialDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == DO_HARDMODE_AERIAL then
+        local st = acuState[guid]
+        if not st then
+            st = { fireFighter = false }
+            acuState[guid] = st
+        end
+        st.fireFighter = true
+        creature:CastSpell(creature, SPELL_EMERGENCY_MODE)
+        schedule(guid, "firebots", 1000, function()
+            summonFireBots(creature, guid)
+        end)
+    end
+    if action == DO_HARDMODE_AERIAL or action == DO_START_AERIAL then
+        creature:SetDisableGravity(false)
+        creature:SetHover(true)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+        -- SetImmuneToPC(false): NO bridge -- leg skipped, see header.
+        creature:SetReactState(REACT_AGGRESSIVE)
+        schedule(guid, "junkbot", 5000, function()
+            summonJunkBot(creature, guid)
+        end)
+        schedule(guid, "assaultbot", 9000, function()
+            summonAssaultBot(creature, guid)
+        end)
+        schedule(guid, "bombbot", 9000, function()
+            summonBombBot(creature, guid)
+        end)
+        return
+    end
+    if action == DO_DISABLE_AERIAL then
+        creature:StopSpellCast()
+        creature:SetReactState(REACT_PASSIVE)
+        creature:AttackStop()
+        creature:MoveFall()
+        delayTimers(guid, { "firebots", "junkbot", "assaultbot", "bombbot" }, 23000)
+        return
+    end
+    if action == DO_ENABLE_AERIAL then
+        creature:SetReactState(REACT_AGGRESSIVE)
+        return
+    end
+    if action == DO_ASSEMBLED_COMBAT then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetReactState(REACT_AGGRESSIVE)
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+        cancelTimerKey(guid, "firebots")
+        cancelTimerKey(guid, "junkbot")
+        cancelTimerKey(guid, "assaultbot")
+        cancelTimerKey(guid, "bombbot")
+        return
+    end
+end
+
+-- C++ JustSummoned (:1206): firefighter EMERGENCY_MODE on summoned
+-- assault/junk bots. (BossAI summon-tracking leg is engine-side.)
+local function aerialJustSummoned(event, creature, summoned)
+    local st = acuState[creature:GetGUIDLow()]
+    if st and st.fireFighter then
+        local entry = summoned:GetEntry()
+        if entry == NPC_ASSAULT_BOT or entry == NPC_JUNK_BOT then
+            summoned:CastSpell(summoned, SPELL_EMERGENCY_MODE)
+        end
+    end
+end
+
+-- C++ Reset / death: cancel all Lua timers (events.Reset twin).
+local function aerialReset(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+local function aerialDied(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 5, aerialSpawn)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 9, aerialDamageTaken)
+RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 19, aerialJustSummoned)
+RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 23, aerialReset)
+RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 4, aerialDied)
+RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 38, aerialDoAction)

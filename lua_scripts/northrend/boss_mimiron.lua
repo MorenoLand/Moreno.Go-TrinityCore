@@ -30,7 +30,12 @@
 --     GetO resolve via the generic object fallback, scripting/object.go:185).
 --   JustEngagedWith EVENT_INTRO_1 PORTED (tick 475): Talk, latch-gated
 --     (SAY_HARDMODE_ON when _fireFighter, else SAY_MKII_ACTIVATE), 1500ms
---     after engage; the chain truncates (INTRO_2/3 stay out, see below).
+--     after engage; EVENT_INTRO_2/INTRO_3 PORTED (tick 557): INTRO_2's
+--     MKII legs (SEAT_7 cast, FREEZE_ANIM removal, flag removal) and
+--     INTRO_3's DoAction to MKII (DO_HARDMODE_MKII when _fireFighter,
+--     else DO_START_MKII) resolve MKII via the instance GUID
+--     (DATA_LEVIATHAN_MK_II twin of GetVehicleBase/GetVehicleCreatureBase
+--     -- same target creature, different lookup).
 --   DoAction (:397) receiver PORTED (tick 475, event 38): all five cases.
 --     DO_ACTIVATE_HARD_MODE sets the _fireFighter latch (per-GUID state)
 --     + DoZoneInCombat; DO_ACTIVATE_VX001 / DO_ACTIVATE_AERIAL /
@@ -66,16 +71,18 @@
 --     casts, SetFacingTo on the base -- GetVehicleBase /
 --     GetVehicleCreatureBase have no binding on the handler surface),
 --     MovePoint legs (no MovePoint binding), elevator/button GameObject
---     legs (no GO bridge), MKII legs (no MKII ref; instance-GUID lookup
---     unbridged), worldtrigger legs (EVENT_SUMMON_FLAMES, elevator
+--     legs (no GO bridge), MKII legs in the activation chains
+--     (vehicle-base SetFacingTo / MOUNT / MovePoint legs; the
+--     instance-GUID MKII ref itself is live — INTRO_2/3 use it),
+--     worldtrigger legs (EVENT_SUMMON_FLAMES, elevator
 --     knockback), computer DoAction legs (Reset / OUTTRO_2, no computer
 --     ref), aerial EnterEvadeMode on Reset (no bridge; event 25 unused),
 --     Reset SEAT_3 cast on MKII via instance GUID.
 --   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base --
 --     out (no GetVehicleBase binding); button GO flag leg -- out (no GO
---     bridge); EVENT_SUMMON_FLAMES -- out (worldtrigger via instance GUID);
---     INTRO_2 legs are vehicle-base legs, INTRO_3 is a DoAction to MKII
---     (no MKII ref).
+--     bridge); EVENT_SUMMON_FLAMES -- out (worldtrigger via instance GUID).
+--     (INTRO_2/INTRO_3 are ported — see the INTRO_1 bullet — via the
+--     instance-GUID MKII twin, not the vehicle base.)
 --   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode,
 --     elevator/button GO legs, computer DoAction, SEAT_3 cast on MKII via
 --     instance GUID -- all out.
@@ -124,6 +131,7 @@ local SPELL_SEAT_1 = 52391
 local SPELL_SEAT_2 = 63313
 local SPELL_SEAT_5 = 63316
 local SPELL_SEAT_6 = 63344
+local SPELL_SEAT_7 = 63345
 local SPELL_FREEZE_ANIM = 16245
 local SPELL_MOUNT_VX_001 = 64388
 local SPELL_HALF_HEAL = 64188
@@ -145,6 +153,8 @@ local SAY_AERIAL_ACTIVATE = 8
 local SAY_AERIAL_DEATH = 10
 local SAY_V07TRON_ACTIVATE = 11
 
+local DO_START_MKII = 0
+local DO_HARDMODE_MKII = 1
 local DO_ACTIVATE_VX001 = 2
 local DO_START_VX001 = 3
 local DO_HARDMODE_VX001 = 4
@@ -161,6 +171,14 @@ local VX001_SUMMON_POS = { 2744.431, 2569.385, 364.3968, 3.141593 }
 local ACU_SUMMON_POS = { 2744.650, 2569.460, 380.0, 3.141593 }
 
 local SAY_V07TRON_DEATH = 13
+
+-- UlduarData instance GUID key for Leviathan Mk II (ulduar.h /
+-- instance_ulduar.cpp:817; the npc_mimiron_proximity_mine.lua ev15
+-- precedent): the Lua twin of C++ me->GetVehicleBase() /
+-- GetVehicleCreatureBase() for the INTRO_2/INTRO_3 MKII legs — the
+-- vehicle-base resolution has no binding, but the target creature
+-- is the same MKII whose GUID the instance latches here.
+local DATA_LEVIATHAN_MK_II = 32
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -215,7 +233,7 @@ end
 -- Forward declarations for the cyclic OUTTRO chain (tharon_ja/gal_darah
 -- idiom: plain assignments below, never `local function` re-declares)
 -- plus the INTRO_1 step, defined below the engage handler that schedules it.
-local outtro1, outtro2, outtro3, intro1
+local outtro1, outtro2, outtro3, intro1, intro2, intro3
 
 -- C++ constructor (:391): SetReactState(REACT_PASSIVE), _fireFighter false.
 local function mimironSpawn(event, creature)
@@ -257,12 +275,41 @@ end
 
 -- C++ UpdateAI EVENT_INTRO_1: Talk, latch-gated (SAY_HARDMODE_ON when
 -- _fireFighter, else SAY_MKII_ACTIVATE), then EVENT_INTRO_2 in 5s.
--- INTRO_2 (SEAT_7 on the vehicle base) and INTRO_3 (DoAction to MKII)
--- stay out (no GetVehicleBase / MKII ref), so the chain truncates
--- after the Talk.
 intro1 = function(creature, guid)
     local st = bossState[guid]
     creature:Talk(st and st.fireFighter and SAY_HARDMODE_ON or SAY_MKII_ACTIVATE)
+    schedule(guid, "intro2", 5000, function()
+        intro2(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_INTRO_2: on the vehicle base (MKII): cast SEAT_7,
+-- remove FREEZE_ANIM, remove NON_ATTACKABLE | NOT_SELECTABLE; then
+-- EVENT_INTRO_3 in 2s. The vehicle-base resolution has no binding; the
+-- MKII is resolved via the instance GUID instead (DATA_LEVIATHAN_MK_II
+-- twin, see above) — same target creature, different lookup.
+intro2 = function(creature, guid)
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if mkii then
+        creature:CastSpell(mkii, SPELL_SEAT_7)
+        mkii:RemoveAura(SPELL_FREEZE_ANIM)
+        mkii:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+    end
+    schedule(guid, "intro3", 2000, function()
+        intro3(creature, guid)
+    end)
+end
+
+-- C++ UpdateAI EVENT_INTRO_3: the vehicle base (MKII) gets
+-- DO_HARDMODE_MKII when _fireFighter, else DO_START_MKII. Same
+-- instance-GUID twin as INTRO_2. This is the only sender of those
+-- two actions, so the MKII ev38 arms go live here.
+intro3 = function(creature, guid)
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if mkii then
+        local st = bossState[guid]
+        mkii:DoAction(st and st.fireFighter and DO_HARDMODE_MKII or DO_START_MKII)
+    end
 end
 
 -- C++ UpdateAI EVENT_OUTTRO_3: TELEPORT_VISUAL, NOT_SELECTABLE flag,
@@ -462,14 +509,20 @@ end
 
 -- C++ DoAction DO_ACTIVATE_V0L7R0N_2 (:413-415) schedules
 -- EVENT_VOL7RON_ACTIVATION_1 in 1s. Steps 1/2 (MKII SetFacingTo, VX-001
--- MOUNT_MKII on MKII) and step 3 (MKII MovePoint) stay out (no MKII
--- ref); steps 4 (aerial MOUNT_VX_001 + HALF_HEAL), 5 (Talk), 6 (SEAT_2
--- on the stored VX-001 ref) and 7 (DO_ASSEMBLED_COMBAT to the stored
--- VX-001 / ACU refs; the MKII leg has no ref) are ported.
+-- MOUNT_MKII on MKII) and step 3 (MKII MovePoint) stay out (vehicle-
+-- mount choreography + MovePoint legs, no bridge); steps 4 (aerial
+-- on the stored VX-001 ref) and 7 (DO_ASSEMBLED_COMBAT to MKII via the
+-- instance GUID + the stored VX-001 / ACU refs) are ported.
 local function vol7ronActivation7(creature, guid)
     local st = bossState[guid]
     if not st then
         return
+    end
+    -- C++ :638-640 loops DATA_LEVIATHAN_MK_II..DATA_AERIAL_COMMAND_UNIT
+    -- (32..34); MKII resolves via the instance GUID (INTRO_2/3 twin).
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if mkii then
+        mkii:DoAction(DO_ASSEMBLED_COMBAT)
     end
     if st.vx001 then
         st.vx001:DoAction(DO_ASSEMBLED_COMBAT)
