@@ -21,6 +21,7 @@
 local NPC_ROCKET_MIMIRON_VISUAL = 34050
 
 local SPELL_ROCKET_STRIKE_DAMAGE = 63041
+local SPELL_NOT_SO_FRIENDLY_FIRE = 65040 -- boss_mimiron.cpp:170
 
 -- boss_mimiron.cpp:184-186 Data enum; ulduar.h UlduarData
 -- (DATA_COLOSSUS = 20, counting up) instance GUID key for the
@@ -34,24 +35,35 @@ local function rocketVisualSpawn(event, creature)
 end
 
 -- C++ spell_mimiron_rocket_strike_damage::HandleScript
--- (boss_mimiron.cpp:2311-2313, spell 63041): when the damage hits a
--- player, the MK II's DATA_SETUP_ROCKET latch clears (the
--- achievement_setup_rocket gate). The leg rides the creature
--- SpellHitTarget hook (ev15, mine precedent): the visual is the
--- caster, the handler fires per hit player, and the MK II resolves
--- via the instance GUID store (latched by
+-- (boss_mimiron.cpp:2311-2313, spell 63041 EFFECT_0 SCHOOL_DAMAGE):
+-- when the damage hits a player, the MK II's DATA_SETUP_ROCKET latch
+-- clears (the achievement_setup_rocket gate). The leg rides the
+-- creature SpellHitTarget hook (ev15, mine precedent): the visual is
+-- the caster, the handler fires per hit player, and the MK II
+-- resolves via the instance GUID store (latched by
 -- boss_leviathan_mk_ii.lua ev5).
+-- C++ spell_mimiron_rocket_strike_damage::HandleFriendlyFire
+-- (:2315-2318, EFFECT_1 SCHOOL_DAMAGE): every hit unit casts
+-- 65040 on itself, triggered. C++ passes a null target
+-- (WorldObject::CastSpell with empty targets, Object.cpp:2904-2919);
+-- Go's creature CastSpell(nil, ...) falls back to the victim, so the
+-- port passes the hit unit explicitly as its own target instead.
+-- Ev15 fires once per hit target with no effect index
+-- (boss_ai.go:4053-4109), so both C++ legs ride this handler.
 local function rocketVisualSpellHitTarget(event, creature, target, spellId)
     if spellId ~= SPELL_ROCKET_STRIKE_DAMAGE then
         return
     end
-    if not target or target:GetTypeId() ~= 4 then -- TYPEID_PLAYER
+    if not target then
         return
     end
-    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
-    if mkii then
-        mkii:SetData(DATA_SETUP_ROCKET, 0)
+    if target:GetTypeId() == 4 then -- TYPEID_PLAYER
+        local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+        if mkii then
+            mkii:SetData(DATA_SETUP_ROCKET, 0)
+        end
     end
+    target:CastSpell(target, SPELL_NOT_SO_FRIENDLY_FIRE, true)
 end
 
 RegisterCreatureEvent(NPC_ROCKET_MIMIRON_VISUAL, 5, rocketVisualSpawn)

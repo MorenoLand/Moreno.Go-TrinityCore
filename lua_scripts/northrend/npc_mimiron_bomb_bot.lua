@@ -30,27 +30,48 @@ local SPELL_BOMB_BOT = 63801
 local DATA_SETUP_BOMB = 1
 local DATA_LEVIATHAN_MK_II = 32
 
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
+local UNIT_FLAG_PACIFIED = 0x00020000 -- UnitDefines.h:141
+
 local function bombBotSpawn(event, creature)
     creature:CastSpell(creature, SPELL_BOMB_BOT_AURA)
 end
 
 -- C++ spell_mimiron_bomb_bot::HandleScript
--- (boss_mimiron.cpp:1713-1721, spell 63801): when the explosion hits
--- a player, the MK II's DATA_SETUP_BOMB latch clears (the
--- achievement_setup_boom gate). The leg rides the creature
+-- (boss_mimiron.cpp:1713-1721, spell 63801 EFFECT_0 SCHOOL_DAMAGE):
+-- when the explosion hits a player, the MK II's DATA_SETUP_BOMB latch
+-- clears (the achievement_setup_boom gate). The leg rides the creature
 -- SpellHitTarget hook (ev15, mine precedent): the bot is the caster,
 -- the handler fires per hit player, and the MK II resolves via the
 -- instance GUID store (latched by boss_leviathan_mk_ii.lua ev5).
+-- C++ spell_mimiron_bomb_bot::HandleDespawn (:1721-1728, EFFECT_1
+-- APPLY_AURA): a hit creature is flagged unselectable + pacified and
+-- despawns 1s later. Ev15 fires once per hit target with no effect
+-- index (boss_ai.go:4053-4109), so both C++ legs ride this handler,
+-- gated on target type the way the C++ GetHitPlayer/GetHitCreature
+-- gates are. DBC caveat: if 63801 EFFECT_1 targets only the caster,
+-- only the bot itself takes this leg; the handler applies it to
+-- whatever the engine's hit set contains.
 local function bombBotSpellHitTarget(event, creature, target, spellId)
     if spellId ~= SPELL_BOMB_BOT then
         return
     end
-    if not target or target:GetTypeId() ~= 4 then -- TYPEID_PLAYER
+    if not target then
         return
     end
-    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
-    if mkii then
-        mkii:SetData(DATA_SETUP_BOMB, 0)
+    if target:GetTypeId() == 4 then -- TYPEID_PLAYER
+        local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+        if mkii then
+            mkii:SetData(DATA_SETUP_BOMB, 0)
+        end
+        return
+    end
+    if target:GetTypeId() == 3 then -- TYPEID_UNIT
+        target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
+        CreateLuaEvent(function()
+            target:Despawn()
+        end, 1000, 0)
     end
 end
 
