@@ -88,41 +88,55 @@
 -- Talk(SAY_SHATTER 5) + Talk(EMOTE_SHATTER 7) ride the DoAction
 -- ACTION_PROTECTIVE_BUBBLE_SHATTERED leg (:127-140: AOE splatter /
 -- burst, DRAINED cast, 30% max-health damage leg, scheduler.DelayAll)
--- — dispatch IS bridged (ev38); the sender is the unported
--- spell_ichoron_protective_bubble AuraScript shatter hook (:406);
--- joins the unported-DoAction-sender queue.
+-- — PORTED 2026-11-08 (tick 485) as the ev38 receiver below; the
+-- sender (spell_ichoron_protective_bubble shatter hook, :406) is
+-- ported alongside it as a RegisterAuraEvent remove hook.
 -- Talk(SAY_BUBBLE 6) rides the DoAction ACTION_DRAINED leg (:141-149:
--- HealthAbovePct(30) -> protective bubble recast, triggered) — same
--- queue (sender: spell_ichoron_drained expire, :332).
+-- HealthAbovePct(30) -> protective bubble recast, triggered) —
+-- PORTED 2026-11-08 (tick 485) as the ev38 receiver below; the
+-- sender (spell_ichoron_drained expire, :332) is ported alongside it
+-- as a RegisterAuraEvent remove hook.
 -- ACTION_WATER_GLOBULE_HIT (3% max-health heal, _dehydration = false)
--- — same queue (sender: spell_ichoron_merge, :370).
+-- — PORTED 2026-11-08 (tick 485) as the ev38 receiver below; the
+-- sender stays out (spell_ichoron_merge SpellScript, :370 — no
+-- SpellScript bridge), so the receiver is dormant until the merge
+-- leg lands (the thorim ACTION_BERSERK dormant-receiver precedent).
 -- The ScheduleTasks Async leg (:207-211: SHRINK 54297 +
 -- PROTECTIVE_BUBBLE 54306 self-casts) seeds the bubble phase machine
--- — per the gothik bubble-phase precedent it stays out: the
--- shatter / DRAINED / re-bubble legs are all unported-DoAction-sender
--- and AuraScript legs, so a ported bubble would never shatter.
+-- — PORTED 2026-11-08 (tick 485) as engage casts in
+-- ichoronEnterCombat: with the shatter hook + SHATTERED receiver
+-- ported, the bubble now shatters, so the gothik-precedent stay-out
+-- no longer applies.
 -- The npc_ichor_globule SpellHit machine — stale "no SpellHit bridge" retracted (2026-10-21): ev14 IS bridged
--- (fires from the Go spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 + spells.go:11765) — but the arm stays
--- out: the VISUAL 54260 trigger rides Ichoron's JustSummoned (:172-178) behind the unbridged spell_ichoron_splatter
--- AuraScript (entry 29321 never spawns), and the arm's legs are MoveFollow -> the MovementInform FOLLOW_MOTION_TYPE
--- merge gate on the instance DATA_ICHORON object GUID -> SPELL_MERGE 54269 + DespawnOrUnsummon (no MoveFollow /
--- MovementInform / instance-object-GUID / DespawnOrUnsummon bridges) — the gothik bubble-phase precedent: a ported
--- TRANSFORM 54268 self-cast would never merge; the
--- DamageTaken SPLASH 59516 arm IS bridged (event 9, registered
--- 2026-10-19 — the stale "no DamageTaken bridges" claim retracted).
+-- (fires from the Go spell path, boss_ai.go:2125/2134 + pet_combat.go:5222 + spells.go:11765). PORTED 2026-11-08
+-- (tick 485): the VISUAL 54260 trigger rides Ichoron's JustSummoned (:172-178); the arm's legs are now all
+-- bridged — MoveFollow (lua_creature_events.go:5105), MovementInform FOLLOW_MOTION_TYPE (14) on ev28 with the
+-- followed target's GUID counter as id (creaturemotion.go:4406-4410), the instance DATA_ICHORON object-GUID
+-- read (creature:GetGuidData, lua_creature_events.go:6472 — Ichoron latches its own GUID in ichoronReset),
+-- SPELL_MERGE 54269 self-cast + DespawnOrUnsummon(1ms) (lua_creature_events.go:6637). The merge SpellScript
+-- itself (shrink stack -1 + DoAction WATER_GLOBULE_HIT) stays out — no SpellScript bridge — so the merge cast
+-- is a dormant trigger and the heal/dehydration legs ride the ported ev38 receiver. The DamageTaken SPLASH
+-- 59516 arm IS bridged (event 9, registered 2026-10-19 — the stale "no DamageTaken bridges" claim retracted).
 -- The npc_ichor_globule ctor SetReactState(REACT_PASSIVE)
 -- (boss_ichoron.cpp:248) stays out: globules spawn only from the unported
 -- spell_ichoron_splatter AuraScript, and this runtime's event-5 spawn hook
 -- never fires for temp summons — no construction-time hook (halion
 -- precedent).
--- spell_ichoron_drained (59820 AuraScript: expire -> DoAction
--- ACTION_DRAINED :332), spell_ichoron_merge (54269 SpellScript:
--- shrink stack -1 + DoAction ACTION_WATER_GLOBULE_HIT :370),
--- spell_ichoron_protective_bubble (54306 AuraScript: charges <= 1 on
--- remove -> DoAction ACTION_PROTECTIVE_BUBBLE_SHATTERED :406),
--- spell_ichoron_splatter (54259 AuraScript: periodic globule summon
--- 54258/54264/54265/54266/54267, expire -> shrink +10 stacks) — no
--- SpellScript / AuraScript bridges.
+-- spell_ichoron_drained (59820 AuraScript) — PORTED 2026-11-08 (tick 485) via RegisterAuraEvent: apply (mode 2)
+-- sets NOT_SELECTABLE + FEIGN_DEATH flags (:322-326), remove (mode 3) clears them and, on
+-- AURA_REMOVE_BY_EXPIRE (4), fires DoAction ACTION_DRAINED (:332). Load() gate (owner entry 29313 or 32234,
+-- NPC_DUMMY_ICHORON violet_hold.h:110) rides the target's GetEntry.
+-- spell_ichoron_protective_bubble (54306 AuraScript) — PORTED 2026-11-08 (tick 485) via RegisterAuraEvent
+-- remove (mode 3): charges <= 1 -> DoAction ACTION_PROTECTIVE_BUBBLE_SHATTERED (:406). The charges read rides
+-- aura:GetStackAmount() (lua_aura.go:226 — auraWireStackCount returns RemainingCharges when the DBC StackAmount
+-- is 0, dispel.go:995-1005); the bubble is charge-driven per C++ (GetCharges gate), so a DBC StackAmount > 0
+-- would misread the gate — documented assumption, same class as the other DBC-dependent ports.
+-- spell_ichoron_splatter (54259 AuraScript) — PORTED 2026-11-08 (tick 485) via RegisterAuraEvent: periodic
+-- (mode 1) casts a random globule-summon spell (54258/54264/54265/54266/54267) triggered on the target and
+-- returns true = PreventDefaultAction (:447-452); remove (mode 3) on EXPIRE adds 10 shrink stacks (:458-461)
+-- via creature:GetAura + Aura:SetStackAmount.
+-- spell_ichoron_merge (54269 SpellScript: shrink stack -1 + DoAction ACTION_WATER_GLOBULE_HIT :370) — no
+-- SpellScript bridge, stays out.
 -- achievement_dehydration (OnCheck AI()->GetData(DATA_DEHYDRATION))
 -- — PORTED 2026-11-08 (tick 419): ev1 write leg below (Reset twin);
 -- the Go case reads the boss motion's SetData slot. Its only clear is
@@ -146,13 +160,39 @@ local SPELL_WATER_BLAST = 54237
 local SPELL_WATER_GLOBULE_VISUAL = 54260
 local SPELL_WATER_GLOBULE_TRANSFORM = 54268
 local UNIT_FIELD_FLAGS = 59
+local UNIT_FIELD_FLAGS_2 = 60
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local UNIT_FLAG2_FEIGN_DEATH = 0x00000001
 local SPELL_WATER_BOLT_VOLLEY = 54241
 local SPELL_THREAT_PROC = 61732
 local SPELL_FRENZY = 54312
 local SPELL_DRAINED = 59820
+local SPELL_SHRINK = 54297
+local SPELL_PROTECTIVE_BUBBLE = 54306
+local SPELL_SPLATTER = 54259
+local SPELL_BURST = 54379
+local SPELL_MERGE = 54269
+local SPELL_WATER_GLOBULE_SUMMON_1 = 54258
+local SPELL_WATER_GLOBULE_SUMMON_2 = 54264
+local SPELL_WATER_GLOBULE_SUMMON_3 = 54265
+local SPELL_WATER_GLOBULE_SUMMON_4 = 54266
+local SPELL_WATER_GLOBULE_SUMMON_5 = 54267
+
+local SAY_SHATTER = 5
+local SAY_BUBBLE = 6
+local EMOTE_SHATTER = 7
+
+local ACTION_WATER_GLOBULE_HIT = 1
+local ACTION_PROTECTIVE_BUBBLE_SHATTERED = 2
+local ACTION_DRAINED = 3
+
+local NPC_DUMMY_ICHORON = 32234
+local AURA_REMOVE_BY_EXPIRE = 4
+local FOLLOW_MOTION_TYPE = 14
 
 local timers = {}
+local timerFns = {}
+local timerDelays = {}
 
 -- C++ _isFrenzy latch (:185): one-flip Talk(SAY_ENRAGE 4) + FRENZY
 -- (54312) cast guard.
@@ -169,6 +209,8 @@ local function cancelTimers(guid)
             RemoveEventById(id)
         end
         timers[guid] = nil
+        timerFns[guid] = nil
+        timerDelays[guid] = nil
     end
 end
 
@@ -177,11 +219,44 @@ local function schedule(guid, key, delay, fn)
     if not per then
         per = {}
         timers[guid] = per
+        timerFns[guid] = {}
+        timerDelays[guid] = {}
     end
     if per[key] then
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+    timerFns[guid][key] = fn
+    timerDelays[guid][key] = delay
+end
+
+-- C++ scheduler.DelayAll (boss_ichoron.cpp:139, SHATTERED leg): every
+-- pending scheduler task fires delayMs later. The Lua mirror
+-- re-seeds each pending timer with its last-used delay + delayMs
+-- (the last-used delay, not the true remaining time — documented
+-- approximation; randtime re-arms already carry that shape). Keys in
+-- skip stay on their own clock: the frenzy poll models the
+-- pre-scheduler UpdateAI health check, which DelayAll never touches.
+local function delayAllTimers(guid, delayMs, skip)
+    local per = timers[guid]
+    if not per then
+        return
+    end
+    for key, id in pairs(per) do
+        if not (skip and skip[key]) then
+            local fn = timerFns[guid] and timerFns[guid][key]
+            local delay = timerDelays[guid] and timerDelays[guid][key]
+            if fn and delay then
+                RemoveEventById(id)
+                local extra = delayMs
+                if type(delay) == "table" then
+                    schedule(guid, key, {delay[1] + extra, delay[2] + extra}, fn)
+                else
+                    schedule(guid, key, delay + extra, fn)
+                end
+            end
+        end
+    end
 end
 
 -- Cast-state gate (2026-11-04): BossAI ctor scheduler validator
@@ -189,7 +264,7 @@ end
 -- aborts while casting with tasks still queued, so each scheduler tick
 -- below defers 500ms via creature:IsCasting()
 -- (lua_creature_events.go:1950) without consuming its re-arm (the
--- mal_ganis idiom); volley/blast scheduler ticks carry the gate; the frenzy 1s poll models the pre-scheduler UpdateAI health check, ungated per C++; shrink/bubble Async machine stays unported.
+-- mal_ganis idiom); volley/blast scheduler ticks carry the gate; the frenzy 1s poll models the pre-scheduler UpdateAI health check, ungated per C++; the shrink/bubble Async casts fire at engage, ungated per C++.
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, 50.0f) — no
 -- playerOnly flag, so any threat-listed unit within 50y qualifies
@@ -286,6 +361,11 @@ local function ichoronEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
+    -- C++ ScheduleTasks Async leg (:207-211): DoCast(me, SHRINK) +
+    -- DoCast(me, PROTECTIVE_BUBBLE), both non-triggered self-casts,
+    -- seeding the bubble phase machine.
+    creature:CastSpell(creature, SPELL_SHRINK)
+    creature:CastSpell(creature, SPELL_PROTECTIVE_BUBBLE)
     -- C++ Reset -> Initialize (boss_ichoron.cpp:92-97): _dehydration
     -- = true. Written at engage, not Reset: ev23 fires on death too,
     -- ahead of the kill-credit criteria read, so an ev23 write would
@@ -322,6 +402,12 @@ local function ichoronReset(event, creature)
     end
     cancelTimers(guid)
     frenzyFired[guid] = nil
+    -- Latch Ichoron's GUID under DATA_ICHORON for the globule merge
+    -- gate (boss_ichoron.cpp:261-263 reads the instance
+    -- DATA_ICHORON object GUID). ev23 fires on spawn as well as
+    -- evade (lua_creature_events.go:3733), so the latch lands at
+    -- spawn; re-latching the same GUID on evade is a no-op.
+    creature:SetGuidData(DATA_ICHORON)
     if creature:GetBossState(DATA_ICHORON) ~= 3 then
         creature:SetBossState(DATA_ICHORON, 0)
     end
@@ -392,6 +478,142 @@ end
 
 RegisterCreatureEvent(ENTRY_ICHORON, 20, ichoronSummonDespawned)
 
+-- C++ boss_ichoronAI::DoAction (boss_ichoron.cpp:110-151), ev38
+-- dispatch (creature:DoAction, lua_creature_events.go:802). The
+-- SHATTERED and DRAINED senders are the ported aura hooks below;
+-- the WATER_GLOBULE_HIT sender (spell_ichoron_merge SpellScript)
+-- stays out, so action 1 is dormant until the merge leg lands.
+local function ichoronDoAction(event, creature, action)
+    if action == ACTION_WATER_GLOBULE_HIT then
+        -- :119-125: !IsAlive break, +3% max-health heal,
+        -- _dehydration = false. ModifyHealth rides SetHealth
+        -- (lua_creature_events.go:2598, clamps to max like C++
+        -- Unit::SetHealth); CountPctFromMaxHealth floors (max*3/100).
+        if not creature:IsAlive() then
+            return
+        end
+        local maxHealth = creature:GetMaxHealth()
+        local heal = math.floor(maxHealth * 3 / 100)
+        creature:SetHealth(math.min(maxHealth, creature:GetHealth() + heal))
+        creature:SetData(DATA_DEHYDRATION, 0)
+    elseif action == ACTION_PROTECTIVE_BUBBLE_SHATTERED then
+        -- :127-140: Talk SAY_SHATTER + EMOTE_SHATTER, DoCastAOE
+        -- SPLATTER + BURST triggered, DoCast(me, DRAINED, true),
+        -- 30% max-health damage leg, scheduler.DelayAll(15s).
+        -- LowerPlayerDamageReq has no bridge and stays out
+        -- (documented deviation). The damage leg never kills:
+        -- health - min(damage, health - 1) == max(1, health - damage).
+        creature:Talk(SAY_SHATTER)
+        creature:Talk(EMOTE_SHATTER)
+        creature:CastSpell(creature, SPELL_SPLATTER, true)
+        creature:CastSpell(creature, SPELL_BURST, true)
+        creature:CastSpell(creature, SPELL_DRAINED, true)
+        local maxHealth = creature:GetMaxHealth()
+        local damage = math.floor(maxHealth * 30 / 100)
+        creature:SetHealth(math.max(1, creature:GetHealth() - damage))
+        delayAllTimers(creature:GetGUID(), 15000, { frenzy = true })
+    elseif action == ACTION_DRAINED then
+        -- :141-149: HealthAbovePct(30) (strict > the floored 30%
+        -- threshold, the frenzy strict-< twin) -> Talk SAY_BUBBLE +
+        -- DoCast(me, PROTECTIVE_BUBBLE, true).
+        local maxHealth = creature:GetMaxHealth()
+        if maxHealth > 0 and creature:GetHealth() > math.floor(maxHealth * 30 / 100) then
+            creature:Talk(SAY_BUBBLE)
+            creature:CastSpell(creature, SPELL_PROTECTIVE_BUBBLE, true)
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ICHORON, 38, ichoronDoAction)
+
+-- C++ spell_ichoron_drained AuraScript (boss_ichoron.cpp:305-347),
+-- via RegisterAuraEvent (aura events 1-7, runtime.go:497-503;
+-- creature-side fire sites spells.go:39194/:44661/:44753,
+-- boss_ai.go:9332). Handlers receive (event, aura, target); the
+-- Load() owner-entry gate (29313 or 32234) rides target:GetEntry().
+-- AURA_REMOVE_BY_EXPIRE = 4 (lua_aura.go:246 comment: NONE 0,
+-- DEFAULT 1, CANCEL 2, ENEMY_SPELL 3, EXPIRE 4, DEATH 5).
+local function ichoronAuraOwner(target)
+    return target ~= nil and (target:GetEntry() == ENTRY_ICHORON
+        or target:GetEntry() == NPC_DUMMY_ICHORON)
+end
+
+-- :322-326: apply sets NOT_SELECTABLE + FEIGN_DEATH flags.
+-- UNIT_FIELD_FLAGS = 59, UNIT_FIELD_FLAGS_2 = 60 (lua_player.go:859);
+-- UNIT_FLAG2_FEIGN_DEATH = 0x00000001 (UnitDefines.h:161).
+local function drainedAuraApply(event, aura, target)
+    if not ichoronAuraOwner(target) then
+        return
+    end
+    target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    target:SetFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_FEIGN_DEATH)
+end
+
+-- :328-339: remove clears both flags; on EXPIRE the target AI gets
+-- DoAction(ACTION_DRAINED).
+local function drainedAuraRemove(event, aura, target)
+    if not ichoronAuraOwner(target) then
+        return
+    end
+    target:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    target:RemoveFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_FEIGN_DEATH)
+    if aura:GetRemoveMode() == AURA_REMOVE_BY_EXPIRE then
+        target:DoAction(ACTION_DRAINED)
+    end
+end
+
+-- C++ spell_ichoron_protective_bubble AuraScript (:387-420): on
+-- remove, charges <= 1 -> DoAction
+-- ACTION_PROTECTIVE_BUBBLE_SHATTERED. The C++ commented-out
+-- remove-mode gate stays commented out (any remove mode fires it).
+-- Charges ride aura:GetStackAmount() (see header note).
+local function bubbleAuraRemove(event, aura, target)
+    if not ichoronAuraOwner(target) then
+        return
+    end
+    if aura:GetStackAmount() <= 1 then
+        target:DoAction(ACTION_PROTECTIVE_BUBBLE_SHATTERED)
+    end
+end
+
+-- C++ spell_ichoron_splatter AuraScript (:422-470): periodic tick
+-- casts a random globule-summon spell triggered on the target and
+-- PreventDefaultAction()s (:447-452); on EXPIRE the SHRINK aura
+-- gains 10 stacks (:458-461) via creature:GetAura +
+-- Aura:SetStackAmount (ModStackAmount twin; nil-guarded like the
+-- C++ GetAura null check).
+local SPLATTER_SUMMONS = {
+    SPELL_WATER_GLOBULE_SUMMON_1,
+    SPELL_WATER_GLOBULE_SUMMON_2,
+    SPELL_WATER_GLOBULE_SUMMON_3,
+    SPELL_WATER_GLOBULE_SUMMON_4,
+    SPELL_WATER_GLOBULE_SUMMON_5,
+}
+
+local function splatterAuraPeriodic(event, aura, target)
+    if target == nil then
+        return true
+    end
+    target:CastSpell(target, SPLATTER_SUMMONS[math.random(#SPLATTER_SUMMONS)], true)
+    return true
+end
+
+local function splatterAuraRemove(event, aura, target)
+    if target == nil or aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    local shrink = target:GetAura(SPELL_SHRINK)
+    if shrink then
+        shrink:SetStackAmount(shrink:GetStackAmount() + 10)
+    end
+end
+
+RegisterAuraEvent(SPELL_DRAINED, 2, drainedAuraApply)
+RegisterAuraEvent(SPELL_DRAINED, 3, drainedAuraRemove)
+RegisterAuraEvent(SPELL_PROTECTIVE_BUBBLE, 3, bubbleAuraRemove)
+RegisterAuraEvent(SPELL_SPLATTER, 1, splatterAuraPeriodic)
+RegisterAuraEvent(SPELL_SPLATTER, 3, splatterAuraRemove)
+
 -- C++ npc_ichor_globule::DamageTaken (boss_ichoron.cpp:279-290):
 -- if (!_splashTriggered && damage >= me->GetHealth()): latch,
 -- DoCastAOE(SPELL_SPLASH 59516). DoCastAOE is self-cast per
@@ -431,6 +653,28 @@ local function ichorGlobuleSpellHit(event, creature, caster, spellId)
     end
     creature:CastSpell(creature, SPELL_WATER_GLOBULE_TRANSFORM)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    -- :261-263: MoveFollow(unitCaster, 0.0f, 0.0f); the merge leg
+    -- rides the ev28 follow inform below.
+    creature:MoveFollow(caster, 0, 0)
+end
+
+-- C++ npc_ichor_globule::MovementInform (boss_ichoron.cpp:266-274):
+-- FOLLOW_MOTION_TYPE only, and only when the followed target is
+-- Ichoron — the instance DATA_ICHORON object GUID's counter
+-- (GetCounter() = low 32 bits) must equal the inform id. Go passes
+-- uint32(targetGUID) as the id (creaturemotion.go:4406-4410), so the
+-- Lua mirror compares against GetGuidData(DATA_ICHORON) % 2^32
+-- (GUIDs stay below 2^53, so the modulo is exact). On match:
+-- CastSpell(me, SPELL_MERGE) + DespawnOrUnsummon(1ms).
+local function ichorGlobuleMovementInform(event, creature, type, id)
+    if type ~= FOLLOW_MOTION_TYPE then
+        return
+    end
+    if id ~= creature:GetGuidData(DATA_ICHORON) % 4294967296 then
+        return
+    end
+    creature:CastSpell(creature, SPELL_MERGE)
+    creature:DespawnOrUnsummon(1)
 end
 
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 2, ichorGlobuleCleanup)
@@ -438,6 +682,7 @@ RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 4, ichorGlobuleCleanup)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 9, ichorGlobuleDamageTaken)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 14, ichorGlobuleSpellHit)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 23, ichorGlobuleCleanup)
+RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 28, ichorGlobuleMovementInform)
 RegisterCreatureEvent(ENTRY_ICHOR_GLOBULE, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_ichoron.cpp:291: empty UpdateAI in C++ (never melees)
 end)

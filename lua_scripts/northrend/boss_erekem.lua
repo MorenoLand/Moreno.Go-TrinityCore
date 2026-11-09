@@ -13,7 +13,12 @@
 -- 29395 Erekem Guard (violet_hold.h NPC_EREKEM_GUARD, line 105) —
 -- entry-verifiable (the nexus_commanders / malygos / sartharion
 -- kalecgos precedent); the CreatureScript ScriptName bindings are
--- DB-side as usual. DATA_EREKEM = 4 (violet_hold.h line 54).
+-- DB-side as usual. DATA_EREKEM = 4 (violet_hold.h line 54);
+-- DATA_EREKEM_GUARD_1 = 15 / DATA_EREKEM_GUARD_2 = 16
+-- (violet_hold.h lines 69-70: DATA_MAIN_EVENT_STATE 9,
+-- DATA_WAVE_COUNT 10, DATA_DOOR_INTEGRITY 11,
+-- DATA_PORTAL_LOCATION 12, DATA_START_BOSS_ENCOUNTER 13,
+-- DATA_DEFENSELESS 14, then the guard slots).
 -- The stale "no-timer-bridge" doctrine is superseded by the
 -- CreateLuaEvent bridge (engine/scripting/runtime.go:798 — the
 -- archavon / maiden_of_virtue precedent): module-local GUID-keyed
@@ -65,6 +70,37 @@
 -- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_EREKEM 4,
 -- NOT_STARTED), != DONE-gated, ported in erekemReset (new ev23,
 -- split from ev2 — leave-combat does not call Reset in C++).
+-- MovementInform (:78-82) — EFFECT_MOTION_TYPE (16,
+-- MovementDefines.h:44) / POINT_INTRO (1, violet_hold.h:154) ->
+-- me->SetFacingTo(4.921828f): PORTED 2026-11-08 (tick 485) — ev28
+-- fires MovementInform(EFFECT_MOTION_TYPE, id) on effect-spline
+-- arrival (lua_creature_events.go:4861, creaturemotion.go:5723; the
+-- ymiron ev28 precedent). Sender is the instance script's
+-- MoveSmoothPath(POINT_INTRO, ...) (instance_violet_hold.cpp:582),
+-- unported — the receiver is dormant until the intro leg lands.
+-- Phase machine (:169-181) — _phase 0->1 on !CheckGuardAlive()
+-- (:137-150, instance GetGuidData legs): SetCanDualWield(true),
+-- DoCast(me, SPELL_WINDFURY 54493, true) (triggered), then
+-- DoSpellAttackIfReady (SPELL_STORMSTRIKE 51876) vs
+-- DoMeleeAttackIfReady: PARTIALLY PORTED 2026-11-08 (tick 485) —
+-- CheckGuardAlive rides creature:GetInstanceCreature
+-- (lua_creature_events.go:6488) over the guard GUID slots the
+-- npc_erekem_guard spawn handler latches (instance_violet_hold.cpp:
+-- 234-247 first-empty-slot twin); the per-frame UpdateAI check rides
+-- a 1s re-armed CreateLuaEvent poll seeded at engage (the ichoron
+-- frenzy / sindragosa 1s-poll convention); on flip the Windfury
+-- triggered self-cast fires and the latch stops re-arming.
+-- SetCanDualWield has no bridge and stays out (Go melee does not
+-- model dual-wield); DoSpellAttackIfReady(STORMSTRIKE) has no bridge
+-- and stays out (melee stays engine-driven — the phase-1 melee
+-- replacement is a documented deviation).
+-- GetChainHealTarget (:149-166) — dead helper: zero call sites in the
+-- file (the chain-heal arm uses DoSelectLowestHpFriendly).
+-- JustReachedHome (:84-88) — instance->SetData(DATA_HANDLE_CELLS,
+-- DATA_EREKEM): no instance SetData bridge.
+-- SAY_SPAWN (3) / SAY_ADD_KILLED (4) / SAY_BOTH_ADDS_KILLED (5) —
+-- never Talk()ed anywhere in the file (grep -c "Talk(" = 3, all
+-- ported above): dead enum text.
 -- DOCUMENTED DEVIATIONS:
 -- LIGHTNING_BOLT's SelectTarget (:204) passes no playerOnly flag
 -- (playerOnly=false default, UnitAI.h:170) — C++ would also consider
@@ -82,7 +118,8 @@
 -- DoCastVictim) legs NEVER FIRE in C++; the guard is melee-only.
 -- Porting them would fabricate casts that never occur. DoZoneInCombat
 -- (:276) has no bridge; DoMeleeAttackIfReady (:284-285) is
--- engine-driven in Go.
+-- engine-driven in Go. The guard's only live Lua leg is the spawn
+-- GUID slot-fill (npc_erekem_guard.lua).
 -- EARTH_SHIELD re-cast (:187-192) — if (Unit* ally =
 -- DoSelectLowestHpFriendly(30.0f)) DoCast(ally, SPELL_EARTH_SHIELD):
 -- lowest-HP-friendly ally selection (includes the guard creatures,
@@ -95,26 +132,16 @@
 -- BREAK_BONDS scan (:226-241) — instance->GetGuidData
 -- (DATA_EREKEM_GUARD_1/2) + CheckGuardAuras (:102-135) ->
 -- DoCastAOE(SPELL_BREAK_BONDS 59463), 10s re-arm on a hit / 500ms
--- poll: instance-GUID / cross-creature machine unbridged.
+-- poll: CheckGuardAuras needs HasAuraWithMechanic / HasAuraType,
+-- neither bridged — the scan stays out even though the guard-GUID
+-- read itself is now bridged.
 -- Reset() SetCanDualWield(false) (:68) — phase-machine arm (see
--- below), unmodeled.
--- Phase machine (:169-181) — _phase 0->1 on !CheckGuardAlive()
--- (:137-150, instance GetGuidData legs): SetCanDualWield(true),
--- DoCast(me, SPELL_WINDFURY 54493, true) (triggered — phase-gated,
--- stays out with the machine), DoSpellAttackIfReady
--- (SPELL_STORMSTRIKE 51876) vs DoMeleeAttackIfReady: no bridges.
--- GetChainHealTarget (:149-166) — dead helper: zero call sites in the
--- file (the chain-heal arm uses DoSelectLowestHpFriendly).
--- MovementInform (:78-82) — EFFECT_MOTION_TYPE/POINT_INTRO ->
--- me->SetFacingTo(4.921828f): no MovementInform bridge.
--- JustReachedHome (:84-88) — instance->SetData(DATA_HANDLE_CELLS,
--- DATA_EREKEM): no instance SetData bridge.
--- SAY_SPAWN (3) / SAY_ADD_KILLED (4) / SAY_BOTH_ADDS_KILLED (5) —
--- never Talk()ed anywhere in the file (grep -c "Talk(" = 3, all
--- ported above): dead enum text.
+-- above), unmodeled.
 
 local ENTRY_EREKEM = 29315
 local DATA_EREKEM = 4
+local DATA_EREKEM_GUARD_1 = 15
+local DATA_EREKEM_GUARD_2 = 16
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -124,8 +151,16 @@ local SPELL_EARTH_SHIELD = 54479
 local SPELL_BLOODLUST = 54516
 local SPELL_LIGHTNING_BOLT = 53044
 local SPELL_EARTH_SHOCK = 54511
+local SPELL_WINDFURY = 54493
+
+local EFFECT_MOTION_TYPE = 16
+local POINT_INTRO = 1
 
 local timers = {}
+
+-- C++ _phase latch (:169-181): 0 until both guards are dead, then 1
+-- (Windfury cast fires once on the flip).
+local phaseOne = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -230,6 +265,39 @@ local function earthShockTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI phase check (:169-181): _phase == 0 &&
+-- !CheckGuardAlive() (:137-150: either guard GUID resolves to a live
+-- creature) -> _phase = 1, SetCanDualWield(true) (no bridge, stays
+-- out), DoCast(me, SPELL_WINDFURY, true). The per-frame check rides a
+-- 1s re-armed CreateLuaEvent poll seeded at engage (the ichoron
+-- frenzy / sindragosa 1s-poll convention); the poll stops re-arming
+-- once the latch flips. Nil guard reads count as dead, matching the
+-- C++ null-guard skip — so a guard-less Erekem flips on the first
+-- poll exactly as C++ would on its first UpdateAI tick.
+local function checkGuardAlive(creature)
+    for _, dataId in ipairs({DATA_EREKEM_GUARD_1, DATA_EREKEM_GUARD_2}) do
+        local guard = creature:GetInstanceCreature(dataId)
+        if guard and guard:IsAlive() then
+            return true
+        end
+    end
+    return false
+end
+
+local function phaseTick(creature, guid)
+    if phaseOne[guid] then
+        return
+    end
+    if not checkGuardAlive(creature) then
+        phaseOne[guid] = true
+        creature:CastSpell(creature, SPELL_WINDFURY, true)
+        return
+    end
+    schedule(guid, "phase", 1000, function()
+        phaseTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith (:71-76): Talk(SAY_AGGRO) + DoCast(me,
 -- SPELL_EARTH_SHIELD) non-triggered self-cast at engage (the toravon
 -- engage self-cast precedent); base arms (:73) ported base-first
@@ -245,6 +313,7 @@ local function erekemEnterCombat(event, creature)
     creature:CastSpell(creature, SPELL_EARTH_SHIELD)
     local guid = creature:GetGUID()
     cancelTimers(guid)
+    phaseOne[guid] = nil
     schedule(guid, "bloodlust", 2000, function()
         bloodlustTick(creature, guid)
     end)
@@ -253,6 +322,9 @@ local function erekemEnterCombat(event, creature)
     end)
     schedule(guid, "earthshock", {2000, 8000}, function()
         earthShockTick(creature, guid)
+    end)
+    schedule(guid, "phase", 1000, function()
+        phaseTick(creature, guid)
     end)
 end
 
@@ -272,8 +344,8 @@ local function erekemJustDied(event, creature)
     creature:SetBossState(DATA_EREKEM, 3)
 end
 
--- C++ boss_erekemAI::Reset (:64-69): Initialize() (_phase = 0, phase
--- machine unported) + BossAI::Reset() — _Reset()
+-- C++ boss_erekemAI::Reset (:64-69): Initialize() (_phase = 0 —
+-- the phaseOne latch clears here) + BossAI::Reset() — _Reset()
 -- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_EREKEM 4,
 -- NOT_STARTED) only when the stored state != DONE. Split from ev2
 -- (the keleseth/svala precedent): ev2 leave-combat does not call
@@ -283,13 +355,24 @@ local function erekemReset(event, creature)
     if creature:GetBossState(DATA_EREKEM) ~= 3 then
         creature:SetBossState(DATA_EREKEM, 0)
     end
+    phaseOne[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
 end
 
 -- Shared timer wipe for events 2/23/4 (the svala / yogg_saron
 -- convention).
 local function erekemCancelCombatTimers(event, creature)
+    phaseOne[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
+end
+
+-- C++ MovementInform (:78-82): EFFECT_MOTION_TYPE (16) +
+-- POINT_INTRO (1) -> me->SetFacingTo(4.921828f). ev28 args are
+-- (event, creature, type, id) (creaturemotion.go:5723).
+local function erekemMovementInform(event, creature, type, id)
+    if type == EFFECT_MOTION_TYPE and id == POINT_INTRO then
+        creature:SetFacingTo(4.921828)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_EREKEM, 1, erekemEnterCombat)
@@ -298,3 +381,4 @@ RegisterCreatureEvent(ENTRY_EREKEM, 3, erekemKilledUnit)
 RegisterCreatureEvent(ENTRY_EREKEM, 4, erekemCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_EREKEM, 4, erekemJustDied)
 RegisterCreatureEvent(ENTRY_EREKEM, 23, erekemReset)
+RegisterCreatureEvent(ENTRY_EREKEM, 28, erekemMovementInform)
