@@ -40,14 +40,15 @@
 -- option's action value is DB-side; the intro/outro scheduler
 -- machine (instance wave-count gates, sinclariTrigger talks) is
 -- unbridged — documented-only.
--- The 3 teleportation portal scripts (wave-summon machines, instance
--- wave-count gates), npc_azure_saboteur (MoveSmoothPath choreography,
+-- The 3 teleportation portal scripts are ported in violet_hold.lua
+-- (tick 488: wave-summon machines, instance wave-count gates);
+-- npc_azure_saboteur (MoveSmoothPath choreography,
 -- MovementInform-gated SHIELD_DISRUPTION 58291, instance
 -- DATA_START_BOSS_ENCOUNTER), npc_violet_hold_defense_system
 -- (Reset-scheduled, not combat-engaged: 4s DoCastAOE 57912+57930, 1s
 -- re-arms, 58152 instakill on repeat counter 2, 7s despawn),
--- go_activation_crystal (gossip), and the 3 spell scripts (no
--- SpellScript/AuraScript bridge).
+-- go_activation_crystal (gossip), and the teleport-player spell
+-- script (62138, no SpellScript bridge).
 
 local ENTRY_INVADER_1, ENTRY_INVADER_2 = 30661, 30961
 local ENTRY_SPELLBREAKER_1, ENTRY_SPELLBREAKER_2 = 30662, 30962

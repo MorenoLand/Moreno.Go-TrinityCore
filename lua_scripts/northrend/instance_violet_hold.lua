@@ -20,8 +20,8 @@
 -- activation-crystal gossip handler
 -- (npc_violet_hold_activation_crystal.lua, tick 417); the
 -- door-integrity clear (Destroy Door Seal 58040 AuraScript,
--- violet_hold.cpp:1385) stays out (no AuraScript bridge) and the wipe
--- re-arm (instance :893) stays out with CheckEventState below.
+-- violet_hold.cpp:1385) is ported in violet_hold.lua (tick 488) and
+-- the wipe re-arm (instance :893) stays out with CheckEventState below.
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: the nine boss/Sinclari binds above. Fires on
 --   materialization (motionFor funnel, instance_hooks.go:311-320); a
@@ -80,8 +80,8 @@
 --     door, pushes SHOW 0 / WAVE_COUNT / PRISON_STATE, sets the
 --     crystal flags. DONE opens the main door, pushes SHOW 0, sets
 --     the crystal flags, and fires Sinclari DoAction
---     ACTION_SINCLARI_OUTRO (dormant receiver — the Sinclari AI is
---     unported, so the ev38 fire is a no-op until it lands). The
+--     ACTION_SINCLARI_OUTRO (live since tick 488: the Sinclari ev38
+--     receiver is ported in violet_hold.lua). The
 --     DONE arm has no live writer: the live DONE path is the
 --     OnUnitDeath cyanigosa leg above.
 --   - DATA_START_BOSS_ENCOUNTER (13) / DATA_HANDLE_CELLS (28): no
@@ -130,9 +130,9 @@
 --   portable as a whole).
 -- - StartBossEncounter (:625-693) / AddWave (:741-781) /
 --   ScheduleCyanigosaIntro (:883-905) / SpawnPortal (:560-578):
---   MoveSmoothPath is unbridged and the portal/saboteur/Sinclari
---   AIs in violet_hold.cpp are unported (the portal AI has no Lua
---   file, so summoned portals would be inert); MoveJump /
+--   MoveSmoothPath is unbridged and the saboteur AI in violet_hold.cpp
+--   is unported; the three portal AIs ARE ported (violet_hold.lua,
+--   tick 488) and wait on AddWave's summons. MoveJump /
 --   creature:SummonCreature / instance SetData ARE bridged, but the
 --   machines they would feed have no live trigger.
 -- - ProcessEvent (:928-936, EVENT_ACTIVATE_CRYSTAL 20001 -> summon
