@@ -13816,14 +13816,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 		// Spell missed, do not trigger channel or effects
-		fireLaunchMissNodmgProcs(ctx)
 		// PreprocessTarget still runs in C++ for the miss entries
 		// (Spell.cpp:2334-2381): the BeforeHit/OnHit twins fire here
 		// for them before the return — hitTargets is empty so only
 		// the miss loops fire. A fresh hitDamage state is correct:
 		// no damage arm runs on this path, so GetHitDamage reads
-		// the 0 seed like C++.
+		// the 0 seed like C++. Twins precede the nodmg procs below:
+		// pass 1 (:2334-2381) runs before the DoDamageAndTriggers
+		// no-damage arm (Spell.cpp:2560-2575), the same order as
+		// the normal path (twins, then effects, then procs).
 		s.fireSpellScriptPreprocessTwins(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
+		fireLaunchMissNodmgProcs(ctx)
 		return
 	}
 
@@ -14014,14 +14017,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 		if len(hitTargets) == 0 && !isReflected {
-			fireLaunchMissNodmgProcs(effCtx)
 			// PreprocessTarget still runs in C++ for the miss entries
 			// (Spell.cpp:2334-2381): the BeforeHit/OnHit twins fire here
 			// for them before the return — hitTargets is empty so only
 			// the miss loops fire. A fresh hitDamage state is correct:
 			// no damage arm runs on this path, so GetHitDamage reads
-			// the 0 seed like C++.
+			// the 0 seed like C++. Twins precede the nodmg procs below:
+			// pass 1 (:2334-2381) runs before the DoDamageAndTriggers
+			// no-damage arm (Spell.cpp:2560-2575), the same order as
+			// the normal path (twins, then effects, then procs).
 			s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}})
+			fireLaunchMissNodmgProcs(effCtx)
 			return
 		}
 		// A missed primary target resolves no unit: the unit-targeted
