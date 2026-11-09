@@ -238,7 +238,6 @@ end
 RegisterCreatureEvent(ENTRY_MORAGG, 1, moraggEnterCombat)
 RegisterCreatureEvent(ENTRY_MORAGG, 2, moraggCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggJustDied)
-RegisterCreatureEvent(ENTRY_MORAGG, 4, moraggCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_MORAGG, 23, moraggReset)
 RegisterCreatureEvent(ENTRY_MORAGG, 24, moraggReachedHome)
 

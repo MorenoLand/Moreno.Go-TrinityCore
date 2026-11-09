@@ -279,6 +279,5 @@ end
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 1, lavanthorEnterCombat)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 2, lavanthorCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 4, lavanthorJustDied)
-RegisterCreatureEvent(ENTRY_LAVANTHOR, 4, lavanthorCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 23, lavanthorReset)
 RegisterCreatureEvent(ENTRY_LAVANTHOR, 24, lavanthorReachedHome)
