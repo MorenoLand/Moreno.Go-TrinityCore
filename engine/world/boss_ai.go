@@ -19799,17 +19799,31 @@ func init() {
 	// (boss_sjonnir.cpp:291) + ev5 SetGuidData latch; consumer
 	// achievement_abuse_the_ooze ported (criteria-script bridge); the
 	// npc_malformed_ooze (27981 local enum; no Talk arms — the
-	// 10s/3s merge machine has no proximity / summon / despawn /
-	// timer bridges; npc_spark_of_ionar no-bridgeable-arms
-	// precedent — no registration); npc_iron_sludge (28165 local
+	// 10s/3s merge machine PORTED tick 515 in
+	// lua_scripts/northrend/npc_malformed_ooze.lua; the old "no
+	// proximity / summon / despawn / timer bridges" claim was stale);
+	// npc_iron_sludge (28165 local
 	// enum; no Talk arms) registered, JustDied DoAction relay ported;
 	// achievement_abuse_the_ooze (GetData >= 5) PORTED tick 235
 	// (criteria-script bridge, achievement_criteria_scripts.go).
 	RegisterLuaBoss("boss_sjonnir", 27978)
+	// npc_malformed_ooze: Halls of Stone ooze, entry 27981
+	// (boss_sjonnir.cpp local enum) — 10s/3s merge machine ported
+	// (FindNearestCreature 3.0f -> DoSpawnCreature IRON_SLUDGE 28165
+	// + double DisappearAndDie) in
+	// lua_scripts/northrend/npc_malformed_ooze.lua (tick 515).
+	RegisterLuaBoss("npc_malformed_ooze", 27981)
 	// npc_iron_sludge: Halls of Stone ooze, entry 28165
 	// (boss_sjonnir.cpp local enum) — JustDied DoAction(ACTION_OOZE_DEAD)
 	// relay in lua_scripts/northrend/boss_sjonnir.lua (tick 235).
 	RegisterLuaBoss("npc_iron_sludge", 28165)
+	// npc_tribuna_controller: Tribunal of the Ages controller, entry
+	// 28234 (halls_of_stone.cpp) — Marnak/Abedneum dark-matter /
+	// searing-gaze loops ported (ev38 activation protocol, actions 2/3
+	// driven by Brann's escort steps 12/18) in
+	// lua_scripts/northrend/npc_tribuna_controller.lua (tick 515);
+	// Kaddrak glare arm dead in C++ (list never populated), omitted.
+	RegisterLuaBoss("npc_tribuna_controller", 28234)
 
 	// Auriaya (33515), Ulduar —
 	// lua_scripts/northrend/boss_auriaya.lua.

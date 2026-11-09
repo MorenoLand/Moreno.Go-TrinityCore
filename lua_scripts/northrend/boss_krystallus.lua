@@ -267,7 +267,7 @@ local function krystallusEnterCombat(event, creature, target)
     creature:SetBossState(DATA_KRYSTALLUS, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "stomp", {20000, 29000}, function()
         stompTick(creature, guid)
@@ -294,7 +294,7 @@ local function krystallusTargetDied(event, creature, victim)
 end
 
 local function krystallusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_krystallus.cpp:61-63): _Reset() —
@@ -302,7 +302,14 @@ end
 -- (ScriptedCreature.cpp:499-511; the bjarngrim precedent sets it
 -- unconditionally on ev23).
 local function krystallusReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    -- C++ BossAI::_Reset (ScriptedCreature.cpp:499-510): returns early
+    -- when dead (ev23 fires on death too in Go) and zeroes the combat
+    -- pulse delay before SetBossState(NOT_STARTED).
+    if creature:IsDead() then
+        return
+    end
+    creature:SetCombatPulseDelay(0)
     creature:SetBossState(DATA_KRYSTALLUS, 0)
 end
 
@@ -311,7 +318,7 @@ end
 local function krystallusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_KRYSTALLUS, 3)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_KRYSTALLUS, 1, krystallusEnterCombat)

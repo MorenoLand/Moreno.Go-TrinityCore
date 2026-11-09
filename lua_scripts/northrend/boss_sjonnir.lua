@@ -99,17 +99,15 @@
 -- npc_malformed_ooze (CreatureScript via
 -- GetHallsOfStoneAI<npc_malformed_oozeAI> (ScriptedAI);
 -- NPC_MALFORMED_OOZE = 27981, local enum in boss_sjonnir.cpp —
--- entry-verifiable but bridge-blocked, NO registration — the
--- npc_spark_of_ionar / stormforged_lieutenant no-bridgeable-arms
--- precedent; no Talk arms anywhere in the script — the merge
--- machine (FindNearestCreature 27981 3.0f -> DoSpawnCreature
+-- entry-verifiable; no Talk arms anywhere — the merge machine
+-- (FindNearestCreature 27981 3.0f -> DoSpawnCreature
 -- IRON_SLUDGE 28165 + double DisappearAndDie; _mergeTimer 10s /
--- 3s) stays out on BEARER grounds only: the proximity / summon /
--- despawn / timer bridges are all live now (FindNearestCreature
--- lua_creature_events.go:2332, SummonCreature :1183, Despawn,
--- CreateLuaEvent runtime.go:798) — the old "no bridges" claim is
--- stale — but the ooze AI itself is unregistered, so the arm has
--- no bearer to run on.
+-- 3s) is PORTED (tick 515) in
+-- lua_scripts/northrend/npc_malformed_ooze.lua, registered in
+-- boss_ai.go. The old "no proximity / summon / despawn / timer
+-- bridges" claim was stale: all four bridges are live
+-- (FindNearestCreature lua_creature_events.go:6094, SummonCreature
+-- :3718, Despawn :3024, CreateLuaEvent runtime.go:798).
 -- npc_iron_sludge (CreatureScript via
 -- GetHallsOfStoneAI<npc_iron_sludgeAI> (ScriptedAI);
 -- NPC_IRON_SLUDGE = 28165, local enum — entry-verifiable; no Talk arms
@@ -256,10 +254,12 @@ end
 -- the C++ enum 0-based), 30s.
 -- Deviations: C++ JustSummoned moves the summon to CenterPoint
 -- (MovePoint twin: summon:MoveTo(0, CenterPoint), sjonnirJustSummoned
--- below); the add AIs (27982/27979/27981/27980) are
--- unported/unregistered, so summons are inert until those land; the
--- 30s death-timer leg is unmodeled (corpse/dead family 4/5/6 starts
--- its timer at death — documented engine delta).
+-- below); the add AIs (27982/27979/27980) are unported/unregistered,
+-- so those summons are inert until they land — the malformed ooze
+-- (27981) merge machine IS ported (tick 515), so ooze summons merge
+-- into iron sludges; the 30s death-timer leg is unmodeled
+-- (corpse/dead family 4/5/6 starts its timer at death — documented
+-- engine delta).
 local function summonTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "summon", 500, function()
@@ -322,7 +322,7 @@ local function sjonnirEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 -- C++ JustEngagedWith: EVENT_CHAIN_LIGHTNING {3s,8s} randtime seed.
     schedule(guid, "chainLightning", {3000, 8000}, function()
@@ -363,8 +363,8 @@ local function despawnSjonnirSummons(guid)
 end
 
 local function sjonnirCombatEnd(event, creature)
-    despawnSjonnirSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnSjonnirSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset (:92): abuseTheOoze = 0; EnterEvadeMode ends with
     -- Reset() (CreatureAI.cpp:237), and ev2/ev23 share this handler.
     creature:SetData(DATA_ABUSE_THE_OOZE, 0)
@@ -376,8 +376,8 @@ end
 -- unconditionally on ev23). Split from sjonnirCombatEnd: ev2
 -- leave-combat does not call Reset in C++, only ev23 does.
 local function sjonnirReset(event, creature)
-    despawnSjonnirSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnSjonnirSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's counter before
@@ -400,10 +400,10 @@ end
 -- Talk(DEATH) — SetBossState(DATA_SJONNIR, DONE) first; the despawn
 -- leg ports via the ev19 summons latch below.
 local function sjonnirDied(event, creature, killer)
-    despawnSjonnirSummons(creature:GetGUID())
+    despawnSjonnirSummons(creature:GetGUIDLow())
     creature:SetBossState(DATA_SJONNIR, 3)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_sjonnirAI::JustSummoned (boss_sjonnir.cpp:117-122):
@@ -412,13 +412,13 @@ end
 -- latch rides the ev19 table below, despawned from died/reset/leave
 -- (BossAI _JustDied/_Reset DespawnAll, keleseth precedent).
 local function sjonnirJustSummoned(event, creature, summon)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = sjonnirSummons[guid]
     if not list then
         list = {}
         sjonnirSummons[guid] = list
     end
-    list[summon:GetGUID()] = summon
+    list[summon:GetGUIDLow()] = summon
     summon:MoveTo(0, 1295.21, 667.157, 189.691)
 end
 

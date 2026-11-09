@@ -20,16 +20,22 @@
 -- 1, 0)); the latch is initialized true on spawn (ev5, the ctor Initialize
 -- :289) and read by achievement_brann_spankin_new (ported in
 -- engine/world/achievement_criteria_scripts.go, the abuse_the_ooze
--- precedent). The Reset re-init leg is vacuous: the latch can only be false
--- while escorting, and Reset skips Initialize while escorting (:304-313).
+-- precedent). Reset (halls_of_stone.cpp:304-313) re-inits the latch and
+-- sets the tribunal NOT_STARTED when not escorting — PORTED (tick 515)
+-- on ev23 (IsEscorted bridged lua_creature_events.go:2380); the
+-- DespawnDwarf leg has no Lua twin yet (no dwarf GUID list — summons
+-- unported), noted, not fabricated.
 -- Documented-only: the full escort event machine (tribunal waypoints,
--- Sjonnir intro) — no escort/movement bridge; npc_tribuna_controller
--- (halls_of_stone.cpp:134-267) — its UpdateAI arms (glare / dark matter /
--- searing gaze) are gated on bKaddrakActivated / bMarnakActivated /
--- bAbedneumActivated flags set only by Brann's escort steps (:8/:12/:18
--- of UpdateEscortAI), so they are unreachable without the escort machine;
--- its Reset HandleGameObject legs close faces the escort never opens in
--- Lua; UpdateFacesList is commented out in C++.
+-- Sjonnir intro) — the escort primitives are all bridged (StartEscort
+-- :2391, MoveWaypoint :4219, OnReachWP event 6, IsEscorted :2380; the
+-- old-hillsbrad precedent), so this is unported work, not a stay-out;
+-- the escort machine is the next unit. npc_tribuna_controller
+-- (halls_of_stone.cpp:134-267) — PORTED (tick 515) in
+-- lua_scripts/northrend/npc_tribuna_controller.lua; its Marnak/Abedneum
+-- loops activate via the ev38 protocol (actions 2/3) driven by Brann's
+-- escort steps 12/18; the Kaddrak glare arm is dead in C++
+-- (KaddrakGUIDList never populated — UpdateFacesList commented out),
+-- deliberately omitted. UpdateFacesList is commented out in C++.
 
 local ENTRY_BRANN_HOS = 28070
 
@@ -65,7 +71,7 @@ local function brannDamageTaken(_, creature, _, damage)
     if creature:GetBossState(DATA_TRIBUNAL_OF_AGES) == 1 then
         creature:SetData(DATA_BRANN_SPARKLIN_NEWS, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
@@ -101,7 +107,36 @@ local function brannGossipSelect(event, player, creature, sender, action)
     end
 end
 
+-- C++ UpdateAI low-HP arm (halls_of_stone.cpp:674-679): !bIsLowHP &&
+-- HealthBelowPct(30) -> Talk(SAY_LOW_HEALTH), latch; bIsLowHP &&
+-- !HealthBelowPct(30) -> latch cleared (healed back above 30%).
+-- The heal re-arm rides the pre-heal event-11 hook (valithria
+-- precedent): a heal that lifts health back to >= the floored 30%
+-- threshold clears the latch, so a second drop below 30% re-yells.
+local function brannHealReceived(_, creature, _, heal)
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth == 0 then
+        return
+    end
+    if creature:GetHealth() + heal >= math.floor(maxHealth * 30 / 100) then
+        lowHpLatched[creature:GetGUIDLow()] = nil
+    end
+end
+
+-- C++ Reset (halls_of_stone.cpp:304-313): while NOT escorting,
+-- Initialize() (latch re-init) + DespawnDwarf() +
+-- SetBossState(DATA_TRIBUNAL_OF_AGES, NOT_STARTED). The DespawnDwarf
+-- leg has no Lua twin yet (no dwarf GUID list — summons unported).
+local function brannReset(event, creature)
+    if not creature:IsEscorted() then
+        lowHpLatched[creature:GetGUIDLow()] = nil
+        creature:SetBossState(DATA_TRIBUNAL_OF_AGES, 0)
+    end
+end
+
 RegisterCreatureGossipEvent(ENTRY_BRANN_HOS, 1, brannGossipHello)
 RegisterCreatureGossipEvent(ENTRY_BRANN_HOS, 2, brannGossipSelect)
 RegisterCreatureEvent(ENTRY_BRANN_HOS, 5, brannSpawned)
 RegisterCreatureEvent(ENTRY_BRANN_HOS, 9, brannDamageTaken)
+RegisterCreatureEvent(ENTRY_BRANN_HOS, 11, brannHealReceived)
+RegisterCreatureEvent(ENTRY_BRANN_HOS, 23, brannReset)

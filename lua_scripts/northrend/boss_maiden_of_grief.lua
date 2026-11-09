@@ -31,7 +31,8 @@
 -- me-form DoZoneInCombat, ScriptedCreature.cpp:540/542) ported
 -- into maidenEnterCombat; the
 -- DoStartTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT 20383) leg
--- has no bridge (no timed-achievement bridge).
+-- is PORTED (tick 515) via the instance-data bridge
+-- (instance_hooks.go:75; the xt002/kologarn precedent).
 -- KilledUnit — C++-gated on who->GetTypeId() == TYPEID_PLAYER, then
 -- Talk(SAY_SLAY 1) — PORTED (event 3; the razuvious player-gated
 -- variant precedent: victim nil-guard, victim:GetObjectType() ==
@@ -62,9 +63,9 @@
 -- target (C++ :108-111).
 -- DOCUMENTED-ONLY (in this header; no registration beyond entry
 -- 27975):
--- Reset DoStopTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT) — no
--- achievement bridge. JustEngagedWith DoStartTimedAchievement — no
--- timed-achievement bridge.
+-- Reset DoStopTimedAchievement(ACHIEV_GOOD_GRIEF_START_EVENT) — PORTED
+-- (tick 515) via the instance-data bridge (instance_hooks.go:110).
+-- JustEngagedWith DoStartTimedAchievement — PORTED (tick 515), same bridge.
 -- PORTED (retraction re-audit 2026-10-17: the "no heroic bridge" claim
 -- was stale — creature:IsHeroic() is bridged on the event-handler
 -- surface (engine/world/lua_creature_events.go:409-417, per-instance
@@ -95,6 +96,11 @@ local SPELL_STORM_OF_GRIEF = 50752
 local SPELL_SHOCK_OF_SORROW = 50760
 local SPELL_PILLAR_OF_WOE = 50761
 local SPELL_PARTING_SORROW = 59723 -- boss_maiden_of_grief.cpp spells enum
+
+-- ACHIEVEMENT_TIMED_TYPE_EVENT = 1 (xt002 precedent, tick 472);
+-- ACHIEV_GOOD_GRIEF_START_EVENT = 20383 (boss_maiden_of_grief.cpp:49).
+local ACHIEVEMENT_TIMED_TYPE_EVENT = 1
+local ACHIEV_GOOD_GRIEF_START_EVENT = 20383
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
 -- events 2/4/23) — the maiden / bjarngrim-lieutenant convention.
@@ -254,12 +260,23 @@ local function maidenEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:525-543) —
     -- SetBossState(DATA_MAIDEN_OF_GRIEF, IN_PROGRESS) first, then
     -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, before Talk
-    -- (C++ arm order); instance/achievement legs out.
+    -- (C++ arm order); the timed-achievement leg is ported below.
     creature:SetBossState(DATA_MAIDEN_OF_GRIEF, 1)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    -- C++ JustEngagedWith (:79): instance->DoStartTimedAchievement
+    -- (ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_GOOD_GRIEF_START_EVENT) —
+    -- instance-data bridge (instance_hooks.go:75; xt002 precedent).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT,
+                ACHIEV_GOOD_GRIEF_START_EVENT)
+        end
+    end
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Reset() :65-66: the EVENT_PARTING_SORROW seed is
     -- IsHeroic()-gated (creature:IsHeroic() bridged — the
@@ -289,7 +306,7 @@ local function maidenTargetDied(event, creature, victim)
 end
 
 local function maidenLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_maiden_of_grief.cpp:61-63): _Reset() —
@@ -297,8 +314,18 @@ end
 -- (ScriptedCreature.cpp:499-511; the bjarngrim precedent sets it
 -- unconditionally on ev23).
 local function maidenReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_MAIDEN_OF_GRIEF, 0)
+    -- C++ Reset (:71): instance->DoStopTimedAchievement
+    -- (ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_GOOD_GRIEF_START_EVENT).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:StopTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT,
+                ACHIEV_GOOD_GRIEF_START_EVENT)
+        end
+    end
 end
 
 -- C++ JustDied (boss_maiden_of_grief.cpp:88-91): _JustDied() then
@@ -306,7 +333,7 @@ end
 local function maidenDied(event, creature, killer)
     creature:SetBossState(DATA_MAIDEN_OF_GRIEF, 3)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_MAIDEN_OF_GRIEF, 1, maidenEnterCombat)
