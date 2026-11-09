@@ -2874,14 +2874,18 @@ local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:66
 -- re-casts the jump on itself with stack + 1 and the caster (Lich
 -- King) self-casts Plague Siphon, triggered. The AfterDispel leg
 -- (:2107-2125) re-casts with the same stack on a genuine dispel.
--- OPEN GAP (tick 501): on a PARTIAL dispel (multi-stack, aura
--- survives) Go fires only the ev5 OnDispel hook, never ev3, so no
--- re-cast/siphon happens; C++ AfterDispel re-casts with the current
--- (decremented) stack + siphons + removes. The ev3 ENEMY_SPELL
--- branch below covers only a stack-1 full removal. The ev5 fix needs
--- the dispel-snapshot semantics check first (the ev5 aura snapshot
--- is pre-decrement, lua_aura.go dispelAuraRef; a stack-1 dispel
--- would double-fire with this ev3 branch).
+-- PORTED tick 502 (ev5 below): on a PARTIAL dispel (multi-stack,
+-- aura survives) Go fires only the ev5 OnDispel hook, never ev3 —
+-- the ev3 ENEMY_SPELL branch covers only a stack-1 full removal.
+-- The ev5 snapshot is pre-decrement (lua_aura.go dispelAuraRef),
+-- so the post-decrement stack is snapshot - 1; a stack-1 dispel
+-- returns early here to avoid double-firing with ev3. The old aura
+-- is removed FIRST (default mode, so ev3 no-ops on it) — removing
+-- after the re-cast would kill the fresh aura, since a cast on a
+-- target already carrying the spell refreshes it in place — then
+-- the jump re-casts with stack - 1, siphons, mirroring the C++
+-- Remove(AURA_REMOVE_BY_ENEMY_SPELL) tail. The C++ _lastAmount
+-- reapply guard is unneeded: Go fires ev5 only on real dispels.
 local function necroticPlagueJumpRemove(event, aura, target)
     local mode = aura:GetRemoveMode()
     local stack = aura:GetStackAmount()
@@ -2906,6 +2910,36 @@ local function necroticPlagueJumpRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 3, necroticPlagueJumpRemove)
+
+-- C++ spell_the_lich_king_necrotic_plague_jump_aura::AfterDispel
+-- (boss_the_lich_king.cpp:2107-2125), partial-dispel leg: on a
+-- multi-stack dispel the aura survives with stack - 1, the target
+-- re-casts the jump with that stack, the caster siphons, and the
+-- aura is then removed outright. PORTED tick 502 (ev5). Table
+-- field, not a local: the file sits at the 200 main-chunk local
+-- limit.
+LK.necroticPlagueJumpDispel = function(event, aura, target)
+    local stack = aura:GetStackAmount()
+    if stack < 2 then
+        return -- stack-1 full removal rides the ev3 ENEMY_SPELL branch
+    end
+    local caster = aura:GetCaster()
+    local newStack = stack - 1
+    target:RemoveAura(SPELL_NECROTIC_PLAGUE_JUMP)
+    target:CastSpell(target, SPELL_NECROTIC_PLAGUE_JUMP, true)
+    local fresh = target:GetAura(SPELL_NECROTIC_PLAGUE_JUMP)
+    if fresh ~= nil then
+        fresh:SetStackAmount(newStack)
+    end
+    if caster ~= nil and caster:GetObjectType() == "Creature" then
+        if newStack > caster:GetData(DATA_PLAGUE_STACK) then
+            caster:SetData(DATA_PLAGUE_STACK, newStack)
+        end
+        caster:CastSpell(caster, SPELL_PLAGUE_SIPHON, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_NECROTIC_PLAGUE_JUMP, 5, LK.necroticPlagueJumpDispel)
 
 -- C++ spell_the_lich_king_harvest_soul::OnRemove
 -- (boss_the_lich_king.cpp:2538-2558) and
