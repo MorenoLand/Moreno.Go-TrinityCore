@@ -248,7 +248,8 @@
 --   2..5 / SAY_INTRO_ALLIANCE_5 2) ride the intro scheduler machine.
 --   The outro arms still port via the deathbringer-side relay below
 --   (relayStartOutro); Talk(SAY_OUTRO_HORDE_4 14) rides the OUTRO_6
---   move-arrival chain (not ported — needs the GetClosePoint leg);
+--   move-arrival chain (PORTED this tick via
+--   deathbringer:GetRelativePoint(0, 0) = GetClosePoint twin);
 --   the muradin outro chain rides waypoint/movement events (no bridge).
 --   SpellHit(SPELL_GRIP_OF_AGONY) movement legs stay out (see intro
 --   machine note above). The cross-AI deathbringer->AI()->DoAction(
@@ -276,10 +277,9 @@
 --   tick — boss intro 0/1/2/3/4/5/6 (8 calls: ALLIANCE_6 Talks twice)
 --   + horde event-NPC 0/1/2/3/4/5 (6) + muradin 0/1/2 (3);
 --   previously ported — aggro 7 + kill 10 + frenzy 11 + death 13 +
---   blood beasts 9 + berserk 12 + horde outro 11/12/13 + alliance
+--   blood beasts 9 + berserk 12 + horde outro 11/12/13/14 + alliance
 --   outro 3 (relayStartOutro below); still documented-only — mark 8
---   (1) + emote 14 (1) + horde outro 14 (OUTRO_6 chain) + muradin
---   outro 4..12 (waypoint chain).
+--   (1) + emote 14 (1) + muradin outro 4..12 (waypoint chain).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
 -- EVENT_SCENT_OF_BLOOD (:520-526) PORTED 2026-11-08 (tick 493): the
@@ -314,6 +314,8 @@ local ACTION_CONTINUE_INTRO = -3781301
 local POINT_SAURFANG = 3781300 -- boss_deathbringer_saurfang.cpp:213-222
 local POINT_FIRST_STEP = 3781301
 local POINT_CHARGE = 3781302
+local POINT_CORPSE = 3781304
+local POINT_FINAL = 3781305
 local FACTION_UNDEAD_SCOURGE = 974 -- SharedDefines.h:253
 local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h (OBJECT_END + 0x35; the FL precedent)
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
@@ -344,6 +346,9 @@ local DEATHBRINGER_Z = 541.1138
 local FIRST_STEP_X = -541.3177 -- firstStepPos, boss_deathbringer_saurfang.cpp:224
 local FIRST_STEP_Y = 2211.365
 local FIRST_STEP_Z = 539.2921
+local FINAL_X = -563.7552 -- finalPos, boss_deathbringer_saurfang.cpp:247
+local FINAL_Y = 2211.328
+local FINAL_Z = 538.7848
 -- chargePos[1] is the event NPC's own slot; [2..6] are the guards'
 -- (C++ chargePos[0..5], boss_deathbringer_saurfang.cpp:226-234;
 -- guard _index 1..5 -> Lua slots 2..6).
@@ -366,6 +371,7 @@ local SAY_DEATH = 13
 local SAY_OUTRO_HORDE_1 = 11
 local SAY_OUTRO_HORDE_2 = 12
 local SAY_OUTRO_HORDE_3 = 13
+local SAY_OUTRO_HORDE_4 = 14
 local SAY_OUTRO_ALLIANCE_1 = 3
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
@@ -385,6 +391,8 @@ local SPELL_ACHIEVEMENT = 72928
 local SPELL_REPUTATION_BOSS_KILL = 73843 -- icecrown_citadel.h:35
 local SPELL_PERMANENT_FEIGN_DEATH = 70628
 local SPELL_GRIP_OF_AGONY = 70572 -- boss_deathbringer_saurfang.cpp:95
+local SPELL_RIDE_VEHICLE = 70640 -- boss_deathbringer_saurfang.cpp:117 (outro)
+local EMOTE_STATE_DROWNED = 383 -- SharedDefines.h:2021
 local SPELL_ZERO_POWER = 72242
 local SPELL_BLOOD_LINK = 72178
 local SPELL_BLOOD_LINK_DUMMY = 72202 -- boss_deathbringer_saurfang.cpp:107
@@ -671,10 +679,12 @@ end
 -- C++ DamageTaken :375-376 -> event-NPC DoAction(ACTION_START_OUTRO).
 -- Horde (:673-685): RemoveAura(GRIP) + Talk(OUTRO_1 11) + Talk(OUTRO_2
 -- 12) at 10s + Talk(OUTRO_3 13) at 18s + SetDisableGravity(false) +
--- MoveFall + guard despawn; the OUTRO_4 corpse move
--- (GetClosePoint-derived position) and the OUTRO_5 final move
--- (arrival-gated despawn chain) stay out — the chain needs the OUTRO_4
--- move to produce its arrival.
+-- MoveFall + guard despawn; OUTRO_4 (24s corpse move, GetClosePoint via
+-- deathbringer:GetRelativePoint(0, 0)) + OUTRO_5 (30s final move) +
+-- OUTRO_6 (Talk OUTRO_4 14, 4s after the POINT_CORPSE arrival) PORTED
+-- this tick; the POINT_CORPSE arrival (ride-vehicle cast, NOT_SELECTABLE
+-- flag, DROWNED emote state) + POINT_FINAL arrival (both despawn) ride
+-- eventNpcMovementInform below.
 -- Alliance (muradin :873): RemoveAura(GRIP) + Talk(OUTRO_1 3) +
 -- SetDisableGravity(false) + MoveFall + guard despawn + deathbringer
 -- DespawnOrUnsummon(5s); muradin schedules no
@@ -695,6 +705,21 @@ local function relayStartOutro(creature)
         end)
         schedule(npcGuid, "outro3", 18000, function()
             eventNpc:Talk(SAY_OUTRO_HORDE_3)
+        end)
+        -- C++ :679-680: OUTRO_4 at 24s (corpse move) + OUTRO_5 at 30s
+        -- (final move); the POINT_CORPSE arrival re-schedules outro5 at
+        -- 1s (schedule() key-cancel = C++ RescheduleEvent, :735) and
+        -- outro6 at 4s (:736).
+        schedule(npcGuid, "outro4", 24000, function()
+            local deathbringer = eventNpc:FindNearestCreature(ENTRY_DEATHBRINGER_SAURFANG, 100)
+            if deathbringer then
+                local x, y, z = deathbringer:GetRelativePoint(0, 0)
+                eventNpc:SetWalk(true)
+                eventNpc:MoveTo(POINT_CORPSE, x, y, z)
+            end
+        end)
+        schedule(npcGuid, "outro5", 30000, function()
+            eventNpc:MoveTo(POINT_FINAL, FINAL_X, FINAL_Y, FINAL_Z)
         end)
         -- C++ :681-682: SetDisableGravity(false) + MoveFall, after the
         -- schedules (both bridged now — the "no MoveFall bridge" note is stale).
@@ -1216,11 +1241,41 @@ end
 -- ALLIANCE_5 (5s) schedules + deathbringer DoAction(
 -- ACTION_CONTINUE_INTRO). HORDE_8 / ALLIANCE_5 also broadcast
 -- ACTION_CHARGE (guards + self MoveCharge to chargePos[0] at 8.5).
+-- MovementInform POINT_CORPSE (:728-737) + POINT_FINAL (:738-741):
+-- corpse arrival (ride-vehicle cast, NOT_SELECTABLE flag, DROWNED
+-- emote state, OUTRO_5 at 1s + OUTRO_6 at 4s) and final arrival
+-- (deathbringer + self despawn).
 local function eventNpcMovementInform(event, creature, motionType, id)
-    if motionType ~= POINT_MOTION_TYPE or id ~= POINT_FIRST_STEP then
+    if motionType ~= POINT_MOTION_TYPE then
         return
     end
     local guid = creature:GetGUIDLow()
+    if id == POINT_CORPSE then
+        local deathbringer = creature:FindNearestCreature(ENTRY_DEATHBRINGER_SAURFANG, 100)
+        if deathbringer then
+            deathbringer:CastSpell(creature, SPELL_RIDE_VEHICLE, true)
+            deathbringer:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            deathbringer:EmoteState(EMOTE_STATE_DROWNED)
+        end
+        schedule(guid, "outro5", 1000, function()
+            creature:MoveTo(POINT_FINAL, FINAL_X, FINAL_Y, FINAL_Z)
+        end)
+        schedule(guid, "outro6", 4000, function()
+            creature:Talk(SAY_OUTRO_HORDE_4)
+        end)
+        return
+    end
+    if id == POINT_FINAL then
+        local deathbringer = creature:FindNearestCreature(ENTRY_DEATHBRINGER_SAURFANG, 100)
+        if deathbringer then
+            deathbringer:Despawn()
+        end
+        creature:Despawn()
+        return
+    end
+    if id ~= POINT_FIRST_STEP then
+        return
+    end
     local isHorde = creature:GetEntry() == ENTRY_SE_HIGH_OVERLORD_SAURFANG
     creature:SetWalk(false)
     if isHorde then

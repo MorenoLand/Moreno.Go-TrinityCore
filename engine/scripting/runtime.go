@@ -520,10 +520,17 @@ const (
 // SpellScript.h. Only the hooks Go can fire exist here: OnCast mirrors
 // Spell::CallScriptOnCastHandlers (Spell.cpp:3432, :7951), fired once
 // per cast after target selection and before SendSpellGo, with args
-// (event, spell); OnHit mirrors the CallScriptOnHitHandlers arm of
-// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2377), fired once
-// per unit hit target before damage, with args (event, spell,
-// hitTarget); AfterHit mirrors CallScriptAfterHitHandlers (Spell.cpp:
+// (event, spell); OnHit mirrors the CallScriptOnHitHandlers arm
+// (Spell.cpp:2377, in Spell::TargetInfo::PreprocessTarget, before the
+// effect loop deals damage in C++), fired once per unit hit target,
+// with args (event, spell, hitTarget). The Go twins fire AFTER the
+// damage arms (creature boss_ai.go DoDamageAndTriggers twin, player
+// finishSpellCast/direct paths), so a Lua OnHit handler must never
+// depend on pre-damage state: the damage-rewrite legs ride the
+// pre-damage spellScriptOnHitDamage table and the lethal-latch legs
+// ride spellScriptOnHitLatch (spell_onhit.go) instead — GetHitDamage()
+// still reads the pre-effect seed at OnHit, matching C++. AfterHit
+// mirrors CallScriptAfterHitHandlers (Spell.cpp:
 // 2659), fired once per unit hit target after the per-hit trigger
 // consumer, with the same args. OnEffectHit mirrors
 // CallScriptEffectHandlers in the SPELL_EFFECT_HANDLE_HIT mode
