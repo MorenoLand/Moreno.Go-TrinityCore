@@ -50,6 +50,8 @@
 -- (:266/:598-600); the old "no-timer-bridge" claim for this arm
 -- was stale doctrine (maiden CreateLuaEvent convention).
 -- Talk(EMOTE_UNSTABLE_EXPERIMENT 5) rides EVENT_UNSTABLE_EXPERIMENT
+-- (:612-615) — PORTED 2026-11-09 (unstableExperimentTick + ev5
+-- RegisterSpellEvent handler below, dormant until Spell.dbc ships).
 -- (:612-615) — OUT: P1&&P2-gated, cancelled at the P2->P3
 -- transition (:531) — phase machine (gothik precedent). Talk(
 -- EMOTE_MALLEABLE_GOO 9) ×2 rides EVENT_MALLEABLE_GOO (:630-650)
@@ -142,10 +144,11 @@
 -- per-hook verdicts from the tick-496 triage (unstable-experiment
 -- ev5, volatile-ooze AI, slime-puddle / clear-aura-effect-value /
 -- ooze-eruption-searcher / stinky-precious-decimate candidates) are
--- recorded in the checkpoint — the gate checks (ev5 fire for a
--- self-cast SCRIPT_EFFECT spell, 70351 default-case double-fire,
--- ev14/ev15 for non-boss creatures) still need running before they
--- land.
+-- recorded in the checkpoint — the unstable-experiment ev5 gate check
+-- PASSED tick 497 (boss_ai.go:3417 fire site, no 70351 default case,
+-- GetEffectValue/GetCreaturesInGrid twins live) and the chain is
+-- ported below; the ev14/ev15 gate check for non-boss creatures
+-- (volatile-ooze AI) still needs running before it lands.
 -- DOCUMENTED-ENTRY EVIDENCE (not registered): icecrown_citadel.h —
 -- NPC_VOLATILE_OOZE = 37697 (line 238); NPC_GAS_CLOUD = 37562
 -- (line 237); instance_icecrown_citadel.cpp OnCreatureCreate binds
@@ -177,6 +180,7 @@ local SAY_AGGRO = 4
 local SAY_KILL = 11
 local SAY_DEATH = 13
 local SAY_BERSERK = 12
+local EMOTE_UNSTABLE_EXPERIMENT = 5 -- boss_professor_putricide.cpp:47
 
 local SPELL_OOZE_TANK_PROTECTION = 71770
 local SPELL_MUTATED_PLAGUE_CLEAR = 72618
@@ -231,6 +235,21 @@ local function cancelTimers(guid)
     end
 end
 
+local function cancelTimer(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
+-- Per-GUID experiment stage (C++ _experimentState, DATA_EXPERIMENT_STAGE
+-- = 1, :172/:546/:561-562): 0 = OOZE, 1 = GAS; Reset sets OOZE
+-- (:241), each Unstable Experiment cast toggles it before selecting
+-- the target (:971-972). Lua-local — creature:GetData is the
+-- per-motion latch, not the boss-AI data store.
+local experimentStage = {}
+
 local function schedule(guid, key, delay, fn)
     local per = timers[guid]
     if not per then
@@ -284,6 +303,23 @@ local function slimePuddleTick(creature, guid)
     end)
 end
 
+-- C++ EVENT_UNSTABLE_EXPERIMENT (:612-615): Talk(EMOTE_UNSTABLE_
+-- EXPERIMENT 5) + DoCast(me, SPELL_UNSTABLE_EXPERIMENT 70351)
+-- non-triggered, re-arm {35s,40s}; init {30s,35s} at engage (:268);
+-- cancelled on entering phase 3 (:531, in putricideDoAction below).
+-- The 70351 payload rides the ev5 RegisterSpellEvent handler below.
+local function unstableExperimentTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "unstable", 500, function() unstableExperimentTick(creature, guid) end)
+        return
+    end
+    creature:Talk(EMOTE_UNSTABLE_EXPERIMENT)
+    creature:CastSpell(creature, SPELL_UNSTABLE_EXPERIMENT)
+    schedule(guid, "unstable", math.random(35000, 40000), function()
+        unstableExperimentTick(creature, guid)
+    end)
+end
+
 -- C++ EVENT_BERSERK: 10min single-fire, all phases — Talk(SAY_BERSERK) +
 -- DoCast(me, SPELL_BERSERK2) non-triggered (:266/:598-600).
 local function onBerserk(creature, guid)
@@ -318,6 +354,8 @@ local function putricideJustEngagedWith(event, creature, target)
     schedule(guid, "berserk", 600000, function() onBerserk(creature, guid) end)
     -- C++ :267 — events.ScheduleEvent(EVENT_SLIME_PUDDLE, 10s).
     schedule(guid, "slimepuddle", 10000, function() slimePuddleTick(creature, guid) end)
+    -- C++ :268 — events.ScheduleEvent(EVENT_UNSTABLE_EXPERIMENT, 30s, 35s).
+    schedule(guid, "unstable", math.random(30000, 35000), function() unstableExperimentTick(creature, guid) end)
 end
 
 -- C++ Reset/_Reset() timer machinery — cancel/re-arm on combat
@@ -346,9 +384,9 @@ end
 -- C++ Reset :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT, true) and ExtraEffect :1382 set it false:
 -- achievement criteria, no achievement bridge (the lich-king no-achievement-criteria-bridge precedent).
 -- DATA_EXPERIMENT_STAGE (:971-972) toggles inside
--- spell_putricide_unstable_experiment — NOT yet ported (consts staged
--- above; gate check pending: ev5 fire for the self-cast SCRIPT_EFFECT
--- + 70351 default case, tick-496 triage). No blanket
+-- spell_putricide_unstable_experiment — PORTED 2026-11-09 (ev5
+-- RegisterSpellEvent handler below; stage in the Lua-local
+-- experimentStage table, Reset to OOZE). No blanket
 -- no-SpellScript-bridge queue claim (RegisterSpellEvent exists).
 local function putricideReset(event, creature)
     -- C++ Reset :234-235 — instance->SetBossState(
@@ -361,6 +399,7 @@ local function putricideReset(event, creature)
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_NOT_STARTED)
     cancelTimers(creature:GetGUID())
     phase[creature:GetGUID()] = 1 -- C++ :240 SetPhase(PHASE_COMBAT_1)
+    experimentStage[creature:GetGUID()] = nil -- C++ :241 _experimentState = EXPERIMENT_STATE_OOZE (0)
     -- C++ boss_professor_putricide.cpp:242: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset: flip follows events.Reset).
     creature:SetReactState(1) -- REACT_DEFENSIVE
@@ -510,6 +549,12 @@ local function putricideDoAction(event, creature, action)
     if action ~= ACTION_CHANGE_PHASE then
         return
     end
+    -- C++ :531 — entering PHASE_COMBAT_3 cancels EVENT_UNSTABLE_
+    -- EXPERIMENT; the latch flips phase[guid] to 3 before dispatching
+    -- this DoAction, so the gate reads the new phase.
+    if (phase[creature:GetGUID()] or 1) == 3 then
+        cancelTimer(creature:GetGUID(), "unstable")
+    end
     if not creature:IsHeroic() then
         return
     end
@@ -543,3 +588,59 @@ RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 23, putricideReset)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 24, putricideReachHome)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 19, putricideJustSummoned)
 RegisterCreatureEvent(ENTRY_PROFESSOR_PUTRICIDE, 38, putricideDoAction)
+
+-- C++ spell_putricide_unstable_experiment::HandleScript (:963-988,
+-- OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT): the stage
+-- toggles BEFORE selection (old stage picks the target and the effect
+-- value); stage 0 picks the first stalker with a neighbour within
+-- 10yd, stage 1 the first singleton — "2 of them are spawned at green
+-- place" (:977); no match leaves the LAST stalker in the list as the
+-- target; empty list leaves no target. The cast is
+-- caster:CastSpell(target, Effects[stage].CalcValue(), true) —
+-- spell:GetEffectValue(stage) is the CalcValue twin (lua_spell.go),
+-- 0 until Spell.dbc ships, so the leg is dormant until then.
+-- Gate check PASSED this tick: ev5 (SpellEventOnEffectHitTarget)
+-- fires from the creature cast path (boss_ai.go:3417/3420, per
+-- (effect, live hit target), caster-targeted effect takes a full
+-- share); the effectIndex == 0 gate is load-bearing — Go fires once
+-- per non-zero effect, C++ registers EFFECT_0 only, so without it the
+-- stage would toggle twice per cast. No 70351 case exists in
+-- creatureEffectScriptEffect (boss_ai.go:7642), so the Go SCRIPT_EFFECT
+-- default is a no-op and there is no double-fire. GetCreaturesInGrid
+-- is the GetCreatureListWithEntryInGrid twin (lua_creature_events.go,
+-- includes self, GUID-sorted — the C++ grid-visit order is
+-- unspecified, so the pick among several matching stalkers may differ
+-- from C++; the stage/neighbour rule itself is exact).
+local function unstableExperimentScript(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local guid = caster:GetGUID()
+    local stage = experimentStage[guid] or 0
+    experimentStage[guid] = 1 - stage
+    local stalkers = caster:GetCreaturesInGrid(NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER, 200)
+    if #stalkers == 0 then
+        return
+    end
+    local target = nil
+    for _, stalker in ipairs(stalkers) do
+        target = stalker
+        local near = stalker:GetCreaturesInGrid(NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER, 10)
+        if (stage == 0 and #near > 1) or (stage == 1 and #near == 1) then
+            break
+        end
+    end
+    if target == nil then
+        return
+    end
+    local value = spell:GetEffectValue(stage)
+    if value <= 0 then
+        return
+    end
+    caster:CastSpell(target, value, true)
+end
+RegisterSpellEvent(SPELL_UNSTABLE_EXPERIMENT, 5, unstableExperimentScript)
