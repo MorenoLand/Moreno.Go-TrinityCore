@@ -71,25 +71,26 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- EVENT_STAMPEDE's rhino-spirit summon leg (JustSummoned
 -- NPC_RHINO_SPIRIT 29791 -> Stampede Spirit 55221/55219 self-casts +
--- Stampede Spirit Charge 59823 on a random target, :101-:109) — the
--- cast of 55218 itself is ported; the summon has no bridge (no
--- SPELL_EFFECT_SUMMON delivery on creature casts — eregos precedent).
+-- Stampede Spirit Charge 59823 on a random target, :101-:109) —
+-- PORTED below (galDarahJustSummoned, ev19; dormant until Spell.dbc
+-- ships, see the handler note). The cast of 55218 itself is ported.
 -- spell_gal_darah_impaling_charge (SpellScript 54956/59827: charge hit ->
 -- target casts Impaling Charge Control Vehicle 54958 on the boss +
 -- caster AI()->SetGUID(target, DATA_SHARE_THE_LOVE)) — the SetGUID leg
 -- is PORTED tick 417 via event 15 (galDarahSpellHitTarget below): the
 -- charge landing on a target records the target GUID in the per-GUID
 -- impaled set and writes the distinct count into the boss motion's
--- SetData store (the C++ _impaledPlayers set, boss_gal_darah.cpp:147-160).
+-- SetData store (the C++ _impaledPlayers set, boss_gal_darah.cpp:147-160),
+-- and Talks EMOTE_IMPALE (6) with the target on every hit (this tick —
+-- the Talk bridge takes a target, lua_creature_events.go:1129).
 -- No SpellScript binding is needed — ev15 is the SpellHitTarget twin
 -- (boss_ai.go fireCreatureSpellHitTarget; sindragosa precedent). The
 -- 54958 control-vehicle cast itself stays out (no vehicle-possess
 -- bridge); the cast of 54956 itself is ported.
 -- spell_gal_darah_stampede_charge (SpellScript 55220/59823: rhino spirit
--- despawns 1s after its charge hits) — no SpellScript binding bridge
--- (standing; the old "no despawn bridge" parenthetical was stale —
--- creature:Despawn() is bridged, lua_creature_events.go:214) —
--- documented-only.
+-- despawns 1s after its charge hits) — PORTED below
+-- (stampedeChargeHit, ev5 effectIndex == 1; dormant until Spell.dbc
+-- ships, see the handler note).
 -- spell_gal_darah_clear_puncture (SpellScript 60022: remove Puncture
 -- 55276 / heroic 59826) — PORTED engine-side in creatureEffectScriptEffect
 -- (boss_ai.go); the JustDied cast of 60022 itself was already ported.
@@ -123,6 +124,7 @@ local SAY_DEATH = 2
 local SAY_SUMMON_RHINO = 3
 local SAY_TRANSFORM_1 = 4
 local SAY_TRANSFORM_2 = 5
+local EMOTE_IMPALE = 6
 
 local SPELL_IMPALING_CHARGE = 54956
 local H_SPELL_IMPALING_CHARGE = 59827 -- boss_gal_darah.cpp:247
@@ -135,6 +137,12 @@ local SPELL_HEARTH_BEAM_VISUAL = 54988
 local SPELL_TRANSFORM_RHINO = 55297
 local SPELL_TRANSFORM_BACK = 55299
 local SPELL_CLEAR_PUNCTURE = 60022
+local SPELL_STAMPEDE_SPIRIT = 55221
+local SPELL_STAMPEDE_SPIRIT_2 = 55219
+local SPELL_STAMPEDE_SPIRIT_CHARGE = 59823
+local SPELL_STAMPEDE_CHARGE = 55220 -- normal-mode stampede charge
+
+local NPC_RHINO_SPIRIT = 29791 -- gundrak.h NPC_RHINO_SPIRIT
 
 local PHASE_TROLL = 1
 local PHASE_RHINO = 2
@@ -484,6 +492,12 @@ local function galDarahSpellHitTarget(event, creature, target, spellId)
     if target == nil then
         return
     end
+    -- C++ SetGUID (boss_gal_darah.cpp:147-160) Talks EMOTE_IMPALE (6)
+    -- with the target on EVERY charge hit, including a repeat impale
+    -- of the same player — the Talk is unconditional in C++, so it
+    -- sits outside the dedupe below. Bridge: creature:Talk(id, target),
+    -- lua_creature_events.go:1129.
+    creature:Talk(EMOTE_IMPALE, target)
     local guid = creature:GetGUID()
     local set = impaledPlayers[guid]
     if set == nil then
@@ -499,10 +513,73 @@ local function galDarahSpellHitTarget(event, creature, target, spellId)
     end
 end
 
+-- C++ SelectTarget(Random, 0) (boss_gal_darah.cpp:107): threat-list
+-- draw with no range and no player-only filter (DefaultTargetSelector,
+-- UnitAI.h:59 — dist 0 ignored, playerOnly false); the alive filter
+-- is the in-tree GetAITargets idiom (impaling-charge arm above).
+local function randomThreatTarget(creature)
+    local candidates = {}
+    for _, tgt in ipairs(creature:GetAITargets()) do
+        if not tgt:IsDead() then
+            candidates[#candidates + 1] = tgt
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ JustSummoned (boss_gal_darah.cpp:101-109): a rhino spirit
+-- (NPC_RHINO_SPIRIT 29791) self-casts Stampede Spirit 55221 + 55219
+-- triggered, then charges a random threat target with 59823
+-- non-triggered. DORMANT until Spell.dbc ships: the spirit arrives
+-- via the SPELL_EFFECT_SUMMON effect of Stampede 55218, delivered
+-- for creature casters by creatureEffectSummonType (boss_ai.go:3451,
+-- spellKnown-gated), which fires ev19 on the summoner through
+-- summonTempCreature (lua_creature_events.go:190) — the old "no
+-- SPELL_EFFECT_SUMMON delivery on creature casts" header claim is
+-- stale.
+local function galDarahJustSummoned(event, creature, summon)
+    if summon == nil or summon:GetEntry() ~= NPC_RHINO_SPIRIT then
+        return
+    end
+    summon:CastSpell(summon, SPELL_STAMPEDE_SPIRIT, true)
+    summon:CastSpell(summon, SPELL_STAMPEDE_SPIRIT_2, true)
+    local target = randomThreatTarget(creature)
+    if target then
+        summon:CastSpell(target, SPELL_STAMPEDE_SPIRIT_CHARGE)
+    end
+end
+
+-- C++ spell_gal_darah_stampede_charge::OnHit (boss_gal_darah.cpp:291-298):
+-- the rhino spirit despawns 1s after its charge (55220 / 59823) hits —
+-- OnEffectHitTarget EFFECT_1 SPELL_EFFECT_SCHOOL_DAMAGE. ev5 fires
+-- once per (effect, hit target) from the creature cast path
+-- (boss_ai.go:3417), gated here on effectIndex == 1; the caster is
+-- the spirit (spell:GetCaster, lua_spell.go:478) and
+-- DespawnOrUnsummon(1000) is the 1s delay twin
+-- (lua_creature_events.go:6637). DORMANT until Spell.dbc ships
+-- (spellKnown gate on the charge spells).
+local function stampedeChargeHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:DespawnOrUnsummon(1000)
+end
+
+RegisterSpellEvent(SPELL_STAMPEDE_CHARGE, 5, stampedeChargeHit)
+RegisterSpellEvent(SPELL_STAMPEDE_SPIRIT_CHARGE, 5, stampedeChargeHit)
+
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 1, galDarahEnterCombat)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 2, galDarahLeaveCombat)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 3, galDarahTargetDied)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 4, galDarahDied)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 14, galDarahSpellHit)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 15, galDarahSpellHitTarget)
+RegisterCreatureEvent(ENTRY_GAL_DARAH, 19, galDarahJustSummoned)
 RegisterCreatureEvent(ENTRY_GAL_DARAH, 23, galDarahReset)

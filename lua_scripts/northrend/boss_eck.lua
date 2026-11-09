@@ -38,10 +38,11 @@
 -- UpdateAI arm so it stays ungated per C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- The BossAI ctor Talk(EMOTE_SPAWN 0) fires at AI construction
--- (first grid spawn); the only OnSpawn hook on the Go Lua surface
--- (event 5) fires on the respawn path only (kill.go
--- fireCreatureSpawned — phase_hunter precedent), so wiring it
--- there would miss fresh spawns — not C++-exact, documented-only.
+-- (first grid spawn) — PORTED below (eckSpawned, event 5): event 5
+-- fires on the initial-spawn funnel too, not only on respawn
+-- (creaturemotion.go:1262, checkpoint 2026-10-19 — the old
+-- "respawn-path only" claim is stale), so the ctor Talk rides it
+-- and fires on every (re)spawn like the C++ ctor.
 -- DamageTaken: HealthBelowPctDamaged(20) -> RescheduleEvent
 -- (EVENT_BERSERK, 1s) + _berserk latch (PORTED — the old
 -- "no health-pct bridge" note was stale: event 9 carries damage and
@@ -53,6 +54,8 @@
 -- (C++ !_berserk).
 
 local ENTRY_ECK_THE_FEROCIOUS = 29932
+
+local EMOTE_SPAWN = 0
 
 local SPELL_ECK_BITE    = 55813
 local SPELL_ECK_SPIT    = 55814
@@ -256,8 +259,18 @@ local function eckReset(event, creature)
     cancelTimers(creature:GetGUID())
 end
 
+-- C++ boss_eckAI ctor (boss_eck.cpp:61-65): Talk(EMOTE_SPAWN 0) at AI
+-- construction. Event 5 fires on the initial-spawn funnel too
+-- (creaturemotion.go:1262), so the ctor Talk rides it; it fires on
+-- every (re)spawn like the C++ ctor. Runs after the ev23 pre-fire,
+-- which only cancels timers — the Talk is unaffected.
+local function eckSpawned(event, creature)
+    creature:Talk(EMOTE_SPAWN)
+end
+
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 1, eckEnterCombat)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 2, eckLeaveCombat)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 4, eckDied)
+RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 5, eckSpawned)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 9, eckDamageTaken)
 RegisterCreatureEvent(ENTRY_ECK_THE_FEROCIOUS, 23, eckReset)

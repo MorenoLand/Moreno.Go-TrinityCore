@@ -17531,22 +17531,22 @@ func init() {
 	// RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName binding
 	// is instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arms in lua_scripts/northrend/boss_gal_darah.lua:
-	// JustEngagedWith Talk(SAY_AGGRO 0); KilledUnit Talk(SAY_SLAY 1)
-	// player-gated (event 3 — nalorakk precedent); JustDied
-	// Talk(SAY_DEATH 2) + DoCastSelf(Clear Puncture 60022, triggered).
-	// Cast-state gate PORTED: no UpdateAI override, so BossAI::UpdateAI
-	// base gates apply — all 7 timer ticks defer 500ms while casting.
-	// The whole combat rotation is phase-gated through
-	// events.SetPhase/IsInPhase (no phase bridge — moorabi precedent)
-	// and the phase flips are driven by unbridged arms, so
-	// EVENT_PUNCTURE / EVENT_WHIRLING_SLASH / EVENT_ENRAGE /
-	// EVENT_IMPALING_CHARGE / EVENT_TRANSFORM are documented in
-	// the lua file, not wired (STOMP/STAMPEDE ported as self-cast;
-	// plus: no random-target SelectTarget
-	// bridge, no SpellScript binding bridge for the three SpellScripts,
-	// no cross-AI SetGUID/GetData bridges, no aura-removal bridge,
-	// no despawn bridge; achievement_share_the_love has no
-	// achievement-criteria bridge — snakes precedent).
+	// JustEngagedWith Talk(SAY_AGGRO 0) + SetPhase(PHASE_TROLL);
+	// KilledUnit Talk(SAY_SLAY 1) player-gated (event 3 — nalorakk
+	// precedent); JustDied Talk(SAY_DEATH 2) + DoCastSelf(Clear
+	// Puncture 60022, triggered); Reset DoCastAOE(Hearth Beam Visual
+	// 54988, triggered); the full phase machine (troll stampede /
+	// whirling, rhino stomp / impaling / puncture / enrage, transform
+	// flip 5s after the second whirling / impaling arm, Lua-local
+	// phase + counter); SpellHit(55299) -> RemoveAura(55297);
+	// impaling-charge ev15 SetGUID leg + Talk(EMOTE_IMPALE 6, target)
+	// on every hit; JustSummoned rhino-spirit leg (ev19, dormant
+	// until Spell.dbc ships); stampede-charge spirit despawn
+	// (ev5 effectIndex 1, dormant). Cast-state gates PORTED (no
+	// UpdateAI override — all 7 timer ticks defer 500ms while
+	// casting). Stay-outs: 54958 control-vehicle cast (no
+	// vehicle-possess bridge); summons.DespawnAll (no summon
+	// tracking in Lua).
 	RegisterLuaBoss("boss_gal_darah", 29306)
 
 	// boss_eck: Gundrak dungeon boss script, entry 29932
@@ -17554,17 +17554,17 @@ func init() {
 	// RegisterCreatureAIWithFactory(GetGundrakAI) ScriptName binding
 	// is instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arms in lua_scripts/northrend/boss_eck.lua:
+	// ctor Talk(EMOTE_SPAWN 0) via event 5 (fires on the
+	// initial-spawn funnel too, creaturemotion.go:1262);
 	// JustEngagedWith-scheduled EVENT_BITE (DoCastVictim 55813, 5s
 	// init, 8-12s repeat), EVENT_SPIT (DoCastVictim 55814, 10s init,
-	// 6-14s repeat), EVENT_BERSERK (DoCastSelf 55816, 60-90s init,
-	// single fire). Cast-state gate PORTED: no UpdateAI override, so
-	// BossAI::UpdateAI base gates apply — all 4 timer ticks defer 500ms
-	// while casting. Documented in the lua file, not wired: the ctor
-	// Talk(EMOTE_SPAWN 0) (no faithful Lua trigger — event 5 fires
-	// respawn-path only, phase_hunter precedent), the DamageTaken
-	// HealthBelowPctDamaged(20) early-berserk leg (no health-pct
-	// bridge — doomwalker precedent), and EVENT_SPRING (random-target
-	// SelectTarget bridge absent — cairne/kazzak precedent).
+	// 6-14s repeat), EVENT_SPRING (random non-victim threat player
+	// in 35y -> RAND(55815, 55837), 8s init, 5-10s repeat),
+	// EVENT_BERSERK (DoCastSelf 55816, 60-90s init, single fire);
+	// DamageTaken HealthBelowPctDamaged(20) early-berserk leg
+	// (event 9, RescheduleEvent 1s + latch). Cast-state gates
+	// PORTED: no UpdateAI override, so BossAI::UpdateAI base gates
+	// apply — all 4 timer ticks defer 500ms while casting.
 	RegisterLuaBoss("boss_eck", 29932)
 
 	// boss_elder_nadox: Ahn'kahet dungeon boss script, entry 29309
