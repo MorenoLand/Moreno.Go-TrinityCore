@@ -160,7 +160,7 @@ local function onFrenzy(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "sandbreath", math.random(15000, 30000), function()
@@ -175,11 +175,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ SetData(TYPE_MEDIVH, DONE) quest-credit arm
@@ -205,7 +205,7 @@ local function grantMedivhDoneCredit(mapObj)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied instance legs (boss_aeonus.cpp:93-94):
     -- SetData(TYPE_RIFT, DONE) + SetData(TYPE_MEDIVH, DONE) (the

@@ -126,7 +126,7 @@ local function onCorruptForces(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "wrath", 8000, function()
         onWrath(creature, guid)
@@ -140,11 +140,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_celebras_the_cursed.cpp:71-74): the whole body is
@@ -155,7 +155,7 @@ end
 local function onDied(event, creature, killer)
     creature:SummonCreature(13716, creature:GetX(), creature:GetY(),
         creature:GetZ(), 0, 2, 600000)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

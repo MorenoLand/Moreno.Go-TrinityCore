@@ -156,7 +156,7 @@ local function onSpawnHatchlings(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ has no JustEngagedWith override (boss_fankriss.cpp:73-77 is
     -- Reset only) — base BossAI::JustEngagedWith writes
@@ -173,11 +173,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset _Reset() leg (boss_fankriss.cpp:73-77): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
     if creature:IsAlive() and creature:GetBossState(DATA_FRANKRIS) ~= BOSS_STATE_DONE then
@@ -191,7 +191,7 @@ end
 -- header claim is retired this run.
 local function onDied(event, creature, killer)
     creature:SetBossState(DATA_FRANKRIS, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

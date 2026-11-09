@@ -208,7 +208,7 @@ local function onSpellHitTarget(event, creature, target, spellId)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (boss_infinite_corruptor.cpp:78-81): Talk,
@@ -227,11 +227,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
@@ -253,7 +253,7 @@ end
 -- FindNearestCreature skips dead creatures, so a dead guardian/rift
 -- reads as absent, like C++'s live-pointer checks.
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_INFINITE_CORRUPTOR, 3) -- DONE
     creature:UpdateWorldState(WORLDSTATE_TIME_GUARDIAN_SHOW, 0)

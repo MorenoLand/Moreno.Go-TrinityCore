@@ -199,7 +199,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_AMNENNAR_THE_COLD_BRINGER, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_amnennar_the_coldbringer.cpp:71-73)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "wrath", 8000, function()
         onAmnennarsWrath(creature, guid)
@@ -218,11 +218,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_amnennar_the_coldbringer.cpp:86-88):
     -- _JustDied() only — BossAI::_JustDied
     -- (ScriptedCreature.cpp:513-520) writes SetBossState
@@ -237,7 +237,7 @@ end
 -- != DONE-gated (Go fires ev23 on the death path before ev4,
 -- moroes/algalon precedent, so both gates are live here).
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(DATA_AMNENNAR_THE_COLD_BRINGER) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_AMNENNAR_THE_COLD_BRINGER, BOSS_STATE_NOT_STARTED)
     end

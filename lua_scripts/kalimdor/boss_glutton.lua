@@ -114,7 +114,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_GLUTTON, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_glutton.cpp:56-58)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     local st = { hp50 = false, hp15 = false }
@@ -124,11 +124,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_glutton.cpp:67-69): _JustDied() only —
     -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
     -- SetBossState(DATA_GLUTTON, DONE).
@@ -142,7 +142,7 @@ end
 -- != DONE-gated (Go fires ev23 on the death path before ev4,
 -- moroes/algalon precedent, so both gates are live here).
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() and creature:GetBossState(DATA_GLUTTON) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_GLUTTON, BOSS_STATE_NOT_STARTED)
     end
