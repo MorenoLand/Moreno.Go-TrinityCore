@@ -175,7 +175,7 @@ end)
 local cavernTimers = {}
 
 local function scheduleIcicleTick(instanceData, trigger, delay)
-    local guid = trigger:GetGUID()
+    local guid = trigger:GetGUIDLow()
     if cavernTimers[guid] then
         RemoveEventById(cavernTimers[guid])
     end

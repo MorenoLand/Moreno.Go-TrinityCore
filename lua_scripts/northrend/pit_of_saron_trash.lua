@@ -152,7 +152,7 @@ local function leapTick(creature, guid)
 end
 
 local function trashEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local entry = creature:GetEntry()
     if entry == ENTRY_FLAMEBEARER then
@@ -174,7 +174,7 @@ local function trashEnterCombat(event, creature, target)
 end
 
 local function trashCancelCombatTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local TRASH_ENTRIES = {

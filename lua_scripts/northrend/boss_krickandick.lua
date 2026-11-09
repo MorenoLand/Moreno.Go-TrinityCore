@@ -546,7 +546,7 @@ end
 -- PORTED below — cross-creature target-cast rides the barrage precedent
 -- (obtained-object CastSpell) plus the verified SelectTarget picks.
 local function ickEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     -- BossAI::JustEngagedWith (:163-175, base-first) — SetBossState
     -- (DATA_ICK 1, IN_PROGRESS) via creature:SetBossState, then
@@ -567,7 +567,7 @@ end
 
 -- Shared timer wipe for events 2/23 (the svala / yogg_saron convention).
 local function ickCancelCombat(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 -- C++ boss_ick JustDied (:176-189) + boss_krick DoAction(ACTION_OUTRO)
@@ -591,7 +591,7 @@ end
 -- ports on event 28 (krickMovementInform below); the EVENT_OUTRO_1..13
 -- chain ports in advanceOutro below.
 local function ickDied(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     creature:SetBossState(DATA_ICK, 3)
     local krick = creature:FindNearestCreature(ENTRY_KRICK, 40.0)
     if krick == nil then
@@ -663,7 +663,7 @@ local function findTargetByGuid(creature, guid)
 end
 
 local function ickDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_STORE_OLD_TARGET then
         local victim = creature:GetVictim()
         if victim then
@@ -696,7 +696,7 @@ RegisterCreatureEvent(ENTRY_ICK, 38, ickDoAction)
 -- after the ickThreatStore local, so the clear binds the module-local
 -- table and not a nil global (the malown forward-reference rule).
 local function ickReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if creature:GetBossState(DATA_ICK) ~= 3 then
         creature:SetBossState(DATA_ICK, 0)
     end
@@ -715,7 +715,7 @@ RegisterCreatureEvent(ENTRY_ICK, 23, ickReset)
 -- advanceOutro timers (the C++ _events.Reset() twin) and drops the
 -- phase flag, so a later MovementInform cannot resume a stale chain.
 local function krickReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     outroState[guid] = nil
     krickPhaseOutro[guid] = nil
@@ -920,7 +920,7 @@ local function krickMovementInform(_, creature, moveType, id)
     if moveType ~= 8 or id ~= POINT_KRICK_INTRO then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:Talk(SAY_KRICK_OUTRO_1)
     krickPhaseOutro[guid] = true
     schedule(guid, "outro", 1000, function() advanceOutro(creature, guid, 1) end)

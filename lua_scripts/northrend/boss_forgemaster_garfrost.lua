@@ -398,7 +398,7 @@ end
 -- untouched. Then the C++-exact 5000ms MovementInform ->
 -- EVENT_RESUME_ATTACK delay (:171).
 local function garfrostMovementInform(event, creature, moveType, id)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = garfrostState[guid]
     if not st then
         return
@@ -461,7 +461,7 @@ end
 -- CallForHelp(70.0f) (:112, bridged — lua_creature_events.go:1781);
 -- the EVENT_THROW_SARONITE seed at 7000ms (:113).
 local function garfrostEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     -- BossAI::JustEngagedWith (:107-115, base-first) — SetBossState
     -- (DATA_GARFROST 0, IN_PROGRESS) via creature:SetBossState, then
@@ -485,7 +485,7 @@ end
 -- exact boundary. The first leg returns after flipping (:141), so one
 -- hit from >66% to <=33% flips only to phase 2 — replicated here.
 local function garfrostDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = garfrostState[guid]
     if not st then
         return
@@ -529,7 +529,7 @@ end
 -- GetCreature check. RemoveAllGameObjects() stays out (Go engine
 -- owns object cleanup).
 local function garfrostJustDied(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     creature:SetBossState(DATA_GARFROST, 3)
     local mapObj = creature:GetMap()
     local data = nil
@@ -551,7 +551,7 @@ local function garfrostJustDied(event, creature)
 end
 
 local function garfrostLeaveCombat(event, creature)
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:99-105): _Reset() first — SetBossState(DATA_GARFROST 0,
@@ -564,7 +564,7 @@ local function garfrostReset(event, creature)
     if creature:GetBossState(DATA_GARFROST) ~= 3 then
         creature:SetBossState(DATA_GARFROST, 0)
     end
-    clearState(creature:GetGUID())
+    clearState(creature:GetGUIDLow())
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's peak before

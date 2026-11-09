@@ -419,7 +419,7 @@ local function markOfRimefangApply(event, aura, target)
         return
     end
     hoarfrostTarget = target
-    local guid = caster:GetGUID()
+    local guid = caster:GetGUIDLow()
     schedule(guid, "hoarfrost", 1000, function()
         local victim = hoarfrostTarget
         hoarfrostTarget = nil
@@ -469,7 +469,7 @@ local function tyrannusDoAction(event, creature, action)
     if action ~= ACTION_START_INTRO then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:Talk(SAY_TYRANNUS_INTRO_1)
     creature:SetBossState(DATA_TYRANNUS, 1) -- IN_PROGRESS (:217)
     schedule(guid, "intro2", 22000, function()
@@ -491,7 +491,7 @@ end
 -- The :250-252 EVENT_COMBAT_START seed legs land here — Eluna event 1
 -- fires at the same combat-start moment (DoZoneInCombat :249).
 local function tyrannusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     -- C++ :247 EVENT_COMBAT_START: me->SetReactState(REACT_AGGRESSIVE)
     -- (bridged, lua_creature_events.go:524); in C++ arm order it precedes
@@ -513,7 +513,7 @@ end
 
 -- Shared timer wipe for event 2 (the bronjahm convention).
 local function tyrannusCancelCombat(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (:150-162) + EnterEvadeMode (:178-186), routed through the
@@ -532,7 +532,7 @@ end
 -- despawnAtEvade).
 local function tyrannusReset(event, creature)
     if not creature:IsAlive() then
-        initState(creature:GetGUID())
+        initState(creature:GetGUIDLow())
         return
     end
     if creature:GetBossState(DATA_TYRANNUS) == 1 then
@@ -548,7 +548,7 @@ local function tyrannusReset(event, creature)
     elseif creature:GetBossState(DATA_TYRANNUS) ~= 3 then
         creature:SetBossState(DATA_TYRANNUS, 0) -- NOT_STARTED: Reset / spawn path
     end
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
 end
 
 -- C++ :193 JustDied: Talk(SAY_DEATH) FIRST (:194), then SetBossState
@@ -566,7 +566,7 @@ end
 -- ToTempSummon(), which is null for the static-spawn boss, so the leg
 -- is vacuous in the real instance.
 local function tyrannusJustDied(event, creature)
-    initState(creature:GetGUID())
+    initState(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_TYRANNUS, 3)
     local mapObj = creature:GetMap()
@@ -644,7 +644,7 @@ end
 -- — its only callers are tyrannus's EVENT_COMBAT_START (:244, the
 -- intro machine above) and JustDied (:204, above).
 local function rimefangDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_START_RIMEFANG then
         creature:DoZoneInCombat()
         schedule(guid, "movenext", 500, function() rimefangMoveNext(creature, guid) end)
@@ -658,13 +658,13 @@ end
 -- puts Rimefang in combat at the same moment.
 local function rimefangEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_scourgelord_tyrannus.cpp:350: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     schedule(guid, "icyblast", 15000, function() icyBlastTick(creature, guid) end)
 end
 
 local function rimefangCancelCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     initState(guid)
     rimefangWaypoint[guid] = nil -- C++ Initialize(): _currentWaypoint = 0 on Reset
     -- C++ boss_scourgelord_tyrannus.cpp:317-318: me->SetCanFly(true) then
