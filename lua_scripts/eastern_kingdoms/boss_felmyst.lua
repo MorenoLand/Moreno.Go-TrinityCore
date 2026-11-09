@@ -215,7 +215,7 @@ local function onEncapsulate(creature, guid)
 end
 
 local function onCombatStart(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, AURA_SUNWELL_RADIANCE, true)
     creature:CastSpell(creature, AURA_NOXIOUS_FUMES, true)
@@ -227,11 +227,11 @@ local function onCombatStart(event, creature)
 end
 
 local function onCombatEnd(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(YELL_DEATH)
 end
 

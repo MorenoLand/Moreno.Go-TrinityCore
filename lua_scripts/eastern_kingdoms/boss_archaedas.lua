@@ -190,7 +190,7 @@ local function onGroundTremor(creature, guid)
 end
 
 local function onArchaedasCombatStart(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ boss_archaedas.cpp:128: JustEngagedWith -> SetControlled(false,
     -- UNIT_STATE_ROOT), after the faction/flag legs (which stay out per
@@ -203,12 +203,12 @@ end
 -- UNIT_STATE_ROOT). Ev23 only: ev2/ev4 stay on onArchaedasCombatEnd
 -- (C++ JustDied never Resets, so a corpse must not re-root).
 local function onArchaedasReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetRooted(true)
 end
 
 local function onArchaedasCombatEnd(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onStoneKeeperDied(event, creature)

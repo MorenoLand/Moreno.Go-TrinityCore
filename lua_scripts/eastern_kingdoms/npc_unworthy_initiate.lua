@@ -174,7 +174,7 @@ local function onDeathCoil(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "icytouch", 1000, function() onIcyTouch(creature, guid) end)
     schedule(guid, "plaguestrike", 3000, function() onPlagueStrike(creature, guid) end)
@@ -189,11 +189,11 @@ local function onCombatEnd(_, creature)
     -- documented-only; see header) and before the KNEEL stand
     -- (unported, see header).
     creature:SetFlag(59, 0x100)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs(ENTRIES) do

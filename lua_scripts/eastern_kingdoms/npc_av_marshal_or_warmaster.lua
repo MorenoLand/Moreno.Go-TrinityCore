@@ -153,7 +153,7 @@ local function onEnrage(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "charge", {2000, 12000}, function() onCharge(creature, guid) end)
     schedule(guid, "cleave", {1000, 11000}, function() onCleave(creature, guid) end)
@@ -163,11 +163,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     onSpawnOrReset(_, creature)
 end
 

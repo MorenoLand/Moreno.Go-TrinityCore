@@ -189,7 +189,7 @@ local function onBerserk(creature, guid)
 end
 
 local function onCombatStart(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     enraged[guid] = nil
     creature:Talk(YELL_AGGRO)
@@ -200,13 +200,13 @@ local function onCombatStart(event, creature)
 end
 
 local function onCombatEnd(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     enraged[guid] = nil
 end
 
 local function onDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     enraged[guid] = nil
     creature:Talk(YELL_DEATH)

@@ -98,14 +98,14 @@ local function onKnockout(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "trample", 3000, function() onTrample(creature, guid) end)
     schedule(guid, "knockout", 12000, function() onKnockout(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: 30x SummonCreature(NPC_MINDLESS_UNDEAD,
@@ -137,7 +137,7 @@ local function nearestAlivePlayer(creature, maxDist)
 end
 
 local function onJustDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local target = nearestAlivePlayer(creature, 100)
     for _ = 1, 30 do
         local mob = creature:SummonCreature(NPC_MINDLESS_UNDEAD,

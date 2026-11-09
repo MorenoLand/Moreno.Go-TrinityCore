@@ -146,7 +146,7 @@ local function onRandomYell(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "whirlwind", {1000, 20000}, function() onWhirlwind(creature, guid) end)
@@ -157,7 +157,7 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onSpawn(_, creature)
@@ -165,7 +165,7 @@ local function onSpawn(_, creature)
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_DREKTHAR, 5, onSpawn)

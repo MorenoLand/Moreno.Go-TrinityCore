@@ -166,7 +166,7 @@ end
 -- first, gargolmar precedent); KillCount = 0 per engage (the
 -- C++ Initialize arm).
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     creature:Talk(YELL_AGGRO)
     corrupterState[guid] = {
@@ -193,7 +193,7 @@ local function onTargetDied(_, creature, victim)
     if not victim or victim:GetTypeId() ~= TYPEID_PLAYER then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = corrupterState[guid]
     if not st then
         return
@@ -210,7 +210,7 @@ end
 -- state drop is C++-exact. The C++ death path runs Reset too,
 -- so OnDied lands here as well (gargolmar / omen precedent).
 local function onReset(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(TWILIGHT_CORRUPTER_ENTRY, 1, onEnterCombat)

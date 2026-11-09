@@ -187,7 +187,7 @@ local function onRaiseDead(creature, guid)
 end
 
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowbolt", 5000, function() onShadowbolt(creature, guid) end)
     schedule(guid, "cleave", 8000, function() onCleave(creature, guid) end)
@@ -198,11 +198,11 @@ local function onEnterCombat(_, creature)
 end
 
 local function onCombatEnd(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_BARON, 1, onEnterCombat)

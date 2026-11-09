@@ -168,7 +168,7 @@ local function onQuestAccept(event, player, creature, quest)
     if quest.ID ~= QUEST_BLOODY_BREAKOUT then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "intro0", 500, function() onIntro0(creature, guid) end)
 end
@@ -177,7 +177,7 @@ local function onGossipHello(event, player, creature)
     -- chapter2.cpp:112-126 — the non-event branch returns false (the
     -- default menu loads); a nil return would veto it in Go
     -- (gossip.go:138-150), so the C++-false arm must return false here.
-    if not eventGossip[creature:GetGUID()] then
+    if not eventGossip[creature:GetGUIDLow()] then
         return false
     end
     player:GossipSendMenu(TEXT_ID_EVENT, creature)
@@ -196,7 +196,7 @@ local function onReset(_, creature)
                                -- bridge" header claim was stale —
                                -- creature:RemoveAllAuras() is bridged
                                -- (engine/world/lua_creature_events.go:164)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_KOLTIRA, 31, onQuestAccept)
