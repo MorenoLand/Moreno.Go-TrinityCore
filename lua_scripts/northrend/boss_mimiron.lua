@@ -43,10 +43,13 @@
 --     with the bridgeable legs ported per step (Talk legs, VX-001 summon
 --     + FREEZE_ANIM, ACU summon, SEAT_1/2 casts and DoAction relays via
 --     the Lua-kept summon refs, the DATA_VX_001 / DATA_AERIAL_COMMAND_UNIT
---     instance-GUID twins); DO_ACTIVATE_V0L7R0N_1 is the Talk leg only.
---     The receiver is dormant until the component-AI senders land
---     (MKII MovementInform :807/:817, VX-001 DamageTaken :960, ACU
---     MovementInform :1229, computer self-destruct :1453) -- the vezax
+--     instance-GUID twins); DO_ACTIVATE_V0L7R0N_1 is Talk + the MKII
+--     MoveTo P4_POS_1 leg (PORTED this tick, MoveTo twin). The receiver
+--     is live for DO_ACTIVATE_VX001 (MKII MovementInform :807, tick 561),
+--     DO_ACTIVATE_AERIAL (VX-001 DamageTaken :960, tick 561) and
+--     DO_ACTIVATE_V0L7R0N_1 (ACU MovementInform :1229, tick 561) and
+--     DO_ACTIVATE_V0L7R0N_2 (MKII MovementInform :817, this tick); the
+--     computer self-destruct :1453 sender stays out -- the vezax
 --     ANIMUS_DIE precedent.
 --   EVENT_OUTTRO_2 cache summon PORTED (tick 475): the GO entry rides the
 --     _fireFighter latch (now modeled) + IsHeroic RAID_MODE twin
@@ -169,6 +172,13 @@ local DO_ACTIVATE_HARD_MODE = 13
 -- boss_mimiron.cpp:327-340 (VX001SummonPos / ACUSummonPos).
 local VX001_SUMMON_POS = { 2744.431, 2569.385, 364.3968, 3.141593 }
 local ACU_SUMMON_POS = { 2744.650, 2569.460, 380.0, 3.141593 }
+
+-- boss_mimiron.cpp:319-323 Waypoints enum + :346/:349 VehicleRelocation
+-- (MoveTo twin ids): WP_MKII_P4_POS_1 = 2, WP_MKII_P4_POS_4 = 5.
+local WP_MKII_P4_POS_1 = 2
+local WP_MKII_P4_POS_4 = 5
+local MKII_P4_POS_1 = { 2765.945, 2571.095, 364.0636 }
+local MKII_P4_POS_4 = { 2761.215, 2568.875, 364.0636 }
 
 local SAY_V07TRON_DEATH = 13
 
@@ -508,11 +518,13 @@ local function aerialActivation1(creature, guid)
 end
 
 -- C++ DoAction DO_ACTIVATE_V0L7R0N_2 (:413-415) schedules
--- EVENT_VOL7RON_ACTIVATION_1 in 1s. Steps 1/2 (MKII SetFacingTo, VX-001
--- MOUNT_MKII on MKII) and step 3 (MKII MovePoint) stay out (vehicle-
--- mount choreography + MovePoint legs, no bridge); steps 4 (aerial
--- on the stored VX-001 ref) and 7 (DO_ASSEMBLED_COMBAT to MKII via the
--- instance GUID + the stored VX-001 / ACU refs) are ported.
+-- EVENT_VOL7RON_ACTIVATION_1 in 1s. Step 1 (MKII SetFacingTo PI) PORTED
+-- this tick (SetFacingTo bridged, instance-resolved MKII); step 2 stays
+-- out -- vx001 RemoveAurasDueToSpell(TORSO_DISABLED) has no bridge and
+-- the SPELL_MOUNT_MKII cast without the aura removal would fabricate;
+-- step 3 (MKII MovePoint P4_POS_4) PORTED this tick via the MoveTo twin;
+-- steps 4 (aerial on the stored VX-001 ref) and 7 (DO_ASSEMBLED_COMBAT
+-- to MKII via the instance GUID + the stored VX-001 / ACU refs) are ported.
 local function vol7ronActivation7(creature, guid)
     local st = bossState[guid]
     if not st then
@@ -564,6 +576,12 @@ local function vol7ronActivation4(creature, guid)
 end
 
 local function vol7ronActivation3(creature, guid)
+    -- C++ :611-614: MKII MovePoint to WP_MKII_P4_POS_4 via the MoveTo
+    -- twin (the P4_POS_4 arrival below schedules MOVE_POINT_5).
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if mkii then
+        mkii:MoveTo(WP_MKII_P4_POS_4, MKII_P4_POS_4[1], MKII_P4_POS_4[2], MKII_P4_POS_4[3])
+    end
     schedule(guid, "vol7ronact4", 5000, function()
         vol7ronActivation4(creature, guid)
     end)
@@ -576,16 +594,23 @@ local function vol7ronActivation2(creature, guid)
 end
 
 local function vol7ronActivation1(creature, guid)
+    -- C++ :595-598: MKII SetFacingTo(float(M_PI)).
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if mkii then
+        mkii:SetFacingTo(3.141593)
+    end
     schedule(guid, "vol7ronact2", 1000, function()
         vol7ronActivation2(creature, guid)
     end)
 end
 
--- C++ DoAction (:397-422, event 38): the phase-machine receiver. All five
--- senders live in the unported component AIs of this same file (MKII
--- MovementInform :807/:817, VX-001 DamageTaken :960, ACU MovementInform
--- :1229, computer self-destruct :1453), so the receiver is dormant until
--- those senders land -- the vezax ANIMUS_DIE precedent.
+-- C++ DoAction (:397-422, event 38): the phase-machine receiver. Four
+-- of the five senders are live now -- MKII MovementInform :807 (P1 idle
+-- arrival, tick 561) and :817 (P4_POS_3 arrival, this tick), VX-001
+-- DamageTaken :960 (tick 561), ACU MovementInform :1229 (tick 561) --
+-- so the receiver fires end-to-end except DO_ACTIVATE_HARD_MODE, whose
+-- sender is the computer self-destruct :1453, which stays out (no
+-- computer ref) -- the vezax ANIMUS_DIE precedent.
 local function mimironDoAction(event, creature, action)
     local guid = creature:GetGUIDLow()
     if action == DO_ACTIVATE_VX001 then
@@ -597,8 +622,14 @@ local function mimironDoAction(event, creature, action)
             aerialActivation1(creature, guid)
         end)
     elseif action == DO_ACTIVATE_V0L7R0N_1 then
+        -- C++ :407-411: Talk SAY_AERIAL_DEATH, then MKII MovePoint to
+        -- WP_MKII_P4_POS_1 via the MoveTo twin (the P4_POS_1 arrival
+        -- below schedules EVENT_MOVE_POINT_2).
         creature:Talk(SAY_AERIAL_DEATH)
-        -- MKII MovePoint leg stays out (no MovePoint bridge).
+        local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+        if mkii then
+            mkii:MoveTo(WP_MKII_P4_POS_1, MKII_P4_POS_1[1], MKII_P4_POS_1[2], MKII_P4_POS_1[3])
+        end
     elseif action == DO_ACTIVATE_V0L7R0N_2 then
         schedule(guid, "vol7ronact1", 1000, function()
             vol7ronActivation1(creature, guid)

@@ -35,10 +35,11 @@
 -- is the documented deviation), else CastStop + SELF_REPAIR 64383.
 -- RemoveAllAurasExceptType has NO bridge — leg skipped (auras persist;
 -- the component is passive/non-attackable at 1 HP).
--- MovementInform (:795-807) WP_MKII_P1_IDLE arrival PORTED tick 561:
--- SetFlag NOT_SELECTABLE, HALF_HEAL 64188, controller
--- DoAction(DO_ACTIVATE_VX001). The P4-position arrival legs (:808-822)
--- stay out — the V0L7R0N chain that drives them is a separate unit.
+-- MovementInform (:795-822) PORTED tick 561 (P1_IDLE) + this tick (P4):
+-- P1_IDLE arrival sets NOT_SELECTABLE, HALF_HEAL 64188, controller
+-- DoAction(DO_ACTIVATE_VX001); P4_POS_1/2/4 arrivals schedule the 1ms
+-- EVENT_MOVE_POINT_2/3/5 legs (MoveTo P4_POS_2/3/5); P4_POS_3 arrival
+-- sends controller DoAction(DO_ACTIVATE_V0L7R0N_2).
 -- The GetData/SetData
 -- setup-mine/bomb/rocket/firefighter latches ARE modeled below
 -- (tick 417): the ctor/Reset defaults + the proximity-mine
@@ -111,11 +112,23 @@ local NPC_AERIAL_COMMAND_UNIT = 33670
 local UNIT_STAND_STATE_DEAD = 7 -- UnitDefines.h:40
 local MKII_SEAT_CANNON = 3 -- boss_mimiron.cpp:329
 local WP_MKII_P1_IDLE = 1 -- boss_mimiron.cpp:318
+local WP_MKII_P4_POS_1 = 2 -- boss_mimiron.cpp:319
+local WP_MKII_P4_POS_2 = 3
+local WP_MKII_P4_POS_3 = 4
+local WP_MKII_P4_POS_4 = 5
+local WP_MKII_P4_POS_5 = 6
 local MOVE_RUN = 1
 local DO_ACTIVATE_VX001 = 2 -- boss_mimiron.cpp:283
+local DO_ACTIVATE_V0L7R0N_2 = 11 -- boss_mimiron.cpp:297
 local POINT_MOTION_TYPE = 8
 -- VehicleRelocation[WP_MKII_P1_IDLE], boss_mimiron.cpp:345.
 local MKII_P1_IDLE_POS = { 2792.070, 2596.320, 364.3136 }
+-- VehicleRelocation[WP_MKII_P4_POS_2/3/5], boss_mimiron.cpp:347-348/350
+-- (the P4_POS_1/4 destinations are the controller's MoveTo legs in
+-- boss_mimiron.lua, so only the MKII-driven destinations live here).
+local MKII_P4_POS_2 = { 2768.195, 2573.095, 364.0636 }
+local MKII_P4_POS_3 = { 2763.820, 2568.870, 364.3136 }
+local MKII_P4_POS_5 = { 2744.610, 2569.380, 364.3136 }
 local timers = {}
 
 -- Per-GUID assembled latch: the Lua mirror of the EventMap phase
@@ -508,18 +521,46 @@ local function leviathanMkIIDamageTaken(event, creature, attacker, damage)
     return false, health - 1
 end
 
--- C++ boss_leviathan_mk_iiAI::MovementInform (:802-807), WP_MKII_P1_IDLE
--- arrival only (the P4-position legs stay out — see header). Event 28
--- args: (event, creature, motionType, id); the four_horsemen ev28 form.
+-- C++ boss_leviathan_mk_iiAI::MovementInform (:795-822), in C++ order.
+-- Event 28 args: (event, creature, motionType, id); the four_horsemen
+-- ev28 form. P4 legs: P4_POS_1 arrival schedules EVENT_MOVE_POINT_2 in
+-- 1ms (MovePoint to P4_POS_2); P4_POS_2 -> MOVE_POINT_3 (P4_POS_3);
+-- P4_POS_3 -> controller DoAction DO_ACTIVATE_V0L7R0N_2 (receiver live
+-- in boss_mimiron.lua); P4_POS_4 -> MOVE_POINT_5 (P4_POS_5); P4_POS_5
+-- arrival is the C++ default (nothing). The 1ms schedule is the C++
+-- ScheduleEvent 1ms twin; the move-point timers die with Reset/JustDied
+-- via cancelTimers, matching C++ events.Reset.
 local function leviathanMkIIMovementInform(event, creature, motionType, id)
-    if motionType ~= POINT_MOTION_TYPE or id ~= WP_MKII_P1_IDLE then
+    if motionType ~= POINT_MOTION_TYPE then
         return
     end
-    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
-    creature:CastSpell(creature, SPELL_HALF_HEAL)
-    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
-    if mimiron ~= nil then
-        mimiron:DoAction(DO_ACTIVATE_VX001)
+    if id == WP_MKII_P1_IDLE then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:CastSpell(creature, SPELL_HALF_HEAL)
+        local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+        if mimiron ~= nil then
+            mimiron:DoAction(DO_ACTIVATE_VX001)
+        end
+    elseif id == WP_MKII_P4_POS_1 then
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "movepoint2", 1, function()
+            creature:MoveTo(WP_MKII_P4_POS_2, MKII_P4_POS_2[1], MKII_P4_POS_2[2], MKII_P4_POS_2[3])
+        end)
+    elseif id == WP_MKII_P4_POS_2 then
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "movepoint3", 1, function()
+            creature:MoveTo(WP_MKII_P4_POS_3, MKII_P4_POS_3[1], MKII_P4_POS_3[2], MKII_P4_POS_3[3])
+        end)
+    elseif id == WP_MKII_P4_POS_3 then
+        local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+        if mimiron ~= nil then
+            mimiron:DoAction(DO_ACTIVATE_V0L7R0N_2)
+        end
+    elseif id == WP_MKII_P4_POS_4 then
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "movepoint5", 1, function()
+            creature:MoveTo(WP_MKII_P4_POS_5, MKII_P4_POS_5[1], MKII_P4_POS_5[2], MKII_P4_POS_5[3])
+        end)
     end
 end
 
