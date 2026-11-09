@@ -88,3 +88,67 @@ local function stoneformRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ICC_STONEFORM, 3, stoneformRemove)
+
+local SPELL_REMOVE_EMPOWERED_BLOOD = 72131 -- icecrown_citadel.cpp:1284; boss_blood_prince_council.cpp:110
+
+-- C++ spell_generic_remove_empowered_blood::HandleScript (icecrown_citadel.cpp:1286-1305):
+-- EFFECT_0 SCRIPT_EFFECT removes Empowered Blood (70227) from the hit
+-- unit. Caster verified: Prince Valanar self-casts 72131 triggered in
+-- the BPC controller Reset (boss_blood_prince_council.cpp:248).
+-- 70939 (Lana'thel's leg) is already handled natively in Go
+-- (boss_ai.go:7864) and is NOT registered here. No Go case for 72131,
+-- so no double-fire.
+local function removeEmpoweredBlood(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_ICC_EMPOWERED_BLOOD)
+end
+
+RegisterSpellEvent(SPELL_REMOVE_EMPOWERED_BLOOD, 5, removeEmpoweredBlood)
+
+local SPELL_HARVEST_BLIGHT_SPECIMEN = 72155 -- icecrown_citadel.cpp:88
+
+-- C++ spell_icc_harvest_blight_specimen::HandleScript / HandleQuestComplete
+-- (icecrown_citadel.cpp:1455-1476): EFFECT_0 SCRIPT_EFFECT and EFFECT_1
+-- QUEST_COMPLETE each remove the aura named by the effect value from the
+-- hit unit. Caster verified: Alchemist Adrianna's gossip casts 72155
+-- (npc_alchemist_adrianna.lua). No Go case for 72155, so no double-fire.
+local function harvestBlightSpecimen(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 and effectIndex ~= 1 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local value = spell:GetEffectValue(effectIndex)
+    if value > 0 then
+        hitTarget:RemoveAura(value)
+    end
+end
+
+RegisterSpellEvent(SPELL_HARVEST_BLIGHT_SPECIMEN, 5, harvestBlightSpecimen)
+
+local SPELL_ICC_SIPHON_ESSENCE = 70299 -- icecrown_citadel.cpp:101
+local AURA_REMOVE_BY_CANCEL = 2 -- SpellAuraDefines.h:61-69 (NONE 0, DEFAULT 1, CANCEL 2)
+
+-- C++ spell_icc_siphon_essence::OnRemove (icecrown_citadel.cpp:1221-1235):
+-- EFFECT_1 MOD_ROOT, REAL; only when the aura is removed by cancel does
+-- the target's AI take DoAction(ACTION_SIPHON_INTERRUPTED 1). The
+-- remove-mode gate is the whole leg (lua_aura.go:238 GetRemoveMode);
+-- other remove modes take no arm. The DoAction receiver lives in
+-- npc_darkfallen_icc.lua (DarkFallenAI :826-830).
+local function siphonEssenceRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_CANCEL then
+        return
+    end
+    if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:DoAction(1)
+end
+
+RegisterAuraEvent(SPELL_ICC_SIPHON_ESSENCE, 3, siphonEssenceRemove)

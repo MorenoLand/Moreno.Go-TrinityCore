@@ -11,6 +11,8 @@ local NPC_DARKFALLEN_ADVISOR = 37571
 local NPC_DARKFALLEN_TACTICIAN = 37666
 local NPC_VAMPIRIC_FIEND = 37901
 
+local GO_EMPOWERING_BLOOD_ORB = 201741 -- icecrown_citadel.h:403
+
 local SPELL_POLYMORPH_ALLY = 72106
 
 -- Blood knight
@@ -414,6 +416,20 @@ local function darkfallenReset(event, creature)
     startEmoteMachine(creature)
 end
 
+-- DarkFallenAI::DoAction(ACTION_SIPHON_INTERRUPTED 1)
+-- (icecrown_citadel.cpp:826-830): the empowering blood orb within 10y
+-- loses NOT_SELECTABLE. Fired from the siphon-essence aura OnRemove leg
+-- (spell_icecrown_citadel.lua, 70299 ev3) via creature:DoAction(1).
+local function darkfallenDoAction(event, creature, action)
+    if action ~= 1 then
+        return
+    end
+    local orb = creature:FindNearestGameObject(GO_EMPOWERING_BLOOD_ORB, 10.0)
+    if orb ~= nil then
+        orb:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+end
+
 -- Vampiric fiend (npc_vampiric_fiend, icecrown_citadel.cpp:905-931):
 -- JustEngagedWith -> DoCastSelf(DISEASE_CLOUD 41290), 9s one-shot
 -- DoCastVictim(LEECHING_ROOT 70671), 38s one-shot DespawnOrUnsummon;
@@ -450,6 +466,7 @@ for _, entry in ipairs(DARKFALLEN_ENTRIES) do
         darkfallenReset(event, creature)
     end)
     RegisterCreatureEvent(entry, 23, darkfallenReset)
+    RegisterCreatureEvent(entry, 38, darkfallenDoAction)
 end
 
 RegisterCreatureEvent(NPC_VAMPIRIC_FIEND, 1, fiendEngage)
