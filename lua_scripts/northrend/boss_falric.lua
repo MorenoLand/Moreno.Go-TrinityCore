@@ -60,7 +60,20 @@
 --   instance->SetBossState (DATA_FALRIC 0, DONE) (:104) PORTED
 --   2026-11-05 via creature:SetBossState, in C++ order AFTER Talk
 --   (unlike garfrost, whose _JustDied runs first). The old "no
---   bridge" claim for :104 is retracted.
+--   bridge" claim for :104 is retracted. The SetBossState-override
+--   leg (instance_halls_of_reflection.cpp:342-348: ++_waveCount +
+--   EVENT_NEXT_WAVE 1min) is PORTED 2026-11-08 (tick 491) via the
+--   Go-only signal instanceData:SetData(HOR_SETDATA_NEXT_WAVE = 1000,
+--   0) right after the DONE write (creature:SetBossState fires no
+--   instance event, so the override leg cannot live in the instance
+--   file).
+-- DoAction (boss_horAI.cpp:36-48) — ACTION_ENTER_COMBAT (-668001,
+--   halls_of_reflection.h:130) PORTED 2026-11-08 (tick 491) via the
+--   ev38 receiver: SetImmuneToAll(false), REACT_AGGRESSIVE,
+--   DoZoneInCombat. The sender is the instance wave machine (ADD_WAVE
+--   at wave 5/10); the apply half lives in falricReset below, so the
+--   toggle pair is complete (the 2026-10-23 SetImmuneToAll sweep bar
+--   is met — the old "unported instance wave machine" note is stale).
 -- Reset (:60-64 + boss_horAI.cpp:26-34) — _Reset() first:
 --   SetBossState(DATA_FALRIC 0, NOT_STARTED) only when the stored
 --   state != DONE (the bronjahm / cyanigosa precedent: ev23 fires on
@@ -68,9 +81,15 @@
 --   via creature:SetBossState in a new ev23 leg split from ev2
 --   (leave-combat does not call Reset in C++); then Initialize
 --   (_hopelessnessCount = 0, :67). The SetVisible(false) /
---   SetImmuneToAll(true) / REACT_PASSIVE legs (:30-32) and the
---   GetData(DATA_WAVE_COUNT) / ProcessEvent(EVENT_DO_WIPE) leg
---   (:33-34) stay out — see the documented-only note below.
+--   SetImmuneToAll(true) / REACT_PASSIVE legs (:30-32) are PORTED
+--   2026-11-08 (tick 491) — all three bridges are live
+--   (lua_creature_events.go:5548/:5966/:4229) and the clear half
+--   (DoAction ACTION_ENTER_COMBAT, see above) is ported, so the
+--   toggle pair is complete. The GetData(DATA_WAVE_COUNT) /
+--   ProcessEvent(EVENT_DO_WIPE) leg (:33-34) is PORTED 2026-11-08
+--   (tick 491) via instanceData:SetData(DATA_WAVE_COUNT, 0) when the
+--   stored wave count is non-zero (the instance event-8 handler
+--   runs the wipe).
 -- DamageTaken (:89-96) — the hopelessness machine, floored single-flip
 --   latch: event 9 fires pre-application, so the post-damage health
 --   decides ((GetHealth()-damage), strictly below 66 / 33 / 10 like C++
@@ -92,20 +111,16 @@
 --   72435) = self-cast; re-arm {21000,39000}ms randtime unconditional.
 --
 -- DOCUMENTED-ONLY (no registration beyond entry 38112):
--- ctor / boss_horAI::Reset (boss_horAI.cpp:26-34) — _Reset() passthrough,
---   SetVisible(false), SetImmuneToAll(true) (:30),
---   SetReactState(REACT_PASSIVE), the GetData(DATA_WAVE_COUNT) /
---   ProcessEvent(EVENT_DO_WIPE) wave leg. The flag twin
---   (creature:SetFlag(59, 0x300)) IS bridged, but :30 is the apply half
---   of an instance-sequencer-driven toggle: the clear
---   (DoAction(ACTION_ENTER_COMBAT), boss_horAI.cpp:41, driven by the
---   unported instance wave machine, instance_halls_of_reflection.cpp:605)
---   — dispatch IS bridged (creature:DoAction fires ev38); porting
---   the apply alone fabricates a permanently-immune boss the C++ never
---   exhibits — both halves stay out (the 2026-10-23 SetImmuneToAll
---   sweep; same bar as the svalna gauntlet toggle). The old "no bridge
---   by construction" phrasing is retracted: the blocker is the unported
---   toggle pair, not the flag bridge. Initialize (_hopelessnessCount =
+-- ctor / boss_horAI::Reset (boss_horAI.cpp:26-34) — the _Reset()
+--   passthrough, SetVisible(false), SetImmuneToAll(true) (:30),
+--   SetReactState(REACT_PASSIVE) and the GetData(DATA_WAVE_COUNT) /
+--   ProcessEvent(EVENT_DO_WIPE) wave leg are all PORTED (see the
+--   PORTED ARMS notes above, tick 491); the toggle pair is complete
+--   because the clear (DoAction(ACTION_ENTER_COMBAT),
+--   boss_horAI.cpp:41, driven by the ported instance wave machine,
+--   instance_halls_of_reflection.cpp:605) is ported too. The old
+--   "both halves stay out" note (2026-10-23 SetImmuneToAll sweep)
+--   is retracted. Initialize (_hopelessnessCount =
 --   0, :67) is the per-GUID state seed on enter combat.
 -- JustEngagedWith :79 DoZoneInCombat — PORTED 2026-10-23
 -- (creature:DoZoneInCombat, in arm order after Talk; bridge live at
@@ -144,7 +159,14 @@
 
 local ENTRY_FALRIC = 38112
 local DATA_FALRIC = 0 -- halls_of_reflection.h:37
+local DATA_WAVE_COUNT = 6 -- halls_of_reflection.h:45
 local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
+
+local ACTION_ENTER_COMBAT = -668001 -- halls_of_reflection.h:130
+local HOR_SETDATA_NEXT_WAVE = 1000 -- Go-only signal, instance_halls_of_reflection.lua
+
+local REACT_PASSIVE = 0 -- UnitDefines.h:340
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
@@ -327,10 +349,35 @@ local function falricJustDied(event, creature)
     creature:Talk(SAY_DEATH)
     clearState(creature:GetGUID())
     creature:SetBossState(DATA_FALRIC, BOSS_STATE_DONE)
+    -- C++ instance_halls_of_reflection.cpp:342-348 SetBossState-override
+    -- leg: ++_waveCount + EVENT_NEXT_WAVE in 1min. creature:SetBossState
+    -- fires no instance event, so the leg rides the Go-only
+    -- HOR_SETDATA_NEXT_WAVE signal (instance event 8).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data:SetData(HOR_SETDATA_NEXT_WAVE, 0)
+        end
+    end
 end
 
 local function falricLeaveCombat(event, creature)
     clearState(creature:GetGUID())
+end
+
+-- C++ boss_horAI::DoAction (boss_horAI.cpp:36-48): ACTION_ENTER_COMBAT
+-- — SetImmuneToAll(false), REACT_AGGRESSIVE, DoZoneInCombat. The
+-- sender is the instance wave machine (ADD_WAVE at wave 5/10); the
+-- apply half lives in falricReset below, so the toggle pair is
+-- complete (tick 491).
+local function falricDoAction(event, creature, action)
+    if action ~= ACTION_ENTER_COMBAT then
+        return
+    end
+    creature:SetImmuneToAll(false)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:DoZoneInCombat()
 end
 
 -- C++ Reset (:60-64 + boss_horAI.cpp:26-34): _Reset() first —
@@ -344,6 +391,22 @@ local function falricReset(event, creature)
     if creature:GetBossState(DATA_FALRIC) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_FALRIC, 0)
     end
+    -- C++ boss_horAI.cpp:30-32: SetVisible(false), SetImmuneToAll(true),
+    -- REACT_PASSIVE (tick 491; the clear half is falricDoAction above).
+    creature:SetVisible(false)
+    creature:SetImmuneToAll(true)
+    creature:SetReactState(REACT_PASSIVE)
+    -- C++ boss_horAI.cpp:33-34: GetData(DATA_WAVE_COUNT) != NOT_STARTED
+    -- -> ProcessEvent(EVENT_DO_WIPE); the instance event-8 handler runs
+    -- the wipe when it receives DATA_WAVE_COUNT NOT_STARTED with a
+    -- non-zero count (instance_halls_of_reflection.lua).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data ~= nil and (data.waveCount or 0) ~= 0 then
+            data:SetData(DATA_WAVE_COUNT, 0)
+        end
+    end
     clearState(creature:GetGUID())
 end
 
@@ -353,3 +416,4 @@ RegisterCreatureEvent(ENTRY_FALRIC, 3, falricKilledUnit)
 RegisterCreatureEvent(ENTRY_FALRIC, 4, falricJustDied)
 RegisterCreatureEvent(ENTRY_FALRIC, 9, falricDamageTaken)
 RegisterCreatureEvent(ENTRY_FALRIC, 23, falricReset)
+RegisterCreatureEvent(ENTRY_FALRIC, 38, falricDoAction)

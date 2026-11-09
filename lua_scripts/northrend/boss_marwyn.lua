@@ -63,6 +63,13 @@
 --   if found, DoCast(target, SPELL_SHARED_SUFFERING 72368)
 --   non-triggered; re-arm {14000,15000}ms unconditional (:119, outside
 --   the target-if).
+-- DoAction (boss_horAI.cpp:36-48) — ACTION_ENTER_COMBAT (-668001,
+--   halls_of_reflection.h:130) PORTED 2026-11-08 (tick 491) via the
+--   ev38 receiver: SetImmuneToAll(false), REACT_AGGRESSIVE,
+--   DoZoneInCombat. The sender is the instance wave machine (ADD_WAVE
+--   at wave 5/10); the apply half lives in marwynReset below, so the
+--   toggle pair is complete (the 2026-10-23 SetImmuneToAll sweep bar
+--   is met — the old "unported instance wave machine" note is stale).
 -- KilledUnit (:84-88) — Talk(SAY_SLAY 1) player-gated (:87), the
 --   razuvious player-gated variant precedent.
 -- JustDied (:77-82) — Talk(SAY_DEATH 2) (:79) unconditional, the
@@ -83,18 +90,24 @@
 --   spawn too, and a DONE boss must stay DONE), PORTED 2026-11-05
 --   via creature:SetBossState in the ev23 leg (split from ev2 —
 --   leave-combat does not call Reset in C++). The SetVisible(false) /
---   SetImmuneToAll(true) / REACT_PASSIVE + wave-wipe legs stay out
---   (see the falric header, same boss_horAI base).
+--   SetImmuneToAll(true) / REACT_PASSIVE legs (:30-32) are PORTED
+--   2026-11-08 (tick 491) — all three bridges are live
+--   (lua_creature_events.go:5548/:5966/:4229) and the clear half
+--   (DoAction ACTION_ENTER_COMBAT, see above) is ported, so the
+--   toggle pair is complete. The GetData(DATA_WAVE_COUNT) /
+--   ProcessEvent(EVENT_DO_WIPE) leg (:33-34) is PORTED 2026-11-08
+--   (tick 491) via instanceData:SetData(DATA_WAVE_COUNT, 0) when the
+--   stored wave count is non-zero (the instance event-8 handler
+--   runs the wipe).
 -- DOCUMENTED-ONLY (no registration beyond entry 38113):
 -- boss_horAI base (boss_horAI.h:27-33 / boss_horAI.cpp) — the
---   ctor/Reset/DoAction/JustSummoned arms are documented-only: the flag
---   twin (creature:SetFlag(59, 0x300)) IS bridged, but Reset's
---   SetImmuneToAll(true) (:30) is the apply half of an
---   instance-sequencer-driven toggle whose clear (DoAction
---   ACTION_ENTER_COMBAT, :41, unported instance wave machine) has no
---   DoAction bridge — porting the apply alone fabricates a
---   permanently-immune boss (the falric header carries the full note,
---   2026-10-23 SetImmuneToAll sweep).
+--   ctor/Reset/DoAction arms are PORTED (see the PORTED ARMS notes
+--   above, tick 491); the toggle pair is complete because the clear
+--   (DoAction ACTION_ENTER_COMBAT, :41, driven by the ported
+--   instance wave machine) is ported too. The old "both halves stay
+--   out" note (2026-10-23 SetImmuneToAll sweep) is retracted.
+--   JustSummoned (boss_horAI.cpp:50-53, summons.Summon) has no Lua
+--   twin — neither boss reads its summon list, so nothing to port.
 -- JustEngagedWith :68 DoZoneInCombat — PORTED (creature:DoZoneInCombat, event-1 handler, C++ arm order — live bridge engine/world/lua_creature_events.go, 2026-10-23).
 -- JustEngagedWith :69 / JustDied :81 instance->SetBossState
 --   (DATA_MARWYN, IN_PROGRESS / DONE) — PORTED 2026-11-05 via
@@ -118,9 +131,15 @@
 --   (:164) — on AURA_REMOVE_BY_ENEMY_SPELL the remaining
 --   damage (amount * remainingTicks) is forwarded as a TRIGGERED cast
 --   of SPELL_SHARED_SUFFERING_DISPEL 72373 with
---   SPELLVALUE_BASE_POINT1 = remainingDamage (:150-159)) — no
---   AuraScript bridge (the boss_moragg optic-link precedent), stays in
---   the standing queue.
+--   SPELLVALUE_BASE_POINT1 = remainingDamage (:150-159)) — the
+--   OnRemove hook IS bridged now (RegisterAuraEvent(72368, 3),
+--   AuraEventOnRemove; aura:GetCaster/GetRemoveMode/GetAmount/
+--   GetTickNumber/GetTotalTicks all live, lua_aura.go), but the
+--   leg's entire payload is the SPELLVALUE_BASE_POINT1 write and
+--   CastSpell takes only (target, id, triggered) — no spell-mod
+--   bridge exists, so the dispel would cast with a default (zero)
+--   base point. Stays out until a CastSpell spell-mod twin lands
+--   (re-verified 2026-11-08, tick 491).
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
 -- Random-target helper: threat-list players via GetAITargets
@@ -132,7 +151,13 @@
 
 local ENTRY_MARWYN = 38113
 local DATA_MARWYN = 1 -- halls_of_reflection.h:38
+local DATA_WAVE_COUNT = 6 -- halls_of_reflection.h:45
 local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
+
+local ACTION_ENTER_COMBAT = -668001 -- halls_of_reflection.h:130
+
+local REACT_PASSIVE = 0 -- UnitDefines.h:340
+local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
 
 local SPELL_START_HALLS_OF_REFLECTION_QUEST_AE = 72900 -- halls_of_reflection.h:158
 local WORLD_STATE_HOR_WAVES_ENABLED = 4884 -- halls_of_reflection.h:170
@@ -339,6 +364,20 @@ local function marwynJustDied(event, creature, killer)
     end
 end
 
+-- C++ boss_horAI::DoAction (boss_horAI.cpp:36-48): ACTION_ENTER_COMBAT
+-- — SetImmuneToAll(false), REACT_AGGRESSIVE, DoZoneInCombat. The
+-- sender is the instance wave machine (ADD_WAVE at wave 5/10); the
+-- apply half lives in marwynReset below, so the toggle pair is
+-- complete (tick 491).
+local function marwynDoAction(event, creature, action)
+    if action ~= ACTION_ENTER_COMBAT then
+        return
+    end
+    creature:SetImmuneToAll(false)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:DoZoneInCombat()
+end
+
 local function marwynLeaveCombat(event, creature)
     initState(creature:GetGUID())
 end
@@ -352,6 +391,22 @@ local function marwynReset(event, creature)
     if creature:GetBossState(DATA_MARWYN) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_MARWYN, 0)
     end
+    -- C++ boss_horAI.cpp:30-32: SetVisible(false), SetImmuneToAll(true),
+    -- REACT_PASSIVE (tick 491; the clear half is marwynDoAction above).
+    creature:SetVisible(false)
+    creature:SetImmuneToAll(true)
+    creature:SetReactState(REACT_PASSIVE)
+    -- C++ boss_horAI.cpp:33-34: GetData(DATA_WAVE_COUNT) != NOT_STARTED
+    -- -> ProcessEvent(EVENT_DO_WIPE); the instance event-8 handler runs
+    -- the wipe when it receives DATA_WAVE_COUNT NOT_STARTED with a
+    -- non-zero count (instance_halls_of_reflection.lua).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data ~= nil and (data.waveCount or 0) ~= 0 then
+            data:SetData(DATA_WAVE_COUNT, 0)
+        end
+    end
     initState(creature:GetGUID())
 end
 
@@ -360,3 +415,4 @@ RegisterCreatureEvent(ENTRY_MARWYN, 2, marwynLeaveCombat)
 RegisterCreatureEvent(ENTRY_MARWYN, 3, marwynKilledUnit)
 RegisterCreatureEvent(ENTRY_MARWYN, 4, marwynJustDied)
 RegisterCreatureEvent(ENTRY_MARWYN, 23, marwynReset)
+RegisterCreatureEvent(ENTRY_MARWYN, 38, marwynDoAction)
