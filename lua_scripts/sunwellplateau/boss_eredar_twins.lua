@@ -474,7 +474,7 @@ local function sacrolashEnterCombat(event, creature, target)
     end
     creature:SetBossState(DATA_EREDAR_TWINS, 1)
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:211: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     sacrolashState[guid] = { enraged = false, sisterDeath = false }
     schedule(guid, "shadowblades", 10000, function()
         sacrolashShadowBlades(creature, guid)
@@ -520,13 +520,13 @@ local function sacrolashDied(event, creature)
 end
 
 local function sacrolashLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sacrolashState[guid] = nil
 end
 
 local function sacrolashReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     sacrolashState[guid] = nil
     if not creature:IsDead() then
@@ -714,7 +714,7 @@ local function alythessEnterCombat(event, creature, target)
     creature:SetBossState(DATA_EREDAR_TWINS, 1)
     creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     alythessState[guid] = { enraged = false, sisterDeath = false }
     schedule(guid, "conflagration", 45000, function()
         alythessConflagration(creature, guid)
@@ -759,13 +759,13 @@ local function alythessDied(event, creature)
 end
 
 local function alythessLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     alythessState[guid] = nil
 end
 
 local function alythessReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     alythessState[guid] = nil
     if not creature:IsDead() then
@@ -822,7 +822,7 @@ end
 -- creature:Kill(); Reset re-arms it, and the evade cycle re-arms
 -- via LeaveCombat cancel + EnterCombat).
 local function shadowImageEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ 5000 + rand32()%15000 is exclusive-top [5000,19999].
     schedule(guid, "shadowfury", math.random(5000, 19999), function()
         shadowImageFury(creature, guid)
@@ -839,7 +839,7 @@ local function shadowImageEnterCombat(event, creature)
 end
 
 local function shadowImageLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_shadow_imageAI::Reset (boss_eredar_twins.cpp:678-680):
@@ -849,7 +849,7 @@ end
 -- evade (ported 2026-10-20); skip on the death path — C++ Reset
 -- never runs there (Eluna On_Reset fires ahead of OnDied).
 local function shadowImageReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if not creature:IsDead() then
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     end

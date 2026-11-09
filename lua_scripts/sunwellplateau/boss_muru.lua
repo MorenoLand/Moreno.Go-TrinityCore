@@ -304,7 +304,7 @@ end
 local function muruEnterCombat(event, creature)
     creature:SetMeleeAttack(false) -- boss_muru.cpp:320: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_muru.cpp:237 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     muruState[guid] = { phase = 1, hasEnraged = false }
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -350,7 +350,7 @@ end
 local function muruDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
     if health > 0 and damage >= health then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local st = muruState[guid]
         if st and st.phase == 1 then
             st.phase = 2
@@ -370,7 +370,7 @@ local function muruResetState(guid)
 end
 
 local function muruLeaveCombat(event, creature)
-    muruResetState(creature:GetGUID())
+    muruResetState(creature:GetGUIDLow())
     -- NO entropius relay here, on C++ grounds (not Go-ordering
     -- grounds): C++ boss_muruAI::EnterEvadeMode (:255-259) calls
     -- BossAI::EnterEvadeMode() FIRST, whose Reset() runs Initialize()
@@ -385,7 +385,7 @@ local function muruLeaveCombat(event, creature)
 end
 
 local function muruDied(event, creature, killer)
-    muruResetState(creature:GetGUID())
+    muruResetState(creature:GetGUIDLow())
 end
 
 local function muruReset(event, creature)
@@ -400,7 +400,7 @@ local function muruReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(DATA_MURU) ~= 3 then
         creature:SetBossState(DATA_MURU, 0)
     end
-    muruResetState(creature:GetGUID())
+    muruResetState(creature:GetGUIDLow())
     creature:SetVisible(true)
 end
 
@@ -409,9 +409,9 @@ local function muruJustSummoned(event, creature, summon)
         return
     end
     creature:SetVisible(false)
-    local st = muruState[creature:GetGUID()]
+    local st = muruState[creature:GetGUIDLow()]
     if st then
-        st.entropiusGUID = summon:GetGUID()
+        st.entropiusGUID = summon:GetGUIDLow()
         if st.hasEnraged then
             summon:CastSpell(summon, SPELL_ENRAGE, true)
         end
@@ -466,7 +466,7 @@ local function entropiusEnterCombat(event, creature)
     -- (ScriptedCreature.h:330); _JustEngagedWith writes
     -- SetBossState(DATA_MURU 4, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(DATA_MURU, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "negativeenergy", 2000, function()
         entropiusNegativeEnergy(creature, guid)
@@ -486,7 +486,7 @@ local function entropiusCleanup(event, creature)
     if muru then
         muru:Despawn()
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_entropiusAI::EnterEvadeMode (boss_muru.cpp:183-193), in
@@ -502,7 +502,7 @@ end
 -- a true return would veto the base evade. Event 4 keeps
 -- entropiusCleanup: C++ JustDied despawns no summons.
 local function entropiusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ :184-185 first: muru evades with entropius. One-way only,
     -- and C++-exact: muru's relay back is a dead arm (its Reset
     -- clears the _entropiusGUID latch first — see muruLeaveCombat),
@@ -530,7 +530,7 @@ end
 -- spawn/evade-only, never runs on death; the cast does not belong
 -- on the corpse.
 local function entropiusReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsAlive() and creature:GetBossState(DATA_MURU) ~= 3 then
         creature:SetBossState(DATA_MURU, 0)
@@ -555,7 +555,7 @@ local function portalSpellHit(event, creature, caster, spellId)
         creature:CastSpell(creature, SPELL_TRANSFORM_VISUAL_MISSILE, true)
     elseif spellId == SPELL_OPEN_PORTAL_2 then
         creature:CastSpell(creature, SPELL_OPEN_PORTAL, true)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "voidsentinelsummoner", 6000, function()
             creature:CastSpell(creature, SPELL_SUMMON_VOID_SENTINEL_SUMMONER, true)
         end)
@@ -563,7 +563,7 @@ local function portalSpellHit(event, creature, caster, spellId)
 end
 
 local function portalReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_PORTAL, 14, portalSpellHit)
@@ -575,7 +575,7 @@ RegisterCreatureEvent(ENTRY_PORTAL, 23, portalReset)
 -- nullptr, self-cast is the Lua lowering). No entry gate in C++.
 local function portalJustSummoned(event, creature, summon)
     creature:CastSpell(summon, SPELL_SUMMON_VOID_SENTINEL_SUMMONER_VISUAL, true)
-    schedule(summon:GetGUID(), "voidspawnsummon", 1500, function()
+    schedule(summon:GetGUIDLow(), "voidspawnsummon", 1500, function()
         summon:CastSpell(summon, SPELL_SUMMON_VOID_SENTINEL, true)
     end)
 end
@@ -651,7 +651,7 @@ local function darkFiendSpawn(event, creature)
     -- event 5. Alive-gated; cancelTimers rides the death leg
     -- deliberately. The 2s activate arm runs before the first 3s
     -- proximity check, as in C++.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsAlive() then
         creature:SetDisplayId(creature:GetTemplateModelId(2))
@@ -681,7 +681,7 @@ local function voidSentinelVoidBlast(creature, guid)
 end
 
 local function voidSentinelEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_SHADOW_PULSE_PERIODIC, true)
     schedule(guid, "voidblast", 45000, function()
@@ -690,7 +690,7 @@ local function voidSentinelEnterCombat(event, creature)
 end
 
 local function voidSentinelCleanup(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_void_sentinelAI::JustDied (boss_muru.cpp:484-491):
@@ -738,7 +738,7 @@ local function blackholeVisualStep0(creature, guid)
 end
 
 local function blackholeReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ npc_black_holeAI::Reset(): DoCast(BLACKHOLE_SUMMON_VISUAL) + 15s
     -- DisappearAndDie / 1s aggressive-visual loop schedules (boss_muru.cpp:524).

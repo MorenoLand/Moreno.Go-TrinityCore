@@ -652,7 +652,7 @@ end
 local function kjEnterCombat(event, creature)
     creature:DoZoneInCombat() -- boss_kiljaeden.cpp:657 (JustEngagedWith sole arm; bridge live 2026-10-23)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_kiljaeden.cpp:525 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     kjState[guid] = newKjState()
     creature:Talk(SAY_KJ_EMERGE)
@@ -662,7 +662,7 @@ local function kjEnterCombat(event, creature)
 end
 
 local function kjCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     kjState[guid] = nil
     -- C++ boss_kiljaedenAI::Reset (boss_kiljaeden.cpp:587-598):
@@ -756,7 +756,7 @@ local function deceiverVolley(creature, guid)
 end
 
 local function deceiverReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "upkeep", 1000, function()
         deceiverUpkeep(creature, guid)
@@ -788,7 +788,7 @@ local function deceiverFelfire(creature, guid)
 end
 
 local function deceiverEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ JustEngagedWith (boss_kiljaeden.cpp:958-965):
     -- SetBossState(DATA_KILJAEDEN 5, IN_PROGRESS) first, then the
     -- AddThreat(who, 1.0, controller) relay (stays out: cross-
@@ -807,7 +807,7 @@ local function deceiverEnterCombat(event, creature)
 end
 
 local function deceiverLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local per = timers[guid]
     if per and per.volley then
         RemoveEventById(per.volley)
@@ -820,7 +820,7 @@ local function deceiverLeaveCombat(event, creature)
 end
 
 local function deceiverDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_DECEIVER, 1, deceiverEnterCombat)
@@ -867,7 +867,7 @@ end
 
 local function fiendEnterCombat(event, creature)
     creature:SetMeleeAttack(false) -- boss_kiljaeden.cpp:1105: custom UpdateAI never calls DoMeleeAttackIfReady (explode machine in C++, never melees)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     fiendState[guid] = { armed = false }
     -- C++ npc_volatile_felfire_fiendAI::UpdateAI first tick with a
@@ -890,7 +890,7 @@ local function fiendEnterCombat(event, creature)
 end
 
 local function fiendCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     fiendState[guid] = nil
 end
@@ -907,7 +907,7 @@ RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 23, fiendCleanup)
 -- DespawnOrUnsummon arm (stale "no despawn bridge" claim retracted:
 -- creature:Despawn() is bridged, engine/world/lua_creature_events.go:214).
 local function armageddonReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ npc_armageddonAI::Reset() only calls Initialize(); the visual/visual2/
     -- trigger chain is driven by UpdateAI's uiTimer (boss_kiljaeden.cpp:1142), which
@@ -933,7 +933,7 @@ local function armageddonReset(event, creature)
 end
 
 local function armageddonCleanup(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ARMAGEDDON_TARGET, 2, armageddonCleanup)
@@ -1082,7 +1082,7 @@ local function reflectionRogue(creature, guid)
 end
 
 local function reflectionEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local class = 0
     local victim = creature:GetVictim()
@@ -1116,7 +1116,7 @@ local function reflectionEnterCombat(event, creature)
 end
 
 local function reflectionCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     reflectionState[guid] = nil
 end
