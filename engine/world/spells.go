@@ -26666,6 +26666,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	// value (Spell.cpp:2377/2547). The client-path twin lives in
 	// finishSpellCast above.
 	hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
+	// SpellScript OnEffectHit (Spell.cpp:3722-3730, the HIT-mode
+	// HandleEffects loop in Spell::_handle_immediate_phase, which runs
+	// before DoProcessTargetContainer): fires once per non-zero effect
+	// with no unit target. Triggered casts reach it too —
+	// TRIGGERED_CAST_DIRECTLY -> cast -> handle_immediate
+	// (Spell.cpp:3172/3475) — so the funnel fires it here, ahead of
+	// the twins, like the client path (the creature path fires it
+	// unconditionally in boss_ai.go; the client path fires it in
+	// applyEffects and on both all-miss early returns).
+	s.fireSpellScriptEffectHitNoTarget(ctx, spell, spellID, int32(triggeredCastTimeMs), spellTarget, castItemGUID)
 	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
 	// its SpellScript hooks before the per-effect DoTargetSpellHit
 	// loop (Spell.cpp:2384) deals any damage — pass 1 of

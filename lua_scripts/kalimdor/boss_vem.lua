@@ -22,6 +22,7 @@
 -- read of DATA_VEMISDEAD (11) — ported in boss_kri.lua /
 -- boss_yauj.lua (2s poll, latched self-cast 34624).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
+local DATA_VEM = 10 -- temple_of_ahnqiraj.h:42
 local ENTRY = 15544
 
 local SPELL_CHARGE = 26561
@@ -64,6 +65,16 @@ end
 -- C++ Charge_Timer (boss_bug_trio.cpp:195): SelectTarget Random,0
 -- defaults — threat-list any-unit alive, no dist, playerOnly=false;
 -- pets/totems are eligible, unlike the old instance-player pool.
+-- Instance guid store (engine/world/instance_guid_store.go): Vem
+-- latches its own GUID under DATA_VEM on spawn (CREATURE_EVENT_ON_SPAWN
+-- 5, fired on first spawn + respawn) — the Lua mirror of the C++
+-- instance script's OnCreatureCreate latching (instance_temple_of_
+-- ahnqiraj.cpp:32-33); Yauj resolves it via GetInstanceCreature for
+-- the Heal 25807 random target (illidari-council precedent).
+local function onSpawn(event, creature)
+    creature:SetGuidData(DATA_VEM)
+end
+
 local function onCharge(creature, guid)
     local candidates = {}
     for _, p in ipairs(creature:GetAITargets()) do
@@ -149,4 +160,5 @@ end
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 23, onReset)

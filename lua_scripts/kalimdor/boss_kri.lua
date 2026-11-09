@@ -14,6 +14,7 @@
 -- loot-flag + instance DATA_BUG_TRIO_DEATH legs PORTED below
 -- (argent-soldier precedent).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
+local DATA_KRI = 9 -- temple_of_ahnqiraj.h:41
 local ENTRY = 15511
 
 local SPELL_CLEAVE = 26350
@@ -54,6 +55,16 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Instance guid store (engine/world/instance_guid_store.go): Kri
+-- latches its own GUID under DATA_KRI on spawn (CREATURE_EVENT_ON_SPAWN
+-- 5, fired on first spawn + respawn) — the Lua mirror of the C++
+-- instance script's OnCreatureCreate latching (instance_temple_of_
+-- ahnqiraj.cpp:32-33); Yauj resolves it via GetInstanceCreature for
+-- the Heal 25807 random target (illidari-council precedent).
+local function onSpawn(event, creature)
+    creature:SetGuidData(DATA_KRI)
 end
 
 local function onCleave(creature, guid)
@@ -180,5 +191,6 @@ end
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)

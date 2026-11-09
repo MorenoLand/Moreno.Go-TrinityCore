@@ -15,14 +15,18 @@
 -- Ported: Vem-dead Enrage 34624 (boss_bug_trio.cpp:321-332 — 2s
 -- poll of instance DATA_VEMISDEAD, latched self-cast; the vemDead
 -- slot is written by Vem's onDied in boss_vem.lua).
--- Documented-only: Heal 25807 (target selection via instance
--- GetCreature(DATA_KRI/DATA_VEM) — no bridge; self-cast alone
--- would misrepresent the random 1-of-3).
+-- Ported: Heal 25807 (boss_bug_trio.cpp:294-313 — uniform 1-of-3
+-- Kri / Vem / self; the twins resolve via GetInstanceCreature
+-- (DATA_KRI/DATA_VEM), latched by Kri/Vem's onSpawn SetGuidData
+-- — illidari-council precedent).
 local DATA_BUG_TRIO = 6 -- temple_of_ahnqiraj.h:36
+local DATA_KRI = 9 -- temple_of_ahnqiraj.h:41
+local DATA_VEM = 10 -- temple_of_ahnqiraj.h:42
 local ENTRY = 15543
 
 local SPELL_FEAR = 19408
 local SPELL_ENRAGE = 34624
+local SPELL_HEAL = 25807
 
 -- boss_bug_trio.cpp:274 summon target (no name constant in the C++
 -- tree — the entry comes from the summon call site itself).
@@ -76,6 +80,34 @@ local function onFear(creature, guid)
     end)
 end
 
+-- C++ boss_bug_trio.cpp:294-313: Heal_Timer (25-40s, then
+-- 15-30s) picks uniformly 1-of-3: Kri via instance
+-- GetCreature(DATA_KRI), Vem via GetCreature(DATA_VEM), or self.
+-- GetInstanceCreature is bridged (lua_creature_events.go) over
+-- the guid store Kri/Vem latch on spawn; nil when unlatched or
+-- off-map, like the C++ nullptr. A dead pick wastes the tick
+-- like C++ (DoCast on a dead twin casts nothing); no re-roll,
+-- preserving the uniform 1-of-3.
+local function onHeal(creature, guid)
+    local roll = math.random(0, 2)
+    if roll == 0 then
+        local kri = creature:GetInstanceCreature(DATA_KRI)
+        if kri and kri:IsAlive() then
+            creature:CastSpell(kri, SPELL_HEAL)
+        end
+    elseif roll == 1 then
+        local vem = creature:GetInstanceCreature(DATA_VEM)
+        if vem and vem:IsAlive() then
+            creature:CastSpell(vem, SPELL_HEAL)
+        end
+    else
+        creature:CastSpell(creature, SPELL_HEAL)
+    end
+    schedule(guid, "heal", math.random(15000, 30000), function()
+        onHeal(creature, guid)
+    end)
+end
+
 -- C++ boss_bug_trio.cpp:321-332: Check_Timer (2s) polls instance
 -- GetData(DATA_VEMISDEAD); on true, self-cast Enrage 34624 and
 -- latch VemDead. The outer poll keeps re-arming in C++ even once
@@ -110,6 +142,9 @@ local function onEnterCombat(event, creature, target)
     yaujState[guid] = { vemDead = false }
     schedule(guid, "fear", math.random(12000, 24000), function()
         onFear(creature, guid)
+    end)
+    schedule(guid, "heal", math.random(25000, 40000), function()
+        onHeal(creature, guid)
     end)
     schedule(guid, "vemcheck", 2000, function()
         onVemCheck(creature, guid)
