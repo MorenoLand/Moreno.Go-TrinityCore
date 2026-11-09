@@ -9,7 +9,9 @@
 --   DamageTaken (:1127) phase-independent legs: on a lethal hit, clamp
 --     damage to health-1 (Lua `return false, health - 1`, the lich-king
 --     damage-rewrite form), SetReactState passive, AttackStop,
---     SetDisableGravity(true), triggered self-cast VEHICLE_DAMAGED.
+--     SetDisableGravity(true), triggered self-cast VEHICLE_DAMAGED;
+--     phase branches PORTED tick 561 below (MoveTo P4 pos / VOL7RON
+--     stand-DEAD + IsEncounterFinished + SELF_REPAIR).
 --   DoAction (:1159) whole switch (event 38, `aerialDoAction`): the
 --     6/7/12 senders are LIVE in boss_mimiron.lua -- aerialActivation6
 --     sends DO_START_AERIAL (6) / DO_HARDMODE_AERIAL (7),
@@ -55,15 +57,15 @@
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   UpdateAI plasma-ball attack: DoSpellAttackIfReady (PLASMA_BALL_P1
 --     63689 in phase 3, PLASMA_BALL_P2 65647 in phase 4) -- no bridge.
---   DamageTaken phase branches: PHASE_AERIAL_COMMAND_UNIT MovePoint to
---     WP_AERIAL_P4_POS -- out (no MovePoint / GetMotionMaster binding);
---     PHASE_VOL7RON stand-DEAD + IsEncounterFinished cross-creature
---     stand-state reads/kills/despawns + SELF_REPAIR 64383 -- out (phase
---     is EventMap state with no Lua read, and the finish check reads two
---     other creatures via the instance). SetAnimationTier(Ground) -- out
---     (no binding). The C++ lethal leg also runs events.Reset; the
---     Lua arm cancels the summon pumps on the lethal hit (tick 557)
---     to match.
+--   DamageTaken phase branches PORTED tick 561 below: PHASE_AERIAL_
+--     COMMAND_UNIT MovePoint to WP_AERIAL_P4_POS via the MoveTo twin
+--     (MKII precedent, lua_creature_events.go:4875); PHASE_VOL7RON
+--     stand-DEAD + IsEncounterFinished + SELF_REPAIR 64383, phase read
+--     from the acuState mirror (set in DoAction 6/12). Stay-outs inside
+--     it: SetAnimationTier(Ground) (no binding) and GetMotionMaster()->
+--     Clear() (no binding; MoveTo re-issues the motion). The C++ lethal
+--     leg also runs events.Reset; the Lua arm cancels the summon pumps
+--     on the lethal hit (tick 557) to match.
 --   EnterEvadeMode (:1201, summons.DespawnAll) -- out: DespawnAll has no
 --     binding, and there is NO engine-fired evade event hook (the
 --     creature-event list has no OnEvade; 25 is unassigned). CORRECTION
@@ -77,9 +79,10 @@
 --     per the Lua phase mirror in acuState (AERIAL_COMMAND_UNIT vs
 --     VOL7RON, set in DoAction 6/12).
 --   MovementInform (:1220, WP_AERIAL_P4_POS facing + NOT_SELECTABLE flag
---     + CLEAR_ALL_DEBUFFS + DO_ACTIVATE_V0L7R0N_1) -- out: unreachable
---     without the unbridged DamageTaken MovePoint leg, and its tail is a
---     DoAction into the controller.
+--     + CLEAR_ALL_DEBUFFS + DO_ACTIVATE_V0L7R0N_1) PORTED tick 561
+--     below: reachable now the DamageTaken MovePoint leg lands via
+--     MoveTo (ev28 arrival); the DO_ACTIVATE_V0L7R0N_1 receiver is
+--     live in boss_mimiron.lua.
 --
 -- BRIDGE NOTES (checked against the CURRENT runtime, not memory):
 --   SetDisableGravity, SetHover, SetReactState, AttackStop, SetStandState,
@@ -97,6 +100,8 @@ local NPC_AERIAL_COMMAND_UNIT = 33670
 local NPC_ASSAULT_BOT = 34057
 local NPC_JUNK_BOT = 33855
 local NPC_MIMIRON = 33350 -- ulduar.h (controller, KilledUnit Talk target)
+local NPC_LEVIATHAN_MKII = 33432
+local NPC_VX_001 = 33651
 
 -- boss_mimiron.cpp:36-47 Yells (controller Talk ids).
 local SAY_AERIAL_SLAY = 9
@@ -108,6 +113,8 @@ local SPELL_SUMMON_FIRE_BOT_TRIGGER = 64620
 local SPELL_SUMMON_JUNK_BOT_TRIGGER = 63820
 local SPELL_SUMMON_ASSAULT_BOT_TRIGGER = 64425
 local SPELL_SUMMON_BOMB_BOT = 63811
+local SPELL_SELF_REPAIR = 64383 -- boss_mimiron.cpp:175
+local SPELL_CLEAR_ALL_DEBUFFS = 34098 -- boss_mimiron.cpp:179
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -116,6 +123,7 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x2000000
 local REACT_PASSIVE = 0
 local REACT_AGGRESSIVE = 2 -- UnitDefines.h: REACT_DEFENSIVE=1, REACT_AGGRESSIVE=2 (tick 557 fix: was 1)
 local UNIT_STAND_STATE_STAND = 0
+local UNIT_STAND_STATE_DEAD = 7 -- UnitDefines.h:40
 
 -- enum Actions (boss_mimiron.cpp:283-298): DO_START_MKII 0,
 -- DO_HARDMODE_MKII 1, DO_ACTIVATE_VX001 2, DO_START_VX001 3,
@@ -125,6 +133,12 @@ local DO_HARDMODE_AERIAL = 7
 local DO_DISABLE_AERIAL = 8
 local DO_ENABLE_AERIAL = 9
 local DO_ASSEMBLED_COMBAT = 12
+local DO_ACTIVATE_V0L7R0N_1 = 10 -- boss_mimiron.cpp:296
+local WP_AERIAL_P4_POS = 7 -- boss_mimiron.cpp:325 (Waypoints enum)
+local POINT_MOTION_TYPE = 8
+-- VehicleRelocation[WP_AERIAL_P4_POS], boss_mimiron.cpp:345.
+local ACU_P4_POS = { 2744.62, 2569.41, 382.0 }
+local ACU_P4_ORIENTATION = 3.054326
 
 local timers = {}
 local acuState = {}
@@ -275,21 +289,92 @@ local function aerialSpawn(event, creature)
     creature:SetDisableGravity(true)
 end
 
--- C++ DamageTaken (:1127), phase-independent legs in C++ order: lethal
--- clamp (damage = health - 1), react passive, AttackStop, gravity on,
--- triggered self-cast VEHICLE_DAMAGED. The phase branches (MovePoint /
--- stand-dead / self-repair) stay out -- see header. The C++ arm also
--- runs events.Reset, so the summon pumps are cancelled here too (tick
--- 557 fix: they previously kept running after a lethal hit).
+-- C++ IsEncounterFinished (boss_mimiron.cpp:357-382) — the MKII/VX-001
+-- twin: all three components at UNIT_STAND_STATE_DEAD -> Unit::Kill
+-- each, DespawnOrUnsummon 120s each, then the controller's JustDied
+-- arm. Lua delivers the controller JustDied by killing the controller
+-- (C++ calls JustDied directly without killing; documented deviation).
+-- FindNearestCreature is the twin of the C++ instance GUID lookups.
+local function isEncounterFinished(creature, attacker)
+    local mkii = creature:FindNearestCreature(NPC_LEVIATHAN_MKII, 500)
+    local vx001 = creature:FindNearestCreature(NPC_VX_001, 500)
+    local aerial = creature:FindNearestCreature(NPC_AERIAL_COMMAND_UNIT, 500)
+    if mkii == nil or vx001 == nil or aerial == nil then
+        return false
+    end
+    if mkii:GetStandState() ~= UNIT_STAND_STATE_DEAD or vx001:GetStandState() ~= UNIT_STAND_STATE_DEAD or aerial:GetStandState() ~= UNIT_STAND_STATE_DEAD then
+        return false
+    end
+    local killer = attacker or creature
+    local selfGuid = creature:GetGUIDLow()
+    for _, part in ipairs({ mkii, vx001, aerial }) do
+        if part:GetGUIDLow() ~= selfGuid then
+            part:Kill(killer)
+        end
+    end
+    for _, part in ipairs({ mkii, vx001, aerial }) do
+        part:DespawnOrUnsummon(120000)
+    end
+    creature:Kill(killer)
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        mimiron:Kill(killer)
+    end
+    return true
+end
+
+-- C++ DamageTaken (:1127-1157), in C++ order. The health > 0 guard is
+-- the midnight form (ev9 can fire on an already-dead creature).
+-- SetAnimationTier(Ground) has no bridge -- leg skipped, see header.
+-- PHASE_AERIAL_COMMAND_UNIT: MovePoint to WP_AERIAL_P4_POS via the
+-- MoveTo twin (the ev28 arrival below fires on completion);
+-- GetMotionMaster()->Clear() has no bridge (MoveTo re-issues).
+-- PHASE_VOL7RON: stand-DEAD, IsEncounterFinished finish path (early
+-- return, no Reset), else CastStop + SELF_REPAIR. The C++ arm ends
+-- with events.Reset, so the summon pumps are cancelled on a lethal
+-- hit -- except on the VOL7RON finish-path early return, where C++
+-- returns before the Reset (the kills fire the components' JustDied
+-- arms, which cancel theirs).
 local function aerialDamageTaken(event, creature, attacker, damage)
     local health = creature:GetHealth()
-    if damage >= health then
-        cancelTimers(creature:GetGUIDLow())
-        creature:SetReactState(REACT_PASSIVE)
-        creature:AttackStop()
-        creature:SetDisableGravity(true)
-        creature:CastSpell(creature, SPELL_VEHICLE_DAMAGED, true)
-        return false, health - 1
+    if health == 0 or damage < health then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    creature:SetReactState(REACT_PASSIVE)
+    creature:AttackStop()
+    creature:SetDisableGravity(true)
+    creature:CastSpell(creature, SPELL_VEHICLE_DAMAGED, true)
+    local st = acuState[guid]
+    local phase = st and st.phase
+    if phase == "AERIAL_COMMAND_UNIT" then
+        creature:MoveTo(WP_AERIAL_P4_POS, ACU_P4_POS[1], ACU_P4_POS[2], ACU_P4_POS[3])
+    elseif phase == "VOL7RON" then
+        creature:SetStandState(UNIT_STAND_STATE_DEAD)
+        if isEncounterFinished(creature, attacker) then
+            return false, health - 1
+        end
+        creature:StopSpellCast()
+        creature:CastSpell(creature, SPELL_SELF_REPAIR)
+    end
+    cancelTimers(guid)
+    return false, health - 1
+end
+
+-- C++ MovementInform (:1220-1230), WP_AERIAL_P4_POS arrival only.
+-- Event 28 args: (event, creature, motionType, id); the four_horsemen
+-- ev28 form. The DO_ACTIVATE_V0L7R0N_1 receiver is live in
+-- boss_mimiron.lua.
+local function aerialMovementInform(event, creature, motionType, id)
+    if motionType ~= POINT_MOTION_TYPE or id ~= WP_AERIAL_P4_POS then
+        return
+    end
+    creature:SetFacingTo(ACU_P4_ORIENTATION)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS)
+    local mimiron = creature:FindNearestCreature(NPC_MIMIRON, 500)
+    if mimiron ~= nil then
+        mimiron:DoAction(DO_ACTIVATE_V0L7R0N_1)
     end
 end
 
@@ -409,6 +494,7 @@ end
 
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 5, aerialSpawn)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 9, aerialDamageTaken)
+RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 28, aerialMovementInform)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 19, aerialJustSummoned)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 23, aerialReset)
 RegisterCreatureEvent(NPC_AERIAL_COMMAND_UNIT, 3, aerialTargetDied)
