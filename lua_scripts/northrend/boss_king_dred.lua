@@ -47,7 +47,7 @@
 -- TEMPSUMMON_DEAD_DESPAWN 1s), randtime(20s,25s) init, 20-25s repeat —
 -- PORTED 2026-10-24 (the stale "absent summon STRAND bridge" claim was
 -- wrong: creature:SummonCreature is bridged, lua_creature_events.go:728;
--- the position leg rides creature:GetRelativePoint, lua_objects.go:519).
+-- the position leg rides creature:GetRelativePoint, lua_creature_events.go:3529 (motion twin; session twin lua_objects.go:3008).
 -- Unmodeled (no bridges — documented, not wired):
 -- UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-loop + in-loop gates
 -- PORTED: all 6 boss timer arms defer 500ms while casting (no repeat
@@ -212,7 +212,7 @@ end
 -- GetClosePoint(size=combatReach/3, dist=10, relAngle=0) =
 -- GetNearPoint(nullptr, 10+combatReach/3, orientation) (Object.cpp:3307)
 -- = creature:GetRelativePoint(10 + reach/3, 0) — the bridge hardcodes
--- size=0 (lua_creature_events.go:519), so the size leg rides the dist
+-- size=0 (lua_creature_events.go:3529), so the size leg rides the dist
 -- argument. o=0 falls back to the summoner's orientation on both sides
 -- (Object.cpp:2061-2062 twin); DEAD_DESPAWN is type 6 in the engine's
 -- 0-based summon-type scheme (lua_creature_events.go:936). Same boss

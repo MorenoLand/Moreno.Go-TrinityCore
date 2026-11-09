@@ -262,7 +262,7 @@ local function setCrystalStatus(crystal, active)
         if active then
             channelTarget:CastSpell(channelTarget, SPELL_BEAM_CHANNEL)
         elseif channelTarget:IsCasting() then
-            channelTarget:CastStop()
+            channelTarget:StopSpellCast()
         end
     end
 end
@@ -347,7 +347,7 @@ local function novosReset(event, creature)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     end
     if creature:IsCasting() then
-        creature:CastStop()
+        creature:StopSpellCast()
     end
 end
 
@@ -359,7 +359,7 @@ end
 -- (go:SetGoState / go:FindNearestCreature bridges live). At 4 deaths:
 -- Talk(SAY_ARCANE_FIELD 4) + SetSummonerStatus(false) (cross-AI, stays
 -- out) + SetBubbled(false) (the RemoveFlag NON_ATTACKABLE + CastStop
--- legs — HasFlag/RemoveFlag and IsCasting/CastStop are bridged) +
+-- legs — HasFlag/RemoveFlag and IsCasting/StopSpellCast are bridged) +
 -- EVENT_SUMMON_MINIONS (15s, heroic) seeds the summonMinionsTick pump
 -- (tick 510); EVENT_ATTACK (3s) stays out (no SelectTarget bridge).
 -- Below 4: the SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000) re-arm on
@@ -384,7 +384,7 @@ local function novosDoAction(event, creature, action)
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         end
         if creature:IsCasting() then
-            creature:CastStop()
+            creature:StopSpellCast()
         end
         -- C++ CrystalHandlerDied (:268-272): EVENT_ATTACK (3s) /
         -- EVENT_SUMMON_MINIONS (15s, heroic-only) schedules. EVENT_ATTACK

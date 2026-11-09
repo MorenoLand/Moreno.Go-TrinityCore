@@ -3505,6 +3505,43 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// GetMap is WorldObject::GetMap (WorldObjectMethods.h): the DBC-backed
+	// Map object for the creature's map/instance (NewMapObject + mapLive,
+	// the same builder behind the player, gameobject, and instance-hook
+	// surfaces). The session-creature twin (lua_objects.go) has carried it
+	// since the WorldObjectMethods census; the motion builder never did,
+	// so every handler-creature creature:GetMap() call (the instanceDataOf
+	// idiom, ~148 sites) indexed to nil and died on the call.
+	methods["GetMap"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		return []any{scripting.NewMapObject(mapID, instanceID, s.mapLive(mapID, instanceID))}, nil
+	}
+	// GetRelativePoint is WorldObjectMethods::GetRelativePoint
+	// (WorldObjectMethods.h:630-646): WorldObject::GetClosePoint(x, y, z,
+	// 0, dist, relAngle) = GetNearPoint with absAngle = orientation +
+	// relAngle at (combatReach + dist) (Object.cpp:3307-3311, 3272-3269).
+	// The height-collision re-solve (UpdateAllowedPositionZ/IsWithinLOS)
+	// has no Go model, so z stays the creature's z. Same twin as the
+	// session-creature surface (lua_objects.go); the motion builder never
+	// had it, so king_dred's raptor-call summon point died on the call.
+	methods["GetRelativePoint"] = func(_ context.Context, args []any) ([]any, error) {
+		dist, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		rad, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		reach, orientation, x, y, z := motion.CombatReach, motion.Orientation, motion.X, motion.Y, motion.Z
+		s.motionMu.Unlock()
+		r := reach + dist
+		a := orientation + rad
+		return []any{x + r*float32(math.Cos(float64(a))), y + r*float32(math.Sin(float64(a))), z}, nil
+	}
 	// SetHover is Creature::SetHover (Creature.cpp:3105): flips
 	// MOVEMENTFLAG_HOVER with the C++ no-op-on-unchanged early-out, then
 	// broadcasts SMSG_SPLINE_MOVE_SET_HOVER/UNSET_HOVER (packed GUID only,
