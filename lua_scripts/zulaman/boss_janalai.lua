@@ -409,7 +409,7 @@ local function janalaiEnterCombat(event, creature, target)
     creature:SetBossState(2, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_janalai.cpp:181-183 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     janalaiResetState(guid)
     -- C++ JustEngagedWith (boss_janalai.cpp:181-193): Talk + the Initialize
     -- timer set — FireBreathTimer 8s, BombTimer 30s, HatcherTimer 10s,
@@ -438,7 +438,7 @@ end
 -- so it never fires on the killing blow; the postDamage > 0 guard
 -- keeps the port from enraging while dying.
 local function janalaiDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = janalaiState(guid)
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -480,7 +480,7 @@ local function janalaiDamageTaken(event, creature, attacker, damage)
 end
 
 local function janalaiLeaveCombat(event, creature)
-    janalaiResetState(creature:GetGUID())
+    janalaiResetState(creature:GetGUIDLow())
 end
 
 local function janalaiTargetDied(event, creature, victim)
@@ -488,7 +488,7 @@ local function janalaiTargetDied(event, creature, victim)
 end
 
 local function janalaiDied(event, creature, killer)
-    janalaiResetState(creature:GetGUID())
+    janalaiResetState(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_janalai.cpp:169-173): Talk first, then
     -- _JustDied(), writing SetBossState(BOSS_JANALAI 2, DONE)
@@ -503,7 +503,7 @@ local function janalaiReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
         creature:SetBossState(2, 0)
     end
-    janalaiResetState(creature:GetGUID())
+    janalaiResetState(creature:GetGUIDLow())
     -- C++ boss_janalai::Reset (boss_janalai.cpp:162-169): Initialize()
     -- -> position-gated MovePoint (no movement bridge) ->
     -- me->SetDisableGravity(true).
@@ -568,7 +568,7 @@ local function onBuffet(creature, guid)
 end
 
 local function hatchlingEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     schedule(timers, guid, "buffet", 7000, function()
         onBuffet(creature, guid)
@@ -576,11 +576,11 @@ local function hatchlingEnterCombat(event, creature, target)
 end
 
 local function hatchlingLeaveCombat(event, creature)
-    cancelTimers(timers, creature:GetGUID())
+    cancelTimers(timers, creature:GetGUIDLow())
 end
 
 local function hatchlingReset(event, creature)
-    cancelTimers(timers, creature:GetGUID())
+    cancelTimers(timers, creature:GetGUIDLow())
     -- C++ npc_janalai_hatchlingAI::Reset (boss_janalai.cpp:618-627):
     -- Initialize() -> position-gated MovePoint (no movement bridge) ->
     -- me->SetDisableGravity(true) (:626).

@@ -117,7 +117,7 @@ local function lucifronEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_LUCIFRON 0, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(0, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "impendingdoom", 10000, function()
         onImpendingDoom(creature, guid)
@@ -135,7 +135,7 @@ local function lucifronResetState(guid)
 end
 
 local function lucifronLeaveCombat(event, creature)
-    lucifronResetState(creature:GetGUID())
+    lucifronResetState(creature:GetGUIDLow())
 end
 
 local function lucifronDied(event, creature, killer)
@@ -143,7 +143,7 @@ local function lucifronDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_LUCIFRON 0, DONE).
     creature:SetBossState(0, 3)
-    lucifronResetState(creature:GetGUID())
+    lucifronResetState(creature:GetGUIDLow())
 end
 
 local function lucifronReset(event, creature)
@@ -154,7 +154,7 @@ local function lucifronReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
         creature:SetBossState(0, 0)
     end
-    lucifronResetState(creature:GetGUID())
+    lucifronResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_LUCIFRON, 1, lucifronEnterCombat)

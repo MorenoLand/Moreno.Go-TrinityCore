@@ -216,7 +216,7 @@ local function shazzrahEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_SHAZZRAH 4, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(4, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arcaneexplosion", 6000, function()
         onArcaneExplosion(creature, guid)
@@ -240,7 +240,7 @@ local function shazzrahResetState(guid)
 end
 
 local function shazzrahLeaveCombat(event, creature)
-    shazzrahResetState(creature:GetGUID())
+    shazzrahResetState(creature:GetGUIDLow())
 end
 
 local function shazzrahDied(event, creature, killer)
@@ -248,7 +248,7 @@ local function shazzrahDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_SHAZZRAH 4, DONE).
     creature:SetBossState(4, 3)
-    shazzrahResetState(creature:GetGUID())
+    shazzrahResetState(creature:GetGUIDLow())
 end
 
 local function shazzrahReset(event, creature)
@@ -259,7 +259,7 @@ local function shazzrahReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
         creature:SetBossState(4, 0)
     end
-    shazzrahResetState(creature:GetGUID())
+    shazzrahResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SHAZZRAH, 1, shazzrahEnterCombat)

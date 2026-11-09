@@ -247,7 +247,7 @@ local function akilzonEnterCombat(event, creature, target)
     creature:SetBossState(1, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_akilzon.cpp:116-118 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; bridge live 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     akilzonResetState(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith: 10-20s static, 20-30s gust, 10-20s lightning,
@@ -271,7 +271,7 @@ local function akilzonEnterCombat(event, creature, target)
 end
 
 local function akilzonLeaveCombat(event, creature)
-    akilzonResetState(creature:GetGUID())
+    akilzonResetState(creature:GetGUIDLow())
 end
 
 local function akilzonTargetDied(event, creature, victim)
@@ -281,7 +281,7 @@ local function akilzonTargetDied(event, creature, victim)
 end
 
 local function akilzonDied(event, creature, killer)
-    akilzonResetState(creature:GetGUID())
+    akilzonResetState(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_akilzon.cpp:130-133): Talk first, then
     -- _JustDied(), writing SetBossState(BOSS_AKILZON 1, DONE)
@@ -296,7 +296,7 @@ local function akilzonReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
         creature:SetBossState(1, 0)
     end
-    akilzonResetState(creature:GetGUID())
+    akilzonResetState(creature:GetGUIDLow())
     -- C++ boss_akilzon::Reset (boss_akilzon.cpp:403-407): Initialize()
     -- -> me->SetDisableGravity(true) (:406).
     creature:SetDisableGravity(true)
@@ -349,7 +349,7 @@ local function onEagleSwoop(creature, guid)
 end
 
 local function eagleEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(eagleTimers, guid)
     schedule(eagleTimers, guid, "swoop", math.random(5000, 10000), function()
         onEagleSwoop(creature, guid)
@@ -357,15 +357,15 @@ local function eagleEnterCombat(event, creature, target)
 end
 
 local function eagleLeaveCombat(event, creature)
-    cancelTimers(eagleTimers, creature:GetGUID())
+    cancelTimers(eagleTimers, creature:GetGUIDLow())
 end
 
 local function eagleDied(event, creature, killer)
-    cancelTimers(eagleTimers, creature:GetGUID())
+    cancelTimers(eagleTimers, creature:GetGUIDLow())
 end
 
 local function eagleReset(event, creature)
-    cancelTimers(eagleTimers, creature:GetGUID())
+    cancelTimers(eagleTimers, creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SOARING_EAGLE, 1, eagleEnterCombat)

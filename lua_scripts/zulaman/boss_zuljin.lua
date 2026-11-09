@@ -539,7 +539,7 @@ local function zuljinEnterCombat(event, creature, target)
     creature:SetBossState(5, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_zuljin.cpp:205-207 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     zuljinResetState(guid)
     local st = zuljinState(guid)
     st.introActive = true
@@ -568,13 +568,13 @@ local function zuljinEnterCombat(event, creature, target)
 end
 
 local function zuljinLeaveCombat(event, creature)
-    zuljinResetState(creature:GetGUID())
+    zuljinResetState(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: suppressed while the intro timer is pending; no
 -- player gate in C++.
 local function zuljinTargetDied(event, creature, victim)
-    if zuljinState(creature:GetGUID()).introActive then
+    if zuljinState(creature:GetGUIDLow()).introActive then
         return
     end
     creature:Talk(YELL_KILL)
@@ -588,9 +588,9 @@ local function zuljinDied(event, creature, killer)
     -- (UNIT_STAND_STATE_DEAD 7). Capture the latched spirit before the
     -- reset below wipes the state table; nil-guarded for
     -- TEMPSUMMON_DEAD_DESPAWN timing (C++ proves it alive at JustDied).
-    local st = zuljinState(creature:GetGUID())
+    local st = zuljinState(creature:GetGUIDLow())
     local spirit = st.spirits and st.spirits[4]
-    zuljinResetState(creature:GetGUID())
+    zuljinResetState(creature:GetGUIDLow())
     creature:SetBossState(5, 3)
     creature:Talk(YELL_DEATH)
     if spirit then
@@ -607,7 +607,7 @@ local function zuljinReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
         creature:SetBossState(5, 0)
     end
-    zuljinResetState(creature:GetGUID())
+    zuljinResetState(creature:GetGUIDLow())
     creature:SetEquipmentSlots(33975, 0xFFFFFFFF, 0xFFFFFFFF)
 end
 
@@ -615,7 +615,7 @@ end
 -- pre-damage health < health_20 * (4 - Phase), EnterPhase(Phase + 1).
 -- health_20 = floor(maxHealth * 20 / 100) (C++ CountPctFromMaxHealth).
 local function zuljinDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = zuljinState(guid)
     if st.sequence ~= nil or st.phase >= PHASE_DRAGONHAWK then
         return false, damage

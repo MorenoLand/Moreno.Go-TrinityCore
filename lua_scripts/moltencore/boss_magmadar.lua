@@ -143,7 +143,7 @@ local function magmadarEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_MAGMADAR 1, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(1, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "frenzy", 30000, function()
         onFrenzy(creature, guid)
@@ -161,7 +161,7 @@ local function magmadarResetState(guid)
 end
 
 local function magmadarLeaveCombat(event, creature)
-    magmadarResetState(creature:GetGUID())
+    magmadarResetState(creature:GetGUIDLow())
 end
 
 local function magmadarDied(event, creature, killer)
@@ -169,7 +169,7 @@ local function magmadarDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_MAGMADAR 1, DONE).
     creature:SetBossState(1, 3)
-    magmadarResetState(creature:GetGUID())
+    magmadarResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_magmadar.cpp:61-64): BossAI::Reset() first, then the
@@ -181,7 +181,7 @@ local function magmadarReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
         creature:SetBossState(1, 0)
     end
-    magmadarResetState(creature:GetGUID())
+    magmadarResetState(creature:GetGUIDLow())
     -- Reset-only arm (boss_magmadar.cpp); alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_MAGMA_SPIT, true)

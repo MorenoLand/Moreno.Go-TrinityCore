@@ -98,7 +98,7 @@ local function onBoard(event, vehicle, passenger, seatId)
     if pennant == 0 then
         return
     end
-    pennantByVehicle[vehicle:GetGUID()] = pennant
+    pennantByVehicle[vehicle:GetGUIDLow()] = pennant
     passenger:CastSpell(nil, pennant, true)
 end
 
@@ -109,7 +109,7 @@ local function onUnboard(event, vehicle, passenger, seatId)
     if passenger == nil or passenger:GetObjectType() ~= "Player" then
         return
     end
-    local guid = vehicle:GetGUID()
+    local guid = vehicle:GetGUIDLow()
     local pennant = pennantByVehicle[guid]
     pennantByVehicle[guid] = nil
     if pennant == nil or pennant == 0 then

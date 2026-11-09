@@ -171,7 +171,7 @@ local function gehennasEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_GEHENNAS 2, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(2, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "curse", 12000, function()
         onGehennasCurse(creature, guid)
@@ -189,7 +189,7 @@ local function gehennasResetState(guid)
 end
 
 local function gehennasLeaveCombat(event, creature)
-    gehennasResetState(creature:GetGUID())
+    gehennasResetState(creature:GetGUIDLow())
 end
 
 local function gehennasDied(event, creature, killer)
@@ -197,7 +197,7 @@ local function gehennasDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_GEHENNAS 2, DONE).
     creature:SetBossState(2, 3)
-    gehennasResetState(creature:GetGUID())
+    gehennasResetState(creature:GetGUIDLow())
 end
 
 local function gehennasReset(event, creature)
@@ -208,7 +208,7 @@ local function gehennasReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
         creature:SetBossState(2, 0)
     end
-    gehennasResetState(creature:GetGUID())
+    gehennasResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GEHENNAS, 1, gehennasEnterCombat)

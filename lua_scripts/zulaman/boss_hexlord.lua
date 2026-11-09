@@ -400,7 +400,7 @@ local function hexlordEnterCombat(event, creature, target)
     creature:SetBossState(4, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_hexlord.cpp:290-292 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     state[guid] = { drainDeadline = os.time() + 60, playerClass = nil, playerGuid = nil }
     creature:Talk(YELL_AGGRO)
@@ -426,7 +426,7 @@ local function hexlordEnterCombat(event, creature, target)
 end
 
 local function hexlordLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     state[guid] = nil
 end
@@ -436,7 +436,7 @@ local function hexlordTargetDied(event, creature, victim)
 end
 
 local function hexlordDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     state[guid] = nil
     -- C++ JustDied (boss_hexlord.cpp:321-323): _JustDied() first,
@@ -481,7 +481,7 @@ engagePickedAdds = function(creature, victim)
     if victim == nil then
         return
     end
-    local ids = hexlordAddIds[creature:GetGUID()]
+    local ids = hexlordAddIds[creature:GetGUIDLow()]
     if not ids then
         return
     end
@@ -522,7 +522,7 @@ local function hexlordReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
         creature:SetBossState(4, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     state[guid] = nil
     -- C++ Reset (boss_hexlord.cpp:282-288): _Reset(); Initialize();
@@ -704,7 +704,7 @@ end
 
 local function addEnterCombat(event, creature)
     creature:DoZoneInCombat() -- boss_hexlord.cpp:227 (boss_hexlord_addAI::JustEngagedWith sole arm; bridge live 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
     local arms = ADD_ARMS[creature:GetEntry()]
     if arms then
@@ -717,15 +717,15 @@ local function addEnterCombat(event, creature)
 end
 
 local function addLeaveCombat(event, creature)
-    cancelTimers(timers, creature:GetGUID())
+    cancelTimers(timers, creature:GetGUIDLow())
 end
 
 local function addDied(event, creature)
-    cancelTimers(timers, creature:GetGUID())
+    cancelTimers(timers, creature:GetGUIDLow())
 end
 
 local function addReset(event, creature)
-    cancelTimers(timers, creature:GetGUID())
+    cancelTimers(timers, creature:GetGUIDLow())
 end
 
 local ADD_ENTRIES = {

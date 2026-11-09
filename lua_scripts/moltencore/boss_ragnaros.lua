@@ -403,7 +403,7 @@ local function ragnarosEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_RAGNAROS 9, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(9, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { hasYelledMagmaBurst = false, hasSubmergedOnce = false }
     schedule(guid, "eruption", 15000, function()
@@ -442,7 +442,7 @@ local function ragnarosResetState(guid)
 end
 
 local function ragnarosLeaveCombat(event, creature)
-    ragnarosResetState(creature:GetGUID())
+    ragnarosResetState(creature:GetGUIDLow())
 end
 
 local function ragnarosDied(event, creature, killer)
@@ -451,7 +451,7 @@ local function ragnarosDied(event, creature, killer)
     -- writes SetBossState(BOSS_RAGNAROS 9, DONE). (The JustDied at
     -- boss_ragnaros.cpp:331-333 belongs to npc_son_of_flame, not the boss.)
     creature:SetBossState(9, 3)
-    ragnarosResetState(creature:GetGUID())
+    ragnarosResetState(creature:GetGUIDLow())
 end
 
 local function ragnarosReset(event, creature)
@@ -465,7 +465,7 @@ local function ragnarosReset(event, creature)
     end
     -- C++ boss_ragnaros.cpp:106: SetUInt32Value(UNIT_NPC_EMOTESTATE, 0)
     creature:EmoteState(0)
-    ragnarosResetState(creature:GetGUID())
+    ragnarosResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_RAGNAROS, 1, ragnarosEnterCombat)
@@ -483,7 +483,7 @@ RegisterCreatureEvent(ENTRY_RAGNAROS, 23, ragnarosReset)
 -- (boss_ragnaros.cpp:175) — reachable across submerges since slain sons
 -- from an earlier banish keep counting until the next submerge resets.
 RegisterCreatureEvent(ENTRY_RAGNAROS, 21, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local s = getState(guid)
     s.addsDeaths = (s.addsDeaths or 0) + 1
     if s.banished and s.addsDeaths > 8 then

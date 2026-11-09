@@ -180,7 +180,7 @@ local function baronGeddonEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_BARON_GEDDON 5, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(5, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "inferno", 45000, function()
         onInferno(creature, guid)
@@ -226,7 +226,7 @@ local function baronGeddonResetState(guid)
 end
 
 local function baronGeddonLeaveCombat(event, creature)
-    baronGeddonResetState(creature:GetGUID())
+    baronGeddonResetState(creature:GetGUIDLow())
 end
 
 local function baronGeddonDied(event, creature, killer)
@@ -234,7 +234,7 @@ local function baronGeddonDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_BARON_GEDDON 5, DONE).
     creature:SetBossState(5, 3)
-    baronGeddonResetState(creature:GetGUID())
+    baronGeddonResetState(creature:GetGUIDLow())
 end
 
 local function baronGeddonReset(event, creature)
@@ -246,7 +246,7 @@ local function baronGeddonReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(5) ~= 3 then
         creature:SetBossState(5, 0)
     end
-    baronGeddonResetState(creature:GetGUID())
+    baronGeddonResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_BARON_GEDDON, 1, baronGeddonEnterCombat)

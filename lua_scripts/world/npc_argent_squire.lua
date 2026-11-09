@@ -58,7 +58,7 @@ local function onSpawn(event, creature)
     -- flag-strip pump re-arms via CreateLuaEvent repeats (earth-elemental
     -- idiom). cancelPump first: ev23 pre-fires on spawn, so ev5+ev23
     -- would otherwise double-seed.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     squirePump[guid] = CreateLuaEvent(function()
         flagStripTick(creature, guid)
@@ -70,7 +70,7 @@ local function onReset(event, creature)
 end
 
 local function onDeath(event, creature)
-    cancelPump(creature:GetGUID())
+    cancelPump(creature:GetGUIDLow())
 end
 
 local function onGossipSelect(event, player, creature, sender, action, code, listID)

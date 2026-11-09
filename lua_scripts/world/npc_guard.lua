@@ -205,13 +205,13 @@ armBanish = function(creature, guid) -- C++ npc_guard.cpp:210 ScheduleVanish
 end
 
 local function shattrathEnterCombat(event, creature, target) -- C++ :197-199
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelBanish(guid)
     armBanish(creature, guid)
 end
 
 local function shattrathLeaveCombat(event, creature) -- C++ Reset cancel (:193-195) + UpdateAI out-of-combat bail (:202-207)
-    cancelBanish(creature:GetGUID())
+    cancelBanish(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_ALDOR_VINDICATOR, 1, shattrathEnterCombat)

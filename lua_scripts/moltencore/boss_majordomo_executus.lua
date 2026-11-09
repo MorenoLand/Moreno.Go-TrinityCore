@@ -256,7 +256,7 @@ local function majordomoEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_MAJORDOMO_EXECUTUS 8, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(8, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "magicreflection", 30000, function()
@@ -317,7 +317,7 @@ local function majordomoResetState(guid)
 end
 
 local function majordomoLeaveCombat(event, creature)
-    majordomoResetState(creature:GetGUID())
+    majordomoResetState(creature:GetGUIDLow())
 end
 
 local function majordomoDied(event, creature, killer)
@@ -326,7 +326,7 @@ local function majordomoDied(event, creature, killer)
     -- SetBossState(BOSS_MAJORDOMO_EXECUTUS 8, DONE). (The normal
     -- defeat path writes DONE earlier, in onDefeatPump :116.)
     creature:SetBossState(8, 3)
-    majordomoResetState(creature:GetGUID())
+    majordomoResetState(creature:GetGUIDLow())
 end
 
 local function majordomoReset(event, creature)
@@ -338,7 +338,7 @@ local function majordomoReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(8) ~= 3 then
         creature:SetBossState(8, 0)
     end
-    majordomoResetState(creature:GetGUID())
+    majordomoResetState(creature:GetGUIDLow())
 end
 
 -- C++ OnGossipSelect: menu 4108 option 0 -> CloseGossipMenuFor,
@@ -365,7 +365,7 @@ local function majordomoGossipSelect(event, player, creature, sender, action, co
     end
     player:GossipClearMenu()
     player:GossipComplete()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:RemoveFlag(82, 1)
     creature:Talk(SAY_SUMMON_MAJ)
     schedule(guid, "outro2", 8000, function()

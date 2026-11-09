@@ -207,7 +207,7 @@ local function sulfuronEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_SULFURON_HARBINGER 6, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(6, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "darkstrike", 10000, function()
         onDarkStrike(creature, guid)
@@ -231,7 +231,7 @@ local function sulfuronResetState(guid)
 end
 
 local function sulfuronLeaveCombat(event, creature)
-    sulfuronResetState(creature:GetGUID())
+    sulfuronResetState(creature:GetGUIDLow())
 end
 
 local function sulfuronDied(event, creature, killer)
@@ -239,7 +239,7 @@ local function sulfuronDied(event, creature, killer)
     -- events.Reset() only; _JustDied() writes
     -- SetBossState(BOSS_SULFURON_HARBINGER 6, DONE).
     creature:SetBossState(6, 3)
-    sulfuronResetState(creature:GetGUID())
+    sulfuronResetState(creature:GetGUIDLow())
 end
 
 local function sulfuronReset(event, creature)
@@ -252,7 +252,7 @@ local function sulfuronReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
         creature:SetBossState(6, 0)
     end
-    sulfuronResetState(creature:GetGUID())
+    sulfuronResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SULFURON_HARBINGER, 1, sulfuronEnterCombat)

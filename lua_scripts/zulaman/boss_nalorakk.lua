@@ -293,7 +293,7 @@ local function nalorakkEnterCombat(event, creature, target)
     creature:SetBossState(0, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_nalorakk.cpp:240-242 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     nalorakkResetState(guid)
     -- C++ JustEngagedWith: Talk + the Initialize timer set.
     creature:Talk(YELL_AGGRO)
@@ -307,7 +307,7 @@ local function nalorakkEnterCombat(event, creature, target)
 end
 
 local function nalorakkLeaveCombat(event, creature)
-    nalorakkResetState(creature:GetGUID())
+    nalorakkResetState(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: random YELL_KILL_ONE / YELL_KILL_TWO (no player gate).
@@ -320,7 +320,7 @@ local function nalorakkTargetDied(event, creature, victim)
 end
 
 local function nalorakkDied(event, creature, killer)
-    nalorakkResetState(creature:GetGUID())
+    nalorakkResetState(creature:GetGUIDLow())
     -- C++ JustDied (boss_nalorakk.cpp:247-249): _JustDied() first,
     -- writing SetBossState(BOSS_NALORAKK 0, DONE)
     -- (ScriptedCreature.cpp:513-519), then Talk(YELL_DEATH).
@@ -341,7 +341,7 @@ local function nalorakkReset(event, creature)
     -- (its wave-4 clear never runs in the collapsed model, so the
     -- flags would strand the boss unattackable).
     creature:SetSpeedRate(1, 2.0)
-    nalorakkResetState(creature:GetGUID())
+    nalorakkResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_NALORAKK, 1, nalorakkEnterCombat)

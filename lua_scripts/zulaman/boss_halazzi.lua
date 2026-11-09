@@ -439,7 +439,7 @@ local function halazziEnterCombat(event, creature, target)
     creature:SetBossState(3, 1)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540; boss_halazzi.cpp:117-119 base call first)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     halazziResetState(guid)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith: Talk + EnterPhase(PHASE_LYNX).
@@ -450,8 +450,8 @@ local function halazziEnterCombat(event, creature, target)
 end
 
 local function halazziLeaveCombat(event, creature)
-    despawnHalazziSummons(creature:GetGUID())
-    halazziResetState(creature:GetGUID())
+    despawnHalazziSummons(creature:GetGUIDLow())
+    halazziResetState(creature:GetGUIDLow())
 end
 
 local function halazziTargetDied(event, creature, victim)
@@ -461,8 +461,8 @@ local function halazziTargetDied(event, creature, victim)
 end
 
 local function halazziDied(event, creature, killer)
-    halazziResetState(creature:GetGUID())
-    despawnHalazziSummons(creature:GetGUID())
+    halazziResetState(creature:GetGUIDLow())
+    despawnHalazziSummons(creature:GetGUIDLow())
     -- C++ JustDied (boss_halazzi.cpp:326-328): _JustDied() first,
     -- writing SetBossState(BOSS_HALAZZI 3, DONE)
     -- (ScriptedCreature.cpp:513-519), then Talk(SAY_DEATH).
@@ -477,7 +477,7 @@ local function halazziReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnHalazziSummons(guid)
     halazziResetState(guid)
     -- C++ Reset: triggered dual-wield self-cast, then EnterPhase(LYNX).
@@ -493,7 +493,7 @@ end
 
 -- C++ DamageTaken: lethal damage is zeroed outside the enrage phase.
 local function halazziDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if not st then
         return
@@ -511,8 +511,8 @@ end
 -- timer in startSplit is the bearer; this guard keeps the C++ arm wired.
 local function halazziSpellHit(event, creature, spellId)
     if spellId == SPELL_TRANSFORM_SPLIT2
-            and halazziState(creature:GetGUID()).phase == PHASE_SPLIT then
-        enterPhase(creature, creature:GetGUID(), PHASE_HUMAN)
+            and halazziState(creature:GetGUIDLow()).phase == PHASE_SPLIT then
+        enterPhase(creature, creature:GetGUIDLow(), PHASE_HUMAN)
     end
 end
 
@@ -525,13 +525,13 @@ end
 -- below, despawned from died/reset/leave (BossAI _JustDied/_Reset
 -- DespawnAll, keleseth precedent).
 local function halazziJustSummoned(event, creature, summon)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = halazziSummons[guid]
     if not list then
         list = {}
         halazziSummons[guid] = list
     end
-    list[summon:GetGUID()] = summon
+    list[summon:GetGUIDLow()] = summon
     local victim = creature:GetVictim()
     if victim ~= nil then
         summon:EngageWithTarget(victim)
@@ -577,7 +577,7 @@ local function lynxResetState(guid)
 end
 
 local function lynxEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     lynxResetState(guid)
     schedule(lynxTimers, guid, "frenzy", math.random(30000, 50000), function()
         onLynxFrenzy(creature, guid)
@@ -588,15 +588,15 @@ local function lynxEnterCombat(event, creature, target)
 end
 
 local function lynxLeaveCombat(event, creature)
-    lynxResetState(creature:GetGUID())
+    lynxResetState(creature:GetGUIDLow())
 end
 
 local function lynxDied(event, creature, killer)
-    lynxResetState(creature:GetGUID())
+    lynxResetState(creature:GetGUIDLow())
 end
 
 local function lynxReset(event, creature)
-    lynxResetState(creature:GetGUID())
+    lynxResetState(creature:GetGUIDLow())
 end
 
 -- C++ lynx DamageTaken: lethal damage is zeroed unconditionally.

@@ -141,7 +141,7 @@ local function golemaggEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_GOLEMAGG_THE_INCINERATOR 7, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(7, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "pyroblast", 7000, function()
         onPyroblast(creature, guid)
@@ -153,7 +153,7 @@ local function golemaggResetState(guid)
 end
 
 local function golemaggLeaveCombat(event, creature)
-    golemaggResetState(creature:GetGUID())
+    golemaggResetState(creature:GetGUIDLow())
 end
 
 local function golemaggDied(event, creature, killer)
@@ -161,7 +161,7 @@ local function golemaggDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_GOLEMAGG_THE_INCINERATOR 7, DONE).
     creature:SetBossState(7, 3)
-    golemaggResetState(creature:GetGUID())
+    golemaggResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_golemagg.cpp:60-62): BossAI::Reset() first, then the
@@ -174,7 +174,7 @@ local function golemaggReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
         creature:SetBossState(7, 0)
     end
-    golemaggResetState(creature:GetGUID())
+    golemaggResetState(creature:GetGUIDLow())
     -- Reset-only arm (boss_golemagg.cpp); alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_MAGMASPLASH, true)
@@ -188,7 +188,7 @@ end
 -- and arm the earthquake cycle (C++-exact; the creature HasAura bridge
 -- means a dispelled enrage re-casts, matching C++).
 local function golemaggDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if creature:HasAura(SPELL_ENRAGE) then
         return
     end

@@ -26,7 +26,7 @@ local QUESTS = {
 local stateByGuid = {}
 
 local function resetState(creature)
-    stateByGuid[creature:GetGUID()] = {casterGuid = nil, isHealed = false, canRun = false}
+    stateByGuid[creature:GetGUIDLow()] = {casterGuid = nil, isHealed = false, canRun = false}
     creature:SetStandState(STAND_KNEEL)
     creature:SetHealth(math.floor(creature:GetMaxHealth() * 70 / 100))
 end
@@ -42,7 +42,7 @@ local function onSpellHit(event, creature, caster, spellId)
     if creature:IsInCombat() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = stateByGuid[guid]
     if st == nil then
         st = {casterGuid = nil, isHealed = false, canRun = false}

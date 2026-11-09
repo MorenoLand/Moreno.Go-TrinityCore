@@ -100,7 +100,7 @@ local function garrEnterCombat(event, creature, target)
     -- BossAI::JustEngagedWith first; _JustEngagedWith writes
     -- SetBossState(BOSS_GARR 3, IN_PROGRESS) (ScriptedCreature.cpp:537).
     creature:SetBossState(3, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "antimagicpulse", 25000, function()
         onAntimagicPulse(creature, guid)
@@ -115,7 +115,7 @@ local function garrResetState(guid)
 end
 
 local function garrLeaveCombat(event, creature)
-    garrResetState(creature:GetGUID())
+    garrResetState(creature:GetGUIDLow())
 end
 
 local function garrDied(event, creature, killer)
@@ -123,7 +123,7 @@ local function garrDied(event, creature, killer)
     -- virtual dispatch (ScriptedCreature.h:330); _JustDied() writes
     -- SetBossState(BOSS_GARR 3, DONE).
     creature:SetBossState(3, 3)
-    garrResetState(creature:GetGUID())
+    garrResetState(creature:GetGUIDLow())
 end
 
 local function garrReset(event, creature)
@@ -136,7 +136,7 @@ local function garrReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0)
     end
-    garrResetState(creature:GetGUID())
+    garrResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GARR, 1, garrEnterCombat)

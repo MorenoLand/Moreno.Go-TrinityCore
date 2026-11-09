@@ -439,7 +439,7 @@ end
 -- Pre-damage health in the event-9 hook (moroes precedent); C++-exact
 -- floor form (ironaya convention); health > 0 hook guard (midnight).
 local function ysondreDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local stage = stages[guid] or 1
     stages[guid] = stage
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
@@ -461,7 +461,7 @@ end
 -- ev15 — both bridges now live); the draw-spirit cast itself is
 -- visual-only (no Go effect for 24811).
 local function lethonDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local stage = stages[guid] or 1
     stages[guid] = stage
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
@@ -505,7 +505,7 @@ local function spiritShadeMovementInform(_, creature, moveType, id)
     if moveType ~= FOLLOW_MOTION_TYPE then
         return
     end
-    local expected = shadeSummonerLow[creature:GetGUID()]
+    local expected = shadeSummonerLow[creature:GetGUIDLow()]
     if expected ~= nil and id % 16777216 == expected then
         creature:CastSpell(creature, SPELL_DARK_OFFERING)
         creature:DespawnOrUnsummon(1000)
@@ -519,12 +519,12 @@ local function spiritShadeSummoned(event, creature, summoner)
     if not summoner then
         return
     end
-    shadeSummonerLow[creature:GetGUID()] = summoner:GetGUIDLow()
+    shadeSummonerLow[creature:GetGUIDLow()] = summoner:GetGUIDLow()
     creature:MoveFollow(summoner, 0, 0)
 end
 
 local function spiritShadeCleanup(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     shadeSummonerLow[guid] = nil
 end
@@ -532,7 +532,7 @@ end
 -- C++ boss_emeriss::DamageTaken (:515-523): if (!HealthAbovePct(100 -
 -- 25*_stage)) { Talk(1); DoCast(me, 24910, triggered); ++_stage; }.
 local function emerissDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local stage = stages[guid] or 1
     stages[guid] = stage
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
@@ -573,7 +573,7 @@ end
 -- (sibling-dragon convention); the _banished latch is the re-trigger
 -- guard (C++ leaves it set until the banish exit).
 local function taerarDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local stage = stages[guid] or 1
     stages[guid] = stage
     if taerarBanished[guid] then
@@ -610,7 +610,7 @@ end
 -- else in the ported model, so any summoned-creature death while
 -- banished counts; the 60s timer is the guaranteed exit regardless.
 local function taerarSummonedDies(event, creature, summon, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not taerarBanished[guid] then
         return
     end
@@ -628,7 +628,7 @@ end
 -- wrong — CreateLuaEvent is a real bridge, retracted this run).
 local function ysondreEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "summon_player", 1000, function()
         summonPlayerTick(creature, guid)
@@ -649,7 +649,7 @@ end
 
 local function lethonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "summon_player", 1000, function()
         summonPlayerTick(creature, guid)
@@ -670,7 +670,7 @@ end
 
 local function emerissEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "summon_player", 1000, function()
         summonPlayerTick(creature, guid)
@@ -691,7 +691,7 @@ end
 
 local function taerarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "summon_player", 1000, function()
         summonPlayerTick(creature, guid)
@@ -736,18 +736,18 @@ local function emerissKilledUnit(event, creature, victim)
 end
 
 local function dragonLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     taerarBanished[guid] = nil
     taerarShades[guid] = nil
 end
 
 local function dragonDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function dragonReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     stages[guid] = 1 -- C++ Initialize()/Reset() sets _stage = 1
     -- C++ emerald_dragonAI::Reset (boss_emerald_dragons.cpp:100):
@@ -777,8 +777,8 @@ end
 -- above (2026-10-20).
 local function taerarReset(event, creature)
     dragonReset(event, creature)
-    taerarBanished[creature:GetGUID()] = nil
-    taerarShades[creature:GetGUID()] = nil
+    taerarBanished[creature:GetGUIDLow()] = nil
+    taerarShades[creature:GetGUIDLow()] = nil
     creature:RemoveAura(SPELL_SHADE)
 end
 

@@ -181,7 +181,7 @@ onBlueRing = function(bunny, guid)
 end
 
 local function onBunnyAIUpdate(event, bunny)
-    local guid = bunny:GetGUID()
+    local guid = bunny:GetGUIDLow()
     if bunny:GetData(DATA_BUNNY_RUNNING) == 1 then
         if not ringRunning[guid] then
             ringRunning[guid] = true
@@ -194,8 +194,8 @@ end
 
 local function onBunnyReset(event, bunny)
     bunny:SetData(DATA_BUNNY_RUNNING, 0)
-    cancelRingTimers(bunny:GetGUID())
-    ringRunning[bunny:GetGUID()] = nil
+    cancelRingTimers(bunny:GetGUIDLow())
+    ringRunning[bunny:GetGUIDLow()] = nil
 end
 
 RegisterCreatureEvent(POLE_BUNNY_ENTRY, 7, onBunnyAIUpdate)
@@ -323,11 +323,11 @@ local function injuredPatientDecay(event, creature)
         creature:SetFlag(59, 0x02000000) -- UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE
         creature:SetDeathState(1) -- JUST_DIED (DeathState 0-4, Unit.h:200-207)
         creature:SetFlag(79, 32) -- UNIT_FIELD_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD
-        local doctorGUID = patientDoctor[creature:GetGUID()]
+        local doctorGUID = patientDoctor[creature:GetGUIDLow()]
         if doctorGUID then
             local state = doctorState[doctorGUID]
             if state then
-                local record = state.patients[creature:GetGUID()]
+                local record = state.patients[creature:GetGUIDLow()]
                 if record then
                     doctorPatientDied(state, doctorGUID, record.coord)
                 end
@@ -403,14 +403,14 @@ end
 
 -- C++ Reset :646-650 (Initialize + RemoveFlag NOT_SELECTABLE).
 local function doctorReset(event, creature)
-    doctorClearState(creature:GetGUID())
+    doctorClearState(creature:GetGUIDLow())
     creature:RemoveFlag(59, TRIAGE_FLAG_NOT_SELECTABLE)
 end
 
 -- Doctor death has no C++ arm; clear the Lua state so a stale table
 -- cannot resurrect the event.
 local function doctorDied(event, creature)
-    doctorClearState(creature:GetGUID())
+    doctorClearState(creature:GetGUIDLow())
 end
 
 -- C++ BeginEvent :655-683, fired from OnQuestAccept :768-772.
@@ -435,7 +435,7 @@ local function doctorQuestAccept(event, player, creature, quest)
     for i, coord in ipairs(coords) do
         pool[i] = coord
     end
-    doctorState[creature:GetGUID()] = {
+    doctorState[creature:GetGUIDLow()] = {
         doctorObj = creature,
         playerGUID = player:GetGUID(),
         coords = pool,
@@ -453,7 +453,7 @@ end
 -- even on a failed summon (C++ order), while an empty coords pool
 -- returns without resetting (next tick retries).
 local function doctorAIUpdate(event, creature)
-    local state = doctorState[creature:GetGUID()]
+    local state = doctorState[creature:GetGUIDLow()]
     if not state then
         return
     end
@@ -478,9 +478,9 @@ local function doctorAIUpdate(event, creature)
     local patient = creature:SummonCreature(patientEntry, coord[1], coord[2], coord[3], coord[4], 3, 5000)
     if patient then
         patient:SetFlag(59, TRIAGE_FLAG_PLAYER_CONTROLLED)
-        local patientGUID = patient:GetGUID()
+        local patientGUID = patient:GetGUIDLow()
         state.patients[patientGUID] = { coord = coord, obj = patient }
-        patientDoctor[patientGUID] = creature:GetGUID()
+        patientDoctor[patientGUID] = creature:GetGUIDLow()
         table.remove(state.coords, idx)
     end
     state.ticks = 0
@@ -574,13 +574,13 @@ local function patientSpellHit(event, creature, caster, spellId)
     if caster == nil or type(caster.GetQuestStatus) ~= "function" then
         return
     end
-    local doctorGUID = patientDoctor[creature:GetGUID()]
+    local doctorGUID = patientDoctor[creature:GetGUIDLow()]
     local eventDone = false
     if doctorGUID then
         local state = doctorState[doctorGUID]
         if state and caster:GetGUID() == state.playerGUID then
             if caster:GetQuestStatus(QUEST_TRIAGE_ALLIANCE) == QUEST_INCOMPLETE or caster:GetQuestStatus(QUEST_TRIAGE_HORDE) == QUEST_INCOMPLETE then
-                eventDone = doctorPatientSaved(state, doctorGUID, creature:GetGUID(), caster)
+                eventDone = doctorPatientSaved(state, doctorGUID, creature:GetGUIDLow(), caster)
             end
         end
     end

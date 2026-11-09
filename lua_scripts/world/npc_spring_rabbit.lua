@@ -124,7 +124,7 @@ onSearchTick = function(creature, guid)
     if partner and not partner:HasAura(SPELL_SPRING_RABBIT_IN_LOVE) then
         creature:AddAura(SPELL_SPRING_RABBIT_IN_LOVE)
         doRabbitAction(creature, guid)
-        local partnerGuid = partner:GetGUID()
+        local partnerGuid = partner:GetGUIDLow()
         if not state[partnerGuid] then
             state[partnerGuid] = { inLove = false }
         end
@@ -144,7 +144,7 @@ onSearchTick = function(creature, guid)
 end
 
 local function onRabbitReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if not creature:IsAlive() then
         state[guid] = nil
@@ -159,7 +159,7 @@ local function onRabbitReset(event, creature)
 end
 
 local function onRabbitDied(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
 end
