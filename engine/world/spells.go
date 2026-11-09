@@ -18793,9 +18793,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 		}
 		// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
-		// Spell::TargetInfo::DoDamageAndTriggers) fires once per unit hit
-		// target, before damage and before the AI SpellHit leg below
-		// (2377 precedes 2629), with args (event, spell, hitTarget).
+		// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+		// target in C++, before damage and before the AI SpellHit leg
+		// below (2377 precedes 2629), with args (event, spell,
+		// hitTarget). Go fires this twin after the effects loop on
+		// this path — the phase gate (lua_spell.go) still reproduces
+		// the C++ GetHitDamage values, and the creature path now fires
+		// it pre-damage (boss_ai.go pass-1 position).
 		// C++ fires it for missed targets too (2377 sits outside the
 		// _spellHitTarget if) with a null hit unit, so the miss entries
 		// fire with a nil target; the 0 GUID has no TargetInfo and is
@@ -18875,8 +18879,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// and the linked-hit leg both fire from the same call even when the
 		// snapshot is empty, matching C++.
 		// The SpellScript OnHit/AfterHit legs around the same point
-		// (Spell.cpp:2377 CallScriptOnHitHandlers; Spell.cpp:2659
-		// CallScriptAfterHitHandlers in DoTargetSpellHit) fire from the
+		// (Spell.cpp:2377 CallScriptOnHitHandlers in PreprocessTarget;
+		// Spell.cpp:2659 CallScriptAfterHitHandlers in
+		// DoDamageAndTriggers) fire from the
 		// OnHit loop above and the AfterHit loop below; the GO/item/corpse
 		// TargetInfo legs (Spell.cpp:2682-2707) have no Go model and stay
 		// out, like the per-effect OnEffectHit hooks.
@@ -28610,10 +28615,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	}
 
 	// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
-	// Spell::TargetInfo::DoDamageAndTriggers) fires once per unit hit
-	// target, before damage and before the AI SpellHit leg below, with
-	// args (event, spell, hitTarget); missed targets fire with a nil
-	// target, like the client path. Notification-only.
+	// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+	// target in C++, before damage and before the AI SpellHit leg
+	// below, with args (event, spell, hitTarget); missed targets fire
+	// with a nil target, like the client path. Go fires this twin
+	// after the damage funnel on this path — the phase gate
+	// (lua_spell.go) still reproduces the C++ GetHitDamage values.
+	// Notification-only.
 	funnelSpellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: int32(triggeredCastTimeMs), targetGUID: targetGUID, castItemGUID: castItemGUID, hitDamage: hitDamage})
 	for _, effectTarget := range goHitTargets {
 		if effectTarget == 0 {

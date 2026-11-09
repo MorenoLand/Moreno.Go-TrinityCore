@@ -3612,6 +3612,100 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	if spellKnown {
 		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 	}
+	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
+	// its SpellScript hooks before the per-effect DoTargetSpellHit
+	// loop (Spell.cpp:2384) deals any damage — pass 1 of
+	// DoProcessTargetContainer (Spell.cpp:3555-3566). The BeforeHit
+	// (:2357) and OnHit (:2377) twins below therefore fire here,
+	// ahead of the damage arms, not in the DoDamageAndTriggers block
+	// below where they used to sit (moved 2026-11-09): a handler sees
+	// the target alive on a lethal hit, and GetHitDamage() reads the
+	// pre-effect seed (0 — TargetInfo::Damage defaults 0, Spell.h:681)
+	// like C++. The AI ev14/ev15 legs stay in the DoDamageAndTriggers
+	// block (:2629-2650, post-damage). The damage-rewrite table is NOT
+	// consulted here — the damage arms consult spellScriptOnHitDamage
+	// right after damage := baseDamage, the C++ SetHitDamage position
+	// (Spell.cpp:2377-2380); the twins below are notification-only.
+	// SpellScript BeforeHit (Spell.cpp:2357,
+	// CallScriptBeforeHitHandlers in Spell::TargetInfo::PreprocessTarget)
+	// fires once per unit hit target, before OnHit, miss-inclusive:
+	// PreprocessTarget calls it before nulling _spellHitTarget on a
+	// miss, so the handler still sees the unit (unlike OnHit, which
+	// fires nil after the nulling). The missInfo is the C++
+	// SpellMissInfo number. Reflected targets fire twice in C++ (the
+	// original target with REFLECT, the caster return trip with NONE)
+	// — both legs fire here, matching the OnHit loop's single caster
+	// fire right after this loop with a second original-target fire
+	// carrying REFLECT.
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
+		for _, guid := range hitTargets {
+			if guid == 0 {
+				continue
+			}
+			hitDamage.phase = spellHitPhaseBeforeHit
+			hitDamage.currentTarget = guid
+			if status, reflected := reflectedTargets[guid]; reflected {
+				s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), protocol.SpellMissReflect)
+				if status == protocol.SpellMissNone {
+					hitDamage.currentTarget = m.GUID
+					s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m), protocol.SpellMissNone)
+				}
+				continue
+			}
+			missInfo := protocol.SpellMissNone
+			if evadedTargets[guid] {
+				missInfo = protocol.SpellMissEvade
+			} else if immuneTargets[guid] {
+				missInfo = protocol.SpellMissImmune
+			} else if v := missTargets[guid]; v != protocol.SpellMissNone {
+				missInfo = v
+			}
+			s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), missInfo)
+		}
+	}
+	// SpellScript OnHit (Spell.cpp:2377, CallScriptOnHitHandlers in
+	// Spell::TargetInfo::PreprocessTarget) fires once per unit hit
+	// target, before the per-effect damage arms below, with args
+	// (event, spell, hitTarget). C++ fires it for missed targets too
+	// (2377 sits outside the _spellHitTarget if) with a null hit
+	// unit, so the miss/evade/immune entries fire nil; a landed
+	// reflect (ReflectResult == SPELL_MISS_NONE) retargets
+	// _spellHitTarget to the caster (Spell.cpp:2350), so the twin
+	// fires on the caster, while a bounced one fires nil; a guid-0
+	// entry fires nothing. The AI ev14/ev15 legs for the same target
+	// stay in the DoDamageAndTriggers block below.
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
+		for _, guid := range hitTargets {
+			hitDamage.phase = spellHitPhaseOnHit
+			hitDamage.currentTarget = guid
+			if status, reflected := reflectedTargets[guid]; reflected {
+				if status == protocol.SpellMissNone {
+					hitDamage.currentTarget = m.GUID
+					s.fireSpellHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m))
+				} else {
+					s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
+				}
+				continue
+			}
+			if evadedTargets[guid] {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
+				continue
+			}
+			if immuneTargets[guid] {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
+				continue
+			}
+			if missTargets[guid] != protocol.SpellMissNone {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
+				continue
+			}
+			if guid != 0 {
+				s.fireSpellHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid))
+			}
+		}
+	}
 	// Spell::EffectSchoolDMG (SpellEffects.cpp:322) + EffectWeaponDmg
 	// (SpellEffects.cpp:3171) for a creature caster: the damage arms.
 	// Player hit targets ride creatureEffectSpellDamage below;
@@ -3952,43 +4046,6 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
-	// SpellScript BeforeHit (Spell.cpp:2357,
-	// CallScriptBeforeHitHandlers in Spell::TargetInfo::PreprocessTarget)
-	// fires once per unit hit target, before OnHit, miss-inclusive:
-	// PreprocessTarget calls it before nulling _spellHitTarget on a
-	// miss, so the handler still sees the unit (unlike OnHit, which
-	// fires nil after the nulling). The missInfo is the C++
-	// SpellMissInfo number. Reflected targets fire twice in C++ (the
-	// original target with REFLECT, the caster return trip with NONE)
-	// — both legs fire here, matching the OnHit loop's single caster
-	// fire below with a second original-target fire carrying REFLECT.
-	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
-		for _, guid := range hitTargets {
-			if guid == 0 {
-				continue
-			}
-			hitDamage.phase = spellHitPhaseBeforeHit
-			hitDamage.currentTarget = guid
-			if status, reflected := reflectedTargets[guid]; reflected {
-				s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), protocol.SpellMissReflect)
-				if status == protocol.SpellMissNone {
-					hitDamage.currentTarget = m.GUID
-					s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m), protocol.SpellMissNone)
-				}
-				continue
-			}
-			missInfo := protocol.SpellMissNone
-			if evadedTargets[guid] {
-				missInfo = protocol.SpellMissEvade
-			} else if immuneTargets[guid] {
-				missInfo = protocol.SpellMissImmune
-			} else if v := missTargets[guid]; v != protocol.SpellMissNone {
-				missInfo = v
-			}
-			s.fireSpellBeforeHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), missInfo)
-		}
-	}
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2629-2650): the
 	// target-side SpellHit Eluna hook — CREATURE_EVENT_ON_HIT_BY_SPELL
 	// (event 14), args (event, creature, caster, spellid) — fires once
@@ -4010,10 +4067,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// so firing once per target is exact, not an approximation — same as
 	// the player path (spells.go).
 	if spellKnown {
-		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage})
 		for _, guid := range hitTargets {
-			hitDamage.phase = spellHitPhaseOnHit
-			hitDamage.currentTarget = guid
 			if status, reflected := reflectedTargets[guid]; reflected {
 				// Reflect return trip (Spell.cpp:2350): a landed reflect
 				// (ReflectResult == SPELL_MISS_NONE) retargets
@@ -4029,33 +4083,19 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				// model delta); only the AI notification legs are
 				// modeled.
 				if status == protocol.SpellMissNone {
-					// SpellScript OnHit (Spell.cpp:2377) precedes the
-					// AI legs per TargetInfo; a landed reflect fires
-					// it on the caster, a bounced one with a nil hit
-					// unit (2377 sits outside the _spellHitTarget if).
-					hitDamage.currentTarget = m.GUID
-					s.fireSpellHit(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m))
 					s.fireCreatureLuaEvent(ctx, m, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)
 					s.fireCreatureSpellHitTarget(ctx, m, m.GUID, spellID)
-				} else {
-					s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				}
 				continue
 			}
 			if evadedTargets[guid] {
-				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				continue
 			}
 			if immuneTargets[guid] {
-				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				continue
 			}
 			if missTargets[guid] != protocol.SpellMissNone {
-				s.fireSpellHit(ctx, spellID, creatureSpellObj, nil)
 				continue
-			}
-			if guid != 0 {
-				s.fireSpellHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid))
 			}
 			if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.fireCreatureLuaEvent(ctx, tm, scripting.CreatureEventOnHitBySpell, s.luaMotionCreature(m), spellID)

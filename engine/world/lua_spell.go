@@ -55,10 +55,12 @@ type spellObjectParams struct {
 // damage of the effects already run for that target (Spell.cpp:2409),
 // and AfterHit sees the final post-mitigation damage (Spell.cpp:2547,
 // m_damage = damageInfo.damage after CalculateSpellDamageTaken).
-// Go fires the OnHit/AfterHit hooks after its damage arms have run,
-// so the phase gate — not the fire order — reproduces the C++
-// values: GetHitDamage returns the seed before AfterHit and the
-// recorded final damage at AfterHit.
+// The creature path fires the OnHit hook pre-damage (pass-1 position,
+// boss_ai.go) and the AfterHit hook after its damage arms have run;
+// the player path and the triggered funnel still fire OnHit
+// post-damage (spells.go), so the phase gate — not the fire order —
+// reproduces the C++ values: GetHitDamage returns the seed before
+// AfterHit and the recorded final damage at AfterHit.
 const (
 	spellHitPhaseNone = iota
 	spellHitPhaseBeforeHit
@@ -74,10 +76,13 @@ const (
 // Spell.cpp:2547), written by creatureEffectSpellDamage and
 // creatureEffectSpellDamageCreature. seedByTarget holds OnHit /
 // BeforeHit / OnEffectHitTarget SetHitDamage writes (the C++ m_damage
-// seed the effect loop adds to, Spell.cpp:2380/2425); Go's damage is
-// already dealt by the time those hooks fire, so a seed write is
-// recorded for in-hook read-back only and never rescales dealt
-// damage. currentTarget is the hit target of the fire in progress
+// seed the effect loop adds to, Spell.cpp:2380/2425); the damage arms
+// never consult the seed, so a seed write is recorded for in-hook
+// read-back only and never rescales dealt damage — on the creature
+// path the OnHit twin fires before the damage arms run, but the arms
+// still compute from the DBC base (the table-driven rewrites in
+// spell_onhit.go ride the arms directly). currentTarget is the hit
+// target of the fire in progress
 // (the fire loops set it synchronously before each trigger); a nil
 // state means no damage was threaded for this cast (player path —
 // not yet threaded — and non-hit hooks), and both methods then read 0.

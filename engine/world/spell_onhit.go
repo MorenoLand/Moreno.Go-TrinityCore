@@ -28,11 +28,13 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 
 // spellScriptOnHitLatch runs the SpellScript OnHit arms that set a
 // creature ScriptData latch on a lethal hit. Go's fireSpellHit twin
-// fires after the damage arm (boss_ai.go DoDamageAndTriggers block),
-// so a latch set there lands after the criteria read in
-// grantCreatureKillReward. Callers invoke this from the lethal branch
-// of the creature-caster damage arm, once the final damage is known
-// and before the kill-credit legs run. DELIBERATE DIVERGENCE from
+// now fires pre-damage (boss_ai.go pass-1 position), but the C++
+// latch condition (GetHitDamage() >= target health at OnHit) is a
+// no-op there — GetHitDamage() is 0 at OnHit — so the latch still
+// cannot be set from the twin; callers invoke this from the lethal
+// branch of the creature-caster damage arm, once the final damage is
+// known and before the kill-credit legs run (grantCreatureKillReward
+// reads the latch at criteria time). DELIBERATE DIVERGENCE from
 // C++-as-written: spell_razorscale_flame_breath::CheckDamage
 // (boss_razorscale.cpp:1589-1600) is an OnHit arm testing
 // GetHitDamage() >= target health, but GetHitDamage() is 0 at OnHit
