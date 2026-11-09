@@ -445,8 +445,10 @@ local function putricideReachHome(event, creature)
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_FAIL)
 end
 
--- C++ Reset :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT, true) and ExtraEffect :1382 set it false:
--- achievement criteria, no achievement bridge (the lich-king no-achievement-criteria-bridge precedent).
+-- C++ Reset :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT, true): the set leg is
+-- PORTED via the shared instanceData nauseaEligible key (orbWhispererEligible
+-- precedent); the ExtraEffect :1382 clear leg stays out — no SpellScript bridge —
+-- so the key can over-grant if the regurgitated-ooze aura lands.
 -- DATA_EXPERIMENT_STAGE (:971-972) toggles inside
 -- spell_putricide_unstable_experiment — PORTED 2026-11-09 (ev5
 -- RegisterSpellEvent handler below; stage in the Lua-local
@@ -461,6 +463,15 @@ local function putricideReset(event, creature)
     -- :238). PORTED 2026-11-06 via creature:SetBossState. No != DONE
     -- gate: the C++ call is explicit, not _Reset().
     creature:SetBossState(DATA_PROFESSOR_PUTRICIDE, BOSS_STATE_NOT_STARTED)
+    -- C++ :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT 17, true), right
+    -- after the SetBossState arm and before events.Reset (:238).
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.nauseaEligible = 1
+        end
+    end
     cancelTimers(creature:GetGUIDLow())
     phase[creature:GetGUIDLow()] = 1 -- C++ :240 SetPhase(PHASE_COMBAT_1)
     experimentStage[creature:GetGUIDLow()] = nil -- C++ :241 _experimentState = EXPERIMENT_STATE_OOZE (0)

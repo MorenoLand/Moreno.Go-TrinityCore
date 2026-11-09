@@ -1060,7 +1060,7 @@ local SPELL_SPEED_OF_INVENTION = 62671
 -- RemoveAurasDueToSpell BRAIN_LINK + caster casts INSANE 63120
 -- triggered, C++ order. The stale "no OnRemove / no SetData
 -- bridge" claim is retired: ev3 + GetRemoveMode + the shared
--- instanceData table (driveMeCrazy slot) are all live. The sibling
+-- instanceData table (driveMeCrazyEligible slot) are all live. The sibling
 -- SpellScript ModSanityStacks
 -- (BeforeCast, SPELLVALUE_AURA_STACK 100) stays out: no spell
 -- BeforeCast bridge.
@@ -1085,7 +1085,7 @@ local function sanityRemove(event, aura, target)
     end
     local data = yoggInstanceData(target)
     if data then
-        data.driveMeCrazy = 0
+        data.driveMeCrazyEligible = 0
     end
     target:RemoveAura(SPELL_BRAIN_LINK)
     local caster = aura:GetCaster()
@@ -1250,7 +1250,7 @@ end
 -- SummonCreatureGroup(CREATURE_GROUP_CLOUDS 0) + distance-sort +
 -- alternating DoAction(0/1) (clockwise) on each cloud. The
 -- SetData(DATA_DRIVE_ME_CRAZY, true) leg is PORTED 2026-11-08
--- (tick 436) via the shared instanceData table (driveMeCrazy slot);
+-- (tick 436) via the shared instanceData table (driveMeCrazyEligible slot);
 -- DoStopTimedAchievement stays out (no bridge). The sort +
 -- DoAction loop stays out — the cloud DoAction
 -- leg is MoveCirclePath (no bridge). The group spawn itself is the
@@ -1267,7 +1267,7 @@ local function voiceReset(event, creature)
     voiceGuardians[creature:GetGUIDLow()] = nil -- C++ Reset: Initialize() _guardianTimer = 20s (:467)
     local data = yoggInstanceData(creature)
     if data then
-        data.driveMeCrazy = 1 -- C++ Reset: instance->SetData(DATA_DRIVE_ME_CRAZY, true) (:495)
+        data.driveMeCrazyEligible = 1 -- C++ Reset: instance->SetData(DATA_DRIVE_ME_CRAZY, true) (:495)
     end
     creature:SummonCreatureGroup(0) -- CREATURE_GROUP_CLOUDS
 end

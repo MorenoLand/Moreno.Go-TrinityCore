@@ -1727,9 +1727,13 @@ func checkIcecrownCitadelCriteria(s *session, criteriaID uint32) bool {
 		// C++ :1154-1158 returns IsNauseaEligible: set true by
 		// putricide Reset (:236), cleared by
 		// spell_putricide_regurgitated_ooze (boss_professor_
-		// putricide.cpp:1382) — no SpellScript bridge,
-		// fail-closed.
-		return false
+		// putricide.cpp:1382). The set leg ports in Lua via
+		// the shared instanceData nauseaEligible key (1/0
+		// numbers); absent reads as the C++ ctor default true
+		// (instance_icecrown_citadel.cpp:158). The clear leg
+		// stays out — no SpellScript bridge — so the key can
+		// over-grant when the regurgitated-ooze aura lands.
+		return num("nauseaEligible", 1) >= 1
 	case 13033, 12969, 13034, 13032: // CRITERIA_ORB_WHISPERER_*
 		// C++ :1159-1163 returns IsOrbWhispererEligible: set
 		// true by blood-prince Reset (:452), cleared when a

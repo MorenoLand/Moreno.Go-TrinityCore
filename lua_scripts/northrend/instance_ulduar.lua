@@ -22,7 +22,7 @@
 -- keepersCount — the C++ keepersCount member (instance_ulduar.cpp
 -- :180/:357-377, DATA_KEEPERS_COUNT), incremented at the
 -- observation-ring keeper gossip summon (boss_yogg_saron.lua),
--- read by the Go lights-in-the-darkness gates; driveMeCrazy —
+-- read by the Go lights-in-the-darkness gates; driveMeCrazyEligible —
 -- DATA_DRIVE_ME_CRAZY (Yogg Reset true, sanity OnRemove false,
 -- boss_yogg_saron.lua), read by the Go DRIVE_ME_CRAZY gate;
 -- maxArmorItemLevel / maxWeaponItemLevel — the Algalon
