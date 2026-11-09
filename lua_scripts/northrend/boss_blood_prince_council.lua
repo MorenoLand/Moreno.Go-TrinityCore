@@ -93,10 +93,10 @@
 -- re-arm {20000,30000}ms.
 -- valanar EVENT_BERSERK (:814-817) — DoCastSelf(SPELL_BERSERK 50334) +
 -- Talk(SAY_VALANAR_BERSERK 5), cast before Talk (C++ order), one-shot.
--- valanar JustSummoned NPC_KINETIC_BOMB (:778-785) — RemoveFlag(59,
--- UNIT_FLAG_NOT_SELECTABLE) immediately after the MovePoint call
--- (not arrival-gated); MovePoint + ground-Z stay out (no motion /
--- terrain-height bridge).
+-- valanar JustSummoned NPC_KINETIC_BOMB (:778-785) — MovePoint to
+-- the ground-Z + RemoveFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+-- immediately after the MovePoint call (not arrival-gated) — PORTED
+-- this tick (MoveTo bridge + map:GetHeight).
 -- BloodPrincesBossAI::KilledUnit (:505-521) — Talk(kill text)
 -- victim->GetTypeId() == TYPEID_PLAYER gated, entry-switched (event 3,
 -- the razuvious player-gated variant precedent): keleseth
@@ -202,7 +202,7 @@
 -- aura-remove -> ev38 chase via ballChaseTarget; base ball 38332
 -- takes the SetGUID store with no emote), valanar
 -- bomb-target react/cast + vortex dummy/periodic casts (bomb
--- MovePoint ground-Z + DoZoneInCombat(summon) out).
+-- MovePoint ground-Z PORTED this tick; DoZoneInCombat(summon) out).
 -- npc_blood_queen_lana_thel — Talk(SAY_INTRO_1 0) rides
 -- ACTION_START_INTRO (:866-880, sender is the unported controller /
 -- blood-queen intro machine — dispatch IS bridged, ev38);
@@ -223,8 +223,10 @@
 -- timer arms; the bomb's explode trigger now rides the 72080 aura
 -- tick (ported tick 189) and its despawn leg rides the same tick's
 -- DoAction(72052) -> ev38 handler (PORTED tick 232; bomb registered
--- in boss_ai.go). The chase leg (ACTION_KINETIC_BOMB_JUMP,
--- MoveCharge — no bridge) stays OUT. (Their JustSummoned legs port
+-- in boss_ai.go). The chase leg (ACTION_KINETIC_BOMB_JUMP +
+-- CONTINUE_FALLING, MoveCharge) PORTED this tick (kineticBombDoAction
+-- below); its sender stays out (knockback SpellScript 72087
+-- BeforeHit, no SpellScript bridge). (Their JustSummoned legs port
 -- via the boss ev19 handlers above, not via AI registration.)
 -- BloodPrincesBossAI::JustReachedHome (:525-534) — PORTED 2026-11-09
 -- via ev24 (DISENGAGE frame + SetHealth(1) + empowered clear +
@@ -286,6 +288,7 @@ local SPELL_KINETIC_BOMB = 72080 -- boss_blood_prince_council.cpp:107
 local SPELL_KINETIC_BOMB_EXPLOSION = 72052 -- boss_blood_prince_council.cpp:115
 local SPELL_KINETIC_BOMB_VISUAL = 72054 -- boss_blood_prince_council.cpp:114
 local SPELL_UNSTABLE = 72059 -- boss_blood_prince_council.cpp:113
+local SPELL_KINETIC_BOMB_KNOCKBACK = 72087 -- boss_blood_prince_council.cpp:116
 local SPELL_SHOCK_VORTEX_DUMMY = 72633 -- boss_blood_prince_council.cpp:120
 local SPELL_SHOCK_VORTEX_PERIODIC = 71945 -- boss_blood_prince_council.cpp:119
 local EMOTE_TALDARAM_FLAME = 3 -- boss_blood_prince_council.cpp:51
@@ -443,6 +446,7 @@ local ACTION_START_INTRO = 1 -- boss_blood_prince_council.cpp:154
 local ACTION_INTRO_DONE = 2 -- :155
 local ACTION_STAND_UP = 3 -- :156
 local ACTION_KINETIC_BOMB_JUMP = 6 -- :159
+local POINT_KINETIC_BOMB_IMPACT = 384540 -- :165
 local SPELL_FEIGN_DEATH = 71598 -- boss_blood_prince_council.cpp:68
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FIELD_FLAGS_2 = 60
@@ -525,6 +529,11 @@ local DEATH_TEXT = {
 }
 
 local timers = {}
+
+-- Kinetic-bomb home positions, keyed by bomb GUIDLow: the C++
+-- npc_kinetic_bomb _x/_y/_groundZ snapshot (Reset :983-994),
+-- consumed by the JUMP + CONTINUE_FALLING MoveCharge legs.
+local kineticBombHome = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -833,30 +842,59 @@ local function shadowPrisonTick(event, aura, target)
     end
 end
 
--- C++ npc_kinetic_bomb::DoAction (boss_blood_prince_council.cpp:995-998)
--- + UpdateAI EVENT_BOMB_DESPAWN (:1019-1022): action 72052 schedules
--- the despawn 1s out; on fire the bomb goes invisible and despawns
--- 5s later. Bridges: SetVisible (lua_creature_events.go:4977),
--- DespawnOrUnsummon (:6011); 1s delay via the file's GUID-keyed
--- schedule (CreateLuaEvent, the princes' timer idiom).
+-- C++ npc_kinetic_bomb::DoAction (boss_blood_prince_council.cpp:995-1010)
+-- + UpdateAI EVENT_BOMB_DESPAWN (:1019-1022) / EVENT_CONTINUE_FALLING
+-- (:1023-1027): action 72052 schedules the despawn 1s out; on fire
+-- the bomb goes invisible and despawns 5s later. ACTION_KINETIC_BOMB_
+-- JUMP (6) — sender is the knockback SpellScript (72087 BeforeHit,
+-- :1252-1266, no SpellScript bridge) — knocks the bomb 100y up at
+-- run speed unless the knockback aura is up, then 3s later the fall
+-- leg charges it back to the Reset ground-Z; both charges ride the
+-- MoveCharge bridge (lua_creature_events.go) with the
+-- POINT_KINETIC_BOMB_IMPACT id (384540). The 3s reschedule is
+-- unconditional in C++ (outside the HasAura gate) and fires once
+-- (no repeat). Bridges: SetVisible (lua_creature_events.go:4977),
+-- DespawnOrUnsummon (:6011), HasAura, GetSpeed(1) = MOVE_RUN,
+-- MoveClear (MotionMaster::Clear twin); 1s/3s delays via the file's
+-- GUID-keyed schedule (CreateLuaEvent, the princes' timer idiom).
+-- PORTED this tick (JUMP + fall legs; explosion leg tick 232).
 local function kineticBombDoAction(event, creature, action)
-    if action ~= SPELL_KINETIC_BOMB_EXPLOSION then
+    local guid = creature:GetGUIDLow()
+    if action == SPELL_KINETIC_BOMB_EXPLOSION then
+        schedule(guid, "bombdespawn", 1000, function()
+            creature:SetVisible(false)
+            creature:DespawnOrUnsummon(5000)
+            kineticBombHome[guid] = nil
+        end)
         return
     end
-    local guid = creature:GetGUIDLow()
-    schedule(guid, "bombdespawn", 1000, function()
-        creature:SetVisible(false)
-        creature:DespawnOrUnsummon(5000)
+    if action ~= ACTION_KINETIC_BOMB_JUMP then
+        return
+    end
+    if not creature:HasAura(SPELL_KINETIC_BOMB_KNOCKBACK) then
+        creature:MoveClear()
+        local home = kineticBombHome[guid]
+        if home then
+            creature:MoveCharge(POINT_KINETIC_BOMB_IMPACT, home.x, home.y, creature:GetZ() + 100.0, creature:GetSpeed(1))
+        end
+    end
+    schedule(guid, "bombfall", 3000, function()
+        creature:MoveClear()
+        local home = kineticBombHome[guid]
+        if home then
+            creature:MoveCharge(POINT_KINETIC_BOMB_IMPACT, home.x, home.y, home.groundZ, creature:GetSpeed(1))
+        end
     end)
 end
 
 -- C++ npc_kinetic_bomb::Reset (:983-994): _events.Reset() (cancel
 -- the bomb's timers — cancelTimers, the file's GUID-keyed idiom; the
--- bomb only ever holds the bombdespawn key) + SetWalk(true)
+-- bomb holds the bombdespawn + bombfall keys) + SetWalk(true)
 -- + triggered self-casts SPELL_UNSTABLE 72059 + SPELL_KINETIC_BOMB_
 -- VISUAL 72054 + SetReactState(REACT_PASSIVE) + DespawnOrUnsummon(
--- 60s). The GetPosition/GetHeight ground-Z legs stay out — dead in
--- Lua, consumed only by the unported MoveCharge legs. The 60s
+-- 60s) + the _x/_y/_groundZ snapshot (GetPosition + GetHeight, max
+-- search 500) for the MoveCharge legs — map:GetHeight returns nil
+-- off-grid, so the spawn Z is the fallback. The 60s
 -- despawn and the explosion's 5s despawn do not conflict: Go's
 -- DespawnOrUnsummon is a plain time.AfterFunc
 -- (lua_creature_events.go:6637-6656) and a later fire on an
@@ -870,6 +908,10 @@ local function kineticBombReset(event, creature)
     creature:CastSpell(creature, SPELL_KINETIC_BOMB_VISUAL, true)
     creature:SetReactState(0) -- REACT_PASSIVE
     creature:DespawnOrUnsummon(60000)
+    local bx, by = creature:GetX(), creature:GetY()
+    local mapObj = creature:GetMap()
+    local groundZ = mapObj and mapObj:GetHeight(bx, by) or nil
+    kineticBombHome[guid] = {x = bx, y = by, groundZ = groundZ or creature:GetZ()}
 end
 
 -- C++ :826-838 valanar EVENT_SHOCK_VORTEX base leg (else branch,
@@ -1171,11 +1213,11 @@ local function princesReachHome(event, creature)
 end
 
 -- C++ boss_prince_valanar_icc::JustSummoned NPC_KINETIC_BOMB case
--- (boss_blood_prince_council.cpp:778-785): the MovePoint to the
--- ground position stays out (no motion bridge; ground-Z needs the
--- terrain height query), but the RemoveFlag(UNIT_FIELD_FLAGS,
--- UNIT_FLAG_NOT_SELECTABLE) leg fires IMMEDIATELY after the MovePoint
--- call in the same handler — not arrival-gated — so it ports here.
+-- (boss_blood_prince_council.cpp:778-785): MovePoint to the ground
+-- position (map:GetHeight, spawn-Z fallback) + RemoveFlag(
+-- UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) IMMEDIATELY after the
+-- MovePoint call in the same handler — not arrival-gated. PORTED
+-- this tick (MoveTo bridge + map:GetHeight).
 local function valanarJustSummoned(_, creature, summoned)
     local entry = summoned:GetEntry()
     if entry == ENTRY_KINETIC_BOMB_TARGET then
@@ -1196,6 +1238,10 @@ local function valanarJustSummoned(_, creature, summoned)
         end, 5000)
     end
     if summoned:GetEntry() == ENTRY_KINETIC_BOMB then
+        local bx, by = summoned:GetX(), summoned:GetY()
+        local mapObj = summoned:GetMap()
+        local groundZ = mapObj and mapObj:GetHeight(bx, by) or nil
+        summoned:MoveTo(POINT_KINETIC_BOMB_IMPACT, bx, by, groundZ or summoned:GetZ())
         summoned:RemoveFlag(59, 0x02000000) -- UNIT_FLAG_NOT_SELECTABLE
     end
     if entry == ENTRY_KINETIC_BOMB_TARGET or entry == ENTRY_KINETIC_BOMB or entry == ENTRY_SHOCK_VORTEX then
