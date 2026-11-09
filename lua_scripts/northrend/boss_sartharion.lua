@@ -67,8 +67,9 @@
 -- DrakeRespawn PORTED 2026-11-05 (tick 254) in drakeRespawn below
 -- (GetInstanceCreature + SetHomePosition + MoveHome, the
 -- MoveTargetedHome twin, + Respawn + AI SetData(DATA_CAN_LOOT, 0) —
--- the store write nothing reads yet; the drake-side _canLoot read
--- stays out on the default-0 trap, see obsidian_sanctum.lua);
+-- the write lands in the drake motion's SetData store and the
+-- drake-side _canLoot read IS ported in obsidian_sanctum.lua
+-- (GetData check + ev5 SetData(1) seed);
 -- SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) PORTED in sartharionReset
 -- (creature:SetBossState, malygos precedent).
 -- JustReachedHome — _Reset() PORTED 2026-11-05 (tick 254) via ev24
@@ -185,6 +186,10 @@ local berserked = {}
 
 local drakeCount = {}
 
+-- GUID-KEY FIX tick 513: all timer/latch tables are keyed on
+-- GetGUIDLow() (a Lua number). GetGUID() returns a fresh UInt64
+-- userdata per call, so a cross-handler cancelTimers(GetGUID())
+-- lookup missed the stored key and timers never cancelled.
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -325,6 +330,12 @@ local function berserkPollTick(creature, guid)
     if berserked[guid] then
         return
     end
+    -- C++ UpdateAI sets _isSoftEnraged every tick at <=10% HP
+    -- (boss_sartharion.cpp:503-505); the lava-strike tick alone
+    -- could lag a full slow cycle — the 1s poll sets it too.
+    if creature:GetHealthPct() <= 10 then
+        softEnraged[guid] = true
+    end
     if creature:GetHealthPct() <= 35
         and (creature:GetBossState(DATA_TENEBRON) ~= BOSS_STATE_DONE
             or creature:GetBossState(DATA_SHADRON) ~= BOSS_STATE_DONE
@@ -443,8 +454,9 @@ local DRAKE_HOME = {
 -- drake, set the home position; if alive, clear NON_ATTACKABLE and send
 -- it home (MoveHome is the MoveTargetedHome twin); else, if its boss
 -- state is not DONE, respawn it, send it home, and write
--- AI()->SetData(DATA_CAN_LOOT, 0) (the store write nothing reads yet —
--- the drake-side _canLoot read stays out on the default-0 trap).
+-- AI()->SetData(DATA_CAN_LOOT, 0) (the write lands in the drake
+-- motion's SetData store, read by the drake JustDied arm in
+-- obsidian_sanctum.lua via GetData).
 local function drakeRespawn(creature)
     for dataId = DATA_TENEBRON, DATA_VESPERON do
         local drake = creature:GetInstanceCreature(dataId)
@@ -475,14 +487,16 @@ end
 -- ScheduleEvent x9 — the Talk and the timer casts are
 -- bridgeable; the rest are machine legs with no bridges.
 -- C++ DrakeRespawn :237/:257/:277 tenebron/shadron/vesperon->AI()->SetData(DATA_CAN_LOOT, 0):
--- cross-AI write into the unported drake AIs (obsidian_sanctum.cpp dummy_dragonAI, :326 _canLoot gate).
--- No cross-AI SetData bridge and the target AIs are unported — dropped, documented.
+-- cross-creature write into the drake AIs (obsidian_sanctum.cpp dummy_dragonAI, :326 _canLoot gate).
+-- PORTED in drakeRespawn below: creature:SetData writes the target motion's
+-- ScriptData store (lua_creature_events.go:792), which the drake JustDied arm
+-- reads via GetData (obsidian_sanctum.lua:556).
 local function sartharionEnterCombat(event, creature, target)
     creature:Talk(SAY_SARTHARION_AGGRO)
     creature:SetBossState(DATA_SARTHARION, BOSS_STATE_IN_PROGRESS) -- C++ :167-169 (BossAI base arm; setActive/instance legs have no bridge)
     creature:SetCombatPulseDelay(5) -- boss_sartharion.cpp:169 (BossAI base arm; setActive/instance legs have no bridge)
     creature:DoZoneInCombat() -- C++ :170, in arm order after Talk (live bridge lua_creature_events.go; 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     fetchDragons(creature, guid) -- C++ :172, in arm order after DoZoneInCombat
     schedule(guid, "cleave", 7000, function()
@@ -517,7 +531,7 @@ local function sartharionEnterCombat(event, creature, target)
 end
 
 local function sartharionLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: victim->GetTypeId() == TYPEID_PLAYER gate,
@@ -536,7 +550,7 @@ end
 -- DisappearAndDie: no death-state/corpse leg; respawn stays governed
 -- by DrakeRespawn's GetBossState ~= DONE gate).
 local function sartharionDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_SARTHARION, BOSS_STATE_DONE)
     creature:Talk(SAY_SARTHARION_DEATH)
     for dataId = DATA_TENEBRON, DATA_VESPERON do
@@ -548,7 +562,7 @@ local function sartharionDied(event, creature, killer)
 end
 
 local function sartharionReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset :152-158, in order: the RemoveAurasDueToSpell
     -- (SPELL_TWILIGHT_REVENGE) leg is HasAura-gated (bridged, the
     -- nefarius precedent), then SetHomePosition(literals) (event-
@@ -558,7 +572,12 @@ local function sartharionReset(event, creature)
         creature:RemoveAura(SPELL_TWILIGHT_REVENGE)
     end
     creature:SetHomePosition(3246.57, 551.263, 58.6164, 4.66003)
-    drakeRespawn(creature) -- C++ :157
+    -- Alive-gated: ev23 pre-fires on death, and an ungated
+    -- drakeRespawn would respawn an already-dead drake that ev4
+    -- then leaves despawned (C++ leaves a corpse).
+    if creature:IsAlive() then
+        drakeRespawn(creature) -- C++ :157
+    end
     creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED) -- C++ :158
     -- C++ Reset :148-150 calls Initialize(), zeroing drakeCount.
     -- Alive-gated: ev23 pre-fires on death, and a death-time zero

@@ -66,9 +66,13 @@
 --   focusing iris (the iris leg is dormant — its writer is
 --   FAIL-gated, see boss_malygos.lua).
 -- - OnUnitDeath player root (SetControlled ROOT on player
---   death, the EoE falling fix): no player-death hook —
---   PlayerEventKilledByCreature (8) fires only for
---   creature kills, never for falls.
+--   death, the EoE falling fix): PORTABLE via the Go-only
+--   INSTANCE_EVENT_ON_UNIT_DEATH (9, instance_hooks.go
+--   triggerInstanceUnitDeathPlayer — fires from killPlayer's
+--   setDeathState leg, incl. fall deaths) + player:SetRooted()
+--   (lua_player.go:3427, the SetControlled ROOT twin) — PORTED
+--   tick 513: RegisterMapEvent(616, 9, ...) gating on
+--   unit:GetObjectType() == "Player".
 -- - Boss boundaries (CircleBoundary 280yd): no boundary model
 --   in Go (naxxramas precedent).
 -- - SaveToDB / instance-data persistence across restarts: the
@@ -79,6 +83,7 @@ local INSTANCE_EVENT_ON_UPDATE = 3
 local INSTANCE_EVENT_ON_PLAYER_ENTER = 4
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 local INSTANCE_EVENT_ON_GAMEOBJECT_CREATE = 6
+local INSTANCE_EVENT_ON_UNIT_DEATH = 9
 
 local DATA_MALYGOS_EVENT = 0 -- eye_of_eternity.h:28
 
@@ -294,5 +299,19 @@ RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_SET_DATA, function(event
             entry = GO_FOCUSING_IRIS_25
         end
         malygos:SummonGameObject(entry, pos[1], pos[2], pos[3], pos[4], 0)
+    end
+end)
+
+-- C++ instance OnUnitDeath (instance_eye_of_eternity.cpp:149-160):
+-- any dying player is rooted (SetControlled ROOT, the EoE falling
+-- fix — a dead player keeps moving otherwise, and the release box
+-- may or may not pop). PORTED tick 513 via the Go-only
+-- INSTANCE_EVENT_ON_UNIT_DEATH (9, instance_hooks.go
+-- triggerInstanceUnitDeathPlayer — fires from killPlayer's
+-- setDeathState leg, incl. fall deaths) + player:SetRooted()
+-- (lua_player.go:3427, the SetControlled ROOT twin).
+RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_UNIT_DEATH, function(event, instanceData, mapObj, unit)
+    if unit:GetObjectType() == "Player" then
+        unit:SetRooted(true)
     end
 end)

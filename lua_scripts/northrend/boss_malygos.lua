@@ -44,8 +44,9 @@
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE 1) +
 -- DoCast(SPELL_BERSERK 60670) (event 1; the setActive /
--- CheckRequiredBosses / EnterEvadeMode /
--- DoStartTimedAchievement legs have no bridges —
+-- CheckRequiredBosses / DoStartTimedAchievement legs have no
+-- bridges (EnterEvadeMode IS bridged, lua_creature_events.go:5014,
+-- but the gate needs CheckRequiredBosses) —
 -- the tharon_ja BossAI-bookkeeping precedent; the state leg is
 -- PORTED 2026-11-05 in malygosEnterCombat, C++ order: state
 -- before Talk + berserk). The berserk is a
@@ -113,7 +114,9 @@
 -- SetBossState NOT_STARTED leg is PORTED 2026-11-05 in
 -- malygosReset (!= DONE-gated, _Reset() position first in C++
 -- Reset :372); immunity / flight-speed / phase legs stay out
--- (no immune surface, no speed literal, no phase bridge).
+-- (SetImmuneToAll IS bridged, lua_creature_events.go:5966 — the
+-- Reset apply below writes the same 0x100|0x200 flags; no speed
+-- literal, no phase bridge).
 -- DoAction (the ~60-action event/phase
 -- machine: ACTION_LAND_ENCOUNTER_START, platform-destroy
 -- intro, surge-of-power legs — all gated on
@@ -129,9 +132,10 @@
 -- bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
 -- SetControlled(true, UNIT_STATE_ROOT) rides that same unbridged
 -- MovementInform: stays out, except the vortex points (PORTED
--- below). DamageTaken (surge-of-power and destroy-platform
--- health gates, immune flag flips) — no health / timer-event
--- bridges. UpdateAI (phase-one arcane event machine,
+-- below). DamageTaken is only the lethal clamp (damage > health &&
+-- _phase != PHASE_THREE -> damage = health - 1); ev9 IS bridged
+-- pre-damage with a rewrite (lua_creature_events.go:6955) but the
+-- arm stays out — no phase model to tell PHASE_THREE. UpdateAI (phase-one arcane event machine,
 -- phase-three disk/scion machine) — no timer-event / cast /
 -- phase bridges; EVENT_VORTEX + EVENT_POWER_SPARKS are PORTED
 -- (CreateLuaEvent timers + DoAction / instance SetData, below).
@@ -220,8 +224,9 @@
 -- buddy summon + ride trigger, surge-of-power 25 warning
 -- target selection + the surge itself, alexstrasza gift beam
 -- + gift beam visual) — no SpellScript bridge (the varos
--- precedents) and no AuraScript bridge (the keristrasza
--- precedent); all 17 join the standing queues, except the gift
+-- precedents); AuraScript OnApply/OnRemove ride RegisterAuraEvent
+-- (ported in this file, below). The SpellScript legs join the
+-- standing queues, except the gift
 -- beam visual OnApply (PORTED tick 204, below), the portal
 -- beam (ported, below), and the vortex visual OnRemove
 -- (PORTED tick 429, below); the vortex dummy (56105) is PORTED
@@ -335,7 +340,7 @@ end
 -- drops SPELL_VORTEX_1. Shared by the ev3 handler and the fallback
 -- timer; the landed latch makes the second caller a no-op.
 local function vortexLand(caster)
-    local guid = caster:GetGUID()
+    local guid = caster:GetGUIDLow()
     local state = getVortexState(guid)
     if state.landed then
         return
@@ -445,7 +450,7 @@ local function malygosDoAction(event, creature, action)
                 instanceData:SetData(DATA_VORTEX_HANDLING, 0)
             end
         end
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local state = getVortexState(guid)
         state.landed = false
         schedule(guid, "land", VORTEX_LAND_FALLBACK_MS, function()
@@ -494,7 +499,7 @@ local function malygosMovementInform(_, creature, moveType, id)
     if moveType ~= 8 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == POINT_LIFT_IN_AIR_P_ONE then
         creature:SetDisableGravity(true)
         schedule(guid, "moveToVortex", 1, function()
@@ -537,7 +542,7 @@ local function malygosEnterCombat(event, creature, target)
     creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_IN_PROGRESS)
     creature:Talk(SAY_START_P_ONE)
     creature:CastSpell(creature, SPELL_BERSERK)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = getVortexState(guid)
     state.executing = false
     state.landed = false
@@ -575,7 +580,7 @@ end
 -- is needed (C++ DespawnOrUnsummon rides the creature's own
 -- despawn timer, not the EventMap).
 local function malygosDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     vortexState[guid] = nil
     creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_DONE)
@@ -616,7 +621,7 @@ end
 -- bits have no Go consumer today, so the Reset apply below is a
 -- faithful write with no behavior change until one lands.
 local function malygosReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     vortexState[guid] = nil
     -- C++ Reset (boss_malygos.cpp:345/:371/:381): _despawned is the
@@ -717,7 +722,7 @@ local function alexstraszaGiftBeamVisualApply(event, aura, target)
     end
     local giftGuid = target:SummonGameObject(gift, target:GetX(), target:GetY(), target:GetZ(), target:GetO(), 0)
     if giftGuid ~= nil then
-        giftBeamGifts[target:GetGUID()] = giftGuid
+        giftBeamGifts[target:GetGUIDLow()] = giftGuid
     end
 end
 
@@ -739,7 +744,7 @@ local function alexstraszaGiftBeamVisualRemove(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
     end
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     local giftGuid = giftBeamGifts[guid]
     giftBeamGifts[guid] = nil
     if giftGuid ~= nil then

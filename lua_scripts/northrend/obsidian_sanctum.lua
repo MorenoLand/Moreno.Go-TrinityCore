@@ -71,10 +71,10 @@
 -- over dragonCommon[6] (waypointId wrap + EVENT_FREE_MOVEMENT 500ms)
 -- + LAND DoZoneInCombat + random-threat-player AddThreat(1.0) +
 -- Attack(true) + MoveChase; the != IN_PROGRESS -> EnterEvadeMode leg
--- is OMITTED per the checkpoint head NEXT (the drake returns without
--- moving when Sartharion is not IN_PROGRESS); the
--- GetMotionMaster()->Clear() leg is vacuous post-arrival (the spline
--- already landed).
+-- is PORTED tick 513 (obsidian_sanctum.cpp:211-214; bridge live,
+-- lua_creature_events.go:5014 — dead/already-evading no-op guards
+-- ride along); the GetMotionMaster()->Clear() leg is vacuous
+-- post-arrival (the spline already landed).
 -- OpenPortal PORTED 2026-11-05 (tick 255) in openPortal below (egg /
 -- acolyte summons, Vesperon InterruptNonMeleeSpells + 32747 cast, both
 -- Talks); the portal SetRespawnTime(30000) leg stays PARKED — Go GO
@@ -248,6 +248,13 @@ local ACOLYTE_SHADRON_POS2 = { 3246.57, 551.263, 58.6164 }
 local ACOLYTE_VESPERON_POS = { 3145.68, 520.71, 89.7 }
 local ACOLYTE_VESPERON_POS2 = { 3246.57, 551.263, 58.6164 }
 
+-- GUID-KEY RULE (tick 513): per-GUID tables are keyed on GetGUIDLow()
+-- (a stable Lua number), NEVER on GetGUID() — each GetGUID() call
+-- pushes a fresh UInt64 userdata (engine/scripting/globals.go:2127),
+-- and Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another handler call.
+-- Same-handler locals and timer-closure captures were the only safe
+-- GetGUID() uses; this file keys everything on GetGUIDLow().
 local timers = {}
 
 local function cancelTimers(guid)
@@ -352,9 +359,10 @@ local function dragonMovementInform(_, creature, moveType, id)
         return
     end
     if creature:GetBossState(DATA_SARTHARION) ~= BOSS_STATE_IN_PROGRESS then
+        creature:EnterEvadeMode() -- obsidian_sanctum.cpp:211-214
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local flight = dragonFlight[guid]
     if not flight then
         flight = { waypointId = 0, canMoveFree = false }
@@ -489,7 +497,7 @@ end
 local function dragonEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:DoZoneInCombat() -- obsidian_sanctum.cpp:189 (dummy_dragonAI::JustEngagedWith arm 2, C++ order; bridge live 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowbreath", 20000, function()
         shadowBreathTick(creature, guid)
@@ -513,7 +521,7 @@ local function dragonEnterCombat(event, creature, target)
 end
 
 local function dragonLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ dummy_dragonAI::KilledUnit: victim->GetTypeId() ==
@@ -552,7 +560,7 @@ local drakeDataByEntry = {
 }
 
 local function dragonDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetData(DATA_CAN_LOOT) == 0 then
         creature:SetLootRecipient()
     end
@@ -599,11 +607,11 @@ local function dragonReset(event, creature)
     if creature:HasFlag(59, 0x2) then
         creature:RemoveFlag(59, 0x2)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset calls Initialize (:184): waypointId = 0,
     -- _canMoveFree = false — the free-movement machine restarts from
     -- the next INIT arrival.
-    dragonFlight[creature:GetGUID()] = { waypointId = 0, canMoveFree = false }
+    dragonFlight[creature:GetGUIDLow()] = { waypointId = 0, canMoveFree = false }
 end
 
 -- C++ instance OnCreatureCreate latch (instance_obsidian_sanctum.cpp:60-78)
@@ -622,7 +630,7 @@ local function dragonSpawn(event, creature)
         creature:SetGuidData(dataId)
     end
     creature:SetData(DATA_CAN_LOOT, 1)
-    dragonFlight[creature:GetGUID()] = { waypointId = 0, canMoveFree = false }
+    dragonFlight[creature:GetGUIDLow()] = { waypointId = 0, canMoveFree = false }
 end
 
 for _, entry in ipairs({ ENTRY_TENEBRON, ENTRY_SHADRON, ENTRY_VESPERON }) do
@@ -638,8 +646,9 @@ end
 -- C++ npc_shadron::Reset: the self HasAura-gated strips of
 -- SPELL_TWILIGHT_TORMENT_VESP / SPELL_GIFT_OF_TWILIGTH_SHA are PORTED
 -- (stale "no aura bridge" claim retracted — HasAura/RemoveAura are
--- bridged); the SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) leg has no
--- instance bridge (documented). Registered after dragonReset so the
+-- bridged); the SetBossState(DATA_PORTAL_OPEN, NOT_STARTED) leg is PORTED
+-- 2026-11-05 (tick 255, SetBossState bridge live,
+-- engine/world/lua_creature_events.go:6419). Registered after dragonReset so the
 -- timer cancel lands first, mirroring the C++ base-then-override order.
 local function shadronReset(event, creature)
     if creature:HasAura(SPELL_TWILIGHT_TORMENT_VESP) then
@@ -678,7 +687,7 @@ local function fadeArmorTick(creature, guid)
 end
 
 local function whelpEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fadearmor", 1000, function()
         fadeArmorTick(creature, guid)
@@ -686,16 +695,16 @@ local function whelpEnterCombat(event, creature)
 end
 
 local function whelpLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function whelpDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function whelpReset(event, creature)
     creature:RemoveAllAuras()
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 for _, entry in ipairs({ ENTRY_TWILIGHT_WHELP, ENTRY_SARTHARION_TWILIGHT_WHELP }) do
@@ -724,8 +733,8 @@ local ENTRY_FLAME_TSUNAMI = 30616
 -- ported; DespawnOrUnsummon(28s) ports as a 28s one-shot
 -- self-despawn (arm-if-absent: the C++ despawn countdown keeps
 -- running through evade, so the ev23-on-evade refire must not
--- re-arm it; ev4 cancels it); the instance-gated gift-aura legs
--- stay out.
+-- re-arm it; ev4 cancels it); the instance-gated gift-aura legs are
+-- PORTED 2026-11-05 (tick 255, GetInstanceCreature bridge live).
 local function acolyteShadronReset(event, creature)
     -- The Go Kill() funnel fires ev23 on death before ev4; a dead
     -- acolyte must not re-arm the despawn timer or re-cast auras
@@ -749,7 +758,7 @@ local function acolyteShadronReset(event, creature)
             shadron:AddAura(SPELL_GIFT_OF_TWILIGTH_SHA)
         end
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local per = timers[guid]
     if not (per and per["despawn"]) then
         schedule(guid, "despawn", 28000, function()
@@ -769,7 +778,7 @@ end
 -- retracted (lua_player.go:2752 / :2957). Timer cancel folds in here
 -- (replaces the old acolyteDespawnCancel registration).
 local function acolyteShadronDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetInstanceCreature(DATA_SHADRON) then
         creature:SetBossState(DATA_PORTAL_OPEN, BOSS_STATE_NOT_STARTED)
     end
@@ -805,7 +814,7 @@ local function acolyteVesperonReset(event, creature)
     end
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
     creature:CastSpell(creature, SPELL_TWILIGHT_TORMENT_VESP_ACO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local per = timers[guid]
     if not (per and per["despawn"]) then
         schedule(guid, "despawn", 28000, function()
@@ -818,10 +827,11 @@ RegisterCreatureEvent(ENTRY_ACOLYTE_VESPERON, 23, acolyteVesperonReset)
 
 -- C++ npc_acolyte_of_vesperon::JustDied (obsidian_sanctum.cpp:728):
 -- me->RemoveAurasDueToSpell(SPELL_TWILIGHT_TORMENT_VESP_ACO) —
--- self leg ported; the instance/vesperon/player legs stay out.
+-- self leg ported; the instance/vesperon/player legs are PORTED
+-- 2026-11-05 (tick 255, see the PORTED note inside acolyteVesperonDied).
 local function acolyteVesperonDied(event, creature, killer)
     creature:RemoveAura(SPELL_TWILIGHT_TORMENT_VESP_ACO)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_acolyte_of_vesperon::JustDied (obsidian_sanctum.cpp:728-766),
     -- PORTED 2026-11-05 (tick 255): Vesperon SetBossState(DATA_PORTAL_OPEN,
     -- NOT_STARTED) + torment strip (alive + HasAura-gated) + the
@@ -880,12 +890,14 @@ local function twilightEggTick(creature, guid)
 end
 
 local function twilightEggDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_twilight_eggs::Reset (obsidian_sanctum.cpp:804-809):
 -- me->AddAura(SPELL_TWILIGHT_SHIFT_ENTER, me) ported; the
--- EVENT_TWILIGHT_EGGS 20s payload is seeded here.
+-- EVENT_TWILIGHT_EGGS 20s payload is seeded here. The ctor
+-- SetCombatMovement(false) (:800) is PORTED tick 513 here (the
+-- ctor-equivalent point; bridge lua_creature_events.go:4410).
 local function twilightEggReset(event, creature)
     -- The Go Kill() funnel fires ev23 on death before ev4; a dead egg
     -- must not re-arm the hatch timer (C++ Reset never runs on a corpse).
@@ -893,7 +905,8 @@ local function twilightEggReset(event, creature)
         return
     end
     creature:AddAura(SPELL_TWILIGHT_SHIFT_ENTER)
-    local guid = creature:GetGUID()
+    creature:SetCombatMovement(false) -- obsidian_sanctum.cpp:800 (ctor)
+    local guid = creature:GetGUIDLow()
     schedule(guid, "eggtick", 20000, function()
         twilightEggTick(creature, guid)
     end)
@@ -949,7 +962,7 @@ local function tsunamiBuffTick(creature, guid)
 end
 
 local function tsunamiReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetReactState(REACT_PASSIVE)
     schedule(guid, "tsunami", 100, function()
@@ -962,7 +975,7 @@ local function tsunamiReset(event, creature)
 end
 
 local function tsunamiRemove(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 23, tsunamiReset)
 RegisterCreatureEvent(ENTRY_FLAME_TSUNAMI, 37, tsunamiRemove)
