@@ -275,7 +275,7 @@ end
 -- then Talk(SAY_AGGRO); the base instance SetBossState / setActive /
 -- ScheduleTasks legs stay out (no instance-script model).
 local function gruulEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetState(guid)
     gruulState[guid] = freshState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -287,7 +287,7 @@ local function gruulEnterCombat(event, creature)
 end
 
 local function gruulLeaveCombat(event, creature)
-    resetState(creature:GetGUID())
+    resetState(creature:GetGUIDLow())
 end
 
 -- C++ boss_gruul::SpellHitTarget (:125-159): the SPELL_SHATTER arm
@@ -302,7 +302,7 @@ end
 -- bridge, and fabricating the hit set would misattribute knockbacks.
 local function gruulSpellHitTarget(event, creature, target, spellId)
     if spellId == SPELL_SHATTER then
-        local st = gruulState[creature:GetGUID()]
+        local st = gruulState[creature:GetGUIDLow()]
         if st and st.performing then
             st.performing = false
         end
@@ -321,11 +321,11 @@ end
 local function gruulDied(event, creature, killer)
     creature:SetBossState(1, 3) -- DATA_GRUUL, DONE (boss_gruul.cpp:119-122: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
-    resetState(creature:GetGUID())
+    resetState(creature:GetGUIDLow())
 end
 
 local function gruulReset(event, creature)
-    resetState(creature:GetGUID())
+    resetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_GRUUL, 1, gruulEnterCombat)

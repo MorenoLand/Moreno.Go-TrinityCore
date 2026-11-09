@@ -243,7 +243,7 @@ end
 -- leave-combat/reset/enter-combat state clears. Returns
 -- nothing, so it never vetoes the engine AI step.
 local function onAIUpdate(event, creature, diff)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if creature:GetData(1) ~= 1 then
         deathTalk[guid] = nil
         return
@@ -270,7 +270,7 @@ local function onAIUpdate(event, creature, diff)
 end
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -282,7 +282,7 @@ RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 3, function(_, creature)
@@ -303,11 +303,11 @@ RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 4, function(_, creature)
     if dalliah ~= nil and not dalliah:IsInCombat() then
         dalliah:SetData(1, 1)
     end
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 7, onAIUpdate)

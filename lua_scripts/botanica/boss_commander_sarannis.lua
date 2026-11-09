@@ -179,7 +179,7 @@ end
 -- (the BossAI arm is instance-blocked) — Talk(SAY_AGGRO)
 -- (C++-exact).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         resonance = 42700,
@@ -196,7 +196,7 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ KilledUnit: Talk(SAY_KILL) unconditionally (no player
@@ -209,7 +209,7 @@ end)
 -- arm is instance-blocked).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ DamageTaken: the phase latch — HealthBelowPctDamaged
@@ -220,7 +220,7 @@ end)
 -- (boss_commander_sarannis.cpp:164-179 — no SpellScript bridge
 -- is needed because the script body is fully C++-visible).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = combatStates[guid]
     if not st then
         return
@@ -259,5 +259,5 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)

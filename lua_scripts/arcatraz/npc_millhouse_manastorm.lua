@@ -280,11 +280,11 @@ local function combatTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 5, function(_, creature)
-    startIntro(creature, creature:GetGUID())
+    startIntro(creature, creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombat(guid)
     combatState[guid] = { pyro = 1000, fire = 2500, lowhp = false }
     combatTimers[guid] = CreateLuaEvent(function()
@@ -293,7 +293,7 @@ RegisterCreatureEvent(ENTRY_MILLHOUSE, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 2, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombat(guid)
     combatState[guid] = nil
     if not introDone[guid] then
@@ -311,7 +311,7 @@ RegisterCreatureEvent(ENTRY_MILLHOUSE, 3, function(_, creature, victim)
 end)
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 4, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:Talk(SAY_DEATH)
     cancelIntro(guid)
     cancelCombat(guid)
@@ -321,7 +321,7 @@ RegisterCreatureEvent(ENTRY_MILLHOUSE, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 23, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombat(guid)
     combatState[guid] = nil
 end)

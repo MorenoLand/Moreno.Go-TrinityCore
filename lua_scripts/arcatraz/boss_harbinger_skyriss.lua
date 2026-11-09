@@ -476,14 +476,14 @@ end
 -- done once set); C++ re-runs the intro on Reset, but that re-run is
 -- outside this arm's scope.
 RegisterCreatureEvent(ENTRY_SKYRISS, 27, function(_, creature, unit)
-    local intro = introStates[creature:GetGUID()]
+    local intro = introStates[creature:GetGUIDLow()]
     if not intro or not intro.done then
         return true
     end
 end)
 
 RegisterCreatureEvent(ENTRY_SKYRISS, 5, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     resetImmuneFlags(creature, guid)
     introTimers[guid] = CreateLuaEvent(function()
@@ -511,7 +511,7 @@ local function onJustSummoned(_, creature, summoned)
             and summoned:GetEntry() ~= ENTRY_ILLUSION_33 then
         return
     end
-    local st = combatStates[creature:GetGUID()]
+    local st = combatStates[creature:GetGUIDLow()]
     local pct = st and st.splitPct or 66
     local maxHealth = summoned:GetMaxHealth()
     if maxHealth > 0 then
@@ -532,7 +532,7 @@ RegisterCreatureEvent(ENTRY_SKYRISS, 19, onJustSummoned)
 -- lands on OnEnterCombat (omor precedent); the pull yell is
 -- the intro phase-2 SAY_AGGRO, not an engage yell.
 RegisterCreatureEvent(ENTRY_SKYRISS, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = freshCombatState()
     combatTimers[guid] = CreateLuaEvent(function()
@@ -544,7 +544,7 @@ end)
 -- blocked; the observable remainder — the Initialize() re-
 -- latch with the Intro flag untouched — is fullReset.
 RegisterCreatureEvent(ENTRY_SKYRISS, 2, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     resetImmuneFlags(creature, guid)
     local intro = introStates[guid]
@@ -567,13 +567,13 @@ end)
 RegisterCreatureEvent(ENTRY_SKYRISS, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(3, 3) -- DATA_HARBINGER_SKYRISS, DONE (boss_harbinger_skyriss.cpp:117-121: Talk then _JustDied)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() re-latch as the evade hook.
 RegisterCreatureEvent(ENTRY_SKYRISS, 23, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     fullReset(guid)
     resetImmuneFlags(creature, guid)
     local intro = introStates[guid]

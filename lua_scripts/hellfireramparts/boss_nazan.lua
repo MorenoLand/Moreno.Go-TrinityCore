@@ -285,7 +285,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_NAZAN, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     if not states[guid] then
         -- Fresh spawn or post-death re-engage: C++ ctor +
@@ -304,17 +304,17 @@ end)
 -- No event 3: the C++ has no KilledUnit override.
 
 RegisterCreatureEvent(ENTRY_NAZAN, 2, function(_, creature)
-    evadeBoss(creature:GetGUID())
+    evadeBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NAZAN, 4, function(_, creature)
     -- Death: full state drop — respawn re-engages with
     -- fresh ctor state (C++-exact).
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NAZAN, 23, function(_, creature)
-    evadeBoss(creature:GetGUID())
+    evadeBoss(creature:GetGUIDLow())
 end)
 
 -- C++ boss_nazanAI::SpellHitTarget (boss_vazruden_the_herald.cpp:113-117):

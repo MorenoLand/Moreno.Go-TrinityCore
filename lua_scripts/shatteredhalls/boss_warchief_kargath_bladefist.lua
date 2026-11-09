@@ -217,7 +217,7 @@ end
 
 local function kargathEnterCombat(event, creature)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     kargathAssassinFired[guid] = false
     kargathAssassins[guid] = {}
     kargathGuards[guid] = {}
@@ -248,7 +248,7 @@ local function kargathEnterCombat(event, creature)
 end
 
 local function kargathLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelKargath(guid)
     despawnAssassins(guid)
     despawnGuards(guid)
@@ -257,7 +257,7 @@ end
 local function kargathDied(event, creature, killer)
     creature:SetBossState(2, 3) -- DATA_KARGATH, DONE (boss_warchief_kargath_bladefist.cpp:120-124: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelKargath(guid)
     despawnAssassins(guid)
     despawnGuards(guid)
@@ -270,7 +270,7 @@ local function kargathReset(event, creature)
     -- sweep above (documented above).
     creature:SetSpeedRate(1, 2)
     creature:SetWalk(false)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelKargath(guid)
     despawnAssassins(guid)
     despawnGuards(guid)

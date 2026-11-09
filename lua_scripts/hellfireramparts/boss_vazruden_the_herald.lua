@@ -216,7 +216,7 @@ end
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 1,
     function(_, creature)
         creature:SetMeleeAttack(false) -- boss_vazruden_the_herald.cpp:402: custom UpdateAI never calls DoMeleeAttackIfReady (phase machine in C++, never melees)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelPump(guid)
         resetHerald(guid)
         local st = freshState()
@@ -258,7 +258,7 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 19, heraldJustSummoned)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 2,
     function(_, creature)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         unsummonAdds(creature, guid)
         cancelPump(guid)
         resetHerald(guid)
@@ -266,13 +266,13 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 2,
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 4,
     function(_, creature)
-        cancelPump(creature:GetGUID())
-        resetHerald(creature:GetGUID())
+        cancelPump(creature:GetGUIDLow())
+        resetHerald(creature:GetGUIDLow())
     end)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 23,
     function(_, creature)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         unsummonAdds(creature, guid)
         cancelPump(guid)
         resetHerald(guid)

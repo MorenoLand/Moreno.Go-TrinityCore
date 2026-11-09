@@ -222,7 +222,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_GARGOLMAR, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     creature:Talk(SAY_AGGRO)
@@ -242,7 +242,7 @@ end)
 -- (fel orc convert precedent).
 
 RegisterCreatureEvent(ENTRY_GARGOLMAR, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_GARGOLMAR, 3, function(_, creature)
@@ -253,9 +253,9 @@ end)
 
 RegisterCreatureEvent(ENTRY_GARGOLMAR, 4, function(_, creature)
     creature:Talk(SAY_DIE)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_GARGOLMAR, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)

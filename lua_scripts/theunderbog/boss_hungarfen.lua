@@ -167,7 +167,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_HUNGARFEN, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
@@ -176,13 +176,13 @@ RegisterCreatureEvent(ENTRY_HUNGARFEN, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_HUNGARFEN, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_HUNGARFEN, 4, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_HUNGARFEN, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)

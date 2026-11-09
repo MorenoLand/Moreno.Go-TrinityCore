@@ -102,7 +102,7 @@ local function convertTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetConvert(guid)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
@@ -115,7 +115,7 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 2, function(_, creature)
-    resetConvert(creature:GetGUID())
+    resetConvert(creature:GetGUIDLow())
 end)
 
 -- C++ MoveInLineOfSight is an empty override: converts never
@@ -125,7 +125,7 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 27, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 4, function(_, creature)
-    resetConvert(creature:GetGUID())
+    resetConvert(creature:GetGUIDLow())
     -- C++ JustDied peon-death relay (boss_nethekurse.cpp:340-346):
     -- no distance gate in C++, so a 100.0 room-scale search;
     -- boss:Talk(SAY_PEON_DIES) is the SetData effect (same
@@ -137,7 +137,7 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 23, function(_, creature)
-    resetConvert(creature:GetGUID())
+    resetConvert(creature:GetGUIDLow())
     -- C++ Reset (boss_nethekurse.cpp:325): SetNoCallAssistance(true).
     creature:SetNoCallAssistance(true)
 end)

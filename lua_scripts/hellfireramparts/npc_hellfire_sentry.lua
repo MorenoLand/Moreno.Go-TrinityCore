@@ -95,7 +95,7 @@ end
 
 RegisterCreatureEvent(ENTRY_HELLFIRE_SENTRY, 1,
     function(_, creature)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         resetSentry(guid)
         states[guid] = freshState()
         timers[guid] = CreateLuaEvent(function()
@@ -107,17 +107,17 @@ RegisterCreatureEvent(ENTRY_HELLFIRE_SENTRY, 1,
 
 RegisterCreatureEvent(ENTRY_HELLFIRE_SENTRY, 2,
     function(_, creature)
-        resetSentry(creature:GetGUID())
+        resetSentry(creature:GetGUIDLow())
     end)
 
 RegisterCreatureEvent(ENTRY_HELLFIRE_SENTRY, 4,
     function(_, creature)
         -- The JustDied -> herald SentryDownBy relay has no
         -- cross-creature bridge (documented above).
-        resetSentry(creature:GetGUID())
+        resetSentry(creature:GetGUIDLow())
     end)
 
 RegisterCreatureEvent(ENTRY_HELLFIRE_SENTRY, 23,
     function(_, creature)
-        resetSentry(creature:GetGUID())
+        resetSentry(creature:GetGUIDLow())
     end)

@@ -140,7 +140,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     cancelDespawn(guid)
     states[guid] = freshState()
@@ -160,7 +160,7 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN, 2, function(_, creature)
     -- (lua_creature_events.go:214). Re-engage (event 1) cancels the
     -- pending despawn — the C++ decrements UnsummonCheck only in the
     -- !UpdateVictim() branch, and Reset() re-seeds it to 2000.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     cancelDespawn(guid)
     despawnTimers[guid] = CreateLuaEvent(function()
@@ -187,11 +187,11 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN, 4, function(_, creature, killer)
     if killer and killer:GetGUID() ~= creature:GetGUID() then
         creature:Talk(SAY_DIE)
     end
-    resetBoss(creature:GetGUID())
-    cancelDespawn(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
+    cancelDespawn(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
-    cancelDespawn(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
+    cancelDespawn(creature:GetGUIDLow())
 end)

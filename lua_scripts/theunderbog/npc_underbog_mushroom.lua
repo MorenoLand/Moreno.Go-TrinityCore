@@ -109,7 +109,7 @@ local function mushroomTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 5, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetMushroom(guid)
     states[guid] = freshState()
     -- C++ Reset arms, fired on spawn (frozen-core precedent):
@@ -123,15 +123,15 @@ RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 5, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 2, function(_, creature)
-    resetMushroom(creature:GetGUID())
+    resetMushroom(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 4, function(_, creature)
-    resetMushroom(creature:GetGUID())
+    resetMushroom(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 23, function(_, creature)
-    resetMushroom(creature:GetGUID())
+    resetMushroom(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_UNDERBOG_MUSHROOM, 1, function(_, creature)

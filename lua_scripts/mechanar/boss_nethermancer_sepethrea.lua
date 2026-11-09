@@ -209,7 +209,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     bossStates[guid] = freshBossState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -226,7 +226,7 @@ RegisterCreatureEvent(ENTRY_SEPRETHREA, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 3, function(_, creature)
@@ -237,11 +237,11 @@ end)
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 4, function(_, creature)
     creature:SetBossState(3, 3) -- DATA_NETHERMANCER_SEPETHREA, DONE (boss_nethermancer_sepethrea.cpp:89-92: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 -- npc_ragin_flames: C++ Initialize() timers — inferno 10s,
@@ -280,7 +280,7 @@ local function flameTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetFlame(guid)
     flameStates[guid] = freshFlameState()
     timers[guid] = CreateLuaEvent(function()
@@ -289,15 +289,15 @@ RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 2, function(_, creature)
-    resetFlame(creature:GetGUID())
+    resetFlame(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 4, function(_, creature)
-    resetFlame(creature:GetGUID())
+    resetFlame(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_RAGIN_FLAMES, 23, function(_, creature)
-    resetFlame(creature:GetGUID())
+    resetFlame(creature:GetGUIDLow())
     -- C++ npc_ragin_flames::Reset() :181-182: ApplySpellImmune(0,
     -- IMMUNITY_DAMAGE, SPELL_SCHOOL_MASK_MAGIC=126 / NORMAL=1, true).
     creature:ApplySpellImmune(0, 3, 126, true)

@@ -127,7 +127,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -138,14 +138,14 @@ RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 4, function(_, creature)
     creature:SetBossState(3, 3) -- DATA_SHATTERED_EXECUTIONER, DONE (shattered_halls.cpp: _JustDied then quest leg)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)

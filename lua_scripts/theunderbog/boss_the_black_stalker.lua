@@ -330,7 +330,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     timers[guid] = CreateLuaEvent(function()
@@ -339,18 +339,18 @@ RegisterCreatureEvent(ENTRY_BLACK_STALKER, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
-    despawnStriders(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
+    despawnStriders(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 4, function(_, creature)
-    resetBoss(creature:GetGUID())
-    despawnStriders(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
+    despawnStriders(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_BLACK_STALKER, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
-    despawnStriders(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
+    despawnStriders(creature:GetGUIDLow())
 end)
 
 -- C++ JustSummoned (boss_the_black_stalker.cpp:109-119):
@@ -368,13 +368,13 @@ RegisterCreatureEvent(ENTRY_BLACK_STALKER, 19, function(_, creature, summoned)
     if not summoned or summoned:GetEntry() ~= ENTRY_SPORE_STRIDER then
         return
     end
-    local bguid = creature:GetGUID()
+    local bguid = creature:GetGUIDLow()
     local list = striders[bguid]
     if not list then
         list = {}
         striders[bguid] = list
     end
-    list[summoned:GetGUID()] = summoned
+    list[summoned:GetGUIDLow()] = summoned
     local target = pickThreatTargetSkipFirst(creature)
     if not target then
         target = creature:GetVictim()

@@ -277,7 +277,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_PATHALEON, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     bossStates[guid] = freshBossState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -289,7 +289,7 @@ RegisterCreatureEvent(ENTRY_PATHALEON, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_PATHALEON, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_PATHALEON, 3, function(_, creature)
@@ -300,7 +300,7 @@ end)
 RegisterCreatureEvent(ENTRY_PATHALEON, 4, function(_, creature)
     creature:SetBossState(4, 3) -- DATA_PATHALEON_THE_CALCULATOR, DONE (boss_pathaleon_the_calculator.cpp:94-97: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 -- C++ DamageTaken: HealthBelowPctDamaged(20, damage) — post-
@@ -324,7 +324,7 @@ RegisterCreatureEvent(ENTRY_PATHALEON, 9, function(_, creature, attacker, damage
 end)
 
 RegisterCreatureEvent(ENTRY_PATHALEON, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 -- npc_nether_wraith: C++ Initialize() timers — arcane
@@ -386,7 +386,7 @@ local function wraithTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_NETHER_WRAITH, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetWraith(guid)
     wraithStates[guid] = freshWraithState()
     timers[guid] = CreateLuaEvent(function()
@@ -395,13 +395,13 @@ RegisterCreatureEvent(ENTRY_NETHER_WRAITH, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_NETHER_WRAITH, 2, function(_, creature)
-    resetWraith(creature:GetGUID())
+    resetWraith(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NETHER_WRAITH, 4, function(_, creature)
-    resetWraith(creature:GetGUID())
+    resetWraith(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NETHER_WRAITH, 23, function(_, creature)
-    resetWraith(creature:GetGUID())
+    resetWraith(creature:GetGUIDLow())
 end)

@@ -177,7 +177,7 @@ RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
     -- Re-assert the ctor root on engage (idempotent; the event-5
     -- handler above is the C++-exact placement).
     creature:SetRooted(true)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
@@ -195,7 +195,7 @@ RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 4, function(_, creature)
@@ -210,11 +210,11 @@ RegisterCreatureEvent(ENTRY_AHUNE, 4, function(_, creature)
     if bunny then bunny:Kill(creature) end
     local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
     if core then core:Kill(creature) end
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 -- C++ spell_ice_spear_control_aura::PeriodicTick

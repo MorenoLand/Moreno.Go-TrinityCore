@@ -246,7 +246,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     -- Restore phase-1 melee: the SetMeleeAttack(false) flag
@@ -260,7 +260,7 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 3, function(_, creature)
@@ -272,9 +272,9 @@ end)
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 4, function(_, creature)
     creature:SetBossState(0, 3) -- DATA_NETHEKURSE, DONE (boss_nethekurse.cpp:118-121: _JustDied then Talk)
     creature:Talk(SAY_DIE)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)

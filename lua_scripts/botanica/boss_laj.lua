@@ -224,7 +224,7 @@ end
 -- JustEngagedWith override is empty — no pull yell
 -- (C++-exact).
 RegisterCreatureEvent(ENTRY_LAJ, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         canSummon = false,
@@ -274,20 +274,20 @@ RegisterCreatureEvent(ENTRY_LAJ, 19, onJustSummoned)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_LAJ, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- No OnTargetDied(3): the C++ does not override KilledUnit
 -- (C++-exact).
 
 RegisterCreatureEvent(ENTRY_LAJ, 4, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_LAJ, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
     -- C++ boss_lajAI::Reset() :86-91: SetDisplayId(MODEL_DEFAULT)
     -- PORTED 2026-10-20 (display bridge live — C++ arm order:
     -- display first, then the school immunity matrix); shadow

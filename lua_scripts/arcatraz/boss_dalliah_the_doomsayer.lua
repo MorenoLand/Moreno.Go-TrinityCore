@@ -261,7 +261,7 @@ end
 -- leave-combat/reset/enter-combat state clears. Returns
 -- nothing, so it never vetoes the engine AI step.
 local function onAIUpdate(event, creature, diff)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if creature:GetData(1) ~= 1 then
         deathTalk[guid] = nil
         return
@@ -288,7 +288,7 @@ local function onAIUpdate(event, creature, diff)
 end
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     if creature:IsHeroic() then
@@ -303,7 +303,7 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 3, function(_, creature)
@@ -325,11 +325,11 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 4, function(_, creature)
     if soccothrates ~= nil and not soccothrates:IsInCombat() then
         soccothrates:SetData(1, 1)
     end
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 7, onAIUpdate)

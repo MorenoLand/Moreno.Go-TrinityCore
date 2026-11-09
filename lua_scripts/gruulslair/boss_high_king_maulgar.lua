@@ -325,7 +325,7 @@ end
 -- SetInCombatWith pairing (boss_high_king_maulgar.cpp:250-251) has no
 -- bridge — engine triggerCreatureAggro converges the engage.
 local function maulgarEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     maulgarResetState(guid)
     maulgarState[guid] = { phase2 = false }
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:134: engage every player on the map (live bridge 2026-10-23)
@@ -334,7 +334,7 @@ local function maulgarEnterCombat(event, creature, target)
 end
 
 local function maulgarLeaveCombat(event, creature)
-    maulgarResetState(creature:GetGUID())
+    maulgarResetState(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY), no victim gate (C++-exact).
@@ -347,14 +347,14 @@ end
 local function maulgarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:121-126)
-    maulgarResetState(creature:GetGUID())
+    maulgarResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset: Initialize + non-triggered self-cast dual wield
 -- 29651 (C++-exact — unlike Brutallus this one is NOT
 -- triggered); the SetBossState(NOT_STARTED) arm is blocked.
 local function maulgarReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     maulgarResetState(guid)
     maulgarState[guid] = { phase2 = false }
     -- C++ Reset: non-triggered DoCast(me, SPELL_DUAL_WIELD) (Reset-only
@@ -425,14 +425,14 @@ end
 -- SetBossState(IN_PROGRESS) (blocked) + the three combat
 -- arms.
 local function olmEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     olmResetState(guid)
     creature:DoZoneInCombat()
     olmArmCombat(creature, guid)
 end
 
 local function olmLeaveCombat(event, creature)
-    olmResetState(creature:GetGUID())
+    olmResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: the maulgar DoAction(ACTION_ADD_DEATH) relay
@@ -442,7 +442,7 @@ end
 local function olmDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:263-269)
-    olmResetState(creature:GetGUID())
+    olmResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset: Initialize the three timers; the
@@ -450,7 +450,7 @@ end
 -- override (0.0f threat + MoveChase 30 yd) has no threat/
 -- movement bridges — default engine AttackStart applies.
 local function olmReset(event, creature)
-    olmResetState(creature:GetGUID())
+    olmResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_OLM_THE_SUMMONER, 1, olmEnterCombat)
@@ -500,7 +500,7 @@ local function kigglerResetState(guid)
 end
 
 local function kigglerEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     kigglerResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:344, C++ arm order
     schedule(guid, "polymorph", 5000, function()
@@ -518,7 +518,7 @@ local function kigglerEnterCombat(event, creature, target)
 end
 
 local function kigglerLeaveCombat(event, creature)
-    kigglerResetState(creature:GetGUID())
+    kigglerResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: the maulgar DoAction relay ports via
@@ -527,11 +527,11 @@ end
 local function kigglerDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:350-356)
-    kigglerResetState(creature:GetGUID())
+    kigglerResetState(creature:GetGUIDLow())
 end
 
 local function kigglerReset(event, creature)
-    kigglerResetState(creature:GetGUID())
+    kigglerResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_KIGGLER_THE_CRAZED, 1, kigglerEnterCombat)
@@ -567,7 +567,7 @@ local function blindeyeResetState(guid)
 end
 
 local function blindeyeEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     blindeyeResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:436, C++ arm order
     schedule(guid, "shield", 5000, function()
@@ -582,7 +582,7 @@ local function blindeyeEnterCombat(event, creature, target)
 end
 
 local function blindeyeLeaveCombat(event, creature)
-    blindeyeResetState(creature:GetGUID())
+    blindeyeResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: the maulgar DoAction relay ports via
@@ -591,11 +591,11 @@ end
 local function blindeyeDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:442-448)
-    blindeyeResetState(creature:GetGUID())
+    blindeyeResetState(creature:GetGUIDLow())
 end
 
 local function blindeyeReset(event, creature)
-    blindeyeResetState(creature:GetGUID())
+    blindeyeResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_BLINDEYE_THE_SEER, 1, blindeyeEnterCombat)
@@ -673,7 +673,7 @@ end
 
 local function kroshEnterCombat(event, creature, target)
     creature:SetMeleeAttack(false) -- boss_high_king_maulgar.cpp:533: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     kroshResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:519, C++ JustEngagedWith arm order
     schedule(guid, "fireball", 1000, function()
@@ -697,7 +697,7 @@ local function kroshEnterCombat(event, creature, target)
 end
 
 local function kroshLeaveCombat(event, creature)
-    kroshResetState(creature:GetGUID())
+    kroshResetState(creature:GetGUIDLow())
 end
 
 -- C++ JustDied: the maulgar DoAction relay ports via
@@ -706,11 +706,11 @@ end
 local function kroshDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:525-531)
-    kroshResetState(creature:GetGUID())
+    kroshResetState(creature:GetGUIDLow())
 end
 
 local function kroshReset(event, creature)
-    kroshResetState(creature:GetGUID())
+    kroshResetState(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(NPC_KROSH_FIREHAND, 1, kroshEnterCombat)

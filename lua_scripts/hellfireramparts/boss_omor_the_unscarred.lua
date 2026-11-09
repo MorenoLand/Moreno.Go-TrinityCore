@@ -301,7 +301,7 @@ end
 
 RegisterCreatureEvent(ENTRY_OMOR, 1, function(_, creature)
     creature:SetCombatMovement(false) -- BossAI ctor arm, boss_omor_the_unscarred.cpp:64 (ranged AI stands and casts)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -329,7 +329,7 @@ local function omorJustSummoned(_, creature, summon)
     if summon and target then
         summon:EngageWithTarget(target)
     end
-    local st = states[creature:GetGUID()]
+    local st = states[creature:GetGUIDLow()]
     if st then
         st.summonedCount = st.summonedCount + 1
     end
@@ -339,7 +339,7 @@ RegisterCreatureEvent(ENTRY_OMOR, 19, omorJustSummoned)
 
 RegisterCreatureEvent(ENTRY_OMOR, 2, function(_, creature)
     creature:Talk(SAY_WIPE)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_OMOR, 3, function(_, creature)
@@ -353,9 +353,9 @@ end)
 
 RegisterCreatureEvent(ENTRY_OMOR, 4, function(_, creature)
     creature:Talk(SAY_DIE)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_OMOR, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)

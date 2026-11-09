@@ -261,7 +261,7 @@ end
 -- DeadAddsCount are tree-form machine values that reset on
 -- entry).
 RegisterCreatureEvent(ENTRY_FREYWINN, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     -- Fresh-AI latch reset (C++ respawn recreates the AI with an
     -- empty summon list); the world objects themselves persist,
@@ -283,8 +283,8 @@ end)
 -- blocked; the observable remainder is despawnFrayers +
 -- fullReset.
 RegisterCreatureEvent(ENTRY_FREYWINN, 2, function(_, creature)
-    despawnFrayers(creature:GetGUID())
-    fullReset(creature:GetGUID())
+    despawnFrayers(creature:GetGUIDLow())
+    fullReset(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_FREYWINN, 3, function(_, creature)
@@ -297,14 +297,14 @@ RegisterCreatureEvent(ENTRY_FREYWINN, 4, function(_, creature)
     -- C++ JustDied is Talk-only: latched frayers are NOT despawned
     -- on death (only Reset despawns them).
     creature:Talk(SAY_DEATH)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() re-latch as the evade hook.
 RegisterCreatureEvent(ENTRY_FREYWINN, 23, function(_, creature)
-    despawnFrayers(creature:GetGUID())
-    fullReset(creature:GetGUID())
+    despawnFrayers(creature:GetGUIDLow())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ JustSummoned (:100-103): latch NPC_FRAYER summons only.
@@ -312,11 +312,11 @@ RegisterCreatureEvent(ENTRY_FREYWINN, 19, function(_, creature, summoned)
     if summoned:GetEntry() ~= ENTRY_FRAYER then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = frayers[guid]
     if not list then
         list = {}
         frayers[guid] = list
     end
-    list[summoned:GetGUID()] = summoned
+    list[summoned:GetGUIDLow()] = summoned
 end)

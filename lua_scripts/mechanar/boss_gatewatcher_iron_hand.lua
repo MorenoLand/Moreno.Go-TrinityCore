@@ -149,7 +149,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -161,7 +161,7 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 2, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 3, function(_, creature)
@@ -177,9 +177,9 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 4, function(_, creature)
     -- Talk(SAY_DEATH) — C++ arm order.
     creature:SetBossState(DATA_GATEWATCHER_IRON_HAND, 3) -- DONE
     creature:Talk(SAY_DEATH)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 23, function(_, creature)
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)

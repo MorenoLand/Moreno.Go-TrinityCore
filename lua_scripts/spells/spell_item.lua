@@ -24,11 +24,11 @@ local SPELL_NITRO_BOOSTS_PARACHUTE = 54649 -- spell_item.cpp:3063
 local lastZByGUID = {}
 
 local function nitroBackfireApply(event, aura, target)
-    lastZByGUID[target:GetGUID()] = target:GetZ()
+    lastZByGUID[target:GetGUIDLow()] = target:GetZ()
 end
 
 local function nitroBackfirePeriodic(event, aura, target)
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     local lastZ = lastZByGUID[guid]
     local curZ = target:GetZ()
     if lastZ == nil then
@@ -48,7 +48,7 @@ local function nitroBackfirePeriodic(event, aura, target)
 end
 
 local function nitroBackfireRemove(event, aura, target)
-    lastZByGUID[target:GetGUID()] = nil
+    lastZByGUID[target:GetGUIDLow()] = nil
 end
 
 RegisterAuraEvent(SPELL_NITRO_BOOSTS_BACKFIRE, 2, nitroBackfireApply)

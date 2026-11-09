@@ -235,7 +235,7 @@ end
 -- The C++ JustEngagedWith talks SAY_AGGRO (the BossAI arm is
 -- instance-blocked) — Talk(SAY_AGGRO) (C++-exact).
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         sacrifice = 5700,
@@ -254,7 +254,7 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ KilledUnit: Talk(SAY_KILL) unconditionally (no player
@@ -267,7 +267,7 @@ end)
 -- arm is instance-blocked).
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ DamageTaken: the phase latches in C++ arm order (50%
@@ -275,7 +275,7 @@ end)
 -- health after this hit strictly below pct% (majordomo /
 -- shahraz precedent).
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 9, function(_, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = combatStates[guid]
     if not st then
         return
@@ -298,5 +298,5 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)

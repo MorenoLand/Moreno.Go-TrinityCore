@@ -350,7 +350,7 @@ local function bossTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_OMROGG, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     resetBoss(guid)
     local st = freshState()
     states[guid] = st
@@ -387,7 +387,7 @@ end)
 -- arms the 3.5s KillingDelay follow-up, case 1 clears it. No
 -- player gate in C++ (C++-exact: event 3 fires on any kill).
 RegisterCreatureEvent(ENTRY_OMROGG, 3, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = states[guid]
     if not st or not st.leftHead or not st.rightHead then
         return
@@ -408,11 +408,11 @@ end)
 
 RegisterCreatureEvent(ENTRY_OMROGG, 2, function(_, creature)
     -- C++ Reset kills both heads (setDeathState JUST_DIED).
-    local st = states[creature:GetGUID()]
+    local st = states[creature:GetGUIDLow()]
     if st then
         despawnHeads(st)
     end
-    resetBoss(creature:GetGUID())
+    resetBoss(creature:GetGUIDLow())
 end)
 
 RegisterCreatureEvent(ENTRY_OMROGG, 4, function(_, creature)
@@ -422,7 +422,7 @@ RegisterCreatureEvent(ENTRY_OMROGG, 4, function(_, creature)
     -- talks YELL_DIE_R 4s later (SetData arm) then dies. The delayed
     -- leg captures the head handle directly, so it survives the
     -- state clear below; the left head lingers, as in C++.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = states[guid]
     if st and st.leftHead and st.rightHead then
         st.leftHead:Talk(0)
@@ -441,7 +441,7 @@ RegisterCreatureEvent(ENTRY_OMROGG, 23, function(_, creature)
     -- pumps stop either way, but heads are only despawned on a
     -- live reset — a death-time reset must leave them for event 4,
     -- so state is preserved when dead and cleared by event 4.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     cancelDelayPump(guid)
     if creature:IsAlive() then

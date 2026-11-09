@@ -169,7 +169,7 @@ end
 -- only talks (the BossAI arm is instance-blocked) —
 -- Talk(SAY_AGGRO) (C++-exact).
 RegisterCreatureEvent(ENTRY_WARP_SPLINTER, 1, function(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
     combatStates[guid] = {
         warStomp = math.random(25000, 40000),
@@ -184,7 +184,7 @@ end)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_WARP_SPLINTER, 2, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- C++ KilledUnit: Talk(SAY_SLAY) unconditionally (no player
@@ -197,13 +197,13 @@ end)
 -- arm is instance-blocked).
 RegisterCreatureEvent(ENTRY_WARP_SPLINTER, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end)
 
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_WARP_SPLINTER, 23, function(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
     -- C++ Reset() :171: SetSpeedRate(MOVE_RUN, 0.7f) (boss_warp_splinter.
     -- cpp).
     creature:SetSpeedRate(1, 0.7)
