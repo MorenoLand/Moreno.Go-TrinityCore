@@ -16,6 +16,11 @@
 -- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset. Timers via
 -- CreateLuaEvent (maiden_of_virtue precedent), cancelled on 2/4/23;
 -- melee is engine-driven in Go, like C++ DoMeleeAttackIfReady.
+-- GUID-KEY FIX tick 511: timers + ormorokFrenzy + spikeDespawnTimers
+-- keyed on GetGUIDLow() (stable uint32) — GetGUID() userdata keys
+-- never match across calls, so the frenzy latch never read true
+-- (re-fired on every hit below 25%) and leave/died/reset cancels
+-- previously missed (tick 508 hadronox precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 1) + schedules EVENT_CRYSTAL_
 -- SPIKES (12s) + EVENT_TRAMPLE (10s) + EVENT_SPELL_REFLECTION
@@ -94,6 +99,11 @@ local SPELL_TRAMPLE = 48016
 local SPELL_FRENZY = 48017
 local SPELL_SUMMON_CRYSTALLINE_TANGLER = 61564
 local SPELL_CRYSTAL_SPIKES = 47958
+
+local GO_ORMOROKS_CONTAINMENT_SPHERE = 188528 -- nexus.h:64
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_SEARCH_DIST = 1000 -- whole-instance radius; entries are unique per GO
 
 local timers = {}
 local ormorokFrenzy = {}
@@ -205,7 +215,7 @@ end
 -- the BossAI::JustEngagedWith SetBossState(IN_PROGRESS) leg
 -- PORTED 2026-11-05 (base-first, ScriptedCreature.cpp:537).
 local function ormorokEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ormorokFrenzy[guid] = false
     -- C++ JustEngagedWith base call first (boss_ormorok.cpp:89):
@@ -234,7 +244,7 @@ local function ormorokEnterCombat(event, creature, target)
 end
 
 local function ormorokLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ormorokFrenzy[guid] = false
 end
@@ -243,7 +253,7 @@ end
 -- CURRENT-health form, see header note — Talk(SAY_FRENZY 6) +
 -- DoCast(me, SPELL_FRENZY 48017) self-cast, one-shot latch.
 local function ormorokDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if ormorokFrenzy[guid] then
         return
     end
@@ -262,10 +272,24 @@ end
 -- (boss_ormorok.cpp:110-114); the _JustDied SetBossState(DONE)
 -- leg PORTED 2026-11-05 (ScriptedCreature.cpp:519).
 local function ormorokDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ormorokFrenzy[guid] = false
     creature:SetBossState(DATA_ORMOROK, BOSS_STATE_DONE)
+    -- C++ SetBossState override (instance_nexus.cpp:151-159): Ormorok
+    -- DONE frees his containment sphere (RemoveFlag NOT_SELECTABLE).
+    -- No boss-state-change event exists, so the leg rides the DONE
+    -- write here (palehoof precedent); the instanceData flag feeds
+    -- the instance OnGameObjectCreate / OnPlayerEnter applies.
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.ormorokDone = true
+    end
+    local sphere = creature:FindNearestGameObject(GO_ORMOROKS_CONTAINMENT_SPHERE, GO_SEARCH_DIST)
+    if sphere then
+        sphere:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
     creature:Talk(SAY_DEATH)
 end
 
@@ -281,7 +305,7 @@ local function ormorokReset(event, creature)
     -- C++ Reset (boss_ormorok.cpp:81-85): BossAI::Reset() first
     -- (events/scheduler cancel + _Reset SetBossState NOT_STARTED,
     -- != DONE-gated), then Initialize() (frenzy=false).
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:GetBossState(DATA_ORMOROK) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_ORMOROK, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
@@ -385,7 +409,7 @@ local function crystalSpikeTriggerSummoned(event, creature, summoner)
     else
         creature:SetData(DATA_COUNT, MAX_COUNT)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     spikeDespawnTimers[guid] = CreateLuaEvent(function()
         spikeDespawnTimers[guid] = nil
         if creature:GetEntry() == NPC_CRYSTAL_SPIKE_TRIGGER then
@@ -401,7 +425,7 @@ end
 -- C++ UpdateAI stops on death, so the 2s despawn timer dies with
 -- the spike; the trap Delete leg dies with it.
 local function crystalSpikeTriggerDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local id = spikeDespawnTimers[guid]
     if id then
         RemoveEventById(id)

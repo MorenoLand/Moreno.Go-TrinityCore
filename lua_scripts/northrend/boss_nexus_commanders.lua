@@ -58,6 +58,10 @@
 -- JustDied — Talk(SAY_DEATH 2) (event 4; the _JustDied bookkeeping has
 -- no bridge — tharon_ja precedent). All timers cancelled on 2/4/23
 -- (gargolmar precedent).
+-- GUID-KEY FIX tick 511: the timers table is keyed on GetGUIDLow()
+-- (stable uint32) — GetGUID() userdata keys never match across
+-- calls, so leave/died/reset cancels previously missed and timer
+-- pumps leaked across wipes (tick 508 hadronox precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith — RemoveAurasDueToSpell(SPELL_FROZEN_PRISON 47543)
 -- PORTED via creature:RemoveAura (the old "no aura-removal bridge —
@@ -211,7 +215,7 @@ local function commandersEnterCombat(event, creature, target)
         -- creature:RemoveAura is bridged
         -- (engine/world/lua_objects.go:228)
     creature:CastSpell(creature, SPELL_BATTLE_SHOUT)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "charge", math.random(3000, 4000), function()
         chargeTick(creature, guid)
@@ -225,7 +229,7 @@ local function commandersEnterCombat(event, creature, target)
 end
 
 local function commandersLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 1) only when victim->GetTypeId() ==
@@ -241,11 +245,11 @@ end
 local function commandersDied(event, creature, killer)
     creature:SetBossState(DATA_COMMANDER, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function commandersReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(DATA_COMMANDER) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_COMMANDER, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end

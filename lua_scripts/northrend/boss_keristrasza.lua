@@ -26,6 +26,11 @@
 -- CreateLuaEvent (maiden_of_virtue precedent); melee is
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
+-- GUID-KEY FIX tick 511: timers + keristraszaEnraged keyed on
+-- GetGUIDLow() (stable uint32) — GetGUID() userdata keys never
+-- match across calls, so the enrage latch never read true
+-- (re-fired on every hit below 25%) and leave/died/reset cancels
+-- previously missed (tick 508 hadronox precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) + DoCastAOE(SPELL_INTENSE_COLD
 -- 48094) 2-arg (non-triggered) one-shot as creature:CastSpell(creature,
@@ -74,12 +79,15 @@
 -- RemoveFlag is unconditional and PORTED below on event 23 (flag
 -- bridges are live — the Oct-12 "no flag bridge" wording was stale);
 -- Initialize() rides the enraged-latch reset, _intenseColdList.clear()
--- has no achievement bridge, and RemovePrison(CheckContainmentSpheres())
--- as a Reset gate evaluation stays out (the freeing direction now
--- ports via the gossip handler below; re-evaluation on Reset is
--- equivalent to a no-op in-instance because clicked spheres never
--- deactivate, and the spawn-time prison state itself is DB/spawn-data
--- territory); _Reset() SetBossState(NOT_STARTED, != DONE-gated)
+-- rides the engage-time clearIntenseColdMarks, and RemovePrison(
+-- CheckContainmentSpheres()) is PORTED tick 511 as a Reset gate
+-- evaluation (alive-guarded ev23): all three spheres clicked (the
+-- instanceData.spheresClicked mirror of the gossip latch) ->
+-- RemovePrison(true); otherwise RemovePrison(false) — SetFlag
+-- IMMUNE_TO_PC + NON_ATTACKABLE + self-cast FROZEN_PRISON. The
+-- spawn-time prison state itself is DB/spawn-data territory; the
+-- Reset leg re-asserts it, matching C++.
+-- _Reset() SetBossState(NOT_STARTED, != DONE-gated)
 -- PORTED 2026-11-05 (creature:SetBossState bridged).
 -- (the Oct-12 "no timer-event / random-target / cast bridge" and
 -- "no IsHeroic bridge" claims were wrong, retracted — the heroic
@@ -148,6 +156,11 @@ local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h:132
 
 local timers = {}
 local keristraszaEnraged = {}
+
+-- Forward-declared (tharon_ja/gal_darah idiom: plain assignment below,
+-- never a second `local function`): the Reset prison re-evaluation
+-- calls it, but its definition sits with the gossip handler.
+local unprisonKeristrasza
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -308,7 +321,7 @@ end
 -- pre-application convention (loken) — event 9 fires
 -- pre-application.
 local function keristraszaDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if keristraszaEnraged[guid] then
         return
     end
@@ -337,7 +350,7 @@ end
 -- periodic SetGUID leg is PORTED below via RegisterAuraEvent(48094, 1,
 -- recordIntenseCold) + clearIntenseColdMarks at engage (helper above).
 local function keristraszaEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     keristraszaEnraged[guid] = false
     clearIntenseColdMarks(creature) -- C++ Initialize :78-87 _intenseColdList.clear(), engage twin (blood-queen precedent)
@@ -370,7 +383,7 @@ end
 -- C++ Reset/Initialize: _enrage = false (cpp:78) + timers gone
 -- with the events — cancel timers, drop the latch.
 local function keristraszaLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     keristraszaEnraged[guid] = false
 end
@@ -381,6 +394,30 @@ local function keristraszaReset(event, creature)
     -- is unconditional — ported (the containment-sphere prison machine
     -- around it stays documented-only, instance/GO-gated).
     creature:RemoveFlag(59, 0x40000)
+    -- C++ Reset (boss_keristrasza.cpp:88-93): RemovePrison(
+    -- CheckContainmentSpheres()) — re-evaluate the prison against
+    -- the three sphere states. The clicked latch (instanceData.
+    -- spheresClicked, mirrored by the gossip handler below) is the
+    -- twin of the C++ GetGoState read. Alive-guarded: ev23
+    -- pre-fires on death in Go, and C++ Reset never runs on a
+    -- corpse. Freed branch: RemovePrison(true); prisoned branch:
+    -- RemovePrison(false) — SetImmuneToPC(true) + SetFlag
+    -- NON_ATTACKABLE + DoCast FROZEN_PRISON (flag twins per the
+    -- mandokir 0x100 / unprisonKeristrasza precedent below).
+    if creature:IsAlive() then
+        local mapObj = creature:GetMap()
+        local data = mapObj and mapObj:GetInstanceData() or nil
+        local clicked = data and data.spheresClicked or nil
+        if clicked and clicked[GO_ANOMALUS_CONTAINMENT_SPHERE]
+                and clicked[GO_ORMOROKS_CONTAINMENT_SPHERE]
+                and clicked[GO_TELESTRAS_CONTAINMENT_SPHERE] then
+            unprisonKeristrasza(creature)
+        else
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+            creature:CastSpell(creature, SPELL_FROZEN_PRISON)
+        end
+    end
     -- C++ Reset ends with _Reset() (boss_keristrasza.cpp:92) —
     -- SetBossState(NOT_STARTED), != DONE-gated (ScriptedCreature.cpp:510).
     if creature:GetBossState(DATA_KERISTRASZA) ~= BOSS_STATE_DONE then
@@ -392,7 +429,7 @@ end
 -- (boss_keristrasza.cpp:106-110); the _JustDied SetBossState(DONE)
 -- leg PORTED 2026-11-05 (ScriptedCreature.cpp:519).
 local function keristraszaDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     keristraszaEnraged[guid] = false
     creature:Talk(SAY_DEATH)
@@ -416,7 +453,7 @@ end
 -- false would let the native use arms proceed).
 local containmentSpheresClicked = {}
 
-local function unprisonKeristrasza(boss)
+unprisonKeristrasza = function(boss)
     boss:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
     boss:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     boss:RemoveAura(SPELL_FROZEN_PRISON)
@@ -436,6 +473,19 @@ local function onContainmentSphereGossip(_, player, go)
         containmentSpheresClicked[instanceID] = clicked
     end
     clicked[go:GetEntry()] = true
+    -- Mirror into instanceData so the Reset prison re-evaluation
+    -- (keristraszaReset above) can read it without an instance-ID
+    -- bridge on creatures.
+    local mapObj = player:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        local clickedData = data.spheresClicked
+        if not clickedData then
+            clickedData = {}
+            data.spheresClicked = clickedData
+        end
+        clickedData[go:GetEntry()] = true
+    end
     if clicked[GO_ANOMALUS_CONTAINMENT_SPHERE]
             and clicked[GO_ORMOROKS_CONTAINMENT_SPHERE]
             and clicked[GO_TELESTRAS_CONTAINMENT_SPHERE] then

@@ -31,6 +31,10 @@
 -- timers table, cancelled on 2/4/23 — yogg_saron / svala / archavon
 -- precedent); melee is engine-driven in Go (creature combat tick),
 -- like C++ DoMeleeAttackIfReady.
+-- GUID-KEY FIX tick 511: timers + chaos keyed on GetGUIDLow()
+-- (stable uint32) — GetGUID() userdata keys never match across
+-- calls, so leave/died/reset cancels previously missed and the
+-- spark pump leaked across wipes (tick 508 hadronox precedent).
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1) + instance->
 -- SetBossState(DATA_ANOMALUS, IN_PROGRESS) PORTED 2026-11-05
@@ -115,6 +119,11 @@ local SPELL_SPARK = 47751 -- C++ :182 fires SPELL_SPARK unconditionally
 -- precedent — the keristrasza-era "no IsHeroic bridge" claims are
 -- stale).
 
+local GO_ANOMALUS_CONTAINMENT_SPHERE = 188527 -- nexus.h:63
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_SEARCH_DIST = 1000 -- whole-instance radius; entries are unique per GO
+
 local timers = {}
 local chaos = {} -- chaosTheory per-GUID latch: C++ Initialize() sets it
 -- true (Reset twin below); SummonedCreatureDies clears it when a dead
@@ -188,7 +197,7 @@ end
 local function anomalusEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:SetBossState(DATA_ANOMALUS, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "spark", 5000, function()
         sparkTick(creature, guid)
@@ -196,8 +205,8 @@ local function anomalusEnterCombat(event, creature, target)
 end
 
 local function anomalusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    chaos[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    chaos[creature:GetGUIDLow()] = nil
 end
 
 -- C++ JustDied: Talk(SAY_DEATH) + instance->SetBossState(DATA_
@@ -205,13 +214,27 @@ end
 local function anomalusDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_ANOMALUS, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
-    chaos[creature:GetGUID()] = nil
+    -- C++ SetBossState override (instance_nexus.cpp:142-150): Anomalus
+    -- DONE frees his containment sphere (RemoveFlag NOT_SELECTABLE).
+    -- No boss-state-change event exists, so the leg rides the DONE
+    -- write here (palehoof precedent); the instanceData flag feeds
+    -- the instance OnGameObjectCreate / OnPlayerEnter applies.
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.anomalusDone = true
+    end
+    local sphere = creature:FindNearestGameObject(GO_ANOMALUS_CONTAINMENT_SPHERE, GO_SEARCH_DIST)
+    if sphere then
+        sphere:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    cancelTimers(creature:GetGUIDLow())
+    chaos[creature:GetGUIDLow()] = nil
 end
 
 local function anomalusReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    chaos[creature:GetGUID()] = true -- C++ Initialize(): chaosTheory = true
+    cancelTimers(creature:GetGUIDLow())
+    chaos[creature:GetGUIDLow()] = true -- C++ Initialize(): chaosTheory = true
     -- Achievement write leg (tick 417): mirror the latch into the boss
     -- motion's SetData store for achievement_chaos_theory's GetData
     -- (DATA_CHAOS_THEORY 1). IsDead-guarded: ev23 pre-fires on death
@@ -229,7 +252,7 @@ end
 -- link); args are (event, creature, summon, killer) per Eluna.
 local function anomalusSummonedDied(event, creature, summon, killer)
     if summon:GetEntry() == NPC_CHAOTIC_RIFT then
-        chaos[creature:GetGUID()] = false
+        chaos[creature:GetGUIDLow()] = false
         creature:SetData(DATA_CHAOS_THEORY, 0)
     end
 end

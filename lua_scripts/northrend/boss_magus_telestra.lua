@@ -11,6 +11,11 @@
 -- freezes all timers, split/waiting branches return early, so
 -- independent per-arm timers would NOT reproduce it); melee is
 -- engine-driven in Go, like C++ DoMeleeAttackIfReady.
+-- GUID-KEY FIX tick 511: timers + state keyed on GetGUIDLow()
+-- (stable uint32) — GetGUID() userdata keys never match across
+-- calls, so leave/died/reset cancels previously missed and the
+-- ev21 split-personality death tracker never found its state
+-- (tick 508 hadronox precedent).
 -- C++ DoCast default is triggered=false (vaelastrasz convention):
 -- creature:CastSpell(nil, spell) = DoCastVictim,
 -- creature:CastSpell(target, spell) = DoCast,
@@ -108,6 +113,11 @@ local SPELL_ARCANE_MAGUS_VISUAL = 47704
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+local GO_TELESTRAS_CONTAINMENT_SPHERE = 188526 -- nexus.h:65
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+local GO_SEARCH_DIST = 1000 -- whole-instance radius; entries are unique per GO
 
 local timers = {}
 local state = {}
@@ -288,7 +298,7 @@ local function telestraPump(creature, guid)
 end
 
 local function telestraEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     state[guid] = {
         phase = 0,
         iceNova = 7000,
@@ -311,7 +321,7 @@ local function telestraEnterCombat(event, creature)
 end
 
 local function telestraLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function telestraTargetDied(event, creature, victim)
@@ -324,12 +334,26 @@ local function telestraDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetVisible(true)
     creature:SetBossState(DATA_MAGUS_TELESTRA, BOSS_STATE_DONE) -- C++ JustDied: Talk, SetVisible, instance->SetBossState(DONE)
-    cancelTimers(creature:GetGUID())
+    -- C++ SetBossState override (instance_nexus.cpp:133-141): Telestra
+    -- DONE frees her containment sphere (RemoveFlag NOT_SELECTABLE).
+    -- No boss-state-change event exists, so the leg rides the DONE
+    -- write here (palehoof precedent); the instanceData flag feeds
+    -- the instance OnGameObjectCreate / OnPlayerEnter applies.
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.telestraDone = true
+    end
+    local sphere = creature:FindNearestGameObject(GO_TELESTRAS_CONTAINMENT_SPHERE, GO_SEARCH_DIST)
+    if sphere then
+        sphere:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function telestraReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    state[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    state[creature:GetGUIDLow()] = nil
     -- C++ Reset -> Initialize: splitPersonality = 0, time[] zeroed
     -- (boss_magus_telestra.cpp:96-109) -> GetData(DATA_SPLIT_PERSONALITY)
     -- = 0; achievement_split_personality read leg (tick 417).
@@ -359,7 +383,7 @@ local function telestraSummonedDied(event, creature, summon, killer)
     if entry ~= NPC_FIRE_MAGUS and entry ~= NPC_FROST_MAGUS and entry ~= NPC_ARCANE_MAGUS then
         return
     end
-    local st = state[creature:GetGUID()]
+    local st = state[creature:GetGUIDLow()]
     if st == nil then
         return
     end
