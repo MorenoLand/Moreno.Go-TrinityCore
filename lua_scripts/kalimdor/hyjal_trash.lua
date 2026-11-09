@@ -271,7 +271,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if not isPlayerOrPet(attacker) then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     trashDamage[guid] = (trashDamage[guid] or 0) + damage
     local data = instanceDataOf(creature)
     if data then
@@ -453,7 +453,7 @@ local function infernalReveal(creature, guid)
 end
 
 local function onInfernalSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     infernalState[guid] = {
         nativeDisplay = creature:GetDisplayId(),
@@ -500,7 +500,7 @@ end
 
 local function onEnterCombat(name)
     return function(event, creature, target)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local st = infernalState[guid]
         if st then
             -- C++ combat arms run only post-CanMove (hyjal_trash.cpp:503).
@@ -517,7 +517,7 @@ local function onEnterCombat(name)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = infernalState[guid]
     if st then
         -- Evade: the Delay/meteor machine keeps running in C++ (Reset
@@ -535,7 +535,7 @@ end
 local necroSummons
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = infernalState[guid]
     if st then
         cancelInfernalCombat(guid)
@@ -571,7 +571,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local entry = creature:GetEntry()
     if entry == 17907 then -- FROST_WYRM: own override, no base call
         if trashEvent[guid] then
@@ -597,7 +597,7 @@ end
 -- legs hand off cleanly at engage.
 local function onSpawn(name)
     return function(event, creature)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         -- C++ hyjal_trashAI ctor: damageTaken = 0, IsEvent = false.
         trashDamage[guid] = 0
         trashEvent[guid] = nil
@@ -654,7 +654,7 @@ local function spawnSkeleton(creature, guid, entry, dx)
 end
 
 local function onNecromancerKilledUnit(event, creature, victim)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local roll = math.random(0, 2)
     if roll == 0 then
         spawnSkeleton(creature, guid, SKELETON_1, 3)

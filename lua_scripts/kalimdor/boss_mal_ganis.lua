@@ -318,7 +318,7 @@ end
 --   PermBind leg rides no Lua bridge. health > 0 guards the hook on an
 --   already-dead creature.
 local function malganisDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local health = creature:GetHealth()
     local newDamage = damage
     if health > 0 and damage >= health then
@@ -412,7 +412,7 @@ local function startDefeatPump(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     defeated[guid] = nil -- C++ JustEngagedWith resets _defeated
     startHealthYellPump(creature, guid)
@@ -432,21 +432,21 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset override (boss_mal_ganis.cpp:75-79): no _Reset() call —
     -- SetBossState NOT_STARTED iff !_defeated, with no != DONE gate
     -- and no !IsAlive early return (C++-exact; the override has neither).
-    if not defeated[creature:GetGUID()] then
+    if not defeated[creature:GetGUIDLow()] then
         creature:SetBossState(DATA_MAL_GANIS, 0) -- NOT_STARTED
     end
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++: no JustDied override, so base BossAI::JustDied
     -- (ScriptedCreature.h:330) runs _JustDied() -> SetBossState(DONE).
     creature:SetBossState(DATA_MAL_GANIS, 3) -- DONE
@@ -461,7 +461,7 @@ end
 -- (the tracked schedule idiom would wrongly die with cancelTimers
 -- on ev1 — fixed 2026-10-20).
 local function onReachedHome(event, creature)
-    if not defeated[creature:GetGUID()] then
+    if not defeated[creature:GetGUIDLow()] then
         CreateLuaEvent(function()
             creature:Despawn()
         end, 1000)
@@ -473,7 +473,7 @@ RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
     -- C++ KilledUnit (boss_mal_ganis.cpp:181): !_defeated gate reads the
     -- per-GUID latch set by malganisDamageTaken.
-    if victim:GetObjectType() == "Player" and not defeated[creature:GetGUID()] then
+    if victim:GetObjectType() == "Player" and not defeated[creature:GetGUIDLow()] then
         creature:Talk(SAY_SLAY)
     end
 end)

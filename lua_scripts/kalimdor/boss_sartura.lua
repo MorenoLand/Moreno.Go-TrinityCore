@@ -262,7 +262,7 @@ local function checkEnrageLatch(creature, guid, health)
 end
 
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local s = st(guid)
     if s.enraged then
         return
@@ -275,7 +275,7 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     st(guid)
     creature:Talk(SAY_AGGRO)
@@ -296,11 +296,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset _Reset() leg (boss_sartura.cpp:90-94): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
     if creature:IsAlive() and creature:GetBossState(DATA_SARTURA) ~= BOSS_STATE_DONE then
@@ -317,7 +317,7 @@ end
 local function onDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_SARTURA, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

@@ -66,7 +66,7 @@ local function resetState(guid)
 end
 
 local function startPoll(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPoll(guid)
     resetState(guid)
     local function tick()
@@ -110,15 +110,15 @@ local function shenthulSpawnOrReset(event, creature)
 end
 
 local function shenthulDied(event, creature)
-    cancelPoll(creature:GetGUID())
-    state[creature:GetGUID()] = nil
+    cancelPoll(creature:GetGUIDLow())
+    state[creature:GetGUIDLow()] = nil
 end
 
 local function shenthulQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_SHATTERED_SALUTE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if not st then
         return
@@ -128,7 +128,7 @@ local function shenthulQuestAccept(event, player, creature, quest)
 end
 
 local function shenthulReceiveEmote(event, creature, player, textEmote)
-    local st = state[creature:GetGUID()]
+    local st = state[creature:GetGUIDLow()]
     if not st then
         return
     end
@@ -136,7 +136,7 @@ local function shenthulReceiveEmote(event, creature, player, textEmote)
         and player:GetQuestStatus(QUEST_SHATTERED_SALUTE) == QUEST_STATUS_INCOMPLETE
         and st.canEmote then
         player:AreaExploredOrEventHappens(QUEST_SHATTERED_SALUTE)
-        resetState(creature:GetGUID())
+        resetState(creature:GetGUIDLow())
     end
 end
 

@@ -574,7 +574,7 @@ end
 -- killing blow). A single hit crossing both gates runs phase 2
 -- then phase 3 in C++ order (65% tick, then 40% tick).
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = stateFor(guid)
     if st.phase3 then
         return
@@ -605,7 +605,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_ONYXIA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_onyxia.cpp:163-165)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- Fresh fight: phase flags and whelp count reset, but the
     -- Reset-rolled MovePoint survives (C++ Initialize runs at Reset,
@@ -630,12 +630,12 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    clearState(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    clearState(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     -- C++ boss_onyxiaAI::Reset (boss_onyxia.cpp:150-160): Initialize() +
@@ -664,8 +664,8 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    clearState(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    clearState(creature:GetGUIDLow())
     -- C++: no JustDied override in boss_onyxia.cpp, so base
     -- BossAI::JustDied (ScriptedCreature.h:330) runs _JustDied() ->
     -- SetBossState(DATA_ONYXIA, DONE) (ScriptedCreature.cpp:513-520);

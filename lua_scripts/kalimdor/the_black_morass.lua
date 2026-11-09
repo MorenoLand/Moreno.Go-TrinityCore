@@ -298,7 +298,7 @@ local function onMedivhAIUpdate(event, creature)
             creature:UpdateWorldState(WORLD_STATE_BM_RIFT, 0)
             data.nextPortalMs = 15000
             data.portalPending = true
-            local guid = creature:GetGUID()
+            local guid = creature:GetGUIDLow()
             schedule(guid, "check", 5000, function()
                 medivhCheckTick(creature, guid)
             end)
@@ -338,7 +338,7 @@ local function onMedivhSpellHit(event, creature, caster, spellId)
     else
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local per = timers[guid]
     if per and per["corrupt"] then
         return
@@ -349,7 +349,7 @@ local function onMedivhSpellHit(event, creature, caster, spellId)
 end
 
 local function onMedivhReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local data = instanceDataOf(creature)
     if not data then
@@ -366,7 +366,7 @@ local function onMedivhReset(event, creature)
 end
 
 local function onMedivhDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied skips the yell when the killer has Medivh's own
     -- entry (killer && killer->GetEntry() == me->GetEntry() -> return).
     if killer and killer:GetEntry() == ENTRY_MEDIVH then
@@ -379,7 +379,7 @@ local function onRiftSummonedGone(event, rift, summoned)
     if not PORTAL_BOSS_ENTRIES[summoned:GetEntry()] then
         return
     end
-    local guid = rift:GetGUID()
+    local guid = rift:GetGUIDLow()
     cancelTimers(guid)
     local data = instanceDataOf(rift)
     if data then
@@ -395,7 +395,7 @@ local function onRiftSummonedGone(event, rift, summoned)
 end
 
 local function onRiftDied(event, rift, killer)
-    local guid = rift:GetGUID()
+    local guid = rift:GetGUIDLow()
     cancelTimers(guid)
     local data = instanceDataOf(rift)
     if data then

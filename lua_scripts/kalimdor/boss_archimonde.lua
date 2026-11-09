@@ -485,7 +485,7 @@ local function onReachHome(event, creature)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     bossState(guid)
@@ -515,11 +515,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     -- C++ Reset (:298-303): Initialize() (counter reset, above) +
@@ -535,7 +535,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearState(guid)
     creature:Talk(SAY_DEATH)
@@ -553,7 +553,7 @@ end
 -- projected-health check subtracts the incoming damage (aku_mai
 -- convention — C++-exact).
 local function onDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = bossState(guid)
     local health, maxHealth = creature:GetHealth(), creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -577,7 +577,7 @@ end
 local function onKilledUnit(event, creature, victim)
     creature:Talk(SAY_SLAY)
     if victim and victim:GetObjectType() == "Player" then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local color = chargeColor(victim:GetClass())
         if color then
             local st = bossState(guid)

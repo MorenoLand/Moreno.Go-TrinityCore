@@ -269,7 +269,7 @@ end
 -- engage (sironas convention); the C++ checks every AI tick while in
 -- combat, so 1s granularity is an approximation, documented above.
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     lowHp[guid] = false
     creature:Talk(SAY_TH_RANDOM_AGGRO)
@@ -294,13 +294,13 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     lowHp[guid] = false
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     lowHp[guid] = false
     -- C++ Reset (old_hillsbrad.cpp:381-398), in order: Initialize()
@@ -325,13 +325,13 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     lowHp[guid] = false
     hadMount[guid] = false
     -- C++ JustDied skips the yell when Thrall kills himself (player too
     -- far or escort end): killer == me.
-    if not killer or killer:GetGUID() ~= guid then
+    if not killer or killer:GetGUIDLow() ~= guid then
         creature:Talk(SAY_TH_RANDOM_DIE)
     end
     -- C++ JustDied also sends instance->SetData(TYPE_THRALL_EVENT 2,
@@ -440,7 +440,7 @@ local function thrallReachWP(_, creature)
     if not creature:IsEscorted() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local wp = creature:GetCurrentWaypointId()
     if wp == 8 then
         creature:SetWalk(true)

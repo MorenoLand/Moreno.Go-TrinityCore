@@ -161,7 +161,7 @@ local function onSpawn(event, creature)
     -- C++ ctor order (boss_cthun.cpp:1093-1100): SetCombatMovement(false),
     -- then the portal summon above.
     creature:SetCombatMovement(false)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local portal = creature:SummonCreature(ENTRY_GIANT_PORTAL,
         creature:GetX(), creature:GetY(), creature:GetZ(), 0, 4)
     if portal then
@@ -171,7 +171,7 @@ local function onSpawn(event, creature)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     evadeElapsed[guid] = 0
     schedule(guid, "rupture", 500, function()
@@ -195,14 +195,14 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    evadeElapsed[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    evadeElapsed[creature:GetGUIDLow()] = nil
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    evadeElapsed[creature:GetGUID()] = nil
-    killPortal(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    evadeElapsed[creature:GetGUIDLow()] = nil
+    killPortal(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 5, onSpawn)

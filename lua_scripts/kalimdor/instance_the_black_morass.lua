@@ -195,7 +195,7 @@ local function spawnPortal(data, mapObj)
     end
     -- Time-rift wave pump state, started here (no spawn-time hook
     -- exists for TempSummons); the rift's OnDied handler cancels it.
-    local guid = rift:GetGUID()
+    local guid = rift:GetGUIDLow()
     local waveCount = data.portalCount or 0
     local riftWave = 1
     if waveCount < 6 then

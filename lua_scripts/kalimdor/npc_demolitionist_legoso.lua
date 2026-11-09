@@ -239,7 +239,7 @@ end
 -- _eventStarterGuidLow = 0), so its pump, state and starter
 -- GUID clear here too.
 local function fullReset(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     cancelEscortPump(guid)
     legosoState[guid] = nil
@@ -329,7 +329,7 @@ end
 -- healing surge 5s, searing totem 15s, strength of earth
 -- totem 20s.
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     legosoState[guid] = {
         frostTimer = 1000,
@@ -613,7 +613,7 @@ local function onQuestAccept(_, player, creature, quest)
     creature:SetData(DATA_EVENT_STARTER_GUID, player:GetGUIDLow())
     creature:StartEscort(player)
     creature:MoveWaypoint()
-    startEscortPump(creature:GetGUID(), creature)
+    startEscortPump(creature:GetGUIDLow(), creature)
 end
 
 -- C++ WaypointReached (zone_bloodmyst_isle.cpp:725-823): the
@@ -625,7 +625,7 @@ local function onReachWP(_, creature)
     if not player then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local es = escortState(guid)
     local wp = creature:GetCurrentWaypointId()
     if wp == WP_START then
@@ -690,7 +690,7 @@ local function onDoAction(event, creature, action)
     if action ~= ACTION_LEGOSO_SIRONAS_KILLED then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local es = escortState(guid)
     es.phase = PHASE_SIRONAS_SLAIN_SPEECH_1
     es.moveTimer = 5000

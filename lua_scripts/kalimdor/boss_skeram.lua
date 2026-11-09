@@ -227,7 +227,7 @@ local function onDamageTaken(event, creature, attacker, damage)
     if creature:IsSummon() then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local s = st(guid)
     if s.splitHpct <= 0 then
         return
@@ -260,7 +260,7 @@ local function onDamageTaken(event, creature, attacker, damage)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     st(guid)
     -- C++ JustEngagedWith calls BossAI::JustEngagedWith first
@@ -284,7 +284,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_skeram.cpp:81-85 EnterEvadeMode: ScriptedAI base
     -- then, only for images, me->DespawnOrUnsummon() — the event-2
     -- handler is the evade proxy (drakkari precedent); the boss
@@ -295,7 +295,7 @@ local function onLeaveCombat(event, creature)
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_skeramAI::Reset (boss_skeram.cpp:70-74): Initialize()
     -- (split-hpct re-init, covered by st()) -> me->SetVisible(true)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656).
@@ -325,7 +325,7 @@ local function onDied(event, creature, killer)
         creature:Talk(SAY_DEATH)
         creature:SetBossState(DATA_SKERAM, BOSS_STATE_DONE)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
