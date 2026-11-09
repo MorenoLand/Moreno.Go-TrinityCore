@@ -54,8 +54,8 @@
 -- order, after Talk; instance->SetBossState IN_PROGRESS (:163)
 -- PORTED 2026-11-05 via creature:SetBossState (lua_creature_events.go:
 -- 5917) — the old "no bridge" claim is retracted. The
--- me->setActive(true) leg and the five ScheduleEvent legs have no
--- bridge (only EVENT_ENRAGE ports, below).
+-- me->setActive(true) leg has no bridge; the five ScheduleEvent legs
+-- port 2026-11-08 (tick 493, below).
 -- boss_lord_marrowgar KilledUnit — Talk(SAY_KILL 4) player-gated
 -- (event 3 — the razuvious player-gated variant precedent; the
 -- twelfth ported variant, tenth identical to
@@ -71,14 +71,14 @@
 -- target gates (the festergut/rotface/putricide/sindragosa berserk
 -- precedent; TRIGGERED self-cast).
 -- DOCUMENTED-ONLY (in this header; entries 36612 + 36619 registered):
--- npc_coldflame (36672) exposes zero own Talk lines; its IsSummonedBy
--- legs are cross-AI position (GetLastColdflamePosition /
--- DATA_COLDFLAME_GUID player lookup) + GetNearPoint2D — Teleport and
--- DoCast ARE bridged but the computed position is not — plus the
--- UpdateAI EVENT_COLDFLAME_TRIGGER machine; not registered (the
--- bronjahm npc_corrupted_soul_fragment precedent; ev22 re-checked
--- 2026-11-05, no-port stands — GetAbsoluteAngle / GetNearPoint2D /
--- GetPosition absent from the creature surface, only GetZ exists).
+-- npc_coldflame (36672) exposes zero own Talk lines; PORTED 2026-11-08
+-- (tick 493, below): registered in this chunk, ev22 DoCast(SPELL_COLDFLAME_
+-- SUMMON 69147); the IsSummonedBy reposition legs (GetLastColdflamePosition /
+-- DATA_COLDFLAME_GUID player lookup + GetNearPoint2D) and the UpdateAI
+-- EVENT_COLDFLAME_TRIGGER teleport leg stay out — GetAbsoluteAngle /
+-- GetNearPoint2D / GetPosition absent from the creature surface, only GetZ
+-- exists (re-checked 2026-11-08, still true). The summon itself rides the
+-- target-player SummonCreature fallback (see onColdflame).
 -- The vehicle legs
 -- (RIDE_VEHICLE cast + PassengerBoarded spline) belong to bone_spike's
 -- IsSummonedBy below, not to coldflame. npc_bone_spike (36619): the JustDied/KilledUnit
@@ -91,42 +91,40 @@
 -- instanceData bonedEligible key (below, Go 12775/12962/13393/13394
 -- read it); PassengerBoarded spline leg; UpdateAI machine)
 -- has no bridges.
--- boss_lord_marrowgar Reset scheduler legs (:148-152) — only
--- EVENT_ENRAGE ports (above); EVENT_ENABLE_BONE_SLICE /
--- EVENT_BONE_SPIKE_GRAVEYARD / EVENT_COLDFLAME / EVENT_WARN_BONE_STORM
--- stay out (see UpdateAI). The RemoveAurasDueToSpell(SPELL_BONE_STORM
--- 69076 / SPELL_BERSERK 26662) legs (:145-146) PORT (creature:RemoveAura
--- on event 23, C++ order kept); the SetSpeedRate legs ride the
--- unbridged bone-storm motion machine (3x speed :226 accompanies the
--- unported MovePoint chase; the :252 _baseSpeed restore rides the
--- unported MoveChase return) — stays out, verdict unchanged (the
--- old "no SetSpeedRate bridge" claim is stale: the bridge is live,
--- lua_creature_events.go:735 — the motion machine is the blocker).
--- boss_lord_marrowgar UpdateAI — the EventMap machine: arms with
--- unbridged phase/machine legs stay out (the gothik precedent).
--- EVENT_WARN_BONE_STORM legs carry Talk(EMOTE_BONE_STORM 7)
--- and the SPELL_BONE_STORM self-cast but enter the bone-storm phase
--- machine (DelayEvents, schedules BEGIN, speed/move legs);
--- EVENT_BONE_STORM_BEGIN carries
--- Talk(SAY_BONE_STORM 2), aura-duration and 3x speed legs;
--- EVENT_BONE_STORM_MOVE carries random-NonTank SelectTarget +
--- MovePoint legs (no-random-target-SelectTarget / no-motion
--- queues); EVENT_BONE_STORM_END carries movement removal,
--- MoveChase and event-reschedule legs; EVENT_BONE_SPIKE_GRAVEYARD /
--- EVENT_COLDFLAME carry DoCast / DoCastAOE legs but both summon
--- npc_bone_spike / npc_coldflame (vehicle/passenger/spline machines,
--- no summon bridge); EVENT_ENRAGE is PORTED with its pre-loop
--- UNIT_STATE_CASTING gate (:193, 500ms IsCasting defer — the old
--- "ungated one-shot / gate has no bridge" claims are retracted,
--- IsCasting live at lua_creature_events.go:1950);
--- bone-storm-aura gate, bone-slice DoCastVictim legs and
--- DoMeleeAttackIfReady have no bridge. JustReachedHome
+-- boss_lord_marrowgar Reset scheduler legs (:148-152) — PORTED
+-- 2026-11-08 (tick 493, below): ENABLE_BONE_SLICE / BONE_SPIKE_GRAVEYARD /
+-- COLDFLAME / WARN_BONE_STORM all seed at engage (the enrage precedent);
+-- the RemoveAurasDueToSpell(SPELL_BONE_STORM / SPELL_BERSERK) legs (:145-146)
+-- PORT (creature:RemoveAura on event 23, C++ order kept); the SetSpeedRate
+-- legs ride the bone-storm machine (below) — the old "no SetSpeedRate
+-- bridge" claim is stale (live, lua_creature_events.go:735) and the old
+-- "only EVENT_ENRAGE ports" claim is retracted.
+-- boss_lord_marrowgar UpdateAI — the EventMap machine: PORTED 2026-11-08
+-- (tick 493, below). WARN_BONE_STORM (Talk EMOTE 7 + BONE_STORM self-cast +
+-- BEGIN @3050ms + WARN re-arm {90s,95s}); BEGIN (GetAura SetDuration 20s/30s
+-- + speed x3 + Talk SAY_BONE_STORM 2 + END @duration+1ms, fallthrough MOVE);
+-- MOVE (re-arm duration/3 + random non-tank via GetAITargets + MoveChase
+-- approx — no GetX/GetY on handler creatures/players, so the MovePoint
+-- position leg and the MovementInform MoveIdle leg stay out); END (MoveClear
+-- + MoveChase victim + speed restore + ENABLE_BONE_SLICE @10s + graveyard
+-- reschedule @15s non-heroic); ENABLE_BONE_SLICE latch; GRAVEYARD (SpellScript
+-- body replicated: 1/3 random valid players, target:SummonCreature — the
+-- old "no summon bridge" claim is stale, SummonCreature live at
+-- lua_creature_events.go:3718 / lua_player.go:6765); COLDFLAME (script body
+-- replicated: random non-tank player, 1 summon, 4 in storm); bone-slice
+-- DoCastVictim as a 1.5s poller (CastSpell(nil) victim-cast + spike-immune
+-- marking — the old "DoCastVictim legs have no bridge" claim is retracted).
+-- Stay-outs: DelayEvents(3s) at WARN (timers keep cadence), the bone-slice
+-- damage split + DoAction CLEAR_SPIKE_IMMUNITIES sender (both ride the
+-- unbridged bone-slice SpellScript; the immunity list is maintained by the
+-- poller instead — ev38 DoAction itself IS bridged), the coldflame
+-- reposition/trigger-teleport legs (no position bridge), the dead-target
+-- spike-despawn leg (no aura-caster-GUID bridge), DoMeleeAttackIfReady
+-- (engine-driven melee is not suppressed during bone storm). JustReachedHome
 -- instance-SetBossState(FAIL) (:175) PORTED 2026-11-05 via
--- creature:SetBossState on ev24 OnReachHome (the opera ev24
--- precedent); the DATA_BONED_ACHIEVEMENT-reset leg PORTS via the
--- shared instanceData bonedEligible key (marrowgarReset, below).
--- DoAction(ACTION_CLEAR_SPIKE_IMMUNITIES) and MovementInform have
--- no bridge.
+-- creature:SetBossState on ev24 OnReachHome (the opera ev24 precedent);
+-- the DATA_BONED_ACHIEVEMENT-reset leg PORTS via the shared instanceData
+-- bonedEligible key (marrowgarReset, below).
 -- Talk(SAY_ENTER_ZONE 0) rides DoAction(ACTION_TALK_ENTER_ZONE),
 -- which only fires from at_lord_marrowgar_entrance — ev38 dispatch bridged;
 -- sender area-trigger TryHandleOnce (boss_lord_marrowgar.cpp:675-681) unported,
@@ -163,6 +161,16 @@ local SAY_BERSERK = 6
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_BONE_STORM = 69076 -- boss_lord_marrowgar.cpp spells enum
+local SPELL_BONE_SPIKE_GRAVEYARD = 69057 -- boss_lord_marrowgar.cpp:49
+local SPELL_COLDFLAME_NORMAL = 69140 -- boss_lord_marrowgar.cpp:50
+local SPELL_COLDFLAME_BONE_STORM = 72705 -- boss_lord_marrowgar.cpp:51
+local SPELL_COLDFLAME_SUMMON = 69147 -- boss_lord_marrowgar.cpp:59
+local ENTRY_COLDFLAME = 36672 -- boss_lord_marrowgar.cpp npc_coldflame
+local POINT_TARGET_BONESTORM_PLAYER = 36612631 -- boss_lord_marrowgar.cpp:83
+local SAY_BONE_STORM = 2
+local SAY_BONESPIKE = 3
+local EMOTE_BONE_STORM = 7
+local BoneSpikeSummonId = {69062, 72669, 72670} -- boss_lord_marrowgar.cpp:62
 
 local timers = {}
 
@@ -188,6 +196,244 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local marrowgarState = {}
+
+local function getMarrowgarState(guid)
+    local st = marrowgarState[guid]
+    if not st then
+        st = {boneSlice = false, spikeImmune = {}, baseRunRate = 1.0, stormDuration = 20000}
+        marrowgarState[guid] = st
+    end
+    return st
+end
+
+local function cancelTimer(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
+-- C++ SelectTarget(Random, NonTankTargetSelector) twin: random entry from
+-- the threat-sorted GetAITargets list excluding the current victim (the
+-- tank); falls back to any threatened unit (C++ :234-235).
+local function pickRandomNonTank(creature)
+    local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = victim and victim:GetGUID() or 0
+    local pool = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetGUID() ~= victimGuid then
+            pool[#pool + 1] = unit
+        end
+    end
+    if #pool == 0 then
+        pool = targets
+    end
+    if #pool == 0 then
+        return nil
+    end
+    return pool[math.random(#pool)]
+end
+
+-- C++ spell_marrowgar_coldflame SelectTarget (:482-495) twin: random
+-- living player without IMPALED, excluding the victim (the spell's
+-- -combatReach minimum-distance leg); falls back to any living player
+-- (C++ :489-491).
+local function pickColdflameTarget(creature)
+    local targets = creature:GetAITargets()
+    local victim = creature:GetVictim()
+    local victimGuid = victim and victim:GetGUID() or 0
+    local pool = {}
+    for _, unit in ipairs(targets) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() and not unit:HasAura(SPELL_IMPALED) and unit:GetGUID() ~= victimGuid then
+            pool[#pool + 1] = unit
+        end
+    end
+    if #pool == 0 then
+        for _, unit in ipairs(targets) do
+            if unit:GetObjectType() == "Player" and not unit:IsDead() then
+                pool[#pool + 1] = unit
+            end
+        end
+    end
+    if #pool == 0 then
+        return nil
+    end
+    return pool[math.random(#pool)]
+end
+
+-- Forward declarations (tharon_ja/gal_darah idiom): the storm machine
+-- functions reference each other, so plain assignments, never a second
+-- `local function` for the same name (that shadows the forward slot).
+local onWarnBoneStorm, onBoneStormBegin, onBoneStormMove, onBoneStormEnd
+local onEnableBoneSlice, onBoneSliceTick, onGraveyard, onColdflame
+
+-- C++ EVENT_WARN_BONE_STORM (:214-221): _boneSlice = false, Talk
+-- (EMOTE_BONE_STORM 7), DoCast(me, SPELL_BONE_STORM) self-cast, BEGIN
+-- @3050ms, WARN re-arm {90s,95s}. The DelayEvents(3s, GROUP_SPECIAL)
+-- leg is a documented no-op: the graveyard/coldflame timers keep their
+-- cadence through the storm (their gates already read the storm aura at
+-- fire time). FinishSpell has no bridge.
+onWarnBoneStorm = function(creature, guid)
+    local st = getMarrowgarState(guid)
+    st.boneSlice = false
+    creature:Talk(EMOTE_BONE_STORM)
+    creature:CastSpell(creature, SPELL_BONE_STORM)
+    schedule(guid, "beginStorm", 3050, function() onBoneStormBegin(creature, guid) end)
+    schedule(guid, "warnStorm", {90000, 95000}, function() onWarnBoneStorm(creature, guid) end)
+end
+
+-- C++ EVENT_BONE_STORM_BEGIN (:223-229): aura SetDuration
+-- (_boneStormDuration), SetSpeedRate x3, Talk(SAY_BONE_STORM 2), END @
+-- duration+1ms, fallthrough to MOVE. Duration RAID_MODE(20s, 30s, 20s,
+-- 30s) = 10-man 20s / 25-man 30s (:136); the x3 rate multiplies the
+-- GetSpeed(1)/7.0 rate captured at engage.
+onBoneStormBegin = function(creature, guid)
+    local st = getMarrowgarState(guid)
+    local aura = creature:GetAura(SPELL_BONE_STORM)
+    if aura then
+        aura:SetDuration(st.stormDuration)
+    end
+    creature:SetSpeedRate(1, st.baseRunRate * 3.0)
+    creature:Talk(SAY_BONE_STORM)
+    schedule(guid, "endStorm", st.stormDuration + 1, function() onBoneStormEnd(creature, guid) end)
+    onBoneStormMove(creature, guid)
+end
+
+-- C++ EVENT_BONE_STORM_MOVE (:230-238): re-arm @ duration/3, random
+-- non-tank target, MovePoint(POINT_TARGET_BONESTORM_PLAYER, *unit).
+-- Documented approx: MoveChase(target) — no GetX/GetY exists on handler
+-- creatures or players, so the target's position is unreadable and no
+-- point arrival ever fires (the MovementInform MoveIdle leg stays out);
+-- the boss still runs at a fresh random non-tank target every
+-- duration/3, and END re-chases the victim.
+onBoneStormMove = function(creature, guid)
+    local st = getMarrowgarState(guid)
+    schedule(guid, "moveStorm", math.floor(st.stormDuration / 3), function() onBoneStormMove(creature, guid) end)
+    local target = pickRandomNonTank(creature)
+    if target then
+        creature:MoveChase(target)
+    end
+end
+
+-- C++ EVENT_BONE_STORM_END (:240-258): drop the point movement,
+-- MoveChase victim, speed restore, cancel MOVE, ENABLE_BONE_SLICE @10s,
+-- reschedule GRAVEYARD @15s when not heroic.
+onBoneStormEnd = function(creature, guid)
+    cancelTimer(guid, "moveStorm")
+    creature:MoveClear()
+    local victim = creature:GetVictim()
+    if victim then
+        creature:MoveChase(victim)
+    end
+    creature:SetSpeedRate(1, 0)
+    schedule(guid, "enableSlice", 10000, function() onEnableBoneSlice(creature, guid) end)
+    if not creature:IsHeroic() then
+        schedule(guid, "graveyard", 15000, function() onGraveyard(creature, guid) end)
+    end
+end
+
+-- C++ EVENT_ENABLE_BONE_SLICE (:259-261): _boneSlice = true.
+onEnableBoneSlice = function(creature, guid)
+    getMarrowgarState(guid).boneSlice = true
+end
+
+-- C++ UpdateAI tail (:274-277): while _boneSlice and no current melee
+-- spell, DoCastVictim(SPELL_BONE_SLICE). No per-tick UpdateAI hook
+-- exists in Lua, so a 1.5s poller (the spell GCD) stands in, gated on
+-- IsCasting() for the CURRENT_MELEE_SPELL + casting gates; each cast
+-- marks the victim spike-immune (the bone-slice SpellScript SplitDamage
+-- leg, :641-648 — its DoAction CLEAR_SPIKE_IMMUNITIES sender is that
+-- same unbridged SpellScript, so the list is maintained here instead).
+-- The damage-split-across-targets leg stays out.
+onBoneSliceTick = function(creature, guid)
+    local st = getMarrowgarState(guid)
+    if st.boneSlice and not creature:HasAura(SPELL_BONE_STORM) and not creature:IsCasting() then
+        local victim = creature:GetVictim()
+        if victim then
+            creature:CastSpell(nil, SPELL_BONE_SLICE)
+            local vg = victim:GetGUID()
+            local immune = false
+            for i = 1, math.min(#st.spikeImmune, 3) do
+                if st.spikeImmune[i] == vg then immune = true end
+            end
+            if not immune then
+                st.spikeImmune[#st.spikeImmune + 1] = vg
+            end
+        end
+    end
+    schedule(guid, "boneSlice", 1500, function() onBoneSliceTick(creature, guid) end)
+end
+
+-- C++ EVENT_BONE_SPIKE_GRAVEYARD (:200-203) + spell_marrowgar_bone_spike_
+-- graveyard HandleSpikes (:575-600) replicated in Lua: the 69057 cast
+-- itself is skipped (its SpellScript has no bridge and Go runs no
+-- SPELL_EFFECT_SUMMON executor) and the script body ports directly —
+-- gate IsHeroic() or no bone-storm aura, boneSpikeCount = 25-man and 3
+-- or 1 (spawnMode & 1, :585), BoneSpikeTargetSelector (:107-126):
+-- living players without IMPALED and not in the bone-slice immune list,
+-- random picks; each target summons its own spike (target:SummonCreature,
+-- the target-cast-summon-on-self :590 twin — the spike's ev22 impaled +
+-- ride-vehicle + 8s fail-boned legs below are now live); Talk
+-- SAY_BONESPIKE after the loop. Re-arm {15s,20s} always (C++ :203).
+-- The dead-target spike-despawn leg stays out (no aura-caster-GUID bridge).
+onGraveyard = function(creature, guid)
+    local st = getMarrowgarState(guid)
+    if creature:IsHeroic() or not creature:HasAura(SPELL_BONE_STORM) then
+        local targets = creature:GetAITargets()
+        local pool = {}
+        for _, unit in ipairs(targets) do
+            if unit:GetObjectType() == "Player" and not unit:IsDead() and not unit:HasAura(SPELL_IMPALED) then
+                local ug = unit:GetGUID()
+                local immune = false
+                for i = 1, math.min(#st.spikeImmune, 3) do
+                    if st.spikeImmune[i] == ug then immune = true end
+                end
+                if not immune then
+                    pool[#pool + 1] = unit
+                end
+            end
+        end
+        local count = 1
+        if creature:Is25ManRaid() then count = 3 end
+        local picks = {}
+        while #picks < count and #pool > 0 do
+            picks[#picks + 1] = table.remove(pool, math.random(#pool))
+        end
+        if #picks > 0 then
+            for _, target in ipairs(picks) do
+                target:SummonCreature(ENTRY_BONE_SPIKE, 0, 0, 0, 0)
+            end
+            creature:Talk(SAY_BONESPIKE)
+        end
+    end
+    schedule(guid, "graveyard", {15000, 20000}, function() onGraveyard(creature, guid) end)
+end
+
+-- C++ EVENT_COLDFLAME (:205-212) + spell_marrowgar_coldflame SelectTarget
+-- (:482-495) replicated in Lua: the 69140/72705 casts themselves are
+-- skipped (their SpellScripts have no bridge) and the script body ports
+-- directly — the coldflame summon lands via the target player
+-- (target:SummonCreature, the spell's dest-area summon twin; the
+-- summoner is the player, not marrowgar — the C++ IsSummonedBy
+-- owner-guard + GetNearPoint2D reposition legs stay out, no position
+-- bridge — so the spawn sits at the 2x-reach fallback point beside the
+-- target instead of 15y from marrowgar toward it). Storm: 4 coldflames
+-- (the 72705 script's 4 casts, :518-521). Re-arm 5s always (C++ :212).
+onColdflame = function(creature, guid)
+    local target = pickColdflameTarget(creature)
+    if target then
+        local count = 1
+        if creature:HasAura(SPELL_BONE_STORM) then count = 4 end
+        for _ = 1, count do
+            target:SummonCreature(ENTRY_COLDFLAME, 0, 0, 0, 0)
+        end
+    end
+    schedule(guid, "coldflame", 5000, function() onColdflame(creature, guid) end)
+end
+
 -- C++ :261-263 EVENT_ENRAGE: DoCast(me, SPELL_BERSERK, true) +
 -- Talk(SAY_BERSERK 6) — 10min one-shot, no phase/machine/random-target
 -- gates (the festergut/rotface/putricide/sindragosa berserk precedent);
@@ -208,7 +454,7 @@ end
 
 -- C++ boss_lord_marrowgar::JustEngagedWith: Talk(SAY_AGGRO) — the
 -- auriaya engage-port precedent. The EventMap seeds (:148-152) —
--- only EVENT_ENRAGE ports (the rest are summon/phase-machine legs).
+-- all five port 2026-11-08 (tick 493, below).
 local function marrowgarJustEngagedWith(event, creature, target)
     local guid = creature:GetGUID()
     cancelTimers(guid)
@@ -220,6 +466,21 @@ local function marrowgarJustEngagedWith(event, creature, target)
     creature:DoZoneInCombat()
     creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_IN_PROGRESS)
     schedule(guid, "enrage", 600000, function() onEnrage(creature, guid) end)
+    -- C++ Reset seeds (:148-152): ENABLE_BONE_SLICE 10s, GRAVEYARD 15s,
+    -- COLDFLAME 5s, WARN_BONE_STORM {45s,50s}, ENRAGE 10min (above).
+    -- Seeded here (engage follows reset; the enrage precedent). The
+    -- bone-slice poller starts now and reads the _boneSlice latch.
+    local runSpeed = creature:GetSpeed(1)
+    if runSpeed <= 0 then runSpeed = 7.0 end
+    local st = getMarrowgarState(guid)
+    st.baseRunRate = runSpeed / 7.0
+    st.stormDuration = 20000
+    if creature:Is25ManRaid() then st.stormDuration = 30000 end
+    schedule(guid, "graveyard", 15000, function() onGraveyard(creature, guid) end)
+    schedule(guid, "coldflame", 5000, function() onColdflame(creature, guid) end)
+    schedule(guid, "warnStorm", {45000, 50000}, function() onWarnBoneStorm(creature, guid) end)
+    schedule(guid, "enableSlice", 10000, function() onEnableBoneSlice(creature, guid) end)
+    schedule(guid, "boneSlice", 1500, function() onBoneSliceTick(creature, guid) end)
 end
 
 -- C++ Reset() event machinery — cancel/re-arm on combat events (the
@@ -248,6 +509,10 @@ local function marrowgarReset(event, creature)
     creature:SetSpeedRate(1, 0)
     creature:RemoveAura(SPELL_BONE_STORM)
     creature:RemoveAura(SPELL_BERSERK)
+    -- C++ Reset() :153-154: _boneSlice = false, _boneSpikeImmune.clear().
+    local rst = getMarrowgarState(creature:GetGUID())
+    rst.boneSlice = false
+    rst.spikeImmune = {}
     -- C++ Reset() :177: instance->SetData(DATA_BONED_ACHIEVEMENT 14,
     -- true) — re-arms the Boned eligibility latch on every reset
     -- (wipe or evade); the Go 12775/12962/13393/13394 check reads
@@ -340,9 +605,10 @@ end
 -- effect instance SetData(DATA_BONED_ACHIEVEMENT 14, false) — the
 -- shared instanceData bonedEligible key is the Go-side twin; the
 -- timer is cancelled on spike death/kill above because in C++ the
--- EventMap dies with the spike AI. Dormant until the graveyard
--- summon chain lands: no 69057/69062 handling in Go and
--- SPELL_EFFECT_SUMMON has no session-path executor yet.
+-- timer is cancelled on spike death/kill above because in C++ the
+-- EventMap dies with the spike AI. LIVE 2026-11-08 (tick 493): the
+-- graveyard summon chain ports in onGraveyard below
+-- (target:SummonCreature, the target-cast-summon-on-self :590 twin).
 local function boneSpikeIsSummonedBy(event, creature, summoner)
     if not summoner then
         return
@@ -363,3 +629,15 @@ end
 RegisterCreatureEvent(ENTRY_BONE_SPIKE, 3, boneSpikeKilledUnit)
 RegisterCreatureEvent(ENTRY_BONE_SPIKE, 4, boneSpikeJustDied)
 RegisterCreatureEvent(ENTRY_BONE_SPIKE, 22, boneSpikeIsSummonedBy)
+
+-- C++ npc_coldflame::IsSummonedBy (boss_lord_marrowgar.cpp:369-395): the
+-- reposition legs (GetLastColdflamePosition / GetAbsoluteAngle /
+-- GetNearPoint2D / NearTeleportTo) stay out — no position bridge — and
+-- the 500ms EVENT_COLDFLAME_TRIGGER teleport leg stays out with them;
+-- the DoCast(SPELL_COLDFLAME_SUMMON 69147) leg PORTS. Registered here
+-- (same chunk as the summoner, sharing the entry const).
+local function coldflameIsSummonedBy(event, creature, summoner)
+    creature:CastSpell(creature, SPELL_COLDFLAME_SUMMON)
+end
+
+RegisterCreatureEvent(ENTRY_COLDFLAME, 22, coldflameIsSummonedBy)
