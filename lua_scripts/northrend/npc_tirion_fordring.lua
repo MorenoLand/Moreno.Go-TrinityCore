@@ -145,7 +145,6 @@ local SUMMON_CORPSE_TIMED_DESPAWN = 5
 local SUMMON_DEAD_DESPAWN = 6
 
 local SPELL_OPEN_PORTAL = 67864
-local SPELL_WILFRED_PORTAL = 68424
 local SPELL_JARAXXUS_HITTIN_YA = 66327
 local SPELL_FEL_LIGHTNING_INTRO = 67888
 local SPELL_LK_FROST_NOVA = 68198
@@ -694,27 +693,9 @@ end
 RegisterCreatureEvent(ENTRY_FIZZLEBANG, 23, fizzlebangReset)
 RegisterCreatureEvent(ENTRY_FIZZLEBANG, 28, fizzlebangMovementInform)
 
--- C++ npc_open_portal_target_toc (trial_of_the_crusader.cpp:564-600):
--- SpellHit(SPELL_OPEN_PORTAL) -> 2s -> self-cast WILFRED_PORTAL +
--- despawn 9s. Reset: passive + no gravity.
-local function portalTargetReset(event, creature)
-    creature:SetReactState(REACT_PASSIVE)
-    creature:SetDisableGravity(true)
-    cancelTimers(creature:GetGUIDLow())
-end
-
-local function portalTargetSpellHit(event, creature, caster, spellId)
-    if spellId == SPELL_OPEN_PORTAL then
-        local guid = creature:GetGUIDLow()
-        schedule(guid, "wilfredPortal", 2000, function()
-            creature:CastSpell(creature, SPELL_WILFRED_PORTAL)
-            creature:DespawnOrUnsummon(9000)
-        end)
-    end
-end
-
-RegisterCreatureEvent(ENTRY_WILFRED_PORTAL, 23, portalTargetReset)
-RegisterCreatureEvent(ENTRY_WILFRED_PORTAL, 14, portalTargetSpellHit)
+-- Wilfred portal-target arms removed 2026-11-09: entry 17965 ev23/ev14 are
+-- registered by the canonical port lua_scripts/northrend/npc_open_portal_target_toc.lua;
+-- two registrations double-fired every reset/spell-hit.
 
 -- C++ boss_lich_king_toc (trial_of_the_crusader.cpp:303-353). The
 -- emote-state legs (EVENT_EMOTE_TALK's SetUInt32Value + EXCLAMATION /

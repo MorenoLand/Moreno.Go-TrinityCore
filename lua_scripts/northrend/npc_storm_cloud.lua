@@ -282,62 +282,7 @@ RegisterCreatureEvent(NPC_FINKLESTEIN, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- zone_zuldrak.cpp:510: custom UpdateAI never calls DoMeleeAttackIfReady (RP event machine in C++, never melees)
 end)
 
--- C++ spell_fetch_ingredient_aura::OnRemove (zone_zuldrak.cpp:873-896):
--- EFFECT_0 DUMMY, REAL. On expiry, if the target still has the
--- invisibility buff (51216) and Finklestein (28205) is within 100yd,
--- strip the buff and Finklestein says SAY_RUINED (4) to the target.
--- The aura IS the fetch spell: all 21 SPELL_FETCH_* ids
--- (zone_zuldrak.cpp:610-632) carry this loader. DORMANT until
--- Spell.dbc ships (no aura-engine application of the fetch spells yet);
--- the ev3 fire, expire gate, player HasAura/RemoveAura, player
--- FindNearestCreature and Talk(id, player) legs are all live bridges.
-local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
-local SAY_RUINED = 4 -- zone_zuldrak.cpp:431
-
-local FETCH_INGREDIENT_AURAS = {
-    51018, 51055, 51057, 51059, 51062, 51064, 51067, 51069, 51072,
-    51077, 51079, 51081, 51083, 51085, 51087, 51091, 51093, 51095,
-    51097, 51100, 51102,
-}
-
-local function fetchIngredientOnRemove(event, aura, target)
-    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
-        return
-    end
-    if not target:HasAura(SPELL_ALCHEMIST_APPRENTICE_INVISBUFF) then
-        return
-    end
-    local finklestein = target:FindNearestCreature(NPC_FINKLESTEIN, 100.0)
-    if not finklestein then
-        return
-    end
-    target:RemoveAura(SPELL_ALCHEMIST_APPRENTICE_INVISBUFF)
-    finklestein:Talk(SAY_RUINED, target)
-end
-
-for _, spellId in ipairs(FETCH_INGREDIENT_AURAS) do
-    RegisterAuraEvent(spellId, 3, fetchIngredientOnRemove)
-end
-
--- C++ spell_random_ingredient_aura::PeriodicTick
--- (zone_zuldrak.cpp:660-671): EFFECT_0 PERIODIC_DUMMY. Each tick the
--- target self-casts the random-ingredient spell matching the aura's
--- own id (non-triggered in C++; the player CastSpell funnel ignores
--- the triggered flag, pre-existing). One closure per aura spell: the
--- aura object exposes no spell-id read on the Lua side, so the id
--- rides the closure. DORMANT until Spell.dbc ships.
-local SPELL_RANDOM_INGREDIENT_MEDIUM_AURA = 51154 -- zone_zuldrak.cpp:369
-local SPELL_RANDOM_INGREDIENT_HARD_AURA = 51157 -- zone_zuldrak.cpp:370
-local SPELL_RANDOM_INGREDIENT_EASY = 51134 -- zone_zuldrak.cpp:371
-local SPELL_RANDOM_INGREDIENT_MEDIUM = 51105 -- zone_zuldrak.cpp:372
-local SPELL_RANDOM_INGREDIENT_HARD = 51107 -- zone_zuldrak.cpp:373
-
-local function makeRandomIngredientTick(spellId)
-    return function(event, aura, target)
-        target:CastSpell(target, spellId)
-    end
-end
-
-RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_EASY_AURA, 1, makeRandomIngredientTick(SPELL_RANDOM_INGREDIENT_EASY))
-RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_MEDIUM_AURA, 1, makeRandomIngredientTick(SPELL_RANDOM_INGREDIENT_MEDIUM))
-RegisterAuraEvent(SPELL_RANDOM_INGREDIENT_HARD_AURA, 1, makeRandomIngredientTick(SPELL_RANDOM_INGREDIENT_HARD))
+-- Aura registrations removed 2026-11-09: the 21 fetch-ingredient OnRemove (ev3)
+-- and 3 random-ingredient PeriodicTick (ev1) arms are registered by the
+-- canonical port lua_scripts/northrend/zone_zuldrak.lua (ticks 424/425);
+-- two registrations double-fired every aura tick/remove.
