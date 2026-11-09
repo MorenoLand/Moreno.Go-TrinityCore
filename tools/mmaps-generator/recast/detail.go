@@ -1,8 +1,6 @@
 // Detail mesh building mirrors dep/recastnavigation/Recast/Source/RecastMeshDetail.cpp
-// (rcBuildPolyMeshDetail) and the rcPolyMeshDetail struct in
-// dep/recastnavigation/Recast/Include/Recast.h.
-//
-// rcMergePolyMeshDetails is intentionally not ported: MapBuilder does not use it.
+// (rcBuildPolyMeshDetail, rcMergePolyMeshDetails) and the rcPolyMeshDetail
+// struct in dep/recastnavigation/Recast/Include/Recast.h.
 package recast
 
 import "math"
@@ -1328,5 +1326,67 @@ func BuildPolyMeshDetail(mesh *PolyMesh, chf *CompactHeightfield, sampleDist, sa
 	dmesh.Verts = dmesh.Verts[:dmesh.Nverts*3]
 	dmesh.Tris = dmesh.Tris[:dmesh.Ntris*4]
 
+	return true
+}
+
+// MergePolyMeshDetails mirrors rcMergePolyMeshDetails (RecastMeshDetail.cpp):
+// it concatenates the sub-meshes, rebasing each mesh's vert and tri bases
+// by the running totals. Nil entries are skipped. MapBuilder does not use
+// it; it completes the detail-mesh API. Counts are clamped to the slices
+// actually present, so a malformed detail mesh degrades instead of
+// indexing out of bounds.
+func MergePolyMeshDetails(details []*PolyMeshDetail, out *PolyMeshDetail) bool {
+	if out == nil {
+		return false
+	}
+	maxVerts, maxTris, maxMeshes := 0, 0, 0
+	for _, dm := range details {
+		if dm == nil {
+			continue
+		}
+		maxVerts += dm.Nverts
+		maxTris += dm.Ntris
+		maxMeshes += dm.Nmeshes
+	}
+	out.Nmeshes = 0
+	out.Meshes = make([]uint32, maxMeshes*4)
+	out.Ntris = 0
+	out.Tris = make([]uint8, maxTris*4)
+	out.Nverts = 0
+	out.Verts = make([]float32, maxVerts*3)
+	for _, dm := range details {
+		if dm == nil {
+			continue
+		}
+		nmeshes := dm.Nmeshes
+		if nmeshes > len(dm.Meshes)/4 {
+			nmeshes = len(dm.Meshes) / 4
+		}
+		for j := 0; j < nmeshes; j++ {
+			src := dm.Meshes[j*4:]
+			dst := out.Meshes[out.Nmeshes*4:]
+			dst[0] = uint32(out.Nverts) + src[0]
+			dst[1] = src[1]
+			dst[2] = uint32(out.Ntris) + src[2]
+			dst[3] = src[3]
+			out.Nmeshes++
+		}
+		nverts := dm.Nverts
+		if nverts*3 > len(dm.Verts) {
+			nverts = len(dm.Verts) / 3
+		}
+		for k := 0; k < nverts; k++ {
+			copy(out.Verts[out.Nverts*3:], dm.Verts[k*3:k*3+3])
+			out.Nverts++
+		}
+		ntris := dm.Ntris
+		if ntris*4 > len(dm.Tris) {
+			ntris = len(dm.Tris) / 4
+		}
+		for k := 0; k < ntris; k++ {
+			copy(out.Tris[out.Ntris*4:], dm.Tris[k*4:k*4+4])
+			out.Ntris++
+		}
+	}
 	return true
 }
