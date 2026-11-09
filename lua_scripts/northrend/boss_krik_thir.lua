@@ -169,6 +169,12 @@ local ACTION_WATCHER_ENGAGED = 3
 local ACTION_PET_ENGAGED = 4
 local ACTION_PET_EVADE = 5
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 
 local function cancelTimers(guid)
@@ -254,7 +260,7 @@ end
 local hadFrenzy = {}
 
 local function krikThirDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if hadFrenzy[guid] then
         return
     end
@@ -305,7 +311,7 @@ end
 
 -- C++ boss_krik_thirAI::DoAction (:214-251).
 local function krikThirDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = machineState(guid)
     if action == ACTION_GASHRA_DIED or action == ACTION_NARJIL_DIED
         or action == ACTION_SILTHIK_DIED then
@@ -408,7 +414,7 @@ local watcherEngaged = {}
 
 local function makeWatcherEnterCombat(arms)
     return function(event, creature)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         if not watcherEngaged[guid] then
             watcherEngaged[guid] = true
             local summoner = creature:GetSummonerUnit()
@@ -426,14 +432,14 @@ local function makeWatcherEnterCombat(arms)
 end
 
 local function watcherLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ watcher JustDied (:430-435 / :508-513 / :586-591): relay to
 -- the boss only while it is alive.
 local function makeWatcherDied(action)
     return function(event, creature, killer)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelTimers(guid)
         watcherEngaged[guid] = nil
         local krikthir = creature:GetInstanceCreature(DATA_KRIKTHIR)
@@ -444,7 +450,7 @@ local function makeWatcherDied(action)
 end
 
 local function krikThirEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     machineState(guid).pets = false
     schedule(guid, "mindflay", math.random(1000, 3000), function()
@@ -460,7 +466,7 @@ local function krikThirEnterCombat(event, creature, target)
 end
 
 local function krikThirLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hadFrenzy[guid] = nil
 end
@@ -472,14 +478,14 @@ local function krikThirTargetDied(event, creature, victim)
 end
 
 local function krikThirDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hadFrenzy[guid] = nil
     creature:Talk(SAY_DEATH)
 end
 
 local function krikThirReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     hadFrenzy[guid] = nil
     bossMachine[guid] = nil

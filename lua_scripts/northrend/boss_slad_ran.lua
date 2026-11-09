@@ -108,6 +108,12 @@ local SPAWN_LOCS = {
     { 1716.76, 635.159, 129.282, 0.191986 },
 }
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 
 local function cancelTimers(guid)
@@ -198,7 +204,7 @@ local function venomBoltTick(creature, guid)
 end
 
 local function sladranEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
@@ -233,7 +239,7 @@ local function despawnSladranSummons(guid)
 end
 
 local function sladranLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnSladranSummons(guid)
     cancelTimers(guid)
     sladranPhase[guid] = nil
@@ -246,8 +252,8 @@ local function sladranTargetDied(event, creature, victim)
 end
 
 local function sladranDied(event, creature, killer)
-    despawnSladranSummons(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnSladranSummons(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
     -- instance->SetBossState(DATA_SLAD_RAN, DONE). The instance
     -- script's altar-clear leg reads the flag below (no
@@ -263,7 +269,7 @@ local function sladranDied(event, creature, killer)
 end
 
 local function sladranReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnSladranSummons(guid)
     cancelTimers(guid)
     sladranPhase[guid] = nil
@@ -345,7 +351,7 @@ end
 sladranPhase = {}
 
 local function sladranDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
         return
@@ -376,13 +382,13 @@ end
 -- latch rides the ev19 table below, despawned from died/reset/leave
 -- (BossAI _JustDied/_Reset DespawnAll, keleseth precedent).
 local function sladranJustSummoned(event, creature, summon)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = sladranSummons[guid]
     if not list then
         list = {}
         sladranSummons[guid] = list
     end
-    list[summon:GetGUID()] = summon
+    list[summon:GetGUIDLow()] = summon
     summon:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
 end
 
@@ -476,7 +482,7 @@ local function gripTick(creature, guid)
 end
 
 local function constrictorEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "grip", 2000, function()
         gripTick(creature, guid)
@@ -484,15 +490,15 @@ local function constrictorEnterCombat(event, creature, target)
 end
 
 local function constrictorLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function constrictorDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function constrictorReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_CONSTRICTOR, 1, constrictorEnterCombat)
@@ -510,7 +516,7 @@ local function viperBiteTick(creature, guid)
 end
 
 local function viperEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "bite", 2000, function()
         viperBiteTick(creature, guid)
@@ -518,15 +524,15 @@ local function viperEnterCombat(event, creature, target)
 end
 
 local function viperLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function viperDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function viperReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_VIPER, 1, viperEnterCombat)

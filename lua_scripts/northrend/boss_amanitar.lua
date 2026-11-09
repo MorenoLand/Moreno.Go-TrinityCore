@@ -103,9 +103,11 @@
 -- apply paths).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler
 -- (gargolmar precedent); BossAI _Reset/_JustDied instance
--- bookkeeping has no bridge.
+-- bookkeeping ports in amanitarDied below (SetBossState + flag).
 
 local ENTRY_AMANITAR = 30258
+local DATA_AMANITAR = 3 -- ahnkahet.h:34
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local SPELL_BASH = 57094
 local SPELL_MINI = 57055
@@ -494,8 +496,26 @@ local function amanitarLeaveCombat(event, creature)
     creature:Despawn()
 end
 
+-- C++ LoadObjectData (instance_ahnkahet.cpp:30-37): latch the boss
+-- GUID under DATA_AMANITAR (instance_guid_store.go; the
+-- instance-side OnCreatureCreate route is dead for static spawns
+-- — instance_ahnkahet.lua header).
+local function amanitarSpawned(event, creature)
+    creature:SetGuidData(DATA_AMANITAR)
+end
+
 local function amanitarDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_AMANITAR, DONE); the flag rides
+    -- the same instance-consumer pattern as instance_ahnkahet.lua
+    -- (no boss-state-change event exists).
+    creature:SetBossState(DATA_AMANITAR, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.amanitarDone = true
+    end
     -- C++ JustDied (boss_amanitar.cpp:111-116): _JustDied() is the
     -- cancelTimers above; DoCastAOE(SPELL_REMOVE_MUSHROOM_POWER)
     -- ports below; instance->DoRemoveAurasDueToSpellOnPlayers(
@@ -513,6 +533,7 @@ end
 RegisterCreatureEvent(ENTRY_AMANITAR, 1, amanitarEnterCombat)
 RegisterCreatureEvent(ENTRY_AMANITAR, 2, amanitarLeaveCombat)
 RegisterCreatureEvent(ENTRY_AMANITAR, 4, amanitarDied)
+RegisterCreatureEvent(ENTRY_AMANITAR, 5, amanitarSpawned)
 RegisterCreatureEvent(ENTRY_AMANITAR, 23, amanitarReset)
 RegisterCreatureEvent(ENTRY_AMANITAR, 19, amanitarJustSummoned)
 RegisterCreatureEvent(ENTRY_AMANITAR, 21, amanitarSummonedDied)

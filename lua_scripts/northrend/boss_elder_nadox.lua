@@ -13,7 +13,8 @@
 -- creature:CastSpell(nil, spell) = DoCastVictim,
 -- creature:CastSpell(creature, spell) = DoCastSelf (moroes precedent).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler (gargolmar
--- precedent); BossAI _Reset/_JustDied instance bookkeeping has no bridge.
+-- precedent); BossAI _JustDied instance bookkeeping ports in
+-- nadoxDied below (SetBossState + instanceData flag).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_elder_nadox: JustEngagedWith Talk(SAY_AGGRO 0) (event 1);
 -- EVENT_PLAGUE DoCast(SelectTarget(Random, 0, 100, true),
@@ -79,6 +80,8 @@
 -- achievement_criteria_scripts.go).
 
 local ENTRY_ELDER_NADOX = 29309
+local DATA_ELDER_NADOX = 0 -- ahnkahet.h:31
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 local DATA_RESPECT_YOUR_ELDERS = 6 -- boss_elder_nadox.cpp:54 (Events enum)
 local NPC_AHNKAHAR_GUARDIAN = 30176 -- ahnkahet.h:52
 
@@ -232,7 +235,25 @@ local function nadoxDied(event, creature, killer)
     local guid = creature:GetGUID()
     cancelTimers(guid)
     clearState(guid)
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_ELDER_NADOX, DONE); the flag
+    -- rides the same instance-consumer pattern as
+    -- instance_ahnkahet.lua (no boss-state-change event exists).
+    creature:SetBossState(DATA_ELDER_NADOX, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.elderNadoxDone = true
+    end
     creature:Talk(SAY_DEATH)
+end
+
+-- C++ LoadObjectData (instance_ahnkahet.cpp:30-37): latch the boss
+-- GUID under DATA_ELDER_NADOX (instance_guid_store.go; the
+-- instance-side OnCreatureCreate route is dead for static spawns
+-- — instance_ahnkahet.lua header).
+local function nadoxSpawned(event, creature)
+    creature:SetGuidData(DATA_ELDER_NADOX)
 end
 
 local function nadoxReset(event, creature)
@@ -285,6 +306,7 @@ RegisterCreatureEvent(ENTRY_ELDER_NADOX, 1, nadoxEnterCombat)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 2, nadoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 3, nadoxTargetDied)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 4, nadoxDied)
+RegisterCreatureEvent(ENTRY_ELDER_NADOX, 5, nadoxSpawned)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 9, nadoxDamageTaken)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 21, nadoxSummonedDied)
 RegisterCreatureEvent(ENTRY_ELDER_NADOX, 23, nadoxReset)

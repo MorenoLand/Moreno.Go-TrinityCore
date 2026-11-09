@@ -41,7 +41,7 @@
 -- KilledUnit Talk(SAY_SLAY 3) player-gated (event 3,
 -- victim:GetObjectType()=="Player" — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 4) (event 4; _JustDied instance
--- bookkeeping has no bridge).
+-- bookkeeping ports in jedogaDied below — SetBossState + flag).
 -- Cast-state VERIFIED gate-less for ported arms: the boss's own
 -- UpdateAI pre-loop (:302) + in-loop (:385) UNIT_STATE_CASTING
 -- gates exist in C++, but they guard only the unported
@@ -189,6 +189,8 @@
 -- the "no bridge" claim is stale (ev21 + the SetData store are live).
 
 local ENTRY_JEDOGA_SHADOWSEEKER = 29310
+local DATA_JEDOGA_SHADOWSEEKER = 2 -- ahnkahet.h:33
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 local DATA_VOLUNTEER_WORK = 1 -- boss_jedoga_shadowseeker.cpp:137
 local NPC_TWILIGHT_VOLUNTEER = 30385 -- ahnkahet.h:57
 
@@ -265,6 +267,16 @@ end
 local function jedogaDied(event, creature, killer)
     -- C++ JustDied (:195-198): _JustDied() (DespawnAll) before Talk.
     despawnJedogaSummons(creature:GetGUID())
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_JEDOGA_SHADOWSEEKER, DONE); the
+    -- flag rides the same instance-consumer pattern as
+    -- instance_ahnkahet.lua (no boss-state-change event exists).
+    creature:SetBossState(DATA_JEDOGA_SHADOWSEEKER, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.jedogaShadowseekerDone = true
+    end
     creature:Talk(SAY_DEATH)
 end
 
@@ -311,6 +323,12 @@ end
 -- the latch cleared.
 local function jedogaSpawned(event, creature)
     creature:SetData(DATA_VOLUNTEER_WORK, 1)
+    -- C++ LoadObjectData (instance_ahnkahet.cpp:30-37): latch the
+    -- boss GUID under DATA_JEDOGA_SHADOWSEEKER
+    -- (instance_guid_store.go; the instance-side OnCreatureCreate
+    -- route is dead for static spawns — instance_ahnkahet.lua
+    -- header).
+    creature:SetGuidData(DATA_JEDOGA_SHADOWSEEKER)
 end
 
 -- C++ SummonedCreatureDies (boss_jedoga_shadowseeker.cpp:253-260): a

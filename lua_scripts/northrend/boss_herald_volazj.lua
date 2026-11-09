@@ -116,9 +116,11 @@
 -- documented as missing upstream.
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler
 -- (gargolmar precedent); BossAI _Reset/_JustDied instance
--- bookkeeping has no bridge.
+-- bookkeeping ports in volazjDied below (SetBossState + flag).
 
 local ENTRY_HERALD_VOLAZJ = 29311
+local DATA_HERALD_VOLAZJ = 4 -- ahnkahet.h:35
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local SPELL_MIND_FLAY = 57941
 local SPELL_SHADOW_BOLT_VOLLEY = 57942
@@ -288,9 +290,27 @@ end
 
 local function volazjDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_HERALD_VOLAZJ, DONE); the flag
+    -- rides the same instance-consumer pattern as
+    -- instance_ahnkahet.lua (no boss-state-change event exists).
+    creature:SetBossState(DATA_HERALD_VOLAZJ, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.heraldVolazjDone = true
+    end
     creature:Talk(SAY_DEATH)
     resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:284, C++
                                      -- arm order (after Talk)
+end
+
+-- C++ LoadObjectData (instance_ahnkahet.cpp:30-37): latch the boss
+-- GUID under DATA_HERALD_VOLAZJ (instance_guid_store.go; the
+-- instance-side OnCreatureCreate route is dead for static spawns
+-- — instance_ahnkahet.lua header).
+local function volazjSpawned(event, creature)
+    creature:SetGuidData(DATA_HERALD_VOLAZJ)
 end
 
 local function volazjReset(event, creature)
@@ -342,5 +362,6 @@ RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 1, volazjEnterCombat)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 2, volazjLeaveCombat)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 3, volazjTargetDied)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 4, volazjDied)
+RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 5, volazjSpawned)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 23, volazjReset)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 9, volazjDamageTaken)

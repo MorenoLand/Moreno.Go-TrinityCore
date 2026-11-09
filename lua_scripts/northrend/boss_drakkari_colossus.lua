@@ -117,6 +117,12 @@ local REACT_AGGRESSIVE = 2
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 
 local function cancelTimers(guid)
@@ -161,7 +167,7 @@ end
 -- C++ :115-119 JustEngagedWith: BossAI base arms first, then
 -- me->RemoveAura(SPELL_FREEZE_ANIM) via the RemoveAura bridge.
 local function colossusEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
@@ -175,11 +181,11 @@ end
 -- resets in place (Reset). Cancel timers only; do NOT despawn (the
 -- old Despawn() cited the elemental's evade arm, :328-331).
 local function colossusLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function colossusDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
     -- instance->SetBossState(DATA_DRAKKARI_COLOSSUS, DONE). The
     -- instance script's altar-clear leg reads the flag below (no
@@ -197,7 +203,7 @@ end
 -- EVENT_MIGHTY_BLOW schedule (rides enterCombat in Lua, see above);
 -- Initialize() resets the phase to NORMAL.
 local function colossusReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetData(DATA_COLOSSUS_PHASE, COLOSSUS_PHASE_NORMAL)
     if creature:GetData(DATA_INTRO_DONE) ~= 0 then
         creature:SetReactState(REACT_AGGRESSIVE)

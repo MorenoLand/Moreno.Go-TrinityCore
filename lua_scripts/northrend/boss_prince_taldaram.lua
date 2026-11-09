@@ -13,7 +13,8 @@
 -- creature:CastSpell(nil, spell) = DoCastVictim,
 -- creature:CastSpell(creature, spell) = DoCastSelf (moroes precedent).
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23) cancel the scheduler (gargolmar
--- precedent); BossAI _Reset/_JustDied instance bookkeeping has no bridge.
+-- precedent); BossAI _JustDied instance bookkeeping ports in
+-- taldaramDied below (SetBossState + instanceData flag).
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_prince_taldaram: JustEngagedWith Talk(SAY_AGGRO 2) (event 1);
 -- EVENT_BLOODTHIRST DoCastSelf(Bloodthirst 55968), 10s init, 10s repeat;
@@ -36,8 +37,11 @@
 -- target is alive, past 20000 / heroic 40000 -> clear target +
 -- StopSpellCast (interrupts the live Embrace 55959 channel).
 -- Deviations: C++ DelayEvents(500ms) on VANISH has no Lua twin
--- (independent CreateLuaEvent timers); the UpdateAI vanish-evade check
--- stays out (EnterEvadeMode has no Lua bridge, 2026-10-21).
+-- (independent CreateLuaEvent timers); the UpdateAI vanish-evade
+-- check stays out — creature:EnterEvadeMode() IS bridged
+-- (lua_creature_events.go:5014; the 2026-10-21 "no bridge" note is
+-- stale) but this file has no UpdateAI tick surface to hang the
+-- per-diff check on.
 -- Cast-state: the boss's own UpdateAI pre-loop (:171) + in-loop
 -- (:222) UNIT_STATE_CASTING gates are PORTED — every UpdateAI timer
 -- arm (bloodthirst, conjure, vanish, startfeeding, donefeeding)
@@ -70,10 +74,10 @@
 -- (same room); SetFlag NOT_SELECTABLE + SetGoState ACTIVE legs kept
 -- verbatim (no-ops for static spawns — see keristrasza sphere note);
 -- instance SetData(DATA_SPHERE_1/2, IN_PROGRESS) twin is boss
--- ScriptData via creature:SetData/GetData (per-creature store, not
--- the instance script — only Lua reads it, so the substitution is
--- complete within the port; the Go instance script's SpheresState
--- save/load + OnGameObjectCreate re-apply are not fed); boss
+-- ScriptData via creature:SetData/GetData (per-creature store, read
+-- by checkSpheres) PLUS the instance write below (data:SetData
+-- feeds instance_ahnkahet.lua SpheresState save/load +
+-- OnGameObjectCreate re-apply); boss
 -- Talk(SAY_1 0) + CheckSpheres() -> RemovePrison() PORTED except
 -- MoveLand (no bridge) and the platform HandleGameObject(true) leg
 -- (static-GO state write, no-op) — both documented in removePrison.
@@ -114,6 +118,8 @@ local DATA_SPHERE_ANGLE_OFFSET = math.pi / 2 -- boss_prince_taldaram.cpp:62
 local SPELL_HOVER_FALL = 60425 -- boss_prince_taldaram.cpp:51
 local DATA_SPHERE_1 = 5 -- ahnkahet.h:38
 local DATA_SPHERE_2 = 6 -- ahnkahet.h:39
+local DATA_PRINCE_TALDARAM = 1 -- ahnkahet.h:32
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 local DATA_GROUND_POSITION_Z = 11.30809 -- boss_prince_taldaram.cpp:63
 local GO_SPHERE_1 = 193093 -- ahnkahet.h:77
 local GO_SPHERE_2 = 193094 -- ahnkahet.h:78
@@ -128,6 +134,12 @@ local GAMEOBJECT_FLAGS = 9 -- arlokk precedent
 local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
 local GO_STATE_ACTIVE = 0
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 
 -- C++ _embraceTargetGUID / _embraceTakenDamage: the target is stored as
@@ -322,7 +334,7 @@ local function vanishTick(creature, guid)
 end
 
 local function taldaramEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearEmbrace(guid)
     -- BossAI::JustEngagedWith base arms, base-first (C++ arm order);
@@ -342,7 +354,7 @@ local function taldaramEnterCombat(event, creature, target)
 end
 
 local function taldaramLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnFlameSpheres(guid)
     cancelTimers(guid)
     clearEmbrace(guid)
@@ -350,7 +362,7 @@ end
 
 local function taldaramTargetDied(event, creature, victim)
     if victim and victim:GetObjectType() == "Player" then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local target = embraceTarget[guid]
         if target ~= nil and victim:GetGUID() == target:GetGUID() then
             embraceTarget[guid] = nil
@@ -360,9 +372,19 @@ local function taldaramTargetDied(event, creature, victim)
 end
 
 local function taldaramDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     clearEmbrace(guid)
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_PRINCE_TALDARAM, DONE). The
+    -- instance script's platform leg reads the flag below (no
+    -- boss-state-change event exists — instance_ahnkahet.lua header).
+    creature:SetBossState(DATA_PRINCE_TALDARAM, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.princeTaldaramDone = true
+    end
     creature:Talk(SAY_DEATH)
     despawnFlameSpheres(guid)
 end
@@ -370,7 +392,7 @@ end
 local checkSpheres
 
 local function taldaramReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnFlameSpheres(guid)
     cancelTimers(guid)
     clearEmbrace(guid)
@@ -389,7 +411,7 @@ end
 -- 55959 channel — StopSpellCast bridged, lua_creature_events.go:1006).
 -- Damage passes through unchanged (no return, garaxxas precedent).
 local function taldaramDamageTaken(_, creature, _, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local target = embraceTarget[guid]
     if target and not target:IsDead() then
         local total = (embraceDamage[guid] or 0) + damage
@@ -412,6 +434,11 @@ end
 -- internal (no UpdateAI vanish check is modeled — documented above).
 local function taldaramSpawn(event, creature)
     creature:SetDisableGravity(true)
+    -- C++ LoadObjectData (instance_ahnkahet.cpp:30-37): latch the
+    -- boss GUID under DATA_PRINCE_TALDARAM (instance_guid_store.go;
+    -- the instance-side OnCreatureCreate route is dead for static
+    -- spawns — instance_ahnkahet.lua header).
+    creature:SetGuidData(DATA_PRINCE_TALDARAM)
 end
 
 -- C++ boss_prince_taldaramAI::RemovePrison (:279-292) + CheckSpheres
@@ -468,6 +495,20 @@ local function onTaldaramSphereGossip(_, _, go)
     elseif go:GetEntry() == GO_SPHERE_2 then
         boss:SetData(DATA_SPHERE_2, 1)
     end
+    -- C++ instance->SetData(DATA_SPHERE_1/2, IN_PROGRESS)
+    -- (boss_prince_taldaram.cpp:422-427): feeds the instance
+    -- script's SpheresState + GO re-apply + save
+    -- (instance_ahnkahet.lua; instance_hooks.go SetData fires
+    -- OnSetData event 8, the gundrak-altar precedent).
+    local mapObj = go:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        if go:GetEntry() == GO_SPHERE_1 then
+            data:SetData(DATA_SPHERE_1, 1)
+        elseif go:GetEntry() == GO_SPHERE_2 then
+            data:SetData(DATA_SPHERE_2, 1)
+        end
+    end
     boss:Talk(SAY_1)
     checkSpheres(boss)
     return true
@@ -480,19 +521,19 @@ RegisterCreatureEvent(ENTRY_PRINCE_TALDARAM, 19, function(_, creature, summoned)
             and entry ~= NPC_FLAME_SPHERE_3 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local list = flameSpheres[guid]
     if not list then
         list = {}
         flameSpheres[guid] = list
     end
-    list[summoned:GetGUID()] = summoned
+    list[summoned:GetGUIDLow()] = summoned
     -- C++ sphere Reset (:312-321): triggered spawn-effect +
     -- visual casts, then EVENT_START_MOVE (3s) + EVENT_DESPAWN
     -- (13s). The SetGUID leg lands here as the stored target.
     summoned:CastSpell(summoned, SPELL_FLAME_SPHERE_SPAWN_EFFECT, true)
     summoned:CastSpell(summoned, SPELL_FLAME_SPHERE_VISUAL, true)
-    local sphereGuid = summoned:GetGUID()
+    local sphereGuid = summoned:GetGUIDLow()
     sphereTargets[sphereGuid] = flameSphereTarget[guid]
     local offset = 0
     if entry == NPC_FLAME_SPHERE_2 then

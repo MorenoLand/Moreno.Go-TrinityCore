@@ -63,6 +63,12 @@ local SPELL_ECK_BERSERK = 55816
 local SPELL_ECK_SPRING_1 = 55815
 local SPELL_ECK_SPRING_2 = 55837
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 -- C++ _berserk bool model: true once the early-berserk DamageTaken arm
 -- has fired OR the 60-90s EVENT_BERSERK fired (both set _berserk = true
@@ -211,7 +217,7 @@ end
 -- second qualifying hit is a C++ no-op); the per-key schedule replace
 -- is the RescheduleEvent cancel+reschedule.
 local function eckDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local per = timers[guid]
     if not per or not per["berserk"] or berserkLatched[guid] then
         return
@@ -229,7 +235,7 @@ local function eckDamageTaken(event, creature, attacker, damage)
 end
 
 local function eckEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
@@ -248,15 +254,15 @@ local function eckEnterCombat(event, creature, target)
 end
 
 local function eckLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function eckDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function eckReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_eckAI ctor (boss_eck.cpp:61-65): Talk(EMOTE_SPAWN 0) at AI

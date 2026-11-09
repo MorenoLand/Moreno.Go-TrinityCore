@@ -147,6 +147,12 @@ local NPC_RHINO_SPIRIT = 29791 -- gundrak.h NPC_RHINO_SPIRIT
 local PHASE_TROLL = 1
 local PHASE_RHINO = 2
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 local phaseState = {}
 local impaledPlayers = {} -- [boss guid] = { [player guid] = true }
@@ -407,7 +413,7 @@ end
 -- InterruptNonMeleeSpells(false) (ported below, no-op twin) +
 -- SetPhase(PHASE_TROLL) (:121-:126).
 local function galDarahEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
@@ -426,7 +432,7 @@ end
 -- respawn on their normal spawntime. The summons.DespawnAll leg stays
 -- out (no summon tracking in Lua).
 local function galDarahLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Despawn()
 end
 
@@ -448,7 +454,7 @@ local function galDarahSpellHit(event, creature, caster, spellId)
 end
 
 local function galDarahDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     creature:CastSpell(creature, SPELL_CLEAR_PUNCTURE, true)
 end
@@ -457,12 +463,12 @@ end
 -- DoCastAOE(SPELL_HEARTH_BEAM_VISUAL, true) (:93-:99) — only the triggered
 -- self-cast is bridgeable.
 local function galDarahReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset(): _impaledPlayers.clear() + _phaseCounter = 0
     -- (boss_gal_darah.cpp:93-99) -> GetData(DATA_SHARE_THE_LOVE) = 0;
     -- achievement_share_the_love read leg (tick 417).
-    impaledPlayers[creature:GetGUID()] = nil
-    impaledCount[creature:GetGUID()] = nil
+    impaledPlayers[creature:GetGUIDLow()] = nil
+    impaledCount[creature:GetGUIDLow()] = nil
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's count before
@@ -498,14 +504,14 @@ local function galDarahSpellHitTarget(event, creature, target, spellId)
     -- sits outside the dedupe below. Bridge: creature:Talk(id, target),
     -- lua_creature_events.go:1129.
     creature:Talk(EMOTE_IMPALE, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local set = impaledPlayers[guid]
     if set == nil then
         set = {}
         impaledPlayers[guid] = set
         impaledCount[guid] = 0
     end
-    local pguid = target:GetGUID()
+    local pguid = target:GetGUIDLow()
     if pguid ~= nil and not set[pguid] then
         set[pguid] = true
         impaledCount[guid] = impaledCount[guid] + 1

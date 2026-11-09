@@ -92,6 +92,12 @@ local SPELL_NUMBING_ROAR = 55100
 local SPELL_DETERMINED_STAB = 55104
 local SPELL_DETERMINED_GORE = 55102
 
+-- GUID-key rule: per-GUID tables are keyed on GetGUIDLow() (stable
+-- number). GetGUID() returns a fresh UInt64 userdata per call and
+-- Lua table keys compare userdata by identity, so a key stored
+-- under one call never matches a lookup from another
+-- (engine/scripting/object.go pushUInt64; instance_gundrak.lua
+-- GUID-KEY FIX).
 local timers = {}
 local transformed = {}
 
@@ -226,7 +232,7 @@ end
 RegisterAuraEvent(SPELL_MOJO_FRENZY, 1, mojoFrenzyTick)
 
 local function moorabiEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
@@ -252,8 +258,8 @@ local function moorabiEnterCombat(event, creature, target)
 end
 
 local function moorabiLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
-    transformed[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    transformed[creature:GetGUIDLow()] = nil
     -- C++ EnterEvadeMode (boss_moorabi.cpp:101-104): _DespawnAtEvade()
     -- — the despawn half is creature:Despawn; the instance
     -- SetBossState(FAIL) half rides the no-instance bridge.
@@ -267,8 +273,8 @@ local function moorabiTargetDied(event, creature, victim)
 end
 
 local function moorabiDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    transformed[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    transformed[creature:GetGUIDLow()] = nil
     -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
     -- instance->SetBossState(DATA_MOORABI, DONE). The instance
     -- script's altar-clear leg reads the flag below (no
@@ -306,7 +312,7 @@ local function phantomTick(creature, guid)
 end
 
 local function moorabiReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     transformed[guid] = nil
     -- C++ Reset _transformed = false -> GetData(DATA_LESS_RABI) = 1
@@ -347,7 +353,7 @@ end
 -- SpellHitTarget arm on this unit.)
 local function moorabiSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TRANSFORMATION then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         local first = not transformed[guid]
         transformed[guid] = true
         -- C++ SpellHit(55098) _transformed = true -> GetData(DATA_LESS_RABI)
