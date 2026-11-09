@@ -217,7 +217,9 @@
 -- (:926-939, periodic-strip + FLAMES + 2s death-effect cast) stays
 -- OUT — no chase finalize bridge — so the ball chases but never
 -- detonates; DamageDealt (:965-975, orb-whisperer achievement
--- flag) stays out — no achievement bridge.
+-- flag) stays out — no DamageDealt hook in Go (the criteria case
+-- reads the shared instanceData key; only the Reset set leg is
+-- ported, so the key can over-grant).
 -- npc_kinetic_bomb / npc_dark_nucleus — zero Talk lines; Reset
 -- one-shot aura casts (:987-988, :1047) are aura/visual setup, not
 -- timer arms; the bomb's explode trigger now rides the 72080 aura
@@ -1115,9 +1117,10 @@ end
 -- switch (me->GetEntry()) Talk(death text) — the sjonnir
 -- JustDied-Talk precedent.
 -- C++ BloodPrincesBossAI SetData legs: Reset :452 instance->SetData(DATA_ORB_WHISPERER_ACHIEVEMENT, true)
--- and DamageDealt :549/:965 set it false — achievement criteria, no achievement bridge. JustReachedHome :533
--- controller->AI()->SetData(DATA_PRINCE_EVADE, 1) — cross-AI write into the unported BloodPrinceController;
--- no cross-AI SetData bridge. All three dropped, documented.
+-- PORTED this tick via the shared instanceData orbWhispererEligible key (princesReset); the DamageDealt
+-- clear legs :549 (princes) / :965 (ball of flame) stay out — no DamageDealt hook in Go. JustReachedHome
+-- :533 controller->AI()->SetData(DATA_PRINCE_EVADE, 1) PORTED via the ACTION_PRINCE_EVADE DoAction fold
+-- (controllerDoAction below) — verified this tick vs C++ :304-310.
 local function princesJustDied(event, creature)
     cancelTimers(creature:GetGUIDLow())
     despawnValanarSummons(creature:GetGUIDLow())
@@ -1147,6 +1150,20 @@ local function princesReset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
     creature:SetHealth(1) -- boss_blood_prince_council.cpp:451 (base Reset arm; SetHealth(_spawnHealth), _spawnHealth = 1 per InitializeAI :438)
+    -- C++ :452 instance->SetData(DATA_ORB_WHISPERER_ACHIEVEMENT 18, true)
+    -- via the shared instanceData orbWhispererEligible key (rotface
+    -- oozeDanceEligible precedent); the criteria case reads it with
+    -- the C++ ctor default true. The DamageDealt clear legs (:549
+    -- princes, :965 ball of flame) stay out — no DamageDealt hook in
+    -- Go — so the key can over-grant when a prince deals >23k/25k
+    -- direct damage.
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            data.orbWhispererEligible = 1
+        end
+    end
     -- NOTE (2026-11-09): the UNIT_FLAG_NON_ATTACKABLE (0x2) clear is
     -- NOT here. C++ clears it only in the controller-Reset intro loop
     -- (:239-250), which runs AFTER the reach-home set in the wipe

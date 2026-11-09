@@ -1685,11 +1685,12 @@ func checkUlduarCriteria(s *session, criteriaID uint32) bool {
 // CheckAchievementCriteriaMeet (instance_icecrown_citadel.cpp:
 // 1140-1178). Criteria IDs are the ICCAchievementData enum
 // (icecrown_citadel.h:448-477). The four eligibility latches live
-// in the C++ instance script (ctor :156-159 sets all true); only
-// Boned has a bridged write path — the other three clear legs are
-// a SpellScript (Nausea, Ooze Dance) or a DamageDealt hook (Orb
-// Whisperer), neither of which Go exposes, so they stay
-// fail-closed. The max-players legs read
+// in the C++ instance script (ctor :156-159 sets all true). Boned,
+// Ooze Dance and Orb Whisperer have bridged write paths via the
+// shared instanceData keys; Nausea stays fail-closed (its clear leg
+// is a SpellScript Go does not expose). Orb Whisperer's clear legs
+// need a DamageDealt hook Go does not expose, so its key can
+// over-grant. The max-players legs read
 // instance->ToInstanceMap()->GetMaxPlayers(); the spawn mode is
 // the twin (0/2 = 10-man, 1/3 = 25-man).
 func checkIcecrownCitadelCriteria(s *session, criteriaID uint32) bool {
@@ -1733,9 +1734,13 @@ func checkIcecrownCitadelCriteria(s *session, criteriaID uint32) bool {
 		// C++ :1159-1163 returns IsOrbWhispererEligible: set
 		// true by blood-prince Reset (:452), cleared when a
 		// prince deals >23000/25000 direct spell damage
-		// (boss_blood_prince_council.cpp:549/965) — no
-		// DamageDealt hook in Go, fail-closed.
-		return false
+		// (boss_blood_prince_council.cpp:549/965). The set leg
+		// ports in Lua via the shared instanceData
+		// orbWhispererEligible key (1/0 numbers); absent reads
+		// as the C++ ctor default true. The clear legs stay out
+		// — no DamageDealt hook in Go — so the key can
+		// over-grant when a prince deals heavy direct damage.
+		return num("orbWhispererEligible", 1) >= 1
 	case 13340, 12780, 13011: // CRITERIA_KILL_LANA_THEL_10M / ONCE_BITTEN_10N/10V
 		return is10Man
 	case 13360, 13012, 13013: // CRITERIA_KILL_LANA_THEL_25M / ONCE_BITTEN_25N/25V
