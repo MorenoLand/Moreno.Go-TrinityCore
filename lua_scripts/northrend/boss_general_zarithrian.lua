@@ -269,7 +269,7 @@ local function zarithrianEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "cleave", 8000, function()
         cleaveTick(creature, guid)
@@ -289,7 +289,7 @@ local function zarithrianEnterCombat(event, creature, target)
 end
 
 local function zarithrianLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_general_zarithrian.cpp:120-124):
     -- summons.DespawnAll() (no summon-registry bridge) +
     -- _DespawnAtEvade() -> instance->SetBossState(FAIL)
@@ -305,7 +305,7 @@ end
 -- early like the moroes precedent (C++ _Reset returns early when the
 -- boss is dead, ScriptedCreature.cpp:499-501).
 local function zarithrianReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:IsDead() then
         return
     end
@@ -342,7 +342,7 @@ end
 -- (ScriptedCreature.cpp:513-519) sets SetBossState(DONE) first;
 -- PORTED 2026-11-06 via creature:SetBossState (live bridge).
 local function zarithrianDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_GENERAL_ZARITHRIAN, 3) -- DONE
     creature:Talk(SAY_DEATH)
 end
@@ -415,7 +415,7 @@ end
 -- motion leg has no bridge; the REACT_DEFENSIVE arm is PORTED
 -- 2026-10-20 — creature:SetReactState).
 local function flamecallerEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     flamecallerState[guid] = { lavaGout = 0 }
     schedule(guid, "blast_nova", 17000, function()
@@ -427,15 +427,15 @@ local function flamecallerEnterCombat(event, creature, target)
 end
 
 local function flamecallerLeaveCombat(event, creature)
-    flamecallerCancel(creature:GetGUID())
+    flamecallerCancel(creature:GetGUIDLow())
 end
 
 local function flamecallerDied(event, creature, killer)
-    flamecallerCancel(creature:GetGUID())
+    flamecallerCancel(creature:GetGUIDLow())
 end
 
 local function flamecallerReset(event, creature)
-    flamecallerCancel(creature:GetGUID())
+    flamecallerCancel(creature:GetGUIDLow())
     -- C++ boss_general_zarithrian.cpp:193: me->SetReactState(REACT_DEFENSIVE)
     -- (npc_onyx_flamecaller Reset: DEFENSIVE is the permanent baseline).
     creature:SetReactState(1) -- REACT_DEFENSIVE

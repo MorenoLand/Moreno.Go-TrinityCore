@@ -146,7 +146,7 @@ end
 -- seeds — BRUTAL_STRIKE / CRUSHING_LEAP / DAGGER_THROW / CHECK_RANGE
 -- port (below); SpellHit ported in iocBossSpellHit below.
 local function iocBossJustEngagedWith(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "brutal_strike", 5000, function() onBrutalStrike(creature, guid) end)
     schedule(guid, "crushing_leap", 15000, function() onCrushingLeap(creature, guid) end)
@@ -163,11 +163,11 @@ end
 -- the C++ DEAD-gated restore block. LeaveCombat/JustDied carry only
 -- the timer wipe (maiden convention).
 local function iocBossLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function iocBossReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local guardEntry = ENTRY_SEVENTH_LEGION_INFANTRY
     if creature:GetEntry() ~= ENTRY_HALFORD_WYRMBANE then
         guardEntry = ENTRY_KOR_KRON_GUARD
@@ -178,7 +178,7 @@ local function iocBossReset(event, creature)
 end
 
 local function iocBossDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- Documented-only arms (no bridge):

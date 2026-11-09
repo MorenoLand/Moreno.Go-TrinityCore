@@ -310,7 +310,7 @@ local function baltharusEnterCombat(event, creature, target)
     creature:SetBossState(DATA_BALTHARUS_THE_WARBORN, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "cleave", 13000, function()
         cleaveTick(creature, guid)
@@ -334,7 +334,7 @@ local function despawnClones(creature)
 end
 
 local function baltharusLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     despawnClones(creature)
     cancelTimers(guid)
     cloneCount[guid] = nil
@@ -352,7 +352,7 @@ local function baltharusLeaveCombat(event, creature)
 end
 
 local function baltharusReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     cloneCount[guid] = nil
     -- C++ Reset (boss_baltharus_the_warborn.cpp:78-86): _Reset() first
@@ -413,7 +413,7 @@ local function baltharusCloneTick(creature, guid)
 end
 
 local function baltharusDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not cloneCount[guid] then
         cloneCount[guid] = 0
     end
@@ -467,7 +467,7 @@ local function baltharusJustSummoned(event, creature, summon)
         return
     end
     summon:SetHealth(creature:GetHealth())
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "summonsattack", 2000, function()
         if summon:IsAlive() then
             summon:DoZoneInCombat()
@@ -483,7 +483,7 @@ end
 -- first arm, moroes precedent; the DoAction leg ports below via grid
 -- sweep + timed Talk chain).
 local function baltharusDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     despawnClones(creature)
     creature:SetBossState(DATA_BALTHARUS_THE_WARBORN, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
@@ -497,7 +497,7 @@ local function baltharusDied(event, creature, killer)
     -- relayProfessor idiom: first alive match, unique entry, 100yd).
     for _, xerestrasza in ipairs(creature:GetCreaturesInGrid(ENTRY_XERESTRASZA, 100)) do
         if xerestrasza:IsAlive() then
-            local xguid = xerestrasza:GetGUID()
+            local xguid = xerestrasza:GetGUIDLow()
             xerestrasza:SetFarVisible(true)
             xerestrasza:Talk(SAY_XERESTRASZA_EVENT)
             xerestrasza:SetWalk(true)
@@ -542,7 +542,7 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)
 -- Reset cancels any pending chain event and clears the questgiver flag
 -- the 69s event set (the setActive legs stay out, as in baltharusDied).
 local function xerestraszaReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_QUESTGIVER)
 end
 
@@ -559,7 +559,7 @@ RegisterCreatureEvent(ENTRY_XERESTRASZA, 23, xerestraszaReset)
 -- is the same no-brand pool = enervatingBrandTick.
 local function cloneEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- C++ :257, first in arm order (live bridge lua_creature_events.go; 2026-10-23)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "cleave", 11000, function()
         cleaveTick(creature, guid)
@@ -573,7 +573,7 @@ local function cloneEnterCombat(event, creature, target)
 end
 
 local function cloneLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_baltharus_the_warborn_clone::Reset
@@ -582,7 +582,7 @@ end
 -- (REACT_DEFENSIVE) — the react-state leg rides the SetReactState bridge
 -- (engine/world/lua_creature_events.go).
 local function cloneReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:CastSpell(creature, SPELL_SPAWN_EFFECT)
     creature:SetReactState(REACT_DEFENSIVE)
 end
@@ -597,7 +597,7 @@ end
 -- Nil when the boss was never latched (the C++ nullptr twin). Timers
 -- are cancelled so the clone's scheduler doesn't fire on the corpse.
 local function cloneDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local baltharus = creature:GetInstanceCreature(DATA_BALTHARUS_THE_WARBORN)
     if baltharus ~= nil then
         baltharus:Kill(killer)

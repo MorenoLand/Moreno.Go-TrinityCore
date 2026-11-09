@@ -175,7 +175,7 @@ local function savianaEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "enrage", 20000, function()
         enrageTick(creature, guid)
@@ -186,7 +186,7 @@ local function savianaEnterCombat(event, creature, target)
 end
 
 local function savianaLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- JustDied's _JustDied() instance leg is PORTED via
@@ -197,13 +197,13 @@ end
 -- _JustDied() first, then DoPlaySoundToSet(me, SOUND_ID_DEATH 17531);
 -- zero Talk lines in the arm.
 local function savianaDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_SAVIANA_RAGEFIRE, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:PlayDirectSound(SOUND_ID_DEATH)
 end
 
 local function savianaReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_saviana_ragefire::Reset (boss_saviana_ragefire.cpp:80-86):
     -- _Reset() -> SetReactState(REACT_AGGRESSIVE) -> me->SetCanFly(false)
     -- (:85) -> me->SetDisableGravity(false) (:86). BossAI::_Reset

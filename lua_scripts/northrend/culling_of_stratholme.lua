@@ -380,7 +380,7 @@ local function chromieMiddleCancelTimers(guid)
 end
 
 local function onChromieMiddleSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     chromieMiddleCancelTimers(guid)
     chromieMiddleWhispered[guid] = {}
     local data = instanceDataOf(creature)
@@ -399,10 +399,10 @@ end
 
 RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 5, onChromieMiddleSpawn)
 RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 4, function(event, creature)
-    chromieMiddleCancelTimers(creature:GetGUID())
+    chromieMiddleCancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_CHROMIE_MIDDLE, 23, function(event, creature)
-    chromieMiddleCancelTimers(creature:GetGUID())
+    chromieMiddleCancelTimers(creature:GetGUIDLow())
 end)
 
 -- C++ OnGossipHello (culling_of_stratholme.cpp:508-514): quest menu
@@ -675,7 +675,7 @@ end
 -- dispatch exists but is bypassed: the relay already holds the
 -- bartleby object, so no GUID-to-creature lookup is needed.
 local function bartlebyStartFluff(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if bartlebyStarted[guid] then
         return
     end
@@ -702,7 +702,7 @@ end
 -- reveals roger (C++ would stack a second START event).
 -- Called directly by the crate_helper relay below.
 local function rogerStartFluff(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "fluff", math.random(5000, 12000), function()
         creature:SetStandState(UNIT_STAND_STATE_STAND)
         creature:SetFacingTo(1.53589)
@@ -716,7 +716,7 @@ local function rogerStartFluff(creature)
 end
 
 local function onBartlebySpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     bartlebyStarted[guid] = false
     schedule(guid, "idle", math.random(60000, 120000), function()
@@ -726,10 +726,10 @@ end
 
 RegisterCreatureEvent(ENTRY_BARTLEBY, 5, onBartlebySpawn)
 RegisterCreatureEvent(ENTRY_BARTLEBY, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_BARTLEBY, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 -- C++ Perelli(line[, ori]): nearest perelli Talks line to the
@@ -782,7 +782,7 @@ onMoriganIdle2 = function(creature, guid)
 end
 
 local function onMoriganSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     moriganStarted[guid] = false
     schedule(guid, "idle1", math.random(5000, 15000), function()
@@ -792,10 +792,10 @@ end
 
 RegisterCreatureEvent(ENTRY_SERGEANT, 5, onMoriganSpawn)
 RegisterCreatureEvent(ENTRY_SERGEANT, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_SERGEANT, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 
 -- C++ npc_martha_goslin (culling_of_stratholme.cpp:607-700, tick 402).
@@ -856,7 +856,7 @@ end
 -- saved info is unchanged, so the first interrupt's chain/idle are
 -- kept here too.
 local function marthaInterrupt(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local chain = marthaChain[guid]
     local idleKey = marthaIdleKey[guid]
     if chain ~= nil then
@@ -885,7 +885,7 @@ local function marthaInterrupt(creature)
 end
 
 local function onMarthaSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:EmoteState(EMOTE_STATE_USE_STANDING)
     marthaScheduleIdle(creature, guid, "idle2", math.random(5000, 10000))
@@ -895,7 +895,7 @@ local function onMarthaMovementInform(event, creature, type, id)
     if type ~= SPLINE_CHAIN_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     marthaChain[guid] = nil
     if id == MOVEID_EVENT1 then
         creature:EmoteState(EMOTE_STATE_USE_STANDING)
@@ -910,10 +910,10 @@ end
 
 RegisterCreatureEvent(ENTRY_MARTHA, 5, onMarthaSpawn)
 RegisterCreatureEvent(ENTRY_MARTHA, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_MARTHA, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_MARTHA, 28, onMarthaMovementInform)
 
@@ -924,7 +924,7 @@ RegisterCreatureEvent(ENTRY_MARTHA, 28, onMarthaMovementInform)
 -- as jenaStartFluff — Started is read only at the INITIAL-chain
 -- arrival, so a late reveal is a no-op in practice).
 local function jenaStartFluff(creature)
-    jenaStarted[creature:GetGUID()] = true
+    jenaStarted[creature:GetGUIDLow()] = true
 end
 
 local function jenaFindMartha(creature)
@@ -984,7 +984,7 @@ local function onJenaMovementInform(event, creature, type, id)
     if type ~= SPLINE_CHAIN_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == MOVEID_EVENT1 then
         if jenaStarted[guid] then
             schedule(guid, "start", math.random(1000, 3000), function()
@@ -1028,7 +1028,7 @@ local function onJenaMovementInform(event, creature, type, id)
 end
 
 local function onJenaSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     jenaStarted[guid] = false
     if creature:IsMoving() then
@@ -1039,10 +1039,10 @@ end
 
 RegisterCreatureEvent(ENTRY_JENA, 5, onJenaSpawn)
 RegisterCreatureEvent(ENTRY_JENA, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_JENA, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_JENA, 28, onJenaMovementInform)
 
@@ -1112,7 +1112,7 @@ local function onMalcolmMovementInform(event, creature, type, id)
     if type ~= SPLINE_CHAIN_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == MOVEID_EVENT1 then
         creature:Talk(0)
         creature:MoveAlongSplineChain(MOVEID_EVENT2, CHAIN_MALCOLM2, true)
@@ -1153,7 +1153,7 @@ local function onMalcolmMovementInform(event, creature, type, id)
 end
 
 local function onMalcolmSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:MoveAlongSplineChain(MOVEID_EVENT1, CHAIN_MALCOLM1, true)
     local scruffy = creature:SummonCreature(ENTRY_SCRUFFY, SCRUFFY_SPAWN[1], SCRUFFY_SPAWN[2], SCRUFFY_SPAWN[3], SCRUFFY_SPAWN[4])
@@ -1164,10 +1164,10 @@ end
 
 RegisterCreatureEvent(ENTRY_MALCOLM, 5, onMalcolmSpawn)
 RegisterCreatureEvent(ENTRY_MALCOLM, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_MALCOLM, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_MALCOLM, 28, onMalcolmMovementInform)
 
@@ -1205,7 +1205,7 @@ local function onRogerMovementInform(event, creature, type, id)
     if type ~= SPLINE_CHAIN_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == MOVEID_EVENT1 then
         creature:Talk(1)
         schedule(guid, "face3", 5000, function()
@@ -1259,7 +1259,7 @@ local function onBartlebyMovementInform(event, creature, type, id)
     if type ~= SPLINE_CHAIN_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == MOVEID_EVENT1 then
         creature:SetStandState(UNIT_STAND_STATE_KNEEL)
         schedule(guid, "fluff2", 4000, function()
@@ -1313,7 +1313,7 @@ local function onMoriganMovementInform(event, creature, type, id)
     if type ~= SPLINE_CHAIN_MOTION_TYPE then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if id == MOVEID_EVENT1 then
         creature:SetStandState(UNIT_STAND_STATE_KNEEL)
         schedule(guid, "sergeant1", 1000, function()
@@ -1365,7 +1365,7 @@ local function onCrateHelperSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_ARCANE_DISRUPTION then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if crateRevealed[guid] then
         return
     end
@@ -1400,7 +1400,7 @@ local function onCrateHelperSpellHit(event, creature, caster, spellId)
     if entry == ENTRY_BARTLEBY then
         bartlebyStartFluff(closest)
     elseif entry == ENTRY_SERGEANT then
-        moriganStarted[closest:GetGUID()] = true
+        moriganStarted[closest:GetGUIDLow()] = true
     elseif entry == ENTRY_ROGER then
         rogerStartFluff(closest)
     elseif entry == ENTRY_JENA then
@@ -1413,8 +1413,8 @@ RegisterCreatureEvent(ENTRY_CRATE_HELPER, 14, onCrateHelperSpellHit)
 -- Roger has no spawn behavior in C++ (no InitializeAI); these only
 -- cancel a pending fluff timer if roger despawns/leaves combat.
 RegisterCreatureEvent(ENTRY_ROGER, 4, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)
 RegisterCreatureEvent(ENTRY_ROGER, 23, function(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end)

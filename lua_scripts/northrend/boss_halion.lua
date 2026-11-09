@@ -540,7 +540,7 @@ end
 -- controller leg has no bridge (documented above).
 local function halionEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     fightPhaseThree = false
@@ -588,7 +588,7 @@ local function halionEnterCombat(event, creature, target)
 end
 
 local function halionCombatEnd(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     fightPhaseThree = false
@@ -619,7 +619,7 @@ end
 -- reach-home FAIL would fabricate a leg — the FAIL rides this
 -- ev23 evade-fire instead.
 local function halionReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     phaseTwo[guid] = nil
     fightPhaseThree = false
@@ -652,7 +652,7 @@ end
 -- (creature:StopSpellCast() before the Phasing cast, 2026-11-05);
 -- the controller SetData leg rides the no-cross-AI bridge.
 local function halionDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ :283 reads IsInPhase(PHASE_THREE) before the transition
     -- checks, so the phase-crossing blow is still capped.
     local wasPhaseThree = fightPhaseThree
@@ -709,7 +709,7 @@ end
 -- (the hexlord JustDied precedent — no GUID->creature bridge, and
 -- the instance guid store is never latched for these temp summons).
 local function halionDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     fightPhaseThree = false
     creature:SetBossState(DATA_HALION, 3) -- DONE (_JustDied, first arm)
     creature:Talk(SAY_DEATH)
@@ -893,7 +893,7 @@ local twilightEngaged = {}
 -- SOUL_CONSUMPTION's constructor schedule is re-anchored the same
 -- way — tailLashTick precedent).
 local function twilightEngage(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     fightPhaseThree = false
     twilightEngaged[guid] = true
@@ -933,7 +933,7 @@ local function twilightHalionClearPhase(guid)
 end
 
 local function twilightHalionLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
     twilightEngaged[guid] = nil
@@ -945,7 +945,7 @@ end
 -- npc_halion_controllerAI::Reset (entry 40146, unregistered). Event 23
 -- only cancels timers.
 local function twilightHalionReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
     twilightEngaged[guid] = nil
@@ -964,7 +964,7 @@ end
 -- bookkeeping only). The Kill legs ride creature:Kill over the grid
 -- scan (hexlord precedent, as in halionDied above).
 local function twilightHalionDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     twilightHalionClearPhase(guid)
     twilightEngaged[guid] = nil
@@ -1007,7 +1007,7 @@ end
 -- damage-routing leg (controller->AI()->SetData
 -- (DATA_TWILIGHT_DAMAGE_TAKEN)) rides the no-cross-AI bridge.
 local function twilightHalionDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ :469 reads IsInPhase(PHASE_THREE) before the 50% check, so
     -- the phase-crossing blow is still capped.
     local wasPhaseThree = twilightPhaseThree[guid]
