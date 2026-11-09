@@ -21370,6 +21370,13 @@ func init() {
 	// bomb-despawn arm in lua_scripts/northrend/boss_blood_prince_council.lua
 	// (tick 232; ev38 handler, sender is the ported 72080 aura tick).
 	RegisterLuaBoss("npc_kinetic_bomb", 38454)
+	// npc_ball_of_flame: Icecrown Citadel ball of flame (38332,
+	// NPC_BALL_OF_FLAME) and ball of inferno flame (38451,
+	// NPC_BALL_OF_INFERNO_FLAME) — Reset aura casts, flame-ball-visual
+	// OnRemove (71714 + chase DoAction) and the chase receiver in
+	// lua_scripts/northrend/boss_blood_prince_council.lua (tick 497).
+	RegisterLuaBoss("npc_ball_of_flame", 38332)
+	RegisterLuaBoss("npc_ball_of_inferno_flame", 38451)
 
 	// boss_blood_queen_lana_thel: Icecrown Citadel boss script,
 	// entry 37955 (icecrown_citadel.h NPC_BLOOD_QUEEN_LANA_THEL —

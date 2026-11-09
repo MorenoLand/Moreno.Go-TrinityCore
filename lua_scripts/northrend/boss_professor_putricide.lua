@@ -195,6 +195,14 @@ local SPELL_SLIME_PUDDLE_AURA = 70343
 local SPELL_GROW = 70347
 local SPELL_CHOKING_GAS_BOMB_PERIODIC = 71259
 local SPELL_CHOKING_GAS_EXPLOSION_TRIGGER = 71280
+local SPELL_TEAR_GAS_CREATURE = 71618 -- boss_professor_putricide.cpp:76
+local SPELL_TEAR_GAS_CANCEL = 71620 -- boss_professor_putricide.cpp:77
+local SPELL_OOZE_ERUPTION_SEARCH_PERIODIC = 70457 -- boss_professor_putricide.cpp:104
+local SPELL_OOZE_ERUPTION = 70492 -- boss_professor_putricide.cpp:102
+local SPELL_VOLATILE_OOZE_ADHESIVE = 70447 -- boss_professor_putricide.cpp:103
+local SPELL_GASEOUS_BLOAT_PROC = 70215 -- boss_professor_putricide.cpp:99
+local SPELL_EXPUNGED_GAS = 70701 -- boss_professor_putricide.cpp:100
+local NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER = 37824 -- icecrown_citadel.h:235
 
 local NPC_MALLEABLE_OOZE_STALKER = 38556
 local NPC_GROWING_OOZE_PUDDLE = 37690
@@ -337,8 +345,11 @@ end
 
 -- C++ Reset :236 instance->SetData(DATA_NAUSEA_ACHIEVEMENT, true) and ExtraEffect :1382 set it false:
 -- achievement criteria, no achievement bridge (the lich-king no-achievement-criteria-bridge precedent).
--- DATA_EXPERIMENT_STAGE (:971-972) toggles inside the unbridged spell_putricide_unstable_experiment
--- SpellScript and is only read there — the whole chain joins the no-SpellScript-bridge queue. Dropped, documented.
+-- DATA_EXPERIMENT_STAGE (:971-972) toggles inside
+-- spell_putricide_unstable_experiment — NOT yet ported (consts staged
+-- above; gate check pending: ev5 fire for the self-cast SCRIPT_EFFECT
+-- + 70351 default case, tick-496 triage). No blanket
+-- no-SpellScript-bridge queue claim (RegisterSpellEvent exists).
 local function putricideReset(event, creature)
     -- C++ Reset :234-235 — instance->SetBossState(
     -- DATA_PROFESSOR_PUTRICIDE, NOT_STARTED), gated on NOT being in

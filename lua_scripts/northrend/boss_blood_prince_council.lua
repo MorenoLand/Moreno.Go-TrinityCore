@@ -196,7 +196,9 @@
 -- keleseth/taldaram/valanar JustSummoned (:634-642, :697-710,
 -- :770-789) — PARTLY PORTED via the ev19 handlers: keleseth
 -- teleport (open-space exact), taldaram random-target pick +
--- emote + SetGUID store (ball chase DoAction out), valanar
+-- emote + SetGUID store (ball chase DoAction PORTED 2026-11-09:
+-- aura-remove -> ev38 chase via ballChaseTarget; base ball 38332
+-- takes the SetGUID store with no emote), valanar
 -- bomb-target react/cast + vortex dummy/periodic casts (bomb
 -- MovePoint ground-Z + DoZoneInCombat(summon) out).
 -- npc_blood_queen_lana_thel — Talk(SAY_INTRO_1 0) rides
@@ -204,15 +206,30 @@
 -- blood-queen intro machine — dispatch IS bridged, ev38);
 -- Talk(SAY_INTRO_2 1) rides EVENT_INTRO_1 (:896-905, intro scheduler
 -- leg, no-timer-bridge) — NOT registered.
--- npc_ball_of_flame / npc_kinetic_bomb / npc_dark_nucleus — zero Talk
--- lines; Reset one-shot aura casts (:919-924, :987-988, :1047) are
--- aura/visual setup, not timer arms; the bomb's explode trigger now
--- rides the 72080 aura tick (ported tick 189) and its despawn leg
--- rides the same tick's DoAction(72052) -> ev38 handler (PORTED tick
--- 232; bomb registered in boss_ai.go). The chase leg
--- (ACTION_KINETIC_BOMB_JUMP, MoveCharge — no bridge) stays OUT.
--- (Their JustSummoned legs port via the boss ev19 handlers above,
--- not via AI registration.)
+-- npc_ball_of_flame — PORTED 2026-11-09 (registered in boss_ai.go):
+-- Reset one-shot aura casts (:919-924) via ev23; the
+-- flame-ball-visual AuraScript OnRemove (:1148-1160) via
+-- RegisterAuraEvent kind 3 (55891 -> triggered 71714 + DoAction
+-- chase; 55947 -> despawn); the DoAction chase (:949-957) via ev38
+-- (ClearUnitState + Attack + MoveChase). MovementInform arrival
+-- (:926-939, periodic-strip + FLAMES + 2s death-effect cast) stays
+-- OUT — no chase finalize bridge — so the ball chases but never
+-- detonates; DamageDealt (:965-975, orb-whisperer achievement
+-- flag) stays out — no achievement bridge.
+-- npc_kinetic_bomb / npc_dark_nucleus — zero Talk lines; Reset
+-- one-shot aura casts (:987-988, :1047) are aura/visual setup, not
+-- timer arms; the bomb's explode trigger now rides the 72080 aura
+-- tick (ported tick 189) and its despawn leg rides the same tick's
+-- DoAction(72052) -> ev38 handler (PORTED tick 232; bomb registered
+-- in boss_ai.go). The chase leg (ACTION_KINETIC_BOMB_JUMP,
+-- MoveCharge — no bridge) stays OUT. (Their JustSummoned legs port
+-- via the boss ev19 handlers above, not via AI registration.)
+-- BloodPrincesBossAI::JustReachedHome (:525-534) — PORTED 2026-11-09
+-- via ev24 (DISENGAGE frame + SetHealth(1) + empowered clear +
+-- NON_ATTACKABLE set + evade-counter DoAction to the controller;
+-- the counter evades the controller at 3, :306-310). The 0x2 clear
+-- rides controllerReset (the :239-250 intro-loop twin), NOT
+-- princesReset — ev23 fires before ev24 in the wipe sequence.
 -- UpdateAI UNIT_STATE_CASTING gates — PORTED 2026-11-04 (creature:IsCasting
 -- 500ms defer, mal_ganis idiom; the old "no live unit-state read bridge /
 -- timers fire unconditionally" claim is retracted): controller :366/:401
@@ -250,6 +267,19 @@ local ENTRY_KINETIC_BOMB = 38454 -- icecrown_citadel.h:254 (NPC_KINETIC_BOMB)
 local ENTRY_KINETIC_BOMB_TARGET = 38458 -- icecrown_citadel.h:253 (NPC_KINETIC_BOMB_TARGET)
 local ENTRY_SHOCK_VORTEX = 38422 -- icecrown_citadel.h:255 (NPC_SHOCK_VORTEX)
 local ENTRY_BALL_OF_INFERNO_FLAME = 38451 -- icecrown_citadel.h:251 (NPC_BALL_OF_INFERNO_FLAME)
+local ENTRY_BALL_OF_FLAME = 38332 -- icecrown_citadel.h:251 (NPC_BALL_OF_FLAME)
+local SPELL_FLAME_SPHERE_SPAWN_EFFECT = 55891 -- boss_blood_prince_council.cpp:94
+local SPELL_BALL_OF_FLAMES_VISUAL = 71706 -- boss_blood_prince_council.cpp:95
+local SPELL_BALL_OF_FLAMES = 71714 -- boss_blood_prince_council.cpp:96
+local SPELL_BALL_OF_FLAMES_PROC = 71756 -- boss_blood_prince_council.cpp:101
+local SPELL_BALL_OF_FLAMES_PERIODIC = 71709 -- boss_blood_prince_council.cpp:102
+local SPELL_FLAME_SPHERE_DEATH_EFFECT = 55947 -- boss_blood_prince_council.cpp:98
+local SPELL_REMOVE_EMPOWERED_BLOOD = 72131 -- boss_blood_prince_council.cpp:110
+local ACTION_FLAME_BALL_CHASE = 7 -- boss_blood_prince_council.cpp:159
+local ACTION_PRINCE_EVADE = 100 -- Lua-only carrier (see princesReachHome)
+local DATA_BLOOD_PRINCES_CONTROL = 22 -- icecrown_citadel.h:98
+local UNIT_STATE_CASTING = 0x8000 -- Unit.h:226
+local UNIT_STATE_STUNNED = 0x08 -- Unit.h:214
 local SPELL_KINETIC_BOMB = 72080 -- boss_blood_prince_council.cpp:107
 local SPELL_KINETIC_BOMB_EXPLOSION = 72052 -- boss_blood_prince_council.cpp:115
 local SPELL_KINETIC_BOMB_VISUAL = 72054 -- boss_blood_prince_council.cpp:114
@@ -312,14 +342,77 @@ local taldaramSummons = {}
 -- observable leg. Cleared with the despawn list.
 local ballTargets = {}
 
+-- Ball-GUID-keyed chase target for the ball's own ev38 DoAction
+-- receiver (the taldaram ev19 handler stores the same target in
+-- ballTargets[taldaramGuid] for the despawn sweep; this flat map is
+-- what the ball reads when its aura-remove leg fires DoAction).
+local ballChaseTarget = {}
+
 local function despawnTaldaramSummons(guid)
     local list = taldaramSummons[guid]
     if list then
-        for _, summon in pairs(list) do
+        for summonGuid, summon in pairs(list) do
+            ballChaseTarget[summonGuid] = nil
             summon:Despawn()
         end
         ballTargets[guid] = nil
         taldaramSummons[guid] = nil
+    end
+end
+
+-- C++ npc_ball_of_flame::Reset (:919-924): triggered self-casts of
+-- the spawn effect + visual; inferno flames additionally cast the
+-- proc + periodic auras triggered. ev23 fires on first spawn too
+-- (fireCreatureSpawned, creaturemotion.go:1240-1262), matching the
+-- C++ spawn-Reset.
+local function ballOfFlameReset(event, creature)
+    creature:CastSpell(creature, SPELL_FLAME_SPHERE_SPAWN_EFFECT, true)
+    creature:CastSpell(creature, SPELL_BALL_OF_FLAMES_VISUAL, true)
+    if creature:GetEntry() == ENTRY_BALL_OF_INFERNO_FLAME then
+        creature:CastSpell(creature, SPELL_BALL_OF_FLAMES_PROC, true)
+        creature:CastSpell(creature, SPELL_BALL_OF_FLAMES_PERIODIC, true)
+    end
+end
+
+-- C++ spell_taldaram_flame_ball_visual::OnRemove (:1148-1160,
+-- AfterEffectRemove, SPELL_AURA_MOD_STUN, AURA_EFFECT_HANDLE_REAL):
+-- removal of the spawn effect casts Ball of Flames (71714) on the
+-- ball triggered and sends ACTION_FLAME_BALL_CHASE; removal of the
+-- death effect despawns the ball. Ported via RegisterAuraEvent kind
+-- 3 (OnRemove, lua_aura.go fireAuraRemove — the AfterEffectRemove
+-- legs run in the same single fire). The Load() entry gate
+-- (38332/38451) is carried in the handler. The 55947 leg is dormant:
+-- its only caster is the unported MovementInform arrival leg.
+local function flameBallVisualRemove(spellId, event, aura, target)
+    if target:GetEntry() ~= ENTRY_BALL_OF_FLAME
+        and target:GetEntry() ~= ENTRY_BALL_OF_INFERNO_FLAME then
+        return
+    end
+    if spellId == SPELL_FLAME_SPHERE_SPAWN_EFFECT then
+        target:CastSpell(target, SPELL_BALL_OF_FLAMES, true)
+        target:DoAction(ACTION_FLAME_BALL_CHASE)
+    else
+        target:DespawnOrUnsummon()
+    end
+end
+
+-- C++ npc_ball_of_flame::DoAction ACTION_FLAME_BALL_CHASE (:949-957):
+-- clear CASTING|STUNNED, Attack(target, true), MoveChase(target,
+-- 1.0f). The chase target is the taldaram ev19 SetGUID store
+-- (ballChaseTarget). MovementInform arrival (:926-939, remove
+-- periodic + FLAMES + 2s death-effect cast) stays out — no chase
+-- finalize bridge — so the ball chases but never detonates.
+local function ballOfFlameDoAction(event, creature, action)
+    if action ~= ACTION_FLAME_BALL_CHASE then
+        return
+    end
+    local target = ballChaseTarget[creature:GetGUID()]
+    if target == nil then
+        return
+    end
+    creature:ClearUnitState(UNIT_STATE_CASTING + UNIT_STATE_STUNNED)
+    if creature:Attack(target, true) then
+        creature:MoveChase(target, 1.0)
     end
 end
 local ENTRY_DARK_NUCLEUS = 38369 -- icecrown_citadel.h:250 (NPC_DARK_NUCLEUS)
@@ -980,6 +1073,53 @@ local function princesReset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_blood_prince_council.cpp:447 (base Reset arm; pulse disable)
     creature:RemoveFlag(59, 0x100) -- boss_blood_prince_council.cpp:449 (base Reset arm; SetImmuneToPC(false) = clear UNIT_FLAG_IMMUNE_TO_PC)
     creature:SetHealth(1) -- boss_blood_prince_council.cpp:451 (base Reset arm; SetHealth(_spawnHealth), _spawnHealth = 1 per InitializeAI :438)
+    -- NOTE (2026-11-09): the UNIT_FLAG_NON_ATTACKABLE (0x2) clear is
+    -- NOT here. C++ clears it only in the controller-Reset intro loop
+    -- (:239-250), which runs AFTER the reach-home set in the wipe
+    -- sequence — clearing here (ev23 fires before ev24) would be a
+    -- no-op against the wipe flag. The clear rides controllerReset
+    -- below, the loop's Lua twin.
+end
+
+-- Per-controller evade counter: C++ boss_blood_council_controller::
+-- SetData(DATA_PRINCE_EVADE 4, 1) (:306-310) accumulates _resetCounter
+-- and evades the controller at 3 (all three princes home). The
+-- controller has no SetData override consumer beyond that counter, so
+-- the cross-AI write folds into a DoAction dispatch (the invocation
+-- rotation precedent): each prince's reach-home sends
+-- ACTION_PRINCE_EVADE (100, Lua-only) and the controller's ev38
+-- receiver counts it. Reset in controllerReset (the Initialize twin,
+-- :228-232).
+local evadeCounter = {}
+
+local function controllerDoAction(event, creature, action)
+    if action ~= ACTION_PRINCE_EVADE then
+        return
+    end
+    local guid = creature:GetGUID()
+    local count = (evadeCounter[guid] or 0) + 1
+    evadeCounter[guid] = count
+    if count == 3 then
+        creature:EnterEvadeMode()
+    end
+end
+
+-- C++ BloodPrincesBossAI::JustReachedHome (:525-534): DISENGAGE frame
+-- + SetHealth(_spawnHealth) + _isEmpowered = false + (controller
+-- present) SetFlag(NON_ATTACKABLE 0x2) + controller SetData(
+-- DATA_PRINCE_EVADE, 1). ev24 OnReachHome (lua_creature_events.go,
+-- the anubarak/lana-thel/bronjahm precedent). The controller SetData
+-- leg rides the ACTION_PRINCE_EVADE DoAction above — the controller
+-- evades once all three princes report home.
+local function princesReachHome(event, creature)
+    creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    creature:SetHealth(1)
+    empowered[creature:GetGUID()] = false
+    local controller = creature:GetInstanceCreature(DATA_BLOOD_PRINCES_CONTROL)
+    if controller ~= nil then
+        creature:SetFlag(59, 0x2) -- UNIT_FLAG_NON_ATTACKABLE
+        controller:DoAction(ACTION_PRINCE_EVADE)
+    end
 end
 
 -- C++ boss_prince_valanar_icc::JustSummoned NPC_KINETIC_BOMB case
@@ -1166,6 +1306,7 @@ end
 -- no instance GetData bridge (creature:GetData is the per-motion latch).
 local function controllerReset(event, creature)
     invocationState[creature:GetGUID()] = nil
+    evadeCounter[creature:GetGUID()] = nil
     cancelTimers(creature:GetGUID())
     -- C++ boss_blood_council_controller::Reset :235 — _Reset() first:
     -- SetBossState NOT_STARTED only when the stored state != DONE
@@ -1175,6 +1316,28 @@ local function controllerReset(event, creature)
         creature:SetBossState(DATA_BLOOD_PRINCE_COUNCIL, BOSS_STATE_NOT_STARTED)
     end
     creature:SummonCreatureGroup(1) -- SUMMON_PRINCES_GROUP
+    -- C++ controller Reset intro loop (:239-250): per-prince
+    -- RemoveFlag(NON_ATTACKABLE) + SetImmuneToPC(false) + (valanar)
+    -- SetHealth(max) + triggered Remove-Empowered-Blood self-cast.
+    -- The loop is gated on instance GetData(DATA_BLOOD_PRINCE_COUNCIL
+    -- _INTRO 43) == 0; the data starts 1, is set 0 by the first
+    -- ACTION_START_INTRO (:342) and is never set back (no other
+    -- SetData site in-tree), so on every wipe-reset the loop runs —
+    -- and it is the ONLY 0x2-clear site (princesReset does not clear
+    -- it). The Lua model has no intro-data store, so the legs run
+    -- unconditionally here; SetImmuneToPC(false) rides princesReset
+    -- (RemoveFlag 0x100) and is not repeated. At fresh-instance spawn
+    -- the legs are no-ops (no flag set, valanar already at max).
+    for _, bossData in ipairs(PRINCES_DATA) do
+        local prince = creature:GetInstanceCreature(bossData)
+        if prince ~= nil then
+            prince:RemoveFlag(59, 0x2) -- UNIT_FLAG_NON_ATTACKABLE
+            if bossData == DATA_PRINCE_VALANAR then
+                prince:SetHealth(prince:GetMaxHealth())
+                prince:CastSpell(prince, SPELL_REMOVE_EMPOWERED_BLOOD, true)
+            end
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_KELESETH, 1, kelesethEnterCombat)
@@ -1208,7 +1371,8 @@ RegisterCreatureEvent(ENTRY_KELESETH, 19, function(_, creature, summoned)
     list[summoned:GetGUID()] = summoned
 end)
 RegisterCreatureEvent(ENTRY_TALDARAM, 19, function(_, creature, summoned)
-    if summoned:GetEntry() ~= ENTRY_BALL_OF_INFERNO_FLAME then
+    local entry = summoned:GetEntry()
+    if entry ~= ENTRY_BALL_OF_INFERNO_FLAME and entry ~= ENTRY_BALL_OF_FLAME then
         return
     end
     local guid = creature:GetGUID()
@@ -1218,19 +1382,25 @@ RegisterCreatureEvent(ENTRY_TALDARAM, 19, function(_, creature, summoned)
         taldaramSummons[guid] = list
     end
     list[summoned:GetGUID()] = summoned
-    -- C++ JustSummoned (:697-710): random-target pick + Talk emote
-    -- + SetGUID, in that order (latch above is the summons.Summon
-    -- leg). The ball chase itself rides the aura-removal DoAction
-    -- leg (unbridged) and stays out.
+    -- C++ JustSummoned (:697-710): random-target pick + (inferno
+    -- flame only) Talk emote + SetGUID, in that order (latch above is
+    -- the summons.Summon leg). The base ball (38332, Conjure Flame
+    -- 71718) takes the SetGUID store with NO emote (:703 gates the
+    -- Talk on the inferno entry); the chase itself rides the
+    -- aura-removal DoAction leg (ported above: flameBallVisualRemove
+    -- -> ballOfFlameDoAction via ballChaseTarget).
     local target = randomBallTarget(creature)
     if target then
-        creature:Talk(EMOTE_TALDARAM_FLAME, target)
+        if entry == ENTRY_BALL_OF_INFERNO_FLAME then
+            creature:Talk(EMOTE_TALDARAM_FLAME, target)
+        end
         local per = ballTargets[guid]
         if not per then
             per = {}
             ballTargets[guid] = per
         end
         per[summoned:GetGUID()] = target
+        ballChaseTarget[summoned:GetGUID()] = target
     end
 end)
 
@@ -1264,6 +1434,20 @@ RegisterCreatureEvent(ENTRY_KINETIC_BOMB, 38, kineticBombDoAction)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 1, controllerEnterCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 2, controllerLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 23, controllerReset)
+RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 38, controllerDoAction)
+RegisterCreatureEvent(ENTRY_KELESETH, 24, princesReachHome)
+RegisterCreatureEvent(ENTRY_TALDARAM, 24, princesReachHome)
+RegisterCreatureEvent(ENTRY_VALANAR, 24, princesReachHome)
+RegisterCreatureEvent(ENTRY_BALL_OF_FLAME, 23, ballOfFlameReset)
+RegisterCreatureEvent(ENTRY_BALL_OF_INFERNO_FLAME, 23, ballOfFlameReset)
+RegisterCreatureEvent(ENTRY_BALL_OF_FLAME, 38, ballOfFlameDoAction)
+RegisterCreatureEvent(ENTRY_BALL_OF_INFERNO_FLAME, 38, ballOfFlameDoAction)
+RegisterAuraEvent(SPELL_FLAME_SPHERE_SPAWN_EFFECT, 3, function(event, aura, target)
+    flameBallVisualRemove(SPELL_FLAME_SPHERE_SPAWN_EFFECT, event, aura, target)
+end)
+RegisterAuraEvent(SPELL_FLAME_SPHERE_DEATH_EFFECT, 3, function(event, aura, target)
+    flameBallVisualRemove(SPELL_FLAME_SPHERE_DEATH_EFFECT, event, aura, target)
+end)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 1, nucleusEnterCombat)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 9, nucleusDamageTaken)
 RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)
