@@ -10,6 +10,13 @@ local NPC_ROTTING_FROST_GIANT_25 = 38494
 local EMOTE_DEATH_PLAGUE_WARNING = 0
 local SPELL_DEATH_PLAGUE_AURA = 72865
 local SPELL_RECENTLY_INFECTED = 72884
+
+-- spell_frost_giant_death_plague (72864, :1391-1449) STAYS OUT
+-- (tick 504): no C++ caster of 72864 exists anywhere in-tree — the
+-- giant casts the 72865 aura directly (:485) — so a
+-- RegisterSpellEvent(72864) handler would be dead code in Go (no
+-- live cast path); the ev7 shared-list / ev5 jump legs and the
+-- AfterCast kill leg (no AfterCast hook in runtime.go) go with it.
 local SPELL_STOMP = 64652
 local SPELL_ARCTIC_BREATH = 72848
 

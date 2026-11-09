@@ -152,3 +152,14 @@ local function siphonEssenceRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ICC_SIPHON_ESSENCE, 3, siphonEssenceRemove)
+
+-- spell_icc_sprit_alarm (:1339-1388) STAYS OUT (tick 504): the
+-- spell-ID binding is DB-side (spell_script_names, no rows in-tree)
+-- and no Spell.dbc ships, so no verifiable RegisterSpellEvent id;
+-- no GetGObjCaster bridge (zero hits) and no spell-object
+-- GetEffectMiscValue (aura-side GetSpellEffectMiscValue only,
+-- lua_aura.go:412); ev5/ev7 fire only from the creature cast path
+-- (boss_ai.go:3141/:3417-3420), so a GO-cast trap spell has no fire
+-- path. The ward legs (nearest GO 201814-201817 + SetRespawnTime +
+-- deathbound-ward 37007 Talk(0)/RemoveAura(70733)/AttackStart) go
+-- with it.

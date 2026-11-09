@@ -25,10 +25,13 @@
 -- controller GUID (SetGUID DATA_GUID :680 unported, no darkfallen-side
 -- receiver), so the call can't be addressed: UpdateValidGuids prune +
 -- 5s visual re-arm + orb NOT_SELECTABLE flag stay out);
--- SpellHit ORB_CONTROLLER_ACTIVE 70293 (:720-725, ev14 hook exists but
--- the leg's only effect is a SetGUID into the unported
--- go_empowering_blood_orb GO script); the init-time SetGUID(DATA_GUID)
--- to each minion (:680) has no Lua receiver on the darkfallen side
+-- SpellHit ORB_CONTROLLER_ACTIVE 70293 (:720-725): ev14 hook exists
+-- but 70293 has no C++ caster anywhere in-tree (const :97 + check
+-- :722 only), so the hit can never fire in Go; the SetGUID leg it
+-- would drive (go_empowering_blood_orb.lua, ported tick 504) stays
+-- out with it — the GO object has no CastSpell bridge for the leg's
+-- 70304 cast either. The init-time SetGUID(DATA_GUID) to each
+-- minion (:680) has no Lua receiver on the darkfallen side
 -- (darkfallen header documents the TriggerGuid gap).
 
 local NPC_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248
