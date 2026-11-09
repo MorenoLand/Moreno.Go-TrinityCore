@@ -24,6 +24,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 3 OnTargetDied, 4 OnDied
 -- (bjarngrim); 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied, 23 OnReset
 -- (lieutenant). Timer arms ride the CreateLuaEvent convention —
+-- GUID-key fix (tick 514): timer/state tables key on GetGUIDLow(), not GetGUID() — GetGUID() returns fresh uint64 userdata per call (engine/scripting/globals.go pushUInt64), so cross-handler key lookups missed and ev2/ev4 cancels leaked; GetGUIDLow() is a uint32 Lua number (lua_creature_events.go:2578).
 -- GUID-keyed timers table, cancel on events 2/4/23; CastSpell(nil,
 -- spell) = DoCastVictim; all casts here are 2-arg / non-triggered
 -- (boss_bjarngrim.cpp); {min,max} delay tables = urand re-arms. Melee
@@ -233,7 +234,7 @@ local function bjarngrimStancePump(creature, guid)
 end
 
 local function bjarngrimStanceStart(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     bjarngrimStanceInit(guid)
     bjarngrimStanceSchedule(guid, 500, function()
         bjarngrimStancePump(creature, guid)
@@ -246,7 +247,7 @@ end
 -- so no cast fires, matching the C++ guard. The pump itself is canceled
 -- on ev2/ev4 and rebuilt on the next ev1.
 local function bjarngrimStanceReset(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = bjarngrimStance[guid]
     if st and st.stance ~= STANCE_DEFENSIVE then
         creature:RemoveAura(STANCE_SPELL[st.stance])
@@ -296,7 +297,7 @@ local function bjarngrimDied(event, creature, killer)
     -- C++ JustDied tail (boss_bjarngrim.cpp:220):
     -- instance->SetBossState(DATA_BJARNGRIM, DONE).
     creature:SetBossState(DATA_BJARNGRIM, 3)
-    bjarngrimStanceCancel(creature:GetGUID())
+    bjarngrimStanceCancel(creature:GetGUIDLow())
 end
 
 -- CreateLuaEvent timer harness (GUID-keyed timers table, cancel on
@@ -361,7 +362,7 @@ end
 -- FindNearestCreature + EngageWithTarget (the eredar-twins
 -- fight-unique idiom); the arc-weld timer arm is unchanged.
 local function lieutenantEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if target then
         local bjarngrim = creature:FindNearestCreature(ENTRY_BJARNGRIM, 1000)
@@ -378,11 +379,11 @@ local function lieutenantEnterCombat(event, creature, target)
 end
 
 local function lieutenantLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function lieutenantDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_BJARNGRIM, 1, bjarngrimEnterCombat)
@@ -403,11 +404,11 @@ RegisterCreatureEvent(ENTRY_STORMFORGED_LIEUTENANT, 23, lieutenantLeaveCombat)
 local SPELL_TEMPORARY_ELECTRICAL_CHARGE = 52092
 local canBuff = {}
 local function bjarngrimLeaveCombat(event, creature)
-    canBuff[creature:GetGUID()] = creature:HasAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE)
-    bjarngrimStanceCancel(creature:GetGUID())
+    canBuff[creature:GetGUIDLow()] = creature:HasAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE)
+    bjarngrimStanceCancel(creature:GetGUIDLow())
 end
 local function bjarngrimReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if canBuff[guid] ~= false and not creature:HasAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE) then
         creature:AddAura(SPELL_TEMPORARY_ELECTRICAL_CHARGE)
     end

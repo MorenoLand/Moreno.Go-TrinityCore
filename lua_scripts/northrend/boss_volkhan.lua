@@ -36,6 +36,7 @@
 -- One intro timer in the ported arms (EVENT_FORGE_CAST, see below);
 -- melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
+-- GUID-key fix (tick 514): timer/state tables key on GetGUIDLow(), not GetGUID() — GetGUID() returns fresh uint64 userdata per call (engine/scripting/globals.go pushUInt64), so cross-handler key lookups missed and ev2/ev4 cancels leaked; GetGUIDLow() is a uint32 Lua number (lua_creature_events.go:2578).
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) (event 1; the SetPhase /
 -- ScheduleEvent legs and the BossAI::JustEngagedWith passthrough
@@ -213,7 +214,7 @@ local function volkhanForgeTick(creature, guid)
 end
 
 local function volkhanForgeStart(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     volkhanForgeCancel(guid)
     volkhanForgeTimers[guid] = CreateLuaEvent(function()
         volkhanForgeTick(creature, guid)
@@ -225,7 +226,7 @@ end
 -- and the base arms port (below). The phase flip cancels the PHASE_INTRO forge cast.
 local function volkhanEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
-    volkhanForgeCancel(creature:GetGUID())
+    volkhanForgeCancel(creature:GetGUIDLow())
     -- C++ JustEngagedWith base call last (boss_volkhan.cpp:130):
     -- BossAI::JustEngagedWith arms (ScriptedCreature.cpp:540/542) --
     -- SetCombatPulseDelay(5) + me-form DoZoneInCombat, at the handler
@@ -248,7 +249,7 @@ end
 -- 386 (C++ arm order: Talk, DespawnGolem, _JustDied).
 local function volkhanDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    volkhanForgeCancel(creature:GetGUID())
+    volkhanForgeCancel(creature:GetGUIDLow())
     -- C++ boss_volkhan::JustDied (boss_volkhan.cpp:146-152): DespawnGolem.
     -- The GUID-list loop has no bridge, so sweep the forge arena for his
     -- golems via GetCreaturesInGrid and Despawn the living. Both entries
@@ -341,7 +342,7 @@ end
 -- in combat (UpdateAI :455). Lua re-keys to event 1 per the tree
 -- convention (halion / moroes).
 local function golemEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     golemCancelTimers(guid)
     golemSchedule(guid, "blast", 20000, function()
         golemBlastTick(creature, guid)
@@ -352,11 +353,11 @@ local function golemEnterCombat(event, creature, target)
 end
 
 local function golemLeaveCombat(event, creature)
-    golemCancelTimers(creature:GetGUID())
+    golemCancelTimers(creature:GetGUIDLow())
 end
 
 local function golemDied(event, creature, killer)
-    golemCancelTimers(creature:GetGUID())
+    golemCancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ DamageTaken :425-444: kill-shot (damage >= GetHealth()) ->
@@ -375,7 +376,7 @@ end
 -- MotionMaster Clear (:440) PORTED 2026-11-05 as creature:StopMoving()
 -- (MoveClear alias of the StopMoving twin, lua_creature_events.go:2809-2825).
 local function golemDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if damage >= creature:GetHealth() then
         creature:UpdateEntry(ENTRY_BRITTLE_GOLEM)
         creature:SetHealth(1)
@@ -398,7 +399,7 @@ end
 -- C++ Reset :407-410 -> Initialize: m_bIsFrozen = false +
 -- reschedules (timers re-arm on the next event 1).
 local function golemReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     golemFrozen[guid] = nil
     golemCancelTimers(guid)
 end
@@ -417,7 +418,7 @@ RegisterCreatureEvent(ENTRY_MOLTEN_GOLEM, 4, golemDied)
 local SPELL_SHATTER = 52429
 local function golemSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_SHATTER and creature:GetEntry() == ENTRY_BRITTLE_GOLEM then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         golemCancelTimers(guid)
         golemFrozen[guid] = nil
         creature:Despawn()

@@ -26,6 +26,7 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Driven by CreateLuaEvent
 -- timers; melee is engine-driven in Go (creature combat tick),
+-- GUID-key fix (tick 514): timer/state tables key on GetGUIDLow(), not GetGUID() — GetGUID() returns fresh uint64 userdata per call (engine/scripting/globals.go pushUInt64), so cross-handler key lookups missed and ev2/ev4 cancels leaked; GetGUIDLow() is a uint32 Lua number (lua_creature_events.go:2578).
 -- like C++ DoMeleeAttackIfReady.
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 0) + SetBossState(DATA_IONAR 2,
@@ -270,7 +271,7 @@ ionarSplit = function(creature, guid, state)
             if target then
                 spark:MoveFollow(target, 0, 0)
             end
-            state.sparks[spark:GetGUID()] = { obj = spark, returning = false }
+            state.sparks[spark:GetGUIDLow()] = { obj = spark, returning = false }
         end
     end
     creature:AttackStop()
@@ -372,7 +373,7 @@ end
 local function ionarEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     creature:SetBossState(2, 1) -- DATA_IONAR, IN_PROGRESS (boss_ionar.cpp:128; moroes precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ionarState[guid] = { dispersed = false, disperseHealth = 45 + math.random(0, 10), split = false, splitPhase = true, sparks = {} }
     schedule(guid, "ballLightning", {10000, 11000}, function()
@@ -397,12 +398,12 @@ local function ionarCombatEnd(event, creature)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656 —
     -- unconditional here is end-state-identical to the C++ gate).
     -- C++ Reset (:118): RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE).
-    ionarDespawnSparks(ionarState[creature:GetGUID()])
-    ionarState[creature:GetGUID()] = nil
+    ionarDespawnSparks(ionarState[creature:GetGUIDLow()])
+    ionarState[creature:GetGUIDLow()] = nil
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
     creature:SetVisible(true)
     creature:SetRooted(false)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(2, 0) -- DATA_IONAR, NOT_STARTED (boss_ionar.cpp:122; moroes precedent)
 end
 
@@ -418,17 +419,17 @@ end
 -- instance->SetBossState(DATA_IONAR, DONE) — all three PORTED.
 local function ionarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
-    ionarDespawnSparks(ionarState[creature:GetGUID()])
-    ionarState[creature:GetGUID()] = nil
+    ionarDespawnSparks(ionarState[creature:GetGUIDLow()])
+    ionarState[creature:GetGUIDLow()] = nil
     creature:SetBossState(2, 3) -- DATA_IONAR, DONE (boss_ionar.cpp:137; moroes precedent)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_ionar::DamageTaken (boss_ionar.cpp:190-194):
 -- uiDamage = 0 when !me->IsVisible() — PORTED via the own-state
 -- split flag (no IsVisible bridge; Lua knows it set invisible).
 local function ionarDamageTaken(event, creature, attacker, damage)
-    local state = ionarState[creature:GetGUID()]
+    local state = ionarState[creature:GetGUIDLow()]
     if state and state.split then
         return false, 0
     end
@@ -472,7 +473,7 @@ local function sparkMovementInform(_, creature, moveType, id)
     if moveType ~= 8 or id ~= 0 then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     for _, state in pairs(ionarState) do
         state.sparks[guid] = nil
     end

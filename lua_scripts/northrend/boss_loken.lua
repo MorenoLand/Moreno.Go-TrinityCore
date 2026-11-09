@@ -26,6 +26,7 @@
 -- (event, creature, attacker, damage) pre-application — the moroes
 -- convention). Timers via CreateLuaEvent (GUID-keyed, cancelled on
 -- events 2/4/23); melee is engine-driven in Go.
+-- GUID-key fix (tick 514): timer/state tables key on GetGUIDLow(), not GetGUID() — GetGUID() returns fresh uint64 userdata per call (engine/scripting/globals.go pushUInt64), so cross-handler key lookups missed and ev2/ev4 cancels leaked; GetGUIDLow() is a uint32 Lua number (lua_creature_events.go:2578).
 -- Ported arms (C++-exact for all modeled arms):
 -- JustEngagedWith — Talk(SAY_AGGRO 2) (event 1; the BossAI
 -- bookkeeping passthrough, events.SetPhase(PHASE_NORMAL), and
@@ -232,8 +233,8 @@ local function lokenEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
-    lokenResetMod(creature:GetGUID())
-    local guid = creature:GetGUID()
+    lokenResetMod(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arc", 15000, function()
         arcTick(creature, guid)
@@ -266,7 +267,7 @@ local lokenHealthMod = {}
 local SAY_BY_MOD = { [1] = SAY_75HEALTH, [2] = SAY_50HEALTH, [3] = SAY_25HEALTH }
 
 local function lokenDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local mod = lokenHealthMod[guid] or 1
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -312,7 +313,7 @@ local function lokenDied(event, creature, killer)
             p:RemoveAura(SPELL_PULSING_SHOCKWAVE_AURA)
         end
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ MoveInLineOfSight: Talk(SAY_INTRO_1 0) on first player sight
@@ -329,7 +330,7 @@ end
 local lokenIntroDone = {}
 
 local function lokenMoveInLOS(event, creature, unit)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local targetReach = 1.5
     if unit:GetObjectType() ~= "Player" then
         targetReach = unit:GetCombatReach()
@@ -344,9 +345,9 @@ local function lokenMoveInLOS(event, creature, unit)
 end
 
 RegisterCreatureEvent(ENTRY_LOKEN, 1, lokenEnterCombat)
-RegisterCreatureEvent(ENTRY_LOKEN, 2, function(e, c) lokenResetMod(c:GetGUID()) cancelTimers(c:GetGUID()) end)
+RegisterCreatureEvent(ENTRY_LOKEN, 2, function(e, c) lokenResetMod(c:GetGUIDLow()) cancelTimers(c:GetGUIDLow()) end)
 RegisterCreatureEvent(ENTRY_LOKEN, 3, lokenTargetDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 4, lokenDied)
 RegisterCreatureEvent(ENTRY_LOKEN, 9, lokenDamageTaken)
-RegisterCreatureEvent(ENTRY_LOKEN, 23, function(e, c) lokenResetMod(c:GetGUID()) cancelTimers(c:GetGUID()) end)
+RegisterCreatureEvent(ENTRY_LOKEN, 23, function(e, c) lokenResetMod(c:GetGUIDLow()) cancelTimers(c:GetGUIDLow()) end)
 RegisterCreatureEvent(ENTRY_LOKEN, 27, lokenMoveInLOS)
