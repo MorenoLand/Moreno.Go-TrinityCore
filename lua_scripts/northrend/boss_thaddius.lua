@@ -229,7 +229,7 @@ local GO_FLAG_NOT_SELECTABLE = 16
 local GO_NAXX_PORTAL_CONSTRUCT = 181576 -- naxxramas.h:166
 
 local function thaddiusDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustDied (boss_thaddius.cpp:208-222): _JustDied (SetBossState
     -- DONE, ScriptedCreature.cpp:513-520; moroes/faerlina precedent) +
@@ -488,7 +488,7 @@ end
 
 -- C++ boss_thaddius::DoAction (boss_thaddius.cpp:226-296), event 38.
 local function thaddiusDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_FEUGEN_RESET or action == ACTION_STALAGG_RESET then
         if thaddiusPhase[guid] ~= PHASE_NOT_ENGAGED then
             beginResetEncounter(creature, guid)
@@ -552,7 +552,7 @@ end
 local function thaddiusSpawn(event, creature)
     creature:SetGuidData(DATA_THADDIUS)
     if creature:GetBossState(BOSS_THADDIUS) ~= BOSS_STATE_DONE then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         thaddiusPhase[guid] = PHASE_NOT_ENGAGED
         thaddiusStalaggAlive[guid] = true
         thaddiusFeugenAlive[guid] = true
@@ -575,7 +575,7 @@ end
 -- true to veto the Go base evade (threat-clear / walk-home / full-heal);
 -- timers are NOT cancelled here (the C++ EventMap survives evade).
 local function thaddiusLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if not thaddiusBallEnabled[guid] then
         thaddiusBallEnabled[guid] = true
         return true
@@ -595,7 +595,7 @@ end
 -- melee (the swing timer is elapsed and never resets without a melee
 -- swing); the IsCasting gate is the operative one.
 local function thaddiusAIUpdate(event, creature, diff)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if thaddiusPhase[guid] ~= PHASE_THADDIUS then
         return
     end

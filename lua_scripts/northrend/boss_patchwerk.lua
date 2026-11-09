@@ -174,7 +174,7 @@ local function patchwerkEnterCombat(event, creature)
     creature:SetBossState(BOSS_PATCHWERK, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     enraged[guid] = false
     creature:Talk(SAY_AGGRO)
     schedule(guid, "hateful", 1000, function()
@@ -186,7 +186,7 @@ local function patchwerkEnterCombat(event, creature)
 end
 
 local function patchwerkLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function patchwerkTargetDied(event, creature, victim)
@@ -196,13 +196,13 @@ local function patchwerkTargetDied(event, creature, victim)
 end
 
 local function patchwerkDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_PATCHWERK, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
 end
 
 local function patchwerkReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(BOSS_PATCHWERK) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_PATCHWERK, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end

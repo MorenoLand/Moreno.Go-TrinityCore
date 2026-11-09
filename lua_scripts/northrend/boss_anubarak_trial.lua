@@ -350,7 +350,7 @@ local function anubarakEnterCombat(event, creature, target)
     }) do
         creature:SummonCreature(NPC_FROST_SPHERE, pos[1], pos[2], pos[3], 0, 7, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "berserk", 600000, function()
         berserkTick(creature, guid)
@@ -358,7 +358,7 @@ local function anubarakEnterCombat(event, creature, target)
 end
 
 local function anubarakLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     anubarakState[guid] = nil
 end
@@ -370,7 +370,7 @@ local function anubarakTargetDied(event, creature, victim)
 end
 
 local function anubarakDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_anubarak_trial.cpp:235-237): _JustDied()
     -- (BossAI, ScriptedCreature.cpp:513-520) — events.Reset() +
     -- scheduler.CancelAll() are the cancelTimers above; SetBossState(
@@ -463,8 +463,8 @@ end
 -- SUMMON_NERUBIAN / SUBMERGE, PHASE_MELEE) stay out behind the
 -- unported submerge phase machine (tharon_ja bar).
 local function anubarakReset(event, creature)
-    cancelTimers(creature:GetGUID())
-    anubarakState[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    anubarakState[creature:GetGUIDLow()] = nil
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_INTRO_MASK)
     for _, sphere in ipairs(creature:GetCreaturesInGrid(NPC_FROST_SPHERE, 150)) do
         sphere:Despawn()
@@ -488,7 +488,7 @@ end
 -- PORTED tick 424 below via RegisterAuraEvent (66118, 1); the old
 -- "no AuraScript bridge" claim is stale.
 local function anubarakDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = anubarakState[guid]
     if st and st.reachedPhase3 then
         return

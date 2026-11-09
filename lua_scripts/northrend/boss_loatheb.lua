@@ -163,7 +163,7 @@ local function loathebEnterCombat(event, creature)
     creature:SetBossState(BOSS_LOATHEB, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     doomCounter[guid] = 0
     -- C++ Reset (:72): _sporeLoser = true (re-arm site — see header).
     creature:SetData(DATA_ACHIEVEMENT_SPORE_LOSER, 1)
@@ -182,7 +182,7 @@ local function loathebEnterCombat(event, creature)
 end
 
 local function loathebLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local GAMEOBJECT_FLAGS = 9
@@ -193,7 +193,7 @@ local GO_NAXX_PORTAL_PLAGUE = 181577 -- naxxramas.h:167
 -- plague portal flag clear + DONE flag for the instance pump's
 -- wing taunt (create-time form cannot fire — see instance file).
 local function loathebDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_LOATHEB, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_PLAGUE, 1000)
     if portal then
@@ -226,7 +226,7 @@ local function loathebSpawned(event, creature)
 end
 
 local function loathebReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(BOSS_LOATHEB) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_LOATHEB, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end

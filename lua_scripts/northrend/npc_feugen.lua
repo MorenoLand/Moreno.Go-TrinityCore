@@ -239,7 +239,7 @@ local function feugenEnterCombat(event, creature, target)
     if stalagg and not stalagg:IsInCombat() then
         stalagg:AddThreat(target, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "staticfield", 6000, function()
         staticFieldTick(creature, guid)
@@ -247,7 +247,7 @@ local function feugenEnterCombat(event, creature, target)
 end
 
 local function feugenLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_thaddius.cpp:736-740): thaddius
     -- DoAction(ACTION_FEUGEN_RESET).
     local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
@@ -266,7 +266,7 @@ local function feugenTargetDied(event, creature, victim)
 end
 
 local function feugenDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     feugenFeign[guid] = nil
     feugenOverload[guid] = nil
@@ -277,7 +277,7 @@ end
 -- true ("force tesla coil state refresh") alongside the latch inits.
 -- Go ev5 fires once per spawn (felmyst trailSpawn precedent).
 local function feugenSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetGuidData(DATA_FEUGEN) -- C++ instance OnCreatureCreate latch, faerlina precedent
     feugenOverload[guid] = nil
     feugenRefreshBeam[guid] = true
@@ -299,7 +299,7 @@ local UNIT_STAND_STATE_STAND = 0
 local UNIT_STAND_STATE_DEAD = 7
 
 local function feugenReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ has no Reset override: on evade feugen runs EnterEvadeMode ->
     -- thaddius DoAction(ACTION_FEUGEN_RESET) -> BeginResetEncounter ->
@@ -340,7 +340,7 @@ end
 local EMOTE_FEIGN_DEATH = 3
 
 local function feugenDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if damage < creature:GetHealth() then
         return false, damage
     end
@@ -392,7 +392,7 @@ local function feugenSpellHit(event, creature, caster, spellId)
     if not caster or caster:GetObjectType() ~= "Creature" then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local hx, hy, hz = creature:GetHomePosition()
     local dx = creature:GetX() - hx
     local dy = creature:GetY() - hy
@@ -437,7 +437,7 @@ end
 
 -- C++ npc_feugenAI::DoAction (boss_thaddius.cpp:749-809), event 38.
 local function feugenDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_BEGIN_RESET_ENCOUNTER then
         feugenBeginResetEncounter(creature, guid)
     elseif action == ACTION_FEUGEN_REVIVING_FX then

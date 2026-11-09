@@ -156,7 +156,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(BOSS_MAEXXNA, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- boss_maexxna.cpp JustEngagedWith schedule.
     schedule(guid, "spray", 40000, function()
@@ -177,7 +177,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local GAMEOBJECT_FLAGS = 9
@@ -189,7 +189,7 @@ local GO_NAXX_PORTAL_ARACHNID = 181575 -- naxxramas.h:165
 -- documents why the create-time form cannot fire) + DONE flag for
 -- the instance pump's wing taunt.
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_MAEXXNA, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     local portal = creature:FindNearestGameObject(GO_NAXX_PORTAL_ARACHNID, 1000)
     if portal then
@@ -205,7 +205,7 @@ local function onDied(event, creature, killer)
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(BOSS_MAEXXNA) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_MAEXXNA, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end

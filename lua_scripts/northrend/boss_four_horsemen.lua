@@ -367,13 +367,13 @@ local GO_HORSEMEN_CHEST_HERO = 193426 -- naxxramas.h:116
 local function makeHandlers(which)
     local function enterCombat(event, creature)
         creature:SetBossState(BOSS_HORSEMEN, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith via BeginEncounter (boss_four_horsemen.cpp:217), idempotent across the four engages
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         shouldSay[guid] = (which == "thane" or which == "sir")
         creature:Talk(SAY_AGGRO)
         beginFighting(creature, guid, which)
     end
     local function leaveCombat(event, creature)
-        cancelTimers(creature:GetGUID())
+        cancelTimers(creature:GetGUIDLow())
     end
     local function targetDied(event, creature, victim)
         if victim ~= nil and victim:GetObjectType() == "Player" then
@@ -382,7 +382,7 @@ local function makeHandlers(which)
     end
     local function died(event, creature, killer)
         creature:Talk(SAY_DEATH)
-        cancelTimers(creature:GetGUID())
+        cancelTimers(creature:GetGUIDLow())
         -- C++ SetBossState(BOSS_HORSEMEN, DONE) legs
         -- (instance_naxxramas.cpp): when the fourth horseman dies,
         -- the chest flag clear (respawn leg stays out — no GO
@@ -427,7 +427,7 @@ local function makeHandlers(which)
         end
     end
     local function reset(event, creature)
-        cancelTimers(creature:GetGUID())
+        cancelTimers(creature:GetGUIDLow())
         -- C++ Reset (boss_four_horsemen.cpp:303): _timeDied = 0.
         local mapObj = creature:GetMap()
         if mapObj then
@@ -447,7 +447,7 @@ local function makeHandlers(which)
 end
 
 local function spellHitTarget(event, creature, target, spellId)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if spellId == SPELL_UNHOLY_SHADOW then
         creature:Talk(SAY_SPECIAL)
     elseif spellId == SPELL_METEOR and shouldSay[guid] then

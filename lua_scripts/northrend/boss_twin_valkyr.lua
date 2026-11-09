@@ -492,7 +492,7 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras,
         -- boss_twin_baseAI engage legs (Talk + surge below) — C++-exact;
         -- Fjola-only (eydis AI has no summon).
         if creature:GetEntry() == ENTRY_FJOLA then
-            controllers[creature:GetGUID()] = creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
+            controllers[creature:GetGUIDLow()] = creature:SummonCreature(NPC_BULLET_CONTROLLER, 563.672974, 139.571, 393.837006, 0.0, 7, 0)
         end
         -- C++ boss_twin_baseAI::JustEngagedWith first arm (:268, PORTED
         -- 2026-10-23 — DoZoneInCombat bridge live,
@@ -513,7 +513,7 @@ local function makeEnterCombat(surgeSpell, spikeSpell, touchSpell, essenceAuras,
         creature:Talk(SAY_AGGRO)
         creature:CastSpell(creature, surgeSpell)
         creature:SetCombatPulseDelay(5) -- boss_twin_valkyr.cpp:278 (JustEngagedWith arm; the setActive leg has no bridge)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelTimers(guid)
         -- C++ boss_fjolaAI::JustEngagedWith :444: EVENT_SPECIAL_ABILITY
         -- 45s (fjola only; the timed-achievement leg has no bridge).
@@ -544,8 +544,8 @@ end
 
 local function makeLeaveCombat()
     return function(event, creature)
-        cancelTimers(creature:GetGUID())
-        despawnController(creature:GetGUID())
+        cancelTimers(creature:GetGUIDLow())
+        despawnController(creature:GetGUIDLow())
     end
 end
 
@@ -556,7 +556,7 @@ local function targetDied(event, creature, victim)
 end
 
 local function died(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (boss_twin_valkyr.cpp:237-259): Talk(SAY_DEATH), then
     -- the sister-gated lootable legs, in C++ order.
@@ -586,12 +586,12 @@ local function died(event, creature, killer)
     -- Sister not found: C++ takes neither flag branch (Talk only).
     -- C++ JustDied's trailing unconditional summons.DespawnAll()
     -- (:258) runs after the sister branches, whatever they took.
-    despawnController(creature:GetGUID())
+    despawnController(creature:GetGUIDLow())
 end
 
 local function reset(event, creature)
-    cancelTimers(creature:GetGUID())
-    despawnController(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
+    despawnController(creature:GetGUIDLow())
     -- boss_fjolaAI::Reset :392 / boss_eydisAI::Reset :499 — unconditional
     -- SetEquipmentSlots(false, EQUIP_MAIN_*, EQUIP_UNEQUIP, EQUIP_NO_CHANGE):
     -- creature:SetEquipmentSlots is bridged on the event surface.

@@ -351,7 +351,7 @@ local function markedDeathTick(creature, guid)
 end
 
 local function blackKnightEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if nativeDisplay[guid] == nil then
         nativeDisplay[guid] = creature:GetDisplayId()
@@ -378,7 +378,7 @@ end
 -- Black Knight Res 67693, phase advance, root clear). Strict
 -- incoming-damage check (uiDamage > health), so no postDamage guard.
 local function blackKnightDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getBlackKnightState(guid)
     if st.phase <= PHASE_SKELETON and damage > creature:GetHealth() then
         creature:SetHealth(0)
@@ -430,7 +430,7 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
 end
 
 local function blackKnightLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     bkState[guid] = nil
     creature:SetMeleeAttack(true)
@@ -447,14 +447,14 @@ local DONE = 3
 local function blackKnightDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_KILL_CREDIT)
     creature:SetBossState(BOSS_BLACK_KNIGHT, DONE)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     bkState[guid] = nil
     nativeDisplay[guid] = nil
 end
 
 local function blackKnightReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     bkState[guid] = nil
     creature:SetMeleeAttack(true)

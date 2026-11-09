@@ -148,7 +148,7 @@ end
 -- C++ ctor (:203) SetCombatMovement(false) rides here too
 -- (re-applied on reset/evade — value-idempotent).
 local function dummySpawnOrReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetCombatMovement(false)
     cancelTimers(guid)
     vulnerable[guid] = false
@@ -162,13 +162,13 @@ end
 -- dummySpawnOrReset (C++ evade -> Reset semantics); ev4 keeps
 -- the cancel (a dead dummy runs no timers; spawn re-arms).
 local function dummyDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ SpellHit :237-269: entry-switched credit casts + the global
 -- 62626 vulnerable latch (dual HasAura gate).
 local function dummySpellHit(event, creature, caster, spellId)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local entry = creature:GetEntry()
     if entry == ENTRY_CHARGE_TARGET then
         if spellId == SPELL_PLAYER_CHARGE and vulnerable[guid] and caster then

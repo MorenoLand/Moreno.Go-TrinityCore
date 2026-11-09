@@ -242,7 +242,7 @@ local function gluthEnterCombat(event, creature, target)
     creature:SetBossState(BOSS_GLUTH, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "decimate", {110000, 120000}, function()
         decimateTick(creature, guid)
@@ -262,16 +262,16 @@ local function gluthEnterCombat(event, creature, target)
 end
 
 local function gluthLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function gluthDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_GLUTH, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
 end
 
 local function gluthReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(BOSS_GLUTH) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_GLUTH, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end

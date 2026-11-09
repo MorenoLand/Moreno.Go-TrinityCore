@@ -355,7 +355,7 @@ local function gothikEnterCombat(event, creature, target)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan/loatheb/razuvious precedent)
     creature:SetMeleeAttack(false) -- boss_gothik.cpp:416: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
     creature:Talk(SAY_INTRO_1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     waveCount[guid] = 0
     gateCanOpen[guid] = false
@@ -383,7 +383,7 @@ local function gothikEnterCombat(event, creature, target)
 end
 
 local function gothikLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_KILL 6) only when victim->GetTypeId() ==
@@ -400,7 +400,7 @@ local function gothikDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (:365-370): SetData(DATA_GOTHIK_GATE,
     -- GO_STATE_ACTIVE) + _gateIsOpen = false — PORTED tick 406.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     gateIsOpen[guid] = false
     local gate = creature:FindNearestGameObject(GO_GOTHIK_GATE, 1000.0)
     if gate then gate:SetGoState(0) end -- GO_STATE_ACTIVE
@@ -429,7 +429,7 @@ local function gothikReset(event, creature)
         creature:SetBossState(BOSS_GOTHIK, BOSS_STATE_NOT_STARTED)
     end
     creature:SetReactState(REACT_PASSIVE) -- boss_gothik.cpp:321 Reset arm
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     waveCount[guid] = 0
     gateCanOpen[guid] = false
     gateIsOpen[guid] = true
@@ -472,14 +472,14 @@ RegisterCreatureEvent(ENTRY_GOTHIK_TRIGGER, 9, gothikTriggerDamageTaken)
 -- (fireCreatureDamageTaken; tesla/halazzi precedent); no return once
 -- phase two has flipped leaves damage untouched.
 local function gothikDamageTaken(event, creature, attacker, damage)
-    if not phaseTwo[creature:GetGUID()] then
+    if not phaseTwo[creature:GetGUIDLow()] then
         return false, 0
     end
     -- APPROXIMATE: C++ :437-438 runs every UpdateAI tick (no Lua
     -- vehicle); damage-event-driven twin using the post-damage health
     -- estimate (GetHealth() - damage): open the gate once below 30%
     -- in phase two. openGate is idempotent.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local dmg = damage or 0
     if not gateIsOpen[guid] and creature:GetHealth() - dmg < math.floor(creature:GetMaxHealth() * 30 / 100) then
         openGate(creature, guid)
@@ -516,17 +516,17 @@ local SPELL_SKULLS_RIDER = 27937 -- boss_gothik.cpp:84
 
 local function livingTraineeDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_TRAINEE, true)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function livingKnightDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_DK, true)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function livingRiderDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_ANCHOR_1_RIDER, true)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 4, livingTraineeDied)
@@ -724,7 +724,7 @@ local function gothikJustSummoned(event, creature, summon)
         summon:DespawnOrUnsummon()
         return
     end
-    if gateIsOpen[creature:GetGUID()] then
+    if gateIsOpen[creature:GetGUIDLow()] then
         summon:DoAction(ACTION_GATE_OPENED)
     else
         summon:DoAction(ACTION_ACQUIRE_TARGET)
@@ -737,7 +737,7 @@ end
 -- bridge, so the only Lua-visible effect is opening the gate when allowed.
 local function gothikDoAction(event, creature, action)
     if action ~= ACTION_MINION_EVADE then return end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if gateIsOpen[guid] then return end
     if gateCanOpen[guid] then
         openGate(creature, guid)
@@ -805,7 +805,7 @@ end
 -- instance GetGuidData bridge). AttackStart engages the minion, firing
 -- its ev1 — this is what arms the tick-405 timer kits.
 local function minionDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_GATE_OPENED then
         minionGateIsOpen[guid] = true
     elseif action ~= ACTION_ACQUIRE_TARGET then
@@ -829,7 +829,7 @@ end
 -- not cleared on ev2/23 (C++ keeps the latch across evades; new spawns get
 -- fresh GUIDs, so stale keys are never read).
 local function minionDamageTaken(event, creature, attacker, damage)
-    if not minionGateIsOpen[creature:GetGUID()]
+    if not minionGateIsOpen[creature:GetGUIDLow()]
         and (not attacker or not isOnSameSide(creature, attacker)) then
         return false, 0
     end
@@ -1010,7 +1010,7 @@ end
 
 -- Shared ev1 arming per minion entry (ctor inits above).
 local function livingTraineeEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "deathplague", {5000, 20000}, function()
         deathPlagueTick(creature, guid)
@@ -1018,7 +1018,7 @@ local function livingTraineeEnterCombat(event, creature)
 end
 
 local function livingKnightEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shadowmark", {5000, 10000}, function()
         shadowMarkTick(creature, guid)
@@ -1026,7 +1026,7 @@ local function livingKnightEnterCombat(event, creature)
 end
 
 local function livingRiderEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "boltvolley", {5000, 10000}, function()
         boltVolleyTick(creature, guid)
@@ -1034,7 +1034,7 @@ local function livingRiderEnterCombat(event, creature)
 end
 
 local function spectralTraineeEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "arcaneexplosion", 2000, function()
         arcaneExplosionTick(creature, guid)
@@ -1042,7 +1042,7 @@ local function spectralTraineeEnterCombat(event, creature)
 end
 
 local function spectralKnightEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "whirlwind", {15000, 25000}, function()
         whirlwindTick(creature, guid)
@@ -1050,7 +1050,7 @@ local function spectralKnightEnterCombat(event, creature)
 end
 
 local function spectralRiderEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "frenzy", {2000, 5000}, function()
         frenzyTick(creature, guid)
@@ -1061,7 +1061,7 @@ local function spectralRiderEnterCombat(event, creature)
 end
 
 local function spectralHorseEnterCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "stomp", {10000, 15000}, function()
         stompTick(creature, guid)
@@ -1072,7 +1072,7 @@ end
 -- (the gothikLeaveCombat twin; the spectral JustDied is a no-op in
 -- C++ — base passes no _deathNotify — so ev4 rides this wipe).
 local function minionCancelTimers(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_LIVE_TRAINEE, 1, livingTraineeEnterCombat)

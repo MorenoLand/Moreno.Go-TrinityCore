@@ -216,7 +216,7 @@ local function heiganEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (:127): _safetyDance = true.
     creature:SetData(DATA_SAFETY_DANCE, 1)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "disrupt", {15000, 20000}, function() onDisrupt(creature, guid) end)
     schedule(guid, "fever", {10000, 20000}, function() onFever(creature, guid) end)
@@ -224,7 +224,7 @@ local function heiganEnterCombat(event, creature, target)
 end
 
 local function heiganLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function heiganTargetDied(event, creature, victim)
@@ -240,7 +240,7 @@ local function heiganDied(event, creature, killer)
     -- C++ JustDied (:110-114): _JustDied SetBossState DONE
     -- (ScriptedCreature.cpp:513-520; moroes precedent).
     creature:SetBossState(BOSS_HEIGAN, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function heiganReset(event, creature)
@@ -250,7 +250,7 @@ local function heiganReset(event, creature)
     if creature:GetBossState(BOSS_HEIGAN) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_HEIGAN, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetReactState(REACT_AGGRESSIVE)
 end
 

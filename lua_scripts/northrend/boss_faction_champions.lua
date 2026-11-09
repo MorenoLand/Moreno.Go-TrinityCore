@@ -657,7 +657,7 @@ local function championEnterCombat(event, creature, target)
     elseif entry == 34471 or entry == 34456 then
         creature:CastSpell(creature, SPELL_SEAL_OF_COMMAND)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "threat", 5000, function()
         powerCheck(creature, guid)
@@ -692,12 +692,12 @@ local function championEnterCombat(event, creature, target)
 end
 
 local function championLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function championDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 
@@ -734,7 +734,7 @@ local CHAMPION_EQUIPMENT = {
     [34454] = {47422, 49982, 0xFFFFFFFF},
 }
 local function championReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local entry = creature:GetEntry()
     local slots = CHAMPION_EQUIPMENT[entry]
     if slots ~= nil then
@@ -966,7 +966,7 @@ end
 -- summons bypass the map-event latch in instance_trial_of_the_crusader.lua,
 -- so the latch has to happen here for GetInstanceCreature(2) readers.
 local function controllerReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if controllerChampions[guid] ~= nil then
         return
     end
@@ -991,12 +991,12 @@ local function controllerReset(event, creature)
 end
 
 local function controllerLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function controllerDied(event, creature)
-    cancelTimers(creature:GetGUID())
-    controllerChampions[creature:GetGUID()] = nil
+    cancelTimers(creature:GetGUIDLow())
+    controllerChampions[creature:GetGUIDLow()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_CHAMPIONS_CONTROLLER, 2, controllerLeaveCombat)

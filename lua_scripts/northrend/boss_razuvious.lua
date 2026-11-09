@@ -265,7 +265,7 @@ local function razyviousEnterCombat(event, creature, target)
     creature:StopMoving() -- boss_razuvious.cpp:123 (the summons.DoZoneInCombat
     -- sibling at :124 stays out — summons-container call, 2026-10-23 re-eval)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "attack", 7000, function()
         -- C++ EVENT_ATTACK (7s, one-shot): SetCombatMovement(true) is a
@@ -290,8 +290,8 @@ local function razyviousLeaveCombat(event, creature)
     -- C++ EnterEvadeMode -> Reset -> _Reset summons.DespawnAll; the
     -- re-summon rides event 24 below. Death never fires event 2, so
     -- this stays evade-only, C++-exact.
-    despawnAdds(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnAdds(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit: Talk(SAY_SLAY) when victim->GetTypeId() ==
@@ -315,7 +315,7 @@ local function razyviousDied(event, creature, killer)
     -- bridge (tharon_ja precedent).
     creature:CastSpell(creature, SPELL_HOPELESS, true)
     creature:SetBossState(BOSS_RAZUVIOUS, BOSS_STATE_DONE) -- C++ JustDied (:115); moroes precedent
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function razyviousReset(event, creature)
@@ -323,7 +323,7 @@ local function razyviousReset(event, creature)
     -- + _Reset bookkeeping (SetBossState NOT_STARTED; moroes precedent).
     creature:SetCombatMovement(false)
     creature:SetBossState(BOSS_RAZUVIOUS, BOSS_STATE_NOT_STARTED)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ InitializeAI (boss_razuvious.cpp:82-89): if not dead and boss
@@ -336,7 +336,7 @@ local function razuviousSpawn(event, creature)
     if not creature:IsDead() and creature:GetBossState(BOSS_RAZUVIOUS) ~= BOSS_STATE_DONE then
         creature:SetCombatMovement(false) -- Reset leg (:168-171)
         creature:SetBossState(BOSS_RAZUVIOUS, BOSS_STATE_NOT_STARTED) -- _Reset leg
-        summonAdds(creature, creature:GetGUID())
+        summonAdds(creature, creature:GetGUIDLow())
     end
 end
 
@@ -344,7 +344,7 @@ end
 -- (no model) + SummonAdds() + MotionMaster Initialize (engine-side
 -- on home arrival, no bridge needed).
 local function razuviousReachHome(event, creature)
-    summonAdds(creature, creature:GetGUID())
+    summonAdds(creature, creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 1, razyviousEnterCombat)

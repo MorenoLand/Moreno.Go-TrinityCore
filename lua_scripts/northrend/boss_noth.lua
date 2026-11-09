@@ -368,7 +368,7 @@ local function nothEnterCombat(event, creature)
     creature:SetBossState(BOSS_NOTH, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     state[guid] = {
         phase = "none",
         balconyCount = 0,
@@ -382,7 +382,7 @@ local function nothEnterCombat(event, creature)
 end
 
 local function nothLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function nothTargetDied(event, creature, victim)
@@ -394,11 +394,11 @@ end
 local function nothDied(event, creature, killer)
     creature:SetBossState(BOSS_NOTH, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function nothDamageTaken(event, creature, attacker, damage)
-    local st = state[creature:GetGUID()]
+    local st = state[creature:GetGUIDLow()]
     if st ~= nil and st.phase == "balcony"
             and damage >= creature:GetHealth() then
         creature:SetHealth(1)
@@ -417,7 +417,7 @@ local function nothReset(event, creature)
     if creature:GetBossState(BOSS_NOTH) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_NOTH, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if st ~= nil and st.phase == "balcony" then
         creature:CastSpell(creature, SPELL_TELEPORT_BACK)

@@ -56,19 +56,19 @@ end
 
 local function portalTargetReset(event, creature)
     creature:SetReactState(REACT_PASSIVE)
-    cancelPortalTimer(creature:GetGUID())
+    cancelPortalTimer(creature:GetGUIDLow())
     creature:SetDisableGravity(true)
 end
 
 local function portalTargetDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function portalTargetSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_OPEN_PORTAL then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPortalTimer(guid)
     local per = timers[guid]
     if not per then

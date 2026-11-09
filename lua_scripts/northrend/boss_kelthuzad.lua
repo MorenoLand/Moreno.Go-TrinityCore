@@ -325,7 +325,7 @@ end
 -- at once via DoZoneInCombat -> AtEngage -> JustEngagedWith, which
 -- zeroes the timer in C++, so they never wander.
 local function seedMinionWander(summon)
-    local guid = summon:GetGUID()
+    local guid = summon:GetGUIDLow()
     schedule(guid, "wander", math.random(4000, 12000), function()
         wanderTick(summon, guid)
     end)
@@ -340,7 +340,7 @@ local function kelthuzadMinionMovementInform(_, creature, moveType, id)
     if moveType ~= 8 or id ~= MOVEMENT_MINION_RANDOM then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "wander", math.random(2000, 10000) + math.random(2000, 10000), function()
         wanderTick(creature, guid)
     end)
@@ -360,7 +360,7 @@ local function kelthuzadJustSummoned(event, creature, summon)
     if not summon then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local latched = kelthuzadSummons[guid]
     if not latched then
         latched = {}
@@ -373,7 +373,7 @@ local function kelthuzadSummonDespawned(event, creature, summon)
     if not summon then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local latched = kelthuzadSummons[guid]
     if latched then
         local summonGuid = summon:GetGUID()
@@ -405,7 +405,7 @@ local function despawnKelthuzadSummons(guid, skipGuardians)
     for _, summon in ipairs(toDespawn) do
         -- A wandering minion's pending "wander" timer must not fire on
         -- the despawned creature (C++ despawn ends the AI outright).
-        cancelTimers(summon:GetGUID())
+        cancelTimers(summon:GetGUIDLow())
         summon:Despawn()
     end
 end
@@ -427,7 +427,7 @@ local function despawnMinionsTick(creature, guid)
         for _, summon in ipairs(toDespawn) do
             -- A wandering minion's pending "wander" timer must not fire
             -- on the despawned creature (C++ despawn ends the AI).
-            cancelTimers(summon:GetGUID())
+            cancelTimers(summon:GetGUIDLow())
             summon:Despawn()
         end
     end
@@ -438,7 +438,7 @@ end
 -- summons despawned) — timer/summons/counter twins only; the
 -- ReactState/NOT_SELECTABLE/immune legs stay out with Reset itself.
 local function kelthuzadReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:GetBossState(BOSS_KELTHUZAD) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
@@ -464,7 +464,7 @@ end
 -- C++ EnterEvadeMode (:237-245) -> Reset() + _DespawnAtEvade(): the
 -- ev2 twin of the Reset bookkeeping above.
 local function kelthuzadLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     despawnKelthuzadSummons(guid, false)
     -- C++ EnterEvadeMode calls Reset (:237-245), which zeroes the same
@@ -554,7 +554,7 @@ local function kelthuzadGuardianDoAction(event, creature, action)
     if action ~= ACTION_JUST_SUMMONED then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetVisible(false)
     creature:SetHomePosition()
@@ -590,19 +590,19 @@ bloodTapTick = function(creature, guid)
 end
 
 local function kelthuzadGuardianLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_kelthuzad_guardianAI::Reset (boss_kelthuzad.cpp:836-840):
 -- SetCombatPulseDelay(0) + ScriptedAI::Reset.
 local function kelthuzadGuardianReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetCombatPulseDelay(0)
 end
 
 local function kelthuzadDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
-    despawnKelthuzadSummons(creature:GetGUID(), true) -- C++ _JustDied (:280): non-guardian summons despawn; guardians flee, not despawned
+    cancelTimers(creature:GetGUIDLow())
+    despawnKelthuzadSummons(creature:GetGUIDLow(), true) -- C++ _JustDied (:280): non-guardian summons despawn; guardians flee, not despawned
     kelthuzadGuardianFlee(creature)
     creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:Talk(SAY_DEATH)
@@ -1101,7 +1101,7 @@ local function kelthuzadDoAction(event, creature, action)
             seedMinionWander(summon)
         end
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ :550-554: the five phase-one schedules, all seeded once here.
     -- EVENT_SKELETON 5s, EVENT_BANSHEE 30s, EVENT_ABOMINATION 30s,
     -- EVENT_DESPAWN_MINIONS 3m33s (213000ms), EVENT_PHASE_TWO 3m48s
@@ -1144,7 +1144,7 @@ local function kelthuzadMinionEnterCombat(event, creature, target)
     -- never checked again, so the wander stops permanently on engage.
     -- (A MovePoint already in flight still lands and re-arms via ev28,
     -- the C++ MovementInform behavior — the spline is not cancelled.)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelKey(guid, "wander")
     if creature:GetEntry() == ENTRY_ABOMINATION then
         schedule(guid, "wound", math.random(10000, 20000), function()
@@ -1191,7 +1191,7 @@ woundTick = function(creature, guid)
 end
 
 local function kelthuzadMinionLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ has no JustDied arm for skeleton/banshee (boss_kelthuzad.cpp:
@@ -1199,7 +1199,7 @@ end
 -- bookkeeping — a wander timer re-armed by an in-flight MoveTo
 -- landing after engage must not fire on the corpse.
 local function kelthuzadMinionDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ npc_kelthuzad_abominationAI::JustDied (:732-736): relay
@@ -1208,7 +1208,7 @@ end
 -- the achievement check itself stays out — no bridge for that
 -- ScriptName).
 local function kelthuzadAbominationDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local kelthuzad = creature:GetInstanceCreature(DATA_KELTHUZAD)
     if kelthuzad then
         kelthuzad:DoAction(ACTION_ABOMINATION_DIED)

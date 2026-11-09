@@ -269,7 +269,7 @@ local function hammerJusticeTick(creature, guid)
 end
 
 local function eadricEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "vengeance", 10000, function()
         vengeanceTick(creature, guid)
@@ -283,15 +283,15 @@ local function eadricEnterCombat(event, creature, target)
 end
 
 local function eadricLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function eadricDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function eadricReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_eadricAI::Reset is Initialize() only (timers re-init);
     -- the :305 RemoveAllAuras belongs to boss_paletressAI::Reset, not
     -- eadric — a prior tick misattributed it here, fixed this tick
@@ -394,7 +394,7 @@ local function renewTick(creature, guid)
 end
 
 local function paletressEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     local st = getPaletressState(guid)
     st.shieldHealth = false
@@ -411,17 +411,17 @@ local function paletressEnterCombat(event, creature, target)
 end
 
 local function paletressLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function paletressDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_paletressAI::Reset: RemoveAllAuras + Initialize (timers /
 -- latches re-init); the MemoryGUID RemoveFromWorld leg stays out.
 local function paletressReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     getPaletressState(guid).shieldHealth = false
     creature:RemoveAllAuras()
@@ -434,7 +434,7 @@ end
 -- 0 guard — the lethal hit is absorbed by argentDamageTaken, which
 -- runs first and chains damage to 0).
 local function paletressHealthLatch(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = getPaletressState(guid)
     if st.shieldHealth then
         return

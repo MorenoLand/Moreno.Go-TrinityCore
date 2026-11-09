@@ -237,7 +237,7 @@ local function deriveFactionLeader(creature)
 end
 
 local function fordringState(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = ford[guid]
     if not st then
         st = { leader = DATA_GARROSH, jormungarsSummoned = false, icehowlSummoned = false }
@@ -343,7 +343,7 @@ end
 
 -- C++ npc_tirion_toc::DoAction (trial_of_the_crusader.cpp:392-510).
 local function fordringDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = fordringState(creature)
     if action == ACTION_START_GORMOK then
         creature:Talk(0)
@@ -504,7 +504,7 @@ end
 
 -- C++ npc_tirion_toc::Reset (trial_of_the_crusader.cpp:355-362).
 local function fordringReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local st = fordringState(creature)
     st.leader = deriveFactionLeader(creature)
     st.jormungarsSummoned = false
@@ -595,7 +595,7 @@ end
 -- (0 beasts / 1 pigs-or-dogs / 2 demand-justice / 3 no-mercy-or-glory /
 -- 4 faction-dead / 5 valkyr-dead / 6 killed); delays differ per leader.
 local function leaderDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local isVarian = creature:GetEntry() == ENTRY_VARIAN
     if action == ACTION_START_GORMOK then
         schedule(guid, "gormokIntro", isVarian and 11000 or 12000, function()
@@ -629,7 +629,7 @@ local function leaderDoAction(event, creature, action)
 end
 
 local function leaderReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_VARIAN, 23, leaderReset)
@@ -675,8 +675,8 @@ end
 
 local function fizzlebangReset(event, creature)
     creature:SetReactState(REACT_PASSIVE)
-    cancelTimers(creature:GetGUID())
-    schedule(creature:GetGUID(), "startMove", 1000, function()
+    cancelTimers(creature:GetGUIDLow())
+    schedule(creature:GetGUIDLow(), "startMove", 1000, function()
         creature:MoveAlongSplineChain(POINT_SUMMON, SPLINE_INITIAL_MOVEMENT, true)
     end)
 end
@@ -685,8 +685,8 @@ local function fizzlebangMovementInform(event, creature, type, id)
     if type == SPLINE_CHAIN_MOTION_TYPE and id == POINT_SUMMON then
         openMainGate(creature)
         creature:Talk(0)
-        schedule(creature:GetGUID(), "oblivion", 11000, function()
-            fizzlebangOblivion(creature, creature:GetGUID())
+        schedule(creature:GetGUIDLow(), "oblivion", 11000, function()
+            fizzlebangOblivion(creature, creature:GetGUIDLow())
         end)
     end
 end
@@ -700,12 +700,12 @@ RegisterCreatureEvent(ENTRY_FIZZLEBANG, 28, fizzlebangMovementInform)
 local function portalTargetReset(event, creature)
     creature:SetReactState(REACT_PASSIVE)
     creature:SetDisableGravity(true)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function portalTargetSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_OPEN_PORTAL then
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "wilfredPortal", 2000, function()
             creature:CastSpell(creature, SPELL_WILFRED_PORTAL)
             creature:DespawnOrUnsummon(9000)
@@ -724,23 +724,23 @@ RegisterCreatureEvent(ENTRY_WILFRED_PORTAL, 14, portalTargetSpellHit)
 local function lichKingReset(event, creature)
     creature:SetReactState(REACT_PASSIVE)
     creature:SetBossState(DATA_LICH_KING, 1)
-    cancelTimers(creature:GetGUID())
-    schedule(creature:GetGUID(), "startMove", 1000, function()
+    cancelTimers(creature:GetGUIDLow())
+    schedule(creature:GetGUIDLow(), "startMove", 1000, function()
         creature:MoveAlongSplineChain(POINT_MIDDLE, SPLINE_INITIAL_MOVEMENT, true)
     end)
 end
 
 local function lichKingMovementInform(event, creature, type, id)
     if type == SPLINE_CHAIN_MOTION_TYPE and id == POINT_MIDDLE then
-        schedule(creature:GetGUID(), "startTalk", 4000, function()
+        schedule(creature:GetGUIDLow(), "startTalk", 4000, function()
             creature:Talk(0)
-            schedule(creature:GetGUID(), "emoteTalk", 4000, function()
+            schedule(creature:GetGUIDLow(), "emoteTalk", 4000, function()
                 local mapObj = creature:GetMap()
                 if mapObj ~= nil then
                     mapObj:SetZoneWeather(AREA_TRIAL_OF_THE_CRUSADER, WEATHER_FOG, 0.0)
                 end
             end)
-            schedule(creature:GetGUID(), "breakPlatform", 18000, function()
+            schedule(creature:GetGUIDLow(), "breakPlatform", 18000, function()
                 creature:CastSpell(creature, SPELL_LK_FROST_NOVA, true)
                 creature:CastSpell(creature, SPELL_CORPSE_TELEPORT, true)
                 creature:CastSpell(creature, SPELL_DESTROY_FLOOR_KNOCKUP, true)

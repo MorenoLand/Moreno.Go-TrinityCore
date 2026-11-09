@@ -250,7 +250,7 @@ local function removeCCCheck(creature, guid)
 end
 
 local function druidEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
@@ -264,21 +264,21 @@ local function druidEnterCombat(event, creature, target)
 end
 
 local function druidLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function druidDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 
 local function druidSpawn(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function druidReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_toc_druid::Reset (boss_faction_champions.cpp:774):
     -- SetEquipmentSlots(false, 51799, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE).
     creature:SetEquipmentSlots(51799, 0xFFFFFFFF, 0xFFFFFFFF)

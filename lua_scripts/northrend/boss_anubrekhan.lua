@@ -321,7 +321,7 @@ local function anubrekhanEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; heigan/loatheb/razuvious precedent)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     swarmState[guid] = { swarm = false, soon = false }
     local locustDelay = math.random(100000, 120000)
@@ -354,7 +354,7 @@ local function anubrekhanEnterCombat(event, creature, target)
 end
 
 local function anubrekhanLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ KilledUnit (boss_anubrekhan.cpp:143-149): TYPEID_PLAYER-gated
@@ -381,7 +381,7 @@ local function anubrekhanTargetDied(event, creature, victim)
 end
 
 local function anubrekhanDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_ANUBREKHAN, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
 end
 
@@ -397,7 +397,7 @@ local function anubrekhanJustSummoned(_, creature, summoned)
 end
 
 local function anubrekhanReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(BOSS_ANUBREKHAN) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_ANUBREKHAN, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end

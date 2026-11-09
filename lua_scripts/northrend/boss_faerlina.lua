@@ -304,14 +304,14 @@ local function faerlinaSpawn(event, creature)
     creature:SetGuidData(DATA_FAERLINA)
     if not creature:IsDead() and creature:GetBossState(BOSS_FAERLINA) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_NOT_STARTED) -- Reset leg (:109-113)
-        summonAdds(creature, creature:GetGUID())
+        summonAdds(creature, creature:GetGUIDLow())
     end
 end
 
 -- C++ JustReachedHome (boss_faerlina.cpp:93-97): _JustReachedHome
 -- (setActive(false), no Lua model) + SummonAdds().
 local function faerlinaReachHome(event, creature)
-    summonAdds(creature, creature:GetGUID())
+    summonAdds(creature, creature:GetGUIDLow())
 end
 
 local function faerlinaEnterCombat(event, creature, target)
@@ -319,7 +319,7 @@ local function faerlinaEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     for _, add in ipairs(faerlinaSummons[guid] or {}) do -- C++ summons.DoZoneInCombat (:103)
         if add ~= nil then
             add:DoZoneInCombat()
@@ -368,8 +368,8 @@ local function faerlinaLeaveCombat(event, creature)
     -- C++ EnterEvadeMode -> Reset -> _Reset summons.DespawnAll; the
     -- re-summon rides event 24 below. Death never fires event 2, so
     -- this stays evade-only, C++-exact (razuvious precedent).
-    despawnAdds(creature:GetGUID())
-    cancelTimers(creature:GetGUID())
+    despawnAdds(creature:GetGUIDLow())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function faerlinaTargetDied(event, creature, victim)
@@ -383,9 +383,9 @@ local function faerlinaDied(event, creature, killer)
     -- C++ JustDied (:121-125): _JustDied summons.DespawnAll +
     -- SetBossState DONE (ScriptedCreature.cpp:513-520; moroes
     -- precedent).
-    despawnAdds(creature:GetGUID())
+    despawnAdds(creature:GetGUIDLow())
     creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset (boss_faerlina.cpp:109-113): _Reset (summons.DespawnAll +
@@ -393,11 +393,11 @@ end
 -- ScriptedCreature.cpp:499-511) + _frenzyDispels = 0 (achievement-only,
 -- no consumer — documented in the header).
 local function faerlinaReset(event, creature)
-    despawnAdds(creature:GetGUID())
+    despawnAdds(creature:GetGUIDLow())
     if creature:GetBossState(BOSS_FAERLINA) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_FAERLINA, BOSS_STATE_NOT_STARTED)
     end
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
     -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
     -- and a death-time zero would clobber the fight's counter before

@@ -629,7 +629,7 @@ local function jaraxxusEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_lord_jaraxxus.cpp:135 (BossAI base arm; setActive/instance legs have no bridge)
     creature:DoZoneInCombat() -- boss_lord_jaraxxus.cpp:135 (BossAI base arm)
     creature:Talk(SAY_AGGRO)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "fireball", 6000, function()
         fireballTick(creature, guid)
@@ -660,7 +660,7 @@ local function jaraxxusEnterCombat(event, creature, target)
 end
 
 local function jaraxxusLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ boss_jaraxxus::EnterEvadeMode (:147-151): _EnterEvadeMode
     -- (reset legs ride jaraxxusReset ev23, which Go fires first) +
@@ -708,7 +708,7 @@ local function jaraxxusTargetDied(event, creature, victim)
 end
 
 local function jaraxxusDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
     -- C++ _JustDied() (ScriptedCreature.cpp:513-519): events.Reset() +
     -- scheduler.CancelAll() ride cancelTimers above; summons.DespawnAll()
@@ -726,7 +726,7 @@ end
 
 local function jaraxxusReset(event, creature)
     creature:SetCombatPulseDelay(0) -- boss_lord_jaraxxus.cpp:118 (Reset arm 1; pulse disable, ResetLootMode leg has no bridge)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ boss_jaraxxus::Reset (:116-130): events.Reset() /
     -- summons.DespawnAll() ride cancelTimers above (DespawnAll itself
     -- stays out — no summon-registry bridge); NOT_STARTED ->
@@ -737,7 +737,7 @@ local function jaraxxusReset(event, creature)
     -- (lua_creature_events.go:6174) — the old "FAIL gate has no bridge"
     -- claim is STALE. On evade ev23 fires before ev2 sets FAIL, so the
     -- state here is still IN_PROGRESS and neither branch fires.
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local state = creature:GetBossState(DATA_JARAXXUS)
     if state == BOSS_STATE_NOT_STARTED then
         startIntro(creature, guid)
@@ -761,7 +761,7 @@ local function jaraxxusMovementInform(event, creature, moveType, pointId)
     local wilfred = creature:GetInstanceCreature(DATA_FIZZLEBANG)
     if wilfred ~= nil then
         creature:SetFacingToObject(wilfred)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         schedule(guid, "taunt", 9000, function() tauntTick(creature, guid) end)
     end
 end
@@ -774,7 +774,7 @@ end
 -- DoAction fires ev38 on the target (lua_creature_events.go:827).
 local function jaraxxusDoAction(event, creature, action)
     if action == ACTION_JARAXXUS_INTRO then
-        startIntro(creature, creature:GetGUID())
+        startIntro(creature, creature:GetGUIDLow())
     elseif action == ACTION_JARAXXUS_ENGAGE then
         creature:RemoveAura(SPELL_JARAXXUS_CHAINS)
         creature:SetReactState(REACT_AGGRESSIVE)
@@ -832,7 +832,7 @@ local function mistressKissTick(creature, guid)
 end
 
 local function mistressEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shivanslash", 4000, function()
         shivanSlashTick(creature, guid)
@@ -854,11 +854,11 @@ local function mistressEnterCombat(event, creature, target)
 end
 
 local function mistressLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function mistressDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_mistress_of_pain::JustDied (boss_lord_jaraxxus.cpp:421-424):
     -- _instance->SetData(DATA_MISTRESS_OF_PAIN_COUNT 302, DECREASE 502)
     -- (trial_of_the_crusader.h:73, :76); instance SetData decrements
@@ -882,7 +882,7 @@ local function mistressDied(event, creature, killer)
 end
 
 local function mistressReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_mistress_of_pain::Reset (boss_lord_jaraxxus.cpp:398-411):
     -- instance->GetBossState(DATA_JARAXXUS) != IN_PROGRESS ->
     -- DespawnOrUnsummon (:400-404; GetBossState IS bridged,
@@ -928,7 +928,7 @@ RegisterCreatureEvent(ENTRY_MISTRESS_OF_PAIN, 23, mistressReset)
 -- jaraxxus->AI()->JustSummoned leg (:305-306) stays out (no cross-AI
 -- bridge). No UpdateAI in C++ — the flame has no combat ticks.
 local function legionFlameReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_IN_PROGRESS then
         creature:DespawnOrUnsummon()
         return
@@ -971,7 +971,7 @@ end
 -- stays out (no cross-AI bridge). No JustEngagedWith in C++ — the
 -- scheduler starts in Reset, not on engage.
 local function felInfernalReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:GetBossState(DATA_JARAXXUS) ~= BOSS_STATE_IN_PROGRESS then
         creature:DespawnOrUnsummon()
@@ -991,7 +991,7 @@ local function felInfernalReset(event, creature)
 end
 
 local function felInfernalLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_FEL_INFERNAL, 2, felInfernalLeaveCombat)

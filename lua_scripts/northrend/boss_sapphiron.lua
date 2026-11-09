@@ -474,7 +474,7 @@ local function sapphironEnterCombat(event, creature, target)
     creature:SetBossState(BOSS_SAPPHIRON, BOSS_STATE_IN_PROGRESS) -- BossAI::_JustEngagedWith (ScriptedCreature.cpp:537), base-first (faerlina precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; anubrekhan/gothik precedent)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:CastSpell(creature, SPELL_FROST_AURA, true)
     resistsTick(creature, guid)
@@ -496,7 +496,7 @@ local function sapphironEnterCombat(event, creature, target)
 end
 
 local function sapphironLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ SpellHitTarget (boss_sapphiron.cpp:193-203): SPELL_CHECK_RESISTS
@@ -530,7 +530,7 @@ local GO_STATE_READY = 1
 -- non-DONE transitions are unobserved in Go) + door object kept
 -- for the instance pump's chain-end open + DONE flag for the chain.
 local function sapphironDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(BOSS_SAPPHIRON, BOSS_STATE_DONE) -- BossAI::_JustDied (ScriptedCreature.cpp:519)
     creature:CastSpell(creature, SPELL_DIES, true)
     local door = creature:FindNearestGameObject(GO_ROOM_KELTHUZAD, 1000)
@@ -553,7 +553,7 @@ end
 -- hovering). Gated on the flight latch — the non-flight Reset is
 -- _Reset bookkeeping only.
 local function sapphironReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local wasFlying = flying[guid]
     cancelTimers(guid)
     if creature:GetBossState(BOSS_SAPPHIRON) ~= BOSS_STATE_DONE then
@@ -615,7 +615,7 @@ local function sapphironDoAction(event, creature, action)
     if action ~= ACTION_BIRTH then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "birth", 23000, function()
         creature:SetVisible(true)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
@@ -629,7 +629,7 @@ end
 -- return rewrites damage (fireCreatureDamageTaken; tesla/halazzi
 -- precedent).
 local function sapphironDamageTaken(event, creature, attacker, damage)
-    if flying[creature:GetGUID()] then
+    if flying[creature:GetGUIDLow()] then
         local hp = creature:GetHealth()
         if damage >= hp and hp > 0 then
             return false, hp - 1
@@ -665,7 +665,7 @@ local function iceboltApply(event, aura, target)
 end
 
 local function iceboltRemove(event, aura, target)
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     local blockGuid = iceboltBlocks[guid]
     if blockGuid then
         local block = target:GetGameObjectByGUID(blockGuid)
@@ -678,7 +678,7 @@ local function iceboltRemove(event, aura, target)
 end
 
 local function iceboltPeriodic(event, aura, target)
-    local guid = target:GetGUID()
+    local guid = target:GetGUIDLow()
     if iceboltBlocks[guid] then
         return
     end

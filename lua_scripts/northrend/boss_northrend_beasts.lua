@@ -485,7 +485,7 @@ local function enterCombat(event, creature, target)
         end
     end
     creature:SetBossState(DATA_NORTHREND_BEASTS, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "impale", 10000, function()
         impaleTick(creature, guid)
@@ -589,7 +589,7 @@ local function beastsEvaded(event, creature)
 end
 
 local function leaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     beastsEvaded(event, creature)
 end
 
@@ -604,12 +604,12 @@ end
 -- Tirion machine.
 local function gormokDied(event, creature, killer)
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     beastsCountDeath(creature)
 end
 
 local function reset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm; SetReactState leg stays out on the paired-arm rule — see header)
 end
 

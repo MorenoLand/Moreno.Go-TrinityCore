@@ -254,7 +254,7 @@ end
 -- (boss_faction_champions.lua precedent: the EventMap ticks only in
 -- combat; canceled on events 2/4/23).
 local function scheduleRotation(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "scream", {10000, 30000}, function() onPsychicScream(creature, guid) end)
     schedule(guid, "manaburn", {15000, 30000}, function() onManaBurn(creature, guid) end)
@@ -312,13 +312,13 @@ local function removeCCCheck(creature, guid)
 end
 
 local function priestEnterCombat(event, creature, target)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:647
     creature:DoZoneInCombat() -- boss_faction_champions.cpp:649, in arm order after pulse delay
     championEncounterStart(creature) -- C++ :650-651 SetData(2, IN_PROGRESS)
     scheduleRotation(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     schedule(guid, "threat", 5000, function() threatCheck(creature, guid) end)
     if creature:IsHeroic() then
         schedule(guid, "removecc", 5000, function() removeCCCheck(creature, guid) end)
@@ -326,21 +326,21 @@ local function priestEnterCombat(event, creature, target)
 end
 
 local function priestLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function priestDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 
 local function priestSpawn(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function priestReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ npc_toc_priest::Reset (boss_faction_champions.cpp:1063):
     -- SetEquipmentSlots(false, 49992, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE).
     creature:SetEquipmentSlots(49992, 0xFFFFFFFF, 0xFFFFFFFF)

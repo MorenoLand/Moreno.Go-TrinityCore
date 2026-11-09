@@ -385,7 +385,7 @@ end
 -- C++ Reset: base legs (unbridged, see header) + 8 event schedules +
 -- SetEquipmentSlots(false, 50966, NO_CHANGE, NO_CHANGE).
 local function scheduleRotation(creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "cyclone", {10000, 20000}, function() onCyclone(creature, guid) end)
     schedule(guid, "roots", {10000, 20000}, function() onRoots(creature, guid) end)
@@ -447,7 +447,7 @@ local function removeCCCheck(creature, guid)
 end
 
 local function boomkinEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:CastSpell(creature, SPELL_ANTI_AOE, true)
     creature:SetCombatPulseDelay(5) -- boss_faction_champions.cpp:646
     creature:DoZoneInCombat() -- C++ :649, in arm order after pulse delay (bridge live 2026-10-23)
@@ -459,12 +459,12 @@ local function boomkinEnterCombat(event, creature, target)
 end
 
 local function boomkinLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountFail(creature) -- C++ JustReachedHome :596-600 SetData(2, FAIL), ev2 twin
 end
 
 local function boomkinDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     championCountDeath(creature) -- C++ JustDied :637-641 SetData(2, DONE)
 end
 

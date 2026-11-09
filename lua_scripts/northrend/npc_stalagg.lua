@@ -224,7 +224,7 @@ local function stalaggEnterCombat(event, creature, target)
     if feugen and not feugen:IsInCombat() then
         feugen:AddThreat(target, 0)
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "powersurge", 10000, function()
         powerSurgeTick(creature, guid)
@@ -232,7 +232,7 @@ local function stalaggEnterCombat(event, creature, target)
 end
 
 local function stalaggLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_thaddius.cpp:490-494): thaddius
     -- DoAction(ACTION_STALAGG_RESET).
     local thaddius = creature:GetInstanceCreature(DATA_THADDIUS)
@@ -251,7 +251,7 @@ local function stalaggTargetDied(event, creature, victim)
 end
 
 local function stalaggDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     stalaggFeign[guid] = nil
     stalaggOverload[guid] = nil
@@ -262,7 +262,7 @@ end
 -- true ("force tesla coil state refresh") alongside the latch inits.
 -- Go ev5 fires once per spawn (felmyst trailSpawn precedent).
 local function stalaggSpawn(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     creature:SetGuidData(DATA_STALAGG) -- C++ instance OnCreatureCreate latch, faerlina precedent
     stalaggOverload[guid] = nil
     stalaggRefreshBeam[guid] = true
@@ -284,7 +284,7 @@ local UNIT_STAND_STATE_STAND = 0
 local UNIT_STAND_STATE_DEAD = 7
 
 local function stalaggReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ has no Reset override: on evade stalagg runs EnterEvadeMode ->
     -- thaddius DoAction(ACTION_STALAGG_RESET) -> BeginResetEncounter ->
@@ -325,7 +325,7 @@ end
 local EMOTE_FEIGN_DEATH = 3
 
 local function stalaggDamageTaken(event, creature, attacker, damage)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if damage < creature:GetHealth() then
         return false, damage
     end
@@ -380,7 +380,7 @@ local function stalaggSpellHit(event, creature, caster, spellId)
     if not caster or caster:GetObjectType() ~= "Creature" then
         return
     end
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local hx, hy, hz = creature:GetHomePosition()
     local dx = creature:GetX() - hx
     local dy = creature:GetY() - hy
@@ -425,7 +425,7 @@ end
 
 -- C++ npc_stalaggAI::DoAction (boss_thaddius.cpp:503-558), event 38.
 local function stalaggDoAction(event, creature, action)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     if action == ACTION_BEGIN_RESET_ENCOUNTER then
         stalaggBeginResetEncounter(creature, guid)
     elseif action == ACTION_STALAGG_REVIVING_FX then
