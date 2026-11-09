@@ -13,6 +13,10 @@ local NPC_VAMPIRIC_FIEND = 37901
 
 local GO_EMPOWERING_BLOOD_ORB = 201741 -- icecrown_citadel.h:403
 
+local DATA_GUID = 2 -- icecrown_citadel.cpp:188 (DATA_DAMNED_KILLS = 1, DATA_GUID)
+local ACTION_EVADE = 2 -- icecrown_citadel.cpp:193-195
+local ACTION_COMBAT = 3
+
 local SPELL_POLYMORPH_ALLY = 72106
 
 -- Blood knight
@@ -53,6 +57,7 @@ local DARKFALLEN_ENTRIES = {
 -- the out-of-combat emote machine, per DarkFallenAI::JustEngagedWith).
 local timers = {}
 local emoteActive = {} -- per-GUID: out-of-combat emote machine latch (C++ IsDoingEmotes)
+local triggerGuid = {} -- per-GUID: orb controller low GUID (C++ DarkFallenAI TriggerGuid)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -163,8 +168,9 @@ local function randomDarkfallenTarget(creature, excludeAura, excludeVictim, play
 end
 
 -- C++ JustEngagedWith for each subclass (:815-822): cancel the emote
--- machine + class ScheduleSpells; the TriggerGuid ACTION_COMBAT signal to
--- the orb controller has no cross-creature AI bridge — documented.
+-- machine + class ScheduleSpells, then signal the orb controller
+-- (TriggerGuid ACTION_COMBAT + own GUID) via the event-40 SetGUID
+-- bridge (lua_creature_events.go).
 local function darkfallenEngage(entry, creature)
     local guid = creature:GetGUIDLow()
     stopEmoteMachine(guid)
@@ -392,21 +398,43 @@ local function darkfallenEngage(entry, creature)
             stepTick()
         end)
     end
+    -- DarkFallenAI::JustEngagedWith (:815-822) tail: signal the orb
+    -- controller that combat started (ACTION_COMBAT + own GUID); the
+    -- controller zone-engages this darkfallen and siphons a minion
+    -- (npc_icc_orb_controller.lua). Nil trigger = never registered
+    -- with a controller (C++ GetUnit(nil) skip twin).
+    local trigger = triggerGuid[guid]
+    if trigger ~= nil then
+        local controller = creature:GetCreatureByGUID(trigger)
+        if controller ~= nil then
+            controller:SetGUID(guid, ACTION_COMBAT)
+        end
+    end
 end
 
 local function darkfallenLeaveCombat(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     emoteActive[guid] = false
-    -- C++ EnterEvadeMode legs (ACTION_EVADE signal, orb GO-flag leg,
-    -- _EnterEvadeMode) ride unbridged cross-AI/GO machines; the emote
-    -- machine re-arms on Reset — modeled here via ev2 (teron evade
-    -- precedent) since Reset fires on evade in C++.
+    -- The emote machine re-arms on Reset — modeled here via ev2 (teron
+    -- evade precedent) since Reset fires on evade in C++.
     startEmoteMachine(creature)
+    -- DarkFallenAI::EnterEvadeMode (:838-842): tell the orb controller
+    -- the fight ended (ACTION_EVADE via the bridged ev38 dispatch); it
+    -- re-arms the visual channel (npc_icc_orb_controller.lua).
+    local trigger = triggerGuid[guid]
+    if trigger ~= nil then
+        local controller = creature:GetCreatureByGUID(trigger)
+        if controller ~= nil then
+            controller:DoAction(ACTION_EVADE)
+        end
+    end
 end
 
 local function darkfallenDied(event, creature, killer)
-    stopEmoteMachine(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    stopEmoteMachine(guid)
+    triggerGuid[guid] = nil
 end
 
 local function darkfallenReset(event, creature)
@@ -414,6 +442,16 @@ local function darkfallenReset(event, creature)
         return
     end
     startEmoteMachine(creature)
+end
+
+-- DarkFallenAI::SetGUID (icecrown_citadel.cpp:832-835): the orb
+-- controller stores its GUID here at init (DATA_GUID); the engage /
+-- evade arms above signal back through it.
+local function darkfallenSetGUID(event, creature, guid, id)
+    if id ~= DATA_GUID then
+        return
+    end
+    triggerGuid[creature:GetGUIDLow()] = guid
 end
 
 -- DarkFallenAI::DoAction(ACTION_SIPHON_INTERRUPTED 1)
@@ -467,6 +505,7 @@ for _, entry in ipairs(DARKFALLEN_ENTRIES) do
     end)
     RegisterCreatureEvent(entry, 23, darkfallenReset)
     RegisterCreatureEvent(entry, 38, darkfallenDoAction)
+    RegisterCreatureEvent(entry, 40, darkfallenSetGUID)
 end
 
 RegisterCreatureEvent(NPC_VAMPIRIC_FIEND, 1, fiendEngage)

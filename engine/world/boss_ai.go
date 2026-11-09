@@ -21755,7 +21755,9 @@ func init() {
 	// random target; vampiric fiend (37901): disease cloud 41290
 	// self, leeching root 70671 victim one-shot, 38s self-despawn;
 	// out-of-combat emote machine (polymorph-ally 72106 + random
-	// DarkFallensEmotes) on spawn/evade.
+	// DarkFallensEmotes) on spawn/evade; SetGUID relay (event 40):
+	// controller GUID stored at init (DATA_GUID), engage signals
+	// ACTION_COMBAT + own GUID, evade signals ACTION_EVADE (ev38).
 	// DarkFallenAI Reset scheduler validator :786-791 gates the
 	// emote machine + all 12 subclass ScheduleSpells ticks: Lua
 	// defers 500ms while casting, no re-arm consumed; vampiric
@@ -21771,12 +21773,15 @@ func init() {
 	RegisterLuaBoss("npc_darkfallen_icc", 37901)
 
 	// npc_icc_orb_controller (Icecrown Citadel instance script):
-	// visual channel only — Reset 1s init grid sweep (10.0f, the 5
-	// darkfallen entries, alive only), first visual 1s later, alternating
+	// visual channel + SetGUID relay — Reset 1s init grid sweep (10.0f,
+	// the 5 darkfallen entries, alive only) hands each minion the
+	// controller GUID (DATA_GUID), first visual 1s later, alternating
 	// 3s/21s repeat, random in-world init minion self-casts blood orb
-	// visual 72099; SetGUID ACTION_COMBAT siphon, DoAction evade re-arm,
-	// and SpellHit orb-controller-active legs stay out (no cross-creature
-	// AI SetGUID/DoAction bridge, GO orb script unported).
+	// visual 72099; SetGUID ACTION_COMBAT (event 40: combat latch,
+	// CancelAll, zone-engage darkfallen, random minion siphon essence
+	// 70299) and DoAction ACTION_EVADE (ev38: prune, 5s visual re-arm,
+	// orb NOT_SELECTABLE) ported on the SetGUID bridge; SpellHit
+	// orb-controller-active leg stays out (70293 has no C++ caster).
 	// Checked-no-gate: UpdateAI is a plain _scheduler.Update with
 	// no SetValidator; visual casts ride minions, not self.
 	// Entry verifiable from icecrown_citadel.h:248 — see

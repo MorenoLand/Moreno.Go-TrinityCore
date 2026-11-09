@@ -417,6 +417,17 @@ const (
 	// returns void, so returns are discarded). 39 is unused in the
 	// TrinityCore LuaEngine CreatureEvents numbering.
 	CreatureEventOnSpellClick = 39
+	// CreatureEventOnSetGUID is a Go-side extension (no C++ Eluna hook):
+	// CreatureAI::SetGUID dispatches through the AI virtual table, which
+	// Lua-ported AIs have no bearer <redacted>, so creature:SetGUID(guid, id) is
+	// the transport — it fires (event, creature, guid, id) on the entry
+	// then unique bindings, the void-hook twin of the other creature
+	// events (C++ SetGUID returns void, so returns are discarded). The
+	// guid is the low half (GetGUIDLow convention): packed GUIDs lose
+	// bits through Lua numbers, so senders pass the counter half and
+	// receivers resolve it with GetCreatureByGUID. 40 is the next free
+	// slot after the DoAction-38 / SpellClick-39 precedents.
+	CreatureEventOnSetGUID = 40
 )
 
 // AuraEvents contract for RegisterAuraEvent(spellID, event, fn). There is

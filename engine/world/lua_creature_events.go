@@ -841,6 +841,43 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnDoAction, doArgs...)
 		return nil, nil
 	}
+	// SetGUID is the CreatureAI::SetGUID dispatch twin (CreatureAI.h):
+	// the C++ call runs the AI's virtual override for the id with the
+	// sender's GUID, and Lua-ported AIs have no AI object — so this
+	// fires the Go-side CREATURE_EVENT_ON_SET_GUID (40) hook with
+	// (event, creature, guid, id) on the entry then unique bindings,
+	// the void-hook twin of the other creature events (C++ SetGUID
+	// returns void, so the hook returns are discarded). The guid is
+	// the low half (GetGUIDLow convention): packed GUIDs lose bits
+	// through Lua numbers, so callers pass creature:GetGUIDLow() and
+	// receivers resolve it with GetCreatureByGUID. Backs the ICC orb
+	// controller relay (icecrown_citadel.cpp:680/729/821/833): the
+	// controller hands its GUID to each darkfallen minion (DATA_GUID)
+	// and the minion answers with its own on engage (ACTION_COMBAT).
+	methods["SetGUID"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("SetGUID requires guid and id arguments")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, err
+		}
+		id, err := luaInt32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.Features == nil || s.Features.Scripts == nil {
+			return nil, nil
+		}
+		creature := s.luaMotionCreature(motion)
+		if creature == nil {
+			return nil, nil
+		}
+		setArgs := []any{scripting.CreatureEventOnSetGUID, creature, guid, id}
+		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnSetGUID, setArgs...)
+		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnSetGUID, setArgs...)
+		return nil, nil
+	}
 	// IsInBack(target[, arc]) is WorldObject::isInBack(target, arc) =
 	// !HasInArc(2*pi - arc, target) (Object.cpp:1417-1420), the event-surface
 	// twin of the session bridge (lua_objects.go:477-496); Eluna's arc
@@ -3961,6 +3998,41 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{s.serverLuaGameObject(ctx, guid)}, nil
+	}
+	// GetCreatureByGUID is ObjectAccessor::GetCreature (ObjectAccessor.h)
+	// by low GUID — the creature-surface twin of GetGameObjectByGUID:
+	// Lua GUIDs travel as the counter half (GetGUIDLow convention; packed
+	// GUIDs lose bits through Lua numbers), so the lookup scans the
+	// map+instance motions for a matching low half, the same scan
+	// GetCreaturesInGrid runs under motionMu. Nil when no such creature
+	// is live. Backs the ICC orb-controller relay: the darkfallen resolves
+	// its stored controller GUID, and the controller resolves its minion
+	// GUIDs (icecrown_citadel.cpp:729-749).
+	methods["GetCreatureByGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return []any{nil}, nil
+		}
+		low := guid & 0x00FFFFFF
+		s.motionMu.Lock()
+		var target *creatureMotion
+		for _, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+			if m != nil && m.GUID&0x00FFFFFF == low {
+				target = m
+				break
+			}
+		}
+		s.motionMu.Unlock()
+		if target == nil {
+			return []any{nil}, nil
+		}
+		return []any{s.luaMotionCreature(target)}, nil
 	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go

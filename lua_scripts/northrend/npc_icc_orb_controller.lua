@@ -17,22 +17,17 @@
 -- both reaches — the same approximation the darkfallen emoteTick uses
 -- for this identical search class. The GetWaypointPath leg has no
 -- handler-surface bridge (darkfallen precedent: DB trash never paths).
--- STAYS OUT: SetGUID ACTION_COMBAT (:729-748, no cross-creature AI
--- SetGUID bridge — CancelAll, DoZoneInCombat, SIPHON_ESSENCE 70299 on a
--- random minion); DoAction ACTION_EVADE (:750-763, ev38 dispatch IS bridged
--- — creature:DoAction, lua_creature_events.go:802 — but its sender,
--- DarkFallenAI::EnterEvadeMode (:838-842), has no Lua arm carrying the
--- controller GUID (SetGUID DATA_GUID :680 unported, no darkfallen-side
--- receiver), so the call can't be addressed: UpdateValidGuids prune +
--- 5s visual re-arm + orb NOT_SELECTABLE flag stay out);
--- SpellHit ORB_CONTROLLER_ACTIVE 70293 (:720-725): ev14 hook exists
--- but 70293 has no C++ caster anywhere in-tree (const :97 + check
--- :722 only), so the hit can never fire in Go; the SetGUID leg it
--- would drive (go_empowering_blood_orb.lua, ported tick 504) stays
+-- PORTED: SetGUID ACTION_COMBAT (:729-748) + DoAction ACTION_EVADE
+-- (:750-763) on the event-40 SetGUID bridge (creature:SetGUID /
+-- GetCreatureByGUID, lua_creature_events.go) — the darkfallen side
+-- stores the controller GUID (DATA_GUID :680, sent at init below)
+-- and signals back on engage/evade (npc_darkfallen_icc.lua).
+-- STAYS OUT: SpellHit ORB_CONTROLLER_ACTIVE 70293 (:720-725): ev14
+-- hook exists but 70293 has no C++ caster anywhere in-tree (const :97
+-- + check :722 only), so the hit can never fire in Go; the SetGUID leg
+-- it would drive (go_empowering_blood_orb.lua, ported tick 504) stays
 -- out with it — the GO object has no CastSpell bridge for the leg's
--- 70304 cast either. The init-time SetGUID(DATA_GUID) to each
--- minion (:680) has no Lua receiver on the darkfallen side
--- (darkfallen header documents the TriggerGuid gap).
+-- 70304 cast either.
 
 local NPC_BLOOD_ORB_CONTROLLER = 38008 -- icecrown_citadel.h:248
 
@@ -43,6 +38,15 @@ local NPC_DARKFALLEN_ADVISOR = 37571
 local NPC_DARKFALLEN_TACTICIAN = 37666
 
 local SPELL_BLOOD_ORB_VISUAL = 72099
+local SPELL_SIPHON_ESSENCE = 70299
+
+local GO_EMPOWERING_BLOOD_ORB = 201741 -- icecrown_citadel.h:403
+local GAMEOBJECT_FLAGS = 9 -- UpdateFields.h: OBJECT_END 6 + 3 (arlokk precedent)
+local GO_FLAG_NOT_SELECTABLE = 16 -- SharedDefines.h:1641
+
+local DATA_GUID = 2 -- icecrown_citadel.cpp:188 (DATA_DAMNED_KILLS = 1, DATA_GUID)
+local ACTION_EVADE = 2 -- icecrown_citadel.cpp:193-195
+local ACTION_COMBAT = 3
 
 local DARKFALLEN_ENTRIES = {
     NPC_DARKFALLEN_BLOOD_KNIGHT,
@@ -53,7 +57,7 @@ local DARKFALLEN_ENTRIES = {
 }
 
 local timers = {}
-local state = {} -- per-GUID: { minions = {guid,...}, isLongRepeat = bool }
+local state = {} -- per-GUID: { minions = {guid,...}, isLongRepeat = bool, isInCombat = bool }
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -109,20 +113,31 @@ end
 local function orbReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    state[guid] = nil
+    -- State is created at Reset (not in the init task) so the SetGUID
+    -- combat arm can latch isInCombat even if combat lands inside the
+    -- 1s init window — C++ CancelAll then also kills the pending init
+    -- and _minionGuids stays empty (:729-735).
+    state[guid] = { minions = {}, isLongRepeat = false, isInCombat = false }
     schedule(guid, "init", 1000, function()
+        local st = state[guid]
+        if st == nil then
+            return
+        end
         local minions = {}
         for _, entry in ipairs(DARKFALLEN_ENTRIES) do
             for _, c in ipairs(creature:GetCreaturesInGrid(entry, 10.0)) do
                 if c:IsAlive() then
                     minions[#minions + 1] = c:GetGUIDLow()
+                    -- C++ Reset init (:680): hand the controller GUID to
+                    -- each minion (DATA_GUID) so it can signal back.
+                    c:SetGUID(guid, DATA_GUID)
                 end
             end
         end
         if #minions == 0 then
             return
         end
-        state[guid] = { minions = minions, isLongRepeat = false }
+        st.minions = minions
         schedule(guid, "visual", 1000, function()
             visualTick(creature, guid)
         end)
@@ -135,6 +150,85 @@ local function orbDied(event, creature, killer)
     state[guid] = nil
 end
 
+-- npc_icc_orb_controller::SetGUID (icecrown_citadel.cpp:727-749):
+-- ACTION_COMBAT from an engaging darkfallen (its own GUID): latch,
+-- cancel the visual machine, zone-engage the darkfallen (one call
+-- per out-of-combat minion in C++ — the Go DoZoneInCombat has no
+-- target arg, it engages the caller, CreatureAI.cpp:73-104, so one
+-- call is the same net effect), then a random minion self-casts
+-- SIPHON_ESSENCE 70299 (C++ nil-victim cast; self-cast twin per the
+-- visual-leg note above). A nil darkfallen (stale GUID) returns
+-- before the loop, as in C++.
+local function orbSetGUID(event, creature, guid, id)
+    if id ~= ACTION_COMBAT then
+        return
+    end
+    local cg = creature:GetGUIDLow()
+    local st = state[cg]
+    if st == nil or st.isInCombat then
+        return
+    end
+    st.isInCombat = true
+    cancelTimers(cg)
+    if #st.minions == 0 then
+        return
+    end
+    local darkfallen = creature:GetCreatureByGUID(guid)
+    if darkfallen == nil then
+        return
+    end
+    local anyOutOfCombat = false
+    for _, g in ipairs(st.minions) do
+        local minion = creature:GetCreatureByGUID(g)
+        if minion ~= nil and not minion:IsInCombat() then
+            anyOutOfCombat = true
+            break
+        end
+    end
+    if anyOutOfCombat then
+        darkfallen:DoZoneInCombat()
+    end
+    local pick = st.minions[math.random(#st.minions)]
+    local minion = creature:GetCreatureByGUID(pick)
+    if minion ~= nil then
+        minion:CastSpell(minion, SPELL_SIPHON_ESSENCE)
+    end
+end
+
+-- npc_icc_orb_controller::DoAction ACTION_EVADE
+-- (icecrown_citadel.cpp:751-763): the darkfallen evaded — drop the
+-- latch, prune dead/despawned minions (UpdateValidGuids :705-718),
+-- re-arm the visual channel with the 5s evade first-fire, and flag
+-- the empowering blood orb NOT_SELECTABLE.
+local function orbDoAction(event, creature, action)
+    if action ~= ACTION_EVADE then
+        return
+    end
+    local cg = creature:GetGUIDLow()
+    local st = state[cg]
+    if st == nil or not st.isInCombat then
+        return
+    end
+    st.isInCombat = false
+    local kept = {}
+    for _, g in ipairs(st.minions) do
+        local minion = creature:GetCreatureByGUID(g)
+        if minion ~= nil and minion:IsAlive() then
+            kept[#kept + 1] = g
+        end
+    end
+    st.minions = kept
+    schedule(cg, "visual", 5000, function()
+        visualTick(creature, cg)
+    end)
+    local orb = creature:FindNearestGameObject(GO_EMPOWERING_BLOOD_ORB, 5.0)
+    if orb ~= nil then
+        orb:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+end
+
 RegisterCreatureEvent(NPC_BLOOD_ORB_CONTROLLER, 5, orbReset)
 RegisterCreatureEvent(NPC_BLOOD_ORB_CONTROLLER, 23, orbReset)
 RegisterCreatureEvent(NPC_BLOOD_ORB_CONTROLLER, 4, orbDied)
+RegisterCreatureEvent(NPC_BLOOD_ORB_CONTROLLER, 40, orbSetGUID)
+RegisterCreatureEvent(NPC_BLOOD_ORB_CONTROLLER, 38, orbDoAction)
