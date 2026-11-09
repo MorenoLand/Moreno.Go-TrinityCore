@@ -150,8 +150,10 @@
 -- the pet-template InitializeAI leg (cross-AI SetGUID(GUID_TYPE_PET)
 -- -> JustSummoned — SetGUID bridge absent; GetCreature(DATA_ANUBARAK)
 -- instance legs — instance model absent), JustDied
--- ACTION_PET_DIED (DoAction bridge absent), EnterEvadeMode
--- ACTION_PET_EVADE (DoAction bridge absent); darter InitializeAI
+-- ACTION_PET_DIED (DoAction dispatch IS bridged, lua_creature_events.go:827 —
+-- the gap is the unported pet sender + the unpopulated _petCount latch),
+-- EnterEvadeMode
+-- ACTION_PET_EVADE (same: dispatch bridged, sender unported); darter InitializeAI
 -- DoCastAOE(SPELL_DART 59349) (stays out: entry-blocked — the darter
 -- has no C++ NPC constant, summoned DB-side); assassin
 -- InitializeAI MoveJump choreography (GetRandomPositionAround

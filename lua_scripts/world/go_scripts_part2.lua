@@ -43,11 +43,12 @@
 --     FindNearestCreature bridged 2026-10-24 too (lua_objects.go), so
 --     the ribbon-pole bunny search is portable (sole block DoAction).
 --   - Creature DoAction / MovePoint / AI()->Talk via a GO-obtained
---     creature: no bridge (blocks cage children walk+Talk, ribbon pole
---     ACTION_COSMETIC_FIRES) — re-verified 2026-10-24: zero DoAction
---     hits in runtime.go + lua_creature_events.go, and bunny 17066 has
---     no AI anywhere else in the C++ tree (go_scripts.cpp is its sole
---     hit), so even a dispatch bridge would have no handler to call.
+--     creature: DoAction dispatch IS bridged now (lua_creature_events.go:827;
+--     the 2026-10-24 "zero DoAction hits" re-verification is stale) — the
+--     ribbon-pole ACTION_COSMETIC_FIRES leg rides the creature:SetData
+--     relay instead (see below); the cage-children walk+Talk legs are
+--     unchanged by this correction. Bunny 17066 has no AI anywhere else
+--     in the C++ tree (go_scripts.cpp is its sole hit).
 --   - GameObject GetAreaId/GetZoneId IS bridged 2026-10-24
 --     (lua_objects.go, zoneAndAreaID twin) — brewfest area dispatch and
 --     bells zone->soundId init now portable; remaining blocks are the
@@ -101,8 +102,9 @@
 -- NPC_POLE_RIBBON_BUNNY 17066, 10.0f) bridged 2026-10-24 (lua_objects.go),
 -- player:CastSpell(player, RibbonPoleSpells[urand(0,2)] in {29705, 29726,
 -- 29727} — enum :811-813) bridged 2026-10-24. The DoAction(
--- ACTION_COSMETIC_FIRES 0) leg has no dispatch bridge, so the start
--- rides the creature:SetData relay: the handler writes the bunny's
+-- ACTION_COSMETIC_FIRES 0) dispatch IS bridged (lua_creature_events.go:827;
+-- the 2026-10-24 "no dispatch bridge" note is stale), but the start
+-- rides the creature:SetData relay (kept): the handler writes the bunny's
 -- running latch (SetData key 1, shared with npcs_special_part1.lua)
 -- and the bunny's event-7 detector starts the ring chain.
 -- Entry IS in-tree (GO_RIBBON_POLE 181605, npcs_special.cpp enum), so

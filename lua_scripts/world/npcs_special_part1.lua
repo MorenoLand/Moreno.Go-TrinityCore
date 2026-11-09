@@ -92,9 +92,10 @@
 -- npc_midsummer_bunny_pole (C++ :456-574) — PORTED 2026-10-24.
 -- Entry IS in-tree (NPC_POLE_RIBBON_BUNNY 17066, go_scripts.cpp:797),
 -- so the class registers; the old "no entry consts" ground is retracted.
--- DoAction :484-492 has no dispatch bridge, so the start rides the
--- creature:SetData relay instead: the ribbon-pole GO gossip handler
--- (go_scripts_part2.lua) writes the running latch, and the bunny's
+-- DoAction dispatch IS bridged (lua_creature_events.go:827), so the start
+-- rides the creature:SetData relay instead (kept from the 2026-10-24 port):
+-- the ribbon-pole GO gossip handler (go_scripts_part2.lua) writes the
+-- running latch, and the bunny's
 -- event-7 latch-rise detector below starts the ring chain — the GO
 -- handler and the bunny handler share the motion's ScriptData map
 -- (both objects are luaMotionCreature builds), never a DoAction call.
