@@ -37,9 +37,10 @@
 -- as a per-key cancel); DUNGEON_MODE(3, 5) rides
 -- creature:IsHeroic(); SpawnLoc[] positions literal;
 -- TEMPSUMMON_CORPSE_TIMED_DESPAWN (5) / 20s -> summonType 5 /
--- despawnMs 20000. Documented delta: the corpse-timed despawn leg has
--- no bridge — snake / constrictor corpses stay on the normal corpse
--- sweep. Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4)
+-- despawnMs 20000. The corpse timer rides the bridged SummonCreature
+-- type-5 leg (lua_creature_events.go — CORPSE_TIMED_DESPAWN carries
+-- the duration for the corpse timer); the old "no bridge" claim was
+-- stale. Talk(SAY_SUMMON_SNAKES 3) / Talk(SAY_SUMMON_CONSTRICTORS 4)
 -- were already ported: HealthBelowPct(30/25) runs on the bridged
 -- creature:GetHealthPct() in an event-9 handler with a per-GUID phase
 -- latch (the old "no HealthBelowPct bridge" claim was stale —
@@ -47,10 +48,12 @@
 -- JustSummoned's MovePoint-to-boss arm is ported via the MoveTo
 -- twin and its summons latch via the ev19 table (despawned from
 -- died/reset/leave). SetGUID(DATA_SNAKES_WHYD_IT_HAVE_TO_BE_SNAKES) /
--- WasWrapped have no cross-AI SetGUID bridge (zero hits —
--- netherstorm precedent). achievement_snakes_whyd_it_have_to_be_snakes
--- (AchievementCriteriaScript, CAST_AI cross-AI OnCheck) has no
--- achievement-criteria bridge on the Lua surface — documented-only.
+-- WasWrapped ports as per-player "wrapped_<guidLow>" keys in the
+-- shared instanceData table (recordWrapped, below — the
+-- once_bitten_twice_shy precedent); achievement_snakes_whyd_it_have_to_be_snakes
+-- is PORTED end-to-end (the Go gate reads those keys,
+-- achievement_criteria_scripts.go). The old "no cross-AI SetGUID /
+-- no achievement-criteria bridge" claims were stale.
 -- Constrictor: the stack-count leg (GetAura(55093) stack check == 5)
 -- PORTED via Unit:GetAura + Aura:GetStackAmount (lua_aura.go) — the
 -- old "no player-surface stack bridge" wording is retired. Remaining
@@ -258,8 +261,8 @@ end
 -- scheduler.Schedule(5s, GROUP_SNAKES, ...) with task.Repeat() — every
 -- 5s (initial 5s), summon DUNGEON_MODE(3, 5) vipers at SpawnLoc[i],
 -- TEMPSUMMON_CORPSE_TIMED_DESPAWN (5), 20s -> summonType 5 /
--- despawnMs 20000. Documented delta: the corpse-timed despawn leg has
--- no bridge — viper corpses stay on the normal corpse sweep.
+-- despawnMs 20000 (corpse timer bridged — see the snake-wave note
+-- above, not a documented delta).
 local function snakeWaveTick(creature, guid)
     -- C++ BossAI scheduler validator (ScriptedCreature.cpp:493-496)
     -- + TaskScheduler::Dispatch predicate checks: while casting, due
@@ -324,7 +327,8 @@ end
 -- hit can cascade 0->1->2 — no elseif. The summon-wave payloads ride
 -- snakeWaveTick / constrictorWaveTick above (the old "summon STRAND
 -- (standing)" claim is re-keyed — creature:SummonCreature is bridged);
--- the corpse-timed despawn legs stay documented-only. Phase latch
+-- the corpse-timed despawn legs ride the bridged type-5 summon leg.
+-- Phase latch
 -- cleared on evade/reset (C++ Initialize()/Reset()).
 sladranPhase = {}
 

@@ -17471,14 +17471,15 @@ func init() {
 	// Talk(EMOTE_ACTIVATE_ALTAR 6) + Talk(SAY_DEATH 2); cast-state gates
 	// PORTED (BossAI scheduler validator — nova/bite/venom + snake/
 	// constrictor wave ticks defer 500ms while casting; constrictor/
-	// viper own schedulers ungated). The DamageTaken
-	// phase machine (HealthBelowPct 30/25 — no health-pct bridge, and
-	// the SummonCreature snake/constrictor waves sit behind the summon
-	// STRAND), JustSummoned's MovePoint choreography, the
-	// SetGUID/WasWrapped cross-AI wrap latch, and
-	// achievement_snakes_whyd_it_have_to_be_snakes (no
-	// achievement-criteria bridge) are documented in the lua file,
-	// not wired.
+	// viper own schedulers ungated). The DamageTaken phase machine
+	// (HealthBelowPct 30/25, strict-< floored threshold, 0->1->2 cascade),
+	// the SummonCreature snake/constrictor waves (type-5 corpse-timed
+	// despawn, bridged), JustSummoned's MovePoint choreography, the
+	// SetGUID/WasWrapped wrap latch (per-player instanceData keys) and
+	// achievement_snakes_whyd_it_have_to_be_snakes (Go gate reads the
+	// wrapped_ keys) are all PORTED (tick 417 + tick 505 header
+	// corrections — the old "no health-pct / summon / SetGUID /
+	// achievement-criteria bridge" claims were stale).
 	RegisterLuaBoss("boss_slad_ran", 29304)
 
 	// boss_moorabi: Gundrak dungeon boss script, entry 29305
@@ -17497,12 +17498,13 @@ func init() {
 	// Talk(SAY_DEATH 2); cast-state gates PORTED (own UpdateAI pre-loop
 	// + in-loop gates — all five timer ticks defer 500ms while casting,
 	// incl the PHASE_INTRO phantom arm). The three DoCastAOE combat arms (Ground
-	// Tremor/Quake, Numbing Shout/Roar, Determined Stab/Gore) have no
-	// DoCastAOE bridge, the PHASE_INTRO EVENT_PHANTOM has no phase
-	// bridge, EnterEvadeMode has no despawn bridge, SpellHit/GetData
-	// have no cross-AI bridges, achievement_less_rabi has no
-	// achievement-criteria bridge, and spell_moorabi_mojo_frenzy has
-	// no AuraScript bridge — all documented in the lua file, not wired.
+	// Tremor/Quake, Numbing Shout/Roar, Determined Stab/Gore) are PORTED as
+	// self-casts (DoCastAOE self-cast lowering), EVENT_PHANTOM is PORTED
+	// (Reset-scheduled, enterCombat cancels), EnterEvadeMode's despawn half
+	// is PORTED (ev2 creature:Despawn), SpellHit(55098) is PORTED (ev14) with
+	// the _transformed latch in the SetData store, achievement_less_rabi is
+	// PORTED (Go gate reads DATA_LESS_RABI), and spell_moorabi_mojo_frenzy
+	// is PORTED (RegisterAuraEvent) — the old "no bridge" claims were stale.
 	RegisterLuaBoss("boss_moorabi", 29305)
 
 	// boss_drakkari_colossus: Gundrak dungeon boss script, entry 29307
@@ -17511,16 +17513,17 @@ func init() {
 	// is instance-shimmed, the creature_template binding DB-side).
 	// BossAI. Ported arm in lua_scripts/northrend/boss_drakkari_colossus.lua:
 	// EVENT_MIGHTY_BLOW — DoCastVictim(Mighty Blow 54719), Reset-scheduled
-	// 10-30s init, rescheduled 5-15s (the only bridgeable arm of the slice);
+	// 10-30s init, rescheduled 5-15s;
 	// cast-state gate PORTED (own UpdateAI pre-loop + in-loop gates —
 	// mighty-blow tick defers 500ms while casting, no 5-15s re-arm).
-	// The DamageTaken phase machine (HealthBelowPct 50/5 — no health-pct
-	// bridge) sits behind the absent DoAction bridge, and the freeze/unfreeze
-	// action legs behind SetImmuneToPC / SetReactState / motion-master /
-	// aura-removal bridges; boss_drakkari_elemental and npc_living_mojo are
+	// The DamageTaken phase machine (HealthBelowPct 50/5, ev9 damage
+	// rewrite) + DoAction FREEZE / SUMMON_ELEMENTAL / UNFREEZE machine
+	// (ev38, SetFlag(59, 0x100) immune twin, MoveIdle, react-state flips)
+	// + Reset INTRO_DONE leg + JustSummoned half-health leg are PORTED
+	// (tick 505); the evade-despawn bug (cited the elemental's evade arm)
+	// is fixed. boss_drakkari_elemental and npc_living_mojo are
 	// entry-unverifiable (no host-entry constants in the C++ sources — joins
-	// the bridgeable-but-entry-blocked queue) — all documented in the lua
-	// file, not wired.
+	// the bridgeable-but-entry-blocked queue).
 	RegisterLuaBoss("boss_drakkari_colossus", 29307)
 
 	// boss_gal_darah: Gundrak dungeon boss script, entry 29306
