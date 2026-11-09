@@ -1331,8 +1331,9 @@ func BuildPolyMeshDetail(mesh *PolyMesh, chf *CompactHeightfield, sampleDist, sa
 
 // MergePolyMeshDetails mirrors rcMergePolyMeshDetails (RecastMeshDetail.cpp):
 // it concatenates the sub-meshes, rebasing each mesh's vert and tri bases
-// by the running totals. Nil entries are skipped. MapBuilder does not use
-// it; it completes the detail-mesh API. Counts are clamped to the slices
+// by the running totals. Nil entries are skipped. MapBuilder uses it in
+// buildMoveMapTile to merge every sub-tile detail mesh before
+// dtCreateNavMeshData. Counts are clamped to the slices
 // actually present, so a malformed detail mesh degrades instead of
 // indexing out of bounds.
 func MergePolyMeshDetails(details []*PolyMeshDetail, out *PolyMeshDetail) bool {

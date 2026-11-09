@@ -1,14 +1,9 @@
 // MapBuilder orchestration port (src/tools/mmaps_generator/MapBuilder.cpp/.h,
 // src/common/Collision/Maps/MapDefines.h): tile config, map-specific Recast
 // config, tile bounds, skip rules, dtNavMeshParams/.mmap header writing,
-// .mmtile header, and the stage-1 tile build (heightfield through distance
-// field — the Recast pipeline in TileBuilder::buildMoveMapTile up to
-// rcBuildDistanceField).
-//
-// Stages NOT ported yet: rcBuildRegions, rcBuildContours, rcBuildPolyMesh,
-// rcBuildPolyMeshDetail, rcMergePolyMesh(es/Details), dtCreateNavMeshData and
-// the .mmtile write. Those need RecastRegion/Contour/Mesh/MeshDetail plus
-// DetourNavMeshBuilder (~6,500 C++ lines) and are the next unit.
+// .mmtile header, and the full TileBuilder::buildMoveMapTile pipeline
+// (heightfield through distance field, regions, contours, polymesh, detail
+// mesh, merged meshes, dtCreateNavMeshData, .mmtile write).
 package main
 
 import (
@@ -18,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mmaps-generator/detour"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mmaps-generator/recast"
 )
 
@@ -315,22 +311,34 @@ func buildNavMeshParams(tiles []mapTile) NavMeshParams {
 	return params
 }
 
-// tileStage1Stats is the per-tile result of the stage-1 build.
-type tileStage1Stats struct {
+// tileBuildStats is the per-tile result of the full build.
+type tileBuildStats struct {
 	SubTiles      int
 	Spans         int
 	WalkableSpans int
 	MaxDistance   uint16
+	Polys         int
+	Verts         int
+	NavDataSize   int
 	Skipped       bool
 	Empty         bool
+	Written       bool
 }
 
-// buildTileStage1 runs TileBuilder::buildMoveMapTile up to rcBuildDistanceField
-// (the stages ported so far) for one map tile. It returns per-tile build
-// statistics; the polymesh/detail/Detour stages are the next unit.
-func buildTileStage1(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]float32,
-	tileConfig TileConfig, bigBaseUnit bool, maxWalkableAngle, maxWalkableAngleNotSteep *float32) tileStage1Stats {
-	var stats tileStage1Stats
+// buildMoveMapTile runs TileBuilder::buildMoveMapTile (MapBuilder.cpp:598)
+// end to end for one map tile: heightfield through distance field, regions,
+// contours, polymesh, detail mesh, merged meshes, dtCreateNavMeshData and
+// the .mmtile write. navMeshOrig is the dtNavMeshParams orig of the map
+// (buildNavMeshParams, from the map's tile list); outputDir receives the
+// %03d%02d%02d.mmtile file. The C++ in-memory navMesh addTile/removeTile
+// round-trip has no Go equivalent and is not mirrored: the file write is
+// the durable output. The m_debugOutput IntermediateValues dump is not
+// ported (the Go tool has no --debug flag).
+func buildMoveMapTile(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]float32,
+	tileConfig TileConfig, bigBaseUnit bool, maxWalkableAngle, maxWalkableAngleNotSteep *float32,
+	outputDir string, navMeshOrig [3]float32, usesLiquids bool) tileBuildStats {
+	var stats tileBuildStats
+	tileString := fmt.Sprintf("[Map %03d] [%02d,%02d]: ", mapID, tileX, tileY)
 
 	tVerts := md.SolidVerts
 	tTris := md.SolidTris
@@ -350,6 +358,10 @@ func buildTileStage1(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]flo
 	tileCfg := config
 	tileCfg.Width = config.TileSize + config.BorderSize*2
 	tileCfg.Height = config.TileSize + config.BorderSize*2
+
+	// Merge per tile poly and detail meshes.
+	pmmerge := make([]*recast.PolyMesh, 0, tilesPerMap*tilesPerMap)
+	dmmerge := make([]*recast.PolyMeshDetail, 0, tilesPerMap*tilesPerMap)
 
 	for y := 0; y < tilesPerMap; y++ {
 		for x := 0; x < tilesPerMap; x++ {
@@ -386,9 +398,44 @@ func buildTileStage1(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]flo
 			chf := recast.BuildCompactHeightfield(tileCfg.WalkableHeight, tileCfg.WalkableClimb, solid)
 
 			// Build polymesh intermediates.
-			recast.ErodeWalkableArea(config.WalkableRadius, chf)
-			recast.MedianFilterWalkableArea(chf)
-			recast.BuildDistanceField(chf)
+			if !recast.ErodeWalkableArea(config.WalkableRadius, chf) {
+				fmt.Printf("%s Failed eroding area!\n", tileString)
+				continue
+			}
+			if !recast.MedianFilterWalkableArea(chf) {
+				fmt.Printf("%s Failed filtering area!\n", tileString)
+				continue
+			}
+			if !recast.BuildDistanceField(chf) {
+				fmt.Printf("%s Failed building distance field!\n", tileString)
+				continue
+			}
+			if !recast.BuildRegions(chf, tileCfg.BorderSize, tileCfg.MinRegionArea, tileCfg.MergeRegionArea) {
+				fmt.Printf("%s Failed building regions!\n", tileString)
+				continue
+			}
+
+			cset := &recast.ContourSet{}
+			if !recast.BuildContours(chf, tileCfg.MaxSimplificationError, tileCfg.MaxEdgeLen, cset) {
+				fmt.Printf("%s Failed building contours!\n", tileString)
+				continue
+			}
+
+			// Build polymesh.
+			pmesh := &recast.PolyMesh{}
+			if !recast.BuildPolyMesh(cset, tileCfg.MaxVertsPerPoly, pmesh) {
+				fmt.Printf("%s Failed building polymesh!\n", tileString)
+				continue
+			}
+
+			dmesh := &recast.PolyMeshDetail{}
+			if !recast.BuildPolyMeshDetail(pmesh, chf, tileCfg.DetailSampleDist, tileCfg.DetailSampleMaxError, dmesh) {
+				fmt.Printf("%s Failed building polymesh detail!\n", tileString)
+				continue
+			}
+
+			pmmerge = append(pmmerge, pmesh)
+			dmmerge = append(dmmerge, dmesh)
 
 			stats.SubTiles++
 			stats.Spans += chf.SpanCount
@@ -403,5 +450,98 @@ func buildTileStage1(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]flo
 		}
 	}
 
+	mergedMesh := &recast.PolyMesh{}
+	if !recast.MergePolyMeshes(pmmerge, mergedMesh) {
+		fmt.Printf("%s Failed merging polymeshes!\n", tileString)
+		return stats
+	}
+	mergedDetail := &recast.PolyMeshDetail{}
+	if !recast.MergePolyMeshDetails(dmmerge, mergedDetail) {
+		fmt.Printf("%s Failed merging polymesh details!\n", tileString)
+		return stats
+	}
+
+	// Set polygons as walkable.
+	for i := 0; i < mergedMesh.Npolys; i++ {
+		if area := mergedMesh.Areas[i] & navAreaAllMask; area != 0 {
+			if area >= navAreaMinValue {
+				mergedMesh.Flags[i] = uint16(1) << (navAreaMaxValue - int(area))
+			} else {
+				mergedMesh.Flags[i] = navGround
+			}
+		}
+	}
+
+	// Setup mesh parameters.
+	params := detour.NewNavMeshCreateParams(mergedMesh, mergedDetail)
+	params.OffMeshConVerts = md.OffMeshConnections
+	params.OffMeshConCount = len(md.OffMeshConnections) / 6
+	params.OffMeshConRad = md.OffMeshConnectionRads
+	params.OffMeshConDir = md.OffMeshConnectionDirs
+	params.OffMeshConAreas = md.OffMeshConnectionsAreas
+	params.OffMeshConFlags = md.OffMeshConnectionsFlags
+
+	params.WalkableHeight = tileConfig.BaseUnitDim * float32(config.WalkableHeight)
+	params.WalkableRadius = tileConfig.BaseUnitDim * float32(config.WalkableRadius)
+	params.WalkableClimb = tileConfig.BaseUnitDim * float32(config.WalkableClimb)
+	params.TileX = int(((bmin[0]+bmax[0])/2 - navMeshOrig[0]) / moveMapGridSize)
+	params.TileY = int(((bmin[2]+bmax[2])/2 - navMeshOrig[2]) / moveMapGridSize)
+	// C++ sets params.bmin/bmax from the tile bounds, not the merged mesh
+	// bounds (which include the Recast border padding).
+	params.Bmin = bmin
+	params.Bmax = bmax
+	params.Cs = config.Cs
+	params.Ch = config.Ch
+	params.TileLayer = 0
+	params.BuildBvTree = true
+
+	// These values are checked within dtCreateNavMeshData; handle them
+	// here so the error message is clear.
+	if params.Nvp > dtVertsPerPolygon {
+		fmt.Printf("%s Invalid verts-per-polygon value!\n", tileString)
+		return stats
+	}
+	if params.VertCount >= 0xffff {
+		fmt.Printf("%s Too many vertices!\n", tileString)
+		return stats
+	}
+	if params.VertCount == 0 || len(params.Verts) == 0 {
+		// Occurs mostly when adjacent tiles have models loaded but those
+		// models don't span into this tile.
+		return stats
+	}
+	if params.PolyCount == 0 || len(params.Polys) == 0 || params.PolyCount == tilesPerMap*tilesPerMap {
+		// Flat tiles with no actual geometry: one poly per sub-tile.
+		fmt.Printf("%s No polygons to build on tile!\n", tileString)
+		return stats
+	}
+	if len(params.DetailMeshes) == 0 || len(params.DetailVerts) == 0 || len(params.DetailTris) == 0 {
+		fmt.Printf("%s No detail mesh to build tile!\n", tileString)
+		return stats
+	}
+
+	fmt.Printf("%s Building navmesh tile...\n", tileString)
+	navData, ok := detour.CreateNavMeshData(params)
+	if !ok {
+		fmt.Printf("%s Failed building navmesh tile!\n", tileString)
+		return stats
+	}
+
+	// File output.
+	fileName := filepath.Join(outputDir, fmt.Sprintf("%03d%02d%02d.mmtile", mapID, tileY, tileX))
+	fmt.Printf("%s Writing to file...\n", tileString)
+	header := newMmapTileHeader(uint32(len(navData)), usesLiquids)
+	out := make([]byte, 0, 20+len(navData))
+	out = append(out, header.Marshal()...)
+	out = append(out, navData...)
+	if err := os.WriteFile(fileName, out, 0o644); err != nil {
+		fmt.Printf("%s Failed to open %s for writing: %v\n", tileString, fileName, err)
+		return stats
+	}
+
+	stats.Polys = mergedMesh.Npolys
+	stats.Verts = mergedMesh.Nverts
+	stats.NavDataSize = len(navData)
+	stats.Written = true
 	return stats
 }

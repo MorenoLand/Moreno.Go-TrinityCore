@@ -7,10 +7,9 @@
 //     cleaning, off-mesh connections, Recast stage 1 (heightfield,
 //     rasterization, walkable marking/filters, compact heightfield, erosion,
 //     median filter, distance field).
-//   - PENDING: loadVMap (needs a Go StaticMapTree/.vmtree reader + WorldModel
-//     parsing), Recast stages 2-4 (regions, contours, polymesh, detail mesh),
-//     dtCreateNavMeshData and the .mmtile write. Until those land the tool
-//     exits 1 and writes no .mmtile files.
+//   - DONE: loadVMap (StaticMapTree/.vmtree/.vmo reader), Recast stages 2-4
+//     (regions, contours, polymesh, detail mesh, merged meshes),
+//     dtCreateNavMeshData and the .mmtile write.
 package main
 
 import (
@@ -173,7 +172,7 @@ func printBanner() {
 
 type tileResult struct {
 	tile  mapTile
-	stats tileStage1Stats
+	stats tileBuildStats
 }
 
 func main() {
@@ -263,6 +262,13 @@ func main() {
 	}
 	tileConfig := newTileConfig(*bigBaseUnit)
 
+	// dtNavMeshParams orig per map (MapBuilder::buildNavMesh), needed for
+	// the dtCreateNavMeshData tileX/tileY placement in buildMoveMapTile.
+	navOrigs := make(map[uint32][3]float32, len(kept))
+	for mapID, tiles := range kept {
+		navOrigs[mapID] = buildNavMeshParams(tiles).Orig
+	}
+
 	// Build the tile job list (MapBuilder::buildMap queue).
 	var jobs []mapTile
 	if *tileFlag != "" && *targetMap >= 0 {
@@ -312,7 +318,7 @@ func main() {
 			tb := newTerrainBuilder(*skipLiquid, *mapsDir, *vmapsDir)
 			for tile := range jobCh {
 				if shouldSkipTile(tile.MapID, tile.TileX, tile.TileY, *outputDir) {
-					resultCh <- tileResult{tile: tile, stats: tileStage1Stats{Skipped: true}}
+					resultCh <- tileResult{tile: tile, stats: tileBuildStats{Skipped: true}}
 					atomic.AddUint32(&processed, 1)
 					continue
 				}
@@ -330,7 +336,7 @@ func main() {
 				tb.LoadVMap(tile.MapID, tile.TileY, tile.TileX, &md)
 
 				if len(md.SolidVerts) == 0 && len(md.LiquidVerts) == 0 {
-					resultCh <- tileResult{tile: tile, stats: tileStage1Stats{Empty: true}}
+					resultCh <- tileResult{tile: tile, stats: tileBuildStats{Empty: true}}
 					continue
 				}
 
@@ -343,15 +349,16 @@ func main() {
 				allVerts = append(allVerts, md.LiquidVerts...)
 				allVerts = append(allVerts, md.SolidVerts...)
 				if len(allVerts) == 0 {
-					resultCh <- tileResult{tile: tile, stats: tileStage1Stats{Empty: true}}
+					resultCh <- tileResult{tile: tile, stats: tileBuildStats{Empty: true}}
 					continue
 				}
 				bmin, bmax := getTileBounds(tile.TileX, tile.TileY, allVerts, len(allVerts)/3)
 
 				tb.LoadOffMeshConnections(tile.MapID, tile.TileX, tile.TileY, &md, *offMeshFile)
 
-				stats := buildTileStage1(tile.MapID, tile.TileX, tile.TileY, &md, bmin, bmax,
-					tileConfig, *bigBaseUnit, maxWalkableAngle, maxWalkableAngleNotSteep)
+				stats := buildMoveMapTile(tile.MapID, tile.TileX, tile.TileY, &md, bmin, bmax,
+					tileConfig, *bigBaseUnit, maxWalkableAngle, maxWalkableAngleNotSteep,
+					*outputDir, navOrigs[tile.MapID], tb.UsesLiquids())
 				resultCh <- tileResult{tile: tile, stats: stats}
 			}
 		}()
@@ -363,7 +370,7 @@ func main() {
 	wg.Wait()
 	close(resultCh)
 
-	var built, skipped, empty, totalSpans, totalWalkable int
+	var built, skipped, empty, written, totalSpans, totalWalkable, totalPolys, totalVerts, totalNavData int
 	var maxDist uint16
 	for res := range resultCh {
 		switch {
@@ -375,6 +382,12 @@ func main() {
 			built++
 			totalSpans += res.stats.Spans
 			totalWalkable += res.stats.WalkableSpans
+			totalPolys += res.stats.Polys
+			totalVerts += res.stats.Verts
+			totalNavData += res.stats.NavDataSize
+			if res.stats.Written {
+				written++
+			}
 			if res.stats.MaxDistance > maxDist {
 				maxDist = res.stats.MaxDistance
 			}
@@ -382,11 +395,7 @@ func main() {
 	}
 
 	elapsed := time.Since(start)
-	fmt.Printf("Stage 1 complete in %v: %d tiles built (heightfield through distance field), %d skipped (valid .mmtile exists), %d empty, %d compact spans (%d walkable), max distance %d.\n",
-		elapsed.Round(time.Millisecond), built, skipped, empty, totalSpans, totalWalkable, maxDist)
-	fmt.Println("Tile geometry is NOT complete: regions, contours, polymesh, detail mesh,")
-	fmt.Println("dtCreateNavMeshData and the .mmtile write are still pending, and loadVMap")
-	fmt.Println("has no Go reader yet — no .mmtile files were fabricated.")
+	fmt.Printf("Complete in %v: %d tiles built (%d .mmtile written), %d skipped (valid .mmtile exists), %d empty, %d compact spans (%d walkable), %d polys, %d verts, %d navmesh bytes, max distance %d.\n",
+		elapsed.Round(time.Millisecond), built, written, skipped, empty, totalSpans, totalWalkable, totalPolys, totalVerts, totalNavData, maxDist)
 	fmt.Printf("Output directory: '%s'\n", *outputDir)
-	os.Exit(1)
 }
