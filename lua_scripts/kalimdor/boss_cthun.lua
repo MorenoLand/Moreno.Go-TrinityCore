@@ -77,7 +77,7 @@ local function onWhisper(creature, guid)
 end
 
 local function startWhispers(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     -- C++ Reset _Reset() leg (boss_cthun.cpp:516-519): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511); ev23 only — the
     -- ev5 spawn pass shares this handler, and a spawn write would
@@ -109,7 +109,7 @@ end
 -- C++ cthunAI::JustDied (boss_cthun.cpp:838-842) sets only
 -- DATA_CTHUN_PHASE and never calls _JustDied(): NO ev4 DONE leg.
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 5, startWhispers)

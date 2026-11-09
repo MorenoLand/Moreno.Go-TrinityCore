@@ -34,7 +34,7 @@ local function onMoveInLOS(event, creature, player)
         -- once per creature so repeated proximity fires within the 1s
         -- window don't stack redundant untracked Despawn timers.
         creature:CastSpell(player, SPELL_DEPTH_CHARGE_TRAP)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         if not despawnPending[guid] then
             despawnPending[guid] = true
             CreateLuaEvent(function()
@@ -101,7 +101,7 @@ local function rizzleGossipSelect(event, player, creature, sender, action)
     if action == GOSSIP_ACTION_INFO_DEF + 1 then
         player:GossipComplete()
         creature:CastSpell(player, SPELL_GIVE_SOUTHFURY_MOONSTONE, true)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         if not despawnPending[guid] then
             despawnPending[guid] = true
             CreateLuaEvent(function()

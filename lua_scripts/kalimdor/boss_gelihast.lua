@@ -67,13 +67,13 @@ local function onThrowNet(creature, guid)
 end
 
 local function gelihastLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustEngagedWith: BossAI::JustEngagedWith (no bridge) +
 -- ScheduleEvent(EVENT_THROW_NET, 2s, 4s).
 local function gelihastEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "thrownet", math.random(2000, 4000), function()
         onThrowNet(creature, guid)

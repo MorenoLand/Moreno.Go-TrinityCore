@@ -98,7 +98,7 @@ end
 
 local function creditSpawn(_, creature)
     creature:SetCombatMovement(false)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "check", 2000, function()
         creditCheck(creature, guid)
@@ -106,7 +106,7 @@ local function creditSpawn(_, creature)
 end
 
 local function creditDied(_, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(CREDIT_ENTRY, 5, creditSpawn)
