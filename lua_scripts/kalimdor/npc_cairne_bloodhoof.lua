@@ -112,7 +112,7 @@ end
 local ENTRY = 3057
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- zone_thunder_bluff.cpp JustEngagedWith: DoPlaySoundToSet(me, 5884).
     creature:PlayDirectSound(SOUND_AGGRO)
@@ -134,15 +134,15 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

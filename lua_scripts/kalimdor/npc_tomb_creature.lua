@@ -83,7 +83,7 @@ local function onWeb(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "web", math.random(5000, 8000), function()
         onWeb(creature, guid)
@@ -91,14 +91,14 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: refresh the entry-conditional self-buff aura under its
 -- HasAura guard (Poison Proc 3616 for Tomb Fiend, Virulent Poison
 -- Proc 12254 for Tomb Reaver).
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset(): entry-gated DoCast(POISON_PROC/VIRULENT_POISON_PROC)
     -- is Reset-only (razorfen_downs.cpp). Alive-gated; the timer cancel
     -- rides the death leg deliberately.
@@ -137,7 +137,7 @@ end
 -- OnGameObjectCreate latch twin for the static gong, which never fires
 -- the Go create hook), with a FindNearestGameObject fallback.
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     local data = instanceDataOf(creature)
     if not data then
         return

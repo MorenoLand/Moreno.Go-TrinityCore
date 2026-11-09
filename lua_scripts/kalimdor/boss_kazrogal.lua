@@ -152,7 +152,7 @@ local function onMark(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     markBase[guid] = 45000
     -- C++ JustEngagedWith (:90-94): SetData(DATA_KAZROGALEVENT,
@@ -171,11 +171,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset (:84-87): Initialize() then SetData(NOT_STARTED).
     -- Alive-gated: Go fires ev23 on the death path before ev4
     -- (moroes/algalon precedent) and C++ Reset never runs on death.
@@ -192,7 +192,7 @@ end
 local function onDied(event, creature, killer)
     creature:SetBossState(DATA_KAZROGAL, BOSS_STATE_DONE)
     creature:PlayDirectSound(11018)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

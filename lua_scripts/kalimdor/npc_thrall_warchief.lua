@@ -125,7 +125,7 @@ end
 local ENTRY = 4949
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- zone_orgrimmar.cpp JustEngagedWith: DoPlaySoundToSet(me, 5880).
     creature:PlayDirectSound(SOUND_AGGRO)
@@ -138,15 +138,15 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ OnGossipHello (zone_orgrimmar.cpp:297-306): quest menu first

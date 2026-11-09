@@ -109,7 +109,7 @@ end
 -- C++ JustEngagedWith: BossAI leg (no instance bridge), events
 -- reset, InitSpells: self-cast TOXIN + schedule both timers.
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ JustEngagedWith calls BossAI::JustEngagedWith first
     -- (boss_viscidus.cpp:183-186) — SetBossState(DATA_VISCIDUS, IN_PROGRESS).
@@ -126,11 +126,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset _Reset() leg (boss_viscidus.cpp:109-111): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
     if creature:IsAlive() and creature:GetBossState(DATA_VISCIDUS) ~= BOSS_STATE_DONE then
@@ -145,7 +145,7 @@ end
 local function onDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_VISCIDUS_SUICIDE)
     creature:SetBossState(DATA_VISCIDUS, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

@@ -126,7 +126,7 @@ local function onRepulsiveGaze(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "dustfield", 8000, function()
         onDustField(creature, guid)
@@ -143,11 +143,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (boss_princess_theradras.cpp:74-77): the whole body is
@@ -156,7 +156,7 @@ end
 -- bridge" claim is retracted (celebras precedent).
 local function onDied(event, creature, killer)
     creature:SummonCreature(12238, 28.067, 61.875, -123.405, 4.67, 2, 600000)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

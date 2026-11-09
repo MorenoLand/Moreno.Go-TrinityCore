@@ -219,7 +219,7 @@ end
 -- C++ JustEngagedWith: DoCastVictim(SPELL_BIRTH) then
 -- BossAI::JustEngagedWith (instance leg, standing).
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     st(guid)
     local victim = creature:GetVictim()
@@ -248,7 +248,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ has no JustDied override — base BossAI::JustDied runs by virtual
@@ -259,11 +259,11 @@ end
 -- in cancelTimers too).
 local function onDied(event, creature, killer)
     creature:SetBossState(DATA_OURO, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset _Reset() leg (boss_ouro.cpp:78-82): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
     if creature:IsAlive() and creature:GetBossState(DATA_OURO) ~= BOSS_STATE_DONE then

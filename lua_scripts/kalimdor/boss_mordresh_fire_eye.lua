@@ -167,7 +167,7 @@ local function onEnterCombat(event, creature, target)
     creature:SetBossState(DATA_MORDRESH_FIRE_EYE, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_mordresh_fire_eye.cpp:61-63)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     schedule(guid, "fireball", 100, function()
@@ -187,7 +187,7 @@ end
 -- onEnterCombat still clears it via cancelTimers (C++
 -- JustEngagedWith events.Reset()).
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelKey(guid, "fireball")
     cancelKey(guid, "firenova")
 end
@@ -200,7 +200,7 @@ end
 -- moroes/algalon precedent); the OOC schedule below is NOT gated —
 -- on the death path it is cancelled immediately by onDied, as before.
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:IsAlive() and creature:GetBossState(DATA_MORDRESH_FIRE_EYE) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_MORDRESH_FIRE_EYE, BOSS_STATE_NOT_STARTED)
@@ -211,7 +211,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_mordresh_fire_eye.cpp:70-72): _JustDied() only —
     -- BossAI::_JustDied (ScriptedCreature.cpp:513-520) writes
     -- SetBossState(DATA_MORDRESH_FIRE_EYE, DONE).

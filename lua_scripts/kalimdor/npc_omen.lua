@@ -154,7 +154,7 @@ end
 -- in the C++ latch — the pump is cancelled first,
 -- gargolmar precedent).
 local function onEnterCombat(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelPump(guid)
     omenState[guid] = {
         cleaveTimer = 3000 + math.random(0, 2000),
@@ -170,7 +170,7 @@ end
 -- per-GUID state like the other cleanup hooks.
 local function onDied(_, creature)
     creature:CastSpell(creature, SPELL_OMEN_SUMMON_SPOTLIGHT)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 -- C++ SpellHit: SPELL_ELUNE_CANDLE -> RescheduleEvent(EVENT_
@@ -197,14 +197,14 @@ local function onSpellHit(_, creature, _, spellId)
     if creature:HasAura(SPELL_OMEN_STARFALL) then
         creature:RemoveAura(SPELL_OMEN_STARFALL)
     end
-    local st = omenState[creature:GetGUID()]
+    local st = omenState[creature:GetGUIDLow()]
     if st then
         st.starfallTimer = 14000 + math.random(0, 2000)
     end
 end
 
 local function onLeaveCombat(_, creature)
-    fullReset(creature:GetGUID())
+    fullReset(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(OMEN_ENTRY, 1, onEnterCombat)

@@ -108,7 +108,7 @@ local function onEnterCombat(event, creature, target)
     -- lua_creature_events.go:5917). The CheckRequiredBosses gate is
     -- vacuous (no instance override in instance_ruins_of_ahnqiraj.cpp).
     creature:SetBossState(DATA_RAJAXX, BOSS_STATE_IN_PROGRESS)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
@@ -121,11 +121,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset _Reset() leg (boss_rajaxx.cpp:79;
     -- BossAI::_Reset ScriptedCreature.cpp:499-511: alive-gated and
     -- != DONE-gated; Go fires ev23 on the death path before ev4,
@@ -140,7 +140,7 @@ end
 -- SetBossState(DATA_RAJAXX, DONE) (ScriptedCreature.cpp:513-520);
 -- the mal_ganis precedent, not the old "cancel only" reading.
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:SetBossState(DATA_RAJAXX, BOSS_STATE_DONE)
 end
 

@@ -136,17 +136,17 @@ local function onSleep(creature, guid)
 end
 
 local function kelrisLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function kelrisDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEATH)
 end
 
 -- C++ Reset: DoCastSelf(SPELL_BLACKFATHOM_CHANNELING).
 local function kelrisOnReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ Reset: non-triggered DoCastSelf (Reset-only arm,
     -- boss_kelris.cpp; the JustReachedHome leg rides the separate
     -- ev24 handler). Event 23 fires on death too (engine
@@ -164,7 +164,7 @@ local function kelrisReachHome(event, creature)
 end
 
 local function kelrisEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(SAY_AGGRO)
     creature:RemoveAura(SPELL_BLACKFATHOM_CHANNELING)

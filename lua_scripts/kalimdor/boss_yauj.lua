@@ -62,7 +62,7 @@ local function onFear(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ has no JustEngagedWith override (boss_bug_trio.cpp:237-259)
     -- — base BossAI::JustEngagedWith writes SetBossState(DATA_BUG_TRIO,
@@ -76,11 +76,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- No _Reset() in C++ Reset (boss_bug_trio.cpp:259-262, Initialize
     -- only) — this leg models base BossAI::JustReachedHome ->
     -- _JustReachedHome (NOT_STARTED, alive-gated and != DONE-gated,
@@ -91,7 +91,7 @@ local function onReset(event, creature)
 end
 
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ JustDied (boss_bug_trio.cpp:270-279): 10 iterations, each
     -- picking a random threat-list target (SelectTarget Random, no
     -- playerOnly/dist args) and summoning one 15621 at the boss's

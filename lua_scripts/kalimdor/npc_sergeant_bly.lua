@@ -107,7 +107,7 @@ local function onRevenge(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "shieldbash", 5000, function()
         onShieldBash(creature, guid)
@@ -118,18 +118,18 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ has no JustDied arm, but a dead creature stops UpdateAI, so the
 -- re-arming shield-bash / revenge timers must be cancelled on death or
 -- they keep casting from the corpse forever.
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)

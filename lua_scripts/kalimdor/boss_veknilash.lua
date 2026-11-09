@@ -334,7 +334,7 @@ local function onTeleport(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     flags[guid] = {}
     bugState[guid] = {abuse = math.random(10000, 17000)}
@@ -391,11 +391,11 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     -- C++ TwinReset _Reset() leg (boss_twinemperors.cpp:104-108):
     -- alive-gated and != DONE-gated (ScriptedCreature.cpp:499-511;
     -- moroes/algalon precedent).
@@ -421,7 +421,7 @@ end
 local function onDied(event, creature, killer)
     creature:PlayDirectSound(SOUND_VN_DEATH)
     creature:SetBossState(DATA_TWIN_EMPERORS, BOSS_STATE_DONE)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ boss_twinemperorsAI::DamageTaken (boss_twinemperors.cpp:115-128):

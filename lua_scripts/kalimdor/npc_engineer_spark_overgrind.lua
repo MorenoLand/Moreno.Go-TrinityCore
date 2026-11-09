@@ -140,7 +140,7 @@ local function onEmote(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(ATTACK_YELL, target)
     -- C++ UpdateAI returns before the dynamite pump when IsTreeEvent
@@ -155,7 +155,7 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ emote pump runs only when !IsInCombat() && !IsTreeEvent
     -- (zone_azuremyst_isle.cpp:242-249): the tree-event Spark never
@@ -173,11 +173,11 @@ end
 -- kill path and its IsDead guard skips the emote re-arm, so this lands
 -- the same reset as leave-combat without re-arming anything.
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- zone_azuremyst_isle.cpp:224 — Reset restores the constructor-captured
     -- UNIT_NPC_FLAGS via SetUInt32Value; the SetFaction(NormFaction) leg

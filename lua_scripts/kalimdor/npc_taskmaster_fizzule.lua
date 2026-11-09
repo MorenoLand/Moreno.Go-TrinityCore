@@ -72,11 +72,11 @@ local function schedule(guid, key, delay, fn)
 end
 
 local function fizzuleSpawn(event, creature)
-    factionNorm[creature:GetGUID()] = creature:GetFaction()
+    factionNorm[creature:GetGUIDLow()] = creature:GetFaction()
 end
 
 local function fizzuleReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { isFriend = false, flareCount = 0 }
     local norm = factionNorm[guid]
@@ -86,7 +86,7 @@ local function fizzuleReset(event, creature)
 end
 
 local function fizzuleSpellHit(event, creature, caster, spellId)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if st == nil then
         st = { isFriend = false, flareCount = 0 }
@@ -101,7 +101,7 @@ local function fizzuleSpellHit(event, creature, caster, spellId)
 end
 
 local function fizzuleReceiveEmote(event, creature, player, textEmote)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local st = state[guid]
     if st == nil then
         return

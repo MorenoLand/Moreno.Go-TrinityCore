@@ -80,7 +80,7 @@ local function onKnockback(creature, guid)
 end
 
 local function onEnterCombat(event, creature, target)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ has no JustEngagedWith override (boss_bug_trio.cpp:150-186)
     -- — base BossAI::JustEngagedWith writes SetBossState(DATA_BUG_TRIO,
@@ -97,12 +97,12 @@ local function onEnterCombat(event, creature, target)
 end
 
 local function onLeaveCombat(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ Reset _Reset() leg (boss_bug_trio.cpp:172-176): alive-gated and
     -- != DONE-gated (ScriptedCreature.cpp:499-511; moroes/algalon precedent).
@@ -116,7 +116,7 @@ end
 -- (DATA_BUG_TRIO_DEATH) only — so base DONE never runs: NO ev4
 -- SetBossState leg (cthun precedent).
 local function onDied(event, creature, killer)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
 end
 

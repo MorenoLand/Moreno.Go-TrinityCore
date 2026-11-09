@@ -182,7 +182,7 @@ end
 
 local function onEnterCombat(name)
     return function(event, creature, target)
-        local guid = creature:GetGUID()
+        local guid = creature:GetGUIDLow()
         cancelTimers(guid)
         creature:Talk(YELL_ATTACKED)
         local iv = intervals[name]
@@ -196,7 +196,7 @@ local function onEnterCombat(name)
 end
 
 local function onLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
 end
 
 -- C++ Reset: Initialize() + faction bookkeeping (no bridges); for Jaina
@@ -205,7 +205,7 @@ end
 -- evade per the hyjalAI.h comment, so Reset re-applies it). No C++ timer
 -- arms on Reset — the SpellTimers arm only on engage.
 local function onReset(event, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     -- C++ hyjalAI::Reset: triggered DoCast(me, SPELL_BRILLIANCE_AURA)
     -- for JAINA (Reset-only arm, hyjalAI.cpp). Event 23 fires on
@@ -226,7 +226,7 @@ end
 -- unbridgeable IsDummy gate — see header — and the wave/instance
 -- bookkeeping has no bridge).
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUID())
+    cancelTimers(creature:GetGUIDLow())
     creature:Talk(YELL_DEATH)
 end
 

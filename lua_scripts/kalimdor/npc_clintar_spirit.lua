@@ -31,7 +31,7 @@ local clintarPlayer = {}
 -- C++ IsSummonedBy: first player within 5.0 yd with quest 10965
 -- incomplete starts the escort; latch that player's GUID.
 local function onSummoned(event, creature, summoner)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     for _, plr in ipairs(GetPlayersInWorld()) do
         if creature:GetDistance(plr) <= 5.0 and plr:GetQuestStatus(QUEST_NO_MERE_DREAM) == QUEST_STATUS_INCOMPLETE then
             clintarPlayer[guid] = plr:GetGUID()
@@ -43,7 +43,7 @@ end
 -- C++ JustDied: latched player with quest 10965 still incomplete
 -- fails the quest; latch cleared.
 local function onDied(_, creature)
-    local guid = creature:GetGUID()
+    local guid = creature:GetGUIDLow()
     local playerGuid = clintarPlayer[guid]
     clintarPlayer[guid] = nil
     if not playerGuid then
