@@ -71,6 +71,8 @@
 -- OnLeaveCombat(2)/OnReset(23), gargolmar precedent.
 
 local ENTRY_SLAD_RAN = 29304
+local DATA_SLAD_RAN = 0 -- gundrak.h DATA_SLAD_RAN
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 local ENTRY_CONSTRICTOR = 29713
 local ENTRY_VIPER = 29680
 
@@ -246,6 +248,16 @@ end
 local function sladranDied(event, creature, killer)
     despawnSladranSummons(creature:GetGUID())
     cancelTimers(creature:GetGUID())
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_SLAD_RAN, DONE). The instance
+    -- script's altar-clear leg reads the flag below (no
+    -- boss-state-change event exists — instance_gundrak.lua header).
+    creature:SetBossState(DATA_SLAD_RAN, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.sladRanDone = true
+    end
     creature:Talk(EMOTE_ACTIVATE_ALTAR)
     creature:Talk(SAY_DEATH)
 end

@@ -60,7 +60,8 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- Constructor SetReactState(REACT_PASSIVE) (:90) — the AI
 -- constructor has no Lua lifecycle equivalent (no ctor hook).
--- JustDied — _JustDied() instance bookkeeping only, no bridge.
+-- JustDied — _JustDied() DONE ports in colossusDied below
+-- (SetBossState + instance flag); the _Reset half has no bridge.
 -- boss_drakkari_elemental — ENTRY UNVERIFIABLE (gundrak.h
 -- GDCreatureIds has no NPC_DRAKKARI_ELEMENTAL; the .cpp enum names
 -- only spells/texts; belnistrasz/willix precedent — no invented
@@ -92,6 +93,8 @@
 -- bookkeeping has no bridge.
 
 local ENTRY_DRAKKARI_COLOSSUS = 29307
+local DATA_DRAKKARI_COLOSSUS = 1 -- gundrak.h DATA_DRAKKARI_COLOSSUS
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local SPELL_MIGHTY_BLOW = 54719
 local SPELL_FREEZE_ANIM = 16245
@@ -177,6 +180,16 @@ end
 
 local function colossusDied(event, creature, killer)
     cancelTimers(creature:GetGUID())
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_DRAKKARI_COLOSSUS, DONE). The
+    -- instance script's altar-clear leg reads the flag below (no
+    -- boss-state-change event exists — instance_gundrak.lua header).
+    creature:SetBossState(DATA_DRAKKARI_COLOSSUS, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.drakkariDone = true
+    end
 end
 
 -- C++ Reset (:98-114): _Reset(); INTRO_DONE leg (SetReactState
