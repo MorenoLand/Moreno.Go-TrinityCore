@@ -373,6 +373,15 @@ RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 23, teronReset)
 -- DoZoneInCombat are PORTED in teronJustSummoned below; the blossom's
 -- timers die with Teron's timers on leave/died/reset.
 local function blossomShadowboltTick(blossom, bossGuid, blossomGuid)
+    -- C++ npc_doom_blossom::UpdateAI (boss_teron_gorefiend.cpp:250-255):
+    -- the CASTING pre-loop gate skips the scheduler while a cast is
+    -- in progress, so the bolt fires late rather than on the 2s grid.
+    if blossom:IsCasting() then
+        schedule(bossGuid, "blossomShadowbolt:" .. blossomGuid, 500, function()
+            blossomShadowboltTick(blossom, bossGuid, blossomGuid)
+        end)
+        return
+    end
     local target = randomAnyTarget(blossom)
     if target then
         blossom:CastSpell(target, SPELL_DOOM_BLOSSOM_SHADOWBOLT, false)
