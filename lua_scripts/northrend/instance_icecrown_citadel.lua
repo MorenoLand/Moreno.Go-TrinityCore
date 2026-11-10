@@ -19,6 +19,28 @@
 --   (motionFor funnel, instance_hooks.go:311-320); a static template
 --   spawn never materializes server-side and is never bound (naxxramas
 --   LoadGrid delta).
+-- - OnUnitDeath (instance_icecrown_citadel.cpp:444-500, PORTED 2026-11-10):
+--   NPC_FROSTWING_WHELP (:460-477): the trash-set erase/count is
+--   modeled as a live sweep — the dead whelp's home Y (< 2484.35f =
+--   RIMEFANG, else SPINESTALKER, trash InitializeAI) picks the owner,
+--   and GetCreaturesInGrid(37532, 500) filtered to live whelps of that
+--   owner stands in for the SpinestalkerTrash/RimefangTrash sets (the
+--   whelp's own InitializeAI/JustAppeared SetData legs never fire in
+--   Go — the whelp is unregistered and static spawns never fire
+--   OnCreatureCreate); when none remain, the frostwyrm found by grid
+--   sweep gets DoAction(ACTION_START_FROSTWYRM) (the C++
+--   FrostwyrmGUIDs-empty early return is the no-live-frostwyrm
+--   sweep miss). DELTA: whelps in never-loaded grids are invisible
+--   to the sweep, so the fire can come early if one hall's whelps
+--   never materialized. NPC_RIMEFANG/NPC_SPINESTALKER (:478-496):
+--   the Sindragosa-DONE gate rides creature:GetBossState; the other
+--   frostwyrm's liveness is a grid sweep in place of the
+--   FrostwyrmGUIDs erase/count; both dead -> SummonCreature(36853,
+--   SindragosaSpawnPos) + DoAction(ACTION_START_FROSTWYRM) (the
+--   LoadGrid leg has no bridge; the heroic-attempts gate has no
+--   bridge — the attempts machine is unmodeled, see SetBossState
+--   note). The Ymirjar relay (:451-458, SetGUID to Crok) stays out
+--   (no SetGUID bridge).
 -- - OnCreatureCreate conditional legs:
 --   NPC_INFILTRATOR_MINCHAR_BQ (:277-281): SetUInt32Value(
 --   UNIT_NPC_EMOTESTATE, 0) + SetDisableGravity(true) — both bridged
@@ -83,7 +105,9 @@
 
 local MAP_ICECROWN_CITADEL = 631
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
+local INSTANCE_EVENT_ON_UNIT_DEATH = 9
 
+local NPC_FROSTWING_WHELP = 37532 -- icecrown_citadel.h:308
 local NPC_NERUBAR_BROODKEEPER = 36725 -- icecrown_citadel.h:152
 local NPC_INFILTRATOR_MINCHAR_BQ = 38558 -- icecrown_citadel.h:162
 local NPC_LORD_MARROWGAR = 36612 -- icecrown_citadel.h:169
@@ -124,6 +148,11 @@ local NPC_WICKED_SPIRIT = 39190 -- icecrown_citadel.h:326
 local NPC_INVISIBLE_STALKER = 30298 -- icecrown_citadel.h:335
 
 local UNIT_NPC_EMOTESTATE = 83 -- UpdateFields.h:140 (OBJECT_END 0x0006 + 0x4D)
+
+local DATA_SINDRAGOSA = 11 -- icecrown_citadel.h:85
+local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
+local ACTION_START_FROSTWYRM = -368530 -- icecrown_citadel.h:507
+local SINDRAGOSA_SPAWN_POS = {4818.7, 2483.71, 287.065, 3.089233} -- boss_sindragosa.cpp:169
 
 local bossBinds = {
     [NPC_LORD_MARROWGAR] = "lordMarrowgar",
@@ -192,3 +221,66 @@ RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_CREATURE_CREATE, functi
     end
     instanceData[key] = creature
 end)
+
+-- C++ OnUnitDeath (instance_icecrown_citadel.cpp:444-500), PORTED
+-- 2026-11-10 — the instance-side sender for the frostwyrm intro
+-- machines (the 2026-11-04 stay-out is lifted:
+-- INSTANCE_EVENT_ON_UNIT_DEATH fires from setDeathState,
+-- instance_hooks.go, the Blood Furnace precedent).
+local function onUnitDeath(event, instanceData, mapObj, unit)
+    local entry = unit:GetEntry()
+    if entry == NPC_FROSTWING_WHELP then
+        -- C++ :464: the owner is the whelp AI's DATA_FROSTWYRM_OWNER,
+        -- home Y < 2484.35f = RIMEFANG (trash InitializeAI).
+        local _, homeY = unit:GetHomePosition()
+        local ownerEntry = NPC_SPINESTALKER
+        if homeY < 2484.35 then
+            ownerEntry = NPC_RIMEFANG
+        end
+        -- C++ :466-476: erase from the owner's trash set, fire when
+        -- empty — the live sweep below is the set twin.
+        for _, whelp in ipairs(unit:GetCreaturesInGrid(NPC_FROSTWING_WHELP, 500)) do
+            if not whelp:IsDead() then
+                local _, whelpHomeY = whelp:GetHomePosition()
+                if (whelpHomeY < 2484.35) == (homeY < 2484.35) then
+                    return
+                end
+            end
+        end
+        for _, frostwyrm in ipairs(unit:GetCreaturesInGrid(ownerEntry, 500)) do
+            if not frostwyrm:IsDead() then
+                frostwyrm:DoAction(ACTION_START_FROSTWYRM)
+                return
+            end
+        end
+        return
+    end
+    if entry == NPC_SPINESTALKER or entry == NPC_RIMEFANG then
+        -- C++ :481-483: the heroic-attempts gate has no bridge (the
+        -- attempts machine is unmodeled); the DONE gate rides
+        -- creature:GetBossState.
+        if unit:GetBossState(DATA_SINDRAGOSA) == BOSS_STATE_DONE then
+            return
+        end
+        local otherEntry = NPC_RIMEFANG
+        if entry == NPC_RIMEFANG then
+            otherEntry = NPC_SPINESTALKER
+        end
+        -- C++ :488-489: erase from FrostwyrmGUIDs, fire when empty —
+        -- the live sweep below is the set twin.
+        for _, frostwyrm in ipairs(unit:GetCreaturesInGrid(otherEntry, 500)) do
+            if not frostwyrm:IsDead() then
+                return
+            end
+        end
+        -- C++ :491-493: LoadGrid has no bridge; the summon +
+        -- DoAction legs port.
+        local boss = unit:SummonCreature(NPC_SINDRAGOSA, SINDRAGOSA_SPAWN_POS[1], SINDRAGOSA_SPAWN_POS[2], SINDRAGOSA_SPAWN_POS[3], SINDRAGOSA_SPAWN_POS[4])
+        if boss then
+            boss:DoAction(ACTION_START_FROSTWYRM)
+        end
+        return
+    end
+end
+
+RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_UNIT_DEATH, onUnitDeath)

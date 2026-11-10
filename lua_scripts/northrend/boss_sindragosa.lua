@@ -93,11 +93,12 @@
 -- instance GetData bridge).
 -- SAY_RESPITE_FOR_A_TORMENTED_SOUL 4 is declared in the text enum
 -- but never referenced by a Talk() call — dead text evidence.
--- boss_sindragosa DoAction — ACTION_START_FROSTWYRM intro machine (ev38
--- dispatch bridged; senders at_sindragosa_lair OnTrigger
--- (boss_sindragosa.cpp:1505) + instance OnCreatureRemove
--- (instance_icecrown_citadel.cpp:493) unported, receiver arm is the unported
--- flight machine); JustReachedHome SetBossState FAIL leg PORTED
+-- boss_sindragosa DoAction — ACTION_START_FROSTWYRM intro machine PORTED
+-- 2026-11-10 (ev38 dispatch bridged; the instance OnUnitDeath sender is
+-- PORTED in instance_icecrown_citadel.lua this tick — the 2026-11-04
+-- stay-out is lifted; the at_sindragosa_lair OnTrigger sender
+-- (boss_sindragosa.cpp:1489-1506) stays out, no AreaTrigger bridge);
+-- JustReachedHome SetBossState FAIL leg PORTED
 -- 2026-11-06 (sindragosaReachHome, ev24).
 -- spell_sindragosa_ice_tomb_target::HandleSindragosaTalk —
 -- creatureCaster->AI()->Talk(EMOTE_WARN_FROZEN_ORB 7, GetHitUnit())
@@ -108,11 +109,13 @@
 -- bridges that do not exist. npc_spinestalker (37534) /
 -- npc_rimefang_icc (37533) / npc_sindragosa_trash handler (37531)
 -- ARE registered — their pure timer arms are PORTED below (the
--- maiden CreateLuaEvent precedent); their intro DoAction flight machines and the trash JustAppeared / SetData
--- instance legs stay out (ev38 dispatch bridged; senders at_sindragosa_lair
--- (boss_sindragosa.cpp:1492,1496) + instance OnCreatureRemove
--- (instance_icecrown_citadel.cpp:469,476) unported / no-motion / no-instance
--- bridges). The
+-- maiden CreateLuaEvent precedent); their intro DoAction flight machines
+-- are PORTED 2026-11-10 below (ev38 receivers + ev28 FLY_IN-arrival
+-- LandEvent twin + LAND arms; the instance OnUnitDeath sender is
+-- PORTED in instance_icecrown_citadel.lua; the at_sindragosa_lair
+-- sender stays out, no AreaTrigger bridge). The trash JustAppeared /
+-- SetData instance legs are modeled in the instance file as live
+-- sweeps (see its OnUnitDeath note), not as whelp hooks. The
 -- frostwing whelp (37532) carries no timer arms — NOT registered.
 -- at_sindragosa_lair joins the no-AreaTrigger bridge queue (the
 -- boss_anubrekhan at_anubrekhan_entrance precedent);
@@ -189,6 +192,9 @@ local EMOTE_WARN_FROZEN_ORB = 7
 local sindragosaThirdPhase = {}
 local sindragosaAirPhase = {}
 local rimefangBlastCounter = {}
+local frostwyrmSummoned = {}
+local frostwyrmIntro = {}
+local sindragosaIntroDone = {}
 
 local SPELL_FROST_AURA = 70084
 local SPELL_PERMAEATING_CHILL = 70109
@@ -228,6 +234,13 @@ local DATA_WHELP_MARKER = 2 -- boss_sindragosa.cpp:143
 local POINT_MOTION_TYPE = 8 -- MovementGeneratorType POINT (darnavan precedent)
 local EFFECT_MOTION_TYPE = 16 -- MovementGeneratorType EFFECT (MoveTakeoff/MoveLand)
 local POINT_FROSTWYRM_FLY_IN = 1 -- :151
+local POINT_FROSTWYRM_LAND = 2 -- :152
+local ACTION_START_FROSTWYRM = -368530 -- icecrown_citadel.h:507
+local SPELL_SINDRAGOSA_S_FURY = 70608 -- :54
+local UNIT_FIELD_FLAGS = 59 -- arlokk precedent
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- bosses_opera.lua:103
+local UNIT_FLAG_IMMUNE_TO_PC = 0x100 -- UnitDefines.h:132
+local MOVE_FLIGHT = 6 -- Unit.h:270
 local POINT_AIR_PHASE = 3 -- :153
 local POINT_TAKEOFF = 4 -- :154
 local POINT_LAND = 5 -- :155
@@ -237,7 +250,11 @@ local SINDRAGOSA_AIR_POS = {4475.99, 2484.43, 247.934}
 local SINDRAGOSA_AIR_POS_FAR = {4525.6, 2485.15, 245.082}
 local SINDRAGOSA_FLY_IN_POS = {4419.19, 2484.36, 232.515}
 local SINDRAGOSA_LAND_POS = {4419.19, 2484.57, 203.3848}
+local SINDRAGOSA_FLY_POS = {4475.19, 2484.57, 234.851} -- :170
 local RIMEFANG_FLY_POS = {4413.309, 2456.421, 233.3795}
+local RIMEFANG_LAND_POS = {4413.309, 2456.421, 203.3848, 2.890186} -- :166
+local SPINESTALKER_FLY_POS = {4418.895, 2514.233, 230.4864} -- :167
+local SPINESTALKER_LAND_POS = {4418.895, 2514.233, 203.3848, 3.396045} -- :168
 
 local timers = {}
 
@@ -564,7 +581,52 @@ local function sindragosaMovementInform(event, creature, moveType, id)
         creature:SetDisableGravity(false)
         creature:SetReactState(1) -- REACT_DEFENSIVE
         sindragosaAirPhase[guid] = false
+    elseif moveType == POINT_MOTION_TYPE and id == POINT_FROSTWYRM_FLY_IN then
+        -- C++ FrostwyrmLandEvent (boss_sindragosa.cpp:176-188, added at
+        -- moveTime + 250ms): MoveLand(POINT_FROSTWYRM_LAND, LandPos) —
+        -- the FLY_IN arrival is the moveTime twin (darnavan precedent).
+        if frostwyrmIntro[guid] then
+            frostwyrmIntro[guid] = nil
+            creature:MoveLand(POINT_FROSTWYRM_LAND, SINDRAGOSA_LAND_POS[1], SINDRAGOSA_LAND_POS[2], SINDRAGOSA_LAND_POS[3])
+        end
+    elseif id == POINT_FROSTWYRM_LAND then
+        -- C++ boss_sindragosa::MovementInform POINT_FROSTWYRM_LAND
+        -- (:354-361): the setActive leg has no bridge.
+        creature:SetFarVisible(false)
+        creature:SetCanFly(false)
+        creature:SetDisableGravity(false)
+        creature:SetHomePosition(SINDRAGOSA_LAND_POS[1], SINDRAGOSA_LAND_POS[2], SINDRAGOSA_LAND_POS[3], 3.141593)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetSpeedRate(MOVE_FLIGHT, 2.5)
+        creature:DoZoneInCombat() -- Sindragosa enters combat as soon as she lands
     end
+end
+
+-- C++ boss_sindragosa::DoAction ACTION_START_FROSTWYRM (:311-331),
+-- PORTED 2026-11-10 (see header; the instance OnUnitDeath sender is
+-- PORTED in instance_icecrown_citadel.lua).
+local function sindragosaDoAction(event, creature, action)
+    if action ~= ACTION_START_FROSTWYRM then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    -- C++ :314: instance->SetData(DATA_SINDRAGOSA_INTRO, 0) — no
+    -- instance-SetData bridge; the Lua-local latch below is the twin,
+    -- read by sindragosaReset's intro-gated fly-set.
+    sindragosaIntroDone[guid] = true
+    -- C++ :315-316: the TempSummon type flip has no bridge.
+    if creature:IsDead() then
+        return
+    end
+    -- C++ :320: setActive(true) has no bridge.
+    creature:SetFarVisible(true)
+    creature:SetCanFly(true)
+    creature:SetDisableGravity(true)
+    creature:SetSpeedRate(MOVE_FLIGHT, 4.0)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    frostwyrmIntro[guid] = true
+    creature:MoveTo(POINT_FROSTWYRM_FLY_IN, SINDRAGOSA_FLY_POS[1], SINDRAGOSA_FLY_POS[2], SINDRAGOSA_FLY_POS[3])
+    creature:CastSpell(creature, SPELL_SINDRAGOSA_S_FURY)
 end
 
 local function onIceTomb(creature, guid)
@@ -659,6 +721,14 @@ local function sindragosaReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
     sindragosaThirdPhase[creature:GetGUIDLow()] = nil
     sindragosaAirPhase[creature:GetGUIDLow()] = nil
+    -- C++ Reset :252-255: the fly-set runs while
+    -- instance->GetData(DATA_SINDRAGOSA_INTRO) is nonzero (initialized
+    -- to 1, instance_icecrown_citadel.cpp:155; cleared by the DoAction
+    -- arm above) — the Lua-local latch is the twin.
+    if not sindragosaIntroDone[creature:GetGUIDLow()] then
+        creature:SetCanFly(true)
+        creature:SetDisableGravity(true)
+    end
     -- Alive-gated like the tank-marker cast below: ev23 fires on
     -- death too (fireCreatureDied runs Reset before the kill-credit
     -- criteria read, kill.go:1091/:1400), and a death-time zero
@@ -764,11 +834,10 @@ end
 -- summon gating (the maiden CreateLuaEvent precedent); the UpdateAI
 -- CASTING gates are PORTED (500ms IsCasting defer, mal_ganis idiom
 -- — IsCasting live, lua_creature_events.go:1950; the old "no bridge /
--- timers fire unconditionally" claim is retracted). The intro ACTION_START_FROSTWYRM flight machine stays out (ev38 dispatch
--- bridged; senders at_sindragosa_lair (boss_sindragosa.cpp:1492) + instance
--- OnCreatureRemove (instance_icecrown_citadel.cpp:469) unported;
--- MovePoint/MovementInform are bridged — the sindragosa air-phase machine
--- ports on them — but with no sender the receiver would be dead code).
+-- timers fire unconditionally" claim is retracted). The intro
+-- ACTION_START_FROSTWYRM flight machine is PORTED 2026-11-10 below
+-- (frostwyrmDoAction + spinestalkerMovementInform; the instance
+-- OnUnitDeath sender is PORTED in instance_icecrown_citadel.lua).
 local function onSpinestalkerRoar(creature, guid)
     -- C++ spinestalker UpdateAI pre-loop gate :730 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
     if creature:IsCasting() then
@@ -812,10 +881,10 @@ end
 -- EVENT_FROST_BREATH_RIMEFANG DoCastSelf(SPELL_FROST_BREATH)
 -- non-triggered {12s,15s} -> {35s,40s} (:791/:868-871). EVENT_ICY_BLAST
 -- PORTED 2026-11-09 (counter + MovePoint + ev28 FLY_IN arrival twin for
--- the moveTime re-arms + blast-cast chain). The
--- intro flight machine stays out (ev38 dispatch bridged; senders
--- at_sindragosa_lair (boss_sindragosa.cpp:1496) + instance OnCreatureRemove
--- (instance_icecrown_citadel.cpp:476) unported).
+-- the moveTime re-arms + blast-cast chain). The intro flight machine is
+-- PORTED 2026-11-10 below (frostwyrmDoAction + rimefangMovementInform
+-- LAND arm; the instance OnUnitDeath sender is PORTED in
+-- instance_icecrown_citadel.lua).
 local function onRimefangFrostBreath(creature, guid)
     -- C++ rimefang UpdateAI pre-loop gate :862 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
     if creature:IsCasting() then
@@ -889,14 +958,32 @@ end
 -- C++ rimefang has no MovementInform leg for POINT_FROSTWYRM_FLY_IN —
 -- the ICY_BLAST_CAST 250ms / ICY_BLAST {60s,70s} re-arms are scheduled
 -- from moveTime, i.e. from the FLY_IN arrival; the ev28 arrival is
--- that twin (the darnavan precedent).
+-- that twin (the darnavan precedent). The intro flight's FLY_IN
+-- arrival is the FrostwyrmLandEvent twin instead (PORTED 2026-11-10):
+-- the intro flag separates the two flights sharing the point.
 local function rimefangMovementInform(event, creature, moveType, id)
-    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_FROSTWYRM_FLY_IN then
+    local guid = creature:GetGUIDLow()
+    if moveType == POINT_MOTION_TYPE and id == POINT_FROSTWYRM_FLY_IN then
+        if frostwyrmIntro[guid] then
+            frostwyrmIntro[guid] = nil
+            creature:MoveLand(POINT_FROSTWYRM_LAND, RIMEFANG_LAND_POS[1], RIMEFANG_LAND_POS[2], RIMEFANG_LAND_POS[3])
+            return
+        end
+        schedule(guid, "icy_blast_cast", 250, function() onRimefangIcyBlastCast(creature, guid) end)
+        schedule(guid, "icy_blast", {60000, 70000}, function() onRimefangIcyBlast(creature, guid) end)
         return
     end
-    local guid = creature:GetGUIDLow()
-    schedule(guid, "icy_blast_cast", 250, function() onRimefangIcyBlastCast(creature, guid) end)
-    schedule(guid, "icy_blast", {60000, 70000}, function() onRimefangIcyBlast(creature, guid) end)
+    if moveType == EFFECT_MOTION_TYPE and id == POINT_FROSTWYRM_LAND then
+        -- C++ npc_rimefang_icc::MovementInform POINT_FROSTWYRM_LAND
+        -- (:837-847): the setActive leg has no bridge.
+        creature:SetFarVisible(false)
+        creature:SetCanFly(false)
+        creature:SetDisableGravity(false)
+        creature:SetHomePosition(RIMEFANG_LAND_POS[1], RIMEFANG_LAND_POS[2], RIMEFANG_LAND_POS[3], RIMEFANG_LAND_POS[4])
+        creature:SetFacingTo(RIMEFANG_LAND_POS[4])
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
+    end
 end
 
 local function rimefangEnterCombat(event, creature, target)
@@ -917,8 +1004,8 @@ end
 -- EVENT_CONCUSSIVE_SHOCK DoCastSelf(SPELL_CONCUSSIVE_SHOCK)
 -- non-triggered {8s,10s} -> {10s,13s} (:944/:998-1000). The whelp
 -- (37532) carries no timer arms — NOT registered. The
--- JustAppeared / SetData instance legs stay out (no instance
--- bridge).
+-- JustAppeared / SetData instance legs are modeled in the instance
+-- file as live sweeps (PORTED 2026-11-10, see its OnUnitDeath note).
 local function onHandlerOrderWhelp(creature, guid)
     -- C++ trash UpdateAI pre-loop gate :986 (no in-loop return): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
     if creature:IsCasting() then
@@ -955,13 +1042,74 @@ local function addReset(event, creature)
 end
 
 -- C++ spinestalker Reset (:657-670) / rimefang Reset (:795-808):
--- SetCanFly(true) + SetDisableGravity(true) while !_summoned. The intro
--- DoAction that sets _summoned is unported (senders unported), so the
--- adds are perpetually pre-intro in this port and Reset always sets fly.
+-- SetCanFly(true) + SetDisableGravity(true) while !_summoned. The
+-- _summoned latch is PORTED 2026-11-10 (frostwyrmDoAction sets it, so
+-- Reset stops re-setting fly after the intro flight).
 local function frostwyrmReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
-    creature:SetCanFly(true)
-    creature:SetDisableGravity(true)
+    if not frostwyrmSummoned[creature:GetGUIDLow()] then
+        creature:SetCanFly(true)
+        creature:SetDisableGravity(true)
+    end
+end
+
+-- C++ npc_spinestalker / npc_rimefang_icc DoAction
+-- ACTION_START_FROSTWYRM (:685-705 / :812-833), PORTED 2026-11-10
+-- (see header; the instance OnUnitDeath sender is PORTED in
+-- instance_icecrown_citadel.lua). One handler for both entries: the
+-- arms differ only in the flag leg (spinestalker NON_ATTACKABLE,
+-- rimefang SetImmuneToPC) and the fly/land positions.
+local function frostwyrmDoAction(event, creature, action)
+    if action ~= ACTION_START_FROSTWYRM then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if frostwyrmSummoned[guid] then
+        return
+    end
+    frostwyrmSummoned[guid] = true
+    if creature:IsDead() then
+        return
+    end
+    -- C++ :691-694 / :818-821: setActive(true) has no bridge.
+    creature:SetFarVisible(true)
+    creature:SetSpeedRate(MOVE_FLIGHT, 2.0)
+    local flyPos = RIMEFANG_FLY_POS
+    if creature:GetEntry() == ENTRY_SPINESTALKER then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        flyPos = SPINESTALKER_FLY_POS
+    else
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    end
+    frostwyrmIntro[guid] = true
+    -- C++ :700-702 / :827-829: SetDefaultMovementType + MoveIdle +
+    -- StopMoving have no bridge; the MovePoint leg ports.
+    creature:MoveTo(POINT_FROSTWYRM_FLY_IN, flyPos[1], flyPos[2], flyPos[3])
+    creature:SetReactState(1) -- REACT_DEFENSIVE
+end
+
+-- C++ npc_spinestalker::MovementInform (:710-721): the FLY_IN arrival
+-- is the FrostwyrmLandEvent twin (darnavan precedent, as in
+-- rimefangMovementInform); the LAND arm ports in C++ order (the
+-- setActive leg has no bridge).
+local function spinestalkerMovementInform(event, creature, moveType, id)
+    local guid = creature:GetGUIDLow()
+    if moveType == POINT_MOTION_TYPE and id == POINT_FROSTWYRM_FLY_IN then
+        if frostwyrmIntro[guid] then
+            frostwyrmIntro[guid] = nil
+            creature:MoveLand(POINT_FROSTWYRM_LAND, SPINESTALKER_LAND_POS[1], SPINESTALKER_LAND_POS[2], SPINESTALKER_LAND_POS[3])
+        end
+        return
+    end
+    if moveType == EFFECT_MOTION_TYPE and id == POINT_FROSTWYRM_LAND then
+        creature:SetFarVisible(false)
+        creature:SetCanFly(false)
+        creature:SetDisableGravity(false)
+        creature:SetHomePosition(SPINESTALKER_LAND_POS[1], SPINESTALKER_LAND_POS[2], SPINESTALKER_LAND_POS[3], SPINESTALKER_LAND_POS[4])
+        creature:SetFacingTo(SPINESTALKER_LAND_POS[4])
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
+    end
 end
 
 -- C++ JustSummoned NPC_FROST_BOMB (boss_sindragosa.cpp:413-421):
@@ -1017,15 +1165,19 @@ RegisterCreatureEvent(ENTRY_SINDRAGOSA, 23, sindragosaReset)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 24, sindragosaReachHome)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 19, sindragosaJustSummoned)
 RegisterCreatureEvent(ENTRY_SINDRAGOSA, 28, sindragosaMovementInform)
+RegisterCreatureEvent(ENTRY_SINDRAGOSA, 38, sindragosaDoAction)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 1, spinestalkerEnterCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 2, addLeaveCombat)
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 4, addLeaveCombat) -- C++ boss_sindragosa.cpp:678-681: JustDied _events.Reset() only
 RegisterCreatureEvent(ENTRY_SPINESTALKER, 23, frostwyrmReset)
+RegisterCreatureEvent(ENTRY_SPINESTALKER, 28, spinestalkerMovementInform)
+RegisterCreatureEvent(ENTRY_SPINESTALKER, 38, frostwyrmDoAction)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 1, rimefangEnterCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 2, addLeaveCombat)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 4, addLeaveCombat) -- C++ boss_sindragosa.cpp:805-808: JustDied _events.Reset() only
 RegisterCreatureEvent(ENTRY_RIMEFANG, 23, frostwyrmReset)
 RegisterCreatureEvent(ENTRY_RIMEFANG, 28, rimefangMovementInform)
+RegisterCreatureEvent(ENTRY_RIMEFANG, 38, frostwyrmDoAction)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 1, handlerEnterCombat)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 2, addLeaveCombat)
 RegisterCreatureEvent(ENTRY_FROSTWARDEN_HANDLER, 23, addReset)
