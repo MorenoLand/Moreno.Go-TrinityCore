@@ -38,7 +38,9 @@
 -- map-469 instance binding is instance_blackwing_lair.lua); the boss's
 -- own _Reset/_JustDied/BossAI::JustEngagedWith
 -- bookkeeping writes ARE ported (creature:SetBossState, bridge live
--- lua_creature_events.go:5917):
+-- lua_creature_events.go:5917), including the _Reset/_JustDied
+-- summons.DespawnAll leg over the instanceData.razorSummons registry
+-- (despawnSummons below; instance_blackwing_lair.lua records it):
 -- ev1 IN_PROGRESS (no JustEngagedWith override — base runs,
 -- ScriptedCreature.h:329), ev23 NOT_STARTED (Reset :84-89 calls _Reset();
 -- alive + != DONE gate, ScriptedCreature.cpp:499-511), ev4 DONE (JustDied
@@ -285,16 +287,21 @@ local function razorgoreDied(event, creature, killer)
 end
 
 local function razorgoreReset(event, creature)
-    -- C++ Reset (boss_razorgore.cpp:84-89): _Reset() writes
-    -- SetBossState(DATA_RAZORGORE_THE_UNTAMED 0, NOT_STARTED), alive-
-    -- gated and skipped when already DONE (ScriptedCreature.cpp:499-511);
-    -- Go fires ev23 on the death path too, hence the gate. The
-    -- SetData(DATA_EGG_EVENT, NOT_STARTED) arm (:89) rides the instance
-    -- bearer (instance_blackwing_lair.lua) and is
+    -- C++ Reset (boss_razorgore.cpp:84-89): _Reset() despawns the
+    -- summons registry, then writes SetBossState(DATA_RAZORGORE_THE_UNTAMED
+    -- 0, NOT_STARTED) — both inside the alive gate, the state write
+    -- additionally skipped when already DONE (ScriptedCreature.cpp:
+    -- 499-511); Go fires ev23 on the death path too, hence the gate.
+    -- The SetData(DATA_EGG_EVENT, NOT_STARTED) arm (:89) rides the
+    -- instance bearer (instance_blackwing_lair.lua) and is
     -- unconditional, mirroring C++ Reset; on the death path ev4 already
-    -- wrote the same value, so the duplicate write is a no-op.
-    if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
-        creature:SetBossState(0, 0)
+    -- wrote the same value (and already despawned), so the duplicate
+    -- writes are no-ops.
+    if creature:IsAlive() then
+        despawnSummons(creature)
+        if creature:GetBossState(0) ~= 3 then
+            creature:SetBossState(0, 0)
+        end
     end
     local data = instanceDataOf(creature)
     if data then
