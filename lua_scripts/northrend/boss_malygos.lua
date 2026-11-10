@@ -377,6 +377,16 @@ end
 -- once health is at or below 50% (the phase-two transition itself —
 -- Talk SAY_END_P_ONE, REACT_PASSIVE, AttackStop — stays out).
 local function vortexTick(creature, guid)
+    -- C++ UpdateAI pre-loop (:740) + in-loop (:970) CASTING gates,
+    -- PHASE_NOT_STARTED-exempt (ticks seed on engage, so live only in
+    -- phase one via the health latch below): 500ms IsCasting defer,
+    -- mal_ganis idiom.
+    if creature:IsCasting() then
+        schedule(guid, "vortex", 500, function()
+            vortexTick(creature, guid)
+        end)
+        return
+    end
     if creature:GetHealthPct() <= 50 then
         return
     end
@@ -398,6 +408,14 @@ end
 -- runs in instance_eye_of_eternity.lua. PORTED 2026-11-08
 -- (tick 432).
 local function powerSparksTick(creature, guid)
+    -- Same C++ CASTING gates as vortexTick (:740/:970,
+    -- PHASE_NOT_STARTED-exempt): 500ms IsCasting defer.
+    if creature:IsCasting() then
+        schedule(guid, "powerSparks", 500, function()
+            powerSparksTick(creature, guid)
+        end)
+        return
+    end
     if creature:GetHealthPct() <= 50 then
         return
     end

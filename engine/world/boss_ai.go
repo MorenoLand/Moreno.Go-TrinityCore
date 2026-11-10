@@ -19386,10 +19386,14 @@ func init() {
 	// destroy-platform health gates, immune flag flips — no health /
 	// timer-event bridges); the UpdateAI arcane / vortex / power-spark /
 	// phase-three disk machines (no timer-event / cast / phase bridges);
-	// CAST-STATE 2026-11-04: boss UpdateAI pre-loop (:740) + in-loop
-	// (:970) CASTING gates (PHASE_NOT_STARTED-exempt) guard only the
-	// unported event machine — zero ported timer ticks, and the ported
-	// engage / died / reset hooks are ungated per C++; no gate ported.
+	// CAST-STATE 2026-11-04 (corrected 2026-11-09): boss UpdateAI
+	// pre-loop (:740) + in-loop (:970) CASTING gates
+	// (PHASE_NOT_STARTED-exempt) guard the event machine; the two
+	// ported phase-one timer ticks (vortexTick, powerSparksTick, both
+	// seeded on engage, health-latched to phase one) carry the 500ms
+	// IsCasting defer (mal_ganis idiom) — the 2026-11-04 "zero ported
+	// timer ticks" line went stale when the ticks landed 2026-11-08.
+	// The ported engage / died / reset hooks stay ungated per C++.
 	// SpellHit (SPELL_POWER_SPARK_MALYGOS -> Talk SAY_BUFF_SPARK 14 +
 	// despawn the spark; SPELL_MALYGOS_BERSERK -> Talk
 	// EMOTE_HIT_BERSERKER_TIMER — ev14 live; both arms trigger-dead (56152 via the unported spark MI cast, 47008 aura tick never
