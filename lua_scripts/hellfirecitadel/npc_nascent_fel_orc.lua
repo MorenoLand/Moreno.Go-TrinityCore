@@ -30,17 +30,18 @@
 -- 7s init then {16s,21s} — non-triggered DoCastVictim,
 -- re-arm {16s,21s} (C++-exact). OnDied(4): cleanup (the
 -- instance OnUnitDeath prisoner-counter -> ActivateCell
--- chain is instance-gated). OnLeaveCombat(2)/OnReset(23):
--- cancel the pump, drop per-GUID state (the C++ Reset() ->
--- scheduler.CancelAll() arm collapses into the pump cancel;
+-- chain is PORTED in instance_blood_furnace.lua).
+-- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop
+-- per-GUID state (the C++ Reset() ->
+-- scheduler.CancelAll() arm collapses into the pump cancel);
 -- the JustReachedHome -> instance GetBossState(IN_PROGRESS)
--- -> cross-creature DoAction(ACTION_RESET_BROGGOK) relay has
--- no instance/cross-creature bridges).
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — the prisoner wave release and the
--- cell-door/lever choreography live in instance_blood_
--- furnace.cpp, which stays blocked on the instance-script
--- model; the base Reset() emote arm (scheduler.CancelAll +
+-- -> cross-creature DoAction(ACTION_RESET_BROGGOK) relay
+-- is PORTED in the ev2 handler below.
+-- Deliberate deviations (all await engine bridges): the
+-- prisoner wave release and the cell-door/lever choreography
+-- are PORTED in instance_blood_furnace.lua (RegisterMapEvent
+-- (542, 9) OnUnitDeath chain; the spawn flag leg rides ev5
+-- below); the base Reset() emote arm (scheduler.CancelAll +
 -- the 1s-5s emote task repeating 6s-9s over the
 -- EMOTE_ONESHOT_ROAR/SHOUT/BATTLE_ROAR one-shots) ported
 -- via creature:PerformEmote (handler twin, lua_creature_events.go:325;
@@ -53,6 +54,14 @@ local SPELL_CONCUSSION_BLOW = 22427
 local SPELL_STOMP = 31900
 
 local ENTRY_NASCENT_FEL_ORC = 17398
+
+local ENTRY_BROGGOK = 17380 -- blood_furnace.h:51
+local DATA_BROGGOK = 1 -- blood_furnace.h:29
+local ACTION_RESET_BROGGOK = 2 -- blood_furnace.h:85
+local BOSS_STATE_IN_PROGRESS = 1
+
+local UNIT_FIELD_FLAGS = 59 -- arlokk precedent
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- bosses_opera.lua:103
 
 local timers = {}
 local states = {}
@@ -143,6 +152,15 @@ RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 2, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetMob(guid)
     startEmoteLoop(creature, guid)
+    -- C++ BroggokPrisionersAI::JustReachedHome
+    -- (boss_broggok.cpp:179-187): boss IN_PROGRESS ->
+    -- broggok DoAction(ACTION_RESET_BROGGOK). ev2 is the
+    -- leave-combat twin of reaching home (the evade leg);
+    -- the boss-state gate is C++-exact.
+    local broggok = creature:FindNearestCreature(ENTRY_BROGGOK, 500)
+    if broggok and broggok:GetBossState(DATA_BROGGOK) == BOSS_STATE_IN_PROGRESS then
+        broggok:DoAction(ACTION_RESET_BROGGOK)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 4, function(_, creature)
@@ -155,8 +173,15 @@ RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 23, function(_, creature)
     startEmoteLoop(creature, guid)
 end)
 
--- Event 5 (On Spawn): C++ Reset() arms the emote loop.
+-- Event 5 (On Spawn): C++ Reset() arms the emote loop, and
+-- the instance StorePrisoner twin flags in-box prisoners
+-- NON_ATTACKABLE + immune (instance_blood_furnace.cpp:202-211);
+-- the position gate is C++-exact (only cells 5-8 are stored).
 RegisterCreatureEvent(ENTRY_NASCENT_FEL_ORC, 5, function(_, creature)
     local guid = creature:GetGUIDLow()
     startEmoteLoop(creature, guid)
+    if BloodFurnace and BloodFurnace.cellAt(creature:GetX(), creature:GetY(), creature:GetZ()) then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:SetImmuneToAll(true)
+    end
 end)
