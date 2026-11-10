@@ -280,6 +280,12 @@ local onEnableBoneSlice, onBoneSliceTick, onGraveyard, onColdflame
 -- cadence through the storm (their gates already read the storm aura at
 -- fire time). FinishSpell has no bridge.
 onWarnBoneStorm = function(creature, guid)
+    -- C++ UpdateAI pre-loop gate :193 — the arm sits in the gated loop,
+    -- so a cast in flight delays the storm warning (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "warnStorm", 500, function() onWarnBoneStorm(creature, guid) end)
+        return
+    end
     local st = getMarrowgarState(guid)
     st.boneSlice = false
     creature:Talk(EMOTE_BONE_STORM)
@@ -294,6 +300,12 @@ end
 -- 30s) = 10-man 20s / 25-man 30s (:136); the x3 rate multiplies the
 -- GetSpeed(1)/7.0 rate captured at engage.
 onBoneStormBegin = function(creature, guid)
+    -- Gated-loop arm (pre-loop :193): the whole BEGIN leg waits out a
+    -- cast in flight (speed/Talk/END schedule ride the event).
+    if creature:IsCasting() then
+        schedule(guid, "beginStorm", 500, function() onBoneStormBegin(creature, guid) end)
+        return
+    end
     local st = getMarrowgarState(guid)
     local aura = creature:GetAura(SPELL_BONE_STORM)
     if aura then
@@ -315,6 +327,11 @@ end
 onBoneStormMove = function(creature, guid)
     local st = getMarrowgarState(guid)
     schedule(guid, "moveStorm", math.floor(st.stormDuration / 3), function() onBoneStormMove(creature, guid) end)
+    -- Gated-loop arm (pre-loop :193): the re-arm above stays on cadence;
+    -- only the MoveChase waits out a cast in flight.
+    if creature:IsCasting() then
+        return
+    end
     local target = pickRandomNonTank(creature)
     if target then
         creature:MoveChase(target)
@@ -325,6 +342,12 @@ end
 -- MoveChase victim, speed restore, cancel MOVE, ENABLE_BONE_SLICE @10s,
 -- reschedule GRAVEYARD @15s when not heroic.
 onBoneStormEnd = function(creature, guid)
+    -- Gated-loop arm (pre-loop :193): the whole END leg waits out a cast
+    -- in flight (move cancel / re-chase / reschedules ride the event).
+    if creature:IsCasting() then
+        schedule(guid, "endStorm", 500, function() onBoneStormEnd(creature, guid) end)
+        return
+    end
     cancelTimer(guid, "moveStorm")
     creature:MoveClear()
     local victim = creature:GetVictim()
@@ -340,6 +363,11 @@ end
 
 -- C++ EVENT_ENABLE_BONE_SLICE (:259-261): _boneSlice = true.
 onEnableBoneSlice = function(creature, guid)
+    -- Gated-loop arm (pre-loop :193); the flag waits out a cast in flight.
+    if creature:IsCasting() then
+        schedule(guid, "enableSlice", 500, function() onEnableBoneSlice(creature, guid) end)
+        return
+    end
     getMarrowgarState(guid).boneSlice = true
 end
 
@@ -423,6 +451,13 @@ end)
 -- SAY_BONESPIKE after the loop. Re-arm {15s,20s} always (C++ :203).
 -- The dead-target spike-despawn leg stays out (no aura-caster-GUID bridge).
 onGraveyard = function(creature, guid)
+    -- Gated-loop arm (pre-loop :193): the spike summons wait out a cast
+    -- in flight, like any other arm in the loop (the garfrost forgeJump
+    -- precedent — the cast itself is skipped, but the event is gated).
+    if creature:IsCasting() then
+        schedule(guid, "graveyard", 500, function() onGraveyard(creature, guid) end)
+        return
+    end
     local st = getMarrowgarState(guid)
     if creature:IsHeroic() or not creature:HasAura(SPELL_BONE_STORM) then
         local targets = creature:GetAITargets()
@@ -466,6 +501,12 @@ end
 -- target instead of 15y from marrowgar toward it). Storm: 4 coldflames
 -- (the 72705 script's 4 casts, :518-521). Re-arm 5s always (C++ :212).
 onColdflame = function(creature, guid)
+    -- Gated-loop arm (pre-loop :193): the coldflame summons wait out a
+    -- cast in flight (same idiom as onGraveyard above).
+    if creature:IsCasting() then
+        schedule(guid, "coldflame", 500, function() onColdflame(creature, guid) end)
+        return
+    end
     local target = pickColdflameTarget(creature)
     if target then
         local count = 1
