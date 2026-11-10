@@ -24,7 +24,7 @@
 -- 2 select (relic/monument).
 -- Event machine: a 500ms CreateLuaEvent pump is the C++ UpdateAI
 -- EventMap twin — every C++ delay (500ms/1s/1500ms/2s/3s) is a
--- multiple of 500ms, so all timers are exact. Each pump tick runs
+-- multiple of 500ms, so all timers are quantized to the 500ms pump grid. Each pump tick runs
 -- Update(diff) then executes the single earliest-due event
 -- (ties: lowest event id), mirroring ExecuteEvent's one-event-
 -- per-UpdateAI. ScheduleEvent overwrites a pending event of the
@@ -272,8 +272,12 @@ local function cancelEvent(st, eventId)
     st.events[eventId] = nil
 end
 
-local function cancelAllEvents(st)
+local function cancelRoundEvents(st)
+    local periodic = st.events[EVENT_SIMON_PERIODIC_PLAYER_CHECK]
     st.events = {}
+    if periodic ~= nil then
+        st.events[EVENT_SIMON_PERIODIC_PLAYER_CHECK] = periodic
+    end
 end
 
 -- C++ DoCast(self) twin: explicit self target (see header).
@@ -419,7 +423,7 @@ local function doAction(creature, guid, st, action)
         st.listening = false
         creature:CastSpell(creature, SPELL_VISUAL_START_AI_LEVEL)
         giveRewardForLevel(creature, guid, st, st.gameLevel)
-        cancelAllEvents(st)
+        cancelRoundEvents(st)
         if st.gameLevel == 10 then
             resetNode(creature, guid, st)
         else
@@ -719,9 +723,11 @@ end
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 40, onSetGUID)
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 38, onDoAction)
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 15, onSpellHitTarget)
-RegisterCreatureEvent(NPC_SIMON_BUNNY, 2, onCleanup)
+-- Cleanup only on died (4) / remove (37): C++ has no Reset override
+-- and leave-combat touches nothing, so an evade (ev23 then ev2) must
+-- NOT cancel the pump or drop state, or the node bricks (relic stays
+-- NOT_SELECTABLE, bunny is MANUAL_DESPAWN).
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 4, onCleanup)
-RegisterCreatureEvent(NPC_SIMON_BUNNY, 23, onCleanup)
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 37, onCleanup)
 
 RegisterGameObjectGossipEvent(GO_APEXIS_RELIC, 2, onRelicSelect)
