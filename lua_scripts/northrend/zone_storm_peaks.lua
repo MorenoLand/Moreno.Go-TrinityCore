@@ -42,6 +42,16 @@
 --   and the DoAction(1..4) call sites fire Lua OnDoAction hooks with no
 --   consumer until that AI ports; the spell arms are also DORMANT until
 --   Spell.dbc ships the records.
+--   spell_falling_dragon_feign_death (55795, :1376-1408): EFFECT_0
+--   DUMMY. Apply sets UNIT_FLAG_UNK_29 + UNIT_FLAG2_FEIGN_DEATH on the
+--   wyrm; remove clears both. Cast by the wyrm on itself at dead-phase
+--   (:814); the dead-phase machine itself (DamageTaken latch, MoveFall)
+--   is npc_wild_wyrm AI, unported.
+--   spell_player_mount_wyrm (56672, :1411-1445): EFFECT_0 DUMMY. On
+--   remove the player casts SPELL_FIGHT_WYRM (56673) on itself,
+--   triggered. Cast by the wyrm on the player at POINT_START_FIGHT
+--   (:782). Player-aura ev2/ev3 fire via the spells.go apply/remove
+--   funnels (fireAuraApply/fireAuraRemove on the player object).
 --
 -- PORTED (tick 205, RegisterAuraEvent OnApply = 2 / OnPeriodic = 1):
 --   spell_jokkum_scriptcast (61319, zone_storm_peaks.cpp:967-996):
@@ -81,6 +91,7 @@ local SPELL_PLAYER_CAST_VERANUS_SUMMON = 56650 -- TDB spell_script_names
 local SPELL_SUMMON_VERANUS_AND_THORIM = 56649 -- zone_storm_peaks.cpp:955
 local SPELL_CLOSE_RIFT = 56763 -- TDB spell_script_names
 local SPELL_DESPAWN_RIFT = 61665 -- zone_storm_peaks.cpp:1031
+local SPELL_PLAYER_MOUNT_WYRM = 56672 -- zone_storm_peaks.cpp:633
 local SPELL_FIGHT_WYRM = 56673 -- zone_storm_peaks.cpp:634
 local SPELL_EJECT_PASSENGER_1 = 60603 -- zone_storm_peaks.cpp:647
 local SPELL_GRIP = 56689 -- zone_storm_peaks.cpp:636
@@ -90,6 +101,11 @@ local SPELL_MIGHTY_SPEAR_THRUST = 60586 -- zone_storm_peaks.cpp:640
 local SPELL_LOW_HEALTH_TRIGGER = 60596 -- zone_storm_peaks.cpp:644
 local SPELL_DODGE_CLAWS = 56704 -- zone_storm_peaks.cpp:638
 local SPELL_CLAW_SWIPE_CHECK = 56705 -- zone_storm_peaks.cpp:1290
+local SPELL_FALLING_DRAGON_FEIGN_DEATH = 55795 -- zone_storm_peaks.cpp:656
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h
+local UNIT_FIELD_FLAGS_2 = 60 -- UpdateFields.h:118 (OBJECT_END+0x36)
+local UNIT_FLAG_UNK_29 = 0x20000000 -- UnitDefines.h:153
+local UNIT_FLAG2_FEIGN_DEATH = 0x00000001 -- UnitDefines.h:161
 local ACTION_CLAW_SWIPE_WARN = 1 -- zone_storm_peaks.cpp:665
 local ACTION_CLAW_SWIPE_DODGE = 2 -- zone_storm_peaks.cpp:666
 local ACTION_GRIP_FAILING = 3 -- zone_storm_peaks.cpp:667
@@ -344,3 +360,48 @@ local function clawSwipeCheckRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_CLAW_SWIPE_CHECK, 3, clawSwipeCheckRemove)
+
+-- C++ spell_falling_dragon_feign_death_AuraScript
+-- (zone_storm_peaks.cpp:1386-1408): EFFECT_0 DUMMY, REAL handle.
+-- AfterEffectApply sets UNIT_FLAG_UNK_29 (UNIT_FIELD_FLAGS) +
+-- UNIT_FLAG2_FEIGN_DEATH (UNIT_FIELD_FLAGS_2) on the wyrm;
+-- AfterEffectRemove clears both. Cast by the wyrm on itself
+-- (DoCastAOE) when the dead-phase starts (:814); the dead-phase
+-- machine (DamageTaken latch, MoveFall, KillSelf) is npc_wild_wyrm
+-- AI, unported, so nothing casts this yet. DORMANT until Spell.dbc
+-- ships the 55795 record.
+local function feignDeathApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29)
+    target:SetFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_FEIGN_DEATH)
+end
+
+RegisterAuraEvent(SPELL_FALLING_DRAGON_FEIGN_DEATH, 2, feignDeathApply)
+
+local function feignDeathRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29)
+    target:RemoveFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_FEIGN_DEATH)
+end
+
+RegisterAuraEvent(SPELL_FALLING_DRAGON_FEIGN_DEATH, 3, feignDeathRemove)
+
+-- C++ spell_player_mount_wyrm_AuraScript
+-- (zone_storm_peaks.cpp:1426-1430): EFFECT_0 DUMMY, REAL handle.
+-- AfterEffectRemove the target (the player) casts SPELL_FIGHT_WYRM
+-- (56673) on a nil target, triggered. Cast by the wyrm on the player
+-- at POINT_START_FIGHT (:782). The port casts it on the target
+-- (self-cast, the close-rift precedent); Validate (56673 in DBC) has
+-- no Lua bridge. DORMANT until Spell.dbc ships the 56672 record.
+local function mountWyrmRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_FIGHT_WYRM, true)
+end
+
+RegisterAuraEvent(SPELL_PLAYER_MOUNT_WYRM, 3, mountWyrmRemove)
