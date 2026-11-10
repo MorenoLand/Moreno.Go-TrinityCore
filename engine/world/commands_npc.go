@@ -677,10 +677,9 @@ func (s *session) handleNPCDelete(ctx context.Context, args []string) bool {
 	}
 	// Creature::DeleteFromDB (Creature.cpp:1861): the row must exist first,
 	// then every live creature with that spawn id on every map with the
-	// row's map id is despawned, and the creature, spawn_group,
-	// creature_addon, game_event_creature, game_event_model_equip and
-	// linked_respawn rows are deleted. The respawn-time removal has no Go
-	// model and stays open.
+	// row's map id is despawned, its respawn times are removed, and the
+	// creature, spawn_group, creature_addon, game_event_creature,
+	// game_event_model_equip and linked_respawn rows are deleted.
 	if !s.deleteCreatureFromDB(ctx, guid) {
 		s.sendSysMessage(fmt.Sprintf("Creature with GUID %d not found.", guid)) // LANG_COMMAND_CREATGUIDNOTFOUND 287
 		return true
@@ -733,9 +732,11 @@ func (s *session) npcDespawnLiveSpawn(ctx context.Context, guid, mapID uint32) {
 // deleteCreatureFromDB is the Creature::DeleteFromDB twin
 // (Creature.cpp:1861-1933): false when the spawn has no creature row
 // (GetCreatureData nil); on success every live creature with that spawn
-// id is despawned (npcDespawnLiveSpawn) and the creature, spawn-group,
+// id is despawned (npcDespawnLiveSpawn), its respawn times are removed
+// on every instance of the row's map (clearCreatureRespawnTimes, the
+// RemoveRespawnTime leg), and the creature, spawn-group,
 // creature_addon, game-event and linked-respawn rows are deleted. The
-// respawn-time removal has no Go model. The game_event_model_equip leg
+// game_event_model_equip leg
 // (WORLD_DEL_GAME_EVENT_MODEL_EQUIP) and both linked_respawn legs
 // (guid + linkedGuid, linkType 0/1 and 0/3, SpawnData.h:109-112) were
 // missing from the npc-delete port; the wp arms share this helper.
@@ -750,6 +751,7 @@ func (s *session) deleteCreatureFromDB(ctx context.Context, guid uint32) bool {
 	}
 	if s.server != nil {
 		s.npcDespawnLiveSpawn(ctx, guid, rowMap)
+		s.server.clearCreatureRespawnTimes(ctx, guid, rowMap)
 	}
 	if _, err := db.ExecContext(ctx, "DELETE FROM creature WHERE guid = ?", guid); err != nil {
 		return false

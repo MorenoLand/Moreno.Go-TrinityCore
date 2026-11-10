@@ -3237,20 +3237,34 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) bool {
 	const blocked = "ahbot is not supported: the auction house bot engine has no Go model."
 	switch strings.ToLower(args[0]) {
 	case "items":
+		// The quality token resolves against visible subcommands only
+		// (ChatCommand.cpp:207-237, FilteredCommandListIterator): an
+		// ambiguous prefix lists only the qualities the invoker may
+		// use, a prefix with exactly one visible match resolves to
+		// it, and a token matching no visible quality falls through
+		// to the bare array arm (gated on the items permission, so
+		// an invisible quality never engages its own leaf perm).
+		quality := ""
 		if len(args) >= 2 {
-			if matches := ahbotQualityMatches(args[1]); len(matches) > 1 {
+			if visible := s.ahbotVisibleQualities(ctx, args[1]); len(visible) > 1 {
 				s.sendSysMessage(fmt.Sprintf("Subcommand '%s' of command '.ahbot items' is ambiguous, please use one of the following:", args[1]))
-				for _, name := range matches {
+				for _, name := range visible {
 					s.sendSysMessage("  " + name)
 				}
 				return true
+			} else if len(visible) == 1 {
+				quality = visible[0]
+				args[1] = quality
 			}
 		}
-		perm := ahbotItemsPerm(args)
+		perm := permissionCommandAhbotItems
+		if quality != "" {
+			perm = ahbotItemsPerm(args)
+		}
 		if !s.commandAllowed(ctx, perm) {
 			return false
 		}
-		if ok, msgLeg := ahbotItemsLeg(args); !ok {
+		if ok, msgLeg := ahbotItemsLeg(args, quality); !ok {
 			if msgLeg {
 				s.sendSysMessage("Syntax: .ahbot items [gray|white|green|blue|purple|orange|yellow]")
 				return true
@@ -3259,11 +3273,25 @@ func (s *session) handleCmdAhbot(ctx context.Context, args []string) bool {
 		}
 		return s.blockedCommandArm(ctx, perm, blocked)
 	case "ratio":
-		perm := ahbotRatioPerm(args)
+		// Same visibility-aware resolution as items: the house token
+		// resolves against visible house subcommands only (houses
+		// share no prefixes, so no ambiguity leg exists); anything
+		// else falls through to the bare triple arm.
+		house := ""
+		if len(args) >= 2 {
+			if visible := s.ahbotVisibleHouses(ctx, args[1]); len(visible) == 1 {
+				house = visible[0]
+				args[1] = house
+			}
+		}
+		perm := permissionCommandAhbotRatio
+		if house != "" {
+			perm = ahbotRatioPerm(args)
+		}
 		if !s.commandAllowed(ctx, perm) {
 			return false
 		}
-		if ok, msgLeg := ahbotRatioLeg(args); !ok {
+		if ok, msgLeg := ahbotRatioLeg(args, house); !ok {
 			if msgLeg {
 				s.sendSysMessage("Syntax: .ahbot ratio [alliance|horde|neutral]")
 				return true
@@ -3454,6 +3482,61 @@ func ahbotQualityMatches(tok string) []string {
 	return matches
 }
 
+// ahbotVisibleQualities mirrors the C++ subcommand traversal for the
+// ahbot items quality rows (ChatCommand.cpp:207-237): only prefix
+// matches the invoker may use (RBAC 780-786) are candidates for
+// resolution or the ambiguity listing.
+func (s *session) ahbotVisibleQualities(ctx context.Context, tok string) []string {
+	var visible []string
+	for _, q := range ahbotQualityMatches(tok) {
+		var perm uint32
+		switch q {
+		case "gray":
+			perm = permissionCommandAhbotItemsGray
+		case "white":
+			perm = permissionCommandAhbotItemsWhite
+		case "green":
+			perm = permissionCommandAhbotItemsGreen
+		case "blue":
+			perm = permissionCommandAhbotItemsBlue
+		case "purple":
+			perm = permissionCommandAhbotItemsPurple
+		case "orange":
+			perm = permissionCommandAhbotItemsOrange
+		case "yellow":
+			perm = permissionCommandAhbotItemsYellow
+		}
+		if s.commandAllowed(ctx, perm) {
+			visible = append(visible, q)
+		}
+	}
+	return visible
+}
+
+// ahbotVisibleHouses is the ahbotVisibleQualities equivalent for the
+// ratio houses (RBAC 788-790).
+func (s *session) ahbotVisibleHouses(ctx context.Context, tok string) []string {
+	var visible []string
+	for _, h := range []string{"alliance", "horde", "neutral"} {
+		if !strings.HasPrefix(h, strings.ToLower(tok)) {
+			continue
+		}
+		var perm uint32
+		switch h {
+		case "alliance":
+			perm = permissionCommandAhbotRatioAlliance
+		case "horde":
+			perm = permissionCommandAhbotRatioHorde
+		case "neutral":
+			perm = permissionCommandAhbotRatioNeutral
+		}
+		if s.commandAllowed(ctx, perm) {
+			visible = append(visible, h)
+		}
+	}
+	return visible
+}
+
 // ahbotQualityToken resolves a quality token the way the C++ subcommand
 // traversal does (ChatCommand.cpp FilteredCommandListIterator): an exact
 // name wins, otherwise a unique case-insensitive prefix matches; an
@@ -3508,24 +3591,24 @@ func ahbotHouseToken(tok string) (string, bool) {
 }
 
 // ahbotItemsLeg classifies an items invocation the way the C++ typed
-// dispatcher does (ChatCommandArgs.h): (valid, messageLeg). A quality arm
-// takes exactly one uint32 amount; an unknown quality token falls through
+// dispatcher does (ChatCommandArgs.h): (valid, messageLeg). quality is
+// the visibility-resolved quality subcommand ("" for the bare array
+// arm, resolved by the caller against visible rows only): a quality arm
+// takes exactly one uint32 amount; an unresolved token falls through
 // to the bare array arm, which takes exactly seven uint32s. A non-uint32
 // token reports the framework parse message (messageLeg); a short array,
 // a missing amount, or trailing tokens fail silently.
-func ahbotItemsLeg(args []string) (bool, bool) {
-	if len(args) >= 2 {
-		if _, ok := ahbotQualityToken(args[1]); ok {
-			switch {
-			case len(args) == 2:
-				return false, false
-			case !ahbotUint32(args[2]):
-				return false, true
-			case len(args) > 3:
-				return false, false
-			default:
-				return true, false
-			}
+func ahbotItemsLeg(args []string, quality string) (bool, bool) {
+	if quality != "" {
+		switch {
+		case len(args) == 2:
+			return false, false
+		case !ahbotUint32(args[2]):
+			return false, true
+		case len(args) > 3:
+			return false, false
+		default:
+			return true, false
 		}
 	}
 	nums := args[1:]
@@ -3544,20 +3627,19 @@ func ahbotItemsLeg(args []string) (bool, bool) {
 }
 
 // ahbotRatioLeg is the ahbotItemsLeg equivalent for ratio: house + one
-// uint32, or exactly three uint32s for the bare arm.
-func ahbotRatioLeg(args []string) (bool, bool) {
-	if len(args) >= 2 {
-		if _, ok := ahbotHouseToken(args[1]); ok {
-			switch {
-			case len(args) == 2:
-				return false, false
-			case !ahbotUint32(args[2]):
-				return false, true
-			case len(args) > 3:
-				return false, false
-			default:
-				return true, false
-			}
+// uint32, or exactly three uint32s for the bare arm. house is the
+// visibility-resolved house subcommand ("" for the bare triple arm).
+func ahbotRatioLeg(args []string, house string) (bool, bool) {
+	if house != "" {
+		switch {
+		case len(args) == 2:
+			return false, false
+		case !ahbotUint32(args[2]):
+			return false, true
+		case len(args) > 3:
+			return false, false
+		default:
+			return true, false
 		}
 	}
 	nums := args[1:]

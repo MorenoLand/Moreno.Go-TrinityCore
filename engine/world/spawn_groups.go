@@ -335,6 +335,39 @@ func (s *Server) spawnGroupClearCreatureRespawn(ctx context.Context, mapID, inst
 	s.deleteCreatureRespawnRow(ctx, guid, mapID, instanceID)
 }
 
+// clearCreatureRespawnTimes mirrors the respawn-time leg of
+// Creature::DeleteFromDB (Creature.cpp:1878-1886): for every loaded map
+// with the row's map id, Map::RemoveRespawnTime drops the pending
+// respawn timer and its saved row. Go drops the global record plus
+// every instance record on the map and deletes the saved row per
+// (map, instance) pair (CHAR_DEL_RESPAWN).
+func (s *Server) clearCreatureRespawnTimes(ctx context.Context, guid, mapID uint32) {
+	if s == nil || guid == 0 {
+		return
+	}
+	instances := make(map[uint32]bool)
+	s.motionMu.Lock()
+	if rec, ok := s.creatureRespawns[guid]; ok {
+		if rec.Map == mapID {
+			instances[rec.InstanceID] = true
+		}
+		delete(s.creatureRespawns, guid)
+	}
+	for key, respawns := range s.instanceCreatureRespawns {
+		if key.MapID != mapID {
+			continue
+		}
+		if _, ok := respawns[guid]; ok {
+			delete(respawns, guid)
+			instances[key.InstanceID] = true
+		}
+	}
+	s.motionMu.Unlock()
+	for instanceID := range instances {
+		s.deleteCreatureRespawnRow(ctx, guid, mapID, instanceID)
+	}
+}
+
 // spawnGroupRemoveCreatureMotion removes a live creature motion with the
 // despawnAtEvade removal shape (delete + SMSG_DESTROY_OBJECT + OnRemove)
 // minus the evade re-arm: a group despawn is not a delayed respawn.
