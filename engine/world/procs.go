@@ -3283,6 +3283,17 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				}
 				continue
 			}
+			if auraSpell.ID == 62259 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_dk_glyph_of_death_grip::HandleProc
+				// (spell_dk.cpp:1234-1238): PreventDefaultAction; the
+				// glyph resets the cooldown of Death Grip Initial
+				// (49576). No Lua ev6 twin: spell_dk.lua holds no 62259
+				// handler, and the Lua ev6 veto above would fire first
+				// if one ever registers. DORMANT until Spell.dbc ships
+				// the 62259 proc entry.
+				s.resetPlayerCooldown(49576, true)
+				continue
+			}
 			if auraSpell.ID == 50240 && i == 2 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_oculus_evasive_maneuvers::HandleProc
 				// (oculus.cpp:488-493): PreventDefaultAction; the holder

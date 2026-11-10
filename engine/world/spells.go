@@ -4127,6 +4127,32 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// spell_dk_death_pact::CheckCast (spell_dk.cpp:990-1006): the cast
+	// requires a living owned undead creature within 100 yards; without
+	// one it fails SPELL_FAILED_NO_PET. C++ script OnCheckCast handlers
+	// run at the end of Spell::CheckCast, so this wires after the generic
+	// gates. The FilterTargets leg (eff1 area filter) stays out: the DBC
+	// effect role of EFFECT_1 is unverifiable without Spell.dbc, so the
+	// area list it would filter cannot be named here.
+	if spellID == 48743 {
+		hasUndeadPet := false
+		s.server.motionMu.Lock()
+		for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+			if m == nil || m.OwnerGUID != s.playerGUID || m.CreatureType != creatureTypeUndead || m.Health == 0 {
+				continue
+			}
+			if math.Hypot(float64(m.X-s.player.X), float64(m.Y-s.player.Y)) <= 100 {
+				hasUndeadPet = true
+				break
+			}
+		}
+		s.server.motionMu.Unlock()
+		if !hasUndeadPet {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPet), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "death pact without owned undead pet")
+			return true
+		}
+	}
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
 	// requiring combo points (REQ_COMBO_POINTS1/2) fails with
 	// SPELL_FAILED_NO_COMBO_POINTS when none are banked — against the
