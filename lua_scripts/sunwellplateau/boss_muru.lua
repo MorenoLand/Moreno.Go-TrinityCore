@@ -136,8 +136,9 @@
 -- repeat-counter visual
 -- chain: after 1s cast 46247 (the REACT_AGGRESSIVE arm is PORTED
 -- 2026-10-20 — creature:SetReactState; the AttackStart
--- (DATA_PLAYER_GUID) co-arm has no instance-player bridge —
--- skipped), after a further 1.2s cast 46242, after a
+-- (DATA_PLAYER_GUID) co-arm is PORTED 2026-11-10 below — first
+-- instance player without aura 45839, the computed-getter victim),
+-- after a further 1.2s cast 46242, after a
 -- further 2s cast 46228 + 46235, then the chain ends (C++-exact
 -- — no repeat after the counter-2 arm). The 15s DisappearAndDie
 -- arm (Reset scheduler, cpp:528-531) is ported in blackholeReset
@@ -220,6 +221,7 @@ local SPELL_BLACKHOLE_SUMMON_VISUAL = 46242
 local SPELL_BLACKHOLE_SUMMON_VISUAL_2 = 46247
 local SPELL_BLACKHOLE_PASSIVE = 46228
 local SPELL_BLACK_HOLE_VISUAL_2 = 46235
+local SPELL_VENGEANCE = 45839 -- aura 45839, Vengeance of the Blue Dragonflight (kalecgos dragon form)
 
 local ENTRY_MURU = 25741
 local ENTRY_ENTROPIUS = 25840
@@ -729,9 +731,24 @@ end
 local function blackholeVisualStep0(creature, guid)
     -- C++ boss_muru.cpp:539: me->SetReactState(REACT_AGGRESSIVE)
     -- (1s scheduler: flip first; the co-arm AttackStart on the
-    -- instance-stored victim has no bridge and stays out).
+    -- computed-getter victim ports below — first instance player
+    -- without aura 45839, instance_sunwell_plateau.cpp:84-97).
     creature:SetReactState(2) -- REACT_AGGRESSIVE
     creature:CastSpell(creature, SPELL_BLACKHOLE_SUMMON_VISUAL_2)
+    -- C++ boss_muru.cpp:541: AttackStart(victim) where victim is
+    -- ObjectAccessor::GetUnit(*me, instance->GetGuidData(
+    -- DATA_PLAYER_GUID)) — the computed getter returns the first map
+    -- player without 45839 (no dead filter in C++); first in
+    -- GetPlayersInWorld order here (Go world order, not the C++
+    -- map-list order — pick may differ from C++ when several
+    -- 45839-free players are in the map).
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId and not p:HasAura(SPELL_VENGEANCE) then
+            creature:AttackStart(p)
+            break
+        end
+    end
     schedule(guid, "visual", 1200, function()
         blackholeVisualStep1(creature, guid)
     end)

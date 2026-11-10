@@ -67,8 +67,9 @@
 -- RemoveFlag(79, LOOTABLE) on the sister-alive death (dynamic-flag
 -- bridge live, twin_valkyr precedent). OnReset(23):
 -- per-GUID reset (Enraged=false, SisterDeath=false) + cancel
--- timers; the instance sister respawn/threat relay stays out (no
--- instance-creature bridge); SetBossState(DATA_EREDAR_TWINS 3,
+-- timers; the instance sister respawn/threat relay is PORTED below
+-- via creature:GetInstanceCreature (bridge live,
+-- lua_creature_events.go:6680); SetBossState(DATA_EREDAR_TWINS 3,
 -- NOT_STARTED) ports via creature:SetBossState (bridge live
 -- lua_creature_events.go:5917).
 -- OnLeaveCombat(2): cancel timers, drop per-GUID state. The
@@ -118,8 +119,9 @@
 -- (YELL_ALY_DEAD 6) is ported via the twinDead latch; the loot-
 -- flag arm ports as RemoveFlag(79, LOOTABLE) on the sister-alive
 -- death (dynamic-flag bridge live). OnReset(23): per-GUID reset + cancel
--- timers; the instance sister respawn/threat relay stays out (no
--- instance-creature bridge); SetBossState(DATA_EREDAR_TWINS 3,
+-- timers; the instance sister respawn/threat relay is PORTED below
+-- via creature:GetInstanceCreature (bridge live,
+-- lua_creature_events.go:6680); SetBossState(DATA_EREDAR_TWINS 3,
 -- NOT_STARTED) ports via creature:SetBossState (bridge live
 -- lua_creature_events.go:5917). OnLeaveCombat(2):
 -- cancel timers, drop per-GUID state. The SpellHitTarget arm (45235
@@ -536,6 +538,21 @@ local function sacrolashReset(event, creature)
         -- instance->SetBossState(DATA_EREDAR_TWINS 3, NOT_STARTED)
         -- (:131), no gate in C++; Go fires ev23 on the death path
         -- too, hence the alive gate (C++ Reset never runs on death).
+        -- Sister leg (:118-125) ports first, in C++ order: dead
+        -- sister respawns, live sister's victim is added to my threat
+        -- (GetInstanceCreature bridge live; sister GUIDs latched at
+        -- spawn via SetGuidData).
+        local sister = creature:GetInstanceCreature(DATA_ALYTHESS)
+        if sister ~= nil then
+            if sister:IsDead() then
+                sister:Respawn()
+            else
+                local victim = sister:GetVictim()
+                if victim ~= nil then
+                    creature:AddThreat(victim, 0)
+                end
+            end
+        end
         creature:SetBossState(DATA_EREDAR_TWINS, 0)
     end
 end
@@ -775,6 +792,21 @@ local function alythessReset(event, creature)
         -- instance->SetBossState(DATA_EREDAR_TWINS 3, NOT_STARTED)
         -- (:387), no gate in C++; Go fires ev23 on the death path
         -- too, hence the alive gate (C++ Reset never runs on death).
+        -- Sister leg (:374-381) ports first, in C++ order: dead
+        -- sister respawns, live sister's victim is added to my threat
+        -- (GetInstanceCreature bridge live; sister GUIDs latched at
+        -- spawn via SetGuidData).
+        local sister = creature:GetInstanceCreature(DATA_SACROLASH)
+        if sister ~= nil then
+            if sister:IsDead() then
+                sister:Respawn()
+            else
+                local victim = sister:GetVictim()
+                if victim ~= nil then
+                    creature:AddThreat(victim, 0)
+                end
+            end
+        end
         creature:SetBossState(DATA_EREDAR_TWINS, 0)
     end
 end

@@ -83,9 +83,13 @@
 -- * shield orb: the (Phase-1) shield-orb summons (summon bridge live)
 --   stay out — the orb AI is movement-driven (MovePoint orbit :1256,
 --   no movement bridge) and picks its shadow-bolt target via
---   instance->GetGuidData(DATA_PLAYER_GUID) (no instance bridge); a
---   summoned orb would be frozen and targetless; the soul-flay 2s
---   re-arm is a real side effect and is kept; repeat {30s,60s}.
+--   instance->GetGuidData(DATA_PLAYER_GUID) — creature:GetGuidData
+--   IS bridged (instance guid store, lua_creature_events.go:6646),
+--   but C++ DATA_PLAYER_GUID is a computed getter (first map player
+--   without aura 45839), not a stored GUID, so the store reads 0;
+--   the orb leg stays out on the orbit alone; a summoned orb would
+--   be frozen and targetless; the soul-flay 2s re-arm is a real side
+--   effect and is kept; repeat {30s,60s}.
 -- * shadow spike (phase 3+): Talk(SAY_KJ_REFLECTION); the 4
 --   sinister-reflection summons (summon bridge live) stay out on the
 --   paired SetDisplayId + AttackStart(target) legs (:683-684,
@@ -229,8 +233,9 @@
 -- 30s offcombat Talk) is gated on instance boss states. npc_
 -- felfire_portal (25603) is not registered — its only UpdateAI
 -- arm is the summon+threat fiend spawner. npc_shield_orb (25502)
--- is not registered — movement-bound circle path plus an
--- instance-GUID-targeted shadow bolt, neither bridgeable.
+-- is not registered — movement-bound circle path (no movement
+-- bridge) plus a shadow bolt at the computed-getter player (first
+-- map player without aura 45839); the orbit alone blocks it.
 
 local ENTRY_KILJAEDEN = 25315
 local ENTRY_DECEIVER = 25588
@@ -513,9 +518,11 @@ local function fireTimer(creature, st, name)
         st.t.soulflay = 1000
     elseif name == "shieldorb" then
         -- The (Phase-1) shield-orb summons stay out — orb AI needs
-        -- MovePoint orbit (:1256, no movement bridge) + instance
-        -- GetGuidData(DATA_PLAYER_GUID) (no instance bridge); the
-        -- soul-flay re-arm is a real side effect.
+        -- MovePoint orbit (:1256, no movement bridge); its shadow-bolt
+        -- target is instance->GetGuidData(DATA_PLAYER_GUID), a computed
+        -- getter (first map player without aura 45839), not a stored
+        -- GUID — no store read; the soul-flay re-arm is a real side
+        -- effect.
         st.t.shieldorb = math.random(30000, 60000)
         st.t.soulflay = 2000
     elseif name == "shadowspike" then
