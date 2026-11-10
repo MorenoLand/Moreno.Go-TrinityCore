@@ -332,11 +332,13 @@ type tileBuildStats struct {
 // (buildNavMeshParams, from the map's tile list); outputDir receives the
 // %03d%02d%02d.mmtile file. The C++ in-memory navMesh addTile/removeTile
 // round-trip has no Go equivalent and is not mirrored: the file write is
-// the durable output. The m_debugOutput IntermediateValues dump is not
-// ported (the Go tool has no --debug flag).
+// the durable output. With debugOutput the m_debugOutput IntermediateValues
+// dump runs after the tile build (debug.go writeDebugOutput), even on the
+// flat/empty early exits below — C++ runs the block after the do{}while(0)
+// build block (MapBuilder.cpp:924-935).
 func buildMoveMapTile(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]float32,
 	tileConfig TileConfig, bigBaseUnit bool, maxWalkableAngle, maxWalkableAngleNotSteep *float32,
-	outputDir string, navMeshOrig [3]float32, usesLiquids bool) tileBuildStats {
+	outputDir string, navMeshOrig [3]float32, usesLiquids bool, debugOutput bool) tileBuildStats {
 	var stats tileBuildStats
 	tileString := fmt.Sprintf("[Map %03d] [%02d,%02d]: ", mapID, tileX, tileY)
 
@@ -459,6 +461,16 @@ func buildMoveMapTile(mapID, tileX, tileY uint32, md *MeshData, bmin, bmax [3]fl
 	if !recast.MergePolyMeshDetails(dmmerge, mergedDetail) {
 		fmt.Printf("%s Failed merging polymesh details!\n", tileString)
 		return stats
+	}
+
+	// MapBuilder.cpp:924-935: with --debugOutput the merged meshes are dumped
+	// (IntermediateValues) once the tile build returns, even on the flat /
+	// empty early exits below — C++ runs the block after the do{}while(0)
+	// build block. Registered here, once the merged meshes exist: an
+	// alloc/merge failure returns above, where C++ would dereference the
+	// null iv.polyMesh instead of dumping.
+	if debugOutput {
+		defer writeDebugOutput(mapID, tileX, tileY, config.BorderSize, mergedMesh, mergedDetail, md)
 	}
 
 	// Set polygons as walkable.

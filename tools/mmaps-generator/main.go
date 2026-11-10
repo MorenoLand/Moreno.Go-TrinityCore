@@ -190,6 +190,7 @@ func main() {
 	maxAngle := flag.Float64("maxAngle", -1, "Maximum walkable slope angle in degrees (default 55)")
 	maxAngleNotSteep := flag.Float64("maxAngleNotSteep", -1, "Maximum non-steep walkable slope angle in degrees (default 55)")
 	tileFlag := flag.String("tile", "", "Build a single tile as X,Y (requires -map)")
+	debugOutput := flag.Bool("debugOutput", false, "Write RecastDemo debug files (meshes/*.hf/.chf/.cs/.pmesh/.dmesh/.obj/.mesh) like C++ --debugOutput")
 	flag.Parse()
 
 	printBanner()
@@ -358,7 +359,7 @@ func main() {
 
 				stats := buildMoveMapTile(tile.MapID, tile.TileX, tile.TileY, &md, bmin, bmax,
 					tileConfig, *bigBaseUnit, maxWalkableAngle, maxWalkableAngleNotSteep,
-					*outputDir, navOrigs[tile.MapID], tb.UsesLiquids())
+					*outputDir, navOrigs[tile.MapID], tb.UsesLiquids(), *debugOutput)
 				resultCh <- tileResult{tile: tile, stats: stats}
 			}
 		}()
