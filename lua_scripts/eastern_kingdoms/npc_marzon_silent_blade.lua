@@ -28,29 +28,32 @@
 -- in a despawn, so no reset can observe it (SetFaction itself is
 -- bridged — lua_creature_events.go:1125). The C++ MovementInform
 -- POINT_MOTION_TYPE cross-AI latch (CAST_AI into the lescovar
--- AI's uiTimer/uiPhase) has a live hook now (CreatureEventOnMovementInform 28, runtime.go:389, args (event, creature, type, id), POINT = 8) but no
--- lescovar phase machine to write into yet — it lands with the
--- lescovar escort port. Melee is engine-driven.
+-- AI's uiTimer/uiPhase) is PORTED below: event 28
+-- (CreatureEventOnMovementInform, runtime.go:389, args (event,
+-- creature, type, id), POINT = 8) sends ACTION_MARZON_ARRIVED
+-- to the summoner via DoAction (sironas precedent — the same
+-- constant value is defined in npc_lord_gregor_lescovar.lua,
+-- whose ev38 handler arms phase 5 + starts the lescovar pump).
+-- The IsAIEnabled gate has no bridge; the summoner is the
+-- lescovar AI by construction. Melee is engine-driven.
 -- npc_tyrion (quest-434 OnQuestAccept -> FindNearestCreature(
--- NPC_TYRION_SPYBOT 8856) -> escort Start) awaits the quest-
--- accept / world-search / escort bridges — documented only.
--- npc_tyrion_spybot (escort AI: waypoint 1/5/17 Talk chains to
--- Tyrion 7766 / royal guard 1756 / Lescovar 1754 behind the
--- escort / world-search / cross-creature-Talk bridges; me->
--- UpdateEntry(7779) awaits the entry-update bridge; phase-10
--- lescovar escort start behind the escort bridge;
--- DisappearAndDie behind the despawn bridge) — documented only.
+-- NPC_TYRION_SPYBOT 8856) -> escort Start) is PORTED in
+-- npc_tyrion.lua. npc_tyrion_spybot (escort AI: waypoint 1/5/17
+-- Talk chains, UpdateEntry(7779), phase-10 lescovar escort
+-- start) is PORTED in npc_tyrion_spybot.lua.
 -- npc_lord_gregor_lescovar (escort AI: waypoint 14/16 chains;
--- SummonCreature(NPC_MARZON_BLADE 1755) behind the no-summon
--- bridge; phase-5/7 Marzon/lescovar cross-creature Talk + the
--- SetFaction(FACTION_MONSTER) traitor flip ride the unbridged escort/
--- quest machines (SetFaction itself is bridged); guards' GetCreatureListWithEntryInGrid +
--- DisappearAndDie behind the world-search / despawn bridges;
--- AreaExploredOrEventHappens(QUEST_THE_ATTACK 434) quest credit
--- behind the no-quest bridge) — documented only.
+-- SummonCreature(NPC_MARZON_BLADE 1755); phase-5/7 Marzon/
+-- lescovar cross-creature Talk + the SetFaction(FACTION_MONSTER)
+-- traitor flip; guards' GetCreaturesInGrid + Despawn;
+-- AreaExploredOrEventHappens(QUEST_THE_ATTACK 434) quest credit)
+-- is PORTED in npc_lord_gregor_lescovar.lua.
 
 local NPC_MARZON_BLADE = 1755
 local SAY_MARZON_2 = 1
+
+local ACTION_MARZON_ARRIVED = 1
+
+local POINT_MOTION_TYPE = 8
 
 -- C++ JustEngagedWith (zone_stormwind_city.cpp:230-251): Talk(
 -- SAY_MARZON_2), then the summoner arm — if IsSummon, the live
@@ -87,5 +90,23 @@ local function onLeaveCombat(_, creature)
     end
 end
 
+-- C++ MovementInform (zone_stormwind_city.cpp:268-301): only
+-- POINT_MOTION_TYPE arrivals count; if summoned, the live
+-- creature summoner gets the lescovar phase latch (uiTimer =
+-- 2000, uiPhase = 5) — carried here as DoAction(
+-- ACTION_MARZON_ARRIVED) into the summoner (see header).
+local function onMovementInform(_, creature, moveType, _)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if creature:IsSummon() then
+        local summoner = creature:GetSummonerUnit()
+        if summoner and summoner:GetObjectType() == "Creature" then
+            summoner:DoAction(ACTION_MARZON_ARRIVED)
+        end
+    end
+end
+
 RegisterCreatureEvent(NPC_MARZON_BLADE, 1, onEnterCombat)
 RegisterCreatureEvent(NPC_MARZON_BLADE, 2, onLeaveCombat)
+RegisterCreatureEvent(NPC_MARZON_BLADE, 28, onMovementInform)

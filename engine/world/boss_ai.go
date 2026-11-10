@@ -14171,23 +14171,29 @@ func init() {
 	// Despawn() (npc_marzon_silent_blade.lua); Reset's
 	// RestoreFaction stays unmodeled (faction only changes in the
 	// lescovar phase-7 flip; the chain ends in a despawn);
-	// MovementInform's cross-AI escort-phase latch has a live hook
-	// (event 28, POINT = 8) but no lescovar phase machine to write
-	// into yet — it lands with the lescovar escort port;
-	// entry 1755 verifiable from the C++ LordGregorLescovar enum
-	// — see lua_scripts/eastern_kingdoms/npc_marzon_silent_
-	// blade.lua. npc_tyrion (quest-434 OnQuestAccept escort start
-	// on the 8856 spybot) is PORTABLE now: OnQuestAccept (ev31),
-	// FindNearestCreature, StartEscort, GetEscortPlayer,
-	// SetEscortPaused all bridged; only SetMaxPlayerDistance(200)
-	// has no bridge (documented delta). npc_tyrion_spybot (escort
-	// Talk chains + UpdateEntry(7779)) is PORTABLE now: OnReachWP
-	// (6), Talk-with-player, UpdateEntry, Despawn all bridged.
-	// npc_lord_gregor_lescovar (escort + Marzon summon + traitor
-	// faction flip + guard despawn) is PORTABLE now: SummonCreature,
-	// MoveTo, GetCreatureListWithEntryInGrid, SetFaction(14),
-	// AreaExploredOrEventHappens(434) all bridged — the Stormwind
-	// escort port is the next EK zone unit.
+	// MovementInform's cross-AI escort-phase latch is ported
+	// (event 28, POINT = 8 -> DoAction ACTION_MARZON_ARRIVED into
+	// the lescovar AI, npc_marzon_silent_blade.lua); entry 1755
+	// verifiable from the C++ LordGregorLescovar enum — see
+	// lua_scripts/eastern_kingdoms/npc_marzon_silent_blade.lua.
+	// npc_tyrion (quest-434 OnQuestAccept escort start on the 8856
+	// spybot) is PORTED 2026-11-10: OnQuestAccept (ev31),
+	// FindNearestCreature, StartEscort, MoveWaypoint all bridged;
+	// only SetMaxPlayerDistance(200) has no bridge (documented
+	// delta) — see lua_scripts/eastern_kingdoms/npc_tyrion.lua.
+	// npc_tyrion_spybot (escort Talk chains + UpdateEntry(7779) +
+	// phase-10 lescovar escort start) is PORTED 2026-11-10:
+	// OnReachWP (6), Talk-with-player, UpdateEntry, Despawn all
+	// bridged — see lua_scripts/eastern_kingdoms/npc_tyrion_
+	// spybot.lua. npc_lord_gregor_lescovar (escort + Marzon summon
+	// + traitor faction flip + guard despawn + quest credit) is
+	// PORTED 2026-11-10: SummonCreature, MoveTo, GetCreaturesInGrid,
+	// SetFaction(14), AreaExploredOrEventHappens(434) all bridged —
+	// see lua_scripts/eastern_kingdoms/npc_lord_gregor_lescovar.lua.
+	// zone_stormwind_city closes the EK zone set.
+	RegisterLuaBoss("npc_tyrion", 7766)
+	RegisterLuaBoss("npc_tyrion_spybot", 8856)
+	RegisterLuaBoss("npc_lord_gregor_lescovar", 1754)
 	RegisterLuaBoss("npc_marzon_silent_blade", 1755)
 	// npc_highborne_lamenter (Undercity zone script): the UpdateAI
 	// EventCast one-shot arm — non-triggered self-cast of SPELL_
