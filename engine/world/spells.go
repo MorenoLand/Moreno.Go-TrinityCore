@@ -16151,42 +16151,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.castSpellDirect(effCtx, 23885, s.playerGUID)
 					}
 					// spell_fatal_strike::HandleDummy
-					// (zone_storm_peaks.cpp:1349-1361): the EFFECT_0
-					// DUMMY OnEffectHitTarget arm — the chance is the
-					// caster's Pry Jaws Open aura (56706) effect-0
-					// amount, 0 when the aura is absent;
-					// roll_chance_i per hit target (C++ fires per hit
-					// target; the spell is single-target, so once per
-					// effect over the miss-filtered hit targets is
-					// exact). On a hit the caster casts Fatal Strike
-					// Damage (60881) triggered on the hit target —
-					// C++ casts with a null victim and 60881 is a
-					// 20yd school-damage spell, so the implicit
-					// target is the caster's victim, the hit unit
-					// here. On a miss the caster's AI runs
-					// DoAction(5) (Talk SAY_STRIKE_MISS); the
-					// wild-wyrm AI is unported, so the miss leg is
-					// silent. Go runs vehicle-bar casts as the
-					// player (procs.go:3195), so the Pry Jaws Open
-					// aura is the rider's, not the wyrm's (oculus
-					// 50240 precedent) — 56706 is a self-range
-					// Apply Aura: Dummy, eff0 base 5 (Wowhead
-					// WotLK). No triggered-cast twin: no in-tree
-					// caster casts 60587 triggered. DORMANT until
-					// Spell.dbc ships the 60587/56706/60881 records.
-					if spellID == 60587 && len(hitTargets) > 0 {
-						chance, _ := s.auraEffectAmount(56706, 0)
-						for _, targetGUID := range hitTargets {
-							if targetGUID == 0 {
-								continue
-							}
-							// roll_chance_i(chance): urand(0, 99) < chance.
-							if rand.Float64()*100 < float64(chance) {
-								s.castSpellDirect(effCtx, 60881, targetGUID)
-							}
-						}
-					}
-					// spell_fatal_strike::HandleDummy
 					// (zone_storm_peaks.cpp:1346-1362): the EFFECT_0 DUMMY
 					// OnEffectHit arm rolls the Pry Jaws Open chance and
 					// casts 60881 or fires the miss DoAction — the
