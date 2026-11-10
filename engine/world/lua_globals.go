@@ -34,12 +34,17 @@ func (s *Server) luaGameEventIDs() []uint32 {
 // (eventId, force = false), no return. It records a forced override on
 // the cached active set (conditions.go); the world-tick 34/35 hook diff
 // then fires the transition, and IsGameEventActive / GetActiveGameEvents
-// read the overridden set.
+// read the overridden set. With force set it also applies the C++
+// `overwrite` schedule rewrite (GameEventMgr.cpp:141-147/192-195);
+// without force the schedule is untouched, as in C++.
 func (s *Server) luaGameEventControl(eventID uint32, start, force bool) {
 	if s == nil {
 		return
 	}
 	s.setGameEventOverride(int64(eventID), start)
+	if force {
+		s.applyGameEventScheduleRewrite(context.Background(), int64(eventID), start)
+	}
 }
 
 // luaMapByID is the MapProvider behind the Eluna GetMapById global: the

@@ -133,6 +133,64 @@ func (s *Server) withGameEventOverrides(base map[int64]struct{}) map[int64]struc
 	return out
 }
 
+// gameEventSchedule is one in-memory start/end rewrite from a forced
+// StartEvent/StopEvent (GameEventMgr.cpp:134-152/185-232): C++ mutates
+// the loaded GameEventData, never the DB row, so the rewrite lives in
+// memory beside the overrides and loadGameEventDataMap applies it.
+type gameEventSchedule struct {
+	start int64
+	end   int64
+}
+
+// applyGameEventScheduleRewrite ports the `overwrite` leg of
+// GameEventMgr::StartEvent/StopEvent (GameEventMgr.cpp:141-147 and
+// :192-195): on start, a NORMAL/INTERNAL event's start becomes now and
+// its end becomes start + length when the end no longer follows the
+// start; on stop, a NORMAL/INTERNAL event's start becomes now -
+// length*MINUTE with the same end rule. The `+ length` end form is
+// verbatim C++ — GameEventData.length is minutes (GameEventMgr.h:68,
+// loaded raw at :264) yet both end lines add it unscaled, while the
+// stop start line scales it (length * MINUTE, :198) and
+// CheckOneGameEvent/NextCheck scale it too (:54/:108-110) — the
+// asymmetry is upstream, not a porting slip. World-event rows
+// (state > INTERNAL) take no schedule rewrite on either leg: start
+// runs the conditions branch instead, and stop runs the condition-reset
+// + game_event_save delete leg, which has no Go model.
+func (s *Server) applyGameEventScheduleRewrite(ctx context.Context, eventID int64, start bool) {
+	if s == nil {
+		return
+	}
+	data := s.loadGameEventDataMap(ctx)
+	ev, ok := data[eventID]
+	if !ok {
+		return
+	}
+	if ev.WorldEvent != gameEventStateNormal && ev.WorldEvent != gameEventStateInternal {
+		return
+	}
+	now := time.Now().Unix()
+	var rewritten gameEventSchedule
+	if start {
+		rewritten.start = now
+		rewritten.end = ev.End
+		if rewritten.end <= rewritten.start {
+			rewritten.end = rewritten.start + ev.Length
+		}
+	} else {
+		rewritten.start = now - ev.Length*60
+		rewritten.end = ev.End
+		if rewritten.end <= rewritten.start {
+			rewritten.end = rewritten.start + ev.Length
+		}
+	}
+	s.gameEventScheduleMu.Lock()
+	defer s.gameEventScheduleMu.Unlock()
+	if s.gameEventScheduleRewrites == nil {
+		s.gameEventScheduleRewrites = make(map[int64]gameEventSchedule)
+	}
+	s.gameEventScheduleRewrites[eventID] = rewritten
+}
+
 // setGameEventOverride records a Lua StartGameEvent (active) or
 // StopGameEvent (inactive) override. GameEventMgr::StartEvent/StopEvent
 // (GameEventMgr.cpp:134/185) reduce, for GAMEEVENT_NORMAL events, to
@@ -141,10 +199,11 @@ func (s *Server) withGameEventOverrides(base map[int64]struct{}) map[int64]struc
 // ApplyNewEvent/UnApplyEvent legs (spawn application via the query-time
 // event clause, model/equip and vendor rows; announce and worldstate
 // writes) run on the same tick transition in applyGameEventTransition.
-// DELTAS: no schedule rewrite (the force argument is accepted and
-// ignored), and an override persists until the opposite call — a
-// forced-active event is not expired by its schedule window and a
-// forced-inactive one does not rejoin at its next occurrence.
+// DELTA: an override persists until the opposite call — a forced-active
+// event is not expired by its schedule window and a forced-inactive one
+// does not rejoin at its next occurrence. (The overwrite schedule
+// rewrite itself is ported: applyGameEventScheduleRewrite, called from
+// luaGameEventControl when force is set.)
 func (s *Server) setGameEventOverride(eventID int64, active bool) {
 	s.gameEventOverrideMu.Lock()
 	defer s.gameEventOverrideMu.Unlock()
@@ -215,9 +274,21 @@ func (s *Server) loadGameEventDataMap(ctx context.Context) map[int64]gameEventFu
 			// rejected at load.
 			continue
 		}
+		if rw, ok := s.gameEventScheduleRewrite(event.Entry); ok {
+			event.Start, event.End = rw.start, rw.end
+		}
 		data[event.Entry] = event
 	}
 	return data
+}
+
+// gameEventScheduleRewrite reads one forced start/end rewrite (see
+// applyGameEventScheduleRewrite); the zero value reports absent.
+func (s *Server) gameEventScheduleRewrite(eventID int64) (gameEventSchedule, bool) {
+	s.gameEventScheduleMu.Lock()
+	defer s.gameEventScheduleMu.Unlock()
+	rw, ok := s.gameEventScheduleRewrites[eventID]
+	return rw, ok
 }
 
 // conditionRow is one `conditions` row; rows sharing an ElseGroup are AND'ed

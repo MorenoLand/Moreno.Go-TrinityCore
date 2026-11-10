@@ -7466,11 +7466,12 @@ func (s *session) handleEventInfo(ctx context.Context, args []string) bool {
 // the event joins the cached active set at once, and the 100ms world-tick
 // 34/35 diff fires the start transition; the ApplyNewEvent legs run on
 // the same tick transition (applyGameEventTransition: announce +
-// worldstate write; spawn application is query-time). DELTAS vs C++: no
-// start/end schedule rewrite (force accepted, ignored by the override
-// layer), and the hook fires on the next tick rather than synchronously;
-// the override persists until the opposite call instead of expiring with
-// the schedule window.
+// worldstate write; spawn application is query-time). The overwrite
+// schedule rewrite is ported (applyGameEventScheduleRewrite: start =
+// now, end = start + length when the end no longer follows), so `.event
+// info` renders the rewritten window. DELTAS vs C++: the hook fires on
+// the next tick rather than synchronously; the override persists until
+// the opposite call instead of expiring with the schedule window.
 func (s *session) handleEventStart(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .event start <eventId>"
 	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
@@ -7506,9 +7507,12 @@ func (s *session) handleEventStart(ctx context.Context, args []string) bool {
 // the event leaves the cached active set at once, and the 100ms
 // world-tick 34/35 diff fires the stop transition; the UnApplyEvent legs
 // run on the same tick transition (applyGameEventTransition: worldstate
-// cleanup; spawn removal is query-time). DELTAS vs C++: no forced-state
-// DB reset, and the hook fires on the next tick rather than
-// synchronously.
+// cleanup; spawn removal is query-time). The overwrite schedule rewrite
+// is ported (applyGameEventScheduleRewrite: start = now - length*MINUTE,
+// end = start + length when the end no longer follows) for
+// NORMAL/INTERNAL rows; the serverwide condition-reset + game_event_save
+// delete leg has no Go model. DELTAS vs C++: no forced-state DB reset,
+// and the hook fires on the next tick rather than synchronously.
 func (s *session) handleEventStop(ctx context.Context, args []string) bool {
 	const syntax = "Syntax: .event stop <eventId>"
 	// ChatCommand.h:112: trailing tokens fail the single-arg parse.
