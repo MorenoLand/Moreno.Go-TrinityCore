@@ -51,6 +51,10 @@
 --   (lua_values.go SetUInt32Value; lua_creature_events.go:3116).
 --   NPC_WICKED_SPIRIT (:325-329): SetReactState(REACT_PASSIVE) —
 --   SetCorpseDelay(0) has no bridge, stays out.
+--   NPC_INVISIBLE_STALKER (:313-318, PORTED 2026-11-10): within 10yd
+--   of (4357.052, 2769.421) casts SPELL_ARTHAS_TELEPORTER_CEREMONY
+--   (72915) on itself — creature:GetExactDist2d(x, y) point form
+--   (scripting/object.go:282).
 -- - GetGuidData (instance_icecrown_citadel.cpp:763-850): the Lua mirror
 --   is the instanceData binds above, read as instanceData.<boss> (the
 --   oculus precedent). NOTE: the live ICC boss files read GUIDs via
@@ -78,9 +82,6 @@
 --   (:230-233) SetControlled(true, UNIT_STATE_ROOT) — no bridge;
 --   NPC_VOLATILE_OOZE / NPC_GAS_CLOUD (:242-251) relay into the
 --   professor's JustSummoned — no cross-AI JustSummoned bridge;
---   NPC_INVISIBLE_STALKER (:313-318) casts SPELL_ARTHAS_TELEPORTER_CEREMONY
---   only within 10yd of (4357.052, 2769.421) — the position bridge
---   (creature:GetX/GetY) now exists, so this leg is portable next;
 --   the guardian faction-buff cast (:207-211) rides the team latch
 --   (no instance GetData bridge — the halls_of_reflection precedent).
 -- - OnCreatureRemove (:335-339): clears SindragosaGUID only — no
@@ -163,6 +164,8 @@ local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
 local ACTION_START_FROSTWYRM = -368530 -- icecrown_citadel.h:507
 local SINDRAGOSA_SPAWN_POS = {4818.7, 2483.71, 287.065, 3.089233} -- boss_sindragosa.cpp:169
 
+local SPELL_ARTHAS_TELEPORTER_CEREMONY = 72915 -- icecrown_citadel.h:45
+
 local bossBinds = {
     [NPC_LORD_MARROWGAR] = "lordMarrowgar",
     [NPC_LADY_DEATHWHISPER] = "ladyDeathwhisper",
@@ -222,13 +225,20 @@ RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_CREATURE_CREATE, functi
         list[#list + 1] = creature
         return
     end
-    -- C++ :230-233 / :242-251 / :313-318: the gunship-cannon root,
-    -- ooze/gas-cloud professor relay and stalker teleporter cast are
-    -- skipped — no SetControlled / cross-AI-JustSummoned bridges
-    -- (see header).
+    -- C++ :313-318: the teleporter-visual stalker at the Frozen
+    -- Throne center casts the ceremony visual on itself.
+    if entry == NPC_INVISIBLE_STALKER then
+        if creature:GetExactDist2d(4357.052, 2769.421) < 10.0 then
+            creature:CastSpell(creature, SPELL_ARTHAS_TELEPORTER_CEREMONY)
+        end
+        return
+    end
+    -- C++ :230-233 / :242-251: the gunship-cannon root and
+    -- ooze/gas-cloud professor relay are skipped — no SetControlled /
+    -- cross-AI-JustSummoned bridges (see header).
     if entry == NPC_ALLIANCE_GUNSHIP_CANNON or
             entry == NPC_HORDE_GUNSHIP_CANNON or entry == NPC_VOLATILE_OOZE or
-            entry == NPC_GAS_CLOUD or entry == NPC_INVISIBLE_STALKER then
+            entry == NPC_GAS_CLOUD then
         return
     end
     -- C++ :269-276: the four Crok captains index by entry -
