@@ -45,7 +45,8 @@
 -- instance-gated and unported, so the summons are inert.
 -- OnTargetDied(3): Talk(SAY_SLAY) (no TYPEID gate, C++-exact).
 -- OnDied(4): Talk(SAY_DEATH) + cleanup (the SetBossState DONE arm
--- is instance-blocked).
+-- is PORTED below: SetBossState + instanceData.steamriggerDone
+-- flag + the mek panel clear).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the Initialize() reset and the SetBossState NOT_
 -- STARTED arm are instance-blocked). Melee is engine-driven.
@@ -61,13 +62,15 @@
 -- range arms are movement-blocked, and melee is engine-driven
 -- anyway — so a registration would be an empty skeleton
 -- (vashj shield-generator-channel precedent).
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI shim
--- (the DATA_MEKGINEER_STEAMRIGGER NOT_STARTED/IN_PROGRESS/DONE
--- bookkeeping in Reset/JustEngagedWith/JustDied skipped; the
--- DATA_ACCESS_PANEL_MEK / main-door sequencing arms live in
--- instance_steam_vault.cpp, which stays blocked on the
--- instance-script model); the 3-5x mechanic summons at the fixed
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PORTED (instance_steam_vault.lua) —
+-- the DATA_MEKGINEER_STEAMRIGGER DONE arm rides ev4 below
+-- (SetBossState + instanceData flag + panel clear); the
+-- NOT_STARTED/IN_PROGRESS bookkeeping in Reset/JustEngagedWith
+-- stays out (no consumer); the DATA_ACCESS_PANEL_MEK /
+-- main-door sequencing arms are PORTED in instance_steam_vault.lua
+-- + go_main_chambers_access_panel.lua; boss admission via the
+-- luaBossAI shim for the rest; the 3-5x mechanic summons at the fixed
 -- offsets are PORTED (summonMechanics, below — the C++ ScriptData
 -- even notes "no known summon spells exist"); no
 -- SpellScript/AuraScript scripts in this file.
@@ -82,6 +85,11 @@ local SAY_SLAY = 2
 local SAY_DEATH = 3
 
 local ENTRY_STEAMRIGGER = 17796
+
+-- steam_vault.h SVGameObjectIds; UnitDefines/GameObject field ids.
+local GO_ACCESS_PANEL_MEK = 184126
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
 local NPC_STREAMRIGGER_MECHANIC = 17951
 
 local timers = {}
@@ -267,6 +275,19 @@ end)
 RegisterCreatureEvent(ENTRY_STEAMRIGGER, 4, function(_, creature)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(1, 3) -- DATA_MEKGINEER_STEAMRIGGER, DONE (boss_mekgineer_steamrigger.cpp: Talk then SetBossState)
+    -- C++ instance_steam_vault.cpp SetBossState override (:144-150):
+    -- DONE -> the mek access panel loses GO_FLAG_NOT_SELECTABLE.
+    -- Go fires no event on boss-state writes, so the panel clears
+    -- here in ev4 (C++-exact timing); the main-door gate reads the
+    -- instanceData flag below (instance_steam_vault.lua).
+    for _, go in ipairs(creature:GetGameObjectsInGrid(GO_ACCESS_PANEL_MEK, 1000)) do
+        go:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.steamriggerDone = true
+    end
     resetBoss(creature:GetGUIDLow())
 end)
 

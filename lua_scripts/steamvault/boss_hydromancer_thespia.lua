@@ -47,7 +47,9 @@
 -- the Heroic second cast is modeled via creature:IsHeroic()
 -- (above). OnTargetDied(3): victim:
 -- GetObjectType() == "Player" -> Talk(SAY_SLAY) (C++-exact). OnDied(4): Talk(
--- SAY_DEAD) + cleanup (the _JustDied arm is instance-blocked).
+-- SAY_DEAD) + cleanup (the _JustDied DONE arm is PORTED below:
+-- SetBossState + instanceData.thespiaDone flag + the hydro
+-- panel clear).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the _Reset arm is instance-blocked). Melee is engine-
 -- driven.
@@ -61,13 +63,15 @@
 -- (:153, after _events.Update, before the ExecuteEvent loop) is
 -- ported as a 500ms IsCasting defer, no re-arm consumed).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cleanup.
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI shim
--- (the DATA_HYDROMANCER_THESPIA NOT_STARTED/IN_PROGRESS/DONE
--- bookkeeping in _Reset/_JustDied/BossAI::JustEngagedWith
--- skipped; the DATA_ACCESS_PANEL_HYDRO / main-door sequencing
--- arms live in instance_steam_vault.cpp, which stays blocked on
--- the instance-script model); difficulty is bridged —
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PORTED (instance_steam_vault.lua) —
+-- the DATA_HYDROMANCER_THESPIA DONE arm rides ev4 below
+-- (SetBossState + instanceData flag + panel clear); the
+-- NOT_STARTED/IN_PROGRESS bookkeeping in _Reset/BossAI::
+-- JustEngagedWith stays out (no consumer); the DATA_ACCESS_
+-- PANEL_HYDRO / main-door sequencing arms are PORTED in
+-- instance_steam_vault.lua + go_main_chambers_access_panel.lua;
+-- boss admission via the luaBossAI shim for the rest; difficulty is bridged —
 -- creature:IsHeroic() (per-instance difficulty, lua_creature_events.go)
 -- drives the heroic second casts of lightning cloud (25033) and
 -- enveloping winds (31718); cast-state gating PORTED (boss
@@ -86,6 +90,11 @@ local SAY_DEAD = 3
 
 local ENTRY_THESPIA = 17797
 local ENTRY_WATER_ELEMENTAL = 17917
+
+-- steam_vault.h SVGameObjectIds; UnitDefines/GameObject field ids.
+local GO_ACCESS_PANEL_HYDRO = 184125
+local GAMEOBJECT_FLAGS = 9
+local GO_FLAG_NOT_SELECTABLE = 16
 
 local thespiaTimers = {}
 local thespiaState = {}
@@ -241,6 +250,19 @@ end)
 RegisterCreatureEvent(ENTRY_THESPIA, 4, function(_, creature)
     creature:Talk(SAY_DEAD)
     creature:SetBossState(0, 3) -- DATA_HYDROMANCER_THESPIA, DONE (boss_hydromancer_thespia.cpp: Talk precedes _JustDied)
+    -- C++ instance_steam_vault.cpp SetBossState override (:134-141):
+    -- DONE -> the hydro access panel loses GO_FLAG_NOT_SELECTABLE.
+    -- Go fires no event on boss-state writes, so the panel clears
+    -- here in ev4 (C++-exact timing); the main-door gate reads the
+    -- instanceData flag below (instance_steam_vault.lua).
+    for _, go in ipairs(creature:GetGameObjectsInGrid(GO_ACCESS_PANEL_HYDRO, 1000)) do
+        go:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.thespiaDone = true
+    end
     resetThespia(creature:GetGUIDLow())
 end)
 
