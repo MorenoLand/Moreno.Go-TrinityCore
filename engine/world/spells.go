@@ -27755,6 +27755,12 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				}
 			}
 		}
+		// spell_sha_lava_lash (spell_shaman.cpp:1481-1495): the +25%
+		// Flametongue off-hand gate is a per-cast caster fact, computed
+		// once per effect here rather than per target (one
+		// equipped-items lookup per cast); the dispatch below applies it
+		// only to the SCHOOL_DAMAGE effect.
+		lavaLashBoost := spellID == 60103 && eff.Effect == 2 && s.lavaLashFlametongueBoost(ctx)
 		// The power-drain log batches per effect (C++ logs per effect via
 		// SendLogExecute, Spell.cpp:4523-4564); the arm below appends and
 		// the flush lands after the per-target loop.
@@ -27810,7 +27816,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// (Spell.cpp:2377), so C++ deals the unmodified base.
 				if s.server != nil && s.player != nil {
 					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
-						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg); hit {
+						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost); hit {
 							baseDmg = rewritten
 						}
 					}
@@ -30072,6 +30078,70 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 // SpellInfo::IsAffected(familyName, {flag0,flag1,flag2})
 // (SpellInfo.cpp:1305-1317) — the Go analog of
 // Unit::GetAuraEffect(auraType, familyName, f0, f1, f2).
+// dummyAuraItemGUIDForFamily is the ItemGUID-returning twin of
+// hasAuraOfType: the cast-item GUID of the first live dummy aura matching
+// the family flags (Unit::GetAuraEffect + AuraEffect::GetBase()->
+// GetCastItemGUID, Unit.cpp:4494-4496). Backs the Lava Lash off-hand
+// Flametongue gate.
+func (s *session) dummyAuraItemGUIDForFamily(auraType, familyName, flag0, flag1, flag2 uint32) (uint64, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	want := [3]uint32{flag0, flag1, flag2}
+	anyFlag := flag0|flag1|flag2 != 0
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != familyName {
+			continue
+		}
+		for index, effect := range auraSpell.Effects {
+			if effect.Aura != auraType || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !anyFlag {
+				return aura.ItemGUID, true
+			}
+			// flag96::HasFlag (Util.h:401-404): OR across the three words,
+			// against the spell-level SpellFamilyFlags.
+			for i := 0; i < 3; i++ {
+				if want[i] != 0 && auraSpell.SpellFamilyFlags[i]&want[i] != 0 {
+					return aura.ItemGUID, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+// lavaLashFlametongueBoost mirrors spell_sha_lava_lash::HandleDummy
+// (spell_shaman.cpp:1481-1495): Lava Lash deals 25% more damage when the
+// caster's off-hand weapon is enchanted with Flametongue — the dummy aura
+// (shaman family flag 0x200000) whose cast item is the off-hand item. A
+// main-hand-only Flametongue does not qualify: its aura's cast item is
+// the main-hand GUID. The equipped-items lookup is the DB-backed
+// loadUseableEquippedItems twin (broken items skipped — a broken
+// off-hand carries no live enchant aura anyway).
+func (s *session) lavaLashFlametongueBoost(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	var offhand uint64
+	for _, item := range s.loadUseableEquippedItems(ctx) {
+		if item.slot == equipSlotOffhand {
+			offhand = item.guid
+			break
+		}
+	}
+	if offhand == 0 {
+		return false
+	}
+	guid, ok := s.dummyAuraItemGUIDForFamily(spellAuraDummy, spellFamilyShaman, 0x200000, 0, 0)
+	return ok && guid == offhand
+}
+
 func (s *session) hasAuraOfType(auraType, familyName, flag0, flag1, flag2 uint32) bool {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return false

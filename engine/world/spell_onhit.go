@@ -24,9 +24,112 @@ import (
 // their tick-372 "ported scaling" notes were wrong. OnEffectHitTarget
 // arms qualify too — IsInModifiableHook (SpellScript.cpp:421-434)
 // covers EFFECT_HIT_TARGET — so 50341 (oculus) is live; the dispatch
-// carries casterMaxHealth for caster-absolute arms.
-func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32) (uint32, bool) {
+// carries casterMaxHealth for caster-absolute arms. OnEffectLaunchTarget
+// arms qualify the same way (HandleEffects runs the script hook before
+// the effect handler, Spell.cpp:5165-5171, with damage already the
+// rolled DBC base), so 49840 (oculus shock lance) is live via
+// shockLanceDetonate. The stateful arms (49840, 34779, 60103) live in
+// this Server method, not the pure table below: 49840 reads and consumes
+// the target's charge aura, 34779 picks its trigger spell from the
+// caster's map difficulty, and 60103 takes its Flametongue gate
+// (lavaLashBoost, computed once per cast by the player-caster arm —
+// creature casters never satisfy it, and the spell's Load() gate
+// requires TYPEID_PLAYER anyway).
+func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32, casterGUID, victimGUID uint64, mapID, instanceID uint32, lavaLashBoost bool) (uint32, bool) {
+	switch spell.ID {
+	case 49840:
+		return s.shockLanceDetonate(casterGUID, victimGUID, mapID, instanceID, baseDamage)
+	case 34779:
+		return s.freezingCircleDamage(mapID, instanceID)
+	case 60103:
+		if !lavaLashBoost {
+			return baseDamage, false
+		}
+		// spell_sha_lava_lash::HandleDummy (spell_shaman.cpp:1481-1495):
+		// the dummy effect's value is the percent (25): AddPct(hitDamage,
+		// damage) adds hitDamage * damage / 100. GetHitDamage() here is
+		// the launch damage (baseDamage at this dispatch position), not
+		// the OnHit 0 — this is an OnEffectHitTarget arm, and m_damage
+		// already holds the launch accumulation at hit time
+		// (TargetInfo::DoTargetSpellHit, Spell.cpp:2409-2425).
+		pct := spell.Effects[1].CalcValueForLevel(spell, casterLevel)
+		if pct <= 0 {
+			return baseDamage, false
+		}
+		return baseDamage + baseDamage*uint32(pct)/100, true
+	}
 	return onHitDamageRewrite(spell.ID, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage)
+}
+
+// shockLanceDetonate mirrors spell_oculus_shock_lance::CalcDamage
+// (oculus.cpp:524-538): the OnEffectLaunchTarget arm adds the target's
+// SPELL_AMBER_SHOCK_CHARGE (49836) EFFECT_0 amount — from this caster
+// only (GetAuraEffect(spell, eff, casterGUID)) — to the rolled DBC base,
+// then removes the charge aura (AURA_REMOVE_BY_ENEMY_SPELL). ADDITIVE:
+// HandleEffects (Spell.cpp:5165) already set damage to the rolled base
+// before the hook, and EffectSchoolDMG starts from that rewritten value
+// (SpellEffects.cpp:322-348), so the charge adds on top of base — the
+// same shape as the 50341 case in the table below. The amount is the
+// single DBC effect value, not stack-scaled: Aura::ModStackAmount
+// (SpellAuras.cpp:1030-1068) never rescales m_amount. Creature targets
+// only: the encounter's targets are enemy dragons, and a player victim's
+// charge aura lives in the session aura store, which this dispatch does
+// not read — a player carrying 49836 keeps it (documented gap).
+func (s *Server) shockLanceDetonate(casterGUID, victimGUID uint64, mapID, instanceID uint32, baseDamage uint32) (uint32, bool) {
+	if s == nil || victimGUID == 0 {
+		return baseDamage, false
+	}
+	victim := s.findCreatureMotion(mapID, instanceID, victimGUID)
+	if victim == nil {
+		return baseDamage, false
+	}
+	key := creatureAuraKeyForMotion(victim)
+	s.auraMu.Lock()
+	aura := s.activeCreatureAuras[key][49836]
+	s.auraMu.Unlock()
+	if aura == nil || aura.EffectMask&(1<<0) == 0 || aura.CasterGUID != casterGUID {
+		return baseDamage, false
+	}
+	amount := aura.Amounts[0]
+	s.removeCreatureAura(key, 49836)
+	if amount <= 0 {
+		return baseDamage, true
+	}
+	return baseDamage + uint32(amount), true
+}
+
+// freezingCircleDamage mirrors spell_freezing_circle::HandleDamage
+// (spell_generic.cpp:4271-4287): the OnEffectHitTarget arm REPLACES the
+// hit damage with the trigger spell's EFFECT_0 CalcValue — the Pit of
+// Saron heroic (70276) / normal (69574) trigger in dungeons, the base
+// trigger (34787) anywhere else. CalcValue() with no caster takes no
+// per-level scaling (SpellInfo.cpp:402-425), so the Go twin is
+// Effects[0].CalcValue(), not CalcValueForLevel. The difficulty comes
+// from the first session on the instance (autoBalanceInstanceDifficulty);
+// a dungeon with nobody on it reports normal, matching an empty
+// instance's default difficulty.
+func (s *Server) freezingCircleDamage(mapID, instanceID uint32) (uint32, bool) {
+	if s == nil || s.Data == nil {
+		return 0, false
+	}
+	triggerID := uint32(34787)
+	if entry, found, err := s.Data.Map(mapID); err == nil && found && entry.IsDungeon() {
+		dungeonDiff, _ := s.autoBalanceInstanceDifficulty(mapID, instanceID)
+		if dungeonDiff == 1 { // DUNGEON_DIFFICULTY_HEROIC
+			triggerID = 70276
+		} else {
+			triggerID = 69574
+		}
+	}
+	trigger, found, err := s.Data.Spell(triggerID)
+	if err != nil || !found {
+		return 0, false
+	}
+	value := trigger.Effects[0].CalcValue()
+	if value <= 0 {
+		return 0, false
+	}
+	return uint32(value), true
 }
 
 // spellScriptOnHitLatch runs the SpellScript OnHit arms that set a

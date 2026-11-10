@@ -53,8 +53,10 @@
 --   so the leg is a no-op); SetOrientation(2.5) rides
 --   SetFacingTo(2.5), the absolute-facing twin.
 -- - The remaining SpellScripts/AuraScripts: call-drake dest
---   select (49345/49461/49462, SpellScript), shock lance
---   damage calc (49840, SpellScript) — no SpellScript bridge;
+--   select (49345/49461/49462, SpellScript) — no SpellScript bridge;
+--   shock lance damage calc (49840) ports Go-side
+--   (spell_onhit.go shockLanceDetonate: base + 49836 eff0 amount
+--   from this caster, charge aura consumed; creature targets only);
 --   touch the nightmare damage calc (50341) ports Go-side
 --   (spell_onhit.go onHitDamageRewrite: base + 30% caster max HP).
 --   evasive maneuvers proc (50240) + temporal rift proc
