@@ -282,6 +282,19 @@ func (s *session) advantageT10ProcAllowed(ev procEventInfo) bool {
 	return true
 }
 
+// hungeringColdProcAllowed mirrors spell_dk_hungering_cold::CheckProc
+// (spell_dk.cpp:1371-1379): melee damage (no triggering spell) always
+// procs; a triggering spell procs unless its Dispel is DISPEL_DISEASE.
+// The default trigger is DBC-driven, so this gate alone is the port,
+// like the 70656 gate below. DORMANT until Spell.dbc ships the 51209
+// proc entry.
+func (s *session) hungeringColdProcAllowed(ev procEventInfo) bool {
+	if ev.eventSpell == nil {
+		return true
+	}
+	return ev.eventSpell.DispelType != dispelDisease
+}
+
 // isProcOnCooldown checks whether an internal cooldown (ICD) is active for the given proc ID.
 func (s *session) isProcOnCooldown(procID uint32) bool {
 	if s == nil || s.procICD == nil {
@@ -1107,6 +1120,11 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 61607, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
+	case 58642: // Glyph of Scourge Strike, EFFECT_0: the proc actor casts 69961 on the proc target; PreventDefaultAction.
+		if effIndex != 0 || actorGUID == 0 || triggerTargetGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 69961, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -3160,6 +3178,12 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 70656 && !s.advantageT10ProcAllowed(ev) {
 			continue
 		}
+		// spell_dk_hungering_cold::CheckProc (spell_dk.cpp:1371-1379):
+		// the disease-dispel gate runs before the chance roll, like the
+		// C++ CheckProc in GetProcEffectMask (70656 precedent above).
+		if auraSpell.ID == 51209 && !s.hungeringColdProcAllowed(ev) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3292,6 +3316,21 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// if one ever registers. DORMANT until Spell.dbc ships
 				// the 62259 proc entry.
 				s.resetPlayerCooldown(49576, true)
+				continue
+			}
+			if auraSpell.ID == 58642 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_dk_glyph_of_scourge_strike::HandleProc
+				// (spell_dk.cpp:1260-1270): PreventDefaultAction; the
+				// actor casts the script spell (69961) on the proc
+				// target, triggered with the aura effect. No Lua ev6
+				// twin: spell_dk.lua holds no 58642 handler, and the
+				// Lua ev6 veto above would fire first if one ever
+				// registers. DORMANT until Spell.dbc ships the 58642
+				// proc entry.
+				if triggerTargetGUID == 0 {
+					continue
+				}
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 69961, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
 				continue
 			}
 			if auraSpell.ID == 50240 && i == 2 && eff.Aura == spellAuraProcTriggerSpell {

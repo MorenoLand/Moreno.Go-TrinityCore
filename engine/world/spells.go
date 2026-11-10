@@ -16198,6 +16198,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 49158 || spellID == 51325 || spellID == 51326 || spellID == 51327 || spellID == 51328 {
 						s.corpseExplosionDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, explicitAreaJoin)
 					}
+					// spell_dk_death_grip (spell_dk.cpp:950-978): the
+					// EFFECT_0 DUMMY OnEffectHitTarget arm. Fires once per
+					// effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target), ahead of the
+					// pet-aura/Eluna legs like the corpse-explosion arm
+					// above, and only when a target was actually hit.
+					if spellID == 49560 && len(hitTargets) > 0 {
+						s.deathGripDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, target)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -36593,6 +36602,29 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 			}
 		}
 	}
+	// spell_dk_icebound_fortitude::CalculateAmount (spell_dk.cpp:1405-1438):
+	// the EFFECT_2 MOD_DAMAGE_PERCENT_TAKEN amount sheds 15% of the defense
+	// above 400 (defense skill + defense rating bonus), and the Glyph of
+	// Icebound Fortitude (58625) effect-0 amount caps it from above (the
+	// value is negative — damage taken is reduced). Load() requires a player
+	// caster; this function runs on the caster's session, so the guard is
+	// the s.player check. The uint32 round-trip is exact: the caller stores
+	// the amount back through int32 (Amounts[index] assignment). No
+	// recalculation leg: C++ re-runs this hook when defense changes, Go
+	// computes it once at application. DORMANT until Spell.dbc ships 48792.
+	if spell.ID == 48792 && eff.Aura == spellAuraModDamagePercentTaken && s.player != nil {
+		value := int32(amount)
+		defValue := uint32(float64(s.getSkillValue(95)) + s.ratingBonusValue(CombatRatingDefenseSkill))
+		if defValue > 400 {
+			value -= int32(float64(defValue-400) * 0.15)
+		}
+		if glyphAmount, ok := s.auraEffectAmount(58625, 0); ok {
+			if valMax := -glyphAmount; value > valMax {
+				value = valMax
+			}
+		}
+		amount = uint32(value)
+	}
 	return durationMs, periodMs, amount
 }
 
@@ -51350,10 +51382,10 @@ func (s *session) corpseExplosionDetonate(ctx context.Context, spell wotlk.Spell
 		// Living ghoul as a target (spell_dk.cpp:711-716): the ghoul casts
 		// 47496 on itself, non-triggered in C++; castSpellDirect is the
 		// triggered funnel, so the cast rides triggered here. The 47496
-		// Suicide leg (43999 + 51270, spell_dk.cpp:1200-1204) stays out:
-		// 47496's own script is unported, and replicating it here would
-		// double-fire if it ever ports (its ev5 fires through this same
-		// triggered funnel).
+		// Suicide leg (43999 + 51270, spell_dk.cpp:1200-1204) ports as the
+		// spell_dk.lua ev5 handler (2026-11-10), which fires through this
+		// same triggered funnel — it is NOT replicated here, or it would
+		// double-fire.
 		s.castSpellDirect(ctx, 47496, targetGUID)
 		return
 	}
@@ -51380,6 +51412,58 @@ func (s *session) corpseExplosionDetonate(ctx context.Context, spell wotlk.Spell
 	// effect lands on the corpse either way.
 	s.castSpellDirect(ctx, 43999, targetGUID)
 	s.castSpellDirect(ctx, 51270, targetGUID)
+}
+
+// deathGripDummyEffect is spell_dk_death_grip (spell_dk.cpp:950-978):
+// the EFFECT_0 DUMMY OnEffectHitTarget arm — a hit unit without
+// SPELL_AURA_DEFLECT_SPELLS (Deterrence) casts the EFFECT_0 value
+// (Death Grip Initial, 49576) triggered at the explicit dest position.
+// DORMANT until Spell.dbc ships the 49560 record. Deltas: Go casts as
+// the player session (the 60881/49158 precedent) where C++ has the hit
+// unit cast; the dest is the packet dest when present, else the hit
+// unit's position — the C++ dest is the DBC implicit dest, unverifiable
+// without Spell.dbc (if it proves TARGET_DEST_CASTER, this must switch
+// to the caster's position). The 49576 script itself (CheckCast +
+// dummy, spell_dk.cpp:2740-2781) is unported, so the chain ends at the
+// funnel's default 49576 handling.
+func (s *session) deathGripDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64, target protocol.SpellTargetData) {
+	if s == nil || s.player == nil || s.server == nil || effectIndex != 0 || len(spell.Effects) == 0 {
+		return
+	}
+	trigger := spell.Effects[0].CalcValueForLevel(spell, casterLevel)
+	if trigger <= 0 {
+		return
+	}
+	hasDest := target.Flags&protocol.SpellTargetFlagDestLocation != 0
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		tm := s.findCreatureMotion(guid)
+		var ts *session
+		if tm == nil {
+			ts = s.server.findSessionByGUID(guid)
+			if ts == nil || ts.player == nil {
+				continue
+			}
+		}
+		if tm != nil {
+			if s.server.creatureHasAuraType(creatureAuraKeyForMotion(tm), spellAuraDeflectSpells) {
+				continue
+			}
+		} else if ts.hasAuraType(spellAuraDeflectSpells) {
+			continue
+		}
+		dest := target.Destination
+		if !hasDest {
+			if tm != nil {
+				dest = protocol.SpellTargetLocation{X: tm.X, Y: tm.Y, Z: tm.Z}
+			} else {
+				dest = protocol.SpellTargetLocation{X: ts.player.X, Y: ts.player.Y, Z: ts.player.Z}
+			}
+		}
+		s.castSpellDirectWithOverrides(ctx, uint32(trigger), 0, false, nil, 0, &dest, 0)
+	}
 }
 
 // corpseExplosionDummyEffect is spell_dk_corpse_explosion

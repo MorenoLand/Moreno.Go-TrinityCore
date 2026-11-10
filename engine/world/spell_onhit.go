@@ -66,8 +66,9 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 		// CalcValueForLevel is the CalcValue(caster) twin (level clamp
 		// + per-level + die roll, store.go:157). The Suicide leg
 		// (EFFECT_1 OnEffectHitTarget: triggered 47496-triggered +
-		// visual cast on the hit unit) stays out — no triggered-cast
-		// leg in this dispatch.
+		// visual cast on the hit unit) ports as the spell_dk.lua ev5
+		// handler (2026-11-10), which fires through the triggered
+		// funnel — not in this dispatch, or it would double-fire.
 		pct := spell.Effects[2].CalcValueForLevel(spell, casterLevel)
 		if pct <= 0 {
 			return baseDamage, false

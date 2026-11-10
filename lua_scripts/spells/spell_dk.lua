@@ -63,8 +63,9 @@
 --   with BP0 = EFFECT_0 value, then 43999 + 51270 triggered. Deltas:
 --   empty-list FinishCast has no bridge (cast does nothing); the
 --   living-ghoul leg casts 47496 triggered where C++ casts plain,
---   and its Suicide leg (43999 + 51270) stays out — replicating it
---   would double-fire if 47496's script ever ports.
+--   and its Suicide leg (43999 + 51270) ports as the ev5 handler
+--   below (2026-11-10) — the Go detonate arm must not also cast them
+--   for a living ghoul, or it would double-fire.
 -- ALREADY PORTED (verified in-house this tick, NOT re-ported — the
 --   2026-11-10 census rows for these two are stale, its matcher
 --   misses Go cases in spells.go/procs.go):
@@ -101,6 +102,9 @@
 --   precedent) and the OnCheckCast class gate stays out (no check-cast
 --   bridge; DK-gated by learning).
 --   spell_dk_blood_boil (48721): PORTED below (2026-11-10).
+--   spell_dk_ghoul_explode (47496): PORTED below (2026-11-10) — the
+--   Suicide leg as an ev5 handler; the HandleDamage leg is the Go
+--   spellScriptOnHitDamage arm (spell_onhit.go).
 --   spell_dk_advantage_t10_4p (70656, 2026-11-10): PORTED in Go
 --   (procs.go advantageT10ProcAllowed): DoCheckProc gate only — DK
 --   player actor with all runes on cooldown; the 70657 trigger is
@@ -271,3 +275,32 @@ end
 
 RegisterSpellEvent(SPELL_DK_BLOOD_BOIL, 1, bloodBoilReset)
 RegisterSpellEvent(SPELL_DK_BLOOD_BOIL, 3, bloodBoilAfterHit)
+
+local SPELL_DK_GHOUL_EXPLODE = 47496 -- spell_dk.cpp:1171
+local SPELL_DK_CORPSE_EXPLOSION_TRIGGERED = 43999 -- spell_dk.cpp:60
+local SPELL_DK_CORPSE_EXPLOSION_VISUAL = 51270 -- spell_dk.cpp:61
+
+-- C++ spell_dk_ghoul_explode_SpellScript::Suicide
+-- (spell_dk.cpp:1196-1205): EFFECT_1 OnEffectHitTarget — the hit unit
+-- casts SPELL_DK_CORPSE_EXPLOSION_TRIGGERED 43999 triggered on itself,
+-- and the caster casts the visual 51270 triggered on the hit unit.
+-- The HandleDamage leg (EFFECT_0 OnEffectLaunchTarget, pct of the
+-- caster's max health) is the Go spellScriptOnHitDamage 47496 arm
+-- (spell_onhit.go); this ev5 fires only in the triggered funnel
+-- (castSpellDirectWithOverrides, spells.go) — the living-ghoul leg of
+-- corpseExplosionDetonate casts 47496 through it, so the Suicide leg
+-- lands there and nowhere else (the Go detonate arm must not also cast
+-- 43999 + 51270 for a living ghoul, or it would double-fire).
+-- DORMANT until Spell.dbc ships the 47496 record.
+local function ghoulExplodeSuicide(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    hitTarget:CastSpell(hitTarget, SPELL_DK_CORPSE_EXPLOSION_TRIGGERED, true)
+    if caster ~= nil then
+        caster:CastSpell(hitTarget, SPELL_DK_CORPSE_EXPLOSION_VISUAL, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_DK_GHOUL_EXPLODE, 5, ghoulExplodeSuicide)
