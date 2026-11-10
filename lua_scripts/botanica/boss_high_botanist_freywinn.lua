@@ -173,9 +173,10 @@ end
 
 -- C++ UpdateAI in arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into
--- the pump. Only bridgeable arms are modeled (the summon /
--- aura / movement / cast-state arms are bridge-blocked —
--- see deviations).
+-- the pump. The summon / aura / cast-state arms are PORTED
+-- (ev19 latch + RemoveAllAuras + IsCasting/Interrupt);
+-- only the movement arms (MoveIdle / MoveChase) stay out —
+-- see deviations.
 local function combatTick(creature, guid)
     local st = combatStates[guid]
     if not st then
@@ -210,11 +211,11 @@ local function combatTick(creature, guid)
         st.treeForm = st.treeForm - 1000
     end
 
-    -- 2. Tree-form exit machine: the dead-frayer summons
-    -- scan is unreachable (no summon bridge), so the only
-    -- reachable exit is the forced TreeForm - 30000 arm —
-    -- C++-exact for the reachable model. Exiting returns
-    -- early, skipping the seedling arm (C++-exact).
+    -- 2. Tree-form exit machine: the dead-frayer scan over the
+    -- ev19-latched frayers runs every pump tick (one dead frayer
+    -- per tick, C++ break); the forced TreeForm - 30000 arm is
+    -- the fallback exit. Exiting returns early, skipping the
+    -- seedling arm (C++-exact).
     if not st.moveFree then
         -- C++ MoveCheck 500ms dead-frayer scan (:162-180), at the
         -- 1s pump granularity: one dead latched frayer per tick

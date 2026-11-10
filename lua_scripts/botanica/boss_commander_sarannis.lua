@@ -43,9 +43,10 @@
 -- port of UpdateAI in C++ arm order — 1s granularity exact
 -- for all C++ timers; the !UpdateVictim early return
 -- collapses into the pump; the UNIT_STATE_CASTING early-
--- return gates before and after the event loop have no
--- cast-state bridge — the arms fire unconditionally,
--- netherspite precedent). Pump:
+-- return gates before and after the event loop are PORTED
+-- via the per-arm `and not creature:IsCasting()` idiom
+-- (dalliah precedent; live CastingUntil window,
+-- lua_creature_events.go:1950). Pump:
 -- 1. Arcane resonance arm — 42.7s init then 42.7s: Talk(SAY_
 --    ARCANE_RESONANCE) + TRIGGERED DoCastVictim(SPELL_ARCANE_
 --    RESONANCE 34794, true) (C++-exact), re-arm 42700 (C++-

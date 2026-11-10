@@ -48,8 +48,9 @@
 -- the event loop are PORTED (creature:IsCasting, live
 -- CastingUntil window — zereketh/corrupter precedent). Pump:
 -- 1. Sacrifice arm — 5.7s init then 29.4s: target =
---    SelectTarget(Random, 1) — random alive player excluding
---    the current victim (skyriss / thespia precedent); if a
+--    SelectTarget(Random, 1) — random alive player past the
+--    MaxThreat head (UnitAI.h:204-206 — the offset skips the
+--    top-threat entry, not the victim; fixed 2026-11-10); if a
 --    target exists (the arm is skipped when the C++ picks
 --    none, C++-exact): Talk(SAY_CAST_SACRIFICE) +
 --    TRIGGERED DoCast(target, SPELL_SACRIFICE 34661, true)
@@ -129,30 +130,27 @@ local function fullReset(guid)
     combatStates[guid] = nil
 end
 
--- C++ SelectTarget(Random, 1, 0.0f, true): UnitAI.h builds the list
--- victim-first, so offset 1 removes the victim, not the threat head;
--- then threat-list players alive, no range cap.
--- when it picks no target.
+-- C++ SelectTarget(Random, 1, 0.0f, true) (UnitAI.h:204-206):
+-- the first entry in MaxThreat order among predicate-matching
+-- units (alive players, no range cap) is skipped, then a
+-- uniform random pick from the rest. GetAITargets() returns
+-- the threat list in MaxThreat order, so the skip is the
+-- first alive player in that order — NOT the victim: the
+-- victim is the top-threat unit only in the common case, and
+-- skipping the victim by GUID (the old helper) kept the
+-- MaxThreat head in the pool whenever victim != top threat
+-- (taunt / threat-drop edge). Fixed 2026-11-10.
 local function randomThreatPlayerPastHead(creature)
-    local victim = creature:GetVictim()
-    local victimGuid = nil
-    if victim ~= nil then
-        victimGuid = victim:GetGUID()
-    end
     local targets = creature:GetAITargets()
     local candidates = {}
-    local aliveSeen = 0
+    local skippedHead = false
     for _, unit in ipairs(targets) do
-        local skip = false
-        if victimGuid ~= nil then
-            skip = unit:GetGUID() == victimGuid
-        elseif not unit:IsDead() then
-            aliveSeen = aliveSeen + 1
-            skip = aliveSeen == 1
-        end
-        if not skip
-                and unit:GetObjectType() == "Player" and not unit:IsDead() then
-            candidates[#candidates + 1] = unit
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            if not skippedHead then
+                skippedHead = true
+            else
+                candidates[#candidates + 1] = unit
+            end
         end
     end
     if #candidates == 0 then
