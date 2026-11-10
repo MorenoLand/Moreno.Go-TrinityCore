@@ -34,7 +34,7 @@ const (
 	PlayerEventLevelChange       = 13
 	PlayerEventMoneyChange       = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go fires it from session modifyPlayerMoney (quest_reward_grant.go), which every ModifyMoney-equivalent money write routes through; direct SetMoney-style writes (GM set, SetCoinage, values-table write) fire nothing, like C++
 	PlayerEventReputationChange  = 15
-	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; Go fires it from the shared setter (skills.go setFreeTalentPointsOverride) and the learn/reset/level-up recompute arms (fireTalentPointsChanged), matching the C++ SetFreeTalentPoints calls in LearnTalent/ResetTalents/InitTalentForLevel
+	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; Go fires it from the shared setter (skills.go setFreeTalentPointsOverride), the learn/reset/level-up recompute arms (fireTalentPointsChanged) and the login-load recompute (handlePlayerLogin, LoadFromDB :17979), matching the C++ SetFreeTalentPoints calls in LearnTalent/ResetTalents/InitTalentForLevel
 	PlayerEventTalentReset       = 17 // OnTalentsReset fires from Player::ResetTalents (Player.cpp:3992, first statement, before the no-talents/cost arms); Go fires it from resetTalents (skills.go), covering the Lua binding, at-login reset, .reset talents and talent-wipe confirm
 	PlayerEventChat              = 18
 	PlayerEventWhisper           = 19

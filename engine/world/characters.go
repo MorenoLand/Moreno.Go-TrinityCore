@@ -1447,6 +1447,20 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	// ACHIEVEMENT_CRITERIA_TYPE_OWN_RANK is never fired by the C++
 	// server (AchievementMgr.cpp:1130 "Not implemented yet"), so no
 	// title fire belongs here.
+	// Player::LoadFromDB (Player.cpp:17979) calls InitTalentForLevel, whose
+	// normal arm calls SetFreeTalentPoints(talentPointsForLevel - used)
+	// (Player.cpp:2833) — and SetFreeTalentPoints fires
+	// OnPlayerFreeTalentPointsChanged (Player.cpp:4087-4090), i.e. event
+	// 16. Level < 10 with no spent talents never calls it
+	// (InitTalentForLevel :2805-2811 only calls SetFreeTalentPoints when
+	// m_usedTalentCount > 0), so the fire is gated the same way. The
+	// sub-10 spent arm also ResetTalents in C++ (talent wipe); only the
+	// points hook is fired here, the wipe is not modeled. It runs
+	// before the login event, matching C++ order (LoadFromDB precedes
+	// OnPlayerLogin).
+	if s.player.Level >= 10 || len(s.player.Talents) > 0 {
+		s.fireTalentPointsChanged(ctx)
+	}
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	if firstLogin {
 		s.triggerPlayerEvent(ctx, scripting.PlayerEventFirstLogin, s.luaPlayer())

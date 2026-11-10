@@ -16,25 +16,15 @@ const (
 	maxGlyphSlotIndex uint8  = 6
 )
 
-// freeTalentPoints mirrors Player::GetFreeTalentPoints (Player.cpp:25462).
-// Level < 10 grants 0 talent points.
-// Level >= 10 grants (level - 9) talent points minus all spent points.
+// freeTalentPoints mirrors Player::GetFreeTalentPoints (Player.cpp:25462),
+// which reads PLAYER_CHARACTER_POINTS1 as written by SetFreeTalentPoints
+// from CalculateTalentsPoints (Player.cpp:25147) minus spent ranks —
+// including the death-knight Ebon-Hold arm (map 609, level 56+:
+// level-55 + quest bonus, capped at level-9). It delegates to the
+// package-level function so the session value, the update mask, and the
+// Eluna GetFreeTalentPoints bridge all read the identical total.
 func (s *session) freeTalentPoints() uint32 {
-	if s.player != nil && s.player.FreeTalentPointsOverrideSet {
-		return s.player.FreeTalentPointsOverride
-	}
-	if s.player == nil || s.player.Level < 10 {
-		return 0
-	}
-	totalPoints := uint32(s.player.Level - 9)
-	var spent uint32
-	for _, rank := range s.player.Talents {
-		spent += uint32(rank + 1)
-	}
-	if spent >= totalPoints {
-		return 0
-	}
-	return totalPoints - spent
+	return freeTalentPoints(s.player)
 }
 
 // setFreeTalentPointsOverride mirrors Player::SetFreeTalentPoints
@@ -55,8 +45,9 @@ func (s *session) setFreeTalentPointsOverride(ctx context.Context, points uint32
 // fireTalentPointsChanged fires PLAYER_EVENT_ON_TALENT_CHANGE (16) with
 // the current free-talent total, mirroring the Player::SetFreeTalentPoints
 // call C++ makes at the end of LearnTalent (:25557), ResetTalents
-// (:4002/:4064) and InitTalentForLevel (GiveLevel, :2833). The value is
-// read through freeTalentPoints so override and derived paths agree.
+// (:4002/:4064) and InitTalentForLevel (GiveLevel, :2833; LoadFromDB,
+// :17979). The value is read through freeTalentPoints so override and
+// derived paths agree.
 func (s *session) fireTalentPointsChanged(ctx context.Context) {
 	if s.player == nil {
 		return
