@@ -92,6 +92,18 @@ func onHitDamageRewrite(spellID uint32, victimHealth, victimMaxHealth, baseDamag
 		// Util.h:66-69). The class header binds both the normal (33666)
 		// and heroic (38795) effect ids.
 		return uint32(float32(victimMaxHealth) * 80.0 / 100.0), true
+	case 48642:
+		// spell_skadi_launch_harpoon::HandleDamageCalc
+		// (boss_skadi.cpp:797-801): damage = 35% of the hit unit's
+		// max health (target->CountPctFromMaxHealth(35), an
+		// ABSOLUTE value, not GetHitDamage()-relative — unlike the
+		// bone-storm / tympanic / bone-slice / koralon / defile /
+		// cosmic-smash arms, which are C++ no-ops at OnHit).
+		// The FilterTargets leg (keep only Grauf when >=2 targets,
+		// :791-795) stays out: no Go target-select hook for this
+		// spell, so the rewrite applies to whichever targets the
+		// engine selects.
+		return uint32(float32(victimMaxHealth) * 35.0 / 100.0), true
 	}
 	return baseDamage, false
 }

@@ -115,9 +115,11 @@
 -- DoCastVictim as a 1.5s poller (CastSpell(nil) victim-cast + spike-immune
 -- marking — the old "DoCastVictim legs have no bridge" claim is retracted).
 -- Stay-outs: DelayEvents(3s) at WARN (timers keep cadence), the bone-slice
--- damage split + DoAction CLEAR_SPIKE_IMMUNITIES sender (both ride the
--- unbridged bone-slice SpellScript; the immunity list is maintained by the
--- poller instead — ev38 DoAction itself IS bridged), the coldflame
+-- damage split (a C++ no-op: SetHitDamage(GetHitDamage() / _targetCount)
+-- with GetHitDamage() 0 at OnHit, Spell.cpp:2377 — ports as nothing);
+-- the CLEAR_SPIKE_IMMUNITIES sender ports as the poller's pre-cast clear
+-- and the per-hit-target marking rides the 69055 ev2 handler (dormant
+-- until Spell.dbc ships), the coldflame
 -- reposition/trigger-teleport legs (no position bridge), the dead-target
 -- spike-despawn leg (no aura-caster-GUID bridge), DoMeleeAttackIfReady
 -- (engine-driven melee is not suppressed during bone storm). JustReachedHome
@@ -162,6 +164,7 @@ local SAY_BERSERK = 6
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_BONE_STORM = 69076 -- boss_lord_marrowgar.cpp spells enum
 local SPELL_BONE_SPIKE_GRAVEYARD = 69057 -- boss_lord_marrowgar.cpp:49
+local SPELL_BONE_SLICE = 69055 -- boss_lord_marrowgar.cpp:47
 local SPELL_COLDFLAME_NORMAL = 69140 -- boss_lord_marrowgar.cpp:50
 local SPELL_COLDFLAME_BONE_STORM = 72705 -- boss_lord_marrowgar.cpp:51
 local SPELL_COLDFLAME_SUMMON = 69147 -- boss_lord_marrowgar.cpp:59
@@ -345,14 +348,22 @@ end
 -- exists in Lua, so a 1.5s poller (the spell GCD) stands in, gated on
 -- IsCasting() for the CURRENT_MELEE_SPELL + casting gates; each cast
 -- marks the victim spike-immune (the bone-slice SpellScript SplitDamage
--- leg, :641-648 — its DoAction CLEAR_SPIKE_IMMUNITIES sender is that
--- same unbridged SpellScript, so the list is maintained here instead).
--- The damage-split-across-targets leg stays out.
+-- leg, :647-656 — its BeforeCast CLEAR_SPIKE_IMMUNITIES sender ports
+-- here as the pre-cast clear, and the per-hit-target marking rides
+-- the ev2 handler below once Spell.dbc ships). The damage split is a
+-- C++ no-op (SetHitDamage(GetHitDamage() / _targetCount) with
+-- GetHitDamage() 0 at OnHit, Spell.cpp:2377) and ports as nothing.
+-- BUGFIX 2026-11-09: SPELL_BONE_SLICE was never defined in this file,
+-- so the cast below passed a nil spell id, CastSpell raised "value is
+-- not unsigned", and the handler unwound before the marking AND the
+-- re-arm schedule — the poller died on its first eligible tick and
+-- bone slice never fired (silent since tick 493).
 onBoneSliceTick = function(creature, guid)
     local st = getMarrowgarState(guid)
     if st.boneSlice and not creature:HasAura(SPELL_BONE_STORM) and not creature:IsCasting() then
         local victim = creature:GetVictim()
         if victim then
+            st.spikeImmune = {}
             creature:CastSpell(nil, SPELL_BONE_SLICE)
             local vg = victim:GetGUID()
             local immune = false
@@ -366,6 +377,38 @@ onBoneSliceTick = function(creature, guid)
     end
     schedule(guid, "boneSlice", 1500, function() onBoneSliceTick(creature, guid) end)
 end
+
+-- C++ spell_marrowgar_bone_slice::SplitDamage
+-- (boss_lord_marrowgar.cpp:647-656, OnHit, spell 69055): every hit unit
+-- is handed to the caster AI via SetGUID(DATA_SPIKE_IMMUNE 1), which
+-- pushes the GUID into _boneSpikeImmune (read back by the graveyard
+-- BoneSpikeTargetSelector as DATA_SPIKE_IMMUNE+0..2, MAX_BONE_SPIKE_IMMUNE
+-- 3, :98/:107-126). The ev2 twin fires once per hit target, pre-damage,
+-- miss-inclusive with a nil target (boss_ai.go pass-1); a nil target is
+-- skipped — Go has no GUID for a missed unit, where C++ marks it anyway,
+-- but the poller above still marks the victim unconditionally, matching
+-- the C++ "even if the spell missed" comment for the main target.
+-- DORMANT until Spell.dbc ships: 69055 is not spellKnown, so the engine
+-- fires no ev2 today; the poller's victim marking is the live leg until
+-- then. Handler is inline: the file sits near the 200-local limit.
+RegisterSpellEvent(SPELL_BONE_SLICE, 2, function(event, spell, target)
+    if target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local st = getMarrowgarState(caster:GetGUIDLow())
+    local tg = target:GetGUID()
+    local immune = false
+    for i = 1, math.min(#st.spikeImmune, 3) do
+        if st.spikeImmune[i] == tg then immune = true end
+    end
+    if not immune then
+        st.spikeImmune[#st.spikeImmune + 1] = tg
+    end
+end)
 
 -- C++ EVENT_BONE_SPIKE_GRAVEYARD (:200-203) + spell_marrowgar_bone_spike_
 -- graveyard HandleSpikes (:575-600) replicated in Lua: the 69057 cast

@@ -174,7 +174,9 @@
 -- twin: the RegisterAuraEvent set is Periodic 1 / Apply 2 / Remove 3 /
 -- ChangeAmount 4 / Dispel 5 / Proc 6 / BeforeDispel 7,
 -- engine/scripting/runtime.go:497-503) and spell_skadi_launch_harpoon
--- (cone target filter + 35%-max-health damage calc, no bridge).
+-- (cone target filter stays out — no Go target-select hook for this
+-- spell; the 35%-max-health damage calc is PORTED in the Go OnHit
+-- table, engine/world/spell_onhit.go:48642).
 -- spell_skadi_ride_vehicle + spell_summon_gauntlet_mobs_periodic are
 -- PORTED below via RegisterAuraEvent (this run) — the old
 -- "no-AuraScript-bridge" claim for them is retired.
