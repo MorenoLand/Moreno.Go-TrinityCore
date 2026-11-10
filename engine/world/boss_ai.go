@@ -16258,27 +16258,32 @@ func init() {
 	RegisterLuaBoss("boss_bloodmage_thalnos", 4543)
 	// Archaedas (2748, Uldaman) runs the Ground Tremor (6524)
 	// schedule (60s init, 45s re-arm, DoCastVictim -> GetVictim +
-	// CastSpell). The awaken sequence (SpellHit 10347 Talk/yell +
-	// 4s waking-up timer + AttackStart on the instance's GUID 0),
-	// the 10s wall-minion SetData(DATA_MINIONS) pump, the <66%/
-	// <33% guardian/vault-walker awaken arms, the JustDied
-	// SetData(DATA_ANCIENT_DOOR, DONE)/SetData(DATA_MINIONS,
-	// SPECIAL) legs and the Reset freeze-aura/flag/faction legs
-	// are instance-model/SpellHit-14/flag/faction-blocked; the
+	// CastSpell) plus the JustEngagedWith faction/flag/root legs,
+	// the SpellHit 10347 awaken arm (ev14 Talk + 4s timer +
+	// AttackStart, whoWoke-guarded), the 10s wall-minion pump, the
+	// <66%/<33% guardian/vault-walker awaken arms (1s health poll,
+	// range-query emulation of the instance GUID vectors — distance
+	// order, not spawn order), and the JustDied door-open (141869/
+	// 124369) + minion-despawn legs; the Reset freeze-aura/flag/
+	// faction legs stay out pending the altar trigger, and Reset's
+	// SetData(0, 5) respawn leg is a C++ no-op (swapped args, type
+	// 0 has no SetData case — deliberately not ported). The
 	// KilledUnit Talk rides event 3 (CREATURE_EVENT_ON_TARGET_DIED).
 	// The stone
 	// keepers (4857) run their JustDied triggered self-cast of
 	// Self Destruct 9874 (headless_horseman/omen onDied self-cast
-	// precedent); their faction/flag/root and DATA_STONE_KEEPERS
-	// legs are documented-only. The archaedas minions
-	// (7309/7077/7076/10120) have no bridgeable AI arms (state
-	// legs + SpellHit-15 awaken + engine-driven melee) and the
-	// Altar of Archaedas GO script is entry-unverifiable (no GO
-	// entry named in the C++ sources) — documented in the .lua
-	// header. Entries C++-verified via instance_uldaman.cpp's
-	// OnCreatureCreate name-comments feeding the GUID vectors the
-	// boss's GetGuidData(0/1-4/5-10) arms consume (kalecgos
-	// entry-verifiability check, ramstein strength).
+	// precedent) plus the Reset/JustEngagedWith freeze/unfreeze
+	// legs and the JustDied next-keeper continuation (chain start
+	// via DB ProcessEvent 2228 has no bridge). The archaedas minions
+	// (7309/7077/7076/10120) run the same Reset/JustEngagedWith
+	// state legs plus the SpellHit 10347 5s awaken arm
+	// (whoWoke-guarded); the Altar of Archaedas GO script is
+	// entry-unverifiable (no GO entry named in the C++ sources) —
+	// documented in the .lua header. Entries C++-verified via
+	// instance_uldaman.cpp's OnCreatureCreate name-comments
+	// feeding the GUID vectors the boss's GetGuidData(0/1-4/5-10)
+	// arms consume (kalecgos entry-verifiability check, ramstein
+	// strength).
 	RegisterLuaBoss("boss_archaedas", 2748)
 	RegisterLuaBoss("npc_stonekeepers", 4857)
 	// Ironaya (7228, Uldaman) runs Arcing Smash (8374, 3s init /
@@ -16287,8 +16292,10 @@ func init() {
 	// CastSpell) and <25% W-Stomp (11876, self-cast) arms via a
 	// 1s health check (kalecgos precedent). The Knockaway threat-
 	// reset leg is ported (ModifyThreatByPercent(victim, -100)); the
-	// ActivateIronaya instance choreography has no bridge; the
-	// latches clear on combat end/reset.
+	// ActivateIronaya choreography is ported in uldaman.lua as the
+	// go_keystone_chamber (124371) gossip chain (27s timer, entry
+	// C++-verified in uldaman.h:38) and the spawn freeze leg runs
+	// on event 5; the latches clear on combat end/reset.
 	// Entry C++-verified via instance_uldaman.cpp OnCreatureCreate
 	// (case 7228: // Ironaya).
 	RegisterLuaBoss("boss_ironaya", 7228)

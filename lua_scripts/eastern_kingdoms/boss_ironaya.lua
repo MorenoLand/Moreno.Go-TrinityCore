@@ -3,7 +3,9 @@
 -- boss_ironaya.cpp
 -- (boss_ironaya : public ScriptedAI (NOT BossAI — constructor
 -- Initialize() zeroes uiArcingTimer 3000 / bHasCastKnockaway /
--- bHasCastWstomp + instance = creature->GetInstanceScript();
+-- bHasCastWstomp; the AI holds no InstanceScript* — the header's
+-- old "instance = creature->GetInstanceScript()" line was false,
+-- zero `instance` hits in boss_ironaya.cpp);
 -- Reset -> Initialize(); JustEngagedWith empty; UpdateAI: no
 -- target -> return; !bHasCastKnockaway && HealthBelowPct(50) &&
 -- GetVictim -> DoCastVictim(10101 SPELL_KNOCKAWAY, true) +
@@ -28,7 +30,7 @@
 -- HasUnitState hits in boss_ironaya.cpp), so no defer applies and
 -- timers fire unconditionally, matching C++ (the "no bridge"
 -- phrasing is stale — IsCasting is live at
--- lua_creature_events.go:1950).
+-- lua_creature_events.go:2275).
 -- Verifiable numbers (file's own enums): SPELL_ARCINGSMASH =
 -- 8374 / SPELL_KNOCKAWAY = 10101 / SPELL_WSTOMP = 11876.
 -- Ported arms:
@@ -50,15 +52,30 @@
 --   blocked (standing).
 -- - The instance-side ActivateIronaya choreography
 --   (SetFaction/RemoveFlag NOT_SELECTABLE/ROOT off/MovePoint to
---   IronayaPoint/SAY_AGGRO Talk) lives in instance_uldaman.cpp,
---   which stays DOCUMENTED-BLOCKED (instance-script model,
---   standing).
+--   IronayaPoint/SAY_AGGRO Talk) is PORTED in uldaman.lua as the
+--   go_keystone_chamber (124371) gossip chain (27s timer, entry
+--   C++-verified in uldaman.h:38); the ironaya-side spawn freeze
+--   below is its counterpart. C++ freezes Ironaya on spawn only
+--   while encounter[2] != DONE (instance_uldaman.cpp:471-473) —
+--   Lua has no persisted encounter state, so the freeze applies
+--   on every spawn (documented delta; a fresh instance always
+--   matches).
+-- Ported arms (instance-side):
+-- - OnSpawn(5): SetFrozenState (instance_uldaman.cpp:150-158) ->
+--   FACTION_FRIENDLY + RemoveAllAuras + SetFlag(59, 0x02000000)
+--   + SetRooted(true) + AddAura(10255 SPELL_MINION_FREEZE_ANIM).
 
 local NPC_IRONAYA = 7228
 
 local SPELL_ARCINGSMASH = 8374
 local SPELL_KNOCKAWAY = 10101
 local SPELL_WSTOMP = 11876
+local SPELL_MINION_FREEZE_ANIM = 10255
+
+local FACTION_FRIENDLY = 35
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
 local state = {}
@@ -136,7 +153,18 @@ local function onIronayaCombatEnd(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ instance_uldaman.cpp OnCreatureCreate case 7228 ->
+-- SetFrozenState (instance_uldaman.cpp:150-158).
+local function onIronayaSpawn(event, creature)
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:RemoveAllAuras()
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(true)
+    creature:AddAura(SPELL_MINION_FREEZE_ANIM)
+end
+
 RegisterCreatureEvent(NPC_IRONAYA, 1, onIronayaCombatStart)
 RegisterCreatureEvent(NPC_IRONAYA, 2, onIronayaCombatEnd)
 RegisterCreatureEvent(NPC_IRONAYA, 4, onIronayaCombatEnd)
+RegisterCreatureEvent(NPC_IRONAYA, 5, onIronayaSpawn)
 RegisterCreatureEvent(NPC_IRONAYA, 23, onIronayaCombatEnd)

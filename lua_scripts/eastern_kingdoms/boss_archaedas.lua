@@ -63,7 +63,7 @@
 -- HasUnitState hits in boss_archaedas.cpp, all three AIs), so no
 -- defer applies and timers fire unconditionally, matching C++ (the
 -- "no bridge" phrasing is stale — IsCasting is live at
--- lua_creature_events.go:1950); the C++ UpdateAI timer arms map onto
+-- lua_creature_events.go:2275); the C++ UpdateAI timer arms map onto
 -- OnEnterCombat timers with the C++-exact init delays (maiden
 -- convention).
 -- Verifiable numbers (file's own enums): SPELL_GROUND_TREMOR =
@@ -85,79 +85,121 @@
 --   engine/world/lua_creature_events.go): Talk(SAY_KILL = 3),
 --   unconditional (the C++ ignores the victim). The old
 --   "no KilledUnit bridge" note was stale.
+-- - Archaedas JustEngagedWith faction/flag/root legs (ev1): SetFaction
+--   (14) + RemoveFlag(59, 0x02000000) + SetRooted(false).
+-- - Wall-minion 10s pump (ev1-scheduled, instance_uldaman.cpp
+--   ActivateWallMinions): first alive non-MONSTER wall minion
+--   (7309/7077) via GetCreaturesInRange, same unfreeze legs as
+--   ActivateMinion + archaedas CastSpell(target, 10258, true) +
+--   target self-cast 10347; re-arms every 10s in combat even when
+--   none remains (C++ SetData leg is unconditional).
+-- - Guardian/vault-walker awaken arms (1s health poll):
+--   <=66% awakens all 7076 (flag true except the last of the
+--   range list) + Talk(1); <=33% awakens all 10120 + Talk(2);
+--   per-guid latches. Health comparison is integer-exact
+--   (health <= floor(max*pct/100), !HealthAbovePct twin).
+-- - Archaedas SpellHit(10347) (ev14): Talk(0) + 4s timer ->
+--   AttackStart(whoWoke player); the attack leg is skipped while
+--   the altar entry is unverified (whoWokeGuid == 0).
+-- - Archaedas JustDied (ev4): opens the temple door (141869) and
+--   the ancient vault door (124369) via SetGoState(0) + despawns
+--   every alive MONSTER-faction minion (DeActivateMinions twin).
+-- - Stone Keeper JustDied continuation: after the 9874 self-cast,
+--   unfreeze the first alive stone keeper (4857); if none is
+--   alive, open the keeper temple door (124367) + the archaedas
+--   temple door (141869).
+-- - Minions (7076/10120/7309/7077) + stone keepers (4857):
+--   Reset (ev23) freeze legs, JustEngagedWith (ev1) unfreeze
+--   legs, minion SpellHit(10347) (ev14) 5s -> AttackStart
+--   (whoWoke-guarded, same as the boss arm).
+-- Fidelity deltas (range-query emulation, no instance script):
+-- GetCreaturesInRange returns distance order, C++ walks spawn-
+-- order GUID vectors — which guardian is the flag=false one and
+-- which wall minion wakes first can differ from C++; counts,
+-- timers, and spells are exact.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - Archaedas Reset's instance->SetData(0, 5) respawn-minions
---   leg + FACTION_FRIENDLY / NOT_SELECTABLE / ROOT legs +
---   AddAura(16245) freeze leg: instance-model blocked; the
---   FRIENDLY leg additionally rides the unported altar-awaken
---   machine (faction IS bridged — lua_creature_events.go:1208 —
---   but a FRIENDLY-at-reset port with no awaken path would brick
---   the fight after the first evade). The freeze-aura self-cast
---   is deferred with the stranded-half convention
---   (npc_captured_rageclaw / npc_phoenix_tk). The ROOT leg alone
---   is PORTED 2026-10-25 (ev23 onArchaedasReset, SetRooted twin):
---   it pairs with the ev1 release and needs no awaken path.
--- - JustEngagedWith's faction/flag/root legs: SetFaction is bridged
---   (lua_creature_events.go:1208) but the MONSTER flip rides the
---   unported altar-awaken machine — without the awaken path the
---   FRIENDLY/MONSTER cycle has no re-trigger, so both faction
---   legs stay documented-only (the flag leg stays out with them;
---   the ROOT leg alone is PORTED 2026-10-25 on ev1 — it pairs
---   with the ev23 set and needs no awaken path).
--- - SpellHit(10347) on boss and minions (the whole awaken
---   sequence: Talk(SAY_AGGRO), 4s/5s waking-up timers,
---   AttackStart(instance->GetGuidData(0))): stays out — the
---   trigger is the unported instance_uldaman.cpp ActivateArchaedas
---   self-cast (instance_uldaman.cpp:260-268), so event 14 can
---   never fire with this ID (the old "event 15 never fires"
---   label was stale — the C++ hook is void SpellHit = event 14,
---   which fires from the Go spell path).
--- - uiWallMinionTimer 10s -> instance->SetData(DATA_MINIONS,
---   IN_PROGRESS): instance-model blocked; the timer alone
---   would be a firesworn stub.
--- - The guardian (<66%) and vault-walker (<33%) awaken arms:
---   every leg runs through instance->GetGuidData(5..10 /
---   1..4) and ActivateMinion's DoCast(minion, 10258/10252) /
---   self-cast(10347) / flag/faction/aura legs — instance-model
---   blocked (faction IS bridged — lua_creature_events.go:1208 —
---   but the legs ride the unported awaken machine; flag/aura-strip
---   still bridgeless).
--- - JustDied's SetData(DATA_ANCIENT_DOOR, DONE) /
---   SetData(DATA_MINIONS, SPECIAL) legs: instance-model
---   blocked (standing).
--- - GetUldamanAI -> GetInstanceAI leg: instance-script model
---   blocked (standing).
--- - npc_archaedas_minions (7309/7077/7076/10120): no bridgeable
---   arms at all — Reset/JustEngagedWith are faction/flag/root/
---   freeze-aura state legs (faction IS bridged now —
---   lua_creature_events.go:1208 — but the legs ride the unported
---   awaken machine; the stay-out is registration/machine grounds,
---   not bridge grounds — SetRooted is bridged), the SpellHit(10347)
---   awaken sequence never fires, and the remainder is engine-
---   driven melee. Unregistered (registering a hook with zero
---   bridgeable arms would be a firesworn stub), documented
---   here.
--- - npc_stonekeepers Reset/JustEngagedWith faction/flag/root
---   legs: faction bridged but machine-coupled (see above),
---   flag/root bridges exist but the legs are machine-coupled;
---   JustDied's instance->SetData(DATA_
---   STONE_KEEPERS, IN_PROGRESS) leg: instance-model blocked.
+--   leg: C++ NO-OP, deliberately not ported — the args are
+--   swapped (type 0 has no SetData case; the intended
+--   SetData(DATA_MINIONS, NOT_STARTED) is never called anywhere
+--   in the tree), so RespawnMinions never fires from Reset in
+--   this C++ tree. The Reset FRIENDLY / NOT_SELECTABLE / AddAura
+--   (16245) freeze legs stay out pending the altar trigger: a
+--   FRIENDLY-at-reset port with no awaken path would brick the
+--   fight after the first evade. The ROOT leg alone is PORTED
+--   (ev23 onArchaedasReset, SetRooted twin) and pairs with the
+--   ev1 release.
+-- - The instance script itself (instance_uldaman.cpp): SetData /
+--   GetData / SetGuidData / ProcessEvent / OnCreatureCreate /
+--   Load / SaveToDB have no instance-script bridge — the script
+--   as a unit stays DOCUMENTED-BLOCKED; the legs above are
+--   Lua-side per-leg emulation, not a port of the instance model.
+--   Encounter persistence (doors re-opening on instance load)
+--   has no Lua equivalent.
 -- - go_altar_of_archaedas: entry-unverifiable (no GO entry for
 --   the altar is named anywhere in src/server — fails the
---   kalecgos check); its OnGossipHello arms (player self-cast
---   11206 + instance->SetGuidData(0, ...)) are bridgeable-in-
---   principle but unregistrable + instance-blocked. QUEUED with
---   the entry-unverifiable list, pending entry evidence.
+--   kalecgos check; Wowhead lookup found no object page with an
+--   entry 2026-11-10); its OnGossipHello arms (player self-cast
+--   11206 + instance->SetGuidData(0, ...) -> ActivateArchaedas:
+--   RemoveAura(16245) + self-cast 10347 non-triggered + SetFaction
+--   (415 TITAN) + RemoveFlag + close temple door 141869) are
+--   bridgeable-in-principle but unregistrable. QUEUED with the
+--   entry-unverifiable list, pending entry evidence. Until it
+--   lands, the boss engages directly (ev1) and the SpellHit
+--   AttackStart legs stay whoWoke-guarded.
+-- - First stone-keeper activation: ProcessEvent(EVENT_SUB_BOSS_
+--   AGGRO = 2228) is a DB-driven instance event with no Lua
+--   instance-event bridge — the chain cannot start; only the
+--   JustDied continuation above is ported.
+-- - GetUldamanAI -> GetInstanceAI leg: instance-script model
+--   blocked (standing).
+-- - The old "flag/aura-strip still bridgeless" claim is STALE:
+--   SetFlag (lua_creature_events.go:6022), RemoveFlag (:6087),
+--   RemoveAura (:1571), AddAura (:2652) are all live on the
+--   creature surface; the stay-outs above are machine/entry
+--   grounds, not bridge grounds.
 
 local NPC_ARCHAEDAS = 2748
 local NPC_STONE_KEEPER = 4857
+local NPC_EARTHEN_GUARDIAN = 7076
+local NPC_VAULT_WALKER = 10120
+local NPC_EARTHEN_CUSTODIAN = 7309
+local NPC_EARTHEN_HALLSHAPER = 7077
 
 local SPELL_GROUND_TREMOR = 6524
 local SPELL_SELF_DESTRUCT = 9874
+local SPELL_ARCHAEDAS_AWAKEN = 10347
+local SPELL_AWAKEN_VAULT_WALKER = 10258
+local SPELL_MINION_FREEZE_ANIM = 10255
 
+local SAY_AGGRO = 0
+local SAY_SUMMON_GUARDIANS = 1
+local SAY_SUMMON_VAULT_WALKERS = 2
 local SAY_KILL = 3
 
+local FACTION_FRIENDLY = 35
+local FACTION_MONSTER = 14
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+local GO_ARCHAEDAS_TEMPLE_DOOR = 141869
+local GO_ALTAR_OF_THE_KEEPER_TEMPLE_DOOR = 124367
+local GO_ANCIENT_VAULT_DOOR = 124369
+
+local SEARCH_RANGE = 100.0
+
 local timers = {}
+local state = {}
+
+local function getState(guid)
+    local st = state[guid]
+    if not st then
+        st = { guardiansAwake = false, vaultWalkersAwake = false, whoWokeGuid = 0 }
+        state[guid] = st
+    end
+    return st
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -181,6 +223,97 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ !HealthAbovePct(pct) = health <= CountPctFromMaxHealth(pct),
+-- floor(max*pct/100) (ironaya healthBelowPct convention, inverted).
+local function healthNotAbovePct(creature, pct)
+    local max = creature:GetMaxHealth()
+    if max == 0 then
+        return false
+    end
+    return creature:GetHealth() <= math.floor(max * pct / 100)
+end
+
+-- C++ ActivateMinion (boss_archaedas.cpp:112-124): DoCast(minion,
+-- 10258, flag) + minion self-cast 10347 triggered + RemoveFlag
+-- NOT_SELECTABLE + ROOT off + FACTION_MONSTER + RemoveAura(10255).
+-- The minion's own SpellHit(10347) arm needs the whoWoke player, so
+-- the archaedas guid's whoWokeGuid rides along into the minion state.
+local function activateMinion(archaedas, guid, minion, flag)
+    if not minion or minion:IsDead() then
+        return
+    end
+    archaedas:CastSpell(minion, SPELL_AWAKEN_VAULT_WALKER, flag)
+    minion:CastSpell(minion, SPELL_ARCHAEDAS_AWAKEN, true)
+    minion:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    minion:SetRooted(false)
+    minion:SetFaction(FACTION_MONSTER)
+    minion:RemoveAura(SPELL_MINION_FREEZE_ANIM)
+    local st = getState(guid)
+    if st.whoWokeGuid ~= 0 then
+        getState(minion:GetGUIDLow()).whoWokeGuid = st.whoWokeGuid
+    end
+end
+
+-- C++ ActivateWallMinions (instance_uldaman.cpp:199-219): first
+-- alive wall minion whose faction is not yet MONSTER, in spawn
+-- order; the range query returns distance order instead (documented
+-- delta — one minion per 10s either way).
+local function firstFrozenWallMinion(creature)
+    for _, entry in ipairs({ NPC_EARTHEN_CUSTODIAN, NPC_EARTHEN_HALLSHAPER }) do
+        local minions = creature:GetCreaturesInRange(SEARCH_RANGE, entry)
+        if minions then
+            for _, minion in ipairs(minions) do
+                if minion:GetFaction() ~= FACTION_MONSTER then
+                    return minion
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function onWallMinion(creature, guid)
+    local minion = firstFrozenWallMinion(creature)
+    if minion then
+        activateMinion(creature, guid, minion, true)
+    end
+    schedule(guid, "wall", 10000, function() onWallMinion(creature, guid) end)
+end
+
+-- C++ UpdateAI guardian/vault-walker arms (boss_archaedas.cpp:
+-- 174-194): <66% awakens EarthenGuardian1..6 (flag true except
+-- the 6th), <33% awakens VaultWalker1..4 (flag true except the
+-- 4th); the flag=false minion is the last of the range list
+-- (distance order, not C++ spawn order — documented delta).
+local function awakenGroup(creature, guid, entry, lastFlagFalse)
+    local minions = creature:GetCreaturesInRange(SEARCH_RANGE, entry)
+    if not minions then
+        return
+    end
+    for i, minion in ipairs(minions) do
+        local flag = true
+        if lastFlagFalse and i == #minions then
+            flag = false
+        end
+        activateMinion(creature, guid, minion, flag)
+    end
+end
+
+local function onHealthPoll(creature, guid)
+    local st = getState(guid)
+    if not st.guardiansAwake and healthNotAbovePct(creature, 66) then
+        awakenGroup(creature, guid, NPC_EARTHEN_GUARDIAN, true)
+        creature:Talk(SAY_SUMMON_GUARDIANS)
+        st.guardiansAwake = true
+    end
+    if not st.vaultWalkersAwake and healthNotAbovePct(creature, 33) then
+        awakenGroup(creature, guid, NPC_VAULT_WALKER, true)
+        creature:Talk(SAY_SUMMON_VAULT_WALKERS)
+        st.vaultWalkersAwake = true
+    end
+    schedule(guid, "health", 1000, function() onHealthPoll(creature, guid) end)
+end
+
 local function onGroundTremor(creature, guid)
     local victim = creature:GetVictim()
     if victim then
@@ -192,18 +325,49 @@ end
 local function onArchaedasCombatStart(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    -- C++ boss_archaedas.cpp:128: JustEngagedWith -> SetControlled(false,
-    -- UNIT_STATE_ROOT), after the faction/flag legs (which stay out per
-    -- the header's awaken-machine note); the root leg alone is ported.
+    -- C++ boss_archaedas.cpp:126-130: JustEngagedWith -> FACTION_
+    -- MONSTER + RemoveFlag NOT_SELECTABLE + SetControlled(false,
+    -- UNIT_STATE_ROOT).
+    creature:SetFaction(FACTION_MONSTER)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetRooted(false)
     schedule(guid, "tremor", 60000, function() onGroundTremor(creature, guid) end)
+    schedule(guid, "wall", 10000, function() onWallMinion(creature, guid) end)
+    schedule(guid, "health", 1000, function() onHealthPoll(creature, guid) end)
+end
+
+-- C++ SpellHit (boss_archaedas.cpp:131-140): 10347 -> Talk(AGGRO)
+-- + 4s waking-up timer -> AttackStart(whoWokeArchaedasGUID). The
+-- whoWoke GUID is set by the altar handler (instance_uldaman.cpp
+-- SetGuidData(0)); without it the attack leg is skipped — the boss
+-- still engages directly via ev1.
+local function onArchaedasSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_ARCHAEDAS_AWAKEN then
+        return
+    end
+    creature:Talk(SAY_AGGRO)
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "awaken", 4000, function()
+        local st = state[guid]
+        if st and st.whoWokeGuid ~= 0 then
+            local player = GetPlayerByGUID(st.whoWokeGuid)
+            if player then
+                creature:AttackStart(player)
+            end
+        end
+    end)
 end
 
 -- C++ boss_archaedas.cpp:105: Reset -> SetControlled(true,
 -- UNIT_STATE_ROOT). Ev23 only: ev2/ev4 stay on onArchaedasCombatEnd
--- (C++ JustDied never Resets, so a corpse must not re-root).
+-- (C++ JustDied never Resets, so a corpse must not re-root). The
+-- Reset freeze-aura/flag/faction legs stay out pending the altar
+-- trigger (no altar entry yet — a FRIENDLY-at-reset port with no
+-- awaken path would brick the fight after the first evade).
 local function onArchaedasReset(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    state[guid] = nil
     creature:SetRooted(true)
 end
 
@@ -211,8 +375,65 @@ local function onArchaedasCombatEnd(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ JustDied (boss_archaedas.cpp:209-213) -> SetData(DATA_
+-- ANCIENT_DOOR, DONE) opens the temple door (141869) and the
+-- ancient vault door (124369); SetData(DATA_MINIONS, SPECIAL) ->
+-- DeActivateMinions despawns every alive MONSTER-faction minion.
+local function onArchaedasDied(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    state[guid] = nil
+    for _, entry in ipairs({ GO_ARCHAEDAS_TEMPLE_DOOR, GO_ANCIENT_VAULT_DOOR }) do
+        local door = creature:GetNearestGameObject(SEARCH_RANGE, entry)
+        if door then
+            door:SetGoState(0)
+        end
+    end
+    for _, entry in ipairs({ NPC_EARTHEN_CUSTODIAN, NPC_EARTHEN_HALLSHAPER, NPC_EARTHEN_GUARDIAN, NPC_VAULT_WALKER }) do
+        local minions = creature:GetCreaturesInRange(SEARCH_RANGE, entry)
+        if minions then
+            for _, minion in ipairs(minions) do
+                if minion:GetFaction() == FACTION_MONSTER then
+                    minion:DespawnOrUnsummon()
+                end
+            end
+        end
+    end
+end
+
+-- C++ npc_stonekeepers::JustDied (boss_archaedas.cpp:378-381):
+-- DoCast(me, 9874, true) + instance->SetData(DATA_STONE_KEEPERS,
+-- IN_PROGRESS) -> ActivateStoneKeepers (instance_uldaman.cpp:
+-- 177-197): unfreeze the first alive stone keeper; if none is
+-- alive, open the altar-of-the-keeper temple door (124367) and
+-- the archaedas temple door (141869). The chain's first
+-- activation (ProcessEvent 2228, DB-driven) has no Lua bridge,
+-- so the continuation only runs once a keeper has died.
 local function onStoneKeeperDied(event, creature)
     creature:CastSpell(creature, SPELL_SELF_DESTRUCT, true)
+    local keepers = creature:GetCreaturesInRange(SEARCH_RANGE, NPC_STONE_KEEPER)
+    local nextKeeper = nil
+    if keepers then
+        for _, keeper in ipairs(keepers) do
+            if keeper:GetGUIDLow() ~= creature:GetGUIDLow() then
+                nextKeeper = keeper
+                break
+            end
+        end
+    end
+    if nextKeeper then
+        nextKeeper:SetRooted(false)
+        nextKeeper:SetFaction(FACTION_MONSTER)
+        nextKeeper:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        nextKeeper:RemoveAura(SPELL_MINION_FREEZE_ANIM)
+        return
+    end
+    for _, entry in ipairs({ GO_ALTAR_OF_THE_KEEPER_TEMPLE_DOOR, GO_ARCHAEDAS_TEMPLE_DOOR }) do
+        local door = creature:GetNearestGameObject(SEARCH_RANGE, entry)
+        if door then
+            door:SetGoState(0)
+        end
+    end
 end
 
 -- C++ boss_archaedas::KilledUnit — Talk(SAY_KILL), unconditional
@@ -221,9 +442,76 @@ local function onArchaedasTargetDied(event, creature, victim)
     creature:Talk(SAY_KILL)
 end
 
+-- C++ npc_archaedas_minions::Reset (boss_archaedas.cpp:240-247)
+-- and npc_stonekeepers::Reset (:345-352): FRIENDLY + NOT_SELECTABLE
+-- + ROOT + RemoveAllAuras + AddAura(10255). JustEngagedWith
+-- (minions :249-256, stonekeepers :354-359): MONSTER + flag/root
+-- off (minions also RemoveAllAuras). SpellHit(10347) on minions
+-- (:259-265): 5s waking-up timer -> AttackStart(whoWokeGUID);
+-- the whoWoke GUID rides in the minion's state from activateMinion
+-- and is skipped when unknown (no altar click yet).
+local function onMinionReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    state[guid] = nil
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(true)
+    creature:RemoveAllAuras()
+    creature:AddAura(SPELL_MINION_FREEZE_ANIM)
+end
+
+local function onMinionCombatStart(event, creature)
+    creature:SetFaction(FACTION_MONSTER)
+    creature:RemoveAllAuras()
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(false)
+end
+
+local function onStoneKeeperReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    state[guid] = nil
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(true)
+    creature:RemoveAllAuras()
+    creature:AddAura(SPELL_MINION_FREEZE_ANIM)
+end
+
+local function onStoneKeeperCombatStart(event, creature)
+    creature:SetFaction(FACTION_MONSTER)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetRooted(false)
+end
+
+local function onMinionSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_ARCHAEDAS_AWAKEN then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "awaken", 5000, function()
+        local st = state[guid]
+        if st and st.whoWokeGuid ~= 0 then
+            local player = GetPlayerByGUID(st.whoWokeGuid)
+            if player then
+                creature:AttackStart(player)
+            end
+        end
+    end)
+end
+
 RegisterCreatureEvent(NPC_ARCHAEDAS, 1, onArchaedasCombatStart)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 2, onArchaedasCombatEnd)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 3, onArchaedasTargetDied)
-RegisterCreatureEvent(NPC_ARCHAEDAS, 4, onArchaedasCombatEnd)
+RegisterCreatureEvent(NPC_ARCHAEDAS, 4, onArchaedasDied)
+RegisterCreatureEvent(NPC_ARCHAEDAS, 14, onArchaedasSpellHit)
 RegisterCreatureEvent(NPC_ARCHAEDAS, 23, onArchaedasReset)
+RegisterCreatureEvent(NPC_STONE_KEEPER, 1, onStoneKeeperCombatStart)
 RegisterCreatureEvent(NPC_STONE_KEEPER, 4, onStoneKeeperDied)
+RegisterCreatureEvent(NPC_STONE_KEEPER, 23, onStoneKeeperReset)
+for _, entry in ipairs({ NPC_EARTHEN_GUARDIAN, NPC_VAULT_WALKER, NPC_EARTHEN_CUSTODIAN, NPC_EARTHEN_HALLSHAPER }) do
+    RegisterCreatureEvent(entry, 1, onMinionCombatStart)
+    RegisterCreatureEvent(entry, 14, onMinionSpellHit)
+    RegisterCreatureEvent(entry, 23, onMinionReset)
+end
