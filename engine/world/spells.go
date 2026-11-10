@@ -16150,6 +16150,54 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 23881 && len(hitTargets) > 0 {
 						s.castSpellDirect(effCtx, 23885, s.playerGUID)
 					}
+					// spell_fatal_strike::HandleDummy
+					// (zone_storm_peaks.cpp:1349-1361): the EFFECT_0
+					// DUMMY OnEffectHitTarget arm — the chance is the
+					// caster's Pry Jaws Open aura (56706) effect-0
+					// amount, 0 when the aura is absent;
+					// roll_chance_i per hit target (C++ fires per hit
+					// target; the spell is single-target, so once per
+					// effect over the miss-filtered hit targets is
+					// exact). On a hit the caster casts Fatal Strike
+					// Damage (60881) triggered on the hit target —
+					// C++ casts with a null victim and 60881 is a
+					// 20yd school-damage spell, so the implicit
+					// target is the caster's victim, the hit unit
+					// here. On a miss the caster's AI runs
+					// DoAction(5) (Talk SAY_STRIKE_MISS); the
+					// wild-wyrm AI is unported, so the miss leg is
+					// silent. Go runs vehicle-bar casts as the
+					// player (procs.go:3195), so the Pry Jaws Open
+					// aura is the rider's, not the wyrm's (oculus
+					// 50240 precedent) — 56706 is a self-range
+					// Apply Aura: Dummy, eff0 base 5 (Wowhead
+					// WotLK). No triggered-cast twin: no in-tree
+					// caster casts 60587 triggered. DORMANT until
+					// Spell.dbc ships the 60587/56706/60881 records.
+					if spellID == 60587 && len(hitTargets) > 0 {
+						chance, _ := s.auraEffectAmount(56706, 0)
+						for _, targetGUID := range hitTargets {
+							if targetGUID == 0 {
+								continue
+							}
+							// roll_chance_i(chance): urand(0, 99) < chance.
+							if rand.Float64()*100 < float64(chance) {
+								s.castSpellDirect(effCtx, 60881, targetGUID)
+							}
+						}
+					}
+					// spell_fatal_strike::HandleDummy
+					// (zone_storm_peaks.cpp:1346-1362): the EFFECT_0 DUMMY
+					// OnEffectHit arm rolls the Pry Jaws Open chance and
+					// casts 60881 or fires the miss DoAction — the
+					// player-path twin (fatalStrikeDummyEffect). Fires
+					// once per effect over the hit targets (C++ fires per
+					// hit target; the spell is single-target), ahead of
+					// the pet-aura/Eluna legs like the bloodthirst arm
+					// above, and only when a target was actually hit.
+					if spellID == 60587 && len(hitTargets) > 0 {
+						s.fatalStrikeDummyEffect(effCtx)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -51196,6 +51244,56 @@ func (s *session) modWyrmGripStacks(delta int32, mode auraRemoveMode, matchCaste
 		casterGUID = wyrm.GUID
 	}
 	s.server.modCreatureAuraStacks(creatureAuraKeyForMotion(wyrm), 56689, delta, mode, casterGUID)
+}
+
+// fatalStrikeDummyEffect is the player-path twin of
+// spell_fatal_strike::HandleDummy (zone_storm_peaks.cpp:1346-1362):
+// EFFECT_0 DUMMY OnEffectHitTarget — the caster's Pry Jaws Open aura
+// (56706) effect-0 amount is the hit chance; a failed roll fires the
+// wyrm AI's ACTION_FATAL_STRIKE_MISS (5, Talk SAY_STRIKE_MISS), a
+// success casts Fatal Strike Damage (60881, 30000 physical per Wowhead)
+// triggered on the caster (the C++ nil-target cast; the tooltip drives
+// the spear down the wyrm's own throat, and the wyrm's DamageTaken
+// lethal leg is what the strike feeds). C++ casts with the wyrm as
+// caster; Go runs vehicle-bar casts as the player (procs.go:3195), so
+// the wyrm is the caster's VehicleGUID and the chance reads the wyrm's
+// creature aura — the GetAuraEffect twin
+// (lua_creature_events.go:1494 read shape: Amounts[effIndex] under
+// auraMu, EffectMask-gated). The miss leg fires the Go-side
+// CREATURE_EVENT_ON_DO_ACTION (38) hook (lua_creature_events.go:839
+// pattern); nothing consumes it until the wyrm AI ports, so the Talk
+// stays silent. A Lua ev5 port would never fire: the player path has
+// no OnEffectHitTarget site, and the dummy leg's Eluna arm
+// (fireSpellDummyEffect) fires creature/GO/item hooks only. DORMANT
+// until Spell.dbc ships the 60587 / 60881 records; the 60881 implicit
+// target is the caster per the tooltip — Wowhead shows no target text,
+// so the self-cast is documented, not DBC-proven.
+func (s *session) fatalStrikeDummyEffect(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
+		return
+	}
+	wyrm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+	if wyrm == nil {
+		return
+	}
+	chance := int32(0)
+	s.server.auraMu.Lock()
+	if aura := s.server.activeCreatureAuras[creatureAuraKeyForMotion(wyrm)][56706]; aura != nil && !aura.Stopped && len(aura.Amounts) > 0 && aura.EffectMask&1 != 0 {
+		chance = aura.Amounts[0]
+	}
+	s.server.auraMu.Unlock()
+	// roll_chance_i(chance): urand(0, 99) < chance.
+	if rand.IntN(100) >= int(chance) {
+		if s.server.Features != nil && s.server.Features.Scripts != nil {
+			if creature := s.server.luaMotionCreature(wyrm); creature != nil {
+				doArgs := []any{scripting.CreatureEventOnDoAction, creature, int32(5)}
+				_, _ = s.server.Features.Scripts.TriggerCreatureEvent(ctx, wyrm.Entry, scripting.CreatureEventOnDoAction, doArgs...)
+				_, _ = s.server.Features.Scripts.TriggerUniqueCreatureEvent(ctx, wyrm.GUID, wyrm.InstanceID, scripting.CreatureEventOnDoAction, doArgs...)
+			}
+		}
+		return
+	}
+	s.castSpellDirect(ctx, 60881, wyrm.GUID)
 }
 
 // Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the
