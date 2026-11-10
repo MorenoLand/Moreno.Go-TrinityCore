@@ -372,6 +372,12 @@ end
 -- TARGET_UNIT_SRC_AREA_ENEMY — one random target, preferring one
 -- more than 15yd from the caster (in-range targets are removed
 -- first; if none remain, the original random pick stands).
+-- AllWorldObjectsInRange is IsWithinDist(go, 15, false)
+-- (GridNotifiers.h:1523-1531): 2D, strict, with both combat reaches
+-- added to the range (_IsWithinDist, Object.cpp:1147-1166; IsInDist2d
+-- is raw-2D < dist, Position.h:144) — the frost-bomb/napalm twin.
+-- Targets here are enemy units: creature reach via GetCombatReach,
+-- player reach the engine's 1.5 constant (napalm precedent).
 local function rocketTargetFilter(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return
@@ -387,7 +393,11 @@ local function rocketTargetFilter(event, spell, effectIndex, targets)
     local pick = list[math.random(#list)]
     local far = {}
     for _, t in ipairs(list) do
-        if caster:GetDistance(t) > 15 then
+        local reach = 1.5
+        if t:GetTypeId() == 3 then -- TYPEID_UNIT
+            reach = t:GetCombatReach()
+        end
+        if t:GetDistance2d(caster) >= 15.0 + caster:GetCombatReach() + reach then
             far[#far + 1] = t
         end
     end
