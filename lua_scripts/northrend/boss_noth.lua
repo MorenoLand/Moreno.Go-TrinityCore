@@ -67,8 +67,8 @@
 -- groundAttackable/balconyTeleport — defer precedes Talk/cast/
 -- phase-flip; the event stays queued, no re-arm consumed).
 -- Talk/DamageTaken/JustSummoned arms ungated per C++ (separate
--- hooks); the justBlinked MoveChase leg after the loop stays
--- ungated (plain melee block, no CASTING check on it).
+-- hooks); the justBlinked MoveChase leg (:309-315, CASTING-gated
+-- per :302) is ported in nothBlinkChase below (500ms poll).
 -- JustSummoned (event 19): summoned:SetFarVisible(true) +
 -- summoned:DoZoneInCombat() (C++ order); KilledUnit
 -- Talk(SAY_SLAY 2) player-gated (event 3, commanders
@@ -87,9 +87,7 @@
 -- (Go fires ev23 on the evade path before ev2, balnazzar
 -- precedent — the cast is gated on phase BALCONY, so a
 -- spawn Reset with phase NONE casts nothing); JustSummoned
--- setActive(true) (no bridge); justBlinked MoveChase
--- workaround (no motion bridge — the boss keeps its victim
--- via the engine instead); summons.Summon tracking /
+-- setActive(true) (no bridge); summons.Summon tracking /
 -- DespawnAll (no bridge); 25-man detection is
 -- creature:Is25ManRaid() (lua_creature_events.go:1830).
 
@@ -116,7 +114,7 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 local timers = {}
 local state = {}
 
-local nothCurse, nothWarrior, nothBlink, nothBalcony, nothWave, nothGround
+local nothCurse, nothWarrior, nothBlink, nothBlinkChase, nothBalcony, nothWave, nothGround
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -267,9 +265,41 @@ nothBlink = function(creature, guid)
     if st ~= nil then
         st.justBlinked = true
     end
+    schedule(guid, "blinkChase", 500, function()
+        nothBlinkChase(creature, guid)
+    end)
     schedule(guid, "blink", 40000, function()
         nothBlink(creature, guid)
     end)
+end
+
+-- C++ boss_noth.cpp:309-315 (PHASE_GROUND, after the UpdateAI event loop):
+-- justBlinked + victim out of melee range -> MotionMaster Clear +
+-- MoveChase(victim), latch cleared. The CASTING early-return (:302-303)
+-- gates the leg, so the poll defers 500ms while casting (file idiom);
+-- the latch waits while out of ground phase or with no victim, exactly
+-- as C++ re-checks it every tick.
+nothBlinkChase = function(creature, guid)
+    local st = state[guid]
+    if st == nil then
+        return
+    end
+    if creature:IsCasting() or st.phase ~= "ground" then
+        schedule(guid, "blinkChase", 500, function()
+            nothBlinkChase(creature, guid)
+        end)
+        return
+    end
+    local victim = creature:GetVictim()
+    if victim == nil or creature:IsWithinMeleeRange(victim) then
+        schedule(guid, "blinkChase", 500, function()
+            nothBlinkChase(creature, guid)
+        end)
+        return
+    end
+    creature:MoveClear()
+    creature:MoveChase(victim)
+    st.justBlinked = false
 end
 
 nothBalcony = function(creature, guid)
