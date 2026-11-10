@@ -19936,12 +19936,16 @@ func init() {
 	// one-shot; EVENT_SAVAGE_POUNCE random-target CatsTargetSelector
 	// leg; SetWalk legs; JustDied DoAction(ACTION_CRAZY_CAT_LADY)
 	// relay PORTED tick 235); npc_feral_defender (entry 34035,
-	// Wowhead-verified 2026-11-05; no Talk arms — the
-	// respawn/feign-death machinery has no bridges; JustDied relay
-	// PORTED tick 235); npc_swarming_guardian (no entry
-	// in C++ evidence, no Talk arms; no registration);
-	// npc_seeping_essence_stalker (no entry in C++ evidence, no
-	// Talk arms; no registration);
+	// Wowhead-verified 2026-11-05; no Talk arms — the full machine
+	// (Reset / START_COMBAT / RUSH / respawn chain / DamageTaken
+	// feign-death / 61906 periodic retarget) PORTED this tick, the
+	// SetAuraStack leg modeled Lua-side (AddAura + 8-stack counter)
+	// and JustDied relay PORTED tick 235); npc_swarming_guardian
+	// (entry 34034, Wowhead-verified this tick; no Talk arms; Reset
+	// 1s -> REACT_AGGRESSIVE + DoCastSelf 63709 PORTED this tick,
+	// registered); npc_seeping_essence_stalker (entry 34098,
+	// Wowhead-verified this tick; no Talk arms; Reset one-shot
+	// DoCastSelf 64458 PORTED this tick, registered);
 	// spell_auriaya_strenght_of_the_pack (64381), spell_auriaya_
 	// sentinel_blast (64392 / 64679), spell_auriaya_agro_creator
 	// (63709), spell_auriaya_feral_essence_removal (64456),
@@ -19956,9 +19960,18 @@ func init() {
 	// npc_sanctum_sentry / npc_feral_defender: Ulduar cats, entries 34014
 	// (boss_auriaya.cpp local enum) / 34035 (Wowhead-verified 2026-11-05,
 	// npc=34035, Ulduar, WotLK) — sentry/defender JustDied DoAction relays
-	// in lua_scripts/northrend/boss_auriaya.lua (tick 235).
+	// in lua_scripts/northrend/boss_auriaya.lua (tick 235); the defender
+	// machine (Reset / START_COMBAT / RUSH / respawn chain / DamageTaken
+	// feign-death / 61906 periodic retarget) ported this tick.
 	RegisterLuaBoss("npc_sanctum_sentry", 34014)
 	RegisterLuaBoss("npc_feral_defender", 34035)
+	// npc_swarming_guardian / npc_seeping_essence_stalker: Ulduar cats,
+	// entries 34034 / 34098 (Wowhead-verified this tick, npc=34034 /
+	// npc=34098, Ulduar, WotLK) — guardian Reset 1s -> REACT_AGGRESSIVE +
+	// DoCastSelf 63709, stalker Reset one-shot DoCastSelf 64458, in
+	// lua_scripts/northrend/boss_auriaya.lua (this tick).
+	RegisterLuaBoss("npc_swarming_guardian", 34034)
+	RegisterLuaBoss("npc_seeping_essence_stalker", 34098)
 
 	// Flame Leviathan (33113), Ulduar —
 	// lua_scripts/northrend/boss_flame_leviathan.lua.

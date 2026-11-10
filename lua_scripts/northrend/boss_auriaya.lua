@@ -115,23 +115,31 @@
 -- npc_feral_defender — entry 34035 (no constant in C++; Wowhead-
 -- verified 2026-11-05, npc=34035, Ulduar, WotLK) — the whole machine
 -- is phase-gated (PHASE_NONE/PHASE_COMBAT :111-112) and its timer legs
--- (EVENT_RUSH :389-393, EVENT_START_COMBAT :384, respawn chain
--- :395-415) ride CatsTargetSelector random-target selection; the
+-- (EVENT_RUSH :386-394, EVENT_START_COMBAT :379-384, respawn chain
+-- :395-417) ride CatsTargetSelector random-target selection; the
 -- DamageTaken (:427-446) feign-death machinery — health (GetHealth/
--- GetMaxHealth) and aura (creature:HasAura) bridges exist, but the
--- unit stays blocked on unbridged SetAuraStack + random-target
--- selection (SetReactState/AttackStop/flag/threat/gravity bridges are
--- live — the stale list above is retracted) — NO registration for the
--- machine; JustDied (:448-453) PORTED 2026-11-05 in feralDefenderDied
--- (summon-essence self-cast 64457 + DoAction(ACTION_DEFENDER_DIED)
--- relay; entry 34035 registered in boss_ai.go).
--- npc_swarming_guardian — the 1s scheduler self-cast
--- SPELL_AGRO_CREATOR 63709 (:464-474) is timer-driven but has no
--- creature entry in C++ evidence — NO registration; the 63709
--- pounce leg needs target search anyway.
--- npc_seeping_essence_stalker — Reset one-shot self-cast
--- SPELL_SEEPING_ESSENCE 64458 (:494-499), not timer-driven, no
--- entry in C++ evidence — NO registration.
+-- GetMaxHealth) and aura (creature:HasAura) bridges exist, and the
+-- SetReactState/AttackStop/flag/threat/gravity bridges are live —
+-- PORTED this tick: SetAuraStack (no bridge) is modeled Lua-side
+-- (AddAura 64455 + per-GUID 8-stack counter, -1 per feign via the
+-- 64456 script twin, aura removed at 0); the 61906 periodic retarget
+-- (AuraScript, no bridge) rides a Lua 5s tick; JustDied (:448-453)
+-- PORTED 2026-11-05 in feralDefenderDied (summon-essence self-cast
+-- 64457 + DoAction(ACTION_DEFENDER_DIED) relay; entry 34035
+-- registered in boss_ai.go).
+-- npc_swarming_guardian — entry 34034 (no constant in C++; Wowhead-
+-- verified this tick, npc=34034, Ulduar, WotLK) — Reset (:464-474):
+-- REACT_PASSIVE + 1s scheduler -> REACT_AGGRESSIVE + DoCastSelf
+-- SPELL_AGRO_CREATOR 63709 PORTED this tick in guardianReset (the
+-- Auriaya JustSummoned relay is a no-op: boss_auriaya defines no
+-- JustSummoned override; the 63709 pounce/threat leg lives in the
+-- unported spell_auriaya_agro_creator SpellScript); registered in
+-- boss_ai.go this tick.
+-- npc_seeping_essence_stalker — entry 34098 (no constant in C++;
+-- Wowhead-verified this tick, npc=34098, Ulduar, WotLK) — Reset
+-- one-shot self-cast SPELL_SEEPING_ESSENCE 64458 (:494-499) PORTED
+-- this tick in stalkerReset (JustSummoned relay no-op, as the
+-- guardian; UpdateAI empty); registered in boss_ai.go this tick.
 -- spell_auriaya_strenght_of_the_pack (64381),
 -- spell_auriaya_sentinel_blast (64392 / 64679),
 -- spell_auriaya_agro_creator (63709),
@@ -146,6 +154,8 @@
 local ENTRY_AURIAYA = 33515
 local ENTRY_SANCTUM_SENTRY = 34014
 local ENTRY_FERAL_DEFENDER = 34035
+local ENTRY_SWARMING_GUARDIAN = 34034
+local ENTRY_SEEPING_ESSENCE_STALKER = 34098
 
 -- BOSS_AURIAYA = 6 (ulduar.h:42); DATA_NINE_LIVES 30763077 /
 -- DATA_CRAZY_CAT_LADY 30063007 (boss_auriaya.cpp:108-109);
@@ -176,8 +186,32 @@ local SPELL_RIP_FLESH          = 64375
 local SPELL_SAVAGE_POUNCE        = 64666
 local SPELL_STRENGHT_OF_THE_PACK = 64369
 local SPELL_SUMMON_ESSENCE       = 64457
+local SPELL_AGRO_CREATOR         = 63709
+local SPELL_SEEPING_ESSENCE      = 64458
+local SPELL_SHADOW_PAWS          = 64479
+local SPELL_REDUCE_CRITCAL       = 64481
+local SPELL_FERAL_ESSENCE        = 64455
+local SPELL_RANDOM_AGRO_PERIODIC = 61906
+local SPELL_FERAL_RUSH           = 64496
+local SPELL_FERAL_POUNCE         = 64478
+local SPELL_DROWNED_STATE        = 64462
+local SPELL_PERMANENT_FEIGN_DEATH = 58951
+local SPELL_FERAL_ESSENCE_APPLICATION_REMOVAL = 64456
+local SPELL_CLEAR_ALL_DEBUFFS    = 34098
+local SPELL_FULL_HEAL            = 64460
+
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
+
+-- FERAL_ESSENCE stack counts per defender GUID (the SetAuraStack
+-- twin — see feralDefenderDamageTaken); Reset sets 8, each feign
+-- spends one, death/leave-combat clears via feralDefenderDied /
+-- cancelCombatTimers + Reset re-init.
+local defenderStacks = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -233,6 +267,7 @@ local function randomThreatPlayerSkipFirst(creature)
     end
     return candidates[math.random(#candidates)]
 end
+
 
 -- C++ EVENT_SONIC_SCREECH (:234-236): DoCastVictim
 -- (SPELL_SONIC_SCREECH 64422) (2-arg non-triggered), 48s init
@@ -569,11 +604,294 @@ end
 -- revives (DamageTaken :427-446) never reach JustDied, so this fires
 -- only on a real death.
 local function feralDefenderDied(event, creature)
+    cancelCombatTimers(event, creature)
+    defenderStacks[creature:GetGUIDLow()] = nil
     creature:CastSpell(creature, SPELL_SUMMON_ESSENCE, true)
     local auriaya = creature:GetInstanceCreature(BOSS_AURIAYA_DATA)
     if auriaya then
         auriaya:DoAction(ACTION_DEFENDER_DIED)
     end
+end
+
+-- C++ CatsTargetSelector ring pick (boss_auriaya.cpp:120-134):
+-- threat-list player alive in [minDist, maxDist) with LOS; the
+-- distance is C++ GetDistance (both reaches subtracted,
+-- Object.cpp:1169) — the sentry savage-pounce twin (reach 1.5,
+-- reach-exact). skipVictim mirrors the SelectTarget offset-1 legs
+-- (victim first, popped before the draw).
+local function randomRingTarget(creature, minDist, maxDist, skipVictim)
+    local victim = creature:GetVictim()
+    local victimGuid = nil
+    if victim ~= nil then
+        victimGuid = victim:GetGUID()
+    end
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead()
+                and (not skipVictim or victimGuid == nil
+                    or unit:GetGUID() ~= victimGuid) then
+            local d = creature:GetDistance(unit) - creature:GetCombatReach() - 1.5
+            if d >= minDist and d < maxDist and creature:IsWithinLOS(unit) then
+                candidates[#candidates + 1] = unit
+            end
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ SelectTarget(Random, 0, 0.0f, true): random threat-list player
+-- alive, no distance filter, no skip.
+local function randomAliveThreatPlayer(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
+-- C++ EVENT_RUSH (:386-394): SelectTarget(Random, 1,
+-- CatsTargetSelector(me, 10.0f, 11.0f)) -> DoCast(target,
+-- SPELL_FERAL_RUSH 64496, triggered); found: 5s re-arm; none: 1s.
+local function defenderRushTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "rush", 500, function()
+            defenderRushTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomRingTarget(creature, 10.0, 11.0, true)
+    if target then
+        creature:CastSpell(target, SPELL_FERAL_RUSH, true)
+        schedule(guid, "rush", 5000, function()
+            defenderRushTick(creature, guid)
+        end)
+    else
+        schedule(guid, "rush", 1000, function()
+            defenderRushTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ spell_auriaya_random_agro_periodic (61906, :580-616): 5s
+-- periodic — no AuraScript bridge, so the leg rides this Lua 5s tick
+-- (the aura itself is still cast triggered in Reset; its engine
+-- periodic is a no-op without the script). PASSIVE-gated exactly
+-- like the C++ handler; far target 15-25yd ring + LOS -> AddThreat
+-- 3e6 + CastSpell FERAL_POUNCE 64478 triggered + AttackStart; else
+-- any random threat player -> AddThreat 3e6 + AttackStart; none:
+-- nothing. No IsCasting defer — aura periodics tick outside UpdateAI.
+local function defenderRetargetTick(creature, guid)
+    if creature:GetReactState() ~= REACT_PASSIVE then
+        local target = randomRingTarget(creature, 15.0, 25.0, false)
+        local farTarget = target ~= nil
+        if not target then
+            target = randomAliveThreatPlayer(creature)
+        end
+        if target then
+            creature:AddThreat(target, 3000000)
+            if farTarget then
+                creature:CastSpell(target, SPELL_FERAL_POUNCE, true)
+            end
+            creature:AttackStart(target)
+        end
+    end
+    schedule(guid, "retarget", 5000, function()
+        defenderRetargetTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_START_COMBAT (:379-384): phase COMBAT +
+-- SetReactState(AGGRESSIVE) + random target AttackStart +
+-- EVENT_RUSH in 1s. The phase needs no Lua variable — the schedule
+-- encodes it (RUSH only exists after this arm).
+local function defenderStartCombatTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "startcombat", 500, function()
+            defenderStartCombatTick(creature, guid)
+        end)
+        return
+    end
+    creature:SetReactState(REACT_AGGRESSIVE)
+    local target = randomAliveThreatPlayer(creature)
+    if target then
+        creature:AttackStart(target)
+    end
+    schedule(guid, "rush", 1000, function()
+        defenderRushTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_RESPAWN_DEFENDER_2 (:402-404): RemoveAurasDueToSpell
+-- (SPELL_DROWNED_STATE 64462) — creature:RemoveAura twin.
+local function defenderRespawnTick2(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "respawn2", 500, function()
+            defenderRespawnTick2(creature, guid)
+        end)
+        return
+    end
+    creature:RemoveAura(SPELL_DROWNED_STATE)
+end
+
+-- C++ EVENT_RESPAWN_DEFENDER_3 (:405-417): RemoveAurasDueToSpell
+-- (FEIGN_DEATH) + DoCastSelf(FULL_HEAL 64460, triggered) +
+-- RemoveFlag(NOT_SELECTABLE) + SetReactState(AGGRESSIVE) +
+-- SetDisableGravity(false) + SetHover(false) + random target
+-- AttackStart + EVENT_RUSH in 1s.
+local function defenderRespawnTick3(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "respawn3", 500, function()
+            defenderRespawnTick3(creature, guid)
+        end)
+        return
+    end
+    creature:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+    creature:CastSpell(creature, SPELL_FULL_HEAL, true)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:SetDisableGravity(false)
+    creature:SetHover(false)
+    local target = randomAliveThreatPlayer(creature)
+    if target then
+        creature:AttackStart(target)
+    end
+    schedule(guid, "rush", 1000, function()
+        defenderRushTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_RESPAWN_DEFENDER (:395-401): SetDisableGravity(true) +
+-- SetHover(true) + DoCastSelf(DROWNED_STATE 64462, triggered) +
+-- _2 in 3s + _3 in 5s (both scheduled from here, C++-exact).
+local function defenderRespawnTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "respawn", 500, function()
+            defenderRespawnTick(creature, guid)
+        end)
+        return
+    end
+    creature:SetDisableGravity(true)
+    creature:SetHover(true)
+    creature:CastSpell(creature, SPELL_DROWNED_STATE, true)
+    schedule(guid, "respawn2", 3000, function()
+        defenderRespawnTick2(creature, guid)
+    end)
+    schedule(guid, "respawn3", 5000, function()
+        defenderRespawnTick3(creature, guid)
+    end)
+end
+
+-- C++ npc_feral_defender::DamageTaken (:427-446): lethal-or-equal
+-- damage AND HasAura(FERAL_ESSENCE) zeroes the hit (DamageTaken
+-- form — fires on lethal hits, no postDamage>0 guard, nefarian
+-- precedent); unless already feigning (HasAura FEIGN_DEATH):
+-- PASSIVE + AttackStop + NOT_SELECTABLE + self-cast FEIGN_DEATH
+-- 58951 triggered + self-cast 64456 triggered (the essence-removal
+-- SpellScript: ModStackAmount(-1) — modeled Lua-side below) +
+-- self-cast SUMMON_ESSENCE 64457 triggered + self-cast CLEAR_ALL_
+-- DEBUFFS 34098 triggered + ResetThreatList + RESPAWN_DEFENDER in
+-- 30s + CancelEvent(RUSH). The 8-stack FERAL_ESSENCE latch is the
+-- SetAuraStack twin (no bridge): Reset applies the aura via
+-- creature:AddAura (HasAura reads the presence set) and the count
+-- lives in defenderStacks; at 0 the aura is removed, so the next
+-- lethal hit kills — 8 feigns + the death = nine lives.
+local function feralDefenderDamageTaken(event, creature, attacker, damage)
+    local newDamage = damage
+    if damage >= creature:GetHealth() and creature:HasAura(SPELL_FERAL_ESSENCE) then
+        newDamage = 0
+        if not creature:HasAura(SPELL_PERMANENT_FEIGN_DEATH) then
+            local guid = creature:GetGUIDLow()
+            creature:SetReactState(REACT_PASSIVE)
+            creature:AttackStop()
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:CastSpell(creature, SPELL_PERMANENT_FEIGN_DEATH, true)
+            creature:CastSpell(creature, SPELL_FERAL_ESSENCE_APPLICATION_REMOVAL, true)
+            local stacks = defenderStacks[guid] or 0
+            if stacks > 0 then
+                stacks = stacks - 1
+                defenderStacks[guid] = stacks
+                if stacks == 0 then
+                    creature:RemoveAura(SPELL_FERAL_ESSENCE)
+                end
+            end
+            creature:CastSpell(creature, SPELL_SUMMON_ESSENCE, true)
+            creature:CastSpell(creature, SPELL_CLEAR_ALL_DEBUFFS, true)
+            creature:ResetAllThreat()
+            schedule(guid, "respawn", 30000, function()
+                defenderRespawnTick(creature, guid)
+            end)
+            local per = timers[guid]
+            if per and per["rush"] then
+                RemoveEventById(per["rush"])
+                per["rush"] = nil
+            end
+        end
+    end
+    return false, newDamage
+end
+
+-- C++ npc_feral_defender::Reset (:351-363): SetReactState(PASSIVE)
+-- + DoCastSelf(SHADOW_PAWS 64479, triggered) + DoCastSelf
+-- (REDUCE_CRITCAL 64481, triggered) + SetAuraStack(FERAL_ESSENCE
+-- 64455, me, 8) — no bridge; AddAura + defenderStacks twin, see
+-- DamageTaken — + DoCastSelf(RANDOM_AGRO_PERIODIC 61906, triggered)
+-- + phase NONE + EVENT_START_COMBAT in 1s; the JustSummoned relay
+-- (:361-362) is a no-op (no boss override, as the guardian).
+-- The 61906 periodic retarget rides defenderRetargetTick (5s, from
+-- Reset, re-arming — the AuraScript itself has no bridge).
+local function feralDefenderReset(event, creature)
+    cancelCombatTimers(event, creature)
+    local guid = creature:GetGUIDLow()
+    defenderStacks[guid] = 8
+    creature:SetReactState(REACT_PASSIVE)
+    creature:CastSpell(creature, SPELL_SHADOW_PAWS, true)
+    creature:CastSpell(creature, SPELL_REDUCE_CRITCAL, true)
+    creature:AddAura(SPELL_FERAL_ESSENCE)
+    creature:CastSpell(creature, SPELL_RANDOM_AGRO_PERIODIC, true)
+    schedule(guid, "startcombat", 1000, function()
+        defenderStartCombatTick(creature, guid)
+    end)
+    schedule(guid, "retarget", 5000, function()
+        defenderRetargetTick(creature, guid)
+    end)
+end
+
+-- npc_swarming_guardian — C++ Reset (:464-474): SetReactState(PASSIVE)
+-- + 1s TaskScheduler arm -> SetReactState(AGGRESSIVE) +
+-- DoCastSelf(SPELL_AGRO_CREATOR 63709) (2-arg non-triggered); the
+-- Auriaya JustSummoned relay (:472-473) is a no-op — boss_auriaya
+-- defines no JustSummoned override. The 63709 dummy-effect pounce /
+-- threat leg lives in spell_auriaya_agro_creator (SpellScript, no
+-- bridge); the cast itself ports. The scheduler arm runs outside
+-- UpdateVictim / the CASTING gate in C++, so no 500ms defer.
+local function guardianAggroTick(creature, guid)
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:CastSpell(creature, SPELL_AGRO_CREATOR)
+end
+
+local function guardianReset(event, creature)
+    cancelCombatTimers(event, creature)
+    creature:SetReactState(REACT_PASSIVE)
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "guardianAggro", 1000, function()
+        guardianAggroTick(creature, guid)
+    end)
+end
+
+-- npc_seeping_essence_stalker — C++ Reset (:493-499): one-shot
+-- DoCastSelf(SPELL_SEEPING_ESSENCE 64458) (2-arg non-triggered); the
+-- Auriaya JustSummoned relay (:498) is a no-op (no override, as the
+-- guardian); UpdateAI is empty.
+local function stalkerReset(event, creature)
+    creature:CastSpell(creature, SPELL_SEEPING_ESSENCE)
 end
 
 RegisterCreatureEvent(ENTRY_AURIAYA, 1, auriayaEnterCombat)
@@ -587,4 +905,11 @@ RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 1, sentryEnterCombat)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 4, sentryDied)
 RegisterCreatureEvent(ENTRY_SANCTUM_SENTRY, 23, sentryReset)
+RegisterCreatureEvent(ENTRY_FERAL_DEFENDER, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_FERAL_DEFENDER, 4, feralDefenderDied)
+RegisterCreatureEvent(ENTRY_FERAL_DEFENDER, 9, feralDefenderDamageTaken)
+RegisterCreatureEvent(ENTRY_FERAL_DEFENDER, 23, feralDefenderReset)
+RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 4, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 23, guardianReset)
+RegisterCreatureEvent(ENTRY_SEEPING_ESSENCE_STALKER, 23, stalkerReset)
