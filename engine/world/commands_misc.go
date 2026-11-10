@@ -352,8 +352,9 @@ func destroyItemCountSlotRank(bag, slot uint32) int {
 // (the C++ quirk, ported verbatim). Scope is the C++ one: inventory,
 // keyring, bags, equipment and bank — the character_inventory join
 // excludes buyback slots 74-85 and rows with no inventory slot
-// (mail/auction/guild-bank items C++ never visits). In-trade items
-// have no Go marker (C++ skips IsInTrade items; documented gap).
+// (mail/auction/guild-bank items C++ never visits). In-trade items are
+// skipped via Server.itemInTrade (Item::mb_in_trade mirror, trade.go),
+// matching C++ skipping IsInTrade items in every leg.
 func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64, itemEntry uint32, count uint32) uint32 {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || count == 0 {
 		return 0
@@ -393,6 +394,9 @@ func (s *session) destroyPlayerItemCount(ctx context.Context, targetGUID uint64,
 	for _, it := range items {
 		if remcount >= count {
 			break
+		}
+		if s.server.itemInTrade(it.guid) {
+			continue
 		}
 		if it.count+remcount <= count {
 			// Player::DestroyItemCount (Player.cpp:12727) funnels whole-stack

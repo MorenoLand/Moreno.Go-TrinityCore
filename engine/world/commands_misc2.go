@@ -2542,10 +2542,15 @@ func (s *session) handleCmdUnstuck(ctx context.Context, args []string) bool {
 		return false
 	}
 	if s.player == nil {
-		s.sendSysMessage("You must be in game to use that command.")
-		return true
-	}
-	if !s.commandAllowed(ctx, permissionCommandsUseUnstuckWithArgs) {
+		// Console: C++ skips only the self-cast branch when the session
+		// is null (cs_misc.cpp:919) and runs the args path below, so
+		// console .unstuck <player> <loc> teleports the named player.
+		// A bare console .unstuck has no target; C++ returns false on
+		// empty args (:930-931).
+		if len(args) == 0 {
+			return false
+		}
+	} else if !s.commandAllowed(ctx, permissionCommandsUseUnstuckWithArgs) {
 		s.sendSysMessage("The self-unstuck cast (spell 7355) is not available: spell casting has no Go bridge on this path.")
 		return true
 	}
