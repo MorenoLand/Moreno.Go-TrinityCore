@@ -1235,6 +1235,12 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID, instanceID u
 	s.motionMu.Lock()
 	motion, created := s.motionForLocked(ctx, guid, entry, mapID, instanceID, x, y, z, orientation, moveType, wander, walkSpeedRate, runSpeedRate, currentHealth)
 	s.motionMu.Unlock()
+	// Creature::AIM_Initialize (Creature.cpp:1085, AddToWorld): a fresh
+	// vehicle kit's Reset() arms ApplyAllImmunities before the create
+	// events fire — same order here (Reset before instance-create/OnAdd).
+	if created {
+		s.applyVehicleImmunities(motion)
+	}
 	// Eluna INSTANCE_EVENT_ON_CREATURE_CREATE (5) fires from
 	// Creature::AddToWorld (Creature.cpp:301); the funnel materializes the
 	// creature on the map, so it fires here — after the lock is released,

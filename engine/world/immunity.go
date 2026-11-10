@@ -18,6 +18,7 @@ const (
 	spellAttr3DeathPersistent          uint32 = 0x00100000 // SPELL_ATTR3_DEATH_PERSISTENT (SharedDefines.h:543) — auras with this attribute survive RemoveAllAurasOnDeath (Unit.cpp)
 	spellAttr1UnaffectedBySchoolImmune uint32 = 0x00010000 // SPELL_ATTR1_UNAFFECTED_BY_SCHOOL_IMMUNE (SharedDefines.h:465) — ATTR1 is Go's AttributesEx (Spell.dbc field 5)
 	mechanicBanish                     uint32 = 18         // MECHANIC_BANISH (SharedDefines.h:1375)
+	mechanicShield                     uint32 = 19         // MECHANIC_SHIELD (SharedDefines.h:1376)
 	mechanicInvulnerability            uint32 = 25         // MECHANIC_INVULNERABILITY (SharedDefines.h:1382)
 	mechanicImmuneShield               uint32 = 29         // MECHANIC_IMMUNE_SHIELD (SharedDefines.h:1386)
 	mechanicDisoriented                uint32 = 2          // MECHANIC_DISORIENTED (SharedDefines.h:1359)

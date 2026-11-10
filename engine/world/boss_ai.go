@@ -16251,8 +16251,9 @@ func init() {
 	// <33% guardian/vault-walker awaken arms, the JustDied
 	// SetData(DATA_ANCIENT_DOOR, DONE)/SetData(DATA_MINIONS,
 	// SPECIAL) legs and the Reset freeze-aura/flag/faction legs
-	// are instance-model/SpellHit-15/flag/faction-blocked; the
-	// KilledUnit Talk is queued (no CreatureEvent id). The stone
+	// are instance-model/SpellHit-14/flag/faction-blocked; the
+	// KilledUnit Talk rides event 3 (CREATURE_EVENT_ON_TARGET_DIED).
+	// The stone
 	// keepers (4857) run their JustDied triggered self-cast of
 	// Self Destruct 9874 (headless_horseman/omen onDied self-cast
 	// precedent); their faction/flag/root and DATA_STONE_KEEPERS

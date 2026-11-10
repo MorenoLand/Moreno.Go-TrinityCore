@@ -508,6 +508,94 @@ func (s *Server) getVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) *Ve
 	return nil
 }
 
+// applyVehicleImmunities mirrors Vehicle::ApplyAllImmunities
+// (Vehicle.cpp:160-223): the immunity + root arms of Vehicle::Reset.
+// Every vehicle base is immune to the knockback effects; a mechanical
+// non-boss base additionally takes the heal/dispel effect rows, the
+// periodic-heal / school-immunity / unattackable / absorb /
+// damage-shield / split-damage / resistance / stat / damage-taken state
+// rows, and the banish / shield / immune-shield mechanic rows — all
+// granted by spell 0, so addCreatureSpellImmuneRow dedupes re-application.
+// The rows land in the ScriptSpellImmune store the creature per-effect
+// eval consults (immunity.go creatureImmuneToSpellEffect: IMMUNITY_EFFECT,
+// IMMUNITY_MECHANIC, IMMUNITY_STATE); the mechanical heal row overlaps
+// the template arm (Creature.cpp:2336-2341) and is applied anyway,
+// matching C++ order. Fixed-position vehicles (cannons) and the hardcoded
+// cannon entries root the base via ScriptRooted, the SetControlled
+// (UNIT_STATE_ROOT) twin; the siege-vehicle ids root and take the
+// slow-aura immunity, while the salvaged ids drop the damage-taken row
+// the mechanical arm just added (apply=false).
+// Callers are the two Reset fire sites: AIM_Initialize
+// (Creature.cpp:1085, AddToWorld — both modes) at kit creation, and the
+// JustAppeared tick (Creature.cpp:699-704, compat mode only) via
+// fireCreatureSpawned. No compat gate on the re-apply: C++ gates the
+// JustAppeared Reset on compat mode only because non-compat respawns
+// rebuild the object (AIM_Initialize re-applies); Go reuses the motion,
+// so the re-apply runs for both modes — the rows dedupe and the root is
+// re-armed after the JustRespawned clear. The InstallAllAccessories half
+// of Reset is not repeated here: at first spawn no passengers exist yet
+// and the install rides the step sync (syncCreatureVehiclePassengers);
+// on respawn the kit and its seated accessories persist in Go (no
+// removeVehicleKit on death), so there is nothing to reinstall — the
+// remove+reinstall fate of a despawned accessory is an open follow-up,
+// not a blind port. The OnReset script hook has no Eluna event
+// (VehicleEvents 3 is UNUSED) and no C++ VehicleScript implementor, so
+// it is vacuous.
+func (s *Server) applyVehicleImmunities(motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	s.motionMu.Lock()
+	guid, mapID, instanceID := motion.GUID, motion.Map, motion.InstanceID
+	entry, creatureType, typeFlags := motion.Entry, motion.CreatureType, motion.TypeFlags
+	s.motionMu.Unlock()
+	kit := s.getVehicleKit(mapID, instanceID, guid)
+	if kit == nil {
+		return
+	}
+	key := creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: guid}
+	add := func(op, immType uint32) {
+		s.addCreatureSpellImmuneRow(key, op, immType, 0)
+	}
+	add(immunityOpEffect, spellEffectKnockBack)
+	add(immunityOpEffect, spellEffectKnockBackDest)
+	if creatureType == creatureTypeMechanical && typeFlags&creatureTypeFlagBossMob == 0 {
+		add(immunityOpEffect, spellEffectHeal)
+		add(immunityOpEffect, spellEffectHealPct)
+		add(immunityOpEffect, spellEffectDispel)
+		add(immunityOpState, spellAuraPeriodicHeal)
+		add(immunityOpState, spellAuraSchoolImmunity)
+		add(immunityOpState, spellAuraModUnattackable)
+		add(immunityOpState, SpellAuraSchoolAbsorb)
+		add(immunityOpMechanic, mechanicBanish)
+		add(immunityOpMechanic, mechanicShield)
+		add(immunityOpMechanic, mechanicImmuneShield)
+		add(immunityOpState, spellAuraDamageShield)
+		add(immunityOpState, spellAuraSplitDamagePct)
+		add(immunityOpState, spellAuraModResistance)
+		add(immunityOpState, spellAuraModStat)
+		add(immunityOpState, spellAuraModDamagePercentTaken)
+	}
+	rooted := entry == 30236 || entry == 39759
+	if kit.VehicleInfo != nil {
+		if kit.VehicleInfo.Flags&wotlk.VehicleFlagFixedPosition != 0 {
+			rooted = true
+		}
+		switch kit.VehicleInfo.ID {
+		case 160, 244, 510, 452, 543:
+			rooted = true
+			add(immunityOpState, spellAuraModDecreaseSpeed)
+		case 335, 336, 338:
+			s.removeCreatureSpellImmuneRows(key, immunityOpState, spellAuraModDamagePercentTaken, 0)
+		}
+	}
+	if rooted {
+		s.motionMu.Lock()
+		motion.ScriptRooted = true
+		s.motionMu.Unlock()
+	}
+}
+
 func (s *Server) removeVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) {
 	if s == nil {
 		return

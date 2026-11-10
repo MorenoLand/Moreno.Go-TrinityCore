@@ -2453,7 +2453,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// event, paused/resumed via SetEscortPaused; the EscortAI phase
 	// machine (WaypointReached scripts) lives in Lua ports. The Start
 	// respawn-queue leg (ScriptedEscortAI.cpp:280-285) rides along:
-	// queueEscortRespawn writes the respawn row for escort-quest NPCs
+	// queueEscortRespawnTime queues the respawn record + row for
+	// escort-quest NPCs
 	// (CONFIG_RESPAWN_DYNAMIC_ESCORTNPC + SPAWNGROUP_FLAG_ESCORTQUESTNPC),
 	// ordered before the engaged/already-escorting returns in C++.
 	methods["StartEscort"] = func(ctx context.Context, args []any) ([]any, error) {
@@ -2471,7 +2472,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		motion.EscortPlayerGUID = playerGUID
 		s.motionMu.Unlock()
-		s.queueEscortRespawn(ctx, motion)
+		s.queueEscortRespawnTime(ctx, motion)
 		return nil, nil
 	}
 	// GetEscortPlayer is ScriptedEscortAI::GetPlayerForEscort: the
@@ -7466,6 +7467,11 @@ func (s *Server) fireCreatureSpawned(ctx context.Context, motion *creatureMotion
 	if creature == nil {
 		return
 	}
+	// Creature::Update JustAppeared tick (Creature.cpp:699-704): the
+	// compat-mode vehicleKit Reset() re-applies ApplyAllImmunities
+	// before AI()->JustAppeared() — the On_Reset/OnSpawn pair below.
+	// applyVehicleImmunities documents why the re-apply is ungated.
+	s.applyVehicleImmunities(motion)
 	resetArgs := []any{scripting.CreatureEventOnReset, creature}
 	_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnReset, resetArgs...)
 	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnReset, resetArgs...)

@@ -3090,6 +3090,7 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 		target.Health = target.MaxHealth
 	}
 
+	var freshMotion *creatureMotion
 	s.motionMu.Lock()
 	if motion := s.findCreatureMotionLocked(mapID, instanceID, target.GUID); motion != nil {
 		target.X, target.Y, target.Z, target.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
@@ -3158,8 +3159,15 @@ func (s *Server) loadCombatTargetForInstance(ctx context.Context, guid uint64, m
 				s.createVehicleKit(target.Map, instanceID, target.GUID, st.VehicleID, uint32(entry), false)
 			}
 		}
+		freshMotion = motion
 	}
 	s.motionMu.Unlock()
+	// Creature::AIM_Initialize (Creature.cpp:1085, AddToWorld): the
+	// fresh kit's Reset() arms ApplyAllImmunities — same twin as the
+	// motionFor call site, after the lock is released.
+	if freshMotion != nil {
+		s.applyVehicleImmunities(freshMotion)
+	}
 	return target, nil
 }
 

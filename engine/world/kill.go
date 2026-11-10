@@ -2731,57 +2731,6 @@ func (m *creatureMotion) IsEscorted() bool {
 	return m != nil && m.EscortPlayerGUID != 0
 }
 
-// queueEscortRespawn mirrors the respawn-queue leg of EscortAI::Start
-// (ScriptedEscortAI.cpp:280-285) and FollowerAI::StartFollow
-// (ScriptedFollowerAI.cpp:160-164): with
-// CONFIG_RESPAWN_DYNAMIC_ESCORTNPC set and SPAWNGROUP_FLAG_ESCORTQUESTNPC
-// on the spawn's group, starting the escort queues a respawn from the
-// point it starts — SaveRespawnTime(GetRespawnDelay()). The row is the
-// restart half: without it a server restart mid-escort leaves the NPC
-// streamed dead at its escort position instead of reviving at home after
-// its delay (loadCreatureRespawnTimes seeds the record from the row).
-// The write is the non-compat arm only: Creature::SaveRespawnTime
-// (Creature.cpp:2535-2556) in compatibility mode ignores forceDelay and
-// re-saves the live m_respawnTime, which LoadFromDB seeds from the loaded
-// respawn row (Creature.cpp:1718) and is 0 for a normally-spawned live
-// creature — a 0-time row is delete-only on load (Map.cpp:4460-4465),
-// so the compat leg is a no-op re-save Go has no live value for. The
-// delay-0 arm is the C++ forceDelay-falsy leg: SaveRespawnTime(0) falls
-// through to m_respawnTime (0) and Map::SaveRespawnTime deletes the row,
-// so a zero delay deletes rather than writing a now row. Summons and
-// spawnless motions take the early return (Creature.cpp:2537).
-func (s *Server) queueEscortRespawn(ctx context.Context, motion *creatureMotion) {
-	if s == nil || motion == nil || !s.Config.RespawnDynamicEscortNPC {
-		return
-	}
-	s.motionMu.Lock()
-	guid := motion.GUID
-	mapID := motion.Map
-	instanceID := motion.InstanceID
-	isSummon := motion.IsTempSummon
-	s.motionMu.Unlock()
-	spawnID := uint32(guid & 0x00FFFFFF)
-	if isSummon || spawnID == 0 {
-		return
-	}
-	if s.WorldStore == nil || s.WorldStore.DB == nil {
-		return
-	}
-	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnTypeCreature, spawnID, mapID, instanceID)
-	if !ok || tmpl == nil || tmpl.Flags&spawnGroupFlagEscortQuestNPC == 0 {
-		return
-	}
-	if tmpl.Flags&spawnGroupFlagCompat != 0 {
-		return
-	}
-	delay := s.creatureRespawnDelaySeconds(ctx, mapID, instanceID, guid)
-	if delay == 0 {
-		s.deleteCreatureRespawnRow(ctx, spawnID, mapID, instanceID)
-		return
-	}
-	s.saveCreatureRespawnRow(ctx, spawnID, time.Now().Add(time.Duration(delay)*time.Second), mapID, instanceID)
-}
-
 // escortRespawnExempt mirrors the escort arm of Map::CheckRespawn
 // (Map.cpp:3066-3072): with CONFIG_RESPAWN_DYNAMIC_ESCORTNPC set and
 // SPAWNGROUP_FLAG_ESCORTQUESTNPC on the spawn's group, a live instance
