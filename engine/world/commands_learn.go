@@ -1060,8 +1060,10 @@ func (s *session) handleLearnAllTalents(ctx context.Context) bool {
 		}
 		s.learnTalentDirect(ctx, talentID, rank, spellID)
 	}
-	s.player.FreeTalentPointsOverride = 0
-	s.player.FreeTalentPointsOverrideSet = true
+	// cs_learn.cpp:225: the trailing SetFreeTalentPoints(0) — the
+	// override write + event-16 fire live in the shared
+	// setFreeTalentPointsOverride (skills.go).
+	s.setFreeTalentPointsOverride(ctx, 0)
 	_ = s.sendTalentsInfo(false)
 	// LANG_COMMAND_LEARN_CLASS_TALENTS inlined from TDB enUS.
 	s.sendSysMessage("You have learned all your class talents.")

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -34,6 +35,33 @@ func (s *session) freeTalentPoints() uint32 {
 		return 0
 	}
 	return totalPoints - spent
+}
+
+// setFreeTalentPointsOverride mirrors Player::SetFreeTalentPoints
+// (Player.cpp:4087-4090): the points write plus the
+// OnFreeTalentPointsChanged hook (event 16), fired from the set itself —
+// so every SetFreeTalentPoints-equivalent write fires, not just the Lua
+// binding. Callers: the Lua SetFreeTalentPoints binding, .learn all
+// talents (cs_learn.cpp:225) and .modify talentpoints (cs_modify.cpp:356).
+func (s *session) setFreeTalentPointsOverride(ctx context.Context, points uint32) {
+	if s.player == nil {
+		return
+	}
+	s.player.FreeTalentPointsOverride = points
+	s.player.FreeTalentPointsOverrideSet = true
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentChange, s.luaPlayer(), points)
+}
+
+// fireTalentPointsChanged fires PLAYER_EVENT_ON_TALENT_CHANGE (16) with
+// the current free-talent total, mirroring the Player::SetFreeTalentPoints
+// call C++ makes at the end of LearnTalent (:25557), ResetTalents
+// (:4002/:4064) and InitTalentForLevel (GiveLevel, :2833). The value is
+// read through freeTalentPoints so override and derived paths agree.
+func (s *session) fireTalentPointsChanged(ctx context.Context) {
+	if s.player == nil {
+		return
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentChange, s.luaPlayer(), s.freeTalentPoints())
 }
 
 // learnTalent mirrors Player::LearnTalent (Player.cpp:25460), in C++ check
@@ -198,6 +226,16 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 	learnedPkt.WriteU32(spellID)
 	learnedPkt.WriteU16(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedPkt.Bytes(), true)
+	// Player::LearnTalent calls SetFreeTalentPoints (Player.cpp:25557)
+	// before firing OnLearnTalents (:25559) — the recompute fires event
+	// 16 with the new total, ahead of the event-39 fire below.
+	s.fireTalentPointsChanged(ctx)
+	// Player::LearnTalent fires OnLearnTalents (Player.cpp:25559) at the
+	// end of a successful learn — (event, player, talentId, talentRank,
+	// spellid) per PlayerHooks.cpp:32. Firing here, inside the shared
+	// learn, covers the Lua binding and both client opcode paths
+	// (CMSG_LEARN_TALENT / CMSG_LEARN_PREVIEW_TALENTS), matching C++.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLearnTalents, s.luaPlayer(), talentID, requestedRank, spellID)
 	s.debug("learned talent", "talent", talentID, "spell", spellID, "rank", requestedRank)
 	return true
 }
@@ -553,6 +591,13 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
+	// Player::ResetTalents fires OnPlayerTalentsReset (Player.cpp:3992)
+	// as its first statement — before the no-talents-spent and cost
+	// arms — so the hook fires on every reset call, even a no-op one.
+	// Firing here, inside the shared reset, covers the Lua binding, the
+	// at-login reset, the .reset talents command and the talent-wipe
+	// confirm, matching C++.
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentReset, s.luaPlayer(), free)
 	// Player::ResetTalents (Player.cpp:3994-3996): the at-login flag is
 	// cleared on entry, before the no-talents-spent arm.
 	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
@@ -567,6 +612,9 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 		// runs, so a script-set override is dropped (the derived
 		// value with zero spent is the level total either way).
 		s.player.FreeTalentPointsOverrideSet = false
+		// Player.cpp:4002: SetFreeTalentPoints(talentPointsForLevel)
+		// fires event 16 even on this false arm.
+		s.fireTalentPointsChanged(ctx)
 		return false
 	}
 	cost := uint32(0)
@@ -623,6 +671,8 @@ func (s *session) resetTalents(ctx context.Context, free bool) bool {
 	// SetFreeTalentPoints(talentPointsForLevel), so the override is
 	// dropped and the derived level total reads back.
 	s.player.FreeTalentPointsOverrideSet = false
+	// The :4064 SetFreeTalentPoints fires event 16 with that total.
+	s.fireTalentPointsChanged(ctx)
 	cdb := s.server.CharactersStore.DB
 	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup); err != nil {
 		s.debug("talent reset persistence failed", "account", s.accountName, "error", err)

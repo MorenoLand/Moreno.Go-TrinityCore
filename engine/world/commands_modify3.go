@@ -437,8 +437,11 @@ func (s *session) handleModifyTalentPoints(ctx context.Context, args []string) b
 	if s.modifyTargetLowerSecurity(ctx, target) {
 		return false
 	}
-	target.player.FreeTalentPointsOverride = uint32(tp)
-	target.player.FreeTalentPointsOverrideSet = true
+	// cs_modify.cpp:356: target->ToPlayer()->SetFreeTalentPoints(tp) —
+	// the override write + event-16 fire live in the shared
+	// setFreeTalentPointsOverride (skills.go); the hook fires for the
+	// target player, matching the C++ call on the target.
+	target.setFreeTalentPointsOverride(ctx, uint32(tp))
 	_ = target.sendTalentsInfo(false)
 	return true
 }

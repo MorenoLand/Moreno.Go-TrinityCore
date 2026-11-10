@@ -5667,9 +5667,10 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		state.FreeTalentPointsOverride = points
-		state.FreeTalentPointsOverrideSet = true
-		s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentChange, s.luaPlayer(), points)
+		// The override write + event-16 fire live in the shared
+		// setFreeTalentPointsOverride (skills.go), matching
+		// Player::SetFreeTalentPoints (Player.cpp:4087-4090).
+		s.setFreeTalentPointsOverride(ctx, points)
 		_ = s.sendTalentsInfo(false)
 		return []any{}, nil
 	}
@@ -5708,13 +5709,11 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		learned := s.learnTalent(ctx, talentID, rank)
+		// The OnLearnTalents fire lives inside the shared learnTalent
+		// (skills.go), which covers this binding and both client opcode
+		// paths, matching Player::LearnTalent (Player.cpp:25559).
+		s.learnTalent(ctx, talentID, rank)
 		_ = s.sendTalentsInfo(false)
-		if learned && s.server != nil && s.server.Data != nil {
-			if tEntry, ok, terr := s.server.Data.Talent(talentID); terr == nil && ok && rank < uint32(len(tEntry.SpellRank)) {
-				s.triggerPlayerEvent(ctx, scripting.PlayerEventLearnTalents, s.luaPlayer(), talentID, rank, tEntry.SpellRank[rank])
-			}
-		}
 		return nil, nil
 	}
 	methods["ResetTalents"] = func(ctx context.Context, args []any) ([]any, error) {
@@ -5724,7 +5723,10 @@ func (s *session) luaPlayer() *scripting.Object {
 				noCost = b
 			}
 		}
-		s.triggerPlayerEvent(ctx, scripting.PlayerEventTalentReset, s.luaPlayer(), noCost)
+		// The OnTalentsReset fire lives inside the shared resetTalents
+		// (skills.go), which covers this binding, the at-login reset,
+		// the .reset talents command and the talent-wipe confirm,
+		// matching Player::ResetTalents (Player.cpp:3992).
 		if !s.resetTalents(ctx, noCost) {
 			_ = s.sendTalentsInfo(false)
 		}

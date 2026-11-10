@@ -1837,17 +1837,29 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		s.broadcastGameObjectCreateToVisibleSet(packet.Opcode, packet.Payload.Bytes(), dyn)
 	}
+	// Eluna GAMEOBJECT_EVENT_ON_SPAWN (event 2), fired from
+	// ScriptMgr::GetGameObjectAI (ScriptMgr.cpp:1692-1699) via
+	// GameObject::AIM_Initialize at Create (GameObject.cpp:400), before
+	// AddToWorld — so it fires ahead of the instance-create/add hooks
+	// below, in C++ order. The lazy re-fire on first Update when AI() is
+	// null (GameObject.cpp:441) has no Go twin (no GO update tick). Only
+	// dynamic spawns have a live server-side object — static template
+	// GOs are per-client update packets, so their Create has no Go
+	// counterpart.
+	s.triggerGameObjectEvent(context.Background(), dyn.GUID, scripting.GameObjectEventOnSpawn)
+	// Eluna INSTANCE_EVENT_ON_GAMEOBJECT_CREATE (event 6), fired from
+	// GameObject::AddToWorld (GameObject.cpp:213) via the instance's zone
+	// script — ahead of ON_ADD below, matching the C++ AddToWorld order
+	// (zone-script create :213, Eluna add at the end). Instance maps only;
+	// the static-spawn delta is documented in
+	// engine/world/instance_hooks.go.
+	s.triggerInstanceGameObjectCreate(dyn)
 	// Eluna GAMEOBJECT_EVENT_ON_ADD (event 12), fired from
 	// GameObject::AddToWorld (GameObject.cpp:233): (event, gameobject).
 	// Only dynamic spawns have a live server-side object — static template
 	// GOs are per-client update packets, so their map add has no Go
 	// counterpart.
 	s.triggerGameObjectEvent(context.Background(), dyn.GUID, scripting.GameObjectEventOnAdd)
-	// Eluna INSTANCE_EVENT_ON_GAMEOBJECT_CREATE (event 6), fired from
-	// GameObject::AddToWorld (GameObject.cpp:213) via the instance's zone
-	// script. Instance maps only; the static-spawn delta is documented in
-	// engine/world/instance_hooks.go.
-	s.triggerInstanceGameObjectCreate(dyn)
 }
 
 func isFishingSpell(spellID uint32) bool {

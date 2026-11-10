@@ -34,8 +34,8 @@ const (
 	PlayerEventLevelChange       = 13
 	PlayerEventMoneyChange       = 14 // OnMoneyChanged fires from Player::ModifyMoney (Player.cpp:22826); Go fires it from session modifyPlayerMoney (quest_reward_grant.go), which every ModifyMoney-equivalent money write routes through; direct SetMoney-style writes (GM set, SetCoinage, values-table write) fire nothing, like C++
 	PlayerEventReputationChange  = 15
-	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; the binding fires it, internal learn/reset/level-up recomputes do not
-	PlayerEventTalentReset       = 17 // OnTalentsReset fires from Player::ResetTalents; Go has no talent system, so the engine never fires this event
+	PlayerEventTalentChange      = 16 // OnTalentsChange fires from Player::SetFreeTalentPoints; Go fires it from the shared setter (skills.go setFreeTalentPointsOverride) and the learn/reset/level-up recompute arms (fireTalentPointsChanged), matching the C++ SetFreeTalentPoints calls in LearnTalent/ResetTalents/InitTalentForLevel
+	PlayerEventTalentReset       = 17 // OnTalentsReset fires from Player::ResetTalents (Player.cpp:3992, first statement, before the no-talents/cost arms); Go fires it from resetTalents (skills.go), covering the Lua binding, at-login reset, .reset talents and talent-wipe confirm
 	PlayerEventChat              = 18
 	PlayerEventWhisper           = 19
 	PlayerEventGroupChat         = 20
@@ -56,7 +56,7 @@ const (
 	PlayerEventResurrect         = 36
 	PlayerEventLootMoney         = 37
 	PlayerEventQuestAbandon      = 38
-	PlayerEventLearnTalents      = 39 // OnLearnTalents fires from Player::LearnTalent; Go has no talent system, so the engine never fires this event
+	PlayerEventLearnTalents      = 39 // OnLearnTalents fires from Player::LearnTalent (Player.cpp:25559, success path); Go fires it from learnTalent (skills.go), covering the Lua binding and both client opcode paths (CMSG_LEARN_TALENT / CMSG_LEARN_PREVIEW_TALENTS)
 	PlayerEventQuestStatusChange = 40 // OnQuestStatusChange fires from Player::AddQuest/RewardQuest/SetQuestStatus/quest-abandon/EffectQuestClear (ScriptMgr.cpp:2194); Hooks.h marks 40 UNUSED and ScriptMgr::OnQuestStatusChange is PlayerScript-only (no Eluna call), so Go event 40 is a custom extension surfacing that hook to Lua as (event, player, questId), void
 	PlayerEventCommand           = 42
 	MapEventOnPlayerEnter        = 21
