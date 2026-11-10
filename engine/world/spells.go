@@ -16358,7 +16358,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					s.executeSpellMaxHealthHeal(effCtx, s.playerGUID, spellID, eff.CalcValueForLevel(spell, casterLevel))
 				}
 			case 6, 27, 35: // Apply Aura
-				durationMs, periodMs, amount := s.auraEffectParams(spell, eff)
+				durationMs, periodMs, amount := s.auraEffectParams(spell, eff, effectIndex)
 				schoolMask := spell.SchoolMask
 				if schoolMask == 0 {
 					schoolMask = 1
@@ -16486,7 +16486,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						if effectIndex < len(ds.Effects) {
 							effEff = ds.Effects[effectIndex]
 						}
-						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff)
+						tgtDurationMs, tgtPeriodMs, tgtAmount = s.auraEffectParams(effSpell, effEff, effectIndex)
 					}
 					// GO guids ride hitTargets but unit handlers take none (Spell.cpp:2663).
 					if uint16(auraTarget>>48) == 0xF110 {
@@ -36540,7 +36540,7 @@ func (s *session) hasPeriodicHasteAura(spell wotlk.Spell) bool {
 	return false
 }
 
-func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (durationMs, periodMs, amount uint32) {
+func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect, effectIndex int) (durationMs, periodMs, amount uint32) {
 	if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil && s.player != nil {
 		if val, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
 			durationMs = uint32(val)
@@ -36664,7 +36664,7 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 	// the amount back through int32 (Amounts[index] assignment). No
 	// recalculation leg: C++ re-runs this hook when defense changes, Go
 	// computes it once at application. DORMANT until Spell.dbc ships 48792.
-	if spell.ID == 48792 && eff.Aura == spellAuraModDamagePercentTaken && s.player != nil {
+	if spell.ID == 48792 && effectIndex == 2 && eff.Aura == spellAuraModDamagePercentTaken && s.player != nil {
 		value := int32(amount)
 		defValue := uint32(float64(s.getSkillValue(95)) + s.ratingBonusValue(CombatRatingDefenseSkill))
 		if defValue > 400 {
