@@ -33,6 +33,18 @@
 --   oculus.cpp:560-583): the stun apply casts
 --   SPELL_AMBER_SHOCK_CHARGE (49836) 5x on the target — ports
 --   on AuraEventOnApply (2), the apply twin.
+-- - spell_oculus_evasive_maneuvers (50240, AuraScript OnEffectProc,
+--   oculus.cpp:484-493) + spell_oculus_temporal_rift (49592,
+--   AuraScript OnEffectProc, oculus.cpp:599-621): both port on
+--   AuraEventOnProc (6), the woe-strike/koralon precedent —
+--   return true is PreventDefaultAction. The header's old "no
+--   AuraEvent proc twin" claim is stale: fireAuraProc
+--   (lua_aura.go) fires from the creature proc loop
+--   (boss_ai.go) after the DBC proc-entry gates, like the
+--   session loop. DORMANT until Spell.dbc ships the aura +
+--   proc records (koralon precedent): the handler fires only
+--   when the generated proc entry matches the event (dodge/
+--   parry taken for 50240, damage taken for 49592).
 -- Unmodeled (documented-only, no bridges):
 -- - npc_image_belgaristrasz: ENTRY-BLOCKED — no summon anywhere
 --   in the C++ tree, no DB row in-tree (world.db is an empty
@@ -52,19 +64,21 @@
 --   bridge rejects non-RUN types; 1.0 is the default flight rate,
 --   so the leg is a no-op); SetOrientation(2.5) rides
 --   SetFacingTo(2.5), the absolute-facing twin.
--- - The remaining SpellScripts/AuraScripts: call-drake dest
---   select (49345/49461/49462, SpellScript) — no SpellScript bridge;
---   shock lance damage calc (49840) ports Go-side
+-- - The remaining SpellScripts/AuraScripts: shock lance damage
+--   calc (49840) ports Go-side
 --   (spell_onhit.go shockLanceDetonate: base + 49836 eff0 amount
 --   from this caster, charge aura consumed; creature + player
 --   victims — player leg reads the victim session's activeAuras);
 --   touch the nightmare damage calc (50341) ports Go-side
 --   (spell_onhit.go onHitDamageRewrite: base + 30% caster max HP).
---   evasive maneuvers proc (50240) + temporal rift proc
---   (49592) — no AuraEvent proc twin (events are 1 periodic /
---   2 apply / 3 remove / 4 stack-change only); dream funnel
---   calc-amount (50344) — event 4 is stack-count change, not
---   DoEffectCalcAmount.
+--   dream funnel calc-amount (50344) — event 4 is stack-count
+--   change, not DoEffectCalcAmount.
+-- - Call-drake dest select (49345/49461/49462, SpellScript
+--   OnDestinationTargetSelect, oculus.cpp:424-437: +12z summon
+--   offset) — no bridge: DestinationTargetSelect handlers are the
+--   documented no-bridge leg (target_dest_targets.go:470, no
+--   ScriptMgr model); the summon itself rides the Go spell system
+--   at the unadjusted caster-front dest.
 -- - Drake MovementInform POINT_LAND now ports on ev28
 --   (drakeLandInform below).
 
@@ -447,4 +461,60 @@ local function stopTimeApply(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_STOP_TIME, 2, stopTimeApply)
+local SPELL_EVASIVE_MANEUVERS = 50240 -- oculus.cpp:57
+local SPELL_EVASIVE_CHARGES = 50241 -- oculus.cpp:56
+local SPELL_TEMPORAL_RIFT = 49592 -- oculus.cpp:71
+
+-- C++ spell_oculus_evasive_maneuvers::HandleProc
+-- (oculus.cpp:484-493): OnEffectProc, EFFECT_2,
+-- SPELL_AURA_PROC_TRIGGER_SPELL. PreventDefaultAction; the
+-- holder loses one Evasive Charge stack
+-- (RemoveAuraFromStack: ModStackAmount(-1), aura removed at 0);
+-- when no charges aura remains, the maneuvers aura removes
+-- itself (Remove()). The charges aura is read through the live
+-- wire count (aura:GetStackAmount); SetStackAmount(0) does not
+-- remove in Go, so the last stack goes through RemoveAura.
+local function evasiveManeuversProc(event, aura, target, actor, procTarget, damage)
+    if target ~= nil then
+        local charges = target:GetAura(SPELL_EVASIVE_CHARGES)
+        if charges ~= nil then
+            local stacks = charges:GetStackAmount()
+            if stacks <= 1 then
+                target:RemoveAura(SPELL_EVASIVE_CHARGES)
+            else
+                charges:SetStackAmount(stacks - 1)
+            end
+        end
+        if not target:HasAura(SPELL_EVASIVE_CHARGES) then
+            aura:Remove()
+        end
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_EVASIVE_MANEUVERS, 6, evasiveManeuversProc)
+
+-- C++ spell_oculus_temporal_rift::HandleProc
+-- (oculus.cpp:599-621): OnEffectProc, EFFECT_2, SPELL_AURA_DUMMY.
+-- PreventDefaultAction; a zero-damage event does nothing; else the
+-- damage accumulates into the effect-2 amount, and each 15000
+-- threshold makes the aura caster cast SPELL_AMBER_SHOCK_CHARGE
+-- (49836) triggered on the holder, carrying the remainder forward
+-- (one threshold per proc, the C++ single-subtract arm).
+local function temporalRiftProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 then
+        return true
+    end
+    local amount = aura:GetAmount(2) + damage
+    if amount >= 15000 then
+        local caster = aura:GetCaster()
+        if caster ~= nil and target ~= nil then
+            caster:CastSpell(target, SPELL_AMBER_SHOCK_CHARGE, true)
+        end
+        amount = amount - 15000
+    end
+    aura:SetAmount(amount, 2)
+    return true
+end
+
+RegisterAuraEvent(SPELL_TEMPORAL_RIFT, 6, temporalRiftProc)
