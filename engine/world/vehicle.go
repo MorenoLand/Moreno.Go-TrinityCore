@@ -637,9 +637,10 @@ func (s *Server) resetVehicleKitOnReachHome(ctx context.Context, motion *creatur
 // at the base position, UNIT_MASK_ACCESSORY, then the HandleSpellClick
 // twin boards it — and Vehicle::AddPassenger (Vehicle.cpp:471-478) ejects
 // the seat's current occupant first when the seat is occupied, so a
-// still-seated minion is ejected (not unsummoned: Vehicle::RemovePassenger
-// leaves the unit in the world; the kit-drop unsummon fate rides
-// removeVehicleKit only) and the fresh summon boards in its place. A
+// still-seated minion is ejected and unsummons 2s later (Unit::_ExitVehicle
+// Unit.cpp:13258-13265: the AddPassenger seat-eject runs _ExitVehicle, and a
+// UNIT_MASK_ACCESSORY minion exits with UnSummon(2000) while the base is
+// alive) and the fresh summon boards in its place. A
 // player seated on a minion seat stays out: C++ would eject the player,
 // but Go's player exit needs the session's exit leg (duel forfeit,
 // control packets) and minion seats are not player-enterable in
@@ -676,6 +677,7 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 				continue
 			}
 			if occupantMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, occupant); occupantMotion != nil {
+				wasAccessoryMinion := occupantMotion.VehicleAccessoryMinion
 				kit.RemovePassenger(occupant)
 				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
 				s.motionMu.Lock()
@@ -684,6 +686,7 @@ func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *
 				occupantMotion.VehicleAccessoryMinion = false
 				occupantMotion.Moving = false
 				s.motionMu.Unlock()
+				s.unsummonEjectedVehicleAccessory(occupantMotion, wasAccessoryMinion)
 			} else {
 				kit.RemovePassenger(occupant)
 			}
@@ -1092,6 +1095,23 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 // movement.go's base-GUID arm. Seated-AI suppression and kit-drop fate
 // ride the shared gates: the stepCreatureMotion VehicleGUID gate and
 // removeVehicleKit's exitCreatureVehiclePassengers.
+// unsummonEjectedVehicleAccessory bridges the Unit::_ExitVehicle
+// (Unit.cpp:13258-13265) fate for an ejected minion accessory: the
+// control-aura removal behind RemoveAllPassengers (respawn Reset) and the
+// AddPassenger seat-eject (evade reinstall) both run _ExitVehicle, and a
+// UNIT_MASK_ACCESSORY minion exits with UnSummon(2000) while the base is
+// alive — the "Approximation" delay in C++. Non-minion passengers stay in
+// the world. The timer is identity-safe: expireTempSummonGuardian no-ops
+// when the motion already left the map.
+func (s *Server) unsummonEjectedVehicleAccessory(motion *creatureMotion, wasAccessoryMinion bool) {
+	if s == nil || motion == nil || !wasAccessoryMinion {
+		return
+	}
+	time.AfterFunc(2*time.Second, func() {
+		s.expireTempSummonGuardian(context.Background(), motion)
+	})
+}
+
 // resetVehicleKitOnRespawn bridges the InstallAllAccessories(false) half of
 // the respawn Vehicle::Reset (Creature::Respawn re-inits the AI;
 // AIM_Initialize (Creature.cpp:1085) / JustAppeared tick (Creature.cpp:699-704)
@@ -1104,9 +1124,12 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 // full SummonTime and ejects a live player still seated on the respawned base
 // (Go never ejected them at death), while the refill kept the stale accessory
 // + remaining timer and left the player riding. The eject leg follows the
-// evade reinstall's RemovePassenger pattern for creatures (ejected, not
-// unsummoned — the kit-drop unsummon fate rides removeVehicleKit only) and
-// the session exitVehicle leg for players (control release, duel forfeit,
+// evade reinstall's RemovePassenger pattern for creatures, with the
+// Unit::_ExitVehicle (Unit.cpp:13258-13265) fate for minion accessories:
+// the aura removal behind RemoveAllPassengers runs _ExitVehicle, and a
+// UNIT_MASK_ACCESSORY minion unsummons (UnSummon(2000)) while the base is
+// alive — only non-minion passengers stay in the world. The player leg
+// rides the session exitVehicle (control release, duel forfeit,
 // exit position, and the VehicleAI::OnCharmed dismiss arm via RemoveCharmedBy
 // — Vehicle.cpp:518 + CombatAI.cpp:295). The latch is set, not consulted:
 // C++ re-runs InstallAllAccessories on every respawn, so the step sync must
@@ -1152,6 +1175,7 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		if occupantMotion == nil {
 			continue
 		}
+		wasAccessoryMinion := occupantMotion.VehicleAccessoryMinion
 		s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
 		s.motionMu.Lock()
 		occupantMotion.VehicleGUID = 0
@@ -1159,6 +1183,7 @@ func (s *Server) resetVehicleKitOnRespawn(ctx context.Context, motion *creatureM
 		occupantMotion.VehicleAccessoryMinion = false
 		occupantMotion.Moving = false
 		s.motionMu.Unlock()
+		s.unsummonEjectedVehicleAccessory(occupantMotion, wasAccessoryMinion)
 	}
 	origin := s.summonOriginFromMotion(motion)
 	baseGUID := motion.GUID
