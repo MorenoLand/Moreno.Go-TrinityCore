@@ -13776,9 +13776,12 @@ func init() {
 	// DATA_GATEWATCHER_IRON_HAND(1) and 184322->
 	// DATA_GATEWATCHER_GYROKILL(0) as passage doors, 184449->
 	// DATA_NETHERMANCER_SEPRETHREA(3) as a room door; the
-	// SetBossState override is a no-op switch — documented
-	// only, no-instance-script-bridge queue; see
-	// hidden_files/CHECKPOINT.md.
+	// SetBossState override is a no-op switch, so base door
+	// handling applies — the three DONE-door opens are PORTED
+	// boss-side (FindNearestGameObject + SetGoState ACTIVE in
+	// each boss's ev4, Blood Furnace idiom); no instance-side
+	// hook exists, and Sepethrea's engage-time room-door
+	// close stays out (ev1 writes no IN_PROGRESS state).
 	// zone_blades_edge_mountains residuals (npc_nether_drake
 	// already ported at lua_scripts/outland/npc_nether_drake.lua
 	// per the earlier Outland zone-set work, SpellHit rotation

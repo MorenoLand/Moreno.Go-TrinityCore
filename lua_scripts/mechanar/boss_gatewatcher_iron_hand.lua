@@ -43,7 +43,8 @@
 --    spells always (C++-exact, not IsHeroic-gated).
 -- OnDied(4): _JustDied() + Talk(SAY_DEATH) (C++-exact —
 -- the SetBossState(DONE) arm IS ported below, stale
--- "instance-blocked" retracted 2026-11-07).
+-- "instance-blocked" retracted 2026-11-07) + the doorData
+-- DONE-door open (GO_DOOR_MOARG_1, ported 2026-11-10).
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
@@ -65,6 +66,9 @@ local EMOTE_HAMMER = 4
 local ENTRY_GATEWATCHER_IRON_HAND = 19710
 -- mechanar.h:31 (MRDataTypes): DATA_GATEWATCHER_IRON_HAND = 1.
 local DATA_GATEWATCHER_IRON_HAND = 1
+
+local GO_DOOR_MOARG_1 = 184632 -- mechanar.h:39
+local GO_STATE_ACTIVE = 0 -- GameObjectMethods.h:90
 
 local timers = {}
 local states = {}
@@ -176,6 +180,15 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 4, function(_, creature)
     -- -> SetBossState(DATA_GATEWATCHER_IRON_HAND, DONE), then
     -- Talk(SAY_DEATH) — C++ arm order.
     creature:SetBossState(DATA_GATEWATCHER_IRON_HAND, 3) -- DONE
+    -- C++ doorData (instance_mechanar.cpp): GO_DOOR_MOARG_1 is a
+    -- DOOR_TYPE_PASSAGE door on this boss — base
+    -- InstanceScript::SetBossState opens it on DONE. No
+    -- instance-side hook exists, so the boss opens it here
+    -- (Blood Furnace idiom: nearest GO + SetGoState ACTIVE).
+    local door = creature:FindNearestGameObject(GO_DOOR_MOARG_1, 500)
+    if door then
+        door:SetGoState(GO_STATE_ACTIVE)
+    end
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUIDLow())
 end)

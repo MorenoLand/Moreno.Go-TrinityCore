@@ -45,7 +45,9 @@
 --    via the sawBladeExtra countdown, which fires the same
 --    cast+Talk handler and re-arms itself at 20-30s.
 -- OnDied(4): Talk(SAY_DEATH) (C++-exact); the BossAI
--- _JustDied arm is instance-blocked, unmodeled.
+-- _JustDied arm IS ported below via creature:SetBossState
+-- (bridged) — stale "instance-blocked" retracted
+-- 2026-11-10, with the doorData DONE-door open riding it.
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
@@ -64,6 +66,9 @@ local SAY_SAW_BLADES = 2
 local SAY_DEATH = 3
 
 local ENTRY_GATEWATCHER_GYROKILL = 19218
+
+local GO_DOOR_MOARG_2 = 184322 -- mechanar.h:40
+local GO_STATE_ACTIVE = 0 -- GameObjectMethods.h:90
 
 local timers = {}
 local states = {}
@@ -190,6 +195,15 @@ end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_GYROKILL, 4, function(_, creature)
     creature:SetBossState(0, 3) -- DATA_GATEWATCHER_GYROKILL, DONE (boss_gatewatcher_gyrokill.cpp:62-65: _JustDied then Talk)
+    -- C++ doorData (instance_mechanar.cpp): GO_DOOR_MOARG_2 is a
+    -- DOOR_TYPE_PASSAGE door on this boss — base
+    -- InstanceScript::SetBossState opens it on DONE. No
+    -- instance-side hook exists, so the boss opens it here
+    -- (Blood Furnace idiom: nearest GO + SetGoState ACTIVE).
+    local door = creature:FindNearestGameObject(GO_DOOR_MOARG_2, 500)
+    if door then
+        door:SetGoState(GO_STATE_ACTIVE)
+    end
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUIDLow())
 end)

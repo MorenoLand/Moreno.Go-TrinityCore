@@ -47,7 +47,9 @@
 -- 6. Solarburn 35267: 30s init and re-arm — TRIGGERED
 --    DoCastVictim (C++-exact).
 -- OnDied(4): Talk(SAY_DEATH) (C++-exact); the BossAI
--- _JustDied arm is instance-blocked, unmodeled.
+-- _JustDied arm IS ported below via creature:SetBossState
+-- (bridged) — stale "instance-blocked" retracted
+-- 2026-11-10, with the doorData DONE-door open riding it.
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared (the
 -- C++ Reset() / BossAI _Reset() arms are instance-blocked).
 -- The C++ UNIT_STATE_CASTING early-return (top of UpdateAI)
@@ -96,6 +98,9 @@ local SAY_DEATH = 4
 
 local ENTRY_SEPRETHREA = 17271
 local ENTRY_RAGIN_FLAMES = 22323
+
+local GO_DOOR_NETHERMANCER = 184449 -- mechanar.h:41
+local GO_STATE_ACTIVE = 0 -- GameObjectMethods.h:90
 
 local timers = {}
 local bossStates = {}
@@ -236,6 +241,17 @@ end)
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 4, function(_, creature)
     creature:SetBossState(3, 3) -- DATA_NETHERMANCER_SEPETHREA, DONE (boss_nethermancer_sepethrea.cpp:89-92: _JustDied then Talk)
+    -- C++ doorData (instance_mechanar.cpp): GO_DOOR_NETHERMANCER
+    -- is a DOOR_TYPE_ROOM door on this boss — base
+    -- InstanceScript::SetBossState opens it on DONE (room doors
+    -- open whenever state != IN_PROGRESS). No instance-side
+    -- hook exists, so the boss opens it here (Blood Furnace
+    -- idiom: nearest GO + SetGoState ACTIVE). The engage-time
+    -- close leg is out: ev1 writes no IN_PROGRESS state.
+    local door = creature:FindNearestGameObject(GO_DOOR_NETHERMANCER, 500)
+    if door then
+        door:SetGoState(GO_STATE_ACTIVE)
+    end
     creature:Talk(SAY_DEATH)
     resetBoss(creature:GetGUIDLow())
 end)
