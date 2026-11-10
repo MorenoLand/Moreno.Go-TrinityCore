@@ -20225,7 +20225,9 @@ func init() {
 	// as Go cases in achievement_criteria_scripts.go, ticks 417/419).
 	// Cast-state gates PORTED: boss UpdateAI pre-loop :325 +
 	// in-loop :381 CASTING gates as 500ms IsCasting defer in
-	// enrageTick; life-spark pre-loop :645 gate in shock tick.
+	// enrageTick and in the ev38 DoAction handler (the
+	// EVENT_ENTER_HARD_MODE 65737 cast waits while XT-002 casts,
+	// this tick); life-spark pre-loop :645 gate in shock tick.
 	RegisterLuaBoss("boss_xt002", 33293)
 
 	// General Vezax (33271), Ulduar —
@@ -20369,17 +20371,15 @@ func init() {
 	// SetCorpseDelay(604800) leg has no bridge; the _JustDied()
 	// SetBossState(DONE) leg PORTED tick 258 — the sjonnir
 	// JustDied-Talk precedent).
-	// Documented-only: Reset / PassengerBoarded
-	// (Talk(SAY_LEFT_ARM_GONE 2) / Talk(SAY_RIGHT_ARM_GONE 3)
-	// + SPELL_ARM_DEAD_DAMAGE 63629 / rubble-stalker casts /
-	// EVENT_STONE_SHOUT / CRITERIA_DISARMED legs — no
-	// PassengerBoarded bridge); JustSummoned (focused-eyebeam
-	// visuals, REACT_PASSIVE, MoveChase(eyebeamTarget) — no
-	// bridges); the UpdateAI event machine (melee check /
-	// sweep / smash / stone shout / berserk Talk(SAY_BERSERK
-	// 7) / arm respawns / stone grip Talk(SAY_GRAB_PLAYER 5)
-	// + Talk(EMOTE_STONE_GRIP 8) / focused eyebeam — no
-	// timer-event / cast / vehicle / summon bridges); the
+	// Documented-only: Reset (eyebeamTarget.Clear() has no
+	// summon-list bridge); PassengerBoarded PORTED tick 474 via
+	// RegisterVehicleEvent (arm Talk + 40s respawn + arm-damage +
+	// rubble casts + EVENT_STONE_SHOUT + CRITERIA_DISARMED);
+	// JustSummoned PORTED (event 19, focused-eyebeam visuals /
+	// REACT_PASSIVE / MoveChase); the UpdateAI event machine
+	// (melee check / sweep / smash / stone shout / berserk /
+	// arm respawns / stone grip / focused eyebeam) PORTED as
+	// timer ticks (ticks 462/474); the
 	// eight spell scripts (spell_ulduar_rubble_summon /
 	// spell_ulduar_stone_grip_cast_target /
 	// spell_ulduar_cancel_stone_grip /
@@ -20392,7 +20392,10 @@ func init() {
 	// no-AuraScript-bridge queues).
 	// Cast-state gates PORTED: boss UpdateAI pre-loop :251 +
 	// in-loop :315 CASTING gates as 500ms IsCasting defer in
-	// focusedEyebeam/enrage/meleeCheck ticks (mal_ganis idiom).
+	// all seven cast ticks (focusedEyebeam/enrage/meleeCheck/
+	// smash/sweep/stoneShout/stoneGrip, mal_ganis idiom);
+	// respawnArmTick is a non-cast vehicle-install arm,
+	// delay-while-casting unobservable (this tick).
 	RegisterLuaBoss("boss_kologarn", 32930)
 	// Hodir (Ulduar) — fight logic in
 	// lua_scripts/northrend/boss_hodir.lua. Ported arms:
@@ -20417,8 +20420,11 @@ func init() {
 	// (icicle / freeze / blows / flash-freeze / rare-cache /
 	// berserk) defer 500ms on creature:IsCasting(), no repeat
 	// re-arm — boss UpdateAI pre-loop (:437) + in-loop (:492)
-	// CASTING gates. Add gates (priest / shaman / druid /
-	// mage) cover unported arms only; icicle / snowpacked /
+	// CASTING gates. Add gates PORTED tick 476: priest heal
+	// + HealthBelowPct(30) poll, shaman storm cloud, druid
+	// starlight, mage conjure-fire + melt ice — all defer
+	// 500ms on IsCasting (priest dispel stays out, no
+	// friendly-grid bridge); icicle / snowpacked /
 	// flash-freeze / toasty UpdateAIs are ungated per C++.
 	RegisterLuaBoss("boss_hodir", 32845)
 

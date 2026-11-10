@@ -414,6 +414,17 @@ local function xt002DoAction(event, creature, action)
     if action ~= ACTION_ENTER_HARD_MODE then
         return
     end
+    -- C++ EVENT_ENTER_HARD_MODE runs under the boss UpdateAI
+    -- CASTING gates (pre-loop :325 + in-loop :381): the 1ms-delayed
+    -- event waits while XT-002 casts — 500ms IsCasting defer, the
+    -- same idiom as enrageTick (mal_ganis idiom).
+    if creature:IsCasting() then
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "hardmode", 500, function()
+            xt002DoAction(event, creature, action)
+        end)
+        return
+    end
     creature:SetHealth(creature:GetMaxHealth()) -- SetFullHealth twin (assembly precedent)
     creature:CastSpell(creature, SPELL_HEARTBREAK, true)
     creature:AddLootMode(LOOT_MODE_HARD_MODE_1)
