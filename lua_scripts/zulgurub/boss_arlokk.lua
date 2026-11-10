@@ -35,12 +35,14 @@
 -- Prowler (15101): OnReset self-casts the sneak auras 22766 + 7939
 -- (C++-exact non-triggered casts; the MovePoint to Arlokk has no
 -- bridge); OnEnterCombat removes both sneak auras (C++
--- JustEngagedWith). Melee is engine-driven. The 6s attack timer has
--- no Attack bridge; the SpellHit(24211) arm stays out on the same
--- blocker — stale "no SpellHit bridge" retracted (2026-10-21; ev14
--- fires), but the arm's whole body is me->Attack(unitCaster, true)
--- (boss_arlokk.cpp:378-385), which has no bridge (registering it
--- would be a stub, firesworn convention); the JustDied
+-- JustEngagedWith). Melee is engine-driven. The SpellHit(24211) arm
+-- is PORTED below (2026-11-10): creature:Attack(target, true) is
+-- bridged (lua_creature_events.go:1740, Unit::Attack twin) — the old
+-- "no Attack bridge" claim is retracted. The 6s EVENT_ATTACK timer
+-- (boss_arlokk.cpp:411-419, one-shot, victimless-only, threat-list
+-- random pick) stays out: no Lua primitive maps the empty-threat
+-- SelectTarget pick, and the prowler never spawns in Go (see
+-- Deviations). The JustDied
 -- arlokk-SetData(_sideData, 0) leg is cross-creature summon
 -- bookkeeping with no bridge (stays out — the 4s despawn leg IS
 -- ported below).
@@ -84,6 +86,7 @@ local SAY_DEATH = 2
 local SPELL_SHADOW_WORD_PAIN = 24212
 local SPELL_GOUGE = 12540
 local SPELL_MARK_OF_ARLOKK = 24210
+local SPELL_MARK_OF_ARLOKK_TRIGGER = 24211 -- boss_arlokk.cpp:330
 local SPELL_RAVAGE = 24213
 local SPELL_PANTHER_TRANSFORM = 24190
 local SPELL_VANISH_VISUAL = 24222
@@ -480,6 +483,19 @@ end
 -- ports C++-exact as a one-shot CreateLuaEvent. The timer rides the
 -- file's timers idiom and is cancelled on 2/4/23 (prowlerReset covers
 -- 23; a dead prowler cannot leave combat, so 2 never fires here).
+--- C++ npc_zulian_prowlerAI::SpellHit (boss_arlokk.cpp:378-385): Mark
+--- of Arlokk trigger -> Attack(caster, true). The "should only hit if
+--- line of sight" is a C++ comment, not a check — no LOS gate in the
+--- arm. ev14 passes the caster unit (creature_area_targets.go:2667 /
+--- pet_combat.go fire sites); the C++ ToUnit() nil-guard has no
+--- non-unit case on this path (attumen/halazzi precedent: caster used
+--- directly).
+local function prowlerSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_MARK_OF_ARLOKK_TRIGGER then
+        creature:Attack(caster, true)
+    end
+end
+
 local function prowlerDied(event, creature, killer)
     local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
@@ -494,6 +510,7 @@ end
 
 RegisterCreatureEvent(ENTRY_PROWLER, 1, prowlerEnterCombat)
 RegisterCreatureEvent(ENTRY_PROWLER, 4, prowlerDied)
+RegisterCreatureEvent(ENTRY_PROWLER, 14, prowlerSpellHit)
 RegisterCreatureEvent(ENTRY_PROWLER, 23, prowlerReset)
 
 -- go_gong_of_bethekk (180526, C++ ScriptName "go_gong_of_bethekk",

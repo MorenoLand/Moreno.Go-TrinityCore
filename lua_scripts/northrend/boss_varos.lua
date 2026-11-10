@@ -105,8 +105,10 @@
 -- + me->DespawnOrUnsummon() — NOTE: SpellHitTarget (event 15) IS
 -- dispatched in the current runtime (runtime.go:201 /
 -- boss_ai.go:2052); the leg stays out because 51017 is a summon with
--- no spell-effect delivery leg (urom verdict) and DespawnOrUnsummon
--- has no Lua binding, not because the event never fires; UpdateAI — DoMeleeAttackIfReady only; MovementInform
+-- no spell-effect delivery leg (urom verdict) — DespawnOrUnsummon DOES
+-- have a Lua binding (creature:Despawn(), lua_creature_events.go:3097;
+-- the old "no binding" claim is retracted 2026-11-10) — and because
+-- the entry is unverifiable, not because the event never fires; UpdateAI — DoMeleeAttackIfReady only; MovementInform
 -- (POINT_MOTION_TYPE / ACTION_CALL_DRAGON_EVENT) — MoveIdle +
 -- DoCast(target, SPELL_ICE_BEAM) (the target-GUID leg); DoAction(
 -- ACTION_CALL_DRAGON_EVENT) — varos via instance GetGuidData(
