@@ -21868,7 +21868,7 @@ func init() {
 	// Baltharus the Warborn (39751) — Lua port of
 	// src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_baltharus_the_warborn.cpp
 	// (368 lines; 2 CreatureScripts (boss_baltharus_the_warborn (BossAI,
-	// DATA_BALTHARUS_THE_WARBORN = 1) + npc_baltharus_the_warborn_clone
+	// DATA_BALTHARUS_THE_WARBORN = 0) + npc_baltharus_the_warborn_clone
 	// (BossAI, DATA_BALTHARUS_CLONE = 3)); all registered from inside
 	// AddSC_boss_baltharus_the_warborn(); loader decl 190 / call 385 per
 	// northrend_script_loader.cpp — the THIRD group of the

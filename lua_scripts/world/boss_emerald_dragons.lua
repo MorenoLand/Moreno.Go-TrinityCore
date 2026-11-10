@@ -49,11 +49,12 @@
 -- registered):
 -- emerald_dragonAI Reset — PORTED 2026-10-24: RemoveFlag NOT_SELECTABLE /
 -- NON_ATTACKABLE (already ported 2026-10-20) + DoCast(me, SPELL_MARK_OF_
--- NATURE_AURA 25041, triggered) self-cast in dragonReset; the aura is
--- mechanically inert in Go (its 10s tick triggers 25042 via the
+-- NATURE_AURA 25041, triggered) self-cast in dragonReset + SetReactState
+-- (REACT_AGGRESSIVE) :101 — the banish machine's REACT_PASSIVE :639 can
+-- still be live at Reset (evade mid-banish), so the leg is ported; the
+-- aura is mechanically inert in Go (its 10s tick triggers 25042 via the
 -- SpellScript-only spell_mark_of_nature), like the ported KilledUnit
--- 25040 cast. SetReactState(REACT_AGGRESSIVE) stays out: nothing in the
--- ported model ever sets the dragons non-aggressive (see dragonReset).
+-- 25040 cast.
 -- The base EVENT_TAIL_SWEEP / EVENT_NOXIOUS_BREATH / EVENT_SEEPING_FOG
 -- machine is PORTED 2026-10-24 (tailSweepTick / noxiousBreathTick /
 -- seepingFogTick, seeded in all four EnterCombat handlers): the old
@@ -753,14 +754,14 @@ local function dragonReset(event, creature)
     -- C++ emerald_dragonAI::Reset (boss_emerald_dragons.cpp:100):
     -- RemoveFlag(UNIT_FIELD_FLAGS, NOT_SELECTABLE|NON_ATTACKABLE)
     -- (ported 2026-10-20); the banish-machine SetFlag pair (:638) is
-    -- PORTED in taerarDamageTaken below (this run), so this Reset leg
-    -- only clears the base flags.
-    -- C++ :101's SetReactState(REACT_AGGRESSIVE) stays out for the
-    -- base Reset: the banish machine's own REACT_PASSIVE :639 /
-    -- AGGRESSIVE restore :677 are PORTED in taerarDamageTaken /
-    -- taerarEndBanish below (this run), and spawn default is
-    -- AGGRESSIVE, so no base-Reset react leg is needed.
+    -- PORTED in taerarDamageTaken below, so this Reset leg only clears
+    -- the base flags.
+    -- C++ :101 SetReactState(REACT_AGGRESSIVE) — PORTED: the banish
+    -- machine's REACT_PASSIVE :639 can still be live at Reset (evade
+    -- mid-banish), and the engine restores no react state on its own;
+    -- without this leg taerar stays PASSIVE into the next engage.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
+    creature:SetReactState(REACT_AGGRESSIVE)
     -- C++ emerald_dragonAI::Reset (:102): DoCast(me, SPELL_MARK_OF_NATURE_
     -- AURA 25041, triggered) — ported for C++-exactness; mechanically
     -- inert in Go (its 10s tick triggers 25042 via the SpellScript-only
