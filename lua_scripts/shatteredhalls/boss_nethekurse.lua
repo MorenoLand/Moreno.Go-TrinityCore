@@ -6,7 +6,8 @@
 -- fissure are registered alongside).
 -- First boss in the Shattered Halls set per
 -- outland_script_loader.cpp order (instance_shattered_halls.
--- cpp stays blocked on the instance-script model).
+-- lua ported 3fe088b3 — the door machine reads this file's
+-- SetBossState(0, 3) write on death).
 -- Entry: NPC_GRAND_WARLOCK_NETHEKURSE = 16807 in shattered_
 -- halls.h (mapped in instance_shattered_halls.cpp
 -- OnCreatureCreate — the door/peon instance machine around
@@ -60,7 +61,8 @@
 -- (bookkeeping exact).
 -- OnTargetDied(3): Talk(SAY_SLAY) — C++ KilledUnit talks
 -- with no player gate (C++-exact). OnDied(4): Talk(SAY_DIE)
--- + cleanup (the _JustDied arm is instance-blocked). OnLeave
+-- + SetBossState(0, 3) DONE (the _JustDied twin — drives the
+-- instance door machine) + cleanup. OnLeave
 -- Combat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the Reset() NON_ATTACKABLE re-flag arm stays out on the
 -- paired-arm rule — its removal rides the unported peon-relay /
@@ -68,15 +70,17 @@
 -- (thespia/kalithresh precedent); SetFlag(59) itself is bridged; the
 -- _Reset arm is instance-blocked).
 -- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI
--- shim (instance_shattered_halls.cpp stays blocked on the
--- instance-script model; the BossAI ctor DATA_NETHEKURSE =
--- 0 bookkeeping in Reset/JustEngagedWith/JustDied skipped —
--- DATA_NETHEKURSE is an instance-side constant,
--- unbridgeable; the MoveInLineOfSight SAY_INTRO + SetBoss
--- State IN_PROGRESS arm, the 90s IntroEvent_Timer ->
--- DoTauntPeons machine (the "@todo kill the peons first"
--- arm), and the door GO arms are instance gated); no
+-- intro/peon machine — boss admission via the luaBossAI
+-- shim (the BossAI ctor DATA_NETHEKURSE = 0 bookkeeping in
+-- Reset/JustEngagedWith is skipped — DATA_NETHEKURSE is an
+-- instance-side constant, unbridgeable; the MoveInLineOfSight
+-- SAY_INTRO + SetBossState IN_PROGRESS arm and the 90s
+-- IntroEvent_Timer -> DoTauntPeons machine (the "@todo kill
+-- the peons first" arm) stay out on sighting-bridge grounds
+-- — ev27 is engage-only, no 30yd sighting twin; the peon
+-- SetData counts and the all-four-dead activation live in
+-- npc_fel_orc_convert.lua as direct Talk relays, the
+-- NON_ATTACKABLE removal moot in-port); no
 -- cross-creature bridge — the peon SetData(SETDATA_PEON_
 -- AGGRO/DEATH) relay from npc_fel_orc_convert (ObjectAccessor
 -- GetCreature via instance GetGuidData), the resulting

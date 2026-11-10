@@ -86,6 +86,13 @@ local DATA_NETHEKURSE = 0
 local DATA_SHATTERED_EXECUTIONER = 3
 local DATA_PRISONERS_EXECUTED = 4
 
+-- Lua-side transport id (no C++ counterpart — the executioner
+-- AI has no DoAction override): fired on the executioner right
+-- after each SetData(DATA_PRISONERS_EXECUTED) write so its
+-- ev38 handler runs the SetData machine once per write
+-- (boss_shattered_executioner.lua; broggok precedent).
+local ACTION_PRISONERS_EXECUTED = 1
+
 -- shattered_halls.h SHCreatureIds / SHGameobjectIds.
 local NPC_GRAND_WARLOCK_NETHEKURSE = 16807
 local NPC_SHATTERED_EXECUTIONER = 17301
@@ -282,8 +289,8 @@ RegisterMapEvent(MAP_SHATTERED_HALLS, INSTANCE_EVENT_ON_UPDATE, function(event, 
     -- C++ Update expiry: strip, advance executed, stage the next
     -- timer, write SetData(DATA_PRISONERS_EXECUTED) to the
     -- executioner (creature:SetData store — the executioner file
-    -- reads it via GetData; its header's "unreachable" claim is
-    -- stale, the bridge is live at lua_creature_events.go:792).
+    -- reads it via GetData) and fire the ev38 relay so its
+    -- SetData machine runs once per write (lua_creature_events.go:792).
     castOnPlayers(mapObj, SPELL_REMOVE_KARGATH_EXECUTIONER)
     local executed = (instanceData.prisonersExecuted or 0) + 1
     instanceData.prisonersExecuted = executed
@@ -299,5 +306,6 @@ RegisterMapEvent(MAP_SHATTERED_HALLS, INSTANCE_EVENT_ON_UPDATE, function(event, 
     local executioner = findCreature(mapObj, NPC_SHATTERED_EXECUTIONER)
     if executioner then
         executioner:SetData(DATA_PRISONERS_EXECUTED, executed)
+        executioner:DoAction(ACTION_PRISONERS_EXECUTED)
     end
 end)
