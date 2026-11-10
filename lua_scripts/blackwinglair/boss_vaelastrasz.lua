@@ -85,6 +85,15 @@
 
 local ENTRY_VAELASTRAZ = 13020
 
+-- The boss files reach the instance script through the shared
+-- instanceData table (gruul precedent:
+-- creature:GetMap():GetInstanceData()); the door-data flags below
+-- ride it (instance_blackwing_lair.lua).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
 local SAY_LINE1 = 0
 local SAY_LINE2 = 1
 local SAY_LINE3 = 2
@@ -382,6 +391,10 @@ local function onDied(event, creature, killer)
     -- (ScriptedCreature.h:330) runs _JustDied(), writing
     -- SetBossState(DATA_VAELASTRAZ_THE_CORRUPT 1, DONE).
     creature:SetBossState(1, 3)
+    local data = instanceDataOf(creature)
+    if data then
+        data.vaelastraszDone = true
+    end
     cancelTimers(creature:GetGUIDLow())
 end
 
@@ -413,6 +426,10 @@ local function onReset(event, creature)
     -- clears HasYelled (C++-exact).
     if creature:IsAlive() and creature:GetBossState(1) ~= 3 then
         creature:SetBossState(1, 0)
+        local data = instanceDataOf(creature)
+        if data then
+            data.vaelastraszDone = false
+        end
     end
     local guid = creature:GetGUIDLow()
     creature:SetStandState(7)

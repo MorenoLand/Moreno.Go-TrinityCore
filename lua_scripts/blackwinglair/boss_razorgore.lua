@@ -281,6 +281,7 @@ local function razorgoreDied(event, creature, killer)
     creature:Talk(3) -- SAY_DEATH
     local data = instanceDataOf(creature)
     if data then
+        data.razorgoreDone = true
         data:SetData(DATA_EGG_EVENT, 0) -- NOT_STARTED
     end
     razorgoreResetState(creature:GetGUIDLow())
@@ -301,6 +302,10 @@ local function razorgoreReset(event, creature)
         despawnSummons(creature)
         if creature:GetBossState(0) ~= 3 then
             creature:SetBossState(0, 0)
+            local data = instanceDataOf(creature)
+            if data then
+                data.razorgoreDone = false
+            end
         end
     end
     local data = instanceDataOf(creature)

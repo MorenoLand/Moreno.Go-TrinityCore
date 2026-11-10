@@ -60,6 +60,15 @@
 
 local ENTRY_CHROMAGGUS = 14020
 
+-- The boss files reach the instance script through the shared
+-- instanceData table (gruul precedent:
+-- creature:GetMap():GetInstanceData()); the door-data flags below
+-- ride it (instance_blackwing_lair.lua).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
 local SPELL_FIRE_VULNERABILITY = 22277
 local SPELL_FROST_VULNERABILITY = 22278
 local SPELL_SHADOW_VULNERABILITY = 22279
@@ -333,6 +342,10 @@ local function chromaggusDied(event, creature, killer)
     -- SetBossState(DATA_CHROMAGGUS 6, DONE). (The old "state
     -- untouched" claim was wrong: the base runs by virtual dispatch.)
     creature:SetBossState(6, 3)
+    local data = instanceDataOf(creature)
+    if data then
+        data.chromaggusDone = true
+    end
     cancelTimers(creature:GetGUIDLow())
 end
 
@@ -343,6 +356,10 @@ local function chromaggusReset(event, creature)
     -- fires ev23 on the death path too, hence the gate.
     if creature:IsAlive() and creature:GetBossState(6) ~= 3 then
         creature:SetBossState(6, 0)
+        local data = instanceDataOf(creature)
+        if data then
+            data.chromaggusDone = false
+        end
     end
     cancelTimers(creature:GetGUIDLow())
     local st = chromaggusState[creature:GetGUIDLow()]

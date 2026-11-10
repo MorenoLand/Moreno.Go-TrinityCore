@@ -32,6 +32,15 @@
 
 local ENTRY_EBONROC = 14601
 
+-- The boss files reach the instance script through the shared
+-- instanceData table (gruul precedent:
+-- creature:GetMap():GetInstanceData()); the door-data flags below
+-- ride it (instance_blackwing_lair.lua).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
 local SPELL_SHADOWFLAME = 22539
 local SPELL_WINGBUFFET = 23339
 local SPELL_SHADOWOFEBONROC = 23340
@@ -147,6 +156,10 @@ local function ebonrocDied(event, creature, killer)
     -- (ScriptedCreature.h:330) runs _JustDied(), writing
     -- SetBossState(DATA_EBONROC 4, DONE).
     creature:SetBossState(4, 3)
+    local data = instanceDataOf(creature)
+    if data then
+        data.ebonrocDone = true
+    end
     ebonrocResetState(creature:GetGUIDLow())
 end
 
@@ -158,6 +171,10 @@ local function ebonrocReset(event, creature)
     -- the death path too, hence the gate.
     if creature:IsAlive() and creature:GetBossState(4) ~= 3 then
         creature:SetBossState(4, 0)
+        local data = instanceDataOf(creature)
+        if data then
+            data.ebonrocDone = false
+        end
     end
     ebonrocResetState(creature:GetGUIDLow())
 end

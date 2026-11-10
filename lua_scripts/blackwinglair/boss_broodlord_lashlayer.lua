@@ -59,6 +59,15 @@
 
 local ENTRY_BROODLORD = 12017
 
+-- The boss files reach the instance script through the shared
+-- instanceData table (gruul precedent:
+-- creature:GetMap():GetInstanceData()); the door-data flags below
+-- ride it (instance_blackwing_lair.lua).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
 local SAY_AGGRO = 0
 local SAY_LEASH = 1 -- Talk ported once-latched in onCheck; EnterEvadeMode leg stays out.
 
@@ -218,6 +227,10 @@ local function broodlordDied(event, creature, killer)
     -- are idempotent). _JustDied() runs first in C++ (:80), writing
     -- SetBossState(DATA_BROODLORD_LASHLAYER 2, DONE).
     creature:SetBossState(2, 3)
+    local data = instanceDataOf(creature)
+    if data then
+        data.broodlordDone = true
+    end
     for _, device in ipairs(creature:GetGameObjectsInGrid(GO_SUPPRESSION_DEVICE, 200)) do
         device:SetGoState(GO_STATE_ACTIVE)
         device:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
@@ -233,6 +246,10 @@ local function broodlordReset(event, creature)
     -- Go fires ev23 on the death path too, hence the gate.
     if creature:IsAlive() and creature:GetBossState(2) ~= 3 then
         creature:SetBossState(2, 0)
+        local data = instanceDataOf(creature)
+        if data then
+            data.broodlordDone = false
+        end
     end
     broodlordResetState(creature:GetGUIDLow())
 end

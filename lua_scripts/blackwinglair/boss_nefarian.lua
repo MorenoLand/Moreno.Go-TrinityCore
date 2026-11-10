@@ -118,6 +118,15 @@
 local ENTRY_VICTOR_NEFARIUS = 10162
 local ENTRY_NEFARIAN = 11583
 
+-- The boss files reach the instance script through the shared
+-- instanceData table (gruul precedent:
+-- creature:GetMap():GetInstanceData()); the door-data flags below
+-- ride it (instance_blackwing_lair.lua).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
 local GOSSIP_ICON_CHAT = 0
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
@@ -361,6 +370,10 @@ local function beginEvent(creature, guid)
     -- 7, IN_PROGRESS) (ScriptedCreature.cpp:527; the CheckRequiredBosses
     -- gate has no case for id 7, so it always passes).
     creature:SetBossState(7, 1)
+    local data = instanceDataOf(creature)
+    if data then
+        data.nefarianInProgress = true
+    end
     local st = nefariusState[guid]
     if not st then
         nefariusInit(guid)
@@ -445,6 +458,10 @@ local function onNefariusReset(event, creature)
         if not creature:FindNearestCreature(ENTRY_NEFARIAN, 1000) then
             if creature:IsAlive() and creature:GetBossState(7) ~= 3 then
                 creature:SetBossState(7, 0)
+                local data = instanceDataOf(creature)
+                if data then
+                    data.nefarianInProgress = false
+                end
             end
         end
         creature:SetVisible(true)
@@ -469,6 +486,10 @@ end
 -- onNefariusReset — the throne arms on the death path were unfaithful).
 local function onNefariusDied(event, creature)
     creature:SetBossState(7, 3)
+    local data = instanceDataOf(creature)
+    if data then
+        data.nefarianInProgress = false
+    end
     cancelTimers(creature:GetGUIDLow())
     nefariusInit(creature:GetGUIDLow())
 end
@@ -667,6 +688,10 @@ end
 -- SetBossState(DATA_NEFARIAN 7, DONE) first, then Talk(SAY_DEATH).
 local function nefarianDied(event, creature, killer)
     creature:SetBossState(7, 3)
+    local data = instanceDataOf(creature)
+    if data then
+        data.nefarianInProgress = false
+    end
     creature:Talk(SAY_DEATH)
     nefarianClear(creature:GetGUIDLow())
 end
@@ -693,6 +718,10 @@ local function nefarianDespawnCheck(creature, guid)
     end
     st.done = true
     creature:SetBossState(7, 2) -- DATA_NEFARIAN (blackwing_lair.h:38), FAIL
+    local data = instanceDataOf(creature)
+    if data then
+        data.nefarianInProgress = false
+    end
     for _, construct in ipairs(creature:GetCreaturesInGrid(14605, 500)) do
         construct:DespawnOrUnsummon()
     end
@@ -745,6 +774,10 @@ RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 1, function(_, creature)
     -- (ScriptedCreature.h:329), writing IN_PROGRESS; idempotent with
     -- beginEvent's write (the event is the only way combat starts).
     creature:SetBossState(7, 1)
+    local data = instanceDataOf(creature)
+    if data then
+        data.nefarianInProgress = true
+    end
     creature:SetMeleeAttack(false) -- boss_nefarian.cpp:248: custom UpdateAI never calls DoMeleeAttackIfReady (event machine in C++, never melees)
 end)
 -- C++ boss_victor_nefariusAI::JustReachedHome (boss_nefarian.cpp:200-203)

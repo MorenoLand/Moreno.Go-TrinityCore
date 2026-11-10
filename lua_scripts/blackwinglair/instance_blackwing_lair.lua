@@ -17,6 +17,29 @@
 -- Update(diff) shape): spawn waves 45s after IN_PROGRESS then every
 -- {12s,17s}, phase two 1s after the 15th counted egg.
 --
+-- PORTED — door data (instance_blackwing_lair.cpp:28-38 +
+-- InstanceScript::UpdateDoorState, InstanceScript.cpp:188-215):
+-- the 8 portcullis rows over 6 GOs — 176965 razorgore, 179364
+-- vaelastrasz, 179365 broodlord, 179115 threedragons, 179117
+-- chromaggus (all DOOR_TYPE_PASSAGE, open iff DONE) and 176966
+-- nefarian (DOOR_TYPE_ROOM, open iff NOT IN_PROGRESS). The
+-- threedragons door ANDs its three rows (UpdateDoorState loops
+-- every row for the entry and stays open only while all hold),
+-- so it opens once firemaw AND ebonroc AND flamegor are DONE.
+-- Go fires no event on boss-state writes, so the 8 boss files
+-- write instanceData done/in-progress flags in the same breath
+-- as creature:SetBossState (the gruul pattern); the OnUpdate
+-- poll (event 3) applies the door states, retrying on later
+-- ticks if a door GO is unresolvable. The OnGameObjectCreate
+-- handler (event 6) covers the dynamic-spawn path and the
+-- OnPlayerEnter apply covers the static-spawn path (static GOs
+-- never fire event 6 in Go — triggerInstanceGameObjectCreate is
+-- dynamic-spawn-only, instance_hooks.go:488-503). Doors are
+-- entry-resolved via player:FindNearestGameObject (the gruul
+-- findGO idiom, 1000y — the whole instance); the applied state
+-- is tracked in instanceData (<door>DoorOpen) so re-fires are
+-- no-ops.
+--
 -- C++-exact quirks kept: the first SPECIAL starts the event and its
 -- nested SetData(IN_PROGRESS) resets EggCount to 0, so phase two
 -- needs 16 destroyed eggs (1 to start + 15 counted); SetData(DONE)
@@ -44,9 +67,7 @@
 -- arm / EggList: the list is only consumed by the unportable DONE
 -- arm, so it is not built. OnUnitDeath Razorgore DONE arm: the boss
 -- ev4 already writes SetBossState DONE. CheckRequiredBosses gating:
--- no bridge. Door data (8 portcullis rows): needs boss-written
--- instanceData flags in all 8 boss files (gruul pattern) — separate
--- unit, not this one. The SPECIAL arm's
+-- no bridge. The SPECIAL arm's
 -- razor->RemoveAurasDueToSpell(42013) + DoRemoveAurasDueToSpellOnPlayers
 -- (42013) legs have no bridge (creature RemoveAurasDueToSpell is
 -- unbridged; no instance player-aura removal) — the phase-two timer
@@ -65,7 +86,9 @@
 local MAP_BLACKWING_LAIR = 469
 
 local INSTANCE_EVENT_ON_UPDATE = 3
+local INSTANCE_EVENT_ON_PLAYER_ENTER = 4
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
+local INSTANCE_EVENT_ON_GAMEOBJECT_CREATE = 6
 local INSTANCE_EVENT_ON_SET_DATA = 8
 
 -- blackwing_lair.h BWLMisc: ACTION_PHASE_TWO = 1, DATA_EGG_EVENT = 2.
@@ -74,6 +97,20 @@ local DATA_EGG_EVENT = 2
 
 local NPC_RAZORGORE = 12435
 local SPELL_EGG_DESTROY = 19873
+
+-- blackwing_lair.h BWLGameObjectIds: the door-data portcullis rows
+-- (instance_blackwing_lair.cpp:28-38).
+local GO_PORTCULLIS_RAZORGORE = 176965
+local GO_PORTCULLIS_VAELASTRASZ = 179364
+local GO_PORTCULLIS_BROODLORD = 179365
+local GO_PORTCULLIS_THREEDRAGONS = 179115
+local GO_PORTCULLIS_CHROMAGGUS = 179117
+local GO_PORTCULLIS_NEFARIAN = 176966
+
+local GO_STATE_ACTIVE = 0
+local GO_STATE_READY = 1
+
+local GO_SEARCH_DIST = 1000 -- whole-instance radius; one door per entry
 
 -- EncounterState (InstanceScript.h): NOT_STARTED 0, IN_PROGRESS 1,
 -- SPECIAL 4.
@@ -140,6 +177,57 @@ local function razorOf(instanceData, mapObj)
         end
     end
     return nil
+end
+
+-- Entry-based GO resolution from any player in the instance
+-- (the gruul findGO idiom; player:FindNearestGameObject covers
+-- DB spawns).
+local function findGO(mapObj, entry)
+    if mapObj == nil then
+        return nil
+    end
+    local players = mapObj:GetPlayers()
+    if not players then
+        return nil
+    end
+    for _, player in ipairs(players) do
+        local go = player:FindNearestGameObject(entry, GO_SEARCH_DIST)
+        if go then
+            return go
+        end
+    end
+    return nil
+end
+
+-- C++ InstanceScript::UpdateDoorState (InstanceScript.cpp:188-215):
+-- PASSAGE opens iff its boss is DONE; ROOM opens iff its boss is
+-- NOT IN_PROGRESS. The threedragons door ANDs its three PASSAGE
+-- rows (open iff firemaw AND ebonroc AND flamegor are DONE).
+-- Reads the boss-written instanceData flags (no boss-state-change
+-- event exists); idempotent across re-fires via the tracked
+-- applied state.
+local function setDoor(instanceData, mapObj, entry, key, open)
+    if instanceData[key] ~= open then
+        local door = findGO(mapObj, entry)
+        if door then
+            if open then
+                door:SetGoState(GO_STATE_ACTIVE)
+            else
+                door:SetGoState(GO_STATE_READY)
+            end
+            instanceData[key] = open
+        end
+    end
+end
+
+local function updateDoors(instanceData, mapObj)
+    setDoor(instanceData, mapObj, GO_PORTCULLIS_RAZORGORE, "razorgoreDoorOpen", instanceData.razorgoreDone == true)
+    setDoor(instanceData, mapObj, GO_PORTCULLIS_VAELASTRASZ, "vaelastraszDoorOpen", instanceData.vaelastraszDone == true)
+    setDoor(instanceData, mapObj, GO_PORTCULLIS_BROODLORD, "broodlordDoorOpen", instanceData.broodlordDone == true)
+    setDoor(instanceData, mapObj, GO_PORTCULLIS_THREEDRAGONS, "threedragonsDoorOpen",
+        instanceData.firemawDone == true and instanceData.ebonrocDone == true and instanceData.flamegorDone == true)
+    setDoor(instanceData, mapObj, GO_PORTCULLIS_CHROMAGGUS, "chromaggusDoorOpen", instanceData.chromaggusDone == true)
+    setDoor(instanceData, mapObj, GO_PORTCULLIS_NEFARIAN, "nefarianDoorOpen", not instanceData.nefarianInProgress)
 end
 
 -- C++ EVENT_RAZOR_SPAWN (instance_blackwing_lair.cpp Update):
@@ -211,6 +299,7 @@ end
 -- to Razorgore. The Nefarian respawn leg never schedules (its
 -- SetBossState FAIL sender is unported — see header).
 RegisterMapEvent(MAP_BLACKWING_LAIR, INSTANCE_EVENT_ON_UPDATE, function(event, instanceData, mapObj, diff)
+    updateDoors(instanceData, mapObj)
     local spawnMs = instanceData.razorSpawnMs
     if spawnMs then
         spawnMs = spawnMs - diff
@@ -251,6 +340,30 @@ RegisterMapEvent(MAP_BLACKWING_LAIR, INSTANCE_EVENT_ON_CREATURE_CREATE, function
 end)
 
 RegisterMapEvent(MAP_BLACKWING_LAIR, INSTANCE_EVENT_ON_SET_DATA, onSetData)
+
+-- C++ OnGameObjectCreate (instance_blackwing_lair.cpp: LoadDoorData):
+-- a door creation re-evaluates its state. Fires only for dynamic
+-- spawns in Go; the static-spawn path is the OnPlayerEnter apply
+-- below.
+local DOOR_ENTRIES = {
+    [GO_PORTCULLIS_RAZORGORE] = true,
+    [GO_PORTCULLIS_VAELASTRASZ] = true,
+    [GO_PORTCULLIS_BROODLORD] = true,
+    [GO_PORTCULLIS_THREEDRAGONS] = true,
+    [GO_PORTCULLIS_CHROMAGGUS] = true,
+    [GO_PORTCULLIS_NEFARIAN] = true,
+}
+RegisterMapEvent(MAP_BLACKWING_LAIR, INSTANCE_EVENT_ON_GAMEOBJECT_CREATE, function(event, instanceData, mapObj, go)
+    if DOOR_ENTRIES[go:GetEntry()] then
+        updateDoors(instanceData, mapObj)
+    end
+end)
+
+-- Static-spawn path for the door legs: re-apply on player enter
+-- (idempotent — guarded by the tracked applied state).
+RegisterMapEvent(MAP_BLACKWING_LAIR, INSTANCE_EVENT_ON_PLAYER_ENTER, function(event, instanceData, mapObj, player)
+    updateDoors(instanceData, mapObj)
+end)
 
 -- C++ spell_egg_event SpellScript (boss_razorgore.cpp): OnHit ->
 -- instance->SetData(DATA_EGG_EVENT, SPECIAL). The hit target is
