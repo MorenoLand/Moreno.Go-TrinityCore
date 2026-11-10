@@ -66,11 +66,14 @@ func (s *Server) fireGameEventHookTransitions(ctx context.Context, starts, stops
 
 // updateGameEventHooks diffs the cached active game-event set against
 // the last fired set and fires the transitions. The last set is stored
-// before firing so a re-entrant tick cannot re-fire the same edge.
+// before firing so a re-entrant tick cannot re-fire the same edge. The
+// world-event condition machine runs first (its transitions invalidate
+// the cache, so the diff below sees the new states in the same tick).
 func (s *Server) updateGameEventHooks(ctx context.Context) {
 	if s == nil || s.stopEvent.Load() {
 		return
 	}
+	s.updateWorldGameEvents(ctx)
 	current := s.cachedActiveGameEvents(ctx)
 	next := make(map[int64]struct{}, len(current))
 	for id := range current {
@@ -103,12 +106,18 @@ const langEventMessage = 4
 // on the tick diff, so command- and Lua-driven transitions land within
 // one 100ms tick, like the 34/35 hooks. DELTAS: the condition machine
 // (GAMEEVENT_WORLD_CONDITIONS/NEXTPHASE, CheckOneGameEventConditions,
-// SaveWorldEventStateToDB) has no Go model, so world-event rows never
-// reach this path through the schedule; the holiday worldstate leg
-// (UpdateWorldStates, GameEventMgr.cpp:1595-1614) needs the DBC
-// BattlemasterList HolidayWorldState, and RunSmartAIScripts
+// SaveWorldEventStateToDB) is ported in game_event_conditions.go, so
+// world-event rows reach this path through the schedule; the holiday
+// worldstate leg (UpdateWorldStates, GameEventMgr.cpp:1595-1614) needs
+// the DBC BattlemasterList HolidayWorldState, and RunSmartAIScripts
 // (SMART_EVENT_GAME_EVENT_START/END) needs a SmartAI engine — neither
-// exists in Go.
+// exists in Go. Remaining deltas: the per-player condition worldstates
+// (SendWorldStateUpdate, GameEventMgr.cpp:1710-1720) have no Go model —
+// the server-wide worldstate write above is the only condition progress
+// signal — and the StopEvent world branch (condition reset +
+// game_event_save delete, GameEventMgr.cpp:185-232) is not ported, so a
+// stopped world event keeps its saved CONDITIONS progress until a GM
+// restarts it.
 func (s *Server) applyGameEventTransition(ctx context.Context, id int64, start bool) {
 	if s == nil {
 		return

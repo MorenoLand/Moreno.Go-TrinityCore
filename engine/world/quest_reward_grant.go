@@ -396,6 +396,11 @@ func (s *session) applyQuestRewardGrants(ctx context.Context, view questRewardVi
 	}
 	packetHonor := 10 * s.calculateQuestHonorGain(ctx, questID, uint32(qLevel))
 	if announce {
+		// Player::SendQuestReward (Player.cpp:17016) fires the world-event
+		// condition machine before sending the packet.
+		if s.server != nil {
+			s.server.handleGameEventQuestComplete(ctx, questID)
+		}
 		if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, packetXP, uint32(moneyRew), packetHonor, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
 			return false
 		}

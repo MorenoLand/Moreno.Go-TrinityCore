@@ -31,8 +31,10 @@ const gameEventStateNormal = 0
 const gameEventStateInternal = 5
 
 // activeGameEvents computes the currently active event set the way
-// GameEventMgr does for GAMEEVENT_NORMAL rows: the event is active when now
-// lies inside [start, end) and inside the current occurrence window.
+// GameEventMgr does: NORMAL rows are active inside their schedule window,
+// world-event rows per the CheckOneGameEvent state arms (CONDITIONS and
+// NEXTPHASE active, FINISHED and INTERNAL inactive, INACTIVE only when its
+// prerequisites are met — game_event_conditions.go).
 func (s *Server) activeGameEventSets(ctx context.Context) (map[int64]struct{}, map[int64]struct{}) {
 	active := make(map[int64]struct{})
 	holidays := make(map[int64]struct{})
@@ -49,14 +51,36 @@ func (s *Server) activeGameEventSets(ctx context.Context) (map[int64]struct{}, m
 		return active, holidays
 	}
 	defer rows.Close()
+	var events []gameEvent
 	for rows.Next() {
 		var event gameEvent
 		if err := rows.Scan(&event.Entry, &event.Start, &event.End, &event.Occurrence, &event.Length, &event.Holiday, &event.WorldEvent); err != nil {
 			continue
 		}
-		if event.WorldEvent != gameEventStateNormal {
-			// Conditions-driven world events stay inactive without their
-			// state machinery, matching an idle GameEventMgr.
+		events = append(events, event)
+	}
+	// World-event rows resolve their state from `game_event_save` (the
+	// condition machine, game_event_conditions.go); their active test is
+	// the CheckOneGameEvent state arms, not the schedule window.
+	saves := s.loadGameEventSaves(ctx)
+	prereqs := s.loadGameEventPrerequisites(ctx)
+	states := make(map[int64]int64, len(events))
+	nextstarts := make(map[int64]int64, len(events))
+	for _, event := range events {
+		state, nextstart := worldGameEventState(event.WorldEvent, event.Entry, saves)
+		states[event.Entry] = state
+		nextstarts[event.Entry] = nextstart
+	}
+	for _, event := range events {
+		if event.WorldEvent != gameEventStateNormal && event.WorldEvent != gameEventStateInternal {
+			if checkOneWorldGameEvent(states[event.Entry], nextstarts[event.Entry], prereqs[event.Entry], states, nextstarts, now) {
+				active[event.Entry] = struct{}{}
+			}
+			continue
+		}
+		if event.WorldEvent == gameEventStateInternal {
+			// GAMEEVENT_INTERNAL is never handled by the update loop
+			// (CheckOneGameEvent returns false).
 			continue
 		}
 		if event.Length <= 0 {
@@ -154,8 +178,9 @@ type gameEventSchedule struct {
 // CheckOneGameEvent/NextCheck scale it too (:54/:108-110) — the
 // asymmetry is upstream, not a porting slip. World-event rows
 // (state > INTERNAL) take no schedule rewrite on either leg: start
-// runs the conditions branch instead, and stop runs the condition-reset
-// + game_event_save delete leg, which has no Go model.
+// runs the conditions branch instead (game_event_conditions.go), and
+// stop runs the condition-reset + game_event_save delete leg, which
+// still has no Go model.
 func (s *Server) applyGameEventScheduleRewrite(ctx context.Context, eventID int64, start bool) {
 	if s == nil {
 		return
