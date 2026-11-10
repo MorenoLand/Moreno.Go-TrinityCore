@@ -136,12 +136,13 @@ end
 
 -- C++ burn arm: threat-list player alive within 100 yd not
 -- carrying 46394 gets the targeted self-cast; repeat {60s,180s}.
--- The player-side self-cast has no bridge — AddAura reproduces
--- the whole effect (gurtogg fel-rage convention).
+-- C++ boss_brutallus.cpp:325: target->CastSpell(target, SPELL_BURN,
+-- true) — ported as the target self-cast via player:CastSpell
+-- (bridged, lua_player.go; moroes garrote precedent).
 local function brutallusBurn(creature, guid)
     local target = randomThreatPlayerInRange(creature, 100, SPELL_BURN)
     if target then
-        target:AddAura(SPELL_BURN)
+        target:CastSpell(target, SPELL_BURN, true)
     end
     schedule(guid, "burn", math.random(60000, 180000), function()
         brutallusBurn(creature, guid)

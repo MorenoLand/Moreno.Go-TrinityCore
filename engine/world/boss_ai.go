@@ -12872,15 +12872,17 @@ func init() {
 	// the berserk chain (10min, then every 10s, C++-exact), the
 	// unguarded kill Talk, the death Talk and timer cleanup; the
 	// ground ticks defer 500ms on IsCasting (C++ IsNonMeleeSpellCast
-	// gate boss_felmyst.cpp:421, no re-arm consumed); the flight
-	// phase, DamageTaken invulnerability, FOG_INFORM SpellHit
-	// summon, vapor-trail despawn summon and JustAppeared Talk arms
-	// have no movement/summon/kill/spawn bridges, and the
-	// SetBossState arms are blocked on the instance-script model.
+	// gate boss_felmyst.cpp:421, no re-arm consumed); the FOG_INFORM
+	// SpellHit summon + JustSummoned DEAD legs port, and the
+	// SetBossState + JustAppeared Talk arms port (sibling file); the
+	// flight phase, DamageTaken invulnerability and vapor-trail
+	// despawn summon stay out on the unported PHASE_FLIGHT /
+	// MovementInform machine.
 	RegisterLuaBoss("boss_felmyst", 25038)
 	// Vapor trail (25267) runs its constructor triggered self-cast
-	// of trail trigger 45399; the flag/combat-reach arms have no
-	// bridges; its UpdateAI is an empty override, so no gate. The
+	// of trail trigger 45399 on ev22 (ev5 never fires for temp
+	// summons); the flag/combat-reach arms port (SetFlag/SetCombatReach
+	// bridged). The
 	// vapor (25265) UpdateAI is a victim-pick AttackStart only (zero
 	// cast-state hits), so no gate, and the Blazing Dead (25268)
 	// has no C++ AI class at all, so no gate; neither is registered

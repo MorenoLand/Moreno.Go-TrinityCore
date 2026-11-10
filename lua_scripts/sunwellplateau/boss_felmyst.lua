@@ -13,7 +13,8 @@
 -- BREATH=2 (the DoTextEmote is commented out in C++) and YELL_
 -- TAKEOFF=3 belong to the unmodeled spawn/flight arms.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
+-- OnTargetDied, 4 OnDied, 14 OnHitBySpell, 19 OnJustSummoned, 22
+-- OnSummoned (trail ctor arms), 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): OnEnterCombat(1):
@@ -45,24 +46,27 @@
 -- motion slot) and setActive(false) arms stay out, and the
 -- SetBossState(NOT_STARTED) arm ports via creature:SetBossState
 -- (bridge live 2026-11-05). OnLeaveCombat(2)/OnReset(23): cancel timers.
--- Trail (25267): OnSpawn(5): NOT_SELECTABLE SetFlag + triggered
+-- Trail (25267): OnSummoned(22): NOT_SELECTABLE SetFlag + triggered
 -- self-cast trail trigger 45399 + SetTarget(self) (C++ constructor
 -- arms, C++-exact — the constructor runs once at AI creation; C++
--- Reset() is empty, so OnReset(23) would wrongly re-fire on evade;
+-- Reset() is empty, so OnReset(23) would wrongly re-fire on evade,
+-- and ev5 never fires for temp summons, so the ctor arms ride ev22;
 -- stale "no flag bridge" retracted — SetFlag(59, x) is bridged);
 -- the 0.01 bounding-radius arm has no bridge (bounding radius has
 -- no creature motion slot; the combat-reach bridge covers only
 -- UNIT_FIELD_COMBATREACH).
 -- Vapor (25265, "npc_felmyst_vapor") is not registered: its only
 -- C++ arms are the NOT_SELECTABLE flag, the 0.8 run-speed arm and
--- the no-victim random-target AttackStart selection, none of which
--- have flag/speed/threat bridges — entry verified for future
--- registration. NPC_DEAD (25268, Blazing Dead) has no AI class in
--- this file — no C++ ScriptName to verify a binding against, so it
--- is not registered (firesworn convention); its boss-side
--- JustSummoned (AttackStart random + DoZoneInCombat + triggered
--- self-cast dead passive 45415) and SpellHit arms are summon-
--- blocked (below).
+-- the no-victim random-target AttackStart selection — all bridged
+-- now (SetFlag, SetSpeedRate, DoZoneInCombat, AttackStart, ev7,
+-- ev22) — but vapors never spawn without the flight machine, so
+-- registration waits on it; entry verified for future registration.
+-- NPC_DEAD (25268, Blazing Dead) has no AI class in this file — no
+-- C++ ScriptName to verify a binding against, so it is not
+-- registered (firesworn convention); its boss-side JustSummoned
+-- (AttackStart random + DoZoneInCombat + triggered self-cast dead
+-- passive 45415) and SpellHit arms port below (felmystSummoned /
+-- felmystSpellHit).
 -- Deliberate deviations (all await engine bridges): the flight
 -- phase is unmodeled — the EVENT_FLIGHT 1min transition, the
 -- entire 10-step HandleFlightSequence (liftoff emote + Talk(YELL_
@@ -80,13 +84,9 @@
 -- always GROUND here). The SpellHit FOG_INFORM 45714 arm (summon
 -- NPC_DEAD at the caster, copy health, triggered FOG_CHARM 45717
 -- + FOG_CHARM2 45726 self-casts, lethal DealDamage on the caster)
--- stays out (2026-10-24 re-triage: event 14 DOES fire for the
--- player-caster path (spells.go:11781), and SummonCreature +
--- SetMaxHealth + DoZoneInCombat are all bridged now — but the lethal
--- DealDamage on the player caster has no bridge (creature:Kill is
--- self-only) and the summoned DEAD's AttackStart(random) has none,
--- so the summon+charm legs alone would leave a live player beside a
--- charmed, idle copy — a half-pair C++ never produces). The
+-- ports below (felmystSpellHit, event 14; the summoned DEAD's
+-- AttackStart/DoZoneInCombat/passive legs port in felmystSummoned,
+-- event 19). The
 -- DespawnSummons(NPC_VAPOR_TRAIL)->NPC_DEAD summon arm (fires only
 -- when phase == PHASE_FLIGHT) is phase-gated; the SetVisible/
 -- Despawn side ports via GetCreaturesInGrid + SetVisible + Despawn
@@ -108,6 +108,7 @@
 
 local NPC_FELMYST = 25038
 local NPC_VAPOR_TRAIL = 25267
+local NPC_DEAD = 25268 -- sunwell_plateau.h:69
 
 local SPELL_CLEAVE = 19983
 local SPELL_CORROSION = 45866
@@ -117,6 +118,10 @@ local SPELL_BERSERK = 45078
 local AURA_SUNWELL_RADIANCE = 45769
 local AURA_NOXIOUS_FUMES = 47002
 local SPELL_TRAIL_TRIGGER = 45399
+local SPELL_DEAD_PASSIVE = 45415 -- boss_felmyst.cpp:70
+local SPELL_FOG_INFORM = 45714 -- boss_felmyst.cpp:74
+local SPELL_FOG_CHARM = 45717 -- boss_felmyst.cpp:75
+local SPELL_FOG_CHARM2 = 45726 -- boss_felmyst.cpp:76
 
 local YELL_KILL = 1
 local YELL_BERSERK = 4
@@ -316,9 +321,12 @@ end
 
 -- C++ npc_felmyst_trailAI constructor arms: triggered self-cast
 -- trail trigger 45399 + SetTarget(self) (boss_felmyst.cpp:562-567).
--- OnSpawn(5): the constructor runs once at AI creation and C++
--- Reset() is empty, so ev23 would wrongly re-fire on evade; ev5
--- fires once per spawn (grid/respawn funnel, C++-exact).
+-- OnSummoned(22): the constructor runs once at AI creation and C++
+-- Reset() is empty, so ev23 would wrongly re-fire on evade; ev5 does
+-- NOT fire for temp summons (summonTempCreature fires only ev19/ev22,
+-- lua_creature_events.go:190-198 — trails spawn only as temp summons,
+-- EVENT_SUMMON_FOG 10s), so the ctor arms ride ev22, which fires on
+-- the summoned creature (fireCreaturePetSummoned).
 local function trailSpawn(event, creature)
     -- C++ npc_felmyst_trailAI ctor arm order: SetFlag(UNIT_FIELD_FLAGS,
     -- UNIT_FLAG_NOT_SELECTABLE) -> DoCast(me, 45399, true) ->
@@ -331,12 +339,51 @@ local function trailSpawn(event, creature)
     creature:SetTarget(creature:GetGUID())
 end
 
+-- C++ SpellHit (boss_felmyst.cpp:201-221): hit by FOG_INFORM 45714 ->
+-- summon NPC_DEAD (25268) at the caster, copy the caster's max health,
+-- triggered self-casts FOG_CHARM 45717 + FOG_CHARM2 45726 on the summon,
+-- then lethal DealDamage on the caster (full current health, school 0
+-- = physical mask 1, C++ SPELL_SCHOOL_MASK_NORMAL). The summon type is
+-- Go 3 = C++ TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 5s.
+local function felmystSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_FOG_INFORM or caster == nil then
+        return
+    end
+    local summon = creature:SummonCreature(NPC_DEAD, caster:GetX(), caster:GetY(), caster:GetZ(), 0, 3, 5000)
+    if summon ~= nil then
+        local maxHealth = caster:GetMaxHealth()
+        summon:SetMaxHealth(maxHealth)
+        summon:SetHealth(maxHealth)
+        summon:CastSpell(summon, SPELL_FOG_CHARM, true)
+        summon:CastSpell(summon, SPELL_FOG_CHARM2, true)
+    end
+    creature:DealDamage(caster, caster:GetHealth(), false, 0)
+end
+
+-- C++ JustSummoned (boss_felmyst.cpp:228-236): summon entry 25268 ->
+-- AttackStart(random threat-list pick — C++ SelectTarget(Random) has
+-- no playerOnly flag and no distance), DoZoneInCombat(summon),
+-- triggered self-cast DEAD_PASSIVE 45415.
+local function felmystSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= NPC_DEAD then
+        return
+    end
+    local targets = creature:GetAITargets()
+    if #targets > 0 then
+        summoned:AttackStart(targets[math.random(#targets)])
+    end
+    summoned:DoZoneInCombat()
+    summoned:CastSpell(summoned, SPELL_DEAD_PASSIVE, true)
+end
+
 RegisterCreatureEvent(NPC_FELMYST, 1, felmystEnterCombat)
 RegisterCreatureEvent(NPC_FELMYST, 2, felmystResetState)
 RegisterCreatureEvent(NPC_FELMYST, 3, felmystTargetDied)
 RegisterCreatureEvent(NPC_FELMYST, 4, felmystDied)
+RegisterCreatureEvent(NPC_FELMYST, 14, felmystSpellHit)
+RegisterCreatureEvent(NPC_FELMYST, 19, felmystSummoned)
 RegisterCreatureEvent(NPC_FELMYST, 23, felmystResetState)
-RegisterCreatureEvent(NPC_VAPOR_TRAIL, 5, trailSpawn)
+RegisterCreatureEvent(NPC_VAPOR_TRAIL, 22, trailSpawn)
 RegisterCreatureEvent(NPC_VAPOR_TRAIL, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_felmyst.cpp:576: empty UpdateAI in C++ (never melees)
 end)

@@ -25,7 +25,7 @@
 -- SAY_SATH_SPELL1=3 (shadowbolt, 20%), SAY_SATH_SPELL2=4 (corruption
 -- strike, 20%); human SAY_GOOD_NEAR_DEATH_0/1/2=0/1/2 (75%/50%/10%
 -- thresholds), SAY_GOOD_DEATH=3 (death). SAY_OUTRO_1=2 and SAY_OUTRO_
--- 2=3 belong to the unmodeled outro movement chain.
+-- 2=3 belong to the outro movement chain (ported below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 9 OnDamageTaken (returns false,
 -- newDamage; the boolean is consumed by the engine, the number
@@ -64,7 +64,8 @@
 -- creature DoAction, which now ports via grid sweep + 1s outro-start
 -- (kalecgosOutroStart below); the OUTRO_1/2/3 movement chain
 -- (SAY_OUTRO_1/2, gravity/liftoff/MovePoint/invisible/KillSelf arms)
--- stays out. The encounter-frame disengage leg ports in
+-- port below (kalecgosOutro1/2/3 + kalecgosMovementInform, event 28).
+-- The encounter-frame disengage leg ports in
 -- kalecgosOutroStart below (bridge live 2026-11-05).
 -- OnDamageTaken(9, pre-damage hook): lethal from anyone but
 -- self -> damage rewritten to 0 (C++ damage = 0, C++-exact).
@@ -75,13 +76,13 @@
 -- DoRemoveAurasDueToSpellOnPlayers(
 -- SPELL_SPECTRAL_REALM_AURA 46021, true, true — the
 -- includePets/includeControlled legs have no pet/controlled
--- iteration bridge),
--- spectral-realm, summons.DespawnAll, the sathrovarr
--- _DespawnAtEvade relay and the outro-phase early return) have no
--- bridges — modeled as timer/state cleanup only. DespawnPortals IS
--- ported on ev2 (kalecgosLeaveCombat, GetGameObjectsInGrid 250yd +
--- Despawn twin of C++ Delete()); the POINT_OUTRO_2 call stays out
--- with the outro machine.
+-- iteration bridge — player leg PORTED via stripSpectralRealmAuras),
+-- summons.DespawnAll (vacuous — nothing summoned in Lua), the
+-- sathrovarr _DespawnAtEvade relay and the outro-phase early return
+-- (no bridge; harmless — outro already disengaged and cancelled
+-- timers). DespawnPortals IS ported on ev2 (kalecgosLeaveCombat,
+-- GetGameObjectsInGrid 250yd + Despawn twin of C++ Delete()); the
+-- POINT_OUTRO_2 DespawnPortals call ports in kalecgosMovementInform.
 -- Kalecgos human (24891). OnReset: say-phase = 1, arm revitalize
 -- 45027 5s then 5s (non-triggered self-cast — C++ DoCast default is
 -- triggered=false, vaelastrasz convention) and heroic strike 45026
@@ -116,23 +117,25 @@
 -- triggered self-cast banish 44836 (C++-exact; no events.Reset on
 -- this side). OnDamageTaken(9): lethal from anyone but self ->
 -- damage rewritten to 0 (C++-exact). OnTargetDied(3): player victim
--- -> Talk(SAY_SATH_SLAY); the killed-kalecgos-human evade relay has
--- no bridge — skipped. OnDied(4): Talk(SAY_SATH_DEATH); the
+-- -> Talk(SAY_SATH_SLAY); the killed-kalecgos-human evade relay
+-- ports via grid sweep + dragon:EnterEvadeMode (below).
+-- OnDied(4): Talk(SAY_SATH_DEATH); the
 -- DoRemoveAurasDueToSpellOnPlayers player leg
 -- (SPELL_SPECTRAL_REALM_AURA 46021) is PORTED via
 -- stripSpectralRealmAuras (GetPlayersInWorld + mapId/instanceId filter +
 -- player:RemoveAura — the moroes precedent; the
 -- includePets/includeControlled legs have no pet/controlled iteration
 -- bridge — stay out) and the kalecgos ACTION_
--- START_OUTRO relay has no bridge — skipped. OnSpellHit(14): hit
+-- START_OUTRO relay ports via grid sweep + 1s outro-start (below).
+-- OnSpellHit(14): hit
 -- by 46733 (tap check damage) -> triggered self-cast teleport back
 -- 46020; the Unit::Kill(unitCaster, me) arm stays out — creature:Kill()
 -- is self-killer only, and this arm credits the kill to the caster
 -- (player kill chain), which no bridge expresses — skipped.
 -- OnLeaveCombat(2)/OnReset(23): the kalecgos EnterEvadeMode relay
--- has no bridge — modeled as timer/state cleanup only.
--- Not registered: go_kalecgos_spectral_rift (GO 187055 — no
--- GameObjectAI bridge); spell_kalecgos_tap_check,
+-- ports via grid sweep + dragon:EnterEvadeMode (below).
+-- Registered: go_kalecgos_spectral_rift (GO 187055) via
+-- RegisterGameObjectGossipEvent (below); spell_kalecgos_tap_check,
 -- spell_kalecgos_spectral_blast, spell_kalecgos_spectral_realm_
 -- trigger (standing SpellScript gaps; the spectral_realm_aura
 -- OnRemove leg is PORTED below, tick 425).
@@ -159,18 +162,14 @@
 -- DATA_KALECGOS_HUMAN/DATA_SATHROVARR instance-GUID bookkeeping
 -- arms are skipped); no cross-creature bridge —
 -- the human summon on pull, the sathrovarr GUID cache, the sathrovarr
--- JustDied -> kalecgos ACTION_START_OUTRO relay, the sathrovarr
 -- check-timer kalecgos banish/tap-check arms, the kalecgos check-
--- timer sathrovarr banish/tap-check arm, the kalecgos<->sathrovarr
--- ACTION_ENRAGE relay and both evade relays are unmodeled; no
--- movement/react bridge — the outro liftoff/MovePoint/
--- invisible/KillSelf chain, the human engage positioning and the
--- enter-evade flag arms are unmodeled (the faction leg itself,
--- me->SetFaction(FACTION_FRIENDLY) :319, is now bridgeable via
--- creature:SetFaction (engine/world/lua_creature_events.go:2076),
--- but the chain's bearer is sathrovarr's cross-creature DoAction
--- relay — the OUTRO_START combat-stop legs now port via sweep
--- (kalecgosOutroStart); the movement chain stays out); the agony
+-- timer sathrovarr banish/tap-check arm and the kalecgos<->sathrovarr
+-- ACTION_ENRAGE relay are unmodeled; the sathrovarr JustDied ->
+-- kalecgos ACTION_START_OUTRO relay and both evade relays port via
+-- grid sweep (below); no movement/react bridge for the human engage
+-- positioning and the enter-evade flag arms (unmodeled) — the outro
+-- liftoff/MovePoint/invisible/KillSelf chain ports below (MoveTo +
+-- event 28, bridges live); the agony
 -- NonTankTargetSelector filter collapses to the victim (ported
 -- above); the spectral-blast selector lives in the unmodeled
 -- SpellScript (remove_if polarity, not a SelectTarget pick); the
@@ -187,7 +186,11 @@ local BOSS_STATE_IN_PROGRESS = 1 -- InstanceScript.h:68-76 (EncounterState)
 
 local SAY_EVIL_AGGRO = 0
 local SAY_EVIL_SLAY = 1
+local SAY_OUTRO_1 = 2 -- boss_kalecgos.cpp:41
+local SAY_OUTRO_2 = 3 -- boss_kalecgos.cpp:42
 local EMOTE_ENRAGE = 4
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31
+local EMOTE_ONESHOT_LIFTOFF = 254 -- SharedDefines.h:2003
 local REACT_PASSIVE = 0 -- midnight/curator precedent
 local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
 local SAY_ARCANE_BUFFET = 6
@@ -225,6 +228,14 @@ local timers = {}
 local kalecgosState = {}
 local humanSayPhase = {}
 local sathrovarrState = {}
+
+-- Forward declarations: stripSpectralRealmAuras is defined below
+-- sathrovarrDied but used by kalecgosLeaveCombat above it; the
+-- outro chain functions are defined below kalecgosOutroStart but
+-- referenced from its scheduled closures (malown forward-declare
+-- idiom — plain assignments below, never re-local).
+local stripSpectralRealmAuras
+local kalecgosOutro1, kalecgosOutro2, kalecgosOutro3
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -415,10 +426,17 @@ end
 
 local function kalecgosLeaveCombat(event, creature)
     kalecgosResetState(creature:GetGUIDLow())
-    -- C++ EnterEvadeMode (boss_kalecgos.cpp:169): disengage before
-    -- DespawnPortals; DoRemoveAurasDueToSpellOnPlayers /
-    -- summons.DespawnAll / _DespawnAtEvade legs stay out (no bridges).
+    -- C++ EnterEvadeMode (boss_kalecgos.cpp:164-177): disengage (:169),
+    -- DoRemoveAurasDueToSpellOnPlayers(SPELL_SPECTRAL_REALM_AURA 46021,
+    -- true, true) (:170, player leg PORTED via stripSpectralRealmAuras —
+    -- the includePets/includeControlled legs have no pet/controlled
+    -- iteration bridge), summons.DespawnAll (:171, vacuous — nothing
+    -- summoned in Lua), DespawnPortals (:172, ported below); the
+    -- sathrovarr _DespawnAtEvade relay (:175) and self _DespawnAtEvade
+    -- (:177) have no bridge; the PHASE_OUTRO early return (:165-166)
+    -- is harmless (outro already disengaged and cancelled timers).
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE
+    stripSpectralRealmAuras(creature)
     -- C++ EnterEvadeMode's DespawnPortals (boss_kalecgos.cpp:172-186):
     -- every spectral-rift GO within the default 250yd grid scan is
     -- Delete()d; Lua Despawn is the hide-in-instance twin (the
@@ -454,11 +472,15 @@ end
 -- schedules EVENT_OUTRO_START 1s; its handler (:311-322) resets events,
 -- sets PHASE_OUTRO, stops regen, goes passive, interrupts casts, drops
 -- attackers, stops attacks, goes friendly, clears auras, disengages the
--- encounter frame, and schedules OUTRO_1 3s. The encounter-frame leg
--- ports here; the OUTRO_1/2/3 movement chain stays out. The combat-stop legs
--- port here. cancelTimers subsumes the phase reset: every combat timer
--- in this file runs through schedule(), so cancelling them is the
--- PHASE_OUTRO gate. Arm order is C++-exact.
+-- encounter frame, and schedules OUTRO_1 3s. The combat-stop legs port
+-- here, and the OUTRO_1/2/3 movement chain ports below (OUTRO_1
+-- gravity + liftoff emote :325-327, OUTRO_2 MovePoint POINT_OUTRO_1
+-- :330, MovementInform POINT_OUTRO_1 Talk SAY_OUTRO_1 + OUTRO_3 9s
+-- :239-240, OUTRO_3 Talk SAY_OUTRO_2 + MovePoint POINT_OUTRO_2
+-- :333-334, MovementInform POINT_OUTRO_2 invisible + DespawnPortals
+-- + KillSelf :243-245). cancelTimers subsumes the phase reset: every
+-- combat timer in this file runs through schedule(), so cancelling them
+-- is the PHASE_OUTRO gate. Arm order is C++-exact.
 local function kalecgosOutroStart(creature, guid)
     if creature:IsDead() then
         return
@@ -478,6 +500,55 @@ local function kalecgosOutroStart(creature, guid)
     creature:SetFaction(FACTION_FRIENDLY)
     creature:RemoveAllAuras()
     creature:SendEncounterUnit(1, creature) -- ENCOUNTER_FRAME_DISENGAGE (boss_kalecgos.cpp:321)
+    schedule(guid, "outro_1", 3000, function()
+        kalecgosOutro1(creature, guid)
+    end)
+end
+
+-- C++ EVENT_OUTRO_1 (boss_kalecgos.cpp:325-327): SetDisableGravity(true)
+-- + liftoff emote + OUTRO_2 in 3s.
+kalecgosOutro1 = function(creature, guid)
+    creature:SetDisableGravity(true)
+    creature:PerformEmote(EMOTE_ONESHOT_LIFTOFF)
+    schedule(guid, "outro_2", 3000, function()
+        kalecgosOutro2(creature, guid)
+    end)
+end
+
+-- C++ EVENT_OUTRO_2 (boss_kalecgos.cpp:330): MovePoint(POINT_OUTRO_1,
+-- FlyPos[0] = 1704.18, 927.999, 57.888); arrival fires event 28 below.
+kalecgosOutro2 = function(creature, guid)
+    creature:MoveTo(0, 1704.18, 927.999, 57.888)
+end
+
+-- C++ EVENT_OUTRO_3 (boss_kalecgos.cpp:333-334): Talk(SAY_OUTRO_2) +
+-- MovePoint(POINT_OUTRO_2, FlyPos[1] = 1614.355, 846.9694, 119.0971,
+-- genPath=false — Go MoveTo is straight-line, the documented twin).
+kalecgosOutro3 = function(creature, guid)
+    creature:Talk(SAY_OUTRO_2)
+    creature:MoveTo(1, 1614.355, 846.9694, 119.0971)
+end
+
+-- C++ MovementInform (boss_kalecgos.cpp:235-248): POINT_OUTRO_1 arrival
+-- (id 0) -> Talk(SAY_OUTRO_1) + OUTRO_3 in 9s; POINT_OUTRO_2 arrival
+-- (id 1) -> SetVisible(false) + DespawnPortals + KillSelf.
+local function kalecgosMovementInform(event, creature, type, id)
+    if type ~= POINT_MOTION_TYPE then
+        return
+    end
+    if id == 0 then -- POINT_OUTRO_1
+        creature:Talk(SAY_OUTRO_1)
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "outro_3", 9000, function()
+            kalecgosOutro3(creature, guid)
+        end)
+    elseif id == 1 then -- POINT_OUTRO_2
+        creature:SetVisible(false)
+        for _, portal in ipairs(creature:GetGameObjectsInGrid(GO_SPECTRAL_RIFT, 250)) do
+            portal:Despawn()
+        end
+        creature:Kill()
+    end
 end
 
 -- C++ DamageTaken: lethal from anyone but self -> damage = 0
@@ -496,6 +567,7 @@ RegisterCreatureEvent(ENTRY_KALECGOS, 3, kalecgosTargetDied)
 RegisterCreatureEvent(ENTRY_KALECGOS, 4, kalecgosDied)
 RegisterCreatureEvent(ENTRY_KALECGOS, 9, kalecgosDamageTaken)
 RegisterCreatureEvent(ENTRY_KALECGOS, 23, kalecgosReset)
+RegisterCreatureEvent(ENTRY_KALECGOS, 28, kalecgosMovementInform)
 
 -- ================= Kalecgos human (24891) =================
 
@@ -733,11 +805,21 @@ local function sathrovarrEnterCombat(event, creature, target)
     end)
 end
 
--- C++ KilledUnit: player victim -> Talk(SAY_SATH_SLAY). The killed-
--- kalecgos-human evade relay has no bridge — skipped.
+-- C++ KilledUnit: player victim -> Talk(SAY_SATH_SLAY); killed
+-- kalecgos-human -> EnterEvadeMode (EVADE_REASON_OTHER)
+-- (boss_kalecgos.cpp:496-505), which relays to the dragon
+-- (:471-474) — ported via grid sweep + dragon:EnterEvadeMode
+-- (bridge live, lua_creature_events.go:5194; muru precedent).
 local function sathrovarrTargetDied(event, creature, victim)
     if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SATH_SLAY)
+    elseif victim:GetObjectType() == "Creature" and victim:GetEntry() == ENTRY_KALECGOS_HUMAN then
+        for _, kalecgos in ipairs(creature:GetCreaturesInGrid(ENTRY_KALECGOS, 500)) do
+            if kalecgos:IsAlive() then
+                kalecgos:EnterEvadeMode()
+                break
+            end
+        end
     end
 end
 
@@ -752,8 +834,9 @@ end
 -- player sharing the creature's map+instance — GetPlayersInWorld +
 -- mapId/instanceId filter + player:RemoveAura (the moroes precedent;
 -- C++-exact, no alive gate). The includePets/includeControlled legs have
--- no pet/controlled iteration bridge — stay out.
-local function stripSpectralRealmAuras(creature)
+-- no pet/controlled iteration bridge — stay out. Plain assignment
+-- (forward-declared above): used by kalecgosLeaveCombat, defined here.
+stripSpectralRealmAuras = function(creature)
     local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == mapId and p:GetInstanceId() == instanceId then
@@ -790,10 +873,20 @@ local function sathrovarrDied(event, creature, killer)
     end
 end
 
--- C++ EnterEvadeMode: the kalecgos EnterEvadeMode relay has no
--- bridge — modeled as timer/state cleanup only.
+-- C++ EnterEvadeMode (boss_kalecgos.cpp:471-474): relay to the
+-- dragon via grid sweep + dragon:EnterEvadeMode (bridge live,
+-- lua_creature_events.go:5194). No self-evade in C++ — Sathrovarr
+-- is _DespawnAtEvade'd by the dragon after 10s (no bridge). No
+-- recursion risk: the dragon's ev2 handler has no relay back, and
+-- triggerCreatureEvade no-ops when already evading.
 local function sathrovarrLeaveCombat(event, creature)
     sathrovarrResetState(creature:GetGUIDLow())
+    for _, kalecgos in ipairs(creature:GetCreaturesInGrid(ENTRY_KALECGOS, 500)) do
+        if kalecgos:IsAlive() then
+            kalecgos:EnterEvadeMode()
+            break
+        end
+    end
 end
 
 local function sathrovarrReset(event, creature)
@@ -945,3 +1038,21 @@ local function spectralRealmRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SPECTRAL_REALM_AURA, 3, spectralRealmRemove)
+
+-- C++ go_kalecgos_spectral_rift::OnGossipHello
+-- (boss_kalecgos.cpp:590-594): player without spectral exhaustion
+-- (44867) self-casts the spectral-realm trigger (44811), triggered.
+-- DORMANT-BY-CONSTRUCTION: the trigger SpellScript
+-- (boss_kalecgos.cpp:680-707) is unported, so 44811 does nothing
+-- until it ports — same pattern as the realm-aura OnRemove above.
+local SPELL_SPECTRAL_REALM_TRIGGER = 44811 -- boss_kalecgos.cpp:86
+
+local function spectralRiftGossip(_, player, go)
+    if not player:HasAura(SPELL_SPECTRAL_EXHAUSTION) then
+        player:CastSpell(player, SPELL_SPECTRAL_REALM_TRIGGER, true)
+    end
+    return true -- C++ returns true (handled); Eluna polarity: a Lua
+    -- false would let native use proceed (kirtonos precedent).
+end
+
+RegisterGameObjectGossipEvent(GO_SPECTRAL_RIFT, 1, spectralRiftGossip)
