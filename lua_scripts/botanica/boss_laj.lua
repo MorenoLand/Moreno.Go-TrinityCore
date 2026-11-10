@@ -239,16 +239,17 @@ RegisterCreatureEvent(ENTRY_LAJ, 1, function(_, creature)
 end)
 
 -- C++ JustSummoned (boss_laj.cpp:172-175): summon AttackStarts a
--- SelectTarget(Random, 0) pick; defaults playerOnly=false, but the Go
--- EngageWithTarget bearer resolves player sessions only
--- (lua_creature_events.go:498), so the pool is threat players alive
--- (skyriss JustSummoned precedent) — instance players off the threat
--- list are ineligible in C++; victim included.
-local function randomThreatPlayer(creature)
+-- SelectTarget(Random, 0) pick; playerOnly defaults false, so any
+-- live threat-list unit is eligible — victim included. The Go
+-- EngageWithTarget bearer funnels creature victims through the
+-- same aggro path (lua_creature_events.go:1385-1393), so the pool
+-- is live threat units, not players only (the old "player sessions
+-- only" claim, citing :498, is stale — :498 is IsMoving now).
+local function randomThreatUnit(creature)
     local targets = creature:GetAITargets()
     local out = {}
     for _, unit in ipairs(targets) do
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+        if not unit:IsDead() then
             out[#out + 1] = unit
         end
     end
@@ -263,7 +264,7 @@ local function onJustSummoned(_, creature, summoned)
         return
     end
     if creature:GetVictim() then
-        local target = randomThreatPlayer(creature)
+        local target = randomThreatUnit(creature)
         if target then
             summoned:EngageWithTarget(target)
         end

@@ -69,24 +69,20 @@
 -- instance-script model; the BossAI ctor DATA_WARP_SPLINTER
 -- = 4 bookkeeping in Reset/JustEngagedWith/JustDied
 -- skipped); the six SummonTreants SummonCreature calls stay out
--- on the paired WarpGuid cross-AI write (not 'no summon bridge'
--- — the summon bridge is live);
--- no movement bridge — the treant MoveFollow(Warp) arm and
--- the boss-side SetSpeedRate(MOVE_RUN, 0.7f) unmodeled
--- (omor precedent); no cross-creature bridge — the treant
--- WarpGuid / ObjectAccessor::GetUnit lookup unmodeled; no
--- cast-bp0 bridge — the treant's SPELL_HEAL_FATHER 6262
--- cast (base points = treant's current HP) unmodeled; the
--- npc_warp_splinter_treant (19949) AI is documented only,
--- not registered (omor-heads / skyriss-illusion precedent):
--- its reachable C++ arms — the WarpGuid proximity check,
--- the Warp->CastSpell(Warp, SPELL_HEAL_FATHER) +
--- KillSelf heal arm, the MoveFollow arm, the melee arm —
--- all sit behind movement / cross-creature / cast-bp0 /
--- suicide bridges that do not exist, so there is nothing
--- bridgeable; the six treant_pos[] spawn coordinates and
--- the Treant_Spawn_Pos_X/Y bookkeeping feed only the
--- summon orientation, so they land nowhere; the
+-- for now — the WarpGuid write has a live twin (boss ev19
+-- summoned:SetData, soccothrates cross-creature precedent) and the
+-- treant port is the next unit (see below);
+-- the treant arms are bridgeable (MoveFollow :5291, GetCreatureByGUID
+-- :4050, CastCustomSpell bp0 :971, Kill-self :3228, SummonCreature
+-- :3828; WarpGuid rides boss ev19 summoned:SetData, soccothrates
+-- cross-creature precedent) — the npc_warp_splinter_treant (19949)
+-- port + summon arms are the next unit, not a bridge block; the
+-- boss-side SetSpeedRate(MOVE_RUN, 0.7f) IS ported (ev23, bridge live
+-- :5641) — the old 'no movement / cross-creature / cast-bp0 bridge'
+-- claims are stale; the six treant_pos[] spawn coordinates are the
+-- summon sites (used by the port); the Treant_Spawn_Pos_X/Y
+-- bookkeeping feeds only the summon orientation O, so it lands
+-- nowhere else; the
 -- ScriptData "SD%Complete: 80 / Includes Sapling (need
 -- some better control with these)" caveat is upstream,
 -- documented, not bridged; no SpellScript/AuraScript
