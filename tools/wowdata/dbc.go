@@ -159,14 +159,20 @@ func atoiPrefix(s string) (int, bool) {
 	if start == i {
 		return 0, false
 	}
-	n, err := strconv.Atoi(s[start:i])
+	// C++ atoi returns int: strtol's long result is truncated to 32 bits,
+	// so "2147483648" is -2147483648 and "4294967297" is 1 (verified
+	// against glibc on this platform). Apply the sign before the
+	// truncation — "-2147483648" must stay negative — and treat a
+	// strtol-range overflow as invalid: both clamps (LONG_MAX/MIN)
+	// truncate to <= 0 as int32, so C++ rejects them either way.
+	n64, err := strconv.ParseInt(s[start:i], 10, 64)
 	if err != nil {
 		return 0, false
 	}
 	if negative {
-		n = -n
+		n64 = -n64
 	}
-	return n, true
+	return int(int32(n64)), true
 }
 
 // extractDBCFromArchives reads every .dbc from archives, which must already
