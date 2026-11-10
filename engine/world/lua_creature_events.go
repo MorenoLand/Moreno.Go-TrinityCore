@@ -5942,7 +5942,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// the flag-backed fields the SetFlag/RemoveFlag bridges honor:
 	// UNIT_FIELD_FLAGS (59) reads the live motion.UnitFlags mirror (init
 	// from template at spawn; SetFlag/RemoveFlag/Mount/Dismount write
-	// it), UNIT_NPC_FLAGS (82) reads motion.NPCFlags, UNIT_DYNAMIC_FLAGS
+	// it), UNIT_FIELD_FLAGS_2 (60) reads motion.UnitFlags2,
+	// UNIT_NPC_FLAGS (82) reads motion.NPCFlags, UNIT_DYNAMIC_FLAGS
 	// (79) reads motion.DynamicFlags. Other fields return false.
 	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
 		field, err := luaUint32Arg(args, 0)
@@ -5958,6 +5959,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		switch field {
 		case 59:
 			has = motion.UnitFlags&flag != 0
+		case unitFieldFlags2:
+			has = motion.UnitFlags2&flag != 0
 		case unitFieldNPCFlags:
 			has = motion.NPCFlags&flag != 0
 		case unitFieldDynamicFlags:
@@ -6015,7 +6018,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (UpdateFields.h:117). SetFlag/RemoveFlag on it mutate motion.UnitFlags,
 	// which the engine reads in help-call (creaturemotion.go:1089) and
 	// chain/area target filtering — intro NOT_SELECTABLE/NON_ATTACKABLE arms
-	// port with real targeting effect. UNIT_NPC_FLAGS (field 82) is honored
+	// port with real targeting effect. UNIT_FIELD_FLAGS_2 (field 60) is
+	// honored too (see below); UNIT_NPC_FLAGS (field 82) is honored
 	// too (see below); UNIT_DYNAMIC_FLAGS (field 79) is honored too (see
 	// below); other update fields have no creature backing here and are
 	// ignored.
@@ -6032,6 +6036,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		npcDirty := false
 		var unitFlags uint32
 		unitFlagsDirty := false
+		var flags2 uint32
+		flags2Dirty := false
 		var dynFlags uint32
 		dynDirty := false
 		var mapID, instanceID uint32
@@ -6040,6 +6046,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Lock()
 			motion.UnitFlags |= flags
 			unitFlags, unitFlagsDirty = motion.UnitFlags, true
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
+			s.motionMu.Unlock()
+		} else if field == unitFieldFlags2 {
+			// UNIT_FIELD_FLAGS_2 (UpdateFields.h:118: OBJECT_END+0x36 = 60).
+			// C++ SetFlag ORs the bits; the values-update broadcast twin
+			// mirrors the 59 arm. Backs the falling-dragon feign-death leg
+			// (zone_storm_peaks.cpp:55795 sets UNIT_FLAG2_FEIGN_DEATH
+			// 0x00000001 here); IsTargetableForAttack reads the same
+			// motion.UnitFlags2 mirror, so the flag has real targeting
+			// effect.
+			s.motionMu.Lock()
+			motion.UnitFlags2 |= flags
+			flags2, flags2Dirty = motion.UnitFlags2, true
 			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
 		} else if field == unitFieldNPCFlags {
@@ -6082,6 +6101,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 				map[int]uint32{unitFieldDynamicFlags: dynFlags})
 		}
+		if flags2Dirty {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{unitFieldFlags2: flags2})
+		}
 		return nil, nil
 	}
 	methods["RemoveFlag"] = func(_ context.Context, args []any) ([]any, error) {
@@ -6097,6 +6120,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		npcDirty := false
 		var unitFlags uint32
 		unitFlagsDirty := false
+		var flags2 uint32
+		flags2Dirty := false
 		var dynFlags uint32
 		dynDirty := false
 		var mapID, instanceID uint32
@@ -6105,6 +6130,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			s.motionMu.Lock()
 			motion.UnitFlags &^= flags
 			unitFlags, unitFlagsDirty = motion.UnitFlags, true
+			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
+			s.motionMu.Unlock()
+		} else if field == unitFieldFlags2 {
+			// UNIT_FIELD_FLAGS_2 (see SetFlag above): C++ RemoveFlag ANDNs
+			// the bits. Backs the falling-dragon feign-death leg.
+			s.motionMu.Lock()
+			motion.UnitFlags2 &^= flags
+			flags2, flags2Dirty = motion.UnitFlags2, true
 			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
 		} else if field == unitFieldNPCFlags {
@@ -6134,6 +6167,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if dynDirty {
 			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
 				map[int]uint32{unitFieldDynamicFlags: dynFlags})
+		}
+		if flags2Dirty {
+			s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
+				map[int]uint32{unitFieldFlags2: flags2})
 		}
 		return nil, nil
 	}
