@@ -1,6 +1,11 @@
 -- Storm Peaks zone spell aura scripts -- Lua ports of the AuraScript arms
 -- in src/server/scripts/Northrend/zone_storm_peaks.cpp.
 --
+-- PORTED (SpellScript, RegisterSpellEvent ev5 = OnEffectHitTarget):
+--   spell_eject_passenger_wild_wyrm (60603, zone_storm_peaks.cpp:1070-1100):
+--   EFFECT_0 SCRIPT_EFFECT. OnEffectHitTarget the hit unit loses
+--   SPELL_FIGHT_WYRM (56673). Cast by the wild wyrm on ACTION_GRIP_LOST.
+--
 -- PORTED (tick 205, RegisterAuraEvent OnApply = 2 / OnPeriodic = 1):
 --   spell_jokkum_scriptcast (61319, zone_storm_peaks.cpp:967-996):
 --   EFFECT_0 DUMMY. OnApply the target casts Jokkum Summon (56541) on
@@ -39,6 +44,8 @@ local SPELL_PLAYER_CAST_VERANUS_SUMMON = 56650 -- TDB spell_script_names
 local SPELL_SUMMON_VERANUS_AND_THORIM = 56649 -- zone_storm_peaks.cpp:955
 local SPELL_CLOSE_RIFT = 56763 -- TDB spell_script_names
 local SPELL_DESPAWN_RIFT = 61665 -- zone_storm_peaks.cpp:1031
+local SPELL_FIGHT_WYRM = 56673 -- zone_storm_peaks.cpp:634
+local SPELL_EJECT_PASSENGER_1 = 60603 -- zone_storm_peaks.cpp:647
 
 -- C++ spell_jokkum_scriptcast_AuraScript::OnApply
 -- (zone_storm_peaks.cpp:980-984).
@@ -66,3 +73,19 @@ local function closeRiftPeriodic(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_CLOSE_RIFT, 1, closeRiftPeriodic)
+
+-- C++ spell_eject_passenger_wild_wyrm::HandleScript
+-- (zone_storm_peaks.cpp:1084-1087): EFFECT_0 SCRIPT_EFFECT
+-- OnEffectHitTarget — the hit unit loses SPELL_FIGHT_WYRM (56673).
+-- Cast by the wild wyrm on ACTION_GRIP_LOST (DoCastAOE, :746); the
+-- hit units are the passengers. Fires on the creature path only (ev5,
+-- runtime.go:574-577); the return value is ignored. DORMANT until
+-- Spell.dbc ships the 60603 record.
+local function ejectPassengerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_FIGHT_WYRM)
+end
+
+RegisterSpellEvent(SPELL_EJECT_PASSENGER_1, 5, ejectPassengerHit)

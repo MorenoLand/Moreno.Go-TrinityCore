@@ -160,7 +160,10 @@
 -- -> damage = 0) ride the same unregistered pre-phase trash entries; the
 -- unit-side GetAffectingPlayer pet-owner resolution has no Lua bridge.
 -- The ten spell scripts / condition_thorim_arena_leap / three achievements —
--- no SpellScript / AuraScript / ConditionScript / achievement bridges.
+-- no AuraScript / ConditionScript / achievement bridges. SpellScript
+-- OnEffectHitTarget IS bridged (RegisterSpellEvent ev5, skadi/gal_darah
+-- precedent): 64767/64909 ported below; 62042's script arm (FilterTargets
+-- ev7 + HandleScript ev5 + LoseHammer AfterCast) stays open.
 
 local ENTRY_THORIM = 32865
 local BOSS_THORIM = 8 -- ulduar.h:44
@@ -201,6 +204,10 @@ local FACTION_FRIENDLY = 35
 
 local SPELL_SHEATH_OF_LIGHTNING = 62276
 local SPELL_STORMHAMMER = 62042 -- boss_thorim.cpp:39
+local SPELL_STORMHAMMER_SIF = 64767 -- boss_thorim.cpp:40
+local SPELL_STORMHAMMER_BOOMERANG = 64909 -- boss_thorim.cpp:41
+local SPELL_SIF_TRANSFORM = 64778 -- boss_thorim.cpp:73
+local THORIM_WEAPON_DISPLAY_ID = 45900 -- boss_thorim.cpp:323
 local SPELL_CHARGE_ORB = 62016 -- boss_thorim.cpp:43
 local SPELL_UNBALANCING_STRIKE = 62130 -- boss_thorim.cpp:54
 local SPELL_CHAIN_LIGHTNING = 62131 -- boss_thorim.cpp:48
@@ -1064,3 +1071,41 @@ RegisterCreatureEvent(ENTRY_JORMUNGAR_BEHEMOTH, 4, preAddDied)
 RegisterCreatureEvent(ENTRY_MERCENARY_CAPTAIN_A, 4, preAddDied)
 RegisterCreatureEvent(ENTRY_MERCENARY_SOLDIER_A, 4, preAddDied)
 RegisterCreatureEvent(ENTRY_DARK_RUNE_ACOLYTE_PRE, 4, preAddDied)
+
+-- C++ spell_thorim_stormhammer_sif::HandleScript (boss_thorim.cpp:1970-1976):
+-- EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget — the hit unit casts
+-- SPELL_STORMHAMMER_BOOMERANG (64909) on the caster, triggered, and
+-- casts SPELL_SIF_TRANSFORM (64778) on itself, triggered. The AfterCast
+-- LoseHammer leg (caster UNIT_VIRTUAL_ITEM_SLOT_ID = 0, :1978-1981)
+-- stays out: CallScriptAfterCastHandlers is a Go no-op (spells.go:19257),
+-- no AfterCast bridge. LATENT — the hard-mode outro cast (EVENT_OUTRO_1,
+-- :798-799) stays out, so 64767 never lands yet. DORMANT until Spell.dbc
+-- ships the 64767 record.
+local function stormhammerSifHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, SPELL_STORMHAMMER_BOOMERANG, true)
+    hitTarget:CastSpell(hitTarget, SPELL_SIF_TRANSFORM, true)
+end
+
+RegisterSpellEvent(SPELL_STORMHAMMER_SIF, 5, stormhammerSifHit)
+
+-- C++ spell_thorim_stormhammer_boomerang::RecoverHammer
+-- (boss_thorim.cpp:2007-2010): EFFECT_0 DUMMY OnEffectHitTarget — the
+-- hit unit (the caster, Thorim — the boomerang is cast on the caster)
+-- restores UNIT_VIRTUAL_ITEM_SLOT_ID to THORIM_WEAPON_DISPLAY_ID 45900.
+-- SetEquipmentSlots(main, 0xFFFFFFFF, 0xFFFFFFFF) writes slot 0 only
+-- (malchezaar/zuljin precedent). DORMANT until Spell.dbc ships 64909.
+local function stormhammerBoomerangHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:SetEquipmentSlots(THORIM_WEAPON_DISPLAY_ID, 0xFFFFFFFF, 0xFFFFFFFF)
+end
+
+RegisterSpellEvent(SPELL_STORMHAMMER_BOOMERANG, 5, stormhammerBoomerangHit)

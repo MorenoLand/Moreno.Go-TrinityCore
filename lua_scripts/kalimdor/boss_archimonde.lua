@@ -157,8 +157,9 @@
 --   entry unverified (below).
 -- - spell_archimonde_drain_world_tree_dummy: SpellScript
 --   OnEffectHitTarget (target casts SPELL_DRAIN_WORLD_TREE_TRIGGERED
---   39141 triggered on the caster) — SpellScript handlers not modeled
---   (blocked, standing).
+--   39141 triggered on the caster) — PORTED 2026-11-10 via
+--   RegisterSpellEvent ev5 (skadi/gal_darah precedent); the old
+--   "SpellScript handlers not modeled" claim was stale.
 -- - SAY_SOUL_CHARGE (7) is declared in the C++ Texts enum but never
 --   Talked — no C++-side Talk to port.
 -- - YELL_ARCHIMONDE_INTRO (8) is Talked from the instance script, not
@@ -194,6 +195,8 @@ local SPELL_FINGER_OF_DEATH     = 31984
 local SPELL_HAND_OF_DEATH       = 35354
 local SPELL_PROTECTION_OF_ELUNE = 38528
 local SPELL_DRAIN_WORLD_TREE    = 39140
+local SPELL_DRAIN_WORLD_TREE_DUMMY = 39142 -- boss_archimonde.cpp:542
+local SPELL_DRAIN_WORLD_TREE_TRIGGERED = 39141 -- boss_archimonde.cpp:53
 
 local SPELL_UNLEASH_SOUL_RED    = 32053
 local SPELL_UNLEASH_SOUL_YELLOW = 32054
@@ -600,3 +603,22 @@ RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 24, onReachHome)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ spell_archimonde_drain_world_tree_dummy::HandleScript
+-- (boss_archimonde.cpp:558-561): EFFECT_0 DUMMY OnEffectHitTarget —
+-- the hit unit casts SPELL_DRAIN_WORLD_TREE_TRIGGERED (39141) on the
+-- caster, triggered. Fires on the creature path only (ev5,
+-- runtime.go:574-577); the return value is ignored. DORMANT until
+-- Spell.dbc ships the 39142 record (skadi precedent).
+local function drainWorldTreeDummyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, SPELL_DRAIN_WORLD_TREE_TRIGGERED, true)
+end
+
+RegisterSpellEvent(SPELL_DRAIN_WORLD_TREE_DUMMY, 5, drainWorldTreeDummyHit)
