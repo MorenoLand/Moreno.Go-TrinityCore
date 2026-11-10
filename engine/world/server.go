@@ -162,6 +162,8 @@ type Server struct {
 	gameEventOverrides        map[int64]bool
 	gameEventScheduleMu       sync.Mutex // guards gameEventScheduleRewrites (see conditions.go)
 	gameEventScheduleRewrites map[int64]gameEventSchedule
+	gameEventStateMu          sync.Mutex // guards gameEventStateOverrides (see game_event_conditions.go)
+	gameEventStateOverrides   map[int64]gameEventSave
 	tradeInTradeMu            sync.Mutex // guards tradeInTrade (see trade.go)
 	tradeInTrade              map[uint64]bool
 	ticketsEnabled            atomic.Bool

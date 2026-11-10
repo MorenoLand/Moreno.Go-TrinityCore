@@ -128,7 +128,7 @@ func (s *Server) loadGameEventQuestConditions(ctx context.Context) map[int64]gam
 
 // loadGameEventSaves loads the `game_event_save` rows (characters DB),
 // keyed by event id. StopEvent in-memory states (gameEventStateOverrides,
-// set by stopWorldGameEvent) apply on top: C++ keeps the stopped
+// set by resetGameEventWorldState) apply on top: C++ keeps the stopped
 // INACTIVE state in memory after deleting the save row, and Go derives
 // the live state from these rows on every read, so the override is what
 // carries the stopped state until the next SaveWorldEventStateToDB for
@@ -207,9 +207,6 @@ func (s *Server) saveWorldEventStateToDB(ctx context.Context, eventID, state, ne
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return
 	}
-	s.gameEventStateMu.Lock()
-	delete(s.gameEventStateOverrides, eventID)
-	s.gameEventStateMu.Unlock()
 	db := s.CharactersStore.DB
 	if _, err := db.ExecContext(ctx, "DELETE FROM game_event_save WHERE eventEntry = ?", eventID); err != nil {
 		return
@@ -219,6 +216,9 @@ func (s *Server) saveWorldEventStateToDB(ctx context.Context, eventID, state, ne
 		next = uint64(nextstart)
 	}
 	_, _ = db.ExecContext(ctx, "INSERT INTO game_event_save (eventEntry, state, next_start) VALUES (?, ?, ?)", eventID, uint8(state), next)
+	s.gameEventStateMu.Lock()
+	delete(s.gameEventStateOverrides, eventID)
+	s.gameEventStateMu.Unlock()
 }
 
 // saveGameEventConditionProgress persists one condition's done count to
@@ -469,11 +469,24 @@ func (s *Server) startGameEventWorld(ctx context.Context, eventID uint32, force 
 // resetGameEventWorldState persists the StopEvent world-event reset leg
 // (GameEventMgr.cpp:202-218): conditions zeroed, state back to
 // WORLD_INACTIVE, nextstart cleared — DELETE of all condition saves for
-// the event plus DELETE of the save row. The resolved state then falls
-// back to the game_event column, which carries the base INACTIVE state
-// for world events.
+// the event plus DELETE of the save row. C++ also flips data.state to
+// INACTIVE in memory, and Go derives the live state from the save rows
+// on every read, so the stopped state is recorded in the in-memory
+// override (gameEventStateOverrides): without it the state would fall
+// back to the game_event.world_event column, which is only the
+// load-time initial value. The next SaveWorldEventStateToDB for the
+// event clears the override, matching C++ re-saving the state.
 func (s *Server) resetGameEventWorldState(ctx context.Context, eventID int64) {
-	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+	if s == nil {
+		return
+	}
+	s.gameEventStateMu.Lock()
+	if s.gameEventStateOverrides == nil {
+		s.gameEventStateOverrides = make(map[int64]gameEventSave)
+	}
+	s.gameEventStateOverrides[eventID] = gameEventSave{State: gameEventStateWorldInactive, NextStart: 0}
+	s.gameEventStateMu.Unlock()
+	if s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return
 	}
 	db := s.CharactersStore.DB
