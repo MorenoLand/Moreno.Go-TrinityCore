@@ -14153,25 +14153,41 @@ func init() {
 	// trigger / quest-status / world-search / summon bridges —
 	// documented only.
 	RegisterLuaBoss("boss_twilight_corrupter", 15625)
+	// npc_cameron (Goldshire zone script, Children of Goldshire game
+	// event 76): documented only — the OnGameEvent start/stop trigger
+	// IS reachable (RegisterServerEvent 34/35, runtime.go:289-297)
+	// but the machine rides MovePath(pathId) (no bridge; the DB
+	// waypoint paths 80500-80503/80700 are not in the C++ sources)
+	// + Formation (SearchFormation/RemoveMember, no Lua surface)
+	// + WaypointReached chains; MoveTo/MoveRandom/FindNearestCreature
+	// /PlayDistanceSound are bridged but cannot carry the machine
+	// without the path/formation legs. Entry 805 verifiable from
+	// the C++ COG_Creatures enum — no Lua file.
 	// npc_marzon_silent_blade (Stormwind City zone script): aggro
-	// yell only — Talk(SAY_MARZON_2 1) on OnEnterCombat (C++-
-	// exact); the summoner-AttackStart gate (IsSummon /
-	// GetSummonerUnit) awaits the summon bridge; EnterEvadeMode's
-	// self-DisappearAndDie pair is ported via event-2 Despawn()
-	// (npc_marzon_silent_blade.lua); Reset's
-	// RestoreFaction awaits the faction bridge; MovementInform's
-	// cross-AI escort-phase latch awaits the movement bridge;
+	// yell + summoner-AttackStart gate (IsSummon / GetSummonerUnit
+	// :5516 / AttackStart :6831, all bridged — ported 2026-11-10)
+	// on OnEnterCombat (C++-exact); EnterEvadeMode's
+	// self + summoner DisappearAndDie pair is ported via event-2
+	// Despawn() (npc_marzon_silent_blade.lua); Reset's
+	// RestoreFaction stays unmodeled (faction only changes in the
+	// lescovar phase-7 flip; the chain ends in a despawn);
+	// MovementInform's cross-AI escort-phase latch has a live hook
+	// (event 28, POINT = 8) but no lescovar phase machine to write
+	// into yet — it lands with the lescovar escort port;
 	// entry 1755 verifiable from the C++ LordGregorLescovar enum
 	// — see lua_scripts/eastern_kingdoms/npc_marzon_silent_
 	// blade.lua. npc_tyrion (quest-434 OnQuestAccept escort start
-	// on the 8856 spybot) awaits the quest-accept / world-search /
-	// escort bridges; npc_tyrion_spybot (escort Talk chains +
-	// UpdateEntry(7779)) awaits the escort / world-search /
-	// cross-creature-Talk / entry-update / despawn bridges;
+	// on the 8856 spybot) is PORTABLE now: OnQuestAccept (ev31),
+	// FindNearestCreature, StartEscort, GetEscortPlayer,
+	// SetEscortPaused all bridged; only SetMaxPlayerDistance(200)
+	// has no bridge (documented delta). npc_tyrion_spybot (escort
+	// Talk chains + UpdateEntry(7779)) is PORTABLE now: OnReachWP
+	// (6), Talk-with-player, UpdateEntry, Despawn all bridged.
 	// npc_lord_gregor_lescovar (escort + Marzon summon + traitor
-	// faction flip + guard despawn) awaits the escort / summon /
-	// faction / world-search / despawn / quest bridges —
-	// documented only.
+	// faction flip + guard despawn) is PORTABLE now: SummonCreature,
+	// MoveTo, GetCreatureListWithEntryInGrid, SetFaction(14),
+	// AreaExploredOrEventHappens(434) all bridged — the Stormwind
+	// escort port is the next EK zone unit.
 	RegisterLuaBoss("npc_marzon_silent_blade", 1755)
 	// npc_highborne_lamenter (Undercity zone script): the UpdateAI
 	// EventCast one-shot arm — non-triggered self-cast of SPELL_
@@ -14197,10 +14213,14 @@ func init() {
 	// quest-590 "A Rogue's Deal" duel — OnQuestAccept stores the
 	// player, SetFaction(FACTION_ENEMY 168), RemoveFlag questgiver,
 	// AttackStart; DamageTaken (lethal or below 15%) zeroes damage
-	// (return false, 0), CombatStop, then the 3s/2s/5s/12s/3s chain
+	// (return false, 0), CombatStop, EnterEvadeMode (ported
+	// 2026-11-10: bridge live lua_creature_events.go:5200; the
+	// evade fires ev23 first, so onReset guards the surrender
+	// latch / quest player — C++ Reset leaves _playerGUID alone —
+	// and the latch clears on the next OnQuestAccept, so a second
+	// duel re-triggers), then the 3s/2s/5s/12s/3s chain
 	// (rude emote, Talk 0, quest credit + drink 7737, questgiver
-	// flag back, stand); EnterEvadeMode has no bridge and
-	// SetImmuneToPC has no engine model — the surrender latch +
+	// flag back, stand); SetImmuneToPC has no engine model — the surrender latch +
 	// zero-damage return replicate the immunity, and the native
 	// faction is restored via GetFaction/SetFaction. Entry 6784
 	// from classic.wowhead.com/npc=6784/calvin-montague (no NPC_

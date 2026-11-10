@@ -25,19 +25,13 @@
 -- - DamageTaken (zone_tirisfal_glades.cpp:97-105): damage >
 --   health OR HealthBelowPctDamaged(15, damage) -> damage = 0
 --   (ev9 rewrite, `return false, 0` malchezaar precedent),
---   CombatStop(true), then the 3s/2s/5s/12s/3s event chain:
+--   CombatStop(true), EnterEvadeMode(), then the 3s/2s/5s/12s/3s
+--   event chain:
 --   PerformEmote(EMOTE_ONESHOT_RUDE 14) -> Talk(SAY_COMPLETE 0)
 --   -> player AreaExploredOrEventHappens(590) + DoCastSelf(
 --   SPELL_DRINK 7737) -> SetFlag(UNIT_NPC_FLAGS,
 --   UNIT_NPC_FLAG_QUESTGIVER) -> SetStandState(STAND 0).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - EnterEvadeMode (DamageTaken :101): no bridge (standing). The
---   duel happens at Calvin's spawn point, so the walk-home leg is
---   unobservable; CombatStop(true) + the chain cover the rest.
--- - RestoreFaction (Reset :84): no bridge. Replicated with the
---   GetFaction/SetFaction pair: the native faction is read on
---   OnSpawn and restored in DamageTaken (C++ restores it in Reset,
---   which EnterEvadeMode fires immediately) and on OnReset.
 -- - SetImmuneToPC (Reset :85-86, OnQuestAccept :137): the Go
 --   engine has no immunity-to-PC model (zero hits outside
 --   comments), so both arms are vacuous here. Their observable
@@ -46,6 +40,16 @@
 --   returns `false, 0`, so attacks do nothing — exactly as C++
 --   immunity behaves; the surrender chain only arms once a quest
 --   player exists.
+-- - EnterEvadeMode (DamageTaken :101) is PORTED (bridge live at
+--   lua_creature_events.go:5200; the "no bridge" claim in earlier
+--   headers is stale): CombatStop -> EnterEvadeMode -> schedule.
+--   The evade fires ev23 first (triggerCreatureEvade,
+--   creaturemotion.go:4703-4704), so onReset must NOT clear the
+--   surrender latch / quest player while surrendered — C++ Reset
+--   leaves _playerGUID alone. The latch is cleared on the next
+--   OnQuestAccept instead (mirrors SetImmuneToPC(false)); without
+--   that clear a second duel could never re-trigger (the latch
+--   made every later hit `false, 0`).
 
 local ENTRY_NPC_CALVIN_MONTAGUE = 6784
 
@@ -95,15 +99,18 @@ end
 -- C++ Reset (zone_tirisfal_glades.cpp:82-88): RestoreFaction +
 -- SetImmuneToPC(true). The faction restore rides GetFaction (read
 -- on spawn) + SetFaction; the immunity arm is vacuous (no engine
--- model). Cancelling the chain + clearing the latch matches the
--- in-tree reset idiom (spectral-citizen); the C++ EventMap is not
--- cleared in Reset, but the chain can only be pending while
--- surrendered, and a reset while surrendered only fires at respawn.
+-- model). The latch / quest-player clear is guarded: the surrender
+-- evade fires ev23 BEFORE the chain is scheduled, and C++ Reset
+-- leaves _playerGUID alone, so clearing here would drop the quest
+-- credit and the immunity latch. A plain (non-surrender) reset
+-- still clears both.
 local function onReset(_, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    playerGuid[guid] = nil
-    surrendered[guid] = nil
+    if not surrendered[guid] then
+        playerGuid[guid] = nil
+        surrendered[guid] = nil
+    end
     if nativeFaction[guid] then
         creature:SetFaction(nativeFaction[guid])
     end
@@ -137,6 +144,10 @@ local function onQuestAccept(_, player, creature, quest)
     end
     local guid = creature:GetGUIDLow()
     playerGuid[guid] = player:GetGUID()
+    -- C++ SetImmuneToPC(false): the surrender latch is the Lua
+    -- stand-in for the immunity, so a re-accept must clear it or
+    -- the second duel could never re-trigger.
+    surrendered[guid] = nil
     creature:SetFaction(FACTION_ENEMY)
     creature:AttackStart(player)
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
@@ -144,7 +155,7 @@ end
 
 -- C++ DamageTaken (zone_tirisfal_glades.cpp:90-106): lethal damage
 -- or HealthBelowPctDamaged(15, damage) -> damage = 0, CombatStop,
--- EnterEvadeMode [no bridge], schedule EVENT_EMOTE_RUDE 3s. This
+-- EnterEvadeMode, schedule EVENT_EMOTE_RUDE 3s. This
 -- is a DamageTaken arm, so it DOES fire on the killing blow
 -- (nefarian rule: only UpdateAI arms skip lethal hits) — no
 -- postDamage > 0 guard. The surrender latch + the no-quest-player
@@ -163,8 +174,11 @@ local function onDamageTaken(_, creature, _, damage)
     if damage > health or postDamage * 100 < HEALTH_PCT_SURRENDER * maxHealth then
         surrendered[guid] = true
         creature:CombatStop(true)
-        -- C++ Reset restores the faction immediately via the evade;
-        -- the evade itself has no bridge, so restore it here.
+        -- C++ order (zone_tirisfal_glades.cpp:99-101): CombatStop,
+        -- EnterEvadeMode, then the 3s schedule. The evade fires
+        -- ev23 first; onReset's guard keeps the latch / quest
+        -- player and restores the faction (Reset :84).
+        creature:EnterEvadeMode()
         if nativeFaction[guid] then
             creature:SetFaction(nativeFaction[guid])
         end

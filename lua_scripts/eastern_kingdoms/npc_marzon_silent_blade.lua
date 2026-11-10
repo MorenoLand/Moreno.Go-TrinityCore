@@ -16,19 +16,21 @@
 -- self-Talk arm (Talk takes a textId only; the line plays nearby).
 -- The C++ JustEngagedWith summoner arm (IsSummon ->
 -- ToTempSummon()->GetSummonerUnit() -> summoner->AI()->
--- AttackStart(who)) stays unmodeled: IsSummon IS bridged now
--- (creature:IsSummon), but GetSummonerUnit and AttackStart have
--- no bridges (marzon is summoned by the lescovar waypoint-16
--- phase arm, behind the escort machine). The C++ EnterEvadeMode DisappearAndDie pair
--- self-DisappearAndDie arm is PORTED below (vazruden/muru
--- convention: DisappearAndDie -> immediate creature:Despawn());
--- the summoner-DisappearAndDie leg stays out behind the
--- no-summoner-access bridge. The
--- C++ Reset RestoreFaction arm stays out behind the summon/escort/
--- quest machines that gate the whole unit (SetFaction itself is
--- bridged — lua_creature_events.go:1125). The C++ MovementInform POINT_MOTION_TYPE cross-AI
--- latch (CAST_AI into the lescovar AI's uiTimer/uiPhase) has no
--- movement bridge — unmodeled. Melee is engine-driven.
+-- AttackStart(who)) is PORTED below: IsSummon, GetSummonerUnit
+-- (lua_creature_events.go:5516) and AttackStart (:6831,
+-- EngageWithTarget twin) are all bridged now — the "no bridges"
+-- claim in earlier headers is stale. The C++ EnterEvadeMode
+-- DisappearAndDie pair is PORTED below (vazruden/muru
+-- convention: DisappearAndDie -> immediate creature:Despawn()),
+-- self AND summoner legs (GetSummonerUnit :5516). The C++
+-- Reset RestoreFaction arm stays unmodeled: Marzon's faction only
+-- changes in the lescovar phase-7 flip, and the quest chain ends
+-- in a despawn, so no reset can observe it (SetFaction itself is
+-- bridged — lua_creature_events.go:1125). The C++ MovementInform
+-- POINT_MOTION_TYPE cross-AI latch (CAST_AI into the lescovar
+-- AI's uiTimer/uiPhase) has a live hook now (CreatureEventOnMovementInform 28, runtime.go:389, args (event, creature, type, id), POINT = 8) but no
+-- lescovar phase machine to write into yet — it lands with the
+-- lescovar escort port. Melee is engine-driven.
 -- npc_tyrion (quest-434 OnQuestAccept -> FindNearestCreature(
 -- NPC_TYRION_SPYBOT 8856) -> escort Start) awaits the quest-
 -- accept / world-search / escort bridges — documented only.
@@ -50,23 +52,39 @@
 local NPC_MARZON_BLADE = 1755
 local SAY_MARZON_2 = 1
 
--- C++ JustEngagedWith: Talk(SAY_MARZON_2). The summoner-AttackStart
--- gate (IsSummon / GetSummonerUnit / TYPEID_UNIT / IsAlive /
--- !IsInCombat) sits behind the no-summoner-access / no-AttackStart
--- bridges (IsSummon itself is bridged) — no bridgeable
--- arm there, so the yell stands alone (C++-exact for the modeled
--- arm).
-local function onEnterCombat(_, creature)
+-- C++ JustEngagedWith (zone_stormwind_city.cpp:230-251): Talk(
+-- SAY_MARZON_2), then the summoner arm — if IsSummon, the live
+-- creature summoner not already in combat attacks the same target
+-- (GetSummonerUnit :5516 returns the luaMotionCreature for a
+-- creature summoner; the TYPEID_UNIT gate is GetObjectType() ==
+-- "Creature"; AttackStart :6831). The event-1 target is the
+-- engaging unit (phase-hunter precedent); fall back to the victim.
+local function onEnterCombat(_, creature, target)
     creature:Talk(SAY_MARZON_2)
+    if creature:IsSummon() then
+        local summoner = creature:GetSummonerUnit()
+        if summoner and summoner:GetObjectType() == "Creature" and summoner:IsAlive() and not summoner:IsInCombat() then
+            local who = target or creature:GetVictim()
+            if who then
+                summoner:AttackStart(who)
+            end
+        end
+    end
 end
 
 local function onLeaveCombat(_, creature)
     -- C++ npc_marzon_silent_bladeAI::EnterEvadeMode
-    -- (zone_stormwind_city.cpp:257-259): me->DisappearAndDie(),
-    -- unconditional self arm -> immediate creature:Despawn()
-    -- (vazruden/muru convention); the IsSummon summoner leg stays
-    -- out (no summoner-access bridge).
+    -- (zone_stormwind_city.cpp:253-267): me->DisappearAndDie()
+    -- first, then the IsSummon summoner leg (live creature
+    -- summoner DisappearAndDie) — both immediate Despawn() calls
+    -- (vazruden/muru convention).
     creature:Despawn()
+    if creature:IsSummon() then
+        local summoner = creature:GetSummonerUnit()
+        if summoner and summoner:GetObjectType() == "Creature" and summoner:IsAlive() then
+            summoner:Despawn()
+        end
+    end
 end
 
 RegisterCreatureEvent(NPC_MARZON_BLADE, 1, onEnterCombat)
