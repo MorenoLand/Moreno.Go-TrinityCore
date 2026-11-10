@@ -7631,6 +7631,51 @@ func (s *Server) creatureMistressKissArea(ctx context.Context, m *creatureMotion
 	s.castCreatureSpellInternal(ctx, m, uint32(value), picked, true)
 }
 
+// creatureMirroredSoulSelector mirrors
+// spell_devourer_of_souls_mirrored_soul_target_selector
+// (boss_devourer_of_souls.cpp:432-470): FilterTargets keeps one random
+// target from the area list (Trinity::Containers::SelectRandomContainerElement
+// — a uniform pick over the whole list, with no entry or faction filter of
+// its own), then HandleScript casts 69051 (Mirrored Soul) on it,
+// NON-triggered. The pick runs once per cast, so it sits beside the
+// mistress-kiss case above the per-target loop; the miss/reflect gates
+// mirror that helper (a missed or reflected pick casts nothing, a clean
+// reflect redirects the buff onto the caster). Without this leg the boss's
+// DoCastAOE(69048) selected its area targets and the script-effect arm
+// fired on none of them, so 69051 — whose own arm is ported below — never
+// landed and the 69023 proc aura was never applied.
+func (s *Server) creatureMirroredSoulSelector(ctx context.Context, m *creatureMotion, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	candidates := make([]uint64, 0, len(hitTargets))
+	seen := make(map[uint64]struct{}, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		if _, dup := seen[guid]; dup {
+			continue
+		}
+		seen[guid] = struct{}{}
+		candidates = append(candidates, guid)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	picked := candidates[rand.Intn(len(candidates))]
+	if evaded[picked] || immune[picked] || missed[picked] != protocol.SpellMissNone {
+		return
+	}
+	if status, isReflected := reflected[picked]; isReflected {
+		if status != protocol.SpellMissNone {
+			return
+		}
+		picked = m.GUID
+	}
+	s.castCreatureSpellInternal(ctx, m, 69051, picked, false)
+}
+
 // creatureAlgalonBigBangAscend mirrors spell_algalon_big_bang
 // (boss_algalon_the_observer.cpp:1139-1164): CountTargets stores the
 // EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY list size, and CheckTargets
@@ -7701,6 +7746,13 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 		// the filter-and-pick runs once per cast, not once per hit
 		// target, so it bypasses the loop below.
 		s.creatureMistressKissArea(ctx, m, eff, hitTargets, reflected, evaded, immune, missed)
+		return
+	case 69048:
+		// spell_devourer_of_souls_mirrored_soul_target_selector
+		// (boss_devourer_of_souls.cpp:432-470): the filter-and-pick
+		// runs once per cast, not once per hit target, so it bypasses
+		// the loop below like the mistress-kiss case above.
+		s.creatureMirroredSoulSelector(ctx, m, hitTargets, reflected, evaded, immune, missed)
 		return
 	}
 	for _, guid := range hitTargets {
@@ -9424,10 +9476,10 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 	}
 	var leechTotal uint32
 	// casterAP threads the caster's total attack power into the
-	// OnHit dispatch for ghoul thrash (47480) only; other spells
-	// pay no DB lookup for it.
+	// OnHit dispatch for ghoul thrash (47480) and bloodthirst
+	// (23881) only; other spells pay no DB lookup for it.
 	var casterAP float64
-	if spell.ID == 47480 {
+	if spell.ID == 47480 || spell.ID == 23881 {
 		casterAP = s.creatureBaseAttackPower(ctx, m)
 	}
 	// perTarget is the spellHitDamageState record: the final
@@ -9688,10 +9740,10 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 	casterKey := creatureAuraKeyForMotion(m)
 	var leechTotal uint32
 	// casterAP threads the caster's total attack power into the
-	// OnHit dispatch for ghoul thrash (47480) only; other spells
-	// pay no DB lookup for it.
+	// OnHit dispatch for ghoul thrash (47480) and bloodthirst
+	// (23881) only; other spells pay no DB lookup for it.
 	var casterAP float64
-	if spell.ID == 47480 {
+	if spell.ID == 47480 || spell.ID == 23881 {
 		casterAP = s.creatureBaseAttackPower(ctx, m)
 	}
 	// perTarget is the spellHitDamageState record: the final

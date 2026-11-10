@@ -14714,6 +14714,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				// accumulated per hit target (DoEffectOnLaunchTarget,
 				// Spell.cpp:7771-7774).
 				chainMult := s.applySpellModFloat(spell, spellModDamageMultiplier, float64(eff.ChainAmplitude)*100.0) / 100.0
+				// spell_sha_lava_lash (spell_shaman.cpp:1481-1495): the +25%
+				// Flametongue off-hand gate is a per-cast caster fact, computed
+				// once per effect here rather than per target (one
+				// equipped-items lookup per cast) — the triggered path's
+				// twin sits at its own damage arm, and this is the
+				// client-cast leg the dispatch consult below needs.
+				lavaLashBoost := spellID == 60103 && eff.Effect == 2 && s.lavaLashFlametongueBoost(effCtx)
 				for _, effectTarget := range dmgList {
 					// GOTargetInfo targets never take unit damage (Spell.cpp:2193;
 					// SchoolDMG :322 null-returns on a null unitTarget): a GO guid riding
@@ -14772,6 +14779,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// and MeleeDamageBonusDone/Taken ride the damage
 							// pipeline (executeSpellDamageWithFlags).
 							targetDamage = chainScaledAmount(s.weaponDmgEffectBase(effCtx, spell, wdTarget), chainMult, chainJumpIndex[effectTarget])
+						}
+						// SpellScript OnHit dispatch (Spell::PreprocessTarget,
+						// Spell.cpp:2350/3557): the OnHit handlers rewrite the
+						// hit damage before the effect loop — the client-cast
+						// leg, at the same pre-division position as the
+						// triggered path's twin above (C++ divides the
+						// rewritten damage in EffectSchoolDMG). finishSpellCast
+						// runs its own effect loop, so without this consult
+						// the table's spells (49840/34779/47480/47496/60103/
+						// 23881) dealt their DBC base on every player-initiated
+						// cast and the rewrites only fired on triggered casts.
+						// The base is the chain-scaled target damage — the
+						// table holds no chain spell, so it equals the rolled
+						// DBC base for every entry. casterAP threads only for
+						// bloodthirst (23881), like the triggered leg.
+						if s.server != nil && s.player != nil {
+							if tgt, ok := s.getCombatTarget(effCtx, effectTarget); ok {
+								casterAP := float64(0)
+								if spellID == 23881 {
+									casterAP = float64(s.totalAttackPowerValue(false))
+								}
+								if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, targetDamage, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost, casterAP); hit {
+									targetDamage = rewritten
+								}
+							}
 						}
 						// Unit::CalculateAOEAvoidance (Unit.cpp:12397-12404):
 						// the victim's AOE-avoidance aura product scales the
@@ -16106,6 +16138,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// kept-target join the dummy targets share).
 					s.fireSpellDummyEffectForTargets(effCtx, spellID, uint8(effectIndex), raiseTargets)
 				} else {
+					// spell_warr_bloodthirst::HandleDummy
+					// (spell_warrior.cpp:112-115): the EFFECT_1 DUMMY
+					// OnEffectHit arm casts 23885 (Bloodthirst) on the
+					// caster, triggered — the 8s PROC_TRIGGER_SPELL aura
+					// whose next proc casts the 23880 heal. Fires once per
+					// effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target), ahead of the
+					// pet-aura/Eluna legs like the raise-ally script leg
+					// above, and only when a target was actually hit.
+					if spellID == 23881 && len(hitTargets) > 0 {
+						s.castSpellDirect(effCtx, 23885, s.playerGUID)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -27431,6 +27475,17 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 					s.fireSpellDummyEffectForTargets(ctx, spellID, uint8(effectIndex), dummyTargets)
 				} else {
+					// spell_warr_bloodthirst::HandleDummy
+					// (spell_warrior.cpp:112-115): the EFFECT_1 DUMMY
+					// OnEffectHit arm casts 23885 (Bloodthirst) on the
+					// caster, triggered — the 8s PROC_TRIGGER_SPELL aura
+					// whose next proc casts the 23880 heal. The client
+					// path's twin sits in finishSpellCast's dummy arm;
+					// this is the triggered-cast leg, gated on a
+					// miss-filtered hit like the raise-ally leg above.
+					if spellID == 23881 && len(effectGUIDs) > 0 {
+						s.castSpellDirect(ctx, 23885, s.playerGUID)
+					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -27816,7 +27871,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// (Spell.cpp:2377), so C++ deals the unmodified base.
 				if s.server != nil && s.player != nil {
 					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
-						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost, 0); hit {
+						// casterAP threads the caster's total attack power
+						// into the OnHit dispatch for bloodthirst (23881)
+						// only — the creature-caster twin gates the same
+						// way (boss_ai.go), and other spells pay no
+						// lookup for it.
+						casterAP := float64(0)
+						if spellID == 23881 {
+							casterAP = float64(s.totalAttackPowerValue(false))
+						}
+						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost, casterAP); hit {
 							baseDmg = rewritten
 						}
 					}
@@ -28042,6 +28106,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				healAmount := uint32(healValue)
 				if healAmount == 0 && spellID == ProcSpellCrusader {
 					healAmount = 100
+				}
+				// spell_warr_bloodthirst_heal::HandleHeal
+				// (spell_warrior.cpp:141-154): the OnEffectLaunchTarget arm
+				// REPLACES the heal with CountPctFromMaxHealth of 23881's
+				// EFFECT_1 CalcValue (the dummy effect's heal pct) — the
+				// DBC heal value never lands. The caster is the warrior
+				// (s.player), so the pct reads the caster's max health,
+				// not the target's. The Done/Taken bonus legs ride
+				// executeSpellHeal below, like the C++ else arm. Only the
+				// triggered path needs it: 23880 arrives via the 23885
+				// proc aura, never from the client. A missing 23881 row
+				// or a non-positive pct keeps the DBC value.
+				if spellID == 23880 && s.server != nil && s.server.Data != nil {
+					if bt, found, err := s.server.Data.Spell(23881); err == nil && found && len(bt.Effects) > 1 {
+						if healPct := bt.Effects[1].CalcValueForLevel(bt, casterLevel); healPct > 0 {
+							healAmount = uint32(uint64(s.player.MaxHealth) * uint64(healPct) / 100)
+						}
+					}
 				}
 				s.executeSpellHeal(ctx, effectTarget, spellID, healAmount, effectIndex, inheritCritBase, chainMult, jumpIndex)
 			} else if eff.Effect == spellEffectHealPct { // SPELL_EFFECT_HEAL_PCT

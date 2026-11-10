@@ -42,13 +42,18 @@ import (
 // takes the caster's total attack power for its frenzy-scaled damage
 // (the ghoul's AP, not the target's — the dispatch threads
 // casterAttackPower, computed by the creature-caster arms only for
-// this spell so other casts pay no DB lookup).
+// this spell so other casts pay no DB lookup). 23881 takes the same
+// thread plus the victim's MELEE_ATTACK_POWER_ATTACKER_BONUS sum
+// (bloodthirstDamage below): the player arm threads
+// totalAttackPowerValue for it, the creature arms creatureBaseAttackPower.
 func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32, casterGUID, victimGUID uint64, mapID, instanceID uint32, lavaLashBoost bool, casterAttackPower float64) (uint32, bool) {
 	switch spell.ID {
 	case 49840:
 		return s.shockLanceDetonate(casterGUID, victimGUID, mapID, instanceID, baseDamage)
 	case 34779:
 		return s.freezingCircleDamage(mapID, instanceID)
+	case 23881:
+		return s.bloodthirstDamage(victimGUID, mapID, instanceID, baseDamage, casterAttackPower)
 	case 47480:
 		return s.ghoulThrashDamage(spell, casterGUID, mapID, instanceID, baseDamage, casterAttackPower)
 	case 47496:
@@ -144,6 +149,40 @@ func (s *Server) shockLanceDetonate(casterGUID, victimGUID uint64, mapID, instan
 		return baseDamage + uint32(amount), true
 	}
 	return baseDamage, false
+}
+
+// bloodthirstDamage mirrors spell_warr_bloodthirst::HandleDamage
+// (spell_warrior.cpp:102-110): the OnEffectLaunchTarget arm REPLACES the
+// hit damage with CalculatePct(APbonus, GetEffectValue()) — the attack-power
+// bonus (the caster's GetTotalAttackPowerValue(BASE_ATTACK) plus the
+// victim's SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS total modifier)
+// times the rolled DBC base (baseDamage at this dispatch position) over
+// 100. C++ holds APbonus in a uint32 (the float AP truncates on assignment,
+// then the int32 victim modifier adds); Go mirrors that with an int32 sum
+// clamped at zero — no negative MELEE_ATTACK_POWER_ATTACKER_BONUS aura
+// exists in content, so the clamp only guards the C++ uint32 wrap that
+// would follow one. The caster leg rides the dispatch's casterAttackPower
+// (the player arm threads totalAttackPowerValue, the creature arms
+// creatureBaseAttackPower); the victim leg sums the victim's live auras
+// here (player victims via the session fold, creature victims via
+// creatureAuraModifierSum), matching GetTotalAuraModifier's any-caster sum.
+func (s *Server) bloodthirstDamage(victimGUID uint64, mapID, instanceID uint32, baseDamage uint32, casterAttackPower float64) (uint32, bool) {
+	if s == nil || baseDamage == 0 {
+		return baseDamage, false
+	}
+	victimBonus := int32(0)
+	if vs := s.findSessionByGUID(victimGUID); vs != nil && vs.player != nil {
+		for _, amt := range vs.auraTypeModifiers(uint32(spellAuraMeleeAttackPowerAttackerBonus)) {
+			victimBonus += amt
+		}
+	} else if victim := s.findCreatureMotion(mapID, instanceID, victimGUID); victim != nil {
+		victimBonus = creatureAuraModifierSum(s, creatureAuraKeyForMotion(victim), uint32(spellAuraMeleeAttackPowerAttackerBonus))
+	}
+	apBonus := int32(casterAttackPower) + victimBonus
+	if apBonus < 0 {
+		apBonus = 0
+	}
+	return uint32(apBonus) * baseDamage / 100, true
 }
 
 // freezingCircleDamage mirrors spell_freezing_circle::HandleDamage
