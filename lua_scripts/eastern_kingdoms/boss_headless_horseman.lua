@@ -309,6 +309,9 @@ end
 -- C++ boss_headless_horseman::JustSummoned (boss_headless_horseman.cpp:391-395):
 -- _summons.Summon is bookkeeping only; DoZoneInCombat(summon) engages
 -- the summon in zone combat (drakkari precedent).
+-- SummonedCreatureDies (:397-400) is _summons.Despawn(summon), list
+-- bookkeeping only — the list has no modeled consumer (see Reset note
+-- above) — documented-only, no ev21 handler.
 local function onJustSummoned(_, creature, summoned)
     summoned:DoZoneInCombat()
 end

@@ -81,14 +81,15 @@
 --   UNIT_FLAG_NOT_SELECTABLE) leg — PORTED (2026-10-20); the
 --   RemoveAurasDueToSpell(SPELL_ALLURING_PERFUME 68589) leg is PORTED via
 --   creature:RemoveAura (stale "no aura-remove bridge" claim retracted).
--- - SummonedCreatureDies: the event-21 dispatch IS bridged now
---   (2026-10-24, retiring the old "no fire site" claim), and the
---   baxter/frye summon group (Reset SummonCreatureGroup(1)) is PORTED
---   2026-11-05, so the arm has a bearer — but the ev21 _deadCount arm
---   itself is still unported (not in this strip's scope): _deadCount
---   never increments in the port, the lethal clamp persists, and the
---   DoCastSelf(SPELL_QUIET_SUICIDE 3617) arm that ends the feign-death
---   in C++ cannot fire (the mandokir/nefarian no-bearer precedent).
+-- - SummonedCreatureDies: PORTED 2026-11-10 (onSummonedCreatureDies,
+--   event 21): Frye/Baxter deaths increment the per-GUID _deadCount,
+--   and when Hummel bears SPELL_PERMANENT_FEIGN_DEATH with _deadCount
+--   == 2, triggered self-cast SPELL_QUIET_SUICIDE ends the feign-death
+--   (boss_apothecary_hummel.cpp:164-171, C++ order; the HasAura/count
+--   check runs on every summon death, outside the entry gate). Bearer
+--   is live: group spawns via SummonCreatureGroup(1) flow through
+--   summonTempCreature stamping OwnerGUID, so ev21 reaches Hummel
+--   (lua_creature_events.go:7357).
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
 --   DONE) + sLFGMgr->FinishDungeon(288) — the SetBossState leg stays out
 --   as a C++ DEAD WRITE (tick 380: instance_shadowfang_keep.cpp never
@@ -148,8 +149,11 @@ local SPELL_SUMMON_TABLE = 69218
 local SPELL_PERMANENT_FEIGN_DEATH = 29266
 local SPELL_ALLURING_PERFUME = 68589
 local SPELL_CHAIN_REACTION = 68821
+local SPELL_QUIET_SUICIDE = 3617
 
 local NPC_CROWN_APOTHECARY = 36885
+local NPC_APOTHECARY_FRYE = 36272
+local NPC_APOTHECARY_BAXTER = 36565
 
 local QUEST_YOUVE_BEEN_SERVED = 14488
 
@@ -440,10 +444,31 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
 end
 
+
+-- C++ SummonedCreatureDies (boss_apothecary_hummel.cpp:164-171): Frye/Baxter
+-- deaths increment _deadCount; when Hummel bears SPELL_PERMANENT_FEIGN_DEATH
+-- and _deadCount hits 2, triggered self-cast SPELL_QUIET_SUICIDE ends the
+-- feign-death. C++ order: the increment gate first, then the HasAura/count
+-- check on every summon death (no early return before it).
+local function onSummonedCreatureDies(event, creature, summon, killer)
+    local guid = creature:GetGUIDLow()
+    local st = getState(guid)
+    if summon ~= nil then
+        local entry = summon:GetEntry()
+        if entry == NPC_APOTHECARY_FRYE or entry == NPC_APOTHECARY_BAXTER then
+            st.deadCount = st.deadCount + 1
+        end
+    end
+    if creature:HasAura(SPELL_PERMANENT_FEIGN_DEATH) and st.deadCount == 2 then
+        creature:CastSpell(creature, SPELL_QUIET_SUICIDE, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HUMMEL, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HUMMEL, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_HUMMEL, 4, onDied)
 RegisterCreatureEvent(ENTRY_HUMMEL, 9, onDamageTaken)
+RegisterCreatureEvent(ENTRY_HUMMEL, 21, onSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_HUMMEL, 23, onReset)
 RegisterCreatureEvent(ENTRY_HUMMEL, 34, onQuestReward)
 RegisterCreatureGossipEvent(ENTRY_HUMMEL, 1, onGossipHello)

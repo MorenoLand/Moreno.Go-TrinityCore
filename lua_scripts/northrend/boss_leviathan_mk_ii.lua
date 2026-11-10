@@ -57,6 +57,9 @@
 -- player-gated, the controller Talks SAY_MKII_SLAY 3 in phase 1,
 -- SAY_V07TRON_SLAY 12 once assembled (mkiiAssembled latch = the
 -- EventMap PHASE_VOL7RON mirror);
+-- JustSummoned (boss_mimiron.cpp:783-785) is pure summons.Summon
+-- bookkeeping with no consumer in this file (no summon-list DespawnAll
+-- leg is modeled; Reset/JustDied run timer-cancel only) — documented-only.
 -- MovementInform drives the same cross-creature activation chain.
 
 local NPC_LEVIATHAN_MKII = 33432
