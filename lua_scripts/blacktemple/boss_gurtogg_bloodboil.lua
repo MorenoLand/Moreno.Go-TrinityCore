@@ -88,8 +88,8 @@
 -- casting tick defers 500ms under its own key, consuming no re-arm.
 -- Deviations from C++ (remaining): no instance-
 -- script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith/JustDied/Reset and the
--- DATA_GURTOGG_BLOODBOIL bookkeeping arms skipped); threat model
+-- (BossAI::JustEngagedWith/JustDied/Reset, except the SetBossState
+-- IN_PROGRESS/DONE arms, PORTED above); threat model
 -- partial — the AttackStart(oldTarget) arm is PORTED in onChangePhase
 -- (threat legs ported in onStartPhase2/onChangePhase); the ApplySpellImmune
 -- taunt/attack-me arms ARE bridged (lua_creature_events.go:860) and
@@ -540,6 +540,7 @@ local function gurtoggEnterCombat(event, creature, target)
     cancelTimers(guid)
     state[guid] = { phase = PHASE_1 }
     creature:Talk(SAY_AGGRO)
+    creature:SetBossState(4, 1) -- DATA_GURTOGG_BLOODBOIL, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:531; supremus idiom)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     schedule(guid, "berserk", 600000, function()
@@ -568,10 +569,11 @@ local function gurtoggTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: _JustDied (instance bookkeeping — blocked on the
--- instance-script model) + DoPlaySoundToSet(11439) = creature:
+-- C++ JustDied: _JustDied (SetBossState DONE, PORTED —
+-- creature:SetBossState is bridged, lua_creature_events.go:6593) + DoPlaySoundToSet(11439) = creature:
 -- PlayDirectSound (SMSG_PLAY_SOUND). Death cleanup + sound.
 local function gurtoggDied(event, creature, killer)
+    creature:SetBossState(4, 3) -- DATA_GURTOGG_BLOODBOIL, DONE (BossAI::JustDied -> _JustDied, ScriptedCreature.cpp:513; supremus idiom)
     creature:PlayDirectSound(11439)
     gurtoggResetState(creature:GetGUIDLow())
 end

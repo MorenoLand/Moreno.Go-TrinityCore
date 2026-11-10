@@ -41,8 +41,8 @@
 -- Talk(SAY_ENRAGE), once-guard via per-GUID state (C++ _enraged,
 -- cleared on Reset). OnTargetDied(3): Talk(SAY_SLAY),
 -- TYPEID_PLAYER gate (terestian convention). OnDied(4):
--- Talk(SAY_DEATH); the _JustDied instance arm is blocked on the
--- instance-script model. OnLeaveCombat(2)/OnReset(23): cancel
+-- Talk(SAY_DEATH) + SetBossState(DONE) (PORTED — creature:SetBossState
+-- is bridged, lua_creature_events.go:6593). OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, drop per-GUID state (C++ Reset: _Reset/_enraged=false;
 -- the EnterEvadeMode _DespawnAtEvade() -> DespawnOrUnsummon() arm is
 -- ported in shahrazLeaveCombat via creature:Despawn, supremus
@@ -211,6 +211,7 @@ local function shahrazEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     enraged[guid] = false
+    creature:SetBossState(6, 1) -- DATA_MOTHER_SHAHRAZ, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:531; supremus idiom)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -246,9 +247,10 @@ local function shahrazResetState(guid)
     enraged[guid] = nil
 end
 
--- C++ JustDied: _JustDied (instance arm, no bridge) +
+-- C++ JustDied: _JustDied (SetBossState DONE, PORTED) +
 -- Talk(SAY_DEATH).
 local function shahrazDied(event, creature, killer)
+    creature:SetBossState(6, 3) -- DATA_MOTHER_SHAHRAZ, DONE (BossAI::JustDied -> _JustDied, ScriptedCreature.cpp:513; supremus idiom)
     creature:Talk(SAY_DEATH)
     shahrazResetState(creature:GetGUIDLow())
 end

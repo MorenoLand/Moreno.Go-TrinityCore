@@ -94,8 +94,8 @@
 -- doom blossom / shadowy construct gates belong to unregistered AIs.
 -- Deviations from C++ (remaining): no instance-
 -- script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith and the DATA_TERON_GOREFIEND
--- bookkeeping arms skipped).
+-- (BossAI::JustEngagedWith, except the SetBossState IN_PROGRESS/
+-- DONE arms, PORTED above).
 
 local ENTRY_TERON_GOREFIEND = 22871
 
@@ -290,6 +290,7 @@ end
 local function teronEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
+    creature:SetBossState(3, 1) -- DATA_TERON_GOREFIEND, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:531; supremus idiom)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -345,6 +346,7 @@ end
 -- removal arms port Lua-side below (hit = self, C++ order).
 local function teronDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    creature:SetBossState(3, 3) -- DATA_TERON_GOREFIEND, DONE (BossAI::JustDied -> _JustDied, ScriptedCreature.cpp:513; supremus idiom)
     creature:CastSpell(creature, SPELL_SHADOW_OF_DEATH_REMOVE, false)
     -- Same 41999 OnHit follow-up as teronLeaveCombat (hit = self).
     creature:RemoveAura(SPELL_POSSESS_SPIRIT_IMMUNE)

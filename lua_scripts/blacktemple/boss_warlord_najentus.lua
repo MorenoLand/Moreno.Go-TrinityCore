@@ -56,8 +56,8 @@
 -- The SpellHit handler is not an UpdateAI event and stays ungated.
 -- Deviations from C++ (remaining): no instance-
 -- script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith and the DATA_HIGH_WARLORD_NAJENTUS
--- bookkeeping arms skipped); the impaling-spine GO summon (185584)
+-- (BossAI::JustEngagedWith, except the SetBossState IN_PROGRESS/
+-- DONE arms, PORTED above); the impaling-spine GO summon (185584)
 -- is ported via creature:SummonGameObject in onSpine (the Summon
 -- bridge landed after the old "no summon bridge" note was written);
 -- the EnterEvadeMode _DespawnAtEvade arm rides creature:Despawn in
@@ -251,6 +251,7 @@ end
 local function najentusEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
+    creature:SetBossState(0, 1) -- DATA_HIGH_WARLORD_NAJENTUS, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:531; supremus idiom)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -291,6 +292,7 @@ end
 
 -- C++ JustDied: Talk(SAY_DEATH).
 local function najentusDied(event, creature, killer)
+    creature:SetBossState(0, 3) -- DATA_HIGH_WARLORD_NAJENTUS, DONE (BossAI::JustDied -> _JustDied, ScriptedCreature.cpp:513; supremus idiom)
     creature:Talk(SAY_DEATH)
     najentusResetState(creature:GetGUIDLow())
 end

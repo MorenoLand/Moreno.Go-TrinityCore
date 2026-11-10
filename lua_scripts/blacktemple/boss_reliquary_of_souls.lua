@@ -56,8 +56,8 @@
 -- reset — the REACT_PASSIVE arm is PORTED 2026-10-20 —
 -- creature:SetReactState; the summons arms have no bridge).
 -- OnDied: cancel
--- timers (the instance SetBossState(DONE) arm is blocked on the
--- instance-script model). The UpdateAI !_inCombat early return is
+-- timers + SetBossState(DONE) (PORTED — creature:SetBossState is
+-- bridged, lua_creature_events.go:6593; supremus idiom). The UpdateAI !_inCombat early return is
 -- implicit — timers only exist once pulled; the reliquary boss
 -- UpdateAI pre-loop CASTING gate (:266) is PORTED on the submerge
 -- tick (500ms IsCasting defer, no re-arm consumed); the enslaved-
@@ -239,6 +239,7 @@ local function reliquaryEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     reliquaryState[guid] = { phase = PHASE_SUFFERING }
+    creature:SetBossState(5, 1) -- DATA_RELIQUARY_OF_SOULS, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:531; supremus idiom)
     schedule(guid, "submerge", 10000, function()
         onSubmerge(creature, guid)
     end)
@@ -256,6 +257,7 @@ end
 -- C++ JustDied: events.Reset + instance SetBossState(DONE) — the
 -- instance arm is blocked on the instance-script model.
 local function reliquaryDied(event, creature, killer)
+    creature:SetBossState(5, 3) -- DATA_RELIQUARY_OF_SOULS, DONE (boss_reliquary_of_souls.cpp:253-257; supremus idiom)
     reliquaryClear(creature:GetGUIDLow())
 end
 

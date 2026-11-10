@@ -347,6 +347,7 @@ local function councilEnterCombat(event, creature, target)
         return
     end
     st.inCombat = true
+    creature:SetBossState(DATA_ILLIDARI_COUNCIL, 1) -- IN_PROGRESS (BossAI::JustEngagedWith -> _JustEngagedWith, boss_illidari_council.cpp:150, ScriptedCreature.cpp:531; supremus idiom)
     creature:CastSpell(creature, SPELL_EMPYREAL_BALANCE, true)
     -- C++ empyreal_balance HandleDummy: the hit unit (= self here)
     -- takes 25% of the caster's current health as its new max and
@@ -731,6 +732,8 @@ end
 -- the random pick — pick from the pool, not pick-then-gate (fixed
 -- 2026-10-18; the pick-then-gate form usually picked a far player
 -- and cast nothing).
+local zerevorArcaneExplosionCheck -- forward declare: referenced by zerevorArcaneExplosion below (tharon_ja/gal_darah idiom)
+
 local function zerevorArcaneExplosion(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "zerevor_ae", 500, function()
@@ -754,13 +757,27 @@ local function zerevorArcaneExplosion(creature, guid)
             creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
             st.canUseArcaneExplosion = false
             schedule(guid, "zerevor_ae_check", 5000, function()
-                bossState(guid).canUseArcaneExplosion = true
+                zerevorArcaneExplosionCheck(creature, guid)
             end)
         end
     end
     schedule(guid, "zerevor_ae", 1000, function()
         zerevorArcaneExplosion(creature, guid)
     end)
+end
+
+-- C++ EVENT_ARCANE_EXPLOSION_CHECK: re-enable the arcane-explosion
+-- gate (no cast, no Talk — but still an event in the gated UpdateAI
+-- loop, boss_illidari_council.cpp:437-446, so it defers 500ms while
+-- casting like every other council tick).
+zerevorArcaneExplosionCheck = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "zerevor_ae_check", 500, function()
+            zerevorArcaneExplosionCheck(creature, guid)
+        end)
+        return
+    end
+    bossState(guid).canUseArcaneExplosion = true
 end
 
 -- C++ JustEngagedWith + ScheduleEvents: one-time non-triggered
