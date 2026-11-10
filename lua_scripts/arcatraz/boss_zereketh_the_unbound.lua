@@ -33,11 +33,12 @@
 -- (SAY_AGGRO) + 1s scheduler pump (a port of UpdateAI in C++
 -- arm order — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump; the
--- BossAI::JustEngagedWith instance legs (SetBossState/
--- setActive/ScheduleTasks) + JustDied/_Reset stay blocked,
--- DATA_ZEREKETH = 0 is an instance-side constant,
--- unbridgeable; the base pulse + me-zone arms are PORTED
--- in ev1 below). Pump: void zone 36119 — target = a random
+-- BossAI::JustEngagedWith setActive/ScheduleTasks legs +
+-- JustDied/_Reset setActive legs stay blocked; the
+-- SetBossState bookkeeping (DATA_ZEREKETH = 0) is PORTED
+-- as the (0,1)/(0,0)/(0,3) writes below (lua_creature_
+-- events.go:6605; omor/gruul precedent). The base pulse +
+-- me-zone arms are PORTED in ev1 below). Pump: void zone 36119 — target = a random
 -- threat-list player within 100 yd after skipping the
 -- top-threat entry (C++ SelectTarget(Random, 1, 100, true),
 -- UnitAI.h:170-197), nil pick casts nothing, non-triggered
@@ -65,8 +66,9 @@
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_arcatraz.cpp stays blocked on the instance-script
--- model; the BossAI ctor DATA_ZEREKETH = 0 bookkeeping in
--- Reset/JustEngagedWith/JustDied skipped); no SpellScript/AuraScript scripts
+-- model; the BossAI ctor DATA_ZEREKETH = 0 SetBossState
+-- bookkeeping is PORTED as the (0,1)/(0,0)/(0,3) writes
+-- below); no SpellScript/AuraScript scripts
 -- in this file.
 
 local SPELL_VOID_ZONE = 36119
@@ -222,6 +224,7 @@ RegisterCreatureEvent(ENTRY_ZEREKETH, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetBossState(0, 1) -- DATA_ZEREKETH, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; gruul/omor precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -247,5 +250,6 @@ RegisterCreatureEvent(ENTRY_ZEREKETH, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_ZEREKETH, 23, function(_, creature)
+    creature:SetBossState(0, 0) -- DATA_ZEREKETH, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
     resetBoss(creature:GetGUIDLow())
 end)

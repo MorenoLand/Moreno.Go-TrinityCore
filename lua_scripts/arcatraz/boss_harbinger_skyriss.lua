@@ -62,9 +62,12 @@
 -- combat pump (a port of UpdateAI in C++ arm order — 1s
 -- granularity exact for all C++ timers; the !UpdateVictim
 -- early return collapses into the pump; the BossAI::
--- JustEngagedWith/JustDied/_Reset arms are instance-blocked,
--- DATA_HARBINGER_SKYRISS = 3 is an instance-side constant,
--- unbridgeable). Combat pump: image splits — if not yet
+-- JustEngagedWith override is empty (no IN_PROGRESS write
+-- boss-side — Millhouse's AI writes (3,1), arcatraz.cpp:339)
+-- and the JustDied/_Reset setActive/persistence legs stay
+-- blocked; the SetBossState(3,3) DONE write is PORTED in
+-- ev4 below and the SetBossState(3,0) NOT_STARTED write in
+-- ev23 below). Combat pump: image splits — if not yet
 -- split at 66% and health is at or below 66% (C++ !HealthAbove
 -- Pct(66), nethekurse precedent), DoSplit(66): Talk(SAY_
 -- IMAGE), cast 36931, and set the 66 latch; then if not yet split at 33%
@@ -102,8 +105,9 @@
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_arcatraz.cpp stays blocked on the
 -- instance-script model; the BossAI ctor DATA_HARBINGER_
--- SKYRISS = 3 bookkeeping in Reset/JustEngagedWith/JustDied
--- skipped); intro phase-1/2 HandleGameObject(DATA_WARDENS_SHIELD,
+-- SKYRISS = 3 bookkeeping is PORTED as the SetBossState
+-- (3,0)/(3,3) writes below — no (3,1), the C++
+-- JustEngagedWith override is empty); intro phase-1/2 HandleGameObject(DATA_WARDENS_SHIELD,
 -- true/false) arms PORTED in introTick (boss-anchored
 -- FindNearestGameObject sweep, entry 184802; 2026-10-26
 -- GO-interaction strip);
@@ -530,7 +534,10 @@ RegisterCreatureEvent(ENTRY_SKYRISS, 19, onJustSummoned)
 
 -- C++ JustEngagedWith is empty — the combat timer schedule
 -- lands on OnEnterCombat (omor precedent); the pull yell is
--- the intro phase-2 SAY_AGGRO, not an engage yell.
+-- the intro phase-2 SAY_AGGRO, not an engage yell. No
+-- IN_PROGRESS write from this file: the C++ JustEngagedWith
+-- override is empty, so (3,1) never fires boss-side —
+-- Millhouse's AI writes it at arcatraz.cpp:339.
 RegisterCreatureEvent(ENTRY_SKYRISS, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
@@ -540,9 +547,10 @@ RegisterCreatureEvent(ENTRY_SKYRISS, 1, function(_, creature)
     end, 1000, 0)
 end)
 
--- C++ Reset() (called on evade): _Reset() is instance-
--- blocked; the observable remainder — the Initialize() re-
--- latch with the Intro flag untouched — is fullReset.
+-- C++ Reset() (called on evade): the SetBossState(3,0)
+-- NOT_STARTED write lands in ev23 below; the observable
+-- remainder — the Initialize() re-latch with the Intro flag
+-- untouched — is fullReset.
 RegisterCreatureEvent(ENTRY_SKYRISS, 2, function(_, creature)
     local guid = creature:GetGUIDLow()
     fullReset(guid)
@@ -573,6 +581,7 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() re-latch as the evade hook.
 RegisterCreatureEvent(ENTRY_SKYRISS, 23, function(_, creature)
+    creature:SetBossState(3, 0) -- DATA_HARBINGER_SKYRISS, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
     local guid = creature:GetGUIDLow()
     fullReset(guid)
     resetImmuneFlags(creature, guid)

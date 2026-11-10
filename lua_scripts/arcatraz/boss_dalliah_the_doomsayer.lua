@@ -35,10 +35,10 @@
 -- Fight shape (C++-exact for all modeled arms): Dalliah
 -- (20885): OnEnterCombat(1): per-GUID reset to the C++
 -- Initialize-equivalent schedule (gift {1s,4s} / whirlwind
--- {7s,9s}; the BossAI::JustEngagedWith instance legs stay
--- blocked, DATA_DALLIAH = 1 is an instance-side constant,
--- unbridgeable; the base pulse + me-zone arms are PORTED
--- in ev1 below) + Talk(SAY_AGGRO) + 1s scheduler pump (a port
+-- {7s,9s}; the BossAI::JustEngagedWith setActive/
+-- ScheduleTasks legs stay blocked; the SetBossState(1,1)
+-- IN_PROGRESS write is PORTED in ev1 below, with the base
+-- pulse + me-zone arms) + Talk(SAY_AGGRO) + 1s scheduler pump (a port
 -- of UpdateAI in C++ arm order — 1s granularity exact for all
 -- C++ timers; the !UpdateVictim early return collapses into
 -- the pump; the soccothratesDeath out-of-combat branch is
@@ -70,18 +70,20 @@
 -- skips it while casting). Melee is engine-driven.
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++ talks unconditionally —
 -- no player gate, C++-exact). OnDied(4): Talk(SAY_DEATH) +
--- cleanup (the _JustDied arm is instance-blocked; the
+-- cleanup (the _JustDied setActive/persistence legs stay
+-- blocked; the SetBossState(1,3) DONE write is PORTED; the
 -- soccothrates->AI()->SetData(1, 1) death relay is PORTED
 -- below via FindNearestCreature + SetData). OnLeaveCombat(2)/OnReset(23): cancel the
 -- pump, drop per-GUID state (the C++ Reset() observable
 -- remainder — the schedule re-latch — lands on OnEnterCombat
--- per the gargolmar precedent; the _Reset arm is instance-
--- blocked).
+-- per the gargolmar precedent; the SetBossState(1,0)
+-- NOT_STARTED write is PORTED in ev23 below).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (instance_arcatraz.cpp stays blocked on the instance-script
--- model; the BossAI ctor DATA_DALLIAH = 1 bookkeeping in
--- Reset/JustEngagedWith/JustDied skipped); no cross-creature
+-- model; the BossAI ctor DATA_DALLIAH = 1 SetBossState
+-- bookkeeping is PORTED as the (1,1)/(1,0)/(1,3) writes
+-- below); no cross-creature
 -- bridge — the EVENT_ME_FIRST 6s arm (Talk(SAY_AGGRO_DALLIAH_
 -- FIRST) on Soccothrates' AI via instance GetGuidData(DATA_
 -- SOCCOTHRATES)) PORTED 2026-10-24 in bossTick; the
@@ -291,6 +293,7 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetBossState(1, 1) -- DATA_DALLIAH, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; gruul/omor precedent)
     if creature:IsHeroic() then
         states[guid].shadowWave = 11000 + math.random(0, 4999)
     end
@@ -329,6 +332,7 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 23, function(_, creature)
+    creature:SetBossState(1, 0) -- DATA_DALLIAH, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
     resetBoss(creature:GetGUIDLow())
 end)
 
