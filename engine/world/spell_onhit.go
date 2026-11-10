@@ -71,31 +71,52 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 // (SpellEffects.cpp:322-348), so the charge adds on top of base — the
 // same shape as the 50341 case in the table below. The amount is the
 // single DBC effect value, not stack-scaled: Aura::ModStackAmount
-// (SpellAuras.cpp:1030-1068) never rescales m_amount. Creature targets
-// only: the encounter's targets are enemy dragons, and a player victim's
-// charge aura lives in the session aura store, which this dispatch does
-// not read — a player carrying 49836 keeps it (documented gap).
+// (SpellAuras.cpp:1030-1068) never rescales m_amount. Player victims
+// resolve through the victim session's activeAuras under its castMu
+// (the cloneCasterGUIDForUnit pattern, aura_state.go:173-205);
+// re-application preserves Amounts (spells.go:37988), so the player
+// leg reads the same single DBC value. Neither dispatch call site
+// holds a session castMu (no castMu lock in spells.go:2271-27819 or
+// the lua_player.go CastSpell binding), so locking the victim
+// session here cannot invert with the caster's lock.
 func (s *Server) shockLanceDetonate(casterGUID, victimGUID uint64, mapID, instanceID uint32, baseDamage uint32) (uint32, bool) {
 	if s == nil || victimGUID == 0 {
 		return baseDamage, false
 	}
-	victim := s.findCreatureMotion(mapID, instanceID, victimGUID)
-	if victim == nil {
-		return baseDamage, false
+	if victim := s.findCreatureMotion(mapID, instanceID, victimGUID); victim != nil {
+		key := creatureAuraKeyForMotion(victim)
+		s.auraMu.Lock()
+		aura := s.activeCreatureAuras[key][49836]
+		s.auraMu.Unlock()
+		if aura == nil || aura.EffectMask&(1<<0) == 0 || aura.CasterGUID != casterGUID {
+			return baseDamage, false
+		}
+		amount := aura.Amounts[0]
+		s.removeCreatureAura(key, 49836)
+		if amount <= 0 {
+			return baseDamage, true
+		}
+		return baseDamage + uint32(amount), true
 	}
-	key := creatureAuraKeyForMotion(victim)
-	s.auraMu.Lock()
-	aura := s.activeCreatureAuras[key][49836]
-	s.auraMu.Unlock()
-	if aura == nil || aura.EffectMask&(1<<0) == 0 || aura.CasterGUID != casterGUID {
-		return baseDamage, false
+	if vs := s.findSessionByGUID(victimGUID); vs != nil && vs.player != nil {
+		vs.castMu.Lock()
+		aura := vs.activeAuras[49836]
+		matched := aura != nil && !aura.Stopped && aura.EffectMask&(1<<0) != 0 && aura.CasterGUID == casterGUID
+		amount := int32(0)
+		if matched {
+			amount = aura.Amounts[0]
+		}
+		vs.castMu.Unlock()
+		if !matched {
+			return baseDamage, false
+		}
+		vs.removeAuraWithMode(49836, auraRemoveByEnemySpell)
+		if amount <= 0 {
+			return baseDamage, true
+		}
+		return baseDamage + uint32(amount), true
 	}
-	amount := aura.Amounts[0]
-	s.removeCreatureAura(key, 49836)
-	if amount <= 0 {
-		return baseDamage, true
-	}
-	return baseDamage + uint32(amount), true
+	return baseDamage, false
 }
 
 // freezingCircleDamage mirrors spell_freezing_circle::HandleDamage

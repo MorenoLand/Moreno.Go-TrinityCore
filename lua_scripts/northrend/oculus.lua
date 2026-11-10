@@ -56,7 +56,8 @@
 --   select (49345/49461/49462, SpellScript) — no SpellScript bridge;
 --   shock lance damage calc (49840) ports Go-side
 --   (spell_onhit.go shockLanceDetonate: base + 49836 eff0 amount
---   from this caster, charge aura consumed; creature targets only);
+--   from this caster, charge aura consumed; creature + player
+--   victims — player leg reads the victim session's activeAuras);
 --   touch the nightmare damage calc (50341) ports Go-side
 --   (spell_onhit.go onHitDamageRewrite: base + 30% caster max HP).
 --   evasive maneuvers proc (50240) + temporal rift proc
