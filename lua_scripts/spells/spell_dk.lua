@@ -50,6 +50,23 @@
 --   spell ID lives in DB spell_script_names, nowhere in the file.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
 --   needs DealDamage; spell_dk_raise_ally needs ghoul AI push/pop.
+--   spell_dk_dancing_rune_weapon (49028, 2026-11-10): Lua STAY-OUT,
+--   PORTED in Go (procs.go procAuraTriggerLoopFiltered, sibling tick):
+--   the OnEffectProc arm mirrors half the triggering spell's damage
+--   from the controlled rune-weapon guardian (entry 27893) via
+--   SendSpellNonMeleeDamageLog + DealDamage. No Lua ev6 port: the proc
+--   args carry no triggering spell id/school, Lua has no
+--   controlled-unit enumeration, and the Lua DealDamage spell leg
+--   deals 0 by design (lua_unit_combat.go). The Go twin scans the
+--   motion map for entry 27893 owned by the caster and deals the
+--   damage through the log + direct-damage helpers.
+--   spell_dk_death_gate (52751, 2026-11-10): PORTED in Go, not Lua —
+--   handleEffectScriptEffect case (spells.go): the hit unit self-casts
+--   the effect-0 CalcValue non-triggered; a Lua ev5 port would never
+--   fire (the player path has no OnEffectHitTarget site, 60533
+--   precedent) and the OnCheckCast class gate stays out (no check-cast
+--   bridge; DK-gated by learning).
+--   spell_dk_blood_boil (48721): PORTED below (2026-11-10).
 
 local SPELL_DK_BLOOD_PRESENCE = 48266
 local SPELL_DK_FROST_PRESENCE = 48263
@@ -163,3 +180,45 @@ end
 
 RegisterAuraEvent(SPELL_DK_IMPROVED_UNHOLY_PRESENCE_R1, 2, improvedUnholyPresenceApply)
 RegisterAuraEvent(SPELL_DK_IMPROVED_UNHOLY_PRESENCE_R1, 3, improvedUnholyPresenceRemove)
+
+local SPELL_DK_BLOOD_BOIL = 48721 -- spell_dk.cpp:461
+local SPELL_DK_BLOOD_BOIL_TRIGGERED = 65658 -- spell_dk.cpp:52
+local CLASS_DEATH_KNIGHT = 6
+
+local bloodBoilFired = {}
+
+-- C++ spell_dk_blood_boil_SpellScript::HandleAfterHit
+-- (spell_dk.cpp:486-494): AfterHit, once per cast (the _executed
+-- latch) on the first live hit unit — the caster self-casts
+-- SPELL_DK_BLOOD_BOIL_TRIGGERED 65658 triggered. The Load() gate
+-- (caster is a DK player) is the class check below. The ev1
+-- (OnCast, fires once per cast before the effect loop, spells.go)
+-- reset is the per-cast fresh SpellScript instance; a nil hitTarget
+-- is the miss leg (C++ GetHitUnit() nil skips). DORMANT until
+-- Spell.dbc ships the 48721/65658 records.
+local function bloodBoilReset(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    bloodBoilFired[caster:GetGUIDLow()] = false
+end
+
+local function bloodBoilAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetClass() ~= CLASS_DEATH_KNIGHT then
+        return
+    end
+    local low = caster:GetGUIDLow()
+    if bloodBoilFired[low] then
+        return
+    end
+    bloodBoilFired[low] = true
+    caster:CastSpell(caster, SPELL_DK_BLOOD_BOIL_TRIGGERED, true)
+end
+
+RegisterSpellEvent(SPELL_DK_BLOOD_BOIL, 1, bloodBoilReset)
+RegisterSpellEvent(SPELL_DK_BLOOD_BOIL, 3, bloodBoilAfterHit)
