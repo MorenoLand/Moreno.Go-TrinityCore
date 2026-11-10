@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mpq"
@@ -169,7 +170,12 @@ func parseBuildNumber(text string) (uint32, error) {
 }
 
 // atoiPrefix mirrors C atoi: leading whitespace, an optional sign, then a
-// run of decimal digits; 0 when no digits lead.
+// run of decimal digits; 0 when no digits lead. C++ atoi returns int, so
+// the strtol long result truncates to 32 bits: "2147483648" is -2147483648
+// and "4294967297" is 1 (glibc-verified, same model as tools/wowdata
+// atoiPrefix). A strtol-range overflow clamps to LONG_MAX/MIN, both of
+// which truncate to <= 0 as int32, so it returns 0 here and the caller
+// rejects it like C++ does.
 func atoiPrefix(s string) int {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\v' || s[i] == '\f' || s[i] == '\r') {
@@ -180,20 +186,21 @@ func atoiPrefix(s string) int {
 		neg = s[i] == '-'
 		i++
 	}
-	value := 0
-	digits := 0
+	start := i
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		value = value*10 + int(s[i]-'0')
-		digits++
 		i++
 	}
-	if digits == 0 {
+	if start == i {
+		return 0
+	}
+	n64, err := strconv.ParseInt(s[start:i], 10, 64)
+	if err != nil {
 		return 0
 	}
 	if neg {
-		return -value
+		n64 = -n64
 	}
-	return value
+	return int(int32(n64))
 }
 
 // readClientBuild returns the client build from the first detected
