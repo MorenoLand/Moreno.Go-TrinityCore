@@ -17364,11 +17364,12 @@ func init() {
 	// (not BossAI); AddSC_razorfen_downs also registers
 	// npc_idol_room_spawner (SetData-only summon machine — no summon
 	// bridge, documented-only, unregistered) and go_gong (OnGossipHello
-	// SendCustomAnim(0) ported in npc_belnistrasz.lua; instance
-	// SetData(DATA_WAVE) leg stays out — no instance-data bridge).
+	// SendCustomAnim(0) + the instance SetData(DATA_WAVE) wave machine
+	// ported in npc_belnistrasz.lua (shared instanceData table; tomb-death
+	// leg in npc_tomb_creature.lua).
 	// Ported arms in lua_scripts/kalimdor/npc_belnistrasz.lua:
 	// Reset refreshes Arcane Intellect 13326 under the C++ HasAura
-	// guard (the gossip-questgiver flag re-set has no bridge);
+	// guard (the gossip-questgiver flag re-set IS bridged — SetFlag(82, 2) ported);
 	// OnQuestAccept(3525) latches eventInProgress + Talk(0) (escort
 	// Start/faction/MovePath have no bridges); JustEngagedWith arms
 	// Fireball 9053 (1s init, 8s repeat, victim-cast) + Frost Nova
@@ -17379,7 +17380,8 @@ func init() {
 	// the event — not the 500ms defer used for pre-loop gates);
 	// MovementInform/idol-ritual machine (SummonCreature NPC 8611,
 	// Talk 1-5 progress, GO summons, GroupEventHappens credit) is
-	// documented-only in the lua file, not wired; JustDied's 5s
+	// documented-only in the lua file, not wired (MovementInform ev28 IS
+	// live; the blocker is the escort MovePath alone); JustDied's 5s
 	// DespawnOrUnsummon IS ported (freya delayed-despawn idiom) while
 	// its instance SetBossState(6, DONE) stays out as a C++ dead write
 	// (EncounterCount = 5) — see the lua file header.
@@ -17390,13 +17392,14 @@ func init() {
 	// no NPC_ constant in the C++ tree — belnistrasz precedent).
 	// EscortAI (not BossAI); AddSC_razorfen_kraul's only registration.
 	// Ported arms in lua_scripts/kalimdor/npc_willix.lua:
-	// OnQuestAccept(1144) -> Talk(0) (EscortAI Start + faction swap
-	// have no bridges); JustEngagedWith -> Talk(2) ungated
-	// (targeted-player Talk broadcasts). The whole WaypointReached
-	// escort path (Talk 1/3-10, emotes, boar 4514 summons,
-	// GroupEventHappens credit), JustSummoned AttackStart, and
-	// JustDied FailQuest have no bridges — documented in the lua
-	// file, not wired.
+	// OnQuestAccept(1144) -> StartEscort(player) + MoveWaypoint() +
+	// Talk(0) + SetFaction(113); WaypointReached (ev6) ported: Talk 1/3-10,
+	// boar 4514 summons (type 3, 25s) + AttackStart(Willix) at the summon
+	// site, wp45 questgiver-flag restore + GroupEventHappens(1144) credit,
+	// wp46 Talk(10) + StopEscort; JustEngagedWith -> Talk(2) ungated
+	// (targeted-player Talk broadcasts); JustDied FailQuest ported via the
+	// escort-player latch. Stays out: wp3 EMOTE_STATE_POINT 29 (no
+	// SetEmoteState bridge).
 	RegisterLuaBoss("npc_willix", 4508)
 	// instance_razorfen_kraul.cpp audit (loader decl :76 / call :189):
 	// InstanceMapScript (map 47, "instance_razorfen_kraul") — GO latch

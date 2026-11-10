@@ -76,8 +76,10 @@
 --   SetData spawner-count, Talk progress lines 1-5, idol-shutdown
 --   visual 12774, camera shake 12816, brazier GO summon 152097,
 --   GroupEventHappens credit, idol-fire GO deletes 151951/151952/
---   151973, InterruptSpell channeled) — the whole idol-ritual machine
---   needs MovementInform + summon + quest-credit + GO-summon bridges.
+--   151973, InterruptSpell channeled) — MovementInform (ev28) IS live
+--   now; the machine stays out on the escort MovePath alone (no
+--   arbitrary-path bridge, only self-path startCreatureWaypoint), so
+--   Belnistrasz never reaches waypoint 17 and the chain never starts.
 -- - npc_idol_room_spawner ("npc_idol_room_spawner"): its only arm is
 --   SetData summoning 4 trash entries (Withered Battle Boar 7333,
 --   Death's Head Geomancer 7335, Withered Quilguard 7329,
@@ -236,8 +238,8 @@ end
 
 -- C++ Reset: only the !eventInProgress branch is reachable here —
 -- refresh Arcane Intellect under the C++ HasAura guard; re-arm local
--- event/channeling state (the gossip-questgiver flag re-set has no
--- bridge).
+-- event/channeling state (the gossip-questgiver flag re-set IS bridged
+-- — SetFlag(82, 2) below).
 local function onReset(event, creature)
     local guid = creature:GetGUIDLow()
     local st = getState(guid)
