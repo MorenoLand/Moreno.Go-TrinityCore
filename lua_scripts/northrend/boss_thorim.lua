@@ -162,8 +162,9 @@
 -- The ten spell scripts / condition_thorim_arena_leap / three achievements —
 -- no AuraScript / ConditionScript / achievement bridges. SpellScript
 -- OnEffectHitTarget IS bridged (RegisterSpellEvent ev5, skadi/gal_darah
--- precedent): 64767/64909 ported below; 62042's script arm (FilterTargets
--- ev7 + HandleScript ev5 + LoseHammer AfterCast) stays open.
+-- precedent): 64767/64909 ported below; 62042's FilterTargets (ev7) +
+-- HandleScript (ev5) ported below, LoseHammer AfterCast stays out
+-- (no AfterCast bridge, spells.go:19257).
 
 local ENTRY_THORIM = 32865
 local BOSS_THORIM = 8 -- ulduar.h:44
@@ -206,6 +207,7 @@ local SPELL_SHEATH_OF_LIGHTNING = 62276
 local SPELL_STORMHAMMER = 62042 -- boss_thorim.cpp:39
 local SPELL_STORMHAMMER_SIF = 64767 -- boss_thorim.cpp:40
 local SPELL_STORMHAMMER_BOOMERANG = 64909 -- boss_thorim.cpp:41
+local SPELL_DEAFENING_THUNDER = 62470 -- boss_thorim.cpp:42
 local SPELL_SIF_TRANSFORM = 64778 -- boss_thorim.cpp:73
 local THORIM_WEAPON_DISPLAY_ID = 45900 -- boss_thorim.cpp:323
 local SPELL_CHARGE_ORB = 62016 -- boss_thorim.cpp:43
@@ -1109,3 +1111,111 @@ local function stormhammerBoomerangHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_STORMHAMMER_BOOMERANG, 5, stormhammerBoomerangHit)
+
+-- C++ spell_thorim_stormhammer::FilterTargets (boss_thorim.cpp:1911-1924):
+-- OnObjectAreaTargetSelect EFFECT_ALL TARGET_UNIT_SRC_AREA_ENEMY —
+-- drop targets above the balcony (Z > 428.0, HeightPositionCheck) or
+-- outside the arena (ArenaBoundaries: inside the floor circle
+-- (2134.77, -262.307, r 45.4) and outside the balcony circle
+-- (2135.178, -321.122, r 32.0, inverted)); an empty list fails the cast
+-- (FinishCast SPELL_FAILED_NO_VALID_TARGETS), else one random target
+-- is kept. The AfterCast LoseHammer leg (caster
+-- UNIT_VIRTUAL_ITEM_SLOT_ID = 0, :1935-1938) stays out:
+-- CallScriptAfterCastHandlers is a Go no-op (spells.go:19257), no
+-- AfterCast bridge. DELTA: no FinishCast bridge — an emptied list
+-- leaves the cast to resolve with no script-effect hit, so the
+-- damage/stun arms still land on the victim where C++ aborts the
+-- whole cast. DORMANT until Spell.dbc ships the 62042 record.
+local function stormhammerFilter(event, spell, effectIndex, targets)
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetZ() <= 428.0
+                and target:GetDistance2d(2134.77, -262.307) <= 45.4
+                and target:GetDistance2d(2135.178, -321.122) > 32.0 then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    if #kept > 0 then
+        targets:Add(kept[math.random(#kept)])
+    end
+end
+
+RegisterSpellEvent(SPELL_STORMHAMMER, 7, stormhammerFilter)
+
+-- C++ spell_thorim_stormhammer::HandleScript (boss_thorim.cpp:1926-1933):
+-- EFFECT_2 SCRIPT_EFFECT OnEffectHitTarget — the hit unit casts
+-- SPELL_DEAFENING_THUNDER (62470) on itself, triggered, and casts
+-- SPELL_STORMHAMMER_BOOMERANG (64909) on the caster, triggered.
+-- DORMANT until Spell.dbc ships the 62042 record.
+local function stormhammerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 2 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_DEAFENING_THUNDER, true)
+    hitTarget:CastSpell(caster, SPELL_STORMHAMMER_BOOMERANG, true)
+end
+
+RegisterSpellEvent(SPELL_STORMHAMMER, 5, stormhammerHit)
+
+-- C++ spell_thorim_activate_lightning_orb_periodic::PeriodicTick
+-- (boss_thorim.cpp:2090-2109): PreventDefaultAction; the aura caster
+-- (the Thorim controller, :744) searches thunder orbs (NPC_THUNDER_ORB)
+-- within 100.0f that sit below the balcony (HeightPositionCheck(false):
+-- Z <= 428.0), picks one at random, and hands its GUID to Thorim's
+-- SetGUID(DATA_CHARGED_PILLAR) (:511-522: the pillar casts
+-- SPELL_LIGHTNING_ORB_CHARGED on itself triggered and
+-- SPELL_LIGHTNING_PILLAR_2 (62976) on no target, then
+-- EVENT_LIGHTNING_CHARGE fires 8s later — Thorim casts
+-- SPELL_LIGHTNING_RELEASE on the pillar). LATENT:
+-- EVENT_START_PERIODIC_CHARGE (the controller cast, :744) is unported,
+-- so the aura never lands yet. The SetGUID arm is inlined here because
+-- GetInstanceCreature(BOSS_THORIM) IS the instance-GUID bridge (the
+-- file header's "no instance-GUID bridge" note is stale — illidari
+-- council precedent). SPELL_LIGHTNING_PILLAR_2 stays out: CastSpell(nil)
+-- falls back to the current target or no-ops, there is no nil-target
+-- cast bridge. The release is scheduled on Thorim's GUID through the
+-- file's schedule helper (replacement semantics vs C++'s duplicate
+-- EventMap entries; a re-tick inside the 8s window re-arms on the
+-- newest pillar instead of firing twice on it).
+local SPELL_ACTIVATE_LIGHTNING_ORB_PERIODIC = 62184 -- boss_thorim.cpp:57
+local SPELL_LIGHTNING_ORB_CHARGED = 62186 -- boss_thorim.cpp:49
+local NPC_THUNDER_ORB = 33378 -- ulduar.h:193
+local THORIM_BALCONY_Z_CHECK = 428.0 -- boss_thorim.cpp:369
+
+local function activateLightningOrbTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return true
+    end
+    local low = {}
+    for _, orb in ipairs(caster:GetCreaturesInRange(100, NPC_THUNDER_ORB)) do
+        if orb:GetZ() <= THORIM_BALCONY_Z_CHECK then
+            low[#low + 1] = orb
+        end
+    end
+    if #low == 0 then
+        return true
+    end
+    local pillar = low[math.random(1, #low)]
+    local thorim = caster:GetInstanceCreature(BOSS_THORIM)
+    if thorim == nil then
+        return true
+    end
+    pillar:CastSpell(pillar, SPELL_LIGHTNING_ORB_CHARGED, true)
+    local pillarLow = pillar:GetGUIDLow()
+    local thorimLow = thorim:GetGUIDLow()
+    schedule(thorimLow, "lightningCharge", 8000, function()
+        local pillarNow = thorim:GetCreatureByGUID(pillarLow)
+        if pillarNow ~= nil then
+            thorim:CastSpell(pillarNow, SPELL_LIGHTNING_RELEASE, false)
+        end
+    end)
+    return true
+end
+
+RegisterAuraEvent(SPELL_ACTIVATE_LIGHTNING_ORB_PERIODIC, 1, activateLightningOrbTick)
