@@ -72,6 +72,14 @@
 --   (bridged lua_creature_events.go:734) ported on ev5 for all three,
 --   after the derived arms, in C++ order (derived IsSummonedBy calls
 --   the base at its end; abomination has no override, base only).
+-- LK JustSummoned / SummonedCreatureDies (:1233-1250) — PORTED
+--   2026-11-10: ev5 increments the shared
+--   instanceData.escapeSummonCount (the LK's _summonsCount) and ev4
+--   decrements it with the zero guard, firing leader
+--   DoAction(ACTION_WALL_BROKEN -668003) when the count hits 0 with
+--   no LK summon events pending (instanceData.lkPendingSummons, the
+--   C++ _events.Empty() twin) and the escape boss state IN_PROGRESS.
+--   The LK machine side lives in npc_the_lich_king_escape.lua.
 --
 -- DOCUMENTED-ONLY (no registration beyond the three entries above):
 -- npc_escape_event_trash::IsSummonedBy leader link (:2186-2192) —
@@ -115,7 +123,10 @@ local EMOTE_ONESHOT_EMERGE = 449
 
 local DATA_THE_LICH_KING_ESCAPE = 2 -- halls_of_reflection.h:39
 local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
+local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2
+
+local ACTION_WALL_BROKEN = -668003 -- halls_of_reflection.h:132
 
 local timers = {}
 local wakes = {}
@@ -145,6 +156,52 @@ end
 
 local function alive(guid)
     return timers[guid] ~= nil
+end
+
+local function getTrashInstanceData(creature)
+    local mapObj = creature:GetMap()
+    if not mapObj then
+        return nil
+    end
+    return mapObj:GetInstanceData()
+end
+
+-- C++ npc_the_lich_king_escape_horAI::JustSummoned (:1233-1236): the
+-- LK's _summonsCount++ rides the summoned trash's ev5 (the file
+-- header's ev5 == IsSummonedBy note); the shared
+-- instanceData.escapeSummonCount is the C++ member, split across
+-- files because Lua has no per-AI members.
+local function escapeTrashSpawned(creature)
+    local data = getTrashInstanceData(creature)
+    if data then
+        data.escapeSummonCount = (data.escapeSummonCount or 0) + 1
+    end
+end
+
+-- C++ SummonedCreatureDies (:1238-1250): the "should never happen"
+-- zero guard, --_summonsCount, then the `!_summonsCount &&
+-- _events.Empty()` check — the LK's pending summon events are
+-- instanceData.lkPendingSummons (npc_the_lich_king_escape.lua) —
+-- and the escape boss state must be IN_PROGRESS before the leader
+-- gets DoAction(ACTION_WALL_BROKEN).
+local function escapeTrashDied(creature)
+    local data = getTrashInstanceData(creature)
+    if not data then
+        return
+    end
+    local count = data.escapeSummonCount or 0
+    if count == 0 then
+        return
+    end
+    count = count - 1
+    data.escapeSummonCount = count
+    if count == 0 and (data.lkPendingSummons or 0) == 0
+            and creature:GetBossState(DATA_THE_LICH_KING_ESCAPE) == BOSS_STATE_IN_PROGRESS then
+        local leader = data.jainaOrSylvanasEscape
+        if leader then
+            leader:DoAction(ACTION_WALL_BROKEN)
+        end
+    end
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 0, dist, true): a random
@@ -263,6 +320,7 @@ end
 
 -- C++ :2215-2224: spawn self-cast, passive, emerge emote, then base.
 local function ghoulSpawn(event, creature)
+    escapeTrashSpawned(creature)
     creature:CastSpell(creature, SPELL_RAGING_GHOUL_SPAWN, true)
     creature:SetReactState(REACT_PASSIVE)
     creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
@@ -323,6 +381,7 @@ end
 
 -- C++ :2281-2290: spawn self-cast, passive, emerge emote, then base.
 local function witchDoctorSpawn(event, creature)
+    escapeTrashSpawned(creature)
     creature:CastSpell(creature, SPELL_RISEN_WITCH_DOCTOR_SPAWN, true)
     creature:SetReactState(REACT_PASSIVE)
     creature:PerformEmote(EMOTE_ONESHOT_EMERGE)
@@ -363,6 +422,7 @@ end
 
 -- C++ base IsSummonedBy only (no derived override): DoZoneInCombat.
 local function abominationSpawn(event, creature)
+    escapeTrashSpawned(creature)
     creature:DoZoneInCombat()
     startDespawnPoll(creature)
 end
@@ -374,6 +434,7 @@ local function onLeaveOrDiedOrReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if event == 4 then
+        escapeTrashDied(creature)
         if wakes[guid] then
             RemoveEventById(wakes[guid])
             wakes[guid] = nil
