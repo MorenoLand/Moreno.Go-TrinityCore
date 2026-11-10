@@ -1092,6 +1092,72 @@ func (s *Server) installVehicleAccessoriesFromOrigin(ctx context.Context, origin
 // movement.go's base-GUID arm. Seated-AI suppression and kit-drop fate
 // ride the shared gates: the stepCreatureMotion VehicleGUID gate and
 // removeVehicleKit's exitCreatureVehiclePassengers.
+// reinstallMissingVehicleAccessories bridges the InstallAllAccessories(false)
+// half of the respawn Vehicle::Reset (Creature::Respawn re-inits the AI;
+// AIM_Initialize (Creature.cpp:1085) / JustAppeared (Creature.cpp:699-704)
+// run Reset, which removes all passengers then installs every template
+// accessory). Go respawns reuse the motion and the kit (no removeVehicleKit
+// on death), so live accessories are still seated — only rows whose seat
+// stands EMPTY are refilled: a minion whose SummonTime expired, or an
+// accessory killed, while the base was dead. Occupied seats are skipped,
+// never ejected: C++'s RemoveAllPassengers first would eject a live
+// player still seated on the respawned base (Go never ejected them at
+// death), and the end state for creatures is identical (same entry on
+// the same seat) without the GUID churn. The spawn-install latch is set
+// by the refill (it performed the install), so the step sync does not
+// re-attempt and summon-then-despawn duplicates. Called only from the
+// respawn scheduler (kill.go world + instance paths), never from
+// fireCreatureSpawned — first spawn installs through the step sync.
+func (s *Server) reinstallMissingVehicleAccessories(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	kit := s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
+	if kit == nil || motion.Health <= 0 {
+		return
+	}
+	kit.mu.Lock()
+	if len(kit.Accessories) == 0 {
+		kit.mu.Unlock()
+		return
+	}
+	accessories := append([]VehicleAccessory(nil), kit.Accessories...)
+	kit.AccessoriesInstalled = true
+	kit.mu.Unlock()
+	origin := s.summonOriginFromMotion(motion)
+	baseGUID := motion.GUID
+	for _, acc := range accessories {
+		if kit.GetPassenger(acc.SeatID) != 0 {
+			continue
+		}
+		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, motion.X, motion.Y, motion.Z, motion.Orientation, acc.SummonType, acc.SummonTime)
+		if summoned == nil {
+			continue
+		}
+		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
+		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
+		if !ok {
+			s.expireTempSummonGuardian(ctx, summoned)
+			continue
+		}
+		s.motionMu.Lock()
+		summoned.VehicleGUID = baseGUID
+		summoned.VehicleSeat = assigned
+		summoned.VehicleAccessoryMinion = acc.IsMinion
+		summoned.Moving = false
+		s.motionMu.Unlock()
+		kit.mu.Lock()
+		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
+		kit.mu.Unlock()
+		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
+			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
+			if acc.IsMinion {
+				s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(summoned))
+			}
+		}
+	}
+}
+
 func (s *Server) installPlayerVehicleAccessories(ctx context.Context, sess *session, kit *VehicleKit) {
 	if s == nil || sess == nil || sess.player == nil || kit == nil {
 		return

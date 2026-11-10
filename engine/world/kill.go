@@ -2876,6 +2876,8 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset
 			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216).
 			if motion != nil {
+				// Respawn Vehicle::Reset refills accessories whose seats stand empty (InstallAllAccessories(false) half).
+				s.reinstallMissingVehicleAccessories(ctx, motion)
 				s.fireCreatureSpawned(ctx, motion)
 				// Creature::Respawn (Creature.cpp:2198): ai->Reset() runs on
 				// every respawn — the instance path already calls OnReset;
@@ -2943,6 +2945,8 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 		s.reseatRespawnedEntry(ctx, motion, respawn.Entry)
 		s.clearLootState(item.key.MapID, item.key.InstanceID, creatureWorldGUID(respawn.GUID, respawn.Entry))
 		if motion != nil {
+			// Respawn Vehicle::Reset refills accessories whose seats stand empty (InstallAllAccessories(false) half).
+			s.reinstallMissingVehicleAccessories(ctx, motion)
 			// Eluna CREATURE_EVENT_ON_SPAWN (5), with the event-23 On_Reset
 			// pre-fire (Eluna::JustRespawned, CreatureHooks.cpp:210-216) —
 			// ahead of the native boss reset, matching ElunaCreatureAI::
