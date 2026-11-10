@@ -138,7 +138,7 @@ local mkiiAssembled = {}
 
 -- GetCurrTime is wall-clock ms (Eluna global, engine globals.go:941);
 -- os.clock() is CPU time and stalls while the server idles, which would
--- corrupt the due/remaining math used by delayTimers (thekal idiom).
+-- corrupt the due/remaining math used by timeUntil (thekal idiom).
 local function nowMs()
     return GetCurrTime()
 end
@@ -189,27 +189,6 @@ local function schedule(guid, key, delay, fn)
         delayMs = math.random(delay[1], delay[2])
     end
     per[key] = armEntry(guid, key, delayMs, fn)
-end
-
--- C++ EventMap::DelayEvents (thekal idiom): push the named armed timers
--- out by extraMs, preserving each timer's remaining time.
-local function delayTimers(guid, keys, extraMs)
-    local per = timers[guid]
-    if not per then
-        return
-    end
-    local now = nowMs()
-    for _, key in ipairs(keys) do
-        local entry = per[key]
-        if entry then
-            RemoveEventById(entry.id)
-            local remaining = entry.due - now
-            if remaining < 0 then
-                remaining = 0
-            end
-            per[key] = armEntry(guid, key, remaining + extraMs, entry.fn)
-        end
-    end
 end
 
 -- C++ EventMap::GetTimeUntilEvent twin: ms until the named timer fires,

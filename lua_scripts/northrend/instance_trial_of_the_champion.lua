@@ -24,8 +24,10 @@
 --   (instance_trial_of_the_champion.cpp:225-238): when the counter
 --   reaches exactly 9, the champion walks to (746.88, 618.74, 411.06)
 --   and is un-gated (RemoveFlag NON_ATTACKABLE + REACT_AGGRESSIVE).
---   The counter is written by the soldier JustDied arm, not by an
---   instance SetData hook (no such Lua event exists), so the instance
+--   The counter is written by the soldier JustDied arm, not via an
+--   InstanceData:SetData call (the event-8 hook exists —
+--   instance_hooks.go:43 — but the arm writes the shared table
+--   directly, so no SetData fire occurs on that path), so the instance
 --   script polls it on ON_UPDATE (the aeonus/medivh check-tick
 --   precedent). Exact-equality preserves C++ semantics.
 --   Bridges: creature:MoveTo (lua_creature_events.go:4624),
@@ -78,8 +80,9 @@ end)
 
 -- C++ SetData DATA_ARGENT_SOLDIER_DEFEATED leg
 -- (instance_trial_of_the_champion.cpp:225-238), polled: the counter is
--- written by the soldier JustDied arm (boss_eadric.lua) and there is no
--- instance SetData hook, so ON_UPDATE observes the exact-9 transition.
+-- written by the soldier JustDied arm (boss_eadric.lua) straight into
+-- the shared table, not via InstanceData:SetData, so the event-8 hook
+-- never fires on that path and ON_UPDATE observes the exact-9 transition.
 RegisterMapEvent(MAP_TRIAL_OF_THE_CHAMPION, INSTANCE_EVENT_ON_UPDATE, function(event, instanceData, mapObj, diff)
     if instanceData.argentChampionUngated then
         return

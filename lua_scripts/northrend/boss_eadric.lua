@@ -466,8 +466,9 @@ RegisterCreatureEvent(ENTRY_PALETRESS, 23, paletressReset)
 -- instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED,
 -- instance->GetData(DATA_ARGENT_SOLDIER_DEFEATED) + 1).
 -- DATA_ARGENT_SOLDIER_DEFEATED = 8 (trial_of_the_champion.h TCData).
--- The instance SetData/GetData pair has no direct Lua bridge
--- (creature:SetData is the per-AI store), so the counter lives in the
+-- The instance SetData bridge exists (InstanceData:SetData fires
+-- INSTANCE_EVENT_ON_SET_DATA (8), instance_hooks.go:51) but GetData
+-- has no InstanceData method, so the counter lives in the
 -- shared instanceData table (boss_aeonus.lua precedent) and the
 -- 9-deaths un-gate leg polls it in instance_trial_of_the_champion.lua.
 -- The EscortAI waypoint machine stays out (no escort bridge).
