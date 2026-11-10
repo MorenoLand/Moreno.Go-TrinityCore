@@ -28,19 +28,38 @@ import (
 // arms qualify the same way (HandleEffects runs the script hook before
 // the effect handler, Spell.cpp:5165-5171, with damage already the
 // rolled DBC base), so 49840 (oculus shock lance) is live via
-// shockLanceDetonate. The stateful arms (49840, 34779, 60103) live in
+// shockLanceDetonate. The stateful arms (49840, 34779, 60103, 47496) live in
 // this Server method, not the pure table below: 49840 reads and consumes
 // the target's charge aura, 34779 picks its trigger spell from the
 // caster's map difficulty, and 60103 takes its Flametongue gate
 // (lavaLashBoost, computed once per cast by the player-caster arm —
 // creature casters never satisfy it, and the spell's Load() gate
-// requires TYPEID_PLAYER anyway).
+// requires TYPEID_PLAYER anyway). 47496 takes the caster's max health
+// for its pct-of-max-health damage (the ghoul's health, not the
+// target's — the dispatch already threads casterMaxHealth).
 func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32, casterGUID, victimGUID uint64, mapID, instanceID uint32, lavaLashBoost bool) (uint32, bool) {
 	switch spell.ID {
 	case 49840:
 		return s.shockLanceDetonate(casterGUID, victimGUID, mapID, instanceID, baseDamage)
 	case 34779:
 		return s.freezingCircleDamage(mapID, instanceID)
+	case 47496:
+		// spell_dk_ghoul_explode::HandleDamage (spell_dk.cpp:1187-1191):
+		// the OnEffectLaunchTarget arm REPLACES the hit damage with
+		// CountPctFromMaxHealth(EFFECT_2 CalcValue) — pct of the
+		// caster's max health. Same hook position as the 49840 arm
+		// (HandleEffects runs it before EffectSchoolDMG), so the
+		// dispatch returns the computed value outright, not base+value.
+		// CalcValueForLevel is the CalcValue(caster) twin (level clamp
+		// + per-level + die roll, store.go:157). The Suicide leg
+		// (EFFECT_1 OnEffectHitTarget: triggered 47496-triggered +
+		// visual cast on the hit unit) stays out — no triggered-cast
+		// leg in this dispatch.
+		pct := spell.Effects[2].CalcValueForLevel(spell, casterLevel)
+		if pct <= 0 {
+			return baseDamage, false
+		}
+		return casterMaxHealth * uint32(pct) / 100, true
 	case 60103:
 		if !lavaLashBoost {
 			return baseDamage, false
