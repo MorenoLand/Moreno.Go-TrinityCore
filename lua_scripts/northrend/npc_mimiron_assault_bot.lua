@@ -7,6 +7,9 @@ local NPC_MIMIRON_ASSAULT_BOT = 34057
 
 local SPELL_MAGNETIC_FIELD = 64668
 
+-- Unit.h:221: UNIT_STATE_ROOT = 0x400.
+local UNIT_STATE_ROOT = 1024
+
 -- GUID-keyed CreateLuaEvent timers (C++ JustEngagedWith schedules the
 -- EventMap; the C++ EventMap only ticks once UpdateAI runs with a
 -- victim, so engage-seeding is behavior-identical — the krystallus
@@ -44,12 +47,36 @@ local function magneticFieldTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI UNIT_STATE_ROOT arm (:1306-1313): while rooted, retarget
+-- the nearest alive player within 30yd (ResetAllThreat + AttackStart).
+-- HasUnitState is bridged (lua_creature_events.go:2280, any-bit read);
+-- ResetAllThreat (:2135) and EngageWithTarget (:1391, the AttackStart
+-- twin) are bridged. 1s poll (the wg_spirit_guide per-tick lowering);
+-- C++ SelectTarget(MinDistance) reads the threat list while
+-- GetNearestPlayer(30) scans all alive players in range — the vx_001
+-- off-threat delta, same class.
+local function rootRetargetTick(creature, guid)
+    if creature:HasUnitState(UNIT_STATE_ROOT) then
+        local target = creature:GetNearestPlayer(30)
+        if target then
+            creature:ResetAllThreat()
+            creature:EngageWithTarget(target)
+        end
+    end
+    schedule(guid, "root", 1000, function()
+        rootRetargetTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: EVENT_MAGNETIC_FIELD in 14s.
 local function assaultBotEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     schedule(guid, "magnetic", 14000, function()
         magneticFieldTick(creature, guid)
+    end)
+    schedule(guid, "root", 1000, function()
+        rootRetargetTick(creature, guid)
     end)
 end
 
@@ -69,10 +96,3 @@ RegisterCreatureEvent(NPC_MIMIRON_ASSAULT_BOT, 1, assaultBotEnterCombat)
 RegisterCreatureEvent(NPC_MIMIRON_ASSAULT_BOT, 2, assaultBotLeaveCombat)
 RegisterCreatureEvent(NPC_MIMIRON_ASSAULT_BOT, 4, assaultBotDied)
 RegisterCreatureEvent(NPC_MIMIRON_ASSAULT_BOT, 23, assaultBotReset)
-
--- Unmodeled: the UNIT_STATE_ROOT retarget arm (C++ UpdateAI: on ROOT,
--- SelectTarget(MinDistance, 0, 30.0f) + ResetAllThreat + AttackStart).
--- HasUnitState/IsRooted has no bridge on the handler-creature surface
--- (ResetAllThreat and the EngageWithTarget AttackStart twin are both
--- bridged -- the root-state read alone blocks the arm); the magnetic
--- field timer above is the whole engage-gated behavior.

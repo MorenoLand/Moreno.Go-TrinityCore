@@ -22407,12 +22407,12 @@ func init() {
 	RegisterLuaBoss("npc_wg_spirit_guide", 31842)
 	// npc_mimiron_assault_bot (Ulduar, Mimiron ACU phase) — ported arm
 	// in lua_scripts/northrend/npc_mimiron_assault_bot.lua: engage-seeded
-	// magnetic-field timer (14s, 30s re-arm, victim-cast 64668).
+	// magnetic-field timer (14s, 30s re-arm, victim-cast 64668) +
+	// 1s ROOT retarget poll (nearest alive player 30yd, ResetAllThreat
+	// + EngageWithTarget; HasUnitState bridged).
 	// Entry 34057 wowhead-only (no C++ NPC_ constant for this add).
-	// ROOT retarget arm stays documented-only (no HasUnitState /
-	// AttackStart bridge).
 	RegisterLuaBoss("npc_mimiron_assault_bot", 34057)
-	// Checked-no-gate: UpdateAI CASTING hits zero — magnetic-field tick stays ungated (ROOT retarget leg is a separate, unported arm).
+	// Checked-no-gate: UpdateAI CASTING hits zero — magnetic-field tick stays ungated; ROOT arm is a state read, not a cast gate.
 	// npc_mimiron_frost_bomb (Ulduar, Mimiron VX-001 phase) — ported arms
 	// in lua_scripts/northrend/npc_mimiron_frost_bomb.lua: Reset-seeded
 	// explosion chain (10s AOE 64626, +3s AOE 65354, despawn +3s).
@@ -22429,12 +22429,12 @@ func init() {
 	// Checked-no-gate: plain event loop, zero CASTING hits — arm/detonation chain stays ungated.
 	// npc_mimiron_flames (Ulduar, Mimiron hard-mode fire) — ported arm
 	// in lua_scripts/northrend/npc_mimiron_flames.lua: Reset-seeded
-	// one-shot spread cast (4s, AOE 64562). Entries 34363
+	// one-shot spread cast (4s, AOE 64562) + 1s IN_PROGRESS despawn
+	// poll (GetBossState bridge live). Entries 34363
 	// "Flames (Initial)" (spell 64563 summon link) + 34121
 	// "Flames (Spread)" (spell 64564 summon link), wowhead-only;
 	// both share the AI (the spread chain needs every patch to
-	// cast 64562). IN_PROGRESS despawn gate stays documented-only
-	// (no instance boss-state bridge).
+	// cast 64562).
 	RegisterLuaBoss("npc_mimiron_flames", 34363)
 	RegisterLuaBoss("npc_mimiron_flames", 34121)
 	// Checked-no-gate: plain event loop, zero CASTING hits — 4s spread one-shot stays ungated.
