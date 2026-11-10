@@ -115,7 +115,10 @@
 -- boss_thorimAI phase-2 machine, remainder: EVENT_ACTIVATE_LIGHTNING_FIELD
 -- (bunny grid sweep + per-bunny LightningFieldEvent BasicEvent, no bridge) /
 -- EVENT_START_PERIODIC_CHARGE (unregistered controller cast) /
--- EVENT_LIGHTNING_CHARGE (SetGUID-gated pillar cast, no instance-GUID bridge).
+-- EVENT_LIGHTNING_CHARGE (SetGUID-gated pillar cast, PORTED 2026-11-10
+-- in activateLightningOrbTick below via GetInstanceCreature + the
+-- schedule helper; the header's old "no instance-GUID bridge" note was
+-- stale).
 -- The transition itself + EVENT_JUMPDOWN (minus MoveJump) + UNBALANCING_STRIKE
 -- + CHAIN_LIGHTNING are PORTED 2026-11-08, tick 478.
 -- boss_thorimAI FinishEncounter / EVENT_OUTRO_1..3 (lines 598-601: Talks
@@ -1165,10 +1168,10 @@ RegisterSpellEvent(SPELL_STORMHAMMER, 5, stormhammerHit)
 -- C++ spell_thorim_activate_lightning_orb_periodic::PeriodicTick
 -- (boss_thorim.cpp:2090-2109): PreventDefaultAction; the aura caster
 -- (the Thorim controller, :744) searches thunder orbs (NPC_THUNDER_ORB)
--- within 100.0f that sit below the balcony (HeightPositionCheck(false):
--- Z <= 428.0), picks one at random, and hands its GUID to Thorim's
--- SetGUID(DATA_CHARGED_PILLAR) (:511-522: the pillar casts
--- SPELL_LIGHTNING_ORB_CHARGED on itself triggered and
+-- within 100.0f that sit ABOVE the balcony (UpperOrbCheck, :2064-2076:
+-- HeightPositionCheck(true), Z > 428.0), picks one at random, and hands
+-- its GUID to Thorim's SetGUID(DATA_CHARGED_PILLAR) (:511-522: the pillar
+-- casts SPELL_LIGHTNING_ORB_CHARGED on itself triggered and
 -- SPELL_LIGHTNING_PILLAR_2 (62976) on no target, then
 -- EVENT_LIGHTNING_CHARGE fires 8s later — Thorim casts
 -- SPELL_LIGHTNING_RELEASE on the pillar). LATENT:
@@ -1180,8 +1183,10 @@ RegisterSpellEvent(SPELL_STORMHAMMER, 5, stormhammerHit)
 -- falls back to the current target or no-ops, there is no nil-target
 -- cast bridge. The release is scheduled on Thorim's GUID through the
 -- file's schedule helper (replacement semantics vs C++'s duplicate
--- EventMap entries; a re-tick inside the 8s window re-arms on the
--- newest pillar instead of firing twice on it).
+-- EventMap entries — vacuous here: the aura ticks every 16s (DBC
+-- amplitude) against an 8s release, so a re-tick can never land inside
+-- the window). DELTAS: GetCreaturesInRange is a 3D + alive-only sweep
+-- where C++ visits 2D grid cells with no alive filter.
 local SPELL_ACTIVATE_LIGHTNING_ORB_PERIODIC = 62184 -- boss_thorim.cpp:57
 local SPELL_LIGHTNING_ORB_CHARGED = 62186 -- boss_thorim.cpp:49
 local NPC_THUNDER_ORB = 33378 -- ulduar.h:193
@@ -1192,16 +1197,16 @@ local function activateLightningOrbTick(event, aura, target)
     if caster == nil then
         return true
     end
-    local low = {}
+    local upper = {}
     for _, orb in ipairs(caster:GetCreaturesInRange(100, NPC_THUNDER_ORB)) do
-        if orb:GetZ() <= THORIM_BALCONY_Z_CHECK then
-            low[#low + 1] = orb
+        if orb:GetZ() > THORIM_BALCONY_Z_CHECK then
+            upper[#upper + 1] = orb
         end
     end
-    if #low == 0 then
+    if #upper == 0 then
         return true
     end
-    local pillar = low[math.random(1, #low)]
+    local pillar = upper[math.random(1, #upper)]
     local thorim = caster:GetInstanceCreature(BOSS_THORIM)
     if thorim == nil then
         return true

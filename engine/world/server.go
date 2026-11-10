@@ -447,7 +447,15 @@ type session struct {
 	// calendar event or copy may not be created
 	// (CALENDAR_CREATE_EVENT_COOLDOWN = 5s).
 	calendarEventCooldown int64
-	gmChat                bool
+	// collectingFalloutRollSet/collectingFalloutRollOK memoize the
+	// per-cast roll_chance_i(25) of spell_collecting_fallout (12709)
+	// across the two triggerLaunchSpellEffectIndex calls of one launch
+	// block (EFFECT_0 phial then EFFECT_1 poisoning, gnomeregan.cpp:
+	// 553-590); the EFFECT_1 read clears RollSet, so a stale value can
+	// never leak into the next cast.
+	collectingFalloutRollSet bool
+	collectingFalloutRollOK  bool
+	gmChat                   bool
 	// locale mirrors WorldSession::m_sessionDbLocaleIndex
 	// (WorldSession.h:1198, WorldSocket.cpp:267 -> WorldSession.cpp:132):
 	// the session's LocaleConstant index from account.locale (0 = enUS),

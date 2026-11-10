@@ -29181,6 +29181,10 @@ const (
 	spellBrittleArmorAura    = 24575 // aura stacked by triggerBrittleArmorSpell
 	spellMercurialShieldAura = 26464 // aura stacked by triggerMercurialShieldSpell
 
+	spellCollectingFallout       = 12709 // triggering spell (gnomeregan.cpp:553)
+	spellCollectingFalloutPhial  = 11637 // EFFECT_0 trigger: Empty Heavy Phial
+	spellCollectingFalloutPoison = 11638 // EFFECT_1 trigger: Radiation Poisoning
+
 	mechanicRoot       = 7  // MECHANIC_ROOT (SharedDefines.h:1364)
 	mechanicSnare      = 11 // MECHANIC_SNARE (SharedDefines.h:1368)
 	mechanicSlowAttack = 8  // MECHANIC_SLOW_ATTACK (SharedDefines.h:1365)
@@ -29271,6 +29275,34 @@ func (s *session) triggerLaunchSpellEffectIndex(ctx context.Context, spell wotlk
 	}
 	if eff.Effect != spellEffectTriggerSpell && eff.Effect != spellEffectTriggerSpellWithValue {
 		return
+	}
+	// spell_collecting_fallout (gnomeregan.cpp:553-590): OnEffectLaunch
+	// rolls roll_chance_i(25) once per cast on EFFECT_0 — success lets
+	// the phial (11637) fire and the fail arm prevents the poisoning
+	// (11638); failure prevents the phial and lets the poisoning fire.
+	// Both triggers ride this whole-spell LAUNCH arm (neither triggered
+	// spell needs an explicit unit target and 12709 is not channeled,
+	// SpellInfo::NeedsToBeTriggeredByCaster), so the roll is memoized
+	// on the session across the two per-index calls (effect order 0
+	// then 1, same launch loop) and cleared on the EFFECT_1 read; a
+	// missing roll reads as failure, matching C++'s _spellFail = true
+	// default. Placed ahead of the DBC lookups so the roll runs even
+	// when a trigger record is missing, like the C++ script hook.
+	if spellID == spellCollectingFallout {
+		switch eff.TriggerSpell {
+		case spellCollectingFalloutPhial:
+			s.collectingFalloutRollOK = rand.IntN(100) < 25
+			s.collectingFalloutRollSet = true
+			if !s.collectingFalloutRollOK {
+				return
+			}
+		case spellCollectingFalloutPoison:
+			ok := s.collectingFalloutRollSet && s.collectingFalloutRollOK
+			s.collectingFalloutRollSet = false
+			if ok {
+				return
+			}
+		}
 	}
 	if eff.TriggerSpell == 0 || eff.TriggerSpell == spellID {
 		// SpellEffects.cpp:948-951: no triggered spell — warn and return
