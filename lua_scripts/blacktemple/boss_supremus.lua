@@ -50,10 +50,11 @@
 -- timer arm goes through the gated onSwitchPhase wrapper; the
 -- JustSummoned volcano relay is not an UpdateAI event and stays
 -- ungated. (The old boss_supremus.cpp:213-216 citation was npc_volcano's
--- UpdateAI, not the boss's.) Deviations from C++: no instance-
--- script model — boss admission via the luaBossAI shim
--- (BossAI::JustEngagedWith and the DATA_SUPREMUS bookkeeping arms
--- skipped); threat model partial — the ResetThreatList/AddThreat
+-- UpdateAI, not the boss's.) Encounter-state bookkeeping PORTED
+-- (maiden idiom; bridge live, lua_creature_events.go:6593):
+-- SetBossState(DATA_SUPREMUS 1, IN_PROGRESS) first in OnEnterCombat +
+-- SetBossState(1, DONE) in OnDied. Deviations from C++: threat model
+-- partial — the ResetThreatList/AddThreat
 -- (1,000,000 on the charge target) arms and the threat-list pick
 -- for hateful strike: ResetAllThreat IS bridged (lua_objects.go)
 -- the switch-target pair is PORTED in onSwitchTarget (ResetAllThreat +
@@ -385,6 +386,7 @@ local function supremusEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = { phase = PHASE_INITIAL }
+    creature:SetBossState(1, 1) -- DATA_SUPREMUS, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:531; maiden idiom)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540) -- base me-form DoZone already fires on engage via the ported ChangePhase tail (mandokir convention)
     changePhase(creature, guid)
     schedule(guid, "flame", 20000, function()
@@ -412,6 +414,7 @@ local function supremusLeaveCombat(event, creature)
 end
 
 local function supremusDied(event, creature, killer)
+    creature:SetBossState(1, 3) -- DATA_SUPREMUS, DONE (BossAI::JustDied -> _JustDied, ScriptedCreature.cpp:513; supremus has no JustDied override)
     supremusResetState(creature:GetGUIDLow())
 end
 

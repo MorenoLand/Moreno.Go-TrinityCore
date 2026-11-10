@@ -12638,7 +12638,9 @@ func init() {
 	// boss_supremus has no UpdateAI override) are PORTED in Lua via the
 	// IsCasting 500ms defer (mal_ganis idiom); the engage-time ChangePhase
 	// call stays ungated (direct JustEngagedWith call); the
-	// encounter-state bookkeeping is blocked on the instance-script model; the
+	// encounter-state bookkeeping arms are PORTED (SetBossState
+	// IN_PROGRESS on engage + DONE on death, maiden idiom; bridge live
+	// lua_creature_events.go:6593); the
 	// ResetThreatList/AddThreat arms are PORTED via threat bridges (ResetAllThreat + AddThreat 1e6 in onSwitchTarget, C++ order; the hateful strike
 	// target pick is approximated by the highest-health melee-range player);
 	// the ApplySpellImmune taunt arms stay out on no-bearer grounds (the

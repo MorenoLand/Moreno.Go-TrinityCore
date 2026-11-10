@@ -50,11 +50,13 @@
 -- boss_pandemoniusAI::JustDied — Talk(SAY_DEATH 2) (event 4).
 -- DOCUMENTED-ONLY (in this header; only entry 18341 registered):
 -- boss_pandemoniusAI ctor / Reset — BossAI _Reset() + the
--- DATA_PANDEMONIUS instance binding (GetManaTombsAI): the
--- BossAI/instance legs have no bridge (the auriaya precedent) —
--- the Lua port carries no encounter state, and the per-GUID timer
--- tables reset on 2/4/23 (the gargolmar precedent) matching the
--- C++ Reset re-latch of VoidBlastCounter = 0.
+-- DATA_PANDEMONIUS instance binding (GetManaTombsAI): the Lua port
+-- carries no encounter state, and the per-GUID timer tables reset on
+-- 2/4/23 (the gargolmar precedent) matching the C++ Reset re-latch
+-- of VoidBlastCounter = 0. JustDied sets no boss state in C++ either
+-- (the override Talks only, never calls _JustDied), so the Lua
+-- omission of SetBossState is C++-exact, not a missing bridge
+-- (the bridge is live, lua_creature_events.go:6593).
 -- events.DelayEvents(500ms, DARK_SHELL_EVENT_GROUP): no
 -- event-group-delay bridge. Modeled as a shellShift accumulator:
 -- each non-5th void blast adds 500ms to the NEXT dark-shell

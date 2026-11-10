@@ -226,8 +226,8 @@ end
 -- self-cast + SetFaction(summoner faction); UNIT_STATE_ROOT ports via
 -- creature:SetRooted (2026-10-24); AttackStart(FocusedTargetGUID)
 -- PORTED this run via EngageWithTarget on the stored pick (the
--- focus fire's event-1 fiery pump then runs); SetLevel has no
--- bridge, stays out.
+-- focus fire's event-1 fiery pump then runs); SetLevel ports via
+-- the creature:SetLevel bridge (lua_creature_events.go:6236).
 local function focusFireSummoned(event, creature, summon)
     if summon and summon:GetEntry() == NPC_FOCUS_FIRE then
         summon:CastSpell(summon, SPELL_FOCUS_FIRE_VISUAL)

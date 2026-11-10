@@ -1044,6 +1044,15 @@ end
 -- PASSIVE, AttackStop and flag arms are PORTED —
 -- creature:SetReactState, creature:AttackStop, creature:SetFlag;
 -- the summon-DoAction arm has no bridge.
+-- C++ EVENT_SHADOW_PRISON_TEXT / EVENT_SUMMON_MAIEV /
+-- EVENT_CONFRONT_MAIEV_TEXT / EVENT_RESUME_COMBAT_PHASE_4
+-- (boss_illidan.cpp:984-1001): events-map arms, gated (mal_ganis
+-- idiom) — extracted from startPhase4's anonymous closures
+-- 2026-11-09. Forward declarations: the chain links reference each
+-- other textually before their definitions; without these the names
+-- compile to globals and the chain calls nil (tharon_ja idiom).
+local onShadowPrisonText, onSummonMaiev, onConfrontMaiev, onResumeCombat4
+
 local function startPhase4(creature, guid)
     cancelPhaseSchedule(guid)
     -- The air-phase timers are canceled here too as a safety net:
@@ -1067,35 +1076,75 @@ local function startPhase4(creature, guid)
     -- confrontation ends.
     creature:SetFlag(59, 0x2000000)
     schedule(guid, "shadowPrisonText", 500, function()
-        creature:Talk(SAY_ILLIDAN_SHADOW_PRISON)
-        schedule(guid, "summonMaiev", 9000, function()
-            creature:CastSpell(creature, SPELL_SUMMON_MAIEV, false)
-            -- C++ boss_illidan.cpp:990-991: SetFacingToObject(maiev) after
-            -- the summon; the instance-GUID lookup is substituted with
-            -- FindNearestCreature(23197 NPC_MAIEV_SHADOWSONG, 100.0) —
-            -- the summon lands at the caster, so the range is generous
-            -- — and the nil-guard mirrors the C++ if. Atan2 + SetFacingTo
-            -- is the zuljin flame-breath idiom.
-            local maiev = creature:FindNearestCreature(23197, 100.0)
-            if maiev then
-                local face = math.atan2(maiev:GetY() - creature:GetY(), maiev:GetX() - creature:GetX())
-                if face < 0 then face = face + 2 * math.pi end
-                creature:SetFacingTo(face)
-            end
-            schedule(guid, "confrontMaiev", 9000, function()
-                creature:Talk(SAY_ILLIDAN_CONFRONT_MAIEV)
-                schedule(guid, "resumeCombat4", 13000, function()
-                    -- C++ boss_illidan.cpp:999-1000: RemoveFlag(UNIT_FIELD_FLAGS,
-                    -- UNIT_FLAG_NOT_SELECTABLE) then me->SetReactState(REACT_AGGRESSIVE)
-                    -- (EVENT_RESUME_COMBAT_PHASE_4: flag clear before the flip,
-                    -- before the phase-4 re-arm).
-                    creature:RemoveFlag(59, 0x2000000)
-                    creature:SetReactState(2) -- REACT_AGGRESSIVE
-                    armPhaseSchedule(creature, guid, PHASE_4)
-                end)
-            end)
-        end)
+        onShadowPrisonText(creature, guid)
     end)
+end
+
+onShadowPrisonText = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "shadowPrisonText", 500, function()
+            onShadowPrisonText(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_ILLIDAN_SHADOW_PRISON)
+    schedule(guid, "summonMaiev", 9000, function()
+        onSummonMaiev(creature, guid)
+    end)
+end
+
+onSummonMaiev = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summonMaiev", 500, function()
+            onSummonMaiev(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_MAIEV, false)
+    -- C++ boss_illidan.cpp:990-991: SetFacingToObject(maiev) after
+    -- the summon; the instance-GUID lookup is substituted with
+    -- FindNearestCreature(23197 NPC_MAIEV_SHADOWSONG, 100.0) —
+    -- the summon lands at the caster, so the range is generous
+    -- — and the nil-guard mirrors the C++ if. Atan2 + SetFacingTo
+    -- is the zuljin flame-breath idiom.
+    local maiev = creature:FindNearestCreature(23197, 100.0)
+    if maiev then
+        local face = math.atan2(maiev:GetY() - creature:GetY(), maiev:GetX() - creature:GetX())
+        if face < 0 then face = face + 2 * math.pi end
+        creature:SetFacingTo(face)
+    end
+    schedule(guid, "confrontMaiev", 9000, function()
+        onConfrontMaiev(creature, guid)
+    end)
+end
+
+onConfrontMaiev = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "confrontMaiev", 500, function()
+            onConfrontMaiev(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_ILLIDAN_CONFRONT_MAIEV)
+    schedule(guid, "resumeCombat4", 13000, function()
+        onResumeCombat4(creature, guid)
+    end)
+end
+
+onResumeCombat4 = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "resumeCombat4", 500, function()
+            onResumeCombat4(creature, guid)
+        end)
+        return
+    end
+    -- C++ boss_illidan.cpp:999-1000: RemoveFlag(UNIT_FIELD_FLAGS,
+    -- UNIT_FLAG_NOT_SELECTABLE) then me->SetReactState(REACT_AGGRESSIVE)
+    -- (EVENT_RESUME_COMBAT_PHASE_4: flag clear before the flip,
+    -- before the phase-4 re-arm).
+    creature:RemoveFlag(59, 0x2000000)
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    armPhaseSchedule(creature, guid, PHASE_4)
 end
 
 -- C++ EVENT_PHASE_4_DELAYED (12s, GROUP_PHASE_ALL): the delayed
@@ -1343,6 +1392,22 @@ end
 -- and DoAction(ACTION_FINALIZE_AIR_PHASE). The count is per-GUID
 -- (C++ member, Reset :483); the relay sender is the flame's
 -- JustDied (flameCleanup, event 4, above).
+-- C++ EVENT_RESUME_COMBAT (boss_illidan.cpp:934-938): RemoveFlag +
+-- REACT_AGGRESSIVE + ScheduleEvents(GROUP_PHASE_3); events-map arm,
+-- gated (mal_ganis idiom) — extracted from illidanDoAction's
+-- anonymous closure 2026-11-09. (The flag arm stays out: the flag
+-- was never set at the 65% entry; the music arm stays out.)
+local function onResumeCombat(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "resumeCombat", 500, function()
+            onResumeCombat(creature, guid)
+        end)
+        return
+    end
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    armPhaseSchedule(creature, guid, PHASE_3)
+end
+
 local function illidanDoAction(event, creature, action)
     if action ~= ACTION_FLAME_DEAD then
         return
@@ -1376,8 +1441,7 @@ local function illidanDoAction(event, creature, action)
     creature:SetDisableGravity(false)
     creature:SetSheath(1) -- SHEATH_STATE_MELEE
     schedule(guid, "resumeCombat", 3000, function()
-        creature:SetReactState(2) -- REACT_AGGRESSIVE
-        armPhaseSchedule(creature, guid, PHASE_3)
+        onResumeCombat(creature, guid)
     end)
 end
 
@@ -1498,6 +1562,20 @@ RegisterAuraEvent(SPELL_AKAMA_DOOR_CHANNEL, 3, akamaDoorChannelRemove)
 -- unverified). EVENT_AKAMA_THANKS (:1270-1273) Talks
 -- SAY_AKAMA_SALUTE; the spirit-salute/spline tail stays out (no
 -- movement bridge).
+-- C++ EVENT_AKAMA_THANKS (boss_illidan.cpp:1270-1273): Talk; the
+-- spirit-salute/spline tail stays out (no movement bridge).
+-- Events-map arm, gated (mal_ganis idiom) — extracted from
+-- akamaDoAction's anonymous closure 2026-11-09.
+local function onAkamaThanks(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "akamaThanks", 500, function()
+            onAkamaThanks(creature, guid)
+        end)
+        return
+    end
+    creature:Talk(SAY_AKAMA_SALUTE)
+end
+
 local function akamaDoAction(event, creature, action)
     if action ~= ACTION_OPEN_DOOR then
         return
@@ -1508,7 +1586,7 @@ local function akamaDoAction(event, creature, action)
     end
     local guid = creature:GetGUIDLow()
     schedule(guid, "akamaThanks", 2000, function()
-        creature:Talk(SAY_AKAMA_SALUTE)
+        onAkamaThanks(creature, guid)
     end)
 end
 
