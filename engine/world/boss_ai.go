@@ -18508,8 +18508,10 @@ func init() {
 	// (razelikh precedent); join the SpellScript/AuraScript queue.
 	// CASTING gates PORTED (500ms IsCasting defer): base UpdateAI
 	// pre-loop :314 + in-loop :320 gates cover gormok impale/stomp;
-	// snobold :510/:548 + jormungar :857/:863 + icehowl (base) gates
-	// cover unported arms only; combat-stalker UpdateAI :606 ungated
+	// snobold :510/:548 gates cover the PORTED fire-bomb tick
+	// (boss_northrend_beasts.lua fireBombTick, 500ms IsCasting
+	// defer); jormungar :857/:863 + icehowl (base) gates cover
+	// unported arms only; combat-stalker UpdateAI :606 ungated
 	// (zero HasUnitState hits).
 	RegisterLuaBoss("boss_gormok", 34796)
 	// Anub'Rekhan (Naxxramas) — fight logic in
@@ -19812,12 +19814,13 @@ func init() {
 	// spell_krystallus_shatter_effect (radius-scaled hit damage)
 	// — no SpellScript bridge; both join the
 	// no-SpellScript-bridge queue.
-	// CAST-STATE 2026-11-04: UpdateAI pre-loop gate :86 +
-	// in-loop :119 PORTED as a 500ms IsCasting defer in all 3
-	// ported ticks (boulder/spike/stomp, mal_ganis idiom);
-	// GROUND_SLAM/SHATTER chain stays unported, so it takes no
-	// defer; the "no timer-event/cast bridges" claim above is
-	// stale for the three ported arms.
+	// CAST-STATE 2026-11-04 (corrected 2026-11-09): UpdateAI
+	// pre-loop gate :86 + in-loop :119 PORTED as a 500ms IsCasting
+	// defer in all 5 ported ticks (boulder/spike/stomp/slam/shatter,
+	// mal_ganis idiom); the GROUND_SLAM/SHATTER chain IS ported
+	// (groundSlamTick/shatterTick, both deferred); the
+	// "no timer-event/cast bridges" claim above is stale for the
+	// five ported arms.
 	RegisterLuaBoss("boss_krystallus", 27977)
 
 	// Sjonnir the Ironshaper (27978), Halls of Stone —

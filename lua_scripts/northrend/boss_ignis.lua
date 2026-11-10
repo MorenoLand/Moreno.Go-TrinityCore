@@ -215,7 +215,7 @@ end
 
 -- Boss UpdateAI CASTING gates (boss_ignis.cpp pre-loop :214 +
 -- in-loop :283) PORTED as a 500ms IsCasting defer in jet,
--- scorch and berserk ticks (mal_ganis idiom; IsCasting live,
+-- scorch, berserk and construct ticks (mal_ganis idiom; IsCasting live,
 -- lua_creature_events.go:1950); Talk/DamageTaken/JustSummoned
 -- arms stay ungated per C++ (separate hooks).
 -- C++ EVENT_JET (:222-:224): Talk(EMOTE_JETS 7) + DoCast(me,

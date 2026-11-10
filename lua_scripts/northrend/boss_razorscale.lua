@@ -587,6 +587,10 @@ RS.summonMinionsTick = function(creature, guid)
     if RS.phase[guid] ~= RS.PHASE_AIR then
         return
     end
+    if creature:IsCasting() then
+        schedule(guid, "summonMinions", 500, function() RS.summonMinionsTick(creature, guid) end)
+        return
+    end
     local count = 2
     if creature:Is25ManRaid() then
         count = math.random(2, 4)
@@ -1226,9 +1230,17 @@ RS.harpoonFireStateSpellHit = function(event, creature, caster, spellId)
 end
 
 -- Boss UpdateAI CASTING gates (boss_razorscale.cpp pre-loop
--- :565 + in-loop :654) PORTED as a 500ms IsCasting defer in
--- berserkTick (mal_ganis idiom); the darkrune watcher/guardian/
--- sentinel UpdateAI gates guard unported spawner-machine arms only.
+-- :565 + in-loop :654) PORTED as a 500ms IsCasting defer in every
+-- ported cast timer tick (fireball/devouring/summonMinions/
+-- flameBreath/wingBuffet/firebolt/fuseArmor/flameBreathGround/
+-- berserk, mal_ganis idiom; summonMinions deferred 2026-11-09);
+-- the two one-shot motion arms take no defer (resumeAir fires 4s
+-- after the instant wing-buffet/firebolt casts; resumeMoveChase
+-- fires 1ms after DoAction interrupts all casts) — unobservable;
+-- the darkrune watcher/guardian/sentinel UpdateAI gates (:1277/
+-- :1300, :1348/:1367, :1407/:1434) guard the PORTED darkrune ticks
+-- (lightningBolt/chainLightning, stormstrike, heroicStrike/
+-- battleShout/whirlwind).
 -- C++ EVENT_BERSERK (:572-575): DoCastSelf(SPELL_BERSERK 47008,
 -- TRIGGERED) + Talk(EMOTE_BERSERK 2, me); 900s init (:362), no
 -- re-arm, no phase gate — cast-before-Talk order kept.
