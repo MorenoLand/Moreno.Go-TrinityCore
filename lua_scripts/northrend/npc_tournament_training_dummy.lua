@@ -58,13 +58,13 @@
 -- evade-Reset path, halycon precedent).
 -- Ported arm 3 (C++ DamageTaken :226-230, shared AI — all three
 -- entries): damage = 0 unconditionally -> event-9 damage-rewrite
--- returns (true, 0) (lich_king_escape precedent). The
--- RescheduleEvent(EVENT_DUMMY_RESET, 10s) leg rides the unbridged
--- evade machine (EVENT_DUMMY_RESET :296-302: UpdateVictim-gated
--- EnterEvadeMode, no evade bridge) — documented deviation; the
--- latch-clear side effect is moot since the 5s recast clears it,
--- and the evade->Reset defend re-arm IS modeled (ev23 then ev2
--- both re-arm — see the ev2 registration note below).
+-- returns (true, 0) (lich_king_escape precedent) + the
+-- EVENT_DUMMY_RESET 10s reschedule (IsInCombat-gated
+-- EnterEvadeMode + 10s re-arm, :296-302; bridges live:
+-- IsInCombat lua_creature_events.go:647, EnterEvadeMode :5188 —
+-- the old "unbridged evade machine" note was stale). The evade ->
+-- Reset defend re-arm IS modeled (ev23 then ev2 both re-arm —
+-- see the ev2 registration note below).
 -- Unmodeled: the 62709 counterattack; the
 -- SetControlled stunned leg; npc_argent_valiant's charge /
 -- shield-breaker combat timers (no NPC_ARGENT_VALIANT entry
@@ -166,8 +166,12 @@ local function dummyDied(event, creature)
 end
 
 -- C++ SpellHit :237-269: entry-switched credit casts + the global
--- 62626 vulnerable latch (dual HasAura gate).
+-- 62626 vulnerable latch (dual HasAura gate). C++ returns early on
+-- a null caster (:239-241), so the whole arm is caster-gated.
 local function dummySpellHit(event, creature, caster, spellId)
+    if not caster then
+        return
+    end
     local guid = creature:GetGUIDLow()
     local entry = creature:GetEntry()
     if entry == ENTRY_CHARGE_TARGET then
@@ -191,11 +195,30 @@ local function dummySpellHit(event, creature, caster, spellId)
     end
 end
 
--- C++ DamageTaken :226-230: damage = 0 unconditionally (the
--- EVENT_DUMMY_RESET reschedule leg rides the unbridged evade
--- machine — documented above).
+-- Forward declaration (tharon_ja idiom): dummyDamageTaken's
+-- closure references onDummyReset, defined below; a plain
+-- assignment there binds this slot (never re-`local function`).
+local onDummyReset
+
+-- C++ DamageTaken :226-230: damage = 0 unconditionally +
+-- RescheduleEvent(EVENT_DUMMY_RESET, 10s).
 local function dummyDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "reset", 10000, function() onDummyReset(creature, guid) end)
     return true, 0
+end
+
+-- C++ EVENT_DUMMY_RESET :296-302: UpdateVictim-gated
+-- EnterEvadeMode (evade -> Reset -> defend re-arm) + 10s
+-- re-arm. UpdateVictim() reads as IsInCombat here (the dummy
+-- has a victim exactly while players are attacking it);
+-- EnterEvadeMode fires ev23 before ev2, so the ev23 Reset
+-- re-arm lands and this timer re-schedules after it.
+onDummyReset = function(creature, guid)
+    if creature:IsInCombat() then
+        creature:EnterEvadeMode()
+        schedule(guid, "reset", 10000, function() onDummyReset(creature, guid) end)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_CHARGE_TARGET, 5, dummySpawnOrReset)

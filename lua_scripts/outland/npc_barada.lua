@@ -29,8 +29,11 @@
 --   DoAction HOVER 2 + 11s; step 11 Jules DoAction FLIGHT 3 + 10s;
 --   step 13/15/17/19 Talk SAY_BARADA_5/6/7; step 20 Jules DoAction
 --   MOVE_HOME 4 + RemoveAura VOMITS 39295 + 10s; step 21 Jules
---   RemoveAllAuras + RemoveAura BARADAS_COMMAND + RemoveFlag PACIFIED +
---   Talk SAY_BARADA_8 7 + EnterEvadeMode + EVENT_RESET in 2min.
+--   `success` latch set + RemoveAllAuras + RemoveAura BARADAS_COMMAND
+--   + RemoveFlag PACIFIED + Talk SAY_BARADA_8 7 + EnterEvadeMode +
+--   EVENT_RESET in 2min (latch clear); the latch lives in the shared
+--   ColonelJulesSuccess table (npc_colonel_jules.lua) and gates the
+--   Jules gossip-hello quest credit, ported there.
 --   Bridges: SetFacingTo (lua_creature_events.go:4735), PerformEmote
 --   (lua_creature_events.go:4090; C++ Unit::HandleEmoteCommand only
 --   broadcasts the emote packet, Unit.cpp:1610), CastSpell self-cast,
@@ -49,13 +52,11 @@
 -- Jules idles within 20 yd; there is no GetCreatureByGUID bridge
 -- (only GetPlayerByGUID, runtime.go:1160).
 -- Stay-outs (vacuous or unbridged, no observable loss in Lua):
--- - Jules `success` latch (step 21 set / EVENT_RESET clear):
---   C++ npc_colonel_jules.cpp:527 gates the unported Jules
---   skull/combat machine on it; npc_colonel_jules.lua models no
---   success-gated behavior, so both writes are no-ops here.
 -- - Jules HOVER (2) / FLIGHT (3) arms: Barada still sends them
---   faithfully, but npc_colonel_jules.lua handles MOVE_HOME (4) only
---   (AddAura / SetCanFly / MoveJump / waypoint-chain legs unbridged).
+--   faithfully, but npc_colonel_jules.lua handles MOVE_HOME (4) only;
+--   the hover/flight + skull-summon + waypoint-chain machine is a
+--   queued port (its AddAura / SetCanFly / MoveJump / SummonCreature
+--   bridges are live, see npc_colonel_jules.lua).
 -- - Explicit MoveTargetedHome (step 21): redundant — base
 --   CreatureAI::EnterEvadeMode moves home itself (CreatureAI.cpp:233)
 --   and resets, which the ev23 handler above mirrors.
@@ -245,6 +246,14 @@ local function talkStep(creature, guid)
     elseif step == 21 then
         jules = findJules(creature)
         if jules then
+            -- C++ sets the Jules `success` member here; the Lua
+            -- latch lives in the shared ColonelJulesSuccess table
+            -- (npc_colonel_jules.lua) and gates the gossip-hello
+            -- quest credit.
+            if ColonelJulesSuccess == nil then
+                ColonelJulesSuccess = {}
+            end
+            ColonelJulesSuccess[jules:GetGUIDLow()] = true
             jules:RemoveAllAuras()
         end
         creature:RemoveAura(SPELL_BARADAS_COMMAND)
@@ -252,7 +261,15 @@ local function talkStep(creature, guid)
         creature:Talk(SAY_BARADA_8)
         creature:EnterEvadeMode()
         state[guid] = nil
-        schedule(guid, "reset", 120000, function() state[guid] = nil end)
+        schedule(guid, "reset", 120000, function()
+            -- C++ EVENT_RESET (zone_hellfire_peninsula.cpp:799-802):
+            -- the Jules `success` latch clears after 2min.
+            local j = findJules(creature)
+            if j and ColonelJulesSuccess ~= nil then
+                ColonelJulesSuccess[j:GetGUIDLow()] = nil
+            end
+            state[guid] = nil
+        end)
     end
 end
 
