@@ -130,8 +130,11 @@
 -- boss_halion UpdateAI — CASTING gates (material :327 pre-loop,
 -- PHASE_TWO early-return handled by the 75% latch; twilight
 -- pre-loop-only :513) ported as 500ms IsCasting defer on material
--- cleave/tail-lash/breath + twilight cleave/breath/tail-lash/
--- soul-consumption; the firewall GO leg is non-cast and stays ungated.
+-- cleave/tail-lash/breath/meteor/fiery/firewall + twilight
+-- cleave/breath/tail-lash/soul-consumption; the firewall GO leg is
+-- non-cast but sits inside the gated loop (:347-351, after the :327
+-- gate), so it carries the same 500ms defer (gated-loop non-cast-leg
+-- precedent).
 -- EVENT_METEOR_STRIKE / EVENT_FIERY_COMBUSTION PORTED tick 270
 -- (meteorStrikeTick / fieryCombustionTick below): the old
 -- "phase-machine-gated" stay-out is retracted — EventMap
@@ -522,6 +525,28 @@ local function fieryCombustionTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI EVENT_ACTIVATE_FIREWALL (:347-351): flame-ring GO
+-- state flip (HandleGameObject false = READY 1 on both rings), 5s
+-- engage-anchored one-shot. Non-cast but INSIDE the gated loop (the
+-- :327 pre-loop gate delays the EVENT, not just casts), so it carries
+-- the same 500ms IsCasting defer as the cast arms — check before the
+-- GO leg, re-schedule consumes no re-arm (a one-shot has none).
+-- Cancelled on combat end by halionCombatEnd's cancelTimers, matching
+-- events.Reset; the 75% latch's cancelTimers likewise kills a
+-- deferred re-schedule, so no phaseTwo guard is needed.
+local function firewallTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "firewall", 500, function()
+            firewallTick(creature, guid)
+        end)
+        return
+    end
+    local flameRing = creature:FindNearestGameObject(GO_FLAME_RING, 100)
+    if flameRing then flameRing:SetGoState(1) end
+    local twilightRing = creature:FindNearestGameObject(GO_TWILIGHT_FLAME_RING, 100)
+    if twilightRing then twilightRing:SetGoState(1) end
+end
+
 -- C++ boss_halion::JustEngagedWith :242-262:
 -- Talk(SAY_AGGRO); events.Reset(); events.SetPhase(PHASE_ONE);
 -- BossAI::JustEngagedWith(who); me->AddAura(SPELL_TWILIGHT_PRECISION, me);
@@ -567,10 +592,7 @@ local function halionEnterCombat(event, creature, target)
         matBreathTick(creature, guid)
     end)
     schedule(guid, "firewall", 5000, function()
-        local flameRing = creature:FindNearestGameObject(GO_FLAME_RING, 100)
-        if flameRing then flameRing:SetGoState(1) end
-        local twilightRing = creature:FindNearestGameObject(GO_TWILIGHT_FLAME_RING, 100)
-        if twilightRing then twilightRing:SetGoState(1) end
+        firewallTick(creature, guid)
     end)
     -- C++ :254-255 — EVENT_FIERY_COMBUSTION randtime(15s,18s),
     -- EVENT_METEOR_STRIKE 18s (see fieryCombustionTick /

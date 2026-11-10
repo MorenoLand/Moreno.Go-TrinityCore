@@ -119,13 +119,14 @@ end
 -- C++ EVENT_ENRAGE: DoCastSelf(SPELL_ENRAGE 78722) (non-triggered) +
 -- Talk(EMOTE_ENRAGED 2), 20s init, Repeat(24s).
 local function enrageTick(creature, guid)
-    creature:CastSpell(creature, SPELL_ENRAGE)
+    -- C++ UpdateAI pre-loop gate :153 (+ in-loop :195): 500ms IsCasting defer, no re-arm consumed.
     if creature:IsCasting() then
         schedule(guid, "enrage", 500, function()
             enrageTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(creature, SPELL_ENRAGE)
     creature:Talk(EMOTE_ENRAGED)
     schedule(guid, "enrage", 24000, function()
         enrageTick(creature, guid)
@@ -135,13 +136,14 @@ end
 -- C++ EVENT_FLAME_BREATH: DoCastVictim(SPELL_FLAME_BREATH 74403)
 -- (non-triggered), 14s init, Repeat(20s, 30s).
 local function flameBreathTick(creature, guid)
-    creature:CastSpell(nil, SPELL_FLAME_BREATH)
+    -- C++ UpdateAI pre-loop gate :153 (+ in-loop :195): 500ms IsCasting defer, no re-arm consumed.
     if creature:IsCasting() then
         schedule(guid, "flamebreath", 500, function()
             flameBreathTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(nil, SPELL_FLAME_BREATH)
     schedule(guid, "flamebreath", {20000, 30000}, function()
         flameBreathTick(creature, guid)
     end)

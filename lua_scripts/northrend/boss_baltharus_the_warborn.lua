@@ -204,13 +204,13 @@ end
 -- C++ EVENT_CLEAVE: DoCastVictim(SPELL_CLEAVE 40504) (non-triggered),
 -- 13s init, Repeat(20s, 24s).
 local function cleaveTick(creature, guid)
-    creature:CastSpell(nil, SPELL_CLEAVE)
     if creature:IsCasting() then
         schedule(guid, "cleave", 500, function()
             cleaveTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", {20000, 24000}, function()
         cleaveTick(creature, guid)
     end)
@@ -219,13 +219,13 @@ end
 -- C++ EVENT_BLADE_TEMPEST: DoCastSelf(SPELL_BLADE_TEMPEST 75125)
 -- (non-triggered), 18s init, Repeat(24s) (:204 boss AI; :301 is the clone AI).
 local function bladeTempestTick(creature, guid)
-    creature:CastSpell(creature, SPELL_BLADE_TEMPEST)
     if creature:IsCasting() then
         schedule(guid, "bladetempest", 500, function()
             bladeTempestTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(creature, SPELL_BLADE_TEMPEST)
     schedule(guid, "bladetempest", 24000, function()
         bladeTempestTick(creature, guid)
     end)
@@ -235,13 +235,13 @@ end
 -- (SPELL_BLADE_TEMPEST 75125) (non-triggered), 15s init, Repeat(24s) —
 -- VICTIM-cast, the deviation from the boss's DoCastSelf (:204).
 local function cloneBladeTempestTick(creature, guid)
-    creature:CastSpell(nil, SPELL_BLADE_TEMPEST)
     if creature:IsCasting() then
         schedule(guid, "clonebladetempest", 500, function()
             cloneBladeTempestTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(nil, SPELL_BLADE_TEMPEST)
     schedule(guid, "clonebladetempest", 24000, function()
         cloneBladeTempestTick(creature, guid)
     end)
@@ -298,7 +298,11 @@ end
 -- convention; the UpdateAI CASTING gates (boss :189/:223, clone
 -- :289/:314) are ported as 500ms IsCasting defer per cast tick,
 -- including the 1ms EVENT_CLONE pump (stale maiden deviation
--- retracted).
+-- retracted); the non-cast EVENT_SUMMONS_ATTACK leg defers on the boss
+-- the same way (summonsAttackTick, 2026-11-09 audit — the three
+-- cleave/blade ticks were also moved from a post-cast IsCasting check
+-- to the top-of-tick defer this audit, since casting first consumed
+-- the event while another cast was in progress).
 local function baltharusEnterCombat(event, creature, target)
     -- C++ JustEngagedWith (boss_baltharus_the_warborn.cpp:110-120):
     -- InterruptNonMeleeSpells(false) first, then the BossAI base arms
@@ -452,6 +456,22 @@ local function baltharusDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ EVENT_SUMMONS_ATTACK (:213-215) runs inside the boss UpdateAI
+-- gated loop (:189 pre-loop + :223 in-loop CASTING gates), so the 2s
+-- leg defers 500ms on the BOSS (the scheduling creature) while it is
+-- casting, re-arm unconsumed — the non-cast-leg precedent.
+local function summonsAttackTick(creature, summon, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summonsattack", 500, function()
+            summonsAttackTick(creature, summon, guid)
+        end)
+        return
+    end
+    if summon:IsAlive() then
+        summon:DoZoneInCombat()
+    end
+end
+
 -- C++ boss_baltharus_the_warborn::JustSummoned (:136-141):
 -- summons.Summon(summon) (summon-list, no bridge) +
 -- summon->SetHealth(me->GetHealth()) +
@@ -471,9 +491,7 @@ local function baltharusJustSummoned(event, creature, summon)
     summon:SetHealth(creature:GetHealth())
     local guid = creature:GetGUIDLow()
     schedule(guid, "summonsattack", 2000, function()
-        if summon:IsAlive() then
-            summon:DoZoneInCombat()
-        end
+        summonsAttackTick(creature, summon, guid)
     end)
 end
 

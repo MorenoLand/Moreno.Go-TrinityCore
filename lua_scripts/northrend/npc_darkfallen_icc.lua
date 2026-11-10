@@ -90,8 +90,25 @@ end
 -- has no bridge on
 -- the event-handler surface (the session surface has GetWaypointPath;
 -- DB trash never paths), then 1s later a random emote from
--- DarkFallensEmotes. IsDoingEmotes is true unless the creature has a
+-- DarkFallensEmotes (itself a validator-gated Scheduler task, so
+-- emoteFollowTick defers 500ms while casting). IsDoingEmotes is true unless the creature has a
 -- waypoint path (no handler-surface bridge; always true in Lua).
+-- The 1s follow-up emote is itself a Scheduler task in C++
+-- (icecrown_citadel.cpp:807-810), so the Reset validator :786-791
+-- gates it too: 500ms IsCasting defer, no re-arm consumed.
+local function emoteFollowTick(creature, guid)
+    if not emoteActive[guid] then
+        return
+    end
+    if creature:IsCasting() then
+        schedule(guid, "emotefollow", 500, 0, function()
+            emoteFollowTick(creature, guid)
+        end)
+        return
+    end
+    creature:PerformEmote(DARKFALLEN_EMOTES[math.random(#DARKFALLEN_EMOTES)])
+end
+
 local function emoteTick(creature, guid)
     if not emoteActive[guid] then
         return
@@ -121,11 +138,9 @@ local function emoteTick(creature, guid)
             creature:CastSpell(friends[math.random(#friends)], SPELL_POLYMORPH_ALLY)
         end
     end
-    CreateLuaEvent(function()
-        if emoteActive[guid] then
-            creature:PerformEmote(DARKFALLEN_EMOTES[math.random(#DARKFALLEN_EMOTES)])
-        end
-    end, 1000, 0)
+    schedule(guid, "emotefollow", 1000, 0, function()
+        emoteFollowTick(creature, guid)
+    end)
     schedule(guid, "emote", {15000, 30000}, 0, function()
         emoteTick(creature, guid)
     end)

@@ -121,6 +121,12 @@
 -- IsCasting check, double-firing the line on a mid-cast tick — C++
 -- executes the event (Talk included) only when not casting, so the
 -- check now precedes Talk (the saviana enrageTick ordering).
+-- 2026-11-09 U69: same ordering defect in cleaveTick /
+-- intimidatingRoarTick / flamecallerBlastNovaTick — all three cast
+-- first and checked IsCasting after, firing while already casting and
+-- (for a non-instant spell) re-casting on a spurious 500ms re-tick
+-- instead of the C++ re-arm; the check now precedes the cast in all
+-- three (the frost-giant idiom), matching addsTick/adds2Tick/lavaGoutTick.
 
 local ENTRY_GENERAL_ZARITHRIAN = 39746
 local ENTRY_ONYX_FLAMECALLER = 39814
@@ -174,13 +180,16 @@ end
 -- C++ EVENT_CLEAVE: DoCastVictim(SPELL_CLEAVE_ARMOR 74367)
 -- (non-triggered), 8s init, re-ScheduleEvent(15s) (fixed, not Repeat).
 local function cleaveTick(creature, guid)
-    creature:CastSpell(nil, SPELL_CLEAVE_ARMOR)
+    -- C++ UpdateAI pre-loop gate :133 (+ in-loop :166): 500ms IsCasting
+    -- defer, no re-arm consumed — the check precedes the cast (the
+    -- frost-giant idiom); cast-first fired Cleave while already casting.
     if creature:IsCasting() then
         schedule(guid, "cleave", 500, function()
             cleaveTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(nil, SPELL_CLEAVE_ARMOR)
     schedule(guid, "cleave", 15000, function()
         cleaveTick(creature, guid)
     end)
@@ -189,13 +198,16 @@ end
 -- C++ EVENT_INTIDMDATING_ROAR: DoCastSelf(SPELL_INTIMIDATING_ROAR 74384)
 -- (non-triggered), 14s init, Repeat(35s, 40s).
 local function intimidatingRoarTick(creature, guid)
-    creature:CastSpell(creature, SPELL_INTIMIDATING_ROAR)
+    -- C++ UpdateAI pre-loop gate :133 (+ in-loop :166): 500ms IsCasting
+    -- defer, no re-arm consumed — the check precedes the cast (the
+    -- frost-giant idiom); cast-first fired Roar while already casting.
     if creature:IsCasting() then
         schedule(guid, "roar", 500, function()
             intimidatingRoarTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(creature, SPELL_INTIMIDATING_ROAR)
     schedule(guid, "roar", {35000, 40000}, function()
         intimidatingRoarTick(creature, guid)
     end)
@@ -370,13 +382,16 @@ end
 -- C++ EVENT_BLAST_NOVA (:226-229): DoCastAOE(SPELL_BLAST_NOVA 74392)
 -- non-triggered self-cast; Repeat(15s, 20s).
 local function flamecallerBlastNovaTick(creature, guid)
-    creature:CastSpell(creature, SPELL_BLAST_NOVA)
+    -- C++ UpdateAI pre-loop gate :233: 500ms IsCasting defer, no re-arm
+    -- consumed — the check precedes the cast (the frost-giant idiom);
+    -- cast-first fired Blast Nova while already casting.
     if creature:IsCasting() then
         schedule(guid, "blast_nova", 500, function()
             flamecallerBlastNovaTick(creature, guid)
         end)
         return
     end
+    creature:CastSpell(creature, SPELL_BLAST_NOVA)
     schedule(guid, "blast_nova", {15000, 20000}, function()
         flamecallerBlastNovaTick(creature, guid)
     end)
