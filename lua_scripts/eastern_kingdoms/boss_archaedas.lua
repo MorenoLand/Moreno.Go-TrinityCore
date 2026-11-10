@@ -99,8 +99,8 @@
 --   per-guid latches. Health comparison is integer-exact
 --   (health <= floor(max*pct/100), !HealthAbovePct twin).
 -- - Archaedas SpellHit(10347) (ev14): Talk(0) + 4s timer ->
---   AttackStart(whoWoke player); the attack leg is skipped while
---   the altar entry is unverified (whoWokeGuid == 0).
+--   AttackStart(whoWoke player); the attack leg runs once the
+--   altar has set whoWokeGuid (altar ported, see below).
 -- - Archaedas JustDied (ev4): opens the temple door (141869) and
 --   the ancient vault door (124369) via SetGoState(0) + despawns
 --   every alive MONSTER-faction minion (DeActivateMinions twin).
@@ -112,6 +112,15 @@
 --   Reset (ev23) freeze legs, JustEngagedWith (ev1) unfreeze
 --   legs, minion SpellHit(10347) (ev14) 5s -> AttackStart
 --   (whoWoke-guarded, same as the boss arm).
+-- - go_altar_of_archaedas (133234): OnGossipHello -> player
+--   self-cast 11206 + ActivateArchaedas (RemoveAura 16245 +
+--   self-cast 10347 non-triggered + SetFaction 415 + RemoveFlag
+--   NOT_SELECTABLE + whoWoke = player + close temple door
+--   141869); returns false (native GO use arms proceed).
+-- - Archaedas Reset (ev23) freeze legs: FACTION_FRIENDLY +
+--   SetFlag NOT_SELECTABLE + SetRooted(true) + AddAura(16245);
+--   pairs with the altar awaken path (re-freeze on evade, altar
+--   re-triggers the fight).
 -- Fidelity deltas (range-query emulation, no instance script):
 -- GetCreaturesInRange returns distance order, C++ walks spawn-
 -- order GUID vectors — which guardian is the flag=false one and
@@ -123,12 +132,7 @@
 --   swapped (type 0 has no SetData case; the intended
 --   SetData(DATA_MINIONS, NOT_STARTED) is never called anywhere
 --   in the tree), so RespawnMinions never fires from Reset in
---   this C++ tree. The Reset FRIENDLY / NOT_SELECTABLE / AddAura
---   (16245) freeze legs stay out pending the altar trigger: a
---   FRIENDLY-at-reset port with no awaken path would brick the
---   fight after the first evade. The ROOT leg alone is PORTED
---   (ev23 onArchaedasReset, SetRooted twin) and pairs with the
---   ev1 release.
+--   this C++ tree.
 -- - The instance script itself (instance_uldaman.cpp): SetData /
 --   GetData / SetGuidData / ProcessEvent / OnCreatureCreate /
 --   Load / SaveToDB have no instance-script bridge — the script
@@ -136,17 +140,6 @@
 --   Lua-side per-leg emulation, not a port of the instance model.
 --   Encounter persistence (doors re-opening on instance load)
 --   has no Lua equivalent.
--- - go_altar_of_archaedas: entry-unverifiable (no GO entry for
---   the altar is named anywhere in src/server — fails the
---   kalecgos check; Wowhead lookup found no object page with an
---   entry 2026-11-10); its OnGossipHello arms (player self-cast
---   11206 + instance->SetGuidData(0, ...) -> ActivateArchaedas:
---   RemoveAura(16245) + self-cast 10347 non-triggered + SetFaction
---   (415 TITAN) + RemoveFlag + close temple door 141869) are
---   bridgeable-in-principle but unregistrable. QUEUED with the
---   entry-unverifiable list, pending entry evidence. Until it
---   lands, the boss engages directly (ev1) and the SpellHit
---   AttackStart legs stay whoWoke-guarded.
 -- - First stone-keeper activation: ProcessEvent(EVENT_SUB_BOSS_
 --   AGGRO = 2228) is a DB-driven instance event with no Lua
 --   instance-event bridge — the chain cannot start; only the
@@ -171,6 +164,8 @@ local SPELL_SELF_DESTRUCT = 9874
 local SPELL_ARCHAEDAS_AWAKEN = 10347
 local SPELL_AWAKEN_VAULT_WALKER = 10258
 local SPELL_MINION_FREEZE_ANIM = 10255
+local SPELL_BOSS_OBJECT_VISUAL = 11206
+local SPELL_FREEZE_ANIM = 16245
 
 local SAY_AGGRO = 0
 local SAY_SUMMON_GUARDIANS = 1
@@ -179,10 +174,12 @@ local SAY_KILL = 3
 
 local FACTION_FRIENDLY = 35
 local FACTION_MONSTER = 14
+local FACTION_TITAN = 415
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
+local GO_ALTAR_OF_ARCHAEDAS = 133234
 local GO_ARCHAEDAS_TEMPLE_DOOR = 141869
 local GO_ALTAR_OF_THE_KEEPER_TEMPLE_DOOR = 124367
 local GO_ANCIENT_VAULT_DOOR = 124369
@@ -358,17 +355,23 @@ local function onArchaedasSpellHit(event, creature, caster, spellId)
     end)
 end
 
--- C++ boss_archaedas.cpp:105: Reset -> SetControlled(true,
--- UNIT_STATE_ROOT). Ev23 only: ev2/ev4 stay on onArchaedasCombatEnd
--- (C++ JustDied never Resets, so a corpse must not re-root). The
--- Reset freeze-aura/flag/faction legs stay out pending the altar
--- trigger (no altar entry yet — a FRIENDLY-at-reset port with no
--- awaken path would brick the fight after the first evade).
+-- C++ boss_archaedas.cpp:102-108: Reset -> Initialize() +
+-- instance->SetData(0, 5) (a C++ no-op — swapped args, see the
+-- header) + SetFaction(FACTION_FRIENDLY) + SetFlag(UNIT_FIELD_
+-- FLAGS, UNIT_FLAG_NOT_SELECTABLE) + SetControlled(true,
+-- UNIT_STATE_ROOT) + AddAura(SPELL_FREEZE_ANIM). Ev23 only:
+-- ev2/ev4 stay on onArchaedasCombatEnd (C++ JustDied never
+-- Resets, so a corpse must not re-root). The freeze legs pair
+-- with the altar awaken path — after an evade the boss re-freezes
+-- and the altar re-triggers the fight.
 local function onArchaedasReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetRooted(true)
+    creature:AddAura(SPELL_FREEZE_ANIM)
 end
 
 local function onArchaedasCombatEnd(event, creature)
@@ -515,3 +518,37 @@ for _, entry in ipairs({ NPC_EARTHEN_GUARDIAN, NPC_VAULT_WALKER, NPC_EARTHEN_CUS
     RegisterCreatureEvent(entry, 14, onMinionSpellHit)
     RegisterCreatureEvent(entry, 23, onMinionReset)
 end
+
+-- C++ go_altar_of_archaedasAI::OnGossipHello (boss_archaedas.cpp:
+-- 392-400): player self-cast 11206 SPELL_BOSS_OBJECT_VISUAL +
+-- instance->SetGuidData(0, player GUID) -> ActivateArchaedas
+-- (instance_uldaman.cpp:256-268): RemoveAura(16245) + self-cast
+-- 10347 non-triggered + SetFaction(415 FACTION_TITAN) + RemoveFlag
+-- NOT_SELECTABLE + whoWokeArchaedasGUID = player; SetDoor(
+-- archaedasTempleDoor, false) closes the temple door (141869).
+-- Returns false in C++ (native GO use arms proceed). Entry 133234
+-- triple-confirmed 2026-11-10 (Evowow WotLK DB, ClassicDB, NFU
+-- WotLK DB — all "Altar of Archaedas", Uldaman, Khaz'goroth's
+-- Seat, related spells "Uldaman Boss Agro" + "Uldaman Boss Object
+-- Visual"; distinct from the Altar of the Keepers, 130511).
+local function onAltarGossip(event, player, go)
+    if not player then
+        return false
+    end
+    player:CastSpell(player, SPELL_BOSS_OBJECT_VISUAL)
+    local archaedas = player:FindNearestCreature(NPC_ARCHAEDAS, SEARCH_RANGE)
+    if archaedas then
+        archaedas:RemoveAura(SPELL_FREEZE_ANIM)
+        archaedas:CastSpell(archaedas, SPELL_ARCHAEDAS_AWAKEN)
+        archaedas:SetFaction(FACTION_TITAN)
+        archaedas:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        getState(archaedas:GetGUIDLow()).whoWokeGuid = player:GetGUID()
+        local door = archaedas:GetNearestGameObject(SEARCH_RANGE, GO_ARCHAEDAS_TEMPLE_DOOR)
+        if door then
+            door:SetGoState(1)
+        end
+    end
+    return false
+end
+
+RegisterGameObjectGossipEvent(GO_ALTAR_OF_ARCHAEDAS, 1, onAltarGossip)

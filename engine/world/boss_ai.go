@@ -16264,11 +16264,14 @@ func init() {
 	// <66%/<33% guardian/vault-walker awaken arms (1s health poll,
 	// range-query emulation of the instance GUID vectors — distance
 	// order, not spawn order), and the JustDied door-open (141869/
-	// 124369) + minion-despawn legs; the Reset freeze-aura/flag/
-	// faction legs stay out pending the altar trigger, and Reset's
-	// SetData(0, 5) respawn leg is a C++ no-op (swapped args, type
-	// 0 has no SetData case — deliberately not ported). The
-	// KilledUnit Talk rides event 3 (CREATURE_EVENT_ON_TARGET_DIED).
+	// 124369) + minion-despawn legs, the Reset freeze-aura/flag/
+	// faction legs, and the go_altar_of_archaedas (133234,
+	// triple-confirmed in the Evowow/ClassicDB/NFU WotLK DBs)
+	// gossip arm (player self-cast 11206 + ActivateArchaedas +
+	// close temple door 141869); Reset's SetData(0, 5) respawn leg
+	// is a C++ no-op (swapped args, type 0 has no SetData case —
+	// deliberately not ported). The KilledUnit Talk rides event 3
+	// (CREATURE_EVENT_ON_TARGET_DIED).
 	// The stone
 	// keepers (4857) run their JustDied triggered self-cast of
 	// Self Destruct 9874 (headless_horseman/omen onDied self-cast
@@ -16277,9 +16280,8 @@ func init() {
 	// via DB ProcessEvent 2228 has no bridge). The archaedas minions
 	// (7309/7077/7076/10120) run the same Reset/JustEngagedWith
 	// state legs plus the SpellHit 10347 5s awaken arm
-	// (whoWoke-guarded); the Altar of Archaedas GO script is
-	// entry-unverifiable (no GO entry named in the C++ sources) —
-	// documented in the .lua header. Entries C++-verified via
+	// (whoWoke-guarded, set by the altar gossip arm). Entries
+	// C++-verified via
 	// instance_uldaman.cpp's OnCreatureCreate name-comments
 	// feeding the GUID vectors the boss's GetGuidData(0/1-4/5-10)
 	// arms consume (kalecgos entry-verifiability check, ramstein
