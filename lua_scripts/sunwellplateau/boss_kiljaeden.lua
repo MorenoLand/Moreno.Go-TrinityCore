@@ -582,6 +582,11 @@ local function fireTimer(creature, st, name)
             changeTimers(st, true, 9000)
             st.t.darkness = 8750
             st.off.darkness = false
+            -- C++ :820-821: in sacrifice the armageddon timer is
+            -- re-activated, so it keeps firing through the 9s channel.
+            if phase == PHASE_SACRIFICE then
+                st.off.armageddon = false
+            end
             st.isInDarkness = true
         else
             st.t.darkness = (phase == PHASE_SACRIFICE) and 15000 or math.random(40000, 70000)
@@ -697,11 +702,23 @@ local function kjCleanup(event, creature)
     -- C++ boss_kiljaedenAI::Reset (boss_kiljaeden.cpp:587-598):
     -- Initialize() -> kalec RemoveDynObject (cross-creature, blocked)
     -- -> SetFloatValue(COMBATREACH, 12) -> summons.DespawnAll()
-    -- (blocked, no summon-list bridge). NOTE: the SetFarVisible(true)
+    -- (:595; the same arm in EnterEvadeMode :648) — PORTED via the
+    -- GetCreaturesInGrid + Despawn idiom (the kjDied precedent below);
+    -- the stale "no summon-list bridge" claim is retracted for the
+    -- three boss-latched entries. NOTE: the SetFarVisible(true)
     -- previously ported here was misattributed — that arm (:268)
     -- belongs to boss_kalecgos_kjAI::Reset (Kalecgos 25319, not
     -- registered), not to Kiljaeden's own Reset, so it is removed.
     creature:SetCombatReach(12)
+    for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_SINISTER_REFLECTION, 150)) do
+        add:Despawn()
+    end
+    for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_ARMAGEDDON_TARGET, 150)) do
+        add:Despawn()
+    end
+    for _, add in ipairs(creature:GetCreaturesInGrid(ENTRY_SHIELD_ORB, 150)) do
+        add:Despawn()
+    end
 end
 
 local function kjDied(event, creature, killer)
@@ -787,25 +804,28 @@ end
 local function deceiverReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    schedule(guid, "upkeep", 1000, function()
-        deceiverUpkeep(creature, guid)
-    end)
     -- C++ Reset (boss_kiljaeden.cpp:946-950): Initialize() (the
     -- combat-timer values, re-armed by the upkeep/volley/felfire
     -- schedules) then instance->SetBossState(DATA_KILJAEDEN 5,
     -- NOT_STARTED), no gate in C++; Go fires ev23 on the death path
-    -- too, hence the alive gate (C++ Reset never runs on death).
+    -- too (fireCreatureDied: OnReset then OnDied), hence the alive
+    -- gate on the whole body (C++ Reset never runs on death) — an
+    -- ungated upkeep schedule would channel on the corpse.
     if creature:IsAlive() then
+        schedule(guid, "upkeep", 1000, function()
+            deceiverUpkeep(creature, guid)
+        end)
         creature:SetBossState(DATA_KILJAEDEN, 0)
     end
 end
 
 -- C++ Felfire Portal arm (boss_kiljaeden.cpp:997-1000): spawn the portal
 -- at the deceiver's position (0,0,0,0 offsets), TEMPSUMMON_TIMED_DESPAWN
--- 20s, then copy the deceiver's threat list onto it at 1.0 each;
+-- (type 2, not 3: 3 is TIMED_DESPAWN_OUT_OF_COMBAT) 20s, then copy the
+-- deceiver's threat list onto it at 1.0 each;
 -- FelfirePortalTimer re-arms at 20000 (Initialize :938).
 local function deceiverFelfire(creature, guid)
-    local portal = creature:SummonCreature(ENTRY_FELFIRE_PORTAL, creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 20000)
+    local portal = creature:SummonCreature(ENTRY_FELFIRE_PORTAL, creature:GetX(), creature:GetY(), creature:GetZ(), 0, 2, 20000)
     if portal then
         for _, t in ipairs(creature:GetAITargets()) do
             portal:AddThreat(t, 1.0)
@@ -814,6 +834,13 @@ local function deceiverFelfire(creature, guid)
     schedule(guid, "felfire", 20000, function()
         deceiverFelfire(creature, guid)
     end)
+end
+
+-- C++ npc_hand_of_the_deceiverAI::JustSummoned (boss_kiljaeden.cpp:952-955):
+-- the felfire portal takes the deceiver's faction, then its level.
+local function deceiverJustSummoned(event, creature, summon)
+    summon:SetFaction(creature:GetFaction())
+    summon:SetLevel(creature:GetLevel())
 end
 
 local function deceiverEnterCombat(event, creature)
@@ -855,6 +882,7 @@ end
 RegisterCreatureEvent(ENTRY_DECEIVER, 1, deceiverEnterCombat)
 RegisterCreatureEvent(ENTRY_DECEIVER, 2, deceiverLeaveCombat)
 RegisterCreatureEvent(ENTRY_DECEIVER, 4, deceiverDied)
+RegisterCreatureEvent(ENTRY_DECEIVER, 19, deceiverJustSummoned)
 RegisterCreatureEvent(ENTRY_DECEIVER, 23, deceiverReset)
 
 -- ================= Volatile Felfire Fiend (25598) =================
@@ -1030,9 +1058,13 @@ local function reflectionHunter(creature, guid)
     schedule(guid, "sr2", math.random(4000, 6000), function()
         reflectionHunterShoot(creature, guid)
     end)
-    schedule(guid, "sr0", 1000, function()
-        reflectionHunterMelee(creature, guid)
-    end)
+    -- C++ timers start at 0 (:1377-1384): the melee-range arm fires on
+    -- the first tick when in range (the second multi-shot of tick 1),
+    -- so it runs now, not on a 1s poll. The C++ uint32 underflow
+    -- (timer[0] -= diff at :1461 with no in-range gate) permanently
+    -- disables the arm if tick 1 is out of range; the 1s re-poll in
+    -- reflectionHunterMelee is the intended behavior, not the bug.
+    reflectionHunterMelee(creature, guid)
 end
 
 local function reflectionMage(creature, guid)
