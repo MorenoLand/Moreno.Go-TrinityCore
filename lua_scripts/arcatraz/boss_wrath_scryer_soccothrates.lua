@@ -55,10 +55,9 @@
 -- re-arm {11s,12s} regardless (C++-exact). The HealthBelowPct
 -- (25) latch runs every tick (halazzi strict-fraction
 -- precedent): the first sub-25% tick sets the dalliahTaunt
--- latch — the C++ Talk(SAY_SOCCOTHRATES_25_PERCENT) on
--- Dalliah's AI has no cross-creature bridge, so the yell is
--- unreachable and the latch is bookkeeping only (omor
--- summonedCount precedent). The C++ UNIT_STATE_CASTING early-
+-- latch and talks SAY_SOCCOTHRATES_25_PERCENT on Dalliah via
+-- GetCreaturesInGrid (dead-inclusive, C++-exact — no alive/
+-- in-combat gate in the C++ arm; see bossTick). The C++ UNIT_STATE_CASTING early-
 -- return gates (before and after the event switch, boss_
 -- wrath_scryer_soccothrates.cpp:238/:263) are PORTED via
 -- the shared-pump gate idiom: each due arm carries `and
@@ -92,12 +91,13 @@
 -- 1..9 chain, Talk(SAY_SOCCOTHRATES_CONVO_1..4), the dalliah->
 -- AI()->Talk(SAY_DALLIAH_CONVO_1..3) arms, the dalliah + self
 -- MovePoint arms and the SetFacingToObject / SetHomePosition
--- arms (SetFacingToObject itself is bridgeable via the atan2 twin —
--- math.atan2 + bridged creature:SetFacingTo, devourer_of_souls
--- precedent — but the arms ride the unmodeled cross-creature
--- preFight chain (EVENT_PREFIGHT_9, C++ :203-206 via instance->
--- GetGuidData(DATA_DALLIAH), me<->dalliah face targets) — no
--- cross-creature / movement bridges); no
+-- arms (SetFacingToObject is directly bridged (lua_creature_
+-- events.go:4890); MoveTo is the MovePoint twin (:4986) and
+-- SetHomePosition is bridged (:6554) — but the arms ride the
+-- unmodeled cross-creature preFight chain (EVENT_PREFIGHT_9,
+-- C++ :203-206 via instance-> GetGuidData(DATA_DALLIAH),
+-- me<->dalliah face targets); the arms stay unmodeled only
+-- because the preFight trigger itself is unreachable); no
 -- cross-creature bridge — PORTED 2026-10-24: the EVENT_ME_FIRST
 -- 6s arm (dalliah->AI()->Talk(SAY_AGGRO_SOCCOTHRATES_FIRST)
 -- when Dalliah is alive and out of combat), the HealthBelowPct(25)
@@ -286,6 +286,9 @@ end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 2, function(_, creature)
     resetBoss(creature:GetGUIDLow())
+    if creature:IsAlive() then
+        creature:SetData(1, 0) -- C++ Reset() clears dalliahDeath (boss_wrath_scryer_soccothrates.cpp:94-99)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 3, function(_, creature)
@@ -310,8 +313,13 @@ RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 23, function(_, creature)
-    creature:SetBossState(2, 0) -- DATA_SOCCOTHRATES, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
+    if not creature:IsDead() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0) -- DATA_SOCCOTHRATES, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511)
+    end
     resetBoss(creature:GetGUIDLow())
+    if creature:IsAlive() then
+        creature:SetData(1, 0) -- C++ Reset() clears dalliahDeath (boss_wrath_scryer_soccothrates.cpp:94-99)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 7, onAIUpdate)

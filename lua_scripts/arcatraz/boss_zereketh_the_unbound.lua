@@ -250,6 +250,8 @@ RegisterCreatureEvent(ENTRY_ZEREKETH, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_ZEREKETH, 23, function(_, creature)
-    creature:SetBossState(0, 0) -- DATA_ZEREKETH, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
+    if not creature:IsDead() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0) -- DATA_ZEREKETH, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511)
+    end
     resetBoss(creature:GetGUIDLow())
 end)

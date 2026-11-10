@@ -54,11 +54,11 @@
 -- 36144 — one-shot, non-triggered DoCast on self (C++ DoCast
 -- (me), C++-exact), Talk(SAY_HEAL). The HealthBelowPct(25)
 -- latch runs every tick (halazzi strict-fraction precedent):
--- the first sub-25% tick sets the soccothratesTaunt latch —
--- the C++ Talk(SAY_DALLIAH_25_PERCENT) on Soccothrates' AI
--- has no cross-creature bridge, so the yell is unreachable
--- and the latch is bookkeeping only (omor summonedCount
--- precedent). The C++ UNIT_STATE_CASTING early-return gates
+-- the first sub-25% tick sets the soccothratesTaunt latch and
+-- talks SAY_DALLIAH_25_PERCENT on Soccothrates via
+-- GetCreaturesInGrid (dead-inclusive, C++-exact — no alive/
+-- in-combat gate in C++ :180-184; see bossTick). The C++
+-- UNIT_STATE_CASTING early-return gates
 -- (before and after the event switch, boss_dalliah_the_
 -- doomsayer.cpp:142/:176) are PORTED via the shared-pump
 -- gate idiom: each due arm carries `and not creature:
@@ -83,8 +83,8 @@
 -- (instance_arcatraz.cpp stays blocked on the instance-script
 -- model; the BossAI ctor DATA_DALLIAH = 1 SetBossState
 -- bookkeeping is PORTED as the (1,1)/(1,0)/(1,3) writes
--- below); no cross-creature
--- bridge — the EVENT_ME_FIRST 6s arm (Talk(SAY_AGGRO_DALLIAH_
+-- below); cross-creature arms are ported via FindNearestCreature
+-- / GetCreaturesInGrid + SetData/GetData — the EVENT_ME_FIRST 6s arm (Talk(SAY_AGGRO_DALLIAH_
 -- FIRST) on Soccothrates' AI via instance GetGuidData(DATA_
 -- SOCCOTHRATES)) PORTED 2026-10-24 in bossTick; the
 -- HealthBelowPct(25) taunt (Talk(SAY_DALLIAH_25_PERCENT) on
@@ -307,6 +307,9 @@ end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 2, function(_, creature)
     resetBoss(creature:GetGUIDLow())
+    if creature:IsAlive() then
+        creature:SetData(1, 0) -- C++ Reset() clears soccothratesDeath (boss_dalliah_the_doomsayer.cpp:70-76)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 3, function(_, creature)
@@ -332,8 +335,13 @@ RegisterCreatureEvent(ENTRY_DALLIAH, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 23, function(_, creature)
-    creature:SetBossState(1, 0) -- DATA_DALLIAH, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
+    if not creature:IsDead() and creature:GetBossState(1) ~= 3 then
+        creature:SetBossState(1, 0) -- DATA_DALLIAH, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511)
+    end
     resetBoss(creature:GetGUIDLow())
+    if creature:IsAlive() then
+        creature:SetData(1, 0) -- C++ Reset() clears soccothratesDeath (boss_dalliah_the_doomsayer.cpp:70-76)
+    end
 end)
 
 RegisterCreatureEvent(ENTRY_DALLIAH, 7, onAIUpdate)

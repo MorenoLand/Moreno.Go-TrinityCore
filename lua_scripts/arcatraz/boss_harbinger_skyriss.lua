@@ -44,10 +44,10 @@
 -- from spawn — the C++ ticks it inside UpdateAI before the
 -- !UpdateVictim early return — so a 1s intro pump starts on
 -- spawn with phase 1 / 5000 (the C++ Reset() SetImmuneToAll
--- (!Intro) arm is PORTED via the bridged unit-flags surface —
--- see resetImmuneFlags — and the pre-Intro
--- MoveInLineOfSight suppression has no LoS-aggro bridge, so
--- the intro runs on spawn, documented under deviations).
+-- (!Intro) arm is PORTED via the direct bridge
+-- (see resetImmuneFlags) — and the pre-Intro
+-- MoveInLineOfSight suppression is PORTED via the ev27 veto
+-- below (fireCreatureMoveInLOS, lua_creature_events.go:7268)).
 -- Intro pump: phase 1 Talk(SAY_INTRO), re-arm 25000; phase 2
 -- Talk(SAY_AGGRO), re-arm 3000; phase 3 — Intro = true, the
 -- pump self-cancels (the C++ Intro_Phase = 1 / Intro_Timer =
@@ -60,7 +60,9 @@
 -- the C++ JustEngagedWith override is empty, so no engage
 -- yell — the pull yell is the intro phase-2 SAY_AGGRO) + 1s
 -- combat pump (a port of UpdateAI in C++ arm order — 1s
--- granularity exact for all C++ timers; the !UpdateVictim
+-- granularity exact for fixed C++ timers (random re-arms —
+-- domination / mana-burn {16s,32s} — can fire up to 999ms
+-- late on the 1s pump); the !UpdateVictim
 -- early return collapses into the pump; the BossAI::
 -- JustEngagedWith override is empty (no IN_PROGRESS write
 -- boss-side — Millhouse's AI writes (3,1), arcatraz.cpp:339)
@@ -110,23 +112,21 @@
 -- JustEngagedWith override is empty); intro phase-1/2 HandleGameObject(DATA_WARDENS_SHIELD,
 -- true/false) arms PORTED in introTick (boss-anchored
 -- FindNearestGameObject sweep, entry 184802; 2026-10-26
--- GO-interaction strip);
--- no cross-creature bridge — the intro phase-2 mellic->
--- setDeathState(JUST_DIED)/SetHealth(0) kill stays out
--- (instance GUID data); the C++ Reset() SetImmuneToAll(!Intro)
+-- GO-interaction strip); the intro phase-2 mellic kill is
+-- PORTED (GetInstanceCreature + SetDeathState/SetHealth, latch
+-- by npc_mellichar.lua); the C++ Reset() SetImmuneToAll(!Intro)
 -- arm and the intro phase-3 SetImmuneToAll(false) arm are PORTED
--- via the bridged unit-flags surface (see resetImmuneFlags); no
--- LoS-aggro bridge — the
--- MoveInLineOfSight Intro gate unmodeled (gargolmar
--- precedent); the DoSplit illusion summons ride spell casts and
+-- via the direct bridge (see resetImmuneFlags); the
+-- MoveInLineOfSight Intro gate is PORTED via the ev27 veto below;
 -- the JustSummoned health-set (66%/33%)/AttackStart-random-target/
 -- Summon/immunity arms are PORTED in onJustSummoned below
 -- (EngageWithTarget bridge, 2026-10-24; the illusion AI 21466/21467
--- stays unregistered — its own AI is a no-op); the illusion SpellIds H_SPELL_MIND_REND_IMAGE
+-- is REGISTERED below — illusionReset clears the unit flags
+-- per its C++ Reset()); the illusion SpellIds H_SPELL_MIND_REND_IMAGE
 -- 39021 never fire in the C++ AI — not bridged; the heroic-only
 -- H_SPELL_MANA_BURN 39020 {16s,32s} arm is PORTED (the old "no
 -- difficulty bridge" claim was stale — creature:IsHeroic() is
--- bridged, lua_creature_events.go:260); no
+-- bridged, lua_creature_events.go:4084); no
 -- cast-state bridge — the fear/domination/mana-burn
 -- IsNonMeleeSpellCast early-return gates are PORTED via
 -- creature:IsCasting() (see combatTick); the DoSplit
@@ -140,12 +140,10 @@
 -- (millhouse unused-spells precedent); the ScriptData
 -- "combatAI not fully implemented" caveat is upstream,
 -- documented, not bridged; boss_harbinger_skyriss_illusion
--- (entries 21466/21467) documented only, not registered
--- (omor-heads precedent) — its C++ AI is a no-op: Reset()
--- only touches unit flags (RemoveFlag is bridged but the creature
--- is unregistered, so the arm has no Lua site) and immune-to-PC,
--- and JustEngagedWith is empty, so there is nothing
--- bridgeable; no SpellScript/AuraScript scripts in this
+-- (entries 21466/21467) is REGISTERED below (illusionReset) —
+-- its C++ AI is a no-op beyond Reset(): unit-flag +
+-- immune-to-PC clears (both flag twins bridged) and an empty
+-- JustEngagedWith; no SpellScript/AuraScript scripts in this
 -- file.
 
 local SPELL_MIND_REND = 36924
@@ -167,6 +165,7 @@ local SAY_DEATH = 6
 
 local ENTRY_SKYRISS = 20912
 local ENTRY_ALPHA_POD_TARGET = 21436
+local DATA_MELLICHAR = 10 -- arcatraz.h:43
 local GO_WARDENS_SHIELD = 184802 -- arcatraz.h:65
 local GO_STATE_ACTIVE = 0 -- netherspite precedent: READY 1, ACTIVE 0
 local GO_STATE_READY = 1
@@ -213,19 +212,15 @@ local function fullReset(guid)
 end
 
 -- C++ Reset(): me->SetImmuneToAll(!Intro)
--- (boss_harbinger_skyriss.cpp:103) — the immune legs ride the bridged
--- unit-flags surface (SetImmuneToAll = Set/RemoveFlag(UNIT_FIELD_FLAGS
--- = 59, UNIT_FLAG_IMMUNE_TO_PC 0x100 | UNIT_FLAG_IMMUNE_TO_NPC 0x200;
--- Unit.cpp:8440-8451); ValidateAttackersAndOwnTarget / EndAllCombat are
--- engine-combat legs with no Lua bridge). The JustSummoned
--- summon->SetImmuneToAll(false) arm (:136) is PORTED in onJustSummoned
--- below via RemoveFlag (summoned objects need no registration).
+-- (boss_harbinger_skyriss.cpp:103) — the direct bridge
+-- (lua_creature_events.go:6152; 0x100 | 0x200 on field 59,
+-- Unit.cpp:8440-8451). The EndAllCombat leg on apply is moot
+-- at these sites (spawn/evade — combat is ending or never
+-- started); ValidateAttackersAndOwnTarget has no Go model.
+-- The JustSummoned summon->SetImmuneToAll(false) arm (:136)
+-- is PORTED in onJustSummoned below via the same bridge.
 local function resetImmuneFlags(creature, guid)
-    if introStates[guid].done then
-        creature:RemoveFlag(59, 0x300)
-    else
-        creature:SetFlag(59, 0x300)
-    end
+    creature:SetImmuneToAll(not introStates[guid].done)
 end
 
 local function introTick(creature, guid)
@@ -242,8 +237,8 @@ local function introTick(creature, guid)
     -- Intro machine in C++ arm order — the bridgeable Talk arms,
     -- the phase-1/2 wardens-shield GO arms, and the phase-3
     -- SetImmuneToAll(false) arm (see resetImmuneFlags) are modeled;
-    -- the mellic cross-creature kill arm is bridge-blocked,
-    -- see deviations.
+    -- the mellic kill leg is PORTED below (GetInstanceCreature +
+    -- SetDeathState/SetHealth).
     if st.phase == INTRO_PHASE_1 then
         creature:Talk(SAY_INTRO)
         -- C++: instance->HandleGameObject(DATA_WARDENS_SHIELD, true)
@@ -258,9 +253,21 @@ local function introTick(creature, guid)
         st.timer = 25000
     elseif st.phase == INTRO_PHASE_2 then
         creature:Talk(SAY_AGGRO)
+        -- C++ (boss_harbinger_skyriss.cpp:177-185): mellic->
+        -- setDeathState(JUST_DIED); mellic->SetHealth(0) — the
+        -- GUID is latched under DATA_MELLICHAR by npc_mellichar.lua
+        -- (ev5 SetGuidData); nil when the latch missed (ordering),
+        -- matching the C++ null-guard. JUST_DIED = 1 (Unit.h:203).
+        local mellic = creature:GetInstanceCreature(DATA_MELLICHAR)
+        if mellic then
+            mellic:SetDeathState(1)
+            mellic:SetHealth(0)
+        end
         -- C++: instance->HandleGameObject(DATA_WARDENS_SHIELD, false)
-        -- = GO_STATE_READY 1; the mellic kill leg (setDeathState /
-        -- SetHealth(0)) stays out — no cross-creature kill bridge.
+        -- = GO_STATE_READY 1 (inside the C++ mellic null-guard; the
+        -- shield close stays unconditional here — the latch is
+        -- best-effort and a missed latch must not leave the shield
+        -- open).
         local shield = creature:FindNearestGameObject(GO_WARDENS_SHIELD, 100)
         if shield then
             shield:SetGoState(GO_STATE_READY)
@@ -270,9 +277,8 @@ local function introTick(creature, guid)
     elseif st.phase == INTRO_PHASE_3 then
         -- C++: me->SetImmuneToAll(false); Intro = true
         -- (boss_harbinger_skyriss.cpp:188-189) — C++ arm order, flag
-        -- clear first; rides the bridged unit-flags surface
-        -- (see resetImmuneFlags).
-        creature:RemoveFlag(59, 0x300)
+        -- clear first; the direct bridge (lua_creature_events.go:6152).
+        creature:SetImmuneToAll(false)
         st.done = true
         cancelIntroPump(guid)
     end
@@ -310,13 +316,14 @@ local function randomThreatPastHead(creature)
 end
 
 -- C++ JustSummoned (skyriss.cpp:132): SelectTarget(Random, 0) ->
--- AttackStart; the pool is the threat list, and the
--- EngageWithTarget bridge resolves player sessions only, so the
--- pick stays player-restricted (a pet pick would no-op).
-local function randomThreatPlayer(creature)
+-- AttackStart; the pool is the threat list, any alive unit,
+-- victim included — the EngageWithTarget bridge funnels
+-- creature victims too (lua_creature_events.go:1385-1412),
+-- so the pick is NOT player-restricted.
+local function randomThreatUnit(creature)
     local candidates = {}
     for _, unit in ipairs(creature:GetAITargets()) do
-        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+        if not unit:IsDead() then
             candidates[#candidates + 1] = unit
         end
     end
@@ -342,8 +349,8 @@ local function doSplit(creature, st, pct)
     -- C++ DoSplit :150-151: if (IsNonMeleeSpellCast(false))
     -- InterruptNonMeleeSpells(false), before Talk — PORTED
     -- 2026-11-04 via creature:IsCasting() (live CastingUntil
-    -- window, lua_creature_events.go:1950) + the bridged
-    -- InterruptNonMeleeSpells(false) arm (lua_creature_events.go:1995;
+    -- window, lua_creature_events.go:2275) + the bridged
+    -- InterruptNonMeleeSpells(false) arm (lua_creature_events.go:2320;
     -- kelidan precedent).
     if creature:IsCasting() then
         creature:InterruptNonMeleeSpells(false)
@@ -447,7 +454,7 @@ local function combatTick(creature, guid)
     -- via creature:IsCasting(), as for fear / domination. The
     -- old "no difficulty bridge" claim was stale —
     -- creature:IsHeroic() is bridged
-    -- (lua_creature_events.go:260).
+    -- (lua_creature_events.go:4084).
     if creature:IsHeroic() then
         if st.manaBurn <= 1000 then
             -- C++ IsNonMeleeSpellCast(false) early return, as fear.
@@ -472,13 +479,13 @@ end
 -- (boss_harbinger_skyriss.cpp:107-111): if (!Intro) return — the default
 -- aggro engage is suppressed until the intro machine completes (Intro =
 -- true at intro phase 3, :189). Go's fireCreatureMoveInLOS
--- (lua_creature_events.go:531) fires ev27 on the aggro-engage branch and a
+-- (lua_creature_events.go:7268) fires ev27 on the aggro-engage branch and a
 -- boolean true vetoes exactly that engage, so veto while the Lua intro
 -- latch (introStates[guid].done, set true at introTick INTRO_PHASE_3 —
 -- the C++ :189 counterpart) is unset, and let the engage proceed after.
 -- Post-evade this follows the file's one-shot intro model (fullReset keeps
--- done once set); C++ re-runs the intro on Reset, but that re-run is
--- outside this arm's scope.
+-- done once set); C++ Reset() calls Initialize() but leaves Intro untouched
+-- (cpp:101-105), so no re-run exists — the one-shot model is C++-exact.
 RegisterCreatureEvent(ENTRY_SKYRISS, 27, function(_, creature, unit)
     local intro = introStates[creature:GetGUIDLow()]
     if not intro or not intro.done then
@@ -500,13 +507,12 @@ end)
 -- the C++ enum comments): health-set to the last split's pct
 -- of max (CountPctFromMaxHealth twin), then — only while
 -- Skyriss has a victim — AttackStart on a random target
--- (SelectTarget(Random, 0): any random threat-list player alive,
--- victim included), then SetImmuneToAll(false)
--- via the unit-flags surface (see resetImmuneFlags). The
--- summons.Summon bookkeeping has no Lua-visible effect.
--- EngageWithTarget is the player-target AttackStart twin
--- (2026-10-24 bridge); a non-player C++ pick no-ops
--- through the funnel.
+-- (SelectTarget(Random, 0): any random threat-list unit alive,
+-- victim included), then SetImmuneToAll(false) via the direct
+-- bridge (lua_creature_events.go:6152). The summons.Summon
+-- bookkeeping has no Lua-visible effect. EngageWithTarget is
+-- the AttackStart twin; creature victims funnel through it
+-- too (lua_creature_events.go:1385-1412).
 local function onJustSummoned(_, creature, summoned)
     if not summoned then
         return
@@ -522,12 +528,12 @@ local function onJustSummoned(_, creature, summoned)
         summoned:SetHealth(math.floor(maxHealth * pct / 100))
     end
     if creature:GetVictim() then
-        local target = randomThreatPlayer(creature)
+        local target = randomThreatUnit(creature)
         if target then
             summoned:EngageWithTarget(target)
         end
     end
-    summoned:RemoveFlag(59, 0x300)
+    summoned:SetImmuneToAll(false)
 end
 
 RegisterCreatureEvent(ENTRY_SKYRISS, 19, onJustSummoned)
@@ -581,7 +587,9 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() re-latch as the evade hook.
 RegisterCreatureEvent(ENTRY_SKYRISS, 23, function(_, creature)
-    creature:SetBossState(3, 0) -- DATA_HARBINGER_SKYRISS, NOT_STARTED (C++ Reset _Reset, ScriptedCreature.cpp:499-510)
+    if not creature:IsDead() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0) -- DATA_HARBINGER_SKYRISS, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511)
+    end
     local guid = creature:GetGUIDLow()
     fullReset(guid)
     resetImmuneFlags(creature, guid)
@@ -592,3 +600,22 @@ RegisterCreatureEvent(ENTRY_SKYRISS, 23, function(_, creature)
         end, 1000, 0)
     end
 end)
+
+-- C++ illusionAI::Reset (boss_harbinger_skyriss.cpp:289-293):
+-- me->SetImmuneToPC(false); me->RemoveFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_NON_ATTACKABLE).
+-- SetImmuneToPC(false) is exactly RemoveFlag(59, 0x100)
+-- (Unit.cpp:8453-8473); NOT_SELECTABLE = 0x02000000 and
+-- NON_ATTACKABLE = 0x2 (UnitDefines.h:149/:125). Go summons
+-- take UnitFlags verbatim from creature_template, so the
+-- flags must be cleared here or the illusions stay
+-- unselectable/unattackable. ev23 + ev5 both fire on summon
+-- creation (motionFor initial-spawn funnel, creaturemotion.go:
+-- 1268); the handler is idempotent.
+local function illusionReset(_, creature)
+    creature:RemoveFlag(59, 0x02000102)
+end
+RegisterCreatureEvent(ENTRY_ILLUSION_66, 23, illusionReset)
+RegisterCreatureEvent(ENTRY_ILLUSION_33, 23, illusionReset)
+RegisterCreatureEvent(ENTRY_ILLUSION_66, 5, illusionReset)
+RegisterCreatureEvent(ENTRY_ILLUSION_33, 5, illusionReset)

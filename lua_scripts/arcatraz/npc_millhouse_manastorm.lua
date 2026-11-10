@@ -24,8 +24,9 @@
 -- C++ JustDied, C++-exact); SAY_ICEBLOCK = 8 is never Talk()ed
 -- by the C++ AI (unused enum); SAY_COMPLETE = 11 fires only
 -- from the C++ Reset() when the instance boss-state for DATA_
--- HARBINGER_SKYRISS is DONE — instance blocked, unreachable in
--- this model.
+-- HARBINGER_SKYRISS is DONE — PORTED in ev23 below via the
+-- bridged GetBossState (lua_creature_events.go:6624), with
+-- the IsAlive guard (Go fires ev23 ahead of OnDied).
 -- Eluna creature events: 5 OnSpawn, 1 OnEnterCombat, 2
 -- OnLeaveCombat, 3 OnTargetDied, 4 OnDied, 23 OnReset.
 -- Timers via CreateLuaEvent (per-GUID scheduler pumps); melee
@@ -58,10 +59,12 @@
 -- OnEnterCombat(1): per-GUID reset to the C++ Initialize()
 -- combat values (LowHp = false / Pyroblast_Timer = 1000 /
 -- Fireball_Timer = 2500 — the C++ has no JustEngagedWith
--- override, so there is no engage yell) + a 1s combat pump (a
+-- override, so there is no engage yell) + a 500ms combat pump (a
 -- port of the combat half of UpdateAI in C++ arm order — the
--- !UpdateVictim early return collapses into the pump, which
--- only exists while in combat). Combat pump: LowHp latch —
+-- !UpdateVictim early return is PORTED as the GetVictim guard
+-- in combatTick; the 2500ms fireball init is not a multiple of
+-- 1000, so the pump runs at 500ms and all combat timers land
+-- exact; the pump only exists while in combat). Combat pump: LowHp latch —
 -- Talk(SAY_LOWHP) once when health drops strictly below 20%
 -- (C++ HealthBelowPct(20), halazzi strict-fraction
 -- precedent); pyroblast 33975 — 1s init then 40s, Talk(SAY_
@@ -78,7 +81,7 @@
 -- convention). OnDied(4): Talk(SAY_DEATH) + cancel both pumps
 -- + drop per-GUID state (the _JustDied arm is instance-
 -- blocked; the FailQuest arm is commented out in C++
--- (arcatraz.cpp:64-66); FailQuest bridged, lua_player.go:410). OnLeaveCombat(2): cancel the combat pump + drop
+-- (arcatraz.cpp:64-66); FailQuest bridged, lua_player.go:4511). OnLeaveCombat(2): cancel the combat pump + drop
 -- combat state, and restart the intro machine when it had not
 -- completed (the C++ Reset() re-Initialize()s — Phase = 1 /
 -- Init = false — and the instance DATA_WARDEN_2 gate is
@@ -90,18 +93,19 @@
 -- of OnDied and OnSpawn (verified in engine/world/lua_
 -- creature_events.go), so the intro restart stays on the
 -- evade hook to avoid double pumps.
--- npc_warden_mellichar is documented only, not registered
+-- npc_warden_mellichar is registered only as the DATA_MELLICHAR
+-- guid latch (npc_mellichar.lua); its AI stays documented here
 -- (omor-heads precedent): entry NPC_MELLICHAR = 20904
 -- (arcatraz.h). Its Reset() (SetFlag(UNIT_FLAG_NON_ATTACKABLE)
--- — SetFlag is bridged but the creature is unregistered, so the
--- arm has no Lua site; DoCastSelf(SPELL_TARGET_OMEGA 36852);
+-- — SetFlag is bridged; DoCastSelf(SPELL_TARGET_OMEGA 36852);
 -- instance->SetBossState(DATA_HARBINGER_SKYRISS, NOT_STARTED)
--- — instance blocked), its empty AttackStart override, its
--- MoveInLineOfSight proximity arm (no LoS-aggro bridge —
--- gargolmar precedent — so the engage trigger itself is
--- unreachable), its JustEngagedWith (Talk(YELL_INTRO1) +
--- DoCastSelf(SPELL_BUBBLE_VISUAL 36849) + instance
--- SetBossState(IN_PROGRESS) + HandleGameObject(DATA_WARDENS_
+-- — SetBossState is bridged, lua_creature_events.go:6605 —
+-- the Reset arms are individually portable, next strip), its
+-- empty AttackStart override, its MoveInLineOfSight proximity
+-- arm (ev27 is engage-only, so the LoS-aggro trigger itself is
+-- unreachable — gargolmar precedent), its JustEngagedWith
+-- (Talk(YELL_INTRO1) + DoCastSelf(SPELL_BUBBLE_VISUAL 36849) +
+-- instance SetBossState(IN_PROGRESS) + HandleGameObject(DATA_WARDENS_
 -- SHIELD) + IsRunning = true), its whole UpdateAI phase
 -- machine (CanProgress gated on instance GetData(DATA_WARDEN_
 -- 1..4)/GetBossState(DATA_HARBINGER_SKYRISS); DoPrepareFor
@@ -112,27 +116,30 @@
 -- -150.86, 42.6573), 20977 at (417.242, -149.795, 42.6548),
 -- 20908/20909 at (420.851, -174.337, 42.6655), 20910/20911 at
 -- (470.364, -174.656, 42.6753), 20912 at (446.086, -182.506,
--- 44.0852) — no summon bridge, steamrigger precedent) and its
--- JustSummoned DoZoneInCombat/AttackStart relay (no cross-
--- creature bridge) all await engine bridges: no instance-
--- script/summon/cross-creature/gameobject/flag/LoS-aggro
--- bridges. Its yells (YELL_INTRO1 = 0 / YELL_INTRO2 = 1 /
+-- 44.0852) — SummonCreature is bridged (lua_creature_events.go:
+-- 3828), so the summon arms are portable once the phase
+-- machine's instance-data gate lifts) and its
+-- JustSummoned DoZoneInCombat/AttackStart relay (DoZoneInCombat
+-- is bridged, lua_creature_events.go:2063; AttackStart :6831)
+-- all await the true blockers: instance DATA_WARDEN_* data,
+-- HandleGameObject, CanCreatureAttack/GetDistanceZ/SelectTarget. Its yells (YELL_INTRO1 = 0 / YELL_INTRO2 = 1 /
 -- YELL_RELEASE1 = 2 / YELL_RELEASE2A = 3 / YELL_RELEASE2B = 4
 -- / YELL_RELEASE3 = 5 / YELL_RELEASE4 = 6 / YELL_WELCOME = 7)
 -- are carried here for the record.
 -- Deliberate deviations (all await engine bridges): no
--- instance-script model — the DATA_WARDEN_2/DATA_HARBINGER_
--- SKYRISS reads in Reset() and the phase-7 SetData arm are
--- skipped (instance_arcatraz.cpp stays blocked on the
--- instance-script model); the Reset() instance-gated
+-- instance-script model — the DATA_WARDEN_2 read in Reset()
+-- and the phase-7 SetData arm are skipped (the DATA_HARBINGER_
+-- SKYRISS read is PORTED as the SAY_COMPLETE arm in ev23 below;
+-- instance_arcatraz.cpp stays blocked on the instance-script
+-- model); the Reset() instance-gated
 -- SetImmuneToNPC(false) arm stays fused to its unported
 -- instance gate (the phase-7 arm is PORTED via the bridged
--- unit-flags surface — see introTick); no movement bridge —
--- the AttackStart MoveChase(who, 25.0f) arm unmodeled (omor
--- SetCombatMovement precedent); the pyroblast
+-- unit-flags surface — see introTick); the AttackStart
+-- MoveChase(who, 25.0f) arm is PORTED in ev1 below (MoveChase
+-- bridged, lua_creature_events.go:5252); the pyroblast
 -- IsNonMeleeSpellCast(false) early-return gate is PORTED
 -- via creature:IsCasting() (live CastingUntil window,
--- lua_creature_events.go:1950): while casting, combatTick
+-- lua_creature_events.go:2275): while casting, combatTick
 -- returns before the pyroblast arm, so the pyroblast timer
 -- stays due and the fireball timer does not advance that
 -- tick (C++ return semantics); the intro machine and LowHp
@@ -154,6 +161,7 @@ local SAY_KILL = 6
 local SAY_PYRO = 7
 local SAY_LOWHP = 9
 local SAY_DEATH = 10
+local SAY_COMPLETE = 11
 
 local SPELL_CONJURE_WATER = 36879
 local SPELL_ARCANE_INTELLECT = 36880
@@ -253,11 +261,18 @@ local function combatTick(creature, guid)
     if not st then
         return
     end
+    -- C++ UpdateAI !UpdateVictim early return (arcatraz.cpp:190-191):
+    -- no victim, no LowHp talk and no casts this tick (death/evade
+    -- race — the pump is cancelled by ev2/ev4, but a tick can land
+    -- between the victim clearing and the cancel).
+    if creature:GetVictim() == nil then
+        return
+    end
     if not st.lowhp and healthBelowPct(creature, 20) then
         creature:Talk(SAY_LOWHP)
         st.lowhp = true
     end
-    if st.pyro <= 1000 then
+    if st.pyro <= 500 then
         -- C++ IsNonMeleeSpellCast(false) early return
         -- (arcatraz.cpp:202): while casting, the tick ends
         -- here — pyroblast stays due and fireball does not
@@ -269,13 +284,13 @@ local function combatTick(creature, guid)
         creature:CastSpell(nil, SPELL_PYROBLAST)
         st.pyro = 40000
     else
-        st.pyro = st.pyro - 1000
+        st.pyro = st.pyro - 500
     end
-    if st.fire <= 1000 then
+    if st.fire <= 500 then
         creature:CastSpell(nil, SPELL_FIREBALL)
         st.fire = 4000
     else
-        st.fire = st.fire - 1000
+        st.fire = st.fire - 500
     end
 end
 
@@ -283,13 +298,19 @@ RegisterCreatureEvent(ENTRY_MILLHOUSE, 5, function(_, creature)
     startIntro(creature, creature:GetGUIDLow())
 end)
 
-RegisterCreatureEvent(ENTRY_MILLHOUSE, 1, function(_, creature)
+RegisterCreatureEvent(ENTRY_MILLHOUSE, 1, function(_, creature, target)
     local guid = creature:GetGUIDLow()
     cancelCombat(guid)
     combatState[guid] = { pyro = 1000, fire = 2500, lowhp = false }
+    -- C++ AttackStart (arcatraz.cpp:117-124): MoveChase(who, 25.0f)
+    -- (lua_creature_events.go:5252; the chase target is the combat
+    -- victim, so the pursuit leg honors the 25yd stop).
+    if target then
+        creature:MoveChase(target, 25.0)
+    end
     combatTimers[guid] = CreateLuaEvent(function()
         combatTick(creature, guid)
-    end, 1000, 0)
+    end, 500, 0)
 end)
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 2, function(_, creature)
@@ -324,4 +345,12 @@ RegisterCreatureEvent(ENTRY_MILLHOUSE, 23, function(_, creature)
     local guid = creature:GetGUIDLow()
     cancelCombat(guid)
     combatState[guid] = nil
+    -- C++ Reset() (arcatraz.cpp:112-113): Talk(SAY_COMPLETE) when
+    -- Skyriss is DONE (GetBossState bridged, lua_creature_events.go:
+    -- 6624). The IsAlive guard is required: Go fires ev23 ahead of
+    -- OnDied (lua_creature_events.go:7349), while C++ Reset() never
+    -- runs on death.
+    if creature:IsAlive() and creature:GetBossState(3) == 3 then
+        creature:Talk(SAY_COMPLETE)
+    end
 end)

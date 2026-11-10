@@ -13476,8 +13476,9 @@ func init() {
 	// npc_millhouse_manastorm.lua; the pyroblast
 	// IsNonMeleeSpellCast gate is PORTED (creature:IsCasting).
 	// npc_warden_mellichar
-	// (20904) is documented there but not registered: its
-	// whole event machine is instance/summon driven.
+	// (20904) is registered only as the DATA_MELLICHAR guid
+	// latch (npc_mellichar.lua); its phase machine stays
+	// instance-data blocked.
 	RegisterLuaBoss("npc_millhouse_manastorm", 20977)
 
 	// boss_zereketh_the_unbound (20870): void zone / shadow
@@ -13489,19 +13490,23 @@ func init() {
 	// boss_dalliah_the_doomsayer (20885): gift of the
 	// doomsayer / whirlwind / heal boss; the Soccothrates
 	// cross-creature arms and the out-of-combat
-	// EVENT_SOCCOTHRATES_DEATH machine have no
-	// cross-creature / data-set bridges — see lua_scripts/
+	// EVENT_SOCCOTHRATES_DEATH machine are PORTED 2026-10-24
+	// (FindNearestCreature / GetCreaturesInGrid + event 7 +
+	// creature:SetData); the 25% taunt is PORTED via
+	// GetCreaturesInGrid — see lua_scripts/
 	// arcatraz/boss_dalliah_the_doomsayer.lua; the
 	// UNIT_STATE_CASTING gates are PORTED (creature:IsCasting).
 	RegisterLuaBoss("boss_dalliah_the_doomsayer", 20885)
 
 	// boss_wrath_scryer_soccothrates (20886): felfire shock /
 	// knock away boss; the MoveInLineOfSight prefight
-	// machine, the Dalliah cross-creature arms (ME_FIRST,
-	// the 25% taunt, the JustDied SetData relay) and the
-	// SetData / EVENT_DALLIAH_DEATH machine have no
-	// LoS / instance-data / cross-creature / data-set
-	// bridges — see lua_scripts/arcatraz/
+	// machine stays unmodeled (no 70yd proximity /
+	// instance-data bridge); the Dalliah cross-creature arms
+	// (ME_FIRST, the 25% taunt, the JustDied SetData relay)
+	// and the SetData / EVENT_DALLIAH_DEATH machine are
+	// PORTED 2026-10-24 via FindNearestCreature /
+	// GetCreaturesInGrid + event 7 + creature:SetData — see
+	// lua_scripts/arcatraz/
 	// boss_wrath_scryer_soccothrates.lua; the
 	// UNIT_STATE_CASTING gates are PORTED (creature:IsCasting).
 	RegisterLuaBoss("boss_wrath_scryer_soccothrates", 20886)
@@ -13510,20 +13515,22 @@ func init() {
 	// splits / mind rend / fear / domination boss; the
 	// DoSplit InterruptNonMeleeSpells leg is PORTED 2026-11-04
 	// (IsCasting-gated interrupt before Talk, kelidan precedent);
-	// the wardens-shield / mellichar-kill intro arms, the DoSplit
-	// illusion summons (spell-cast summons — type/duration live
-	// in spell data, unverifiable — plus the JustSummoned
-	// AttackStart relay has no bridge and the illusion AI
-	// (21466/21467) is unregistered), the heroic mana-burn arm
-	// is PORTED (IsHeroic bridged) and the cast-state gates are
-	// PORTED (creature:IsCasting); the instance / cross-creature
-	// legs stay out — see lua_scripts/arcatraz/boss_harbinger_skyriss.lua. Arcatraz
+	// the wardens-shield / mellichar-kill intro arms are PORTED
+	// (sweep + GetInstanceCreature latch), the DoSplit
+	// illusion summons ride spell casts and the JustSummoned
+	// AttackStart relay is PORTED (EngageWithTarget funnels
+	// creature victims too) and the illusion AI (21466/21467)
+	// is REGISTERED (illusionReset flag-clear); the heroic
+	// mana-burn arm is PORTED (IsHeroic bridged) and the
+	// cast-state gates are PORTED (creature:IsCasting); the
+	// Mellichar phase machine + DATA_WARDEN_* instance data
+	// stay out — see lua_scripts/arcatraz/boss_harbinger_skyriss.lua. Arcatraz
 	// boss roster 4/4 COMPLETE.
 	RegisterLuaBoss("boss_harbinger_skyriss", 20912)
 
 	// The Botanica (Tempest Keep) boss roster 1/5:
 	// boss_high_botanist_freywinn (17975): seedling / tree-form
-	// boss; the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells legs are PORTED (IsCasting live, lua_creature_events.go:1950; interrupt bridged :1995); the tree-form aura / movement arms have no aura / movement bridges — see lua_scripts/
+	// boss; the tree-form IsNonMeleeSpellCast/InterruptNonMeleeSpells legs are PORTED (IsCasting live, lua_creature_events.go:2275; interrupt bridged :2320); the tree-form aura / movement arms have no aura / movement bridges — see lua_scripts/
 	// botanica/boss_high_botanist_freywinn.lua. instance_the_
 	// botanica.cpp stays blocked on the instance-script model.
 	RegisterLuaBoss("boss_high_botanist_freywinn", 17975)
