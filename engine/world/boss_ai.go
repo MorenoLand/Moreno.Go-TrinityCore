@@ -12966,8 +12966,9 @@ func init() {
 	// 100ms Lua pump: soul flay 45442+47106, legion lightning
 	// 45664, fire bloom 45641, shadow spike 46680 (+30s wait),
 	// flame dart 45737, darkness 46605/45657 (+9s wait), with the
-	// C++-exact 85/55/25% phase transitions and the shield-orb /
-	// orbs-empower timer dynamics (summons and the kalecgos
+	// C++-exact 85/55/25% phase transitions, the shield-orb
+	// summons (one per phase step, 45s timed-or-corpse despawn)
+	// and the orbs-empower timer dynamics (the kalecgos
 	// cross-creature arms skipped). The soul-flay/legion-lightning/
 	// fire-bloom/shadow-spike/darkness arms carry per-arm
 	// IsNonMeleeSpellCast(false) queue gates (boss_kiljaeden.cpp:746/
@@ -12978,6 +12979,13 @@ func init() {
 	// anveena rows, the SetBossState/DoZoneInCombat arms and the
 	// armageddon-target summons are ported in fireTimer (Lua header).
 	RegisterLuaBoss("boss_kiljaeden", 25315)
+	// Shield Orb (25502) runs the C++ circle-orbit AI: MoveTo
+	// orbit r=17 at z=45, step PI/32, 50% clockwise roll, ev28
+	// MovementInform arrival, 1s Teleport failsafe, shadow bolt
+	// 45680 at the first vengeance-free map player (boss_kiljaeden.
+	// cpp:1194-1285; DATA_PLAYER_GUID computed getter twinned via
+	// the muru GetPlayersInWorld pattern).
+	RegisterLuaBoss("npc_shield_orb", 25502)
 	// Hand of the Deceiver (25588) runs its shadow-bolt-volley
 	// 45770 schedule, the 20% shadow-infusion 45772 upkeep and the
 	// out-of-combat shadow-channeling 46757 upkeep. The felfire-
@@ -19969,10 +19977,11 @@ func init() {
 	// DoCastSelf 64458 PORTED this tick, registered);
 	// spell_auriaya_strenght_of_the_pack (64381), spell_auriaya_
 	// sentinel_blast (64392 / 64679), spell_auriaya_feral_essence_removal
-	// (64456), spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
-	// bridge; the remaining four join the no-SpellScript-bridge queue
-	// (spell_auriaya_agro_creator (63709) PORTED in boss_auriaya.lua
-	// guardianDummyEffect, ev30 dummy-effect event);
+	// (64456) — no SpellScript bridge; the remaining three join the
+	// no-SpellScript-bridge queue (spell_auriaya_feral_rush (64496 /
+	// 64674) PORTED in boss_auriaya.lua feralRushHit, ev5
+	// OnEffectHitTarget; spell_auriaya_agro_creator (63709) PORTED in
+	// boss_auriaya.lua guardianDummyEffect, ev30 dummy-effect event);
 	// spell_auriaya_random_agro_periodic (61906) — no AuraScript
 	// bridge; joins the no-AuraScript-bridge queue;
 	// achievement_nine_lives / achievement_crazy_cat_lady

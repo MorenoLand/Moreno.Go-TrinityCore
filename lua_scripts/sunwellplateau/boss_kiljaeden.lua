@@ -80,16 +80,17 @@
 -- * fire bloom: RemoveAura(45442) + non-triggered DoCastAOE(45641)
 --   (self-cast, kalecgos convention); repeat 40s (25s in
 --   sacrifice); soul flay re-armed 1s.
--- * shield orb: the (Phase-1) shield-orb summons (summon bridge live)
---   stay out — the orb AI is movement-driven (MovePoint orbit :1256,
---   no movement bridge) and picks its shadow-bolt target via
---   instance->GetGuidData(DATA_PLAYER_GUID) — creature:GetGuidData
---   IS bridged (instance guid store, lua_creature_events.go:6646),
---   but C++ DATA_PLAYER_GUID is a computed getter (first map player
---   without aura 45839), not a stored GUID, so the store reads 0;
---   the orb leg stays out on the orbit alone; a summoned orb would
---   be frozen and targetless; the soul-flay 2s re-arm is a real side
---   effect and is kept; repeat {30s,60s}.
+-- * shield orb: PORTED — the TIMER_SUMMON_SHILEDORB arm summons
+--   one orb per phase step (i = 1 .. Phase-1) at center + sin(row)
+--   offsets, TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN 45s (fireTimer,
+--   below); the orb AI is PORTED below (npc_shield_orb): MoveTo
+--   orbit r=17 at z=45, step PI/32, 50% clockwise roll, ev28
+--   MovementInform arrival, 1s Teleport failsafe; shadow bolt
+--   45680 non-triggered at the first vengeance-free map player
+--   (the DATA_PLAYER_GUID computed getter twinned via the muru
+--   GetPlayersInWorld pattern — creature:GetGuidData IS bridged
+--   but the store reads 0 for the computed id 19); repeat
+--   {30s,60s}; soul-flay re-armed 2s.
 -- * shadow spike (phase 3+): Talk(SAY_KJ_REFLECTION); the 4
 --   sinister-reflection summons (summon bridge live) stay out on the
 --   paired SetDisplayId + AttackStart(target) legs (:683-684,
@@ -203,9 +204,9 @@
 -- and their JustDied DespawnAll is PORTED in kjDied (2026-10-22);
 -- no GameObjectAI bridge
 -- — go_orb_of_the_blue_flight (gossip summon + vengeance cast)
--- is not registered; Teleport IS bridged (creature:Teleport) but the
--- shield-orb arms ride unregistered entries plus the
--- circle-movement/MovementInform machine, so they stay unmodeled;
+-- is not registered; Teleport IS bridged (creature:Teleport) and
+-- the shield-orb arms ARE ported below (MoveTo orbit + ev28
+-- MovementInform + Teleport failsafe);
 -- SetCombatMovement bridge live (lua_creature_events.go:1301) — KJ's own
 -- ctor arm PORTED in kjEnterCombat (boss_kiljaeden.cpp:525); the controller
 -- (25608) + felfire-portal arms are unregistered entries and the
@@ -233,9 +234,9 @@
 -- 30s offcombat Talk) is gated on instance boss states. npc_
 -- felfire_portal (25603) is not registered — its only UpdateAI
 -- arm is the summon+threat fiend spawner. npc_shield_orb (25502)
--- is not registered — movement-bound circle path (no movement
--- bridge) plus a shadow bolt at the computed-getter player (first
--- map player without aura 45839); the orbit alone blocks it.
+-- IS registered — orbit + shadow-bolt AI PORTED below (the
+-- computed-getter DATA_PLAYER_GUID target rides the muru
+-- GetPlayersInWorld pattern, not the instance guid store).
 
 local ENTRY_KILJAEDEN = 25315
 local ENTRY_DECEIVER = 25588
@@ -268,6 +269,7 @@ local SPELL_FLAME_DART = 45737
 local SPELL_DARKNESS_OF_A_THOUSAND_SOULS = 46605
 local SPELL_DARKNESS_OF_A_THOUSAND_SOULS_DAMAGE = 45657
 local SPELL_VENGEANCE_OF_THE_BLUE_FLIGHT = 45839
+local SPELL_SHADOW_BOLT = 45680
 local SPELL_SHADOW_BOLT_VOLLEY = 45770
 local SPELL_SHADOW_INFUSION = 45772
 local SPELL_SHADOW_CHANNELING = 46757
@@ -288,6 +290,19 @@ local SPELL_SR_SHOOT = 16496
 local SPELL_SR_MULTI_SHOT = 48098
 local SPELL_SR_WHIRLWIND = 17207
 local SPELL_SR_MOONFIRE = 47072
+
+-- Shield-orb orbit geometry (boss_kiljaeden.cpp:153 SHIELD_ORB_Z,
+-- :194-195 ShieldOrbLocations rows 1..3)
+local SHIELD_ORB_Z = 45.0
+local SHIELD_ORB_CENTER_X = 1698.9
+local SHIELD_ORB_CENTER_Y = 627.87
+local SHIELD_ORB_RADIUS = 17
+local SHIELD_ORB_LOCATIONS = {
+    { 12, 3.14 },
+    { 12, 3.14 / 0.7 },
+    { 12, 3.14 * 3.8 },
+}
+local POINT_MOTION_TYPE = 8
 
 -- Player classes (nefarian convention)
 local CLASS_WARRIOR = 1
@@ -517,12 +532,19 @@ local function fireTimer(creature, st, name)
         st.t.firebloom = (phase == PHASE_SACRIFICE) and 25000 or 40000
         st.t.soulflay = 1000
     elseif name == "shieldorb" then
-        -- The (Phase-1) shield-orb summons stay out — orb AI needs
-        -- MovePoint orbit (:1256, no movement bridge); its shadow-bolt
-        -- target is instance->GetGuidData(DATA_PLAYER_GUID), a computed
-        -- getter (first map player without aura 45839), not a stored
-        -- GUID — no store read; the soul-flay re-arm is a real side
-        -- effect.
+        -- C++ TIMER_SUMMON_SHILEDORB (boss_kiljaeden.cpp:786-794):
+        -- one orb per phase step (i = 1 .. Phase-1, Phase the enum
+        -- value 2..5) at center + sin(row) offsets, TEMPSUMMON_
+        -- TIMED_OR_CORPSE_DESPAWN (type 1) 45s; re-arm urand
+        -- (30000, 60000); soul-flay re-armed 2s. No
+        -- IsNonMeleeSpellCast gate on this case in C++ (:786).
+        for i = 1, phase - 1 do
+            local row = SHIELD_ORB_LOCATIONS[i]
+            creature:SummonCreature(ENTRY_SHIELD_ORB,
+                SHIELD_ORB_CENTER_X + math.sin(row[1]),
+                SHIELD_ORB_CENTER_Y + math.sin(row[2]),
+                SHIELD_ORB_Z, 0, 1, 45000)
+        end
         st.t.shieldorb = math.random(30000, 60000)
         st.t.soulflay = 2000
     elseif name == "shadowspike" then
@@ -1132,3 +1154,130 @@ RegisterCreatureEvent(ENTRY_SINISTER_REFLECTION, 1, reflectionEnterCombat)
 RegisterCreatureEvent(ENTRY_SINISTER_REFLECTION, 2, reflectionCleanup)
 RegisterCreatureEvent(ENTRY_SINISTER_REFLECTION, 4, reflectionCleanup)
 RegisterCreatureEvent(ENTRY_SINISTER_REFLECTION, 23, reflectionCleanup)
+
+-- ================= Shield Orb (25502) =================
+
+-- C++ npc_shield_orbAI::UpdateAI (:1272): the shadow-bolt target
+-- is ObjectAccessor::GetPlayer(*me, instance->GetGuidData(
+-- DATA_PLAYER_GUID)) — the computed getter returns the first map
+-- player without 45839 (instance_sunwell_plateau.cpp:84-97; no
+-- dead filter in C++); first in GetPlayersInWorld order here (Go
+-- world order, not the C++ map-list order — pick may differ from
+-- C++ when several 45839-free players are in the map), muru
+-- precedent (boss_muru.lua black-hole arm).
+local function firstVengeanceFreePlayerInMap(creature)
+    local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
+    for _, p in ipairs(GetPlayersInWorld()) do
+        if p:GetMapId() == mapId and p:GetInstanceId() == instanceId
+                and not p:HasAura(SPELL_VENGEANCE_OF_THE_BLUE_FLIGHT) then
+            return p
+        end
+    end
+    return nil
+end
+
+local orbState = {}
+
+-- C++ npc_shield_orbAI::UpdateAI (boss_kiljaeden.cpp:1240-1279),
+-- 100ms pump (the file's TICK convention): pointReached -> next
+-- circle point (r=17 around the Sunwell center, step PI/32,
+-- clockwise roll 50%) via MovePoint(1, x, y, 45); else count the
+-- 1s check timer down and Teleport to the target point on expiry
+-- (the move-arrival failsafe); shadow bolt 45680 non-triggered at
+-- the vengeance-free player, re-arm urand(500, 1000).
+local function orbTick(creature, guid)
+    local st = orbState[guid]
+    if st == nil then
+        return
+    end
+    if st.pointReached then
+        local c = st.c
+        local x, y
+        if st.clockwise then
+            y = st.my - SHIELD_ORB_RADIUS * math.sin(c)
+            x = st.mx - SHIELD_ORB_RADIUS * math.cos(c)
+        else
+            y = st.my + SHIELD_ORB_RADIUS * math.sin(c)
+            x = st.mx + SHIELD_ORB_RADIUS * math.cos(c)
+        end
+        st.pointReached = false
+        st.checkTimer = 1000
+        st.x, st.y = x, y
+        creature:MoveTo(1, x, y, SHIELD_ORB_Z)
+        c = c + math.pi / 32
+        if c >= 2 * math.pi then
+            c = 0
+        end
+        st.c = c
+    else
+        st.checkTimer = st.checkTimer - TICK
+        if st.checkTimer <= 0 then
+            creature:Teleport(st.x, st.y, SHIELD_ORB_Z)
+            st.pointReached = true
+        end
+    end
+    st.boltTimer = st.boltTimer - TICK
+    if st.boltTimer <= 0 then
+        local target = firstVengeanceFreePlayerInMap(creature)
+        if target then
+            creature:CastSpell(target, SPELL_SHADOW_BOLT)
+        end
+        st.boltTimer = math.random(500, 1000)
+    end
+    schedule(guid, "orb", TICK, function()
+        orbTick(creature, guid)
+    end)
+end
+
+-- C++ npc_shield_orbAI::Reset (:1234-1237) + Initialize
+-- (:1211-1221): SetDisableGravity(true); bPointReached=true,
+-- uiTimer=urand(500, 1000), uiCheckTimer=1000, r=17, c=0,
+-- center (1698.9, 627.87), clockwise=roll_chance_i(50).
+local function orbReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    orbState[guid] = nil
+    -- Go fires ev23 on the death path too (deceiverReset note);
+    -- C++ Reset never runs on death.
+    if creature:IsAlive() then
+        creature:SetDisableGravity(true)
+        orbState[guid] = {
+            pointReached = true,
+            clockwise = math.random(2) == 1,
+            checkTimer = 1000,
+            boltTimer = math.random(500, 1000),
+            c = 0,
+            mx = SHIELD_ORB_CENTER_X,
+            my = SHIELD_ORB_CENTER_Y,
+            x = 0,
+            y = 0,
+        }
+        schedule(guid, "orb", TICK, function()
+            orbTick(creature, guid)
+        end)
+    end
+end
+
+local function orbCleanup(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    orbState[guid] = nil
+end
+
+-- C++ MovementInform (:1281-1286): POINT_MOTION_TYPE arrival ->
+-- bPointReached=true (id ignored).
+local function orbMovementInform(event, creature, type, id)
+    if type ~= POINT_MOTION_TYPE then
+        return
+    end
+    local st = orbState[creature:GetGUIDLow()]
+    if st then
+        st.pointReached = true
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SHIELD_ORB, 2, orbCleanup)
+RegisterCreatureEvent(ENTRY_SHIELD_ORB, 4, orbCleanup)
+RegisterCreatureEvent(ENTRY_SHIELD_ORB, 23, orbReset)
+RegisterCreatureEvent(ENTRY_SHIELD_ORB, 28, orbMovementInform)
+RegisterCreatureEvent(ENTRY_SHIELD_ORB, 37, orbCleanup)
