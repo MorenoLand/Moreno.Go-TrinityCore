@@ -22,8 +22,9 @@
 -- the C++ SetData switch (instance_zulfarrak.cpp:186-194, EVENT_PYRAMID
 -- only). Readers (Bly/Weegli gossip + MovementInform) read
 -- creature:GetMap():GetInstanceData().pyramidPhase.
--- The phase writers are the cage gossip (ENTRY-BLOCKED, see below) and
--- Weegli's MovementInform arrival in npc_weegli_blastfuse.lua.
+-- The phase writers are the cage gossip (ported below, entries
+-- 141070-141074) and Weegli's MovementInform arrival in
+-- npc_weegli_blastfuse.lua.
 --
 -- Ported arms (C++-exact):
 -- - OnCreatureCreate (instance_zulfarrak.cpp:128-164): REACT_PASSIVE (0)
@@ -55,6 +56,15 @@
 --   MoveNPCIfAlive (instance_zulfarrak.cpp:274-287): SetWalk(true) +
 --   MoveTo(1, x, y, z) (the MovePoint twin, lua_creature_events.go:4974)
 --   + SetHomePosition(x, y, z, o), via GetInstanceCreature.
+-- - go_troll_cage OnGossipHello (zulfarrak.cpp:202-244): all five cage
+--   entries 141070-141074 (gameobject_template ScriptName, AzerothCore
+--   acore_world; spawned map 209 at 1881-1891/1294-1299) share one
+--   handler — SetData(EVENT_PYRAMID, PYRAMID_CAGES_OPEN) first, then
+--   initBlyCrewMember x5 (SetReactState AGGRESSIVE 2 + SetWalk +
+--   SetHomePosition(x, y, z, 0) + MoveTo(1, x, y, z) + SetFaction(250)),
+--   null-safe via GetInstanceCreature, no IsAlive gate (C++ has none).
+--   Returns false like C++ so the native GO use arms proceed
+--   (gameobject_hooks.go:144-202 polarity).
 -- - STALE-OBJECT RULE: a creature object built by luaMotionCreature is
 --   a construction-time snapshot (engine/world/lua_creature_events.go:
 --   6853-6866, Fields hold spawn-time Health), so a stored crew object
@@ -67,30 +77,11 @@
 --   GetCreature-null leg, which counts as dead).
 --
 -- Stay-outs (documented-only):
--- - go_troll_cage OnGossipHello (zulfarrak.cpp:202-244): SetData
---   (EVENT_PYRAMID, PYRAMID_CAGES_OPEN) + initBlyCrewMember x5
---   (SetReactState(AGGRESSIVE 2) + SetWalk + SetHomePosition +
---   MovePoint + SetFaction(FACTION_ESCORTEE_N_NEUTRAL_ACTIVE 250)) —
---   ENTRY-BLOCKED, not bridge-blocked: the GO gossip hello bridge IS
---   live (RegisterGameObjectGossipEvent, engine/scripting/runtime.go:
---   1104-1119 + engine/world/gameobject_hooks.go:144-202, fired from
---   handleGameObjectUse for every GO type), and every leg of the arm
---   is bridged (instanceData:SetData, GetInstanceCreature, SetWalk,
---   SetHomePosition, MoveTo, SetFaction), but the cage GO entry is in
---   NO in-tree source: zulfarrak.h/cpp carry no GO entry (only
---   GO_END_DOOR 146084), the world DB is not vendored (world.db is a
---   0-byte stub; the server reads gameobject_template from an external
---   MySQL), and web searches for the entry returned nothing. Runtime
---   discovery is also closed: INSTANCE_EVENT_ON_GAMEOBJECT_CREATE (6)
---   fires only for dynamic GO spawns (engine/world/instance_hooks.go:
---   484-499 + gameobjects.go:1850 — static template GOs have no Go
---   AddToWorld), so the static cages can never be seen before use.
---   Until the gameobject_template row for ScriptName "go_troll_cage"
---   is known, the event cannot start in-game: the phase stays
---   NOT_STARTED and the wave machine below is dormant. The cage arm
---   is one RegisterGameObjectGossipEvent(entry, 1, handler) away —
---   the handler body is the C++ text above, with the crew resolved
---   from instanceData.crew.
+-- - go_troll_cage: PORTED (see above) — entries sourced 2026-11-10 from
+--   AzerothCore acore_world gameobject_template.sql (ScriptName rows
+--   141070-141074) + gameobject.sql spawns (map 209, pyramid cage row);
+--   the old ENTRY-BLOCKED note is superseded, as are the matching notes
+--   in npc_sergeant_bly.lua / npc_weegli_blastfuse.lua.
 -- - SendAddsUpStairs MovePath (instance_zulfarrak.cpp:323-335):
 --   add->GetMotionMaster()->MovePath(PATH_ADDS 81553, false) has NO
 --   bridge — only startCreatureWaypoint (the creature's own DB path,
@@ -297,6 +288,54 @@ local function sendAddsUpStairs(instanceData, count)
         moved[#moved + 1] = base[1]
         table.remove(base, 1)
     end
+end
+
+local REACT_AGGRESSIVE = 2
+local FACTION_ESCORTEE_N_NEUTRAL_ACTIVE = 250
+
+-- Troll Cage GO entries (gameobject_template ScriptName "go_troll_cage",
+-- AzerothCore acore_world; spawned map 209 at 1881-1891/1294-1299).
+local GO_TROLL_CAGE = {141070, 141071, 141072, 141073, 141074}
+
+-- C++ initBlyCrewMember positions (zulfarrak.cpp:227-232): {entry, x, y, z}.
+local CAGE_CREW = {
+    {ENTRY_BLY, 1884.99, 1263, 41.52},
+    {ENTRY_RAVEN, 1882.5, 1263, 41.52},
+    {ENTRY_ORO, 1886.47, 1270.68, 41.68},
+    {ENTRY_WEEGLI, 1890, 1263, 41.52},
+    {ENTRY_MURTA, 1891.19, 1272.03, 41.60},
+}
+
+-- C++ go_troll_cage::OnGossipHello (zulfarrak.cpp:212-224): SetData first,
+-- then arouse each crew member (null-safe via GetInstanceCreature; no
+-- IsAlive gate in C++). Returns false like C++ so the native GO use arms
+-- proceed (gameobject_hooks.go:144-202 polarity).
+local function onTrollCageGossip(_, player, go)
+    local mapObj = player:GetMap()
+    local instanceData = mapObj and mapObj:GetInstanceData()
+    if not instanceData then
+        return false
+    end
+    instanceData:SetData(EVENT_PYRAMID, PYRAMID_CAGES_OPEN)
+    local resolver = resolverFor(instanceData)
+    if not resolver then
+        return false
+    end
+    for _, row in ipairs(CAGE_CREW) do
+        local crew = resolver:GetInstanceCreature(row[1])
+        if crew then
+            crew:SetReactState(REACT_AGGRESSIVE)
+            crew:SetWalk(true)
+            crew:SetHomePosition(row[2], row[3], row[4], 0)
+            crew:MoveTo(1, row[2], row[3], row[4])
+            crew:SetFaction(FACTION_ESCORTEE_N_NEUTRAL_ACTIVE)
+        end
+    end
+    return false
+end
+
+for _, entry in ipairs(GO_TROLL_CAGE) do
+    RegisterGameObjectGossipEvent(entry, 1, onTrollCageGossip)
 end
 
 RegisterMapEvent(MAP_ZULFARRAK, INSTANCE_EVENT_ON_CREATURE_CREATE, function(event, instanceData, mapObj, creature)

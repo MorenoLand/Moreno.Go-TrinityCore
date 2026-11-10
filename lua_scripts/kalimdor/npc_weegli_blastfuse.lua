@@ -62,20 +62,19 @@
 --   broggok precedent (DoUseDoorOrButton with restore 0 leaves the door
 --   open, exactly what SetGoState(ACTIVE) does). C++ checks the phase
 --   branch first, else-if the door branch — replicated.
---   The CAGES_OPEN leg is ported but unreachable until go_troll_cage's
---   entry is sourced (see below): the cage is the only CAGES_OPEN writer.
---   Cage-herd coords (zulfarrak.cpp:220-228, for the cage porting tick):
---   Bly 1884.99/1263/41.52, Raven 1882.5/1263/41.52, Oro 1886.47/1270.68/
---   41.68, Weegli 1890/1263/41.52, Murta 1891.19/1272.03/41.60, facing 0.
+--   The CAGES_OPEN leg is ported and reachable now: go_troll_cage is
+--   ported in instance_zulfarrak.lua (entries 141070-141074), the only
+--   CAGES_OPEN writer.
+--   Cage-herd coords (zulfarrak.cpp:220-228): Bly 1884.99/1263/41.52,
+--   Raven 1882.5/1263/41.52, Oro 1886.47/1270.68/41.68, Weegli 1890/
+--   1263/41.52, Murta 1891.19/1272.03/41.60, facing 0.
 -- Unmodeled (documented-only, no bridges):
 -- - LandMine_Timer (30s init, never fires in the C++ UpdateAI — dead
 --   leg); SPELL_GOBLIN_LAND_MINE 21688 and SPELL_WEEGLIS_BARREL 10772
 --   are dead enum entries (never cast). Reset and JustDied are
 --   commented-out in C++ — nothing to port.
 -- - go_troll_cage OnGossipHello crew-arouse machine (zulfarrak.cpp:218-232):
---   ENTRY-BLOCKED (no cage GO entry in the C++ tree or workspace SQL —
---   see instance_zulfarrak.lua); until the entry is sourced the crew
---   stays passive and the pyramid machine never starts.
+--   PORTED in instance_zulfarrak.lua (entries 141070-141074).
 -- - Bly->Weegli DoAction(0) (zulfarrak.cpp:106) is vacuous — Weegli defines
 --   no DoAction override (zulfarrak.cpp:270-387), so the C++ base no-ops;
 --   no ev38 handler is registered for Weegli.

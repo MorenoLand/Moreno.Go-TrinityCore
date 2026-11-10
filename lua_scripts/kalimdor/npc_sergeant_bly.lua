@@ -58,9 +58,8 @@
 --   C++ base no-ops; there is nothing to dispatch to (the ev38 dispatch
 --   itself is bridged, npc_weegli_blastfuse.lua header).
 -- - go_troll_cage OnGossipHello crew-arouse machine (zulfarrak.cpp:218-232):
---   ENTRY-BLOCKED (no cage GO entry in the C++ tree or workspace SQL —
---   see instance_zulfarrak.lua); until the entry is sourced the crew
---   stays passive and the pyramid machine never starts.
+--   PORTED in instance_zulfarrak.lua (entries 141070-141074, sourced
+--   2026-11-10 from AzerothCore acore_world gameobject_template.sql).
 
 local ENTRY = 7604
 
