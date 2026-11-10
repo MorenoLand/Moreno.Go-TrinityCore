@@ -694,9 +694,9 @@ func (s *session) handleInstanceSetBossState(ctx context.Context, args []string)
 	// C++ rejects state > TO_BE_DECIDED or encounterId >
 	// GetEncounterCount() in one check (cs_instance.cpp:256-260); a
 	// negative state passes and wraps into the EncounterState enum, so
-	// it is set (uint8(state)) and reported INVALID, not Bad value.
+	// it is set (uint8(state)) and reported INVALID, not "Incorrect value.".
 	if state > int(encounterStateToBeDecided) || encounterID > encounterCount {
-		s.sendSysMessage("Bad value.")
+		s.sendSysMessage(misc2BadValue)
 		return true
 	}
 	// encounterId == count passes the gate but SetBossState ignores
@@ -732,7 +732,7 @@ func (s *session) handleInstanceGetBossState(ctx context.Context, args []string)
 	}
 	encounterID := uint32(cAtoi(args[0]))
 	if encounterID > encounterCount {
-		s.sendSysMessage("Bad value.")
+		s.sendSysMessage(misc2BadValue)
 		return true
 	}
 	state := s.server.instanceBossState(target.player.Map, target.player.InstanceID, encounterID)

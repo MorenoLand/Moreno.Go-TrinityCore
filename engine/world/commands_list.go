@@ -286,10 +286,10 @@ func (s *session) handleListCreatureCommand(ctx context.Context, args []string) 
 			guid, guid, name, x, y, z, mapID, "", ""))
 	}
 	// LANG_COMMAND_LISTCREATUREMESSAGE (441): C++ passes (creatureId,
-	// creatureCount) positionally (cs_list.cpp:149) into the recalled
-	// TDB text, so the id leads — the same (id, count) order as the
-	// item/object twins below. Format text unseeded in-tree.
-	s.sendSysMessage(fmt.Sprintf("List of creatures found: %d (entry %d)", entry, creatureCount))
+	// creatureCount) positionally (cs_list.cpp:149) into the text, so
+	// the id leads — the same (id, count) order as the item/object
+	// twins below. Text from AC acore_string row 441 (TC lineage).
+	s.sendSysMessage(fmt.Sprintf("Found creatures %d: %d ", entry, creatureCount))
 	return true
 }
 
@@ -367,9 +367,9 @@ func (s *session) handleListObjectCommand(ctx context.Context, args []string) bo
 			guid, entry, guid, name, x, y, z, mapID, "", ""))
 	}
 	// LANG_COMMAND_LISTOBJMESSAGE (439): C++ passes (gameObjectId,
-	// objectCount) positionally (cs_list.cpp:428) into the recalled TDB
-	// text, so the id leads. Format text unseeded in-tree.
-	s.sendSysMessage(fmt.Sprintf("List of gameobjects found: %d (entry %d)", entry, objectCount))
+	// objectCount) positionally (cs_list.cpp:428) into the text, so
+	// the id leads. Text from AC acore_string row 439 (TC lineage).
+	s.sendSysMessage(fmt.Sprintf("Found gameobjects %d: %d ", entry, objectCount))
 	return true
 }
 
@@ -560,9 +560,9 @@ func (s *session) handleListItemCommand(ctx context.Context, args []string) bool
 	}
 	// LANG_COMMAND_LISTITEMMESSAGE (438): C++ passes (itemId, total,
 	// inventory, mail, auction, guild) positionally (cs_list.cpp:342)
-	// into the recalled TDB text, so the id leads. Format text unseeded
-	// in-tree.
-	s.sendSysMessage(fmt.Sprintf("List of items found: %d (item %d, inventory: %d, mail: %d, auction: %d, guild bank: %d)",
+	// into the text, so the id leads. Text from AC acore_string
+	// row 438 (TC lineage).
+	s.sendSysMessage(fmt.Sprintf("Found items %d: %d ( inventory %d mail %d auction %d guild %d)",
 		itemID, total, inventoryCount, mailCount, auctionCount, guildCount))
 	return true
 }

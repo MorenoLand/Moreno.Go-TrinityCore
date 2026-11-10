@@ -106,7 +106,7 @@ const (
 	misc2ObjectGUID         = "Object GUID: %s"                                // LANG_OBJECT_GUID 201
 	misc2KickSelf           = "You cannot kick yourself."                      // LANG_COMMAND_KICKSELF 281
 	misc2KickMessage        = "Player %s has been kicked."                     // LANG_COMMAND_KICKMESSAGE 282
-	misc2BadValue           = "Bad value."                                     // LANG_BAD_VALUE 168
+	misc2BadValue           = "Incorrect value."                               // LANG_BAD_VALUE 115
 	misc2ExploreArea        = "Area explored."                                 // LANG_EXPLORE_AREA 5064
 	misc2HideArea           = "Area hidden."                                   // LANG_HIDE_AREA (custom; no LANG id)
 	misc2PlayerSaved        = "Player saved."                                  // LANG_PLAYER_SAVED 76

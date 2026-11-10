@@ -42,9 +42,10 @@ type lookupRecord interface {
 	Float32(field int) (float32, error)
 }
 
-// lookupMaxResultsMsg mirrors LANG_COMMAND_LOOKUP_MAX_RESULTS.
+// lookupMaxResultsMsg mirrors LANG_COMMAND_LOOKUP_MAX_RESULTS (5029);
+// text from AC acore_string row 5029 (TC trinity_string lineage).
 func lookupMaxResultsMsg(maxResults uint32) string {
-	return fmt.Sprintf("Showing only the first %d results.", maxResults)
+	return fmt.Sprintf("Result limit reached (max results: %d)", maxResults)
 }
 
 // lookupSelectedPlayer mirrors ChatHandler::getSelectedPlayer
@@ -894,11 +895,16 @@ func (s *session) handleLookupTaxinode(query string) bool {
 // result cap applied like the C++ limitReached path. The C++ matches by
 // substring against the pre-lowercased in-memory map (wnameLow.find), so
 // the match is done in Go — a SQL LIKE would let %/_ in the token act as
-// wildcards. The LANG_COMMAND_TELE_LOCATION (168) header wrapping the
-// reply stays open: the trinity_string text is unseeded in-tree.
+// wildcards. The LANG_COMMAND_TELE_LOCATION (168) header wraps the reply in
+// one message (cs_lookup.cpp:1217); text from AC acore_string
+// row 168 (TC trinity_string lineage). The 165/166 legs below
+// are sourced from the same rows.
 func (s *session) handleLookupTele(ctx context.Context, token string) bool {
 	if token == "" {
-		s.sendSysMessage("Syntax: .lookup tele <name>")
+		// LANG_COMMAND_TELE_PARAMETER (165): C++ sends the message +
+		// SetSentErrorMessage and returns false (cs_lookup.cpp:1170-1174);
+		// message + true is the Go equivalent. Text from AC row 165.
+		s.sendSysMessage("Requires search parameter.")
 		return true
 	}
 	// R-LOOKUP-TELE-2: C++ Utf8toWStr fails -> return false silent
@@ -940,10 +946,11 @@ func (s *session) handleLookupTele(ctx context.Context, token string) bool {
 		fmt.Fprintf(&reply, "  |cffffffff|Htele:%d|h[%s]|h|r\n", id, name)
 	}
 	if reply.Len() == 0 {
-		s.sendSysMessage("No location found.")
+		// LANG_COMMAND_TELE_NOLOCATION (166), text from AC row 166.
+		s.sendSysMessage("There are no teleport locations matching your request.")
 		return true
 	}
-	s.sendSysMessage(reply.String())
+	s.sendSysMessage("Locations found are:\n" + reply.String())
 	if limitReached {
 		s.sendSysMessage(lookupMaxResultsMsg(maxResults))
 	}

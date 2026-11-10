@@ -353,7 +353,7 @@ func (s *session) handleGuildCreateCommand(ctx context.Context, args []string) b
 	// IsReservedName / IsValidCharterName have no Go bridge (documented
 	// gap); the empty and >24-char rejects are enforced (Guild.cpp:1224).
 	if guildName == "" || len(guildName) > 24 {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
 		return true
 	}
 
@@ -673,7 +673,7 @@ func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) b
 	// with LANG_INSERT_GUILD_NAME.
 	oldName, ok := guildQuotedArg(toks[0])
 	if !ok {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
 		return true
 	}
 	if len(toks) < 2 {
@@ -698,11 +698,11 @@ func (s *session) handleGuildRenameCommand(ctx context.Context, args []string) b
 	// reserved or invalid charter name fail. The reserved/charter checks
 	// have no Go bridge (documented gap).
 	if newName == "" || len(newName) > 24 {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
 		return true
 	}
 	if _, err := cdb.ExecContext(ctx, "UPDATE guild SET name = ? WHERE guildid = ?", newName, guildID); err != nil {
-		s.sendSysMessage("Incorrect value") // LANG_BAD_VALUE 115
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
 		return true
 	}
 	s.sendSysMessage(fmt.Sprintf("'%s' Guild name changed to '%s'", oldName, newName)) // LANG_GUILD_RENAME_DONE 97

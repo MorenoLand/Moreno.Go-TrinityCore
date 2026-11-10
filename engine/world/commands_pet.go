@@ -415,7 +415,7 @@ func (s *session) handlePetLevelCommand(ctx context.Context, args []string) bool
 		delta = int(ownerLevel) - int(petLevel)
 	}
 	if delta == 0 || delta < -strongMaxLevel || delta > strongMaxLevel {
-		s.sendSysMessage("Wrong command value.") // LANG_BAD_VALUE 115
+		s.sendSysMessage("Incorrect value.") // LANG_BAD_VALUE 115
 		return true
 	}
 	newLevel := int(petLevel) + delta
