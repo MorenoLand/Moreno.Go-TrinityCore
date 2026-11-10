@@ -1125,6 +1125,24 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 69961, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
+	case 61257: // Runic Power Back on Snare/Root (PvP 4P), EFFECT_0: the action target casts 61258 on itself when the triggering spell roots or snares.
+		if effIndex != 0 || triggerSpell == nil {
+			return scriptProcCast{}, false
+		}
+		var mechanicMask uint32
+		for _, eff := range triggerSpell.Effects {
+			if eff.Mechanic < 32 {
+				mechanicMask |= uint32(1) << eff.Mechanic
+			}
+		}
+		if mechanicMask&((uint32(1)<<7)|(uint32(1)<<11)) == 0 { // MECHANIC_ROOT, MECHANIC_SNARE (SharedDefines.h:1364,1368)
+			return scriptProcCast{}, false
+		}
+		actionTarget := procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID)
+		if actionTarget == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 61258, casterGUID: actionTarget, targetGUID: actionTarget}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -3184,6 +3202,12 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 51209 && !s.hungeringColdProcAllowed(ev) {
 			continue
 		}
+		// spell_dk_improved_blood_presence_triggered::CheckProc
+		// (spell_dk.cpp:1512-1517): only a player actor procs the
+		// heal; a creature or pet dealing the damage never fires it.
+		if auraSpell.ID == 63611 && !procActorIsPlayerGUID(ev.actorGUID) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3318,6 +3342,22 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.resetPlayerCooldown(49576, true)
 				continue
 			}
+			if auraSpell.ID == 63611 && i == 1 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_dk_improved_blood_presence_triggered::HandleProc
+				// (spell_dk.cpp:1519-1529): PreventDefaultAction; the
+				// actor casts Improved Blood Presence Heal (50475) on
+				// itself with BP0 = pct of the triggering damage by the
+				// effect amount. No damage gate in C++ (a null
+				// DamageInfo skips the cast; Go cannot distinguish a
+				// null info from zero damage, so a zero-damage event
+				// still fires with BP0 0). No Lua ev6 twin: spell_dk.lua
+				// holds no 63611 handler (it only casts 63611 from the
+				// blood-presence apply leg), and the Lua ev6 veto above
+				// would fire first if one ever registers. DORMANT until
+				// Spell.dbc ships the 63611 proc entry.
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 50475, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.damage) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				continue
+			}
 			if auraSpell.ID == 58642 && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_dk_glyph_of_scourge_strike::HandleProc
 				// (spell_dk.cpp:1260-1270): PreventDefaultAction; the
@@ -3349,6 +3389,25 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				if s.removePlayerAuraFromStack(50241) {
 					s.removeAura(auraSpell.ID)
 				}
+				continue
+			}
+			if auraSpell.ID == 50421 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_dk_scent_of_blood::HandleProc (spell_dk.cpp:2205-2210):
+				// PreventDefaultAction; the holder casts Scent of Blood
+				// (50422) on itself and loses one stack of the talent
+				// aura. Placed before the generic arm, which would cast
+				// the DBC trigger on the proc target instead. The cast
+				// carries the triggering-aura attribution (the C++ aurEff
+				// overload), mirroring the generic leg below. No Lua ev6
+				// twin: spell_dk.lua holds no 50421 handler, and the Lua
+				// ev6 veto above would fire first if one ever registers.
+				// DORMANT until Spell.dbc ships the 50421 proc entry.
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.castSpellDirect(ctx, 50422, s.playerGUID)
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				_ = s.removePlayerAuraFromStack(50421)
 				continue
 			}
 			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
