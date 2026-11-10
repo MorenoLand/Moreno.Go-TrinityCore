@@ -93,19 +93,20 @@
 -- Initialize, the ctor/Reset note above); DoMeleeAttackIfReady is
 -- engine-driven in Go.
 -- npc_voidtraveler (NPC_VOID_TRAVELER = 19226) — zero Talk calls;
--- the UpdateAI follow/sacrifice machine: Vorpil lookup via
--- _instance->GetGuidData(DATA_GRANDMASTER_VORPIL) (no-instance
--- bridge), MoveFollow (no motion bridge), DoCast(me,
--- SPELL_SACRIFICE 33587, false) at 3 yards, then on _sacrificed:
--- DoCastAOE(SPELL_EMPOWERING_SHADOWS 33783, true) + DoCast(me,
--- SPELL_SHADOW_NOVA 33846, true) + me->KillSelf() (creature:Kill()
--- is the self-kill bridge, kj fiend precedent — but the kill leg
--- stays out with the rest: the casts bridge (self-cast convention)
--- but the follow / instance-lookup legs don't, and the file is
--- documented-only (NOT registered; shaffar-beacon precedent).
--- All Talk() calls in the file accounted for (4 ported above —
--- aggro/slay/death/intro; SAY_HELP 2 rides the traveler timer
--- machine — documented-only).
+-- the UpdateAI follow/sacrifice machine PORTED below (travelerTick,
+-- ev22 + 1s pump): the C++ Vorpil lookup via _instance->GetGuidData
+-- is replaced by the ev22 summoner capture (spirit-shade precedent
+-- — the traveler is summoned by Vorpil, so no instance bridge is
+-- needed); MoveFollow bridged (lua_creature_events.go:5279);
+-- DoCast(me, SPELL_SACRIFICE 33587, false) at 3 yards, then on
+-- _sacrificed: DoCastAOE(SPELL_EMPOWERING_SHADOWS 33783, true) +
+-- DoCast(me, SPELL_SHADOW_NOVA 33846, true) + me->KillSelf()
+-- (creature:Kill() no-arg = self-kill, kj fiend precedent).
+-- NOT registered in boss_ai.go (ev22/ev2/ev4 resolve live, the
+-- shaffar-beacon precedent).
+-- All Talk() calls in the file accounted for (5 ported above —
+-- aggro/slay/death/intro + SAY_HELP 2 riding the traveler timer
+-- machine).
 
 local ENTRY_GRANDMASTER_VORPIL = 18732 -- NPC_GRANDMASTER_VORPIL (shadow_labyrinth.h)
 
@@ -119,6 +120,9 @@ local SPELL_BANISH = 38791
 local SPELL_DRAW_SHADOWS = 33563
 local SPELL_RAIN_OF_FIRE = 33617
 local SPELL_VOID_PORTAL_VISUAL = 33569
+local SPELL_SACRIFICE = 33587 -- boss_grandmaster_vorpil.cpp:56 (void-traveler)
+local SPELL_EMPOWERING_SHADOWS = 33783 -- boss_grandmaster_vorpil.cpp:58
+local SPELL_SHADOW_NOVA = 33846 -- boss_grandmaster_vorpil.cpp:57
 
 local ENTRY_VOID_PORTAL = 19224
 local ENTRY_VOID_TRAVELER = 19226
@@ -315,6 +319,69 @@ local function travelerTick(creature, guid)
     end
 end
 
+-- C++ npc_voidtravelerAI::UpdateAI (:255-282): 1s _moveTimer poll —
+-- Vorpil via _instance->GetGuidData (no bridge; replaced by the ev22
+-- summoner capture, spirit-shade precedent); MoveFollow(Vorpil, 0, 0)
+-- every poll; within 3 yards DoCast(me, SPELL_SACRIFICE, false) +
+-- _sacrificed, 500ms later DoCastAOE(SPELL_EMPOWERING_SHADOWS, true)
+-- + DoCast(me, SPELL_SHADOW_NOVA, true) + KillSelf. The C++ retry
+-- when Vorpil is missing is the nil-summoner 1s re-schedule below.
+local travelerSummoner = {} -- per-traveler-GUID Vorpil object (ev22)
+local travelerSacrificed = {} -- per-traveler-GUID _sacrificed latch
+
+local function travelerAITick(creature, guid)
+    local vorpil = travelerSummoner[guid]
+    if not vorpil then
+        schedule(guid, "traveler_ai", 1000, function()
+            travelerAITick(creature, guid)
+        end)
+        return
+    end
+    if travelerSacrificed[guid] then
+        creature:CastSpell(creature, SPELL_EMPOWERING_SHADOWS, true)
+        creature:CastSpell(creature, SPELL_SHADOW_NOVA, true)
+        creature:Kill()
+        return
+    end
+    creature:MoveFollow(vorpil, 0, 0)
+    if creature:GetDistance(vorpil) <= 3 then
+        creature:CastSpell(creature, SPELL_SACRIFICE)
+        travelerSacrificed[guid] = true
+        schedule(guid, "traveler_ai", 500, function()
+            travelerAITick(creature, guid)
+        end)
+        return
+    end
+    schedule(guid, "traveler_ai", 1000, function()
+        travelerAITick(creature, guid)
+    end)
+end
+
+-- C++ npc_voidtravelerAI::IsSummonedBy — the C++ ctor captures the
+-- instance script; Lua captures the summoner instead (the traveler
+-- is summoned by Vorpil, so the ev22 summoner IS the lookup result).
+-- MoveFollow fires at once (C++ _moveTimer starts 0, first poll
+-- immediate), then the 1s pump takes over.
+local function travelerSummoned(event, creature, summoner)
+    if not summoner then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    travelerSummoner[guid] = summoner
+    travelerSacrificed[guid] = nil
+    creature:MoveFollow(summoner, 0, 0)
+    schedule(guid, "traveler_ai", 1000, function()
+        travelerAITick(creature, guid)
+    end)
+end
+
+local function travelerCleanup(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    travelerSummoner[guid] = nil
+    travelerSacrificed[guid] = nil
+end
+
 -- C++ boss_grandmaster_vorpilAI::JustEngagedWith:
 -- events.ScheduleEvent(EVENT_SHADOWBOLT_VOLLEY, 7s, 14s);
 -- if (IsHeroic()) events.ScheduleEvent(EVENT_BANISH, 15s);
@@ -435,3 +502,6 @@ RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 3, vorpilTargetDied)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 4, vorpilDied)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 23, vorpilReset)
 RegisterCreatureEvent(ENTRY_GRANDMASTER_VORPIL, 27, vorpilMoveInLOS)
+RegisterCreatureEvent(ENTRY_VOID_TRAVELER, 22, travelerSummoned)
+RegisterCreatureEvent(ENTRY_VOID_TRAVELER, 2, travelerCleanup)
+RegisterCreatureEvent(ENTRY_VOID_TRAVELER, 4, travelerCleanup)

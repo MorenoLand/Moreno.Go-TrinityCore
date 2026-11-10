@@ -112,9 +112,14 @@
 -- EVENT_ARCANE_BLAST / EVENT_BELLOWING_ROAR).
 -- npc_dream_fog — zero Talk; NOT registered: the _roamTimer 15-30s
 -- chase / 2.5s MoveRandom + MoveChase + SetWalk + walk-speed machine
--- — re-keyed 2026-10-15 (timer doctrine): no-movement bridge is the
--- true blocker (the timer leg bridges); with no registered Lua file
--- the class stays out. The stale "no-timer" claim is corrected.
+-- — re-keyed 2026-11-09: MoveChase/MoveRandom/SetWalk/MoveClear ARE
+-- bridged now, but the chase leg stays out (Go's MoveChase pauses
+-- unless the target is the combat victim — a random-target chase
+-- moves nothing) and SetSpeedRate rejects MOVE_WALK (MOVE_RUN=1
+-- only), so the 0.75x walk-speed leg has no bridge; the seeping-fog
+-- spawn spells are unmodeled in Go, so no fog ever spawns in the
+-- ported model either. The stale "no-movement bridge" claim is
+-- corrected.
 -- npc_spirit_shade — zero Talk; PORTED: the IsSummonedBy
 -- MoveFollow leg (boss_emerald_dragons.cpp:430-438) via ev22, plus the
 -- MovementInform arrival leg (:440-446: dark-offering cast + 1s
@@ -554,7 +559,8 @@ end
 -- (ragnaros emerge precedent).
 local function taerarEndBanish(creature, guid)
     taerarBanished[guid] = nil
-    taerarShades[guid] = nil
+    -- C++ exit legs (:673-677) never reset _shades: a timer-expired
+    -- banish keeps its residual for the next stage's += 3 (:633).
     local per = timers[guid]
     if per and per["taerar_banish"] then
         RemoveEventById(per["taerar_banish"])
@@ -594,7 +600,10 @@ local function taerarDamageTaken(event, creature, attacker, damage)
             creature:CastSpell(victim, SPELL_SUMMON_SHADE_2, true)
             creature:CastSpell(victim, SPELL_SUMMON_SHADE_3, true)
         end
-        taerarShades[guid] = 3
+        taerarShades[guid] = (taerarShades[guid] or 0) + 3 -- C++ :633
+        -- _shades += count: a residual from a timer-expired banish
+        -- survives the exit (C++ never resets _shades there); =3
+        -- dropped it, exiting the next banish early.
         taerarBanished[guid] = true
         creature:CastSpell(creature, SPELL_SHADE)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_NON_ATTACKABLE)
@@ -606,18 +615,21 @@ local function taerarDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ boss_taerarAI::SummonedCreatureDies (:613-615): --_shades; the
--- UpdateAI banish branch exits when !_shades. Taerar summons nothing
--- else in the ported model, so any summoned-creature death while
--- banished counts; the 60s timer is the guaranteed exit regardless.
+-- C++ boss_taerarAI::SummonedCreatureDies (:613-615): --_shades
+-- (unconditional); the UpdateAI banish branch exits when !_shades.
+-- Taerar summons nothing else in the ported model, so any
+-- summoned-creature death counts — including one after a
+-- timer-expired exit, which still decrements the residual; the 60s
+-- timer is the guaranteed exit regardless.
 local function taerarSummonedDies(event, creature, summon, killer)
     local guid = creature:GetGUIDLow()
-    if not taerarBanished[guid] then
+    local shades = taerarShades[guid]
+    if shades == nil then
         return
     end
-    local shades = (taerarShades[guid] or 0) - 1
+    shades = shades - 1
     taerarShades[guid] = shades
-    if shades <= 0 then
+    if taerarBanished[guid] and shades <= 0 then
         taerarEndBanish(creature, guid)
     end
 end

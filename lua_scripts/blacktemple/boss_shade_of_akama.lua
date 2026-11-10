@@ -55,8 +55,9 @@
 -- npc_ashtongue_sorcerer's, which is not registered; the old "no
 -- UNIT_STATE bridge" claim was stale). Deviations from C++: no
 -- instance-script model — the DATA_SHADE_OF_AKAMA /
--- DATA_AKAMA_SHADE creature lookups and the SetBossState DONE arm stay
--- out; the akama DoAction(ACTION_SHADE_OF_AKAMA_DEAD) arm is PORTED below
+-- DATA_AKAMA_SHADE creature lookups stay out (the SetBossState DONE +
+-- IN_PROGRESS arms ARE ported below — creature:SetBossState is bridged,
+-- lua_creature_events.go:6593); the akama DoAction(ACTION_SHADE_OF_AKAMA_DEAD) arm is PORTED below
 -- via the grid sweep, while the spawner DoAction(ACTION_START/STOP/
 -- DESPAWN_ALL_SPAWNS) arms stay out (ev38 dispatch IS bridged, but the
 -- spawner AI is unregistered — no ev38 bearer); no MovementInform bridge
@@ -102,11 +103,11 @@ local ENTRY_AKAMA_SHADE = 23191 -- black_temple.h:88 (NPC_AKAMA_SHADE)
 -- C++ npc_akama_shade::DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when
 -- HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407; _hasYelledOnce
 -- cleared in Initialize()/Reset(), so akamaShadeReset clears the Lua
--- flag below). DamageTaken arms fire on lethal hits (C++
--- HealthBelowPctDamaged semantics — yazzai/nefarian convention), so no
--- post-damage guard. This arm belongs to npc_akama_shade (entry 23191),
--- NOT to the boss AI. The SAY_BROKEN_FREE_*/SAY_DEAD lines (0,1,2,4) are
--- also npc_akama_shade's.
+-- flag below). C++ uses plain HealthBelowPct — pre-damage current health,
+-- NOT HealthBelowPctDamaged — so a lethal hit from above 20% does NOT
+-- fire it; no post-damage projection. This arm belongs to
+-- npc_akama_shade (entry 23191), NOT to the boss AI. The
+-- SAY_BROKEN_FREE_*/SAY_DEAD lines (0,1,2,4) are also npc_akama_shade's.
 local akamaYelledOnce = {}
 
 local function akamaShadeDamageTaken(event, creature, attacker, damage)
@@ -114,8 +115,10 @@ local function akamaShadeDamageTaken(event, creature, attacker, damage)
     -- C++ DamageTaken HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407,
     -- pre-damage): strict-< against the floored integer threshold (the
     -- old GetHealthPct() < 20 fired up to 1 HP early — maulgar/ironaya
-    -- precedent). DamageTaken arms fire on lethal hits (no post-damage
-    -- guard — yazzai/nefarian convention).
+    -- precedent). Plain HealthBelowPct reads pre-damage health, so a
+    -- lethal hit from above 20% does not fire this arm (unlike
+    -- HealthBelowPctDamaged arms — yazzai/nefarian convention); no
+    -- post-damage projection.
     local maxHealth = creature:GetMaxHealth()
     if not akamaYelledOnce[guid] and maxHealth > 0
         and creature:GetHealth() < math.floor(maxHealth * 20 / 100) then
@@ -127,8 +130,9 @@ end
 -- C++ JustDied: non-triggered self-cast of the shade trigger + the
 -- channeler DespawnEntry arm (PORTED in shadeDied via the grid sweep;
 -- the akama DoAction legs are PORTED below via the same sweep, while
--- the spawner DoActions and SetBossState DONE arms have no
--- instance/summon bridges).
+-- the spawner DoActions stay out — no ev38 bearer on the unregistered
+-- spawner AI; the SetBossState(DONE) arm is PORTED below,
+-- creature:SetBossState is bridged, lua_creature_events.go:6593).
 local function shadeDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_SHADE_OF_AKAMA_TRIGGER)
     -- C++ JustDied then calls akama->AI()->DoAction(ACTION_SHADE_OF_AKAMA_DEAD)
@@ -149,12 +153,15 @@ local function shadeDied(event, creature, killer)
     -- ASHTONGUE_CHANNELER) via the grid-sweep idiom (illidan
     -- parasitic-shadowfiend precedent; C++ SummonList is exact, the
     -- 100yd sweep is the approximation). C++ order: cast first, then
-    -- the akama legs above, then the despawn (spawner DoActions +
-    -- SetBossState DONE stay out on the instance bridge).
+    -- the akama legs above, then the despawn, then SetBossState DONE
+    -- (boss_shade_of_akama.cpp:283; DATA_SHADE_OF_AKAMA = 2,
+    -- black_temple.h:33; the spawner DoActions stay out — no ev38
+    -- bearer on the unregistered spawner AI).
     for _, channeler in ipairs(creature:GetCreaturesInGrid(
             ENTRY_ASHTONGUE_CHANNELER, 100)) do
         channeler:Despawn()
     end
+    creature:SetBossState(2, 3) -- DATA_SHADE_OF_AKAMA, DONE
 end
 
 -- C++ SpellHit: hit by the soul-retrieve spell -> non-triggered
@@ -265,18 +272,22 @@ local function akamaShadeReset(event, creature)
     -- Initialize() clears _hasYelledOnce, then SetFaction(FACTION_
     -- ASHTONGUE_DEATHSWORN 1820) before the stealth self-cast.
     -- The gossip-flag leg: C++ re-adds UNIT_NPC_FLAG_GOSSIP only when
-    -- the instance boss-state is not DONE (no boss-state bridge), so
-    -- it is re-added unconditionally here — the approximation the
-    -- gossip-select port below depends on (without it the hook can
-    -- never fire after the first SHADE_START removal).
+    -- the instance boss-state is not DONE — creature:GetBossState is
+    -- bridged (lua_creature_events.go; the maiden/curator ~= 3 idiom),
+    -- so the flag is re-added only while DATA_SHADE_OF_AKAMA != DONE
+    -- (the approximation the gossip-select port below depends on —
+    -- without it the hook can never fire after the first SHADE_START
+    -- removal).
     -- SetFaction is bridged (lua_creature_events.go:1125).
     akamaYelledOnce[creature:GetGUIDLow()] = nil
     cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() then
         creature:SetFaction(1820)
         creature:CastSpell(creature, SPELL_STEALTH)
-        creature:SetNPCFlags(bit32.bor(creature:GetNPCFlags(),
-            UNIT_NPC_FLAG_GOSSIP))
+        if creature:GetBossState(2) ~= 3 then -- DATA_SHADE_OF_AKAMA != DONE
+            creature:SetNPCFlags(bit32.bor(creature:GetNPCFlags(),
+                UNIT_NPC_FLAG_GOSSIP))
+        end
     end
 end
 
@@ -295,10 +306,13 @@ local function akamaShadeGossipSelect(event, player, creature, sender, action, c
     local guid = creature:GetGUIDLow()
     schedule(guid, "shade_start", 500, function()
         -- C++ EVENT_SHADE_START (boss_shade_of_akama.cpp:460-467):
-        -- SetBossState IN_PROGRESS (no bridge) + RemoveFlag(UNIT_NPC_FLAGS,
-        -- UNIT_NPC_FLAG_GOSSIP) + RemoveAurasDueToSpell(SPELL_STEALTH)
-        -- + SetWalk + MovePoint to AkamaWP[0] (arrival EVENT_SHADE_CHANNEL
-        -- stays out — no MovementInform bridge).
+        -- SetBossState IN_PROGRESS (PORTED — creature:SetBossState is
+        -- bridged, lua_creature_events.go:6593; DATA_SHADE_OF_AKAMA = 2)
+        -- + RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) +
+        -- RemoveAurasDueToSpell(SPELL_STEALTH) + SetWalk + MovePoint
+        -- to AkamaWP[0] (arrival EVENT_SHADE_CHANNEL stays out — no
+        -- MovementInform bridge).
+        creature:SetBossState(2, 1) -- DATA_SHADE_OF_AKAMA, IN_PROGRESS
         creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
             bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
         creature:RemoveAura(SPELL_STEALTH)

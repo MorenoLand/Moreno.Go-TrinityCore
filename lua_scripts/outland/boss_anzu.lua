@@ -25,9 +25,10 @@
 -- (nil = victim fallback, the CastSpell bridge); 14s init, 25s flat
 -- repeat.
 -- EVENT_CYCLONE_OF_FEATHERS — SelectTarget(Random, 0) (playerOnly
--- default true) → DoCast(target, SPELL_CYCLONE_OF_FEATHERS 40321)
--- 2-arg (non-triggered); threat-list pool via GetAITargets with the
--- "Player" filter (ikiss convention); 5s init, 21s flat repeat.
+-- defaults FALSE per UnitAI.h:170 — pets/totems eligible) →
+-- DoCast(target, SPELL_CYCLONE_OF_FEATHERS 40321) 2-arg (non-triggered);
+-- threat-list pool via GetAITargets with no Player filter (the
+-- 2026-10-19 correction); 5s init, 21s flat repeat.
 -- boss_anzuAI::DamageTaken — HealthBelowPctDamaged(33/66, damage)
 -- one-shot latches (event 9 fires pre-damage — moroes/syth
 -- precedent): Talk(SAY_SUMMON_BROOD 0) + one-shot EVENT_SUMMON 3s.

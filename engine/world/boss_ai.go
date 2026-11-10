@@ -12652,11 +12652,13 @@ func init() {
 	// casting gate and ports no boss events, and npc_akama_shade's UpdateAI
 	// (:452) is likewise ungated; the file's only casting gate (:756)
 	// belongs to the unregistered ashtongue sorcerer AI; the
-	// encounter-state bookkeeping is blocked on the instance-script model
-	// (DATA_SHADE_OF_AKAMA/DATA_AKAMA_SHADE lookups, SetBossState DONE);
-	// the chase-complete phase-two gate has no MovementInform bridge, so the
-	// threat 41602 arm and the phase-one immune/non-selectable/emotestate
-	// arms have no bridge; the channeler/sorcerer/defender/rogue/
+	// SetBossState DONE + IN_PROGRESS arms are PORTED
+	// (creature:SetBossState is bridged, lua_creature_events.go:6593);
+	// only the DATA_SHADE_OF_AKAMA/DATA_AKAMA_SHADE creature lookups stay
+	// blocked on the instance-script model; the chase-complete phase-two
+	// gate has no MovementInform bridge, so the threat 41602 arm and the
+	// phase-one immune/non-selectable/emotestate arms have no bridge; the
+	// channeler/sorcerer/defender/rogue/
 	// elementalist/spiritbinder/broken companion AIs are not registered
 	// (ScriptName bindings are DB-side) and have no summon model; the shade
 	// soul-channel AuraScripts have no AuraScript bridge.
@@ -22054,9 +22056,10 @@ func init() {
 	// emerald_dragonAI / emeriss KilledUnit player-gated victim-self-casts
 	// (25040 / 24904, no Go spell effect); the Reset self-cast 25041 +
 	// RemoveFlag / SetReactState legs; the UpdateAI SPELL_SUMMON_PLAYER
-	// 24776 max-threat pull; npc_dream_fog + npc_spirit_shade (no-movement /
-	// no-despawn bridges — not registered); the SpellHitTarget shade-summon
-	// machine; the two SpellScriptLoaders (no-SpellScript bridge).
+	// 24776 max-threat pull; npc_dream_fog (victim-gated MoveChase +
+	// MOVE_WALK speed rejection — not registered) + npc_spirit_shade
+	// (ported: ev22 MoveFollow + ev28 MovementInform); the SpellHitTarget
+	// shade-summon machine; the two SpellScriptLoaders (no-SpellScript bridge).
 	RegisterLuaBoss("boss_ysondre", 14887)
 	RegisterLuaBoss("boss_lethon", 14888)
 	RegisterLuaBoss("boss_emeriss", 14889)
@@ -22205,15 +22208,15 @@ func init() {
 	// mismatch), the whole UpdateAI timer machine (shadowbolt
 	// volley / heroic-only banish / draw-shadows player teleports /
 	// traveler summon + 20%-health enrage), and the zero-Talk
-	// npc_voidtraveler follow/sacrifice machine (NPC_VOID_TRAVELER
-	// 19226 NOT registered — shaffar-beacon precedent) ride
-	// no-timer / no-cast / no-random-target / no-summon /
-	// no-motion / no-instance bridges — documented-only.
+	// npc_voidtraveler follow/sacrifice machine (ported: ev22
+	// summoner-capture + MoveFollow pump; 19226 NOT registered —
+	// shaffar-beacon precedent).
 	RegisterLuaBoss("boss_grandmaster_vorpil", 18732)
 	// UpdateAI CASTING gates (:171 pre-loop + :211 in-loop) ported as
 	// 500ms IsCasting defer on volley / banish / draw-shadows / traveler
-	// (append-keyed defer for the multimap arms); void-traveler AI stays
-	// out (no motion bridge).
+	// (append-keyed defer for the multimap arms); void-traveler AI
+	// ported (ev22 summoner-capture + MoveFollow pump, no instance
+	// lookup needed).
 	// boss_darkweaver_syth (Sethekk Halls, Outland dungeon pass) —
 	// fight logic in lua_scripts/outland/boss_darkweaver_syth.lua: the
 	// event-1 flame/arcane/frost/shadow-shock + chain-lightning
