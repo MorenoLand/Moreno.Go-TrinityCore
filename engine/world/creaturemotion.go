@@ -10454,7 +10454,7 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 	found := false
 	for _, effect := range spell.Effects {
 		switch effect.Effect {
-		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg:
+		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg, spellEffectHealthLeech:
 			// C++ owners: EffectSchoolDMG (SpellEffectsHandlers 2),
 			// EffectWeaponDmg (handlers 17/31/58/121). Effect 87
 			// (SPELL_EFFECT_GAMEOBJECT_DAMAGE) was wrongly grouped here —
@@ -10463,6 +10463,18 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 			// (NORMALIZED_WEAPON_DMG) was missing though EffectWeaponDmg
 			// handles it and it damages the unit (player path groups all
 			// four at spells.go:13112).
+			// EffectHealthLeech (handler 9,
+			// SpellEffects.cpp:1513-1553) belongs here too: HandleEffects
+			// resets damage = CalculateDamage(i) per effect (Spell.cpp:
+			// 5165) and the leech handler folds its own damage into the
+			// shared m_damage, so a leech-only spell's damage IS the
+			// leech CalcValue and a mixed spell deals school + leech.
+			// Without this case a pure-leech creature spell dealt and
+			// healed nothing (found=false early-returns the damage arms).
+			// Heal-basis delta: leechDealt downstream is now the
+			// combined actually-lost total, while C++ heals the
+			// actually-lost leech damage only — exact for leech-only
+			// spells; per-effect tracking is needed for mixed spells.
 			found = true
 			value := effect.CalcValueForLevel(spell, casterLevel)
 			if value > 0 {
