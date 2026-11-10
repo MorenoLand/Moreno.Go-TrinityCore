@@ -22341,10 +22341,11 @@ func init() {
 	// Initialize/Reset phase machine (2500ms hidden, visible, fur
 	// MoveTo, Talk 0, loot/none emotes, caribou-trap activation +
 	// latch, triggered self-cast 46104) and the JustDied trap-GO
-	// loot-state/state legs. Entry 25835 verifiable from the C++
-	// NesingwaryTrapper enum; the fur Delete, summoner-credit and
-	// spell-summoner legs stay out (no GO-delete / summoner /
-	// SpellScript bridges).
+	// loot-state/state legs + the JustDied summoner-credit leg
+	// (GetSummonerUnit bridged 2026-11-05). Entry 25835 verifiable
+	// from the C++ NesingwaryTrapper enum; the fur Delete and
+	// spell-summoner legs stay out (no GO-delete / SpellScript
+	// bridges).
 	RegisterLuaBoss("npc_nesingwary_trapper", 25835)
 	// Checked-no-gate: zero HasUnitState hits in zone_borean_tundra.cpp — phase-machine arms stay ungated.
 	// npc_counselor_talbot (Borean Tundra, Last Rites quest chain) —
