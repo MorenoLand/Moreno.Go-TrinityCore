@@ -50,7 +50,8 @@
 --   cthun body (writers at cthun.cpp:429 PHASE_CTHUN_TRANSITION,
 --   :627/:671/:815 stomach/weak, :840 done), so a Lua-local phase
 --   simulation would drift from the real shared state;
---   (b) InterruptNonMeleeSpells — absent from the method list;
+--   (b) InterruptNonMeleeSpells — bridged (lua_creature_events.go,
+--   InterruptNonMeleeSpells method) but irrelevant without the gate;
 --   (c) SetTarget — bridged 2026-10-20 (creature:SetTarget), but the
 --   phase gate (a) still blocks the port. The cast core
 --   (random threat pick via GetAITargets + CastSpell 26134) IS
@@ -81,9 +82,10 @@
 -- Surrounding machinery, also unbridged (for the record, not
 -- wired): Reset (:210-:220) — its two aura clears port below on event
 -- 23; the SetVisible + FindNearestCreature(NPC_CTHUN_PORTAL) passive
--- legs stay out — FindNearestCreature
--- has no bridge (SetVisible IS bridged — creature:SetVisible — but the
--- arm rides the instance SetData leg); JustEngagedWith (:224-:228): the
+-- legs stay out — the arm rides the instance SetData leg
+-- (FindNearestCreature IS bridged, lua_creature_events.go:6268, and
+-- SetVisible IS bridged — creature:SetVisible — but neither leg can
+-- run without the instance phase write); JustEngagedWith (:224-:228): the
 -- DoZoneInCombat leg PORTS below (event 1 handler, 2026-10-23
 -- re-triage) — only the instance->SetData(DATA_CTHUN_PHASE,
 -- PHASE_EYE_GREEN_BEAM) leg stays out (no instance bridge);

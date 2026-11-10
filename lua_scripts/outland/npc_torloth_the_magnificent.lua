@@ -5,8 +5,13 @@
 -- Entry: 22076 (wowhead npc=22076/torloth-the-magnificent,
 -- verified 2026-11-07; "Torloth the Magnificent <The Crimson
 -- Sigil>", Shadowmoon Valley; no NPC_ constant in the C++ file).
--- Eluna creature events: 4 JustDied.
--- Ported arm (legs (a) + (b)):
+-- Eluna creature events: 4 JustDied, 23 Reset.
+-- Ported arms:
+-- - Reset (zone_shadowmoon_valley.cpp:772-779, event 23):
+--   AddUnitState(UNIT_STATE_ROOT) + SetFlag(UNIT_FIELD_FLAGS,
+--   UNIT_FLAG_NON_ATTACKABLE) + SetTarget(Empty); Initialize()'s
+--   GUID-latch/Timers clears have no Lua bearer (cinematic machine
+--   stays out).
 -- - JustDied (zone_shadowmoon_valley.cpp:875-893, event 4): nil
 --   killer returns; TYPEID_PLAYER (4) killer ->
 --   killer:GroupEventHappens(10781, creature); TYPEID_UNIT (3)
@@ -30,6 +35,23 @@ local QUEST_BATTLE_OF_THE_CRIMSON_WATCH = 10781
 
 local TYPEID_UNIT = 3
 local TYPEID_PLAYER = 4
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- UnitDefines.h:125
+local UNIT_STATE_ROOT = 1024 -- Unit.h:221
+
+-- C++ Reset (zone_shadowmoon_valley.cpp:772-779): Initialize() +
+-- AddUnitState(UNIT_STATE_ROOT) + SetFlag(UNIT_FIELD_FLAGS,
+-- UNIT_FLAG_NON_ATTACKABLE) + SetTarget(Empty). Initialize() only
+-- clears the cinematic machine's GUID latches + Timers flag, which
+-- have no Lua bearer (the TorlothAnim machine stays out); the three
+-- bridged legs port here (AddUnitState lua_creature_events.go:2291,
+-- ROOT bit sets the ScriptRooted gate).
+local function onReset(event, creature)
+    creature:AddUnitState(UNIT_STATE_ROOT)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    creature:SetTarget()
+end
 
 -- C++ JustDied leg (a): quest-10781 group credit via the killer
 -- (player) or the killer's owner (pet/guardian); leg (b) below
@@ -56,3 +78,4 @@ local function onDied(event, creature, killer)
 end
 
 RegisterCreatureEvent(ENTRY_TORLOTH, 4, onDied)
+RegisterCreatureEvent(ENTRY_TORLOTH, 23, onReset)

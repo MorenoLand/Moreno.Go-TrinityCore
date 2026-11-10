@@ -47,8 +47,15 @@
 -- MovePoint) stays out: AttackStop/SetReactState are bridged but the
 -- transition choreography (SetPhase, MovePoint, event-group cancel,
 -- spell interrupt) has no bearer, so a lone-leg port would fabricate
--- phase behavior. The advisors' DamageTaken fake-death latch has no
--- display/stand/flag/health bridges — unmodeled, see below).
+-- phase behavior. The advisors' DamageTaken fake-death latch stays out
+-- on its real blockers, not missing display/stand/flag/health bridges
+-- (SetStandState/SetHealth/SetFlag are all bridged): no
+-- ModifyAuraState / ClearComboPointHolders / RemoveAllAurasOnDeath
+-- bridges (zero Lua-method hits), the resurrection machine
+-- (SPELL_RESSURECTION SpellHit -> EVENT_DELAYED_RESSURECTION) rides
+-- the unported instance phase machine, and the JustDied(killer) ->
+-- Kael DoAction(ACTION_ACTIVE_ADVISOR) relay has no bearer (Lua ev4
+-- fires only on real death).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order); melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady. C++ DoCast
@@ -252,12 +259,9 @@ end)
 local kaelPreEncounter = {}
 
 -- C++ MoveInLineOfSight (boss_kaelthas.cpp:561): PHASE_NONE +
--- IsValidAttackTarget(who) + target within 30yd -> SetTarget
--- (the DoAction leg's ev38 dispatch is bridged but its sole consumer —
--- the START_ENCOUNTER arm, boss_kaelthas.cpp:485-496 — is the unported
--- phase machine, so it is latent; AddThreat is bridged
--- (lua_creature_events.go:2046); only SetInCombatWith has no bridge —
--- documented).
+-- IsValidAttackTarget(who) + target within 30yd -> DoAction (latent,
+-- phase machine unported) + SetInCombatWith (no bridge) +
+-- AddThreat(who, 0.0f) + SetTarget(who), in C++ order.
 RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
     local guid = creature:GetGUIDLow()
     if kaelPreEncounter[guid] == false then
@@ -269,6 +273,7 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 27, function(_, creature, unit)
             targetReach = unit:GetCombatReach()
         end
         if creature:GetDistance(unit) - creature:GetCombatReach() - targetReach < 30.0 then -- IsWithinDistInMap (Object.cpp:1238), reach-exact
+            creature:AddThreat(unit, 0)
             creature:SetTarget(unit)
             kaelPreEncounter[guid] = false
         end

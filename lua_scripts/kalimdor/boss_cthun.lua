@@ -65,6 +65,11 @@ local function onWhisper(creature, guid)
         return
     end
     if creature:IsInCombat() then
+        -- C++ cthunAI::UpdateAI (boss_cthun.cpp:596): unconditional
+        -- SetTarget(Empty) on every combat tick, before the phase
+        -- switch (so the STOMACH-case clear at :666 is subsumed);
+        -- 5s poll granularity here, kaelthas.lua:308 empty-clear form.
+        creature:SetTarget()
         per["whisper"] = CreateLuaEvent(function()
             onWhisper(creature, guid)
         end, 5000)
