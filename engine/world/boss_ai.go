@@ -16286,8 +16286,9 @@ func init() {
 	// <50% Knockaway (10101, DoCastVictim triggered -> GetVictim +
 	// CastSpell) and <25% W-Stomp (11876, self-cast) arms via a
 	// 1s health check (kalecgos precedent). The Knockaway threat-
-	// reset leg and the ActivateIronaya instance choreography have
-	// no bridges; the latches clear on combat end/reset.
+	// reset leg is ported (ModifyThreatByPercent(victim, -100)); the
+	// ActivateIronaya instance choreography has no bridge; the
+	// latches clear on combat end/reset.
 	// Entry C++-verified via instance_uldaman.cpp OnCreatureCreate
 	// (case 7228: // Ironaya).
 	RegisterLuaBoss("boss_ironaya", 7228)

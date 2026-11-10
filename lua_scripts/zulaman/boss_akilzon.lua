@@ -41,8 +41,9 @@
 -- is modeled as a direct timer cast; SetDisableGravity and speed-rate
 -- arms are skipped. The 44007 cloud-visual self-cast on the storm target
 -- is ported via player:CastSpell (2026-10-24 bridge).
--- The C++ EnterEvadeMode arms (storm target gone) have no bridge, so a
--- missing storm target is a no-op. No instance-script model — admission
+-- The C++ EnterEvadeMode arm (storm target gone, boss_akilzon.cpp:264-270)
+-- is ported via creature:EnterEvadeMode (bridge live 2026-11-08,
+-- lua_creature_events.go:5200). No instance-script model — admission
 -- only via the luaBossAI shim (a no-op BossAI slot; the SetBossState legs
 -- are ported below via creature:SetBossState, bridge live 2026-11-05). AddThreat for eagles is skipped. The commented-
 -- out static-disruption AOE visual arm in C++ is not modeled (dead code).
@@ -183,8 +184,7 @@ end
 
 -- C++ EVENT_ELECTRICAL_STORM (boss_akilzon.cpp:264-302): random alive
 -- player within 50 yd; nil target returns out of the case BEFORE the 60s
--- re-arm (EnterEvadeMode in C++ — no evade bridge, so the storm simply
--- stops). Target casts 44007 on self (ported 2026-10-24 via the
+-- re-arm (EnterEvadeMode in C++ — ported, see onElectricalStorm else leg). Target casts 44007 on self (ported 2026-10-24 via the
 -- player:CastSpell bridge, C++ order: 44007 before the storm cast),
 -- boss DoCast(target, 43648) non-triggered; then the cloud leg
 -- (boss_akilzon.cpp:283-294): me->SummonTrigger(x, y,
@@ -223,6 +223,13 @@ local function onElectricalStorm(creature, guid)
         schedule(timers, guid, "storm", 60000, function()
             onElectricalStorm(creature, guid)
         end)
+    else
+        -- C++ EVENT_ELECTRICAL_STORM (boss_akilzon.cpp:264-270): no
+        -- target -> EnterEvadeMode() + return, no re-arm. Bridged
+        -- (creature:EnterEvadeMode, lua_creature_events.go:5200) — it
+        -- fires On_Reset (23) then On_LeaveCombat (2), which cancel
+        -- the timers and write SetBossState NOT_STARTED.
+        creature:EnterEvadeMode()
     end
 end
 
@@ -297,9 +304,6 @@ local function akilzonReset(event, creature)
         creature:SetBossState(1, 0)
     end
     akilzonResetState(creature:GetGUIDLow())
-    -- C++ boss_akilzon::Reset (boss_akilzon.cpp:403-407): Initialize()
-    -- -> me->SetDisableGravity(true) (:406).
-    creature:SetDisableGravity(true)
 end
 
 RegisterCreatureEvent(ENTRY_AKILZON, 1, akilzonEnterCombat)
@@ -315,7 +319,7 @@ RegisterCreatureEvent(ENTRY_AKILZON, 23, akilzonReset)
 -- modeled as a direct timer cast on a random alive player every {5s,10s}.
 -- MoveInLineOfSight is suppressed in C++ (empty override) and Reset's
 -- SetDisableGravity ports via the creature:SetDisableGravity bridge
--- (akilzonReset); JustEngagedWith's DoZoneInCombat is ported below
+-- (eagleReset, ev23); JustEngagedWith's DoZoneInCombat is ported below
 -- (bridge live 2026-10-23).
 -- C++ npc_akilzon_eagle UpdateAI (boss_akilzon.cpp:439):
 -- SelectTarget(Random, 0) — playerOnly FALSE (2-arg form) — picks from
@@ -349,6 +353,9 @@ local function onEagleSwoop(creature, guid)
 end
 
 local function eagleEnterCombat(event, creature, target)
+    -- C++ npc_akilzon_eagleAI::JustEngagedWith (boss_akilzon.cpp:409-412):
+    -- DoZoneInCombat() only.
+    creature:DoZoneInCombat()
     local guid = creature:GetGUIDLow()
     cancelTimers(eagleTimers, guid)
     schedule(eagleTimers, guid, "swoop", math.random(5000, 10000), function()
@@ -365,6 +372,9 @@ local function eagleDied(event, creature, killer)
 end
 
 local function eagleReset(event, creature)
+    -- C++ npc_akilzon_eagleAI::Reset (boss_akilzon.cpp:403-407):
+    -- Initialize() + me->SetDisableGravity(true) (:406).
+    creature:SetDisableGravity(true)
     cancelTimers(eagleTimers, creature:GetGUIDLow())
 end
 
