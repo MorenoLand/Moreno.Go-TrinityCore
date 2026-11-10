@@ -64,10 +64,10 @@
 -- boss_talon_king_ikissAI::KilledUnit — TYPEID_PLAYER gate →
 -- Talk(SAY_SLAY 2) (event 3; razuvious player-gated precedent).
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
--- DOCUMENTED-ONLY (in this header; only entry 18473 registered):
--- spell_talon_king_ikiss_blink SpellScript (38194 → random
--- area-target teleport via SPELL_BLINK_TELEPORT 38203) — no
--- SpellScript bridge (instance_ulduar precedent).
+-- spell_talon_king_ikiss_blink SpellScript (38194) PORTED below
+-- (RegisterSpellEvent ev7 + ev5, 62042/39142 precedent): FilterTargets
+-- keeps one random area-enemy target; the hit unit casts
+-- SPELL_BLINK_TELEPORT 38203 on the caster, triggered.
 
 local ENTRY_TALON_KING_IKISS = 18473 -- DB-side; no NPC_ constant in sethekk_halls.h
 
@@ -78,6 +78,7 @@ local SAY_DEATH = 3 -- boss_talon_king_ikiss.cpp:39
 local EMOTE_ARCANE_EXPLOSION = 4 -- boss_talon_king_ikiss.cpp:40
 
 local SPELL_BLINK = 38194 -- boss_talon_king_ikiss.cpp:45
+local SPELL_BLINK_TELEPORT = 38203 -- boss_talon_king_ikiss.cpp:35
 local SPELL_MANA_SHIELD = 38151 -- boss_talon_king_ikiss.cpp:47
 local SPELL_ARCANE_BUBBLE = 9438 -- boss_talon_king_ikiss.cpp:48
 local SPELL_SLOW = 35032 -- boss_talon_king_ikiss.cpp:49
@@ -355,3 +356,41 @@ RegisterCreatureEvent(ENTRY_TALON_KING_IKISS, 4, ikissDied)
 RegisterCreatureEvent(ENTRY_TALON_KING_IKISS, 9, ikissDamageTaken)
 RegisterCreatureEvent(ENTRY_TALON_KING_IKISS, 23, ikissReset)
 RegisterCreatureEvent(ENTRY_TALON_KING_IKISS, 27, ikissMoveInLOS)
+
+-- C++ spell_talon_king_ikiss_blink::FilterTargets
+-- (boss_talon_king_ikiss.cpp:180-188): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY — keep one random target
+-- from the area-enemy list (C++ picks via
+-- SelectRandomContainerElement, clears, pushes the one pick; an
+-- empty list returns early). DORMANT until Spell.dbc ships the
+-- 38194 record.
+local function blinkFilter(event, spell, effectIndex, targets)
+    local list = targets:GetTargets()
+    if #list == 0 then
+        return
+    end
+    targets:Clear()
+    targets:Add(list[math.random(#list)])
+end
+
+RegisterSpellEvent(SPELL_BLINK, 7, blinkFilter)
+
+-- C++ spell_talon_king_ikiss_blink::HandleDummyHitTarget
+-- (boss_talon_king_ikiss.cpp:190-194): EFFECT_0 DUMMY
+-- OnEffectHitTarget — the hit unit casts SPELL_BLINK_TELEPORT
+-- (38203) on the caster, triggered. PreventHitDefaultEffect has
+-- no Lua twin; the DUMMY default is the Eluna arm and no Eluna
+-- script handles 38194 in-tree, so the delta is vacuous.
+-- DORMANT until Spell.dbc ships the 38194/38203 records.
+local function blinkHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, SPELL_BLINK_TELEPORT, true)
+end
+
+RegisterSpellEvent(SPELL_BLINK, 5, blinkHit)

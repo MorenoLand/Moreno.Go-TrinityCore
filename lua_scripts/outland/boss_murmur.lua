@@ -67,9 +67,9 @@
 -- spell_murmur_sonic_boom_effect (33666 damage = 80% of target max
 -- health — PORTED 2026-11-07 (tick 372) via the pre-damage OnHit
 -- dispatch in engine/world/spell_onhit.go),
--- spell_murmur_thundering_storm (25-100y target band) —
--- SpellScript — no SpellScript bridge (instance_ulduar
--- precedent) — documented-only, except the 33666 damage leg above.
+-- spell_murmur_thundering_storm (25-100y target band) PORTED
+-- below (RegisterSpellEvent ev7, 62042 precedent); the 33666
+-- damage leg is ported in engine/world/spell_onhit.go.
 
 local ENTRY_MURMUR = 18708 -- DB-side; no NPC_MURMUR in shadow_labyrinth.h
 
@@ -354,3 +354,33 @@ RegisterCreatureEvent(ENTRY_MURMUR, 1, murmurEnterCombat)
 RegisterCreatureEvent(ENTRY_MURMUR, 2, murmurLeaveCombat)
 RegisterCreatureEvent(ENTRY_MURMUR, 4, murmurDied)
 RegisterCreatureEvent(ENTRY_MURMUR, 23, murmurReset)
+
+-- C++ spell_murmur_thundering_storm::FilterTarget
+-- (boss_murmur.cpp:241-246): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY — drop targets closer than 25yd or
+-- farther than 100yd from the caster (ThunderingStormCheck:
+-- distSq < 25^2 or > 100^2 removed; the 25-100yd ring is kept).
+-- GetDistance2d is the 2D twin of GetExactDist2dSq. An emptied
+-- list leaves the cast to resolve with no script-effect hit in
+-- Go (no FinishCast bridge — 62042 delta). DORMANT until
+-- Spell.dbc ships the 39365 record.
+local function thunderingStormFilter(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local x, y = caster:GetX(), caster:GetY()
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        local d = target:GetDistance2d(x, y)
+        if d >= 25.0 and d <= 100.0 then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_THUNDERING_STORM, 7, thunderingStormFilter)
