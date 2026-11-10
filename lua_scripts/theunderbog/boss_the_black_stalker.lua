@@ -29,6 +29,8 @@
 -- override is empty) + 1s scheduler pump (a port of UpdateAI
 -- — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump). Pump:
+-- evade check 60-yd home distance -> EnterEvadeMode + return
+-- (PORTED — GetHomePosition + EnterEvadeMode bridges live);
 -- levitate 31704: 12s init then 12000+rand32()%3000 — target
 -- = random alive threat-list unit with the threat head skipped
 -- (C++ SelectTarget(Random, 1), offset-before-filter,
@@ -64,11 +66,10 @@
 -- bridge — the LevitatedTarget followup machine is PORTED
 -- below (GUID->player scan + HasAura gate + SUSPENSION leg;
 -- only the MAGNETIC_PULL 31705 player self-cast leg stays out
--- — no player self-cast bridge); no
--- home-position bridge exists (lua_creature_events.go) but
--- EnterEvadeMode has no bridge — the check_Timer 60-yd evade
--- arm unmodeled (timer bookkeeping exact; the re-arm from
--- 5000 to 1000 is C++-exact); the JustSummoned AttackStart
+-- — no player self-cast bridge); the check_Timer 60-yd evade
+-- arm IS ported (GetHomePosition + EnterEvadeMode bridges
+-- live, lua_creature_events.go:6482/:5200; the stale "no bridge"
+-- claims are retracted); the JustSummoned AttackStart
 -- relay IS ported (above) — only the SummonList Striders
 -- tracking/DespawnAll arms stay out (no creature-by-GUID
 -- bridge; Go spell-duration temp summons cover the death/
@@ -223,12 +224,23 @@ local function bossTick(creature, guid)
         return
     end
 
-    -- Evade check: 5s init then 1s — timer bookkeeping only:
-    -- the fire arm (60-yd home-position distance check ->
-    -- EnterEvadeMode) has no EnterEvadeMode bridge; re-arm
-    -- 1000 regardless (C++-exact). GetHomePosition IS bridged
-    -- (lua_creature_events.go) — the evade call is the true blocker.
+    -- Evade check (boss_the_black_stalker.cpp:125-138): 5s init
+    -- then 1s — home position via creature:GetHomePosition()
+    -- (lua_creature_events.go:6482, x/y/z/o); beyond 60 yd 3D
+    -- (C++ IsWithinDist3d, pure Euclidean) -> EnterEvadeMode()
+    -- (lua_creature_events.go:5200; fires ev23 then ev2, the
+    -- C++ EnterEvadeMode twin, moroes precedent) + return,
+    -- skipping the rest of the tick (C++-exact); re-arm 1000
+    -- regardless.
     if st.check <= 1000 then
+        local hx, hy, hz = creature:GetHomePosition()
+        local dx = creature:GetX() - hx
+        local dy = creature:GetY() - hy
+        local dz = creature:GetZ() - hz
+        if math.sqrt(dx * dx + dy * dy + dz * dz) > 60 then
+            creature:EnterEvadeMode()
+            return
+        end
         st.check = 1000
     else
         st.check = st.check - 1000
