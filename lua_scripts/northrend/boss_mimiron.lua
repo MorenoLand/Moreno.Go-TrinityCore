@@ -79,15 +79,16 @@
 --     (vehicle-base SetFacingTo / MOUNT / MovePoint legs; the
 --     instance-GUID MKII ref itself is live — INTRO_2/3 use it),
 --     worldtrigger legs (EVENT_SUMMON_FLAMES, elevator
---     knockback), aerial EnterEvadeMode on Reset (no bridge; event 25 unused),
---     Reset SEAT_3 cast on MKII via instance GUID.
+--     knockback), aerial EnterEvadeMode on Reset (bridged,
+--     lua_creature_events.go:5188, but runs the base evade, not the ACU
+--     override — summons.DespawnAll unbridged, so it stays out).
 --   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base --
 --     out (no GetVehicleBase binding); button GO flag leg -- out (no GO
 --     bridge); EVENT_SUMMON_FLAMES -- out (worldtrigger via instance GUID).
 --     (INTRO_2/INTRO_3 are ported — see the INTRO_1 bullet — via the
 --     instance-GUID MKII twin, not the vehicle base.)
 --   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode,
---     elevator/button GO legs, SEAT_3 cast on MKII via instance GUID -- all out.
+--     elevator/button GO legs -- out (SEAT_3 on MKII is PORTED below).
 --   Bomb/rocket/mine SpellHitTarget legs live in the npc files, not
 --     here: npc_mimiron_bomb_bot.lua / npc_mimiron_rocket_visual.lua /
 --     npc_mimiron_proximity_mine.lua register ev15 (the frost-bomb has
@@ -135,6 +136,7 @@ local SPELL_DESPAWN_ASSAULT_BOTS = 64463
 local SPELL_TELEPORT_VISUAL = 41232
 local SPELL_SEAT_1 = 52391
 local SPELL_SEAT_2 = 63313
+local SPELL_SEAT_3 = 63314 -- boss_mimiron.cpp:75
 local SPELL_SEAT_5 = 63316
 local SPELL_SEAT_6 = 63344
 local SPELL_SEAT_7 = 63345
@@ -261,7 +263,7 @@ end
 -- C++ Reset (:456), creature-local legs in C++ order: DONE
 -- early-return gate (:457-458), _Reset() SetBossState NOT_STARTED,
 -- then RemoveFlag NON_ATTACKABLE, _fireFighter = false, then self-cast
--- WELD. _Reset clears the event machine, so Lua timers are cancelled
+-- WELD + SEAT_3 on the MKII instance GUID. _Reset clears the event machine, so Lua timers are cancelled
 -- here too. The VX-001 / ACU refs are kept (C++ instance GUIDs persist
 -- across Reset); the latch is what Reset clears.
 local function mimironReset(event, creature)
@@ -281,6 +283,11 @@ local function mimironReset(event, creature)
     end
     stateFor(creature:GetGUIDLow()).fireFighter = false
     creature:CastSpell(creature, SPELL_WELD)
+    -- C++ Reset (:483-484): SEAT_3 on the MKII instance GUID.
+    local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if mkii then
+        creature:CastSpell(mkii, SPELL_SEAT_3)
+    end
 end
 
 -- C++ JustEngagedWith (:424), creature-local legs in C++ order:

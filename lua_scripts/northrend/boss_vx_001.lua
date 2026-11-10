@@ -43,10 +43,11 @@
 --   HandleDummy casting 63681; 63681's ev7 range-preferring filter
 --   + ev5 HandleScript casting 63036 + SetDisplayId 11686) — the
 --   63041 damage leg lands in npc_mimiron_rocket_visual.lua.
---   EVENT_RELOAD (10s) is NOT scheduled: its legs are display-only
---   (GetVehicleKit()->GetPassenger + SetDisplayId, both bridged —
---   the passenger pick is used by the FilterTargets port above),
---   no combat effect.
+--   EVENT_RELOAD (10s) is PORTED (reloadTick below): seats 5-6
+--   passengers reset to native display via the bridged GetVehicleKit
+--   / GetPassenger / GetNativeDisplayId / SetDisplayId chain
+--   (lua_creature_events.go:3273, lua_vehicle.go:74,
+--   lua_creature_events.go:4705); display-only, no combat effect.
 --   HAND_PULSE (:1077-1079): random alive player within 120yd; cast
 --   RAND(SPELL_HAND_PULSE_LEFT 64348, SPELL_HAND_PULSE_RIGHT 64352);
 --   re-arm {1500ms,3s}.
@@ -80,7 +81,8 @@
 --   ticks and RAPID_BURST_RIGHT 64019 on even ticks, triggered by the
 --   aura effect. No PreventDefaultAction in C++, so no return here.
 --   The AfterRemove arm (:2207-2210, target TempSummon DespawnOrUnsummon)
---   stays out: no aura apply/remove hook exists on the Lua surface.
+--   is PORTED (rapidBurstRemove below, RegisterAuraEvent ev3 —
+--   runtime.go:510, lua_aura.go:737; halion ev3 precedent).
 --
 -- DamageTaken (:943-975) PORTED tick 561 below: the 1-HP latch, the
 -- PHASE_VX_001 branch (HALF_HEAL / TORSO_DISABLED / DO_ACTIVATE_AERIAL
@@ -292,11 +294,15 @@ local function rapidBurstPump(creature, guid)
     end)
 end
 
+-- Forward declaration (tharon_ja idiom): rocketStrikeTick's closure
+-- schedules reloadTick, defined below; a plain assignment there binds
+-- this slot (never re-`local function`).
+local reloadTick
+
 -- C++ EVENT_ROCKET_STRIKE arm (:1066-1069): DoCastAOE phase-dependent
 -- (SINGLE 64402 in PHASE_VX_001, BOTH 65034 in PHASE_VOL7RON);
--- re-arm {20s,25s}. EVENT_RELOAD (10s) is NOT scheduled — its legs
--- read the vehicle kit (GetVehicleKit()->GetPassenger + SetDisplayId),
--- display-only, no bridge.
+-- re-arm {20s,25s}; EVENT_RELOAD (10s) is PORTED below (reloadTick):
+-- seats 5-6 passengers reset to native display (C++ :1071-1075).
 local function rocketStrikeTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "rocketStrike", 500, function()
@@ -310,9 +316,37 @@ local function rocketStrikeTick(creature, guid)
         spell = SPELL_ROCKET_STRIKE_BOTH
     end
     creature:CastSpell(creature, spell)
+    schedule(guid, "reload", 10000, function()
+        reloadTick(creature, guid)
+    end)
     schedule(guid, "rocketStrike", {20000, 25000}, function()
         rocketStrikeTick(creature, guid)
     end)
+end
+
+-- C++ EVENT_RELOAD arm (:1071-1075): seats 5-6 (ROCKET_SEAT_LEFT/RIGHT)
+-- passengers reset to their native display. One-shot, scheduled 10s
+-- after every rocket strike; replace-by-key matches C++ ScheduleEvent
+-- (no overlap in practice: reload fires 10s after a strike, the next
+-- strike is 20-25s out). IsCasting defer like the other event-loop
+-- arms (C++ pre-loop gate); delayAllTimers delays it under
+-- spinning-up, matching C++ DelayEvents.
+reloadTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "reload", 500, function()
+            reloadTick(creature, guid)
+        end)
+        return
+    end
+    local kit = creature:GetVehicleKit()
+    if kit then
+        for seat = ROCKET_SEAT_LEFT, ROCKET_SEAT_RIGHT do
+            local rocket = kit:GetPassenger(seat)
+            if rocket then
+                rocket:SetDisplayId(rocket:GetNativeDisplayId())
+            end
+        end
+    end
 end
 
 -- C++ spell_mimiron_rocket_strike::FilterTargets
@@ -730,7 +764,19 @@ RegisterCreatureEvent(NPC_VX_001, 3, vx001TargetDied)
 RegisterCreatureEvent(NPC_VX_001, 4, vx001JustDied)
 RegisterCreatureEvent(NPC_VX_001, 19, vx001JustSummoned)
 RegisterCreatureEvent(NPC_VX_001, 14, vx001SpellHit)
+-- C++ spell_mimiron_rapid_burst_AuraScript::AfterRemove (:2207-2210):
+-- the aura target, when a TempSummon, despawns on remove. 63382 is
+-- cast only on burst targets (SpellHit :1038-1039, NPC_BURST_TARGET
+-- 34211, summoned via 64840), so the IsSummon gate is the exact
+-- ToTempSummon twin (lua_creature_events.go:922).
+local function rapidBurstRemove(event, aura, target)
+    if target ~= nil and target:GetObjectType() == "Creature" and target:IsSummon() then
+        target:Despawn()
+    end
+end
+
 RegisterAuraEvent(SPELL_RAPID_BURST, 1, rapidBurstTick)
+RegisterAuraEvent(SPELL_RAPID_BURST, 3, rapidBurstRemove)
 RegisterSpellEvent(SPELL_ROCKET_STRIKE_SINGLE, 7, rocketStrikeFilterTargets)
 RegisterSpellEvent(SPELL_ROCKET_STRIKE_BOTH, 7, rocketStrikeFilterTargets)
 RegisterSpellEvent(SPELL_ROCKET_STRIKE_SINGLE, 5, rocketStrikeDummy)

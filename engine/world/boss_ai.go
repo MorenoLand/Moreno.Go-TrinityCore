@@ -22432,44 +22432,52 @@ func init() {
 	// one-shot spread cast (4s, AOE 64562) + 1s IN_PROGRESS despawn
 	// poll (GetBossState bridge live). Entries 34363
 	// "Flames (Initial)" (spell 64563 summon link) + 34121
-	// "Flames (Spread)" (spell 64564 summon link), wowhead-only;
+	// "Flames (Spread)" (spell 64564 summon link), ulduar.h:128-129;
 	// both share the AI (the spread chain needs every patch to
 	// cast 64562).
 	RegisterLuaBoss("npc_mimiron_flames", 34363)
 	RegisterLuaBoss("npc_mimiron_flames", 34121)
 	// Checked-no-gate: plain event loop, zero CASTING hits — 4s spread one-shot stays ungated.
 	// boss_vx_001 (Ulduar, Mimiron VX-001 phase) — ported arms
-	// in lua_scripts/northrend/boss_vx_001.lua: JustSummoned burst-target
-	// leg + SpellHit rapid-burst leg (DoAction/timer/DamageTaken arms stay out).
+	// in lua_scripts/northrend/boss_vx_001.lua: DoAction/timer/
+	// DamageTaken/KilledUnit/MovementInform/SpellHit legs, rapid-burst
+	// aura tick + AfterRemove despawn, rocket-strike chain + 10s reload
+	// seat display reset.
 	RegisterLuaBoss("boss_vx_001", 33651)
-	// Checked-no-gate for ported arms: pre-loop + in-loop CASTING gates cover the unported event machine only (JustSummoned/SpellHit legs are separate hooks).
+	// Cast-state: pre-loop + in-loop CASTING gates; all pumps defer 500ms on IsCasting.
 	// boss_leviathan_mk_ii (Ulduar, Mimiron phase 1) — ported arm
 	// in lua_scripts/northrend/boss_leviathan_mk_ii.lua: Reset
 	// (NON_ATTACKABLE|NOT_SELECTABLE + react passive + self-cast
 	// FREEZE_ANIM 16245). Combat timers, DamageTaken lethal clamp,
-	// KilledUnit/MovementInform and the boss_mimiron / aerial-command
-	// / computer / fire-bot arms stay out (DoAction phase machine,
-	// vehicle kit, MovePoint; instance boss-state legs ported tick 259).
+	// KilledUnit/MovementInform, DoAction phase machine and the
+	// boss_mimiron / aerial-command / computer / fire-bot arms ported;
+	// vehicle kit / MovePoint legs stay out.
 	RegisterLuaBoss("boss_leviathan_mk_ii", 33432)
-	// Checked-no-gate for ported arms: pre-loop + in-loop CASTING gates cover the unported event machine only (Reset arm is not an UpdateAI event).
+	// Cast-state: pre-loop + in-loop CASTING gates; all pumps defer 500ms on IsCasting.
 	// boss_mimiron (Ulduar, phase-machine controller) — ported arms in
 	// lua_scripts/northrend/boss_mimiron.lua: spawn react-passive, Reset
 	// flag/WELD legs + DONE gate + NOT_STARTED + _fireFighter clear,
 	// engage flag/WELD legs + IN_PROGRESS + INTRO_1 Talk, JustDied DONE +
 	// OUTTRO chain (7s/3s/11s) + ExitVehicle-at-MoveJump-destination +
 	// OUTTRO_2 cache summon, DoAction receiver (HARD_MODE latch +
-	// DoZoneInCombat; VX001/AERIAL/VOL7RON activation chains with the
-	// bridgeable Talk/summon/SEAT/DoAction legs, dormant until the
-	// component-AI senders land). Vehicle-base/MovePoint/GO/MKII legs
-	// stay documented-only.
+	// DoZoneInCombat; VX001/AERIAL/VOL7RON activation chains with Talk/
+	// summon/SEAT/DoAction legs — the component-AI senders are live).
+	// Reset SEAT_3 on the MKII instance GUID ported. Vehicle-base/
+	// MovePoint/GO legs stay documented-only.
 	RegisterLuaBoss("boss_mimiron", 33350)
+	// Cast-state: C++ pre-loop + in-loop CASTING gates; Lua has zero
+	// IsCasting defers — every Mimiron cast in the one-shot chains is
+	// instant, so the gate can never engage (accepted lowering).
 	// boss_aerial_command_unit (Ulduar, Mimiron phase 3) — ported arms in
 	// lua_scripts/northrend/boss_aerial_command_unit.lua: spawn
-	// react-passive/gravity legs + DamageTaken lethal clamp legs.
-	// DoAction arms, UpdateAI summon timers, plasma-ball attack, phase
-	// branches, EnterEvadeMode, JustSummoned, KilledUnit, MovementInform
-	// stay documented-only (see file header).
+	// react-passive/gravity legs + DamageTaken lethal clamp legs,
+	// DoAction arms, UpdateAI summon timers, phase branches,
+	// JustSummoned, KilledUnit, MovementInform, magnetic-core aura
+	// legs. Plasma-ball attack, EnterEvadeMode, SetImmuneToPC/
+	// SetAnimationTier stay out (see file header).
 	RegisterLuaBoss("boss_aerial_command_unit", 33670)
+	// Cast-state: C++ pre-loop + in-loop CASTING gates; all four summon
+	// pumps defer 500ms on IsCasting.
 	// npc_aeranas (Hellfire Peninsula, Avruu's Orb summon) — ported
 	// arms in lua_scripts/outland/npc_aeranas.lua: Reset faction/
 	// questgiver/Talk + 8s monster-faction timer, combat shock/

@@ -510,6 +510,12 @@ local function magneticCoreApply(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
     end
+    -- C++ OnApply is EFFECT_1 only: the core itself carries only
+    -- EFFECT_0, so the effect-blind Go ev2 fire must not run the leg
+    -- on it; the ACU is the EFFECT_1 target.
+    if target:GetEntry() ~= NPC_AERIAL_COMMAND_UNIT then
+        return
+    end
     target:DoAction(DO_DISABLE_AERIAL)
     target:CastSpell(target, SPELL_MAGNETIC_CORE_VISUAL, true)
 end
@@ -522,15 +528,19 @@ end
 -- gate) and Despawn() on a summon is the DespawnOrUnsummon twin
 -- (lua_creature_events.go:3061). The Go ev3 hook fires once per
 -- removal (not per effect), so both C++ AfterEffectRemove arms share
--- this one fire; for the ACU (not a summon) the despawn leg no-ops,
--- matching C++.
+-- this one fire — but the ACU IS a TempSummon (summoned
+-- TEMPSUMMON_MANUAL_DESPAWN, boss_mimiron.cpp:579), so the despawn
+-- leg must be gated off the ACU: the aura on the ACU carries only
+-- EFFECT_1, and only the core itself (the EFFECT_0 target) despawns
+-- on remove. Without the gate the first 64436 removal despawns the
+-- phase-3 boss mid-fight.
 local function magneticCoreRemove(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
     end
     target:DoAction(DO_ENABLE_AERIAL)
     target:RemoveAura(SPELL_MAGNETIC_CORE_VISUAL)
-    if target:IsSummon() then
+    if target:GetEntry() ~= NPC_AERIAL_COMMAND_UNIT and target:IsSummon() then
         target:Despawn()
     end
 end

@@ -1,8 +1,7 @@
 -- Flames (Ulduar, Mimiron hard-mode fire) — Lua port of
 -- npc_mimiron_flamesAI in
 -- src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp (lines 1516-1561).
--- Entries (wowhead, no C++ NPC_ constant exists for these adds — the
--- cthun/telestra wowhead-only precedent, never guessed): 34363
+-- Entries (ulduar.h:128-129: NPC_FLAME 34363, NPC_FLAME_SPREAD 34121):
 -- "Flames (Initial)" (summoned by spell 64563, the C++
 -- SPELL_SUMMON_FLAMES_INITIAL) and 34121 "Flames (Spread)"
 -- (summoned by spell 64564, the C++ SPELL_SUMMON_FLAMES_SPREAD).
