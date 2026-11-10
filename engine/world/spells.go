@@ -16162,6 +16162,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 60587 && len(hitTargets) > 0 {
 						s.fatalStrikeDummyEffect(effCtx)
 					}
+					// spell_dk_corpse_explosion (spell_dk.cpp:647-745):
+					// the EFFECT_0/1 DUMMY OnEffectHitTarget arms. Fires
+					// once per effect (C++ fires per hit target; the
+					// per-effect target split rides the helper:
+					// EFFECT_0 takes the explicit target, EFFECT_1 one
+					// random area corpse), ahead of the pet-aura/Eluna
+					// legs like the fatal-strike arm above.
+					if spellID == 49158 || spellID == 51325 || spellID == 51326 || spellID == 51327 || spellID == 51328 {
+						s.corpseExplosionDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, explicitAreaJoin)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -36541,6 +36551,22 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect) (du
 			amount += shieldBonus
 		}
 	}
+	// spell_dk_anti_magic_zone::CalculateAmount (spell_dk.cpp:396-410):
+	// the pool is the Anti-Magic Shell talent (51052) effect-0
+	// CalcValue plus twice the caster's total attack power — the script
+	// hook replaces the default amount (and its spell-power bonus
+	// above), it does not add to it. The npcbot attack-power leg has
+	// no Go model. Only overrides when the talent record exists
+	// (DORMANT until Spell.dbc ships 50461/51052).
+	if spell.ID == 50461 && eff.Aura == SpellAuraSchoolAbsorb && s.server != nil && s.server.Data != nil {
+		if talent, found, err := s.server.Data.Spell(51052); err == nil && found && len(talent.Effects) > 0 {
+			pool := talent.Effects[0].CalcValueForLevel(talent, paramsCasterLevel)
+			pool += int32(2 * s.totalAttackPowerValue(false))
+			if pool > 0 {
+				amount = uint32(pool)
+			}
+		}
+	}
 	return durationMs, periodMs, amount
 }
 
@@ -51258,6 +51284,120 @@ func (s *session) fatalStrikeDummyEffect(ctx context.Context) {
 		return
 	}
 	s.castSpellDirect(ctx, 60881, wyrm.GUID)
+}
+
+// corpseExplosionValidTarget is CorpseExplosionCheck
+// (spell_dk.cpp:622-645): a dead unit, or (allowGhoul) the caster's own
+// living ghoul (entry 26125), that is neither mechanical (creature type 9)
+// nor elemental (type 4) and whose display is its native display. The C++
+// type-mask leg is a single-type test, so it reads as type != 4 && != 9;
+// players are never mechanical/elemental and pass the type leg, and a
+// ghost player counts as dead (deathState CORPSE; Go ghosts carry Health 1).
+func (s *session) corpseExplosionValidTarget(guid uint64, allowGhoul bool) bool {
+	if s == nil || s.player == nil || s.server == nil || guid == 0 {
+		return false
+	}
+	if tm := s.findCreatureMotion(guid); tm != nil {
+		deadOrGhoul := tm.Health == 0 || (allowGhoul && tm.Entry == 26125 && tm.OwnerGUID == s.playerGUID)
+		return deadOrGhoul && tm.CreatureType != 4 && tm.CreatureType != 9 && tm.DisplayID == tm.NativeDisplayID
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return ts.isDeadOrGhost() && playerLuaDisplayID(ts, ts.player) == playerLuaNativeDisplayID(ts, ts.player)
+	}
+	return false
+}
+
+// corpseExplosionDetonate is HandleCorpseExplosion (spell_dk.cpp:699-728)
+// for one hit unit: a living ghoul casts Ghoul Explode (47496) on itself;
+// a corpse takes the damage leg (HandleDamage), the triggered explosion
+// (43999) and the visual (51270).
+func (s *session) corpseExplosionDetonate(ctx context.Context, spell wotlk.Spell, casterLevel uint32, targetGUID uint64) {
+	alive := false
+	if tm := s.findCreatureMotion(targetGUID); tm != nil {
+		alive = tm.Health > 0
+	} else if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		alive = !ts.isDeadOrGhost()
+	} else {
+		return
+	}
+	if alive {
+		// Living ghoul as a target (spell_dk.cpp:711-716): the ghoul casts
+		// 47496 on itself, non-triggered in C++; castSpellDirect is the
+		// triggered funnel, so the cast rides triggered here. The 47496
+		// Suicide leg (43999 + 51270, spell_dk.cpp:1200-1204) stays out:
+		// 47496's own script is unported, and replicating it here would
+		// double-fire if it ever ports (its ev5 fires through this same
+		// triggered funnel).
+		s.castSpellDirect(ctx, 47496, targetGUID)
+		return
+	}
+	// HandleDamage (spell_dk.cpp:694-708): both effect legs cast the
+	// EFFECT_1 CalcValue spell with BP0 = the EFFECT_0 value — the eff0
+	// leg reads Effects[1].CalcValue() as the spell and GetEffectValue()
+	// (eff0) as BP0; the eff1 leg reads GetEffectValue() (eff1) as the
+	// spell and CalculateDamage(EFFECT_0) as BP0. Same spell, same BP0.
+	damageSpell := int32(0)
+	bp0 := int32(0)
+	if len(spell.Effects) > 1 {
+		damageSpell = spell.Effects[1].CalcValueForLevel(spell, casterLevel)
+		bp0 = spell.Effects[0].CalcValueForLevel(spell, casterLevel)
+	}
+	if damageSpell > 0 {
+		if bp0 < 0 {
+			bp0 = 0
+		}
+		s.castSpellDirectWithBasePoint(ctx, uint32(damageSpell), targetGUID, uint32(bp0))
+	}
+	// Corpse Explosion (Suicide): the corpse casts 43999 triggered on
+	// itself, and the caster casts 51270 triggered on it. Go casts both
+	// as the player with the corpse as target (the 60881 precedent); the
+	// effect lands on the corpse either way.
+	s.castSpellDirect(ctx, 43999, targetGUID)
+	s.castSpellDirect(ctx, 51270, targetGUID)
+}
+
+// corpseExplosionDummyEffect is spell_dk_corpse_explosion
+// (spell_dk.cpp:647-745). A Lua ev5 port would never fire: the player path
+// has no OnEffectHitTarget site on the normal cast path (finishSpellCast;
+// ev5 fires only in castSpellDirectWithOverrides and on the creature path),
+// so this is a Go case in the finishSpellCast dummy leg (the 60587
+// fatalStrikeDummyEffect precedent). DORMANT until Spell.dbc ships the
+// 49158/51325-51328 records.
+func (s *session) corpseExplosionDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64, explicitTarget uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	if effectIndex == 0 {
+		// CheckTarget (spell_dk.cpp:663-670): the explicit target is the
+		// EFFECT_0 hit target only when it passes the check (dead corpse
+		// or own ghoul); otherwise EFFECT_0 hits nothing.
+		if explicitTarget == 0 || !s.corpseExplosionValidTarget(explicitTarget, true) {
+			return
+		}
+		s.corpseExplosionDetonate(ctx, spell, casterLevel, explicitTarget)
+		return
+	}
+	if effectIndex != 1 {
+		return
+	}
+	// CheckTargets (spell_dk.cpp:674-692): a valid explicit target clears
+	// the area list, so EFFECT_1 hits nothing; otherwise one random valid
+	// corpse from the area list explodes. The empty-list FinishCast
+	// (SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW) has no bridge — the cast
+	// simply does nothing.
+	if explicitTarget != 0 && s.corpseExplosionValidTarget(explicitTarget, true) {
+		return
+	}
+	valid := make([]uint64, 0, len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid != 0 && s.corpseExplosionValidTarget(guid, false) {
+			valid = append(valid, guid)
+		}
+	}
+	if len(valid) == 0 {
+		return
+	}
+	s.corpseExplosionDetonate(ctx, spell, casterLevel, valid[rand.IntN(len(valid))])
 }
 
 // Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the
