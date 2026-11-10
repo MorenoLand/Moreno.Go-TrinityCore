@@ -50,6 +50,40 @@
 --   spell ID lives in DB spell_script_names, nowhere in the file.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
 --   needs DealDamage; spell_dk_raise_ally needs ghoul AI push/pop.
+-- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
+--   path has no OnEffectHitTarget site on the normal cast path, so a
+--   RegisterSpellEvent ev5 handler would never fire on a client cast):
+--   spell_dk_corpse_explosion (49158/51325-51328, spell_dk.cpp:647-745):
+--   Go case in the finishSpellCast dummy leg (60587 precedent) —
+--   EFFECT_0 takes the explicit target when it passes
+--   CorpseExplosionCheck (dead corpse or own ghoul 26125, not
+--   mechanical/elemental, display == native), EFFECT_1 explodes one
+--   random valid corpse from the area list when no valid explicit
+--   target exists; damage leg casts the EFFECT_1 CalcValue spell
+--   with BP0 = EFFECT_0 value, then 43999 + 51270 triggered. Deltas:
+--   empty-list FinishCast has no bridge (cast does nothing); the
+--   living-ghoul leg casts 47496 triggered where C++ casts plain,
+--   and its Suicide leg (43999 + 51270) stays out — replicating it
+--   would double-fire if 47496's script ever ports.
+-- ALREADY PORTED (verified in-house this tick, NOT re-ported — the
+--   2026-11-10 census rows for these two are stale, its matcher
+--   misses Go cases in spells.go/procs.go):
+--   spell_dk_dancing_rune_weapon (49028, spell_dk.cpp:747-807):
+--   Go twin in procs.go (dbd71fab) — the proc loop finds the DRW
+--   (entry 27893, owner == caster) by motion-map scan and mirrors
+--   half the proc-event damage onto its victim with the damage log
+--   + direct damage, using the proc spell's id/school from the Go
+--   proc event (exactly the three things the Lua ev6 args lack:
+--   no controlled-unit enumeration, no proc spell id/school, no
+--   damage-log bridge — the Lua stay-out analysis still holds, the
+--   Go twin is the only leg). DORMANT until Spell.dbc ships the
+--   49028 proc entry.
+--   spell_dk_death_gate (52751, spell_dk.cpp:909-948): pre-existing
+--   Go case in handleEffectScriptEffect — the hit unit self-casts
+--   the EFFECT_0 value (the teleport spell); CheckClass stays out
+--   (no OnCheckCast bridge); the player leg rides the triggered
+--   funnel where C++ casts plain (documented delta). DORMANT until
+--   Spell.dbc ships 52751.
 --   spell_dk_dancing_rune_weapon (49028, 2026-11-10): Lua STAY-OUT,
 --   PORTED in Go (procs.go procAuraTriggerLoopFiltered, sibling tick):
 --   the OnEffectProc arm mirrors half the triggering spell's damage
@@ -67,6 +101,21 @@
 --   precedent) and the OnCheckCast class gate stays out (no check-cast
 --   bridge; DK-gated by learning).
 --   spell_dk_blood_boil (48721): PORTED below (2026-11-10).
+--   spell_dk_advantage_t10_4p (70656, 2026-11-10): PORTED in Go
+--   (procs.go advantageT10ProcAllowed): DoCheckProc gate only — DK
+--   player actor with all runes on cooldown; the 70657 trigger is
+--   DBC-driven. No Lua ev6 twin: no rune-cooldown bridge in Lua.
+--   spell_dk_anti_magic_shell_raid (50462, 2026-11-10): PORTED in Go
+--   (absorption.go scriptAbsorbHit): per-hit absorb is pct of damage,
+--   pool unlimited (-1 in C++), never consumed. No Lua absorb hook.
+--   spell_dk_anti_magic_zone (50461, 2026-11-10): PORTED in Go
+--   (absorption.go scriptAbsorbHit + spells.go auraEffectParams):
+--   per-hit absorb pct of damage, pool = 51052 talent eff0 + 2x AP.
+--   spell_dk_blood_gorged (50453, 2026-11-10): PORTED in Go
+--   (boss_ai.go creature proc loop): bloodworm casts 50454 on its
+--   owner, BP0 = 150% of triggering damage; owner-missing gate is
+--   the DoCheckProc leg. No Lua handler registered (GetOwner +
+--   CastCustomSpell exist, so a future ev6 handler would veto first).
 
 local SPELL_DK_BLOOD_PRESENCE = 48266
 local SPELL_DK_FROST_PRESENCE = 48263

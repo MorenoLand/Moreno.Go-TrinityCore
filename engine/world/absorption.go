@@ -392,6 +392,60 @@ func (s *Server) tickCasterAbsorbIgnorePctForSpell(casterSess *session, casterGU
 	return s.creatureAbsorbIgnorePctForSpell(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: casterGUID}, schoolMask, spellID)
 }
 
+// scriptAbsorbPct returns the script absorb percent for a
+// SPELL_AURA_SCHOOL_ABSORB aura whose C++ script overrides the per-hit
+// absorb with CalculatePct(damage, pct): 50462 Anti-Magic Shell (raid)
+// and 50461 Anti-Magic Zone (spell_dk.cpp:253-301, 366-434), where pct is
+// the aura spell's own effect-0 CalcValue at the caster's level. A zero
+// or unreadable pct falls through to the generic pool leg.
+func (s *Server) scriptAbsorbPct(spellID uint32, casterLevel uint8) (uint32, bool) {
+	if s == nil || s.Data == nil {
+		return 0, false
+	}
+	switch spellID {
+	case 50462, 50461:
+	default:
+		return 0, false
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found || len(spell.Effects) == 0 {
+		return 0, false
+	}
+	pct := spell.Effects[0].CalcValueForLevel(spell, uint32(casterLevel))
+	if pct <= 0 {
+		return 0, false
+	}
+	return uint32(pct), true
+}
+
+// scriptAbsorbHit applies a script-override school-absorb hit: the
+// per-hit absorb is CalculatePct(remainingDamage, pct), not the pool.
+// 50462's pool is unlimited (-1 in C++), so the amount is never
+// consumed; 50461's pool is finite (talent+AP CalculateAmount, see
+// auraEffectParams), so the amount is consumed and the depleted flag
+// reports exhaustion for the caller's removal pass.
+func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32) (uint32, bool, bool) {
+	if aura == nil || remainingDamage == 0 {
+		return 0, false, false
+	}
+	pct, ok := s.scriptAbsorbPct(aura.SpellID, aura.CasterLevel)
+	if !ok {
+		return 0, false, false
+	}
+	absorbThis := uint32(uint64(remainingDamage) * uint64(pct) / 100)
+	if absorbThis > remainingDamage {
+		absorbThis = remainingDamage
+	}
+	if aura.SpellID == 50461 {
+		if absorbThis > aura.Amount {
+			absorbThis = aura.Amount
+		}
+		aura.Amount -= absorbThis
+		return absorbThis, aura.Amount == 0, true
+	}
+	return absorbThis, false, true
+}
+
 // applyAbsorptionShields applies active absorption shields (Power Word: Shield, Ice Barrier, etc.)
 // to mitigate incoming damage of the given school mask according to TrinityCore priority order.
 // Returns absorbed damage and remaining unabsorbed damage.
@@ -463,6 +517,14 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				// only their own spell school. A zero MiscValue absorbs
 				// nothing, like C++ — there is no all-schools fallback.
 				if aura.MiscValue&int32(schoolMask) != 0 {
+					if absorbThis, depleted, ok := s.server.scriptAbsorbHit(aura, remainingDamage); ok {
+						remainingDamage -= absorbThis
+						absorbed += absorbThis
+						if depleted {
+							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+						}
+						continue
+					}
 					absorbThis := aura.Amount
 					if absorbThis > remainingDamage {
 						absorbThis = remainingDamage
@@ -585,6 +647,14 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 					// (Unit.cpp:1881), not the aura spell's school — see
 					// the player leg above. 256 is not an absorb type.
 					if aura.MiscValue&int32(schoolMask) != 0 {
+						if absorbThis, depleted, ok := s.scriptAbsorbHit(aura, remainingDamage); ok {
+							remainingDamage -= absorbThis
+							absorbed += absorbThis
+							if depleted {
+								exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+							}
+							continue
+						}
 						absorbThis := aura.Amount
 						if absorbThis > remainingDamage {
 							absorbThis = remainingDamage

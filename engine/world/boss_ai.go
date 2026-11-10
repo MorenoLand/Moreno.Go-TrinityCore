@@ -10730,6 +10730,21 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.castCreatureSpellInternalWithBasePoints(ctx, m, 69034, aura.CasterGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 45 / 100)}, nil, false, 0)
 				continue
 			}
+			if auraSpell.ID == 50453 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_dk_blood_gorged::HandleProc (spell_dk.cpp:511-550):
+				// PreventDefaultAction; the bloodworm casts Blood Gorged
+				// Heal (50454) on its owner with BP0 = 150% of the
+				// triggering damage. The DoCheckProc leg (owner exists)
+				// is the OwnerGUID check below; a zero-damage event heals
+				// nothing. Lua ev6 could reach this (GetOwner +
+				// CastCustomSpell exist on the creature surface) but no
+				// handler is registered, so this Go arm is the only leg.
+				if ev.damage == 0 || m.OwnerGUID == 0 {
+					continue
+				}
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, 50454, m.OwnerGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 3 / 2)}, nil, false, 0)
+				continue
+			}
 			if eff.Aura == spellAuraProcTriggerSpellWithValue {
 				// HandleProcTriggerSpellWithValueAuraProc passes the
 				// triggering effect's own amount (SpellAuraEffects.cpp:5726-5728)

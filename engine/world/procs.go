@@ -257,6 +257,31 @@ func (s *session) procChanceDefault(procSpellID uint32, configuredChance float64
 	return float64(spell.ProcChance) / 100.0
 }
 
+// advantageT10ProcAllowed mirrors spell_dk_advantage_t10_4p::CheckProc
+// (spell_dk.cpp:229-247): the T10 4P melee bonus procs only when the
+// actor is a Death Knight player with every rune on cooldown
+// (GetRuneCooldown(i) != 0 for all MAX_RUNES). The default trigger
+// (70657) is DBC-driven, so this gate alone is the port; Lua has no
+// rune-cooldown bridge, so there is no ev6 twin.
+func (s *session) advantageT10ProcAllowed(ev procEventInfo) bool {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight {
+		return false
+	}
+	if ev.actorGUID != s.playerGUID {
+		return false
+	}
+	if s.runes == nil {
+		return false
+	}
+	nowMs := time.Now().UnixMilli()
+	for i := 0; i < maxRunes; i++ {
+		if s.runes.runeCooldownRemainingMs(i, nowMs) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // isProcOnCooldown checks whether an internal cooldown (ICD) is active for the given proc ID.
 func (s *session) isProcOnCooldown(procID uint32) bool {
 	if s == nil || s.procICD == nil {
@@ -3127,6 +3152,12 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 			}
 		}
 		if !canSpellTriggerProcOnEvent(entry, ev, auraSpell.AttributesEx3&spellAttr3CanProcWithTriggered != 0) {
+			continue
+		}
+		// spell_dk_advantage_t10_4p::CheckProc (spell_dk.cpp:209-252):
+		// the T10 4P gate runs before the chance roll, like the C++
+		// CheckProc in GetProcEffectMask.
+		if auraSpell.ID == 70656 && !s.advantageT10ProcAllowed(ev) {
 			continue
 		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
