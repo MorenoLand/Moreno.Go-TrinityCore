@@ -517,31 +517,41 @@ end
 -- C++ OnRemove (EFFECT_1, same effect): DoAction(DO_ENABLE_AERIAL) +
 -- RemoveAurasDueToSpell(VISUAL) -- the bridged RemoveAura(spellID)
 -- twin. The OnRemoveSelf EFFECT_0 DUMMY leg (TempSummon
--- DespawnOrUnsummon) stays out: no IsTempSummon bridge. The Go ev3
--- hook fires once per removal (not per effect), so both C++
--- AfterEffectRemove arms share this one fire.
+-- DespawnOrUnsummon) is PORTED this tick: IsSummon() is bridged
+-- (lua_creature_events.go:922, motion.IsTempSummon — the ToTempSummon
+-- gate) and Despawn() on a summon is the DespawnOrUnsummon twin
+-- (lua_creature_events.go:3061). The Go ev3 hook fires once per
+-- removal (not per effect), so both C++ AfterEffectRemove arms share
+-- this one fire; for the ACU (not a summon) the despawn leg no-ops,
+-- matching C++.
 local function magneticCoreRemove(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
     end
     target:DoAction(DO_ENABLE_AERIAL)
     target:RemoveAura(SPELL_MAGNETIC_CORE_VISUAL)
+    if target:IsSummon() then
+        target:Despawn()
+    end
 end
 
 -- C++ spell_mimiron_magnetic_core_SpellScript::FilterTargets
 -- (:1901-1913, EFFECT_1): drop targets with a vehicle base or the
 -- NON_ATTACKABLE flag. PORTED tick 561 via RegisterSpellEvent ev7
 -- (the skadi freezing-cloud precedent: targets:GetTargets() /
--- targets:Remove). The vehicle-base half stays out: GetVehicleBase
--- has no Lua twin (verified by grep of the creature/player/object
--- surfaces); the flag half is C++-exact via HasFlag on either unit
--- type (players carry HasFlag too, lua_player.go:866).
+-- targets:Remove). The vehicle-base half is PORTED this tick:
+-- GetVehicleBase() is non-null exactly when the unit rides a vehicle,
+-- and IsOnVehicle() is that twin on both unit types (creature,
+-- lua_creature_events.go:3252; player, lua_player.go:2801 — the weld
+-- precedent uses target:IsOnVehicle():GetOwner() for the same
+-- GetVehicleBase lookup); a vehicle base itself rides nothing, so its
+-- IsOnVehicle() is nil, matching C++.
 local function magneticCoreTargetSelect(event, spell, effectIndex, targets)
     if effectIndex ~= 1 then
         return
     end
     for _, target in ipairs(targets:GetTargets()) do
-        if target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
+        if target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) or target:IsOnVehicle() ~= nil then
             targets:Remove(target)
         end
     end

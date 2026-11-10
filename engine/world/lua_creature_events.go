@@ -1076,6 +1076,33 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0)
 		return nil, nil
 	}
+	// SetChannelObjectGuid(target) is Unit::SetChannelObjectGuid
+	// (Unit.h:1360): SetGuidValue(UNIT_FIELD_CHANNEL_OBJECT, guid) —
+	// retargets the caster's live channel object and broadcasts the
+	// 64-bit field (low/high slots, the commands.go channelGUID
+	// precedent). The motion twin is ChannelTargetGUID, read by
+	// creatureChannelUnitTarget / creatureChannelDest for later
+	// TARGET_UNIT_CHANNEL_TARGET / TARGET_DEST_CHANNEL_TARGET
+	// resolution; the channel stamp at cast start is overwritten here
+	// mid-cast, matching the C++ OnHit legs (laser barrage /
+	// spinning up) that rewrite it per hit target. A nil/zero target
+	// clears the channel object, matching C++'s guid clear.
+	methods["SetChannelObjectGuid"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetChannelObjectGuid requires a target")
+		}
+		guid := luaObjectGUID(args[0])
+		s.motionMu.Lock()
+		motion.ChannelTargetGUID = guid
+		mapID, instanceID := motion.Map, motion.InstanceID
+		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID, motion.GUID, map[int]uint32{
+			unitFieldChannelObject:     uint32(guid),
+			unitFieldChannelObject + 1: uint32(guid >> 32),
+		}, x, y, z, phase)
+		return nil, nil
+	}
 	// InterruptSpell(spellType[, delayed]) is Unit::InterruptSpell
 	// (UnitMethods.h:2547-2570, Unit.cpp:3140-3172): MELEE is a no-op
 	// (no melee spell slot in Go, the lua_creature_events.go:2094
@@ -3254,6 +3281,36 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{s.luaVehicleObject(motion.Map, motion.InstanceID, motion.VehicleGUID)}, nil
+	}
+	// SetChannelObjectGuid is Unit::SetChannelObjectGuid (Unit.cpp): writes
+	// UNIT_FIELD_CHANNEL_OBJECT on the caster, the channel-object target
+	// for the live channeled spell. Go twin: the motion's
+	// ChannelTargetGUID, stamped by stampCreatureChannel at cast time
+	// (boss_ai.go:3087) ahead of the effect loop; the ev5
+	// OnEffectHitTarget hook fires inside that loop (boss_ai.go:3406-3421),
+	// so a script leg writing here overwrites the stamped value per hit
+	// target, last hit wins — the C++ order for the P3Wx2 laser barrage /
+	// spinning-up hack (boss_mimiron.cpp:2017, :2405: the core sets no
+	// channel object for multi-target spells, so the script sets it per
+	// hit). Takes the hit unit object; the packed GUID is read off the
+	// object whole, so the GetGUIDLow convention never applies. The
+	// player twin stays out: both script users are creature-cast.
+	methods["SetChannelObjectGuid"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("unit is required")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("unit is required")
+		}
+		guid, ok := objectUint64Field(target, "GUID")
+		if !ok || guid == 0 {
+			return nil, fmt.Errorf("unit is required")
+		}
+		s.motionMu.Lock()
+		motion.ChannelTargetGUID = guid
+		s.motionMu.Unlock()
+		return nil, nil
 	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
