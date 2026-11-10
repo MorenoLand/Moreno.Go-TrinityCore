@@ -6,7 +6,7 @@
 -- an AI-factory helper, not a script).
 -- Final boss in the Shattered Halls set per
 -- outland_script_loader.cpp order (instance_shattered_halls.
--- cpp stays blocked on the instance-script model).
+-- lua ported 3fe088b3).
 -- Entry: NPC_KARGATH_BLADEFIST = 16808 from shattered_halls.
 -- h (SHCreatureIds), mapped in instance_shattered_halls.cpp
 -- OnCreatureCreate (line 111) plus GetGuidData (line 170).
@@ -28,8 +28,11 @@
 -- to tick; melee is engine-driven in Go (creature combat tick),
 -- like C++.
 -- Fight shape (C++-exact for all modeled arms): Kargath
--- (16808): OnEnterCombat(1) — Talk(SAY_AGGRO); the C++
--- JustEngagedWith override does nothing else, and the
+-- (16808): OnEnterCombat(1) — SetBossState(2, 1) IN_PROGRESS
+-- (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537) +
+-- Talk(SAY_AGGRO) + the assassin one-shot (5s) + the guard
+-- wave pump (30s init) + the resetcheck evade pump (5s);
+-- the C++ JustEngagedWith override does nothing else, and the
 -- Initialize() schedule (Blade_Dance_Timer 45000 /
 -- Summon_Assistant_Timer 30000 / Assassins_Timer 5000 /
 -- resetcheck_timer 5000 / summoned 2) drives bridge-blocked arms
@@ -38,21 +41,26 @@
 -- OnTargetDied(3): Talk(SAY_SLAY) gated on the killed unit
 -- being a player (C++ `victim->GetTypeId() == TYPEID_PLAYER`
 -- via the terestian/gurtogg 3-arg handler, C++-exact).
--- OnDied(4): Talk(SAY_DEATH) (the _JustDied arm is
--- instance-blocked; the removeAdds assassin sweep is PORTED via
--- stored summon objects — the guard list stays empty because
--- guards are never summoned, header). OnReset(23): the C++ Reset()
+-- OnDied(4): Talk(SAY_DEATH) + SetBossState(2, 3) DONE (the
+-- _JustDied twin) + the removeAdds assassin/guard sweep +
+-- the Kargath-DONE executioner Reset relay (instance_
+-- shattered_halls.cpp:153-157 twin, PORTED below via
+-- FindNearestCreature + ev38). OnReset(23): the C++ Reset()
 -- SetSpeedRate(MOVE_RUN, 2) arm, ported via creature:SetSpeedRate
 -- (the SetWalk(false) leg is PORTED in kargathReset via creature:SetWalk; removeAdds/_Reset/
 -- Initialize have no observable remainder in this model, omrogg
--- "no event 3" precedent). Melee is
+-- "no event 3" precedent) + SetBossState(2, 0) NOT_STARTED
+-- (the _Reset twin, ScriptedCreature.cpp:499-510). Melee is
 -- engine-driven.
 -- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI
--- shim (instance_shattered_halls.cpp stays blocked on the
--- instance-script model; the BossAI ctor DATA_KARGATH = 2
--- bookkeeping in Reset/JustEngagedWith/JustDied skipped —
--- DATA_KARGATH is an instance-side constant, unbridgeable);
+-- instance-script model for the boss-state bookkeeping —
+-- boss admission via the luaBossAI shim (the BossAI ctor
+-- DATA_KARGATH = 2 bookkeeping in Reset/JustEngagedWith/
+-- JustDied is PORTED as the SetBossState writes above, not
+-- skipped); the DoAction(ACTION_EXECUTIONER_TAUNT) arm stays
+-- out — its only caller is the unported at_nethekurse_exit
+-- areatrigger (shattered_halls.cpp:49), so no ev38 handler
+-- would ever fire;
 -- the Assassins_Timer 5s arm (four NPC_SHATTERED_ASSASSIN
 -- 17695 summons at AssassEntrance/AssassExit with
 -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT) is PORTED 2026-10-24
@@ -90,9 +98,11 @@
 -- the JustSummoned guard AttackStart relay is ported via
 -- summoned:EngageWithTarget (random threat target); the
 -- removeAdds sweep is ported for assassins AND guards via
--- stored summon objects; no position/home bridge — the resetcheck_timer
--- 5s evade arm (EnterEvadeMode when x is outside [205, 255])
--- unmodeled (bookkeeping exact: 5s init then 5s); no
+-- stored summon objects; the resetcheck_timer 5s evade arm
+-- (EnterEvadeMode when x is outside [205, 255]) is PORTED
+-- 2026-11-10 via a 5s pump + creature:GetX() + EnterEvadeMode
+-- (black stalker precedent — the old "no position/home bridge"
+-- claim was stale); no
 -- unit-state bridge — the C++ UpdateAI skips
 -- DoMeleeAttackIfReady entirely while InBlade (no melee
 -- during blade dance) and there is no bridge to suppress
@@ -106,6 +116,15 @@ local SAY_DEATH = 2
 
 local ENTRY_KARGATH_BLADEFIST = 16808
 local ENTRY_SHATTERED_ASSASSIN = 17695
+local ENTRY_SHATTERED_EXECUTIONER = 17301
+-- Lua-side transport id (no C++ counterpart — the executioner
+-- AI has no DoAction override): fired on the executioner when
+-- Kargath dies, so its ev38 handler runs the C++ Reset arms
+-- (instance_shattered_halls.cpp:155-156 calls executioner->
+-- AI()->Reset() on every DATA_KARGATH state change; only the
+-- DONE transition changes the executioner's observable state,
+-- so the relay fires on death only).
+local ACTION_KARGATH_DONE_RESET = 2
 local ENTRY_HEARTHEN_GUARD = 17621
 local ENTRY_SHARPSHOOTER_GUARD = 17622
 local ENTRY_REAVER_GUARD = 17623
@@ -123,6 +142,7 @@ local ASSASSIN_SPOTS = {
 }
 
 local kargathTimers = {}
+local kargathResetTimers = {}
 local kargathAssassins = {}
 local kargathAssassinFired = {}
 local kargathGuards = {}
@@ -134,6 +154,11 @@ local function cancelKargath(guid)
     if id then
         RemoveEventById(id)
         kargathTimers[guid] = nil
+    end
+    local resetId = kargathResetTimers[guid]
+    if resetId then
+        RemoveEventById(resetId)
+        kargathResetTimers[guid] = nil
     end
     local guardId = kargathGuardTimers[guid]
     if guardId then
@@ -216,12 +241,25 @@ local function kargathGuardTick(creature, guid)
 end
 
 local function kargathEnterCombat(event, creature)
+    creature:SetBossState(2, 1) -- DATA_KARGATH, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; gruul precedent)
     creature:Talk(SAY_AGGRO)
     local guid = creature:GetGUIDLow()
     kargathAssassinFired[guid] = false
     kargathAssassins[guid] = {}
     kargathGuards[guid] = {}
     kargathSummoned[guid] = 2
+    -- C++ resetcheck_timer (UpdateAI :342-353): 5s init then 5s —
+    -- EnterEvadeMode when the boss's x is outside [205, 255]
+    -- (uint32 truncation; math.floor matches for positive x, and
+    -- negative x evades either way). Runs only in combat (the C++
+    -- check sits past the !UpdateVictim return), so the pump
+    -- starts here and dies on events 2/4/23.
+    kargathResetTimers[guid] = CreateLuaEvent(function()
+        local x = math.floor(creature:GetX())
+        if x > 255 or x < 205 then
+            creature:EnterEvadeMode()
+        end
+    end, 5000, 0)
     kargathGuardTimers[guid] = CreateLuaEvent(function()
         kargathGuardTick(creature, guid)
     end, 30000)
@@ -257,6 +295,15 @@ end
 local function kargathDied(event, creature, killer)
     creature:SetBossState(2, 3) -- DATA_KARGATH, DONE (boss_warchief_kargath_bladefist.cpp:120-124: _JustDied then Talk)
     creature:Talk(SAY_DEATH)
+    -- C++ instance SetBossState override (instance_shattered_halls.
+    -- cpp:153-157): on DATA_KARGATH DONE the executioner's AI
+    -- Reset runs (IMMUNE_TO_PC flag clear); no creature:Reset()
+    -- bridge exists, so the relay fires its ev38 Reset action
+    -- (boss_shattered_executioner.lua; nil-guarded, as in C++).
+    local executioner = creature:FindNearestCreature(ENTRY_SHATTERED_EXECUTIONER, 1000.0)
+    if executioner then
+        executioner:DoAction(ACTION_KARGATH_DONE_RESET)
+    end
     local guid = creature:GetGUIDLow()
     cancelKargath(guid)
     despawnAssassins(guid)
@@ -268,6 +315,12 @@ local function kargathReset(event, creature)
     -- PORTED below; the rest of Reset (removeAdds/_Reset/Initialize)
     -- has no observable remainder in this model except the assassin
     -- sweep above (documented above).
+    -- C++ _Reset (ScriptedCreature.cpp:499-510): SetBossState
+    -- DATA_KARGATH, NOT_STARTED — ev23 fires on death too (engine
+    -- reset-then-died order); the NOT_STARTED write lands before
+    -- the ev4 DONE write, so the final state stays DONE (gruul
+    -- precedent).
+    creature:SetBossState(2, 0) -- DATA_KARGATH, NOT_STARTED
     creature:SetSpeedRate(1, 2)
     creature:SetWalk(false)
     local guid = creature:GetGUIDLow()

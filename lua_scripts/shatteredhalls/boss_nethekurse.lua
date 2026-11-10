@@ -37,7 +37,9 @@
 -- ATTACKABLE gate until all four peons die) is instance/
 -- cross-creature/flag blocked, so the Initialize() schedule
 -- lands on the only engagement hook this model has, broggok
--- activate-schedule precedent) + Talk(SAY_AGGRO) + 1s
+-- activate-schedule precedent) + SetBossState(0, 1) IN_PROGRESS
+-- (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537) +
+-- Talk(SAY_AGGRO) + 1s
 -- scheduler pump (a port of UpdateAI — 1s granularity exact
 -- for all C++ timers; the !UpdateVictim early return
 -- collapses into the pump; IsMainEvent is true at the only
@@ -64,17 +66,19 @@
 -- + SetBossState(0, 3) DONE (the _JustDied twin — drives the
 -- instance door machine) + cleanup. OnLeave
 -- Combat(2)/OnReset(23): cancel the pump, drop per-GUID
--- state (the Reset() NON_ATTACKABLE re-flag arm stays out on the
+-- state; ev23 also writes SetBossState(0, 0) NOT_STARTED (the
+-- _Reset twin, ScriptedCreature.cpp:499-510 — lands before the
+-- ev4 DONE write, so the final state stays DONE). The Reset()
+-- NON_ATTACKABLE re-flag arm stays out on the
 -- paired-arm rule — its removal rides the unported peon-relay /
 -- intro-timer machine and porting SetFlag alone would strand the bit
--- (thespia/kalithresh precedent); SetFlag(59) itself is bridged; the
--- _Reset arm is instance-blocked).
+-- (thespia/kalithresh precedent); SetFlag(59) itself is bridged;
+-- only the flag leg stays out).
 -- Deliberate deviations (all await engine bridges): no
 -- intro/peon machine — boss admission via the luaBossAI
--- shim (the BossAI ctor DATA_NETHEKURSE = 0 bookkeeping in
--- Reset/JustEngagedWith is skipped — DATA_NETHEKURSE is an
--- instance-side constant, unbridgeable; the MoveInLineOfSight
--- SAY_INTRO + SetBossState IN_PROGRESS arm and the 90s
+-- shim (the BossAI ctor DATA_NETHEKURSE = 0 bookkeeping is
+-- PORTED as the SetBossState writes above, not skipped; the
+-- MoveInLineOfSight SAY_INTRO + SetBossState IN_PROGRESS arm and the 90s
 -- IntroEvent_Timer -> DoTauntPeons machine (the "@todo kill
 -- the peons first" arm) stay out on sighting-bridge grounds
 -- — ev27 is engage-only, no 30yd sighting twin; the peon
@@ -253,6 +257,7 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetBossState(0, 1) -- DATA_NETHEKURSE, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; gruul precedent)
     -- Restore phase-1 melee: the SetMeleeAttack(false) flag
     -- persists on the motion past evade, so re-engage must
     -- re-allow swings (phase 1 calls DoMeleeAttackIfReady).
@@ -280,5 +285,12 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 23, function(_, creature)
+    -- C++ _Reset (ScriptedCreature.cpp:499-510): SetBossState
+    -- DATA_NETHEKURSE, NOT_STARTED — ev23 fires on death too
+    -- (engine reset-then-died order); the NOT_STARTED write lands
+    -- before the ev4 DONE write, so the final state stays DONE
+    -- (gruul precedent). The Reset() NON_ATTACKABLE re-flag arm
+    -- stays out on the paired-arm rule (see header).
+    creature:SetBossState(0, 0) -- DATA_NETHEKURSE, NOT_STARTED
     resetBoss(creature:GetGUIDLow())
 end)

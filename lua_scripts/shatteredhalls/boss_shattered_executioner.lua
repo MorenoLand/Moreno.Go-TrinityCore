@@ -71,11 +71,12 @@
 -- anyway); spell_kargath_executioner is an AuraScript and
 -- spell_remove_kargath_executioner is a SpellScript — no
 -- AuraScript/SpellScript bridges, both documented only, not
--- registered; no Kargath-DONE Reset trigger — C++
--- instance_shattered_halls.cpp:155-156 calls executioner->
--- AI()->Reset() when Kargath dies and no creature:Reset()
--- bridge exists, so the immune-flag clear lands only on the
--- executioner's next own Reset (kargath-file relay pending);
+-- registered; the Kargath-DONE Reset trigger is PORTED
+-- 2026-11-10 via the ev38 relay — the kargath file fires
+-- ACTION_KARGATH_DONE_RESET on death (instance_shattered_halls.
+-- cpp:155-156 calls executioner->AI()->Reset() when Kargath
+-- dies; no creature:Reset() bridge exists, so the relay runs
+-- the Reset arms — loot modes + immune-flag clear — directly);
 -- the empty JustSummoned override (anti-despawn of
 -- prisoners on death/reset) is skipped (ahune bunny /
 -- nethekurse fissure empty-skeleton precedent).
@@ -105,6 +106,11 @@ local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 -- ev38 action right after each SetData(DATA_PRISONERS_EXECUTED)
 -- write, so the SetData machine below runs once per write.
 local ACTION_PRISONERS_EXECUTED = 1
+-- Lua-side transport id (no C++ counterpart): the kargath file
+-- fires this ev38 action when Kargath dies, so the C++ Reset
+-- arms run (instance_shattered_halls.cpp:155-156 calls
+-- executioner->AI()->Reset() on DATA_KARGATH DONE).
+local ACTION_KARGATH_DONE_RESET = 2
 
 local timers = {}
 local states = {}
@@ -238,6 +244,7 @@ RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetBossState(3, 1) -- DATA_SHATTERED_EXECUTIONER, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; gruul precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     timers[guid] = CreateLuaEvent(function()
@@ -269,15 +276,25 @@ RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 23, function(_, creature)
+    -- C++ _Reset (ScriptedCreature.cpp:499-510): SetBossState
+    -- DATA_SHATTERED_EXECUTIONER, NOT_STARTED — ev23 fires on
+    -- death too (engine reset-then-died order); the NOT_STARTED
+    -- write lands before the ev4 DONE write, so the final state
+    -- stays DONE (gruul precedent).
+    creature:SetBossState(3, 0) -- DATA_SHATTERED_EXECUTIONER, NOT_STARTED
     resetBoss(creature:GetGUIDLow())
     applyResetArms(creature)
 end)
 
 -- C++ SetData relay (broggok precedent): the instance file
 -- fires ACTION_PRISONERS_EXECUTED after each SetData(4)
--- write; the machine reads the stored value.
+-- write; the machine reads the stored value. The kargath file
+-- fires ACTION_KARGATH_DONE_RESET when Kargath dies; the
+-- Reset arms run (loot modes + immune flag per Kargath DONE).
 RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 38, function(_, creature, action)
     if action == ACTION_PRISONERS_EXECUTED then
         applyPrisonersExecuted(creature, creature:GetData(DATA_PRISONERS_EXECUTED))
+    elseif action == ACTION_KARGATH_DONE_RESET then
+        applyResetArms(creature)
     end
 end)

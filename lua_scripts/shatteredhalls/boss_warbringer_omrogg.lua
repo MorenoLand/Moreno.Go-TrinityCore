@@ -5,7 +5,7 @@
 -- heads is registered alongside).
 -- Second boss in the Shattered Halls set per
 -- outland_script_loader.cpp order (instance_shattered_halls.
--- cpp stays blocked on the instance-script model).
+-- lua ported 3fe088b3).
 -- Entry: no NPC_OMROGG entry exists in shattered_halls.h and
 -- instance_shattered_halls.cpp has no OnCreatureCreate
 -- mapping for the boss, so the entry is verified externally:
@@ -60,20 +60,20 @@
 -- (C++-exact).
 -- OnDied(4): left-head Talk(YELL_DIE_L) + 4s right-head
 -- Talk(YELL_DIE_R) + despawn (C++ JustDied/SetData arms,
--- PORTED below); the _JustDied arm is instance-blocked.
+-- PORTED below); SetBossState(1, 3) DONE (the _JustDied twin).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state, despawn both heads (C++ Reset setDeathState arms,
--- PORTED below); the _Reset arm is instance-blocked.
+-- PORTED below); SetBossState(1, 0) NOT_STARTED on ev23 (the
+-- _Reset twin, ScriptedCreature.cpp:499-510).
 -- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI
--- shim (instance_shattered_halls.cpp stays blocked on the
--- instance-script model; the BossAI ctor DATA_OMROGG = 1
--- bookkeeping in Reset/JustEngagedWith/JustDied skipped —
--- DATA_OMROGG is an instance-side constant, unbridgeable;
--- the JustEngagedWith SetBossState(DATA_OMROGG, IN_PROGRESS)
--- arm, the Reset SetData(DATA_OMROGG, NOT_STARTED) arm and
--- the DATA_KARGATH cross-boss assist arms in instance_
--- shattered_halls.cpp are instance gated); the JustEngagedWith
+-- instance-script model for the boss-state bookkeeping —
+-- boss admission via the luaBossAI shim (the BossAI ctor
+-- DATA_OMROGG = 1 bookkeeping is PORTED as the SetBossState
+-- writes above, not skipped; the Reset SetData(DATA_OMROGG,
+-- NOT_STARTED) arm is a C++ no-op — the instance has no
+-- SetData override — and the DATA_KARGATH cross-boss assist
+-- arms are unimplemented upstream: no GetBossState(DATA_OMROGG)
+-- consumer exists in the C++ tree); the JustEngagedWith
 -- SummonCreature(NPC_LEFT_HEAD/NPC_RIGHT_HEAD,
 -- TEMPSUMMON_DEAD_DESPAWN) calls + JustSummoned SetVisible
 -- (false) + left-head GoCombat aggro yell are PORTED in the
@@ -354,6 +354,7 @@ RegisterCreatureEvent(ENTRY_OMROGG, 1, function(_, creature)
     resetBoss(guid)
     local st = freshState()
     states[guid] = st
+    creature:SetBossState(1, 1) -- DATA_OMROGG, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; gruul precedent — the instance override no-ops for omrogg, but the store write is C++-exact)
     -- C++ JustEngagedWith (boss_warbringer_omrogg.cpp:202-213):
     -- SummonCreature both heads at the boss (all-zero coords hit
     -- the bridge's near-summoner fallback), JustSummoned
@@ -441,6 +442,10 @@ RegisterCreatureEvent(ENTRY_OMROGG, 23, function(_, creature)
     -- pumps stop either way, but heads are only despawned on a
     -- live reset — a death-time reset must leave them for event 4,
     -- so state is preserved when dead and cleared by event 4.
+    -- C++ _Reset (ScriptedCreature.cpp:499-510): SetBossState
+    -- DATA_OMROGG, NOT_STARTED — the write lands before the ev4
+    -- DONE write, so the final state stays DONE (gruul precedent).
+    creature:SetBossState(1, 0) -- DATA_OMROGG, NOT_STARTED
     local guid = creature:GetGUIDLow()
     cancelPump(guid)
     cancelDelayPump(guid)
