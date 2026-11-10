@@ -13268,13 +13268,18 @@ func init() {
 	// Frozen core (25865): the ctor Initialize self casts via
 	// the engine-fired OnSpawn event, and the JustDied self
 	// casts (the cross-creature Kill arm stays blocked). The
-	// bunny/flamecaller/ice-stone/SpellScript-AuraScript arms
-	// stay unregistered. Fight logic in
+	// bunny/ice-stone/SpellScript-AuraScript arms stay
+	// unregistered; the flamecaller (25754) is PORTED 2026-11-10
+	// (MovementInform + SpellHit + DoAction + look-for-opening
+	// chain, fed by the new instance_the_slave_pens.lua guid
+	// latches — see lua_scripts/theslavepens/npc_earthen_ring_
+	// flamecaller.lua). Fight logic in
 	// lua_scripts/theslavepens/boss_ahune.lua and
 	// lua_scripts/theslavepens/npc_frozen_core.lua.
 	// Cast-state gating PORTED on ahune: boss inherits BossAI::UpdateAI (no override), pre-loop (:578) + in-loop (:584) gates on the ported synch-health tick (ScriptedCreature.cpp:571-589); frozen core's plain ScriptedAI EventMap UpdateAI (boss_ahune.cpp:316) has no gate and no ported tick.
 	RegisterLuaBoss("boss_ahune", 25740)
 	RegisterLuaBoss("npc_frozen_core", 25865)
+	RegisterLuaBoss("npc_earthen_ring_flamecaller", 25754)
 	// Hungarfen (The Underbog): foul-spores once-guard at <=20%
 	// health, the acid-geyser target casts, and the mushroom-
 	// summon arm PORTED 2026-10-22 (SummonCreature(17990, target

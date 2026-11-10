@@ -58,9 +58,10 @@
 -- (the DATA_AHUNE NOT_STARTED/IN_PROGRESS/DONE bookkeeping in
 -- BossAI::JustEngagedWith instance bookkeeping / JustDied skipped
 -- (base pulse + me-DoZone arms ported in ev1);
--- instance_the_slave_pens.cpp is a placeholder and stays
--- blocked on the instance-script model); no cross-creature
--- bridge — the DoAction(ACTION_AHUNE_RETREAT) entry to
+-- instance_the_slave_pens.cpp is PORTED 2026-11-10
+-- (instance_the_slave_pens.lua: LoadObjectData entry latches +
+-- flamecaller GUID capture via creature:SetGuidData, event 5);
+-- no cross-creature bridge — the DoAction(ACTION_AHUNE_RETREAT) entry to
 -- Submerge() is unreachable: it is fired only cross-creature
 -- by npc_ahune_bunny's EVENT_AHUNE_PHASE_TWO, and the whole
 -- bunny phase machine (ACTION_START_EVENT from the
@@ -92,11 +93,9 @@
 -- and its delayer sibling spell_summon_ice_spear_delayer is PORTED
 -- tick 191 below (RegisterAuraEvent 46878, iceSpearDelayerTick,
 -- aura:GetTickNumber bridge); npc_earthen_ring_flamecaller (25754) is
--- documented only — its whole AI is cross-creature driven
--- (SpellHit SHAMANS_LOOK_FOR_OPENING, DoAction EMOTE_
--- RESURFACE, Reset via the bunny's ResetFlameCallers) or
--- movement driven (MovementInform MovePoint arms) and would
--- be an empty skeleton; go_ahune_ice_stone (187882) is a
+-- PORTED 2026-11-10 (npc_earthen_ring_flamecaller.lua: MovementInform
+-- + SpellHit + DoAction + look-for-opening chain; its bunny-side
+-- triggers stay unregistered); go_ahune_ice_stone (187882) is a
 -- GameObjectScript — RegisterGameObjectEvent exists, but the stone's
 -- select body stays blocked (bunny DoAction + instance lookup);
 -- SAY_PLAYER_TEXT_1/2/3 (0/1/2), EMOTE_EARTHEN_ASSAULT 0,
