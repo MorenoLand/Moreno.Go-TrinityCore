@@ -19968,10 +19968,11 @@ func init() {
 	// Wowhead-verified this tick; no Talk arms; Reset one-shot
 	// DoCastSelf 64458 PORTED this tick, registered);
 	// spell_auriaya_strenght_of_the_pack (64381), spell_auriaya_
-	// sentinel_blast (64392 / 64679), spell_auriaya_agro_creator
-	// (63709), spell_auriaya_feral_essence_removal (64456),
-	// spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
-	// bridge; all five join the no-SpellScript-bridge queue;
+	// sentinel_blast (64392 / 64679), spell_auriaya_feral_essence_removal
+	// (64456), spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
+	// bridge; the remaining four join the no-SpellScript-bridge queue
+	// (spell_auriaya_agro_creator (63709) PORTED in boss_auriaya.lua
+	// guardianDummyEffect, ev30 dummy-effect event);
 	// spell_auriaya_random_agro_periodic (61906) — no AuraScript
 	// bridge; joins the no-AuraScript-bridge queue;
 	// achievement_nine_lives / achievement_crazy_cat_lady

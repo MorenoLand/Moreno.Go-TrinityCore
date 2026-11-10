@@ -132,8 +132,8 @@
 -- REACT_PASSIVE + 1s scheduler -> REACT_AGGRESSIVE + DoCastSelf
 -- SPELL_AGRO_CREATOR 63709 PORTED this tick in guardianReset (the
 -- Auriaya JustSummoned relay is a no-op: boss_auriaya defines no
--- JustSummoned override; the 63709 pounce/threat leg lives in the
--- unported spell_auriaya_agro_creator SpellScript); registered in
+-- JustSummoned override; the 63709 pounce/threat leg is PORTED in
+-- guardianDummyEffect (ev30 dummy-effect event)); registered in
 -- boss_ai.go this tick.
 -- npc_seeping_essence_stalker — entry 34098 (no constant in C++;
 -- Wowhead-verified this tick, npc=34098, Ulduar, WotLK) — Reset
@@ -142,10 +142,11 @@
 -- guardian; UpdateAI empty); registered in boss_ai.go this tick.
 -- spell_auriaya_strenght_of_the_pack (64381),
 -- spell_auriaya_sentinel_blast (64392 / 64679),
--- spell_auriaya_agro_creator (63709),
 -- spell_auriaya_feral_essence_removal (64456),
 -- spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
--- bridge; spell_auriaya_random_agro_periodic (61906) — no
+-- bridge (spell_auriaya_agro_creator (63709) PORTED in
+-- guardianDummyEffect, ev30 dummy-effect event);
+-- spell_auriaya_random_agro_periodic (61906) — no
 -- AuraScript bridge; achievement_nine_lives / achievement_crazy_cat_lady
 -- — PORTED 2026-11-05: checkAchievementCriteriaScript reads the victim
 -- motion's SetData latches (engine/world/achievement_criteria_scripts.go),
@@ -187,6 +188,7 @@ local SPELL_SAVAGE_POUNCE        = 64666
 local SPELL_STRENGHT_OF_THE_PACK = 64369
 local SPELL_SUMMON_ESSENCE       = 64457
 local SPELL_AGRO_CREATOR         = 63709
+local SPELL_POUNCE               = 64399
 local SPELL_SEEPING_ESSENCE      = 64458
 local SPELL_SHADOW_PAWS          = 64479
 local SPELL_REDUCE_CRITCAL       = 64481
@@ -869,8 +871,8 @@ end
 -- DoCastSelf(SPELL_AGRO_CREATOR 63709) (2-arg non-triggered); the
 -- Auriaya JustSummoned relay (:472-473) is a no-op — boss_auriaya
 -- defines no JustSummoned override. The 63709 dummy-effect pounce /
--- threat leg lives in spell_auriaya_agro_creator (SpellScript, no
--- bridge); the cast itself ports. The scheduler arm runs outside
+-- threat leg is PORTED in guardianDummyEffect (ev30, below); the
+-- scheduler arm runs outside
 -- UpdateVictim / the CASTING gate in C++, so no 500ms defer.
 local function guardianAggroTick(creature, guid)
     creature:SetReactState(REACT_AGGRESSIVE)
@@ -884,6 +886,32 @@ local function guardianReset(event, creature)
     schedule(guid, "guardianAggro", 1000, function()
         guardianAggroTick(creature, guid)
     end)
+end
+
+-- C++ spell_auriaya_agro_creator (63709, :550-577): OnEffectHitTarget
+-- SPELL_EFFECT_DUMMY EFFECT_0 — no Go SpellScript bridge, so the leg
+-- rides the creature dummy-effect event (ev30, Eluna
+-- CREATURE_EVENT_ON_DUMMY_EFFECT; the Go creature-cast engine fires it
+-- per hit target from castCreatureSpellInternalWithBasePoints,
+-- spell_dummy.go, gated on the DBC record). PASSIVE-gated exactly like
+-- the C++ handler (IsAIEnabled is vacuous for a registered creature);
+-- random player 5-10yd + LOS (CatsTargetSelector :118-133, the
+-- randomRingTarget idiom) -> CastSpell POUNCE 64399 triggered +
+-- AddThreat 5e7 + AttackStart; none: nothing. The dummy hit target is
+-- the guardian itself (self-cast), so the handler runs once per cast.
+local function guardianDummyEffect(event, caster, spellID, effIndex, target)
+    if spellID ~= SPELL_AGRO_CREATOR or effIndex ~= 0 then
+        return
+    end
+    if caster:GetReactState() == REACT_PASSIVE then
+        return
+    end
+    local victim = randomRingTarget(caster, 5.0, 10.0, false)
+    if victim then
+        caster:CastSpell(victim, SPELL_POUNCE, true)
+        caster:AddThreat(victim, 50000000)
+        caster:AttackStart(victim)
+    end
 end
 
 -- npc_seeping_essence_stalker — C++ Reset (:493-499): one-shot
@@ -912,4 +940,5 @@ RegisterCreatureEvent(ENTRY_FERAL_DEFENDER, 23, feralDefenderReset)
 RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 2, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 4, cancelCombatTimers)
 RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 23, guardianReset)
+RegisterCreatureEvent(ENTRY_SWARMING_GUARDIAN, 30, guardianDummyEffect)
 RegisterCreatureEvent(ENTRY_SEEPING_ESSENCE_STALKER, 23, stalkerReset)
