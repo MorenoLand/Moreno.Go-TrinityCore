@@ -15862,7 +15862,7 @@ func init() {
 	// arugal slot added 2026-10-25 (below).
 	// boss_archmage_arugal (Shadowfang Keep): BossAI-derived
 	// (shadowfang_keep.cpp:230) — the slot, not Eluna registration, gates
-	// beginInstanceEncounter (worldport_instance.go:376).
+	// beginInstanceEncounter (worldport_instance.go:443).
 	// UpdateAI pre-loop CASTING gate (shadowfang_keep.cpp:275, no
 	// in-loop gate) PORTED as 500ms IsCasting defers on all 4 timer
 	// arms; KilledUnit / SpellHitTarget hooks stay ungated per C++.

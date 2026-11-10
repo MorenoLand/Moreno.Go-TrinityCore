@@ -53,8 +53,8 @@
 --   SetCorpseDelay(0) has no bridge, stays out.
 --   NPC_INVISIBLE_STALKER (:313-318, PORTED 2026-11-10): within 10yd
 --   of (4357.052, 2769.421) casts SPELL_ARTHAS_TELEPORTER_CEREMONY
---   (72915) on itself — creature:GetExactDist2d(x, y) point form
---   (scripting/object.go:282).
+--   (72915) on itself — creature:GetExactDistance2d(x, y) point form
+--   (scripting/object.go:282; the C++ core name is GetExactDist2d).
 -- - GetGuidData (instance_icecrown_citadel.cpp:763-850): the Lua mirror
 --   is the instanceData binds above, read as instanceData.<boss> (the
 --   oculus precedent). NOTE: the live ICC boss files read GUIDs via
@@ -228,7 +228,7 @@ RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_CREATURE_CREATE, functi
     -- C++ :313-318: the teleporter-visual stalker at the Frozen
     -- Throne center casts the ceremony visual on itself.
     if entry == NPC_INVISIBLE_STALKER then
-        if creature:GetExactDist2d(4357.052, 2769.421) < 10.0 then
+        if creature:GetExactDistance2d(4357.052, 2769.421) < 10.0 then
             creature:CastSpell(creature, SPELL_ARTHAS_TELEPORTER_CEREMONY)
         end
         return
