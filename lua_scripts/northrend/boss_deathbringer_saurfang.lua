@@ -289,7 +289,8 @@
 --   via creature:Is25ManRaid() (C++ :495-497, cast order kept).
 -- The UNIT_STATE_CASTING gate in UpdateAI (pre-loop :456 + in-loop
 --   :531; the old note's line numbers drifted) is PORTED 2026-11-04:
---   500ms IsCasting defer in all six ported ticks (mal_ganis idiom).
+--   500ms IsCasting defer in all six ported combat ticks + the two
+--   intro GRIP legs (2026-11-09).
 -- Lua OnReset (event 23) replays the Reset aura-setup casts; C++
 --   Reset also runs at initial spawn — if the engine never fires 23
 --   pre-combat, the setup auras apply on the first evade instead.
@@ -1064,6 +1065,28 @@ end
 -- SetPhase(PHASE_COMBAT) + _introDone (saurfangIntroDone — set here
 -- so a post-intro engage skips the GRIP/interrupt leg exactly as C++
 -- :293-298) + SetImmuneToPC(false) (RemoveFlag(59, 0x100) twin).
+-- C++ EVENT_INTRO_ALLIANCE_6 (:471-475): Talk x2 + DoCastSelf(GRIP_OF_AGONY);
+-- EVENT_INTRO_HORDE_9 (:484-487): DoCastSelf(GRIP) + Talk. Both ride the
+-- boss UpdateAI pre-loop gate :456 — 500ms IsCasting defer (mal_ganis idiom).
+local function onIntroA6(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "introA6", 500, function() onIntroA6(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_INTRO_ALLIANCE_6)
+    creature:Talk(SAY_INTRO_ALLIANCE_7)
+    creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
+end
+
+local function onIntroH9(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "introH9", 500, function() onIntroH9(creature, guid) end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
+    creature:Talk(SAY_INTRO_HORDE_9)
+end
+
 -- ALLIANCE_6: Talk x2 + GRIP self-cast; HORDE_9: GRIP + Talk.
 local function saurfangContinueIntroAction(creature, guid)
     if saurfangIntroDone[guid] then
@@ -1074,20 +1097,13 @@ local function saurfangContinueIntroAction(creature, guid)
         creature:RemoveFlag(UNIT_FIELD_FLAGS, 0x100)
     end
     if saurfangIntroPhase[guid] == "A" then
-        schedule(guid, "introA6", 7000, function()
-            creature:Talk(SAY_INTRO_ALLIANCE_6)
-            creature:Talk(SAY_INTRO_ALLIANCE_7)
-            creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
-        end)
+        schedule(guid, "introA6", 7000, function() onIntroA6(creature, guid) end)
         schedule(guid, "introFinish", 8000, onIntroFinish)
     elseif saurfangIntroPhase[guid] == "H" then
         schedule(guid, "introH4", 6500, function()
             creature:Talk(SAY_INTRO_HORDE_4)
         end)
-        schedule(guid, "introH9", 48200, function()
-            creature:CastSpell(creature, SPELL_GRIP_OF_AGONY)
-            creature:Talk(SAY_INTRO_HORDE_9)
-        end)
+        schedule(guid, "introH9", 48200, function() onIntroH9(creature, guid) end)
         schedule(guid, "introFinish", 55700, onIntroFinish)
     end
 end
