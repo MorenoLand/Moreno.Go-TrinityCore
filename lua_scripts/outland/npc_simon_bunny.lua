@@ -26,10 +26,18 @@
 -- EventMap twin — every C++ delay (500ms/1s/1500ms/2s/3s) is a
 -- multiple of 500ms, so all timers are quantized to the 500ms pump grid. Each pump tick runs
 -- Update(diff) then executes the single earliest-due event
--- (ties: lowest event id), mirroring ExecuteEvent's one-event-
--- per-UpdateAI. ScheduleEvent overwrites a pending event of the
--- same id; CancelEventGroup(0) cancels all (all simon events are
--- group 0). DoCast(self) arms are creature:CastSpell(creature,
+-- (ties: insertion order — EventMap is a multimap and
+-- ExecuteEvent takes begin(); the Lua pump breaks ties by lowest
+-- id, so the second event on a tie waits an extra 500ms pump
+-- tick vs ~50ms in C++), mirroring ExecuteEvent's
+-- one-event-per-UpdateAI. ScheduleEvent never cancels a pending
+-- event of the same id (EventMap.h: "An existing event is not
+-- canceled"; only RescheduleEvent cancels-then-schedules) — the
+-- Lua table assignment overwrites instead. CancelEventGroup(0)
+-- is a no-op in C++ (group 0 invalid, EventMap.cpp), so
+-- PERIODIC_PLAYER_CHECK survives ROUND_FINISHED; the Lua
+-- round-cancel preserves it explicitly. DoCast(self) arms are
+-- creature:CastSpell(creature,
 -- spell) — CastSpell(nil, spell) would no-op here (no victim,
 -- creature never in combat); DoCast(player) arms pass the player.
 -- Transports (both ends are Lua in this file, C++ semantics kept):
@@ -53,7 +61,7 @@
 --   to bunny:SetGUID; the bunny resolves it with GetPlayerByGUID,
 --   which compares full GUIDs (scripting/globals.go:187) — the
 --   scanner-bunny precedent (player GUIDs are small character
---   counters, so the Lua-number round-trip is exact).
+--   counters, so the UInt64 userdata round-trip is exact).
 -- - Relic menu: no hello handler is registered — the native
 --   questgiver/goober arm opens the DB gossip menu
 --   (gameobjects.go:910/935, useQuestGiverGameObject), the C++
@@ -80,7 +88,8 @@
 --   TOO_LONG_TIME -> WRONG_SEQUENCE, ROUND_FINISHED ->
 --   ROUND_FINISHED action.
 -- - DoAction (:463-486): ROUND_FINISHED (listening=false,
---   START_AI_LEVEL visual, GiveRewardForLevel, cancel all, level
+--   START_AI_LEVEL visual, GiveRewardForLevel, cancel round
+--   events (PERIODIC_PLAYER_CHECK survives), level
 --   10 -> ResetNode else SETUP_PRE_GAME 1s), CORRECT_FULL_SEQUENCE
 --   (gameLevel++, ROUND_FINISHED), WRONG_SEQUENCE (GivePunishment,
 --   ROUND_FINISHED).
@@ -272,6 +281,10 @@ local function cancelEvent(st, eventId)
     st.events[eventId] = nil
 end
 
+-- C++ CancelEventGroup(0) is a no-op (group 0 is invalid,
+-- EventMap.cpp), so PERIODIC_PLAYER_CHECK survives every round;
+-- the round-scoped events are cancelled, the periodic check is
+-- not (its remaining delay is preserved, C++-exact).
 local function cancelRoundEvents(st)
     local periodic = st.events[EVENT_SIMON_PERIODIC_PLAYER_CHECK]
     st.events = {}
@@ -530,7 +543,9 @@ local function gamePump(creature, guid)
     end
 
     -- EventMap Update: all timers advance, then ExecuteEvent
-    -- takes the single earliest-due event (ties: lowest id).
+    -- takes the single earliest-due event (C++ ties: insertion
+    -- order; the Lua pump breaks ties by lowest id, so the second
+    -- tied event waits an extra pump tick).
     local fireId = nil
     for id, delay in pairs(st.events) do
         local remaining = delay - 500

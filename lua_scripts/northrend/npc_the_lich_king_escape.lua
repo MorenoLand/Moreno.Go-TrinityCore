@@ -82,12 +82,12 @@
 --   The old "no-MovementInform / no-instance-GetGuidData bridges"
 --   note is retracted: ev28 + the instance bind carry both legs.
 -- SelectVictim passive-evade (:1349-1361) — PORTED 2026-11-10 as a
---   1s poller (started on spawn, cancelled on ev2/ev4): passive +
---   REMORSELESS_WINTER aura up + no alive player on the threat
---   list runs the evade legs. The C++ gate is PvE combat refs < 2;
---   the player-count gate is its conservative subset (it can only
---   miss a fire, never false-fire: with a living player on threat
---   the encounter is alive by definition). The non-passive
+--   1s poller (started on spawn, cancelled on ev2/ev4): in combat +
+--   passive + REMORSELESS_WINTER aura up + no alive player on the
+--   threat list runs the evade legs. The C++ gate is PvE combat refs
+--   < 2; the player-count gate is its conservative subset (it can
+--   only miss a fire, never false-fire: with a living player on
+--   threat the encounter is alive by definition). The non-passive
 --   AttackStart-victim leg is engine-driven in Go.
 -- EnterEvadeMode (:1305-1316) — the _despawn once-latch, SetBossState
 --   (FAIL), sound, cast, StopMoving and 12s delayed Despawn are all
@@ -104,9 +104,11 @@
 --   scheduled-but-unfired summon events in
 --   instanceData.lkPendingSummons; the trash death handler fires
 --   leader DoAction(ACTION_WALL_BROKEN) when the count hits 0
---   with no summon events pending and the escape boss state
---   IN_PROGRESS — the C++ `!_summonsCount && _events.Empty()`
---   check, read at summon death exactly as C++ reads it.
+--   with no summon events pending — the C++ `!_summonsCount &&
+--   _events.Empty()` check, read at summon death exactly as C++
+--   reads it — plus a Lua-side IN_PROGRESS guard (C++ has none;
+--   summons only exist during the escape, so it cannot mask a
+--   real fire).
 --   PORTED 2026-11-10 (trash side); see npc_hor_escape_trash.lua.
 --
 -- DOCUMENTED-ONLY: (none — every arm above is ported or has its
@@ -221,6 +223,17 @@ local function runLkEvent(creature, guid, kind, key)
     if not creature:IsInCombat() or creature:IsCasting() then
         lkSchedule(guid, key, 500, function() runLkEvent(creature, guid, kind, key) end)
         return
+    end
+    -- One-shot fired: drop its id so lkAlive goes false once the
+    -- machine drains — a fired id otherwise keeps the table non-nil
+    -- forever. The defer branch above re-schedules under the same
+    -- key instead, so this only runs on a real fire.
+    local per = lkTimers[guid]
+    if per then
+        per[key] = nil
+        if next(per) == nil then
+            lkTimers[guid] = nil
+        end
     end
     if kind ~= "winter" then
         local data = getInstanceData(creature)
@@ -339,13 +352,15 @@ end
 -- poller is the UpdateAI twin; the alive-player-on-threat gate is the
 -- conservative subset of the combat-refs gate (it can only miss a
 -- fire, never false-fire: with a living player on threat the
--- encounter is alive by definition). The non-passive
+-- encounter is alive by definition). The IsInCombat gate is C++
+-- SelectVictim's not-in-combat early return (:1350-1351): the
+-- passive branch never evaluates out of combat. The non-passive
 -- AttackStart-victim leg is engine-driven in Go.
 local function lkEvadePoll(creature, guid)
     if lkEvadePolls[guid] == nil then
         return
     end
-    if creature:GetReactState() == REACT_PASSIVE and creature:HasAura(SPELL_REMORSELESS_WINTER) then
+    if creature:IsInCombat() and creature:GetReactState() == REACT_PASSIVE and creature:HasAura(SPELL_REMORSELESS_WINTER) then
         local alivePlayer = false
         for _, t in ipairs(creature:GetAITargets()) do
             if t:GetObjectType() == "Player" and not t:IsDead() then
