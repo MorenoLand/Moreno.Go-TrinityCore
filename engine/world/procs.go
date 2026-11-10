@@ -3186,6 +3186,72 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 					continue
 				}
 			}
+			if auraSpell.ID == 49028 && i == 1 && eff.Aura == spellAuraDummy {
+				// spell_dk_dancing_rune_weapon::HandleProc
+				// (spell_dk.cpp:763-793): PreventDefaultAction; the
+				// caster's controlled Dancing Rune Weapon (27893)
+				// mirrors half the triggering spell's damage onto its
+				// own victim — SendSpellNonMeleeDamageLog with the
+				// triggering spell's id/school, then DealDamage
+				// (SPELL_DIRECT_DAMAGE, triggered=true). No Lua ev6
+				// port: ev6 args carry no proc spell id/school, Lua
+				// has no controlled-unit enumeration, and the Lua
+				// DealDamage spell leg deals 0 by design
+				// (lua_unit_combat.go) — so this Go twin is the only
+				// leg, not a Lua-off fallback. DORMANT until Spell.dbc
+				// ships the 49028 proc entry; the DRW itself rides the
+				// guardian summon funnel (owner faction stamped,
+				// 27893 display arm stays out per boss_ai.go).
+				if ev.eventSpell == nil || ev.damage == 0 {
+					continue
+				}
+				amount := ev.damage / 2
+				if amount == 0 {
+					continue
+				}
+				s.server.motionMu.Lock()
+				var drw *creatureMotion
+				for _, m := range s.server.motionMapLocked(s.player.Map, s.player.InstanceID) {
+					if m != nil && m.Entry == 27893 && m.OwnerGUID == s.playerGUID {
+						drw = m
+						break
+					}
+				}
+				s.server.motionMu.Unlock()
+				if drw == nil {
+					continue
+				}
+				s.server.motionMu.Lock()
+				victimGUID, dx, dy, dz := drw.TargetGUID, drw.X, drw.Y, drw.Z
+				s.server.motionMu.Unlock()
+				if victimGUID == 0 {
+					continue
+				}
+				spellID := ev.eventSpell.ID
+				schoolMask := uint32(ev.eventSpell.SchoolMask)
+				if ts := s.server.findSessionByGUID(victimGUID); ts != nil && ts.player != nil {
+					var overkill uint32
+					if victimHealth := ts.player.Health; amount >= victimHealth && victimHealth > 0 {
+						overkill = amount - victimHealth
+					}
+					logPkt := buildSpellNonMeleeDamageLog(victimGUID, drw.GUID, spellID, amount, overkill, uint8(schoolMask), 0, 0, 0, 0)
+					_ = ts.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s.player.Map, s.player.InstanceID, dx, dy, dz, ts)
+					s.server.dealDirectDamageToPlayer(ctx, drw.GUID, nil, ts, spellID, schoolMask, amount)
+				} else if vm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, victimGUID); vm != nil {
+					s.server.motionMu.Lock()
+					victimHealth := vm.Health
+					s.server.motionMu.Unlock()
+					var overkill uint32
+					if amount >= victimHealth && victimHealth > 0 {
+						overkill = amount - victimHealth
+					}
+					logPkt := buildSpellNonMeleeDamageLog(victimGUID, drw.GUID, spellID, amount, overkill, uint8(schoolMask), 0, 0, 0, 0)
+					s.server.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s.player.Map, s.player.InstanceID, dx, dy, dz, nil)
+					s.server.dealDirectDamageToCreature(ctx, drw.GUID, nil, vm, creatureAuraKeyForMotion(vm), spellID, schoolMask, true, amount)
+				}
+				continue
+			}
 			if auraSpell.ID == 50240 && i == 2 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_oculus_evasive_maneuvers::HandleProc
 				// (oculus.cpp:488-493): PreventDefaultAction; the holder

@@ -51364,6 +51364,29 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			stacks = -15
 		}
 		s.modWyrmGripStacks(stacks, auraRemoveByExpire, false)
+	case 52751:
+		// spell_dk_death_gate (spell_dk.cpp:908-947): OnEffectHitTarget
+		// EFFECT_0 SCRIPT_EFFECT — the hit unit self-casts the effect-0
+		// CalcValue (the Acherus teleport spell). PreventHitDefaultEffect
+		// is vacuous: the generic script-effect leg casts nothing by
+		// default. A Lua ev5 port would never fire: the player path has
+		// no OnEffectHitTarget site (60533 precedent above). The
+		// OnCheckCast class gate stays out: no check-cast bridge in the
+		// player path, and the spell is DK-gated by learning. Self-only,
+		// so the hit target is the caster's session. TRIGGERED DELTA:
+		// C++ casts non-triggered, but Go has no server-side
+		// non-triggered player cast helper — the teleport rides the
+		// triggered funnel (castSpellDirect) like the 69222/71806 arms.
+		// Dead hit units cast nothing (40904 precedent). DORMANT until
+		// Spell.dbc ships the 52751 record.
+		if value := eff.CalcValueForLevel(spell, uint32(s.player.Level)); value != 0 {
+			if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil {
+				if targetSess.isDeadOrGhost() {
+					return
+				}
+				targetSess.castSpellDirect(ctx, uint32(value), targetGUID)
+			}
+		}
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
 		// the hit target must be a creature; the caster must be a player
