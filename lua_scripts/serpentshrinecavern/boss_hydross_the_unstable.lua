@@ -26,7 +26,8 @@
 -- of a 1s scheduler pump (a port of boss_hydross_the_unstableAI::
 -- UpdateAI — 1s granularity is exact for the 7s/15s/10min/60s
 -- timers; the 2.5s PosCheck uses fractional countdown arithmetic,
--- C++-exact). The instance SetData(IN_PROGRESS) arm is blocked.
+-- C++-exact). The instance SetData(IN_PROGRESS) arm is PORTED
+-- below (instanceData:SetData, event 8 — instance_serpent_shrine.lua).
 -- Corrupted form: MarkOfCorruption 15s then 15s — DoCastVictim of
 -- 38219/38220/38221/38222/38230/40583 by stack count; count
 -- increments while < 5 (so the sixth spell repeats — C++-exact).
@@ -66,13 +67,13 @@
 -- verbatim). OnTargetDied(3): Talk(corrupted ? SAY_CORRUPT_SLAY :
 -- SAY_CLEAN_SLAY) — no TYPEID gate in C++ (C++-exact). OnDied(4):
 -- Talk(corrupted ? SAY_CORRUPT_DEATH : SAY_CLEAN_DEATH) + cleanup
--- (the SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
+-- (the SetData(DONE) arm is PORTED below). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state, despawn the
 -- stored beam pair (C++ Reset :137 DeSummonBeams, PORTED
 -- 2026-10-24; the adds despawn via despawnAdds, PORTED 2026-10-25
 -- — beams are NOT in Summons);
--- the instance SetData(NOT_STARTED) and SetMeleeDamageSchool have
--- no bridges; the ApplySpellImmune Reset/tick arms are PORTED
+-- the instance SetData(NOT_STARTED) arm is PORTED below (the
+-- SetMeleeDamageSchool arm has no bridge); the ApplySpellImmune Reset/tick arms are PORTED
 -- 2026-10-20 (creature:ApplySpellImmune bridge,
 -- lua_creature_events.go); the SetDisplayId arm is ported).
 -- Deliberate deviations (all await engine bridges): the beam pair
@@ -97,9 +98,11 @@
 -- and at Reset); no school bridge — SetMeleeDamageSchool
 -- unmodeled; the Reset + both form-switch ApplySpellImmune
 -- frost/nature arms are PORTED 2026-10-20 (the karazhan mana-feeder
--- convention); no instance-script model —
--- boss admission via the luaBossAI shim (DATA_HYDROSSTHEUNSTABLE
--- EVENT NOT_STARTED/IN_PROGRESS/DONE bookkeeping skipped).
+-- convention); instance-script model PORTED
+-- (instance_serpent_shrine.lua) — boss admission via the
+-- luaBossAI shim, with the DATA_HYDROSSTHEUNSTABLEEVENT
+-- NOT_STARTED/IN_PROGRESS/DONE bookkeeping written through
+-- instanceData:SetData (event 8).
 
 local SPELL_MARK_OF_HYDROSS = { 38215, 38216, 38217, 38218, 38231, 40584 }
 local SPELL_MARK_OF_CORRUPTION = { 38219, 38220, 38221, 38222, 38230, 40583 }
@@ -117,6 +120,21 @@ local SAY_CORRUPT_SLAY = 5
 local SAY_CORRUPT_DEATH = 6
 
 local ENTRY_HYDROSS = 21216
+
+-- serpent_shrine.h DATA_HYDROSSTHEUNSTABLEEVENT = 3; EncounterState
+-- (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local DATA_HYDROSSTHEUNSTABLEEVENT = 3
+local ENCOUNTER_NOT_STARTED = 0
+local ENCOUNTER_IN_PROGRESS = 1
+local ENCOUNTER_DONE = 3
+
+-- instance_serpent_shrine.lua owns the SetData switch; the boss
+-- files reach it through the shared instanceData table
+-- (slad_ran.lua:261-263 precedent: creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local ENTRY_PURE_SPAWN = 22035 -- boss_hydross_the_unstable.cpp:66
 local ENTRY_TAINTED_SPAWN = 22036 -- boss_hydross_the_unstable.cpp:67
@@ -438,6 +456,12 @@ local function hydrossEnterCombat(event, creature)
     resetState(guid)
     hydrossState[guid] = freshHydrossState()
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_hydross_the_unstable.cpp:176-181):
+    -- Talk(SAY_AGGRO) then SetData(IN_PROGRESS).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_HYDROSSTHEUNSTABLEEVENT, ENCOUNTER_IN_PROGRESS)
+    end
     -- C++ first-UpdateAI-tick SummonBeams latch (boss_hydross_the_
     -- unstable.cpp:217-221): the beam flag starts false, so the pair
     -- exists pre-pull in C++. The event-7 handler above arms the same
@@ -478,6 +502,12 @@ local function hydrossDied(event, creature, killer)
     else
         creature:Talk(SAY_CLEAN_DEATH)
     end
+    -- C++ JustDied (boss_hydross_the_unstable.cpp:209-214): Talk
+    -- then SetData(DONE).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_HYDROSSTHEUNSTABLEEVENT, ENCOUNTER_DONE)
+    end
     despawnAdds(creature:GetGUIDLow())
     resetState(creature:GetGUIDLow())
 end
@@ -494,6 +524,12 @@ local function hydrossReset(event, creature)
     -- C++ Reset() :143: SetDisplayId(MODEL_CLEAN) — C++ arm order
     -- after the school-immunity arms.
     creature:SetDisplayId(20162)
+    -- C++ Reset() :145: SetData(NOT_STARTED) — last arm after the
+    -- display swap (the Summons.DespawnAll leg rides despawnAdds above).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_HYDROSSTHEUNSTABLEEVENT, ENCOUNTER_NOT_STARTED)
+    end
 end
 
 -- C++ JustSummoned (boss_hydross_the_unstable.cpp:196-206): the

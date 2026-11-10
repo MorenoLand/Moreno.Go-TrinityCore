@@ -31,11 +31,11 @@
 -- phase 120000 / geyser {15s,20s} / check 15000 / wait 60000 /
 -- wait2 60000 / spawned false / inRange false) — submerged
 -- starts FALSE at combat: the whole fishing pre-phase (the
--- CheckCanStart/DATA_STRANGE_POOL poll, the emerge anim, the
--- WaitTimer/WaitTimer2 chain, SetVisible, the NOT_SELECTABLE
--- flag and ImmuneToPC arms) has no instance/GO/display/flag
--- bridges — the modeled fight starts on pull per the
--- magtheridon/ragnaros-intro convention. + 1s scheduler pump
+-- CheckCanStart/DATA_STRANGE_POOL poll is PORTED in the ev27 veto
+-- below; the emerge anim, the WaitTimer/WaitTimer2 chain,
+-- SetVisible, the NOT_SELECTABLE flag and ImmuneToPC arms) has
+-- no instance/GO/display/flag bridges — the modeled fight starts
+-- on pull per the magtheridon/ragnaros-intro convention. + 1s scheduler pump
 -- (a port of UpdateAI — 1s granularity is exact for the 45s/
 -- 18s/15s/2s/60s/120s timers). Pump, !Submerged arm: phase 120s
 -- -> InterruptNonMeleeSpells(false) + DoCast self 37550
@@ -83,12 +83,13 @@
 -- convention). The MoveInLineOfSight no-sight-engage leg is PORTED
 -- 2026-10-26 (ev27 veto while !started; the fight starts on pull).
 -- OnDied(4): cleanup + despawnLurkerAdds (the SetData
--- DONE/IN_PROGRESS arms are instance blocked).
+-- DONE/IN_PROGRESS arms are PORTED below).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the Reset arms — SetSwim + SetDisableGravity (both
 -- PORTED via their creature bridges, lurkerReset),
 -- the SPELL_SUBMERGE self-cast, SetVisible(false) and
--- the SetData NOT_STARTED arms — are movement/display/
+-- the SetData NOT_STARTED arms — the SetData arms are PORTED
+-- below; the submerge-cast/display arms are movement/display/
 -- instance blocked; the NOT_SELECTABLE flag + ImmuneToPC arms
 -- stay out by pull-convention (the flag bridge exists, but
 -- nothing in the modeled fight clears them); Summons.DespawnAll
@@ -111,14 +112,19 @@
 -- PORTED 2026-10-26 (ev27 veto; the radius leg is Go's scan guard).
 -- OnDied(4)/OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI shim
--- (DATA_THELURKERBELOWEVENT 17 NOT_STARTED/IN_PROGRESS/DONE
--- and DATA_STRANGE_POOL 23 NOT_STARTED/IN_PROGRESS bookkeeping
--- skipped); stale 'no GO bridge' retracted (RegisterGameObjectGossipEvent
--- bridged, engine/world/gameobject_hooks.go) — go_strange_pool's
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PARTLY PORTED
+-- (instance_serpent_shrine.lua) — the DATA_THELURKERBELOWEVENT 17
+-- NOT_STARTED/IN_PROGRESS/DONE and DATA_STRANGE_POOL 23
+-- NOT_STARTED/IN_PROGRESS bookkeeping is wired through
+-- instanceData:SetData (event 8), and the CheckCanStart
+-- DATA_STRANGE_POOL read is wired in the ev27 veto; boss
+-- admission via the luaBossAI shim for the rest. Stale 'no GO
+-- bridge' retracted (RegisterGameObjectGossipEvent bridged,
+-- engine/world/gameobject_hooks.go) — go_strange_pool's
 -- OnGossipHello (the 25% fishing roll, the 54587 cast, the DATA_STRANGE_POOL
--- transitions) unmodeled; the 9x submerged ambusher/guardian
+-- transitions) unmodeled (needs its own GO file, outside this
+-- unit's named file set); the 9x submerged ambusher/guardian
 -- summons PORTED 2026-10-24 (first-submerged-tick block); no movement bridge —
 -- the spout MoveRotate 20s machine, the rot-arc spout picks
 -- and the SPOUT_ANIM upkeep unmodeled; no LOS/arc/water-on-
@@ -146,6 +152,23 @@ local SPELL_SHOOT = 37770
 local EMOTE_SPOUT = 0
 
 local ENTRY_LURKER = 21217
+
+-- serpent_shrine.h DATA_THELURKERBELOWEVENT = 17,
+-- DATA_STRANGE_POOL = 23; EncounterState (InstanceScript.h:68-76):
+-- NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local DATA_THELURKERBELOWEVENT = 17
+local DATA_STRANGE_POOL = 23
+local ENCOUNTER_NOT_STARTED = 0
+local ENCOUNTER_IN_PROGRESS = 1
+local ENCOUNTER_DONE = 3
+
+-- instance_serpent_shrine.lua owns the SetData switch; the boss
+-- files reach it through the shared instanceData table
+-- (slad_ran.lua:261-263 precedent: creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 -- UnitDefines.h:132; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
 -- bridged (engine/world/lua_creature_events.go:690/725).
@@ -455,16 +478,26 @@ end
 -- (instance DATA_STRANGE_POOL via go_strange_pool) has no Lua model, so
 -- the latch tracks the Go fight lifecycle: false until the first pull
 -- (event 1), cleared on 2/4/23 (C++ Reset re-arms CanStartEvent false).
--- Damage pulls bypass the scan, so the veto never blocks a Go pull;
--- the radius/valid-target legs are Go's aggro-scan guards.
+-- The CheckCanStart gate read is PORTED (boss_lurker_below.cpp:140-144:
+-- GetData(DATA_STRANGE_POOL) != NOT_STARTED): the veto lifts when
+-- fished OR pulled. Damage pulls bypass the scan, so the veto never
+-- blocks a Go pull; the radius/valid-target legs are Go's aggro-scan guards.
 local function lurkerMoveInLOS(event, creature, unit)
-    if not lurkerStarted[creature:GetGUIDLow()] then
+    local data = instanceDataOf(creature)
+    local fished = data ~= nil and (data.strangePool or 0) ~= 0
+    if not lurkerStarted[creature:GetGUIDLow()] and not fished then
         return true
     end
 end
 
 local function lurkerEnterCombat(event, creature)
     creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_lurker_below.cpp:99 (ranged AI stands and casts)
+    -- C++ JustEngagedWith (boss_lurker_below.cpp:171-174):
+    -- SetData(THELURKERBELOWEVENT, IN_PROGRESS).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_THELURKERBELOWEVENT, ENCOUNTER_IN_PROGRESS)
+    end
     local guid = creature:GetGUIDLow()
     resetLurker(guid)
     lurkerState[guid] = freshLurkerState()
@@ -483,6 +516,14 @@ local function lurkerLeaveCombat(event, creature)
 end
 
 local function lurkerDied(event, creature, killer)
+    -- C++ JustDied (boss_lurker_below.cpp:163-168): SetData(
+    -- THELURKERBELOWEVENT, DONE) then SetData(STRANGE_POOL,
+    -- IN_PROGRESS), before Summons.DespawnAll.
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_THELURKERBELOWEVENT, ENCOUNTER_DONE)
+        data:SetData(DATA_STRANGE_POOL, ENCOUNTER_IN_PROGRESS)
+    end
     despawnLurkerAdds(creature:GetGUIDLow())
     resetLurker(creature:GetGUIDLow())
     lurkerStarted[creature:GetGUIDLow()] = nil
@@ -497,6 +538,15 @@ local function lurkerReset(event, creature)
     -- Initialize() (timer re-init, covered by resetLurker).
     creature:SetSwim(true)
     creature:SetDisableGravity(true)
+    -- C++ Reset (boss_lurker_below.cpp:155-156): SetData(
+    -- THELURKERBELOWEVENT, NOT_STARTED) then SetData(STRANGE_POOL,
+    -- NOT_STARTED) — after the swim/gravity arms, before the
+    -- submerge-cast leg (submerge-cast stays out, no display bridge).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_THELURKERBELOWEVENT, ENCOUNTER_NOT_STARTED)
+        data:SetData(DATA_STRANGE_POOL, ENCOUNTER_NOT_STARTED)
+    end
     -- Reset hygiene: an evade mid-submerge would strand the submerged
     -- IMMUNE_TO_PC bit (the modeled fight restarts unsubmerged on the
     -- next pull per the magtheridon/ragnaros-intro convention; C++

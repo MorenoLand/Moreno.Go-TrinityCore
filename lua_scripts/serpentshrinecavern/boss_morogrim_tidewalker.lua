@@ -56,9 +56,9 @@
 -- side triggered casts of 37854/37858/37860/37861 have no
 -- player bridges — unmodeled, below). OnTargetDied(3): Talk(
 -- SAY_SLAY) (no TYPEID gate, C++-exact). OnDied(4): Talk(SAY_
--- DEATH) + cleanup (the SetData(DONE) arm is instance-blocked).
+-- DEATH) + cleanup (the SetData(DONE) arm is PORTED below).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
--- state (the SetData(NOT_STARTED) arm is instance-blocked).
+-- state (the SetData(NOT_STARTED) arm is PORTED below).
 -- Melee is engine-driven.
 -- npc_water_globule (21913): OnEnterCombat(1): per-GUID reset
 -- (check 1000) + 1s pump; pump: if the victim exists and is
@@ -77,11 +77,13 @@
 -- on event 1 (2026-10-23 — the stale "no no-melee bridge / leotheras
 -- precedent" claim is retracted). OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI shim
--- (the DATA_MOROGRIMTIDEWALKEREVENT NOT_STARTED/IN_PROGRESS/
--- DONE bookkeeping and the JustEngagedWith Playercount arm
--- skipped); the 10x Tidewalker Lurker (21920) summons at the
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PARTLY PORTED
+-- (instance_serpent_shrine.lua) — the DATA_MOROGRIMTIDEWALKEREVENT
+-- NOT_STARTED/IN_PROGRESS/DONE bookkeeping is wired through
+-- instanceData:SetData (event 8); boss admission via the luaBossAI
+-- shim for the rest (the JustEngagedWith Playercount arm skipped);
+-- the 10x Tidewalker Lurker (21920) summons at the
 -- MurlocCords coords are PORTED 2026-10-24 (SummonCreature + DoZoneInCombat;
 -- stale "no summon bridge" claim retracted — the per-lurker
 -- separately-random target assignment stays out, zone aggro substitutes);
@@ -112,6 +114,21 @@ local EMOTE_WATERY_GLOBULES = 7
 local ENTRY_MOROGRIM = 21213
 local ENTRY_WATER_GLOBULE = 21913
 local ENTRY_TIDEWALKER_LURKER = 21920 -- boss_morogrim_tidewalker.cpp:71
+
+-- serpent_shrine.h DATA_MOROGRIMTIDEWALKEREVENT = 10; EncounterState
+-- (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local DATA_MOROGRIMTIDEWALKEREVENT = 10
+local ENCOUNTER_NOT_STARTED = 0
+local ENCOUNTER_IN_PROGRESS = 1
+local ENCOUNTER_DONE = 3
+
+-- instance_serpent_shrine.lua owns the SetData switch; the boss
+-- files reach it through the shared instanceData table
+-- (slad_ran.lua:261-263 precedent: creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 -- C++ MurlocCords[10][4] (boss_morogrim_tidewalker.cpp:74-85).
 local MURLOC_CORDS = {
@@ -279,6 +296,12 @@ local function morogrimEnterCombat(event, creature)
     resetMorogrim(guid)
     morogrimState[guid] = freshMorogrimState()
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_morogrim_tidewalker.cpp:162-167):
+    -- StartEvent(): Talk(SAY_AGGRO) then SetData(IN_PROGRESS).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_MOROGRIMTIDEWALKEREVENT, ENCOUNTER_IN_PROGRESS)
+    end
     -- Repeats arg 0 = infinite (runtime.go:1189-1194: default repeats is
     -- 1, i.e. one-shot — the 2026-10-25 audit caught both pumps here
     -- firing exactly once, leaving the boss melee-only).
@@ -298,10 +321,22 @@ end
 
 local function morogrimDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_morogrim_tidewalker.cpp:157-161): Talk
+    -- then SetData(DONE).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_MOROGRIMTIDEWALKEREVENT, ENCOUNTER_DONE)
+    end
     resetMorogrim(creature:GetGUIDLow())
 end
 
 local function morogrimReset(event, creature)
+    -- C++ Reset (boss_morogrim_tidewalker.cpp:139-142): Initialize
+    -- then SetData(NOT_STARTED).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_MOROGRIMTIDEWALKEREVENT, ENCOUNTER_NOT_STARTED)
+    end
     resetMorogrim(creature:GetGUIDLow())
 end
 

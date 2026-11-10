@@ -6,13 +6,13 @@
 -- SpellScript/AuraScript scripts in this file).
 -- Final boss in the Hellfire Ramparts set per
 -- outland_script_loader.cpp order (instance_hellfire_
--- ramparts.cpp stays blocked on the instance-script model).
+-- ramparts.cpp PORTED in instance_hellfire_ramparts.lua).
 -- Entry: NPC_VAZRUDEN = 17537 (hellfire_ramparts.h,
 -- verifiable from the C++ sources); instance_hellfire_
 -- ramparts.cpp has no OnCreatureCreate mapping for it —
 -- only OnGameObjectCreate doors and a SetBossState
--- DATA_VAZRUDEN = 2 completion arm (instance-side
--- constant, unbridgeable). The creature_template
+-- DATA_VAZRUDEN = 2 completion arm (PORTED below in
+-- OnDied: SetBossState DONE + instanceData flag). The creature_template
 -- ScriptName bindings are DB-side (no TDB in this
 -- workspace).
 -- Talk: SAY_WIPE = 0 (wipe — fired from the C++
@@ -35,8 +35,9 @@
 -- Fight shape (C++-exact for all modeled arms): Vazruden
 -- (17537): OnEnterCombat(1): per-GUID reset to the C++
 -- Initialize() values (revenge 4000 / wipeSaid false — the
--- BossAI::JustEngagedWith arm is instance-blocked, DATA_
--- VAZRUDEN = 2 is unbridgeable) + Talk(SAY_AGGRO) + 1s
+-- BossAI::JustEngagedWith IN_PROGRESS write stays out —
+-- no consumer; Talk + SetCombatPulseDelay +
+-- DoZoneInCombat are ported) + Talk(SAY_AGGRO) + 1s
 -- scheduler pump (a port of UpdateAI in C++ arm order — 1s
 -- granularity exact for the C++ timer; the !UpdateVictim
 -- early return collapses into the pump). Pump: revenge —
@@ -53,16 +54,18 @@
 -- DisappearAndDie — self, no delay, me->IsAlive() gate,
 -- creature:Despawn(), cancelled on re-engage, C++-exact).
 -- OnDied(4): Talk(SAY_DIE) gated on killer ~= me
--- (C++-exact) + cleanup (the _JustDied arm is
--- instance-blocked). OnReset(23): cancel the pump, drop
+-- (C++-exact) + cleanup + the _JustDied arm (SetBossState
+-- DATA_VAZRUDEN DONE + instanceData.vazrudenDone flag,
+-- PORTED). OnReset(23): cancel the pump, drop
 -- per-GUID state (the Reset() observable remainder — the
 -- Initialize() re-latch — lands on OnEnterCombat; the
--- _Reset arm is instance-blocked).
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI
--- shim (instance_hellfire_ramparts.cpp stays blocked on the
--- instance-script model; the BossAI ctor DATA_VAZRUDEN = 2
--- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
+-- _Reset NOT_STARTED write stays out — no consumer).
+-- Deliberate deviations (all await engine bridges): the
+-- instance script is PORTED (instance_hellfire_ramparts.lua
+-- — RegisterMapEvent model; the _JustDied DONE arm rides
+-- ev4 below); the BossAI ctor DATA_VAZRUDEN = 2
+-- IN_PROGRESS / NOT_STARTED bookkeeping in Reset /
+-- JustEngagedWith stays out (no consumer);
 -- difficulty is bridged — creature:IsHeroic() (per-instance
 -- difficulty, lua_creature_events.go) drives the DUNGEON_MODE
 -- spell variants; the UnsummonCheck DisappearAndDie arm is PORTED
@@ -82,6 +85,9 @@ local SAY_KILL = 2
 local SAY_DIE = 3
 
 local ENTRY_VAZRUDEN = 17537
+
+local DATA_VAZRUDEN = 2 -- hellfire_ramparts.h DATA_VAZRUDEN
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local timers = {}
 local states = {}
@@ -186,6 +192,17 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN, 4, function(_, creature, killer)
     -- in this engine (lua_creature_events.go).
     if killer and killer:GetGUID() ~= creature:GetGUID() then
         creature:Talk(SAY_DIE)
+    end
+    -- C++ BossAI::_JustDied (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_VAZRUDEN, DONE). The
+    -- instance script's chest-clear leg reads the flag below
+    -- (no boss-state-change event exists —
+    -- instance_hellfire_ramparts.lua header).
+    creature:SetBossState(DATA_VAZRUDEN, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.vazrudenDone = true
     end
     resetBoss(creature:GetGUIDLow())
     cancelDespawn(creature:GetGUIDLow())

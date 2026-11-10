@@ -22,7 +22,8 @@
 -- (event 27, per-GUID constructor latch — "no need do intro if
 -- wiped"); SAY_PHASE1=2 has no Lua constant (C++-only enum member,
 -- never talked in C++ either — omission correct). SAY_PHASE3=4
--- likewise has no constant: its branch is instance-gate-blocked (D1).
+-- fires on the phase-3 transition below (PORTED — the
+-- DATA_CANSTARTPHASE3 gate read is wired).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset, 27 OnMoveInLineOfSight. Timers via CreateLuaEvent
 -- (per-GUID scheduler pump); melee is engine-driven in Go
@@ -35,8 +36,8 @@
 -- 30000 / check 15000 / forkedLightning 2000 / entangled false /
 -- phase 1) + Talk(SAY_AGGRO) + start of a 1s scheduler pump (a
 -- port of boss_lady_vashjAI::UpdateAI — 1s granularity is exact
--- for all C++ timers). The instance SetData(IN_PROGRESS) arm stays
--- blocked; the per-player DestroyItemCount(31088) tainted-core sweep
+-- for all C++ timers). The instance SetData(IN_PROGRESS) arm is
+-- PORTED below; the per-player DestroyItemCount(31088) tainted-core sweep
 -- is PORTED on engage (DestroyItemCount is bridged, D5). Phase 1:
 -- Shock blast
 -- 38509 1..60000ms init then {1s,15s} — DoCastVictim (C++-exact).
@@ -62,20 +63,22 @@
 -- player pick, victim fallback (C++-exact). The enchanted/
 -- tainted summon arms are ported below, as are the Coilfang-elite/
 -- Coilfang-strider summon arms (2026-10-25); the phase-3 CheckTimer
--- poll is instance-
--- blocked (instance->GetData(DATA_CANSTARTPHASE3)), so phase 3
--- is unreachable in this model (below). OnTargetDied(3): Talk(
+-- poll is PORTED below (the DATA_CANSTARTPHASE3 gate read rides
+-- the instanceData.canStartPhase3 field), so phase 3 is reachable.
+-- OnTargetDied(3): Talk(
 -- SAY_SLAY) — no TYPEID gate (C++-exact). OnDied(4): Talk(SAY_
--- DEATH) + cleanup (the SetData(DONE) arm is instance-blocked).
+-- DEATH) + cleanup (the SetData(DONE) arm is PORTED below).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
 -- state (the SetCorpseDelay arm has no bridge).
--- Deliberate deviations (all await engine bridges): no instance-
--- script model — boss admission via the luaBossAI shim (the
--- DATA_LADYVASHJEVENT NOT_STARTED/IN_PROGRESS/DONE bookkeeping,
--- the DATA_CANSTARTPHASE3 gate, DATA_LADYVASHJ GUID lookups and
--- the 19s intro AggroTimer / Intro / CanAttack / UNIT_FLAG_NON_
--- ATTACKABLE MoveInLineOfSight machine — the flag arms are PORTED
--- (2026-10-20); the instance bookkeeping stays skipped);
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PARTLY PORTED
+-- (instance_serpent_shrine.lua) — the DATA_LADYVASHJEVENT
+-- NOT_STARTED/IN_PROGRESS/DONE bookkeeping and the
+-- DATA_CANSTARTPHASE3 gate read are wired; the DATA_LADYVASHJ GUID
+-- lookups stay FindNearestCreature-based, and the 19s intro
+-- AggroTimer / Intro / CanAttack / UNIT_FLAG_NON_ATTACKABLE
+-- MoveInLineOfSight machine stays (the flag arms are PORTED
+-- (2026-10-20)); boss admission via the luaBossAI shim for the rest;
 -- the passive summon legs are PORTED (the stale "no summon bridge"
 -- claim is retracted): 4x shield-generator-channel (19870) at the
 -- phase-2 transition, enchanted-elemental (21958, cycling ElementPos)
@@ -83,9 +86,8 @@
 -- timers, and the Coilfang-elite (22055) / Coilfang-strider (22056)
 -- phase-2 summon arms are PORTED below (SummonCreature type 3, 5s +
 -- EngageWithTarget, kargath-guard precedent — the old "sole role is
--- combat" stay-out is retracted). STAY-OUT: sporebat (22140) — phase 3
--- is unreachable (instance DATA_CANSTARTPHASE3 gate), so its summon
--- arm can never fire;
+-- combat" stay-out is retracted). Sporebat (22140) — PORTED below
+-- (the phase-3 summon arm runs once the DATA_CANSTARTPHASE3 gate opens);
 -- the phase-2 MotionMaster Clear stays out (no bridge) but its
 -- DoTeleportTo is PORTED in the phase-2 arm below (2026-10-24 — the old
 -- "no teleport bridge" claim was stale); the enchanted-elemental MovePoint
@@ -116,7 +118,9 @@
 -- .4), cross-creature channel kill via the vashj AI's stored
 -- channel GUIDs, player->CastSpell(38134) on a player target,
 -- DestroyItemCount(31088) and GameObject-target resolution —
--- none bridgeable, documented only, not registered; phase 2's
+-- none bridgeable (the instance side now accepts the
+-- shield-generator writes — instance_serpent_shrine.lua — but the
+-- item OnUse itself stays out), documented only, not registered; phase 2's
 -- "no victim + in combat -> EnterEvadeMode" arm has no evade
 -- bridge — unmodeled.
 -- npc_tainted_elemental (22009) port: OnEnterCombat(1) per-GUID
@@ -145,11 +149,27 @@ local SPELL_POISON_BOLT = 40095
 local SAY_INTRO = 0
 local SAY_AGGRO = 1
 local SAY_PHASE2 = 3
+local SAY_PHASE3 = 4
 local SAY_BOWSHOT = 5
 local SAY_SLAY = 6
 local SAY_DEATH = 7
 
 local ENTRY_LADY_VASHJ = 21212
+
+-- serpent_shrine.h DATA_LADYVASHJEVENT = 8; EncounterState
+-- (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local DATA_LADYVASHJEVENT = 8
+local ENCOUNTER_NOT_STARTED = 0
+local ENCOUNTER_IN_PROGRESS = 1
+local ENCOUNTER_DONE = 3
+
+-- instance_serpent_shrine.lua owns the SetData switch; the boss
+-- files reach it through the shared instanceData table
+-- (slad_ran.lua:261-263 precedent: creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 -- UnitDefines.h:125; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
 -- bridged (engine/world/lua_creature_events.go:690/725).
@@ -161,6 +181,16 @@ local ENTRY_SHIELD_GENERATOR_CHANNEL = 19870 -- boss_lady_vashj.cpp:60 (C++ spel
 local ENTRY_ENCHANTED_ELEMENTAL = 21958
 local ENTRY_COILFANG_ELITE = 22055
 local ENTRY_COILFANG_STRIDER = 22056
+local ENTRY_TOXIC_SPOREBAT = 22140 -- boss_lady_vashj.cpp:65
+
+local SPELL_MAGIC_BARRIER = 38112 -- boss_lady_vashj.cpp:58
+
+-- boss_lady_vashj.cpp:73-76 (SPOREBAT_X/Y/Z/O): the phase-3
+-- sporebat spawn point.
+local SPOREBAT_X = 30.977156
+local SPOREBAT_Y = -925.297761
+local SPOREBAT_Z = 77.176567
+local SPOREBAT_O = 5.223932
 
 -- boss_lady_vashj.cpp:69-71 (MIDDLE_X/Y/Z): the platform center Vashj
 -- teleports to at the phase-2 transition (:401-402).
@@ -271,7 +301,9 @@ end
 
 -- C++ Initialize(): shockBlast 1+rand60000, staticCharge
 -- 10000+rand15000, entangle 30000, check 15000, forkedLightning
--- 2000, entangled false, phase 0 (0 until combat starts it).
+-- 2000, entangled false, phase 0 (0 until combat starts it),
+-- summonSporebat 10000, summonSporebatStatic 30000
+-- (boss_lady_vashj.cpp:170-176).
 local function freshVashjState()
     return {
         shockBlast = 1 + math.random(0, 59999),
@@ -281,6 +313,8 @@ local function freshVashjState()
         forkedLightning = 2000,
         entangled = false,
         phase = 1,
+        summonSporebat = 10000,
+        summonSporebatStatic = 30000,
     }
 end
 
@@ -290,7 +324,10 @@ local function vashjTick(creature, guid)
         return
     end
 
-    if st.phase == 1 then
+    -- C++ UpdateAI runs this branch for Phase == 1 or Phase == 3
+    -- (boss_lady_vashj.cpp:348); the phase-2 arms live in the
+    -- elseif below.
+    if st.phase == 1 or st.phase == 3 then
         -- Shock Blast: DoCastVictim, re-arm {1s,15s} (C++-exact).
         if st.shockBlast <= 1000 then
             creature:CastSpell(nil, SPELL_SHOCK_BLAST)
@@ -336,9 +373,12 @@ local function vashjTick(creature, guid)
         -- SHIED_GENERATOR_CHANNEL 19870 at ShieldGeneratorChannelPos,
         -- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4), then Talk(SAY_PHASE2).
         -- The stored channel returns feed the ev23 Reset cleanup
-        -- (D3); the instance SetData bookkeeping stays blocked.
+        -- (D3); the instance SetData bookkeeping is PORTED below.
+        -- C++ boss_lady_vashj.cpp:404-411 gates the phase-2
+        -- transition on Phase == 1; the Phase == 3 else-arm runs
+        -- the sporebat summons below.
         local maxHealth = creature:GetMaxHealth()
-        if maxHealth > 0
+        if st.phase == 1 and maxHealth > 0
                 and creature:GetHealth() < math.floor(maxHealth * 70 / 100) then
             creature:Teleport(VASHJ_MIDDLE_X, VASHJ_MIDDLE_Y, VASHJ_MIDDLE_Z)
             -- Store channel returns: C++ Reset kills each stored
@@ -368,6 +408,33 @@ local function vashjTick(creature, guid)
             st.coilfangStrider = 60000 + math.random(0, 9999)
         end
 
+        -- Phase 3 sporebat arm (boss_lady_vashj.cpp:414-430):
+        -- SummonCreature(TOXIC_SPOREBAT 22140 at SPOREBAT_X/Y/Z/O,
+        -- TEMPSUMMON_CORPSE_DESPAWN Eluna type 4) + AttackStart(
+        -- random threat-list target); the static timer decays 1000
+        -- per summon (floor 5000) and re-arms the summon timer.
+        if st.phase == 3 then
+            if st.summonSporebat <= 1000 then
+                local sporebat = creature:SummonCreature(ENTRY_TOXIC_SPOREBAT,
+                    SPOREBAT_X, SPOREBAT_Y, SPOREBAT_Z, SPOREBAT_O, 4, 0)
+                if sporebat then
+                    local pick = pickRandomThreatTarget(creature)
+                    if pick then
+                        sporebat:EngageWithTarget(pick)
+                    end
+                end
+                if st.summonSporebatStatic > 1000 then
+                    st.summonSporebatStatic = st.summonSporebatStatic - 1000
+                end
+                st.summonSporebat = st.summonSporebatStatic
+                if st.summonSporebat < 5000 then
+                    st.summonSporebat = 5000
+                end
+            else
+                st.summonSporebat = st.summonSporebat - 1000
+            end
+        end
+
         -- CheckTimer (boss_lady_vashj.cpp:438-448): if nobody on the
         -- threat list is in melee range, Shoot/Multishot.
         -- creature:GetAITargets() is the bridged threat list
@@ -391,10 +458,11 @@ local function vashjTick(creature, guid)
         end
     elseif st.phase == 2 then
         -- Phase 2: forked lightning 2s then {2s,8s} — random
-        -- threat-list pick, victim fallback (C++-exact). Phase 3 has
-        -- no branch: entry needs DATA_CANSTARTPHASE3 (instance-
-        -- blocked), and this guard keeps phase-2 arms from running
-        -- under any other phase value.
+        -- threat-list pick, victim fallback (C++-exact). Phase 3
+        -- has its own branch (the phase-1/3 branch above); this
+        -- elseif keeps the phase-2 arms from running under any
+        -- other phase value, and the CheckTimer poll at the end
+        -- of this branch opens phase 3.
         if st.forkedLightning <= 1000 then
             local pick = pickRandomThreatTarget(creature)
             if not pick then
@@ -485,6 +553,32 @@ local function vashjTick(creature, guid)
         else
             st.coilfangStrider = st.coilfangStrider - 1000
         end
+
+        -- CheckTimer (boss_lady_vashj.cpp:526-544): the phase-3 gate
+        -- poll — instance->GetData(DATA_CANSTARTPHASE3). The read
+        -- rides the plain instanceData.canStartPhase3 field (no
+        -- GetData method exists on instanceData —
+        -- instance_serpent_shrine.lua header). The C++ CheckTimer is
+        -- the same timer variable as the phase-1 melee check above
+        -- (st.check), re-armed 1000 here.
+        if st.check <= 1000 then
+            local data = instanceDataOf(creature)
+            if data ~= nil and data.canStartPhase3 == true then
+                -- C++ :531-542: set life 50%, remove the magic
+                -- barrier, Talk(SAY_PHASE3), Phase = 3. The
+                -- MoveChase leg stays out (no bridge).
+                local maxHealth = creature:GetMaxHealth()
+                if maxHealth > 0 then
+                    creature:SetHealth(math.floor(maxHealth * 50 / 100))
+                end
+                creature:RemoveAura(SPELL_MAGIC_BARRIER)
+                creature:Talk(SAY_PHASE3)
+                st.phase = 3
+            end
+            st.check = 1000
+        else
+            st.check = st.check - 1000
+        end
     end
 end
 
@@ -520,8 +614,8 @@ local function vashjEnterCombat(event, creature)
     vashjState[guid] = freshVashjState()
     -- C++ JustEngagedWith tainted-core sweep (D5): every map player
     -- loses one Tainted Core (31088); DestroyItemCount is bridged
-    -- (lua_player.go:360). The SetData(IN_PROGRESS) leg stays
-    -- instance-blocked. (Sighting-engage also lands here via ev1, a
+    -- (lua_player.go:360). The SetData(IN_PROGRESS) leg is PORTED
+    -- below (StartEvent). (Sighting-engage also lands here via ev1, a
     -- minor over-fire vs C++'s engage-only sweep.)
     for _, p in ipairs(GetPlayersInWorld()) do
         if p:GetMapId() == creature:GetMapId() and p:GetInstanceId() == creature:GetInstanceId() then
@@ -529,6 +623,13 @@ local function vashjEnterCombat(event, creature)
         end
     end
     creature:Talk(SAY_AGGRO)
+    -- C++ JustEngagedWith (boss_lady_vashj.cpp:263-270): the
+    -- tainted-core sweep above, then StartEvent() (:256-260):
+    -- Talk(SAY_AGGRO), Phase = 1, SetData(IN_PROGRESS).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_LADYVASHJEVENT, ENCOUNTER_IN_PROGRESS)
+    end
     vashjTimers[guid] = CreateLuaEvent(function()
         vashjTick(creature, guid)
     end, 1000, 0)
@@ -548,6 +649,12 @@ end
 
 local function vashjDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_lady_vashj.cpp:247-251): Talk then
+    -- SetData(DONE).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_LADYVASHJEVENT, ENCOUNTER_DONE)
+    end
     -- C++ elementals KillSelf on vashj death; channels are untouched
     -- by JustDied (CORPSE_DESPAWN is engine-side).
     despawnStoredSummons(creature:GetGUIDLow(), false)
@@ -560,6 +667,13 @@ local function vashjReset(event, creature)
     -- C++ Reset kills each stored shield channel (JUST_DIED) and the
     -- elementals KillSelf once vashj is out of combat (D3/D7).
     despawnStoredSummons(creature:GetGUIDLow(), true)
+    -- C++ Reset (boss_lady_vashj.cpp:229): SetData(NOT_STARTED)
+    -- after the channel kill, before the corpse-delay leg
+    -- (corpse-delay stays out, no bridge).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_LADYVASHJEVENT, ENCOUNTER_NOT_STARTED)
+    end
     resetVashj(creature:GetGUIDLow())
     -- C++ Reset: non-JustCreated -> CanAttack true (wipe case).
     vashjCanAttack[creature:GetGUIDLow()] = true

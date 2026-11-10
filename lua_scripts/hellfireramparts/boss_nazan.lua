@@ -6,12 +6,13 @@
 -- SpellScript/AuraScript scripts in this file).
 -- Final boss in the Hellfire Ramparts set per
 -- outland_script_loader.cpp order (instance_hellfire_
--- ramparts.cpp stays blocked on the instance-script model).
+-- ramparts.cpp PORTED in instance_hellfire_ramparts.lua).
 -- Entry: NPC_NAZAN = 17536 (hellfire_ramparts.h, verifiable
 -- from the C++ sources); instance_hellfire_ramparts.cpp has
 -- no OnCreatureCreate mapping for it — only OnGameObjectCreate
 -- doors and a SetBossState DATA_NAZAN = 3 completion arm
--- (instance-side constant, unbridgeable). The
+-- (PORTED below in OnDied: SetBossState DONE +
+-- instanceData flag). The
 -- creature_template ScriptName bindings are DB-side (no TDB
 -- in this workspace).
 -- Talk: EMOTE = 0 (land — fired from the C++ flight -> land
@@ -26,8 +27,8 @@
 -- (17536): OnEnterCombat(1): per-GUID reset to the C++ ctor
 -- + Initialize() values (flight true / bellowingRoar 0 /
 -- coneOfFire 0 / fireball 4000 / fly 45000 / turn 0 — the
--- BossAI::JustEngagedWith arm is instance-blocked, DATA_
--- NAZAN = 3 is unbridgeable) + 1s scheduler pump (a port of
+-- BossAI::JustEngagedWith IN_PROGRESS write stays out —
+-- no consumer) + 1s scheduler pump (a port of
 -- UpdateAI in C++ arm order — 1s granularity exact for the
 -- C++ timers; the !UpdateVictim early return collapses into
 -- the pump). Pump: fireball 34653 — 4s init then {4s,7s},
@@ -50,17 +51,20 @@
 -- on self (C++ DoCast(me), C++-exact), re-arm 12000,
 -- Fireball_Timer reset to 4000 (C++-exact). Melee is
 -- engine-driven.
--- OnDied(4): cleanup (the _JustDied arm is instance-
--- blocked). OnLeaveCombat(2)/OnReset(23): cancel the pump
+-- OnDied(4): cleanup + the _JustDied arm (SetBossState
+-- DATA_NAZAN DONE + instanceData.nazanDone flag, PORTED —
+-- base BossAI::JustDied, ScriptedCreature.h:330).
+-- OnLeaveCombat(2)/OnReset(23): cancel the pump
 -- and apply the C++ Reset() = Initialize() re-latch
 -- (fireball 4000 / fly 45000; the ctor-only flight /
 -- bellowingRoar / coneOfFire fields keep their values —
--- the _Reset arm is instance-blocked).
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI
--- shim (instance_hellfire_ramparts.cpp stays blocked on the
--- instance-script model; the BossAI ctor DATA_NAZAN = 3
--- bookkeeping in Reset/JustEngagedWith/JustDied skipped);
+-- the _Reset NOT_STARTED write stays out — no consumer).
+-- Deliberate deviations (all await engine bridges): the
+-- instance script is PORTED (instance_hellfire_ramparts.lua
+-- — RegisterMapEvent model; the _JustDied DONE arm rides
+-- ev4 below); the BossAI ctor DATA_NAZAN = 3
+-- IN_PROGRESS / NOT_STARTED bookkeeping in Reset /
+-- JustEngagedWith stays out (no consumer);
 -- no movement bridge — the whole flight waypoint machine
 -- unmodeled (Turn_Timer MovePoint hops, the flight-phase
 -- DoStartMovement/AttackStart re-acquire arms; the land
@@ -99,6 +103,9 @@ local ENTRY_VAZRUDEN = 17537
 local EMOTE = 0
 
 local ENTRY_NAZAN = 17536
+
+local DATA_NAZAN = 3 -- hellfire_ramparts.h DATA_NAZAN
+local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local timers = {}
 local states = {}
@@ -310,6 +317,19 @@ end)
 RegisterCreatureEvent(ENTRY_NAZAN, 4, function(_, creature)
     -- Death: full state drop — respawn re-engages with
     -- fresh ctor state (C++-exact).
+    -- C++ BossAI::JustDied (ScriptedCreature.h:330 — Nazan
+    -- has no JustDied override) -> _JustDied
+    -- (ScriptedCreature.cpp:513-520):
+    -- instance->SetBossState(DATA_NAZAN, DONE). The
+    -- instance script's chest-clear leg reads the flag below
+    -- (no boss-state-change event exists —
+    -- instance_hellfire_ramparts.lua header).
+    creature:SetBossState(DATA_NAZAN, BOSS_STATE_DONE)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data then
+        data.nazanDone = true
+    end
     resetBoss(creature:GetGUIDLow())
 end)
 

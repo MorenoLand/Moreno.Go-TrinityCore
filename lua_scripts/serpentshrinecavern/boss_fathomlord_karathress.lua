@@ -30,9 +30,9 @@
 -- C++ Initialize() values + Talk(SAY_AGGRO) + start of a 1s
 -- scheduler pump (a port of boss_fathomlord_karathressAI::
 -- UpdateAI — 1s granularity is exact for all C++ timers; the
--- StartEvent Talk(SAY_AGGRO) / DoZoneInCombat / SetData(IN_
--- PROGRESS) / SetGuidData(STARTER) arms are instance/z-combat
--- blocked). Pump per tick: cataclysmic bolt 38441 10s then 10s
+-- StartEvent Talk(SAY_AGGRO) / SetData(IN_PROGRESS) /
+-- SetGuidData(STARTER) arms are PORTED below (writeKarathressStart);
+-- DoZoneInCombat stays out (no bridge). Pump per tick: cataclysmic bolt 38441 10s then 10s
 -- — pick = random alive player in the instance excluding the
 -- victim (C++ SelectTarget(Random, 1), "other than the main
 -- tank" — curator/teron convention, no threat model); if no
@@ -52,15 +52,16 @@
 -- ported via creature:PlayDirectSound.
 -- OnTargetDied(3): Talk(SAY_SLAY) (C++-exact — no TYPEID gate).
 -- OnDied(4): Talk(SAY_DEATH) + cleanup (the SetData(FATHOMLORD_
--- KARATHRESSEVENT, DONE) arm is instance-blocked; the Seer Olum
+-- KARATHRESSEVENT, DONE) arm is PORTED below; the Seer Olum
 -- 22820 quest-10944 summon arm is PORTED below — the stale "no summon
 -- bridge" claim is retracted). OnLeaveCombat
 -- (2)/OnReset(23): cancel the pump, drop per-GUID state (the
--- evade-side advisor respawn + MoveTargetedHome + SetData(NOT_
--- STARTED) arms are instance/movement blocked).
+-- evade-side advisor respawn + MoveTargetedHome arms stay
+-- movement blocked; the SetData(NOT_STARTED) arm is PORTED below).
 -- Sharkkis (21966). OnEnterCombat(1): per-GUID scheduler reset
 -- to the C++ Initialize() values + 1s pump (the instance SetData
--- (IN_PROGRESS)/SetGuidData(STARTER) arms blocked). Pump:
+-- (IN_PROGRESS)/SetGuidData(STARTER) arms are PORTED below —
+-- writeKarathressStart). Pump:
 -- leeching throw 29436 20s then 20s, DoCastVictim (C++-exact);
 -- multishot 38366 15s then 20s, DoCastVictim (C++-exact); the
 -- beast within 38373 30s then 30s, non-triggered self-cast
@@ -112,14 +113,22 @@
 -- OnDied(4):
 -- cleanup + PORTED EventCaribdisDeath relay (relayAdvisorDeath). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI shim
--- (the DATA_KARATHRESSEVENT / DATA_KARATHRESSEVENT_STARTER /
--- DATA_FATHOMLORDKARATHRESSEVENT SetData/GetData gates, the
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PARTLY PORTED
+-- (instance_serpent_shrine.lua) — the DATA_KARATHRESSEVENT /
+-- DATA_KARATHRESSEVENT_STARTER / DATA_FATHOMLORDKARATHRESSEVENT
+-- SetData writes and the starter-low field write are wired
+-- (writeKarathressStart + the Reset/Died arms below); the
 -- DATA_KARATHRESS/DATA_SHARKKIS/DATA_TIDALVESS/DATA_CARIBDIS
--- advisor GUID bookkeeping, the starter-target re-engage arm,
--- the evade-mode event reset and the advisor respawn arms
--- skipped); advisor-death relays PORTED below (FindNearestCreature
+-- advisor GUID bookkeeping stays FindNearestCreature-based
+-- (the instance GUID-low fields are recorded but nothing
+-- resolves a GUID-low to a unit), the starter-target re-engage
+-- arm and the evade-mode event reset stay out (no event-7 poll
+-- in the advisor files; the evade half is engine-covered by
+-- LeaveCombat), and the advisor respawn arms stay out
+-- (FindNearestCreature is live-only, so a dead advisor cannot
+-- be resolved for Respawn); boss admission via the luaBossAI
+-- shim for the rest; advisor-death relays PORTED below (FindNearestCreature
 -- + Talk(SAY_GAIN_ABILITY1..3) + self-cast POWER_OF_SHARKKIS 38455
 -- / TIDALVESS 38452 / CARIBDIS 38451); the summon bridge is
 -- live and the sharkkis pet spawns are PORTED in sharkkisTick
@@ -181,6 +190,43 @@ local ENTRY_FATHOM_LURKER = 22119
 local ENTRY_FATHOM_SPOREBAT = 22120
 local ENTRY_TIDALVESS = 21965
 local ENTRY_CARIBDIS = 21964
+
+-- serpent_shrine.h DATA_KARATHRESSEVENT = 5,
+-- DATA_KARATHRESSEVENT_STARTER = 6,
+-- DATA_FATHOMLORDKARATHRESSEVENT = 19; EncounterState
+-- (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local DATA_KARATHRESSEVENT = 5
+local DATA_KARATHRESSEVENT_STARTER = 6
+local DATA_FATHOMLORDKARATHRESSEVENT = 19
+local ENCOUNTER_NOT_STARTED = 0
+local ENCOUNTER_IN_PROGRESS = 1
+local ENCOUNTER_DONE = 3
+
+-- instance_serpent_shrine.lua owns the SetData switch; the boss
+-- files reach it through the shared instanceData table
+-- (slad_ran.lua:261-263 precedent: creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
+-- C++ boss_fathomlord_karathress.cpp:191-197 StartEvent /
+-- advisor JustEngagedWith: SetGuidData(DATA_KARATHRESSEVENT_STARTER,
+-- who->GetGUID()) then SetData(DATA_KARATHRESSEVENT, IN_PROGRESS).
+-- No SetGuidData method exists on instanceData (instance_hooks.go:
+-- only SetData is attached); the starter rides a plain GUID-low
+-- number field (instance_serpent_shrine.lua header). The C++
+-- UpdateAI starter re-engage / evade legs stay out (header).
+local function writeKarathressStart(creature, target)
+    local data = instanceDataOf(creature)
+    if data == nil then
+        return
+    end
+    if target ~= nil then
+        data.karathressEventStarterLow = target:GetGUIDLow()
+    end
+    data:SetData(DATA_KARATHRESSEVENT, ENCOUNTER_IN_PROGRESS)
+end
 
 local pumpTimers = {}
 local karathressState = {}
@@ -346,11 +392,15 @@ local function karathressTick(creature, guid)
     end
 end
 
-local function karathressEnterCombat(event, creature)
+local function karathressEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     resetState(karathressState, guid)
     karathressState[guid] = freshKarathressState()
     creature:Talk(SAY_AGGRO)
+    -- C++ StartEvent (boss_fathomlord_karathress.cpp:188-197):
+    -- Talk(SAY_AGGRO), DoZoneInCombat (no bridge), SetGuidData(
+    -- STARTER, who->GetGUID()), SetData(IN_PROGRESS).
+    writeKarathressStart(creature, target)
     pumpTimers[guid] = CreateLuaEvent(function()
         karathressTick(creature, guid)
     end, 1000, 0)
@@ -366,16 +416,31 @@ local function karathressTargetDied(event, creature, victim)
 end
 
 -- C++ JustDied (boss_fathomlord_karathress.cpp:205-213): Talk(SAY_DEATH),
--- SetData(FATHOMLORDKARATHRESSEVENT, DONE) [instance-blocked, stays out],
+-- SetData(FATHOMLORDKARATHRESSEVENT, DONE) [PORTED below],
 -- then SummonCreature(SEER_OLUM 22820, OLUM_X/Y/Z/O, TEMPSUMMON_TIMED_DESPAWN
 -- Eluna type 2, 1h) — quest-10944 support.
 local function karathressDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
+    -- C++ JustDied (boss_fathomlord_karathress.cpp:203-213): Talk,
+    -- SetData(FATHOMLORDKARATHRESSEVENT, DONE), then the Seer Olum
+    -- summon below.
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_FATHOMLORDKARATHRESSEVENT, ENCOUNTER_DONE)
+    end
     creature:SummonCreature(22820, 446.78, -542.76, -7.54773, 0.401581, 2, 3600000)
     resetState(karathressState, creature:GetGUIDLow())
 end
 
 local function karathressReset(event, creature)
+    -- C++ Reset (boss_fathomlord_karathress.cpp:140-161): the
+    -- advisor-respawn leg stays out (FindNearestCreature is
+    -- live-only — a dead advisor cannot be resolved for Respawn);
+    -- SetData(KARATHRESSEVENT, NOT_STARTED) is the last arm.
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_KARATHRESSEVENT, ENCOUNTER_NOT_STARTED)
+    end
     resetState(karathressState, creature:GetGUIDLow())
 end
 
@@ -453,10 +518,14 @@ local function sharkkisTick(creature, guid)
     end
 end
 
-local function sharkkisEnterCombat(event, creature)
+local function sharkkisEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     resetState(sharkkisState, guid)
     sharkkisState[guid] = freshSharkkisState()
+    -- C++ boss_fathomguard_sharkkis::JustEngagedWith
+    -- (boss_fathomlord_karathress.cpp:360-363): SetGuidData(
+    -- STARTER, who->GetGUID()) then SetData(IN_PROGRESS).
+    writeKarathressStart(creature, target)
     pumpTimers[guid] = CreateLuaEvent(function()
         sharkkisTick(creature, guid)
     end, 1000, 0)
@@ -488,6 +557,14 @@ local function sharkkisDied(event, creature, killer)
 end
 
 local function sharkkisReset(event, creature)
+    -- C++ boss_fathomguard_sharkkis::Reset
+    -- (boss_fathomlord_karathress.cpp:348-351): SetData(
+    -- KARATHRESSEVENT, NOT_STARTED) is the last arm (the pet
+    -- KillSelf leg stays out — no stored pet object).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_KARATHRESSEVENT, ENCOUNTER_NOT_STARTED)
+    end
     resetState(sharkkisState, creature:GetGUIDLow())
 end
 
@@ -547,10 +624,15 @@ local function tidalvessTick(creature, guid)
     end
 end
 
-local function tidalvessEnterCombat(event, creature)
+local function tidalvessEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     resetState(tidalvessState, guid)
     tidalvessState[guid] = freshTidalvessState()
+    -- C++ boss_fathomguard_tidalvess::JustEngagedWith
+    -- (boss_fathomlord_karathress.cpp:492-495): SetGuidData(
+    -- STARTER, who->GetGUID()), SetData(IN_PROGRESS), then the
+    -- windfury self-cast below.
+    writeKarathressStart(creature, target)
     creature:CastSpell(creature, SPELL_WINDFURY_WEAPON)
     pumpTimers[guid] = CreateLuaEvent(function()
         tidalvessTick(creature, guid)
@@ -567,6 +649,13 @@ local function tidalvessDied(event, creature, killer)
 end
 
 local function tidalvessReset(event, creature)
+    -- C++ boss_fathomguard_tidalvess::Reset
+    -- (boss_fathomlord_karathress.cpp:480-483): SetData(
+    -- KARATHRESSEVENT, NOT_STARTED) is the last arm.
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_KARATHRESSEVENT, ENCOUNTER_NOT_STARTED)
+    end
     resetState(tidalvessState, creature:GetGUIDLow())
 end
 
@@ -620,10 +709,14 @@ local function caribdisTick(creature, guid)
     end
 end
 
-local function caribdisEnterCombat(event, creature)
+local function caribdisEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     resetState(caribdisState, guid)
     caribdisState[guid] = freshCaribdisState()
+    -- C++ boss_fathomguard_caribdis::JustEngagedWith
+    -- (boss_fathomlord_karathress.cpp:614-617): SetGuidData(
+    -- STARTER, who->GetGUID()) then SetData(IN_PROGRESS).
+    writeKarathressStart(creature, target)
     pumpTimers[guid] = CreateLuaEvent(function()
         caribdisTick(creature, guid)
     end, 1000, 0)
@@ -639,6 +732,13 @@ local function caribdisDied(event, creature, killer)
 end
 
 local function caribdisReset(event, creature)
+    -- C++ boss_fathomguard_caribdis::Reset
+    -- (boss_fathomlord_karathress.cpp:602-605): SetData(
+    -- KARATHRESSEVENT, NOT_STARTED) is the last arm.
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_KARATHRESSEVENT, ENCOUNTER_NOT_STARTED)
+    end
     resetState(caribdisState, creature:GetGUIDLow())
 end
 

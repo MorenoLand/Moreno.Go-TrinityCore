@@ -85,7 +85,7 @@
 -- -> Talk(demonForm and SAY_DEMON_SLAY or SAY_NIGHTELF_SLAY)
 -- (C++-exact per-form slay). OnDied(4): Talk(SAY_DEATH) +
 -- cleanup (the demon-copy despawn PORTS below via the latched
--- final-form copy; the SetData(DONE) arm is instance-blocked). OnLeaveCombat(2)/
+-- final-form copy; the SetData(DONE) arm is PORTED below). OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state, restore the
 -- nightelf model + zeroed weapon slots (PORTED 2026-10-20, C++
 -- Reset :253-255 arm order; SetSpeedRate(MOVE_RUN, 2.0f) :252 PORTED
@@ -96,8 +96,8 @@
 -- (creature:SummonCreature bridge; Despawn stands in for the
 -- unbridged DisappearAndDie, type-6 dead-despawn delta — see
 -- checkChannelers); the dual-wield/corpse-delay setup,
--- SPELL_DUAL_WIELD 42459 triggered self-cast and
--- SetData(NOT_STARTED) arms stay out — item/instance blocked.
+-- SPELL_DUAL_WIELD 42459 triggered self-cast stays out — item
+-- blocked; the SetData(NOT_STARTED) arm is PORTED below.
 -- boss_leotheras_the_blind_demonform (21875): OnEnterCombat(1):
 -- per-GUID reset (chaosBlast 1000) + Talk(SAY_FREE) (the C++
 -- JustEngagedWith -> StartEvent arm) + 1s pump. Pump: chaos
@@ -115,7 +115,8 @@
 -- (the JustEngagedWith InterruptNonMeleeSpells leg is PORTED
 -- (boss_leotheras_the_blind.cpp:731, first in binderEnterCombat);
 -- the instance SetGuidData(DATA_LEOTHERAS_EVENT_STARTER) arm
--- stays instance blocked). Pump: mind blast 37531 — timer {3s,8s} init
+-- is PORTED below — the starter rides a plain GUID-low number
+-- field, instance_serpent_shrine.lua header). Pump: mind blast 37531 — timer {3s,8s} init
 -- then {10s,15s}: CastSpell(random alive player, 37531) (C++
 -- SelectTarget(Random, 0) — no player-only gate, teron/krosh
 -- convention; nil pick casts nothing, re-arm regardless —
@@ -154,12 +155,16 @@
 -- (SetGUID victim) unbridged) are unmodeled; the JustDied whisper-
 -- aura removal is cross-creature blocked. OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
--- Deliberate deviations (all await engine bridges): no instance-
--- script model — boss admission via the luaBossAI shim (the
--- DATA_LEOTHERASTHEBLINDEVENT NOT_STARTED/IN_PROGRESS/DONE
--- bookkeeping, DATA_LEOTHERAS_EVENT_STARTER starter bookkeeping,
--- the DATA_LEOTHERAS GUID lookups and the whole banish-release
--- machine — CheckBanish's 3x SpellBinderGUID liveness poll,
+-- Deliberate deviations (all await engine bridges): the
+-- instance-script model is PARTLY PORTED
+-- (instance_serpent_shrine.lua): the DATA_LEOTHERASTHEBLINDEVENT
+-- NOT_STARTED/DONE bookkeeping and the DATA_LEOTHERAS_EVENT_STARTER
+-- starter write are wired through instanceData:SetData / the
+-- starter-low field; the IN_PROGRESS write stays out with the
+-- unmodeled StartEvent/CheckBanish banish-release machine, the
+-- DATA_LEOTHERAS GUID lookups and the starter-victim AddThreat
+-- read stay out with it — boss admission via the luaBossAI shim
+-- for the rest (the CheckBanish 3x SpellBinderGUID liveness poll,
 -- AURA_BANISH 37833 apply/remove, ApplySpellImmune banish
 -- arms, LoadEquipment, starter-victim AddThreat — skipped; the
 -- banished pre-phase collapses into the pull per the
@@ -222,6 +227,21 @@ local ENTRY_LEOTHERAS = 21215
 local ENTRY_DEMON_FORM = 21875
 local ENTRY_SPELLBINDER = 21806
 local ENTRY_INNER_DEMON = 21857
+
+-- serpent_shrine.h DATA_LEOTHERASTHEBLINDEVENT = 9,
+-- DATA_LEOTHERAS_EVENT_STARTER = 21; EncounterState
+-- (InstanceScript.h:68-76): NOT_STARTED 0, IN_PROGRESS 1, DONE 3.
+local DATA_LEOTHERASTHEBLINDEVENT = 9
+local ENCOUNTER_NOT_STARTED = 0
+local ENCOUNTER_DONE = 3
+
+-- instance_serpent_shrine.lua owns the SetData switch; the boss
+-- files reach it through the shared instanceData table
+-- (slad_ran.lua:261-263 precedent: creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local CHAOS_BLAST_RANGE = 30
 
@@ -607,6 +627,12 @@ local function leotherasDied(event, creature, killer)
     if st and st.demonCopy then
         st.demonCopy:Despawn()
     end
+    -- C++ JustDied (boss_leotheras_the_blind.cpp:403-413): Talk
+    -- then SetData(DONE).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_LEOTHERASTHEBLINDEVENT, ENCOUNTER_DONE)
+    end
     resetCreature(leotherasTimers, leotherasState, creature:GetGUIDLow())
 end
 
@@ -638,6 +664,12 @@ local function leotherasReset(event, creature)
     creature:SetSpeedRate(1, 2.0) -- MOVE_RUN, boss_leotheras_the_blind.cpp:252
     creature:SetDisplayId(MODEL_NIGHTELF)
     creature:SetEquipmentSlots(0, 0, 0xFFFFFFFF)
+    -- C++ Reset() :258: SetData(NOT_STARTED) — last arm after the
+    -- corpse-delay leg (corpse-delay stays out, no bridge).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_LEOTHERASTHEBLINDEVENT, ENCOUNTER_NOT_STARTED)
+    end
 end
 
 RegisterCreatureEvent(ENTRY_LEOTHERAS, 1, leotherasEnterCombat)
@@ -771,8 +803,21 @@ local function binderTick(creature, guid)
     end
 end
 
-local function binderEnterCombat(event, creature)
+local function binderEnterCombat(event, creature, target)
     creature:InterruptNonMeleeSpells(false) -- boss_leotheras_the_blind.cpp:731
+    -- C++ npc_greyheart_spellbinder::JustEngagedWith (:732):
+    -- SetGuidData(DATA_LEOTHERAS_EVENT_STARTER, who->GetGUID()).
+    -- No SetGuidData method exists on instanceData
+    -- (instance_hooks.go: only SetData is attached); the starter
+    -- rides a plain GUID-low number field — the C++ CheckBanish
+    -- starter-attack leg stays out with the unmodeled
+    -- banish-release machine (header).
+    if target ~= nil then
+        local data = instanceDataOf(creature)
+        if data then
+            data.leotherasEventStarterLow = target:GetGUIDLow()
+        end
+    end
     local guid = creature:GetGUIDLow()
     resetCreature(binderTimers, binderState, guid)
     binderState[guid] = freshBinderState()
@@ -782,6 +827,14 @@ local function binderEnterCombat(event, creature)
 end
 
 local function binderCleanup(event, creature)
+    -- C++ npc_greyheart_spellbinder::Reset (:723): SetGuidData(
+    -- DATA_LEOTHERAS_EVENT_STARTER, Empty). The ev2/ev4 shares of
+    -- this handler over-clear vs C++ (Reset-only) — unobservable:
+    -- the starter is only read by the unmodeled CheckBanish leg.
+    local data = instanceDataOf(creature)
+    if data then
+        data.leotherasEventStarterLow = nil
+    end
     resetCreature(binderTimers, binderState, creature:GetGUIDLow())
 end
 
