@@ -14,10 +14,10 @@
 -- Entry: zulfarrak.h ZFEntries names ENTRY_WEEGLI = 7607 (alongside the
 -- pyramid ENTRY_BLY/RAVEN/ORO/MURTA entries) — kalecgos check PASSES;
 -- creature_template ScriptName binding stays DB-side. Eluna creature
--- events: 1 OnEnterCombat, 2 OnLeaveCombat, 23 OnReset. Timers via
--- CreateLuaEvent; melee is engine-driven in Go (creature combat tick),
--- like C++ DoMeleeAttackIfReady. No C++ HasUnitState(UNIT_STATE_CASTING)
--- gates in this AI.
+-- events: 1 OnEnterCombat, 2 OnLeaveCombat, 23 OnReset, 28
+-- OnMovementInform. Timers via CreateLuaEvent; melee is engine-driven in
+-- Go (creature combat tick), like C++ DoMeleeAttackIfReady. No C++
+-- HasUnitState(UNIT_STATE_CASTING) gates in this AI.
 -- Ported arms (combat only):
 -- - Bomb 8858: DoCastVictim non-triggered via creature:GetVictim()
 --   (boss_onyxia precedent), init 10s, reschedule 10s unconditional
@@ -39,38 +39,71 @@
 --   (C++-exact; the old 5.0 assumption is retired).
 --   Melee stays engine-driven (DoMeleeAttackIfReady twin); the shoot
 --   fires at most once per swing, only when the victim is out of range.
--- - MovementInform: PYRAMID_CAGES_OPEN -> SetData(EVENT_PYRAMID,
---   PYRAMID_ARRIVED_AT_STAIR) + Talk(SAY_WEEGLI_OHNO=0) +
---   SetHomePosition; destroyingDoor -> DoUseDoorOrButton(GO_END_DOOR via
---   GetGuidData) + DespawnOrUnsummon — no instance SetData/GetData /
---   MovementInform-instance bridges.
--- - DestroyDoor (door-bomb run driven by Weegli's own OnGossipSelect
---   -> DestroyDoor; Bly->Weegli DoAction(0) (zulfarrak.cpp:106) is vacuous — Weegli defines no
--- DoAction override (zulfarrak.cpp:270-387), so the C++ base no-ops; ev38
--- dispatch bridged but there is nothing to dispatch to. (Bly's own
--- self-DoAction(0) at :171 is a different, non-vacuous call driving Bly's
--- postGossipStep machine.)):
---   SetFaction(FACTION_FRIENDLY) (bridged, but the arm is instance-
---   gated) + MovePoint(0, 1858.57, 1146.35, 14.745) (no point-movement
---   bridge) + Talk(SAY_WEEGLI_OK_I_GO=1); the gossip driver is
---   instance-model-blocked anyway (see below).
--- - OnGossipHello/OnGossipSelect: instance->GetData(EVENT_PYRAMID)
---   pyramid-phase gating — instance-model gossip blocked (standing).
+-- Ported arms (pyramid machine, 2026-11-10):
+-- - OnGossipHello (zulfarrak.cpp:361-378): phase-gated menus from the
+--   shared instanceData table — menu 1514 with the GOSSIP_WEEGLI item at
+--   PYRAMID_KILLED_ALL_TROLLS, menu 1511 at PYRAMID_NOT_STARTED, menu
+--   1513 otherwise.
+-- - OnGossipSelect (zulfarrak.cpp:348-359): action GOSSIP_ACTION_INFO_DEF
+--   + 1 (1001) closes the menu and runs DestroyDoor.
+-- - DestroyDoor (zulfarrak.cpp:332-345): SetFaction(FACTION_FRIENDLY) +
+--   MoveTo(0, 1858.57, 1146.35, 14.745) + SetHomePosition(same, 3.85) +
+--   Talk(SAY_WEEGLI_OK_I_GO=1) + destroyingDoor latch. MoveTo is the
+--   MovePoint bridge (lua_creature_events.go:4974); the arrival fires
+--   ev28 below.
+-- - MovementInform (zulfarrak.cpp:324-330, ev28 — the handler receives
+--   (event, creature, moveType, id), the broodkeeper precedent; C++
+--   ignores type/id and branches on state): PYRAMID_CAGES_OPEN ->
+--   instanceData:SetData(EVENT_PYRAMID, PYRAMID_ARRIVED_AT_STAIR) +
+--   Talk(SAY_WEEGLI_OHNO=0) + SetHomePosition(1882.69, 1272.28, 41.87,
+--   0); destroyingDoor -> open the end door + DespawnOrUnsummon. The
+--   door leg is the InstanceScript::DoUseDoorOrButton(GO_END_DOOR 146084)
+--   twin via FindNearestGameObject + SetGoState(GO_STATE_ACTIVE 0), the
+--   broggok precedent (DoUseDoorOrButton with restore 0 leaves the door
+--   open, exactly what SetGoState(ACTIVE) does). C++ checks the phase
+--   branch first, else-if the door branch — replicated.
+--   The CAGES_OPEN leg is ported but unreachable until go_troll_cage's
+--   entry is sourced (see below): the cage is the only CAGES_OPEN writer.
+--   Cage-herd coords (zulfarrak.cpp:220-228, for the cage porting tick):
+--   Bly 1884.99/1263/41.52, Raven 1882.5/1263/41.52, Oro 1886.47/1270.68/
+--   41.68, Weegli 1890/1263/41.52, Murta 1891.19/1272.03/41.60, facing 0.
+-- Unmodeled (documented-only, no bridges):
 -- - LandMine_Timer (30s init, never fires in the C++ UpdateAI — dead
 --   leg); SPELL_GOBLIN_LAND_MINE 21688 and SPELL_WEEGLIS_BARREL 10772
 --   are dead enum entries (never cast). Reset and JustDied are
 --   commented-out in C++ — nothing to port.
 -- - go_troll_cage OnGossipHello crew-arouse machine (zulfarrak.cpp:218-232):
---   initBlyCrewMember per crew member (incl. weegli) — instance
---   GUID-lookup + SetReactState(REACT_AGGRESSIVE) + SetWalk +
---   SetHomePosition + MovePoint + SetFaction(FACTION_ESCORTEE_N_NEUTRAL_ACTIVE).
---   The GO script is unregistered (no Lua); cross-creature legs have no
---   bridges.
+--   ENTRY-BLOCKED (no cage GO entry in the C++ tree or workspace SQL —
+--   see instance_zulfarrak.lua); until the entry is sourced the crew
+--   stays passive and the pyramid machine never starts.
+-- - Bly->Weegli DoAction(0) (zulfarrak.cpp:106) is vacuous — Weegli defines
+--   no DoAction override (zulfarrak.cpp:270-387), so the C++ base no-ops;
+--   no ev38 handler is registered for Weegli.
 
 local ENTRY = 7607
 
 local SPELL_BOMB = 8858
 local SPELL_SHOOT = 6660
+
+local FACTION_FRIENDLY = 35
+
+local EVENT_PYRAMID = 1
+local PYRAMID_NOT_STARTED = 0
+local PYRAMID_CAGES_OPEN = 1
+local PYRAMID_ARRIVED_AT_STAIR = 2
+local PYRAMID_KILLED_ALL_TROLLS = 8
+
+local GO_END_DOOR = 146084
+local GO_STATE_ACTIVE = 0
+
+local GOSSIP_ICON_CHAT = 0
+local GOSSIP_SENDER_MAIN = 1
+local GOSSIP_ACTION_INFO_DEF = 1000
+local GOSSIP_WEEGLI = "Will you blow up that door now?"
+
+local MENU_WEEGLI_DOOR = 1514
+local MENU_WEEGLI_NOT_STARTED = 1511
+local MENU_WEEGLI_IN_PROGRESS = 1513
 
 -- C++ melee/ranged decision (zulfarrak.cpp:311-322): when the swing timer is
 -- ready and the victim is beyond melee range, Weegli shoots 6660 and shows
@@ -84,6 +117,7 @@ local SPELL_SHOOT = 6660
 local SWING_MS = 2000
 
 local timers = {}
+local doorState = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -105,6 +139,18 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay, 1)
+end
+
+-- C++ DestroyDoor (zulfarrak.cpp:332-345).
+local function destroyDoor(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:MoveTo(0, 1858.57, 1146.35, 14.745)
+    creature:SetHomePosition(1858.57, 1146.35, 14.745, 3.85)
+    creature:Talk(1) -- SAY_WEEGLI_OK_I_GO
+    doorState[guid] = true
 end
 
 -- C++ EVENT_BOMB (10s init): DoCastVictim(SPELL_BOMB), non-triggered;
@@ -179,11 +225,67 @@ end
 -- the creature object is destroyed), so a death must cancel the Lua-side
 -- bomb timer: otherwise it re-arms forever post-death and the stale
 -- per["bomb"] blocks the fresh 10s ctor re-arm on the next engage.
+-- Death also clears the destroyingDoor latch (the AI object dies with it).
 local function onDied(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    doorState[guid] = nil
+end
+
+-- C++ MovementInform (zulfarrak.cpp:324-330): phase branch first,
+-- destroyingDoor branch else-if; type/id are ignored.
+local function onMovementInform(event, creature, moveType, id)
+    local data = creature:GetMap():GetInstanceData()
+    local phase = PYRAMID_NOT_STARTED
+    if data and data.pyramidPhase then
+        phase = data.pyramidPhase
+    end
+    if phase == PYRAMID_CAGES_OPEN then
+        if data then
+            data:SetData(EVENT_PYRAMID, PYRAMID_ARRIVED_AT_STAIR)
+        end
+        creature:Talk(0) -- SAY_WEEGLI_OHNO
+        creature:SetHomePosition(1882.69, 1272.28, 41.87, 0)
+    elseif doorState[creature:GetGUIDLow()] then
+        local door = creature:FindNearestGameObject(GO_END_DOOR, 500)
+        if door then
+            door:SetGoState(GO_STATE_ACTIVE)
+        end
+        creature:DespawnOrUnsummon()
+    end
+end
+
+-- C++ OnGossipHello (zulfarrak.cpp:361-378): phase-gated menus.
+local function onGossipHello(event, player, creature)
+    local data = creature:GetMap():GetInstanceData()
+    local phase = PYRAMID_NOT_STARTED
+    if data and data.pyramidPhase then
+        phase = data.pyramidPhase
+    end
+    if phase == PYRAMID_KILLED_ALL_TROLLS then
+        player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_WEEGLI, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
+        player:GossipSendMenu(MENU_WEEGLI_DOOR, creature)
+    elseif phase == PYRAMID_NOT_STARTED then
+        player:GossipSendMenu(MENU_WEEGLI_NOT_STARTED, creature)
+    else
+        player:GossipSendMenu(MENU_WEEGLI_IN_PROGRESS, creature)
+    end
+end
+
+-- C++ OnGossipSelect (zulfarrak.cpp:348-359): action INFO_DEF + 1 closes
+-- the menu and runs DestroyDoor.
+local function onGossipSelect(event, player, creature, sender, action)
+    player:GossipClearMenu()
+    if action == GOSSIP_ACTION_INFO_DEF + 1 then
+        player:GossipComplete()
+        destroyDoor(creature, creature:GetGUIDLow())
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 28, onMovementInform)
+RegisterCreatureGossipEvent(ENTRY, 1, onGossipHello)
+RegisterCreatureGossipEvent(ENTRY, 2, onGossipSelect)

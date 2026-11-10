@@ -17418,11 +17418,13 @@ func init() {
 	// Bash 11972 (victim, 5s init, 15s repeat) and Revenge 12170
 	// (victim, 8s init, 10s repeat), both unconditional (the C++ casts
 	// Revenge unconditionally despite its dodge/parry/block code
-	// comment — the port mirrors the code). Reset's
-	// SetFaction(FACTION_FRIENDLY), the postGossipStep pyramid machine
-	// (instance GUID-lookup + cross-creature DoAction + SetFaction +
-	// AttackStart), and the EVENT_PYRAMID-gated gossip arms have no
-	// bridges — documented in the lua file, not wired.
+	// comment — the port mirrors the code); Reset's
+	// SetFaction(FACTION_FRIENDLY); the postGossipStep pyramid machine
+	// (gossip hello menus 1515/1516/1517 + select 1001 -> ev38 DoAction
+	// -> Talk 0/1 steps at 0s/5s/5s -> FACTION_MONSTER + AttackStart +
+	// Raven/Oro/Murta faction flips, instanceData crew binds). Step 1's
+	// Weegli DoAction(0) is vacuous (no Weegli override) — documented
+	// in the lua file, not wired.
 	RegisterLuaBoss("npc_sergeant_bly", 7604)
 
 	// npc_weegli_blastfuse: Zul'Farrak zone script, entry 7607
@@ -17432,13 +17434,14 @@ func init() {
 	// 10s init, 10s repeat, unconditional); Shoot 6660 + SetSheath
 	// RANGED/MELEE on the swing cadence (creature:SetSheath bridge,
 	// 2026-10-20; melee-range gate via IsWithinDist 5.0, swing gate
-	// paced at 2s). AttackStartCaster, the MovementInform pyramid legs
-	// (no instance SetData/GetData bridges), DestroyDoor's MovePoint
-	// leg (no point-movement bridge; SetFaction IS bridged but the arm
-	// is instance-gated), and the pyramid-gated gossip arms have no
-	// bridges; LandMine_Timer and SPELL_GOBLIN_LAND_MINE /
-	// SPELL_WEEGLIS_BARREL are dead C++ legs — documented in the lua
-	// file, not wired.
+	// paced at 2s); the pyramid machine (gossip hello menus 1511/1513/
+	// 1514 + select 1001 -> DestroyDoor: SetFaction FRIENDLY + MoveTo
+	// door + Talk 1; ev28 MovementInform: CAGES_OPEN -> SetData
+	// ARRIVED_AT_STAIR + Talk 0 + SetHomePosition, destroyingDoor ->
+	// FindNearestGameObject + SetGoState ACTIVE + DespawnOrUnsummon).
+	// AttackStartCaster has no bridge; LandMine_Timer and
+	// SPELL_GOBLIN_LAND_MINE / SPELL_WEEGLIS_BARREL are dead C++ legs
+	// — documented in the lua file, not wired.
 	RegisterLuaBoss("npc_weegli_blastfuse", 7607)
 
 	// npc_troll_volunteer: Durotar zone script, entries 40264/40260
@@ -17477,17 +17480,25 @@ func init() {
 	RegisterLuaBoss("npc_nat_pagle", 12919)
 
 	// zulfarrak.cpp residual audit (loader decl :98 / call :214; Bly +
-	// Weegli + Zum'rah ported above): go_troll_cage (GameObjectScript —
-	// OnGossipHello sets instance EVENT_PYRAMID/CAGES_OPEN and herds
-	// the 5 Bly crew members via GetGuidData + SetReactState/SetWalk/
-	// SetHomePosition/MovePoint/SetFaction — no instance/movement/
-	// faction bridges); go_shallow_grave (GO gossip first-use random
-	// summon: 65% zombie 7286 / 10% dead hero 7276 via SummonCreature —
-	// summon + GO gossip bridges live, but the GO entry is DB-side
-	// (gameobject_template ScriptName, no in-tree evidence), so the
-	// gossip arm is ENTRY-BLOCKED, not dead content);
-	// at_zumrah (AreaTriggerScript — FindNearestCreature 7271 30y +
-	// SetFaction(FACTION_TROLL_FROSTMANE): no area-trigger bridge).
+	// Weegli + Zum'rah ported above; the pyramid machine itself is
+	// ported in instance_zulfarrak.lua — OnCreatureCreate crew binds +
+	// OnSetData EVENT_PYRAMID store + OnUpdate poll + 54-row wave table
+	// + SpawnPyramidWave/MoveNPCIfAlive/IsWaveAllDead; SendAddsUpStairs
+	// MovePath(PATH_ADDS 81553) stays out, no bridge): go_troll_cage
+	// (GameObjectScript — OnGossipHello sets instance EVENT_PYRAMID/
+	// CAGES_OPEN and herds the 5 Bly crew members) is ENTRY-BLOCKED —
+	// the cage GO entry is nowhere in the C++ tree, no
+	// gameobject_template in the workspace SQL, and web searches give
+	// no numeric entry — so the machine's only starter cannot fire and
+	// the waves never start in-game until the entry is sourced;
+	// go_shallow_grave (GO gossip first-use random summon: 65% zombie
+	// 7286 / 10% dead hero 7276 via SummonCreature — summon + GO gossip
+	// bridges live, but the GO entry is DB-side (gameobject_template
+	// ScriptName, no in-tree evidence), so the gossip arm is
+	// ENTRY-BLOCKED, not dead content); at_zumrah (AreaTriggerScript —
+	// FindNearestCreature 7271 30y + SetFaction(FACTION_TROLL_FROSTMANE):
+	// the area-trigger dispatch exists now, RegisterServerEvent 24, but
+	// the trigger id is DB-side, nowhere in the C++ tree).
 	// All three documented-only, joining the no-bridge queues.
 
 	// npc_qiraj_war_spawn: Silithus zone script, entries 15414
