@@ -41,6 +41,18 @@ func (s *Server) luaGameEventControl(eventID uint32, start, force bool) {
 	if s == nil {
 		return
 	}
+	// World-event rows take the StartEvent/StopEvent world branches
+	// (GameEventMgr.cpp:153-181/185-232, game_event_conditions.go): the
+	// start flips INACTIVE to CONDITIONS, checks the conditions and
+	// saves; the stop resets the conditions and drops the save rows.
+	// The override below still forces the cached active set on this
+	// tick, like C++ AddActiveEvent/RemoveActiveEvent.
+	ctx := context.Background()
+	if start {
+		s.startGameEventWorld(ctx, eventID, force)
+	} else {
+		s.stopGameEventWorld(ctx, eventID, force)
+	}
 	s.setGameEventOverride(int64(eventID), start)
 	if force {
 		s.applyGameEventScheduleRewrite(context.Background(), int64(eventID), start)

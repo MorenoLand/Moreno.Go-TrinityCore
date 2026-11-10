@@ -127,7 +127,12 @@ func (s *Server) loadGameEventQuestConditions(ctx context.Context) map[int64]gam
 }
 
 // loadGameEventSaves loads the `game_event_save` rows (characters DB),
-// keyed by event id.
+// keyed by event id. StopEvent in-memory states (gameEventStateOverrides,
+// set by stopWorldGameEvent) apply on top: C++ keeps the stopped
+// INACTIVE state in memory after deleting the save row, and Go derives
+// the live state from these rows on every read, so the override is what
+// carries the stopped state until the next SaveWorldEventStateToDB for
+// the event clears it.
 func (s *Server) loadGameEventSaves(ctx context.Context) map[int64]gameEventSave {
 	saves := make(map[int64]gameEventSave)
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
@@ -146,6 +151,11 @@ func (s *Server) loadGameEventSaves(ctx context.Context) map[int64]gameEventSave
 		}
 		saves[eventID] = save
 	}
+	s.gameEventStateMu.Lock()
+	for id, save := range s.gameEventStateOverrides {
+		saves[id] = save
+	}
+	s.gameEventStateMu.Unlock()
 	return saves
 }
 
@@ -190,11 +200,16 @@ func checkOneGameEventConditions(conds map[int64]*gameEventCondition, length, ne
 
 // saveWorldEventStateToDB mirrors GameEventMgr::SaveWorldEventStateToDB
 // (GameEventMgr.cpp:1689-1708): delete + insert into `game_event_save`
-// (event, state, nextstart or 0 when unset).
+// (event, state, nextstart or 0 when unset). A fresh save supersedes a
+// StopEvent in-memory state (C++ re-saves data.state on every save path),
+// so it clears any gameEventStateOverrides entry for the event.
 func (s *Server) saveWorldEventStateToDB(ctx context.Context, eventID, state, nextstart int64) {
 	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return
 	}
+	s.gameEventStateMu.Lock()
+	delete(s.gameEventStateOverrides, eventID)
+	s.gameEventStateMu.Unlock()
 	db := s.CharactersStore.DB
 	if _, err := db.ExecContext(ctx, "DELETE FROM game_event_save WHERE eventEntry = ?", eventID); err != nil {
 		return
@@ -382,6 +397,12 @@ func (s *Server) handleGameEventQuestComplete(ctx context.Context, questID uint3
 	if !ok {
 		return
 	}
+	// GameEventMgr::HandleQuestComplete (GameEventMgr.cpp:1631): the
+	// event must be active — a CONDITIONS state alone is not enough
+	// across a restart, before the first Update activates it.
+	if _, active := s.cachedActiveGameEvents(ctx)[qc.EventID]; !active {
+		return
+	}
 	saves := s.loadGameEventSaves(ctx)
 	state, nextstart := worldGameEventState(ev.WorldEvent, ev.Entry, saves)
 	if state != gameEventStateWorldConditions {
@@ -407,5 +428,76 @@ func (s *Server) handleGameEventQuestComplete(ctx context.Context, questID uint3
 	if met, next := checkOneGameEventConditions(byEvent, ev.Length, nextstart, time.Now().Unix()); met {
 		s.saveWorldEventStateToDB(ctx, qc.EventID, gameEventStateWorldNextPhase, next)
 		s.forceWorldGameEventUpdate()
+	}
+}
+
+// startGameEventWorld runs the world-event branch of
+// GameEventMgr::StartEvent (GameEventMgr.cpp:153-181): an INACTIVE event
+// enters its CONDITIONS phase, the conditions are checked, and the
+// resulting state persists. It reports whether the id is a world event
+// at all (NORMAL/INTERNAL rows take the schedule path instead). The
+// AddActiveEvent/ApplyNewEvent legs ride the cached-set tick diff, like
+// the NORMAL start; the forced update fires only when overwrite and the
+// conditions are already met, as in C++.
+func (s *Server) startGameEventWorld(ctx context.Context, eventID uint32, force bool) bool {
+	if s == nil {
+		return false
+	}
+	data := s.loadGameEventDataMap(ctx)
+	ev, ok := data[int64(eventID)]
+	if !ok || ev.WorldEvent == gameEventStateNormal || ev.WorldEvent == gameEventStateInternal {
+		return false
+	}
+	saves := s.loadGameEventSaves(ctx)
+	state, nextstart := worldGameEventState(ev.WorldEvent, ev.Entry, saves)
+	if state == gameEventStateWorldInactive {
+		state = gameEventStateWorldConditions
+	}
+	conds := s.loadGameEventConditions(ctx)
+	met, next := checkOneGameEventConditions(conds[int64(eventID)], ev.Length, nextstart, time.Now().Unix())
+	if met {
+		state = gameEventStateWorldNextPhase
+		nextstart = next
+	}
+	s.saveWorldEventStateToDB(ctx, int64(eventID), state, nextstart)
+	if force && met {
+		s.forceWorldGameEventUpdate()
+	}
+	return true
+}
+
+// resetGameEventWorldState persists the StopEvent world-event reset leg
+// (GameEventMgr.cpp:202-218): conditions zeroed, state back to
+// WORLD_INACTIVE, nextstart cleared — DELETE of all condition saves for
+// the event plus DELETE of the save row. The resolved state then falls
+// back to the game_event column, which carries the base INACTIVE state
+// for world events.
+func (s *Server) resetGameEventWorldState(ctx context.Context, eventID int64) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	db := s.CharactersStore.DB
+	_, _ = db.ExecContext(ctx, "DELETE FROM game_event_condition_save WHERE eventEntry = ?", eventID)
+	_, _ = db.ExecContext(ctx, "DELETE FROM game_event_save WHERE eventEntry = ?", eventID)
+}
+
+// stopGameEventWorld runs the world-event reset leg of
+// GameEventMgr::StopEvent (GameEventMgr.cpp:185-232): the conditions
+// reset and the save rows drop when the stop is forced or the event is
+// not already FINISHED (a finished world event only a GM command can
+// stop). Removal/unapply ride the cached-set tick diff.
+func (s *Server) stopGameEventWorld(ctx context.Context, eventID uint32, force bool) {
+	if s == nil {
+		return
+	}
+	data := s.loadGameEventDataMap(ctx)
+	ev, ok := data[int64(eventID)]
+	if !ok || ev.WorldEvent == gameEventStateNormal || ev.WorldEvent == gameEventStateInternal {
+		return
+	}
+	saves := s.loadGameEventSaves(ctx)
+	state, _ := worldGameEventState(ev.WorldEvent, ev.Entry, saves)
+	if force || state != gameEventStateWorldFinished {
+		s.resetGameEventWorldState(ctx, int64(eventID))
 	}
 }

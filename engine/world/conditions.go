@@ -178,9 +178,9 @@ type gameEventSchedule struct {
 // CheckOneGameEvent/NextCheck scale it too (:54/:108-110) — the
 // asymmetry is upstream, not a porting slip. World-event rows
 // (state > INTERNAL) take no schedule rewrite on either leg: start
-// runs the conditions branch instead (game_event_conditions.go), and
-// stop runs the condition-reset + game_event_save delete leg, which
-// still has no Go model.
+// runs the conditions branch instead (startGameEventWorld,
+// game_event_conditions.go), and stop runs the condition-reset +
+// game_event_save delete leg (stopGameEventWorld).
 func (s *Server) applyGameEventScheduleRewrite(ctx context.Context, eventID int64, start bool) {
 	if s == nil {
 		return

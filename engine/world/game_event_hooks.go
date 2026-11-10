@@ -114,10 +114,9 @@ const langEventMessage = 4
 // exists in Go. Remaining deltas: the per-player condition worldstates
 // (SendWorldStateUpdate, GameEventMgr.cpp:1710-1720) have no Go model —
 // the server-wide worldstate write above is the only condition progress
-// signal — and the StopEvent world branch (condition reset +
-// game_event_save delete, GameEventMgr.cpp:185-232) is not ported, so a
-// stopped world event keeps its saved CONDITIONS progress until a GM
-// restarts it.
+// signal. The StopEvent world branch (condition reset +
+// game_event_save delete, GameEventMgr.cpp:185-232) is ported in
+// game_event_conditions.go (stopGameEventWorld, via luaGameEventControl).
 func (s *Server) applyGameEventTransition(ctx context.Context, id int64, start bool) {
 	if s == nil {
 		return
