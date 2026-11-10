@@ -4,8 +4,9 @@
 -- npc_void_sentinel, npc_blackhole; the spell_summon_blood_elves_
 -- script / spell_muru_darkness SpellScripts and the spell_dark_
 -- fiend_skin / spell_transform_visual_missile_periodic / spell_
--- summon_blood_elves_periodic AuraScripts documented below, not
--- registered); sunwell_plateau.h:35 (DATA_MURU = 4, fifth boss),
+-- summon_blood_elves_periodic AuraScripts — all but spell_transform_
+-- visual_missile_periodic ported below via RegisterSpellEvent /
+-- RegisterAuraEvent); sunwell_plateau.h:35 (DATA_MURU = 4, fifth boss),
 -- :60 (NPC_MURU = 25741), :61 (NPC_ENTROPIUS = 25840), :96
 -- (NPC_DARKNESS = 25879), :97 (NPC_DARK_FIENDS = 25744), :100
 -- (NPC_VOID_SENTINEL = 25772), :103 (NPC_MURU_PORTAL_TARGET =
@@ -29,15 +30,17 @@
 -- OnEnterCombat(1): per-GUID reset (phase=1, hasEnraged=false),
 -- triggered self-cast open portal periodic 45994 + darkness
 -- periodic 45998 + negative energy periodic 46009 (C++ DoCast(me,
--- X, true), C++-exact — the periodic summon arms live in the
--- unmodeled spell_summon_blood_elves_periodic / spell_muru_
--- darkness scripts, below); 10s one-shot: triggered self-cast
+-- X, true), C++-exact — the periodic summon arms are ported below
+-- (RegisterAuraEvent 46041 tick; RegisterSpellEvent 46050 ev5 /
+-- 46269 ev1); 10s one-shot: triggered self-cast
 -- summon blood elves script 46050 + summon blood elves periodic
--- 46041 (C++ ScheduleTasks, C++-exact — the actual blood-elf
--- summons are summon-blocked, below); enrage 26662 10min one-shot:
+-- 46041 (C++ ScheduleTasks, C++-exact — the blood-elf summons
+-- port below, RegisterSpellEvent 46050 ev5); enrage 26662 10min
+-- one-shot:
 -- non-triggered self-cast (C++ DoCast default is triggered=false
--- — vaelastrasz convention), hasEnraged=true (the entropius
--- cross-creature cast has no cross-creature bridge — below).
+-- — vaelastrasz convention), hasEnraged=true; the entropius
+-- cross-creature cast is PORTED 2026-11-10 in muruEnrage via
+-- creature:GetCreatureByGUID (lua_creature_events.go:4050).
 -- OnDamageTaken(9, pre-damage hook): lethal from any source ->
 -- damage rewritten to health-1 (C++-exact); additionally, in
 -- PHASE_ONE only: phase=PHASE_TWO, RemoveAllAuras (bridged,
@@ -54,7 +57,7 @@
 -- never dies; the DONE leg lives on Entropius's JustDied, below).
 -- OnReset(23)/OnLeaveCombat(2): timer/state cleanup + the _Reset
 -- NOT_STARTED leg (ports via creature:SetBossState, bridge live
--- lua_creature_events.go:5917; the RemoveFlag(NOT_SELECTABLE) arm
+-- lua_creature_events.go:6605; the RemoveFlag(NOT_SELECTABLE) arm
 -- is vacuous — the set side stays out, above; the EnterEvadeMode
 -- entropius relay is a dead arm in C++ — Reset clears the
 -- _entropiusGUID latch before the relay reads it, see
@@ -64,15 +67,15 @@
 -- retracted — Muru never moves in this model, C++-exact). Entropius (25840). OnReset(23):
 -- triggered self-cast entropius cosmetic spawn 46223 (C++-exact)
 -- + the _Reset NOT_STARTED leg (ports via creature:SetBossState,
--- bridge live lua_creature_events.go:5917). OnEnterCombat(1):
+-- bridge live lua_creature_events.go:6605). OnEnterCombat(1):
 -- 2s one-shot: DoResetPortals (100yd grid scan of entry 25770 ->
 -- RemoveAllAuras, C++-exact arm order — stale "no creature-
 -- enumeration bridge" retracted, GetCreaturesInGrid is bridged) +
 -- triggered self-cast (DoCastAOE self-position, kalecgos convention)
 -- negative energy periodic E 46284; 15s repeat:
 -- triggered self-cast darkness E 46269 + triggered self-cast
--- blackhole 46282 (the dark-fiend summon arm of 46269 lives in
--- the unmodeled spell_muru_darkness SpellScript — below).
+-- blackhole 46282 (the dark-fiend summon arm of 46269 is PORTED
+-- 2026-11-10, RegisterSpellEvent 46269 ev1, below).
 -- UpdateAI melee is engine-driven (C++ DoMeleeAttackIfReady).
 -- OnDied(4): SetBossState(DATA_MURU 4, DONE) via creature:SetBossState
 -- (boss_muru.cpp:193-197, _JustDied() first, then the muru->
@@ -83,8 +86,10 @@
 -- rides bridged calls.
 -- The entropius JustSummoned arms (NPC_DARK_FIENDS -> visual
 -- 45936; NPC_DARKNESS -> REACT_PASSIVE + 46282 self-cast +
--- triggered 46263 summon-darkfiend) are summon-blocked —
--- unmodeled. Portal (25770). OnSpellHit(14): hit by OPEN_ALL_
+-- triggered 46263 summon-darkfiend) are PORTED 2026-11-10 in
+-- entropiusJustSummoned (ev19; the old "summon-blocked" claim was
+-- wrong — ev19 fires on engine-created summons, muru/portal
+-- precedent in this file). Portal (25770). OnSpellHit(14): hit by OPEN_ALL_
 -- PORTALS 46177 -> triggered DoCastAOE(OPEN_PORTAL 45977) +
 -- triggered DoCastAOE(TRANSFORM_VISUAL_MISSILE 46205) (C++-
 -- exact); hit by OPEN_PORTAL_2 45976 -> triggered DoCastAOE(
@@ -143,30 +148,34 @@
 -- — no repeat after the counter-2 arm). The 15s DisappearAndDie
 -- arm (Reset scheduler, cpp:528-531) is ported in blackholeReset
 -- via creature:Despawn — stale "no despawn bridge" retracted.
--- Deliberate deviations (all await engine bridges): no instance-
+-- Deliberate deviations (remaining arms await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
 -- DATA_MURU legs ARE ported — Muru ev1 IN_PROGRESS / ev23
 -- NOT_STARTED, Entropius ev1 / ev23 / ev4 DONE, creature:SetBossState
--- bridge live lua_creature_events.go:5917; Muru itself has no
+-- bridge live lua_creature_events.go:6605; Muru itself has no
 -- JustDied override — no DONE leg exists for the Muru form);
--- no cross-creature bridge — the muru/enrage relay and the
--- dark-fiend summoner-GUID target pick are unmodeled; the
--- entropius-evade (PORTED 2026-11-07 tick 390) and entropius-death
--- (PORTED tick 383) relays to DATA_MURU ride GetInstanceCreature; no
--- summon bridge — the blood-elf/void-spawn/void-sentinel/
--- dark-fiend/entropius spawns and the entropius JustSummoned
--- visual/passive arms unmodeled; no SpellScript/AuraScript
--- bridges — spell_summon_blood_elves_script (4 random 46037/
--- 46040/46038/46039 casts), spell_muru_darkness (8 dark-fiend
--- summon casts 46000-46007 after cast), spell_dark_fiend_skin
--- (dispel-remove -> passive + 45936 visual + 3s despawn),
--- spell_transform_visual_missile_periodic (periodic 46208/46178
--- missile) unmodeled (standing gap — its aura spell ID is DB-side,
--- not in the C++ text); spell_summon_blood_elves_periodic is PORTED
--- below via RegisterAuraEvent (46041 tick -> 46050 re-cast); no
--- aura-enumeration/kill/despawn bridges (flag/visibility/react
--- bridges exist — the arms below stay out on unported-machine or
--- soft-lock-avoidance grounds)
+-- no cross-creature bridge for the dark-fiend summoner-GUID target
+-- pick (IsSummonedBy capture has no bridge; the grid-scan
+-- approximation stands) — the muru/enrage relay IS ported
+-- (GetCreatureByGUID, above); the entropius-evade (PORTED
+-- 2026-11-07 tick 390) and entropius-death (PORTED tick 383) relays
+-- to DATA_MURU ride GetInstanceCreature; no summon bridge for the
+-- spawns themselves (blood-elf/void-spawn/void-sentinel/dark-fiend/
+-- entropius summons resolve through engine cast effects, never a Lua
+-- SummonCreature call) — the entropius JustSummoned visual/passive
+-- arms ARE ported (ev19, above); SpellScript/AuraScript bridges
+-- exist — spell_summon_blood_elves_script PORTED 2026-11-10
+-- (RegisterSpellEvent 46050 ev5), spell_muru_darkness PORTED
+-- 2026-11-10 (RegisterSpellEvent 46269 ev1, OnCast twin of AfterCast),
+-- spell_dark_fiend_skin PORTED 2026-11-10 (RegisterAuraEvent 45934
+-- ev5 OnDispel twin of dispel-remove); spell_transform_visual_
+-- missile_periodic stays out (standing gap — its aura spell ID is
+-- DB-side, not in the C++ text); spell_summon_blood_elves_periodic
+-- is PORTED below via RegisterAuraEvent (46041 tick -> 46050 re-cast); no
+-- aura-enumeration/kill bridges (despawn IS bridged — the
+-- black-hole 15s / fiend / entropius despawn arms are ported;
+-- flag/visibility/react bridges exist — the arms below stay out on
+-- unported-machine or soft-lock-avoidance grounds)
 -- — the muru phase-two RemoveAllAuras arm and the entropius 2s
 -- DoResetPortals grid scan are bridged and ported; the muru
 -- NOT_SELECTABLE set stays out (summon-resolution ground, above)
@@ -183,7 +192,7 @@
 -- the muru 10s blood-elves / 10min enrage / 6s summon-entropius
 -- one-shots and the entropius 2s negative-energy one-shot / 15s
 -- darkness repeat all defer 500ms under their own keys via live
--- creature:IsCasting() (lua_creature_events.go:1950), no re-arm
+-- creature:IsCasting() (lua_creature_events.go:2275), no re-arm
 -- consumed; the defer precedes the casts (and, for the 2s arm, the
 -- DoResetPortals strip). Hooks stay ungated per C++: muru
 -- JustEngagedWith casts, the DamageTaken rewrite/transition itself
@@ -221,6 +230,15 @@ local SPELL_BLACKHOLE_SUMMON_VISUAL = 46242
 local SPELL_BLACKHOLE_SUMMON_VISUAL_2 = 46247
 local SPELL_BLACKHOLE_PASSIVE = 46228
 local SPELL_BLACK_HOLE_VISUAL_2 = 46235
+local SPELL_DARKFIEND_VISUAL = 45936
+local SPELL_SUMMON_DARKFIEND_E = 46263
+local SPELL_SUMMON_BERSERKER = 46037
+local SPELL_SUMMON_BERSERKER_2 = 46040
+local SPELL_SUMMON_FURY_MAGE = 46038
+local SPELL_SUMMON_FURY_MAGE_2 = 46039
+
+local SUMMON_DARK_FIEND_SPELLS = { 46000, 46001, 46002, 46003, 46004, 46005, 46006, 46007 }
+local SUMMON_BLOOD_ELVES_SPELLS = { SPELL_SUMMON_BERSERKER, SPELL_SUMMON_BERSERKER_2, SPELL_SUMMON_FURY_MAGE, SPELL_SUMMON_FURY_MAGE_2 }
 local SPELL_VENGEANCE = 45839 -- aura 45839, Vengeance of the Blue Dragonflight (kalecgos dragon form)
 
 local ENTRY_MURU = 25741
@@ -272,6 +290,45 @@ end
 
 RegisterAuraEvent(SPELL_SUMMON_BLOOD_ELVES_PERIODIC, 1, summonBloodElvesTick)
 
+-- C++ spell_summon_blood_elves_script::HandleScript
+-- (boss_muru.cpp:589-592, registered OnEffectHitTarget EFFECT_0 at
+-- :597): on effect 0, 4 triggered casts, each a random pick of
+-- 46037/46040/46038/46039 on the caster (novos summon-minions ev5
+-- precedent).
+local function summonBloodElvesScript(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    for _ = 1, 4 do
+        caster:CastSpell(caster, SUMMON_BLOOD_ELVES_SPELLS[math.random(#SUMMON_BLOOD_ELVES_SPELLS)], true)
+    end
+end
+
+RegisterSpellEvent(SPELL_SUMMON_BLOOD_ELVES_SCRIPT, 5, summonBloodElvesScript)
+
+-- C++ spell_muru_darkness::HandleAfterCast (boss_muru.cpp:621-624,
+-- registered AfterCast at :629): after 46269 is cast, 8 triggered
+-- dark-fiend summon casts 46000-46007 on the caster. No AfterCast
+-- hook exists in Go (runtime.go:517-600); OnCast (ev1) is the
+-- once-per-cast twin — same multiplicity, fires before 46269's own
+-- effects resolve instead of after (boss_ai.go:3154 fire site,
+-- creature cast path, triggered casts included).
+local function entropiusDarknessSummons(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    for _, fiendSpell in ipairs(SUMMON_DARK_FIEND_SPELLS) do
+        caster:CastSpell(caster, fiendSpell, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_DARKNESS_E, 1, entropiusDarknessSummons)
+
 -- C++ JustEngagedWith: triggered self-casts 45994/45998/46009;
 -- 10s one-shot triggered 46050 + 46041; 10min one-shot
 -- non-triggered enrage 26662.
@@ -289,6 +346,11 @@ local function muruBloodElves(creature, guid)
     creature:CastSpell(creature, SPELL_SUMMON_BLOOD_ELVES_PERIODIC, true)
 end
 
+-- C++ ScheduleTasks 10min arm (boss_muru.cpp:264-270): entropius
+-- first (non-triggered, nil when not yet summoned), then self
+-- (non-triggered), then _hasEnraged = true. The entropius leg rides
+-- creature:GetCreatureByGUID (lua_creature_events.go:4050, low-GUID
+-- lookup, nil when not live) on the GUID muruJustSummoned latched.
 local function muruEnrage(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "enrage", 500, function()
@@ -296,8 +358,14 @@ local function muruEnrage(creature, guid)
         end)
         return
     end
-    creature:CastSpell(creature, SPELL_ENRAGE)
     local st = muruState[guid]
+    if st and st.entropiusGUID then
+        local entropius = creature:GetCreatureByGUID(st.entropiusGUID)
+        if entropius then
+            entropius:CastSpell(entropius, SPELL_ENRAGE)
+        end
+    end
+    creature:CastSpell(creature, SPELL_ENRAGE)
     if st then
         st.hasEnraged = true
     end
@@ -482,7 +550,7 @@ local function entropiusCleanup(event, creature)
     -- C++ boss_entropiusAI::JustDied (boss_muru.cpp:193-197):
     -- _JustDied() first — SetBossState(DATA_MURU 4, DONE) — then the
     -- muru->DisappearAndDie() relay via GetInstanceCreature(DATA_MURU)
-    -- (lua_creature_events.go:6157; nil when unlatched / off-map).
+    -- (lua_creature_events.go:6692; nil when unlatched / off-map).
     creature:SetBossState(DATA_MURU, 3)
     local muru = creature:GetInstanceCreature(DATA_MURU)
     if muru then
@@ -542,10 +610,28 @@ local function entropiusReset(event, creature)
     end
 end
 
+-- C++ boss_entropiusAI::JustSummoned (boss_muru.cpp:167-181):
+-- dark fiend -> non-triggered self-cast darkfiend visual 45936;
+-- darkness -> REACT_PASSIVE + non-triggered self-cast blackhole
+-- 46282 + triggered self-cast summon-darkfiend 46263. The
+-- summons.Summon bookkeeping has no Lua twin; the evade DespawnAll
+-- rides the grid sweeps in entropiusLeaveCombat.
+local function entropiusJustSummoned(event, creature, summon)
+    local entry = summon:GetEntry()
+    if entry == ENTRY_DARK_FIEND then
+        summon:CastSpell(summon, SPELL_DARKFIEND_VISUAL)
+    elseif entry == ENTRY_BLACKHOLE then
+        summon:SetReactState(0) -- REACT_PASSIVE
+        summon:CastSpell(summon, SPELL_BLACKHOLE)
+        summon:CastSpell(summon, SPELL_SUMMON_DARKFIEND_E, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 1, entropiusEnterCombat)
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 2, entropiusLeaveCombat)
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 4, entropiusCleanup)
 RegisterCreatureEvent(ENTRY_ENTROPIUS, 23, entropiusReset)
+RegisterCreatureEvent(ENTRY_ENTROPIUS, 19, entropiusJustSummoned)
 
 -- ================= Muru Portal Target (25770) =================
 
@@ -599,7 +685,7 @@ local function darkFiendProximity(creature, guid)
     if victim ~= nil and victim:GetObjectType() ~= "Player" then
         victimReach = victim:GetCombatReach()
     end
-    if creature:IsAlive() and victim and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 5 -- IsWithinDist gate (Unit.cpp:1233; both reaches)
+    if creature:IsAlive() and victim and creature:GetDistance(victim) - creature:GetCombatReach() - victimReach < 5 -- IsWithinDist gate (Object.cpp:1233; both reaches)
             and creature:HasAura(SPELL_DARKFIEND_SKIN) then
         creature:CastSpell(creature, SPELL_DARKFIEND_DAMAGE)
         cancelTimers(guid)
@@ -665,6 +751,28 @@ local function darkFiendSpawn(event, creature)
             function() darkFiendProximity(creature, guid) end)
     end
 end
+
+-- C++ spell_dark_fiend_skin::OnRemove (boss_muru.cpp:648-660,
+-- registered AfterEffectRemove at :665): only on
+-- AURA_REMOVE_BY_ENEMY_SPELL — Go has no remove-mode arg; OnDispel
+-- (aura ev5, lua_aura.go:778) is the dispel-remove twin (hexlord
+-- unstable-affliction precedent): passive + stop + triggered 45936
+-- visual + DespawnOrUnsummon(3s).
+local function darkFiendSkinDispel(event, aura, target, dispeller)
+    if target == nil then
+        return
+    end
+    target:SetReactState(0) -- REACT_PASSIVE
+    target:AttackStop()
+    target:StopMoving()
+    target:CastSpell(target, SPELL_DARKFIEND_VISUAL, true)
+    local guid = target:GetGUIDLow()
+    schedule(guid, "despawn", 3000, function()
+        target:Despawn()
+    end)
+end
+
+RegisterAuraEvent(SPELL_DARKFIEND_SKIN, 5, darkFiendSkinDispel)
 
 RegisterCreatureEvent(ENTRY_DARK_FIEND, 5, darkFiendSpawn)
 

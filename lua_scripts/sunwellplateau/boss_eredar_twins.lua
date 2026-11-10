@@ -25,17 +25,17 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
--- DoMeleeAttackIfReady. The "event 15 never fires — no bridge"
--- claim is STALE — CREATURE_EVENT_ON_SPELL_HIT_TARGET is bridged
--- (boss_ai.go:2097-2115; the arugal precedent). The SpellHitTarget
--- touched-spell arms stay unmodeled on hit-target-enumeration grounds:
--- C++ fires SpellHitTarget per ACTUAL hit unit of each cast, while Go
--- reports the cast's single target — the shadow-blades / flame-sear /
--- shadow-fury arms are self-cast AoEs, so Go would report the boss
--- herself as the "hit" target, and the touched chain is an interacting
--- aura system (dark-touched + flame-touched -> dark flame) that cannot
--- be half-ported on primary-target-only data without fabricating
--- aura states C++ never produces. Corrected 2026-10-17.
+-- DoMeleeAttackIfReady. CREATURE_EVENT_ON_SPELL_HIT_TARGET (15) is
+-- bridged and fires once per ACTUAL hit unit of each cast — primary,
+-- chain jumps, AoE fan-out (boss_ai.go
+-- castCreatureSpellInternalWithBasePoints: hitTargets is the primary
+-- target plus the SelectImplicitAreaTargets / cone sweeps, and the
+-- per-target loop fires ev15 per guid; the arugal precedent). The
+-- SpellHitTarget touched-spell arms are PORTED below via ev15 handlers
+-- (the 2026-10-17 "Go reports the cast's single target" rationale is
+-- stale). Self-cast AoEs list the caster as hitTargets[0], so the
+-- handlers skip the caster herself — C++ never fires SpellHitTarget on
+-- the caster of her own enemy-AoE.
 -- Fight shape (C++-exact for the modeled arms): Lady Sacrolash
 -- (25165). OnEnterCombat(1): per-GUID reset, arm shadow blades
 -- 45248 10s then 10s, non-triggered self-cast (C++ DoCast(me, ...),
@@ -56,9 +56,11 @@
 -- threat-list unit alive, nil pick keeps the schedule
 -- / enrage 46587 6min one-shot: Talk(YELL_ENRAGE), non-triggered
 -- self-cast (C++ DoCast default triggered=false). The shadow-image
--- summon arm (3 x DoSpawnCreature NPC_SHADOW_IMAGE) has no summon
--- bridge — skipped (felmyst convention); the sister-death
--- conflagration arm 45342 is PORTED below (detection poll +
+-- summon arm (3 x DoSpawnCreature NPC_SHADOW_IMAGE 25214,
+-- TEMPSUMMON_CORPSE_DESPAWN 10s) is PORTED below (sacrolashShadowImage:
+-- SummonCreature type 4 + EngageWithTarget; the paired cross-creature
+-- AddThreat 1M leg stays out — AddThreat is self-threat only). The
+-- sister-death conflagration arm 45342 is PORTED below (detection poll +
 -- arm switch). OnTargetDied(3): 25% Talk(YELL_SAC_KILL), no
 -- TYPEID gate (C++-exact — the C++ KilledUnit Talk has no victim
 -- gate). OnDied(4): the SisterDeath-gated Talk(YELL_SAC_DEAD 4) is
@@ -96,11 +98,13 @@
 -- "timers fire unconditionally (jeklik convention)" claim is
 -- retracted for the gated arms above. The SpellHitTarget
 -- HandleTouchedSpells arm (45248/45329/45256/45270 -> dark touched
--- 45347; 45342 -> flame touched 45348) is unmodeled on
--- hit-target-enumeration grounds (see header top — the "no bridge"
--- label was stale). The melee-range HandleTouchedSpells(victim, 45347)
--- arm has no melee-hook bridge — unmodeled (melee is engine-
--- driven). Grand Warlock Alythess (25166). OnEnterCombat(1):
+-- 45347; 45342 -> flame touched 45348) is PORTED below via ev15
+-- (see header top). The melee-range HandleTouchedSpells(victim, 45347)
+-- arm (:306-315 AttackerStateUpdate leg) stays unmodeled — there is no
+-- melee-hit-dealt hook (no Melee/DealDamage event in
+-- engine/scripting/runtime.go); the swing itself is engine-driven and
+-- enabled (no SetMeleeAttack(false) on this twin — C++ swings, unlike
+-- Alythess). Grand Warlock Alythess (25166). OnEnterCombat(1):
 -- per-GUID reset, arm conflagration 45342 45s then {30s,35s}, non-
 -- triggered on a threat-list unit alive (nil pick
 -- casts nothing but keeps the schedule), Talk(EMOTE_CONFLAGRATION,
@@ -126,19 +130,23 @@
 -- lua_creature_events.go:5917). OnLeaveCombat(2):
 -- cancel timers, drop per-GUID state. The SpellHitTarget arm (45235
 -- -> blaze-summon 45236 self-cast on the hit target; 45342/46771 ->
--- flame touched 45348; 45329 -> dark touched 45347) — the
--- SpellHitTarget bridge is LIVE (event 15, see header top); the arm
--- stays unmodeled on hit-target-enumeration grounds. The 8-step intro
+-- flame touched 45348; 45329 -> dark touched 45347) is PORTED below
+-- via ev15 (see header top). The 8-step intro
 -- chain
 -- (MoveInLineOfSight sighting + cross-creature Talk relays) stays
 -- unmodeled — the trigger is sister-sighting at spawn (same-faction,
--- non-attackable unit), which never coincides with Go's ev27
--- attackable-player aggro-branch fire site, and Go has no spawn hook.
+-- non-attackable unit), and Go's ev27 creature-victim scan is
+-- hostile-gated (creaturemotion.go creatureHostileToCreature), so the
+-- sister sighting never fires ev27. (ev5 IS a spawn hook in Go and is
+-- used below for the GuidData latch — the old "no spawn hook" claim
+-- was stale; the blocker is the ev27 hostile gate, not the hook.)
 -- The no-victim threat handoff from the sister
--- and the sister AttackStart relays are PORTED 2026-10-26 into both
--- enter handlers (FindNearestCreature + !GetVictim gate +
--- EngageWithTarget; the no-victim threat handoff itself stays out —
--- no threat-list bridge). Shadow Image (25214). OnReset(23): the NOT_
+-- and the sister AttackStart relays are PORTED into both enter
+-- handlers (FindNearestCreature + !GetVictim gate +
+-- EngageWithTarget), and the per-tick no-victim handoff itself is
+-- PORTED in the sister-death poll below (it needs only the sister's
+-- victim via GetInstanceCreature + GetVictim, no threat-list bridge).
+-- Shadow Image (25214). OnReset(23): the NOT_
 -- SELECTABLE flag arm is PORTED 2026-10-20 via the live flag bridge
 -- (the old "no flag bridge" claim is retracted; C++:677-679 sets only
 -- the flag + Initialize(); the cast lives in the per-tick HasAura
@@ -162,14 +170,18 @@
 -- BossAI base involved; the DATA_EREDAR_TWINS legs ARE ported —
 -- ev1 IN_PROGRESS / ev23 NOT_STARTED on both twins, ev4 DONE on
 -- the second twin's death via the twinDead latch; the sister
--- AttackStart/respawn/threat relays stay out); the sister-death
--- detection + empower + sister-phase spell arms are PORTED
--- 2026-11-05 (GetInstanceCreature bridge + 1s poll, below); the
--- alythess intro cross-Talk stays unmodeled; all touched-spell chaining
--- and the alythess blaze-summon (GO 187366) arms unmodeled; no
--- summon bridge — the shadow-image spawns unmodeled; no flag/move/
--- threat bridge — the AddThreat and intro-sighting arms stay
--- unmodeled (lootable-flag, no-movement and image KillSelf are PORTED).
+-- AttackStart/respawn/threat relays ARE ported — enter-combat relay,
+-- Reset respawn/threat relay, per-tick no-victim handoff); the
+-- sister-death detection + empower + sister-phase spell arms are
+-- PORTED 2026-11-05 (GetInstanceCreature bridge + 1s poll, below);
+-- the alythess intro cross-Talk stays unmodeled (ev27 hostile gate,
+-- above); the touched-spell chaining and the alythess blaze-summon
+-- (GO 187366) arms are PORTED below via ev15 (the blaze-summon GO
+-- effect itself rides the spell engine); the shadow-image spawns ARE
+-- ported (SummonCreature); the cross-creature AddThreat 1M leg stays
+-- out (AddThreat is self-threat only); the melee dark-touched leg
+-- stays out (no melee-hit hook). The lootable-flag, no-movement and
+-- image KillSelf arms are PORTED.
 
 local SPELL_SHADOW_BLADES = 45248
 local SPELL_SHADOW_NOVA = 45329
@@ -180,6 +192,10 @@ local SPELL_PYROGENICS = 45230
 local SPELL_FLAME_SEAR = 46771
 local SPELL_BLAZE = 45235
 local SPELL_EMPOWER = 45366
+local SPELL_DARK_TOUCHED = 45347
+local SPELL_FLAME_TOUCHED = 45348
+local SPELL_DARK_FLAME = 45345
+local SPELL_BLAZE_SUMMON = 45236
 
 -- UnitDefines.h:149; SetFlag/RemoveFlag on UNIT_FIELD_FLAGS (59) is
 -- bridged (engine/world/lua_creature_events.go:968).
@@ -286,6 +302,36 @@ local function randomThreatTarget(creature)
         return nil
     end
     return alive[math.random(#alive)]
+end
+
+-- C++ HandleTouchedSpells, shared by both twins (boss_eredar_twins.cpp
+-- :184 sacrolash / :465 alythess): a hit unit without dark flame
+-- upgrades dark-touched <-> flame-touched into dark flame, else takes
+-- the single touched aura. RemoveAura(spell) is the
+-- RemoveAurasDueToSpell twin (Aura::Remove() default); the target
+-- self-casts triggered, as in C++ — player targets take the 2-arg
+-- CastSpell (the player funnel is triggered-only), creature targets
+-- the 3rd-arg triggered form.
+local function handleTouchedSpells(target, touchedType)
+    if touchedType == SPELL_FLAME_TOUCHED then
+        if not target:HasAura(SPELL_DARK_FLAME) then
+            if target:HasAura(SPELL_DARK_TOUCHED) then
+                target:RemoveAura(SPELL_DARK_TOUCHED)
+                target:CastSpell(target, SPELL_DARK_FLAME, true)
+            else
+                target:CastSpell(target, SPELL_FLAME_TOUCHED, true)
+            end
+        end
+    else
+        if not target:HasAura(SPELL_DARK_FLAME) then
+            if target:HasAura(SPELL_FLAME_TOUCHED) then
+                target:RemoveAura(SPELL_FLAME_TOUCHED)
+                target:CastSpell(target, SPELL_DARK_FLAME, true)
+            else
+                target:CastSpell(target, SPELL_DARK_TOUCHED, true)
+            end
+        end
+    end
 end
 
 -- ================= Lady Sacrolash (25165) =================
@@ -440,8 +486,8 @@ end
 -- AttackStart(target) when both exist; the 1M cross-creature
 -- AddThreat leg stays out (AddThreat is self-threat only). The
 -- summoned images run their own enter handler (DB-spawned
--- images share it); EngageWithTarget no-ops on non-player picks
--- (session-only funnel, lua_creature_events.go:498-513).
+-- images share it); EngageWithTarget resolves creature targets too
+-- (session or motion lookup), so non-player picks engage as in C++.
 local function sacrolashShadowImage(creature, guid)
     for _ = 1, 3 do
         local target = randomThreatTarget(creature)
@@ -475,7 +521,12 @@ local function sacrolashEnterCombat(event, creature, target)
         end
     end
     creature:SetBossState(DATA_EREDAR_TWINS, 1)
-    creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:211: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
+    -- No SetMeleeAttack(false) here: C++ swings in melee range
+    -- (boss_eredar_twins.cpp:306-315: isAttackReady + IsWithinMeleeRange
+    -- + AttackerStateUpdate — the julianne precedent, a direct UpdateAI
+    -- swing, not a DoMeleeAttackIfReady omission), so the engine-driven
+    -- swing stays enabled. Only the melee dark-touched application stays
+    -- out (no melee-hit hook; see header).
     local guid = creature:GetGUIDLow()
     sacrolashState[guid] = { enraged = false, sisterDeath = false }
     schedule(guid, "shadowblades", 10000, function()
@@ -554,6 +605,26 @@ local function sacrolashReset(event, creature)
             end
         end
         creature:SetBossState(DATA_EREDAR_TWINS, 0)
+    end
+end
+
+-- C++ boss_sacrolashAI::SpellHitTarget (:164-182): shadow blades /
+-- shadow nova / confounding blow / shadow fury hits take dark touched,
+-- conflagration hits take flame touched. Ev15 fires once per actual
+-- hit unit (see header top); the caster herself is hitTargets[0] of
+-- her own self-cast AoEs, so she is skipped — C++ never fires
+-- SpellHitTarget on the caster. (Shadow fury never fires here — the
+-- image's casts fire on the image's bindings — but the case mirrors
+-- the C++ switch.)
+local function sacrolashSpellHitTarget(event, creature, target, spellId)
+    if target == nil or target:GetGUIDLow() == creature:GetGUIDLow() then
+        return
+    end
+    if spellId == SPELL_SHADOW_BLADES or spellId == SPELL_SHADOW_NOVA or
+        spellId == SPELL_CONFOUNDING_BLOW or spellId == SPELL_SHADOW_FURY then
+        handleTouchedSpells(target, SPELL_DARK_TOUCHED)
+    elseif spellId == SPELL_CONFLAGRATION then
+        handleTouchedSpells(target, SPELL_FLAME_TOUCHED)
     end
 end
 
@@ -686,6 +757,22 @@ local function alythessSisterDeathPoll(creature, guid)
     if not st or st.sisterDeath then
         return
     end
+    -- C++ UpdateAI no-victim handoff (:555-565): while the sister lives
+    -- and holds a victim I have none of, take her victim (threat 0 +
+    -- DoStartNoMovement + Attack — EngageWithTarget; no movement, as
+    -- SetCombatMovement(false)). Runs on the 1s poll; after sister
+    -- death C++ no-ops (sister dead), matching the poll stopping on
+    -- the latch above.
+    if creature:GetVictim() == nil then
+        local sister = creature:GetInstanceCreature(DATA_SACROLASH)
+        if sister ~= nil and not sister:IsDead() then
+            local victim = sister:GetVictim()
+            if victim ~= nil then
+                creature:AddThreat(victim, 0)
+                creature:EngageWithTarget(victim)
+            end
+        end
+    end
     local sister = creature:GetInstanceCreature(DATA_SACROLASH)
     if sister ~= nil and sister:IsDead() then
         st.sisterDeath = true
@@ -708,6 +795,7 @@ end
 -- the sister's poll can resolve it via GetInstanceCreature.
 local function alythessSpawn(event, creature)
     creature:SetGuidData(DATA_ALYTHESS)
+    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
 end
 
 -- C++ JustEngagedWith + Initialize: per-GUID reset, arm the
@@ -729,8 +817,7 @@ local function alythessEnterCombat(event, creature, target)
         end
     end
     creature:SetBossState(DATA_EREDAR_TWINS, 1)
-    creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
-    creature:SetCombatMovement(false) -- ScriptedAI ctor arm, boss_eredar_twins.cpp:335 (ranged AI stands and casts)
+    creature:SetMeleeAttack(false) -- boss_eredar_twins.cpp:535: her UpdateAI has no melee arm anywhere (cast-only in C++)
     local guid = creature:GetGUIDLow()
     alythessState[guid] = { enraged = false, sisterDeath = false }
     schedule(guid, "conflagration", 45000, function()
@@ -811,6 +898,23 @@ local function alythessReset(event, creature)
     end
 end
 
+-- C++ boss_alythessAI::SpellHitTarget (:444-462): blaze hits make the
+-- hit unit self-cast blaze-summon 45236 (triggered); conflagration /
+-- flame sear hits take flame touched, shadow nova hits take dark
+-- touched. Caster-self skip as in sacrolashSpellHitTarget.
+local function alythessSpellHitTarget(event, creature, target, spellId)
+    if target == nil or target:GetGUIDLow() == creature:GetGUIDLow() then
+        return
+    end
+    if spellId == SPELL_BLAZE then
+        target:CastSpell(target, SPELL_BLAZE_SUMMON, true)
+    elseif spellId == SPELL_CONFLAGRATION or spellId == SPELL_FLAME_SEAR then
+        handleTouchedSpells(target, SPELL_FLAME_TOUCHED)
+    elseif spellId == SPELL_SHADOW_NOVA then
+        handleTouchedSpells(target, SPELL_DARK_TOUCHED)
+    end
+end
+
 -- ================= Shadow Image (25214) =================
 
 -- C++ EVENT shadow fury: DoCastSelf(45270); first {5s,20s},
@@ -855,6 +959,10 @@ end
 -- via LeaveCombat cancel + EnterCombat).
 local function shadowImageEnterCombat(event, creature)
     local guid = creature:GetGUIDLow()
+    -- No white swing in C++: its UpdateAI (:709-742) has no
+    -- DoMeleeAttackIfReady / AttackerStateUpdate arm — dark strike is a
+    -- spell cast, not a swing — so suppress the engine-driven swing.
+    creature:SetMeleeAttack(false)
     -- C++ 5000 + rand32()%15000 is exclusive-top [5000,19999].
     schedule(guid, "shadowfury", math.random(5000, 19999), function()
         shadowImageFury(creature, guid)
@@ -887,12 +995,26 @@ local function shadowImageReset(event, creature)
     end
 end
 
+-- C++ npc_shadow_imageAI::SpellHitTarget (:685-706): shadow fury /
+-- dark strike hits take the dark-touched leg only (flame-touched
+-- upgrades to dark flame, else dark touched). Caster-self skip as in
+-- sacrolashSpellHitTarget.
+local function shadowImageSpellHitTarget(event, creature, target, spellId)
+    if target == nil or target:GetGUIDLow() == creature:GetGUIDLow() then
+        return
+    end
+    if spellId == SPELL_SHADOW_FURY or spellId == SPELL_DARK_STRIKE then
+        handleTouchedSpells(target, SPELL_DARK_TOUCHED)
+    end
+end
+
 RegisterCreatureEvent(25165, 1, sacrolashEnterCombat)
 RegisterCreatureEvent(25165, 2, sacrolashLeaveCombat)
 RegisterCreatureEvent(25165, 3, sacrolashTargetDied)
 RegisterCreatureEvent(25165, 4, sacrolashDied)
 RegisterCreatureEvent(25165, 23, sacrolashReset)
 RegisterCreatureEvent(25165, 5, sacrolashSpawn)
+RegisterCreatureEvent(25165, 15, sacrolashSpellHitTarget)
 
 RegisterCreatureEvent(25166, 1, alythessEnterCombat)
 RegisterCreatureEvent(25166, 2, alythessLeaveCombat)
@@ -900,7 +1022,9 @@ RegisterCreatureEvent(25166, 3, alythessTargetDied)
 RegisterCreatureEvent(25166, 4, alythessDied)
 RegisterCreatureEvent(25166, 23, alythessReset)
 RegisterCreatureEvent(25166, 5, alythessSpawn)
+RegisterCreatureEvent(25166, 15, alythessSpellHitTarget)
 
 RegisterCreatureEvent(25214, 1, shadowImageEnterCombat)
 RegisterCreatureEvent(25214, 2, shadowImageLeaveCombat)
 RegisterCreatureEvent(25214, 23, shadowImageReset)
+RegisterCreatureEvent(25214, 15, shadowImageSpellHitTarget)
