@@ -335,7 +335,7 @@ local function maulgarEnterCombat(event, creature, target)
     maulgarResetState(guid)
     maulgarState[guid] = { phase2 = false }
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:134: engage every player on the map (live bridge 2026-10-23)
-    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:137)
+    creature:SetBossState(0, 1) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:137)
     creature:Talk(SAY_AGGRO)
     maulgarArmCombat(creature, guid)
 end
@@ -447,7 +447,7 @@ local function olmEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     olmResetState(guid)
     creature:DoZoneInCombat()
-    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS
+    creature:SetBossState(0, 1) -- DATA_MAULGAR, IN_PROGRESS
     olmArmCombat(creature, guid)
 end
 
@@ -532,7 +532,7 @@ local function kigglerEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     kigglerResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:344, C++ arm order
-    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:347)
+    creature:SetBossState(0, 1) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:347)
     schedule(guid, "polymorph", 5000, function()
         kigglerPolymorph(creature, guid)
     end)
@@ -610,7 +610,7 @@ local function blindeyeEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     blindeyeResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:436, C++ arm order
-    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:439)
+    creature:SetBossState(0, 1) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:439)
     schedule(guid, "shield", 5000, function()
         blindeyeShield(creature, guid)
     end)
@@ -727,7 +727,7 @@ local function kroshEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     kroshResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:519, C++ JustEngagedWith arm order
-    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:522)
+    creature:SetBossState(0, 1) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:522)
     schedule(guid, "fireball", 1000, function()
         kroshFireball(creature, guid)
     end)

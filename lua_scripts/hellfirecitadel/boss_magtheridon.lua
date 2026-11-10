@@ -28,8 +28,8 @@
 -- the victim arm (felmyst convention).
 -- Fight shape (C++-exact for the modeled arms): Magtheridon
 -- (17257). OnReset(23): per-GUID state cleared (the _Reset
--- instance bookkeeping is blocked on the instance-script
--- model), non-triggered self-cast 30205 (C++ DoCastSelf(SPELL_
+-- SetBossState NOT_STARTED leg is PORTED below —
+-- instance_magtheridons_lair.lua), non-triggered self-cast 30205 (C++ DoCastSelf(SPELL_
 -- SHADOW_CAGE_C)), channelers=5 (C++-exact init — the
 -- SummonedCreatureDies decrement relay is cross-creature
 -- blocked), phase="banish", taunt timer armed {4min,5min}
@@ -59,26 +59,23 @@
 -- max and phase ~= "collapsed" -> phase="collapsed",
 -- Talk(SAY_COLLAPSE), non-triggered DoCastAOE self-cast camera
 -- shake 36455 (kalecgos convention; the react bridge exists —
--- creature:SetReactState — but the collapse PASSIVE arm stays out:
--- its AGGRESSIVE restore rides the unported world-trigger machine,
--- so the flip alone would strand the boss passive; AttackStop is
--- ported in magtheridonDamageTaken below), 6s -> 4s -> start the 20s
+-- creature:SetReactState — the REACT_PASSIVE flip + AGGRESSIVE
+-- restore are PORTED in magtheridonDamageTaken /
+-- magtheridonDebrisKnockdown below; AttackStop is ported in
+-- magtheridonDamageTaken below), 6s -> 4s -> start the 20s
 -- (the instance SetData COLLAPSE / COLLAPSE_2 arms and the
--- world-trigger 36449 cast via instance->GetCreature(DATA_
--- WORLD_TRIGGER) have no instance/cross-creature bridges; the
--- react-state flip back to aggressive stays out — the react bridge
--- exists (creature:SetReactState) but the world-trigger machine is
--- unported).
+-- world-trigger 36449 cast via the FindNearestCreature grid twin
+-- are PORTED below — instance_magtheridons_lair.lua).
 -- Damage is NOT rewritten (C++-exact — the arm only gates on
 -- the 30% line). OnSpellHit(14): hit by 30168 (shadow cage) ->
 -- Talk(SAY_BANISHED) (muru-portal event-14 precedent). OnTarget-
 -- Died(3): victim:GetObjectType() == "Player" -> Talk(SAY_SLAY) (C++-exact
 -- TYPEID gate, gruul convention). OnDied(4): Talk(SAY_DEATH) +
--- cleanup (the _JustDied arm and the instance MANTICRON_CUBE
--- disable are blocked). OnLeaveCombat(2)/OnReset(23): cancel
--- timers, drop per-GUID state (the evade-side summons.
--- DespawnAll + instance-disable arms are summon/instance
--- blocked). Hellfire Channeler (17256). OnReset(23): per-GUID
+-- cleanup (the _JustDied SetBossState DONE leg + the instance
+-- MANTICRON_CUBE disable are PORTED below). OnLeaveCombat(2)/
+-- OnReset(23): cancel timers, drop per-GUID state (the evade-side
+-- instance-disable arms are PORTED below; summons.DespawnAll
+-- stays out — no bridge). Hellfire Channeler (17256). OnReset(23): per-GUID
 -- state cleared, non-triggered self-cast 30207 (the REACT_DEFENSIVE
 -- arm is PORTED 2026-10-20 — creature:SetReactState).
 -- OnEnterCombat(1): the
@@ -103,10 +100,12 @@
 -- 30632, then 5s -> non-triggered DoCastAOE self-cast 30631
 -- (kalecgos convention). The three spell scripts are unmodeled
 -- (standing gaps — below); go_manticron_cube is PORTED below.
--- Deliberate deviations (all await engine bridges): no
--- instance-script model — boss admission via the luaBossAI shim
--- (the SetBossState/SetData/GetCreature instance arms and the
--- _Reset/_JustDied bookkeeping skipped); the channeler->
+-- Deliberate deviations (all await engine bridges): the
+-- instance script is PORTED (instance_magtheridons_lair.lua —
+-- door machine + SetData switch, event 8; the SetBossState /
+-- SetData / GetBossState / SetGuidData instance arms and the
+-- _Reset/_JustDied/_DespawnAtEvade bookkeeping are PORTED below);
+-- the channeler->
 -- magtheridon ACTION_START_CHANNELERS_EVENT relay, the "Hit
 -- Kill" relay, the SummonedCreatureDies count leg and the
 -- break-free phase machine (PHASE_BANISH -> PHASE_1 ->
@@ -114,12 +113,12 @@
 -- are PORTED 2026-11-05 via the ev38 DoAction bridge with a
 -- FindNearestCreature grid twin for the instance GetCreature
 -- lookup (unique 17257 in the room); the summons.DoZoneInCombat
--- (channelers) leg and the world-trigger debris-knockdown cast
--- stay unmodeled — so a direct pull still releases the boss
+-- (channelers) leg stays unmodeled and the world-trigger
+-- debris-knockdown cast is PORTED below — so a direct pull still releases the boss
 -- immediately (EMOTE_BREAKS_FREE + SAY_FREE + the RELEASED timer
 -- set, C++-exact values); no summon bridge — the channeler
--- group summon skipped; the magtheridon passive/aggressive arms stay
--- out on the unported collapse machine; the EVENT_RELEASED
+-- group summon skipped; the magtheridon passive/aggressive arms are
+-- PORTED below (DamageTaken / debris-knockdown); the EVENT_RELEASED
 -- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) leg is
 -- PORTED (boss_magtheridon.cpp:253, magtheridonEnterCombat below —
 -- the flag bridge is live since e9387671; the old "no flag bridge"
@@ -211,6 +210,25 @@ local EMOTE_BREAKS_FREE = 8
 local EMOTE_BLAST_NOVA = 9
 
 local ACTION_START_CHANNELERS_EVENT = 2
+
+-- magtheridons_lair.h MLDataTypes / MLActions (the instance
+-- SetData machine, instance_magtheridons_lair.lua).
+local DATA_MANTICRON_CUBE = 9
+local DATA_COLLAPSE = 10
+local DATA_COLLAPSE_2 = 11
+local DATA_CALL_WARDERS = 12
+local ACTION_ENABLE = 1
+local ACTION_DISABLE = 2
+local ENTRY_WORLD_TRIGGER = 21252
+local SPELL_DEBRIS_KNOCKDOWN = 36449
+
+-- The boss files reach the instance script through the shared
+-- instanceData table (slad_ran.lua:261-263 precedent:
+-- creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- boss_magtheridon.cpp:253
@@ -308,6 +326,18 @@ end
 -- C++ Reset: non-triggered self-cast 30205, phase BANISH,
 -- channelers 5, taunt {4min,5min} repeat.
 local function magtheridonReset(event, creature)
+    -- C++ Reset: _Reset (SetBossState DATA_MAGTHERIDON,
+    -- NOT_STARTED, ScriptedCreature.cpp:499-510) — ev23 fires on
+    -- death too (engine reset-then-died order); the NOT_STARTED
+    -- write lands before the ev4 DONE write, so the final state
+    -- stays DONE (gruul precedent). The instanceData flag drives
+    -- the Magtheridon room door (instance_magtheridons_lair.lua,
+    -- DOOR_TYPE_ROOM: open unless IN_PROGRESS).
+    creature:SetBossState(0, 0) -- DATA_MAGTHERIDON, NOT_STARTED
+    local data = instanceDataOf(creature)
+    if data then
+        data.magtheridonInProgress = false
+    end
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     magState[guid] = nil
@@ -443,19 +473,29 @@ local function magtheridonEnterCombat(event, creature)
     -- released timers, the CombatStart cancel twin.
     local st = magState[guid]
     if st and st.phase == "released" then
+        creature:SetBossState(0, 1) -- DATA_MAGTHERIDON, IN_PROGRESS (ScriptedCreature.cpp:537)
+        local data = instanceDataOf(creature)
+        if data then
+            data.magtheridonInProgress = true
+        end
         creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
         creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
         return
     end
     cancelTimers(guid)
     magState[guid] = { phase = "released", channelers = 5 }
+    creature:SetBossState(0, 1) -- DATA_MAGTHERIDON, IN_PROGRESS (ScriptedCreature.cpp:537)
+    local data = instanceDataOf(creature)
+    if data then
+        data.magtheridonInProgress = true
+    end
     -- BossAI base arms first: boss_magtheridonAI : BossAI with NO
     -- JustEngagedWith override (the file's only JustEngagedWith,
     -- :333, is the channeler's ScriptedAI arm), so inherited
     -- BossAI::_JustEngagedWith runs at first AtEngage
     -- (ScriptedCreature.cpp:540/542; gruul precedent). The
-    -- instance SetBossState / setActive / ScheduleTasks legs stay
-    -- out (no instance-script model). This me-form DoZoneInCombat
+    -- instance setActive / ScheduleTasks legs stay out (the
+    -- SetBossState leg is PORTED below). This me-form DoZoneInCombat
     -- also stands in for the EVENT_RELEASED self-form leg the
     -- collapsed pull handler previously lacked.
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
@@ -485,14 +525,21 @@ end
 
 -- C++ EVENT_COLLAPSE / EVENT_DEBRIS_KNOCKDOWN (boss_magtheridon.cpp:
 -- 259/:265) sit in the same gated event map; named so the 500ms
--- defer can re-queue them (the world-trigger 36449 cast leg stays
--- unported; only the debris scheduling rides the chain).
+-- defer can re-queue them (the world-trigger 36449 cast leg is
+-- PORTED in magtheridonDebrisKnockdown below).
 magtheridonCollapse = function(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "collapse", 500, function()
             magtheridonCollapse(creature, guid)
         end)
         return
+    end
+    -- C++ EVENT_COLLAPSE (boss_magtheridon.cpp:264-266): the six
+    -- columns open — instanceData:SetData (event 8) into the
+    -- instance SetData machine (instance_magtheridons_lair.lua).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_COLLAPSE_2, ACTION_ENABLE)
     end
     schedule(guid, "debrisknockdown", 4000, function()
         magtheridonDebrisKnockdown(creature, guid)
@@ -506,7 +553,22 @@ magtheridonDebrisKnockdown = function(creature, guid)
         end)
         return
     end
-    magtheridonDebris(creature, guid)
+    -- C++ EVENT_DEBRIS_KNOCKDOWN (boss_magtheridon.cpp:268-275):
+    -- the world trigger (21252, the instance DATA_WORLD_TRIGGER
+    -- latch) self-casts debris knockdown 36449 triggered, the boss
+    -- flips back to AGGRESSIVE, EVENT_DEBRIS schedules 20s. The
+    -- whole body rides the trigger lookup — a nil trigger schedules
+    -- nothing. The trigger resolves via the FindNearestCreature
+    -- grid twin (no DATA_WORLD_TRIGGER latch exists — the
+    -- instance file has no creature script for 21252).
+    local trigger = creature:FindNearestCreature(ENTRY_WORLD_TRIGGER, 100.0)
+    if trigger then
+        trigger:CastSpell(trigger, SPELL_DEBRIS_KNOCKDOWN, true)
+        creature:SetReactState(2) -- REACT_AGGRESSIVE
+        schedule(guid, "debris", 20000, function()
+            magtheridonDebris(creature, guid)
+        end)
+    end
 end
 
 -- C++ EVENT_NEARLY_EMOTE (boss_magtheridon.cpp:280-282): one-shot
@@ -525,8 +587,9 @@ end
 
 -- C++ EVENT_RELEASED (boss_magtheridon.cpp:250-264): RemoveFlag
 -- NOT_SELECTABLE, SetImmuneToPC(false) (RemoveFlag(59, 0x100)),
--- DoZoneInCombat, phase 2, the MANTICRON_CUBE instance leg stays
--- out, then the combat timer set. Same gated map, same defer.
+-- DoZoneInCombat, phase 2, the MANTICRON_CUBE ENABLE leg is PORTED
+-- below (instanceData:SetData, event 8), then the combat timer
+-- set. Same gated map, same defer.
 magtheridonReleased = function(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "released", 500, function()
@@ -538,6 +601,13 @@ magtheridonReleased = function(creature, guid)
     creature:RemoveFlag(59, 0x100)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
+    -- C++ EVENT_RELEASED (boss_magtheridon.cpp:257): the cubes go
+    -- selectable — instanceData:SetData (event 8) into the
+    -- instance SetData machine (instance_magtheridons_lair.lua).
+    local data = instanceDataOf(creature)
+    if data then
+        data:SetData(DATA_MANTICRON_CUBE, ACTION_ENABLE)
+    end
     local st = magState[guid]
     if st then
         st.phase = "released"
@@ -570,8 +640,9 @@ end
 -- (boss_magtheridon.cpp:172-186): only in PHASE_BANISH — flip to
 -- PHASE_1, Talk(EMOTE_WEAKEN), summons.DoZoneInCombat(channelers)
 -- stays out (channelers engage individually in this model),
--- START_FIGHT 2min, NEARLY_EMOTE 1min, cancel TAUNT, the
--- SetBossState / SetData instance legs stay out.
+-- START_FIGHT 2min, NEARLY_EMOTE 1min, cancel TAUNT,
+-- SetBossState(IN_PROGRESS) + SetData(CALL_WARDERS) PORTED below
+-- (instanceData:SetData, event 8).
 local function magtheridonDoAction(event, creature, action)
     if action ~= ACTION_START_CHANNELERS_EVENT then
         return
@@ -584,6 +655,15 @@ local function magtheridonDoAction(event, creature, action)
     st.phase = "phase1"
     creature:Talk(EMOTE_WEAKEN)
     cancelKey(guid, "taunt")
+    -- C++ DoAction (boss_magtheridon.cpp:182-183): IN_PROGRESS +
+    -- the warder call — instanceData:SetData (event 8) into the
+    -- instance SetData machine (instance_magtheridons_lair.lua).
+    creature:SetBossState(0, 1) -- DATA_MAGTHERIDON, IN_PROGRESS
+    local data = instanceDataOf(creature)
+    if data then
+        data.magtheridonInProgress = true
+        data:SetData(DATA_CALL_WARDERS, ACTION_ENABLE)
+    end
     schedule(guid, "nearly", 60000, function()
         magtheridonNearlyEmote(creature, guid)
     end)
@@ -607,12 +687,20 @@ local function magtheridonDamageTaken(event, creature, attacker, damage)
     local maxHealth = creature:GetMaxHealth()
     if maxHealth > 0 and health - damage < math.floor(maxHealth * 30 / 100) then
         st.phase = "collapsed"
-        -- C++ boss_magtheridon.cpp:199: me->AttackStop() (arm order
-        -- REACT_PASSIVE flip -> AttackStop -> Talk; the stop is a
-        -- one-shot, melee re-arms on the post-collapse flip via the
-        -- Go combat tick).
+        -- C++ DamageTaken (boss_magtheridon.cpp:193-203, arm order):
+        -- REACT_PASSIVE flip -> AttackStop -> Talk -> SetData
+        -- COLLAPSE ENABLE -> DoCastAOE camera shake -> EVENT_COLLAPSE
+        -- 6s. The passive flip is a one-shot; the AGGRESSIVE restore
+        -- rides the debris-knockdown leg above (PORTED — the
+        -- world-trigger machine now lands via the instance SetData
+        -- switch, so the flip no longer strands the boss passive).
+        creature:SetReactState(0) -- REACT_PASSIVE
         creature:AttackStop()
         creature:Talk(SAY_COLLAPSE)
+        local data = instanceDataOf(creature)
+        if data then
+            data:SetData(DATA_COLLAPSE, ACTION_ENABLE)
+        end
         creature:CastSpell(creature, SPELL_CAMERA_SHAKE)
         schedule(guid, "collapse", 6000, function()
             magtheridonCollapse(creature, guid)
@@ -657,16 +745,48 @@ end
 local function magtheridonDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(0, 3) -- DATA_MAGTHERIDON, DONE (boss_magtheridon.cpp:207-212)
+    -- C++ JustDied (boss_magtheridon.cpp:211): the cubes go
+    -- unselectable — instanceData:SetData (event 8) into the
+    -- instance SetData machine (instance_magtheridons_lair.lua).
+    local data = instanceDataOf(creature)
+    if data then
+        data.magtheridonInProgress = false
+        data:SetData(DATA_MANTICRON_CUBE, ACTION_DISABLE)
+    end
     cancelTimers(creature:GetGUIDLow())
     magState[creature:GetGUIDLow()] = nil
 end
 
+-- C++ EnterEvadeMode (boss_magtheridon.cpp:150-158): summons.
+-- DespawnAll stays out (no bridge) + the three instance-disable
+-- arms PORTED below (instanceData:SetData, event 8) +
+-- _DespawnAtEvade (boss state FAIL, ScriptedCreature.cpp:617).
+-- ev2 fires on evade; the SetData writes are idempotent with the
+-- Reset/JustDied legs.
 local function magtheridonLeaveCombat(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     magState[guid] = nil
+    creature:SetBossState(0, 2) -- DATA_MAGTHERIDON, FAIL (_DespawnAtEvade)
+    local data = instanceDataOf(creature)
+    if data then
+        data.magtheridonInProgress = false
+        data:SetData(DATA_MANTICRON_CUBE, ACTION_DISABLE)
+        data:SetData(DATA_COLLAPSE, ACTION_DISABLE)
+        data:SetData(DATA_COLLAPSE_2, ACTION_DISABLE)
+    end
 end
 
+-- C++ LoadObjectData (instance_magtheridons_lair.cpp:37-42):
+-- Magtheridon latches his own GUID under DATA_MAGTHERIDON (0)
+-- so the instance file's GetInstanceCreature(0) resolves — the
+-- ev5 spawn handler + SetGuidData idiom (illidari council
+-- precedent; motionFor fires ev5 on first spawn and respawn).
+local function magtheridonSpawn(event, creature)
+    creature:SetGuidData(0) -- DATA_MAGTHERIDON
+end
+
+RegisterCreatureEvent(ENTRY_MAGTHERIDON, 5, magtheridonSpawn)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 1, magtheridonEnterCombat)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 2, magtheridonLeaveCombat)
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 3, magtheridonTargetDied)
@@ -863,11 +983,24 @@ local function channelerDied(event, creature, killer)
     chanCanMend[guid] = nil
 end
 
+-- C++ EnterEvadeMode (boss_magtheridon.cpp:364-369): if the boss
+-- is IN_PROGRESS, the boss evades too — creature:GetBossState
+-- (lua_creature_events.go:6620) + the boss's EnterEvadeMode
+-- bridge (:5190, ev23-then-ev2, moroes precedent). The boss-side
+-- evade arms (instance disables + FAIL) ride the boss's own ev2
+-- handler; no double-write — the relay only fires while the boss
+-- is still IN_PROGRESS.
 local function channelerLeaveCombat(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     chanState[guid] = nil
     chanCanMend[guid] = nil
+    if creature:GetBossState(0) == 1 then -- DATA_MAGTHERIDON, IN_PROGRESS
+        local magtheridon = creature:FindNearestCreature(ENTRY_MAGTHERIDON, 100.0)
+        if magtheridon then
+            magtheridon:EnterEvadeMode()
+        end
+    end
 end
 
 -- C++ npc_hellfire_channelerAI::JustSummoned (boss_magtheridon.cpp:356-362):
