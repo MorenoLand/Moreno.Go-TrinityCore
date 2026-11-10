@@ -24,7 +24,7 @@
 -- Whirlwind 30s / Charging 0s / Roar 0s / Phase2=false),
 -- non-triggered self-cast dual wield 29651 (C++ DoCast(me, SPELL_
 -- DUAL_WIELD, false), C++-exact); the SetBossState(NOT_STARTED)
--- arm is blocked on the instance-script model. OnEnterCombat(1):
+-- arm is PORTED in maulgarReset below. OnEnterCombat(1):
 -- per-GUID reset + Talk(SAY_AGGRO). Arming at pull mirrors the
 -- C++ UpdateAI timers. Maulgar phase 2 (a 1s recurring health
 -- check, C++-exact transition rule, once-guarded): <50% health
@@ -41,8 +41,8 @@
 -- (creature:DoAction, lua_creature_events.go:802), but the relay inlines
 -- the Talk — the receiver lookup is the bridged FindNearestCreature
 -- (svalna precedent) and the receiver leg is a bare Talk, so the relay is
--- C++-exact for a live maulgar; only the instance SetBossState
--- (DONE) leg stays blocked.
+-- C++-exact for a live maulgar; the SetBossState(DONE) leg is PORTED
+-- in each ogre's ev4 handler below.
 -- Olm the Summoner (18834): OnReset(23) arms dark decay 33129 10s
 -- then 20s (non-triggered DoCastVictim) / summon WFH 33131 15s
 -- then 30s (non-triggered self-cast — the spell's summon is
@@ -78,12 +78,11 @@
 -- All five: OnEnterCombat(1) resets per-GUID state, ports
 -- DoZoneInCombat (creature:DoZoneInCombat, live bridge
 -- engine/world/lua_creature_events.go, 2026-10-23; C++ arm order:
--- DoZoneInCombat first) and re-arms the combat timers (the
--- SetBossState(IN_PROGRESS) arms are blocked on the
--- instance-script model). OnDied(4): Maulgar Talk(SAY_DEATH);
--- the ogre JustDied relays port via relayOgreDeath (live-maulgar
--- Talk only); the SetBossState(DONE) arms are blocked — timers
--- are cancelled and per-GUID state dropped. OnTargetDied(3):
+-- DoZoneInCombat first) and SetBossState(IN_PROGRESS) (PORTED in
+-- the ev1 handlers below), and re-arms the combat timers. OnDied(4):
+-- Maulgar Talk(SAY_DEATH); the ogre JustDied relays port via
+-- relayOgreDeath (live-maulgar Talk only); the SetBossState(DONE)
+-- arms are PORTED in the ev4 handlers below. OnTargetDied(3):
 -- Maulgar Talk(
 -- SAY_SLAY), no TYPEID gate (C++-exact). OnLeaveCombat(2)/
 -- OnReset(23): cancel timers, drop per-GUID state (evade-side
@@ -124,6 +123,14 @@ local SAY_ENRAGE = 1
 local SAY_OGRE_DEATH = 2
 local SAY_SLAY = 3
 local SAY_DEATH = 4
+
+-- The boss files reach the instance script through the shared
+-- instanceData table (slad_ran.lua:261-263 precedent:
+-- creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local timers = {}
 local maulgarState = {}
@@ -318,17 +325,17 @@ local function maulgarArmCombat(creature, guid)
     end)
 end
 
--- C++ JustEngagedWith: Talk(SAY_AGGRO) + the three combat arms
--- and the phase-2 poller; DoZoneInCombat is PORTED (C++ arm order:
--- DoZoneInCombat first, before Talk) and the
--- SetBossState(IN_PROGRESS) arm is blocked. The AttackStart mutual
--- SetInCombatWith pairing (boss_high_king_maulgar.cpp:250-251) has no
--- bridge — engine triggerCreatureAggro converges the engage.
+-- C++ JustEngagedWith: DoZoneInCombat + SetBossState(DATA_MAULGAR,
+-- IN_PROGRESS) + Talk(SAY_AGGRO) + the three combat arms and the
+-- phase-2 poller. The AttackStart mutual SetInCombatWith pairing
+-- (boss_high_king_maulgar.cpp:250-251) has no bridge — engine
+-- triggerCreatureAggro converges the engage.
 local function maulgarEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     maulgarResetState(guid)
     maulgarState[guid] = { phase2 = false }
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:134: engage every player on the map (live bridge 2026-10-23)
+    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:137)
     creature:Talk(SAY_AGGRO)
     maulgarArmCombat(creature, guid)
 end
@@ -342,17 +349,24 @@ local function maulgarTargetDied(event, creature, victim)
     creature:Talk(SAY_SLAY)
 end
 
--- C++ JustDied: Talk(SAY_DEATH); the SetBossState(DONE) arm is
--- blocked on the instance-script model.
+-- C++ JustDied: Talk(SAY_DEATH) + SetBossState(DATA_MAULGAR, DONE)
+-- (boss_high_king_maulgar.cpp:121-126). The instanceData.maulgardone
+-- flag drives the Maulgar passage door (instance_gruuls_lair.lua,
+-- DOOR_TYPE_PASSAGE: open iff DONE).
 local function maulgarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:121-126)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = true
+    end
     maulgarResetState(creature:GetGUIDLow())
 end
 
 -- C++ Reset: Initialize + non-triggered self-cast dual wield
 -- 29651 (C++-exact — unlike Brutallus this one is NOT
--- triggered); the SetBossState(NOT_STARTED) arm is blocked.
+-- triggered) + SetBossState(DATA_MAULGAR, NOT_STARTED)
+-- (boss_high_king_maulgar.cpp:111-114).
 local function maulgarReset(event, creature)
     local guid = creature:GetGUIDLow()
     maulgarResetState(guid)
@@ -362,6 +376,11 @@ local function maulgarReset(event, creature)
     -- C++ Reset() never runs on death, so the cast is alive-gated.
     if creature:IsAlive() then
         creature:CastSpell(creature, SPELL_DUAL_WIELD)
+    end
+    creature:SetBossState(0, 0) -- DATA_MAULGAR, NOT_STARTED
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = false
     end
 end
 
@@ -422,12 +441,13 @@ end
 
 -- C++ JustEngagedWith: DoZoneInCombat PORTED (C++ arm order:
 -- DoZoneInCombat first; boss_high_king_maulgar.cpp:257) +
--- SetBossState(IN_PROGRESS) (blocked) + the three combat
--- arms.
+-- SetBossState(DATA_MAULGAR, IN_PROGRESS) (boss_high_king_maulgar.cpp:260)
+-- + the three combat arms.
 local function olmEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     olmResetState(guid)
     creature:DoZoneInCombat()
+    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS
     olmArmCombat(creature, guid)
 end
 
@@ -436,20 +456,29 @@ local function olmLeaveCombat(event, creature)
 end
 
 -- C++ JustDied: the maulgar DoAction(ACTION_ADD_DEATH) relay
--- ports via relayOgreDeath above; the SetBossState(DONE) arm is
--- blocked on the instance-script model — timer cleanup only
--- besides the relay.
+-- ports via relayOgreDeath above; SetBossState(DATA_MAULGAR, DONE)
+-- is PORTED (boss_high_king_maulgar.cpp:263-269) — timer cleanup
+-- only besides the relay.
 local function olmDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:263-269)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = true
+    end
     olmResetState(creature:GetGUIDLow())
 end
 
--- C++ Reset: Initialize the three timers; the
--- SetBossState(NOT_STARTED) arm is blocked. The AttackStart
--- override (0.0f threat + MoveChase 30 yd) has no threat/
+-- C++ Reset: Initialize the three timers + SetBossState
+-- (DATA_MAULGAR, NOT_STARTED) (boss_high_king_maulgar.cpp:237-240).
+-- The AttackStart override (0.0f threat + MoveChase 30 yd) has no threat/
 -- movement bridges — default engine AttackStart applies.
 local function olmReset(event, creature)
+    creature:SetBossState(0, 0) -- DATA_MAULGAR, NOT_STARTED
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = false
+    end
     olmResetState(creature:GetGUIDLow())
 end
 
@@ -503,6 +532,7 @@ local function kigglerEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     kigglerResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:344, C++ arm order
+    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:347)
     schedule(guid, "polymorph", 5000, function()
         kigglerPolymorph(creature, guid)
     end)
@@ -522,15 +552,25 @@ local function kigglerLeaveCombat(event, creature)
 end
 
 -- C++ JustDied: the maulgar DoAction relay ports via
--- relayOgreDeath above; SetBossState(DONE) is blocked — timer
--- cleanup only besides the relay.
+-- relayOgreDeath above; SetBossState(DATA_MAULGAR, DONE) is PORTED
+-- (boss_high_king_maulgar.cpp:350-356) — timer cleanup only besides
+-- the relay.
 local function kigglerDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:350-356)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = true
+    end
     kigglerResetState(creature:GetGUIDLow())
 end
 
 local function kigglerReset(event, creature)
+    creature:SetBossState(0, 0) -- DATA_MAULGAR, NOT_STARTED (boss_high_king_maulgar.cpp:341)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = false
+    end
     kigglerResetState(creature:GetGUIDLow())
 end
 
@@ -570,6 +610,7 @@ local function blindeyeEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     blindeyeResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:436, C++ arm order
+    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:439)
     schedule(guid, "shield", 5000, function()
         blindeyeShield(creature, guid)
     end)
@@ -586,15 +627,25 @@ local function blindeyeLeaveCombat(event, creature)
 end
 
 -- C++ JustDied: the maulgar DoAction relay ports via
--- relayOgreDeath above; SetBossState(DONE) is blocked — timer
--- cleanup only besides the relay.
+-- relayOgreDeath above; SetBossState(DATA_MAULGAR, DONE) is PORTED
+-- (boss_high_king_maulgar.cpp:442-448) — timer cleanup only besides
+-- the relay.
 local function blindeyeDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:442-448)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = true
+    end
     blindeyeResetState(creature:GetGUIDLow())
 end
 
 local function blindeyeReset(event, creature)
+    creature:SetBossState(0, 0) -- DATA_MAULGAR, NOT_STARTED (boss_high_king_maulgar.cpp:433)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = false
+    end
     blindeyeResetState(creature:GetGUIDLow())
 end
 
@@ -676,6 +727,7 @@ local function kroshEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     kroshResetState(guid)
     creature:DoZoneInCombat() -- boss_high_king_maulgar.cpp:519, C++ JustEngagedWith arm order
+    creature:SetBossState(0, 2) -- DATA_MAULGAR, IN_PROGRESS (boss_high_king_maulgar.cpp:522)
     schedule(guid, "fireball", 1000, function()
         kroshFireball(creature, guid)
     end)
@@ -701,15 +753,25 @@ local function kroshLeaveCombat(event, creature)
 end
 
 -- C++ JustDied: the maulgar DoAction relay ports via
--- relayOgreDeath above; SetBossState(DONE) is blocked — timer
--- cleanup only besides the relay.
+-- relayOgreDeath above; SetBossState(DATA_MAULGAR, DONE) is PORTED
+-- (boss_high_king_maulgar.cpp:525-531) — timer cleanup only besides
+-- the relay.
 local function kroshDied(event, creature, killer)
     relayOgreDeath(creature)
     creature:SetBossState(0, 3) -- DATA_MAULGAR, DONE (boss_high_king_maulgar.cpp:525-531)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = true
+    end
     kroshResetState(creature:GetGUIDLow())
 end
 
 local function kroshReset(event, creature)
+    creature:SetBossState(0, 0) -- DATA_MAULGAR, NOT_STARTED (boss_high_king_maulgar.cpp:516)
+    local data = instanceDataOf(creature)
+    if data then
+        data.maulgardone = false
+    end
     kroshResetState(creature:GetGUIDLow())
 end
 

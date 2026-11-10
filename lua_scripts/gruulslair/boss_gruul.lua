@@ -20,8 +20,8 @@
 -- triggered=false (vaelastrasz convention); DoCastVictim takes nil
 -- as the victim arm (felmyst convention).
 -- Fight shape (C++-exact for the modeled arms): OnReset(23):
--- per-GUID state cleared (the _Reset instance bookkeeping is
--- blocked on the instance-script model). OnEnterCombat(1):
+-- per-GUID state cleared + SetBossState(DATA_GRUUL, NOT_STARTED)
+-- (BossAI::_Reset, ScriptedCreature.cpp:499-510). OnEnterCombat(1):
 -- per-GUID scheduler reset to the C++ Initialize() values
 -- (growth 30s / cave-in 27s, static 30s / ground slam 35s /
 -- hurtful 8s / reverberation 105s / performing=false) +
@@ -53,8 +53,8 @@
 -- non-triggered self-cast 33525 (the MotionMaster Clear/MoveIdle
 -- arms have no movement bridge — below). OnTargetDied(3): if the
 -- victim is a player, Talk(SAY_SLAY) (C++-exact TYPEID gate).
--- OnDied(4): Talk(SAY_DEATH) + cleanup (the _JustDied arm is
--- blocked on the instance-script model). OnLeaveCombat(2)/
+-- OnDied(4): SetBossState(DATA_GRUUL, DONE) (BossAI::_JustDied)
+-- + Talk(SAY_DEATH) + cleanup. OnLeaveCombat(2)/
 -- OnReset(23): cancel the pump, drop per-GUID state.
 -- The SpellHitTarget override: the "event 15 never fires" claim is
 -- STALE — event 15 (CREATURE_EVENT_ON_SPELL_HIT_TARGET) is bridged
@@ -76,8 +76,9 @@
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
 -- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL SetBossState
--- bookkeeping arms skipped; the base pulse + me-form zone arms
--- are ported in gruulEnterCombat, above). The knockback arm stays out (hit-enumeration
+-- bookkeeping arms are PORTED in gruulEnterCombat/gruulDied/
+-- gruulReset below; the base setActive + ScheduleTasks legs and
+-- the CheckRequiredBosses evade gate stay out). The knockback arm stays out (hit-enumeration
 -- gap, above); the performing-flag clear now rides event 15
 -- (gruulSpellHitTarget), C++-exact; no movement bridge — the ground-slam
 -- MotionMaster Clear/MoveIdle and the shatter MoveChase-resume
@@ -105,6 +106,14 @@ local SAY_DEATH = 4
 local EMOTE_GROW = 5
 
 local ENTRY_GRUUL = 19044
+
+-- The boss files reach the instance script through the shared
+-- instanceData table (slad_ran.lua:261-263 precedent:
+-- creature:GetMap():GetInstanceData()).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
 
 local pumpTimers = {}
 local gruulState = {}
@@ -270,14 +279,22 @@ local function gruulTick(creature, guid)
     end, 1000)
 end
 
--- C++ JustEngagedWith: BossAI::JustEngagedWith first (boss_gruul.cpp:109),
--- then Talk(SAY_AGGRO); the base instance SetBossState / setActive /
--- ScheduleTasks legs stay out (no instance-script model).
+-- C++ JustEngagedWith: BossAI::JustEngagedWith first (boss_gruul.cpp:109):
+-- SetBossState(DATA_GRUUL, IN_PROGRESS) (ScriptedCreature.cpp:537),
+-- then SetCombatPulseDelay(5) + DoZoneInCombat; the setActive /
+-- ScheduleTasks legs and the CheckRequiredBosses evade gate stay out.
+-- The instanceData.gruulInProgress flag drives the Gruul room door
+-- (instance_gruuls_lair.lua, DOOR_TYPE_ROOM: open unless IN_PROGRESS).
 local function gruulEnterCombat(event, creature)
     local guid = creature:GetGUIDLow()
     resetState(guid)
     gruulState[guid] = freshState()
-    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
+    creature:SetBossState(1, 1) -- DATA_GRUUL, IN_PROGRESS
+    local data = instanceDataOf(creature)
+    if data then
+        data.gruulInProgress = true
+    end
+    creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 2 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
     pumpTimers[guid] = CreateLuaEvent(function()
@@ -315,15 +332,28 @@ local function gruulTargetDied(event, creature, victim)
     end
 end
 
--- C++ JustDied: Talk(SAY_DEATH); the _JustDied instance arm is
--- blocked.
+-- C++ JustDied: _JustDied (SetBossState DATA_GRUUL, DONE) then
+-- Talk(SAY_DEATH) (boss_gruul.cpp:119-122).
 local function gruulDied(event, creature, killer)
     creature:SetBossState(1, 3) -- DATA_GRUUL, DONE (boss_gruul.cpp:119-122: _JustDied then Talk)
+    local data = instanceDataOf(creature)
+    if data then
+        data.gruulInProgress = false
+    end
     creature:Talk(SAY_DEATH)
     resetState(creature:GetGUIDLow())
 end
 
+-- C++ Reset: _Reset (SetBossState DATA_GRUUL, NOT_STARTED) +
+-- Initialize. ev23 fires on death too (engine reset-then-died
+-- order); the NOT_STARTED write lands before the ev4 DONE write,
+-- so the final state stays DONE.
 local function gruulReset(event, creature)
+    creature:SetBossState(1, 0) -- DATA_GRUUL, NOT_STARTED
+    local data = instanceDataOf(creature)
+    if data then
+        data.gruulInProgress = false
+    end
     resetState(creature:GetGUIDLow())
 end
 
