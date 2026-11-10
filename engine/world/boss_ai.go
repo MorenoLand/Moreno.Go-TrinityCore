@@ -7743,6 +7743,15 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 				continue
 			}
 			ts.castSpellDirect(ctx, 46394, guid)
+		case 69051:
+			// spell_devourer_of_souls_mirrored_soul::HandleScript
+			// (boss_devourer_of_souls.cpp:371-375): the hit unit casts
+			// 69023 (Mirrored Soul proc aura) on the caster, triggered.
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				ts.castSpellDirect(ctx, 69023, m.GUID)
+			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+				s.castCreatureSpellInternal(ctx, tm, 69023, m.GUID, true)
+			}
 		case 34098:
 			// spell_gen_clear_debuffs (spell_generic.cpp): SPELL_EFFECT_SCRIPT_EFFECT
 			// EFFECT_0 removes the hit unit's owned auras whose spell is neither
@@ -10600,6 +10609,31 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID); actionTarget != 0 {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: eff.TriggerSpell, casterGUID: actionTarget, targetGUID: actionTarget})
 				}
+				continue
+			}
+			if auraSpell.ID == 69023 {
+				// spell_devourer_of_souls_mirrored_soul_proc::HandleProc
+				// (boss_devourer_of_souls.cpp:406-416): PreventDefaultAction;
+				// the holder casts 69034 on the AURA CASTER with BP0 = 45%
+				// of the triggering damage (TRIGGERED_FULL_MASK); a
+				// zero-damage event deals nothing, and the DoCheckProc leg
+				// requires the caster alive. The generic
+				// PROC_TRIGGER_SPELL arm below would cast the DBC trigger
+				// spell on the damage victim with no base points.
+				// Creature-side only: the aura holder is always the Devourer.
+				if ev.damage == 0 || aura.CasterGUID == 0 {
+					continue
+				}
+				casterAlive := false
+				if cs := s.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
+					casterAlive = !cs.isDeadOrGhost()
+				} else if cm := s.findCreatureMotion(m.Map, m.InstanceID, aura.CasterGUID); cm != nil {
+					casterAlive = cm.Health > 0
+				}
+				if !casterAlive {
+					continue
+				}
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, 69034, aura.CasterGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 45 / 100)}, nil, false, 0)
 				continue
 			}
 			if eff.Aura == spellAuraProcTriggerSpellWithValue {
