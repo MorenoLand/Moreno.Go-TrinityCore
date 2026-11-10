@@ -176,9 +176,9 @@ end
 -- on OnEnterCombat): arcane resonance 42.7s / arcane
 -- devastation 15.2s / phase = true (the BossAI ctor DATA_
 -- COMMANDER_SARANNIS = 0 arm is instance-blocked,
--- unbridgeable). The C++ JustEngagedWith talks SAY_AGGRO
--- (the BossAI arm is instance-blocked) — Talk(SAY_AGGRO)
--- (C++-exact).
+-- unbridgeable). The C++ JustEngagedWith calls
+-- BossAI::JustEngagedWith (IN_PROGRESS write below) then
+-- Talk(SAY_AGGRO) (C++-exact).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
@@ -187,6 +187,7 @@ RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 1, function(_, creature)
         devastation = 15200,
         phase = true,
     }
+    creature:SetBossState(0, 1) -- DATA_COMMANDER_SARANNIS, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -206,9 +207,10 @@ RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 3, function(_, creature)
     creature:Talk(SAY_KILL)
 end)
 
--- C++ JustDied: Talk(SAY_DEATH) + cleanup (the _JustDied
--- arm is instance-blocked).
+-- C++ JustDied: _JustDied (DONE write below) then
+-- Talk(SAY_DEATH) + cleanup (boss_commander_sarannis.cpp:83-86).
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 4, function(_, creature)
+    creature:SetBossState(0, 3) -- DATA_COMMANDER_SARANNIS, DONE (BossAI::_JustDied, ScriptedCreature.cpp:519; soccothrates precedent)
     creature:Talk(SAY_DEATH)
     fullReset(creature:GetGUIDLow())
 end)
@@ -260,5 +262,8 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_COMMANDER_SARANNIS, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0) -- DATA_COMMANDER_SARANNIS, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+    end
     fullReset(creature:GetGUIDLow())
 end)

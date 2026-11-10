@@ -230,8 +230,8 @@ end
 -- enrage 12s / phase1 = true / phase2 = true (hellfire
 -- schedule is heroic-gated: {17.4s,19.3s} on heroic,
 -- 18s otherwise).
--- The C++ JustEngagedWith talks SAY_AGGRO (the BossAI arm is
--- instance-blocked) — Talk(SAY_AGGRO) (C++-exact).
+-- The C++ JustEngagedWith calls BossAI::JustEngagedWith
+-- (IN_PROGRESS write below) then Talk(SAY_AGGRO) (C++-exact).
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     cancelCombatPump(guid)
@@ -242,6 +242,7 @@ RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 1, function(_, creature)
         phase1 = true,
         phase2 = true,
     }
+    creature:SetBossState(2, 1) -- DATA_THORNGRIN_THE_TENDER, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -261,9 +262,10 @@ RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 3, function(_, creature)
     creature:Talk(SAY_KILL)
 end)
 
--- C++ JustDied: Talk(SAY_DEATH) + cleanup (the _JustDied
--- arm is instance-blocked).
+-- C++ JustDied: _JustDied (DONE write below) then
+-- Talk(SAY_DEATH) + cleanup (boss_thorngrin_the_tender.cpp:88-91).
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 4, function(_, creature)
+    creature:SetBossState(2, 3) -- DATA_THORNGRIN_THE_TENDER, DONE (BossAI::_JustDied, ScriptedCreature.cpp:519; soccothrates precedent)
     creature:Talk(SAY_DEATH)
     fullReset(creature:GetGUIDLow())
 end)
@@ -296,5 +298,8 @@ end)
 -- Eluna's On_Reset fires ahead of OnDied and OnSpawn, so
 -- this lands the same Reset() reset as the evade hook.
 RegisterCreatureEvent(ENTRY_THORNGRIN_THE_TENDER, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0) -- DATA_THORNGRIN_THE_TENDER, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+    end
     fullReset(creature:GetGUIDLow())
 end)

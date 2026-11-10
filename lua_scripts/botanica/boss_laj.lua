@@ -282,6 +282,7 @@ end)
 -- (C++-exact).
 
 RegisterCreatureEvent(ENTRY_LAJ, 4, function(_, creature)
+    creature:SetBossState(3, 3) -- DATA_LAJ, DONE (base BossAI::JustDied, ScriptedCreature.h:330 -> _JustDied, ScriptedCreature.cpp:519; Laj has no JustDied override)
     fullReset(creature:GetGUIDLow())
 end)
 
