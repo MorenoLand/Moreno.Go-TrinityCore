@@ -9414,6 +9414,13 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		schoolMask = 1
 	}
 	var leechTotal uint32
+	// casterAP threads the caster's total attack power into the
+	// OnHit dispatch for ghoul thrash (47480) only; other spells
+	// pay no DB lookup for it.
+	var casterAP float64
+	if spell.ID == 47480 {
+		casterAP = s.creatureBaseAttackPower(ctx, m)
+	}
 	// perTarget is the spellHitDamageState record: the final
 	// post-mitigation damage per hit target (the C++ m_damage at
 	// AfterHit, Spell.cpp:2547), filled at the record point below.
@@ -9436,7 +9443,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 			continue
 		}
 		damage := baseDamage
-		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(maxUint32(m.Level, 1)), m.X, m.Y, vs.player.X, vs.player.Y, vs.player.Health, vs.player.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false); ok {
+		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(maxUint32(m.Level, 1)), m.X, m.Y, vs.player.X, vs.player.Y, vs.player.Health, vs.player.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false, casterAP); ok {
 			damage = rewritten
 		}
 		damageImmune := false
@@ -9671,6 +9678,13 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 	ownerSess := s.creatureCasterOwnerSession(m)
 	casterKey := creatureAuraKeyForMotion(m)
 	var leechTotal uint32
+	// casterAP threads the caster's total attack power into the
+	// OnHit dispatch for ghoul thrash (47480) only; other spells
+	// pay no DB lookup for it.
+	var casterAP float64
+	if spell.ID == 47480 {
+		casterAP = s.creatureBaseAttackPower(ctx, m)
+	}
 	// perTarget is the spellHitDamageState record: the final
 	// post-mitigation damage per hit target (the C++ m_damage at
 	// AfterHit, Spell.cpp:2547), filled at the record point below.
@@ -9695,7 +9709,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		victimLevel := uint8(maxUint32(victim.Level, 1))
 		attackerLevel := uint8(maxUint32(m.Level, 1))
 		damage := baseDamage
-		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(attackerLevel), m.X, m.Y, victim.X, victim.Y, victimHealth, victim.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false); ok {
+		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(attackerLevel), m.X, m.Y, victim.X, victim.Y, victimHealth, victim.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false, casterAP); ok {
 			damage = rewritten
 		}
 		var absorbed, resisted, blocked uint32

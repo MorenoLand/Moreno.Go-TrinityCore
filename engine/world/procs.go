@@ -1027,8 +1027,9 @@ func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint6
 // scriptAuraProcCast resolves the script arm for a dummy proc effect.
 // C++ owners: spell_deathwhisper_vampiric_might::HandleProc
 // (boss_lady_deathwhisper.cpp:1019-1032),
-// spell_gen_vampiric_touch::HandleProc (spell_generic.cpp:3479-3495), and
-// spell_uk_second_wind::HandleProc (utgarde_keep.cpp:198-240).
+// spell_gen_vampiric_touch::HandleProc (spell_generic.cpp:3479-3495),
+// spell_uk_second_wind::HandleProc (utgarde_keep.cpp:198-240), and
+// spell_dk_mark_of_blood::HandleProc (spell_dk.cpp:1716-1720).
 // A zero-damage event fires nothing for the first two (the C++ early
 // return); the effect index gates to the registered effect (70674
 // EFFECT_1, 52723/60501 EFFECT_0, 42770 EFFECT_0) so sibling dummy
@@ -1076,6 +1077,11 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 42771, casterGUID: actionTarget, targetGUID: actionTarget}, true
+	case 49005: // Mark of Blood, EFFECT_0: the marked enemy (proc actor) casts 61607 on the damage victim; no damage gate in C++.
+		if effIndex != 0 || actorGUID == 0 || triggerTargetGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 61607, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
 	}
 	return scriptProcCast{}, false
 }

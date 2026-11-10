@@ -1,6 +1,8 @@
 package world
 
 import (
+	"math/rand"
+
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
 
@@ -36,13 +38,19 @@ import (
 // creature casters never satisfy it, and the spell's Load() gate
 // requires TYPEID_PLAYER anyway). 47496 takes the caster's max health
 // for its pct-of-max-health damage (the ghoul's health, not the
-// target's — the dispatch already threads casterMaxHealth).
-func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32, casterGUID, victimGUID uint64, mapID, instanceID uint32, lavaLashBoost bool) (uint32, bool) {
+// target's — the dispatch already threads casterMaxHealth). 47480
+// takes the caster's total attack power for its frenzy-scaled damage
+// (the ghoul's AP, not the target's — the dispatch threads
+// casterAttackPower, computed by the creature-caster arms only for
+// this spell so other casts pay no DB lookup).
+func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32, casterGUID, victimGUID uint64, mapID, instanceID uint32, lavaLashBoost bool, casterAttackPower float64) (uint32, bool) {
 	switch spell.ID {
 	case 49840:
 		return s.shockLanceDetonate(casterGUID, victimGUID, mapID, instanceID, baseDamage)
 	case 34779:
 		return s.freezingCircleDamage(mapID, instanceID)
+	case 47480:
+		return s.ghoulThrashDamage(spell, casterGUID, mapID, instanceID, baseDamage, casterAttackPower)
 	case 47496:
 		// spell_dk_ghoul_explode::HandleDamage (spell_dk.cpp:1187-1191):
 		// the OnEffectLaunchTarget arm REPLACES the hit damage with
@@ -170,6 +178,76 @@ func (s *Server) freezingCircleDamage(mapID, instanceID uint32) (uint32, bool) {
 		return 0, false
 	}
 	return uint32(value), true
+}
+
+// ghoulThrashDamage mirrors spell_dk_ghoul_thrash::CalcDamage
+// (spell_dk.cpp:3048-3075): the OnEffectLaunchTarget arm REPLACES the
+// hit damage when the caster carries Ghoul Frenzy (62218) —
+// fixedDamageBonus = AP * GetEffectValue() * 0.01 (GetEffectValue is
+// m_spell->damage, the rolled DBC base at hook time, i.e. baseDamage
+// at this dispatch position) plus irand(AP * 0.05 * stacks,
+// AP * 0.05 * stacks * 2) — then removes the frenzy aura
+// (AURA_REMOVE_BY_ENEMY_SPELL). The charmer leg runs regardless of
+// the frenzy check: the caster's charmer loses 62218 too. Without
+// frenzy the damage stays the DBC base. Per-target dispatch means
+// the first hit target consumes the frenzy, matching C++ (the hook
+// fires once per hit target).
+func (s *Server) ghoulThrashDamage(spell wotlk.Spell, casterGUID uint64, mapID, instanceID uint32, baseDamage uint32, casterAttackPower float64) (uint32, bool) {
+	if s == nil || casterGUID == 0 {
+		return baseDamage, false
+	}
+	caster := s.findCreatureMotion(mapID, instanceID, casterGUID)
+	if caster == nil {
+		return baseDamage, false
+	}
+	key := creatureAuraKeyForMotion(caster)
+	s.auraMu.Lock()
+	frenzy := s.activeCreatureAuras[key][62218]
+	s.auraMu.Unlock()
+	replaced := false
+	value := float64(0)
+	if frenzy != nil {
+		stacks := int32(frenzy.StackCount)
+		if stacks <= 0 {
+			stacks = 1
+		}
+		apBonus := casterAttackPower * 0.05 * float64(stacks)
+		lo := int32(apBonus)
+		hi := int32(apBonus * 2)
+		value = casterAttackPower*float64(baseDamage)*0.01 + float64(lo+int32(rand.Intn(int(hi-lo)+1)))
+		s.removeCreatureAuraWithMode(key, 62218, auraRemoveByEnemySpell)
+		replaced = true
+	}
+	// The charmer leg runs regardless of the frenzy check above.
+	if caster.CharmerGUID != 0 {
+		s.removeGhoulFrenzyFromCharmer(caster.CharmerGUID, mapID, instanceID)
+	}
+	if !replaced {
+		return baseDamage, false
+	}
+	if value <= 0 {
+		return 0, true
+	}
+	return uint32(value), true
+}
+
+// removeGhoulFrenzyFromCharmer is the charmer leg of ghoul thrash:
+// the caster's charmer (the DK master, a player session or a
+// creature) loses Ghoul Frenzy (62218) even when the caster itself
+// carries no frenzy. C++ removes it with plain RemoveAura
+// (AURA_REMOVE_BY_DEFAULT), unlike the caster leg's explicit
+// AURA_REMOVE_BY_ENEMY_SPELL.
+func (s *Server) removeGhoulFrenzyFromCharmer(charmerGUID uint64, mapID, instanceID uint32) {
+	if s == nil || charmerGUID == 0 {
+		return
+	}
+	if cs := s.findSessionByGUID(charmerGUID); cs != nil && cs.player != nil {
+		cs.removeAuraWithMode(62218, auraRemoveByDefault)
+		return
+	}
+	if charmer := s.findCreatureMotion(mapID, instanceID, charmerGUID); charmer != nil {
+		s.removeCreatureAuraWithMode(creatureAuraKeyForMotion(charmer), 62218, auraRemoveByDefault)
+	}
 }
 
 // spellScriptOnHitLatch runs the SpellScript OnHit arms that set a

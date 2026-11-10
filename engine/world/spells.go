@@ -27816,7 +27816,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// (Spell.cpp:2377), so C++ deals the unmodified base.
 				if s.server != nil && s.player != nil {
 					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
-						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost); hit {
+						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost, 0); hit {
 							baseDmg = rewritten
 						}
 					}
@@ -51141,6 +51141,8 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// the burn is self-cast by the target, so aura-caster attribution
 		// rides the target's session, not the original caster's.
 		targetSess.castSpellDirect(ctx, 46394, targetGUID)
+	case 53209:
+		s.chimeraShotScriptEffect(ctx, targetGUID)
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
 		// the hit target must be a creature; the caster must be a player
@@ -51453,6 +51455,126 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			judgement = 41461
 		}
 		s.castSpellDirect(ctx, judgement, targetGUID)
+	}
+}
+
+// chimeraShotScriptEffect mirrors spell_hun_chimera_shot::HandleScriptEffect
+// (spell_hunter.cpp:237-299): the OnEffectHitTarget SCRIPT_EFFECT arm scans
+// the hit unit's auras — in C++ spell-ID order (AuraApplicationMap is a
+// std::map keyed by spell ID) — for the first sting cast by the hunter
+// (familyFlag[1] & 0x80 || familyFlag[0] & 0xC000), refreshes its duration,
+// and fires the matching triggered shot with BP0: Serpent
+// (flag[0] & 0x4000) -> 53353, BP0 = eff0 amount * total ticks * 40%;
+// Viper (flag[1] & 0x80) -> 53358, BP0 = amount * ticks, scaled by the
+// target's max mana as a percent, capped at caster max mana * amount *
+// ticks * 2 / 100, then 60% (the C++ arithmetic as written — ApplyPct
+// takes the target's raw max mana as the percent); Scorpid
+// (flag[0] & 0x8000) -> 53359 (disarm, BP0 0). Total ticks is max
+// duration / period (AuraEffect::GetTotalTicks). The triggered cast rides
+// castSpellDirectWithBasePoint, the TRIGGERED_FULL_MASK + BP0 twin.
+func (s *session) chimeraShotScriptEffect(ctx context.Context, targetGUID uint64) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
+		return
+	}
+	type stingCandidate struct {
+		spellID    uint32
+		amount     int32
+		durationMs uint32
+		periodMs   uint32
+		eff0       bool
+	}
+	var candidates []stingCandidate
+	refresh := func(spellID uint32) {}
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		targetSess.castMu.Lock()
+		for _, aura := range targetSess.activeAuras {
+			if aura == nil || aura.CasterGUID != s.playerGUID {
+				continue
+			}
+			candidates = append(candidates, stingCandidate{spellID: aura.SpellID, amount: aura.Amounts[0], durationMs: aura.DurationMs, periodMs: aura.PeriodMs, eff0: aura.EffectMask&(1<<0) != 0})
+		}
+		targetSess.castMu.Unlock()
+		refresh = func(spellID uint32) {
+			targetSess.castMu.Lock()
+			if aura := targetSess.activeAuras[spellID]; aura != nil {
+				aura.RemainingMs = aura.DurationMs
+			}
+			targetSess.castMu.Unlock()
+		}
+	} else if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil {
+		key := creatureAuraKeyForMotion(motion)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			if aura == nil || aura.CasterGUID != s.playerGUID {
+				continue
+			}
+			candidates = append(candidates, stingCandidate{spellID: aura.SpellID, amount: aura.Amounts[0], durationMs: aura.DurationMs, periodMs: aura.PeriodMs, eff0: aura.EffectMask&(1<<0) != 0})
+		}
+		s.server.auraMu.Unlock()
+		refresh = func(spellID uint32) {
+			s.server.auraMu.Lock()
+			if aura := s.server.activeCreatureAuras[key][spellID]; aura != nil {
+				aura.RemainingMs = aura.DurationMs
+			}
+			s.server.auraMu.Unlock()
+		}
+	} else {
+		return
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].spellID < candidates[j].spellID })
+	for _, cand := range candidates {
+		if s.server.Data == nil {
+			return
+		}
+		sting, found, err := s.server.Data.Spell(cand.spellID)
+		if err != nil || !found {
+			continue
+		}
+		flags := sting.SpellFamilyFlags
+		if flags[1]&0x80 == 0 && flags[0]&0xC000 == 0 {
+			continue
+		}
+		if !cand.eff0 {
+			break
+		}
+		var spellID uint32
+		var basePoint int32
+		ticks := int32(0)
+		if cand.periodMs > 0 {
+			ticks = int32(cand.durationMs / cand.periodMs)
+		}
+		switch {
+		case flags[0]&0x4000 != 0: // Serpent Sting
+			spellID = 53353
+			basePoint = int32(int64(cand.amount) * int64(ticks) * 40 / 100)
+		case flags[1]&0x80 != 0: // Viper Sting
+			spellID = 53358
+			basePoint = cand.amount * ticks
+			maxManaReturn := int32(int64(s.effectiveMaxPower(0)) * int64(basePoint) * 2 / 100)
+			targetMaxMana := int32(0)
+			if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+				targetMaxMana = int32(targetSess.effectiveMaxPower(0))
+			} else if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil {
+				targetMaxMana = int32(motion.MaxMana)
+			}
+			basePoint = int32(int64(basePoint) * int64(targetMaxMana) / 100)
+			if basePoint > maxManaReturn {
+				basePoint = maxManaReturn
+			}
+			basePoint = int32(int64(basePoint) * 60 / 100)
+		case flags[0]&0x8000 != 0: // Scorpid Sting
+			spellID = 53359
+		default:
+			break
+		}
+		refresh(cand.spellID)
+		if spellID != 0 {
+			if basePoint < 0 {
+				basePoint = 0
+			}
+			s.castSpellDirectWithBasePoint(ctx, spellID, targetGUID, uint32(basePoint))
+		}
+		break
 	}
 }
 
