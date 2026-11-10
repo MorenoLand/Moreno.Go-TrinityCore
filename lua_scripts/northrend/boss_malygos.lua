@@ -218,7 +218,8 @@
 -- arcane storm target filters, vortex dummy destination
 -- selection, vortex visual periodic, arcane overload
 -- immunity-window application, nexus-lord align-disk aggro
--- transfer, scion arcane-barrage target-count scaling,
+-- transfer, scion arcane-barrage target-count scaling (filter leg;
+-- the OnHit leg is PORTED this tick, below),
 -- destroy-platform channel aura removal, alexstrasza bunny
 -- platform boom visual + event, wyrmrest skytalon red-dragon
 -- buddy summon + ride trigger, surge-of-power 25 warning
@@ -229,7 +230,8 @@
 -- standing queues, except the gift
 -- beam visual OnApply (PORTED tick 204, below), the portal
 -- beam (ported, below), and the vortex visual OnRemove
--- (PORTED tick 429, below); the vortex dummy (56105) is PORTED
+-- (PORTED tick 429, below), and the scion arcane-barrage OnHit
+-- (PORTED this tick, below); the vortex dummy (56105) is PORTED
 -- 2026-11-08 (tick 431, below) via the InstanceData:SetData bridge.
 -- achievement_denyin_the_scion — OnCheck: player's vehicle
 -- base entry == NPC_HOVER_DISK_MELEE (30234) — no achievement
@@ -263,6 +265,8 @@ local SAY_DEATH = 17
 local SPELL_BERSERK = 60670
 local SPELL_MALYGOS_PORTAL_BEAM = 56046 -- boss_malygos.cpp:102
 local SPELL_PORTAL_OPENED = 61236 -- eye_of_eternity.h:84
+local SPELL_ARCANE_BARRAGE = 56397 -- boss_malygos.cpp:133 (used by Scions of Eternity)
+local SPELL_ARCANE_BARRAGE_DAMAGE = 63934 -- boss_malygos.cpp:134 (the actual damage - cast by affected player by script spell)
 local POINT_VORTEX_P_ONE = 3 -- Movements enum (boss_malygos.cpp:164-166)
 local POINT_LAND_AFTER_VORTEX_P_ONE = 4
 local POINT_LIFT_IN_AIR_P_ONE = 5
@@ -800,3 +804,20 @@ end
 
 RegisterAuraEvent(SPELL_DESTROY_PLATFORM_CHANNEL, 3, destroyPlatformChannelRemove)
 RegisterAuraEvent(SPELL_VORTEX_2, 3, vortexVisualRemove)
+
+-- C++ spell_scion_of_eternity_arcane_barrage::TriggerDamageSpellFromPlayer
+-- (boss_malygos.cpp:1940-2020): OnHit. The hit player self-casts
+-- Arcane Barrage damage 63934, triggered, with the scion as original
+-- caster (Go CastSpell has no orig-caster param — the mimiron
+-- accepted-and-ignored precedent). The FilterMeleeHoverDiskPassangers
+-- target-selection leg stays out (no hover-disk / vehicle-passenger /
+-- malygos-SetGUID bridges); the scion AI itself is unported (entry
+-- unverifiable from repo sources), so this is dormant until a scion
+-- casts 56397 in Go.
+local function scionArcaneBarrageDamage(event, spell, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    target:CastSpell(target, SPELL_ARCANE_BARRAGE_DAMAGE, true)
+end
+RegisterSpellEvent(SPELL_ARCANE_BARRAGE, 2, scionArcaneBarrageDamage)

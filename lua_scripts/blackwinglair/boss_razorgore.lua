@@ -7,8 +7,8 @@
 -- AddSC_boss_razorgore). The go_orb_of_domination GameObjectScript and
 -- the spell_egg_event SpellScript from the same C++ file are not
 -- registered: the orb arm blocks on instance GetData/GetCreature legs
--- (GO gossip hello itself is live, gameobject_hooks.go:167) and there
--- is no spellscript model.
+-- (GO gossip hello itself is live, gameobject_hooks.go:167) and the
+-- egg-event leg has no instance-SetData bearer (see below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
 -- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
@@ -50,8 +50,12 @@
 -- CastSpell SPELL_MINDCONTROL 42013) rides instance legs with no bridge
 -- (GO gossip hello itself is live) and the spell_egg_event
 -- SpellScript (OnHit -> instance->SetData(DATA_EGG_EVENT, SPECIAL))
--- has no bridge — the mind-control/orb/egg-destruction gameplay
--- has no bearer, so the fight can never reach phase two (ev38 dispatch is
+-- stays out: ev2 (SpellEventOnHit) is bridged since 2026-11-08, but
+-- the instance SetData has no bearer (creature:SetData is per-AI
+-- ScriptData, not the instance store) and the spell id is DB-bound
+-- (spell_script_names, unverifiable from repo sources) — the
+-- mind-control/orb/egg-destruction gameplay has no bearer, so the
+-- fight can never reach phase two (ev38 dispatch is
 -- bridged, lua_creature_events.go:802; the blocker is the unported
 -- instance-script sender, instance_blackwing_lair.cpp:262-265).
 

@@ -258,6 +258,8 @@ local SAY_PHASE_TRANSITION_HEROIC = 6
 local SPELL_MALLEABLE_GOO_H = 72296
 local SPELL_GROW_STACKER = 70345
 local SPELL_SLIME_PUDDLE_AURA = 70343
+local SPELL_SLIME_PUDDLE_10 = 70346 -- boss_professor_putricide.cpp:950 (10-man)
+local SPELL_SLIME_PUDDLE_25 = 72456 -- boss_professor_putricide.cpp:950 (25-man)
 local SPELL_GROW = 70347
 local SPELL_CHOKING_GAS_BOMB_PERIODIC = 71259
 local SPELL_CHOKING_GAS_EXPLOSION_TRIGGER = 71280
@@ -858,6 +860,37 @@ local function slimePuddleFilter(event, spell, effectIndex, targets)
     end
 end
 RegisterSpellEvent(SPELL_SLIME_PUDDLE_TRIGGER, 7, slimePuddleFilter)
+
+-- C++ spell_putricide_slime_puddle_aura::ReplaceAura
+-- (boss_professor_putricide.cpp:943-956): OnHit. The puddle summon
+-- (caster) applies the difficulty-mapped puddle aura to the hit unit:
+-- 72456 on 25-man (GetSpawnMode() & 1), 70346 on 10-man — the
+-- Is25ManRaid twin (lua_creature_events.go:3651; NOT IsHeroic,
+-- 25-man normal has spawn mode 1 too). Lua AddAura is self-only on
+-- both surfaces, so the C++ caster:AddAura(spell, target) twin is
+-- target:AddAura(spell). The caster itself is never a hit target in
+-- C++ (TARGET_UNIT_DEST_AREA_ENEMY filter, :937-938), so a self-hit
+-- is skipped. Dormant until Spell.dbc ships (no area hit resolution
+-- yet — the self-cast hit list carries only the caster, rotface
+-- precedent).
+local function slimePuddleReplaceAura(event, spell, target)
+    if target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if target:GetGUIDLow() == caster:GetGUIDLow() then
+        return
+    end
+    if caster:Is25ManRaid() then
+        target:AddAura(SPELL_SLIME_PUDDLE_25)
+    else
+        target:AddAura(SPELL_SLIME_PUDDLE_10)
+    end
+end
+RegisterSpellEvent(SPELL_SLIME_PUDDLE_AURA, 2, slimePuddleReplaceAura)
 
 -- C++ spell_putricide_clear_aura_effect_value::HandleScript
 -- (:1392-1409): OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT

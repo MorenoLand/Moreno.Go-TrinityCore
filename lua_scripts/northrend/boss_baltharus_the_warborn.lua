@@ -98,8 +98,8 @@
 -- and JustDied (:273-279) never call the BossAI base arms, and its
 -- EnterEvadeMode (:264) is empty.
 -- spell_baltharus_enervating_brand_trigger (SpellScript, OnHit
--- HandleSiphonedMight: aura-caster CastSpell SPELL_SIPHONED_MIGHT) —
--- joins the standing no-SpellScript-bridge queue.
+-- HandleSiphonedMight) — PORTED this tick via ev2 (below): the
+-- triggering spell is statically 74502, aura:GetCaster() is bridged.
 -- All 5 Talk() calls in the file accounted for (SAY_AGGRO 1 +
 -- SAY_DEATH 4 + SAY_KILL 2 + SAY_CLONE 3 ported; SAY_BALTHARUS_INTRO 0
 -- documented above).
@@ -144,6 +144,8 @@ local UNIT_NPC_FLAG_QUESTGIVER = 0x00000002 -- UnitDefines.h:187
 local SPELL_CLEAVE           = 40504
 local SPELL_BLADE_TEMPEST    = 75125
 local SPELL_ENERVATING_BRAND = 74502
+local SPELL_ENERVATING_BRAND_TRIGGER = 74505 -- boss_baltharus_the_warborn.cpp:328
+local SPELL_SIPHONED_MIGHT = 74507 -- boss_baltharus_the_warborn.cpp:38
 local SPELL_CLEAR_DEBUFFS    = 34098
 local SPELL_CLONE            = 74511
 local SPELL_REPELLING_WAVE   = 74509
@@ -608,3 +610,32 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 1, cloneEnterCombat)
 RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 2, cloneLeaveCombat)
 RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 4, cloneDied)
 RegisterCreatureEvent(ENTRY_BALTHARUS_CLONE, 23, cloneReset)
+
+-- C++ spell_baltharus_enervating_brand_trigger::HandleSiphonedMight
+-- (boss_baltharus_the_warborn.cpp:328-360): OnHit. The triggering
+-- spell is the Enervating Brand aura itself (74502, the aura whose
+-- periodic trigger casts 74505), so GetTriggeringSpell()->Id is the
+-- static 74502 — no GetTriggeringSpell bridge is needed (none exists
+-- in engine/). The hit unit casts Siphoned Might 74507, triggered,
+-- on the brand aura's caster (Baltharus, via aura:GetCaster(),
+-- lua_aura.go:207). Dormant until Spell.dbc ships (the aura's
+-- periodic trigger effect is DBC-side).
+local function enervatingBrandSiphonedMight(event, spell, target)
+    if target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local aura = caster:GetAura(SPELL_ENERVATING_BRAND)
+    if aura == nil then
+        return
+    end
+    local baltharus = aura:GetCaster()
+    if baltharus == nil then
+        return
+    end
+    target:CastSpell(baltharus, SPELL_SIPHONED_MIGHT, true)
+end
+RegisterSpellEvent(SPELL_ENERVATING_BRAND_TRIGGER, 2, enervatingBrandSiphonedMight)
