@@ -1,10 +1,10 @@
 -- Kil'jaeden (Sunwell Plateau) — Lua port of
 -- src/server/scripts/EasternKingdoms/SunwellPlateau/boss_kiljaeden.cpp
 -- (boss_kiljaeden, npc_hand_of_the_deceiver, npc_volatile_felfire_
--- fiend, npc_armageddon, npc_sinster_reflection — note the C++
--- ScriptName typo "sinster", preserved 1:1 in the registration
--- below; boss_kalecgos_kj, npc_kiljaeden_controller, npc_felfire_
--- portal, npc_shield_orb and go_orb_of_the_blue_flight documented
+-- fiend, npc_armageddon, npc_sinster_reflection, npc_felfire_portal,
+-- npc_shield_orb — note the C++ ScriptName typo "sinster", preserved
+-- 1:1 in the registration below; boss_kalecgos_kj,
+-- npc_kiljaeden_controller and go_orb_of_the_blue_flight documented
 -- below, not registered); sunwell_plateau.h:36 (DATA_KILJAEDEN =
 -- 5, sixth/final boss), :80 (NPC_ANVEENA = 26046), :81 (NPC_
 -- KALECGOS_KJ = 25319), :83 (NPC_KILJAEDEN = 25315), :84 (NPC_
@@ -232,8 +232,9 @@
 -- is summon/instance driven (deceiver/anveena spawns, death-
 -- count-driven KJ spawn) and its only self-contained arm (the
 -- 30s offcombat Talk) is gated on instance boss states. npc_
--- felfire_portal (25603) is not registered — its only UpdateAI
--- arm is the summon+threat fiend spawner. npc_shield_orb (25502)
+-- felfire_portal (25603) IS registered — ctor + Reset flags,
+-- JustSummoned faction+level and the 5s-then-urand-4000-8000
+-- fiend spawner PORTED below. npc_shield_orb (25502)
 -- IS registered — orbit + shadow-bolt AI PORTED below (the
 -- computed-getter DATA_PLAYER_GUID target rides the muru
 -- GetPlayersInWorld pattern, not the instance guid store).
@@ -957,6 +958,71 @@ RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 2, fiendCleanup)
 RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 4, fiendCleanup)
 RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 9, fiendDamageTaken)
 RegisterCreatureEvent(ENTRY_FELFIRE_FIEND, 23, fiendCleanup)
+
+-- ================= Felfire Portal (25603) =================
+
+-- C++ npc_felfire_portalAI::UpdateAI (boss_kiljaeden.cpp:1050-1062):
+-- no victim -> return, the timer does not tick; else spawn a fiend
+-- (TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, type 1, 20s) and AddThreat
+-- a random threat-list target at 100000 on it; re-arm
+-- urand(4000, 8000). The 100ms poll is the UpdateVictim() gate
+-- twin: the spawn countdown is not consumed without a victim.
+local function portalSpawnFiend(creature, guid)
+    if not creature:IsAlive() then
+        return
+    end
+    if creature:GetVictim() == nil then
+        schedule(guid, "fiend", 100, function()
+            portalSpawnFiend(creature, guid)
+        end)
+        return
+    end
+    local fiend = creature:SummonCreature(ENTRY_FELFIRE_FIEND, creature:GetX(), creature:GetY(), creature:GetZ(), 0, 1, 20000)
+    if fiend then
+        local targets = creature:GetAITargets()
+        if #targets > 0 then
+            fiend:AddThreat(targets[math.random(#targets)], 100000)
+        end
+    end
+    schedule(guid, "fiend", math.random(4000, 8000), function()
+        portalSpawnFiend(creature, guid)
+    end)
+end
+
+-- C++ npc_felfire_portalAI ctor (boss_kiljaeden.cpp:1026-1029):
+-- Initialize() (uiSpawnFiendTimer = 5000, :1032-1035) +
+-- SetCombatMovement(false). C++ Reset (:1039-1043): Initialize() +
+-- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE|UNIT_FLAG_NON_
+-- ATTACKABLE). Both ride ev22: temp summons never fire ev5, and
+-- ev23 fires on the death path, so it only cancels here.
+local function portalSpawn(event, creature)
+    creature:SetCombatMovement(false)
+    creature:SetFlag(59, 0x02000002) -- UNIT_FLAG_NON_ATTACKABLE|UNIT_FLAG_NOT_SELECTABLE
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    schedule(guid, "fiend", 5000, function()
+        portalSpawnFiend(creature, guid)
+    end)
+end
+
+-- C++ npc_felfire_portalAI::JustSummoned (boss_kiljaeden.cpp:1045-1049):
+-- the fiend takes the portal's faction, then its level. (The portal
+-- itself gets the deceiver's faction+level via deceiverJustSummoned
+-- ev19 above, :952-955.)
+local function portalJustSummoned(event, creature, summon)
+    summon:SetFaction(creature:GetFaction())
+    summon:SetLevel(creature:GetLevel())
+end
+
+local function portalCleanup(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+RegisterCreatureEvent(ENTRY_FELFIRE_PORTAL, 2, portalCleanup)
+RegisterCreatureEvent(ENTRY_FELFIRE_PORTAL, 4, portalCleanup)
+RegisterCreatureEvent(ENTRY_FELFIRE_PORTAL, 19, portalJustSummoned)
+RegisterCreatureEvent(ENTRY_FELFIRE_PORTAL, 22, portalSpawn)
+RegisterCreatureEvent(ENTRY_FELFIRE_PORTAL, 23, portalCleanup)
 
 -- ================= Armageddon Target (25735) =================
 

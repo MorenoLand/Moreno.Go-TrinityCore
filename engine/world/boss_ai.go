@@ -12993,9 +12993,11 @@ func init() {
 	// Hand of the Deceiver (25588) runs its shadow-bolt-volley
 	// 45770 schedule, the 20% shadow-infusion 45772 upkeep and the
 	// out-of-combat shadow-channeling 46757 upkeep. The felfire-
-	// portal summon, the controller death-count relay and the
-	// SetBossState arms have no summon/cross-creature/instance-
-	// script bridges — registered for its own verifiable AI arms
+	// portal summon + threat copy and the SetBossState arms are
+	// ported in Lua (deceiverFelfire / deceiverReset /
+	// deceiverEnterCombat); the controller death-count relay and
+	// the cross-creature AddThreat relay have no cross-creature
+	// bridge — registered for its own verifiable AI arms
 	// (felmyst-trail convention).
 	// Its UpdateAI carries no cast-state
 	// check: volley, 20% infusion latch and OOC channel fire ungated.
@@ -13007,6 +13009,13 @@ func init() {
 	// Its UpdateAI detonation and DamageTaken
 	// fission arms carry no cast-state check (boss_kiljaeden.cpp:1105-1138).
 	RegisterLuaBoss("npc_volatile_felfire_fiend", 25598)
+	// Felfire Portal (25603) runs the C++ fiend spawner: ctor
+	// SetCombatMovement(false) + Reset NOT_SELECTABLE|NON_ATTACKABLE
+	// flags, JustSummoned faction+level on the fiend, 5s first spawn
+	// then urand(4000, 8000), fiend type 1 20s + AddThreat random
+	// 100000 (boss_kiljaeden.cpp:1024-1062; the UpdateVictim gate is
+	// twinned by a 100ms poll that consumes no spawn countdown).
+	RegisterLuaBoss("npc_felfire_portal", 25603)
 	// Armageddon Target (25735) runs its Reset visual chain:
 	// triggered 45911, 9s -> triggered 45914, 5s -> triggered
 	// 45909. The DespawnOrUnsummon arm is ported via creature:Despawn();
