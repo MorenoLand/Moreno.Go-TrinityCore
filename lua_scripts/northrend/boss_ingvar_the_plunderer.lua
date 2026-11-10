@@ -618,9 +618,17 @@ end
 -- SPELL_SUMMON_BANSHEE 42912) — the SpellScript relocates the summon
 -- dest +30z and summons Annhylde (24068); no SpellScript bridge, so the
 -- summon is direct at the boss position +30z (the keleseth tomb
--- precedent). Annhylde's Reset/MovePoint leg is armed off the returned
--- object (temp summons may never fire ev23).
+-- precedent). The arm sits in the gated UpdateAI loop (pre-loop :206),
+-- so a phase-1 cast still in flight at the 3s mark delays the summon
+-- — ported as the 500ms IsCasting defer below (razorscale
+-- summonMinionsTick precedent).
 summonBansheeTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "summonbanshee", 500, function()
+            summonBansheeTick(creature, guid)
+        end)
+        return
+    end
     local annhylde = creature:SummonCreature(ENTRY_ANNHYLDE, creature:GetX(), creature:GetY(), creature:GetZ() + 30, creature:GetO())
     if annhylde ~= nil then
         annhyldeByIngvar[guid] = annhylde
