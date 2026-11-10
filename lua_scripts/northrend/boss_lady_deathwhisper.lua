@@ -289,6 +289,9 @@ local SPELL_DARK_TRANSFORMATION = 70900 -- :86
 local SPELL_FULL_HEAL = 17683 -- :82 (fanatic self-cast :627)
 local SPELL_DARK_MARTYRDOM_T = 70897 -- :73 (fanatic SpellHit :630)
 local SPELL_DARK_MARTYRDOM_FANATIC = 71236 -- :92 (fanatic self-cast :634)
+local SPELL_DARK_MARTYRDOM_FANATIC_25N = 72495 -- :93
+local SPELL_DARK_MARTYRDOM_FANATIC_10H = 72496 -- :94
+local SPELL_DARK_MARTYRDOM_FANATIC_25H = 72497 -- :95
 local SPELL_DARK_EMPOWERMENT_T = 70896 -- :72 (adherent SpellHit :716)
 local SPELL_DARK_MARTYRDOM_ADHERENT = 70903 -- :105 (adherent self-cast :723)
 local SPELL_DARK_MARTYRDOM_ADHERENT_25N = 72498 -- :106
@@ -1005,9 +1008,13 @@ local function fanaticSpellHit(event, creature, caster, spellId)
         creature:InterruptNonMeleeSpells(true)
         creature:AttackStop()
         creature:CastSpell(creature, SPELL_DARK_MARTYRDOM_FANATIC)
-    elseif spellId == SPELL_DARK_MARTYRDOM_FANATIC then
+    elseif spellId == SPELL_DARK_MARTYRDOM_FANATIC
+            or spellId == SPELL_DARK_MARTYRDOM_FANATIC_25N
+            or spellId == SPELL_DARK_MARTYRDOM_FANATIC_10H
+            or spellId == SPELL_DARK_MARTYRDOM_FANATIC_25H then
         -- C++ :640-660 — the 2s/6s reanimate scheduler fires on the
-        -- DARK_MARTYRDOM_FANATIC self-cast hit: 2s -> UpdateEntry(
+        -- DARK_MARTYRDOM_FANATIC self-cast hit (all four difficulty
+        -- variants share the case, :636-639; adherent precedent :1306):
         -- NPC_REANIMATED_FANATIC) + DoCastSelf(PERMANENT_FEIGN_DEATH) +
         -- DoCastSelf(CLEAR_ALL_DEBUFFS) + DoCastSelf(FULL_HEAL, triggered)
         -- + SetFlag(STUNNED|UNK_29|NOT_SELECTABLE); 6s ->

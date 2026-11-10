@@ -35,10 +35,10 @@
 -- ported now (2026-10-24, lynx summoned since 07:27), the lynx
 -- DisappearAndDie on lynx/enrage entry IS ported (Despawn twin), and
 -- the merge-entry NON_ATTACKABLE flag IS ported (SetFlag twin); the transform-completion signal (SPELL_TRANSFORM_SPLIT2
--- 43573 SpellHit) has no firing hook — the engine's event 14 fires only
--- for player casts (the boss's own split self-cast is visual-only on the
--- bridge), so an event-14 guard for 43573 is kept but the actual human
--- entry runs on a 2s timer approximating the transform; the per-cycle
+-- 43573 SpellHit) fires via ev14 from the creature cast path once the
+-- spell is known (boss_ai.go:4086, Spell.dbc-gated), so the 43573
+-- guard below is live, not a no-op — until Spell.dbc ships the actual
+-- human entry runs on a 2s timer approximating the transform; the per-cycle
 -- health reset is ported as SetMaxHealth(600000) +
 -- SetHealth(600000-150000*TransformCount) (boss_halazzi.cpp:164-165,
 -- C++-exact; the old "no SetMaxHealth bridge" claim was stale — the
@@ -159,8 +159,10 @@ local enterPhase
 
 -- C++ EnterPhase(PHASE_SPLIT) (called from the 1s check timer when
 -- HealthBelowPct(25*(3-TransformCount)) in the lynx phase): Talk, triggered
--- split self-cast; the SPELL_TRANSFORM_SPLIT2 SpellHit arm has no firing
--- hook (see onSplitFallback).
+-- split self-cast; the SPELL_TRANSFORM_SPLIT2 SpellHit arm fires via
+-- ev14 from the creature cast path once the spell is known
+-- (boss_ai.go:4086, Spell.dbc-gated), with the splitwait timer below
+-- as the bearer until then (see onSplitFallback).
 local function startSplit(creature, guid)
     local st = halazziState(guid)
     if st.phase ~= PHASE_LYNX then
@@ -170,11 +172,11 @@ local function startSplit(creature, guid)
     cancelPhaseTimers(guid)
     creature:Talk(SAY_SPLIT)
     creature:CastSpell(creature, SPELL_TRANSFORM_SPLIT, true)
-    -- The C++ SpellHit(43573) -> EnterPhase(PHASE_HUMAN) arm never fires
-    -- through the bridge (the boss's self-cast is visual-only and event 14
-    -- fires only for player casts), so the transform completes on this
-    -- timer, approximating the split transform; the event-14 guard below
-    -- stays as a no-op match for the C++ SpellHit arm.
+    -- The C++ SpellHit(43573) -> EnterPhase(PHASE_HUMAN) arm fires via
+    -- ev14 from the creature cast path once the spell is known
+    -- (boss_ai.go:4086, Spell.dbc-gated); until then the transform
+    -- completes on this timer, approximating the split transform; the
+    -- event-14 guard below stays as the live C++ SpellHit arm.
     schedule(timers, guid, "splitwait", 2000, function()
         if halazziState(guid).phase == PHASE_SPLIT then
             enterPhase(creature, guid, PHASE_HUMAN)
@@ -506,10 +508,14 @@ local function halazziDamageTaken(event, creature, attacker, damage)
     return false, newDamage
 end
 
--- C++ SpellHit(TRANSFORM_SPLIT2) -> EnterPhase(PHASE_HUMAN). The engine's
--- event 14 fires only for player casts, so in practice the splitwait
--- timer in startSplit is the bearer; this guard keeps the C++ arm wired.
-local function halazziSpellHit(event, creature, spellId)
+-- C++ SpellHit(TRANSFORM_SPLIT2) -> EnterPhase(PHASE_HUMAN). ev14 is
+-- 4-arg (event, creature, caster, spellId) per boss_ai.go:4038/:4061 —
+-- the 3-arg form silently received the caster as spellId, so the
+-- 43573 check could never match (fixed 2026-11-09: sole arity bug in
+-- the tree-wide ev14 sweep). The hit fires from the creature cast
+-- path (boss_ai.go:4086) when the spell is known, so until Spell.dbc
+-- ships the splitwait timer in startSplit remains the bearer.
+local function halazziSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TRANSFORM_SPLIT2
             and halazziState(creature:GetGUIDLow()).phase == PHASE_SPLIT then
         enterPhase(creature, creature:GetGUIDLow(), PHASE_HUMAN)
