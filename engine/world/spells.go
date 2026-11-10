@@ -51637,6 +51637,14 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 				targetSess.castSpellDirect(ctx, uint32(value), targetGUID)
 			}
 		}
+	case 69961:
+		// spell_dk_glyph_of_scourge_strike_script::HandleScriptEffect
+		// (spell_dk.cpp:1286-1346): OnEffectHitTarget EFFECT_0
+		// SCRIPT_EFFECT — the glyph's script spell, cast triggered by the
+		// 58642 proc. A Lua ev5 port would never fire: the player path has
+		// no OnEffectHitTarget site (60533 precedent above). DORMANT until
+		// Spell.dbc ships the 69961 record.
+		s.glyphOfScourgeStrikeScriptEffect(targetGUID)
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
 		// the hit target must be a creature; the caster must be a player
@@ -51949,6 +51957,116 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			judgement = 41461
 		}
 		s.castSpellDirect(ctx, judgement, targetGUID)
+	}
+}
+
+// glyphOfScourgeStrikeScriptEffect mirrors
+// spell_dk_glyph_of_scourge_strike_script::HandleScriptEffect
+// (spell_dk.cpp:1286-1346): on the hit target, every Blood Plague / Frost
+// Fever aura from this caster (DK family, SpellFamilyFlags[2] & 0x2, with
+// a live periodic-damage effect) gains 3000ms of duration and max
+// duration, while its current max stays below the DBC max plus 9000 (the
+// glyph) plus the Epidemic talent bonus (ADD_FLAT_MODIFIER aura, DK
+// family, icon 234, effect 0 — the GetAuraEffect lookup). The duration
+// extension is a plain +3000 on both legs, not a re-sync to the base
+// (the inheritCreatureHitTriggerAuraDuration precedent below only sets
+// max = remaining for linked auras). Player targets push the client
+// update (Aura::SetDuration, SpellAuras.cpp:902); creature targets ride
+// the server-side records.
+func (s *session) glyphOfScourgeStrikeScriptEffect(targetGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return
+	}
+	remainingOf := func(remainingMs uint32, updatedAt time.Time) uint32 {
+		remaining := int64(remainingMs)
+		if !updatedAt.IsZero() {
+			if elapsed := time.Since(updatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= elapsed
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		return uint32(remaining)
+	}
+	var epidemic int32
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || len(auraSpell.Effects) == 0 {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDeathKnight || auraSpell.SpellIconID != 234 {
+			continue
+		}
+		if auraSpell.Effects[0].Aura != spellAuraAddFlatModifier || aura.EffectMask&(1<<0) == 0 {
+			continue
+		}
+		epidemic = aura.Amounts[0]
+		if epidemic == 0 {
+			epidemic = auraSpell.Effects[0].BasePoints
+		}
+		break
+	}
+	extend := func(aura *activeAura) bool {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			return false
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			return false
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDeathKnight || auraSpell.SpellFamilyFlags[2]&0x2 == 0 {
+			return false
+		}
+		periodic := false
+		for i, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(i)) != 0 && eff.Aura == spellAuraPeriodicDamage {
+				periodic = true
+				break
+			}
+		}
+		if !periodic {
+			return false
+		}
+		countMin := aura.DurationMs
+		countMax := countMin
+		if dur, ok, err := s.server.Data.SpellDuration(auraSpell.DurationIndex, uint32(aura.CasterLevel)); err == nil && ok && dur > 0 {
+			countMax = uint32(dur)
+		}
+		countMax += 9000
+		if epidemic > 0 {
+			countMax += uint32(epidemic)
+		}
+		if countMin >= countMax {
+			return false
+		}
+		aura.DurationMs = countMin + 3000
+		aura.RemainingMs = remainingOf(aura.RemainingMs, aura.DurationUpdatedAt) + 3000
+		aura.DurationUpdatedAt = time.Now()
+		return true
+	}
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil {
+		for _, aura := range ts.loadedAuras() {
+			if extend(aura) {
+				ts.sendAuraUpdate(aura.Slot, aura.SpellID, false, aura.Positive, aura.DurationMs, aura.RemainingMs)
+			}
+		}
+		return
+	}
+	if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.server.auraMu.Lock()
+		defer s.server.auraMu.Unlock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			extend(aura)
+		}
 	}
 }
 
