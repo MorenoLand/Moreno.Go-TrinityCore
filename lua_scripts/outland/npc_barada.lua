@@ -52,11 +52,9 @@
 -- Jules idles within 20 yd; there is no GetCreatureByGUID bridge
 -- (only GetPlayerByGUID, runtime.go:1160).
 -- Stay-outs (vacuous or unbridged, no observable loss in Lua):
--- - Jules HOVER (2) / FLIGHT (3) arms: Barada still sends them
---   faithfully, but npc_colonel_jules.lua handles MOVE_HOME (4) only;
---   the hover/flight + skull-summon + waypoint-chain machine is a
---   queued port (its AddAura / SetCanFly / MoveJump / SummonCreature
---   bridges are live, see npc_colonel_jules.lua).
+-- - Jules HOVER (2) / FLIGHT (3) arms: Barada sends them faithfully
+--   and npc_colonel_jules.lua now handles them (hover + skull-summon +
+--   waypoint-chain machine ported 2026-11-10); see that file.
 -- - Explicit MoveTargetedHome (step 21): redundant — base
 --   CreatureAI::EnterEvadeMode moves home itself (CreatureAI.cpp:233)
 --   and resets, which the ev23 handler above mirrors.
