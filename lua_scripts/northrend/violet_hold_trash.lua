@@ -23,8 +23,14 @@
 -- 2-arg casts = non-triggered (every arm below is non-triggered — no
 -- triggered=true in the C++ timer arms).
 -- creature:IsWithinDist(plr, range) — the moroes / maiden precedent.
--- DOCUMENTED DEVIATIONS: the TaskScheduler UNIT_STATE_CASTING validator
--- has no bridge — timers fire unconditionally (hodir precedent);
+-- CAST-STATE GATE (2026-11-09): the TaskScheduler UNIT_STATE_CASTING validator
+-- (violet_hold.cpp:879, !CASTING — same predicate as the BossAI ctor validator,
+-- ScriptedCreature.cpp:493-496) is PORTED: all 22 scheduler ticks below defer
+-- 500ms via creature:IsCasting() (the cyanigosa/erekem idiom); the validator
+-- holds the task queued while casting, so the defer — not the drop — is the
+-- C++-exact shape. The old "no bridge" claim is stale (hodir add-gates were
+-- ported the same way, ac25f46a).
+-- DOCUMENTED DEVIATIONS:
 -- UpdateEscortAI's DATA_MAIN_EVENT_STATE != IN_PROGRESS CastStop leg is
 -- unmodeled (it would need a per-tick instance-state poll; the door-seal
 -- cast is a one-shot at arrival, so the leg only matters if the event
@@ -341,11 +347,19 @@ end
 -- npc_azure_invader, entry 30661: DoCastVictim(SPELL_CLEAVE), 5s/5s;
 -- DoCastVictim(SPELL_IMPALE), 4s/4s.
 local function cleaveTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "cleave", 500, function() cleaveTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CLEAVE)
     schedule(guid, "cleave", 5000, function() cleaveTick(creature, guid) end)
 end
 
 local function impaleTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "impale", 500, function() impaleTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_IMPALE)
     schedule(guid, "impale", 4000, function() impaleTick(creature, guid) end)
 end
@@ -353,11 +367,19 @@ end
 -- npc_azure_invader, entry 30961: DoCastVictim(SPELL_BRUTAL_STRIKE),
 -- 5s/5s; DoCastVictim(SPELL_SUNDER_ARMOR), 4s then {8s,10s}.
 local function brutalStrikeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "brutalstrike", 500, function() brutalStrikeTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_BRUTAL_STRIKE)
     schedule(guid, "brutalstrike", 5000, function() brutalStrikeTick(creature, guid) end)
 end
 
 local function sunderArmorTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "sunderarmor", 500, function() sunderArmorTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_SUNDER_ARMOR)
     schedule(guid, "sunderarmor", {8000, 10000}, function() sunderArmorTick(creature, guid) end)
 end
@@ -365,6 +387,10 @@ end
 -- npc_azure_spellbreaker, entry 30662: random <=30y DoCast
 -- SPELL_ARCANE_BLAST, 5s/6s; random <=30y DoCast SPELL_SLOW, 4s/5s.
 local function arcaneBlastTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneblast", 500, function() arcaneBlastTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_BLAST)
@@ -373,6 +399,10 @@ local function arcaneBlastTick(creature, guid)
 end
 
 local function slowTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "slow", 500, function() slowTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_SLOW)
@@ -383,6 +413,10 @@ end
 -- npc_azure_spellbreaker, entry 30962: random <=30y DoCast
 -- SPELL_CHAINS_OF_ICE, 5s/7s; DoCast(me) SPELL_CONE_OF_COLD, 4s/5s.
 local function chainsOfIceTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "chainsofice", 500, function() chainsOfIceTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_CHAINS_OF_ICE)
@@ -391,6 +425,10 @@ local function chainsOfIceTick(creature, guid)
 end
 
 local function coneOfColdTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "coneofcold", 500, function() coneOfColdTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_CONE_OF_COLD)
     schedule(guid, "coneofcold", 5000, function() coneOfColdTick(creature, guid) end)
 end
@@ -398,11 +436,19 @@ end
 -- npc_azure_binder, entry 30663: DoCastAOE(SPELL_ARCANE_EXPLOSION),
 -- 5s/5s; random <=30y DoCast SPELL_ARCANE_BARRAGE, 4s/6s.
 local function arcaneExplosionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneexplosion", 500, function() arcaneExplosionTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_EXPLOSION)
     schedule(guid, "arcaneexplosion", 5000, function() arcaneExplosionTick(creature, guid) end)
 end
 
 local function arcaneBarrageTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcanebarrage", 500, function() arcaneBarrageTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_BARRAGE)
@@ -413,11 +459,19 @@ end
 -- npc_azure_binder, entry 30918: DoCastAOE(SPELL_FROST_NOVA), 5s/5s;
 -- random <=40y DoCast SPELL_FROSTBOLT, 4s/6s.
 local function frostNovaTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostnova", 500, function() frostNovaTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_FROST_NOVA)
     schedule(guid, "frostnova", 5000, function() frostNovaTick(creature, guid) end)
 end
 
 local function frostboltTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "frostbolt", 500, function() frostboltTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_FROSTBOLT)
@@ -428,6 +482,10 @@ end
 -- npc_azure_mage_slayer, entry 30664: DoCast(me)
 -- SPELL_ARCANE_EMPOWERMENT, 5s/14s.
 local function arcaneEmpowermentTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcaneempowerment", 500, function() arcaneEmpowermentTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_ARCANE_EMPOWERMENT)
     schedule(guid, "arcaneempowerment", 14000, function() arcaneEmpowermentTick(creature, guid) end)
 end
@@ -435,6 +493,10 @@ end
 -- npc_azure_mage_slayer, entry 30963: random <=30y DoCast
 -- SPELL_SPELL_LOCK, 5s/9s.
 local function spellLockTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "spelllock", 500, function() spellLockTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 30)
     if target then
         creature:CastSpell(target, SPELL_SPELL_LOCK)
@@ -446,11 +508,19 @@ end
 -- SPELL_CONCUSSION_BLOW, 5s/5s; DoCast(me) SPELL_MAGIC_REFLECTION,
 -- 8s then {10s,15s}.
 local function concussionBlowTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "concussionblow", 500, function() concussionBlowTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_CONCUSSION_BLOW)
     schedule(guid, "concussionblow", 5000, function() concussionBlowTick(creature, guid) end)
 end
 
 local function magicReflectionTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "magicreflection", 500, function() magicReflectionTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MAGIC_REFLECTION)
     schedule(guid, "magicreflection", {10000, 15000}, function() magicReflectionTick(creature, guid) end)
 end
@@ -459,7 +529,11 @@ end
 -- SPELL_TACTICAL_BLINK, then a nested 1300ms one-shot -> nearest
 -- <=5y DoCast SPELL_BACKSTAB; re-arm 8s. C++ nests the backstab
 -- schedule and the Repeat() outside the target check — mirrored here.
-local function backstabTick(creature)
+local function backstabTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "backstab", 500, function() backstabTick(creature, guid) end)
+        return
+    end
     local target = nearestPlayerInRange(creature, 5)
     if target then
         creature:CastSpell(target, SPELL_BACKSTAB)
@@ -467,22 +541,34 @@ local function backstabTick(creature)
 end
 
 local function tacticalBlinkTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "tacticalblink", 500, function() tacticalBlinkTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 40)
     if target then
         creature:CastSpell(target, SPELL_TACTICAL_BLINK)
     end
-    schedule(guid, "backstab", 1300, function() backstabTick(creature) end)
+    schedule(guid, "backstab", 1300, function() backstabTick(creature, guid) end)
     schedule(guid, "tacticalblink", 8000, function() tacticalBlinkTick(creature, guid) end)
 end
 
 -- npc_azure_captain (30666): DoCastVictim SPELL_MORTAL_STRIKE, 5s/5s;
 -- DoCast(me) SPELL_WHIRLWIND_OF_STEEL, 8s/8s.
 local function mortalStrikeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "mortalstrike", 500, function() mortalStrikeTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, SPELL_MORTAL_STRIKE)
     schedule(guid, "mortalstrike", 5000, function() mortalStrikeTick(creature, guid) end)
 end
 
 local function whirlwindOfSteelTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "whirlwindofsteel", 500, function() whirlwindOfSteelTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_WHIRLWIND_OF_STEEL)
     schedule(guid, "whirlwindofsteel", 8000, function() whirlwindOfSteelTick(creature, guid) end)
 end
@@ -492,6 +578,10 @@ end
 -- randtime(0s,0s) then {2s,6s} (C++ Schedule(Seconds(), Seconds(), ...)
 -- is the randtime overload).
 local function arcaneStreamTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "arcanestream", 500, function() arcaneStreamTick(creature, guid) end)
+        return
+    end
     local target = randomPlayerInRange(creature, 35)
     if target then
         creature:CastSpell(target, SPELL_ARCANE_STREAM)
@@ -500,6 +590,10 @@ local function arcaneStreamTick(creature, guid)
 end
 
 local function manaDetonationTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "manadetonation", 500, function() manaDetonationTick(creature, guid) end)
+        return
+    end
     creature:CastSpell(creature, SPELL_MANA_DETONATION)
     schedule(guid, "manadetonation", {2000, 6000}, function() manaDetonationTick(creature, guid) end)
 end
