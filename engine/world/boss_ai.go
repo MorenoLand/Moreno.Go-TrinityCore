@@ -12875,9 +12875,12 @@ func init() {
 	// gate boss_felmyst.cpp:421, no re-arm consumed); the FOG_INFORM
 	// SpellHit summon + JustSummoned DEAD legs port, and the
 	// SetBossState + JustAppeared Talk arms port (sibling file); the
-	// flight phase, DamageTaken invulnerability and vapor-trail
-	// despawn summon stay out on the unported PHASE_FLIGHT /
-	// MovementInform machine.
+	// flight phase (10-step sequence, ev28 driver), the DamageTaken
+	// lethal rewrite (ev9) and the vapor-trail DespawnSummons
+	// DEAD-summon leg port too. The vapor (25265) itself is not
+	// RegisterLuaBoss'd: its ev1/ev22 handlers fire by entry and the
+	// luaBossAI slot is instance-boss admission, which a temp-summon
+	// add must not claim.
 	RegisterLuaBoss("boss_felmyst", 25038)
 	// Vapor trail (25267) runs its constructor triggered self-cast
 	// of trail trigger 45399 on ev22 (ev5 never fires for temp

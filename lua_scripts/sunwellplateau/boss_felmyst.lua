@@ -83,8 +83,8 @@
 -- reach 1.5 + felmyst reach 10 + 70) along that ray, z = target Z
 -- + 10 (Object.cpp:3334-3348); EVENT_SUMMON_FOG's
 -- UpdateGroundPositionZ has no bridge, so the fog trail spawns at
--- the current Z; case 9's DoStartMovement chase has no informing
--- bridge (Go chase never fires ev28, creaturemotion.go:5725), so
+-- the current Z; case 9 chases via MoveChase (DoStartMovement twin)
+-- but the Go chase never fires ev28 (creaturemotion.go:5725), so
 -- the case 9->10 step rides a 3s timer approximating the chase
 -- arrival that C++ informs for (ChaseMovementGenerator.cpp:136/
 -- 150); the AttackStart/MoveInLineOfSight PHASE_FLIGHT gates have
@@ -545,15 +545,18 @@ felmystFlightSequence = function(creature, guid)
     elseif step == 9 then
         -- :390-399: chase the max-threat target; no target ->
         -- EnterEvadeMode with the step NOT advanced. DoStartMovement
-        -- has no informing bridge (Go chase never fires ev28,
-        -- creaturemotion.go:5725), so the chase-arrival inform that
-        -- C++ fires (ChaseMovementGenerator.cpp:136/150) is a 3s
-        -- timer approximation.
+        -- is MoveChase(target, 0, 0) (ScriptedCreature.cpp:159),
+        -- bridged (lua_creature_events.go:5252); the Go chase pauses
+        -- while the pick is not the victim (HasLostTarget) and never
+        -- fires ev28 (creaturemotion.go:5725), so the chase-arrival
+        -- inform C++ fires (ChaseMovementGenerator.cpp:136/150)
+        -- stays a 3s timer approximation.
         local target = maxThreatTarget(creature)
         if target == nil then
             creature:EnterEvadeMode()
             return
         end
+        creature:MoveChase(target)
         st.flightCount = 10
         schedule(guid, "flightseq", 3000, function()
             felmystFlightSequence(creature, guid)
