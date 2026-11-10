@@ -74,6 +74,14 @@ func ExtractCameras(input, output string) (int, error) {
 		fmt.Println("Unable to open CinematicCamera.dbc. Camera extract aborted.")
 		return 0, nil
 	}
+	if db.RecordSize != db.FieldCount*4 {
+		// The extractor's DBCFile::open rejects recordSize !=
+		// fieldCount*4 outright; engine dbc.Parse only rejects the
+		// recordSize > fieldCount*4 half (server loader), so the strict
+		// half is enforced here.
+		fmt.Println("Unable to open CinematicCamera.dbc. Camera extract aborted.")
+		return 0, nil
+	}
 	dest := filepath.Join(output, "Cameras")
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return 0, err

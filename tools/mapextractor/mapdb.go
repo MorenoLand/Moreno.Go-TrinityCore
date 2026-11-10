@@ -44,7 +44,13 @@ func parseDBC(data []byte) (dbcFile, error) {
 	if recordCount < 0 || fieldCount <= 0 || recordSize <= 0 || stringBlockSize < 0 {
 		return dbcFile{}, errors.New("invalid DBC header")
 	}
-	if len(data) < 20+recordCount*recordSize+stringBlockSize {
+	// C++ owner: DBCFile::open (dbcfile.cpp) rejects recordSize !=
+	// fieldCount*4 outright; without this a malformed Map.dbc or
+	// LiquidType.dbc would be accepted here while C++ fatal-exits.
+	if fieldCount*4 != recordSize {
+		return dbcFile{}, errors.New("invalid DBC header")
+	}
+	if uint64(len(data)) < 20+uint64(recordCount)*uint64(recordSize)+uint64(stringBlockSize) {
 		return dbcFile{}, errors.New("truncated DBC file")
 	}
 	return dbcFile{
