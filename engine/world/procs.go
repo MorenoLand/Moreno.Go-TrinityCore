@@ -3186,6 +3186,52 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 					continue
 				}
 			}
+			if auraSpell.ID == 50240 && i == 2 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_oculus_evasive_maneuvers::HandleProc
+				// (oculus.cpp:488-493): PreventDefaultAction; the holder
+				// loses one Ruby Evasive Charges (50241) stack, and the
+				// maneuvers aura itself goes when the last charge is
+				// gone. The player-side twin of the creature-loop arm:
+				// Go runs vehicle-bar casts as the player (the
+				// vehicle-caster delta, spells.go), so a self-targeted
+				// 50240 lands on the rider instead of the drake. Placed
+				// before the generic arm, which would cast the DBC
+				// trigger instead. Lua-off fallback twin of the
+				// oculus.lua event-6 handler: the Lua hook vetoes first
+				// when loaded, so this never double-fires.
+				if s.removePlayerAuraFromStack(50241) {
+					s.removeAura(auraSpell.ID)
+				}
+				continue
+			}
+			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
+				// spell_oculus_temporal_rift::HandleProc
+				// (oculus.cpp:606-621): PreventDefaultAction; the
+				// triggering damage accumulates in the effect amount
+				// (a zero-damage event adds nothing and returns before
+				// the threshold check); at 15000 the aura caster casts
+				// Amber Shock Charge (49836) on the holder and the
+				// counter drops by 15000. The amount lives in the
+				// per-effect slot, not the aura-level Amount; the
+				// unlocked write matches the loop's RemainingCharges
+				// mutation above. The player-side twin of the
+				// creature-loop arm, for a player holder. Lua-off
+				// fallback twin of the oculus.lua event-6 handler
+				// (same veto-first ordering).
+				if ev.damage == 0 {
+					continue
+				}
+				amount := aura.Amounts[i] + int32(ev.damage)
+				fire := amount >= 15000
+				if fire {
+					amount -= 15000
+				}
+				aura.Amounts[i] = amount
+				if fire {
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 49836, casterGUID: aura.CasterGUID, targetGUID: s.playerGUID})
+				}
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)

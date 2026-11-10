@@ -10636,6 +10636,48 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 					continue
 				}
 			}
+			if auraSpell.ID == 50240 && i == 2 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_oculus_evasive_maneuvers::HandleProc
+				// (oculus.cpp:488-493): PreventDefaultAction; the holder
+				// loses one Ruby Evasive Charges (50241) stack, and the
+				// maneuvers aura itself goes when the last charge is
+				// gone. Placed before the generic arm, which would cast
+				// the DBC trigger instead. Lua-off fallback twin of the
+				// oculus.lua event-6 handler: the Lua hook vetoes first
+				// when loaded, so this never double-fires.
+				if s.removeCreatureAuraFromStack(key, 50241) {
+					s.removeCreatureAura(key, auraSpell.ID)
+				}
+				continue
+			}
+			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
+				// spell_oculus_temporal_rift::HandleProc
+				// (oculus.cpp:606-621): PreventDefaultAction; the
+				// triggering damage accumulates in the effect amount
+				// (a zero-damage event adds nothing and returns before
+				// the threshold check); at 15000 the aura caster casts
+				// Amber Shock Charge (49836) on the holder and the
+				// counter drops by 15000. The amount lives in the
+				// per-effect slot, not the aura-level Amount, and the
+				// write rides auraMu like the charge consume above.
+				// Lua-off fallback twin of the oculus.lua event-6
+				// handler (same veto-first ordering).
+				if ev.damage == 0 {
+					continue
+				}
+				s.auraMu.Lock()
+				amount := aura.Amounts[i] + int32(ev.damage)
+				fire := amount >= 15000
+				if fire {
+					amount -= 15000
+				}
+				aura.Amounts[i] = amount
+				s.auraMu.Unlock()
+				if fire {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 49836, casterGUID: aura.CasterGUID, targetGUID: m.GUID})
+				}
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)

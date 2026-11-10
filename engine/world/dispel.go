@@ -1186,6 +1186,110 @@ func (s *session) dispelCreatureAuraCharge(key creatureAuraKey, spellID uint32, 
 	return false
 }
 
+// removeCreatureAuraFromStack mirrors Unit::RemoveAuraFromStack
+// (Unit.cpp:3917) for a creature aura: one stack comes off
+// (Aura::ModStackAmount(-1), SpellAuras.cpp:1030) and the aura is removed
+// when the last stack goes. Returns true when the aura is gone (absent
+// included: RemoveAuraFromStack on a missing aura is a no-op and the
+// caller's HasAura check then reads false). The survivor's amounts rescale
+// with the stack loss and the wire update rides the aura's own caster GUID,
+// the dispelCreatureAuraCharge pattern with a default-mode removal instead
+// of the dispel BY_ENEMY_SPELL one.
+func (s *Server) removeCreatureAuraFromStack(key creatureAuraKey, spellID uint32) bool {
+	if s == nil || key.GUID == 0 || spellID == 0 {
+		return true
+	}
+	s.auraMu.Lock()
+	var aura *activeAura
+	if s.activeCreatureAuras != nil {
+		aura = s.activeCreatureAuras[key][spellID]
+	}
+	if aura != nil && !aura.Stopped && aura.StackCount > 1 {
+		oldCount := uint32(aura.StackCount)
+		aura.StackCount--
+		rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
+	}
+	var slot uint8
+	var positive bool
+	var count uint8
+	removed := aura == nil
+	if aura != nil {
+		slot, positive = aura.Slot, aura.Positive
+		// A zero StackCount reads as a single stack (the
+		// auraUpdateRecords wire default), so ModStackAmount(-1) on
+		// it removes the aura.
+		removed = aura.StackCount <= 1
+		if !removed {
+			count = auraWireStackCount(aura)
+		}
+	}
+	casterGUID := uint64(0)
+	if aura != nil {
+		casterGUID = aura.CasterGUID
+	}
+	s.auraMu.Unlock()
+
+	if aura == nil || removed {
+		s.removeCreatureAura(key, spellID)
+		return true
+	}
+	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, casterGUID, slot, spellID, false, positive, 0, 0, 1, count)
+	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, key.Map, key.InstanceID, key.GUID)
+	return false
+}
+
+// removePlayerAuraFromStack mirrors Unit::RemoveAuraFromStack
+// (Unit.cpp:3917) for a player aura: one stack comes off
+// (Aura::ModStackAmount(-1), SpellAuras.cpp:1030) and the aura is removed
+// when the last stack goes. Returns true when the aura is gone (absent
+// included: RemoveAuraFromStack on a missing aura is a no-op and the
+// caller's HasAura check then reads false). The dispelPlayerAuraCharge
+// stack branch with a default-mode removal instead of the dispel
+// BY_ENEMY_SPELL one.
+func (s *session) removePlayerAuraFromStack(spellID uint32) bool {
+	if s == nil || spellID == 0 {
+		return true
+	}
+	s.castMu.Lock()
+	aura := s.activeAuras[spellID]
+	if aura != nil && !aura.Stopped && aura.StackCount > 1 {
+		// Aura::ModStackAmount(-1): the aura loses one stack and
+		// survives while stacks remain; no timer refresh on decrement.
+		oldCount := uint32(aura.StackCount)
+		aura.StackCount--
+		// SetStackAmount re-credit: the surviving stack loss
+		// rescales the amounts, so the skill bonus follows.
+		s.refreshSkillBonusForAuraAmountChange(aura, func() {
+			rescaleAuraAmountsByStack(aura, oldCount, uint32(aura.StackCount))
+		})
+		advanceAuraDuration(aura, time.Now())
+	}
+	var slot uint8
+	var positive bool
+	var maxDuration, remaining uint32
+	var count uint8
+	removed := aura == nil
+	if aura != nil {
+		slot, positive = aura.Slot, aura.Positive
+		maxDuration, remaining = aura.DurationMs, aura.RemainingMs
+		// A zero StackCount reads as a single stack (the
+		// auraUpdateRecords wire default), so ModStackAmount(-1) on
+		// it removes the aura.
+		removed = aura.StackCount <= 1
+		if !removed {
+			count = auraWireStackCount(aura)
+		}
+	}
+	s.castMu.Unlock()
+
+	if aura == nil || removed {
+		s.removeAura(spellID)
+		return true
+	}
+	s.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDuration, remaining, count)
+	return false
+}
+
 func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, isReflected bool) {
 	s.dispelEffectAsCaster(ctx, 0, targetGUID, spell, eff, nil, isReflected)
 }
