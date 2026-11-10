@@ -176,6 +176,7 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_GYROKILL, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetBossState(0, 1) -- DATA_GATEWATCHER_GYROKILL, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -209,5 +210,8 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_GYROKILL, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_GYROKILL, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(0) ~= 3 then
+        creature:SetBossState(0, 0) -- DATA_GATEWATCHER_GYROKILL, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+    end
     resetBoss(creature:GetGUIDLow())
 end)

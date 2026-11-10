@@ -156,6 +156,7 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState()
+    creature:SetBossState(DATA_GATEWATCHER_IRON_HAND, 1) -- DATA_GATEWATCHER_IRON_HAND, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -194,5 +195,8 @@ RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_GATEWATCHER_IRON_HAND, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(DATA_GATEWATCHER_IRON_HAND) ~= 3 then
+        creature:SetBossState(DATA_GATEWATCHER_IRON_HAND, 0) -- DATA_GATEWATCHER_IRON_HAND, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+    end
     resetBoss(creature:GetGUIDLow())
 end)

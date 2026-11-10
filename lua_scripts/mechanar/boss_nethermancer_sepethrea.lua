@@ -101,6 +101,7 @@ local ENTRY_RAGIN_FLAMES = 22323
 
 local GO_DOOR_NETHERMANCER = 184449 -- mechanar.h:41
 local GO_STATE_ACTIVE = 0 -- GameObjectMethods.h:90
+local GO_STATE_READY = 1
 
 local timers = {}
 local bossStates = {}
@@ -217,6 +218,16 @@ RegisterCreatureEvent(ENTRY_SEPRETHREA, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     bossStates[guid] = freshBossState()
+    creature:SetBossState(3, 1) -- DATA_NETHERMANCER_SEPETHREA, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
+    -- C++ doorData (instance_mechanar.cpp): GO_DOOR_NETHERMANCER is a
+    -- DOOR_TYPE_ROOM door — base InstanceScript::SetBossState closes
+    -- it on IN_PROGRESS (room doors open whenever state !=
+    -- IN_PROGRESS). No instance-side hook exists, so the boss
+    -- closes it here (netherspite precedent).
+    local door = creature:FindNearestGameObject(GO_DOOR_NETHERMANCER, 500)
+    if door then
+        door:SetGoState(GO_STATE_READY)
+    end
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     -- C++ JustEngagedWith: Talk(SAY_AGGRO), DoCast(who,
@@ -246,8 +257,8 @@ RegisterCreatureEvent(ENTRY_SEPRETHREA, 4, function(_, creature)
     -- InstanceScript::SetBossState opens it on DONE (room doors
     -- open whenever state != IN_PROGRESS). No instance-side
     -- hook exists, so the boss opens it here (Blood Furnace
-    -- idiom: nearest GO + SetGoState ACTIVE). The engage-time
-    -- close leg is out: ev1 writes no IN_PROGRESS state.
+    -- idiom: nearest GO + SetGoState ACTIVE); ev1 closes it
+    -- on IN_PROGRESS, ev23 re-opens it on NOT_STARTED.
     local door = creature:FindNearestGameObject(GO_DOOR_NETHERMANCER, 500)
     if door then
         door:SetGoState(GO_STATE_ACTIVE)
@@ -257,6 +268,13 @@ RegisterCreatureEvent(ENTRY_SEPRETHREA, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SEPRETHREA, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(3) ~= 3 then
+        creature:SetBossState(3, 0) -- DATA_NETHERMANCER_SEPETHREA, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+        local door = creature:FindNearestGameObject(GO_DOOR_NETHERMANCER, 500)
+        if door then
+            door:SetGoState(GO_STATE_ACTIVE)
+        end
+    end
     resetBoss(creature:GetGUIDLow())
 end)
 

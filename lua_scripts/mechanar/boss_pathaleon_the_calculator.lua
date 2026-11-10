@@ -280,6 +280,7 @@ RegisterCreatureEvent(ENTRY_PATHALEON, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     bossStates[guid] = freshBossState()
+    creature:SetBossState(4, 1) -- DATA_PATHALEON_THE_CALCULATOR, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(SAY_AGGRO)
@@ -324,6 +325,9 @@ RegisterCreatureEvent(ENTRY_PATHALEON, 9, function(_, creature, attacker, damage
 end)
 
 RegisterCreatureEvent(ENTRY_PATHALEON, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(4) ~= 3 then
+        creature:SetBossState(4, 0) -- DATA_PATHALEON_THE_CALCULATOR, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+    end
     resetBoss(creature:GetGUIDLow())
 end)
 

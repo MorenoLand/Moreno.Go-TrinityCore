@@ -236,6 +236,7 @@ RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 1, function(_, creature)
     local guid = creature:GetGUIDLow()
     resetBoss(guid)
     states[guid] = freshState(creature:IsHeroic())
+    creature:SetBossState(2, 1) -- DATA_MECHANOLORD_CAPACITUS, IN_PROGRESS (BossAI::_JustEngagedWith, ScriptedCreature.cpp:537; soccothrates precedent)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542; sapphiron precedent)
     creature:Talk(YELL_AGGRO)
@@ -260,5 +261,8 @@ RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 4, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 23, function(_, creature)
+    if not creature:IsDead() and creature:GetBossState(2) ~= 3 then
+        creature:SetBossState(2, 0) -- DATA_MECHANOLORD_CAPACITUS, NOT_STARTED (BossAI::_Reset, ScriptedCreature.cpp:499-511; soccothrates precedent)
+    end
     resetBoss(creature:GetGUIDLow())
 end)
