@@ -794,22 +794,22 @@ func wgTowerControlStacks(sess *session) int {
 	return int(aura.StackCount)
 }
 
-// setWGTowerControlStacks mirrors Aura::SetStackAmount for Tower Control
+// setWGPlayerAuraStacks mirrors Aura::SetStackAmount for a player aura
 // (BattlefieldWG.cpp:1085/1090 join stacks, :1217/:1224 destroy steps):
 // zero stacks removes the aura, otherwise a fresh apply is corrected to
 // the count with the SetStackAmount rescale + client update. Caller holds
 // no castMu; applyAura/removeAura take it themselves.
-func (s *Server) setWGTowerControlStacks(sess *session, stacks int) {
+func (s *Server) setWGPlayerAuraStacks(sess *session, spellID uint32, stacks int) {
 	if sess == nil {
 		return
 	}
 	if stacks <= 0 {
-		sess.removeAura(WGSpellTowerControl)
+		sess.removeAura(spellID)
 		return
 	}
-	sess.applyAura(WGSpellTowerControl)
+	sess.applyAura(spellID)
 	sess.castMu.Lock()
-	aura := sess.activeAuras[WGSpellTowerControl]
+	aura := sess.activeAuras[spellID]
 	if aura == nil || aura.Stopped {
 		sess.castMu.Unlock()
 		return
@@ -822,7 +822,34 @@ func (s *Server) setWGTowerControlStacks(sess *session, stacks int) {
 	rescaleAuraAmountsByStack(aura, uint32(oldCount), uint32(stacks))
 	slot, positive, maxDur, dur := aura.Slot, aura.Positive, aura.DurationMs, aura.RemainingMs
 	sess.castMu.Unlock()
-	sess.sendAuraUpdateWithStack(slot, WGSpellTowerControl, false, positive, maxDur, dur, uint8(stacks))
+	sess.sendAuraUpdateWithStack(slot, spellID, false, positive, maxDur, dur, uint8(stacks))
+}
+
+// setWGTowerControlStacks mirrors Aura::SetStackAmount for Tower Control
+// (BattlefieldWG.cpp:1085/1090 join stacks, :1217/:1224 destroy steps).
+// Caller holds no castMu; applyAura/removeAura take it themselves.
+func (s *Server) setWGTowerControlStacks(sess *session, stacks int) {
+	s.setWGPlayerAuraStacks(sess, WGSpellTowerControl, stacks)
+}
+
+// setWGRankAuraStacks mirrors PromotePlayer's per-kill CastSpell
+// (BattlefieldWG.cpp:1018-1047): each promotion credit adds one stack of
+// the current rank aura, up to the promotion at 5. The aura is stacked
+// only when already present — a player with neither rank aura gets no
+// credit in C++ (both GetAura arms miss), so a missing aura is never
+// (re-)applied here. Caller holds no castMu.
+func (s *Server) setWGRankAuraStacks(sess *session, spellID uint32, stacks int) {
+	if sess == nil || stacks <= 0 {
+		return
+	}
+	sess.castMu.Lock()
+	aura := sess.activeAuras[spellID]
+	present := aura != nil && !aura.Stopped
+	sess.castMu.Unlock()
+	if !present {
+		return
+	}
+	s.setWGPlayerAuraStacks(sess, spellID, stacks)
 }
 
 // inviteWGZoneToWar mirrors Battlefield::InvitePlayersInZoneToWar
@@ -1239,7 +1266,13 @@ func (s *Server) DestroyWGVehicle(vehicleGUID uint64) bool {
 	wg := s.getOrCreateWGState()
 	wg.mu.Lock()
 	defer wg.mu.Unlock()
+	return s.destroyWGVehicleLocked(wg, vehicleGUID)
+}
 
+// destroyWGVehicleLocked is the FindAndRemoveVehicleFromList core
+// (BattlefieldWG.cpp:980-997): drop the vehicle from the per-team list
+// and step the matching worldstate count. Caller holds wg.mu.
+func (s *Server) destroyWGVehicleLocked(wg *wgBattlegroundState, vehicleGUID uint64) bool {
 	team, exists := wg.Vehicles[vehicleGUID]
 	if !exists {
 		return false
@@ -1258,6 +1291,28 @@ func (s *Server) DestroyWGVehicle(vehicleGUID uint64) bool {
 		s.updateWGWorldState(WGWorldStateVehicleH, wg.VehiclesHorde)
 	}
 	return true
+}
+
+// onWGUnitDeath mirrors BattlefieldWG::OnUnitDeath
+// (BattlefieldWG.cpp:999-1005): a vehicle destroyed during wartime
+// leaves the vehicle list and the count worldstate steps down
+// (UpdateVehicleCountWG). Called from both setDeathState arms — the
+// owner arm in onCreatureKilled and the no-owner arm in
+// clearCreatureDeathState — matching C++ firing from Unit::setDeathState
+// (Unit.cpp:8956) for every unit death. Non-vehicles and non-WG deaths
+// are one cheap map comparison away from a return; a GUID outside the
+// vehicle list is a no-op in the locked core.
+func (s *Server) onWGUnitDeath(dead *creatureMotion) {
+	if s == nil || dead == nil || dead.Map != WGMapID || !s.isVehicleAI(dead) {
+		return
+	}
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	defer wg.mu.Unlock()
+	if !wg.IsActive {
+		return
+	}
+	s.destroyWGVehicleLocked(wg, dead.GUID)
 }
 
 // HandlePromotion updates player rank progression on honorable kills.
@@ -1290,6 +1345,13 @@ func (wg *wgBattlegroundState) HandlePromotion(s *Server, killerGUID uint64, kil
 				// Instance 0 is the open-world Northrend instance.
 				s.broadcastCreatureTalk(context.Background(), WGMapID, 0, killerGUID, WGCreatureStalker, sess.player.Name, WGTextRankCorporal, killerGUID)
 			}
+		} else if sess := s.findSessionByGUID(killerGUID); sess != nil {
+			// PromotePlayer's per-kill CastSpell (BattlefieldWG.cpp:1036):
+			// each credit below the promotion adds one stack of the
+			// current rank aura — the join cast is stack 1, so the wire
+			// count is kills + 1 (5 on the fourth credit; the fifth
+			// credit promotes instead).
+			s.setWGRankAuraStacks(sess, WGSpellRecruit, int(wg.PlayerKillsInRank[killerGUID])+1)
 		}
 	case WGSpellCorporal:
 		wg.PlayerKillsInRank[killerGUID]++
@@ -1303,6 +1365,10 @@ func (wg *wgBattlegroundState) HandlePromotion(s *Server, killerGUID uint64, kil
 				// same row-driven path as the Corporal arm above.
 				s.broadcastCreatureTalk(context.Background(), WGMapID, 0, killerGUID, WGCreatureStalker, sess.player.Name, WGTextRankFirstLieutenant, killerGUID)
 			}
+		} else if sess := s.findSessionByGUID(killerGUID); sess != nil {
+			// Same per-kill stack arm as the Recruit leg above
+			// (BattlefieldWG.cpp:1046).
+			s.setWGRankAuraStacks(sess, WGSpellCorporal, int(wg.PlayerKillsInRank[killerGUID])+1)
 		}
 	case WGSpellLieutenant:
 		// Max rank achieved
@@ -2019,6 +2085,96 @@ func (s *Server) handleWGPlayerLeave(sess *session) {
 	s.UpdateWGTenacity()
 }
 
+// promoteNearbyWGPlayers is the shared HandlePromotion fan-out
+// (BattlefieldWG.cpp:1007-1016): every in-war player of team within 40
+// (2D) yards of (x, y) shares one promotion credit. Caller holds wg.mu;
+// the player-kill path (handleWGPlayerDeath) and the NPC-credit path
+// (handleWGPromotionCredit) both funnel through it.
+func (wg *wgBattlegroundState) promoteNearbyWGPlayers(s *Server, team uint32, x, y float32) {
+	for guid, t := range wg.PlayersInWar {
+		if t != team {
+			continue
+		}
+		sess := s.findSessionByGUID(guid)
+		if sess == nil || sess.player == nil || sess.player.Map != wg.MapID {
+			continue
+		}
+		dx := float64(sess.player.X - x)
+		dy := float64(sess.player.Y - y)
+		if math.Sqrt(dx*dx+dy*dy) > 40.0 {
+			continue
+		}
+		wg.HandlePromotion(s, guid, t)
+	}
+}
+
+// handleWGPromotionCredit mirrors npc_wg_give_promotion_creditAI::JustDied
+// (BattlefieldWG.cpp:1866-1880): a Wintergrasp NPC slain by a player
+// grants promotion credit to the killer's team around the corpse — the
+// same 40-yard HandlePromotion fan-out as a player kill. The caller
+// guarantees a player killer (killerPlayerGUID != 0); the war-active
+// gate lives in HandlePromotion, matching C++ (HandlePromotion is only
+// reachable through the battlefield object).
+func (s *Server) handleWGPromotionCredit(ctx context.Context, killerPlayerGUID uint64, dead *creatureMotion) {
+	if s == nil || dead == nil || dead.Map != WGMapID || killerPlayerGUID == 0 {
+		return
+	}
+	killerSess := s.findSessionByGUID(killerPlayerGUID)
+	if killerSess == nil || killerSess.player == nil {
+		return
+	}
+	wg := s.getOrCreateWGState()
+	wg.mu.Lock()
+	defer wg.mu.Unlock()
+	if !wg.IsActive {
+		return
+	}
+	wg.promoteNearbyWGPlayers(s, teamForRace(killerSess.player.Race), dead.X, dead.Y)
+}
+
+// wgPromotionCreditAI ports npc_wg_give_promotion_creditAI
+// (BattlefieldWG.cpp:1859-1889): the Wintergrasp NPCs whose ScriptName is
+// npc_wg_give_promotion_credit grant promotion credit on a player kill.
+// Registered by ScriptName, so the DB binding drives it — no entry list
+// is hardcoded. All BossAI legs except the killer-aware death arm are
+// base no-ops (ScriptedAI with only a JustDied override).
+type wgPromotionCreditAI struct{}
+
+func newWGPromotionCreditAI(m *creatureMotion) BossAI { return &wgPromotionCreditAI{} }
+
+func (ai *wgPromotionCreditAI) OnReset(ctx context.Context, s *Server, m *creatureMotion) {}
+func (ai *wgPromotionCreditAI) OnAggro(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
+}
+func (ai *wgPromotionCreditAI) OnDamageTaken(ctx context.Context, s *Server, m *creatureMotion, attacker uint64, damage *uint32) {
+}
+func (ai *wgPromotionCreditAI) HealReceived(ctx context.Context, s *Server, m *creatureMotion, healerGUID uint64, addhealth *uint32) {
+}
+func (ai *wgPromotionCreditAI) HealDone(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, addhealth *uint32) {
+}
+func (ai *wgPromotionCreditAI) DamageDealt(ctx context.Context, s *Server, m *creatureMotion, victimGUID uint64, damage *uint32) {
+}
+func (ai *wgPromotionCreditAI) OnKillPlayer(ctx context.Context, s *Server, m *creatureMotion, victim uint64) {
+}
+func (ai *wgPromotionCreditAI) OnEvade(ctx context.Context, s *Server, m *creatureMotion) {}
+
+// OnDied mirrors BossAI::_JustDied (ScriptedCreature.cpp:512-518) —
+// no-op: the credit leg needs the killer, so it runs in OnDiedByKiller.
+func (ai *wgPromotionCreditAI) OnDied(ctx context.Context, s *Server, m *creatureMotion) {}
+func (ai *wgPromotionCreditAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotion, diff time.Duration, players []playerPos, now time.Time) {
+}
+
+// OnDiedByKiller is the JustDied(Unit* killer) arm
+// (BattlefieldWG.cpp:1869-1879): only a player killer counts
+// (killer->GetTypeId() == TYPEID_PLAYER); the funnel guarantees that by
+// only firing this hook for direct player kills.
+func (ai *wgPromotionCreditAI) OnDiedByKiller(ctx context.Context, s *Server, m *creatureMotion, killerPlayerGUID uint64) {
+	s.handleWGPromotionCredit(ctx, killerPlayerGUID, m)
+}
+
+func init() {
+	RegisterBossAI("npc_wg_give_promotion_credit", 0, newWGPromotionCreditAI)
+}
+
 // handleWGPlayerDeath handles deaths in Wintergrasp and grants promotion credits.
 // Reference: BattlefieldWG::HandleKill (BattlefieldWG.cpp:962-977).
 func (s *Server) handleWGPlayerDeath(victimSess *session, killerSess *session) {
@@ -2038,27 +2194,13 @@ func (s *Server) handleWGPlayerDeath(victimSess *session, killerSess *session) {
 		return
 	}
 
-	// BattlefieldWG::HandlePromotion: every in-war player of the killer's
-	// team within 40 (2D) yards of the victim shares the promotion credit.
-	// PromotePlayer itself gates on war active; the skinnable arm below
-	// does not, so the loop — not the whole handler — carries the gate.
+	// BattlefieldWG::HandlePromotion (BattlefieldWG.cpp:1007-1016): every
+	// in-war player of the killer's team within 40 (2D) yards of the
+	// victim shares the promotion credit. PromotePlayer itself gates on
+	// war active; the skinnable arm below does not, so the loop — not the
+	// whole handler — carries the gate. Caller holds wg.mu.
 	if wg.IsActive {
-		vx, vy := victimSess.player.X, victimSess.player.Y
-		for guid, team := range wg.PlayersInWar {
-			if team != killerTeam {
-				continue
-			}
-			sess := s.findSessionByGUID(guid)
-			if sess == nil || sess.player == nil || sess.player.Map != wg.MapID {
-				continue
-			}
-			dx := float64(sess.player.X - vx)
-			dy := float64(sess.player.Y - vy)
-			if math.Sqrt(dx*dx+dy*dy) > 40.0 {
-				continue
-			}
-			wg.HandlePromotion(s, guid, team)
-		}
+		wg.promoteNearbyWGPlayers(s, killerTeam, victimSess.player.X, victimSess.player.Y)
 	}
 
 	// BattlefieldWG::HandleKill (BattlefieldWG.cpp:962-977): a slain

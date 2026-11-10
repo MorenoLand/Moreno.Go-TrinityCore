@@ -1023,6 +1023,9 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 		// fire (the no-owner arm fires in clearCreatureDeathState).
 		if motion := s.server.findCreatureMotion(target.Map, target.InstanceID, target.GUID); motion != nil {
 			s.server.triggerInstanceUnitDeath(ctx, motion)
+			// BattlefieldWG::OnUnitDeath rides the same setDeathState
+			// zone-script fire (BattlefieldWG.cpp:999-1005).
+			s.server.onWGUnitDeath(motion)
 		}
 		// Unit::Kill's party-kill broadcast (Unit.cpp:11208-11232): when
 		// the killing blow lands and the creature's player-damage
@@ -1111,6 +1114,17 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 			// Eluna-first/native-second order used at respawn (kill.go:865).
 			if motion.BossAI != nil {
 				motion.BossAI.OnDied(ctx, s.server, motion)
+				// CreatureAI::JustDied(Unit* killer) (UnitAI.h:292): the
+				// killer-aware arm runs only for direct player kills —
+				// killer is nil here exactly when the session itself
+				// dealt the blow, and a pet/creature killer is
+				// TYPEID_UNIT in C++, which killer-filtering scripts
+				// reject.
+				if killer == nil {
+					if killerAware, ok := motion.BossAI.(killerAwareDeath); ok {
+						killerAware.OnDiedByKiller(ctx, s.server, motion, s.playerGUID)
+					}
+				}
 			}
 			// CombatAI::JustDied (CombatAI.cpp:68-73): AICOND_DIE spells —
 			// castable-while-dead per UnitAI::FillAISpellInfo
@@ -1853,6 +1867,9 @@ func (s *Server) clearCreatureDeathState(dead *creatureMotion) {
 	// caller skips onCreatureKilled, so this is the no-owner arm of the
 	// single fire (the owner arm fires in onCreatureKilled).
 	s.triggerInstanceUnitDeath(context.Background(), dead)
+	// BattlefieldWG::OnUnitDeath rides the same setDeathState zone-script
+	// fire (BattlefieldWG.cpp:999-1005).
+	s.onWGUnitDeath(dead)
 }
 
 // firePVPKillHook fires Eluna PLAYER_EVENT_ON_KILL_PLAYER (6):

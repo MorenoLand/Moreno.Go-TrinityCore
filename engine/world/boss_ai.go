@@ -115,6 +115,16 @@ var (
 	bossAIByEntry  = make(map[uint32]func(*creatureMotion) BossAI)
 )
 
+// killerAwareDeath is the optional CreatureAI::JustDied(Unit* killer) arm
+// (UnitAI.h:292): a BossAI that needs the killing unit implements it, and
+// the player-kill funnel calls it after OnDied when the killer is a
+// player. Creature killers never reach it — the funnel only fires it for
+// direct player kills (killer == nil in onCreatureKilled), matching C++
+// scripts that filter on killer->GetTypeId() == TYPEID_PLAYER.
+type killerAwareDeath interface {
+	OnDiedByKiller(ctx context.Context, s *Server, motion *creatureMotion, killerPlayerGUID uint64)
+}
+
 func RegisterBossAI(scriptName string, entry uint32, factory func(*creatureMotion) BossAI) {
 	if scriptName != "" {
 		bossAIRegistry[scriptName] = factory
