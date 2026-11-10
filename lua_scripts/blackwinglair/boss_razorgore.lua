@@ -21,31 +21,30 @@
 -- behavior nukes the room and respawns him — but the damage-zeroing is
 -- the shipped logic). The phase-two DoAction trigger comes from the
 -- instance egg machine once the egg event completes; ev38 is registered
--- below (dispatch bridged, lua_creature_events.go:802) but the sender is
--- still unported, so secondPhase stays false until that script lands:
--- phase-two timers (cleave 22540 15s then {7s,10s} /
--- warstomp 24375 35s then {15s,25s} / fireball volley 22425 7s then
--- {12s,15s} / conflagration 23023 12s then 30s, all non-triggered
--- DoCastVictim with unconditional re-arms) are modeled as code but
--- unreachable for now, and Razorgore stays unkillable doing melee only
--- — which is exactly what C++ phase one does in combat. Reset cancels
--- timers and clears the phase flag.
+-- below (dispatch bridged, lua_creature_events.go:802) and the sender
+-- is ported (instance_blackwing_lair.lua); phase-two timers fire once
+-- the egg machine sends DoAction — in-game that still waits on the orb
+-- gossip (mind-control, unported), the only source of the 19873
+-- egg-destroy casts, so Razorgore stays unkillable doing melee only
+-- until the orb lands — which is exactly what C++ phase one does in
+-- combat. Reset cancels timers and clears the phase flag.
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
 -- (boss_razorgore.cpp pre-loop :132 + in-loop :157) are ported as a
 -- 500ms IsCasting defer on every ported phase-two timer tick
 -- (mal_ganis idiom; IsCasting live, lua_creature_events.go:1950;
 -- defer precedes target picks, casts and re-arms, no re-arm
--- consumed); no instance-script model yet — the SetBossState-override
--- arms still have no hook, but the instance SetData arms ARE ported
--- (instanceDataOf bearer; nil until a map-469 instance binding
--- exists); the boss's own _Reset/_JustDied/BossAI::JustEngagedWith
+-- consumed); the SetBossState-override arms still have no hook, but
+-- the instance SetData arms ARE ported (instanceDataOf bearer; the
+-- map-469 instance binding is instance_blackwing_lair.lua); the boss's
+-- own _Reset/_JustDied/BossAI::JustEngagedWith
 -- bookkeeping writes ARE ported (creature:SetBossState, bridge live
 -- lua_creature_events.go:5917):
 -- ev1 IN_PROGRESS (no JustEngagedWith override — base runs,
 -- ScriptedCreature.h:329), ev23 NOT_STARTED (Reset :84-89 calls _Reset();
 -- alive + != DONE gate, ScriptedCreature.cpp:499-511), ev4 DONE (JustDied
 -- :92-97 calls _JustDied()). The Reset/JustDied
--- instance->SetData(DATA_EGG_EVENT, NOT_STARTED) arms have no bearer; RemoveAllAuras/SetFullHealth in DoChangePhase are PORTED
+-- instance->SetData(DATA_EGG_EVENT, NOT_STARTED) arms ride the instance
+-- bearer (instance_blackwing_lair.lua, map 469); RemoveAllAuras/SetFullHealth in DoChangePhase are PORTED
 -- (RemoveAllAuras live, lua_creature_events.go:1523; SetFullHealth rides
 -- SetHealth(GetMaxHealth())) — see doChangePhase below; the
 -- go_orb_of_domination OnGossipHello (instance
@@ -53,13 +52,11 @@
 -- CastSpell SPELL_MINDCONTROL 42013) rides instance legs with no bridge
 -- (GO gossip hello itself is live) and the spell_egg_event
 -- SpellScript (OnHit -> instance->SetData(DATA_EGG_EVENT, SPECIAL))
--- stays out: ev2 (SpellEventOnHit) is bridged since 2026-11-08 and the
--- instance SetData bearer exists now (instanceDataOf), and the spell id
--- is in-repo (SPELL_EGG_DESTROY = 19873, boss_razorgore.cpp:40) — the
--- leg stays out only because its consumer, the instance egg machine,
--- is unported. The mind-control/orb gameplay has no bearer, so the
--- fight cannot reach phase two until the instance egg machine lands
--- (its sender, instance_blackwing_lair.cpp:262-265).
+-- is ported in instance_blackwing_lair.lua as
+-- RegisterSpellEvent(19873, 2). The mind-control/orb gameplay has no
+-- bearer, so the fight cannot reach phase two until the orb gossip
+-- lands (the egg machine itself, instance_blackwing_lair.cpp:262-265,
+-- is ported).
 
 local ENTRY_RAZORGORE = 12435
 
@@ -68,11 +65,34 @@ local DATA_EGG_EVENT = 2
 
 -- The boss files reach the instance script through the shared
 -- instanceData table (gruul.lua precedent:
--- creature:GetMap():GetInstanceData()); nil until a map-469 instance
--- binding exists, so every write below is nil-guarded.
+-- creature:GetMap():GetInstanceData()); the map-469 binding is
+-- instance_blackwing_lair.lua, so every write below is nil-guarded
+-- only for the unloaded / non-instance case.
 local function instanceDataOf(creature)
     local mapObj = creature:GetMap()
     return mapObj and mapObj:GetInstanceData() or nil
+end
+
+-- C++ BossAI::_Reset / _JustDied (ScriptedCreature.cpp:499-516):
+-- summons.DespawnAll() over the registry instance_blackwing_lair.lua
+-- records (instanceData.razorSummons, guidLow set). GetCreatureByGUID
+-- resolves each low GUID on this map+instance (lua_creature_events.go:
+-- 4050); Despawn is DespawnOrUnsummon — permanent for the temp-summon
+-- wave adds, normal respawn timer for DB creatures. The registry is
+-- cleared first so a re-entrant despawn cannot double-run it.
+local function despawnSummons(creature)
+    local data = instanceDataOf(creature)
+    if not data or not data.razorSummons then
+        return
+    end
+    local registry = data.razorSummons
+    data.razorSummons = nil
+    for guidLow in pairs(registry) do
+        local target = creature:GetCreatureByGUID(guidLow)
+        if target then
+            target:Despawn()
+        end
+    end
 end
 
 local SPELL_CLEAVE = 22540
@@ -176,9 +196,9 @@ end
 -- C++ DoChangePhase: arms the four phase-two timers, sets secondPhase,
 -- RemoveAllAuras + SetFullHealth (both bridged now: RemoveAllAuras
 -- is live, SetFullHealth rides SetHealth(GetMaxHealth())). Registered
--- on ev38 below; the sender (instance egg machine,
--- instance_blackwing_lair.cpp:262-265) is still unported, so
--- ACTION_PHASE_TWO (1) cannot fire yet.
+-- on ev38 below; the sender is the ported instance egg machine
+-- (instance_blackwing_lair.lua), which fires once 15 eggs are
+-- counted.
 local function doChangePhase(creature, guid)
     secondPhase[guid] = true
     schedule(guid, "cleave", 15000, function()
@@ -226,8 +246,9 @@ local function razorgoreEnterCombat(event, creature, target)
     -- C++ phase one schedules nothing: the mind-controlled orb
     -- handler drives the fight, not the AI. Combat AI starts only on
     -- DoAction(ACTION_PHASE_TWO), registered on ev38 below; its sender
-    -- is the unported instance egg machine
-    -- (instance_blackwing_lair.cpp:262-265), so it cannot fire yet.
+    -- is the ported instance egg machine
+    -- (instance_blackwing_lair.lua), which fires once 15 eggs are
+    -- counted (in-game: after the orb gossip lands).
 end
 
 -- C++ DamageTaken: pre-damage hook; zeroes all damage until phase two
@@ -247,10 +268,13 @@ local function razorgoreDied(event, creature, killer)
     -- C++ JustDied (boss_razorgore.cpp:92-97): _JustDied() writes
     -- SetBossState(DATA_RAZORGORE_THE_UNTAMED 0, DONE) first, then
     -- Talk(SAY_DEATH), then SetData(DATA_EGG_EVENT, NOT_STARTED) (:97)
-    -- via the instance bearer (nil until a map-469 instance binding
-    -- exists). The instance OnUnitDeath DONE path
+    -- via the instance bearer (instance_blackwing_lair.lua). _JustDied
+    -- despawns the summons registry BEFORE the DONE write
+    -- (ScriptedCreature.cpp:513-517), so despawnSummons runs first.
+    -- The instance OnUnitDeath DONE path
     -- (instance_blackwing_lair.cpp:233-237) stays instance-side — the
     -- boss's own ev4 leg covers a normal kill.
+    despawnSummons(creature)
     creature:SetBossState(0, 3)
     creature:Talk(3) -- SAY_DEATH
     local data = instanceDataOf(creature)
@@ -266,7 +290,7 @@ local function razorgoreReset(event, creature)
     -- gated and skipped when already DONE (ScriptedCreature.cpp:499-511);
     -- Go fires ev23 on the death path too, hence the gate. The
     -- SetData(DATA_EGG_EVENT, NOT_STARTED) arm (:89) rides the instance
-    -- bearer (nil until a map-469 instance binding exists) and is
+    -- bearer (instance_blackwing_lair.lua) and is
     -- unconditional, mirroring C++ Reset; on the death path ev4 already
     -- wrote the same value, so the duplicate write is a no-op.
     if creature:IsAlive() and creature:GetBossState(0) ~= 3 then
