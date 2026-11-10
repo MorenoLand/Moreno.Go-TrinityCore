@@ -168,6 +168,18 @@ func (s *session) misc2AccountForGUID(ctx context.Context, guid uint64) uint32 {
 // reasonStart is the args index where the verbatim Tail reason begins
 // (-1 when no reason tokens follow); the caller reads it through
 // commandTailAfter so interior whitespace survives (cs_misc.cpp:1841).
+// On status 2 the name token is returned too: C++ parses the
+// Optional<PlayerIdentifier> BEFORE muteTime (ChatCommand.h:77-103
+// MultiConsumer tries with-arg first, then without), so a bad name
+// reports CHAR_NAME_NO_EXIST before the minutes are ever reached —
+// e.g. `.mute "John Doe" 10 <reason>` tokenizes to `"John` (plain
+// whitespace tokenize, ChatCommandHelpers.h:55-70; the PlayerIdentifier
+// variant's string_view leg is NOT quote-aware, ChatCommandTags.cpp:
+// 88-121), and C++ fails on the name, not on the valid `10`. The
+// caller resolves the returned name first and only reports the bad
+// minutes when the player exists; splitQuotedArgs is deliberately NOT
+// used here — unquoting would make the command succeed where C++
+// rejects it (same rule as the D34 correction).
 func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reasonStart int, status int) {
 	reasonStart = -1
 	if len(args) == 0 {
@@ -180,12 +192,12 @@ func misc2ParseMuteArgs(args []string) (nameArgs []string, minutes uint32, reaso
 		return nil, uint32(mins), reasonStart, 0
 	}
 	if len(args) < 2 {
-		return nil, 0, reasonStart, 1
+		return args[:1], 0, reasonStart, 1
 	}
 	nameArgs = args[:1]
 	mins, ok := parseCommandUint32(args[1])
 	if !ok {
-		return nil, 0, reasonStart, 2
+		return nameArgs, 0, reasonStart, 2
 	}
 	if len(args) > 2 {
 		reasonStart = 2
@@ -1143,18 +1155,28 @@ func (s *session) handleCmdMute(ctx context.Context, args []string) bool {
 		// No args at all is bare-nullopt (silent false); a lone token
 		// is a framework error — the Optional<PlayerIdentifier> fails
 		// (CHAR_NAME_NO_EXIST) and the missing muteTime fails too
-		// (cs_misc.cpp:1841, ChatCommand.h:77-103 EITHER/OR).
+		// (cs_misc.cpp:1841, ChatCommand.h:77-103 EITHER/OR). C++
+		// parses the name first, so a lone token that names nobody
+		// reports the player, not the minutes (same rule as status 2).
 		if len(args) == 0 {
 			return false
 		}
-		s.sendSysMessage("Invalid mute time.")
+		if _, _, _, ok := s.miscResolvePlayerTarget(ctx, nameArgs); ok {
+			s.sendSysMessage("Invalid mute time.")
+		}
 		return true
 	}
 	if status == 2 {
 		// Unparseable uint32 muteTime (cs_misc.cpp:1841): the framework
 		// prints LANG_CMDPARSER_STRING_VALUE_INVALID +
-		// SetSentErrorMessage.
-		s.sendSysMessage("Invalid mute time.")
+		// SetSentErrorMessage — but only after the PlayerIdentifier
+		// leg, so resolve the name first: a token that names nobody
+		// (e.g. the `"John` fragment of `.mute "John Doe" 10`) fails
+		// as CHAR_NAME_NO_EXIST, and the minutes error is reported
+		// only when the player exists.
+		if _, _, _, ok := s.miscResolvePlayerTarget(ctx, nameArgs); ok {
+			s.sendSysMessage("Invalid mute time.")
+		}
 		return true
 	}
 	reason := "No reason."
