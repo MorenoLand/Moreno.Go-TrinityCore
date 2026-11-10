@@ -1238,6 +1238,67 @@ func (s *Server) removeCreatureAuraFromStack(key creatureAuraKey, spellID uint32
 	return false
 }
 
+// modCreatureAuraStacks mirrors Aura::ModStackAmount (SpellAuras.cpp:1030-1068)
+// for a creature aura: the stack count moves by delta, clamped on increase to
+// the stored DBC StackAmount (1 when the aura is not stackable), and the aura
+// is removed with mode when the count reaches zero or below. Amounts rescale
+// with the stack change and the client gets the stack update (the
+// removeCreatureAuraFromStack wire pattern); on increase the duration
+// refreshes (C++ refresh = new >= old -> RefreshTimers) without touching the
+// periodic tick phase (the expiry timer rearms, the tick scheduler is
+// separate). A casterGUID of 0 skips the caster match (the unfiltered GetAura
+// twin); otherwise the aura must belong to that caster (the
+// GetAura(spell, casterGUID) twin). Absent or stopped auras are a no-op,
+// like C++ calling ModStackAmount on a null Aura*.
+func (s *Server) modCreatureAuraStacks(key creatureAuraKey, spellID uint32, delta int32, mode auraRemoveMode, casterGUID uint64) {
+	if s == nil || key.GUID == 0 || spellID == 0 {
+		return
+	}
+	s.auraMu.Lock()
+	var aura *activeAura
+	if s.activeCreatureAuras != nil {
+		aura = s.activeCreatureAuras[key][spellID]
+	}
+	if aura == nil || aura.Stopped {
+		s.auraMu.Unlock()
+		return
+	}
+	if casterGUID != 0 && aura.CasterGUID != casterGUID {
+		s.auraMu.Unlock()
+		return
+	}
+	oldCount := uint32(auraWireStackCount(aura))
+	newCount := int32(oldCount) + delta
+	if delta > 0 {
+		maxStack := int32(aura.StackAmount)
+		if maxStack == 0 {
+			maxStack = 1
+		}
+		if newCount > maxStack {
+			newCount = maxStack
+		}
+	}
+	if newCount <= 0 {
+		s.auraMu.Unlock()
+		s.removeCreatureAuraWithMode(key, spellID, mode)
+		return
+	}
+	var slot uint8
+	var positive bool
+	var casterG uint64
+	slot, positive, casterG = aura.Slot, aura.Positive, aura.CasterGUID
+	aura.StackCount = uint8(newCount)
+	rescaleAuraAmountsByStack(aura, oldCount, uint32(newCount))
+	if uint32(newCount) >= oldCount && aura.DurationMs > 0 {
+		aura.RemainingMs = aura.DurationMs
+		aura.DurationUpdatedAt = time.Now()
+		(&luaAuraRef{server: s, spellID: spellID, creatureKey: key}).rearmAuraTimer(aura, aura.DurationMs)
+	}
+	s.auraMu.Unlock()
+	updatePkt := protocol.BuildAuraUpdateWithStack(key.GUID, casterG, slot, spellID, false, positive, 0, 0, 1, uint8(newCount))
+	s.broadcastToVisibleSetForCreature(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, key.Map, key.InstanceID, key.GUID)
+}
+
 // removePlayerAuraFromStack mirrors Unit::RemoveAuraFromStack
 // (Unit.cpp:3917) for a player aura: one stack comes off
 // (Aura::ModStackAmount(-1), SpellAuras.cpp:1030) and the aura is removed

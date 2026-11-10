@@ -51177,6 +51177,27 @@ func (s *session) handleEffectPullTowardsDest(target protocol.SpellTargetData, h
 // Brutallus Burn (45141/45151): a player hit target at or beyond the effect
 // radius without the Burn aura (46394) ignites via triggered 46394.
 // Wintergrasp RP-GG pickup (57347): a creature hit target is despawned.
+// modWyrmGripStacks modifies the grip aura (56689) on the vehicle the caster
+// rides — the Go twin of the C++ GetCaster()->GetAura(SPELL_GRIP) leg in the
+// wild-wyrm vehicle spells (zone_storm_peaks.cpp:1171-1229). C++ casts
+// vehicle-bar spells with the wyrm as caster; Go runs them as the player
+// (procs.go:3195), so the wyrm is the caster's VehicleGUID. No-op when the
+// caster rides nothing or the vehicle carries no grip aura.
+func (s *session) modWyrmGripStacks(delta int32, mode auraRemoveMode, matchCaster bool) {
+	if s == nil || s.player == nil || s.server == nil || s.player.VehicleGUID == 0 {
+		return
+	}
+	wyrm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+	if wyrm == nil {
+		return
+	}
+	casterGUID := uint64(0)
+	if matchCaster {
+		casterGUID = wyrm.GUID
+	}
+	s.server.modCreatureAuraStacks(creatureAuraKeyForMotion(wyrm), 56689, delta, mode, casterGUID)
+}
+
 // Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the
 // rolled effect value is destroyed. SpellScript script-effect arms with a
 // creature-cast twin in creatureEffectScriptEffect (boss_ai.go) also fire
@@ -51257,6 +51278,30 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		targetSess.castSpellDirect(ctx, 46394, targetGUID)
 	case 53209:
 		s.chimeraShotScriptEffect(ctx, targetGUID)
+	case 60533:
+		// spell_grab_on (zone_storm_peaks.cpp:1171-1198): OnEffectHitTarget
+		// EFFECT_0 SCRIPT_EFFECT — the caster's grip aura (56689) gains the
+		// effect-0 value in stacks (AURA_REMOVE_BY_DEFAULT, no periodic-timer
+		// reset). A Lua ev5 port would never fire: the player path has no
+		// OnEffectHitTarget site (runtime.go), and Go runs vehicle-bar casts
+		// as the player (procs.go:3195) while C++ casts them with the wyrm —
+		// hence the ridden-vehicle resolution in modWyrmGripStacks. The
+		// caster filter is the GetAura(SPELL_GRIP, casterGUID) twin.
+		// DORMANT until Spell.dbc ships the 60533 record.
+		s.modWyrmGripStacks(eff.CalcValueForLevel(spell, uint32(s.player.Level)), auraRemoveByDefault, true)
+	case 56690, 60586:
+		// spell_loosen_grip (zone_storm_peaks.cpp:1199-1229): OnEffectHitTarget
+		// EFFECT_1 SCRIPT_EFFECT — the caster's grip aura loses stacks
+		// (AURA_REMOVE_BY_EXPIRE): 5 for Thrust Spear (56690), 15 for Mighty
+		// Spear Thrust (60586), the template instantiations at :1486-1487.
+		// Same vehicle-caster translation as the Grab On leg above; no
+		// caster filter in C++ (plain GetAura). DORMANT until Spell.dbc ships
+		// the records.
+		stacks := int32(-5)
+		if spellID == 60586 {
+			stacks = -15
+		}
+		s.modWyrmGripStacks(stacks, auraRemoveByExpire, false)
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
 		// the hit target must be a creature; the caster must be a player
