@@ -64,8 +64,8 @@
 -- creature:IsWithinMeleeRange (lua_creature_events.go); the claw-loop
 -- isTargetableForAttack chain is ported (bridged on the player and
 -- handler-creature surfaces; C++ checkFakeDeath default true); the no-target
--- EnterEvadeMode arm has no
--- bridge — the sequence ends and the starter re-arms instead; the bear
+-- EnterEvadeMode arm is PORTED 2026-11-10 (boss_zuljin.cpp:471 claw /
+-- :521 lynx — no re-arm; evade cancels the timers); the bear
 -- overpower arm has no bridge — it keys off a dodged melee swing
 -- (AttackerStateUpdate health-unchanged check) with no per-swing Lua
 -- hook, so the 5s overpower cooldown is not modeled; the eagle energy-
@@ -261,8 +261,8 @@ end
 -- Shared claw-rage / lynx-rush 500ms loop (C++ Claw_Loop_Timer).
 -- claw: hits the current victim (random threat-list fallback) with
 -- triggered 43150, 12 hits; lynx: a random threat-list unit per jump with
--- triggered 43153, 9 hits. No-target ends the sequence (the C++
--- EnterEvadeMode arm has no bridge).
+-- triggered 43153, 9 hits. No-target evades (boss_zuljin.cpp:471 claw /
+-- :521 lynx, EnterEvadeMode bridge live 2026-11-08), no re-arm.
 local onSeqLoop
 local onClawRage
 local onLynxRush
@@ -285,19 +285,14 @@ onSeqLoop = function(creature, guid)
     else
         target = randomThreatTarget(creature)
     end
-    if target == nil or not creature:IsWithinMeleeRange(target) then
-        if target == nil then
-            st.sequence = nil
-            schedule(timers, guid, seq == "claw" and "clawrage" or "lynxrush",
-                math.random(15000, 20000), function()
-                    if seq == "claw" then
-                        onClawRage(creature, guid)
-                    else
-                        onLynxRush(creature, guid)
-                    end
-                end)
-            return
-        end
+    if target == nil then
+        -- C++ claw loop (boss_zuljin.cpp:471) / lynx loop (:521):
+        -- no target -> EnterEvadeMode + return, no re-arm (the evade
+        -- cancels the sequence timers via ev23/ev2).
+        creature:EnterEvadeMode()
+        return
+    end
+    if not creature:IsWithinMeleeRange(target) then
         schedule(timers, guid, "seqloop", 500, function()
             onSeqLoop(creature, guid)
         end)

@@ -52,8 +52,10 @@
 -- instance-script model — boss admission via the luaBossAI shim (a
 -- no-op BossAI slot; the SetBossState legs are ported below via
 -- creature:SetBossState, bridge live 2026-11-05), and
--- the EnterEvadeMode gong-flag arm is skipped (no EnterEvadeMode bridge;
--- instance GO lookup unbridged); no threat model — mark-of-arlokk target is a random alive
+-- the EnterEvadeMode evade-override legs are PORTED 2026-11-10 in
+-- arlokkLeaveCombat (gong-flag clear via the GetGameObjectsInGrid twin
+-- of the instance GO lookup + DespawnOrUnsummon(4s); ev2 fires on
+-- evade only, never on death/spawn); no threat model — mark-of-arlokk target is a random alive
 -- player (victim fallback); the vanish ResetThreatList arm IS
 -- ported (:285 — ResetAllThreat bridged); equipment PORTED
 -- via creature:SetEquipmentSlots (lua_creature_events.go:451, 2026-10-22):
@@ -396,8 +398,19 @@ local function arlokkEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ boss_arlokkAI::EnterEvadeMode override (boss_arlokk.cpp:163-170):
+-- BossAI::EnterEvadeMode, then the gong's NOT_SELECTABLE flag is
+-- cleared and the boss despawns in 4s. The ev2 hook is the exact seat:
+-- Go fires ev2 only from triggerCreatureEvade (wasInCombat), never on
+-- death (death fires ev23+ev4) or spawn — so the legs run on evade
+-- only, matching the C++ override. The instance GO lookup has no
+-- bridge; the grid scan is its twin (entry 180526 is fight-unique).
 local function arlokkLeaveCombat(event, creature)
     arlokkResetState(creature:GetGUIDLow())
+    for _, go in ipairs(creature:GetGameObjectsInGrid(GO_GONG_OF_BETHEKK, 150)) do
+        go:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+    end
+    creature:DespawnOrUnsummon(4000)
 end
 
 -- C++ JustDied (boss_arlokk.cpp:121-123): _JustDied() first, writing
@@ -490,7 +503,8 @@ RegisterCreatureEvent(ENTRY_PROWLER, 23, prowlerReset)
 -- no JustSummoned arm, so the player summoner's no-event-19 fire matches
 -- C++; type 3 TIMED_DESPAWN_OUT_OF_COMBAT, 10min). C++ returns true
 -- (handled) == Lua true (brazier polarity). The EnterEvadeMode gong-flag
--- arm stays out (no EnterEvadeMode bridge; instance GO lookup unbridged).
+-- arm is ported in arlokkLeaveCombat (grid-scan twin of the instance
+-- GO lookup).
 local function onGongGossip(_, player, go)
     go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
     go:SendCustomAnim(0)

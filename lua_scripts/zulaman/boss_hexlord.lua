@@ -51,22 +51,23 @@
 -- 8 once (C++ RandomResize) and Reset's SpawnAdds respawns the missing/
 -- dead ones at (Pos_X[i], 921.2795, 33.8883, 1.5696)
 -- (TEMPSUMMON_DEAD_DESPAWN, Lua type 6); a living add's
--- EnterEvadeMode+reposition+StopMoving leg has no
--- EnterEvadeMode/UpdatePosition bridge, so living adds stay in place.
+-- EnterEvadeMode+reposition+StopMoving leg is ported below
+-- (creature:EnterEvadeMode, bridge live 2026-11-08; Teleport is the
+-- UpdatePosition twin, StopMoving bridged).
 -- The eight adds' class AIs are registered in this file so the summons
 -- fight.
 -- Deviations from C++: JustEngagedWith's add AttackStart arm, the 5s
 -- CheckAddState re-engage arm, and JustDied's add KillSelf arm are
--- PORTED 2026-10-24 via EngageWithTarget / creature:Kill() (the
--- EnterEvadeMode fallback on a missing/dead add still has no bridge,
--- so a missing add is skipped and the remaining adds still engage);
--- the 5s ResetTimer room-
--- check EnterEvadeMode has no bearer; the add base AI's
--- GetBossState(IN_PROGRESS) evade gate stays out — GetBossState is
--- bridged (lua_creature_events.go:5936) but the gate's EnterEvadeMode
--- leg has no bridge, so the read has no bearer; its DoZoneInCombat arm
--- is ported below (bridge live 2026-10-23); the SiphonSoul !target/!trigger EnterEvadeMode arm has no
--- bridge, so a missing siphon target is a no-op; the shadow-priest
+-- PORTED 2026-10-24 via EngageWithTarget / creature:Kill(); the
+-- JustEngagedWith EnterEvadeMode fallback on a missing/dead add is
+-- PORTED 2026-11-10 (evade + break, bridge live 2026-11-08); the 5s
+-- ResetTimer room-check EnterEvadeMode is PORTED 2026-11-10 (point-form
+-- GetDistance + combat-reach twin of IsWithinDist3d); the add base
+-- AI's GetBossState(IN_PROGRESS) evade gate is PORTED 2026-11-10 via
+-- a 1s poll (GetBossState bridged, lua_creature_events.go:6624); its
+-- DoZoneInCombat arm is ported below (bridge live 2026-10-23); the
+-- SiphonSoul !target/!trigger EnterEvadeMode arm is PORTED 2026-11-10
+-- (no-target / failed-trigger-summon evades, no re-arm); the shadow-priest
 -- HasSpell(15473) redirect is ported via the player:HasSpell bridge;
 -- the C++ druid PlayerClass special case (class 11 -> index 11 of
 -- the 10-row table) is genuine out-of-bounds upstream — Lua guards it
@@ -329,9 +330,9 @@ end
 -- target (MoveChase stays out: no motion bridge, so the trigger stands
 -- at the boss close point instead of chasing the boss), record class
 -- and GUID, arm the ability cycle {8s,10s}; the siphon timer then
--- stays disarmed (99999) until the next spirit bolts. Nil-summon
--- fallback keeps the old boss-direct cast (C++ would EnterEvadeMode
--- on a failed spawn; no evade bridge).
+-- stays disarmed (99999) until the next spirit bolts. No-target /
+-- failed-summon evades (boss_hexlord.cpp:424-428, EnterEvadeMode
+-- bridge live 2026-11-08), no re-arm.
 onSiphonSoul = function(creature, guid)
     local target = randomThreatPlayerInRange(creature, 70)
     if target then
@@ -341,7 +342,10 @@ onSiphonSoul = function(creature, guid)
             trigger:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             trigger:CastSpell(target, SPELL_SIPHON_SOUL, true)
         else
-            creature:CastSpell(target, SPELL_SIPHON_SOUL, true)
+            -- C++ SiphonSoul (boss_hexlord.cpp:424-428): !trigger ->
+            -- EnterEvadeMode + return, no re-arm (bridge live 2026-11-08).
+            creature:EnterEvadeMode()
+            return
         end
         local pc = target:GetClass() - 1
         if pc == 10 then
@@ -355,6 +359,10 @@ onSiphonSoul = function(creature, guid)
         schedule(timers, guid, "ability", math.random(8000, 10000), function()
             onAbility(creature, guid)
         end)
+    else
+        -- C++ SiphonSoul (boss_hexlord.cpp:424-428): !target ->
+        -- EnterEvadeMode + return, no re-arm (bridge live 2026-11-08).
+        creature:EnterEvadeMode()
     end
 end
 
@@ -405,9 +413,17 @@ local function hexlordEnterCombat(event, creature, target)
     state[guid] = { drainDeadline = os.time() + 60, playerClass = nil, playerGuid = nil }
     creature:Talk(YELL_AGGRO)
     -- C++ JustEngagedWith (boss_hexlord.cpp:290-300): each picked add
-    -- engages the boss's victim (EnterEvadeMode fallback stays out —
-    -- no bridge — so a missing add is skipped, see engagePickedAdds).
-    engagePickedAdds(creature, target or creature:GetVictim())
+    -- engages the boss's victim; a missing/dead add evades the boss
+    -- (EnterEvadeMode + break, bridge live 2026-11-08) — no timers
+    -- arm after the evade, see engagePickedAdds.
+    if engagePickedAdds(creature, target or creature:GetVictim()) then
+        return
+    end
+    -- C++ ResetTimer = 5000 (boss_hexlord.cpp:371-381): every 5s the
+    -- boss within 10 yd of (119.223, 1035.45, 29.4481) evades.
+    schedule(timers, guid, "roomcheck", 5000, function()
+        onRoomCheck(creature, guid)
+    end)
     -- C++ CheckAddState_Timer = 5000 (boss_hexlord.cpp:383-390).
     schedule(timers, guid, "checkadds", 5000, function()
         checkAddState(creature, guid)
@@ -474,24 +490,46 @@ hexlordAddIds = {}
 -- EnterEvadeMode + break. The grid scan stands in for AddGUID[]
 -- (no GUID->creature bridge); the 150 yd scan is wider than Reset's
 -- 60 yd so boss-to-add distance cannot hide an add (the eight add
--- entries are fight-unique, so no false positives). The evade leg
--- has no bridge: a missing/dead add is skipped and the remaining
--- alive adds still engage instead of breaking.
+-- entries are fight-unique, so no false positives). Returns true
+-- when the evade leg fired, so the caller arms no timers after it
+-- (bridge live 2026-11-08).
 engagePickedAdds = function(creature, victim)
     if victim == nil then
-        return
+        return false
     end
     local ids = hexlordAddIds[creature:GetGUIDLow()]
     if not ids then
-        return
+        return false
     end
     for _, entry in ipairs(ids) do
+        local alive = false
         for _, add in ipairs(creature:GetCreaturesInGrid(entry, 150)) do
             if not add:IsDead() then
+                alive = true
                 add:EngageWithTarget(victim)
             end
         end
+        if not alive then
+            creature:EnterEvadeMode()
+            return true
+        end
     end
+    return false
+end
+
+-- C++ ResetTimer room check (boss_hexlord.cpp:371-381): every 5s, if the
+-- boss is within 10 yd of (119.223, 1035.45, 29.4481) it evades with no
+-- re-arm (the evade cancels the timers). IsWithinDist3d's twin:
+-- point-form GetDistance <= 10 + GetCombatReach()
+-- (Object.cpp:1213-1216: IsWithinDist3d adds the combat reach).
+onRoomCheck = function(creature, guid)
+    if creature:GetDistance(119.223, 1035.45, 29.4481) <= 10 + creature:GetCombatReach() then
+        creature:EnterEvadeMode()
+        return
+    end
+    schedule(timers, guid, "roomcheck", 5000, function()
+        onRoomCheck(creature, guid)
+    end)
 end
 
 -- C++ CheckAddState (boss_hexlord.cpp:383-390): every 5s, each picked
@@ -531,10 +569,9 @@ local function hexlordReset(event, creature)
     -- (TEMPSUMMON_DEAD_DESPAWN, Lua type 6) when the add is missing or
     -- dead (a dead add is set DEAD first — the corpse is swept here by
     -- entry); a living add gets EnterEvadeMode + reposition +
-    -- StopMoving — the reposition/StopMoving legs are ported via
-    -- grid-add Teleport + StopMoving (Teleport is the NearTeleportTo
-    -- twin: UpdatePosition + spline clear; EnterEvadeMode itself has
-    -- no bridge, so threat/combat state is untouched).
+    -- StopMoving — ported below via creature:EnterEvadeMode (bridge
+    -- live 2026-11-08) + Teleport (the NearTeleportTo twin:
+    -- UpdatePosition + spline clear) + StopMoving.
     -- Timers re-arm on the next combat.
     if hexlordAddIds[guid] == nil then
         local pool = {24240, 24241, 24242, 24243, 24244, 24245, 24246, 24247}
@@ -570,6 +607,7 @@ local function hexlordReset(event, creature)
         else
             for _, add in ipairs(creature:GetCreaturesInGrid(entry, 60)) do
                 if not add:IsDead() then
+                    add:EnterEvadeMode()
                     add:Teleport(HEXLORD_SPAWN_X[i], HEXLORD_SPAWN_Y, HEXLORD_SPAWN_Z, HEXLORD_SPAWN_O)
                     add:StopMoving()
                 end
@@ -584,13 +622,13 @@ RegisterCreatureEvent(ENTRY_HEXLORD, 3, hexlordTargetDied)
 RegisterCreatureEvent(ENTRY_HEXLORD, 4, hexlordDied)
 RegisterCreatureEvent(ENTRY_HEXLORD, 23, hexlordReset)
 
--- The eight hexlord adds. The base boss_hexlord_addAI contributes only
--- the GetBossState(IN_PROGRESS) evade gate stays out — GetBossState is
--- bridged (lua_creature_events.go:5936) but the gate's EnterEvadeMode leg
--- has no bridge — its DoZoneInCombat is ported in addEnterCombat
--- below (bridge live 2026-10-23) — so each add is just its C++ cast
--- timers; melee is engine-driven. Table-driven: each arm is first delay,
--- repeat range, and fire closure.
+-- The eight hexlord adds. The base boss_hexlord_addAI's
+-- GetBossState(IN_PROGRESS) evade gate is ported below as a 1s poll
+-- in addEnterCombat (GetBossState bridged, lua_creature_events.go:6624;
+-- EnterEvadeMode bridge live 2026-11-08); its DoZoneInCombat is ported
+-- in addEnterCombat below (bridge live 2026-10-23) — so each add is
+-- its C++ cast timers plus the gate poll; melee is engine-driven.
+-- Table-driven: each arm is first delay, repeat range, and fire closure.
 
 local ADD_ARMS = {
     [ENTRY_THURG] = {
@@ -702,10 +740,27 @@ addArmFire = function(creature, guid, arm)
     end)
 end
 
+-- C++ boss_hexlord_addAI::UpdateAI (boss_hexlord.cpp:228-234): while
+-- the boss state is not IN_PROGRESS the add evades; the 1s poll is
+-- the UpdateAI-tick twin (the boss-state read returns TO_BE_DECIDED 5
+-- when unset, so the gate also fires before the first pull).
+local function checkAddBossState(creature, guid)
+    if creature:GetBossState(4) ~= 1 then
+        creature:EnterEvadeMode()
+        return
+    end
+    schedule(timers, guid, "bossstate", 1000, function()
+        checkAddBossState(creature, guid)
+    end)
+end
+
 local function addEnterCombat(event, creature)
     creature:DoZoneInCombat() -- boss_hexlord.cpp:227 (boss_hexlord_addAI::JustEngagedWith sole arm; bridge live 2026-10-23)
     local guid = creature:GetGUIDLow()
     cancelTimers(timers, guid)
+    schedule(timers, guid, "bossstate", 1000, function()
+        checkAddBossState(creature, guid)
+    end)
     local arms = ADD_ARMS[creature:GetEntry()]
     if arms then
         for _, arm in ipairs(arms) do
