@@ -67,9 +67,10 @@
 -- Rides the baltharus CreateLuaEvent convention (timers table
 -- keyed by GUID, cancelled on events 2/4/23); the C++
 -- Boss UpdateAI CASTING gates (boss_kologarn.cpp pre-loop :251
--- + in-loop :315) PORTED as a 500ms IsCasting defer in
--- focusedEyebeam/enrage/meleeCheck ticks (mal_ganis idiom;
--- IsCasting live, lua_creature_events.go:1950) — the stale
+-- + in-loop :315) PORTED as a 500ms IsCasting defer in all
+-- seven cast ticks (focusedEyebeam/enrage/meleeCheck/smash/
+-- sweep/stoneShout/stoneGrip) (mal_ganis idiom; IsCasting
+-- live, lua_creature_events.go:1950) — the stale
 -- "gate has no bridge" claim is retracted.
 -- EVENT_FOCUSED_EYEBEAM — DoCast(me,
 -- SPELL_SUMMON_FOCUSED_EYEBEAM 63342, true) (cpp:305-311) =

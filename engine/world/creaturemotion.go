@@ -7942,13 +7942,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				})
 			}
 			schoolMask := uint8(1)
-			damage, hasDBCSpell := uint32(0), false
+			damage, leechDamage, hasDBCSpell := uint32(0), uint32(0), false
 			if s != nil && s.Data != nil {
 				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
 					if spellInfo.SchoolMask != 0 {
 						schoolMask = uint8(spellInfo.SchoolMask)
 					}
-					damage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false)
+					damage, leechDamage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false)
 				}
 			}
 			if !hasDBCSpell {
@@ -8287,9 +8287,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// The nil session rides as the twin's vehicle (its share
 				// leg is nil-guarded, like the area-creature call below).
 				if target.Sess == nil && s.findCreatureMotion(motion.Map, motion.InstanceID, target.GUID) != nil {
-					s.applyInlineCreatureSpellHitCreature(ctx, motion, target.GUID, spellID, damage, schoolMask, target.Sess)
+					s.applyInlineCreatureSpellHitCreature(ctx, motion, target.GUID, spellID, damage, leechDamage, schoolMask, target.Sess)
 				} else {
-					s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, schoolMask, now)
+					s.applyInlineCreatureSpellHit(ctx, motion, target, spellID, damage, leechDamage, schoolMask, now)
 				}
 			}
 			for _, areaHit := range areaHits {
@@ -8301,7 +8301,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						continue
 					}
 				}
-				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, schoolMask, now)
+				s.applyInlineCreatureSpellHit(ctx, motion, areaHit, spellID, damage, leechDamage, schoolMask, now)
 			}
 			// Area-selected creatures take their own damage leg (the new
 			// creature-victim twin in creature_area_targets.go); reflected,
@@ -8315,7 +8315,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 						continue
 					}
 				}
-				s.applyInlineCreatureSpellHitCreature(ctx, motion, areaCreatureGUID, spellID, damage, schoolMask, target.Sess)
+				s.applyInlineCreatureSpellHitCreature(ctx, motion, areaCreatureGUID, spellID, damage, leechDamage, schoolMask, target.Sess)
 			}
 			// Reflect return trips (Spell.cpp:2350, 7740-7743): with
 			// ReflectResult == NONE the reflected spell's effects land on the
@@ -8326,7 +8326,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if trip.status != protocol.SpellMissNone {
 					continue
 				}
-				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, inlineSpell, damage, schoolMask)
+				s.applyInlineReflectReturnTrip(ctx, motion, trip.victim, inlineSpell, damage, leechDamage, schoolMask)
 			}
 			// Creature reflect trips land on the motion through the same
 			// core (applyInlineCreatureReflectReturnTrip): a non-NONE
@@ -8337,7 +8337,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if trip.status != protocol.SpellMissNone {
 					continue
 				}
-				s.applyInlineCreatureReflectReturnTrip(ctx, motion, trip.guid, inlineSpell, damage, schoolMask, target.Sess)
+				s.applyInlineCreatureReflectReturnTrip(ctx, motion, trip.guid, inlineSpell, damage, leechDamage, schoolMask, target.Sess)
 			}
 			// Spell::_cast spell_linked tail (Spell.cpp:3503-3512) +
 			// "Handle procs on cast" tail (:3525-3545), the inline-path
@@ -10449,8 +10449,8 @@ func (s *Server) scaledEffectValue(spell wotlk.Spell, effect wotlk.SpellEffect, 
 	return value
 }
 
-func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool) (uint32, bool) {
-	var damage uint32
+func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool) (uint32, uint32, bool) {
+	var damage, leechDamage uint32
 	found := false
 	for _, effect := range spell.Effects {
 		switch effect.Effect {
@@ -10471,10 +10471,11 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 			// leech CalcValue and a mixed spell deals school + leech.
 			// Without this case a pure-leech creature spell dealt and
 			// healed nothing (found=false early-returns the damage arms).
-			// Heal-basis delta: leechDealt downstream is now the
-			// combined actually-lost total, while C++ heals the
-			// actually-lost leech damage only — exact for leech-only
-			// spells; per-effect tracking is needed for mixed spells.
+			// The leech share is returned separately: the heal basis is
+			// the leech effect's own damage actually lost
+			// (SpellEffects.cpp:1539-1540), not the combined total —
+			// leechHealBasis scales each site's post-mitigation damage
+			// by this share, exact (share 1) for leech-only spells.
 			found = true
 			value := effect.CalcValueForLevel(spell, casterLevel)
 			if value > 0 {
@@ -10482,11 +10483,37 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 				if s != nil {
 					scale = s.npcEffectValueScale(spell, effect, casterLevel, controlledByPlayer)
 				}
-				damage += uint32(float64(value) * scale)
+				scaled := uint32(float64(value) * scale)
+				damage += scaled
+				if effect.Effect == spellEffectHealthLeech {
+					leechDamage += scaled
+				}
 			}
 		}
 	}
-	return damage, found
+	return damage, leechDamage, found
+}
+
+// leechHealBasis scales a post-mitigation damage total down to the leech
+// effect's share of it (Spell::EffectHealthLeech, SpellEffects.cpp:1513-1553:
+// the caster heals for the leech effect's own damage actually lost, times
+// CalcValueMultiplier — not the whole spell's). C++ mitigates each effect's
+// damage separately through the same school's legs (Spell.cpp:5165 resets
+// damage = CalculateDamage(i) per effect), while Go runs one combined
+// pipeline, so the leech share of the combined base is the faithful basis
+// inside this model. Overkill is excluded via the victim-health cap.
+func leechHealBasis(damage, leechBase, totalBase, victimHealth uint32) uint32 {
+	if leechBase == 0 || totalBase == 0 {
+		return 0
+	}
+	dealt := damage
+	if leechBase < totalBase {
+		dealt = uint32(float64(damage) * float64(leechBase) / float64(totalBase))
+	}
+	if dealt > victimHealth {
+		dealt = victimHealth
+	}
+	return dealt
 }
 
 func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {

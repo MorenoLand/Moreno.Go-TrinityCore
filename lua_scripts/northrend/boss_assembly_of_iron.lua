@@ -38,7 +38,9 @@
 -- RemoveAllAuras() added to the three event-23 Reset handlers
 -- (bridge exists at engine/world/lua_creature_events.go:166);
 -- the UNIT_STATE_CASTING gates PORTED as a 500ms IsCasting
--- defer in all 7 ported ticks (steelbreaker pre-loop :241 +
+-- defer in all 13 ported ticks (berserk x3 + fusion punch +
+-- shield of runes + overload + chain lightning + the 6
+-- phase-gated arms ported later; steelbreaker pre-loop :241 +
 -- in-loop :270, molgeim :386/:438, brundir :565/:653;
 -- mal_ganis idiom, IsCasting live lua_creature_events.go:1950
 -- — the stale "bridged-but-false" claim is retracted); every

@@ -1808,7 +1808,12 @@ func (s *Server) creatureRefCenteredAreaTargets(ctx context.Context, motion *cre
 // (Spell.cpp:3503-3512). In C++ these run inside DoTargetSpellHit for every
 // target SelectImplicitAreaTargets (Spell.cpp:1227) selected — not just the
 // wire victim — which is why this helper exists separately from the cast.
-func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatureMotion, p *playerPos, spellID, damage uint32, schoolMask uint8, now time.Time) {
+func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatureMotion, p *playerPos, spellID, damage, leechBase uint32, schoolMask uint8, now time.Time) {
+	// leechBase is the leech effect's share of the incoming base damage
+	// (creatureSpellDamage); totalBase below is that base total, captured
+	// before the pipeline mutates damage, so the heal basis at the end
+	// scales the post-mitigation damage to the leech effect's own share.
+	totalBase := damage
 	// Spell::EffectSchoolDMG (SpellEffects.cpp:785): the victim-side taken
 	// pct legs run on every inline spell hit, ahead of the taken-mitigation
 	// block — Unit::SpellDamageBonusTaken (Unit.cpp:7052). The caster is a
@@ -2065,10 +2070,7 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 		p.Sess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 		victimHealth := p.Sess.player.Health
 		if !godNegated {
-			leechDealt = damage
-			if leechDealt > victimHealth {
-				leechDealt = victimHealth
-			}
+			leechDealt = leechHealBasis(damage, leechBase, totalBase, victimHealth)
 		}
 		// Duel defeat (Unit.cpp:825-853, 957-973): a charmed creature's
 		// spell lands as a duel defeat when its charmer is the duel
@@ -2306,10 +2308,15 @@ func (s *Server) applyInlineCreatureSpellHit(ctx context.Context, motion *creatu
 // lookup uses the same vehicle. A damage-immune victim takes nothing and
 // sends no log (DoDamageAndTriggers' first arm, Spell.cpp:2538) but still
 // runs the proc/stand-up/hook/trigger tail, like the return trip.
-func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion *creatureMotion, victimGUID uint64, spellID, damage uint32, schoolMask uint8, vehicle *session) {
+func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion *creatureMotion, victimGUID uint64, spellID, damage, leechBase uint32, schoolMask uint8, vehicle *session) {
 	if s == nil || motion == nil || victimGUID == 0 || victimGUID == motion.GUID {
 		return
 	}
+	// leechBase is the leech effect's share of the incoming base damage
+	// (creatureSpellDamage); totalBase below is that base total, captured
+	// before the pipeline mutates damage, so the heal basis below scales
+	// the post-mitigation damage to the leech effect's own share.
+	totalBase := damage
 	victim := s.findCreatureMotion(motion.Map, motion.InstanceID, victimGUID)
 	if victim == nil || victim.Health == 0 {
 		return
@@ -2458,10 +2465,7 @@ func (s *Server) applyInlineCreatureSpellHitCreature(ctx context.Context, motion
 	// before the health mutation below.
 	leechDealt := uint32(0)
 	if !damageImmune {
-		leechDealt = damage
-		if leechDealt > victimHealth {
-			leechDealt = victimHealth
-		}
+		leechDealt = leechHealBasis(damage, leechBase, totalBase, victimHealth)
 	}
 	overkill := uint32(0)
 	var killed bool
@@ -3461,10 +3465,15 @@ type inlineReflectReflector struct {
 // reuses the same value. Deviation: C++ delivers the return trip 1.5x TimeDelay
 // after the outbound missile (Spell.cpp:2184); Go lands it synchronously like
 // the pet-path bridge.
-func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, damage uint32, schoolMask uint8, reflector inlineReflectReflector) {
+func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *creatureMotion, spell wotlk.Spell, damage, leechBase uint32, schoolMask uint8, reflector inlineReflectReflector) {
 	if s == nil || motion == nil {
 		return
 	}
+	// leechBase is the leech effect's share of the incoming base damage
+	// (creatureSpellDamage); totalBase below is that base total, captured
+	// before the pipeline mutates damage, so the heal basis below scales
+	// the post-mitigation damage to the leech effect's own share.
+	totalBase := damage
 	// Spell::TargetInfo::DoDamageAndTriggers (Spell.cpp:2609-2617,
 	// 2639-2650) on the return trip: the stand-up arm fires on
 	// TargetInfo::unit — the reflector, not _spellHitTarget (the
@@ -3703,10 +3712,7 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 				break
 			}
 		}
-		leechDealt := damage
-		if leechDealt > motion.Health {
-			leechDealt = motion.Health
-		}
+		leechDealt := leechHealBasis(damage, leechBase, totalBase, motion.Health)
 		if leechDealt > 0 {
 			modOwner := s.spellModOwnerSession(motion.Map, motion.InstanceID, motion.GUID)
 			multiplier := calcValueMultiplier(spell, leechIdx, modOwner)
@@ -3975,11 +3981,11 @@ func (s *Server) applyInlineReflectReturnTripCore(ctx context.Context, motion *c
 // friendly gate rides the path (the tick only casts hostile AI spells at its
 // attack victim), as on the direct hit. The log goes to the reflector's
 // session and fans out nearby; a lethal trip credits the reflector's session.
-func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spell wotlk.Spell, damage uint32, schoolMask uint8) {
+func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflector *playerPos, spell wotlk.Spell, damage, leechBase uint32, schoolMask uint8) {
 	if s == nil || motion == nil || reflector == nil {
 		return
 	}
-	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, schoolMask, inlineReflectReflector{
+	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, leechBase, schoolMask, inlineReflectReflector{
 		standUp: func() {
 			if spell.ID != 0 && (!spellIsPositive(spell) || spellHasEffect(spell, spellEffectDispel)) {
 				if reflector.Sess != nil && reflector.Sess.player != nil && reflector.Sess.player.StandState != 0 {
@@ -4015,11 +4021,11 @@ func (s *Server) applyInlineReflectReturnTrip(ctx context.Context, motion *creat
 // nothing up); the log fans out via broadcastToInstance; no kill credit (a
 // creature reflector credits no player); the share leg runs through the wire
 // victim's session as vehicle, like the creature-victim twin.
-func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflectorGUID uint64, spell wotlk.Spell, damage uint32, schoolMask uint8, vehicle *session) {
+func (s *Server) applyInlineCreatureReflectReturnTrip(ctx context.Context, motion *creatureMotion, reflectorGUID uint64, spell wotlk.Spell, damage, leechBase uint32, schoolMask uint8, vehicle *session) {
 	if s == nil || motion == nil || reflectorGUID == 0 {
 		return
 	}
-	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, schoolMask, inlineReflectReflector{
+	s.applyInlineReflectReturnTripCore(ctx, motion, spell, damage, leechBase, schoolMask, inlineReflectReflector{
 		standUp: func() {
 			if spell.ID == 0 || (spellIsPositive(spell) && !spellHasEffect(spell, spellEffectDispel)) {
 				return

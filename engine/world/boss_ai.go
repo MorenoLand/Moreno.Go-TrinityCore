@@ -3720,7 +3720,8 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// combat spells, Lua CastSpell, boss-AI direct casts, and
 	// trigger/spell_linked casts, which previously dealt nothing here.
 	// EffectHealthLeech (SpellEffects.cpp:1513) rides the damage arms'
-	// actually-lost total. Placed after the aura arm (C++ applies aura
+	// leech effect's share of the actually-lost total (leechHealBasis).
+	// Placed after the aura arm (C++ applies aura
 	// effects before DoDamageAndTriggers deals the damage) and ahead of
 	// the linked tail, matching the other effect-grouped arms above.
 	// Gated on spellKnown like the tail.
@@ -9394,7 +9395,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 	if s == nil || m == nil {
 		return 0, nil
 	}
-	baseDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
+	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
 	if !found {
 		return 0, nil
 	}
@@ -9556,10 +9557,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		if !damageImmune {
 			godNegated := vs.godCheatActive()
 			if !godNegated {
-				leechDealt = damage
-				if leechDealt > vs.player.Health {
-					leechDealt = vs.player.Health
-				}
+				leechDealt = leechHealBasis(damage, baseLeechDamage, baseDamage, vs.player.Health)
 			}
 			if !godNegated && damage > 0 {
 				damage = s.splitDamageToCaster(ctx, guid, true, creatureAuraKey{}, m.GUID, damage, uint32(schoolMask))
@@ -9652,7 +9650,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 	if s == nil || m == nil {
 		return 0, nil
 	}
-	baseDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
+	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
 	if !found {
 		return 0, nil
 	}
@@ -9813,10 +9811,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		}
 		leechDealt := uint32(0)
 		if !damageImmune {
-			leechDealt = damage
-			if leechDealt > victimHealth {
-				leechDealt = victimHealth
-			}
+			leechDealt = leechHealBasis(damage, baseLeechDamage, baseDamage, victimHealth)
 		}
 		if damage > 0 {
 			damage = s.splitDamageToCaster(ctx, guid, false, victimKey, m.GUID, damage, uint32(schoolMask))
@@ -19931,9 +19926,12 @@ func init() {
 	// DoPlaySoundToSet 15476 +
 	// SendEncounterUnit disengage + HandleCats(false) grid
 	// despawn — no Talk arms; the sound, disengage and
-	// HandleCats(false) legs port, event 4 registered); the UpdateAI event machine's remaining legs
-	// (EVENT_SWARNING_GUARDIAN random-target DoCast 64396 25-45s
-	// + summon leg — no target-search / summon bridges);
+	// HandleCats(false) legs port, event 4 registered);
+	// EVENT_SWARNING_GUARDIAN random-target DoCast 64396
+	// {25s,45s} PORTED (randomThreatPlayerSkipFirst + CastSpell,
+	// 51s init; the summon is the spell's own effect, so no
+	// summon bridge is needed — the old "no target-search /
+	// summon bridges" claim was stale);
 	// npc_sanctum_sentry remaining legs (Reset self-buff 64369
 	// one-shot; EVENT_SAVAGE_POUNCE random-target CatsTargetSelector
 	// leg; SetWalk legs; JustDied DoAction(ACTION_CRAZY_CAT_LADY)
@@ -20334,25 +20332,28 @@ func init() {
 	// _JustDied() SetBossState(DONE) PORTED tick 258 (last-death gated);
 	// RemoveAllAuras() on the event-23 Reset handlers (the
 	// _Reset() SetBossState(NOT_STARTED) leg PORTED tick 258
-	// (GetBossState-gated, ev23 x3); phase legs have no bridges).
+	// (GetBossState-gated, ev23 x3); phase legs ride the
+	// assemblyPhase table, PORTED tick 474).
 	// Documented-only (no bridges): DoAction
-	// ACTION_SUPERCHARGE 1 / ACTION_ADD_CHARGE 2 — the phase
-	// machine and the death-cascade never advance, so static
-	// disruption / overwhelming power / rune of death / rune of
-	// summoning / lightning whirl / tendrils flight machine stay
-	// unfired (C++-exact for the reachable phase-1 state — the
-	// gothik precedent); GetData(DATA_PHASE_3) + the
-	// achievement_assembly_i_choose_you OnCheck; EVENT_RUNE_OF_
-	// POWER (random alive ally via instance GUIDs — note the
-	// C++ case-2 DATA_STEELBREAKER copy-paste quirk);
-	// EVENT_MOVE_POSITION + the tendrils flight/land/ground
-	// machine (no motion/hover bridges); the DONE-branch kill
-	// credit (GetBossState bridge live; DONE branch PORTED tick 258
-	// via last-death grid-sweep gate); the three spell
-	// scripts (no AuraScript/SpellScript bridges); the
+	// ACTION_ADD_CHARGE 2 (SpellScript sender, no bridge —
+	// unported-DoAction-sender queue); EVENT_MOVE_POSITION +
+	// the tendrils flight/land/ground machine (no motion/hover
+	// bridges); the three spell scripts (no AuraScript/
+	// SpellScript bridges). PORTED tick 474: the
+	// ACTION_SUPERCHARGE relay + phase machine (JustDied
+	// grid-sweep relay superchargeSurvivors, assemblyPhase
+	// table, phase >= 2/3 reschedules live for static
+	// disruption / overwhelming power / rune of death / rune
+	// of summoning / lightning whirl); GetData(DATA_PHASE_3) +
+	// achievement_assembly_i_choose_you OnCheck PORTED tick
+	// 417; EVENT_RUNE_OF_POWER PORTED as runeOfPowerTick
+	// (urand ally pick incl. the C++ case-2 quirk, 20s init,
+	// 1min repeat, supercharge reschedule 25s); the DONE-branch
+	// kill credit (GetBossState bridge live; DONE branch PORTED
+	// tick 258 via last-death grid-sweep gate).
 	// Cast-state gates PORTED: steelbreaker pre-loop :241 +
 	// in-loop :270, molgeim :386/:438, brundir :565/:653
-	// CASTING gates as 500ms IsCasting defer in all 7 ported
+	// CASTING gates as 500ms IsCasting defer in all 13 ported
 	// ticks (mal_ganis idiom; stale bridged-but-false claim
 	// retracted — IsCasting live lua_creature_events.go:1950).
 	RegisterLuaBoss("boss_steelbreaker", 32867)

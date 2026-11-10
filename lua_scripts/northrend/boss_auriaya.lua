@@ -51,7 +51,7 @@
 -- EVENT_ACTIVATE_DEFENDER (:252-253) — DoCastSelf
 -- (SPELL_ACTIVATE_DEFENDER 64449) 2-arg non-triggered, fires 2s
 -- after SUMMON_DEFENDER, no re-arm.
--- EVENT_SWARMING_GUARDIAN (:255-258) — SelectTarget(Random, 1,
+-- EVENT_SWARNING_GUARDIAN (:255-258) — SelectTarget(Random, 1,
 -- 0.0f, true) -> randomThreatPlayerSkipFirst (UnitAI.h: skip the
 -- first MaxThreat-order entry BEFORE the player/alive filter, then
 -- random over threat-list players alive, 0.0f unlimited),
@@ -315,7 +315,7 @@ local function summonDefenderTick(creature, guid)
     end)
 end
 
--- C++ EVENT_SWARMING_GUARDIAN (:255-258): SelectTarget(Random, 1,
+-- C++ EVENT_SWARNING_GUARDIAN (:255-258): SelectTarget(Random, 1,
 -- 0.0f, true) -> randomThreatPlayerSkipFirst(creature), nil-guarded pick
 -- (C++ `if` — skip cast on nil); DoCast 2-arg = non-triggered ->
 -- CastSpell(target, SPELL_SUMMON_SWARMING_GUARDIAN 64396); re-arm
