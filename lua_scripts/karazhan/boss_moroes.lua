@@ -24,8 +24,12 @@
 -- Locations[i] (CORPSE_TIMED_DESPAWN, 10s) after a by-entry despawn
 -- sweep (no GUID->creature lookup — the ossirian onReset precedent);
 -- the six guests' class AIs are registered in this file so the summons
--- fight. The healer guests' AcquireGUID/
--- SelectGuestTarget need instance GetGuidData, so they target themselves;
+-- fight. The healer guests' AcquireGUID/SelectGuestTarget leg stays out:
+-- creature:GetGuidData IS bridged (lua_creature_events.go:6646), but the
+-- chain needs two unported links — (1) no SetGuidData(DATA_MOROES=1) latch
+-- for Moroes (karazhan.lua has no OnCreatureCreate bind), and (2) Moroes's
+-- AddGUID[4] guest-GUID array (boss_moroes.cpp:204/214) has no Lua-readable
+-- twin — so the guests target themselves (the C++ no-add fallback);
 -- JustDied's DoRemoveAurasDueToSpellOnPlayers(GARROTE) is ported (arm
 -- order after Talk(SAY_DEATH), boss_moroes.cpp:181) via GetPlayersInWorld
 -- + mapId/instanceId filter and player:RemoveAura (bridged).
@@ -428,8 +432,9 @@ RegisterCreatureEvent(ENTRY_MOROES, 23, moroesReset)
 -- Guests ----------------------------------------------------------------
 
 -- Healer guests (catriona, keira) pick a random alive co-add via the
--- instance; with no instance-script model the fallback is the caster
--- itself, like C++'s SelectGuestTarget returning me when no add is found.
+-- instance; the AcquireGUID chain is unported (see header: no Moroes GUID
+-- latch, no AddGUID[4] twin), so the fallback is the caster itself, like
+-- C++'s SelectGuestTarget returning me when no add is found.
 -- C++ boss_moroes_guestAI::UpdateAI (boss_moroes.cpp:364-370) evades a
 -- guest when the boss state is not IN_PROGRESS — vacuous in-flow: the
 -- boss Reset always despawns + respawns the guests (SpawnAdds,
