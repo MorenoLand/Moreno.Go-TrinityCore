@@ -122,7 +122,6 @@ const (
 	misc2GraveAlreadyLinked = "Graveyard %d is already linked to zone %d."     // LANG_COMMAND_GRAVEYARDALRLINKED 450
 	misc2GraveLinked        = "Graveyard %d linked to zone %d."                // LANG_COMMAND_GRAVEYARDLINKED 451
 	misc2GraveWrongZone     = "Graveyard %d cannot be linked to zone %d."      // LANG_COMMAND_GRAVEYARDWRONGZONE 452
-	misc2GraveError         = "Graveyard %d has no link for this zone."        // LANG_COMMAND_GRAVEYARDERROR 454
 	misc2GraveNoTeam        = "no team"                                        // LANG_COMMAND_GRAVEYARD_NOTEAM 455
 	misc2GraveAny           = "any"                                            // LANG_COMMAND_GRAVEYARD_ANY 456
 	misc2GraveAlliance      = "Alliance"                                       // LANG_COMMAND_GRAVEYARD_ALLIANCE 457
@@ -560,7 +559,13 @@ func (s *session) handleCmdShowArea(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
 		return false
 	}
-	target := s.server.playerSessionForGUID(s.selection)
+	// getSelectedPlayer() falls back to self with no target
+	// (Chat.cpp:300-309); only a selected creature/offline player
+	// yields the no-character message (cs_misc.cpp:1083-1088).
+	target := s
+	if s.selection != 0 {
+		target = s.server.playerSessionForGUID(s.selection)
+	}
 	if target == nil || target.player == nil {
 		s.sendSysMessage(miscNoCharSelected)
 		return true
@@ -603,7 +608,13 @@ func (s *session) handleCmdHideArea(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
 		return false
 	}
-	target := s.server.playerSessionForGUID(s.selection)
+	// getSelectedPlayer() falls back to self with no target
+	// (Chat.cpp:300-309); only a selected creature/offline player
+	// yields the no-character message (cs_misc.cpp:1083-1088).
+	target := s
+	if s.selection != 0 {
+		target = s.server.playerSessionForGUID(s.selection)
+	}
 	if target == nil || target.player == nil {
 		s.sendSysMessage(miscNoCharSelected)
 		return true
@@ -883,7 +894,11 @@ func (s *session) handleCmdLinkGrave(ctx context.Context, args []string) bool {
 		return true
 	}
 	if _, err := db.ExecContext(ctx, "INSERT INTO graveyard_zone (ID, GhostZone, Faction) VALUES (?, ?, ?)", graveyardID, zoneID, team); err != nil {
-		s.sendSysMessage(misc2GraveNoData)
+		// C++ has no other failure message here: AddGraveyardLink
+		// false prints ALREADY-LINKED (cs_misc.cpp:1010-1014); the
+		// COUNT pre-check above means only a racing duplicate
+		// reaches this leg.
+		s.sendSysMessage(fmt.Sprintf(misc2GraveAlreadyLinked, graveyardID, zoneID))
 		return true
 	}
 	s.sendSysMessage(fmt.Sprintf(misc2GraveLinked, graveyardID, zoneID))
@@ -1127,8 +1142,10 @@ func (s *session) handleCmdMovegens(ctx context.Context) bool {
 		s.sendSysMessage("Flight")
 	case movementGeneratorPoint:
 		s.sendSysMessage(fmt.Sprintf("Point: %.2f, %.2f, %.2f", motion.X, motion.Y, motion.Z))
-	case movementGeneratorFleeing, movementGeneratorTimedFleeing:
-		s.sendSysMessage("Fleeing")
+	case movementGeneratorFleeing:
+		s.sendSysMessage("Fear")
+	case movementGeneratorEffect:
+		s.sendSysMessage("Effect")
 	case movementGeneratorDistract:
 		s.sendSysMessage("Distracted")
 	default:
@@ -1292,12 +1309,12 @@ func (s *session) handleCmdMuteHistory(ctx context.Context, args []string) bool 
 // a team, with the link's own faction in the report (FindGraveyardData's
 // team, not the requested team). The nearest pick reuses
 // closestGraveyardCandidate, the ObjectMgr::GetClosestGraveyard twin, over
-// the zone's graveyard_zone links. C++ silences and branches are kept: an
-// empty link set on a non-battleground map falls through to the default
-// graveyard, which has no link for this zone and reports GRAVEYARDERROR
-// (team 0 has no default, so it reports ZONENOGRAVEYARDS instead); a
-// battleground map with no links, or links all filtered out by faction,
-// reports ZONENOGRAVEYARDS (team 0) or ZONENOGRAFACTION. Deltas: the link
+// the zone's graveyard_zone links. C++ branches are kept: an empty link
+// set reports ZONENOGRAVEYARDS (team 0) or ZONENOGRAFACTION
+// (cs_misc.cpp:1063-1073); links all filtered out by faction report the
+// same pair. GRAVEYARDERROR (graveyard found but no link for this zone,
+// :1041-1046) has no Go equivalent — the nearest pick is derived from
+// the zone links. Deltas: the link
 // set is read for the player's stored zone (rooted, as repopAtGraveyard
 // does) rather than the C++ map-position zone lookup, and the far
 // graveyard follows DB row order (ORDER BY ID) rather than C++ multimap
@@ -1342,21 +1359,17 @@ func (s *session) handleCmdNearGrave(ctx context.Context, args []string) bool {
 		links = append(links, link)
 	}
 	mapEntry, hasMapEntry, _ := s.server.Data.Map(s.player.Map)
-	isBG := hasMapEntry && teleIsBattlegroundOrArena(mapEntry)
 	if len(links) == 0 {
-		if team == 0 || isBG {
-			if team == 0 {
-				s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveyards, zoneID))
-			} else {
-				s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveFaction, zoneID, misc2GraveTeamName(team)))
-			}
-			return true
+		// No graveyard at all: C++ takes the else branch
+		// (cs_misc.cpp:1063-1073) — ZONENOGRAVEYARDS for team 0,
+		// ZONENOGRAFACTION otherwise. GRAVEYARDERROR fires only
+		// when a graveyard was found but has no link for this zone
+		// (:1041-1046), which the link-derived pick cannot reach.
+		if team == 0 {
+			s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveyards, zoneID))
+		} else {
+			s.sendSysMessage(fmt.Sprintf(misc2ZoneNoGraveFaction, zoneID, misc2GraveTeamName(team)))
 		}
-		defaultID := defaultGraveyardAlliance
-		if team == teamHorde {
-			defaultID = defaultGraveyardHorde
-		}
-		s.sendSysMessage(fmt.Sprintf(misc2GraveError, defaultID))
 		return true
 	}
 	var locations []wotlk.WorldSafeLoc
