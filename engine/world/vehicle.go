@@ -73,7 +73,7 @@ type VehicleKit struct {
 	UsableSeatNum        uint32
 	Accessories          []VehicleAccessory
 	InstalledAccessories []uint64
-	AccessoriesInstalled bool // install latch: InstallAllAccessories attempted once per kit; re-install on evade Reset(true) is a residual (Go has no evade Reset twin)
+	AccessoriesInstalled bool // install latch: the spawn InstallAllAccessories attempt runs once per kit; the evade Reset(true) reinstall bypasses it (resetVehicleKitOnReachHome, minion rows only)
 	InstallEventFired    bool // install latch: VEHICLE_EVENT_ON_INSTALL fired once per kit, on the first passenger sync (Creature::AddToWorld Install twin)
 	LastShootPos         [3]float32
 	X, Y, Z, Orientation float32
@@ -525,22 +525,24 @@ func (s *Server) getVehicleKit(mapID, instanceID uint32, vehicleGUID uint64) *Ve
 // (UNIT_STATE_ROOT) twin; the siege-vehicle ids root and take the
 // slow-aura immunity, while the salvaged ids drop the damage-taken row
 // the mechanical arm just added (apply=false).
-// Callers are the two Reset fire sites: AIM_Initialize
-// (Creature.cpp:1085, AddToWorld — both modes) at kit creation, and the
+// Callers are the Reset fire sites: AIM_Initialize
+// (Creature.cpp:1085, AddToWorld — both modes) at kit creation, the
 // JustAppeared tick (Creature.cpp:699-704, compat mode only) via
-// fireCreatureSpawned. No compat gate on the re-apply: C++ gates the
-// JustAppeared Reset on compat mode only because non-compat respawns
-// rebuild the object (AIM_Initialize re-applies); Go reuses the motion,
-// so the re-apply runs for both modes — the rows dedupe and the root is
-// re-armed after the JustRespawned clear. The InstallAllAccessories half
-// of Reset is not repeated here: at first spawn no passengers exist yet
-// and the install rides the step sync (syncCreatureVehiclePassengers);
-// on respawn the kit and its seated accessories persist in Go (no
-// removeVehicleKit on death), so there is nothing to reinstall — the
-// remove+reinstall fate of a despawned accessory is an open follow-up,
-// not a blind port. The OnReset script hook has no Eluna event
-// (VehicleEvents 3 is UNUSED) and no C++ VehicleScript implementor, so
-// it is vacuous.
+// fireCreatureSpawned, and the HomeMovementGenerator finalize via
+// resetVehicleKitOnReachHome (Vehicle::Reset(true)). No compat gate on
+// the re-apply: C++ gates the JustAppeared Reset on compat mode only
+// because non-compat respawns rebuild the object (AIM_Initialize
+// re-applies); Go reuses the motion, so the re-apply runs for both
+// modes — the rows dedupe and the root is re-armed after the
+// JustRespawned clear. The InstallAllAccessories half of Reset is not
+// repeated here: at first spawn no passengers exist yet and the install
+// rides the step sync (syncCreatureVehiclePassengers), and on evade it
+// rides resetVehicleKitOnReachHome; on respawn the kit and its seated
+// accessories persist in Go (no removeVehicleKit on death), so there is
+// nothing to reinstall — the remove+reinstall fate of a despawned
+// accessory is an open follow-up, not a blind port. The OnReset script
+// hook has no Eluna event (VehicleEvents 3 is UNUSED) and no C++
+// VehicleScript implementor, so it is vacuous.
 func (s *Server) applyVehicleImmunities(motion *creatureMotion) {
 	if s == nil || motion == nil {
 		return
@@ -593,6 +595,120 @@ func (s *Server) applyVehicleImmunities(motion *creatureMotion) {
 		s.motionMu.Lock()
 		motion.ScriptRooted = true
 		s.motionMu.Unlock()
+	}
+}
+
+// resetVehicleKitOnReachHome mirrors the Vehicle::Reset(true) leg of
+// HomeMovementGenerator<Creature>::DoFinalize (HomeMovementGenerator.cpp:139-151):
+// SetSpawnHealth and LoadCreaturesAddon run ahead of it (the evade arms
+// restore health at evade start; the addon load has no Go twin), then
+// Reset(true) re-applies ApplyAllImmunities and, while the base is alive,
+// InstallAllAccessories(true) — MINION accessories only, with NO
+// RemoveAllPassengers first (Vehicle.cpp:84-100: the removal runs only
+// for player bases or !evading). The OnReset script hook is vacuous
+// (VehicleEvents OnReset has no C++ implementors; Hooks.h 3 UNUSED), so
+// nothing fires for it. Called at every Go DoFinalize twin: the three
+// evade-home arms, the script MoveHome spline landing (MoveTargetedHome
+// launches the same generator), and the critter flee-expiry failed
+// launch — all finalize through the same C++ body. A base with no kit
+// is a no-op: getVehicleKit returns nil and the call returns.
+func (s *Server) resetVehicleKitOnReachHome(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil {
+		return
+	}
+	kit := s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID)
+	if kit == nil {
+		return
+	}
+	s.applyVehicleImmunities(motion)
+	if motion.Health <= 0 {
+		return
+	}
+	s.reinstallVehicleMinionAccessories(ctx, motion, kit)
+}
+
+// reinstallVehicleMinionAccessories bridges Vehicle::InstallAllAccessories(true)
+// (Vehicle.cpp:84-100) for the evade leg: only IsMinion rows reinstall, and
+// the once-per-kit AccessoriesInstalled latch does NOT gate it — the latch
+// guards the spawn install (installVehicleAccessoriesFromOrigin), while C++
+// re-runs InstallAllAccessories on every evade. The latch is neither
+// consulted nor set here, so a later first passenger sync still installs
+// the non-minion rows. Per minion row (Vehicle.cpp:386-412): TempSummon
+// at the base position, UNIT_MASK_ACCESSORY, then the HandleSpellClick
+// twin boards it — and Vehicle::AddPassenger (Vehicle.cpp:471-478) ejects
+// the seat's current occupant first when the seat is occupied, so a
+// still-seated minion is ejected (not unsummoned: Vehicle::RemovePassenger
+// leaves the unit in the world; the kit-drop unsummon fate rides
+// removeVehicleKit only) and the fresh summon boards in its place. A
+// player seated on a minion seat stays out: C++ would eject the player,
+// but Go's player exit needs the session's exit leg (duel forfeit,
+// control packets) and minion seats are not player-enterable in
+// practice, so the row is skipped instead of summoning a duplicate the
+// board would refuse. A missing seat aborts the board like the spawn
+// install (the VehicleJoinEvent::Abort twin despawns the fresh summon).
+func (s *Server) reinstallVehicleMinionAccessories(ctx context.Context, motion *creatureMotion, kit *VehicleKit) {
+	if s == nil || motion == nil || kit == nil {
+		return
+	}
+	kit.mu.RLock()
+	var minions []VehicleAccessory
+	for _, acc := range kit.Accessories {
+		if acc.IsMinion {
+			minions = append(minions, acc)
+		}
+	}
+	kit.mu.RUnlock()
+	if len(minions) == 0 {
+		return
+	}
+	origin := s.summonOriginFromMotion(motion)
+	baseGUID := motion.GUID
+	for _, acc := range minions {
+		summoned := s.summonTempCreature(ctx, origin, acc.AccessoryEntry, motion.X, motion.Y, motion.Z, motion.Orientation, acc.SummonType, acc.SummonTime)
+		if summoned == nil {
+			continue
+		}
+		// Vehicle::AddPassenger (Vehicle.cpp:471-478) kicks the occupant
+		// off an occupied target seat before the new passenger boards.
+		if occupant := kit.GetPassenger(acc.SeatID); occupant != 0 {
+			if s.findSessionByGUID(occupant) != nil {
+				s.expireTempSummonGuardian(ctx, summoned)
+				continue
+			}
+			if occupantMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, occupant); occupantMotion != nil {
+				kit.RemovePassenger(occupant)
+				s.triggerVehicleEvent(scripting.VehicleEventOnRemovePassenger, s.luaMotionCreature(motion), s.luaMotionCreature(occupantMotion))
+				s.motionMu.Lock()
+				occupantMotion.VehicleGUID = 0
+				occupantMotion.VehicleSeat = 0
+				occupantMotion.VehicleAccessoryMinion = false
+				occupantMotion.Moving = false
+				s.motionMu.Unlock()
+			} else {
+				kit.RemovePassenger(occupant)
+			}
+		}
+		wasUnselectable := summoned.UnitFlags&0x02000000 != 0
+		assigned, _, ok := kit.AddPassenger(summoned.GUID, acc.SeatID, wasUnselectable)
+		if !ok {
+			s.expireTempSummonGuardian(ctx, summoned)
+			continue
+		}
+		s.motionMu.Lock()
+		summoned.VehicleGUID = baseGUID
+		summoned.VehicleSeat = assigned
+		summoned.VehicleAccessoryMinion = acc.IsMinion
+		summoned.Moving = false
+		s.motionMu.Unlock()
+		kit.mu.Lock()
+		kit.InstalledAccessories = append(kit.InstalledAccessories, summoned.GUID)
+		kit.mu.Unlock()
+		if base := s.findCreatureMotion(origin.Map, origin.InstanceID, baseGUID); base != nil {
+			s.triggerVehicleEvent(scripting.VehicleEventOnAddPassenger, s.luaMotionCreature(base), s.luaMotionCreature(summoned), assigned)
+			if acc.IsMinion {
+				s.triggerVehicleEvent(scripting.VehicleEventOnInstallAccessory, s.luaMotionCreature(base), s.luaMotionCreature(summoned))
+			}
+		}
 	}
 }
 

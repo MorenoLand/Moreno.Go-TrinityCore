@@ -4815,6 +4815,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 			// so the flag set at evade start clears here, as in the
 			// already-home arm below.
 			motion.Evading = false
+			// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+			s.resetVehicleKitOnReachHome(ctx, motion)
 			s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 			return
 		}
@@ -4841,6 +4843,8 @@ func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotio
 		// discarded as a provable no-op, matching the JustDied/SpellHit
 		// rulings. Health was already restored to max at evade start, matching
 		// DoFinalize's SetSpawnHealth ahead of the hook.
+		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+		s.resetVehicleKitOnReachHome(ctx, motion)
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 	}
 }
@@ -5732,6 +5736,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 		case movementGeneratorHome:
 			if motion.X == motion.ScriptMoveDestX && motion.Y == motion.ScriptMoveDestY && motion.Z == motion.ScriptMoveDestZ {
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+				s.resetVehicleKitOnReachHome(ctx, motion)
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 			}
 		}
@@ -5784,6 +5790,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// (CritterAI::OnMovementGeneratorFinalized, PassiveAI.cpp:81-86) whose
 				// home generator finalizes immediately on the failed launch, so
 				// AI()->JustReachedHome() still fires (HomeMovementGenerator.cpp:139-151).
+				// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+				s.resetVehicleKitOnReachHome(ctx, motion)
 				s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 				return
 			}
@@ -9236,6 +9244,8 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		// arm above: the veto gates ScriptedAI::JustReachedHome, which only
 		// BossAI overrides (me->setActive(false), unmodeled in Go), so the
 		// return is discarded.
+		// HomeMovementGenerator::DoFinalize (HomeMovementGenerator.cpp:150) runs Vehicle::Reset(true) ahead of JustReachedHome.
+		s.resetVehicleKitOnReachHome(ctx, motion)
 		s.fireCreatureLuaEvent(ctx, motion, scripting.CreatureEventOnReachHome)
 		return
 	}
