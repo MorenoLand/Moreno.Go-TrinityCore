@@ -12860,11 +12860,10 @@ func init() {
 	// Brutallus (24882) runs the pull Talk, the meteor-slash/stomp
 	// (stomp Talk)/burn/berserk schedule, the unguarded kill Talk,
 	// the death Talk and the Reset dual-wield arm; the burn target
-	// self-cast is modeled as AddAura (no player-side CastSpell
-	// bridge); the Felmyst summon and SetBossState arms have no
-	// summon/instance-script bridges, and the Madrigosa intro
-	// chain has no instance-creature/cross-creature/flag/movement
-	// bridges.
+	// self-cast ports via player:CastSpell, the Felmyst summon and
+	// SetBossState arms port, and the Madrigosa intro chain stays
+	// out (no Madrigosa object; ev27 fires engage-only, while C++
+	// fires on pre-engage sighting).
 	RegisterLuaBoss("boss_brutallus", 24882)
 	// Felmyst (Sunwell Plateau) — fight logic in
 	// lua_scripts/sunwellplateau/boss_felmyst.lua.
@@ -21514,7 +21513,14 @@ func init() {
 	// entry 38008 (icecrown_citadel.h NPC_BLOOD_ORB_CONTROLLER) —
 	// fight logic in lua_scripts/northrend/boss_blood_prince_council.lua
 	// (registered tick 221 for its JustEngagedWith/EnterEvadeMode
-	// encounter-frame arms).
+	// encounter-frame arms). Sole ScriptName owner of 38008: the
+	// encounter requires this BossAI (SetBossState IN_PROGRESS/DONE
+	// only there, boss_blood_prince_council.cpp:278/:321); the other
+	// registered 38008 AI, npc_icc_orb_controller, is never
+	// instantiated — its visual-channel / ACTION_COMBAT / ACTION_EVADE
+	// arms were removed from its Lua file 2026-11-10 (dead-AI
+	// verdict; triage-C #9 re-verdict) and its registration here
+	// deleted with it.
 	RegisterLuaBoss("boss_blood_council_controller", 38008)
 	// npc_kinetic_bomb: Icecrown Citadel kinetic bomb, entry 38454
 	// (icecrown_citadel.h NPC_KINETIC_BOMB) — DoAction(72052)
@@ -21867,9 +21873,11 @@ func init() {
 	// random target; vampiric fiend (37901): disease cloud 41290
 	// self, leeching root 70671 victim one-shot, 38s self-despawn;
 	// out-of-combat emote machine (polymorph-ally 72106 + random
-	// DarkFallensEmotes) on spawn/evade; SetGUID relay (event 40):
-	// controller GUID stored at init (DATA_GUID), engage signals
-	// ACTION_COMBAT + own GUID, evade signals ACTION_EVADE (ev38).
+	// DarkFallensEmotes) on spawn/evade; the TriggerGuid relay to the
+	// 38008 controller is DEAD in C++ (the orb-controller AI never
+	// instantiates — see npc_icc_orb_controller.lua — so the
+	// ACTION_COMBAT / ACTION_EVADE signals are no-ops) and removed
+	// from the Lua file 2026-11-10.
 	// DarkFallenAI Reset scheduler validator :786-791 gates the
 	// emote machine + all 12 subclass ScheduleSpells ticks: Lua
 	// defers 500ms while casting, no re-arm consumed; vampiric
@@ -21884,37 +21892,23 @@ func init() {
 	RegisterLuaBoss("npc_darkfallen_icc", 37666)
 	RegisterLuaBoss("npc_darkfallen_icc", 37901)
 
-	// npc_icc_orb_controller (Icecrown Citadel instance script):
-	// visual channel + SetGUID relay — Reset 1s init grid sweep (10.0f,
-	// the 5 darkfallen entries, alive only) hands each minion the
-	// controller GUID (DATA_GUID), first visual 1s later, alternating
-	// 3s/21s repeat, random in-world init minion self-casts blood orb
-	// visual 72099; SetGUID ACTION_COMBAT (event 40: combat latch,
-	// CancelAll, zone-engage darkfallen, random minion siphon essence
-	// 70299) and DoAction ACTION_EVADE (ev38: prune, 5s visual re-arm,
-	// orb NOT_SELECTABLE) ported on the SetGUID bridge; SpellHit
-	// orb-controller-active leg stays out (70293 has no C++ caster).
-	// Checked-no-gate: UpdateAI is a plain _scheduler.Update with
-	// no SetValidator; visual casts ride minions, not self.
-	// Entry verifiable from icecrown_citadel.h:248 — see
-	// lua_scripts/northrend/npc_icc_orb_controller.lua.
-	// Sixteenth group of the "// Icecrown Citadel" block.
-	RegisterLuaBoss("npc_icc_orb_controller", 38008)
-
 	// npc_icc_nerubar_broodkeeper (Icecrown Citadel instance script):
 	// spawn gravity + CUSTOM_SPELL_03 emote, engage timers CRYPT_SCARABS
 	// victim-cast, DARK_MENDING lowest-health% friendly in 40yd (own-entry
 	// sweep — no generic grid enumeration), WEB_WRAP random threat target;
 	// DoAction fall leg (WEB_BEAM / MoveLand / MovementInform clear)
-	// stays out (ev38 dispatch IS bridged, creature:DoAction —
-	// lua_creature_events.go:802; sender is the unported instance
-	// SetData DATA_NERUBAR_BROODKEEPER_EVENT, instance_icecrown_
-	// citadel.cpp:1127-1132, driven by the area trigger).
+	// PORTED 2026-11-10 (triage-C #10 re-verdict): the sender chain is
+	// live — area trigger at_icc_nerubar_broodkeeper.lua (5611) ->
+	// instanceData:SetData(DATA_NERUBAR_BROODKEEPER_EVENT 46) ->
+	// instance_icecrown_citadel.lua event-8 receiver fans out
+	// DoAction(ACTION_NERUBAR_FALL) to group 0/1
+	// (instance_icecrown_citadel.cpp:1127-1133, C++-exact group
+	// select); ev38 receiver in npc_icc_nerubar_broodkeeper.lua.
 	// UpdateAI pre-loop CASTING gate :1072 (+ in-loop :1105)
 	// already ported in Lua: all 3 ticks defer 500ms while casting.
 	// Entry verifiable from icecrown_citadel.h:152 — see
 	// lua_scripts/northrend/npc_icc_nerubar_broodkeeper.lua.
-	// Seventeenth group of the "// Icecrown Citadel" block.
+	// Sixteenth group of the "// Icecrown Citadel" block.
 	RegisterLuaBoss("npc_icc_nerubar_broodkeeper", 36725)
 }
 

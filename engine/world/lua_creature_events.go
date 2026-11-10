@@ -850,10 +850,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// returns void, so the hook returns are discarded). The guid is
 	// the low half (GetGUIDLow convention): packed GUIDs lose bits
 	// through Lua numbers, so callers pass creature:GetGUIDLow() and
-	// receivers resolve it with GetCreatureByGUID. Backs the ICC orb
-	// controller relay (icecrown_citadel.cpp:680/729/821/833): the
-	// controller hands its GUID to each darkfallen minion (DATA_GUID)
-	// and the minion answers with its own on engage (ACTION_COMBAT).
+	// receivers resolve it with GetCreatureByGUID. Live user is the
+	// Simon game (npc_simon_bunny.lua cluster-press transport); the
+	// ICC orb-controller relay it was built for
+	// (icecrown_citadel.cpp:680/729/821/833) is dead in C++ — the
+	// 38008 trigger runs boss_blood_council_controller, which has no
+	// SetGUID override — and its Lua arms were removed 2026-11-10
+	// (npc_icc_orb_controller.lua dead-AI verdict).
 	methods["SetGUID"] = func(ctx context.Context, args []any) ([]any, error) {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("SetGUID requires guid and id arguments")
@@ -4038,9 +4041,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// GUIDs lose bits through Lua numbers), so the lookup scans the
 	// map+instance motions for a matching low half, the same scan
 	// GetCreaturesInGrid runs under motionMu. Nil when no such creature
-	// is live. Backs the ICC orb-controller relay: the darkfallen resolves
-	// its stored controller GUID, and the controller resolves its minion
-	// GUIDs (icecrown_citadel.cpp:729-749).
+	// is live. Built for the ICC orb-controller relay
+	// (icecrown_citadel.cpp:729-749); that relay is dead in C++
+	// (npc_icc_orb_controller.lua verdict) and the live users are the
+	// ZF pyramid wave adds (instance_zulfarrak.lua) and the
+	// Quel'Danas thalorien/morlen lookups
+	// (zone_isle_of_queldanas.lua).
 	methods["GetCreatureByGUID"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("argument 1 is required")

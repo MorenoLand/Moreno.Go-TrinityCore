@@ -154,7 +154,7 @@ local GROUP_CRYPT_RAIDERS = 4
 
 local states = {}
 -- GUID storage split: creature GUIDs are stored LOW (GetCreatureByGUID
--- masks the low 24 bits — orb_controller precedent); the player GUID is
+-- masks the low 24 bits — lua_creature_events.go); the player GUID is
 -- stored FULL because GetPlayerByGUID compares full equality
 -- (globals.go; commander_dawnforge precedent).
 
