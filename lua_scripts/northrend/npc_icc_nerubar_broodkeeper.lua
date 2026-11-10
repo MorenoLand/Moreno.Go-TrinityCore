@@ -23,22 +23,33 @@
 -- (due events fire on the next non-casting tick); each Lua tick
 -- defers itself 500ms while creature:IsCasting() instead of firing.
 -- Melee rides the engine combat tick (anub'arak precedent).
--- Documented-only: DoAction ACTION_NERUBAR_FALL (:1041-1056) —
--- ev38 dispatch IS bridged (creature:DoAction,
--- lua_creature_events.go:802); the arm stays out because its driver
--- is the unported area-trigger -> instance SetData chain
--- (at_icc_nerubar_broodkeeper :1576-1591 ->
--- instance_icecrown_citadel.cpp:1127-1133, no instance bridge),
--- so WEB_BEAM 69887, SetHomePosition, MoveLand and the
--- MovementInform EFFECT_MOTION_TYPE leg (gravity/immune/emote
--- clear) all stay out; the spawn gravity/emote legs therefore
--- persist in Lua where C++ would clear them after the fall.
+-- DoAction ACTION_NERUBAR_FALL (:1041-1056) + MovementInform
+-- (:1058-1065) PORTED 2026-11-10 (ev38 dispatch bridged,
+-- creature:DoAction, lua_creature_events.go:802; ev28 MovementInform
+-- bridged, EFFECT_MOTION_TYPE 16 per the MoveLand comment,
+-- lua_creature_events.go:4994): the fall arm casts WEB_BEAM 69887,
+-- sets home to the floor below the current position (GetFloorZ has
+-- no bridge — the floor height rides Map:GetHeight(x, y),
+-- engine/scripting/globals.go:1411, nil read falls back to the live
+-- Z), MoveLands down to it and clears the emote; the land arrival
+-- clears gravity. SetImmuneToAll(false) on the arrival stays out —
+-- no bridge (same gap as the InitializeAI leg). The driver chain is
+-- ported end to end: area trigger at_icc_nerubar_broodkeeper.lua ->
+-- instance OnSetData receiver in instance_icecrown_citadel.lua ->
+-- this ev38 arm.
 
 local NPC_ICC_NERUBAR_BROODKEEPER = 36725
 
 local SPELL_CRYPT_SCARABS = 70965
 local SPELL_DARK_MENDING = 71020
 local SPELL_WEB_WRAP = 70980
+local SPELL_WEB_BEAM = 69887 -- icecrown_citadel.cpp:134
+
+local ACTION_NERUBAR_FALL = 1 -- icecrown_citadel.h:483
+local POINT_LAND = 1 -- icecrown_citadel.cpp:210
+local EFFECT_MOTION_TYPE = 16 -- lua_creature_events.go:4994
+
+local EMOTE_ONESHOT_NONE = 0 -- SharedDefines.h:1937
 
 local EMOTE_STATE_CUSTOM_SPELL_03 = 420
 
@@ -147,8 +158,37 @@ local function broodkeeperLeave(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ DoAction ACTION_NERUBAR_FALL (icecrown_citadel.cpp:1041-1056).
+local function broodkeeperDoAction(event, creature, action)
+    if action ~= ACTION_NERUBAR_FALL then
+        return
+    end
+    creature:CastSpell(creature, SPELL_WEB_BEAM)
+    local x, y = creature:GetX(), creature:GetY()
+    local z = creature:GetZ()
+    local mapObj = creature:GetMap()
+    if mapObj then
+        local floorZ = mapObj:GetHeight(x, y)
+        if floorZ ~= nil then
+            z = floorZ
+        end
+    end
+    creature:SetHomePosition(x, y, z, creature:GetO())
+    creature:MoveLand(POINT_LAND, x, y, z)
+    creature:EmoteState(EMOTE_ONESHOT_NONE)
+end
+
+-- C++ MovementInform (icecrown_citadel.cpp:1058-1065).
+local function broodkeeperMovementInform(event, creature, moveType, id)
+    if moveType == EFFECT_MOTION_TYPE and id == POINT_LAND then
+        creature:SetDisableGravity(false)
+    end
+end
+
 RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 5, broodkeeperSpawn)
 RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 1, broodkeeperEngage)
 RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 2, broodkeeperLeave)
 RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 4, broodkeeperLeave)
 RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 23, broodkeeperLeave)
+RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 38, broodkeeperDoAction)
+RegisterCreatureEvent(NPC_ICC_NERUBAR_BROODKEEPER, 28, broodkeeperMovementInform)

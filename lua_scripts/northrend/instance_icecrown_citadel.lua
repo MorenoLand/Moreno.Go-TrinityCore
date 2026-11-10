@@ -12,7 +12,8 @@
 -- bloodQueenCouncil / bloodQueenLanaThel / crokScourgebane /
 -- crokCaptains[1-4] / sisterSvalna / valithriaDreamwalker /
 -- valithriaLichKing / valithriaTrigger / sindragosa / spinestalker /
--- rimefang / theLichKing / highlordTirionFordring / terenas — the
+-- rimefang / theLichKing / highlordTirionFordring / terenas /
+-- broodkeeperGroups[1-2] / broodkeeperTriggerDone — the
 -- OnCreatureCreate GUID latches (instance_icecrown_citadel.cpp:205-330).
 -- Ported arms (C++-exact unless noted):
 -- - OnCreatureCreate: the binds above. Fires on materialization
@@ -42,7 +43,10 @@
 --   note). The Ymirjar relay (:451-458, SetGUID to Crok) stays out
 --   (no SetGUID bridge).
 -- - OnCreatureCreate conditional legs:
---   NPC_INFILTRATOR_MINCHAR_BQ (:277-281): SetUInt32Value(
+--   NPC_NERUBAR_BROODKEEPER (:216-220, PORTED 2026-11-10): the
+--   GetPositionX() > -230.0f group split rides creature:GetX()
+--   (scripting/object.go:185); the lists feed the OnSetData receiver
+--   below. NPC_INFILTRATOR_MINCHAR_BQ (:277-281): SetUInt32Value(
 --   UNIT_NPC_EMOTESTATE, 0) + SetDisableGravity(true) — both bridged
 --   (lua_values.go SetUInt32Value; lua_creature_events.go:3116).
 --   NPC_WICKED_SPIRIT (:325-329): SetReactState(REACT_PASSIVE) —
@@ -70,14 +74,13 @@
 --   No ON_UPDATE poll: the override legs have no live Lua consumer —
 --   the DONE legs already run at DONE time in the boss died handlers
 --   (the palehoof precedent).
--- - OnCreatureCreate skipped binds: NPC_NERUBAR_BROODKEEPER (:216-220)
---   splits into two GUID lists by GetPositionX() > -230.0f — no
---   position bridge; NPC_ALLIANCE/HORDE_GUNSHIP_CANNON (:230-233)
---   SetControlled(true, UNIT_STATE_ROOT) — no bridge;
+-- - OnCreatureCreate skipped binds: NPC_ALLIANCE/HORDE_GUNSHIP_CANNON
+--   (:230-233) SetControlled(true, UNIT_STATE_ROOT) — no bridge;
 --   NPC_VOLATILE_OOZE / NPC_GAS_CLOUD (:242-251) relay into the
 --   professor's JustSummoned — no cross-AI JustSummoned bridge;
 --   NPC_INVISIBLE_STALKER (:313-318) casts SPELL_ARTHAS_TELEPORTER_CEREMONY
---   only within 10yd of (4357.052, 2769.421) — no position bridge;
+--   only within 10yd of (4357.052, 2769.421) — the position bridge
+--   (creature:GetX/GetY) now exists, so this leg is portable next;
 --   the guardian faction-buff cast (:207-211) rides the team latch
 --   (no instance GetData bridge — the halls_of_reflection precedent).
 -- - OnCreatureRemove (:335-339): clears SindragosaGUID only — no
@@ -101,10 +104,13 @@
 --   no bridges; the boss-state store is written via
 --   creature:SetBossState (lua_creature_events.go:5917) and read via
 --   creature:GetBossState (lua_creature_events.go:5932).
--- No ON_UPDATE poll: see the SetBossState note above.
+-- InstanceEventOnUpdate IS dispatched (instance_hooks.go:637-640);
+-- no ICC Update leg is ported — the BloodQuickening /
+-- coldflame-jets machines ride the unported Update machine.
 
 local MAP_ICECROWN_CITADEL = 631
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
+local INSTANCE_EVENT_ON_SET_DATA = 8 -- runtime.go:192 (Go-only)
 local INSTANCE_EVENT_ON_UNIT_DEATH = 9
 
 local NPC_FROSTWING_WHELP = 37532 -- icecrown_citadel.h:308
@@ -150,6 +156,9 @@ local NPC_INVISIBLE_STALKER = 30298 -- icecrown_citadel.h:335
 local UNIT_NPC_EMOTESTATE = 83 -- UpdateFields.h:140 (OBJECT_END 0x0006 + 0x4D)
 
 local DATA_SINDRAGOSA = 11 -- icecrown_citadel.h:85
+local DATA_NERUBAR_BROODKEEPER_EVENT = 46 -- icecrown_citadel.h:122
+local AT_NERUBAR_BROODKEEPER = 5611 -- icecrown_citadel.h:541
+local ACTION_NERUBAR_FALL = 1 -- icecrown_citadel.h:483
 local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
 local ACTION_START_FROSTWYRM = -368530 -- icecrown_citadel.h:507
 local SINDRAGOSA_SPAWN_POS = {4818.7, 2483.71, 287.065, 3.089233} -- boss_sindragosa.cpp:169
@@ -197,11 +206,27 @@ RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_CREATURE_CREATE, functi
         creature:SetReactState(0)
         return
     end
-    -- C++ :216-220 / :230-233 / :242-251 / :313-318: the broodkeeper
-    -- group split, gunship-cannon root, ooze/gas-cloud professor relay
-    -- and stalker teleporter cast are skipped — no position /
-    -- SetControlled / cross-AI-JustSummoned bridges (see header).
-    if entry == NPC_NERUBAR_BROODKEEPER or entry == NPC_ALLIANCE_GUNSHIP_CANNON or
+    -- C++ :216-220: the broodkeeper group split — GetPositionX() >
+    -- -230.0f is group 0, else group 1 (creature:GetX() reads the
+    -- generic object field, scripting/object.go:185); the lists are
+    -- the DATA_NERUBAR_BROODKEEPER_EVENT receiver's fan-out below.
+    if entry == NPC_NERUBAR_BROODKEEPER then
+        if instanceData.broodkeeperGroups == nil then
+            instanceData.broodkeeperGroups = {{}, {}}
+        end
+        local group = 2
+        if creature:GetX() > -230.0 then
+            group = 1
+        end
+        local list = instanceData.broodkeeperGroups[group]
+        list[#list + 1] = creature
+        return
+    end
+    -- C++ :230-233 / :242-251 / :313-318: the gunship-cannon root,
+    -- ooze/gas-cloud professor relay and stalker teleporter cast are
+    -- skipped — no SetControlled / cross-AI-JustSummoned bridges
+    -- (see header).
+    if entry == NPC_ALLIANCE_GUNSHIP_CANNON or
             entry == NPC_HORDE_GUNSHIP_CANNON or entry == NPC_VOLATILE_OOZE or
             entry == NPC_GAS_CLOUD or entry == NPC_INVISIBLE_STALKER then
         return
@@ -284,3 +309,27 @@ local function onUnitDeath(event, instanceData, mapObj, unit)
 end
 
 RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_UNIT_DEATH, onUnitDeath)
+
+-- C++ SetData DATA_NERUBAR_BROODKEEPER_EVENT
+-- (instance_icecrown_citadel.cpp:1127-1133, PORTED 2026-11-10): data ==
+-- AT_NERUBAR_BROODKEEPER (5611) fans out to group 0, any other
+-- trigger id to group 1 — the group lists are the OnCreatureCreate
+-- latches above; each broodkeeper gets DoAction(ACTION_NERUBAR_FALL).
+-- The only in-tree sender is the area trigger in
+-- at_icc_nerubar_broodkeeper.lua.
+RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_SET_DATA, function(event, instanceData, mapObj, type, data)
+    if type ~= DATA_NERUBAR_BROODKEEPER_EVENT then
+        return
+    end
+    local groups = instanceData.broodkeeperGroups
+    if not groups then
+        return
+    end
+    local group = 2
+    if data == AT_NERUBAR_BROODKEEPER then
+        group = 1
+    end
+    for _, broodkeeper in ipairs(groups[group]) do
+        broodkeeper:DoAction(ACTION_NERUBAR_FALL)
+    end
+end)
