@@ -73,6 +73,20 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 			return baseDamage, false
 		}
 		return casterMaxHealth * uint32(pct) / 100, true
+	case 60776, 60864:
+		// spell_jaws_of_death_claw_swipe_pct_damage::HandleDamage
+		// (zone_storm_peaks.cpp:1273-1276): the OnEffectLaunchTarget arm
+		// REPLACES the hit damage with CountPctFromMaxHealth(EFFECT_0
+		// CalcValue) — pct of the hit unit's max health (the 47496
+		// ghoul-explode twin, but the victim's max health, not the
+		// caster's). The loader binds both 60776 Claw Swipe and 60864
+		// Jaws of Death (:1262-1263). DORMANT until Spell.dbc ships the
+		// records and the wild-wyrm AI casts them.
+		pct := spell.Effects[0].CalcValueForLevel(spell, casterLevel)
+		if pct <= 0 {
+			return baseDamage, false
+		}
+		return uint32(float32(victimMaxHealth) * float32(pct) / 100.0), true
 	case 60103:
 		if !lavaLashBoost {
 			return baseDamage, false

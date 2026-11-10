@@ -6,6 +6,43 @@
 --   EFFECT_0 SCRIPT_EFFECT. OnEffectHitTarget the hit unit loses
 --   SPELL_FIGHT_WYRM (56673). Cast by the wild wyrm on ACTION_GRIP_LOST.
 --
+-- PORTED (grip cluster, RegisterSpellEvent ev5 = OnEffectHitTarget /
+-- RegisterAuraEvent ev1 = OnPeriodic, ev2 = OnApply, ev3 = OnRemove):
+--   spell_grip (56689, zone_storm_peaks.cpp:1102-1170): PERIODIC_DUMMY
+--   eff0. DummyTick stack-decay schedule (1/tick for the first 15 ticks,
+--   then 2*sequence (+1 past the 7th tick of each 15-tick block),
+--   :1112-1142) + warn latch below 15 stacks (DoAction ACTION_GRIP_FAILING,
+--   :1135-1141) + HandleDrop on EXPIRE removal (DoAction ACTION_GRIP_LOST,
+--   :1144-1151). The C++ _tickNumber/_warning members live in a
+--   module table keyed by the wyrm GUIDLow, reset on apply — the
+--   AuraEffect tick number resets on re-stack, so aura:GetTickNumber()
+--   would diverge after a Grab On (zone_storm_peaks.cpp:1160-1162).
+--   spell_grab_on (60533, :1171-1198): EFFECT_0 SCRIPT_EFFECT.
+--   OnEffectHitTarget the caster's grip aura gains GetEffectValue()
+--   stacks (ModStackAmount, :1184-1187).
+--   spell_loosen_grip (56690 Thrust Spear / 60586 Mighty Spear Thrust,
+--   :1199-1229, template StacksToLose 5 / 15, AddSC :1486-1487):
+--   EFFECT_1 SCRIPT_EFFECT. OnEffectHitTarget the caster's grip aura
+--   loses 5 / 15 stacks with AURA_REMOVE_BY_EXPIRE (:1214-1217).
+--   spell_low_health_trigger (60596, :1230-1261): EFFECT_0
+--   SCRIPT_EFFECT. OnEffectHitTarget the hit unit casts GetEffectValue()
+--   (the DBC eff0 spell, validated :1242) on a nil target, triggered
+--   (:1247); the port casts it on the hit unit (self-cast), the
+--   close-rift precedent — Go CastSpell(nil, ...) falls back to the
+--   current victim.
+--   spell_claw_swipe_check (56705, :1290-1347): EFFECT_0 DUMMY.
+--   AfterEffectApply warns (DoAction ACTION_CLAW_SWIPE_WARN, :1299-1302);
+--   AfterEffectRemove dodges when the seat-0 passenger holds
+--   SPELL_DODGE_CLAWS (56704), else the target casts the eff0 amount
+--   (60776) on a nil target, non-triggered (:1304-1319); the port casts
+--   it on the target (self-cast, same precedent).
+--   DORMANT: the wild-wyrm AI (npc_wild_wyrm, :702-1090, VehicleAI +
+--   scheduler + movement + phase machine) is unported, so nothing casts
+--   grip / grab-on / thrust-spear / low-health-trigger / claw-swipe yet,
+--   and the DoAction(1..4) call sites fire Lua OnDoAction hooks with no
+--   consumer until that AI ports; the spell arms are also DORMANT until
+--   Spell.dbc ships the records.
+--
 -- PORTED (tick 205, RegisterAuraEvent OnApply = 2 / OnPeriodic = 1):
 --   spell_jokkum_scriptcast (61319, zone_storm_peaks.cpp:967-996):
 --   EFFECT_0 DUMMY. OnApply the target casts Jokkum Summon (56541) on
@@ -46,6 +83,18 @@ local SPELL_CLOSE_RIFT = 56763 -- TDB spell_script_names
 local SPELL_DESPAWN_RIFT = 61665 -- zone_storm_peaks.cpp:1031
 local SPELL_FIGHT_WYRM = 56673 -- zone_storm_peaks.cpp:634
 local SPELL_EJECT_PASSENGER_1 = 60603 -- zone_storm_peaks.cpp:647
+local SPELL_GRIP = 56689 -- zone_storm_peaks.cpp:636
+local SPELL_GRAB_ON = 60533 -- zone_storm_peaks.cpp:637
+local SPELL_THRUST_SPEAR = 56690 -- zone_storm_peaks.cpp:639
+local SPELL_MIGHTY_SPEAR_THRUST = 60586 -- zone_storm_peaks.cpp:640
+local SPELL_LOW_HEALTH_TRIGGER = 60596 -- zone_storm_peaks.cpp:644
+local SPELL_DODGE_CLAWS = 56704 -- zone_storm_peaks.cpp:638
+local SPELL_CLAW_SWIPE_CHECK = 56705 -- zone_storm_peaks.cpp:1290
+local ACTION_CLAW_SWIPE_WARN = 1 -- zone_storm_peaks.cpp:665
+local ACTION_CLAW_SWIPE_DODGE = 2 -- zone_storm_peaks.cpp:666
+local ACTION_GRIP_FAILING = 3 -- zone_storm_peaks.cpp:667
+local ACTION_GRIP_LOST = 4 -- zone_storm_peaks.cpp:668
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:61-69
 
 -- C++ spell_jokkum_scriptcast_AuraScript::OnApply
 -- (zone_storm_peaks.cpp:980-984).
@@ -89,3 +138,209 @@ local function ejectPassengerHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_EJECT_PASSENGER_1, 5, ejectPassengerHit)
+
+-- Grip per-aura state: the C++ spell_grip_AuraScript members _tickNumber
+-- and _warning (zone_storm_peaks.cpp:1158-1160), keyed by the wyrm
+-- GUIDLow. A Lua handler is stateless, so the table carries them; the
+-- entry is created on apply and dropped on remove / expiry.
+local gripState = {}
+
+-- C++ spell_grip_AuraScript members (implicit: _tickNumber = 0,
+-- _warning = false at script-instance creation, :1160-1162).
+local function gripApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    gripState[target:GetGUIDLow()] = { ticks = 0, warned = false }
+end
+
+RegisterAuraEvent(SPELL_GRIP, 2, gripApply)
+
+-- C++ spell_grip_AuraScript::DummyTick (zone_storm_peaks.cpp:1112-1142):
+-- PERIODIC_DUMMY eff0. Each 15 ticks the stack reduction grows by 2
+-- (1 at each 7th and 15th tick past the first block); the first 15 ticks
+-- remove 1 stack each. Below 15 stacks the wyrm warns once
+-- (ACTION_GRIP_FAILING); above 30 the warn latch resets.
+-- DELTA: C++ removes the aura mid-loop via ModStackAmount(-1,
+-- AURA_REMOVE_BY_EXPIRE) when a decrement hits 0, which fires HandleDrop;
+-- Go SetStackAmount(0) does not remove (50240 precedent), so the port
+-- removes explicitly with mode 4 (EXPIRE) once the count would hit 0 —
+-- the ev3 handler below then fires the drop arm. The warn check never
+-- runs on the expiry tick; in C++ it could fire there only when unwarned,
+-- which cannot happen (the count passes 14 on the way down).
+local function gripPeriodic(event, aura, target)
+    if target == nil then
+        return
+    end
+    local key = target:GetGUIDLow()
+    local state = gripState[key]
+    if state == nil then
+        state = { ticks = 0, warned = false }
+        gripState[key] = state
+    end
+    state.ticks = state.ticks + 1
+    local period = ((state.ticks - 1) % 15) + 1
+    local sequence = math.floor((state.ticks - 1) / 15)
+    local stacksToRemove
+    if sequence == 0 then
+        stacksToRemove = 1
+    else
+        stacksToRemove = sequence * 2
+        if period > 7 then
+            stacksToRemove = stacksToRemove + 1
+        end
+    end
+    local stacks = aura:GetStackAmount()
+    if stacks <= stacksToRemove then
+        gripState[key] = nil
+        aura:Remove(AURA_REMOVE_BY_EXPIRE)
+        return
+    end
+    local newStacks = stacks - stacksToRemove
+    aura:SetStackAmount(newStacks)
+    if newStacks < 15 and not state.warned then
+        state.warned = true
+        target:DoAction(ACTION_GRIP_FAILING)
+    elseif newStacks > 30 then
+        state.warned = false
+    end
+end
+
+RegisterAuraEvent(SPELL_GRIP, 1, gripPeriodic)
+
+-- C++ spell_grip_AuraScript::HandleDrop (zone_storm_peaks.cpp:1144-1151):
+-- AfterEffectRemove eff0, REAL handle. Only an EXPIRE removal drops the
+-- grip (the phase-2 RemoveAurasDueToSpell(SPELL_GRIP) uses DEFAULT and
+-- must not eject); the wyrm ejects the passenger and evades
+-- (ACTION_GRIP_LOST, npc_wild_wyrmAI::DoAction :745-747).
+local function gripRemove(event, aura, target)
+    if target == nil or aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    gripState[target:GetGUIDLow()] = nil
+    target:DoAction(ACTION_GRIP_LOST)
+end
+
+RegisterAuraEvent(SPELL_GRIP, 3, gripRemove)
+
+-- C++ spell_grab_on_SpellScript::HandleScript
+-- (zone_storm_peaks.cpp:1184-1187): EFFECT_0 SCRIPT_EFFECT
+-- OnEffectHitTarget — the caster's grip aura gains GetEffectValue()
+-- stacks (ModStackAmount, AURA_REMOVE_BY_DEFAULT). The caster is the
+-- wyrm (vehicle-charm cast). A missing grip aura or a 0 DBC value is a
+-- no-op, matching the C++ null check and the GetEffectValue 0-read
+-- without a DBC row. DORMANT until Spell.dbc ships 60533.
+local function grabOnHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value <= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local grip = caster:GetAura(SPELL_GRIP)
+    if grip == nil then
+        return
+    end
+    grip:SetStackAmount(grip:GetStackAmount() + value)
+end
+
+RegisterSpellEvent(SPELL_GRAB_ON, 5, grabOnHit)
+
+-- C++ spell_loosen_grip_SpellScript::HandleScript
+-- (zone_storm_peaks.cpp:1214-1217): EFFECT_1 SCRIPT_EFFECT
+-- OnEffectHitTarget — the caster's grip aura loses StacksToLose stacks
+-- with AURA_REMOVE_BY_EXPIRE (5 for Thrust Spear, 15 for Mighty Spear
+-- Thrust, template instantiations :1486-1487). At 0 the aura is removed
+-- with EXPIRE, so the ev3 gripRemove handler fires ACTION_GRIP_LOST;
+-- Go SetStackAmount(0) does not remove, so the port removes explicitly
+-- with mode 4 (the gripPeriodic expiry twin). DORMANT until Spell.dbc
+-- ships 56690 / 60586.
+local function makeLoosenGripHit(stacksToLose)
+    return function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 1 then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        local grip = caster:GetAura(SPELL_GRIP)
+        if grip == nil then
+            return
+        end
+        local stacks = grip:GetStackAmount()
+        if stacks <= stacksToLose then
+            grip:Remove(AURA_REMOVE_BY_EXPIRE)
+            return
+        end
+        grip:SetStackAmount(stacks - stacksToLose)
+    end
+end
+
+RegisterSpellEvent(SPELL_THRUST_SPEAR, 5, makeLoosenGripHit(5))
+RegisterSpellEvent(SPELL_MIGHTY_SPEAR_THRUST, 5, makeLoosenGripHit(15))
+
+-- C++ spell_low_health_trigger_SpellScript::HandleScript
+-- (zone_storm_peaks.cpp:1247): EFFECT_0 SCRIPT_EFFECT
+-- OnEffectHitTarget — the hit unit casts GetEffectValue() (the DBC eff0
+-- spell) on a nil target, triggered. The port casts it on the hit unit
+-- (self-cast, the close-rift precedent); a 0 value (no DBC row) is a
+-- no-op. Cast by the wyrm at 25% health (DoCastAOE, :849-851) for the
+-- phase-2 transition. DORMANT until Spell.dbc ships 60596.
+local function lowHealthTriggerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value <= 0 then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, value, true)
+end
+
+RegisterSpellEvent(SPELL_LOW_HEALTH_TRIGGER, 5, lowHealthTriggerHit)
+
+-- C++ spell_claw_swipe_check_AuraScript::OnApply
+-- (zone_storm_peaks.cpp:1299-1302): AfterEffectApply eff0 DUMMY — the
+-- wyrm warns (ACTION_CLAW_SWIPE_WARN, Talk SAY_SWIPE, :736-738).
+local function clawSwipeCheckApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:DoAction(ACTION_CLAW_SWIPE_WARN)
+end
+
+RegisterAuraEvent(SPELL_CLAW_SWIPE_CHECK, 2, clawSwipeCheckApply)
+
+-- C++ spell_claw_swipe_check_AuraScript::OnRemove
+-- (zone_storm_peaks.cpp:1304-1319): AfterEffectRemove eff0 DUMMY. When
+-- the seat-0 passenger holds SPELL_DODGE_CLAWS (56704) the swipe is
+-- dodged (ACTION_CLAW_SWIPE_DODGE); otherwise the target casts the eff0
+-- amount (60776 Claw Swipe) on a nil target, non-triggered. The port
+-- casts it on the target (self-cast, the close-rift precedent); a 0
+-- amount (no DBC row) is a no-op. DORMANT until Spell.dbc ships 56705.
+local function clawSwipeCheckRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    local kit = target:GetVehicleKit()
+    if kit ~= nil then
+        local passenger = kit:GetPassenger(0)
+        if passenger ~= nil and passenger:HasAura(SPELL_DODGE_CLAWS) then
+            target:DoAction(ACTION_CLAW_SWIPE_DODGE)
+            return
+        end
+    end
+    local amount = aura:GetAmount(0)
+    if amount <= 0 then
+        return
+    end
+    target:CastSpell(target, amount, false)
+end
+
+RegisterAuraEvent(SPELL_CLAW_SWIPE_CHECK, 3, clawSwipeCheckRemove)
