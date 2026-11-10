@@ -143,8 +143,9 @@
 -- spell_auriaya_strenght_of_the_pack (64381),
 -- spell_auriaya_sentinel_blast (64392 / 64679),
 -- spell_auriaya_feral_essence_removal (64456),
--- spell_auriaya_feral_rush (64496 / 64674) — no SpellScript
--- bridge (spell_auriaya_agro_creator (63709) PORTED in
+-- spell_auriaya_feral_rush (64496 / 64674) — PORTED in
+-- feralRushHit below (ev5 OnEffectHitTarget, EFFECT_1
+-- SCHOOL_DAMAGE); spell_auriaya_agro_creator (63709) PORTED in
 -- guardianDummyEffect, ev30 dummy-effect event);
 -- spell_auriaya_random_agro_periodic (61906) — no
 -- AuraScript bridge; achievement_nine_lives / achievement_crazy_cat_lady
@@ -195,6 +196,8 @@ local SPELL_REDUCE_CRITCAL       = 64481
 local SPELL_FERAL_ESSENCE        = 64455
 local SPELL_RANDOM_AGRO_PERIODIC = 61906
 local SPELL_FERAL_RUSH           = 64496
+local SPELL_FERAL_RUSH_2         = 64489
+local SPELL_FERAL_RUSH_HEROIC    = 64674
 local SPELL_FERAL_POUNCE         = 64478
 local SPELL_DROWNED_STATE        = 64462
 local SPELL_PERMANENT_FEIGN_DEATH = 58951
@@ -681,6 +684,26 @@ local function defenderRushTick(creature, guid)
         end)
     end
 end
+
+-- C++ spell_auriaya_feral_rush (:640-660): OnEffectHitTarget
+-- EFFECT_1 SPELL_EFFECT_SCHOOL_DAMAGE -> caster self-casts
+-- SPELL_FERAL_RUSH_2 64489, triggered, unconditional. ev5 is the
+-- exact hook (skadi/gal_darah precedent); effectIndex == 1 is the
+-- C++ EFFECT_1 registration. 64674 is the heroic twin (class
+-- comment only, same script bound to both IDs). Dormant until
+-- Spell.dbc ships: the ev5 fire loop is gated on spellKnown.
+local function feralRushHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_FERAL_RUSH_2, true)
+end
+RegisterSpellEvent(SPELL_FERAL_RUSH, 5, feralRushHit)
+RegisterSpellEvent(SPELL_FERAL_RUSH_HEROIC, 5, feralRushHit)
 
 -- C++ spell_auriaya_random_agro_periodic (61906, :580-616): 5s
 -- periodic — no AuraScript bridge, so the leg rides this Lua 5s tick
