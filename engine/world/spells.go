@@ -3653,8 +3653,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				if dist < minRange {
 					// Spell::CheckRange (Spell.cpp:6567-6569) fails min-range
 					// violations with SPELL_FAILED_OUT_OF_RANGE — the engine
-					// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter
-					// is the Death Grip script leg in spell_dk.cpp:2760).
+					// never emits SPELL_FAILED_TOO_CLOSE (the sole emitter
+					// is the 49576 Death Grip Initial gauntlet leg).
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					return true
 				}
@@ -3701,9 +3701,9 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				if minRange > 0 && dist < minRange {
 					// Spell::CheckRange (Spell.cpp:6567-6569): min-range
 					// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
-					// TOO_CLOSE — this C++ tree's engine never emits
-					// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
-					// script leg, spell_dk.cpp:2760).
+					// TOO_CLOSE — this range arm never emits
+					// SPELL_FAILED_TOO_CLOSE (sole emitter is the 49576
+					// Death Grip Initial gauntlet leg).
 					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedOutOfRange), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
 					return true
@@ -4151,6 +4151,31 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoPet), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "death pact without owned undead pet")
 			return true
+		}
+	}
+	// spell_dk_death_grip_initial::CheckCast (spell_dk.cpp:2750-2762):
+	// Death Grip Initial cannot be cast while jumping or falling
+	// (SPELL_FAILED_MOVING), and cannot target a player within 8 yards
+	// (SPELL_FAILED_TOO_CLOSE, patch 3.3.3 minimum range in PvP). C++
+	// script OnCheckCast handlers run at the end of Spell::CheckCast, so
+	// this wires after the generic gates beside the death-pact leg.
+	// s.isFalling folds the jump state in: MSG_MOVE_JUMP sets it
+	// (movement.go), so it twins both HasUnitState(UNIT_STATE_JUMPING)
+	// and HasUnitMovementFlag(MOVEMENTFLAG_FALLING).
+	if spellID == 49576 {
+		if s.isFalling {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedMoving), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "death grip initial while jumping or falling")
+			return true
+		}
+		if targetGUID != 0 && s.server.findSessionByGUID(targetGUID) != nil {
+			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				if distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z) < 8 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTooClose), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "death grip initial too close to player target")
+					return true
+				}
+			}
 		}
 	}
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
@@ -4686,8 +4711,8 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 		if dist < calcMeleeRange(pReach, tgt.CombatReach) {
 			// Spell::CheckRange (Spell.cpp:6555-6556) returns
 			// SPELL_FAILED_OUT_OF_RANGE for min-range violations — the
-			// engine never emits SPELL_FAILED_TOO_CLOSE (the sole C++
-			// emitter is the Death Grip script leg, spell_dk.cpp:2760).
+			// engine never emits SPELL_FAILED_TOO_CLOSE here (the sole
+			// emitter is the 49576 Death Grip Initial gauntlet leg).
 			return 97 // SPELL_FAILED_OUT_OF_RANGE
 		}
 		// Spell::GetMinMaxRange (Spell.cpp:6584-6637): the completion recheck
@@ -4739,8 +4764,8 @@ func (s *session) validateSpellRange(ctx context.Context, spellID uint32, spell 
 	if minRange > 0 && dist < minRange {
 		// Spell::CheckRange (Spell.cpp:6568-6569): min-range violations
 		// fail with SPELL_FAILED_OUT_OF_RANGE, not TOO_CLOSE — the engine
-		// never emits SPELL_FAILED_TOO_CLOSE (the sole C++ emitter is the
-		// Death Grip script leg, spell_dk.cpp:2760).
+		// never emits SPELL_FAILED_TOO_CLOSE (the sole emitter is the
+		// 49576 Death Grip Initial gauntlet leg).
 		return 97 // SPELL_FAILED_OUT_OF_RANGE
 	}
 	// Spell::CheckRange (Spell.cpp:6559-6562): with SPELL_FACING_FLAG_INFRONT
@@ -16207,6 +16232,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 49560 && len(hitTargets) > 0 {
 						s.deathGripDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, target)
 					}
+					// spell_dk_death_grip_initial (spell_dk.cpp:2740-2781): the
+					// EFFECT_0 DUMMY OnEffectHitTarget arm — the caster casts
+					// Death Grip (49560) triggered on the hit unit. Fires once
+					// per effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target), ahead of the
+					// pet-aura/Eluna legs like the death-grip arm above, and
+					// only when a target was actually hit.
+					if spellID == 49576 && len(hitTargets) > 0 {
+						s.deathGripInitialDummyEffect(ctx, effectIndex, hitTargets)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -27542,6 +27577,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// miss-filtered hit like the raise-ally leg above.
 					if spellID == 23881 && len(effectGUIDs) > 0 {
 						s.castSpellDirect(ctx, 23885, s.playerGUID)
+					}
+					// spell_dk_death_grip_initial::HandleDummy
+					// (spell_dk.cpp:2764-2767): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm casts Death Grip (49560) on the
+					// hit unit, triggered. The client path's twin sits in
+					// finishSpellCast's dummy arm; this is the triggered-cast
+					// leg, gated on a miss-filtered hit like the bloodthirst
+					// leg above. The chain terminates: the 49560 re-cast has
+					// no dummy leg in this dispatch, so it never re-casts
+					// 49576.
+					if spellID == 49576 && len(effectGUIDs) > 0 {
+						for _, guid := range effectGUIDs {
+							if guid == 0 {
+								continue
+							}
+							s.castSpellDirect(ctx, 49560, guid)
+						}
 					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
@@ -51423,9 +51475,11 @@ func (s *session) corpseExplosionDetonate(ctx context.Context, spell wotlk.Spell
 // unit cast; the dest is the packet dest when present, else the hit
 // unit's position — the C++ dest is the DBC implicit dest, unverifiable
 // without Spell.dbc (if it proves TARGET_DEST_CASTER, this must switch
-// to the caster's position). The 49576 script itself (CheckCast +
-// dummy, spell_dk.cpp:2740-2781) is unported, so the chain ends at the
-// funnel's default 49576 handling.
+// to the caster's position). The 49576 script itself is ported
+// (deathGripInitialDummyEffect + the CheckCast gauntlet leg); the
+// triggered-path 49560 leg stays out (no 49560 case in the triggered
+// dummy dispatch), so the chain ends after the 49576 dummy's 49560
+// re-cast, whose base effects apply without its script dummy.
 func (s *session) deathGripDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64, target protocol.SpellTargetData) {
 	if s == nil || s.player == nil || s.server == nil || effectIndex != 0 || len(spell.Effects) == 0 {
 		return
@@ -51463,6 +51517,25 @@ func (s *session) deathGripDummyEffect(ctx context.Context, spell wotlk.Spell, e
 			}
 		}
 		s.castSpellDirectWithOverrides(ctx, uint32(trigger), 0, false, nil, 0, &dest, 0)
+	}
+}
+
+// deathGripInitialDummyEffect is spell_dk_death_grip_initial
+// (spell_dk.cpp:2740-2781): the EFFECT_0 DUMMY OnEffectHitTarget arm —
+// the caster casts Death Grip (49560) triggered on the hit unit. No Lua
+// ev5 port: the player path has no OnEffectHitTarget site (60533
+// precedent). DORMANT until Spell.dbc ships the 49576 record. The chain
+// terminates: the 49560 re-cast has no dummy leg in the triggered
+// dispatch, so it never re-casts 49576.
+func (s *session) deathGripInitialDummyEffect(ctx context.Context, effectIndex int, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || effectIndex != 0 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		s.castSpellDirect(ctx, 49560, guid)
 	}
 }
 

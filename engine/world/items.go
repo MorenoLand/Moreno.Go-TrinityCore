@@ -4758,9 +4758,9 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 					if minRange > 0 && dist < minRange {
 						// Spell::CheckRange (Spell.cpp:6567-6569): min-range
 						// violations fail with SPELL_FAILED_OUT_OF_RANGE, not
-						// TOO_CLOSE — this C++ tree's engine never emits
-						// SPELL_FAILED_TOO_CLOSE (sole emitter is the Death Grip
-						// script leg, spell_dk.cpp:2760).
+						// TOO_CLOSE — this item-cast arm never emits
+						// SPELL_FAILED_TOO_CLOSE (sole emitter is the 49576
+						// Death Grip Initial gauntlet leg).
 						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castCount, spellID, spellFailedOutOfRange), true)
 						s.debug("item cast rejected", "account", s.accountName, "spell", spellID, "reason", "too close", "dist", dist, "min", minRange)
 						return true

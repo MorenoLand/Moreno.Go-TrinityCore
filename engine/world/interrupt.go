@@ -17,6 +17,7 @@ const (
 	spellFailedInterrupted        = 40   // SPELL_FAILED_INTERRUPTED (SharedDefines.h:1023)
 	spellFailedMoving             = 51   // SPELL_FAILED_MOVING (SharedDefines.h:1033)
 	spellFailedSpellUnavailable   = 107  // SPELL_FAILED_SPELL_UNAVAILABLE (SharedDefines.h:1089)
+	spellFailedTooClose           = 128  // SPELL_FAILED_TOO_CLOSE (SharedDefines.h:1110)
 )
 
 // isInterruptSpell identifies primary interrupt spells that abort active casts and lock spell schools.
