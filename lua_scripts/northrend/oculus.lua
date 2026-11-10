@@ -54,8 +54,9 @@
 --   SetFacingTo(2.5), the absolute-facing twin.
 -- - The remaining SpellScripts/AuraScripts: call-drake dest
 --   select (49345/49461/49462, SpellScript), shock lance
---   damage calc (49840, SpellScript), touch the nightmare
---   damage calc (50341, SpellScript) — no SpellScript bridge;
+--   damage calc (49840, SpellScript) — no SpellScript bridge;
+--   touch the nightmare damage calc (50341) ports Go-side
+--   (spell_onhit.go onHitDamageRewrite: base + 30% caster max HP).
 --   evasive maneuvers proc (50240) + temporal rift proc
 --   (49592) — no AuraEvent proc twin (events are 1 periodic /
 --   2 apply / 3 remove / 4 stack-change only); dream funnel

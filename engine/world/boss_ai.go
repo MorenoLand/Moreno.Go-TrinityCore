@@ -9436,7 +9436,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 			continue
 		}
 		damage := baseDamage
-		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(maxUint32(m.Level, 1)), m.X, m.Y, vs.player.X, vs.player.Y, vs.player.Health, vs.player.MaxHealth, damage); ok {
+		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(maxUint32(m.Level, 1)), m.X, m.Y, vs.player.X, vs.player.Y, vs.player.Health, vs.player.MaxHealth, m.MaxHealth, damage); ok {
 			damage = rewritten
 		}
 		damageImmune := false
@@ -9695,7 +9695,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		victimLevel := uint8(maxUint32(victim.Level, 1))
 		attackerLevel := uint8(maxUint32(m.Level, 1))
 		damage := baseDamage
-		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(attackerLevel), m.X, m.Y, victim.X, victim.Y, victimHealth, victim.MaxHealth, damage); ok {
+		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(attackerLevel), m.X, m.Y, victim.X, victim.Y, victimHealth, victim.MaxHealth, m.MaxHealth, damage); ok {
 			damage = rewritten
 		}
 		var absorbed, resisted, blocked uint32

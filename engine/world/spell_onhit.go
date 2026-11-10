@@ -21,9 +21,12 @@ import (
 // multiplies GetHitDamage() is a C++ no-op and is NOT in the table:
 // loken 52961 (GetHitDamage() * distance), krystallus/gruul shatter
 // 50811/33671 (GetHitDamage() * falloff) — both removed 2026-11-09,
-// their tick-372 "ported scaling" notes were wrong.
-func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, baseDamage uint32) (uint32, bool) {
-	return onHitDamageRewrite(spell.ID, victimHealth, victimMaxHealth, baseDamage)
+// their tick-372 "ported scaling" notes were wrong. OnEffectHitTarget
+// arms qualify too — IsInModifiableHook (SpellScript.cpp:421-434)
+// covers EFFECT_HIT_TARGET — so 50341 (oculus) is live; the dispatch
+// carries casterMaxHealth for caster-absolute arms.
+func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, casterX, casterY, victimX, victimY float32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32) (uint32, bool) {
+	return onHitDamageRewrite(spell.ID, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage)
 }
 
 // spellScriptOnHitLatch runs the SpellScript OnHit arms that set a
@@ -75,9 +78,11 @@ func (s *Server) spellScriptOnHitLatch(spell wotlk.Spell, victim *creatureMotion
 // absolute-value arms qualify (see spellScriptOnHitDamage above for
 // why GetHitDamage()-relative arms are C++ no-ops). C++
 // EffectSchoolDamage ADDS the rolled DBC base on top of the rewritten
-// Damage (SpellEffects.cpp:788), so these entries replace the base
-// only where the DBC base is 0 — unverified without Spell.dbc.
-func onHitDamageRewrite(spellID uint32, victimHealth, victimMaxHealth, baseDamage uint32) (uint32, bool) {
+// Damage (SpellEffects.cpp:788), so entries replace the base only
+// where the DBC base is 0 — unverified without Spell.dbc — except
+// 50341, whose nonzero base (25000, oculus.cpp:80) is kept and the
+// 30% caster-max-health rewrite is added on top.
+func onHitDamageRewrite(spellID uint32, victimHealth, victimMaxHealth, casterMaxHealth, baseDamage uint32) (uint32, bool) {
 	switch spellID {
 	case 48292:
 		// spell_dark_slash (boss_ymiron.cpp:315-334): the OnHit handler
@@ -104,6 +109,14 @@ func onHitDamageRewrite(spellID uint32, victimHealth, victimMaxHealth, baseDamag
 		// spell, so the rewrite applies to whichever targets the
 		// engine selects.
 		return uint32(float32(victimMaxHealth) * 35.0 / 100.0), true
+	case 50341:
+		// spell_oculus_touch_the_nightmare (oculus.cpp:632-655): the
+		// OnEffectHitTarget handler sets the hit damage to 30% of the
+		// caster's max health. ADDITIVE: EffectSchoolDamage adds the
+		// rolled DBC base on top of the rewritten damage
+		// (SpellEffects.cpp:788), and effect 2's base is 25000
+		// (oculus.cpp:80 tooltip), so the base is kept.
+		return baseDamage + casterMaxHealth*30/100, true
 	}
 	return baseDamage, false
 }

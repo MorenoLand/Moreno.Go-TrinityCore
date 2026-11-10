@@ -27810,7 +27810,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				// (Spell.cpp:2377), so C++ deals the unmodified base.
 				if s.server != nil && s.player != nil {
 					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
-						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, baseDmg); hit {
+						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg); hit {
 							baseDmg = rewritten
 						}
 					}
