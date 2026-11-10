@@ -75,15 +75,6 @@ const (
 	miscFreezeWrong        = "Wrong freeze command usage."                          // LANG_COMMAND_FREEZE_WRONG 5002
 )
 
-// miscDeny reports a per-arm RBAC denial the tree-standard way.
-func (s *session) miscDeny(ctx context.Context, perm uint32) bool {
-	if !s.commandAllowed(ctx, perm) {
-		s.sendNotification("You do not have permission to use that command.")
-		return true
-	}
-	return false
-}
-
 // miscPlayerLink mirrors ChatHandler::playerLink (Chat.h:119); the Go tree
 // has no GetNameLink bridge, so the plain name is used, per tree convention.
 func miscPlayerLink(name string) string { return name }
