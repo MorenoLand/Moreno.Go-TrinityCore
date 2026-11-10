@@ -2451,8 +2451,12 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// escort-player GUID the IsEscorted gate reads. The waypoint walk
 	// itself rides the MoveWaypoint bridge + the OnReachWP (6) arrival
 	// event, paused/resumed via SetEscortPaused; the EscortAI phase
-	// machine (WaypointReached scripts) lives in Lua ports.
-	methods["StartEscort"] = func(_ context.Context, args []any) ([]any, error) {
+	// machine (WaypointReached scripts) lives in Lua ports. The Start
+	// respawn-queue leg (ScriptedEscortAI.cpp:280-285) rides along:
+	// queueEscortRespawn writes the respawn row for escort-quest NPCs
+	// (CONFIG_RESPAWN_DYNAMIC_ESCORTNPC + SPAWNGROUP_FLAG_ESCORTQUESTNPC),
+	// ordered before the engaged/already-escorting returns in C++.
+	methods["StartEscort"] = func(ctx context.Context, args []any) ([]any, error) {
 		if len(args) == 0 {
 			return nil, fmt.Errorf("player is required")
 		}
@@ -2467,6 +2471,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		motion.EscortPlayerGUID = playerGUID
 		s.motionMu.Unlock()
+		s.queueEscortRespawn(ctx, motion)
 		return nil, nil
 	}
 	// GetEscortPlayer is ScriptedEscortAI::GetPlayerForEscort: the

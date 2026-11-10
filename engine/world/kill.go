@@ -2253,9 +2253,25 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	if s.creatureRespawns == nil {
 		s.creatureRespawns = make(map[uint32]creatureRespawn)
 	}
-	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
-	s.motionMu.Unlock()
-	s.saveCreatureRespawnRow(ctx, guid, respawnAt, uint32(mapID), 0)
+	if existing, ok := s.creatureRespawns[guid]; ok && !respawnAt.Before(existing.At) {
+		// Map::AddRespawnInfo (Map.cpp:3153-3175): a later respawn time
+		// never replaces a pending earlier one — the escort-start queue
+		// (queueEscortRespawnTime) pins the respawn to start+delay even
+		// if the NPC dies first, and the dropped save writes no row.
+		// The corpse fields still refresh from this death: the corpse
+		// removes at death+corpseDelay and the revive restores health.
+		existing.CorpseRemoveAt = corpseRemoveAt
+		existing.CorpseRemoved = false
+		existing.Health = health
+		existing.CorpseDelay = corpseDelay
+		existing.RespawnDelay = uint32(seconds)
+		s.creatureRespawns[guid] = existing
+		s.motionMu.Unlock()
+	} else {
+		s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: uint32(seconds)}
+		s.motionMu.Unlock()
+		s.saveCreatureRespawnRow(ctx, guid, respawnAt, uint32(mapID), 0)
+	}
 }
 
 // reseatRespawnedEntry reverts a scripted UpdateEntry transform when the
@@ -2357,9 +2373,24 @@ func (s *Server) scheduleInstanceCreatureRespawn(ctx context.Context, target com
 	if s.instanceCreatureRespawns[key] == nil {
 		s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
 	}
-	s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: respawnDelay}
-	s.motionMu.Unlock()
-	s.saveCreatureRespawnRow(ctx, guid, respawnAt, target.Map, target.InstanceID)
+	if existing, ok := s.instanceCreatureRespawns[key][guid]; ok && !respawnAt.Before(existing.At) {
+		// Map::AddRespawnInfo (Map.cpp:3153-3175): a later respawn time
+		// never replaces a pending earlier one — the escort-start queue
+		// (queueEscortRespawnTime) pins the respawn to start+delay even
+		// if the NPC dies first, and the dropped save writes no row.
+		// The corpse fields still refresh from this death.
+		existing.CorpseRemoveAt = corpseRemoveAt
+		existing.CorpseRemoved = false
+		existing.Health = health
+		existing.CorpseDelay = corpseDelay
+		existing.RespawnDelay = respawnDelay
+		s.instanceCreatureRespawns[key][guid] = existing
+		s.motionMu.Unlock()
+	} else {
+		s.instanceCreatureRespawns[key][guid] = creatureRespawn{GUID: guid, At: respawnAt, Health: health, Entry: uint32(spawnEntry), Map: target.Map, InstanceID: target.InstanceID, X: float32(x), Y: float32(y), Z: float32(z), CorpseRemoveAt: corpseRemoveAt, CorpseDelay: corpseDelay, RespawnDelay: respawnDelay}
+		s.motionMu.Unlock()
+		s.saveCreatureRespawnRow(ctx, guid, respawnAt, target.Map, target.InstanceID)
+	}
 }
 
 // saveCreatureRespawnRow mirrors Map::SaveRespawnInfoDB (Map.cpp:4486,
@@ -2383,6 +2414,110 @@ func (s *Server) deleteCreatureRespawnRow(ctx context.Context, guid uint32, mapI
 		return
 	}
 	_, _ = s.CharactersStore.ExecStatement(ctx, "CHAR_DEL_RESPAWN", 0, guid, mapID, instanceID)
+}
+
+// insertCreatureRespawnRecord mirrors Map::AddRespawnInfo (Map.cpp:3153)
+// plus the Map::SaveRespawnTime DB half (Map.cpp:4475-4484): the record
+// lands in the world or instance map by its InstanceID and its saved row
+// is written — unless a pending record already carries an earlier time,
+// in which case the pending time stands (earliest wins: a later request
+// is dropped, an earlier-or-equal one replaces) and neither the record
+// nor the row is touched.
+func (s *Server) insertCreatureRespawnRecord(ctx context.Context, rec creatureRespawn) {
+	if s == nil || rec.GUID == 0 {
+		return
+	}
+	s.motionMu.Lock()
+	if rec.InstanceID == 0 {
+		if s.creatureRespawns == nil {
+			s.creatureRespawns = make(map[uint32]creatureRespawn)
+		}
+		if existing, ok := s.creatureRespawns[rec.GUID]; ok && rec.At.After(existing.At) {
+			s.motionMu.Unlock()
+			return
+		}
+		s.creatureRespawns[rec.GUID] = rec
+	} else {
+		key := instanceAdmissionKey{MapID: rec.Map, InstanceID: rec.InstanceID}
+		if s.instanceCreatureRespawns == nil {
+			s.instanceCreatureRespawns = make(map[instanceAdmissionKey]map[uint32]creatureRespawn)
+		}
+		if s.instanceCreatureRespawns[key] == nil {
+			s.instanceCreatureRespawns[key] = make(map[uint32]creatureRespawn)
+		}
+		if existing, ok := s.instanceCreatureRespawns[key][rec.GUID]; ok && rec.At.After(existing.At) {
+			s.motionMu.Unlock()
+			return
+		}
+		s.instanceCreatureRespawns[key][rec.GUID] = rec
+	}
+	s.motionMu.Unlock()
+	s.saveCreatureRespawnRow(ctx, rec.GUID, rec.At, rec.Map, rec.InstanceID)
+}
+
+// queueEscortRespawnTime mirrors the SaveRespawnTime(GetRespawnDelay())
+// leg at the head of EscortAI::Start (ScriptedEscortAI.cpp:283-286) and
+// FollowerAI::StartFollow (ScriptedFollowerAI.cpp:161-164): with
+// CONFIG_RESPAWN_DYNAMIC_ESCORTNPC set and SPAWNGROUP_FLAG_ESCORTQUESTNPC
+// on the spawn's group, starting the escort queues a respawn from the
+// point it starts, so a restart mid-escort still revives the NPC at
+// start+delay — the row is what Map::LoadRespawnTimes reads back, and
+// the Go load half is loadCreatureRespawnTimes. The gates run in C++
+// order: creature data, config, group flag. SaveRespawnTime's own early
+// returns (summon, no spawn id, no DB row) ride the dbSpawned check,
+// the Despawn precedent for GetCreatureData(). The seeded record carries
+// CorpseRemoved=false, so the live spawn keeps streaming
+// (creatureCorpseRemoved gates on that flag) and processCreatureRespawns
+// drops it at due time while the NPC is alive, exactly like
+// Map::CheckRespawn's alive arm; a death before then keeps the queued
+// time via the AddRespawnInfo rule in the schedule paths. The compat
+// quirk (Creature.cpp:2545-2552): compat mode ignores the passed
+// forceDelay and writes m_respawnTime as-is — the pending queued time,
+// or 0 for a live creature that never queued one. A 0 row is a delete
+// at the next load (Map::SaveRespawnTime respawnTime==0), and the death
+// path already wrote the row whenever a time is pending, so the compat
+// arm is a no-op here: no in-memory touch (C++ writes straight to the
+// DB, never AddRespawnInfo) and no rewrite of a row that already
+// carries the pending time. A zero delay falls through to m_respawnTime
+// (Creature.cpp:2555), 0 for a live creature, which deletes any pending
+// respawn (Map::SaveRespawnTime respawnTime==0 -> RemoveRespawnTime).
+func (s *Server) queueEscortRespawnTime(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || !s.Config.RespawnDynamicEscortNPC {
+		return
+	}
+	s.motionMu.Lock()
+	guid, entry, mapID, instanceID := motion.GUID, motion.Entry, motion.Map, motion.InstanceID
+	health, homeX, homeY, homeZ := motion.MaxHealth, motion.HomeX, motion.HomeY, motion.HomeZ
+	s.motionMu.Unlock()
+	dbGUID := uint32(guid & 0x00FFFFFF)
+	if dbGUID == 0 || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	var one int
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature WHERE guid = ?", dbGUID).Scan(&one); err != nil {
+		return
+	}
+	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnTypeCreature, dbGUID, mapID, instanceID)
+	if !ok || tmpl == nil || tmpl.Flags&spawnGroupFlagEscortQuestNPC == 0 {
+		return
+	}
+	if s.spawnGroupCompatModeFor(ctx, spawnTypeCreature, dbGUID, mapID, instanceID) {
+		return
+	}
+	delay := s.creatureRespawnDelaySeconds(ctx, mapID, instanceID, guid)
+	if delay == 0 {
+		s.spawnGroupClearCreatureRespawn(ctx, mapID, instanceID, dbGUID)
+		return
+	}
+	if health == 0 {
+		health = 1
+	}
+	s.insertCreatureRespawnRecord(ctx, creatureRespawn{
+		GUID: dbGUID, At: time.Now().Add(time.Duration(delay) * time.Second),
+		Health: health, Entry: entry, Map: mapID, InstanceID: instanceID,
+		X: homeX, Y: homeY, Z: homeZ,
+		CorpseDelay: s.creatureCorpseDelaySeconds(ctx, entry), RespawnDelay: delay,
+	})
 }
 
 // deleteRespawnRowsForInstance mirrors Map::DeleteRespawnTimesInDB
@@ -2594,6 +2729,57 @@ func (s *Server) checkRespawnLinkedDeferral(ctx context.Context, respawn creatur
 // (ScriptedEscortAI.h:58): the escort-player GUID is non-empty.
 func (m *creatureMotion) IsEscorted() bool {
 	return m != nil && m.EscortPlayerGUID != 0
+}
+
+// queueEscortRespawn mirrors the respawn-queue leg of EscortAI::Start
+// (ScriptedEscortAI.cpp:280-285) and FollowerAI::StartFollow
+// (ScriptedFollowerAI.cpp:160-164): with
+// CONFIG_RESPAWN_DYNAMIC_ESCORTNPC set and SPAWNGROUP_FLAG_ESCORTQUESTNPC
+// on the spawn's group, starting the escort queues a respawn from the
+// point it starts — SaveRespawnTime(GetRespawnDelay()). The row is the
+// restart half: without it a server restart mid-escort leaves the NPC
+// streamed dead at its escort position instead of reviving at home after
+// its delay (loadCreatureRespawnTimes seeds the record from the row).
+// The write is the non-compat arm only: Creature::SaveRespawnTime
+// (Creature.cpp:2535-2556) in compatibility mode ignores forceDelay and
+// re-saves the live m_respawnTime, which LoadFromDB seeds from the loaded
+// respawn row (Creature.cpp:1718) and is 0 for a normally-spawned live
+// creature — a 0-time row is delete-only on load (Map.cpp:4460-4465),
+// so the compat leg is a no-op re-save Go has no live value for. The
+// delay-0 arm is the C++ forceDelay-falsy leg: SaveRespawnTime(0) falls
+// through to m_respawnTime (0) and Map::SaveRespawnTime deletes the row,
+// so a zero delay deletes rather than writing a now row. Summons and
+// spawnless motions take the early return (Creature.cpp:2537).
+func (s *Server) queueEscortRespawn(ctx context.Context, motion *creatureMotion) {
+	if s == nil || motion == nil || !s.Config.RespawnDynamicEscortNPC {
+		return
+	}
+	s.motionMu.Lock()
+	guid := motion.GUID
+	mapID := motion.Map
+	instanceID := motion.InstanceID
+	isSummon := motion.IsTempSummon
+	s.motionMu.Unlock()
+	spawnID := uint32(guid & 0x00FFFFFF)
+	if isSummon || spawnID == 0 {
+		return
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	_, tmpl, ok := s.spawnGroupOfMember(ctx, s.WorldStore.DB, spawnTypeCreature, spawnID, mapID, instanceID)
+	if !ok || tmpl == nil || tmpl.Flags&spawnGroupFlagEscortQuestNPC == 0 {
+		return
+	}
+	if tmpl.Flags&spawnGroupFlagCompat != 0 {
+		return
+	}
+	delay := s.creatureRespawnDelaySeconds(ctx, mapID, instanceID, guid)
+	if delay == 0 {
+		s.deleteCreatureRespawnRow(ctx, spawnID, mapID, instanceID)
+		return
+	}
+	s.saveCreatureRespawnRow(ctx, spawnID, time.Now().Add(time.Duration(delay)*time.Second), mapID, instanceID)
 }
 
 // escortRespawnExempt mirrors the escort arm of Map::CheckRespawn
