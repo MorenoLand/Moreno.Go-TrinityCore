@@ -232,6 +232,9 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 		}
 	}
 	if block.Flags&fileSingle != 0 {
+		// Single-sector files carry no offset table for libmpq__decrypt_key
+		// to recover the seed from, so libmpq decrypts them with seed 0;
+		// the filename-derived key above is the MPQ-format (StormLib) seed.
 		data, err := a.readAt(block.FilePos, uint64(block.CompressedSize))
 		if err != nil {
 			return nil, err
@@ -375,6 +378,12 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 	// "some blocks have set the compression flag, but are not compressed":
 	// a PKZIP- or MULTI-flagged block whose packed size is NOT smaller
 	// than the unpacked size is copied verbatim, never decompressed.
+	// C++ owner: dep/libmpq/libmpq/mpq.c libmpq__block_read — "files
+	// should not be compressed and imploded": a block with both flags set
+	// returns LIBMPQ_ERROR_UNPACK, so reject it instead of exploding it.
+	if flags&fileImplode != 0 && flags&fileCompress != 0 {
+		return nil, errors.New("MPQ block is both compressed and imploded")
+	}
 	if flags&fileImplode != 0 {
 		if uint32(len(data)) >= expected {
 			return data[:expected], nil
