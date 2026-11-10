@@ -19962,9 +19962,10 @@ func init() {
 	// 51s init; the summon is the spell's own effect, so no
 	// summon bridge is needed — the old "no target-search /
 	// summon bridges" claim was stale);
-	// npc_sanctum_sentry remaining legs (Reset self-buff 64369
-	// one-shot; EVENT_SAVAGE_POUNCE random-target CatsTargetSelector
-	// leg; SetWalk legs; JustDied DoAction(ACTION_CRAZY_CAT_LADY)
+	// npc_sanctum_sentry VERIFIED EXACT this tick (Reset 64369
+	// triggered one-shot; EVENT_SAVAGE_POUNCE CatsTargetSelector
+	// 10-15yd ring + LOS, 10s/1s re-arms; SetWalk legs no-bridge
+	// separable; JustDied DoAction(ACTION_CRAZY_CAT_LADY)
 	// relay PORTED tick 235); npc_feral_defender (entry 34035,
 	// Wowhead-verified 2026-11-05; no Talk arms — the full machine
 	// (Reset / START_COMBAT / RUSH / respawn chain / DamageTaken

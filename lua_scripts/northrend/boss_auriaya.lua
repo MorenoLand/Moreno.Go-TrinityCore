@@ -662,6 +662,25 @@ local function randomAliveThreatPlayer(creature)
     return candidates[math.random(#candidates)]
 end
 
+-- C++ spell_auriaya_random_agro_periodic fallback (:595-597):
+-- SelectTarget(Random, 0) with the playerOnly default false
+-- (UnitAI.h:170) — any alive threat-list unit, pets included, unlike
+-- the playerOnly=true START_COMBAT / RESPAWN_3 legs above. GetAITargets
+-- resolves creature victims too (lua_creature_events.go:4215), and
+-- AddThreat / AttackStart take creature GUIDs, so no bridge is needed.
+local function randomAliveThreatUnit(creature)
+    local candidates = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    return candidates[math.random(#candidates)]
+end
+
 -- C++ EVENT_RUSH (:386-394): SelectTarget(Random, 1,
 -- CatsTargetSelector(me, 10.0f, 11.0f)) -> DoCast(target,
 -- SPELL_FERAL_RUSH 64496, triggered); found: 5s re-arm; none: 1s.
@@ -711,14 +730,15 @@ RegisterSpellEvent(SPELL_FERAL_RUSH_HEROIC, 5, feralRushHit)
 -- periodic is a no-op without the script). PASSIVE-gated exactly
 -- like the C++ handler; far target 15-25yd ring + LOS -> AddThreat
 -- 3e6 + CastSpell FERAL_POUNCE 64478 triggered + AttackStart; else
--- any random threat player -> AddThreat 3e6 + AttackStart; none:
--- nothing. No IsCasting defer — aura periodics tick outside UpdateAI.
+-- any random alive threat unit (playerOnly=false fallback, pets
+-- included) -> AddThreat 3e6 + AttackStart; none: nothing. No
+-- IsCasting defer — aura periodics tick outside UpdateAI.
 local function defenderRetargetTick(creature, guid)
     if creature:GetReactState() ~= REACT_PASSIVE then
         local target = randomRingTarget(creature, 15.0, 25.0, false)
         local farTarget = target ~= nil
         if not target then
-            target = randomAliveThreatPlayer(creature)
+            target = randomAliveThreatUnit(creature)
         end
         if target then
             creature:AddThreat(target, 3000000)
