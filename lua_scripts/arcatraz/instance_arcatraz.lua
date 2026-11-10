@@ -54,9 +54,11 @@
 -- leg (:169-177) is a no-op in the ported model and stays out
 -- with them. DATA_CONVERSATION (4, :115-116/:133-134) — sole
 -- writer is Soccothrates's MoveInLOS 70y proximity arm
--- (boss_wrath_scryer_soccothrates.cpp:129-132, ev27
--- engage-only, no Z/arc/IsWithinDist replicas) and no C++
--- reader exists outside the instance GetData return. Save/
+-- (boss_wrath_scryer_soccothrates.cpp:129-132), PORTED
+-- 2026-11-10 in boss_wrath_scryer_soccothrates.lua via the ev7
+-- proximity poll + creature:SetData(4, DONE) twin (the only C++
+-- reader is Soccothrates's own MoveInLOS gate, so the flag never
+-- leaves that creature and this file needs no switch). Save/
 -- Load persistence — no bridge (Magtheridon precedent).
 -- Millhouse's commented-out JustDied FailQuest leg
 -- (arcatraz.cpp:137-140) is dead C++ and ports nothing.

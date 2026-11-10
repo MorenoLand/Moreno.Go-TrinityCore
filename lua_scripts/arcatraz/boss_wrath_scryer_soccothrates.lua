@@ -22,14 +22,16 @@
 -- DEATH arm — PORTED 2026-10-24 via event 7 +
 -- creature:SetData (see onAIUpdate); SAY_SOCCOTHRATES_
 -- CONVO_1..4 = 7..10 fire only from the prefight machine —
--- unreachable (MoveInLineOfSight arm instance-blocked, see
--- deviations). SAY_AGGRO_SOCCOTHRATES_FIRST = 0 and SAY_
--- SOCCOTHRATES_25_PERCENT = 6 and SAY_DALLIAH_CONVO_1..3 =
--- 8..10 are Dalliah's creature-text lines, fired via dalliah->
--- AI()->Talk(...) — PORTED 2026-10-24 in bossTick via the
--- FindNearestCreature / grid twin (see below).
+-- PORTED 2026-11-10 via the ev7 proximity poll + prefight pump
+-- (see onAIUpdate / prefightArm below). SAY_AGGRO_
+-- SOCCOTHRATES_FIRST = 0 and SAY_SOCCOTHRATES_25_PERCENT = 6
+-- and SAY_DALLIAH_CONVO_1..3 = 8..10 are Dalliah's
+-- creature-text lines, fired via dalliah->AI()->Talk(...) —
+-- PORTED 2026-10-24 in bossTick via the FindNearestCreature /
+-- grid twin (see below).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via
+-- OnTargetDied, 4 OnDied, 7 OnAIUpdate, 23 OnReset, 27
+-- OnMoveInLineOfSight. Timers via
 -- CreateLuaEvent (per-GUID scheduler pump); melee is
 -- engine-driven in Go (creature combat tick), like C++ DoMelee
 -- AttackIfReady.
@@ -44,8 +46,8 @@
 -- (SAY_AGGRO) + 1s scheduler pump (a port of UpdateAI in C++
 -- arm order — 1s granularity exact for all C++ timers; the
 -- !UpdateVictim early return collapses into the pump: the
--- preFight branch stays out (no MoveInLineOfSight /
--- instance-data bridge); the dalliahDeath branch is PORTED
+-- preFight branch is PORTED 2026-11-10 via the ev7 proximity
+-- poll + prefight pump (see onAIUpdate / prefightArm below); the dalliahDeath branch is PORTED
 -- 2026-10-24 via event 7 + creature:SetData (see onAIUpdate). felfire shock 35759 —
 -- {12s,14s} init then {12s,14s}, TRIGGERED DoCastVictim (C++
 -- `DoCastVictim(SPELL_FELFIRE_SHOCK, true)`, C++-exact),
@@ -83,21 +85,35 @@
 -- shim (instance_arcatraz.cpp stays blocked on the instance-
 -- script model; the BossAI ctor DATA_SOCCOTHRATES = 2
 -- SetBossState bookkeeping is PORTED as the (2,1)/(2,0)/(2,3)
--- writes below); no
--- MoveInLineOfSight / instance-data bridge — the 70yd
--- proximity arm (instance->GetData(DATA_CONVERSATION) ==
--- NOT_STARTED + TYPEID_PLAYER gate) is unreachable, so the
--- whole preFight machine is unmodeled: the EVENT_PREFIGHT_
--- 1..9 chain, Talk(SAY_SOCCOTHRATES_CONVO_1..4), the dalliah->
--- AI()->Talk(SAY_DALLIAH_CONVO_1..3) arms, the dalliah + self
--- MovePoint arms and the SetFacingToObject / SetHomePosition
--- arms (SetFacingToObject is directly bridged (lua_creature_
--- events.go:4890); MoveTo is the MovePoint twin (:4986) and
--- SetHomePosition is bridged (:6554) — but the arms ride the
--- unmodeled cross-creature preFight chain (EVENT_PREFIGHT_9,
--- C++ :203-206 via instance-> GetGuidData(DATA_DALLIAH),
--- me<->dalliah face targets); the arms stay unmodeled only
--- because the preFight trigger itself is unreachable); no
+-- writes below); the MoveInLineOfSight prefight machine is
+-- PORTED 2026-11-10 (see onAIUpdate / prefightArm): the 70yd
+-- proximity arm rides the ev7 poll (runthak precedent: ev27
+-- fires only from the aggro-engage branch, and this trigger is
+-- out-of-combat proximity) + creature:GetPlayersInGrid(70)
+-- (3D + reach, live players same map+instance), and the
+-- conversation flag rides the per-creature ScriptData store
+-- via creature:SetData(DATA_CONVERSATION, DONE) /
+-- GetData (lua_creature_events.go:809) — the instance file
+-- needs no switch: the only C++ reader is Soccothrates's own
+-- MoveInLineOfSight gate (instance_arcatraz.cpp:133-134), so
+-- the flag never leaves this creature;
+-- the EVENT_PREFIGHT_1..9 chain, Talk(SAY_SOCCOTHRATES_
+-- CONVO_1..4), the dalliah->AI()->Talk(SAY_DALLIAH_CONVO_1..3)
+-- arms, the dalliah + self MovePoint arms (MoveTo twin,
+-- lua_creature_events.go:4986) and the SetFacingToObject /
+-- SetHomePosition arms (SetFacingToObject via the atan2 twin +
+-- bridged creature:SetFacingTo, nightbane precedent;
+-- SetHomePosition bridged, lua_creature_events.go:6554) all
+-- ride the chain; the Dalliah legs resolve via the grid twin
+-- (GetCreaturesInGrid, dead-inclusive — the C++ arms null-check
+-- the instance GUID only). The chain dies on engage (the C++
+-- combat branch consumes remaining PREFIGHT events via
+-- default) and the conversation flag is instance-lifetime
+-- (never cleared by Reset, C++-exact). The ev27 veto below
+-- ports the other half of the override: C++ MoveInLineOfSight
+-- never calls the base, so Soccothrates never proximity-aggros
+-- — every aggro-engage-branch fire is vetoed and combat starts
+-- only via damage (ev1); no
 -- cross-creature bridge — PORTED 2026-10-24: the EVENT_ME_FIRST
 -- 6s arm (dalliah->AI()->Talk(SAY_AGGRO_SOCCOTHRATES_FIRST)
 -- when Dalliah is alive and out of combat), the HealthBelowPct(25)
@@ -125,6 +141,18 @@ local SAY_DEATH = 4
 local SAY_DALLIAH_DEATH = 6
 local SAY_AGGRO_SOCCOTHRATES_FIRST = 0
 local SAY_SOCCOTHRATES_25_PERCENT = 6
+local SAY_SOCCOTHRATES_CONVO_1 = 7
+local SAY_SOCCOTHRATES_CONVO_2 = 8
+local SAY_SOCCOTHRATES_CONVO_3 = 9
+local SAY_SOCCOTHRATES_CONVO_4 = 10
+local SAY_DALLIAH_CONVO_1 = 8
+local SAY_DALLIAH_CONVO_2 = 9
+local SAY_DALLIAH_CONVO_3 = 10
+
+-- arcatraz.h AZDataTypes: DATA_CONVERSATION = 4; the flag value
+-- is EncounterState DONE = 3 (InstanceScript.h).
+local DATA_CONVERSATION = 4
+local CONVERSATION_DONE = 3
 
 local ENTRY_SOCCOTHRATES = 20886
 local ENTRY_DALLIAH = 20885
@@ -132,6 +160,7 @@ local ENTRY_DALLIAH = 20885
 local timers = {}
 local states = {}
 local deathTalk = {}
+local prefight = {}
 
 local function cancelPump(guid)
     local id = timers[guid]
@@ -145,6 +174,7 @@ local function resetBoss(guid)
     cancelPump(guid)
     states[guid] = nil
     deathTalk[guid] = nil
+    prefight[guid] = nil -- C++ Reset()/JustEngagedWith: preFight = false
 end
 
 -- C++ ctor / JustEngagedWith schedule (the BossAI arms are
@@ -232,6 +262,83 @@ local function bossTick(creature, guid)
     end
 end
 
+-- C++ MoveInLineOfSight prefight machine (boss_wrath_scryer_
+-- soccothrates.cpp:127-136 trigger, :156-211 EVENT_PREFIGHT_
+-- 1..9 chain): trigger = instance GetData(DATA_CONVERSATION)
+-- == NOT_STARTED + player within 70y -> Talk CONVO_1, flag
+-- DONE, chain at 2s/3s/3s/6s/2s/3s/2s/4s/4s. The Dalliah legs
+-- resolve via GetCreaturesInGrid (dead-inclusive — the C++
+-- arms null-check the instance GUID only, 25%-latch twin).
+-- Returns the delay to the next step, or nil when the chain
+-- ends (step 9: facing + home positions, preFight = false).
+local function dalliahInGrid(creature)
+    local found = creature:GetCreaturesInGrid(ENTRY_DALLIAH, 200)
+    if #found > 0 then
+        return found[1]
+    end
+    return nil
+end
+
+local function prefightArm(creature, step)
+    if step == 1 then
+        local dalliah = dalliahInGrid(creature)
+        if dalliah ~= nil then
+            dalliah:Talk(SAY_DALLIAH_CONVO_1)
+        end
+        return 3000
+    elseif step == 2 then
+        creature:Talk(SAY_SOCCOTHRATES_CONVO_2)
+        return 3000
+    elseif step == 3 then
+        local dalliah = dalliahInGrid(creature)
+        if dalliah ~= nil then
+            dalliah:Talk(SAY_DALLIAH_CONVO_2)
+        end
+        return 6000
+    elseif step == 4 then
+        creature:Talk(SAY_SOCCOTHRATES_CONVO_3)
+        return 2000
+    elseif step == 5 then
+        local dalliah = dalliahInGrid(creature)
+        if dalliah ~= nil then
+            dalliah:Talk(SAY_DALLIAH_CONVO_3)
+        end
+        return 3000
+    elseif step == 6 then
+        creature:Talk(SAY_SOCCOTHRATES_CONVO_4)
+        return 2000
+    elseif step == 7 then
+        local dalliah = dalliahInGrid(creature)
+        if dalliah ~= nil then
+            dalliah:MoveTo(0, 118.6048, 96.84852, 22.44115)
+        end
+        return 4000
+    elseif step == 8 then
+        creature:MoveTo(0, 122.1035, 192.7203, 22.44115)
+        return 4000
+    elseif step == 9 then
+        local dalliah = dalliahInGrid(creature)
+        if dalliah ~= nil then
+            -- SetFacingToObject twin (nightbane atan2 idiom):
+            -- Dalliah faces self, self faces Dalliah.
+            local faceDalliah = math.atan2(creature:GetY() - dalliah:GetY(), creature:GetX() - dalliah:GetX())
+            if faceDalliah < 0 then
+                faceDalliah = faceDalliah + 2 * math.pi
+            end
+            dalliah:SetFacingTo(faceDalliah)
+            local faceSelf = math.atan2(dalliah:GetY() - creature:GetY(), dalliah:GetX() - creature:GetX())
+            if faceSelf < 0 then
+                faceSelf = faceSelf + 2 * math.pi
+            end
+            creature:SetFacingTo(faceSelf)
+            dalliah:SetHomePosition(dalliah:GetX(), dalliah:GetY(), dalliah:GetZ(), 1.51737)
+            creature:SetHomePosition(creature:GetX(), creature:GetY(), creature:GetZ(), 4.725722)
+        end
+        return nil
+    end
+    return nil
+end
+
 -- C++ SetData(1, 1) / EVENT_DALLIAH_DEATH machine
 -- (boss_wrath_scryer_soccothrates.cpp:139-146 SetData schedules the
 -- 6s event; :216-231 the !UpdateVictim branch executes it):
@@ -246,6 +353,41 @@ end
 -- nothing, so it never vetoes the engine AI step.
 local function onAIUpdate(event, creature, diff)
     local guid = creature:GetGUIDLow()
+    -- Prefight machine (C++ UpdateAI !UpdateVictim order: the
+    -- preFight block runs before the dalliahDeath block below).
+    -- Engage kills the chain (JustEngagedWith preFight = false;
+    -- the combat branch consumes remaining PREFIGHT events via
+    -- default); the conversation flag survives (instance-
+    -- lifetime, never cleared by Reset).
+    if creature:GetVictim() ~= nil then
+        prefight[guid] = nil
+    else
+        local pf = prefight[guid]
+        if pf == nil then
+            if creature:GetData(DATA_CONVERSATION) ~= CONVERSATION_DONE then
+                local players = creature:GetPlayersInGrid(70)
+                if #players > 0 then
+                    creature:Talk(SAY_SOCCOTHRATES_CONVO_1)
+                    creature:SetData(DATA_CONVERSATION, CONVERSATION_DONE)
+                    prefight[guid] = { step = 1, remaining = 2000 }
+                end
+            end
+        else
+            if diff == nil then
+                diff = 100
+            end
+            pf.remaining = pf.remaining - diff
+            if pf.remaining <= 0 then
+                local nextDelay = prefightArm(creature, pf.step)
+                if nextDelay == nil then
+                    prefight[guid] = nil
+                else
+                    pf.step = pf.step + 1
+                    pf.remaining = nextDelay
+                end
+            end
+        end
+    end
     if creature:GetData(1) ~= 1 then
         deathTalk[guid] = nil
         return
@@ -323,3 +465,14 @@ RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 23, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 7, onAIUpdate)
+
+-- C++ MoveInLineOfSight (boss_wrath_scryer_soccothrates.cpp:
+-- 127-136) is an override that never calls the base, so
+-- Soccothrates never proximity-aggros — combat starts only
+-- via damage (ev1). Go's fireCreatureMoveInLOS fires ev27 on
+-- the aggro-engage branch and a boolean true vetoes exactly
+-- that engage, so return true models the override C++-exact
+-- (cyanigosa precedent).
+RegisterCreatureEvent(ENTRY_SOCCOTHRATES, 27, function(_, creature, unit)
+    return true
+end)
