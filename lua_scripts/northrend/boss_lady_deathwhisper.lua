@@ -182,8 +182,9 @@
 -- (deathwhisperDamageTaken; Touch of Insignificance PORTED 2026-10-24
 -- (victim:AddAura lands on the victim object, gurtogg precedent — the
 -- old "self-only" wording was wrong for victim objects); Summon Spirits
--- stays out — creature-cast path has no SPELL_EFFECT_SUMMON delivery
--- leg, the eregos precedent); the mana-barrier aura legs have no bridge.
+-- is PORTED (summonSpiritsTick below, defers 500ms while casting; the
+-- SPELLVALUE_MAX_TARGETS arg has no bridge — documented delta, not
+-- faked with an IsHeroic gate); the mana-barrier aura legs have no bridge.
 -- boss_lady_deathwhisper JustDied — PORTED 2026-10-24: darnavan
 -- rescue (SetFaction/CombatStop/SetReactState/Talk via FindNearestCreature
 -- liveness twin) + KilledMonsterCredit group loop (player:KilledMonsterCredit

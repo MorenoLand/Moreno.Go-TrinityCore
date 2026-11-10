@@ -239,7 +239,8 @@
 -- UpdateAI UNIT_STATE_CASTING gates — PORTED 2026-11-04 (creature:IsCasting
 -- 500ms defer, mal_ganis idiom; the old "no live unit-state read bridge /
 -- timers fire unconditionally" claim is retracted): controller :366/:401
--- (covers only the unported EVENT_INVOCATION_OF_BLOOD), keleseth :651/:675,
+-- (EVENT_INVOCATION_OF_BLOOD, ported onInvocationOfBlood below — defers
+-- 500ms while casting), keleseth :651/:675,
 -- taldaram :717/:749, valanar :807/:844. Controller/intro UpdateAIs
 -- (:890/:968/:1011) and the nucleus UpdateAI (:1082, TaskScheduler only)
 -- carry no CASTING gate — the nucleus aura-check tick stays ungated.
@@ -1321,6 +1322,13 @@ end
 -- new prince's ACTION_CAST_INVOCATION is sent here instead of relying
 -- on the spell hit, which carries no Lua-visible payload beyond it.
 local function onInvocationOfBlood(controller, guid)
+    -- C++ controller UpdateAI pre-loop gate :366 (+ in-loop :401,
+    -- single-event loop): 500ms IsCasting defer, no re-arm consumed
+    -- (the mal_ganis idiom).
+    if controller:IsCasting() then
+        schedule(guid, "invocation", 500, function() onInvocationOfBlood(controller, guid) end)
+        return
+    end
     local st = invocationState[guid]
     if not st then
         return
