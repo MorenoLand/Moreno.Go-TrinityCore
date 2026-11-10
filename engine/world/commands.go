@@ -4057,7 +4057,11 @@ func (s *session) handleCharacterRename(ctx context.Context, args []string) bool
 		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, t) {
-		return false // C++ HasLowerSecurity: silent fail
+		// ChatHandler::HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+		// and sets the error flag (Chat.cpp:96-99), so the leg reports
+		// (message + true), not a silent false.
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	chars := s.server.CharactersStore
 	if chars == nil {

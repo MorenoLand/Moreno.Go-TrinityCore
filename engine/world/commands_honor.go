@@ -93,7 +93,9 @@ func (s *session) handleCmdHonor(ctx context.Context, args []string) bool {
 // is the selected online player, else the handler's own player
 // (ChatHandler::getSelectedPlayer falls back to self, Chat.cpp:300); an
 // unresolvable selection reports LANG_PLAYER_NOT_FOUND (499, "Player not
-// found." per the tree convention). HasLowerSecurity fails silently.
+// found." per the tree convention). HasLowerSecurity prints
+// LANG_YOURS_SECURITY_IS_LOW (Chat.cpp:96-99) and returns false with the
+// error flag set, so no help listing follows.
 func (s *session) handleHonorAdd(ctx context.Context, args []string) bool {
 	if len(args) != 1 {
 		return false
@@ -122,7 +124,11 @@ func (s *session) handleHonorAdd(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
-		return false // C++ HasLowerSecurity: silent fail
+		// ChatHandler::HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+		// and sets the error flag (Chat.cpp:96-99), so the leg reports
+		// (message + true), not a silent false.
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	target.rewardHonorPoints(ctx, uint32(amount))
 	return true
@@ -150,7 +156,11 @@ func (s *session) handleHonorAddKill(ctx context.Context) bool {
 		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: victim}) {
-		return false // C++ HasLowerSecurity: silent fail
+		// ChatHandler::HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+		// and sets the error flag (Chat.cpp:96-99), so the leg reports
+		// (message + true), not a silent false.
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	if victim == s {
 		s.honorSelfKillTail()
@@ -190,7 +200,11 @@ func (s *session) handleHonorUpdate(ctx context.Context) bool {
 		return true
 	}
 	if s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
-		return false // C++ HasLowerSecurity: silent fail
+		// ChatHandler::HasLowerSecurity prints LANG_YOURS_SECURITY_IS_LOW
+		// and sets the error flag (Chat.cpp:96-99), so the leg reports
+		// (message + true), not a silent false.
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	target.updateHonorFields()
 	target.persistHonorFields(ctx)

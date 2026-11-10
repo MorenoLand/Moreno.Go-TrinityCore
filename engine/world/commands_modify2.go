@@ -199,7 +199,7 @@ func (s *session) handleModifyScale(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	// LANG_YOU_CHANGE_SIZE 147 / LANG_YOURS_SIZE_CHANGED 148.
 	s.notifyModify(target,
@@ -238,7 +238,7 @@ func (s *session) handleModifySpell(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	// LANG_YOU_CHANGE_SPELLFLATID 131 / LANG_YOURS_SPELLFLATID_CHANGED 132.
 	s.notifyModify(target,
@@ -310,7 +310,7 @@ func (s *session) handleModifyMount(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	speed, ok := checkModifySpeedBounds(args[1], 0.1, 50.0)
 	if !ok {

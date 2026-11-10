@@ -169,8 +169,9 @@ func parseSScanfU64(s string) uint64 {
 
 // titlesTarget mirrors getSelectedPlayer (Chat.cpp:301-309): no selection
 // resolves to the invoker (self fallback); only a set-but-unresolvable
-// selection reports LANG_NO_CHAR_SELECTED. The HasLowerSecurity silent fail
-// is the s.security < target.security comparison.
+// selection reports LANG_NO_CHAR_SELECTED. The HasLowerSecurity leg prints
+// LANG_YOURS_SECURITY_IS_LOW (Chat.cpp:96-99) on the s.security <
+// target.security comparison.
 func (s *session) titlesTarget() *session {
 	if s.selection != 0 && s.server != nil {
 		if ts := s.server.playerSessionForGUID(s.selection); ts != nil && ts.player != nil {

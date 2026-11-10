@@ -35,7 +35,9 @@ import (
 //     fallback query). `del`/`move` run the DeleteFromDB twin (live despawn
 //     + multi-table cleanup, 242 on failure); `move` recreates with a new
 //     GUID and leaves wpguid stale, as C++ does. The 222 search message
-//     text is unseeded (TDB) and stays unsent.
+//     is sent on a wpguid miss (cs_wp.cpp:592); its text and the other
+//     waypoint LANG texts are the acore_string enUS rows (TC
+//     trinity_string lineage, rows 220-245).
 //   - `unload`: native DB (DELETE creature_addon, MovementType = 0) plus live
 //     motion-map refresh, walk-home spline, and creature Say.
 //   - `reload <id>`: re-reads waypoint_data and replaces Points on every
@@ -56,8 +58,9 @@ import (
 // DB row, so pets, vehicles, temp summons and every real creature selection
 // resolved as no target. The motion lookup type-checks for free (players and
 // gameobjects are never creature motions) and needs no DB row, matching the
-// C++ live-object resolution. LANG texts are inlined from the TDB enUS
-// recall (no in-tree trinity_string seed).
+// C++ live-object resolution. LANG texts below are the acore_string enUS
+// texts (TC trinity_string lineage), rendered printf-style; no in-tree
+// TDB seed exists.
 //
 // R13: the root and all 7 arms return bool — bare/unknown subcommands
 // return false (the framework shows the help listing), denial is a silent
@@ -549,6 +552,9 @@ func (s *session) wpVisualPoint(ctx context.Context, guid uint32) (pathID, point
 	if wdb.QueryRowContext(ctx, "SELECT id, point FROM waypoint_data WHERE wpguid = ?", guid).Scan(&pathID, &point) == nil {
 		return pathID, point, true
 	}
+	// C++ sends LANG_WAYPOINT_NOTFOUNDSEARCH (222) on the wpguid miss and
+	// then runs the position-proximity fallback (cs_wp.cpp:592-609).
+	s.sendSysMessage(fmt.Sprintf("Creature (GUID: %d) No waypoint found - used 'wpguid'. Now trying to find it by its position...", guid))
 	var x, y, z float64
 	if wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&x, &y, &z) != nil {
 		return 0, 0, false
@@ -597,7 +603,9 @@ func (s *session) handleWpModify(ctx context.Context, args []string) bool {
 	}
 	pathID, point, ok := s.wpVisualPoint(ctx, guid)
 	if !ok {
-		s.sendSysMessage(fmt.Sprintf("Waypoint %d not found in DB.", guid))
+		// LANG_WAYPOINT_NOTFOUNDDBPROBLEM 223 on a failed proximity
+		// fallback (cs_wp.cpp:610-614), acore_string row 223.
+		s.sendSysMessage(fmt.Sprintf("No waypoint information was found for Creature (GUID: %d). Make sure 'wp show on' command was properly executed.", guid))
 		return true
 	}
 	wdb := s.server.WorldStore.DB
@@ -607,7 +615,7 @@ func (s *session) handleWpModify(ctx context.Context, args []string) bool {
 		// DeleteFromDB first (cs_wp.cpp:650-674): on failure the waypoint
 		// row stays and LANG_WAYPOINT_NOTREMOVED (242) + error return.
 		if !s.deleteCreatureFromDB(ctx, guid) {
-			s.sendSysMessage(fmt.Sprintf("Waypoint %d not removed.", guid)) // LANG_WAYPOINT_NOTREMOVED 242, TDB enUS recall
+			s.sendSysMessage(fmt.Sprintf("Warning: Could not delete WP from the world with ID: %d", guid)) // LANG_WAYPOINT_NOTREMOVED 242, acore_string row 242
 			return true
 		}
 		_, _ = wdb.ExecContext(ctx, "DELETE FROM waypoint_data WHERE id = ? AND point = ?", pathID, point)
@@ -628,19 +636,19 @@ func (s *session) handleWpModify(ctx context.Context, args []string) bool {
 		// keeps pointing at the deleted GUID, so later modify/show arms
 		// fall back to the position-proximity query.
 		if !s.deleteCreatureFromDB(ctx, guid) {
-			s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228, TDB enUS recall
+			s.sendSysMessage("Could not create visual waypoint with creatureID: 1") // LANG_WAYPOINT_VP_NOTCREATED 228, acore_string row 228
 			return true
 		}
 		p := s.player
 		var newGUID uint32
 		if wdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM creature").Scan(&newGUID) != nil || newGUID == 0 {
-			s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228
+			s.sendSysMessage("Could not create visual waypoint with creatureID: 1") // LANG_WAYPOINT_VP_NOTCREATED 228, acore_string row 228
 			return false
 		}
 		if _, err := wdb.ExecContext(ctx,
 			"INSERT INTO creature (guid, id, map, spawnMask, phaseMask, position_x, position_y, position_z, orientation, spawntimesecs, MovementType) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, 120, 0)",
 			newGUID, p.Map, 1<<s.playerSpawnMode(), s.playerPhaseMaskForSpawn(), p.X, p.Y, p.Z, p.Orientation); err != nil {
-			s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228
+			s.sendSysMessage("Could not create visual waypoint with creatureID: 1") // LANG_WAYPOINT_VP_NOTCREATED 228, acore_string row 228
 			return false
 		}
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE id = ? AND point = ?",
@@ -651,13 +659,13 @@ func (s *session) handleWpModify(ctx context.Context, args []string) bool {
 	if len(args) < 2 {
 		// LANG_WAYPOINT_ARGUMENTREQ (233) without SetSentErrorMessage
 		// (cs_wp.cpp:640-644): message + help.
-		s.sendSysMessage(fmt.Sprintf("Argument required for %s.", show))
+		s.sendSysMessage(fmt.Sprintf("Argument required for '%s'.", show)) // LANG_WAYPOINT_ARGUMENTREQ 233, acore_string row 233
 		return false
 	}
 	if _, err := wdb.ExecContext(ctx, "UPDATE waypoint_data SET "+show+" = ? WHERE id = ? AND point = ?", args[1], pathID, point); err != nil {
 		return true
 	}
-	s.sendSysMessage(fmt.Sprintf("Waypoint %s changed.", show)) // LANG_WAYPOINT_CHANGED_NO 237
+	s.sendSysMessage(fmt.Sprintf("Waypoint %s modified.", show)) // LANG_WAYPOINT_CHANGED_NO 237, acore_string row 237
 	return true
 }
 
@@ -743,7 +751,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 	var pathID uint32
 	if len(args) > 1 {
 		if hasTarget {
-			s.sendSysMessage("Creature selected.") // LANG_WAYPOINT_CREATSELECTED 224, TDB enUS recall
+			s.sendSysMessage("Selected creature is ignored - provided GUID is used") // LANG_WAYPOINT_CREATSELECTED 224, acore_string row 224
 		}
 		pathID = uint32(cAtoi(args[1]))
 	} else {
@@ -757,7 +765,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 	case "info":
 		guid, entry, ok := s.wpSelectedCreature(ctx)
 		if !ok || entry != 1 {
-			s.sendSysMessage("Select a visual waypoint.") // LANG_WAYPOINT_VP_SELECT 226, TDB enUS recall
+			s.sendSysMessage("You must select a visual waypoint.") // LANG_WAYPOINT_VP_SELECT 226, acore_string row 226
 			return true
 		}
 		// C++ info looks up by wpguid only — no position fallback
@@ -784,9 +792,8 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 			s.sendSysMessage(fmt.Sprintf("Show info: Event chance: %d", actionChance))
 		}
 		if !found {
-			// LANG_WAYPOINT_NOTFOUNDDBPROBLEM 223; text unconfirmed from TDB,
-			// keeping the port's established wording.
-			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found in DB.", guid))
+			// LANG_WAYPOINT_NOTFOUNDDBPROBLEM 223, acore_string row 223.
+			s.sendSysMessage(fmt.Sprintf("No waypoint information was found for Creature (GUID: %d). Make sure 'wp show on' command was properly executed.", guid))
 		}
 	case "on":
 		// C++ checks the path exists first (cs_wp.cpp:808-814).
@@ -814,14 +821,14 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 		hasError := false
 		for _, g := range oldVisuals {
 			if !s.deleteCreatureFromDB(ctx, g) {
-				s.sendSysMessage(fmt.Sprintf("Waypoint %d not removed.", g)) // LANG_WAYPOINT_NOTREMOVED 242, TDB enUS recall
+				s.sendSysMessage(fmt.Sprintf("Warning: Could not delete WP from the world with ID: %d", g)) // LANG_WAYPOINT_NOTREMOVED 242, acore_string row 242
 				hasError = true
 			}
 		}
 		if hasError {
-			s.sendSysMessage("Some visual waypoints are too far away to be removed.") // LANG_WAYPOINT_TOOFAR1 243, TDB enUS recall
-			s.sendSysMessage("They could not be removed from the database.")          // LANG_WAYPOINT_TOOFAR2 244, TDB enUS recall
-			s.sendSysMessage("Move closer and try again.")                            // LANG_WAYPOINT_TOOFAR3 245, TDB enUS recall
+			s.sendSysMessage("This happens if the waypoint is too far away from your char.")      // LANG_WAYPOINT_TOOFAR1 243, acore_string row 243
+			s.sendSysMessage("The WP is deleted from the database, but not from the world here.") // LANG_WAYPOINT_TOOFAR2 244, acore_string row 244
+			s.sendSysMessage("They will disappear after a server restart.")                       // LANG_WAYPOINT_TOOFAR3 245, acore_string row 245
 		}
 		// No blanket wpguid reset: C++ never touches waypoint_data.wpguid
 		// in `on` (cs_wp.cpp:820-874) — each re-spawned point overwrites
@@ -850,7 +857,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 			if vg == 0 {
 				// Create/LoadFromDB failure reports LANG_WAYPOINT_VP_NOTCREATED
 				// WITHOUT SetSentErrorMessage (cs_wp.cpp:858-867): message + help.
-				s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228, TDB enUS recall
+				s.sendSysMessage("Could not create visual waypoint with creatureID: 1") // LANG_WAYPOINT_VP_NOTCREATED 228, acore_string row 228
 				return false
 			}
 			_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = ? WHERE id = ? AND point = ?", vg, pathID, point)
@@ -873,7 +880,13 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 			qerr = wdb.QueryRowContext(ctx, "SELECT position_x, position_y, position_z, orientation FROM waypoint_data WHERE id = ? ORDER BY point DESC LIMIT 1", pathID).Scan(&x, &y, &z, &o)
 		}
 		if qerr != nil {
-			s.sendSysMessage(fmt.Sprintf("Waypoint %d not found.", pathID)) // LANG_WAYPOINT_NOTFOUND 220 / NOTFOUNDLAST 221
+			// LANG_WAYPOINT_NOTFOUND 220 (first) / NOTFOUNDLAST 221 (last),
+			// acore_string rows 220/221; C++ passes the path id (cs_wp.cpp:928,979).
+			if show == "first" {
+				s.sendSysMessage(fmt.Sprintf("Creature (GUID: %d) No waypoint found.", pathID))
+			} else {
+				s.sendSysMessage(fmt.Sprintf("Creature (GUID: %d) Last waypoint not found.", pathID))
+			}
 			return true
 		}
 		// Create/LoadFromDB failure aborts with LANG_WAYPOINT_VP_NOTCREATED
@@ -885,9 +898,9 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 			// WITHOUT SetSentErrorMessage (cs_wp.cpp:909-917, 955-963):
 			// message + help.
 			if show == "first" {
-				s.sendSysMessage("Visual waypoint not created.") // LANG_WAYPOINT_VP_NOTCREATED 228, TDB enUS recall
+				s.sendSysMessage("Could not create visual waypoint with creatureID: 1") // LANG_WAYPOINT_VP_NOTCREATED 228, acore_string row 228
 			} else {
-				s.sendSysMessage("Waypoint not created.") // LANG_WAYPOINT_NOTCREATED 230, TDB enUS recall
+				s.sendSysMessage("Could not create waypoint-creature with ID: 1") // LANG_WAYPOINT_NOTCREATED 230, acore_string row 230
 			}
 			return false
 		}
@@ -896,7 +909,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 		if err != nil {
 			// C++ sends LANG_WAYPOINT_VP_NOTFOUND (227) whenever the query
 			// returns no rows (cs_wp.cpp:1024-1029), error included.
-			s.sendSysMessage("Visual waypoint not found.") // LANG_WAYPOINT_VP_NOTFOUND 227, TDB enUS recall
+			s.sendSysMessage("No visual waypoints found") // LANG_WAYPOINT_VP_NOTFOUND 227, acore_string row 227
 			return true
 		}
 		var guids []uint32
@@ -908,7 +921,7 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 		}
 		rows.Close()
 		if len(guids) == 0 {
-			s.sendSysMessage("Visual waypoint not found.") // LANG_WAYPOINT_VP_NOTFOUND 227, TDB enUS recall
+			s.sendSysMessage("No visual waypoints found") // LANG_WAYPOINT_VP_NOTFOUND 227, acore_string row 227
 			return true
 		}
 		// Per-guid DeleteFromDB (cs_wp.cpp:973-1013): a failure reports
@@ -918,17 +931,17 @@ func (s *session) handleWpShow(ctx context.Context, args []string) bool {
 		hasError := false
 		for _, g := range guids {
 			if !s.deleteCreatureFromDB(ctx, g) {
-				s.sendSysMessage(fmt.Sprintf("Waypoint %d not removed.", g)) // LANG_WAYPOINT_NOTREMOVED 242, TDB enUS recall
+				s.sendSysMessage(fmt.Sprintf("Warning: Could not delete WP from the world with ID: %d", g)) // LANG_WAYPOINT_NOTREMOVED 242, acore_string row 242
 				hasError = true
 			}
 		}
 		_, _ = wdb.ExecContext(ctx, "UPDATE waypoint_data SET wpguid = 0")
 		if hasError {
-			s.sendSysMessage("Some visual waypoints are too far away to be removed.") // LANG_WAYPOINT_TOOFAR1 243, TDB enUS recall
-			s.sendSysMessage("They could not be removed from the database.")          // LANG_WAYPOINT_TOOFAR2 244, TDB enUS recall
-			s.sendSysMessage("Move closer and try again.")                            // LANG_WAYPOINT_TOOFAR3 245, TDB enUS recall
+			s.sendSysMessage("This happens if the waypoint is too far away from your char.")      // LANG_WAYPOINT_TOOFAR1 243, acore_string row 243
+			s.sendSysMessage("The WP is deleted from the database, but not from the world here.") // LANG_WAYPOINT_TOOFAR2 244, acore_string row 244
+			s.sendSysMessage("They will disappear after a server restart.")                       // LANG_WAYPOINT_TOOFAR3 245, acore_string row 245
 		}
-		s.sendSysMessage("All visual waypoints removed.") // LANG_WAYPOINT_VP_ALLREMOVED 229
+		s.sendSysMessage("All visual waypoints removed") // LANG_WAYPOINT_VP_ALLREMOVED 229, acore_string row 229
 	default:
 		s.sendSysMessage("DEBUG: wpshow - no valid command found")
 	}

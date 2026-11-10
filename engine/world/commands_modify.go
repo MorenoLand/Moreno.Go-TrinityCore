@@ -48,11 +48,15 @@ func (s *session) modifyTargetPlayer(ctx context.Context) *session {
 }
 
 // modifyTargetLowerSecurity mirrors the HasLowerSecurity guard shared by the
-// modify arms: the command fails silently when the target's account outranks
-// the handler's security level.
+// modify arms (Chat.cpp:54-102): the command fails when the target's account
+// outranks the handler's security level. HasLowerSecurity prints
+// LANG_YOURS_SECURITY_IS_LOW and sets the error flag (Chat.cpp:96-99), so a
+// blocked arm reports (message + true); the RBAC_PERM_CHECK_FOR_LOWER_SECURITY
+// bypass rides characterTargetLowerSecurity, like every other family.
 func (s *session) modifyTargetLowerSecurity(ctx context.Context, target *session) bool {
-	if target != s && s.security < s.accountSecurityLevel(ctx, target.accountID) {
-		return true // C++ HasLowerSecurity: silent fail
+	if target != s && s.characterTargetLowerSecurity(ctx, characterTarget{online: target}) {
+		s.sendSysMessage("Your security level is too low.")
+		return true
 	}
 	return false
 }
@@ -119,7 +123,7 @@ func (s *session) handleCmdMorph(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	target.player.TransformDisplayID = displayID
 	target.sendPlayerUpdate()
@@ -156,7 +160,7 @@ func (s *session) handleCmdDeMorph(ctx context.Context) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	target.player.TransformDisplayID = 0
 	target.sendPlayerUpdate()
@@ -261,7 +265,7 @@ func (s *session) handleModifyHP(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	// LANG_YOU_CHANGE_HP 118 / LANG_YOURS_HP_CHANGED 119.
 	s.notifyModify(target,
@@ -310,7 +314,7 @@ func (s *session) handleModifyPower(ctx context.Context, args []string, powerIdx
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	shown, shownMax := res/multiplier, resmax/multiplier
 	switch powerIdx {
@@ -405,7 +409,7 @@ func (s *session) handleModifyMoney(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	moneyToAdd, ok := parseModifyMoney(strings.Join(args, " "))
 	if !ok {
@@ -467,7 +471,7 @@ func (s *session) handleModifyHonor(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	amount := int32(cAtoi(args[0]))
 	newValue := int64(target.player.TotalHonorPoints) + int64(amount)
@@ -530,7 +534,7 @@ func (s *session) handleModifyXP(ctx context.Context, args []string) bool {
 		return true
 	}
 	if s.modifyTargetLowerSecurity(ctx, target) {
-		return false
+		return true
 	}
 	target.grantXP(ctx, uint32(xp)) // Player::GiveXP
 	return true
