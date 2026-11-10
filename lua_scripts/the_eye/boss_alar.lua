@@ -63,9 +63,9 @@
 --    SPELL_DIVE_BOMB_VISUAL 35367) (C++-exact; the SpellHit
 --    SetDisplayId/ApplySpellImmune arms are PORTED below
 --    (stale "no display/immune bridge" retracted 2026-10-21);
---    the ascent MovePoint has no
---    movement bridge — the 5s meteor wait approximates the
---    flight, nightbane precedent); dive (+4s, C++-exact) —
+--    the ascent MovePoint is PORTED below (creature:MoveTo +
+--    ev28 arrival cuts the 5s meteor wait, which stays as the
+--    ForceMove fallback; kalecgos precedent); dive (+4s, C++-exact) —
 --    TRIGGERED DoCast(target, SPELL_DIVE_BOMB 35181, true) on
 --    a random threat-list unit (C++ SelectTarget
 --    (Random, 0), threat-pool lens; the RemoveAurasDueToSpell
@@ -124,9 +124,9 @@
 -- second-return damage rewrite, combat.go:508), the latch
 -- fires once (!WaitEvent — C++-exact for the WE_DIE /
 -- WE_REVIVE window via st.dying and for the 10s post-quill
--- WE_DUMMY window via st.quillWait; the platform-movement
--- windows are unknowable without a movement bridge —
--- documented approximation), the phase-1 schedule is
+-- WE_DUMMY window via st.quillWait; the platform-arrival
+-- gating stays timer-modeled (the MovePoints themselves are
+-- PORTED below), the phase-1 schedule is
 -- dropped and the WE_DIE -> WE_REVIVE sequence starts.
 -- OnDied(4): cleanup (the _JustDied arm is instance-blocked).
 -- OnLeaveCombat(2)/OnReset(23): cancel the pump, drop per-GUID
@@ -139,11 +139,13 @@
 -- instance-script model — boss admission via the luaBossAI
 -- shim (instance_the_eye.cpp stays blocked on the instance-
 -- script model; the BossAI ctor DATA_ALAR = 1 bookkeeping in
--- Reset/JustEngagedWith/JustDied skipped); no movement bridge
--- — the phase-1 platform MovePoints, the ForceMove re-issue,
--- the WE_DIE waypoint[5] MovePoint and the dive-bomb waypoint[4]
--- MovePoint stay unbridged (omor / nightbane precedents); the WE_DIVE
--- UpdatePosition teleport is PORTED via creature:Teleport + StopMoving;
+-- Reset/JustEngagedWith/JustDied skipped); movement is
+-- PORTED below (creature:MoveTo + ev28 MovementInform,
+-- kalecgos precedent): the phase-1 platform MovePoints, the
+-- WE_DIE waypoint[5] flight and the dive-bomb waypoint[4]
+-- ascent — the ForceMove 5s re-issue stays out (the 5s waits
+-- double as its fallback); the WE_DIVE UpdatePosition
+-- teleport is PORTED via creature:Teleport + StopMoving;
 -- 'no summon bridge' is stale (the bridge is live) — per-arm: phase-1 ember DoSpawnCreature
 -- (:376) and dive-bomb two-ember DoSpawnCreature (:335-337) stay
 -- out on the paired JustSummoned AttackStart relay (:204-208,
@@ -195,6 +197,19 @@ local CREATURE_FLAME_PATCH_ALAR = 20602
 local SPELL_FLAME_PATCH = 35380
 
 local ENTRY_ALAR = 19514
+
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31 (kalecgos precedent)
+
+-- boss_alar.cpp:55-60 (Lua 1-indexed): [1-4] phase-1 platforms,
+-- [5] dive-bomb ascent, [6] WE_DIE flight point.
+local WAYPOINTS = {
+    { 340.15, 58.65, 17.71 },
+    { 388.09, 31.54, 20.18 },
+    { 388.18, -32.85, 20.18 },
+    { 340.29, -60.19, 17.72 },
+    { 332.0, 0.01, 39.0 },
+    { 331.0, 0.01, -2.39 },
+}
 
 local alarState = {}
 local alarPump = {}
@@ -272,8 +287,7 @@ end
 
 -- The dive-bomb chain (C++ WE_METEOR -> WE_DIVE -> WE_LAND ->
 -- WE_SUMMON, in order); called when the current step's wait
--- expires. The ascent MovePoint has no movement bridge — the
--- 5s meteor wait approximates the flight (nightbane precedent).
+-- expires or the ascent arrival (ev28) cuts it short.
 local function advanceDive(creature, guid)
     local st = alarState[guid]
     if not st or not st.dive then
@@ -383,8 +397,14 @@ local function combatTick(creature, guid)
             creature:SetStandState(0)
             -- boss_alar.cpp:295 — SetFullHealth() before the flag clear.
             creature:SetHealth(creature:GetMaxHealth())
+            -- boss_alar.cpp:296 — SetSpeedRate(MOVE_RUN,
+            -- DefaultMoveSpeedRate): restores the template rate
+            -- after the WE_DIE 5.0 flight (rate <= 0 clears the
+            -- script override, same idiom as ev23 below).
+            creature:SetSpeedRate(1, 0)
             -- boss_alar.cpp:297 — C++ arm order before DoZoneInCombat/REBIRTH
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+            creature:DoZoneInCombat()
             creature:CastSpell(creature, SPELL_REBIRTH, true)
             st.meltArmor = 60000
             st.charge = 7000
@@ -418,8 +438,10 @@ local function combatTick(creature, guid)
                 -- WE_PLATFORM with no quill roll: the forced
                 -- platform move after a quill (cur_wp = 4) or
                 -- the initial state (C++-exact); the MovePoint
-                -- itself has no movement bridge.
+                -- is PORTED (boss_alar.cpp:391, waypoint[0]).
                 st.curWp = 0
+                local wp = WAYPOINTS[st.curWp + 1]
+                creature:MoveTo(0, wp[1], wp[2], wp[3])
                 st.platform = 30000 + math.random(0, 4999)
             elseif math.random(0, 4) == 0 then
                 -- WE_QUILL: the 20% branch — urand(0, 4) == 0
@@ -428,6 +450,12 @@ local function combatTick(creature, guid)
                 -- platform decision (C++-exact).
                 creature:CastSpell(creature, SPELL_FLAME_QUILLS, true)
                 st.curWp = 4
+                -- C++ :391: the quill decision flies to waypoint[4]
+                -- (the high point) before the WE_QUILL cast lands;
+                -- the cast above stays decision-time (the 10s
+                -- WE_DUMMY wait models the post-cast window).
+                local wp = WAYPOINTS[st.curWp + 1]
+                creature:MoveTo(0, wp[1], wp[2], wp[3])
                 st.quillWait = true
                 st.platform = 10000
             else
@@ -439,6 +467,9 @@ local function combatTick(creature, guid)
                 else
                     st.curWp = st.curWp + 1
                 end
+                -- C++ :391: MovePoint(0, waypoint[cur_wp]).
+                local wp = WAYPOINTS[st.curWp + 1]
+                creature:MoveTo(0, wp[1], wp[2], wp[3])
                 st.platform = 30000 + math.random(0, 4999)
             end
         else
@@ -469,14 +500,17 @@ local function combatTick(creature, guid)
         -- Dive bomb arm — 40000+rand()%5000: starts the dive
         -- chain, re-arm 40000+rand()%5000 (C++-exact).
         if st.diveBomb <= 1000 then
-            -- C++ boss_alar.cpp:420-425: me->AttackStop() -> MovePoint
-            -- (no movement bridge; the 5s meteor wait models the
-            -- ascent) -> SetFlag(NOT_SELECTABLE) -> SetFloatValue(
-            -- BOUNDINGRADIUS, 50) (no creature motion slot, stays out)
-            -- -> WE_METEOR. The flag leg is bridged (SetFlag(59),
-            -- same file :370 precedent) and pairs with the WE_SUMMON
-            -- clear below.
+            -- C++ boss_alar.cpp:420-425: me->AttackStop() ->
+            -- MovePoint(6, waypoint[4]) -> SetFlag(NOT_SELECTABLE)
+            -- -> SetFloatValue(BOUNDINGRADIUS, 50) (no creature
+            -- motion slot, stays out) -> WE_METEOR. The flag leg
+            -- is bridged (SetFlag(59), same file :370 precedent)
+            -- and pairs with the WE_SUMMON clear below; the
+            -- MovePoint is PORTED (ev28 arrival cuts the 5s
+            -- meteor wait, which stays as the ForceMove fallback).
             creature:AttackStop()
+            local wp = WAYPOINTS[5]
+            creature:MoveTo(6, wp[1], wp[2], wp[3])
             creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
             st.dive = { step = "meteor", wait = 5000 }
             st.diveBomb = 40000 + math.random(0, 4999)
@@ -617,9 +651,17 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         -- SetTarget(:212) (hodir/freya lethal-arm precedent).
         creature:AttackStop()
         -- boss_alar.cpp:212 — clear the visual target
-        -- (ObjectGuid::Empty); the speed(:213)/motion
-        -- (:214-215) legs stay unbridged (Interrupt(:208) PORTED above).
+        -- (ObjectGuid::Empty).
         creature:SetTarget(0)
+        -- boss_alar.cpp:213 — SetSpeedRate(MOVE_RUN, 5.0f) for the
+        -- death flight; the WE_REVIVE arm restores the template
+        -- rate below (SetSpeedRate(1, 0) clears the override).
+        creature:SetSpeedRate(1, 5.0)
+        -- boss_alar.cpp:214-215 — GetMotionMaster()->Clear() then
+        -- MovePoint(0, waypoint[5]); the Clear has no twin but the
+        -- MoveTo launch supersedes the motion slot.
+        local wp = WAYPOINTS[6]
+        creature:MoveTo(0, wp[1], wp[2], wp[3])
         return 0, 0
     end
 end)
@@ -648,6 +690,22 @@ RegisterCreatureEvent(ENTRY_ALAR, 23, function(_, creature)
     creature:SetDisableGravity(true)
     -- boss_alar.cpp:170 — C++ Reset arm order after ApplySpellImmune
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+end)
+
+-- C++ MovementInform (boss_alar.cpp:230-236): POINT_MOTION_TYPE
+-- arrival -> WaitTimer = 1, AfterMoving = true, ForceMove = false.
+-- The dive-bomb ascent (MovePoint id 6, waypoint[4]) arrival cuts
+-- the 5s meteor wait (the pump advances the WE_METEOR step on its
+-- next tick); platform arrivals (id 0) need no gate — the platform
+-- cadence is timer-driven in this model.
+RegisterCreatureEvent(ENTRY_ALAR, 28, function(_, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE or pointId ~= 6 then
+        return
+    end
+    local st = alarState[creature:GetGUIDLow()]
+    if st and st.dive and st.dive.step == "meteor" then
+        st.dive.wait = 0
+    end
 end)
 
 -- C++ spell_alar_flame_quills::PeriodicTick

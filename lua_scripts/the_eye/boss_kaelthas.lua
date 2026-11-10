@@ -157,17 +157,19 @@
 -- and GetInstanceCreature are all bridged (lua_creature_events.go:802,
 -- :5802, :5821, :5855, :5865), but the consumer bodies are the unported
 -- phase machine (GO statue/window arms have no instance-GetGameObject
--- bridge; PREPARE_ADVISORS needs EnterEvadeMode, unbridged; the machine's
--- MovePoint legs have no MovementInform hook); the 7-weapon summon
+-- bridge; PREPARE_ADVISORS stays out on its missing GetGuidData latch
+-- (ACTION_START_ENCOUNTER driver, instance-driven, unmodeled) — the
+-- EnterEvadeMode + MoveTo/ev28 MovementInform bridges are live
+-- (lua_creature_events.go:5200/:4989, kalecgos precedent); the 7-weapon summon
 -- machine (SPELL_SUMMON_WEAPONS 36976 + SPELL_SUMMON_
 -- WEAPONA-G 36958-36964 — driver unmodeled, summon bridge live); the EVENT_
--- RESUME path after the phase-5 transition MovePoints (no
--- movement bridge — omor/nightbane precedent); gravity
+-- RESUME path after the phase-5 transition MovePoints (rides
+-- the unported transition machine; MoveTo/ev28 bridged); gravity
 -- lapse / nether beam / pyroblast / mind control / phoenix
 -- summon / flamestrike pump arms all ride the instance-
 -- phased event machine; the 50% DamageTaken transition
--- latch (MovePoint POINT_START_TRANSITION) has no movement
--- bridge; BossAI ctor/_Reset()/JustReachedHome()/
+-- latch (MovePoint POINT_START_TRANSITION) rides the unported
+-- transition machine (MoveTo/ev28 bridged); BossAI ctor/_Reset()/JustReachedHome()/
 -- JustSummoned() bookkeeping (DATA_KAELTHAS = 0) has no
 -- instance-script bridge (instance_the_eye.cpp stays in the
 -- no-instance-script-bridge queue). Melee engine-driven.
@@ -299,12 +301,15 @@ end)
 -- SetDisableGravity(false) (:460) + SetTarget empty (:461) +
 -- SetObjectScale(1.0) (:462); the DoAction PREPARE_ADVISORS leg and BossAI::Reset bookkeeping stay out
 -- (ev38 dispatch bridged; sender is Kael's own Reset self-call at
--- boss_kaelthas.cpp:457, but the leg body needs instance GetGuidData (:490-493)
--- + EnterEvadeMode, both unbridged).
+-- boss_kaelthas.cpp:457, but the leg body needs the GetGuidData latch
+-- from ACTION_START_ENCOUNTER (instance-driven, unmodeled); GetGuidData
+-- + EnterEvadeMode are both bridged (header), so the leg stays out on
+-- the missing latch, not the bridges).
 -- The scale/gravity/emote writes are native-value idempotent at spawn
 -- (ev23 fires ahead of spawn too); the SIZE_INCREASE ladder (:827-847)
 -- stays out -- it fires from MovementInform POINT_TRANSITION_CENTER_
--- ASCENDING (:601-610), no movement bridge. Latch clear is Lua
+-- ASCENDING (:601-610) of the unported transition machine (MoveTo +
+-- ev28 are bridged, kalecgos precedent). Latch clear is Lua
 -- bookkeeping, not a C++ arm.
 RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
