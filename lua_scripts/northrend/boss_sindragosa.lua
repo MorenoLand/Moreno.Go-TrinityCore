@@ -145,9 +145,10 @@
 -- EMOTE_WARN_BLISTERING_COLD 2, SAY_BLISTERING_COLD 3,
 -- SAY_AIR_PHASE 5) are PORTED 2026-11-09 with the air-phase machine above.
 
--- CAST-STATE GATES PORTED (2026-11-04): boss :450/:563 gates berserk /
--- ice-tomb / third-phase-check; spinestalker :730 (pre-loop only) gates
--- all 3 ticks; rimefang :862 (pre-loop only) gates frost-breath;
+-- CAST-STATE GATES PORTED (2026-11-04): boss :450/:563 gates all boss ticks
+-- (incl. the air/land movement arms); spinestalker :730 (pre-loop only) gates
+-- all 3 ticks; rimefang :862 (pre-loop only) gates frost-breath /
+-- icy-blast / icy-blast-cast;
 -- trash :986 (pre-loop only) gates both handler ticks; ice-tomb :618
 -- UpdateAI has no gate (existence check only, NOT registered); engage /
 -- DamageTaken / JustDied / JustSummoned legs ungated per C++ (separate
@@ -386,6 +387,11 @@ end
 -- the post-landing init delays, then MoveLand(POINT_LAND_GROUND,
 -- SindragosaLandPos) — the landing itself fires ev28 below.
 local function onLandGround(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563): 500ms IsCasting defer, re-seed + MoveLand not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "land_ground", 500, function() onLandGround(creature, guid) end)
+        return
+    end
     schedule(guid, "cleave", {13000, 15000}, function() onCleave(creature, guid) end)
     schedule(guid, "tail_smash", {19000, 23000}, function() onTailSmash(creature, guid) end)
     schedule(guid, "frost_breath", {10000, 15000}, function() onFrostBreath(creature, guid) end)
@@ -399,6 +405,11 @@ end
 -- never seeded in this port (no positional-cast bridge for the
 -- 69846 trigger, see below), so the cancel is a no-op by construction.
 local function onLand(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563): 500ms IsCasting defer, MovePoint not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "land", 500, function() onLand(creature, guid) end)
+        return
+    end
     creature:MoveTo(POINT_LAND, SINDRAGOSA_FLY_IN_POS[1], SINDRAGOSA_FLY_IN_POS[2], SINDRAGOSA_FLY_IN_POS[3])
 end
 
@@ -406,12 +417,22 @@ end
 -- SindragosaAirPosFar). The facing + EVENT_LAND 30s ride the FAR
 -- arrival in MovementInform below.
 local function onAirMovementFar(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563): 500ms IsCasting defer, MovePoint not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "air_movement_far", 500, function() onAirMovementFar(creature, guid) end)
+        return
+    end
     creature:MoveTo(POINT_AIR_PHASE_FAR, SINDRAGOSA_AIR_POS_FAR[1], SINDRAGOSA_AIR_POS_FAR[2], SINDRAGOSA_AIR_POS_FAR[3])
 end
 
 -- C++ EVENT_AIR_MOVEMENT (:521-523): MovePoint(POINT_AIR_PHASE,
 -- SindragosaAirPos).
 local function onAirMovement(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :450 (+ in-loop :563): 500ms IsCasting defer, MovePoint not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "air_movement", 500, function() onAirMovement(creature, guid) end)
+        return
+    end
     creature:MoveTo(POINT_AIR_PHASE, SINDRAGOSA_AIR_POS[1], SINDRAGOSA_AIR_POS[2], SINDRAGOSA_AIR_POS[3])
 end
 
@@ -810,6 +831,11 @@ end
 -- SetFacingToObject + DoCast(SPELL_ICY_BLAST), re-arm 3s; at 0, victim =
 -- SelectVictim -> REACT_DEFENSIVE + AttackStart + SetCanFly(false).
 local function onRimefangIcyBlastCast(creature, guid)
+    -- C++ rimefang UpdateAI pre-loop gate :862 (no in-loop return): 500ms IsCasting defer, counter + re-arm not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "icy_blast_cast", 500, function() onRimefangIcyBlastCast(creature, guid) end)
+        return
+    end
     local counter = (rimefangBlastCounter[guid] or 1) - 1
     rimefangBlastCounter[guid] = counter
     if counter > 0 then

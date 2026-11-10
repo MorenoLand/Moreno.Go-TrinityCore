@@ -135,7 +135,8 @@
 -- PORTED (2026-10-13 retraction re-audit): npc_gluttonous_abomination —
 -- GUT_SPRAY 70633 self-cast {10s,13s} init/re-arm (:871-872/:899).
 -- CAST-STATE GATES PORTED (2026-11-04): boss UpdateAI :420/:447 gates
--- the ported EVENT_DREAM_SLIP one-shot; archmage :703/:728 gates all 3
+-- all four ported boss events (intro-talk, dream-portal, dream-slip,
+-- berserk — all four defer); archmage :703/:728 gates all 3
 -- ticks, skeleton :759/:779 gates both ticks, abomination :890
 -- (pre-loop only) gates gut-spray; controller :590/:616 gates cover
 -- unported summoner casts only (ported engage Talk ungated, separate
@@ -813,6 +814,11 @@ local function onValithriaIntroTalk(creature, guid)
     if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_IN_PROGRESS then
         return
     end
+    -- C++ UpdateAI pre-loop gate :420 (+ in-loop :447): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "intro_talk", 500, function() onValithriaIntroTalk(creature, guid) end)
+        return
+    end
     creature:Talk(SAY_VALITHRIA_ENTER_COMBAT)
 end
 
@@ -855,6 +861,11 @@ end
 -- ACTION_ENTER_COMBAT, gated on IN_PROGRESS (:420).
 local function onValithriaBerserk(creature, guid)
     if creature:GetBossState(DATA_VALITHRIA_DREAMWALKER) ~= BOSS_STATE_IN_PROGRESS then
+        return
+    end
+    -- C++ UpdateAI pre-loop gate :420 (+ in-loop :447): 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "berserk", 500, function() onValithriaBerserk(creature, guid) end)
         return
     end
     creature:Talk(SAY_VALITHRIA_BERSERK)

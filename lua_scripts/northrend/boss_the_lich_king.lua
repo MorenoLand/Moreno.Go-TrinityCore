@@ -321,13 +321,14 @@
 
 -- CAST-STATE GATES PORTED (2026-11-04): boss :900/:1149
 -- (TRANSITION/OUTRO/FROSTMOURNE-exempt in C++; phase-aware in Lua
--- since the 2026-11-08 phase model) gates the berserk one-shot; horror :1323 (pre-loop
+-- since the 2026-11-08 phase model) gates all LK UpdateAI events in
+-- INTRO/ONE/TWO/THREE; horror :1323 (pre-loop
 -- only) gates shockwave/enrage; raging :1412 (pre-loop only) gates
 -- soul-shriek + the set-aggressive flip; warden :1843 UpdateAI is a
 -- plain loop (zero CASTING hits) so soul-rip stays ungated;
--- valkyr :1544/:1576 gates cover the grab machine (timer + target
--- search ported tick 447; MovementInform drop legs still out);
--- tirion :1240 gate covers unported intro/outro talks only;
+-- valkyr :1544/:1576 gates cover grab / life-siphon / move-to-drop /
+-- move-to-center (all four defer; MovementInform drop legs still out);
+-- tirion :1240 gate covers the ported intro/outro talks (all defer);
 -- strangulate/terenas/bomb/frostmourne UpdateAIs ungated (zero hits);
 -- terenas 2s despawns are DespawnOrUnsummon, not scheduler events.
 local ENTRY_THE_LICH_KING = 36597
@@ -964,6 +965,14 @@ end
 -- (ported below; its sender is the unported Quake SpellScript).
 -- PORTED 2026-11-08.
 local function onStartAttack(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :900 (+ in-loop :1149): 500ms
+    -- IsCasting defer (mal_ganis idiom) — exempt while in
+    -- TRANSITION/OUTRO/FROSTMOURNE, where C++ keeps executing events.
+    local phase = lkPhase[guid]
+    if creature:IsCasting() and phase ~= LK.PHASE_TRANSITION and phase ~= LK.PHASE_OUTRO and phase ~= LK.PHASE_FROSTMOURNE then
+        schedule(guid, "start_attack", 500, function() onStartAttack(creature, guid) end)
+        return
+    end
     creature:SetReactState(REACT_AGGRESSIVE)
     if lkPhase[guid] == LK.PHASE_FROSTMOURNE then
         lkPhase[guid] = LK.PHASE_THREE
@@ -1094,7 +1103,7 @@ local function onOutroTalk3(creature, guid)
     creature:Talk(LK.SAY_LK_OUTRO_3)
 end
 
--- C++ EVENT_EMOTE_CAST_SHOUT (:928, PHASE_OUTRO; scheduled :724): DoCastSelf
+-- C++ EVENT_EMOTE_CAST_SHOUT (:928, PHASE_OUTRO; scheduled :725): DoCastSelf
 -- SPELL_EMOTE_SHOUT_NO_SHEATH 73213.
 local function onOutroShout(creature, guid)
     creature:CastSpell(creature, LK.SPELL_EMOTE_SHOUT_NO_SHEATH)
@@ -1281,6 +1290,11 @@ local function onFinishIntro(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_INTRO then
         return
     end
+    -- C++ boss UpdateAI pre-loop gate :900: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "finish_intro", 500, function() onFinishIntro(creature, guid) end)
+        return
+    end
     creature:SetWalk(false)
     creature:SetImmuneToAll(false)
     creature:SetReactState(REACT_AGGRESSIVE)
@@ -1307,6 +1321,11 @@ end
 -- PORTED 2026-11-08.
 local function onIntroEmote1(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    -- C++ boss UpdateAI pre-loop gate :900: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "intro_emote_1", 500, function() onIntroEmote1(creature, guid) end)
         return
     end
     creature:PerformEmote(LK.EMOTE_ONESHOT_POINT_NO_SHEATHE)
@@ -1339,6 +1358,11 @@ local function onIntroTalk1(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_INTRO then
         return
     end
+    -- C++ boss UpdateAI pre-loop gate :900: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "intro_talk_1", 500, function() onIntroTalk1(creature, guid) end)
+        return
+    end
     creature:Talk(LK.SAY_LK_INTRO_2)
     creature:PerformEmote(LK.EMOTE_ONESHOT_TALK_NO_SHEATHE)
     schedule(guid, "intro_shout_1", 7000, function() onEmoteCastShout(creature, guid) end)
@@ -1353,6 +1377,11 @@ local function onIntroMove2(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_INTRO then
         return
     end
+    -- C++ boss UpdateAI pre-loop gate :900: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "intro_move_2", 500, function() onIntroMove2(creature, guid) end)
+        return
+    end
     creature:MoveTo(LK.POINT_LK_INTRO_2, LK.INTRO_2_X, LK.INTRO_2_Y, LK.INTRO_2_Z)
 end
 
@@ -1362,6 +1391,11 @@ local function onIntroMove3(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_INTRO then
         return
     end
+    -- C++ boss UpdateAI pre-loop gate :900: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "intro_move_3", 500, function() onIntroMove3(creature, guid) end)
+        return
+    end
     creature:MoveTo(LK.POINT_LK_INTRO_3, LK.INTRO_3_X, LK.INTRO_3_Y, LK.INTRO_3_Z)
 end
 
@@ -1369,10 +1403,16 @@ end
 -- + RemoveAurasDueToSpell(SPELL_EMOTE_SIT_NO_SHEATH 73220) +
 -- SetWalk(true) + MovePoint(POINT_LK_INTRO_1, LichKingIntro[0]).
 -- The phase gate is the C++ PHASE_INTRO event bit (the phase model
--- landed 2026-11-08); no IsCasting defer (no cast in the arm).
+-- landed 2026-11-08); 500ms IsCasting defer (the :900 pre-loop gate
+-- covers non-cast arms too — it fires before ExecuteEvent).
 -- PORTED 2026-11-08.
 onIntroMove1 = function(creature, guid)
     if lkPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    -- C++ boss UpdateAI pre-loop gate :900: 500ms IsCasting defer, no re-arm consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "intro_move_1", 500, function() onIntroMove1(creature, guid) end)
         return
     end
     creature:SetSheath(LK.SHEATH_STATE_MELEE)
@@ -2014,6 +2054,11 @@ LK.onValkyrGrab = function(creature, guid)
     if LK.valkyrGrabbed[guid] then
         return
     end
+    -- C++ valkyr UpdateAI pre-loop gate :1544 (+ in-loop :1576): 500ms IsCasting defer, re-arm not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "valkyrGrab", 500, function() LK.onValkyrGrab(creature, guid) end)
+        return
+    end
     -- C++ :1554 DoCastAOE(SPELL_VALKYR_TARGET_SEARCH) — no triggered
     -- arg (false); the true here was a deviation (tick 501).
     creature:CastSpell(creature, LK.SPELL_VALKYR_TARGET_SEARCH, false)
@@ -2131,12 +2176,7 @@ LK.valkyrMovementInform = function(event, creature, moveType, id)
         end
         creature:CastSpell(target, LK.SPELL_VALKYR_CARRY)
         LK.valkyrDropPoint[guid] = {x = nearest:GetX(), y = nearest:GetY(), z = nearest:GetZ()}
-        schedule(guid, "valkyrMoveToDrop", 1500, function()
-            local drop = LK.valkyrDropPoint[guid]
-            if drop ~= nil then
-                creature:MoveTo(LK.POINT_DROP_PLAYER, drop.x, drop.y, drop.z)
-            end
-        end)
+        schedule(guid, "valkyrMoveToDrop", 1500, function() LK.onValkyrMoveToDrop(creature, guid) end)
     elseif id == LK.POINT_DROP_PLAYER then
         creature:CastSpell(creature, LK.SPELL_EJECT_ALL_PASSENGERS)
         LK.valkyrGrabbed[guid] = nil
@@ -2156,7 +2196,28 @@ LK.valkyrMovementInform = function(event, creature, moveType, id)
     end
 end
 
+-- C++ EVENT_MOVE_TO_DROP_POS (:1558-1560): MovePoint to the drop
+-- position. Extracted from the MovementInform closure (LK table field,
+-- same 200-local-budget precedent as onValkyrGrab) so the :1544 gate
+-- defer can re-schedule it by name.
+LK.onValkyrMoveToDrop = function(creature, guid)
+    -- C++ valkyr UpdateAI pre-loop gate :1544 (+ in-loop :1576): 500ms IsCasting defer, move not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "valkyrMoveToDrop", 500, function() LK.onValkyrMoveToDrop(creature, guid) end)
+        return
+    end
+    local drop = LK.valkyrDropPoint[guid]
+    if drop ~= nil then
+        creature:MoveTo(LK.POINT_DROP_PLAYER, drop.x, drop.y, drop.z)
+    end
+end
+
 LK.onValkyrMoveToCenter = function(creature, guid)
+    -- C++ valkyr UpdateAI pre-loop gate :1544 (+ in-loop :1576): 500ms IsCasting defer, move not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "valkyrMoveToCenter", 500, function() LK.onValkyrMoveToCenter(creature, guid) end)
+        return
+    end
     local angle = math.random() * 2 * math.pi
     local r = math.random() * 4.0
     local _, _, homeZ = creature:GetHomePosition()
@@ -2164,6 +2225,11 @@ LK.onValkyrMoveToCenter = function(creature, guid)
 end
 
 LK.onValkyrLifeSiphon = function(creature, guid)
+    -- C++ valkyr UpdateAI pre-loop gate :1544 (+ in-loop :1576): 500ms IsCasting defer, re-arm not consumed (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "valkyrLifeSiphon", 500, function() LK.onValkyrLifeSiphon(creature, guid) end)
+        return
+    end
     creature:CastSpell(nil, LK.SPELL_LIFE_SIPHON)
     schedule(guid, "valkyrLifeSiphon", 2500, function() LK.onValkyrLifeSiphon(creature, guid) end)
 end
@@ -2504,6 +2570,11 @@ tirionFns.introTalk1 = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_INTRO then
         return
     end
+    -- C++ tirion UpdateAI pre-loop gate :1240: 500ms IsCasting defer (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tirion_intro_talk_1", 500, function() tirionFns.introTalk1(creature, guid) end)
+        return
+    end
     creature:Talk(LK.SAY_TIRION_INTRO_2)
     schedule(guid, "tirion_intro_emote_1", 2000, function() tirionFns.introEmote1(creature, guid) end)
     schedule(guid, "tirion_intro_charge", 5000, function() tirionFns.introCharge(creature, guid) end)
@@ -2513,6 +2584,11 @@ end
 -- HandleEmoteCommand(EMOTE_ONESHOT_POINT_NO_SHEATHE 397).
 tirionFns.introEmote1 = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_INTRO then
+        return
+    end
+    -- C++ tirion UpdateAI pre-loop gate :1240: 500ms IsCasting defer (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tirion_intro_emote_1", 500, function() tirionFns.introEmote1(creature, guid) end)
         return
     end
     creature:PerformEmote(LK.EMOTE_ONESHOT_POINT_NO_SHEATHE)
@@ -2525,6 +2601,11 @@ tirionFns.introCharge = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_INTRO then
         return
     end
+    -- C++ tirion UpdateAI pre-loop gate :1240: 500ms IsCasting defer (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tirion_intro_charge", 500, function() tirionFns.introCharge(creature, guid) end)
+        return
+    end
     creature:SetWalk(false)
     creature:MoveTo(LK.POINT_TIRION_CHARGE, LK.TIRION_CHARGE_X, LK.TIRION_CHARGE_Y, LK.TIRION_CHARGE_Z)
 end
@@ -2535,11 +2616,16 @@ tirionFns.outroTalk1 = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_OUTRO then
         return
     end
+    -- C++ tirion UpdateAI pre-loop gate :1240: 500ms IsCasting defer (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tirion_outro_talk_1", 500, function() tirionFns.outroTalk1(creature, guid) end)
+        return
+    end
     creature:Talk(LK.SAY_TIRION_OUTRO_1)
 end
 
 -- C++ EVENT_OUTRO_BLESS (:1262-1264, PHASE_OUTRO): DoCastSelf
--- SPELL_LIGHTS_BLESSING 71797. 500ms IsCasting defer (the :1294
+-- SPELL_LIGHTS_BLESSING 71797. 500ms IsCasting defer (the :1240
 -- UpdateAI casting gate; mal_ganis idiom).
 tirionFns.outroBless = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_OUTRO then
@@ -2564,6 +2650,11 @@ tirionFns.outroRemoveIce = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_OUTRO then
         return
     end
+    -- C++ tirion UpdateAI pre-loop gate :1240: 500ms IsCasting defer (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tirion_outro_remove_ice", 500, function() tirionFns.outroRemoveIce(creature, guid) end)
+        return
+    end
     creature:RemoveAura(LK.SPELL_ICE_LOCK)
     creature:SetEquipmentSlots(LK.EQUIP_ASHBRINGER_GLOWING, 0xFFFFFFFF, 0xFFFFFFFF)
     local lichKing = creature:FindNearestCreature(ENTRY_THE_LICH_KING, 500)
@@ -2580,12 +2671,17 @@ tirionFns.outroMove1 = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_OUTRO then
         return
     end
+    -- C++ tirion UpdateAI pre-loop gate :1240: 500ms IsCasting defer (mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "tirion_outro_move_1", 500, function() tirionFns.outroMove1(creature, guid) end)
+        return
+    end
     creature:MoveTo(LK.POINT_TIRION_OUTRO_1, LK.OUTRO_POS_1_X, LK.OUTRO_POS_1_Y, LK.OUTRO_POS_1_Z)
 end
 
 -- C++ EVENT_OUTRO_JUMP (:1277-1279, PHASE_OUTRO): DoCastAOE
 -- SPELL_JUMP 71809 (self-cast per the DoCastAOE convention).
--- 500ms IsCasting defer (the :1294 gate).
+-- 500ms IsCasting defer (the :1240 gate).
 tirionFns.outroJump = function(creature, guid)
     if tirionPhase[guid] ~= LK.PHASE_OUTRO then
         return
