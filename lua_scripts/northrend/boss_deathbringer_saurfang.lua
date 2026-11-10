@@ -289,7 +289,7 @@
 --   via creature:Is25ManRaid() (C++ :495-497, cast order kept).
 -- The UNIT_STATE_CASTING gate in UpdateAI (pre-loop :456 + in-loop
 --   :531; the old note's line numbers drifted) is PORTED 2026-11-04:
---   500ms IsCasting defer in all five ported ticks (mal_ganis idiom).
+--   500ms IsCasting defer in all six ported ticks (mal_ganis idiom).
 -- Lua OnReset (event 23) replays the Reset aura-setup casts; C++
 --   Reset also runs at initial spawn — if the engine never fires 23
 --   pre-combat, the setup auras apply on the first evade instead.
@@ -517,6 +517,13 @@ end
 -- (EMOTE_SCENT_OF_BLOOD 14) + DoCastAOE(SPELL_SCENT_OF_BLOOD 72769)
 -- self-cast. PORTED 2026-11-08 (tick 493).
 local function onScentOfBlood(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :456 (+ in-loop :531, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "scent", 500, function() onScentOfBlood(creature, guid) end)
+        return
+    end
     local beasts = saurfangLiveBeasts[guid]
     if beasts and next(beasts) ~= nil then
         creature:Talk(EMOTE_SCENT_OF_BLOOD)

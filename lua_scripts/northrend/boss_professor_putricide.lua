@@ -42,9 +42,11 @@
 -- DOCUMENTED-BLOCKED (no registration beyond entry 36678):
 -- boss_professor_putricide UpdateAI — PORTED (2026-10-13):
 -- UpdateAI UNIT_STATE_CASTING gates (:572 pre-loop, :697 in-loop)
--- PORTED 2026-11-04: slimePuddleTick + onBerserk defer 500ms while
--- IsCasting (mal_ganis idiom); DamageTaken :347 CASTING return guards
--- only the unported phase latches — checked, no gate ported there.
+-- PORTED 2026-11-04: slimePuddleTick + unstableExperimentTick +
+-- onBerserk defer 500ms while IsCasting (mal_ganis idiom);
+-- DamageTaken :347 CASTING return is PORTED in putricideDamageTaken
+-- (early return while casting; the next hit re-checks the 80%/35%
+-- phase latches, C++-exact).
 -- EVENT_BERSERK single-fire 10min all phases — Talk(SAY_BERSERK
 -- 12) + DoCastSelf(SPELL_BERSERK2 47008) non-triggered
 -- (:266/:598-600); the old "no-timer-bridge" claim for this arm
