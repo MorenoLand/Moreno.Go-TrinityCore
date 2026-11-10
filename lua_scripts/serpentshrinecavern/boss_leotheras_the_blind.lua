@@ -143,17 +143,19 @@
 -- CastSpell(creature, 37713, true) triggered (C++-exact upkeep);
 -- shadow bolt 39309 10s — CastSpell(nil, 39309) (C++ DoCastVictim
 -- non-triggered — vaelastrasz convention). The victim binding
--- (SetGUID(INNER_DEMON_VICTIM) from leotheras — cross-creature
--- blocked), the damage-immunity arm (damage=0 unless the
--- attacker is the bound victim or self — CREATURE_EVENT_ON_-
--- DAMAGE_TAKEN (9) carries a damage rewrite, but the arm's
--- victim-GUID exemption is cross-creature blocked (ModifyThreatByPercent
--- is bridged 2026-10-24, but the binding is not), so a port would fabricate
--- blanket immunity — unmodeled) and the threat retarget/owner-
+-- (SetGUID(INNER_DEMON_VICTIM) from leotheras — PORTED 2026-11-10
+-- via the innerDemonVictim table: the summon site stores the
+-- picked player's GUID keyed by demon GUIDLow), the
+-- damage-immunity arm (damage=0 unless the attacker is the bound
+-- victim or self — CREATURE_EVENT_ON_DAMAGE_TAKEN (9) carries a
+-- damage rewrite, ModifyThreatByPercent is bridged 2026-10-24 —
+-- PORTED below as innerDamageTaken) and the threat retarget/owner-
 -- death
 -- arms (threat-scale + AddThreat bridged 2026-10-24; the owner binding
--- (SetGUID victim) unbridged) are unmodeled; the JustDied whisper-
--- aura removal is cross-creature blocked. OnDied(4)/
+-- (SetGUID victim) is now the innerDemonVictim table, but the
+-- retarget leg still needs a GUID->unit lookup for the owner, so
+-- it stays unmodeled) and the JustDied whisper-aura removal is
+-- cross-creature blocked. OnDied(4)/
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): the
 -- instance-script model is PARTLY PORTED
@@ -256,6 +258,12 @@ local binderTimers = {}
 local binderState = {}
 local innerTimers = {}
 local innerState = {}
+-- Inner-demon victim binding (C++ npc_inner_demonAI::SetGUID
+-- (INNER_DEMON_VICTIM), boss_leotheras_the_blind.cpp:109-112): the
+-- summon site below knows both ends, so the binding lives in this
+-- Lua-side table keyed by demon GUIDLow — no cross-creature GUID
+-- bridge needed (leotherasEventStarterLow precedent, same file).
+local innerDemonVictim = {}
 
 -- Alive players sharing the creature's map+instance (teron
 -- convention).
@@ -501,8 +509,8 @@ local function leotherasTick(creature, guid)
         -- pz, o=0, type 3, 5000ms) + EngageWithTarget(player) (the
         -- AttackStart leg, PORTED 2026-10-26) + player AddAura
         -- (INSIDIOUS_WHISPER 37676). The SetGUID(INNER_DEMON_VICTIM)
-        -- binding stays out (no cross-creature GUID bridge), so the
-        -- demon's victim-only damage immunity stays unmodeled.
+        -- binding is PORTED below via the innerDemonVictim table
+        -- (summon site stores the picked player's GUID).
         if st.innerDemons <= 1000 then
             local victim = creature:GetVictim()
             local victimGuid = victim and victim:GetGUID() or nil
@@ -523,11 +531,12 @@ local function leotherasTick(creature, guid)
                         target:GetZ(), 0, 3, 5000)
                     if demon then
                         -- C++ boss_leotheras_the_blind.cpp:543-548:
-                        -- AttackStart(this picked player); the
-                        -- SetGUID victim-binding stays out (no
-                        -- cross-creature AI SetGUID bridge). The
-                        -- target is a player, so the session-only
+                        -- AttackStart(this picked player) +
+                        -- demon->AI()->SetGUID(player,
+                        -- INNER_DEMON_VICTIM). The target is a
+                        -- player, so the session-only
                         -- EngageWithTarget funnel applies.
+                        innerDemonVictim[demon:GetGUIDLow()] = target:GetGUID()
                         demon:EngageWithTarget(target)
                     end
                     target:AddAura(SPELL_INSIDIOUS_WHISPER)
@@ -901,10 +910,34 @@ local function innerEnterCombat(event, creature)
 end
 
 local function innerCleanup(event, creature)
+    innerDemonVictim[creature:GetGUIDLow()] = nil
     resetCreature(innerTimers, innerState, creature:GetGUIDLow())
+end
+
+-- C++ npc_inner_demonAI::DamageTaken
+-- (boss_leotheras_the_blind.cpp:129-135): damage from anyone but
+-- the bound victim (or self) is zeroed and the attacker's threat
+-- is wiped (-100%); the victim and self damage normally. The
+-- victim GUID rides the innerDemonVictim table (see above); a
+-- missing binding behaves C++-exact (empty victimGUID zeroes
+-- everything but self-damage). Nil attacker zeroes with no
+-- threat call (C++ ModifyThreatByPercent(null) is a no-op in
+-- the Go bridge). Damage rewrite via the numeric second return
+-- (moroes/hodir precedent).
+local function innerDamageTaken(event, creature, attacker, damage)
+    if attacker == nil then
+        return false, 0
+    end
+    local attackerGuid = attacker:GetGUID()
+    if attackerGuid ~= innerDemonVictim[creature:GetGUIDLow()]
+            and attackerGuid ~= creature:GetGUID() then
+        creature:ModifyThreatByPercent(attacker, -100)
+        return false, 0
+    end
 end
 
 RegisterCreatureEvent(ENTRY_INNER_DEMON, 1, innerEnterCombat)
 RegisterCreatureEvent(ENTRY_INNER_DEMON, 2, innerCleanup)
 RegisterCreatureEvent(ENTRY_INNER_DEMON, 4, innerCleanup)
+RegisterCreatureEvent(ENTRY_INNER_DEMON, 9, innerDamageTaken)
 RegisterCreatureEvent(ENTRY_INNER_DEMON, 23, innerCleanup)
