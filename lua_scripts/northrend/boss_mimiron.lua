@@ -49,12 +49,13 @@
 --     DO_ACTIVATE_AERIAL (VX-001 DamageTaken :960, tick 561) and
 --     DO_ACTIVATE_V0L7R0N_1 (ACU MovementInform :1229, tick 561) and
 --     DO_ACTIVATE_V0L7R0N_2 (MKII MovementInform :817, this tick); the
---     computer self-destruct :1453 sender stays out -- the vezax
---     ANIMUS_DIE precedent.
+--     computer self-destruct :1453 sender is live via
+--     npc_mimiron_computer.lua (this tick).
 --   EVENT_OUTTRO_2 cache summon PORTED (tick 475): the GO entry rides the
 --     _fireFighter latch (now modeled) + IsHeroic RAID_MODE twin
 --     (ulduar.h:299-302; 420-day respawn = 36288000s); the computer
---     DoAction(DO_DEACTIVATE_COMPUTER) leg stays out (no computer ref).
+--     DoAction(DO_DEACTIVATE_COMPUTER) leg is live via
+--     npc_mimiron_computer.lua (this tick).
 --
 -- PORTED (tick 190, RegisterAuraEvent):
 --   spell_mimiron_summon_flames_spread (64562) HandleTick — PreventDefaultAction;
@@ -78,8 +79,7 @@
 --     (vehicle-base SetFacingTo / MOUNT / MovePoint legs; the
 --     instance-GUID MKII ref itself is live — INTRO_2/3 use it),
 --     worldtrigger legs (EVENT_SUMMON_FLAMES, elevator
---     knockback), computer DoAction legs (Reset / OUTTRO_2, no computer
---     ref), aerial EnterEvadeMode on Reset (no bridge; event 25 unused),
+--     knockback), aerial EnterEvadeMode on Reset (no bridge; event 25 unused),
 --     Reset SEAT_3 cast on MKII via instance GUID.
 --   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base --
 --     out (no GetVehicleBase binding); button GO flag leg -- out (no GO
@@ -87,8 +87,7 @@
 --     (INTRO_2/INTRO_3 are ported — see the INTRO_1 bullet — via the
 --     instance-GUID MKII twin, not the vehicle base.)
 --   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode,
---     elevator/button GO legs, computer DoAction, SEAT_3 cast on MKII via
---     instance GUID -- all out.
+--     elevator/button GO legs, SEAT_3 cast on MKII via instance GUID -- all out.
 --   Bomb/rocket/mine SpellHitTarget legs live in the npc files, not
 --     here: npc_mimiron_bomb_bot.lua / npc_mimiron_rocket_visual.lua /
 --     npc_mimiron_proximity_mine.lua register ev15 (the frost-bomb has
@@ -174,6 +173,7 @@ local DO_ACTIVATE_V0L7R0N_1 = 10
 local DO_ACTIVATE_V0L7R0N_2 = 11
 local DO_ASSEMBLED_COMBAT = 12
 local DO_ACTIVATE_HARD_MODE = 13
+local DO_DEACTIVATE_COMPUTER = 15
 
 -- boss_mimiron.cpp:327-340 (VX001SummonPos / ACUSummonPos).
 local VX001_SUMMON_POS = { 2744.431, 2569.385, 364.3968, 3.141593 }
@@ -195,6 +195,7 @@ local SAY_V07TRON_DEATH = 13
 -- vehicle-base resolution has no binding, but the target creature
 -- is the same MKII whose GUID the instance latches here.
 local DATA_LEVIATHAN_MK_II = 32
+local DATA_COMPUTER = 35 -- ulduar.h UlduarData (DATA_AERIAL_COMMAND_UNIT = 34, counting up)
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
@@ -270,6 +271,14 @@ local function mimironReset(event, creature)
     creature:SetBossState(BOSS_MIMIRON, 0)
     cancelTimers(creature:GetGUIDLow())
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    -- C++ Reset (:471-472): when _fireFighter, the computer gets
+    -- DoAction(DO_DEACTIVATE_COMPUTER) before the latch clears.
+    if stateFor(creature:GetGUIDLow()).fireFighter then
+        local computer = creature:GetInstanceCreature(DATA_COMPUTER)
+        if computer then
+            computer:DoAction(DO_DEACTIVATE_COMPUTER)
+        end
+    end
     stateFor(creature:GetGUIDLow()).fireFighter = false
     creature:CastSpell(creature, SPELL_WELD)
 end
@@ -341,13 +350,20 @@ end
 -- C++ UpdateAI EVENT_OUTTRO_2: Talk SAY_V07TRON_DEATH, then OUTTRO_3
 -- in 11s. The cache summon rides the _fireFighter latch + IsHeroic
 -- RAID_MODE twin (ulduar.h:299-302; 420-day respawn = 36288000s); the
--- computer DoAction(DO_DEACTIVATE_COMPUTER) leg stays out (no computer ref).
+-- computer DoAction(DO_DEACTIVATE_COMPUTER) leg is live via
+-- npc_mimiron_computer.lua (this tick).
 outtro2 = function(creature, guid)
     creature:Talk(SAY_V07TRON_DEATH)
     local st = bossState[guid]
     local heroic = creature:IsHeroic()
     local cache
     if st and st.fireFighter then
+        -- C++ EVENT_OUTTRO_2 (:651-652): when _fireFighter, the computer
+        -- gets DoAction(DO_DEACTIVATE_COMPUTER) before the cache summon.
+        local computer = creature:GetInstanceCreature(DATA_COMPUTER)
+        if computer then
+            computer:DoAction(DO_DEACTIVATE_COMPUTER)
+        end
         cache = heroic and GO_CACHE_OF_INNOVATION_FIREFIGHTER_HERO or GO_CACHE_OF_INNOVATION_FIREFIGHTER
     else
         cache = heroic and GO_CACHE_OF_INNOVATION_HERO or GO_CACHE_OF_INNOVATION
@@ -623,13 +639,12 @@ local function vol7ronActivation1(creature, guid)
     end)
 end
 
--- C++ DoAction (:397-422, event 38): the phase-machine receiver. Four
--- of the five senders are live now -- MKII MovementInform :807 (P1 idle
--- arrival, tick 561) and :817 (P4_POS_3 arrival, this tick), VX-001
--- DamageTaken :960 (tick 561), ACU MovementInform :1229 (tick 561) --
--- so the receiver fires end-to-end except DO_ACTIVATE_HARD_MODE, whose
--- sender is the computer self-destruct :1453, which stays out (no
--- computer ref) -- the vezax ANIMUS_DIE precedent.
+-- C++ DoAction (:397-422, event 38): the phase-machine receiver. All
+-- five senders are live now -- MKII MovementInform :807 (P1 idle
+-- arrival, tick 561) and :817 (P4_POS_3 arrival, tick 561), VX-001
+-- DamageTaken :960 (tick 561), ACU MovementInform :1229 (tick 561),
+-- and DO_ACTIVATE_HARD_MODE from the computer self-destruct :1453
+-- (npc_mimiron_computer.lua, this tick).
 local function mimironDoAction(event, creature, action)
     local guid = creature:GetGUIDLow()
     if action == DO_ACTIVATE_VX001 then

@@ -19,11 +19,14 @@
 local SPELL_FROST_BOMB_TRIGGER = 64623 -- boss_mimiron.cpp:2640
 local SPELL_SUMMON_FROST_BOMB = 64627 -- boss_mimiron.cpp:142
 
--- C++ FilterTargets (boss_mimiron.cpp:2655-2668). GetDistance is the
--- 3D center-distance twin of the AllWorldObjectsInRange predicate
--- (the boss_vx_001 caster:GetDistance(t) precedent); the in-range
--- removal runs over the snapshot GetTargets() returns, so removing
--- inside the loop is safe.
+-- C++ FilterTargets (boss_mimiron.cpp:2655-2668). AllWorldObjectsInRange
+-- is IsWithinDist(go, 15, false) (GridNotifiers.h:1523-1531): 2D, strict,
+-- with both combat reaches added to the range (_IsWithinDist,
+-- Object.cpp:1147-1166; IsInDist2d is raw-2D < dist, Position.h:144).
+-- The twin is GetDistance2d < 15 + caster reach + target reach
+-- (GetCombatReach is creature-bridged; the 64623 targets are entry
+-- creatures). The in-range removal runs over the snapshot GetTargets()
+-- returns, so removing inside the loop is safe.
 local function frostBombTargetFilter(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return
@@ -35,7 +38,7 @@ local function frostBombTargetFilter(event, spell, effectIndex, targets)
     local caster = spell:GetCaster()
     if caster ~= nil then
         for _, target in ipairs(list) do
-            if target:GetDistance(caster) <= 15.0 then
+            if target:GetDistance2d(caster) < 15.0 + caster:GetCombatReach() + target:GetCombatReach() then
                 targets:Remove(target)
             end
         end

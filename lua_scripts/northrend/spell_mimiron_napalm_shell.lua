@@ -22,11 +22,14 @@ local SPELL_NAPALM_SHELL = 63666 -- boss_mimiron.cpp:88
 
 -- C++ FilterTargets (boss_mimiron.cpp:1980-1993). PORTED via
 -- RegisterSpellEvent ev7 (the skadi freezing-cloud precedent).
--- GetDistance is the 3D center-distance twin of the
--- AllWorldObjectsInRange predicate (the boss_vx_001
--- caster:GetDistance(t) precedent); the in-range removal runs over
--- the snapshot GetTargets() returns, so removing inside the loop is
--- safe.
+-- AllWorldObjectsInRange is IsWithinDist(go, 15, false)
+-- (GridNotifiers.h:1523-1531): 2D, strict, with both combat reaches
+-- added to the range (_IsWithinDist, Object.cpp:1147-1166; IsInDist2d
+-- is raw-2D < dist, Position.h:144). The twin is GetDistance2d < 15 +
+-- caster reach + 1.5 player reach (the engine's own player-reach
+-- constant, lua_creature_events.go:6450; player_state.go:2347).
+-- The in-range removal runs over the snapshot GetTargets() returns,
+-- so removing inside the loop is safe.
 local function napalmShellFilter(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return
@@ -39,7 +42,7 @@ local function napalmShellFilter(event, spell, effectIndex, targets)
     local caster = spell:GetCaster()
     if caster ~= nil then
         for _, target in ipairs(list) do
-            if target:GetDistance(caster) <= 15.0 then
+            if target:GetDistance2d(caster) < 15.0 + caster:GetCombatReach() + 1.5 then
                 targets:Remove(target)
             end
         end
