@@ -128,7 +128,9 @@
 -- is PORTED 2026-11-08 (tick 417, thorimSpellHit below; LATENT — Sif is
 -- unregistered and EVENT_START_SIF_CHANNEL is unported, so 62565 never
 -- lands yet; the Go gate stays HELD). The Sif Talk(SAY_SIF_DESPAWN) /
--- DespawnOrUnsummon cross-creature relay in the same arm stays out.
+-- DespawnOrUnsummon cross-creature relay in the same arm is PORTED
+-- 2026-11-09 (thorimSpellHit below; BPC cross-creature Talk +
+-- freya DespawnOrUnsummon precedents).
 -- SpellHitTarget (SPELL_LIGHTNING_RELEASE 62466 -> player target ->
 -- _dontStandInTheLightning = false) — ev15 IS bridged (caster-side;
 -- thorim casts 62466 on the pillar and the spell's player hits fire
@@ -192,6 +194,7 @@ local SAY_SLAY = 4
 local SAY_BERSERK = 5 -- boss_thorim.cpp:149
 local SAY_WIPE = 6 -- boss_thorim.cpp:150
 local SAY_DEATH = 7
+local SAY_SIF_DESPAWN = 1 -- Sif text ids (boss_thorim.cpp:166-168): SAY_SIF_START 0, SAY_SIF_DESPAWN 1, SAY_SIF_EVENT 2
 
 local SPELL_CREDIT_KILL = 64985
 local FACTION_FRIENDLY = 35
@@ -962,13 +965,18 @@ end
 -- FindNearestCreature sweep (colossusDied precedent): Sif is
 -- summoned at engage (2148.301, -297.8453), well inside 200yd of
 -- Thorim. The Sif Talk(SAY_SIF_DESPAWN)/DespawnOrUnsummon relay in
--- the same arm stays out (header). LATENT, Go gate HELD: Sif is
+-- the same arm is PORTED 2026-11-09 below (same FindNearestCreature
+-- gate; C++ order Talk -> DespawnOrUnsummon(6s) -> _hardMode=false).
+-- LATENT, Go gate HELD: Sif is
 -- unregistered and EVENT_START_SIF_CHANNEL is unported, so 62565
 -- never lands in Lua yet and the latch stays 1 (a gate now would
 -- award on every kill).
 local function thorimSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TOUCH_OF_DOMINION_TRIGGERED then
-        if creature:FindNearestCreature(ENTRY_SIF, 200) then
+        local sif = creature:FindNearestCreature(ENTRY_SIF, 200)
+        if sif then
+            sif:Talk(SAY_SIF_DESPAWN)
+            sif:DespawnOrUnsummon(6000)
             creature:SetData(DATA_LOSE_YOUR_ILLUSION, 0)
         end
     end
