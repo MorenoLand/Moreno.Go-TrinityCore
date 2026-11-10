@@ -214,8 +214,9 @@ local timers = {}
 -- latch (set by DO_ACTIVATE_HARD_MODE, cleared by Reset, read by the
 -- INTRO_1 Talk and the OUTTRO_2 cache summon) + the VX-001 / ACU
 -- creatures summoned by the activation chains, the Lua twin of the
--- DATA_VX_001 / DATA_AERIAL_COMMAND_UNIT instance GUIDs (kept across
--- Reset like the C++ GUIDs; cleared when the controller despawns).
+-- DATA_VX_001 / DATA_AERIAL_COMMAND_UNIT instance GUIDs. Reset
+-- despawns them (the _Reset summons.DespawnAll twin, below); the
+-- activation chains re-summon on the next pull.
 local bossState = {}
 
 local function stateFor(guid)
@@ -261,17 +262,34 @@ local function mimironSpawn(event, creature)
 end
 
 -- C++ Reset (:456), creature-local legs in C++ order: DONE
--- early-return gate (:457-458), _Reset() SetBossState NOT_STARTED,
--- then RemoveFlag NON_ATTACKABLE, _fireFighter = false, then self-cast
--- WELD + SEAT_3 on the MKII instance GUID. _Reset clears the event machine, so Lua timers are cancelled
--- here too. The VX-001 / ACU refs are kept (C++ instance GUIDs persist
--- across Reset); the latch is what Reset clears.
+-- early-return gate (:457-458), aerial EnterEvadeMode (:461-462),
+-- _Reset() SetBossState NOT_STARTED + summons.DespawnAll
+-- (ScriptedCreature.cpp:507), then RemoveFlag NON_ATTACKABLE,
+-- _fireFighter = false, then self-cast WELD + SEAT_3 on the MKII
+-- instance GUID. _Reset clears the event machine, so Lua timers are
+-- cancelled here too. The aerial EnterEvadeMode leg stays out: the
+-- ACU is despawned by the same _Reset immediately after, and its own
+-- summons are untracked in Lua (boss_aerial_command_unit.lua:73).
+-- The old "VX-001 / ACU refs kept across Reset" note was wrong:
+-- instance GUIDs persist, but _Reset despawns the creatures.
 local function mimironReset(event, creature)
     if creature:GetBossState(BOSS_MIMIRON) == 3 then
         return
     end
     creature:SetBossState(BOSS_MIMIRON, 0)
     cancelTimers(creature:GetGUIDLow())
+    -- _Reset summons.DespawnAll twin: VX-001 (:547) and the aerial
+    -- command unit (:579) are Mimiron's only own summons. JustDied
+    -- does NOT call _JustDied, so no despawn there.
+    local st = stateFor(creature:GetGUIDLow())
+    if st.vx001 then
+        st.vx001:Despawn()
+        st.vx001 = nil
+    end
+    if st.aerial then
+        st.aerial:Despawn()
+        st.aerial = nil
+    end
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     -- C++ Reset (:471-472): when _fireFighter, the computer gets
     -- DoAction(DO_DEACTIVATE_COMPUTER) before the latch clears.
