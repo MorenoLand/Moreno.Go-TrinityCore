@@ -54,10 +54,11 @@
 --   DESTROYED): FAIL is unobservable in Go — the boss files
 --   port _Reset (NOT_STARTED) on ev2/ev23, never FAIL
 --   (naxxramas precedent: Go observes only DONE via onDied).
--- - ProcessEvent EVENT_FOCUSING_IRIS (20711): no instance
---   ProcessEvent bridge (oculus precedent); the receiver
---   (Malygos DoAction(0), ACTION_LAND_ENCOUNTER_START) sits
---   in the unported DoAction machine in boss_malygos.lua.
+-- - ProcessEvent EVENT_FOCUSING_IRIS (20711): PORTED this tick —
+--   no instance ProcessEvent bridge (oculus precedent), so the
+--   body rides the GO-use hook (event 14) on both iris entries
+--   below (focusingIrisUse); the receiver (Malygos DoAction(0),
+--   ACTION_LAND_ENCOUNTER_START) is PORTED in boss_malygos.lua.
 -- - SetData dispatch: PORTED 2026-11-08 (tick 431 + tick 432,
 --   below) via the Go-only InstanceEventOnSetData bridge
 --   (event 8, InstanceData:SetData) — DATA_VORTEX_HANDLING runs
@@ -101,6 +102,9 @@ local GO_HEART_OF_MAGIC_10 = 194158 -- eye_of_eternity.h:70
 local GO_HEART_OF_MAGIC_25 = 194159 -- eye_of_eternity.h:71
 
 local SPELL_SUMMOM_RED_DRAGON_BUDDY = 56070 -- eye_of_eternity.h:86
+local SPELL_IRIS_OPENED = 61012 -- eye_of_eternity.h:86
+local GAMEOBJECT_FLAGS = 9 -- arlokk precedent: OBJECT_END 6 + 3 (Go gameObjectFlags twin)
+local GO_FLAG_IN_USE = 1 -- SharedDefines.h:1637 (chromaggus precedent)
 
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
@@ -150,6 +154,51 @@ RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_GAMEOBJECT_CREATE, funct
         instanceData.exitPortalPosition = { go:GetX(), go:GetY(), go:GetZ(), go:GetO() }
     end
 end)
+
+-- C++ instance_eye_of_eternity::ProcessEvent EVENT_FOCUSING_IRIS
+-- (20711, instance_eye_of_eternity.cpp:164-181): the Alexstrasza
+-- bunny casts SPELL_IRIS_OPENED on itself, the iris gains
+-- GO_FLAG_IN_USE, Malygos takes DoAction(0)
+-- (ACTION_LAND_ENCOUNTER_START, boss_malygos.lua), the exit
+-- portal is deleted. The sender is the player clicking the
+-- focusing iris — the Go twin is the GameObjectEventOnUse hook
+-- (event 14, gameobjects.go:1426, the sapphiron-birth precedent);
+-- there is no instance ProcessEvent bridge, so the body rides
+-- the GO-use hook directly. The iris and exit portal are static
+-- DB spawns, so the C++ Delete() legs ride go:Despawn() (hide for
+-- the instance lifetime, sapphiron precedent — Go Delete() only
+-- removes dynamic objects, lua_objects.go:4567). The irisUsed
+-- latch + returning true keep a second click from re-firing the
+-- machine while the flag disables interaction in C++. PORTED
+-- this tick.
+local function focusingIrisUse(event, go, player)
+    if player == nil then
+        return
+    end
+    local mapObj = go:GetMap()
+    if mapObj == nil then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if data == nil or data.irisUsed then
+        return
+    end
+    data.irisUsed = true
+    if data.alexstraszaBunny ~= nil then
+        data.alexstraszaBunny:CastSpell(data.alexstraszaBunny, SPELL_IRIS_OPENED)
+    end
+    go:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_IN_USE)
+    if data.malygos ~= nil then
+        data.malygos:DoAction(0) -- ACTION_LAND_ENCOUNTER_START
+    end
+    if data.exitPortal ~= nil then
+        data.exitPortal:Despawn()
+    end
+    return true
+end
+
+RegisterGameObjectEvent(GO_FOCUSING_IRIS_10, 14, focusingIrisUse)
+RegisterGameObjectEvent(GO_FOCUSING_IRIS_25, 14, focusingIrisUse)
 
 RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_PLAYER_ENTER, function(event, instanceData, mapObj, player)
     if instanceData.malygosDone then

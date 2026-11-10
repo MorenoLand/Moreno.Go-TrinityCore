@@ -83,12 +83,15 @@
 -- lua_objects.go).
 -- Vortex machine (PORTED tick 429, below): EVENT_VORTEX
 -- CreateLuaEvent timer (30-35s first, 60-80s re-arm, C++
--- boss_malygos.cpp:547/:776-779) seeded at engage — engage is
--- the earliest observable phase-one start in Go (the intro land
--- machine is unported), so the first vortex fires ~7s early
--- vs C++; the phase-one latch is Lua-side (the tick no-ops and
--- stops re-arming at 50% health, the C++ UpdateAI phase-two
--- flip — the transition itself stays out). ACTION_LIFT_IN_AIR
+-- boss_malygos.cpp:547/:776-779) seeded at engage — engage
+-- follows the iris use + land now that the intro land machine
+-- is PORTED this tick, so the kit arms at first engage after
+-- the land (C++ arms phase one at land+7s; residual deviation:
+-- if engage fires before the land completes, the first vortex
+-- is up to ~7s early); the phase-one latch is Lua-side (the
+-- tick no-ops and stops re-arming at 50% health, the C++
+-- UpdateAI phase-two flip — the transition itself stays out).
+-- ACTION_LIFT_IN_AIR
 -- (z + 20 MoveTo twin of MoveTakeoff) + EVENT_MOVE_TO_VORTEX_POINT
 -- (REACT_PASSIVE + AttackStop + MoveTo vortex point) +
 -- ACTION_EXECUTE_VORTEX (56237/55873/56105 triggered self-casts,
@@ -125,11 +128,18 @@
 -- lua_creature_events.go:802); the VORTEX actions are PORTED
 -- (ACTION_EXECUTE_VORTEX + ACTION_LIFT_IN_AIR, below) and
 -- ACTION_HANDLE_RESPAWN is PORTED 2026-11-08 (tick 432, below —
--- dormant, FAIL-gated); the rest of the machine stays out on its
--- unported drivers (motion / instance), not dispatch. MovementInform
+-- dormant, FAIL-gated); ACTION_LAND_ENCOUNTER_START is PORTED
+-- this tick (below — sender: the focusing-iris GO use in
+-- instance_eye_of_eternity.lua; EVENT_LAND_START_ENCOUNTER 7s +
+-- POINT_LAND_P_ONE arrival below). ACTION_HANDLE_P_THREE_INTRO
+-- (2) + ACTION_CYCLIC_MOVEMENT (5) stay out on unported
+-- drivers (the SetData summon-deaths machine /
+-- EVENT_PATHING_AROUND_PLATFORM; no MoveCirclePath bridge),
+-- not dispatch. MovementInform
 -- (POINT_LAND_P_ONE / cyclic movement points) — the vortex
--- takeoff-land points are PORTED (below); the rest has no motion
--- bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
+-- takeoff-land points are PORTED (below), and POINT_LAND_P_ONE
+-- is PORTED this tick (type-16 arrival, below); the rest has no
+-- motion bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
 -- SetControlled(true, UNIT_STATE_ROOT) rides that same unbridged
 -- MovementInform: stays out, except the vortex points (PORTED
 -- below). DamageTaken is only the lethal clamp (damage > health &&
@@ -249,6 +259,8 @@ local BOSS_STATE_IN_PROGRESS = 1 -- EncounterState (InstanceScript.h:68-76)
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 local GO_HEART_OF_MAGIC_10 = 194158 -- eye_of_eternity.h:70
 local GO_HEART_OF_MAGIC_25 = 194159 -- eye_of_eternity.h:71
+local GO_FOCUSING_IRIS_10 = 193958 -- eye_of_eternity.h:66
+local GO_FOCUSING_IRIS_25 = 193960 -- eye_of_eternity.h:67
 local HEART_OF_MAGIC_SPAWN_X = 755.351 -- boss_malygos.cpp:291
 local HEART_OF_MAGIC_SPAWN_Y = 1298.31 -- boss_malygos.cpp:291
 local HEART_OF_MAGIC_SPAWN_Z = 223.909 -- boss_malygos.cpp:291
@@ -267,9 +279,11 @@ local SPELL_MALYGOS_PORTAL_BEAM = 56046 -- boss_malygos.cpp:102
 local SPELL_PORTAL_OPENED = 61236 -- eye_of_eternity.h:84
 local SPELL_ARCANE_BARRAGE = 56397 -- boss_malygos.cpp:133 (used by Scions of Eternity)
 local SPELL_ARCANE_BARRAGE_DAMAGE = 63934 -- boss_malygos.cpp:134 (the actual damage - cast by affected player by script spell)
+local POINT_LAND_P_ONE = 2 -- Movements enum (boss_malygos.cpp:162)
 local POINT_VORTEX_P_ONE = 3 -- Movements enum (boss_malygos.cpp:164-166)
 local POINT_LAND_AFTER_VORTEX_P_ONE = 4
 local POINT_LIFT_IN_AIR_P_ONE = 5
+local ACTION_LAND_ENCOUNTER_START = 0 -- Actions enum (boss_malygos.cpp:180)
 local ACTION_EXECUTE_VORTEX = 1 -- Actions enum (boss_malygos.cpp:183-185)
 local ACTION_LIFT_IN_AIR = 3
 local ACTION_HANDLE_RESPAWN = 4 -- Actions enum (boss_malygos.cpp:186)
@@ -440,6 +454,40 @@ local function moveToVortexPoint(creature, guid)
     creature:MoveTo(POINT_VORTEX_P_ONE, VORTEX_POINT_X, VORTEX_POINT_Y, VORTEX_POINT_Z)
 end
 
+-- C++ EVENT_LAND_START_ENCOUNTER (boss_malygos.cpp:763-771): face
+-- the focusing iris and delete it, REACT_AGGRESSIVE,
+-- SetPhase(PHASE_ONE, true). The iris resolves via the instanceData
+-- bind with the FindNearestGameObject fallback (the DONE-leg
+-- precedent in malygosDied); the iris is a static DB spawn, so the
+-- C++ Delete() rides go:Despawn() (sapphiron precedent — Go
+-- Delete() only removes dynamic objects, lua_objects.go:4567).
+-- The SetPhase leg arms the phase-one event kit — in Lua the
+-- ported legs (vortex + power sparks) arm at first engage after
+-- the land (malygosEnterCombat), so this tick only faces, hides
+-- the iris, and aggressives; the 7s schedule is the DoAction(0)
+-- arm below. PORTED this tick.
+local function landStartEncounterTick(creature, guid)
+    local mapObj = creature:GetMap()
+    local iris = nil
+    if mapObj then
+        local data = mapObj:GetInstanceData()
+        if data then
+            iris = data.iris
+        end
+    end
+    if iris == nil then
+        iris = creature:FindNearestGameObject(GO_FOCUSING_IRIS_10, 1000)
+        if iris == nil then
+            iris = creature:FindNearestGameObject(GO_FOCUSING_IRIS_25, 1000)
+        end
+    end
+    if iris ~= nil then
+        creature:SetFacingToObject(iris)
+        iris:Despawn()
+    end
+    creature:SetReactState(REACT_AGGRESSIVE)
+end
+
 -- C++ boss_malygosAI::DoAction (boss_malygos.cpp:473-491): the
 -- vortex actions only. ACTION_EXECUTE_VORTEX casts the three vortex
 -- spells on self, all triggered, in C++ order; the landed latch is
@@ -451,7 +499,42 @@ end
 -- phase-one gate is the health latch (vortexTick is the only live
 -- caller and already checked it).
 local function malygosDoAction(event, creature, action)
-    if action == ACTION_EXECUTE_VORTEX then
+    if action == ACTION_LAND_ENCOUNTER_START then
+        -- C++ boss_malygosAI::DoAction ACTION_LAND_ENCOUNTER_START
+        -- (boss_malygos.cpp:460-472): CancelEventGroup(1) — the
+        -- group-1 events (EVENT_SAY_INTRO + EVENT_START_FIRST_RANDOM_PORTAL,
+        -- PHASE_NOT_STARTED) are not scheduled in Lua, so the cancel
+        -- is vacuous here — then MoveLand to the near point of the
+        -- Alexstrasza bunny (30 yd at the bunny->Malygos angle,
+        -- GetNearPoint2D twin via math.atan2/cos/sin, bunny Z),
+        -- SetImmuneToAll(false), DoZoneInCombat, and the 7s
+        -- EVENT_LAND_START_ENCOUNTER schedule (landStartEncounterTick
+        -- above). Sender: the focusing-iris GO use in
+        -- instance_eye_of_eternity.lua (the instance ProcessEvent
+        -- EVENT_FOCUSING_IRIS body). The whole arm is gated on the
+        -- bunny bind, C++-exact. PORTED this tick.
+        local mapObj = creature:GetMap()
+        local bunny = nil
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                bunny = data.alexstraszaBunny
+            end
+        end
+        if bunny == nil then
+            return
+        end
+        local bx, by, bz = bunny:GetX(), bunny:GetY(), bunny:GetZ()
+        local mx, my = creature:GetX(), creature:GetY()
+        local angle = math.atan2(my - by, mx - bx)
+        creature:MoveLand(POINT_LAND_P_ONE, bx + 30.0 * math.cos(angle), by + 30.0 * math.sin(angle), bz)
+        creature:SetImmuneToAll(false)
+        creature:DoZoneInCombat()
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "landStartEncounter", 7000, function()
+            landStartEncounterTick(creature, guid)
+        end)
+    elseif action == ACTION_EXECUTE_VORTEX then
         creature:CastSpell(creature, SPELL_VORTEX_1, true)
         creature:CastSpell(creature, SPELL_VORTEX_2, true)
         creature:CastSpell(creature, SPELL_VORTEX_3, true)
@@ -518,6 +601,15 @@ end
 -- POINT_LAND_AFTER_VORTEX_P_ONE -> SetDisableGravity(false) +
 -- _executingVortex = false + REACT_AGGRESSIVE.
 local function malygosMovementInform(_, creature, moveType, id)
+    if id == POINT_LAND_P_ONE and moveType == 16 then
+        -- C++ MovementInform POINT_LAND_P_ONE (boss_malygos.cpp:670-672):
+        -- SetDisableGravity(false). MoveLand stamps EFFECT_MOTION_TYPE
+        -- (16, lua_creature_events.go:5002), not POINT (8), so this leg
+        -- rides the type-16 arrival; the C++ switch is id-only.
+        -- PORTED this tick.
+        creature:SetDisableGravity(false)
+        return
+    end
     if moveType ~= 8 then
         return
     end
@@ -569,16 +661,18 @@ local function malygosEnterCombat(event, creature, target)
     state.executing = false
     state.landed = false
     -- C++ SetPhaseEvents PHASE_ONE (boss_malygos.cpp:547): first
-    -- EVENT_VORTEX 30-35s after the phase-one start; engage is the
-    -- earliest observable phase-one start in Go (the intro land
-    -- machine is unported), so the first vortex fires ~7s early
-    -- vs C++ (phase one starts 7s after the land in C++).
+    -- EVENT_VORTEX 30-35s after the phase-one start; the intro land
+    -- machine is PORTED this tick, so engage follows the iris use +
+    -- land and the kit arms at first engage after the land (C++
+    -- arms phase one at land+7s; residual deviation: if engage
+    -- fires before the land completes, the first vortex is up to
+    -- ~7s early).
     schedule(guid, "vortex", math.random(30000, 35000), function()
         vortexTick(creature, guid)
     end)
     -- C++ SetPhaseEvents PHASE_ONE (boss_malygos.cpp:548): first
     -- EVENT_POWER_SPARKS 20-30s after the phase-one start; same
-    -- engage-as-phase-one-start proxy (and the same ~7s-early
+    -- engage-after-land arming (and the same residual ~7s-early
     -- deviation) as the vortex seed above. PORTED 2026-11-08
     -- (tick 432).
     schedule(guid, "powerSparks", math.random(20000, 30000), function()
