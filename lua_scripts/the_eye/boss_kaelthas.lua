@@ -144,11 +144,11 @@
 -- JustDied (summon chain, unreachable) — documented only, no
 -- registration. spell_kael_gravity_lapse (25 teleport spells
 -- 35966-35990 + SPELL_GRAVITY_LAPSE_PERIODIC 34480 /
--- SPELL_GRAVITY_LAPSE_FLIGHT_AURA 39432) — SpellScript, no
--- SpellScript bridge (standing blocker) — documented only.
--- The player self-casts (34480/39432) ride the same HandleScript
--- as the teleport casts, so the bridged player:CastSpell does
--- not unlock them — verified 2026-10-24.
+-- SPELL_GRAVITY_LAPSE_FLIGHT_AURA 39432) — PORTED below (ev4
+-- counter reset + ev5 per-target arm; the "no SpellScript bridge"
+-- note was stale — ev5 ports OnEffectHitTarget SpellScript arms,
+-- 60533/39142 precedents). DORMANT until the phase-4 machine
+-- casts 35941 and Spell.dbc ships the records.
 -- Kael'thas himself (19622): the whole phase machine is
 -- unmodeled — DoAction chains (ACTION_START_ENCOUNTER /
 -- ACTION_PREPARE_ADVISORS / ACTION_ACTIVE_ADVISOR /
@@ -645,3 +645,61 @@ local function phoenixDied(event, creature, killer)
     creature:SummonCreature(NPC_PHOENIX_EGG, 0, 0, 0, 0, 0, 16000)
 end
 RegisterCreatureEvent(ENTRY_PHOENIX_TK, 4, phoenixDied)
+
+local SPELL_GRAVITY_LAPSE = 35941 -- boss_kaelthas.cpp:117
+local SPELL_GRAVITY_LAPSE_PERIODIC = 34480 -- boss_kaelthas.cpp:118
+local SPELL_GRAVITY_LAPSE_FLIGHT_AURA = 39432 -- boss_kaelthas.cpp:119
+local GRAVITY_LAPSE_TELEPORTS = {
+    35966, 35967, 35968, 35969, 35970, 35971, 35972, 35973,
+    35974, 35975, 35976, 35977, 35978, 35979, 35980, 35981,
+    35982, 35983, 35984, 35985, 35986, 35987, 35988, 35989, 35990,
+}
+local gravityLapseCount = {}
+
+-- C++ spell_kael_gravity_lapse_SpellScript::HandleScript
+-- (boss_kaelthas.cpp:1470-1475): EFFECT_0 SCRIPT_EFFECT
+-- OnEffectHitTarget — per hit target in order: the caster casts
+-- GravityLapseSpells[_targetCount] triggered on the hit unit, the
+-- hit unit casts 34480 + 39432 triggered on itself, _targetCount++.
+-- The 25 teleport IDs are GravityLapseSpells[] (:271-296, 35966-35990
+-- in array order). The per-cast counter is a fresh SpellScript
+-- instance in C++; ev4 (OnEffectHit, HIT phase before the per-target
+-- loop, 75415 ruby_sanctum precedent) resets it keyed by caster
+-- GUIDLow. A 26th hit target has no teleport (array is 25 entries for
+-- a 25-man raid) but still gets the two self-auras. DORMANT until the
+-- phase-4 machine casts 35941 (gravity lapse pump arm rides the
+-- unported instance-phased event machine) and Spell.dbc ships the
+-- records. The header's "no SpellScript bridge" note is stale: ev5
+-- ports OnEffectHitTarget SpellScript arms (60533/39142 precedents).
+local function gravityLapseReset(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    gravityLapseCount[caster:GetGUIDLow()] = 0
+end
+
+local function gravityLapseHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local low = caster:GetGUIDLow()
+    local idx = gravityLapseCount[low] or 0
+    local tele = GRAVITY_LAPSE_TELEPORTS[idx + 1]
+    if tele ~= nil then
+        caster:CastSpell(hitTarget, tele, true)
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_GRAVITY_LAPSE_PERIODIC, true)
+    hitTarget:CastSpell(hitTarget, SPELL_GRAVITY_LAPSE_FLIGHT_AURA, true)
+    gravityLapseCount[low] = idx + 1
+end
+
+RegisterSpellEvent(SPELL_GRAVITY_LAPSE, 4, gravityLapseReset)
+RegisterSpellEvent(SPELL_GRAVITY_LAPSE, 5, gravityLapseHit)
