@@ -81,7 +81,8 @@
 -- SAY_TOWER_NATURE 8); tower state has no bridge and the summon legs are
 -- excluded.
 -- SpellHitTarget (SPELL_PURSUED: _pursueTarget GUID + vehicle seat walk ->
--- Talk(EMOTE_PURSUE 12, passenger)) — no vehicle bridge.
+-- Talk(EMOTE_PURSUE 12, passenger)) is PORTED below (ev15; the old
+-- "no vehicle bridge" note was stale — GetVehicleKit/GetPassenger live).
 -- SpellHit: stale "no SpellHit bridge" retracted (2026-10-21) — ev14
 -- CreatureEventOnHitBySpell is bridged; the arms stay out on their own
 -- machines: SPELL_START_THE_ENGINE 62472 vehicle-accessory install —
@@ -275,6 +276,16 @@ local SPELL_FLAME_VENTS     = 62396
 local SPELL_MISSILE_BARRAGE = 62400
 local SPELL_SYSTEMS_SHUTDOWN = 62475
 local SPELL_AUTO_REPAIR = 62705 -- boss_flame_leviathan.cpp:75/:1595
+local NPC_SALVAGED_DEMOLISHER = 33109 -- ulduar.h:59
+local NPC_SALVAGED_SIEGE_ENGINE = 33060 -- ulduar.h:60
+local AREA_FORMATION_GROUNDS = 4652 -- boss_flame_leviathan.cpp:1706
+local EMOTE_PURSUE = 12 -- boss_flame_leviathan.cpp:164
+
+-- The AI _pursueTarget GUID store (boss_flame_leviathan.cpp:489),
+-- keyed by boss GUIDLow; written by the SpellHitTarget leg below and
+-- cleared on Reset (:270). (The spell-script _target member lives in
+-- the pursueTarget local beside the ev7 handlers.)
+local pursueTargetGuid = {}
 
 local timers = {}
 
@@ -461,11 +472,12 @@ end
 -- C++ Reset (boss_flame_leviathan.cpp:265-273): _Reset() —
 -- SetBossState(DATA_LEVIATHAN, NOT_STARTED) (ScriptedCreature.cpp:503-512;
 -- maiden precedent sets it unconditionally on ev23) — then Shutdown = 0 /
--- _pursueTarget.Clear() (unmodeled Lua state, consumed only by the blocked
--- shutdown-threshold / SpellHitTarget legs) and SetReactState
+-- _pursueTarget.Clear() (pursueTargetGuid[guid] = nil below; the store is
+-- consumed only by the blocked DoBatteringRamIfReady legs) and SetReactState
 -- (REACT_DEFENSIVE) last.
 local function flameLeviathanReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    pursueTargetGuid[creature:GetGUIDLow()] = nil
     creature:SetBossState(DATA_LEVIATHAN, 0)
     -- C++ boss_flame_leviathan.cpp:272: me->SetReactState(REACT_DEFENSIVE)
     -- (Reset last leg).
@@ -746,3 +758,131 @@ local function autoRepairHandleScript(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_AUTO_REPAIR, 5, autoRepairHandleScript)
+
+-- Random-resize twin of Trinity::Containers::RandomResize: keeps a
+-- uniform random subset of n from list (Fisher-Yates partial).
+-- Malygos idiom (boss_malygos.lua).
+local function randomResize(list, n)
+    local count = #list
+    if count <= n then
+        return list
+    end
+    for i = 1, n do
+        local j = math.random(i, count)
+        list[i], list[j] = list[j], list[i]
+    end
+    local out = {}
+    for i = 1, n do
+        out[i] = list[i]
+    end
+    return out
+end
+
+-- Per-cast EFFECT_0 pick, shared with the EFFECT_1 leg below (the
+-- C++ SpellScript instance's _target member, :1780): reset by the
+-- EFFECT_0 handler on every cast (ev7 fires in effect order,
+-- lua_spell.go fireSpellTargetSelects), so a stale pick never leaks
+-- into the next cast.
+local pursueTarget = nil
+
+-- C++ spell_pursue::FilterTargets (boss_flame_leviathan.cpp:1751-1765):
+-- OnObjectAreaTargetSelect, EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY.
+-- RandomResize to 1 over FlameLeviathanPursuedTargetSelector
+-- (:1703-1739): creature targets only, entry 33109 salvaged demolisher
+-- / 33060 salvaged siege engine (ulduar.h:59-60), a vehicle kit, area
+-- 4652 Formation Grounds, and a player on any seat (GetPassenger
+-- returns nil for empty/unknown seats, lua_vehicle.go:74). Empty list:
+-- the caster evades (EnterEvadeMode bridged,
+-- lua_creature_events.go:5200); else the pick is stored for the
+-- EFFECT_1 leg and the list is resized to it.
+-- PORTED 2026-11-11. DORMANT: 62374 is cast only by the EVENT_PURSUE
+-- driver above (35s) plus Spell.dbc.
+local function pursueFilterTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    pursueTarget = nil
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetObjectType() == "Creature" then
+            local entry = target:GetEntry()
+            if entry == VEHICLE_DEMOLISHER or entry == VEHICLE_SIEGE then
+                local vehicle = target:GetVehicleKit()
+                if vehicle ~= nil and target:GetAreaId() == AREA_FORMATION_GROUNDS then
+                    for seat = 0, 7 do
+                        local passenger = vehicle:GetPassenger(seat)
+                        if passenger ~= nil and passenger:GetObjectType() == "Player" then
+                            kept[#kept + 1] = target
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if #kept == 0 then
+        targets:Clear()
+        local caster = spell:GetCaster()
+        if caster ~= nil and caster:GetObjectType() == "Creature" then
+            caster:EnterEvadeMode()
+        end
+        return
+    end
+    local picked = randomResize(kept, 1)[1]
+    pursueTarget = picked
+    targets:Clear()
+    targets:Add(picked)
+end
+
+-- C++ spell_pursue::FilterTargetsSubsequently (:1768-1774):
+-- OnObjectAreaTargetSelect, EFFECT_1 TARGET_UNIT_SRC_AREA_ENEMY. Copy
+-- the EFFECT_0 pick: clear the list, push _target back if set; an
+-- empty EFFECT_0 list leaves pursueTarget nil, so EFFECT_1 selects
+-- nothing. PORTED 2026-11-11. DORMANT with the EFFECT_0 leg above.
+local function pursueFilterTargetsSubsequently(event, spell, effectIndex, targets)
+    if effectIndex ~= 1 then
+        return
+    end
+    targets:Clear()
+    if pursueTarget ~= nil then
+        targets:Add(pursueTarget)
+    end
+end
+
+RegisterSpellEvent(SPELL_PURSUED, 7, pursueFilterTargets)
+RegisterSpellEvent(SPELL_PURSUED, 7, pursueFilterTargetsSubsequently)
+
+-- C++ boss_flame_leviathanAI::SpellHitTarget (:480-500): on a
+-- SPELL_PURSUED hit, store the target GUID (_pursueTarget), AttackStart
+-- it, then whisper EMOTE_PURSUE (12) to the first player passenger on
+-- its vehicle seats. Twin: ev15 CreatureEventOnSpellHitTarget
+-- (boss_ai.go:4359; handler args (event, creature, target, spellId),
+-- eredar-twins precedent); AttackStart bridged
+-- (lua_creature_events.go:6868); Talk(id, player) whisper-target bridge
+-- (lua_creature_events.go:1196). The C++ seat walk dereferences the kit
+-- directly (the pursued target always has one by the ev7 selector);
+-- the nil-kit guard below only fires for a target that somehow has
+-- none. DoBatteringRamIfReady's consumption of the stored GUID stays
+-- out (attack-timer legs, no bridges).
+-- PORTED 2026-11-11. DORMANT with the ev7 legs above.
+local function flameLeviathanSpellHitTarget(event, creature, target, spellId)
+    if target == nil or spellId ~= SPELL_PURSUED then
+        return
+    end
+    pursueTargetGuid[creature:GetGUIDLow()] = target:GetGUIDLow()
+    creature:AttackStart(target)
+    local vehicle = target:GetVehicleKit()
+    if vehicle == nil then
+        return
+    end
+    for seat = 0, 7 do
+        local passenger = vehicle:GetPassenger(seat)
+        if passenger ~= nil and passenger:GetObjectType() == "Player" then
+            creature:Talk(EMOTE_PURSUE, passenger)
+            return
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 15, flameLeviathanSpellHitTarget)
+

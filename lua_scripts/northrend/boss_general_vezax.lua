@@ -176,10 +176,10 @@
 -- aurEff amount — PORTED tick 422 below via RegisterAuraEvent
 -- (63276, 1); the "no AuraScript bridge" claim is retired —
 -- RegisterAuraEvent + aura:GetCaster/GetAmount are live);
--- spell_general_vezax_mark_of_the_faceless_leech (63276/63134
--- target filter removing expl target, FinishCast on empty —
--- no SpellScript bridge; joins the no-SpellScript-bridge
--- queue); spell_general_vezax_saronite_vapors (63323 —
+-- spell_general_vezax_mark_of_the_faceless_leech (63278
+-- SPELL_MARK_OF_THE_FACELESS_DAMAGE — target filter removing
+-- expl target, FinishCast on empty — PORTED below via
+-- RegisterSpellEvent (63278, 7)); spell_general_vezax_saronite_vapors (63323 —
 -- OnApply: bp * 2^stack mana restore -> SPELL_SARONITE_VAPORS_
 -- ENERGIZE 63337 + DAMAGE 63338 at 2x — PORTED tick 422 below
 -- via RegisterAuraEvent (63323, 2 + 4); the "no AuraScript
@@ -665,6 +665,33 @@ local function markOfTheFacelessPeriodic(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MARK_OF_THE_FACELESS, 1, markOfTheFacelessPeriodic)
+
+-- C++ spell_general_vezax_mark_of_the_faceless_leech
+-- (boss_general_vezax.cpp:487-515): OnObjectAreaTargetSelect,
+-- EFFECT_1 TARGET_UNIT_DEST_AREA_ENEMY. Remove the explicit target
+-- (the marked unit, hit by EFFECT_0's dummy through the 435 cast)
+-- from the drain list; an empty list fails the cast
+-- (FinishCast(SPELL_FAILED_NO_VALID_TARGETS) — no twin, but
+-- immaterial: EFFECT_0 of 63278 is a no-op dummy, so an empty list
+-- means the cast does nothing, the corpse-explosion precedent).
+-- Binding 63278 = SPELL_MARK_OF_THE_FACELESS_DAMAGE
+-- (boss_general_vezax.cpp:52; the 435 periodic casts it on the
+-- marked target, and 63278 carries the EFFECT_1 drain — 63276 has a
+-- single effect and cannot carry the class's EFFECT_1 leg; 63134 is
+-- SPELL_SARAS_BLESSING, unrelated).
+-- PORTED 2026-11-11. DORMANT: 63278 is cast only by the 435 leg above
+-- plus Spell.dbc.
+local function markOfTheFacelessLeechFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 1 then
+        return
+    end
+    local explTarget = spell:GetTarget()
+    if explTarget ~= nil then
+        targets:Remove(explTarget)
+    end
+end
+
+RegisterSpellEvent(SPELL_MARK_OF_THE_FACELESS_DAMAGE, 7, markOfTheFacelessLeechFilter)
 
 -- C++ spell_general_vezax_saronite_vapors (boss_general_vezax.cpp:516-553):
 -- AfterEffectApply EFFECT_0 DUMMY, REAL_OR_REAPPLY — the caster
