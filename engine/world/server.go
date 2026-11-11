@@ -455,7 +455,16 @@ type session struct {
 	// never leak into the next cast.
 	collectingFalloutRollSet bool
 	collectingFalloutRollOK  bool
-	gmChat                   bool
+	// bloodTapRuneIndex/bloodTapRuneIndexSet carry spell_dk_blood_tap's
+	// script _runeIndex (spell_dk.cpp:3145-3205) from the launch arm
+	// (HandleEffect) to the aura-apply arm (HandleApply): the spell
+	// script picks the rune to convert to death, the aura script
+	// converts that slot. The Set flag clears on consume, so a stale
+	// value can never leak into the next cast (collectingFalloutRollSet
+	// precedent).
+	bloodTapRuneIndex    uint8
+	bloodTapRuneIndexSet bool
+	gmChat               bool
 	// locale mirrors WorldSession::m_sessionDbLocaleIndex
 	// (WorldSession.h:1198, WorldSocket.cpp:267 -> WorldSession.cpp:132):
 	// the session's LocaleConstant index from account.locale (0 = enUS),

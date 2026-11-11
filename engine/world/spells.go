@@ -185,6 +185,7 @@ const (
 	spellFailedBadTargets                uint8  = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedBmOrInvisGod              uint8  = 159 // SPELL_FAILED_BM_OR_INVISGOD (SharedDefines.h:1141)
 	spellFailedTargetIsPlayer            uint8  = 117 // SPELL_FAILED_TARGET_IS_PLAYER (SharedDefines.h:1099)
+	spellFailedTargetNotDead             uint8  = 119 // SPELL_FAILED_TARGET_NOT_DEAD (SharedDefines.h:1101)
 	spellFailedTargetNoPockets           uint8  = 123 // SPELL_FAILED_TARGET_NO_POCKETS (SharedDefines.h:1105)
 	spellFailedTargetNotPlayer           uint8  = 122 // SPELL_FAILED_TARGET_NOT_PLAYER (SharedDefines.h:1104)
 	spellFailedTargetNoWeapons           uint8  = 124 // SPELL_FAILED_TARGET_NO_WEAPONS (SharedDefines.h:1106)
@@ -201,6 +202,7 @@ const (
 	spellFailedNoPower                   uint8  = 85    // SPELL_FAILED_NO_POWER (SharedDefines.h:1067)
 	spellFailedOutOfRange                uint8  = 97    // SPELL_FAILED_OUT_OF_RANGE (SharedDefines.h:1079)
 	spellFailedSpellInProgress           uint8  = 105   // SPELL_FAILED_SPELL_IN_PROGRESS (SharedDefines.h:1087)
+	spellFailedNoValidTargets            uint8  = 178   // SPELL_FAILED_NO_VALID_TARGETS (SharedDefines.h:1160)
 	spellFailedUnknown                   uint8  = 187   // SPELL_FAILED_UNKNOWN (SharedDefines.h:1169)
 	spellFailedNoChargesRemain           uint8  = 76    // SPELL_FAILED_NO_CHARGES_REMAIN (SharedDefines.h:1058)
 	spellFailedDontReport                uint8  = 27    // SPELL_FAILED_DONT_REPORT (SharedDefines.h:1009)
@@ -4176,6 +4178,39 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			}
+		}
+	}
+	// spell_dk_raise_ally_initial::CheckCast (spell_dk.cpp:2820-2829):
+	// Raise Ally Initial needs a dead, not-yet-risen explicit target —
+	// no target fails SPELL_FAILED_NO_VALID_TARGETS, a living target
+	// SPELL_FAILED_TARGET_NOT_DEAD, and an already-risen (ghouled, 46619
+	// aura) target SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. C++ script
+	// OnCheckCast handlers run at the end of Spell::CheckCast, so this
+	// wires after the generic gates beside the death-grip leg. An
+	// unresolvable target (offline player, unloaded creature) passes
+	// through: the dummy leg skips it the same way C++'s GetHitPlayer
+	// no-ops, so no live cast is wrongly failed.
+	if spellID == spellRaiseAllyInitial {
+		if targetGUID == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNoValidTargets), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise ally initial without a target")
+			return true
+		}
+		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+			if !targetSess.isDeadOrGhost() {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotDead), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise ally initial on a living target")
+				return true
+			}
+			if targetSess.playerHasAuraSpell(spellRaiseAlly) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantDoThatRightNow), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise ally initial on an already-risen target")
+				return true
+			}
+		} else if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil && motion.Health > 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotDead), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise ally initial on a living creature target")
+			return true
 		}
 	}
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
@@ -13561,7 +13596,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	for effectIndex, eff := range spell.Effects {
 		s.triggerLaunchSpellEffectIndex(ctx, spell, spellID, target, eff)
 		if eff.Effect == spellEffectActivateRune {
-			s.handleEffectActivateRune(spell, eff, effectIndex)
+			// spell_dk_blood_tap::HandleEffect (spell_dk.cpp:3149):
+			// PreventHitDefaultEffect — the script's reset picks the
+			// rune, not the generic leg.
+			if spellID == spellBloodTap {
+				s.bloodTapHandleEffect()
+			} else {
+				s.handleEffectActivateRune(spell, eff, effectIndex)
+			}
 		}
 	}
 
@@ -26935,7 +26977,14 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// SPELL_EFFECT_HANDLE_LAUNCH — the client launch block's
 			// per-index arm, mirrored here so a triggered rune spell
 			// activates runes instead of falling through.
-			s.handleEffectActivateRune(spell, eff, effectIndex)
+			// spell_dk_blood_tap::HandleEffect (spell_dk.cpp:3149):
+			// PreventHitDefaultEffect — the script's reset picks the
+			// rune, not the generic leg.
+			if spellID == spellBloodTap {
+				s.bloodTapHandleEffect()
+			} else {
+				s.handleEffectActivateRune(spell, eff, effectIndex)
+			}
 		}
 		// Spell::SelectEffectTypeImplicitTargets special case (Spell.cpp:1708-1746):
 		// effects 85 (SUMMON_PLAYER) and 152 (SUMMON_RAF_FRIEND) target the
@@ -36346,6 +36395,45 @@ func (s *Server) spellFirstRank(spellID uint32) uint32 {
 	return spellID
 }
 
+// spellRank mirrors SpellInfo::GetRank (SpellInfo.cpp) via the spell_ranks
+// world table cached by petAuraStackGroups: the 1-based rank of spellID
+// within its first-rank chain, or 0 when the spell has no rank row.
+func (s *Server) spellRank(spellID uint32) uint8 {
+	if s == nil {
+		return 0
+	}
+	groups := s.petAuraStackGroups()
+	first := groups.firstRank[spellID]
+	if first == 0 {
+		first = spellID
+	}
+	for r := uint32(1); r <= 64; r++ {
+		id, ok := groups.rankSpell[uint64(first)<<32|uint64(r)]
+		if !ok {
+			break
+		}
+		if id == spellID {
+			return uint8(r)
+		}
+	}
+	return 0
+}
+
+// spellWithRank mirrors sSpellMgr->GetSpellWithRank (SpellMgr.cpp): the
+// spell ID of the given rank in firstSpellID's chain, or 0 when the chain
+// has no such rank.
+func (s *Server) spellWithRank(firstSpellID uint32, rank uint8) uint32 {
+	if s == nil || rank == 0 {
+		return 0
+	}
+	groups := s.petAuraStackGroups()
+	id, ok := groups.rankSpell[uint64(firstSpellID)<<32|uint64(rank)]
+	if !ok {
+		return 0
+	}
+	return id
+}
+
 // spellAuraScaleMask mirrors the "Fill aura scaling information" block in
 // Spell::prepare (Spell.cpp:3040-3056). It returns the bit mask of effect
 // indexes whose auras scale for low-level targets, or 0 when scaling does
@@ -38472,7 +38560,20 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// AuraEffect::HandleAuraConvertRune apply leg
 		// (SpellAuraEffects.cpp:4847-4875).
 		if eff.Aura == spellAuraConvertRune {
-			targetSess.applyConvertRuneAura(eff, amount)
+			// spell_dk_blood_tap::HandleApply (spell_dk.cpp:3113):
+			// PreventDefaultAction — the aura converts exactly the slot
+			// the launch arm picked, never the generic first-fit. The
+			// stash clears on consume (collectingFalloutRollSet
+			// precedent); a 45529 aura applied without a launch (e.g.
+			// .aura) converts nothing, like C++'s MAX_RUNES default.
+			if spell.ID == spellBloodTap {
+				if s.bloodTapRuneIndexSet {
+					targetSess.bloodTapApplyConvertRune(s.bloodTapRuneIndex)
+					s.bloodTapRuneIndexSet = false
+				}
+			} else {
+				targetSess.applyConvertRuneAura(eff, amount)
+			}
 		}
 		if eff.Aura == spellAuraFakeInebriation {
 			targetSess.player.FakeInebriation += amount

@@ -397,17 +397,20 @@ func (s *Server) tickCasterAbsorbIgnorePctForSpell(casterSess *session, casterGU
 // SPELL_AURA_SCHOOL_ABSORB aura whose C++ script overrides the per-hit
 // absorb with CalculatePct(damage, pct): 50462 Anti-Magic Shell (raid)
 // and 50461 Anti-Magic Zone (spell_dk.cpp:253-301, 366-434), where pct is
-// the aura spell's own effect-0 CalcValue at the caster's level, and
+// the aura spell's own effect-0 CalcValue at the caster's level,
 // 49145 Spell Deflection (spell_dk.cpp:2338-2340), where the same
 // effect-0 CalcValue is the absorb pct gated on a parry roll (the roll
-// itself lives in scriptAbsorbHit, not here). A zero or unreadable pct
-// falls through to the generic pool leg.
+// itself lives in scriptAbsorbHit, not here), and 52284 Will of the
+// Necropolis (spell_dk.cpp:2696-2701), where the same effect-0 CalcValue
+// is the absorb pct gated on the target's health vs the matching-rank
+// talent spell's min-HP pct (the gate itself lives in scriptAbsorbHit,
+// not here). A zero or unreadable pct falls through to the generic pool leg.
 func (s *Server) scriptAbsorbPct(spellID uint32, casterLevel uint8) (uint32, bool) {
 	if s == nil || s.Data == nil {
 		return 0, false
 	}
 	switch spellID {
-	case 50462, 50461, 49145:
+	case 50462, 50461, 49145, 52284:
 	default:
 		return 0, false
 	}
@@ -436,9 +439,19 @@ func (s *Server) scriptAbsorbPct(spellID uint32, casterLevel uint8) (uint32, boo
 // reduction, neither of which the absorb call sites carry). A failed
 // roll absorbs nothing and leaves the pool untouched; the pool itself
 // is unlimited (-1 in C++), like 50462, so it is never consumed.
+// 52284 Will of the Necropolis (spell_dk.cpp:2711-2726) absorbs
+// pct(remainingDamage) only when the victim's health after this damage
+// drops below the min-HP pct in effect 0 of the matching-rank talent
+// spell (49189, same rank as the aura); the pool is unlimited (-1 in
+// C++), so it is never consumed, and a gate that does not trip absorbs
+// nothing with the pool untouched. A missing rank row, talent spell, or
+// victim max health falls through to the generic pool leg (today's
+// behaviour) instead of inventing a gate. victimHealth/victimMaxHealth
+// are the victim's current and max health; pass zeros when the victim's
+// health is not resolvable.
 // Every absorb call site is a direct-damage path (melee / spell hit),
 // so the C++ SPELL_DIRECT_DAMAGE gate holds by construction.
-func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32, parryChancePct float64) (uint32, bool, bool) {
+func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32, parryChancePct float64, victimHealth, victimMaxHealth uint32) (uint32, bool, bool) {
 	if aura == nil || remainingDamage == 0 {
 		return 0, false, false
 	}
@@ -448,6 +461,31 @@ func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32, parry
 	}
 	if aura.SpellID == 49145 {
 		if parryChancePct <= 0 || rand.Float64()*100 >= parryChancePct {
+			return 0, false, true
+		}
+		absorbThis := uint32(uint64(remainingDamage) * uint64(pct) / 100)
+		if absorbThis > remainingDamage {
+			absorbThis = remainingDamage
+		}
+		return absorbThis, false, true
+	}
+	if aura.SpellID == 52284 {
+		rank := s.spellRank(aura.SpellID)
+		talentID := s.spellWithRank(49189, rank)
+		if rank == 0 || talentID == 0 || victimMaxHealth == 0 {
+			return 0, false, false
+		}
+		talent, found, err := s.Data.Spell(talentID)
+		if err != nil || !found || len(talent.Effects) == 0 {
+			return 0, false, false
+		}
+		minHpPct := talent.Effects[0].CalcValueForLevel(talent, uint32(aura.CasterLevel))
+		if minHpPct <= 0 {
+			return 0, false, false
+		}
+		minHp := uint64(victimMaxHealth) * uint64(minHpPct) / 100
+		remainingHp := int64(victimHealth) - int64(remainingDamage)
+		if remainingHp >= int64(minHp) {
 			return 0, false, true
 		}
 		absorbThis := uint32(uint64(remainingDamage) * uint64(pct) / 100)
@@ -541,7 +579,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				// only their own spell school. A zero MiscValue absorbs
 				// nothing, like C++ — there is no all-schools fallback.
 				if aura.MiscValue&int32(schoolMask) != 0 {
-					if absorbThis, depleted, ok := s.server.scriptAbsorbHit(aura, remainingDamage, float64(s.player.ParryPercentage)); ok {
+					if absorbThis, depleted, ok := s.server.scriptAbsorbHit(aura, remainingDamage, float64(s.player.ParryPercentage), s.player.Health, s.player.MaxHealth); ok {
 						remainingDamage -= absorbThis
 						absorbed += absorbThis
 						if depleted {
@@ -671,7 +709,11 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 					// (Unit.cpp:1881), not the aura spell's school — see
 					// the player leg above. 256 is not an absorb type.
 					if aura.MiscValue&int32(schoolMask) != 0 {
-						if absorbThis, depleted, ok := s.scriptAbsorbHit(aura, remainingDamage, -1); ok {
+						var creatureHealth, creatureMaxHealth uint32
+						if motion != nil {
+							creatureHealth, creatureMaxHealth = motion.Health, motion.MaxHealth
+						}
+						if absorbThis, depleted, ok := s.scriptAbsorbHit(aura, remainingDamage, -1, creatureHealth, creatureMaxHealth); ok {
 							remainingDamage -= absorbThis
 							absorbed += absorbThis
 							if depleted {

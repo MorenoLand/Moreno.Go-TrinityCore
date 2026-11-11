@@ -30,6 +30,7 @@ const (
 	classDeathKnight = 6
 
 	spellEmpowerRuneWeapon uint32 = 47568 // Empower Rune Weapon (SpellEffects.cpp:5350)
+	spellBloodTap          uint32 = 45529 // Blood Tap (spell_dk.cpp:3091)
 )
 
 // dkRuneState mirrors Player::m_runes (Player.h:286): per-slot base and
@@ -434,6 +435,70 @@ func (s *session) handleEffectActivateRune(spell wotlk.Spell, eff wotlk.SpellEff
 	if changed {
 		s.sendRuneCooldownUpdate()
 	}
+}
+
+// bloodTapHandleEffect mirrors spell_dk_blood_tap_SpellScript::HandleEffect
+// (spell_dk.cpp:3149-3191): the OnEffectLaunch arm of EFFECT_0
+// (SPELL_EFFECT_ACTIVATE_RUNE) with PreventHitDefaultEffect, so the generic
+// EffectActivateRune leg never runs for this spell. It resets the blood-rune
+// cooldown the script picks — the shorter-cooldown one when both are down,
+// the down one when only one is — and records the rune the aura must
+// convert to death: the reset rune when both blood slots currently share a
+// type, else the blood rune among them. The C++ spell->SetRuneState snapshot
+// has no Go twin: it only feeds SendSpellGo's RuneData.Start, and Go skips
+// the rune-list block for spells carrying a CONVERT_RUNE aura (spells.go).
+func (s *session) bloodTapHandleEffect() {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight || s.runes == nil {
+		return
+	}
+	nowMs := time.Now().UnixMilli()
+	rs := s.runes
+	cd0 := rs.runeCooldownRemainingMs(0, nowMs)
+	cd1 := rs.runeCooldownRemainingMs(1, nowMs)
+	var resetIndex uint8
+	if cd1 == 0 {
+		resetIndex = 0
+	} else if cd0 == 0 || cd1 < cd0 {
+		resetIndex = 1
+	} else {
+		resetIndex = 0
+	}
+	// Player::SetRuneCooldown(resetIndex, 0) (Player.cpp:24855): the rune
+	// becomes ready; the grace window restarts like the generic
+	// activate-rune arm's reset.
+	rs.cooldownEndMs[resetIndex] = 0
+	if rs.graceStartMs[resetIndex] > nowMs {
+		rs.graceStartMs[resetIndex] = nowMs
+	}
+	if rs.current[0] == rs.current[1] {
+		s.bloodTapRuneIndex = resetIndex
+	} else if rs.current[0] == runeBlood {
+		s.bloodTapRuneIndex = 0
+	} else {
+		s.bloodTapRuneIndex = 1
+	}
+	s.bloodTapRuneIndexSet = true
+	s.sendRuneCooldownUpdate()
+}
+
+// bloodTapApplyConvertRune mirrors spell_dk_blood_tap_AuraScript::HandleApply
+// (spell_dk.cpp:3113-3126): the OnEffectApply arm of EFFECT_1
+// (SPELL_AURA_CONVERT_RUNE) with PreventDefaultAction, so the generic
+// convert-rune leg never runs for this spell. It converts exactly the slot
+// the launch arm picked to a death rune (Player::AddRuneByAuraEffect,
+// Player.cpp:24887-24891 — no cooldown check, unlike the generic leg's
+// ready-only first-fit). The remove leg is the generic
+// removeConvertRuneAura: the converted slot's base is blood and its current
+// is death, so it reverts when no other blood→death source remains.
+func (s *session) bloodTapApplyConvertRune(index uint8) {
+	if s == nil || s.player == nil || s.player.Class != classDeathKnight || s.runes == nil {
+		return
+	}
+	if index >= maxRunes {
+		return
+	}
+	s.runes.current[index] = runeDeath
+	s.sendRuneCooldownUpdate()
 }
 
 // applyConvertRuneAura mirrors AuraEffect::HandleAuraConvertRune's apply leg
