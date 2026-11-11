@@ -1045,3 +1045,58 @@ end
 
 RegisterSpellEvent(SPELL_ARCANE_STORM_P_I, 7, makeArcaneStormFilter(false))
 RegisterSpellEvent(SPELL_ARCANE_STORM_P_III, 7, makeArcaneStormFilter(true))
+
+local SPELL_ALIGN_DISK_AGGRO = 61210 -- boss_malygos.cpp:121
+
+-- C++ spell_nexus_lord_align_disk_aggro::HandleScript
+-- (boss_malygos.cpp:1905-1910): OnEffectHitTarget, EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT. Load admits creature casters only;
+-- the hit creature chases the caster's victim (MoveChase twin).
+-- PORTED 2026-11-11. DORMANT: npc_nexus_lord is unported in Go
+-- (only header mentions), so 61210 is never cast yet; the 1s
+-- EVENT_NUKE_DUMMY driver (boss_malygos.cpp:1350) rides with it.
+local function alignDiskAggro(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local victim = caster:GetVictim()
+    if victim == nil then
+        return
+    end
+    hitTarget:MoveChase(victim)
+end
+
+RegisterSpellEvent(SPELL_ALIGN_DISK_AGGRO, 5, alignDiskAggro)
+
+local SPELL_DESTROY_PLATFORM_EVENT = 59099 -- boss_malygos.cpp:141
+
+-- C++ spell_alexstrasza_bunny_destroy_platform_boom_visual::HandleDummy
+-- (boss_malygos.cpp:2078-2082): OnEffectHitTarget, EFFECT_0
+-- SPELL_EFFECT_DUMMY. Load admits creature casters only; the hit
+-- creature self-casts SPELL_DESTROY_PLATFORM_EVENT, NON-triggered
+-- (C++ passes no triggered flag). PORTED 2026-11-11. DORMANT:
+-- the chain starts at the 58842 channel removal (row 408, itself
+-- dormant on the unported destroy-platform driver), so 59084 is
+-- never cast yet.
+local function boomVisualDummy(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_DESTROY_PLATFORM_EVENT)
+end
+
+RegisterSpellEvent(SPELL_DESTROY_PLATFORM_BOOM_VISUAL, 5, boomVisualDummy)
