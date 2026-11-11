@@ -10959,6 +10959,25 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 26170, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.heal) * 10 / 100), bp0Set: true})
 				continue
 			}
+			if auraSpell.ID == 55440 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_glyph_of_healing_wave::HandleProc
+				// (spell_shaman.cpp:951-965): the creature-side twin of
+				// the procs.go leg — the actor casts Glyph of Healing
+				// Wave Heal (55533) on itself with BP0 = pct of the
+				// heal by the effect amount, unless the actor healed
+				// itself or the heal is null/zero. The creature loop
+				// carries no heal amounts, so ev.heal is 0 here and
+				// the leg skips exactly like the C++ null/zero-heal
+				// early return; it fires only if a heal-carrying
+				// creature event is ever threaded (the 53651
+				// precedent). DORMANT until Spell.dbc ships the 55440
+				// proc entry.
+				if ev.heal == 0 || ev.actorGUID == 0 || ev.actorGUID == triggerTargetGUID {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 55533, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				continue
+			}
 			if auraSpell.ID == 55677 && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_pri_glyph_of_dispel_magic::HandleProc
 				// (spell_priest.cpp:439-457): the creature-side twin

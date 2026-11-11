@@ -4519,6 +4519,28 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraSpell = 0
 				continue
 			}
+			if auraSpell.ID == 55440 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_glyph_of_healing_wave::HandleProc
+				// (spell_shaman.cpp:951-965): PreventDefaultAction; on a
+				// heal proc the actor casts Glyph of Healing Wave Heal
+				// (55533) on itself with BP0 = pct of the heal by the
+				// effect amount — unless the actor healed itself, or
+				// the heal is null/zero. No Lua ev6 twin: ev6 carries
+				// no heal amounts. DORMANT until Spell.dbc ships the
+				// 55440 proc entry; periodic / funnel / leech heal
+				// events carry no amounts in Go, so they skip here
+				// where C++ would fire with the tick amount (the
+				// 54937 precedent).
+				if ev.heal == 0 || ev.actorGUID == 0 || ev.actorGUID == triggerTargetGUID {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 55533, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if auraSpell.ID == 55677 && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_pri_glyph_of_dispel_magic::HandleProc
 				// (spell_priest.cpp:439-457): PreventDefaultAction; on a
