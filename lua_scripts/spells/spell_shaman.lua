@@ -72,17 +72,46 @@
 --   (55441) amount from the totem owner's aura. Non-triggered cast;
 --   the original-caster leg has no Go model.
 --
--- CLOSED (tick 295 census, all 50 loader classes): the other 46 are
---   stay-outs — proc arms (ancestral awakening, earth shield,
---   earthliving, flametongue, frozen power, glyphs, imp water shield,
---   lightning overload/shield, nature guardian, shamanistic rage,
---   spirit hunt, static shock, tidal force, t3 6p, t8/t9/t10 bonuses,
---   windfury), absorb/calc arms (shadow ward twin,
---   rend twin), SpellScript-only (chain heal, cleansing
---   pulse, earthen power, fire nova, healing/mana spring totem,
---   heroism, lava lash, stoneclaw, thunderstorm), AfterDispel (flame
---   shock), summon-slot arms (sentry totem, totemic mastery — no
---   totem-slot bridge; only the PET slot is modeled), and the t3 8p
+-- PORTED (census rows 266-270):
+--   spell_sha_sentry_totem_AuraScript::AfterRemove
+--   (spell_shaman.cpp:1791-1796): EFFECT_1 DUMMY, AURA_EFFECT_HANDLE_REAL.
+--   On remove the player caster stops bind sight (Player::StopCastingBindSight,
+--   Player.cpp:24605-24616): the bind-sight aura comes off the air totem
+--   (GetTotem slot 3). The AfterApply leg (spell_shaman.cpp:1781-1788, cast
+--   Bind Sight 6277 on the totem) is Go-ported in totems.go — a Lua OnApply
+--   twin cannot work: the 6495 aura applies in the cast effect loop, before
+--   the post-loop summon fills the air slot. On unsummon the handler no-ops
+--   (slot already cleared) and the Go teardown in destroyTotemGUID removes
+--   the bind sight instead.
+--   spell_sha_spirit_hunt_AuraScript::HandleProc
+--   (spell_shaman.cpp:1905-1919): EFFECT_0 DUMMY. On a damaging proc the pet
+--   actor casts Spirit Hunt Heal (58879) on itself and on its owner, both
+--   triggered with BP0 = pct of the damage by the effect amount. The
+--   zero-damage gate is the C++ null/zero-damage early return; a missing
+--   owner skips both casts. The handler returns true (PreventDefaultAction),
+--   so the proc loop skips the default leg — the dummy effect has no DBC
+--   trigger spell anyway.
+--   spell_sha_totemic_mastery_AuraScript::HandleDummy
+--   (spell_shaman.cpp:2048-2061): EFFECT_0 PERIODIC_TRIGGER_SPELL. Each tick
+--   the handler checks all four totem slots; with any slot empty it returns
+--   and the Go default trigger cast fires; with all four filled it casts
+--   Totemic Mastery (38437) itself, triggered, and returns true to veto the
+--   default — exactly one 38437 per tick either way. Correct under both DBC
+--   readings of the 38443 trigger spell (38437, or none).
+--   spell_sha_shamanistic_rage (30823) and spell_sha_tidal_force_dummy
+--   (55198) are Go-ported in procs.go (AP-pct BP0 for 30824; one-stack drop
+--   of 55166) — no Lua ev6 twin: ev6 carries no attack-power or
+--   RemoveAuraFromStack bridge.
+--
+-- CLOSED (tick 295 census, all 50 loader classes, minus rows 266-270
+--   ported above): the remaining stay-outs — proc arms (ancestral
+--   awakening, earth shield, earthliving, flametongue, frozen power,
+--   glyphs, imp water shield, lightning overload/shield, nature
+--   guardian, static shock, t3 6p, t8/t9/t10 bonuses, windfury),
+--   absorb/calc arms (shadow ward twin, rend twin), SpellScript-only
+--   (chain heal, cleansing pulse, earthen power, fire nova,
+--   healing/mana spring totem, heroism, lava lash, stoneclaw,
+--   thunderstorm), AfterDispel (flame shock), and the t3 8p
 --   self-remove (family-flag GetAuraEffect overload unbridged).
 --   Astral shift aura is proc, not the visual dummy above; the 51474
 --   absorb leg is Go-ported above.
@@ -236,3 +265,80 @@ local function manaTideTotemHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_SHAMAN_MANA_TIDE_TOTEM_SPELL, 5, manaTideTotemHit)
+
+local SPELL_SHAMAN_SENTRY_TOTEM = 6495 -- spell_shaman.cpp:1767 (class spell_sha_sentry_totem)
+local SPELL_SHAMAN_SPIRIT_HUNT = 58877 -- spell_shaman.cpp:1886 (class spell_sha_spirit_hunt)
+local SPELL_SHAMAN_SPIRIT_HUNT_HEAL = 58879 -- spell_shaman.cpp:79
+local SPELL_SHAMAN_TOTEMIC_MASTERY_AURA = 38443 -- spell_shaman.cpp:2036 (class spell_sha_totemic_mastery)
+local SPELL_SHAMAN_TOTEMIC_MASTERY = 38437 -- spell_shaman.cpp:67
+local SPELL_AURA_BIND_SIGHT = 1 -- SpellAuraDefines.h:81 (spells.go:644)
+-- Totem slots are 0..3 Fire/Earth/Water/Air (totems.go:18-21); C++
+-- SUMMON_SLOT_TOTEM_FIRE..AIR are 1..4 (PET is 0).
+local TOTEM_SLOT_FIRE = 0
+local TOTEM_SLOT_AIR = 3
+
+-- C++ spell_sha_sentry_totem_AuraScript::AfterRemove
+-- (spell_shaman.cpp:1791-1796): EFFECT_1 DUMMY, AURA_EFFECT_HANDLE_REAL.
+-- The player caster stops bind sight, so the bind-sight aura comes off the
+-- air totem. On unsummon the slot is already cleared and the handler no-ops;
+-- the Go teardown in destroyTotemGUID owns that path. DORMANT until
+-- Spell.dbc ships the 6495 row.
+local function sentryTotemRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    local totem = caster:GetTotem(TOTEM_SLOT_AIR)
+    if totem == nil then
+        return
+    end
+    totem:RemoveAurasByType(SPELL_AURA_BIND_SIGHT)
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_SENTRY_TOTEM, 3, sentryTotemRemove)
+
+-- C++ spell_sha_spirit_hunt_AuraScript::HandleProc
+-- (spell_shaman.cpp:1905-1919): EFFECT_0 DUMMY. On a damaging proc the pet
+-- actor casts Spirit Hunt Heal (58879) on itself and on its owner, both
+-- triggered with BP0 = pct of the damage by the effect amount. The
+-- zero-damage gate is the C++ null/zero-damage early return; a missing
+-- owner skips both casts. Returns true (PreventDefaultAction) so the proc
+-- loop skips the default leg. DORMANT until Spell.dbc ships the 58877 proc
+-- entry; the pet melee proc path carries the damage, the pet spell path
+-- does not (pre-existing engine gap).
+local function spiritHuntProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 or actor == nil then
+        return
+    end
+    local owner = actor:GetOwner()
+    if owner == nil then
+        return
+    end
+    local bp0 = math.floor(damage * aura:GetAmount(0) / 100)
+    actor:CastCustomSpell(actor, SPELL_SHAMAN_SPIRIT_HUNT_HEAL, true, bp0)
+    actor:CastCustomSpell(owner, SPELL_SHAMAN_SPIRIT_HUNT_HEAL, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_SPIRIT_HUNT, 6, spiritHuntProc)
+
+-- C++ spell_sha_totemic_mastery_AuraScript::HandleDummy
+-- (spell_shaman.cpp:2048-2061): EFFECT_0 PERIODIC_TRIGGER_SPELL. Each tick
+-- the handler checks all four totem slots; with any slot empty it returns
+-- and the Go default trigger cast fires; with all four filled it casts
+-- Totemic Mastery (38437) itself, triggered, and returns true to veto the
+-- default. DORMANT until Spell.dbc ships the 38443 row.
+local function totemicMasteryPeriodic(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    for slot = TOTEM_SLOT_FIRE, TOTEM_SLOT_AIR do
+        if target:GetTotem(slot) == nil then
+            return
+        end
+    end
+    target:CastSpell(target, SPELL_SHAMAN_TOTEMIC_MASTERY, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_TOTEMIC_MASTERY_AURA, 1, totemicMasteryPeriodic)

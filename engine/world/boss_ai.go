@@ -10876,6 +10876,39 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				}
 				continue
 			}
+			if auraSpell.ID == 58877 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_spirit_hunt::HandleProc
+				// (spell_shaman.cpp:1905-1917): PreventDefaultAction;
+				// on a damaging proc the actor (the spirit wolf)
+				// casts Spirit Hunt Heal (58879) on itself and on
+				// its owner with BP0 = pct of the damage by the
+				// effect amount (CastSpellExtraArgs(aurEff)). The
+				// zero-damage gate is the C++ null/zero-damage early
+				// return; the owner read is the C++ GetOwner() twin
+				// (guardian summons stamp OwnerGUID, boss_ai.go).
+				// Placed before the generic arm, which would cast
+				// the DBC trigger on the proc target instead. Lua-off
+				// fallback twin of the spell_shaman.lua event-6
+				// handler: the Lua hook vetoes first when loaded, so
+				// this never double-fires. DORMANT until Spell.dbc
+				// ships the 58877 proc entry.
+				if ev.damage == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				ownerGUID := uint64(0)
+				if ev.actorGUID == m.GUID {
+					ownerGUID = m.OwnerGUID
+				} else if actorMotion := s.findCreatureMotion(m.Map, m.InstanceID, ev.actorGUID); actorMotion != nil {
+					ownerGUID = actorMotion.OwnerGUID
+				}
+				if ownerGUID == 0 {
+					continue
+				}
+				bp0 := uint32(uint64(ev.damage) * uint64(scriptProcEffAmount(aura, i)) / 100)
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 58879, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: bp0, bp0Set: true})
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 58879, casterGUID: ev.actorGUID, targetGUID: ownerGUID, bp0: bp0, bp0Set: true})
+				continue
+			}
 			if (auraSpell.ID == 31801 || auraSpell.ID == 53736) && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_pal_seal_of_vengeance::HandleApplyDoT +
 				// HandleSeal (spell_paladin.cpp:2180-2231): the

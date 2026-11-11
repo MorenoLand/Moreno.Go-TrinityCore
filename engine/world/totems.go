@@ -989,6 +989,18 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 		}
 	}
 
+	// spell_sha_sentry_totem::AfterApply (spell_shaman.cpp:1781-1788): the
+	// caster casts Bind Sight (6277) on the air totem, triggered. The totem
+	// must exist (air slot creature), so the cast rides the completed summon,
+	// like the glyph arm above — a Lua OnApply twin cannot work: the 6495
+	// aura applies in the cast effect loop, before this post-loop summon
+	// fills the slot. The cast lands the bind-sight aura whose
+	// creature-branch apply leg moves the caster's viewpoint to the totem
+	// (spells.go). DORMANT until Spell.dbc ships the 6495 and 6277 rows.
+	if spellID == 6495 {
+		s.castSpellDirect(ctx, 6277, totemGUID)
+	}
+
 	// Launch pulse / lifecycle loop
 	go s.runTotemLifecycle(def, totem)
 }
@@ -2295,6 +2307,33 @@ func (s *session) handleEffectDestroyAllTotems(ctx context.Context, spell wotlk.
 	}
 }
 
+// allTotemSlotsFilled reports whether every totem slot holds a live
+// totem (the C++ m_SummonSlot[SUMMON_SLOT_TOTEM_FIRE..MAX_TOTEM_SLOT]
+// non-null fold in spell_sha_totemic_mastery::HandleDummy,
+// spell_shaman.cpp:2056-2058). The slot read mirrors the
+// grounding-magnet arm: copy the slot pointers under totemMu, then
+// read Stopped off each record.
+func (s *session) allTotemSlotsFilled() bool {
+	if s == nil || s.server == nil || s.playerGUID == 0 {
+		return false
+	}
+	s.server.totemMu.RLock()
+	slots := s.server.activeTotems[s.playerGUID]
+	s.server.totemMu.RUnlock()
+	for _, t := range slots {
+		if t == nil {
+			return false
+		}
+		t.mu.Lock()
+		stopped := t.Stopped
+		t.mu.Unlock()
+		if stopped {
+			return false
+		}
+	}
+	return true
+}
+
 // isTotemGUID reports whether guid is a live player totem (C++ Unit::IsTotem,
 // used by gates like Spell::EffectTaunt's totem rejection,
 // SpellEffects.cpp:3141-3143).
@@ -2479,6 +2518,16 @@ func (s *session) destroyTotemGUID(slotID uint8, expectedGUID uint64) {
 	// strips the owner's Sentry Totem aura (spell 6495, Totem.h:30-32).
 	if totemEntry == 3968 && s.player != nil {
 		s.removeAura(6495)
+		// spell_sha_sentry_totem::AfterRemove (spell_shaman.cpp:1791-1796)
+		// + Player::StopCastingBindSight (Player.cpp:24605-24616): the
+		// bind-sight aura the player cast on the totem comes off, which
+		// drops the viewpoint via the creature remove leg (spells.go).
+		// The MOD_POSSESS / MOD_POSSESS_PET arms are vacuous — a totem
+		// never carries them. The totem motion is already deleted above,
+		// but the aura map is keyed by GUID, so the removal still lands.
+		if s.server != nil && totemGUID != 0 {
+			s.server.removeCreatureAurasByTypeFromCaster(creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: totemGUID}, spellAuraBindSight, s.playerGUID)
+		}
 	}
 
 	// Totem::UnSummon (Totem.cpp:150-162): the totem's aura leaves every

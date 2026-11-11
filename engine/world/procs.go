@@ -3881,6 +3881,45 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraSpell = 0
 				continue
 			}
+			if auraSpell.ID == 30823 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_sha_shamanistic_rage::HandleProc
+				// (spell_shaman.cpp:1826-1834): PreventDefaultAction;
+				// the holder casts Shamanistic Rage Proc (30824) on
+				// itself with BP0 = pct of its total base attack
+				// power by the effect amount (CastSpellExtraArgs
+				// (aurEff)). Placed before the generic arm, which
+				// would cast the DBC trigger on the proc target with
+				// no base points. The cast carries the
+				// triggering-aura attribution (the C++ aurEff
+				// overload), mirroring the generic leg below (23572
+				// precedent). No Lua ev6 twin: spell_shaman.lua holds
+				// no 30823 handler — the census lua_hit is a comment
+				// mention only. DORMANT until Spell.dbc ships the
+				// 30823 proc entry.
+				amount := int64(int32(s.totalAttackPowerValue(false))) * int64(scriptProcEffAmount(aura, i)) / 100
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.castSpellDirectWithBasePoint(ctx, 30824, s.playerGUID, uint32(amount))
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 55198 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_tidal_force_dummy::HandleProc
+				// (spell_shaman.cpp:1988-1993): PreventDefaultAction;
+				// the proc actor loses one stack of Tidal Force Crit
+				// (55166). The actor is the holder for this aura's
+				// healing-spell procs, so the player-side stack drop
+				// is the C++ RemoveAuraFromStack(55166) (74396
+				// precedent). No Lua ev6 twin: ev6 carries no
+				// RemoveAuraFromStack bridge. DORMANT until Spell.dbc
+				// ships the 55198 proc entry.
+				_ = s.removePlayerAuraFromStack(55166)
+				continue
+			}
 			if auraSpell.ID == 67151 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_hun_t9_4p_bonus::HandleProc
 				// (spell_hunter.cpp:1598-1607): PreventDefaultAction; the

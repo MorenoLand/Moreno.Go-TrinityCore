@@ -3122,6 +3122,25 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return nil
 	})
+	// GetTotem(slot) is the m_SummonSlot totem-slot read (Unit.h): Go's
+	// TotemSlots are 0..3 (Fire/Earth/Water/Air, totems.go), where C++
+	// SUMMON_SLOT_TOTEM_FIRE..AIR are 1..4 (PET is 0). A live totem
+	// resolves to its creature object; an empty slot, or a despawned
+	// totem, reads nil. The totem-slot bridge the spell_shaman.lua header
+	// called missing (sentry totem, totemic mastery).
+	methods["GetTotem"] = func(_ context.Context, args []any) ([]any, error) {
+		slot, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if slot >= 4 || state.TotemSlots[slot] == 0 || s.server == nil {
+			return []any{nil}, nil
+		}
+		if obj := s.server.luaUnitObjectForGUID(state.Map, state.InstanceID, state.TotemSlots[slot]); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
+	}
 	// IsCharmed is Unit::IsCharmed (UnitMethods.h:376): the
 	// UNIT_FIELD_CHARMEDBY read. Go stores no charmer for players
 	// (GetCharmerGUID reads 0), so this reads false.

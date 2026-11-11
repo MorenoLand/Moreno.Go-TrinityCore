@@ -35862,6 +35862,33 @@ func (s *session) removeAura(spellID uint32) {
 	s.removeAuraWithMode(spellID, auraRemoveByDefault)
 }
 
+// stopCastingBindSight mirrors Player::StopCastingBindSight
+// (Player.cpp:24605-24616): the BIND_SIGHT / MOD_POSSESS /
+// MOD_POSSESS_PET auras cast by this player leave the current
+// viewpoint target (PLAYER_FARSIGHT) — nothing at all with no
+// viewpoint. The command twin lives in handleCmdUnBindSight.
+func (s *session) stopCastingBindSight() {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	targetGUID := s.player.FarsightGUID
+	if targetGUID == 0 {
+		return
+	}
+	if target := s.server.playerSessionForGUID(targetGUID); target != nil {
+		target.removeAurasByTypeFromCaster(spellAuraBindSight, s.playerGUID)
+		target.removeAurasByTypeFromCaster(spellAuraModPossess, s.playerGUID)
+		target.removeAurasByTypeFromCaster(spellAuraModPossessPet, s.playerGUID)
+		return
+	}
+	if motion := s.findCreatureMotion(targetGUID); motion != nil {
+		key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraBindSight, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossess, s.playerGUID)
+		s.server.removeCreatureAurasByTypeFromCaster(key, spellAuraModPossessPet, s.playerGUID)
+	}
+}
+
 func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	wasMounted := false
 	wasMovementControl := false
@@ -36303,6 +36330,16 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// damage buff). DORMANT until Spell.dbc ships the 51690 record.
 	if spellID == 51690 {
 		s.removeAura(61851)
+	}
+	// spell_sha_sentry_totem_AuraScript::AfterRemove
+	// (spell_shaman.cpp:1790-1795): the EFFECT_1 DUMMY
+	// AfterEffectRemove arm — when the caster is a player it stops
+	// casting bind sight. The removed-caster gate is the C++
+	// GetTypeId() == TYPEID_PLAYER check on the caster (the
+	// holder is the caster for this self aura). DORMANT until
+	// Spell.dbc ships the 6495 record.
+	if spellID == 6495 && removedCasterGUID == s.playerGUID {
+		s.stopCastingBindSight()
 	}
 	// AuraEffect::HandleAuraModSchoolImmunity remove leg
 	// (SpellAuraEffects.cpp:3188-3190): the second flag-aura arm is
@@ -39530,6 +39567,31 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if spell.ID == 51690 && effIndex == 0 && eff.Aura == spellAuraPeriodicDummy {
 			targetSess.castSpellDirect(ctx, 61851, targetGUID)
 		}
+		// spell_sha_sentry_totem_AuraScript::AfterApply
+		// (spell_shaman.cpp:1781-1788): the EFFECT_1 DUMMY
+		// AfterEffectApply arm — the caster casts Bind Sight (6277)
+		// on its air-slot totem, triggered. The slot read is the
+		// C++ m_SummonSlot[SUMMON_SLOT_TOTEM_AIR] twin (the
+		// totemMu read mirrors the grounding-magnet arm); a
+		// stopped or non-totem slot is the C++ null/!IsTotem
+		// arm. castSpellDirect is already the triggered twin
+		// (TRIGGERED_FULL_MASK, castSpellDirectWithOverrides).
+		// DORMANT until Spell.dbc ships the 6495 record.
+		if spell.ID == 6495 && effIndex == 1 && eff.Aura == spellAuraDummy && s.server != nil {
+			var totemGUID uint64
+			s.server.totemMu.RLock()
+			if totem := s.server.activeTotems[casterGUID][TotemSlotAir]; totem != nil {
+				totem.mu.Lock()
+				if !totem.Stopped {
+					totemGUID = totem.TotemGUID
+				}
+				totem.mu.Unlock()
+			}
+			s.server.totemMu.RUnlock()
+			if totemGUID != 0 && s.server.isTotemGUID(totemGUID) {
+				targetSess.castSpellDirect(ctx, 6277, totemGUID)
+			}
+		}
 		if eff.Aura == 139 {
 			_ = targetSess.sendForcedReactions()
 			if eff.MiscValue >= 0 && amount >= 4 {
@@ -40577,6 +40639,17 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// strip, the feign-death flags set (UNIT_FLAG_UNK_29,
 	// UNIT_FLAG2_FEIGN_DEATH, UNIT_DYNFLAG_DEAD), the react state drops to
 	// passive (SetReactState(REACT_PASSIVE)), and combat drops
+	// AuraEffect::HandleBindSight apply leg (SpellAuraEffects.cpp:4754-4766):
+	// the CASTER's viewpoint moves to the target (Player::SetViewpoint
+	// apply arm, Player.cpp:24618: PLAYER_FARSIGHT takes the target GUID).
+	// Creature-target twin of the player-branch leg above — the Sentry
+	// Totem bind-sight cast (6277, totems.go) lands here; without it the
+	// aura record lands on the totem but the viewpoint never moves.
+	if eff.Aura == spellAuraBindSight {
+		s.player.FarsightGUID = targetGUID
+		s.sendPlayerUpdate()
+		s.streamFarsightNeighborhood(ctx, targetGUID)
+	}
 	// (CombatStop(false, false) — the dungeon AttackStop split is
 	// player-only). The enemy-cast-interrupt arm has no Go model (creature
 	// casts carry no target tracking); UNIT_STATE_DIED is aura-derived and
@@ -41373,6 +41446,28 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if ts.server.fireAuraPeriodicTick(context.Background(), aura, auraRef.luaAuraObject(), ts.luaPlayer()) {
 			return
 		}
+	}
+	// spell_sha_totemic_mastery::HandleDummy
+	// (spell_shaman.cpp:2053-2062): OnEffectPeriodic EFFECT_0
+	// PERIODIC_TRIGGER_SPELL — when all four totem slots are filled
+	// the holder casts Totemic Mastery (38437) on itself with the
+	// aura effect and prevents the default trigger; otherwise the
+	// default trigger fires. The Go arm casts 38437 triggered and
+	// returns (the PreventDefaultAction twin) exactly when every
+	// slot holds a live totem, and falls through to the default
+	// trigger below otherwise — faithful under every DBC
+	// trigger-spell reading. Lua-off fallback twin of the
+	// spell_shaman.lua event-1 handler: the Lua hook vetoes
+	// first when loaded (its GetTotem bridge reads the same
+	// four slots), so this never double-fires. DORMANT until
+	// Spell.dbc ships the 38443 periodic row.
+	if aura.SpellID == 38443 && aura.AuraType == spellAuraPeriodicTriggerSpell && ts.allTotemSlotsFilled() {
+		ts.triggeredByAuraCast = true
+		ts.triggeredByAuraSpell = aura.SpellID
+		ts.castSpellDirect(context.Background(), 38437, ts.playerGUID)
+		ts.triggeredByAuraCast = false
+		ts.triggeredByAuraSpell = 0
+		return
 	}
 	ts.faceChannelTargetOnPeriodicTick(aura, tickSpell, tickKnown, pMap, pInst)
 	// UNIT_STATE_ISOLATED (SpellAuraEffects.cpp:3142-3182: banish-mechanic
@@ -46001,6 +46096,9 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	controlVehicleCaster := uint64(0)
 	wasPhase := false
 	wasFeignDeath := false
+	wasBindSight := false
+	bindSightCasterGUID := uint64(0)
+	bindSightTargetGUID := uint64(0)
 	var removedLinkedTriggers []linkedTriggerRef
 	removedLinkedParentCaster := uint64(0)
 	wasQuestTame := false
@@ -46043,6 +46141,12 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 				// AuraEffect::HandleFeignDeath creature remove leg
 				// (SpellAuraEffects.cpp:66): captured before the aura is deleted.
 				wasFeignDeath = aura.AuraType == spellAuraFeignDeath
+				// AuraEffect::HandleBindSight remove leg
+				// (SpellAuraEffects.cpp:4754-4766): captured before the
+				// aura is deleted.
+				wasBindSight = aura.AuraType == spellAuraBindSight
+				bindSightCasterGUID = aura.CasterGUID
+				bindSightTargetGUID = key.GUID
 				// The remove arm of AuraEffect::HandleAuraLinked
 				// (SpellAuraEffects.cpp:4898-4903): the linked trigger
 				// spell's aura leaves the creature too. Captured before
@@ -46116,6 +46220,19 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 	// (SpellAuraEffects.cpp:66): flags clear, react state restores.
 	if wasFeignDeath {
 		s.clearCreatureFeignDeath(key)
+	}
+	// AuraEffect::HandleBindSight remove leg (SpellAuraEffects.cpp:4754-4766),
+	// creature-target twin of the player remove leg: the viewpoint lives on
+	// the CASTER's session, not the target's — clear PLAYER_FARSIGHT only
+	// when it still points at the removed aura's target (RemoveGuidValue
+	// semantics, Player.cpp:24642-24647); an offline caster keeps no stale
+	// viewpoint to clear.
+	if wasBindSight {
+		if casterSess := s.findSessionByGUID(bindSightCasterGUID); casterSess != nil && casterSess.player != nil && casterSess.player.FarsightGUID == bindSightTargetGUID {
+			casterSess.player.FarsightGUID = 0
+			casterSess.sendPlayerUpdate()
+			casterSess.streamNearbyObjects(context.Background())
+		}
 	}
 	// AuraEffect::HandleAuraModSchoolImmunity remove leg
 	// (SpellAuraEffects.cpp:3188-3190): the creature-target twin of the
