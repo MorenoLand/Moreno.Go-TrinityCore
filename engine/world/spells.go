@@ -14281,6 +14281,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// reads the final value (Spell.cpp:2377/2547). The creature-caster
 		// twin lives in castCreatureSpellInternal (boss_ai.go).
 		hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
+		// scourgeStrikeMultipliers is the per-target multiplier the
+		// Scourge Strike dummy leg (EFFECT_2) writes for the AfterHit
+		// leg below: C++ keeps one member per script instance, but Go
+		// runs the effects loop for all targets before the AfterHit
+		// loop, so the map is the per-target twin.
+		scourgeStrikeMultipliers := map[uint64]float64{}
 		// Lazily computed once per cast invocation: whether the caster's
 		// usable main-hand weapon is a dagger, for the rogue arm of
 		// Spell::EffectWeaponDmg (SpellEffects.cpp:3237-3245).
@@ -15094,12 +15100,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 									}
 								}
 							}
-							// The remaining DeathKnight arms are documented
-							// no-bridge, all blocked on
-							// unitTarget->GetDiseasesByCaster (Unit.cpp:4776)
-							// — no per-caster disease-counting model exists
-							// in the tree (grep for DiseasesByCaster: empty;
-							// dispel.go only models the DispelDisease mask).
+							// The remaining DeathKnight arms are unported:
+							// the per-caster disease-counting model they
+							// need now exists (targetDiseasesByCaster,
+							// spells.go — the Scourge Strike 55090 port
+							// reads it), but these arms still need their
+							// own legs.
 							// Blood Strike (3328-3341, SpellFamilyFlags[0] &
 							// 0x400000) needs disease count/2 *
 							// Effects[2].CalcValue() plus the T8 4P bonus
@@ -15113,8 +15119,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							// 1736) needs 50% per disease. Heart Strike
 							// (3375-3383, SpellFamilyFlags[0] & 0x1000000)
 							// needs disease count * Effects[2].CalcValue()
-							// plus T8 4P 64736. Revisit when per-caster
-							// disease tracking lands.
+							// plus T8 4P 64736. Port each arm's own leg; the
+							// disease count is no longer the blocker.
 						}
 						targetDamage = s.applySchoolDMGFamilyArms(effCtx, spell, spellID, eff, effectIndex, casterLevel, effectTarget, targetDamage)
 						// Spell::DoEffectOnLaunchTarget (Spell.cpp:7761-7766): the
@@ -16241,6 +16247,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// only when a target was actually hit.
 					if spellID == 49576 && len(hitTargets) > 0 {
 						s.deathGripInitialDummyEffect(ctx, effectIndex, hitTargets)
+					}
+					// spell_dk_scourge_strike (spell_dk.cpp:2255-2312): the
+					// EFFECT_2 DUMMY OnEffectHitTarget arm — the
+					// multiplier is the EFFECT_2 value times the
+					// hit unit's diseases from this caster, over 100,
+					// plus the T8 4P bonus 64736 pct. All four ranks
+					// share the script (spell_script_names). Fires once
+					// per effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target), ahead of the
+					// pet-aura/Eluna legs like the death-grip-initial arm
+					// above, and only when a target was actually hit.
+					// The AfterHit leg below reads the per-target
+					// multiplier map this fills.
+					if (spellID == 55090 || spellID == 55265 || spellID == 55270 || spellID == 55271) && len(hitTargets) > 0 {
+						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, scourgeStrikeMultipliers)
 					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
@@ -19153,6 +19174,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			hitDamage.currentTarget = effectTarget
 			s.server.fireSpellAfterHit(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, effectTarget))
 		}
+		// spell_dk_scourge_strike AfterHit (spell_dk.cpp:2292-2306) —
+		// the Go twin of the C++ AfterHit arm: bp = GetHitDamage() *
+		// multiplier, plus the Black Ice (49140, EFFECT_0, any rank)
+		// pct, cast as the triggered Scourge Strike damage spell
+		// 70890 with BP0. A Lua ev3 handler would need the dummy
+		// leg's multiplier, which only the Go dummy leg above can
+		// compute (no ev5 site on the player path, 60533
+		// precedent). Fires once per hit target, after the Lua
+		// AfterHit handlers above; miss entries take no cast (C++
+		// GetHitUnit() nil skips). The triggered-path 70890 cast
+		// has no dummy leg in the triggered dispatch, so the chain
+		// ends here.
+		s.scourgeStrikeAfterHit(effCtx, hitTargets, scourgeStrikeMultipliers, hitDamage)
 		for _, miss := range missStatus {
 			hitDamage.phase = spellHitPhaseAfterHit
 			hitDamage.currentTarget = miss.TargetGUID
@@ -51536,6 +51570,64 @@ func (s *session) deathGripInitialDummyEffect(ctx context.Context, effectIndex i
 			continue
 		}
 		s.castSpellDirect(ctx, 49560, guid)
+	}
+}
+
+// scourgeStrikeDummyEffect is spell_dk_scourge_strike
+// (spell_dk.cpp:2279-2290): the EFFECT_2 DUMMY OnEffectHitTarget arm —
+// multiplier = GetEffectValue() * GetDiseasesByCaster / 100, plus the
+// Death Knight T8 Melee 4P Bonus (64736, EFFECT_0) pct (C++ AddPct).
+// No Lua ev5 port: the player path has no OnEffectHitTarget site on
+// the normal cast path (60533 precedent), so this is a Go case in the
+// finishSpellCast dummy leg (the 49560 deathGripDummyEffect
+// precedent). DORMANT until Spell.dbc ships the 55090/55265/55270/55271
+// records. The multiplier is stored per hit target for the AfterHit
+// leg; a zero-disease target stores 0 and its AfterHit cast still
+// fires with BP0 0, like C++.
+func (s *session) scourgeStrikeDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64, multipliers map[uint64]float64) {
+	if s == nil || s.player == nil || s.server == nil || effectIndex != 2 || len(spell.Effects) <= 2 || multipliers == nil {
+		return
+	}
+	value := float64(spell.Effects[2].CalcValueForLevel(spell, casterLevel))
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		multiplier := value * float64(s.targetDiseasesByCaster(ctx, guid, s.playerGUID)) / 100.0
+		if amt, ok := s.auraEffectAmount(64736, 0); ok {
+			multiplier += multiplier * float64(amt) / 100.0
+		}
+		multipliers[guid] = multiplier
+	}
+}
+
+// scourgeStrikeAfterHit is spell_dk_scourge_strike
+// (spell_dk.cpp:2292-2306): the AfterHit arm — bp = GetHitDamage() *
+// multiplier, plus the Black Ice (49140, EFFECT_0, any rank) pct (C++
+// AddPct), cast as the triggered Scourge Strike damage spell 70890
+// with BP0 (CastSpellExtraArgs TRIGGERED_FULL_MASK twin: the
+// castSpellDirectWithBasePoint funnel). The dummy leg above fills the
+// per-target multiplier map; a target with no dummy entry (no
+// EFFECT_2 hit) takes no cast, matching the C++ member that only the
+// dummy arm writes. DORMANT until Spell.dbc ships the
+// 55090/55265/55270/55271 records.
+func (s *session) scourgeStrikeAfterHit(ctx context.Context, hitTargets []uint64, multipliers map[uint64]float64, hitDamage *spellHitDamageState) {
+	if s == nil || s.player == nil || s.server == nil || len(multipliers) == 0 || hitDamage == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		multiplier, ok := multipliers[guid]
+		if !ok {
+			continue
+		}
+		bp := int32(float64(hitDamage.damageByTarget[guid]) * multiplier)
+		if amt, ok := s.server.rankedAuraEffectAmount(s.loadedAuras(), 49140, 0); ok {
+			bp += bp * amt / 100
+		}
+		s.castSpellDirectWithBasePoint(ctx, 70890, guid, uint32(bp))
 	}
 }
 
