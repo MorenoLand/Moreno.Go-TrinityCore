@@ -749,8 +749,11 @@ local function stoneGripAbsorbRemoved(event, aura, target)
     if aura:GetRemoveMode() ~= 3 then
         return
     end
+    -- C++ picks the heroic stalker for every difficulty but
+    -- 10-man normal (DUNGEON_DIFFICULTY_NORMAL 0, :541); 10-man
+    -- heroic is not 25-man, so the 25-man test alone misses it.
     local entry = ENTRY_RUBBLE_STALKER
-    if target:Is25ManRaid() then
+    if target:Is25ManRaid() or target:IsHeroic() then
         entry = ENTRY_RUBBLE_STALKER_HEROIC
     end
     local stalker = target:FindNearestCreature(entry, 200)
@@ -778,6 +781,14 @@ local function cancelStoneGrip(event, spell, target, effectIndex)
         return
     end
     local caster = spell:GetCaster()
+    -- C++ switches on the target's map difficulty
+    -- (boss_kologarn.cpp:462-472): 10-man normal removes the EFFECT_0 value,
+    -- 25-man normal the EFFECT_1 value, heroic difficulties hit
+    -- the default leg and remove nothing (10H=2, 25H=3,
+    -- DBCEnums.h:286-289).
+    if caster ~= nil and caster:IsHeroic() then
+        return
+    end
     local valueIndex = 0
     if caster ~= nil and caster:Is25ManRaid() then
         valueIndex = 1
@@ -817,7 +828,10 @@ local function rubbleSummonHandleScript(event, spell, hitTarget, effectIndex)
         kologarnGuid = caster:GetGuidData(DATA_KOLOGARN)
     end
     for _ = 1, 5 do
-        caster:CastCustomSpell(caster, spellId, false, nil, nil, nil, nil, kologarnGuid)
+        -- TRIGGERED_FULL_MASK: the ObjectGuid CastSpellExtraArgs
+        -- ctor sets it (SpellDefines.h:167) — the C++ 3-arg call
+        -- resolves through that ctor, so the 5 casts are triggered.
+        caster:CastCustomSpell(caster, spellId, true, nil, nil, nil, nil, kologarnGuid)
     end
 end
 RegisterSpellEvent(SPELL_SUMMON_RUBBLE, 5, rubbleSummonHandleScript)
