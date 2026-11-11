@@ -181,7 +181,9 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   ribbon pole channel) whose aura IDs live only in world DB
 --   spell_script_names. Romantic_picnic (PORTED below, tick 575) and
 --   hallow_end_trick (PORTED below, tick 576, ev5) were in this list
---   until this tick — the GetPlayersInRange bridge postdates tick 295. The tick-295 "no RegisterSpellScript bridge"
+--   until this tick — the GetPlayersInRange bridge postdates tick 295. Trick_or_treat (PORTED below, tick 577, ev5)
+--   and hallow_end_wand (PORTED below, tick 579, ev3) left it this tick; tricky_treat stays out (tick 578: no binding
+--   ID in-tree, no GetAuraCount bridge — see the stay-out note at the tail). The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
 --   which is how 24930 Hallow's End Candy is ported above, and 43876
 --   Dismount Ram this tick (tail). 43714 relay-race intro force is
@@ -525,3 +527,162 @@ local function hallowEndTrickHit(event, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_HALLOW_END_TRICK, 5, hallowEndTrickHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hallow_end_trick_or_treat::HandleScript
+--   (spell_holiday.cpp:322-331, registered OnEffectHitTarget EFFECT_0
+--   SCRIPT_EFFECT at :335): on a hit player the caster casts Trick
+--   24714 or Treat 24715 (roll_chance_i(50)) and then Tricked or
+--   Treated 24755, both triggered. No PreventDefaultAction in C++,
+--   so the ev5 notification-only fire is exact. Binding ID 24751
+--   comes from the `// 24751 Trick or Treat` comment
+--   (spell_holiday.cpp:298) — the same convention as the 24750 port
+--   above; no spell_script_names row exists in-tree. ev5 fires on
+--   the creature path (boss_ai.go:3435) and the player triggered
+--   funnel (spells.go:28261), not on a direct player cast
+--   (finishSpellCast) — the open engine-work item from the census
+--   head. The triggered casts land non-triggered on the player path
+--   (file KNOWN LIMIT).
+local SPELL_HALLOW_END_TRICK_OR_TREAT = 24751 -- spell_holiday.cpp:298
+local SPELL_TRICK = 24714 -- spell_holiday.cpp:301
+local SPELL_TREAT = 24715 -- spell_holiday.cpp:302
+local SPELL_TRICKED_OR_TREATED = 24755 -- spell_holiday.cpp:303
+
+local function hallowEndTrickOrTreatHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(1, 100) <= 50 then
+        caster:CastSpell(target, SPELL_TRICK, true)
+    else
+        caster:CastSpell(target, SPELL_TREAT, true)
+    end
+    caster:CastSpell(target, SPELL_TRICKED_OR_TREATED, true)
+end
+
+RegisterSpellEvent(SPELL_HALLOW_END_TRICK_OR_TREAT, 5, hallowEndTrickOrTreatHit)
+
+-- STAYS OUT (this tick):
+--   spell_hallow_end_tricky_treat::HandleScript
+--   (spell_holiday.cpp:367-368, registered OnEffectHitTarget EFFECT_0
+--   SCRIPT_EFFECT at :373): if the caster has the Tricky Treat
+--   trigger aura 42965 and more than 3 stacks of the speed aura
+--   42919, a 33% roll self-casts Upset Tummy 42966, triggered.
+--   Blockers: (1) no binding spell ID anywhere in-tree — census
+--   source "no-id", no `// <id>` comment above the class, no
+--   spell_script_names row in the partial sql/ tree, and zero hits
+--   for 42919/42965/42966 in the Go tree; (2) no GetAuraCount bridge
+--   on any Lua surface (player HasAura is live, lua_player.go:2695,
+--   but no count read exists in engine/ or Lua). Go recipe: bind
+--   the TDB spell_script_names ID once known and expose
+--   unit:GetAuraCount via the aura store (playerHasAura pattern,
+--   achievements.go:834), then register ev5 with the body above.
+--   Census hook OnEffectHitTarget is correct.
+
+-- PORTED (this tick, RegisterSpellEvent AfterHit = 3):
+--   spell_hallow_end_wand::HandleScriptEffect
+--   (spell_holiday.cpp:407-451, registered AfterHit at :454): on a
+--   hit target the caster casts one costume aura by the wand's own
+--   spell ID and the target's native gender — leper gnome 24719,
+--   pirate 24717, ghost 24737, ninja 24718 (female/male pairs
+--   24709-24713/24735-24736); the random wand 24720 casts one of the
+--   seven wand spells at random (24717/24718/24719/24724/24733/24737/
+--   24741), replayed here as a triggered cast of the picked wand so
+--   its own ev3 handler fires — skeleton 24724, wisp 24733 and bat
+--   24741 hit the C++ default: return, so they are not registered
+--   and a random pick of one is a no-op, exactly as in C++. No
+--   PreventDefaultAction in C++, so the ev3 notification-only fire
+--   is exact. ev3 fires on the direct player cast path
+--   (spells.go:19700), the triggered funnel (spells.go:29893) and
+--   the creature path (boss_ai.go:4245) — and the direct Lua
+--   CastSpell path fires it too (castSpellDirectWithOverrides ->
+--   fireSpellAfterHit), so the 24720 nested cast chains correctly.
+--   The per-ID closure below replays the C++ switch on
+--   GetSpellInfo()->Id; there is no spell:GetId bridge. DELTA: the
+--   handler gates to player targets — GetNativeGender is
+--   player-only (lua_player.go:360), so a creature target keeps its
+--   C++ costume unported. A nil target (Go fires AfterHit with nil
+--   on misses) returns without casting; C++ dereferences
+--   GetHitUnit() unchecked there.
+local SPELL_HALLOWED_WAND_PIRATE = 24717 -- spell_holiday.cpp:387
+local SPELL_HALLOWED_WAND_NINJA = 24718 -- spell_holiday.cpp:388
+local SPELL_HALLOWED_WAND_LEPER_GNOME = 24719 -- spell_holiday.cpp:389
+local SPELL_HALLOWED_WAND_RANDOM = 24720 -- spell_holiday.cpp:390
+local SPELL_HALLOWED_WAND_SKELETON = 24724 -- spell_holiday.cpp:391
+local SPELL_HALLOWED_WAND_WISP = 24733 -- spell_holiday.cpp:392
+local SPELL_HALLOWED_WAND_GHOST = 24737 -- spell_holiday.cpp:393
+local SPELL_HALLOWED_WAND_BAT = 24741 -- spell_holiday.cpp:394
+
+local HALLOWED_WAND_SPELLS = {
+    SPELL_HALLOWED_WAND_PIRATE,
+    SPELL_HALLOWED_WAND_NINJA,
+    SPELL_HALLOWED_WAND_LEPER_GNOME,
+    SPELL_HALLOWED_WAND_SKELETON,
+    SPELL_HALLOWED_WAND_WISP,
+    SPELL_HALLOWED_WAND_GHOST,
+    SPELL_HALLOWED_WAND_BAT,
+}
+
+local function hallowEndWandHit(wandId)
+    return function(event, spell, target)
+        if target == nil then
+            return
+        end
+        if target:GetObjectType() ~= "Player" then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        local female = target:GetNativeGender() == GENDER_FEMALE
+        local spellId = 0
+        if wandId == SPELL_HALLOWED_WAND_LEPER_GNOME then
+            if female then
+                spellId = SPELL_LEPER_GNOME_COSTUME_FEMALE
+            else
+                spellId = SPELL_LEPER_GNOME_COSTUME_MALE
+            end
+        elseif wandId == SPELL_HALLOWED_WAND_PIRATE then
+            if female then
+                spellId = SPELL_PIRATE_COSTUME_FEMALE
+            else
+                spellId = SPELL_PIRATE_COSTUME_MALE
+            end
+        elseif wandId == SPELL_HALLOWED_WAND_GHOST then
+            if female then
+                spellId = SPELL_GHOST_COSTUME_FEMALE
+            else
+                spellId = SPELL_GHOST_COSTUME_MALE
+            end
+        elseif wandId == SPELL_HALLOWED_WAND_NINJA then
+            if female then
+                spellId = SPELL_NINJA_COSTUME_FEMALE
+            else
+                spellId = SPELL_NINJA_COSTUME_MALE
+            end
+        elseif wandId == SPELL_HALLOWED_WAND_RANDOM then
+            spellId = HALLOWED_WAND_SPELLS[math.random(#HALLOWED_WAND_SPELLS)]
+        else
+            return
+        end
+        caster:CastSpell(target, spellId, true)
+    end
+end
+
+for _, wandId in ipairs({
+    SPELL_HALLOWED_WAND_PIRATE,
+    SPELL_HALLOWED_WAND_NINJA,
+    SPELL_HALLOWED_WAND_LEPER_GNOME,
+    SPELL_HALLOWED_WAND_RANDOM,
+    SPELL_HALLOWED_WAND_GHOST,
+}) do
+    RegisterSpellEvent(wandId, 3, hallowEndWandHit(wandId))
+end
