@@ -131,15 +131,13 @@
 --   (:164) — on AURA_REMOVE_BY_ENEMY_SPELL the remaining
 --   damage (amount * remainingTicks) is forwarded as a TRIGGERED cast
 --   of SPELL_SHARED_SUFFERING_DISPEL 72373 with
---   SPELLVALUE_BASE_POINT1 = remainingDamage (:150-159)) — the
---   OnRemove hook IS bridged now (RegisterAuraEvent(72368, 3),
---   AuraEventOnRemove; aura:GetCaster/GetRemoveMode/GetAmount/
---   GetTickNumber/GetTotalTicks all live, lua_aura.go), but the
---   leg's entire payload is the SPELLVALUE_BASE_POINT1 write and
---   CastSpell takes only (target, id, triggered) — no spell-mod
---   bridge exists, so the dispel would cast with a default (zero)
---   base point. Stays out until a CastSpell spell-mod twin lands
---   (re-verified 2026-11-08, tick 491).
+--   SPELLVALUE_BASE_POINT1 = remainingDamage (:150-159)) — PORTED
+--   below (RegisterAuraEvent(72368/72369, 3), CastCustomSpell bp1 =
+--   remainingDamage; the "no spell-mod bridge" claim is stale —
+--   creature CastCustomSpell is live, lua_creature_events.go:977,
+--   leeching-swarm precedent; GetRemainingTicks is
+--   GetTotalTicks - GetTickNumber, SpellAuraEffects.h:79).
+--   DORMANT until Spell.dbc ships 72368/72369/72373.
 --
 -- DEVIATIONS FROM C++ (documented; every other value C++-exact):
 -- Random-target helper: threat-list players via GetAITargets
@@ -175,6 +173,8 @@ local SPELL_OBLITERATE = 72360
 local SPELL_WELL_OF_CORRUPTION = 72362
 local SPELL_CORRUPTED_FLESH = 72363
 local SPELL_SHARED_SUFFERING = 72368
+local SPELL_SHARED_SUFFERING_HEROIC = 72369 -- boss_marwyn.cpp:135, same loader
+local SPELL_SHARED_SUFFERING_DISPEL = 72373 -- boss_marwyn.cpp:39
 
 local timers = {}
 
@@ -438,3 +438,32 @@ RegisterCreatureEvent(ENTRY_MARWYN, 3, marwynKilledUnit)
 RegisterCreatureEvent(ENTRY_MARWYN, 4, marwynJustDied)
 RegisterCreatureEvent(ENTRY_MARWYN, 23, marwynReset)
 RegisterCreatureEvent(ENTRY_MARWYN, 38, marwynDoAction)
+
+-- C++ spell_marwyn_shared_suffering (boss_marwyn.cpp:141-168):
+-- AuraScript AfterEffectRemove EFFECT_0 SPELL_AURA_PERIODIC_DAMAGE,
+-- registered for 72368 + 72369 (boss_marwyn.cpp:135). On remove by an
+-- enemy spell only (GetRemoveMode() == 3, AURA_REMOVE_BY_ENEMY_SPELL),
+-- the caster forwards the remaining damage (amount * remainingTicks,
+-- SpellAuraEffects.h:79: GetRemainingTicks = GetTotalTicks - _ticksDone)
+-- as a TRIGGERED cast of SPELL_SHARED_SUFFERING_DISPEL 72373 on the
+-- target with SPELLVALUE_BASE_POINT1 = remainingDamage. CastCustomSpell
+-- bp1 is the BASE_POINT1 slot (sparse map, nil bp0 leaves effect 0 at
+-- its DBC value; leeching-swarm precedent). DORMANT until Spell.dbc
+-- ships 72368/72369/72373.
+local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:61-69
+
+local function sharedSufferingRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_ENEMY_SPELL then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    local remainingDamage = aura:GetAmount() * (aura:GetTotalTicks() - aura:GetTickNumber())
+    if remainingDamage > 0 then
+        caster:CastCustomSpell(target, SPELL_SHARED_SUFFERING_DISPEL, true, nil, remainingDamage)
+    end
+end
+RegisterAuraEvent(SPELL_SHARED_SUFFERING, 3, sharedSufferingRemove)
+RegisterAuraEvent(SPELL_SHARED_SUFFERING_HEROIC, 3, sharedSufferingRemove)

@@ -22241,9 +22241,9 @@ func init() {
 	// Talk(SAY_CORRUPTED_FLESH 3)) is ported with its pre-loop
 	// CASTING gate (500ms IsCasting defer); the DoZoneInCombat
 	// leg is ported, the instance SetBossState legs have no
-	// bridge, and spell_marwyn_shared_suffering has no
-	// AuraScript bridge (the boss_moragg optic-link precedent) —
-	// documented in the lua header. Fourth and last group of the "// Halls of Reflection"
+	// bridge, and spell_marwyn_shared_suffering is PORTED in
+	// the lua file (RegisterAuraEvent 72368/72369 ev3 +
+	// CastCustomSpell bp1) — documented in the lua header. Fourth and last group of the "// Halls of Reflection"
 	// block — the block CLOSES here.
 	RegisterLuaBoss("boss_marwyn", 38113)
 	// Lord Marrowgar (Icecrown Citadel) — bridgeable Talk arms ported
