@@ -1100,3 +1100,50 @@ local function boomVisualDummy(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_DESTROY_PLATFORM_BOOM_VISUAL, 5, boomVisualDummy)
+
+local DATA_PLATFORM = 2 -- eye_of_eternity.h:35-41, EOEInstanceData64 (DATA_TRIGGER 0, DATA_MALYGOS 1, DATA_PLATFORM 2)
+local GO_FLAG_DESTROYED = 1024 -- SharedDefines.h:1646
+local SPELL_SUMMON_RED_DRAGON_BUDDY_F_CAST = 58846 -- boss_malygos.cpp:138
+
+-- C++ spell_alexstrasza_bunny_destroy_platform_event::HandleSendEvent /
+-- HandleScript (boss_malygos.cpp:2094-2124): OnEffectHit, EFFECT_0
+-- SPELL_EFFECT_SEND_EVENT + EFFECT_2 SPELL_EFFECT_SCRIPT_EFFECT. Load
+-- admits creature casters only. eff0: the platform GO (instance
+-- GetGuidData(DATA_PLATFORM)) gains GO_FLAG_DESTROYED — the
+-- GetGuidData (lua_creature_events.go:6695) + GetGameObjectByGUID
+-- (:4025) + GO SetFlag (lua_objects.go:4474, field 9) bridges are all
+-- live, the 11:21 sibling stay-out's "no bridge" claim is wrong. eff2:
+-- the caster casts SPELL_SUMMON_RED_DRAGON_BUDDY_F_CAST with no
+-- explicit target (C++ CastSpell(nullptr, ...)); Go has no no-target
+-- cast — nil falls back to victim (vaelastrasz convention) — so the
+-- self-cast twin is used: for this implicit-area spell the explicit
+-- target only seeds the dest location, which is the caster's either
+-- way. PORTED 2026-11-11. DORMANT twice over: (1) the chain starts
+-- at the 58842 channel removal (row 408, itself dormant on the
+-- unported destroy-platform driver); (2) DATA_PLATFORM is never
+-- latched in the Go instance guid store — instance_eye_of_eternity.lua
+-- binds the platform to its own Lua table (instanceData.platform),
+-- not via SetGuidData, and SetGuidData is creature-surface only
+-- (lua_creature_events.go:6680), so the GO cannot latch itself —
+-- GetGuidData(2) reads 0 until a latch lands. Nil/zero-guarded,
+-- fail-closed (the gift-beam GetGuidData guard precedent).
+local function destroyPlatformEvent(event, spell, hitTarget, effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if effectIndex == 0 then
+        local platformGuid = caster:GetGuidData(DATA_PLATFORM)
+        if platformGuid == nil or platformGuid == 0 then
+            return
+        end
+        local platform = caster:GetGameObjectByGUID(platformGuid)
+        if platform ~= nil then
+            platform:SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_DESTROYED)
+        end
+    elseif effectIndex == 2 then
+        caster:CastSpell(caster, SPELL_SUMMON_RED_DRAGON_BUDDY_F_CAST)
+    end
+end
+
+RegisterSpellEvent(SPELL_DESTROY_PLATFORM_EVENT, 5, destroyPlatformEvent)
