@@ -88,15 +88,15 @@ RegisterAuraEvent(SPELL_HUNTER_COBRA_STRIKES_TRIGGERED, 6, cobraStrikesTriggered
 --   The Lua cast corrects the target vs the Go default proc leg,
 --   which would cast the trigger spell on the proc target
 --   (procs.go:5505) instead of the holder self-cast C++ does.
---   KNOWN DEVIATION: C++ passes SPELLVALUE_AURA_STACK =
---   triggeredSpellInfo->StackAmount (53257's DBC stack count, the
---   2-charge grant), but no Lua cast bridge carries an aura-stack
---   mod — player:CastSpell has no stack arg and CastCustomSpell
---   overrides base points only (lua_player.go:2934/2956). The Go
---   cast path applies fresh auras at StackCount 0, read as 1
---   (spells.go:23032-23037), so this port grants 1 charge where
---   C++ grants the DBC stack count; the 53257 stack-drop handler
---   above then consumes it.
+--   The C++ SPELLVALUE_AURA_STACK mod (triggeredSpellInfo->
+--   StackAmount, the 2-charge grant) has no cast-bridge twin, so it
+--   rides cast-then-set (brewfest-ram precedent): after the cast,
+--   the fresh 53257 aura is raised to its DBC stack count via
+--   aura:GetSpellStackAmount (lua_aura.go:356). If the aura is not
+--   visible yet the set is skipped and the port falls back to the
+--   1-charge grant (fresh auras read StackCount 0 as 1,
+--   spells.go:23032-23037); the 53257 stack-drop handler above then
+--   consumes it.
 --   DORMANT until Spell.dbc ships the 53256 proc entry.
 local SPELL_HUNTER_COBRA_STRIKES = 53256 -- spell_hunter.cpp:313
 
@@ -106,6 +106,13 @@ local function cobraStrikesProc(event, aura, target, actor, procTarget, damage)
         return true
     end
     target:CastSpell(target, triggerSpell, true)
+    local stacks = aura:GetSpellStackAmount(triggerSpell)
+    if stacks > 1 then
+        local triggered = target:GetAura(triggerSpell)
+        if triggered ~= nil then
+            triggered:SetStackAmount(stacks)
+        end
+    end
     return true
 end
 
@@ -544,27 +551,99 @@ RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R2, 1, rapidRecuperationTick)
 -- comments (threat.go, pets.go, lua_creature_events.go). The row is
 -- uncovered; the gate needs a CheckCast bridge or a Go leg.
 
--- NOT IN LUA: spell_hun_lock_and_load (56342, spell_hunter.cpp:741-805)
--- — DoCheckProc (marker-aura 67544 gate, ev6-readable via
--- actor:HasAura) plus two DoCheckEffectProc arms the ev6 hook
--- cannot express: the trap arm needs the proc type mask
--- (PROC_FLAG_DONE_TRAP_ACTIVATION) and the triggering spell's
--- frost school mask, and the periodic arm needs
--- PROC_FLAG_DONE_PERIODIC; the ev6 args carry no type mask, no
--- proc spell, and no effect index, so the handler cannot tell a
--- trap proc from a periodic proc. STAYS OUT until ev6
--- event-spell/school/type-mask forwarding lands (open engine work,
--- same as census rows 547-551 + 572).
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_lock_and_load::HandleProc
+--   (spell_hunter.cpp:787-793): OnProc. PreventDefaultAction (the
+--   true return); the actor casts the trigger 56453 and the marker
+--   67544 on itself, both triggered. The CheckProc/CheckTrapProc/
+--   CheckPeriodicProc legs live in Go, not here: procs.go
+--   lockAndLoadProcAllowed gates the proc before the chance roll
+--   (marker absent, trap-activation + frost-school + eff0 roll, or
+--   periodic + eff1 roll) — the ev6 hook carries no type mask or
+--   proc spell, so the Lua handler cannot tell the legs apart
+--   (roar-of-sacrifice gate precedent). The Go loop fires the hook
+--   once per eligible effect, so a proc qualifying both effects
+--   casts trigger + marker twice; both casts refresh the same
+--   auras, so the double fire is benign. DORMANT until Spell.dbc
+--   ships the 56342 proc entry.
+local SPELL_HUNTER_LOCK_AND_LOAD = 56342 -- spell_hunter.cpp:741
+local SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER = 56453 -- spell_hunter.cpp:64
+local SPELL_HUNTER_LOCK_AND_LOAD_MARKER = 67544 -- spell_hunter.cpp:65
 
--- NOT IN LUA: spell_hun_piercing_shots (53234, spell_hunter.cpp:1070-1119)
--- — the HandleProc math is ev6-expressible (damage arg, actor,
--- procTarget; bp = CalculatePct(damage, eff0 amount) / max ticks,
--- cast 63468 with BP0 via CastCustomSpell, roar-of-sacrifice
--- precedent) except for one read: piercingShots->GetMaxTicks(),
--- the 63468 DoT's tick count, has no cross-spell bridge — aura
--- has GetTotalTicks only for its own spell (lua_aura.go) and
--- GetSpellEffectCalcValue reads base points, not duration/
--- amplitude. RECIPE: add an aura:GetSpellTotalTicks(spellId)
--- bridge on the GetSpellEffectCalcValue precedent (DBC duration /
--- amplitude, +1 for START_PERIODIC_AT_APPLY), then port the
--- handler with a procTarget-nil CheckProc gate.
+local function lockAndLoadProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER, true)
+    actor:CastSpell(actor, SPELL_HUNTER_LOCK_AND_LOAD_MARKER, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_LOCK_AND_LOAD, 6, lockAndLoadProc)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_piercing_shots::CheckProc + HandleProc
+--   (spell_hunter.cpp:1084-1105): DoCheckProc needs a non-null
+--   action target — the procTarget-nil return below vetoes (true),
+--   since the C++ no-proc path casts nothing and the Go default
+--   trigger leg must not fire either. OnEffectProc, EFFECT_0
+--   SPELL_AURA_PROC_TRIGGER_SPELL. PreventDefaultAction (the true
+--   return); the actor casts Piercing Shots 63468 on the action
+--   target with BP0 = CalculatePct(damage, eff0 amount) / max
+--   ticks, triggered (aurEff args; math.floor, roar-of-sacrifice
+--   precedent). The tick count reads via the new
+--   aura:GetSpellMaxTicks bridge (lua_aura.go), the
+--   serverSpellMaxTicks DBC twin (duration/amplitude, +1 for
+--   START_PERIODIC_AT_APPLY); a 0 read (DBC missing) skips the
+--   cast rather than dividing by zero. A zero-damage event vetoes
+--   without casting — C++ GetDamageInfo() null takes the same
+--   PreventDefaultAction-then-nothing path. DORMANT until Spell.dbc
+--   ships the 53234 proc entry.
+local SPELL_HUNTER_PIERCING_SHOTS_TALENT = 53234 -- spell_hunter.cpp:1070
+local SPELL_HUNTER_PIERCING_SHOTS = 63468 -- spell_hunter.cpp:55
+
+local function piercingShotsProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil or damage == nil or damage == 0 then
+        return true
+    end
+    local ticks = aura:GetSpellMaxTicks(SPELL_HUNTER_PIERCING_SHOTS)
+    if ticks == 0 then
+        return true
+    end
+    local bp0 = math.floor(math.floor(damage * aura:GetAmount(0) / 100) / ticks)
+    actor:CastCustomSpell(procTarget, SPELL_HUNTER_PIERCING_SHOTS, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_PIERCING_SHOTS_TALENT, 6, piercingShotsProc)
+
+-- NOT IN LUA: spell_hun_rapid_recuperation_trigger (53228,
+-- spell_hunter.cpp:1161-1217) — EFFECT_0 PROC_TRIGGER_SPELL arm is
+-- a pure gate (veto unless the proc spell carries family flag [0]
+-- 0x20, Rapid Fire) and EFFECT_1 DUMMY casts the rank mana spell
+-- (56654/58882) when the proc spell carries family flag [1]
+-- 0x01000000 (Rapid Killing); ev6 carries no proc-spell object, so
+-- neither flag is readable. STAYS OUT until ev6 event-spell
+-- forwarding lands (open engine work, same as rows 547-551 + 572 +
+-- 597 + 603 + 608). The 599/600 periodic legs it feeds are ported
+-- above (ev1). CENSUS CORRECTION: row 601 hooks (HandleDummy /
+-- OnEffectHitTarget) are phantom; real is OnEffectProc x2.
+-- NOT IN LUA: spell_hun_sniper_training (53302,
+-- spell_hunter.cpp:1350-1420) — the countdown lives in
+-- OnEffectUpdatePeriodic (no Lua event: only OnPeriodic/Apply/
+-- Remove/ChangeAmount/Dispel/Proc fire) and both the reset and the
+-- buff-cast legs need CalculateSpellDamage(baseAmount), which has no
+-- Lua bridge (nor does aura:GetBaseAmount or aura:GetId for the
+-- 64418 + rank-offset buff math). STAYS OUT; recipe: add an
+-- update-periodic aura event + a CalculateSpellDamage bridge, then
+-- port ev1 with the moving/stationary countdown folded in.
+-- CENSUS CORRECTION: row 602 hooks (OnCheckCast) are phantom; real
+-- is OnEffectPeriodic + OnEffectUpdatePeriodic.
+-- CENSUS CORRECTION: row 603 spell_hun_thrill_of_the_hunt (34497)
+-- is NOT covered — the census go/lua hits are Fjola Lightbane's
+-- creature entry 34497 (boss_twin_valkyr), not the talent. The
+-- talent STAYS OUT: both arms need the proc spell (Explosive Shot
+-- family flag [2] 0x200 + GetAuraEffect family lookup +
+-- ManaCostPercentage + GetMaxTicks; else CalcPowerCost(caster,
+-- school mask)), and ev6 carries no proc-spell object. Same open
+-- engine work as row 601; GetMaxTicks shares the 598 recipe.

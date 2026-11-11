@@ -319,3 +319,27 @@ end
 
 RegisterAuraEvent(SPELL_HEARTPIERCE_HEROIC, 6, makeHeartpierceProc(HEARTPIERCE_HEROIC_BY_POWER))
 RegisterAuraEvent(SPELL_HEARTPIERCE, 6, makeHeartpierceProc(HEARTPIERCE_BY_POWER))
+
+-- CENSUS CORRECTIONS (this tick, rows 604-607):
+--   604 spell_item_trigger_spell is NOT covered — the census hits
+--   are the unrelated generic spell_trigger_spell_from_caster in
+--   boss files. The class is a SpellScript template (OnEffectHit
+--   DUMMY, spell_item.cpp:42-84) instantiated for arcanite
+--   dragonling / gnomish battle chicken / mechanical dragonling /
+--   mithril mechanical dragonling; no RegisterSpellScript bridge,
+--   so all four STAY OUT.
+--   605 spell_item_defibrillate is NOT covered — SpellScript
+--   OnEffectHitTarget RESURRECT (spell_item.cpp:712-756), goblin
+--   jumper cables 67% / XL 50% fail chance + fail spell; no
+--   RegisterSpellScript bridge. STAYS OUT.
+--   606 spell_item_sunwell_neck is NOT covered — the ev6 arm itself
+--   is expressible (actor-player gate + GetReputationRank 932/934
+--   exalted legs casting 45479/45429, 45480/45428, 45432/45431,
+--   45478/45430 per neck, spell_item.cpp:3546-3595) but the four
+--   aura binding IDs live only in the world DB spell_script_names
+--   (script names spell_item_sunwell_exalted_{caster,melee,tank,
+--   healer}_neck), unresolvable in-tree. STAYS OUT until the IDs
+--   are established; recipe: register ev6 per aura ID once known.
+--   607 spell_item_trinket_stack VERIFIED in-tree: the OnRemove leg
+--   is the ported handler above (tick 295); the proc leg stays out
+--   (no proc hook) as the header already records.

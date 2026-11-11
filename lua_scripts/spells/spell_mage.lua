@@ -81,6 +81,16 @@
 --   decrease-speed auras (C++ defaults, both polarities)).
 --   Dormant until Spell.dbc
 --   ships the 56374 proc entry.
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_mage_blazing_speed (spell_mage.cpp:228-258): aura 31641,
+--   EFFECT_0 PROC_TRIGGER_SPELL. PreventDefaultAction (return true)
+--   so the Go default trigger leg does not fire; the action target
+--   casts 31643 (Blazing Speed buff, spell_mage.cpp:35) on itself,
+--   triggered. The ev6 `target` arg is the aura holder on both proc
+--   loops, which is C++ GetActionTarget on the taken event
+--   (Unit.cpp:10412; procs.go procActionTargetGUID) — the talent
+--   procs only when hit, so the taken-only reading holds. DORMANT
+--   until Spell.dbc ships the 31641 proc entry.
 -- STAY-OUT (tick 294): every other spell_mage class — no proc hook,
 --   absorb/CalcAmount/ManaShield hooks absent, SpellScript-only
 --   with no RegisterSpellScript in the engine, or cross-script state
@@ -148,3 +158,39 @@ local function fingersOfFrostRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MAGE_FINGERS_OF_FROST, 3, fingersOfFrostRemove)
+
+local SPELL_MAGE_BLAZING_SPEED_AURA = 31641 -- spell_mage.cpp:228 (class spell_mage_blazing_speed)
+local SPELL_MAGE_BLAZING_SPEED_BUFF = 31643 -- spell_mage.cpp:35
+
+local function blazingSpeedProc(event, aura, target, actor, procTarget, damage)
+    target:CastSpell(target, SPELL_MAGE_BLAZING_SPEED_BUFF, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_BLAZING_SPEED_AURA, 6, blazingSpeedProc)
+
+-- NOT IN LUA: spell_mage_arcane_potency (31571, spell_mage.cpp:143-193)
+-- — CheckProc filters the proc spell by SpellIconID (Clearcasting /
+-- Presence of Mind) and HandleProc casts the rank-indexed trigger
+-- (57529/57531); ev6 carries no proc-spell object. STAYS OUT until
+-- ev6 event-spell forwarding lands (open engine work, same as
+-- census rows 547-551 + 572 + 597 + 601 + 603).
+-- NOT IN LUA: spell_mage_blast_wave (11113, spell_mage.cpp:195-226)
+-- — SpellScript OnEffectHitTarget KNOCK_BACK (glyph 62126 gate);
+-- no RegisterSpellScript bridge. STAYS OUT.
+-- NOT IN LUA: spell_mage_burnout (44449, spell_mage.cpp:294-333)
+-- — CheckProc needs damageInfo->GetSpellInfo() and HandleProc needs
+-- CalcPowerCost(target, school mask); ev6 passes only a damage
+-- number, no damage-info spell/school. STAYS OUT until ev6
+-- damage-info forwarding lands.
+-- NOT IN LUA: spell_mage_imp_blizzard (11185, spell_mage.cpp:471-501)
+-- — HandleChill casts GetSpellWithRank(CHILLED 12484, rank); the
+-- Go twin spellWithRank (spells.go:37377) is not on the Lua surface.
+-- STAYS OUT; recipe: expose a rank lookup on the
+-- GetSpellEffectCalcValue precedent, then port ev6 (actor casts the
+-- ranked Chilled on procTarget, triggered).
+-- CENSUS CORRECTION: row 610 hooks are HandleDummy only; real is
+-- OnEffectProc EFFECT_0 PROC_TRIGGER_SPELL. Rows 608/611/612 hooks
+-- are likewise wrong (608: DoCheckProc + OnEffectProc; 611: DoCheckProc
+-- + OnEffectProc EFFECT_1 DUMMY; 612: OnEffectProc EFFECT_0
+-- OVERRIDE_CLASS_SCRIPTS).
