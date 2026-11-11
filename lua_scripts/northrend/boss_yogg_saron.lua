@@ -204,15 +204,13 @@
 -- spell_yogg_saron_empowered OnPeriodic (64161,
 -- empoweredTick below) and spell_yogg_saron_sanity DummyTick
 -- (63050, sanityTick below); spell_yogg_saron_brain_link (63802)
--- stays out WHOLE — all three legs resolve only via SaraAI:
--- FilterTargets (:2140-2151) calls ai->SetLinkBetween on the two
--- survivors, DummyTick (:2192-2204) resolves the linked player via
--- ai->GetLinkedPlayerGUID (the distance threshold reads
--- aurEff->GetAmount(), which IS bridged now (lua_aura.go) but is
--- moot without the link), and OnRemove (:2172-2186) calls
--- ai->RemoveLinkFrom / ai->GetLinkedPlayerGUID (EXPIRE leg) or
--- strips BRAIN_LINK from the linked player (non-expire leg). No
--- SaraAI bridge exists. Residuals
+-- PORTED this tick below (yoggBrainLinkFilter / yoggBrainLinkTick /
+-- yoggBrainLinkRemoved): the SaraAI _linkData map rides a PHASE3
+-- module table (the 431 pursueTargetGuid precedent), the linked
+-- player resolves via GetPlayerByGUID, and the distance threshold
+-- reads aura:GetAmount(0) (lua_aura.go). No SaraAI bridge exists;
+-- the C++ OnRemove SaraAI-cast gate rides aura:GetCaster() ~= nil.
+-- Residuals
 -- retired: empowered OnApply (stack-9 buff) ported tick 438
 -- via ev2 (empoweredApply below); sanity OnRemove ported
 -- tick 436 via ev3 (sanityRemove below).
@@ -230,8 +228,11 @@
 -- UpdateEntry 36064/33988), empowering_shadows range check (64466,
 -- ev5 hit-target casts effect value on caster, triggered) + missile
 -- (64467, ev5 hit-target self-casts 64468, triggered); brain_link
--- (63802) stays out whole (SaraAI, above). Census go_hit=true is a
--- FALSE POSITIVE on all six rows (Lua-comment hits only, zero Go).
+-- (63802, ev7 link filter + ev1 distance-gated 63803/63804 tick +
+-- ev3 unlink/strip) PORTED this tick via a PHASE3 link table (the
+-- sibling's stays-out call is overturned: every leg has a bridge or
+-- a precedent). Census go_hit=true is a FALSE POSITIVE on all six
+-- rows (Lua-comment hits only, zero Go).
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -290,6 +291,8 @@ local PHASE3 = {
     MALADY = 63830, -- :138
     MALADY_JUMP = 63881, -- :269
     BRAIN_LINK_DAMAGE = 63803, -- :140
+    BRAIN_LINK_NO_DAMAGE = 63804, -- :141
+    brainLinks = {}, -- SaraAI _linkData twin: GUID -> partner GUID, both directions
     BOIL_OMINOUSLY = 63030, -- class comment :2247 (no in-tree enum/cast site; DBC-gated)
     FLASH_FREEZE = 64175, -- :276
     SUMMON_GUARDIAN_1 = 63031, -- :146
@@ -302,6 +305,9 @@ local PHASE3 = {
     ILLUSION_ROOM = 63988, -- :270
     AURA_REMOVE_BY_EXPIRE = 4, -- SpellAuraDefines.h:67
     AURA_REMOVE_BY_DEATH = 5, -- SpellAuraDefines.h:68
+    SPELL_CONSTRICTOR_TENTACLE_SUMMON = 64133, -- :274
+    SPELL_SQUEEZE = 64125, -- :275
+    SPELL_SQUEEZE_HEROIC = 64126, -- loader comment :2445 (difficulty twin, no in-tree enum)
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -1261,6 +1267,105 @@ RegisterSpellEvent(PHASE3.MALADY, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.MALADY_JUMP, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.BRAIN_LINK_DAMAGE, 5, PHASE3.yoggSanityReduction)
 
+-- C++ spell_yogg_saron_brain_link::FilterTargets
+-- (boss_yogg_saron.cpp:2139-2151): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY -> drop illusion-room carriers, then
+-- clear unless exactly 2 remain, then SaraAI::SetLinkBetween the two
+-- survivors (:707-711, both directions). The link store rides
+-- PHASE3.brainLinks (the 431 pursueTargetGuid precedent); the filter
+-- idiom mirrors yoggHighSanityFilter above. Bound 63802 (boss enum
+-- :139, Sara DoCastAOE :860, EVENT_BRAIN_LINK 23s, MAX_TARGETS 2).
+PHASE3.yoggBrainLinkFilter = function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target ~= nil and target:HasAura(PHASE3.ILLUSION_ROOM) then
+            targets:Remove(target)
+        end
+    end
+    if targets:GetCount() ~= 2 then
+        targets:Clear()
+        return
+    end
+    local list = targets:GetTargets()
+    local a, b = list[1], list[2]
+    if a == nil or b == nil then
+        return
+    end
+    local ga, gb = a:GetGUID(), b:GetGUID()
+    PHASE3.brainLinks[ga] = gb
+    PHASE3.brainLinks[gb] = ga
+end
+RegisterSpellEvent(SPELL_BRAIN_LINK, 7, PHASE3.yoggBrainLinkFilter)
+
+-- C++ spell_yogg_saron_brain_link_AuraScript::DummyTick
+-- (boss_yogg_saron.cpp:2190-2203): OnEffectPeriodic EFFECT_0
+-- SPELL_AURA_PERIODIC_DUMMY -> the linked player (SaraAI
+-- GetLinkedPlayerGUID :698-705, via PHASE3.brainLinks here) takes
+-- the damage beam 63803 when farther than the aura amount, else the
+-- no-damage beam 63804, both triggered (player CastSpell takes no
+-- triggered arg; the cast rides the ev5 funnel either way). The
+-- caster gate mirrors the C++ caster/SaraAI nil return; the distance
+-- is center-to-center (the generic GetDistance fallback carries no
+-- combat-reach subtraction). Bound 63802.
+PHASE3.yoggBrainLinkTick = function(event, aura, target)
+    if target == nil then
+        return
+    end
+    if aura:GetCaster() == nil then
+        return
+    end
+    local partnerGUID = PHASE3.brainLinks[target:GetGUID()]
+    if partnerGUID == nil then
+        return
+    end
+    local linked = GetPlayerByGUID(partnerGUID)
+    if linked == nil then
+        return
+    end
+    if target:GetDistance(linked) > aura:GetAmount(0) then
+        target:CastSpell(linked, PHASE3.BRAIN_LINK_DAMAGE)
+    else
+        target:CastSpell(linked, PHASE3.BRAIN_LINK_NO_DAMAGE)
+    end
+end
+RegisterAuraEvent(SPELL_BRAIN_LINK, 1, PHASE3.yoggBrainLinkTick)
+
+-- C++ spell_yogg_saron_brain_link_AuraScript::OnRemove
+-- (boss_yogg_saron.cpp:2166-2186): OnEffectRemove EFFECT_0
+-- SPELL_AURA_PERIODIC_DUMMY, REAL handle -> EXPIRE unlinks only;
+-- any other mode unlinks and strips BRAIN_LINK from the linked
+-- player, but only when that player resolves (C++ gates both on the
+-- GetPlayer hit). RemoveLinkFrom erases one direction only (:715);
+-- the partner's own OnRemove erases theirs when its aura strips.
+-- RemoveAurasDueToSpell has no Lua binding; player:RemoveAura is
+-- the twin. Bound 63802.
+PHASE3.yoggBrainLinkRemoved = function(event, aura, target)
+    if target == nil then
+        return
+    end
+    if aura:GetCaster() == nil then
+        return
+    end
+    local guid = target:GetGUID()
+    if aura:GetRemoveMode() == PHASE3.AURA_REMOVE_BY_EXPIRE then
+        PHASE3.brainLinks[guid] = nil
+        return
+    end
+    local partnerGUID = PHASE3.brainLinks[guid]
+    if partnerGUID == nil then
+        return
+    end
+    local linked = GetPlayerByGUID(partnerGUID)
+    if linked == nil then
+        return
+    end
+    PHASE3.brainLinks[guid] = nil
+    linked:RemoveAura(SPELL_BRAIN_LINK)
+end
+RegisterAuraEvent(SPELL_BRAIN_LINK, 3, PHASE3.yoggBrainLinkRemoved)
+
 -- C++ spell_yogg_saron_boil_ominously::HandleDummy
 -- (boss_yogg_saron.cpp:2263-2271): OnEffectHitTarget EFFECT_0
 -- SPELL_EFFECT_DUMMY -> if the hit unit carries no flash-freeze aura
@@ -1291,8 +1396,11 @@ RegisterSpellEvent(PHASE3.BOIL_OMINOUSLY, 5, PHASE3.yoggBoilOminously)
 -- (boss_yogg_saron.cpp:2295-2305): AfterEffectApply/Remove EFFECT_0
 -- SPELL_AURA_PERIODIC_TRIGGER_SPELL, REAL handle -> the aura target
 -- (an immortal guardian creature) swaps entry to the marked guardian
--- on apply and back on remove, ungated in C++. UpdateEntry is the
--- SetEntry twin (lua_creature_events.go:4824); the ev2/ev3 aura
+-- on apply and back on remove, ungated in C++. C++ calls
+-- Object::SetEntry (Object.h:85), a bare OBJECT_FIELD_ENTRY flip —
+-- NOT Creature::UpdateEntry, whose full re-seat (template reload,
+-- random level roll) the 668cd3fe landing wrongly used; SetEntry is
+-- bridged this tick (lua_creature_events.go). The ev2/ev3 aura
 -- target is the motion creature for creature owners (lua_aura.go
 -- ownerObject). Bound 64465 (Yogg DoCastAOE, already ported as a
 -- cast in yoggPhase3Tick).
@@ -1300,14 +1408,14 @@ PHASE3.yoggShadowBeaconApplied = function(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
     end
-    target:UpdateEntry(PHASE3.NPC_MARKED_IMMORTAL_GUARDIAN)
+    target:SetEntry(PHASE3.NPC_MARKED_IMMORTAL_GUARDIAN)
 end
 RegisterAuraEvent(PHASE3.SPELL_SHADOW_BEACON, 2, PHASE3.yoggShadowBeaconApplied)
 PHASE3.yoggShadowBeaconRemoved = function(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
     end
-    target:UpdateEntry(PHASE3.NPC_IMMORTAL_GUARDIAN)
+    target:SetEntry(PHASE3.NPC_IMMORTAL_GUARDIAN)
 end
 RegisterAuraEvent(PHASE3.SPELL_SHADOW_BEACON, 3, PHASE3.yoggShadowBeaconRemoved)
 
@@ -1510,6 +1618,90 @@ local function voiceJustSummoned(event, creature, summoned)
         summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
     end
 end
+
+-- C++ spell_yogg_saron_constrictor_tentacle::OnApply
+-- (boss_yogg_saron.cpp:2393-2397): AfterEffectApply EFFECT_0
+-- SPELL_AURA_DUMMY, REAL -> the aura target self-casts
+-- SPELL_CONSTRICTOR_TENTACLE_SUMMON (64133), non-triggered.
+-- Bound 64132 (voice DoCastAOE :580, max-targets 1). The census
+-- OnEffectHitTarget hook is a phantom — the class registers only
+-- AfterEffectApply. DORMANT until Spell.dbc ships.
+PHASE3.yoggConstrictorTentacleApplied = function(event, aura, target)
+    target:CastSpell(target, PHASE3.SPELL_CONSTRICTOR_TENTACLE_SUMMON, false)
+end
+RegisterAuraEvent(SPELL_CONSTRICTOR_TENTACLE, 2, PHASE3.yoggConstrictorTentacleApplied)
+
+-- C++ spell_yogg_saron_lunge::HandleScript
+-- (boss_yogg_saron.cpp:2424-2432): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit self-casts SPELL_SQUEEZE
+-- (64125) triggered, then casts the effect's value on the caster,
+-- triggered. No PreventHitDefaultEffect: SCRIPT_EFFECT has no Go
+-- default arm beyond the Eluna hook (the 453 precedent). Bound 64131
+-- (constrictor JustSummoned :658, triggered self-cast). The census
+-- AfterEffectApply hook is a phantom. DORMANT until Spell.dbc ships.
+PHASE3.yoggLungeHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, PHASE3.SPELL_SQUEEZE, true)
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        hitTarget:CastSpell(caster, value, true)
+    end
+end
+RegisterSpellEvent(SPELL_LUNGE, 5, PHASE3.yoggLungeHit)
+
+-- C++ spell_yogg_saron_squeeze::OnRemove
+-- (boss_yogg_saron.cpp:2455-2464): AfterEffectRemove EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE, REAL -> if the aura target rides a
+-- vehicle (the constrictor tentacle) and it is alive, the tentacle
+-- kills itself. GetVehicleBase has no Lua bridge; the twin is
+-- IsOnVehicle + Vehicle:GetOwner (the mimiron/weldTick idiom) and
+-- Kill is the KillSelf twin (lua_creature_events.go:3237). No
+-- remove-mode gate in C++. Bound 64125 (lunge :2428) + 64126
+-- (heroic difficulty twin, loader comment :2445). The census hooks
+-- (AfterEffectApply + OnEffectHitTarget) are both phantoms — the
+-- class registers only AfterEffectRemove. DORMANT until Spell.dbc ships.
+PHASE3.yoggSqueezeRemoved = function(event, aura, target)
+    if target == nil then
+        return
+    end
+    local vehicle = target:IsOnVehicle()
+    if vehicle == nil then
+        return
+    end
+    local base = vehicle:GetOwner()
+    if base ~= nil and base:IsAlive() then
+        base:Kill()
+    end
+end
+RegisterAuraEvent(PHASE3.SPELL_SQUEEZE, 3, PHASE3.yoggSqueezeRemoved)
+RegisterAuraEvent(PHASE3.SPELL_SQUEEZE_HEROIC, 3, PHASE3.yoggSqueezeRemoved)
+
+-- C++ spell_yogg_saron_diminsh_power::HandleProc
+-- (boss_yogg_saron.cpp:2483-2492): OnEffectProc EFFECT_0
+-- SPELL_AURA_PROC_TRIGGER_SPELL -> PreventDefaultAction, then if
+-- the target's current channeled spell is casting, interrupt it.
+-- The ev6 true-return is the PreventDefaultAction twin (it skips
+-- the default trigger leg, lua_aura.go:836; oculus precedent);
+-- GetCurrentSpell(2) is the live-channel nil test (Go has no
+-- SPELL_STATE_DELAYED / PREPARING channel state, so a live channel
+-- is a casting one) and InterruptSpell(2) is bridged on the
+-- creature + player builders. Bound 64148 (crusher tentacle Reset
+-- self-cast :1366). The census hooks (AfterEffectApply +
+-- OnEffectHitTarget) are both phantoms — the class registers only
+-- OnEffectProc. DORMANT until Spell.dbc ships.
+PHASE3.yoggDiminshPowerProc = function(event, aura, target, actor, procTarget, damage)
+    if target ~= nil and target:GetCurrentSpell(2) ~= nil then
+        target:InterruptSpell(2)
+    end
+    return true
+end
+RegisterAuraEvent(SPELL_DIMINSH_POWER, 6, PHASE3.yoggDiminshPowerProc)
 
 -- C++ boss_voice_of_yogg_saronAI::Reset (boss_yogg_saron.cpp:490-509):
 -- _Reset + SetPhase(PHASE_ONE) + instance SetData(DATA_DRIVE_ME_CRAZY) +

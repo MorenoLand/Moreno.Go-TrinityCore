@@ -4829,6 +4829,26 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		ok := s.seatCreatureEntry(ctx, motion, newEntry)
 		return []any{ok}, nil
 	}
+	//
+	// SetEntry is Object::SetEntry (Object.h:85): a bare
+	// SetUInt32Value(OBJECT_FIELD_ENTRY, entry) — no template reload,
+	// no level roll, no stat change, unlike Creature::UpdateEntry
+	// (the seatCreatureEntry twin above). The live motion.Entry flips
+	// with EntryOverride latched so grid sweeps keep the new entry,
+	// and the values-update carries the new entry to clients.
+	methods["SetEntry"] = func(ctx context.Context, args []any) ([]any, error) {
+		newEntry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.Entry = newEntry
+		motion.EntryOverride = true
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{objectFieldEntry: newEntry})
+		return nil, nil
+	}
 	// SetFacingTo is Unit::SetFacingTo (Unit.cpp:13669): an in-place
 	// MoveTo + SetFacing spline that turns the unit without moving it. The
 	// Go twin reuses the DistractMovementGenerator facing pattern — an
