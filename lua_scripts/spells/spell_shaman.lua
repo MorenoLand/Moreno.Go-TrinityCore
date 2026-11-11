@@ -49,20 +49,35 @@
 --   in C++ rides the return-true twin, suppressing the Go default
 --   trigger cast.
 --
+-- PORTED (Go, census rows 248-250):
+--   spell_sha_ancestral_awakening_proc::HandleDummy
+--   (spell_shaman.cpp:169-180): EFFECT_0 DUMMY. Per hit unit the caster
+--   casts 52752 triggered with BP0 = GetEffectValue(). The FilterTargets
+--   arm (lowest-health-pct raid target only, when 2+ targets) has no Go
+--   hook. The ancestral awakening aura proc arm stays out.
+--   spell_sha_astral_shift::Absorb (spell_shaman.cpp:224-231): the
+--   SCHOOL_ABSORB leg for 51474, gated on the stun/fear/silence flags
+--   (stun also needs a stun-mechanic aura); the CalculateAmount -1 pool
+--   is modeled by never consuming it. The astral shift aura CheckProc
+--   arm stays out.
+--   spell_sha_bloodlust::ApplyDebuff (spell_shaman.cpp:313-319): the
+--   AfterHit arm — each hit target gains Sated 57724, triggered. The
+--   RemoveInvalidTargets arm has no Go hook.
+--
 -- CLOSED (tick 295 census, all 50 loader classes): the other 46 are
 --   stay-outs — proc arms (ancestral awakening, earth shield,
 --   earthliving, flametongue, frozen power, glyphs, imp water shield,
 --   lightning overload/shield, nature guardian, shamanistic rage,
 --   spirit hunt, static shock, tidal force, t3 6p, t8/t9/t10 bonuses,
---   windfury), absorb/calc arms (astral shift, shadow ward twin,
---   rend twin), SpellScript-only (bloodlust, chain heal, cleansing
+--   windfury), absorb/calc arms (shadow ward twin,
+--   rend twin), SpellScript-only (chain heal, cleansing
 --   pulse, earthen power, fire nova, healing/mana spring/tide totem,
 --   heroism, lava lash, stoneclaw, thunderstorm), AfterDispel (flame
 --   shock), summon-slot arms (sentry totem, totemic mastery — no
 --   totem-slot bridge; only the PET slot is modeled), and the t3 8p
 --   self-remove (family-flag GetAuraEffect overload unbridged).
---   Astral shift + astral shift aura are proc/absorb, not the visual
---   dummy above.
+--   Astral shift aura is proc, not the visual dummy above; the 51474
+--   absorb leg is Go-ported above.
 
 local SPELL_SHAMAN_EARTHBIND_TOTEM = 6474 -- spell_shaman.cpp:460 (class spell_sha_earthbind_totem)
 local SPELL_SHAMAN_STORM_EARTH_AND_FIRE = 51483 -- spell_shaman.cpp:62

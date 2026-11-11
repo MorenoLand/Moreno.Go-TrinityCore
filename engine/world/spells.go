@@ -16640,6 +16640,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 14185 && effectIndex == 0 && len(hitTargets) > 0 {
 						s.preparationDummyEffect()
 					}
+					// spell_rog_shiv::HandleDummy
+					// (spell_rogue.cpp:914-920): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — the caster casts Shiv
+					// Triggered (5940) on the hit unit, triggered. The
+					// Load gate (caster is a player) is implicit: this
+					// is the player cast path. Fires once per effect
+					// over the hit targets (C++ fires per hit target).
+					// DORMANT until Spell.dbc ships the 5938 record.
+					if spellID == 5938 && effectIndex == 0 && len(hitTargets) > 0 {
+						for _, guid := range hitTargets {
+							if guid == 0 {
+								continue
+							}
+							s.castSpellDirect(effCtx, 5940, guid)
+						}
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// spell_hun_readiness::HandleDummy
 					// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY
@@ -19612,6 +19628,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// ends here.
 		s.scourgeStrikeAfterHit(effCtx, hitTargets, scourgeStrikeMultipliers, hitDamage)
 		s.divineStormAfterHit(ctx, spellID, spell, casterLevel, hitTargets, hitDamage)
+		s.bloodlustAfterHit(ctx, spellID, hitTargets)
 		for _, miss := range missStatus {
 			hitDamage.phase = spellHitPhaseAfterHit
 			hitDamage.currentTarget = miss.TargetGUID
@@ -28276,6 +28293,37 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// 14185 record.
 					if spellID == 14185 && effectIndex == 0 && len(effectGUIDs) > 0 {
 						s.preparationDummyEffect()
+					}
+					// spell_rog_shiv::HandleDummy
+					// (spell_rogue.cpp:914-920): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — the triggered-cast leg,
+					// gated on a miss-filtered hit like the silverbrook
+					// leg above. DORMANT until Spell.dbc ships the
+					// 5938 record.
+					if spellID == 5938 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						for _, guid := range effectGUIDs {
+							if guid == 0 {
+								continue
+							}
+							s.castSpellDirect(ctx, 5940, guid)
+						}
+					}
+					// spell_sha_ancestral_awakening_proc::HandleDummy
+					// (spell_shaman.cpp:169-180): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit unit, the caster
+					// casts Ancestral Awakening (Proc) 52752 on it,
+					// triggered, with BP0 = GetEffectValue(). The
+					// FilterTargets arm (lowest-health-pct raid target
+					// only, when 2+ targets) has no Go hook: the player
+					// path has no area-target-select filter site, so
+					// the leg fires on each DBC-resolved hit target.
+					// DORMANT until Spell.dbc ships the 52759 record.
+					// No client-path twin: 52759 is only ever cast
+					// triggered from the ancestral awakening aura proc
+					// (spell_shaman.cpp:124-129), never from a client
+					// cast (54171 divine-storm precedent).
+					if spellID == 52759 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						s.ancestralAwakeningProcDummyEffect(ctx, spell, effectIndex, casterLevel, effectGUIDs)
 					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
@@ -52621,6 +52669,48 @@ func (s *session) divineStormAfterHit(ctx context.Context, spellID uint32, spell
 		}
 		bp := int32(int64(hitDamage.damageByTarget[guid]) * int64(healPct) / 100)
 		s.castSpellDirectWithBasePoint(ctx, 54171, s.playerGUID, uint32(bp))
+	}
+}
+
+// bloodlustAfterHit is spell_sha_bloodlust
+// (spell_shaman.cpp:313-319): the AfterHit arm — per hit target, the
+// target casts Sated (57724) on itself, triggered. Go casts from the
+// player onto the target instead: the aura lands on the same unit and
+// the RemoveInvalidTargets check is caster-agnostic. Fires once per hit
+// target, after the Lua AfterHit handlers above; miss entries take no
+// cast (C++ GetHitUnit() nil skips). The RemoveInvalidTargets arm (drop
+// Sated holders from the raid list) has no Go hook: the player path has
+// no area-target-select filter site. DORMANT until Spell.dbc ships the
+// 2825 record.
+func (s *session) bloodlustAfterHit(ctx context.Context, spellID uint32, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || spellID != 2825 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		s.castSpellDirect(ctx, 57724, guid)
+	}
+}
+
+// ancestralAwakeningProcDummyEffect is spell_sha_ancestral_awakening_proc
+// (spell_shaman.cpp:169-180): the EFFECT_0 DUMMY OnEffectHitTarget arm —
+// per hit unit, the caster casts Ancestral Awakening (Proc) 52752 on it,
+// triggered, with BP0 = GetEffectValue() (the DBC effect-0 value at the
+// caster's level, the divineStormDummyEffect CalcValueForLevel twin; a
+// zero value still casts with BP0 0, like C++). DORMANT until Spell.dbc
+// ships the 52759 record.
+func (s *session) ancestralAwakeningProcDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || effectIndex != 0 || len(spell.Effects) == 0 || len(hitTargets) == 0 {
+		return
+	}
+	value := spell.Effects[0].CalcValueForLevel(spell, casterLevel)
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		s.castSpellDirectWithBasePoint(ctx, 52752, guid, uint32(value))
 	}
 }
 

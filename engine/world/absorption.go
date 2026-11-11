@@ -402,17 +402,21 @@ func (s *Server) tickCasterAbsorbIgnorePctForSpell(casterSess *session, casterGU
 // the aura spell's own effect-0 CalcValue at the caster's level,
 // 49145 Spell Deflection (spell_dk.cpp:2338-2340), where the same
 // effect-0 CalcValue is the absorb pct gated on a parry roll (the roll
-// itself lives in scriptAbsorbHit, not here), and 52284 Will of the
+// itself lives in scriptAbsorbHit, not here), 52284 Will of the
 // Necropolis (spell_dk.cpp:2696-2701), where the same effect-0 CalcValue
 // is the absorb pct gated on the target's health vs the matching-rank
 // talent spell's min-HP pct (the gate itself lives in scriptAbsorbHit,
-// not here). A zero or unreadable pct falls through to the generic pool leg.
+// not here), and 51474 Astral Shift (spell_shaman.cpp:205-231), where
+// the same effect-0 CalcValue is the absorb pct gated on the
+// stun/fear/silence flags (the gate itself lives in astralShiftAbsorbHit,
+// not here — scriptAbsorbHit has no flag/mechanic inputs). A zero or
+// unreadable pct falls through to the generic pool leg.
 func (s *Server) scriptAbsorbPct(spellID uint32, casterLevel uint8) (uint32, bool) {
 	if s == nil || s.Data == nil {
 		return 0, false
 	}
 	switch spellID {
-	case 50462, 50461, 49145, 52284:
+	case 50462, 50461, 49145, 52284, 51474:
 	default:
 		return 0, false
 	}
@@ -586,6 +590,50 @@ func (s *session) ardentDefenderAbsorbHit(aura *activeAura, remainingDamage uint
 		return uint32(uint64(damageToReduce) * uint64(absorbPct) / 100), false, true
 	}
 	return 0, false, true
+}
+
+// astralShiftAbsorbHit mirrors spell_sha_astral_shift::Absorb
+// (spell_shaman.cpp:224-231): the SCHOOL_ABSORB script leg for 51474.
+// The pool is unlimited (CalculateAmount sets -1), so the amount is
+// never consumed; the per-hit absorb is CalculatePct(damage, absorbPct),
+// the DBC effect-0 CalcValue read by scriptAbsorbPct. The gate is the
+// C++ flag check: the target is fleeing or silenced, or stunned with a
+// stun-mechanic aura (HasAuraWithMechanic, the auraSpellMechanicMask
+// twin — the absorb path carries no ctx for targetHasAuraWithMechanic).
+// A gate that does not trip absorbs nothing with the pool untouched —
+// the (0, false, true) return, like the failed parry roll in
+// scriptAbsorbHit — so the generic pool leg below must not run. Player
+// path only: Astral Shift is a player talent, and the creature absorb
+// loop has no per-spell gate site (ardent-defender precedent). DORMANT
+// until Spell.dbc ships the 51474 record.
+func (s *session) astralShiftAbsorbHit(aura *activeAura, remainingDamage uint32) (uint32, bool, bool) {
+	if s == nil || s.player == nil || aura == nil || aura.SpellID != 51474 || remainingDamage == 0 {
+		return 0, false, false
+	}
+	if s.player.UnitFlags&(unitFlagFleeing|unitFlagSilenced) == 0 {
+		if s.player.UnitFlags&unitFlagStunned == 0 {
+			return 0, false, true
+		}
+		hasStunMechanic := false
+		for _, a := range s.activeAuras {
+			if a != nil && !a.Stopped && s.auraSpellMechanicMask(a)&(uint32(1)<<mechanicStun) != 0 {
+				hasStunMechanic = true
+				break
+			}
+		}
+		if !hasStunMechanic {
+			return 0, false, true
+		}
+	}
+	pct, ok := s.server.scriptAbsorbPct(aura.SpellID, aura.CasterLevel)
+	if !ok {
+		return 0, false, false
+	}
+	absorbThis := uint32(uint64(remainingDamage) * uint64(pct) / 100)
+	if absorbThis > remainingDamage {
+		absorbThis = remainingDamage
+	}
+	return absorbThis, false, true
 }
 
 // guardianSpiritAbsorbHit mirrors spell_pri_guardian_spirit::Absorb
@@ -764,6 +812,14 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				// nothing, like C++ — there is no all-schools fallback.
 				if aura.MiscValue&int32(schoolMask) != 0 {
 					if absorbThis, depleted, ok := s.ardentDefenderAbsorbHit(aura, remainingDamage); ok {
+						remainingDamage -= absorbThis
+						absorbed += absorbThis
+						if depleted {
+							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+						}
+						continue
+					}
+					if absorbThis, depleted, ok := s.astralShiftAbsorbHit(aura, remainingDamage); ok {
 						remainingDamage -= absorbThis
 						absorbed += absorbThis
 						if depleted {
