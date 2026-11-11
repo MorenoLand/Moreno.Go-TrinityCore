@@ -54,6 +54,39 @@ end
 
 RegisterAuraEvent(SPELL_HUNTER_ASPECT_OF_THE_BEAST, 2, aspectOfTheBeastApply)
 
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_cobra_strikes_triggered::HandleStackDrop
+--   (spell_hunter.cpp:361-364): OnEffectProc, EFFECT_0
+--   SPELL_AURA_ADD_FLAT_MODIFIER — each proc drops one stack.
+--   C++ calls no PreventDefaultAction; the default leg is a no-op
+--   (no DBC trigger spell), so the handler returns nothing. The Go
+--   proc loop reaches the aura only because this tick added
+--   ADD_FLAT_MODIFIER to isProcTriggerAuraType (procs.go; TC
+--   SpellMgr.cpp:1716 lists it in isTriggerAura). ModStackAmount(-1)
+--   removes the aura at 0 stacks; Lua SetStackAmount does not, so the
+--   last stack removes explicitly. DORMANT until Spell.dbc ships the
+--   53257 proc entry.
+local SPELL_HUNTER_COBRA_STRIKES_TRIGGERED = 53257 -- spell_hunter.cpp:351
+
+local function cobraStrikesTriggeredProc(event, aura, target, actor, procTarget, damage)
+    local stacks = aura:GetStackAmount()
+    if stacks <= 1 then
+        aura:Remove()
+    else
+        aura:SetStackAmount(stacks - 1)
+    end
+end
+
+RegisterAuraEvent(SPELL_HUNTER_COBRA_STRIKES_TRIGGERED, 6, cobraStrikesTriggeredProc)
+
+-- NOT IN LUA: spell_hun_glyph_of_arcane_shot (56841, spell_hunter.cpp:410-467)
+-- lives in Go (procs.go): the CheckProc sting gate runs before the chance
+-- roll and the HandleProc mana-refund arm (61389, BP0 = pct of the triggering
+-- spell's power cost) sits in the session proc loop. Lua cannot port it: the
+-- ev6 hook carries no proc-spell object (no power-cost read) and has no
+-- family-flag aura scan. See the procs.go comments for the DORMANT note and
+-- the non-triggered-cast deviation.
+
 -- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
 --   spell_hun_ascpect_of_the_viper::OnApply/OnRemove
 --   (spell_hunter.cpp:194-206): EFFECT_0 SPELL_AURA_OBS_MOD_POWER,
@@ -67,9 +100,12 @@ RegisterAuraEvent(SPELL_HUNTER_ASPECT_OF_THE_BEAST, 2, aspectOfTheBeastApply)
 --   is not a proc-trigger aura type (procs.go:1025), so the player
 --   proc loop never fires ev6 for 34074; the mana math also needs
 --   ranged attack time (no GetAttackTime bridge) and the glyph
---   56851 effect amount. The Go periodic OBS_MOD_POWER tick
---   (spells.go:41749) regenerates amount% of max power per tick
---   instead, a pre-existing approximation.
+--   56851 effect amount. In TC the proc works only via a spell_proc
+--   DB row (OBS_MOD_POWER is not a TC trigger aura either,
+--   SpellMgr.cpp:1686-1729), and Go has no spell_proc table — the leg
+--   needs a spell_proc import, not a Lua handler. The Go periodic
+--   OBS_MOD_POWER tick (spells.go:41749) regenerates amount% of max
+--   power per tick instead, a pre-existing approximation.
 local SPELL_HUNTER_ASPECT_OF_THE_VIPER = 34074 -- spell_hunter.cpp:37
 local SPELL_HUNTER_VIPER_ATTACK_SPEED = 60144 -- spell_hunter.cpp:61
 local SPELL_HUNTER_VICIOUS_VIPER = 61609 -- spell_hunter.cpp:60

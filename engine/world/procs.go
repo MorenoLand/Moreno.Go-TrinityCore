@@ -295,6 +295,53 @@ func (s *session) hungeringColdProcAllowed(ev procEventInfo) bool {
 	return ev.eventSpell.DispelType != dispelDisease
 }
 
+// glyphOfArcaneShotProcAllowed mirrors
+// spell_hun_glyph_of_arcane_shot::CheckProc (spell_hunter.cpp:430-451):
+// the proc target must carry a sting cast by the holder — hunter family,
+// SpellFamilyFlags HasFlag(0xC000, 0x1080) (Util.h:401-404, OR across
+// parts: Serpent, Viper, Scorpid, Wyvern Sting). The aura scan is the
+// chimera-shot scan (spells.go) over the hit unit's auras, candidates
+// collected under the aura lock and DBC-read after it.
+func (s *session) glyphOfArcaneShotProcAllowed(targetGUID uint64, casterGUID uint64) bool {
+	if s == nil || s.server == nil || s.server.Data == nil || targetGUID == 0 {
+		return false
+	}
+	var candidates []uint32
+	if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		targetSess.castMu.Lock()
+		for _, aura := range targetSess.activeAuras {
+			if aura == nil || aura.CasterGUID != casterGUID {
+				continue
+			}
+			candidates = append(candidates, aura.SpellID)
+		}
+		targetSess.castMu.Unlock()
+	} else if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil {
+		key := creatureAuraKeyForMotion(motion)
+		s.server.auraMu.Lock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			if aura == nil || aura.CasterGUID != casterGUID {
+				continue
+			}
+			candidates = append(candidates, aura.SpellID)
+		}
+		s.server.auraMu.Unlock()
+	} else {
+		return false
+	}
+	for _, spellID := range candidates {
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		if spell.SpellFamilyName == spellFamilyHunter && len(spell.SpellFamilyFlags) >= 2 &&
+			(spell.SpellFamilyFlags[0]&0xC000 != 0 || spell.SpellFamilyFlags[1]&0x1080 != 0) {
+			return true
+		}
+	}
+	return false
+}
+
 // isProcOnCooldown checks whether an internal cooldown (ICD) is active for the given proc ID.
 func (s *session) isProcOnCooldown(procID uint32) bool {
 	if s == nil || s.procICD == nil {
@@ -1020,12 +1067,17 @@ const spellVampiricAura = 20810
 // C++ HandleProc arm fires a spell, damage, or a charge-jump
 // (SpellMgr.cpp:1686-1729, SpellAuraEffects.cpp:1010-1043): dummy,
 // proc-trigger-spell, proc-trigger-damage, proc-trigger-spell-with-value,
-// and the raid-proc-from-charge pair. The remaining isTriggerAura types
-// (reflect, stealth-break) have no Go HandleProc arm yet.
+// and the raid-proc-from-charge pair, plus ADD_FLAT_MODIFIER
+// (SpellMgr.cpp:1716 lists it in isTriggerAura): its only C++ arm is the
+// script hook — the Cobra Strikes stack drop (spell_hunter.cpp:361-364) —
+// and the default leg no-ops on the TriggerSpell == 0 gate below, so the
+// type enters the loop for its hook alone. The remaining isTriggerAura
+// types (reflect, stealth-break, ADD_PCT_MODIFIER) have no Go HandleProc
+// arm yet.
 func isProcTriggerAuraType(auraType uint32) bool {
 	switch auraType {
 	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue,
-		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue:
+		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier:
 		return true
 	}
 	return false
@@ -3208,6 +3260,15 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 63611 && !procActorIsPlayerGUID(ev.actorGUID) {
 			continue
 		}
+		// spell_hun_glyph_of_arcane_shot::CheckProc
+		// (spell_hunter.cpp:430-451): the glyph only procs when the
+		// proc target carries a sting cast by the holder (Serpent,
+		// Viper, Scorpid, Wyvern: hunter family, flags 0xC000/0x1080).
+		// The gate runs before the chance roll, like the C++ CheckProc
+		// in GetProcEffectMask (70656 precedent above).
+		if auraSpell.ID == 56841 && !s.glyphOfArcaneShotProcAllowed(triggerTargetGUID, s.playerGUID) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3469,6 +3530,30 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 						}
 					}
 				}
+			}
+			if auraSpell.ID == 56841 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_hun_glyph_of_arcane_shot::HandleProc
+				// (spell_hunter.cpp:454-468): PreventDefaultAction; the
+				// refunded mana is pct of the triggering spell's power
+				// cost by the effect amount, cast as 61389 on the holder
+				// with BP0. The CheckProc sting gate ran before the
+				// chance roll above. No Lua ev6 twin: the hook carries
+				// no proc-spell object, so Lua cannot read the
+				// triggering cost, and it has no family-flag aura scan.
+				// DORMANT until Spell.dbc ships the 56841 proc entry.
+				// C++ casts 61389 non-triggered ("is this intended?"
+				// in the source); Go has no non-triggered direct-cast
+				// twin, so the triggered twin rides
+				// castSpellDirectWithBasePoint (the 43714 precedent).
+				if ev.eventSpell == nil {
+					continue
+				}
+				mana := int64(s.calculateSpellPowerCost(*ev.eventSpell)) * int64(scriptProcEffAmount(aura, i)) / 100
+				if mana < 0 {
+					mana = 0
+				}
+				s.castSpellDirectWithBasePoint(ctx, 61389, s.playerGUID, uint32(mana))
+				continue
 			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
