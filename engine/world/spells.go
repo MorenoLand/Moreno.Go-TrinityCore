@@ -20588,16 +20588,25 @@ func (srv *Server) spellBonusData(spellID uint32) (spellBonusEntry, bool) {
 	return e, ok
 }
 
-// spellMaxTicks mirrors SpellInfo::GetMaxTicks (SpellInfo.cpp:3108): the
-// periodic-aura effect's tick count = duration / amplitude, skipping infinite
-// periodics, +1 with ATTR5_START_PERIODIC_AT_APPLY. The last periodic effect
-// wins, matching the C++ assignment.
+// spellMaxTicks is the session twin of serverSpellMaxTicks below.
 func (s *session) spellMaxTicks(spell wotlk.Spell) uint32 {
-	var total uint32
-	if s.server == nil || s.server.Data == nil {
+	if s.server == nil {
 		return 0
 	}
-	dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, 1)
+	return s.server.serverSpellMaxTicks(spell)
+}
+
+// serverSpellMaxTicks mirrors SpellInfo::GetMaxTicks (SpellInfo.cpp:3108): the
+// periodic-aura effect's tick count = duration / amplitude, skipping infinite
+// periodics, +1 with ATTR5_START_PERIODIC_AT_APPLY. The last periodic effect
+// wins, matching the C++ assignment. The creature proc path (boss_ai.go)
+// reuses it exactly — the session twin delegates here.
+func (s *Server) serverSpellMaxTicks(spell wotlk.Spell) uint32 {
+	var total uint32
+	if s == nil || s.Data == nil {
+		return 0
+	}
+	dur, ok, err := s.Data.SpellDuration(spell.DurationIndex, 1)
 	if err != nil || !ok || dur <= 0 {
 		return 0
 	}
@@ -35403,6 +35412,16 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					break
 				}
 			}
+			// spell_pri_guardian_spirit::CalculateAmount
+			// (spell_priest.cpp:552-558): the self-cast twin of the
+			// applyAuraToTarget leg — EFFECT_1's amount is unlimited
+			// (-1). This loop only computes amounts for the first aura
+			// effect, so the -1 lands directly on Amounts[1] instead
+			// of through the rolled computation (the 1038 leg's
+			// structural note); the record's Amount stays EFFECT_0's.
+			if spellID == 47788 && effectMask&(1<<1) != 0 {
+				amounts[1] = -1
+			}
 			if mask, mountMisc, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(sp); mountedFlight {
 				effectMask, auraType, miscValue = mask, spellAuraMounted, mountMisc
 				amounts, baseAmounts = mountAmounts, mountBaseAmounts
@@ -38508,6 +38527,15 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
+	}
+	// spell_pri_guardian_spirit::CalculateAmount
+	// (spell_priest.cpp:552-558): DoEffectCalcAmount on EFFECT_1
+	// SPELL_AURA_SCHOOL_ABSORB sets the absorption amount to unlimited
+	// (-1). Adjusted here, before the player/creature split, so both
+	// branches and both merge arms take the -1 amount; the uint32 wrap
+	// is exact two's-complement for the negative DBC base.
+	if spell.ID == 47788 && effIndex == 1 && eff.Aura == SpellAuraSchoolAbsorb {
+		amount = ^uint32(0)
 	}
 	mountEffectMask, mountMiscValue, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell)
 

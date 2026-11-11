@@ -588,6 +588,93 @@ func (s *session) ardentDefenderAbsorbHit(aura *activeAura, remainingDamage uint
 	return 0, false, true
 }
 
+// guardianSpiritAbsorbHit mirrors spell_pri_guardian_spirit::Absorb
+// (spell_priest.cpp:560-573): the SCHOOL_ABSORB script leg for 47788.
+// healPct is the EFFECT_1 CalcValue read at Load (no-level CalcValue,
+// SpellInfo.cpp:402) — the DBC heal pct, not the applied amount. A
+// non-lethal hit absorbs nothing and leaves the aura in place; a lethal
+// hit absorbs the whole remaining damage, removes the aura (the depleted
+// flag feeds the exhaustedSpells pass, which removes with
+// AURA_REMOVE_BY_ENEMY_SPELL like C++), and the target casts Guardian
+// Spirit Heal (48153) on itself with BP0 = healPct% of max health. The
+// pool is unlimited (CalculateAmount sets -1, see spells.go), so the leg
+// never reports a partial consume and the generic pool leg must never run
+// for this aura — handled is true whenever the DBC reads, the
+// scriptAbsorbHit convention. The school gate reads the absorb effect's
+// own MiscValue from the DBC (Unit.cpp:1881): the record's MiscValue
+// belongs to EFFECT_0 (the +40% healing-received aura), not the absorb.
+// The record's AuraType is EFFECT_0's too, so this leg is tried ahead of
+// the 69 leg, not inside it. C++ casts the heal with TRIGGERED_FULL_MASK;
+// Go rides the direct-cast path like every script cast, and the cast
+// carries context.Background() because the absorb funnel has no request
+// context (the ardentDefender precedent). Returns (absorb, depleted,
+// handled).
+func (s *session) guardianSpiritAbsorbHit(aura *activeAura, remainingDamage uint32, schoolMask uint8) (uint32, bool, bool) {
+	if s == nil || s.player == nil || aura == nil || aura.SpellID != 47788 || remainingDamage == 0 {
+		return 0, false, false
+	}
+	if s.server == nil || s.server.Data == nil {
+		return 0, false, false
+	}
+	spell, found, err := s.server.Data.Spell(47788)
+	if err != nil || !found || len(spell.Effects) < 2 || spell.Effects[1].Aura != SpellAuraSchoolAbsorb {
+		return 0, false, false
+	}
+	if spell.Effects[1].MiscValue&int32(schoolMask) == 0 {
+		return 0, false, false
+	}
+	healPct := spell.Effects[1].CalcValue()
+	if healPct <= 0 {
+		return 0, false, false
+	}
+	health := s.player.Health
+	maxHealth := s.player.MaxHealth
+	if maxHealth == 0 || health == 0 {
+		return 0, false, true
+	}
+	if remainingDamage < health {
+		return 0, false, true
+	}
+	healAmount := uint32(uint64(maxHealth) * uint64(healPct) / 100)
+	s.castSpellDirectWithBasePoint(context.Background(), 48153, s.playerGUID, healAmount)
+	return remainingDamage, true, true
+}
+
+// guardianSpiritCreatureAbsorbHit is the creature-side twin of
+// guardianSpiritAbsorbHit: same lethal-only absorb, same 48153 self-cast
+// via fireScriptProcCast (which resolves creature casters), same
+// AURA_REMOVE_BY_ENEMY_SPELL removal through the depleted flag. The heal
+// cast carries context.Background() because the absorb funnel has no
+// request context.
+func (s *Server) guardianSpiritCreatureAbsorbHit(key creatureAuraKey, aura *activeAura, remainingDamage uint32, schoolMask uint8, creatureHealth, creatureMaxHealth uint32) (uint32, bool, bool) {
+	if s == nil || key.GUID == 0 || aura == nil || aura.SpellID != 47788 || remainingDamage == 0 {
+		return 0, false, false
+	}
+	if s.Data == nil {
+		return 0, false, false
+	}
+	spell, found, err := s.Data.Spell(47788)
+	if err != nil || !found || len(spell.Effects) < 2 || spell.Effects[1].Aura != SpellAuraSchoolAbsorb {
+		return 0, false, false
+	}
+	if spell.Effects[1].MiscValue&int32(schoolMask) == 0 {
+		return 0, false, false
+	}
+	healPct := spell.Effects[1].CalcValue()
+	if healPct <= 0 {
+		return 0, false, false
+	}
+	if creatureMaxHealth == 0 || creatureHealth == 0 {
+		return 0, false, true
+	}
+	if remainingDamage < creatureHealth {
+		return 0, false, true
+	}
+	healAmount := uint32(uint64(creatureMaxHealth) * uint64(healPct) / 100)
+	s.fireScriptProcCast(context.Background(), key.Map, key.InstanceID, scriptProcCast{spellID: 48153, casterGUID: key.GUID, targetGUID: key.GUID, bp0: healAmount, bp0Set: true})
+	return remainingDamage, true, true
+}
+
 // applyAbsorptionShields applies active absorption shields (Power Word: Shield, Ice Barrier, etc.)
 // to mitigate incoming damage of the given school mask according to TrinityCore priority order.
 // Returns absorbed damage and remaining unabsorbed damage.
@@ -647,6 +734,14 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				break
 			}
 			if aura == nil || aura.Stopped || aura.Amount == 0 {
+				continue
+			}
+			if absorbThis, depleted, ok := s.guardianSpiritAbsorbHit(aura, remainingDamage, schoolMask); ok {
+				remainingDamage -= absorbThis
+				absorbed += absorbThis
+				if depleted {
+					exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+				}
 				continue
 			}
 
@@ -792,15 +887,23 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 				if remainingDamage == 0 {
 					break
 				}
+				var creatureHealth, creatureMaxHealth uint32
+				if motion != nil {
+					creatureHealth, creatureMaxHealth = motion.Health, motion.MaxHealth
+				}
+				if absorbThis, depleted, ok := s.guardianSpiritCreatureAbsorbHit(key, aura, remainingDamage, schoolMask, creatureHealth, creatureMaxHealth); ok {
+					remainingDamage -= absorbThis
+					absorbed += absorbThis
+					if depleted {
+						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+					}
+					continue
+				}
 				if aura.AuraType == SpellAuraSchoolAbsorb {
 					// C++ gates on the absorb effect's MiscValue
 					// (Unit.cpp:1881), not the aura spell's school — see
 					// the player leg above. 256 is not an absorb type.
 					if aura.MiscValue&int32(schoolMask) != 0 {
-						var creatureHealth, creatureMaxHealth uint32
-						if motion != nil {
-							creatureHealth, creatureMaxHealth = motion.Health, motion.MaxHealth
-						}
 						if absorbThis, depleted, ok := s.scriptAbsorbHit(aura, remainingDamage, -1, creatureHealth, creatureMaxHealth); ok {
 							remainingDamage -= absorbThis
 							absorbed += absorbThis

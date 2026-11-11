@@ -4473,6 +4473,90 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraSpell = 0
 				continue
 			}
+			if auraSpell.ID == 26169 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_aq_3p_bonus::HandleProc
+				// (spell_priest.cpp:159-173): PreventDefaultAction; on a
+				// heal proc the actor casts Oracular Heal (26170) on
+				// itself with BP0 = 10% of the heal — unless the actor
+				// healed itself, or the heal is null/zero. No Lua ev6
+				// twin: ev6 carries no heal amounts. DORMANT until
+				// Spell.dbc ships the 26169 proc entry; periodic /
+				// funnel / leech heal events carry no amounts in Go,
+				// so they skip here where C++ would fire with the tick
+				// amount (the 54937 precedent).
+				if ev.heal == 0 || ev.actorGUID == 0 || ev.actorGUID == triggerTargetGUID {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 26170, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.heal) * 10 / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 55677 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_glyph_of_dispel_magic::HandleProc
+				// (spell_priest.cpp:439-457): PreventDefaultAction; on a
+				// Dispel Magic (or Abolish Disease — both share spell
+				// icon 74) proc the actor casts Glyph of Dispel Magic
+				// Heal (56131) on the proc target with BP0 = the effect
+				// amount pct of the target's max health. The icon gate
+				// is the C++ SpellIconID check on the triggering spell;
+				// a dispel that dispels nothing still procs in C++, so
+				// there is no dispelled-count gate here. No Lua ev6
+				// twin: ev6 carries no proc spell or max health.
+				// DORMANT until Spell.dbc ships the 55677 proc entry.
+				if ev.eventSpell == nil || ev.eventSpell.SpellIconID != 74 || triggerTargetGUID == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				maxHealth, _, _, ok := s.server.procTargetVitals(s.player.Map, s.player.InstanceID, triggerTargetGUID)
+				if !ok || maxHealth == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 56131, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(uint64(maxHealth) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 55680 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_glyph_of_prayer_of_healing::HandleProc
+				// (spell_priest.cpp:480-501): PreventDefaultAction; on a
+				// heal proc the aura HOLDER casts Glyph of Prayer of
+				// Healing Heal (56161) on the proc target with BP0 = pct
+				// of the heal by the effect amount, divided by the
+				// triggered spell's max ticks. The zero-heal gate is the
+				// C++ null/zero-heal early return. No Lua ev6 twin: ev6
+				// carries no heal amounts. DORMANT until Spell.dbc ships
+				// the 55680 proc entry and the 56161 duration row; a
+				// missing 56161 row skips where C++ would assert (the
+				// 49194 precedent).
+				if ev.heal == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.server == nil || s.server.Data == nil {
+					continue
+				}
+				healSpell, found, err := s.server.Data.Spell(56161)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.spellMaxTicks(healSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.heal) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 56161, casterGUID: s.playerGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)

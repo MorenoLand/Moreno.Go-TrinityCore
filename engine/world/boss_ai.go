@@ -10909,6 +10909,77 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: bonusSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
 				continue
 			}
+			if auraSpell.ID == 26169 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_aq_3p_bonus::HandleProc
+				// (spell_priest.cpp:159-173): the creature-side twin
+				// of the procs.go leg — the actor casts Oracular Heal
+				// (26170) on itself with BP0 = 10% of the heal, unless
+				// the actor healed itself or the heal is null/zero.
+				// The creature loop carries no heal amounts, so ev.heal
+				// is 0 here and the leg skips exactly like the C++
+				// null/zero-heal early return; it fires only if a
+				// heal-carrying creature event is ever threaded (the
+				// 53651 precedent). DORMANT until Spell.dbc ships the
+				// 26169 proc entry.
+				if ev.heal == 0 || ev.actorGUID == 0 || ev.actorGUID == triggerTargetGUID {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 26170, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.heal) * 10 / 100), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 55677 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_glyph_of_dispel_magic::HandleProc
+				// (spell_priest.cpp:439-457): the creature-side twin
+				// of the procs.go leg — on a Dispel Magic / Abolish
+				// Disease proc (triggering spell icon 74) the actor
+				// casts Glyph of Dispel Magic Heal (56131) on the proc
+				// target with BP0 = the effect amount pct of the
+				// target's max health. DORMANT until Spell.dbc ships
+				// the 55677 proc entry.
+				if ev.eventSpell == nil || ev.eventSpell.SpellIconID != 74 || triggerTargetGUID == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				maxHealth, _, _, ok := s.procTargetVitals(m.Map, m.InstanceID, triggerTargetGUID)
+				if !ok || maxHealth == 0 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 56131, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(uint64(maxHealth) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 55680 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_glyph_of_prayer_of_healing::HandleProc
+				// (spell_priest.cpp:480-501): the creature-side twin
+				// of the procs.go leg — on a heal proc the aura HOLDER
+				// (the creature) casts Glyph of Prayer of Healing Heal
+				// (56161) on the proc target with BP0 = pct of the
+				// heal by the effect amount, divided by the triggered
+				// spell's max ticks. The creature loop carries no heal
+				// amounts, so ev.heal is 0 here and the leg skips
+				// exactly like the C++ null/zero-heal early return; a
+				// missing 56161 row skips where C++ would assert (the
+				// 49194 precedent). DORMANT until Spell.dbc ships the
+				// 55680 proc entry and the 56161 duration row.
+				if ev.heal == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.Data == nil {
+					continue
+				}
+				healSpell, found, err := s.Data.Spell(56161)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.serverSpellMaxTicks(healSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.heal) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 56161, casterGUID: m.GUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)

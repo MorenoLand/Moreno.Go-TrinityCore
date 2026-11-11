@@ -490,6 +490,14 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		// generic RandomResize cap below.
 		targets = s.glyphOfHolyLightFilterTargets(spell, targets)
 	}
+	if spell.ID == 64844 {
+		// spell_pri_divine_hymn::FilterTargets
+		// (spell_priest.cpp:400-412): the script hook fires inside
+		// SelectImplicitAreaTargets ahead of the MaxAffectedTargets cap
+		// (Spell.cpp:1290-1300), so the filter runs here, before the
+		// generic RandomResize cap below.
+		targets = s.divineHymnFilterTargets(spell, targets)
+	}
 	if maxTargets := spell.MaxTargets; maxTargets > 0 {
 		// Spell.cpp:1293 — cap to MaxAffectedTargets plus
 		// SPELL_AURA_MOD_MAX_AFFECTED_TARGETS aura modifiers, then
@@ -524,6 +532,47 @@ func (s *session) glyphOfHolyLightFilterTargets(spell wotlk.Spell, targets []uin
 			return s.glyphOfHolyLightTargetHealthPct(targets[a]) < s.glyphOfHolyLightTargetHealthPct(targets[b])
 		})
 		targets = targets[:maxTargets]
+	}
+	return targets
+}
+
+// divineHymnFilterTargets mirrors
+// spell_pri_divine_hymn::FilterTargets (spell_priest.cpp:400-412):
+// RaidCheck drops every target not in raid with the caster (the caster
+// itself always passes), then when the list still exceeds 3 it is sorted
+// lowest-health-first (Trinity::HealthPctOrderPred) and resized to 3.
+// The raid test rides friendlyRefererScope's inRaid, so creatures owned
+// by raid members pass like C++'s owner resolution, and a solo caster
+// keeps only itself. The sort reuses the glyphOfHolyLight health reader.
+// The 3 is the C++ hardcoded maxTargets, not the DBC MaxTargets the
+// generic cap below applies after. DORMANT until Spell.dbc ships the
+// 64844 record.
+func (s *session) divineHymnFilterTargets(spell wotlk.Spell, targets []uint64) []uint64 {
+	scope := s.friendlyRefererScope(s.playerGUID)
+	if scope.inRaid == nil {
+		return targets
+	}
+	kept := targets[:0]
+	for _, guid := range targets {
+		cand := friendlyCandidate{guid: guid}
+		if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			cand.isPlayer = true
+		} else if m := s.findCreatureMotion(guid); m != nil {
+			cand.ownerGUID = m.OwnerGUID
+			if cand.ownerGUID == 0 {
+				cand.ownerGUID = m.CharmOwnerGUID
+			}
+		}
+		if scope.inRaid(cand) {
+			kept = append(kept, guid)
+		}
+	}
+	targets = kept
+	if len(targets) > 3 {
+		sort.SliceStable(targets, func(a, b int) bool {
+			return s.glyphOfHolyLightTargetHealthPct(targets[a]) < s.glyphOfHolyLightTargetHealthPct(targets[b])
+		})
+		targets = targets[:3]
 	}
 	return targets
 }
