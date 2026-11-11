@@ -137,12 +137,13 @@
 -- EVENT_PATHING_AROUND_PLATFORM; no MoveCirclePath bridge),
 -- not dispatch. MovementInform
 -- (POINT_LAND_P_ONE / cyclic movement points) — the vortex
--- takeoff-land points are PORTED (below), and POINT_LAND_P_ONE
--- is PORTED this tick (type-16 arrival, below); the rest has no
--- motion bridge. boss_malygos.cpp:720 POINT_IDLE_P_THREE
--- SetControlled(true, UNIT_STATE_ROOT) rides that same unbridged
--- MovementInform: stays out, except the vortex points (PORTED
--- below). DamageTaken is only the lethal clamp (damage > health &&
+-- takeoff-land points are PORTED (below), POINT_LAND_P_ONE
+-- is PORTED this tick (type-16 arrival, below), and
+-- POINT_NEAR_RANDOM_PORTAL_P_NONE is PORTED 2026-11-11 (below);
+-- the rest has no motion bridge. boss_malygos.cpp:720
+-- POINT_IDLE_P_THREE SetControlled(true, UNIT_STATE_ROOT) rides
+-- that same unbridged MovementInform: stays out, except the
+-- vortex + random-portal points (PORTED below). DamageTaken is only the lethal clamp (damage > health &&
 -- _phase != PHASE_THREE -> damage = health - 1); ev9 IS bridged
 -- pre-damage with a rewrite (lua_creature_events.go:6955) but the
 -- arm stays out — no phase model to tell PHASE_THREE. UpdateAI (phase-one arcane event machine,
@@ -234,9 +235,11 @@
 -- platform boom visual + event, wyrmrest skytalon red-dragon
 -- buddy summon + ride trigger, surge-of-power 25 warning
 -- target selection + the surge itself, alexstrasza gift beam
--- + gift beam visual) — no SpellScript bridge (the varos
--- precedents); AuraScript OnApply/OnRemove ride RegisterAuraEvent
--- (ported in this file, below). The SpellScript legs join the
+-- + gift beam visual) — SpellScript legs ride RegisterSpellEvent
+-- (ev1/ev2/ev3/ev4/ev5/ev7 live, runtime.go:601-607; the varos
+-- "no SpellScript bridge" claim is stale, retired 2026-11-11);
+-- AuraScript OnApply/OnRemove ride RegisterAuraEvent (ported in
+-- this file, below). The SpellScript legs join the
 -- standing queues, except the gift
 -- beam visual OnApply (PORTED tick 204, below), the portal
 -- beam (ported, below), and the vortex visual OnRemove
@@ -338,6 +341,17 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- Per-key cancel twin of EventMap::CancelEventGroup for one key
+-- (the portal driver keys below); cancelTimers above is the
+-- whole-map twin used by Reset/JustDied.
+local function cancelTimer(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
+end
+
 -- Per-GUID vortex machine state: executing is the C++ _executingVortex
 -- latch (set at EVENT_VORTEX, cleared at the land-after-vortex
 -- arrival); landed guards the land body so the ev3 removal handler
@@ -351,6 +365,70 @@ local function getVortexState(guid)
         vortexState[guid] = state
     end
     return state
+end
+
+local SPELL_RANDOM_PORTAL = 56047 -- boss_malygos.cpp:101
+local SPELL_PORTAL_BEAM = 56046 -- boss_malygos.cpp:102
+local POINT_NEAR_RANDOM_PORTAL_P_NONE = 1 -- Movements enum (boss_malygos.cpp:162)
+local NPC_PORTAL_TRIGGER = 30118 -- eye_of_eternity.h:51
+
+-- C++ boss_malygosAI::UpdateAI EVENT_START_FIRST_RANDOM_PORTAL /
+-- EVENT_RANDOM_PORTAL (boss_malygos.cpp:756-758): DoCastAOE
+-- (SPELL_RANDOM_PORTAL, { SPELLVALUE_MAX_TARGETS, 1 }). Twin: the
+-- DoCastAOE self-cast (creature:CastSpell(creature, spell));
+-- SPELLVALUE_MAX_TARGETS has no bridge, so the 1-target cap is not
+-- modeled — the cast is dormant until Spell.dbc ships in any case.
+-- PORTED 2026-11-11 (row-401 follow-up).
+local function firstRandomPortalTick(creature, guid)
+    creature:CastSpell(creature, SPELL_RANDOM_PORTAL)
+end
+
+-- C++ EVENT_STOP_PORTAL_BEAM (boss_malygos.cpp:759-761):
+-- InterruptNonMeleeSpells(true). The Lua bridge takes no args
+-- (lua_creature_events.go:2320) — the delayed flag has no model;
+-- the interrupt itself is the leg. PORTED 2026-11-11.
+local function stopPortalBeamTick(creature, guid)
+    creature:InterruptNonMeleeSpells()
+end
+
+-- C++ boss_malygosAI::MovementInform POINT_NEAR_RANDOM_PORTAL_P_NONE
+-- (boss_malygos.cpp:665-672): the nearest portal trigger in 31 yd
+-- (alive-only — the Go bridge filters dead motions) re-arms the
+-- intro machine: EVENT_STOP_PORTAL_BEAM in 10s + EVENT_RANDOM_PORTAL
+-- in 14s, both group 1 PHASE_NOT_STARTED (the keyed schedule keeps
+-- the C++ single-pending invariant), then DoCast(portal,
+-- SPELL_PORTAL_BEAM). PORTED 2026-11-11 (row-401 follow-up).
+local function portalArrivalTick(creature, guid)
+    local portal = creature:FindNearestCreature(NPC_PORTAL_TRIGGER, 31.0)
+    if portal == nil then
+        return
+    end
+    schedule(guid, "stopBeam", 10000, function()
+        stopPortalBeamTick(creature, guid)
+    end)
+    schedule(guid, "randomPortal", 14000, function()
+        firstRandomPortalTick(creature, guid)
+    end)
+    creature:CastSpell(portal, SPELL_PORTAL_BEAM)
+end
+
+-- Random-resize twin of Trinity::Containers::RandomResize: keeps a
+-- uniform random subset of n from list (Fisher-Yates partial).
+-- Shared by the arcane-storm and scion barrage filters below.
+local function randomResize(list, n)
+    local count = #list
+    if count <= n then
+        return list
+    end
+    for i = 1, n do
+        local j = math.random(i, count)
+        list[i], list[j] = list[j], list[i]
+    end
+    local out = {}
+    for i = 1, n do
+        out[i] = list[i]
+    end
+    return out
 end
 
 -- C++ spell_malygos_vortex_visual::OnRemove (boss_malygos.cpp:1800-1829,
@@ -508,9 +586,10 @@ local function malygosDoAction(event, creature, action)
     if action == ACTION_LAND_ENCOUNTER_START then
         -- C++ boss_malygosAI::DoAction ACTION_LAND_ENCOUNTER_START
         -- (boss_malygos.cpp:460-472): CancelEventGroup(1) — the
-        -- group-1 events (EVENT_SAY_INTRO + EVENT_START_FIRST_RANDOM_PORTAL,
-        -- PHASE_NOT_STARTED) are not scheduled in Lua, so the cancel
-        -- is vacuous here — then MoveLand to the near point of the
+        -- group-1 portal keys are cancelled per-key below (the
+        -- intro portal machine is ported this tick); EVENT_SAY_INTRO
+        -- is still unscheduled in Lua, so no cancel is needed for
+        -- it — then MoveLand to the near point of the
         -- Alexstrasza bunny (30 yd at the bunny->Malygos angle,
         -- GetNearPoint2D twin via math.atan2/cos/sin, bunny Z),
         -- SetImmuneToAll(false), DoZoneInCombat, and the 7s
@@ -537,6 +616,9 @@ local function malygosDoAction(event, creature, action)
         creature:SetImmuneToAll(false)
         creature:DoZoneInCombat()
         local guid = creature:GetGUIDLow()
+        cancelTimer(guid, "firstPortal")
+        cancelTimer(guid, "stopBeam")
+        cancelTimer(guid, "randomPortal")
         schedule(guid, "landStartEncounter", 7000, function()
             landStartEncounterTick(creature, guid)
         end)
@@ -620,7 +702,9 @@ local function malygosMovementInform(_, creature, moveType, id)
         return
     end
     local guid = creature:GetGUIDLow()
-    if id == POINT_LIFT_IN_AIR_P_ONE then
+    if id == POINT_NEAR_RANDOM_PORTAL_P_NONE then
+        portalArrivalTick(creature, guid)
+    elseif id == POINT_LIFT_IN_AIR_P_ONE then
         creature:SetDisableGravity(true)
         schedule(guid, "moveToVortex", 1, function()
             moveToVortexPoint(creature, guid)
@@ -766,6 +850,15 @@ local function malygosReset(event, creature)
         creature:DoAction(ACTION_HANDLE_RESPAWN)
     end
     creature:SetReactState(0) -- REACT_PASSIVE
+    -- C++ SetPhaseEvents PHASE_NOT_STARTED (boss_malygos.cpp:538-541):
+    -- EVENT_START_FIRST_RANDOM_PORTAL 2s, group 1 (Reset ->
+    -- SetPhase(PHASE_NOT_STARTED, true) re-seeds on every Reset, so
+    -- the seed rides the reset, not the spawn); EVENT_SAY_INTRO 1s
+    -- stays out (SAY_INTRO_EVENT Talk leg, unbound in Lua).
+    -- PORTED 2026-11-11 (row-401 follow-up).
+    schedule(guid, "firstPortal", 2000, function()
+        firstRandomPortalTick(creature, guid)
+    end)
 end
 
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
@@ -823,8 +916,10 @@ local giftBeamGifts = {} -- target GUID -> summoned gift GO GUID (OnRemove leg, 
 
 -- C++ spell_alexstrasza_gift_beam_visual::OnApply
 -- (boss_malygos.cpp:2380-2391): Load admits creature casters only;
--- the creature target summons Alexstrasza's Gift at its own position,
--- 10-man or 25-man by raid difficulty. The OnRemove leg is PORTED
+-- the creature target summons Alexstrasza's Gift at its own position
+-- on exact 10-man-normal / 25-man-normal difficulty only — heroic
+-- modes summon nothing (IsHeroic() is the exact-difficulty twin).
+-- The OnRemove leg is PORTED
 -- below (tick 427) — the GO RemoveFlag bridge is live
 -- (engine/world/lua_objects.go:4488), retiring the "no GO flag
 -- bridge" stay-out. The outer beam aura's own spell ID is DB-side
@@ -836,6 +931,12 @@ local function alexstraszaGiftBeamVisualApply(event, aura, target)
         return
     end
     if target:GetObjectType() ~= "Creature" then
+        return
+    end
+    -- CORRECTED 2026-11-11: C++ summons only on exact normal
+    -- difficulties (boss_malygos.cpp:2384-2387); the old
+    -- Is25ManRaid-only pick summoned a gift on heroic modes too.
+    if target:IsHeroic() then
         return
     end
     local gift = GO_ALEXSTRASZA_S_GIFT_10
@@ -928,10 +1029,9 @@ RegisterAuraEvent(SPELL_VORTEX_2, 3, vortexVisualRemove)
 -- Arcane Barrage damage 63934, triggered, with the scion as original
 -- caster (Go CastSpell has no orig-caster param — the mimiron
 -- accepted-and-ignored precedent). The FilterMeleeHoverDiskPassangers
--- target-selection leg stays out (no hover-disk / vehicle-passenger /
--- malygos-SetGUID bridges); the scion AI itself is unported (entry
--- unverifiable from repo sources), so this is dormant until a scion
--- casts 56397 in Go.
+-- target-selection leg is ported below (ev7); the scion AI itself is
+-- unported (entry unverifiable from repo sources), so this is dormant
+-- until a scion casts 56397 in Go.
 local function scionArcaneBarrageDamage(event, spell, target)
     if target == nil or target:GetObjectType() ~= "Player" then
         return
@@ -940,8 +1040,95 @@ local function scionArcaneBarrageDamage(event, spell, target)
 end
 RegisterSpellEvent(SPELL_ARCANE_BARRAGE, 2, scionArcaneBarrageDamage)
 
-local SPELL_RANDOM_PORTAL = 56047 -- boss_malygos.cpp:101
-local POINT_NEAR_RANDOM_PORTAL_P_NONE = 1 -- Movements enum (boss_malygos.cpp:162)
+local NPC_HOVER_DISK_MELEE = 30234 -- eye_of_eternity.h:53
+
+-- Module-level twin of the malygos-AI GUID store
+-- (DATA_LAST_TARGET_BARRAGE_GUID, boss_malygos.cpp:323/432/450):
+-- the malygos AI lives in this same file, so a file-local GUIDLow
+-- (the magnetic-pull GUIDLow-identity precedent) is the exact store;
+-- nil until the first filter pass picks a target.
+local lastBarrageTargetGuid = nil
+
+-- C++ IsPlayerOnHoverDisk (boss_malygos.cpp:1922-1937): the unit is
+-- on a hover disk iff its vehicle base has entry 30234. Twin:
+-- IsOnVehicle returns the vehicle object (or nil) on the player and
+-- creature surfaces (lua_player.go:2841, lua_creature_events.go:3288);
+-- the vehicle's own GetEntry is the Vehicle.dbc id, so the entry check
+-- must go through GetOwner, the base unit (lua_vehicle.go:60).
+local function isPlayerOnHoverDisk(target)
+    local vehicle = target:IsOnVehicle()
+    if vehicle == nil then
+        return false
+    end
+    local base = vehicle:GetOwner()
+    if base == nil then
+        return false
+    end
+    return base:GetEntry() == NPC_HOVER_DISK_MELEE
+end
+
+-- C++ spell_scion_of_eternity_arcane_barrage::FilterMeleeHoverDiskPassangers
+-- (boss_malygos.cpp:1955-2000): OnObjectAreaTargetSelect, EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY. (1) With >1 target, drop the previous
+-- pick (malygos AI DATA_LAST_TARGET_BARRAGE_GUID). (2) Prefer targets
+-- NOT on a hover disk — only if every target rides one do disk riders
+-- stay. (3) Drop targets still carrying the 2s barrage-damage aura
+-- 63934 (UnitAuraCheck(true, ...) removes aura bearers; the gothik
+-- volley HasAura idiom). (4) Random-resize to 1 and store the pick's
+-- GUIDLow in the malygos-AI store twin. Load() admits creature casters
+-- with an instance script; the caster-creature leg is checked here,
+-- the instance leg is implied (scions exist only in EoE) and the store
+-- starts nil. PORTED 2026-11-11. DORMANT until a scion casts 56397.
+local function scionArcaneBarrageFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local kept = targets:GetTargets()
+    if #kept == 0 then
+        return
+    end
+    if #kept > 1 and lastBarrageTargetGuid ~= nil then
+        local withoutPrevious = {}
+        for _, target in ipairs(kept) do
+            if target:GetGUIDLow() ~= lastBarrageTargetGuid then
+                withoutPrevious[#withoutPrevious + 1] = target
+            end
+        end
+        kept = withoutPrevious
+    end
+    local withoutDisk = {}
+    for _, target in ipairs(kept) do
+        if not isPlayerOnHoverDisk(target) then
+            withoutDisk[#withoutDisk + 1] = target
+        end
+    end
+    if #withoutDisk > 0 then
+        kept = withoutDisk
+    end
+    local unauraed = {}
+    for _, target in ipairs(kept) do
+        if not target:HasAura(SPELL_ARCANE_BARRAGE_DAMAGE) then
+            unauraed[#unauraed + 1] = target
+        end
+    end
+    kept = unauraed
+    if #kept == 0 then
+        targets:Clear()
+        return
+    end
+    kept = randomResize(kept, 1)
+    lastBarrageTargetGuid = kept[1]:GetGUIDLow()
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_ARCANE_BARRAGE, 7, scionArcaneBarrageFilter)
 
 -- C++ spell_malygos_random_portal::HandleDummy
 -- (boss_malygos.cpp:1645-1658): OnEffectHitTarget, EFFECT_0
@@ -953,7 +1140,10 @@ local POINT_NEAR_RANDOM_PORTAL_P_NONE = 1 -- Movements enum (boss_malygos.cpp:16
 -- DORMANT: the driver (boss UpdateAI EVENT_RANDOM_PORTAL 14s cycle
 -- + EVENT_START_FIRST_RANDOM_PORTAL 2s seed,
 -- boss_malygos.cpp:542/:666/:756-758) is the unported intro phase
--- machine, so 56047 is never cast in Go yet.
+-- machine is PORTED 2026-11-11 (firstRandomPortalTick seed +
+-- portalArrivalTick re-portal, above), but the cast flows through
+-- the Go spell path only once Spell.dbc ships, so 56047 is never
+-- cast in Go yet.
 local function randomPortalDummy(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 or hitTarget == nil then
         return
@@ -979,24 +1169,6 @@ RegisterSpellEvent(SPELL_RANDOM_PORTAL, 5, randomPortalDummy)
 
 local SPELL_ARCANE_STORM_P_I = 61693 -- boss_malygos.cpp:112
 local SPELL_ARCANE_STORM_P_III = 57459 -- boss_malygos.cpp:151
-
--- Random-resize twin of Trinity::Containers::RandomResize: keeps a
--- uniform random subset of n from list (Fisher-Yates partial).
-local function randomResize(list, n)
-    local count = #list
-    if count <= n then
-        return list
-    end
-    for i = 1, n do
-        local j = math.random(i, count)
-        list[i], list[j] = list[j], list[i]
-    end
-    local out = {}
-    for i = 1, n do
-        out[i] = list[i]
-    end
-    return out
-end
 
 -- C++ spell_malygos_arcane_storm::FilterTargets
 -- (boss_malygos.cpp:1707-1722): OnObjectAreaTargetSelect, EFFECT_0
@@ -1127,7 +1299,11 @@ local SPELL_SUMMON_RED_DRAGON_BUDDY_F_CAST = 58846 -- boss_malygos.cpp:138
 -- (lua_creature_events.go:6680), so the GO cannot latch itself —
 -- GetGuidData(2) reads 0 until a latch lands. Nil/zero-guarded,
 -- fail-closed (the gift-beam GetGuidData guard precedent).
-local function destroyPlatformEvent(event, spell, hitTarget, effectIndex)
+-- CORRECTED 2026-11-11: the 11:28 landing registered ev5; C++ binds
+-- OnEffectHit (boss_malygos.cpp:2125-2126), args (event, spell,
+-- effectIndex) (lua_spell.go:585-592) — ev5 multi-fired the eff2 leg
+-- per hit target and dead-fired with zero targets.
+local function destroyPlatformEvent(event, spell, effectIndex)
     local caster = spell:GetCaster()
     if caster == nil or caster:GetObjectType() ~= "Creature" then
         return
@@ -1146,4 +1322,157 @@ local function destroyPlatformEvent(event, spell, hitTarget, effectIndex)
     end
 end
 
-RegisterSpellEvent(SPELL_DESTROY_PLATFORM_EVENT, 5, destroyPlatformEvent)
+RegisterSpellEvent(SPELL_DESTROY_PLATFORM_EVENT, 4, destroyPlatformEvent)
+
+local SPELL_RIDE_RED_DRAGON_BUDDY = 56071 -- boss_malygos.cpp:137
+
+-- C++ spell_wyrmrest_skytalon_ride_red_dragon_buddy_trigger::HandleScript
+-- (boss_malygos.cpp:2183-2187): OnEffectHitTarget, EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT. Load admits unit casters; the hit unit
+-- casts the spell's effect value on the caster, triggered. The unit
+-- gate (not the file's usual creature-only gate) is the faithful Load
+-- twin here — the body never ToCreatures the caster, and whether the
+-- trigger is cast by the buddy or the skytalon rider is DB-side.
+-- The binding ID rests on the enum-name match (loader name ==
+-- SPELL_RIDE_RED_DRAGON_BUDDY; final confirmation is DB-side,
+-- spell_script_names) — no conflicting candidate: 56070 binds the
+-- summon script, 56072 is SPELL_RIDE_RED_DRAGON_TRIGGERED, cast
+-- directly by the skytalon AI (:1530). GetEffectValue(0) reads the
+-- DBC value dynamically (lua_spell.go:395-400, 0 without a DBC row —
+-- fail-closed). PORTED 2026-11-11. DORMANT: Spell.dbc not shipped;
+-- the driver chain 58846 -> 56070 -> 56071 starts at the
+-- destroy-platform event, itself dormant on the unported phase-2
+-- machine. Census OnObjectAreaTargetSelect label is bogus — no such
+-- hook exists in this class.
+local function rideRedDragonBuddyTrigger(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or (caster:GetObjectType() ~= "Creature" and caster:GetObjectType() ~= "Player") then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value == nil or value == 0 then
+        return
+    end
+    hitTarget:CastSpell(caster, value, true)
+end
+
+RegisterSpellEvent(SPELL_RIDE_RED_DRAGON_BUDDY, 5, rideRedDragonBuddyTrigger)
+
+local SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25 = 60939 -- boss_malygos.cpp:150
+local SPELL_SURGE_OF_POWER_PHASE_3_25 = 60936 -- boss_malygos.cpp:149
+local EMOTE_SURGE_OF_POWER_WARNING_P3 = 18 -- boss_malygos.cpp:217
+
+-- Module-level twin of the malygos-AI surge GUID store
+-- (DATA_FIRST_SURGE_TARGET_GUID 14/15/16, boss_malygos.cpp:320):
+-- no SetGUID twin exists for the AI store (SetGuidData latches the
+-- calling creature's own GUID into the instance store), so the triple
+-- lives here keyed by caster GUIDLow (the giftBeamGifts precedent),
+-- reset at each selector cast — the boss AI's pre-cast
+-- _surgeTargetGUID clear (boss_malygos.cpp:947-949).
+local surgeTargets = {}
+
+-- C++ spell_malygos_surge_of_power_warning_selector_25::SendThreeTargets
+-- (boss_malygos.cpp:2219-2246): OnObjectAreaTargetSelect, EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY. Keep only vehicle creatures
+-- (IsCreatureVehicleCheck(false) drops everything else — the
+-- arcane-storm GetVehicleKit twin); an empty list stays empty (the
+-- Clear() below mirrors the post-remove_if list, it does not add
+-- targets); random-resize to 3, store each pick's GUIDLow in the
+-- surge table in pick order, and whisper the EMOTE_SURGE_OF_POWER
+-- warning to the seat-0 player passenger of each picked vehicle
+-- (Talk(id, player) whisper-target bridge,
+-- lua_creature_events.go:1196; GetPassenger(0), lua_vehicle.go:74).
+-- PORTED 2026-11-11. DORMANT: 60939 is cast only by the unported
+-- phase-3 machine (DoCastAOE 60939, boss_malygos.cpp:952, 25-man
+-- normal) plus Spell.dbc. Census OnEffectApply label is bogus
+-- (SpellScript, not AuraScript); AfterHit is the second leg, below.
+local function surgeWarningSelectorTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local vehicles = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetObjectType() == "Creature" and target:GetVehicleKit() ~= nil then
+            vehicles[#vehicles + 1] = target
+        end
+    end
+    if #vehicles == 0 then
+        targets:Clear()
+        return
+    end
+    local selected = randomResize(vehicles, 3)
+    local stored = {}
+    for i, target in ipairs(selected) do
+        stored[i] = target:GetGUIDLow()
+        local passenger = target:GetVehicleKit():GetPassenger(0)
+        if passenger ~= nil and passenger:GetObjectType() == "Player" then
+            caster:Talk(EMOTE_SURGE_OF_POWER_WARNING_P3, passenger)
+        end
+    end
+    surgeTargets[caster:GetGUIDLow()] = stored
+    targets:Clear()
+    for _, target in ipairs(selected) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25, 7, surgeWarningSelectorTargets)
+
+-- C++ spell_malygos_surge_of_power_warning_selector_25::ExecuteMainSpell
+-- (boss_malygos.cpp:2248-2251): AfterHit — the caster casts
+-- SPELL_SURGE_OF_POWER_PHASE_3_25 with no explicit target,
+-- non-triggered. Twin: the self-cast (the 58846 precedent);
+-- AfterHit fires once per hit target (boss_ai.go:4206-4228), so the
+-- main spell casts up to 3x per selector cast, faithful to C++
+-- (Spell.cpp:2659 per-target AfterHit). PORTED 2026-11-11. DORMANT
+-- with the selector leg above.
+local function surgeWarningSelectorAfterHit(event, spell, hitTarget)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:CastSpell(caster, SPELL_SURGE_OF_POWER_PHASE_3_25)
+end
+
+RegisterSpellEvent(SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25, 3, surgeWarningSelectorAfterHit)
+
+-- C++ spell_malygos_surge_of_power_25::FilterTargets
+-- (boss_malygos.cpp:2281-2301): OnObjectAreaTargetSelect, EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY. Erase every target whose GUID is not
+-- one of the AI's stored surge GUIDs (slots 14-16) — the surgeTargets
+-- table the selector leg above writes; an unset table keeps nothing,
+-- the C++ all-zero-slots twin. PORTED 2026-11-11. DORMANT: 60936 is
+-- cast only via the selector's AfterHit, so this rides 412 (plus the
+-- phase-3 machine + Spell.dbc). Census OnEffectApply label is bogus.
+local function surgeOfPower25Filter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local stored = surgeTargets[caster:GetGUIDLow()] or {}
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        for _, guid in ipairs(stored) do
+            if target:GetGUIDLow() == guid then
+                kept[#kept + 1] = target
+                break
+            end
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_SURGE_OF_POWER_PHASE_3_25, 7, surgeOfPower25Filter)
