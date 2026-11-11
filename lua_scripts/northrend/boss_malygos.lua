@@ -240,9 +240,15 @@
 -- standing queues, except the gift
 -- beam visual OnApply (PORTED tick 204, below), the portal
 -- beam (ported, below), and the vortex visual OnRemove
--- (PORTED tick 429, below), and the scion arcane-barrage OnHit
--- (PORTED this tick, below); the vortex dummy (56105) is PORTED
--- 2026-11-08 (tick 431, below) via the InstanceData:SetData bridge.
+-- (PORTED tick 429, below), the scion arcane-barrage OnHit
+-- (PORTED this tick, below), the random portal dummy (PORTED
+-- 2026-11-11, below), and the arcane storm target filter
+-- (PORTED 2026-11-11, below — the HandleVisual launch leg stays
+-- out, no OnEffectLaunchTarget Lua event); the vortex dummy
+-- (56105) is PORTED 2026-11-08 (tick 431, below) via the
+-- InstanceData:SetData bridge. The arcane overload radius filter
+-- stays out: its binding spell is DB-side (56435 only a commented
+-- enum line) and the DBC radius has no Lua bridge (no CalcRadius).
 -- achievement_denyin_the_scion — OnCheck: player's vehicle
 -- base entry == NPC_HOVER_DISK_MELEE (30234) — no achievement
 -- bridge (the kelthuzad / thaddius precedent); joins the
@@ -933,3 +939,109 @@ local function scionArcaneBarrageDamage(event, spell, target)
     target:CastSpell(target, SPELL_ARCANE_BARRAGE_DAMAGE, true)
 end
 RegisterSpellEvent(SPELL_ARCANE_BARRAGE, 2, scionArcaneBarrageDamage)
+
+local SPELL_RANDOM_PORTAL = 56047 -- boss_malygos.cpp:101
+local POINT_NEAR_RANDOM_PORTAL_P_NONE = 1 -- Movements enum (boss_malygos.cpp:162)
+
+-- C++ spell_malygos_random_portal::HandleDummy
+-- (boss_malygos.cpp:1645-1658): OnEffectHitTarget, EFFECT_0
+-- SPELL_EFFECT_DUMMY. Load admits creature casters only; the hit
+-- creature is the portal the boss relocates toward — a near point
+-- 29.1-30.0 yd out at the target->Malygos angle, target Z — and
+-- Malygos MovePoints there. The decimate ev5 idiom
+-- (spell:GetCaster, hitTarget, effectIndex). PORTED 2026-11-11.
+-- DORMANT: the driver (boss UpdateAI EVENT_RANDOM_PORTAL 14s cycle
+-- + EVENT_START_FIRST_RANDOM_PORTAL 2s seed,
+-- boss_malygos.cpp:542/:666/:756-758) is the unported intro phase
+-- machine, so 56047 is never cast in Go yet.
+local function randomPortalDummy(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if caster:GetEntry() ~= ENTRY_MALYGOS then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local tx, ty, tz = hitTarget:GetX(), hitTarget:GetY(), hitTarget:GetZ()
+    local mx, my = caster:GetX(), caster:GetY()
+    local angle = math.atan2(my - ty, mx - tx)
+    local dist = math.random(291, 300) / 10.0
+    caster:MoveTo(POINT_NEAR_RANDOM_PORTAL_P_NONE, tx + dist * math.cos(angle), ty + dist * math.sin(angle), tz)
+end
+
+RegisterSpellEvent(SPELL_RANDOM_PORTAL, 5, randomPortalDummy)
+
+local SPELL_ARCANE_STORM_P_I = 61693 -- boss_malygos.cpp:112
+local SPELL_ARCANE_STORM_P_III = 57459 -- boss_malygos.cpp:151
+
+-- Random-resize twin of Trinity::Containers::RandomResize: keeps a
+-- uniform random subset of n from list (Fisher-Yates partial).
+local function randomResize(list, n)
+    local count = #list
+    if count <= n then
+        return list
+    end
+    for i = 1, n do
+        local j = math.random(i, count)
+        list[i], list[j] = list[j], list[i]
+    end
+    local out = {}
+    for i = 1, n do
+        out[i] = list[i]
+    end
+    return out
+end
+
+-- C++ spell_malygos_arcane_storm::FilterTargets
+-- (boss_malygos.cpp:1707-1722): OnObjectAreaTargetSelect, EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY. The list is randomly resized to 4
+-- (10-man normal) or 10 (any other difficulty) targets; for
+-- SPELL_ARCANE_STORM_P_III only vehicle creatures are kept first
+-- (IsCreatureVehicleCheck: TYPEID_UNIT + a vehicle kit). The ev7
+-- gothik-volley idiom (targets:GetTargets/Clear/Add). The 10-man
+-- heroic leg rides creature:IsHeroic() (C++ counts only
+-- RAID_DIFFICULTY_10MAN_NORMAL as 4). PORTED 2026-11-11.
+-- DORMANT until Spell.dbc ships (no cast flows through the Go
+-- spell path yet). The HandleVisual leg (OnEffectLaunchTarget,
+-- caster casts 57473 triggered per hit unit) STAYS OUT — no
+-- launch-target Lua event exists (runtime.go spell events end at
+-- ev7) and an ev5 substitution would mistime the lead missile.
+local function makeArcaneStormFilter(phaseThree)
+    return function(event, spell, effectIndex, targets)
+        if effectIndex ~= 0 then
+            return
+        end
+        local all = targets:GetTargets()
+        if #all == 0 then
+            return
+        end
+        local caster = spell:GetCaster()
+        local count = 10
+        if caster ~= nil and caster:GetObjectType() == "Creature" and not caster:Is25ManRaid() and not caster:IsHeroic() then
+            count = 4
+        end
+        local kept = all
+        if phaseThree then
+            kept = {}
+            for _, target in ipairs(all) do
+                if target:GetObjectType() == "Creature" and target:GetVehicleKit() ~= nil then
+                    kept[#kept + 1] = target
+                end
+            end
+        end
+        kept = randomResize(kept, count)
+        targets:Clear()
+        for _, target in ipairs(kept) do
+            targets:Add(target)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_ARCANE_STORM_P_I, 7, makeArcaneStormFilter(false))
+RegisterSpellEvent(SPELL_ARCANE_STORM_P_III, 7, makeArcaneStormFilter(true))
