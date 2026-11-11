@@ -1226,7 +1226,7 @@ const spellVampiricAura = 20810
 func isProcTriggerAuraType(auraType uint32) bool {
 	switch auraType {
 	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue,
-		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier, spellAuraOverrideClassScripts,
+		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier, spellAuraAddPctModifier, spellAuraOverrideClassScripts,
 		spellAuraModSpellCritChance:
 		return true
 	}
@@ -1246,6 +1246,8 @@ type scriptProcCast struct {
 	targetGUID uint64
 	bp0        uint32
 	bp0Set     bool
+	bp1        uint32
+	bp1Set     bool
 }
 
 // procActionTargetGUID mirrors ProcEventInfo::GetActionTarget
@@ -1284,6 +1286,9 @@ func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint6
 // triggerTargetGUID — on a taken event that is the holder, on a done
 // event (a root/stun the holder cast, e.g. Charge) it is the enemy, and
 // the C++ cast lands on the enemy (utgarde_keep.cpp:225-227).
+// bp1/bp1Set are the EFFECT_1 twin of bp0 (spell_pal_glyph_of_divinity,
+// 54939: BP1 = twice the triggering spell's EFFECT_1 CalcValue); the
+// fire arm folds either override into the cast's base-point map.
 func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID, triggerTargetGUID uint64, triggerSpell *wotlk.Spell) (scriptProcCast, bool) {
 	if effAura != spellAuraDummy {
 		return scriptProcCast{}, false
@@ -1371,8 +1376,15 @@ func (s *Server) fireScriptProcCast(ctx context.Context, holderMap uint32, holde
 		return
 	}
 	if sess := s.findSessionByGUID(cast.casterGUID); sess != nil {
-		if cast.bp0Set {
-			sess.castSpellDirectWithBasePoint(ctx, cast.spellID, cast.targetGUID, cast.bp0)
+		if cast.bp0Set || cast.bp1Set {
+			overrides := make(map[int]int32)
+			if cast.bp0Set {
+				overrides[0] = int32(cast.bp0)
+			}
+			if cast.bp1Set {
+				overrides[1] = int32(cast.bp1)
+			}
+			sess.castSpellDirectWithOverrides(ctx, cast.spellID, cast.targetGUID, false, overrides, 0, nil, 0)
 		} else {
 			sess.castSpellDirectWithOverrides(ctx, cast.spellID, cast.targetGUID, false, nil, 0, nil, 0)
 		}
@@ -1380,8 +1392,14 @@ func (s *Server) fireScriptProcCast(ctx context.Context, holderMap uint32, holde
 	}
 	if motion := s.findCreatureMotion(holderMap, holderInstance, cast.casterGUID); motion != nil {
 		var overrides map[int]int32
-		if cast.bp0Set {
-			overrides = map[int]int32{0: int32(cast.bp0)}
+		if cast.bp0Set || cast.bp1Set {
+			overrides = make(map[int]int32)
+			if cast.bp0Set {
+				overrides[0] = int32(cast.bp0)
+			}
+			if cast.bp1Set {
+				overrides[1] = int32(cast.bp1)
+			}
 		}
 		s.castCreatureSpellInternalWithBasePoints(ctx, motion, cast.spellID, cast.targetGUID, true, overrides, nil, false, 0)
 	}
@@ -1546,6 +1564,14 @@ type procEventInfo struct {
 	eventSpell      *wotlk.Spell
 	actorGUID       uint64
 	damage          uint32
+	// heal / effectiveHeal carry HealInfo::GetHeal / GetEffectiveHeal
+	// (Spell.cpp:2512) on heal proc events: the pre-absorb, pre-overheal
+	// heal and the health actually gained. Zero on every non-heal event
+	// and on heal events whose amount was never threaded (periodic /
+	// funnel / leech ticks) — the 54937 leg reads the zero as the C++
+	// null/zero-heal early return.
+	heal          uint32
+	effectiveHeal uint32
 	// triggeredByAuraSpell is Spell::m_triggeredByAuraSpell (Spell.cpp:3068):
 	// the aura spell whose proc trigger cast the event's spell, 0 when the
 	// cast was not triggered by an aura. Aura::GetProcEffectMask
@@ -2833,7 +2859,7 @@ func (s *session) procSpellReflectTakenAuraTriggers(ctx context.Context, casterG
 // (Spell::IsTriggered, Spell.cpp:7501-7504) so the
 // CanSpellTriggerProcOnEvent mana-cost, spell-family, and triggered-cast
 // gates engage exactly. The trigger spell targets the heal target.
-func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, heal uint32, crit bool) {
+func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint64, spellID uint32, heal uint32, effectiveHeal uint32, crit bool) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -2874,6 +2900,8 @@ func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint
 		eventSpell:           &spellCopy,
 		triggeredByAuraSpell: s.castTriggerAuraSpell,
 		actorGUID:            s.playerGUID,
+		heal:                 heal,
+		effectiveHeal:        effectiveHeal,
 	})
 }
 
@@ -2891,7 +2919,7 @@ func (s *session) procSpellHealAuraTriggers(ctx context.Context, targetGUID uint
 // heal arm. The triggered state and the triggering-aura attribution come from
 // the caster's cast, not the victim's session, matching Spell::IsTriggered
 // and Spell::m_triggeredByAuraSpell on the shared spell (Spell.cpp:3068).
-func (s *session) procSpellHealTakenAuraTriggers(ctx context.Context, healerGUID uint64, spellID uint32, heal uint32, crit bool, casterTriggered bool, triggerAuraSpell uint32) {
+func (s *session) procSpellHealTakenAuraTriggers(ctx context.Context, healerGUID uint64, spellID uint32, heal uint32, effectiveHeal uint32, crit bool, casterTriggered bool, triggerAuraSpell uint32) {
 	if s == nil || s.server == nil || s.server.Data == nil {
 		return
 	}
@@ -2928,6 +2956,8 @@ func (s *session) procSpellHealTakenAuraTriggers(ctx context.Context, healerGUID
 		eventSpell:           &spellCopy,
 		triggeredByAuraSpell: triggerAuraSpell,
 		actorGUID:            healerGUID,
+		heal:                 heal,
+		effectiveHeal:        effectiveHeal,
 	})
 }
 
@@ -4077,6 +4107,73 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 					mana = 0
 				}
 				s.castSpellDirectWithBasePoint(ctx, 61389, s.playerGUID, uint32(mana))
+				continue
+			}
+			if auraSpell.ID == 54939 && i == 0 && eff.Aura == spellAuraAddPctModifier {
+				// spell_pal_glyph_of_divinity::OnProc
+				// (spell_paladin.cpp:819-833): Lay on Hands (Rank 1) has
+				// no mana effect — the gate is the triggering spell's
+				// EFFECT_1 being SPELL_EFFECT_ENERGIZE; a cast on the
+				// proc target itself (self-cast LoH) takes nothing. The
+				// actor casts Glyph of Divinity Proc (54986) on nil
+				// (self) with BP1 = twice the triggering spell's
+				// EFFECT_1 CalcValue (no-caster CalcValue,
+				// SpellInfo.cpp:402 — no level scaling, no mods). No
+				// PreventDefaultAction in C++, but HandleProc's default
+				// arm is a no-op for ADD_PCT_MODIFIER
+				// (SpellAuraEffects.cpp:1010-1043), so the `continue`
+				// past the generic leg below is exact. No Lua ev6 twin:
+				// ev6 carries no proc spell. DORMANT until Spell.dbc
+				// ships the 54939 proc entry.
+				if ev.eventSpell == nil || len(ev.eventSpell.Effects) < 2 || ev.eventSpell.Effects[1].Effect != spellEffectEnergize {
+					continue
+				}
+				if ev.actorGUID == 0 || ev.actorGUID == triggerTargetGUID {
+					continue
+				}
+				bp1 := ev.eventSpell.Effects[1].CalcValue() * 2
+				if bp1 < 0 {
+					bp1 = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 54986, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp1: uint32(bp1), bp1Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 54937 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_glyph_of_holy_light_dummy::HandleProc
+				// (spell_paladin.cpp:898-912): PreventDefaultAction; on a
+				// heal proc the actor casts Glyph of Holy Light Heal
+				// (54968) on the proc target with BP0 = pct of the heal
+				// amount by the effect amount, where the amount is the
+				// effective heal when it reaches the triggering spell's
+				// EFFECT_0 BasePoints + DieSides, else the raw heal
+				// (HealInfo::GetHeal / GetEffectiveHeal,
+				// Spell.cpp:2512). The proc loop carries no heal info on
+				// non-heal events, so a zero heal is the C++ null/zero
+				// early return. No Lua ev6 twin: ev6 carries no heal
+				// amounts. DORMANT until Spell.dbc ships the 54937 proc
+				// entry; periodic / funnel / leech heal events carry no
+				// amounts in Go, so they skip here where C++ would fire
+				// with the tick amount.
+				if ev.heal == 0 || ev.eventSpell == nil || len(ev.eventSpell.Effects) == 0 {
+					continue
+				}
+				basePoints := ev.eventSpell.Effects[0].BasePoints + ev.eventSpell.Effects[0].DieSides
+				healAmount := ev.heal
+				if int64(ev.effectiveHeal) >= int64(basePoints) {
+					healAmount = ev.effectiveHeal
+				}
+				if triggerTargetGUID == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 54968, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(uint64(healAmount) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
 				continue
 			}
 			if eff.Aura == spellAuraDummy {

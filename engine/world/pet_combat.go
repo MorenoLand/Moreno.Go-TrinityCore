@@ -7347,7 +7347,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 		// effectiveHeal * 0.5) runs after HealBySpell, before the proc
 		// pass; the 0.5 fold lives inside the helper.
 		s.server.distributeCreatureHealingThreat(ctx, caster.Map, caster.InstanceID, caster.GUID, targetGUID, effectiveHeal, spellID, false)
-		s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, taking)
+		s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, effectiveHeal, taking)
 		return
 	}
 	s.server.motionMu.Lock()
@@ -7366,7 +7366,7 @@ func (s *session) executePetSpellHeal(ctx context.Context, caster *creatureMotio
 	// Spell.cpp:2514: same forward as the player branch, on the
 	// effective heal, ahead of the proc pass.
 	s.server.distributeCreatureHealingThreat(ctx, caster.Map, caster.InstanceID, caster.GUID, targetGUID, effectiveHeal, spellID, false)
-	s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, taking)
+	s.firePetSpellHealProcs(ctx, caster, targetGUID, spellID, triggered, isCrit, rawHeal, effectiveHeal, taking)
 }
 
 // firePetSpellZeroHealProcs runs the no-damage proc arm for a pet-cast
@@ -7603,7 +7603,7 @@ func (s *session) firePetSpellDoneSideProcs(ctx context.Context, caster *creatur
 // victim sits inside its own proc evaluation (the canEffectTrigger
 // CanProc gate, Spell.cpp:2440-2442); creature victims carry no procDeep
 // model, matching the damage path.
-func (s *session) firePetSpellHealProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, triggered, isCrit bool, rawHeal uint32, taking *spellModTakingContext) {
+func (s *session) firePetSpellHealProcs(ctx context.Context, caster *creatureMotion, targetGUID uint64, spellID uint32, triggered, isCrit bool, rawHeal uint32, effectiveHeal uint32, taking *spellModTakingContext) {
 	if s == nil || s.server == nil || s.server.Data == nil || caster == nil || rawHeal == 0 {
 		return
 	}
@@ -7636,11 +7636,13 @@ func (s *session) firePetSpellHealProcs(ctx context.Context, caster *creatureMot
 		triggered:      triggered,
 		eventSpell:     &spellCopy,
 		actorGUID:      caster.GUID,
+		heal:           rawHeal,
+		effectiveHeal:  effectiveHeal,
 	}
 	s.server.fireCreatureAuraProcLoop(ctx, caster, targetGUID, ev)
 	s.server.firePetModOwnerAuraProcs(ctx, caster, targetGUID, ev, taking)
 	if victim := s.server.findSessionByGUID(targetGUID); victim != nil && victim.player != nil {
-		victim.procSpellHealTakenAuraTriggers(ctx, caster.GUID, spellID, rawHeal, isCrit, triggered, 0)
+		victim.procSpellHealTakenAuraTriggers(ctx, caster.GUID, spellID, rawHeal, effectiveHeal, isCrit, triggered, 0)
 	} else {
 		targetMotion := s.server.findCreatureMotion(caster.Map, caster.InstanceID, targetGUID)
 		if targetMotion == nil {

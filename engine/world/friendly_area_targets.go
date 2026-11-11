@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"sort"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -481,6 +482,14 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 			}
 		}
 	}
+	if spell.ID == 54968 {
+		// spell_pal_glyph_of_holy_light::FilterTargets
+		// (spell_paladin.cpp:858-867): the script hook fires inside
+		// SelectImplicitAreaTargets ahead of the MaxAffectedTargets cap
+		// (Spell.cpp:1290-1300), so the filter runs here, before the
+		// generic RandomResize cap below.
+		targets = s.glyphOfHolyLightFilterTargets(spell, targets)
+	}
 	if maxTargets := spell.MaxTargets; maxTargets > 0 {
 		// Spell.cpp:1293 — cap to MaxAffectedTargets plus
 		// SPELL_AURA_MOD_MAX_AFFECTED_TARGETS aura modifiers, then
@@ -492,4 +501,52 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		}
 	}
 	return targets
+}
+
+// glyphOfHolyLightFilterTargets mirrors
+// spell_pal_glyph_of_holy_light::FilterTargets (spell_paladin.cpp:858-867):
+// the caster leaves the DEST_AREA_ALLY list, and when the list still exceeds
+// MaxAffectedTargets it is sorted lowest-health-first
+// (Trinity::HealthPctOrderPred) and resized. The sort is stable, matching
+// the C++ list sort; MaxTargets 0 keeps the list whole (the generic cap
+// below guards the same way). DORMANT until Spell.dbc ships the 54968
+// record.
+func (s *session) glyphOfHolyLightFilterTargets(spell wotlk.Spell, targets []uint64) []uint64 {
+	kept := targets[:0]
+	for _, guid := range targets {
+		if guid != s.playerGUID {
+			kept = append(kept, guid)
+		}
+	}
+	targets = kept
+	if maxTargets := spell.MaxTargets; maxTargets > 0 && uint32(len(targets)) > maxTargets {
+		sort.SliceStable(targets, func(a, b int) bool {
+			return s.glyphOfHolyLightTargetHealthPct(targets[a]) < s.glyphOfHolyLightTargetHealthPct(targets[b])
+		})
+		targets = targets[:maxTargets]
+	}
+	return targets
+}
+
+// glyphOfHolyLightTargetHealthPct returns the target's health fraction for
+// the Glyph of Holy Light sort. An unresolvable target sorts last (1.0),
+// like a full-health unit; the caster never reaches the sort (removed
+// first). Player health reads ride the session-player precedent; creature
+// health reads under motionMu, the DRW-leg precedent (procs.go).
+func (s *session) glyphOfHolyLightTargetHealthPct(guid uint64) float64 {
+	if s == nil || s.server == nil {
+		return 1
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil && ts.player.MaxHealth > 0 {
+		return float64(ts.player.Health) / float64(ts.player.MaxHealth)
+	}
+	if m := s.findCreatureMotion(guid); m != nil {
+		s.server.motionMu.Lock()
+		health, maxHealth := m.Health, m.MaxHealth
+		s.server.motionMu.Unlock()
+		if maxHealth > 0 {
+			return float64(health) / float64(maxHealth)
+		}
+	}
+	return 1
 }

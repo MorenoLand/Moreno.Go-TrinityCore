@@ -27903,6 +27903,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 							s.castSpellDirect(ctx, 49560, guid)
 						}
 					}
+					// spell_pal_divine_storm_dummy::HandleDummy
+					// (spell_paladin.cpp:699-708): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit target, the caster
+					// casts Divine Storm Heal (54172) on the hit unit,
+					// triggered, with BP0 = GetEffectValue() /
+					// _targetCount, the CountTargets area-raid list size
+					// (:694-697). No client-path twin: 54171 is only ever
+					// cast triggered from the 53385 AfterHit leg above
+					// (divineStormAfterHit), never from a client cast.
+					// DELTA: the divisor is the miss-filtered hit list
+					// (effectGUIDs) where C++ counts the pre-miss
+					// selection list — friendly-area targets never miss,
+					// so the two agree for this spell. DORMANT until
+					// Spell.dbc ships the 54171 record.
+					if spellID == 54171 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						s.divineStormDummyEffect(ctx, spell, effectIndex, casterLevel, effectGUIDs)
+					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -30966,7 +30983,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// elevation in Unit::TriggerAurasProcOnEvent, Unit.cpp:10424-10448).
 	targetCantProc := targetSess != nil && targetSess.procDeep > 0
 	if rawHeal > 0 && !targetCantProc {
-		s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, isCrit)
+		s.procSpellHealAuraTriggers(ctx, targetGUID, spellID, rawHeal, effectiveHeal, isCrit)
 
 		// Real aura procs on the taken side of a direct heal (TrinityCore
 		// Unit::ProcDamageAndSpellFor via Spell::TargetInfo::DoDamageAndTriggers,
@@ -30976,7 +30993,7 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 		// gate; on a self-heal this is the caster session, matching C++ where
 		// ProcDamageAndSpellFor's done and taken passes iterate the same aura
 		// list. The trigger spell targets the healer.
-		targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, isCrit, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
+		targetSess.procSpellHealTakenAuraTriggers(ctx, s.playerGUID, spellID, rawHeal, effectiveHeal, isCrit, s.triggeredNoProcEvents > 0, s.castTriggerAuraSpell)
 	} else if !targetCantProc {
 		// No-damage arm (Spell.cpp:2563-2579, 2581-2586): done side first,
 		// then the taken side on the target's session, matching the
@@ -52012,6 +52029,33 @@ func (s *session) divineStormAfterHit(ctx context.Context, spellID uint32, spell
 		}
 		bp := int32(int64(hitDamage.damageByTarget[guid]) * int64(healPct) / 100)
 		s.castSpellDirectWithBasePoint(ctx, 54171, s.playerGUID, uint32(bp))
+	}
+}
+
+// divineStormDummyEffect is spell_pal_divine_storm_dummy
+// (spell_paladin.cpp:684-721): the EFFECT_0 DUMMY OnEffectHitTarget arm —
+// per hit target, the caster casts Divine Storm Heal (54172) on the hit
+// unit, triggered, with BP0 = GetEffectValue() / _targetCount. GetEffectValue
+// is the EFFECT_0 value the 53385 AfterHit leg overrode with the per-target
+// heal amount (castSpellDirectWithBasePoint folds it into
+// spell.Effects[0].BasePoints, so CalcValueForLevel reads it back — the
+// scourgeStrikeDummyEffect precedent); _targetCount is the CountTargets
+// area-raid list size, which the caller passes as the hit list (the
+// miss-filtered divisor delta is documented at the call site). A zero
+// target count takes no cast (C++ `if (!_targetCount)` early return); a
+// zero value still casts with BP0 0, like C++. DORMANT until Spell.dbc ships
+// the 54171 record.
+func (s *session) divineStormDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || effectIndex != 0 || len(spell.Effects) == 0 || len(hitTargets) == 0 {
+		return
+	}
+	value := spell.Effects[0].CalcValueForLevel(spell, casterLevel)
+	bp := value / int32(len(hitTargets))
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		s.castSpellDirectWithBasePoint(ctx, 54172, guid, uint32(bp))
 	}
 }
 

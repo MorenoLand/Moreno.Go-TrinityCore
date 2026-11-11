@@ -249,21 +249,44 @@ func (s *session) addSpellMods(aura *activeAura) {
 		if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
 			continue
 		}
-		if effect.Aura != spellAuraAddFlatModifier && effect.Aura != spellAuraAddPctModifier {
-			continue
-		}
-		if effect.MiscValue < 0 || effect.MiscValue >= spellModOpCount {
-			continue
-		}
-		mod := &spellModifier{
-			op:          uint8(effect.MiscValue),
-			modType:     uint8(effect.Aura),
-			effectIndex: uint8(index),
-			spellID:     aura.SpellID,
-			value:       spellModEffectValue(aura, index, effect),
-			mask:        effect.SpellClassMask,
-			usesCharges: sp.ProcCharges > 0,
-			owner:       aura,
+		var mod *spellModifier
+		if aura.SpellID == 33695 && index == 0 && effect.Aura == spellAuraDummy {
+			// spell_pal_exorcism_and_holy_wrath_damage::HandleEffectCalcSpellMod
+			// (spell_paladin.cpp:736-748): the EFFECT_0 DUMMY aura carries no
+			// 107/108 effect, so the generic arm above never registers it —
+			// the script hook builds the modifier itself: SPELLMOD_DAMAGE,
+			// SPELLMOD_FLAT, spellId 33695, mask[1] 0x200002 (Exorcism /
+			// Holy Wrath family flags), value the effect amount. The
+			// drop/refresh arms key on owner/effectIndex, so they pick
+			// this mod up unchanged. DORMANT until Spell.dbc ships the
+			// 33695 record.
+			mod = &spellModifier{
+				op:          spellModDamage,
+				modType:     uint8(spellAuraAddFlatModifier),
+				effectIndex: 0,
+				spellID:     33695,
+				value:       spellModEffectValue(aura, 0, effect),
+				mask:        [3]uint32{0, 0x200002, 0},
+				usesCharges: sp.ProcCharges > 0,
+				owner:       aura,
+			}
+		} else {
+			if effect.Aura != spellAuraAddFlatModifier && effect.Aura != spellAuraAddPctModifier {
+				continue
+			}
+			if effect.MiscValue < 0 || effect.MiscValue >= spellModOpCount {
+				continue
+			}
+			mod = &spellModifier{
+				op:          uint8(effect.MiscValue),
+				modType:     uint8(effect.Aura),
+				effectIndex: uint8(index),
+				spellID:     aura.SpellID,
+				value:       spellModEffectValue(aura, index, effect),
+				mask:        effect.SpellClassMask,
+				usesCharges: sp.ProcCharges > 0,
+				owner:       aura,
+			}
 		}
 		frames = append(frames, spellModFrames(s.spellMods[mod.op], mod, true)...)
 		s.spellMods[mod.op] = append(s.spellMods[mod.op], mod)
