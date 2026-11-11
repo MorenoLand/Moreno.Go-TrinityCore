@@ -135,7 +135,8 @@
 -- (procs.go procSpellHealTakenAuraTriggers early-returns on heal == 0),
 -- so the handler casts unconditionally and returns true
 -- (PreventDefaultAction); the hook's damage arg is always 0 on heal
--- events, so no damage gate. DORMANT until the phase-2 EVENT_WOE_STRIKE
+-- events, so no damage gate. 59735 heroic twin registered 2026-11-11
+-- (same AuraScript class binds both IDs). DORMANT until the phase-2 EVENT_WOE_STRIKE
 -- arm applies the aura and the DBC proc entry for 42730 ships.
 -- The heroic twin 59735 (same class, :439-480, same effect spell
 -- 42739 — no heroic effect twin in the file) rides the same handler;
@@ -157,7 +158,7 @@ local SPELL_STAGGERING_ROAR = 42708
 local SPELL_ENRAGE = 42705
 local SPELL_INGVAR_FEIGN_DEATH = 42795 -- boss_ingvar_the_plunderer.cpp (DamageTaken, triggered self-cast)
 local SPELL_WOE_STRIKE = 42730 -- boss_ingvar_the_plunderer.cpp:85
-local SPELL_WOE_STRIKE_HEROIC = 59735 -- boss_ingvar_the_plunderer.cpp:439 (heroic twin)
+local SPELL_WOE_STRIKE_HEROIC = 59735 -- boss_ingvar_the_plunderer.cpp:439 (comment-block twin of 42730)
 local SPELL_WOE_STRIKE_EFFECT = 42739 -- boss_ingvar_the_plunderer.cpp:86
 local SPELL_SUMMON_BANSHEE = 42912 -- boss_ingvar_the_plunderer.cpp:74
 local SPELL_INGVAR_TRANSFORM = 42796 -- boss_ingvar_the_plunderer.cpp:96

@@ -259,17 +259,24 @@
 -- lists OnObjectAreaTargetSelect); 478's OnObjectAreaTargetSelect is
 -- real; 481's OnCheckCast is real but unbridged.
 -- Census rows 482-486 PORTED/STAYED-OUT 2026-11-11 below:
--- titanic_storm (64172, ev5 eff0 DUMMY -> caster kills hit unit,
--- Unit::Kill twin; DBC-bound 64171 -> 64172 chain unverifiable
--- in-repo), hodirs_protective_gaze (64174) STAYS OUT — no absorb /
--- check-area-target aura event (aura events 1-7, runtime.go),
--- ulduar_teleporter STAYS OUT — no OnCheckCast spell event (spell
--- events 1-7) and its bound spell ID is unrecoverable in-repo,
--- woe_strike 42730 VERIFIED-EXISTING (ev6 proc, ingvar file) +
--- heroic twin 59735 PORTED (same handler, dormant until difficulty
--- resolution lands). Census hooks: 482 exact; 483/485/486 [] phantom
--- (missed DoCheckAreaTarget + OnEffectAbsorb / DoCheckProc +
--- OnEffectProc); 484 OnCheckCast exact but unbridged.
+-- titanic_storm (64172, ev5 EFFECT_0 DUMMY -> Unit::Kill(caster,
+-- hitTarget); Kill bridges split by receiver, so the handler branches
+-- on hitTarget type — creature hitTarget:Kill(caster), player
+-- hitTarget:Kill(hitTarget) self-kill; fixes 5da47a5f's
+-- caster:Kill(hitTarget), which killed the caster); hodirs_protective_gaze
+-- (64174) STAYS OUT — DoCheckAreaTarget unbridged AND no OnEffectAbsorb
+-- aura event (aura events 1-7, runtime.go); the Hodir engage cast of
+-- 64174 is already ported (keeperEnterCombat). ulduar_teleporter
+-- STAYS OUT — OnCheckCast only, no spell OnCheckCast event (spell
+-- events 1-7); no spell ID in the loader, DBC-bound (note in
+-- instance_ulduar.lua). ingvar woe_strike (42730) VERIFIED-EXISTING
+-- (woeStrikeProc, ev6; the CheckProc heal > 0 gate rides procs.go's
+-- heal == 0 early return) and its heroic twin 59735 registered this
+-- tick (same AuraScript class binds both IDs). Census go_hit/lua_hit
+-- true on 482-485 are FALSE POSITIVES (64171/const/comment hits, zero
+-- Go); 486 was correctly false on both. Census hooks: 482 exact,
+-- 484 real but unbridged; 485/486 list none and miss the real
+-- OnEffectProc.
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -310,7 +317,6 @@ local PHASE3 = {
     SPELL_DEAFENING_ROAR = 64189, -- :158
     SPELL_PHASE_3_TRANSFORM = 63895, -- :157
     SPELL_TITANIC_STORM = 64171, -- :222
-    SPELL_TITANIC_STORM_DUMMY = 64172, -- :3111
     SAY_YOGG_SARON_SPAWN = 0, -- :52
     SAY_YOGG_SARON_PHASE_3 = 3, -- :56
     SAY_YOGG_SARON_DEAFENING_ROAR = 4, -- :57
@@ -1360,7 +1366,7 @@ RegisterSpellEvent(PHASE3.LUNATIC_GAZE_DAMAGE, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.LUNATIC_GAZE_DAMAGE_2, 5, PHASE3.yoggSanityReduction)
 
 -- C++ spell_yogg_saron_insane_periodic::HandleScript
--- (boss_yogg_saron.cpp:2951-2955): OnEffectHitTarget EFFECT_0
+-- (boss_yogg_saron.cpp:2949-2955): OnEffectHitTarget EFFECT_0
 -- SPELL_EFFECT_DUMMY -> the caster casts the effect's value on the hit
 -- unit, triggered; the 453/460 shape with triggered=true (C++ passes
 -- true here). No in-tree cast site; DBC-bound (loader comment :2940).
@@ -1410,12 +1416,19 @@ end
 RegisterSpellEvent(PHASE3.HATE_TO_ZERO, 5, PHASE3.yoggHateToZeroHit)
 
 -- C++ spell_yogg_saron_titanic_storm::HandleScript
--- (boss_yogg_saron.cpp:3118-3129): OnEffectHitTarget EFFECT_0
--- SPELL_EFFECT_DUMMY -> the caster kills the hit unit
--- (Unit::Kill(GetCaster(), target), no gating). Bound 64172 (loader
--- comment :3111); the 64171 cast is Thorim's phase-3 DoAction
--- (:1681-1687, keeperDoAction above). DORMANT until Spell.dbc ships
--- the 64171 -> 64172 chain (no Spell.dbc in-repo to verify it).
+-- (boss_yogg_saron.cpp:3120-3125): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> Unit::Kill(GetCaster(), target). The Kill
+-- bridges split by receiver: creature Kill kills the RECEIVER
+-- (lua_creature_events.go:3228, the :413 voice precedent), player
+-- Kill kills the ARG (lua_player.go:3521) — so one bare form is wrong
+-- for one of the two victim types (5da47a5f's caster:Kill(hitTarget)
+-- killed the caster whenever the caster was a creature). Branch on
+-- hitTarget type: creature victims die via hitTarget:Kill(caster),
+-- player victims via the insane self-kill idiom hitTarget:Kill
+-- (hitTarget) (creditHonorableKill no-ops for killer == victim,
+-- achievements.go:1802). No in-tree cast site; DBC-bound (loader
+-- comment :3111). Not 64171 SPELL_TITANIC_STORM, the Thorim-cast
+-- spell. DORMANT until Spell.dbc ships 64172.
 PHASE3.yoggTitanicStormHit = function(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 or hitTarget == nil then
         return
@@ -1424,9 +1437,13 @@ PHASE3.yoggTitanicStormHit = function(event, spell, hitTarget, effectIndex)
     if caster == nil then
         return
     end
-    caster:Kill(hitTarget)
+    if hitTarget:GetObjectType() == "Creature" then
+        hitTarget:Kill(caster)
+    else
+        hitTarget:Kill(hitTarget)
+    end
 end
-RegisterSpellEvent(PHASE3.SPELL_TITANIC_STORM_DUMMY, 5, PHASE3.yoggTitanicStormHit)
+RegisterSpellEvent(PHASE3.TITANIC_STORM_SCRIPT, 5, PHASE3.yoggTitanicStormHit)
 
 -- C++ spell_yogg_saron_brain_link::FilterTargets
 -- (boss_yogg_saron.cpp:2139-2151): OnObjectAreaTargetSelect EFFECT_0

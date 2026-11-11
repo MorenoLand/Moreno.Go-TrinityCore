@@ -82,6 +82,11 @@
 -- instance hooks), the Algalon summon timer + _algalonTimer
 -- world states, SaveToDB (the C++ per-bit SaveToDB in OnUnitDeath
 -- has no Lua twin; the mask persists with the table).
+-- spell_ulduar_teleporter (instance_ulduar.cpp:1085-1114) STAYS OUT —
+-- OnCheckCast only (expl target must be a player, not in combat), and
+-- there is no spell OnCheckCast event (spell events 1-7,
+-- runtime.go:601-607); the loader carries no spell ID either, so
+-- there is nothing to register — DBC-bound.
 local MAP_ULDUAR = 603
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 local INSTANCE_EVENT_ON_UPDATE = 3
