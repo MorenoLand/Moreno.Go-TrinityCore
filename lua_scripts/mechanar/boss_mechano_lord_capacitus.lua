@@ -44,7 +44,9 @@
 --    IsHeroic() gate is bridgeable: creature:IsHeroic() on
 --    the event-handler surface, lua_creature_events.go:203):
 --    15s init then randtime(45-60s) — non-triggered
---    DoCastAOE (self-cast convention, C++-exact).
+--    DoCastAOE (self-cast convention, C++-exact); the
+--    39096 dummy leg is PORTED via RegisterSpellEvent ev5
+--    below (per-hit 50/50 self-cast of 39088/39091).
 -- 5. Summon Nether Charge: 10s init — RAND of the four
 --    directional summon spells 35153/35904/35905/35906,
 --    non-triggered DoCastSelf; the re-arm timer is
@@ -60,10 +62,17 @@
 -- zereketh/corrupter precedent): decrement-first, pre-loop
 -- gate, in-loop gate after each fired arm.
 -- The polarity-charge SpellScript class in the file
--- (spell_capacitus_polarity_charge 39088-39093 stack
--- machine) joins the no-SpellScript-bridge queue —
--- documented only; the polarity-shift dummy (39088/39091
--- 50% roll) is ported in the polarity timer arm below.
+-- (spell_capacitus_polarity_charge 39090/39093 stack
+-- machine) stays out: the charge spells are cast by the
+-- polarity-aura holder (a player) via the DBC periodic
+-- trigger, and the ev5 player path has no per-effect list
+-- site yet (runtime.go — same blocker as census rows
+-- 525/526); secondary: PreventHitDamage has no Go model
+-- and there is no GetTriggeringSpell bridge. The
+-- polarity-shift dummy (39088/39091 50% roll) is PORTED
+-- below via RegisterSpellEvent ev5 (census row 541); the
+-- timer arm now casts 39096 DoCastAOE instead of the old
+-- per-player threat-list loop.
 -- OnDied(4): Talk(YELL_DEATH) (C++-exact); the BossAI
 -- _JustDied arm is instance-blocked, unmodeled.
 -- OnReset(23) / OnLeaveCombat(2): per-GUID state cleared
@@ -186,19 +195,11 @@ local function bossTick(creature, guid)
     -- engage gate, bridgeable): 15s init then
     -- randtime(45-60s) — non-triggered DoCastAOE self-cast
     -- (C++-exact). The shift SpellScript
-    -- (boss_mechano_lord_capacitus.cpp:238-264) casts positive
-    -- polarity 39088 / negative polarity 39091 50/50 on each hit
-    -- unit, self-cast with caster GUID = Capacitus; with no
-    -- SpellScript bridge the arm is modeled as a per-player loop
-    -- over the threat list (threat list approximates the DoCastAOE
-    -- area), each player receiving 39088 or 39091 non-triggered
-    -- (the C++ cast carries the caster GUID, not a triggered flag).
+    -- (boss_mechano_lord_capacitus.cpp:238-264) runs per hit
+    -- unit via RegisterSpellEvent ev5 below (50/50 self-cast
+    -- of 39088/39091, originalCaster = Capacitus).
     if st.polarityShift and st.polarityShift <= 0 then
-        for _, unit in ipairs(creature:GetAITargets()) do
-            if unit:GetObjectType() == "Player" and not unit:IsDead() then
-                creature:CastSpell(unit, math.random() < 0.5 and SPELL_POSITIVE_POLARITY or SPELL_NEGATIVE_POLARITY)
-            end
-        end
+        creature:CastSpell(creature, SPELL_POLARITY_SHIFT)
         st.polarityShift = math.random(45000, 60000)
         if creature:IsCasting() then
             return
@@ -230,6 +231,22 @@ local function bossTick(creature, guid)
             return
         end
     end
+end
+
+-- C++ spell_capacitus_polarity_shift::HandleDummy (boss_mechano_lord_capacitus.cpp:255-261):
+-- OnEffectHitTarget, EFFECT_0 SPELL_EFFECT_DUMMY: each hit unit self-casts
+-- SPELL_POSITIVE_POLARITY (39088) or SPELL_NEGATIVE_POLARITY (39091) 50/50,
+-- non-triggered, originalCaster = Capacitus. ev5 fires once per (effect,
+-- hit target) on the creature path (boss_ai.go:3435-3438).
+-- KNOWN DELTAS: a player hit unit's self-cast rides the triggered-only
+-- player funnel (lua_player.go:2897) where C++ is non-triggered, and the
+-- originalCaster GUID is accepted-but-unmodeled there; a creature hit
+-- unit casts non-triggered, C++-exact. DORMANT until Spell.dbc ships 39096.
+local function polarityShiftDummy(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    target:CastSpell(target, math.random() < 0.5 and SPELL_POSITIVE_POLARITY or SPELL_NEGATIVE_POLARITY)
 end
 
 RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 1, function(_, creature)
@@ -266,3 +283,4 @@ RegisterCreatureEvent(ENTRY_MECHANO_LORD_CAPACITUS, 23, function(_, creature)
     end
     resetBoss(creature:GetGUIDLow())
 end)
+RegisterSpellEvent(SPELL_POLARITY_SHIFT, 5, polarityShiftDummy)

@@ -10,9 +10,12 @@
 -- GetGuidData(NPC_KARGATH_BLADEFIST)/GetGuidData(NPC_
 -- SHATTERED_EXECUTIONER), SummonCreature, DoAction(ACTION_
 -- EXECUTIONER_TAUNT = 1)); spell_kargath_executioner is an
--- AuraScript and spell_remove_kargath_executioner is a
--- SpellScript — no AuraScript/SpellScript bridges, both
--- documented only, not registered).
+-- AuraScript (DoCheckAreaTarget only — no aura event for
+-- it, and the map-540 filter is a no-op in practice) and
+-- spell_remove_kargath_executioner is a SpellScript whose
+-- caster is the player (Load() gate) — the ev5 player path
+-- has no per-effect list site yet (runtime.go); both
+-- documented only, not registered (census rows 537/538).
 -- Zone .cpp in the Shattered Halls set per outland_script_
 -- loader.cpp order (boss roster 3/3 closed with kargath;
 -- instance_shattered_halls.lua ported 3fe088b3).
@@ -68,10 +71,10 @@
 -- unbridgeable; GetShatteredHallsAI is an AI-factory helper,
 -- not a script); no Lua area-trigger bridge — at_nethekurse_
 -- exit unported (its whole OnTrigger body is instance-gated
--- anyway); spell_kargath_executioner is an AuraScript and
--- spell_remove_kargath_executioner is a SpellScript — no
--- AuraScript/SpellScript bridges, both documented only, not
--- registered; the Kargath-DONE Reset trigger is PORTED
+-- anyway); spell_kargath_executioner (537: DoCheckAreaTarget
+-- only, no aura event) and spell_remove_kargath_executioner
+-- (538: player-cast, ev5 player path missing) stay
+-- documented only, not registered; the Kargath-DONE Reset trigger is PORTED
 -- 2026-11-10 via the ev38 relay — the kargath file fires
 -- ACTION_KARGATH_DONE_RESET on death (instance_shattered_halls.
 -- cpp:155-156 calls executioner->AI()->Reset() when Kargath
