@@ -52,8 +52,10 @@ RegisterAuraEvent(SPELL_BREWFEST_APPLE_TRAP, 2, appleTrapApply)
 -- application carries no remove mode outside a removal).
 -- Gaps (tick 295: the first is closed — event 4 now re-runs the
 -- switch on stack-raising merges, see the registration below; the
--- OnPeriodic leg (RemoveAuraFromStack) stays out — no
--- RemoveAuraFromStack bridge.
+-- OnPeriodic leg closed this tick — no RemoveAuraFromStack bridge,
+-- so the stack drop rides aura:SetStackAmount and the CHANGE_AMOUNT
+-- re-run of OnChange it triggers in C++ is replayed explicitly in
+-- giddyupPeriodic below).
 local SPELL_BREWFEST_GIDDYUP = 42924 -- spell_holiday.cpp:1087
 local SPELL_RENTAL_RACING_RAM = 43883 -- spell_holiday.cpp:1069
 local SPELL_SWIFT_WORK_RAM = 43880 -- spell_holiday.cpp:1070
@@ -63,15 +65,7 @@ local SPELL_RAM_CANTER = 42993 -- spell_holiday.cpp:1074
 local SPELL_RAM_GALLOP = 42994 -- spell_holiday.cpp:1075
 local AURA_REMOVE_BY_DEFAULT = 1 -- SpellAuraDefines.h:64
 
-local function giddyupChange(event, aura, target)
-    if not target:HasAura(SPELL_RENTAL_RACING_RAM) and not target:HasAura(SPELL_SWIFT_WORK_RAM) then
-        target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
-        return
-    end
-    if target:HasAura(SPELL_EXHAUSTED_RAM) then
-        return
-    end
-    local stacks = aura:GetStackAmount()
+local function giddyupSpeedLeg(target, stacks)
     if stacks == 1 then
         target:RemoveAura(SPELL_RAM_LEVEL_NEUTRAL)
         target:RemoveAura(SPELL_RAM_CANTER)
@@ -84,12 +78,49 @@ local function giddyupChange(event, aura, target)
         target:RemoveAura(SPELL_RAM_CANTER)
         target:CastSpell(target, SPELL_RAM_GALLOP, true)
     end
+end
+
+local function giddyupChange(event, aura, target)
+    if not target:HasAura(SPELL_RENTAL_RACING_RAM) and not target:HasAura(SPELL_SWIFT_WORK_RAM) then
+        target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
+        return
+    end
+    if target:HasAura(SPELL_EXHAUSTED_RAM) then
+        return
+    end
+    giddyupSpeedLeg(target, aura:GetStackAmount())
     if aura:GetRemoveMode() == AURA_REMOVE_BY_DEFAULT then
         target:RemoveAura(SPELL_RAM_TROT)
         target:CastSpell(target, SPELL_RAM_LEVEL_NEUTRAL, true)
     end
 end
 
+-- C++ spell_brewfest_giddyup::OnPeriodic (spell_holiday.cpp:1140-1143):
+-- RemoveAuraFromStack(GetId()) drops one stack per tick. The stack
+-- change re-fires OnChange in C++ (CHANGE_AMOUNT), so the switch
+-- re-runs on the new count — the ramp-down through canter (6) and
+-- trot (1). SetStackAmount fires no change-amount event in Go, so
+-- the decrement and the switch re-run are both done here; the
+-- remove-mode leg is skipped because the mode is NONE mid-tick, as
+-- in C++. At 0 stacks the aura drops instead of going negative.
+local function giddyupPeriodic(event, aura, target)
+    local stacks = aura:GetStackAmount() - 1
+    if stacks <= 0 then
+        target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
+        return
+    end
+    aura:SetStackAmount(stacks)
+    if not target:HasAura(SPELL_RENTAL_RACING_RAM) and not target:HasAura(SPELL_SWIFT_WORK_RAM) then
+        target:RemoveAura(SPELL_BREWFEST_GIDDYUP)
+        return
+    end
+    if target:HasAura(SPELL_EXHAUSTED_RAM) then
+        return
+    end
+    giddyupSpeedLeg(target, stacks)
+end
+
+RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 1, giddyupPeriodic)
 RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 2, giddyupChange)
 RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 3, giddyupChange)
 -- Tick 295: the change-amount gap is closed — event 4 fires when a
