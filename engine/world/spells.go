@@ -16567,6 +16567,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 49158 || spellID == 51325 || spellID == 51326 || spellID == 51327 || spellID == 51328 {
 						s.corpseExplosionDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, explicitAreaJoin)
 					}
+					// spell_dk_death_coil (spell_dk.cpp:841-907):
+					// the EFFECT_0 DUMMY OnEffectHitTarget arm. Fires
+					// once per effect over the hit targets (C++ fires
+					// per hit target; the spell is single-target),
+					// ahead of the pet-aura/Eluna legs like the
+					// corpse-explosion arm above, and only when a
+					// target was actually hit.
+					if (spellID == 47541 || spellID == 52375 || spellID == 59134 || spellID == 62900) && effectIndex == 0 && len(hitTargets) > 0 {
+						s.deathCoilDummyEffect(effCtx, spell, casterLevel, hitTargets)
+					}
 					// spell_dk_death_grip (spell_dk.cpp:950-978): the
 					// EFFECT_0 DUMMY OnEffectHitTarget arm. Fires once per
 					// effect over the hit targets (C++ fires per hit
@@ -53090,6 +53100,46 @@ func (s *session) corpseExplosionDummyEffect(ctx context.Context, spell wotlk.Sp
 		return
 	}
 	s.corpseExplosionDetonate(ctx, spell, casterLevel, valid[rand.IntN(len(valid))])
+}
+
+// deathCoilDummyEffect is spell_dk_death_coil (spell_dk.cpp:841-907).
+// A Lua ev5 port would never fire: the player path has no
+// OnEffectHitTarget site on the normal cast path (finishSpellCast; ev5
+// fires only in castSpellDirectWithOverrides and on the creature path),
+// and caster:IsFriendlyTo has no bridge on player objects — so this is
+// a Go case in the finishSpellCast dummy leg (the corpse-explosion /
+// death-grip precedent). Per hit target: friendly takes the 47633 heal
+// with BP0 = GetEffectValue() * 1.5 (the C++ float multiply, truncated
+// to int32 by AddSpellBP0); hostile takes the 47632 damage with BP0 =
+// GetEffectValue() plus the Sigil of the Vengeful Heart (64962)
+// EFFECT_1 base amount when the caster carries it. Both casts are
+// TRIGGERED_FULL_MASK, which castSpellDirectWithBasePoint mirrors.
+// CheckCast (facing / friendly-must-be-undead) stays out — no
+// check-cast bridge in finishSpellCast. DORMANT until Spell.dbc ships
+// the 47541/52375/59134/62900 + 47632/47633 records.
+func (s *session) deathCoilDummyEffect(ctx context.Context, spell wotlk.Spell, casterLevel uint32, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || len(spell.Effects) == 0 {
+		return
+	}
+	value := spell.Effects[0].CalcValueForLevel(spell, casterLevel)
+	sigil := int32(0)
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.SpellID != 64962 || aura.EffectMask&(1<<1) == 0 {
+			continue
+		}
+		sigil = aura.BaseAmounts[1]
+		break
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		if s.isFriendlyToTarget(guid, s.server.findSessionByGUID(guid)) || s.isFriendlyToCreatureTarget(guid) {
+			s.castSpellDirectWithBasePoint(ctx, 47633, guid, uint32(int32(float32(value)*1.5)))
+		} else {
+			s.castSpellDirectWithBasePoint(ctx, 47632, guid, uint32(value+sigil))
+		}
+	}
 }
 
 // Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the

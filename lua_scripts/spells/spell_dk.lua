@@ -51,6 +51,19 @@
 --   consecutive IDs with no in-tree citation.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
 --   needs DealDamage; spell_dk_raise_ally needs ghoul AI push/pop.
+--   spell_dk_death_coil ranks 1-4 (47541/52375/59134/62900) stay out
+--   of Lua — no ev5 player path, no IsFriendlyTo on players; the Go
+--   finishSpellCast dummy leg is PORTED (spells.go deathCoilDummyEffect
+--   + boss_ai.go creature twin: 47632 damage / 47633 heal, BP0 = effect
+--   value [*1.5 heal] + sigil 64962 eff1).
+--   spell_dk_death_rune (49208/49467/54639, tick 559) stays out — no
+--   Lua rune bridges at all (GetBaseRune/GetRuneCooldown/
+--   AddRuneByAuraEffect/RemoveRunesByAuraEffect, aura ResetPeriodic
+--   all absent; Go-side dkRuneState exists, runes.go). spell_dk_
+--   death_strike (49998, tick 562) stays out — no ev5 player path;
+--   Go finishSpellCast dummy recipe recorded in CHECKPOINT (disease
+--   count * max-health pct + Improved Death Strike icon 2751 leg,
+--   self-cast 45470 non-triggered).
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
 --   path has no OnEffectHitTarget site on the normal cast path, so a
 --   RegisterSpellEvent ev5 handler would never fire on a client cast):
@@ -352,3 +365,29 @@ end
 
 RegisterAuraEvent(SPELL_DK_DEATH_AND_DECAY_R1, 1, deathAndDecayTick)
 RegisterAuraEvent(SPELL_DK_DEATH_AND_DECAY_R2, 1, deathAndDecayTick)
+
+local SPELL_DK_NECROSIS_R1 = 51459 -- spell_dk.cpp:1735
+local SPELL_DK_NECROSIS_DAMAGE = 51460 -- spell_dk.cpp:93
+
+-- C++ spell_dk_necrosis::HandleProc (spell_dk.cpp:1751-1761):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction (the ev6
+-- true return), then the actor casts SPELL_DK_NECROSIS_DAMAGE 51460 on
+-- the proc target with BP0 = pct(triggering damage, aura EFFECT_0
+-- amount), triggered via the aurEff overload (TRIGGERED_FULL_MASK,
+-- SpellDefines.h:166) — the CastCustomSpell `true` arg is exact. No
+-- CheckProc gate, no proc-spell or school filter, so the ev6 args
+-- (event, aura, target, actor, procTarget, damage) suffice — the
+-- player-aura proc path reaches ev6 (procs.go:3921). The damage==0 leg
+-- returns after PreventDefaultAction, so it still vetoes.
+-- DORMANT until Spell.dbc ships the 51459 proc entry. Higher ranks
+-- are not in-tree — not registered until DBC confirms them.
+local function necrosisProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil or damage == nil or damage == 0 then
+        return true
+    end
+    local bp0 = math.floor(damage * aura:GetAmount() / 100)
+    actor:CastCustomSpell(procTarget, SPELL_DK_NECROSIS_DAMAGE, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_NECROSIS_R1, 6, necrosisProc)

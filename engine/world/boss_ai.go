@@ -3587,6 +3587,36 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 					}
 				}
 			}
+			if (spellID == 47541 || spellID == 52375 || spellID == 59134 || spellID == 62900) && i == 0 {
+				// spell_dk_death_coil (spell_dk.cpp:841-907): the
+				// EFFECT_0 DUMMY OnEffectHitTarget arm — the
+				// creature-caster twin of the session leg (the
+				// unworthy-initiate 52375 cast): friendly hit units
+				// take the 47633 heal with BP0 = 1.5x the effect
+				// value, hostile units the 47632 damage with BP0 =
+				// the effect value (the Sigil of the Vengeful Heart
+				// bonus is player-only, no creature leg). The Eluna
+				// arm below still fires (no continue), like the
+				// judgement arm above. DORMANT until Spell.dbc ships
+				// the 47541/52375/59134/62900 + 47632/47633 records.
+				value := spellInfo.Effects[i].CalcValueForLevel(spellInfo, uint32(m.Level))
+				for _, guid := range bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart) {
+					if guid == 0 || evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+						continue
+					}
+					if status, isReflected := reflectedTargets[guid]; isReflected {
+						if status != protocol.SpellMissNone {
+							continue
+						}
+						guid = m.GUID
+					}
+					if s.creatureFriendlyToTarget(m, guid) {
+						s.castCreatureSpellInternalWithBasePoints(ctx, m, 47633, guid, true, map[int]int32{0: int32(float32(value) * 1.5)}, nil, false, 0)
+					} else {
+						s.castCreatureSpellInternalWithBasePoints(ctx, m, 47632, guid, true, map[int]int32{0: value}, nil, false, 0)
+					}
+				}
+			}
 			s.fireCreatureSpellDummyEffectForTargets(ctx, m, spellID, uint8(i), bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 		}
 	}
