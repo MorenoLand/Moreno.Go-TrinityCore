@@ -182,7 +182,12 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   ribbon pole channel) whose aura IDs live only in world DB
 --   spell_script_names. The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
---   which is how 24930 Hallow's End Candy is ported above.
+--   which is how 24930 Hallow's End Candy is ported above, and 43876
+--   Dismount Ram this tick (tail). 43714 relay-race intro force is
+--   covered by the Go default FORCE_CAST leg on both caster paths
+--   (spells.go:52503, boss_ai.go:6953); its script delta is only the
+--   reagent/power cost flag, unbridgeable from Lua — an ev4 port
+--   would double-cast.
 
 local SPELL_HALLOW_END_CANDY_PIRATE = 24926 -- spell_holiday.cpp:169 (class spell_hallow_end_candy_pirate)
 local SPELL_HALLOWS_END_CANDY_FEMALE_DEFIAS_PIRATE = 44742 -- spell_holiday.cpp:122
@@ -357,3 +362,26 @@ local function midsummerRibbonPoleVisualTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MIDSUMMER_RIBBON_POLE_PERIODIC_VISUAL, 1, midsummerRibbonPoleVisualTick)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_brewfest_dismount_ram::HandleScript
+--   (spell_holiday.cpp:1387-1395): EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT.
+--   On hit the caster drops the Rental Racing Ram aura (43883).
+--   The Go default script-effect leg is a per-spellID switch with no
+--   43876 case, so nothing else fires; ev4 runs ahead of the effects
+--   loop (spells.go:14348), the same site the 24930 port rides. The
+--   C++ arm uses no hit unit, so the no-target ev4 fire is exact.
+local SPELL_BREWFEST_DISMOUNT_RAM = 43876 -- spell_holiday.cpp:1377
+
+local function dismountRam(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:RemoveAura(SPELL_RENTAL_RACING_RAM)
+end
+
+RegisterSpellEvent(SPELL_BREWFEST_DISMOUNT_RAM, 4, dismountRam)
