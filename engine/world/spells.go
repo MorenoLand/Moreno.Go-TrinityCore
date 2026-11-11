@@ -4282,6 +4282,20 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	// spell_q11010_q11102_q11023_q11008_check_fly_mount::CheckRequirement
+	// (spell_quest.cpp:1671-1678): the Skyguard Blasting Charge (39844)
+	// casts only while the caster carries a FLY aura or a
+	// MOD_INCREASE_MOUNTED_FLIGHT_SPEED aura; otherwise it fails
+	// SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. C++ script OnCheckCast
+	// handlers run at the end of Spell::CheckCast, so this wires after
+	// the generic gates beside the tame-beast leg.
+	if spellID == 39844 {
+		if !s.hasAuraType(spellAuraFly) && !s.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantDoThatRightNow), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skyguard blasting charge without a flight aura")
+			return true
+		}
+	}
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
 	// requiring combo points (REQ_COMBO_POINTS1/2) fails with
 	// SPELL_FAILED_NO_COMBO_POINTS when none are banked — against the
@@ -16574,6 +16588,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if (spellID == 55090 || spellID == 55265 || spellID == 55270 || spellID == 55271) && len(hitTargets) > 0 {
 						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, scourgeStrikeMultipliers)
 					}
+					// spell_q12308_escape_from_silverbrook::HandleDummy
+					// (spell_quest.cpp:2256-2259): the EFFECT_0 DUMMY
+					// OnEffectHit arm casts 48681 (Summon Silverbrook
+					// Worgen) on the caster, triggered — the client-path
+					// twin of the triggered-funnel leg above. Fires once
+					// per effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target self-cast),
+					// ahead of the pet-aura/Eluna legs like the
+					// scourge-strike arm above, and only when a target
+					// was actually hit.
+					if spellID == 48682 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.castSpellDirect(effCtx, 48681, s.playerGUID)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// spell_hun_readiness::HandleDummy
 					// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY
@@ -28174,6 +28201,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 								s.castSpellDirect(ctx, uint32(value), guid)
 							}
 						}
+					}
+					// spell_q12308_escape_from_silverbrook::HandleDummy
+					// (spell_quest.cpp:2256-2259): the EFFECT_0 DUMMY
+					// OnEffectHit arm casts 48681 (Summon Silverbrook
+					// Worgen) on the caster, triggered — the triggered-cast
+					// leg, gated on a miss-filtered hit like the bloodthirst
+					// leg above.
+					if spellID == 48682 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						s.castSpellDirect(ctx, 48681, s.playerGUID)
 					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the

@@ -481,6 +481,26 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				}
 				x, y, z = resolveCasterDestPosition(s.server.Data, targetType, eff.RadiusIndex, uint32(s.player.Level), s.player.X, s.player.Y, s.player.Z, s.player.Orientation, combatReach, modRadius)
 				hasDst = true
+				// SpellScript OnDestinationTargetSelect RelocateOffset
+				// legs (spell_quest.cpp): 55368 Summon Stefan and 59303
+				// Summon Frost Wyrm raise the EFFECT_0
+				// TARGET_DEST_CASTER_BACK destination 20 yards, and
+				// 12601 Second Chances raises the EFFECT_0
+				// TARGET_DEST_CASTER destination 2.5 yards — the script
+				// handler rewrites m_targets dst, so the running
+				// destination (and this effect's snapshot) carries the
+				// offset like the C++ RelocateOffset. The effect-28
+				// summon arm still spawns at the caster (handleSummonPet
+				// ignores dest slots); the spawn-at-dest gap is
+				// pre-existing, not introduced here.
+				if effIndex == 0 {
+					switch {
+					case (spellID == 55368 || spellID == 59303) && targetType == implicitTargetDestCasterBack:
+						z += 20
+					case spellID == 12601 && targetType == implicitTargetDestCaster:
+						z += 2.5
+					}
+				}
 			case targetType == implicitTargetDestCasterFishing:
 				// Spell::SelectImplicitCasterDestTargets (Spell.cpp:1359-1389):
 				// TARGET_DEST_CASTER_FISHING (39) — the bobber point resolves
