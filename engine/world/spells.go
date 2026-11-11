@@ -676,6 +676,7 @@ const (
 	spellIconCheatDeath                               = 2109 // Cheat Death dummy aura (Unit.cpp:7078)
 	spellIconImprovedInsectSwarm                      = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
 	spellIconRendAndTear                              = 2859 // Rend and Tear talent dummy aura (SpellEffects.cpp:3306)
+	spellIconImprovedDeathStrike                      = 2751 // Improved Death Strike talent aura (spell_dk.cpp:1148)
 	spellSchoolMaskNormal                             = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
 	spellSchoolMaskFrost                              = 16   // SPELL_SCHOOL_MASK_FROST (SharedDefines.h:328)
 	spellAuraAttackPowerPercent                       = 166
@@ -16576,6 +16577,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// target was actually hit.
 					if (spellID == 47541 || spellID == 52375 || spellID == 59134 || spellID == 62900) && effectIndex == 0 && len(hitTargets) > 0 {
 						s.deathCoilDummyEffect(effCtx, spell, casterLevel, hitTargets)
+					}
+					// spell_dk_death_strike (spell_dk.cpp:1126-1165):
+					// the EFFECT_2 DUMMY OnEffectHitTarget arm. Fires
+					// once per effect over the hit targets (C++ fires
+					// per hit target; the spell is single-target),
+					// ahead of the pet-aura/Eluna legs like the
+					// death-coil arm above, and only when a target was
+					// actually hit.
+					if spellID == 49998 && effectIndex == 2 && len(hitTargets) > 0 {
+						s.deathStrikeDummyEffect(effCtx, spell, casterLevel, hitTargets)
 					}
 					// spell_dk_death_grip (spell_dk.cpp:950-978): the
 					// EFFECT_0 DUMMY OnEffectHitTarget arm. Fires once per
@@ -53140,6 +53151,78 @@ func (s *session) deathCoilDummyEffect(ctx context.Context, spell wotlk.Spell, c
 			s.castSpellDirectWithBasePoint(ctx, 47632, guid, uint32(value+sigil))
 		}
 	}
+}
+
+// deathStrikeDummyEffect is spell_dk_death_strike (spell_dk.cpp:1126-1165).
+// A Lua ev5 port would never fire: the player path has no
+// OnEffectHitTarget site on the normal cast path (finishSpellCast; ev5
+// fires only in castSpellDirectWithOverrides and on the creature path),
+// so this is a Go case in the finishSpellCast dummy leg (the death-coil
+// precedent). Per hit target: BP0 = the disease count on the target by
+// this caster (targetDiseasesByCaster, the GetDiseasesByCaster mirror)
+// times CountPctFromMaxHealth of the EFFECT_0 DamageMultiplier (the DBC
+// EffectChainAmplitude, SpellInfo.cpp:345), plus the Improved Death
+// Strike leg — the caster's ADD_PCT_MODIFIER DK-family icon-2751 aura
+// effect 0 adds its EFFECT_2 CalcValue pct. The caster then self-casts
+// the 45470 heal with that BP0. C++ casts 45470 NON-triggered (the
+// "@todo castspell refactor" note at :1153); Go has no non-triggered
+// direct-cast helper, so the heal rides the triggered-only funnel
+// (castSpellDirectWithOverrides) like the death-gate leg. DORMANT until
+// Spell.dbc ships the 49998 + 45470 records. No creature twin: no
+// in-tree creature caster cites 49998 and there is no creature-side
+// disease-count helper.
+func (s *session) deathStrikeDummyEffect(ctx context.Context, spell wotlk.Spell, casterLevel uint32, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || len(spell.Effects) == 0 {
+		return
+	}
+	pct := int32(spell.Effects[0].ChainAmplitude)
+	perDisease := int32(0)
+	if pct > 0 {
+		perDisease = int32(uint64(s.player.MaxHealth) * uint64(pct) / 100)
+	}
+	improvedPct := s.improvedDeathStrikePct(casterLevel)
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		count := s.targetDiseasesByCaster(ctx, guid, s.playerGUID)
+		bp := int32(uint64(count) * uint64(perDisease))
+		if improvedPct != 0 {
+			bp += int32(int64(bp) * int64(improvedPct) / 100)
+		}
+		s.castSpellDirectWithOverrides(ctx, 45470, s.playerGUID, false, map[int]int32{0: bp}, 0, nil, 0)
+	}
+}
+
+// improvedDeathStrikePct mirrors the Improved Death Strike leg of
+// spell_dk_death_strike::HandleDummy (spell_dk.cpp:1147-1149):
+// Unit::GetAuraEffect(SPELL_AURA_ADD_PCT_MODIFIER, SPELLFAMILY_DEATHKNIGHT,
+// DK_ICON_ID_IMPROVED_DEATH_STRIKE 2751, 0) — the first live caster aura
+// effect of that type/family/icon at effect 0 — and its EFFECT_2
+// CalculateSpellDamage value at the caster's level (the DBC read, not
+// the stored aura amount). Zero when no such aura is up or its spell
+// record is missing.
+func (s *session) improvedDeathStrikePct(casterLevel uint32) int32 {
+	if s == nil || s.server == nil {
+		return 0
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&(1<<0) == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || len(auraSpell.Effects) == 0 {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyDeathKnight || auraSpell.SpellIconID != spellIconImprovedDeathStrike || auraSpell.Effects[0].Aura != spellAuraAddPctModifier {
+			continue
+		}
+		if len(auraSpell.Effects) <= 2 {
+			return 0
+		}
+		return auraSpell.Effects[2].CalcValueForLevel(auraSpell, casterLevel)
+	}
+	return 0
 }
 
 // Wintergrasp RP-GG drop (57349): count 5 of the item whose entry is the

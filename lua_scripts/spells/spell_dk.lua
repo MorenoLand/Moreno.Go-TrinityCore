@@ -60,10 +60,12 @@
 --   Lua rune bridges at all (GetBaseRune/GetRuneCooldown/
 --   AddRuneByAuraEffect/RemoveRunesByAuraEffect, aura ResetPeriodic
 --   all absent; Go-side dkRuneState exists, runes.go). spell_dk_
---   death_strike (49998, tick 562) stays out — no ev5 player path;
---   Go finishSpellCast dummy recipe recorded in CHECKPOINT (disease
---   count * max-health pct + Improved Death Strike icon 2751 leg,
---   self-cast 45470 non-triggered).
+--   death_strike (49998, tick 562) PORTED in Go (spells.go
+--   deathStrikeDummyEffect, this tick): disease count * max-health
+--   pct (Effects[0].DamageMultiplier = ChainAmplitude) + Improved
+--   Death Strike icon 2751 leg, self-cast 45470; the C++ cast is
+--   non-triggered but rides the triggered funnel (no non-triggered
+--   player cast helper — the 47496 ghoul precedent).
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
 --   path has no OnEffectHitTarget site on the normal cast path, so a
 --   RegisterSpellEvent ev5 handler would never fire on a client cast):
@@ -80,6 +82,15 @@
 --   and its Suicide leg (43999 + 51270) ports as the ev5 handler
 --   below (2026-11-10) — the Go detonate arm must not also cast them
 --   for a living ghoul, or it would double-fire.
+--   spell_dk_death_strike (49998, spell_dk.cpp:1126-1165, tick 562):
+--   Go case in the finishSpellCast dummy leg — per hit target the
+--   caster self-casts 45470 with BP0 = diseases-by-caster *
+--   CountPctFromMaxHealth(Effects[0].DamageMultiplier), plus the
+--   Improved Death Strike icon-2751 AddPct leg (aura spell EFFECT_2).
+--   KNOWN DELTA: C++ casts the heal non-triggered; Go has no
+--   non-triggered player cast helper, so it rides the triggered
+--   funnel (47496 precedent). DORMANT until Spell.dbc ships the
+--   49998 + 45470 records; other Death Strike ranks unconfirmed.
 -- ALREADY PORTED (verified in-house this tick, NOT re-ported — the
 --   2026-11-10 census rows for these two are stale, its matcher
 --   misses Go cases in spells.go/procs.go):
