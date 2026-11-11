@@ -19502,8 +19502,9 @@ func init() {
 	// legs unbridged), npc_bullet_controller (34743,
 	// entry-unverifiable; DoCastAOE bridge absent) — zero registration,
 	// documented-only. spell_bullet_controller,
-	// spell_valkyr_essences, spell_power_of_the_twins — no SpellScript /
-	// AuraScript binding bridge (razelikh precedent); join the
+	// spell_valkyr_essences, spell_power_of_the_twins — stay out:
+	// essences has no OnEffectAbsorb hook (AuraEvents 1-7 only),
+	// power_of_the_twins has no EnableDualWield bridge; join the
 	// SpellScript/AuraScript queue. spell_powering_up is PORTED in
 	// lua_scripts/northrend/boss_twin_valkyr.lua (RegisterSpellEvent
 	// ev5 on the 67590-helper pool) — the binding bridge is live.
