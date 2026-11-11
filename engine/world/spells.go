@@ -19629,6 +19629,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.scourgeStrikeAfterHit(effCtx, hitTargets, scourgeStrikeMultipliers, hitDamage)
 		s.divineStormAfterHit(ctx, spellID, spell, casterLevel, hitTargets, hitDamage)
 		s.bloodlustAfterHit(ctx, spellID, hitTargets)
+		s.heroismAfterHit(ctx, spellID, hitTargets)
 		for _, miss := range missStatus {
 			hitDamage.phase = spellHitPhaseAfterHit
 			hitDamage.currentTarget = miss.TargetGUID
@@ -52691,6 +52692,28 @@ func (s *session) bloodlustAfterHit(ctx context.Context, spellID uint32, hitTarg
 			continue
 		}
 		s.castSpellDirect(ctx, 57724, guid)
+	}
+}
+
+// heroismAfterHit is spell_sha_heroism
+// (spell_shaman.cpp:1116-1120): the AfterHit arm — per hit target, the
+// target casts Exhaustion (57723) on itself, triggered. Go casts from the
+// player onto the target instead: the aura lands on the same unit and
+// the RemoveInvalidTargets check is caster-agnostic. Fires once per hit
+// target, after the Lua AfterHit handlers above; miss entries take no
+// cast (C++ GetHitUnit() nil skips). The RemoveInvalidTargets arm (drop
+// Exhaustion holders from the raid list) has no Go hook: the player path
+// has no area-target-select filter site (the bloodlust 2825 precedent).
+// DORMANT until Spell.dbc ships the 32182 record.
+func (s *session) heroismAfterHit(ctx context.Context, spellID uint32, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil || spellID != 32182 {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		s.castSpellDirect(ctx, 57723, guid)
 	}
 }
 

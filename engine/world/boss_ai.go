@@ -11157,6 +11157,39 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 37595, casterGUID: m.GUID, targetGUID: m.GUID})
 				continue
 			}
+			if auraSpell.ID == 23552 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_sha_item_lightning_shield_trigger::HandleProc
+				// (spell_shaman.cpp:1302-1311): the creature-side twin of
+				// the procs.go leg — the holder casts Lightning Shield T2
+				// damage (27635) on itself. Placed before the generic
+				// PROC_TRIGGER_SPELL arm, which would cast the DBC trigger
+				// on the proc target instead (the 37594 precedent). No Lua
+				// ev6 twin: spell_shaman.lua holds no 23552 handler.
+				// DORMANT until Spell.dbc ships the 23552 proc entry.
+				s.castCreatureSpellInternal(ctx, m, 27635, m.GUID, true)
+				continue
+			}
+			if auraSpell.ID == 23572 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_sha_item_mana_surge::HandleProc
+				// (spell_shaman.cpp:1336-1355): the creature-side twin of
+				// the procs.go leg — the holder casts Mana Surge (23571)
+				// on itself with BP0 = 35% of the triggering spell's power
+				// cost (creatureSpellPowerCost twin of the C++
+				// CalcPowerCost). Placed before the generic
+				// PROC_TRIGGER_SPELL arm, which would cast the DBC trigger
+				// on the proc target with no base points. No Lua ev6 twin:
+				// spell_shaman.lua holds no 23572 handler. DORMANT until
+				// Spell.dbc ships the 23572 proc entry.
+				if ev.eventSpell == nil {
+					continue
+				}
+				mana := int64(s.creatureSpellPowerCost(*ev.eventSpell, m)) * 35 / 100
+				if mana < 0 {
+					mana = 0
+				}
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, 23571, m.GUID, true, map[int]int32{0: int32(mana)}, nil, false, 0)
+				continue
+			}
 			if auraSpell.ID == 70770 && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_pri_t10_heal_2p_bonus::HandleProc
 				// (spell_priest.cpp:1547-1576): the creature-side twin of

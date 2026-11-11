@@ -3812,6 +3812,50 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				_ = s.removePlayerAuraFromStack(50421)
 				continue
 			}
+			if auraSpell.ID == 23552 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_sha_item_lightning_shield_trigger::HandleProc
+				// (spell_shaman.cpp:1302-1311): PreventDefaultAction; the
+				// holder casts Lightning Shield T2 damage (27635) on
+				// itself. Placed before the generic arm, which would cast
+				// the DBC trigger on the proc target instead. The cast
+				// carries the triggering-aura attribution (the C++ aurEff
+				// overload), mirroring the generic leg below (50421
+				// precedent). No Lua ev6 twin: spell_shaman.lua holds no
+				// 23552 handler. DORMANT until Spell.dbc ships the 23552
+				// proc entry.
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.castSpellDirect(ctx, 27635, s.playerGUID)
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 23572 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_sha_item_mana_surge::HandleProc
+				// (spell_shaman.cpp:1336-1355): PreventDefaultAction; the
+				// holder casts Mana Surge (23571) on itself with BP0 =
+				// 35% of the triggering spell's power cost. Placed before
+				// the generic arm, which would cast the DBC trigger on the
+				// proc target with no base points. The cast carries the
+				// triggering-aura attribution (the C++ aurEff overload),
+				// mirroring the generic leg below (56841 precedent for the
+				// power-cost read). No Lua ev6 twin: spell_shaman.lua holds
+				// no 23572 handler. DORMANT until Spell.dbc ships the 23572
+				// proc entry.
+				if ev.eventSpell == nil {
+					continue
+				}
+				mana := int64(s.calculateSpellPowerCost(*ev.eventSpell)) * 35 / 100
+				if mana < 0 {
+					mana = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.castSpellDirectWithBasePoint(ctx, 23571, s.playerGUID, uint32(mana))
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if auraSpell.ID == 67151 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_hun_t9_4p_bonus::HandleProc
 				// (spell_hunter.cpp:1598-1607): PreventDefaultAction; the
