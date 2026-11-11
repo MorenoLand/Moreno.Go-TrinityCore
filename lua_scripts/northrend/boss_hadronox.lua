@@ -27,8 +27,8 @@
 -- without the intro/movement machinery.
 -- EVENT_LEECH_POISON — DoCastAOE(Leech Poison 53030) self-cast,
 -- randtime(5s,7s) init, randtime(7s,9s) repeat (math.random); the
--- AuraScript's heal-on-death leg (53800) stays out (no AuraScript
--- bridge).
+-- AuraScript's heal-on-death leg (53800) is PORTED below (tick 202,
+-- RegisterAuraEvent OnRemove).
 -- EVENT_WEB_GRAB — DoCastAOE(Web Grab 57731) self-cast,
 -- randtime(13s,19s) init, randtime(20s,25s) repeat (math.random).
 -- EVENT_ACID_CLOUD — DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD
@@ -68,8 +68,8 @@
 -- DoCastAOE(WEB_SIDE_DOORS 53185) + _doorsWebbed latch + DoZoneInCombat
 -- only at the final step — PORTED 2026-11-08 (tick 416) in
 -- hadronoxMovementInform below (ev28 is bridged). Both spells' aura-
--- removal effects ride the unported spell_hadronox_web_doors
--- SpellScript (shazzrah precedent) — the casts are the ported arm.
+-- removal effects are PORTED below (RegisterSpellEvent ev5) — the
+-- casts are the ported arm.
 -- GetData(DATA_HADRONOX_ENTERED_COMBAT) + SetGUID(_anubar GUID list) +
 -- ObjectAccessor cross-AI — cross-AI GetData/SetGUID bridges absent.
 -- GetData(DATA_HADRONOX_WEBBED_DOORS) — PORTED 2026-11-08 (tick 416):
@@ -179,17 +179,28 @@
 -- spell_hadronox_periodic_summon_champion / _crypt_fiend / _necromancer
 -- (53035/53037/53036: HandleApply SetPeriodicTimer(2-17ms) + HandlePeriodic
 -- top/bottom summon casts 53064-53092 gated on HavePlayers + boss-state
--- DONE aura-remove + caster Z >= 750.0f) — no SpellScript/AuraScript
--- binding bridge on the Lua surface (razelikh precedent) —
--- documented-only.
+-- DONE aura-remove + caster Z >= 750.0f) — PORTED below
+-- (RegisterAuraEvent ev1, the template's three instantiations share one
+-- factory). The old "no SpellScript/AuraScript binding bridge" claim is
+-- stale: AuraEventOnPeriodic (1) / OnApply (2) / OnRemove (3) are live
+-- (runtime.go:508-514; muru 46041 ev1 precedent). Deviations: the
+-- HandleApply 2-17ms first-tick re-arm has no SetPeriodicTimer bridge,
+-- so the first tick fires at the DBC AuraPeriod; the HavePlayers gate
+-- reads the map IsEmpty twin (globals.go:1223-1227, per-instance); the
+-- auras themselves are DB-side per-spawn creature_addon auras on the
+-- NPC_WORLDTRIGGER_LARGE (23472) triggers — Go never applies addon
+-- auras and the per-spawn mapping is not in-tree, so no Lua application
+-- leg is invented (bomb-bot precedent needs a 1:1 C++-documented
+-- mapping); the handlers are DORMANT until the auras are applied, and
+-- DBC-gated too (the 53064-53092 summon casts need Spell.dbc records).
 -- PORTED (tick 202, RegisterAuraEvent OnRemove):
 -- spell_hadronox_leeching_poison (53030 AuraScript: OnEffectRemove
 -- AURA_REMOVE_BY_DEATH (non-guardian) -> caster CastSpell(caster,
 -- LEECH_POISON_HEAL 53800, triggered)); the IsGuardian gate reads the
 -- new unit:IsGuardian bridge (Map::SummonCreature mask rule).
 -- spell_hadronox_web_doors (53177/53185 SpellScript: OnEffectHitTarget
--- removes the three periodic-summon auras from the target) — no
--- SpellScript binding bridge.
+-- removes the three periodic-summon auras from the target) — PORTED
+-- below (RegisterSpellEvent ev5; muru summon-blood-elves precedent).
 -- achievement_hadronox_denied — AchievementCriteriaScript (target ToCreature
 -- -> AI GetData(DATA_HADRONOX_WEBBED_DOORS)) — no achievement-criteria
 -- bridge (snakes precedent) + cross-AI GetData bridge absent —
@@ -245,6 +256,66 @@ local SPELL_CRUSHER_FRENZY = 53801
 local SPELL_CRUSHER_SMASH = 53318
 local CRUSHER_EMOTE_FRENZY = 2
 local HADRONOX_EMOTE_MOVE = 1 -- boss_hadronox.cpp:132
+
+-- C++ spell_hadronox_periodic_summon_template_AuraScript::HandlePeriodic
+-- (boss_hadronox.cpp:960-979): EFFECT_0 PERIODIC_DUMMY. On each tick the
+-- caster (the world trigger carrying the aura) casts the top summon spell
+-- when its Z is >= 750.0f, else the bottom one, triggered; when the boss
+-- state is DONE the aura removes itself; with no players in the instance
+-- the tick is a no-op. One factory mirrors the C++ template (one class,
+-- three instantiations bound to 53035/53037/53036 with their top/bottom
+-- pairs). HandleApply (:953-957) only re-arms the first tick to 2-17ms
+-- and has no bridge (see header) — no ev2 registration.
+local HADRONOX_PERIODIC_SUMMONS = {
+    [53035] = { 53064, 53090 }, -- champion: TOP 53064, BOTTOM 53090
+    [53037] = { 53065, 53091 }, -- crypt fiend: TOP 53065, BOTTOM 53091
+    [53036] = { 53066, 53092 }, -- necromancer: TOP 53066, BOTTOM 53092
+}
+
+local function periodicSummonTick(topSpell, bottomSpell)
+    return function(event, aura, target)
+        local caster = aura:GetCaster()
+        if caster == nil then
+            return
+        end
+        local map = caster:GetMap()
+        if map ~= nil and map:IsEmpty() then
+            return
+        end
+        if caster:GetBossState(DATA_HADRONOX) == BOSS_STATE_DONE then
+            aura:Remove()
+            return
+        end
+        if caster:GetZ() >= 750.0 then
+            caster:CastSpell(caster, topSpell, true)
+        else
+            caster:CastSpell(caster, bottomSpell, true)
+        end
+    end
+end
+
+for periodicSpell, pair in pairs(HADRONOX_PERIODIC_SUMMONS) do
+    RegisterAuraEvent(periodicSpell, 1, periodicSummonTick(pair[1], pair[2]))
+end
+
+-- C++ spell_hadronox_web_doors::HandleDummy (boss_hadronox.cpp:1094-1102,
+-- registered OnEffectHitTarget EFFECT_0 SPELL_EFFECT_APPLY_AURA at :1106):
+-- on effect 0, each hit unit loses the three periodic-summon auras. The
+-- ev5 hook fires once per (effect, live hit target) before the default
+-- (boss_ai.go:3435-3438), so the effectIndex == 0 filter is the C++
+-- registration twin (muru summon-blood-elves precedent). DBC-gated only
+-- (the 53177/53185 casts need Spell.dbc records).
+local function webDoorsHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    target:RemoveAura(53035)
+    target:RemoveAura(53037)
+    target:RemoveAura(53036)
+end
+
+RegisterSpellEvent(SPELL_WEB_FRONT_DOORS, 5, webDoorsHit)
+RegisterSpellEvent(SPELL_WEB_SIDE_DOORS, 5, webDoorsHit)
 
 -- Crusher-death step counter for the HADRONOX_MOVE relay below (C++
 -- _step, reset in Reset/ctor; NUM_STEPS = 4, Talk gated on _step < 3).
