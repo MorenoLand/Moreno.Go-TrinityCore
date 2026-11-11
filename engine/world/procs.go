@@ -96,13 +96,21 @@ const (
 	ProcSpellWoundPois   = 57975 // Wound Poison VII
 
 	// Trinket Proc Spells & ICDs
-	// Deathbringer's Will (DBW) - 45s ICD
+	// Deathbringer's Will (DBW) - 45s ICD. Buff IDs are C++-exact
+	// vs the DeathbringersWill enum (spell_item.cpp:543-554):
+	// normal Str 71484 / Agi 71485 / AP 71486 / Crit 71491 /
+	// Haste 71492, heroic Agi 71556 / AP 71558 / Crit 71559 /
+	// Haste 71560 / Str 71561.
 	ProcSpellDBWAgilityNorm  = 71485 // +600 Agi (Taunka)
-	ProcSpellDBWStrengthNorm = 71487 // +600 Str (Vrykul)
-	ProcSpellDBWAPNorm       = 71484 // +1200 AP (Iron Dwarf)
-	ProcSpellDBWAgilityHero  = 71491 // +700 Agi
-	ProcSpellDBWStrengthHero = 71492 // +700 Str
-	ProcSpellDBWAPHero       = 71560 // +1400 AP
+	ProcSpellDBWStrengthNorm = 71484 // +600 Str (Vrykul)
+	ProcSpellDBWAPNorm       = 71486 // +1200 AP (Iron Dwarf)
+	ProcSpellDBWCritNorm     = 71491 // +600 Crit (Iron Dwarf)
+	ProcSpellDBWHasteNorm    = 71492 // +600 Haste (Vrykul)
+	ProcSpellDBWAgilityHero  = 71556 // +700 Agi
+	ProcSpellDBWStrengthHero = 71561 // +700 Str
+	ProcSpellDBWAPHero       = 71558 // +1400 AP
+	ProcSpellDBWCritHero     = 71559 // +700 Crit
+	ProcSpellDBWHasteHero    = 71560 // +700 Haste
 
 	// Whispering Fanged Skull (WFS) - 45s ICD
 	ProcSpellWFSNorm = 71401 // +1100 AP
@@ -782,6 +790,34 @@ func (s *session) procWeaponEnchantProcsFromSpellHit(ctx context.Context, target
 	s.fireWeaponEnchantProc(ctx, target, encID, attTime)
 }
 
+// deathbringersWillForms mirrors spell_item_deathbringers_will::
+// HandleProc (spell_item.cpp:584-620): the class table picks one of
+// three buffs uniformly — warrior/paladin/death knight take
+// Strength/Critical/Haste, hunter Agility/Critical/AP, rogue/shaman
+// Agility/Haste/AP, druid Strength/Agility/Haste; priest, mage and
+// warlock take none (C++ returns early on the empty list). Class
+// numbers are SharedDefines.h (1 warrior, 2 paladin, 3 hunter,
+// 4 rogue, 5 priest, 6 death knight, 7 shaman, 8 mage, 9 warlock,
+// 11 druid).
+func deathbringersWillForms(class uint8, heroic bool) []uint32 {
+	var str, agi, ap, crit, haste uint32 = ProcSpellDBWStrengthNorm, ProcSpellDBWAgilityNorm, ProcSpellDBWAPNorm, ProcSpellDBWCritNorm, ProcSpellDBWHasteNorm
+	if heroic {
+		str, agi, ap, crit, haste = ProcSpellDBWStrengthHero, ProcSpellDBWAgilityHero, ProcSpellDBWAPHero, ProcSpellDBWCritHero, ProcSpellDBWHasteHero
+	}
+	switch class {
+	case 1, 2, 6:
+		return []uint32{str, crit, haste}
+	case 3:
+		return []uint32{agi, crit, ap}
+	case 4, 7:
+		return []uint32{agi, haste, ap}
+	case 11:
+		return []uint32{str, agi, haste}
+	default:
+		return nil
+	}
+}
+
 // procItemAndTrinketEffects evaluates and triggers equipped trinkets and rings on melee/ranged attacks.
 // Respects exact TrinityCore 3.3.5 Internal Cooldowns (ICD) and proc chances.
 // Reference: TrinityCore Unit::ProcDamageAndSpellFor (Unit.cpp:10950-11250).
@@ -807,19 +843,20 @@ func (s *session) procItemAndTrinketEffects(ctx context.Context, target combatTa
 
 		switch itemID {
 		case ItemDeathbringersWillNorm:
-			// 35% chance on attack, 45s ICD
-			if !s.isProcOnCooldown(ProcSpellDBWAgilityNorm) && rand.Float64() < s.procChanceDefault(ProcSpellDBWAgilityNorm, 0.35) {
-				// Pick one of the 3 forms: Agi (71485), Str (71487), AP (71484)
-				forms := []uint32{ProcSpellDBWAgilityNorm, ProcSpellDBWStrengthNorm, ProcSpellDBWAPNorm}
+			// 35% chance on attack, 45s ICD. The buff is one of the
+			// three class-table forms (deathbringersWillForms); a
+			// class with no forms never procs.
+			if forms := deathbringersWillForms(s.player.Class, false); len(forms) > 0 && !s.isProcOnCooldown(ProcSpellDBWAgilityNorm) && rand.Float64() < s.procChanceDefault(ProcSpellDBWAgilityNorm, 0.35) {
 				chosen := forms[rand.Intn(len(forms))]
 				s.castSpellDirect(ctx, chosen, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellDBWAgilityNorm, 45*time.Second)
 			}
 
 		case ItemDeathbringersWillHero:
-			// 35% chance on attack, 45s ICD
-			if !s.isProcOnCooldown(ProcSpellDBWAgilityHero) && rand.Float64() < s.procChanceDefault(ProcSpellDBWAgilityHero, 0.35) {
-				forms := []uint32{ProcSpellDBWAgilityHero, ProcSpellDBWStrengthHero, ProcSpellDBWAPHero}
+			// 35% chance on attack, 45s ICD. The buff is one of the
+			// three class-table forms (deathbringersWillForms); a
+			// class with no forms never procs.
+			if forms := deathbringersWillForms(s.player.Class, true); len(forms) > 0 && !s.isProcOnCooldown(ProcSpellDBWAgilityHero) && rand.Float64() < s.procChanceDefault(ProcSpellDBWAgilityHero, 0.35) {
 				chosen := forms[rand.Intn(len(forms))]
 				s.castSpellDirect(ctx, chosen, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellDBWAgilityHero, 45*time.Second)
@@ -3307,6 +3344,23 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 67151 && !(procActorIsPlayerGUID(ev.actorGUID) && s.player != nil && s.player.PetGUID != 0) {
 			continue
 		}
+		// spell_item_zandalarian_charm::CheckProc
+		// (spell_item.cpp:4124-4131): the charm only procs on a
+		// triggering spell other than itself (24658); a proc event
+		// with no spell info never procs. The gate runs before the
+		// chance roll, like the C++ CheckProc in GetProcEffectMask
+		// (70656 precedent above).
+		if auraSpell.ID == 24658 && (ev.eventSpell == nil || ev.eventSpell.ID == 24658) {
+			continue
+		}
+		// spell_item_zandalarian_charm::CheckProc, Restless Strength
+		// twin (spell_item.cpp:4124-4131, registered
+		// spell_item.cpp:4414 with stack aura 24662): the charm only
+		// procs on a triggering spell other than itself (24661); a
+		// proc event with no spell info never procs.
+		if auraSpell.ID == 24661 && (ev.eventSpell == nil || ev.eventSpell.ID == 24661) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3527,6 +3581,134 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 68130, casterGUID: ev.actorGUID, targetGUID: s.player.PetGUID})
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if (auraSpell.ID == 71519 || auraSpell.ID == 71562) && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_item_deathbringers_will::HandleProc
+				// (spell_item.cpp:586-612): PreventDefaultAction; the
+				// actor casts one of three stat buffs on itself with
+				// the aura effect, picked uniformly by class — the
+				// normal (71519) and heroic (71562) trigger sets
+				// differ. Priest/mage/warlock tables are empty in C++
+				// (no cast). Placed before the generic arm, which would
+				// cast the DBC trigger on the proc target instead. The
+				// cast carries the triggering-aura attribution (the C++
+				// aurEff overload), mirroring the generic leg below
+				// (67151 precedent). The census go_hit is a false
+				// positive: 71562 in-tree is the Ashen Band proc
+				// constant (procs.go:125), not this trinket. DORMANT
+				// until Spell.dbc ships the 71519/71562 proc entries.
+				if s.player == nil {
+					continue
+				}
+				var pool []uint32
+				if auraSpell.ID == 71562 {
+					// Heroic trigger set (spell_item.cpp:550-554).
+					switch s.player.Class {
+					case 1, 2, 6: // CLASS_WARRIOR, CLASS_PALADIN, CLASS_DEATH_KNIGHT
+						pool = []uint32{71561, 71559, 71560}
+					case 3: // CLASS_HUNTER
+						pool = []uint32{71556, 71559, 71558}
+					case 4, 7: // CLASS_ROGUE, CLASS_SHAMAN
+						pool = []uint32{71556, 71560, 71558}
+					case 11: // CLASS_DRUID
+						pool = []uint32{71561, 71556, 71560}
+					}
+				} else {
+					// Normal trigger set (spell_item.cpp:544-548).
+					switch s.player.Class {
+					case 1, 2, 6: // CLASS_WARRIOR, CLASS_PALADIN, CLASS_DEATH_KNIGHT
+						pool = []uint32{71484, 71491, 71492}
+					case 3: // CLASS_HUNTER
+						pool = []uint32{71485, 71491, 71486}
+					case 4, 7: // CLASS_ROGUE, CLASS_SHAMAN
+						pool = []uint32{71485, 71492, 71486}
+					case 11: // CLASS_DRUID
+						pool = []uint32{71484, 71485, 71492}
+					}
+				}
+				if len(pool) > 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: pool[rand.Intn(len(pool))], casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				continue
+			}
+			if auraSpell.ID == 69739 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_item_shard_of_the_scale::HandleProc
+				// (spell_item.cpp:3444-3456): PreventDefaultAction; a
+				// DONE_SPELL_MAGIC_DMG_CLASS_POS event casts the heal
+				// 69734 on the proc target, a NEG event the damage
+				// 69730, both with the aura effect. The two legs are
+				// independent in C++ (two ifs), so both fire if both
+				// flags are set. No Lua ev6 twin: ev6 args carry no
+				// proc type mask. DORMANT until Spell.dbc ships the
+				// 69739 proc entry.
+				if ev.typeMask&procFlagDoneSpellMagicDmgClassPos != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 69734, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				if ev.typeMask&procFlagDoneSpellMagicDmgClassNeg != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 69730, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				continue
+			}
+			if auraSpell.ID == 69755 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_item_shard_of_the_scale::HandleProc, purified
+				// rank (spell_item.cpp:3444-3456, template args
+				// SPELL_PURIFIED_CAUTERIZING_HEAL 69733 /
+				// SPELL_PURIFIED_SEARING_FLAMES 69729): same POS/NEG
+				// split as the shiny 69739 arm above — a
+				// DONE_SPELL_MAGIC_DMG_CLASS_POS event casts the heal
+				// 69733 on the proc target, a NEG event the damage
+				// 69729, both with the aura effect, independent legs.
+				// No Lua ev6 twin: ev6 args carry no proc type mask.
+				// DORMANT until Spell.dbc ships the 69755 proc entry.
+				if ev.typeMask&procFlagDoneSpellMagicDmgClassPos != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 69733, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				if ev.typeMask&procFlagDoneSpellMagicDmgClassNeg != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 69729, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				continue
+			}
+			if auraSpell.ID == 24658 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_item_zandalarian_charm::HandleStackDrop
+				// (spell_item.cpp:4133-4137): PreventDefaultAction;
+				// the holder loses one stack of the Unstable Power
+				// stack aura 24659. No Lua ev6 twin: ev6 args carry
+				// no triggering spell id, so the CheckProc gate is
+				// unimplementable in Lua. DORMANT until Spell.dbc
+				// ships the 24658 proc entry.
+				_ = s.removePlayerAuraFromStack(24659)
+				continue
+			}
+			if auraSpell.ID == 24661 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_item_zandalarian_charm::HandleStackDrop,
+				// Restless Strength twin (spell_item.cpp:4133-4137):
+				// PreventDefaultAction; the holder loses one stack of
+				// the Restless Strength stack aura 24662. No Lua ev6
+				// twin: ev6 args carry no triggering spell id, so the
+				// CheckProc gate is unimplementable in Lua. DORMANT
+				// until Spell.dbc ships the 24661 proc entry.
+				_ = s.removePlayerAuraFromStack(24662)
 				continue
 			}
 			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {

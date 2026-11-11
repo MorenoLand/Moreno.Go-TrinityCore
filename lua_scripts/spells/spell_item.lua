@@ -222,3 +222,100 @@ RegisterAuraEvent(SPELL_LIGHTNING_CAPACITOR_AURA, 3, trinketStackRemove)
 RegisterAuraEvent(SPELL_THUNDER_CAPACITOR_AURA, 3, trinketStackRemove)
 RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_NORMAL_AURA, 3, trinketStackRemove)
 RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_HEROIC_AURA, 3, trinketStackRemove)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_item_anger_capacitor::HandleProc (spell_item.cpp:243-258):
+--   EFFECT_0 DUMMY. PreventDefaultAction (return true on every path);
+--   the actor self-casts Mote of Anger 71432, triggered, and at
+--   Stacks motes the motes drop and the actor casts Manifest Anger
+--   on the proc target: main-hand 71433, or off-hand 71434 when the
+--   player has an off-hand weapon and the 50% roll lands
+--   (spell_item.cpp:253-256). The off-hand leg rides
+--   GetEquippedItemBySlot(16) (EQUIPMENT_SLOT_OFFHAND); it reads
+--   whatever is equipped there, so a non-weapon off-hand item is an
+--   approximation of C++ GetWeaponForAttack(OFF_ATTACK, true), and
+--   it needs the characters DB (nil without it). Registered for both
+--   ranks: heroic 71545 (7-stack), normal 71406 (8-stack). The
+--   OnRemove leg that drops the motes lives above (tick 295).
+--   DORMANT until Spell.dbc ships the 71406/71545 proc entries.
+local SPELL_MANIFEST_ANGER_MAIN_HAND = 71433 -- spell_item.cpp:211
+local SPELL_MANIFEST_ANGER_OFF_HAND = 71434 -- spell_item.cpp:212
+
+local function makeAngerCapacitorProc(stacks)
+    return function(event, aura, target, actor, procTarget, damage)
+        if actor == nil then
+            return true
+        end
+        actor:CastSpell(actor, SPELL_MOTE_OF_ANGER, true)
+        local motes = actor:GetAura(SPELL_MOTE_OF_ANGER)
+        if motes == nil or motes:GetStackAmount() < stacks then
+            return true
+        end
+        actor:RemoveAura(SPELL_MOTE_OF_ANGER)
+        local spellId = SPELL_MANIFEST_ANGER_MAIN_HAND
+        if procTarget ~= nil and actor:GetObjectType() == "Player"
+            and actor:GetEquippedItemBySlot(16) ~= nil
+            and math.random(100) <= 50 then
+            spellId = SPELL_MANIFEST_ANGER_OFF_HAND
+        end
+        if procTarget ~= nil then
+            actor:CastSpell(procTarget, spellId, true)
+        end
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_ANGER_CAPACITOR_HEROIC, 6, makeAngerCapacitorProc(7))
+RegisterAuraEvent(SPELL_ANGER_CAPACITOR, 6, makeAngerCapacitorProc(8))
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_item_heartpierce::HandleProc (spell_item.cpp:1164-1195):
+--   EFFECT_0 DUMMY. PreventDefaultAction; the actor self-casts the
+--   Invigoration for its power type: heroic (mana 71888, energy
+--   71887, rage 71886, runic power 71885), normal (mana 71881,
+--   energy 71882, rage 71883, runic power 71884); any other power
+--   type casts nothing. C++ casts on a null target with aurEff; the
+--   Invigoration spells are self-targeted, so the Lua twin casts
+--   on the actor, triggered. The normal-rank aura is 71880.
+--   DORMANT until Spell.dbc ships the 71880/71892 proc entries.
+local SPELL_HEARTPIERCE = 71880 -- normal-rank aura (twin of 71892)
+local SPELL_HEARTPIERCE_HEROIC = 71892 -- spell_item.cpp:1136 (class spell_item_heartpierce, heroic template)
+local SPELL_INVIGORATION_MANA = 71881 -- spell_item.cpp:1116
+local SPELL_INVIGORATION_ENERGY = 71882 -- spell_item.cpp:1117
+local SPELL_INVIGORATION_RAGE = 71883 -- spell_item.cpp:1118
+local SPELL_INVIGORATION_RP = 71884 -- spell_item.cpp:1119
+local SPELL_INVIGORATION_MANA_HERO = 71888 -- spell_item.cpp:1124
+local SPELL_INVIGORATION_ENERGY_HERO = 71887 -- spell_item.cpp:1123
+local SPELL_INVIGORATION_RAGE_HERO = 71886 -- spell_item.cpp:1122
+local SPELL_INVIGORATION_RP_HERO = 71885 -- spell_item.cpp:1121
+
+local HEARTPIERCE_BY_POWER = {
+    [0] = SPELL_INVIGORATION_MANA,
+    [1] = SPELL_INVIGORATION_RAGE,
+    [3] = SPELL_INVIGORATION_ENERGY,
+    [6] = SPELL_INVIGORATION_RP,
+}
+
+local HEARTPIERCE_HEROIC_BY_POWER = {
+    [0] = SPELL_INVIGORATION_MANA_HERO,
+    [1] = SPELL_INVIGORATION_RAGE_HERO,
+    [3] = SPELL_INVIGORATION_ENERGY_HERO,
+    [6] = SPELL_INVIGORATION_RP_HERO,
+}
+
+local function makeHeartpierceProc(byPower)
+    return function(event, aura, target, actor, procTarget, damage)
+        if actor == nil then
+            return true
+        end
+        local spellId = byPower[actor:GetPowerType()]
+        if spellId == nil then
+            return true
+        end
+        actor:CastSpell(actor, spellId, true)
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_HEARTPIERCE_HEROIC, 6, makeHeartpierceProc(HEARTPIERCE_HEROIC_BY_POWER))
+RegisterAuraEvent(SPELL_HEARTPIERCE, 6, makeHeartpierceProc(HEARTPIERCE_BY_POWER))

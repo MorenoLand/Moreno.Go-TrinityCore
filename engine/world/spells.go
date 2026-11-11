@@ -563,6 +563,7 @@ const (
 	petTameNoPetAvailable    uint8 = 7  // PETTAME_NOPETAVAILABLE
 	petTameDead              uint8 = 10 // PETTAME_DEAD
 	petTameCantControlExotic uint8 = 12 // PETTAME_CANTCONTROLEXOTIC
+	petTameTooMany           uint8 = 2  // PETTAME_TOOMANY (SharedDefines.h:3564)
 
 	// Creature template gates for the summon-pet stable block's IsTameable
 	// check (CreatureData.h:230-237, SharedDefines.h:2661/2683/2729/2745).
@@ -4211,6 +4212,73 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedTargetNotDead), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "raise ally initial on a living creature target")
 			return true
+		}
+	}
+	// spell_hun_tame_beast::CheckCast (spell_hunter.cpp:1432-1470): Tame
+	// Beast needs a creature explicit target at or below the hunter's
+	// level, tameable for this caster (the exotic gate rides
+	// CanTameExoticPets), with no current pet and no unslotted hunter
+	// pet in the stable. C++ script OnCheckCast handlers run at the end
+	// of Spell::CheckCast, so this wires after the generic gates beside
+	// the death-pact leg. The charmed-caster leg stays out: caster-side
+	// charmed-unit tracking has no Go bridge (spells.go:300). The
+	// aura-dummy threat arm lives at spells.go:39663; the census lua_hit
+	// is a false positive (gossip menu 1515, coordinates only).
+	// An unresolvable target passes through (raise-ally precedent):
+	// the effect-time tame still no-ops on it.
+	if spellID == 1515 {
+		if targetGUID == 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast without a target")
+			return true
+		}
+		if s.server.findSessionByGUID(targetGUID) != nil {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadImplicitTargets), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast on a player target")
+			return true
+		}
+		if motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); motion != nil {
+			if motion.Level > uint32(s.player.Level) {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedHighLevel), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast on a higher-level target")
+				return true
+			}
+			if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+				entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+				if entry == 0 {
+					entry = uint32(targetGUID & 0xFFFFFFFF)
+				}
+				var ctype, family, typeFlags int64
+				if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(family, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", entry).Scan(&ctype, &family, &typeFlags); err != nil || !creatureTameable(ctype, family, typeFlags, s.canTameExoticPets()) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast on a non-tameable target")
+					return true
+				}
+			}
+		}
+		if s.player.PetGUID != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedAlreadyHaveSummon), true)
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast with an active pet")
+			return true
+		}
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			cdb := s.server.CharactersStore.DB
+			var current int64
+			if err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&current); err == nil && current > 0 {
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedAlreadyHaveSummon), true)
+				s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast with a current stable pet")
+				return true
+			}
+			if rows, err := s.queryUnslottedStablePets(ctx, cdb); err == nil {
+				for _, r := range rows {
+					if r.petType == 1 { // HUNTER_PET
+						s.sendTameFailure(petTameTooMany)
+						_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedDontReport), true)
+						s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "tame beast with an unslotted stable pet")
+						return true
+					}
+				}
+			}
 		}
 	}
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
