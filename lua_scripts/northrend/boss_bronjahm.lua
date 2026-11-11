@@ -93,11 +93,16 @@
 --   instance GetGuidData store. Its IsSummonedBy relay (:235-239) needs
 --   no registration — the summon funnel already delivers JustSummoned
 --   to Bronjahm via ev19. The consume_soul SpellScript redirect
---   (:302-310) stays out (no SpellScript bridge).
--- The four SpellScript/AuraScript hooks (magic_bane mana-power damage
---   recalc :284, consume_soul script-effect redirect :311, soulstorm_visual
---   8-spell periodic ring :345/:350, soulstorm_targeting 10yd exclusion)
---   join the no-SpellScript / no-AuraScript bridge queues.
+--   (:303-310) is PORTED below via RegisterSpellEvent (68861, 5).
+-- Of the four SpellScript/AuraScript hooks, all four are PORTED:
+--   magic_bane mana-power damage recalc (:272-284) rides the Go
+--   spellScriptOnHitDamage dispatch (magicBaneDamage, spell_onhit.go —
+--   the dispatch covers OnEffectLaunchTarget arms, 12809/47496
+--   precedent; victim power type + max mana resolve inside it,
+--   heroic via autoBalanceInstanceDifficulty, freezingCircleDamage
+--   precedent); consume_soul script-effect redirect (:303-311) is ev5;
+--   soulstorm_visual 8-spell periodic ring (:321-331/:343-350) is ev1 on
+--   68870 + 69008; soulstorm_targeting 10yd exclusion (:369-380) is ev7.
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature casts are
 -- packet-visual), so timers fire unconditionally (the maiden precedent);
@@ -524,8 +529,8 @@ RegisterCreatureEvent(ENTRY_BRONJAHM, 20, bronjahmSummonDespawned)
 -- no registration: the summon funnel already delivers JustSummoned to
 -- Bronjahm via ev19 (see bronjahmJustSummoned above), and the Lua
 -- GUID-set absorbs C++'s double delivery. The consume_soul SpellScript
--- itself (script-effect redirect :302-310) stays out — no SpellScript
--- bridge — so the cast fires its DBC effect only. Dormant until the
+-- itself (script-effect redirect :303-311) is PORTED below (ev5,
+-- bronjahmConsumeSoulHit), so the cast fires its redirect leg. Dormant until the
 -- DATA_BRONJAHM latch lands (ev5 spawn, above); an unlatched store
 -- reads 0 and the id check fails closed.
 local function soulFragmentMovementInform(event, creature, type, id)
@@ -548,3 +553,78 @@ local function bronjahmReachHome(event, creature)
     creature:CastSpell(creature, SPELL_SOULSTORM_CHANNEL, true)
 end
 RegisterCreatureEvent(ENTRY_BRONJAHM, 24, bronjahmReachHome)
+
+-- C++ spell_bronjahm_magic_bane (boss_bronjahm.cpp:272-284):
+-- OnEffectLaunchTarget EFFECT_0 SPELL_EFFECT_SCHOOL_DAMAGE, mana-power
+-- damage recalc. The recalc rides the Go spellScriptOnHitDamage dispatch
+-- (magicBaneDamage, spell_onhit.go), not a Lua hook — ev5 is
+-- notification-only for damage rewrites (lua_spell.go) — so there is no
+-- Lua leg here.
+
+-- C++ spell_bronjahm_soulstorm_visual (boss_bronjahm.cpp:321-331/:343-350):
+-- AuraScript OnEffectPeriodic EFFECT_0 SPELL_AURA_PERIODIC_DUMMY, registered
+-- twice ("spell_bronjahm_soulstorm_channel" 69008 + "spell_bronjahm_soulstorm_visual"
+-- 68870): PreventDefaultAction + target casts SoulstormVisualSpells[tickNumber % 8]
+-- on itself, triggered. aura:GetTickNumber() is _ticksDone, incremented before
+-- the script handlers run (SpellAuraEffects.cpp:827-830) — first tick reads 1,
+-- like the Go object (lua_aura.go) — so the Lua 1-based table indexes
+-- (tick % 8) + 1. Return true is PreventDefaultAction (row-341 precedent).
+-- DORMANT until Spell.dbc ships 68870/69008 with a periodic-dummy effect 0.
+local SOULSTORM_VISUAL_SPELLS = {68904, 68886, 68905, 68896, 68906, 68897, 68907, 68898}
+
+local function soulstormVisualTick(event, aura, target)
+    if target == nil then
+        return true
+    end
+    local spellId = SOULSTORM_VISUAL_SPELLS[(aura:GetTickNumber() % 8) + 1]
+    target:CastSpell(target, spellId, true)
+    return true
+end
+RegisterAuraEvent(SPELL_SOULSTORM_VISUAL, 1, soulstormVisualTick)
+RegisterAuraEvent(SPELL_SOULSTORM_CHANNEL, 1, soulstormVisualTick)
+
+-- C++ spell_bronjahm_soulstorm_targeting (boss_bronjahm.cpp:369-380):
+-- OnObjectAreaTargetSelect EFFECT_ALL TARGET_UNIT_DEST_AREA_ENEMY: remove any
+-- target with GetExactDist2d(caster) <= 10.0f. target:GetExactDistance2d(caster)
+-- is the raw center 2D hypot (object.go), exactly C++ GetExactDist2d. One
+-- handler covers every selecting effect (ev7 fires once per effect, radiance
+-- precedent). DORMANT until Spell.dbc ships 68872.
+local function soulstormTargetingFilter(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetExactDistance2d(caster) > 10.0 then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+RegisterSpellEvent(SPELL_SOULSTORM, 7, soulstormTargetingFilter)
+
+-- C++ spell_bronjahm_consume_soul::HandleScript
+-- (boss_bronjahm.cpp:303-310): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> PreventHitDefaultEffect(0), then the
+-- hit unit casts GetEffectValue() on itself, triggered. Go fires ev5
+-- once per (effect, live hit target) before the default
+-- (boss_ai.go:3435-3438); spell:GetEffectValue(0) is the CalcValue
+-- twin (lua_spell.go:400, kologarn precedent); the Go SCRIPT_EFFECT
+-- default for 68861 is a per-spell no-op (no 68861 case in-tree), so
+-- the veto leg is hook-only in practice. Live via the fragment
+-- MovementInform cast (soulFragmentMovementInform above, C++ :249).
+local function bronjahmConsumeSoulHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    spell:PreventHitDefaultEffect(0)
+    local value = spell:GetEffectValue(0)
+    if value > 0 then
+        hitTarget:CastSpell(hitTarget, value, true)
+    end
+end
+RegisterSpellEvent(SPELL_CONSUME_SOUL, 5, bronjahmConsumeSoulHit)

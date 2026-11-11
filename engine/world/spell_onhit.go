@@ -76,6 +76,14 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 			return baseDamage, false
 		}
 		return uint32(int32(casterAttackPower)) * uint32(pct) / 100, true
+	case 68793:
+		// spell_bronjahm_magic_bane::RecalculateDamage
+		// (boss_bronjahm.cpp:272-284): the OnEffectLaunchTarget arm
+		// REPLACES the EFFECT_0 school-damage value with the rolled
+		// DBC base plus half the hit unit's max mana, capped at the
+		// heroic/normal max — same hook position as the 12809 arm
+		// (HandleEffects runs it before EffectSchoolDMG).
+		return s.magicBaneDamage(victimGUID, mapID, instanceID, baseDamage)
 	case 47480:
 		return s.ghoulThrashDamage(spell, casterGUID, mapID, instanceID, baseDamage, casterAttackPower)
 	case 47496:
@@ -254,6 +262,58 @@ func (s *Server) freezingCircleDamage(mapID, instanceID uint32) (uint32, bool) {
 		return 0, false
 	}
 	return uint32(value), true
+}
+
+// magicBaneDamage mirrors spell_bronjahm_magic_bane::RecalculateDamage
+// (boss_bronjahm.cpp:272-280): the OnEffectLaunchTarget arm for
+// SPELL_MAGIC_S_BANE 68793 — a non-mana hit unit takes the DBC base
+// unchanged; a mana hit unit takes GetEffectValue() (the rolled DBC
+// base, i.e. baseDamage at this dispatch position) plus half its max
+// mana, capped at 15000 heroic / 10000 normal (Map::IsHeroic,
+// Map.cpp:4249-4252 — raids heroic at difficulty >= 2, dungeons at
+// >= 1, via the freezingCircleDamage difficulty read; an empty
+// instance reports normal). The victim's power type and max mana
+// resolve inside the dispatch (bloodthirstDamage precedent), so the
+// creature and player caster legs share the arm. DORMANT until
+// Spell.dbc ships the 68793 record.
+func (s *Server) magicBaneDamage(victimGUID uint64, mapID, instanceID uint32, baseDamage uint32) (uint32, bool) {
+	if s == nil {
+		return baseDamage, false
+	}
+	powerType := int32(-1)
+	maxMana := uint32(0)
+	if vs := s.findSessionByGUID(victimGUID); vs != nil && vs.player != nil {
+		powerType = int32(playerPowerType(vs.player))
+		maxMana = vs.player.MaxPowers[0]
+	} else if victim := s.findCreatureMotion(mapID, instanceID, victimGUID); victim != nil {
+		powerType = int32(victim.PowerType)
+		if len(victim.MaxPowers) > 0 {
+			maxMana = victim.MaxPowers[0]
+		}
+	} else {
+		return baseDamage, false
+	}
+	if powerType != 0 { // POWER_MANA
+		return baseDamage, false
+	}
+	maxDamage := uint32(10000)
+	if s.Data != nil {
+		if entry, found, err := s.Data.Map(mapID); err == nil && found {
+			dungeonDiff, raidDiff := s.autoBalanceInstanceDifficulty(mapID, instanceID)
+			heroic := dungeonDiff >= 1
+			if entry.IsRaid() {
+				heroic = raidDiff >= 2
+			}
+			if heroic {
+				maxDamage = 15000
+			}
+		}
+	}
+	newDamage := baseDamage + maxMana/2
+	if newDamage > maxDamage {
+		newDamage = maxDamage
+	}
+	return newDamage, true
 }
 
 // ghoulThrashDamage mirrors spell_dk_ghoul_thrash::CalcDamage

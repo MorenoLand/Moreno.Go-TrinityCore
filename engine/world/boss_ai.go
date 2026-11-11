@@ -22112,9 +22112,12 @@ func init() {
 	// C++-exact. All five event-loop ticks carry the 500ms IsCasting
 	// defer (own UpdateAI pre-loop :163 + in-loop :208 gates); the
 	// DamageTaken latch itself stays ungated (separate hook). The JustSummoned soul-fragment machine, GetData,
-	// npc_corrupted_soul_fragment (36535), the SpellScript/AuraScript
-	// hooks and the achievement remain bridge-blocked — documented in
-	// the lua header.
+	// npc_corrupted_soul_fragment (36535) and the achievement remain
+	// bridge-blocked — documented in the lua header. All four
+	// SpellScript/AuraScript hooks are PORTED: consume_soul ev5,
+	// soulstorm_visual ev1, soulstorm_targeting ev7 in the lua file,
+	// magic_bane via the Go spellScriptOnHitDamage dispatch
+	// (magicBaneDamage, spell_onhit.go).
 	RegisterLuaBoss("boss_bronjahm", 36497)
 
 	// Devourer of Souls (Forge of Souls) — bridgeable Talk arms ported
