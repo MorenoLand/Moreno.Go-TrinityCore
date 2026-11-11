@@ -31,7 +31,7 @@
 --   spell_mage_fingers_of_frost (spell_mage.cpp:587-625): aura
 --   74396, mode 3 only. OnRemove the target drops 44544 (Fingers of
 --   Frost aurastate aura). The proc leg (RemoveAuraFromStack on
---   proc) stays out — no proc hook, no RemoveAuraFromStack bridge.
+--   proc) is the Go arm in procs.go (rows 181-185).
 --   Mode 2 fires on fresh apply only; the frostfire apply leg is
 --   AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK, so a reapply does not
 --   re-cast 68391 in Go (standing deviation).
@@ -52,6 +52,35 @@
 --   spell_mage_cold_snap (spell_mage.cpp:343-377): 11958 DUMMY arm
 --   in spells.go (resets every other Frost Mage cooldown with a
 --   recovery time); live on cast, not dormant.
+-- PORTED IN GO (tick 2026-11-10, rows 181-185):
+--   spell_mage_fingers_of_frost (spell_mage.cpp:587-625): 74396
+--   EFFECT_0 OnEffectProc arm in procs.go (actor loses one stack
+--   of 74396); mode-3 OnRemove leg stays the Lua leg above.
+--   Dormant until Spell.dbc ships the 74396 proc entry.
+--   spell_mage_focus_magic (spell_mage.cpp:723-761): 54646
+--   CheckProc gate (caster alive) + EFFECT_0 OnEffectProc arm in
+--   procs.go (holder casts 54648 on the caster);
+--   MOD_SPELL_CRIT_CHANCE joined the proc-trigger types
+--   (SpellMgr.cpp:1718). Dormant until Spell.dbc ships the 54646
+--   proc entry.
+--   spell_mage_gen_extra_effects (spell_mage.cpp:766-819): 48108
+--   CheckProc gate (no self-target events; T8 4P roll suppresses)
+--   + OnProc arm in procs.go (actor with T10 2P aura 70752 casts
+--   70753 on self; no PreventDefaultAction, default 57761 still
+--   fires); 48108 has a single DBC effect
+--   (ADD_FLAT_MODIFIER, SpellModOp 10 CASTING_TIME, Wowhead
+--   WotLK). Dormant until Spell.dbc ships the 48108 proc entry.
+--   spell_mage_glyph_of_polymorph (spell_mage.cpp:822-852): 56375
+--   EFFECT_0 OnEffectProc arm in procs.go (proc target loses all
+--   periodic-damage auras except 32409, plus periodic-damage-
+--   percent and periodic-leech); player + creature target legs.
+--   Dormant until Spell.dbc ships the 56375 proc entry.
+--   spell_mage_glyph_of_icy_veins (spell_mage.cpp:853-883): 56374
+--   EFFECT_0 OnEffectProc arm in procs.go (actor loses negative
+--   haste-spells auras (C++ passes true, false) and all
+--   decrease-speed auras (C++ defaults, both polarities)).
+--   Dormant until Spell.dbc
+--   ships the 56374 proc entry.
 -- STAY-OUT (tick 294): every other spell_mage class — no proc hook,
 --   absorb/CalcAmount/ManaShield hooks absent, SpellScript-only
 --   with no RegisterSpellScript in the engine, or cross-script state

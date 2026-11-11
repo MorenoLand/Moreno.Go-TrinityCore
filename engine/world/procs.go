@@ -348,6 +348,48 @@ func (s *session) combustionCheckProc(ctx context.Context, ev procEventInfo) boo
 	return false
 }
 
+// focusMagicProcAllowed mirrors spell_mage_focus_magic::CheckProc
+// (spell_mage.cpp:737-741): the proc target is the aura's caster (the
+// mage who cast Focus Magic on the holder) and the proc only fires while
+// that caster is alive. The caster is always a mage player, so the
+// session lookup covers the live cases; an offline caster has no session
+// and the gate stays closed, matching C++ GetCaster() returning null.
+// DORMANT until Spell.dbc ships the 54646 proc entry.
+func (s *session) focusMagicProcAllowed(aura *activeAura) bool {
+	if aura == nil || aura.CasterGUID == 0 {
+		return false
+	}
+	if s == nil || s.server == nil {
+		return false
+	}
+	if casterSess := s.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess.player != nil {
+		return casterSess.player.Health > 0
+	}
+	return false
+}
+
+// genExtraEffectsProcAllowed mirrors
+// spell_mage_gen_extra_effects::CheckProc (spell_mage.cpp:784-799): the
+// actor never procs from an event whose proc target is itself (the
+// Arcane Missiles double-proc guard), and a live T8 4P bonus aura
+// (64869 EFFECT_0) suppresses the proc on its own chance roll
+// (roll_chance_i on the effect amount; a missing aura never suppresses).
+// DORMANT until Spell.dbc ships the 48108 proc entry.
+func (s *session) genExtraEffectsProcAllowed(ev procEventInfo, triggerTargetGUID uint64) bool {
+	if ev.actorGUID != 0 && ev.actorGUID == triggerTargetGUID {
+		return false
+	}
+	if s == nil || s.server == nil || ev.actorGUID == 0 {
+		return true
+	}
+	if actorSess := s.server.findSessionByGUID(ev.actorGUID); actorSess != nil {
+		if amt, ok := actorSess.auraEffectAmount(64869, 0); ok && amt > 0 && rand.Intn(100) < int(amt) {
+			return false
+		}
+	}
+	return true
+}
+
 // glyphOfArcaneShotProcAllowed mirrors
 // spell_hun_glyph_of_arcane_shot::CheckProc (spell_hunter.cpp:430-451):
 // the proc target must carry a sting cast by the holder — hunter family,
@@ -1175,12 +1217,17 @@ const spellVampiricAura = 20810
 // type enters the loop for its hook alone. OVERRIDE_CLASS_SCRIPTS
 // (SpellMgr.cpp:1708) enters the same way, for the Improved Mana Gems
 // arm (spell_mage.cpp:515-526) — its default leg likewise no-ops on
-// TriggerSpell == 0. The remaining isTriggerAura types (reflect,
-// stealth-break, ADD_PCT_MODIFIER) have no Go HandleProc arm yet.
+// TriggerSpell == 0. MOD_SPELL_CRIT_CHANCE (SpellMgr.cpp:1718) enters
+// the same way, for the Focus Magic arm (spell_mage.cpp:743-747); its
+// CheckEffectProc gate (SpellAuraEffects.cpp:1023-1026, skip spells that
+// can't crit) already lives in checkEffectProcGates. The remaining
+// isTriggerAura types (reflect, stealth-break, ADD_PCT_MODIFIER) have no
+// Go HandleProc arm yet.
 func isProcTriggerAuraType(auraType uint32) bool {
 	switch auraType {
 	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue,
-		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier, spellAuraOverrideClassScripts:
+		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier, spellAuraOverrideClassScripts,
+		spellAuraModSpellCritChance:
 		return true
 	}
 	return false
@@ -3428,6 +3475,23 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 11129 && !s.combustionCheckProc(ctx, ev) {
 			continue
 		}
+		// spell_mage_focus_magic::CheckProc (spell_mage.cpp:737-741):
+		// the proc only fires while the aura's caster (the mage) is
+		// alive. The gate runs before the chance roll, like the C++
+		// CheckProc in GetProcEffectMask (70656 precedent above).
+		// DORMANT until Spell.dbc ships the 54646 proc entry.
+		if auraSpell.ID == 54646 && !s.focusMagicProcAllowed(aura) {
+			continue
+		}
+		// spell_mage_gen_extra_effects::CheckProc
+		// (spell_mage.cpp:784-799): no self-target proc events (the
+		// Arcane Missiles double-proc guard) and the T8 4P bonus roll
+		// suppresses the proc. The gate runs before the chance roll,
+		// like the C++ CheckProc in GetProcEffectMask (70656 precedent
+		// above). DORMANT until Spell.dbc ships the 48108 proc entry.
+		if auraSpell.ID == 48108 && !s.genExtraEffectsProcAllowed(ev, triggerTargetGUID) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3794,6 +3858,122 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 					s.triggeredByAuraCast = false
 					s.triggeredByAuraSpell = 0
 				}
+				continue
+			}
+			if auraSpell.ID == 74396 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_mage_fingers_of_frost::HandleDummy
+				// (spell_mage.cpp:600-604): PreventDefaultAction; the
+				// proc actor loses one stack of Fingers of Frost
+				// (74396). The actor is the holder for this aura's
+				// own-crit procs, so the player-side stack drop is
+				// the C++ RemoveAuraFromStack(GetId()). The mode-3
+				// OnRemove leg (drop 44544) stays the Lua leg in
+				// spell_mage.lua. No Lua ev6 twin: ev6 carries no
+				// RemoveAuraFromStack bridge. DORMANT until Spell.dbc
+				// ships the 74396 proc entry.
+				_ = s.removePlayerAuraFromStack(74396)
+				continue
+			}
+			if auraSpell.ID == 54646 && i == 0 && eff.Aura == spellAuraModSpellCritChance {
+				// spell_mage_focus_magic::HandleProc
+				// (spell_mage.cpp:743-747): PreventDefaultAction; the
+				// holder casts Focus Magic Proc (54648) on the aura's
+				// caster (the mage), with the aura effect. The gate
+				// above already verified the caster is alive. No Lua
+				// ev6 twin: ev6 carries no aura-caster GUID. DORMANT
+				// until Spell.dbc ships the 54646 proc entry.
+				if ev.actorGUID != 0 && aura.CasterGUID != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 54648, casterGUID: s.playerGUID, targetGUID: aura.CasterGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				continue
+			}
+			if auraSpell.ID == 48108 && i == 0 && eff.Aura == spellAuraAddFlatModifier {
+				// spell_mage_gen_extra_effects::HandleProc
+				// (spell_mage.cpp:801-807): no PreventDefaultAction,
+				// so the default 57761 Fireball! trigger still fires
+				// via the generic leg below; the proc actor casts
+				// the T10 2P bonus effect (70753) on
+				// nil (self), triggered, when it carries the T10 2P
+				// bonus aura (70752). The C++ script registers whole-
+				// aura OnProc; 48108 carries exactly one DBC effect
+				// (EFFECT_0 ADD_FLAT_MODIFIER, SpellModOp 10
+				// CASTING_TIME for Pyroblast, Wowhead WotLK
+				// 2026-11-10), so the effect-0 gate fires once per
+				// proc. ADD_FLAT_MODIFIER is already a proc-trigger
+				// type (Cobra Strikes precedent). No Lua ev6 twin:
+				// ev6 carries no HasAura check. DORMANT until
+				// Spell.dbc ships the 48108 proc entry.
+				if ev.actorGUID != 0 {
+					actorHasT10 := false
+					if actorSess := s.server.findSessionByGUID(ev.actorGUID); actorSess != nil {
+						actorHasT10 = actorSess.hasAura(70752)
+					}
+					if actorHasT10 {
+						s.triggeredByAuraCast = true
+						s.triggeredByAuraSpell = auraSpell.ID
+						s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 70753, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+						s.triggeredByAuraCast = false
+						s.triggeredByAuraSpell = 0
+					}
+				}
+			}
+			if auraSpell.ID == 56375 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_mage_glyph_of_polymorph::HandleProc
+				// (spell_mage.cpp:831-840): PreventDefaultAction; the
+				// polymorph target loses every periodic-damage aura
+				// except Shadow Word: Death (32409), plus every
+				// periodic-damage-percent and periodic-leech aura.
+				// C++ uses the RemoveAurasByType defaults
+				// (negative=true, positive=true, Unit.h:1263), so
+				// the plain type helpers match. No
+				// Lua ev6 twin: ev6 carries no proc-target aura
+				// removal. DORMANT until Spell.dbc ships the 56375
+				// proc entry.
+				if triggerTargetGUID != 0 {
+					if ts := s.server.findSessionByGUID(triggerTargetGUID); ts != nil && ts.player != nil {
+						ts.removeAurasByTypeExcept(spellAuraPeriodicDamage, 32409)
+						ts.removeAurasByType(spellAuraPeriodicDamagePercent)
+						ts.removeAurasByType(spellAuraPeriodicLeech)
+					} else if m := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, triggerTargetGUID); m != nil {
+						key := creatureAuraKeyForMotion(m)
+						s.server.removeCreatureAurasByTypeExcept(key, spellAuraPeriodicDamage, 32409)
+						s.server.removeCreatureAurasByType(key, spellAuraPeriodicDamagePercent)
+						s.server.removeCreatureAurasByType(key, spellAuraPeriodicLeech)
+					}
+				}
+				continue
+			}
+			if auraSpell.ID == 56374 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_mage_glyph_of_icy_veins::HandleProc
+				// (spell_mage.cpp:862-870): PreventDefaultAction; the
+				// actor loses every haste-spells aura (negative-only:
+				// C++ passes true, false) and every decrease-speed
+				// aura (both polarities: C++ uses the
+				// RemoveAurasByType defaults, negative=true,
+				// positive=true, Unit.h:1263). The haste leg keeps
+				// the inline Positive filter so a positive haste
+				// buff survives; the snare leg uses the plain type
+				// helper, which removes both polarities. The actor
+				// is the holder for this self-cast glyph proc. No
+				// Lua ev6 twin: ev6 carries no aura-type removal.
+				// DORMANT until Spell.dbc ships the 56374 proc
+				// entry.
+				var ids []uint32
+				s.castMu.Lock()
+				for _, a := range s.activeAuras {
+					if a != nil && !a.Positive && a.AuraType == spellAuraHasteSpells {
+						ids = append(ids, a.SpellID)
+					}
+				}
+				s.castMu.Unlock()
+				for _, id := range ids {
+					s.removeAura(id)
+				}
+				s.removeAurasByType(spellAuraModDecreaseSpeed)
 				continue
 			}
 			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
