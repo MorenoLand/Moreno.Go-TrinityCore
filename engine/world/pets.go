@@ -1314,6 +1314,7 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 	s.sendPlayerUpdate()
 	s.loadPetAuras(ctx, petID, petGUID)
 	s.applyOwnerPetAuras(ctx, entry, petGUID)
+	s.castPetPassiveSpells(ctx, petID, petGUID)
 	if !s.updatePetOnLevelUp(ctx) {
 		s.sendPetSpells(ctx, petID, entry, reactState)
 	}
@@ -1541,6 +1542,123 @@ func (s *session) loadPetAuras(ctx context.Context, petID uint32, petGUID uint64
 		packet := protocol.BuildAuraUpdateWithStackEffect(petGUID, record.CasterGUID, record.Slot, record.SpellID, false, record.Positive, record.MaxDurationMs, record.DurationMs, record.CasterLevel, record.StackCount, record.EffectMask)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
 		s.server.broadcastToVisibleSetFromSession(s, uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet)
+	}
+}
+
+// castPetPassiveSpells bridges the passive arm of Pet::addSpell
+// (Pet.cpp:1466-1467): a passive spell in the pet's spellbook is cast on
+// the pet itself, triggered, when learned — and again on load, since
+// Pet::LoadPetFromDB re-adds every pet_spell row. Go learns the rows in
+// learnPetFamilyPassives / getPetSpellsForLevel without casting them, so
+// no pet passive ever became an aura: the scaling auras (spell_pet.cpp
+// 34947/34902/35695/19591 family), Ferocious Inspiration, avoidance and
+// every other pet passive were spellbook entries only. The cast runs at
+// the end of spawnPet, after loadPetAuras, so a restored pet_aura row
+// wins over a fresh cast (creatureHasAura guard). A missing Spell.dbc
+// record skips silently; non-passive rows are untouched.
+func (s *session) castPetPassiveSpells(ctx context.Context, petID uint32, petGUID uint64) {
+	if s == nil || s.server == nil || s.player == nil || petID == 0 || petGUID == 0 || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.findCreatureMotionLocked(s.player.Map, s.player.InstanceID, petGUID)
+	s.server.motionMu.Unlock()
+	if motion == nil || motion.OwnerGUID != s.playerGUID {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM pet_spell WHERE guid = ? ORDER BY spell", petID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spellID uint32
+		if rows.Scan(&spellID) != nil || spellID == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found || spell.Attributes&spellAttributePassive == 0 {
+			continue
+		}
+		if s.server.creatureHasAura(motion, spellID) {
+			continue
+		}
+		s.server.castCreatureSpellTriggered(ctx, motion, spellID, motion.GUID)
+		s.applyPetCalculateBonuses(spell, motion)
+	}
+}
+
+// applyPetCalculateBonuses is the DoEffectCalcAmount twin of
+// spell_gen_pet_calculate (spell_pet.cpp:91-223, the one class in that
+// file AddSC_pet_spell_scripts news — though the AddSC itself is never
+// called from AddSpellsScripts, the arms are the live design): the owner-derived
+// crit/hit/expertise additions its CalculateAmount* arms fold into the
+// aura amount at apply time (amount += int32(value), C++ float-to-int32
+// truncation). The stored record is adjusted in place right after the
+// passive cast above, so the live creatureAuraTypeSum folds (pet crit,
+// hit, expertise) read the C++ value. The DBC base amount stays as the
+// apply path computed it; only the owner-derived term is added here.
+// Only the five switch-bound IDs take a bonus (19591/35695/61013/61017/
+// 61697); the other tamed-pet passives (20784/34666/34667/34675) hit
+// `default: break` in C++ and stay at their DBC base. A deferred or
+// otherwise unapplied cast leaves no record and is skipped fail-closed.
+func (s *session) applyPetCalculateBonuses(spell wotlk.Spell, motion *creatureMotion) {
+	if s == nil || s.server == nil || s.player == nil || motion == nil {
+		return
+	}
+	spellID := spell.ID
+	critSpell := s.getSpellCritFromIntellect(s.player) +
+		float64(s.totalAuraModifier(spellAuraModSpellCritChance)) +
+		float64(s.totalAuraModifier(spellAuraModCritPct)) +
+		s.ratingBonusValue(CombatRatingCritSpell)
+	critMelee := s.getMeleeCritFromAgility() +
+		float64(s.totalAuraModifier(spellAuraModWeaponCritPercent)) +
+		float64(s.totalAuraModifier(spellAuraModCritPct)) +
+		s.ratingBonusValue(CombatRatingCritMelee)
+	meleeHit := float64(s.totalAuraModifier(spellAuraModHitChance)) +
+		s.ratingBonusValue(CombatRatingHitMelee)
+	spellHit := float64(s.totalAuraModifier(spellAuraModSpellHitChance)) +
+		s.ratingBonusValue(CombatRatingHitSpell)
+	expertise := float64(s.totalAuraModifier(spellAuraModExpertise)) +
+		s.ratingBonusValue(CombatRatingExpertise)
+	var bonuses [3]float64
+	switch spellID {
+	// Only 19591 binds among the tamed-pet passives: the Register switch
+	// (spell_pet.cpp:198-216) cases SPELL_TAMED_PET_PASSIVE_06 alone —
+	// 20784/34666/34667/34675 (_07.._10) hit `default: break` and take
+	// no owner bonus in C++.
+	case 19591:
+		bonuses = [3]float64{critMelee, critSpell, 0}
+	case 35695:
+		bonuses = [3]float64{critSpell, critMelee, 0}
+	case 61013, 61017:
+		bonuses = [3]float64{meleeHit, spellHit, expertise}
+	case 61697:
+		bonuses = [3]float64{meleeHit, spellHit, 0}
+	default:
+		return
+	}
+	key := creatureAuraKeyForMotion(motion)
+	s.server.auraMu.Lock()
+	defer s.server.auraMu.Unlock()
+	aura := s.server.activeCreatureAuras[key][spellID]
+	if aura == nil || aura.Stopped {
+		return
+	}
+	for index, bonus := range bonuses {
+		if bonus != 0 {
+			aura.Amounts[index] += int32(bonus)
+		}
+	}
+	// Amount mirrors the last aura effect's amount (apply-path convention).
+	last := 0
+	for index, eff := range spell.Effects {
+		if eff.Aura != 0 {
+			last = index
+		}
+	}
+	if last < len(aura.Amounts) {
+		aura.Amount = uint32(aura.Amounts[last])
 	}
 }
 

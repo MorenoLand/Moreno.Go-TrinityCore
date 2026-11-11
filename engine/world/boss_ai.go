@@ -9481,6 +9481,16 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			continue
 		}
 		slot := uint8(len(s.activeCreatureAuras[targetKey]) % 64)
+		// The fresh record carries this effect's amount in Amounts/BaseAmounts
+		// too: the per-effect loop only refreshes later effects through
+		// refreshAuraEffectBasepoints, so without this Amounts[0] stayed 0
+		// and every creatureAuraTypeSum fold (pet crit/hit/expertise,
+		// resistance, AP) read a fresh creature-applied aura as zero.
+		// AuraEffect::CalculateAmount produces the amount for every effect
+		// (SpellAuraEffects.cpp:525-539), so the stored base is exact here.
+		var freshAmounts, freshBaseAmounts [3]int32
+		freshAmounts[i] = int32(amount)
+		freshBaseAmounts[i] = eff.BasePoints
 		aura := &activeAura{
 			SpellID:            spell.ID,
 			DispelType:         spell.DispelType,
@@ -9489,6 +9499,8 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			EffectMask:         spellEffectMask(spell, eff),
 			CasterGUID:         m.GUID,
 			TargetGUID:         targetGUID,
+			Amounts:            freshAmounts,
+			BaseAmounts:        freshBaseAmounts,
 			TargetKey:          targetKey,
 			SchoolMask:         spell.SchoolMask,
 			MiscValue:          eff.MiscValue,
