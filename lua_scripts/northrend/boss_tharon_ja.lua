@@ -77,8 +77,9 @@
 -- re-arm; stale "constant-false IsCasting" claim retracted);
 -- spell_tharon_ja_clear_gift_of_tharon_ja SpellScript (53242
 -- EFFECT_0 SCRIPT_EFFECT ->
--- RemoveAura(52509)) — no SpellScript binding bridge (razelikh
--- precedent). There is no AchievementCriteriaScript class in
+-- RemoveAura(52509)) — PORTED below via RegisterSpellEvent
+-- (53242, 5); the "no SpellScript binding bridge (razelikh
+-- precedent)" claim is stale. There is no AchievementCriteriaScript class in
 -- boss_tharon_ja.cpp at all — the achievement leg is the JustDied
 -- DoCastAOE(61863), which is ported (the old "no achievement bridge
 -- (kelthuzad precedent)" header note was misleading).
@@ -459,3 +460,18 @@ RegisterCreatureEvent(ENTRY_THARON_JA, 2, tharonJaLeaveCombat)
 RegisterCreatureEvent(ENTRY_THARON_JA, 3, tharonJaTargetDied)
 RegisterCreatureEvent(ENTRY_THARON_JA, 4, tharonJaDied)
 RegisterCreatureEvent(ENTRY_THARON_JA, 23, tharonJaReset)
+
+-- C++ spell_tharon_ja_clear_gift_of_tharon_ja::HandleScript
+-- (boss_tharon_ja.cpp:225-229): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit loses Gift of
+-- Tharon'ja (52509). Ported via RegisterSpellEvent (53242, 5);
+-- LIVE: both C++ cast sites are already ported — JustDied
+-- (:115, tharonJaDied) and GoingSkeletal (:185,
+-- goingSkeletalTick), both triggered self-casts.
+local function tharonJaClearGift(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_GIFT_OF_THARON_JA)
+end
+RegisterSpellEvent(SPELL_CLEAR_GIFT_OF_THARON_JA, 5, tharonJaClearGift)

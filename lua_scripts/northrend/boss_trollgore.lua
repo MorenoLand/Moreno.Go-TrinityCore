@@ -66,9 +66,10 @@
 -- The consume-buff leg of EVENT_CONSUME (SPELL_CONSUME_BUFF 49381
 -- stacking via spell_trollgore_consume SpellScript) and the
 -- damage+despawn leg of EVENT_CORPSE_EXPLODE (49618 via the
--- spell_trollgore_corpse_explode AuraScript) — no SpellScript/
--- AuraScript binding bridge (razelikh precedent); the yells + cast
--- cadence are ported, these effect legs stay out.
+-- spell_trollgore_corpse_explode AuraScript) — PORTED 2026-11-11
+-- via RegisterSpellEvent ev5 + RegisterAuraEvent ev1/ev3 below (the
+-- razelikh "no SpellScript/AuraScript binding bridge" stay-out is
+-- retired: ev5/ev1/ev3 are the live script hooks, novos precedent).
 -- The _consumptionJunction latch (Initialize/Reset true; UpdateAI
 -- flips it false when GetAura(SPELL_CONSUME_BUFF_HELPER 49381 /
 -- 59805)->GetStackAmount() > 9) — PORTED tick 418 as a SetData mirror
@@ -76,10 +77,9 @@
 -- code" verdict is superseded by the Go achievement dispatch, which
 -- reads the Lua SetData store via bossLatchData
 -- (achievement_criteria_scripts.go) instead of a cross-AI GetData
--- call. Known delta (bronjahm class): the Consume buff itself is
--- applied by the unported spell_trollgore_consume SpellScript, so if
--- Go never stacks the buff the poll never flips and the gate
--- over-awards vs C++ on slow kills.
+-- call. Retired 2026-11-11: the Consume buff is now applied by the
+-- ported spell_trollgore_consume handler below, so the poll flips on
+-- slow kills as in C++.
 -- GetData(DATA_CONSUMPTION_JUNCTION 1) — no cross-AI GetData bridge;
 -- its only caller is achievement_consumption_junction, whose Go case
 -- reads the Lua SetData store instead — see below.
@@ -113,8 +113,10 @@
 -- spell_trollgore_corpse_explode (49555/59807 AuraScript:
 -- OnEffectPeriodic(2nd tick) -> caster->CastSpell(GetTarget(),
 -- SPELL_CORPSE_EXPLODE_DAMAGE 49618); AfterEffectRemove -> target
--- ToCreature DespawnOrUnsummon) — no SpellScript/AuraScript binding
--- bridge on the Lua surface (razelikh precedent) — documented-only.
+-- ToCreature DespawnOrUnsummon) — both PORTED 2026-11-11 (consume
+-- via RegisterSpellEvent ev5, corpse-explode via RegisterAuraEvent
+-- ev1 tick 2 + ev3, below); the invader-taunt script stays out
+-- (motion-master-gated, documented above).
 -- achievement_consumption_junction — AchievementCriteriaScript
 -- (target ToCreature -> AI()->GetData(DATA_CONSUMPTION_JUNCTION)) —
 -- the Go case reads the Lua SetData store via bossLatchData
@@ -133,7 +135,10 @@ local SAY_DEATH = 4
 local SPELL_CRUSH = 49639
 local SPELL_INFECTED_WOUND = 49637
 local SPELL_CONSUME = 49380
+local SPELL_CONSUME_HEROIC = 59803 -- boss_trollgore.cpp:229 comment
 local SPELL_CORPSE_EXPLODE = 49555
+local SPELL_CORPSE_EXPLODE_HEROIC = 59807 -- boss_trollgore.cpp:262 comment
+local SPELL_CORPSE_EXPLODE_DAMAGE = 49618 -- boss_trollgore.cpp:32
 local SPELL_CONSUME_BUFF = 49381 -- boss_trollgore.cpp:34
 local SPELL_CONSUME_BUFF_HEROIC = 59805 -- boss_trollgore.cpp:35
 local SPELL_SUMMON_INVADER_A = 49456 -- boss_trollgore.cpp:40
@@ -366,3 +371,58 @@ RegisterCreatureEvent(ENTRY_TROLLGORE, 2, trollgoreLeaveCombat)
 RegisterCreatureEvent(ENTRY_TROLLGORE, 3, trollgoreTargetDied)
 RegisterCreatureEvent(ENTRY_TROLLGORE, 4, trollgoreDied)
 RegisterCreatureEvent(ENTRY_TROLLGORE, 23, trollgoreReset)
+
+-- C++ spell_trollgore_consume::HandleConsume
+-- (boss_trollgore.cpp:243-247): OnEffectHitTarget EFFECT_1
+-- SCRIPT_EFFECT -> the hit unit casts SPELL_CONSUME_BUFF 49381 on
+-- the caster, triggered. C++ casts 49381 unconditionally (no
+-- DUNGEON_MODE on the buff id), so the heroic script spell 59803
+-- binds the same handler. The effectIndex gate is load-bearing:
+-- Go fires ev5 once per effect (razorscale precedent).
+local function trollgoreConsumeHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, SPELL_CONSUME_BUFF, true)
+end
+RegisterSpellEvent(SPELL_CONSUME, 5, trollgoreConsumeHit)
+RegisterSpellEvent(SPELL_CONSUME_HEROIC, 5, trollgoreConsumeHit)
+
+-- C++ spell_trollgore_corpse_explode::PeriodicTick
+-- (boss_trollgore.cpp:276-281): OnEffectPeriodic EFFECT_0
+-- PERIODIC_DUMMY, 2nd tick only -> the caster casts
+-- SPELL_CORPSE_EXPLODE_DAMAGE 49618 on the aura target, triggered
+-- (CastSpell(target, spell, aurEff) is TRIGGERED_FULL_MASK, the
+-- row-341 combustion precedent). aura:GetTickNumber() reads 1 on
+-- the first tick (lua_aura.go).
+local function trollgoreCorpseExplodeTick(event, aura, target)
+    if aura:GetTickNumber() ~= 2 or target == nil then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_CORPSE_EXPLODE_DAMAGE, true)
+end
+RegisterAuraEvent(SPELL_CORPSE_EXPLODE, 1, trollgoreCorpseExplodeTick)
+RegisterAuraEvent(SPELL_CORPSE_EXPLODE_HEROIC, 1, trollgoreCorpseExplodeTick)
+
+-- C++ spell_trollgore_corpse_explode::HandleRemove
+-- (boss_trollgore.cpp:283-286): AfterEffectRemove EFFECT_0
+-- PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL -> the target creature
+-- despawns. Go fires ev3 once per removal, carrying the
+-- AfterEffectRemove legs (lua_aura.go fireAuraRemove); the
+-- GetObjectType gate mirrors C++ GetTarget()->ToCreature().
+local function trollgoreCorpseExplodeRemove(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:Despawn()
+end
+RegisterAuraEvent(SPELL_CORPSE_EXPLODE, 3, trollgoreCorpseExplodeRemove)
+RegisterAuraEvent(SPELL_CORPSE_EXPLODE_HEROIC, 3, trollgoreCorpseExplodeRemove)

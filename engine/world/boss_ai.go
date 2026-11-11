@@ -18957,24 +18957,25 @@ func init() {
 	// EVENT_CONSUME Talk(2) + DoCastAOE(49380) and EVENT_CORPSE_EXPLODE
 	// Talk(3) + DoCastAOE(49555) ported as self-cast.
 	// Documented in the lua file, not wired: EVENT_SPAWN invader-summoner trigger casts
-	// (instance model absent), the _consumptionJunction latch (aura-stack
-	// 49381/59805 — no aura-stack bridge), GetData(DATA_CONSUMPTION_
+	// (instance model absent), GetData(DATA_CONSUMPTION_
 	// JUNCTION) cross-AI (its only caller is achievement_consumption_
 	// junction — no achievement-criteria bridge, snakes precedent +
 	// cross-AI GetData absent), JustSummoned MovePoint choreography
 	// (motion-master + summon STRAND bridges absent), the UpdateAI
 	// casting-skip, npc_drakkari_invader (27709/27753/27754 entry-verifiable
 	// — zero registration: Dismount/SetImmuneToAll + DoCastAOE(49405)
-	// behind motion + DoCastAOE bridges), spell_trollgore_consume
-	// (49380/59803) + spell_trollgore_invader_taunt (49405) + spell_
-	// trollgore_corpse_explode (49555/59807) (no SpellScript/AuraScript
-	// binding bridge — razelikh precedent), and
-	// achievement_consumption_junction.
+	// behind motion + DoCastAOE bridges), spell_trollgore_invader_taunt
+	// (49405) (no SpellScript binding bridge — razelikh precedent), and
+	// achievement_consumption_junction. spell_trollgore_consume
+	// (49380/59803) + spell_trollgore_corpse_explode (49555/59807)
+	// PORTED in lua_scripts/northrend/boss_trollgore.lua
+	// (RegisterSpellEvent ev5 / RegisterAuraEvent ev1+ev3).
 	// Cast-state PORTED: own UpdateAI pre-loop + in-loop CASTING gates
 	// — all 4 ported timer arms (crush/infected-wound/consume/
 	// corpse-explode) defer 500ms while casting, no repeat re-arm;
 	// Talk arms ungated per C++; post-loop consumptionJunction latch
-	// stays out (write-only, sole reader unbridged achievement GetData).
+	// PORTED tick 418 as a SetData mirror — the Go achievement gate reads
+	// the Lua SetData store via bossLatchData (achievement_criteria_scripts.go:803).
 	RegisterLuaBoss("boss_trollgore", 26630)
 
 	// npc_slad_ran_constrictor: Gundrak script, entry 29713
@@ -19019,10 +19020,11 @@ func init() {
 	// DATA_NOVOS_ACHIEV), JustSummoned (summon STRAND absent),
 	// npc_crystal_channel_target (26712 entry-verifiable — zero
 	// registration: cross-AI AI()->SetData activation + MovePath
-	// bridges absent), spell_novos_summon_minions (59910 — no
-	// SpellScript binding bridge — razelikh precedent), and
-	// achievement_oh_novos (no achievement-criteria bridge — snakes
-	// precedent — + cross-AI GetData absent).
+	// bridges absent), spell_novos_summon_minions (59910 — PORTED in
+	// lua_scripts/northrend/boss_novos.lua, RegisterSpellEvent ev5,
+	// 2x 59933 triggered), and achievement_oh_novos (no
+	// achievement-criteria bridge — snakes precedent — + cross-AI
+	// GetData absent).
 	// Cast-state CHECKED-NO-GATE: own UpdateAI pre-loop (:147) +
 	// in-loop (:167) CASTING gates guard only the unported
 	// EVENT_ATTACK / EVENT_SUMMON_MINIONS arms (scheduled only after
@@ -19086,9 +19088,10 @@ func init() {
 	// all 10 ported arms defer 500ms while casting, no repeat re-arm
 	// (gate precedes target picks and transition Talk/Reset legs;
 	// stale constant-false IsCasting claim retracted). Documented in
-	// the lua file, not wired: Reset's _Reset(); spell_tharon_ja_clear_gift_
-	// of_tharon_ja (53242 SpellScript — no SpellScript binding bridge,
-	// razelikh precedent). Drak'Tharon Keep block CLOSED.
+	// the lua file, not wired: Reset's _Reset(). spell_tharon_ja_
+	// clear_gift_of_tharon_ja (53242 SpellScript) PORTED in
+	// lua_scripts/northrend/boss_tharon_ja.lua (RegisterSpellEvent
+	// ev5). Drak'Tharon Keep block CLOSED.
 	RegisterLuaBoss("boss_tharon_ja", 26632)
 
 	// boss_eadric: Trial of the Champion dungeon boss script, entry
