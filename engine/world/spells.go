@@ -16601,6 +16601,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 48682 && effectIndex == 0 && len(hitTargets) > 0 {
 						s.castSpellDirect(effCtx, 48681, s.playerGUID)
 					}
+					// spell_q12641_death_comes_from_on_high::HandleDummy
+					// (spell_quest.cpp:2338-2362): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit creature, the caster
+					// casts the building's credit spell on itself,
+					// triggered. Fires once per effect over the hit targets
+					// (C++ fires per hit target), ahead of the pet-aura/Eluna
+					// legs like the silverbrook arm above, and only when a
+					// target was actually hit. DORMANT until Spell.dbc ships
+					// the 51858 record.
+					if spellID == 51858 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.siphonOfAcherusDummyEffect(effCtx, hitTargets)
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// spell_hun_readiness::HandleDummy
 					// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY
@@ -28210,6 +28222,15 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// leg above.
 					if spellID == 48682 && effectIndex == 0 && len(effectGUIDs) > 0 {
 						s.castSpellDirect(ctx, 48681, s.playerGUID)
+					}
+					// spell_q12641_death_comes_from_on_high::HandleDummy
+					// (spell_quest.cpp:2338-2362): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit creature, the caster
+					// casts the building's credit spell on itself,
+					// triggered — the triggered-cast leg, gated on a
+					// miss-filtered hit like the silverbrook leg above.
+					if spellID == 51858 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						s.siphonOfAcherusDummyEffect(ctx, effectGUIDs)
 					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
@@ -52392,6 +52413,43 @@ func (s *session) deathGripInitialDummyEffect(ctx context.Context, effectIndex i
 	}
 }
 
+// siphonOfAcherusDummyEffect mirrors
+// spell_q12641_death_comes_from_on_high::HandleDummy
+// (spell_quest.cpp:2338-2362): the EFFECT_0 DUMMY OnEffectHitTarget arm —
+// per hit creature, the caster casts the building's credit spell on
+// itself, triggered; an unmatched entry casts nothing (the C++ default
+// return). A hit target with no live creature motion takes nothing:
+// GetHitCreature()->GetEntry() has no Go model outside the motion
+// registry. DORMANT until Spell.dbc ships the 51858 record.
+func (s *session) siphonOfAcherusDummyEffect(ctx context.Context, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		motion := s.findCreatureMotion(guid)
+		if motion == nil {
+			continue
+		}
+		var credit uint32
+		switch motion.Entry {
+		case 28525: // NPC_NEW_AVALON_FORGE
+			credit = 51974
+		case 28543: // NPC_NEW_AVALON_TOWN_HALL
+			credit = 51977
+		case 28542: // NPC_SCARLET_HOLD
+			credit = 51980
+		case 28544: // NPC_CHAPEL_OF_THE_CRIMSON_FLAME
+			credit = 51982
+		default:
+			continue
+		}
+		s.castSpellDirect(ctx, credit, s.playerGUID)
+	}
+}
+
 // scourgeStrikeDummyEffect is spell_dk_scourge_strike
 // (spell_dk.cpp:2279-2290): the EFFECT_2 DUMMY OnEffectHitTarget arm —
 // multiplier = GetEffectValue() * GetDiseasesByCaster / 100, plus the
@@ -52742,6 +52800,36 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 				}
 				targetSess.castSpellDirect(ctx, uint32(value), targetGUID)
 			}
+		}
+	case 51770:
+		// spell_q12619_emblazon_runeblade_effect::HandleScript
+		// (spell_quest.cpp:2453-2460): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHit arm — the caster casts the effect-0 value on
+		// itself. C++ fires OnEffectHit once per effect, not per target;
+		// Go has no no-target script-effect dispatch, but the 51769 aura
+		// casts 51770 on the caster, so the caster is always the hit
+		// target and this per-target leg fires exactly once. TRIGGERED
+		// DELTA: C++ casts non-triggered, but Go has no server-side
+		// non-triggered player cast helper — the cast rides the
+		// triggered funnel (castSpellDirect) like the 52751 death-gate
+		// arm. A Lua ev5 port would never fire: the player path has no
+		// OnEffectHitTarget site (60533 precedent above). DORMANT until
+		// Spell.dbc ships the 51770 record.
+		if value := eff.CalcValueForLevel(spell, uint32(s.player.Level)); value != 0 {
+			s.castSpellDirect(ctx, uint32(value), s.playerGUID)
+		}
+	case 66744:
+		// spell_q14100_q14111_make_player_destroy_totems::HandleScriptEffect
+		// (spell_quest.cpp:2605-2615): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — a hit player casts 66747 (Totem of the
+		// Earthen Ring) on itself, triggered (TRIGGERED_FULL_MASK: no
+		// reagent cost). The census "OnEffectRemove" hook is wrong: the
+		// class registers no aura-remove leg. A creature hit takes
+		// nothing (GetHitPlayer). The creature-caster twin sits in
+		// creatureEffectScriptEffect (boss_ai.go). DORMANT until
+		// Spell.dbc ships the 66744 record.
+		if targetSess := s.server.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+			targetSess.castSpellDirect(ctx, 66747, targetGUID)
 		}
 	case 69961:
 		// spell_dk_glyph_of_scourge_strike_script::HandleScriptEffect

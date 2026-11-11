@@ -499,6 +499,28 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 						z += 20
 					case spellID == 12601 && targetType == implicitTargetDestCaster:
 						z += 2.5
+					case spellID == 48681 && targetType == implicitTargetDestCasterSummon:
+						// spell_q12308_escape_from_silverbrook_summon_worgen::ModDest
+						// (spell_quest.cpp:2283-2290): the EFFECT_0
+						// TARGET_DEST_CASTER_SUMMON destination moves to the
+						// caster's near position at CalcRadius, angle
+						// frand(0.75, 1.25) * pi — MovePosition adds the
+						// caster orientation (Object.cpp:3340) and z is kept
+						// (no map-height model), like the resolver above.
+						// Distinct from the 48682 dummy leg (a5affd0d),
+						// which casts this spell; this is the spell's own
+						// destination leg.
+						dist := float32(0)
+						if s.server.Data != nil {
+							if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok {
+								dist = value
+							}
+						}
+						dist = modRadius(dist)
+						angle := (0.75 + rand.Float32()*0.5) * float32(math.Pi)
+						angle += s.player.Orientation
+						x = s.player.X + dist*float32(math.Cos(float64(angle)))
+						y = s.player.Y + dist*float32(math.Sin(float64(angle)))
 					}
 				}
 			case targetType == implicitTargetDestCasterFishing:

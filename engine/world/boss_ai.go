@@ -7830,6 +7830,19 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.castCreatureSpellInternal(ctx, tm, 69023, m.GUID, true)
 			}
+		case 66744:
+			// spell_q14100_q14111_make_player_destroy_totems::HandleScriptEffect
+			// (spell_quest.cpp:2605-2615): the EFFECT_0 SCRIPT_EFFECT
+			// OnEffectHitTarget arm — the creature-caster twin of the
+			// session leg: a hit player casts 66747 (Totem of the
+			// Earthen Ring) on itself, triggered (TRIGGERED_FULL_MASK:
+			// no reagent cost). A creature hit takes nothing
+			// (GetHitPlayer). The census "OnEffectRemove" hook is
+			// wrong: the class registers no aura-remove leg. DORMANT
+			// until Spell.dbc ships the 66744 record.
+			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+				ts.castSpellDirect(ctx, 66747, guid)
+			}
 		case 53407, 20271, 53408:
 			// spell_pal_judgement::HandleScriptEffect
 			// (spell_paladin.cpp:1503-1566): the creature-caster twin
