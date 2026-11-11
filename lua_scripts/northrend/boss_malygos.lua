@@ -1324,23 +1324,26 @@ end
 
 RegisterSpellEvent(SPELL_DESTROY_PLATFORM_EVENT, 4, destroyPlatformEvent)
 
-local SPELL_RIDE_RED_DRAGON_BUDDY = 56071 -- boss_malygos.cpp:137
+local SPELL_RIDE_RED_DRAGON_TRIGGERED = 56072 -- eye_of_eternity.h:85
 
 -- C++ spell_wyrmrest_skytalon_ride_red_dragon_buddy_trigger::HandleScript
 -- (boss_malygos.cpp:2183-2187): OnEffectHitTarget, EFFECT_0
 -- SPELL_EFFECT_SCRIPT_EFFECT. Load admits unit casters; the hit unit
 -- casts the spell's effect value on the caster, triggered. The unit
 -- gate (not the file's usual creature-only gate) is the faithful Load
--- twin here — the body never ToCreatures the caster, and whether the
--- trigger is cast by the buddy or the skytalon rider is DB-side.
--- The binding ID rests on the enum-name match (loader name ==
--- SPELL_RIDE_RED_DRAGON_BUDDY; final confirmation is DB-side,
--- spell_script_names) — no conflicting candidate: 56070 binds the
--- summon script, 56072 is SPELL_RIDE_RED_DRAGON_TRIGGERED, cast
--- directly by the skytalon AI (:1530). GetEffectValue(0) reads the
--- DBC value dynamically (lua_spell.go:395-400, 0 without a DBC row —
--- fail-closed). PORTED 2026-11-11. DORMANT: Spell.dbc not shipped;
--- the driver chain 58846 -> 56070 -> 56071 starts at the
+-- twin here — the body never ToCreatures the caster.
+-- CORRECTED 2026-11-11: the a3f32974 landing bound this to 56071
+-- (SPELL_RIDE_RED_DRAGON_BUDDY, the ride spell itself) on an
+-- enum-name guess — wrong. The trigger spell is 56072: the skytalon
+-- AI casts SPELL_RIDE_RED_DRAGON_TRIGGERED on the summoning player
+-- (boss_malygos.cpp:1530), and this script is that cast's
+-- SCRIPT_EFFECT leg — the hit player casts the effect value (the
+-- 56071 ride spell) back on the skytalon. Binding confirmation is
+-- DB-side (spell_script_names) as usual, but 56072 is the only
+-- candidate with a cast site and a matching effect. GetEffectValue(0)
+-- reads the DBC value dynamically (lua_spell.go:395-400, 0 without a
+-- DBC row — fail-closed). PORTED 2026-11-11. DORMANT: Spell.dbc not
+-- shipped; the driver chain 58846 -> 56070 -> 56072 starts at the
 -- destroy-platform event, itself dormant on the unported phase-2
 -- machine. Census OnObjectAreaTargetSelect label is bogus — no such
 -- hook exists in this class.
@@ -1359,7 +1362,7 @@ local function rideRedDragonBuddyTrigger(event, spell, hitTarget, effectIndex)
     hitTarget:CastSpell(caster, value, true)
 end
 
-RegisterSpellEvent(SPELL_RIDE_RED_DRAGON_BUDDY, 5, rideRedDragonBuddyTrigger)
+RegisterSpellEvent(SPELL_RIDE_RED_DRAGON_TRIGGERED, 5, rideRedDragonBuddyTrigger)
 
 local SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25 = 60939 -- boss_malygos.cpp:150
 local SPELL_SURGE_OF_POWER_PHASE_3_25 = 60936 -- boss_malygos.cpp:149
@@ -1385,10 +1388,16 @@ local surgeTargets = {}
 -- warning to the seat-0 player passenger of each picked vehicle
 -- (Talk(id, player) whisper-target bridge,
 -- lua_creature_events.go:1196; GetPassenger(0), lua_vehicle.go:74).
--- PORTED 2026-11-11. DORMANT: 60939 is cast only by the unported
--- phase-3 machine (DoCastAOE 60939, boss_malygos.cpp:952, 25-man
--- normal) plus Spell.dbc. Census OnEffectApply label is bogus
--- (SpellScript, not AuraScript); AfterHit is the second leg, below.
+-- PORTED 2026-11-11. CORRECTED 2026-11-11: the a3f32974 landing
+-- replaced the spell's target list with the 3 picks — wrong. C++
+-- copies the vehicle list to selectedTargets and resizes only the
+-- COPY (:2240-2241); the spell itself still hits every vehicle, and
+-- AfterHit fires once per vehicle hit. The store + whispers ride the
+-- 3 picks; the target list passes through untouched.
+-- DORMANT: 60939 is cast only by the unported phase-3 machine
+-- (DoCastAOE 60939, boss_malygos.cpp:952, 25-man normal) plus
+-- Spell.dbc. Census OnEffectApply label is bogus (SpellScript, not
+-- AuraScript); AfterHit is the second leg, below.
 local function surgeWarningSelectorTargets(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return
@@ -1417,10 +1426,9 @@ local function surgeWarningSelectorTargets(event, spell, effectIndex, targets)
         end
     end
     surgeTargets[caster:GetGUIDLow()] = stored
-    targets:Clear()
-    for _, target in ipairs(selected) do
-        targets:Add(target)
-    end
+    -- No targets:Clear()/Add() here: C++ resizes only the
+    -- selectedTargets copy (:2240-2241); the spell's list stays the
+    -- full vehicle list and AfterHit fires once per vehicle hit.
 end
 
 RegisterSpellEvent(SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25, 7, surgeWarningSelectorTargets)
@@ -1429,10 +1437,11 @@ RegisterSpellEvent(SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25, 7, surgeWarningSele
 -- (boss_malygos.cpp:2248-2251): AfterHit — the caster casts
 -- SPELL_SURGE_OF_POWER_PHASE_3_25 with no explicit target,
 -- non-triggered. Twin: the self-cast (the 58846 precedent);
--- AfterHit fires once per hit target (boss_ai.go:4206-4228), so the
--- main spell casts up to 3x per selector cast, faithful to C++
--- (Spell.cpp:2659 per-target AfterHit). PORTED 2026-11-11. DORMANT
--- with the selector leg above.
+-- AfterHit fires once per hit target of 60939 (lua_spell.go:574-581)
+-- — every vehicle, not just the 3 picks (C++ Spell.cpp:2659
+-- per-target AfterHit) — so the main spell casts once per vehicle
+-- hit, each 60936 cast filtering to the same 3 stored GUIDs.
+-- PORTED 2026-11-11. DORMANT with the selector leg above.
 local function surgeWarningSelectorAfterHit(event, spell, hitTarget)
     local caster = spell:GetCaster()
     if caster == nil or caster:GetObjectType() ~= "Creature" then
