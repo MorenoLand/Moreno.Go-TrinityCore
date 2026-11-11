@@ -188,13 +188,12 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   (582, ev5) left it on the reconcile tick; buff-food x5, well_fed
 --   x5, on_plate and a_serving_of stay out (see the reconcile-tick
 --   checkpoint entry for the reasons). px_238_winter_wondervolt (587,
---   ev5, 26275) left it this tick; mistletoe 586 stays out (no binding
---   ID in-tree — no TC comment/enum, no in-tree spell_script_names
---   row, web search inconclusive); relay_race_turn_in 588 stays out
---   (no binding ID in-tree — 44501 is the credit spell it casts, not
---   its own ID); barker_bunny 43259-43262 stays out (no player
---   broadcast-text Talk bridge — player:Say takes a raw string,
---   lua_player.go:1106). The tick-295 "no RegisterSpellScript bridge"
+--   ev5, 26275) left it this tick; mistletoe (586, ev5, 26218) and
+--   barker_bunny (589-592, ev2, 43259-43262) left it on the next tick
+--   — mistletoe's binding is the AC spell_script_names row, and the
+--   bunny rides the player:Talk bridge built that tick.
+--   relay_race_turn_in 588 stays out (no binding ID in-tree — 44501
+--   is the credit spell it casts, not its own ID). The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
 --   which is how 24930 Hallow's End Candy is ported above, and 43876
 --   Dismount Ram this tick (tail). 43714 relay-race intro force is
@@ -917,3 +916,110 @@ local function px238WinterWondervoltHit(event, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_PX_238_WINTER_WONDERVOLT, 5, px238WinterWondervoltHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_winter_veil_mistletoe::HandleScript
+--   (spell_holiday.cpp:988-994, registered OnEffectHitTarget EFFECT_0
+--   SCRIPT_EFFECT at :999): on a hit player the caster casts one of
+--   Create Holly 26207, Create Mistletoe 26206 or Create Snowflakes
+--   45036 at random, triggered. No PreventDefaultAction in C++, so
+--   the ev5 notification-only fire is exact. Binding ID 26218 comes
+--   from AzerothCore spell_script_names (26218,
+--   'spell_winter_veil_mistletoe') — it overturns the 17:35 stay-out
+--   (no TC comment/enum, no in-tree row, web search inconclusive).
+--   ev5 fires on the creature path and the player triggered funnel,
+--   not on a direct player cast (finishSpellCast) — the open
+--   engine-work item from the census head.
+local SPELL_WINTER_VEIL_MISTLETOE = 26218 -- AC spell_script_names
+local SPELL_CREATE_HOLLY = 26207 -- spell_holiday.cpp:965
+local SPELL_CREATE_MISTLETOE = 26206 -- spell_holiday.cpp:964
+local SPELL_CREATE_SNOWFLAKES = 45036 -- spell_holiday.cpp:966
+
+local WINTER_VEIL_MISTLETOE_CREATES = {
+    SPELL_CREATE_HOLLY,
+    SPELL_CREATE_MISTLETOE,
+    SPELL_CREATE_SNOWFLAKES,
+}
+
+local function winterVeilMistletoeHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, WINTER_VEIL_MISTLETOE_CREATES[math.random(#WINTER_VEIL_MISTLETOE_CREATES)], true)
+end
+
+RegisterSpellEvent(SPELL_WINTER_VEIL_MISTLETOE, 5, winterVeilMistletoeHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2):
+--   spell_brewfest_barker_bunny::OnApply
+--   (spell_holiday.cpp:1456-1480, registered OnEffectApply EFFECT_1
+--   SPELL_AURA_DUMMY AURA_EFFECT_HANDLE_REAL at :1484): the aura
+--   owner must be a player (Load gate, :1451-1454). On apply the
+--   player says one of four broadcast texts for the first matching
+--   bark quest in order — Drohn's Distillery 11407, T'chali's
+--   Voodoo Brewery 11408, Barleybrews 11293, Thunderbrews 11294 —
+--   each matching on INCOMPLETE or COMPLETE status; a later matching
+--   quest overwrites an earlier pick (sequential ifs, not else-if).
+--   The say rides the player:Talk bridge built this tick
+--   (lua_player.go: Talk = Unit::Talk CHAT_MSG_SAY leg); it overturns
+--   the 17:35 stay-out (no player broadcast-text Talk bridge).
+--   Binding IDs 43259-43262 come from the `// 43259 Brewfest -
+--   Barker Bunny 1` comments (spell_holiday.cpp:1438-1441), the same
+--   convention as 24750/24751; no AC spell_script_names row exists
+--   (no "barker" row in the AC table at all).
+local SPELL_BREWFEST_BARKER_BUNNY_1 = 43259 -- spell_holiday.cpp:1438
+local SPELL_BREWFEST_BARKER_BUNNY_2 = 43260 -- spell_holiday.cpp:1439
+local SPELL_BREWFEST_BARKER_BUNNY_3 = 43261 -- spell_holiday.cpp:1440
+local SPELL_BREWFEST_BARKER_BUNNY_4 = 43262 -- spell_holiday.cpp:1441
+local QUEST_BARK_FOR_DROHNS_DISTILLERY = 11407 -- spell_holiday.cpp:1406
+local QUEST_BARK_FOR_TCHALIS_VOODOO_BREWERY = 11408 -- spell_holiday.cpp:1407
+local QUEST_BARK_BARLEYBREW = 11293 -- spell_holiday.cpp:1410
+local QUEST_BARK_FOR_THUNDERBREWS = 11294 -- spell_holiday.cpp:1411
+local QUEST_STATUS_COMPLETE = 1 -- quests.go:18 (QuestDef.h:101-109)
+local QUEST_STATUS_INCOMPLETE = 3 -- quests.go:19
+local SAY_DROHN_DISTILLERY = { 23520, 23521, 23522, 23523 } -- spell_holiday.cpp:1414-1417
+local SAY_TCHALIS_VOODOO = { 23524, 23525, 23526, 23527 } -- spell_holiday.cpp:1420-1423
+local SAY_BARLEYBREW = { 23464, 23465, 23466, 22941 } -- spell_holiday.cpp:1426-1429
+local SAY_THUNDERBREWS = { 23467, 23468, 23469, 22942 } -- spell_holiday.cpp:1432-1435
+
+local function brewfestBarkerBunnyApply(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    local broadcastTextId = 0
+    local status = target:GetQuestStatus(QUEST_BARK_FOR_DROHNS_DISTILLERY)
+    if status == QUEST_STATUS_INCOMPLETE or status == QUEST_STATUS_COMPLETE then
+        broadcastTextId = SAY_DROHN_DISTILLERY[math.random(#SAY_DROHN_DISTILLERY)]
+    end
+    status = target:GetQuestStatus(QUEST_BARK_FOR_TCHALIS_VOODOO_BREWERY)
+    if status == QUEST_STATUS_INCOMPLETE or status == QUEST_STATUS_COMPLETE then
+        broadcastTextId = SAY_TCHALIS_VOODOO[math.random(#SAY_TCHALIS_VOODOO)]
+    end
+    status = target:GetQuestStatus(QUEST_BARK_BARLEYBREW)
+    if status == QUEST_STATUS_INCOMPLETE or status == QUEST_STATUS_COMPLETE then
+        broadcastTextId = SAY_BARLEYBREW[math.random(#SAY_BARLEYBREW)]
+    end
+    status = target:GetQuestStatus(QUEST_BARK_FOR_THUNDERBREWS)
+    if status == QUEST_STATUS_INCOMPLETE or status == QUEST_STATUS_COMPLETE then
+        broadcastTextId = SAY_THUNDERBREWS[math.random(#SAY_THUNDERBREWS)]
+    end
+    if broadcastTextId ~= 0 then
+        target:Talk(broadcastTextId)
+    end
+end
+
+for _, bunnyId in ipairs({
+    SPELL_BREWFEST_BARKER_BUNNY_1,
+    SPELL_BREWFEST_BARKER_BUNNY_2,
+    SPELL_BREWFEST_BARKER_BUNNY_3,
+    SPELL_BREWFEST_BARKER_BUNNY_4,
+}) do
+    RegisterAuraEvent(bunnyId, 2, brewfestBarkerBunnyApply)
+end

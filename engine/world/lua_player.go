@@ -1205,6 +1205,43 @@ func (s *session) luaPlayer() *scripting.Object {
 		packet := protocol.BuildChatMessage(chatType, languageUniversal, s.player.GUID, receiverGUID, text, "")
 		return nil, receiver.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), packet, true)
 	}
+	// Talk is Unit::Talk(uint32 textId, ChatMsg msgType, float textRange, WorldObject const* target)
+	// (Unit.cpp:14074-14087) for the CHAT_MSG_SAY leg: resolves the broadcast_text row by ID and
+	// sends it as a CHAT_MSG_SAY (0x01) packet from this player to players in say range
+	// (CONFIG_LISTEN_RANGE_SAY, the PlayerDistWorker leg), with the self-write plus
+	// broadcastToSetWithin shape of sendAchievementEarnedChat. The creature twin is
+	// broadcastCreatureTalk (lua_creature_events.go:1196); the player surface had no
+	// broadcast-text Talk until this bridge — player:Say takes a raw string, so the brewfest
+	// barker bunny aura (43259-43262) could not speak. DELTA: C++ localizes per receiver locale
+	// and the sender's gender (BroadcastText::GetText); Go reads the enUS Text column only (the
+	// WhisperText precedent). The target argument C++ passes (the speaker itself, for $N
+	// substitution) has no Go model. A missing row drops silently (the C++ log-and-return arm).
+	// No chat hook fires: scripted Talk is not player-typed chat.
+	methods["Talk"] = func(ctx context.Context, args []any) ([]any, error) {
+		textID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil || s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return []any{}, nil
+		}
+		var text string
+		var language uint32
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT Text, LanguageID FROM broadcast_text WHERE ID = ?", textID).Scan(&text, &language); err != nil || text == "" {
+			return []any{}, nil
+		}
+		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
+		senderName := ""
+		if s.gmMessage {
+			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
+			senderName = s.player.Name
+		}
+		payload := protocol.BuildChatMessageWithOptions(chatSay, language, s.player.GUID, 0, text, "", s.gmMessage, senderName, s.chatTag())
+		_ = s.write(opcode, payload, true)
+		s.server.broadcastToSetWithin(opcode, payload, s.player.Map, s.player.InstanceID, s.player.X, s.player.Y, s.player.Z, float64(s.server.Config.ChatListenRangeSay), s)
+		return []any{}, nil
+	}
 	methods["Whisper"] = playerWhisper
 	methods["SendUnitWhisper"] = playerWhisper
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
