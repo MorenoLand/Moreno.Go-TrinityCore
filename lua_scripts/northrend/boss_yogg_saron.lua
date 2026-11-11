@@ -308,6 +308,10 @@ local PHASE3 = {
     SPELL_CONSTRICTOR_TENTACLE_SUMMON = 64133, -- :274
     SPELL_SQUEEZE = 64125, -- :275
     SPELL_SQUEEZE_HEROIC = 64126, -- loader comment :2445 (difficulty twin, no in-tree enum)
+    SPELL_DEATH_RAY_PERIODIC = 63883, -- :234
+    SPELL_DEATH_RAY_DAMAGE_VISUAL = 63886, -- :235
+    SPELL_TELEPORT_BACK_TO_MAIN_ROOM = 63992, -- :272
+    SPELL_CANCEL_ILLUSION_ROOM_AURA = 63993, -- loader comment :2645 (no in-tree enum/cast site)
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -1307,8 +1311,10 @@ RegisterSpellEvent(SPELL_BRAIN_LINK, 7, PHASE3.yoggBrainLinkFilter)
 -- no-damage beam 63804, both triggered (player CastSpell takes no
 -- triggered arg; the cast rides the ev5 funnel either way). The
 -- caster gate mirrors the C++ caster/SaraAI nil return; the distance
--- is center-to-center (the generic GetDistance fallback carries no
--- combat-reach subtraction). Bound 63802.
+-- is C++ WorldObject::GetDistance (Object.cpp:1169-1173): exact dist
+-- minus both players' 1.5 combat reach, clamped at 0 (generic
+-- GetDistance carries no reach subtraction, so subtract 3.0 here).
+-- Bound 63802.
 PHASE3.yoggBrainLinkTick = function(event, aura, target)
     if target == nil then
         return
@@ -1324,7 +1330,7 @@ PHASE3.yoggBrainLinkTick = function(event, aura, target)
     if linked == nil then
         return
     end
-    if target:GetDistance(linked) > aura:GetAmount(0) then
+    if math.max(0, target:GetDistance(linked) - 3.0) > aura:GetAmount(0) then
         target:CastSpell(linked, PHASE3.BRAIN_LINK_DAMAGE)
     else
         target:CastSpell(linked, PHASE3.BRAIN_LINK_NO_DAMAGE)
@@ -1702,6 +1708,111 @@ PHASE3.yoggDiminshPowerProc = function(event, aura, target, actor, procTarget, d
     return true
 end
 RegisterAuraEvent(SPELL_DIMINSH_POWER, 6, PHASE3.yoggDiminshPowerProc)
+
+-- C++ spell_yogg_saron_match_health::HandleScript
+-- (boss_yogg_saron.cpp:2563-2569): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit's health is set to
+-- the caster's health pct of its own max. CountPctFromMaxHealth
+-- truncates the float pct to int32 (lua_values.go), matching the
+-- C++ (int32) cast. Bound 64069 (brain DamageTaken :1070-1090,
+-- triggered) + 64066 (brain Reset :1065, same ID-agnostic arm;
+-- 64066's DB binding to this loader is unconfirmed — no separate
+-- loader exists in-tree). The census OnEffectHitTarget hook is
+-- exact; no AfterEffectApply leg exists. DORMANT until Spell.dbc ships.
+PHASE3.yoggMatchHealthHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:SetHealth(hitTarget:CountPctFromMaxHealth(caster:GetHealthPct()))
+end
+RegisterSpellEvent(PHASE3.SPELL_MATCH_HEALTH_2, 5, PHASE3.yoggMatchHealthHit)
+RegisterSpellEvent(SPELL_MATCH_HEALTH, 5, PHASE3.yoggMatchHealthHit)
+
+-- C++ spell_yogg_saron_shattered_illusion::HandleScript
+-- (boss_yogg_saron.cpp:2592-2598): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit removes the aura
+-- named by the effect value (DBC-side, presumably 64173
+-- SPELL_SHATTERED_ILLUSION). Bound 65238 (brain DamageTaken
+-- DoCastAOE :1070-1090, triggered). No PreventHitDefaultEffect:
+-- SCRIPT_EFFECT has no Go default arm beyond the Eluna hook (the
+-- 453 precedent). DORMANT until Spell.dbc ships.
+PHASE3.yoggShatteredIllusionHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        hitTarget:RemoveAura(value)
+    end
+end
+RegisterSpellEvent(PHASE3.SPELL_SHATTERED_ILLUSION_REMOVE, 5, PHASE3.yoggShatteredIllusionHit)
+
+-- C++ spell_yogg_saron_death_ray_warning_visual::OnRemove
+-- (boss_yogg_saron.cpp:2622-2632): AfterEffectRemove EFFECT_0
+-- SPELL_AURA_DUMMY, REAL -> the caster self-casts
+-- SPELL_DEATH_RAY_PERIODIC (63883) triggered, casts
+-- SPELL_DEATH_RAY_DAMAGE_VISUAL (63886) on a nil target
+-- (explicit self-cast twin, the 461 precedent), triggered, then
+-- MoveConfused (lua_creature_events.go:5237). Bound 63882 (death-ray
+-- summon JustSummoned :890, non-triggered). The census
+-- OnEffectHitTarget hook is a phantom — the class registers only
+-- AfterEffectRemove. DORMANT until Spell.dbc ships.
+PHASE3.yoggDeathRayWarningRemoved = function(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, PHASE3.SPELL_DEATH_RAY_PERIODIC, true)
+    caster:CastSpell(caster, PHASE3.SPELL_DEATH_RAY_DAMAGE_VISUAL, true)
+    caster:MoveConfused()
+end
+RegisterAuraEvent(SPELL_DEATH_RAY_WARNING_VISUAL, 3, PHASE3.yoggDeathRayWarningRemoved)
+
+-- C++ spell_yogg_saron_cancel_illusion_room_aura::HandleScript
+-- (boss_yogg_saron.cpp:2660-2667): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit self-casts
+-- SPELL_TELEPORT_BACK_TO_MAIN_ROOM (63992), non-triggered, then
+-- removes the aura named by the effect value. Bound 63993 (loader
+-- comment :2645, registered AddSC :3221; no in-tree cast site or
+-- boss enum — the trigger lives in DBC, the 429 precedent).
+-- DORMANT until Spell.dbc ships.
+PHASE3.yoggCancelIllusionRoomHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, PHASE3.SPELL_TELEPORT_BACK_TO_MAIN_ROOM, false)
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        hitTarget:RemoveAura(value)
+    end
+end
+RegisterSpellEvent(PHASE3.SPELL_CANCEL_ILLUSION_ROOM_AURA, 5, PHASE3.yoggCancelIllusionRoomHit)
+
+-- C++ spell_yogg_saron_nondescript::OnRemove
+-- (boss_yogg_saron.cpp:2691-2696): AfterEffectRemove EFFECT_0
+-- SPELL_AURA_MOD_STUN, REAL -> the target self-casts the aura
+-- effect's amount as a spell id, triggered. aura:GetAmount()
+-- defaults to effect 0 (lua_aura.go:267) and the ev3 snapshot
+-- carries the stored amounts (lua_aura.go:32). Bound 64010 +
+-- 64013 (influence tentacle Reset :1422, entry-conditional
+-- non-triggered cast; both ids served by the one loader). The
+-- census OnEffectHitTarget hook is a phantom — the class registers
+-- only AfterEffectRemove. DORMANT until Spell.dbc ships.
+PHASE3.yoggNondescriptRemoved = function(event, aura, target)
+    if target == nil then
+        return
+    end
+    local value = aura:GetAmount()
+    if value ~= 0 then
+        target:CastSpell(target, value, true)
+    end
+end
+RegisterAuraEvent(SPELL_NONDESCRIPT_1, 3, PHASE3.yoggNondescriptRemoved)
+RegisterAuraEvent(SPELL_NONDESCRIPT_2, 3, PHASE3.yoggNondescriptRemoved)
 
 -- C++ boss_voice_of_yogg_saronAI::Reset (boss_yogg_saron.cpp:490-509):
 -- _Reset + SetPhase(PHASE_ONE) + instance SetData(DATA_DRIVE_ME_CRAZY) +
