@@ -597,6 +597,12 @@ func (s *session) ardentDefenderAbsorbHit(aura *activeAura, remainingDamage uint
 // flag feeds the exhaustedSpells pass, which removes with
 // AURA_REMOVE_BY_ENEMY_SPELL like C++), and the target casts Guardian
 // Spirit Heal (48153) on itself with BP0 = healPct% of max health. The
+// heal is NOT cast here: C++ removes the aura first (spell_priest.cpp
+// :568, "we don't want 40% healing bonus"), and the Go direct-heal path
+// folds SPELL_AURA_MOD_HEALING_RECEIVED while the aura still stands, so
+// a self-cast Guardian Spirit would inflate its own heal. The leg
+// returns the heal amount and the caller casts after the exhaustedSpells
+// removal pass below. Returns (absorb, depleted, handled, heal). The
 // pool is unlimited (CalculateAmount sets -1, see spells.go), so the leg
 // never reports a partial consume and the generic pool leg must never run
 // for this aura — handled is true whenever the DBC reads, the
@@ -607,72 +613,73 @@ func (s *session) ardentDefenderAbsorbHit(aura *activeAura, remainingDamage uint
 // the 69 leg, not inside it. C++ casts the heal with TRIGGERED_FULL_MASK;
 // Go rides the direct-cast path like every script cast, and the cast
 // carries context.Background() because the absorb funnel has no request
-// context (the ardentDefender precedent). Returns (absorb, depleted,
-// handled).
-func (s *session) guardianSpiritAbsorbHit(aura *activeAura, remainingDamage uint32, schoolMask uint8) (uint32, bool, bool) {
+// context (the ardentDefender precedent).
+func (s *session) guardianSpiritAbsorbHit(aura *activeAura, remainingDamage uint32, schoolMask uint8) (uint32, bool, bool, uint32) {
 	if s == nil || s.player == nil || aura == nil || aura.SpellID != 47788 || remainingDamage == 0 {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	if s.server == nil || s.server.Data == nil {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	spell, found, err := s.server.Data.Spell(47788)
 	if err != nil || !found || len(spell.Effects) < 2 || spell.Effects[1].Aura != SpellAuraSchoolAbsorb {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	if spell.Effects[1].MiscValue&int32(schoolMask) == 0 {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	healPct := spell.Effects[1].CalcValue()
 	if healPct <= 0 {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	health := s.player.Health
 	maxHealth := s.player.MaxHealth
 	if maxHealth == 0 || health == 0 {
-		return 0, false, true
+		return 0, false, true, 0
 	}
 	if remainingDamage < health {
-		return 0, false, true
+		return 0, false, true, 0
 	}
 	healAmount := uint32(uint64(maxHealth) * uint64(healPct) / 100)
-	s.castSpellDirectWithBasePoint(context.Background(), 48153, s.playerGUID, healAmount)
-	return remainingDamage, true, true
+	return remainingDamage, true, true, healAmount
 }
 
 // guardianSpiritCreatureAbsorbHit is the creature-side twin of
 // guardianSpiritAbsorbHit: same lethal-only absorb, same 48153 self-cast
 // via fireScriptProcCast (which resolves creature casters), same
 // AURA_REMOVE_BY_ENEMY_SPELL removal through the depleted flag. The heal
-// cast carries context.Background() because the absorb funnel has no
-// request context.
-func (s *Server) guardianSpiritCreatureAbsorbHit(key creatureAuraKey, aura *activeAura, remainingDamage uint32, schoolMask uint8, creatureHealth, creatureMaxHealth uint32) (uint32, bool, bool) {
+// is returned, not cast: fireScriptProcCast resolves the caster through
+// findCreatureMotion (motionMu), which must never be taken under auraMu,
+// and C++ removes the aura before casting. The caller casts after the
+// exhaustedSpells removal pass, once auraMu is released. The heal cast
+// carries context.Background() because the absorb funnel has no request
+// context. Returns (absorb, depleted, handled, heal).
+func (s *Server) guardianSpiritCreatureAbsorbHit(key creatureAuraKey, aura *activeAura, remainingDamage uint32, schoolMask uint8, creatureHealth, creatureMaxHealth uint32) (uint32, bool, bool, uint32) {
 	if s == nil || key.GUID == 0 || aura == nil || aura.SpellID != 47788 || remainingDamage == 0 {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	if s.Data == nil {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	spell, found, err := s.Data.Spell(47788)
 	if err != nil || !found || len(spell.Effects) < 2 || spell.Effects[1].Aura != SpellAuraSchoolAbsorb {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	if spell.Effects[1].MiscValue&int32(schoolMask) == 0 {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	healPct := spell.Effects[1].CalcValue()
 	if healPct <= 0 {
-		return 0, false, false
+		return 0, false, false, 0
 	}
 	if creatureMaxHealth == 0 || creatureHealth == 0 {
-		return 0, false, true
+		return 0, false, true, 0
 	}
 	if remainingDamage < creatureHealth {
-		return 0, false, true
+		return 0, false, true, 0
 	}
 	healAmount := uint32(uint64(creatureMaxHealth) * uint64(healPct) / 100)
-	s.fireScriptProcCast(context.Background(), key.Map, key.InstanceID, scriptProcCast{spellID: 48153, casterGUID: key.GUID, targetGUID: key.GUID, bp0: healAmount, bp0Set: true})
-	return remainingDamage, true, true
+	return remainingDamage, true, true, healAmount
 }
 
 // applyAbsorptionShields applies active absorption shields (Power Word: Shield, Ice Barrier, etc.)
@@ -686,6 +693,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 
 	remainingDamage = damage
 	var exhaustedSpells []uint32
+	var guardianHeal uint32
 
 	// The mana-shield leg resolves each shield caster's spell-mod owner
 	// through findCreatureMotion (motionMu) for pet casters, so those
@@ -736,11 +744,12 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 			if aura == nil || aura.Stopped || aura.Amount == 0 {
 				continue
 			}
-			if absorbThis, depleted, ok := s.guardianSpiritAbsorbHit(aura, remainingDamage, schoolMask); ok {
+			if absorbThis, depleted, ok, heal := s.guardianSpiritAbsorbHit(aura, remainingDamage, schoolMask); ok {
 				remainingDamage -= absorbThis
 				absorbed += absorbThis
 				if depleted {
 					exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+					guardianHeal = heal
 				}
 				continue
 			}
@@ -848,6 +857,15 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 		s.removeAuraWithMode(id, auraRemoveByEnemySpell)
 	}
 
+	// Guardian Spirit's heal fires here, after the aura is gone (the C++
+	// Remove-then-cast order, spell_priest.cpp:568): the direct-heal path
+	// folds SPELL_AURA_MOD_HEALING_RECEIVED while the aura stands, so
+	// casting inside the loop would inflate a self-cast heal with the
+	// aura's own +40%.
+	if guardianHeal > 0 {
+		s.castSpellDirectWithBasePoint(context.Background(), 48153, s.playerGUID, guardianHeal)
+	}
+
 	return absorbed, remainingDamage
 }
 
@@ -859,6 +877,7 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 
 	remainingDamage = damage
 	var exhaustedSpells []uint32
+	var guardianHeal uint32
 
 	// The mana-shield leg drains the creature's mana pool (Powers[0], filled
 	// from the template mana row at spawn); resolved ahead of the aura lock
@@ -891,11 +910,12 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 				if motion != nil {
 					creatureHealth, creatureMaxHealth = motion.Health, motion.MaxHealth
 				}
-				if absorbThis, depleted, ok := s.guardianSpiritCreatureAbsorbHit(key, aura, remainingDamage, schoolMask, creatureHealth, creatureMaxHealth); ok {
+				if absorbThis, depleted, ok, heal := s.guardianSpiritCreatureAbsorbHit(key, aura, remainingDamage, schoolMask, creatureHealth, creatureMaxHealth); ok {
 					remainingDamage -= absorbThis
 					absorbed += absorbThis
 					if depleted {
 						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+						guardianHeal = heal
 					}
 					continue
 				}
@@ -973,6 +993,14 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 	// AURA_REMOVE_BY_ENEMY_SPELL, not the default mode.
 	for _, id := range exhaustedSpells {
 		s.removeCreatureAuraWithMode(key, id, auraRemoveByEnemySpell)
+	}
+
+	// Guardian Spirit's heal fires here, after the aura is gone and auraMu
+	// is released (the C++ Remove-then-cast order, spell_priest.cpp:568):
+	// fireScriptProcCast resolves the caster through findCreatureMotion
+	// (motionMu), which must never be taken under auraMu.
+	if guardianHeal > 0 {
+		s.fireScriptProcCast(context.Background(), key.Map, key.InstanceID, scriptProcCast{spellID: 48153, casterGUID: key.GUID, targetGUID: key.GUID, bp0: guardianHeal, bp0Set: true})
 	}
 
 	return absorbed, remainingDamage
