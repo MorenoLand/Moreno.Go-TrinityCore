@@ -117,3 +117,50 @@ RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM, 6, impShadowformProc)
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
+
+-- CLOSED IN GO + TRIAGED STAY OUT (tick 2026-11-11 18:46, census rows
+-- 224-229 header-source + 672-673 comment-block; spell_priest.cpp end):
+--   prayer_of_mending_heal (33110, :1185-1219): CLOSED IN GO
+--   (spells.go:31449-31471: T9 2P 67201 EFFECT_0 pct on the hit heal,
+--   post-chain pre-crit). Real hook OnEffectHitTarget EFFECT_0
+--   SPELL_EFFECT_HEAL only; census phantom HandleDamage/OnEffectApply/OnHit.
+--   shadowfiend_death (57989, :1268-1315): CLOSED IN GO (boss_ai.go
+--   creature leg :11268-11297: owner casts 58227 on self when the
+--   shadowfiend sits below 1% after the damage). Real hooks DoCheckProc
+--   + OnEffectProc EFFECT_0 DUMMY; census phantom HandleDamage/OnHit.
+--   shadow_word_death (32379, :1316-1350): STAY OUT. OnHit HandleDamage
+--   needs GetHitDamage (Pain and Suffering icon 2874 EFFECT_1 pct, then
+--   caster casts 32409 on self triggered BP0=damage); the player-path hit
+--   state is nil so GetHitDamage reads 0 at OnHit and AfterHit
+--   (lua_spell.go:91-93). Go-leg candidate in the spells.go damage path.
+--   Real hook OnHit only; census phantom HandleDamage.
+--   vampiric_embrace (15286, :1351-1392): CLOSED IN GO (procs.go:5261-5280
+--   + boss_ai.go:11307-11322: actor casts 15290 on null, BP0=selfHeal/5,
+--   BP1=selfHeal). Real hook OnEffectProc EFFECT_0 DUMMY.
+--   vampiric_touch (34914, :1393-1458): PARTIAL. HandleDispel arm is Go
+--   (dispel.go:1781-1805: 64085 backlash, 8 * EFFECT_1 amount; OPEN
+--   DEVIATION: no SpellDamageBonusTaken scaling, C++ :1428-1430). The
+--   Replenishment arm (OnEffectProc EFFECT_2, actor casts 57669 on null)
+--   is Go (procs.go specific leg, 34914 i==2, added this tick); NO Lua
+--   port: ev6 fires once per eligible effect with no effect index in
+--   its args, and EFFECT_0 + EFFECT_2 are both DUMMY, so a handler
+--   would cast twice per proc; the EFFECT_0 CheckDummy gate has no Lua
+--   model. Real hooks DoCheckEffectProc EFFECT_0 + AfterDispel +
+--   OnEffectProc EFFECT_2; census hooks empty.
+--   t3_4p_bonus (28809, :1459-1491): CLOSED IN GO (procs.go:5285-5301 +
+--   boss_ai.go:11324-11331: actor casts 28810 on the proc target). Real
+--   hook OnEffectProc EFFECT_0 DUMMY; census phantom OnCheckCast.
+--   t5_heal_2p_bonus (37594, :1492-1536): CLOSED IN GO (procs.go:5302-5328
+--   + boss_ai.go:11332-11353: full-health overheal gate, holder casts
+--   37595 on self). Real hooks DoCheckProc + OnEffectProc EFFECT_0
+--   PROC_TRIGGER_SPELL; census phantom OnCheckCast.
+--   t10_heal_2p_bonus (70770, :1537-1585): CLOSED IN GO (procs.go:5329-5368
+--   + boss_ai.go:11387-11424: actor casts 70772 on the proc target,
+--   BP0=pct(heal, amount)/70772 max ticks). Real hook OnEffectProc
+--   EFFECT_0 DUMMY; census phantom OnCheckCast.
+--   power_infusion (10060, :1586-1604): STAY OUT. OnCheckCast only
+--   (target with Arcane Power 12042 -> SPELL_FAILED_AURA_BOUNCED); no
+--   OnCheckCast bridge exists in lua_spell.go or engine/scripting.
+--   Census rows 224-229 + 672-673 now all closed in Go except the
+--   SW:D / VT-Replenishment / power-infusion legs noted above; the next
+--   unworked census row is 674 (spell_q55_sacred_cleansing, spell_quest.cpp).

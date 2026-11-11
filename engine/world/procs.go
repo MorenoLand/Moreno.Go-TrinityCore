@@ -5282,6 +5282,30 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraSpell = 0
 				continue
 			}
+			if auraSpell.ID == 34914 && i == 2 && eff.Aura == spellAuraDummy {
+				// spell_pri_vampiric_touch::HandleProc
+				// (spell_priest.cpp:1437-1442): PreventDefaultAction; on a
+				// damage proc the actor casts Replenishment (57669) on
+				// null. The null target is the spell's own implicit
+				// targets (TARGET_UNIT_CASTER_AREA_PARTY) — the zero
+				// target rides the cast path's fallback legs, not the
+				// 40438 self-cast precedent. C++ CheckDummy (:1411-1414)
+				// returns false for EFFECT_0, so only this EFFECT_2 arm
+				// fires; the EFFECT_0 default leg no-ops on
+				// TriggerSpell == 0. No Lua ev6 twin: ev6 fires once per
+				// eligible effect with no effect index in its args, so a
+				// handler would cast twice per proc. DORMANT until
+				// Spell.dbc ships the 34914 proc entry.
+				if ev.actorGUID == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 57669, casterGUID: ev.actorGUID, targetGUID: 0})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if auraSpell.ID == 28809 && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_pri_t3_4p_bonus::HandleProc
 				// (spell_priest.cpp:1467-1472): PreventDefaultAction; the
