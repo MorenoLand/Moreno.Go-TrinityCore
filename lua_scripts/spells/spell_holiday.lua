@@ -182,8 +182,12 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   spell_script_names. Romantic_picnic (PORTED below, tick 575) and
 --   hallow_end_trick (PORTED below, tick 576, ev5) were in this list
 --   until this tick — the GetPlayersInRange bridge postdates tick 295. Trick_or_treat (PORTED below, tick 577, ev5)
---   and hallow_end_wand (PORTED below, tick 579, ev3) left it this tick; tricky_treat stays out (tick 578: no binding
---   ID in-tree, no GetAuraCount bridge — see the stay-out note at the tail). The tick-295 "no RegisterSpellScript bridge"
+--   and hallow_end_wand (PORTED below, tick 579, ev3) left it this tick;
+--   tricky_treat (PORTED below, tick 578, ev5, dormant on the missing
+--   direct-player ev5 site), feast_on (581, ev5) and turkey_tracker
+--   (582, ev5) left it on the reconcile tick; buff-food x5, well_fed
+--   x5, on_plate and a_serving_of stay out (see the reconcile-tick
+--   checkpoint entry for the reasons). The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
 --   which is how 24930 Hallow's End Candy is ported above, and 43876
 --   Dismount Ram this tick (tail). 43714 relay-race intro force is
@@ -529,6 +533,199 @@ end
 RegisterSpellEvent(SPELL_HALLOW_END_TRICK, 5, hallowEndTrickHit)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hallow_end_tricky_treat::HandleScript
+--   (spell_holiday.cpp:362-371, registered OnEffectHitTarget EFFECT_0
+--   SCRIPT_EFFECT at :373): if the caster holds the trigger aura
+--   42965 and the speed aura 42919 at more than 3 stacks, a 33% roll
+--   self-casts Upset Tummy 42966, triggered. GetAuraCount is the sum
+--   of the aura's stack amounts (Unit.cpp:4644-4656), so the count leg
+--   rides GetAura + GetStackAmount (a missing aura reads 0; a 0-stack
+--   aura counting 1 in C++ cannot occur). Binding ID 44436 comes from
+--   AzerothCore spell_script_names (44436,'spell_hallows_end_tricky_treat');
+--   no TC in-tree row or comment exists, but the same AC table
+--   cross-validates on 24750/24751/61784-61788/61804-61808/66250-66262
+--   against TC comments and enums. DORMANT: ev5 has no finishSpellCast
+--   fire site (open engine work from the census head) and the treat is
+--   a player item-use direct cast, so this fires on no live path until
+--   that site lands — the port is verified code waiting on it.
+local SPELL_HALLOW_END_TRICKY_TREAT = 44436 -- AC spell_script_names
+local SPELL_TRICKY_TREAT_SPEED = 42919 -- spell_holiday.cpp:304
+local SPELL_TRICKY_TREAT_TRIGGER = 42965 -- spell_holiday.cpp:305
+local SPELL_UPSET_TUMMY = 42966 -- spell_holiday.cpp:306
+
+local function hallowEndTrickyTreatHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if not caster:HasAura(SPELL_TRICKY_TREAT_TRIGGER) then
+        return
+    end
+    local speed = caster:GetAura(SPELL_TRICKY_TREAT_SPEED)
+    if speed == nil or speed:GetStackAmount() <= 3 then
+        return
+    end
+    if math.random(1, 100) <= 33 then
+        caster:CastSpell(caster, SPELL_UPSET_TUMMY, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_HALLOW_END_TRICKY_TREAT, 5, hallowEndTrickyTreatHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_pilgrims_bounty_feast_on::HandleDummy
+--   (spell_holiday.cpp:540-580, registered OnEffectHitTarget EFFECT_0
+--   DUMMY at :585): the spell ID picks the helpins spell (turkey
+--   61784 -> 61842, cranberries 61785 -> 61841, sweet potatoes 61786
+--   -> 61844, pie 61787 -> 61845, stuffing 61788 -> 61843); the
+--   caster's vehicle kit seat 0 passenger, if a player, self-casts
+--   the eat visual 61826 and the caster casts the helpins spell on
+--   them, triggered. Then the caster's aura named by effect 0's value
+--   loses one stack, and at 1 stack the caster first drops the aura
+--   named by that aura's effect-0 CalcValue (aura:GetSpellEffectCalcValue,
+--   lua_aura.go:323, the CalcValue() twin). Binding IDs 61784-61788
+--   come from the FeastOnSpells enum (spell_holiday.cpp:541-545) and
+--   agree with AC spell_script_names. The C++ CastSpell orig-caster
+--   GUID argument has no Lua twin, so the helpins cast rides a plain
+--   triggered cast. spell:GetEffectValue(0) is the CalcValueForLevel
+--   twin of the script's GetEffectValue(). ev5 fires on the creature
+--   path (boss_ai.go:3435) — the caster is the table/chair vehicle
+--   base — and the triggered funnel; the handler ignores the hit
+--   target, as in C++, so a multi-target hit replays the legs per
+--   target exactly like the C++ per-target hook.
+local SPELL_FEAST_ON_TURKEY = 61784 -- spell_holiday.cpp:541
+local SPELL_FEAST_ON_CRANBERRIES = 61785 -- spell_holiday.cpp:542
+local SPELL_FEAST_ON_SWEET_POTATOES = 61786 -- spell_holiday.cpp:543
+local SPELL_FEAST_ON_PIE = 61787 -- spell_holiday.cpp:544
+local SPELL_FEAST_ON_STUFFING = 61788 -- spell_holiday.cpp:545
+local SPELL_CRANBERRY_HELPINS = 61841 -- spell_holiday.cpp:546
+local SPELL_TURKEY_HELPINS = 61842 -- spell_holiday.cpp:547
+local SPELL_STUFFING_HELPINS = 61843 -- spell_holiday.cpp:548
+local SPELL_SWEET_POTATO_HELPINS = 61844 -- spell_holiday.cpp:549
+local SPELL_PIE_HELPINS = 61845 -- spell_holiday.cpp:550
+local SPELL_ON_PLATE_EAT_VISUAL = 61826 -- spell_holiday.cpp:551
+
+local FEAST_ON_HELPINS = {
+    [SPELL_FEAST_ON_TURKEY] = SPELL_TURKEY_HELPINS,
+    [SPELL_FEAST_ON_CRANBERRIES] = SPELL_CRANBERRY_HELPINS,
+    [SPELL_FEAST_ON_SWEET_POTATOES] = SPELL_SWEET_POTATO_HELPINS,
+    [SPELL_FEAST_ON_PIE] = SPELL_PIE_HELPINS,
+    [SPELL_FEAST_ON_STUFFING] = SPELL_STUFFING_HELPINS,
+}
+
+local FEAST_ON_IDS = {
+    SPELL_FEAST_ON_TURKEY,
+    SPELL_FEAST_ON_CRANBERRIES,
+    SPELL_FEAST_ON_SWEET_POTATOES,
+    SPELL_FEAST_ON_PIE,
+    SPELL_FEAST_ON_STUFFING,
+}
+
+local function pilgrimsBountyFeastOnHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local helpins = FEAST_ON_HELPINS[spell:GetEntry()]
+    if helpins == nil then
+        return
+    end
+    local kit = caster:GetVehicleKit()
+    if kit ~= nil then
+        local passenger = kit:GetPassenger(0)
+        if passenger ~= nil and passenger:GetObjectType() == "Player" then
+            passenger:CastSpell(passenger, SPELL_ON_PLATE_EAT_VISUAL, true)
+            caster:CastSpell(passenger, helpins, true)
+        end
+    end
+    local aura = caster:GetAura(spell:GetEffectValue(0))
+    if aura ~= nil then
+        if aura:GetStackAmount() == 1 then
+            local removeId = aura:GetSpellEffectCalcValue(aura:GetAuraId(), 0)
+            if removeId ~= 0 then
+                caster:RemoveAura(removeId)
+            end
+        end
+        local stacks = aura:GetStackAmount() - 1
+        if stacks <= 0 then
+            caster:RemoveAura(aura:GetAuraId())
+        else
+            aura:SetStackAmount(stacks)
+        end
+    end
+end
+
+for _, feastId in ipairs(FEAST_ON_IDS) do
+    RegisterSpellEvent(feastId, 5, pilgrimsBountyFeastOnHit)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_pilgrims_bounty_turkey_tracker::HandleScript
+--   (spell_holiday.cpp:628-655, registered OnEffectHitTarget EFFECT_1
+--   SCRIPT_EFFECT at :657): the caster must be a creature and the hit
+--   target a player; a player already holding the max visual 62021 is
+--   skipped. The tracker's own aura (62014) on the target picks the
+--   leg by stack count — 10 hunter, 20 domination, 30 slaughter, 40
+--   triumph (Talk emotes 0-3, whispered to the target) — and at 40
+--   the target also self-casts the max visual 62021, triggered, and
+--   drops the tracker aura; every matching count then self-casts the
+--   counter visual 62015, triggered. Binding ID 62014 comes from
+--   AzerothCore spell_script_names (62014,'spell_pilgrims_bounty_turkey_tracker');
+--   no TC in-tree row exists, but the same AC table cross-validates
+--   on 24750/24751/61784-61788/61804-61808/66250-66262. creature:Talk
+--   is the motion-creature bridge (lua_creature_events.go:1196).
+local SPELL_PILGRIMS_BOUNTY_TURKEY_TRACKER = 62014 -- AC spell_script_names
+local SPELL_KILL_COUNTER_VISUAL = 62015 -- spell_holiday.cpp:600
+local SPELL_KILL_COUNTER_VISUAL_MAX = 62021 -- spell_holiday.cpp:601
+local EMOTE_TURKEY_HUNTER = 0 -- spell_holiday.cpp:602
+local EMOTE_TURKEY_DOMINATION = 1 -- spell_holiday.cpp:603
+local EMOTE_TURKEY_SLAUGHTER = 2 -- spell_holiday.cpp:604
+local EMOTE_TURKEY_TRIUMPH = 3 -- spell_holiday.cpp:605
+
+local function pilgrimsBountyTurkeyTrackerHit(event, spell, target, effectIndex)
+    if effectIndex ~= 1 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:HasAura(SPELL_KILL_COUNTER_VISUAL_MAX) then
+        return
+    end
+    local aura = target:GetAura(SPELL_PILGRIMS_BOUNTY_TURKEY_TRACKER)
+    if aura == nil then
+        return
+    end
+    local stacks = aura:GetStackAmount()
+    if stacks == 10 then
+        caster:Talk(EMOTE_TURKEY_HUNTER, target)
+    elseif stacks == 20 then
+        caster:Talk(EMOTE_TURKEY_DOMINATION, target)
+    elseif stacks == 30 then
+        caster:Talk(EMOTE_TURKEY_SLAUGHTER, target)
+    elseif stacks == 40 then
+        caster:Talk(EMOTE_TURKEY_TRIUMPH, target)
+        target:CastSpell(target, SPELL_KILL_COUNTER_VISUAL_MAX, true)
+        target:RemoveAura(SPELL_PILGRIMS_BOUNTY_TURKEY_TRACKER)
+    else
+        return
+    end
+    target:CastSpell(target, SPELL_KILL_COUNTER_VISUAL, true)
+end
+
+RegisterSpellEvent(SPELL_PILGRIMS_BOUNTY_TURKEY_TRACKER, 5, pilgrimsBountyTurkeyTrackerHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_hallow_end_trick_or_treat::HandleScript
 --   (spell_holiday.cpp:322-331, registered OnEffectHitTarget EFFECT_0
 --   SCRIPT_EFFECT at :335): on a hit player the caster casts Trick
@@ -569,22 +766,13 @@ end
 
 RegisterSpellEvent(SPELL_HALLOW_END_TRICK_OR_TREAT, 5, hallowEndTrickOrTreatHit)
 
--- STAYS OUT (this tick):
---   spell_hallow_end_tricky_treat::HandleScript
---   (spell_holiday.cpp:367-368, registered OnEffectHitTarget EFFECT_0
---   SCRIPT_EFFECT at :373): if the caster has the Tricky Treat
---   trigger aura 42965 and more than 3 stacks of the speed aura
---   42919, a 33% roll self-casts Upset Tummy 42966, triggered.
---   Blockers: (1) no binding spell ID anywhere in-tree — census
---   source "no-id", no `// <id>` comment above the class, no
---   spell_script_names row in the partial sql/ tree, and zero hits
---   for 42919/42965/42966 in the Go tree; (2) no GetAuraCount bridge
---   on any Lua surface (player HasAura is live, lua_player.go:2695,
---   but no count read exists in engine/ or Lua). Go recipe: bind
---   the TDB spell_script_names ID once known and expose
---   unit:GetAuraCount via the aura store (playerHasAura pattern,
---   achievements.go:834), then register ev5 with the body above.
---   Census hook OnEffectHitTarget is correct.
+-- SUPERSEDED (reconcile tick): the tricky_treat stay-out note below
+--   was wrong on both counts and 578 is PORTED above (ev5, 44436):
+--   (1) the binding ID is 44436 from AzerothCore spell_script_names,
+--   cross-validated by the same table on 24750/24751/61784-61788/
+--   61804-61808/66250-66262 against TC comments and enums; (2) the
+--   GetAuraCount leg rides GetAura + GetStackAmount (Unit.cpp:4644-
+--   4656 sums stack amounts). See the 578 PORTED block above.
 
 -- PORTED (this tick, RegisterSpellEvent AfterHit = 3):
 --   spell_hallow_end_wand::HandleScriptEffect
