@@ -4557,6 +4557,36 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraSpell = 0
 				continue
 			}
+			if auraSpell.ID == 40438 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_item_t6_trinket::HandleProc
+				// (spell_priest.cpp:696-705): PreventDefaultAction; on a
+				// heal proc the actor casts Divine Blessing (40440) on
+				// null, on a damage proc Divine Wrath (40441) on null —
+				// both spells are self-targeted, so the null target reads
+				// as the actor (the 26170 self-cast precedent). Both
+				// arms can fire on one event when the mask carries both
+				// bits. The spell-type mask is the C++ GetSpellTypeMask
+				// twin: HIT-phase events carry Damage or Heal (melee
+				// events carry None and fire neither); the generated
+				// entry's HIT-only phase mask keeps CAST/FINISH events
+				// out, so no extra phase gate is needed. No Lua ev6
+				// twin: ev6 carries no spell-type mask. DORMANT until
+				// Spell.dbc ships the 40438 proc entry.
+				if ev.actorGUID == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				if ev.spellTypeMask&procSpellTypeHeal != 0 {
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 40440, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+				}
+				if ev.spellTypeMask&procSpellTypeDamage != 0 {
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 40441, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+				}
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
@@ -4748,13 +4778,17 @@ func (s *session) procRaidProcFromCharge(ctx context.Context, aura *activeAura, 
 	}
 	// target->CastSpell(target, triggerSpellId, {this, GetCasterGUID()}):
 	// the trigger fires on the current holder. Go's cast path has no
-	// OriginalCaster slot, so the trigger runs with the holder as caster
-	// (documented delta).
+	// OriginalCaster slot, so the trigger runs with the holder as caster;
+	// the original caster GUID rides triggeredByAuraCasterGUID into
+	// castTriggerAuraCasterGUID, where the Prayer of Mending Heal leg
+	// reads it (the holder-as-caster delta otherwise stands).
 	s.triggeredByAuraCast = true
 	s.triggeredByAuraSpell = auraSpell.ID
+	s.triggeredByAuraCasterGUID = casterGUID
 	s.castSpellDirect(ctx, triggerSpellID, s.playerGUID)
 	s.triggeredByAuraCast = false
 	s.triggeredByAuraSpell = 0
+	s.triggeredByAuraCasterGUID = 0
 }
 
 // raidProcJumpRadius resolves the jump radius for a raid-proc-from-charge

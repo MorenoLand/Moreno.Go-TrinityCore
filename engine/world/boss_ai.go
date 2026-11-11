@@ -10980,6 +10980,46 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 56161, casterGUID: m.GUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
 				continue
 			}
+			if auraSpell.ID == 40438 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_item_t6_trinket::HandleProc
+				// (spell_priest.cpp:696-705): the creature-side twin of
+				// the procs.go leg — on a heal proc the actor casts
+				// Divine Blessing (40440) on itself, on a damage proc
+				// Divine Wrath (40441) on itself; both arms can fire on
+				// one event when the mask carries both bits. The
+				// HIT-phase spell-type mask twin reads like the session
+				// leg (melee events carry None and fire neither).
+				// DORMANT until Spell.dbc ships the 40438 proc entry.
+				if ev.actorGUID == 0 {
+					continue
+				}
+				if ev.spellTypeMask&procSpellTypeHeal != 0 {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 40440, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+				}
+				if ev.spellTypeMask&procSpellTypeDamage != 0 {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 40441, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+				}
+				continue
+			}
+			if auraSpell.ID == 28305 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_mana_leech::HandleProc + CheckProc
+				// (spell_priest.cpp:860-871): the aura holder is the
+				// priest's pet (Shadowfiend); the proc fires only when
+				// the pet has a live owner, and the pet casts Mana Leech
+				// Proc (34650) on its owner. The DoCheckProc leg
+				// (owner exists) is the OwnerGUID check below, the
+				// 50453 Blood Gorged precedent — a wild or ownerless
+				// pet never procs. Creature-side only: the holder is
+				// definitionally a pet, and the player loop has no
+				// owner concept (a player holder's GetOwner() is null,
+				// so CheckProc would always fail there). DORMANT until
+				// Spell.dbc ships the 28305 proc entry.
+				if m.OwnerGUID == 0 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 34650, casterGUID: m.GUID, targetGUID: m.OwnerGUID})
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)

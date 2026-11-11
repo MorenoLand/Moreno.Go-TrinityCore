@@ -498,6 +498,14 @@ func (s *session) spellFriendlyAreaTargetsUnchecked(ctx context.Context, spell w
 		// generic RandomResize cap below.
 		targets = s.divineHymnFilterTargets(spell, targets)
 	}
+	if spell.ID == 64904 {
+		// spell_pri_hymn_of_hope::FilterTargets
+		// (spell_priest.cpp:576-590): the script hook fires inside
+		// SelectImplicitAreaTargets ahead of the MaxAffectedTargets cap
+		// (Spell.cpp:1290-1300), so the filter runs here, before the
+		// generic RandomResize cap below, like the 64844 leg above.
+		targets = s.hymnOfHopeFilterTargets(spell, targets)
+	}
 	if maxTargets := spell.MaxTargets; maxTargets > 0 {
 		// Spell.cpp:1293 — cap to MaxAffectedTargets plus
 		// SPELL_AURA_MOD_MAX_AFFECTED_TARGETS aura modifiers, then
@@ -575,6 +583,87 @@ func (s *session) divineHymnFilterTargets(spell wotlk.Spell, targets []uint64) [
 		targets = targets[:3]
 	}
 	return targets
+}
+
+// hymnOfHopeFilterTargets mirrors
+// spell_pri_hymn_of_hope::FilterTargets (spell_priest.cpp:576-590):
+// PowerCheck drops every target whose power type is not mana, RaidCheck
+// drops every target not in raid with the caster (the caster itself
+// always passes), then when the list still exceeds 3 it is sorted
+// lowest-mana-pct-first (Trinity::PowerPctOrderPred, ascending) and
+// resized to 3. The raid test rides friendlyRefererScope's inRaid like
+// the 64844 leg, and the mana-pct sort reuses the same stable-sort shape
+// as the 64844 health sort. The 3 is the C++ hardcoded maxTargets, not
+// the DBC MaxTargets the generic cap below applies after. No creature
+// per-spell filter dispatch exists (the 64844 precedent), so this is the
+// player path only. DORMANT until Spell.dbc ships the 64904 record.
+func (s *session) hymnOfHopeFilterTargets(spell wotlk.Spell, targets []uint64) []uint64 {
+	scope := s.friendlyRefererScope(s.playerGUID)
+	if scope.inRaid == nil {
+		return targets
+	}
+	kept := targets[:0]
+	for _, guid := range targets {
+		cand := friendlyCandidate{guid: guid}
+		if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			cand.isPlayer = true
+		} else if m := s.findCreatureMotion(guid); m != nil {
+			cand.ownerGUID = m.OwnerGUID
+			if cand.ownerGUID == 0 {
+				cand.ownerGUID = m.CharmOwnerGUID
+			}
+		}
+		if !scope.inRaid(cand) {
+			continue
+		}
+		if _, ok := s.hymnOfHopeTargetManaPct(guid); !ok {
+			continue
+		}
+		kept = append(kept, guid)
+	}
+	targets = kept
+	if len(targets) > 3 {
+		sort.SliceStable(targets, func(a, b int) bool {
+			pctA, _ := s.hymnOfHopeTargetManaPct(targets[a])
+			pctB, _ := s.hymnOfHopeTargetManaPct(targets[b])
+			return pctA < pctB
+		})
+		targets = targets[:3]
+	}
+	return targets
+}
+
+// hymnOfHopeTargetManaPct returns the target's mana fraction for the Hymn
+// of Hope sort, and whether the target has a mana power type at all
+// (C++ PowerCheck(POWER_MANA): only mana users survive the filter).
+// Player mana rides the session-player precedent (Powers[0] over the
+// effective max); creature mana reads under motionMu, the DRW-leg
+// precedent (procs.go). An unresolvable target or a non-mana power type
+// reads not-ok and drops out of the list.
+func (s *session) hymnOfHopeTargetManaPct(guid uint64) (float64, bool) {
+	if s == nil || s.server == nil {
+		return 1, false
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		if playerPowerType(ts.player) != 0 { // POWER_MANA (SharedDefines.h:1186)
+			return 1, false
+		}
+		maxMana := ts.effectiveMaxPower(0)
+		if maxMana == 0 {
+			return 1, false
+		}
+		return float64(ts.player.Powers[0]) / float64(maxMana), true
+	}
+	if m := s.findCreatureMotion(guid); m != nil {
+		s.server.motionMu.Lock()
+		powerType, mana, maxMana := m.PowerType, m.Mana, m.MaxMana
+		s.server.motionMu.Unlock()
+		if powerType != 0 || maxMana == 0 { // POWER_MANA (SharedDefines.h:1186)
+			return 1, false
+		}
+		return float64(mana) / float64(maxMana), true
+	}
+	return 1, false
 }
 
 // glyphOfHolyLightTargetHealthPct returns the target's health fraction for

@@ -24452,9 +24452,16 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 	prevCastTriggerAuraSpell := s.castTriggerAuraSpell
 	s.castTriggerAuraSpell = s.triggeredByAuraSpell
 	s.triggeredByAuraSpell = 0
+	// The original-caster twin of the m_triggeredByAuraSpell move above:
+	// the pending original-caster GUID moves into the in-cast slot for
+	// this cast's spell-script legs, with save/restore for nested casts.
+	prevCastTriggerAuraCasterGUID := s.castTriggerAuraCasterGUID
+	s.castTriggerAuraCasterGUID = s.triggeredByAuraCasterGUID
+	s.triggeredByAuraCasterGUID = 0
 	defer func() {
 		s.triggeredNoProcEvents--
 		s.castTriggerAuraSpell = prevCastTriggerAuraSpell
+		s.castTriggerAuraCasterGUID = prevCastTriggerAuraCasterGUID
 	}()
 	// Spell::m_triggeredByAuraSpell (Spell.h:808): the diminishing-returns
 	// group resolves the triggered variant when the cast was triggered by an
@@ -31146,6 +31153,31 @@ func (s *session) executeSpellHealDoneBonus(ctx context.Context, targetGUID uint
 	// pre-absorb). chainScaledAmount no-ops at jump 0, matching C++'s
 	// 1.0 seed for the primary target.
 	heal = chainScaledAmount(heal, chainMult, chainJump)
+
+	// spell_pri_prayer_of_mending_heal::HandleHeal
+	// (spell_priest.cpp:1194-1205): the EFFECT_0 SPELL_EFFECT_HEAL
+	// OnEffectHitTarget arm — when the ORIGINAL caster carries the
+	// Priest T9 2P bonus aura (67201), the hit heal grows by that
+	// aura's EFFECT_0 amount percent. The hook fires after the
+	// Done/Taken bonus legs and the chain falloff (DoEffectOnLaunchTarget
+	// accumulates m_healing before DoSpellEffectHit runs the script
+	// handlers) and before the crit roll (DoDamageAndTriggers crits the
+	// modified heal), so this leg sits exactly there: post-chain,
+	// pre-crit. The original caster is the Prayer of Mending aura's
+	// caster, threaded through castTriggerAuraCasterGUID by the
+	// raid-proc jump; a direct cast (no trigger) falls back to the
+	// caster, matching GetOriginalCaster. A missing 67201 aura or a
+	// non-positive amount leaves the heal untouched. DORMANT until
+	// Spell.dbc ships the 33110 record.
+	if spellID == 33110 && s.server != nil && s.player != nil {
+		origCasterGUID := s.castTriggerAuraCasterGUID
+		if origCasterGUID == 0 {
+			origCasterGUID = s.playerGUID
+		}
+		if bonusPct, ok := s.server.serverUnitAuraEffectAmount(s.player.Map, s.player.InstanceID, origCasterGUID, 67201, 0, origCasterGUID); ok && bonusPct > 0 {
+			heal += uint32(uint64(heal) * uint64(bonusPct) / 100)
+		}
+	}
 
 	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem).
 	// Spell::DoEffectOnLaunchTarget (Spell.cpp:7782-7788): the
@@ -52857,6 +52889,19 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 				s.server.removeCreatureAura(key, id)
 			}
 		}
+	case 47948:
+		// spell_pri_pain_and_suffering_proc::HandleEffectScriptEffect
+		// (spell_priest.cpp:955-968): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — refresh Shadow Word: Pain on the hit
+		// unit: recalculate its tick amount with the caster's current
+		// bonuses, recompute its period, refresh its duration. The
+		// handler runs from both the client path and the triggered
+		// dispatch (the 63521 precedent), so one case covers both. No
+		// creature-caster twin: the caster is the talent-holding priest
+		// player (the -47580 dummy aura lives on players), and the
+		// recalc needs the caster's spellpower model. DORMANT until
+		// Spell.dbc ships the 47948 record.
+		s.refreshShadowWordPainOnTarget(ctx, targetGUID)
 	case 60022:
 		// spell_gal_darah_clear_puncture (boss_gal_darah.cpp:320-339):
 		// EFFECT_0 removes Puncture from the hit unit, heroic (59826)
@@ -52995,6 +53040,123 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			judgement = 41461
 		}
 		s.castSpellDirect(ctx, judgement, targetGUID)
+	}
+}
+
+// refreshShadowWordPainOnTarget mirrors
+// spell_pri_pain_and_suffering_proc::HandleEffectScriptEffect
+// (spell_priest.cpp:955-968): on the hit unit, the Shadow Word: Pain
+// aura effect — priest family, SpellFamilyFlags[0] & 0x8000, live
+// SPELL_AURA_PERIODIC_DAMAGE effect, applied by this caster (the C++
+// GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_PRIEST, 0x8000,
+// 0, 0, casterGUID) twin) — has its tick amount recalculated with the
+// caster's current bonuses (AuraEffect::CalculateAmount,
+// SpellAuraEffects.cpp:498-518), its period recomputed
+// (CalculatePeriodic with reset=false, so the periodic timer keeps
+// running), and its duration refreshed with the tick counter zeroed
+// (Aura::RefreshDuration, SpellAuras.cpp:905-927). The lookup is the
+// targetHasFamilyAuraEffectByCaster classifier returning the record and
+// effect index for the rewrite; the per-target mutation follows the
+// glyphOfScourgeStrikeScriptEffect precedent (player targets push a
+// client aura update, creature targets mutate under auraMu). A missing
+// SW:P aura refreshes nothing.
+func (s *session) refreshShadowWordPainOnTarget(ctx context.Context, targetGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || targetGUID == 0 {
+		return
+	}
+	var swp *activeAura
+	var swpSpell wotlk.Spell
+	swpEff := -1
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyPriest || len(auraSpell.SpellFamilyFlags) == 0 || auraSpell.SpellFamilyFlags[0]&0x8000 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicDamage {
+				continue
+			}
+			swp, swpSpell, swpEff = aura, auraSpell, index
+			break
+		}
+		if swpEff >= 0 {
+			break
+		}
+	}
+	if swpEff < 0 || swp == nil || swpEff >= len(swpSpell.Effects) {
+		return
+	}
+	// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-518): the
+	// recalculated tick amount is the same auraEffectParams fold the
+	// apply path runs (CalcValue + the periodic spellpower bonus).
+	_, _, newAmount := s.auraEffectParams(swpSpell, swpSpell.Effects[swpEff], swpEff)
+	newPeriod := s.foldPeriodicPeriod(swpSpell, swpSpell.Effects[swpEff])
+	spellID := swpSpell.ID
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		aura := ts.activeAuras[spellID]
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			ts.castMu.Unlock()
+			return
+		}
+		aura.Amounts[swpEff] = int32(newAmount)
+		if swpEff == 0 {
+			aura.Amount = newAmount
+		}
+		aura.PeriodMs = newPeriod
+		aura.RemainingMs = aura.DurationMs
+		aura.DurationUpdatedAt = time.Now()
+		aura.TickCount = 0
+		if aura.Timer != nil {
+			aura.Timer.Stop()
+			aura.Timer = nil
+		}
+		durationMs := aura.DurationMs
+		if durationMs > 0 && durationMs < 18000000 {
+			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+				ts.removeAuraWithMode(spellID, auraRemoveByExpire)
+			})
+		}
+		slot, positive := aura.Slot, aura.Positive
+		ts.castMu.Unlock()
+		ts.sendAuraUpdate(slot, spellID, false, positive, durationMs, durationMs)
+		return
+	}
+	if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.server.auraMu.Lock()
+		defer s.server.auraMu.Unlock()
+		aura := s.server.activeCreatureAuras[key][spellID]
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			return
+		}
+		aura.Amounts[swpEff] = int32(newAmount)
+		if swpEff == 0 {
+			aura.Amount = newAmount
+		}
+		aura.PeriodMs = newPeriod
+		aura.RemainingMs = aura.DurationMs
+		aura.DurationUpdatedAt = time.Now()
+		aura.TickCount = 0
+		if aura.Timer != nil {
+			aura.Timer.Stop()
+			aura.Timer = nil
+		}
+		if aura.DurationMs > 0 && aura.DurationMs < 18000000 {
+			slot := aura.Slot
+			aura.Timer = time.AfterFunc(time.Duration(aura.DurationMs)*time.Millisecond, func() {
+				s.expireCreatureAura(key, spellID, slot)
+			})
+		}
 	}
 }
 
