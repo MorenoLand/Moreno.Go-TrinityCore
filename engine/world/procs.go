@@ -326,6 +326,59 @@ func (s *session) burningDeterminationProcAllowed(ev procEventInfo) bool {
 	return mechanicMask&((uint32(1)<<26)|(uint32(1)<<9)) != 0
 }
 
+// retaliationProcAllowed mirrors spell_warr_retaliation::CheckProc
+// (spell_warrior.cpp:821-826): the attack must come from the front
+// (GetTarget()->isInFront(actor, PI) — the 180-degree frontal arc,
+// the combat.go attackerInFront idiom) and the warrior must not be
+// stunned (UNIT_STATE_STUNNED, the conditions.go hasAuraType
+// (spellAuraModStun) live source). The gate runs before the chance
+// roll, like the C++ CheckProc in GetProcEffectMask (70656 precedent
+// above). DORMANT until Spell.dbc ships the 20230 proc entry.
+func (s *session) retaliationProcAllowed(ctx context.Context, ev procEventInfo) bool {
+	if s == nil || s.player == nil || ev.actorGUID == 0 {
+		return false
+	}
+	if s.hasAuraType(spellAuraModStun) {
+		return false
+	}
+	actor, ok := s.getCombatTarget(ctx, ev.actorGUID)
+	if !ok {
+		return false
+	}
+	return hasInArc(s.player.Orientation, s.player.X, s.player.Y, actor.X, actor.Y, math.Pi)
+}
+
+// cheatDeathProcAllowed mirrors spell_warr_t3_prot_8p_bonus::CheckProc
+// (spell_warrior.cpp:1064-1076): the ACTION TARGET (the holder on a
+// taken event, Unit.cpp:10412) is below 20% health already, or the
+// incoming damage would drop it below 20%
+// (HealthBelowPctDamaged(20, damage), Unit.h:873 — the 57989
+// boss_ai.go formula: post-damage health strictly below
+// maxHealth*20/100). The gate runs before the chance roll, like the
+// C++ CheckProc in GetProcEffectMask (70656 precedent above). The
+// default proc action is DBC-driven, so this gate alone is the port.
+// DORMANT until Spell.dbc ships the 28845 proc entry.
+func (s *session) cheatDeathProcAllowed(ctx context.Context, ev procEventInfo, triggerTargetGUID uint64) bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	actionTarget := procActionTargetGUID(ev.actorGUID, s.playerGUID, triggerTargetGUID)
+	if actionTarget == 0 {
+		return false
+	}
+	target, ok := s.getCombatTarget(ctx, actionTarget)
+	if !ok || target.MaxHealth == 0 {
+		return false
+	}
+	if int64(target.Health) < int64(target.MaxHealth)*20/100 {
+		return true
+	}
+	if ev.damage == 0 {
+		return false
+	}
+	return int64(target.Health)-int64(ev.damage) < int64(target.MaxHealth)*20/100
+}
+
 // combustionCheckProc mirrors spell_mage_combustion::CheckProc
 // (spell_mage.cpp:395-409): a non-critical hit casts the Combustion
 // proc aura (28682) on the actor, triggered, and takes no charge; a
@@ -1543,6 +1596,11 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 58374, casterGUID: actorGUID, targetGUID: actorGUID}, true
+	case 20230: // Retaliation, EFFECT_0: the holder casts 20240 on the proc target; PreventDefaultAction (spell_warrior.cpp:828-832). The aurEff overload marks the cast triggered, which the triggered funnel carries. The isInFront/not-stunned CheckProc rides the gate block below in both proc loops. DORMANT until Spell.dbc ships the 20230 proc entry.
+		if effIndex != 0 || holderGUID == 0 || triggerTargetGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 20240, casterGUID: holderGUID, targetGUID: triggerTargetGUID}, true
 	case 61257: // Runic Power Back on Snare/Root (PvP 4P), EFFECT_0: the action target casts 61258 on itself when the triggering spell roots or snares.
 		if effIndex != 0 || triggerSpell == nil {
 			return scriptProcCast{}, false
@@ -3686,6 +3744,21 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 70656 && !s.advantageT10ProcAllowed(ev) {
 			continue
 		}
+		// spell_warr_retaliation::CheckProc (spell_warrior.cpp:821-826):
+		// the front-arc / not-stunned gate runs before the chance roll,
+		// like the C++ CheckProc in GetProcEffectMask (70656 precedent
+		// above). DORMANT until Spell.dbc ships the 20230 proc entry.
+		if auraSpell.ID == 20230 && !s.retaliationProcAllowed(ctx, ev) {
+			continue
+		}
+		// spell_warr_t3_prot_8p_bonus::CheckProc
+		// (spell_warrior.cpp:1064-1076): the below-20% gate runs before
+		// the chance roll, like the C++ CheckProc in GetProcEffectMask
+		// (70656 precedent above). DORMANT until Spell.dbc ships the
+		// 28845 proc entry.
+		if auraSpell.ID == 28845 && !s.cheatDeathProcAllowed(ctx, ev, triggerTargetGUID) {
+			continue
+		}
 		// spell_dk_hungering_cold::CheckProc (spell_dk.cpp:1371-1379):
 		// the disease-dispel gate runs before the chance roll, like the
 		// C++ CheckProc in GetProcEffectMask (70656 precedent above).
@@ -5313,6 +5386,40 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraCast = true
 				s.triggeredByAuraSpell = auraSpell.ID
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 63106, casterGUID: s.playerGUID, targetGUID: s.playerGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 70844 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_warr_item_t10_prot_4p_bonus::HandleProc
+				// (spell_warrior.cpp:657-669): PreventDefaultAction; the
+				// ACTION TARGET casts Stoicism (70845) on itself,
+				// triggered, with BP0 = pct of its max health by the
+				// EFFECT_1 CalcValue. C++ reads Effects[EFFECT_1]
+				// explicitly (not the proc effect's amount), so the
+				// trigger is EFFECT_0 and the pct rides Amounts[1];
+				// a missing EFFECT_1 amount skips like a failed gate.
+				// The action target is the holder on a taken event
+				// (Unit.cpp:10412), the victim on a done event — the
+				// literal C++ read either way. No Lua ev6 twin:
+				// spell_warrior.lua holds no 70844 handler, and the Lua
+				// ev6 veto above would fire first if one ever registers.
+				// DORMANT until Spell.dbc ships the 70844 proc entry.
+				if len(aura.Amounts) < 2 || aura.Amounts[1] <= 0 {
+					continue
+				}
+				actionTarget := procActionTargetGUID(ev.actorGUID, s.playerGUID, triggerTargetGUID)
+				if actionTarget == 0 {
+					continue
+				}
+				maxHealth, _, _, ok := s.server.procTargetVitals(s.player.Map, s.player.InstanceID, actionTarget)
+				if !ok || maxHealth == 0 {
+					continue
+				}
+				bp0 := uint32(uint64(maxHealth) * uint64(aura.Amounts[1]) / 100)
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 70845, casterGUID: actionTarget, targetGUID: actionTarget, bp0: bp0, bp0Set: true})
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
 				continue

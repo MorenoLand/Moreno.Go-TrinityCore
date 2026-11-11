@@ -11212,6 +11212,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	nearbyGOMask := spellGOListArmEffectMask(spell, implicitTargetGONearbyEntry)
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, clientEnemyAreaTarget)
+		if spellID == 5246 && target.UnitGUID != 0 {
+			// spell_warr_intimidating_shout::FilterTargets
+			// (spell_warrior.cpp:625-628, 632-633): EFFECT_1 and
+			// EFFECT_2, TARGET_UNIT_SRC_AREA_ENEMY — the explicit
+			// target drops out of both area lists (its own EFFECT_0
+			// cower leg rejoins it through explicitAreaJoin below, so
+			// only the area fear/damage legs lose it). The 53434 /
+			// 24604 caster-only filter above is the precedent.
+			// DORMANT until Spell.dbc ships the 5246 record.
+			kept := hitTargets[:0]
+			for _, guid := range hitTargets {
+				if guid != target.UnitGUID {
+					kept = append(kept, guid)
+				}
+			}
+			hitTargets = kept
+		}
 		// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
 		// with each effect's own check type (ENEMY vs ALLY/PARTY/RAID), so the
 		// friendly-area effect of a harmful spell selects allies — not the
@@ -16508,6 +16525,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// above, and only when a target was actually hit.
 					if spellID == 23881 && len(hitTargets) > 0 {
 						s.castSpellDirect(effCtx, 23885, s.playerGUID)
+					}
+					// spell_warr_last_stand::HandleDummy
+					// (spell_warrior.cpp:696-703): the EFFECT_0 DUMMY
+					// OnEffectHit arm casts 12976 on the caster,
+					// triggered, with BP0 = CountPctFromMaxHealth of
+					// the dummy effect's value (GetEffectValue, the
+					// CalcValueForLevel read the 23880 arm uses for
+					// its CalcValue(GetCaster()) pct). Fires once per
+					// effect over the hit targets (C++ fires once per
+					// effect in the HIT phase; the spell is self-cast),
+					// ahead of the pet-aura/Eluna legs like the
+					// bloodthirst arm above, and only when a target
+					// was actually hit. DORMANT until Spell.dbc ships
+					// the 12975 record.
+					if spellID == 12975 && effectIndex == 0 && len(hitTargets) > 0 {
+						if pct := eff.CalcValueForLevel(spell, casterLevel); pct > 0 {
+							bp0 := int32(uint64(s.player.MaxHealth) * uint64(pct) / 100)
+							s.castSpellDirectWithOverrides(effCtx, 12976, s.playerGUID, false, map[int]int32{0: bp0}, 0, nil, 0)
+						}
 					}
 					// spell_fatal_strike::HandleDummy
 					// (zone_storm_peaks.cpp:1346-1362): the EFFECT_0 DUMMY
@@ -26232,6 +26268,20 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 		switch {
 		case isAreaEnemySpell(spell):
 			hitTargets = s.spellAreaEnemyTargets(ctx, spell, funnelEnemyAreaTarget)
+			if spellID == 5246 && spellTarget.UnitGUID != 0 {
+				// spell_warr_intimidating_shout::FilterTargets
+				// (spell_warrior.cpp:625-628, 632-633): the triggered-path
+				// twin of the client-path filter above — the explicit
+				// target drops out of the EFFECT_1/EFFECT_2 area lists.
+				// DORMANT until Spell.dbc ships the 5246 record.
+				kept := hitTargets[:0]
+				for _, guid := range hitTargets {
+					if guid != spellTarget.UnitGUID {
+						kept = append(kept, guid)
+					}
+				}
+				hitTargets = kept
+			}
 			// C++ SelectImplicitAreaTargets runs per effect (Spell.cpp:1227-1309)
 			// with each effect's own check type (ENEMY vs ALLY/PARTY/RAID) on
 			// triggered casts too — SelectSpellTargets carries no IsTriggered gate
@@ -28233,6 +28283,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// miss-filtered hit like the raise-ally leg above.
 					if spellID == 23881 && len(effectGUIDs) > 0 {
 						s.castSpellDirect(ctx, 23885, s.playerGUID)
+					}
+					// spell_warr_last_stand::HandleDummy
+					// (spell_warrior.cpp:696-703): the triggered-cast
+					// leg, gated on a miss-filtered hit like the
+					// bloodthirst leg above; the client-path twin sits
+					// in finishSpellCast's dummy arm. DORMANT until
+					// Spell.dbc ships the 12975 record.
+					if spellID == 12975 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						if pct := eff.CalcValueForLevel(spell, casterLevel); pct > 0 {
+							bp0 := int32(uint64(s.player.MaxHealth) * uint64(pct) / 100)
+							s.castSpellDirectWithOverrides(ctx, 12976, s.playerGUID, false, map[int]int32{0: bp0}, 0, nil, 0)
+						}
 					}
 					// spell_dk_death_grip_initial::HandleDummy
 					// (spell_dk.cpp:2764-2767): the EFFECT_0 DUMMY

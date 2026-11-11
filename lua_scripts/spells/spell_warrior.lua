@@ -51,3 +51,23 @@ local function vigilanceRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARRIOR_VIGILANCE, 3, vigilanceRemove)
+
+-- PORTED (this tick, RegisterSpellEvent OnObjectAreaTargetSelect = 7):
+--   spell_warr_intimidating_shout::FilterTargets
+--   (spell_warrior.cpp:625-628, 632-633): EFFECT_1 and EFFECT_2,
+--   TARGET_UNIT_SRC_AREA_ENEMY — the explicit target drops out of
+--   both area lists (its own EFFECT_0 cower leg still hits it).
+--   ev7 fires on the creature-cast path only (boss_ai.go:3151); the
+--   player-cast legs live in Go (spells.go area filters). The spell
+--   object's GetTarget is the explicit unit target (the C++
+--   GetExplTargetWorldObject). DORMANT until Spell.dbc drives the cast.
+local SPELL_WARRIOR_INTIMIDATING_SHOUT = 5246 -- spell_warrior.cpp:615
+
+local function intimidatingShoutFilter(event, spell, effectIndex, targets)
+    local target = spell:GetTarget()
+    if target ~= nil then
+        targets:Remove(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_WARRIOR_INTIMIDATING_SHOUT, 7, intimidatingShoutFilter)

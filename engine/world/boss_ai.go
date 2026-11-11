@@ -10684,6 +10684,57 @@ func (s *Server) fireCreatureMeleeAuraProcs(ctx context.Context, m *creatureMoti
 // The SetCantProc evaluation window (Unit.cpp:10424-10428) has no
 // creature-side reader yet (no per-motion m_procDeep model); the _cast
 // proc leg carries no CanProc gate in C++, so the omission is inert there.
+// retaliationCreatureProcAllowed mirrors
+// spell_warr_retaliation::CheckProc (spell_warrior.cpp:821-826) on the
+// creature side: the attack must come from the holder's front
+// (isInFront(actor, PI), the hasInArc math.Pi idiom) and the holder
+// must not be stunned (SPELL_AURA_MOD_STUN on the creature, the
+// creatureHasAuraType live source). The gate runs before the chance
+// roll, like the C++ CheckProc in GetProcEffectMask. DORMANT until
+// Spell.dbc ships the 20230 proc entry.
+func (s *Server) retaliationCreatureProcAllowed(ctx context.Context, m *creatureMotion, key creatureAuraKey, ev procEventInfo) bool {
+	if s == nil || m == nil || ev.actorGUID == 0 {
+		return false
+	}
+	if s.creatureHasAuraType(key, spellAuraModStun) {
+		return false
+	}
+	actor, ok := s.combatTargetByGUID(ctx, m.Map, m.InstanceID, ev.actorGUID)
+	if !ok {
+		return false
+	}
+	return hasInArc(m.Orientation, m.X, m.Y, actor.X, actor.Y, math.Pi)
+}
+
+// cheatDeathCreatureProcAllowed mirrors
+// spell_warr_t3_prot_8p_bonus::CheckProc (spell_warrior.cpp:1064-1076)
+// on the creature side: the ACTION TARGET (the holder on a taken
+// event, Unit.cpp:10412) is below 20% health already, or the incoming
+// damage would drop it below 20% (HealthBelowPctDamaged(20, damage),
+// the 57989 boss_ai.go formula). The gate runs before the chance roll,
+// like the C++ CheckProc in GetProcEffectMask. DORMANT until Spell.dbc
+// ships the 28845 proc entry.
+func (s *Server) cheatDeathCreatureProcAllowed(ctx context.Context, m *creatureMotion, ev procEventInfo, triggerTargetGUID uint64) bool {
+	if s == nil || m == nil {
+		return false
+	}
+	actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID)
+	if actionTarget == 0 {
+		return false
+	}
+	target, ok := s.combatTargetByGUID(ctx, m.Map, m.InstanceID, actionTarget)
+	if !ok || target.MaxHealth == 0 {
+		return false
+	}
+	if int64(target.Health) < int64(target.MaxHealth)*20/100 {
+		return true
+	}
+	if ev.damage == 0 {
+		return false
+	}
+	return int64(target.Health)-int64(ev.damage) < int64(target.MaxHealth)*20/100
+}
+
 func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion, triggerTargetGUID uint64, ev procEventInfo) {
 	if s == nil || m == nil {
 		return
@@ -10730,6 +10781,20 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			continue
 		}
 		if !canSpellTriggerProcOnEvent(entry, ev, auraSpell.AttributesEx3&spellAttr3CanProcWithTriggered != 0) {
+			continue
+		}
+		// spell_warr_retaliation::CheckProc (spell_warrior.cpp:821-826):
+		// the front-arc / not-stunned gate runs before the chance roll,
+		// like the C++ CheckProc in GetProcEffectMask. DORMANT until
+		// Spell.dbc ships the 20230 proc entry.
+		if auraSpell.ID == 20230 && !s.retaliationCreatureProcAllowed(ctx, m, key, ev) {
+			continue
+		}
+		// spell_warr_t3_prot_8p_bonus::CheckProc
+		// (spell_warrior.cpp:1064-1076): the below-20% gate runs before
+		// the chance roll, like the C++ CheckProc in GetProcEffectMask.
+		// DORMANT until Spell.dbc ships the 28845 proc entry.
+		if auraSpell.ID == 28845 && !s.cheatDeathCreatureProcAllowed(ctx, m, ev, triggerTargetGUID) {
 			continue
 		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
@@ -11332,6 +11397,30 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 					amount = 0
 				}
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 63106, casterGUID: m.GUID, targetGUID: m.GUID, bp0: uint32(amount), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 70844 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_warr_item_t10_prot_4p_bonus::HandleProc
+				// (spell_warrior.cpp:657-669): the creature-side twin of
+				// the procs.go leg — the ACTION TARGET casts Stoicism
+				// (70845) on itself, triggered, with BP0 = pct of its
+				// max health by the EFFECT_1 CalcValue (Amounts[1];
+				// the trigger is EFFECT_0, per the procs.go note). No
+				// Lua ev6 twin. DORMANT until Spell.dbc ships the
+				// 70844 proc entry.
+				if len(aura.Amounts) < 2 || aura.Amounts[1] <= 0 {
+					continue
+				}
+				actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID)
+				if actionTarget == 0 {
+					continue
+				}
+				maxHealth, _, _, ok := s.procTargetVitals(m.Map, m.InstanceID, actionTarget)
+				if !ok || maxHealth == 0 {
+					continue
+				}
+				bp0 := uint32(uint64(maxHealth) * uint64(aura.Amounts[1]) / 100)
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 70845, casterGUID: actionTarget, targetGUID: actionTarget, bp0: bp0, bp0Set: true})
 				continue
 			}
 			if auraSpell.ID == 39367 && i == 1 && eff.Aura == spellAuraDummy {
