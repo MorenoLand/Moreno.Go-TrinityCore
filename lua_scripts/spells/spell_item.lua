@@ -84,7 +84,7 @@ RegisterAuraEvent(SPELL_NITRO_BOOSTS_BACKFIRE, 3, nitroBackfireRemove)
 --   EFFECT_0 PROC_TRIGGER_SPELL, REAL. On remove the stack aura
 --   drops (Lightning Capacitor 37657 -> 37658, Thunder Capacitor
 --   54841 -> 54842, ToC25 normal 67712 -> 67713, ToC25 heroic
---   67758 -> 67759). The proc leg stays out (no proc hook).
+--   67758 -> 67759). The proc leg is ported below (this tick, ev6).
 --
 -- PORTED (tick 295, RegisterAuraEvent OnApply = 2 / OnChangeAmount = 4 /
 --   OnRemove = 3):
@@ -320,26 +320,121 @@ end
 RegisterAuraEvent(SPELL_HEARTPIERCE_HEROIC, 6, makeHeartpierceProc(HEARTPIERCE_HEROIC_BY_POWER))
 RegisterAuraEvent(SPELL_HEARTPIERCE, 6, makeHeartpierceProc(HEARTPIERCE_BY_POWER))
 
--- CENSUS CORRECTIONS (this tick, rows 604-607):
---   604 spell_item_trigger_spell is NOT covered — the census hits
---   are the unrelated generic spell_trigger_spell_from_caster in
---   boss files. The class is a SpellScript template (OnEffectHit
---   DUMMY, spell_item.cpp:42-84) instantiated for arcanite
---   dragonling / gnomish battle chicken / mechanical dragonling /
---   mithril mechanical dragonling; no RegisterSpellScript bridge,
---   so all four STAY OUT.
---   605 spell_item_defibrillate is NOT covered — SpellScript
---   OnEffectHitTarget RESURRECT (spell_item.cpp:712-756), goblin
---   jumper cables 67% / XL 50% fail chance + fail spell; no
---   RegisterSpellScript bridge. STAYS OUT.
---   606 spell_item_sunwell_neck is NOT covered — the ev6 arm itself
---   is expressible (actor-player gate + GetReputationRank 932/934
---   exalted legs casting 45479/45429, 45480/45428, 45432/45431,
---   45478/45430 per neck, spell_item.cpp:3546-3595) but the four
---   aura binding IDs live only in the world DB spell_script_names
---   (script names spell_item_sunwell_exalted_{caster,melee,tank,
---   healer}_neck), unresolvable in-tree. STAYS OUT until the IDs
---   are established; recipe: register ev6 per aura ID once known.
---   607 spell_item_trinket_stack VERIFIED in-tree: the OnRemove leg
---   is the ported handler above (tick 295); the proc leg stays out
---   (no proc hook) as the header already records.
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_item_sunwell_neck::HandleProc (spell_item.cpp:3568-3582):
+--   EFFECT_0 DUMMY. PreventDefaultAction (return true on every path);
+--   the actor must be a player (CheckProc, :3563-3567); an Aldor-
+--   exalted player casts the Aldor spell on the procTarget and a
+--   Scryers-exalted player casts the Scryers spell (independent ifs,
+--   :3577-3581), both triggered. Binding IDs are the `// <id> -
+--   Sunwell Exalted ... Neck` comments (:3536/:3539/:3542/:3544),
+--   the same comment-ID convention as the other ports in this file.
+--   DORMANT until Spell.dbc ships the 45481-45484 proc entries.
+local SPELL_SUNWELL_NECK_CASTER = 45481 -- spell_item.cpp:3536
+local SPELL_SUNWELL_NECK_MELEE = 45482 -- spell_item.cpp:3539
+local SPELL_SUNWELL_NECK_TANK = 45483 -- spell_item.cpp:3542
+local SPELL_SUNWELL_NECK_HEALER = 45484 -- spell_item.cpp:3544
+local SPELL_LIGHTS_WRATH = 45479 -- spell_item.cpp:3518
+local SPELL_ARCANE_BOLT = 45429 -- spell_item.cpp:3519
+local SPELL_LIGHTS_STRENGTH = 45480 -- spell_item.cpp:3521
+local SPELL_ARCANE_STRIKE = 45428 -- spell_item.cpp:3522
+local SPELL_LIGHTS_WARD = 45432 -- spell_item.cpp:3524
+local SPELL_ARCANE_INSIGHT = 45431 -- spell_item.cpp:3525
+local SPELL_LIGHTS_SALVATION = 45478 -- spell_item.cpp:3527
+local SPELL_ARCANE_SURGE = 45430 -- spell_item.cpp:3528
+local FACTION_ALDOR = 932 -- spell_item.cpp:3532
+local FACTION_SCRYERS = 934 -- spell_item.cpp:3533
+local REP_EXALTED = 7
+
+local function makeSunwellNeckProc(aldorSpell, scryersSpell)
+    return function(event, aura, target, actor, procTarget, damage)
+        if actor == nil or procTarget == nil then
+            return true
+        end
+        if actor:GetObjectType() ~= "Player" then
+            return true
+        end
+        if actor:GetReputationRank(FACTION_ALDOR) == REP_EXALTED then
+            actor:CastSpell(procTarget, aldorSpell, true)
+        end
+        if actor:GetReputationRank(FACTION_SCRYERS) == REP_EXALTED then
+            actor:CastSpell(procTarget, scryersSpell, true)
+        end
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_SUNWELL_NECK_CASTER, 6, makeSunwellNeckProc(SPELL_LIGHTS_WRATH, SPELL_ARCANE_BOLT))
+RegisterAuraEvent(SPELL_SUNWELL_NECK_MELEE, 6, makeSunwellNeckProc(SPELL_LIGHTS_STRENGTH, SPELL_ARCANE_STRIKE))
+RegisterAuraEvent(SPELL_SUNWELL_NECK_TANK, 6, makeSunwellNeckProc(SPELL_LIGHTS_WARD, SPELL_ARCANE_INSIGHT))
+RegisterAuraEvent(SPELL_SUNWELL_NECK_HEALER, 6, makeSunwellNeckProc(SPELL_LIGHTS_SALVATION, SPELL_ARCANE_SURGE))
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_item_trinket_stack::HandleProc (spell_item.cpp:3726-3744):
+--   EFFECT_0 PROC_TRIGGER_SPELL. PreventDefaultAction (return true
+--   on every path); the actor self-casts the stack spell, triggered,
+--   and while the stack aura is below the EFFECT_0 threshold nothing
+--   further happens; at threshold the stack aura drops and the actor
+--   casts the trigger spell on the procTarget (C++ GetActionTarget,
+--   the ev6 procTarget on the done event), triggered. Same factory
+--   shape as the anger-capacitor proc above. The OnRemove leg that
+--   drops the stack aura lives above (tick 295). DORMANT until
+--   Spell.dbc ships the 37657/54841/67712/67758 proc entries.
+local SPELL_LIGHTNING_CAPACITOR_TRIGGER = 37661 -- spell_item.cpp:3689
+local SPELL_THUNDER_CAPACITOR_TRIGGER = 54843 -- spell_item.cpp:3692
+local SPELL_TOC25_CASTER_TRINKET_NORMAL_TRIGGER = 67714 -- spell_item.cpp:3695
+local SPELL_TOC25_CASTER_TRINKET_HEROIC_TRIGGER = 67760 -- spell_item.cpp:3698
+
+local function makeTrinketStackProc(stackSpell, triggerSpell)
+    return function(event, aura, target, actor, procTarget, damage)
+        if actor == nil then
+            return true
+        end
+        actor:CastSpell(actor, stackSpell, true)
+        local stack = actor:GetAura(stackSpell)
+        if stack == nil or stack:GetStackAmount() < aura:GetAmount() then
+            return true
+        end
+        actor:RemoveAura(stackSpell)
+        if procTarget ~= nil then
+            actor:CastSpell(procTarget, triggerSpell, true)
+        end
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_LIGHTNING_CAPACITOR_AURA, 6, makeTrinketStackProc(SPELL_LIGHTNING_CAPACITOR_STACK, SPELL_LIGHTNING_CAPACITOR_TRIGGER))
+RegisterAuraEvent(SPELL_THUNDER_CAPACITOR_AURA, 6, makeTrinketStackProc(SPELL_THUNDER_CAPACITOR_STACK, SPELL_THUNDER_CAPACITOR_TRIGGER))
+RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_NORMAL_AURA, 6, makeTrinketStackProc(SPELL_TOC25_CASTER_TRINKET_NORMAL_STACK, SPELL_TOC25_CASTER_TRINKET_NORMAL_TRIGGER))
+RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_HEROIC_AURA, 6, makeTrinketStackProc(SPELL_TOC25_CASTER_TRINKET_HEROIC_STACK, SPELL_TOC25_CASTER_TRINKET_HEROIC_TRIGGER))
+
+-- CENSUS CORRECTIONS (rows 604-607, verified in-house this tick):
+--   604 spell_item_trigger_spell STAYS OUT — the census hits are the
+--   unrelated generic spell_trigger_spell_from_caster in boss files.
+--   SpellScript template, OnEffectHit DUMMY (spell_item.cpp:42-84),
+--   instantiated for arcanite dragonling 23074->19804 / gnomish
+--   battle chicken 23133->13166 / mechanical dragonling 23076->4073 /
+--   mithril mechanical dragonling 23075->12749. ev4 OnEffectHit exists
+--   and fires on the player item-use path (spells.go finishSpellCast),
+--   so the old "no RegisterSpellScript bridge" reason is stale; the
+--   real blocker is spell:GetCastItem — no such method anywhere in
+--   the tree (castItemGUID sits unexposed in spellObjectParams).
+--   Recipe: expose GetCastItem on the spell object, then register
+--   ev4 per binding ID casting the mapped triggered spell.
+--   605 spell_item_defibrillate STAYS OUT — SpellScript
+--   OnEffectHitTarget RESURRECT only (spell_item.cpp:712-756;
+--   census HandleDummy/OnObjectAreaTargetSelect are wrong), goblin
+--   jumper cables 8342 (67% fail -> 8338) / XL 22999 (50% -> 23055)
+--   / gnomish army knife 54732 (33%, no fail spell). Doubly blocked:
+--   ev5 has no player-path fire site (creature path + triggered
+--   funnel only, runtime.go contract) and the PreventHitDefaultEffect
+--   veto has no player-path model — a fail roll would resurrect AND
+--   cast the fail spell. Plus missing GetCastItem (same as 604).
+--   606 spell_item_sunwell_neck PORTED this tick (ev6, dormant) —
+--   CORRECTION to the old note below: the four aura binding IDs are
+--   the `// <id> - Sunwell Exalted ... Neck` comments
+--   (spell_item.cpp:3536/3539/3542/3544), not DB-only.
+--   607 spell_item_trinket_stack proc leg PORTED this tick (ev6,
+--   dormant) — CORRECTION to the old note below: ev6 exists and the
+--   anger-capacitor port in this file already rides it. The OnRemove
+--   leg was already ported (tick 295, verified).

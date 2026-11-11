@@ -96,8 +96,9 @@
 --   with no RegisterSpellScript in the engine, or cross-script state
 --   (arcane_missiles / missile_barrage_proc share a flag no Lua leg
 --   can set). Notable: ice_barrier (absorb + GetDummyAuraEffect
---   not on the aura-hook surface), ignite (DBC GetMaxTicks/rank
---   math), fire_frost_ward (absorb).
+--   not on the aura-hook surface), fire_frost_ward (absorb).
+--   (Ignite left this list this tick: GetSpellMaxTicks + the new
+--   aura:GetRank bridge cover its rank/max-ticks math.)
 
 local SPELL_MAGE_FROSTFIRE_BOLT = 44614
 local SPELL_MAGE_PERMAFROST_AURA = 68391
@@ -186,6 +187,35 @@ end
 
 RegisterAuraEvent(SPELL_MAGE_IMP_BLIZZARD_AURA, 6, impBlizzardProc)
 
+local SPELL_MAGE_IGNITE_AURA = 11119 -- spell_mage.cpp:1053 (class spell_mage_ignite)
+local SPELL_MAGE_IGNITE = 12654 -- spell_mage.cpp:43
+local SPELL_MAGE_MAGIC_ABSORPTION_AURA = 29441 -- spell_mage.cpp:1138 (class spell_mage_magic_absorption)
+local SPELL_MAGE_MAGIC_ABSORPTION_MANA = 29442 -- spell_mage.cpp:58
+
+local function igniteProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 or procTarget == nil then
+        return true
+    end
+    local maxTicks = aura:GetSpellMaxTicks(SPELL_MAGE_IGNITE)
+    local rank = aura:GetRank()
+    if maxTicks <= 0 or rank == 0 then
+        return true
+    end
+    local amount = math.floor(damage * (8 * rank) / 100 / maxTicks)
+    target:CastCustomSpell(procTarget, SPELL_MAGE_IGNITE, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_IGNITE_AURA, 6, igniteProc)
+
+local function magicAbsorptionProc(event, aura, target, actor, procTarget, damage)
+    local bp0 = math.floor(target:GetMaxPower(0) * aura:GetAmount() / 100)
+    target:CastCustomSpell(target, SPELL_MAGE_MAGIC_ABSORPTION_MANA, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
+
 -- NOT IN LUA: spell_mage_arcane_potency (31571, spell_mage.cpp:143-193)
 -- — CheckProc filters the proc spell by SpellIconID (Clearcasting /
 -- Presence of Mind) and HandleProc casts the rank-indexed trigger
@@ -207,6 +237,21 @@ RegisterAuraEvent(SPELL_MAGE_IMP_BLIZZARD_AURA, 6, impBlizzardProc)
 --   (GetSpellWithRank(12484, this aura's rank), new aura bridge on
 --   the GetSpellEffectCalcValue precedent) on the procTarget,
 --   triggered. DORMANT until Spell.dbc ships the 11185 proc entry.
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_mage_ignite (11119, spell_mage.cpp:1053-1098): OnEffectProc
+--   EFFECT_0 DUMMY. PreventDefaultAction (return true); the holder
+--   casts Ignite 12654 on the procTarget with BP0 = pct(damage,
+--   8 * rank) / maxTicks (new aura:GetRank bridge + GetSpellMaxTicks
+--   on the GetSpellEffectCalcValue precedent; the damage gate is the
+--   ev6 damage-arg convention for the C++ damageInfo check).
+--   KNOWN DEVIATION: C++ casts non-triggered; Lua CastCustomSpell
+--   rides the triggered-only funnel (standing gap, same as vendetta).
+--   DORMANT until Spell.dbc ships the 11119 proc entry.
+--   spell_mage_magic_absorption (29441, spell_mage.cpp:1138-1173):
+--   OnEffectProc EFFECT_0 DUMMY. PreventDefaultAction (return true);
+--   the holder (C++ GetActionTarget on the resist event) casts
+--   29442 on itself with BP0 = pct(max mana, aurEff amount), via
+--   GetMaxPower(0). DORMANT until Spell.dbc ships the 29441 proc entry.
 -- CENSUS CORRECTION: row 610 hooks are HandleDummy only; real is
 -- OnEffectProc EFFECT_0 PROC_TRIGGER_SPELL. Rows 608/611/612 hooks
 -- are likewise wrong (608: DoCheckProc + OnEffectProc; 611: DoCheckProc

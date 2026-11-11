@@ -419,6 +419,19 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{r.server.spellWithRank(firstSpell, r.server.spellRank(spellID))}, nil
 	}
+	// GetRank is SpellInfo::GetRank (SpellInfo.cpp) via the
+	// spell_ranks world table (spells.go spellRank): the 1-based rank
+	// of this aura's spell within its first-rank chain, or 0 when the
+	// spell has no rank row. The ignite leg (spell_mage.cpp:1071)
+	// scales the dot by 8 * rank; a 0 read means no DBC rank data,
+	// so a port that gates on a nonzero rank never fires a bogus
+	// 0-damage cast.
+	methods["GetRank"] = luaNoArgs(func() any {
+		if r.server == nil {
+			return uint8(0)
+		}
+		return r.server.spellRank(spellID)
+	})
 	// GetSpellEffectIsEffect(spellID, effectIndex) is
 	// SpellInfo::Effects[eff].IsEffect() (SpellInfo.h: the effect
 	// slot carries a real effect when Effect != SPELL_EFFECT_NONE):
