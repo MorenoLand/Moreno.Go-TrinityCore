@@ -187,7 +187,14 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   direct-player ev5 site), feast_on (581, ev5) and turkey_tracker
 --   (582, ev5) left it on the reconcile tick; buff-food x5, well_fed
 --   x5, on_plate and a_serving_of stay out (see the reconcile-tick
---   checkpoint entry for the reasons). The tick-295 "no RegisterSpellScript bridge"
+--   checkpoint entry for the reasons). px_238_winter_wondervolt (587,
+--   ev5, 26275) left it this tick; mistletoe 586 stays out (no binding
+--   ID in-tree — no TC comment/enum, no in-tree spell_script_names
+--   row, web search inconclusive); relay_race_turn_in 588 stays out
+--   (no binding ID in-tree — 44501 is the credit spell it casts, not
+--   its own ID); barker_bunny 43259-43262 stays out (no player
+--   broadcast-text Talk bridge — player:Say takes a raw string,
+--   lua_player.go:1106). The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
 --   which is how 24930 Hallow's End Candy is ported above, and 43876
 --   Dismount Ram this tick (tail). 43714 relay-race intro force is
@@ -668,9 +675,10 @@ end
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_pilgrims_bounty_turkey_tracker::HandleScript
 --   (spell_holiday.cpp:628-655, registered OnEffectHitTarget EFFECT_1
---   SCRIPT_EFFECT at :657): the caster must be a creature and the hit
---   target a player; a player already holding the max visual 62021 is
---   skipped. The tracker's own aura (62014) on the target picks the
+--   SCRIPT_EFFECT at :657): the caster must be a creature (ToCreature);
+--   the hit target is any unit — C++ has no player gate, only the
+--   tracker-aura lookup. A target already holding the max visual 62021
+--   is skipped. The tracker's own aura (62014) on the target picks the
 --   leg by stack count — 10 hunter, 20 domination, 30 slaughter, 40
 --   triumph (Talk emotes 0-3, whispered to the target) — and at 40
 --   the target also self-casts the max visual 62021, triggered, and
@@ -690,9 +698,6 @@ local EMOTE_TURKEY_TRIUMPH = 3 -- spell_holiday.cpp:605
 
 local function pilgrimsBountyTurkeyTrackerHit(event, spell, target, effectIndex)
     if effectIndex ~= 1 or target == nil then
-        return
-    end
-    if target:GetObjectType() ~= "Player" then
         return
     end
     local caster = spell:GetCaster()
@@ -874,3 +879,41 @@ for _, wandId in ipairs({
 }) do
     RegisterSpellEvent(wandId, 3, hallowEndWandHit(wandId))
 end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_winter_veil_px_238_winter_wondervolt::HandleScript
+--   (spell_holiday.cpp:1040-1053, registered OnEffectHitTarget EFFECT_0
+--   SCRIPT_EFFECT at :1056): PreventHitDefaultEffect is vacuous on the
+--   Go ev5 notification-only fire (lua_spell.go:599 discards the return)
+--   and the DBC SCRIPT_EFFECT leg does nothing by default, so the
+--   handler returns nothing. A hit unit already holding any of the
+--   four transform auras is left alone; otherwise it self-casts one
+--   of the four at random, triggered. Binding ID 26275 comes from the
+--   `// 26275 - PX-238 Winter Wondervolt TRAP` comment
+--   (spell_holiday.cpp:1009), the same convention as 24750/24751.
+local SPELL_PX_238_WINTER_WONDERVOLT = 26275 -- spell_holiday.cpp:1009
+local SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_1 = 26157 -- spell_holiday.cpp:1012
+local SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_2 = 26272 -- spell_holiday.cpp:1013
+local SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_3 = 26273 -- spell_holiday.cpp:1014
+local SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_4 = 26274 -- spell_holiday.cpp:1015
+
+local PX_238_WINTER_WONDERVOLT_TRANSFORMS = {
+    SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_1,
+    SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_2,
+    SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_3,
+    SPELL_PX_238_WINTER_WONDERVOLT_TRANSFORM_4,
+}
+
+local function px238WinterWondervoltHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    for _, transformId in ipairs(PX_238_WINTER_WONDERVOLT_TRANSFORMS) do
+        if target:HasAura(transformId) then
+            return
+        end
+    end
+    target:CastSpell(target, PX_238_WINTER_WONDERVOLT_TRANSFORMS[math.random(#PX_238_WINTER_WONDERVOLT_TRANSFORMS)], true)
+end
+
+RegisterSpellEvent(SPELL_PX_238_WINTER_WONDERVOLT, 5, px238WinterWondervoltHit)
