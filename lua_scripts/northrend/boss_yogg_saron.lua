@@ -1399,10 +1399,15 @@ RegisterSpellEvent(PHASE3.INSANE_PERIODIC, 5, PHASE3.yoggInsanePeriodicHit)
 -- covers pets/totems/player-summoned minions; IsPet/IsTotem
 -- unbridged and the minion/guardian-mask leg unexposed, so a
 -- player-summoned non-minion TempSummon over-excludes, unreachable
--- in the bound ToC worm Emerge cast). No charm carve-out: charm
--- never changes SUMMONEDBY (Unit.h:1147) or the TempSummon summoner,
--- and a player-summoned unit charmed by another unit stays excluded
--- in C++. Bound 63984 (boss enum :271; Dreadscale/Acidmaw Emerge
+-- in the bound ToC worm Emerge cast). Charm carve-out: C++ charm
+-- never changes SUMMONEDBY (Unit.h:1147), but Go charm OVERWRITES
+-- motion.OwnerGUID with the charmer (creaturemotion.go:3436), so a
+-- creature-summoned unit MC'd by a player would read as
+-- player-summoned; skip the exclusion while CharmerGUID ==
+-- OwnerGUID (the overwritten state; uncharmed CharmerGUID is 0).
+-- Residual: a player-summoned unit charmed by a creature is
+-- included by both forms (C++ excludes it), unreachable here.
+-- Bound 63984 (boss enum :271; Dreadscale/Acidmaw Emerge
 -- DoCastAOE :770 beasts.cpp).
 -- DORMANT until Spell.dbc ships 63984.
 PHASE3.yoggHateToZeroHit = function(event, spell, hitTarget, effectIndex)
@@ -1416,7 +1421,8 @@ PHASE3.yoggHateToZeroHit = function(event, spell, hitTarget, effectIndex)
         return
     end
     local ownerGUID = hitTarget:GetOwnerGUID()
-    if ownerGUID ~= 0 and GetPlayerByGUID(ownerGUID) ~= nil then
+    if ownerGUID ~= 0 and GetPlayerByGUID(ownerGUID) ~= nil
+        and hitTarget:GetCharmerGUID() ~= ownerGUID then
         return
     end
     local caster = spell:GetCaster()
