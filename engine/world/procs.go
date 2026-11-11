@@ -1153,7 +1153,7 @@ func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint6
 // triggerTargetGUID — on a taken event that is the holder, on a done
 // event (a root/stun the holder cast, e.g. Charge) it is the enemy, and
 // the C++ cast lands on the enemy (utgarde_keep.cpp:225-227).
-func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID, triggerTargetGUID uint64, triggerSpell *wotlk.Spell) (scriptProcCast, bool) {
+func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID, triggerTargetGUID uint64, triggerSpell *wotlk.Spell, auraCasterGUID uint64, schoolMask uint32, miscValue int32) (scriptProcCast, bool) {
 	if effAura != spellAuraDummy {
 		return scriptProcCast{}, false
 	}
@@ -1214,6 +1214,28 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 61258, casterGUID: actionTarget, targetGUID: actionTarget}, true
+	case 53480: // Roar of Sacrifice, EFFECT_1: the action target casts 67481 on the aura caster, BP0 = pct of damage.
+		// spell_hun_roar_of_sacrifice::CheckProc/HandleProc
+		// (spell_hunter.cpp:1279-1303): the school-mask gate reads
+		// the damage school against the effect's misc value, and the
+		// caster-null leg reads the aura caster; both ride the new
+		// params. C++ casts BP0 = 0 on a zero-damage event (no early
+		// return), so there is no damage gate here, unlike 70674.
+		// The cast is triggered (CastSpellExtraArgs(aurEff),
+		// SpellDefines.h:167), which fireScriptProcCast honors.
+		// DORMANT until Spell.dbc ships the 53480 proc flags
+		// (serverSpellProcEntryFor needs ProcTypeMask != 0).
+		if effIndex != 1 || auraCasterGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		if schoolMask&uint32(miscValue) == 0 {
+			return scriptProcCast{}, false
+		}
+		actionTarget := procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID)
+		if actionTarget == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 67481, casterGUID: actionTarget, targetGUID: auraCasterGUID, bp0: uint32(uint64(damage) * uint64(effAmount) / 100), bp0Set: true}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -3587,7 +3609,7 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				continue
 			}
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell, aura.CasterGUID, ev.schoolMask, eff.MiscValue); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
 					continue
 				}

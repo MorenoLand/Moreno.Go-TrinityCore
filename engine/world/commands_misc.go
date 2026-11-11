@@ -1372,6 +1372,71 @@ func (s *session) resetPlayerCooldownsByCategory(category uint32, update bool) {
 	}
 }
 
+// resetReadinessCooldowns mirrors spell_hun_readiness::HandleDummy
+// (spell_hunter.cpp:1234-1252): SpellHistory::ResetCooldowns over the
+// predicate "hunter-family spell, not Readiness (23989), Bestial Wrath
+// (19574) or Gift of the Naaru (59543), with a recovery time",
+// update=true. GetRecoveryTime is max(RecoveryTime,
+// CategoryRecoveryTime) (SpellInfo.cpp:3149-3152). A cooldown entry
+// with no DBC record cannot be evaluated (C++ AssertSpellInfo would
+// crash on it); it is left alone. The erase and the category-map
+// zeroing mirror resetPlayerCooldownsByCategory above.
+func (s *session) resetReadinessCooldowns() {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.playerStateMu.Lock()
+	snapshot := append([]spellCooldown(nil), s.player.Cooldowns...)
+	s.playerStateMu.Unlock()
+	matched := make(map[uint32]struct{})
+	for _, cd := range snapshot {
+		if cd.Spell == 23989 || cd.Spell == 19574 || cd.Spell == 59543 {
+			continue
+		}
+		if s.server == nil || s.server.Data == nil {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(cd.Spell)
+		if err != nil || !found {
+			continue
+		}
+		if spell.SpellFamilyName != spellFamilyHunter {
+			continue
+		}
+		recovery := spell.RecoveryTime
+		if spell.CategoryRecoveryTime > recovery {
+			recovery = spell.CategoryRecoveryTime
+		}
+		if recovery == 0 {
+			continue
+		}
+		matched[cd.Spell] = struct{}{}
+	}
+	if len(matched) == 0 {
+		return
+	}
+	erasedCategories := make(map[uint32]struct{})
+	s.playerStateMu.Lock()
+	kept := s.player.Cooldowns[:0]
+	for _, cd := range s.player.Cooldowns {
+		if _, drop := matched[cd.Spell]; !drop {
+			kept = append(kept, cd)
+		} else if cd.Category != 0 {
+			erasedCategories[cd.Category] = struct{}{}
+		}
+	}
+	s.player.Cooldowns = kept
+	for i := range s.player.Cooldowns {
+		if _, erased := erasedCategories[s.player.Cooldowns[i].Category]; erased {
+			s.player.Cooldowns[i].CategoryEnd = 0
+		}
+	}
+	s.playerStateMu.Unlock()
+	for spellID := range matched {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CLEAR_COOLDOWN), buildClearCooldown(s.playerGUID, spellID), true)
+	}
+}
+
 // handleCmdDamage mirrors HandleDamageCommand (cs_misc.cpp:2116-2261, RBAC
 // 498): the flat-melee-damage path on a selected player plus the `go`
 // destructible-building form. The school/armor/absorb and spell-damage

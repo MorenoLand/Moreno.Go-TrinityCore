@@ -264,6 +264,75 @@ RegisterAuraEvent(SPELL_HUNTER_MISDIRECTION, 6, misdirectionProc)
 -- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
 --   spell_hun_pet_carrion_feeder::HandleDummy
 --   (spell_hunter.cpp:1001-1005): OnEffectHit, EFFECT_0
+--   SPELL_EFFECT_DUMMY. The pet casts the carrion feeder
+--   heal 54045 on itself, NON-triggered (C++ passes false; the
+--   creature CastSpell bridge honors the flag,
+--   lua_creature_events.go:936). Pet casts ride
+--   castCreatureSpellInternalWithBasePoints, whose ev4 fire site
+--   is boss_ai.go:3365 (last-stand precedent).
+-- NOT PORTED: Load() (spell_hunter.cpp:973-980) — no IsPet bridge
+--   on creature objects; the spell is a pet-only ability, so the
+--   gate holds by construction (53478 precedent). CheckIfCorpseNear
+--   (spell_hunter.cpp:985-999) — no Lua OnCheckCast bridge (53271
+--   DoCheckCast precedent); the cast succeeds with no corpse
+--   nearby. DORMANT until Spell.dbc drives 54044 (pet ability).
+local SPELL_HUNTER_PET_CARRION_FEEDER = 54044 -- spell_hunter.cpp:964
+local SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED = 54045 -- spell_hunter.cpp:54
+
+local function petCarrionFeederDummy(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED, false)
+end
+
+RegisterSpellEvent(SPELL_HUNTER_PET_CARRION_FEEDER, 4, petCarrionFeederDummy)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hun_pet_heart_of_the_phoenix::HandleScript
+--   (spell_hunter.cpp:1042-1056): OnEffectHitTarget, EFFECT_0
+--   SPELL_EFFECT_SCRIPT_EFFECT. With an owner and no 55711
+--   debuff on the pet, the owner casts the triggered revive
+--   54114 on the pet with BP0 = 100 (player CastCustomSpell,
+--   lua_player.go:2879), then the pet casts the 55711 debuff on
+--   itself, triggered. ev5 fires on the creature path per
+--   (effect, live hit target) (boss_ai.go:3427-3430).
+-- NOT PORTED: Load() (spell_hunter.cpp:1030-1035) — no IsPet
+--   bridge; pet-only ability, holds by construction (53478
+--   precedent). DORMANT until Spell.dbc drives 55709 (pet
+--   ability).
+local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX = 55709 -- spell_hunter.cpp:51
+local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED = 54114 -- spell_hunter.cpp:52
+local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF = 55711 -- spell_hunter.cpp:53
+
+local function petHeartOfThePhoenixScript(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:HasAura(SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF) then
+        return
+    end
+    local owner = caster:GetOwner()
+    if owner == nil then
+        return
+    end
+    owner:CastCustomSpell(caster, SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED, true, 100)
+    caster:CastSpell(caster, SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF, true)
+end
+
+RegisterSpellEvent(SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX, 5, petHeartOfThePhoenixScript)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_hun_pet_carrion_feeder::HandleDummy
+--   (spell_hunter.cpp:1001-1005): OnEffectHit, EFFECT_0
 --   SPELL_EFFECT_DUMMY. The pet self-casts the triggered heal 54045,
 --   non-triggered (C++ passes false; creature CastSpell honors the
 --   flag, lua_creature_events.go:953). The C++ Load() IsPet gate rides

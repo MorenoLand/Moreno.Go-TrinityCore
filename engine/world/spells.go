@@ -16305,6 +16305,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if (spellID == 55090 || spellID == 55265 || spellID == 55270 || spellID == 55271) && len(hitTargets) > 0 {
 						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, scourgeStrikeMultipliers)
 					}
+					// spell_hun_readiness::HandleDummy
+					// (spell_hunter.cpp:1234-1252): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm finishes the cooldown on the
+					// caster's other Hunter abilities (resetReadinessCooldowns
+					// in commands_misc.go carries the predicate). Fires once
+					// per effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target self-cast), ahead
+					// of the pet-aura/Eluna legs like the arms above, and
+					// only when a target was actually hit. A Lua ev5 port
+					// can never fire: the player path has no per-effect
+					// OnEffectHitTarget site (runtime.go).
+					if spellID == 23989 && len(hitTargets) > 0 {
+						s.resetReadinessCooldowns()
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// spell_hun_readiness::HandleDummy
 					// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY

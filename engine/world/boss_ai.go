@@ -10679,7 +10679,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				continue
 			}
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell, aura.CasterGUID, ev.schoolMask, eff.MiscValue); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)
 					continue
 				}
