@@ -54,9 +54,9 @@
 --   precedent: the writer calls instanceData:SetData(type, data) and
 --   this handler runs the switch leg; no table write happens in the
 --   bridge itself, so every leg stores its own state below):
---   DATA_ICE_SHARDS_HIT (9): store shardsHit. DORMANT: the only
---   writer is the spell_pos_ice_shards SpellScript (pit_of_saron.cpp
---   :297, no SpellScript bridge), so no live writer exists yet.
+--   DATA_ICE_SHARDS_HIT (9): store shardsHit. The only writer is
+--   the spell_pos_ice_shards SpellScript (pit_of_saron.cpp :297) —
+--   PORTED below (iceShardsHit, ev5 on 69425).
 --   DATA_CAVERN_ACTIVE (10): store cavernActive; data ~= 0 runs
 --   HandleCavernEventTrigger(true) (:265-276), data == 0 runs it with
 --   false. DORMANT: the only writers are the cavern area triggers
@@ -107,6 +107,7 @@ local INSTANCE_EVENT_ON_SET_DATA = 8
 
 -- pit_of_saron.h POSDataTypes (:26-40).
 local DATA_ICE_SHARDS_HIT = 9
+local SPELL_POS_ICE_SHARDS = 69425 -- pit_of_saron.cpp:279-315 (Wowhead WotLK: Ice Shards, Effect #1 School Damage Frost 3800 / 5700 heroic, 7yd radius)
 local DATA_CAVERN_ACTIVE = 10
 
 local NPC_GARFROST = 36494 -- pit_of_saron.h:49
@@ -226,3 +227,21 @@ RegisterMapEvent(MAP_PIT_OF_SARON, INSTANCE_EVENT_ON_SET_DATA, function(event, i
     end
     -- Other types fall through, the C++ default arm.
 end)
+
+-- C++ spell_pos_ice_shards_SpellScript::HandleScriptEffect
+-- (pit_of_saron.cpp:279-315): the falling-icicle damage spell
+-- hitting a player writes instance DATA_ICE_SHARDS_HIT (9).
+-- Load()'s PoS gate is the map-658 check (InstanceHasScript twin:
+-- the caster is the icicle creature, so the ev5 creature path
+-- fires, runtime.go; effectIndex == 0 is the EFFECT_0 bind).
+-- DORMANT until Spell.dbc ships (spellKnown gate).
+local function iceShardsHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil or hitTarget:GetTypeId() ~= 4 then return end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetMapId() ~= MAP_PIT_OF_SARON then return end
+    local mapObj = caster:GetMap()
+    local inst = mapObj and mapObj:GetInstanceData() or nil
+    if inst ~= nil then inst:SetData(DATA_ICE_SHARDS_HIT, 1) end
+end
+
+RegisterSpellEvent(SPELL_POS_ICE_SHARDS, 5, iceShardsHit)

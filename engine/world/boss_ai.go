@@ -18622,10 +18622,11 @@ func init() {
 	// impaling-charge ev15 SetGUID leg + Talk(EMOTE_IMPALE 6, target)
 	// on every hit; JustSummoned rhino-spirit leg (ev19, dormant
 	// until Spell.dbc ships); stampede-charge spirit despawn
-	// (ev5 effectIndex 1, dormant). Cast-state gates PORTED (no
+	// (ev5 effectIndex 1, dormant); 54958 control-vehicle cast
+	// (ev15, before the Talk, dormant until Spell.dbc ships the
+	// 54958 effect rows). Cast-state gates PORTED (no
 	// UpdateAI override — all 7 timer ticks defer 500ms while
-	// casting). Stay-outs: 54958 control-vehicle cast (no
-	// vehicle-possess bridge); summons.DespawnAll (no summon
+	// casting). Stay-outs: summons.DespawnAll (no summon
 	// tracking in Lua).
 	RegisterLuaBoss("boss_gal_darah", 29306)
 

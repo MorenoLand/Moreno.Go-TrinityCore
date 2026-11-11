@@ -85,8 +85,11 @@
 -- the Talk bridge takes a target, lua_creature_events.go:1129).
 -- No SpellScript binding is needed — ev15 is the SpellHitTarget twin
 -- (boss_ai.go fireCreatureSpellHitTarget; sindragosa precedent). The
--- 54958 control-vehicle cast itself stays out (no vehicle-possess
--- bridge); the cast of 54956 itself is ported.
+-- 54958 control-vehicle cast is PORTED below (galDarahSpellHitTarget,
+-- before the Talk, the C++ cast-then-SetGUID order); the aura-236
+-- control-vehicle apply legs exist engine-side (spells.go), DORMANT
+-- until Spell.dbc ships the 54958 effect rows (stampede-charge ev5
+-- precedent). The cast of 54956 itself is ported.
 -- spell_gal_darah_stampede_charge (SpellScript 55220/59823: rhino spirit
 -- despawns 1s after its charge hits) — PORTED below
 -- (stampedeChargeHit, ev5 effectIndex == 1; dormant until Spell.dbc
@@ -128,6 +131,7 @@ local EMOTE_IMPALE = 6
 
 local SPELL_IMPALING_CHARGE = 54956
 local H_SPELL_IMPALING_CHARGE = 59827 -- boss_gal_darah.cpp:247
+local SPELL_IMPALING_CHARGE_CONTROL_VEHICLE = 54958 -- boss_gal_darah.cpp:29
 local SPELL_STOMP = 55292
 local SPELL_PUNCTURE = 55276
 local SPELL_STAMPEDE = 55218
@@ -498,6 +502,13 @@ local function galDarahSpellHitTarget(event, creature, target, spellId)
     if target == nil then
         return
     end
+    -- C++ HandleScript (boss_gal_darah.cpp:269-277): the hit target
+    -- casts 54958 triggered on the caster BEFORE SetGUID — the cast
+    -- is unconditional per hit, so it sits outside the dedupe below.
+    -- Player/creature CastSpell bridges (lua_player.go:2897,
+    -- moroes precedent); the aura-236 board leg is DORMANT until
+    -- Spell.dbc ships the 54958 effect rows (spells.go).
+    target:CastSpell(creature, SPELL_IMPALING_CHARGE_CONTROL_VEHICLE, true)
     -- C++ SetGUID (boss_gal_darah.cpp:147-160) Talks EMOTE_IMPALE (6)
     -- with the target on EVERY charge hit, including a repeat impale
     -- of the same player — the Talk is unconditional in C++, so it

@@ -2,6 +2,14 @@
 -- src/server/scripts/Northrend/IsleOfConquest/isle_of_conquest.cpp
 -- (spell_ioc_parachute_ic only; the rest of the file's
 -- creature/spell scripts are not ported here).
+-- spell_ioc_gunship_portal (C++ :142-180) STAYS OUT: Load() gates
+-- on a player caster, and a player-cast ev5 has no fire site
+-- (runtime.go — creature + triggered-funnel paths only); there is
+-- no player:TeleportTo bridge (TeleportNear exits the vehicle,
+-- lua_player.go:4741-4744, the opposite of
+-- TELE_TO_NOT_LEAVE_TRANSPORT) and no GetWorldLocation bridge;
+-- the spell ID itself is DB-bound (spell_script_names) and
+-- unrecoverable in this clone.
 
 -- C++ spell_ioc_parachute_ic_AuraScript::HandleTriggerSpell
 -- (isle_of_conquest.cpp:189-203, aura 66656 SPELL_PARACHUTE,

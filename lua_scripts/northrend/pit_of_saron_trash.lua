@@ -36,9 +36,12 @@
 -- spawn funnel once the entry is sourced. The ctor SetDisplayId
 -- (Modelid1) is bridgeable since the tharon_ja SetDisplayId port but
 -- rides the same unsourced entry.
--- spell_pos_ice_shards (C++ :279-315) — SpellScript, no
--- SpellScript/AuraScript bridge; its instance SetData
--- (DATA_ICE_SHARDS_HIT) leg is instance-gated too.
+-- spell_pos_ice_shards (C++ :279-315) — SpellScript ev5
+-- (OnEffectHitTarget, EFFECT_0 SCHOOL_DAMAGE) writing instance
+-- SetData (DATA_ICE_SHARDS_HIT, 9) — PORTED in
+-- instance_pit_of_saron.lua (iceShardsHit, 69425 Ice Shards,
+-- Wowhead-verified Effect #1 School Damage Frost; dormant until
+-- Spell.dbc ships).
 -- at_pit_cavern_entrance / at_pit_cavern_end (C++ :317-355) —
 -- AreaTriggerScripts; trigger delivery exists (server event 24,
 -- areatrigger.go) but both arms are instance legs (Get/SetData
