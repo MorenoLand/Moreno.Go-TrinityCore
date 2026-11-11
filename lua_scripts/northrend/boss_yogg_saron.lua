@@ -258,6 +258,18 @@
 -- Census hooks wrong on 477/479/480 (OnCheckCast phantoms; 477 also
 -- lists OnObjectAreaTargetSelect); 478's OnObjectAreaTargetSelect is
 -- real; 481's OnCheckCast is real but unbridged.
+-- Census rows 482-486 PORTED/STAYED-OUT 2026-11-11 below:
+-- titanic_storm (64172, ev5 eff0 DUMMY -> caster kills hit unit,
+-- Unit::Kill twin; DBC-bound 64171 -> 64172 chain unverifiable
+-- in-repo), hodirs_protective_gaze (64174) STAYS OUT — no absorb /
+-- check-area-target aura event (aura events 1-7, runtime.go),
+-- ulduar_teleporter STAYS OUT — no OnCheckCast spell event (spell
+-- events 1-7) and its bound spell ID is unrecoverable in-repo,
+-- woe_strike 42730 VERIFIED-EXISTING (ev6 proc, ingvar file) +
+-- heroic twin 59735 PORTED (same handler, dormant until difficulty
+-- resolution lands). Census hooks: 482 exact; 483/485/486 [] phantom
+-- (missed DoCheckAreaTarget + OnEffectAbsorb / DoCheckProc +
+-- OnEffectProc); 484 OnCheckCast exact but unbridged.
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -298,6 +310,7 @@ local PHASE3 = {
     SPELL_DEAFENING_ROAR = 64189, -- :158
     SPELL_PHASE_3_TRANSFORM = 63895, -- :157
     SPELL_TITANIC_STORM = 64171, -- :222
+    SPELL_TITANIC_STORM_DUMMY = 64172, -- :3111
     SAY_YOGG_SARON_SPAWN = 0, -- :52
     SAY_YOGG_SARON_PHASE_3 = 3, -- :56
     SAY_YOGG_SARON_DEAFENING_ROAR = 4, -- :57
@@ -347,6 +360,7 @@ local PHASE3 = {
     LUNATIC_GAZE_DAMAGE = 64164, -- :160
     LUNATIC_GAZE_DAMAGE_2 = 64168, -- loader comment :2981 (no in-tree enum name; Load :2992 stacks 2)
     HATE_TO_ZERO = 63984, -- :271
+    TITANIC_STORM_SCRIPT = 64172, -- loader comment :3111 (64171 SPELL_TITANIC_STORM is the Thorim-cast spell, a different spell)
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -1394,6 +1408,25 @@ PHASE3.yoggHateToZeroHit = function(event, spell, hitTarget, effectIndex)
     hitTarget:ModifyThreatByPercent(caster, -100)
 end
 RegisterSpellEvent(PHASE3.HATE_TO_ZERO, 5, PHASE3.yoggHateToZeroHit)
+
+-- C++ spell_yogg_saron_titanic_storm::HandleScript
+-- (boss_yogg_saron.cpp:3118-3129): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> the caster kills the hit unit
+-- (Unit::Kill(GetCaster(), target), no gating). Bound 64172 (loader
+-- comment :3111); the 64171 cast is Thorim's phase-3 DoAction
+-- (:1681-1687, keeperDoAction above). DORMANT until Spell.dbc ships
+-- the 64171 -> 64172 chain (no Spell.dbc in-repo to verify it).
+PHASE3.yoggTitanicStormHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:Kill(hitTarget)
+end
+RegisterSpellEvent(PHASE3.SPELL_TITANIC_STORM_DUMMY, 5, PHASE3.yoggTitanicStormHit)
 
 -- C++ spell_yogg_saron_brain_link::FilterTargets
 -- (boss_yogg_saron.cpp:2139-2151): OnObjectAreaTargetSelect EFFECT_0

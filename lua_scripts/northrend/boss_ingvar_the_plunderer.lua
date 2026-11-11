@@ -137,6 +137,11 @@
 -- (PreventDefaultAction); the hook's damage arg is always 0 on heal
 -- events, so no damage gate. DORMANT until the phase-2 EVENT_WOE_STRIKE
 -- arm applies the aura and the DBC proc entry for 42730 ships.
+-- The heroic twin 59735 (same class, :439-480, same effect spell
+-- 42739 — no heroic effect twin in the file) rides the same handler;
+-- dormant until difficulty resolution lands (Store.SpellDifficulty
+-- has zero callers in engine/world, so heroic currently applies
+-- 42730).
 
 local ENTRY_INGVAR = 23954
 local ENTRY_INGVAR_UNDEAD = 23980
@@ -152,6 +157,7 @@ local SPELL_STAGGERING_ROAR = 42708
 local SPELL_ENRAGE = 42705
 local SPELL_INGVAR_FEIGN_DEATH = 42795 -- boss_ingvar_the_plunderer.cpp (DamageTaken, triggered self-cast)
 local SPELL_WOE_STRIKE = 42730 -- boss_ingvar_the_plunderer.cpp:85
+local SPELL_WOE_STRIKE_HEROIC = 59735 -- boss_ingvar_the_plunderer.cpp:439 (heroic twin)
 local SPELL_WOE_STRIKE_EFFECT = 42739 -- boss_ingvar_the_plunderer.cpp:86
 local SPELL_SUMMON_BANSHEE = 42912 -- boss_ingvar_the_plunderer.cpp:74
 local SPELL_INGVAR_TRANSFORM = 42796 -- boss_ingvar_the_plunderer.cpp:96
@@ -658,6 +664,7 @@ local function woeStrikeProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_WOE_STRIKE, 6, woeStrikeProc)
+RegisterAuraEvent(SPELL_WOE_STRIKE_HEROIC, 6, woeStrikeProc)
 
 RegisterCreatureEvent(ENTRY_INGVAR, 1, ingvarEnterCombat)
 RegisterCreatureEvent(ENTRY_INGVAR, 2, ingvarLeaveCombat)
