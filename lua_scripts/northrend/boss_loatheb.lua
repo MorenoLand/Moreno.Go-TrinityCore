@@ -1,8 +1,8 @@
 -- Loatheb (Naxxramas, Plague Quarter) — Lua port of
 -- src/server/scripts/Northrend/Naxxramas/boss_loatheb.cpp
 -- (boss_loatheb (BossAI); AddSC_boss_loatheb also registers
--- achievement_spore_loser and spell_loatheb_deathbloom, both
--- unmodeled below).
+-- achievement_spore_loser (unmodeled below) and
+-- spell_loatheb_deathbloom (PORTED below via RegisterAuraEvent ev3).
 -- Entry: 16011 Loatheb (creature_template table, cross-checked:
 -- Anub'Rekhan 15956 / Faerlina 15953 / Thaddius 15928 / Maexxna 15952 /
 -- Gluth 15932 / Heigan 15936 / Sapphiron 15989 / Kel'Thuzad 15990 all
@@ -50,9 +50,11 @@
 -- All timers cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired): Reset/
 -- JustEngagedWith/JustDied instance bookkeeping (_Reset/_JustDied);
--- spell_loatheb_deathbloom AuraScript
--- AfterRemove leg (DEATHBLOOM_FINAL_DAMAGE 55594 on aura expire —
--- no SpellScript bridge); the spore creature itself has no AI
+-- spell_loatheb_deathbloom AuraScript — PORTED: AfterRemove leg
+-- (DEATHBLOOM_FINAL_DAMAGE 55594 on aura expire) rides
+-- RegisterAuraEvent ev3 below (deathbloomRemove); the old "no
+-- SpellScript bridge" note was stale — ev3 + GetRemoveMode
+-- are live (marwyn precedent). The spore creature itself has no AI
 -- class in this file (spell-summoned, DB-side); melee
 -- engine-driven.
 
@@ -65,6 +67,7 @@ local SAY_NECROTIC_AURA_FADING = 2
 local SPELL_NECROTIC_AURA = 55593
 local SPELL_SUMMON_SPORE = 29234
 local SPELL_DEATHBLOOM = 29865
+local SPELL_DEATHBLOOM_FINAL_DAMAGE = 55594 -- boss_loatheb.cpp:33
 local SPELL_INEVITABLE_DOOM = 29204
 local SPELL_FUNGAL_CREEP = 29232
 
@@ -124,6 +127,26 @@ local function deathbloomTick(creature, guid)
         deathbloomTick(creature, guid)
     end)
 end
+
+-- C++ spell_loatheb_deathbloom_AuraScript::AfterRemove
+-- (boss_loatheb.cpp:179-185): AfterEffectRemove, EFFECT_0
+-- SPELL_AURA_PERIODIC_DAMAGE, gated on remove mode
+-- AURA_REMOVE_BY_EXPIRE; the aura target casts
+-- DEATHBLOOM_FINAL_DAMAGE 55594 on itself with the original
+-- caster set to the aura caster (Loatheb). PORTED via
+-- RegisterAuraEvent ev3 (marwyn shared_suffering precedent);
+-- the EXPIRE gate reads aura:GetRemoveMode() == 4
+-- (lua_aura.go:238-246). Deviation: no SetOriginalCaster
+-- bridge (player CastCustomSpell accepts the arg but leaves it
+-- unmodeled), so the 55594 damage attributes to the target,
+-- not Loatheb; the cast itself is non-triggered like C++.
+local function deathbloomRemove(event, aura, target)
+    if aura:GetRemoveMode() == 4 then
+        target:CastSpell(target, SPELL_DEATHBLOOM_FINAL_DAMAGE)
+    end
+end
+
+RegisterAuraEvent(SPELL_DEATHBLOOM, 3, deathbloomRemove)
 
 local function doomTick(creature, guid)
     doomCounter[guid] = (doomCounter[guid] or 0) + 1

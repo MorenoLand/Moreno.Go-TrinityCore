@@ -176,8 +176,11 @@
 -- so home-arrival never fires; trigger-chain-blocked, not
 -- entry-blocked.
 -- spell_kelthuzad_chains (AuraScript 28410): scale-mod apply/remove
--- handlers — no AuraScript binding bridge (razelikh precedent) — joins
--- the SpellScript/AuraScript queue.
+-- handlers — engine-covered, no Lua needed: both arms only call
+-- HandleAuraModScale -> RecalculateObjectScale, and Go folds
+-- object scale live over active MOD_SCALE auras
+-- (aura_unit.go:40-50, creature_auras.go:106-127). The old "no
+-- AuraScript binding bridge — joins the queue" note was stale.
 -- spell_kelthuzad_detonate_mana (AuraScript 27819): periodic mana-drain
 -- -> SPELL_MANA_DETONATION_DAMAGE 27820 — PORTED below via
 -- RegisterAuraEvent ev1 (detonateManaTick).
