@@ -19663,16 +19663,22 @@ func init() {
 	// EVENT_DECIMATE DoCastAOE(28374) ported as self-cast (20x
 	// multi-search machine stays out). The
 	// STATE_GLUTH_EATING deferral arms (3s/5s/4s repeats) have no state
-	// bridge — documented in the lua. Unmodeled: Reset react-state/
-	// speed legs (no bridges), SummonedCreatureDies despawn (no summon
-	// bridge), EVENT_SUMMON creature groups (no
-	// summon bridge + difficulty gate), zombie single/multi search +
-	// kill legs + DoAction DECIMATE_EVENT + MovementInform (no summon/
-	// cross-AI / react-state / motion bridges), EMOTE_DECIMATE/SPOTS_ONE/
-	// DEVOURS_ALL Talks (vortex — not ported orphaned), spell_gluth_decimate
-	// + spell_gluth_zombiechow_search (no SpellScript binding bridge),
-	// npc_zombie_chow (entry-unverifiable from C++ evidence — no
-	// registration; ctor DoCastSelf(INFECTED_WOUND 29307) joins the
+	// bridge — documented in the lua. EVENT_DECIMATE 25-man twin
+	// 54426 rides the Is25ManRaid branch (GetSpellIdForDifficulty has
+	// no Go model); spell_gluth_decimate PORTED (ev5 damage 28375 BP0
+	// + ev4 DoAction dispatch, ev38 receiver no-op until the zombie
+	// machine ports); spell_gluth_zombiechow_search PORTED (ev3 5%
+	// heal, dormant on the unported zombie-eat cast sites);
+	// EVENT_SUMMON creature groups PORTED (summonTick, Is25ManRaid
+	// branch, SummonCreatureGroup bridged 2026-11-05); Reset
+	// react-state + speed legs PORTED (SetReactState + SetSpeedRate);
+	// EMOTE_DECIMATE rides the ported decimate tick. Unmodeled:
+	// SummonedCreatureDies despawn (no summon bridge), zombie
+	// single/multi search + kill legs + MovementInform (no summon/
+	// cross-AI / react-state / motion bridges), EMOTE_SPOTS_ONE/
+	// DEVOURS_ALL Talks (vortex — not ported orphaned), npc_zombie_chow
+	// (entry-unverifiable from C++ evidence — no registration; ctor
+	// DoCastSelf(INFECTED_WOUND 29307) joins the
 	// bridgeable-but-entry-blocked queue).
 	// CASTING gates PORTED (500ms IsCasting defer): boss UpdateAI
 	// pre-loop :139 + in-loop :264 gates cover wound/enrage/decimate/

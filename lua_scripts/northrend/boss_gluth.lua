@@ -86,11 +86,15 @@
 -- the whole zombie state machine (STATE_GLUTH_EATING / zombie GUID
 -- persistence) — no state bridge.
 -- spell_gluth_decimate (28374/54426): HandleScriptEffect -> Decimate
--- damage 28375 via CastSpellBP0 + HandleEvent -> DoAction(
--- ACTION_DECIMATE_EVENT) — no SpellScript binding bridge (razelikh
--- precedent) — joins the SpellScript/AuraScript queue.
+-- damage 28375 via CastCustomSpell BP0 + HandleEvent -> DoAction(
+-- ACTION_DECIMATE_EVENT) — PORTED below (ev5 effectIndex 0 +
+-- ev4 effectIndex 2 + ev38 receiver, the "no SpellScript binding
+-- bridge (razelikh precedent)" header claim is stale —
+-- RegisterSpellEvent is live); the DoAction receiver body stays an
+-- empty no-op twin until the zombie machine ports.
 -- spell_gluth_zombiechow_search (28239/28404): AfterHit -> 5%-max-
--- health heal — same, SpellScript queue.
+-- health heal — PORTED below (ev3); DORMANT — both cast sites ride
+-- the unported zombie-eat machine.
 -- npc_zombie_chow (ScriptedAI — entries 16360/30303 appear only in a
 -- C++ comment; no NPC_ constants in naxxramas.h, no instance
 -- bindings — entry-unverifiable from C++ evidence — no registration):
@@ -110,6 +114,11 @@ local EMOTE_BERSERKER = 4
 local SPELL_MORTAL_WOUND = 54378
 local SPELL_ENRAGE = 28371
 local SPELL_DECIMATE = 28374
+local SPELL_DECIMATE_HEROIC = 54426 -- boss_gluth.cpp:40 (25-man twin)
+local SPELL_DECIMATE_DMG = 28375
+local SPELL_ZOMBIE_CHOW_SINGLE = 28239
+local SPELL_ZOMBIE_CHOW_MULTI = 28404 -- boss_gluth.cpp:44
+local ACTION_DECIMATE_EVENT = 2 -- boss_gluth.cpp:87
 local SPELL_BERSERK = 26662
 
 local timers = {}
@@ -173,7 +182,10 @@ end
 
 -- C++ EVENT_DECIMATE: Talk(EMOTE_DECIMATE 1) + DoCastAOE(Decimate
 -- 28374) as self-cast, randtime(110s,120s) init, re-scheduled
--- randtime(110s,120s) (C++ ScheduleEvent re-arm). The eating-state
+-- randtime(110s,120s) (C++ ScheduleEvent re-arm). The 25-man twin
+-- 54426 rides the Is25ManRaid branch (C++ DoCastAOE maps via
+-- GetSpellIdForDifficulty, which has no Go model — boss_ai.go:12751;
+-- summonTick Is25ManRaid precedent below). The eating-state
 -- 4s deferral and the 20x SEARCH_ZOMBIE_MULTI legs have no bridges
 -- (documented in the header); the state is never EATING without the
 -- zombie machine, so the timer fires unconditionally (maiden
@@ -186,7 +198,11 @@ local function decimateTick(creature, guid)
         return
     end
     creature:Talk(EMOTE_DECIMATE)
-    creature:CastSpell(creature, SPELL_DECIMATE)
+    if creature:Is25ManRaid() then
+        creature:CastSpell(creature, SPELL_DECIMATE_HEROIC)
+    else
+        creature:CastSpell(creature, SPELL_DECIMATE)
+    end
     schedule(guid, "decimate", {110000, 120000}, function()
         decimateTick(creature, guid)
     end)
@@ -293,3 +309,71 @@ RegisterCreatureEvent(ENTRY_GLUTH, 1, gluthEnterCombat)
 RegisterCreatureEvent(ENTRY_GLUTH, 2, gluthLeaveCombat)
 RegisterCreatureEvent(ENTRY_GLUTH, 4, gluthDied)
 RegisterCreatureEvent(ENTRY_GLUTH, 23, gluthReset)
+
+-- C++ spell_gluth_decimate::HandleScriptEffect (boss_gluth.cpp:313-326):
+-- Decimate (28374 / 25-man 54426) hitting a unit deals (health - 5%
+-- max health) as 28375 triggered with BP0, when positive. ev5 fires
+-- once per (effect, hit target) from the creature cast path
+-- (boss_ai.go:3435), effectIndex == 0 is the EFFECT_0 bind; the
+-- conditions-table rows on effect 0 (boss_gluth.cpp:40) are DB-side
+-- and unevaluated in Go — flagged, not a verdict-changer.
+local function decimateDamageHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetEntry() ~= ENTRY_GLUTH then
+        return
+    end
+    local damage = hitTarget:GetHealth() - hitTarget:CountPctFromMaxHealth(5)
+    if damage > 0 then
+        caster:CastCustomSpell(hitTarget, SPELL_DECIMATE_DMG, true, damage)
+    end
+end
+
+-- C++ spell_gluth_decimate::HandleEvent (boss_gluth.cpp:328-331): the
+-- SEND_EVENT effect fires DoAction(ACTION_DECIMATE_EVENT) on the boss
+-- AI once per cast (ev4, boss_ai.go:3373 — once per non-zero effect,
+-- not per target). The receiver (boss_gluth.cpp:267-276) sets every
+-- summoned zombie DECIMATED — no summon list / cross-AI bridge yet,
+-- so the receiver stays an empty no-op twin until the zombie machine
+-- ports.
+local function decimateEventHit(event, spell, effectIndex)
+    if effectIndex ~= 2 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetEntry() ~= ENTRY_GLUTH then
+        return
+    end
+    caster:DoAction(ACTION_DECIMATE_EVENT)
+end
+
+local function gluthDoAction(event, creature, action)
+    if action ~= ACTION_DECIMATE_EVENT then
+        return
+    end
+end
+
+-- C++ spell_gluth_zombiechow_search::HealForEachTargetHit
+-- (boss_gluth.cpp:368-371): AfterHit heals Gluth 5% max health per
+-- unit hit (ev3 fires once per hit target, boss_ai.go:4215-4228).
+-- 28239 single-target / 28404 multi (boss_gluth.cpp:44; the census
+-- has no row for 28404). DORMANT: both cast sites ride the unported
+-- zombie-eat machine (EVENT_KILL_ZOMBIE_SINGLE :231,
+-- EVENT_SEARCH_ZOMBIE_MULTI :258).
+local function zombieChowHeal(event, spell, hitTarget)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetEntry() ~= ENTRY_GLUTH then
+        return
+    end
+    caster:SetHealth(caster:GetHealth() + caster:CountPctFromMaxHealth(5))
+end
+
+RegisterSpellEvent(SPELL_DECIMATE, 5, decimateDamageHit)
+RegisterSpellEvent(SPELL_DECIMATE_HEROIC, 5, decimateDamageHit)
+RegisterSpellEvent(SPELL_DECIMATE, 4, decimateEventHit)
+RegisterSpellEvent(SPELL_DECIMATE_HEROIC, 4, decimateEventHit)
+RegisterSpellEvent(SPELL_ZOMBIE_CHOW_SINGLE, 3, zombieChowHeal)
+RegisterSpellEvent(SPELL_ZOMBIE_CHOW_MULTI, 3, zombieChowHeal)
+RegisterCreatureEvent(ENTRY_GLUTH, 38, gluthDoAction)
