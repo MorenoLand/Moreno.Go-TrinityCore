@@ -226,12 +226,14 @@
 -- ExitVehicle-with-position (session.exitVehicle takes no
 -- position), DestroyForNearbyPlayers, UpdateObjectVisibility.);
 -- spell_kologarn_stone_shout (SpellScript area-target filter
--- on EFFECT_0 — no SpellScript bridge; joins the
--- no-SpellScript-bridge queue);
+-- on EFFECT_0 — PORTED 2026-11-11 via RegisterSpellEvent ev7
+-- below: keep players + pets, drop everything else; the
+-- "no SpellScript bridge" note is stale, ev7 is live);
 -- spell_kologarn_summon_focused_eyebeam (SpellScript
 -- FORCE_CAST handler: caster casts the effect's TriggerSpell
--- — no SpellScript bridge; joins the no-SpellScript-bridge
--- queue).
+-- — PORTED 2026-11-11 via RegisterSpellEvent ev5 below:
+-- PreventHitDefaultEffect + GetTriggerSpell are both live;
+-- the "no SpellScript bridge" note is stale).
 
 local ENTRY_KOLOGARN = 32930
 
@@ -958,3 +960,56 @@ local function stoneGripTargetSelect(event, spell, effectIndex, targets)
 end
 RegisterSpellEvent(SPELL_STONE_GRIP, 7, stoneGripTargetSelect)
 RegisterSpellEvent(SPELL_STONE_GRIP_HEROIC, 7, stoneGripTargetSelect)
+
+-- C++ spell_kologarn_stone_shout::FilterTargets
+-- (boss_kologarn.cpp:611-640): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY -> keep players and pets, drop every
+-- other target (creatures return !IsPet(), anything else is dropped).
+-- No Lua IsPet method exists; the in-tree approximation is a nonzero
+-- OwnerGUID (hyjal_trash / spell_hunter precedent, lua_creature_events.go:4253)
+-- — it over-counts totems/guardians, which C++ drops. Bound 63716
+-- (boss enum :43; boss casts it at :275-277, DoCast SPELL_STONE_SHOUT).
+-- DORMANT until Spell.dbc ships: the 63716 cast is DBC-gated.
+local function stoneShoutFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target == nil then
+            -- nothing to keep; the list holds resolved objects only
+        elseif target:GetObjectType() == "Player" then
+            -- keep
+        elseif target:GetObjectType() == "Creature" and target:GetOwnerGUID() ~= 0 then
+            -- pet: keep
+        else
+            targets:Remove(target)
+        end
+    end
+end
+RegisterSpellEvent(SPELL_STONE_SHOUT, 7, stoneShoutFilter)
+
+-- C++ spell_kologarn_summon_focused_eyebeam::HandleForceCast
+-- (boss_kologarn.cpp:646-668): OnEffectHitTarget EFFECT_0/1
+-- SPELL_EFFECT_FORCE_CAST -> PreventHitDefaultEffect, then the caster
+-- casts the effect's TriggerSpell on itself, triggered. Bound 63342
+-- (boss enum :52; boss casts it at :305-311, DoCast(me, 63342, true)).
+-- GetTriggerSpell(effectIndex) is live (lua_spell.go:424); the veto
+-- record is threaded through the ev5 fire (lua_spell.go:461), so
+-- PreventHitDefaultEffect skips the Go default force-cast arm.
+-- DORMANT until Spell.dbc ships 63342's trigger values (fail-closed
+-- 0 read: no bogus 0-id cast).
+local function summonFocusedEyebeamForceCast(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 and effectIndex ~= 1 then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local triggerSpell = spell:GetTriggerSpell(effectIndex)
+    if triggerSpell ~= 0 then
+        caster:CastSpell(caster, triggerSpell, true)
+    end
+end
+RegisterSpellEvent(SPELL_SUMMON_FOCUSED_EYEBEAM, 5, summonFocusedEyebeamForceCast)

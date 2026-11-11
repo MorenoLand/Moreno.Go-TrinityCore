@@ -167,7 +167,8 @@
 -- OnEffectHitTarget IS bridged (RegisterSpellEvent ev5, skadi/gal_darah
 -- precedent): 64767/64909 ported below; 62042's FilterTargets (ev7) +
 -- HandleScript (ev5) ported below, LoseHammer AfterCast stays out
--- (no AfterCast bridge, spells.go:19257).
+-- (no AfterCast bridge, spells.go:19257); 62580/62604 frostbolt
+-- volley FilterTargets (ev7) ported below.
 
 local ENTRY_THORIM = 32865
 local BOSS_THORIM = 8 -- ulduar.h:44
@@ -212,6 +213,8 @@ local SPELL_STORMHAMMER_SIF = 64767 -- boss_thorim.cpp:40
 local SPELL_STORMHAMMER_BOOMERANG = 64909 -- boss_thorim.cpp:41
 local SPELL_DEAFENING_THUNDER = 62470 -- boss_thorim.cpp:42
 local SPELL_SIF_TRANSFORM = 64778 -- boss_thorim.cpp:73
+local SPELL_FROSTBOLT_VOLLEY = 62580 -- boss_thorim.cpp:70
+local SPELL_FROSTBOLT_VOLLEY_HEROIC = 62604 -- boss_thorim.cpp:1733
 local THORIM_WEAPON_DISPLAY_ID = 45900 -- boss_thorim.cpp:323
 local SPELL_CHARGE_ORB = 62016 -- boss_thorim.cpp:43
 local SPELL_UNBALANCING_STRIKE = 62130 -- boss_thorim.cpp:54
@@ -1224,3 +1227,32 @@ local function activateLightningOrbTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ACTIVATE_LIGHTNING_ORB_PERIODIC, 1, activateLightningOrbTick)
+
+-- C++ spell_thorim_frostbolt_volley::FilterTargets
+-- (boss_thorim.cpp:1734-1767): OnObjectAreaTargetSelect EFFECT_ALL
+-- TARGET_UNIT_SRC_AREA_ENEMY -> keep players and pets, drop every
+-- other target (creatures return !IsPet(), anything else is dropped);
+-- the identical lambda as kologarn stone_shout. No Lua IsPet method
+-- exists; the in-tree approximation is a nonzero OwnerGUID
+-- (hyjal_trash / spell_hunter precedent, lua_creature_events.go:4253)
+-- — it over-counts totems/guardians, which C++ drops. No effectIndex
+-- gate: C++ registers EFFECT_ALL (rotface precedent). Bound 62580 /
+-- 62604 (boss enum :70 + comment :1733; boss casts 62580 at :1661-1662,
+-- DoCastAOE SPELL_FROSTBOLT_VOLLEY; 62604 is the 25-man twin per the
+-- paired comment). DORMANT until Spell.dbc ships: the volley casts
+-- are DBC-gated.
+local function frostboltVolleyFilter(event, spell, effectIndex, targets)
+    for _, target in ipairs(targets:GetTargets()) do
+        if target == nil then
+            -- nothing to keep; the list holds resolved objects only
+        elseif target:GetObjectType() == "Player" then
+            -- keep
+        elseif target:GetObjectType() == "Creature" and target:GetOwnerGUID() ~= 0 then
+            -- pet: keep
+        else
+            targets:Remove(target)
+        end
+    end
+end
+RegisterSpellEvent(SPELL_FROSTBOLT_VOLLEY, 7, frostboltVolleyFilter)
+RegisterSpellEvent(SPELL_FROSTBOLT_VOLLEY_HEROIC, 7, frostboltVolleyFilter)
