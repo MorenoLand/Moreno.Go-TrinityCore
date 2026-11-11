@@ -143,18 +143,21 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   success aura (Alliance 45719, Horde 46651), triggered, and the
 --   braziers aura removes itself.
 --
--- CLOSED (tick 295 census): the remaining holiday classes are
---   SpellScript-only (no RegisterSpellScript bridge), plus
---   romantic_picnic (no nearby-player enumeration), pilgrims
---   bounty a_serving_of (vehicle/seat chain), brewfest barker
---   bunny (no player Talk bridge), and the DB-bound IDs
---   (pilgrims buff-food x5, midsummer ribbon pole channel) whose
---   aura IDs live only in world DB spell_script_names.
+-- CLOSED (tick 295 census, corrected this tick): the remaining holiday
+--   classes are SpellScript-only, plus romantic_picnic (no
+--   nearby-player enumeration), pilgrims bounty a_serving_of
+--   (vehicle/seat chain), brewfest barker bunny (no player Talk
+--   bridge), and the DB-bound IDs (pilgrims buff-food x5, midsummer
+--   ribbon pole channel) whose aura IDs live only in world DB
+--   spell_script_names. The tick-295 "no RegisterSpellScript bridge"
+--   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
+--   which is how 24930 Hallow's End Candy is ported above.
 
 local SPELL_HALLOW_END_CANDY_PIRATE = 24926 -- spell_holiday.cpp:169 (class spell_hallow_end_candy_pirate)
 local SPELL_HALLOWS_END_CANDY_FEMALE_DEFIAS_PIRATE = 44742 -- spell_holiday.cpp:122
 local SPELL_HALLOWS_END_CANDY_MALE_DEFIAS_PIRATE = 44743 -- spell_holiday.cpp:123
 local GENDER_FEMALE = 1 -- SharedDefines.h:77
+
 local SPELL_RAM_TROT = 42992 -- spell_holiday.cpp:1073
 local SPELL_RAM_CANTER = 42993 -- spell_holiday.cpp:1074
 local SPELL_RAM_GALLOP = 42994 -- spell_holiday.cpp:1075
@@ -192,6 +195,41 @@ local function hallowEndCandyPirateRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_HALLOW_END_CANDY_PIRATE, 3, hallowEndCandyPirateRemove)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_hallow_end_candy::HandleDummy (spell_holiday.cpp:139-142,
+--   registered OnEffectHit EFFECT_0 DUMMY): on effect 0 the caster
+--   self-casts one of the four candy auras at random (orange giant
+--   24924, skeleton 24925, pirate 24926, ghost 24927), triggered.
+--   Fires on the player path (spells.go:14348) and the creature path
+--   (boss_ai.go:3365), once per non-zero effect with the effect
+--   index. Corrects the tick-295 header note below: the
+--   SpellScript-only classes are not all unbridgeable — OnEffectHit
+--   rides ev4 (muru ev5 precedent).
+local SPELL_HALLOWS_END_CANDY = 24930 -- spell_holiday.cpp:127
+local SPELL_HALLOWS_END_CANDY_ORANGE_GIANT = 24924 -- spell_holiday.cpp:118
+local SPELL_HALLOWS_END_CANDY_SKELETON = 24925 -- spell_holiday.cpp:119
+local SPELL_HALLOWS_END_CANDY_GHOST = 24927 -- spell_holiday.cpp:121
+
+local HALLOW_END_CANDY_SPELLS = {
+    SPELL_HALLOWS_END_CANDY_ORANGE_GIANT,
+    SPELL_HALLOWS_END_CANDY_SKELETON,
+    SPELL_HALLOW_END_CANDY_PIRATE,
+    SPELL_HALLOWS_END_CANDY_GHOST,
+}
+
+local function hallowEndCandyDummy(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, HALLOW_END_CANDY_SPELLS[math.random(#HALLOW_END_CANDY_SPELLS)], true)
+end
+
+RegisterSpellEvent(SPELL_HALLOWS_END_CANDY, 4, hallowEndCandyDummy)
 
 local function dropFatigueStacks(target, amount)
     local fatigue = target:GetAura(SPELL_RAM_FATIGUE)
