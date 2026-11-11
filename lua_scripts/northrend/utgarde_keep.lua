@@ -29,12 +29,15 @@
 --   there is no GO-state bridge in Go — the writes would land in a
 --   store nothing reads. Re-activates when the forge GO machine lands.
 --   npc_enslaved_proto_drake (24083) is ported in
---   npc_enslaved_proto_drake.lua; spell_fixate (SpellScript, no bridge)
---   and spell_uk_second_wind (ported in procs.go) are the remaining
---   AddSC_utgarde_keep() registrations (utgarde_keep.cpp:345-352).
+--   npc_enslaved_proto_drake.lua; spell_fixate is ported below
+--   (40414 ev5) and spell_uk_second_wind (ported in procs.go) are
+--   the remaining AddSC_utgarde_keep() registrations
+--   (utgarde_keep.cpp:345-352).
 
 local SPELL_TICKING_TIME_BOMB = 59686 -- TDB spell_script_names
 local SPELL_TICKING_TIME_BOMB_EXPLODE = 59687 -- utgarde_keep.cpp:122
+local SPELL_FIXATE = 40414 -- Wowhead WotLK Fixate: effect 2 Script Effect, value 40415; TDB spell_script_names binding DB-side
+local SPELL_FIXATE_TRIGGER = 40415 -- utgarde_keep.cpp:159
 
 -- C++ spell_ticking_time_bomb_AuraScript::HandleOnEffectRemove
 -- (utgarde_keep.cpp:139-144).
@@ -45,3 +48,22 @@ local function tickingTimeBombRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_TICKING_TIME_BOMB, 3, tickingTimeBombRemove)
+
+-- C++ spell_fixate::HandleScriptEffect (utgarde_keep.cpp:177-180):
+-- OnEffectHitTarget, EFFECT_2 SPELL_EFFECT_SCRIPT_EFFECT -> the hit
+-- unit casts Fixate Trigger (40415) on the caster, triggered. The
+-- "no bridge" header claim was stale: ev5 is OnEffectHitTarget
+-- (runtime.go:600-608) and the palehoof crazed_effect arm
+-- (boss_palehoof.lua:824-831) ports the identical shape. No in-tree
+-- cast site; DBC-bound. ev5 fires on the creature path and the
+-- triggered funnel only — a player caster would stay blocked.
+local function fixateHit(event, spell, hitTarget, effectIndex)
+    if effectIndex == 2 and hitTarget ~= nil then
+        local caster = spell:GetCaster()
+        if caster ~= nil then
+            hitTarget:CastSpell(caster, SPELL_FIXATE_TRIGGER, true)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_FIXATE, 5, fixateHit)

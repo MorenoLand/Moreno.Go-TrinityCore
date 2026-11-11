@@ -1393,18 +1393,30 @@ RegisterSpellEvent(PHASE3.INSANE_PERIODIC, 5, PHASE3.yoggInsanePeriodicHit)
 -- caster's threat on its list (ModifyThreatByPercent -100). The Go twin
 -- is hitTarget:ModifyThreatByPercent(caster, -100) on the motion
 -- creature (lua_creature_events.go:2165, ScaleThreat x0.00). The gate
--- is the GetObjectType() == "Creature" twin (ThreatManager.cpp:156:
--- creatures only); pets/totems/player-summoned minions are also
--- excluded in C++ but IsPet is unexposed on the Lua surface (the 447
--- note), so they over-include — documented, unreachable in the ToC
--- worm Emerge cast (players + pets only). Bound 63984 (boss enum
--- :271; Dreadscale/Acidmaw Emerge DoCastAOE :770 beasts.cpp).
+-- is the CanHaveThreatList twin (ThreatManager.cpp:156-180): creature
+-- only, not a trigger (IsTrigger, lua_creature_events.go:2631), and
+-- not summoned by a player (GetPlayerByGUID(GetOwnerGUID()) ~= nil
+-- covers pets/totems/player-summoned minions; IsPet/IsTotem
+-- unbridged and the minion/guardian-mask leg unexposed, so a
+-- player-summoned non-minion TempSummon over-excludes, unreachable
+-- in the bound ToC worm Emerge cast). No charm carve-out: charm
+-- never changes SUMMONEDBY (Unit.h:1147) or the TempSummon summoner,
+-- and a player-summoned unit charmed by another unit stays excluded
+-- in C++. Bound 63984 (boss enum :271; Dreadscale/Acidmaw Emerge
+-- DoCastAOE :770 beasts.cpp).
 -- DORMANT until Spell.dbc ships 63984.
 PHASE3.yoggHateToZeroHit = function(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 or hitTarget == nil then
         return
     end
     if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    if hitTarget:IsTrigger() then
+        return
+    end
+    local ownerGUID = hitTarget:GetOwnerGUID()
+    if ownerGUID ~= 0 and GetPlayerByGUID(ownerGUID) ~= nil then
         return
     end
     local caster = spell:GetCaster()
