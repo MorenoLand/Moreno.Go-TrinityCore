@@ -9621,6 +9621,95 @@ func (s *Server) serverUnitHasAuraFromCaster(mapID, instanceID uint32, guid uint
 	return false
 }
 
+// serverUnitAuraEffectAmount is the amount twin of serverUnitHasAuraFromCaster:
+// the applied amount of guid's spellID effect effIndex from casterGUID,
+// falling back to the DBC base (AuraEffect ctor default,
+// SpellAuraEffects.cpp:386) when the stored amount is zero. Player targets
+// read the loaded-auras snapshot; creature targets read the live
+// creature-aura record.
+func (s *Server) serverUnitAuraEffectAmount(mapID, instanceID uint32, guid uint64, spellID uint32, effIndex int, casterGUID uint64) (int32, bool) {
+	if s == nil || guid == 0 || spellID == 0 || effIndex < 0 {
+		return 0, false
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		return ts.auraEffectAmountFromCaster(spellID, effIndex, casterGUID)
+	}
+	if tm := s.findCreatureMotion(mapID, instanceID, guid); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		defer s.auraMu.Unlock()
+		aura := s.activeCreatureAuras[key][spellID]
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			return 0, false
+		}
+		if effIndex >= len(aura.Amounts) {
+			return 0, false
+		}
+		amount := aura.Amounts[effIndex]
+		if amount == 0 {
+			if dotSpell, found, err := s.Data.Spell(spellID); err == nil && found && effIndex < len(dotSpell.Effects) {
+				amount = dotSpell.Effects[effIndex].BasePoints
+			}
+		}
+		return amount, true
+	}
+	return 0, false
+}
+
+// sealOfVengeanceDoTStacks mirrors the aura lookup in
+// spell_pal_seal_of_vengeance::HandleSeal (spell_paladin.cpp:2202-2210): the
+// target's live SPELL_AURA_PERIODIC_DAMAGE effect whose spell is
+// paladin-family with flags[1] & 0x800 (Holy Vengeance 31803 / Blood
+// Corruption 53742), applied by casterGUID. Returns the stack count (a zero
+// stored count reads as one, the codebase convention) and the spell's
+// StackAmount, or ok=false when the target carries no such DoT.
+func (s *Server) sealOfVengeanceDoTStacks(mapID, instanceID uint32, targetGUID, casterGUID uint64) (stacks, maxStacks uint32, ok bool) {
+	if s == nil || targetGUID == 0 || s.Data == nil {
+		return 0, 0, false
+	}
+	var auras []*activeAura
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		auras = ts.loadedAuras()
+	} else if tm := s.findCreatureMotion(mapID, instanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.auraMu.Unlock()
+	} else {
+		return 0, 0, false
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			continue
+		}
+		dotSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found || dotSpell.SpellFamilyName != spellFamilyPaladin || len(dotSpell.SpellFamilyFlags) < 2 || dotSpell.SpellFamilyFlags[1]&0x800 == 0 {
+			continue
+		}
+		hasPeriodicDamage := false
+		for index, eff := range dotSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if eff.Aura == spellAuraPeriodicDamage {
+				hasPeriodicDamage = true
+				break
+			}
+		}
+		if !hasPeriodicDamage || dotSpell.StackAmount == 0 {
+			continue
+		}
+		stacks = uint32(aura.StackCount)
+		if stacks == 0 {
+			stacks = 1
+		}
+		return stacks, dotSpell.StackAmount, true
+	}
+	return 0, 0, false
+}
+
 // unitHasAuraFromCaster is the Go twin of Unit::HasAura(spellId,
 // casterGUID) (Unit.cpp): whether guid carries spellID from
 // casterGUID. Player targets read the loaded-auras snapshot
@@ -20861,6 +20950,96 @@ func (s *session) auraEffectAmount(spellID uint32, effIndex int) (int32, bool) {
 		return amount, true
 	}
 	return 0, false
+}
+
+// auraEffectAmountFromCaster is the caster-filtered twin of auraEffectAmount:
+// the applied amount of spellID's effIndex from casterGUID, falling back to
+// the DBC base (AuraEffect ctor default, SpellAuraEffects.cpp:386) when the
+// stored amount is zero.
+func (s *session) auraEffectAmountFromCaster(spellID uint32, effIndex int, casterGUID uint64) (int32, bool) {
+	if s.server == nil || s.server.Data == nil || effIndex < 0 {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.SpellID != spellID || aura.CasterGUID != casterGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found || effIndex >= len(aura.Amounts) || effIndex >= len(auraSpell.Effects) {
+			continue
+		}
+		if aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		amount := aura.Amounts[effIndex]
+		if amount == 0 {
+			amount = auraSpell.Effects[effIndex].BasePoints
+		}
+		return amount, true
+	}
+	return 0, false
+}
+
+// auraEffectAmountByFamilyIcon mirrors the family+icon leg of
+// Unit::GetAuraEffect (Unit.cpp): the first live effect of the given aura
+// type whose spell matches family and icon at effIndex. Returns the applied
+// amount, falling back to the DBC base (SpellAuraEffects.cpp:386).
+func (s *session) auraEffectAmountByFamilyIcon(auraType uint32, family uint32, iconID uint32, effIndex int) (int32, bool) {
+	if s.server == nil || s.server.Data == nil || effIndex < 0 {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || effIndex >= len(auraSpell.Effects) {
+			continue
+		}
+		if auraSpell.SpellFamilyName != family || auraSpell.SpellIconID != iconID {
+			continue
+		}
+		if auraSpell.Effects[effIndex].Aura != auraType {
+			continue
+		}
+		amount := int32(0)
+		if effIndex < len(aura.Amounts) {
+			amount = aura.Amounts[effIndex]
+		}
+		if amount == 0 {
+			amount = auraSpell.Effects[effIndex].BasePoints
+		}
+		return amount, true
+	}
+	return 0, false
+}
+
+// sacredShieldCalcBonus mirrors spell_pal_sacred_shield::CalculateAmount
+// (spell_paladin.cpp:1991-2015): the DoEffectCalcAmount leg on EFFECT_0
+// SPELL_AURA_SCHOOL_ABSORB. bonus is 75% of the caster's
+// SpellBaseHealingBonusDone(school), folded through ApplyEffectModifiers
+// (SPELLMOD_ALL_EFFECTS then the EFFECT_0 op) and the spellpower coefficient
+// level penalty; dampenPct/iccPct are the AddPct folds applied to the running
+// total afterwards (arena dampening 74410 EFFECT_0, else battleground
+// dampening 74411; Strength of Wrynn icon 1704, else Hellscream's Warsong
+// icon 937, MOD_HEALING_DONE_PERCENT EFFECT_2). The caller adds bonus to the
+// rolled base and folds the pcts in order.
+func (s *session) sacredShieldCalcBonus(spell wotlk.Spell, casterLevel uint32) (bonus, dampenPct, iccPct int32) {
+	bonus = int32(int64(s.spellBaseHealingBonusDone(uint32(spell.SchoolMask))) * 75 / 100)
+	bonus = s.applySpellMod(spell, spellModAllEffects, bonus)
+	bonus = s.applySpellMod(spell, spellModEffect1, bonus)
+	bonus = int32(float64(bonus) * spellCoefficientLevelFactor(spell, casterLevel))
+	if amt, ok := s.auraEffectAmount(74410, 0); ok {
+		dampenPct = amt
+	} else if amt, ok := s.auraEffectAmount(74411, 0); ok {
+		dampenPct = amt
+	}
+	if amt, ok := s.auraEffectAmountByFamilyIcon(auraModHealingDonePercent, spellFamilyGeneric, 1704, 2); ok {
+		iccPct = amt
+	} else if amt, ok := s.auraEffectAmountByFamilyIcon(auraModHealingDonePercent, spellFamilyGeneric, 937, 2); ok {
+		iccPct = amt
+	}
+	return bonus, dampenPct, iccPct
 }
 
 // dummyAuraAmountByIcon mirrors Unit::GetDummyAuraEffect(family, icon, 0): the
@@ -35101,6 +35280,20 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 		}
 	}
 
+	// spell_pal_sacred_shield::CalculateAmount (spell_paladin.cpp:1991-2015):
+	// the DoEffectCalcAmount leg on EFFECT_0 SPELL_AURA_SCHOOL_ABSORB.
+	// Computed before castMu is taken — the bonus fold locks the caster's
+	// castMu itself (the charge fold above follows the same pattern). A
+	// creature caster has no Go healing-bonus model, so the leg only fires
+	// on a self-cast by the session player; otherwise the DBC base stands.
+	var sacredShieldBonus, sacredShieldDampen, sacredShieldICC int32
+	sacredShieldCalc := false
+	if spellID == 58597 && casterGUID == s.playerGUID && s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found && len(sp.Effects) > 0 && sp.Effects[0].Aura == SpellAuraSchoolAbsorb {
+			sacredShieldBonus, sacredShieldDampen, sacredShieldICC = s.sacredShieldCalcBonus(sp, uint32(casterLevel))
+			sacredShieldCalc = true
+		}
+	}
 	s.castMu.Lock()
 	if s.activeAuras == nil {
 		s.activeAuras = make(map[uint32]*activeAura)
@@ -35193,6 +35386,13 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 							}
 							amounts[index] -= glyphAmt
 						}
+					}
+					if sacredShieldCalc && index == 0 {
+						total := rolled + sacredShieldBonus
+						total += total * sacredShieldDampen / 100
+						total += total * sacredShieldICC / 100
+						amounts[index] = total
+						effectAmount = uint32(total)
 					}
 					baseAmounts[index] = effect.BasePoints
 					if auraEffectCanBeRecalculated(effect.Aura) {
@@ -38417,6 +38617,20 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if spell.ID == 1038 && effIndex == 1 && casterGUID == targetGUID {
 			if glyphAmt, ok := targetSess.auraEffectAmount(63225, 0); ok {
 				amount = uint32(int32(amount) - glyphAmt)
+			}
+		}
+		if spell.ID == 58597 && effIndex == 0 && eff.Aura == SpellAuraSchoolAbsorb {
+			// spell_pal_sacred_shield::CalculateAmount (spell_paladin.cpp:1991-2015):
+			// the DoEffectCalcAmount leg on EFFECT_0 — s is the caster session
+			// here, so the caster's bonuses fold into the applied amount. A
+			// creature or otherwise non-player caster has no Go healing-bonus
+			// model, so the DBC base stands there.
+			if s.player != nil && casterGUID == s.playerGUID {
+				bonus, dampenPct, iccPct := s.sacredShieldCalcBonus(spell, uint32(s.player.Level))
+				total := int32(amount) + bonus
+				total += total * dampenPct / 100
+				total += total * iccPct / 100
+				amount = uint32(total)
 			}
 		}
 

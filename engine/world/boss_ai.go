@@ -10820,6 +10820,95 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: healSpellID, casterGUID: ev.actorGUID, targetGUID: beaconTarget, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
 				continue
 			}
+			if auraSpell.ID == 53601 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_sacred_shield_dummy::HandleProc
+				// (spell_paladin.cpp:2049-2066): the creature-side twin
+				// of the procs.go leg — the caster casts Sacred Shield
+				// (58597) on the action target with the triggering
+				// aura; cooldown is the effect amount in seconds,
+				// overridden by the T8 Holy 4P bonus (64895) EFFECT_0
+				// amount on the caster, tracked on the per-aura
+				// ProcCooldownUntil (the C++ _cooldownEnd member).
+				// DORMANT until Spell.dbc ships the 53601 proc entry.
+				casterGUID := aura.CasterGUID
+				if casterGUID == 0 {
+					continue
+				}
+				cooldown := time.Duration(scriptProcEffAmount(aura, i)) * time.Second
+				if amt, ok := s.serverUnitAuraEffectAmount(m.Map, m.InstanceID, casterGUID, 64895, 0, casterGUID); ok {
+					cooldown = time.Duration(amt) * time.Second
+				}
+				aura.ProcCooldownUntil = time.Now().Add(cooldown)
+				if actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID); actionTarget != 0 {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 58597, casterGUID: casterGUID, targetGUID: actionTarget})
+				}
+				continue
+			}
+			if (auraSpell.ID == 31801 || auraSpell.ID == 53736) && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_seal_of_vengeance::HandleApplyDoT +
+				// HandleSeal (spell_paladin.cpp:2180-2231): the
+				// creature-side twin of the procs.go legs — the seal
+				// DoT (31803/53742) on auto-attacks or Hammer of the
+				// Righteous (icon 3023), then the stack-scaled damage
+				// (42463/53739) when the target carries the live seal
+				// DoT from the actor, below max stacks only on
+				// spell-melee-damage-class events. DORMANT until
+				// Spell.dbc ships the 31801/53736 proc entries.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				dotSpellID := uint32(31803)
+				damageSpellID := uint32(42463)
+				if auraSpell.ID == 53736 {
+					dotSpellID = 53742
+					damageSpellID = 53739
+				}
+				if ev.typeMask&procFlagDoneMeleeAutoAttack != 0 || (ev.eventSpell != nil && ev.eventSpell.SpellIconID == 3023) {
+					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: dotSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+				}
+				if stacks, maxStacks, ok := s.sealOfVengeanceDoTStacks(m.Map, m.InstanceID, triggerTargetGUID, ev.actorGUID); ok {
+					if stacks >= maxStacks || ev.typeMask&procFlagDoneSpellMeleeDmgClass != 0 {
+						if dmgSpell, found, err := s.Data.Spell(damageSpellID); err == nil && found && len(dmgSpell.Effects) > 0 {
+							amount := int64(dmgSpell.Effects[0].CalcValue()) * int64(stacks) / int64(maxStacks)
+							if amount < 0 {
+								amount = 0
+							}
+							s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: damageSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+						}
+					}
+				}
+				continue
+			}
+			if auraSpell.ID == 28789 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_t3_6p_bonus::HandleProc
+				// (spell_paladin.cpp:2380-2423): the creature-side twin
+				// of the procs.go leg — the actor casts the class-bonus
+				// spell (28795/28793/28791/28790) on the proc target by
+				// its class. DORMANT until Spell.dbc ships the 28789
+				// proc entry.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				classID, ok := s.procTargetClass(m.Map, m.InstanceID, triggerTargetGUID)
+				if !ok {
+					continue
+				}
+				var bonusSpellID uint32
+				switch classID {
+				case 2, 5, 7, 11: // CLASS_PALADIN, CLASS_PRIEST, CLASS_SHAMAN, CLASS_DRUID
+					bonusSpellID = 28795
+				case 8, 9: // CLASS_MAGE, CLASS_WARLOCK
+					bonusSpellID = 28793
+				case 3, 4: // CLASS_HUNTER, CLASS_ROGUE
+					bonusSpellID = 28791
+				case 1: // CLASS_WARRIOR
+					bonusSpellID = 28790
+				default:
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: bonusSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)

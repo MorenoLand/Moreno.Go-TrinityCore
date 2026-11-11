@@ -180,3 +180,21 @@ func (s *session) spellHealingOfAttackPowerFold(schoolMask uint32) int32 {
 	}
 	return total
 }
+
+// spellBaseHealingBonusDone mirrors Unit::SpellBaseHealingBonusDone
+// (Unit.cpp:7764-7795): the caster's own SPELL_AURA_MOD_HEALING_DONE (135)
+// auras gated by school, plus spellpower and the of-stat (175) /
+// of-attack-power (238) percent legs. No victim fold — that is
+// SpellHealingBonusDone, not the base.
+func (s *session) spellBaseHealingBonusDone(schoolMask uint32) int32 {
+	if s == nil {
+		return 0
+	}
+	total := s.healingDoneAuraModifier(schoolMask)
+	if s.player != nil {
+		total += int32(s.player.SpellPower)
+		total += s.spellHealingOfStatFold()
+		total += s.spellHealingOfAttackPowerFold(schoolMask)
+	}
+	return total
+}

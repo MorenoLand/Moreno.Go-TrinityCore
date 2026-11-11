@@ -1273,6 +1273,24 @@ func (s *Server) procTargetVitals(mapID, instanceID uint32, guid uint64) (maxHea
 	return 0, 0, 0, false
 }
 
+// procTargetClass resolves a proc target's class (Unit::GetClass,
+// Unit.h:850: the UNIT_FIELD_BYTES_0 class byte): the player's class
+// for player targets, the template unit_class (Creature.cpp:494) for
+// creatures. A zero GUID or an unresolvable unit reads not-ok, and the
+// caller skips the leg like the C++ default case.
+func (s *Server) procTargetClass(mapID, instanceID uint32, guid uint64) (uint8, bool) {
+	if s == nil || guid == 0 {
+		return 0, false
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		return sess.player.Class, true
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		return uint8(m.UnitClass), true
+	}
+	return 0, false
+}
+
 // procActionTargetGUID mirrors ProcEventInfo::GetActionTarget
 // (Unit.h:473): the actor-side event's action target is the other unit
 // (Unit.cpp:10388: actor=this, actionTarget=other, procTarget=other),
@@ -1287,72 +1305,6 @@ func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint6
 		return triggerTargetGUID
 	}
 	return holderGUID
-}
-
-// procEventProcTargetGUID mirrors ProcEventInfo::GetProcTarget
-// (Unit.cpp:10388/10412): on the actor-side event the proc target is the
-// other unit (triggerTargetGUID); on the target-side event it is the actor
-// (the attacker). The Judgement of Light/Wisdom legs read their proc
-// caster off it (spell_paladin.cpp:1616/1657).
-func procEventProcTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint64 {
-	if actorGUID != 0 && actorGUID == holderGUID {
-		return triggerTargetGUID
-	}
-	return actorGUID
-}
-
-// procUnitMaxHealth reads a unit's maximum health the way
-// Unit::CountPctFromMaxHealth needs it: player sessions carry it on the
-// state, creature motions on the motion. Pets and unloaded units read 0
-// (the Judgement of Light leg then casts with a zero base point —
-// flagged there).
-func (s *Server) procUnitMaxHealth(mapID, instanceID uint32, guid uint64) uint32 {
-	if s == nil || guid == 0 {
-		return 0
-	}
-	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
-		return sess.player.MaxHealth
-	}
-	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
-		return m.MaxHealth
-	}
-	return 0
-}
-
-// procUnitPowerType reads a unit's current power type:
-// Player::GetPowerType via playerPowerType (class + shapeshift +
-// override) for players, the motion's PowerType for creatures. The
-// second return is false when the unit cannot be resolved (pets and
-// unloaded units) — the Judgement of Wisdom CheckProc then fails
-// closed.
-func (s *Server) procUnitPowerType(mapID, instanceID uint32, guid uint64) (uint8, bool) {
-	if s == nil || guid == 0 {
-		return 0, false
-	}
-	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
-		return playerPowerType(sess.player), true
-	}
-	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
-		return uint8(m.PowerType), true
-	}
-	return 0, false
-}
-
-// procUnitBaseMana reads Unit::GetCreateMana (Unit.h:1353:
-// UNIT_FIELD_BASE_MANA): the player's BaseMana (MaxPowers[0] fallback,
-// the calculateSpellPowerCost precedent, spells.go:1976) for players,
-// 0 for creatures, which carry no base mana.
-func (s *Server) procUnitBaseMana(mapID, instanceID uint32, guid uint64) uint32 {
-	if s == nil || guid == 0 {
-		return 0
-	}
-	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
-		if sess.player.BaseMana != 0 {
-			return sess.player.BaseMana
-		}
-		return sess.player.MaxPowers[0]
-	}
-	return 0
 }
 
 // scriptAuraProcCast resolves the script arm for a dummy proc effect.
@@ -4396,6 +4348,127 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraCast = true
 				s.triggeredByAuraSpell = auraSpell.ID
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: healSpellID, casterGUID: ev.actorGUID, targetGUID: beaconTarget, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 53601 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_sacred_shield_dummy::HandleProc
+				// (spell_paladin.cpp:2049-2066): PreventDefaultAction;
+				// the caster (the paladin) casts Sacred Shield (58597)
+				// on the action target (the healed unit) with the
+				// triggering aura. The cooldown is the effect amount
+				// in seconds, overridden by the T8 Holy 4P bonus
+				// (64895) EFFECT_0 amount on the caster; the per-aura
+				// ProcCooldownUntil is the Go twin of the C++
+				// _cooldownEnd member (the loop gate above already
+				// skips while it is in the future). No Lua ev6 twin:
+				// ev6 carries no cooldown state. DORMANT until
+				// Spell.dbc ships the 53601 proc entry.
+				casterGUID := aura.CasterGUID
+				if casterGUID == 0 {
+					continue
+				}
+				cooldown := time.Duration(scriptProcEffAmount(aura, i)) * time.Second
+				if amt, ok := s.auraEffectAmountFromCaster(64895, 0, casterGUID); ok {
+					cooldown = time.Duration(amt) * time.Second
+				}
+				aura.ProcCooldownUntil = time.Now().Add(cooldown)
+				if actionTarget := procActionTargetGUID(ev.actorGUID, s.playerGUID, triggerTargetGUID); actionTarget != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 58597, casterGUID: casterGUID, targetGUID: actionTarget})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				continue
+			}
+			if (auraSpell.ID == 31801 || auraSpell.ID == 53736) && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_seal_of_vengeance::HandleApplyDoT +
+				// HandleSeal (spell_paladin.cpp:2180-2231): both
+				// OnEffectProc legs on EFFECT_0 DUMMY, each with
+				// PreventDefaultAction, so they run independently on
+				// the same proc event. HandleApplyDoT applies the seal
+				// DoT (Holy Vengeance 31803 / Blood Corruption 53742)
+				// on the proc target: only auto-attacks, or Hammer of
+				// the Righteous (icon 3023) otherwise. HandleSeal deals
+				// the stack-scaled damage (Seal of Vengeance 42463 /
+				// Seal of Corruption 53739): it needs the target's live
+				// periodic-damage seal DoT from the actor, and below max
+				// stacks it only fires on spell-melee-damage-class
+				// events; the amount is the DBC EFFECT_0 CalcValue
+				// scaled by stacks/maxStacks. TRIGGERED_DONT_RESET_
+				// PERIODIC_TIMER has no twin in the Go script-proc cast
+				// path. No Lua ev6 twin: ev6 carries no stack counts
+				// or type masks. DORMANT until Spell.dbc ships the
+				// 31801/53736 proc entries.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				dotSpellID := uint32(31803)
+				damageSpellID := uint32(42463)
+				if auraSpell.ID == 53736 {
+					dotSpellID = 53742
+					damageSpellID = 53739
+				}
+				if ev.typeMask&procFlagDoneMeleeAutoAttack != 0 || (ev.eventSpell != nil && ev.eventSpell.SpellIconID == 3023) {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: dotSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
+				if stacks, maxStacks, ok := s.server.sealOfVengeanceDoTStacks(s.player.Map, s.player.InstanceID, triggerTargetGUID, ev.actorGUID); ok {
+					if stacks >= maxStacks || ev.typeMask&procFlagDoneSpellMeleeDmgClass != 0 {
+						if dmgSpell, found, err := s.server.Data.Spell(damageSpellID); err == nil && found && len(dmgSpell.Effects) > 0 {
+							amount := int64(dmgSpell.Effects[0].CalcValue()) * int64(stacks) / int64(maxStacks)
+							if amount < 0 {
+								amount = 0
+							}
+							s.triggeredByAuraCast = true
+							s.triggeredByAuraSpell = auraSpell.ID
+							s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: damageSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+							s.triggeredByAuraCast = false
+							s.triggeredByAuraSpell = 0
+						}
+					}
+				}
+				continue
+			}
+			if auraSpell.ID == 28789 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_t3_6p_bonus::HandleProc
+				// (spell_paladin.cpp:2380-2423): PreventDefaultAction;
+				// the actor casts the class-bonus spell on the proc
+				// target by its class: MP5 (28795) for paladin /
+				// priest / shaman / druid, spell power (28793) for
+				// mage / warlock, attack power (28791) for hunter /
+				// rogue, armor (28790) for warrior; any other class
+				// casts nothing. No Lua ev6 twin: ev6 carries no
+				// target class. DORMANT until Spell.dbc ships the
+				// 28789 proc entry.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				classID, ok := s.server.procTargetClass(s.player.Map, s.player.InstanceID, triggerTargetGUID)
+				if !ok {
+					continue
+				}
+				var bonusSpellID uint32
+				switch classID {
+				case 2, 5, 7, 11: // CLASS_PALADIN, CLASS_PRIEST, CLASS_SHAMAN, CLASS_DRUID
+					bonusSpellID = 28795
+				case 8, 9: // CLASS_MAGE, CLASS_WARLOCK
+					bonusSpellID = 28793
+				case 3, 4: // CLASS_HUNTER, CLASS_ROGUE
+					bonusSpellID = 28791
+				case 1: // CLASS_WARRIOR
+					bonusSpellID = 28790
+				default:
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: bonusSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
 				continue
