@@ -72,6 +72,14 @@
 --   the OnObjectAreaTargetSelect fire site is creature-path only, no
 --   player-path twin. Rime (49188), scent_of_blood_trigger (49004)
 --   and sudden_doom (49018) are PORTED below (ev6, ticks 568/570/571).
+--   Vendetta (49015) is PORTED below (ev6, tick 573). Threat of
+--   Thassarian (65661, tick 572) stays out — the ev6 args carry no
+--   proc spell id/family flags (dancing_rune_weapon precedent,
+--   procs.go procAuraTriggerLoopFiltered), no GetSpellWithRank
+--   bridge, and the offhand gate is only approximable via
+--   GetEquippedItemBySlot(16). Wandering Plague (49217, tick 574)
+--   stays out — no GetUnitCriticalChanceAgainst bridge anywhere in
+--   the engine; the crit-chance roll is the whole gate.
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
 --   path has no OnEffectHitTarget site on the normal cast path, so a
 --   RegisterSpellEvent ev5 handler would never fire on a client cast):
@@ -484,3 +492,25 @@ local function suddenDoomProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_DK_SUDDEN_DOOM, 6, suddenDoomProc)
+
+local SPELL_DK_VENDETTA = 49015 -- spell_dk.cpp:2590
+local SPELL_DK_VENDETTA_HEAL = 50181 -- spell_dk.cpp:92
+
+-- C++ spell_dk_vendetta::HandleProc (spell_dk.cpp:2605-2612):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction first
+-- (the ev6 true return on every path), then the actor self-casts the
+-- heal 50181 with BP0 = CountPctFromMaxHealth(this aura's EFFECT_0
+-- amount), triggered via the aurEff overload. The nil CastCustomSpell
+-- target falls back to the caster (lua_player.go CastCustomSpell).
+-- DORMANT until Spell.dbc ships the 49015 proc entry. Rank 1 only —
+-- higher-rank IDs are not in the file, never guessed.
+local function vendettaProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or aura == nil then
+        return true
+    end
+    local bp0 = actor:CountPctFromMaxHealth(aura:GetAmount())
+    actor:CastCustomSpell(nil, SPELL_DK_VENDETTA_HEAL, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_VENDETTA, 6, vendettaProc)
