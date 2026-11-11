@@ -64,7 +64,7 @@
 -- gap (aran precedent) — documented-only; the ResetThreat(victim)
 -- half IS ported via the 1s meleerange poll (see meleeRangeTick).
 -- spell_murmur_sonic_boom (33923/38796 → CastSpell(nil, 33666)
--- triggered) PORTED below (RegisterSpellEvent ev5, both cast ids);
+-- triggered) PORTED below (RegisterSpellEvent ev4, both cast ids);
 -- spell_murmur_sonic_boom_effect (33666 damage = 80% of target max
 -- health — PORTED 2026-11-07 (tick 372) via the pre-damage OnHit
 -- dispatch in engine/world/spell_onhit.go),
@@ -394,10 +394,13 @@ RegisterSpellEvent(SPELL_THUNDERING_STORM, 7, thunderingStormFilter)
 -- cast is 33666 for both the normal (33923) and heroic (38796) cast
 -- ids; 38795 (heroic effect) is never named in C++ outside the class
 -- header comment — its damage leg is already covered by the Go
--- spell_onhit.go 33666/38795 case. ev5 fires once per effect per live
--- hit target, matching C++ OnEffectHit; the effectIndex==0 gate is
--- the skeram precedent. DORMANT until Spell.dbc ships 33923/38796.
-local function sonicBoomHit(event, spell, target, effectIndex)
+-- spell_onhit.go 33666/38795 case. ev4 = OnEffectHit
+-- (runtime.go:604; lua_spell.go:588-594): fires once per cast per
+-- effect, matching C++ OnEffectHit (Spell.cpp:3722-3730); the pushed
+-- ev5 registration multi-cast 33666 once per hit target of 33923
+-- and never fired on a targetless dummy hit. DORMANT until Spell.dbc
+-- ships 33923/38796.
+local function sonicBoomHit(event, spell, effectIndex)
     if effectIndex ~= 0 then
         return
     end
@@ -408,5 +411,5 @@ local function sonicBoomHit(event, spell, target, effectIndex)
     caster:CastSpell(nil, SPELL_SONIC_BOOM_EFFECT, true)
 end
 
-RegisterSpellEvent(SPELL_SONIC_BOOM_CAST, 5, sonicBoomHit)
-RegisterSpellEvent(SPELL_SONIC_BOOM_HEROIC_CAST, 5, sonicBoomHit)
+RegisterSpellEvent(SPELL_SONIC_BOOM_CAST, 4, sonicBoomHit)
+RegisterSpellEvent(SPELL_SONIC_BOOM_HEROIC_CAST, 4, sonicBoomHit)

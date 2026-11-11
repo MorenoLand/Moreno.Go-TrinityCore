@@ -284,10 +284,10 @@ RegisterCreatureEvent(ENTRY_TALLHORN_STAG, 23, tallhornStagReset)
 -- removed the first time it reaches max). GetSpellStackAmount reads
 -- DBC field 49 and is 0 until Spell.dbc ships 53094, so the arm is
 -- dormant-but-correct until then (choking-vines convention).
--- KNOWN DELTA: C++ casts 53095 triggered; player:CastSpell
--- ignores the triggered flag (lua_player.go:2577 ->
--- castSpellDirect), so the call lands non-triggered —
--- pre-existing bridge gap, same as all prior player-target ports.
+-- No delta on the triggered flag: player:CastSpell funnels through
+-- castSpellDirect, documented "Mirrors TrinityCore Unit::CastSpell
+-- (Spell.cpp: triggered = true)" (spells.go:24323-24327); the `true`
+-- arg is redundant, not dropped.
 local SPELL_INFECTED_WORGEN_BITE = 53094
 local SPELL_WORGENS_CALL = 53095
 
