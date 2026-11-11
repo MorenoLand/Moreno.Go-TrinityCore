@@ -3286,6 +3286,14 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 		}
 	}
+	// spell_warl_seduction::HandleDummy (spell_warlock.cpp:1125-1135):
+	// the EFFECT_0 APPLY_AURA OnEffectLaunchTarget arm, placed in the
+	// LAUNCH pre-pass ahead of the HIT arms like the C++ launch phase.
+	// Gated on spellKnown like the tail. DORMANT until Spell.dbc ships
+	// the 6358 record.
+	if spellKnown && spellID == 6358 && len(spellInfo.Effects) > 0 && spellInfo.Effects[0].Effect == spellEffectApplyAura {
+		s.creatureEffectSeduction(ctx, m, spellInfo, spellInfo.Effects[0], bossConeEffectTargetsFiltered(0, spellInfo.Effects[0], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+	}
 	// Spell::PreprocessSpellHit friendly-assist arms (Spell.cpp:2752-2765)
 	// for a creature caster: per hit target ahead of the HIT arms below
 	// (the launch pre-passes above already ran, matching C++'s
@@ -4436,6 +4444,50 @@ func (s *Server) creatureEffectInstaKill(ctx context.Context, m *creatureMotion,
 			continue
 		}
 		s.creatureInstaKillVictim(ctx, m, guid)
+	}
+}
+
+// creatureEffectSeduction mirrors the DoT-strip leg of
+// spell_warl_seduction::HandleDummy (spell_warlock.cpp:1125-1135): the
+// EFFECT_0 APPLY_AURA OnEffectLaunchTarget arm — when the caster's owner
+// carries Glyph of Succubus (56250), the hit unit loses every
+// periodic-damage aura except Shadow Word: Death (32409), plus every
+// periodic-damage-percent and periodic-leech aura. The strip is the
+// glyph-of-polymorph twin (procs.go, 56375). A caster with no owner (a
+// wild creature) or an owner without the glyph strips nothing; a player
+// caster has no owner in C++ either, so there is no player-path arm.
+// Missed, evaded, immune and bounced targets skip, and a landed reflect
+// retargets to the caster, like the interrupt arm below.
+func (s *Server) creatureEffectSeduction(ctx context.Context, m *creatureMotion, spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+	if s == nil || m == nil {
+		return
+	}
+	owner := s.creatureCasterOwnerSession(m)
+	if owner == nil || !owner.hasAura(56250) {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 || evaded[guid] || immune[guid] || missed[guid] != protocol.SpellMissNone {
+			continue
+		}
+		if status, isReflected := reflected[guid]; isReflected {
+			if status != protocol.SpellMissNone {
+				continue
+			}
+			guid = m.GUID
+		}
+		if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			ts.removeAurasByTypeExcept(spellAuraPeriodicDamage, 32409)
+			ts.removeAurasByType(spellAuraPeriodicDamagePercent)
+			ts.removeAurasByType(spellAuraPeriodicLeech)
+			continue
+		}
+		if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
+			key := creatureAuraKeyForMotion(tm)
+			s.removeCreatureAurasByTypeExcept(key, spellAuraPeriodicDamage, 32409)
+			s.removeCreatureAurasByType(key, spellAuraPeriodicDamagePercent)
+			s.removeCreatureAurasByType(key, spellAuraPeriodicLeech)
+		}
 	}
 }
 
@@ -11254,6 +11306,63 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 					amount = 0
 				}
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 70772, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 63108 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_warl_siphon_life::OnProc + CheckProc
+				// (spell_warlock.cpp:1353-1375): the creature-side twin of
+				// the procs.go leg — on a damaging proc the holder casts
+				// Siphon Life Heal (63106) on itself with BP0 = pct of
+				// the damage by the effect amount, triggered, with the
+				// aura effect. LITERAL TEXT: C++ casts
+				// GetTarget()->CastSpell(GetTarget(), ...) and reads the
+				// Glyph of Siphon Life (56216, EFFECT_0) on GetTarget(),
+				// so the glyph leg can never fire (56216 lives on the
+				// warlock, not the DoT victim) and is omitted here — no
+				// creature spell-ID aura-amount reader exists either
+				// (only type-based readers). No Lua ev6 twin.
+				// DORMANT until Spell.dbc ships the 63108 proc entry.
+				if ev.damage == 0 {
+					continue
+				}
+				amount := int64(ev.damage) * int64(scriptProcEffAmount(aura, i)) / 100
+				if amount < 0 {
+					amount = 0
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 63106, casterGUID: m.GUID, targetGUID: m.GUID, bp0: uint32(amount), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 39367 && i == 1 && eff.Aura == spellAuraDummy {
+				// spell_warl_seed_of_corruption_generic::HandleProc
+				// (spell_warlock.cpp:1260-1283): the creature-side twin of
+				// the procs.go leg — the seeded creature counts the damage
+				// down against the EFFECT_1 amount; at zero the aura is
+				// removed and the caster casts Seed of Corruption (32865)
+				// on the ACTION TARGET (the holder on a taken event,
+				// Unit.cpp:10412), triggered, with the aura effect. The
+				// amount write rides auraMu like the charge consume above
+				// (the 49592 precedent). Lua-off fallback twin of the
+				// (absent) ev6 handler: the Lua hook vetoes first when
+				// loaded, so this never double-fires. DORMANT until
+				// Spell.dbc ships the 39367 proc entry.
+				if ev.damage == 0 || i >= len(aura.Amounts) {
+					continue
+				}
+				s.auraMu.Lock()
+				amount := aura.Amounts[i] - int32(ev.damage)
+				if amount > 0 {
+					aura.Amounts[i] = amount
+				}
+				s.auraMu.Unlock()
+				if amount > 0 {
+					continue
+				}
+				s.removeCreatureAura(key, auraSpell.ID)
+				actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID)
+				if aura.CasterGUID == 0 || actionTarget == 0 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 32865, casterGUID: aura.CasterGUID, targetGUID: actionTarget})
 				continue
 			}
 			if eff.Aura == spellAuraDummy {

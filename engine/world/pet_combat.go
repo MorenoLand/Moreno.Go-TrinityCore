@@ -5102,6 +5102,16 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			s.server.creatureEffectCharge(ctx, motion, hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
 		case spellEffectChargeDest:
 			s.server.creatureEffectChargeDest(ctx, motion, hasDest, dx, dy, dz)
+		case spellEffectApplyAura:
+			// spell_warl_seduction::HandleDummy
+			// (spell_warlock.cpp:1125-1135): the EFFECT_0 APPLY_AURA
+			// OnEffectLaunchTarget arm — the succubus is a pet, so its
+			// casts ride this twin, not castCreatureSpellInternal; the
+			// creature-path twin sits in the boss_ai.go LAUNCH
+			// pre-pass. DORMANT until Spell.dbc ships the 6358 record.
+			if spell.ID == 6358 && i == 0 {
+				s.server.creatureEffectSeduction(ctx, motion, spell, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+			}
 		}
 	}
 	stamp := gameTimeMS()

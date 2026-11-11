@@ -5244,6 +5244,74 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraSpell = 0
 				continue
 			}
+			if auraSpell.ID == 39367 && i == 1 && eff.Aura == spellAuraDummy {
+				// spell_warl_seed_of_corruption_generic::HandleProc
+				// (spell_warlock.cpp:1260-1283): PreventDefaultAction; a
+				// damaging proc counts the damage down against the
+				// EFFECT_1 amount — while the remainder stays positive
+				// the aura survives with the reduced amount; at zero the
+				// aura is removed and the caster casts Seed of
+				// Corruption (32865) on the ACTION TARGET — the holder
+				// on a taken event (Unit.cpp:10412: actor=attacker,
+				// actionTarget=holder, procTarget=attacker) — triggered,
+				// with the aura effect (CastSpellExtraArgs(aurEff) is
+				// TRIGGERED_FULL_MASK, SpellDefines.h:166). The
+				// zero-damage gate is the C++ null/zero-damage early
+				// return. No Lua ev6 twin: spell_warlock.lua holds no
+				// 39367 handler, and the Lua ev6 veto above would fire
+				// first if one ever registers. DORMANT until Spell.dbc
+				// ships the 39367 proc entry.
+				if ev.damage == 0 || i >= len(aura.Amounts) {
+					continue
+				}
+				amount := aura.Amounts[i] - int32(ev.damage)
+				if amount > 0 {
+					aura.Amounts[i] = amount
+					continue
+				}
+				s.removeAura(auraSpell.ID)
+				actionTarget := procActionTargetGUID(ev.actorGUID, s.playerGUID, triggerTargetGUID)
+				if aura.CasterGUID == 0 || actionTarget == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 32865, casterGUID: aura.CasterGUID, targetGUID: actionTarget})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 63108 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_warl_siphon_life::OnProc + CheckProc
+				// (spell_warlock.cpp:1353-1375): PreventDefaultAction; on
+				// a damaging proc with the holder alive, the holder
+				// casts Siphon Life Heal (63106) on itself with BP0 =
+				// pct of the damage by the effect amount, plus the Glyph
+				// of Siphon Life (56216, EFFECT_0 on the holder) pct —
+				// triggered, with the aura effect (CastSpellExtraArgs
+				// (aurEff) is TRIGGERED_FULL_MASK, SpellDefines.h:166).
+				// The zero-damage gate and the alive gate are the C++
+				// CheckProc. No Lua ev6 twin: spell_warlock.lua holds no
+				// 63108 handler, and the Lua ev6 veto above would fire
+				// first if one ever registers. DORMANT until Spell.dbc
+				// ships the 63108 proc entry.
+				if ev.damage == 0 || s.player == nil || s.player.Health == 0 {
+					continue
+				}
+				amount := int64(ev.damage) * int64(scriptProcEffAmount(aura, i)) / 100
+				if glyphAmt, ok := s.auraEffectAmount(56216, 0); ok {
+					amount += amount * int64(glyphAmt) / 100
+				}
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 63106, casterGUID: s.playerGUID, targetGUID: s.playerGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)

@@ -16589,6 +16589,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							s.castSpellDirect(effCtx, uint32(value), s.playerGUID)
 						}
 					}
+					// spell_warl_soulshatter::HandleDummy
+					// (spell_warlock.cpp:1470-1478): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit unit threatened by
+					// the caster, the caster casts Soulshatter (32835) on
+					// the unit, triggered; the client-path leg, gated on
+					// a hit like the judgement-of-command arm above; the
+					// triggered-cast twin sits in the dummy funnel.
+					// DORMANT until Spell.dbc ships the 29858 record.
+					if spellID == 29858 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.soulshatterDummyEffect(effCtx, hitTargets)
+					}
 					// spell_dk_scourge_strike (spell_dk.cpp:2255-2312): the
 					// EFFECT_2 DUMMY OnEffectHitTarget arm — the
 					// multiplier is the EFFECT_2 value times the
@@ -28300,6 +28311,18 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 						if value > 0 {
 							s.castSpellDirect(ctx, uint32(value), s.playerGUID)
 						}
+					}
+					// spell_warl_soulshatter::HandleDummy
+					// (spell_warlock.cpp:1470-1478): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit unit threatened by
+					// the caster, the caster casts Soulshatter (32835) on
+					// the unit, triggered; the triggered-cast leg, gated
+					// on a miss-filtered hit like the silverbrook leg
+					// above; the client-path twin sits in
+					// finishSpellCast's dummy arm. DORMANT until
+					// Spell.dbc ships the 29858 record.
+					if spellID == 29858 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						s.soulshatterDummyEffect(ctx, effectGUIDs)
 					}
 					// spell_q12641_death_comes_from_on_high::HandleDummy
 					// (spell_quest.cpp:2338-2362): the EFFECT_0 DUMMY
@@ -53793,6 +53816,32 @@ func (s *session) refreshShadowWordPainOnTarget(ctx context.Context, targetGUID 
 				s.expireCreatureAura(key, spellID, slot)
 			})
 		}
+	}
+}
+
+// soulshatterDummyEffect mirrors
+// spell_warl_soulshatter::HandleDummy (spell_warlock.cpp:1470-1478): the
+// EFFECT_0 DUMMY OnEffectHitTarget arm — per hit unit threatened by the
+// caster, the caster casts Soulshatter (32835) on the unit, triggered.
+// The threat test is the target's ThreatManager::IsThreatenedBy(caster,
+// includeOffline=true) twin (threat.go HasThreatEntry); the caster is
+// online by construction, so the offline flag is moot. Player hit
+// targets carry no threat list in Go and never count as threatened — a
+// player caster adds no threat in C++ either, so a player target's
+// _threatenedByMe never holds one.
+func (s *session) soulshatterDummyEffect(ctx context.Context, targets []uint64) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	for _, guid := range targets {
+		if guid == 0 {
+			continue
+		}
+		tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, guid)
+		if tm == nil || !tm.ThreatMgr.HasThreatEntry(s.playerGUID) {
+			continue
+		}
+		s.castSpellDirect(ctx, 32835, guid)
 	}
 }
 
