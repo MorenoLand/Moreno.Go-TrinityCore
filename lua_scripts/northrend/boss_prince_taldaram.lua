@@ -84,8 +84,11 @@
 -- spell_prince_taldaram_conjure_flame_sphere (55931: self-cast
 -- 55895 + heroic 59511/59512) and
 -- spell_prince_taldaram_flame_sphere_summon (55895/59511/59512:
--- destination Z offset) — no SpellScript binding bridge on the Lua
--- surface (razelikh precedent) — documented-only.
+-- destination Z offset +5.5) — PORTED Go-side: the creature dest
+-- resolver carries the RelocateOffset leg
+-- (engine/world/creature_dest_targets.go;
+-- boss_prince_taldaram.cpp:496-501). No Lua SpellScript binding
+-- exists for OnDestinationTargetSelect (razelikh precedent).
 -- NOTE: the ICC Blood Prince Council's boss_prince_taldaram_icc is a
 -- distinct registered script (boss_blood_prince_council.cpp, call 1349);
 -- this lua covers only the Ahn'kahet boss_prince_taldaram registration.

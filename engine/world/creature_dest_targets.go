@@ -434,6 +434,18 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 			case isCasterDestTarget(targetType):
 				otherDest = true
 				x, y, z = resolveCasterDestPosition(s.Data, targetType, eff.RadiusIndex, m.Level, m.X, m.Y, m.Z, m.Orientation, combatReach, modRadius)
+				// SpellScript OnDestinationTargetSelect RelocateOffset leg
+				// (spell_prince_taldaram_flame_sphere_summon,
+				// boss_prince_taldaram.cpp:496-501): the EFFECT_0
+				// TARGET_DEST_CASTER destination rises 5.5 yards, so the
+				// flame spheres spawn above the boss. Same hardcoded-leg
+				// style as the player-path 55368/59303/12601 offsets
+				// (target_dest_targets.go); the snapshot carries it into
+				// creatureEffectSummonType.
+				if effIndex == 0 && targetType == implicitTargetDestCaster &&
+					(spell.ID == 55895 || spell.ID == 59511 || spell.ID == 59512) {
+					z += 5.5
+				}
 			case isTargetDestTarget(targetType):
 				otherDest = true
 				// C++ asserts a non-null object target here
