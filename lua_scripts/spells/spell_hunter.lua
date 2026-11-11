@@ -79,6 +79,38 @@ end
 
 RegisterAuraEvent(SPELL_HUNTER_COBRA_STRIKES_TRIGGERED, 6, cobraStrikesTriggeredProc)
 
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_cobra_strikes::HandleProc
+--   (spell_hunter.cpp:327-338): OnEffectProc, EFFECT_0
+--   SPELL_AURA_PROC_TRIGGER_SPELL. PreventDefaultAction (the true
+--   return); the holder casts the DBC trigger spell (53257, read via
+--   aura:GetTriggerSpell(0), lua_aura.go:294) on itself, triggered.
+--   The Lua cast corrects the target vs the Go default proc leg,
+--   which would cast the trigger spell on the proc target
+--   (procs.go:5505) instead of the holder self-cast C++ does.
+--   KNOWN DEVIATION: C++ passes SPELLVALUE_AURA_STACK =
+--   triggeredSpellInfo->StackAmount (53257's DBC stack count, the
+--   2-charge grant), but no Lua cast bridge carries an aura-stack
+--   mod — player:CastSpell has no stack arg and CastCustomSpell
+--   overrides base points only (lua_player.go:2934/2956). The Go
+--   cast path applies fresh auras at StackCount 0, read as 1
+--   (spells.go:23032-23037), so this port grants 1 charge where
+--   C++ grants the DBC stack count; the 53257 stack-drop handler
+--   above then consumes it.
+--   DORMANT until Spell.dbc ships the 53256 proc entry.
+local SPELL_HUNTER_COBRA_STRIKES = 53256 -- spell_hunter.cpp:313
+
+local function cobraStrikesProc(event, aura, target, actor, procTarget, damage)
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    target:CastSpell(target, triggerSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_COBRA_STRIKES, 6, cobraStrikesProc)
+
 -- NOT IN LUA: spell_hun_glyph_of_arcane_shot (56841, spell_hunter.cpp:410-467)
 -- lives in Go (procs.go): the CheckProc sting gate runs before the chance
 -- roll and the HandleProc mana-refund arm (61389, BP0 = pct of the triggering
@@ -153,6 +185,51 @@ local function glyphOfMendPetProc(event, aura, target, actor, procTarget, damage
 end
 
 RegisterAuraEvent(SPELL_HUNTER_GLYPH_OF_MEND_PET, 6, glyphOfMendPetProc)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_hunting_party::HandleProc
+--   (spell_hunter.cpp:577-580): OnEffectProc, EFFECT_0
+--   SPELL_AURA_DUMMY. PreventDefaultAction (the true return); the
+--   proc actor casts Replenishment 57669 on itself, triggered
+--   (aurEff args; the C++ nullptr target is the self-cast, the
+--   mend-pet precedent). DUMMY is a proc-trigger aura type
+--   (procs.go:1322), so ev6 can fire; DORMANT until Spell.dbc ships
+--   the 53290 proc entry.
+local SPELL_HUNTER_HUNTING_PARTY = 53290 -- spell_hunter.cpp:561
+local SPELL_REPLENISHMENT = 57669 -- spell_hunter.cpp:68
+
+local function huntingPartyProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_REPLENISHMENT, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_HUNTING_PARTY, 6, huntingPartyProc)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_improved_mend_pet::CheckProc + HandleProc
+--   (spell_hunter.cpp:609-617): DoCheckProc rolls the EFFECT_0
+--   amount as the chance (roll_chance_i, the invigoration
+--   math.random precedent); OnEffectProc, EFFECT_0 SPELL_AURA_DUMMY.
+--   PreventDefaultAction (the true return); the holder casts
+--   Improved Mend Pet 24406 on itself, triggered (aurEff args).
+--   The failed roll returns without casting — the DUMMY default leg
+--   is a no-op, so the veto is harmless either way. DORMANT until
+--   Spell.dbc ships the 19572 proc entry.
+local SPELL_HUNTER_IMPROVED_MEND_PET = 19572 -- spell_hunter.cpp:594
+local SPELL_HUNTER_IMPROVED_MEND_PET_TRIGGERED = 24406 -- spell_hunter.cpp:45
+
+local function improvedMendPetProc(event, aura, target, actor, procTarget, damage)
+    if math.random(100) > aura:GetAmount(0) then
+        return true
+    end
+    target:CastSpell(target, SPELL_HUNTER_IMPROVED_MEND_PET_TRIGGERED, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_IMPROVED_MEND_PET, 6, improvedMendPetProc)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_hun_invigoration::HandleScriptEffect
@@ -425,3 +502,69 @@ end
 
 RegisterSpellEvent(SPELL_HUNTER_CALL_OF_THE_WILD, 7, targetOnlyPetAndOwnerFilter)
 RegisterSpellEvent(SPELL_HUNTER_FURIOUS_HOWL, 7, targetOnlyPetAndOwnerFilter)
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_hun_rapid_recuperation::HandlePeriodic
+--   (spell_hunter.cpp:1140-1148): OnEffectPeriodic, EFFECT_0
+--   SPELL_AURA_PERIODIC_TRIGGER_SPELL. PreventDefaultAction (the
+--   true return, geddon infernoTick precedent) — the Go default
+--   periodic leg would cast the trigger spell with its DBC base
+--   points instead of the mana-pct override. BP0 = CalculatePct of
+--   the target's max mana by the EFFECT_0 amount (math.floor,
+--   roar-of-sacrifice precedent); the holder casts the DBC trigger
+--   spell (read via aura:GetTriggerSpell(0), lua_aura.go:294) on
+--   itself, triggered (aurEff args). One handler serves both ranks
+--   (56654 rank 1, 58882 rank 2 — same class, spell_hunter.cpp:1124).
+--   The session periodic tick fires ev1 for player auras
+--   (spells.go:41587). DORMANT until Spell.dbc drives the
+--   56654/58882 periodic auras.
+local SPELL_HUNTER_RAPID_RECUPERATION_R1 = 56654 -- spell_hunter.cpp:69
+local SPELL_HUNTER_RAPID_RECUPERATION_R2 = 58882 -- spell_hunter.cpp:70
+
+local function rapidRecuperationTick(event, aura, target)
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    local bp0 = math.floor(target:GetMaxPower(0) * aura:GetAmount(0) / 100)
+    target:CastCustomSpell(target, triggerSpell, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R1, 1, rapidRecuperationTick)
+RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R2, 1, rapidRecuperationTick)
+
+-- NOT IN LUA: spell_hun_disengage (781, spell_hunter.cpp:379-400)
+-- — OnCheckCast only (player out of combat fails the cast with
+-- SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW). No Lua OnCheckCast bridge
+-- exists (masters-call precedent above), and Go's default enforces
+-- none of the gate. CENSUS CORRECTION: the 2026-11-10 census marks
+-- row 594 go_hit/lua_hit True, but no 781 handling exists anywhere
+-- in the Go tree — the hits are the verb "disengage" in unrelated
+-- comments (threat.go, pets.go, lua_creature_events.go). The row is
+-- uncovered; the gate needs a CheckCast bridge or a Go leg.
+
+-- NOT IN LUA: spell_hun_lock_and_load (56342, spell_hunter.cpp:741-805)
+-- — DoCheckProc (marker-aura 67544 gate, ev6-readable via
+-- actor:HasAura) plus two DoCheckEffectProc arms the ev6 hook
+-- cannot express: the trap arm needs the proc type mask
+-- (PROC_FLAG_DONE_TRAP_ACTIVATION) and the triggering spell's
+-- frost school mask, and the periodic arm needs
+-- PROC_FLAG_DONE_PERIODIC; the ev6 args carry no type mask, no
+-- proc spell, and no effect index, so the handler cannot tell a
+-- trap proc from a periodic proc. STAYS OUT until ev6
+-- event-spell/school/type-mask forwarding lands (open engine work,
+-- same as census rows 547-551 + 572).
+
+-- NOT IN LUA: spell_hun_piercing_shots (53234, spell_hunter.cpp:1070-1119)
+-- — the HandleProc math is ev6-expressible (damage arg, actor,
+-- procTarget; bp = CalculatePct(damage, eff0 amount) / max ticks,
+-- cast 63468 with BP0 via CastCustomSpell, roar-of-sacrifice
+-- precedent) except for one read: piercingShots->GetMaxTicks(),
+-- the 63468 DoT's tick count, has no cross-spell bridge — aura
+-- has GetTotalTicks only for its own spell (lua_aura.go) and
+-- GetSpellEffectCalcValue reads base points, not duration/
+-- amplitude. RECIPE: add an aura:GetSpellTotalTicks(spellId)
+-- bridge on the GetSpellEffectCalcValue precedent (DBC duration /
+-- amplitude, +1 for START_PERIODIC_AT_APPLY), then port the
+-- handler with a procTarget-nil CheckProc gate.
