@@ -63,7 +63,8 @@
 -- far" + DoMeleeAttackIfReady) — engine-driven melee is a genuine
 -- gap (aran precedent) — documented-only; the ResetThreat(victim)
 -- half IS ported via the 1s meleerange poll (see meleeRangeTick).
--- spell_murmur_sonic_boom (33923 → CastSpell(33666) triggered),
+-- spell_murmur_sonic_boom (33923/38796 → CastSpell(nil, 33666)
+-- triggered) PORTED below (RegisterSpellEvent ev5, both cast ids);
 -- spell_murmur_sonic_boom_effect (33666 damage = 80% of target max
 -- health — PORTED 2026-11-07 (tick 372) via the pre-damage OnHit
 -- dispatch in engine/world/spell_onhit.go),
@@ -78,6 +79,8 @@ local SPELL_MAGNETIC_PULL = 33689 -- boss_murmur.cpp:33
 local SPELL_SONIC_SHOCK = 38797 -- boss_murmur.cpp:34
 local SPELL_THUNDERING_STORM = 39365 -- boss_murmur.cpp:35
 local SPELL_SONIC_BOOM_CAST = 33923 -- boss_murmur.cpp:36
+local SPELL_SONIC_BOOM_EFFECT = 33666 -- boss_murmur.cpp:37
+local SPELL_SONIC_BOOM_HEROIC_CAST = 38796 -- boss_murmur.cpp:160 (class header comment; heroic twin of 33923)
 local SPELL_MURMURS_TOUCH = 33711 -- boss_murmur.cpp:38
 
 local EMOTE_SONIC_BOOM = 0 -- boss_murmur.cpp:40
@@ -384,3 +387,26 @@ local function thunderingStormFilter(event, spell, effectIndex, targets)
 end
 
 RegisterSpellEvent(SPELL_THUNDERING_STORM, 7, thunderingStormFilter)
+
+-- C++ spell_murmur_sonic_boom::HandleEffect (boss_murmur.cpp:175-178):
+-- OnEffectHit, EFFECT_0 SPELL_EFFECT_DUMMY: the caster casts Sonic
+-- Boom Effect (33666) with a nil target, triggered. The literal C++
+-- cast is 33666 for both the normal (33923) and heroic (38796) cast
+-- ids; 38795 (heroic effect) is never named in C++ outside the class
+-- header comment — its damage leg is already covered by the Go
+-- spell_onhit.go 33666/38795 case. ev5 fires once per effect per live
+-- hit target, matching C++ OnEffectHit; the effectIndex==0 gate is
+-- the skeram precedent. DORMANT until Spell.dbc ships 33923/38796.
+local function sonicBoomHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(nil, SPELL_SONIC_BOOM_EFFECT, true)
+end
+
+RegisterSpellEvent(SPELL_SONIC_BOOM_CAST, 5, sonicBoomHit)
+RegisterSpellEvent(SPELL_SONIC_BOOM_HEROIC_CAST, 5, sonicBoomHit)

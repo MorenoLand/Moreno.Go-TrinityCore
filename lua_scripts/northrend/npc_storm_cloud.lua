@@ -109,20 +109,28 @@
 -- IS bridged now — verdict stands on REGISTRATION ONLY (no C++ GO
 -- entry const).
 -- spell_random_ingredient_aura — AuraScript periodic (51015->
--- 51134 / 51154->51105 / 51157->51107 self-casts): no
--- AuraScript bridge (blasted_lands / gordunni precedents) —
--- documented-only.
+-- 51134 / 51154->51105 / 51157->51107 self-casts): PORTED in
+-- lua_scripts/northrend/zone_zuldrak.lua (ticks 424/438,
+-- RegisterAuraEvent ev1); the "no AuraScript bridge" note here
+-- is stale.
 -- spell_random_ingredient — SpellScript (hit-player urand 0-10
 -- / 11-15 / 16-20 -> closest 28205 25yd CastSpell(player,
--- FetchIngredients[ingredient][0]) + Talk(say, player)): no
--- SpellScript / world-search bridges — documented-only.
+-- FetchIngredients[ingredient][0]) + Talk(say, player)): the
+-- caster is the player (aura-tick self-cast), so the blocker is
+-- the ev5 player-cast fire site (finishSpellCast never fires
+-- ev5); the legs are live (player:FindNearestCreature,
+-- creature:CastSpell(player), creature:Talk) — documented-only.
 -- spell_pot_check — SpellScript (21-slot Have/Fetch aura scan
 -- -> SPELL_THROW_INGREDIENT 51025 + Have-aura / item-count
 -- gates -> DestroyItemCount / SetData(1,1) ingredient-advance
 -- vs RemoveItems + RemoveAura(51216) + Talk(4, player) ruin
 -- path; hard-tier completion -> quest-12541 INCOMPLETE gate ->
--- RemoveAura(51216) + CastSpell(player, 51111)): no SpellScript
--- / quest bridges — documented-only. The full FetchIngredients
+-- RemoveAura(51216) + CastSpell(player, 51111)): the caster is
+-- the player (cauldron gossip self-cast), so the blocker is the
+-- ev5 player-cast fire site plus the Finklestein AI SetData(1,1)
+-- leg (no AI SetData bridge); GetQuestStatus + DestroyItemCount
+-- + player HasAura/RemoveAura/CastSpell are all bridged —
+-- documented-only. The full FetchIngredients
 -- table (21 ingredients: 51018-51104 fetch/have pairs, item
 -- ids 38336-38398, SAY 5-25) and 51015/51154/51157 + 51134/
 -- 51105/51107 + 51046 + 51025 + 51111 + 51216 + 12541

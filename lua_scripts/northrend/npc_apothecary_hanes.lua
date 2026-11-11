@@ -53,9 +53,12 @@
 -- (Go IsCharmed = any charm, C++ requires player-owned charm).
 -- spell_mindless_abomination_explosion_fx_master — SpellScript
 -- (creature-gated 43401 blood-explosion self-cast + 10x 42266
--- poison circumference casts) has no SpellScript bridge anywhere
--- in the model (blasted_lands / gordunni precedents) —
--- documented-only.
+-- poison circumference casts) stays out on the binding spell ID
+-- only: the ID appears nowhere in the C++ tree and no cast site
+-- exists, so no registration can be wired. The ev5
+-- RegisterSpellEvent bridge itself exists (creature-cast funnel,
+-- boss_buru egg-explosion precedent) — the "no SpellScript bridge"
+-- claim is retracted.
 -- npc_riven_widow_cocoon — the JustDied player-killer machine
 -- (20% roll: player->CastSpell(me, 43289) + KilledMonsterCredit
 -- 24211; else player->CastSpell(me, one of the 11 cocoon summon

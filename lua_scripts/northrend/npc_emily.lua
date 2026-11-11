@@ -98,9 +98,12 @@
 -- RegisterVehicleEvent OnAddPassenger, ev14/ev24 arms) — the
 -- "no bridges" claim above is retracted for those three; the
 -- remaining spell loaders (spell_shredder_delivery /
--- spell_infected_worgen_bite / spell_vehicle_warhead_fuse /
--- spell_warhead_detonate) stay SpellScript-only, no SpellScript
--- bridge anywhere in the model (sindragosa ice_tomb_target precedent).
+-- spell_vehicle_warhead_fuse / spell_warhead_detonate) stay
+-- SpellScript-only, no SpellScript bridge anywhere in the model
+-- (sindragosa ice_tomb_target precedent). spell_infected_worgen_bite
+-- is an AuraScript, not a SpellScript — PORTED in
+-- lua_scripts/northrend/zone_grizzly_hills.lua (RegisterAuraEvent
+-- 53094 ev2/ev4, max-stack Remove + self-cast 53095).
 
 local ENTRY_EMILY = 26588
 local ENTRY_MRFLOPPY = 26589 -- zone_grizzly_hills.cpp:36 (NPC_MRFLOPPY)

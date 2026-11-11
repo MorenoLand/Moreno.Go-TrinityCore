@@ -15240,10 +15240,12 @@ func init() {
 	// DoAction bridge (event 38), RegisterVehicleEvent
 	// OnAddPassenger, ev14 SpellHit lumberboat arm, ev24 ReachHome
 	// reset; the 49250 detonate script legs run inline, no
-	// KnockbackFrom bridge), and the four remaining spell loaders
-	// (spell_shredder_delivery, spell_infected_worgen_bite,
-	// spell_vehicle_warhead_fuse, spell_warhead_detonate — all
-	// SpellScript, no SpellScript bridge) are documented only.
+	// KnockbackFrom bridge), and the three remaining spell loaders
+	// (spell_shredder_delivery, spell_vehicle_warhead_fuse,
+	// spell_warhead_detonate — all SpellScript, no SpellScript bridge)
+	// are documented only. spell_infected_worgen_bite is an AuraScript,
+	// not a SpellScript — PORTED in lua_scripts/northrend/
+	// zone_grizzly_hills.lua (RegisterAuraEvent 53094 ev2/ev4).
 	RegisterLuaBoss("npc_rocket_propelled_warhead", 27593)
 	RegisterLuaBoss("npc_emily", 26588)
 	// npc_apothecary_hanes (Howling Fjord zone script): the

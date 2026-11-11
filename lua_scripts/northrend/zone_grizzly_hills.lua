@@ -272,3 +272,39 @@ end
 
 RegisterCreatureEvent(ENTRY_TALLHORN_STAG, 5, tallhornStagReset)
 RegisterCreatureEvent(ENTRY_TALLHORN_STAG, 23, tallhornStagReset)
+
+-- spell_infected_worgen_bite (zone_grizzly_hills.cpp:839-868):
+-- AuraScript on SPELL_INFECTED_WORGEN_BITE 53094. AfterEffectApply
+-- EFFECT_1 SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAPPLY:
+-- when the aura re-applies on a player at max stacks it removes
+-- itself and the target casts SPELL_WORGENS_CALL 53095 on itself,
+-- triggered. Go twin: the handler runs on ev2 (fresh apply) and ev4
+-- (stack-raising merge) — together they cover every C++ reapply; a
+-- refresh-only reapply at max stacks is unreachable (the aura is
+-- removed the first time it reaches max). GetSpellStackAmount reads
+-- DBC field 49 and is 0 until Spell.dbc ships 53094, so the arm is
+-- dormant-but-correct until then (choking-vines convention).
+-- KNOWN DELTA: C++ casts 53095 triggered; player:CastSpell
+-- ignores the triggered flag (lua_player.go:2577 ->
+-- castSpellDirect), so the call lands non-triggered —
+-- pre-existing bridge gap, same as all prior player-target ports.
+local SPELL_INFECTED_WORGEN_BITE = 53094
+local SPELL_WORGENS_CALL = 53095
+
+local function infectedWorgenBiteApply(_, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    local maxStacks = aura:GetSpellStackAmount(aura:GetAuraId())
+    if maxStacks == 0 then
+        return
+    end
+    if aura:GetStackAmount() ~= maxStacks then
+        return
+    end
+    aura:Remove()
+    target:CastSpell(target, SPELL_WORGENS_CALL, true)
+end
+
+RegisterAuraEvent(SPELL_INFECTED_WORGEN_BITE, 2, infectedWorgenBiteApply)
+RegisterAuraEvent(SPELL_INFECTED_WORGEN_BITE, 4, infectedWorgenBiteApply)
