@@ -1273,6 +1273,26 @@ func (s *Server) procTargetVitals(mapID, instanceID uint32, guid uint64) (maxHea
 	return 0, 0, 0, false
 }
 
+// procTargetFullHealth reports whether a proc target sits at full health
+// (Unit::GetHealth() >= GetMaxHealth(), Unit.h:872): the overheal gate of
+// spell_pri_t5_heal_2p_bonus::CheckProc (spell_priest.cpp:1504-1513), read
+// post-heal on the done side (the heal is applied before the proc loop
+// runs, spells.go). Players read the live state; creatures the motion
+// health. A zero GUID, an unresolvable unit, or a zero max health reads
+// not-full, and the caller skips the leg like a failed C++ gate.
+func (s *Server) procTargetFullHealth(mapID, instanceID uint32, guid uint64) bool {
+	if s == nil || guid == 0 {
+		return false
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		return sess.player.MaxHealth > 0 && sess.player.Health >= sess.player.MaxHealth
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		return m.MaxHealth > 0 && m.Health >= m.MaxHealth
+	}
+	return false
+}
+
 // procTargetClass resolves a proc target's class (Unit::GetClass,
 // Unit.h:850: the UNIT_FIELD_BYTES_0 class byte): the player's class
 // for player targets, the template unit_class (Creature.cpp:494) for
@@ -4583,6 +4603,110 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				if ev.spellTypeMask&procSpellTypeDamage != 0 {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 40441, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
 				}
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 15286 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_vampiric_embrace::HandleProc
+				// (spell_priest.cpp:1363-1378): PreventDefaultAction; on a
+				// damage proc the actor casts Vampiric Embrace Heal
+				// (15290) on null with BP0 = selfHeal/5 (integer division)
+				// and BP1 = selfHeal, where selfHeal is pct of the damage
+				// by the effect amount. The null target is the spell's own
+				// implicit targets (TARGET_UNIT_CASTER_AREA_PARTY) — the
+				// zero target rides the cast path's fallback legs, not the
+				// 40438 self-cast precedent. No Lua ev6 twin: ev6 carries
+				// no damage amounts. DORMANT until Spell.dbc ships the
+				// 15286 proc entry.
+				if ev.damage == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				selfHeal := uint32(uint64(ev.damage) * uint64(scriptProcEffAmount(aura, i)) / 100)
+				partyHeal := selfHeal / 5
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 15290, casterGUID: ev.actorGUID, targetGUID: 0, bp0: partyHeal, bp0Set: true, bp1: selfHeal, bp1Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 28809 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_t3_4p_bonus::HandleProc
+				// (spell_priest.cpp:1467-1472): PreventDefaultAction; the
+				// actor casts Armor of Faith (28810) on the proc target
+				// with the aura effect. No Lua ev6 twin: ev6 carries no
+				// proc-target routing for this arm. DORMANT until
+				// Spell.dbc ships the 28809 proc entry.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 28810, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 37594 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_pri_t5_heal_2p_bonus::HandleProc + CheckProc
+				// (spell_priest.cpp:1504-1524): PreventDefaultAction; on a
+				// heal proc whose effective heal is positive and whose
+				// heal target sits at full health (the overheal gate) the
+				// aura HOLDER casts Item Efficiency (37595) on itself
+				// with the aura effect. Placed before the generic
+				// PROC_TRIGGER_SPELL arm, which would cast the DBC
+				// trigger instead (the 62259 precedent); the
+				// TriggerSpell == 0 gate below never sees it. The heal
+				// is already applied when the proc loop runs (spells.go
+				// heal leg), so the full-health read is post-heal, like
+				// C++. No Lua ev6 twin: ev6 carries no heal amounts.
+				// DORMANT until Spell.dbc ships the 37594 proc entry.
+				if ev.effectiveHeal == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if !s.server.procTargetFullHealth(s.player.Map, s.player.InstanceID, triggerTargetGUID) {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 37595, casterGUID: s.playerGUID, targetGUID: s.playerGUID})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 70770 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_t10_heal_2p_bonus::HandleProc
+				// (spell_priest.cpp:1547-1576): PreventDefaultAction; on a
+				// heal proc the actor casts Blessed Healing (70772) on the
+				// proc target with BP0 = pct of the heal by the effect
+				// amount, divided by the triggered spell's max ticks. The
+				// zero-heal gate is the C++ null/zero-heal early return; a
+				// missing 70772 row skips where C++ would assert (the
+				// 49194 precedent). No Lua ev6 twin: ev6 carries no heal
+				// amounts. DORMANT until Spell.dbc ships the 70770 proc
+				// entry and the 70772 duration row.
+				if ev.heal == 0 || ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.server == nil || s.server.Data == nil {
+					continue
+				}
+				healSpell, found, err := s.server.Data.Spell(70772)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.spellMaxTicks(healSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.heal) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 70772, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
 				continue

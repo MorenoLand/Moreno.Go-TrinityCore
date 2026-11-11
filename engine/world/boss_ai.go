@@ -11020,6 +11020,125 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 34650, casterGUID: m.GUID, targetGUID: m.OwnerGUID})
 				continue
 			}
+			if auraSpell.ID == 57989 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_shadowfiend_death::HandleProc + CheckProc
+				// (spell_priest.cpp:1281-1304): PreventDefaultAction; on a
+				// damage-taken event the ACTION TARGET (the holder on a
+				// taken event, the victim on a done event — Unit.cpp:10388,
+				// 10412) must have an owner and sit below 1% once the
+				// incoming damage is subtracted
+				// (HealthBelowPctDamaged(1, damage), Unit.h:873), and the
+				// owner casts Glyph of Shadowfiend Mana (58227) on itself.
+				// The holder is the shadowfiend itself: IsSummonedBy
+				// casts 57989 on the pet (pet_priest.cpp:80, glyph-gated),
+				// and the Lua ev22 arm applies it there. The action-target
+				// gate is the C++ owner check — a done event's victim has
+				// no owner, so only taken events reach the cast. The proc
+				// loop runs post-damage (AttackerStateUpdate, Unit.cpp:2169
+				// follows DealMeleeDamage), so m.Health is already reduced
+				// and the formula subtracts the damage exactly as C++ does;
+				// on a lethal blow the victim's auras are stripped in the
+				// death chain, so the leg fires on the sub-1% blow, never
+				// after death — no postDamage>0 guard (the nefarian-form
+				// DamageTaken rule). Creature-side only: a player holder's
+				// GetOwner() is null, so CheckProc would always fail there
+				// (the 28305 precedent). DORMANT until Spell.dbc ships the
+				// 57989 proc entry.
+				if ev.damage == 0 || m.MaxHealth == 0 {
+					continue
+				}
+				if actionTarget := procActionTargetGUID(ev.actorGUID, m.GUID, triggerTargetGUID); actionTarget != m.GUID {
+					continue
+				}
+				if m.OwnerGUID == 0 {
+					continue
+				}
+				if int64(m.Health)-int64(ev.damage) >= int64(m.MaxHealth)/100 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 58227, casterGUID: m.OwnerGUID, targetGUID: m.OwnerGUID})
+				continue
+			}
+			if auraSpell.ID == 15286 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_vampiric_embrace::HandleProc
+				// (spell_priest.cpp:1363-1378): the creature-side twin of
+				// the procs.go leg — the actor casts Vampiric Embrace Heal
+				// (15290) on null with BP0 = selfHeal/5 and BP1 = selfHeal.
+				// DORMANT until Spell.dbc ships the 15286 proc entry.
+				if ev.damage == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				selfHeal := uint32(uint64(ev.damage) * uint64(scriptProcEffAmount(aura, i)) / 100)
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 15290, casterGUID: ev.actorGUID, targetGUID: 0, bp0: selfHeal / 5, bp0Set: true, bp1: selfHeal, bp1Set: true})
+				continue
+			}
+			if auraSpell.ID == 28809 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_t3_4p_bonus::HandleProc
+				// (spell_priest.cpp:1467-1472): the creature-side twin of
+				// the procs.go leg — the actor casts Armor of Faith (28810)
+				// on the proc target. DORMANT until Spell.dbc ships the
+				// 28809 proc entry.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 28810, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+				continue
+			}
+			if auraSpell.ID == 37594 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_pri_t5_heal_2p_bonus::HandleProc + CheckProc
+				// (spell_priest.cpp:1504-1524): the creature-side twin of
+				// the procs.go leg — on a heal proc whose effective heal is
+				// positive and whose heal target sits at full health the
+				// holder casts Item Efficiency (37595) on itself. Placed
+				// before the generic PROC_TRIGGER_SPELL arm (the 50240
+				// precedent). The creature loop carries no heal amounts, so
+				// ev.effectiveHeal is 0 here and the leg skips exactly like
+				// the C++ null-heal early return; it fires only if a
+				// heal-carrying creature event is ever threaded (the 53651
+				// precedent). DORMANT until Spell.dbc ships the 37594 proc
+				// entry.
+				if ev.effectiveHeal == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if !s.procTargetFullHealth(m.Map, m.InstanceID, triggerTargetGUID) {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 37595, casterGUID: m.GUID, targetGUID: m.GUID})
+				continue
+			}
+			if auraSpell.ID == 70770 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pri_t10_heal_2p_bonus::HandleProc
+				// (spell_priest.cpp:1547-1576): the creature-side twin of
+				// the procs.go leg — the actor casts Blessed Healing (70772)
+				// on the proc target with BP0 = pct of the heal by the
+				// effect amount, divided by the triggered spell's max ticks.
+				// The creature loop carries no heal amounts, so ev.heal is
+				// 0 here and the leg skips exactly like the C++ null/zero-
+				// heal early return; a missing 70772 row skips where C++
+				// would assert (the 49194 precedent). DORMANT until
+				// Spell.dbc ships the 70770 proc entry and the 70772
+				// duration row.
+				if ev.heal == 0 || ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.Data == nil {
+					continue
+				}
+				healSpell, found, err := s.Data.Spell(70772)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.serverSpellMaxTicks(healSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.heal) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 70772, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				continue
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)
