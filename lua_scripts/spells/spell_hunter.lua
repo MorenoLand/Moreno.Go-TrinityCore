@@ -260,3 +260,98 @@ local function misdirectionProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_HUNTER_MISDIRECTION, 6, misdirectionProc)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_hun_pet_carrion_feeder::HandleDummy
+--   (spell_hunter.cpp:1001-1005): OnEffectHit, EFFECT_0
+--   SPELL_EFFECT_DUMMY. The pet self-casts the triggered heal 54045,
+--   non-triggered (C++ passes false; creature CastSpell honors the
+--   flag, lua_creature_events.go:953). The C++ Load() IsPet gate rides
+--   the in-tree approximation (nonzero OwnerGUID,
+--   lua_creature_events.go:4253) — no Lua IsPet method exists.
+--   NOT PORTED: CheckIfCorpseNear (spell_hunter.cpp:1010-1026) — no Lua
+--   OnCheckCast bridge, and Go's default enforces no corpse search
+--   (53271 DoCheckCast precedent). DORMANT until Spell.dbc drives
+--   54044 (pet ability).
+local SPELL_HUNTER_PET_CARRION_FEEDER = 54044 -- spell_hunter.cpp:964
+local SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED = 54045 -- spell_hunter.cpp:54
+
+local function carrionFeederDummy(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetOwnerGUID() == 0 then
+        return
+    end
+    caster:CastSpell(caster, SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED, false)
+end
+
+RegisterSpellEvent(SPELL_HUNTER_PET_CARRION_FEEDER, 4, carrionFeederDummy)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hun_pet_heart_of_the_phoenix::HandleScript
+--   (spell_hunter.cpp:1043-1055): OnEffectHitTarget, EFFECT_0
+--   SPELL_EFFECT_SCRIPT_EFFECT. With an owner and no 55711 debuff on
+--   the pet, the owner casts the resurrect 54114 on the pet with BP0 =
+--   100, triggered (player CastCustomSpell, lua_player.go:2879), then
+--   the pet self-casts the debuff 55711, triggered. The C++ Load()
+--   IsPet gate rides the nonzero-OwnerGUID approximation (see above);
+--   creature HasAura is bridged (lua_creature_events.go:1414) and
+--   GetOwner returns the player object (lua_creature_events.go:627).
+--   DORMANT until Spell.dbc drives 55709 (pet ability).
+local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX = 55709 -- spell_hunter.cpp:51
+local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED = 54114 -- spell_hunter.cpp:52
+local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF = 55711 -- spell_hunter.cpp:53
+
+local function heartOfThePhoenixScript(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetOwnerGUID() == 0 then
+        return
+    end
+    local owner = caster:GetOwner()
+    if owner == nil then
+        return
+    end
+    if caster:HasAura(SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF) then
+        return
+    end
+    owner:CastCustomSpell(caster, SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED, true, 100)
+    caster:CastSpell(caster, SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF, true)
+end
+
+RegisterSpellEvent(SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX, 5, heartOfThePhoenixScript)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_roar_of_sacrifice::HandleProc
+--   (spell_hunter.cpp:1294-1301): OnEffectProc, EFFECT_1
+--   SPELL_AURA_DUMMY. PreventDefaultAction (the true return); the
+--   action target casts the triggered 67481 on the aura caster with
+--   BP0 = pct(damage, eff1 amount) (CalculatePct, math.floor
+--   precedent in spell_priest.lua). The CheckProc school-mask gate
+--   lives in Go, not here: ev6 args carry no school, and the aura
+--   object has no MiscValue bridge — procs.go adds the
+--   roarOfSacrificeProcAllowed gate ahead of the chance roll
+--   (56841 precedent), so this handler only fires on gated events.
+--   DUMMY is a proc-trigger aura type (procs.go:1077), so ev6 can
+--   fire; DORMANT until Spell.dbc ships the 53480 proc entry.
+local SPELL_HUNTER_ROAR_OF_SACRIFICE = 53480 -- spell_hunter.cpp:1265
+local SPELL_ROAR_OF_SACRIFICE_TRIGGERED = 67481 -- spell_hunter.cpp:63
+
+local function roarOfSacrificeProc(event, aura, target, actor, procTarget, damage)
+    if procTarget == nil or damage == nil then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local bp0 = math.floor(damage * aura:GetAmount(1) / 100)
+    procTarget:CastCustomSpell(caster, SPELL_ROAR_OF_SACRIFICE_TRIGGERED, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_ROAR_OF_SACRIFICE, 6, roarOfSacrificeProc)

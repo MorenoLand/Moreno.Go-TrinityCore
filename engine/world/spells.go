@@ -16306,6 +16306,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, scourgeStrikeMultipliers)
 					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
+					// spell_hun_readiness::HandleDummy
+					// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm finishes the cooldown on every
+					// other Hunter ability except Bestial Wrath. Fires once
+					// per effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target self-cast),
+					// ahead of the Eluna arm below, and only when a
+					// target was actually hit.
+					if spellID == 23989 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.readinessDummyEffect()
+					}
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
 					// early return above.
@@ -52342,6 +52353,46 @@ func (s *session) glyphOfScourgeStrikeScriptEffect(targetGUID uint64) {
 		for _, aura := range s.server.activeCreatureAuras[key] {
 			extend(aura)
 		}
+	}
+}
+
+// readinessDummyEffect mirrors spell_hun_readiness::HandleDummy
+// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY OnEffectHitTarget arm
+// finishes the cooldown on every other Hunter ability except Bestial
+// Wrath — hunter-family spells with a nonzero recovery time, excluding
+// Readiness itself (23989) and Gift of the Naaru (59543). C++
+// SpellInfo::GetRecoveryTime (SpellInfo.cpp:3149-3152) is the max of the
+// spell and category recovery times. The C++ Load() player gate holds by
+// construction (this is the session/player cast path). Spells absent from
+// the DBC store are skipped — C++ would AssertSpellInfo, Go has no record
+// to evaluate. Each reset rides resetPlayerCooldown (update=true), the
+// per-spell SMSG_CLEAR_COOLDOWN twin of ResetCooldowns(pred, true).
+func (s *session) readinessDummyEffect() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	s.playerStateMu.Lock()
+	snapshot := append([]spellCooldown(nil), s.player.Cooldowns...)
+	s.playerStateMu.Unlock()
+	for _, cd := range snapshot {
+		if cd.Spell == 23989 || cd.Spell == 19574 || cd.Spell == 59543 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(cd.Spell)
+		if err != nil || !found {
+			continue
+		}
+		if spell.SpellFamilyName != spellFamilyHunter {
+			continue
+		}
+		recovery := spell.RecoveryTime
+		if spell.CategoryRecoveryTime > recovery {
+			recovery = spell.CategoryRecoveryTime
+		}
+		if recovery == 0 {
+			continue
+		}
+		s.resetPlayerCooldown(cd.Spell, true)
 	}
 }
 

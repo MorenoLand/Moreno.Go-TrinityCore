@@ -342,6 +342,25 @@ func (s *session) glyphOfArcaneShotProcAllowed(targetGUID uint64, casterGUID uin
 	return false
 }
 
+// roarOfSacrificeProcAllowed mirrors
+// spell_hun_roar_of_sacrifice::CheckProc (spell_hunter.cpp:1279-1292):
+// the proc needs a damage event (DamageInfo non-null in C++; the
+// ev.damage == 0 proxy stands in, as in checkEffectProcGates), a
+// damage school intersecting the EFFECT_1 MiscValue mask, and a live
+// aura caster (GetCaster() non-null).
+func (s *session) roarOfSacrificeProcAllowed(aura *activeAura, auraSpell wotlk.Spell, ev procEventInfo) bool {
+	if aura == nil || aura.CasterGUID == 0 {
+		return false
+	}
+	if ev.damage == 0 {
+		return false
+	}
+	if len(auraSpell.Effects) < 2 {
+		return false
+	}
+	return ev.schoolMask&uint32(auraSpell.Effects[1].MiscValue) != 0
+}
+
 // isProcOnCooldown checks whether an internal cooldown (ICD) is active for the given proc ID.
 func (s *session) isProcOnCooldown(procID uint32) bool {
 	if s == nil || s.procICD == nil {
@@ -3267,6 +3286,18 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		// The gate runs before the chance roll, like the C++ CheckProc
 		// in GetProcEffectMask (70656 precedent above).
 		if auraSpell.ID == 56841 && !s.glyphOfArcaneShotProcAllowed(triggerTargetGUID, s.playerGUID) {
+			continue
+		}
+		// spell_hun_roar_of_sacrifice::CheckProc
+		// (spell_hunter.cpp:1279-1292): the proc only fires on damage
+		// events whose school matches the EFFECT_1 MiscValue mask, with
+		// a live aura caster. The damage-info null leg rides the
+		// ev.damage == 0 proxy (the CC-aura gate in
+		// checkEffectProcGates uses the same proxy); the school mask is
+		// the proc event's, the MiscValue the DBC effect-1 value.
+		// Placed before the chance roll, like the C++ CheckProc in
+		// GetProcEffectMask (70656 precedent above).
+		if auraSpell.ID == 53480 && !s.roarOfSacrificeProcAllowed(aura, auraSpell, ev) {
 			continue
 		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
