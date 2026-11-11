@@ -3976,6 +3976,25 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.removeAurasByType(spellAuraModDecreaseSpeed)
 				continue
 			}
+			if auraSpell.ID == 56372 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_mage_glyph_of_ice_block::HandleProc
+				// (spell_mage.cpp:892-904): PreventDefaultAction; the
+				// proc actor's Mage-family cooldowns whose family
+				// flags[0] carry 0x40 finish (Frost Nova). The actor
+				// is the holder for this self-cast glyph proc; the
+				// session lookup covers an actor that is not the
+				// holder. No Lua ev6 twin: ev6 carries no cooldown
+				// reset. DORMANT until Spell.dbc ships the 56372
+				// proc entry.
+				actorSess := s
+				if ev.actorGUID != 0 {
+					if as := s.server.findSessionByGUID(ev.actorGUID); as != nil {
+						actorSess = as
+					}
+				}
+				actorSess.glyphOfIceBlockProcReset()
+				continue
+			}
 			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
 				// spell_oculus_temporal_rift::HandleProc
 				// (oculus.cpp:606-621): PreventDefaultAction; the

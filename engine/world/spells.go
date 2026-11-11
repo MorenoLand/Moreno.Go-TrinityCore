@@ -16437,6 +16437,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 11958 && effectIndex == 0 && len(hitTargets) > 0 {
 						s.coldSnapDummyEffect()
 					}
+					// spell_mage_polymorph_cast_visual::HandleDummy
+					// (spell_mage.cpp:1401-1408): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — the caster's nearest
+					// Aurosalia within 30 yards casts a random
+					// polymorph form on itself, triggered. Fires once
+					// per effect over the hit targets (C++ fires per
+					// hit target; the spell is single-target
+					// self-cast), ahead of the Eluna arm below, and
+					// only when a target was actually hit.
+					if spellID == 32826 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.polymorphVisualDummyEffect(ctx)
+					}
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
 					// early return above.
@@ -19504,8 +19516,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// Effect 28 (SPELL_EFFECT_SUMMON) logs the summon; the effect
 			// loop already handled it when present — the already-active
 			// gate keeps this exactly-once.
+			// spell_mage_summon_water_elemental::HandleDummy
+			// (spell_mage.cpp:1453-1466): with the Glyph of Eternal
+			// Water aura (70937) the caster casts the permanent
+			// summon (70908); otherwise the temporary summon (70907,
+			// 45s duration, Wowhead WotLK). The glyph aura rides
+			// loadGlyphAuras, so playerHasAuraSpell(70937) is the
+			// C++ HasAura test. The summon above is the permanent
+			// leg; without the glyph a 45s timer unsummons the
+			// elemental still active under the summoned GUID (a
+			// re-summon mints a fresh GUID, so the timer never
+			// catches a replacement). The npcbot guard is vacuous —
+			// Go has no npcbot model and this is the player path.
 			if guid := s.handleSummonPet(effCtx, spellID, 510); guid != 0 {
 				s.sendSummonObjectLog(spellID, 28, guid)
+				if !s.playerHasAuraSpell(70937) {
+					summonedGUID := guid
+					time.AfterFunc(45*time.Second, func() {
+						if s.player != nil && s.player.PetGUID == summonedGUID {
+							s.unsummonPet(context.Background(), petSaveNotInSlot)
+						}
+					})
+				}
 			}
 		} else if spellID == 46584 { // Raise Dead
 			// spell_dk_raise_dead::ConsumeReagents (spell_dk.cpp:2068-2079):
@@ -52577,6 +52609,57 @@ func (s *session) coldSnapDummyEffect() {
 		}
 		s.resetPlayerCooldown(cd.Spell, true)
 	}
+}
+
+// glyphOfIceBlockProcReset mirrors spell_mage_glyph_of_ice_block::HandleProc
+// (spell_mage.cpp:892-904): PreventDefaultAction; ResetCooldowns over the
+// predicate "Mage family, SpellFamilyFlags[0] & 0x40" (Frost Nova), with
+// update=true. C++ carries no recovery-time filter and no self-exclusion
+// — the predicate is exactly family + flags — so neither is applied here.
+// Each reset rides resetPlayerCooldown (update=true), the per-spell
+// SMSG_CLEAR_COOLDOWN twin of ResetCooldowns(pred, true). Spells absent
+// from the DBC store are skipped — C++ would AssertSpellInfo, Go has no
+// record to evaluate. Called on the proc actor's session (procs.go arm).
+func (s *session) glyphOfIceBlockProcReset() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	s.playerStateMu.Lock()
+	snapshot := append([]spellCooldown(nil), s.player.Cooldowns...)
+	s.playerStateMu.Unlock()
+	for _, cd := range snapshot {
+		spell, found, err := s.server.Data.Spell(cd.Spell)
+		if err != nil || !found {
+			continue
+		}
+		if spell.SpellFamilyName != spellFamilyMage {
+			continue
+		}
+		if spell.SpellFamilyFlags[0]&0x40 == 0 {
+			continue
+		}
+		s.resetPlayerCooldown(cd.Spell, true)
+	}
+}
+
+// polymorphVisualDummyEffect mirrors spell_mage_polymorph_cast_visual::HandleDummy
+// (spell_mage.cpp:1401-1408): the EFFECT_0 DUMMY OnEffectHitTarget arm — the
+// caster's nearest Aurosalia (18744, spell_mage.cpp:1382) within 30 yards casts
+// a random polymorph form on itself, triggered. Forms 32813/32816/32817/32818/
+// 32819/32820 (spell_mage.cpp:45-50, 1424-1429). The C++ TYPEID_UNIT check is
+// vacuous in Go — the motion registry holds creatures only. The triggered
+// self-cast rides fireScriptProcCast, whose creature-caster leg casts triggered.
+func (s *session) polymorphVisualDummyEffect(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	guid, ok := s.nearestCreatureEntryGUIDInRange(18744, 30, s.player.X, s.player.Y, s.player.Z, 0, true)
+	if !ok || guid == 0 {
+		return
+	}
+	forms := [6]uint32{32813, 32816, 32817, 32818, 32819, 32820}
+	form := forms[rand.IntN(len(forms))]
+	s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: form, casterGUID: guid, targetGUID: guid})
 }
 
 // chimeraShotScriptEffect mirrors spell_hun_chimera_shot::HandleScriptEffect

@@ -1,9 +1,11 @@
 package world
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"sort"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 )
@@ -508,6 +510,84 @@ func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32, parry
 	return absorbThis, false, true
 }
 
+// ardentDefenderAbsorbHit mirrors spell_pal_ardent_defender::Absorb
+// (spell_paladin.cpp:183-252): the SCHOOL_ABSORB script leg for 31850.
+// _absorbPct is the DBC effect-0 CalcValue, _healPct the effect-1
+// CalcValue (Load, :166-167); the pool is unlimited (CalculateAmount
+// sets -1, :177-181), so the amount is never consumed and the leg never
+// reports depletion. A lethal hit with the 66235 heal off cooldown
+// absorbs everything and casts the heal with BP0 =
+// CountPctFromMaxHealth(lroundf(_healPct * defenseFactor)), defenseFactor
+// = min(1, defenseSkill / (maxSkillForLevel + 140)); the heal then takes
+// a 2-minute cooldown (AddCooldown, :235). Otherwise a hit landing below
+// 35% max health absorbs CalculatePct(damageToReduce, _absorbPct), where
+// damageToReduce is the full damage when already below 35%, else only
+// the part below the line (:238-248). The remaining-damage argument is
+// the C++ dmgInfo damage at this aura's turn in CalcAbsorbResist, and
+// the if/else-if chain is preserved: a lethal hit with the heal on
+// cooldown still takes the sub-35% partial absorb. C++ casts the heal
+// non-triggered; Go rides the direct-cast path like every script cast,
+// and the cast carries context.Background() because the absorb funnel
+// has no request context. The npcbot branch is the same player math;
+// Go has no npcbot model and Load() admits players only, so the
+// creature absorb leg stays out. Returns (absorb, depleted, handled);
+// handled is true whenever the DBC reads, so the generic pool leg never
+// consumes this aura's amount — an unreadable DBC falls through to it,
+// the scriptAbsorbHit convention.
+func (s *session) ardentDefenderAbsorbHit(aura *activeAura, remainingDamage uint32) (uint32, bool, bool) {
+	if s == nil || s.player == nil || aura == nil || aura.SpellID != 31850 || remainingDamage == 0 {
+		return 0, false, false
+	}
+	if s.server == nil || s.server.Data == nil {
+		return 0, false, false
+	}
+	spell, found, err := s.server.Data.Spell(31850)
+	if err != nil || !found || len(spell.Effects) < 2 {
+		return 0, false, false
+	}
+	absorbPct := spell.Effects[0].CalcValueForLevel(spell, uint32(aura.CasterLevel))
+	healPct := spell.Effects[1].CalcValueForLevel(spell, uint32(aura.CasterLevel))
+	if absorbPct <= 0 || healPct <= 0 {
+		return 0, false, false
+	}
+	health := s.player.Health
+	maxHealth := s.player.MaxHealth
+	if maxHealth == 0 {
+		return 0, false, false
+	}
+	damage := remainingDamage
+	remainingHealth := int64(health) - int64(damage)
+	allowedHealth := uint32(uint64(maxHealth) * 35 / 100)
+	if remainingHealth <= 0 && s.playerCooldownRemainingMs(66235, 0) == 0 {
+		defenseSkill := uint32(0)
+		for _, skill := range s.player.Skills {
+			if skill.Skill == 95 {
+				defenseSkill = uint32(skill.Value)
+				break
+			}
+		}
+		reqDef := float64(uint32(s.player.Level)*5 + 140)
+		defenseFactor := float64(defenseSkill) / reqDef
+		if defenseFactor > 1 {
+			defenseFactor = 1
+		}
+		healBP := uint32(uint64(maxHealth) * uint64(int64(math.Round(float64(healPct)*defenseFactor))) / 100)
+		s.castSpellDirectWithBasePoint(context.Background(), 66235, s.playerGUID, healBP)
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: 66235, End: time.Now().Unix() + 120})
+		return damage, false, true
+	}
+	if remainingHealth < int64(allowedHealth) {
+		var damageToReduce uint32
+		if health < allowedHealth {
+			damageToReduce = damage
+		} else {
+			damageToReduce = uint32(int64(allowedHealth) - remainingHealth)
+		}
+		return uint32(uint64(damageToReduce) * uint64(absorbPct) / 100), false, true
+	}
+	return 0, false, true
+}
+
 // applyAbsorptionShields applies active absorption shields (Power Word: Shield, Ice Barrier, etc.)
 // to mitigate incoming damage of the given school mask according to TrinityCore priority order.
 // Returns absorbed damage and remaining unabsorbed damage.
@@ -579,6 +659,14 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				// only their own spell school. A zero MiscValue absorbs
 				// nothing, like C++ — there is no all-schools fallback.
 				if aura.MiscValue&int32(schoolMask) != 0 {
+					if absorbThis, depleted, ok := s.ardentDefenderAbsorbHit(aura, remainingDamage); ok {
+						remainingDamage -= absorbThis
+						absorbed += absorbThis
+						if depleted {
+							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+						}
+						continue
+					}
 					if absorbThis, depleted, ok := s.server.scriptAbsorbHit(aura, remainingDamage, float64(s.player.ParryPercentage), s.player.Health, s.player.MaxHealth); ok {
 						remainingDamage -= absorbThis
 						absorbed += absorbThis

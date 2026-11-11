@@ -14,6 +14,15 @@
 --   target:RemoveAura(id) takes no caster filter. The buff is only
 --   ever cast by the blessing's caster, so the unfiltered removal is
 --   the same removal in practice.
+-- PORTED (tick 202, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
+--   spell_pal_aura_mastery (31821 Aura Mastery, spell_paladin.cpp:267-294):
+--   EFFECT_0 ADD_PCT_MODIFIER, REAL. OnApply the target casts the
+--   immunity aura (64364) on itself, triggered; on remove the target
+--   drops it. Same (spell, caster GUID) removal delta as the blessing
+--   above: the immunity aura on the target was cast by the target
+--   itself in the apply leg, so the unfiltered removal is the same
+--   removal in practice. The 64364 area-target leg (DoCheckAreaTarget,
+--   concentration-aura gate) is census row 191, not this row.
 -- STILL BLOCKED (same class):
 --   CheckProc / HandleProc (:511-519): on a mana-power target the
 --   proc casts Sanctuary Energize (57319) — no proc hook exists on
@@ -43,3 +52,23 @@ end
 
 RegisterAuraEvent(SPELL_PALADIN_BLESSING_OF_SANCTUARY, 3, blessingOfSanctuaryRemove)
 RegisterAuraEvent(SPELL_PALADIN_GREATER_BLESSING_OF_SANCTUARY, 3, blessingOfSanctuaryRemove)
+
+local SPELL_PALADIN_AURA_MASTERY = 31821 -- spell_paladin.cpp:267
+local SPELL_PALADIN_AURA_MASTERY_IMMUNE = 64364 -- spell_paladin.cpp:93
+
+-- C++ spell_pal_aura_mastery_AuraScript::HandleEffectApply
+-- (spell_paladin.cpp:282-285): the target casts the immunity aura
+-- (64364) on itself, triggered.
+local function auraMasteryApply(event, aura, target)
+    target:CastSpell(target, SPELL_PALADIN_AURA_MASTERY_IMMUNE, true)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_AURA_MASTERY, 2, auraMasteryApply)
+
+-- C++ spell_pal_aura_mastery_AuraScript::HandleEffectRemove
+-- (spell_paladin.cpp:287-290): the target drops the immunity aura.
+local function auraMasteryRemove(event, aura, target)
+    target:RemoveAura(SPELL_PALADIN_AURA_MASTERY_IMMUNE)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_AURA_MASTERY, 3, auraMasteryRemove)

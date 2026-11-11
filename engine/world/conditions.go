@@ -1511,6 +1511,43 @@ func (s *session) nearestCreatureEntryInRange(entry uint32, radius float32, x, y
 	return false
 }
 
+// nearestCreatureEntryGUIDInRange is the GUID-returning twin of
+// nearestCreatureEntryInRange (same WorldObject::FindNearestCreature
+// terms): same map and instance, matching entry, the alive arm against
+// the Go death model, the search origin excluded by GUID, and 3D distance
+// within radius. Returns the GUID of the NEAREST qualifying creature —
+// C++ FindNearestCreature returns the nearest, not the first in grid
+// order — so the scan tracks the minimum distance instead of stopping
+// at the first match.
+func (s *session) nearestCreatureEntryGUIDInRange(entry uint32, radius float32, x, y, z float32, excludeGUID uint64, alive bool) (uint64, bool) {
+	if s == nil || s.server == nil || s.player == nil {
+		return 0, false
+	}
+	srv := s.server
+	srv.motionMu.Lock()
+	defer srv.motionMu.Unlock()
+	var bestGUID uint64
+	bestDist := float64(radius)
+	found := false
+	for _, motion := range srv.motionMapLocked(s.player.Map, s.player.InstanceID) {
+		if motion == nil || motion.Map != s.player.Map || motion.InstanceID != s.player.InstanceID {
+			continue
+		}
+		if motion.Entry != entry || motion.GUID == excludeGUID {
+			continue
+		}
+		if (motion.Health > 0) != alive {
+			continue
+		}
+		if d := distance3D(x, y, z, motion.X, motion.Y, motion.Z); d <= bestDist {
+			bestDist = d
+			bestGUID = motion.GUID
+			found = true
+		}
+	}
+	return bestGUID, found
+}
+
 // nearestGameObjectEntryInRange ports WorldObject::FindNearestGameObject
 // (Object.cpp:2158-2166) with the NearestGameObjectEntryInObjectRangeCheck
 // terms (GridNotifiers.h:736-760): same map and instance, matching entry,
