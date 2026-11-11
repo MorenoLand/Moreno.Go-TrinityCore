@@ -175,12 +175,13 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   braziers aura removes itself.
 --
 -- CLOSED (tick 295 census, corrected this tick): the remaining holiday
---   classes are SpellScript-only, plus romantic_picnic (no
---   nearby-player enumeration), pilgrims bounty a_serving_of
+--   classes are SpellScript-only, plus pilgrims bounty a_serving_of
 --   (vehicle/seat chain), brewfest barker bunny (no player Talk
 --   bridge), and the DB-bound IDs (pilgrims buff-food x5, midsummer
 --   ribbon pole channel) whose aura IDs live only in world DB
---   spell_script_names. The tick-295 "no RegisterSpellScript bridge"
+--   spell_script_names. Romantic_picnic (PORTED below, tick 575) and
+--   hallow_end_trick (PORTED below, tick 576, ev5) were in this list
+--   until this tick — the GetPlayersInRange bridge postdates tick 295. The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
 --   which is how 24930 Hallow's End Candy is ported above, and 43876
 --   Dismount Ram this tick (tail). 43714 relay-race intro force is
@@ -385,3 +386,142 @@ local function dismountRam(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_BREWFEST_DISMOUNT_RAM, 4, dismountRam)
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnPeriodic = 1):
+--   spell_love_is_in_the_air_romantic_picnic::OnApply/OnPeriodic
+--   (spell_holiday.cpp:54-101): EFFECT_0 PERIODIC_DUMMY. On apply the
+--   target sits (UNIT_STAND_STATE_SIT = 1) and self-casts the meal
+--   periodic 45103, non-triggered. Every 5s tick: if the target is no
+--   longer sitting it drops the achievement aura 45123 and the picnic
+--   aura removes itself; otherwise it self-casts the basket check
+--   45119 and one visual at random (meal eat 45120 / drink 45121),
+--   both non-triggered, then scans players within
+--   INTERACTION_DISTANCE*2 = 10 yards for another player holding
+--   the same aura — the caster casts the achievement aura 45123 on
+--   each such player and on the target, triggered; if none is found
+--   the target drops 45123. The tick-295 "no nearby-player
+--   enumeration" note is stale: GetPlayersInRange is on the player
+--   surface (lua_worldobject_range.go:608, alive-only default matches
+--   the C++ AnyPlayerInObjectRangeCheck reqAlive default). The 45123
+--   casts land non-triggered on the player path (file KNOWN LIMIT);
+--   the C++ no-break loop re-casts 45123 on the target per matching
+--   player, replayed here.
+local SPELL_ROMANTIC_PICNIC = 45102 -- spell_holiday.cpp:34
+local SPELL_ROMANTIC_PICNIC_BASKET_CHECK = 45119 -- spell_holiday.cpp:37
+local SPELL_ROMANTIC_PICNIC_MEAL_PERIODIC = 45103 -- spell_holiday.cpp:38
+local SPELL_ROMANTIC_PICNIC_MEAL_EAT_VISUAL = 45120 -- spell_holiday.cpp:39
+local SPELL_ROMANTIC_PICNIC_DRINK_VISUAL = 45121 -- spell_holiday.cpp:41
+local SPELL_ROMANTIC_PICNIC_ACHIEV = 45123 -- spell_holiday.cpp:42
+local UNIT_STAND_STATE_SIT = 1 -- UnitDefines.h:34
+
+local ROMANTIC_PICNIC_VISUALS = {
+    SPELL_ROMANTIC_PICNIC_MEAL_EAT_VISUAL,
+    SPELL_ROMANTIC_PICNIC_DRINK_VISUAL,
+}
+
+local function romanticPicnicApply(event, aura, target)
+    target:SetStandState(UNIT_STAND_STATE_SIT)
+    target:CastSpell(target, SPELL_ROMANTIC_PICNIC_MEAL_PERIODIC, false)
+end
+
+RegisterAuraEvent(SPELL_ROMANTIC_PICNIC, 2, romanticPicnicApply)
+
+local function romanticPicnicPeriodic(event, aura, target)
+    if target:GetStandState() ~= UNIT_STAND_STATE_SIT then
+        target:RemoveAura(SPELL_ROMANTIC_PICNIC_ACHIEV)
+        aura:Remove()
+        return
+    end
+    target:CastSpell(target, SPELL_ROMANTIC_PICNIC_BASKET_CHECK, false)
+    target:CastSpell(target, ROMANTIC_PICNIC_VISUALS[math.random(#ROMANTIC_PICNIC_VISUALS)], false)
+    local foundSomeone = false
+    local caster = aura:GetCaster()
+    for _, player in ipairs(target:GetPlayersInRange(10)) do
+        if player:GetGUID() ~= target:GetGUID() and player:HasAura(SPELL_ROMANTIC_PICNIC) then
+            if caster ~= nil then
+                caster:CastSpell(player, SPELL_ROMANTIC_PICNIC_ACHIEV, true)
+                caster:CastSpell(target, SPELL_ROMANTIC_PICNIC_ACHIEV, true)
+            end
+            foundSomeone = true
+        end
+    end
+    if not foundSomeone and target:HasAura(SPELL_ROMANTIC_PICNIC_ACHIEV) then
+        target:RemoveAura(SPELL_ROMANTIC_PICNIC_ACHIEV)
+    end
+end
+
+RegisterAuraEvent(SPELL_ROMANTIC_PICNIC, 1, romanticPicnicPeriodic)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hallow_end_trick::HandleScript (spell_holiday.cpp:254-282,
+--   registered OnEffectHitTarget EFFECT_0 SCRIPT_EFFECT at :288): on
+--   a hit player the caster casts one costume aura, triggered —
+--   urand(0, 5) picks leper gnome (1), pirate (2), ghost (3) or
+--   ninja (4) by native gender, skeleton (5), or the trick buff
+--   24753 (0). No PreventDefaultAction in C++, so the ev5
+--   notification-only fire is exact. Binding ID 24750 comes from the
+--   `// 24750 Trick` comment (spell_holiday.cpp:213) — the same
+--   convention as the 24930 port above; no spell_script_names row
+--   exists in-tree (sql/mysql/world.sql ships the table empty). ev5
+--   fires on the creature path (boss_ai.go:3435) and the player
+--   triggered funnel (spells.go:28261), not on a direct player cast
+--   (finishSpellCast) — the open engine-work item from the census
+--   head. The triggered costume cast lands non-triggered on the
+--   player path (file KNOWN LIMIT).
+local SPELL_HALLOW_END_TRICK = 24750 -- spell_holiday.cpp:213
+local SPELL_PIRATE_COSTUME_MALE = 24708 -- spell_holiday.cpp:216
+local SPELL_PIRATE_COSTUME_FEMALE = 24709 -- spell_holiday.cpp:217
+local SPELL_NINJA_COSTUME_MALE = 24710 -- spell_holiday.cpp:218
+local SPELL_NINJA_COSTUME_FEMALE = 24711 -- spell_holiday.cpp:219
+local SPELL_LEPER_GNOME_COSTUME_MALE = 24712 -- spell_holiday.cpp:220
+local SPELL_LEPER_GNOME_COSTUME_FEMALE = 24713 -- spell_holiday.cpp:221
+local SPELL_SKELETON_COSTUME = 24723 -- spell_holiday.cpp:222
+local SPELL_GHOST_COSTUME_MALE = 24735 -- spell_holiday.cpp:223
+local SPELL_GHOST_COSTUME_FEMALE = 24736 -- spell_holiday.cpp:224
+local SPELL_HALLOW_END_TRICK_BUFF = 24753 -- spell_holiday.cpp:225
+
+local function hallowEndTrickHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local spellId = SPELL_HALLOW_END_TRICK_BUFF
+    local female = target:GetNativeGender() == GENDER_FEMALE
+    local roll = math.random(0, 5)
+    if roll == 1 then
+        if female then
+            spellId = SPELL_LEPER_GNOME_COSTUME_FEMALE
+        else
+            spellId = SPELL_LEPER_GNOME_COSTUME_MALE
+        end
+    elseif roll == 2 then
+        if female then
+            spellId = SPELL_PIRATE_COSTUME_FEMALE
+        else
+            spellId = SPELL_PIRATE_COSTUME_MALE
+        end
+    elseif roll == 3 then
+        if female then
+            spellId = SPELL_GHOST_COSTUME_FEMALE
+        else
+            spellId = SPELL_GHOST_COSTUME_MALE
+        end
+    elseif roll == 4 then
+        if female then
+            spellId = SPELL_NINJA_COSTUME_FEMALE
+        else
+            spellId = SPELL_NINJA_COSTUME_MALE
+        end
+    elseif roll == 5 then
+        spellId = SPELL_SKELETON_COSTUME
+    end
+    caster:CastSpell(target, spellId, true)
+end
+
+RegisterSpellEvent(SPELL_HALLOW_END_TRICK, 5, hallowEndTrickHit)
