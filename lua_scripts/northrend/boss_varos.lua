@@ -70,10 +70,11 @@
 -- lieutenant precedent).
 -- EVENT_ENERGIZE_CORES_VISUAL DoCast(me,
 -- SPELL_ENERGIZE_CORES_VISUAL 62136) non-triggered, 5s loop —
--- PORTED as CreateLuaEvent + CastSpell(creature, 62136). The
--- firstCoreEnergize / coreEnergizeOrientation latch is unmodeled:
--- its only consumer is the spell_varos_energize_core_area
--- SpellScripts’ orientation filter (no SpellScript bridge).
+-- PORTED as CreateLuaEvent + CastSpell(creature, 62136); the
+-- firstCoreEnergize / coreEnergizeOrientation latch IS modeled
+-- per-GUID in energizeVisualTick below (2026-11-11), and the
+-- 4s EVENT_ENERGIZE_CORES chain + its ev7 filter are ported
+-- there too.
 -- EVENT_CALL_AZURE Talk(SAY_AZURE 1) + Talk(SAY_AZURE_EMOTE 2),
 -- 15s/30s init -> 20s/25s loop — PORTED on a CreateLuaEvent
 -- timer; the DoCast(me, SPELL_CALL_AZURE_RING_CAPTAIN 51002) leg
@@ -127,9 +128,15 @@
 -- area_entry — SpellScript FilterTargets (TARGET_UNIT_SRC_AREA_
 -- ENEMY / TARGET_UNIT_SRC_AREA_ENTRY): caster must be NPC_VAROS,
 -- keeps only targets within 1.0f of the AI's
--- GetCoreEnergizeOrientation() — no SpellScript bridge (the
--- standing SpellScript-check-handlers gap); both join the
--- no-SpellScript-bridge queue.
+-- GetCoreEnergizeOrientation(). The "no SpellScript bridge" claim
+-- is STALE (2026-11-11): ev7 is the OnObjectAreaTargetSelect bridge
+-- (runtime.go:607, malygos 402/412/413 precedent), GetAngle is the
+-- GetAbsoluteAngle twin (object.go:449), GetO() the orientation
+-- read, and the latch is modeled per-GUID in energizeVisualTick
+-- below (first tick = GetO(), later ticks -= 2.0 normalized).
+-- ENEMY PORTED 2026-11-11 (ev7); _ENTRY is the same filter shape
+-- on the entry target list — next strip.
+local SPELL_ENERGIZE_CORES = 50785 -- boss_varos.cpp:38
 
 local ENTRY_VAROS = 27447
 
@@ -148,6 +155,20 @@ local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_DONE = 3 -- EncounterState (InstanceScript.h:68-76)
 
 local timers = {}
+
+-- Per-GUID twin of the boss_varosAI firstCoreEnergize /
+-- coreEnergizeOrientation members (boss_varos.cpp:68-73, 168-169):
+-- nil = not yet latched (firstCoreEnergize false), a number = the
+-- latched orientation. Reset clears it (C++ Reset calls
+-- Initialize(), :88-97); the filter below reads 0.0 for an
+-- unlatched GUID, the C++ Initialize() 0.0f twin.
+local coreEnergizeOrientation = {}
+
+-- Position::NormalizeOrientation twin: [0, 2pi).
+local function normalizeOrientation(o)
+    local twoPi = 2 * math.pi
+    return o - twoPi * math.floor(o / twoPi)
+end
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -186,10 +207,18 @@ local function amplifyTick(creature, guid)
     end)
 end
 
--- C++ EVENT_ENERGIZE_CORES_VISUAL (:125-136): DoCast(me, 62136)
--- non-triggered, 5s loop. The orientation latch is unmodeled
--- (SpellScript-only consumer); the 4s EVENT_ENERGIZE_CORES chain
--- dies with the 50785 stay-out.
+-- C++ EVENT_ENERGIZE_CORES_VISUAL (:125-136): latch first (first
+-- tick = me->GetOrientation(), later ticks -= 2.0f normalized),
+-- then DoCast(me, 62136) non-triggered, 5s loop; schedules
+-- EVENT_ENERGIZE_CORES 4s. PORTED 2026-11-11 (the latch + the 4s
+-- chain; the old "unmodeled / dies with the 50785 stay-out" note
+-- is retired — the 50785 cast is a plain self-cast, and its
+-- target filter is the ev7 handler below).
+-- Forward-declared (tharon_ja/gal_darah idiom: plain assignment
+-- below, never a second `local function`): the visual tick
+-- schedules the cores tick, defined just after it.
+local energizeCoresTick
+
 local function energizeVisualTick(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "energizeVisual", 500, function()
@@ -197,11 +226,70 @@ local function energizeVisualTick(creature, guid)
         end)
         return
     end
+    local orientation = coreEnergizeOrientation[guid]
+    if orientation == nil then
+        coreEnergizeOrientation[guid] = creature:GetO()
+    else
+        coreEnergizeOrientation[guid] = normalizeOrientation(orientation - 2.0)
+    end
     creature:CastSpell(creature, SPELL_ENERGIZE_CORES_VISUAL)
     schedule(guid, "energizeVisual", 5000, function()
         energizeVisualTick(creature, guid)
     end)
+    schedule(guid, "energizeCores", 4000, function()
+        energizeCoresTick(creature, guid)
+    end)
 end
+
+-- C++ EVENT_ENERGIZE_CORES (:121-123): DoCast(me, SPELL_ENERGIZE_
+-- CORES 50785) non-triggered, then CancelEvent (self). PORTED
+-- 2026-11-11. DORMANT: 50785's damage/effect legs are DBC-side;
+-- the ev7 filter below shapes its target list when it lands.
+energizeCoresTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "energizeCores", 500, function()
+            energizeCoresTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_ENERGIZE_CORES)
+end
+
+-- C++ spell_varos_energize_core_area_enemy::FilterTargets
+-- (boss_varos.cpp:324-353): OnObjectAreaTargetSelect, EFFECT_0,
+-- TARGET_UNIT_SRC_AREA_ENEMY. Caster must be NPC_VAROS; keeps
+-- only targets whose absolute angle from Varos is within 1.0f of
+-- the AI's GetCoreEnergizeOrientation() (fabs, unnormalized diff
+-- — the C++ wrap-around quirk is kept verbatim). PORTED
+-- 2026-11-11 via ev7 (runtime.go:607); GetAngle is the
+-- GetAbsoluteAngle twin (object.go:449). DORMANT: 50785 is cast
+-- only by the energizeCoresTick above, which rides Spell.dbc.
+local function energizeCoreAreaEnemyFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if caster:GetEntry() ~= ENTRY_VAROS then
+        return
+    end
+    local orientation = coreEnergizeOrientation[caster:GetGUIDLow()] or 0.0
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        local angle = caster:GetAngle(target:GetX(), target:GetY())
+        if math.abs(orientation - angle) <= 1.0 then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_ENERGIZE_CORES, 7, energizeCoreAreaEnemyFilter)
 
 -- C++ EVENT_CALL_AZURE (:138-143): Talk(SAY_AZURE) +
 -- Talk(SAY_AZURE_EMOTE), 15s/30s init -> 20s/25s loop. The 51002
@@ -259,6 +347,9 @@ local function varosReset(event, creature)
     if creature:GetBossState(DATA_VAROS) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_VAROS, BOSS_STATE_NOT_STARTED)
     end
+    -- C++ Reset calls Initialize() (boss_varos.cpp:88-97): the
+    -- orientation latch resets with it.
+    coreEnergizeOrientation[creature:GetGUIDLow()] = nil
     cancelTimers(creature:GetGUIDLow())
 end
 
