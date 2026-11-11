@@ -36711,6 +36711,15 @@ func (s *session) auraEffectParams(spell wotlk.Spell, eff wotlk.SpellEffect, eff
 		}
 		amount = uint32(value)
 	}
+	// spell_dk_vampiric_blood::CalculateAmount (spell_dk.cpp:2576-2581):
+	// the EFFECT_1 MOD_INCREASE_HEALTH amount is that pct of the
+	// owner's max health (Unit::CountPctFromMaxHealth), not the flat
+	// DBC value. No recalculation leg: C++ re-runs this hook when max
+	// health changes, Go computes it once at application (the 48792
+	// precedent above). DORMANT until Spell.dbc ships 55233.
+	if spell.ID == 55233 && effectIndex == 1 && eff.Aura == spellAuraModIncreaseHealth && s.player != nil {
+		amount = uint32(uint64(s.player.MaxHealth) * uint64(amount) / 100)
+	}
 	return durationMs, periodMs, amount
 }
 
