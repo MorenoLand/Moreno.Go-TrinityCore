@@ -716,6 +716,27 @@ func (s *session) dummyAuraEffectAmount(family uint32, iconID uint32) (int32, bo
 	return 0, false
 }
 
+// dummyAuraEffectSpellID mirrors Unit::GetDummyAuraEffect(family, icon, 0)
+// (Unit.cpp:4510-4524) for callers that need the matching aura's spell
+// id rather than its amount: the first live SPELL_AURA_DUMMY aura with
+// the family and icon. Same scan as dummyAuraEffectAmount above.
+func (s *session) dummyAuraEffectSpellID(family uint32, iconID uint32) (uint32, bool) {
+	if s == nil || s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.AuraType != spellAuraDummy || aura.EffectMask&1 == 0 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found || spell.SpellFamilyName != family || spell.SpellIconID != iconID {
+			continue
+		}
+		return aura.SpellID, true
+	}
+	return 0, false
+}
+
 // heartOfTheWildStaminaPct mirrors the Heart of the Wild arm of
 // AuraEffect::HandleShapeshiftBoosts (SpellAuraEffects.cpp:1208-1224): the
 // amount of the first MOD_TOTAL_STAT_PERCENTAGE aura with SpellIconID 240

@@ -512,6 +512,47 @@ func (s *session) getEquipmentEnchant(slot uint8) uint32 {
 	return uint32(encID)
 }
 
+// windfuryWeaponProc resolves the spell_sha_windfury_weapon CheckProc
+// (spell_shaman.cpp:2387-2435) for the aura's cast item: the item must
+// still be equipped, in the mainhand or offhand slot matching the swing's
+// proc flags, and carrying a temporary enchantment (index 3 of the
+// item_instance enchantments column, TEMP_ENCHANTMENT_SLOT). The attack
+// type follows the slot (GetAttackBySlot); a swapped or unenchanted
+// weapon never procs. The NPCBot leg has no Go model.
+func (s *session) windfuryWeaponProc(ctx context.Context, aura *activeAura, ev procEventInfo) (offhand bool, tempEnchantID uint32, ok bool) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || ctx == nil || aura == nil || aura.ItemGUID == 0 {
+		return false, 0, false
+	}
+	var slot int64
+	var encStr string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ci.slot, COALESCE(ii.enchantments, '') FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ci.item = ? AND ci.bag = 0 LIMIT 1`, s.playerGUID, int64(aura.ItemGUID)).Scan(&slot, &encStr); err != nil {
+		return false, 0, false
+	}
+	switch slot {
+	case int64(equipSlotMainhand):
+	case int64(equipSlotOffhand):
+		offhand = true
+	default:
+		return false, 0, false
+	}
+	if offhand {
+		if ev.typeMask&procFlagDoneOffhandAttack == 0 {
+			return false, 0, false
+		}
+	} else if ev.typeMask&procFlagDoneMainhandAttack == 0 {
+		return false, 0, false
+	}
+	fields := strings.Fields(encStr)
+	if len(fields) <= 3 {
+		return false, 0, false
+	}
+	tempID, err := strconv.ParseUint(fields[3], 10, 32)
+	if err != nil || tempID == 0 {
+		return false, 0, false
+	}
+	return offhand, uint32(tempID), true
+}
+
 // getEquipmentItem returns the item entry ID present on the given equipment slot.
 func (s *session) getEquipmentItem(slot uint8) uint32 {
 	if s == nil || s.player == nil || s.player.Equipment == "" {
@@ -3719,6 +3760,18 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 48108 && !s.genExtraEffectsProcAllowed(ev, triggerTargetGUID) {
 			continue
 		}
+		// spell_sha_windfury_weapon::CheckProc
+		// (spell_shaman.cpp:2387-2435): the aura's cast item must still
+		// be the equipped weapon for the swinging attack type, carrying
+		// the temporary Windfury enchantment. The gate runs before the
+		// chance roll, like the C++ CheckProc in GetProcEffectMask
+		// (70656 precedent above). DORMANT until Spell.dbc ships the
+		// 33757 proc entry.
+		if auraSpell.ID == 33757 {
+			if _, _, ok := s.windfuryWeaponProc(ctx, aura, ev); !ok {
+				continue
+			}
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -4911,6 +4964,70 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraCast = true
 				s.triggeredByAuraSpell = auraSpell.ID
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 70809, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 33757 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_windfury_weapon::HandleProc
+				// (spell_shaman.cpp:2437-2501): PreventDefaultAction; the
+				// actor is the aura holder (the CheckProc gate above
+				// already matched the swinging weapon); the swinging
+				// weapon's temporary enchantment picks the rank whose
+				// EFFECT_0 MiscValue equals it, and EFFECT_1 CalcValue
+				// is the extra attack power. The Windfury Attack (25504
+				// mainhand / 33750 offhand) fires twice, triggered, on
+				// the proc target with BP0 = extraAP / 14 * hasted
+				// attack time / 1000. No Lua ev6 twin: spell_shaman.lua
+				// holds no 33757 handler. DORMANT until Spell.dbc ships
+				// the 33757 proc entry.
+				if ev.actorGUID == 0 || ev.actorGUID != s.playerGUID || triggerTargetGUID == 0 {
+					continue
+				}
+				_, enchantID, ok := s.windfuryWeaponProc(ctx, aura, ev)
+				if !ok {
+					continue
+				}
+				if s.server == nil || s.server.Data == nil {
+					continue
+				}
+				var extraAttackPower int32
+				for rank := uint8(1); rank <= 8; rank++ {
+					rankID := s.server.spellWithRank(8232, rank)
+					if rankID == 0 {
+						break
+					}
+					rankSpell, found, err := s.server.Data.Spell(rankID)
+					if err != nil || !found || len(rankSpell.Effects) < 2 {
+						continue
+					}
+					if rankSpell.Effects[0].MiscValue != int32(enchantID) {
+						continue
+					}
+					extraAttackPower = rankSpell.Effects[1].CalcValueForLevel(rankSpell, uint32(s.player.Level))
+					break
+				}
+				if extraAttackPower == 0 {
+					continue
+				}
+				attackSpellID := uint32(25504)
+				attackTime := s.player.AttackTime
+				offhand := false
+				if ev.typeMask&procFlagDoneOffhandAttack != 0 {
+					attackSpellID = 33750
+					attackTime = s.player.OffhandAttackTime
+					offhand = true
+				}
+				hasted := s.getHastedMeleeSpeed(time.Duration(attackTime)*time.Millisecond, offhand)
+				amount := int32(float64(extraAttackPower) / 14.0 * float64(hasted) / float64(time.Second))
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				for n := 0; n < 2; n++ {
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: attackSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				}
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
 				continue

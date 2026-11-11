@@ -49553,12 +49553,59 @@ func (s *session) canStoreNewItem(ctx context.Context, playerGUID uint64, entry 
 	return equipErrOk
 }
 
+// healthstoneItemTypes is the iTypes table of
+// spell_warl_create_healthstone (spell_warlock.cpp:250-259): per
+// Create Healthstone rank (rows 1-8: Minor, Lesser, Healthstone,
+// Greater, Major, Master, Demonic, Fel), the base stone, the Improved
+// Healthstone R1 stone, and the Improved Healthstone R2 stone.
+var healthstoneItemTypes = [8][3]uint32{
+	{5512, 19004, 19005},
+	{5511, 19006, 19007},
+	{5509, 19008, 19009},
+	{5510, 19010, 19011},
+	{9421, 19012, 19013},
+	{22103, 22104, 22105},
+	{36889, 36890, 36891},
+	{36892, 36893, 36894},
+}
+
+// createHealthstoneRank mirrors SpellInfo::GetRank for the Create
+// Healthstone chain (first spell 6201): the 1-based rank of spellID,
+// or 0 when the spell is not a Create Healthstone rank or the
+// spell_ranks chain is unavailable. Ranks resolve through the
+// spell_ranks chain (spellRank/spellWithRank), so no rank spell list
+// is hardcoded.
+func (s *session) createHealthstoneRank(spellID uint32) uint8 {
+	if s == nil || s.server == nil {
+		return 0
+	}
+	rank := s.server.spellRank(spellID)
+	if rank == 0 || rank > 8 {
+		return 0
+	}
+	if s.server.spellWithRank(6201, rank) != spellID {
+		return 0
+	}
+	return rank
+}
+
 // checkSpellCreateItemCast mirrors the SPELL_EFFECT_CREATE_ITEM /
 // SPELL_EFFECT_CREATE_ITEM_2 arm of the Spell::CheckItems special-effects
 // loop (Spell.cpp:6864-6905). Returns the SpellCastResult failure code, or
 // 0 when the arm passes. Client-initiated casts only — triggered casts go
 // through castSpellDirect (the !IsTriggered() arm is structural).
 func (s *session) checkSpellCreateItemCast(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	// spell_warl_create_healthstone::CheckCast
+	// (spell_warlock.cpp:201-210): the caster must be able to store
+	// the rank's base stone (iTypes[rank-1][0]); any failure is
+	// SPELL_FAILED_TOO_MANY_OF_ITEM. The improved-stone columns play
+	// no part here — C++ checks the base item only.
+	if rank := s.createHealthstoneRank(spell.ID); rank != 0 {
+		if msg := s.canStoreNewItem(ctx, s.playerGUID, healthstoneItemTypes[rank-1][0], 1); msg != equipErrOk {
+			return spellFailedTooManyOfItem
+		}
+		return 0
+	}
 	for i := 0; i < len(spell.Effects); i++ {
 		eff := spell.Effects[i]
 		if eff.Effect != spellEffectCreateItem && eff.Effect != spellEffectCreateItem2 {
@@ -52977,6 +53024,38 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
 	}
+	// spell_warl_create_healthstone::HandleScriptEffect
+	// (spell_warlock.cpp:212-237): the EFFECT_0 SCRIPT_EFFECT
+	// OnEffectHitTarget arm — the hit unit (the caster, self-cast)
+	// creates the rank's stone, upgraded by its Improved Healthstone
+	// dummy aura (warlock family, icon 284, effect 0): R1 (18692)
+	// takes column 1, R2 (18693) column 2, no aura or an unknown rank
+	// takes the base column 0 (the C++ error log + rank-0 fallthrough).
+	// The count is the effect's CalcValue (Spell::DoCreateItem,
+	// SpellEffects.cpp:1587-1592), clamped to at least 1. The
+	// CheckCast arm above already gated inventory space.
+	// DORMANT until Spell.dbc ships the healthstone rank records.
+	if rank := s.createHealthstoneRank(spellID); rank != 0 {
+		improvedRank := uint8(0)
+		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+			if auraSpellID, ok := ts.dummyAuraEffectSpellID(spellFamilyWarlock, 284); ok {
+				switch auraSpellID {
+				case 18692:
+					improvedRank = 1
+				case 18693:
+					improvedRank = 2
+				}
+			}
+		}
+		count := eff.CalcValueForLevel(spell, uint32(s.player.Level))
+		if count < 1 {
+			count = 1
+		}
+		if _, err := s.storeOrStackItem(ctx, targetGUID, healthstoneItemTypes[rank-1][improvedRank], uint32(count)); err != nil {
+			s.sendEquipError(equipErrItemNotFound, 0)
+		}
+		return
+	}
 	switch spellID {
 	case 41931:
 		// Mug Transformation (SpellEffects.cpp:3654-3685): hunt the bags for
@@ -53497,6 +53576,63 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			judgement = 41461
 		}
 		s.castSpellDirect(ctx, judgement, targetGUID)
+	case 47193:
+		// spell_warl_demonic_empowerment::HandleScriptEffect
+		// (spell_warlock.cpp:444-483): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — the hit creature must be a pet; it
+		// casts its family empowerment on itself, triggered:
+		// Succubus 54435, Voidwalker 54443, Felguard 54508, Felhunter
+		// 54509, Imp 54444. The voidwalker leg carries BP0 = the
+		// caster's CalculateSpellDamage(54443, EFFECT_0) as a percent
+		// of the pet's max health (CountPctFromMaxHealth). The family
+		// reads creature_template.family for the pet's entry (the
+		// pets.go:477 precedent); an unresolvable pet, entry, or
+		// family skips where C++ would assert (the 55680 precedent).
+		// DORMANT until Spell.dbc ships the 47193 record.
+		if s.petNumberForGUID(targetGUID) == 0 {
+			return
+		}
+		motion := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID)
+		if motion == nil {
+			return
+		}
+		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return
+		}
+		var family int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(family, 0) FROM creature_template WHERE entry = ?", motion.Entry).Scan(&family); err != nil {
+			return
+		}
+		var buffSpellID uint32
+		var overrides map[int]int32
+		switch family {
+		case 17: // CREATURE_FAMILY_SUCCUBUS
+			buffSpellID = 54435
+		case 16: // CREATURE_FAMILY_VOIDWALKER
+			buffSpellID = 54443
+			if s.server.Data == nil {
+				return
+			}
+			voidwalkerSpell, found, err := s.server.Data.Spell(54443)
+			if err != nil || !found || len(voidwalkerSpell.Effects) == 0 {
+				return
+			}
+			pct := voidwalkerSpell.Effects[0].CalcValueForLevel(voidwalkerSpell, uint32(s.player.Level))
+			maxHealth, _, _, ok := s.server.procTargetVitals(s.player.Map, s.player.InstanceID, targetGUID)
+			if !ok || maxHealth == 0 {
+				return
+			}
+			overrides = map[int]int32{0: int32(uint64(maxHealth) * uint64(pct) / 100)}
+		case 29: // CREATURE_FAMILY_FELGUARD
+			buffSpellID = 54508
+		case 15: // CREATURE_FAMILY_FELHUNTER
+			buffSpellID = 54509
+		case 23: // CREATURE_FAMILY_IMP
+			buffSpellID = 54444
+		default:
+			return
+		}
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, buffSpellID, targetGUID, true, overrides, nil, false, 0)
 	}
 }
 
