@@ -416,13 +416,14 @@ local SPELL_CATEGORY_HOWLING_BLAST = 1248 -- spell_dk.cpp:116
 -- SPELL_AURA_PROC_TRIGGER_SPELL OnEffectProc. The target's spell
 -- history resets cooldowns whose DBC category is
 -- SPELL_CATEGORY_HOWLING_BLAST (1248), update=true. The DoCheckProc
--- target-is-player gate is vacuous in the ev6 loop (the target is
--- always the aura-holding player, procs.go:3921). No
+-- target-is-player gate rides the handler (the creature ev6 loop at
+-- boss_ai.go:10884 can pass a non-player target, and
+-- ResetTypeCooldowns is a player-only method). No
 -- PreventDefaultAction: the DBC default trigger still fires after
 -- (the handler returns nothing). DORMANT until Spell.dbc ships the
 -- 49188 proc entry.
 local function rimeProc(event, aura, target, actor, procTarget, damage)
-    if target == nil then
+    if target == nil or target:GetTypeId() ~= 4 then
         return
     end
     target:ResetTypeCooldowns(SPELL_CATEGORY_HOWLING_BLAST, true)
