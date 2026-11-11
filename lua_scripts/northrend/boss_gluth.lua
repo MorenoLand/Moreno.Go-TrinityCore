@@ -358,8 +358,8 @@ end
 -- C++ spell_gluth_zombiechow_search::HealForEachTargetHit
 -- (boss_gluth.cpp:368-371): AfterHit heals Gluth 5% max health per
 -- unit hit (ev3 fires once per hit target, boss_ai.go:4215-4228).
--- 28239 single-target / 28404 multi (boss_gluth.cpp:44; the census
--- has no row for 28404). DORMANT: both cast sites ride the unported
+-- 28239 single-target / 28404 multi (boss_gluth.cpp:44; census row
+-- 386 is the 28404 entry). DORMANT: both cast sites ride the unported
 -- zombie-eat machine (EVENT_KILL_ZOMBIE_SINGLE :231,
 -- EVENT_SEARCH_ZOMBIE_MULTI :258).
 local function zombieChowHeal(event, spell, hitTarget)

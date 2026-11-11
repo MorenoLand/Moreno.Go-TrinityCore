@@ -173,8 +173,9 @@
 -- arm; the ev20 SummonedCreatureDespawn forward stays out — Gothik's
 -- arm is summons.Despawn bookkeeping only, no Lua-visible effect).
 -- spell_gothik_shadow_bolt_volley (SpellScript 27831: FilterTargets
--- removes shadow-marked targets) — no SpellScript binding bridge
--- (razelikh precedent) — joins the SpellScript/AuraScript queue.
+-- keeps ONLY shadow-marked targets — UnitAuraCheck(false, 27825)
+-- returns true for the unmarked, and remove_if drops those) — PORTED
+-- below (ev7, soulstorm-targeting precedent).
 
 local ENTRY_GOTHIK = 16060
 local ENTRY_GOTHIK_TRIGGER = 16137
@@ -1100,3 +1101,29 @@ RegisterCreatureEvent(ENTRY_DEAD_HORSE, 1, spectralHorseEnterCombat)
 RegisterCreatureEvent(ENTRY_DEAD_HORSE, 2, minionCancelTimers)
 RegisterCreatureEvent(ENTRY_DEAD_HORSE, 4, minionCancelTimers)
 RegisterCreatureEvent(ENTRY_DEAD_HORSE, 23, minionCancelTimers)
+
+-- C++ spell_gothik_shadow_bolt_volley::FilterTargets (boss_gothik.cpp:979-982):
+-- OnObjectAreaTargetSelect EFFECT_0 keeps only targets carrying
+-- SPELL_SHADOW_MARK (27825): UnitAuraCheck(false, 27825) is true for
+-- the unmarked, and remove_if drops those. ev7 fires per selecting
+-- effect from the creature cast path (boss_ai.go:3128), so the
+-- EFFECT_0 gate matches the C++ bind; targets resolve to player /
+-- creature unit objects, both with HasAura bridged. Live via the
+-- living-rider boltVolleyTick DoCastAOE (no phase gate in the rider's
+-- _UpdateAI; riders spawn phase one).
+local function shadowBoltVolleyFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:HasAura(SPELL_SHADOW_MARK) then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+RegisterSpellEvent(SPELL_SHADOW_BOLT_VOLLEY, 7, shadowBoltVolleyFilter)
