@@ -65,7 +65,13 @@
 --   pct (Effects[0].DamageMultiplier = ChainAmplitude) + Improved
 --   Death Strike icon 2751 leg, self-cast 45470; the C++ cast is
 --   non-triggered but rides the triggered funnel (no non-triggered
---   player cast helper — the 47496 ghoul precedent).
+--   player cast helper — the 47496 ghoul precedent). spell_dk_
+--   pestilence (50842, tick 567) stays out — no ev5 player path, and
+--   no aura donePct/critChance/ChangeAmount bridges for the disease
+--   copy legs. spell_dk_rune_tap_party (59754, tick 569) stays out —
+--   the OnObjectAreaTargetSelect fire site is creature-path only, no
+--   player-path twin. Rime (49188), scent_of_blood_trigger (49004)
+--   and sudden_doom (49018) are PORTED below (ev6, ticks 568/570/571).
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
 --   path has no OnEffectHitTarget site on the normal cast path, so a
 --   RegisterSpellEvent ev5 handler would never fire on a client cast):
@@ -402,3 +408,78 @@ local function necrosisProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_DK_NECROSIS_R1, 6, necrosisProc)
+
+local SPELL_DK_RIME = 49188 -- spell_dk.cpp:2127
+local SPELL_CATEGORY_HOWLING_BLAST = 1248 -- spell_dk.cpp:116
+
+-- C++ spell_dk_rime::HandleProc (spell_dk.cpp:2142-2149): EFFECT_1
+-- SPELL_AURA_PROC_TRIGGER_SPELL OnEffectProc. The target's spell
+-- history resets cooldowns whose DBC category is
+-- SPELL_CATEGORY_HOWLING_BLAST (1248), update=true. The DoCheckProc
+-- target-is-player gate is vacuous in the ev6 loop (the target is
+-- always the aura-holding player, procs.go:3921). No
+-- PreventDefaultAction: the DBC default trigger still fires after
+-- (the handler returns nothing). DORMANT until Spell.dbc ships the
+-- 49188 proc entry.
+local function rimeProc(event, aura, target, actor, procTarget, damage)
+    if target == nil then
+        return
+    end
+    target:ResetTypeCooldowns(SPELL_CATEGORY_HOWLING_BLAST, true)
+end
+
+RegisterAuraEvent(SPELL_DK_RIME, 6, rimeProc)
+
+local SPELL_DK_SCENT_OF_BLOOD_TRIGGER = 49004 -- spell_dk.cpp:2225
+
+-- C++ spell_dk_scent_of_blood_trigger::HandleProc (spell_dk.cpp:2237-2240):
+-- EFFECT_0 SPELL_AURA_PROC_TRIGGER_SPELL OnEffectProc. Removes the old
+-- buff (the effect's DBC trigger spell) from the holder so the re-proc
+-- does not stack onto an existing aura. No PreventDefaultAction: the
+-- DBC default trigger still fires after (the handler returns nothing).
+-- Distinct from the talent aura 50421, whose Go leg lives in procs.go.
+-- DORMANT until Spell.dbc ships the 49004 proc entry.
+local function scentOfBloodTriggerProc(event, aura, target, actor, procTarget, damage)
+    if aura == nil or target == nil then
+        return
+    end
+    local trig = aura:GetTriggerSpell(0)
+    if trig ~= 0 then
+        target:RemoveAura(trig)
+    end
+end
+
+RegisterAuraEvent(SPELL_DK_SCENT_OF_BLOOD_TRIGGER, 6, scentOfBloodTriggerProc)
+
+local SPELL_DK_SUDDEN_DOOM = 49018 -- spell_dk.cpp:2382
+local SUDDEN_DOOM_DEATH_COIL_RANKS = {47541, 52375, 59134, 62900} -- spell_dk.cpp:840
+
+-- C++ spell_dk_sudden_doom::HandleProc (spell_dk.cpp:2398-2422):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction first
+-- (the ev6 true return on every path, even the no-rank path), then the
+-- actor casts the highest known Death Coil rank on the proc target,
+-- triggered via the aurEff overload (the player CastSpell funnel).
+-- The rank walk is GetNextRankSpell + HasSpell in C++; no
+-- GetNextRankSpell bridge exists, so the walk is the hardcoded
+-- ascending rank list from the death-coil class (spell_dk.cpp:840).
+-- DORMANT until Spell.dbc ships the 49018 proc entry.
+local function suddenDoomProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local known = 0
+    for _, rank in ipairs(SUDDEN_DOOM_DEATH_COIL_RANKS) do
+        if actor:HasSpell(rank) then
+            known = rank
+        else
+            break
+        end
+    end
+    if known == 0 then
+        return true
+    end
+    actor:CastSpell(procTarget, known)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_SUDDEN_DOOM, 6, suddenDoomProc)
