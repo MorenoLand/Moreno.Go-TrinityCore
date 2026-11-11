@@ -46,8 +46,9 @@
 -- STAY-OUT (tick 294): every other spell_dk class — no proc hook
 --   (OnEffectProc/CheckProc), absorb/CalcAmount/ManaShield hooks
 --   absent, or SpellScript-only with no RegisterSpellScript in the
---   engine. spell_dk_death_and_decay is entry-blocked: its aura
---   spell ID lives in DB spell_script_names, nowhere in the file.
+--   engine. spell_dk_death_and_decay ranks 1-2 (43265/49938) are
+--   PORTED below (ev1, tick 547); ranks 3-4 (49939/49940) stay out —
+--   consecutive IDs with no in-tree citation.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
 --   needs DealDamage; spell_dk_raise_ally needs ghoul AI push/pop.
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
@@ -304,3 +305,50 @@ local function ghoulExplodeSuicide(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_DK_GHOUL_EXPLODE, 5, ghoulExplodeSuicide)
+
+local SPELL_DK_BUTCHERY_R1 = 48979 -- spell_dk.cpp:587
+local SPELL_DK_BUTCHERY_R2 = 49483 -- bot_death_knight_ai.cpp:72, rank 2
+local SPELL_DK_BUTCHERY_RUNIC_POWER = 50163 -- spell_dk.cpp:88
+
+-- C++ spell_dk_butchery::HandleProc (spell_dk.cpp:603-609): EFFECT_0
+-- SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction (the ev6 true
+-- return), then the actor self-casts SPELL_DK_BUTCHERY_RUNIC_POWER
+-- 50163 with BP0 = the aura EFFECT_0 amount, triggered via the aurEff
+-- overload (CastSpellExtraArgs(aurEff) sets TRIGGERED_FULL_MASK,
+-- SpellDefines.h:166) — the CastCustomSpell `true` arg is exact, not
+-- a delta. No CheckProc gate, no proc-spell or school filter, so the
+-- ev6 args suffice. DORMANT until Spell.dbc ships the 48979/49483
+-- proc entries.
+local function butcheryProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastCustomSpell(actor, SPELL_DK_BUTCHERY_RUNIC_POWER, true, aura:GetAmount())
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_BUTCHERY_R1, 6, butcheryProc)
+RegisterAuraEvent(SPELL_DK_BUTCHERY_R2, 6, butcheryProc)
+
+local SPELL_DK_DEATH_AND_DECAY_R1 = 43265 -- bot_death_knight_ai.cpp:34
+local SPELL_DK_DEATH_AND_DECAY_R2 = 49938 -- PlayerAI.cpp:247
+local SPELL_DK_DEATH_AND_DECAY_DAMAGE = 52212 -- spell_dk.cpp:57
+
+-- C++ spell_dk_death_and_decay::HandleDummyTick (spell_dk.cpp:819-827):
+-- EFFECT_0 SPELL_AURA_PERIODIC_DUMMY OnEffectPeriodic. The caster
+-- casts SPELL_DK_DEATH_AND_DECAY_DAMAGE 52212 on the aura holder with
+-- BP0 = the aura EFFECT_0 amount, triggered via the aurEff overload
+-- (TRIGGERED_FULL_MASK, SpellDefines.h:166) — the CastCustomSpell
+-- `true` arg is exact. Ranks 3-4 (49939/49940) are consecutive IDs
+-- with no in-tree citation — not registered until DBC confirms them.
+-- DORMANT until Spell.dbc ships the D&D aura records.
+local function deathAndDecayTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    caster:CastCustomSpell(target, SPELL_DK_DEATH_AND_DECAY_DAMAGE, true, aura:GetAmount())
+end
+
+RegisterAuraEvent(SPELL_DK_DEATH_AND_DECAY_R1, 1, deathAndDecayTick)
+RegisterAuraEvent(SPELL_DK_DEATH_AND_DECAY_R2, 1, deathAndDecayTick)

@@ -236,7 +236,7 @@ RegisterCreatureEvent(ENTRY, 23, onReset)
 -- DAMAGE 32961 on itself, triggered by the aura (the aurEff
 -- overload = triggered cast), and SetDuration(0) removes the
 -- aura (aura:SetDuration(0) twin). POWER_MANA is 0. The
--- CalculateAmount leg (5% of max mana per tick) stays out — no
+-- CalculateAmount leg (5% of current mana per tick) stays out — no
 -- DoEffectCalcAmount bridge.
 local SPELL_MARK_OF_KAZZAK_DAMAGE = 32961
 local POWER_MANA = 0
@@ -260,7 +260,9 @@ RegisterAuraEvent(SPELL_MARK_OF_KAZZAK, 1, markOfKazzakTick)
 -- cast). Rides the Go AuraEventOnProc bridge (event 6, lua_aura.go /
 -- procs.go); the boss's 21063 cast is ported above, so the leg can
 -- fire live whenever the afflicted player takes damage. The player
--- CastSpell path ignores the triggered flag (pre-existing, tick 423).
+-- CastSpell rides the triggered funnel (castSpellDirect mirrors
+-- Unit::CastSpell triggered=true, spells.go:24323) — the `true` arg
+-- is exact, not dropped (the tick-423 note was inverted).
 local SPELL_TWISTED_REFLECTION_HEAL = 21064 -- boss_doomlord_kazzak.cpp:45
 
 local function twistedReflectionProc(event, aura, target, actor, procTarget, damage)
