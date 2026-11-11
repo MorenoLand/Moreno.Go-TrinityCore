@@ -37,11 +37,14 @@
 -- (EventMap.cpp:111 early-returns on group 0), so the shutdown arm
 -- is fully C++-exact as ported.
 -- The systems_shutdown AuraScript (stun/root + gathering-speed removal)
--- has no AddUnitState bridge — documented. The Shutout achievement
--- flag IS modeled (tick 417): spawn init (Initialize twin) + the
--- EVENT_SHUTDOWN clear leg in shutdownTick below. The
--- ClearUnitState(UNIT_STATE_STUNNED | UNIT_STATE_ROOT) line in EVENT_REPAIR
--- (:435) is likewise unmodeled (no ClearUnitState bridge); the
+-- is PORTED below (RegisterAuraEvent apply/remove; AddUnitState is
+-- bridged, lua_creature_events.go:2294 — the old "no bridge" note was
+-- stale). The Shutout achievement flag IS modeled (tick 417): spawn
+-- init (Initialize twin) + the EVENT_SHUTDOWN clear leg in
+-- shutdownTick below. The ClearUnitState(UNIT_STATE_STUNNED |
+-- UNIT_STATE_ROOT) line in EVENT_REPAIR (:435) is PORTED in
+-- repairTick below (ClearUnitState bridged,
+-- lua_creature_events.go:2306); the
 -- UpdateAI CASTING gates (own pre-loop :394 + in-loop :473) are
 -- PORTED as a 500ms IsCasting defer in every ported timer tick
 -- (mal_ganis idiom; IsCasting bridged lua_creature_events.go:1950).
@@ -201,6 +204,8 @@ local POINT_MOTION_TYPE = 8
 local REACT_AGGRESSIVE = 2 -- UnitDefines.h:342
 local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117 (OBJECT_END + 0x35)
 local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+local UNIT_STATE_STUNNED = 0x08 -- Unit.h:214
+local UNIT_STATE_ROOT = 0x400 -- Unit.h:221
 local UNIT_FLAG_NON_ATTACKABLE = 0x00000002 -- UnitDefines.h:125
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
 
@@ -373,6 +378,7 @@ local function repairTick(creature, guid)
         return
     end
     creature:Talk(EMOTE_REPAIR)
+    creature:ClearUnitState(UNIT_STATE_STUNNED + UNIT_STATE_ROOT)
     schedule(guid, "shutdown", 150000, function()
         shutdownTick(creature, guid)
     end)
@@ -673,11 +679,13 @@ RegisterCreatureEvent(ENTRY_POOL_OF_TAR, 9, poolOfTarDamageTaken)
 -- EFFECT_0 SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, AURA_EFFECT_HANDLE_REAL.
 -- OnApply the owner creature gains UNIT_STATE_STUNNED|ROOT, the
 -- UNIT_FLAG_STUNNED flag, and loses its Gathering Speed aura (62375);
--- OnRemove the flag is cleared. The AddUnitState leg has no bridge and
--- stays out (the flag is the client-visible half); the flag and
--- RemoveAura legs ride the bridged SetFlag/RemoveFlag and RemoveAura.
+-- OnRemove the flag is cleared. AddUnitState is bridged
+-- (lua_creature_events.go:2294; the ROOT bit also sets the
+-- ScriptRooted gate) — the 2026-11-11 fix adds the state leg the
+-- old "no bridge" note had left out.
 
 local function systemsShutdownApply(event, aura, target)
+    target:AddUnitState(UNIT_STATE_STUNNED + UNIT_STATE_ROOT)
     target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
     target:RemoveAura(SPELL_GATHERING_SPEED)
 end

@@ -224,8 +224,11 @@
 -- RegisterAuraEvent OnRemove, mode gate via aura:GetRemoveMode));
 -- spell_assembly_meltdown (SPELL_EFFECT_INSTAKILL handler:
 -- instance GetGuidData(DATA_STEELBREAKER) ->
--- DoAction(ACTION_ADD_CHARGE) — no SpellScript bridge; joins
--- the no-SpellScript-bridge queue);
+-- DoAction(ACTION_ADD_CHARGE) — ev5 (OnEffectHitTarget) IS bridged,
+-- but the meltdown spell's binding ID is DB-side (spell_script_names)
+-- with no cast site or spell ID anywhere in the Ulduar tree; stays
+-- out on the binding (the old "no SpellScript bridge" rationale was
+-- stale, corrected 2026-11-11);
 -- spell_assembly_rune_of_summoning (62273 — periodic-dummy
 -- AuraScript: casts SPELL_RUNE_OF_SUMMONING_SUMMON 62020 with
 -- the summoner GUID + OnRemove despawn of the rune summon —
