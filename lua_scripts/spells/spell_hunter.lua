@@ -89,7 +89,7 @@ RegisterAuraEvent(SPELL_HUNTER_COBRA_STRIKES_TRIGGERED, 6, cobraStrikesTriggered
 
 -- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
 --   spell_hun_ascpect_of_the_viper::OnApply/OnRemove
---   (spell_hunter.cpp:194-206): EFFECT_0 SPELL_AURA_OBS_MOD_POWER,
+--   (spell_hunter.cpp:194-208): EFFECT_0 SPELL_AURA_OBS_MOD_POWER,
 --   AfterEffectApply/AfterEffectRemove REAL. Hunter T7 4P bonus:
 --   while the hunter has Viper Attack Speed 60144, applying the
 --   aspect casts Vicious Viper 61609 on self (aurEff args), and
@@ -153,3 +153,110 @@ local function glyphOfMendPetProc(event, aura, target, actor, procTarget, damage
 end
 
 RegisterAuraEvent(SPELL_HUNTER_GLYPH_OF_MEND_PET, 6, glyphOfMendPetProc)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hun_invigoration::HandleScriptEffect
+--   (spell_hunter.cpp:647-653): OnEffectHitTarget, EFFECT_0
+--   SPELL_EFFECT_SCRIPT_EFFECT. The hit unit's Invigoration talent
+--   aura (family HUNTER, icon 3487) rolls its amount as the chance;
+--   on success the hit unit casts the energize 53398 on itself,
+--   triggered. GetDummyAuraEffect is the C++ twin on both surfaces
+--   (player lua_player.go:2687, creature lua_creature_events.go:1464);
+--   its !SpellFamilyFlags gate is C++-exact (Unit.cpp:4510-4522), so
+--   the port is exactly as correct as the C++ arm. roll_chance_i is
+--   math.random(100) <= amount (kalecgos precedent). DORMANT until
+--   Spell.dbc drives 53412's script-effect cast (proc data).
+local SPELL_HUNTER_INVIGORATION = 53412 -- spell_hunter.cpp:633
+local SPELL_HUNTER_INVIGORATION_TRIGGERED = 53398 -- spell_hunter.cpp:46
+local SPELLFAMILY_HUNTER = 9 -- SharedDefines.h:3590
+local SPELL_HUNTER_INVIGORATION_ICON = 3487 -- spell_hunter.cpp:651
+
+local function invigorationScript(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local amount = target:GetDummyAuraEffect(SPELLFAMILY_HUNTER, SPELL_HUNTER_INVIGORATION_ICON, 0)
+    if amount == nil then
+        return
+    end
+    if math.random(100) <= amount then
+        target:CastSpell(target, SPELL_HUNTER_INVIGORATION_TRIGGERED, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_HUNTER_INVIGORATION, 5, invigorationScript)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_hun_last_stand_pet::HandleDummy (spell_hunter.cpp:720-726):
+--   OnEffectHitTarget, EFFECT_0 SPELL_EFFECT_DUMMY. The pet casts
+--   the triggered heal 53479 on itself with BP0 = 30% of its max
+--   health (CountPctFromMaxHealth, creature bridge
+--   lua_creature_events.go:466); CastCustomSpell carries the BP0
+--   override (lua_creature_events.go:936+, spell_dk.lua precedent).
+--   Pet casts ride castCreatureSpellInternalWithBasePoints, whose
+--   ev4 fire site is boss_ai.go:3365. DORMANT until Spell.dbc drives
+--   53478 (pet ability).
+local SPELL_HUNTER_PET_LAST_STAND = 53478 -- spell_hunter.cpp:706
+local SPELL_HUNTER_PET_LAST_STAND_TRIGGERED = 53479 -- spell_hunter.cpp:50
+
+local function lastStandPetDummy(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastCustomSpell(caster, SPELL_HUNTER_PET_LAST_STAND_TRIGGERED, true, caster:CountPctFromMaxHealth(30))
+end
+
+RegisterSpellEvent(SPELL_HUNTER_PET_LAST_STAND, 4, lastStandPetDummy)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hun_masters_call::HandleScriptEffect
+--   (spell_hunter.cpp:876-879): OnEffectHitTarget, EFFECT_1
+--   SPELL_EFFECT_SCRIPT_EFFECT. The hit unit casts the triggered
+--   freedom effect 62305 on itself (C++ nullptr target = self-cast;
+--   the Lua self-target is the twin, mend-pet precedent).
+-- NOT PORTED: DoCheckCast (spell_hunter.cpp:838-869) — no Lua
+--   OnCheckCast bridge, and Go's default enforces none of the
+--   pet-alive / charmed / stunned / fleeing / confused / LOS legs.
+--   HandleDummy eff0 (spell_hunter.cpp:871-874) — the pet casts
+--   GetEffectValue() on the hit unit; spell:GetEffectValue(0)
+--   exists (lua_spell.go:215) but there is no player-side
+--   pet-object bridge (only GetPetGUID, lua_player.go:1466;
+--   GetCreatureByGUID is creature-object-only).
+local SPELL_HUNTER_MASTERS_CALL = 53271 -- spell_hunter.cpp:814
+local SPELL_HUNTER_MASTERS_CALL_TRIGGERED = 62305 -- spell_hunter.cpp:47
+
+local function mastersCallScript(event, spell, target, effectIndex)
+    if effectIndex ~= 1 or target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_HUNTER_MASTERS_CALL_TRIGGERED, true)
+end
+
+RegisterSpellEvent(SPELL_HUNTER_MASTERS_CALL, 5, mastersCallScript)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_misdirection::HandleProc (spell_hunter.cpp:917-921):
+--   OnEffectProc, EFFECT_1 SPELL_AURA_DUMMY. PreventDefaultAction
+--   (the true return); the target casts the redirect proc aura
+--   35079 on itself, triggered (aurEff args ride the standard
+--   triggered-flag gap; the redirect pct comes from 35079's DBC
+--   effect, registered by handleEffectRedirectThreat,
+--   spell_threat.go:185). DUMMY is a proc-trigger aura type
+--   (procs.go:1077), so ev6 can fire; DORMANT until Spell.dbc ships
+--   the 34477 proc entry. The OnRemove arm is Go-covered:
+--   removeAuraWithMode unregisters the 35079 redirect key
+--   (spells.go:35331); the 34477-key unregister is a dead arm —
+--   registration keys the proc spell's id.
+local SPELL_HUNTER_MISDIRECTION = 34477 -- spell_hunter.cpp:48
+local SPELL_HUNTER_MISDIRECTION_PROC = 35079 -- spell_hunter.cpp:49
+
+local function misdirectionProc(event, aura, target, actor, procTarget, damage)
+    target:CastSpell(target, SPELL_HUNTER_MISDIRECTION_PROC, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_MISDIRECTION, 6, misdirectionProc)
