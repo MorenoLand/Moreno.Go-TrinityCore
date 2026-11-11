@@ -203,11 +203,16 @@
 -- (AuraEventOnPeriodic = 1, runtime.go) ports
 -- spell_yogg_saron_empowered OnPeriodic (64161,
 -- empoweredTick below) and spell_yogg_saron_sanity DummyTick
--- (63050, sanityTick below); spell_yogg_saron_brain_link
--- DummyTick (63802) stays out — the linked player resolves
--- only via SaraAI.GetLinkedPlayerGUID (no bridge); the distance
--- threshold reads aurEff->GetAmount(), which IS bridged now
--- (lua_aura.go) but is moot without the link. Residuals
+-- (63050, sanityTick below); spell_yogg_saron_brain_link (63802)
+-- stays out WHOLE — all three legs resolve only via SaraAI:
+-- FilterTargets (:2140-2151) calls ai->SetLinkBetween on the two
+-- survivors, DummyTick (:2192-2204) resolves the linked player via
+-- ai->GetLinkedPlayerGUID (the distance threshold reads
+-- aurEff->GetAmount(), which IS bridged now (lua_aura.go) but is
+-- moot without the link), and OnRemove (:2172-2186) calls
+-- ai->RemoveLinkFrom / ai->GetLinkedPlayerGUID (EXPIRE leg) or
+-- strips BRAIN_LINK from the linked player (non-expire leg). No
+-- SaraAI bridge exists. Residuals
 -- retired: empowered OnApply (stack-9 buff) ported tick 438
 -- via ev2 (empoweredApply below); sanity OnRemove ported
 -- tick 436 via ev3 (sanityRemove below).
@@ -218,7 +223,15 @@
 -- below (PHASE3.yoggTargetSelectorHandleScript /
 -- PHASE3.yoggHighSanityFilter / PHASE3.yoggSanityReduction /
 -- PHASE3.yoggMaladyRemoved — table fields, the file is at the
--- 200-local limit).
+-- 200-local limit). Census rows 456-461 PORTED 2026-11-11 below:
+-- brain_link_damage (63803, ev5 sanity -2 via yoggSanityReduction),
+-- boil_ominously (63030, ev5 flash-freeze/guardian-aura gates + Talk
+-- 0 + triggered self-cast 63031), shadow_beacon (64465, ev2/ev3
+-- UpdateEntry 36064/33988), empowering_shadows range check (64466,
+-- ev5 hit-target casts effect value on caster, triggered) + missile
+-- (64467, ev5 hit-target self-casts 64468, triggered); brain_link
+-- (63802) stays out whole (SaraAI, above). Census go_hit=true is a
+-- FALSE POSITIVE on all six rows (Lua-comment hits only, zero Go).
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -276,6 +289,16 @@ local PHASE3 = {
     PSYCHOSIS_HEROIC = 65301, -- class comment :2022 (no in-tree enum/cast site; paired-comment precedent, cf. 62604)
     MALADY = 63830, -- :138
     MALADY_JUMP = 63881, -- :269
+    BRAIN_LINK_DAMAGE = 63803, -- :140
+    BOIL_OMINOUSLY = 63030, -- class comment :2247 (no in-tree enum/cast site; DBC-gated)
+    FLASH_FREEZE = 64175, -- :276
+    SUMMON_GUARDIAN_1 = 63031, -- :146
+    EMOTE_OMINOUS_CLOUD_PLAYER_TOUCH = 0, -- :71
+    EMPOWERING_SHADOWS_RANGE_CHECK = 64466, -- class comment :2319
+    EMPOWERING_SHADOWS_MISSILE = 64467, -- class comment :2346
+    EMPOWERING_SHADOWS = 64468, -- :193
+    NPC_IMMORTAL_GUARDIAN = 33988, -- ulduar.h:224
+    NPC_MARKED_IMMORTAL_GUARDIAN = 36064, -- ulduar.h:227
     ILLUSION_ROOM = 63988, -- :270
     AURA_REMOVE_BY_EXPIRE = 4, -- SpellAuraDefines.h:67
     AURA_REMOVE_BY_DEATH = 5, -- SpellAuraDefines.h:68
@@ -1210,6 +1233,11 @@ PHASE3.yoggSanityReduction = function(event, spell, hitTarget, effectIndex)
             return
         end
         stacks = 3
+    elseif id == PHASE3.BRAIN_LINK_DAMAGE then
+        if effectIndex ~= 1 then
+            return
+        end
+        stacks = 2
     else
         return
     end
@@ -1231,6 +1259,91 @@ RegisterSpellEvent(PHASE3.PSYCHOSIS, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.PSYCHOSIS_HEROIC, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.MALADY, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.MALADY_JUMP, 5, PHASE3.yoggSanityReduction)
+RegisterSpellEvent(PHASE3.BRAIN_LINK_DAMAGE, 5, PHASE3.yoggSanityReduction)
+
+-- C++ spell_yogg_saron_boil_ominously::HandleDummy
+-- (boss_yogg_saron.cpp:2263-2271): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> if the hit unit carries no flash-freeze aura
+-- and the caster carries neither summon-guardian aura, the caster
+-- Talks the touch emote to the hit unit and self-casts the guardian
+-- summon, triggered. No PreventHitDefaultEffect: DUMMY has no Go
+-- default arm beyond the Eluna hook (the 453 precedent). Bound 63030
+-- (ominous cloud, DBC-gated cast; no C++ cast site).
+PHASE3.yoggBoilOminously = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if hitTarget:HasAura(PHASE3.FLASH_FREEZE) or caster:HasAura(PHASE3.SUMMON_GUARDIAN_1) or caster:HasAura(SPELL_SUMMON_GUARDIAN_2) then
+        return
+    end
+    if caster:GetObjectType() == "Creature" then
+        caster:Talk(PHASE3.EMOTE_OMINOUS_CLOUD_PLAYER_TOUCH, hitTarget)
+    end
+    caster:CastSpell(caster, PHASE3.SUMMON_GUARDIAN_1, true)
+end
+RegisterSpellEvent(PHASE3.BOIL_OMINOUSLY, 5, PHASE3.yoggBoilOminously)
+
+-- C++ spell_yogg_saron_shadow_beacon::OnApply/OnRemove
+-- (boss_yogg_saron.cpp:2295-2305): AfterEffectApply/Remove EFFECT_0
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL, REAL handle -> the aura target
+-- (an immortal guardian creature) swaps entry to the marked guardian
+-- on apply and back on remove, ungated in C++. UpdateEntry is the
+-- SetEntry twin (lua_creature_events.go:4824); the ev2/ev3 aura
+-- target is the motion creature for creature owners (lua_aura.go
+-- ownerObject). Bound 64465 (Yogg DoCastAOE, already ported as a
+-- cast in yoggPhase3Tick).
+PHASE3.yoggShadowBeaconApplied = function(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:UpdateEntry(PHASE3.NPC_MARKED_IMMORTAL_GUARDIAN)
+end
+RegisterAuraEvent(PHASE3.SPELL_SHADOW_BEACON, 2, PHASE3.yoggShadowBeaconApplied)
+PHASE3.yoggShadowBeaconRemoved = function(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:UpdateEntry(PHASE3.NPC_IMMORTAL_GUARDIAN)
+end
+RegisterAuraEvent(PHASE3.SPELL_SHADOW_BEACON, 3, PHASE3.yoggShadowBeaconRemoved)
+
+-- C++ spell_yogg_saron_empowering_shadows_range_check::HandleScript
+-- (boss_yogg_saron.cpp:2331-2335): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit casts the effect's value
+-- on the caster, triggered (the 453 target-selector shape, target as
+-- caster). Bound 64466 (DBC-gated; eff0 value is the 64467 missile).
+PHASE3.yoggEmpoweringShadowsRangeCheck = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        hitTarget:CastSpell(caster, value, true)
+    end
+end
+RegisterSpellEvent(PHASE3.EMPOWERING_SHADOWS_RANGE_CHECK, 5, PHASE3.yoggEmpoweringShadowsRangeCheck)
+
+-- C++ spell_yogg_saron_empowering_shadows_missile::HandleScript
+-- (boss_yogg_saron.cpp:2361-2365): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit (the marked guardian)
+-- casts empowering shadows, triggered, on a nil target. Go
+-- CastSpell(nil) falls back to victim, so the C++ nil-target
+-- self-cast is written as an explicit self-cast. Bound 64467.
+PHASE3.yoggEmpoweringShadowsMissile = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, PHASE3.EMPOWERING_SHADOWS, true)
+end
+RegisterSpellEvent(PHASE3.EMPOWERING_SHADOWS_MISSILE, 5, PHASE3.yoggEmpoweringShadowsMissile)
 
 -- C++ spell_yogg_saron_malady_of_the_mind_AuraScript::OnRemove
 -- (boss_yogg_saron.cpp:2099-2111): AfterEffectRemove EFFECT_1
