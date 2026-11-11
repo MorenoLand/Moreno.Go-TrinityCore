@@ -166,13 +166,14 @@
 -- the instance latch write leg is flameLeviathanSpawned below (ev5,
 -- instance ctor twin) and the Go case reads the shared instanceData
 -- table; its only clear leg is the spell_auto_repair SpellScript
--- (boss_flame_leviathan.cpp:1630-1645; no SpellScript bridge), so the
--- latch stays 1 in the Go-modeled fight.
+-- (boss_flame_leviathan.cpp:1630-1645) — PORTED 2026-11-11 at the tail
+-- (ev5 HandleScript; the stale "no SpellScript bridge" note is retracted).
 -- spell_overload_circuit (62399) / spell_tar_blaze (62292) /
--- spell_load_into_catapult / spell_auto_repair / spell_pursue /
+-- spell_load_into_catapult / spell_pursue /
 -- spell_vehicle_throw_passenger — AuraScript/SpellScript bridges absent;
 -- all join the no-SpellScript-bridge queue. spell_systems_shutdown
--- (62475) is PORTED below (RegisterAuraEvent apply/remove).
+-- (62475) is PORTED below (RegisterAuraEvent apply/remove), and
+-- spell_auto_repair (62705) is PORTED at the tail (ev5 HandleScript).
 
 local ENTRY_FLAME_LEVIATHAN = 33113
 local ENTRY_POOL_OF_TAR = 33189
@@ -273,6 +274,7 @@ local SPELL_GATHERING_SPEED = 62375
 local SPELL_FLAME_VENTS     = 62396
 local SPELL_MISSILE_BARRAGE = 62400
 local SPELL_SYSTEMS_SHUTDOWN = 62475
+local SPELL_AUTO_REPAIR = 62705 -- boss_flame_leviathan.cpp:75/:1595
 
 local timers = {}
 
@@ -696,3 +698,51 @@ end
 
 RegisterAuraEvent(SPELL_SYSTEMS_SHUTDOWN, 2, systemsShutdownApply)
 RegisterAuraEvent(SPELL_SYSTEMS_SHUTDOWN, 3, systemsShutdownRemove)
+
+-- C++ spell_auto_repair::HandleScript (boss_flame_leviathan.cpp:1624-1645):
+-- EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT. The hit unit's vehicle-kit seat-0
+-- driver gets TextEmote(EMOTE_REPAIR 14); the vehicle base is healed to
+-- full and the instance DATA_UNBROKEN latch clears (achievement_unbroken).
+-- PORTED 2026-11-11 (ev5; binding 62705 from the boss enum :75 + the
+-- loader enum :1595 — the 62273 rune-of-summoning precedent, likewise
+-- cast-site-free in-tree). The BeforeHit cooldown gate is enforced here:
+-- HasAura(62705) is the HasAuraEffect(62705, EFFECT_2) twin (the marker
+-- is the spell's own dummy aura) and the early return is the
+-- PreventHitEffect(EFFECT_0) twin — the ev6 PreventHit* calls are no-ops
+-- in Go (lua_spell.go: the veto record is nil outside ev4/ev5 fires), so
+-- no ev6 hook is registered. The TextEmote leg is skipped: no
+-- numeric-emote bridge (SendUnitEmote takes a string); a re-cast inside
+-- the window re-runs only the idempotent legs. DORMANT: no cast site
+-- in-tree, and the eff1 default leg is DBC-side.
+local function autoRepairHandleScript(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    if hitTarget:HasAura(SPELL_AUTO_REPAIR) then
+        return
+    end
+    local vehicle = hitTarget:GetVehicleKit()
+    if vehicle == nil then
+        return
+    end
+    local driver = vehicle:GetPassenger(0)
+    if driver == nil then
+        return
+    end
+    local mapObj = hitTarget:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    if data == nil then
+        return
+    end
+    local base = vehicle:GetOwner()
+    if base == nil then
+        return
+    end
+    base:SetHealth(base:GetMaxHealth())
+    data["unbroken"] = 0
+end
+
+RegisterSpellEvent(SPELL_AUTO_REPAIR, 5, autoRepairHandleScript)
