@@ -7867,6 +7867,15 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			}
 			s.auraMu.Unlock()
 			s.castCreatureSpellInternal(ctx, m, judgementSealDamageSpell(s.Data, auras), guid, true)
+		case 63975:
+			// spell_rog_glyph_of_backstab_triggered::HandleScript
+			// (spell_rogue.cpp:814-847): the EFFECT_0 SCRIPT_EFFECT
+			// OnEffectHitTarget arm — the creature caster's Rupture aura
+			// on the hit unit gains 2000ms of duration and max duration,
+			// up to +6000ms over its base max (BonusDuration
+			// bookkeeping). No Rupture aura, or the cap reached, takes
+			// nothing. DORMANT until Spell.dbc ships the 63975 record.
+			s.glyphOfBackstabTriggeredCreatureEffect(m, guid)
 		case 55709:
 			// spell_hun_pet_heart_of_the_phoenix::HandleScript
 			// (spell_hunter.cpp:1036-1050): EFFECT_0 SCRIPT_EFFECT —
@@ -9515,6 +9524,16 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			s.applyCreatureDetaunt(targetKey.Map, targetKey.InstanceID, m.GUID, targetKey.GUID, durationMs)
 		}
 		armExpiry(aura)
+		// spell_rog_killing_spree_AuraScript::HandleApply
+		// (spell_rogue.cpp:414-417): the EFFECT_0 PERIODIC_DUMMY
+		// AfterEffectApply arm — the aura holder casts 61851 (Killing
+		// Spree damage buff) on itself, triggered. This is the
+		// fresh-record leg only, like fireAuraApply below, so the C++
+		// REAL-mode gate (fresh apply only) holds. DORMANT until
+		// Spell.dbc ships the 51690 record.
+		if spell.ID == 51690 && i == 0 && eff.Aura == spellAuraPeriodicDummy {
+			s.castCreatureSpellInternal(ctx, target, 61851, targetGUID, true)
+		}
 		// RegisterAuraEvent OnApply, creature-caster twin of the
 		// session apply paths (AuraEffect::HandleEffect's
 		// CallScriptEffectApplyHandlers arm). This is the fresh-record

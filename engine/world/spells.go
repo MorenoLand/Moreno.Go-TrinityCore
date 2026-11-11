@@ -16613,6 +16613,33 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 51858 && effectIndex == 0 && len(hitTargets) > 0 {
 						s.siphonOfAcherusDummyEffect(effCtx, hitTargets)
 					}
+					// spell_rog_killing_spree::HandleDummy
+					// (spell_rogue.cpp:381-389): the EFFECT_1 DUMMY
+					// OnEffectHitTarget arm — each hit unit joins the
+					// 51690 aura script's target list. Fires once per
+					// effect over the hit targets (C++ fires per hit
+					// target). The FilterTargets arm (empty list or
+					// caster on a vehicle fails the cast with
+					// SPELL_FAILED_OUT_OF_RANGE) has no Go hook: the
+					// player path has no area-target-select filter
+					// site. DORMANT until Spell.dbc ships the 51690
+					// record.
+					if spellID == 51690 && effectIndex == 1 && len(hitTargets) > 0 {
+						s.killingSpreeDummyEffect(hitTargets)
+					}
+					// spell_rog_preparation::HandleDummy
+					// (spell_rogue.cpp:569-593): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — ResetCooldowns over the
+					// rogue family-flag predicate (Cold Blood /
+					// Shadowstep, Vanish / Evasion / Sprint, plus
+					// Dismantle / Kick / Blade Flurry with Glyph of
+					// Preparation 56819), update=true. Fires once per
+					// effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target self-cast).
+					// DORMANT until Spell.dbc ships the 14185 record.
+					if spellID == 14185 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.preparationDummyEffect()
+					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// spell_hun_readiness::HandleDummy
 					// (spell_hunter.cpp:1234-1251): the EFFECT_0 DUMMY
@@ -28232,6 +28259,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					if spellID == 51858 && effectIndex == 0 && len(effectGUIDs) > 0 {
 						s.siphonOfAcherusDummyEffect(ctx, effectGUIDs)
 					}
+					// spell_rog_killing_spree::HandleDummy
+					// (spell_rogue.cpp:381-389): the EFFECT_1 DUMMY
+					// OnEffectHitTarget arm — the triggered-cast leg,
+					// gated on a miss-filtered hit like the silverbrook
+					// leg above. DORMANT until Spell.dbc ships the
+					// 51690 record.
+					if spellID == 51690 && effectIndex == 1 && len(effectGUIDs) > 0 {
+						s.killingSpreeDummyEffect(effectGUIDs)
+					}
+					// spell_rog_preparation::HandleDummy
+					// (spell_rogue.cpp:569-593): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — the triggered-cast leg,
+					// gated on a miss-filtered hit like the silverbrook
+					// leg above. DORMANT until Spell.dbc ships the
+					// 14185 record.
+					if spellID == 14185 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						s.preparationDummyEffect()
+					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -33412,6 +33457,15 @@ type activeAura struct {
 	// steady-clock deadline of the per-aura proc ICD
 	// (SpellProcEntry::Cooldown); a zero value is never on cooldown.
 	ProcCooldownUntil time.Time
+	// KillingSpreeTargets is the spell_rog_killing_spree_AuraScript
+	// _targets list (spell_rogue.cpp:371-462): GUIDs the EFFECT_1 dummy
+	// arm collected, consumed one per periodic tick.
+	KillingSpreeTargets []uint64
+	// RuptureBonusDurationMs is the spell_rog_rupture_AuraScript
+	// BonusDuration (spell_rogue.cpp:746-748): milliseconds the Glyph of
+	// Backstab triggered spell (63975) has added to this Rupture aura,
+	// capped at 6000 over its base max duration.
+	RuptureBonusDurationMs uint32
 }
 
 func isHarmfulAura(auraType uint32) bool {
@@ -36193,6 +36247,13 @@ func (s *session) removeAuraWithMode(spellID uint32, mode auraRemoveMode) {
 	// already bridged but live-and-vacuous until this setter landed.
 	if wasAllowOnlyAbility && s.player != nil && !s.hasAuraType(spellAuraAllowOnlyAbility) {
 		s.player.PlayerFlags &^= playerFlagAllowOnlyAbility
+	}
+	// spell_rog_killing_spree_AuraScript::HandleRemove
+	// (spell_rogue.cpp:440-443): the EFFECT_0 PERIODIC_DUMMY
+	// AfterEffectRemove arm — the aura holder drops 61851 (Killing Spree
+	// damage buff). DORMANT until Spell.dbc ships the 51690 record.
+	if spellID == 51690 {
+		s.removeAura(61851)
 	}
 	// AuraEffect::HandleAuraModSchoolImmunity remove leg
 	// (SpellAuraEffects.cpp:3188-3190): the second flag-aura arm is
@@ -39409,6 +39470,16 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// player-flag arms in this block.
 		if eff.Aura == spellAuraAllowOnlyAbility {
 			targetSess.player.PlayerFlags |= playerFlagAllowOnlyAbility
+		}
+		// spell_rog_killing_spree_AuraScript::HandleApply
+		// (spell_rogue.cpp:414-417): the EFFECT_0 PERIODIC_DUMMY
+		// AfterEffectApply arm — the aura holder casts 61851 (Killing
+		// Spree damage buff) on itself, triggered. The C++ REAL-mode gate
+		// (fresh apply only) has no Go counterpart: a reapply re-casts
+		// 61851, refreshing it. DORMANT until Spell.dbc ships the 51690
+		// record.
+		if spell.ID == 51690 && effIndex == 0 && eff.Aura == spellAuraPeriodicDummy {
+			targetSess.castSpellDirect(ctx, 61851, targetGUID)
 		}
 		if eff.Aura == 139 {
 			_ = targetSess.sendForcedReactions()
@@ -42776,6 +42847,18 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		}
 		aura.Amount = uint32(amount)
 		ts.refreshAttackPowerOfArmor()
+	case spellAuraPeriodicDummy: // SPELL_AURA_PERIODIC_DUMMY
+		// spell_rog_killing_spree_AuraScript::HandleEffectPeriodic
+		// (spell_rogue.cpp:419-435): the EFFECT_0 PERIODIC_DUMMY
+		// OnEffectPeriodic arm — each tick picks a random GUID from the
+		// dummy arm's target list and casts 57840 (teleport) and 57841
+		// (weapon damage) on it, triggered; an unresolvable GUID is
+		// dropped and the pick repeats. Other periodic-dummy auras have
+		// no Go leg; the Lua mode-1 hook above already ran. DORMANT
+		// until Spell.dbc ships the 51690 record.
+		if aura.SpellID == 51690 {
+			ts.killingSpreePeriodicTick(aura)
+		}
 	}
 }
 
@@ -46103,6 +46186,14 @@ func (s *Server) removeCreatureAuraWithMode(key creatureAuraKey, spellID uint32,
 		// (StatSystem.cpp:1317-1330, 1018-1022): dropping a direct armor
 		// aura rewrites UNIT_FIELD_RESISTANCES (armor).
 		s.recomputeCreatureArmorOnAuraChange(key, spellID)
+		// spell_rog_killing_spree_AuraScript::HandleRemove
+		// (spell_rogue.cpp:440-443): the EFFECT_0 PERIODIC_DUMMY
+		// AfterEffectRemove arm — the aura holder drops 61851 (Killing
+		// Spree damage buff). DORMANT until Spell.dbc ships the 51690
+		// record.
+		if spellID == 51690 {
+			s.removeCreatureAura(key, 61851)
+		}
 	}
 	// RegisterAuraEvent OnRemove, creature-target twin of the player
 	// funnel (AuraEffect::HandleEffect's
@@ -52839,6 +52930,18 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// no OnEffectHitTarget site (60533 precedent above). DORMANT until
 		// Spell.dbc ships the 69961 record.
 		s.glyphOfScourgeStrikeScriptEffect(targetGUID)
+	case 63975:
+		// spell_rog_glyph_of_backstab_triggered::HandleScript
+		// (spell_rogue.cpp:814-847): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — the caster's Rupture aura on the hit
+		// unit gains 2000ms of duration and max duration, up to +6000ms
+		// over its base max (BonusDuration bookkeeping). No Rupture aura,
+		// or the cap reached, takes nothing. PreventHitDefaultEffect is
+		// vacuous: the Go SCRIPT_EFFECT default is a per-spell no-op. A
+		// Lua ev5 port would never fire: the player path has no
+		// OnEffectHitTarget site (60533 precedent above). DORMANT until
+		// Spell.dbc ships the 63975 record.
+		s.glyphOfBackstabTriggeredScriptEffect(ctx, targetGUID)
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):
 		// the hit target must be a creature; the caster must be a player
@@ -53501,6 +53604,279 @@ func (s *session) glyphOfIceBlockProcReset() {
 			continue
 		}
 		s.resetPlayerCooldown(cd.Spell, true)
+	}
+}
+
+// killingSpreeDummyEffect mirrors spell_rog_killing_spree::HandleDummy
+// (spell_rogue.cpp:381-389): the EFFECT_1 DUMMY OnEffectHitTarget arm —
+// each hit unit joins the 51690 aura script's target list. C++ fires per
+// hit target; Go fires once per effect over the hit targets, so the whole
+// list appends here. No aura on the caster (the apply leg has not run yet)
+// takes nothing. DORMANT until Spell.dbc ships the 51690 record.
+func (s *session) killingSpreeDummyEffect(hitTargets []uint64) {
+	if s == nil || len(hitTargets) == 0 {
+		return
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura == nil || aura.Stopped || aura.SpellID != 51690 {
+			continue
+		}
+		aura.KillingSpreeTargets = append(aura.KillingSpreeTargets, hitTargets...)
+		return
+	}
+}
+
+// killingSpreePeriodicTick mirrors spell_rog_killing_spree_AuraScript::HandleEffectPeriodic
+// (spell_rogue.cpp:419-435): the EFFECT_0 PERIODIC_DUMMY OnEffectPeriodic
+// arm — each tick picks a random GUID from the dummy arm's target list
+// and casts 57840 (teleport) and 57841 (weapon damage) on it, triggered;
+// an unresolvable GUID is dropped and the pick repeats. DORMANT until
+// Spell.dbc ships the 51690 record.
+func (ts *session) killingSpreePeriodicTick(aura *activeAura) {
+	if ts == nil || ts.server == nil || ts.player == nil || aura == nil {
+		return
+	}
+	for len(aura.KillingSpreeTargets) > 0 {
+		idx := rand.IntN(len(aura.KillingSpreeTargets))
+		guid := aura.KillingSpreeTargets[idx]
+		if ts.server.findSessionByGUID(guid) != nil || ts.server.findCreatureMotion(ts.player.Map, ts.player.InstanceID, guid) != nil {
+			ts.castSpellDirect(context.Background(), 57840, guid)
+			ts.castSpellDirect(context.Background(), 57841, guid)
+			return
+		}
+		aura.KillingSpreeTargets = append(aura.KillingSpreeTargets[:idx], aura.KillingSpreeTargets[idx+1:]...)
+	}
+}
+
+// preparationDummyEffect mirrors spell_rog_preparation::HandleDummy
+// (spell_rogue.cpp:569-593): the EFFECT_0 DUMMY OnEffectHitTarget arm —
+// ResetCooldowns over the predicate "Rogue family, and (flags[1] &
+// 0x240 Cold Blood / Shadowstep, or flags[0] & 0x860 Vanish / Evasion /
+// Sprint, or with Glyph of Preparation 56819: flags[1] & 0x100000
+// Dismantle, flags[0] & 0x10 Kick, or flags[0] & 0x40000000 with
+// flags[1] & 0x800 Blade Flurry)", with update=true. Flag values from
+// SpellMgr.h:60-65. C++ Load() requires a player caster; this arm runs
+// on the player cast path only. C++ carries no recovery-time filter and
+// no self-exclusion, so neither is applied here. Spells absent from the
+// DBC store are skipped — C++ would AssertSpellInfo, Go has no record
+// to evaluate. DORMANT until Spell.dbc ships the 14185 record.
+func (s *session) preparationDummyEffect() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	hasGlyph := s.hasAura(56819)
+	s.playerStateMu.Lock()
+	snapshot := append([]spellCooldown(nil), s.player.Cooldowns...)
+	s.playerStateMu.Unlock()
+	for _, cd := range snapshot {
+		spell, found, err := s.server.Data.Spell(cd.Spell)
+		if err != nil || !found {
+			continue
+		}
+		if spell.SpellFamilyName != spellFamilyRogue {
+			continue
+		}
+		if len(spell.SpellFamilyFlags) < 2 {
+			continue
+		}
+		if spell.SpellFamilyFlags[1]&0x240 != 0 || spell.SpellFamilyFlags[0]&0x860 != 0 {
+			s.resetPlayerCooldown(cd.Spell, true)
+			continue
+		}
+		if hasGlyph && (spell.SpellFamilyFlags[1]&0x100000 != 0 || spell.SpellFamilyFlags[0]&0x10 != 0 || (spell.SpellFamilyFlags[0]&0x40000000 != 0 && spell.SpellFamilyFlags[1]&0x800 != 0)) {
+			s.resetPlayerCooldown(cd.Spell, true)
+		}
+	}
+}
+
+// glyphOfBackstabTriggeredScriptEffect mirrors spell_rog_glyph_of_backstab_triggered::HandleScript
+// (spell_rogue.cpp:814-847): the EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget
+// arm — the caster's Rupture aura on the hit unit (PERIODIC_DAMAGE,
+// Rogue family, flags[0] & 0x100000) gains 2000ms of duration and max
+// duration, up to +6000ms over its base max (BonusDuration bookkeeping
+// in RuptureBonusDurationMs). No Rupture aura, or the cap reached, takes
+// nothing. PreventHitDefaultEffect is vacuous: the Go SCRIPT_EFFECT
+// default is a per-spell no-op. The expiry Timer is re-armed on
+// extension — the 69961 precedent extends RemainingMs without re-arming
+// it, which leaves the aura expiring at the original deadline (latent
+// gap there, flagged not fixed here). DORMANT until Spell.dbc ships the
+// 63975 record.
+func (s *session) glyphOfBackstabTriggeredScriptEffect(ctx context.Context, targetGUID uint64) {
+	_ = ctx
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil {
+		return
+	}
+	remainingOf := func(remainingMs uint32, updatedAt time.Time) uint32 {
+		remaining := int64(remainingMs)
+		if !updatedAt.IsZero() {
+			if elapsed := time.Since(updatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= elapsed
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		return uint32(remaining)
+	}
+	extend := func(aura *activeAura) bool {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			return false
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			return false
+		}
+		if auraSpell.SpellFamilyName != spellFamilyRogue || len(auraSpell.SpellFamilyFlags) < 1 || auraSpell.SpellFamilyFlags[0]&0x100000 == 0 {
+			return false
+		}
+		periodic := false
+		for i, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(i)) != 0 && eff.Aura == spellAuraPeriodicDamage {
+				periodic = true
+				break
+			}
+		}
+		if !periodic {
+			return false
+		}
+		countMin := aura.DurationMs
+		countMax := countMin - aura.RuptureBonusDurationMs + 6000
+		if countMin >= countMax {
+			return false
+		}
+		aura.RuptureBonusDurationMs += 2000
+		aura.DurationMs = countMin + 2000
+		aura.RemainingMs = remainingOf(aura.RemainingMs, aura.DurationUpdatedAt) + 2000
+		aura.DurationUpdatedAt = time.Now()
+		return true
+	}
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil {
+		for _, aura := range ts.loadedAuras() {
+			if extend(aura) {
+				ts.castMu.Lock()
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				aura.Timer = time.AfterFunc(time.Duration(aura.RemainingMs)*time.Millisecond, func() {
+					ts.expirePlayerAura(aura.SpellID)
+				})
+				ts.castMu.Unlock()
+				ts.sendAuraUpdate(aura.Slot, aura.SpellID, false, aura.Positive, aura.DurationMs, aura.RemainingMs)
+			}
+		}
+	}
+	if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.server.auraMu.Lock()
+		defer s.server.auraMu.Unlock()
+		for _, aura := range s.server.activeCreatureAuras[key] {
+			if extend(aura) {
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				spellID := aura.SpellID
+				aura.Timer = time.AfterFunc(time.Duration(aura.RemainingMs)*time.Millisecond, func() {
+					s.server.removeCreatureAuraWithMode(key, spellID, auraRemoveByExpire)
+				})
+			}
+		}
+	}
+}
+
+// glyphOfBackstabTriggeredCreatureEffect mirrors spell_rog_glyph_of_backstab_triggered::HandleScript
+// (spell_rogue.cpp:814-847) for a creature caster: the EFFECT_0
+// SCRIPT_EFFECT OnEffectHitTarget arm — the caster's Rupture aura on the
+// hit unit gains 2000ms of duration and max duration, up to +6000ms over
+// its base max (BonusDuration bookkeeping in RuptureBonusDurationMs). No
+// Rupture aura, or the cap reached, takes nothing. The expiry Timer is
+// re-armed on extension, same as the session leg. DORMANT until
+// Spell.dbc ships the 63975 record.
+func (s *Server) glyphOfBackstabTriggeredCreatureEffect(m *creatureMotion, targetGUID uint64) {
+	if s == nil || s.Data == nil || m == nil || targetGUID == 0 {
+		return
+	}
+	remainingOf := func(remainingMs uint32, updatedAt time.Time) uint32 {
+		remaining := int64(remainingMs)
+		if !updatedAt.IsZero() {
+			if elapsed := time.Since(updatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= elapsed
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		return uint32(remaining)
+	}
+	extend := func(aura *activeAura) bool {
+		if aura == nil || aura.Stopped || aura.CasterGUID != m.GUID {
+			return false
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			return false
+		}
+		if auraSpell.SpellFamilyName != spellFamilyRogue || len(auraSpell.SpellFamilyFlags) < 1 || auraSpell.SpellFamilyFlags[0]&0x100000 == 0 {
+			return false
+		}
+		periodic := false
+		for i, eff := range auraSpell.Effects {
+			if aura.EffectMask&(1<<uint(i)) != 0 && eff.Aura == spellAuraPeriodicDamage {
+				periodic = true
+				break
+			}
+		}
+		if !periodic {
+			return false
+		}
+		countMin := aura.DurationMs
+		countMax := countMin - aura.RuptureBonusDurationMs + 6000
+		if countMin >= countMax {
+			return false
+		}
+		aura.RuptureBonusDurationMs += 2000
+		aura.DurationMs = countMin + 2000
+		aura.RemainingMs = remainingOf(aura.RemainingMs, aura.DurationUpdatedAt) + 2000
+		aura.DurationUpdatedAt = time.Now()
+		return true
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil {
+		for _, aura := range ts.loadedAuras() {
+			if extend(aura) {
+				ts.castMu.Lock()
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				aura.Timer = time.AfterFunc(time.Duration(aura.RemainingMs)*time.Millisecond, func() {
+					ts.expirePlayerAura(aura.SpellID)
+				})
+				ts.castMu.Unlock()
+				ts.sendAuraUpdate(aura.Slot, aura.SpellID, false, aura.Positive, aura.DurationMs, aura.RemainingMs)
+			}
+		}
+	}
+	if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		defer s.auraMu.Unlock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			if extend(aura) {
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				spellID := aura.SpellID
+				aura.Timer = time.AfterFunc(time.Duration(aura.RemainingMs)*time.Millisecond, func() {
+					s.removeCreatureAuraWithMode(key, spellID, auraRemoveByExpire)
+				})
+			}
+		}
 	}
 }
 

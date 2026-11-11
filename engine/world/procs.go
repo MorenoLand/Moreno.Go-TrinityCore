@@ -1393,6 +1393,11 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 69961, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
+	case 56800: // Glyph of Backstab, EFFECT_0: the proc actor casts 63975 on the proc target with the aura effect (triggered); PreventDefaultAction.
+		if effIndex != 0 || actorGUID == 0 || triggerTargetGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 63975, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
 	case 61257: // Runic Power Back on Snare/Root (PvP 4P), EFFECT_0: the action target casts 61258 on itself when the triggering spell roots or snares.
 		if effIndex != 0 || triggerSpell == nil {
 			return scriptProcCast{}, false
