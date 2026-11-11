@@ -20,9 +20,13 @@
 -- position (MoveTo twin).
 -- MovementInform arrival leg PORTED (event 28, C++-exact):
 -- POINT_URUZIN (4026400) arrival -> DespawnOrUnsummon.
--- Deliberate deviations (await engine bridges): the mount-check AuraScript
--- (spell_mount_check, cross-AI GetMountId consumer) is SpellScript
--- class, out — the mount model is still stored per-GUID for it.
+-- Mount-check aura PORTED 2026-11-11 (RegisterAuraEvent 75420 ev1 tick,
+-- zone_durotar.cpp:388-403): ownerless tick returns; owner mounted +
+-- target not -> Mount(state mountModel); owner not mounted + target
+-- mounted -> Dismount; RUN rate copied from the owner (GetSpeed(1)/7.0,
+-- playerBaseMoveSpeed[1] = creatureBaseRunSpeed = 7.0).
+-- Deliberate deviation: the WALK rate leg stays out (SetSpeedRate is
+-- RUN-only, lua_creature_events.go:5641).
 -- Melee is engine-driven in Go, like C++ DoMeleeAttackIfReady
 -- (the volunteer is REACT_PASSIVE, so this never fires in practice).
 
@@ -39,6 +43,9 @@ local POINT_MOTION_TYPE = 8
 local POINT_URUZIN = 4026400 -- zone_durotar.cpp:94
 
 local REACT_PASSIVE = 0
+
+local MOVE_RUN = 1
+local BASE_RUN_SPEED = 7.0
 
 local VOLUNTEER_ENTRIES = { 40264, 40260 }
 
@@ -125,3 +132,31 @@ for _, entry in ipairs(VOLUNTEER_ENTRIES) do
     RegisterCreatureEvent(entry, 14, volunteerSpellHit)
     RegisterCreatureEvent(entry, 28, volunteerMovementInform)
 end
+
+-- C++ spell_mount_check::HandleEffectPeriodic
+-- (zone_durotar.cpp:388-403, registered OnEffectPeriodic EFFECT_0
+-- SPELL_AURA_PERIODIC_DUMMY): the aura target is the volunteer; its
+-- owner is the player (GetOwner returns the player object or nil).
+-- Owner mounted + target not -> Mount(state mountModel, the
+-- InitializeAI pick, C++-exact incl. the 0-model case); owner not
+-- mounted + target mounted -> Dismount; RUN rate copied from the
+-- owner every tick. C++ also copies the WALK rate — stays out, no
+-- walk-rate setter bridge.
+local function mountCheckTick(_, _, target)
+    if target == nil then
+        return
+    end
+    local owner = target:GetOwner()
+    if owner == nil then
+        return
+    end
+    if owner:IsMounted() and not target:IsMounted() then
+        local state = stateFor(target:GetGUIDLow())
+        target:Mount(state.mountModel)
+    elseif not owner:IsMounted() and target:IsMounted() then
+        target:Dismount()
+    end
+    target:SetSpeedRate(MOVE_RUN, owner:GetSpeed(MOVE_RUN) / BASE_RUN_SPEED)
+end
+
+RegisterAuraEvent(SPELL_MOUNTING_CHECK, 1, mountCheckTick)
