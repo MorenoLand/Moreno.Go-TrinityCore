@@ -1381,22 +1381,22 @@ RegisterAuraEvent(SPELL_LEAVE_TWILIGHT_REALM, 3, leaveTwilightRealmOnRemove)
 -- in engine/ and lua_scripts/).
 
 -- C++ npc_living_infernoAI::IsSummonedBy (boss_halion.cpp:1273-1290):
--- DoZoneInCombat (no bridge, boss_ai.go:65) + self-cast Blazing
--- Aura 75885 triggered; on 25-man heroic only, a 3s scheduler
--- self-casts Spawn Living Embers 75880 triggered. The controller
--- DoAction(ACTION_ACTIVATE_EMBERS) + JustSummoned legs stay out
--- (cross-AI, controller 40146 unregistered). The summon fires ev22
--- from summonTempCreature (lua_creature_events.go:196-201; the
--- fireCreaturePetSummoned comment's pet-only wording is stale).
--- The 3s leg rides the file's schedule() harness; the JustDied
--- cancelTimers above kills it if the inferno dies first (C++
--- scheduler dies with the AI).
+-- DoZoneInCombat + self-cast Blazing Aura 75885 triggered; on 25-man
+-- heroic only, a 3s scheduler self-casts Spawn Living Embers 75880
+-- triggered. The controller DoAction(ACTION_ACTIVATE_EMBERS) +
+-- JustSummoned legs stay out (cross-AI, controller 40146
+-- unregistered). The summon fires ev22 from summonTempCreature
+-- (lua_creature_events.go:196-201; the fireCreaturePetSummoned
+-- comment's pet-only wording is stale). The 3s leg rides the file's
+-- schedule() harness; the JustDied cancelTimers above kills it if the
+-- inferno dies first (C++ scheduler dies with the AI).
 local SPELL_BLAZING_AURA = 75885 -- C++ enum :86
 local SPELL_SPAWN_LIVING_EMBERS = 75880 -- C++ enum :87
 local SPELL_SUMMON_LIVING_EMBER = 75881 -- C++ enum :88
 
 local function livingInfernoSummoned(event, creature, summoner)
     local guid = creature:GetGUIDLow()
+    creature:DoZoneInCombat()
     creature:CastSpell(creature, SPELL_BLAZING_AURA, true)
     if creature:IsHeroic() and creature:Is25ManRaid() then
         schedule(guid, "spawn_living_embers", 3000, function()

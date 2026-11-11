@@ -23034,7 +23034,8 @@ func init() {
 	// combustion_consumption_periodic, damage_aoe_summon,
 	// twilight_realm_handlers x2, summon_exit_portals, twilight_phasing,
 	// twilight_cutter, clear_debuffs, spawn_living_embers, blazing_aura —
-	// no-SpellScript bridge)); all registered from inside AddSC_boss_halion()
+	// SpellScript arms ported on RegisterSpellEvent ev4/ev5/ev7 where
+	// bridged, the rest documented stay-outs in boss_halion.lua)); all registered from inside AddSC_boss_halion()
 	// (line 1906); loader decl 193 / call 388 per northrend_script_loader.cpp —
 	// the SIXTH and FINAL group of the "// Ruby Sanctum" block, closing it.
 	// Entry-verifiable: ruby_sanctum.h NPC_HALION = 39863 (line 80),
