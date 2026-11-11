@@ -65,14 +65,13 @@
 -- knock back 24199) — Go reports the cast target (Gruul himself on
 -- the self-cast) while C++ iterates the actual AoE hit players, so the
 -- player-gated arm would never fire faithfully. The two
--- SpellScripts are unmodeled (standing SpellScript gap), except the
--- shatter-effect damage leg:
--- spell_gruul_shatter (33525-hit -> RemoveAurasDueToSpell(stoned
--- 33652) + triggered 33671 shatter effect) and spell_gruul_
--- shatter_effect (NOT a scaling: the OnHit arm multiplies
--- GetHitDamage(), which is 0 at the hook (Spell.cpp:2377), so C++
--- deals the unmodified base — the tick-372 table entry that scaled
--- it down was removed 2026-11-09, engine/world/spell_onhit.go).
+-- SpellScripts: spell_gruul_shatter PORTED below (RegisterSpellEvent
+-- ev5, 33654 — hit unit removes Stoned 33652 + triggered 33671
+-- nil-target cast, C++-exact); spell_gruul_shatter_effect is a C++
+-- no-op (the OnHit arm multiplies GetHitDamage(), which is 0 at the
+-- hook (Spell.cpp:2377), so C++ deals the unmodified base — the
+-- tick-372 table entry that scaled it down was removed 2026-11-09,
+-- engine/world/spell_onhit.go).
 -- Deliberate deviations (all await engine bridges): no instance-
 -- script model — boss admission via the luaBossAI shim (the
 -- BossAI::JustEngagedWith/JustDied/Reset DATA_GRUUL SetBossState
@@ -90,14 +89,17 @@
 -- UpdateAI cast-state gate (boss_gruul.cpp:172, HasUnitState(CASTING)
 -- return) ports via creature:IsCasting() (live CastingUntil window,
 -- lua_creature_events.go:1950) at the top of gruulTick — timers
--- freeze while casting, the 1s pump re-arms untouched; no SpellScript bridge —
--- the shatter/shatter-effect scripts unmodeled (standing gap).
+-- freeze while casting, the 1s pump re-arms untouched; the shatter
+-- script is ported (ev5, above), the shatter-effect script is a
+-- verified no-op.
 
 local SPELL_GROWTH = 36300
 local SPELL_CAVE_IN = 36240
 local SPELL_GROUND_SLAM = 33525
 local SPELL_REVERBERATION = 36297
 local SPELL_SHATTER = 33654
+local SPELL_SHATTER_EFFECT = 33671 -- boss_gruul.cpp:51
+local SPELL_STONED = 33652 -- boss_gruul.cpp:53
 local SPELL_HURTFUL_STRIKE = 33813
 
 local SAY_AGGRO = 0
@@ -325,6 +327,23 @@ local function gruulSpellHitTarget(event, creature, target, spellId)
     end
 end
 
+-- C++ spell_gruul_shatter::HandleScript (boss_gruul.cpp:283-291):
+-- OnEffectHitTarget, EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT: each hit
+-- unit removes SPELL_STONED (33652) and casts SPELL_SHATTER_EFFECT
+-- (33671) on a nil target, triggered. ev5 fires once per (effect,
+-- hit target) on the creature path (boss_ai.go:3435-3438); the hit
+-- target is a player object (luaUnitObjectForGUID, pet_combat.go:479),
+-- so RemoveAura/CastSpell ride the player bridges (nil-target
+-- CastSpell falls back to self, triggered-only funnel).
+-- DORMANT until Spell.dbc ships 33654.
+local function gruulShatterHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    target:RemoveAura(SPELL_STONED)
+    target:CastSpell(nil, SPELL_SHATTER_EFFECT, true)
+end
+
 -- C++ KilledUnit: TYPEID_PLAYER gate (C++-exact via GetObjectType() == "Player").
 local function gruulTargetDied(event, creature, victim)
     if victim:GetObjectType() == "Player" then
@@ -363,3 +382,4 @@ RegisterCreatureEvent(ENTRY_GRUUL, 3, gruulTargetDied)
 RegisterCreatureEvent(ENTRY_GRUUL, 4, gruulDied)
 RegisterCreatureEvent(ENTRY_GRUUL, 23, gruulReset)
 RegisterCreatureEvent(ENTRY_GRUUL, 15, gruulSpellHitTarget)
+RegisterSpellEvent(SPELL_SHATTER, 5, gruulShatterHit)
