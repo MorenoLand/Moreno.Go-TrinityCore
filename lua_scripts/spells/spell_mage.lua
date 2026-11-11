@@ -35,6 +35,23 @@
 --   Mode 2 fires on fresh apply only; the frostfire apply leg is
 --   AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK, so a reapply does not
 --   re-cast 68391 in Go (standing deviation).
+-- PORTED IN GO (tick 2026-11-10, rows 176-180):
+--   spell_mage_burning_determination (spell_mage.cpp:261-292):
+--   54747/54748 CheckProc gate in procs.go (interrupt/silence
+--   mechanic only); default trigger DBC-driven, dormant until
+--   Spell.dbc ships the proc entries.
+--   spell_mage_combustion (spell_mage.cpp:380-417): 11129 CheckProc
+--   gate in procs.go (non-crit casts 28682 triggered, no charge;
+--   crit lets the default proc run), dormant until Spell.dbc ships
+--   the 11129 proc entry.
+--   spell_mage_imp_mana_gems (spell_mage.cpp:506-535): 37447/61062
+--   EFFECT_1 OnEffectProc arm in procs.go (actor casts 37445
+--   triggered on self); OVERRIDE_CLASS_SCRIPTS joined the
+--   proc-trigger types per SpellMgr.cpp:1708, dormant until
+--   Spell.dbc ships the proc entries.
+--   spell_mage_cold_snap (spell_mage.cpp:343-377): 11958 DUMMY arm
+--   in spells.go (resets every other Frost Mage cooldown with a
+--   recovery time); live on cast, not dormant.
 -- STAY-OUT (tick 294): every other spell_mage class — no proc hook,
 --   absorb/CalcAmount/ManaShield hooks absent, SpellScript-only
 --   with no RegisterSpellScript in the engine, or cross-script state

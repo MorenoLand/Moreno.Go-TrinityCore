@@ -677,6 +677,7 @@ const (
 	spellIconImprovedInsectSwarm                      = 1771 // Improved Insect Swarm talent dummy aura (SpellEffects.cpp:521)
 	spellIconRendAndTear                              = 2859 // Rend and Tear talent dummy aura (SpellEffects.cpp:3306)
 	spellSchoolMaskNormal                             = 1    // SPELL_SCHOOL_MASK_NORMAL (SharedDefines.h:324)
+	spellSchoolMaskFrost                              = 16   // SPELL_SCHOOL_MASK_FROST (SharedDefines.h:328)
 	spellAuraAttackPowerPercent                       = 166
 	spellAuraRangedAttackPowerPercent                 = 167
 	spellAuraModAttackPower                           = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
@@ -16402,6 +16403,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// target was actually hit.
 					if spellID == 23989 && effectIndex == 0 && len(hitTargets) > 0 {
 						s.readinessDummyEffect()
+					}
+					// spell_mage_cold_snap::HandleDummy
+					// (spell_mage.cpp:360-368): the EFFECT_0 DUMMY
+					// OnEffectHit arm finishes the cooldown on every
+					// other Frost Mage ability. Fires once per effect
+					// over the hit targets (C++ fires per hit target;
+					// the spell is single-target self-cast), ahead of
+					// the Eluna arm below, and only when a target was
+					// actually hit.
+					if spellID == 11958 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.coldSnapDummyEffect()
 					}
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
@@ -52469,6 +52481,45 @@ func (s *session) readinessDummyEffect() {
 			continue
 		}
 		if spell.SpellFamilyName != spellFamilyHunter {
+			continue
+		}
+		recovery := spell.RecoveryTime
+		if spell.CategoryRecoveryTime > recovery {
+			recovery = spell.CategoryRecoveryTime
+		}
+		if recovery == 0 {
+			continue
+		}
+		s.resetPlayerCooldown(cd.Spell, true)
+	}
+}
+
+// coldSnapDummyEffect mirrors spell_mage_cold_snap::HandleDummy
+// (spell_mage.cpp:360-368): ResetCooldowns over the predicate "Mage
+// family, Frost school, not Cold Snap itself, recovery time > 0", with
+// update=true. SpellInfo::GetRecoveryTime is the max of the spell and
+// category recovery times (SpellInfo.cpp:3149-3152), the same max the
+// readiness arm above uses. C++ Load() requires a player caster; this
+// arm runs on the player cast path only.
+func (s *session) coldSnapDummyEffect() {
+	if s == nil || s.player == nil || s.server == nil || s.server.Data == nil {
+		return
+	}
+	s.playerStateMu.Lock()
+	snapshot := append([]spellCooldown(nil), s.player.Cooldowns...)
+	s.playerStateMu.Unlock()
+	for _, cd := range snapshot {
+		if cd.Spell == 11958 {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(cd.Spell)
+		if err != nil || !found {
+			continue
+		}
+		if spell.SpellFamilyName != spellFamilyMage {
+			continue
+		}
+		if spell.SchoolMask&spellSchoolMaskFrost == 0 {
 			continue
 		}
 		recovery := spell.RecoveryTime

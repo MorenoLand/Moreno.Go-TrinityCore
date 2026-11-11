@@ -303,6 +303,51 @@ func (s *session) hungeringColdProcAllowed(ev procEventInfo) bool {
 	return ev.eventSpell.DispelType != dispelDisease
 }
 
+// burningDeterminationProcAllowed mirrors
+// spell_mage_burning_determination::CheckProc (spell_mage.cpp:272-281):
+// the aura only procs when the triggering spell's mechanic mask
+// carries MECHANIC_INTERRUPT (26) or MECHANIC_SILENCE (9)
+// (SharedDefines.h:1366,1383). The mask is the OR over the triggering
+// spell's effect mechanics, the Second Wind precedent in
+// scriptAuraProcCast below. The default trigger is DBC-driven, so this
+// gate alone is the port. Both ranks share the loader
+// (spell_mage.cpp:261,1486). DORMANT until Spell.dbc ships the
+// 54747/54748 proc entries.
+func (s *session) burningDeterminationProcAllowed(ev procEventInfo) bool {
+	if ev.eventSpell == nil {
+		return false
+	}
+	var mechanicMask uint32
+	for _, eff := range ev.eventSpell.Effects {
+		if eff.Mechanic < 32 {
+			mechanicMask |= uint32(1) << eff.Mechanic
+		}
+	}
+	return mechanicMask&((uint32(1)<<26)|(uint32(1)<<9)) != 0
+}
+
+// combustionCheckProc mirrors spell_mage_combustion::CheckProc
+// (spell_mage.cpp:395-409): a non-critical hit casts the Combustion
+// proc aura (28682) on the actor, triggered, and takes no charge; a
+// critical hit lets the default proc action run. The cast rides the
+// aura-triggered guards the proc arms use, so the 28682 cast cannot
+// re-proc Combustion itself. DORMANT until Spell.dbc ships the 11129
+// proc entry.
+func (s *session) combustionCheckProc(ctx context.Context, ev procEventInfo) bool {
+	if ev.hitMask&procHitCritical != 0 {
+		return true
+	}
+	if s == nil || s.player == nil || s.server == nil || ev.actorGUID == 0 {
+		return false
+	}
+	s.triggeredByAuraCast = true
+	s.triggeredByAuraSpell = 11129
+	s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 28682, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+	s.triggeredByAuraCast = false
+	s.triggeredByAuraSpell = 0
+	return false
+}
+
 // glyphOfArcaneShotProcAllowed mirrors
 // spell_hun_glyph_of_arcane_shot::CheckProc (spell_hunter.cpp:430-451):
 // the proc target must carry a sting cast by the holder — hunter family,
@@ -1127,13 +1172,15 @@ const spellVampiricAura = 20810
 // (SpellMgr.cpp:1716 lists it in isTriggerAura): its only C++ arm is the
 // script hook — the Cobra Strikes stack drop (spell_hunter.cpp:361-364) —
 // and the default leg no-ops on the TriggerSpell == 0 gate below, so the
-// type enters the loop for its hook alone. The remaining isTriggerAura
-// types (reflect, stealth-break, ADD_PCT_MODIFIER) have no Go HandleProc
-// arm yet.
+// type enters the loop for its hook alone. OVERRIDE_CLASS_SCRIPTS
+// (SpellMgr.cpp:1708) enters the same way, for the Improved Mana Gems
+// arm (spell_mage.cpp:515-526) — its default leg likewise no-ops on
+// TriggerSpell == 0. The remaining isTriggerAura types (reflect,
+// stealth-break, ADD_PCT_MODIFIER) have no Go HandleProc arm yet.
 func isProcTriggerAuraType(auraType uint32) bool {
 	switch auraType {
 	case spellAuraDummy, spellAuraProcTriggerSpell, spellAuraProcTriggerDamage, spellAuraProcTriggerSpellWithValue,
-		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier:
+		spellAuraRaidProcFromCharge, spellAuraRaidProcFromChargeWithValue, spellAuraAddFlatModifier, spellAuraOverrideClassScripts:
 		return true
 	}
 	return false
@@ -3361,6 +3408,26 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 24661 && (ev.eventSpell == nil || ev.eventSpell.ID == 24661) {
 			continue
 		}
+		// spell_mage_burning_determination::CheckProc
+		// (spell_mage.cpp:272-281): the aura only procs when the
+		// triggering spell carries an interrupt or silence mechanic.
+		// The gate runs before the chance roll, like the C++
+		// CheckProc in GetProcEffectMask (70656 precedent above).
+		// Both ranks share the loader (spell_mage.cpp:261, 1486).
+		// DORMANT until Spell.dbc ships the 54747/54748 proc entries.
+		if (auraSpell.ID == 54747 || auraSpell.ID == 54748) && !s.burningDeterminationProcAllowed(ev) {
+			continue
+		}
+		// spell_mage_combustion::CheckProc (spell_mage.cpp:395-409):
+		// a non-critical hit casts the Combustion proc aura (28682)
+		// on the actor, triggered, and takes no charge; a critical
+		// hit lets the default proc action run. The gate runs before
+		// the chance roll, like the C++ CheckProc in
+		// GetProcEffectMask (70656 precedent above). DORMANT until
+		// Spell.dbc ships the 11129 proc entry.
+		if auraSpell.ID == 11129 && !s.combustionCheckProc(ctx, ev) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3709,6 +3776,24 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// CheckProc gate is unimplementable in Lua. DORMANT
 				// until Spell.dbc ships the 24661 proc entry.
 				_ = s.removePlayerAuraFromStack(24662)
+				continue
+			}
+			if (auraSpell.ID == 37447 || auraSpell.ID == 61062) && i == 1 && eff.Aura == spellAuraOverrideClassScripts {
+				// spell_mage_imp_mana_gems::HandleProc
+				// (spell_mage.cpp:515-526): PreventDefaultAction; the
+				// proc actor casts Mana Surge (37445) on nil (self),
+				// triggered by the aura effect. Both ranks share the
+				// loader (spell_mage.cpp:505-506). No Lua ev6 twin:
+				// the arm rides the aura-triggered cast the generic
+				// path cannot express. DORMANT until Spell.dbc ships
+				// the 37447/61062 proc entries.
+				if ev.actorGUID != 0 {
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
+					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 37445, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
+				}
 				continue
 			}
 			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
