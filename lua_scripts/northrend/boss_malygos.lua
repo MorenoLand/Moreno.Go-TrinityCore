@@ -1410,6 +1410,12 @@ local function surgeWarningSelectorTargets(event, spell, effectIndex, targets)
     for _, target in ipairs(targets:GetTargets()) do
         if target:GetObjectType() == "Creature" and target:GetVehicleKit() ~= nil then
             vehicles[#vehicles + 1] = target
+        else
+            -- C++ removes non-vehicles from the spell's own list
+            -- (:2233, remove_if IsCreatureVehicleCheck(false)):
+            -- the spell hits vehicles only, so AfterHit fires once
+            -- per vehicle hit, not per enemy in the area.
+            targets:Remove(target)
         end
     end
     if #vehicles == 0 then
@@ -1426,9 +1432,10 @@ local function surgeWarningSelectorTargets(event, spell, effectIndex, targets)
         end
     end
     surgeTargets[caster:GetGUIDLow()] = stored
-    -- No targets:Clear()/Add() here: C++ resizes only the
-    -- selectedTargets copy (:2240-2241); the spell's list stays the
-    -- full vehicle list and AfterHit fires once per vehicle hit.
+    -- No targets:Clear()/Add() of the 3 picks here: C++ resizes
+    -- only the selectedTargets copy (:2240-2241); the spell's list
+    -- stays the full vehicle list (non-vehicles removed above) and
+    -- AfterHit fires once per vehicle hit.
 end
 
 RegisterSpellEvent(SPELL_SURGE_OF_POWER_WARNING_SELECTOR_25, 7, surgeWarningSelectorTargets)
