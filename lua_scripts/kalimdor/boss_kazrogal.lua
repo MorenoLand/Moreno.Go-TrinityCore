@@ -67,8 +67,8 @@
 --   plus the MINRAIDDAMAGE lootable-flag gate — blocked (standing).
 -- - spell_mark_of_kazrogal SpellScriptLoader: the SpellScript
 --   OnObjectAreaTargetSelect filter (targets.remove_if — keeps only mana
---   users, MarkTargetFilter) needs a SpellScript target-filter bridge
---   and stays out; the AuraScript OnEffectPeriodic handler (if target
+--   users, MarkTargetFilter) is PORTED below via RegisterSpellEvent
+--   (ev7, live bridge); the AuraScript OnEffectPeriodic handler (if target
 --   mana == 0, target->CastSpell(target, SPELL_MARK_DAMAGE = 31463,
 --   aurEff) and SetDuration(0)) is PORTED below via RegisterAuraEvent
 --   (tick 194) — the no-AuraScript-bridge block is stale (tick 188).
@@ -211,7 +211,7 @@ RegisterCreatureEvent(ENTRY, 23, onReset)
 -- triggered by the aura (the aurEff overload = triggered cast),
 -- and SetDuration(0) removes the aura (aura:SetDuration(0)
 -- twin). POWER_MANA is 0. The SpellScript target filter (mana
--- users only) stays out — no SpellScript target-filter bridge.
+-- users only) is PORTED below via RegisterSpellEvent ev7.
 local SPELL_MARK_DAMAGE = 31463
 local POWER_MANA = 0
 
@@ -223,3 +223,23 @@ local function markOfKazrogalTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MARK, 1, markOfKazrogalTick)
+
+-- C++ spell_mark_of_kazrogal::FilterTargets
+-- (boss_kazrogal.cpp:193-196): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY — remove_if MarkTargetFilter keeps
+-- only mana users (GetPowerType() == POWER_MANA). The ev7 bridge
+-- is live (ikiss precedent); the old "no SpellScript target-filter
+-- bridge" header claim was stale. DORMANT until Spell.dbc ships
+-- the 31447 record.
+local function markOfKazrogalFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, unit in ipairs(targets:GetTargets()) do
+        if unit:GetPowerType() ~= POWER_MANA then
+            targets:Remove(unit)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_MARK, 7, markOfKazrogalFilter)

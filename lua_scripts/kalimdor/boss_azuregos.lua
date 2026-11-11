@@ -52,13 +52,16 @@
 --   pump skips its cast while casting (its 1s pump keeps running).
 --   The stale "no casting-state bridge (aeonus case)" note is retracted.
 -- Documented-only (no bridges):
--- - spell_mark_of_frost SpellScript (MarkOfFrostTargetSelector target
---   filter + hit-effect aura 23186 application): no SpellScript
---   bridge (standing).
+-- - spell_mark_of_frost SpellScript, MarkOfFrostTargetSelector target
+--   filter only: no SpellScript target-filter bridge. The hit-effect
+--   arm is PORTED below (RegisterSpellEvent 23182 ev5); the filter
+--   is inert on the live cast path anyway (23182 is self-cast by the
+--   killed victim, single target, never area-targeted).
 
 local SAY_TELEPORT = 0
 
 local SPELL_MARK_OF_FROST = 23182
+local SPELL_AURA_OF_FROST = 23186 -- boss_azuregos.cpp:32
 local SPELL_MARK_OF_FROST_AURA = 23184
 local SPELL_MANA_STORM = 21097
 local SPELL_CHILL = 21098
@@ -239,3 +242,26 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
         victim:CastSpell(victim, SPELL_MARK_OF_FROST, true)
     end
 end)
+
+-- C++ spell_mark_of_frost::HandleEffect (boss_azuregos.cpp:196-200):
+-- OnEffectHitTarget EFFECT_0 SPELL_EFFECT_APPLY_AURA — PreventHit-
+-- DefaultEffect, then the hit unit casts SPELL_AURA_OF_FROST 23186
+-- on itself, triggered. Ported via RegisterSpellEvent 23182 ev5
+-- (player-cast funnel, spells.go:28240 — fires once per effect per
+-- live hit target). The C++ PreventHitDefaultEffect has no model on
+-- this path and is deliberately NOT called: the session spell object
+-- carries no PreventHitDefaultEffect method (lua_spell.go:170-300;
+-- it exists only on the creature builder, :461) and the funnel never
+-- consults the veto (spells.go has no defaultPrevented read; the veto
+-- is threaded only through the creature path, boss_ai.go:3279) — so
+-- until the funnel threads it, the default 23182 aura also lands
+-- alongside 23186; the script leg itself is C++-exact. DORMANT
+-- until Spell.dbc ships 23182.
+local function markOfFrostHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_AURA_OF_FROST, true)
+end
+
+RegisterSpellEvent(SPELL_MARK_OF_FROST, 5, markOfFrostHit)

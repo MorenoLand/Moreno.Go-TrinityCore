@@ -167,14 +167,38 @@ local function onTrueFulfillment(creature, guid)
     if #cands > 0 then
         local target = cands[math.random(#cands)]
         creature:CastSpell(target, SPELL_TRUE_FULFILLMENT)
-        -- spell_skeram_true_fulfillment HandleEffect, C++ order: dismount then recast on the hit unit.
-        creature:CastSpell(target, SPELL_GENERIC_DISMOUNT, true)
-        creature:CastSpell(target, SPELL_TRUE_FULFILLMENT_2, true)
+        -- The dismount + 2313 legs ride the SpellScript below
+        -- (RegisterSpellEvent 785 ev5): they fire only when 785
+        -- actually hits, as in C++ — the old inline casts fired
+        -- even on a miss/resist.
     end
     schedule(guid, "fulfillment", math.random(20000, 30000), function()
         onTrueFulfillment(creature, guid)
     end)
 end
+
+-- C++ spell_skeram_true_fulfillment::HandleEffect
+-- (boss_skeram.cpp:262-266): OnEffectHitTarget EFFECT_0 (the
+-- SPELL_AURA_MOD_CHARM apply-aura effect) — the caster casts
+-- SPELL_GENERIC_DISMOUNT 61286 then SPELL_TRUE_FULFILLMENT_2 2313
+-- on the hit unit, both triggered, C++ order, no PreventDefault
+-- (the charm itself still applies). Ported via RegisterSpellEvent
+-- 785 ev5 (creature-cast path, boss_ai.go:3427 — fires once per
+-- effect per live hit target, missed/resisted targets never fire).
+-- DORMANT until Spell.dbc ships 785.
+local function trueFulfillmentHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_GENERIC_DISMOUNT, true)
+    caster:CastSpell(target, SPELL_TRUE_FULFILLMENT_2, true)
+end
+
+RegisterSpellEvent(SPELL_TRUE_FULFILLMENT, 5, trueFulfillmentHit)
 
 -- C++ EVENT_BLINK: DoCast(me, BlinkSpells[urand(0,2)]), init
 -- urand(30000,45000) -> urand(10000,30000). ResetThreatList PORTED

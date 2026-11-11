@@ -50,10 +50,18 @@
 -- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
 --   buru retargeting via instance GetGuidData(DATA_BURU)):
 --   no bridge.
--- - spell_egg_explosion (SpellScript: ACTION_EXPLODE on Buru at 5yd
---   + distance-scaled dummy damage): no SpellScript bridge.
--- - ACTION_EXPLODE's DealDamage(me, me, 45000): no bridge; also only
---   reachable via the unbridged SpellScript.
+-- - spell_egg_explosion (SpellScript): the distance-scaled dummy
+--   damage arm is PORTED below (RegisterSpellEvent 19593 ev5); the
+--   AfterCast arm (FindNearestCreature Buru at 5yd -> DoAction
+--   ACTION_EXPLODE) is PORTED below as a fold into eggDied — no
+--   AfterCast hook exists in Go (runtime.go:517-600), but the egg
+--   is the sole 19593 caster in the tree and the 19593 cast
+--   resolves synchronously, so the fold runs at AfterCast position
+--   (one DoAction: the script binds 19593; the 5255 binding is
+--   DB-side and unverifiable in-tree).
+-- - ACTION_EXPLODE's DealDamage(me, me, 45000): PORTED below via
+--   the event-38 handler (creature:DealDamage bridge,
+--   lua_creature_events.go:1754).
 -- - EVENT_CREEPING_PLAGUE: never scheduled in C++ (only rescheduled
 --   in its own handler) — dead code, C++-verbatim not ported.
 -- - EVENT_RESPAWN_EGG: driven by the unbridged Eggs GuidList
@@ -79,6 +87,8 @@ local ENTRY_BURU_EGG = 15514 -- Wowhead-verified 2026-11-07, see header
 local SPELL_EXPLODE = 19593 -- boss_buru.cpp:39
 local SPELL_EXPLODE_2 = 5255 -- boss_buru.cpp:40
 local SPELL_SUMMON_HATCHLING = 1881 -- boss_buru.cpp:38
+
+local ACTION_EXPLODE = 0 -- boss_buru.cpp:61
 
 local PHASE_EGG = 0
 local PHASE_TRANSFORM = 1
@@ -263,8 +273,17 @@ end
 -- + DoCast(me, SPELL_SUMMON_HATCHLING, true). DoCastAOE is self-cast
 -- per convention; all three casts are triggered in C++. The
 -- ManageRespawn leg stays out (cross-AI dynamic_cast, no bridge).
+-- C++ spell_egg_explosion::HandleAfterCast (boss_buru.cpp:254-258)
+-- folds in here at AfterCast position: the 19593 cast resolves
+-- synchronously, so the FindNearestCreature(NPC_BURU, 5.0f) +
+-- DoAction(ACTION_EXPLODE) runs after the 19593 cast and before
+-- the 5255 cast, in C++ order (one DoAction — see header).
 local function eggDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_EXPLODE, true)
+    local buru = creature:FindNearestCreature(ENTRY, 5)
+    if buru ~= nil then
+        buru:DoAction(ACTION_EXPLODE)
+    end
     creature:CastSpell(creature, SPELL_EXPLODE_2, true)
     creature:CastSpell(creature, SPELL_SUMMON_HATCHLING, true)
 end
@@ -276,3 +295,52 @@ RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
 RegisterCreatureEvent(ENTRY_BURU_EGG, 4, eggDied)
+
+-- C++ boss_buruAI::DoAction(ACTION_EXPLODE) (boss_buru.cpp:100-105):
+-- phase EGG only -> Unit::DealDamage(me, me, 45000). Reached via
+-- the egg-explosion AfterCast fold in eggDied (creature:DoAction
+-- fires event 38 on the entry, razorgore precedent); the phase
+-- gate is the C++ _phase check, read from the Lua buruState.
+local function buruDoAction(event, creature, action)
+    if action ~= ACTION_EXPLODE then
+        return
+    end
+    local state = buruState[creature:GetGUIDLow()]
+    if state == nil or state.phase ~= PHASE_EGG then
+        return
+    end
+    creature:DealDamage(creature, 45000)
+end
+
+RegisterCreatureEvent(ENTRY, 38, buruDoAction)
+
+-- C++ spell_egg_explosion::HandleDummyHitTarget
+-- (boss_buru.cpp:260-264): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY — per hit unit, DealDamage(caster, target,
+-- -16 * caster distance to target + 500). The loader binds spell
+-- 19593 (SPELL_EXPLODE, boss_buru.cpp:39 — the egg's JustDied
+-- DoCastAOE above, same enum-ID evidence standard as the
+-- zone_blasted_lands 27686 port). Distance is the 3D center
+-- distance (C++ WorldObject::GetDistance; Lua GetDistance object
+-- form, scripting/object.go:282, no reach subtraction). C++
+-- converts the float to uint32 (DealDamage, Unit.h:939), so
+-- truncation toward zero; the 0 clamp mirrors that inside the
+-- spell radius — beyond 31.25yd the C++ float goes negative and
+-- the uint32 conversion wraps, unreachable while the DBC radius
+-- holds targets inside it. DORMANT until Spell.dbc ships 19593.
+local function eggExplosionDummy(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local damage = math.floor(500 - 16 * caster:GetDistance(target))
+    if damage < 0 then
+        damage = 0
+    end
+    caster:DealDamage(target, damage)
+end
+
+RegisterSpellEvent(SPELL_EXPLODE, 5, eggExplosionDummy)
