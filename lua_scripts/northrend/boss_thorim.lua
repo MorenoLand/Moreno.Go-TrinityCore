@@ -168,7 +168,8 @@
 -- precedent): 64767/64909 ported below; 62042's FilterTargets (ev7) +
 -- HandleScript (ev5) ported below, LoseHammer AfterCast stays out
 -- (no AfterCast bridge, spells.go:19257); 62580/62604 frostbolt
--- volley FilterTargets (ev7) ported below.
+-- volley FilterTargets (ev7) ported below; 62057/62058 runic smash
+-- HandleScript (ev5) ported below.
 
 local ENTRY_THORIM = 32865
 local BOSS_THORIM = 8 -- ulduar.h:44
@@ -242,6 +243,9 @@ local SPELL_SMASH = 62339
 local SPELL_RUNIC_CHARGE = 62613
 local SPELL_RUNIC_SMASH_LEFT = 62058 -- boss_thorim.cpp:81
 local SPELL_RUNIC_SMASH_RIGHT = 62057 -- boss_thorim.cpp:80
+local SPELL_RUNIC_SMASH = 62465 -- boss_thorim.cpp:79
+local NPC_GOLEM_LEFT_HAND_BUNNY = 33141 -- ulduar.h:191
+local NPC_GOLEM_RIGHT_HAND_BUNNY = 33140 -- ulduar.h:190
 
 local EMOTE_RUNIC_MIGHT = 0
 local SPELL_RUNIC_FORTIFICATION = 62942
@@ -1256,3 +1260,40 @@ local function frostboltVolleyFilter(event, spell, effectIndex, targets)
 end
 RegisterSpellEvent(SPELL_FROSTBOLT_VOLLEY, 7, frostboltVolleyFilter)
 RegisterSpellEvent(SPELL_FROSTBOLT_VOLLEY_HEROIC, 7, frostboltVolleyFilter)
+
+-- C++ spell_thorim_runic_smash::HandleScript
+-- (boss_thorim.cpp:2039-2050): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_TRIGGER_SPELL -> PreventHitDefaultEffect, then every
+-- golem-hand bunny of the entry matching the cast side within 150 yd
+-- schedules its own RunicSmashExplosionEvent at dist * 30 ms, which
+-- casts SPELL_RUNIC_SMASH 62465 on itself, non-triggered (C++ passes
+-- no triggered arg). Bound 62058/62057 (boss enum :80-81; the colossus
+-- casts RAND(left, right) at :1480-1483). The delayed casts ride the
+-- file's schedule() helper keyed by the caster GUID with a per-bunny
+-- key, so colossus Reset/leave-combat/death cancels them (cancelTimers
+-- below); the 6s re-cast outruns the 4.5s max delay, so no pending
+-- explosion is ever clobbered. DORMANT until Spell.dbc ships: the
+-- 62057/62058 casts are DBC-gated.
+local function runicSmashHandleScript(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local bunnyEntry = NPC_GOLEM_RIGHT_HAND_BUNNY
+    if spell:GetEntry() == SPELL_RUNIC_SMASH_LEFT then
+        bunnyEntry = NPC_GOLEM_LEFT_HAND_BUNNY
+    end
+    local casterGuid = caster:GetGUIDLow()
+    for _, trigger in ipairs(caster:GetCreaturesInGrid(bunnyEntry, 150.0)) do
+        local delay = math.max(1, math.floor(caster:GetExactDistance(trigger) * 30.0))
+        schedule(casterGuid, "runicSmashExplosion" .. trigger:GetGUIDLow(), delay, function()
+            trigger:CastSpell(trigger, SPELL_RUNIC_SMASH, false)
+        end)
+    end
+end
+RegisterSpellEvent(SPELL_RUNIC_SMASH_LEFT, 5, runicSmashHandleScript)
+RegisterSpellEvent(SPELL_RUNIC_SMASH_RIGHT, 5, runicSmashHandleScript)

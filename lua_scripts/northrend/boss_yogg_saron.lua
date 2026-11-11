@@ -211,6 +211,14 @@
 -- retired: empowered OnApply (stack-9 buff) ported tick 438
 -- via ev2 (empoweredApply below); sanity OnRemove ported
 -- tick 436 via ev3 (sanityRemove below).
+-- spell_yogg_saron_target_selectors (63744/63745/63747/65206 DUMMY
+-- cast-effect-value, ev5) + psychosis (63795/65301, ev7 filter + ev5
+-- sanity -9/-12) + malady_of_the_mind (63830/63881, ev7 filter on 63830
+-- only + ev5 sanity -3 + ev3 OnRemove jump cast) PORTED 2026-11-11
+-- below (PHASE3.yoggTargetSelectorHandleScript /
+-- PHASE3.yoggHighSanityFilter / PHASE3.yoggSanityReduction /
+-- PHASE3.yoggMaladyRemoved — table fields, the file is at the
+-- 200-local limit).
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -234,8 +242,8 @@ local SPELL_BRAIN_LINK = 63802 -- boss_yogg_saron.cpp:139
 
 -- Phase-3 machine consts (boss_yogg_saron.cpp:365-367 actions,
 -- :282-287 phases, :112-169/:222 spells, :36-60 yells) — grouped in
--- one table: the file is at 187 top-level locals (limit 200, the
--- LK-table precedent). The brain DamageTaken cascade (:1070-1090)
+-- one table: the file sits at the 200-local limit, so new consts ride
+-- this table (the LK-table precedent). The brain DamageTaken cascade (:1070-1090)
 -- sends ACTION_PHASE_THREE to the voice, sara, yogg and the
 -- thorim/mimiron keepers; the receivers are ported this run.
 local ACTION_PHASE_THREE = 2
@@ -257,6 +265,20 @@ local PHASE3 = {
     EMOTE_YOGG_SARON_DEAFENING_ROAR = 5, -- :58
     EMOTE_YOGG_SARON_EMPOWERING_SHADOWS = 7, -- :59
     EMOTE_YOGG_SARON_EXTINGUISH_ALL_LIFE = 8, -- :60
+    -- Target-selector / psychosis / malady ids (boss_yogg_saron.cpp
+    -- enum lines per key) + malady remove modes: grouped here because
+    -- the file is at the 200-local limit; the handlers below are
+    -- assigned as fields of this table for the same reason.
+    SARAS_ANGER = 63744, -- :132
+    SARAS_BLESSING = 63745, -- :130
+    SARAS_FERVOR = 63747, -- :128
+    PSYCHOSIS = 63795, -- :137
+    PSYCHOSIS_HEROIC = 65301, -- class comment :2022 (no in-tree enum/cast site; paired-comment precedent, cf. 62604)
+    MALADY = 63830, -- :138
+    MALADY_JUMP = 63881, -- :269
+    ILLUSION_ROOM = 63988, -- :270
+    AURA_REMOVE_BY_EXPIRE = 4, -- SpellAuraDefines.h:67
+    AURA_REMOVE_BY_DEATH = 5, -- SpellAuraDefines.h:68
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -1095,6 +1117,138 @@ local function sanityRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SANITY, 3, sanityRemove)
+
+-- C++ spell_yogg_saron_target_selectors::HandleScript
+-- (boss_yogg_saron.cpp:1972-1977): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> the caster casts the effect's value on the hit
+-- unit, non-triggered (C++ passes no triggered arg); the DUMMY effect
+-- has no Go default arm beyond the Eluna hook (boss_ai.go dummy arm),
+-- so no PreventHitDefaultEffect, matching C++. Bound 63744/63745/63747
+-- (Sara DoCastAOE :810-818) + 65206 (keeper DoCastAOE :1663-1667).
+-- DORMANT until Spell.dbc ships: the selector casts are DBC-gated.
+PHASE3.yoggTargetSelectorHandleScript = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        caster:CastSpell(hitTarget, value, false)
+    end
+end
+RegisterSpellEvent(PHASE3.SARAS_ANGER, 5, PHASE3.yoggTargetSelectorHandleScript)
+RegisterSpellEvent(PHASE3.SARAS_BLESSING, 5, PHASE3.yoggTargetSelectorHandleScript)
+RegisterSpellEvent(PHASE3.SARAS_FERVOR, 5, PHASE3.yoggTargetSelectorHandleScript)
+RegisterSpellEvent(SPELL_DESTABILIZATION_MATRIX, 5, PHASE3.yoggTargetSelectorHandleScript)
+
+-- C++ spell_yogg_saron_psychosis::FilterTargets
+-- (boss_yogg_saron.cpp:2038-2042) + spell_yogg_saron_malady_of_the_mind::FilterTargets
+-- (:2070-2074): OnObjectAreaTargetSelect -> drop targets with no sanity
+-- aura or sanity stacks <= 40 (HighSanityTargetSelector :2011-2020),
+-- then drop targets carrying the illusion-room aura (UnitAuraCheck
+-- true, SPELL_ILLUSION_ROOM). GetAura/HasAura are live on both the
+-- creature and player builders. Psychosis registers eff0+eff1, malady
+-- eff0/1/2 on 63830 only (C++ :2077 gate); the effectIndex gate below
+-- keeps the Go ev7 fire (selecting legs only) from over-filtering
+-- unregistered effects.
+PHASE3.yoggHighSanityFilter = function(event, spell, effectIndex, targets)
+    local id = spell:GetEntry()
+    if id == PHASE3.PSYCHOSIS or id == PHASE3.PSYCHOSIS_HEROIC then
+        if effectIndex ~= 0 and effectIndex ~= 1 then
+            return
+        end
+    elseif id == PHASE3.MALADY then
+        if effectIndex ~= 0 and effectIndex ~= 1 and effectIndex ~= 2 then
+            return
+        end
+    else
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target == nil then
+            -- nothing to keep; the list holds resolved objects only
+        else
+            local sanity = target:GetAura(SPELL_SANITY)
+            if sanity == nil or sanity:GetStackAmount() <= 40 then
+                targets:Remove(target)
+            elseif target:HasAura(PHASE3.ILLUSION_ROOM) then
+                targets:Remove(target)
+            end
+        end
+    end
+end
+RegisterSpellEvent(PHASE3.PSYCHOSIS, 7, PHASE3.yoggHighSanityFilter)
+RegisterSpellEvent(PHASE3.PSYCHOSIS_HEROIC, 7, PHASE3.yoggHighSanityFilter)
+RegisterSpellEvent(PHASE3.MALADY, 7, PHASE3.yoggHighSanityFilter)
+
+-- C++ SanityReduction::RemoveSanity (boss_yogg_saron.cpp:1999-2004):
+-- the hit unit's sanity aura loses _stacks stacks, removed with
+-- AURA_REMOVE_BY_ENEMY_SPELL when it hits zero; psychosis sets _stacks
+-- 9 (63795) / 12 (65301) in Load (:2031-2034), malady fixes 3 in its
+-- ctor (:2065). The Go twin is SetStackAmount for a partial reduction
+-- and aura:Remove(3) at zero — the mode matters, the sanityRemove ev3
+-- leg gates on it. No PreventHitDefaultEffect: SCRIPT_EFFECT has no Go
+-- default arm (the 429/441 precedent).
+PHASE3.yoggSanityReduction = function(event, spell, hitTarget, effectIndex)
+    local id = spell:GetEntry()
+    local stacks = 0
+    if id == PHASE3.PSYCHOSIS then
+        if effectIndex ~= 1 then
+            return
+        end
+        stacks = 9
+    elseif id == PHASE3.PSYCHOSIS_HEROIC then
+        if effectIndex ~= 1 then
+            return
+        end
+        stacks = 12
+    elseif id == PHASE3.MALADY or id == PHASE3.MALADY_JUMP then
+        if effectIndex ~= 2 then
+            return
+        end
+        stacks = 3
+    else
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local sanity = hitTarget:GetAura(SPELL_SANITY)
+    if sanity == nil then
+        return
+    end
+    local count = sanity:GetStackAmount()
+    if count <= stacks then
+        sanity:Remove(AURA_REMOVE_BY_ENEMY_SPELL)
+    else
+        sanity:SetStackAmount(count - stacks)
+    end
+end
+RegisterSpellEvent(PHASE3.PSYCHOSIS, 5, PHASE3.yoggSanityReduction)
+RegisterSpellEvent(PHASE3.PSYCHOSIS_HEROIC, 5, PHASE3.yoggSanityReduction)
+RegisterSpellEvent(PHASE3.MALADY, 5, PHASE3.yoggSanityReduction)
+RegisterSpellEvent(PHASE3.MALADY_JUMP, 5, PHASE3.yoggSanityReduction)
+
+-- C++ spell_yogg_saron_malady_of_the_mind_AuraScript::OnRemove
+-- (boss_yogg_saron.cpp:2099-2111): AfterEffectRemove EFFECT_1
+-- SPELL_AURA_MOD_FEAR -> when the fear aura leaves by enemy spell,
+-- expiry, or death, the target casts the jump spell on itself,
+-- non-triggered. Bound 63830 (the fear aura; 63881 is the cast, not a
+-- second binding).
+PHASE3.yoggMaladyRemoved = function(event, aura, target)
+    local mode = aura:GetRemoveMode()
+    if mode ~= AURA_REMOVE_BY_ENEMY_SPELL and mode ~= PHASE3.AURA_REMOVE_BY_EXPIRE and mode ~= PHASE3.AURA_REMOVE_BY_DEATH then
+        return
+    end
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, PHASE3.MALADY_JUMP, false)
+end
+RegisterAuraEvent(PHASE3.MALADY, 3, PHASE3.yoggMaladyRemoved)
 
 -- C++ boss_voice_of_yogg_saronAI::UpdateAI EVENT_SUMMON_GUARDIAN_OF_
 -- YOGG_SARON (:567-573): DoCastAOE(SPELL_SUMMON_GUARDIAN_2,
