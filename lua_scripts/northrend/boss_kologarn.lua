@@ -159,8 +159,14 @@
 -- STONE_GRIP legs; SAY_SHOCKWAVE 4 is unused in the C++ AI.)
 -- spell_ulduar_rubble_summon (SCRIPT_EFFECT SpellScript: caster
 -- casts GetEffectValue() with originalCaster = instance
--- GetGuidData(BOSS_KOLOGARN) — no SpellScript bridge; joins
--- the no-SpellScript-bridge queue);
+-- GetGuidData(BOSS_KOLOGARN) — PORTED 2026-11-11 via
+-- RegisterSpellEvent ev5 below: ev5 is the OnEffectHitTarget
+-- bridge (runtime.go), GetEffectValue + GetGuidData + the
+-- CastCustomSpell originalCaster arg are all live (the arg is
+-- accepted-and-ignored, no Go model yet); binding 63633 =
+-- SPELL_SUMMON_RUBBLE (boss_kologarn.cpp:47, stalker cast
+-- :195, ported line 703). DORMANT until Spell.dbc ships
+-- 63633's SCRIPT_EFFECT value (fail-closed 0 read).);
 -- spell_ulduar_stone_grip_cast_target (SpellScript area-target
 -- filters: EFFECT_0 removes the main tank (only when the threat
 -- list holds > 1) + non-player targets and caps to 1 (62166) / 3
@@ -213,8 +219,12 @@
 -- removes depleted absorbs with auraRemoveByEnemySpell, mode 3),
 -- so the C++ ENEMY_SPELL gate ports as aura:GetRemoveMode() == 3.
 -- spell_ulduar_squeezed_lifeless (SpellScript INSTAKILL
--- handler — no SpellScript bridge; joins the
--- no-SpellScript-bridge queue);
+-- OnEffectHitTarget EFFECT_1 — STAYS OUT: the hook itself is
+-- bridgeable (ev5, OnEffectHitTarget), but the binding spell
+-- id is DB-side (no SQUEEZED enum in boss_kologarn.cpp,
+-- census spell 0) and three legs have no bridge: player
+-- ExitVehicle-with-position (session.exitVehicle takes no
+-- position), DestroyForNearbyPlayers, UpdateObjectVisibility.);
 -- spell_kologarn_stone_shout (SpellScript area-target filter
 -- on EFFECT_0 — no SpellScript bridge; joins the
 -- no-SpellScript-bridge queue);
@@ -778,6 +788,39 @@ local function cancelStoneGrip(event, spell, target, effectIndex)
     end
 end
 RegisterSpellEvent(SPELL_STONE_GRIP_CANCEL, 5, cancelStoneGrip)
+
+-- C++ spell_ulduar_rubble_summon::HandleScript
+-- (boss_kologarn.cpp:334-356): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the caster (rubble stalker)
+-- casts GetEffectValue() on itself 5 times with originalCaster
+-- = instance GetGuidData(BOSS_KOLOGARN). Bound 63633
+-- (SPELL_SUMMON_RUBBLE, boss_kologarn.cpp:47; the stalker
+-- casts it at :195, ported above). DORMANT until Spell.dbc
+-- ships 63633's effect-0 value (fail-closed 0 read); the
+-- originalCaster arg is accepted-and-ignored in Go
+-- (lua_creature_events.go), so the 5 casts fire with the boss
+-- GUID passed through for a future model.
+local function rubbleSummonHandleScript(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local spellId = spell:GetEffectValue(0)
+    if spellId == 0 then
+        return
+    end
+    local kologarnGuid = 0
+    if caster:GetObjectType() == "Creature" then
+        kologarnGuid = caster:GetGuidData(DATA_KOLOGARN)
+    end
+    for _ = 1, 5 do
+        caster:CastCustomSpell(caster, spellId, false, nil, nil, nil, nil, kologarnGuid)
+    end
+end
+RegisterSpellEvent(SPELL_SUMMON_RUBBLE, 5, rubbleSummonHandleScript)
 
 -- C++ spell_ulduar_stone_grip::OnRemoveStun
 -- (boss_kologarn.cpp:568-573): AfterEffectRemove EFFECT_2
