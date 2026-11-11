@@ -65,6 +65,31 @@
 --   GetAuraEffectOfRankedSpell(53379, 0): Swift Retribution's
 --   ADD_FLAT_MODIFIER is its EFFECT_0 (the script registers
 --   EFFECT_FIRST_FOUND for that aura type).
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   624 eye_for_an_eye (9799, :777-790: holder casts 25997 on the
+--   attacker, BP0 = min(pct(damage, amount), maxHealth/2));
+--   625 heart_of_the_crusader (20335, :1040-1047: actor casts
+--   rank-matched 21183 on the proc target);
+--   628 improved_lay_of_hands (20234, :1322-1327: action target
+--   casts its DBC trigger spell on itself);
+--   630 judgements_of_the_just (53695, :1698-1703: holder casts
+--   68055 on the action target);
+--   631 judgements_of_the_wise (31876, :1730-1737: actor casts
+--   31930 + Replenishment 57669 on itself);
+--   633 righteous_vengeance (53380, :1944-1965: actor casts 61840
+--   on the proc target, BP0 = pct(damage, amount) / max ticks).
+--   All return true (PreventDefaultAction) and are DORMANT until
+--   Spell.dbc ships their proc entries.
+-- STAYS OUT (this tick): 623 divine_purpose (no
+--   unit:RemoveAurasWithMechanic bridge; Go has the
+--   auraSpellMechanicMask + mechanicStun=12 twins, no removal
+--   helper); 626 holy_shock (no OnCheckCast bridge + spell-level
+--   GetSpellWithRank); 627 illumination + 629 infusion_of_light +
+--   636 spiritual_attunement + 637 sheath_of_light + 638 t8_2p_bonus
+--   (all need heal info / proc-spell family flags / CalcPowerCost,
+--   ev6 carries damage only); 632 lay_on_hands (no OnCheckCast
+--   bridge); 634/635 seal_of_righteousness (needs attack-power /
+--   spellpower / attack-time math, unbridged).
 
 local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 
@@ -189,3 +214,139 @@ local function sanctifiedRetributionRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_R1, 3, sanctifiedRetributionRemove)
+
+local SPELL_PALADIN_EYE_FOR_AN_EYE = 9799 -- spell_paladin.cpp:761 (class spell_pal_eye_for_an_eye)
+local SPELL_PALADIN_EYE_FOR_AN_EYE_DAMAGE = 25997 -- spell_paladin.cpp:61
+
+-- C++ spell_pal_eye_for_an_eye_AuraScript::OnProc
+-- (spell_paladin.cpp:777-790): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction (the true return); no damage -> nothing.
+-- The holder casts the damage spell on the proc target (the
+-- attacker), triggered, BP0 = min(pct(damage, aurEff amount),
+-- holder max health / 2). DORMANT until Spell.dbc ships the 9799
+-- proc entry.
+local function eyeForAnEyeProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 or procTarget == nil then
+        return true
+    end
+    local amount = math.floor(damage * aura:GetAmount() / 100)
+    local cap = math.floor(target:GetMaxHealth() / 2)
+    if amount > cap then
+        amount = cap
+    end
+    target:CastCustomSpell(procTarget, SPELL_PALADIN_EYE_FOR_AN_EYE_DAMAGE, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_EYE_FOR_AN_EYE, 6, eyeForAnEyeProc)
+
+local SPELL_PALADIN_HEART_OF_THE_CRUSADER = 20335 -- spell_paladin.cpp:1026 (class spell_pal_heart_of_the_crusader)
+local SPELL_PALADIN_HEART_OF_THE_CRUSADER_EFF_R1 = 21183 -- spell_paladin.cpp:112
+
+-- C++ spell_pal_heart_of_the_crusader_AuraScript::HandleProc
+-- (spell_paladin.cpp:1040-1047): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; the proc actor casts the rank-matched
+-- effect spell (21183 by this aura's rank) on the proc target,
+-- triggered (aurEff args). DORMANT until Spell.dbc ships the
+-- 20335 proc entry.
+local function heartOfTheCrusaderProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local spellId = aura:GetSpellWithRank(SPELL_PALADIN_HEART_OF_THE_CRUSADER_EFF_R1)
+    if spellId == 0 then
+        return true
+    end
+    actor:CastSpell(procTarget, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_HEART_OF_THE_CRUSADER, 6, heartOfTheCrusaderProc)
+
+local SPELL_PALADIN_IMPROVED_LAY_ON_HANDS = 20234 -- spell_paladin.cpp:1308 (class spell_pal_improved_lay_of_hands)
+
+-- C++ spell_pal_improved_lay_of_hands_AuraScript::HandleProc
+-- (spell_paladin.cpp:1322-1327): OnEffectProc, EFFECT_0
+-- PROC_TRIGGER_SPELL. PreventDefaultAction; the action target
+-- (the ev6 proc target on a done event) casts the DBC trigger
+-- spell on itself, triggered (aurEff args; the C++ original-caster
+-- GUID arg has no Lua twin). DORMANT until Spell.dbc ships the
+-- 20234 proc entry.
+local function improvedLayOnHandsProc(event, aura, target, actor, procTarget, damage)
+    if procTarget == nil then
+        return true
+    end
+    local spellId = aura:GetTriggerSpell(0)
+    if spellId == 0 then
+        return true
+    end
+    procTarget:CastSpell(procTarget, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_IMPROVED_LAY_ON_HANDS, 6, improvedLayOnHandsProc)
+
+local SPELL_PALADIN_JUDGEMENTS_OF_THE_JUST = 53695 -- spell_paladin.cpp:1682 (class spell_pal_judgements_of_the_just)
+local SPELL_PALADIN_JUDGEMENTS_OF_THE_JUST_PROC = 68055 -- spell_paladin.cpp:102
+
+-- C++ spell_pal_judgements_of_the_just_AuraScript::OnProc
+-- (spell_paladin.cpp:1698-1703): OnEffectProc, EFFECT_0
+-- ADD_FLAT_MODIFIER. PreventDefaultAction; the holder casts the
+-- proc spell on the action target (the ev6 proc target on a done
+-- event), triggered (aurEff args). DORMANT until Spell.dbc ships
+-- the 53695 proc entry.
+local function judgementsOfTheJustProc(event, aura, target, actor, procTarget, damage)
+    if procTarget == nil then
+        return true
+    end
+    target:CastSpell(procTarget, SPELL_PALADIN_JUDGEMENTS_OF_THE_JUST_PROC, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_JUDGEMENTS_OF_THE_JUST, 6, judgementsOfTheJustProc)
+
+local SPELL_PALADIN_JUDGEMENTS_OF_THE_WISE = 31876 -- spell_paladin.cpp:1715 (class spell_pal_judgements_of_the_wise)
+local SPELL_PALADIN_JUDGEMENTS_OF_THE_WISE_MANA = 31930 -- spell_paladin.cpp:106
+local SPELL_PALADIN_REPLENISHMENT = 57669 -- spell_paladin.cpp:107
+
+-- C++ spell_pal_judgements_of_the_wise_AuraScript::HandleProc
+-- (spell_paladin.cpp:1730-1737): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; the proc actor casts the mana spell and
+-- Replenishment on itself (the C++ nullptr target is the self-cast,
+-- the hunting-party precedent), triggered (aurEff args). DORMANT
+-- until Spell.dbc ships the 31876 proc entry.
+local function judgementsOfTheWiseProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_PALADIN_JUDGEMENTS_OF_THE_WISE_MANA, true)
+    actor:CastSpell(actor, SPELL_PALADIN_REPLENISHMENT, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_JUDGEMENTS_OF_THE_WISE, 6, judgementsOfTheWiseProc)
+
+local SPELL_PALADIN_RIGHTEOUS_VENGEANCE = 53380 -- spell_paladin.cpp:1930 (class spell_pal_righteous_vengeance)
+local SPELL_PALADIN_RIGHTEOUS_VENGEANCE_DAMAGE = 61840 -- spell_paladin.cpp:108
+
+-- C++ spell_pal_righteous_vengeance_AuraScript::HandleProc
+-- (spell_paladin.cpp:1944-1965): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; no damage -> nothing. The proc actor casts
+-- the damage spell on the proc target, triggered, BP0 =
+-- pct(damage, aurEff amount) / the damage spell's max ticks
+-- (aura:GetSpellMaxTicks twin). DORMANT until Spell.dbc ships the
+-- 53380 proc entry.
+local function righteousVengeanceProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 or actor == nil or procTarget == nil then
+        return true
+    end
+    local maxTicks = aura:GetSpellMaxTicks(SPELL_PALADIN_RIGHTEOUS_VENGEANCE_DAMAGE)
+    if maxTicks <= 0 then
+        return true
+    end
+    local amount = math.floor(damage * aura:GetAmount() / 100 / maxTicks)
+    actor:CastCustomSpell(procTarget, SPELL_PALADIN_RIGHTEOUS_VENGEANCE_DAMAGE, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_RIGHTEOUS_VENGEANCE, 6, righteousVengeanceProc)
