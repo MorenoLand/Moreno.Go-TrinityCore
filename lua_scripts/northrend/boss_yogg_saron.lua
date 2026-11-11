@@ -1256,7 +1256,8 @@ RegisterSpellEvent(PHASE3.MALADY, 7, PHASE3.yoggHighSanityFilter)
 -- the hit unit's sanity aura loses _stacks stacks, removed with
 -- AURA_REMOVE_BY_ENEMY_SPELL when it hits zero; psychosis sets _stacks
 -- 9 (63795) / 12 (65301) in Load (:2031-2034), malady fixes 3 in its
--- ctor (:2065). The Go twin is SetStackAmount for a partial reduction
+-- ctor (:2065), lunatic gaze sets 4 (64164) / 2 (64168) in Load
+-- (:2990-2993). The Go twin is SetStackAmount for a partial reduction
 -- and aura:Remove(3) at zero — the mode matters, the sanityRemove ev3
 -- leg gates on it. No PreventHitDefaultEffect: SCRIPT_EFFECT has no Go
 -- default arm (the 429/441 precedent).
@@ -1283,6 +1284,16 @@ PHASE3.yoggSanityReduction = function(event, spell, hitTarget, effectIndex)
             return
         end
         stacks = 2
+    elseif id == PHASE3.LUNATIC_GAZE_DAMAGE then
+        if effectIndex ~= 1 then
+            return
+        end
+        stacks = 4
+    elseif id == PHASE3.LUNATIC_GAZE_DAMAGE_2 then
+        if effectIndex ~= 1 then
+            return
+        end
+        stacks = 2
     else
         return
     end
@@ -1305,6 +1316,84 @@ RegisterSpellEvent(PHASE3.PSYCHOSIS_HEROIC, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.MALADY, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.MALADY_JUMP, 5, PHASE3.yoggSanityReduction)
 RegisterSpellEvent(PHASE3.BRAIN_LINK_DAMAGE, 5, PHASE3.yoggSanityReduction)
+
+-- C++ spell_yogg_saron_lunatic_gaze::FilterTargets
+-- (boss_yogg_saron.cpp:2995-2998): OnObjectAreaTargetSelect EFFECT_0 +
+-- EFFECT_1 TARGET_UNIT_SRC_AREA_ENEMY -> drop targets where the caster
+-- is not in the target's front PI arc (LunaticGazeTargetSelector
+-- :2968-2980, HasInArc(M_PI, caster)); IsInBack(caster, pi) is the
+-- exact twin (Object.cpp:1417-1420), the eadric radiance precedent.
+-- The sanity leg rides yoggSanityReduction above (Load :2990-2993
+-- stacks 4 for 64164 / 2 for 64168, EFFECT_1 SCRIPT_EFFECT).
+-- DORMANT until Spell.dbc ships 64164/64168.
+PHASE3.yoggLunaticGazeFilter = function(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 and effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target ~= nil and target:IsInBack(caster, math.pi) then
+            targets:Remove(target)
+        end
+    end
+end
+RegisterSpellEvent(PHASE3.LUNATIC_GAZE_DAMAGE, 7, PHASE3.yoggLunaticGazeFilter)
+RegisterSpellEvent(PHASE3.LUNATIC_GAZE_DAMAGE_2, 7, PHASE3.yoggLunaticGazeFilter)
+RegisterSpellEvent(PHASE3.LUNATIC_GAZE_DAMAGE, 5, PHASE3.yoggSanityReduction)
+RegisterSpellEvent(PHASE3.LUNATIC_GAZE_DAMAGE_2, 5, PHASE3.yoggSanityReduction)
+
+-- C++ spell_yogg_saron_insane_periodic::HandleScript
+-- (boss_yogg_saron.cpp:2951-2955): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> the caster casts the effect's value on the hit
+-- unit, triggered; the 453/460 shape with triggered=true (C++ passes
+-- true here). No in-tree cast site; DBC-bound (loader comment :2940).
+-- DORMANT until Spell.dbc ships 64555. Not 64554 SPELL_INSANE_PERIODIC,
+-- the Yogg-cast aura handled above.
+PHASE3.yoggInsanePeriodicHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        caster:CastSpell(hitTarget, value, true)
+    end
+end
+RegisterSpellEvent(PHASE3.INSANE_PERIODIC, 5, PHASE3.yoggInsanePeriodicHit)
+
+-- C++ spell_yogg_saron_hate_to_zero::HandleScript
+-- (boss_yogg_saron.cpp:3055-3061): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> a hit unit that CanHaveThreatList zeroes the
+-- caster's threat on its list (ModifyThreatByPercent -100). The Go twin
+-- is hitTarget:ModifyThreatByPercent(caster, -100) on the motion
+-- creature (lua_creature_events.go:2165, ScaleThreat x0.00). The gate
+-- is the GetObjectType() == "Creature" twin (ThreatManager.cpp:156:
+-- creatures only); pets/totems/player-summoned minions are also
+-- excluded in C++ but IsPet is unexposed on the Lua surface (the 447
+-- note), so they over-include — documented, unreachable in the ToC
+-- worm Emerge cast (players + pets only). Bound 63984 (boss enum
+-- :271; Dreadscale/Acidmaw Emerge DoCastAOE :770 beasts.cpp).
+-- DORMANT until Spell.dbc ships 63984.
+PHASE3.yoggHateToZeroHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:ModifyThreatByPercent(caster, -100)
+end
+RegisterSpellEvent(PHASE3.HATE_TO_ZERO, 5, PHASE3.yoggHateToZeroHit)
 
 -- C++ spell_yogg_saron_brain_link::FilterTargets
 -- (boss_yogg_saron.cpp:2139-2151): OnObjectAreaTargetSelect EFFECT_0
