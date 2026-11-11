@@ -53,10 +53,14 @@
 --   The stale "no casting-state bridge (aeonus case)" note is retracted.
 -- Documented-only (no bridges):
 -- - spell_mark_of_frost SpellScript, MarkOfFrostTargetSelector target
---   filter only: no SpellScript target-filter bridge. The hit-effect
---   arm is PORTED below (RegisterSpellEvent 23182 ev5); the filter
---   is inert on the live cast path anyway (23182 is self-cast by the
---   killed victim, single target, never area-targeted).
+--   filter only: no SpellScript target-filter bridge on the player
+--   path (ev7 fires creature-path only, lua_spell.go:716). The
+--   hit-effect arm is PORTED below (RegisterSpellEvent 23182 ev5)
+--   with the filter predicate as an aura gate (HasAura 23182, no
+--   23186); 23182 is area-enemy targeted in DBC, so the filter is
+--   not inert — the Go funnel resolves the area-enemy list around
+--   the casting player (spells.go spellAreaEnemyTargets, caster
+--   excluded) and ev5 fires per hit target.
 
 local SAY_TELEPORT = 0
 
@@ -248,17 +252,25 @@ end)
 -- DefaultEffect, then the hit unit casts SPELL_AURA_OF_FROST 23186
 -- on itself, triggered. Ported via RegisterSpellEvent 23182 ev5
 -- (player-cast funnel, spells.go:28240 — fires once per effect per
--- live hit target). The C++ PreventHitDefaultEffect has no model on
--- this path and is deliberately NOT called: the session spell object
--- carries no PreventHitDefaultEffect method (lua_spell.go:170-300;
--- it exists only on the creature builder, :461) and the funnel never
--- consults the veto (spells.go has no defaultPrevented read; the veto
--- is threaded only through the creature path, boss_ai.go:3279) — so
--- until the funnel threads it, the default 23182 aura also lands
--- alongside 23186; the script leg itself is C++-exact. DORMANT
+-- live hit target); the MarkOfFrostTargetSelector predicate
+-- (boss_azuregos.cpp:169-173: keep only units with 23182 and
+-- without 23186) rides here as the aura gate, since ev7 has no
+-- player-path fire site. The C++ PreventHitDefaultEffect has no
+-- model on this path and is deliberately NOT called: the session
+-- spell object carries no PreventHitDefaultEffect method
+-- (lua_spell.go:170-300; it exists only on the creature builder,
+-- :461) and the funnel never consults the veto (spells.go has no
+-- defaultPrevented read; the veto is threaded only through the
+-- creature path, boss_ai.go:3279) — so until the funnel threads it,
+-- the default 23182 aura also lands on every area enemy, and a
+-- later cast could pass this gate on a unit the default wrongly
+-- seeded; that residue is an engine gap, not this leg. DORMANT
 -- until Spell.dbc ships 23182.
 local function markOfFrostHit(event, spell, target, effectIndex)
     if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if not target:HasAura(SPELL_MARK_OF_FROST) or target:HasAura(SPELL_AURA_OF_FROST) then
         return
     end
     target:CastSpell(target, SPELL_AURA_OF_FROST, true)
