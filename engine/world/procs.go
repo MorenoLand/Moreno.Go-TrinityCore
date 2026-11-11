@@ -3438,6 +3438,38 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				}
 				continue
 			}
+			if auraSpell.ID == 49194 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_dk_unholy_blight::HandleProc (spell_dk.cpp:2527-2549):
+				// PreventDefaultAction; on a damaging proc the actor casts
+				// Unholy Blight damage (50536) on the proc target with BP0
+				// = pct(damage, eff0 amount), plus the Glyph of Unholy
+				// Blight (63332, EFFECT_0 on the actor) pct, divided by
+				// the damage spell's max ticks. The zero-damage gate is
+				// the C++ early return (!damageInfo || !GetDamage()).
+				// No Lua ev6 twin: spell_dk.lua holds no 49194 handler.
+				// DORMANT until Spell.dbc ships the 49194 proc entry and
+				// the 50536 duration row; a missing 50536 row falls
+				// through to the generic dummy dispatch below, which
+				// no-ops for 49194.
+				if ev.damage == 0 || triggerTargetGUID == 0 || ev.actorGUID == 0 {
+					continue
+				}
+				amount := int32(int64(ev.damage) * int64(scriptProcEffAmount(aura, i)) / 100)
+				if actorSess := s.server.findSessionByGUID(ev.actorGUID); actorSess != nil {
+					if glyphAmt, ok := actorSess.auraEffectAmount(63332, 0); ok {
+						amount += amount * glyphAmt / 100
+					}
+				}
+				if s.server != nil && s.server.Data != nil {
+					if dmgSpell, found, err := s.server.Data.Spell(50536); err == nil && found {
+						if ticks := s.spellMaxTicks(dmgSpell); ticks > 0 {
+							amount /= int32(ticks)
+							s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 50536, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+							continue
+						}
+					}
+				}
+			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)

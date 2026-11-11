@@ -2,6 +2,7 @@ package world
 
 import (
 	"math"
+	"math/rand"
 	"sort"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -396,14 +397,17 @@ func (s *Server) tickCasterAbsorbIgnorePctForSpell(casterSess *session, casterGU
 // SPELL_AURA_SCHOOL_ABSORB aura whose C++ script overrides the per-hit
 // absorb with CalculatePct(damage, pct): 50462 Anti-Magic Shell (raid)
 // and 50461 Anti-Magic Zone (spell_dk.cpp:253-301, 366-434), where pct is
-// the aura spell's own effect-0 CalcValue at the caster's level. A zero
-// or unreadable pct falls through to the generic pool leg.
+// the aura spell's own effect-0 CalcValue at the caster's level, and
+// 49145 Spell Deflection (spell_dk.cpp:2338-2340), where the same
+// effect-0 CalcValue is the absorb pct gated on a parry roll (the roll
+// itself lives in scriptAbsorbHit, not here). A zero or unreadable pct
+// falls through to the generic pool leg.
 func (s *Server) scriptAbsorbPct(spellID uint32, casterLevel uint8) (uint32, bool) {
 	if s == nil || s.Data == nil {
 		return 0, false
 	}
 	switch spellID {
-	case 50462, 50461:
+	case 50462, 50461, 49145:
 	default:
 		return 0, false
 	}
@@ -423,14 +427,34 @@ func (s *Server) scriptAbsorbPct(spellID uint32, casterLevel uint8) (uint32, boo
 // 50462's pool is unlimited (-1 in C++), so the amount is never
 // consumed; 50461's pool is finite (talent+AP CalculateAmount, see
 // auraEffectParams), so the amount is consumed and the depleted flag
-// reports exhaustion for the caller's removal pass.
-func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32) (uint32, bool, bool) {
+// reports exhaustion for the caller's removal pass. 49145 Spell
+// Deflection (spell_dk.cpp:2345-2358) adds a parry roll on top of the
+// pct: the victim's parry chance (PLAYER_PARRY_PERCENTAGE for a player;
+// pass a negative parryChancePct when the victim has no parry model,
+// which reports the hit handled with zero absorbed — the C++ creature
+// arm needs GetCreatureParryChance plus the attacker's expertise
+// reduction, neither of which the absorb call sites carry). A failed
+// roll absorbs nothing and leaves the pool untouched; the pool itself
+// is unlimited (-1 in C++), like 50462, so it is never consumed.
+// Every absorb call site is a direct-damage path (melee / spell hit),
+// so the C++ SPELL_DIRECT_DAMAGE gate holds by construction.
+func (s *Server) scriptAbsorbHit(aura *activeAura, remainingDamage uint32, parryChancePct float64) (uint32, bool, bool) {
 	if aura == nil || remainingDamage == 0 {
 		return 0, false, false
 	}
 	pct, ok := s.scriptAbsorbPct(aura.SpellID, aura.CasterLevel)
 	if !ok {
 		return 0, false, false
+	}
+	if aura.SpellID == 49145 {
+		if parryChancePct <= 0 || rand.Float64()*100 >= parryChancePct {
+			return 0, false, true
+		}
+		absorbThis := uint32(uint64(remainingDamage) * uint64(pct) / 100)
+		if absorbThis > remainingDamage {
+			absorbThis = remainingDamage
+		}
+		return absorbThis, false, true
 	}
 	absorbThis := uint32(uint64(remainingDamage) * uint64(pct) / 100)
 	if absorbThis > remainingDamage {
@@ -517,7 +541,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 				// only their own spell school. A zero MiscValue absorbs
 				// nothing, like C++ — there is no all-schools fallback.
 				if aura.MiscValue&int32(schoolMask) != 0 {
-					if absorbThis, depleted, ok := s.server.scriptAbsorbHit(aura, remainingDamage); ok {
+					if absorbThis, depleted, ok := s.server.scriptAbsorbHit(aura, remainingDamage, float64(s.player.ParryPercentage)); ok {
 						remainingDamage -= absorbThis
 						absorbed += absorbThis
 						if depleted {
@@ -647,7 +671,7 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 					// (Unit.cpp:1881), not the aura spell's school — see
 					// the player leg above. 256 is not an absorb type.
 					if aura.MiscValue&int32(schoolMask) != 0 {
-						if absorbThis, depleted, ok := s.scriptAbsorbHit(aura, remainingDamage); ok {
+						if absorbThis, depleted, ok := s.scriptAbsorbHit(aura, remainingDamage, -1); ok {
 							remainingDamage -= absorbThis
 							absorbed += absorbThis
 							if depleted {
