@@ -16524,9 +16524,10 @@ func init() {
 	// gate, so below 3% the event dies); nil-target casts nothing,
 	// schedule kept. Documented-only (no bridges): GO_GATE_GANDLING
 	// (177374) Reset/JustDied/JustEngagedWith state legs,
-	// IsSummonedBy Talk(0)+MoveRandom(5), spell_shadow_portal (room
+	// IsSummonedBy Talk(0)+MoveRandom(5). spell_shadow_portal (room
 	// portal picker, 6 tries among open gates) + spell_shadow_portal_rooms
-	// (3x RISEN_GUARDIAN 11598 summons per room + gate close),
+	// (3x RISEN_GUARDIAN 11598 summons per room + gate close) PORTED
+	// (RegisterSpellEvent 17950 ev5 + six room spells ev4, same file),
 	// BossAI::JustEngagedWith + DATA_DARKMASTERGANDLING bookkeeping
 	// (luaBossAI shim). Cast-state gates PORTED (creature:IsCasting -
 	// see lua_scripts/eastern_kingdoms/boss_darkmaster_gandling.lua).
@@ -16795,8 +16796,11 @@ func init() {
 	// (npc_barnes precedent). spell_shadowfang_keep_haunting_spirits
 	// is an AuraScript (SPELL_AURA_DUMMY, EFFECT_0): CalcPeriodic arms
 	// 30-90s, dummy tick casts aurEff->GetAmount() triggered on target,
-	// UpdatePeriodic recalculates — no SpellScript/AuraScript bridge,
-	// joins the no-SpellScript-bridge queue. No new Lua files;
+	// UpdatePeriodic recalculates — stays out: its aura spell ID is
+	// DB-side only (no C++ reference, no spell_script_names DB or
+	// Spell.dbc in-repo to bind the loader to a spell), so there is
+	// nothing to register; the periodic arms themselves are bridged
+	// (RegisterAuraEvent ev1). No new Lua files;
 	// arugal slot added 2026-10-25 (below).
 	// boss_archmage_arugal (Shadowfang Keep): BossAI-derived
 	// (shadowfang_keep.cpp:230) — the slot, not Eluna registration, gates

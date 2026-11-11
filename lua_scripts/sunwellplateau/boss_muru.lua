@@ -4,9 +4,8 @@
 -- npc_void_sentinel, npc_blackhole; the spell_summon_blood_elves_
 -- script / spell_muru_darkness SpellScripts and the spell_dark_
 -- fiend_skin / spell_transform_visual_missile_periodic / spell_
--- summon_blood_elves_periodic AuraScripts — all but spell_transform_
--- visual_missile_periodic ported below via RegisterSpellEvent /
--- RegisterAuraEvent); sunwell_plateau.h:35 (DATA_MURU = 4, fifth boss),
+-- summon_blood_elves_periodic AuraScripts — all ported below via
+-- RegisterSpellEvent / RegisterAuraEvent); sunwell_plateau.h:35 (DATA_MURU = 4, fifth boss),
 -- :60 (NPC_MURU = 25741), :61 (NPC_ENTROPIUS = 25840), :96
 -- (NPC_DARKNESS = 25879), :97 (NPC_DARK_FIENDS = 25744), :100
 -- (NPC_VOID_SENTINEL = 25772), :103 (NPC_MURU_PORTAL_TARGET =
@@ -169,8 +168,11 @@
 -- 2026-11-10 (RegisterSpellEvent 46269 ev1, OnCast twin of AfterCast),
 -- spell_dark_fiend_skin PORTED 2026-11-10 (RegisterAuraEvent 45934
 -- ev5 OnDispel twin of dispel-remove); spell_transform_visual_
--- missile_periodic stays out (standing gap — its aura spell ID is
--- DB-side, not in the C++ text); spell_summon_blood_elves_periodic
+-- missile_periodic PORTED 2026-11-11 (RegisterAuraEvent 46205 ev1 tick
+-- -> random 46208/46178 re-cast; the 46205 binding rides the same
+-- spell-constant-name pattern as the 46041 periodic port below —
+-- boss_muru.cpp:62 SPELL_TRANSFORM_VISUAL_MISSILE + :362 DoCastAOE);
+-- spell_summon_blood_elves_periodic
 -- is PORTED below via RegisterAuraEvent (46041 tick -> 46050 re-cast); no
 -- aura-enumeration/kill bridges (despawn IS bridged — the
 -- black-hole 15s / fiend / entropius despawn arms are ported;
@@ -221,6 +223,7 @@ local SPELL_SUMMON_VOID_SENTINEL_SUMMONER = 45978
 local SPELL_SUMMON_VOID_SENTINEL_SUMMONER_VISUAL = 45989
 local SPELL_SUMMON_VOID_SENTINEL = 45988
 local SPELL_TRANSFORM_VISUAL_MISSILE = 46205
+local TRANSFORM_VISUAL_MISSILES = { 46208, 46178 }
 local SPELL_DARKFIEND_SKIN = 45934
 local SPELL_DARKFIEND_DAMAGE = 45944
 local SPELL_SHADOW_PULSE_PERIODIC = 46086
@@ -289,6 +292,18 @@ local function summonBloodElvesTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SUMMON_BLOOD_ELVES_PERIODIC, 1, summonBloodElvesTick)
+
+-- C++ spell_transform_visual_missile_periodic::OnPeriodic
+-- (boss_muru.cpp:678-682): the aura target casts a random
+-- TRANSFORM_VISUAL_MISSILE_1 (46208) / TRANSFORM_VISUAL_MISSILE_2
+-- (46178) triggered on itself each tick (RegisterAuraEvent,
+-- AuraEventOnPeriodic = 1; the nil-target C++ cast rides the
+-- blood-elves-periodic self-target precedent above).
+local function transformVisualMissileTick(event, aura, target)
+    target:CastSpell(target, TRANSFORM_VISUAL_MISSILES[math.random(#TRANSFORM_VISUAL_MISSILES)], true)
+end
+
+RegisterAuraEvent(SPELL_TRANSFORM_VISUAL_MISSILE, 1, transformVisualMissileTick)
 
 -- C++ spell_summon_blood_elves_script::HandleScript
 -- (boss_muru.cpp:589-592, registered OnEffectHitTarget EFFECT_0 at
