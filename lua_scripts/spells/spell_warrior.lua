@@ -14,16 +14,20 @@
 --   exists and removing the spell's aura is the same removal.
 --   DELTA: the Go apply hook is fresh-only (C++ REAL_OR_REAPPLY also
 --   fires on re-apply); same pre-existing delta as Renew (tick 199).
--- STILL BLOCKED (same class):
---   HandleRemove's UnregisterRedirectThreat(59665, caster GUID) leg
---   (spell_warrior.cpp:1128) — no threat-redirect bridge.
---   CheckProc / HandleProc (:1130-1144): the target casts Vigilance
---   Proc (50725) on the caster with the effect amount — no proc hook
---   exists on the RegisterAuraEvent surface, so the proc leg stays out.
---   Glyph of Vigilance (63326) appears only in Validate(); no arm.
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   CheckProc / HandleProc (:1130-1144): the caster-nil gate rides
+--   aura:GetCaster(); the target casts Vigilance Proc (50725) on the
+--   caster, triggered; the true return is PreventDefaultAction, so
+--   the DBC trigger leg does not also fire (procs.go:3919,
+--   boss_ai.go:10852). HandleRemove's UnregisterRedirectThreat
+--   (59665, caster GUID) leg (:1128) is Go-covered
+--   (spells.go:36257). Glyph of Vigilance (63326) folds in Go
+--   (spell_threat.go handleEffectRedirectThreat).
 
 local SPELL_WARRIOR_VIGILANCE = 50720 -- spell_warrior.cpp:87
 local SPELL_WARRIOR_VIGILANCE_REDIRECT_THREAT = 59665 -- spell_warrior.cpp:67
+local SPELL_WARRIOR_VIGILANCE_PROC = 50725 -- spell_warrior.cpp:66
+local SPELL_WARRIOR_TAUNT = 355 -- spell_warrior.cpp:61
 local SPELL_GEN_DAMAGE_REDUCTION_AURA = 68066 -- spell_warrior.cpp:87
 local SPELL_PALADIN_BLESSING_OF_SANCTUARY = 20911 -- spell_warrior.cpp:85
 local SPELL_PALADIN_GREATER_BLESSING_OF_SANCTUARY = 25899 -- spell_warrior.cpp:86
@@ -51,6 +55,34 @@ local function vigilanceRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARRIOR_VIGILANCE, 3, vigilanceRemove)
+
+-- C++ spell_warr_vigilance_AuraScript::CheckProc + HandleProc
+-- (spell_warrior.cpp:1130-1144): the caster-nil gate rides
+-- aura:GetCaster(); the target casts Vigilance Proc (50725) on the
+-- caster, triggered; the true return is PreventDefaultAction, so the
+-- DBC trigger leg does not also fire (procs.go:3919, boss_ai.go:10852).
+local function vigilanceProc(event, aura, target, actor, procTarget, damage)
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        target:CastSpell(caster, SPELL_WARRIOR_VIGILANCE_PROC, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_VIGILANCE, 6, vigilanceProc)
+
+-- C++ spell_warr_vigilance_trigger_SpellScript::HandleScript
+-- (spell_warrior.cpp:1200-1206): PreventHitDefaultEffect (Go's
+-- script-effect default has no 50725 leg); the hit player resets
+-- Taunt (355) cooldown, update=true. The GetObjectType() gate is
+-- the GetHitPlayer() twin.
+local function vigilanceTrigger(event, spell, hitTarget)
+    if hitTarget ~= nil and hitTarget:GetObjectType() == "Player" then
+        hitTarget:ResetSpellCooldown(SPELL_WARRIOR_TAUNT, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_WARRIOR_VIGILANCE_PROC, 2, vigilanceTrigger)
 
 -- PORTED (this tick, RegisterSpellEvent OnObjectAreaTargetSelect = 7):
 --   spell_warr_intimidating_shout::FilterTargets

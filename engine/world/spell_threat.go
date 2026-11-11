@@ -182,6 +182,12 @@ func (s *session) splitThreatRedirects(motion *creatureMotion, amount float32) (
 // threat (ThreatManager.cpp:344-373). damage is the effect's CalculateDamage
 // value. There is no alive check in C++; the registry key is the redirect
 // spell's own id (e.g. 35079), unregistered when its aura is removed.
+// Vigilance Redirect Threat (59665) folds its Glyph of Vigilance leg
+// (spell_warr_vigilance_redirect_threat::CheckGlyph,
+// spell_warrior.cpp:1169-1175): the hit unit's Glyph of Vigilance (63326)
+// EFFECT_0 amount adds to that hit's effect value, per target, before
+// the register — the script runs OnEffectHitTarget, so each hit carries
+// its own warrior's glyph.
 func (s *session) handleEffectRedirectThreat(spell wotlk.Spell, eff wotlk.SpellEffect, hitTargets []uint64) {
 	if s == nil || s.player == nil {
 		return
@@ -194,7 +200,18 @@ func (s *session) handleEffectRedirectThreat(spell wotlk.Spell, eff wotlk.SpellE
 		if targetGUID == 0 {
 			continue
 		}
-		s.registerRedirectThreat(spell.ID, targetGUID, uint32(damage))
+		pct := damage
+		if spell.ID == 59665 && s.server != nil {
+			if ts := s.server.findSessionByGUID(targetGUID); ts != nil {
+				if amt, ok := ts.auraEffectAmount(63326, 0); ok {
+					pct += amt
+				}
+			}
+		}
+		if pct <= 0 {
+			continue
+		}
+		s.registerRedirectThreat(spell.ID, targetGUID, uint32(pct))
 	}
 }
 
