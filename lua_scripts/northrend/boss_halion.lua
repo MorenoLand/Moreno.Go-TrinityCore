@@ -31,7 +31,23 @@
 -- "AddSC_boss_halion" hits boss_halion.cpp only (+ the loader
 -- decl/call lines); this clone carries no sql/ tree, so ScriptName
 -- bindings are DB-side by construction. Pre-existing lua coverage
--- AUDITED this run — COMPLETE (see accounting below).
+-- AUDITED this run — COMPLETE (see accounting below). Census rows
+-- 341-345 (2026-11-11): 341 periodic trigger + 342 marks verified-
+-- existing (342 summon casts corrected to triggered — C++
+-- CastSpellExtraArgs(ObjectGuid) ctor is TRIGGERED_FULL_MASK,
+-- SpellDefines.h:167; player funnel ignores the flag, so behaviour
+-- was already exact); 343 damage_aoe_summon stays out — ev4 carries
+-- no summoned-creature reference for the SetData(3, BP1) leg, the
+-- custom BP1 (mark stacks) has no Go m_spellValue model, and the Go
+-- default summon runs regardless (a Lua re-summon would double-spawn;
+-- the PreventHitDefaultEffect method exists on the spell object but
+-- the summon arms never consult it); 344 twilight-realm handlers
+-- PORTED below (enter binds 74807, the PHASE-effect realm aura, not
+-- 74808 — 74808's own loader is the twilight-phasing SpellScript;
+-- UNK7 legs ride the new player-surface SendEncounterUnit twin,
+-- lua_player.go); 345 clear_debuffs stays out — its only C++ caster
+-- is the unregistered controller 40146, so the handler could never
+-- fire.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnKill, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
 -- SetBossState legs (tick 270; DATA ids from ruby_sanctum.h:
 -- DATA_HALION 3 (:34), DATA_TWILIGHT_HALION 4 (:37); EncounterState
@@ -341,6 +357,7 @@ local SPELL_TWILIGHT_PRECISION = 78243 -- C++ enum :117 (AddAura self-cast, both
 local SPELL_METEOR_STRIKE = 74637 -- C++ enum :64
 local SPELL_METEOR_STRIKE_COUNTDOWN = 74641 -- C++ enum :96
 local ACTION_METEOR_STRIKE_AOE = 2 -- boss_halion.cpp:154
+local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:66
 local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
 local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
 local SPELL_FIERY_COMBUSTION = 74562 -- C++ enum :67
@@ -1247,7 +1264,7 @@ local function markOfCombustionOnRemove(event, aura, target)
     if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
         return
     end
-    target:CastCustomSpell(target, SPELL_FIERY_COMBUSTION_SUMMON, false, nil, aura:GetStackAmount())
+    target:CastCustomSpell(target, SPELL_FIERY_COMBUSTION_SUMMON, true, nil, aura:GetStackAmount())
 end
 
 local function markOfConsumptionBeforeDispel(event, aura, target, dispeller)
@@ -1261,7 +1278,7 @@ local function markOfConsumptionOnRemove(event, aura, target)
     if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
         return
     end
-    target:CastCustomSpell(target, SPELL_SOUL_CONSUMPTION_SUMMON, false, nil, aura:GetStackAmount())
+    target:CastCustomSpell(target, SPELL_SOUL_CONSUMPTION_SUMMON, true, nil, aura:GetStackAmount())
 end
 
 RegisterAuraEvent(SPELL_MARK_OF_COMBUSTION, 7, markOfCombustionBeforeDispel)
@@ -1299,3 +1316,52 @@ end
 
 RegisterAuraEvent(SPELL_FIERY_COMBUSTION, 1, combustionConsumptionTick)
 RegisterAuraEvent(SPELL_SOUL_CONSUMPTION, 1, combustionConsumptionTick)
+
+-- C++ spell_halion_twilight_realm_handlers (boss_halion.cpp:1627-1690):
+-- the enter/leave-twilight-realm aura scripts, instantiated twice
+-- (boss_halion.cpp:1929-1930): "spell_halion_enter_twilight_realm"
+-- (SPELL_FIERY_COMBUSTION 74562, isApply=true) binds the
+-- twilight-realm aura 74807, whose EFFECT_0 is SPELL_AURA_PHASE;
+-- "spell_halion_leave_twilight_realm" (SPELL_SOUL_CONSUMPTION 74792,
+-- isApply=false) binds the leave aura 74812, SPELL_AURA_DUMMY.
+-- OnApply either way strips the matching combustion/consumption
+-- debuff with AURA_REMOVE_BY_ENEMY_SPELL; the leave aura's OnRemove
+-- strips the twilight-realm aura itself (default mode). The enter
+-- variant registers apply-only — no OnRemove leg in C++.
+-- The instance->SendEncounterUnit(ENCOUNTER_FRAME_UNK7) legs ride the
+-- new player-surface SendEncounterUnit twin (lua_player.go) — both
+-- aura targets are players; UNK7 writes nothing past the frame type
+-- (instance_encounter_frame.go), so the C++ nil-unit call and the
+-- default-self unit are packet-identical. ScriptName bindings DB-side.
+-- DORMANT until Spell.dbc ships 74807/74812.
+local function enterTwilightRealmOnApply(event, aura, target)
+    if target:HasAura(SPELL_FIERY_COMBUSTION) then
+        target:RemoveAura(SPELL_FIERY_COMBUSTION, AURA_REMOVE_BY_ENEMY_SPELL)
+    end
+    target:SendEncounterUnit(7)
+end
+
+local function leaveTwilightRealmOnApply(event, aura, target)
+    if target:HasAura(SPELL_SOUL_CONSUMPTION) then
+        target:RemoveAura(SPELL_SOUL_CONSUMPTION, AURA_REMOVE_BY_ENEMY_SPELL)
+    end
+    target:SendEncounterUnit(7)
+end
+
+local function leaveTwilightRealmOnRemove(event, aura, target)
+    if target:HasAura(SPELL_TWILIGHT_REALM) then
+        target:RemoveAura(SPELL_TWILIGHT_REALM)
+    end
+    target:SendEncounterUnit(7)
+end
+
+RegisterAuraEvent(SPELL_TWILIGHT_REALM, 2, enterTwilightRealmOnApply)
+RegisterAuraEvent(SPELL_LEAVE_TWILIGHT_REALM, 2, leaveTwilightRealmOnApply)
+RegisterAuraEvent(SPELL_LEAVE_TWILIGHT_REALM, 3, leaveTwilightRealmOnRemove)
+
+-- C++ spell_halion_clear_debuffs::HandleScript
+-- (boss_halion.cpp:1705-1715) stays out: OnEffectHitTarget EFFECT_0
+-- would strip the CalcValue aura from each hit unit of 75396, but
+-- the only C++ casts are npc_halion_controllerAI::Reset/JustDied
+-- (:586-592/:599-605), entry 40146 unregistered — the cast never
+-- happens in Go, so the handler could never fire.

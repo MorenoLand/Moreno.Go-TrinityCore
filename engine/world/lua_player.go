@@ -122,6 +122,46 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{scripting.NewMapObject(state.Map, state.InstanceID, s.server.mapLive(state.Map, state.InstanceID))}, nil
 	}
+	// SendEncounterUnit(frameType, unit, param1, param2) is the player
+	// twin of the handler-creature bridge (lua_creature_events.go): it
+	// bridges InstanceScript::SendEncounterUnit (InstanceScript.cpp:
+	// 703-736) over sendEncounterUnit (instance_encounter_frame.go)
+	// for the player's instance. frameType is the EncounterFrame enum
+	// (InstanceScript.h:57-64); unit defaults to the player and an
+	// explicit nil unit sends nothing for the GUID-carrying types,
+	// C++-exact; param1 and param2 are optional uint8s defaulting to
+	// 0. Backs the halion leave-twilight-realm UNK7 leg
+	// (boss_halion.cpp:1648-1654), whose aura target is a player.
+	methods["SendEncounterUnit"] = func(_ context.Context, args []any) ([]any, error) {
+		if s.server == nil {
+			return nil, nil
+		}
+		frameType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		unitGUID := state.GUID
+		if len(args) > 1 && args[1] != nil {
+			unitGUID = luaObjectGUID(args[1])
+		}
+		var param1, param2 uint8
+		if len(args) > 2 {
+			p1, err := luaUint32Arg(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			param1 = uint8(p1)
+		}
+		if len(args) > 3 {
+			p2, err := luaUint32Arg(args, 3)
+			if err != nil {
+				return nil, err
+			}
+			param2 = uint8(p2)
+		}
+		s.server.sendEncounterUnit(state.Map, state.InstanceID, unitGUID, frameType, param1, param2)
+		return nil, nil
+	}
 	// GetZoneId/GetAreaId are WorldObject::GetZoneId()/GetAreaId() via
 	// Map::GetZoneAndAreaId (Map.cpp:2641): the area id resolves from the
 	// player's map + position and the zone id is the area's ParentAreaID
