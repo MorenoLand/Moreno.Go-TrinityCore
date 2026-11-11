@@ -3769,17 +3769,6 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.resetPlayerCooldown(49576, true)
 				continue
 			}
-			if auraSpell.ID == 70811 && i == 0 && eff.Aura == spellAuraDummy {
-				// spell_sha_item_t10_elemental_2p_bonus::HandleEffectProc
-				// (spell_shaman.cpp:1443-1448): PreventDefaultAction; the
-				// holder reduces the Elemental Mastery (16166) cooldown
-				// by the aura effect amount. No Lua ev6 twin:
-				// spell_shaman.lua holds no 70811 handler, and the Lua
-				// ev6 veto above would fire first if one ever registers.
-				// DORMANT until Spell.dbc ships the 70811 proc entry.
-				s.modifyPlayerSpellCooldown(16166, -int32(scriptProcEffAmount(aura, i)))
-				continue
-			}
 			if auraSpell.ID == 63611 && i == 1 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_dk_improved_blood_presence_triggered::HandleProc
 				// (spell_dk.cpp:1519-1529): PreventDefaultAction; the
