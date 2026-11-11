@@ -7804,6 +7804,24 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.castCreatureSpellInternal(ctx, tm, 69023, m.GUID, true)
 			}
+		case 55709:
+			// spell_hun_pet_heart_of_the_phoenix::HandleScript
+			// (spell_hunter.cpp:1036-1050): EFFECT_0 SCRIPT_EFFECT —
+			// the owner casts the triggered revival 54114 on the pet
+			// with BP0 = 100 when the pet lacks the 55711 debuff, and
+			// the pet casts the debuff on itself, triggered. The Load
+			// gate (caster IsPet) rides the owner check: a wild caster
+			// has no owner session and skips. The debuff check reads
+			// the caster (m), not the hit target, like C++.
+			owner := s.findSessionByGUID(m.OwnerGUID)
+			if owner == nil || owner.player == nil {
+				continue
+			}
+			if s.creatureSpellTargetHasAura(m, m.GUID, 55711) {
+				continue
+			}
+			owner.castSpellDirectWithBasePoint(ctx, 54114, m.GUID, 100)
+			s.castCreatureSpellInternal(ctx, m, 55711, m.GUID, true)
 		case 34098:
 			// spell_gen_clear_debuffs (spell_generic.cpp): SPELL_EFFECT_SCRIPT_EFFECT
 			// EFFECT_0 removes the hit unit's owned auras whose spell is neither
@@ -10679,7 +10697,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				continue
 			}
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell, aura.CasterGUID, ev.schoolMask, eff.MiscValue); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, m.GUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, cast)
 					continue
 				}

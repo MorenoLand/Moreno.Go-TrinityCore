@@ -1153,7 +1153,7 @@ func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint6
 // triggerTargetGUID — on a taken event that is the holder, on a done
 // event (a root/stun the holder cast, e.g. Charge) it is the enemy, and
 // the C++ cast lands on the enemy (utgarde_keep.cpp:225-227).
-func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID, triggerTargetGUID uint64, triggerSpell *wotlk.Spell, auraCasterGUID uint64, schoolMask uint32, miscValue int32) (scriptProcCast, bool) {
+func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage uint32, effAmount uint32, actorGUID, holderGUID, triggerTargetGUID uint64, triggerSpell *wotlk.Spell) (scriptProcCast, bool) {
 	if effAura != spellAuraDummy {
 		return scriptProcCast{}, false
 	}
@@ -1214,28 +1214,6 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 61258, casterGUID: actionTarget, targetGUID: actionTarget}, true
-	case 53480: // Roar of Sacrifice, EFFECT_1: the action target casts 67481 on the aura caster, BP0 = pct of damage.
-		// spell_hun_roar_of_sacrifice::CheckProc/HandleProc
-		// (spell_hunter.cpp:1279-1303): the school-mask gate reads
-		// the damage school against the effect's misc value, and the
-		// caster-null leg reads the aura caster; both ride the new
-		// params. C++ casts BP0 = 0 on a zero-damage event (no early
-		// return), so there is no damage gate here, unlike 70674.
-		// The cast is triggered (CastSpellExtraArgs(aurEff),
-		// SpellDefines.h:167), which fireScriptProcCast honors.
-		// DORMANT until Spell.dbc ships the 53480 proc flags
-		// (serverSpellProcEntryFor needs ProcTypeMask != 0).
-		if effIndex != 1 || auraCasterGUID == 0 {
-			return scriptProcCast{}, false
-		}
-		if schoolMask&uint32(miscValue) == 0 {
-			return scriptProcCast{}, false
-		}
-		actionTarget := procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID)
-		if actionTarget == 0 {
-			return scriptProcCast{}, false
-		}
-		return scriptProcCast{spellID: 67481, casterGUID: actionTarget, targetGUID: auraCasterGUID, bp0: uint32(uint64(damage) * uint64(effAmount) / 100), bp0Set: true}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -3322,6 +3300,13 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		if auraSpell.ID == 53480 && !s.roarOfSacrificeProcAllowed(aura, auraSpell, ev) {
 			continue
 		}
+		// spell_hun_t9_4p_bonus::CheckProc (spell_hunter.cpp:1591-1596):
+		// the T9 4P bonus only procs when the actor is a player with a
+		// pet out. The gate runs before the chance roll, like the C++
+		// CheckProc in GetProcEffectMask (70656 precedent above).
+		if auraSpell.ID == 67151 && !(procActorIsPlayerGUID(ev.actorGUID) && s.player != nil && s.player.PetGUID != 0) {
+			continue
+		}
 		// C++ GetProcEffectMask/TriggerProcOnEvent (SpellAuras.cpp:2045-2129,
 		// 2192-2212): the proc effect mask can hold several effects and every
 		// one fires its own trigger spell — collect all eligible effects,
@@ -3524,6 +3509,26 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				_ = s.removePlayerAuraFromStack(50421)
 				continue
 			}
+			if auraSpell.ID == 67151 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_hun_t9_4p_bonus::HandleProc
+				// (spell_hunter.cpp:1598-1607): PreventDefaultAction; the
+				// actor casts T9 4P Greatness (68130) on its pet with the
+				// aura effect. Placed before the generic arm, which would
+				// cast the DBC trigger on the proc target instead. The
+				// cast carries the triggering-aura attribution (the C++
+				// aurEff overload), mirroring the generic leg below
+				// (50421 precedent). No Lua ev6 twin: the cast target is
+				// the pet, and Lua has no player-side pet-object bridge
+				// (only GetPetGUID, lua_player.go:1466; a GUID does not
+				// survive the Lua float64 round-trip, lua_spell.go).
+				// DORMANT until Spell.dbc ships the 67151 proc entry.
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 68130, casterGUID: ev.actorGUID, targetGUID: s.player.PetGUID})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
 			if auraSpell.ID == 49592 && i == 2 && eff.Aura == spellAuraDummy {
 				// spell_oculus_temporal_rift::HandleProc
 				// (oculus.cpp:606-621): PreventDefaultAction; the
@@ -3609,7 +3614,7 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				continue
 			}
 			if eff.Aura == spellAuraDummy {
-				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell, aura.CasterGUID, ev.schoolMask, eff.MiscValue); ok {
+				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
 					continue
 				}

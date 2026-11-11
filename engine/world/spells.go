@@ -11001,6 +11001,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// PARTY/ALLY/RAID area targets (20/30/31/33/34/56) replace the
 		// hit-target list the same way enemy area targets do.
 		hitTargets = s.spellFriendlyAreaTargets(ctx, spell, clientFriendlyAreaTarget)
+		if spellID == 53434 || spellID == 24604 {
+			// spell_hun_target_only_pet_and_owner::FilterTargets
+			// (spell_hunter.cpp:1495-1501) keeps the caster plus its
+			// owner. On this player-cast path the caster is the hunter
+			// and a player has no owner (UNIT_FIELD_SUMMONEDBY is
+			// unset, Unit.h:1147), so C++ keeps the caster alone —
+			// the pet+owner leg lives in the Lua ev7 handler, which
+			// fires when the pet casts these spells on the creature
+			// path (boss_ai.go:3151). Without this the party-wide
+			// list above would buff every party member in range.
+			kept := hitTargets[:0]
+			for _, guid := range hitTargets {
+				if guid == s.playerGUID {
+					kept = append(kept, guid)
+				}
+			}
+			hitTargets = kept
+		}
 	} else if friendlyNearbySpell {
 		// Spell::SelectImplicitNearbyTargets (Spell.cpp:1036): the single
 		// nearest PARTY/ALLY/RAID unit (3/4/58) becomes the target.
@@ -16304,20 +16322,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// multiplier map this fills.
 					if (spellID == 55090 || spellID == 55265 || spellID == 55270 || spellID == 55271) && len(hitTargets) > 0 {
 						s.scourgeStrikeDummyEffect(effCtx, spell, effectIndex, casterLevel, hitTargets, scourgeStrikeMultipliers)
-					}
-					// spell_hun_readiness::HandleDummy
-					// (spell_hunter.cpp:1234-1252): the EFFECT_0 DUMMY
-					// OnEffectHitTarget arm finishes the cooldown on the
-					// caster's other Hunter abilities (resetReadinessCooldowns
-					// in commands_misc.go carries the predicate). Fires once
-					// per effect over the hit targets (C++ fires per hit
-					// target; the spell is single-target self-cast), ahead
-					// of the pet-aura/Eluna legs like the arms above, and
-					// only when a target was actually hit. A Lua ev5 port
-					// can never fire: the player path has no per-effect
-					// OnEffectHitTarget site (runtime.go).
-					if spellID == 23989 && len(hitTargets) > 0 {
-						s.resetReadinessCooldowns()
 					}
 					s.addOwnerPetAuraSource(effCtx, spellID, uint8(effectIndex))
 					// spell_hun_readiness::HandleDummy

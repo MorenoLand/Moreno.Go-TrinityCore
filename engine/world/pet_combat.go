@@ -1026,6 +1026,79 @@ func (s *Server) findNearbyPetHostile(pet *creatureMotion, maxDist float32, play
 	return 0
 }
 
+// petCarrionFeederCorpseNear ports spell_hun_pet_carrion_feeder::
+// CheckIfCorpseNear (spell_hunter.cpp:984-1001): a nearby dead enemy
+// unit within the spell's hostile max range
+// (SpellInfo::GetMaxRange(false) = SpellRange MaxHostile, no spellmod
+// fold — the check passes no caster or spell). The C++ predicate is
+// AnyDeadUnitSpellTargetInRangeCheck (GridNotifiers.cpp:423-437): a dead
+// creature, or a dead non-ghost player (player corpses ride the Corpse
+// arm; Go has no standalone corpse objects, so a Health-0 player
+// without the ghost flag is the twin), hostile to the caster
+// (TARGET_CHECK_ENEMY: totems excluded, IsValidAttackTarget for
+// non-corpse targets — Go models the hostility core via
+// creatureHostileToTarget, the IsHostileTo twin) and within range
+// (IsWithinDistInMap carries both combat reaches, the
+// checkCreatureSpellRange convention). Candidates are snapshotted
+// under the map locks, then tested after release — the hostility
+// check takes the locks itself.
+func (s *Server) petCarrionFeederCorpseNear(motion *creatureMotion, spell wotlk.Spell) bool {
+	if s == nil || s.Data == nil || motion == nil {
+		return false
+	}
+	rangeEntry, ok, err := s.Data.SpellRange(spell.RangeIndex)
+	if err != nil || !ok {
+		return false
+	}
+	maxRange := float64(rangeEntry.MaxHostile)
+	petReach := float64(motion.combatReachOrDefault())
+	type deadUnit struct {
+		guid    uint64
+		x, y, z float32
+		reach   float32
+	}
+	var candidates []deadUnit
+	s.motionMu.Lock()
+	for guid, tm := range s.motionMapLocked(motion.Map, motion.InstanceID) {
+		if tm == nil || guid == motion.GUID || tm.Health != 0 {
+			continue
+		}
+		candidates = append(candidates, deadUnit{guid: guid, x: tm.X, y: tm.Y, z: tm.Z, reach: tm.combatReachOrDefault()})
+	}
+	s.motionMu.Unlock()
+	s.sessionsMu.RLock()
+	for ts := range s.sessions {
+		if ts == nil || !ts.authed || !ts.worldReady.Load() || ts.player == nil {
+			continue
+		}
+		p := ts.player
+		if p.Map != motion.Map || p.InstanceID != motion.InstanceID {
+			continue
+		}
+		if p.Health != 0 || p.PlayerFlags&playerFlagGhost != 0 {
+			continue
+		}
+		reach := p.CombatReach
+		if reach <= 0 {
+			reach = 1.5
+		}
+		candidates = append(candidates, deadUnit{guid: p.GUID, x: p.X, y: p.Y, z: p.Z, reach: reach})
+	}
+	s.sessionsMu.RUnlock()
+	for _, c := range candidates {
+		if s.isTotemGUID(c.guid) {
+			continue
+		}
+		if !s.creatureHostileToTarget(motion, c.guid) {
+			continue
+		}
+		if distance3D(motion.X, motion.Y, motion.Z, c.x, c.y, c.z) <= maxRange+petReach+float64(c.reach) {
+			return true
+		}
+	}
+	return false
+}
+
 // consumeKillCommandStack ports spell_hun_kill_command_pet::HandleProc
 // (spell_hunter.cpp:677-690): a Kill Command-empowered pet attack consumes
 // one 58914 stack and one of the owner's 34027 stacks (PreventDefaultAction
@@ -3908,6 +3981,18 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 	if !s.server.creatureComboPointsPreCast(motion, spell, triggered) {
 		return true
 	}
+	// spell_hun_pet_carrion_feeder::CheckIfCorpseNear
+	// (spell_hunter.cpp:984-1001): the OnCheckCast arm — a corpse-near
+	// search for a dead enemy unit within the spell's hostile max
+	// range, else SPELL_FAILED_NO_EDIBLE_CORPSES. The script CheckCast
+	// runs at the end of Spell::CheckCast, so the gate lands here after
+	// the combo-points tail, ahead of the prepare stealth-break arm; a
+	// failing gate fizzles before power, cooldown and GCD like the
+	// rest. Runs for triggered casts too (no C++ triggered exemption
+	// on the script hook).
+	if spell.ID == 54044 && !s.server.petCarrionFeederCorpseNear(motion, spell) {
+		return true
+	}
 	// Spell::prepare stealth-break arm (Spell.cpp:3180-3191, gated by
 	// TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS 0x100): a non-triggered pet
 	// cast of a stealth-breaking spell (SpellInfo::IsBreakingStealth,
@@ -5450,6 +5535,54 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 		switch spell.Effects[i].Effect {
 		case spellEffectScriptEffect:
 			s.server.creatureEffectScriptEffect(ctx, motion, spell.ID, spell.Effects[i], hitTargets, launchReflected, evadedSet, immuneSet, petMissVerdicts)
+		}
+	}
+	// Spell::EffectDummy (SpellEffects.cpp:792) on the pet path, same
+	// dispatch-ahead-of-damage position as the twin and inline blocks:
+	// the HIT_TARGET arm riding its twin, with the launch reflected
+	// map. The twin fires the Eluna dummy hooks here; the pet path
+	// carries no Eluna dummy dispatch, so this loop is the Go
+	// SpellScript home for pet-cast dummy spells only — 54044 Carrion
+	// Feeder and 53478 Last Stand (pet), whose ev4 Lua ports can never
+	// fire (executePetSpellWithOptions has no fireSpellEffectHit site;
+	// the 53478 Lua handler is removed with this tick). Per hit target
+	// like C++ (each invocation casts on the caster, so a multi-target
+	// dummy would cast once per hit target); the 54044 corpse gate
+	// already ran at CheckCast above.
+	for i := range spell.Effects {
+		switch spell.Effects[i].Effect {
+		case spellEffectDummy:
+			for _, guid := range hitTargets {
+				if guid == 0 || evadedSet[guid] || immuneSet[guid] || petMissVerdicts[guid] != protocol.SpellMissNone {
+					continue
+				}
+				if status, isReflected := launchReflected[guid]; isReflected {
+					if status != protocol.SpellMissNone {
+						continue
+					}
+					guid = motion.GUID
+				}
+				switch spell.ID {
+				case 54044:
+					// spell_hun_pet_carrion_feeder::HandleDummy
+					// (spell_hunter.cpp:1003-1007): EFFECT_0 DUMMY —
+					// the pet casts the triggered meal 54045 on
+					// itself, non-triggered in C++ (the false arg).
+					if i == 0 {
+						s.server.castCreatureSpellInternal(ctx, motion, 54045, motion.GUID, false)
+					}
+				case 53478:
+					// spell_hun_last_stand_pet::HandleDummy
+					// (spell_hunter.cpp:720-726): EFFECT_0 DUMMY —
+					// the pet casts the triggered heal 53479 on
+					// itself with BP0 = 30% of its max health
+					// (CountPctFromMaxHealth).
+					if i == 0 {
+						bp0 := int32(motion.MaxHealth) * 30 / 100
+						s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, 53479, motion.GUID, true, map[int]int32{0: bp0}, nil, false, 0)
+					}
+				}
+			}
 		}
 	}
 	// Spell::EffectHealMaxHealth (SpellEffects.cpp:3488) + EffectEnergize

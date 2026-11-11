@@ -186,31 +186,14 @@ end
 
 RegisterSpellEvent(SPELL_HUNTER_INVIGORATION, 5, invigorationScript)
 
--- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
---   spell_hun_last_stand_pet::HandleDummy (spell_hunter.cpp:720-726):
---   OnEffectHitTarget, EFFECT_0 SPELL_EFFECT_DUMMY. The pet casts
---   the triggered heal 53479 on itself with BP0 = 30% of its max
---   health (CountPctFromMaxHealth, creature bridge
---   lua_creature_events.go:466); CastCustomSpell carries the BP0
---   override (lua_creature_events.go:936+, spell_dk.lua precedent).
---   Pet casts ride castCreatureSpellInternalWithBasePoints, whose
---   ev4 fire site is boss_ai.go:3365. DORMANT until Spell.dbc drives
---   53478 (pet ability).
-local SPELL_HUNTER_PET_LAST_STAND = 53478 -- spell_hunter.cpp:706
-local SPELL_HUNTER_PET_LAST_STAND_TRIGGERED = 53479 -- spell_hunter.cpp:50
-
-local function lastStandPetDummy(event, spell, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    caster:CastCustomSpell(caster, SPELL_HUNTER_PET_LAST_STAND_TRIGGERED, true, caster:CountPctFromMaxHealth(30))
-end
-
-RegisterSpellEvent(SPELL_HUNTER_PET_LAST_STAND, 4, lastStandPetDummy)
+-- 53478 Last Stand (pet): PORTED IN GO (2026-11-10), not Lua.
+--   spell_hun_last_stand_pet::HandleDummy (spell_hunter.cpp:720-726)
+--   is a pet-cast EFFECT_0 DUMMY arm, but pet casts ride
+--   executePetSpellWithOptions, which has no fireSpellEffectHit site —
+--   the ev4 Lua handler landed 2026-11-10 could never fire. The leg
+--   lives in the pet-path DUMMY dispatch (pet_combat.go): the pet
+--   casts the triggered heal 53479 on itself with BP0 = 30% of its
+--   max health. DORMANT until Spell.dbc drives 53478 (pet ability).
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_hun_masters_call::HandleScriptEffect
@@ -260,75 +243,6 @@ local function misdirectionProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_HUNTER_MISDIRECTION, 6, misdirectionProc)
-
--- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
---   spell_hun_pet_carrion_feeder::HandleDummy
---   (spell_hunter.cpp:1001-1005): OnEffectHit, EFFECT_0
---   SPELL_EFFECT_DUMMY. The pet casts the carrion feeder
---   heal 54045 on itself, NON-triggered (C++ passes false; the
---   creature CastSpell bridge honors the flag,
---   lua_creature_events.go:936). Pet casts ride
---   castCreatureSpellInternalWithBasePoints, whose ev4 fire site
---   is boss_ai.go:3365 (last-stand precedent).
--- NOT PORTED: Load() (spell_hunter.cpp:973-980) — no IsPet bridge
---   on creature objects; the spell is a pet-only ability, so the
---   gate holds by construction (53478 precedent). CheckIfCorpseNear
---   (spell_hunter.cpp:985-999) — no Lua OnCheckCast bridge (53271
---   DoCheckCast precedent); the cast succeeds with no corpse
---   nearby. DORMANT until Spell.dbc drives 54044 (pet ability).
-local SPELL_HUNTER_PET_CARRION_FEEDER = 54044 -- spell_hunter.cpp:964
-local SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED = 54045 -- spell_hunter.cpp:54
-
-local function petCarrionFeederDummy(event, spell, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    caster:CastSpell(caster, SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED, false)
-end
-
-RegisterSpellEvent(SPELL_HUNTER_PET_CARRION_FEEDER, 4, petCarrionFeederDummy)
-
--- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
---   spell_hun_pet_heart_of_the_phoenix::HandleScript
---   (spell_hunter.cpp:1042-1056): OnEffectHitTarget, EFFECT_0
---   SPELL_EFFECT_SCRIPT_EFFECT. With an owner and no 55711
---   debuff on the pet, the owner casts the triggered revive
---   54114 on the pet with BP0 = 100 (player CastCustomSpell,
---   lua_player.go:2879), then the pet casts the 55711 debuff on
---   itself, triggered. ev5 fires on the creature path per
---   (effect, live hit target) (boss_ai.go:3427-3430).
--- NOT PORTED: Load() (spell_hunter.cpp:1030-1035) — no IsPet
---   bridge; pet-only ability, holds by construction (53478
---   precedent). DORMANT until Spell.dbc drives 55709 (pet
---   ability).
-local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX = 55709 -- spell_hunter.cpp:51
-local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED = 54114 -- spell_hunter.cpp:52
-local SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF = 55711 -- spell_hunter.cpp:53
-
-local function petHeartOfThePhoenixScript(event, spell, target, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    if caster:HasAura(SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF) then
-        return
-    end
-    local owner = caster:GetOwner()
-    if owner == nil then
-        return
-    end
-    owner:CastCustomSpell(caster, SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED, true, 100)
-    caster:CastSpell(caster, SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF, true)
-end
-
-RegisterSpellEvent(SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX, 5, petHeartOfThePhoenixScript)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
 --   spell_hun_pet_carrion_feeder::HandleDummy
@@ -424,3 +338,90 @@ local function roarOfSacrificeProc(event, aura, target, actor, procTarget, damag
 end
 
 RegisterAuraEvent(SPELL_HUNTER_ROAR_OF_SACRIFICE, 6, roarOfSacrificeProc)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_hun_scatter_shot::HandleDummy
+--   (spell_hunter.cpp:1328-1334): OnEffectHitTarget, EFFECT_0
+--   SPELL_EFFECT_DUMMY. The hunter interrupts Auto Shot
+--   (CURRENT_AUTOREPEAT_SPELL = 3 in the Go
+--   luaCastSpellTypeArg numbering, lua_creature_events.go:322)
+--   and stops attacking (AttackStop, lua_player.go:3085). The
+--   C++ Load() player gate rides GetObjectType() == "Player"
+--   (maiden-of-virtue precedent).
+-- NOT PORTED: SendAttackSwingCancelAttack (spell_hunter.cpp:1334)
+--   — no bridge, and Go has no SMSG_ATTACK_SWING_CANCEL opcode
+--   (spells.go:38973); AttackStop already sends SMSG_ATTACK_STOP,
+--   so only the client swing-cancel display is missing.
+--   DORMANT until Spell.dbc drives 37506's dummy cast.
+local SPELL_HUNTER_SCATTER_SHOT = 37506 -- spell_hunter.cpp:1313
+
+local function scatterShotDummy(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    caster:InterruptSpell(3)
+    caster:AttackStop()
+end
+
+RegisterSpellEvent(SPELL_HUNTER_SCATTER_SHOT, 5, scatterShotDummy)
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
+--   spell_hun_viper_attack_speed::OnApply/OnRemove
+--   (spell_hunter.cpp:1638-1652): EFFECT_0 SPELL_AURA_DUMMY,
+--   AfterEffectApply/AfterEffectRemove REAL. On apply, a hunter
+--   already running Aspect of the Viper 34074 casts Vicious Viper
+--   61609 on self (aurEff args; the triggered flag rides the
+--   pre-existing player:CastSpell gap, lua_player.go:2857); on
+--   remove the hunter drops 61609 unconditionally. The twin leg
+--   lives in the 34074 handlers above (aspect apply/remove check
+--   60144), so whichever of the two applies second casts 61609
+--   and whichever removes first drops it.
+local function viperAttackSpeedApply(event, aura, target)
+    if target:HasAura(SPELL_HUNTER_ASPECT_OF_THE_VIPER) then
+        target:CastSpell(target, SPELL_HUNTER_VICIOUS_VIPER, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_HUNTER_VIPER_ATTACK_SPEED, 2, viperAttackSpeedApply)
+
+local function viperAttackSpeedRemove(event, aura, target)
+    target:RemoveAura(SPELL_HUNTER_VICIOUS_VIPER)
+end
+
+RegisterAuraEvent(SPELL_HUNTER_VIPER_ATTACK_SPEED, 3, viperAttackSpeedRemove)
+
+-- PORTED (this tick, RegisterSpellEvent OnObjectAreaTargetSelect = 7):
+--   spell_hun_target_only_pet_and_owner::FilterTargets
+--   (spell_hunter.cpp:1495-1501): EFFECT_0 and EFFECT_1,
+--   TARGET_UNIT_CASTER_AREA_PARTY. The list is replaced with the
+--   caster plus its owner — Call of the Wild 53434 and Furious
+--   Howl 24604 buff the pet and its hunter only, never the party
+--   (bpet_hunter.cpp:42/321-324 casts 53434 as the pet, "10% AP
+--   for pet and hunter"). ev7 fires on the creature-cast path
+--   only (boss_ai.go:3151); pet casts ride
+--   castCreatureSpellInternalWithBasePoints (53478 precedent).
+--   The player-cast leg lives in Go (spells.go): a hunter casting
+--   either spell keeps the caster alone, since a player has no
+--   owner (Unit.h:1147). DORMANT until Spell.dbc drives the casts.
+local SPELL_HUNTER_CALL_OF_THE_WILD = 53434 -- spell_hunter.cpp:1485
+local SPELL_HUNTER_FURIOUS_HOWL = 24604 -- spell_hunter.cpp:1485
+
+local function targetOnlyPetAndOwnerFilter(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    targets:Clear()
+    targets:Add(caster)
+    local owner = caster:GetOwner()
+    if owner ~= nil then
+        targets:Add(owner)
+    end
+end
+
+RegisterSpellEvent(SPELL_HUNTER_CALL_OF_THE_WILD, 7, targetOnlyPetAndOwnerFilter)
+RegisterSpellEvent(SPELL_HUNTER_FURIOUS_HOWL, 7, targetOnlyPetAndOwnerFilter)
