@@ -233,6 +233,17 @@
 -- sibling's stays-out call is overturned: every leg has a bridge or
 -- a precedent). Census go_hit=true is a FALSE POSITIVE on all six
 -- rows (Lua-comment hits only, zero Go).
+-- Census rows 472-476 PORTED 2026-11-11 below: revealed_tentacle
+-- (64012, ev5 triggered 64017 + 63305 self-casts + UpdateEntry
+-- 33943), grim_reprisal (63305, ev6 60%-of-damage 64039 BP0 leg),
+-- induce_madness (64059, ev5 63992 teleport + SANITY remove mode 3
+-- + effect-value remove; AfterCast ClearShatteredIllusion stays out
+-- — no spell AfterCast event), sanity (63050, VERIFIED-EXISTING:
+-- ev1 tick + ev3 remove, BeforeCast stays out), insane (63120,
+-- ev2 Yogg Talk(1, target) + 64464 visual + ev3 alive -> KillSelf).
+-- Census hooks wrong on 473/474/475/476 (473 OnEffectHitTarget,
+-- 474 AfterEffectApply, 475 both, 476 OnEffectHitTarget +
+-- OnObjectAreaTargetSelect phantoms); 472 exact.
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -312,6 +323,12 @@ local PHASE3 = {
     SPELL_DEATH_RAY_DAMAGE_VISUAL = 63886, -- :235
     SPELL_TELEPORT_BACK_TO_MAIN_ROOM = 63992, -- :272
     SPELL_CANCEL_ILLUSION_ROOM_AURA = 63993, -- loader comment :2645 (no in-tree enum/cast site)
+    SPELL_REVEALED_TENTACLE = 64012, -- loader comment :2706 (no in-tree enum/cast site)
+    SPELL_GRIM_REPRISAL = 63305, -- :247
+    SPELL_GRIM_REPRISAL_DAMAGE = 64039, -- :248
+    SPELL_INSANE_VISUAL = 64464, -- :273
+    WHISPER_VOICE_INSANE = 1, -- :65
+    NPC_INFLUENCE_TENTACLE = 33943, -- ulduar.h:219
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -1813,6 +1830,122 @@ PHASE3.yoggNondescriptRemoved = function(event, aura, target)
 end
 RegisterAuraEvent(SPELL_NONDESCRIPT_1, 3, PHASE3.yoggNondescriptRemoved)
 RegisterAuraEvent(SPELL_NONDESCRIPT_2, 3, PHASE3.yoggNondescriptRemoved)
+
+-- C++ spell_yogg_saron_revealed_tentacle::HandleScript
+-- (boss_yogg_saron.cpp:2721-2729): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY -> the caster, if a creature, self-casts
+-- SPELL_TENTACLE_VOID_ZONE (64017) + SPELL_GRIM_REPRISAL (63305),
+-- both triggered, then UpdateEntry(NPC_INFLUENCE_TENTACLE 33943,
+-- GetCreatureData()) — the bridged seatCreatureEntry twin
+-- (lua_creature_events.go:4824; the data/updateLevel args ride
+-- their C++ defaults per the bridge comment). The ToCreature gate
+-- is subsumed by the ev5 fire path (creature path only,
+-- boss_ai.go:3435). No PreventHitDefaultEffect: DUMMY has no Go
+-- default arm beyond the Eluna hook (the 453 precedent). Bound
+-- 64012 (loader comment :2706; no in-tree cast site or boss enum
+-- — the trigger lives in DBC, the 429 precedent). DORMANT until
+-- Spell.dbc ships.
+PHASE3.yoggRevealedTentacleHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_TENTACLE_VOID_ZONE, true)
+    caster:CastSpell(caster, PHASE3.SPELL_GRIM_REPRISAL, true)
+    caster:UpdateEntry(PHASE3.NPC_INFLUENCE_TENTACLE)
+end
+RegisterSpellEvent(PHASE3.SPELL_REVEALED_TENTACLE, 5, PHASE3.yoggRevealedTentacleHit)
+
+-- C++ spell_yogg_saron_grim_reprisal::HandleProc
+-- (boss_yogg_saron.cpp:2757-2767): OnEffectProc EFFECT_0
+-- SPELL_AURA_DUMMY -> PreventDefaultAction, then if the proc
+-- damage is nonzero the target casts SPELL_GRIM_REPRISAL_DAMAGE
+-- (64039) on the attacker with BP0 = CalculatePct(damage, 60)
+-- (Util.h:66-70, float mult truncated). The ev6 true-return is
+-- the PreventDefaultAction twin (lua_aura.go:836; the diminsh
+-- precedent) and it vetoes on every path, matching the C++ call
+-- order (PreventDefaultAction before the damage check); the
+-- damage arg rides fireAuraProc (lua_aura.go:832) and actor is
+-- the event actor, i.e. the damage dealer (procs.go:1497-1499);
+-- CastSpellExtraArgs(aurEff) sets TRIGGERED_FULL_MASK
+-- (SpellDefines.h:166), so the CastCustomSpell BP0 leg is
+-- triggered. Bound 63305 (revealed tentacle :2725, triggered).
+-- The census OnEffectHitTarget hook is a phantom — the class
+-- registers only OnEffectProc. DORMANT until Spell.dbc ships.
+PHASE3.yoggGrimReprisalProc = function(event, aura, target, actor, procTarget, damage)
+    if target == nil or actor == nil or damage == nil or damage == 0 then
+        return true
+    end
+    target:CastCustomSpell(actor, PHASE3.SPELL_GRIM_REPRISAL_DAMAGE, true, math.floor(damage * 60 / 100))
+    return true
+end
+RegisterAuraEvent(PHASE3.SPELL_GRIM_REPRISAL, 6, PHASE3.yoggGrimReprisalProc)
+
+-- C++ spell_yogg_saron_induce_madness::HandleScript
+-- (boss_yogg_saron.cpp:2801-2809): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT -> the hit unit self-casts
+-- SPELL_TELEPORT_BACK_TO_MAIN_ROOM (63992), non-triggered, then
+-- removes SANITY (63050) with AURA_REMOVE_BY_ENEMY_SPELL (mode 3
+-- — which fires the sanityRemove ev3 leg, the drive-me-crazy /
+-- INSANE chain) and the aura named by the effect value. The
+-- AfterCast ClearShatteredIllusion leg (:2811-2820: caster casts
+-- 65238 nil-target + voice DoAction(9)) stays out — no spell
+-- AfterCast event in the Go runtime (runtime.go:601-607, events
+-- 1-7 only). Bound 64059 (Sara DoCastAOE :1110,
+-- ACTION_INDUCE_MADNESS). The census AfterEffectApply hook is a
+-- phantom — the class registers OnEffectHitTarget + AfterCast.
+-- DORMANT until Spell.dbc ships.
+PHASE3.yoggInduceMadnessHit = function(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, PHASE3.SPELL_TELEPORT_BACK_TO_MAIN_ROOM, false)
+    hitTarget:RemoveAura(SPELL_SANITY, AURA_REMOVE_BY_ENEMY_SPELL)
+    local value = spell:GetEffectValue(0)
+    if value ~= 0 then
+        hitTarget:RemoveAura(value)
+    end
+end
+RegisterSpellEvent(SPELL_INDUCE_MADNESS, 5, PHASE3.yoggInduceMadnessHit)
+
+-- C++ spell_yogg_saron_insane::OnApply / OnRemove
+-- (boss_yogg_saron.cpp:2915-2926): AfterEffectApply EFFECT_0
+-- SPELL_AURA_AOE_CHARM, REAL -> the caster, if a creature (Yogg),
+-- whispers WHISPER_VOICE_INSANE (1) to the target, then the target
+-- self-casts SPELL_INSANE_VISUAL (64464), triggered.
+-- AfterEffectRemove -> if the target is alive it kills itself.
+-- The Talk target arg rides the bridged creature:Talk(id, target)
+-- (lua_creature_events.go:1196); the GetCaster()->ToCreature()
+-- gate is the GetObjectType() == "Creature" check (aura:GetCaster()
+-- resolves via luaUnitObjectForGUID, lua_aura.go:207); the
+-- KillSelf leg is target:Kill(target) — player Kill takes the
+-- victim arg and creditHonorableKill no-ops for killer == victim
+-- (achievements.go:1802). Bound 63120 (sanity OnRemove :2879,
+-- triggered). The census OnEffectHitTarget +
+-- OnObjectAreaTargetSelect hooks are phantoms — the class registers
+-- only AfterEffectApply + AfterEffectRemove. DORMANT until
+-- Spell.dbc ships.
+PHASE3.yoggInsaneApplied = function(event, aura, target)
+    if target == nil then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Creature" then
+        caster:Talk(PHASE3.WHISPER_VOICE_INSANE, target)
+    end
+    target:CastSpell(target, PHASE3.SPELL_INSANE_VISUAL, true)
+end
+RegisterAuraEvent(SPELL_INSANE, 2, PHASE3.yoggInsaneApplied)
+
+PHASE3.yoggInsaneRemoved = function(event, aura, target)
+    if target ~= nil and target:IsAlive() then
+        target:Kill(target)
+    end
+end
+RegisterAuraEvent(SPELL_INSANE, 3, PHASE3.yoggInsaneRemoved)
 
 -- C++ boss_voice_of_yogg_saronAI::Reset (boss_yogg_saron.cpp:490-509):
 -- _Reset + SetPhase(PHASE_ONE) + instance SetData(DATA_DRIVE_ME_CRAZY) +
