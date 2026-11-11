@@ -19276,8 +19276,9 @@ func init() {
 	// bridges absent); npc_frost_sphere (34606) — Reset legs ported via boss
 	// ev19; DamageTaken / MovementInform ground-impact machine stays out
 	// (no hook / motion bridge);
-	// spell_pursuing_spikes, spell_impale, spell_anubarak_leeching_swarm —
-	// no SpellScript / AuraScript binding bridge (razelikh precedent).
+	// spell_pursuing_spikes, spell_anubarak_leeching_swarm — ported
+	// via RegisterAuraEvent (boss_anubarak_trial.lua); spell_impale
+	// stays out — PreventHitDamage has no Go model (runtime.go:566).
 	RegisterLuaBoss("boss_anubarak_trial", 34564)
 	// npc_open_portal_target_toc (Trial of the Crusader): entry
 	// 17965 (trial_of_the_crusader.h NPC_WILFRED_PORTAL), ported

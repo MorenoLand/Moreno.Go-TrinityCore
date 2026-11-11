@@ -1036,3 +1036,51 @@ local function tocWarlockUnstableAfflictionDispel(event, aura, target, dispeller
     end
 end
 RegisterAuraEvent(SPELL_TOC_UNSTABLE_AFFLICTION, 5, tocWarlockUnstableAfflictionDispel)
+
+-- spell_faction_champion_death_grip
+-- (boss_faction_champions.cpp:2283-2318, SpellScript OnEffectHitTarget):
+-- EFFECT_0 DUMMY — the hit unit casts SPELL_DEATH_GRIP_PULL 64431 on
+-- the caster, non-triggered (plain C++ CastSpell, no CastSpellExtraArgs).
+-- Ported via RegisterSpellEvent (66017, 5); the DK's 66017 cast is ported
+-- in npc_toc_dk (EVENT_DEATH_GRIP :1755), so the leg can fire live. The
+-- DUMMY default has no Lua twin; no Eluna script handles 66017 in-tree,
+-- so the delta is vacuous (ikiss blinkHit precedent).
+local SPELL_DEATH_GRIP_PULL = 64431 -- boss_faction_champions.cpp:161
+local function tocDeathGripHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, SPELL_DEATH_GRIP_PULL)
+end
+RegisterSpellEvent(SPELL_DEATH_GRIP, 5, tocDeathGripHit)
+
+-- spell_toc_bloodlust
+-- (boss_faction_champions.cpp:2319-2356, SpellScript):
+-- OnObjectAreaTargetSelect EFFECT_0 and EFFECT_1 TARGET_UNIT_SRC_AREA_ALLY
+-- — drop targets carrying AURA_SATED 57724; AfterHit — the hit unit casts
+-- Sated on itself, triggered. Ported via RegisterSpellEvent (65980, 7 + 3);
+-- the filter runs for both effects (no effectIndex guard — C++ hooks both),
+-- kazrogal markOfKazrogalFilter precedent for the ev7 Remove loop. The
+-- shaman champion's DoCastAOE(BLOODLUST) is ported in npc_toc_shaman.lua
+-- (:230-249), so both legs can fire live.
+local SPELL_BLOODLUST = 65980 -- boss_faction_champions.cpp:60
+local AURA_SATED = 57724 -- boss_faction_champions.cpp:65
+local function tocBloodlustFilter(event, spell, effectIndex, targets)
+    for _, unit in ipairs(targets:GetTargets()) do
+        if unit:HasAura(AURA_SATED) then
+            targets:Remove(unit)
+        end
+    end
+end
+local function tocBloodlustApplyDebuff(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, AURA_SATED, true)
+end
+RegisterSpellEvent(SPELL_BLOODLUST, 7, tocBloodlustFilter)
+RegisterSpellEvent(SPELL_BLOODLUST, 3, tocBloodlustApplyDebuff)

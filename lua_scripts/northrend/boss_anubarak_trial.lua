@@ -233,8 +233,11 @@
 -- DisappearAndDie — PORTED (tick 193, RegisterAuraEvent — see
 -- below; the old "no AuraScript binding bridge" claim is stale).
 -- spell_impale (SpellScript) — HandleDamageCalc permafrost
--- damage suppression — no SpellScript binding bridge (razelikh
--- precedent) — documented-only.
+-- damage suppression — STAYS OUT: RegisterSpellEvent ev5 exists
+-- (runtime.go:605) but is notification-only and SetHitDamage's seed
+-- never rescales dealt damage (lua_spell.go:78-83), so PreventHitDamage
+-- has no Go model. The old "no SpellScript binding bridge" claim is
+-- stale (razelikh precedent predates the spell-event bridge).
 -- spell_anubarak_leeching_swarm (AuraScript 66118) —
 -- HandleEffectPeriodic life-leeched damage/heal fan-out (66240 /
 -- 66125) — PORTED tick 424 below via RegisterAuraEvent (66118, 1);
