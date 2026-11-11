@@ -1084,3 +1084,33 @@ local function tocBloodlustApplyDebuff(event, spell, hitTarget)
 end
 RegisterSpellEvent(SPELL_BLOODLUST, 7, tocBloodlustFilter)
 RegisterSpellEvent(SPELL_BLOODLUST, 3, tocBloodlustApplyDebuff)
+
+-- spell_toc_heroism
+-- (boss_faction_champions.cpp:2358-2396, SpellScript — the Alliance
+-- mirror of spell_toc_bloodlust above):
+-- OnObjectAreaTargetSelect EFFECT_0 and EFFECT_1 TARGET_UNIT_SRC_AREA_ALLY
+-- — drop targets carrying AURA_EXHAUSTION 57723; AfterHit — the hit unit
+-- casts Exhaustion on itself, triggered. Ported via RegisterSpellEvent
+-- (65983, 7 + 3); the filter runs for both effects (no effectIndex guard
+-- — C++ hooks both), kazrogal markOfKazrogalFilter precedent for the ev7
+-- Remove loop. The shaman champion's DoCastAOE(HEROISM) is ported in
+-- npc_toc_shaman.lua (:230-249), so both legs can fire live. Census row
+-- 356 listed only OnObjectAreaTargetSelect — the AfterHit arm was
+-- missing from the census (boss_faction_champions.cpp:2387).
+local SPELL_HEROISM = 65983 -- boss_faction_champions.cpp:59
+local AURA_EXHAUSTION = 57723 -- boss_faction_champions.cpp:64
+local function tocHeroismFilter(event, spell, effectIndex, targets)
+    for _, unit in ipairs(targets:GetTargets()) do
+        if unit:HasAura(AURA_EXHAUSTION) then
+            targets:Remove(unit)
+        end
+    end
+end
+local function tocHeroismApplyDebuff(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, AURA_EXHAUSTION, true)
+end
+RegisterSpellEvent(SPELL_HEROISM, 7, tocHeroismFilter)
+RegisterSpellEvent(SPELL_HEROISM, 3, tocHeroismApplyDebuff)

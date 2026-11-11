@@ -19501,10 +19501,12 @@ func init() {
 	// entry-unverifiable; SelectNearestPlayer/DoCastAOE/despawn/motion
 	// legs unbridged), npc_bullet_controller (34743,
 	// entry-unverifiable; DoCastAOE bridge absent) — zero registration,
-	// documented-only. spell_bullet_controller, spell_powering_up,
+	// documented-only. spell_bullet_controller,
 	// spell_valkyr_essences, spell_power_of_the_twins — no SpellScript /
 	// AuraScript binding bridge (razelikh precedent); join the
-	// SpellScript/AuraScript queue.
+	// SpellScript/AuraScript queue. spell_powering_up is PORTED in
+	// lua_scripts/northrend/boss_twin_valkyr.lua (RegisterSpellEvent
+	// ev5 on the 67590-helper pool) — the binding bridge is live.
 	RegisterLuaBoss("boss_twin_valkyr", 34497)
 	RegisterLuaBoss("boss_twin_valkyr", 34496)
 	// Northrend Beasts (Trial of the Crusader) — fight logic in

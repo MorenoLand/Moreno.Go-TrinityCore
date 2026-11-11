@@ -171,21 +171,28 @@
 -- documented-only.
 -- spell_powering_up (SpellScript): HandleScriptEffect — 100-stack
 -- Powering Up 67590-helper check -> Empowered Dark 65724 / Empowered
--- Light 65748 by dummy-aura presence + RemoveAurasDueToSpell — no
--- SpellScript binding bridge (razelikh precedent) — documented-only.
+-- Light 65748 by dummy-aura presence + RemoveAurasDueToSpell — PORTED
+-- below (ev5 on the 67590-helper pool; the "no SpellScript binding
+-- bridge" claim is stale — RegisterSpellEvent is live, lua_spell.go).
 -- spell_valkyr_essences (AuraScript): OnEffectAbsorb handler —
 -- 5%-chance Surge of Speed 65828 self-cast + vortex-damage Powering Up
--- stack fan-out + floating-ball pickup Powering Up stacks — no
--- AuraScript binding bridge (razelikh precedent) — documented-only.
+-- stack fan-out + floating-ball pickup Powering Up stacks — STAY-OUT
+-- re-verified 2026-11-11: no OnEffectAbsorb hook exists
+-- (runtime.go AuraEvents are 1-7: Periodic/Apply/Remove/ChangeAmount/
+-- Dispel/Proc/BeforeDispel).
 -- spell_power_of_the_twins (AuraScript 65879): AfterEffectApply/Remove
--- -> cross-AI sister EnableDualWield(true/false) (SetEquipmentSlots +
--- SetCanDualWield) — no AuraScript binding bridge (razelikh precedent)
--- and no dual-wield bridge — documented-only. The stale "no equipment
--- bridge" claim is retracted: creature:SetEquipmentSlots is bridged on the
--- event surface (lua_creature_events.go), so the unconditional Reset arms
--- are PORTED in reset(); the AuraScript-timed arms (:310) stay out on the
--- missing AuraScript bridge. The four spell scripts join the
--- SpellScript/AuraScript queue.
+-- -> the aura caster herself EnableDualWield(true/false) (SetEquipmentSlots +
+-- SetCanDualWield) — STAY-OUT re-verified 2026-11-11: the OnApply/
+-- OnRemove hooks exist (AuraEvent 2/3, runtime.go) but EnableDualWield
+-- has no Lua bridge (zero DualWield hits on the lua_* / scripting
+-- surfaces). The stale "no equipment bridge" claim is retracted:
+-- creature:SetEquipmentSlots is bridged on the event surface
+-- (lua_creature_events.go), so the unconditional Reset arms
+-- are PORTED in reset(); the AuraScript-timed arms (:310) stay out on
+-- the missing dual-wield bridge. (GetSisterData maps the caster's entry
+-- to her own DATA id, :166 — the old "cross-AI sister" wording was
+-- wrong; the caster enables dual-wield on herself.) The remaining spell
+-- scripts join the SpellScript/AuraScript queue.
 
 local ENTRY_FJOLA = 34497
 local ENTRY_EYDIS = 34496
@@ -715,3 +722,55 @@ end
 
 RegisterCreatureGossipEvent(34568, 1, makeEssenceHello(DARK_ESSENCE_AURAS, LIGHT_ESSENCE_AURAS))
 RegisterCreatureGossipEvent(34567, 1, makeEssenceHello(LIGHT_ESSENCE_AURAS, DARK_ESSENCE_AURAS))
+
+-- spell_powering_up (SpellScript, boss_twin_valkyr.cpp:745-800):
+-- OnEffectHitTarget EFFECT_1 SPELL_EFFECT_SCRIPT_EFFECT — the hit unit
+-- with >= 100 stacks of Powering Up casts Empowered Dark 65724 if it
+-- carries the SPELLFAMILY_GENERIC dummy aura icon 2206 (EFFECT_1),
+-- Empowered Light 65748 if it carries icon 2845 (EFFECT_1), both
+-- triggered, then loses Powering Up. Ported via RegisterSpellEvent
+-- (ev5) on the 67590-helper pool; the stack read rides
+-- Unit:GetAura + Aura:GetStackAmount (slad_ran precedent — no
+-- player-surface GetStackAmount), the dummy reads ride
+-- GetDummyAuraEffect (spell_priest precedent). Binding id: the script
+-- binds to the Powering Up spell itself — the essences Absorb handler
+-- casts the 67590-helper triggered on the owner (:849-859 vortex leg,
+-- :875/879 unleashed leg) and this
+-- script's EFFECT_1 leg is the only consumer of that cast; no
+-- spell_script_names DB ships in-repo to confirm per-variant binding,
+-- so all four RAID_MODE variants register (the file's pool convention).
+-- DORMANT until the essences absorb leg lands: nothing in the Lua
+-- model casts Powering Up yet (spell_valkyr_essences stays out, no
+-- OnEffectAbsorb hook). Census row 358's single OnEffectHitTarget hook
+-- was correct.
+local SPELLFAMILY_GENERIC = 0 -- SharedDefines.h:3581
+local SPELL_EMPOWERED_DARK = 65724 -- boss_twin_valkyr.cpp:88
+local SPELL_EMPOWERED_LIGHT = 65748 -- boss_twin_valkyr.cpp:76
+local function poweringUpHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 or hitTarget == nil then
+        return
+    end
+    local stacks = 0
+    local present = nil
+    for _, auraId in ipairs(POWERING_UP_HELPER_AURAS) do
+        local aura = hitTarget:GetAura(auraId)
+        local n = aura and aura:GetStackAmount() or 0
+        if n > stacks then
+            stacks = n
+            present = auraId
+        end
+    end
+    if stacks < 100 then
+        return
+    end
+    if hitTarget:GetDummyAuraEffect(SPELLFAMILY_GENERIC, 2206, 1) then
+        hitTarget:CastSpell(hitTarget, SPELL_EMPOWERED_DARK, true)
+    end
+    if hitTarget:GetDummyAuraEffect(SPELLFAMILY_GENERIC, 2845, 1) then
+        hitTarget:CastSpell(hitTarget, SPELL_EMPOWERED_LIGHT, true)
+    end
+    hitTarget:RemoveAura(present)
+end
+for _, spellId in ipairs(POWERING_UP_HELPER_AURAS) do
+    RegisterSpellEvent(spellId, 5, poweringUpHit)
+end

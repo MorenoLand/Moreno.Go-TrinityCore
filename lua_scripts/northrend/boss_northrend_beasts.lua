@@ -285,7 +285,8 @@
 -- CastSpellWithRadiusMod); spell_jormungars_
 -- burning_spray / spell_jormungars_paralytic_spray (SpellScript
 -- 66902 / 66901): cast 66869 Burning Bile / 66823 Paralytic Toxin on
--- hit unit; spell_jormungars_paralysis (AuraScript 66830): OnApply
+-- hit unit — PORTED below (ev5, dormant until EVENT_SPRAY lands);
+-- spell_jormungars_paralysis (AuraScript 66830): OnApply
 -- removes itself when DATA_NORTHREND_BEASTS boss state != IN_PROGRESS
 -- (instance model); spell_icehowl_arctic_breath (SpellScript 66688):
 -- casts CalcValue spell on hit unit; spell_icehowl_trample (SpellScript
@@ -796,3 +797,33 @@ local function slimePoolTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SLIME_POOL_EFFECT, 1, slimePoolTick)
+
+-- spell_jormungars_snakes_spray (boss_northrend_beasts.cpp:1239-1276,
+-- one SpellScriptLoader with two script names):
+-- OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCHOOL_DAMAGE — the caster
+-- casts the toxin/bile on the hit unit, triggered. Ported via
+-- RegisterSpellEvent (66902 / 66901, 5); the effectIndex guard mirrors
+-- the C++ EFFECT_0 binding (death-grip precedent). DORMANT until the
+-- worm EVENT_SPRAY cast lands: boss_jormungarAI DoCast(spraySpell)
+-- (:838) rides the unported submerge/phase machine, so no Lua caster
+-- casts 66901/66902 yet. Census row 357 listed AfterEffectApply +
+-- OnObjectAreaTargetSelect alongside OnEffectHitTarget — both wrong:
+-- the class Register() binds OnEffectHitTarget only (:1264).
+local SPELL_BURNING_SPRAY = 66902 -- boss_northrend_beasts.cpp:92
+local SPELL_PARALYTIC_SPRAY = 66901 -- boss_northrend_beasts.cpp:83
+local SPELL_BURNING_BILE = 66869 -- boss_northrend_beasts.cpp:93
+local SPELL_PARALYTIC_TOXIN = 66823 -- boss_northrend_beasts.cpp:87
+local function makeSnakesSprayHit(spellId)
+    return function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= 0 or hitTarget == nil then
+            return
+        end
+        local caster = spell:GetCaster()
+        if caster == nil then
+            return
+        end
+        caster:CastSpell(hitTarget, spellId, true)
+    end
+end
+RegisterSpellEvent(SPELL_BURNING_SPRAY, 5, makeSnakesSprayHit(SPELL_BURNING_BILE))
+RegisterSpellEvent(SPELL_PARALYTIC_SPRAY, 5, makeSnakesSprayHit(SPELL_PARALYTIC_TOXIN))
