@@ -81,10 +81,16 @@
 -- (the EnterEvadeMode retry must keep the machine) and ev23 has no handler
 -- (C++ Reset() is empty; ev23 fires before ev2 in triggerCreatureEvade).
 -- SAY_GREET (0) fires from at_thaddius_entrance — no area-trigger bridge
--- — documented-only. The three SpellScripts (no SpellScript binding bridge
--- — razelikh precedent), the area trigger (no area-trigger bridge) and the
--- achievement (no achievement bridge — kelthuzad precedent; the GetData
--- latch it reads IS ported above) stay documented-only.
+-- — documented-only. Of the three SpellScripts, polarity_shift and
+-- magnetic_pull are PORTED (polarityShiftHit ev5 + magneticPullCast
+-- ev1 in npc_feugen.lua — the "no SpellScript binding bridge
+-- (razelikh precedent)" rationale is STALE: ev1/ev5 fire on the
+-- creature cast path, boss_ai.go:3154/3427); polarity_charge stays
+-- documented-only (ev7 is creature-path-only, but the caster is the
+-- charged player; no GetTriggeringSpell bridge). The area trigger (no
+-- area-trigger bridge) and the achievement (no achievement bridge —
+-- kelthuzad precedent; the GetData latch it reads IS ported above)
+-- stay documented-only.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_thaddius: setActive(true/false) on thaddius/stalagg/feugen (no
 -- bridge); BeginResetEncounter DoRemoveAurasDueToSpellOnPlayers(28059/
@@ -143,6 +149,10 @@ local SPELL_BALL_LIGHTNING = 28299
 local SPELL_CHAIN_LIGHTNING = 28167
 local SPELL_BERSERK = 27680
 local SPELL_POLARITY_SHIFT = 28089
+local SPELL_POSITIVE_CHARGE_APPLY = 28059
+local SPELL_NEGATIVE_CHARGE_APPLY = 28084
+local SPELL_POSITIVE_CHARGE_AMP = 29659
+local SPELL_NEGATIVE_CHARGE_AMP = 29660
 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
@@ -615,6 +625,39 @@ local function thaddiusAIUpdate(event, creature, diff)
         end
     end
 end
+
+-- C++ spell_thaddius_polarity_shift::HandleDummy
+-- (boss_thaddius.cpp:1107-1124): OnEffectHitTarget EFFECT_0
+-- SPELL_EFFECT_DUMMY on POLARITY_SHIFT 28089 — the hit target must
+-- be a player; roll_chance_i(50) picks the charge: positive casts
+-- 28059 on the target (triggered) and removes the positive amp
+-- 29659, negative casts 28084 and removes 29660. PORTED (ev5;
+-- gluth decimate precedent for the effectIndex-0 gate and the
+-- spell:GetCaster() entry check). The player CastSpell 3rd arg is
+-- ignored by the player funnel, which is triggered-only — matching
+-- C++ triggered=true. Dormant until Spell.dbc ships 28089 (the
+-- spellKnown gate, rows 261-265 precedent).
+local function polarityShiftHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetEntry() ~= ENTRY_THADDIUS then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    if math.random() < 0.5 then
+        hitTarget:CastSpell(hitTarget, SPELL_POSITIVE_CHARGE_APPLY, true)
+        hitTarget:RemoveAura(SPELL_POSITIVE_CHARGE_AMP)
+    else
+        hitTarget:CastSpell(hitTarget, SPELL_NEGATIVE_CHARGE_APPLY, true)
+        hitTarget:RemoveAura(SPELL_NEGATIVE_CHARGE_AMP)
+    end
+end
+
+RegisterSpellEvent(SPELL_POLARITY_SHIFT, 5, polarityShiftHit)
 
 RegisterCreatureEvent(ENTRY_THADDIUS, 1, thaddiusEnterCombat)
 RegisterCreatureEvent(ENTRY_THADDIUS, 2, thaddiusLeaveCombat)

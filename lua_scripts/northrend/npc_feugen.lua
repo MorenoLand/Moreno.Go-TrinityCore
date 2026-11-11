@@ -33,12 +33,11 @@
 -- SAY_FEUGEN_SLAY 1) (event 3 — C++-GATED: victim->GetTypeId() ==
 -- TYPEID_PLAYER — nalorakk/kelthuzad player-gate variant). The
 -- magneticPullTimer DoCastSelf(SPELL_MAGNETIC_PULL 54517) leg is
--- documented-only: the cast itself is C++ (:20s/:20s arm), but the
--- pull's whole effect lives in spell_thaddius_magnetic_pull's OnCast
--- HandleCast (threat-table swap + SPELL_MAGNETIC_PULL_EFFECT 28337),
--- and there is no SpellScript binding bridge (razelikh precedent) —
--- so it is the effect, not the cast, that lacks a bridge (gluth's
--- DoCast(28239/28404)-into-SpellScript documented-only precedent).
+-- PORTED (magneticPullTick below, 20s init / 20s repeat, 30s re-seed
+-- on revive) + the pull's OnCast HandleCast is PORTED as
+-- magneticPullCast (ev1; the "no SpellScript binding bridge
+-- (razelikh precedent)" rationale is STALE — SpellEventOnCast fires
+-- on the creature path, boss_ai.go:3154, muru/spell_dk precedent).
 -- All timers
 -- cancelled on 2/4/23 (gargolmar precedent).
 -- Unmodeled (no bridges — documented, not wired):
@@ -118,6 +117,9 @@ local SAY_FEUGEN_AGGRO = 0
 local SAY_FEUGEN_SLAY = 1
 
 local SPELL_FEUGEN_STATICFIELD = 28135
+local SPELL_MAGNETIC_PULL = 54517
+local SPELL_MAGNETIC_PULL_EFFECT = 28337
+local SPELL_ROOT_SELF = 75215
 
 local timers = {}
 
@@ -218,9 +220,28 @@ local function staticFieldTick(creature, guid)
     end)
 end
 
+-- C++ UpdateAI magneticPullTimer: DoCastSelf(SPELL_MAGNETIC_PULL
+-- 54517), 20s init, 20s repeat (boss_thaddius.cpp:730, :895-898).
+-- Same feign latch as staticFieldTick: no cast, re-arm on the 1s
+-- beat while feigned. The pull's whole effect lives in
+-- spell_thaddius_magnetic_pull's OnCast handler (magneticPullCast
+-- below, ev1) — the cast and the effect are both ported now.
+local function magneticPullTick(creature, guid)
+    if feugenFeign[guid] then
+        schedule(guid, "magneticpull", 1000, function()
+            magneticPullTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_MAGNETIC_PULL)
+    schedule(guid, "magneticpull", 20000, function()
+        magneticPullTick(creature, guid)
+    end)
+end
+
 -- C++ JustEngagedWith: Talk(SAY_FEUGEN_AGGRO 0) + the static-field
--- schedule (6s, from InitializeAI). The magneticPullTimer (20s)
--- leg is documented-only (see header). The thaddius cross-AI
+-- schedule (6s, from InitializeAI) + the magnetic-pull schedule
+-- (20s, from the ctor). The thaddius cross-AI
 -- DoAction(ACTION_FEUGEN_AGGRO) + stalagg AddThreat legs have no
 -- bridge — documented, not wired.
 local function feugenEnterCombat(event, creature, target)
@@ -243,6 +264,9 @@ local function feugenEnterCombat(event, creature, target)
     cancelTimers(guid)
     schedule(guid, "staticfield", 6000, function()
         staticFieldTick(creature, guid)
+    end)
+    schedule(guid, "magneticpull", 20000, function()
+        magneticPullTick(creature, guid)
     end)
 end
 
@@ -463,10 +487,13 @@ local function feugenDoAction(event, creature, action)
             end
         end
         -- C++ revive timer re-init (:778-779): staticFieldTimer = 6s
-        -- (magneticPullTimer = 30s is moot — the cast is documented-only).
-        -- The beat loop is replaced, not left to fire within 1s.
+        -- + magneticPullTimer = 30s. The beat loop is replaced, not
+        -- left to fire within 1s.
         schedule(guid, "staticfield", 6000, function()
             staticFieldTick(creature, guid)
+        end)
+        schedule(guid, "magneticpull", 30000, function()
+            magneticPullTick(creature, guid)
         end)
     elseif action == ACTION_TRANSITION then
         creature:Kill(creature) -- KillSelf twin (black_morass precedent)
@@ -497,3 +524,64 @@ RegisterCreatureEvent(ENTRY_FEUGEN, 9, feugenDamageTaken)
 RegisterCreatureEvent(ENTRY_FEUGEN, 14, feugenSpellHit)
 RegisterCreatureEvent(ENTRY_FEUGEN, 23, feugenReset)
 RegisterCreatureEvent(ENTRY_FEUGEN, 38, feugenDoAction)
+
+-- C++ spell_thaddius_magnetic_pull::HandleCast
+-- (boss_thaddius.cpp:1145-1206): OnCast on MAGNETIC_PULL 54517 —
+-- only Feugen ever casts it. Feugen's current victim and Stalagg's
+-- current victim swap threat tables, then the two tanks are pulled
+-- across with SPELL_MAGNETIC_PULL_EFFECT 28337. Same-tank branch
+-- (:1173-1180): swap the two threat deltas and Feugen casts 28337
+-- on the shared tank. Two-tank branch (:1181-1205): the four
+-- cross-table AddThreat deltas, each tank casts 28337 on the other,
+-- both get rooted (SPELL_ROOT_SELF 75215, presence-only — the
+-- mechanical root is unmodeled but HasAura-readable) and both
+-- AttackStart their new tank. PORTED (ev1; boss_ai.go:3154 fires
+-- OnCast on the creature cast path). GetVictim is the
+-- GetCurrentVictim twin (threat.go:134 sync); GetThreat/AddThreat
+-- are bridged (lua_creature_events.go:2149/2199) and negative
+-- AddThreat deltas reduce entries floored at 0 (threat.go:2055-
+-- 2092). Deviation: C++ AddThreat passes ignoreModifiers=true;
+-- Go's AddThreat applies modifiers, so a modifier-bearing tank's
+-- delta lands scaled. Identity is compared by GUIDLow
+-- (eredar-twins precedent) — Lua object identity is not stable
+-- across GetVictim calls. Dormant until Spell.dbc ships 54517
+-- (the spellKnown gate, rows 261-265 precedent).
+local function magneticPullCast(event, spell)
+    local feugen = spell:GetCaster()
+    if feugen == nil or feugen:GetEntry() ~= ENTRY_FEUGEN then
+        return
+    end
+    local stalagg = feugen:GetInstanceCreature(DATA_STALAGG)
+    if stalagg == nil then
+        return
+    end
+    local feugenTank = feugen:GetVictim()
+    local stalaggTank = stalagg:GetVictim()
+    if feugenTank == nil or stalaggTank == nil then
+        return
+    end
+    if feugenTank:GetGUIDLow() == stalaggTank:GetGUIDLow() then
+        local feugenTankThreat = feugen:GetThreat(feugenTank)
+        local stalaggTankThreat = stalagg:GetThreat(stalaggTank)
+        feugen:AddThreat(feugenTank, stalaggTankThreat - feugenTankThreat)
+        stalagg:AddThreat(stalaggTank, feugenTankThreat - stalaggTankThreat)
+        feugen:CastSpell(stalaggTank, SPELL_MAGNETIC_PULL_EFFECT, true)
+    else
+        local feugenTankThreat = feugen:GetThreat(feugenTank)
+        local feugenOtherThreat = feugen:GetThreat(stalaggTank)
+        local stalaggTankThreat = stalagg:GetThreat(stalaggTank)
+        local stalaggOtherThreat = stalagg:GetThreat(feugenTank)
+        feugen:AddThreat(stalaggTank, stalaggTankThreat - feugenOtherThreat)
+        feugen:AddThreat(feugenTank, stalaggOtherThreat - feugenTankThreat)
+        stalagg:AddThreat(feugenTank, feugenTankThreat - stalaggOtherThreat)
+        stalagg:AddThreat(stalaggTank, feugenOtherThreat - stalaggTankThreat)
+        feugenTank:CastSpell(stalaggTank, SPELL_MAGNETIC_PULL_EFFECT, true)
+        stalaggTank:CastSpell(feugenTank, SPELL_MAGNETIC_PULL_EFFECT, true)
+        feugen:AddAura(SPELL_ROOT_SELF, feugen)
+        stalagg:AddAura(SPELL_ROOT_SELF, stalagg)
+        feugen:AttackStart(stalaggTank)
+        stalagg:AttackStart(feugenTank)
+    end
+end
+
+RegisterSpellEvent(SPELL_MAGNETIC_PULL, 1, magneticPullCast)
