@@ -170,8 +170,9 @@
 --   SetGuidData(DATA_SACRIFICED_PLAYER, Empty) leg (:170) stays out:
 --   the Lua SetGuidData bridge only latches the caller's GUID (no
 --   clear), and the key is read only by the unported channeler
---   paralyze machine / paralyze SpellScript filter — no observable
---   effect in the ported model.
+--   paralyze machine (the paralyze SpellScript filter itself is
+--   PORTED below, 2026-11-11 — dormant until the machine lands and
+--   Spell.dbc ships the 48278 record).
 -- JustDied (:217) — the SACRIFICING-gated SetEquipmentSlots(false,
 --   EQUIP_UNEQUIP, EQUIP_NO_CHANGE, EQUIP_NO_CHANGE) = (0,
 --   0xFFFFFFFF, 0xFFFFFFFF) (malchezaar ClearWeapons precedent;
@@ -245,6 +246,8 @@ local SPELL_SINSTER_STRIKE = 15667
 local SPELL_CALL_FLAMES = 48258
 local SPELL_RITUAL_STRIKE_EFF_1 = 48277
 local SPELL_SUMMONED_VIS = 64446 -- boss_svala.cpp:46
+local SPELL_PARALYZE = 48278 -- boss_svala.cpp:52
+local DATA_SACRIFICED_PLAYER = 6 -- utgarde_pinnacle.h:39
 
 -- ScriptedCreature.h: EQUIP_UNEQUIP = 0, EQUIP_NO_CHANGE = -1 (the Go
 -- bridge takes uint32, so 0xFFFFFFFF = untouched — malchezaar
@@ -680,3 +683,36 @@ RegisterCreatureEvent(ENTRY_RITUAL_CHANNELER, 23, channelerReset)
 RegisterCreatureEvent(ENTRY_RITUAL_CHANNELER, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_svala.cpp:435: custom UpdateAI never calls DoMeleeAttackIfReady (cast-only in C++)
 end)
+
+-- C++ spell_paralyze_pinnacle (boss_svala.cpp:502-526): FilterTargets
+-- (EFFECT_0, TARGET_UNIT_SRC_AREA_ENEMY) applies RitualTargetCheck
+-- (:485-500): remove_if drops every target except the sacrificed
+-- player (instance GetGuidData(DATA_SACRIFICED_PLAYER) == target
+-- GUID). The caster is the ritual channeler (200ms UpdateAI cast,
+-- :439-444, unported — the sacrifice selection never latches the GUID
+-- in the ported model, so the filter drops everything until that
+-- machine lands). DORMANT until Spell.dbc ships the 48278 record
+-- (fireSpellTargetSelects gates on the area-enemy leg,
+-- lua_spell.go:704-743; unlatched GUID 0 matches nothing, C++-exact).
+local function paralyzeFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local sacrificedLow = caster:GetGuidDataLow(DATA_SACRIFICED_PLAYER)
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetGUIDLow() == sacrificedLow then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_PARALYZE, 7, paralyzeFilter)
