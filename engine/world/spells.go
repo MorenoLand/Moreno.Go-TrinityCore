@@ -9592,6 +9592,36 @@ func (s *session) playerHasAuraSpell(spellID uint32) bool {
 	return false
 }
 
+// unitHasAuraFromCaster is the Go twin of Unit::HasAura(spellId,
+// casterGUID) (Unit.cpp): whether guid carries spellID from
+// casterGUID. Player targets read the loaded-auras snapshot
+// (loadedAuras locks internally); creature targets read the live
+// creature-aura record, which carries the caster GUID — the
+// presence-only creatureAuras set cannot answer this, so a
+// presence-only record reads false.
+func (s *session) unitHasAuraFromCaster(guid uint64, spellID uint32, casterGUID uint64) bool {
+	if s == nil || s.server == nil || guid == 0 || spellID == 0 {
+		return false
+	}
+	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		for _, aura := range ts.loadedAuras() {
+			if aura != nil && !aura.Stopped && aura.SpellID == spellID && aura.CasterGUID == casterGUID {
+				return true
+			}
+		}
+		return false
+	}
+	if tm := s.findCreatureMotion(guid); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.server.auraMu.Lock()
+		defer s.server.auraMu.Unlock()
+		if aura := s.server.activeCreatureAuras[key][spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID {
+			return true
+		}
+	}
+	return false
+}
+
 // spellGoAmmoData mirrors Spell::UpdateSpellCastDataAmmo
 // (Spell.cpp:4398-4484) for the player-caster branch: the ranged weapon's
 // template supplies the inventory type (thrown weapons also supply the
@@ -16449,6 +16479,19 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					if spellID == 32826 && effectIndex == 0 && len(hitTargets) > 0 {
 						s.polymorphVisualDummyEffect(ctx)
 					}
+					// spell_pal_blessing_of_faith::HandleDummy
+					// (spell_paladin.cpp:439-463): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — per hit target, the
+					// caster casts the target's class Lower City
+					// blessing on itself, triggered; non-healing
+					// classes take nothing. Fires once per effect
+					// over the hit targets (C++ fires per hit target;
+					// the spell is single-target), ahead of the
+					// Eluna arm below, and only when a target was
+					// actually hit.
+					if spellID == 37877 && effectIndex == 0 && len(hitTargets) > 0 {
+						s.blessingOfFaithDummyEffect(ctx, hitTargets)
+					}
 					// Same Eluna arm; the pet-aura gate inside the
 					// dispatcher skips spells that took the AddPetAura
 					// early return above.
@@ -19372,6 +19415,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// has no dummy leg in the triggered dispatch, so the chain
 		// ends here.
 		s.scourgeStrikeAfterHit(effCtx, hitTargets, scourgeStrikeMultipliers, hitDamage)
+		s.divineStormAfterHit(ctx, spellID, spell, casterLevel, hitTargets, hitDamage)
 		for _, miss := range missStatus {
 			hitDamage.phase = spellHitPhaseAfterHit
 			hitDamage.currentTarget = miss.TargetGUID
@@ -25872,6 +25916,24 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			selectionTargets = hitTargets
 		case isFriendlyAreaSpell(spell):
 			hitTargets = s.spellFriendlyAreaTargets(ctx, spell, funnelFriendlyAreaTarget)
+			if spellID == 64364 {
+				// spell_pal_aura_mastery_immune::CheckAreaTarget
+				// (spell_paladin.cpp:318-321): the immunity only lands
+				// on targets carrying Concentration Aura (19746) from
+				// this caster — without this the party-wide sweep above
+				// would buff every party member in range. The 53434 /
+				// 24604 caster-only filter on the client path is the
+				// precedent. Inert when the DBC row is absent (the cast
+				// itself is a no-op then) or carries no friendly-area
+				// leg (the case never fires).
+				kept := hitTargets[:0]
+				for _, guid := range hitTargets {
+					if s.unitHasAuraFromCaster(guid, 19746, auraCasterGUID) {
+						kept = append(kept, guid)
+					}
+				}
+				hitTargets = kept
+			}
 			// A positive spell pairing a friendly-area effect with a
 			// 37/61 effect: the ref-centered effect's own selection
 			// is around the explicit target, not the caster-centered
@@ -51928,6 +51990,31 @@ func (s *session) scourgeStrikeAfterHit(ctx context.Context, hitTargets []uint64
 	}
 }
 
+// divineStormAfterHit is spell_pal_divine_storm
+// (spell_paladin.cpp:640-671): the AfterHit arm — Load() reads the
+// EFFECT_1 heal pct once per cast; per hit target the caster casts
+// Divine Storm (Dummy) 54171 on itself, triggered, with BP0 =
+// CalculatePct of that target's hit damage. Fires once per hit
+// target, after the Lua AfterHit handlers above; miss entries take
+// no cast (C++ GetHitUnit() nil skips). DORMANT until Spell.dbc
+// ships the 53385 record.
+func (s *session) divineStormAfterHit(ctx context.Context, spellID uint32, spell wotlk.Spell, casterLevel uint32, hitTargets []uint64, hitDamage *spellHitDamageState) {
+	if s == nil || s.player == nil || s.server == nil || spellID != 53385 || hitDamage == nil {
+		return
+	}
+	if len(spell.Effects) < 2 {
+		return
+	}
+	healPct := spell.Effects[1].CalcValueForLevel(spell, casterLevel)
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		bp := int32(int64(hitDamage.damageByTarget[guid]) * int64(healPct) / 100)
+		s.castSpellDirectWithBasePoint(ctx, 54171, s.playerGUID, uint32(bp))
+	}
+}
+
 // corpseExplosionDummyEffect is spell_dk_corpse_explosion
 // (spell_dk.cpp:647-745). A Lua ev5 port would never fire: the player path
 // has no OnEffectHitTarget site on the normal cast path (finishSpellCast;
@@ -52660,6 +52747,46 @@ func (s *session) polymorphVisualDummyEffect(ctx context.Context) {
 	forms := [6]uint32{32813, 32816, 32817, 32818, 32819, 32820}
 	form := forms[rand.IntN(len(forms))]
 	s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: form, casterGUID: guid, targetGUID: guid})
+}
+
+// blessingOfFaithDummyEffect mirrors spell_pal_blessing_of_faith::HandleDummy
+// (spell_paladin.cpp:439-463): the EFFECT_0 DUMMY OnEffectHitTarget arm —
+// per hit target the caster casts the target's class Lower City blessing
+// on itself, triggered (druid 37878, paladin 37879, priest 37880, shaman
+// 37881; spell_paladin.cpp:46-49); any other class takes nothing. A player
+// target reads its session class; a creature target reads its template
+// unit_class (Creature::InitEntry SetClass, Creature.cpp:494).
+func (s *session) blessingOfFaithDummyEffect(ctx context.Context, hitTargets []uint64) {
+	if s == nil || s.player == nil || s.server == nil {
+		return
+	}
+	for _, guid := range hitTargets {
+		if guid == 0 {
+			continue
+		}
+		var class uint32
+		if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
+			class = uint32(ts.player.Class)
+		} else if motion := s.findCreatureMotion(guid); motion != nil {
+			class = motion.UnitClass
+		} else {
+			continue
+		}
+		var spellID uint32
+		switch class {
+		case 11: // CLASS_DRUID
+			spellID = 37878
+		case 2: // CLASS_PALADIN
+			spellID = 37879
+		case 5: // CLASS_PRIEST
+			spellID = 37880
+		case 7: // CLASS_SHAMAN
+			spellID = 37881
+		default:
+			continue
+		}
+		s.castSpellDirect(ctx, spellID, s.playerGUID)
+	}
 }
 
 // chimeraShotScriptEffect mirrors spell_hun_chimera_shot::HandleScriptEffect

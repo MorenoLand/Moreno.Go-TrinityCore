@@ -22,11 +22,33 @@
 --   above: the immunity aura on the target was cast by the target
 --   itself in the apply leg, so the unfiltered removal is the same
 --   removal in practice. The 64364 area-target leg (DoCheckAreaTarget,
---   concentration-aura gate) is census row 191, not this row.
--- STILL BLOCKED (same class):
---   CheckProc / HandleProc (:511-519): on a mana-power target the
---   proc casts Sanctuary Energize (57319) — no proc hook exists on
---   the RegisterAuraEvent surface, so the proc leg stays out.
+--   concentration-aura gate) is census row 191, not this row. Row 191
+--   verdict: PORTED (Go, this tick) — the C++ registers only
+--   DoCheckAreaTarget (spell_paladin.cpp:318-321); the gate lives in
+--   the triggered funnel's friendly-area case (spells.go), filtering
+--   to targets carrying Concentration Aura (19746) from the caster.
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
+--   spell_pal_avenging_wrath (31884 Avenging Wrath,
+--   spell_paladin.cpp:337-393): on apply, a Sanctified Wrath talent
+--   aura (53375 EFFECT_2) makes the target cast Sanctified Wrath
+--   (57318) on itself with both base points set to the talent
+--   amount; the target then casts the Avenging Wrath marker (61987)
+--   on itself, triggered, and gains the Immune Shield marker
+--   (61988). On remove the target drops Sanctified Wrath (57318);
+--   the markers are left to their own expiry (C++ removes neither).
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_pal_blessing_of_sanctuary proc leg (:505-519): on a
+--   mana-power target the proc casts Sanctuary Energize (57319) on
+--   the target, triggered; the handler returns true (PreventDefault-
+--   Action), including on the gate-fail path (C++ CheckProc keeps a
+--   failed effect out of the proc mask entirely). DORMANT until
+--   Spell.dbc ships the 20911/25899 proc entries
+--   (serverSpellProcEntryFor needs ProcTypeMask).
+--   DELTA: ev6 fires after the charge consume (procs.go), so a
+--   gate-fail still burns a charge where C++ CheckProc would keep
+--   the effect out of the proc mask entirely.
+
+local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 
 local SPELL_PALADIN_BLESSING_OF_SANCTUARY = 20911 -- spell_paladin.cpp:476
 local SPELL_PALADIN_GREATER_BLESSING_OF_SANCTUARY = 25899 -- spell_paladin.cpp:477
@@ -72,3 +94,53 @@ local function auraMasteryRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PALADIN_AURA_MASTERY, 3, auraMasteryRemove)
+
+local SPELL_PALADIN_AVENGING_WRATH = 31884 -- spell_paladin.cpp:337
+local SPELL_PALADIN_SANCTIFIED_WRATH = 57318 -- spell_paladin.cpp:81
+local SPELL_PALADIN_SANCTIFIED_WRATH_TALENT_R1 = 53375 -- spell_paladin.cpp:82
+local SPELL_PALADIN_AVENGING_WRATH_MARKER = 61987 -- spell_paladin.cpp:64
+local SPELL_PALADIN_IMMUNE_SHIELD_MARKER = 61988 -- spell_paladin.cpp:65
+
+-- C++ spell_pal_avenging_wrath_AuraScript::HandleApply
+-- (spell_paladin.cpp:358-373): with a Sanctified Wrath talent aura
+-- (53375 EFFECT_2) the target casts Sanctified Wrath (57318) on
+-- itself with BP0/BP1 set to the talent amount; the target then
+-- casts the Avenging Wrath marker (61987) on itself, triggered, and
+-- gains the Immune Shield marker (61988).
+local function avengingWrathApply(event, aura, target)
+    local amount = target:GetAuraEffectOfRankedSpell(SPELL_PALADIN_SANCTIFIED_WRATH_TALENT_R1, 2)
+    if amount ~= nil then
+        target:CastCustomSpell(target, SPELL_PALADIN_SANCTIFIED_WRATH, true, amount, amount)
+    end
+    target:CastSpell(target, SPELL_PALADIN_AVENGING_WRATH_MARKER, true)
+    target:AddAura(SPELL_PALADIN_IMMUNE_SHIELD_MARKER)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_AVENGING_WRATH, 2, avengingWrathApply)
+
+-- C++ spell_pal_avenging_wrath_AuraScript::HandleRemove
+-- (spell_paladin.cpp:375-378): the target drops Sanctified Wrath.
+local function avengingWrathRemove(event, aura, target)
+    target:RemoveAura(SPELL_PALADIN_SANCTIFIED_WRATH)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_AVENGING_WRATH, 3, avengingWrathRemove)
+
+local SPELL_PALADIN_BLESSING_OF_SANCTUARY_ENERGIZE = 57319 -- spell_paladin.cpp:39
+
+-- C++ spell_pal_blessing_of_sanctuary_AuraScript::HandleProc
+-- (spell_paladin.cpp:511-519) with the CheckProc gate (:505-508):
+-- on a mana-power target the proc casts Sanctuary Energize (57319)
+-- on the target, triggered; the handler returns true
+-- (PreventDefaultAction) on both paths (charge-consume delta in
+-- the file header).
+local function blessingOfSanctuaryProc(event, aura, target, actor, procTarget, damage)
+    if target == nil or target:GetPowerType() ~= POWER_MANA then
+        return true
+    end
+    target:CastSpell(target, SPELL_PALADIN_BLESSING_OF_SANCTUARY_ENERGIZE, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_BLESSING_OF_SANCTUARY, 6, blessingOfSanctuaryProc)
+RegisterAuraEvent(SPELL_PALADIN_GREATER_BLESSING_OF_SANCTUARY, 6, blessingOfSanctuaryProc)
