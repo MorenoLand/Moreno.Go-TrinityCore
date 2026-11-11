@@ -169,6 +169,23 @@ end
 
 RegisterAuraEvent(SPELL_MAGE_BLAZING_SPEED_AURA, 6, blazingSpeedProc)
 
+local SPELL_MAGE_IMP_BLIZZARD_AURA = 11185 -- spell_mage.cpp:471 (class spell_mage_imp_blizzard)
+local SPELL_MAGE_CHILLED = 12484 -- spell_mage.cpp:56
+
+local function impBlizzardProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local chilled = aura:GetSpellWithRank(SPELL_MAGE_CHILLED)
+    if chilled == 0 then
+        return true
+    end
+    actor:CastSpell(procTarget, chilled, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_IMP_BLIZZARD_AURA, 6, impBlizzardProc)
+
 -- NOT IN LUA: spell_mage_arcane_potency (31571, spell_mage.cpp:143-193)
 -- — CheckProc filters the proc spell by SpellIconID (Clearcasting /
 -- Presence of Mind) and HandleProc casts the rank-indexed trigger
@@ -183,12 +200,13 @@ RegisterAuraEvent(SPELL_MAGE_BLAZING_SPEED_AURA, 6, blazingSpeedProc)
 -- CalcPowerCost(target, school mask); ev6 passes only a damage
 -- number, no damage-info spell/school. STAYS OUT until ev6
 -- damage-info forwarding lands.
--- NOT IN LUA: spell_mage_imp_blizzard (11185, spell_mage.cpp:471-501)
--- — HandleChill casts GetSpellWithRank(CHILLED 12484, rank); the
--- Go twin spellWithRank (spells.go:37377) is not on the Lua surface.
--- STAYS OUT; recipe: expose a rank lookup on the
--- GetSpellEffectCalcValue precedent, then port ev6 (actor casts the
--- ranked Chilled on procTarget, triggered).
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_mage_imp_blizzard (11185, spell_mage.cpp:471-501):
+--   OnEffectProc EFFECT_0 OVERRIDE_CLASS_SCRIPTS. PreventDefaultAction
+--   (return true); the actor casts the rank-matched Chilled
+--   (GetSpellWithRank(12484, this aura's rank), new aura bridge on
+--   the GetSpellEffectCalcValue precedent) on the procTarget,
+--   triggered. DORMANT until Spell.dbc ships the 11185 proc entry.
 -- CENSUS CORRECTION: row 610 hooks are HandleDummy only; real is
 -- OnEffectProc EFFECT_0 PROC_TRIGGER_SPELL. Rows 608/611/612 hooks
 -- are likewise wrong (608: DoCheckProc + OnEffectProc; 611: DoCheckProc
