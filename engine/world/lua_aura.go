@@ -371,6 +371,54 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{sp.StackAmount}, nil
 	}
+	// GetSpellMaxTicks(spellID) is SpellInfo::GetMaxTicks
+	// (SpellInfo.cpp, duration/amplitude over the periodic effects):
+	// the tick count of the given spell. Reads the loaded Spell.dbc
+	// record for the given spell, not this aura's spell. An unknown
+	// spell reads 0, the GetTriggerSpell convention — the
+	// piercing-shots handler (spell_hunter.cpp:1091-1105) divides the
+	// bleed by it, so a 0 read never fires the cast. Default this
+	// aura's spell.
+	methods["GetSpellMaxTicks"] = func(_ context.Context, args []any) ([]any, error) {
+		targetSpell := spellID
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			targetSpell = v
+		}
+		if r.server == nil || r.server.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{r.server.serverSpellMaxTicks(sp)}, nil
+	}
+	// GetSpellWithRank(firstSpellID) is sSpellMgr->GetSpellWithRank
+	// (SpellMgr.cpp): the spell id of this aura's rank in
+	// firstSpellID's chain, or 0 when the chain has no such rank. The
+	// rank is this aura's own spell rank (SpellInfo::GetRank via the
+	// spell_ranks world table, spells.go spellRank) — the
+	// improved-blizzard leg (spell_mage.cpp:484-488) casts the
+	// rank-matched Chilled on the proc target. An unknown rank reads
+	// 0, the GetTriggerSpell convention, so a port that casts only on
+	// a nonzero id never fires a bogus 0-id cast.
+	methods["GetSpellWithRank"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{uint32(0)}, nil
+		}
+		firstSpell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if r.server == nil {
+			return []any{uint32(0)}, nil
+		}
+		return []any{r.server.spellWithRank(firstSpell, r.server.spellRank(spellID))}, nil
+	}
 	// GetSpellEffectIsEffect(spellID, effectIndex) is
 	// SpellInfo::Effects[eff].IsEffect() (SpellInfo.h: the effect
 	// slot carries a real effect when Effect != SPELL_EFFECT_NONE):

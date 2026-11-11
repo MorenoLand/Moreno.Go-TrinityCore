@@ -509,6 +509,36 @@ func (s *session) roarOfSacrificeProcAllowed(aura *activeAura, auraSpell wotlk.S
 	return ev.schoolMask&uint32(auraSpell.Effects[1].MiscValue) != 0
 }
 
+// lockAndLoadProcAllowed mirrors
+// spell_hun_lock_and_load::CheckProc/CheckTrapProc/CheckPeriodicProc
+// (spell_hunter.cpp:759-790): the marker aura 67544 blocks re-procs, a
+// trap-activation event procs only from a frost-school trap spell with a
+// roll against the EFFECT_0 amount, and a periodic event procs only
+// with a roll against the EFFECT_1 amount. The ev6 hook carries no type
+// mask or proc spell, so the leg checks and rolls run here before the
+// chance roll, like the roar-of-sacrifice gate above; the Lua handler
+// only does HandleProc (cast trigger 56453 + marker 67544). The
+// marker check reads the session player's auras: trap and periodic
+// procs reach this loop as the hunter's own events, never the pet's.
+func (s *session) lockAndLoadProcAllowed(aura *activeAura, auraSpell wotlk.Spell, ev procEventInfo) bool {
+	if aura == nil {
+		return false
+	}
+	if s.hasAura(67544) {
+		return false
+	}
+	if ev.typeMask&procFlagDoneTrapActivation != 0 {
+		if ev.eventSpell == nil || ev.eventSpell.SchoolMask&spellSchoolMaskFrost == 0 {
+			return false
+		}
+		return rand.Float64()*100 < float64(aura.Amounts[0])
+	}
+	if ev.typeMask&procFlagDonePeriodic != 0 {
+		return rand.Float64()*100 < float64(aura.Amounts[1])
+	}
+	return false
+}
+
 // isProcOnCooldown checks whether an internal cooldown (ICD) is active for the given proc ID.
 func (s *session) isProcOnCooldown(procID uint32) bool {
 	if s == nil || s.procICD == nil {
@@ -3790,6 +3820,16 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		// Placed before the chance roll, like the C++ CheckProc in
 		// GetProcEffectMask (70656 precedent above).
 		if auraSpell.ID == 53480 && !s.roarOfSacrificeProcAllowed(aura, auraSpell, ev) {
+			continue
+		}
+		// spell_hun_lock_and_load::CheckProc/CheckTrapProc/
+		// CheckPeriodicProc (spell_hunter.cpp:759-790): the marker,
+		// trap-school and periodic legs plus their per-effect rolls
+		// live in lockAndLoadProcAllowed above — the ev6 hook carries
+		// no type mask or proc spell, so the Lua handler cannot tell
+		// the legs apart. Placed before the chance roll, like the
+		// C++ checks in GetProcEffectMask (roar precedent above).
+		if auraSpell.ID == 56342 && !s.lockAndLoadProcAllowed(aura, auraSpell, ev) {
 			continue
 		}
 		// spell_hun_t9_4p_bonus::CheckProc (spell_hunter.cpp:1591-1596):
