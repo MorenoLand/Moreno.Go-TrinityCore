@@ -1350,6 +1350,28 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 61258, casterGUID: actionTarget, targetGUID: actionTarget}, true
+	case 40470: // Paladin Tier 6 Trinket, EFFECT_0: Holy Light / Flash of Light (family flags[0] & 0xC0000000) rolls 15% for Enduring Light (40471); Judgements (flags[0] & 0x00800000) roll 50% for Enduring Judgement (40472); anything else returns. The proc actor casts the winner on the proc target with the aura effect (roll_chance_i, spell_paladin.cpp:1466-1493). DORMANT until Spell.dbc ships the 40470 proc entry.
+		if effIndex != 0 || triggerSpell == nil || actorGUID == 0 || triggerTargetGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		if len(triggerSpell.SpellFamilyFlags) < 1 {
+			return scriptProcCast{}, false
+		}
+		var spellID uint32
+		chance := 0
+		if triggerSpell.SpellFamilyFlags[0]&0xC0000000 != 0 {
+			spellID = 40471
+			chance = 15
+		} else if triggerSpell.SpellFamilyFlags[0]&0x00800000 != 0 {
+			spellID = 40472
+			chance = 50
+		} else {
+			return scriptProcCast{}, false
+		}
+		if rand.Intn(100) >= chance {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: spellID, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -4172,6 +4194,22 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraCast = true
 				s.triggeredByAuraSpell = auraSpell.ID
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 54968, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(uint64(healAmount) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 37705 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_pal_item_healing_discount::HandleProc
+				// (spell_paladin.cpp:1424-1431): PreventDefaultAction; the
+				// aura holder casts Healing Trance (37706) on itself with
+				// the aura effect. The generic leg below would cast the
+				// DBC trigger spell on the proc target instead — the
+				// holder-self target is the deviation this case exists
+				// for. No Lua ev6 twin: ev6 carries no proc spell.
+				// DORMANT until Spell.dbc ships the 37705 proc entry.
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.castSpellDirect(ctx, 37706, s.playerGUID)
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
 				continue

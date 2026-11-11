@@ -47,6 +47,24 @@
 --   DELTA: ev6 fires after the charge consume (procs.go), so a
 --   gate-fail still burns a charge where C++ CheckProc would keep
 --   the effect out of the proc mask entirely.
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
+--   spell_pal_improved_aura (31869 Sanctified Retribution,
+--   spell_paladin.cpp:1248-1310, loader spell_pal_sanctified_retribution
+--   with _spellId 63531): on apply the target drops the owned
+--   Sanctified Retribution aura (63531) cast by this caster, then
+--   casts it on itself, triggered, so the spellmod re-applies; on
+--   remove the aura is dropped unless Swift Retribution (53379) is
+--   still up. Swift Retribution's own apply/remove legs are census
+--   row 862 (same class, loader spell_pal_swift_retribution); the
+--   remove-leg cross-check here only reads 53379. The
+--   concentration/devotion registrations (63510/63514) have no census
+--   rows and are not registered here.
+--   DELTA: C++ removes the aura by (spell, caster GUID); Go
+--   target:RemoveAura(id) takes no caster filter (same delta as the
+--   blessing above). The remove-leg presence check reads
+--   GetAuraEffectOfRankedSpell(53379, 0): Swift Retribution's
+--   ADD_FLAT_MODIFIER is its EFFECT_0 (the script registers
+--   EFFECT_FIRST_FOUND for that aura type).
 
 local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 
@@ -144,3 +162,30 @@ end
 
 RegisterAuraEvent(SPELL_PALADIN_BLESSING_OF_SANCTUARY, 6, blessingOfSanctuaryProc)
 RegisterAuraEvent(SPELL_PALADIN_GREATER_BLESSING_OF_SANCTUARY, 6, blessingOfSanctuaryProc)
+
+local SPELL_PALADIN_SANCTIFIED_RETRIBUTION_R1 = 31869 -- spell_paladin.cpp:87
+local SPELL_PALADIN_SANCTIFIED_RETRIBUTION_AURA = 63531 -- spell_paladin.cpp:92
+local SPELL_PALADIN_SWIFT_RETRIBUTION_R1 = 53379 -- spell_paladin.cpp:88
+
+-- C++ spell_pal_improved_aura_AuraScript::HandleEffectApply
+-- (spell_paladin.cpp:1275-1280): the target drops the owned
+-- Sanctified Retribution aura (63531) cast by this caster, then
+-- casts it on itself, triggered, so the spellmod re-applies.
+local function sanctifiedRetributionApply(event, aura, target)
+    target:RemoveAura(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_AURA)
+    target:CastSpell(target, SPELL_PALADIN_SANCTIFIED_RETRIBUTION_AURA, true)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_R1, 2, sanctifiedRetributionApply)
+
+-- C++ spell_pal_improved_aura_AuraScript::HandleEffectRemove
+-- (spell_paladin.cpp:1282-1289): if Swift Retribution is still up
+-- the shared aura stays; otherwise the target drops it.
+local function sanctifiedRetributionRemove(event, aura, target)
+    if target:GetAuraEffectOfRankedSpell(SPELL_PALADIN_SWIFT_RETRIBUTION_R1, 0) ~= nil then
+        return
+    end
+    target:RemoveAura(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_AURA)
+end
+
+RegisterAuraEvent(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_R1, 3, sanctifiedRetributionRemove)

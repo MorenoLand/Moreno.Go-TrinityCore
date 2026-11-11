@@ -34914,6 +34914,39 @@ func (s *session) refreshCommandAura(spellID, durationMs uint32) bool {
 	return true
 }
 
+// refreshPlayerAuraDuration mirrors Aura::RefreshDuration
+// (SpellAuras.cpp:915-927) for a live player aura: the remaining time
+// resets to the aura's max duration and the expiry timer re-arms. No
+// stack, charge, or periodic-timer work — unlike refreshCommandAura,
+// a script-effect refresh never re-runs the apply path. DELTA: the
+// periodic tick schedule is left running (the creature merge path
+// stops TickTimer on refresh; the player periodic re-arm lives in
+// refreshCommandAura's resetPeriodic leg, not here).
+func (s *session) refreshPlayerAuraDuration(spellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.castMu.Lock()
+	aura, ok := s.activeAuras[spellID]
+	if !ok || aura == nil || aura.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	durationMs := aura.DurationMs
+	aura.RemainingMs = durationMs
+	aura.DurationUpdatedAt = time.Now()
+	if aura.Timer != nil {
+		aura.Timer.Stop()
+		aura.Timer = nil
+	}
+	if durationMs > 0 && durationMs < 18000000 {
+		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+			s.removeAuraWithMode(spellID, auraRemoveByExpire)
+		})
+	}
+	s.castMu.Unlock()
+}
+
 // calcAuraMaxChargesFor mirrors the modifier fold of Aura::CalcMaxCharges
 // (SpellAuras.cpp:951-962) once the caster's spell-mod owner is resolved:
 // the DBC ProcCharges — equal to the generated spell_proc entry's Charges,
@@ -35077,6 +35110,30 @@ func (s *session) applyAuraFromCaster(spellID uint32, durationMs uint32, casterG
 					rolled = s.server.scaledEffectValue(sp, effect, auraCasterLevel, casterControlled, rolled)
 					effectAmount = uint32(rolled)
 					amounts[index] = rolled
+					// spell_pal_hand_of_salvation::CalculateAmount
+					// (spell_paladin.cpp:1004-1013): the self-cast command /
+					// creature-cast twin of the applyAuraToTarget leg — a
+					// self-cast Hand of Salvation sheds the Glyph of
+					// Salvation (63225 EFFECT_0) amount from EFFECT_1.
+					// This loop only computes amounts for the first aura
+					// effect, so the adjustment bites only when EFFECT_0
+					// is not an aura effect; the live-cast path carries
+					// the real leg. The glyph read is a direct map read
+					// under the already-held castMu (auraEffectAmount
+					// would nest the lock); a zero stored amount falls
+					// back to the DBC base, mirroring auraEffectAmount
+					// (SpellAuraEffects.cpp:386).
+					if spellID == 1038 && index == 1 && casterGUID == s.playerGUID {
+						if glyph, ok := s.activeAuras[63225]; ok && glyph != nil && !glyph.Stopped && len(glyph.Amounts) > 0 && glyph.EffectMask&(1<<0) != 0 {
+							glyphAmt := glyph.Amounts[0]
+							if glyphAmt == 0 {
+								if gsp, found, _ := s.server.Data.Spell(63225); found && len(gsp.Effects) > 0 {
+									glyphAmt = gsp.Effects[0].BasePoints
+								}
+							}
+							amounts[index] -= glyphAmt
+						}
+					}
 					baseAmounts[index] = effect.BasePoints
 					if auraEffectCanBeRecalculated(effect.Aura) {
 						recalculateMask |= 1 << uint(index)
@@ -38286,6 +38343,22 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		// read at every periodic tick (SpellAuras.h:167) — the tick does not
 		// re-resolve the caster. Computed before castMu is taken.
 		applyResilience := s.casterCanApplyResilience(casterGUID)
+
+		// spell_pal_hand_of_salvation::CalculateAmount
+		// (spell_paladin.cpp:1004-1013): DoEffectCalcAmount on EFFECT_1
+		// SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN — a self-cast Hand of
+		// Salvation (caster == owner) sheds the Glyph of Salvation
+		// (63225 EFFECT_0) amount from the applied amount. Adjusted here,
+		// before castMu, so both the merge arm (refreshAuraEffectBasepoints)
+		// and the fresh-apply arm take the glyph-adjusted amount; the
+		// uint32 wrap is exact two's-complement for the negative DBC base.
+		// The threat.go case 1038 is the aura's own threat effect, not
+		// this leg. DORMANT until Spell.dbc ships the 1038/63225 records.
+		if spell.ID == 1038 && effIndex == 1 && casterGUID == targetGUID {
+			if glyphAmt, ok := targetSess.auraEffectAmount(63225, 0); ok {
+				amount = uint32(int32(amount) - glyphAmt)
+			}
+		}
 
 		targetSess.castMu.Lock()
 		if targetSess.auras == nil {
@@ -52183,6 +52256,16 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		targetSess.castSpellDirect(ctx, 46394, targetGUID)
 	case 53209:
 		s.chimeraShotScriptEffect(ctx, targetGUID)
+	case 63521:
+		// spell_pal_guarded_by_the_light::HandleScriptEffect
+		// (spell_paladin.cpp:940-945): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — if the caster carries Divine Plea
+		// (54428), refresh its duration. The handler runs from both
+		// the client path and the triggered dispatch (the 54171 leg's
+		// funnel), so one case covers both; a second SCRIPT_EFFECT
+		// effect on the spell would refresh twice, which is
+		// idempotent. DORMANT until Spell.dbc ships the 63521 record.
+		s.refreshPlayerAuraDuration(54428)
 	case 60533:
 		// spell_grab_on (zone_storm_peaks.cpp:1171-1198): OnEffectHitTarget
 		// EFFECT_0 SCRIPT_EFFECT — the caster's grip aura (56689) gains the
