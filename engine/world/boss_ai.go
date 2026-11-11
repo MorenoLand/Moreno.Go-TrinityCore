@@ -3553,6 +3553,32 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				s.creatureBloodMirror(ctx, m, bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart))
 				continue
 			}
+			if spellID == 20425 && i == 0 {
+				// spell_pal_judgement_of_command::HandleDummy
+				// (spell_paladin.cpp:1567-1593): the EFFECT_0 DUMMY
+				// OnEffectHitTarget arm — the creature-caster twin of
+				// the session legs: the caster casts the effect-0
+				// value on each miss-filtered hit unit, triggered,
+				// with the landed-reflect retargeting of the threat
+				// leg. The Eluna arm below still fires (no continue),
+				// like the session paths. DORMANT until Spell.dbc
+				// ships the 20425 record.
+				value := spellInfo.Effects[i].CalcValueForLevel(spellInfo, uint32(m.Level))
+				if value > 0 {
+					for _, guid := range bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart) {
+						if guid == 0 || evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+							continue
+						}
+						if status, isReflected := reflectedTargets[guid]; isReflected {
+							if status != protocol.SpellMissNone {
+								continue
+							}
+							guid = m.GUID
+						}
+						s.castCreatureSpellInternal(ctx, m, uint32(value), guid, true)
+					}
+				}
+			}
 			s.fireCreatureSpellDummyEffectForTargets(ctx, m, spellID, uint8(i), bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
 		}
 	}
@@ -7804,6 +7830,30 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
 				s.castCreatureSpellInternal(ctx, tm, 69023, m.GUID, true)
 			}
+		case 53407, 20271, 53408:
+			// spell_pal_judgement::HandleScriptEffect
+			// (spell_paladin.cpp:1503-1566): the creature-caster twin
+			// of the session leg — the caster casts the judgement
+			// aura (20184/20185/20186 per spell) on the hit unit,
+			// triggered, then the seal judgement damage spell
+			// (54158 unless a live seal's dummy EFFECT_2 names
+			// another spell), triggered. DORMANT until Spell.dbc
+			// ships the records.
+			auraSpellID := uint32(20184)
+			if spellID == 20271 {
+				auraSpellID = 20185
+			} else if spellID == 53408 {
+				auraSpellID = 20186
+			}
+			s.castCreatureSpellInternal(ctx, m, auraSpellID, guid, true)
+			key := creatureAuraKeyForMotion(m)
+			s.auraMu.Lock()
+			auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+			for _, aura := range s.activeCreatureAuras[key] {
+				auras = append(auras, aura)
+			}
+			s.auraMu.Unlock()
+			s.castCreatureSpellInternal(ctx, m, judgementSealDamageSpell(s.Data, auras), guid, true)
 		case 55709:
 			// spell_hun_pet_heart_of_the_phoenix::HandleScript
 			// (spell_hunter.cpp:1036-1050): EFFECT_0 SCRIPT_EFFECT —
@@ -10694,6 +10744,80 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if fire {
 					s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 49836, casterGUID: aura.CasterGUID, targetGUID: m.GUID})
 				}
+				continue
+			}
+			if auraSpell.ID == 20185 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_judgement_of_light_heal::HandleProc
+				// (spell_paladin.cpp:1610-1631): the creature-side twin
+				// of the procs.go leg — the proc target casts 20267 on
+				// itself with BP0 = pct of its max health by the effect
+				// amount. Same no-OriginalCaster note as the player
+				// leg. DORMANT until Spell.dbc ships the 20185 proc
+				// entry.
+				if triggerTargetGUID == 0 {
+					continue
+				}
+				maxHealth, _, _, ok := s.procTargetVitals(m.Map, m.InstanceID, triggerTargetGUID)
+				if !ok || maxHealth == 0 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 20267, casterGUID: triggerTargetGUID, targetGUID: triggerTargetGUID, bp0: uint32(uint64(maxHealth) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 20186 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_judgement_of_wisdom_mana::HandleProc
+				// (spell_paladin.cpp:1649-1679): the creature-side twin
+				// of the procs.go leg — the CheckProc mana-power gate,
+				// then the proc target casts 20268 on itself with BP0
+				// = pct of its CreateMana by the 20268 EFFECT_0
+				// CalcValue. Creatures have no CreateMana in Go, so
+				// procTargetVitals reads MaxMana there. DORMANT until
+				// Spell.dbc ships the 20186 proc entry.
+				if triggerTargetGUID == 0 {
+					continue
+				}
+				_, baseMana, powerType, ok := s.procTargetVitals(m.Map, m.InstanceID, triggerTargetGUID)
+				if !ok || powerType != 0 { // POWER_MANA (SharedDefines.h:1186)
+					continue
+				}
+				manaSpell, found, err := s.Data.Spell(20268)
+				if err != nil || !found || len(manaSpell.Effects) == 0 {
+					continue
+				}
+				amount := int64(baseMana) * int64(manaSpell.Effects[0].CalcValue()) / 100
+				if amount < 0 {
+					amount = 0
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 20268, casterGUID: triggerTargetGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				continue
+			}
+			if auraSpell.ID == 53651 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_light_s_beacon::HandleProc
+				// (spell_paladin.cpp:1825-1865): the creature-side twin
+				// of the procs.go leg — heal-taken proc on the holder,
+				// CheckProc veto when the holder carries 53563 from
+				// the healer, actor casts 53652/53654 on the beacon
+				// target with BP0 = pct of the heal. The creature loop
+				// carries no heal amounts, so ev.heal is 0 here and
+				// the leg skips exactly like the C++ null/zero-heal
+				// early return; it fires only if a heal-carrying
+				// creature event is ever threaded. DORMANT until
+				// Spell.dbc ships the 53651 proc entry.
+				if ev.actorGUID == 0 || ev.eventSpell == nil || ev.heal == 0 {
+					continue
+				}
+				if s.serverUnitHasAuraFromCaster(m.Map, m.InstanceID, m.GUID, 53563, ev.actorGUID) {
+					continue
+				}
+				healSpellID := uint32(53654)
+				if s.spellFirstRank(ev.eventSpell.ID) == s.spellFirstRank(635) {
+					healSpellID = 53652
+				}
+				beaconTarget := aura.CasterGUID
+				if beaconTarget == 0 || !s.serverUnitHasAuraFromCaster(m.Map, m.InstanceID, beaconTarget, 53563, ev.actorGUID) {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: healSpellID, casterGUID: ev.actorGUID, targetGUID: beaconTarget, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
 				continue
 			}
 			if eff.Aura == spellAuraDummy {

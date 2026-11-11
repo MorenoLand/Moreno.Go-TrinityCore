@@ -9592,6 +9592,35 @@ func (s *session) playerHasAuraSpell(spellID uint32) bool {
 	return false
 }
 
+// serverUnitHasAuraFromCaster is the Server-level twin of
+// session.unitHasAuraFromCaster below: the HasAura(spellId,
+// casterGUID) check for a unit that may be a player or a creature,
+// with the creature lookup scoped to the given map/instance. The
+// creature path needs the scope because the server holds no
+// single-map context; the session twin passes its own map/instance.
+func (s *Server) serverUnitHasAuraFromCaster(mapID, instanceID uint32, guid uint64, spellID uint32, casterGUID uint64) bool {
+	if s == nil || guid == 0 || spellID == 0 {
+		return false
+	}
+	if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
+		for _, aura := range ts.loadedAuras() {
+			if aura != nil && !aura.Stopped && aura.SpellID == spellID && aura.CasterGUID == casterGUID {
+				return true
+			}
+		}
+		return false
+	}
+	if tm := s.findCreatureMotion(mapID, instanceID, guid); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		defer s.auraMu.Unlock()
+		if aura := s.activeCreatureAuras[key][spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID {
+			return true
+		}
+	}
+	return false
+}
+
 // unitHasAuraFromCaster is the Go twin of Unit::HasAura(spellId,
 // casterGUID) (Unit.cpp): whether guid carries spellID from
 // casterGUID. Player targets read the loaded-auras snapshot
@@ -9600,26 +9629,14 @@ func (s *session) playerHasAuraSpell(spellID uint32) bool {
 // presence-only creatureAuras set cannot answer this, so a
 // presence-only record reads false.
 func (s *session) unitHasAuraFromCaster(guid uint64, spellID uint32, casterGUID uint64) bool {
-	if s == nil || s.server == nil || guid == 0 || spellID == 0 {
+	if s == nil || s.server == nil {
 		return false
 	}
-	if ts := s.server.findSessionByGUID(guid); ts != nil && ts.player != nil {
-		for _, aura := range ts.loadedAuras() {
-			if aura != nil && !aura.Stopped && aura.SpellID == spellID && aura.CasterGUID == casterGUID {
-				return true
-			}
-		}
-		return false
+	var mapID, instanceID uint32
+	if s.player != nil {
+		mapID, instanceID = s.player.Map, s.player.InstanceID
 	}
-	if tm := s.findCreatureMotion(guid); tm != nil {
-		key := creatureAuraKeyForMotion(tm)
-		s.server.auraMu.Lock()
-		defer s.server.auraMu.Unlock()
-		if aura := s.server.activeCreatureAuras[key][spellID]; aura != nil && !aura.Stopped && aura.CasterGUID == casterGUID {
-			return true
-		}
-	}
-	return false
+	return s.server.serverUnitHasAuraFromCaster(mapID, instanceID, guid, spellID, casterGUID)
 }
 
 // spellGoAmmoData mirrors Spell::UpdateSpellCastDataAmmo
@@ -16428,6 +16445,30 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					// only when a target was actually hit.
 					if spellID == 49576 && len(hitTargets) > 0 {
 						s.deathGripInitialDummyEffect(ctx, effectIndex, hitTargets)
+					}
+					// spell_pal_judgement_of_command::HandleDummy
+					// (spell_paladin.cpp:1567-1593): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — the caster casts the
+					// effect-0 value (the command judgement damage
+					// spell) on the hit unit, triggered. Fires once per
+					// effect over the hit targets (C++ fires per hit
+					// target; the spell is single-target), ahead of the
+					// pet-aura/Eluna legs like the death-grip-initial
+					// arm above, and only when a target was actually
+					// hit. A zero or unknown value casts nothing
+					// (castSpellDirect guards spellID 0; an unknown
+					// DBC row no-ops in the cast path). DORMANT until
+					// Spell.dbc ships the 20425 record.
+					if spellID == 20425 && effectIndex == 0 && len(hitTargets) > 0 {
+						value := eff.CalcValueForLevel(spell, casterLevel)
+						if value > 0 {
+							for _, guid := range hitTargets {
+								if guid == 0 {
+									continue
+								}
+								s.castSpellDirect(effCtx, uint32(value), guid)
+							}
+						}
 					}
 					// spell_dk_scourge_strike (spell_dk.cpp:2255-2312): the
 					// EFFECT_2 DUMMY OnEffectHitTarget arm — the
@@ -27919,6 +27960,25 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// Spell.dbc ships the 54171 record.
 					if spellID == 54171 && effectIndex == 0 && len(effectGUIDs) > 0 {
 						s.divineStormDummyEffect(ctx, spell, effectIndex, casterLevel, effectGUIDs)
+					}
+					// spell_pal_judgement_of_command::HandleDummy
+					// (spell_paladin.cpp:1567-1593): the EFFECT_0 DUMMY
+					// OnEffectHitTarget arm — the triggered-cast leg,
+					// gated on a miss-filtered hit like the bloodthirst
+					// leg above; the client-path twin sits in
+					// finishSpellCast's dummy arm. The caster casts
+					// the effect-0 value on each hit unit, triggered.
+					// DORMANT until Spell.dbc ships the 20425 record.
+					if spellID == 20425 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						value := eff.CalcValueForLevel(spell, casterLevel)
+						if value > 0 {
+							for _, guid := range effectGUIDs {
+								if guid == 0 {
+									continue
+								}
+								s.castSpellDirect(ctx, uint32(value), guid)
+							}
+						}
 					}
 					s.addOwnerPetAuraSource(ctx, spellID, uint8(effectIndex))
 					// Same Eluna arm; the pet-aura gate inside the
@@ -52186,6 +52246,44 @@ func (s *session) corpseExplosionDummyEffect(ctx context.Context, spell wotlk.Sp
 // summons, Grab Crate vehicle, Coyote Spirit/Blood Parrot despawns) need
 // temp-summon / position-cast / vehicle models Go lacks, and the sSpellScripts
 // tail has no Go SpellScript bridge (documented).
+// judgementSealDamageSpell is the seal scan of
+// spell_pal_judgement::HandleScriptEffect (spell_paladin.cpp:1526-1545):
+// the first SPELL_AURA_DUMMY EFFECT_2 on a live seal aura whose amount
+// names a valid spell becomes the judgement damage spell; otherwise
+// 54158 (SPELL_PALADIN_JUDGEMENT_DAMAGE). The C++ loop walks
+// GetAuraEffectsByType(SPELL_AURA_DUMMY) and breaks on the first seal
+// EFFECT_2 with a known spell — the same first-match order here, over
+// the caller's aura snapshot. A zero effect amount falls back to the
+// DBC base points (the AuraEffect ctor default, SpellAuraEffects.cpp:386).
+func judgementSealDamageSpell(data *wotlk.Store, auras []*activeAura) uint32 {
+	if data == nil {
+		return 54158
+	}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped || aura.EffectMask&(1<<2) == 0 {
+			continue
+		}
+		sealSpell, found, err := data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if spellSpecific(sealSpell, nil) != spellSpecificSeal || len(sealSpell.Effects) <= 2 || sealSpell.Effects[2].Aura != spellAuraDummy {
+			continue
+		}
+		amount := aura.Amounts[2]
+		if amount == 0 {
+			amount = sealSpell.Effects[2].BasePoints
+		}
+		if amount <= 0 {
+			continue
+		}
+		if _, found, err := data.Spell(uint32(amount)); err == nil && found {
+			return uint32(amount)
+		}
+	}
+	return 54158
+}
+
 func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, spell wotlk.Spell, eff wotlk.SpellEffect, targetGUID uint64) {
 	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 {
 		return
@@ -52266,6 +52364,28 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// effect on the spell would refresh twice, which is
 		// idempotent. DORMANT until Spell.dbc ships the 63521 record.
 		s.refreshPlayerAuraDuration(54428)
+	case 53407, 20271, 53408:
+		// spell_pal_judgement::HandleScriptEffect
+		// (spell_paladin.cpp:1503-1566): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm shared by the three judgement spells
+		// (the loader takes the judgement aura spell as _spellId:
+		// 53407 -> 20184 Justice, 20271 -> 20185 Light, 53408 ->
+		// 20186 Wisdom). The caster casts the judgement aura on the
+		// hit unit, triggered, then the seal judgement damage spell
+		// (54158 unless a live seal's dummy EFFECT_2 names another
+		// spell), triggered. The census "HandleDummy" hook is wrong:
+		// the class registers no dummy handler. A second
+		// SCRIPT_EFFECT effect on the spell would cast twice (the
+		// 63521 precedent); the three judgement spells carry a single
+		// DBC effect. DORMANT until Spell.dbc ships the records.
+		auraSpellID := uint32(20184)
+		if spellID == 20271 {
+			auraSpellID = 20185
+		} else if spellID == 53408 {
+			auraSpellID = 20186
+		}
+		s.castSpellDirect(ctx, auraSpellID, targetGUID)
+		s.castSpellDirect(ctx, judgementSealDamageSpell(s.server.Data, s.loadedAuras()), targetGUID)
 	case 60533:
 		// spell_grab_on (zone_storm_peaks.cpp:1171-1198): OnEffectHitTarget
 		// EFFECT_0 SCRIPT_EFFECT — the caster's grip aura (56689) gains the

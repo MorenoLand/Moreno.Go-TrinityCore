@@ -1250,6 +1250,29 @@ type scriptProcCast struct {
 	bp1Set     bool
 }
 
+// procTargetVitals resolves a proc target's (GetProcTarget, Unit.h:474)
+// vitals for the judgement proc arms below: max health, base mana
+// (Unit::GetCreateMana), and power type. ProcEventInfo builds the
+// proc target as the other unit on both sides (Unit.cpp:10388, 10412),
+// which is exactly the triggerTargetGUID both proc loops pass, so the
+// caller passes that GUID. Players read the live state (BaseMana is
+// the player_classlevelstats base); creatures have no CreateMana in
+// Go, so MaxMana stands in for it (judgement procs on mana creatures
+// are the only consumers). A zero GUID or an unresolvable unit reads
+// not-ok, and the caller skips the leg like a failed C++ gate.
+func (s *Server) procTargetVitals(mapID, instanceID uint32, guid uint64) (maxHealth, baseMana uint32, powerType uint8, ok bool) {
+	if s == nil || guid == 0 {
+		return 0, 0, 0, false
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		return sess.player.MaxHealth, energizeCreateMana(sess), playerPowerType(sess.player), true
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		return m.MaxHealth, m.MaxMana, uint8(m.PowerType), true
+	}
+	return 0, 0, 0, false
+}
+
 // procActionTargetGUID mirrors ProcEventInfo::GetActionTarget
 // (Unit.h:473): the actor-side event's action target is the other unit
 // (Unit.cpp:10388: actor=this, actionTarget=other, procTarget=other),
@@ -1264,6 +1287,72 @@ func procActionTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint6
 		return triggerTargetGUID
 	}
 	return holderGUID
+}
+
+// procEventProcTargetGUID mirrors ProcEventInfo::GetProcTarget
+// (Unit.cpp:10388/10412): on the actor-side event the proc target is the
+// other unit (triggerTargetGUID); on the target-side event it is the actor
+// (the attacker). The Judgement of Light/Wisdom legs read their proc
+// caster off it (spell_paladin.cpp:1616/1657).
+func procEventProcTargetGUID(actorGUID, holderGUID, triggerTargetGUID uint64) uint64 {
+	if actorGUID != 0 && actorGUID == holderGUID {
+		return triggerTargetGUID
+	}
+	return actorGUID
+}
+
+// procUnitMaxHealth reads a unit's maximum health the way
+// Unit::CountPctFromMaxHealth needs it: player sessions carry it on the
+// state, creature motions on the motion. Pets and unloaded units read 0
+// (the Judgement of Light leg then casts with a zero base point —
+// flagged there).
+func (s *Server) procUnitMaxHealth(mapID, instanceID uint32, guid uint64) uint32 {
+	if s == nil || guid == 0 {
+		return 0
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		return sess.player.MaxHealth
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		return m.MaxHealth
+	}
+	return 0
+}
+
+// procUnitPowerType reads a unit's current power type:
+// Player::GetPowerType via playerPowerType (class + shapeshift +
+// override) for players, the motion's PowerType for creatures. The
+// second return is false when the unit cannot be resolved (pets and
+// unloaded units) — the Judgement of Wisdom CheckProc then fails
+// closed.
+func (s *Server) procUnitPowerType(mapID, instanceID uint32, guid uint64) (uint8, bool) {
+	if s == nil || guid == 0 {
+		return 0, false
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		return playerPowerType(sess.player), true
+	}
+	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
+		return uint8(m.PowerType), true
+	}
+	return 0, false
+}
+
+// procUnitBaseMana reads Unit::GetCreateMana (Unit.h:1353:
+// UNIT_FIELD_BASE_MANA): the player's BaseMana (MaxPowers[0] fallback,
+// the calculateSpellPowerCost precedent, spells.go:1976) for players,
+// 0 for creatures, which carry no base mana.
+func (s *Server) procUnitBaseMana(mapID, instanceID uint32, guid uint64) uint32 {
+	if s == nil || guid == 0 {
+		return 0
+	}
+	if sess := s.findSessionByGUID(guid); sess != nil && sess.player != nil {
+		if sess.player.BaseMana != 0 {
+			return sess.player.BaseMana
+		}
+		return sess.player.MaxPowers[0]
+	}
+	return 0
 }
 
 // scriptAuraProcCast resolves the script arm for a dummy proc effect.
@@ -4210,6 +4299,103 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.triggeredByAuraCast = true
 				s.triggeredByAuraSpell = auraSpell.ID
 				s.castSpellDirect(ctx, 37706, s.playerGUID)
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 20185 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_judgement_of_light_heal::HandleProc
+				// (spell_paladin.cpp:1610-1631): PreventDefaultAction;
+				// the proc target (GetProcTarget, the other unit on
+				// both sides — triggerTargetGUID here) casts
+				// Judgement of Light Heal (20267) on itself with BP0
+				// = pct of its max health by the effect amount. No
+				// Lua ev6 twin: ev6 carries no max-health value. The
+				// C++ OriginalCaster (the judging paladin) has no Go
+				// bridge — the heal rides the proc target as caster.
+				// DORMANT until Spell.dbc ships the 20185 proc entry.
+				if triggerTargetGUID == 0 {
+					continue
+				}
+				maxHealth, _, _, ok := s.server.procTargetVitals(s.player.Map, s.player.InstanceID, triggerTargetGUID)
+				if !ok || maxHealth == 0 {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 20267, casterGUID: triggerTargetGUID, targetGUID: triggerTargetGUID, bp0: uint32(uint64(maxHealth) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 20186 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_judgement_of_wisdom_mana::HandleProc
+				// (spell_paladin.cpp:1649-1679): PreventDefaultAction;
+				// the CheckProc mana-power gate runs first (a rage /
+				// energy / runic-power proc target takes nothing),
+				// then the proc target casts Judgement of Wisdom Mana
+				// (20268) on itself with BP0 = pct of its CreateMana
+				// by the 20268 EFFECT_0 CalcValue. Same no-Original-
+				// Caster and no-ev6 notes as the 20185 leg above. A
+				// missing 20268 DBC row skips where C++ would assert.
+				// DORMANT until Spell.dbc ships the 20186 proc entry.
+				if triggerTargetGUID == 0 {
+					continue
+				}
+				_, baseMana, powerType, ok := s.server.procTargetVitals(s.player.Map, s.player.InstanceID, triggerTargetGUID)
+				if !ok || powerType != 0 { // POWER_MANA (SharedDefines.h:1186)
+					continue
+				}
+				manaSpell, found, err := s.server.Data.Spell(20268)
+				if err != nil || !found || len(manaSpell.Effects) == 0 {
+					continue
+				}
+				amount := int64(baseMana) * int64(manaSpell.Effects[0].CalcValue()) / 100
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 20268, casterGUID: triggerTargetGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 53651 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_pal_light_s_beacon::HandleProc
+				// (spell_paladin.cpp:1825-1865): PreventDefaultAction;
+				// the 53651 dummy aura rides every raid member in the
+				// beacon's range (the 53563 periodic trigger applies
+				// it), so this is a heal-TAKEN proc on the holder. The
+				// CheckProc veto fires when the holder itself carries
+				// the beacon (53563) from the healer — healing the
+				// beacon target directly never re-triggers. The actor
+				// (healer) casts the beacon heal on the beacon target
+				// (the aura caster, which must still carry 53563 from
+				// the actor) with BP0 = pct of the heal by the effect
+				// amount: 53652 for a Holy Light rank, 53654 for any
+				// other heal (53653 is validated in C++ but never
+				// cast). The rank check rides spellFirstRank; an
+				// unchained rank falls through to 53654. No Lua ev6
+				// twin: ev6 carries no heal amount or proc spell.
+				// DORMANT until Spell.dbc ships the 53651 proc entry.
+				if ev.actorGUID == 0 || ev.eventSpell == nil || ev.heal == 0 {
+					continue
+				}
+				if s.unitHasAuraFromCaster(s.playerGUID, 53563, ev.actorGUID) {
+					continue
+				}
+				healSpellID := uint32(53654)
+				if s.server.spellFirstRank(ev.eventSpell.ID) == s.server.spellFirstRank(635) {
+					healSpellID = 53652
+				}
+				beaconTarget := aura.CasterGUID
+				if beaconTarget == 0 || !s.unitHasAuraFromCaster(beaconTarget, 53563, ev.actorGUID) {
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: healSpellID, casterGUID: ev.actorGUID, targetGUID: beaconTarget, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
 				continue
