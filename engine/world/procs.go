@@ -1538,6 +1538,11 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 63311, casterGUID: holderGUID, targetGUID: triggerTargetGUID}, true
+	case 58375: // Glyph of Blocking, EFFECT_0: the proc actor casts 58374 on self; PreventDefaultAction (spell_warrior.cpp:502-507). The actor is the ATTACKER on this taken/block event (Unit.cpp:10412: actor=attacker, actionTarget=holder), so the literal C++ lands the 58374 buff on the attacker, not the blocking warrior — preserved as written. DORMANT until Spell.dbc ships the 58375 proc entry.
+		if effIndex != 0 || actorGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 58374, casterGUID: actorGUID, targetGUID: actorGUID}, true
 	case 61257: // Runic Power Back on Snare/Root (PvP 4P), EFFECT_0: the action target casts 61258 on itself when the triggering spell roots or snares.
 		if effIndex != 0 || triggerSpell == nil {
 			return scriptProcCast{}, false

@@ -54,6 +54,28 @@ func (s *Server) spellScriptOnHitDamage(spell wotlk.Spell, casterLevel uint32, c
 		return s.freezingCircleDamage(mapID, instanceID)
 	case 23881:
 		return s.bloodthirstDamage(victimGUID, mapID, instanceID, baseDamage, casterAttackPower)
+	case 12809:
+		// spell_warr_concussion_blow::HandleDummy
+		// (spell_warrior.cpp:211-214): the OnEffectLaunchTarget arm
+		// REPLACES the EFFECT_1 school-damage value with
+		// CalculatePct(AP, EFFECT_2 CalcValue) — the caster's
+		// GetTotalAttackPowerValue(BASE_ATTACK) times the DBC
+		// effect-2 value over 100 (no victim aura leg, unlike
+		// bloodthirst above). C++ calls CalcValue() with no
+		// caster, so there is no per-level scaling — the plain
+		// CalcValue(), not CalcValueForLevel. Same hook position
+		// as the 23881 arm
+		// (HandleEffects runs it before EffectSchoolDMG), so the
+		// dispatch returns the computed value outright, not
+		// base+value. The caster leg rides the dispatch's
+		// casterAttackPower (threaded for 12809 at the
+		// finishSpellCast, triggered, and creature-caster call
+		// sites). DORMANT until Spell.dbc ships the 12809 record.
+		pct := spell.Effects[2].CalcValue()
+		if pct <= 0 {
+			return baseDamage, false
+		}
+		return uint32(int32(casterAttackPower)) * uint32(pct) / 100, true
 	case 47480:
 		return s.ghoulThrashDamage(spell, casterGUID, mapID, instanceID, baseDamage, casterAttackPower)
 	case 47496:

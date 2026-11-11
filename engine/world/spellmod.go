@@ -270,6 +270,29 @@ func (s *session) addSpellMods(aura *activeAura) {
 				usesCharges: sp.ProcCharges > 0,
 				owner:       aura,
 			}
+		} else if aura.SpellID == 58387 && index == 0 && effect.Aura == spellAuraDummy {
+			// spell_warr_glyph_of_sunder_armor::HandleEffectCalcSpellMod
+			// (spell_warrior.cpp:531-544): the EFFECT_0 DUMMY aura carries no
+			// 107/108 effect, so the generic arm below never registers it —
+			// the script hook builds the modifier itself: op from the
+			// effect's MiscValue, SPELLMOD_FLAT, spellId 58387, mask the
+			// effect's SpellClassMask, value the effect amount. The
+			// drop/refresh arms key on owner/effectIndex, so they pick
+			// this mod up unchanged. DORMANT until Spell.dbc ships the
+			// 58387 record.
+			if effect.MiscValue < 0 || effect.MiscValue >= spellModOpCount {
+				continue
+			}
+			mod = &spellModifier{
+				op:          uint8(effect.MiscValue),
+				modType:     uint8(spellAuraAddFlatModifier),
+				effectIndex: 0,
+				spellID:     58387,
+				value:       spellModEffectValue(aura, 0, effect),
+				mask:        effect.SpellClassMask,
+				usesCharges: sp.ProcCharges > 0,
+				owner:       aura,
+			}
 		} else {
 			if effect.Aura != spellAuraAddFlatModifier && effect.Aura != spellAuraAddPctModifier {
 				continue

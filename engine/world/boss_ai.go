@@ -9628,10 +9628,11 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 	}
 	var leechTotal uint32
 	// casterAP threads the caster's total attack power into the
-	// OnHit dispatch for ghoul thrash (47480) and bloodthirst
-	// (23881) only; other spells pay no DB lookup for it.
+	// OnHit dispatch for ghoul thrash (47480), bloodthirst
+	// (23881), and concussion blow (12809) only; other spells
+	// pay no DB lookup for it.
 	var casterAP float64
-	if spell.ID == 47480 || spell.ID == 23881 {
+	if spell.ID == 47480 || spell.ID == 23881 || spell.ID == 12809 {
 		casterAP = s.creatureBaseAttackPower(ctx, m)
 	}
 	// perTarget is the spellHitDamageState record: the final
@@ -9892,10 +9893,11 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 	casterKey := creatureAuraKeyForMotion(m)
 	var leechTotal uint32
 	// casterAP threads the caster's total attack power into the
-	// OnHit dispatch for ghoul thrash (47480) and bloodthirst
-	// (23881) only; other spells pay no DB lookup for it.
+	// OnHit dispatch for ghoul thrash (47480), bloodthirst
+	// (23881), and concussion blow (12809) only; other spells
+	// pay no DB lookup for it.
 	var casterAP float64
-	if spell.ID == 47480 || spell.ID == 23881 {
+	if spell.ID == 47480 || spell.ID == 23881 || spell.ID == 12809 {
 		casterAP = s.creatureBaseAttackPower(ctx, m)
 	}
 	// perTarget is the spellHitDamageState record: the final

@@ -15151,11 +15151,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						// The base is the chain-scaled target damage — the
 						// table holds no chain spell, so it equals the rolled
 						// DBC base for every entry. casterAP threads only for
-						// bloodthirst (23881), like the triggered leg.
+						// bloodthirst (23881) and concussion blow (12809),
+						// like the triggered leg.
 						if s.server != nil && s.player != nil {
 							if tgt, ok := s.getCombatTarget(effCtx, effectTarget); ok {
 								casterAP := float64(0)
-								if spellID == 23881 {
+								if spellID == 23881 || spellID == 12809 {
 									casterAP = float64(s.totalAttackPowerValue(false))
 								}
 								if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, targetDamage, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost, casterAP); hit {
@@ -28768,12 +28769,13 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 				if s.server != nil && s.player != nil {
 					if tgt, ok := s.getCombatTarget(ctx, effectTarget); ok {
 						// casterAP threads the caster's total attack power
-						// into the OnHit dispatch for bloodthirst (23881)
+						// into the OnHit dispatch for bloodthirst (23881) /
+						// concussion blow (12809)
 						// only — the creature-caster twin gates the same
 						// way (boss_ai.go), and other spells pay no
 						// lookup for it.
 						casterAP := float64(0)
-						if spellID == 23881 {
+						if spellID == 23881 || spellID == 12809 {
 							casterAP = float64(s.totalAttackPowerValue(false))
 						}
 						if rewritten, hit := s.server.spellScriptOnHitDamage(spell, uint32(maxUint32(casterLevel, 1)), s.player.X, s.player.Y, tgt.X, tgt.Y, tgt.Health, tgt.MaxHealth, s.player.MaxHealth, baseDmg, s.playerGUID, effectTarget, s.player.Map, s.player.InstanceID, lavaLashBoost, casterAP); hit {
