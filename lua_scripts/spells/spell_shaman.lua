@@ -64,6 +64,14 @@
 --   AfterHit arm — each hit target gains Sated 57724, triggered. The
 --   RemoveInvalidTargets arm has no Go hook.
 --
+-- PORTED (census rows 261-265, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_sha_mana_tide_totem_SpellScript::HandleDummy
+--   (spell_shaman.cpp:1675-1695): EFFECT_0 DUMMY. Each mana-using hit
+--   unit is energized by Mana Tide Totem (39609) with BP0 = the effect
+--   value (6) percent of its max mana, plus the Glyph of Mana Tide
+--   (55441) amount from the totem owner's aura. Non-triggered cast;
+--   the original-caster leg has no Go model.
+--
 -- CLOSED (tick 295 census, all 50 loader classes): the other 46 are
 --   stay-outs — proc arms (ancestral awakening, earth shield,
 --   earthliving, flametongue, frozen power, glyphs, imp water shield,
@@ -71,7 +79,7 @@
 --   spirit hunt, static shock, tidal force, t3 6p, t8/t9/t10 bonuses,
 --   windfury), absorb/calc arms (shadow ward twin,
 --   rend twin), SpellScript-only (chain heal, cleansing
---   pulse, earthen power, fire nova, healing/mana spring/tide totem,
+--   pulse, earthen power, fire nova, healing/mana spring totem,
 --   heroism, lava lash, stoneclaw, thunderstorm), AfterDispel (flame
 --   shock), summon-slot arms (sentry totem, totemic mastery — no
 --   totem-slot bridge; only the PET slot is modeled), and the t3 8p
@@ -86,6 +94,10 @@ local SPELL_SHAMAN_TOTEM_EARTHEN_POWER = 59566 -- spell_shaman.cpp:65
 local SPELL_SHAMAN_MAELSTROM_WEAPON = 53817 -- spell_shaman.cpp:1550 (class spell_sha_maelstrom_weapon)
 local SPELL_SHAMAN_MAELSTROM_POWER = 70831 -- spell_shaman.cpp:92
 local SPELL_SHAMAN_T10_ENHANCEMENT_4P_BONUS = 70832 -- spell_shaman.cpp:93
+local SPELL_SHAMAN_MANA_TIDE_TOTEM_SPELL = 39610 -- spell_shaman.cpp:1660 (class spell_sha_mana_tide_totem)
+local SPELL_SHAMAN_MANA_TIDE_TOTEM = 39609 -- spell_shaman.cpp:58
+local SPELL_SHAMAN_GLYPH_OF_MANA_TIDE = 55441 -- spell_shaman.cpp:49
+local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 local MAELSTROM_WEAPON_MAX_STACKS = 5 -- spell_shaman.cpp:1572 (GetSpellInfo()->StackAmount)
 local SPELLFAMILY_SHAMAN = 11 -- spells.go:36322
 local SHAMAN_ICON_ID_STORM_EARTH_AND_FIRE = 2289 -- spell_shaman.cpp:484 (dummy icon)
@@ -187,3 +199,40 @@ local function manaTideTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_MANA_TIDE, 1, manaTideTick)
+
+-- C++ spell_sha_mana_tide_totem_SpellScript::HandleDummy
+-- (spell_shaman.cpp:1675-1695): EFFECT_0 OnEffectHitTarget — each
+-- mana-using hit unit is energized by Mana Tide Totem (39609) with
+-- BP0 = the effect value (6) percent of its max mana, plus the
+-- Glyph of Mana Tide (55441) dummy amount from the totem owner's
+-- aura. The C++ cast is non-triggered (plain CastSpellExtraArgs
+-- carrying only the original-caster GUID and BP0); the
+-- original-caster leg has no Go model. DORMANT until Spell.dbc
+-- ships the 39610 and 39609 rows.
+local function manaTideTotemHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetPowerType() ~= POWER_MANA then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local effValue = spell:GetEffectValue(0)
+    if effValue <= 0 then
+        return
+    end
+    local owner = caster:GetOwner()
+    if owner ~= nil then
+        local glyph = owner:GetAuraEffect(SPELL_SHAMAN_GLYPH_OF_MANA_TIDE, 0)
+        if glyph ~= nil then
+            effValue = effValue + glyph
+        end
+    end
+    local bp0 = math.floor(hitTarget:GetMaxPower(POWER_MANA) * effValue / 100)
+    caster:CastCustomSpell(hitTarget, SPELL_SHAMAN_MANA_TIDE_TOTEM, false, bp0)
+end
+
+RegisterSpellEvent(SPELL_SHAMAN_MANA_TIDE_TOTEM_SPELL, 5, manaTideTotemHit)

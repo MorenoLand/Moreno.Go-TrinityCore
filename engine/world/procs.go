@@ -1438,6 +1438,31 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: spellID, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
+	case 40463: // Shaman Tier 6 Trinket, EFFECT_0: Lesser Healing Wave (family flags[0] & 0x80) rolls 10% for Energy Surge (40465); Lightning Bolt (flags[0] & 0x01) rolls 15% for Energy Surge; Stormstrike (flags[1] & 0x10) rolls 50% for Power Surge (40466); anything else returns. The proc actor casts the winner on itself with the aura effect (roll_chance_i, spell_shaman.cpp:1380-1414). DORMANT until Spell.dbc ships the 40463 proc entry.
+		if effIndex != 0 || triggerSpell == nil || actorGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		if len(triggerSpell.SpellFamilyFlags) < 1 {
+			return scriptProcCast{}, false
+		}
+		var spellID uint32
+		chance := 0
+		if triggerSpell.SpellFamilyFlags[0]&0x00000080 != 0 {
+			spellID = 40465
+			chance = 10
+		} else if triggerSpell.SpellFamilyFlags[0]&0x00000001 != 0 {
+			spellID = 40465
+			chance = 15
+		} else if len(triggerSpell.SpellFamilyFlags) >= 2 && triggerSpell.SpellFamilyFlags[1]&0x00000010 != 0 {
+			spellID = 40466
+			chance = 50
+		} else {
+			return scriptProcCast{}, false
+		}
+		if rand.Intn(100) >= chance {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: spellID, casterGUID: actorGUID, targetGUID: actorGUID}, true
 	}
 	return scriptProcCast{}, false
 }
@@ -3744,6 +3769,17 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.resetPlayerCooldown(49576, true)
 				continue
 			}
+			if auraSpell.ID == 70811 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_item_t10_elemental_2p_bonus::HandleEffectProc
+				// (spell_shaman.cpp:1443-1448): PreventDefaultAction; the
+				// holder reduces the Elemental Mastery (16166) cooldown
+				// by the aura effect amount. No Lua ev6 twin:
+				// spell_shaman.lua holds no 70811 handler, and the Lua
+				// ev6 veto above would fire first if one ever registers.
+				// DORMANT until Spell.dbc ships the 70811 proc entry.
+				s.modifyPlayerSpellCooldown(16166, -int32(scriptProcEffAmount(aura, i)))
+				continue
+			}
 			if auraSpell.ID == 63611 && i == 1 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_dk_improved_blood_presence_triggered::HandleProc
 				// (spell_dk.cpp:1519-1529): PreventDefaultAction; the
@@ -4583,6 +4619,19 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 55533, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID, bp0: uint32(uint64(ev.heal) * uint64(scriptProcEffAmount(aura, i)) / 100), bp0Set: true})
 				s.triggeredByAuraCast = false
 				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 70811 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_item_t10_elemental_2p_bonus::HandleEffectProc
+				// (spell_shaman.cpp:1446-1452): PreventDefaultAction; the
+				// target player (the aura holder in this loop) has
+				// Elemental Mastery (16166) shifted by -EFFECT_0 amount.
+				// The C++ ToPlayer gate makes this a player-only leg:
+				// no creature twin (creatures carry no spell history).
+				// No Lua ev6 twin: spell_shaman.lua holds no 70811
+				// handler. DORMANT until Spell.dbc ships the 70811 proc
+				// entry.
+				s.modifyPlayerSpellCooldown(16166, -int32(scriptProcEffAmount(aura, i)))
 				continue
 			}
 			if auraSpell.ID == 55677 && i == 0 && eff.Aura == spellAuraDummy {
