@@ -244,6 +244,20 @@
 -- Census hooks wrong on 473/474/475/476 (473 OnEffectHitTarget,
 -- 474 AfterEffectApply, 475 both, 476 OnEffectHitTarget +
 -- OnObjectAreaTargetSelect phantoms); 472 exact.
+-- Census rows 477-481 PORTED/STAYED-OUT 2026-11-11 below:
+-- insane_periodic (64555, ev5 triggered effect-value cast),
+-- lunatic_gaze (64164/64168, ev7 front-arc filter + ev5 sanity -4/-2
+-- via yoggSanityReduction), hate_to_zero (63984, ev5 creature-gated
+-- ModifyThreatByPercent -100; bound by the ToC worm Emerge DoCastAOE).
+-- keeper_aura (62650/62670/62671/62702) STAYS OUT — no DoCheckAreaTarget
+-- aura event (aura events 1-7, runtime.go); in_the_maws_of_the_old_god
+-- (64184) STAYS OUT — no OnCheckCast spell event (spell events 1-7);
+-- its loot-mode leg is already ported via the Yogg SpellHit handler
+-- above. Census go_hit=true is a FALSE POSITIVE on all five (zero Go
+-- hits); lua_hit true only via consts/comments.
+-- Census hooks wrong on 477/479/480 (OnCheckCast phantoms; 477 also
+-- lists OnObjectAreaTargetSelect); 478's OnObjectAreaTargetSelect is
+-- real; 481's OnCheckCast is real but unbridged.
 
 local ENTRY_SARA = 33134
 local ENTRY_YOGG_SARON = 33288
@@ -329,6 +343,10 @@ local PHASE3 = {
     SPELL_INSANE_VISUAL = 64464, -- :273
     WHISPER_VOICE_INSANE = 1, -- :65
     NPC_INFLUENCE_TENTACLE = 33943, -- ulduar.h:219
+    INSANE_PERIODIC = 64555, -- loader comment :2940 (64554 SPELL_INSANE_PERIODIC is the Yogg-cast aura, a different spell)
+    LUNATIC_GAZE_DAMAGE = 64164, -- :160
+    LUNATIC_GAZE_DAMAGE_2 = 64168, -- loader comment :2981 (no in-tree enum name; Load :2992 stacks 2)
+    HATE_TO_ZERO = 63984, -- :271
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -1839,8 +1857,9 @@ RegisterAuraEvent(SPELL_NONDESCRIPT_2, 3, PHASE3.yoggNondescriptRemoved)
 -- GetCreatureData()) — the bridged seatCreatureEntry twin
 -- (lua_creature_events.go:4824; the data/updateLevel args ride
 -- their C++ defaults per the bridge comment). The ToCreature gate
--- is subsumed by the ev5 fire path (creature path only,
--- boss_ai.go:3435). No PreventHitDefaultEffect: DUMMY has no Go
+-- is explicit: ev5 also fires on the player triggered funnel
+-- (spells.go:28240), and player objects have no UpdateEntry, so a
+-- player-cast 64012 would nil-call after the casts. No PreventHitDefaultEffect: DUMMY has no Go
 -- default arm beyond the Eluna hook (the 453 precedent). Bound
 -- 64012 (loader comment :2706; no in-tree cast site or boss enum
 -- — the trigger lives in DBC, the 429 precedent). DORMANT until
@@ -1850,7 +1869,7 @@ PHASE3.yoggRevealedTentacleHit = function(event, spell, hitTarget, effectIndex)
         return
     end
     local caster = spell:GetCaster()
-    if caster == nil then
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
         return
     end
     caster:CastSpell(caster, SPELL_TENTACLE_VOID_ZONE, true)
