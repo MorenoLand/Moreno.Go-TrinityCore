@@ -278,7 +278,9 @@
 -- ice_tomb_target precedent) — NOT registered. EXCEPTION (tick 194):
 -- spell_halion_combustion_consumption's OnPeriodic leg (re-cast the
 -- mark on the target each tick) is PORTED below via RegisterAuraEvent;
--- its OnApply / OnRemove legs stay out (no apply/remove hooks).
+-- its OnApply / OnRemove legs are PORTED below too (ev2/ev3 — the
+-- old "no apply/remove hooks" claim was stale; see the
+-- combustion_consumption section).
 -- npc_living_inferno
 -- (40681) / npc_living_ember (40683): only their JustDied
 -- DespawnOrUnsummon(1ms) legs port (event 4, below — 1ms ≈ immediate
@@ -337,6 +339,10 @@ local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
 local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :109 ("Phase spell from phase 2 to phase 3")
 local SPELL_TWILIGHT_PRECISION = 78243 -- C++ enum :117 (AddAura self-cast, both engages)
 local SPELL_METEOR_STRIKE = 74637 -- C++ enum :64
+local SPELL_METEOR_STRIKE_COUNTDOWN = 74641 -- C++ enum :96
+local ACTION_METEOR_STRIKE_AOE = 2 -- boss_halion.cpp:154
+local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
+local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
 local SPELL_FIERY_COMBUSTION = 74562 -- C++ enum :67
 local GO_HALION_PORTAL_1 = 202794 -- ruby_sanctum.h:107
 local GO_HALION_PORTAL_2 = 202795 -- ruby_sanctum.h:108
@@ -498,6 +504,33 @@ local function meteorStrikeTick(creature, guid)
         meteorStrikeTick(creature, guid)
     end)
 end
+
+-- C++ spell_halion_meteor_strike_marker::OnRemove
+-- (boss_halion.cpp:1410-1422): AfterEffectRemove EFFECT_0
+-- SPELL_AURA_DUMMY on SPELL_METEOR_STRIKE_COUNTDOWN 74641. On
+-- expiry only, the aura's caster creature gets
+-- DoAction(ACTION_METEOR_STRIKE_AOE 2) — the npc_meteor_strike_initial
+-- leg (DoCastSelf 74648 + 74713, triggered, + BURN relay to its four
+-- meteors, :1005-1010). PORTED 2026-11-11 via RegisterAuraEvent ev3
+-- + creature:DoAction (lua_creature_events.go:827, event-38 dispatch).
+-- DORMANT twice over: the countdown aura is applied by the
+-- initial's unported IsSummonedBy (:1024), and the DoAction consumer
+-- stays out — the initial's entry is DB-bound (ScriptName
+-- npc_meteor_strike_initial; NPC_METEOR_STRIKE_MARK 40029 is defined
+-- in ruby_sanctum.h:91 but never referenced in the C++ file, so no
+-- entry is verifiable from C++ evidence) — until that entry lands,
+-- the dispatch fires into no registered ev38 handler.
+local function meteorStrikeMarkerOnRemove(event, aura, target)
+    if aura:GetRemoveMode() ~= AURA_REMOVE_BY_EXPIRE then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Creature" then
+        caster:DoAction(ACTION_METEOR_STRIKE_AOE)
+    end
+end
+
+RegisterAuraEvent(SPELL_METEOR_STRIKE_COUNTDOWN, 3, meteorStrikeMarkerOnRemove)
 
 -- C++ UpdateAI EVENT_FIERY_COMBUSTION (:363-368): random material-realm
 -- player (victim skipped, position 1) -> CastSpell(target,
@@ -1154,8 +1187,6 @@ RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 1, consumptionTick)
 -- death, the target's mark is stripped with AURA_REMOVE_BY_EXPIRE —
 -- which is what arms the mark's own expire-only OnRemove summon
 -- leg below. Same loader pairing as the periodic tick above.
-local AURA_REMOVE_BY_EXPIRE = 4 -- SpellAuraDefines.h:67
-local AURA_REMOVE_BY_DEATH = 5 -- SpellAuraDefines.h:68
 
 local function combustionDamageOnApply(event, aura, target)
     target:CastSpell(target, SPELL_MARK_OF_COMBUSTION, true)

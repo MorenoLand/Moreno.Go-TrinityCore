@@ -128,10 +128,11 @@
 -- bridge" verdict is retracted 2026-11-07; the stay-out stands on
 -- entry + summon-STRAND grounds alone).
 -- spell_gatewatcher_subboss_trigger (52343 watcher target selection)
--- / spell_anub_ar_skirmisher_fixate (52536 -> 52537) /
--- spell_gatewatcher_web_wrap (52086 expire -> 52087) — no
--- SpellScript/AuraScript binding bridge on the Lua surface (razelikh
--- precedent) — documented-only.
+-- / spell_anub_ar_skirmisher_fixate (52536 -> 52537) — PORTED
+-- 2026-11-11 via RegisterSpellEvent (ev7 / ev5; the old "no
+-- SpellScript binding bridge" claim was stale — the talon_king_ikiss
+-- blinkFilter / mimiron rocketStrikeDummy precedents). spell_gatewatcher_web_wrap (52086 expire -> 52087) — PORTED tick 198 via
+-- RegisterAuraEvent in boss_krikthir_the_gatewatcher.lua.
 -- achievement_watch_him_die — AchievementCriteriaScript (instance
 -- GetCreature per watcher DATA_ entry, all-dead check) — no
 -- achievement-criteria bridge (snakes precedent) + instance-script
@@ -151,6 +152,8 @@ local SPELL_FRENZY = 28747
 local SPELL_CURSE_OF_FATIGUE = 52592
 
 local SPELL_SUBBOSS_AGGRO_TRIGGER = 52343
+local SPELL_FIXATE_TRIGGER = 52536 -- boss_krikthir_the_gatewatcher.cpp:92
+local SPELL_FIXATE_TRIGGERED = 52537 -- boss_krikthir_the_gatewatcher.cpp:93
 local SPELL_ENRAGE = 52470
 local SPELL_BLINDING_WEBS = 52524
 local SPELL_POISON_SPRAY = 52493
@@ -198,6 +201,59 @@ local function schedule(guid, key, delay, fn)
     end
     per[key] = CreateLuaEvent(fn, delay)
 end
+
+-- C++ spell_gatewatcher_subboss_trigger::HandleTargets
+-- (boss_krikthir_the_gatewatcher.cpp:928-955): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ENTRY. Drop every list entry that is
+-- not an alive, out-of-combat creature; default to the caster when
+-- it is out of combat; when survivors remain pick one at random;
+-- clear the list and hit only that one. DORMANT until Spell.dbc
+-- ships the 52343 record (the ev7 fire site is gated on spellKnown,
+-- boss_ai.go:3151; the ikiss blinkFilter precedent).
+local function subbossTriggerTargets(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local kept = {}
+    for _, unit in ipairs(targets:GetTargets()) do
+        if unit:GetObjectType() == "Creature" and unit:IsAlive() and not unit:IsInCombat() then
+            kept[#kept + 1] = unit
+        end
+    end
+    local target = nil
+    local caster = spell:GetCaster()
+    if caster ~= nil and not caster:IsInCombat() then
+        target = caster
+    end
+    if #kept > 0 then
+        target = kept[math.random(#kept)]
+    end
+    targets:Clear()
+    if target ~= nil then
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_SUBBOSS_AGGRO_TRIGGER, 7, subbossTriggerTargets)
+
+-- C++ spell_anub_ar_skirmisher_fixate::HandleScript
+-- (boss_krikthir_the_gatewatcher.cpp:983-991): OnEffectHitTarget
+-- EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT. The hit unit casts
+-- SPELL_FIXATE_TRIGGERED 52537 on the caster, triggered. DORMANT:
+-- the 52536 cast itself rides the entry-blocked skirmisher AI
+-- (SpellHitTarget(CHARGE) leg above) and the ev5 fire site is gated
+-- on spellKnown — the mimiron rocketStrikeDummy precedent.
+local function skirmisherFixateHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if target ~= nil and caster ~= nil then
+        target:CastSpell(caster, SPELL_FIXATE_TRIGGERED, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_FIXATE_TRIGGER, 5, skirmisherFixateHit)
 
 -- C++ EVENT_MIND_FLAY: DoCastVictim; randtime(1s,3s) init, 9-11s repeat.
 local function mindFlayTick(creature, guid)
