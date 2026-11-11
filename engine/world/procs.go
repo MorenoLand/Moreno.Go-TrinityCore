@@ -1311,6 +1311,90 @@ func (s *Server) procTargetClass(mapID, instanceID uint32, guid uint64) (uint8, 
 	return 0, false
 }
 
+// extendTargetFlameShockDuration mirrors the duration leg of
+// spell_sha_t10_elemental_4p_bonus::HandleProc
+// (spell_shaman.cpp:2275-2295): the caster's Flame Shock periodic-damage
+// aura on the target (GetAuraEffect SPELL_AURA_PERIODIC_DAMAGE,
+// SPELLFAMILY_SHAMAN 0x10000000, caster GUID) gains extraMs on its
+// remaining duration, and its max duration grows past the old max, just
+// like Aura::SetDuration/SetMaxDuration. Player targets push the client
+// update (SpellAuras.cpp:902); creature targets ride the server-side
+// records. Reports whether a matching aura was found.
+func (s *Server) extendTargetFlameShockDuration(mapID, instanceID uint32, targetGUID, casterGUID uint64, extraMs uint32) bool {
+	if s == nil || s.Data == nil || targetGUID == 0 || casterGUID == 0 {
+		return false
+	}
+	remainingOf := func(remainingMs uint32, updatedAt time.Time) uint32 {
+		remaining := int64(remainingMs)
+		if !updatedAt.IsZero() {
+			if elapsed := time.Since(updatedAt).Milliseconds(); elapsed > 0 {
+				if uint64(elapsed) < uint64(remaining) {
+					remaining -= elapsed
+				} else {
+					remaining = 0
+				}
+			}
+		}
+		if remaining < 0 {
+			remaining = 0
+		}
+		return uint32(remaining)
+	}
+	extend := func(aura *activeAura) bool {
+		if aura == nil || aura.Stopped || aura.CasterGUID != casterGUID {
+			return false
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			return false
+		}
+		if auraSpell.SpellFamilyName != spellFamilyShaman || auraSpell.SpellFamilyFlags[0]&0x10000000 == 0 {
+			return false
+		}
+		matched := false
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicDamage {
+				continue
+			}
+			matched = true
+			break
+		}
+		if !matched {
+			return false
+		}
+		newRemaining := remainingOf(aura.RemainingMs, aura.DurationUpdatedAt) + extraMs
+		if newRemaining > aura.DurationMs {
+			aura.DurationMs = newRemaining
+		}
+		aura.RemainingMs = newRemaining
+		aura.DurationUpdatedAt = time.Now()
+		return true
+	}
+	if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		for _, aura := range ts.loadedAuras() {
+			if extend(aura) {
+				ts.sendAuraUpdate(aura.Slot, aura.SpellID, false, aura.Positive, aura.DurationMs, aura.RemainingMs)
+				return true
+			}
+		}
+		return false
+	}
+	if tm := s.findCreatureMotion(mapID, instanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.auraMu.Lock()
+		defer s.auraMu.Unlock()
+		for _, aura := range s.activeCreatureAuras[key] {
+			if extend(aura) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // procActionTargetGUID mirrors ProcEventInfo::GetActionTarget
 // (Unit.h:473): the actor-side event's action target is the other unit
 // (Unit.cpp:10388: actor=this, actionTarget=other, procTarget=other),
@@ -4660,6 +4744,175 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// handler. DORMANT until Spell.dbc ships the 70811 proc
 				// entry.
 				s.modifyPlayerSpellCooldown(16166, -int32(scriptProcEffAmount(aura, i)))
+				continue
+			}
+			if auraSpell.ID == 28823 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_t3_6p_bonus::HandleProc
+				// (spell_shaman.cpp:2100-2128): PreventDefaultAction;
+				// the actor casts the class-bonus spell on the proc
+				// target by its class: MP5 (28824) for paladin /
+				// priest / shaman / druid, spell power (28825) for
+				// mage / warlock, attack power (28826) for hunter /
+				// rogue, armor (28827) for warrior; any other class
+				// casts nothing. No Lua ev6 twin: ev6 carries no
+				// target class (the 28789 precedent). DORMANT until
+				// Spell.dbc ships the 28823 proc entry.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				classID, ok := s.server.procTargetClass(s.player.Map, s.player.InstanceID, triggerTargetGUID)
+				if !ok {
+					continue
+				}
+				var bonusSpellID uint32
+				switch classID {
+				case 2, 5, 7, 11: // CLASS_PALADIN, CLASS_PRIEST, CLASS_SHAMAN, CLASS_DRUID
+					bonusSpellID = 28824
+				case 8, 9: // CLASS_MAGE, CLASS_WARLOCK
+					bonusSpellID = 28825
+				case 3, 4: // CLASS_HUNTER, CLASS_ROGUE
+					bonusSpellID = 28826
+				case 1: // CLASS_WARRIOR
+					bonusSpellID = 28827
+				default:
+					continue
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: bonusSpellID, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 64928 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_t8_elemental_4p_bonus::HandleProc
+				// (spell_shaman.cpp:2177-2197): PreventDefaultAction;
+				// on a damaging proc the actor casts Electrified
+				// (64930) on the proc target with BP0 = pct of the
+				// damage by the effect amount, divided by the
+				// triggered spell's max ticks. The zero-damage gate
+				// is the C++ null/zero-damage early return. No Lua
+				// ev6 twin: ev6 carries the damage but no max-ticks
+				// bridge. DORMANT until Spell.dbc ships the 64928
+				// proc entry and the 64930 duration row; a missing
+				// 64930 row skips where C++ would assert (the 55680
+				// precedent).
+				if ev.damage == 0 || ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.server == nil || s.server.Data == nil {
+					continue
+				}
+				dotSpell, found, err := s.server.Data.Spell(64930)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.spellMaxTicks(dotSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.damage) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 64930, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 67228 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_t9_elemental_4p_bonus::HandleProc
+				// (spell_shaman.cpp:2226-2246): PreventDefaultAction;
+				// on a damaging proc the actor casts Lava Burst
+				// Bonus Damage (71824) on the proc target with BP0 =
+				// pct of the damage by the effect amount, divided by
+				// the triggered spell's max ticks. The zero-damage
+				// gate is the C++ null/zero-damage early return. No
+				// Lua ev6 twin: ev6 carries the damage but no
+				// max-ticks bridge. DORMANT until Spell.dbc ships
+				// the 67228 proc entry and the 71824 duration row; a
+				// missing 71824 row skips where C++ would assert
+				// (the 55680 precedent).
+				if ev.damage == 0 || ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.server == nil || s.server.Data == nil {
+					continue
+				}
+				dotSpell, found, err := s.server.Data.Spell(71824)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.spellMaxTicks(dotSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.damage) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 71824, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
+				continue
+			}
+			if auraSpell.ID == 70817 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_t10_elemental_4p_bonus::HandleProc
+				// (spell_shaman.cpp:2275-2295): PreventDefaultAction;
+				// the caster's Flame Shock on the proc target gains
+				// the effect amount in seconds on its remaining
+				// duration, and its max duration grows past the old
+				// max; without the caster's Flame Shock on the target
+				// nothing happens. No Lua ev6 twin: Lua GetAuraEffect
+				// returns an amount, not a mutable aura, and has no
+				// family-flag lookup. DORMANT until Spell.dbc ships
+				// the 70817 proc entry.
+				if ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				extraMs := uint32(scriptProcEffAmount(aura, i)) * 1000
+				s.server.extendTargetFlameShockDuration(s.player.Map, s.player.InstanceID, triggerTargetGUID, ev.actorGUID, extraMs)
+				continue
+			}
+			if auraSpell.ID == 70808 && i == 0 && eff.Aura == spellAuraDummy {
+				// spell_sha_t10_restoration_4p_bonus::HandleProc
+				// (spell_shaman.cpp:2320-2342): PreventDefaultAction;
+				// on a heal proc the actor casts Chained Heal (70809)
+				// on the proc target with BP0 = pct of the heal by
+				// the effect amount, divided by the triggered spell's
+				// max ticks. The zero-heal gate is the C++ null/zero-
+				// heal early return. No Lua ev6 twin: ev6 carries no
+				// heal amounts. DORMANT until Spell.dbc ships the
+				// 70808 proc entry and the 70809 duration row; a
+				// missing 70809 row skips where C++ would assert (the
+				// 55680 precedent).
+				if ev.heal == 0 || ev.actorGUID == 0 || triggerTargetGUID == 0 {
+					continue
+				}
+				if s.server == nil || s.server.Data == nil {
+					continue
+				}
+				dotSpell, found, err := s.server.Data.Spell(70809)
+				if err != nil || !found {
+					continue
+				}
+				ticks := s.spellMaxTicks(dotSpell)
+				if ticks == 0 {
+					continue
+				}
+				amount := int64(ev.heal) * int64(scriptProcEffAmount(aura, i)) / 100 / int64(ticks)
+				if amount < 0 {
+					amount = 0
+				}
+				s.triggeredByAuraCast = true
+				s.triggeredByAuraSpell = auraSpell.ID
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 70809, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID, bp0: uint32(amount), bp0Set: true})
+				s.triggeredByAuraCast = false
+				s.triggeredByAuraSpell = 0
 				continue
 			}
 			if auraSpell.ID == 55677 && i == 0 && eff.Aura == spellAuraDummy {

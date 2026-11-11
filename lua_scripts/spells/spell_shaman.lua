@@ -103,11 +103,34 @@
 --   of 55166) — no Lua ev6 twin: ev6 carries no attack-power or
 --   RemoveAuraFromStack bridge.
 --
--- CLOSED (tick 295 census, all 50 loader classes, minus rows 266-270
+-- PORTED (Go, census rows 271-275):
+--   spell_sha_t3_6p_bonus (28823, spell_shaman.cpp:2100-2128): EFFECT_0
+--   DUMMY. On proc the actor casts the class-bonus spell on the proc
+--   target by its class (28824 MP5 / 28825 spell power / 28826 attack
+--   power / 28827 armor) — no Lua ev6 twin: ev6 carries no target class.
+--   spell_sha_t8_elemental_4p_bonus (64928, spell_shaman.cpp:2177-2197)
+--   and spell_sha_t9_elemental_4p_bonus (67228, spell_shaman.cpp:2226-2246):
+--   EFFECT_0 DUMMY. On a damaging proc the actor casts Electrified
+--   (64930) / Lava Burst Bonus Damage (71824) on the proc target with
+--   BP0 = pct of the damage by the effect amount, divided by the
+--   triggered spell's max ticks — no Lua ev6 twin: ev6 carries the
+--   damage but no max-ticks bridge.
+--   spell_sha_t10_elemental_4p_bonus (70817, spell_shaman.cpp:2275-2295):
+--   EFFECT_0 DUMMY. The caster's Flame Shock on the proc target gains
+--   the effect amount in seconds on its remaining duration, max duration
+--   growing past the old max — no Lua ev6 twin: Lua GetAuraEffect
+--   returns an amount, not a mutable aura, and has no family-flag lookup.
+--   spell_sha_t10_restoration_4p_bonus (70808, spell_shaman.cpp:2320-2342):
+--   EFFECT_0 DUMMY. On a heal proc the actor casts Chained Heal (70809)
+--   on the proc target with BP0 = pct of the heal by the effect amount,
+--   divided by the triggered spell's max ticks — no Lua ev6 twin: ev6
+--   carries no heal amounts.
+--
+-- CLOSED (tick 295 census, all 50 loader classes, minus rows 266-275
 --   ported above): the remaining stay-outs — proc arms (ancestral
 --   awakening, earth shield, earthliving, flametongue, frozen power,
 --   glyphs, imp water shield, lightning overload/shield, nature
---   guardian, static shock, t3 6p, t8/t9/t10 bonuses, windfury),
+--   guardian, static shock, windfury),
 --   absorb/calc arms (shadow ward twin, rend twin), SpellScript-only
 --   (chain heal, cleansing pulse, earthen power, fire nova,
 --   healing/mana spring totem, heroism, lava lash, stoneclaw,
