@@ -216,6 +216,18 @@ end
 
 RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
 
+local SPELL_MAGE_MANA_SHIELD_AURA = 1463 -- spell_mage.cpp:1174 (class spell_mage_mana_shield)
+local SPELL_MAGE_ARCANE_SURGE = 37436 -- spell_mage.cpp:62
+
+local function manaShieldProc(event, aura, target, actor, procTarget, damage)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_MAGE_ARCANE_SURGE, true)
+end
+
+RegisterAuraEvent(SPELL_MAGE_MANA_SHIELD_AURA, 6, manaShieldProc)
+
 -- NOT IN LUA: spell_mage_arcane_potency (31571, spell_mage.cpp:143-193)
 -- — CheckProc filters the proc spell by SpellIconID (Clearcasting /
 -- Presence of Mind) and HandleProc casts the rank-indexed trigger
@@ -251,7 +263,43 @@ RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
 --   OnEffectProc EFFECT_0 DUMMY. PreventDefaultAction (return true);
 --   the holder (C++ GetActionTarget on the resist event) casts
 --   29442 on itself with BP0 = pct(max mana, aurEff amount), via
---   GetMaxPower(0). DORMANT until Spell.dbc ships the 29441 proc entry.
+--   GetMaxPower(0). KNOWN DEVIATION: C++ casts non-triggered; Lua
+--   CastCustomSpell rides the triggered-only funnel (standing gap,
+--   same as ignite). DORMANT until Spell.dbc ships the 29441 proc entry.
+--   spell_mage_mana_shield (1463, spell_mage.cpp:1174-1226): OnEffectProc
+--   EFFECT_0 MANA_SHIELD. NO PreventDefaultAction — the handler
+--   returns nothing, so the Go default leg still runs, exactly as
+--   C++ leaves the default action in place. The holder (C++
+--   GetActionTarget on the taken event, ev6 target per procs.go
+--   procActionTargetGUID — the shield procs only when hit) casts
+--   Arcane Surge 37436 on itself, triggered. KNOWN DEVIATION: C++
+--   casts non-triggered; Lua rides the triggered-only funnel
+--   (standing gap, same as ignite). The CalculateAmount spellpower
+--   leg and the incanter's-absorption Trigger leg STAY OUT
+--   (SpellBaseHealingBonusDone / GetAuraEffectOfRankedSpell
+--   unbridged). DORMANT until Spell.dbc ships the 1463 proc entry.
+-- CENSUS TRIAGE (this tick, rows 613-616 + 621-622, verified in-house):
+--   613 empowered_fire STAYS OUT — CheckProc needs the proc spell
+--   to be Ignite 12654 (ev6 carries no event spell); HandleProc
+--   needs GetCreateMana + CalcValue of 67545. Recipe: ev6
+--   event-spell forwarding.
+--   614 fire_frost_ward STAYS OUT — CalculateAmount needs
+--   SpellBaseHealingBonusDone + level penalty; Absorb needs
+--   OnEffectAbsorb + GetAuraEffectOfRankedSpell. Both unbridged.
+--   615 hot_streak STAYS OUT — HandleProc reads PROC_HIT_CRITICAL
+--   from the hit mask; ev6 passes damage only. Recipe: forward the
+--   hit mask to ev6 (GetAmount(1)/SetAmount counter bridges live).
+--   616 ice_barrier STAYS OUT — CalculateAmount needs
+--   SpellBaseHealingBonusDone + ApplyEffectModifiers + level
+--   penalty; AfterRemove needs GetDummyAuraEffect + ProcChance.
+--   621 master_of_elements STAYS OUT — CheckProc needs the
+--   damage event's spell (ev6 has no event spell); HandleProc needs
+--   CalcPowerCost. Recipe: ev6 event-spell forwarding + a
+--   CalcPowerCost bridge.
+--   622 missile_barrage STAYS OUT — CheckProc needs the proc
+--   spell's family flags (Arcane Blast [0] 0x20000000 full chance,
+--   else 50% roll); ev6 has no event spell. Recipe: ev6
+--   event-spell forwarding.
 -- CENSUS CORRECTION: row 610 hooks are HandleDummy only; real is
 -- OnEffectProc EFFECT_0 PROC_TRIGGER_SPELL. Rows 608/611/612 hooks
 -- are likewise wrong (608: DoCheckProc + OnEffectProc; 611: DoCheckProc
