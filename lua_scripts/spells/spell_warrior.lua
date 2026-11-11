@@ -72,17 +72,18 @@ end
 RegisterAuraEvent(SPELL_WARRIOR_VIGILANCE, 6, vigilanceProc)
 
 -- C++ spell_warr_vigilance_trigger_SpellScript::HandleScript
--- (spell_warrior.cpp:1200-1206): PreventHitDefaultEffect (Go's
--- script-effect default has no 50725 leg); the hit player resets
--- Taunt (355) cooldown, update=true. The GetObjectType() gate is
--- the GetHitPlayer() twin.
+-- (spell_warrior.cpp:1200-1206): OnEffectHitTarget (RegisterSpellEvent
+-- OnEffectHitTarget = 5, the muru/kaelthas precedent — not OnHit = 2).
+-- PreventHitDefaultEffect (Go's script-effect default has no 50725
+-- leg); the hit player resets Taunt (355) cooldown, update=true. The
+-- GetObjectType() gate is the GetHitPlayer() twin.
 local function vigilanceTrigger(event, spell, hitTarget)
     if hitTarget ~= nil and hitTarget:GetObjectType() == "Player" then
         hitTarget:ResetSpellCooldown(SPELL_WARRIOR_TAUNT, true)
     end
 end
 
-RegisterSpellEvent(SPELL_WARRIOR_VIGILANCE_PROC, 2, vigilanceTrigger)
+RegisterSpellEvent(SPELL_WARRIOR_VIGILANCE_PROC, 5, vigilanceTrigger)
 
 -- PORTED (this tick, RegisterSpellEvent OnObjectAreaTargetSelect = 7):
 --   spell_warr_intimidating_shout::FilterTargets
