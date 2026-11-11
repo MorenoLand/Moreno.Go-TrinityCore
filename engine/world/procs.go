@@ -1523,6 +1523,21 @@ func scriptAuraProcCast(auraSpellID uint32, effIndex int, effAura uint32, damage
 			return scriptProcCast{}, false
 		}
 		return scriptProcCast{spellID: 63975, casterGUID: actorGUID, targetGUID: triggerTargetGUID}, true
+	case 56218: // Glyph of Corruption, EFFECT_0: the proc actor casts 17941 Shadow Trance on self; PreventDefaultAction (spell_warlock.cpp:670-692). DORMANT until Spell.dbc ships the 56218 proc entry.
+		if effIndex != 0 || actorGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 17941, casterGUID: actorGUID, targetGUID: actorGUID}, true
+	case 63320: // Glyph of Life Tap, EFFECT_0: the proc actor casts 63321 on self; PreventDefaultAction (spell_warlock.cpp:704-728). DORMANT until Spell.dbc ships the 63320 proc entry.
+		if effIndex != 0 || actorGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 63321, casterGUID: actorGUID, targetGUID: actorGUID}, true
+	case 63310: // Glyph of Shadowflame, EFFECT_0: the aura holder casts 63311 on the proc target; PreventDefaultAction (spell_warlock.cpp:738-760). DORMANT until Spell.dbc ships the 63310 proc entry.
+		if effIndex != 0 || holderGUID == 0 || triggerTargetGUID == 0 {
+			return scriptProcCast{}, false
+		}
+		return scriptProcCast{spellID: 63311, casterGUID: holderGUID, targetGUID: triggerTargetGUID}, true
 	case 61257: // Runic Power Back on Snare/Root (PvP 4P), EFFECT_0: the action target casts 61258 on itself when the triggering spell roots or snares.
 		if effIndex != 0 || triggerSpell == nil {
 			return scriptProcCast{}, false

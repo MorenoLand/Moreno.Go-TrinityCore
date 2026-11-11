@@ -16573,6 +16573,22 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 							}
 						}
 					}
+					// spell_warl_ritual_of_doom_effect::HandleDummy
+					// (spell_warlock.cpp:1096-1102): the EFFECT_0 DUMMY
+					// OnEffectHit arm casts the effect value (the
+					// SpellScript::GetEffectValue m_spell->damage fold,
+					// the 20425 precedent's CalcValueForLevel) on the
+					// caster, triggered — the client-path leg, gated on
+					// a hit like the judgement-of-command arm above;
+					// the triggered-cast twin sits in the dummy funnel.
+					// A zero value casts nothing. DORMANT until
+					// Spell.dbc ships the 18541 record.
+					if spellID == 18541 && effectIndex == 0 && len(hitTargets) > 0 {
+						value := eff.CalcValueForLevel(spell, casterLevel)
+						if value > 0 {
+							s.castSpellDirect(effCtx, uint32(value), s.playerGUID)
+						}
+					}
 					// spell_dk_scourge_strike (spell_dk.cpp:2255-2312): the
 					// EFFECT_2 DUMMY OnEffectHitTarget arm — the
 					// multiplier is the EFFECT_2 value times the
@@ -28267,6 +28283,23 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					// leg above.
 					if spellID == 48682 && effectIndex == 0 && len(effectGUIDs) > 0 {
 						s.castSpellDirect(ctx, 48681, s.playerGUID)
+					}
+					// spell_warl_ritual_of_doom_effect::HandleDummy
+					// (spell_warlock.cpp:1096-1102): the EFFECT_0 DUMMY
+					// OnEffectHit arm casts the effect value (the
+					// SpellScript::GetEffectValue m_spell->damage fold,
+					// the 20425 precedent's CalcValueForLevel) on the
+					// caster, triggered — the triggered-cast leg, gated
+					// on a miss-filtered hit like the silverbrook leg
+					// above; the client-path twin sits in
+					// finishSpellCast's dummy arm. A zero value casts
+					// nothing. DORMANT until Spell.dbc ships the 18541
+					// record.
+					if spellID == 18541 && effectIndex == 0 && len(effectGUIDs) > 0 {
+						value := eff.CalcValueForLevel(spell, casterLevel)
+						if value > 0 {
+							s.castSpellDirect(ctx, uint32(value), s.playerGUID)
+						}
 					}
 					// spell_q12641_death_comes_from_on_high::HandleDummy
 					// (spell_quest.cpp:2338-2362): the EFFECT_0 DUMMY
@@ -53633,6 +53666,16 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 			return
 		}
 		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, buffSpellID, targetGUID, true, overrides, nil, false, 0)
+	case 47422:
+		// spell_warl_everlasting_affliction::HandleScriptEffect
+		// (spell_warlock.cpp:590-603): the EFFECT_0 SCRIPT_EFFECT
+		// OnEffectHitTarget arm — refresh the caster's Corruption on
+		// the hit unit (warlock family, SpellFamilyFlags[0] & 0x2,
+		// live periodic-damage effect): recalculate its tick amount
+		// and period, refresh its duration. The census "OnProc" hook
+		// is wrong: the class registers no proc handler. DORMANT
+		// until Spell.dbc ships the 47422 record.
+		s.refreshEverlastingAfflictionCorruption(ctx, targetGUID)
 	}
 }
 
@@ -53738,6 +53781,151 @@ func (s *session) refreshShadowWordPainOnTarget(ctx context.Context, targetGUID 
 		}
 		aura.PeriodMs = newPeriod
 		aura.RemainingMs = aura.DurationMs
+		aura.DurationUpdatedAt = time.Now()
+		aura.TickCount = 0
+		if aura.Timer != nil {
+			aura.Timer.Stop()
+			aura.Timer = nil
+		}
+		if aura.DurationMs > 0 && aura.DurationMs < 18000000 {
+			slot := aura.Slot
+			aura.Timer = time.AfterFunc(time.Duration(aura.DurationMs)*time.Millisecond, func() {
+				s.expireCreatureAura(key, spellID, slot)
+			})
+		}
+	}
+}
+
+// refreshEverlastingAfflictionCorruption mirrors
+// spell_warl_everlasting_affliction::HandleScriptEffect
+// (spell_warlock.cpp:590-603): on the hit unit, the Corruption aura
+// effect — warlock family, SpellFamilyFlags[0] & 0x2, live
+// SPELL_AURA_PERIODIC_DAMAGE effect, applied by this caster (the C++
+// GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_WARLOCK, 0x2,
+// 0, 0, casterGUID) twin) — has its tick amount recalculated with the
+// caster's current bonuses (AuraEffect::CalculateAmount,
+// SpellAuraEffects.cpp:498-518), its period recomputed
+// (CalculatePeriodic with reset=false, so the periodic timer keeps
+// running), and its duration refreshed with the tick counter zeroed
+// (Aura::RefreshDuration(true), SpellAuras.cpp:905-927). Structure is
+// the refreshShadowWordPainOnTarget precedent above, with one DELTA:
+// RefreshDuration(true) recomputes the max duration from the DBC row
+// (SpellInfo::GetMaxDuration — no SPELLMOD_DURATION fold, unlike the
+// apply-time CalcMaxDuration) with the caster's current haste when the
+// aura is haste-affected, so the duration leg recomputes here and only
+// falls back to the stored DurationMs when the DBC duration row is
+// unavailable. Player targets push the client aura update, creature
+// targets mutate under auraMu. A missing Corruption aura refreshes
+// nothing.
+func (s *session) refreshEverlastingAfflictionCorruption(ctx context.Context, targetGUID uint64) {
+	if s == nil || s.server == nil || s.server.Data == nil || s.player == nil || targetGUID == 0 {
+		return
+	}
+	var corr *activeAura
+	var corrSpell wotlk.Spell
+	corrEff := -1
+	for _, aura := range s.victimAurasForLookup(ctx, targetGUID) {
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			continue
+		}
+		auraSpell, found, err := s.server.Data.Spell(aura.SpellID)
+		if err != nil || !found {
+			continue
+		}
+		if auraSpell.SpellFamilyName != spellFamilyWarlock || len(auraSpell.SpellFamilyFlags) == 0 || auraSpell.SpellFamilyFlags[0]&0x2 == 0 {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != spellAuraPeriodicDamage {
+				continue
+			}
+			corr, corrSpell, corrEff = aura, auraSpell, index
+			break
+		}
+		if corrEff >= 0 {
+			break
+		}
+	}
+	if corrEff < 0 || corr == nil || corrEff >= len(corrSpell.Effects) {
+		return
+	}
+	// AuraEffect::CalculateAmount (SpellAuraEffects.cpp:498-518): the
+	// recalculated tick amount is the same auraEffectParams fold the
+	// apply path runs (CalcValue + the periodic spellpower bonus).
+	_, _, newAmount := s.auraEffectParams(corrSpell, corrSpell.Effects[corrEff], corrEff)
+	newPeriod := s.foldPeriodicPeriod(corrSpell, corrSpell.Effects[corrEff])
+	// Aura::RefreshDuration(true) (SpellAuras.cpp:905-927): the max
+	// duration is the DBC row (SpellInfo::GetMaxDuration), folded by
+	// the caster's current UNIT_MOD_CAST_SPEED only when the aura is
+	// haste-affected (ATTR5_HASTE_AFFECT_DURATION or a
+	// SPELL_AURA_PERIODIC_HASTE aura on the caster).
+	newDurationMs := uint32(0)
+	if corrSpell.DurationIndex > 0 {
+		if val, ok, err := s.server.Data.SpellDuration(corrSpell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
+			newDurationMs = uint32(val)
+		}
+	}
+	if newDurationMs > 0 && (corrSpell.AttributesEx5&spellAttr5HasteAffectDuration != 0 || s.hasPeriodicHasteAura(corrSpell)) {
+		if f := s.unitModCastSpeedFactor(); f != 1.0 {
+			newDurationMs = uint32(float64(newDurationMs) * f)
+		}
+	}
+	spellID := corrSpell.ID
+	if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
+		ts.castMu.Lock()
+		aura := ts.activeAuras[spellID]
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			ts.castMu.Unlock()
+			return
+		}
+		aura.Amounts[corrEff] = int32(newAmount)
+		if corrEff == 0 {
+			aura.Amount = newAmount
+		}
+		aura.PeriodMs = newPeriod
+		if newDurationMs == 0 {
+			newDurationMs = aura.DurationMs
+		}
+		aura.DurationMs = newDurationMs
+		aura.RemainingMs = newDurationMs
+		aura.DurationUpdatedAt = time.Now()
+		aura.TickCount = 0
+		if aura.Timer != nil {
+			aura.Timer.Stop()
+			aura.Timer = nil
+		}
+		durationMs := aura.DurationMs
+		if durationMs > 0 && durationMs < 18000000 {
+			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+				ts.removeAuraWithMode(spellID, auraRemoveByExpire)
+			})
+		}
+		slot, positive := aura.Slot, aura.Positive
+		ts.castMu.Unlock()
+		ts.sendAuraUpdate(slot, spellID, false, positive, durationMs, durationMs)
+		return
+	}
+	if tm := s.server.findCreatureMotion(s.player.Map, s.player.InstanceID, targetGUID); tm != nil {
+		key := creatureAuraKeyForMotion(tm)
+		s.server.auraMu.Lock()
+		defer s.server.auraMu.Unlock()
+		aura := s.server.activeCreatureAuras[key][spellID]
+		if aura == nil || aura.Stopped || aura.CasterGUID != s.playerGUID {
+			return
+		}
+		aura.Amounts[corrEff] = int32(newAmount)
+		if corrEff == 0 {
+			aura.Amount = newAmount
+		}
+		aura.PeriodMs = newPeriod
+		if newDurationMs == 0 {
+			newDurationMs = aura.DurationMs
+		}
+		aura.DurationMs = newDurationMs
+		aura.RemainingMs = newDurationMs
 		aura.DurationUpdatedAt = time.Now()
 		aura.TickCount = 0
 		if aura.Timer != nil {
