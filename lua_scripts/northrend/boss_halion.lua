@@ -1136,6 +1136,7 @@ RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionReset)
 -- npc_living_emberAI::JustDied (:1329-1333): me->DespawnOrUnsummon(1ms)
 -- ports as immediate creature:Despawn() (1ms ≈ immediate, bridged).
 local function livingAddJustDied(event, creature, killer)
+    cancelTimers(creature:GetGUIDLow())
     creature:Despawn()
 end
 
@@ -1365,3 +1366,87 @@ RegisterAuraEvent(SPELL_LEAVE_TWILIGHT_REALM, 3, leaveTwilightRealmOnRemove)
 -- the only C++ casts are npc_halion_controllerAI::Reset/JustDied
 -- (:586-592/:599-605), entry 40146 unregistered — the cast never
 -- happens in Go, so the handler could never fire.
+
+-- C++ spell_halion_twilight_cutter (boss_halion.cpp:1739-1775) stays
+-- out: only OnObjectAreaTargetSelect is registered (:1766, EFFECT_0,
+-- TARGET_UNIT_SRC_AREA_ENEMY) — no OnEffectHitTarget / OnHit. The
+-- filter keeps only targets between the caster and its channel
+-- target (TwilightCutterSelector, IsInBetween 4.0f, :1748-1760) and
+-- clears the list when no channel target resolves. Two independent
+-- blockers: the sole cast is npc_orb_carrier::TriggerCutter (:978,
+-- entry 40081 unregistered, driven only by the unregistered
+-- controller 40146's DoAction chain), so the cast never happens in
+-- Go; and the filter needs GetChannelObjectGuid (setter only,
+-- lua_creature_events.go:1093, no getter) + IsInBetween (zero hits
+-- in engine/ and lua_scripts/).
+
+-- C++ npc_living_infernoAI::IsSummonedBy (boss_halion.cpp:1273-1290):
+-- DoZoneInCombat (no bridge, boss_ai.go:65) + self-cast Blazing
+-- Aura 75885 triggered; on 25-man heroic only, a 3s scheduler
+-- self-casts Spawn Living Embers 75880 triggered. The controller
+-- DoAction(ACTION_ACTIVATE_EMBERS) + JustSummoned legs stay out
+-- (cross-AI, controller 40146 unregistered). The summon fires ev22
+-- from summonTempCreature (lua_creature_events.go:196-201; the
+-- fireCreaturePetSummoned comment's pet-only wording is stale).
+-- The 3s leg rides the file's schedule() harness; the JustDied
+-- cancelTimers above kills it if the inferno dies first (C++
+-- scheduler dies with the AI).
+local SPELL_BLAZING_AURA = 75885 -- C++ enum :86
+local SPELL_SPAWN_LIVING_EMBERS = 75880 -- C++ enum :87
+local SPELL_SUMMON_LIVING_EMBER = 75881 -- C++ enum :88
+
+local function livingInfernoSummoned(event, creature, summoner)
+    local guid = creature:GetGUIDLow()
+    creature:CastSpell(creature, SPELL_BLAZING_AURA, true)
+    if creature:IsHeroic() and creature:Is25ManRaid() then
+        schedule(guid, "spawn_living_embers", 3000, function()
+            creature:CastSpell(creature, SPELL_SPAWN_LIVING_EMBERS, true)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_LIVING_INFERNO, 22, livingInfernoSummoned)
+
+-- C++ spell_halion_spawn_living_embers (boss_halion.cpp:1844-1875):
+-- OnObjectAreaTargetSelect EFFECT_0 TARGET_UNIT_SRC_AREA_ENTRY
+-- RandomResize(unitList, 10) (:1858-1861); OnEffectHitTarget
+-- EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT — each hit unit casts Summon
+-- Living Ember 75881 on itself, triggered (:1861). DORMANT until
+-- Spell.dbc ships the 75880 record (murmur ev7 precedent); the
+-- entry id behind TARGET_UNIT_SRC_AREA_ENTRY is DBC-side.
+local function spawnLivingEmbersFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local list = targets:GetTargets()
+    for i = #list, 2, -1 do
+        local j = math.random(i)
+        list[i], list[j] = list[j], list[i]
+    end
+    targets:Clear()
+    for i = 1, math.min(10, #list) do
+        targets:Add(list[i])
+    end
+end
+
+local function spawnLivingEmbersHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if target ~= nil then
+        target:CastSpell(target, SPELL_SUMMON_LIVING_EMBER, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_SPAWN_LIVING_EMBERS, 7, spawnLivingEmbersFilter)
+RegisterSpellEvent(SPELL_SPAWN_LIVING_EMBERS, 5, spawnLivingEmbersHit)
+
+-- C++ spell_halion_blazing_aura (boss_halion.cpp:1877-1902): the
+-- ev22 caster leg above is ported; the SpellScript itself stays out.
+-- OnEffectHitTarget EFFECT_1 SPELL_EFFECT_FORCE_CAST would
+-- PreventHitDefaultEffect + have the hit unit cast
+-- Effects[1].TriggerSpell on itself non-triggered (:1887-1890) —
+-- but the trigger id is DBC-side (no Spell.dbc in-tree), so the
+-- replacement cast cannot be named. Documented deviation: Go's
+-- default EffectForceCast casts the trigger triggered at the aura
+-- caster, while the script casts it non-triggered at the hit unit.

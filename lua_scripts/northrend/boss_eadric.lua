@@ -155,8 +155,11 @@
 -- stays out; only the JustDied arm is wired.
 -- spell_eadric_radiance — SpellScript (66935 Radiance:
 -- OnObjectAreaTargetSelect filter removes targets not in front
--- within 2.5f / beyond 40y) — no SpellScript binding bridge
--- (razelikh precedent) — documented-only.
+-- within 2.5f / beyond 40y) — PORTED below via RegisterSpellEvent
+-- ev7 (2026-11-11 census row 350; the old "no SpellScript binding
+-- bridge (razelikh precedent)" claim was stale — the ev7 bridge is
+-- live, skadi freezing-cloud precedent; DORMANT until Spell.dbc
+-- ships 66935).
 -- spell_paletress_summon_memory — SpellScript (66545 Summon
 -- Memory: random single-target filter + EFFECT_0
 -- SPELL_EFFECT_SCRIPT_EFFECT -> target CastSpell(memorySpellId[
@@ -220,14 +223,45 @@ end
 
 -- C++ uiRadianceTimer: DoCastAOE(Radiance), 16s init, 16s repeat;
 -- ungated (plain UpdateVictim). The spell_eadric_radiance target
--- filter (front 2.5f / 40y cone) has no Lua bridge — ported as the
--- plain self-cast AOE.
+-- filter (front 2.5f / 40y cone) is ported below as an ev7 handler.
 local function radianceTick(creature, guid)
     creature:CastSpell(creature, SPELL_RADIANCE)
     schedule(guid, "radiance", 16000, function()
         radianceTick(creature, guid)
     end)
 end
+
+-- C++ spell_eadric_radiance::FilterTargets
+-- (boss_argent_challenge.cpp:117-144): OnObjectAreaTargetSelect on
+-- EFFECT_0 and EFFECT_1, TARGET_UNIT_SRC_AREA_ENEMY — remove any
+-- unit where !object->isInFront(caster, 2.5f) ||
+-- !object->IsWithinDist(caster, 40.0f). isInFront(caster, 2.5) is
+-- HasInArc(2.5, caster) (Object.cpp:1412-1414), which is exactly
+-- !isInBack(caster, 2*pi - 2.5) (Object.cpp:1417-1420); the target
+-- objects resolve to player/creature surfaces, both of which carry
+-- IsInBack, and IsWithinDist is the generic object.go 3D check.
+-- One handler covers both effects (ev7 fires once per selecting
+-- effect). DORMANT until Spell.dbc ships the 66935 record (murmur
+-- ev7 precedent).
+local function radianceFilter(event, spell, effectIndex, targets)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if not target:IsInBack(caster, 2 * math.pi - 2.5)
+                and target:IsWithinDist(caster, 40.0) then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+RegisterSpellEvent(SPELL_RADIANCE, 7, radianceFilter)
 
 -- C++ SelectTarget(Random, 0, 250, true) — threat-list players alive
 -- within 250y (UnitAI.h: SelectTarget draws the threat list; the
