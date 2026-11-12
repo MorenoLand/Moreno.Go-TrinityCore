@@ -285,6 +285,26 @@ local function earthbindPeriodic(event, aura, target)
     end
 end
 
+-- C++ spell_sha_earthen_power::FilterTargets (spell_shaman.cpp:540-565):
+-- OnObjectAreaTargetSelect, EFFECT_0 TARGET_UNIT_SRC_AREA_ALLY — drop every
+-- area ally without a snare-mechanic aura (EarthenPowerTargetSelector:
+-- remove_if !ToUnit or !HasAuraWithMechanic(1 << MECHANIC_SNARE)).
+-- The totem's triggered cast rides the creature-cast path (boss_ai.go:3218),
+-- so ev7 fires; the filter only removes targets, so it cannot double-fire.
+-- DORMANT until Spell.dbc ships the 59566 record.
+local MECHANIC_SNARE_MASK = 2048 -- 1 << MECHANIC_SNARE (11), SharedDefines.h:1368
+local function earthenPowerFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, target in ipairs(targets:GetTargets()) do
+        if target == nil or not target:HasAuraWithMechanic(MECHANIC_SNARE_MASK) then
+            targets:Remove(target)
+        end
+    end
+end
+RegisterSpellEvent(SPELL_SHAMAN_TOTEM_EARTHEN_POWER, 7, earthenPowerFilter)
+
 local function maelstromWeaponChangeAmount(event, aura, target)
     local maxStacks = aura:GetSpellStackAmount(SPELL_SHAMAN_MAELSTROM_WEAPON)
     if maxStacks == 0 then

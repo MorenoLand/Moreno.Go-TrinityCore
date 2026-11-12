@@ -40265,31 +40265,6 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if spell.ID == 51690 && effIndex == 0 && eff.Aura == spellAuraPeriodicDummy {
 			targetSess.castSpellDirect(ctx, 61851, targetGUID)
 		}
-		// spell_sha_sentry_totem_AuraScript::AfterApply
-		// (spell_shaman.cpp:1781-1788): the EFFECT_1 DUMMY
-		// AfterEffectApply arm — the caster casts Bind Sight (6277)
-		// on its air-slot totem, triggered. The slot read is the
-		// C++ m_SummonSlot[SUMMON_SLOT_TOTEM_AIR] twin (the
-		// totemMu read mirrors the grounding-magnet arm); a
-		// stopped or non-totem slot is the C++ null/!IsTotem
-		// arm. castSpellDirect is already the triggered twin
-		// (TRIGGERED_FULL_MASK, castSpellDirectWithOverrides).
-		// DORMANT until Spell.dbc ships the 6495 record.
-		if spell.ID == 6495 && effIndex == 1 && eff.Aura == spellAuraDummy && s.server != nil {
-			var totemGUID uint64
-			s.server.totemMu.RLock()
-			if totem := s.server.activeTotems[casterGUID][TotemSlotAir]; totem != nil {
-				totem.mu.Lock()
-				if !totem.Stopped {
-					totemGUID = totem.TotemGUID
-				}
-				totem.mu.Unlock()
-			}
-			s.server.totemMu.RUnlock()
-			if totemGUID != 0 && s.server.isTotemGUID(totemGUID) {
-				targetSess.castSpellDirect(ctx, 6277, totemGUID)
-			}
-		}
 		if eff.Aura == 139 {
 			_ = targetSess.sendForcedReactions()
 			if eff.MiscValue >= 0 && amount >= 4 {

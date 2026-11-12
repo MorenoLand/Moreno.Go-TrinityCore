@@ -996,7 +996,9 @@ func (s *session) summonTotem(ctx context.Context, spellID uint32) {
 	// aura applies in the cast effect loop, before this post-loop summon
 	// fills the slot. The cast lands the bind-sight aura whose
 	// creature-branch apply leg moves the caster's viewpoint to the totem
-	// (spells.go). DORMANT until Spell.dbc ships the 6495 and 6277 rows.
+	// (spells.go). Sole 6277 apply leg: the spells.go AfterEffectApply twin
+	// was removed (it double-cast on recast, when the slot still held the
+	// old totem). DORMANT until Spell.dbc ships the 6495 and 6277 rows.
 	if spellID == 6495 {
 		s.castSpellDirect(ctx, 6277, totemGUID)
 	}
