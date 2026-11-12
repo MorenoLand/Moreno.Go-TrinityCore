@@ -464,6 +464,11 @@ RegisterSpellEvent(23075, 4, itemTriggerSpellHit)
 --   veto has no player-path model — a fail roll would resurrect AND
 --   cast the fail spell. GetCastItem is bridged now (row 604 this
 --   tick), so only the ev5 fire site + prevent model block 605.
+--   CORRECTION (tick 2026-11-12): the ev5 ground above is STALE —
+--   the runtime.go contract now fires OnEffectHitTarget on all three
+--   paths including the player path (spells.go:14735); only the
+--   PreventHitDefaultEffect veto (no player-path prevent record)
+--   still blocks 605.
 --   606 spell_item_sunwell_neck PORTED this tick (ev6, dormant) —
 --   CORRECTION to the old note below: the four aura binding IDs are
 --   the `// <id> - Sunwell Exalted ... Neck` comments
@@ -472,3 +477,35 @@ RegisterSpellEvent(23075, 4, itemTriggerSpellHit)
 --   dormant) — CORRECTION to the old note below: ev6 exists and the
 --   anger-capacitor port in this file already rides it. The OnRemove
 --   leg was already ported (tick 295, verified).
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_purify_helboar_meat::HandleDummy
+--   (spell_item.cpp:2662-2690): EFFECT_0 DUMMY. Load gate is caster
+--   TYPEID_PLAYER (checked in the handler since Lua has no Load
+--   hook); the caster self-casts 29277 (Purified) or 29278 (Toxic)
+--   on a 50/50 roll, triggered. Binding 29200 (AC
+--   'spell_item_purify_helboar_meat'; TDB 335.26091 renames it
+--   'spell_hellfire_peninsula_purify_helboar_meat'). The handler
+--   never reads the hit target, so the arm rides the caster leg of
+--   the ev5 partition.
+local SPELL_PURIFY_HELBOAR_MEAT = 29200 -- spell_item.cpp:2662
+local SPELL_SUMMON_PURIFIED_HELBOAR_MEAT = 29277 -- spell_item.cpp:2658
+local SPELL_SUMMON_TOXIC_HELBOAR_MEAT = 29278 -- spell_item.cpp:2659
+local TYPEID_PLAYER = 4
+
+local function purifyHelboarMeatHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if math.random(0, 99) < 50 then
+        caster:CastSpell(caster, SPELL_SUMMON_PURIFIED_HELBOAR_MEAT, true)
+    else
+        caster:CastSpell(caster, SPELL_SUMMON_TOXIC_HELBOAR_MEAT, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_PURIFY_HELBOAR_MEAT, 5, purifyHelboarMeatHit)

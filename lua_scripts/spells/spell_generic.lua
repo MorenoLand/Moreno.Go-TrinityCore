@@ -232,3 +232,43 @@ end
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_1, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_2, 5, despawnSelfHit)
 RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_3, 5, despawnSelfHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnCheckCast = 8 /
+-- RegisterSpellEvent AfterHit = 3):
+--   spell_gen_bandage::CheckCast + HandleScript
+--   (spell_generic.cpp:495-525): CheckCast fails
+--   SPELL_FAILED_TARGET_AURASTATE (111, SharedDefines.h:1093) when
+--   the explicit target already carries SPELL_RECENTLY_BANDAGED
+--   (11196); AfterHit the caster casts 11196 on the hit unit,
+--   triggered. Bindings 23567 / 23568 / 23569 / 23696 / 24412 /
+--   24413 / 24414 / 35207 share the class (AC
+--   'spell_gen_bandage'; no rows for these IDs in either TDB —
+--   AC-only bindings, from the divergence triage).
+local SPELL_GEN_BANDAGE = { 23567, 23568, 23569, 23696, 24412, 24413, 24414, 35207 } -- spell_generic.cpp:495
+local SPELL_RECENTLY_BANDAGED = 11196 -- spell_generic.cpp:492
+local SPELL_FAILED_TARGET_AURASTATE = 111 -- SharedDefines.h:1093
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171
+
+local function bandageCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target ~= nil and target:HasAura(SPELL_RECENTLY_BANDAGED) then
+        return SPELL_FAILED_TARGET_AURASTATE
+    end
+    return SPELL_CAST_OK
+end
+
+local function bandageAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_RECENTLY_BANDAGED, true)
+end
+
+for _, spellId in ipairs(SPELL_GEN_BANDAGE) do
+    RegisterSpellEvent(spellId, 8, bandageCheckCast)
+    RegisterSpellEvent(spellId, 3, bandageAfterHit)
+end

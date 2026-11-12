@@ -388,6 +388,15 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   secondary: ev5-only + GO targets never fire (spells.go), which
 --   also blocks the q9452 HandleActiveObject leg (:1157) and the
 --   q14076 GO leg.
+--   spell_q1846_bending_shinbone (spell_quest.cpp:96-120): binding
+--   8856 resolved (AC 'spell_q1846_bending_shinbone'; TDB 335.26091
+--   renames it 'spell_undercity_bending_shinbone') but the arm
+--   STAYS OUT — EFFECT_0 SCRIPT_EFFECT targets the item
+--   (GetHitItem, no Lua bridge anywhere in engine/; zero hits) and
+--   the ev5 loop fires per unit GUID only (spells.go:14735), so an
+--   item-only spell never reaches the hook; the 20% roll + triggered
+--   self-cast 8854/8855 legs are unreachable from Lua. Divergence
+--   triage, tick 2026-11-12.
 --   Census go_hit/lua_hit true on 691/693/694/695/696/697/698/699 are
 --   phantoms (zero class-name hits in engine/ + lua_scripts/).
 

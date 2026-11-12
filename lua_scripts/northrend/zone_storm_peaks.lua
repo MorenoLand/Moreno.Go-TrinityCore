@@ -405,3 +405,26 @@ local function mountWyrmRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PLAYER_MOUNT_WYRM, 3, mountWyrmRemove)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12823_remove_collapsing_cave_aura::HandleScriptEffect
+--   (zone_storm_peaks.cpp:1449-1468): EFFECT_0 SCRIPT_EFFECT. The
+--   hit unit loses the Collapsing Cave aura (55486; RemoveAura is
+--   the RemoveAurasDueToSpell twin, lua_player.go:4019 /
+--   lua_creature_events.go:1676). Binding 55693 (AC
+--   'spell_q12823_remove_collapsing_cave_aura'; TDB 335.26091
+--   renames it 'spell_gen_cancel_aura').
+local SPELL_REMOVE_COLLAPSING_CAVE_AURA = 55693 -- zone_storm_peaks.cpp:1449
+local SPELL_COLLAPSING_CAVE = 55486 -- zone_storm_peaks.cpp:1445
+
+local function removeCollapsingCaveAuraHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_COLLAPSING_CAVE)
+end
+
+RegisterSpellEvent(SPELL_REMOVE_COLLAPSING_CAVE_AURA, 5, removeCollapsingCaveAuraHit)
