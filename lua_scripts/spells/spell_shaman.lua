@@ -138,6 +138,86 @@
 --   self-remove (family-flag GetAuraEffect overload unbridged).
 --   Astral shift aura is proc, not the visual dummy above; the 51474
 --   absorb leg is Go-ported above.
+--
+-- PORTED (census rows 758-789, RegisterAuraEvent OnProc = 6,
+--   RegisterSpellEvent OnEffectHitTarget = 5): supersedes the tick-295
+--   closure for earth shield, lightning shield, healing stream totem,
+--   and mana spring totem (re-verified against the current runtime):
+--   spell_sha_earth_shield::HandleProc (spell_shaman.cpp:437-447):
+--   EFFECT_0 DUMMY, rank 1 (974) only. On proc the holder self-casts
+--   Earth Shield Heal (379), triggered, BP0 = the effect amount.
+--   EFFECT_1 (the +healing bonus, MOD_HEALING_PCT 118) is not a
+--   proc-trigger aura type, so the hook fires once per proc.
+--   spell_sha_lightning_shield::HandleProc (spell_shaman.cpp:1531-1537):
+--   EFFECT_0 PROC_TRIGGER_SPELL, rank 1 (324) only — 26364 is the
+--   damage chain's first rank, not the aura. On proc the attacker casts
+--   the rank-matched damage spell (aura:GetSpellWithRank(26364)) on the
+--   holder, triggered.
+--   spell_sha_healing_stream_totem::HandleDummy
+--   (spell_shaman.cpp:1056-1085): all 9 ranks, EFFECT_0 DUMMY. Each hit
+--   unit is healed by 52042 with BP0 = the effect value, raised by the
+--   owner's Restorative Totems dummy (icon 338, EFFECT_1) and Glyph of
+--   Healing Stream Totem (55456) amounts; the totem-owner leg rides
+--   caster:GetOwner(), the GetAffectingPlayer twin.
+--   spell_sha_mana_spring_totem::HandleDummy
+--   (spell_shaman.cpp:1610-1619): all 8 ranks, EFFECT_0 DUMMY. Each
+--   mana-using hit unit is energized by 52032 with BP0 = the effect
+--   value. Both totem ports follow the mana-tide-totem ev5 precedent
+--   (totem caster = creature path); the original-caster legs have no Go
+--   model. Rank 2+ of the shield auras need spell_script_names /
+--   spell_ranks data (not in-tree) to resolve.
+--
+-- STAY OUT (census rows 758-789, verified against the current runtime):
+--   758 ancestral_awakening aura arm — ev6 forwards damage only;
+--   procEventInfo.heal exists engine-side (procs.go:1919) but
+--   fireAuraProc never passes it (lua_aura.go:918). The 52759 proc arm
+--   is Go-ported (spells.go:28452, 53025); FilterTargets has no
+--   player-path hook (runtime.go, OnObjectAreaTargetSelect).
+--   759 astral_shift_aura — DoCheckProc only; ev6 carries no event
+--   spell info / mechanic mask, and Lua has no CheckProc hook.
+--   760 chain_heal — GetHitHeal/SetHitHeal have no Go model
+--   (runtime.go); the Riptide leg needs the family-flag GetAuraEffect
+--   overload (unbridged) and the player path fires no ev5.
+--   762 earthliving_weapon — CheckProc-only; GetCastItem and the proc
+--   attack-type mask are unbridged, so the roll-only twin would
+--   over-fire on off-hand / unenchanted attacks.
+--   763 fire_nova — OnCheckCast has no Lua mode; HandleDummy needs
+--   spell-side GetSpellWithRank (aura-side only) and
+--   GetSpellMaxRangeForTarget (unbridged); player-cast ev5 gap.
+--   764 flame_shock — AfterDispel (mode 5) and GetDummyAuraEffect are
+--   bridged, but the rank-matched Lava Flows triggered cast is not:
+--   aura:GetSpellWithRank keys off the dispelled aura's rank, and the
+--   64694-chain rank ids are not named in-tree.
+--   765 flametongue_weapon — CheckProc needs GetCastItem + proc type
+--   mask; HandleProc needs attack time / spellpower / aura-modifier
+--   math and SetCastItem, all unbridged.
+--   766 frozen_power — the min-distance gate reads SPELL_SHAMAN_FREEZE
+--   (63685) EFFECT_0 CalcValue; no bridge reads another spell's effect
+--   value (GetDistance itself is bridged).
+--   776 imp_water_shield — CheckProc needs family flags; HandleProc
+--   needs the family-flag GetAuraEffect overload to find Water Shield
+--   and read its trigger spell.
+--   777 lightning_overload — HandleProc branches on family flags and
+--   ChainTarget, neither forwarded to ev6.
+--   787 nature_guardian — ev6 fires once per eligible proc effect with
+--   no effect-index arg, and EFFECT_1 is a DUMMY threshold carrier (in
+--   isProcTriggerAuraType), so the EFFECT_0-only arm would double-fire
+--   (two 31616 heals + two 39301 threats per proc). Ranks 2-5 also
+--   unsourced (30882 is the twilight egg NPC entry).
+--   788 static_shock — needs the family-flag GetAuraEffect overload
+--   and DropCharge; neither is bridged.
+--   789 thunderstorm — player-cast ev5 gap: PreventHitDefaultEffect has
+--   a real veto record on the creature-path spell object
+--   (lua_spell.go:455), but the hook never fires for player casts.
+--   Census go_hit/lua_hit for rows 760/761/763/764/765/776/778 are
+--   phantoms (no real engine/Lua hits for 1064/974/1535/8050/10400/
+--   16180/26364); the census hooks for 759, 767-775, and 779-786 list
+--   arms the C++ classes never register.
+--
+-- BRIDGE CORRECTIONS found this tick: (1) ev6 has a creature-side fire
+--   site (boss_ai.go:10894, the creature proc loop twin) — the
+--   runtime.go "session-side only" line is stale. (2) aura:GetSpellWithRank
+--   is live (lua_aura.go:421) and keys off the aura's own rank.
 
 local SPELL_SHAMAN_EARTHBIND_TOTEM = 6474 -- spell_shaman.cpp:460 (class spell_sha_earthbind_totem)
 local SPELL_SHAMAN_STORM_EARTH_AND_FIRE = 51483 -- spell_shaman.cpp:62
@@ -365,3 +445,126 @@ local function totemicMasteryPeriodic(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_TOTEMIC_MASTERY_AURA, 1, totemicMasteryPeriodic)
+
+local SPELL_SHAMAN_EARTH_SHIELD_HEAL = 379 -- spell_shaman.cpp:42
+local SPELL_SHAMAN_EARTH_SHIELD = 974 -- spell_shaman.cpp:422 (class spell_sha_earth_shield)
+local SPELL_SHAMAN_LIGHTNING_SHIELD = 324 -- spell_shaman.cpp:1507 (class spell_sha_lightning_shield)
+local SPELL_SHAMAN_LIGHTNING_SHIELD_R1 = 26364 -- spell_shaman.cpp:58 (damage chain first rank)
+local SPELL_SHAMAN_TOTEM_HEALING_STREAM_HEAL = 52042 -- spell_shaman.cpp:66
+local SPELL_SHAMAN_GLYPH_OF_HEALING_STREAM_TOTEM = 55456 -- spell_shaman.cpp:50
+local SPELL_SHAMAN_MANA_SPRING_TOTEM_ENERGIZE = 52032 -- spell_shaman.cpp:59
+local SHAMAN_ICON_ID_RESTORATIVE_TOTEMS = 338 -- spell_shaman.cpp:99
+local SPELL_SHAMAN_HEALING_STREAM_TOTEM_SPELLS = { 52041, 52046, 52047, 52048, 52049, 52050, 58759, 58760, 58761 } -- spell_shaman.cpp:1042
+local SPELL_SHAMAN_MANA_SPRING_TOTEM_SPELLS = { 52031, 52033, 52034, 52035, 52036, 58778, 58779, 58780 } -- spell_shaman.cpp:1595
+
+-- C++ spell_sha_earth_shield_AuraScript::HandleProc
+-- (spell_shaman.cpp:437-447): EFFECT_0 DUMMY. On proc the holder
+-- self-casts Earth Shield Heal (379), triggered, with BP0 = the effect
+-- amount; the OriginalCaster leg (GetCasterGUID) has no Go model.
+-- Returns true (PreventDefaultAction). DORMANT until Spell.dbc ships
+-- the 974 aura + proc records. Rank 1 only: ranks 2-5 need the
+-- spell_script_names / spell_ranks data (not in-tree) to resolve.
+local function earthShieldProc(event, aura, target, actor, procTarget, damage)
+    if target == nil then
+        return true
+    end
+    local amount = aura:GetAmount(0)
+    if amount == nil or amount == 0 then
+        return true
+    end
+    target:CastCustomSpell(target, SPELL_SHAMAN_EARTH_SHIELD_HEAL, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD, 6, earthShieldProc)
+
+-- C++ spell_sha_lightning_shield_AuraScript::HandleProc
+-- (spell_shaman.cpp:1531-1537): EFFECT_0 PROC_TRIGGER_SPELL. On proc
+-- the holder (action target) casts the rank-matched Lightning Shield
+-- damage spell (aura:GetSpellWithRank(26364), the damage chain's first
+-- rank) on the attacker (actor), triggered. The CheckProc gate
+-- (non-nil action target) is the target ~= nil early return; a nil
+-- actor vetoes the default without casting, like a failed CheckProc.
+-- A rank miss also vetoes: C++ PreventDefaultAction()s before the
+-- rank lookup, so the default never fires. Returns true
+-- (PreventDefaultAction). DORMANT until Spell.dbc ships the 324 aura +
+-- proc records. Rank 1 only: ranks 2-13 need the spell_script_names /
+-- spell_ranks data (not in-tree) to resolve.
+local function lightningShieldProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or target == nil then
+        return true
+    end
+    local rankSpell = aura:GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_SHIELD_R1)
+    if rankSpell == 0 then
+        return true
+    end
+    target:CastSpell(actor, rankSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_SHIELD, 6, lightningShieldProc)
+
+-- C++ spell_sha_healing_stream_totem_SpellScript::HandleDummy
+-- (spell_shaman.cpp:1056-1085): EFFECT_0 DUMMY. Each hit unit is healed
+-- by Totem Healing Stream Heal (52042) with BP0 = the effect value,
+-- raised by the Restorative Totems dummy aura (icon 338, EFFECT_1) and
+-- the Glyph of Healing Stream Totem (55456, EFFECT_0) amounts on the
+-- totem's owner (caster:GetOwner(), the GetAffectingPlayer twin).
+-- Non-triggered cast; the original-caster leg has no Go model.
+-- DORMANT until Spell.dbc ships the totem pulse rows and 52042.
+local function healingStreamTotemHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local damage = spell:GetEffectValue(0)
+    if damage <= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local owner = caster:GetOwner()
+    if owner ~= nil then
+        local restorative = owner:GetDummyAuraEffect(SPELLFAMILY_SHAMAN, SHAMAN_ICON_ID_RESTORATIVE_TOTEMS, 1)
+        if restorative ~= nil then
+            damage = damage + math.floor(damage * restorative / 100)
+        end
+        local glyph = owner:GetAuraEffect(SPELL_SHAMAN_GLYPH_OF_HEALING_STREAM_TOTEM, 0)
+        if glyph ~= nil then
+            damage = damage + math.floor(damage * glyph / 100)
+        end
+    end
+    caster:CastCustomSpell(hitTarget, SPELL_SHAMAN_TOTEM_HEALING_STREAM_HEAL, false, damage)
+end
+
+for _, spellId in ipairs(SPELL_SHAMAN_HEALING_STREAM_TOTEM_SPELLS) do
+    RegisterSpellEvent(spellId, 5, healingStreamTotemHit)
+end
+
+-- C++ spell_sha_mana_spring_totem_SpellScript::HandleDummy
+-- (spell_shaman.cpp:1610-1619): EFFECT_0 DUMMY. Each mana-using hit unit
+-- is energized by Mana Spring Totem Energize (52032) with BP0 = the
+-- effect value. Non-triggered cast; the original-caster leg has no Go
+-- model. DORMANT until Spell.dbc ships the totem pulse rows and 52032.
+local function manaSpringTotemHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetPowerType() ~= POWER_MANA then
+        return
+    end
+    local effValue = spell:GetEffectValue(0)
+    if effValue <= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastCustomSpell(hitTarget, SPELL_SHAMAN_MANA_SPRING_TOTEM_ENERGIZE, false, effValue)
+end
+
+for _, spellId in ipairs(SPELL_SHAMAN_MANA_SPRING_TOTEM_SPELLS) do
+    RegisterSpellEvent(spellId, 5, manaSpringTotemHit)
+end
