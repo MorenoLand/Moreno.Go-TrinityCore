@@ -918,7 +918,12 @@ func (s *Server) hasAuraProcHook(spellID uint32) bool {
 // GetSpellIconId read the event spell (0 when the event carries none —
 // melee/kill events, Unit.cpp:258-288: GetSpellInfo falls back to the
 // damage/heal info, which Go never threads, so a nil event spell reads
-// 0 here); GetSchoolMask reads ev.schoolMask, which every construction
+// 0 here); GetSpellFamilyFlags(index) reads the event spell's
+// SpellFamilyFlags (0 when the event carries none, or the index is out
+// of range); GetRank reads SpellInfo::GetRank (SpellInfo.cpp:3251-3255:
+// the chain rank, 1 when the spell has no chain entry — Go spellRank
+// returns 0 there, so the method folds 0 to 1; 0 only when the event
+// carries no spell at all). GetSchoolMask reads ev.schoolMask, which every construction
 // site fills with the event spell's school (0 falls back to 1, the
 // physical mask) or the melee/damage school, matching C++
 // GetSchoolMask; GetTypeMask / GetSpellTypeMask / GetSpellPhaseMask /
@@ -933,17 +938,39 @@ func (s *Server) hasAuraProcHook(spellID uint32) bool {
 func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID uint64, mapID, instanceID uint32) *scripting.Object {
 	spellID := uint32(0)
 	iconID := uint32(0)
+	var familyFlags [3]uint32
+	rank := uint8(0)
 	if ev.eventSpell != nil {
 		spellID = ev.eventSpell.ID
 		iconID = ev.eventSpell.SpellIconID
+		familyFlags = ev.eventSpell.SpellFamilyFlags
+		rank = s.spellRank(spellID)
+		if rank == 0 {
+			rank = 1
+		}
 	}
 	actor := s.luaUnitObjectForGUID(mapID, instanceID, ev.actorGUID)
 	actionTarget := s.luaUnitObjectForGUID(mapID, instanceID, procActionTargetGUID(ev.actorGUID, holderGUID, triggerTargetGUID))
 	procTarget := s.luaUnitObjectForGUID(mapID, instanceID, triggerTargetGUID)
 	methods := map[string]scripting.ObjectMethod{
-		"GetObjectType":     luaNoArgs(func() any { return "ProcEvent" }),
-		"GetSpellId":        luaNoArgs(func() any { return spellID }),
-		"GetSpellIconId":    luaNoArgs(func() any { return iconID }),
+		"GetObjectType":  luaNoArgs(func() any { return "ProcEvent" }),
+		"GetSpellId":     luaNoArgs(func() any { return spellID }),
+		"GetSpellIconId": luaNoArgs(func() any { return iconID }),
+		"GetSpellFamilyFlags": func(_ context.Context, args []any) ([]any, error) {
+			index := uint32(0)
+			if len(args) > 0 && args[0] != nil {
+				v, err := luaUint32Arg(args, 0)
+				if err != nil {
+					return nil, err
+				}
+				index = v
+			}
+			if index >= uint32(len(familyFlags)) {
+				return []any{uint32(0)}, nil
+			}
+			return []any{familyFlags[index]}, nil
+		},
+		"GetRank":           luaNoArgs(func() any { return rank }),
 		"GetSchoolMask":     luaNoArgs(func() any { return ev.schoolMask }),
 		"GetTypeMask":       luaNoArgs(func() any { return ev.typeMask }),
 		"GetSpellTypeMask":  luaNoArgs(func() any { return ev.spellTypeMask }),

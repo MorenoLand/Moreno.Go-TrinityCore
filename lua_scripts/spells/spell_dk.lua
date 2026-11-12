@@ -514,6 +514,63 @@ end
 
 RegisterAuraEvent(SPELL_DK_VENDETTA, 6, vendettaProc)
 
+local SPELL_DK_ACCLIMATION = 49200 -- spell_dk.cpp:120 (rank 1; ranks 2-3 IDs are not in the file, never guessed)
+local SPELL_DK_ACCLIMATION_HOLY = 50490 -- spell_dk.cpp:43
+local SPELL_DK_ACCLIMATION_FIRE = 50362 -- spell_dk.cpp:44
+local SPELL_DK_ACCLIMATION_NATURE = 50488 -- spell_dk.cpp:48
+local SPELL_DK_ACCLIMATION_FROST = 50485 -- spell_dk.cpp:45
+local SPELL_DK_ACCLIMATION_SHADOW = 50489 -- spell_dk.cpp:47
+local SPELL_DK_ACCLIMATION_ARCANE = 50486 -- spell_dk.cpp:46
+local SPELL_SCHOOL_MASK_HOLY = 2 -- SharedDefines.h:325
+local SPELL_SCHOOL_MASK_FIRE = 4 -- SharedDefines.h:326
+local SPELL_SCHOOL_MASK_NATURE = 8 -- SharedDefines.h:327
+local SPELL_SCHOOL_MASK_FROST = 16 -- SharedDefines.h:328
+local SPELL_SCHOOL_MASK_SHADOW = 32 -- SharedDefines.h:329
+local SPELL_SCHOOL_MASK_ARCANE = 64 -- SharedDefines.h:330
+
+-- C++ spell_dk_acclimation::CheckProc + HandleProc (spell_dk.cpp:144-192):
+-- EFFECT_0 SPELL_AURA_PROC_TRIGGER_SPELL OnEffectProc. CheckProc passes
+-- only when the damage info exists and its first school is a magic
+-- school (GetFirstSchoolInMask); HandleProc PreventDefaultActions
+-- (the true return on every path) and casts the school's trigger
+-- spell from the action target onto itself. The school and action
+-- target ride the forwarded proc event (procEventObject, lua_aura.go:
+-- GetSchoolMask / GetActionTarget); a nil proc event or a non-magic
+-- school vetoes (true) so the DBC default leg never fires on a failed
+-- gate, matching C++ where a failed CheckProc procs nothing. DORMANT
+-- until Spell.dbc ships the 49200 proc entry.
+local function acclimationProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procEvent == nil then
+        return true
+    end
+    local schoolMask = procEvent:GetSchoolMask()
+    local triggerSpell = 0
+    if bit32.band(schoolMask, SPELL_SCHOOL_MASK_HOLY) ~= 0 then
+        triggerSpell = SPELL_DK_ACCLIMATION_HOLY
+    elseif bit32.band(schoolMask, SPELL_SCHOOL_MASK_FIRE) ~= 0 then
+        triggerSpell = SPELL_DK_ACCLIMATION_FIRE
+    elseif bit32.band(schoolMask, SPELL_SCHOOL_MASK_NATURE) ~= 0 then
+        triggerSpell = SPELL_DK_ACCLIMATION_NATURE
+    elseif bit32.band(schoolMask, SPELL_SCHOOL_MASK_FROST) ~= 0 then
+        triggerSpell = SPELL_DK_ACCLIMATION_FROST
+    elseif bit32.band(schoolMask, SPELL_SCHOOL_MASK_SHADOW) ~= 0 then
+        triggerSpell = SPELL_DK_ACCLIMATION_SHADOW
+    elseif bit32.band(schoolMask, SPELL_SCHOOL_MASK_ARCANE) ~= 0 then
+        triggerSpell = SPELL_DK_ACCLIMATION_ARCANE
+    end
+    if triggerSpell == 0 then
+        return true
+    end
+    local actionTarget = procEvent:GetActionTarget()
+    if actionTarget == nil then
+        return true
+    end
+    actionTarget:CastSpell(actionTarget, triggerSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_ACCLIMATION, 6, acclimationProc)
+
 local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
 local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154

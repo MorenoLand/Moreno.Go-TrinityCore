@@ -216,13 +216,41 @@ end
 
 RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
 
+local SPELL_MAGE_ARCANE_POTENCY = 31571 -- spell_mage.cpp:143
+local SPELL_MAGE_ARCANE_POTENCY_TRIGGER = {57529, 57531} -- spell_mage.cpp:156-157
+local SPELL_ICON_MAGE_CLEARCASTING = 212 -- spell_mage.cpp:79
+local SPELL_ICON_MAGE_PRESENCE_OF_MIND = 139 -- spell_mage.cpp:78
 
--- NOT IN LUA: spell_mage_arcane_potency (31571, spell_mage.cpp:143-193)
--- — CheckProc filters the proc spell by SpellIconID (Clearcasting /
--- Presence of Mind) and HandleProc casts the rank-indexed trigger
--- (57529/57531); ev6 carries no proc-spell object. STAYS OUT until
--- ev6 event-spell forwarding lands (open engine work, same as
--- census rows 547-551 + 572 + 597 + 601 + 603).
+-- C++ spell_mage_arcane_potency::CheckProc + HandleProc (spell_mage.cpp:164-186):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. CheckProc passes only when the
+-- event spell's icon is Clearcasting (212) or Presence of Mind (139)
+-- (the family-mask share with Brain Freeze / Missile Barrage is
+-- filtered by icon, not flags); HandleProc PreventDefaultActions (the
+-- true return on every path) and the actor casts the rank-indexed
+-- trigger (57529/57531) on itself, triggered via the aurEff overload.
+-- The icon rides the forwarded proc event (procEventObject, lua_aura.go:
+-- GetSpellIconId); the rank is the aura's (aura:GetRank, 0 vetoes
+-- instead of casting a bogus trigger — silverback precedent).
+-- DORMANT until Spell.dbc ships the 31571 proc entry.
+local function arcanePotencyProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if actor == nil or aura == nil or procEvent == nil then
+        return true
+    end
+    local icon = procEvent:GetSpellIconId()
+    if icon ~= SPELL_ICON_MAGE_CLEARCASTING and icon ~= SPELL_ICON_MAGE_PRESENCE_OF_MIND then
+        return true
+    end
+    local trigger = SPELL_MAGE_ARCANE_POTENCY_TRIGGER[aura:GetRank()]
+    if trigger == nil then
+        return true
+    end
+    actor:CastSpell(actor, trigger, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_ARCANE_POTENCY, 6, arcanePotencyProc)
+
+
 -- NOT IN LUA: spell_mage_blast_wave (11113, spell_mage.cpp:195-226)
 -- — SpellScript OnEffectHitTarget KNOCK_BACK (glyph 62126 gate);
 -- no RegisterSpellScript bridge. STAYS OUT.
@@ -255,6 +283,13 @@ RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
 --   GetMaxPower(0). KNOWN DEVIATION: C++ casts non-triggered; Lua
 --   CastCustomSpell rides the triggered-only funnel (standing gap,
 --   same as ignite). DORMANT until Spell.dbc ships the 29441 proc entry.
+--   spell_mage_hot_streak (44445 R1, spell_mage.cpp:919-968):
+--   OnEffectProc EFFECT_0 DUMMY. PreventDefaultAction (return true);
+--   EFFECT_1 consecutive-crit counter doubles per crit (25 -> 50 ->
+--   100), rolls EFFECT_0 chance at 100, actor casts 48108 triggered
+--   on itself; any path reaching the end resets the counter to 25.
+--   R2/R3 IDs unverified in-tree (world.db 0-byte). DORMANT until
+--   Spell.dbc ships the 44445 proc entry.
 -- CENSUS TRIAGE (this tick, rows 613-616 + 620-622, verified in-house):
 --   620 mana_shield STAYS OUT — CORRECTION: the ev6 port landed this
 --   tick as 191b872e is reverted here. SPELL_AURA_MANA_SHIELD is not
@@ -265,16 +300,21 @@ RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
 --   first; the CalculateAmount spellpower leg and the incanter's-
 --   absorption Trigger leg stay out with it (SpellBaseHealing-
 --   BonusDone / GetAuraEffectOfRankedSpell unbridged).
---   613 empowered_fire STAYS OUT — CheckProc needs the proc spell
---   to be Ignite 12654 (ev6 carries no event spell); HandleProc
---   needs GetCreateMana + CalcValue of 67545. Recipe: ev6
---   event-spell forwarding.
+--   613 empowered_fire STAYS OUT — CheckProc (proc spell is Ignite
+--   12654) is forwardable now via procEvent:GetSpellId(), but
+--   HandleProc needs GetCreateMana + CalcValue of 67545; no
+--   GetCreateMana bridge exists. Recipe: add unit:GetCreateMana,
+--   then port ev6.
 --   614 fire_frost_ward STAYS OUT — CalculateAmount needs
 --   SpellBaseHealingBonusDone + level penalty; Absorb needs
 --   OnEffectAbsorb + GetAuraEffectOfRankedSpell. Both unbridged.
---   615 hot_streak STAYS OUT — HandleProc reads PROC_HIT_CRITICAL
---   from the hit mask; ev6 passes damage only. Recipe: forward the
---   hit mask to ev6 (GetAmount(1)/SetAmount counter bridges live).
+--   615 hot_streak STAYS OUT — the port was written and REVERTED
+--   this tick: ev6 fires once per eligible effect (procs.go
+--   eligible loop; both EFFECT_0 and EFFECT_1 are DUMMY, a
+--   proc-trigger type), so the EFFECT_1 counter would double
+--   twice per crit with no effect index to gate on. Recipe: an
+--   ev6 effect index, or a DBC check that EFFECT_1 fails
+--   checkEffectProc; the hit-mask + counter bridges are live.
 --   616 ice_barrier STAYS OUT — CalculateAmount needs
 --   SpellBaseHealingBonusDone + ApplyEffectModifiers + level
 --   penalty; AfterRemove needs GetDummyAuraEffect + ProcChance.

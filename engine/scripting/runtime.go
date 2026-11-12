@@ -500,7 +500,10 @@ const (
 // it, like the C++ damageInfo->GetDamage() early return), and
 // procEvent is the ProcEventInfo object (lua_aura.go procEventObject):
 // GetSpellId/GetSpellIconId (0 when the event carries no spell —
-// melee/kill events), GetSchoolMask (the event spell's school, or the
+// melee/kill events), GetSpellFamilyFlags(index) / GetRank (the event
+// spell's family flags and chain rank — 0/no-spell reads 0 flags and
+// rank 0; a chained spell with no rank row reads rank 1, the C++
+// GetRank no-chain value), GetSchoolMask (the event spell's school, or the
 // melee/damage school), GetTypeMask/GetSpellTypeMask/GetSpellPhaseMask/
 // GetHitMask (the raw proc masks), GetDamage/GetHeal/GetEffectiveHeal,
 // GetActor/GetActionTarget/GetProcTarget, IsTriggered. The C++
@@ -606,11 +609,12 @@ const (
 // the Lua unit object (player or creature) or nil when the target
 // GUID resolves to nothing; GO, item and corpse TargetInfo legs
 // (Spell.cpp:2661-2707) have no Go model and never fire.
-// OnEffectHitTarget fires on the creature path and on the triggered
-// (funnel) path: the player path resolves each effect's target list per
-// case inside its effects switch, so there is no clean per-effect list
-// site there yet — a player-cast OnEffectHitTarget leg stays blocked
-// until one is built.
+// OnEffectHitTarget fires on all three paths: the creature path, the
+// triggered (funnel) path, and the player path (finishSpellCast's
+// applyEffects, which re-derives the shared per-effect partition ahead
+// of the effects switch — the damage/heal/aura arms' friendly-area /
+// ref-centered / cone switch — since the player path resolves each
+// effect's target list per case inside that switch).
 // OnObjectAreaTargetSelect mirrors the SpellScript hook of the same
 // name (SpellScript.h, fired from Spell::SelectImplicitAreaTargets,
 // Spell.cpp:1227, inside SelectTargets ahead of OnCast at :3432),
@@ -627,8 +631,10 @@ const (
 // (bossConeEffectTargets), i.e. the flat hit list for non-cone
 // spells, minus the caster unless the effect carries a friendly
 // area leg (C++ enemy/entry/ref/cone lists never contain the
-// caster; friendly-area lists do). Creature path only, like
-// OnEffectHitTarget: the player path has no per-effect list site.
+// caster; friendly-area lists do). Creature path only: the player
+// path's per-effect list site (applyEffects) runs after target
+// selection, too late for a selection-time list mutation to reach
+// the arms.
 // GO-area legs (51/52/108) never fire it — the list holds units
 // only. The deferred-fire call re-runs the cast function, so a
 // cast-time cast fires it once, at fire time, like OnCast.

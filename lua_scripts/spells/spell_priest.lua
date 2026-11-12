@@ -132,6 +132,42 @@ end
 
 RegisterSpellEvent(SPELL_PRIEST_POWER_INFUSION, 8, powerInfusionCheckCast)
 
+local SPELL_PRIEST_DIVINE_AEGIS_TALENT = 47509 -- spell_priest.cpp:336
+local SPELL_PRIEST_DIVINE_AEGIS = 47753 -- spell_priest.cpp:40
+
+-- C++ spell_pri_divine_aegis::CheckProc + HandleProc (spell_priest.cpp:351-379):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. CheckProc passes only when
+-- the proc target exists; HandleProc PreventDefaultActions (the true
+-- return on every path) and casts the absorb 47753 on the proc target
+-- with BP0 = pct(heal, aurEff amount) + the existing aegis amount,
+-- capped at procTarget level * 125. The heal rides the forwarded proc
+-- event (procEventObject, lua_aura.go: GetHeal); the existing-aegis
+-- stack reads via procTarget:GetAuraEffect(47753, 0) (nil = none);
+-- the holder (C++ GetTarget) casts via the target arg. DORMANT until
+-- Spell.dbc ships the 47509 proc entry.
+local function divineAegisProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procTarget == nil or aura == nil or target == nil or procEvent == nil then
+        return true
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    local absorb = math.floor(heal * aura:GetAmount(0) / 100)
+    local existing = procTarget:GetAuraEffect(SPELL_PRIEST_DIVINE_AEGIS, 0)
+    if existing ~= nil then
+        absorb = absorb + existing
+    end
+    local cap = procTarget:GetLevel() * 125
+    if absorb > cap then
+        absorb = cap
+    end
+    target:CastCustomSpell(procTarget, SPELL_PRIEST_DIVINE_AEGIS, true, absorb)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PRIEST_DIVINE_AEGIS_TALENT, 6, divineAegisProc)
+
 -- TRIAGED STAY OUT (tick 2026-11-11 18:32, census rows 662-664 + 666-670):
 --   662 body_and_soul (64127, :236-295): both arms need the event spell
 --   (EFFECT_0 PROC_TRIGGER_SPELL vetoes unless family flags [0] & 0x1
@@ -140,9 +176,9 @@ RegisterSpellEvent(SPELL_PRIEST_POWER_INFUSION, 8, powerInfusionCheckCast)
 --   663 circle_of_healing (34861, :296-335): SpellScript target filter
 --   (raid check, glyph 6 vs 5 targets, lowest-health sort); no
 --   OnObjectAreaTargetSelect bridge.
---   664 divine_aegis (47509, :336-389): HandleProc needs heal info
---   (pct(heal, amount) + existing-aegis stack + level*125 cap); ev6
---   carries damage only (heal-info forwarding is open engine work).
+--   664 divine_aegis (47509, :336-389): PORTED this tick (ev6, heal
+--   forwarding: pct(heal, amount) + existing-aegis stack +
+--   level*125 cap, holder casts 47753 on the proc target).
 --   666 improved_spirit_tap (15337, :632-676): DoCheckProc only, gates
 --   the default trigger on the event spell (rank of SW:D 32379 / Mind
 --   Blast 8092, or Mind Flay 58381 at 50%); ev6 carries no event spell.

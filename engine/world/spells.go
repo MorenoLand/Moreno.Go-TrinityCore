@@ -14665,6 +14665,76 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// (fireSpellScriptPreprocessTwins above; moved 2026-11-09, the
 		// creature-caster twin moved the same day in boss_ai.go).
 		spellObj := s.fireSpellScriptPreprocessTwins(effCtx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, hitDamage)
+		// SpellScript OnEffectHitTarget (Spell.cpp:2909,
+		// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_HIT_TARGET mode
+		// from Spell::DoSpellEffectHit, called per (effect, unit target)
+		// from DoProcessTargetContainer, Spell.cpp:3555-3566) fires once
+		// per (effect, live hit target) in effect-major order, before that
+		// effect's default handler — C++ runs CallScriptEffectHandlers
+		// before the effect handler in Spell::HandleEffects
+		// (Spell.cpp:5168). The player path resolves each effect's target
+		// list per case inside the effects switch below, so this loop
+		// re-derives the shared partition the damage/heal/aura arms use
+		// (friendly-area -> friendlyEffectTargets, ref-centered ->
+		// refCenteredFriendlyTargets, cone legs -> the cone partitions,
+		// else the merged hitTargets), ahead of the first per-target
+		// HIT_TARGET arm — the creature path's loop (boss_ai.go) and the
+		// funnel's (castSpellDirectWithOverrides) mirror. Every hook fires
+		// before every default, so the per-effect hook-before-default order
+		// is exact and only the cross-effect order is approximated the
+		// same way. Missed, immune and evaded targets never fire
+		// (missedTargets above, clean reflects excluded there so the
+		// caster entry in hitTargets still fires); GO targets never fire
+		// (runtime.go). A zero effect carries no hook (same skip as the
+		// creature path). DELTAS: the per-arm caster-target legs
+		// (TARGET_UNIT_CASTER effects) and explicit-target rejoins are not
+		// replicated — an effect with those legs fires on the partition
+		// list, not its narrower list.
+		for effectIndex, eff := range spell.Effects {
+			if eff.Effect == 0 {
+				continue
+			}
+			effectList := hitTargets
+			effectSwitched := friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+				(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+			effectRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
+			if effectRefCentered {
+				effectSwitched = true
+			}
+			if effectSwitched {
+				effectList = friendlyEffectTargets
+				effectTrips := reflectedAllyTrips
+				if effectRefCentered {
+					effectList = refCenteredFriendlyTargets
+					effectTrips = refCenteredAllyTrips
+				}
+				if len(effectTrips) > 0 {
+					joined := make([]uint64, len(effectList), len(effectList)+len(effectTrips))
+					copy(joined, effectList)
+					for range effectTrips {
+						joined = append(joined, s.playerGUID)
+					}
+					effectList = joined
+				}
+			}
+			if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !effectSwitched {
+				effectList = friendlyConeEffectTargets
+			}
+			if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !effectSwitched {
+				effectList = enemyConeEffectTargets
+			}
+			for _, guid := range effectList {
+				if guid == 0 || uint16(guid>>48) == 0xF110 {
+					continue
+				}
+				if _, missed := missedTargets[guid]; missed {
+					continue
+				}
+				hitDamage.phase = spellHitPhaseEffectHitTarget
+				hitDamage.currentTarget = guid
+				s.server.fireSpellEffectHitTarget(effCtx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, guid), effectIndex)
+			}
+		}
 		for effectIndex, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
