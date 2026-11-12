@@ -571,6 +571,19 @@ end
 
 RegisterSpellEvent(SPELL_FAILED_MIX_43378, 4, failedMix43378Hit)
 
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q11306_mixing_blood (spell_quest.cpp:2766-2793): EFFECT_1
+--   SEND_EVENT OnEffectHit, binding 43972 per TDB 335.26091
+--   spell_script_names ('spell_fjord_mixing_blood'). Handler at the
+--   end of this file (after the HUNT table): the caster finds the
+--   nearest Generic Trigger Lab 24042 within 100yd; it casts Spurts
+--   and Smoke 38594 on itself. ADJUDICATION: C++
+--   trigger->AI()->DoCastSelf(38594) is UnitAI::DoCastSelf with
+--   default args (UnitAI.h:320: DoCast(me, spellId, {})) — a
+--   NON-triggered self-cast, so the 2-arg trigger:CastSpell(trigger,
+--   38594) is the exact twin (no DoCastSelf bridge needed; the
+--   nearest-creature + self-cast pieces exist).
+
 -- PORTED (tick 2026-11-11, RegisterSpellEvent OnCheckCast = 8):
 --   spell_q11010_q11102_q11023_q11008_check_fly_mount
 --   (spell_quest.cpp:1671-1678): OnCheckCast. The caster must carry
@@ -642,30 +655,29 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   (binding 55516, HUNT block at end of file).
 --   spell_q12919_gymers_throw (:2515-2551): PORTED tick 2026-11-12
 --   (binding 55421, HUNT block at end of file).
---   spell_q13400_illidan_kill_master (:2552-2590): ev5 DUMMY; caster
---   vehicle passenger(0) self-casts 61748 — no binding ID only, same
---   vehicle bridges live.
---   spell_q12414_hand_over_reins (:2666-2697): ev5 EFFECT_1; hit unit
---   ExitVehicle + caster creature despawns — no binding ID
---   (ExitVehicle itself IS bridged, lua_player.go:2889).
+--   spell_q13400_illidan_kill_master (:2552-2590): PORTED tick
+--   2026-11-12 (binding 61752, HUNT block at end of file).
+--   spell_q12414_hand_over_reins (:2666-2697): PORTED tick 2026-11-12
+--   (binding 49285, HUNT block at end of file).
 --   spell_59064_59439_portals (:2726-2765): PORTED tick 2026-11-12
 --   (bindings 59064/59439, class name) — the old stay-out reason
 --   (no ev5 direct-path fire site) was stale: the ev5 player-path
 --   site is live (a910c39d, spells.go:14668-14737).
---   spell_q11306_mixing_blood (:2766-2793): ev4 EFFECT_1 SEND_EVENT;
---   nearest trigger 24042 DoCastSelf(38594) — no binding ID; no
---   DoCastSelf bridge (nearest-creature + self-cast pieces exist).
---   spell_q11306_mixing_vrykul_blood (:2794-2835): ev5 EFFECT_1
---   DUMMY; caster self-casts 43376/43378/43970 (30/30/30) or 43377
---   (10%), triggered — no binding ID.
+--   spell_q11306_mixing_blood (:2766-2793): PORTED tick 2026-11-12
+--   (binding 43972, HUNT block at end of file) — DoCastSelf
+--   adjudicated: default args = non-triggered self-cast.
+--   spell_q11306_mixing_vrykul_blood (:2794-2835): PORTED tick
+--   2026-11-12 (binding 43375, HUNT block at end of file).
 --   spell_q12661_q12669_q12676_q12677_q12713_summon_stefan (:1734-1764):
 --   OnDestinationTargetSelect ONLY (+20Z on TARGET_DEST_CASTER_BACK) —
 --   no bridge; the leg is already in Go (target_dest_targets.go:512,
 --   spell 55368).
 --   spell_q12847_summon_soul_moveto_bunny (:1873-1907):
 --   OnDestinationTargetSelect ONLY (+2.5Z on TARGET_DEST_CASTER) —
---   no bridge; binding spell ID not in the C++ tree (TDB-blocked:
---   the Go +2.5Z leg keys on 12601 only).
+--   no bridge; binding 12601 RESOLVED tick 2026-11-12 per TDB
+--   335.26091 spell_script_names ('spell_icecrown_summon_soul_moveto_bunny')
+--   but the arm stays out (no dest-select bridge) — the +2.5Z leg
+--   is already in Go, keyed on 12601.
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
 --   The ev5 player-path fire site is live (a910c39d,
@@ -1442,6 +1454,20 @@ local HUNT = {
     SPELL_AREA_RESTRICT_ABOM = 76245,
     AREA_THE_BROKEN_FRONT = 4507,
     AREA_MORD_RETHAR_THE_DEATH_GATE = 4508,
+    -- spell_q13400_illidan_kill_master (spell_quest.cpp:2552)
+    SPELL_ILLIDAN_KILL_MASTER = 61752,
+    SPELL_ILLIDAN_KILL_CREDIT = 61748,
+    -- spell_q12414_hand_over_reins (spell_quest.cpp:2666)
+    SPELL_HAND_OVER_REINS = 49285,
+    -- spell_q11306_mixing_blood (spell_quest.cpp:2766)
+    SPELL_MIXING_BLOOD = 43972,
+    SPELL_SPURTS_AND_SMOKE = 38594,
+    -- spell_q11306_mixing_vrykul_blood (spell_quest.cpp:2794)
+    SPELL_MIXING_VRYKUL_BLOOD = 43375,
+    SPELL_FAILED_MIX_1 = 43376,
+    SPELL_FAILED_MIX_2 = 43378,
+    SPELL_FAILED_MIX_3 = 43970,
+    SPELL_SUCCESSFUL_MIX = 43377,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -1877,21 +1903,12 @@ RegisterSpellEvent(HUNT.SPELL_DEATH_COMES_FROM_ON_HIGH, 5, deathComesFromOnHighH
 --   target is unused in C++; the arm repeats per hit target in both
 --   (a second fire finds the seat empty and no-ops).
 --
--- STAY OUT (same tick):
---   spell_q13400_illidan_kill_master (spell_quest.cpp:2552-2590):
---   EFFECT_0 DUMMY ev5; caster vehicle passenger(0) self-casts
---   61748, triggered — no binding ID (no in-file comment, no AC
---   spell_script_names row per the checkpoint-recorded verification;
---   joins the no-id stay-outs). The vehicle bridges are live
---   (IsVehicle/GetVehicleKit/GetPassenger/ExitVehicle), so this ports
---   once a binding ID is found.
---   spell_q12414_hand_over_reins (spell_quest.cpp:2666-2692):
---   EFFECT_1 SCRIPT_EFFECT ev5; the hit unit exits its vehicle and
---   the creature caster despawns — no binding ID (no in-file
---   comment, no AC spell_script_names row per the checkpoint-recorded
---   verification; joins the no-id stay-outs). The bridges are live
---   (ExitVehicle, DespawnOrUnsummon), so this ports once a binding
---   ID is found.
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q13400_illidan_kill_master (spell_quest.cpp:2552-2590)
+--   and spell_q12414_hand_over_reins (:2666-2697): bindings 61752 /
+--   49285 resolved per TDB 335.26091 spell_script_names; handlers
+--   appended at the end of this file (HUNT block). The stay-out
+--   notes above are superseded — both were ID-only blocks.
 
 local function gymersGrabHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 then
@@ -2163,7 +2180,8 @@ RegisterSpellEvent(HUNT.SPELL_AREA_RESTRICT_ABOM, 5, areaRestrictAbomHit)
 --   EFFECT_0 SCRIPT_EFFECT ev5, bindings 59590/60039/60041 per TDB 335.26091
 --   spell_script_names ('spell_icecrown_assign_credit_to_master', three rows).
 --   The hit unit's owner casts the effect's DBC value TRIGGERED on itself.
---   (The three binding spells are the ones the burst 59576 arm casts; see
+--   (The three binding spells are the ones the burst 59579 aura-remove leg
+--   casts (spell_quest.cpp:2087-2093), not the 59576 arm; see
 --   HUNT.SPELL_ASSIGN_*_KILL_CREDIT_TO_MASTER above.) KNOWN LIMIT:
 --   creature/player GetOwner resolves player owners only
 --   (lua_creature_events.go:627, lua_player.go:3508).
@@ -2188,3 +2206,116 @@ end
 for _, spellId in ipairs({HUNT.SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER, HUNT.SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER, HUNT.SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER}) do
     RegisterSpellEvent(spellId, 5, assignCreditToMasterHit)
 end
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q13400_illidan_kill_master (spell_quest.cpp:2552-2590):
+--   EFFECT_0 DUMMY ev5, binding 61752 per TDB 335.26091
+--   spell_script_names ('spell_icecrown_illidan_kill_credit_master'). If the
+--   caster is a vehicle, its seat-0 passenger self-casts Illidan Kill
+--   Credit 61748, TRIGGERED. (The hunt's stay-out was ID-only; the
+--   vehicle bridges are live — IsVehicle/GetVehicleKit/GetPassenger.)
+
+local function illidanKillMasterHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:IsVehicle() then
+        local passenger = caster:GetVehicleKit():GetPassenger(0)
+        if passenger ~= nil then
+            passenger:CastSpell(passenger, HUNT.SPELL_ILLIDAN_KILL_CREDIT, true)
+        end
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_ILLIDAN_KILL_MASTER, 5, illidanKillMasterHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12414_hand_over_reins (spell_quest.cpp:2666-2697): EFFECT_1
+--   SCRIPT_EFFECT ev5, binding 49285 per TDB 335.26091
+--   spell_script_names ('spell_grizzly_hills_hand_over_reins'). The hit
+--   unit exits its vehicle; a creature caster despawns (the C++
+--   ToCreature() nil arm is the GetTypeId()==3 guard — a player
+--   caster has no despawn leg). (The hunt's stay-out was ID-only;
+--   ExitVehicle + DespawnOrUnsummon are live on both surfaces.)
+
+local function handOverReinsHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:ExitVehicle()
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetTypeId() == HUNT.TYPEID_UNIT then
+        caster:DespawnOrUnsummon()
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_HAND_OVER_REINS, 5, handOverReinsHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q11306_mixing_vrykul_blood (spell_quest.cpp:2794-2835):
+--   EFFECT_1 DUMMY ev5, binding 43375 per TDB 335.26091
+--   spell_script_names ('spell_fjord_mixing_vrykul_blood'). The
+--   caster self-casts one of Failed Mix 43376/43378/43970 (30/30/30)
+--   or Successful Mix 43377 (10%), TRIGGERED — urand(0, 99) is the
+--   math.random(0, 99) twin. The failed-mix spells carry their own
+--   Talk scripts (43376/43378 ported above); 43970 has no script
+--   class in spell_quest.cpp. (The hunt's stay-out was ID-only.)
+
+local function mixingVrykulBloodHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local chance = math.random(0, 99)
+    local spellId
+    if chance < 30 then
+        spellId = HUNT.SPELL_FAILED_MIX_1
+    elseif chance < 60 then
+        spellId = HUNT.SPELL_FAILED_MIX_2
+    elseif chance < 90 then
+        spellId = HUNT.SPELL_FAILED_MIX_3
+    else
+        spellId = HUNT.SPELL_SUCCESSFUL_MIX
+    end
+    caster:CastSpell(caster, spellId, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_MIXING_VRYKUL_BLOOD, 5, mixingVrykulBloodHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q11306_mixing_blood (spell_quest.cpp:2766-2793): EFFECT_1
+--   SEND_EVENT OnEffectHit, binding 43972 per TDB 335.26091
+--   spell_script_names ('spell_fjord_mixing_blood'). The caster
+--   finds the nearest Generic Trigger Lab 24042 within 100yd; it
+--   casts Spurts and Smoke 38594 on itself. ADJUDICATION: C++
+--   trigger->AI()->DoCastSelf(38594) is UnitAI::DoCastSelf with
+--   default args (UnitAI.h:320: DoCast(me, spellId, {})) — a
+--   NON-triggered self-cast, so the 2-arg trigger:CastSpell(trigger,
+--   38594) is the exact twin (no DoCastSelf bridge needed; the
+--   nearest-creature + self-cast pieces exist).
+
+local function mixingBloodHit(event, spell, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local trigger = caster:FindNearestCreature(CREATURE_GENERIC_TRIGGER_LAB, 100)
+    if trigger ~= nil then
+        trigger:CastSpell(trigger, HUNT.SPELL_SPURTS_AND_SMOKE)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_MIXING_BLOOD, 4, mixingBloodHit)
