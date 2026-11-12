@@ -801,3 +801,37 @@ local function disengageCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_HUNTER_DISENGAGE, 8, disengageCheckCast)
+
+local SPELL_HUNTER_TAME_BEAST = 1515 -- spell_hunter.cpp:1425 (class spell_hun_tame_beast_SpellScript)
+local SPELL_FAILED_DONT_REPORT = 27 -- SharedDefines.h:1009
+local SPELL_FAILED_BAD_IMPLICIT_TARGETS = 11 -- SharedDefines.h:993
+local SPELL_FAILED_HIGHLEVEL = 36 -- SharedDefines.h:1018
+
+-- C++ spell_hun_tame_beast_SpellScript::CheckCast (spell_hunter.cpp:1432-1470):
+-- a non-player caster fails DONT_REPORT; no explicit target or a
+-- non-creature target fails BAD_IMPLICIT_TARGETS; a target above the
+-- caster's level fails HIGHLEVEL; a non-tameable target fails
+-- BAD_TARGETS (IsTameable(CanTameExoticPets()) via the new bridges).
+-- The pet-stable legs (ALREADY_HAVE_SUMMON / SendTameFailure TOOMANY)
+-- and the charmed-GUID leg (ALREADY_HAVE_CHARM) stay out: no
+-- GetPetStable / GetCharmedGUID bridge. RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast).
+local function tameBeastCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return SPELL_FAILED_DONT_REPORT
+    end
+    local target = spell:GetTarget()
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return SPELL_FAILED_BAD_IMPLICIT_TARGETS
+    end
+    if target:GetLevel() > caster:GetLevel() then
+        return SPELL_FAILED_HIGHLEVEL
+    end
+    if not target:IsTameable(caster:CanTameExoticPets()) then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_HUNTER_TAME_BEAST, 8, tameBeastCheckCast)

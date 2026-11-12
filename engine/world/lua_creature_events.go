@@ -5005,6 +5005,31 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{typ}, nil
 	}
+	// IsTameable is CreatureTemplate::IsTameable (Creature.cpp): the
+	// template must be a beast with a family and the TAMABLE_PET type
+	// flag; exotic pets additionally need the caller's
+	// CanTameExoticPets flag (Player::CanTameExoticPets, Player.h:1826).
+	// The exotic flag arrives as the single bool arg, mirroring the
+	// C++ call target->IsTameable(caster->CanTameExoticPets()) — the
+	// tame-beast CheckCast twin (spell_hunter.cpp:1446). A missing
+	// template row fails closed (not tameable).
+	methods["IsTameable"] = func(ctx context.Context, args []any) ([]any, error) {
+		exotic := false
+		if len(args) >= 1 {
+			if b, ok := args[0].(bool); ok {
+				exotic = b
+			}
+		}
+		if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+			return []any{false}, nil
+		}
+		var ctype, family, typeFlags int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT COALESCE(type, 0), COALESCE(family, 0), COALESCE(type_flags, 0) FROM creature_template WHERE entry = ?", motion.Entry).Scan(&ctype, &family, &typeFlags); err != nil {
+			return []any{false}, nil
+		}
+		return []any{creatureTameable(ctype, family, typeFlags, exotic)}, nil
+	}
 	// GetTemplateModelId is the Lua read path for
 	// Creature::GetCreatureTemplate()->Modelid1..4 (Creature.h): the
 	// template model-id row backing the spawn display. C++ script arms

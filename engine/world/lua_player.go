@@ -1385,6 +1385,11 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetGMRank"] = luaNoArgs(func() any { return s.security })
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
+	// CanTameExoticPets is Player::CanTameExoticPets (Player.h:1826):
+	// game-master state or an active SPELL_AURA_ALLOW_TAME_PET_TYPE
+	// aura. Twin of the session helper in spells.go, for the tame-beast
+	// IsTameable(exotic) call (spell_hunter.cpp:1446).
+	methods["CanTameExoticPets"] = luaNoArgs(func() any { return s.canTameExoticPets() })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	// IsGuardian is Unit::IsGuardian (Unit.h:838 — the UNIT_MASK_GUARDIAN
 	// bit of m_unitTypeMask): players never carry the bit (Player never
