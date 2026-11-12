@@ -364,10 +364,14 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   power_infusion (10060, :1586-1604): PORTED this tick (OnCheckCast
 --   ev8 above: target with Arcane Power 12042 -> SPELL_FAILED_AURA_BOUNCED).
 --   Census rows 224-229 + 672-673 now all closed in Go except the
---   SW:D leg noted above; the next unworked census row is 691
---   (spell_q12937_relief_for_the_fallen, spell_quest.cpp) — rows
---   675-686 + 690 (1-based) all closed this tick; the 9293c104 note
---   calling 674 "q55" is off by one (674 is vampiric_touch).
+--   SW:D leg noted above; the next unworked census row is 692
+--   (spell_q10041_q10040_who_are_they, spell_quest.cpp) — rows
+--   675-686 + 690 (1-based) all closed this tick, 691 relief_for_
+--   the_fallen closed in fa9c8507; the 9293c104 note calling 674
+--   "q55" is off by one (674 is vampiric_touch). 692 stays out on
+--   an unresolvable binding ID (no spell-ID comment in the file;
+--   loader registered via spell_script_names DB); then q12805/
+--   q14112/q9452 per the quest-file NEXT note.
 
 local SPELL_PRIEST_PENANCE_R1 = 47540 -- spell_priest.cpp:49 (class spell_pri_penance)
 local SPELL_PRIEST_PENANCE_R1_HEAL = 47757 -- spell_priest.cpp:51

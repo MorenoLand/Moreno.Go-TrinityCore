@@ -387,8 +387,6 @@ local SPELL_SYMBOL_OF_LIFE = 8593 -- spell_quest.cpp:844 (class spell_symbol_of_
 local SPELL_PERMANENT_FEIGN_DEATH = 29266 -- spell_quest.cpp:842
 local POWER_MANA = 0
 local CLEAR_ALL_FLAGS = 0xFFFFFFFF -- RemoveFlag full-mask twin of SetUInt32Value(field, 0)
-local SPELL_AHUNAES_KNIFE = 52090 -- spell_quest.cpp:887 (class spell_q12659_ahunaes_knife)
-local NPC_SCALPS_KC_BUNNY = 28622 -- spell_quest.cpp:891
 local SPELL_CAST_NET = 29866 -- spell_quest.cpp:1128 (class spell_q9452_cast_net)
 local ITEM_RED_SNAPPER = 23614 -- spell_quest.cpp:1127
 local SPELL_FISHED_UP_MURLOC = 29869 -- spell_quest.cpp:1129
@@ -411,27 +409,6 @@ local function symbolOfLifeHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_SYMBOL_OF_LIFE, 4, symbolOfLifeHit)
-
-local function ahunaesKnifeHit(event, spell, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local target = spell:GetTarget()
-    if target == nil or target:GetObjectType() ~= "Creature" then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    if caster:GetTypeId() ~= 4 then
-        return
-    end
-    target:DespawnOrUnsummon()
-    caster:KilledMonsterCredit(NPC_SCALPS_KC_BUNNY)
-end
-
-RegisterSpellEvent(SPELL_AHUNAES_KNIFE, 4, ahunaesKnifeHit)
 
 local function castNetHit(event, spell, effectIndex)
     if effectIndex ~= 0 then
@@ -1017,29 +994,3 @@ end
 
 RegisterSpellEvent(SPELL_AHUNAES_KNIFE, 5, ahunaesKnifeHit)
 
--- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
---   spell_q12937_relief_for_the_fallen (spell_quest.cpp:746-789):
---   EFFECT_0 DUMMY ev5, binding 55804. Caster-is-player Load gate
---   (explicit check); hit creature -> caster self-casts 55809
---   triggered, KilledMonsterCredit(30035), target despawns.
-local SPELL_RELIEF_FOR_THE_FALLEN = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
-local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
-local NPC_FALLEN_EARTHEN_DEFENDER = 30035 -- spell_quest.cpp:751
-
-local function reliefForTheFallenHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil or caster:GetTypeId() ~= 4 then
-        return
-    end
-    caster:CastSpell(caster, SPELL_TRIGGER_AID_OF_THE_EARTHEN, true)
-    caster:KilledMonsterCredit(NPC_FALLEN_EARTHEN_DEFENDER)
-    hitTarget:DespawnOrUnsummon()
-end
-
-RegisterSpellEvent(SPELL_RELIEF_FOR_THE_FALLEN, 5, reliefForTheFallenHit)
