@@ -1,11 +1,7 @@
 -- Durotar zone spells -- Lua port of
 -- src/server/scripts/Kalimdor/zone_durotar.cpp (spell scripts).
--- spell_voodoo (17009) PORTED below. spell_voljin_war_drums STAYS OUT:
--- the trigger spell ID is DB-bound via spell_script_names (the loader
--- name only in C++, zone_durotar.cpp:417-455); the motivate arms
--- (75088/75086 on citizens 40256/40257, non-triggered caster cast)
--- are recorded here, not guessed — revisit when a TDB dump is
--- available (row-290 Shadowflame precedent).
+-- spell_voodoo (17009) PORTED below. spell_voljin_war_drums (75102,
+-- TDB spell_script_names) PORTED below.
 -- All ports DORMANT until Spell.dbc ships the rows.
 
 local SPELL_VOODOO = 17009
@@ -47,3 +43,35 @@ local function voodooHit(_, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_VOODOO, 5, voodooHit)
+
+local SPELL_VOLJIN_WAR_DRUMS = 75102 -- TDB spell_script_names
+local SPELL_MOTIVATE_1 = 75088 -- zone_durotar.cpp:63
+local SPELL_MOTIVATE_2 = 75086 -- zone_durotar.cpp:64
+local NPC_CITIZEN_1 = 40256 -- zone_durotar.cpp:78
+local NPC_CITIZEN_2 = 40257 -- zone_durotar.cpp:79
+
+-- C++ spell_voljin_war_drums::HandleDummy (zone_durotar.cpp:431-444,
+-- registered OnEffectHitTarget EFFECT_0 SPELL_EFFECT_DUMMY): the
+-- caster (Vol'jin) casts the motivate spell on the hit citizen,
+-- non-triggered — 75088 on citizen 40256, 75086 on citizen 40257,
+-- nothing on any other entry.
+local function warDrumsHit(_, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local motivate = 0
+    if target:GetEntry() == NPC_CITIZEN_1 then
+        motivate = SPELL_MOTIVATE_1
+    elseif target:GetEntry() == NPC_CITIZEN_2 then
+        motivate = SPELL_MOTIVATE_2
+    end
+    if motivate ~= 0 then
+        caster:CastSpell(target, motivate)
+    end
+end
+
+RegisterSpellEvent(SPELL_VOLJIN_WAR_DRUMS, 5, warDrumsHit)

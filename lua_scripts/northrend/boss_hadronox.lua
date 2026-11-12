@@ -264,8 +264,10 @@ local HADRONOX_EMOTE_MOVE = 1 -- boss_hadronox.cpp:132
 -- state is DONE the aura removes itself; with no players in the instance
 -- the tick is a no-op. One factory mirrors the C++ template (one class,
 -- three instantiations bound to 53035/53037/53036 with their top/bottom
--- pairs). HandleApply (:953-957) only re-arms the first tick to 2-17ms
--- and has no bridge (see header) — no ev2 registration.
+-- pairs). HandleApply (:953-957) only re-arms the first tick to 2-17s
+-- (urandms(2, 17) = 2000-17000ms, Random.cpp:49-53) and has no
+-- bridge: ev2 fires (AuraEventOnApply, lua_aura.go:1085) but the
+-- aura object exposes no SetPeriodicTimer twin — no ev2 registration.
 local HADRONOX_PERIODIC_SUMMONS = {
     [53035] = { 53064, 53090 }, -- champion: TOP 53064, BOTTOM 53090
     [53037] = { 53065, 53091 }, -- crypt fiend: TOP 53065, BOTTOM 53091

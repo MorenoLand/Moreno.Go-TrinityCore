@@ -58,9 +58,11 @@
 --   npc_geezle — SummonCreature has zero Lua usage (zulfarrak
 --   go_shallow_grave precedent); MotionMaster, quest-status,
 --   gameobject-respawn legs absent bridges.
---   spell_inoculate_nestlewood — AuraScript/PeriodicTick:
---   no SpellScript bridge (ashenvale spell_destroy_karangs_banner
---   precedent).
+--   spell_inoculate_nestlewood — AuraScript/PeriodicTick: the
+--   bridge exists (RegisterAuraEvent ev1); its arms are unassessed
+--   here, so it stays out pending its own audit (the ashenvale
+--   precedent is stale — row 320 stays out on its unidentifiable
+--   spell ID, not on the bridge).
 local ENTRY = 17243
 
 local SAY_TEXT = 0

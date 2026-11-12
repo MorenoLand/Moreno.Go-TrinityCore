@@ -53,8 +53,9 @@
 -- - spell_egg_explosion (SpellScript): the distance-scaled dummy
 --   damage arm is PORTED below (RegisterSpellEvent 19593 ev5); the
 --   AfterCast arm (FindNearestCreature Buru at 5yd -> DoAction
---   ACTION_EXPLODE) is PORTED below as a fold into eggDied — no
---   AfterCast hook exists in Go (runtime.go:517-600), but the egg
+--   ACTION_EXPLODE) is PORTED below as a fold into eggDied — the
+--   AfterCast hook exists in Go (SpellEventAfterCast=9,
+--   runtime.go:717), but the egg
 --   is the sole 19593 caster in the tree and the 19593 cast
 --   resolves synchronously, so the fold runs at AfterCast position
 --   (one DoAction: the script binds 19593; the 5255 binding is

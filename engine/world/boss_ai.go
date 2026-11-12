@@ -15450,9 +15450,11 @@ func init() {
 	// facing) awaits the movement / world-search / entry-update
 	// / cross-creature-facing bridges — documented only.
 	// spell_q12096_q12092_dummy + spell_q12096_q12092_bark
-	// (Strengthen the Ancients SpellScripts) have no SpellScript
-	// bridge anywhere in the model (blasted_lands / gordunni
-	// precedents) — documented only. npc_wyrmrest_defender
+	// (Strengthen the Ancients SpellScripts) — the bridge exists
+	// (RegisterSpellEvent; the blasted_lands / gordunni precedents
+	// are stale: 27686 is ported, gordunni is blocked on the GO
+	// caster) — documented only pending their own arm audit.
+	// npc_wyrmrest_defender
 	// (VehicleAI low-hp warn arm + SpellHit / gossip / charm
 	// arms) has no verifiable NPC_ entry constant in the C++
 	// sources and sits behind the VehicleAI / SpellHit / gossip

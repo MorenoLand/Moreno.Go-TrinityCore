@@ -32,8 +32,16 @@
 -- decl/call lines); this clone carries no sql/ tree, so ScriptName
 -- bindings are DB-side by construction. Pre-existing lua coverage
 -- AUDITED this run — COMPLETE (see accounting below). Census rows
--- 341-345 (2026-11-11): 341 periodic trigger + 342 marks verified-
--- existing (342 summon casts corrected to triggered — C++
+-- 341-345 (2026-11-12): 340/341 were SWAPPED and are re-bound this
+-- run — the combustion/consumption tick+apply+remove handlers were
+-- registered on the orb damage auras 74629/74803 and the periodic-
+-- trigger handler on the debuffs 74562/74792; TDB spell_script_names
+-- binds "spell_halion_fiery_combustion" -> 74562, "spell_halion_soul_
+-- consumption" -> 74792, "spell_halion_combustion_consumption_
+-- periodic" -> 74629 + 74803. As registered, the 341 handler returned
+-- true (= PreventDefaultAction) on 74562/74792, which would have
+-- suppressed their periodic damage once Spell.dbc ships. 342 marks
+-- verified-existing (342 summon casts corrected to triggered — C++
 -- CastSpellExtraArgs(ObjectGuid) ctor is TRIGGERED_FULL_MASK,
 -- SpellDefines.h:167; player funnel ignores the flag, so behaviour
 -- was already exact); 343 damage_aoe_summon stays out — ev4 carries
@@ -1174,10 +1182,13 @@ RegisterGameObjectGossipEvent(GO_HALION_PORTAL_EXIT, 1, onTwilightPortalGossip)
 -- No PreventDefaultAction, so the Go default damage tick still
 -- fires. Each tick the aura target re-casts its mark spell on
 -- itself, triggered. The loader is instantiated twice
--- (boss_halion.cpp:1923-1924): "spell_halion_soul_consumption"
--- with SPELL_MARK_OF_CONSUMPTION 74795 on the consumption damage
--- aura 74803, and "spell_halion_fiery_combustion" with SPELL_MARK_
--- OF_COMBUSTION 74567 on the combustion damage aura 74629. The
+-- (boss_halion.cpp:1923-1924): "spell_halion_fiery_combustion"
+-- (TDB spell_script_names -> 74562) with SPELL_MARK_OF_COMBUSTION
+-- 74567, and "spell_halion_soul_consumption" (TDB -> 74792) with
+-- SPELL_MARK_OF_CONSUMPTION 74795 — the periodic-damage debuffs,
+-- NOT the 74629/74803 orb damage auras (those carry the periodic-
+-- trigger loader, see below; a prior revision had the two bindings
+-- swapped). The
 -- OnApply leg (same self-cast once) and the OnRemove leg (strip
 -- the mark unless removed by death) are ported below (ev2/ev3;
 -- the old "no apply/remove hooks" claim was stale — the kalecgos
@@ -1195,8 +1206,8 @@ local function consumptionTick(event, aura, target)
     target:CastSpell(target, SPELL_MARK_OF_CONSUMPTION, true)
 end
 
-RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 1, combustionTick)
-RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 1, consumptionTick)
+RegisterAuraEvent(SPELL_FIERY_COMBUSTION, 1, combustionTick)
+RegisterAuraEvent(SPELL_SOUL_CONSUMPTION, 1, consumptionTick)
 
 -- C++ spell_halion_combustion_consumption::OnApply /
 -- OnRemove (boss_halion.cpp:1456-1473): EFFECT_0
@@ -1232,10 +1243,10 @@ local function consumptionDamageOnRemove(event, aura, target)
     end
 end
 
-RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 2, combustionDamageOnApply)
-RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 3, combustionDamageOnRemove)
-RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 2, consumptionDamageOnApply)
-RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 3, consumptionDamageOnRemove)
+RegisterAuraEvent(SPELL_FIERY_COMBUSTION, 2, combustionDamageOnApply)
+RegisterAuraEvent(SPELL_FIERY_COMBUSTION, 3, combustionDamageOnRemove)
+RegisterAuraEvent(SPELL_SOUL_CONSUMPTION, 2, consumptionDamageOnApply)
+RegisterAuraEvent(SPELL_SOUL_CONSUMPTION, 3, consumptionDamageOnRemove)
 
 -- C++ spell_halion_marks (boss_halion.cpp:1530-1589): the mark auras
 -- themselves. BeforeDispel (:1551-1559) zeroes the removed charges
@@ -1289,7 +1300,9 @@ RegisterAuraEvent(SPELL_MARK_OF_CONSUMPTION, 3, markOfConsumptionOnRemove)
 
 -- C++ spell_halion_combustion_consumption_periodic::HandleTick
 -- (boss_halion.cpp:1502-1519): EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL
--- on SPELL_FIERY_COMBUSTION 74562 / SPELL_SOUL_CONSUMPTION 74792.
+-- on the orb damage auras SPELL_COMBUSTION_DAMAGE_AURA 74629 /
+-- SPELL_CONSUMPTION_DAMAGE_AURA 74803 (TDB spell_script_names:
+-- spell_halion_combustion_consumption_periodic -> 74629, 74803).
 -- PreventDefaultAction, so the Go default trigger-spell cast is skipped
 -- (return true). The caster (Halion) casts the trigger spell — the
 -- aura's own Effects[0].TriggerSpell (DBC-side, read via
@@ -1300,7 +1313,7 @@ RegisterAuraEvent(SPELL_MARK_OF_CONSUMPTION, 3, markOfConsumptionOnRemove)
 -- OriginalCaster = caster leg has no Go model (CastCustomSpell
 -- precedent) and is moot here — the caster IS the original caster.
 -- DORMANT until Spell.dbc ships: the trigger spell id and the
--- 74562/74792 auras themselves are DBC-side.
+-- 74629/74803 auras themselves are DBC-side.
 local function combustionConsumptionTick(event, aura, target)
     local caster = aura:GetCaster()
     if caster == nil then
@@ -1315,8 +1328,8 @@ local function combustionConsumptionTick(event, aura, target)
     return true
 end
 
-RegisterAuraEvent(SPELL_FIERY_COMBUSTION, 1, combustionConsumptionTick)
-RegisterAuraEvent(SPELL_SOUL_CONSUMPTION, 1, combustionConsumptionTick)
+RegisterAuraEvent(SPELL_COMBUSTION_DAMAGE_AURA, 1, combustionConsumptionTick)
+RegisterAuraEvent(SPELL_CONSUMPTION_DAMAGE_AURA, 1, combustionConsumptionTick)
 
 -- C++ spell_halion_twilight_realm_handlers (boss_halion.cpp:1627-1690):
 -- the enter/leave-twilight-realm aura scripts, instantiated twice

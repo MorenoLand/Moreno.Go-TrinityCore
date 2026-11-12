@@ -59,11 +59,13 @@
 -- Dummy to Woodlands Walker (roll 1: CastSpell-on-player 47550
 -- item bark + Talk SAY_WALKER_FRIENDLY + DespawnOrUnsummon 1s;
 -- roll 0: Talk SAY_WALKER_ENEMY + SetFaction(FACTION_MONSTER) +
--- Attack) has no SpellScript bridge anywhere in the model
--- (blasted_lands / gordunni precedents) — documented-only.
+-- Attack) — the bridge exists (RegisterSpellEvent; the blasted_lands
+-- / gordunni precedents are stale: 27686 is ported, gordunni is
+-- blocked on the GO caster) — documented-only pending its own audit.
 -- spell_q12096_q12092_bark — Bark of the Walkers (Lothalor
 -- entry-gated Talk SAY_LOTHALOR + RemoveAura(SPELL_CONFUSED 47044) +
--- DespawnOrUnsummon 4s) has no SpellScript bridge — documented-only.
+-- DespawnOrUnsummon 4s) — bridge exists (RegisterSpellEvent) —
+-- documented-only pending its own audit.
 -- npc_wyrmrest_defender (VehicleAI) — UpdateAI low-hp arm
 -- (GetHealthPct() <= 30% -> CastSpell(me, 52421), 20s renew
 -- recovery re-arm gate) sits behind the unmodeled VehicleAI

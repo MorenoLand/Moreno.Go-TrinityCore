@@ -15,8 +15,11 @@
 -- - OnGossipSelect (ev2): clear the menu; action GOSSIP_ACTION_TRADE
 --   (1) opens the vendor list (player:SendListInventory, creature
 --   GUID — lua_player.go:6604-6612).
--- The ooze_zap / ooze_zap_channel_end / energize_aoe SpellScripts in
--- the same file stay out (no SpellScript bridge).
+-- The ooze_zap (42489) / ooze_zap_channel_end (42485) SpellScripts
+-- are PORTED in zone_dustwallow_marsh.lua (RegisterSpellEvent ev5,
+-- + ev8 CheckCast for ooze_zap); energize_aoe (42492) stays out —
+-- ev7 fires only on the creature boss-AI path and its quest ID is
+-- DBC-bound (census row 326).
 -- Melee is engine-driven in Go, like C++ DoMeleeAttackIfReady.
 
 local NAT_PAGLE_ENTRY = 12919
