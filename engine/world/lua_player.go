@@ -4055,6 +4055,17 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.removeAuraWithMode(spell, mode)
 		return nil, nil
 	}
+	// RemoveAuraFromStack(spellId[, casterGUID]) is Unit::RemoveAuraFromStack
+	// (Unit.cpp:3917) for players: the session twin of the handler-creature
+	// method (lua_creature_events.go). Backs the gaseous bloat periodic arm
+	// (boss_professor_putricide.cpp:815-826).
+	methods["RemoveAuraFromStack"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.removePlayerAuraFromStack(spell)}, nil
+	}
 	// RemoveAurasByType is Unit::RemoveAurasByType (Unit.cpp:3884) for
 	// players: every live engine-applied aura whose stored AuraType
 	// matches is removed via the session removeAurasByType funnel

@@ -1692,6 +1692,21 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.removeCreatureAuraWithMode(auraKey(), spell, mode)
 		return nil, nil
 	}
+	// RemoveAuraFromStack(spellId[, casterGUID]) is Unit::RemoveAuraFromStack
+	// (Unit.cpp:3917) on the creature surface: one stack comes off the named
+	// aura (Aura::ModStackAmount(-1), SpellAuras.cpp:1030) and the aura is
+	// removed when the last stack goes; returns true when the aura is gone
+	// (absent included). The C++ caster-GUID argument is accepted and
+	// ignored: the Go aura store holds one aura per spell per unit, so there
+	// is no same-spell second instance to disambiguate. Backs the gaseous
+	// bloat periodic arm (boss_professor_putricide.cpp:815-826).
+	methods["RemoveAuraFromStack"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.removeCreatureAuraFromStack(auraKey(), spell)}, nil
+	}
 	// RemoveMovementImpairingAuras is Unit::RemoveMovementImpairingAuras
 	// (Unit.cpp:4193-4213) on the creature surface: withRoot=true drops
 	// root-mechanic auras (plus the stalked/stun extra the creature

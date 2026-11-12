@@ -180,8 +180,7 @@
 -- REACT_PASSIVE), SpellHit ev14 (71618 hit -> 1s timer), 1s poller
 -- (HasAura(71618) freeze, IsCasting() approx for IsNonMeleeSpellCast
 -- — no bridge), volatile CastMainSpell self-cast 70447. Gas-cloud
--- CastMainSpell stays out: 70672 with SPELLVALUE_AURA_STACK 10 has
--- no cast-mod bridge (zero hits; boss_ai.go:18227 precedent). Evade
+-- CastMainSpell PORTED below (70672 + SetStackAmount(10) twin). Evade
 -- rides ev23 (Go fires ev23 before ev2 on the evade path,
 -- creaturemotion.go:4699 — C++ EnterEvadeMode ends in Reset(),
 -- CreatureAI.cpp:214-236), so no separate ev2 handler; the poller is
@@ -224,9 +223,9 @@
 -- calc is not forwarded (runtime.go:518); the _dmg filter is a
 -- no-op for the player caster (CreatorGUID 0) and ev7 never fires
 -- on the player path (lua_spell.go fireSpellTargetSelects takes a
--- creatureMotion). Gaseous bloat re-confirmed OUT (no
--- RemoveAuraFromStack Lua method, no SPELLVALUE_AURA_STACK
--- cast-mod bridge — only RADIUS_MOD exists in-tree).
+-- creatureMotion). Gaseous bloat PORTED this tick (RemoveAuraFromStack
+-- bridge built; stack-10 re-cast via CastSpell + SetStackAmount(10));
+-- the 05:16 stay-out is superseded.
 -- DOCUMENTED-ENTRY EVIDENCE (not registered): icecrown_citadel.h —
 -- NPC_VOLATILE_OOZE = 37697 (line 238); NPC_GAS_CLOUD = 37562
 -- (line 237); instance_icecrown_citadel.cpp OnCreatureCreate binds
@@ -288,6 +287,9 @@ local SPELL_OOZE_ERUPTION = 70492 -- boss_professor_putricide.cpp:102
 local SPELL_VOLATILE_OOZE_ADHESIVE = 70447 -- boss_professor_putricide.cpp:103
 local SPELL_GASEOUS_BLOAT_PROC = 70215 -- boss_professor_putricide.cpp:99
 local SPELL_GASEOUS_BLOAT = 70672 -- boss_professor_putricide.cpp:97
+local SPELL_GASEOUS_BLOAT_25 = 72455 -- boss_professor_putricide.cpp:121 RAID_MODE 25-man
+local SPELL_GASEOUS_BLOAT_10H = 72832 -- boss_professor_putricide.cpp:121 RAID_MODE 10-man heroic
+local SPELL_GASEOUS_BLOAT_25H = 72833 -- boss_professor_putricide.cpp:121 RAID_MODE 25-man heroic
 local SPELL_EXPUNGED_GAS = 70701 -- boss_professor_putricide.cpp:100
 local SPELL_DECIMATE = 71123 -- boss_festergut.cpp:56 / boss_rotface.cpp:77
 local NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER = 37824 -- icecrown_citadel.h:235
@@ -744,7 +746,7 @@ RegisterSpellEvent(SPELL_UNSTABLE_EXPERIMENT, 5, unstableExperimentScript)
 -- shared base of npc_volatile_ooze (:783-791, aura 70457, hit-target
 -- 70492, CastMainSpell self-cast 70447 non-triggered) and
 -- npc_gas_cloud (:793-810, aura 70215, hit-target 70701, CastMainSpell
--- 70672 with SPELLVALUE_AURA_STACK 10 — no cast-mod bridge, stays
+-- 70672 with SPELLVALUE_AURA_STACK 10 — ported via the SetStackAmount twin,
 -- out). Per-GUID _newTargetSelectTimer: the 1s poller below is the
 -- UpdateAI model (1000ms timer, 1s granularity — the escape-trash
 -- precedent); DoMeleeAttackIfReady has no bridge and is a no-op.
@@ -787,8 +789,16 @@ local function oozePollTick(creature, guid, entry)
     if entry == NPC_VOLATILE_OOZE then
         -- C++ npc_volatile_ooze::CastMainSpell (:787-790).
         creature:CastSpell(creature, SPELL_VOLATILE_OOZE_ADHESIVE)
+    elseif entry == NPC_GAS_CLOUD then
+        -- C++ npc_gas_cloud::CastMainSpell (:803-807): self-cast 70672
+        -- with SPELLVALUE_AURA_STACK 10 (twin: plain self-cast + GetAura
+        -- + SetStackAmount(10); the cast-mod has no bridge).
+        creature:CastSpell(creature, SPELL_GASEOUS_BLOAT)
+        local bloat = creature:GetAura(SPELL_GASEOUS_BLOAT)
+        if bloat ~= nil then
+            bloat:SetStackAmount(10)
+        end
     end
-    -- Gas-cloud CastMainSpell (:803-807) stays out (SPELLVALUE_AURA_STACK).
     schedule(guid, "oozepoll", 1000, function() oozePollTick(creature, guid, entry) end)
 end
 
@@ -915,6 +925,54 @@ local function slimePuddleReplaceAura(event, spell, target)
 end
 for _, spellId in ipairs({ SPELL_SLIME_PUDDLE_72868, SPELL_SLIME_PUDDLE_72869 }) do
     RegisterSpellEvent(spellId, 2, slimePuddleReplaceAura)
+end
+
+-- C++ spell_putricide_gaseous_bloat (boss_professor_putricide.cpp:811-850):
+-- OnEffectPeriodic EFFECT_0 PERIODIC_DAMAGE: one stack comes off the
+-- holder; when the aura is gone the caster re-casts it on itself with
+-- SPELLVALUE_AURA_STACK 10 (twin: plain self-cast + GetAura +
+-- SetStackAmount(10); the cast-mod has no bridge). OnProc: the actor
+-- casts Expunged Gas (70701) with BP0 = the stack-summed raid-size mod
+-- (1500 25-man / 1250 10-man, actor map difficulty & 1 — the actor and
+-- the holder share the map). RegisterAuraEvent OnPeriodic = 1 /
+-- OnProc = 6. DORMANT until Spell.dbc ships the periodic + proc entries.
+-- Bound to all four RAID_MODE ids (AC spell_script_names).
+local function gaseousBloatPeriodic(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local auraId = aura:GetAuraId()
+    target:RemoveAuraFromStack(auraId, aura:GetCasterGUID())
+    if not target:HasAura(auraId) then
+        caster:CastSpell(caster, SPELL_GASEOUS_BLOAT)
+        local bloat = caster:GetAura(SPELL_GASEOUS_BLOAT)
+        if bloat ~= nil then
+            bloat:SetStackAmount(10)
+        end
+    end
+end
+
+local function gaseousBloatProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if actor == nil then
+        return
+    end
+    local stack = aura:GetStackAmount()
+    local mod = 1250
+    local map = actor:GetMap()
+    if map ~= nil and map:GetDifficulty() % 2 == 1 then
+        mod = 1500
+    end
+    local dmg = 0
+    for i = 1, stack do
+        dmg = dmg + mod * i
+    end
+    actor:CastCustomSpell(actor, SPELL_EXPUNGED_GAS, true, dmg)
+end
+
+for _, spellId in ipairs({ SPELL_GASEOUS_BLOAT, SPELL_GASEOUS_BLOAT_25, SPELL_GASEOUS_BLOAT_10H, SPELL_GASEOUS_BLOAT_25H }) do
+    RegisterAuraEvent(spellId, 1, gaseousBloatPeriodic)
+    RegisterAuraEvent(spellId, 6, gaseousBloatProc)
 end
 
 -- C++ spell_putricide_clear_aura_effect_value::HandleScript
