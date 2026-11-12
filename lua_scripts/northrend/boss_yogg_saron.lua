@@ -1576,9 +1576,9 @@ PHASE3.yoggBrainLinkTick = function(event, aura, target)
         return
     end
     if math.max(0, target:GetDistance(linked) - 3.0) > aura:GetAmount(0) then
-        target:CastSpell(linked, PHASE3.BRAIN_LINK_DAMAGE)
+        target:CastSpell(linked, PHASE3.BRAIN_LINK_DAMAGE, true)
     else
-        target:CastSpell(linked, PHASE3.BRAIN_LINK_NO_DAMAGE)
+        target:CastSpell(linked, PHASE3.BRAIN_LINK_NO_DAMAGE, true)
     end
 end
 RegisterAuraEvent(SPELL_BRAIN_LINK, 1, PHASE3.yoggBrainLinkTick)
@@ -1908,24 +1908,22 @@ RegisterSpellEvent(SPELL_LUNGE, 5, PHASE3.yoggLungeHit)
 
 -- C++ spell_yogg_saron_squeeze::OnRemove
 -- (boss_yogg_saron.cpp:2455-2464): AfterEffectRemove EFFECT_0
--- SPELL_AURA_PERIODIC_DAMAGE, REAL -> if the aura target rides a
--- vehicle (the constrictor tentacle) and it is alive, the tentacle
--- kills itself. GetVehicleBase has no Lua bridge; the twin is
--- IsOnVehicle + Vehicle:GetOwner (the mimiron/weldTick idiom) and
--- Kill is the KillSelf twin (lua_creature_events.go:3237). No
--- remove-mode gate in C++. Bound 64125 (lunge :2428) + 64126
--- (heroic difficulty twin, loader comment :2445). The census hooks
--- (AfterEffectApply + OnEffectHitTarget) are both phantoms — the
--- class registers only AfterEffectRemove. DORMANT until Spell.dbc ships.
+-- SPELL_AURA_PERIODIC_DAMAGE, REAL -> if the aura target's vehicle
+-- base is alive, the base kills itself. GetVehicleBase is bridged
+-- (player lua_player.go:3369, creature lua_creature_events.go:3496);
+-- the old IsOnVehicle + Vehicle:GetOwner twin killed the same unit
+-- (Vehicle:GetOwner is GetBase, lua_vehicle.go) but the direct
+-- bridge is name-faithful to C++. Kill is the KillSelf twin
+-- (lua_creature_events.go:3423). No remove-mode gate in C++. Bound
+-- 64125 (lunge :2428) + 64126 (heroic difficulty twin, loader
+-- comment :2445). The census hooks (AfterEffectApply +
+-- OnEffectHitTarget) are both phantoms — the class registers only
+-- AfterEffectRemove. DORMANT until Spell.dbc ships.
 PHASE3.yoggSqueezeRemoved = function(event, aura, target)
     if target == nil then
         return
     end
-    local vehicle = target:IsOnVehicle()
-    if vehicle == nil then
-        return
-    end
-    local base = vehicle:GetOwner()
+    local base = target:GetVehicleBase()
     if base ~= nil and base:IsAlive() then
         base:Kill()
     end
