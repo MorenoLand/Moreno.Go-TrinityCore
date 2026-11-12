@@ -727,3 +727,31 @@ local function deathGripInitialHit(event, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_DK_DEATH_GRIP_INITIAL, 5, deathGripInitialHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnDispel = 5):
+--   spell_dk_frost_fever (55095, spell_dk.cpp:1343-1358): AfterDispel.
+--   When Frost Fever is dispelled, if its caster exists and the owner
+--   still carries an Icy Clutch slow (SPELL_AURA_MOD_DECREASE_SPEED,
+--   SPELLFAMILY_DEATHKNIGHT, flag 0x00040000) from that caster, that
+--   aura is removed by spell id. Rides the Go AuraEventOnDispel bridge
+--   (lua_aura.go fireAuraDispel; hexlord ev5 precedent) and the
+--   GetAuraEffectSpellIdByFamily player+creature twin (hunter
+--   thrill-of-the-hunt precedent); RemoveAura(id) is the
+--   RemoveAurasDueToSpell twin.
+local SPELL_DK_FROST_FEVER = 55095 -- spell_dk.cpp:1343 (class), :3235 (RegisterSpellScript)
+local SPELL_AURA_MOD_DECREASE_SPEED = 33 -- SpellAuraDefines.h:113
+local SPELLFAMILY_DEATHKNIGHT = 15 -- SharedDefines.h:3596
+local SPELL_FAMILY_FLAG_DK_ICY_CLUTCH = 0x00040000 -- spell_dk.cpp:1350
+
+local function frostFeverDispel(event, aura, target, dispeller)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    local icyClutch = target:GetAuraEffectSpellIdByFamily(SPELL_AURA_MOD_DECREASE_SPEED, SPELLFAMILY_DEATHKNIGHT, 0, SPELL_FAMILY_FLAG_DK_ICY_CLUTCH, 0, caster:GetGUID())
+    if icyClutch ~= nil then
+        target:RemoveAura(icyClutch)
+    end
+end
+
+RegisterAuraEvent(SPELL_DK_FROST_FEVER, 5, frostFeverDispel)
