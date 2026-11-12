@@ -1656,6 +1656,45 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetCharmGUID"] = luaNoArgs(func() any {
 		return s.server.unitCharmedGUID(state.Map, state.InstanceID, state.GUID)
 	})
+	// StopCastingCharm is Player::StopCastingCharm (Player.cpp:20940-20973):
+	// the player's charmed creature loses its charm auras (RemoveCharmAuras,
+	// Unit.cpp:6525-6531 — the charmAuraTypes set the .unpossess command
+	// already removes), which uncharms it via the aura-removal path; a
+	// still-charmed unit is force-uncharmed (SetCharm(charm, false) twin).
+	// A charmed vehicle makes the player exit it first (ExitVehicle twin).
+	// Deltas: the IsGhouled leg has no Go model (RemoveGhoul has no analog,
+	// death.go/pets.go) and the puppet leg has none either (Puppet stays out,
+	// boss_ai.go:4965).
+	methods["StopCastingCharm"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if s == nil || s.player == nil || s.server == nil {
+			return nil, nil
+		}
+		charmGUID := s.server.unitCharmedGUID(state.Map, state.InstanceID, state.GUID)
+		if charmGUID == 0 {
+			return nil, nil
+		}
+		motion := s.findCreatureMotion(charmGUID)
+		if motion == nil {
+			return nil, nil
+		}
+		if s.server.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil {
+			s.exitVehicle(ctx)
+		}
+		key := creatureAuraKey{Map: motion.Map, InstanceID: motion.InstanceID, GUID: motion.GUID}
+		for _, auraType := range charmAuraTypes {
+			s.server.removeCreatureAurasByType(key, auraType)
+		}
+		s.server.uncharmCreature(key, state.GUID)
+		return nil, nil
+	}
+	// StopCastingBindSight is Player::StopCastingBindSight (Player.cpp:24605-24616):
+	// the BIND_SIGHT / MOD_POSSESS / MOD_POSSESS_PET auras cast by this player
+	// leave the current viewpoint target. The session twin already exists
+	// (stopCastingBindSight, spells.go:36170); this only exposes it to Lua.
+	methods["StopCastingBindSight"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.stopCastingBindSight()
+		return nil, nil
+	}
 	// GetCritterGUID is Unit::GetCritterGUID (Unit.h:1156):
 	// UNIT_FIELD_CRITTER, the vanity-pet mirror on the player state.
 	methods["GetCritterGUID"] = luaNoArgs(func() any { return state.CritterGUID })

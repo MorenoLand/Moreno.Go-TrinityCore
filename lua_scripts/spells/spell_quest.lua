@@ -627,14 +627,15 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   2026-11-12 (binding 56565, HUNT block at end of file) — the
 --   "no binding ID" line above is superseded by 349bdee8.
 --   spell_q13086_cannons_target (:1957-1985): ev4 DUMMY; caster casts
---   GetEffectValue() triggered at the explicit dest — no binding ID;
---   no position-targeted CastSpell bridge (spell:GetTargetDest
---   exists, lua_spell.go:91, but no CastSpell(x,y,z) arm).
---   spell_q12641_recall_eye_of_acherus (:2381-2415): ev5; caster's
---   charmer-or-owner player stops charm/bindsight + removes the Eye
---   aura — StopCastingCharm/BindSight unbridged (GetCharmerOrOwner
---   IS bridged via GetControllerGUID; binding 52694, in-file comment
---   :2375 — corrected tick 2026-11-12).
+--   GetEffectValue() triggered at the explicit dest — no binding ID
+--   only (corrected tick 2026-11-12: CastSpellAoF(x,y,z,id[,triggered])
+--   IS bridged on both surfaces — lua_creature_events.go:1045,
+--   lua_player.go:3344, triggered defaults true; spell:GetTargetDest
+--   exists, lua_spell.go:305, not :91 as the old note claimed).
+--   spell_q12641_recall_eye_of_acherus (:2381-2415): PORTED tick
+--   2026-11-12 (binding 52694, HUNT block at end of file) — the
+--   StopCastingCharm/BindSight bridges were built this tick
+--   (lua_player.go) and the port uses them + GetControllerGUID.
 --   spell_q12919_gymers_grab (:2474-2514): PORTED tick 2026-11-12
 --   (binding 55516, HUNT block at end of file).
 --   spell_q12919_gymers_throw (:2515-2551): PORTED tick 2026-11-12
@@ -1397,6 +1398,9 @@ local HUNT = {
     NPC_NEW_AVALON_TOWN_HALL = 28543,
     NPC_SCARLET_HOLD = 28542,
     NPC_CHAPEL_OF_THE_CRIMSON_FLAME = 28544,
+    -- spell_q12641_recall_eye_of_acherus (spell_quest.cpp:2381)
+    SPELL_RECALL_EYE_OF_ACHERUS = 52694,
+    SPELL_THE_EYE_OF_ACHERUS = 51852,
     -- spell_q12919_gymers_grab (spell_quest.cpp:2474)
     SPELL_GYMERS_GRAB = 55516,
     SPELL_RIDE_GYMER = 43671,
@@ -1729,15 +1733,6 @@ RegisterAuraEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59579, 3, burstAtTheSeams59579Re
 --   (EFFECT_0 TARGET_DEST_CASTER_SUMMON) — no bridge, same as the
 --   59303 armored-decoy leg. Binding 48681 is the `// 48681`
 --   comment (:2273).
---   spell_q12641_recall_eye_of_acherus (spell_quest.cpp:2381-2412):
---   EFFECT_0 SCRIPT_EFFECT ev5, binding 52694 (`// 52694` comment
---   + sibling AC verification, 02:39 entry). The caster's
---   charmer-or-owner player stops charm/bindsight and removes the
---   51852 Eye aura — StopCastingCharm / StopCastingBindSight have
---   no Lua binding (only the session-internal stopCastingBindSight,
---   spells.go:36170); the charmer resolution (GetControllerGUID +
---   GetPlayerByGUID) and RemoveAura ARE bridged, so this ports
---   once the two StopCasting* methods are exposed.
 
 local function burst52510KnockbackHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 1 then
@@ -1923,3 +1918,38 @@ local function destroyTotemsHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_MAKE_PLAYER_DESTROY_TOTEMS, 5, destroyTotemsHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12641_recall_eye_of_acherus (spell_quest.cpp:2381-2412):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 52694 (`// 52694` comment +
+--   sibling AC verification, 02:39 entry). The caster's charmer-or-owner
+--   player (GetControllerGUID, charmer else owner, 0 when neither —
+--   the GetCharmerOrOwnerGUID twin; GetPlayerByGUID nils non-player
+--   owners, the ToPlayer() twin) stops charm/bindsight and removes
+--   the 51852 Eye aura. StopCastingCharm / StopCastingBindSight were
+--   unbridged; both are exposed on the Lua player surface this tick
+--   (lua_player.go: StopCastingCharm removes the charm auras then
+--   force-uncharms, StopCastingBindSight is the session twin).
+
+local function recallEyeHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= HUNT.TYPEID_UNIT then
+        return
+    end
+    local guid = caster:GetControllerGUID()
+    if guid == 0 then
+        return
+    end
+    local player = GetPlayerByGUID(guid)
+    if player == nil then
+        return
+    end
+    player:StopCastingCharm()
+    player:StopCastingBindSight()
+    player:RemoveAura(HUNT.SPELL_THE_EYE_OF_ACHERUS)
+end
+
+RegisterSpellEvent(HUNT.SPELL_RECALL_EYE_OF_ACHERUS, 5, recallEyeHit)
