@@ -188,6 +188,8 @@ local ENTRY_HEADLESS_HORSEMAN = 23682
 local ENTRY_HORSEMAN_HEAD = 23775
 local ENTRY_SIR_THOMAS = 23904 -- NPC_SIR_THOMAS, scarlet_monastery.h:75
 local SPELL_WISP_INVIS = 42823 -- boss_headless_horseman.cpp:106
+local SPELL_WISP_FLIGHT_PORT = 42818 -- boss_headless_horseman.cpp:108
+local SPELL_HEADLESS_HORSEMAN_C_GHOST_VISUAL = 42575 -- boss_headless_horseman.cpp:109
 local SPELL_WISP_FLIGHT_MISSILE = 42821 -- boss_headless_horseman.cpp:107
 local UNIT_NPC_FLAGS_FIELD = 82 -- aeranas precedent
 local UNIT_NPC_FLAG_QUESTGIVER = 2
@@ -376,8 +378,9 @@ RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 24, onHeadReachHome)
 -- WISP_INVIS 42823, then a 9s one-shot self-cast WISP_FLIGHT_MISSILE
 -- 42821. The bearer arrives via the ported boss onDied
 -- SummonCreature(23904) leg, so Reset arms on events 5/23. The
--- SpellHit(42818) handler stays out (SpellHit handlers not modeled
--- — draenei_survivor precedent).
+-- SpellHit(42818) handler PORTED below (sirThomasSpellHit) — the
+-- "SpellHit handlers not modeled" note is stale: ev14 fires live
+-- (boss_ai.go:4267,4282) and all four legs are bridged.
 local function sirThomasReset(event, creature)
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -388,11 +391,25 @@ local function sirThomasReset(event, creature)
     end)
 end
 
+-- C++ npc_sir_thomas::SpellHit (boss_headless_horseman.cpp:720-730):
+-- 42818 WISP_FLIGHT_PORT -> clear NOT_SELECTABLE, set QUESTGIVER,
+-- remove WISP_INVIS 42823, self-cast C_GHOST_VISUAL 42575 (triggered).
+local function sirThomasSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_WISP_FLIGHT_PORT then
+        return
+    end
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_QUESTGIVER)
+    creature:RemoveAura(SPELL_WISP_INVIS)
+    creature:CastSpell(creature, SPELL_HEADLESS_HORSEMAN_C_GHOST_VISUAL, true)
+end
+
 local function sirThomasClear(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 23, sirThomasReset)
+RegisterCreatureEvent(ENTRY_SIR_THOMAS, 14, sirThomasSpellHit)
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 5, sirThomasReset)
 RegisterCreatureEvent(ENTRY_SIR_THOMAS, 4, sirThomasClear)
 

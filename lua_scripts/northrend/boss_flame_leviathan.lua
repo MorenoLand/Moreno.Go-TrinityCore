@@ -475,8 +475,13 @@ end
 -- _pursueTarget.Clear() (pursueTargetGuid[guid] = nil below; the store is
 -- consumed only by the blocked DoBatteringRamIfReady legs) and SetReactState
 -- (REACT_DEFENSIVE) last.
+local SPELL_OVERLOAD_CIRCUIT = 62399 -- boss_flame_leviathan.cpp:51
+
+local shutdownCount = {}
+
 local function flameLeviathanReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    shutdownCount[creature:GetGUIDLow()] = nil
     pursueTargetGuid[creature:GetGUIDLow()] = nil
     creature:SetBossState(DATA_LEVIATHAN, 0)
     -- C++ boss_flame_leviathan.cpp:272: me->SetReactState(REACT_DEFENSIVE)
@@ -557,6 +562,37 @@ local function flameLeviathanMovementInform(event, creature, motionType, id)
     end
 end
 
+-- C++ boss_flame_leviathanAI::SpellHit (:334-348) OVERLOAD_CIRCUIT leg:
+-- ++Shutdown; at RAID_MODE(2, 4) the UpdateAI check (:385-391) resets the
+-- counter, schedules EVENT_SHUTDOWN in 4s, removes the overload auras and
+-- interrupts non-melee spells. The threshold check runs at hit time here --
+-- equivalent, since Shutdown only changes on SpellHit. The other two
+-- SpellHit arms stay out (START_THE_ENGINE: no vehicle-accessory bridge;
+-- ELECTROSHOCK: vacuous, no channel ever started). The header note above
+-- claiming this leg blocked on raid-size / RemoveAurasDueToSpell is stale:
+-- Is25ManRaid is bridged and RemoveAura covers the single-application aura.
+local function flameLeviathanSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_OVERLOAD_CIRCUIT then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local count = (shutdownCount[guid] or 0) + 1
+    shutdownCount[guid] = count
+    local threshold = 2
+    if creature:Is25ManRaid() then
+        threshold = 4
+    end
+    if count == threshold then
+        shutdownCount[guid] = 0
+        creature:RemoveAura(SPELL_OVERLOAD_CIRCUIT)
+        creature:InterruptNonMeleeSpells()
+        schedule(guid, "shutdown", 4000, function()
+            shutdownTick(creature, guid)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 14, flameLeviathanSpellHit)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 1, flameLeviathanEnterCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 2, flameLeviathanLeaveCombat)
 RegisterCreatureEvent(ENTRY_FLAME_LEVIATHAN, 4, flameLeviathanDied)

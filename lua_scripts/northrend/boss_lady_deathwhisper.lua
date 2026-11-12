@@ -313,6 +313,8 @@ local SPELL_DEATHCHILL_BOLT = 70594
 local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
 local SPELL_SUMMON_SPIRITS = 72478 -- :439-443
+
+local vengefulShadeTargets = {}
 local SPELL_DEATH_AND_DECAY = 71001 -- :63
 local SPELL_DOMINATE_MIND = 71289
 local SPELL_DOMINATE_MIND_SCALE = 71290 -- :64
@@ -760,6 +762,7 @@ local function deathwhisperReset(event, creature)
     cancelTimers(guid)
     improvedCultists[guid] = nil
     deathwhisperPhase[guid] = nil
+    vengefulShadeTargets[guid] = nil
     -- C++ Reset() (:226): unconditional non-triggered self-cast of the
     -- phase-1 channeling aura (removed on engage via
     -- RemoveAurasDueToSpell, :340). Reset-only; alive-gated.
@@ -1242,6 +1245,27 @@ local function darnavanReset(event, creature)
     darnavanCanShatter[guid] = nil
 end
 
+-- C++ boss_lady_deathwhisper::SpellHitTarget (:460-463): every
+-- SPELL_SUMMON_SPIRITS 72478 hit appends the target GUID to
+-- _nextVengefulShadeTargetGUID (cleared on Reset :211, consumed
+-- front-first by JustSummoned :476-479 to SetGUID the next
+-- Vengeful Shade). The cast is ported (summonSpiritsTick), so
+-- ev15 fires live. The consumer (shade SetGUID) is a separate
+-- unported arm; the queue only pays off when that lands.
+local function deathwhisperSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_SUMMON_SPIRITS or target == nil then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local queue = vengefulShadeTargets[guid]
+    if not queue then
+        queue = {}
+        vengefulShadeTargets[guid] = queue
+    end
+    queue[#queue + 1] = target:GetGUIDLow()
+end
+
+RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 15, deathwhisperSpellHitTarget)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 1, deathwhisperJustEngagedWith)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 2, deathwhisperLeaveCombat)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 3, deathwhisperKilledUnit)

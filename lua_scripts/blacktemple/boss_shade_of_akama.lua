@@ -99,6 +99,12 @@ local ENTRY_ASHTONGUE_CHANNELER = 23421
 -- Declared here (rather than in the akama section below) so shadeDied
 -- can sweep it: Lua locals scope from their declaration line.
 local ENTRY_AKAMA_SHADE = 23191 -- black_temple.h:88 (NPC_AKAMA_SHADE)
+local DATA_SHADE_OF_AKAMA = 2 -- black_temple.h:33
+local SPELL_THREAT = 41602 -- boss_shade_of_akama.cpp:55
+local SPELL_CHAIN_LIGHTNING = 39945 -- boss_shade_of_akama.cpp:51
+local SPELL_DESTRUCTIVE_POISON = 40874 -- boss_shade_of_akama.cpp:52
+
+local akamaInCombat = {}
 
 -- C++ npc_akama_shade::DamageTaken: one-shot Talk(SAY_LOW_HEALTH=3) when
 -- HealthBelowPct(20) (boss_shade_of_akama.cpp:401-407; _hasYelledOnce
@@ -263,6 +269,7 @@ end
 local SAY_DEAD = 4
 
 local function akamaShadeDied(event, creature, killer)
+    akamaInCombat[creature:GetGUIDLow()] = nil
     cancelTimers(creature:GetGUIDLow())
     creature:Talk(SAY_DEAD)
 end
@@ -280,6 +287,7 @@ local function akamaShadeReset(event, creature)
     -- removal).
     -- SetFaction is bridged (lua_creature_events.go:1125).
     akamaYelledOnce[creature:GetGUIDLow()] = nil
+    akamaInCombat[creature:GetGUIDLow()] = nil
     cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() then
         creature:SetFaction(1820)
@@ -322,6 +330,57 @@ local function akamaShadeGossipSelect(event, player, creature, sender, action, c
     return false
 end
 
+-- C++ npc_akama_shadeAI::SpellHit (boss_shade_of_akama.cpp:384-399):
+-- SPELL_THREAT (41602) + !_isInCombat -> SetWalk(false),
+-- RemoveAurasDueToSpell(SPELL_AKAMA_SOUL_CHANNEL) on self and on the
+-- shade, AttackStart(shade), schedule EVENT_CHAIN_LIGHTNING 2s and
+-- EVENT_DESTRUCTIVE_POISON 5s (UpdateAI repeats: chain 8-15s, poison
+-- 3-7s; chain = DoCastVictim, poison = DoCastSelf). The pumps are
+-- scheduled only inside the shade-found branch, like C++.
+-- EngageWithTarget is the AttackStart twin (triggerCreatureAggro funnel).
+local function akamaChainTick(creature, guid)
+    if creature:IsAlive() then
+        creature:CastSpell(nil, SPELL_CHAIN_LIGHTNING)
+    end
+    schedule(guid, "akama_chain", 8000 + math.random(0, 7000), function()
+        akamaChainTick(creature, guid)
+    end)
+end
+
+local function akamaPoisonTick(creature, guid)
+    if creature:IsAlive() then
+        creature:CastSpell(creature, SPELL_DESTRUCTIVE_POISON)
+    end
+    schedule(guid, "akama_poison", 3000 + math.random(0, 4000), function()
+        akamaPoisonTick(creature, guid)
+    end)
+end
+
+local function akamaShadeSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_THREAT then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if akamaInCombat[guid] then
+        return
+    end
+    akamaInCombat[guid] = true
+    creature:SetWalk(false)
+    creature:RemoveAura(SPELL_AKAMA_SOUL_CHANNEL)
+    local shade = creature:GetInstanceCreature(DATA_SHADE_OF_AKAMA)
+    if shade then
+        shade:RemoveAura(SPELL_AKAMA_SOUL_CHANNEL)
+        creature:EngageWithTarget(shade)
+        schedule(guid, "akama_chain", 2000, function()
+            akamaChainTick(creature, guid)
+        end)
+        schedule(guid, "akama_poison", 5000, function()
+            akamaPoisonTick(creature, guid)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 14, akamaShadeSpellHit)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 9, akamaShadeDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)
