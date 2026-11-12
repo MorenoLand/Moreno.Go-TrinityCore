@@ -39053,6 +39053,166 @@ func creatureAuraCasterLevel(s *session, casterGUID uint64, spell wotlk.Spell) u
 // periodicInitialDelay overrides the first periodic-tick delay computed by
 // periodicTickInitialDelay (the dynobj target-map pass aligns new applications
 // to the dynobj's shared amplitude schedule); nil keeps the default.
+// spellMixology is the Mixology passive (spell_generic.cpp:3739).
+const spellMixology = 53042
+
+type mixologyBonus struct {
+	pct       int32
+	flat      int32
+	perEffect map[int]int32
+}
+
+// mixologyBonusFor mirrors the bonus arm of
+// spell_gen_mixology_bonus::CalculateAmount (spell_generic.cpp:3847-4015):
+// the per-id bonus for an elixir/flask aura effect. pct entries use the
+// C++ CalculatePct float convention (Util.h:66-70: base * float(pct) /
+// 100.0f, truncated); per-effect entries reproduce the SetBonusValueForEffect
+// arms with the C++ member carry-over — an unlisted effect index keeps the
+// bonus of the highest listed index at or below it (0 when none).
+func mixologyBonusFor(spellID uint32, effIndex int, amount int32) (int32, bool) {
+	b, ok := mixologyBonusTable[spellID]
+	if !ok {
+		return 0, false
+	}
+	if b.perEffect != nil {
+		best := -1
+		for idx := range b.perEffect {
+			if idx <= effIndex && idx > best {
+				best = idx
+			}
+		}
+		if best < 0 {
+			return 0, true
+		}
+		return b.perEffect[best], true
+	}
+	if b.pct != 0 {
+		return int32(float32(amount) * float32(b.pct) / 100), true
+	}
+	return b.flat, true
+}
+
+// mixologyBonusTable mirrors the spell_gen_mixology_bonus::CalculateAmount
+// switch (spell_generic.cpp:3850-4012): the DoEffectCalcAmount bonus per
+// elixir/flask aura id. pct entries scale the rolled amount; flat entries
+// add a fixed bonus; per-effect entries override per effect index (the
+// SetBonusValueForEffect arms — Adepts 54452, Mighty Fortitude 53751,
+// Major Fortitude 39625, Fel Strength 38954, Fortification 28518,
+// Greater Arcane 17539, Giant Growth 8212). 673 Elixir of Minor Defense
+// is in the C++ switch but only in AC spell_script_names, not TDB 26091.
+var mixologyBonusTable = map[uint32]mixologyBonus{
+	// bonus = amount (Weak/Mageblood Troll's Blood Elixir).
+	3219:  {pct: 100},
+	24363: {pct: 100},
+	// bonus = 80% of amount (Frost Power, Lesser Flask of Toughness/Resistance).
+	21920: {pct: 80},
+	53752: {pct: 80},
+	62380: {pct: 80},
+	// bonus = 50% of amount.
+	673:   {pct: 50},
+	2367:  {pct: 50},
+	2374:  {pct: 50},
+	3223:  {pct: 50},
+	11474: {pct: 50},
+	17537: {pct: 50},
+	17626: {pct: 50},
+	24361: {pct: 50},
+	26276: {pct: 50},
+	28520: {pct: 50},
+	33720: {pct: 50},
+	39626: {pct: 50},
+	53758: {pct: 50},
+	54494: {pct: 50},
+	63729: {pct: 50},
+	// bonus = -10.
+	28514: {flat: -10},
+	// bonus = 4.
+	3222:  {flat: 4},
+	42735: {flat: 4},
+	// bonus = 5.
+	3160:  {flat: 5},
+	3164:  {flat: 5},
+	3166:  {flat: 5},
+	17538: {flat: 5},
+	// bonus = 6.
+	7844:  {flat: 6},
+	28509: {flat: 6},
+	33726: {flat: 6},
+	// bonus = 8.
+	39627: {flat: 8},
+	53749: {flat: 8},
+	// bonus = 9.
+	28491: {flat: 9},
+	// bonus = 10.
+	11328: {flat: 10},
+	11396: {flat: 10},
+	17535: {flat: 10},
+	39628: {flat: 10},
+	53764: {flat: 10},
+	// bonus = 11.
+	11334: {flat: 11},
+	11405: {flat: 11},
+	// bonus = 12.
+	11390: {flat: 12},
+	// bonus = 13.
+	28519: {flat: 13},
+	// bonus = 15.
+	2378:  {flat: 15},
+	28490: {flat: 15},
+	// bonus = 17.
+	17629: {flat: 17},
+	// bonus = 20.
+	17627: {flat: 20},
+	28497: {flat: 20},
+	53747: {flat: 20},
+	53748: {flat: 20},
+	54212: {flat: 20},
+	60340: {flat: 20},
+	60341: {flat: 20},
+	60343: {flat: 20},
+	60344: {flat: 20},
+	60345: {flat: 20},
+	60346: {flat: 20},
+	// bonus = 23.
+	17628: {flat: 23},
+	28521: {flat: 23},
+	28540: {flat: 23},
+	33721: {flat: 23},
+	// bonus = 27.
+	60347: {flat: 27},
+	// bonus = 29.
+	28493: {flat: 29},
+	28501: {flat: 29},
+	28503: {flat: 29},
+	// bonus = 32.
+	53746: {flat: 32},
+	// bonus = 47.
+	53755: {flat: 47},
+	// bonus = 50.
+	11406: {flat: 50},
+	// bonus = 70.
+	3220: {flat: 70},
+	// bonus = 82.
+	53760: {flat: 82},
+	// bonus = 100.
+	3593: {flat: 100},
+	// bonus = 140.
+	11348: {flat: 140},
+	11349: {flat: 140},
+	// bonus = 200.
+	28502: {flat: 200},
+	// bonus = 280.
+	53763: {flat: 280},
+	// per-effect bonuses (SetBonusValueForEffect arms).
+	8212:  {perEffect: map[int]int32{0: 5}},
+	17539: {perEffect: map[int]int32{0: 19, 1: 19, 2: 5}},
+	28518: {perEffect: map[int]int32{0: 210, 1: 5}},
+	38954: {perEffect: map[int]int32{0: 40, 1: 40}},
+	39625: {perEffect: map[int]int32{0: 116, 1: 6}},
+	53751: {perEffect: map[int]int32{0: 160}},
+	54452: {perEffect: map[int]int32{0: 13, 1: 13, 2: 8}},
+}
+
 func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, effIndex int, durationMs, periodMs, amount, schoolMask uint32, castMerged map[uint64]struct{}, skipSingleCastReg bool, casterGUID uint64, persistentAreaAura bool, castItemGUID uint64, triggeredByAura bool, periodicInitialDelay *uint32) {
 	if s.player == nil {
 		return
@@ -39072,6 +39232,22 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	// is exact two's-complement for the negative DBC base.
 	if spell.ID == 47788 && effIndex == 1 && eff.Aura == SpellAuraSchoolAbsorb {
 		amount = ^uint32(0)
+	}
+	// spell_gen_mixology_bonus::CalculateAmount
+	// (spell_generic.cpp:3847-4015): DoEffectCalcAmount on EFFECT_ALL
+	// SPELL_AURA_ANY — an alchemist with Mixology (53042) who knows the
+	// elixir's trigger spell gets the per-id bonus folded into every
+	// effect amount. Adjusted here, before the player/creature split, so
+	// both branches and both merge arms take the bonused amount; the
+	// uint32 wrap is exact two's-complement for negative DBC bases.
+	// The caster must be the session player (the Load() TYPEID_PLAYER
+	// gate); the trigger-spell read is DBC-gated like the sacred-shield
+	// leg below. No Lua calc-amount hook exists, so this rides the Go
+	// apply funnel with the guardian-spirit/paladin legs.
+	if casterGUID == s.playerGUID && s.player != nil {
+		if bonus, ok := mixologyBonusFor(spell.ID, effIndex, int32(amount)); ok && s.hasAura(spellMixology) && len(spell.Effects) > 0 && playerHasSpell(s.player, spell.Effects[0].TriggerSpell) {
+			amount = uint32(int32(amount) + bonus)
+		}
 	}
 	mountEffectMask, mountMiscValue, mountAmounts, mountBaseAmounts, mountedFlight := mountedFlightAuraEffects(spell)
 

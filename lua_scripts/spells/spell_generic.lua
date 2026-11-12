@@ -508,3 +508,43 @@ end
 for _, spellId in ipairs(SPELL_GEN_CLONE) do
     RegisterSpellEvent(spellId, 5, cloneHit)
 end
+
+-- PORTED (this tick, RegisterAuraEvent PeriodicTick = 1):
+--   spell_gen_restoration::PeriodicTick (spell_generic.cpp:2887-2905,
+--   registered OnEffectPeriodic EFFECT_0 SPELL_AURA_PERIODIC_TRIGGER_SPELL
+--   at :2909): each tick heals the holder for 10% of max health and
+--   restores 10% of max mana (integer division; skipped when max mana
+--   is 0, i.e. non-mana users). PreventDefaultAction is the true
+--   return, suppressing the DBC trigger-spell default tick.
+--   DELTAS: no HealBySpell/EnergizeBySpell bridge exists — the heal
+--   rides SetHealth (clamped to max; skips heal procs and the combat
+--   log, the spell_pet.lua precedent) and the mana rides ModifyPower
+--   (delta, POWER_MANA) on player holders only; creature holders get
+--   the heal leg but no mana leg (motion-creature ModifyPower takes
+--   (type, delta) and the periodic target's builder is not settled).
+local SPELL_GEN_RESTORATION = { 23493, 24379 }
+
+local POWER_MANA = 0
+
+local function restorationTick(event, aura, target)
+    if target == nil then
+        return true
+    end
+    local heal = target:CountPctFromMaxHealth(10)
+    local health = target:GetHealth()
+    local maxHealth = target:GetMaxHealth()
+    if maxHealth > 0 and health < maxHealth then
+        target:SetHealth(math.min(maxHealth, health + heal))
+    end
+    if target:GetObjectType() == "Player" then
+        local maxMana = target:GetMaxPower(POWER_MANA)
+        if maxMana ~= 0 then
+            target:ModifyPower(math.floor(maxMana / 10), POWER_MANA)
+        end
+    end
+    return true
+end
+
+for _, spellId in ipairs(SPELL_GEN_RESTORATION) do
+    RegisterAuraEvent(spellId, 1, restorationTick)
+end
