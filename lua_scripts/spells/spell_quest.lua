@@ -279,9 +279,6 @@ local function despawnFruitTosserHit(event, spell, effectIndex)
     if caster == nil then
         return
     end
-    if caster:GetTypeId() ~= 4 then
-        return
-    end
     local spellId = SPELL_BANANAS_FALL_TO_GROUND
     local roll = math.random(0, 3)
     if roll == 1 then
@@ -303,9 +300,6 @@ local function takeSputumSampleHit(event, spell, effectIndex)
     end
     local caster = spell:GetCaster()
     if caster == nil then
-        return
-    end
-    if caster:GetTypeId() ~= 4 then
         return
     end
     local reqAuraId = spell:GetEffectValue(1)
