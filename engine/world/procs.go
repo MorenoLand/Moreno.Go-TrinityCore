@@ -1747,7 +1747,7 @@ func (s *Server) fireScriptProcCast(ctx context.Context, holderMap uint32, holde
 				overrides[1] = int32(cast.bp1)
 			}
 		}
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, cast.spellID, cast.targetGUID, true, overrides, nil, false, 0)
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, cast.spellID, cast.targetGUID, true, overrides, nil, false, 0, 0)
 	}
 }
 

@@ -3634,7 +3634,7 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 			ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, map[int]int32{0: bp0}, 0, nil, 0)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
 			bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(effect.BasePoints))
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, map[int]int32{0: bp0}, nil, false, 0)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, map[int]int32{0: bp0}, nil, false, 0, 0)
 		}
 		return true
 	case triggerReplenishManaSpell:
@@ -3647,7 +3647,7 @@ func (s *session) petTriggerSpellSpecialCase(ctx context.Context, motion *creatu
 		if ts := s.server.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 			ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, map[int]int32{0: effect.BasePoints}, 0, nil, 0)
 		} else if tm := s.server.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); tm != nil {
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, map[int]int32{0: effect.BasePoints}, nil, false, 0)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, map[int]int32{0: effect.BasePoints}, nil, false, 0, 0)
 		}
 		return true
 	case triggerDemonicEmpowerSuccub:
@@ -5619,7 +5619,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 					// (CountPctFromMaxHealth).
 					if i == 0 {
 						bp0 := int32(motion.MaxHealth) * 30 / 100
-						s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, 53479, motion.GUID, true, map[int]int32{0: bp0}, nil, false, 0)
+						s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, 53479, motion.GUID, true, map[int]int32{0: bp0}, nil, false, 0, 0)
 					}
 				}
 			}

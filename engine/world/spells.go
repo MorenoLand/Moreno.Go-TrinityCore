@@ -2537,7 +2537,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				dest := [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
 				explicitDest = &dest
 			}
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, vehicleMotion, spellID, targetGUID, false, nil, explicitDest, false, 0)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, vehicleMotion, spellID, targetGUID, false, nil, explicitDest, false, 0, 0)
 			s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "vehicle caster")
 			return true
 		}
@@ -42242,9 +42242,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			// cast below.
 			if aura.AuraType == spellAuraPeriodicTriggerSpellWithValue {
 				withValue := int32(aura.Amount)
-				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, map[int]int32{0: withValue, 1: withValue, 2: withValue}, nil, false, 0)
+				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, map[int]int32{0: withValue, 1: withValue, 2: withValue}, nil, false, 0, 0)
 			} else {
-				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, nil, nil, false, 0)
+				ts.server.castCreatureSpellInternalWithBasePoints(context.Background(), triggerCreatureMotion, aura.TriggerSpell, ts.periodicTriggerTarget(aura), true, nil, nil, false, 0, 0)
 			}
 			return
 		}
@@ -44288,13 +44288,13 @@ func (s *session) castPeriodicTriggerFromCreature(ctx context.Context, key creat
 			return
 		}
 		if casterMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, aura.CasterGUID); casterMotion != nil {
-			s.server.castCreatureSpellInternalWithBasePoints(ctx, casterMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false, 0)
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, casterMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false, 0, 0)
 			return
 		}
 		return
 	}
 	if targetMotion := s.server.findCreatureMotion(key.Map, key.InstanceID, key.GUID); targetMotion != nil {
-		s.server.castCreatureSpellInternalWithBasePoints(ctx, targetMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false, 0)
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, targetMotion, aura.TriggerSpell, aura.TargetGUID, true, basePointOverrides, nil, false, 0, 0)
 	}
 }
 
@@ -54434,7 +54434,7 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		default:
 			return
 		}
-		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, buffSpellID, targetGUID, true, overrides, nil, false, 0)
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, buffSpellID, targetGUID, true, overrides, nil, false, 0, 0)
 	case 47422:
 		// spell_warl_everlasting_affliction::HandleScriptEffect
 		// (spell_warlock.cpp:590-603): the EFFECT_0 SCRIPT_EFFECT

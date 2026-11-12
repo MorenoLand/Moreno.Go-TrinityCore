@@ -1713,7 +1713,7 @@ func bossConeDamageEffect(eff wotlk.SpellEffect) bool {
 }
 
 func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool) {
-	s.castCreatureSpellInternalWithBasePoints(ctx, m, spellID, targetGUID, triggered, nil, nil, false, 0)
+	s.castCreatureSpellInternalWithBasePoints(ctx, m, spellID, targetGUID, triggered, nil, nil, false, 0, 0)
 }
 
 // spellDisabledForCreature mirrors DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL,
@@ -1788,7 +1788,7 @@ func (s *Server) spellDisabledForCreature(ctx context.Context, m *creatureMotion
 // selection legs fold it after their CalcRadius/range-fallback arm
 // (Spell.cpp:1194/1284). It rides the deferred twin fire like
 // basePointOverrides, so a deferred cast-time cast keeps its mod.
-func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool, basePointOverrides map[int]int32, explicitDest *[3]float32, deferredFire bool, radiusMod float32) {
+func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m *creatureMotion, spellID uint32, targetGUID uint64, triggered bool, basePointOverrides map[int]int32, explicitDest *[3]float32, deferredFire bool, radiusMod float32, maxTargets int32) {
 	if s == nil || m == nil || spellID == 0 {
 		return
 	}
@@ -1844,6 +1844,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// record — the store builds a fresh Spell per lookup.
 	if radiusMod > 0 && spellKnown {
 		spellInfo.CastRadiusMod = radiusMod
+	}
+	// CastSpellExtraArgs::AddSpellMod(SPELLVALUE_MAX_TARGETS, n)
+	// (Spell.cpp:7883-7885) sets m_spellValue->MaxAffectedTargets,
+	// defaulting to the DBC MaxTargets (SpellInfo.cpp:853) and capping
+	// area-target selection by RandomResize (Spell.cpp:1207/1293);
+	// the Go twin overrides the local copy's MaxTargets the same way
+	// (0 = unmodified), so every selection leg reading it caps at n.
+	if maxTargets > 0 && spellKnown {
+		spellInfo.MaxTargets = uint32(maxTargets)
 	}
 	// Spell::prepare (Spell.cpp:3174-3194) sends SMSG_SPELL_START for a
 	// non-triggered cast before _cast. Snapshot the pre-selection target here:
@@ -2239,7 +2248,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 				m.CastingUntil = now.Add(time.Duration(castMs) * time.Millisecond)
 				s.cancelPendingCreatureCast(m)
 				m.PendingCastSpellID = spellID
-				s.scheduleDeferredTwinCast(m, spellID, targetGUID, basePointOverrides, explicitDest, castMs, m.PendingCastToken, radiusMod)
+				s.scheduleDeferredTwinCast(m, spellID, targetGUID, basePointOverrides, explicitDest, castMs, m.PendingCastToken, radiusMod, maxTargets)
 				return
 			}
 		}
@@ -3708,9 +3717,9 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 						guid = m.GUID
 					}
 					if s.creatureFriendlyToTarget(m, guid) {
-						s.castCreatureSpellInternalWithBasePoints(ctx, m, 47633, guid, true, map[int]int32{0: int32(float32(value) * 1.5)}, nil, false, 0)
+						s.castCreatureSpellInternalWithBasePoints(ctx, m, 47633, guid, true, map[int]int32{0: int32(float32(value) * 1.5)}, nil, false, 0, 0)
 					} else {
-						s.castCreatureSpellInternalWithBasePoints(ctx, m, 47632, guid, true, map[int]int32{0: value}, nil, false, 0)
+						s.castCreatureSpellInternalWithBasePoints(ctx, m, 47632, guid, true, map[int]int32{0: value}, nil, false, 0, 0)
 					}
 				}
 			}
@@ -7008,7 +7017,7 @@ func (s *Server) creatureEffectTriggerSpell(ctx context.Context, m *creatureMoti
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0)
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0, 0)
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
@@ -7072,7 +7081,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 				ts.castSpellDirectWithOverrides(ctx, triggerReplenishLifeSpell, targetGUID, false, map[int]int32{0: bp0}, 0, nil, 0)
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil && tm.MaxHealth != 0 {
 				bp0 := int32(0.01 * float64(tm.MaxHealth) * float64(eff.BasePoints))
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, map[int]int32{0: bp0}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishLifeSpell, tm.GUID, true, map[int]int32{0: bp0}, nil, false, 0, 0)
 			}
 			return
 		case triggerReplenishManaSpell:
@@ -7085,7 +7094,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 			if ts := s.findSessionByGUID(targetGUID); ts != nil && ts.player != nil {
 				ts.castSpellDirectWithOverrides(ctx, triggerReplenishManaSpell, targetGUID, false, map[int]int32{0: eff.BasePoints}, 0, nil, 0)
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, targetGUID); tm != nil {
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, map[int]int32{0: eff.BasePoints}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, triggerReplenishManaSpell, tm.GUID, true, map[int]int32{0: eff.BasePoints}, nil, false, 0, 0)
 			}
 			return
 		case triggerDemonicEmpowerSuccub:
@@ -7104,7 +7113,7 @@ func (s *Server) creatureTriggerSpellLaunchTarget(ctx context.Context, m *creatu
 	if eff.Effect == spellEffectTriggerSpellWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, targetGUID, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0)
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, targetGUID, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0, 0)
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, targetGUID, true)
@@ -7202,7 +7211,7 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 				if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 					ts.castSpellDirectWithBasePoint(ctx, eff.TriggerSpell, guid, uint32(damage))
 				} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-					s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, tm.GUID, true, map[int]int32{0: damage}, nil, false, 0)
+					s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, tm.GUID, true, map[int]int32{0: damage}, nil, false, 0, 0)
 				}
 				continue
 			}
@@ -7220,7 +7229,7 @@ func (s *Server) creatureEffectForceCast(ctx context.Context, m *creatureMotion,
 			if ts := s.findSessionByGUID(guid); ts != nil && ts.player != nil {
 				ts.castSpellDirectWithBasePoints(ctx, eff.TriggerSpell, m.GUID, []int32{scaled, scaled, scaled})
 			} else if tm := s.findCreatureMotion(m.Map, m.InstanceID, guid); tm != nil {
-				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, map[int]int32{0: scaled, 1: scaled, 2: scaled}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, tm, eff.TriggerSpell, m.GUID, true, map[int]int32{0: scaled, 1: scaled, 2: scaled}, nil, false, 0, 0)
 			}
 			continue
 		}
@@ -8957,7 +8966,7 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 			if eff.Effect == spellEffectTriggerMissileWithValue {
 				damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 				damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, guid, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, guid, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0, 0)
 			} else {
 				s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, guid, true)
 			}
@@ -8973,7 +8982,7 @@ func (s *Server) creatureEffectTriggerMissile(ctx context.Context, m *creatureMo
 	if eff.Effect == spellEffectTriggerMissileWithValue {
 		damage := eff.CalcValueForLevel(spell, uint32(m.Level))
 		damage = s.scaledEffectValue(spell, eff, uint32(m.Level), creatureIsPlayerControlled(m), damage)
-		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0)
+		s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, launchTarget, true, map[int]int32{0: damage, 1: damage, 2: damage}, nil, false, 0, 0)
 		return
 	}
 	s.castCreatureSpellInternal(ctx, m, eff.TriggerSpell, launchTarget, true)
@@ -11580,7 +11589,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if mana < 0 {
 					mana = 0
 				}
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, 23571, m.GUID, true, map[int]int32{0: int32(mana)}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, 23571, m.GUID, true, map[int]int32{0: int32(mana)}, nil, false, 0, 0)
 				continue
 			}
 			if auraSpell.ID == 70770 && i == 0 && eff.Aura == spellAuraDummy {
@@ -11746,7 +11755,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if !casterAlive {
 					continue
 				}
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, 69034, aura.CasterGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 45 / 100)}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, 69034, aura.CasterGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 45 / 100)}, nil, false, 0, 0)
 				continue
 			}
 			if auraSpell.ID == 50453 && i == 0 && eff.Aura == spellAuraDummy {
@@ -11761,7 +11770,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if ev.damage == 0 || m.OwnerGUID == 0 {
 					continue
 				}
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, 50454, m.OwnerGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 3 / 2)}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, 50454, m.OwnerGUID, true, map[int]int32{0: int32(uint64(ev.damage) * 3 / 2)}, nil, false, 0, 0)
 				continue
 			}
 			if eff.Aura == spellAuraProcTriggerSpellWithValue {
@@ -11775,7 +11784,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				if i >= 0 && i < len(aura.Amounts) && aura.Amounts[i] > 0 {
 					bp0 = uint32(aura.Amounts[i])
 				}
-				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, triggerTargetGUID, true, map[int]int32{0: int32(bp0)}, nil, false, 0)
+				s.castCreatureSpellInternalWithBasePoints(ctx, m, eff.TriggerSpell, triggerTargetGUID, true, map[int]int32{0: int32(bp0)}, nil, false, 0, 0)
 				continue
 			}
 			// m_caster->CastSpell(unit, triggeredSpell->Id, true): the

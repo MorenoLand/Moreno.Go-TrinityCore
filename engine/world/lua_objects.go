@@ -2523,7 +2523,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 				triggered = b
 			}
 		}
-		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false, 0)
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false, 0, 0)
 		return nil, nil
 	}
 	// CastSpellAoF is the session-creature twin of the handler binding
@@ -2560,7 +2560,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			return nil, nil
 		}
 		dest := [3]float32{x, y, z}
-		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0)
+		s.server.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0, 0)
 		return nil, nil
 	}
 	// Attack(target[, meleeAttack]) is the session-creature twin of

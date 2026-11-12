@@ -1006,7 +1006,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 				triggered = b
 			}
 		}
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false, 0)
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, basePoints, nil, false, 0, 0)
 		return nil, nil
 	}
 	// CastSpellWithRadiusMod(target, spellId, triggered, radiusMod) is
@@ -1044,7 +1044,45 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if targetGUID == 0 {
 			return nil, nil
 		}
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, nil, nil, false, float32(mod)/10000)
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, nil, nil, false, float32(mod)/10000, 0)
+		return nil, nil
+	}
+	// CastSpellWithMaxTargets(target, spellId, triggered, maxTargets) is
+	// Unit::CastSpell with CastSpellExtraArgs carrying AddSpellMod(
+	// SPELLVALUE_MAX_TARGETS, maxTargets) (Spell.cpp:7883-7885): the
+	// per-cast MaxAffectedTargets override (SpellInfo.cpp:853 default,
+	// Spell.cpp:1207/1293 RandomResize cap), threaded as the local
+	// spell copy's MaxTargets in castCreatureSpellInternalWithBasePoints
+	// — the CastSpellWithRadiusMod twin. A non-positive maxTargets leaves
+	// the DBC cap unmodified. Backs the negative-energy periodic port
+	// (spell_generic.cpp:2344-2367), whose tick ramp is the only
+	// deviation from the default periodic-trigger cast.
+	methods["CastSpellWithMaxTargets"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 4 {
+			return nil, fmt.Errorf("CastSpellWithMaxTargets requires a target, a spell id, triggered and a max targets value")
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		triggered := false
+		if b, ok := args[2].(bool); ok {
+			triggered = b
+		}
+		maxTargets, err := luaInt64Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			s.motionMu.Lock()
+			targetGUID = motion.TargetGUID
+			s.motionMu.Unlock()
+		}
+		if targetGUID == 0 {
+			return nil, nil
+		}
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, targetGUID, triggered, nil, nil, false, 0, int32(maxTargets))
 		return nil, nil
 	}
 	// CastSpellAoF(x, y, z, spellId[, triggered]) is Unit::CastSpell at
@@ -1081,7 +1119,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 		}
 		dest := [3]float32{x, y, z}
-		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0)
+		s.castCreatureSpellInternalWithBasePoints(ctx, motion, spellID, 0, triggered, nil, &dest, false, 0, 0)
 		return nil, nil
 	}
 	// SetChannelObjectGuid(target) is Unit::SetChannelObjectGuid

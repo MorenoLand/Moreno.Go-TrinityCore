@@ -27,6 +27,36 @@ end
 
 RegisterAuraEvent(SPELL_AURA_OF_FEAR, 1, auraOfFearTick)
 
+-- C++ spell_gen_negative_energy_periodic::PeriodicTick
+-- (spell_generic.cpp:2353-2362): 46284 EFFECT_0
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL. PreventDefaultAction; the aura
+-- target casts the DBC trigger of EFFECT_0 (aura:GetTriggerSpell(0))
+-- triggered, with CastSpellExtraArgs AddSpellMod(SPELLVALUE_MAX_TARGETS,
+-- tickNumber / 10 + 1) — the ramp is the script's only deviation from
+-- the default periodic-trigger cast. The explicit self target matches
+-- the default's aura.TargetGUID targeting (spells.go
+-- castPeriodicTriggerFromCreature); the max-targets leg rides the new
+-- CastSpellWithMaxTargets twin (lua_creature_events.go). Binding 46284
+-- is the AC spell_script_names row
+-- (spell_entropius_negative_energy_periodic). Returns true, the
+-- PreventDefaultAction twin, on every tick like C++; a 0 trigger
+-- (unknown DBC row) casts nothing and the vetoed default no-ops too.
+local SPELL_NEGATIVE_ENERGY_PERIODIC = 46284
+
+local function negativeEnergyPeriodicTick(event, aura, target)
+    if target == nil then
+        return true
+    end
+    local trigger = aura:GetTriggerSpell(0)
+    if trigger ~= 0 then
+        local maxTargets = math.floor(aura:GetTickNumber() / 10) + 1
+        target:CastSpellWithMaxTargets(target, trigger, true, maxTargets)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_NEGATIVE_ENERGY_PERIODIC, 1, negativeEnergyPeriodicTick)
+
 -- C++ spell_gen_remove_on_health_pct::PeriodicTick
 -- (spell_generic.cpp:2955-2969): EFFECT_0 SPELL_AURA_PERIODIC_
 -- DAMAGE on 38772 / 43937 / 62331 / 62418 (Grievous Wound,

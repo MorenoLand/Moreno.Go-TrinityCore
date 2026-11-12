@@ -35,7 +35,7 @@ func (s *Server) cancelPendingCreatureCast(m *creatureMotion) {
 // the deferral decision, the START snapshot, and the cast-time
 // CastingUntil stamp. The time.AfterFunc shape mirrors the aura-expiry
 // and reflect-proc timers already in this package.
-func (s *Server) scheduleDeferredTwinCast(m *creatureMotion, spellID uint32, targetGUID uint64, basePointOverrides map[int]int32, explicitDest *[3]float32, castMs uint32, token uint64, radiusMod float32) {
+func (s *Server) scheduleDeferredTwinCast(m *creatureMotion, spellID uint32, targetGUID uint64, basePointOverrides map[int]int32, explicitDest *[3]float32, castMs uint32, token uint64, radiusMod float32, maxTargets int32) {
 	if s == nil || m == nil || castMs == 0 {
 		return
 	}
@@ -58,6 +58,6 @@ func (s *Server) scheduleDeferredTwinCast(m *creatureMotion, spellID uint32, tar
 			return
 		}
 		motion.PendingCastSpellID = 0
-		s.castCreatureSpellInternalWithBasePoints(context.Background(), motion, spellID, targetGUID, false, bpCopy, destCopy, true, radiusMod)
+		s.castCreatureSpellInternalWithBasePoints(context.Background(), motion, spellID, targetGUID, false, bpCopy, destCopy, true, radiusMod, maxTargets)
 	})
 }
