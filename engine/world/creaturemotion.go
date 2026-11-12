@@ -3532,7 +3532,13 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	}
 	motion.Faction = motion.CharmFaction
 	motion.FactionKnown = motion.CharmFactionKnown
-	motion.UnitFlagsKnown = motion.CharmUnitFlagsKnown
+	// The restore above touches only the PLAYER_CONTROLLED and
+	// POSSESSED bits, so a flag raised or cleared mid-charm
+	// (SetFlag/RemoveFlag(59), Mount, SetImmuneToAll) survives
+	// uncharm in value: keep its latch when the restored word
+	// differs from the banked word, or the sweep would wipe the
+	// mid-charm change on the next tick.
+	motion.UnitFlagsKnown = motion.CharmUnitFlagsKnown || motion.UnitFlags != motion.CharmUnitFlags
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
 	// CharmInfo::RestoreState (Unit.cpp:9936-9940): the pre-charm react
