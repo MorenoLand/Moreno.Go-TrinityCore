@@ -44,8 +44,16 @@
 --   50322 with BP0 = CountPctFromMaxHealth(EFFECT_0 amount);
 --   remove drops 50322. Mode 2 is fresh-apply only; the C++ apply
 --   leg is CHANGE_AMOUNT, so mode 4 covers stack-rise re-applies.
--- STAY-OUT (tick 294): every other spell_druid class — no proc hook
---   (OnEffectProc/CheckProc), CalcAmount/CalcSpellMod/UpdatePeriodic
+--   spell_dru_savage_defense (spell_druid.cpp:1252-1274): aura
+--   62600, mode 6 (OnEffectProc). The actor casts the absorb 62606
+--   on self, triggered, with BP0 = floor(total AP * EFFECT_0 amount
+--   / 100) (CalculatePct, float-truncate). DORMANT until Spell.dbc
+--   ships (the anetheron 38196 class: serverSpellProcEntryFor needs
+--   the DBC ProcTypeMask). AC binds the script to 62606, but 62606
+--   is the absorb buff itself (Wowhead/wotlkdb 3.3.5a: 62600 triggers
+--   62606); TDB's 62600 binding is the DBC-true one. No rank-2 proc
+--   aura is bound in either DB's spell_script_names.
+-- STAY-OUT (tick 294): every other spell_druid class — CalcAmount/
 --   hooks absent, or SpellScript-only with no RegisterSpellScript in
 --   the engine. Notable: rip (combo points + attack power), berserk
 --   (ResetCooldowns), nurturing_instinct (GetRank), living_seed
@@ -66,6 +74,8 @@ local SPELL_DRUID_SAVAGE_ROAR = 52610
 local SPELL_DRUID_SAVAGE_ROAR_BUFF = 62071
 local SPELL_DRUID_SURVIVAL_INSTINCTS = 61336
 local SPELL_DRUID_SURVIVAL_INSTINCTS_BUFF = 50322
+local SPELL_DRUID_SAVAGE_DEFENSE = 62600
+local SPELL_DRUID_SAVAGE_DEFENSE_ABSORB = 62606
 
 local POWER_RAGE = 1
 local AURA_REMOVE_BY_EXPIRE = 4
@@ -135,6 +145,23 @@ end
 
 RegisterAuraEvent(SPELL_DRUID_SAVAGE_ROAR, 2, savageRoarApply)
 RegisterAuraEvent(SPELL_DRUID_SAVAGE_ROAR, 3, savageRoarRemove)
+
+-- C++ spell_dru_savage_defense::HandleProc (spell_druid.cpp:1261-1268):
+-- PreventDefaultAction; the proc actor casts EFFECT_0's TriggerSpell
+-- (62606) on self with BP0 = CalculatePct(total AP, EFFECT_0 amount).
+local function savageDefenseProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return false
+    end
+    if actor == nil then
+        return true
+    end
+    local absorb = math.floor(actor:GetTotalAttackPowerValue() * aura:GetAmount(0) / 100)
+    actor:CastCustomSpell(nil, SPELL_DRUID_SAVAGE_DEFENSE_ABSORB, true, absorb)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_SAVAGE_DEFENSE, 6, savageDefenseProc)
 
 local function survivalInstinctsApply(event, aura, target)
     local bp = target:CountPctFromMaxHealth(aura:GetAmount(0))

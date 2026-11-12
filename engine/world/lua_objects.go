@@ -1833,6 +1833,25 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			map[int]uint32{unitFieldPower1 + int(power): amt})
 		return nil, nil
 	}
+	// GetTotalAttackPowerValue([attackType]) is Unit::GetTotalAttackPowerValue
+	// (Unit.cpp:9507-9521) for session creatures via creatureBaseAttackPower
+	// (spell_threat.go): BASE_ATTACK only — creatures carry no ranged-AP
+	// model, so RANGED_ATTACK (2) and OFF_ATTACK (1) error, like any other
+	// out-of-range type on the player twin.
+	methods["GetTotalAttackPowerValue"] = func(ctx context.Context, args []any) ([]any, error) {
+		attackType, err := luaOptionalUint32Arg(args, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if attackType != 0 {
+			return nil, fmt.Errorf("attack type %d is invalid", attackType)
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{float64(0)}, nil
+		}
+		return []any{s.server.creatureBaseAttackPower(ctx, motion)}, nil
+	}
 	// ModifyPower is Unit::ModifyPower (UnitMethods.h:1662) for
 	// session creatures: (delta, type = -1), clamped to 0..max, no
 	// return value — C++-exact, like the player twin.

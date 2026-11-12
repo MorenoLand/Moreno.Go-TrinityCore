@@ -1361,6 +1361,20 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{float32(state.Powers[power]) * 100 / float32(state.MaxPowers[power])}, nil
 	}
+	// GetTotalAttackPowerValue([attackType]) is Unit::GetTotalAttackPowerValue
+	// (Unit.cpp:9507-9521) via totalAttackPowerValue (player_state.go):
+	// BASE_ATTACK (0, default) or RANGED_ATTACK (2). OFF_ATTACK (1) has no
+	// separate Go model and errors, like any other out-of-range type.
+	methods["GetTotalAttackPowerValue"] = func(_ context.Context, args []any) ([]any, error) {
+		attackType, err := luaOptionalUint32Arg(args, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if attackType != 0 && attackType != 2 {
+			return nil, fmt.Errorf("attack type %d is invalid", attackType)
+		}
+		return []any{s.totalAttackPowerValue(attackType == 2)}, nil
+	}
 	methods["GetGMRank"] = luaNoArgs(func() any { return s.security })
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
