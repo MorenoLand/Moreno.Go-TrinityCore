@@ -960,3 +960,86 @@ local function goingBearbackApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12937_relief_for_the_fallen (spell_quest.cpp:754-794):
+--   EFFECT_0 DUMMY ev5, binding 55804. Caster-is-player Load gate
+--   (explicit check); hit creature -> caster self-casts 55809
+--   triggered, KilledMonsterCredit(30035), target despawns at once.
+--   spell_q12659_ahunaes_knife (spell_quest.cpp:888-924): EFFECT_0
+--   DUMMY ev5, binding 52090. Caster-is-player Load gate (explicit
+--   check); hit creature despawns at once, caster takes
+--   KilledMonsterCredit(28622). Same ev5 fire site as the strip above
+--   (a910c39d, spells.go:14668-14737).
+--   NEXT: q10041 (SCRIPT_EFFECT, GetNativeGender + PreventHitDefaultEffect
+--   both bridged) and q9874 (39199/18240 in-tree) have NO binding spell
+--   id anywhere in the C++ file or census (both "no-id") — stay out
+--   until a binding id is resolvable; then q12805/q14112/q9452.
+
+local SPELL_HEALING_FINISHED = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
+local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
+local NPC_FALLEN_EARTHEN_DEFENDER = 30035 -- spell_quest.cpp:751
+local SPELL_AHUNAES_KNIFE = 52090 -- spell_quest.cpp:882 (class spell_q12659_ahunaes_knife)
+local NPC_SCALPS_KC_BUNNY = 28622 -- spell_quest.cpp:885
+
+local function reliefForTheFallenHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:CastSpell(caster, SPELL_TRIGGER_AID_OF_THE_EARTHEN, true)
+    caster:KilledMonsterCredit(NPC_FALLEN_EARTHEN_DEFENDER)
+    hitTarget:DespawnOrUnsummon()
+end
+
+RegisterSpellEvent(SPELL_HEALING_FINISHED, 5, reliefForTheFallenHit)
+
+local function ahunaesKnifeHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    hitTarget:DespawnOrUnsummon()
+    caster:KilledMonsterCredit(NPC_SCALPS_KC_BUNNY)
+end
+
+RegisterSpellEvent(SPELL_AHUNAES_KNIFE, 5, ahunaesKnifeHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12937_relief_for_the_fallen (spell_quest.cpp:746-789):
+--   EFFECT_0 DUMMY ev5, binding 55804. Caster-is-player Load gate
+--   (explicit check); hit creature -> caster self-casts 55809
+--   triggered, KilledMonsterCredit(30035), target despawns.
+local SPELL_RELIEF_FOR_THE_FALLEN = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
+local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
+local NPC_FALLEN_EARTHEN_DEFENDER = 30035 -- spell_quest.cpp:751
+
+local function reliefForTheFallenHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    caster:CastSpell(caster, SPELL_TRIGGER_AID_OF_THE_EARTHEN, true)
+    caster:KilledMonsterCredit(NPC_FALLEN_EARTHEN_DEFENDER)
+    hitTarget:DespawnOrUnsummon()
+end
+
+RegisterSpellEvent(SPELL_RELIEF_FOR_THE_FALLEN, 5, reliefForTheFallenHit)
