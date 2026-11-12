@@ -264,6 +264,14 @@ func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
 			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
 				continue
 			}
+			// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
+			// DoCheckAreaTarget handlers before applying a dynobj aura
+			// to a newcomer; a rejection leaves the target out of the
+			// target map (and out of AuraHolders below), so the next
+			// pass re-checks it.
+			if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, targetGUID) {
+				continue
+			}
 			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, object.AuraEffectIndex, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask), nil, false, object.CasterGUID, true, 0, false, &sharedDelayMs)
 			if object.AuraHolders == nil {
 				object.AuraHolders = make(map[uint64]struct{})
@@ -354,6 +362,14 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		}
 		if s.creatureDynobjAuraPresent(object, guid) {
 			object.AuraHolders[guid] = struct{}{}
+			continue
+		}
+		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
+		// DoCheckAreaTarget handlers before applying a dynobj aura
+		// to a newcomer; a rejection leaves the target out of the
+		// target map (and out of AuraHolders below), so the next
+		// pass re-checks it.
+		if !s.fireAuraCheckAreaTarget(ctx, spellID, object.CasterGUID, object.Map, object.InstanceID, guid) {
 			continue
 		}
 		if vs, ok := playerTargets[guid]; ok && vs != nil {

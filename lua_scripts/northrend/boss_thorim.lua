@@ -1297,3 +1297,39 @@ local function runicSmashHandleScript(event, spell, hitTarget, effectIndex)
 end
 RegisterSpellEvent(SPELL_RUNIC_SMASH_LEFT, 5, runicSmashHandleScript)
 RegisterSpellEvent(SPELL_RUNIC_SMASH_RIGHT, 5, runicSmashHandleScript)
+
+-- C++ spell_thorim_blizzard_effect::CheckAreaTarget
+-- (boss_thorim.cpp:1693-1730; CheckAreaTarget :1704-1720, Register
+-- :1722-1725): DoCheckAreaTarget on the Blizzard aura (62576/62602,
+-- Sif's EVENT_BLIZZARD DoCastAOE(SPELL_BLIZZARD 62577) at :1665-1666;
+-- 62577 is the cast spell, 62576/62602 the persistent-area aura
+-- spells the loader binds, per the class header comment). An area-aura
+-- target is rejected when it already carries this same aura from a
+-- different owner — prevents two nearby blizzard owners from
+-- overriding each other's auras on the same target; the owner itself
+-- is always accepted. In C++ the owner is the dynobj
+-- (Aura::GetOwner(), SpellAuras.h:120; the DynObjAura owner is the
+-- dynamic object, never a unit target), so the target != owner
+-- exemption never fires for this dynobj aura and the arm is the
+-- same-spell-different-owner rejection; in Go the dynobj has no unit
+-- object, so the port compares caster GUIDs instead — a same-spell
+-- aura from the same caster never reaches the hook (the dynobj passes
+-- adopt it: hasDynamicAreaAura / creatureDynobjAuraPresent), so the
+-- caster comparison is outcome-equivalent. The per-spell check reads
+-- the incoming aura's own id (GetAuraId), so a normal-mode aura never
+-- rejects a heroic-mode one and vice versa, like C++ GetId(). ev8
+-- (runtime.go AuraEventOnCheckAreaTarget) fires from the dynobj
+-- target-map passes and the creature cast-time leg. DORMANT until
+-- Spell.dbc ships 62576/62602 (the 62577 -> 62576 trigger chain is
+-- DBC-side and unverifiable from the source tree).
+local SPELL_BLIZZARD_AURA = 62576
+local SPELL_BLIZZARD_AURA_HEROIC = 62602
+local function blizzardCheckAreaTarget(event, aura, target)
+    local existing = target:GetAura(aura:GetAuraId())
+    if existing ~= nil and existing:GetCasterGUID() ~= aura:GetCasterGUID() then
+        return false
+    end
+    return true
+end
+RegisterAuraEvent(SPELL_BLIZZARD_AURA, 8, blizzardCheckAreaTarget)
+RegisterAuraEvent(SPELL_BLIZZARD_AURA_HEROIC, 8, blizzardCheckAreaTarget)

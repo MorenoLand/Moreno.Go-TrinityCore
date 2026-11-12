@@ -36,6 +36,15 @@ type luaAuraRef struct {
 	// tick count). Only the remove hook sets it; writes through it land
 	// on the detached record and are inert.
 	snapshot *activeAura
+	// pending is the not-yet-applied record the OnCheckAreaTarget hook
+	// hands out: the aura has no live record on the candidate target
+	// (that is what the hook is deciding), so resolve() returns this
+	// instead of a live lookup — a live lookup would find a same-spell
+	// aura from another caster and report the wrong caster. Only the
+	// check hook sets it; GetCasterGUID/GetCaster read the incoming
+	// caster, amount/duration reads are 0, and GetOwner reads nil
+	// (the C++ owner is the dynobj).
+	pending *activeAura
 	// removeMode is the AuraRemoveMode (SpellAuraDefines.h:61-69) the
 	// aura was removed with, carried so the OnRemove hook can gate on
 	// it like GetTargetApplication()->GetRemoveMode(). Only the remove
@@ -47,6 +56,9 @@ type luaAuraRef struct {
 func (r *luaAuraRef) resolve() *activeAura {
 	if r == nil {
 		return nil
+	}
+	if r.pending != nil {
+		return r.pending
 	}
 	if r.snapshot != nil {
 		return r.snapshot
@@ -917,6 +929,45 @@ func (s *Server) fireAuraProc(ctx context.Context, aura *activeAura, auraObj *sc
 	}
 	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnProc, scripting.AuraEventOnProc, auraObj, target, actor, procTarget, damage)
 	return luaHookVeto(results)
+}
+
+// hasAuraCheckAreaTargetHook reports whether any RegisterAuraEvent(...,
+// OnCheckAreaTarget, ...) handler is registered for the spell, so the
+// dynobj apply sites can skip building the pending aura/target objects
+// when no handler could run (the hasAuraProcHook twin).
+func (s *Server) hasAuraCheckAreaTargetHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnCheckAreaTarget)
+}
+
+// fireAuraCheckAreaTarget dispatches the RegisterAuraEvent
+// OnCheckAreaTarget hook for a candidate dynobj-aura target (args
+// (event, aura, target)) and reports whether the aura may be applied.
+// That is the Go model of Aura::CallScriptCheckAreaTargetHandlers
+// (SpellAuras.cpp:2233-2248): the C++ results are ANDed, so any handler
+// returning boolean false rejects the target; a handler returning true
+// or nothing passes it. A rejected target is not added to the dynobj's
+// holder map, so the next target-map pass re-checks it, like C++
+// (Aura::UpdateTargetMap re-evaluates candidates every pass). No hook
+// registered, or an unresolvable target object, passes the target.
+func (s *Server) fireAuraCheckAreaTarget(ctx context.Context, spellID uint32, casterGUID uint64, mapID, instanceID uint32, targetGUID uint64) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || !s.hasAuraCheckAreaTargetHook(spellID) {
+		return true
+	}
+	target := s.luaUnitObjectForGUID(mapID, instanceID, targetGUID)
+	if target == nil {
+		return true
+	}
+	ref := &luaAuraRef{server: s, spellID: spellID, mapID: mapID, instanceID: instanceID, pending: &activeAura{CasterGUID: casterGUID}}
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnCheckAreaTarget, scripting.AuraEventOnCheckAreaTarget, ref.luaAuraObject(), target)
+	for _, result := range results {
+		if blocked, ok := result.(bool); ok && !blocked {
+			return false
+		}
+	}
+	return true
 }
 
 // dispelAuraSnapshot copies the aura record a dispel is about to

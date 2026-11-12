@@ -9326,6 +9326,13 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if vs.player.Health == 0 && spell.Attributes&spellAttr0Passive == 0 && spell.AttributesEx1&spellAttr2CanTargetDead == 0 {
 			continue
 		}
+		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
+		// DoCheckAreaTarget handlers when the dynobj aura's target
+		// map is first filled at creation; a rejection leaves the
+		// target out, so the 500ms pass re-checks it.
+		if !s.fireAuraCheckAreaTarget(ctx, spell.ID, m.GUID, m.Map, m.InstanceID, vs.playerGUID) {
+			continue
+		}
 		vs.applyAuraFromCaster(spell.ID, uint32(durationMs), m.GUID, uint8(m.Level))
 	}
 	type creatureTarget struct {
@@ -9345,6 +9352,13 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 			continue
 		}
 		if friendly != s.creatureFriendlyToTarget(m, tm.guid) {
+			continue
+		}
+		// Aura::UpdateTargetMap (SpellAuras.cpp:643-767) runs the
+		// DoCheckAreaTarget handlers when the dynobj aura's target
+		// map is first filled at creation; a rejection leaves the
+		// target out, so the 500ms pass re-checks it.
+		if !s.fireAuraCheckAreaTarget(ctx, spell.ID, m.GUID, m.Map, m.InstanceID, tm.guid) {
 			continue
 		}
 		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil)

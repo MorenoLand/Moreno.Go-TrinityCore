@@ -504,14 +504,31 @@ const (
 // today (player and pet mod-owner auras); creature auras have no proc
 // evaluation site in Go, so creature-held proc auras stay out until
 // one is built.
+// OnCheckAreaTarget mirrors AuraScript::DoCheckAreaTarget
+// (AuraCheckAreaTargetFn, SpellScript.cpp:727-729, SpellAuras.cpp:2233-
+// 2248): it fires when an area aura's target map is (re)computed for a
+// candidate unit, with args (event, aura, target), and the results are
+// ANDed — a handler returning boolean false rejects the target, so the
+// aura is not applied to it, like C++ (Aura::CanBeAppliedOn ->
+// CheckAreaTarget, SpellAuras.cpp:1860-1877, gates
+// Aura::UpdateTargetMap). A handler returning true or nothing passes
+// the target. The aura object is a pending ref: the aura is not yet
+// applied, so GetCasterGUID/GetCaster read the incoming aura's caster
+// and GetOwner reads nil (the C++ owner is the dynobj, which has no
+// Lua unit object); GetAmount/GetDuration read 0. The hook fires only
+// from the dynobj (persistent-area-aura) apply sites — the two 500ms
+// target-map passes and the creature cast-time leg — not from
+// single-target or non-dynobj area-aura applies, so unit area auras
+// (paladin auras, yogg keeper aura) do not fire it yet.
 const (
-	AuraEventOnPeriodic     = 1
-	AuraEventOnApply        = 2
-	AuraEventOnRemove       = 3
-	AuraEventOnChangeAmount = 4
-	AuraEventOnDispel       = 5
-	AuraEventOnProc         = 6
-	AuraEventOnBeforeDispel = 7
+	AuraEventOnPeriodic        = 1
+	AuraEventOnApply           = 2
+	AuraEventOnRemove          = 3
+	AuraEventOnChangeAmount    = 4
+	AuraEventOnDispel          = 5
+	AuraEventOnProc            = 6
+	AuraEventOnBeforeDispel    = 7
+	AuraEventOnCheckAreaTarget = 8
 )
 
 // SpellEvents contract for RegisterSpellEvent(spellID, event, fn). There
