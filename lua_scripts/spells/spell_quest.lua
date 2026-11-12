@@ -99,9 +99,10 @@ RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 3, forceShieldRemove)
 --   claim is now STALE in one direction: RegisterSpellEvent ev4
 --   (OnEffectHit) EXISTS and fires on the player path (spells.go:14625),
 --   so no-target OnEffectHit legs port (q5206/q12634/q12683 ported
---   below); ev5 (OnEffectHitTarget) still does NOT fire for player
---   casts (runtime.go: no per-effect list site on the player path), so
---   all player-cast ev5 legs stay out. Also staying out: going_bearback
+--   below); ev5 (OnEffectHitTarget) fires on the player path ONLY
+--   inside the triggered-cast funnel (spells.go:28261) — direct casts
+--   (finishSpellCast) have no per-effect fire site, so all direct
+--   player-cast ev5 legs stay out. Also staying out: going_bearback
 --   (AfterApply credit via GetCharmerOrOwnerPlayer — unbridged),
 --   quenching_mist + read_pronouncement (aura IDs live only in the
 --   world DB spell_script_names, unresolvable in workspace), and the
@@ -214,8 +215,9 @@ RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 3, bloatedAbomFeignDeat
 
 -- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
 --   spell_q5206_test_fetid_skull (spell_quest.cpp:164-214): EFFECT_0
---   DUMMY OnEffectHit, caster-is-player Load gate (player path only,
---   so the gate rides the fire site). 50% roll: Create Resonating
+--   DUMMY OnEffectHit, caster-is-player Load gate (explicit
+--   GetTypeId()==4 check — ev4 also fires on the creature path,
+--   boss_ai.go:3373). 50% roll: Create Resonating
 --   Skull 17269, else Create Bone Dust 17270, triggered self-cast.
 --   spell_q12634_despawn_fruit_tosser (spell_quest.cpp:603-649):
 --   EFFECT_0 DUMMY OnEffectHit. urand(0,3): 1 -> Orange Falls to
@@ -233,9 +235,9 @@ RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 3, bloatedAbomFeignDeat
 --   effect-0, which no DBC aura carries here.
 --   The ev4 hook fires on the player path (spells.go:14625, ahead of
 --   the effects loop, matching C++ HIT-phase order); the ev5
---   OnEffectHitTarget hook still does NOT fire for player casts
---   (runtime.go: the player path has no per-effect list site), so
---   every other row in this strip stays out on that leg alone.
+--   OnEffectHitTarget hook fires on the player path ONLY inside the
+--   triggered-cast funnel (spells.go:28261), so direct-cast ev5 legs
+--   stay out on that leg alone.
 --   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
 --   header note above), same as all prior player ports.
 
@@ -257,6 +259,9 @@ local function testFetidSkullHit(event, spell, effectIndex)
     if caster == nil then
         return
     end
+    if caster:GetTypeId() ~= 4 then
+        return
+    end
     if math.random(0, 1) == 0 then
         caster:CastSpell(caster, SPELL_CREATE_RESONATING_SKULL, true)
     else
@@ -272,6 +277,9 @@ local function despawnFruitTosserHit(event, spell, effectIndex)
     end
     local caster = spell:GetCaster()
     if caster == nil then
+        return
+    end
+    if caster:GetTypeId() ~= 4 then
         return
     end
     local spellId = SPELL_BANANAS_FALL_TO_GROUND
@@ -297,6 +305,9 @@ local function takeSputumSampleHit(event, spell, effectIndex)
     if caster == nil then
         return
     end
+    if caster:GetTypeId() ~= 4 then
+        return
+    end
     local reqAuraId = spell:GetEffectValue(1)
     if reqAuraId > 0 and caster:HasAura(reqAuraId) then
         local spellId = spell:GetEffectValue(0)
@@ -319,10 +330,12 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   health is set to half max and mana to 75% of max.
 --   spell_q12659_ahunaes_knife (spell_quest.cpp:888-924): EFFECT_0
 --   DUMMY OnEffectHitTarget, same ev4 + spell:GetTarget() route.
---   Caster-is-player Load gate rides the player fire site. The hit
---   creature despawns, then the caster takes Scalps kill credit 28622.
+--   Caster-is-player Load gate is an explicit GetTypeId()==4 check.
+--   The hit creature despawns, then the caster takes Scalps kill
+--   credit 28622.
 --   spell_q9452_cast_net (spell_quest.cpp:1123-1169): EFFECT_0 DUMMY
---   OnEffectHit is ev4-native (no target needed): 66% AddItem Red
+--   OnEffectHit is ev4-native (no target needed; caster-is-player
+--   Load gate is an explicit GetTypeId()==4 check): 66% AddItem Red
 --   Snapper 23614, else the caster self-casts Fished Up Murloc 29869,
 --   triggered. Binding 29866 is enum-grounded (SPELL_CAST_NET,
 --   :1128; effect layout EFFECT_0 DUMMY + EFFECT_1 ACTIVATE_OBJECT
@@ -417,6 +430,9 @@ local function ahunaesKnifeHit(event, spell, effectIndex)
     if caster == nil then
         return
     end
+    if caster:GetTypeId() ~= 4 then
+        return
+    end
     target:DespawnOrUnsummon()
     caster:KilledMonsterCredit(NPC_SCALPS_KC_BUNNY)
 end
@@ -431,6 +447,9 @@ local function castNetHit(event, spell, effectIndex)
     if caster == nil then
         return
     end
+    if caster:GetTypeId() ~= 4 then
+        return
+    end
     if math.random(1, 100) <= 66 then
         caster:AddItem(ITEM_RED_SNAPPER, 1)
     else
@@ -439,3 +458,36 @@ local function castNetHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q11010_q11102_q11023_choose_loc (spell_quest.cpp:1624-1660):
+--   EFFECT_0 DUMMY OnEffectHit. Caster searches players in 65yd
+--   (GetPlayersInRange, shared worldobject range surface); any player
+--   flying gets a Fel Cannon 23082 summoned at their position
+--   (SummonCreature entry,x,y,z,0 — default summonType 7 is the C++
+--   MANUAL_DESPAWN default). No Load() gate in C++ (caster is the
+--   burst-aura target, creature or player; ev4 fires on both paths).
+--   KNOWN DELTA: C++ checks HasAuraType(SPELL_AURA_FLY) or
+--   MOD_INCREASE_MOUNTED_FLIGHT_SPEED (unbridged); this uses
+--   player:IsFlying() (movement-flag based, lua_player.go:1500) —
+--   identical for mounted/flight-form players, reads false before
+--   the first movement packet.
+
+local NPC_FEL_CANNON2 = 23082 -- spell_quest.cpp:1532 (Quest11010_11102_11023Data)
+
+local function chooseLocHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    for _, player in ipairs(caster:GetPlayersInRange(65)) do
+        if player:IsFlying() then
+            caster:SummonCreature(NPC_FEL_CANNON2, player:GetPositionX(), player:GetPositionY(), player:GetPositionZ(), 0)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_CHOOSE_LOC, 4, chooseLocHit)
