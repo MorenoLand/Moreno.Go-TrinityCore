@@ -940,3 +940,26 @@ local function giftOfTheHarvesterCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_ITEM_GIFT_OF_THE_HARVESTER, 8, giftOfTheHarvesterCheckCast)
+
+local SPELL_ITEM_BOOK_OF_GLYPH_MASTERY = 64323 -- spell_item.cpp:2420 (class spell_item_book_of_glyph_mastery; TDB spell_script_names row, 25101 + 26091)
+local SPELL_CUSTOM_ERROR_LEARNED_EVERYTHING = 62 -- SharedDefines.h:1238
+
+-- C++ spell_item_book_of_glyph_mastery::CheckRequirement
+-- (spell_item.cpp:2429-2438, registered OnCheckCast): the caster
+-- fails SPELL_FAILED_CUSTOM_ERROR with LEARNED_EVERYTHING once
+-- every glyph the book can teach is already known
+-- (HasDiscoveredAllSpells, SkillDiscovery.cpp:195-208; 57
+-- discoverable spells in TDB 25101 skill_discovery_template).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go
+-- fireSpellCheckCast). The HandleScript learn leg
+-- (GetExplicitDiscoverySpell + LearnSpell) has no Go model
+-- (spells.go:1094) and stays out.
+local function bookOfGlyphMasteryCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:HasDiscoveredAllSpells(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY) then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_LEARNED_EVERYTHING
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_ITEM_BOOK_OF_GLYPH_MASTERY, 8, bookOfGlyphMasteryCheckCast)

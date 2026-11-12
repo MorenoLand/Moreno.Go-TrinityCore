@@ -2227,6 +2227,13 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{false}, nil
 	}
+	methods["HasDiscoveredAllSpells"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{hasDiscoveredAllSpells(state, spell)}, nil
+	}
 	methods["HasSkill"] = func(_ context.Context, args []any) ([]any, error) {
 		skill, err := luaUint32Arg(args, 0)
 		if err != nil {

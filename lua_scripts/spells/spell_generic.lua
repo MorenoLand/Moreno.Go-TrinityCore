@@ -203,6 +203,33 @@ for _, spellId in ipairs(SPELL_GEN_ADAPTIVE_WARDING_SPELLS) do
     RegisterSpellEvent(spellId, 8, allowCastFromItemOnlyCheckCast)
 end
 
+-- C++ spell_gen_profession_research::CheckRequirement
+-- (spell_generic.cpp:2809-2820, registered OnCheckCast): the caster
+-- fails SPELL_FAILED_CUSTOM_ERROR with NOTHING_TO_DISCOVER (46)
+-- once every spell the research can discover is already known
+-- (HasDiscoveredAllSpells, SkillDiscovery.cpp:195-208; no store
+-- entry means nothing left to discover). RegisterSpellEvent
+-- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast). Bindings are
+-- the four TDB spell_script_names rows for the script (25101 +
+-- 26091): 60893, 61177, 61288, 61756. The
+-- HandleScript discovery-learn leg (GetExplicitDiscoverySpell +
+-- LearnSpell) has no Go model (spells.go:1094) and stays out.
+local SPELL_GEN_PROFESSION_RESEARCH_SPELLS = { 60893, 61177, 61288, 61756 }
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_NOTHING_TO_DISCOVER = 46 -- SharedDefines.h:1222
+
+local function professionResearchCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:HasDiscoveredAllSpells(spell:GetEntry()) then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_NOTHING_TO_DISCOVER
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs(SPELL_GEN_PROFESSION_RESEARCH_SPELLS) do
+    RegisterSpellEvent(spellId, 8, professionResearchCheckCast)
+end
+
 -- PORTED (tick 2026-11-11, RegisterSpellEvent AfterHit = 3):
 --   spell_gen_clear_fear_poly::HandleAfterHit
 --   (spell_generic.cpp:952-966): AfterHit, once per hit target
