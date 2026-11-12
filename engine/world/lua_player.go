@@ -2752,6 +2752,41 @@ func (s *session) luaPlayer() *scripting.Object {
 		ref := &luaAuraRef{server: s.server, spellID: spell, player: s, mapID: state.Map, instanceID: state.InstanceID}
 		return []any{ref.luaAuraObject()}, nil
 	}
+	// GetAuraOfRankedSpell(spellID) is Unit::GetAuraOfRankedSpell
+	// (Unit.cpp:4570-4586): the live aura object of any rank of the
+	// queried spell, or nil when no rank is present. The amount-only
+	// twin is GetAuraEffectOfRankedSpell; this is the object twin,
+	// so SetDuration/SetMaxDuration can reach a ranked aura. Backs
+	// the Cut to the Chase (51664) refresh arm
+	// (spell_rogue.cpp:196-233): the C++ lookup is by family flag,
+	// which matches any Slice and Dice rank, so the ranked chain
+	// (spellFirstRank) is the twin — GetAura(5171) alone would
+	// miss rank 2. Auras of one chain never coexist, so scan order
+	// is immaterial (rankedAuraEffectAmount precedent).
+	methods["GetAuraOfRankedSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{nil}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return []any{nil}, nil
+		}
+		first := s.server.spellFirstRank(spell)
+		for _, aura := range s.loadedAuras() {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			if s.server.spellFirstRank(aura.SpellID) != first {
+				continue
+			}
+			ref := &luaAuraRef{server: s.server, spellID: aura.SpellID, player: s, mapID: state.Map, instanceID: state.InstanceID}
+			return []any{ref.luaAuraObject()}, nil
+		}
+		return []any{nil}, nil
+	}
 	// GetDummyAuraEffect(family, iconID[, effIndex]) is
 	// Unit::GetDummyAuraEffect (Unit.cpp:4540-4543 -> 4510-4522):
 	// the live amount of the first DUMMY aura matching family+icon

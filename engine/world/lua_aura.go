@@ -223,6 +223,27 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return int32(aura.DurationMs)
 	})
+	// GetSpellMaxDuration is SpellInfo::GetMaxDuration
+	// (SpellInfo.cpp:3084-3089): the MaxDuration column of
+	// SpellDuration.dbc for this aura's spell, no per-level
+	// scaling. An unknown spell (no Spell.dbc) reads 0, the
+	// GetTriggerSpell convention. Backs the Cut to the Chase
+	// (51664) refresh arm (spell_rogue.cpp:196-233), which reads
+	// the spell-info max, not the live aura's DurationMs.
+	methods["GetSpellMaxDuration"] = luaNoArgs(func() any {
+		if r.server == nil || r.server.Data == nil {
+			return int32(0)
+		}
+		sp, found, err := r.server.Data.Spell(spellID)
+		if err != nil || !found {
+			return int32(0)
+		}
+		maxDur, ok, err := r.server.Data.SpellMaxDuration(sp.DurationIndex)
+		if err != nil || !ok {
+			return int32(0)
+		}
+		return int32(maxDur)
+	})
 	methods["GetStackAmount"] = luaNoArgs(func() any { return uint32(auraWireStackCount(r.resolve())) })
 	// GetTickNumber is AuraEffect::GetTickNumber (SpellAuraEffects.h),
 	// the _ticksDone counter: both periodic-tick executors increment
