@@ -48,11 +48,10 @@
 --   (STALE as of tick 295: the bridge is live — player
 --   RemoveMovementImpairingAuras, lua_player.go:3473 — and the port
 --   below already calls it; the note is retired, not the leg.)
--- DOCUMENTED-ONLY (no behavior fabricated):
---   The same loader's CheckProc / HandleProc arms (:509-544,
---   EFFECT_2 improved Drain Soul mana proc) are proc arms, not
---   periodic ticks: no proc hook exists on the RegisterAuraEvent
---   surface, so they stay out with the aura-script registration.
+-- (STALE as of census rows 789-804: the CheckProc / HandleProc arms
+--   (:517-544, EFFECT_2 improved Drain Soul mana proc) are now
+--   ported below via RegisterAuraEvent OnProc = 6; the "no proc
+--   hook" claim above is retired, not the arms.)
 
 local SPELL_WARLOCK_HEALTH_FUNNEL = 755
 local SPELL_WARLOCK_IMPROVED_HEALTH_FUNNEL_R1 = 18703
@@ -222,3 +221,175 @@ local function curseOfDoomRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_CURSE_OF_DOOM_R1, 3, curseOfDoomRemove)
+
+local SPELL_WARLOCK_BANISH = 710 -- spell_warlock.cpp:141
+local SPELL_MISS_IMMUNE = 7 -- SharedDefines.h:1558 (SPELL_MISS_IMMUNE)
+
+-- C++ spell_warl_banish::HandleBanish (spell_warlock.cpp:155-168):
+-- BeforeHit. Only an IMMUNE miss re-casts Banish on a banished
+-- target: the target's Banish aura from this caster is removed.
+-- RegisterSpellEvent BeforeHit = 6 (lua_spell.go fireSpellBeforeHit
+-- passes the real miss reason; notification-only, but this arm
+-- vetoes nothing). Rank 1 only: rank 2 (18647) has no
+-- spell_script_names binding in-tree.
+local function banishBeforeHit(event, spell, hitTarget, missInfo)
+    if missInfo ~= SPELL_MISS_IMMUNE then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local banish = hitTarget:GetAura(SPELL_WARLOCK_BANISH)
+    if banish == nil then
+        return
+    end
+    if banish:GetCasterGUID() ~= caster:GetGUID() then
+        return
+    end
+    banish:Remove()
+end
+
+RegisterSpellEvent(SPELL_WARLOCK_BANISH, 6, banishBeforeHit)
+
+local SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1 = 18213 -- spell_warlock.cpp:88
+local SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC = 18371 -- spell_warlock.cpp:89
+local POWER_MANA = 0
+
+-- C++ spell_warl_drain_soul::CheckProc (:517-529) + HandleProc
+-- (:531-545): EFFECT_2 PROC_TRIGGER_SPELL. The CheckProc gate (the
+-- dying unit carries this caster's Drain Soul) is the early return
+-- returning true (PreventDefaultAction, which suppresses the DBC
+-- default leg, like a failed CheckProc); the improved Drain Soul
+-- mana leg casts 18371 on the caster, triggered, BP0 = the
+-- EFFECT_2 pct of the caster's max mana. GetAuraOfRankedSpell is
+-- player-only, so a non-player actor vetoes after the gate.
+-- DORMANT until Spell.dbc ships the 1120 proc entry. Residual:
+-- Go fires ev6 after charge/cooldown consumption, so a vetoed
+-- (failed-gate) proc still spends a charge where C++ would not.
+local function drainSoulProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local drainSoul = procTarget:GetAura(SPELL_WARLOCK_DRAIN_SOUL_R1)
+    if drainSoul == nil then
+        return true
+    end
+    if drainSoul:GetCasterGUID() ~= actor:GetGUID() then
+        return true
+    end
+    if actor:GetObjectType() ~= "Player" then
+        return true
+    end
+    local impDrainSoul = actor:GetAuraOfRankedSpell(SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1)
+    if impDrainSoul == nil then
+        return true
+    end
+    local pct = impDrainSoul:GetAmount(2)
+    if pct == 0 then
+        return true
+    end
+    local maxMana = actor:GetMaxPower(POWER_MANA)
+    if maxMana == 0 then
+        return true
+    end
+    local amount = math.floor(maxMana * pct / 100)
+    actor:CastCustomSpell(actor, SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_DRAIN_SOUL_R1, 6, drainSoulProc)
+
+local SPELL_WARLOCK_SOUL_LEECH = 30293 -- spell_warlock.cpp:1388
+local SPELL_WARLOCK_SOUL_LEECH_HEAL = 30294 -- spell_warlock.cpp:78
+local SPELL_WARLOCK_IMP_SOUL_LEECH_R1 = 54117 -- spell_warlock.cpp:79
+local SPELL_WARLOCK_SOUL_LEECH_CASTER_MANA = { 54300, 59117 } -- spell_warlock.cpp:82-83
+
+-- C++ spell_warl_soul_leech::HandleProc (spell_warlock.cpp:1412-1442):
+-- EFFECT_0 DUMMY. On proc the actor self-casts Soul Leech Heal
+-- 30294, triggered, BP0 = the effect pct of the proc damage.
+-- Improved Soul Leech leg: the holder's ranked 54117 aura gives
+-- the rank (GetRank; 0 without spell_ranks data skips the leg)
+-- and the caster self-casts the rank-matched caster-mana spell
+-- (54300/59117), triggered. BLOCKED legs: the pet-mana cast
+-- (54607/59118) and Replenishment (57669) both target nil in C++
+-- (pet / party via DBC); Go's nil-target CastSpell falls back to
+-- the caster, which would energize the warlock instead of the pet
+-- / party, so they stay out pending a pet/party target bridge.
+-- DORMANT until Spell.dbc ships the 30293 proc entry.
+local function soulLeechProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 then
+        return true
+    end
+    if actor == nil then
+        return true
+    end
+    local pct = aura:GetAmount(0)
+    if pct == 0 then
+        return true
+    end
+    local amount = math.floor(damage * pct / 100)
+    actor:CastCustomSpell(actor, SPELL_WARLOCK_SOUL_LEECH_HEAL, true, amount)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return true
+    end
+    local impSoulLeech = target:GetAuraOfRankedSpell(SPELL_WARLOCK_IMP_SOUL_LEECH_R1)
+    if impSoulLeech == nil then
+        return true
+    end
+    local rank = impSoulLeech:GetRank()
+    if rank < 1 or rank > 2 then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_WARLOCK_SOUL_LEECH_CASTER_MANA[rank], true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_SOUL_LEECH, 6, soulLeechProc)
+
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY = 27243 -- spell_warlock.cpp:1177
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1 = 27285 -- spell_warlock.cpp:75
+
+-- C++ spell_warl_seed_of_corruption_dummy::HandleProc
+-- (spell_warlock.cpp:1202-1227): EFFECT_1 DUMMY. On proc the
+-- damage is eaten from the buffer (EFFECT_1 amount); a surviving
+-- buffer only detonates when the target's health after the hit
+-- drops below 1% (HealthBelowPctDamaged: health - damage <
+-- maxHealth * 1 / 100, Unit.h:873). On detonation the aura is
+-- removed and the caster casts the rank-matched Seed of
+-- Corruption damage spell on the proc target, triggered.
+-- BLOCKED leg: CalculateBuffer (:1192-1200, SP-scaled buffer via
+-- SpellDamageBonusDone) has no DoEffectCalcAmount bridge, so the
+-- buffer starts at its DBC base. DORMANT until Spell.dbc ships
+-- the 27243 proc entry (and spell_ranks for the rank lookup).
+local function seedOfCorruptionDummyProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 then
+        return true
+    end
+    if target == nil or procTarget == nil then
+        return true
+    end
+    local amount = aura:GetAmount(1) - damage
+    if amount > 0 then
+        aura:SetAmount(amount, 1)
+        if target:GetHealth() - damage >= math.floor(target:GetMaxHealth() / 100) then
+            return true
+        end
+    end
+    local caster = aura:GetCaster()
+    aura:Remove()
+    if caster == nil then
+        return true
+    end
+    local rankSpell = aura:GetSpellWithRank(SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1)
+    if rankSpell == 0 then
+        return true
+    end
+    caster:CastSpell(procTarget, rankSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY, 6, seedOfCorruptionDummyProc)
