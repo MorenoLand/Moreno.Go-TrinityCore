@@ -354,6 +354,26 @@ end
 
 RegisterAuraEvent(SPELL_WARLOCK_SOUL_LEECH, 6, soulLeechProc)
 
+local SPELL_WARLOCK_T4_2P_BONUS = 37377 -- spell_warlock.cpp:1493 (class spell_warl_t4_2p_bonus)
+local SPELL_WARLOCK_FLAMESHADOW = 37379 -- spell_warlock.cpp:86 (SPELL_WARLOCK_FLAMESHADOW)
+
+-- C++ spell_warl_t4_2p_bonus_AuraScript::HandleProc
+-- (spell_warlock.cpp:1506-1511): EFFECT_0 DUMMY OnEffectProc —
+-- PreventDefaultAction; the proc actor self-casts the template
+-- trigger, triggered. 37377 binds to spell_warl_t4_2p_bonus_shadow
+-- in spell_script_names (TDB 25101 + 26091), so the trigger is
+-- Flameshadow 37379, not Shadowflame 37378 (39437 binds _fire).
+-- DORMANT until Spell.dbc ships the 37377 proc entry.
+local function t4TwoPieceBonusProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil then
+        return true
+    end
+    actor:CastSpell(actor, SPELL_WARLOCK_FLAMESHADOW, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_T4_2P_BONUS, 6, t4TwoPieceBonusProc)
+
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY = 27243 -- spell_warlock.cpp:1177
 local SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1 = 27285 -- spell_warlock.cpp:75
 

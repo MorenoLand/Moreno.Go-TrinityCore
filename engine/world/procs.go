@@ -5488,9 +5488,9 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// with the aura effect (CastSpellExtraArgs(aurEff) is
 				// TRIGGERED_FULL_MASK, SpellDefines.h:166). The
 				// zero-damage gate is the C++ null/zero-damage early
-				// return. No Lua ev6 twin: spell_warlock.lua holds no
-				// 39367 handler, and the Lua ev6 veto above would fire
-				// first if one ever registers. DORMANT until Spell.dbc
+				// return. Lua ev6 twin: spell_warlock.lua registers
+				// 39367 (ev6, :517-519); the Lua veto fires first,
+				// so this leg is the Lua-off fallback. DORMANT until Spell.dbc
 				// ships the 39367 proc entry.
 				if ev.damage == 0 || i >= len(aura.Amounts) {
 					continue
@@ -5579,7 +5579,17 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 			}
 			if eff.Aura == spellAuraDummy {
 				if cast, ok := scriptAuraProcCast(auraSpell.ID, i, eff.Aura, ev.damage, scriptProcEffAmount(aura, i), ev.actorGUID, s.playerGUID, triggerTargetGUID, ev.eventSpell); ok {
+					// The generic cast carries the triggering-aura
+					// attribution (the C++ aurEff overload,
+					// Spell.cpp:3068 m_triggeredByAuraSpell), like
+					// the inline legs above (50421, 70844): the
+					// dead-caster gate and LOS origin in
+					// castSpellDirectWithOverrides read it.
+					s.triggeredByAuraCast = true
+					s.triggeredByAuraSpell = auraSpell.ID
 					s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, cast)
+					s.triggeredByAuraCast = false
+					s.triggeredByAuraSpell = 0
 					continue
 				}
 			}

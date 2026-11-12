@@ -60,7 +60,7 @@ RegisterAuraEvent(SPELL_WARRIOR_VIGILANCE, 3, vigilanceRemove)
 -- (spell_warrior.cpp:1130-1144): the caster-nil gate rides
 -- aura:GetCaster(); the target casts Vigilance Proc (50725) on the
 -- caster, triggered; the true return is PreventDefaultAction, so the
--- DBC trigger leg does not also fire (procs.go:3919, boss_ai.go:10852).
+-- DBC trigger leg does not also fire (procs.go:4016, boss_ai.go:11077).
 local function vigilanceProc(event, aura, target, actor, procTarget, damage)
     local caster = aura:GetCaster()
     if caster ~= nil then

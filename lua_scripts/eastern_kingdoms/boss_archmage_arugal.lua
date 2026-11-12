@@ -261,3 +261,24 @@ RegisterCreatureEvent(ENTRY_ARUGAL, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_ARUGAL, 4, onDied)
 RegisterCreatureEvent(ENTRY_ARUGAL, 23, onReset)
 RegisterCreatureEvent(ENTRY_ARUGAL, 15, onSpellHitTarget)
+
+local SPELL_SHADOWFANG_KEEP_HAUNTING_SPIRITS = 7057 -- shadowfang_keep.cpp:316 (class spell_shadowfang_keep_haunting_spirits)
+
+-- C++ spell_shadowfang_keep_haunting_spirits_AuraScript::HandleDummyTick
+-- (shadowfang_keep.cpp:330-333): OnEffectPeriodic, EFFECT_0 DUMMY — the
+-- aura target casts aurEff->GetAmount() (a spell id from the DBC row),
+-- triggered, on a nil target (self-cast). Binding 7057 confirmed in
+-- ac_spell_script_names.sql (spell_shadowfang_keep_haunting_spirits_aura).
+-- Cadence delta: CalcPeriodic sets amplitude to (irand(0,60)+30)s
+-- (:325-329) and HandleUpdatePeriodic recalculates it (:335-338); no
+-- SetAmplitude bridge exists, so the tick runs at the DBC AuraPeriod
+-- and the amplitude legs stay out. DORMANT until Spell.dbc ships 7057.
+local function hauntingSpiritsTick(event, aura, target)
+    local spellId = aura:GetAmount(0)
+    if spellId == nil or spellId == 0 then
+        return
+    end
+    target:CastSpell(nil, spellId, true)
+end
+
+RegisterAuraEvent(SPELL_SHADOWFANG_KEEP_HAUNTING_SPIRITS, 1, hauntingSpiritsTick)

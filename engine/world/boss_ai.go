@@ -11683,7 +11683,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				// Unit.cpp:10412), triggered, with the aura effect. The
 				// amount write rides auraMu like the charge consume above
 				// (the 49592 precedent). Lua-off fallback twin of the
-				// (absent) ev6 handler: the Lua hook vetoes first when
+				// ev6 handler: the Lua hook vetoes first when
 				// loaded, so this never double-fires. DORMANT until
 				// Spell.dbc ships the 39367 proc entry.
 				if ev.damage == 0 || i >= len(aura.Amounts) {
