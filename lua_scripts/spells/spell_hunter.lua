@@ -395,10 +395,16 @@ RegisterAuraEvent(SPELL_HUNTER_MISDIRECTION, 6, misdirectionProc)
 --   flag, lua_creature_events.go:953). The C++ Load() IsPet gate rides
 --   the in-tree approximation (nonzero OwnerGUID,
 --   lua_creature_events.go:4253) — no Lua IsPet method exists.
---   NOT PORTED: CheckIfCorpseNear (spell_hunter.cpp:1010-1026) — no Lua
---   OnCheckCast bridge, and Go's default enforces no corpse search
---   (53271 DoCheckCast precedent). DORMANT until Spell.dbc drives
---   54044 (pet ability).
+--   PORTED (RegisterSpellEvent OnCheckCast = 8): CheckIfCorpseNear
+--   (spell_hunter.cpp:985-999) — the cannibalize twin
+--   (spell_generic.cpp:840-854, spell_generic.lua): any dead enemy unit
+--   within the spell's max range (5 yards, GameFAQs WotLK hunter guide)
+--   else SPELL_FAILED_NO_EDIBLE_CORPSES (141); the C++ Load() IsPet
+--   gate rides the same nonzero-OwnerGUID approximation as the dummy
+--   leg (a non-pet caster passes — the unloaded script vetoes
+--   nothing). DORMANT with the dummy leg until Spell.dbc drives 54044
+--   (pet ability) and a creature CheckCast fire site lands — ev8 has
+--   only the player-path fire site (spells.go:4373).
 local SPELL_HUNTER_PET_CARRION_FEEDER = 54044 -- spell_hunter.cpp:964
 local SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED = 54045 -- spell_hunter.cpp:54
 
@@ -414,6 +420,29 @@ local function carrionFeederDummy(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_HUNTER_PET_CARRION_FEEDER, 4, carrionFeederDummy)
+
+local SPELL_HUNTER_PET_CARRION_FEEDER_RANGE = 5 -- GameFAQs WotLK hunter guide: 5 yd range (DBC GetMaxRange(false); no Lua GetMaxRange bridge)
+local SPELL_FAILED_NO_EDIBLE_CORPSES = 141 -- SharedDefines.h:1123
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+local function carrionFeederCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_FAILED_NO_EDIBLE_CORPSES
+    end
+    if caster:GetOwnerGUID() == 0 then
+        return SPELL_CAST_OK
+    end
+    if #caster:GetCreaturesInRange(SPELL_HUNTER_PET_CARRION_FEEDER_RANGE, 0, 1, 2) > 0 then
+        return SPELL_CAST_OK
+    end
+    if #caster:GetPlayersInRange(SPELL_HUNTER_PET_CARRION_FEEDER_RANGE, 1, 2) > 0 then
+        return SPELL_CAST_OK
+    end
+    return SPELL_FAILED_NO_EDIBLE_CORPSES
+end
+
+RegisterSpellEvent(SPELL_HUNTER_PET_CARRION_FEEDER, 8, carrionFeederCheckCast)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_hun_pet_heart_of_the_phoenix::HandleScript
