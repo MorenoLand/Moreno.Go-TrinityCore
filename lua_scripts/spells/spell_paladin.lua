@@ -80,6 +80,8 @@
 --   ADD_FLAT_MODIFIER is its EFFECT_0 (the script registers
 --   EFFECT_FIRST_FOUND for that aura type).
 -- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   623 divine_purpose (31871, :541-558: on the EFFECT_2 amount
+--   roll the proc target strips its STUN auras);
 --   624 eye_for_an_eye (9799, :777-790: holder casts 25997 on the
 --   attacker, BP0 = min(pct(damage, amount), maxHealth/2));
 --   625 heart_of_the_crusader (20335, :1040-1047: actor casts
@@ -94,12 +96,10 @@
 --   on the proc target, BP0 = pct(damage, amount) / max ticks).
 --   All return true (PreventDefaultAction) and are DORMANT until
 --   Spell.dbc ships their proc entries.
--- STAYS OUT (this tick): 623 divine_purpose (no
---   unit:RemoveAurasWithMechanic bridge; Go has the
---   auraSpellMechanicMask + mechanicStun=12 twins, no removal
---   helper); 626 holy_shock PORTED this tick (OnCheckCast ev8 below;
---   the HandleDummy damage/heal legs stay out — ev5 player path
---   dormant + no spell-level GetSpellWithRank); 627 illumination
+-- STAYS OUT (this tick): 626 holy_shock PORTED this tick (OnCheckCast ev8 below;
+--   the HandleDummy damage/heal legs stay out — no spell-level
+--   GetSpellWithRank (the ev5 player path is live, spells.go:14735));
+--   627 illumination
 --   PORTED this tick (ev6, below: Holy Shock family flag via
 --   procEvent:GetSpellFamilyFlags(1), rank-matched Holy Shock via
 --   aura:GetSpellWithRank(20473, rank), CalcPowerCost via
@@ -414,6 +414,34 @@ local function righteousVengeanceProc(event, aura, target, actor, procTarget, da
 end
 
 RegisterAuraEvent(SPELL_PALADIN_RIGHTEOUS_VENGEANCE, 6, righteousVengeanceProc)
+
+local SPELL_PALADIN_DIVINE_PURPOSE = 31871 -- spell_paladin.cpp:536 (class spell_pal_divine_purpose)
+local MECHANIC_STUN_MASK = 4096 -- 1 << MECHANIC_STUN (12), SharedDefines.h:1355
+
+-- C++ spell_pal_divine_purpose_AuraScript::HandleProc
+-- (spell_paladin.cpp:543-553): OnEffectProc, EFFECT_2 DUMMY.
+-- PreventDefaultAction (the true return on every path); on a roll
+-- of the EFFECT_2 amount (roll_chance_i twin: math.random(0, 99)
+-- < amount, the extra_proc idiom) the proc target strips its STUN
+-- auras (RemoveAurasWithMechanic, bridged on the player and
+-- creature surfaces; the AURA_REMOVE_BY_ENEMY_SPELL mode has no
+-- Lua twin, the Go removal is mode-default). Rank 1 only: 31872
+-- has no census row, never guessed. DORMANT until Spell.dbc ships
+-- the 31871 proc entry.
+local function divinePurposeProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 2 then
+        return true
+    end
+    if procTarget == nil or aura == nil then
+        return true
+    end
+    if math.random(0, 99) < aura:GetAmount(2) then
+        procTarget:RemoveAurasWithMechanic(MECHANIC_STUN_MASK)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_DIVINE_PURPOSE, 6, divinePurposeProc)
 
 local SPELL_PALADIN_ILLUMINATION = 20210 -- spell_paladin.cpp:1132 (class spell_pal_illumination)
 local SPELL_PALADIN_HOLY_SHOCK_R1 = 20473 -- spell_paladin.cpp:41
