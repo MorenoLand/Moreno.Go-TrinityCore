@@ -533,25 +533,7 @@ RegisterAuraEvent(SPELL_MAGE_MISSILE_BARRAGE_PROC, 6, missileBarrageProcCheck)
 --   triggered: squirrel 32813 / giraffe 32816 / serpent 32817 /
 --   dragonhawk 32818 / worgen 32819 / sheep 32820 (PolymorphForms[6],
 --   spell_mage.cpp:1422-1430; urand(0, 5) rides math.random(1, 6)).
---   No PreventDefaultAction in C++ — the default dummy leg still runs.
---   DORMANT until Spell.dbc ships the 32826 row.
-local SPELL_MAGE_POLYMORPH_VISUAL = 32826 -- spell_mage.cpp:1386 (class spell_mage_polymorph_cast_visual)
-local NPC_AUROSALIA = 18744 -- spell_mage.cpp:1382
-local SPELL_MAGE_POLYMORPH_FORMS = { 32813, 32816, 32817, 32818, 32819, 32820 } -- spell_mage.cpp:1422-1430
-
-local function polymorphVisualHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    local target = caster:FindNearestCreature(NPC_AUROSALIA, 30.0)
-    if target == nil then
-        return
-    end
-    target:CastSpell(target, SPELL_MAGE_POLYMORPH_FORMS[math.random(1, 6)], true)
-end
-
-RegisterSpellEvent(SPELL_MAGE_POLYMORPH_VISUAL, 5, polymorphVisualHit)
+--   PORTED IN GO, not Lua (polymorphVisualDummyEffect, spells.go):
+--   finishSpellCast fires ev5 before the dummy leg, so a Lua handler
+--   would cast a second random form on the Aurosalia (a910c39d ev5-site
+--   double-fire audit). DORMANT until Spell.dbc ships the 32826 row.

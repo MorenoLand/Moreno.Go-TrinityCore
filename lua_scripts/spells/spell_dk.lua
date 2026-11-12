@@ -797,7 +797,6 @@ end
 RegisterAuraEvent(SPELL_DK_HYSTERIA, 1, hysteriaTick)
 
 local SPELL_DK_DEATH_GRIP_INITIAL = 49576 -- spell_dk.cpp:2740
-local SPELL_DK_DEATH_GRIP = 49560 -- spell_dk.cpp:60
 local PLAYER_COMBAT_REACH = 1.5 -- ObjectDefines.h:40 DEFAULT_PLAYER_COMBAT_REACH
 
 -- C++ spell_dk_death_grip_initial (spell_dk.cpp:2740-2781):
@@ -814,7 +813,10 @@ local PLAYER_COMBAT_REACH = 1.5 -- ObjectDefines.h:40 DEFAULT_PLAYER_COMBAT_REAC
 -- player reaches come off as the 1.5 constant (maiden_of_virtue
 -- precedent; GetCombatReach is creature-surface only).
 -- HandleDummy (OnEffectHitTarget = 5, EFFECT_0 DUMMY): the caster
--- casts Death Grip 49560 on the hit unit, triggered.
+-- casts Death Grip 49560 on the hit unit, triggered. PORTED IN GO,
+-- not Lua (deathGripInitialDummyEffect, spells.go): finishSpellCast
+-- fires ev5 before the dummy leg, so a Lua handler would cast 49560
+-- twice per hit target (a910c39d ev5-site double-fire audit).
 local function deathGripInitialCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster == nil then
@@ -837,19 +839,6 @@ local function deathGripInitialCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_DK_DEATH_GRIP_INITIAL, 8, deathGripInitialCheckCast)
-
-local function deathGripInitialHit(event, spell, target, effectIndex)
-    if effectIndex ~= 0 or target == nil then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    caster:CastSpell(target, SPELL_DK_DEATH_GRIP, true)
-end
-
-RegisterSpellEvent(SPELL_DK_DEATH_GRIP_INITIAL, 5, deathGripInitialHit)
 
 -- PORTED (this tick, RegisterAuraEvent OnDispel = 5):
 --   spell_dk_frost_fever (55095, spell_dk.cpp:1343-1358): AfterDispel.

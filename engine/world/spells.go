@@ -53405,8 +53405,9 @@ func (s *session) deathGripDummyEffect(ctx context.Context, spell wotlk.Spell, e
 // deathGripInitialDummyEffect is spell_dk_death_grip_initial
 // (spell_dk.cpp:2740-2781): the EFFECT_0 DUMMY OnEffectHitTarget arm —
 // the caster casts Death Grip (49560) triggered on the hit unit. No Lua
-// ev5 port: the player path has no OnEffectHitTarget site (60533
-// precedent). DORMANT until Spell.dbc ships the 49576 record. The chain
+// ev5 port: finishSpellCast fires ev5 (a910c39d) before this leg, so
+// a Lua handler would cast 49560 twice per hit target. DORMANT until
+// Spell.dbc ships the 49576 record. The chain
 // terminates: the 49560 re-cast has no dummy leg in the triggered
 // dispatch, so it never re-casts 49576.
 func (s *session) deathGripInitialDummyEffect(ctx context.Context, effectIndex int, hitTargets []uint64) {
@@ -54028,8 +54029,9 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// DELTA: C++ casts non-triggered, but Go has no server-side
 		// non-triggered player cast helper — the cast rides the
 		// triggered funnel (castSpellDirect) like the 52751 death-gate
-		// arm. A Lua ev5 port would never fire: the player path has no
-		// OnEffectHitTarget site (60533 precedent above). DORMANT until
+		// arm. No Lua port (ev4 or ev5): finishSpellCast fires ev4 once
+		// per effect and ev5 once per hit target before this leg, so a
+		// Lua handler would cast the value spell twice. DORMANT until
 		// Spell.dbc ships the 51770 record.
 		if value := eff.CalcValueForLevel(spell, uint32(s.player.Level)); value != 0 {
 			s.castSpellDirect(ctx, uint32(value), s.playerGUID)

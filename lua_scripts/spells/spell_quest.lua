@@ -114,7 +114,6 @@ local SPELL_AGGRO_CHECK = 40112 -- spell_quest.cpp:1530
 local SPELL_AGGRO_BURST_AURA = 40119 -- spell_quest.cpp:1594 (class spell_q11010_q11102_q11023_aggro_burst)
 local SPELL_CHOOSE_LOC = 40056 -- spell_quest.cpp:1529
 local SPELL_EMBLAZON_RUNEBLADE = 51769 -- spell_quest.cpp:2412 (class spell_q12619_emblazon_runeblade)
-local SPELL_EMBLAZON_RUNEBLADE_EFFECT = 51770 -- spell_quest.cpp:2441 (class spell_q12619_emblazon_runeblade_effect)
 local SPELL_BURST_AT_THE_SEAMS_59579 = 59579 -- spell_quest.cpp:2011
 local SPELL_TROLL_EXPLOSION = 52565 -- spell_quest.cpp:2005
 local SPELL_EXPLODE_ABOMINATION_MEAT = 52520 -- spell_quest.cpp:2004
@@ -171,29 +170,11 @@ end
 
 RegisterAuraEvent(SPELL_EMBLAZON_RUNEBLADE, 1, emblazonRunebladeTick)
 
--- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHit = 4):
---   spell_q12619_emblazon_runeblade_effect (spell_quest.cpp:2447-2463):
---   EFFECT_0 SCRIPT_EFFECT. The caster self-casts the effect-0
---   value (GetEffectValue(0)), non-triggered. ev4 fires on the
---   player path (spells.go:14625). KNOWN LIMIT: player:CastSpell
---   ignores the triggered flag (see header note above), same as all
---   prior player ports — the false is passed faithfully.
-
-local function emblazonRunebladeEffectHit(event, spell, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    local effectSpell = spell:GetEffectValue(0)
-    if effectSpell > 0 then
-        caster:CastSpell(caster, effectSpell, false)
-    end
-end
-
-RegisterSpellEvent(SPELL_EMBLAZON_RUNEBLADE_EFFECT, 4, emblazonRunebladeEffectHit)
+-- PORTED IN GO, not Lua (case 51770, handleEffectScriptEffect,
+--   spells.go): finishSpellCast fires ev4 once per effect and ev5 once
+--   per hit target before the script-effect leg, so a Lua handler would
+--   cast the effect-0 value spell twice (a910c39d ev5-site double-fire
+--   audit). The Go case carries the documented triggered-funnel delta.
 
 local function burstAtTheSeamsApply(event, aura, target)
     target:CastSpell(target, SPELL_TROLL_EXPLOSION, true)
