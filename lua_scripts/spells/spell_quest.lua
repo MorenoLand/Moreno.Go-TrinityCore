@@ -1331,6 +1331,28 @@ local HUNT = {
     -- spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy (spell_quest.cpp:1808)
     SPELL_GRAB_FAKE_SOLDIER = 59318,
     SPELL_RIDE = 59319,
+    -- spell_q13011_bear_flank_master (spell_quest.cpp:1907)
+    SPELL_BEAR_FLANK_MASTER = 56565,
+    SPELL_CREATE_BEAR_FLANK = 56566,
+    SPELL_BEAR_FLANK_FAIL = 56569,
+    -- spell_q13264_q13276_q13288_q13289_burst_at_the_seams_59576 (spell_quest.cpp:2025)
+    SPELL_BURST_AT_THE_SEAMS_59576 = 59576,
+    SPELL_BLOATED_ABOMINATION_FEIGN_DEATH = 52593,
+    SPELL_BURST_AT_THE_SEAMS_59579 = 59579,
+    SPELL_BURST_AT_THE_SEAMS_BONE = 52516,
+    SPELL_EXPLODE_ABOMINATION_MEAT = 52520,
+    SPELL_EXPLODE_ABOMINATION_BLOODY_MEAT = 52523,
+    -- spell_q13264_q13276_q13288_q13289_burst_at_the_seams_59579 (spell_quest.cpp:2064)
+    SPELL_TROLL_EXPLOSION = 52565,
+    SPELL_EXPLODE_TROLL_MEAT = 52578,
+    SPELL_EXPLODE_TROLL_BLOODY_MEAT = 52580,
+    SPELL_BURST_AT_THE_SEAMS_59580 = 59580,
+    NPC_ICY_GHOUL = 31142,
+    NPC_VICIOUS_GEIST = 31147,
+    NPC_RISEN_ALLIANCE_SOLDIERS = 31205,
+    SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER = 59590,
+    SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER = 60041,
+    SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER = 60039,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -1496,3 +1518,121 @@ local function grabDecoyHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_GRAB_FAKE_SOLDIER, 5, grabDecoyHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q13011_bear_flank_master (spell_quest.cpp:1907-1956):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 56565 "Bear Flank Master"
+--   (AC spell_script_names.sql L3357; wowhead.com/wotlk/spell=56565
+--   single Script Effect). Load gate caster TYPEID_UNIT is an explicit
+--   GetTypeId() == 3 check (ev5 fires on both paths; creature-path
+--   spell:GetCaster is the casting creature, lua_spell.go:502).
+--   Hit player: 50/50 (math.random(1,100) <= 50, the roll_chance_i(50)
+--   twin) the player casts 56569 on the creature, non-triggered, and
+--   the creature whispers Talk(0) to the player (creature:Talk(textId,
+--   target), lua_creature_events.go:1196); else the player casts 56566
+--   on self, non-triggered.
+--   spell_q13264_q13276_q13288_q13289_burst_at_the_seams_59576
+--   (spell_quest.cpp:2025-2062): EFFECT_0 SCRIPT_EFFECT ev5, binding
+--   59576 "Burst at the Seams" (class-name suffix; wowhead.com/wotlk
+--   /spell=59576 Effect #1 Script Effect, Effect #2 Knock Back).
+--   Caster creature self-casts 52593 + 59579 + 52516 x3 + 52520 +
+--   52523 x3, all triggered; the hit target is unused in C++.
+--   spell_q13264_q13276_q13288_q13289_burst_at_the_seams_59579
+--   (spell_quest.cpp:2064-2104): AuraScript, EFFECT_0 SPELL_AURA_DUMMY,
+--   binding 59579 (class-name suffix; wowhead.com/wotlk/spell=59579
+--   single Apply Aura: Dummy). OnApply (2): target self-casts 52565 +
+--   52520 + 52578 x2 + 52580 + 52516, triggered. OnRemove (3): by
+--   target entry the target casts the master-credit spell on the aura
+--   caster (31142 -> 59590, 31147 -> 60041, 31205 -> 60039; 31692 has
+--   no credit case in C++), then self-casts 59580, triggered. DELTA:
+--   Go OnApply is fresh-only vs C++ REAL_OR_REAPPLY (goingBearback
+--   precedent); a re-apply after expiry re-casts nothing while the
+--   1s aura holds, and the arm only casts.
+--
+-- STAY OUT (same tick):
+--   spell_q13086_cannons_target (spell_quest.cpp:1957-1990): EFFECT_0
+--   DUMMY OnEffectHit; caster casts GetEffectValue() at the explosion
+--   destination, triggered. No binding spell ID: no in-file comment,
+--   no AC spell_script_names.sql row, no TC sql/updates row — joins
+--   the 5 hunt-unresolved no-id stay-outs.
+--   spell_q13264_q13276_q13288_q13289_area_restrict_abom
+--   (spell_quest.cpp:2141-2156) and _assign_credit_to_master
+--   (:2158-2174): RegisterSpellScript classes with no AC table rows
+--   and no class-name spell suffix; bindings unestablished, same
+--   bucket as the hunt-unresolved.
+
+local function bearFlankMasterHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= HUNT.TYPEID_UNIT then
+        return
+    end
+    if math.random(1, 100) <= 50 then
+        hitTarget:CastSpell(caster, HUNT.SPELL_BEAR_FLANK_FAIL, false)
+        caster:Talk(0, hitTarget)
+    else
+        hitTarget:CastSpell(hitTarget, HUNT.SPELL_CREATE_BEAR_FLANK, false)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_BEAR_FLANK_MASTER, 5, bearFlankMasterHit)
+
+local function burstAtTheSeams59576Hit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:CastSpell(caster, HUNT.SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, true)
+    caster:CastSpell(caster, HUNT.SPELL_BURST_AT_THE_SEAMS_59579, true)
+    caster:CastSpell(caster, HUNT.SPELL_BURST_AT_THE_SEAMS_BONE, true)
+    caster:CastSpell(caster, HUNT.SPELL_BURST_AT_THE_SEAMS_BONE, true)
+    caster:CastSpell(caster, HUNT.SPELL_BURST_AT_THE_SEAMS_BONE, true)
+    caster:CastSpell(caster, HUNT.SPELL_EXPLODE_ABOMINATION_MEAT, true)
+    caster:CastSpell(caster, HUNT.SPELL_EXPLODE_ABOMINATION_BLOODY_MEAT, true)
+    caster:CastSpell(caster, HUNT.SPELL_EXPLODE_ABOMINATION_BLOODY_MEAT, true)
+    caster:CastSpell(caster, HUNT.SPELL_EXPLODE_ABOMINATION_BLOODY_MEAT, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59576, 5, burstAtTheSeams59576Hit)
+
+local function burstAtTheSeams59579Apply(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, HUNT.SPELL_TROLL_EXPLOSION, true)
+    target:CastSpell(target, HUNT.SPELL_EXPLODE_ABOMINATION_MEAT, true)
+    target:CastSpell(target, HUNT.SPELL_EXPLODE_TROLL_MEAT, true)
+    target:CastSpell(target, HUNT.SPELL_EXPLODE_TROLL_MEAT, true)
+    target:CastSpell(target, HUNT.SPELL_EXPLODE_TROLL_BLOODY_MEAT, true)
+    target:CastSpell(target, HUNT.SPELL_BURST_AT_THE_SEAMS_BONE, true)
+end
+
+RegisterAuraEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59579, 2, burstAtTheSeams59579Apply)
+
+local function burstAtTheSeams59579Remove(event, aura, target)
+    if target == nil then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster ~= nil then
+        local entry = target:GetEntry()
+        if entry == HUNT.NPC_ICY_GHOUL then
+            target:CastSpell(caster, HUNT.SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER, true)
+        elseif entry == HUNT.NPC_VICIOUS_GEIST then
+            target:CastSpell(caster, HUNT.SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER, true)
+        elseif entry == HUNT.NPC_RISEN_ALLIANCE_SOLDIERS then
+            target:CastSpell(caster, HUNT.SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER, true)
+        end
+    end
+    target:CastSpell(target, HUNT.SPELL_BURST_AT_THE_SEAMS_59580, true)
+end
+
+RegisterAuraEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59579, 3, burstAtTheSeams59579Remove)
