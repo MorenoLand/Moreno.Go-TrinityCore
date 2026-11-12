@@ -915,3 +915,28 @@ local function rocketBootsCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_ROCKET_BOOTS, 8, rocketBootsCheckCast)
+
+local SPELL_ITEM_GIFT_OF_THE_HARVESTER = 52481 -- spell_item.cpp:2463 (class spell_item_gift_of_the_harvester; AC spell_script_names row)
+local NPC_GHOUL = 28845 -- spell_item.cpp:2459
+local MAX_GHOULS = 5 -- spell_item.cpp:2460
+local SPELL_CUSTOM_ERROR_TOO_MANY_GHOULS = 30 -- SharedDefines.h:1206
+
+-- C++ spell_item_gift_of_the_harvester::CheckRequirement
+-- (spell_item.cpp:2467-2478, registered OnCheckCast): the caster
+-- fails SPELL_FAILED_CUSTOM_ERROR with TOO_MANY_GHOULS once 5 ghouls
+-- (28845) are already summoned. RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast). The two-value custom-error
+-- return rides the geyser-fields precedent above; GetAllMinionsByEntry
+-- is bridged on the player surface (lua_player.go:3341).
+local function giftOfTheHarvesterCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        local ghouls = caster:GetAllMinionsByEntry(NPC_GHOUL)
+        if ghouls ~= nil and #ghouls >= MAX_GHOULS then
+            return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_TOO_MANY_GHOULS
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_ITEM_GIFT_OF_THE_HARVESTER, 8, giftOfTheHarvesterCheckCast)

@@ -62,6 +62,11 @@
 --   spell_dru_primal_tenacity (spell_druid.cpp:1102-1140): aura 33851,
 --   mode 9 (OnEffectAbsorb). Same shape on EFFECT_1, plus the cat-form
 --   gate. Both DORMANT until Spell.dbc ships.
+--   spell_dru_savage_roar + spell_dru_survival_instincts CheckCast
+--   (spell_druid.cpp:1281-1288 / 1383-1386, ev8): savage roar fails
+--   ONLY_SHAPESHIFT unless the caster is in cat form; survival
+--   instincts fails it unless the caster is in a feral form (cat /
+--   bear / direbear, Unit.cpp:9164-9168 via GetShapeshiftForm).
 -- STAY-OUT (tick 294): every other spell_druid class — CalcAmount/
 --   hooks absent, or SpellScript-only with no RegisterSpellScript in
 --   the engine. Notable: rip (combo points + attack power), berserk
@@ -210,6 +215,8 @@ local FORM_TREE = 2 -- SpellAuraDefines.h:411
 local FORM_BEAR = 5 -- SpellAuraDefines.h:414
 local FORM_DIREBEAR = 8 -- SpellAuraDefines.h:417
 local FORM_MOONKIN = 31 -- SpellAuraDefines.h:438
+local SPELL_FAILED_ONLY_SHAPESHIFT = 94 -- SharedDefines.h:1076
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
 
 local FORM_TRINKET_SPELLS = {
     [FORM_BEAR] = SPELL_DRUID_FORMS_TRINKET_BEAR,
@@ -240,6 +247,41 @@ local function formsTrinketProc(event, aura, target, actor, procTarget, damage, 
 end
 
 RegisterAuraEvent(SPELL_DRUID_FORMS_TRINKET, 6, formsTrinketProc)
+
+-- C++ spell_dru_savage_roar::CheckCast (spell_druid.cpp:1281-1288):
+-- a caster not in cat form fails SPELL_FAILED_ONLY_SHAPESHIFT.
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding 52610 is the AC spell_script_names row; 62071 is the buff
+-- the aura arm casts, not a CheckCast binding.
+local function savageRoarCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetShapeshiftForm() ~= FORM_CAT then
+        return SPELL_FAILED_ONLY_SHAPESHIFT
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_DRUID_SAVAGE_ROAR, 8, savageRoarCheckCast)
+
+-- C++ spell_dru_survival_instincts::CheckCast (spell_druid.cpp:1383-1386):
+-- a caster not in feral form fails SPELL_FAILED_ONLY_SHAPESHIFT.
+-- IsInFeralForm (Unit.cpp:9164-9168) is form == CAT/BEAR/DIREBEAR,
+-- expressed via the bridged GetShapeshiftForm (lua_player.go:196).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding 61336 is the AC spell_script_names row; 50322 is the buff
+-- the aura arm casts, not a CheckCast binding.
+local function survivalInstinctsCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil then
+        local form = caster:GetShapeshiftForm()
+        if form ~= FORM_CAT and form ~= FORM_BEAR and form ~= FORM_DIREBEAR then
+            return SPELL_FAILED_ONLY_SHAPESHIFT
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_DRUID_SURVIVAL_INSTINCTS, 8, survivalInstinctsCheckCast)
 
 -- C++ spell_dru_moonkin_form_passive::Absorb (spell_druid.cpp:936-976):
 -- 69366 EFFECT_0 SPELL_AURA_SCHOOL_ABSORB. The pool is unlimited
