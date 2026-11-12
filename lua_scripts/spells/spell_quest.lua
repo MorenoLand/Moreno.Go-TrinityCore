@@ -2327,7 +2327,7 @@ RegisterSpellEvent(HUNT.SPELL_MIXING_BLOOD, 4, mixingBloodHit)
 --   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): EFFECT_1
 --   SCRIPT_EFFECT ev5, binding 50894 per TDB 335.26091
 --   spell_script_names ('spell_zuldrak_zuldrak_rat'). The hit unit
---   (basilisk) casts Summon Gorged Lurking Basilisk 50928 on nil,
+--   (basilisk) casts Summon Gorged Lurking Basilisk 50928 on itself,
 --   triggered, then despawns when its 50894 aura reaches the DBC
 --   StackAmount (5 — quest 12527 'Gluttonous Lurkers': 'after eating
 --   five'). ORDERING ADJUDICATION: C++ reads the aura AFTER the
@@ -2354,7 +2354,15 @@ local function zuldrakRatHit(event, spell, hitTarget, effectIndex)
         stacks = aura:GetStackAmount()
     end
     if stacks + 1 >= HUNT.ZULDRAK_RAT_STACKS then
-        hitTarget:CastSpell(nil, HUNT.SPELL_SUMMON_GORGED_LURKING_BASILISK, true)
+        -- Self-cast, not nil: C++ CastSpell((Unit*)nullptr, 50928)
+        -- resolves the summon's implicit target to the caster, but
+        -- the creature CastSpell wrapper falls nil back to the
+        -- motion's combat target and drops the cast when that is 0
+        -- (lua_creature_events.go:936) — the neutral rat being fed
+        -- has no combat target, so nil would summon nothing while
+        -- the rat still despawned below. Explicit self keeps the
+        -- summon arm's caster-position spawn (boss_ai.go:4770).
+        hitTarget:CastSpell(hitTarget, HUNT.SPELL_SUMMON_GORGED_LURKING_BASILISK, true)
         if hitTarget:GetTypeId() == HUNT.TYPEID_UNIT then
             hitTarget:DespawnOrUnsummon()
         end
