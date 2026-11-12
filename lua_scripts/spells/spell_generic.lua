@@ -437,6 +437,35 @@ end
 
 RegisterAuraEvent(SPELL_BURN_BRUTALLUS, 1, burnBrutallusTick)
 
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_gen_aura_of_anger (41337, spell_generic.cpp:369-385):
+--   OnEffectUpdatePeriodic only: EFFECT_1 grows by 5 each tick
+--   and EFFECT_0 is set to 100 * tick number. Same shape as the
+--   burn_brutallus port above (46394): no dedicated update-periodic
+--   AuraEvent, but C++ AuraEffect::Update does ++_ticksDone, then
+--   calls the update-periodic handlers, then the periodic tick
+--   (SpellAuraEffects.cpp:827-834), and Go ev1 fires before the
+--   default tick with _ticksDone already incremented — so the ev1
+--   handler sees the same tick number and the new EFFECT_0 amount
+--   applies to the same tick's damage (SetAmount writes Amount,
+--   lua_aura.go:945). The handler returns nothing: no
+--   PreventDefaultAction in C++, the default periodic damage still
+--   fires. Delta: C++ guards the EFFECT_1 leg on GetEffect(1)
+--   non-nil; the DBC is not shipped in-tree so the effect's
+--   presence is unverified — if EFFECT_1 is absent the
+--   SetAmount(..., 1) write lands in an unread Amounts slot and
+--   is inert. Binding 41337 (TDB 26091 'spell_reliquary_of_souls_
+--   aura_of_anger'; the C++ class is spell_gen_aura_of_anger,
+--   registered at spell_generic.cpp:4353).
+local SPELL_AURA_OF_ANGER = 41337 -- spell_generic.cpp:369
+
+local function auraOfAngerTick(event, aura, target)
+    aura:SetAmount(aura:GetAmount(1) + 5, 1)
+    aura:SetAmount(100 * aura:GetTickNumber(), 0)
+end
+
+RegisterAuraEvent(SPELL_AURA_OF_ANGER, 1, auraOfAngerTick)
+
 -- PORTED (tick 2026-11-12, RegisterAuraEvent OnApply = 2 /
 -- OnRemove = 3):
 --   spell_gen_aura_service_uniform::OnApply/OnRemove
