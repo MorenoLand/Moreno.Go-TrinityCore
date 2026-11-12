@@ -14,8 +14,10 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- gate (SPELL_CAST_OK), as does a missing battlefield — the Go twin of
 -- the always-registered C++ battlefield is getOrCreateWGState, so the
 -- defender read never misses. The 54643 trigger HandleDummy leg stays
--- out: the player path has no OnEffectHitTarget site (death-gate
--- precedent). The second 54640 row (spell_gen_cast_target_to_target)
+-- out: it only writes the spell's explicit target destination
+-- (SetExplTargetDest, zone_wintergrasp.cpp:538-541) and the Lua spell
+-- object has no dest write (the ev5 player-path site itself is live
+-- since a910c39d). The second 54640 row (spell_gen_cast_target_to_target)
 -- has no C++ loader in this tree. Binding 54640 is the TDB 26091
 -- spell_script_names row (spell_wintergrasp_defender_teleport); no AC
 -- spell_script_names row exists for 54640 (grep count 0).

@@ -568,14 +568,15 @@ end
 RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 8, holyShockCheckCast)
 
 local SPELL_PALADIN_RIGHTEOUS_DEFENSE = 31789 -- spell_paladin.cpp:1888 (class spell_pal_righteous_defense)
+local SPELL_PALADIN_RIGHTEOUS_DEFENSE_TAUNT = 31790 -- spell_paladin.cpp:79
 local SPELL_FAILED_DONT_REPORT = 27 -- SharedDefines.h:1009
 
 -- C++ spell_pal_righteous_defense::CheckCast (spell_paladin.cpp:1888-1906):
 -- player-only (the NPCBot exception has no Go twin); the explicit target
 -- must be friendly to the caster, not the caster, and have attackers,
--- else SPELL_FAILED_BAD_TARGETS. The HandleDummy leg stays out: the
--- player path has no OnEffectHitTarget site (death-gate precedent), so
--- the taunt would never fire. The caster==target test compares
+-- else SPELL_FAILED_BAD_TARGETS. The HandleDummy leg is PORTED below
+-- (ev5, this tick): the old stay-out blamed the missing ev5 player-
+-- path site, which went live at a910c39d. The caster==target test compares
 -- GetGUIDLow + GetObjectType (the file's lay-on-hands convention:
 -- packed GUIDs lose bits through Lua numbers). RegisterSpellEvent
 -- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast). Binding 31789 is
@@ -602,6 +603,39 @@ local function righteousDefenseCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_PALADIN_RIGHTEOUS_DEFENSE, 8, righteousDefenseCheckCast)
+
+-- C++ spell_pal_righteous_defense::HandleDummy (spell_paladin.cpp:1908-1920):
+-- EFFECT_0 DUMMY OnEffectHitTarget — up to 3 of the hit unit's attackers
+-- (RandomResize, :1915) get the taunt spell 31790 from the caster,
+-- triggered. GetAttackers is bridged on both surfaces (lua_player.go:3412,
+-- lua_creature_events.go:3534); the partial Fisher-Yates below is the
+-- RandomResize twin (moroes math.random precedent). No Go leg exists
+-- for 31789 (threat.go:3037 lists it only as a taunt spell for the
+-- finishSpellCast taunt check), so this is the only leg. DORMANT until
+-- Spell.dbc ships 31789.
+local function righteousDefenseHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local attackers = hitTarget:GetAttackers()
+    if #attackers == 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local count = math.min(3, #attackers)
+    for i = 1, count do
+        local j = math.random(i, #attackers)
+        attackers[i], attackers[j] = attackers[j], attackers[i]
+    end
+    for i = 1, count do
+        caster:CastSpell(attackers[i], SPELL_PALADIN_RIGHTEOUS_DEFENSE_TAUNT, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_PALADIN_RIGHTEOUS_DEFENSE, 5, righteousDefenseHit)
 
 local SPELL_PALADIN_DIVINE_PROTECTION = 498 -- spell_paladin.cpp:1190 (class spell_pal_immunities)
 local SPELL_PALADIN_DIVINE_SHIELD = 642 -- spell_paladin.cpp:1191

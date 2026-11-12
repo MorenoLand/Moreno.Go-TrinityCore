@@ -19988,8 +19988,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		// multiplier, plus the Black Ice (49140, EFFECT_0, any rank)
 		// pct, cast as the triggered Scourge Strike damage spell
 		// 70890 with BP0. A Lua ev3 handler would need the dummy
-		// leg's multiplier, which only the Go dummy leg above can
-		// compute (no ev5 site on the player path, 60533
+		// leg's multiplier, which lives only in the Go dummy leg's
+		// per-target map above — no Lua leg can read it (and a Lua ev5
+		// port of the dummy leg itself would double it, the 63975
 		// precedent). Fires once per hit target, after the Lua
 		// AfterHit handlers above; miss entries take no cast (C++
 		// GetHitUnit() nil skips). The triggered-path 70890 cast
@@ -53244,9 +53245,10 @@ func (s *session) modWyrmGripStacks(delta int32, mode auraRemoveMode, matchCaste
 // auraMu, EffectMask-gated). The miss leg fires the Go-side
 // CREATURE_EVENT_ON_DO_ACTION (38) hook (lua_creature_events.go:839
 // pattern); nothing consumes it until the wyrm AI ports, so the Talk
-// stays silent. A Lua ev5 port would never fire: the player path has
-// no OnEffectHitTarget site, and the dummy leg's Eluna arm
-// (fireSpellDummyEffect) fires creature/GO/item hooks only. DORMANT
+// stays silent. No Lua ev5 port: Go owns the arm (the 63975
+// precedent) — one must not be added now that the ev5 player-path
+// site is live in finishSpellCast (a910c39d), or the strike would
+// fire twice. DORMANT
 // until Spell.dbc ships the 60587 / 60881 records; the 60881 implicit
 // target is the caster per the tooltip — Wowhead shows no target text,
 // so the self-cast is documented, not DBC-proven.
@@ -53463,10 +53465,12 @@ func (s *session) siphonOfAcherusDummyEffect(ctx context.Context, hitTargets []u
 // (spell_dk.cpp:2279-2290): the EFFECT_2 DUMMY OnEffectHitTarget arm —
 // multiplier = GetEffectValue() * GetDiseasesByCaster / 100, plus the
 // Death Knight T8 Melee 4P Bonus (64736, EFFECT_0) pct (C++ AddPct).
-// No Lua ev5 port: the player path has no OnEffectHitTarget site on
-// the normal cast path (60533 precedent), so this is a Go case in the
-// finishSpellCast dummy leg (the 49560 deathGripDummyEffect
-// precedent). DORMANT until Spell.dbc ships the 55090/55265/55270/55271
+// No Lua ev5 port: Go owns the arm (the 63975 precedent) — one must
+// not be added now that the ev5 player-path site is live in
+// finishSpellCast (a910c39d), or the multiplier would apply twice;
+// this is a Go case in the finishSpellCast dummy leg (the 49560
+// deathGripDummyEffect precedent). DORMANT until Spell.dbc ships the
+// 55090/55265/55270/55271
 // records. The multiplier is stored per hit target for the AfterHit
 // leg; a zero-disease target stores 0 and its AfterHit cast still
 // fires with BP0 0, like C++.
@@ -53634,10 +53638,10 @@ func (s *session) divineStormDummyEffect(ctx context.Context, spell wotlk.Spell,
 }
 
 // corpseExplosionDummyEffect is spell_dk_corpse_explosion
-// (spell_dk.cpp:647-745). A Lua ev5 port would never fire: the player path
-// has no OnEffectHitTarget site on the normal cast path (finishSpellCast;
-// ev5 fires only in castSpellDirectWithOverrides and on the creature path),
-// so this is a Go case in the finishSpellCast dummy leg (the 60587
+// (spell_dk.cpp:647-745). No Lua ev5 port: Go owns the arm (the 63975
+// precedent) — one must not be added now that the ev5 player-path site
+// is live in finishSpellCast (a910c39d), or the explosion would fire
+// twice; this is a Go case in the finishSpellCast dummy leg (the 60587
 // fatalStrikeDummyEffect precedent). DORMANT until Spell.dbc ships the
 // 49158/51325-51328 records.
 func (s *session) corpseExplosionDummyEffect(ctx context.Context, spell wotlk.Spell, effectIndex int, casterLevel uint32, hitTargets []uint64, explicitTarget uint64) {
@@ -53678,11 +53682,12 @@ func (s *session) corpseExplosionDummyEffect(ctx context.Context, spell wotlk.Sp
 }
 
 // deathCoilDummyEffect is spell_dk_death_coil (spell_dk.cpp:841-907).
-// A Lua ev5 port would never fire: the player path has no
-// OnEffectHitTarget site on the normal cast path (finishSpellCast; ev5
-// fires only in castSpellDirectWithOverrides and on the creature path),
-// and caster:IsFriendlyTo has no bridge on player objects — so this is
-// a Go case in the finishSpellCast dummy leg (the corpse-explosion /
+// No Lua ev5 port: Go owns the arm (the 63975 precedent) — one must not
+// be added now that the ev5 player-path site is live in finishSpellCast
+// (a910c39d), or the heal/damage would fire twice. The old "no ev5 site"
+// and "no IsFriendlyTo bridge" rationales are both stale (the site went
+// live at a910c39d; player:IsFriendlyTo is bridged, lua_player.go:3055).
+// This is a Go case in the finishSpellCast dummy leg (the corpse-explosion /
 // death-grip precedent). Per hit target: friendly takes the 47633 heal
 // with BP0 = GetEffectValue() * 1.5 (the C++ float multiply, truncated
 // to int32 by AddSpellBP0); hostile takes the 47632 damage with BP0 =
@@ -53718,11 +53723,11 @@ func (s *session) deathCoilDummyEffect(ctx context.Context, spell wotlk.Spell, c
 }
 
 // deathStrikeDummyEffect is spell_dk_death_strike (spell_dk.cpp:1126-1165).
-// A Lua ev5 port would never fire: the player path has no
-// OnEffectHitTarget site on the normal cast path (finishSpellCast; ev5
-// fires only in castSpellDirectWithOverrides and on the creature path),
-// so this is a Go case in the finishSpellCast dummy leg (the death-coil
-// precedent). Per hit target: BP0 = the disease count on the target by
+// No Lua ev5 port: Go owns the arm (the 63975 precedent) — one must not
+// be added now that the ev5 player-path site is live in finishSpellCast
+// (a910c39d), or the heal would fire twice; this is a Go case in the
+// finishSpellCast dummy leg (the death-coil precedent). Per hit target:
+// BP0 = the disease count on the target by
 // this caster (targetDiseasesByCaster, the GetDiseasesByCaster mirror)
 // times CountPctFromMaxHealth of the EFFECT_0 DamageMultiplier (the DBC
 // EffectChainAmplitude, SpellInfo.cpp:345), plus the Improved Death
@@ -53975,10 +53980,12 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// spell_grab_on (zone_storm_peaks.cpp:1171-1198): OnEffectHitTarget
 		// EFFECT_0 SCRIPT_EFFECT — the caster's grip aura (56689) gains the
 		// effect-0 value in stacks (AURA_REMOVE_BY_DEFAULT, no periodic-timer
-		// reset). A Lua ev5 port would never fire: the player path has no
-		// OnEffectHitTarget site (runtime.go), and Go runs vehicle-bar casts
-		// as the player (procs.go:3195) while C++ casts them with the wyrm —
-		// hence the ridden-vehicle resolution in modWyrmGripStacks. The
+		// reset). The Lua ev5 port was dropped 2026-11-12 as dead: the
+		// player-path spell object returns the player as caster
+		// (lua_spell.go:192) while the grip aura lives on the wyrm only
+		// (zone_storm_peaks.cpp:835 self-cast), so a Lua GetAura(56689)
+		// read could never hit — Go owns the arm via the ridden-vehicle
+		// resolution in modWyrmGripStacks (the 63975 precedent). The
 		// caster filter is the GetAura(SPELL_GRIP, casterGUID) twin.
 		// DORMANT until Spell.dbc ships the 60533 record.
 		s.modWyrmGripStacks(eff.CalcValueForLevel(spell, uint32(s.player.Level)), auraRemoveByDefault, true)
@@ -53988,7 +53995,9 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// (AURA_REMOVE_BY_EXPIRE): 5 for Thrust Spear (56690), 15 for Mighty
 		// Spear Thrust (60586), the template instantiations at :1486-1487.
 		// Same vehicle-caster translation as the Grab On leg above; no
-		// caster filter in C++ (plain GetAura). DORMANT until Spell.dbc ships
+		// caster filter in C++ (plain GetAura). The Lua ev5 ports were
+		// dropped 2026-11-12 as dead with the Grab On leg (same
+		// player-caster / wyrm-aura mismatch). DORMANT until Spell.dbc ships
 		// the records.
 		stacks := int32(-5)
 		if spellID == 60586 {
@@ -54000,11 +54009,13 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// EFFECT_0 SCRIPT_EFFECT — the hit unit self-casts the effect-0
 		// CalcValue (the Acherus teleport spell). PreventHitDefaultEffect
 		// is vacuous: the generic script-effect leg casts nothing by
-		// default. A Lua ev5 port would never fire: the player path has
-		// no OnEffectHitTarget site (60533 precedent above). The
+		// default. The
 		// OnCheckCast class gate stays out: no check-cast bridge in the
 		// player path, and the spell is DK-gated by learning. Self-only,
-		// so the hit target is the caster's session. TRIGGERED DELTA:
+		// so the hit target is the caster's session. No Lua ev5 port: Go
+		// owns the arm (the 63975 precedent) — one must not be added now
+		// that the ev5 player-path site is live in finishSpellCast
+		// (a910c39d), or the teleport would fire twice. TRIGGERED DELTA:
 		// C++ casts non-triggered, but Go has no server-side
 		// non-triggered player cast helper — the teleport rides the
 		// triggered funnel (castSpellDirect) like the 69222/71806 arms.
@@ -54053,8 +54064,10 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// spell_dk_glyph_of_scourge_strike_script::HandleScriptEffect
 		// (spell_dk.cpp:1286-1346): OnEffectHitTarget EFFECT_0
 		// SCRIPT_EFFECT — the glyph's script spell, cast triggered by the
-		// 58642 proc. A Lua ev5 port would never fire: the player path has
-		// no OnEffectHitTarget site (60533 precedent above). DORMANT until
+		// 58642 proc. No Lua ev5 port: Go owns the arm (the 63975
+		// precedent) — one must not be added now that the ev5 player-path
+		// site is live in finishSpellCast (a910c39d), or the script
+		// effect would fire twice. DORMANT until
 		// Spell.dbc ships the 69961 record.
 		s.glyphOfScourgeStrikeScriptEffect(targetGUID)
 	case 63975:

@@ -69,9 +69,11 @@
 --   Death Strike icon 2751 leg, self-cast 45470; the C++ cast is
 --   non-triggered but rides the triggered funnel (no non-triggered
 --   player cast helper — the 47496 ghoul precedent). spell_dk_
---   pestilence (50842, tick 567) stays out — no ev5 player path, and
---   no aura donePct/critChance/ChangeAmount bridges for the disease
---   copy legs. spell_dk_rune_tap_party (59754, tick 569) stays out —
+--   pestilence (50842, tick 567) stays out — no aura donePct/
+--   critChance/ChangeAmount bridges for the disease copy legs (the
+--   ev5 player path itself is live since a910c39d, so that old
+--   clause is stale). spell_dk_rune_tap_party (59754, tick 569)
+--   stays out —
 --   the OnObjectAreaTargetSelect fire site is creature-path only, no
 --   player-path twin. Rime (49188), scent_of_blood_trigger (49004)
 --   and sudden_doom (49018) are PORTED below (ev6, ticks 568/570/571).
@@ -83,9 +85,10 @@
 --   Wandering Plague (49217, tick 574) is PORTED below (ev6, 957b5aea) —
 --   the stale stay-out is corrected: GetUnitCriticalChanceAgainst is
 --   bridged on the player + creature surfaces.
--- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
---   path has no OnEffectHitTarget site on the normal cast path, so a
---   RegisterSpellEvent ev5 handler would never fire on a client cast):
+-- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: Go owns the
+--   arms, the 63975 precedent — a RegisterSpellEvent ev5 handler must
+--   not be added now that the ev5 player-path site is live, or the
+--   legs would fire twice):
 --   spell_dk_corpse_explosion (49158/51325-51328, spell_dk.cpp:647-745):
 --   Go case in the finishSpellCast dummy leg (60587 precedent) —
 --   EFFECT_0 takes the explicit target when it passes
@@ -140,8 +143,9 @@
 --   damage through the log + direct-damage helpers.
 --   spell_dk_death_gate (52751, 2026-11-10): PORTED in Go, not Lua — the
 --   handleEffectScriptEffect case (spells.go) + the CheckClass gate
---   PORTED this tick (OnCheckCast ev8 below); a Lua ev5 port would never
---   fire (the player path has no OnEffectHitTarget site, 60533 precedent).
+--   PORTED this tick (OnCheckCast ev8 below); no Lua ev5 port (Go owns
+--   the arm, the 63975 precedent — adding one now that the ev5
+--   player-path site is live would double the teleport).
 --   spell_dk_blood_boil (48721): PORTED below (2026-11-10).
 --   spell_dk_ghoul_explode (47496): PORTED below (2026-11-10) — the
 --   Suicide leg as an ev5 handler; the HandleDamage leg is the Go

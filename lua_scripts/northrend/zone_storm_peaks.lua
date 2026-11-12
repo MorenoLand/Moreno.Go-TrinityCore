@@ -17,13 +17,13 @@
 --   module table keyed by the wyrm GUIDLow, reset on apply — the
 --   AuraEffect tick number resets on re-stack, so aura:GetTickNumber()
 --   would diverge after a Grab On (zone_storm_peaks.cpp:1160-1162).
---   spell_grab_on (60533, :1171-1198): EFFECT_0 SCRIPT_EFFECT.
---   OnEffectHitTarget the caster's grip aura gains GetEffectValue()
---   stacks (ModStackAmount, :1184-1187).
---   spell_loosen_grip (56690 Thrust Spear / 60586 Mighty Spear Thrust,
---   :1199-1229, template StacksToLose 5 / 15, AddSC :1486-1487):
---   EFFECT_1 SCRIPT_EFFECT. OnEffectHitTarget the caster's grip aura
---   loses 5 / 15 stacks with AURA_REMOVE_BY_EXPIRE (:1214-1217).
+--   spell_grab_on (60533, :1171-1198) + spell_loosen_grip (56690 /
+--   60586, :1199-1229): DROPPED 2026-11-12 — the ev5 handlers read
+--   the caster's 56689 aura, but the player-path spell object
+--   returns the player as caster (lua_spell.go:192) while the grip
+--   aura lives on the wyrm only (self-cast :835), so the legs could
+--   never fire; Go owns both arms via modWyrmGripStacks (spells.go,
+--   the 63975 precedent).
 --   spell_low_health_trigger (60596, :1230-1261): EFFECT_0
 --   SCRIPT_EFFECT. OnEffectHitTarget the hit unit casts GetEffectValue()
 --   (the DBC eff0 spell, validated :1242) on a nil target, triggered
@@ -95,9 +95,6 @@ local SPELL_PLAYER_MOUNT_WYRM = 56672 -- zone_storm_peaks.cpp:633
 local SPELL_FIGHT_WYRM = 56673 -- zone_storm_peaks.cpp:634
 local SPELL_EJECT_PASSENGER_1 = 60603 -- zone_storm_peaks.cpp:647
 local SPELL_GRIP = 56689 -- zone_storm_peaks.cpp:636
-local SPELL_GRAB_ON = 60533 -- zone_storm_peaks.cpp:637
-local SPELL_THRUST_SPEAR = 56690 -- zone_storm_peaks.cpp:639
-local SPELL_MIGHTY_SPEAR_THRUST = 60586 -- zone_storm_peaks.cpp:640
 local SPELL_LOW_HEALTH_TRIGGER = 60596 -- zone_storm_peaks.cpp:644
 local SPELL_DODGE_CLAWS = 56704 -- zone_storm_peaks.cpp:638
 local SPELL_CLAW_SWIPE_CHECK = 56705 -- zone_storm_peaks.cpp:1290
@@ -238,68 +235,6 @@ local function gripRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_GRIP, 3, gripRemove)
-
--- C++ spell_grab_on_SpellScript::HandleScript
--- (zone_storm_peaks.cpp:1184-1187): EFFECT_0 SCRIPT_EFFECT
--- OnEffectHitTarget — the caster's grip aura gains GetEffectValue()
--- stacks (ModStackAmount, AURA_REMOVE_BY_DEFAULT). The caster is the
--- wyrm (vehicle-charm cast). A missing grip aura or a 0 DBC value is a
--- no-op, matching the C++ null check and the GetEffectValue 0-read
--- without a DBC row. DORMANT until Spell.dbc ships 60533.
-local function grabOnHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local value = spell:GetEffectValue(0)
-    if value <= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    local grip = caster:GetAura(SPELL_GRIP)
-    if grip == nil then
-        return
-    end
-    grip:SetStackAmount(grip:GetStackAmount() + value)
-end
-
-RegisterSpellEvent(SPELL_GRAB_ON, 5, grabOnHit)
-
--- C++ spell_loosen_grip_SpellScript::HandleScript
--- (zone_storm_peaks.cpp:1214-1217): EFFECT_1 SCRIPT_EFFECT
--- OnEffectHitTarget — the caster's grip aura loses StacksToLose stacks
--- with AURA_REMOVE_BY_EXPIRE (5 for Thrust Spear, 15 for Mighty Spear
--- Thrust, template instantiations :1486-1487). At 0 the aura is removed
--- with EXPIRE, so the ev3 gripRemove handler fires ACTION_GRIP_LOST;
--- Go SetStackAmount(0) does not remove, so the port removes explicitly
--- with mode 4 (the gripPeriodic expiry twin). DORMANT until Spell.dbc
--- ships 56690 / 60586.
-local function makeLoosenGripHit(stacksToLose)
-    return function(event, spell, hitTarget, effectIndex)
-        if effectIndex ~= 1 then
-            return
-        end
-        local caster = spell:GetCaster()
-        if caster == nil then
-            return
-        end
-        local grip = caster:GetAura(SPELL_GRIP)
-        if grip == nil then
-            return
-        end
-        local stacks = grip:GetStackAmount()
-        if stacks <= stacksToLose then
-            grip:Remove(AURA_REMOVE_BY_EXPIRE)
-            return
-        end
-        grip:SetStackAmount(stacks - stacksToLose)
-    end
-end
-
-RegisterSpellEvent(SPELL_THRUST_SPEAR, 5, makeLoosenGripHit(5))
-RegisterSpellEvent(SPELL_MIGHTY_SPEAR_THRUST, 5, makeLoosenGripHit(15))
 
 -- C++ spell_low_health_trigger_SpellScript::HandleScript
 -- (zone_storm_peaks.cpp:1247): EFFECT_0 SCRIPT_EFFECT
