@@ -143,3 +143,59 @@ local function fungalDecayApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_FUNGAL_DECAY, 2, fungalDecayApply)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnCheckCast = 8):
+--   spell_gen_allow_cast_from_item_only::CheckRequirement
+--   (spell_generic.cpp:155-160): OnCheckCast. The cast fails
+--   SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (173) unless it carries a
+--   cast item (spell:GetCastItem() non-nil, lua_spell.go:294;
+--   creature path reads nil, so a creature cast fails closed like
+--   C++ GetCastItem() on a non-item cast). Binding: the five
+--   Adaptive Warding trigger spells (enum spell_generic.cpp:72-76),
+--   cast triggered by the 28764 aura proc (which skips CheckCast in
+--   both C++ and Go), so the gate only bites on direct casts.
+--   Binding provenance: oncheckcast triage row 18 (spell_script_names
+--   reading); local world.db is 0-byte, so the DB row itself is not
+--   in-tree verifiable — the five IDs are the C++ enum values.
+
+local SPELL_GEN_ADAPTIVE_WARDING_SPELLS = { 28765, 28766, 28768, 28769, 28770 } -- spell_generic.cpp:72-76
+local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171
+
+local function allowCastFromItemOnlyCheckCast(event, spell)
+    if spell:GetCastItem() == nil then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs(SPELL_GEN_ADAPTIVE_WARDING_SPELLS) do
+    RegisterSpellEvent(spellId, 8, allowCastFromItemOnlyCheckCast)
+end
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent AfterHit = 3):
+--   spell_gen_clear_fear_poly::HandleAfterHit
+--   (spell_generic.cpp:952-966): AfterHit, once per hit target
+--   (Spell.cpp:2659, CallScriptAfterHitHandlers in
+--   TargetInfo::DoDamageAndTriggers; Go fires ev3 per hit target on
+--   both paths, spells.go:19713 / boss_ai.go:4245). The hit unit
+--   loses every aura whose mechanic mask intersects FEAR or
+--   POLYMORPH (Unit::RemoveAurasWithMechanic, Unit.cpp:4217-4232;
+--   the unit:RemoveAurasWithMechanic bridge, player + creature
+--   surfaces). Binding: spell 8129 Mana Burn, whole script (only
+--   arm); spell_script_names row not in-tree verifiable (local
+--   world.db is 0-byte), same caveat as the Adaptive Warding port
+--   above.
+
+local SPELL_MANA_BURN = 8129 -- spell_generic.cpp:952
+local MECHANIC_FEAR = 5 -- SharedDefines.h:1362
+local MECHANIC_POLYMORPH = 17 -- SharedDefines.h:1374
+
+local function manaBurnAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAurasWithMechanic((2 ^ MECHANIC_FEAR) + (2 ^ MECHANIC_POLYMORPH))
+end
+
+RegisterSpellEvent(SPELL_MANA_BURN, 3, manaBurnAfterHit)

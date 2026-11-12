@@ -4284,20 +4284,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 	// spell_q11010_q11102_q11023_q11008_check_fly_mount::CheckRequirement
-	// (spell_quest.cpp:1671-1678): the Skyguard Blasting Charge (39844)
-	// and Throw Bomb (40160) cast only while the caster carries a FLY
-	// aura or a MOD_INCREASE_MOUNTED_FLIGHT_SPEED aura; otherwise they
-	// fail SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. Both ids share the one
-	// C++ loader, so both ride this gate. C++ script OnCheckCast
-	// handlers run at the end of Spell::CheckCast, so this wires after
-	// the generic gates beside the tame-beast leg.
-	if spellID == 39844 || spellID == 40160 {
-		if !s.hasAuraType(spellAuraFly) && !s.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantDoThatRightNow), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skyguard blasting charge / throw bomb without a flight aura")
-			return true
-		}
-	}
+	// (spell_quest.cpp:1671-1678) rides the OnCheckCast ev8 hook now
+	// (spell_quest.lua checkFlyMountCheckCast, 39844 + 40160): the
+	// caster must carry a FLY or MOD_INCREASE_MOUNTED_FLIGHT_SPEED
+	// aura, else SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. The ev8 consult
+	// fires after the combo-point leg below, matching C++ CheckCast
+	// order (combo points Spell.cpp:6186-6209, OnCheckCast at the end
+	// :7977-7996); the retired hardcoded gate fired before it.
 	// Combo-point gate (Spell::CheckCast, Spell.cpp:6186-6209): a spell
 	// requiring combo points (REQ_COMBO_POINTS1/2) fails with
 	// SPELL_FAILED_NO_COMBO_POINTS when none are banked — against the
@@ -7377,6 +7370,28 @@ func (s *session) removeAurasByType(auraType uint32) {
 	s.castMu.Lock()
 	for _, aura := range s.activeAuras {
 		if aura != nil && aura.AuraType == auraType {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	s.castMu.Unlock()
+	for _, id := range ids {
+		s.removeAura(id)
+	}
+}
+
+// removeAurasWithMechanic mirrors Unit::RemoveAurasWithMechanic
+// (Unit.cpp:4217-4232): every applied aura whose
+// GetAllEffectsMechanicMask intersects the mask comes off. Stopped
+// auras are not applied, so they never match. Snapshot under castMu,
+// remove outside it, like removeAurasByType.
+func (s *session) removeAurasWithMechanic(mechanicMask uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	var ids []uint32
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura != nil && !aura.Stopped && s.auraSpellMechanicMask(aura)&mechanicMask != 0 {
 			ids = append(ids, aura.SpellID)
 		}
 	}

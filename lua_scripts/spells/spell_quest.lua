@@ -228,11 +228,12 @@ RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 3, bloatedAbomFeignDeat
 --   EFFECT_0 DUMMY OnEffectHit. reqAuraId is the spell's EFFECT_1
 --   DBC value, the cast spell its EFFECT_0 DBC value (both via
 --   spell:GetEffectValue, lua_spell.go:215); if the caster has the
---   aura, it casts the spell on itself, triggered. KNOWN DELTA:
---   C++ checks HasAuraEffect(reqAuraId, 0) (aura with an effect at
---   index 0); no HasAuraEffect bridge exists, so this uses
---   HasAura(reqAuraId) — identical unless the aura lacks an
---   effect-0, which no DBC aura carries here.
+--   aura, it casts the spell on itself, triggered. C++ checks
+--   HasAuraEffect(reqAuraId, 0) (aura with an effect at index 0);
+--   this tick's unit:HasAuraEffect bridge (lua_player.go /
+--   lua_creature_events.go, the GetAuraEffect nil twin) ports it
+--   exactly — the old HasAura twin + its KNOWN DELTA note are
+--   retired.
 --   The ev4 hook fires on the player path (spells.go:14625, ahead of
 --   the effects loop, matching C++ HIT-phase order); the ev5
 --   OnEffectHitTarget hook fires on the player path ONLY inside the
@@ -303,7 +304,7 @@ local function takeSputumSampleHit(event, spell, effectIndex)
         return
     end
     local reqAuraId = spell:GetEffectValue(1)
-    if reqAuraId > 0 and caster:HasAura(reqAuraId) then
+    if reqAuraId > 0 and caster:HasAuraEffect(reqAuraId, 0) then
         local spellId = spell:GetEffectValue(0)
         if spellId > 0 then
             caster:CastSpell(caster, spellId, true)
@@ -585,6 +586,41 @@ local function failedMix43378Hit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_FAILED_MIX_43378, 4, failedMix43378Hit)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnCheckCast = 8):
+--   spell_q11010_q11102_q11023_q11008_check_fly_mount
+--   (spell_quest.cpp:1671-1678): OnCheckCast. The caster must carry
+--   a SPELL_AURA_FLY (201) or MOD_INCREASE_MOUNTED_FLIGHT_SPEED
+--   (207) aura, else SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW (173).
+--   Both 39844 (Skyguard Blasting Charge) and 40160 (Throw Bomb)
+--   share the one C++ loader, so both bind here. Retires the
+--   hardcoded spells.go gate (same arm, fired before the combo-point
+--   leg); the ev8 consult fires after it, matching C++ CheckCast
+--   order (combo points Spell.cpp:6186-6209, OnCheckCast at the end
+--   :7977-7996). caster:HasAuraType is the Unit::HasAuraType bridge
+--   (lua_player.go:2796); GetCaster is the session player on this
+--   path, so a nil caster fails closed.
+
+local SPELL_SKYGUARD_BLASTING_CHARGE = 39844 -- spell_quest.cpp:1662 (class spell_q11010_q11102_q11023_q11008_check_fly_mount)
+local SPELL_THROW_BOMB = 40160 -- spell_quest.cpp:1662
+local SPELL_AURA_FLY = 201 -- SpellAuraDefines.h:281
+local SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED = 207 -- SpellAuraDefines.h:287
+local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171
+
+local function checkFlyMountCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    if not (caster:HasAuraType(SPELL_AURA_FLY) or caster:HasAuraType(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED)) then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_SKYGUARD_BLASTING_CHARGE, 8, checkFlyMountCheckCast)
+RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 
 -- STAY OUT (tick 2026-11-11 census rows 712-721 + 736-738, verified
 --   name-by-name: all 13 classes have ZERO hits in engine/ +

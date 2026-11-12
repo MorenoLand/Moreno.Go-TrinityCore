@@ -1636,6 +1636,29 @@ func (s *Server) creatureHasAuraType(key creatureAuraKey, auraType uint32) bool 
 	return false
 }
 
+// removeCreatureAurasWithMechanic is the creature-target twin of
+// session removeAurasWithMechanic (Unit::RemoveAurasWithMechanic,
+// Unit.cpp:4217-4232): every live creature aura whose
+// GetAllEffectsMechanicMask intersects the mask comes off. Snapshot
+// under auraMu, remove outside it — removeCreatureAura locks auraMu
+// itself, like removeCreatureAurasByType.
+func (s *Server) removeCreatureAurasWithMechanic(key creatureAuraKey, mechanicMask uint32) {
+	if s == nil || key.GUID == 0 {
+		return
+	}
+	var ids []uint32
+	s.auraMu.Lock()
+	for _, aura := range s.activeCreatureAuras[key] {
+		if aura != nil && !aura.Stopped && s.serverAuraSpellMechanicMask(aura)&mechanicMask != 0 {
+			ids = append(ids, aura.SpellID)
+		}
+	}
+	s.auraMu.Unlock()
+	for _, id := range ids {
+		s.removeCreatureAura(key, id)
+	}
+}
+
 // attackTimeAuraModFactor converts one live attack-time aura amount into the
 // Unit::ApplyAttackTimePercentMod swing-interval multiplier
 // (Unit.cpp:10847-10864 via ApplyPercentModFloatVar, Unit.cpp:10842-10845):

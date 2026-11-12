@@ -2800,6 +2800,19 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.hasAuraType(auraType)}, nil
 	}
+	// RemoveAurasWithMechanic(mask) is Unit::RemoveAurasWithMechanic
+	// (Unit.cpp:4217-4232): removes every applied aura whose
+	// GetAllEffectsMechanicMask intersects the mask. Backs AfterHit
+	// ports such as Mana Burn (8129), which strips FEAR and
+	// POLYMORPH auras from the hit target.
+	methods["RemoveAurasWithMechanic"] = func(_ context.Context, args []any) ([]any, error) {
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.removeAurasWithMechanic(mask)
+		return nil, nil
+	}
 	// IsFriendlyTo(target) is WorldObject::IsFriendlyTo
 	// (Object.cpp:2847-2850) on the player surface, via the
 	// playerFriendlyToTarget twin (creature_explicit_target_faction.go):
@@ -2945,6 +2958,35 @@ func (s *session) luaPlayer() *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{aura.Amounts[effIndex]}, nil
+	}
+	// HasAuraEffect(spellID[, effIndex]) is Unit::HasAuraEffect
+	// (Unit.cpp:4630-4642): whether the player carries the named aura
+	// with an effect at the given index (default 0) — the
+	// GetAuraEffect nil twin above. The C++ caster-GUID filter
+	// (third arg) is unmodeled; no in-tree Lua caller passes one.
+	// Backs the spell_q12683_take_sputum_sample gate
+	// (spell_quest.cpp:665).
+	methods["HasAuraEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		effIndex := 0
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			effIndex = int(v)
+		}
+		aura := s.activeAuras[spell]
+		if aura == nil || effIndex < 0 || effIndex >= len(aura.Amounts) || aura.EffectMask&(1<<uint(effIndex)) == 0 {
+			return []any{false}, nil
+		}
+		return []any{true}, nil
 	}
 	// GetAuraEffectOfRankedSpell(spellID[, effIndex]) is
 	// Unit::GetAuraEffectOfRankedSpell (Unit.cpp:4498-4508): the

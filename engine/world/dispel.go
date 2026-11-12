@@ -2843,6 +2843,33 @@ func (s *session) auraSpellMechanicMask(aura *activeAura) uint32 {
 }
 
 // handleEffectDispelMechanic processes SPELL_EFFECT_DISPEL_MECHANIC (108).
+
+// serverAuraSpellMechanicMask is the Server-level twin of session
+// auraSpellMechanicMask (SpellInfo::GetAllEffectsMechanicMask,
+// SpellInfo.cpp:1893-1902): the aura spell's top-level Mechanic plus
+// every non-NONE effect's Mechanic, as a bit mask. Creature auras have
+// no session, so the creature RemoveAurasWithMechanic leg folds
+// through this one.
+func (s *Server) serverAuraSpellMechanicMask(aura *activeAura) uint32 {
+	var mask uint32
+	if aura == nil {
+		return mask
+	}
+	if aura.Mechanic != 0 {
+		mask |= uint32(1) << aura.Mechanic
+	}
+	if s != nil && s.Data != nil {
+		if sp, found, err := s.Data.Spell(aura.SpellID); err == nil && found {
+			for _, eff := range sp.Effects {
+				if eff.Effect != 0 && eff.Mechanic != 0 {
+					mask |= uint32(1) << eff.Mechanic
+				}
+			}
+		}
+	}
+	return mask
+}
+
 // Mirrors TrinityCore Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756).
 func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
 	mechanic := uint32(eff.MiscValue)
