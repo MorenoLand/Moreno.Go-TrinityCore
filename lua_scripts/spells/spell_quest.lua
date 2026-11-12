@@ -103,9 +103,9 @@ RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 3, forceShieldRemove)
 --   (a910c39d, spells.go:14668-14737: one fire per (effect, live hit
 --   target), effect-major, before that effect's default), so direct
 --   player-cast ev5 legs port (rows 675-686 + 690 ported below).
---   Also staying out: the q12619 emblazon effect SpellScript only —
---   quenching_mist (53350) + read_pronouncement (56278) are PORTED
---   below (tick 2026-11-12, hunt-resolved binding IDs).
+--   The q12619 emblazon effect SpellScript (51770) is PORTED below
+--   (tick 2026-11-12); quenching_mist (53350) + read_pronouncement
+--   (56278) are PORTED below (tick 2026-11-12, hunt-resolved IDs).
 
 local SPELL_THAUMATURGY_CHANNEL_AURA = 9712 -- spell_quest.cpp:117 (class spell_q2203_thaumaturgy_channel)
 local SPELL_THAUMATURGY_CHANNEL = 21029 -- spell_quest.cpp:120
@@ -114,6 +114,7 @@ local SPELL_AGGRO_CHECK = 40112 -- spell_quest.cpp:1530
 local SPELL_AGGRO_BURST_AURA = 40119 -- spell_quest.cpp:1594 (class spell_q11010_q11102_q11023_aggro_burst)
 local SPELL_CHOOSE_LOC = 40056 -- spell_quest.cpp:1529
 local SPELL_EMBLAZON_RUNEBLADE = 51769 -- spell_quest.cpp:2412 (class spell_q12619_emblazon_runeblade)
+local SPELL_EMBLAZON_RUNEBLADE_EFFECT = 51770 -- spell_quest.cpp:2441 (class spell_q12619_emblazon_runeblade_effect)
 local SPELL_BURST_AT_THE_SEAMS_59579 = 59579 -- spell_quest.cpp:2011
 local SPELL_TROLL_EXPLOSION = 52565 -- spell_quest.cpp:2005
 local SPELL_EXPLODE_ABOMINATION_MEAT = 52520 -- spell_quest.cpp:2004
@@ -169,6 +170,30 @@ local function emblazonRunebladeTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_EMBLAZON_RUNEBLADE, 1, emblazonRunebladeTick)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q12619_emblazon_runeblade_effect (spell_quest.cpp:2447-2463):
+--   EFFECT_0 SCRIPT_EFFECT. The caster self-casts the effect-0
+--   value (GetEffectValue(0)), non-triggered. ev4 fires on the
+--   player path (spells.go:14625). KNOWN LIMIT: player:CastSpell
+--   ignores the triggered flag (see header note above), same as all
+--   prior player ports — the false is passed faithfully.
+
+local function emblazonRunebladeEffectHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local effectSpell = spell:GetEffectValue(0)
+    if effectSpell > 0 then
+        caster:CastSpell(caster, effectSpell, false)
+    end
+end
+
+RegisterSpellEvent(SPELL_EMBLAZON_RUNEBLADE_EFFECT, 4, emblazonRunebladeEffectHit)
 
 local function burstAtTheSeamsApply(event, aura, target)
     target:CastSpell(target, SPELL_TROLL_EXPLOSION, true)
@@ -1379,6 +1404,9 @@ local HUNT = {
     -- spell_q12919_gymers_throw (spell_quest.cpp:2515)
     SPELL_GYMERS_THROW = 55421,
     SPELL_VARGUL_EXPLOSION = 55569,
+    -- spell_q14100_q14111_make_player_destroy_totems (spell_quest.cpp:2592)
+    SPELL_MAKE_PLAYER_DESTROY_TOTEMS = 66744,
+    SPELL_TOTEM_OF_THE_EARTHEN_RING = 66747,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -1831,6 +1859,13 @@ RegisterSpellEvent(HUNT.SPELL_DEATH_COMES_FROM_ON_HIGH, 5, deathComesFromOnHighH
 --   joins the no-id stay-outs). The vehicle bridges are live
 --   (IsVehicle/GetVehicleKit/GetPassenger/ExitVehicle), so this ports
 --   once a binding ID is found.
+--   spell_q12414_hand_over_reins (spell_quest.cpp:2666-2692):
+--   EFFECT_1 SCRIPT_EFFECT ev5; the hit unit exits its vehicle and
+--   the creature caster despawns — no binding ID (no in-file
+--   comment, no AC spell_script_names row per the checkpoint-recorded
+--   verification; joins the no-id stay-outs). The bridges are live
+--   (ExitVehicle, DespawnOrUnsummon), so this ports once a binding
+--   ID is found.
 
 local function gymersGrabHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 then
@@ -1867,3 +1902,24 @@ local function gymersThrowHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_GYMERS_THROW, 5, gymersThrowHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q14100_q14111_make_player_destroy_totems
+--   (spell_quest.cpp:2597-2617): EFFECT_0 SCRIPT_EFFECT ev5,
+--   binding 66744 (census row 240, in-file comment). The hit player
+--   self-casts Totem of the Earthen Ring 66747, TRIGGERED_FULL_MASK
+--   (triggered twin; the C++ comment notes the reagent cost is
+--   ignored, consumed by quest). GetHitPlayer is the ev5 hitTarget
+--   arg; the Player type check is its twin.
+
+local function destroyTotemsHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_TOTEM_OF_THE_EARTHEN_RING, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_MAKE_PLAYER_DESTROY_TOTEMS, 5, destroyTotemsHit)
