@@ -439,38 +439,3 @@ local function castNetHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
-
--- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
---   spell_q9452_cast_net (spell_quest.cpp:1123-1168): EFFECT_0 DUMMY
---   OnEffectHit. Caster-is-player Load gate rides the fire site
---   (player-cast quest spell, as q5206 above). 66% roll: AddItem Red
---   Snapper 23614, else triggered self-cast Fished Up Murloc 29869.
---   PARTIAL: the EFFECT_1 ACTIVATE_OBJECT OnEffectHitTarget arm
---   (HandleActiveObject: GO SetRespawnTime/Use/SetLootState) stays
---   out — GO TargetInfo legs never fire in Go (runtime.go) and the
---   GO methods are unbridged. The ev4 handler guards effectIndex 0:
---   Go fires ev4 once per non-zero effect, so EFFECT_1 would
---   otherwise double-trigger the roll.
---   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
---   header note above), same as all prior player ports.
-
-local SPELL_CAST_NET = 29866 -- spell_quest.cpp:1119 (class spell_q9452_cast_net)
-local ITEM_RED_SNAPPER = 23614 -- spell_quest.cpp:1118
-local SPELL_FISHED_UP_MURLOC = 29869 -- spell_quest.cpp:1120
-
-local function castNetHit(event, spell, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    if math.random(1, 100) <= 66 then
-        caster:AddItem(ITEM_RED_SNAPPER, 1)
-    else
-        caster:CastSpell(caster, SPELL_FISHED_UP_MURLOC, true)
-    end
-end
-
-RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
