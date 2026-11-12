@@ -475,3 +475,36 @@ end
 
 RegisterAuraEvent(SPELL_SERVICE_UNIFORM, 2, serviceUniformApply)
 RegisterAuraEvent(SPELL_SERVICE_UNIFORM, 3, serviceUniformRemove)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_clone (spell_generic.cpp:969-984): EFFECT_1 and
+--   EFFECT_2 SCRIPT_EFFECT. PreventHitDefaultEffect, then the hit
+--   unit casts the effect's value (DBC CalcValue, the spell to
+--   mirror) on the caster, triggered. The creature-path spell object
+--   carries the live veto record (lua_spell.go:513); GetEffectValue
+--   is bridged on both spell builders (lua_spell.go:215/430).
+--   Bindings 45204/45785/49889/50218/51719/57528 (AC + TDB 26091
+--   agree on all six; 45785 is the Kil'jaeden sinister-reflection
+--   clone, the renamed strict candidate).
+local SPELL_GEN_CLONE = {
+    45204, 45785, 49889, 50218, 51719, 57528,
+}
+
+local function cloneHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 and effectIndex ~= 2 then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, spell:GetEffectValue(effectIndex), true)
+end
+
+for _, spellId in ipairs(SPELL_GEN_CLONE) do
+    RegisterSpellEvent(spellId, 5, cloneHit)
+end
