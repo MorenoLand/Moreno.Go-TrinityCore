@@ -111,18 +111,6 @@
 --   (OnCheckCast ev8 + AfterHit ev3 below); 634/635
 --   seal_of_righteousness (needs attack-power / spellpower /
 --   attack-time math, unbridged).
--- STAYS OUT (t26 triage, tick 2026-11-12): spell_pal_seals
---   (spell_paladin.cpp:2241-2266; 8 ids 20375/31801/31892/33127/
---   38008/41459/53720/53736): the whole class is one DoCheckEffectProc
---   veto returning false on EFFECT_2 SPELL_AURA_DUMMY. Its only C++
---   purpose is suppressing the "unknown spell trigger" log when a seal
---   procs (the judgement code reads EFFECT_2 directly via
---   GetAuraEffectsByType, spells.go judgementSealDamageSpell). Go's
---   proc default leg for a dummy effect with no trigger spell is a
---   silent continue (procs.go: no log, no cast) and scriptAuraProcCast
---   holds no arm for any seal id, so the veto is unobservable in Go
---   — no ev6 port. DORMANT in any case until Spell.dbc ships the
---   seal proc entries.
 
 local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 

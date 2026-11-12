@@ -1199,3 +1199,114 @@ local function flingTorchCatchHit(event, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_FLING_TORCH_CATCH, 5, flingTorchCatchHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_midsummer_torch_target_picker (45907, spell_holiday.cpp:1544-1565):
+--   EFFECT_0 DUMMY. The hit unit self-casts the target-indicator
+--   spells 46901 (cosmetic) + 45723, triggered. Binding 45907 (TDB
+--   26091 + 25101 'spell_midsummer_torch_target_picker'; AC renames
+--   it 'spell_torch_target_picker'). Corrects the 2026-10-24
+--   npcs_special_part1.lua note: SpellScript hooks exist now (ev5
+--   fires on all three paths, runtime.go), so the picker effect is
+--   portable — the bunny-controller caster leg stays documented-only
+--   (null-target cast + no entry consts), but the script itself lands.
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_midsummer_torch_toss_land (46054, spell_holiday.cpp:1567-1589):
+--   EFFECT_0 SCRIPT_EFFECT. The hit unit casts 45724 (braziers hit,
+--   already ported as an aura at :223) on the caster, triggered.
+--   Binding 46054 (TDB 26091 + 25101; AC carries no row).
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_midsummer_juggle_torch (45819, spell_holiday.cpp:1691-1743):
+--   EFFECT_0 DUMMY. No expl-target dest means no throw. The torch +
+--   shadow pair is picked by 2D caster-to-dest distance: <= 1.5 self
+--   (45638 / 46121, dest reset to the caster), <= 10 slow (45792 /
+--   46120), <= 20 medium (45806 / 46118), else fast (45816 / 46117),
+--   both cast non-triggered at the dest. Deltas: GetExactDist2d has
+--   no bridge, so the distance is computed from GetX/GetY + the dest
+--   triple (same values C++ reads). Binding 45819 (TDB 26091 + 25101
+--   'spell_midsummer_juggle_torch'; AC renames it
+--   'spell_midsummer_juggling_torch').
+-- STAYS OUT (re-verified this tick against the CURRENT runtime):
+--   45669 fling_torch_triggered — the >3yd leg needs PreventHitEffect
+--   on the player/funnel path, which threads no prevent record
+--   (lua_spell.go session builder; the live TriggerMissile arm in
+--   spells.go:16365 would still fire, so an ev4 port would double
+--   the missile + 45676). No GetHitDest bridge either (GetExplTargetDest
+--   is the cast-level twin). 45676 fling_torch_missed — ev7
+--   OnObjectAreaTargetSelect exists but is creature-path-only
+--   (runtime.go), and 45676's only caster is the player (fling
+--   triggered :1827), so the filter can never reach it.
+local MIDSUMMER_TORCH = {
+    TARGET_INDICATOR_COSMETIC = 46901, -- spell_holiday.cpp:1500
+    TARGET_INDICATOR = 45723, -- spell_holiday.cpp:1501
+    JUGGLE_TORCH_SELF = 45638, -- spell_holiday.cpp:1676
+    JUGGLE_TORCH_SLOW = 45792, -- spell_holiday.cpp:1673
+    JUGGLE_TORCH_MEDIUM = 45806, -- spell_holiday.cpp:1674
+    JUGGLE_TORCH_FAST = 45816, -- spell_holiday.cpp:1675
+    JUGGLE_TORCH_SHADOW_SELF = 46121, -- spell_holiday.cpp:1681
+    JUGGLE_TORCH_SHADOW_SLOW = 46120, -- spell_holiday.cpp:1678
+    JUGGLE_TORCH_SHADOW_MEDIUM = 46118, -- spell_holiday.cpp:1679
+    JUGGLE_TORCH_SHADOW_FAST = 46117, -- spell_holiday.cpp:1680
+}
+
+local function torchTargetPickerHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    target:CastSpell(target, MIDSUMMER_TORCH.TARGET_INDICATOR_COSMETIC, true)
+    target:CastSpell(target, MIDSUMMER_TORCH.TARGET_INDICATOR, true)
+end
+
+RegisterSpellEvent(45907, 5, torchTargetPickerHit)
+
+local function torchTossLandHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    target:CastSpell(caster, SPELL_MIDSUMMER_BRAZIERS_HIT, true)
+end
+
+RegisterSpellEvent(46054, 5, torchTossLandHit)
+
+local function juggleTorchHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local destX, destY, destZ = spell:GetExplTargetDest()
+    if destX == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local dx = destX - caster:GetX()
+    local dy = destY - caster:GetY()
+    local distance = math.sqrt(dx * dx + dy * dy)
+    local torchSpellID = 0
+    local torchShadowSpellID = 0
+    if distance <= 1.5 then
+        torchSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_SELF
+        torchShadowSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_SHADOW_SELF
+        destX = caster:GetX()
+        destY = caster:GetY()
+        destZ = caster:GetZ()
+    elseif distance <= 10.0 then
+        torchSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_SLOW
+        torchShadowSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_SHADOW_SLOW
+    elseif distance <= 20.0 then
+        torchSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_MEDIUM
+        torchShadowSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_SHADOW_MEDIUM
+    else
+        torchSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_FAST
+        torchShadowSpellID = MIDSUMMER_TORCH.JUGGLE_TORCH_SHADOW_FAST
+    end
+    caster:CastSpellAoF(destX, destY, destZ, torchSpellID)
+    caster:CastSpellAoF(destX, destY, destZ, torchShadowSpellID)
+end
+
+RegisterSpellEvent(45819, 4, juggleTorchHit)
