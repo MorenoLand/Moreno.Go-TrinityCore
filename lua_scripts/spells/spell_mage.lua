@@ -494,6 +494,36 @@ end
 
 RegisterAuraEvent(SPELL_MAGE_MISSILE_BARRAGE, 6, missileBarrageProc)
 
+local SPELL_MAGE_MISSILE_BARRAGE_PROC = 44401 -- spell_mage.cpp:1337 (class spell_mage_missile_barrage_proc)
+local SPELL_MAGE_T8_4P_BONUS = 64869 -- spell_mage.cpp:68
+
+-- C++ spell_mage_missile_barrage_proc::CheckProc (spell_mage.cpp:1345-1360):
+-- DoCheckProc only. Vetoes when the actor is its own proc target
+-- (prevents double proc for Arcane Missiles), and vetoes on a
+-- successful roll against the T8 4-piece bonus aura's EFFECT_0
+-- amount (roll_chance_i rides math.random(0, 99) < amount);
+-- otherwise passes so the DBC default trigger leg fires. No
+-- effectIndex gate (per-aura check, same shape as 44404 above).
+-- OnRemove STAYS OUT: it sets _canProcT10 on the Arcane Missiles
+-- aura script via aura->GetScript<spell_mage_arcane_missiles>
+-- (spell_mage.cpp:1362-1369) — cross-script state with no Lua
+-- twin, and 5143 itself is unported in Lua. DORMANT until
+-- Spell.dbc ships the 44401 proc entry.
+local function missileBarrageProcCheck(event, aura, target, actor, procTarget, damage, procEvent)
+    if procEvent == nil or actor == nil then
+        return true
+    end
+    if procTarget ~= nil and actor:GetGUID() == procTarget:GetGUID() then
+        return true
+    end
+    local t8Amount = actor:GetAuraEffect(SPELL_MAGE_T8_4P_BONUS, 0)
+    if t8Amount ~= nil and math.random(0, 99) < t8Amount then
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_MAGE_MISSILE_BARRAGE_PROC, 6, missileBarrageProcCheck)
+
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_mage_polymorph_cast_visual::HandleDummy (spell_mage.cpp:1386-1418):
 --   EFFECT_0 DUMMY. The caster finds the nearest Aurosalia (18744)

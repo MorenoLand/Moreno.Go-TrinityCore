@@ -47,7 +47,9 @@
 --   spell_dru_savage_defense (spell_druid.cpp:1252-1274): aura
 --   62600, mode 6 (OnEffectProc). The actor casts the absorb 62606
 --   on self, triggered, with BP0 = floor(total AP * EFFECT_0 amount
---   / 100) (CalculatePct, float-truncate). DORMANT until Spell.dbc
+--   / 100) (CalculatePct, float-truncate). TDB maps this script name
+--   to 62606, the absorb buff it casts — a false missing; no handler
+--   registers on 62606. DORMANT until Spell.dbc
 --   ships (the anetheron 38196 class: serverSpellProcEntryFor needs
 --   the DBC ProcTypeMask). AC binds the script to 62606, but 62606
 --   is the absorb buff itself (Wowhead/wotlkdb 3.3.5a: 62600 triggers
