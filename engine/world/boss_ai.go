@@ -11317,6 +11317,21 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 15290, casterGUID: ev.actorGUID, targetGUID: 0, bp0: selfHeal / 5, bp0Set: true, bp1: selfHeal, bp1Set: true})
 				continue
 			}
+			if auraSpell.ID == 34914 && i == 2 && eff.Aura == spellAuraDummy {
+				// spell_pri_vampiric_touch::HandleProc
+				// (spell_priest.cpp:1437-1441): the creature-side twin of
+				// the procs.go leg — the actor casts Replenishment (57669)
+				// on null. C++ CheckDummy (:1411-1414) returns false for
+				// EFFECT_0, so only this EFFECT_2 arm fires. No Lua ev6
+				// twin: ev6 fires once per eligible effect with no effect
+				// index in its args, so a handler would cast twice per
+				// proc. DORMANT until Spell.dbc ships the 34914 proc entry.
+				if ev.actorGUID == 0 {
+					continue
+				}
+				s.fireScriptProcCast(ctx, m.Map, m.InstanceID, scriptProcCast{spellID: 57669, casterGUID: ev.actorGUID, targetGUID: 0})
+				continue
+			}
 			if auraSpell.ID == 28809 && i == 0 && eff.Aura == spellAuraDummy {
 				// spell_pri_t3_4p_bonus::HandleProc
 				// (spell_priest.cpp:1467-1472): the creature-side twin of

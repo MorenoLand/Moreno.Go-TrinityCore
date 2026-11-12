@@ -94,12 +94,18 @@ RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 3, forceShieldRemove)
 --   as a creature, goes REACT_PASSIVE (0). On remove the creature
 --   despawns. Creature-only in practice (abomination NPCs).
 --
--- CLOSED (tick 295 census): the remaining quest classes are
---   SpellScript-only (62, no RegisterSpellScript bridge), plus
---   going_bearback (AfterApply credit via GetCharmerOrOwnerPlayer —
---   unbridged), quenching_mist + read_pronouncement (aura IDs live
---   only in the world DB spell_script_names, unresolvable in
---   workspace), and the q12619 emblazon effect SpellScript.
+-- CLOSED (tick 295 census, corrected 2026-11-11): the remaining quest
+--   classes are SpellScript-only. The "no RegisterSpellScript bridge"
+--   claim is now STALE in one direction: RegisterSpellEvent ev4
+--   (OnEffectHit) EXISTS and fires on the player path (spells.go:14625),
+--   so no-target OnEffectHit legs port (q5206/q12634/q12683 ported
+--   below); ev5 (OnEffectHitTarget) still does NOT fire for player
+--   casts (runtime.go: no per-effect list site on the player path), so
+--   all player-cast ev5 legs stay out. Also staying out: going_bearback
+--   (AfterApply credit via GetCharmerOrOwnerPlayer — unbridged),
+--   quenching_mist + read_pronouncement (aura IDs live only in the
+--   world DB spell_script_names, unresolvable in workspace), and the
+--   q12619 emblazon effect SpellScript.
 
 local SPELL_THAUMATURGY_CHANNEL_AURA = 9712 -- spell_quest.cpp:117 (class spell_q2203_thaumaturgy_channel)
 local SPELL_THAUMATURGY_CHANNEL = 21029 -- spell_quest.cpp:120
@@ -205,3 +211,99 @@ local function bloatedAbomFeignDeathRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 3, bloatedAbomFeignDeathRemove)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q5206_test_fetid_skull (spell_quest.cpp:164-214): EFFECT_0
+--   DUMMY OnEffectHit, caster-is-player Load gate (player path only,
+--   so the gate rides the fire site). 50% roll: Create Resonating
+--   Skull 17269, else Create Bone Dust 17270, triggered self-cast.
+--   spell_q12634_despawn_fruit_tosser (spell_quest.cpp:603-649):
+--   EFFECT_0 DUMMY OnEffectHit. urand(0,3): 1 -> Orange Falls to
+--   Ground 51837, 2 -> Papaya Falls to Ground 51839, 0/3 -> Bananas
+--   Fall to Ground 51836; then a 5% roll overrides to Summon
+--   Adventurous Dwarf 52070. Triggered self-cast.
+--   spell_q12683_take_sputum_sample (spell_quest.cpp:651-685):
+--   EFFECT_0 DUMMY OnEffectHit. reqAuraId is the spell's EFFECT_1
+--   DBC value, the cast spell its EFFECT_0 DBC value (both via
+--   spell:GetEffectValue, lua_spell.go:215); if the caster has the
+--   aura, it casts the spell on itself, triggered. KNOWN DELTA:
+--   C++ checks HasAuraEffect(reqAuraId, 0) (aura with an effect at
+--   index 0); no HasAuraEffect bridge exists, so this uses
+--   HasAura(reqAuraId) — identical unless the aura lacks an
+--   effect-0, which no DBC aura carries here.
+--   The ev4 hook fires on the player path (spells.go:14625, ahead of
+--   the effects loop, matching C++ HIT-phase order); the ev5
+--   OnEffectHitTarget hook still does NOT fire for player casts
+--   (runtime.go: the player path has no per-effect list site), so
+--   every other row in this strip stays out on that leg alone.
+--   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
+--   header note above), same as all prior player ports.
+
+local SPELL_TEST_FETID_SKULL = 17271 -- spell_quest.cpp:164 (class spell_q5206_test_fetid_skull)
+local SPELL_CREATE_RESONATING_SKULL = 17269 -- spell_quest.cpp:160
+local SPELL_CREATE_BONE_DUST = 17270 -- spell_quest.cpp:161
+local SPELL_DESPAWN_FRUIT_TOSSER = 51840 -- spell_quest.cpp:594 (class spell_q12634_despawn_fruit_tosser)
+local SPELL_BANANAS_FALL_TO_GROUND = 51836 -- spell_quest.cpp:597
+local SPELL_ORANGE_FALLS_TO_GROUND = 51837 -- spell_quest.cpp:598
+local SPELL_PAPAYA_FALLS_TO_GROUND = 51839 -- spell_quest.cpp:599
+local SPELL_SUMMON_ADVENTUROUS_DWARF = 52070 -- spell_quest.cpp:600
+local SPELL_TAKE_SPUTUM_SAMPLE = 52308 -- spell_quest.cpp:650 (class spell_q12683_take_sputum_sample)
+
+local function testFetidSkullHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(0, 1) == 0 then
+        caster:CastSpell(caster, SPELL_CREATE_RESONATING_SKULL, true)
+    else
+        caster:CastSpell(caster, SPELL_CREATE_BONE_DUST, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_TEST_FETID_SKULL, 4, testFetidSkullHit)
+
+local function despawnFruitTosserHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local spellId = SPELL_BANANAS_FALL_TO_GROUND
+    local roll = math.random(0, 3)
+    if roll == 1 then
+        spellId = SPELL_ORANGE_FALLS_TO_GROUND
+    elseif roll == 2 then
+        spellId = SPELL_PAPAYA_FALLS_TO_GROUND
+    end
+    if math.random(1, 100) <= 5 then
+        spellId = SPELL_SUMMON_ADVENTUROUS_DWARF
+    end
+    caster:CastSpell(caster, spellId, true)
+end
+
+RegisterSpellEvent(SPELL_DESPAWN_FRUIT_TOSSER, 4, despawnFruitTosserHit)
+
+local function takeSputumSampleHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local reqAuraId = spell:GetEffectValue(1)
+    if reqAuraId > 0 and caster:HasAura(reqAuraId) then
+        local spellId = spell:GetEffectValue(0)
+        if spellId > 0 then
+            caster:CastSpell(caster, spellId, true)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)

@@ -6,7 +6,9 @@
 --   (spell_priest.cpp:1238-1254): EFFECT_0 SPELL_AURA_PERIODIC_HEAL.
 --   On apply, when the caster carries the Empowered Renew talent
 --   aura (SPELLFAMILY_PRIEST 6, icon 3021, EFFECT_1), the caster
---   casts Empowered Renew 63544 on the target with BP0 =
+--   casts Empowered Renew 63544 on the target, triggered
+--   (CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK,
+--   SpellDefines.h:166), with BP0 =
 --   CalculatePct(renew amount * total ticks, talent amount). The
 --   C++ Load() gate (caster is a player, npcbot aside) is the
 --   Player type check below. CalculatePct is T(base * pct / 100.0f)
@@ -31,7 +33,7 @@ local function renewApply(event, aura, target)
     end
     local heal = aura:GetAmount(0) * aura:GetTotalTicks()
     local bp0 = math.floor(heal * empoweredAmount / 100)
-    caster:CastCustomSpell(target, SPELL_PRIEST_EMPOWERED_RENEW, false, bp0)
+    caster:CastCustomSpell(target, SPELL_PRIEST_EMPOWERED_RENEW, true, bp0)
 end
 
 RegisterAuraEvent(SPELL_PRIEST_RENEW, 2, renewApply)
@@ -88,6 +90,28 @@ end
 
 RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM, 6, impShadowformProc)
 
+local SPELL_PRIEST_POWER_WORD_SHIELD = 17 -- spell_priest.cpp:1064 (class spell_pri_power_word_shield)
+local SPELL_PRIEST_WEAKENED_SOUL = 6788 -- PW:S ExcludeTargetAuraSpell (Unit.cpp:7272 Renewed Hope HasAura gate; spell_stats.go:1563 twin)
+
+-- C++ spell_pri_power_word_shield_SpellScript::WeakenSoul
+-- (spell_priest.cpp:1079-1083): AfterHit, the caster casts the
+-- spell's ExcludeTargetAuraSpell (Weakened Soul) on the hit unit,
+-- triggered. Rank 1 only: the C++ loader binds all PW:S ranks, Lua
+-- binds per spell id (the renew 139 precedent). A missed hit fires
+-- nil and casts nothing, like C++ GetHitUnit() nil.
+local function powerWordShieldAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_PRIEST_WEAKENED_SOUL, true)
+end
+
+RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD, 3, powerWordShieldAfterHit)
+
 -- TRIAGED STAY OUT (tick 2026-11-11 18:32, census rows 662-664 + 666-670):
 --   662 body_and_soul (64127, :236-295): both arms need the event spell
 --   (EFFECT_0 PROC_TRIGGER_SPELL vetoes unless family flags [0] & 0x1
@@ -117,6 +141,19 @@ RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM, 6, impShadowformProc)
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
+--   671 power_word_shield (17, :1065-1182): WeakenSoul PORTED above
+--   (AfterHit ev3); CalculateAmount (:1109-1151) has no
+--   DoEffectCalcAmount bridge (spellpower/dampening/ICC math
+--   unbridged) and ReflectDamage (:1153-1169) has no
+--   AfterEffectAbsorb bridge (no absorb event; the DamageInfo
+--   attacker/spell read has no hook). Census go_hit is Renewed Hope
+--   (spell_stats.go:1563 hasAura 6788); lua_hit is the Whitemane
+--   boss cast (22187), not this class.
+--   672 renew (139, :1220-1265): HandleApplyEffect verified
+--   name-by-name (:1237-1254); the Empowered Renew cast is
+--   triggered (aurEff args, SpellDefines.h:166), fixed this tick
+--   (CastCustomSpell false -> true; player funnel ignores the flag
+--   but the creature/NPCBot path honors it). Reapply delta stands.
 
 -- CLOSED IN GO + TRIAGED STAY OUT (tick 2026-11-11 18:46, census rows
 -- 224-229 header-source + 672-673 comment-block; spell_priest.cpp end):
