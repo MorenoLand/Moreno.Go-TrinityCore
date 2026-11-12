@@ -5,10 +5,10 @@
 -- DoCastSelf(SPELL_COLDFLAME_JETS 70460, non-triggered) with a 22s re-arm
 -- (icecrown_citadel.cpp:517-544). SetCombatMovement(false) rides Reset
 -- (lua_creature_events.go:4410; constructor leg, :515-516).
--- DORMANT until at_icc_saurfang_portal lands: the only DoAction caller is
--- the area trigger (icecrown_citadel.cpp:1540-1542), which has no Lua
--- event binding yet (no verifiable trigger ID in-tree); the ev38 handler
--- below fires from any creature:DoAction call on the trap entry.
+-- LIVE since 2026-11-12: the only DoAction caller is the area trigger
+-- (icecrown_citadel.cpp:1540-1542), ported in at_icc_saurfang_portal.lua
+-- (trigger 5698, TDB-verified); the ev38 handler below fires from any
+-- creature:DoAction call on the trap entry.
 
 local NPC_FROST_FREEZE_TRAP = 37744
 

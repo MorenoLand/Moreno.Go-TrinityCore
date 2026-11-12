@@ -157,10 +157,17 @@ local NPC_INVISIBLE_STALKER = 30298 -- icecrown_citadel.h:335
 local UNIT_NPC_EMOTESTATE = 83 -- UpdateFields.h:140 (OBJECT_END 0x0006 + 0x4D)
 
 local DATA_SINDRAGOSA = 11 -- icecrown_citadel.h:85
+local DATA_COLDFLAME_JETS = 26 -- icecrown_citadel.h:102
+local DATA_BLOOD_QUICKENING_STATE = 28 -- icecrown_citadel.h:104
+local DATA_UPPERSPIRE_TELE_ACT = 41 -- icecrown_citadel.h:117
 local DATA_NERUBAR_BROODKEEPER_EVENT = 46 -- icecrown_citadel.h:122
 local AT_NERUBAR_BROODKEEPER = 5611 -- icecrown_citadel.h:541
 local ACTION_NERUBAR_FALL = 1 -- icecrown_citadel.h:483
 local BOSS_STATE_DONE = 3 -- InstanceScript.h:68-76
+local GO_SCOURGE_TRANSPORTER_UPPERSPIRE = 202235 -- icecrown_citadel.h:342
+local GAMEOBJECT_FLAGS = 9 -- gameobjects.go:21
+local GO_FLAG_NOT_SELECTABLE = 0x10 -- SharedDefines.h:1641
+local GO_STATE_ACTIVE = 0 -- SharedDefines.h:1661
 local ACTION_START_FROSTWYRM = -368530 -- icecrown_citadel.h:507
 local SINDRAGOSA_SPAWN_POS = {4818.7, 2483.71, 287.065, 3.089233} -- boss_sindragosa.cpp:169
 
@@ -320,6 +327,36 @@ end
 
 RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_UNIT_DEATH, onUnitDeath)
 
+-- First bound creature wins (the halls_of_reflection worldStateCaller
+-- idiom): any creature in the instance anchors a GO search or reads the
+-- shared boss-state store. Keys match the bossBinds table above; stale
+-- binds still work (despawn only drops the motion from the index,
+-- boss_ai.go:221 — Map/InstanceID survive on the struct).
+local function firstBoundCreature(instanceData)
+    return instanceData.lordMarrowgar or instanceData.ladyDeathwhisper
+        or instanceData.deathbringerSaurfang or instanceData.festergut
+        or instanceData.rotface or instanceData.professorPutricide
+        or instanceData.bloodQueenLanaThel or instanceData.sindragosa
+        or instanceData.theLichKing
+end
+
+-- C++ SetData DATA_COLDFLAME_JETS (instance_icecrown_citadel.cpp:
+-- 1073-1077): the value is only stored (SaveToDB on DONE has no
+-- bridge); the sender is at_icc_saurfang_portal.lua, which gates on
+-- this store.
+-- C++ SetData DATA_UPPERSPIRE_TELE_ACT (:1110-1116): the value is
+-- stored and, on DONE, the Upper Spire teleporter GO is activated
+-- (SetTeleporterState :164-176: RemoveFlag NOT_SELECTABLE + SetGoState
+-- ACTIVE). The GO has exactly one spawn in the instance (TDB
+-- gameobject 150353), so a 5000yd nearest-search from any bound
+-- creature is the direct-lookup twin (instance->GetGameObject has no
+-- Lua bridge; static GOs never fire the event-6 create hook, so no
+-- create-time latch exists — the initial NOT_SELECTABLE state is
+-- DB-side). Sender: at_icc_shutdown_traps.lua.
+-- C++ SetData DATA_BLOOD_QUICKENING_STATE (:1078-1103): the value is
+-- stored; the timer/world-state legs stay out on the sQuestPoolMgr
+-- weekly-quest gate (:1083, no bridge). Sender:
+-- at_icc_start_blood_quickening.lua.
 -- C++ SetData DATA_NERUBAR_BROODKEEPER_EVENT
 -- (instance_icecrown_citadel.cpp:1127-1133, PORTED 2026-11-10): data ==
 -- AT_NERUBAR_BROODKEEPER (5611) fans out to group 0, any other
@@ -328,6 +365,26 @@ RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_UNIT_DEATH, onUnitDeath
 -- The only in-tree sender is the area trigger in
 -- at_icc_nerubar_broodkeeper.lua.
 RegisterMapEvent(MAP_ICECROWN_CITADEL, INSTANCE_EVENT_ON_SET_DATA, function(event, instanceData, mapObj, type, data)
+    if type == DATA_COLDFLAME_JETS then
+        instanceData.coldflameJetsState = data
+        return
+    end
+    if type == DATA_UPPERSPIRE_TELE_ACT then
+        instanceData.upperSpireTeleActState = data
+        if data == BOSS_STATE_DONE then
+            local caller = firstBoundCreature(instanceData)
+            local go = caller and caller:FindNearestGameObject(GO_SCOURGE_TRANSPORTER_UPPERSPIRE, 5000)
+            if go then
+                go:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
+                go:SetGoState(GO_STATE_ACTIVE)
+            end
+        end
+        return
+    end
+    if type == DATA_BLOOD_QUICKENING_STATE then
+        instanceData.bloodQuickeningState = data
+        return
+    end
     if type ~= DATA_NERUBAR_BROODKEEPER_EVENT then
         return
     end

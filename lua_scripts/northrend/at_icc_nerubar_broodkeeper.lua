@@ -13,18 +13,22 @@
 -- group. OnlyOnce is per (instance, triggerId)
 -- (ScriptMgr.cpp:2531-2542: IsAreaTriggerDone / MarkAreaTriggerDone),
 -- modeled as a latch on the shared instanceData table.
+-- The DB binds a second trigger id to this script (5612, TDB
+-- areatrigger_scripts, 25101 + 26091 agree) — it is a live sender in
+-- C++ (the script fires for any bound id) and the instance receiver
+-- already branches on it (data == 5611 -> group 0, else group 1), so
+-- both ids dispatch here; 5612 is read from the dumps, not guessed.
 -- Deviations: the GM gate rides player:IsGM() (lua_player.go:1411,
 -- security > 0 = Player::IsGameMaster twin); the early return runs
 -- before the latch write, matching C++ return false (the trigger is
--- not marked done for a GM). The DB may bind a second trigger id to
--- but no second id appears in the C++ file, so only 5611 dispatches
--- (the gelihast precedent — never guess an id).
+-- not marked done for a GM).
 
 local AT_NERUBAR_BROODKEEPER = 5611 -- icecrown_citadel.h:541
+local AT_NERUBAR_BROODKEEPER_SECOND = 5612 -- TDB areatrigger_scripts
 local DATA_NERUBAR_BROODKEEPER_EVENT = 46 -- icecrown_citadel.h:122
 
 RegisterServerEvent(24, function(event, player, triggerId)
-    if triggerId ~= AT_NERUBAR_BROODKEEPER then
+    if triggerId ~= AT_NERUBAR_BROODKEEPER and triggerId ~= AT_NERUBAR_BROODKEEPER_SECOND then
         return
     end
     local mapObj = player:GetMap()
