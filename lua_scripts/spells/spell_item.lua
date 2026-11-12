@@ -637,3 +637,96 @@ local function socretharsStoneHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_SOCRETHARS_STONE, 5, socretharsStoneHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_brewfest_mount_transformation::HandleDummy
+--   (spell_item.cpp:3011-3065): EFFECT_0 DUMMY. Only while the
+--   caster has a SPELL_AURA_MOUNTED aura: the mount aura is removed
+--   and the caster self-casts the Brewfest mount matching the
+--   mounted run-speed rate (GetSpeedRate(MOVE_RUN) >= 2.0 -> the
+--   100% mount, else the 60% mount), triggered. 49357 keeps the
+--   faction mount (Alliance ram / Horde kodo); 52845 reverses it
+--   (Horde ram / Alliance kodo). Player GetSpeed returns rate *
+--   base speed (MOVE_RUN base 7.0), so rate = GetSpeed / 7.0
+--   (reindeer precedent above). Bindings 49357/52845 (AC
+--   'spell_item_brewfest_mount_transformation'; TDB 26091 renames
+--   it 'spell_brewfest_mount_transformation').
+local SPELL_BREWFEST_MOUNT_TRANSFORM = 49357 -- spell_item.cpp:3005
+local SPELL_BREWFEST_MOUNT_TRANSFORM_REVERSE = 52845 -- spell_item.cpp:3006
+local SPELL_MOUNT_RAM_100 = 43900 -- spell_item.cpp:3001
+local SPELL_MOUNT_RAM_60 = 43899 -- spell_item.cpp:3002
+local SPELL_MOUNT_KODO_100 = 49379 -- spell_item.cpp:3003
+local SPELL_MOUNT_KODO_60 = 49378 -- spell_item.cpp:3004
+local TEAM_ALLIANCE = 0 -- TeamId TEAM_ALLIANCE; player:GetTeam() returns it
+
+local function brewfestMountTransformationHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if not caster:HasAuraType(SPELL_AURA_MOUNTED) then
+        return
+    end
+    caster:RemoveAurasByType(SPELL_AURA_MOUNTED)
+    local spellId = spell:GetEntry()
+    local isRam
+    if spellId == SPELL_BREWFEST_MOUNT_TRANSFORM then
+        isRam = caster:GetTeam() == TEAM_ALLIANCE
+    elseif spellId == SPELL_BREWFEST_MOUNT_TRANSFORM_REVERSE then
+        isRam = caster:GetTeam() ~= TEAM_ALLIANCE
+    else
+        return
+    end
+    local speed = caster:GetSpeed(MOVE_RUN) / BASE_MOVE_SPEED
+    if isRam then
+        if speed >= 2.0 then
+            caster:CastSpell(caster, SPELL_MOUNT_RAM_100, true)
+        else
+            caster:CastSpell(caster, SPELL_MOUNT_RAM_60, true)
+        end
+    else
+        if speed >= 2.0 then
+            caster:CastSpell(caster, SPELL_MOUNT_KODO_100, true)
+        else
+            caster:CastSpell(caster, SPELL_MOUNT_KODO_60, true)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_BREWFEST_MOUNT_TRANSFORM, 5, brewfestMountTransformationHit)
+RegisterSpellEvent(SPELL_BREWFEST_MOUNT_TRANSFORM_REVERSE, 5, brewfestMountTransformationHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_teach_language::HandleDummy
+--   (spell_item.cpp:3141-3167): EFFECT_0 DUMMY. The C++ Load gate
+--   (caster TYPEID_PLAYER) is folded into the handler since Lua
+--   has no Load hook. On a 34% roll the caster self-casts the
+--   faction binary language (Alliance 50242 Gnomish, Horde 50246
+--   Goblin), triggered. Binding 50243 (AC
+--   'spell_item_teach_language'; TDB 26091 renames it
+--   'spell_brewfest_botm_teach_language').
+local SPELL_TEACH_LANGUAGE = 50243 -- spell_item.cpp:3141
+local SPELL_LEARN_GNOMISH_BINARY = 50242 -- spell_item.cpp:3136
+local SPELL_LEARN_GOBLIN_BINARY = 50246 -- spell_item.cpp:3137
+
+local function teachLanguageHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if math.random(1, 100) <= 34 then
+        if caster:GetTeam() == TEAM_ALLIANCE then
+            caster:CastSpell(caster, SPELL_LEARN_GNOMISH_BINARY, true)
+        else
+            caster:CastSpell(caster, SPELL_LEARN_GOBLIN_BINARY, true)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_TEACH_LANGUAGE, 5, teachLanguageHit)

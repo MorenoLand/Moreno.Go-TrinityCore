@@ -436,3 +436,42 @@ local function burnBrutallusTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_BURN_BRUTALLUS, 1, burnBrutallusTick)
+
+-- PORTED (tick 2026-11-12, RegisterAuraEvent OnApply = 2 /
+-- OnRemove = 3):
+--   spell_gen_aura_service_uniform::OnApply/OnRemove
+--   (spell_generic.cpp:422-456): EFFECT_0 SPELL_AURA_TRANSFORM.
+--   On apply a player target takes the goblin service model
+--   (male 31002 / female 31003 by native gender); on remove the
+--   display is restored. RestoreDisplayId has no Go bridge: the
+--   twin is DeMorph (lua_player.go:322, SetDisplayId of the native
+--   display). Deviation: C++ RestoreDisplayId prefers a still-active
+--   transform aura's model over the native display (Unit.cpp:10609);
+--   Go restores the native display unconditionally. Binding 71450
+--   (AC 'spell_gen_aura_service_uniform'; TDB 26091 renames it
+--   'spell_love_is_in_the_air_service_uniform').
+local SPELL_SERVICE_UNIFORM = 71450 -- spell_generic.cpp:415
+local MODEL_GOBLIN_MALE = 31002 -- spell_generic.cpp:418
+local MODEL_GOBLIN_FEMALE = 31003 -- spell_generic.cpp:419
+local GENDER_MALE = 0 -- SharedDefines.h:76
+
+local function serviceUniformApply(event, aura, target)
+    if target == nil or target:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    if target:GetNativeGender() == GENDER_MALE then
+        target:SetDisplayId(MODEL_GOBLIN_MALE)
+    else
+        target:SetDisplayId(MODEL_GOBLIN_FEMALE)
+    end
+end
+
+local function serviceUniformRemove(event, aura, target)
+    if target == nil or target:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    target:DeMorph()
+end
+
+RegisterAuraEvent(SPELL_SERVICE_UNIFORM, 2, serviceUniformApply)
+RegisterAuraEvent(SPELL_SERVICE_UNIFORM, 3, serviceUniformRemove)
