@@ -342,6 +342,116 @@ func (s *Server) creatureExplicitAttackPasses(m *creatureMotion, attacker *sessi
 	return s.creatureAttackCreaturePasses(m, attacker, tm)
 }
 
+// playerFriendlyToTarget mirrors WorldObject::IsFriendlyTo
+// (Object.cpp:2847-2850: GetReactionTo >= REP_FRIENDLY) for a player
+// caster, the twin of creatureFriendlyToTarget (boss_ai.go) with the
+// roles swapped: player targets resolve through playerReactionAlly
+// (explicit_target_faction.go: the self/duel/group/alliance/FFA arms
+// of GetReactionTo, Object.cpp:2744-2762), creature targets through
+// isFriendlyFaction (the reputation-rank + template tail). Self is
+// always friendly (Object.cpp:2711); unresolvable targets read not
+// friendly. The charmer/owner arm (Object.cpp:2712-2714) runs for
+// creature targets via creatureSameOwner — a player's own pet shares
+// the owner's faction template, but the owner check is C++-exact
+// where the template read is only incidental. Forced-rank
+// (SPELL_AURA_FORCE_REACTION) has no Go model.
+func (s *Server) playerFriendlyToTarget(ts *session, targetGUID uint64) bool {
+	if s == nil || ts == nil || ts.player == nil {
+		return false
+	}
+	if targetGUID == ts.playerGUID {
+		return true
+	}
+	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return ts.playerReactionAlly(targetSess)
+	}
+	tm := s.findCreatureMotion(ts.player.Map, ts.player.InstanceID, targetGUID)
+	if tm == nil {
+		return false
+	}
+	if creatureSameOwner(tm, ts.playerGUID, nil, ts) {
+		return true
+	}
+	return s.isFriendlyFaction(tm.Faction, s.creatureExplicitTargetPlayerPos(ts))
+}
+
+// playerExplicitAttackPasses mirrors WorldObject::IsValidAttackTarget
+// (Object.cpp:2930) for a player caster, the twin of
+// creatureExplicitAttackPasses with the roles swapped. Only the
+// hostility verdict is bridged, with the same documented restriction
+// as the creature twin: the dead, GM and untargetable terms are
+// outcome-equivalent with the already-bridged CheckTarget arms and
+// the CheckCast LOS arm — C++ evaluates them here at Spell.cpp:5365
+// but the cast fizzles either way on these silent paths — while
+// CanSeeOrDetect, UNIT_STATE_UNATTACKABLE, the immunity flags, the
+// PLAYER_FLAGS_UBER arm, the UNIT_BYTE2_FLAG_UNK1 PvP term and the
+// npcbot arms have no Go model (documented no-bridge). Self never
+// attacks (Object.cpp:2936, no bySpell in the CheckCast call).
+// Unresolvable targets fail open, like the creature twin.
+func (s *Server) playerExplicitAttackPasses(ts *session, targetGUID uint64) bool {
+	if s == nil || ts == nil || ts.player == nil {
+		return false
+	}
+	if targetGUID == ts.playerGUID {
+		return false
+	}
+	if targetSess := s.findSessionByGUID(targetGUID); targetSess != nil && targetSess.player != nil {
+		return s.playerAttackPlayerPasses(ts, targetSess)
+	}
+	tm := s.findCreatureMotion(ts.player.Map, ts.player.InstanceID, targetGUID)
+	if tm == nil {
+		return true
+	}
+	return s.playerAttackCreaturePasses(ts, tm)
+}
+
+// playerAttackPlayerPasses mirrors IsValidAttackTarget against a player
+// target (Object.cpp:3028-3080): the both-direction friendly refusal
+// first (a same-group member or same-alliance non-FFA player reads
+// friendly via playerReactionAlly), then the duel arm (an in-progress
+// duel opponent is always attackable), then the PvP tail via
+// explicitTargetAttackPvPBlocked (sanctuary blocks, a PvP-flagged
+// target or a both-FFA pair passes). The one-sided reputation arm
+// never runs for PvP — both sides have an affecting player.
+func (s *Server) playerAttackPlayerPasses(ts, targetSess *session) bool {
+	if ts.playerReactionAlly(targetSess) || targetSess.playerReactionAlly(ts) {
+		return false
+	}
+	if ts.duelPartner != 0 && ts.duelPartner == targetSess.playerGUID &&
+		ts.player.DuelTeam != 0 && targetSess.player.DuelTeam != 0 {
+		return true
+	}
+	return !ts.explicitTargetAttackPvPBlocked(targetSess, false)
+}
+
+// playerAttackCreaturePasses mirrors IsValidAttackTarget against a
+// creature target (Object.cpp:3028-3053): a creature owned by the
+// caster never attacks, then the contested-guard hostile term, then
+// the one-sided reputation term (a faction with a reputation row
+// reads attackable only while the caster is at war with it; without
+// a row the faction-template hostile term decides), then the
+// both-direction friendly refusal. Mirrors the wild-caster leg of
+// creatureAttackPlayerPasses with the roles swapped.
+func (s *Server) playerAttackCreaturePasses(ts *session, tm *creatureMotion) bool {
+	if creatureSameOwner(tm, ts.playerGUID, nil, ts) {
+		return false
+	}
+	if s.creatureContestedHostile(tm.Faction, ts) {
+		return true
+	}
+	casterTpl := ts.effectiveFactionTemplate(ts.player.Race)
+	if s.Data != nil {
+		if tpl, found, err := s.Data.FactionTemplate(tm.Faction); err == nil && found && s.factionCanHaveReputation(tpl.Faction) {
+			if !s.playerAtWarWith(ts, tm.Faction) {
+				return false
+			}
+		} else if !s.factionTemplatesHostile(casterTpl, tm.Faction) {
+			return false
+		}
+	}
+	return !s.isFriendlyFaction(tm.Faction, s.creatureExplicitTargetPlayerPos(ts)) && !s.factionTemplatesFriendly(tm.Faction, casterTpl)
+}
+
 // creatureAttackPlayerPasses mirrors IsValidAttackTarget against a player
 // target. With an affecting player (pet/charmed caster) C++ runs the
 // player-controlled branch of GetReactionTo (Object.cpp:2736-2785): duel,

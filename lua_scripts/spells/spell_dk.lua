@@ -51,9 +51,9 @@
 --   consecutive IDs with no in-tree citation.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
 --   needs DealDamage; spell_dk_raise_ally needs ghoul AI push/pop.
---   spell_dk_death_coil ranks 1-4 (47541/52375/59134/62900) stay out
---   of Lua — no ev5 player path, no IsFriendlyTo on players; the Go
---   finishSpellCast dummy leg is PORTED (spells.go deathCoilDummyEffect
+--   spell_dk_death_coil ranks 1-4 (47541/52375/59134/62900): CheckCast
+--   arm PORTED this tick (OnCheckCast ev8 below); the Go
+--   finishSpellCast dummy leg stays PORTED (spells.go deathCoilDummyEffect
 --   + boss_ai.go creature twin: 47632 damage / 47633 heal, BP0 = effect
 --   value [*1.5 heal] + sigil 64962 eff1).
 --   spell_dk_death_rune (49208/49467/54639, tick 559) stays out — no
@@ -120,10 +120,11 @@
 --   49028 proc entry.
 --   spell_dk_death_gate (52751, spell_dk.cpp:909-948): pre-existing
 --   Go case in handleEffectScriptEffect — the hit unit self-casts
---   the EFFECT_0 value (the teleport spell); CheckClass stays out
---   (no OnCheckCast bridge); the player leg rides the triggered
---   funnel where C++ casts plain (documented delta). DORMANT until
---   Spell.dbc ships 52751.
+--   the EFFECT_0 value (the teleport spell); CheckClass PORTED this
+--   tick (OnCheckCast ev8 below; the custom-error message text has no
+--   Go twin — the fire site sends only the failure code); the player
+--   leg rides the triggered funnel where C++ casts plain (documented
+--   delta). DORMANT until Spell.dbc ships 52751.
 --   spell_dk_dancing_rune_weapon (49028, 2026-11-10): Lua STAY-OUT,
 --   PORTED in Go (procs.go procAuraTriggerLoopFiltered, sibling tick):
 --   the OnEffectProc arm mirrors half the triggering spell's damage
@@ -134,12 +135,10 @@
 --   deals 0 by design (lua_unit_combat.go). The Go twin scans the
 --   motion map for entry 27893 owned by the caster and deals the
 --   damage through the log + direct-damage helpers.
---   spell_dk_death_gate (52751, 2026-11-10): PORTED in Go, not Lua —
---   handleEffectScriptEffect case (spells.go): the hit unit self-casts
---   the effect-0 CalcValue non-triggered; a Lua ev5 port would never
---   fire (the player path has no OnEffectHitTarget site, 60533
---   precedent) and the OnCheckCast class gate stays out (no check-cast
---   bridge; DK-gated by learning).
+--   spell_dk_death_gate (52751, 2026-11-10): PORTED in Go, not Lua — the
+--   handleEffectScriptEffect case (spells.go) + the CheckClass gate
+--   PORTED this tick (OnCheckCast ev8 below); a Lua ev5 port would never
+--   fire (the player path has no OnEffectHitTarget site, 60533 precedent).
 --   spell_dk_blood_boil (48721): PORTED below (2026-11-10).
 --   spell_dk_ghoul_explode (47496): PORTED below (2026-11-10) — the
 --   Suicide leg as an ev5 handler; the HandleDamage leg is the Go
@@ -514,3 +513,51 @@ local function vendettaProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_DK_VENDETTA, 6, vendettaProc)
+
+local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+local CREATURE_TYPE_UNDEAD = 6 -- SharedDefines.h:2666
+
+-- C++ spell_dk_death_coil_SpellScript::CheckCast (spell_dk.cpp:878-893):
+-- no explicit target fails BAD_TARGETS; a hostile target out of the
+-- frontal arc fails UNIT_NOT_INFRONT; a target friendly to the caster
+-- that is not undead fails BAD_TARGETS. Check-only port: the dummy
+-- damage/heal legs stay in Go (spells.go deathCoilDummyEffect).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+local function deathCoilCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    local target = spell:GetTarget()
+    if target == nil then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if caster ~= nil and not caster:IsFriendlyTo(target) and not caster:IsInFront(target) then
+        return SPELL_FAILED_UNIT_NOT_INFRONT
+    end
+    if target:IsFriendlyTo(caster) and target:GetCreatureType() ~= CREATURE_TYPE_UNDEAD then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs(SUDDEN_DOOM_DEATH_COIL_RANKS) do
+    RegisterSpellEvent(spellId, 8, deathCoilCheckCast)
+end
+
+local SPELL_DK_DEATH_GATE = 52751 -- spell_dk.cpp:909 (class spell_dk_death_gate_SpellScript)
+
+-- C++ spell_dk_death_gate_SpellScript::CheckClass (spell_dk.cpp:918-927):
+-- a non-Death-Knight caster fails SPELL_FAILED_CUSTOM_ERROR (C++ also
+-- sets the MUST_BE_DEATH_KNIGHT custom message; the Go fire site sends
+-- only the failure code, so the message text has no twin). RegisterSpellEvent
+-- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+local function deathGateCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetClass() ~= CLASS_DEATH_KNIGHT then
+        return SPELL_FAILED_CUSTOM_ERROR
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_DK_DEATH_GATE, 8, deathGateCheckCast)

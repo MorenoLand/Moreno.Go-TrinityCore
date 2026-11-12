@@ -1056,6 +1056,17 @@ func (r *Runtime) TriggerSpellEvent(ctx context.Context, spellID uint32, event i
 	return r.Trigger(ctx, "spell:"+strconv.FormatUint(uint64(spellID), 10), event, args...)
 }
 
+// TriggerSpellEvent2 fires hooks registered with
+// RegisterSpellEvent(spellID, event, fn) for the given spell,
+// capturing two return values per handler, mirroring
+// TriggerCreatureEvent2: SPELL_EVENT_ON_CHECK_CAST (8) reads the
+// custom-error id behind SPELL_FAILED_CUSTOM_ERROR as its second
+// return. Each inner slice is [firstReturn, secondReturn] in handler
+// call order.
+func (r *Runtime) TriggerSpellEvent2(ctx context.Context, spellID uint32, event int, args ...any) ([][]any, error) {
+	return r.triggerN(ctx, "spell:"+strconv.FormatUint(uint64(spellID), 10), event, 2, args...)
+}
+
 // TriggerAuraEvent fires hooks registered with
 // RegisterAuraEvent(spellID, event, fn) for the given spell. Callers pass
 // the Eluna-style leading event number in args, like TriggerCreatureEvent.

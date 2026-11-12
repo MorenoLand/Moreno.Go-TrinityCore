@@ -1458,6 +1458,55 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{!hasInArc(state.Orientation, state.X, state.Y, tx, ty, 2*math.Pi-arc)}, nil
 	}
+	// IsInFront(target[, arc]) is WorldObject::isInFront(target, arc) =
+	// HasInArc(arc, target) (Object.cpp:1412-1415) on the player surface,
+	// twin of the creature bridge (lua_objects.go) and the IsInBack method
+	// above. Eluna's arc defaults to pi. Self is always in front
+	// (Position.cpp:120). Backs the OnCheckCast front gates (holy shock,
+	// penance, death coil), where the caster is the session player.
+	methods["IsInFront"] = func(_ context.Context, args []any) ([]any, error) {
+		var tx, ty float32
+		var targetGUID uint64
+		if len(args) == 0 {
+			return nil, fmt.Errorf("target is required")
+		}
+		if obj, ok := args[0].(*scripting.Object); ok && obj != nil {
+			fx, found := objectFloat32Field(obj, "X")
+			if !found {
+				return nil, fmt.Errorf("target is required")
+			}
+			fy, found := objectFloat32Field(obj, "Y")
+			if !found {
+				return nil, fmt.Errorf("target is required")
+			}
+			tx, ty = fx, fy
+			targetGUID, _ = objectUint64Field(obj, "GUID")
+		} else if len(args) >= 2 {
+			x, err := luaFloat32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			y, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			tx, ty = x, y
+		} else {
+			return nil, fmt.Errorf("target is required")
+		}
+		if targetGUID != 0 && targetGUID == state.GUID {
+			return []any{true}, nil // Position::HasInArc: always have self in arc (Position.cpp:120)
+		}
+		arc := math.Pi
+		if len(args) > 1 {
+			a, err := luaFloat32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			arc = float64(a)
+		}
+		return []any{hasInArc(state.Orientation, state.X, state.Y, tx, ty, arc)}, nil
+	}
 	// IsTargetableForAttack is Unit::isTargetableForAttack (Unit.h:1077,
 	// Unit.cpp) for players: alive, no NON_ATTACKABLE (0x2) / NOT_SELECTABLE
 	// (0x02000000) unit flags, not a GM, and when checkFakeDeath (C++ default
@@ -2750,6 +2799,41 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		return []any{s.hasAuraType(auraType)}, nil
+	}
+	// IsFriendlyTo(target) is WorldObject::IsFriendlyTo
+	// (Object.cpp:2847-2850) on the player surface, via the
+	// playerFriendlyToTarget twin (creature_explicit_target_faction.go):
+	// player targets resolve through playerReactionAlly (self/duel/
+	// group/alliance/FFA), creature targets through the reputation +
+	// template tail, the caster's own pet through the charmer/owner
+	// arm. Unresolvable targets read not friendly, like the creature
+	// surface. Backs the OnCheckCast front gates (holy shock, penance,
+	// death coil).
+	methods["IsFriendlyTo"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 || s.server == nil {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.server.playerFriendlyToTarget(s, targetGUID)}, nil
+	}
+	// IsValidAttackTarget(target) is WorldObject::IsValidAttackTarget
+	// (Object.cpp:2930) on the player surface, via the
+	// playerExplicitAttackPasses twin: the hostility verdict only (the
+	// dead/GM/untargetable/visibility/immunity arms are
+	// outcome-equivalent or unmodeled, like the creature surface).
+	// Unresolvable targets fail open, like the creature surface.
+	methods["IsValidAttackTarget"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 || s.server == nil {
+			return []any{false}, nil
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 {
+			return []any{false}, nil
+		}
+		return []any{s.server.playerExplicitAttackPasses(s, targetGUID)}, nil
 	}
 	// GetAura is Unit::GetAura (UnitMethods.h, Unit.cpp GetAura(spellID)):
 	// the engine record for the spell, or nil when absent. Presence-only

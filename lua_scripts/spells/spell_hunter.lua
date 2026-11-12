@@ -541,15 +541,13 @@ end
 RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R1, 1, rapidRecuperationTick)
 RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R2, 1, rapidRecuperationTick)
 
--- NOT IN LUA: spell_hun_disengage (781, spell_hunter.cpp:379-400)
--- — OnCheckCast only (player out of combat fails the cast with
--- SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW). No Lua OnCheckCast bridge
--- exists (masters-call precedent above), and Go's default enforces
--- none of the gate. CENSUS CORRECTION: the 2026-11-10 census marks
--- row 594 go_hit/lua_hit True, but no 781 handling exists anywhere
--- in the Go tree — the hits are the verb "disengage" in unrelated
--- comments (threat.go, pets.go, lua_creature_events.go). The row is
--- uncovered; the gate needs a CheckCast bridge or a Go leg.
+-- PORTED (this tick, RegisterSpellEvent OnCheckCast = 8):
+--   spell_hun_disengage (781, spell_hunter.cpp:379-400) — CheckCast
+--   only (a player caster out of combat fails the cast with
+--   SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW); the ev8 fire site is the
+--   player cast path only, so the C++ TYPEID_PLAYER arm is vacuous
+--   here. The 2026-11-10 census row 594 go/lua hits were the verb
+--   "disengage" in unrelated comments, not this class.
 
 -- PORTED (this tick, RegisterAuraEvent OnProc = 6):
 --   spell_hun_lock_and_load::HandleProc
@@ -647,3 +645,20 @@ RegisterAuraEvent(SPELL_HUNTER_PIERCING_SHOTS_TALENT, 6, piercingShotsProc)
 -- ManaCostPercentage + GetMaxTicks; else CalcPowerCost(caster,
 -- school mask)), and ev6 carries no proc-spell object. Same open
 -- engine work as row 601; GetMaxTicks shares the 598 recipe.
+
+local SPELL_HUNTER_DISENGAGE = 781 -- spell_hunter.cpp:379 (class spell_hun_disengage_SpellScript)
+local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h:1155
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_hun_disengage_SpellScript::CheckCast (spell_hunter.cpp:388-395):
+-- a player caster out of combat fails SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW.
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+local function disengageCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and not caster:IsInCombat() then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_HUNTER_DISENGAGE, 8, disengageCheckCast)

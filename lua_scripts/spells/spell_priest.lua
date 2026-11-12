@@ -156,10 +156,8 @@ RegisterSpellEvent(SPELL_PRIEST_POWER_INFUSION, 8, powerInfusionCheckCast)
 --   model and its hook fires after charge/cooldown consumption.
 --   670 penance (47540, :980-1064): HandleDummy rides ev5 (spell hit)
 --   + spell-level GetSpellWithRank (47758/47757) + IsFriendlyTo; the
---   CheckCast arm (IsValidAttackTarget / isInFront) needs the
---   player-surface IsFriendlyTo / IsValidAttackTarget reads (the
---   OnCheckCast ev8 bridge itself is live since this tick) and the
---   ev5 player path is dormant.
+--   CheckCast arm is PORTED this tick (OnCheckCast ev8 below, R1 only)
+--   and the ev5 player path is dormant.
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
@@ -222,3 +220,33 @@ RegisterSpellEvent(SPELL_PRIEST_POWER_INFUSION, 8, powerInfusionCheckCast)
 --   Census rows 224-229 + 672-673 now all closed in Go except the
 --   SW:D / VT-Replenishment legs noted above; the next
 --   unworked census row is 674 (spell_q55_sacred_cleansing, spell_quest.cpp).
+
+local SPELL_PRIEST_PENANCE_R1 = 47540 -- spell_priest.cpp:49 (class spell_pri_penance)
+local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
+
+-- C++ spell_pri_penance_SpellScript::CheckCast (spell_priest.cpp:1033-1049):
+-- a nil explicit target passes (no else arm — unlike holy shock); a
+-- hostile target must pass IsValidAttackTarget (else BAD_TARGETS) and be
+-- in front (else UNIT_NOT_INFRONT); friendly targets pass. Check-only
+-- port: the HandleDummy legs ride ev5 (dormant, no player path) +
+-- spell-level GetSpellWithRank (47758/47757). Rank 1 only — higher-rank
+-- IDs are not in the file, never guessed. The C++ NPCBot caster
+-- exception (caster forced to Player*) has no Go twin — the ev8 fire
+-- site is the player cast path only (spells.go). RegisterSpellEvent
+-- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+local function penanceCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    local target = spell:GetTarget()
+    if caster ~= nil and target ~= nil and not caster:IsFriendlyTo(target) then
+        if not caster:IsValidAttackTarget(target) then
+            return SPELL_FAILED_BAD_TARGETS
+        end
+        if not caster:IsInFront(target) then
+            return SPELL_FAILED_UNIT_NOT_INFRONT
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R1, 8, penanceCheckCast)

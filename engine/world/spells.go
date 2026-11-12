@@ -4318,8 +4318,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// SetCurrentCastSpell registers the cast. Triggered casts never reach
 	// handleCastSpell, matching C++ TRIGGERED_IGNORE_CAST_CHECK; creature
 	// casts run no CheckCast gauntlet in Go, so that path does not fire it.
-	if failure := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+	// A SPELL_FAILED_CUSTOM_ERROR failure carries its custom-error id
+	// (WriteCastResultInfo, Spell.cpp:3974) via buildCastFailedParams.
+	if failure, customError := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
+		if failure == spellFailedCustomError {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailedParams(castID, spellID, failure, customError), true)
+		} else {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		}
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "OnCheckCast script hook", "failure", failure)
 		return true
 	}

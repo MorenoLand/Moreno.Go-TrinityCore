@@ -84,9 +84,9 @@
 -- STAYS OUT (this tick): 623 divine_purpose (no
 --   unit:RemoveAurasWithMechanic bridge; Go has the
 --   auraSpellMechanicMask + mechanicStun=12 twins, no removal
---   helper); 626 holy_shock (player-surface IsFriendlyTo /
---   IsValidAttackTarget unbridged; the OnCheckCast ev8 bridge itself
---   is live since this tick); 627 illumination + 629 infusion_of_light +
+--   helper); 626 holy_shock PORTED this tick (OnCheckCast ev8 below;
+--   the HandleDummy damage/heal legs stay out — ev5 player path
+--   dormant + no spell-level GetSpellWithRank); 627 illumination + 629 infusion_of_light +
 --   636 spiritual_attunement + 637 sheath_of_light + 638 t8_2p_bonus
 --   (all need heal info / proc-spell family flags / CalcPowerCost,
 --   ev6 carries damage only); 632 lay_on_hands PORTED this tick
@@ -438,3 +438,60 @@ local function layOnHandsAfterHit(event, spell, hitTarget)
 end
 
 RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS, 3, layOnHandsAfterHit)
+
+local SPELL_PALADIN_HOLY_SHOCK_R1 = 20473 -- spell_paladin.cpp:41 (class spell_pal_holy_shock)
+local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
+
+-- C++ spell_pal_holy_shock_SpellScript::CheckCast (spell_paladin.cpp:1100-1117):
+-- no explicit target fails SPELL_FAILED_BAD_TARGETS; a hostile target
+-- must pass IsValidAttackTarget (else BAD_TARGETS) and be in front
+-- (else SPELL_FAILED_UNIT_NOT_INFRONT); friendly targets pass.
+-- Check-only port: the HandleDummy damage/heal legs ride ev5 (dormant,
+-- no player path) + spell-level GetSpellWithRank. Rank 1 only —
+-- higher-rank IDs are not in the file, never guessed (life_tap
+-- precedent). RegisterSpellEvent OnCheckCast = 8 (lua_spell.go
+-- fireSpellCheckCast).
+local function holyShockCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    local target = spell:GetTarget()
+    if target == nil then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if caster ~= nil and not caster:IsFriendlyTo(target) then
+        if not caster:IsValidAttackTarget(target) then
+            return SPELL_FAILED_BAD_TARGETS
+        end
+        if not caster:IsInFront(target) then
+            return SPELL_FAILED_UNIT_NOT_INFRONT
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 8, holyShockCheckCast)
+
+local SPELL_PALADIN_DIVINE_PROTECTION = 498 -- spell_paladin.cpp:1190 (class spell_pal_immunities)
+local SPELL_PALADIN_DIVINE_SHIELD = 642 -- spell_paladin.cpp:1191
+local SPELL_PALADIN_HAND_OF_PROTECTION = 1022 -- spell_paladin.cpp:1192
+
+-- C++ spell_pal_immunities::CheckCast (spell_paladin.cpp:1207-1221):
+-- a nil explicit target defaults to the caster (HoP); a target carrying
+-- Forbearance (25771) or the Avenging Wrath marker (61987) fails with
+-- SPELL_FAILED_TARGET_AURASTATE. Base IDs only (the C++ comment's
+-- 498/642/1022) — higher ranks are DB-bound via spell_script_names,
+-- unestablished in-tree. RegisterSpellEvent OnCheckCast = 8.
+local function paladinImmunitiesCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target == nil then
+        target = spell:GetCaster()
+    end
+    if target ~= nil and (target:HasAura(SPELL_PALADIN_FORBEARANCE) or target:HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER)) then
+        return SPELL_FAILED_TARGET_AURASTATE
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION }) do
+    RegisterSpellEvent(spellId, 8, paladinImmunitiesCheckCast)
+end

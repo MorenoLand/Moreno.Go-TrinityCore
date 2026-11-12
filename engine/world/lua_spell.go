@@ -580,33 +580,42 @@ func (s *Server) fireSpellCast(ctx context.Context, spellID uint32, spellObj *sc
 
 // fireSpellCheckCast dispatches the RegisterSpellEvent OnCheckCast hook
 // for the spell (SpellEventOnCheckCast, args (event, spell)) and returns
-// the SpellCastResult the cast fails with, or 0 when no handler vetoes
-// it (0 is Go-internal OK; C++ SPELL_CAST_OK is 255, SharedDefines.h:1171,
-// so a handler returning 255 passes like a nil or 0 return). All
-// registered handlers run (TriggerSpellEvent collects every return) and
-// the first non-OK numeric result wins, mirroring
-// CallScriptCheckCastHandlers (Spell.cpp:7977-7996); non-numeric,
-// negative, and >254 returns pass. The spell object is built from the
-// in-flight cast like fireSpellScriptPreprocessTwins, with castTimeMs 0
-// (C++ calculates m_casttime only after the first CheckCast,
-// Spell.cpp:3130-3136) and no cast item (m_CastItem is nil on the
-// handleCastSpell path). Skipped entirely when no handler is registered,
-// so unscripted casts pay only the HasHook lookup.
-func (s *session) fireSpellCheckCast(ctx context.Context, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+// the SpellCastResult the cast fails with plus the custom-error id, or
+// (0, 0) when no handler vetoes it (0 is Go-internal OK; C++
+// SPELL_CAST_OK is 255, SharedDefines.h:1171, so a handler returning
+// 255 passes like a nil or 0 return). All registered handlers run
+// (TriggerSpellEvent2 collects every return) and the first non-OK
+// numeric result wins, mirroring CallScriptCheckCastHandlers
+// (Spell.cpp:7977-7996); non-numeric, negative, and >254 returns pass.
+// The second return is the custom-error id (SpellCustomError, C++
+// SetCustomCastResultMessage) and only rides a
+// SPELL_FAILED_CUSTOM_ERROR (172) failure — C++ WriteCastResultInfo
+// always appends it for that result, so the fire site sends it even
+// when the handler returns none (0, the unset C++ value). The spell
+// object is built from the in-flight cast like
+// fireSpellScriptPreprocessTwins, with castTimeMs 0 (C++ calculates
+// m_casttime only after the first CheckCast, Spell.cpp:3130-3136) and
+// no cast item (m_CastItem is nil on the handleCastSpell path).
+// Skipped entirely when no handler is registered, so unscripted casts
+// pay only the HasHook lookup.
+func (s *session) fireSpellCheckCast(ctx context.Context, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) (uint8, uint32) {
 	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
-		return 0
+		return 0, 0
 	}
 	if !s.server.Features.Scripts.HasHook("spell:"+strconv.FormatUint(uint64(spellID), 10), scripting.SpellEventOnCheckCast) {
-		return 0
+		return 0, 0
 	}
 	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
 	if spellObj == nil {
-		return 0
+		return 0, 0
 	}
-	results, _ := s.server.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnCheckCast, scripting.SpellEventOnCheckCast, spellObj)
+	results, _ := s.server.Features.Scripts.TriggerSpellEvent2(ctx, spellID, scripting.SpellEventOnCheckCast, scripting.SpellEventOnCheckCast, spellObj)
 	for _, result := range results {
+		if len(result) == 0 {
+			continue
+		}
 		var failure float64
-		switch n := result.(type) {
+		switch n := result[0].(type) {
 		case float64:
 			failure = n
 		case float32:
@@ -623,10 +632,27 @@ func (s *session) fireSpellCheckCast(ctx context.Context, spellID uint32, spell 
 			continue
 		}
 		if failure >= 1 && failure <= 254 && failure == float64(uint8(failure)) {
-			return uint8(failure)
+			var custom uint32
+			if len(result) > 1 {
+				switch n := result[1].(type) {
+				case float64:
+					custom = uint32(n)
+				case float32:
+					custom = uint32(n)
+				case int:
+					custom = uint32(n)
+				case int64:
+					custom = uint32(n)
+				case uint32:
+					custom = n
+				case int32:
+					custom = uint32(n)
+				}
+			}
+			return uint8(failure), custom
 		}
 	}
-	return 0
+	return 0, 0
 }
 
 // fireSpellHit dispatches the RegisterSpellEvent OnHit hook for one hit
