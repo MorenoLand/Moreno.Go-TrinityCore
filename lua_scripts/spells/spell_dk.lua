@@ -80,9 +80,9 @@
 --   the stale stay-out is corrected: ev6 forwards the proc spell id,
 --   family flags and rank, GetSpellWithRank is bridged, and the
 --   offhand gate rides the new player:HasOffhandWeapon bridge.
---   Wandering Plague (49217, tick 574)
---   stays out — no GetUnitCriticalChanceAgainst bridge anywhere in
---   the engine; the crit-chance roll is the whole gate.
+--   Wandering Plague (49217, tick 574) is PORTED below (ev6, 957b5aea) —
+--   the stale stay-out is corrected: GetUnitCriticalChanceAgainst is
+--   bridged on the player + creature surfaces.
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
 --   path has no OnEffectHitTarget site on the normal cast path, so a
 --   RegisterSpellEvent ev5 handler would never fire on a client cast):
@@ -747,6 +747,33 @@ local function deathGateCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_DK_DEATH_GATE, 8, deathGateCheckCast)
+
+local SPELL_DK_DEATH_PACT = 48743 -- spell_dk.cpp:989 (class spell_dk_death_pact_SpellScript)
+local SPELL_FAILED_NO_PET = 84 -- SharedDefines.h:1066
+
+-- C++ spell_dk_death_pact_SpellScript::CheckCast (spell_dk.cpp:989-1002):
+-- a live undead creature owned by the caster within 100yd must exist,
+-- else SPELL_FAILED_NO_PET. The FilterTargets leg stays out (no
+-- target-list filter bridge). RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast). Binding 48743 is the AC
+-- spell_script_names row. DELTA: Go's controlled-units scan reads
+-- OwnerGUID == caster, so a charmed undead unit reads as owned (the
+-- C++ GetOwnerGUID leg would reject it); in practice only ghouls
+-- qualify, and the undead-type + distance legs still apply.
+local function deathPactCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return SPELL_FAILED_NO_PET
+    end
+    for _, unit in ipairs(caster:GetControlledUnits()) do
+        if unit:IsAlive() and unit:GetOwnerGUID() == caster:GetGUID() and unit:GetCreatureType() == CREATURE_TYPE_UNDEAD and caster:GetDistance(unit) <= 100 then
+            return SPELL_CAST_OK
+        end
+    end
+    return SPELL_FAILED_NO_PET
+end
+
+RegisterSpellEvent(SPELL_DK_DEATH_PACT, 8, deathPactCheckCast)
 
 local SPELL_DK_HYSTERIA = 49016 -- spell_dk.cpp:1327 (class spell_dk_hysteria)
 

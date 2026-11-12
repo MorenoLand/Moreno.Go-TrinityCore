@@ -519,6 +519,61 @@ func (s *Server) minionsByEntry(mapID, instanceID uint32, ownerGUID uint64, entr
 	return found
 }
 
+// controlledUnits mirrors the Unit::m_Controlled iteration (Unit.h:762):
+// every creature motion in the same map+instance whose OwnerGUID is the
+// owner, GUID-sorted. Unlike minionsByEntry there is no entry or
+// temp-summon filter — pets, guardians, minions and charmed units all
+// read here; callers apply the C++ predicate (alive, type, distance).
+func (s *Server) controlledUnits(mapID, instanceID uint32, ownerGUID uint64) []*creatureMotion {
+	if s == nil || ownerGUID == 0 {
+		return nil
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	var found []*creatureMotion
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
+		if m.GUID == ownerGUID || m.OwnerGUID != ownerGUID {
+			continue
+		}
+		found = append(found, m)
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].GUID < found[j].GUID })
+	return found
+}
+
+// attackersOf mirrors Unit::getAttackers (Unit.h): the GUIDs of the units
+// with this unit as victim — creature motions whose threat-manager
+// victim is the unit plus player sessions whose attackTarget is the
+// unit, in the same map+instance, GUID-sorted. DELTA: Go tracks only
+// the CURRENT victim (motion.TargetGUID / session attackTarget), not
+// the full threat list, so a unit that holds threat on the target but
+// is currently attacking someone else does not read here.
+func (s *Server) attackersOf(mapID, instanceID uint32, guid uint64) []uint64 {
+	if s == nil || guid == 0 {
+		return nil
+	}
+	var found []uint64
+	s.motionMu.Lock()
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
+		if m.GUID != guid && m.TargetGUID == guid {
+			found = append(found, m.GUID)
+		}
+	}
+	s.motionMu.Unlock()
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess.player == nil || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			continue
+		}
+		if sess.attackTarget == guid && sess.playerGUID != 0 && sess.playerGUID != guid {
+			found = append(found, sess.playerGUID)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	sort.Slice(found, func(i, j int) bool { return found[i] < found[j] })
+	return found
+}
+
 // triggerPetDefensive triggers the owner's controlled creatures into attack
 // mode when the owner either attacks (assist) or takes damage (defend).
 // Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked

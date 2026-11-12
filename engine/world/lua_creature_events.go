@@ -3527,6 +3527,25 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// GetAttackers is the motion-creature twin of the player arm in
+	// lua_player.go (Unit::getAttackers, Unit.h; see attackersOf in
+	// pet_combat.go): the units with this creature as victim, as a
+	// Lua array of unit objects (GUID-sorted).
+	methods["GetAttackers"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil {
+			return []any{[]any{}}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		out := make([]any, 0)
+		for _, attackerGUID := range s.attackersOf(mapID, instanceID, guid) {
+			if obj := s.luaUnitObjectForGUID(mapID, instanceID, attackerGUID); obj != nil {
+				out = append(out, obj)
+			}
+		}
+		return []any{out}, nil
+	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
 	// SendTeleportPacket (MSG_MOVE_TELEPORT carrying the creature GUID to

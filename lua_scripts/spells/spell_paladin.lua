@@ -567,6 +567,42 @@ end
 
 RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 8, holyShockCheckCast)
 
+local SPELL_PALADIN_RIGHTEOUS_DEFENSE = 31789 -- spell_paladin.cpp:1888 (class spell_pal_righteous_defense)
+local SPELL_FAILED_DONT_REPORT = 27 -- SharedDefines.h:1009
+
+-- C++ spell_pal_righteous_defense::CheckCast (spell_paladin.cpp:1888-1906):
+-- player-only (the NPCBot exception has no Go twin); the explicit target
+-- must be friendly to the caster, not the caster, and have attackers,
+-- else SPELL_FAILED_BAD_TARGETS. The HandleDummy leg stays out: the
+-- player path has no OnEffectHitTarget site (death-gate precedent), so
+-- the taunt would never fire. The caster==target test compares
+-- GetGUIDLow + GetObjectType (the file's lay-on-hands convention:
+-- packed GUIDs lose bits through Lua numbers). RegisterSpellEvent
+-- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast). Binding 31789 is
+-- the AC spell_script_names row.
+local function righteousDefenseCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return SPELL_FAILED_DONT_REPORT
+    end
+    local target = spell:GetTarget()
+    if target == nil then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if not target:IsFriendlyTo(caster) then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if target:GetGUIDLow() == caster:GetGUIDLow() and target:GetObjectType() == caster:GetObjectType() then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if #target:GetAttackers() == 0 then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_PALADIN_RIGHTEOUS_DEFENSE, 8, righteousDefenseCheckCast)
+
 local SPELL_PALADIN_DIVINE_PROTECTION = 498 -- spell_paladin.cpp:1190 (class spell_pal_immunities)
 local SPELL_PALADIN_DIVINE_SHIELD = 642 -- spell_paladin.cpp:1191
 local SPELL_PALADIN_HAND_OF_PROTECTION = 1022 -- spell_paladin.cpp:1192

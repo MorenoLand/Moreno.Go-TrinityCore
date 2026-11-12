@@ -3364,6 +3364,38 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{out}, nil
 	}
+	// GetControlledUnits is the Unit::m_Controlled iteration
+	// (Unit.h:762): every creature owned by this player in the same
+	// map+instance, as a Lua array of creature objects (GUID-sorted;
+	// see controlledUnits in pet_combat.go). Backs the death-pact
+	// CheckCast port (spell_dk.cpp:989-1002), whose Lua predicate
+	// applies the alive / undead-type / owner / distance legs.
+	methods["GetControlledUnits"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil {
+			return []any{[]any{}}, nil
+		}
+		out := make([]any, 0)
+		for _, m := range s.server.controlledUnits(s.player.Map, s.player.InstanceID, s.playerGUID) {
+			out = append(out, s.server.luaMotionCreature(m))
+		}
+		return []any{out}, nil
+	}
+	// GetAttackers is Unit::getAttackers (Unit.h): the units with
+	// this unit as victim, as a Lua array of unit objects
+	// (GUID-sorted; see attackersOf in pet_combat.go). Backs the
+	// righteous-defense CheckCast port (spell_paladin.cpp:1888-1906).
+	methods["GetAttackers"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil {
+			return []any{[]any{}}, nil
+		}
+		out := make([]any, 0)
+		for _, guid := range s.server.attackersOf(s.player.Map, s.player.InstanceID, s.playerGUID) {
+			if obj := s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, guid); obj != nil {
+				out = append(out, obj)
+			}
+		}
+		return []any{out}, nil
+	}
 	// IsOnVehicle is Unit::IsOnVehicle (UnitMethods.h): despite the doc
 	// claiming bool, the Trinity arm pushes GetVehicle(), the Vehicle
 	// object the unit rides (nil when not riding), so the Go arm pushes
