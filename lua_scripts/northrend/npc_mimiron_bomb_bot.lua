@@ -41,39 +41,35 @@ end
 -- C++ spell_mimiron_bomb_bot::HandleScript
 -- (boss_mimiron.cpp:1713-1721, spell 63801 EFFECT_0 SCHOOL_DAMAGE):
 -- when the explosion hits a player, the MK II's DATA_SETUP_BOMB latch
--- clears (the achievement_setup_boom gate). The leg rides the creature
--- SpellHitTarget hook (ev15, mine precedent): the bot is the caster,
--- the handler fires per hit player, and the MK II resolves via the
--- instance GUID store (latched by boss_leviathan_mk_ii.lua ev5).
+-- clears (the achievement_setup_boom gate).
 -- C++ spell_mimiron_bomb_bot::HandleDespawn (:1721-1728, EFFECT_1
 -- APPLY_AURA): a hit creature is flagged unselectable + pacified and
--- despawns 1s later. Ev15 fires once per hit target with no effect
--- index (boss_ai.go:4053-4109), so both C++ legs ride this handler,
--- gated on target type the way the C++ GetHitPlayer/GetHitCreature
--- gates are. DBC caveat: if 63801 EFFECT_1 targets only the caster,
--- only the bot itself takes this leg; the handler applies it to
--- whatever the engine's hit set contains.
-local function bombBotSpellHitTarget(event, creature, target, spellId)
-    if spellId ~= SPELL_BOMB_BOT then
+-- despawns 1s later. Both legs ride RegisterSpellEvent ev5
+-- (OnEffectHitTarget, boss_ai.go:3406-3421 + triggered funnel
+-- spells.go:27398, clear-fires precedent): the effect index is the
+-- C++ leg selector, so no DBC shared-target-set assumption is needed
+-- — eff0 fires only the player leg, eff1 only the creature leg.
+-- Sweep-wipe note: the NOT_SELECTABLE|PACIFIED flag is re-affirmed
+-- away within a tick (creaturemotion.go:4995), so its targeting
+-- effect lasts <100ms; the 1s despawn still fires.
+local function bombBotSpellHitTarget(event, spell, hitTarget, effectIndex)
+    if not hitTarget then
         return
     end
-    if not target then
-        return
-    end
-    if target:GetTypeId() == 4 then -- TYPEID_PLAYER
-        local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if effectIndex == 0 and hitTarget:GetTypeId() == 4 then -- TYPEID_PLAYER
+        local mkii = spell:GetCaster():GetInstanceCreature(DATA_LEVIATHAN_MK_II)
         if mkii then
             mkii:SetData(DATA_SETUP_BOMB, 0)
         end
         return
     end
-    if target:GetTypeId() == 3 then -- TYPEID_UNIT
-        target:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
+    if effectIndex == 1 and hitTarget:GetTypeId() == 3 then -- TYPEID_UNIT
+        hitTarget:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_PACIFIED)
         CreateLuaEvent(function()
-            target:Despawn()
+            hitTarget:Despawn()
         end, 1000, 0)
     end
 end
 
 RegisterCreatureEvent(NPC_BOMB_BOT, 5, bombBotSpawn)
-RegisterCreatureEvent(NPC_BOMB_BOT, 15, bombBotSpellHitTarget)
+RegisterSpellEvent(SPELL_BOMB_BOT, 5, bombBotSpellHitTarget)

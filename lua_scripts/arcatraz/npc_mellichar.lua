@@ -34,9 +34,14 @@
 -- (:167-177) is ported as the store clear inside doReset
 -- (Reset() calls SetBossState(NOT_STARTED) in C++).
 -- Trigger (ev27): the Go sight scan enforces the C++
--- CanStartAttack/Z/LOS/dist arms before firing (the
--- NON_ATTACKABLE flag is not a scan gate — creaturemotion.
--- go:9438), so the handler adds only the C++-only gates:
+-- CanStartAttack/Z/LOS/dist arms before firing. The Reset-set
+-- NON_ATTACKABLE flag never reaches the scan gate: the per-tick
+-- sweep re-affirms motion.UnitFlags from the template
+-- (creaturemotion.go:4995; template 0x8240 lacks 0x2), so at scan
+-- time the :9262 gate passes and ev27 fires (fire site :9438).
+-- (Sweep-wipe deviation: runtime SetFlag(59) never persists on
+-- DB creatures — recorded, not fixed here.) The handler adds only
+-- the C++-only gates:
 -- !IsRunning, no victim, player-only, and the attack-
 -- radius arm (GetAttackDistance/10, arcatraz.cpp:339-343;
 -- GetDistance twin per the maiden/moroes precedent).
@@ -59,10 +64,13 @@
 -- 22558/39034/39038/13737) — SmartAI has no Lua model;
 -- wave-mob aggro arms (SetData x = 1) — redundant, the
 -- prepare arm already writes IN_PROGRESS before the
--- summon; wave-mob evade arms (SetData(DATA_CONVERSATION,
--- 4) = 2) — the only reader is Soccothrates's MoveInLOS
--- gate (== NOT_STARTED), unreachable once the waves exist
--- (both wardens are dead before the event starts).
+-- summon; wave-mob evade arms (SetBossState(DATA_HARBINGER_SKYRISS
+-- = 3, FAIL = 2) via SMART_ACTION_SET_INST_DATA ap (3,2,1) —
+-- the TDB comment "Data 4 to 2" is a label error; verified vs
+-- SmartScriptMgr.h:493 + instance_arcatraz.cpp:166-175): the
+-- FAIL resets all five warden states to NOT_STARTED (pods
+-- close). No SmartAI model, so the arm stays out; the reader
+-- is the instance boss-state machine, not Soccothrates.
 
 local ENTRY_MELLICHAR = 20904
 local DATA_HARBINGER_SKYRISS = 3 -- arcatraz.h:34
