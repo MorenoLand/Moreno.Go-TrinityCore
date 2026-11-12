@@ -2057,7 +2057,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		// leg below.
 		if victimMotion := s.findCreatureMotion(motion.Map, motion.InstanceID, targetGUID); victimMotion != nil {
 			s.fireCreatureAuraProcLoop(ctx, victimMotion, motion.GUID, procEventInfo{
-				typeMask:       procFlagTakenMeleeAutoAttack,
+				typeMask:       takenMeleeTypeMask(damage),
 				schoolMask:     spellSchoolMaskNormal,
 				spellTypeMask:  procSpellTypeNone,
 				spellPhaseMask: procSpellPhaseNone,

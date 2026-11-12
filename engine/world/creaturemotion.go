@@ -9192,7 +9192,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				target.Sess.procVictimAuraTriggers(ctx, motion.GUID, outcome, hitInfo, targetState, blocked, damage)
 			} else if !isPlayerVictim {
 				if vm := s.findCreatureMotion(target.Map, target.InstanceID, target.GUID); vm != nil {
-					s.fireCreatureAuraProcLoop(ctx, vm, motion.GUID, procEventInfo{typeMask: procFlagTakenMeleeAutoAttack, schoolMask: spellSchoolMaskNormal, spellTypeMask: procSpellTypeNone, spellPhaseMask: procSpellPhaseNone, hitMask: meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked), actorGUID: motion.GUID, damage: damage})
+					s.fireCreatureAuraProcLoop(ctx, vm, motion.GUID, procEventInfo{typeMask: takenMeleeTypeMask(damage), schoolMask: spellSchoolMaskNormal, spellTypeMask: procSpellTypeNone, spellPhaseMask: procSpellPhaseNone, hitMask: meleeOutcomeProcHitMask(outcome, hitInfo, targetState, blocked), actorGUID: motion.GUID, damage: damage})
 				}
 			}
 			// Unit::DealMeleeDamage (Unit.cpp:1555-1600): the player

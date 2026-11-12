@@ -118,16 +118,16 @@ RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW, 2, lightwellRenewApply)
 -- returns; damage at or above the latch drops one charge with
 -- AURA_REMOVE_BY_ENEMY_SPELL, else the latch falls by the damage.
 -- No PreventDefaultAction in C++, so no true return: the EFFECT_0
--- default leg is a no-op (TriggerSpell 0). DORMANT on two gates:
--- (1) 7001 needs an explicit spell_proc DB row — PERIODIC_HEAL is
--- not a trigger aura (SpellMgr.cpp:1686 isTriggerAura), so
--- LoadSpellProcs generates no entry for it and Go loads no
--- spell_proc table (spells.go calcAuraMaxChargesFor note);
--- (2) even with the row, serverSpellProcEntryFor builds generated
--- entries only, so it would need a DB-row-first lookup before the
--- ev6 loops can fire this handler. The CalculateAmount glyph arm
--- (:797-804, AddPct by the 55673 aura's EFFECT_0 amount) stays out:
--- no DoEffectCalcAmount fire site at the apply paths.
+-- default leg is a no-op (TriggerSpell 0). DORMANT until Spell.dbc
+-- ships: the proc entry now comes from the spell_proc-row twin
+-- (procs.go spellProcTableRows — PERIODIC_HEAL is no trigger aura,
+-- SpellMgr.cpp:1686 isTriggerAura, so no generated entry exists)
+-- and the melee taken sites carry PROC_FLAG_TAKEN_DAMAGE
+-- (procs.go takenMeleeTypeMask, Unit.cpp:1430), but the entry's
+-- Chance/Charges still ride the DBC spell and the aura itself needs
+-- the DBC to exist. The CalculateAmount glyph arm (:797-804, AddPct
+-- by the 55673 aura's EFFECT_0 amount) stays out: no
+-- DoEffectCalcAmount fire site at the apply paths.
 local function lightwellRenewProc(event, aura, target, actor, procTarget, damage)
     if damage == nil or damage == 0 then
         return
@@ -276,15 +276,16 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   666 improved_spirit_tap (15337, :632-676): PORTED this tick (ev6,
 --   above): rank of SW:D 32379 / Mind Blast 8092 passes via the new
 --   procEvent:IsRankOf bridge, Mind Flay 58381 at 50%, all else vetoes.
---   667 lightwell_renew (7001, :788-846): PORTED this tick (ev2
---   InitializeAmount latch + ev6 HandleProc DropCharge, above):
---   the DropCharge/ModCharges bridge + per-aura ScriptValues latch
---   landed in lua_aura.go (GetCharges/SetCharges/ModCharges/
---   DropCharge + GetScriptValue/SetScriptValue). DORMANT: 7001 needs
---   an explicit spell_proc DB row (PERIODIC_HEAL is no trigger aura)
---   and a DB-row-first proc-entry lookup in Go. The CalculateAmount
---   glyph-bonus arm (55673) stays out: no DoEffectCalcAmount fire
---   site at the apply paths.
+--   667 lightwell_renew (7001, :788-846): PORTED (ev2 InitializeAmount
+--   latch + ev6 HandleProc DropCharge, above): the DropCharge/
+--   ModCharges bridge + per-aura ScriptValues latch landed in
+--   lua_aura.go (GetCharges/SetCharges/ModCharges/DropCharge +
+--   GetScriptValue/SetScriptValue, 16bb3d16); the spell_proc-row twin
+--   (procs.go spellProcTableRows, all six ranks) + the melee
+--   TAKEN_DAMAGE flag landed this tick. DORMANT until Spell.dbc
+--   ships (entry Chance/Charges ride the DBC spell). The
+--   CalculateAmount glyph-bonus arm (55673) stays out: no
+--   DoEffectCalcAmount fire site at the apply paths.
 --   668 mind_sear (49821, :889-915): SpellScript target filter (drop
 --   the channel object from the area list); no bridge.
 --   669 pain_and_suffering_dummy (47580, :916-942): DoCheckEffectProc
