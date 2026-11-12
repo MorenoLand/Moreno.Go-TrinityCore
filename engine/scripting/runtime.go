@@ -506,7 +506,11 @@ const (
 // GetRank no-chain value), GetSchoolMask (the event spell's school, or the
 // melee/damage school), GetTypeMask/GetSpellTypeMask/GetSpellPhaseMask/
 // GetHitMask (the raw proc masks), GetDamage/GetHeal/GetEffectiveHeal,
-// GetActor/GetActionTarget/GetProcTarget, IsTriggered. The C++
+// GetActor/GetActionTarget/GetProcTarget, IsTriggered, and the eighth arg
+// is the effect index of the eligible effect that fired (0-based, the
+// AuraEffectProcFn effect the script registered on); a handler ignores
+// other indices, so a multi-effect aura's counter arm cannot double-fire.
+// The C++
 // CheckProc gate (DoCheckProc) has no separate hook: a port expresses
 // it by returning true (PreventDefaultAction, skipping the default
 // leg) when the gate FAILS — the inverted veto, e.g. decimation

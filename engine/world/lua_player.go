@@ -1245,6 +1245,34 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["Whisper"] = playerWhisper
 	methods["SendUnitWhisper"] = playerWhisper
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
+	// GetCreateMana is Unit::GetCreateMana (Unit.h:1353: UNIT_FIELD_BASE_MANA):
+	// the energizeCreateMana twin (spells.go) — the player's base mana, else
+	// max mana, else 100. Backs the empowered-fire HandleProc mana leg.
+	methods["GetCreateMana"] = luaNoArgs(func() any { return energizeCreateMana(s) })
+	// IsBaseRuneSlotsOnCooldown(runeType) is Player::IsBaseRuneSlotsOnCooldown
+	// (Player.cpp:25021): true only when no base slot of the given rune type
+	// (0 blood, 1 unholy, 2 frost, 3 death — runes.go) is ready, i.e. every
+	// base slot of that type still has cooldown left. Backs the blade-barrier
+	// CheckProc gate.
+	methods["IsBaseRuneSlotsOnCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		runeType, err := luaInt64Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if runeType < 0 || runeType > 3 {
+			return nil, fmt.Errorf("IsBaseRuneSlotsOnCooldown requires a rune type 0-3, got %d", runeType)
+		}
+		if s.runes == nil {
+			return []any{false}, nil
+		}
+		nowMs := time.Now().UnixMilli()
+		for i := 0; i < maxRunes; i++ {
+			if s.runes.base[i] == uint8(runeType) && s.runes.runeCooldownRemainingMs(i, nowMs) == 0 {
+				return []any{false}, nil
+			}
+		}
+		return []any{true}, nil
+	}
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
 	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):
 	// the Player::UpdateArmor result (player_state.go), the same value the

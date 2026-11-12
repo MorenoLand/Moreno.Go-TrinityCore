@@ -533,13 +533,16 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{r.server.serverSpellMaxTicks(sp)}, nil
 	}
-	// GetSpellWithRank(firstSpellID) is sSpellMgr->GetSpellWithRank
-	// (SpellMgr.cpp): the spell id of this aura's rank in
+	// GetSpellWithRank(firstSpellID[, rank]) is sSpellMgr->GetSpellWithRank
+	// (SpellMgr.cpp): the spell id of the given rank in
 	// firstSpellID's chain, or 0 when the chain has no such rank. The
-	// rank is this aura's own spell rank (SpellInfo::GetRank via the
+	// rank defaults to this aura's own spell rank (SpellInfo::GetRank via the
 	// spell_ranks world table, spells.go spellRank) — the
 	// improved-blizzard leg (spell_mage.cpp:484-488) casts the
-	// rank-matched Chilled on the proc target. An unknown rank reads
+	// rank-matched Chilled on the proc target; an explicit rank serves
+	// arms keyed off another spell's rank, e.g. illumination
+	// (spell_paladin.cpp:1164-1165) resolving the Holy Shock rank from
+	// the proc event's heal spell rank. An unknown rank reads
 	// 0, the GetTriggerSpell convention, so a port that casts only on
 	// a nonzero id never fires a bogus 0-id cast.
 	methods["GetSpellWithRank"] = func(_ context.Context, args []any) ([]any, error) {
@@ -553,7 +556,17 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		if r.server == nil {
 			return []any{uint32(0)}, nil
 		}
-		return []any{r.server.spellWithRank(firstSpell, r.server.spellRank(spellID))}, nil
+		rank := r.server.spellRank(spellID)
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaInt64Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			if v > 0 {
+				rank = uint8(v)
+			}
+		}
+		return []any{r.server.spellWithRank(firstSpell, rank)}, nil
 	}
 	// GetRank is SpellInfo::GetRank (SpellInfo.cpp) via the
 	// spell_ranks world table (spells.go spellRank): the 1-based rank
@@ -1222,20 +1235,23 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 
 // fireAuraProc dispatches the RegisterAuraEvent OnProc hook for one
 // eligible proc effect (args (event, aura, target, actor, procTarget,
-// damage, procEvent); target is the aura holder, actor the proc actor, procTarget
+// damage, procEvent, effectIndex); target is the aura holder, actor the proc actor, procTarget
 // the proc target, damage the proc event's damage, procEvent the
-// ProcEventInfo object above) and reports whether
+// ProcEventInfo object above; effectIndex is the 0-based index of the
+// eligible effect that fired, the AuraEffectProcFn effect the script
+// registered on — a handler ignores other indices, so a multi-effect
+// aura's counter arm cannot double-fire) and reports whether
 // any handler returned boolean true. That is the Go model of AuraScript
 // PreventDefaultAction() in an OnEffectProc handler: the caller skips
 // the effect's default leg. The hook fires after the proc gates and
 // charge/cooldown consumption, like C++ (PrepareProcToTrigger runs
 // before TriggerProcOnEvent), so a veto never refunds a spent charge.
 // Lua errors are logged by the runtime, never propagated.
-func (s *Server) fireAuraProc(ctx context.Context, aura *activeAura, auraObj *scripting.Object, target any, actor any, procTarget any, damage uint32, procEvent *scripting.Object) bool {
+func (s *Server) fireAuraProc(ctx context.Context, aura *activeAura, auraObj *scripting.Object, target any, actor any, procTarget any, damage uint32, procEvent *scripting.Object, effectIndex int) bool {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || aura == nil || auraObj == nil {
 		return false
 	}
-	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnProc, scripting.AuraEventOnProc, auraObj, target, actor, procTarget, damage, procEvent)
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnProc, scripting.AuraEventOnProc, auraObj, target, actor, procTarget, damage, procEvent, effectIndex)
 	return luaHookVeto(results)
 }
 

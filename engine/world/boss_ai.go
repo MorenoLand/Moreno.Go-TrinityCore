@@ -10882,7 +10882,10 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 		eligible := make([]int, 0, len(auraSpell.Effects))
 		for i := range auraSpell.Effects {
 			eff := &auraSpell.Effects[i]
-			if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
+			// Session-loop twin (procs.go): a spell_proc-row entry
+			// (FromSpellProcTable) carries DisableEffectsMask 0, so a
+			// non-trigger effect is eligible too.
+			if eff.Effect == 0 || (!isProcTriggerAuraType(eff.Aura) && !entry.FromSpellProcTable) {
 				continue
 			}
 			if aura.EffectMask&(1<<uint(i)) == 0 {
@@ -10931,7 +10934,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			// the aura ref carries the creature key.
 			if s.hasAuraProcHook(aura.SpellID) {
 				auraObj := (&luaAuraRef{server: s, spellID: aura.SpellID, creatureKey: key, mapID: m.Map, instanceID: m.InstanceID}).luaAuraObject()
-				if s.fireAuraProc(ctx, aura, auraObj, s.luaMotionCreature(m), s.luaUnitObjectForGUID(m.Map, m.InstanceID, ev.actorGUID), s.luaUnitObjectForGUID(m.Map, m.InstanceID, triggerTargetGUID), ev.damage, s.procEventObject(ev, m.GUID, triggerTargetGUID, m.Map, m.InstanceID)) {
+				if s.fireAuraProc(ctx, aura, auraObj, s.luaMotionCreature(m), s.luaUnitObjectForGUID(m.Map, m.InstanceID, ev.actorGUID), s.luaUnitObjectForGUID(m.Map, m.InstanceID, triggerTargetGUID), ev.damage, s.procEventObject(ev, m.GUID, triggerTargetGUID, m.Map, m.InstanceID), i) {
 					continue
 				}
 			}

@@ -1772,6 +1772,36 @@ type spellProcEntry struct {
 	// zeroes it (SpellMgr.cpp:1871), and this server builds generated
 	// entries only, so it is 0 until a spell_proc table import exists.
 	CooldownMs uint32
+	// FromSpellProcTable marks an entry built from the spell_proc-row
+	// twin (spellProcTableRows) rather than generated from DBC: the
+	// spell's proc behavior comes from the DB row in C++
+	// (SpellMgr::LoadSpellProc), whose DisableEffectsMask is 0, so
+	// every effect of the aura is proc-eligible (GetProcEffectMask,
+	// SpellAuras.cpp:2104-2112) even when none is a trigger aura.
+	FromSpellProcTable bool
+}
+
+// spellProcTableRows is the Go twin of the spell_proc DB rows C++
+// loads for spells whose proc behavior the DBC cannot generate
+// (SpellMgr::LoadSpellProc, SpellMgr.cpp:1578-1615): the row supplies
+// ProcFlags; Chance/Charges fall back to the DBC spell
+// (SpellMgr.cpp:1596-1597). Lightwell Renew's ranks need it: their
+// only aura effect is PERIODIC_HEAL, not a trigger aura
+// (SpellMgr.cpp:1686 isTriggerAura), so no generated entry exists
+// and the spell_pri_lightwell_renew script (spell_priest.cpp:788-846)
+// could never proc. The row's flags are PROC_FLAG_TAKEN_DAMAGE
+// (SpellMgr.h:147) — the script procs on any damage taken
+// (HandleProc reads the DamageInfo with no filter) and every
+// taken-damage event carries the flag (Unit.cpp:1430,
+// Spell.cpp:2545). The ranks are single-effect spells, so the ev6
+// hook fires once per proc.
+var spellProcTableRows = map[uint32]uint32{
+	7001:  procFlagTakenDamage, // lightwell renew R1
+	27873: procFlagTakenDamage, // R2
+	27874: procFlagTakenDamage, // R3
+	28276: procFlagTakenDamage, // R4
+	48084: procFlagTakenDamage, // R5
+	48085: procFlagTakenDamage, // R6
 }
 
 // serverSpellProcEntryFor builds the generated spell_proc entry for an aura
@@ -1779,13 +1809,29 @@ type spellProcEntry struct {
 // has no DBC ProcFlags or no proc-trigger aura effect
 // (SpellMgr::LoadSpellProc, SpellMgr.cpp:1755-1869). The session twin
 // delegates here: the logic needs only the DBC spell store, so the
-// creature proc path (boss_ai.go) reuses it exactly.
+// creature proc path (boss_ai.go) reuses it exactly. A spell_proc-row
+// twin (spellProcTableRows) is checked first: the row supplies
+// ProcFlags for spells the DBC cannot generate an entry for, and the
+// DBC lookup above still gates — with no Spell.dbc the row twin stays
+// dormant like every generated entry.
 func (s *Server) serverSpellProcEntryFor(auraSpellID uint32) (entry spellProcEntry, auraSpell wotlk.Spell, ok bool) {
 	if s == nil || s.Data == nil {
 		return entry, auraSpell, false
 	}
 	spell, found, err := s.Data.Spell(auraSpellID)
-	if err != nil || !found || spell.ProcTypeMask == 0 {
+	if err != nil || !found {
+		return entry, auraSpell, false
+	}
+	if flags, ok := spellProcTableRows[auraSpellID]; ok {
+		entry.ProcFlags = flags
+		entry.SpellTypeMask = procSpellTypeMaskAll
+		entry.SpellPhaseMask = procSpellPhaseHit
+		entry.Chance = spell.ProcChance
+		entry.Charges = spell.ProcCharges
+		entry.FromSpellProcTable = true
+		return entry, spell, true
+	}
+	if spell.ProcTypeMask == 0 {
 		return entry, auraSpell, false
 	}
 	hasTrigger := false
@@ -3487,9 +3533,24 @@ func (s *session) procKillAuraTriggers(ctx context.Context, triggerTargetGUID ui
 // BASE_ATTACK and OFF_ATTACK, with no mainhand/offhand arm on the victim
 // side; Unit.cpp:10385-10448 TriggerAurasProcOnEvent). The trigger spell
 // targets the attacker.
+// takenMeleeTypeMask is the victim flag set of a melee auto-attack
+// (Unit::DealMeleeDamage, Unit.cpp:1427-1431): the auto-attack flag
+// always, plus PROC_FLAG_TAKEN_DAMAGE when the hit dealt damage — a
+// miss deals none and carries no damage flag. The spell-hit taken
+// sites already OR the flag in; the melee sites did not, so a
+// taken-damage-only entry (e.g. the lightwell renew spell_proc row)
+// never fired on melee.
+func takenMeleeTypeMask(damage uint32) uint32 {
+	mask := procFlagTakenMeleeAutoAttack
+	if damage > 0 {
+		mask |= procFlagTakenDamage
+	}
+	return mask
+}
+
 func (s *session) procVictimAuraTriggers(ctx context.Context, attackerGUID uint64, outcome protocol.MeleeHitOutcome, hitInfo uint32, targetState uint8, blocked, damage uint32) {
 	s.procAuraTriggerLoop(ctx, attackerGUID, procEventInfo{
-		typeMask:       procFlagTakenMeleeAutoAttack,
+		typeMask:       takenMeleeTypeMask(damage),
 		schoolMask:     spellSchoolMaskNormal,
 		spellTypeMask:  procSpellTypeNone,
 		spellPhaseMask: procSpellPhaseNone,
@@ -3912,7 +3973,16 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 		eligible := make([]int, 0, len(auraSpell.Effects))
 		for i := range auraSpell.Effects {
 			eff := &auraSpell.Effects[i]
-			if eff.Effect == 0 || !isProcTriggerAuraType(eff.Aura) {
+			// A spell_proc-row entry (FromSpellProcTable) carries
+			// DisableEffectsMask 0, so a non-trigger effect is
+			// eligible too (GetProcEffectMask, SpellAuras.cpp:2104-2112):
+			// the script's OnEffectProc is what fires for it (the
+			// default leg is a TriggerSpell==0 no-op), which is how
+			// lightwell renew's PERIODIC_HEAL effect procs. The
+			// row-twin spells are single-effect, so the ev6 hook
+			// fires once per proc — a second proc-eligible effect
+			// would double-fire the handler (the hot-streak class).
+			if eff.Effect == 0 || (!isProcTriggerAuraType(eff.Aura) && !entry.FromSpellProcTable) {
 				continue
 			}
 			if !s.checkEffectProc(aura, eff, ev) {
@@ -3958,7 +4028,7 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 			// of the hot path when no handler is registered.
 			if s.server.hasAuraProcHook(aura.SpellID) {
 				auraObj := (&luaAuraRef{server: s.server, spellID: aura.SpellID, player: s, mapID: s.player.Map, instanceID: s.player.InstanceID}).luaAuraObject()
-				if s.server.fireAuraProc(ctx, aura, auraObj, s.luaPlayer(), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, ev.actorGUID), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, triggerTargetGUID), ev.damage, s.server.procEventObject(ev, s.playerGUID, triggerTargetGUID, s.player.Map, s.player.InstanceID)) {
+				if s.server.fireAuraProc(ctx, aura, auraObj, s.luaPlayer(), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, ev.actorGUID), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, triggerTargetGUID), ev.damage, s.server.procEventObject(ev, s.playerGUID, triggerTargetGUID, s.player.Map, s.player.InstanceID), i) {
 					continue
 				}
 			}
