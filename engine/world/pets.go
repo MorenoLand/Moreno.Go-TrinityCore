@@ -1076,7 +1076,7 @@ func ShouldTemporarilyUnsummonSavedPet(health, playerFlags, unitFlags, mountDisp
 	return temporarySummon || health == 0 || playerFlags&playerFlagGhost != 0 || unitFlags&unitFlagMount != 0 || mountDisplay != 0
 }
 
-func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name string, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, reactState uint8) {
+func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name string, level uint32, modelID uint32, curHealth uint32, maxHealth uint32, curMana uint32, maxMana uint32, reactState uint8, dest sessionDestSnapshot) {
 	if s.player == nil || petID == 0 {
 		return
 	}
@@ -1205,6 +1205,15 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 		petX = s.player.X + (petCombatReach+petFollowDistance)*float32(math.Cos(float64(petO)+math.Pi/2))
 		petY = s.player.Y + (petCombatReach+petFollowDistance)*float32(math.Sin(float64(petO)+math.Pi/2))
 		petZ = s.player.Z
+	}
+	if dest.Has {
+		// Spell::EffectSummonType (SpellEffects.cpp:2194-2405) summons at
+		// the effect's m_destTargets slot, not the caster's close point:
+		// the oculus call-drake +12z leg (oculus.cpp:424-428) rides this
+		// slot via the dest resolver. A stamped dest wins; an unstamped
+		// slot keeps the follow-offset position above (EffectSummonPet's
+		// GetClosePoint shape, SpellEffects.cpp:3075).
+		petX, petY, petZ = dest.X, dest.Y, dest.Z
 	}
 
 	var updateBlock []byte
@@ -1878,7 +1887,7 @@ func (s *session) resummonTemporaryPet(ctx context.Context) {
 	}
 	petNumber := uint32(petID)
 	s.temporaryUnsummonedPetNumber = 0
-	s.spawnPet(ctx, petNumber, uint32(entry), name, petLevel, uint32(modelID), uint32(curHealth), maxHealth, uint32(curMana), maxMana, uint8(reactState))
+	s.spawnPet(ctx, petNumber, uint32(entry), name, petLevel, uint32(modelID), uint32(curHealth), maxHealth, uint32(curMana), maxMana, uint8(reactState), sessionDestSnapshot{})
 }
 
 // petActionBarSlots returns the pet's stored action bar: the character_pet
@@ -2150,7 +2159,7 @@ func (s *session) refreshActivePetOnResummon(ctx context.Context, petID uint32, 
 	s.sendPetSpells(ctx, petID, entry, reactState)
 }
 
-func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uint32) uint64 {
+func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uint32, dest sessionDestSnapshot) uint64 {
 	if s.player == nil {
 		return 0
 	}
@@ -2185,7 +2194,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		if maxMana == 0 {
 			maxMana = uint32(curMana)
 		}
-		s.spawnPet(ctx, uint32(petID), uint32(pEntry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMana, uint8(reactState))
+		s.spawnPet(ctx, uint32(petID), uint32(pEntry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMana, uint8(reactState), dest)
 		return s.player.PetGUID
 	}
 
@@ -2218,7 +2227,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 		}
 		s.learnPetFamilyPassives(ctx, uint32(petID), entry)
 
-		s.spawnPet(ctx, uint32(petID), entry, petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+		s.spawnPet(ctx, uint32(petID), entry, petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState), dest)
 		return s.player.PetGUID
 	}
 
@@ -2255,7 +2264,7 @@ func (s *session) handleSummonPet(ctx context.Context, spellID uint32, entry uin
 	}
 	s.learnPetFamilyPassives(ctx, newPetID, entry)
 
-	s.spawnPet(ctx, newPetID, entry, petName, playerLevel, model, maxHP, maxHP, maxMP, maxMP, 1)
+	s.spawnPet(ctx, newPetID, entry, petName, playerLevel, model, maxHP, maxHP, maxMP, maxMP, 1, dest)
 	return s.player.PetGUID
 }
 
@@ -2353,7 +2362,7 @@ func (s *session) handleResurrectPet(ctx context.Context, spellID uint32, eff wo
 		"UPDATE character_pet SET slot = 0, curhealth = ?, savetime = ? WHERE id = ? AND owner = ?",
 		reviveHP, time.Now().Unix(), petID, s.playerGUID)
 
-	s.spawnPet(ctx, petNumber, uint32(entry), petName, uint32(level), uint32(modelID), reviveHP, maxHP, uint32(curMana), maxMP, uint8(reactState))
+	s.spawnPet(ctx, petNumber, uint32(entry), petName, uint32(level), uint32(modelID), reviveHP, maxHP, uint32(curMana), maxMP, uint8(reactState), sessionDestSnapshot{})
 }
 
 func (s *session) handleTameCreature(ctx context.Context, spellID uint32, targetGUID uint64) {
@@ -2470,7 +2479,7 @@ func (s *session) createTamedPetFromEntry(ctx context.Context, cdb *sql.DB, spel
 	}
 	s.learnPetFamilyPassives(ctx, newPetID, creatureEntry)
 
-	s.spawnPet(ctx, newPetID, creatureEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1)
+	s.spawnPet(ctx, newPetID, creatureEntry, cName, petLevel, modelID, maxHP, maxHP, maxMP, maxMP, 1, sessionDestSnapshot{})
 	return true
 }
 
@@ -3067,7 +3076,7 @@ func (s *session) summonStabledPet(ctx context.Context, cdb *sql.DB, petNumber u
 		curMana = int64(maxMP)
 	}
 	s.learnPetFamilyPassives(ctx, uint32(petID), uint32(entry))
-	s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+	s.spawnPet(ctx, uint32(petID), uint32(entry), petName, petLevel, uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState), sessionDestSnapshot{})
 	if s.player.PetGUID != 0 {
 		_ = s.sendTalentsInfo(true)
 	}

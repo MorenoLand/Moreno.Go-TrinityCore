@@ -204,6 +204,17 @@ type sessionDestSnapshot struct {
 	X, Y, Z float32
 }
 
+// sessionDestSnapshotAt returns one effect's m_destTargets slot (Spell.cpp:789):
+// the stamped snapshot when the resolver stamped one for that effect, the
+// zero snapshot otherwise. The effect-28 summon arms use it to spawn at the
+// effect's destination (SpellEffects.cpp:2194-2405) instead of the caster.
+func sessionDestSnapshotAt(snapshots []sessionDestSnapshot, effIndex int) sessionDestSnapshot {
+	if effIndex >= 0 && effIndex < len(snapshots) {
+		return snapshots[effIndex]
+	}
+	return sessionDestSnapshot{}
+}
+
 // sessionEffectDestTarget returns the SpellTargetData an effect's HIT arm
 // must see: its own m_destTargets slot (Spell.cpp:5159), not the
 // spell-final destination resolveImplicitSpellDestination returns. A stamped
@@ -490,11 +501,11 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				// handler rewrites m_targets dst, so the running
 				// destination (and this effect's snapshot) carries the
 				// offset like the C++ RelocateOffset. The effect-28
-				// summon arm still spawns at the caster (handleSummonPet
-				// ignores dest slots); the spawn-at-dest gap is
-				// pre-existing, not introduced here. The oculus
-				// call-drake leg below (oculus.cpp:424-428) has the same
-				// shape: 49345/49461/49462 raise the EFFECT_0
+				// summon arms pass their slot through handleSummonPet
+				// (sessionDestSnapshotAt) so the spawn lands at the
+				// destination; the oculus call-drake leg below
+				// (oculus.cpp:424-428) has the same shape:
+				// 49345/49461/49462 raise the EFFECT_0
 				// TARGET_DEST_CASTER_FRONT destination 12 yards.
 				if effIndex == 0 {
 					switch {

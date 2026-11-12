@@ -79,11 +79,10 @@
 --   hardcoded RelocateOffset style in the player dest resolver
 --   (target_dest_targets.go, with the 55368/59303/12601 legs) and
 --   the creature twin (creature_dest_targets.go, taldaram leg);
---   the resolved dest and snapshots carry it. Remaining gap: the
---   player-path effect-28 summon arm (handleSummonPet/spawnPet)
---   spawns at the caster and ignores dest slots, so a player-cast
---   call-drake still lands at the caster, not +12z up — the
---   spawn-at-dest leg is open engine work, not a Lua port.
+--   the resolved dest and snapshots carry it, and the player-path
+--   effect-28 summon arms pass their dest slot through
+--   handleSummonPet/spawnPet (sessionDestSnapshotAt), so a
+--   player-cast call-drake spawns at the +12z destination.
 -- - Drake MovementInform POINT_LAND now ports on ev28
 --   (drakeLandInform below).
 

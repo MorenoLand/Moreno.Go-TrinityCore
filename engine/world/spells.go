@@ -4285,15 +4285,16 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	// spell_q11010_q11102_q11023_q11008_check_fly_mount::CheckRequirement
 	// (spell_quest.cpp:1671-1678): the Skyguard Blasting Charge (39844)
-	// casts only while the caster carries a FLY aura or a
-	// MOD_INCREASE_MOUNTED_FLIGHT_SPEED aura; otherwise it fails
-	// SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. C++ script OnCheckCast
+	// and Throw Bomb (40160) cast only while the caster carries a FLY
+	// aura or a MOD_INCREASE_MOUNTED_FLIGHT_SPEED aura; otherwise they
+	// fail SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW. Both ids share the one
+	// C++ loader, so both ride this gate. C++ script OnCheckCast
 	// handlers run at the end of Spell::CheckCast, so this wires after
 	// the generic gates beside the tame-beast leg.
-	if spellID == 39844 {
+	if spellID == 39844 || spellID == 40160 {
 		if !s.hasAuraType(spellAuraFly) && !s.hasAuraType(spellAuraModIncreaseMountedFlightSpeed) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCantDoThatRightNow), true)
-			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skyguard blasting charge without a flight aura")
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "skyguard blasting charge / throw bomb without a flight aura")
 			return true
 		}
 	}
@@ -17190,7 +17191,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 56: // SPELL_EFFECT_SUMMON_PET
 				// Spell::EffectSummonPet (SpellEffects.cpp:3102) logs the
 				// summoned pet via ExecuteLogEffectSummonObject.
-				if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue)); guid != 0 {
+				if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshot{}); guid != 0 {
 					s.sendSummonObjectLog(spellID, eff.Effect, guid)
 				}
 			case 28: // SPELL_EFFECT_SUMMON
@@ -17219,7 +17220,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						}
 					}
 					if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
-						if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue)); guid != 0 {
+						if guid := s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(sessionDestSnapshots, effectIndex)); guid != 0 {
 							s.sendSummonObjectLog(spellID, eff.Effect, guid)
 						}
 					}
@@ -17283,7 +17284,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 55: // SPELL_EFFECT_TAMECREATURE
 				s.handleTameCreature(effCtx, spellID, targetGUID)
 			case 135: // SPELL_EFFECT_CALL_PET
-				s.handleSummonPet(effCtx, spellID, 0)
+				s.handleSummonPet(effCtx, spellID, 0, sessionDestSnapshot{})
 			case 38: // SPELL_EFFECT_DISPEL
 				// Spell::EffectDispel (SpellEffects.cpp:2429) runs per unit
 				// target: a multi-target dispel (e.g. Mass Dispel 32375, 15yd
@@ -19854,7 +19855,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if spellID == 2641 { // Dismiss Pet
 			s.handleDismissPet(effCtx, spellID)
 		} else if spellID == 883 { // Call Pet
-			s.handleSummonPet(effCtx, spellID, 0)
+			s.handleSummonPet(effCtx, spellID, 0, sessionDestSnapshot{})
 		} else if spellID == 31687 { // Summon Water Elemental
 			// Effect 28 (SPELL_EFFECT_SUMMON) logs the summon; the effect
 			// loop already handled it when present — the already-active
@@ -19871,7 +19872,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// re-summon mints a fresh GUID, so the timer never
 			// catches a replacement). The npcbot guard is vacuous —
 			// Go has no npcbot model and this is the player path.
-			if guid := s.handleSummonPet(effCtx, spellID, 510); guid != 0 {
+			if guid := s.handleSummonPet(effCtx, spellID, 510, sessionDestSnapshot{}); guid != 0 {
 				s.sendSummonObjectLog(spellID, 28, guid)
 				if !s.playerHasAuraSpell(70937) {
 					summonedGUID := guid
@@ -19893,7 +19894,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if reagentSpell, found, err := s.server.Data.Spell(48289); err == nil && found {
 				s.takeSpellReagents(effCtx, reagentSpell, castItemGUID, castItemEntry)
 			}
-			if guid := s.handleSummonPet(effCtx, spellID, 26125); guid != 0 {
+			if guid := s.handleSummonPet(effCtx, spellID, 26125, sessionDestSnapshot{}); guid != 0 {
 				s.sendSummonObjectLog(spellID, 28, guid)
 			}
 		} else if spellID == 63645 {
@@ -28520,7 +28521,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 					}
 				}
 				if summonPropsKnown && summonTitle != summonTitleTotem && summonTitle != summonTitleLightwell {
-					if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue)); guid != 0 {
+					if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue), sessionDestSnapshotAt(triggeredDestSnapshots, effectIndex)); guid != 0 {
 						s.sendSummonObjectLog(spellID, eff.Effect, guid)
 					}
 				}
@@ -28533,7 +28534,7 @@ func (s *session) castSpellDirectWithOverrides(ctx context.Context, spellID uint
 			// as the case-28 arm above. The no-owner SummonGuardian
 			// fallback has no Go twin on this player-session path,
 			// same as the client arm.
-			if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue)); guid != 0 {
+			if guid := s.handleSummonPet(ctx, spellID, uint32(eff.MiscValue), sessionDestSnapshot{}); guid != 0 {
 				s.sendSummonObjectLog(spellID, eff.Effect, guid)
 			}
 		}

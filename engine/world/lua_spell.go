@@ -286,6 +286,20 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetCastItem is SpellScript::GetCastItem (SpellScript.cpp:688-691):
+	// the item the spell was cast from (m_spell->m_CastItem), or nil
+	// when the cast carries no item. The sessionLuaItem object carries
+	// the instance GUID, so a port can pass it straight through as the
+	// CastCustomSpell castItem arg (spell_item_trigger_spell).
+	methods["GetCastItem"] = func(ctx context.Context, _ []any) ([]any, error) {
+		if p.castItemGUID == 0 {
+			return []any{nil}, nil
+		}
+		if obj := s.sessionLuaItem(ctx, p.castItemGUID); obj != nil {
+			return []any{obj}, nil
+		}
+		return []any{nil}, nil
+	}
 	// GetTargetDest returns three values, not one: wrap it separately so
 	// the triple is not collapsed into a single table value.
 	methods["GetTargetDest"] = func(_ context.Context, _ []any) ([]any, error) {
@@ -392,6 +406,11 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 	methods["GetEntry"] = luaNoArgs(func() any { return spellID })
 	methods["GetCastTime"] = luaNoArgs(func() any { return castTimeMs })
 	methods["GetDuration"] = luaNoArgs(func() any { return durationMs })
+	// GetCastItem is the creature-path twin of the session builder's
+	// method (SpellScript::GetCastItem, SpellScript.cpp:688-691):
+	// creatures never cast from an item, so m_CastItem is always null
+	// and this reads nil.
+	methods["GetCastItem"] = luaNoArgs(func() any { return nil })
 	// GetEffectValue(effectIndex) is the creature-path twin of the
 	// session builder's method (same contract: SpellScript::
 	// GetEffectValue, m_spell->damage via CalcValueForLevel at the

@@ -408,19 +408,52 @@ RegisterAuraEvent(SPELL_THUNDER_CAPACITOR_AURA, 6, makeTrinketStackProc(SPELL_TH
 RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_NORMAL_AURA, 6, makeTrinketStackProc(SPELL_TOC25_CASTER_TRINKET_NORMAL_STACK, SPELL_TOC25_CASTER_TRINKET_NORMAL_TRIGGER))
 RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_HEROIC_AURA, 6, makeTrinketStackProc(SPELL_TOC25_CASTER_TRINKET_HEROIC_STACK, SPELL_TOC25_CASTER_TRINKET_HEROIC_TRIGGER))
 
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_item_trigger_spell::HandleDummy (spell_item.cpp:66-72):
+--   EFFECT_0 SPELL_EFFECT_DUMMY. If the spell was cast from an item,
+--   the caster casts the mapped triggered spell on itself, triggered,
+--   with the item as the cast item (Unit::CastSpell(caster, id,
+--   item)). One handler for all four AddSC bindings
+--   (spell_item.cpp:4291-4297); the GetCastItem gate is the load-
+--   bearing leg — without an item the dummy does nothing.
+--   DORMANT until Spell.dbc ships the 23074/23133/23076/23075 rows.
+local ITEM_TRIGGER_SPELLS = {
+    [23074] = 19804, -- Arcanite Dragonling (spell_item.cpp:4291)
+    [23133] = 13166, -- Gnomish Battle Chicken (spell_item.cpp:4293)
+    [23076] = 4073, -- Mechanical Dragonling (spell_item.cpp:4295)
+    [23075] = 12749, -- Mithril Mechanical Dragonling (spell_item.cpp:4297)
+}
+
+local function itemTriggerSpellHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local item = spell:GetCastItem()
+    if item == nil then
+        return
+    end
+    local triggered = ITEM_TRIGGER_SPELLS[spell:GetEntry()]
+    if triggered == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastCustomSpell(caster, triggered, true, nil, nil, nil, item)
+end
+
+RegisterSpellEvent(23074, 4, itemTriggerSpellHit)
+RegisterSpellEvent(23133, 4, itemTriggerSpellHit)
+RegisterSpellEvent(23076, 4, itemTriggerSpellHit)
+RegisterSpellEvent(23075, 4, itemTriggerSpellHit)
+
 -- CENSUS CORRECTIONS (rows 604-607, verified in-house this tick):
---   604 spell_item_trigger_spell STAYS OUT — the census hits are the
---   unrelated generic spell_trigger_spell_from_caster in boss files.
---   SpellScript template, OnEffectHit DUMMY (spell_item.cpp:42-84),
---   instantiated for arcanite dragonling 23074->19804 / gnomish
---   battle chicken 23133->13166 / mechanical dragonling 23076->4073 /
---   mithril mechanical dragonling 23075->12749. ev4 OnEffectHit exists
---   and fires on the player item-use path (spells.go finishSpellCast),
---   so the old "no RegisterSpellScript bridge" reason is stale; the
---   real blocker is spell:GetCastItem — no such method anywhere in
---   the tree (castItemGUID sits unexposed in spellObjectParams).
---   Recipe: expose GetCastItem on the spell object, then register
---   ev4 per binding ID casting the mapped triggered spell.
+--   604 spell_item_trigger_spell PORTED this tick (ev4, dormant) —
+--   spell:GetCastItem bridged on the spell object this tick
+--   (lua_spell.go, session builder; creature builder reads nil).
+--   The census hits are the unrelated generic
+--   spell_trigger_spell_from_caster in boss files.
 --   605 spell_item_defibrillate STAYS OUT — SpellScript
 --   OnEffectHitTarget RESURRECT only (spell_item.cpp:712-756;
 --   census HandleDummy/OnObjectAreaTargetSelect are wrong), goblin
@@ -429,7 +462,8 @@ RegisterAuraEvent(SPELL_TOC25_CASTER_TRINKET_HEROIC_AURA, 6, makeTrinketStackPro
 --   ev5 has no player-path fire site (creature path + triggered
 --   funnel only, runtime.go contract) and the PreventHitDefaultEffect
 --   veto has no player-path model — a fail roll would resurrect AND
---   cast the fail spell. Plus missing GetCastItem (same as 604).
+--   cast the fail spell. GetCastItem is bridged now (row 604 this
+--   tick), so only the ev5 fire site + prevent model block 605.
 --   606 spell_item_sunwell_neck PORTED this tick (ev6, dormant) —
 --   CORRECTION to the old note below: the four aura binding IDs are
 --   the `// <id> - Sunwell Exalted ... Neck` comments
