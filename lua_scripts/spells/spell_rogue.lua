@@ -34,6 +34,18 @@
 --   player-surface RemoveAurasByType bridge (lua_player.go, tick
 --   294: session.removeAurasByType already existed, it was only
 --   unexposed on the player object).
+-- PORTED (tick 297, RegisterAuraEvent mode 6 = OnProc):
+--   spell_rog_deadly_brew (spell_rogue.cpp:235-266): aura 51625.
+--   Proc actor casts Crippling Poison 3409 on the proc target,
+--   triggered. DORMANT until Spell.dbc ships the 51625 proc entry.
+--   spell_rog_honor_among_thieves (spell_rogue.cpp:1017-1067):
+--   auras 51698/51700/51701. Proc suppressed while the caster has
+--   51699; otherwise the holder casts the DBC EFFECT_0 trigger spell
+--   on itself, triggered (original-caster GUID leg is a standing
+--   deviation). DORMANT until Spell.dbc ships the proc entries.
+--   spell_rog_turn_the_tables (spell_rogue.cpp:1138-1173): aura
+--   51627. The caster casts the DBC EFFECT_0 trigger spell on nil,
+--   triggered. DORMANT until Spell.dbc ships the 51627 proc entry.
 -- STAY-OUT (tick 294): every other spell_rogue class — no proc hook,
 --   absorb/CalcAmount hooks absent, or SpellScript-only with no
 --   RegisterSpellScript in the engine. Notable: blade_flurry (also
@@ -42,6 +54,28 @@
 --   (periodic target list populated only by the stay-out
 --   SpellScript), preparation (ResetCooldowns with family-flag
 --   predicate), tricks_of_the_trade (proc + target filter).
+-- STAY-OUT (tick 297, census rows 740-756, all verified in-tree):
+--   blade_flurry 13877/33735/51211/65956 — MOD_MELEE_HASTE is not a
+--   proc-trigger aura type (procs.go) and SelectNearbyTarget is
+--   unbridged; 65956 lua_hit is a phantom (boss_faction_champions
+--   cast, not the aura script).
+--   cheat_death 31228 / nerves_of_steel 31130 — no absorb or
+--   CalcAmount aura event (consts end at 7); no GetSpellHistory /
+--   AddCooldown bridge.
+--   cut_to_the_chase 51664 — rank-agnostic Slice and Dice lookup
+--   needs a family-flag aura-object query; GetAura needs an exact
+--   spell ID.
+--   deadly_poison 2818 — no GetCastItem bridge; GetItemByPos is a
+--   nil stub; no enchantment-store read. go_hit is a phantom
+--   (Envenom aura-state machinery).
+--   quick_recovery 31244 — ev6 carries no proc-spell info and no
+--   CalcPowerCost bridge.
+--   rupture 1943 — no GetTotalAttackPowerValue bridge, no CalcAmount
+--   event, and the REAPPLY-only leg is unmodellable (mode 2 is
+--   fresh-apply only). Census hits are phantoms (glyph-of-backstab
+--   bookkeeping + header mention).
+--   setup 13983 — DoCheckProc only, and no GetSelectedUnit bridge.
+--   prey_on_the_weak 51685 VERIFIED CLOSED (ported tick 294).
 
 local SPELL_ROGUE_PREY_ON_THE_WEAK = 51685
 local SPELL_ROGUE_PREY_ON_THE_WEAK_BUFF = 58670
@@ -53,6 +87,12 @@ local SPELL_ROGUE_HONOR_AMONG_THIEVES_PROC = 52916
 local SPELL_ROGUE_HONOR_AMONG_THIEVES_2 = 51699
 local SPELL_ROGUE_VANISH = 11327
 local SPELL_ROGUE_STEALTH = 1784
+local SPELL_ROGUE_DEADLY_BREW = 51625
+local SPELL_ROGUE_CRIPPLING_POISON = 3409
+local SPELL_ROGUE_HONOR_AMONG_THIEVES_R1 = 51698
+local SPELL_ROGUE_HONOR_AMONG_THIEVES_R2 = 51700
+local SPELL_ROGUE_HONOR_AMONG_THIEVES_R3 = 51701
+local SPELL_ROGUE_TURN_THE_TABLES = 51627
 
 local SPELL_AURA_MOD_STALKED = 68
 
@@ -104,3 +144,67 @@ local function vanishApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ROGUE_VANISH, 2, vanishApply)
+
+-- C++ spell_rog_deadly_brew_AuraScript::HandleProc
+-- (spell_rogue.cpp:235-266): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; the proc actor casts Crippling Poison 3409
+-- on the proc target, triggered (aurEff args). DORMANT until
+-- Spell.dbc ships the 51625 proc entry.
+local function deadlyBrewProc(event, aura, target, actor, procTarget, damage)
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    actor:CastSpell(procTarget, SPELL_ROGUE_CRIPPLING_POISON, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_ROGUE_DEADLY_BREW, 6, deadlyBrewProc)
+
+-- C++ spell_rog_honor_among_thieves_AuraScript::HandleProc
+-- (spell_rogue.cpp:1017-1067): OnEffectProc, EFFECT_0
+-- PROC_TRIGGER_SPELL. CheckProc: the aura's caster must exist and
+-- must lack 51699, else the proc is suppressed (Lua: return true =
+-- PreventDefaultAction, which suppresses the default trigger leg).
+-- Otherwise the aura holder casts the DBC EFFECT_0 trigger spell on
+-- itself, triggered. Standing deviation: C++ passes the aura caster's
+-- GUID as original caster; Lua has no twin, so the cast's caster is
+-- the holder. DORMANT until Spell.dbc ships the proc entries.
+local function honorAmongThievesProc(event, aura, target, actor, procTarget, damage)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:HasAura(SPELL_ROGUE_HONOR_AMONG_THIEVES_2) then
+        return true
+    end
+    if target == nil then
+        return true
+    end
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    target:CastSpell(target, triggerSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_ROGUE_HONOR_AMONG_THIEVES_R1, 6, honorAmongThievesProc)
+RegisterAuraEvent(SPELL_ROGUE_HONOR_AMONG_THIEVES_R2, 6, honorAmongThievesProc)
+RegisterAuraEvent(SPELL_ROGUE_HONOR_AMONG_THIEVES_R3, 6, honorAmongThievesProc)
+
+-- C++ spell_rog_turn_the_tables_AuraScript::HandleProc
+-- (spell_rogue.cpp:1138-1173): OnEffectProc, EFFECT_0
+-- PROC_TRIGGER_SPELL. PreventDefaultAction; the aura's caster casts
+-- the DBC EFFECT_0 trigger spell on nil, triggered. DORMANT until
+-- Spell.dbc ships the 51627 proc entry.
+local function turnTheTablesProc(event, aura, target, actor, procTarget, damage)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return true
+    end
+    local triggerSpell = aura:GetTriggerSpell(0)
+    if triggerSpell == 0 then
+        return true
+    end
+    caster:CastSpell(nil, triggerSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_ROGUE_TURN_THE_TABLES, 6, turnTheTablesProc)
