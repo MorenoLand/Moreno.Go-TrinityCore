@@ -338,27 +338,39 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return int32(aura.DurationMs)
 	})
-	// GetSpellMaxDuration is SpellInfo::GetMaxDuration
+	// GetSpellMaxDuration([spellID]) is SpellInfo::GetMaxDuration
 	// (SpellInfo.cpp:3084-3089): the MaxDuration column of
-	// SpellDuration.dbc for this aura's spell, no per-level
-	// scaling. An unknown spell (no Spell.dbc) reads 0, the
-	// GetTriggerSpell convention. Backs the Cut to the Chase
-	// (51664) refresh arm (spell_rogue.cpp:196-233), which reads
-	// the spell-info max, not the live aura's DurationMs.
-	methods["GetSpellMaxDuration"] = luaNoArgs(func() any {
-		if r.server == nil || r.server.Data == nil {
-			return int32(0)
+	// SpellDuration.dbc for the given spell, no per-level scaling.
+	// Reads the loaded Spell.dbc record for the given spell, not
+	// this aura's spell. An unknown spell (no Spell.dbc) reads 0, the
+	// GetTriggerSpell convention. Default this aura's spell. Backs
+	// the Cut to the Chase (51664) refresh arm
+	// (spell_rogue.cpp:196-233), which reads the spell-info max, not
+	// the live aura's DurationMs, and the Infusion of Light (53569)
+	// HoT divisor leg (spell_paladin.cpp:1379-1382), which reads the
+	// Flash of Light proc HoT's (66922) max duration.
+	methods["GetSpellMaxDuration"] = func(_ context.Context, args []any) ([]any, error) {
+		targetSpell := spellID
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			targetSpell = v
 		}
-		sp, found, err := r.server.Data.Spell(spellID)
+		if r.server == nil || r.server.Data == nil {
+			return []any{int32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
 		if err != nil || !found {
-			return int32(0)
+			return []any{int32(0)}, nil
 		}
 		maxDur, ok, err := r.server.Data.SpellMaxDuration(sp.DurationIndex)
 		if err != nil || !ok {
-			return int32(0)
+			return []any{int32(0)}, nil
 		}
-		return int32(maxDur)
-	})
+		return []any{int32(maxDur)}, nil
+	}
 	methods["GetStackAmount"] = luaNoArgs(func() any { return uint32(auraWireStackCount(r.resolve())) })
 	// GetTickNumber is AuraEffect::GetTickNumber (SpellAuraEffects.h),
 	// the _ticksDone counter: both periodic-tick executors increment

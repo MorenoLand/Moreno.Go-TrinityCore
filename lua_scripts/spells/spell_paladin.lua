@@ -94,8 +94,7 @@
 --   spell" note is STALE — procs.go procSpellHealAuraTriggers sets
 --   eventSpell on direct-heal events, disproven in-tree); 629
 --   infusion_of_light + 636 spiritual_attunement + 637 sheath_of_light
---   + 638 t8_2p_bonus need re-triage next tick (same bridges now live:
---   heal spell threads, CalcPowerCost bridged); 632 lay_on_hands PORTED this tick
+--   + 638 t8_2p_bonus PORTED this tick (ev6, below); 632 lay_on_hands PORTED this tick
 --   (OnCheckCast ev8 + AfterHit ev3 below); 634/635
 --   seal_of_righteousness (needs attack-power / spellpower /
 --   attack-time math, unbridged).
@@ -551,3 +550,191 @@ end
 for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION }) do
     RegisterSpellEvent(spellId, 8, paladinImmunitiesCheckCast)
 end
+
+local SPELL_PALADIN_INFUSION_OF_LIGHT_R1 = 53569 -- spell_paladin.cpp:1340 (class spell_pal_infusion_of_light)
+local SPELL_PALADIN_INFUSION_OF_LIGHT_R2 = 53576 -- bot_paladin_ai.cpp:111 (rank 2)
+local SPELL_PALADIN_SACRED_SHIELD = 53601 -- spell_paladin.cpp:98
+local SPELL_PALADIN_T9_HOLY_4P_BONUS = 67191 -- spell_paladin.cpp:99
+local SPELL_PALADIN_FLASH_OF_LIGHT_PROC = 66922 -- spell_paladin.cpp:100
+local PROC_HIT_CRITICAL = 0x2 -- SpellMgr.h:223
+
+-- C++ spell_pal_infusion_of_light_AuraScript::HandleProc
+-- (spell_paladin.cpp:1362-1397): OnEffectProc EFFECT_0
+-- PROC_TRIGGER_SPELL. PreventDefaultAction (the true return on every
+-- path, illumination precedent). Flash of Light leg: the event spell
+-- carries family flag [0] & 0x40000000 with icon 242 — the heal
+-- (procEvent:GetHeal, direct-heal events thread the spell and the
+-- heal, procs.go) must be nonzero, and the healed target must carry
+-- Sacred Shield (53601); the holder casts the Flash of Light HoT
+-- (66922) on the healed target, triggered (aurEff args), BP0 =
+-- pct(heal / durationSeconds, EFFECT_2 amount) where durationSeconds
+-- is the HoT's max duration / 1000 (aura:GetSpellMaxDuration(66922),
+-- lua_aura.go optional-spellID form added this tick), plus the T9
+-- Holy 4P bonus (target:GetAuraEffect(67191, 0) AddPct). EFFECT_2
+-- reads the live amount (aura:GetAmount(2)): the C++ CalcValue()
+-- no-caster overload is the DBC base the live amount is computed
+-- from at apply, and the live read is rank-correct across 53569 /
+-- 53576. Holy Shock leg: a non-critical Holy Shock (flags [0] &
+-- 0x200000 or [1] & 0x10000, hit mask without PROC_HIT_CRITICAL)
+-- only suppresses the default action. DORMANT until Spell.dbc ships
+-- the 53569/53576 proc entries.
+local function infusionOfLightProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if aura == nil or target == nil then
+        return true
+    end
+    if bit32.band(procEvent:GetSpellFamilyFlags(0), 0x40000000) ~= 0 and procEvent:GetSpellIconId() == 242 then
+        local heal = procEvent:GetHeal()
+        if heal == nil or heal == 0 then
+            return true
+        end
+        local healed = procEvent:GetActionTarget()
+        if healed ~= nil and healed:HasAura(SPELL_PALADIN_SACRED_SHIELD) then
+            local duration = math.floor(aura:GetSpellMaxDuration(SPELL_PALADIN_FLASH_OF_LIGHT_PROC) / 1000)
+            if duration <= 0 then
+                return true
+            end
+            local pct = aura:GetAmount(2)
+            local bp0 = math.floor(math.floor(heal / duration) * pct / 100)
+            local bonus = target:GetAuraEffect(SPELL_PALADIN_T9_HOLY_4P_BONUS, 0)
+            if bonus ~= nil then
+                bp0 = bp0 + math.floor(bp0 * bonus / 100)
+            end
+            target:CastCustomSpell(healed, SPELL_PALADIN_FLASH_OF_LIGHT_PROC, true, bp0)
+        end
+        return true
+    end
+    if (bit32.band(procEvent:GetSpellFamilyFlags(0), 0x200000) ~= 0 or bit32.band(procEvent:GetSpellFamilyFlags(1), 0x10000) ~= 0) and bit32.band(procEvent:GetHitMask(), PROC_HIT_CRITICAL) == 0 then
+        return true
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_INFUSION_OF_LIGHT_R1, 6, infusionOfLightProc)
+RegisterAuraEvent(SPELL_PALADIN_INFUSION_OF_LIGHT_R2, 6, infusionOfLightProc)
+
+local SPELL_PALADIN_SPIRITUAL_ATTUNEMENT_R1 = 31785 -- spell_paladin.cpp:2268 (class spell_pal_spiritual_attunement)
+local SPELL_PALADIN_SPIRITUAL_ATTUNEMENT_MANA = 31786 -- spell_paladin.cpp:124
+
+-- C++ spell_pal_spiritual_attunement_AuraScript::CheckProc +
+-- HandleProc (spell_paladin.cpp:2289-2303): OnEffectProc EFFECT_0
+-- DUMMY. CheckProc: no proc when the healer is the healed unit
+-- (procEvent:GetProcTarget() == GetActionTarget() — on the taken
+-- side the proc target is the healer and the action target the
+-- healed holder, procs.go procSpellHealTakenAuraTriggers) or when
+-- there is no effective heal; the check is folded into the handler
+-- (no separate ev6 check hook — the blessing-of-sanctuary
+-- precedent: gate-fail returns true, PreventDefaultAction, without
+-- casting; the ev6 charge-consume delta in the file header applies).
+-- HandleProc: PreventDefaultAction; the healed unit casts the mana
+-- spell (31786) on itself, triggered (aurEff args), BP0 =
+-- pct(effective heal, aurEff amount). Rank 1 only — rank 2's id is
+-- nowhere in the C++ tree (holy-shock precedent, never guessed).
+-- DORMANT until Spell.dbc ships the 31785 proc entry.
+local function spiritualAttunementProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil then
+        return true
+    end
+    local healer = procEvent:GetProcTarget()
+    local healed = procEvent:GetActionTarget()
+    if healer ~= nil and healed ~= nil and healer:GetGUIDLow() == healed:GetGUIDLow() and healer:GetObjectType() == healed:GetObjectType() then
+        return true
+    end
+    local effectiveHeal = procEvent:GetEffectiveHeal()
+    if effectiveHeal == nil or effectiveHeal == 0 then
+        return true
+    end
+    if healed == nil then
+        return true
+    end
+    local amount = math.floor(effectiveHeal * aura:GetAmount() / 100)
+    healed:CastCustomSpell(healed, SPELL_PALADIN_SPIRITUAL_ATTUNEMENT_MANA, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_SPIRITUAL_ATTUNEMENT_R1, 6, spiritualAttunementProc)
+
+local SPELL_PALADIN_SHEATH_OF_LIGHT_R1 = 53501 -- spell_paladin.cpp:2316 (class spell_pal_sheath_of_light)
+local SPELL_PALADIN_SHEATH_OF_LIGHT_R2 = 53502 -- bot_paladin_ai.cpp:107 (rank 2)
+local SPELL_PALADIN_SHEATH_OF_LIGHT_R3 = 53503 -- bot_paladin_ai.cpp:108 (rank 3)
+local SPELL_PALADIN_SHEATH_OF_LIGHT_HEAL = 54203 -- spell_paladin.cpp:109
+
+-- C++ spell_pal_sheath_of_light_AuraScript::HandleProc
+-- (spell_paladin.cpp:2338-2356): OnEffectProc EFFECT_1 DUMMY.
+-- PreventDefaultAction; no heal -> nothing. The proc actor (the
+-- healer) casts the sheath HoT (54203) on the proc target (the
+-- healed unit on the done side), triggered (aurEff args), BP0 =
+-- pct(effective heal, EFFECT_1 amount) / the HoT's max ticks
+-- (aura:GetSpellMaxTicks). DORMANT until Spell.dbc ships the
+-- 53501/53502/53503 proc entries.
+local function sheathOfLightProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 1 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetHeal() == 0 then
+        return true
+    end
+    if aura == nil or actor == nil then
+        return true
+    end
+    local healed = procEvent:GetProcTarget()
+    if healed == nil then
+        return true
+    end
+    local maxTicks = aura:GetSpellMaxTicks(SPELL_PALADIN_SHEATH_OF_LIGHT_HEAL)
+    if maxTicks <= 0 then
+        return true
+    end
+    local amount = math.floor(math.floor(procEvent:GetEffectiveHeal() * aura:GetAmount(1) / 100) / maxTicks)
+    actor:CastCustomSpell(healed, SPELL_PALADIN_SHEATH_OF_LIGHT_HEAL, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_SHEATH_OF_LIGHT_R1, 6, sheathOfLightProc)
+RegisterAuraEvent(SPELL_PALADIN_SHEATH_OF_LIGHT_R2, 6, sheathOfLightProc)
+RegisterAuraEvent(SPELL_PALADIN_SHEATH_OF_LIGHT_R3, 6, sheathOfLightProc)
+
+local SPELL_PALADIN_T8_2P_BONUS = 64890 -- spell_paladin.cpp:2432 (class spell_pal_t8_2p_bonus)
+local SPELL_PALADIN_HOLY_MENDING = 64891 -- spell_paladin.cpp:130
+
+-- C++ spell_pal_t8_2p_bonus_AuraScript::HandleProc
+-- (spell_paladin.cpp:2446-2468): OnEffectProc EFFECT_0 DUMMY.
+-- PreventDefaultAction; no heal -> nothing. The proc actor (the
+-- healer) casts Holy Mending (64891) on the proc target (the healed
+-- unit on the done side), triggered (aurEff args), BP0 = pct(raw
+-- heal — GetHeal, not the effective heal the sheath leg uses —
+-- aurEff amount) / the mending HoT's max ticks
+-- (aura:GetSpellMaxTicks). DORMANT until Spell.dbc ships the 64890
+-- proc entry.
+local function t8TwoPieceBonusProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetHeal() == 0 then
+        return true
+    end
+    if aura == nil or actor == nil then
+        return true
+    end
+    local healed = procEvent:GetProcTarget()
+    if healed == nil then
+        return true
+    end
+    local maxTicks = aura:GetSpellMaxTicks(SPELL_PALADIN_HOLY_MENDING)
+    if maxTicks <= 0 then
+        return true
+    end
+    local amount = math.floor(math.floor(procEvent:GetHeal() * aura:GetAmount() / 100) / maxTicks)
+    actor:CastCustomSpell(healed, SPELL_PALADIN_HOLY_MENDING, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_T8_2P_BONUS, 6, t8TwoPieceBonusProc)
