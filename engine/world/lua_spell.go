@@ -360,15 +360,85 @@ func (p *spellEffectPreventState) defaultPrevented(effectIndex int) bool {
 	return p.prevented[effectIndex]
 }
 
+// spellLaunchDamageState is the per-cast record of SpellScript
+// OnEffectLaunchTarget SetEffectValue writes (SpellScript.cpp:677-686:
+// SetEffectValue writes m_spell->damage, the per-effect value
+// HandleEffects computes as damage = CalculateDamage(i),
+// Spell.cpp:5165). The fire loop sets currentEffect/currentTarget
+// before each trigger and clears active after it; GetEffectValue
+// reads the override for (index, currentTarget) when one exists,
+// else the DBC CalcValue, and SetEffectValue writes the override for
+// the current (effect, target) — a no-op outside a launch-target fire,
+// matching the C++ IsInEffectHook gate. The damage arms consult it per
+// hit target when they compute the effect's base contribution.
+// Keyed per target because C++ fires the hook per target with
+// m_damage reset per target (Spell.cpp:7753); a handler that writes
+// the same value for every target (the incinerating-blast shape) lands
+// the same override on each.
+type spellLaunchDamageState struct {
+	values        map[int]map[uint64]int32
+	currentEffect int
+	currentTarget uint64
+	active        bool
+}
+
+func (l *spellLaunchDamageState) valueFor(effectIndex int, targetGUID uint64) (int32, bool) {
+	if l == nil || l.values == nil {
+		return 0, false
+	}
+	byTarget, ok := l.values[effectIndex]
+	if !ok {
+		return 0, false
+	}
+	value, ok := byTarget[targetGUID]
+	return value, ok
+}
+
+func (l *spellLaunchDamageState) setValue(value int32) {
+	if l == nil || !l.active {
+		return
+	}
+	if l.values == nil {
+		l.values = map[int]map[uint64]int32{}
+	}
+	byTarget := l.values[l.currentEffect]
+	if byTarget == nil {
+		byTarget = map[uint64]int32{}
+		l.values[l.currentEffect] = byTarget
+	}
+	byTarget[l.currentTarget] = value
+}
+
+// overridesForTarget returns the per-effect SetEffectValue rewrites for
+// one hit target, or nil when the launch-target handlers wrote none
+// for it — the damage arms' per-target lookup.
+func (l *spellLaunchDamageState) overridesForTarget(targetGUID uint64) map[int]int32 {
+	if l == nil || len(l.values) == 0 {
+		return nil
+	}
+	overrides := make(map[int]int32, len(l.values))
+	for effectIndex, byTarget := range l.values {
+		if value, ok := byTarget[targetGUID]; ok {
+			overrides[effectIndex] = value
+		}
+	}
+	if len(overrides) == 0 {
+		return nil
+	}
+	return overrides
+}
+
 // creatureSpellObjectOpts carries the optional per-cast state a
 // creature Spell object closes over. hitDamage is the shared damage
 // record (nil outside hit hooks); prevent is the shared veto record
-// (nil where no hook fire can precede a default arm); dest/hasDest is
-// the cast's resolved destination (SpellScript::GetExplTargetDest reads
+// (nil where no hook fire can precede a default arm); launch is the
+// shared launch-target rewrite record (nil outside the ev10 fire);
+// dest/hasDest is the cast's resolved destination (SpellScript::GetExplTargetDest reads
 // m_targets dst — the cast-level dest, not a per-effect snapshot).
 type creatureSpellObjectOpts struct {
 	hitDamage *spellHitDamageState
 	prevent   *spellEffectPreventState
+	launch    *spellLaunchDamageState
 	dest      [3]float32
 	hasDest   bool
 }
@@ -390,11 +460,13 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 	}
 	var hit *spellHitDamageState
 	var prevent *spellEffectPreventState
+	var launch *spellLaunchDamageState
 	dest := [3]float32{}
 	hasDest := false
 	if len(opts) > 0 {
 		hit = opts[0].hitDamage
 		prevent = opts[0].prevent
+		launch = opts[0].launch
 		dest = opts[0].dest
 		hasDest = opts[0].hasDest
 	}
@@ -435,12 +507,36 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 		if index >= uint32(len(spell.Effects)) {
 			return []any{int32(0)}, nil
 		}
+		// A launch-target rewrite for this (effect, target) wins over
+		// the DBC value: the override is per target, the memo below is
+		// not, so the lookup precedes it.
+		if launch != nil {
+			if value, ok := launch.valueFor(int(index), launch.currentTarget); ok {
+				return []any{value}, nil
+			}
+		}
 		if value, ok := effectValues[int(index)]; ok {
 			return []any{value}, nil
 		}
 		value := spell.Effects[index].CalcValueForLevel(spell, m.Level)
 		effectValues[int(index)] = value
 		return []any{value}, nil
+	}
+	// SetEffectValue(value) is SpellScript::SetEffectValue
+	// (SpellScript.cpp:677-686): writes m_spell->damage for the
+	// effect/target the launch-target fire is currently on. A no-op
+	// outside that fire (the launch state is inactive, matching the
+	// C++ IsInEffectHook gate); the player-path builder carries no
+	// launch state, so it has no twin there.
+	methods["SetEffectValue"] = func(_ context.Context, args []any) ([]any, error) {
+		value, err := luaInt32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if launch != nil {
+			launch.setValue(value)
+		}
+		return nil, nil
 	}
 	// GetTriggerSpell([effectIndex]) is SpellInfo::Effects[eff].
 	// TriggerSpell (SpellInfo.h, the DBC trigger of an effect): the
@@ -734,6 +830,36 @@ func (s *Server) fireSpellEffectHitTarget(ctx context.Context, spellID uint32, s
 		return
 	}
 	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnEffectHitTarget, scripting.SpellEventOnEffectHitTarget, spellObj, hitTarget, effectIndex)
+}
+
+// fireSpellAfterCast dispatches the RegisterSpellEvent AfterCast hook
+// for the spell (SpellEventAfterCast, args (event, spell)).
+// Notification-only like fireSpellCast: C++ AfterCast handlers run
+// after the immediate/launch legs and cannot veto the cast.
+func (s *Server) fireSpellAfterCast(ctx context.Context, spellID uint32, spellObj *scripting.Object) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
+		return
+	}
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventAfterCast, scripting.SpellEventAfterCast, spellObj)
+}
+
+// fireSpellEffectLaunchTarget dispatches the RegisterSpellEvent
+// OnEffectLaunchTarget hook for one (effect, hit target) pair
+// (SpellEventOnEffectLaunchTarget, args (event, spell, hitTarget,
+// effectIndex)). The launch record rides the call: currentEffect /
+// currentTarget / active are set for the synchronous trigger so the
+// spell object's GetEffectValue / SetEffectValue read and write the
+// right slot, then active clears — a handler's SetEffectValue lands
+// in the per-cast rewrite record the damage arms consult below.
+func (s *Server) fireSpellEffectLaunchTarget(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any, effectIndex int, targetGUID uint64, launch *spellLaunchDamageState) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil || launch == nil {
+		return
+	}
+	launch.currentEffect = effectIndex
+	launch.currentTarget = targetGUID
+	launch.active = true
+	defer func() { launch.active = false }()
+	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnEffectLaunchTarget, scripting.SpellEventOnEffectLaunchTarget, spellObj, hitTarget, effectIndex)
 }
 
 // fireSpellBeforeHit dispatches the RegisterSpellEvent BeforeHit hook

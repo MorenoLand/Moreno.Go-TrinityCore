@@ -3358,6 +3358,45 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// gated, so the pre-effect hooks read the 0 seed and AfterHit
 	// reads the final value (Spell.cpp:2377/2547).
 	hitDamage := &spellHitDamageState{damageByTarget: map[uint64]int32{}, seedByTarget: map[uint64]int32{}}
+	// spellLaunchDamageState for this cast: the OnEffectLaunchTarget
+	// handlers' SetEffectValue rewrites, consulted per hit target by
+	// the damage arms below.
+	launch := &spellLaunchDamageState{}
+	// SpellScript OnEffectLaunchTarget (Spell.cpp:7753,
+	// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_LAUNCH_TARGET
+	// mode from Spell::HandleLaunchPhase, called per (effect, unit
+	// target) from the launch phase) fires once per (effect, live hit
+	// target) in effect-major order, before that effect's default
+	// handler — C++ runs the launch phase before the hit phase, so
+	// this loop sits ahead of the OnEffectHit loop below and the
+	// OnEffectHitTarget loop after it; Go's grouped effect arms run
+	// out of C++ phase order, so like the ev5 loop this keeps the
+	// per-effect hook-before-default order exact and only
+	// approximates the cross-effect order. Missed, immune and evaded
+	// targets never fire; a landed reflect fires on the caster (the
+	// return trip's _spellHitTarget). A handler's SetEffectValue lands
+	// in the per-cast launch record the damage arms consult.
+	if spellKnown {
+		creatureSpellObj := s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{launch: launch, prevent: prevent, dest: [3]float32{destX, destY, destZ}, hasDest: hasDest})
+		for i := range spellInfo.Effects {
+			if spellInfo.Effects[i].Effect == 0 {
+				continue
+			}
+			for _, guid := range bossConeEffectTargetsFiltered(i, spellInfo.Effects[i], hitTargets, bossConePart) {
+				if guid == 0 || evadedTargets[guid] || immuneTargets[guid] || missTargets[guid] != protocol.SpellMissNone {
+					continue
+				}
+				if status, isReflected := reflectedTargets[guid]; isReflected {
+					if status != protocol.SpellMissNone {
+						continue
+					}
+					s.fireSpellEffectLaunchTarget(ctx, spellID, creatureSpellObj, s.luaMotionCreature(m), i, m.GUID, launch)
+					continue
+				}
+				s.fireSpellEffectLaunchTarget(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid), i, guid, launch)
+			}
+		}
+	}
 	// SpellScript OnEffectHit (Spell.cpp:3722-3730, the HIT-mode
 	// HandleEffects loop in Spell::_handle_immediate_phase, which runs
 	// after HandleThreatSpells and before DoProcessTargetContainer)
@@ -3800,8 +3839,8 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// the linked tail, matching the other effect-grouped arms above.
 	// Gated on spellKnown like the tail.
 	if spellKnown {
-		leechDealt, playerHitDamage := s.creatureEffectSpellDamage(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
-		creatureLeech, creatureHitDamage := s.creatureEffectSpellDamageCreature(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		leechDealt, playerHitDamage := s.creatureEffectSpellDamage(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets, launch)
+		creatureLeech, creatureHitDamage := s.creatureEffectSpellDamageCreature(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeDamageEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets, launch)
 		leechDealt += creatureLeech
 		for guid, dmg := range playerHitDamage {
 			hitDamage.damageByTarget[guid] = dmg
@@ -4257,6 +4296,20 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 			}
 			s.fireSpellAfterHit(ctx, spellID, creatureSpellObj, s.luaUnitObjectForGUID(m.Map, m.InstanceID, guid))
 		}
+	}
+	// SpellScript AfterCast (Spell.cpp:3501,
+	// CallScriptAfterCastHandlers in Spell::_cast, after the
+	// immediate/launch legs and before the spell_linked tail) fires
+	// once per cast. Placed after the AfterHit loop above (the last
+	// piece of the immediate phase on this path) and before the proc
+	// tail below; the object carries the hit-damage record, so a
+	// handler's GetHitDamage reads the last target's final damage —
+	// the C++ m_damage value at this point. DELTA: the spell_linked
+	// tail above already fires ahead of AfterHit on this path, so
+	// AfterCast lands after it too — the linked tail's existing
+	// position is not moved by this bridge.
+	if spellKnown {
+		s.fireSpellAfterCast(ctx, spellID, s.luaCreatureSpellObject(m, spellID, targetGUID, creatureSpellObjectOpts{hitDamage: hitDamage}))
 	}
 	// Spell::_cast "Handle procs on cast" tail (Spell.cpp:3525-3545): the
 	// PHASE_CAST proc leg fires after the spell_linked tail for creature
@@ -9701,11 +9754,11 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 // victims actually lost, overkill excluded, god-cheat and immune hits
 // contributing nothing. A spell the inline path already covers never
 // reaches this arm, so no victim takes the damage twice.
-func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) (uint32, map[uint64]int32) {
+func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, launch *spellLaunchDamageState) (uint32, map[uint64]int32) {
 	if s == nil || m == nil {
 		return 0, nil
 	}
-	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
+	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed, nil)
 	if !found {
 		return 0, nil
 	}
@@ -9743,7 +9796,21 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		if vs.player.Health == 0 || vs.isDeadOrGhost() {
 			continue
 		}
-		damage := baseDamage
+		// A launch-target rewrite for this hit target replaces the
+		// shared base: the override is per (effect, target), so the
+		// base is recomputed for this target only (the pre-loop call
+		// above still answers the found check). The guid here is
+		// post-reflect-redirect, matching the fire loop's current
+		// target for a landed reflect.
+		targetBase, targetLeechBase := baseDamage, baseLeechDamage
+		if launch != nil {
+			if ov := launch.overridesForTarget(guid); len(ov) > 0 {
+				if d, ld, ok := creatureSpellDamage(s, spell, m.Level, m.Charmed, ov); ok {
+					targetBase, targetLeechBase = d, ld
+				}
+			}
+		}
+		damage := targetBase
 		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(maxUint32(m.Level, 1)), m.X, m.Y, vs.player.X, vs.player.Y, vs.player.Health, vs.player.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false, casterAP); ok {
 			damage = rewritten
 		}
@@ -9875,7 +9942,7 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 		if !damageImmune {
 			godNegated := vs.godCheatActive()
 			if !godNegated {
-				leechDealt = leechHealBasis(damage, baseLeechDamage, baseDamage, vs.player.Health)
+				leechDealt = leechHealBasis(damage, targetLeechBase, targetBase, vs.player.Health)
 			}
 			if !godNegated && damage > 0 {
 				damage = s.splitDamageToCaster(ctx, guid, true, creatureAuraKey{}, m.GUID, damage, uint32(schoolMask))
@@ -9964,11 +10031,11 @@ func (s *Server) creatureEffectSpellDamage(ctx context.Context, m *creatureMotio
 // follows the player arm's convention (post-absorb, pre-split,
 // overkill excluded) rather than the inline path's post-split basis,
 // so the shared leech caller sees one convention.
-func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) (uint32, map[uint64]int32) {
+func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, launch *spellLaunchDamageState) (uint32, map[uint64]int32) {
 	if s == nil || m == nil {
 		return 0, nil
 	}
-	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed)
+	baseDamage, baseLeechDamage, found := creatureSpellDamage(s, spell, m.Level, m.Charmed, nil)
 	if !found {
 		return 0, nil
 	}
@@ -10010,7 +10077,18 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		victimHealth := victim.Health
 		victimLevel := uint8(maxUint32(victim.Level, 1))
 		attackerLevel := uint8(maxUint32(m.Level, 1))
-		damage := baseDamage
+		// Launch-target rewrite for this hit target, as in
+		// creatureEffectSpellDamage above (reflected targets never
+		// reach here, so no redirect applies).
+		targetBase, targetLeechBase := baseDamage, baseLeechDamage
+		if launch != nil {
+			if ov := launch.overridesForTarget(guid); len(ov) > 0 {
+				if d, ld, ok := creatureSpellDamage(s, spell, m.Level, m.Charmed, ov); ok {
+					targetBase, targetLeechBase = d, ld
+				}
+			}
+		}
+		damage := targetBase
 		if rewritten, ok := s.spellScriptOnHitDamage(spell, uint32(attackerLevel), m.X, m.Y, victim.X, victim.Y, victimHealth, victim.MaxHealth, m.MaxHealth, damage, m.GUID, guid, m.Map, m.InstanceID, false, casterAP); ok {
 			damage = rewritten
 		}
@@ -10137,7 +10215,7 @@ func (s *Server) creatureEffectSpellDamageCreature(ctx context.Context, m *creat
 		}
 		leechDealt := uint32(0)
 		if !damageImmune {
-			leechDealt = leechHealBasis(damage, baseLeechDamage, baseDamage, victimHealth)
+			leechDealt = leechHealBasis(damage, targetLeechBase, targetBase, victimHealth)
 		}
 		if damage > 0 {
 			damage = s.splitDamageToCaster(ctx, guid, false, victimKey, m.GUID, damage, uint32(schoolMask))

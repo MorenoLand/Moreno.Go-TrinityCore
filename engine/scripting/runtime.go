@@ -679,6 +679,26 @@ const (
 // m_casttime only after the first CheckCast (Spell.cpp:3130-3136) — and
 // m_CastItem is nil on this path, so GetCastItem reads nil. Triggered
 // casts never reach handleCastSpell, matching C++
+// AfterCast mirrors the SpellScript hook of the same name
+// (SpellScript.h:390, fired from Spell::_cast, Spell.cpp:3501, after
+// the immediate/launch legs and before the spell_linked tail), fired
+// once per cast with args (event, spell). Notification-only like
+// OnCast: the handler cannot veto anything, it runs after the
+// effects — the gunship incinerating-blast energy drain
+// (spell_igb_incinerating_blast::RemoveEnergy, SetPower(ENERGY, 0))
+// rides it. Creature path only for now: the player path's
+// finishSpellCast / triggered funnel run no AfterCast fire yet.
+// OnEffectLaunchTarget mirrors the SpellScript hook of the same name
+// (SpellScript.h:397, fired from Spell::HandleLaunchPhase,
+// Spell.cpp:7753, per (effect, unit target) with m_damage reset to 0
+// first), fired once per (effect, live hit target) in effect-major
+// order with args (event, spell, hitTarget, effectIndex), ahead of
+// the default arms like OnEffectHitTarget. It IS a modifiable hook
+// (IsInEffectHook covers LAUNCH_TARGET): a handler's SetEffectValue
+// rewrites m_spell->damage for that (effect, target), and the
+// creature damage arms apply the rewrite when they compute that
+// target's base; GetEffectValue reads the rewritten value.
+// Creature path only for now, same as AfterCast.
 // TRIGGERED_IGNORE_CAST_CHECK, and creature casts run no CheckCast
 // gauntlet in Go, so neither path fires it yet.
 const (
@@ -690,6 +710,8 @@ const (
 	SpellEventBeforeHit                = 6
 	SpellEventOnObjectAreaTargetSelect = 7
 	SpellEventOnCheckCast              = 8
+	SpellEventAfterCast                = 9
+	SpellEventOnEffectLaunchTarget     = 10
 )
 
 type Hook struct {

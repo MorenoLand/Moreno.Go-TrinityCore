@@ -2895,6 +2895,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldResistances: armor})
 		return nil, nil
 	}
+	// GetPower is Unit::GetPower (UnitMethods.h) over the live motion:
+	// the Powers array the SetPower bridge writes, read under motionMu.
+	// Validated 0-4 like SetPower (POWER_MANA..POWER_HAPPINESS); the
+	// gunship-cannon energy read (POWER_ENERGY=3) rides this.
+	methods["GetPower"] = func(_ context.Context, args []any) ([]any, error) {
+		powerType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if powerType > 4 {
+			return nil, fmt.Errorf("GetPower requires a power type 0-4, got %d", powerType)
+		}
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.Powers[powerType]}, nil
+	}
 	// SetPower is Unit::SetPower (Unit.cpp): writes UNIT_FIELD_POWER1+type,
 	// clamped to the type's max (C++ clamps via std::min against
 	// GetMaxPower), then broadcasts the update field. powerType is validated

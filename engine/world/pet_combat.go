@@ -5717,7 +5717,7 @@ func (s *session) executePetSpellWithOptions(ctx context.Context, motion *creatu
 			}
 		}
 	}
-	damage, _, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true)
+	damage, _, hasDamage := creatureSpellDamage(s.server, spell, motion.Level, true, nil)
 	// Spell::SelectImplicitAreaTargets effect-mask rule (Spell.cpp:866-897):
 	// an area-selected target takes only the effects that selected it, so
 	// the damage leg fans out to the area hits only when a damage effect

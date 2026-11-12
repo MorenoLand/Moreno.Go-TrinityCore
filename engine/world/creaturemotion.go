@@ -7998,7 +7998,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					if spellInfo.SchoolMask != 0 {
 						schoolMask = uint8(spellInfo.SchoolMask)
 					}
-					damage, leechDamage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false)
+					damage, leechDamage, hasDBCSpell = creatureSpellDamage(s, spellInfo, motion.Level, false, nil)
 				}
 			}
 			if !hasDBCSpell {
@@ -10501,10 +10501,10 @@ func (s *Server) scaledEffectValue(spell wotlk.Spell, effect wotlk.SpellEffect, 
 	return value
 }
 
-func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool) (uint32, uint32, bool) {
+func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, controlledByPlayer bool, overrides map[int]int32) (uint32, uint32, bool) {
 	var damage, leechDamage uint32
 	found := false
-	for _, effect := range spell.Effects {
+	for i, effect := range spell.Effects {
 		switch effect.Effect {
 		case spellEffectSchoolDamage, spellEffectWeaponDamageNoschool, spellEffectWeaponPercentDamage, spellEffectWeaponDamage, spellEffectNormalizedWeaponDmg, spellEffectHealthLeech:
 			// C++ owners: EffectSchoolDMG (SpellEffectsHandlers 2),
@@ -10530,6 +10530,15 @@ func creatureSpellDamage(s *Server, spell wotlk.Spell, casterLevel uint32, contr
 			// by this share, exact (share 1) for leech-only spells.
 			found = true
 			value := effect.CalcValueForLevel(spell, casterLevel)
+			// A launch-target rewrite replaces the effect's CalcValue
+			// for this target (SetEffectValue wrote the full effect
+			// value, DBC base included), then takes the same NPC
+			// scaling the DBC value would have taken.
+			if overrides != nil {
+				if rewritten, ok := overrides[i]; ok {
+					value = rewritten
+				}
+			}
 			if value > 0 {
 				scale := float64(1)
 				if s != nil {

@@ -449,3 +449,94 @@ end
 
 RegisterAuraEvent(SPELL_ON_SKYBREAKER_DECK, 2, deckAuraApply)
 RegisterAuraEvent(SPELL_ON_ORGRIMS_HAMMER_DECK, 2, deckAuraApply)
+
+-- PORTED (this tick, RegisterSpellEvent): the gunship spell scripts.
+--   spell_igb_incinerating_blast (boss_icecrown_gunship_battle.cpp:1870-1902):
+--   69401 + 70174 bind it in TDB spell_script_names. OnCast (ev1)
+--   stores the caster's energy minus 10; OnEffectLaunchTarget (ev10,
+--   EFFECT_1) adds energyLeft^2 * 8 to the effect value;
+--   AfterCast (ev9) drains the caster's energy to 0. The three hooks
+--   are separate RegisterSpellEvent fires in one synchronous cast, so
+--   the per-cast energy rides a per-caster-GUID table (the
+--   moroes-frenzy pattern), cleared by AfterCast. The C++ uint32
+--   underflow below 10 energy is clamped to 0 — the cannon never casts
+--   this below 10 energy in practice.
+--   spell_igb_cannon_blast (:1844-1866): 69399 + 70172 bind it in TDB
+--   spell_script_names. AfterHit (ev3) casts OVERHEAT 69487 on the
+--   caster (triggered) when its energy reached 100. The SAY_OVERHEAT
+--   chat leg STAYS OUT: no creature-text-by-id bridge exists on the
+--   Lua surface (the vehicle GetPassenger(0) bridge exists, but the
+--   text id has no Lua twin). AfterHit fires per hit target in C++
+--   too, so a multi-target blast re-checks per target exactly like
+--   the C++ hook.
+-- DORMANT until Spell.dbc ships the 69399/69401/70172/70174 rows — and
+-- the gunship use itself waits on the vehicle-caster pipeline: these
+-- casts are player-path vehicle casts (spells.go vehicle-caster arm),
+-- where ev9/ev10 do not fire yet, so the ports fire today only for
+-- creature casts of these spells and activate for the gunship cannons
+-- when that pipeline routes the cast through the creature path.
+local SPELL_IGB_INCINERATING_BLAST_1 = 69401 -- TDB spell_script_names -> spell_igb_incinerating_blast
+local SPELL_IGB_INCINERATING_BLAST_2 = 70174 -- TDB spell_script_names -> spell_igb_incinerating_blast
+local SPELL_IGB_CANNON_BLAST_1 = 69399 -- TDB spell_script_names -> spell_igb_cannon_blast
+local SPELL_IGB_CANNON_BLAST_2 = 70172 -- TDB spell_script_names -> spell_igb_cannon_blast
+local SPELL_IGB_OVERHEAT = 69487 -- boss_icecrown_gunship_battle.cpp:191
+local POWER_ENERGY = 3 -- SharedDefines.h POWER_ENERGY
+
+local incineratingEnergy = {}
+
+local function incineratingBlastStore(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local energy = caster:GetPower(POWER_ENERGY)
+    if energy == nil then
+        return
+    end
+    incineratingEnergy[caster:GetGUIDLow()] = math.max(energy - 10, 0)
+end
+
+local function incineratingBlastRemove(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    incineratingEnergy[caster:GetGUIDLow()] = nil
+    caster:SetPower(POWER_ENERGY, 0)
+end
+
+local function incineratingBlastDamage(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local energyLeft = incineratingEnergy[caster:GetGUIDLow()]
+    if energyLeft == nil then
+        return
+    end
+    spell:SetEffectValue(spell:GetEffectValue(1) + energyLeft * energyLeft * 8)
+end
+
+local function cannonBlastCheck(event, spell, hitTarget)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local energy = caster:GetPower(POWER_ENERGY)
+    if energy == nil or energy < 100 then
+        return
+    end
+    caster:CastSpell(caster, SPELL_IGB_OVERHEAT, true)
+end
+
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 1, incineratingBlastStore)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 9, incineratingBlastRemove)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 10, incineratingBlastDamage)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 1, incineratingBlastStore)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 9, incineratingBlastRemove)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 10, incineratingBlastDamage)
+RegisterSpellEvent(SPELL_IGB_CANNON_BLAST_1, 3, cannonBlastCheck)
+RegisterSpellEvent(SPELL_IGB_CANNON_BLAST_2, 3, cannonBlastCheck)
