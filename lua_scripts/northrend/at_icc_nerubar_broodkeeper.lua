@@ -13,9 +13,10 @@
 -- group. OnlyOnce is per (instance, triggerId)
 -- (ScriptMgr.cpp:2531-2542: IsAreaTriggerDone / MarkAreaTriggerDone),
 -- modeled as a latch on the shared instanceData table.
--- Deviations: the GM gate is skipped — no IsGameMaster on the player
--- surface (the malygos/tyrannus documented deviation); the DB may bind
--- a second trigger id to this script name for the group-1 fan-out,
+-- Deviations: the GM gate rides player:IsGM() (lua_player.go:1411,
+-- security > 0 = Player::IsGameMaster twin); the early return runs
+-- before the latch write, matching C++ return false (the trigger is
+-- not marked done for a GM). The DB may bind a second trigger id to
 -- but no second id appears in the C++ file, so only 5611 dispatches
 -- (the gelihast precedent — never guess an id).
 
@@ -36,6 +37,9 @@ RegisterServerEvent(24, function(event, player, triggerId)
     end
     if data.broodkeeperTriggerDone == nil then
         data.broodkeeperTriggerDone = {}
+    end
+    if player:IsGM() then
+        return
     end
     if data.broodkeeperTriggerDone[triggerId] then
         return

@@ -13,9 +13,9 @@
 -- rows are never guessed).
 --
 -- PORTED ARMS (C++ line refs):
--- at_hor_shadow_throne (trigger 5605, C++ :2117-2134) — GM gate skipped
---   (no IsGameMaster on the player surface, the malygos/tyrannus
---   documented deviation); GetBossState(DATA_THE_LICH_KING_ESCAPE 2)
+-- at_hor_shadow_throne (trigger 5605, C++ :2117-2134) — GM gate
+--   ported via player:IsGM() (lua_player.go:1411, security > 0 =
+--   Player::IsGameMaster twin); GetBossState(DATA_THE_LICH_KING_ESCAPE 2)
 --   == NOT_STARTED -> SetBossState(2, IN_PROGRESS). The read/write go
 --   through the first bound creature in the instance (the instance
 --   file's worldStateCaller idiom): creature:GetBossState /
@@ -27,7 +27,7 @@
 --   and the leg is a no-op (practically unreachable: the intro
 --   creature materializes at instance start).
 -- at_hor_uther_quel_delar_start (trigger 5660, C++ :2734-2752) — GM
---   gate skipped (same deviation); GetData(DATA_QUEL_DELAR_EVENT 14)
+--   gate ported via player:IsGM() (same twin); GetData(DATA_QUEL_DELAR_EVENT 14)
 --   == IN_PROGRESS reads the instance file's quelDelarState store
 --   (event-8 handler, instance_halls_of_reflection.lua); the Uther
 --   fetch reads the bound data.uther (instance OnCreatureCreate bind);
@@ -83,6 +83,9 @@ end
 
 -- C++ :2117-2134 at_hor_shadow_throne.
 local function onShadowThrone(player)
+    if player:IsGM() then
+        return
+    end
     local mapObj = player:GetMap()
     if not mapObj then
         return
@@ -103,6 +106,9 @@ end
 
 -- C++ :2734-2752 at_hor_uther_quel_delar_start.
 local function onUtherQuelDelarStart(player)
+    if player:IsGM() then
+        return
+    end
     local mapObj = player:GetMap()
     if not mapObj then
         return
