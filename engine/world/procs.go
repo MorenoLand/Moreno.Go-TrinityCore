@@ -3958,7 +3958,7 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 			// of the hot path when no handler is registered.
 			if s.server.hasAuraProcHook(aura.SpellID) {
 				auraObj := (&luaAuraRef{server: s.server, spellID: aura.SpellID, player: s, mapID: s.player.Map, instanceID: s.player.InstanceID}).luaAuraObject()
-				if s.server.fireAuraProc(ctx, aura, auraObj, s.luaPlayer(), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, ev.actorGUID), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, triggerTargetGUID), ev.damage) {
+				if s.server.fireAuraProc(ctx, aura, auraObj, s.luaPlayer(), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, ev.actorGUID), s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, triggerTargetGUID), ev.damage, s.server.procEventObject(ev, s.playerGUID, triggerTargetGUID, s.player.Map, s.player.InstanceID)) {
 					continue
 				}
 			}

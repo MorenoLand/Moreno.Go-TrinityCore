@@ -10931,7 +10931,7 @@ func (s *Server) fireCreatureAuraProcLoop(ctx context.Context, m *creatureMotion
 			// the aura ref carries the creature key.
 			if s.hasAuraProcHook(aura.SpellID) {
 				auraObj := (&luaAuraRef{server: s, spellID: aura.SpellID, creatureKey: key, mapID: m.Map, instanceID: m.InstanceID}).luaAuraObject()
-				if s.fireAuraProc(ctx, aura, auraObj, s.luaMotionCreature(m), s.luaUnitObjectForGUID(m.Map, m.InstanceID, ev.actorGUID), s.luaUnitObjectForGUID(m.Map, m.InstanceID, triggerTargetGUID), ev.damage) {
+				if s.fireAuraProc(ctx, aura, auraObj, s.luaMotionCreature(m), s.luaUnitObjectForGUID(m.Map, m.InstanceID, ev.actorGUID), s.luaUnitObjectForGUID(m.Map, m.InstanceID, triggerTargetGUID), ev.damage, s.procEventObject(ev, m.GUID, triggerTargetGUID, m.Map, m.InstanceID)) {
 					continue
 				}
 			}

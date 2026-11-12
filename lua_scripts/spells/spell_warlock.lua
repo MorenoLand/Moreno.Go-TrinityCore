@@ -434,18 +434,20 @@ local SPELL_WARLOCK_DECIMATION_BUFF = 63167 -- bot_warlock_ai.cpp:109
 -- DoCheckProc only. The proc passes only when the action target
 -- carries AURA_STATE_HEALTHLESS_35_PERCENT, which Unit.cpp:468
 -- maintains as HealthBelowPct(35) (Unit.h:872: health <
--- CountPctFromMaxHealth(35), floor(maxHealth * 35 / 100)). The
--- ev6 veto is inverted vs C++: return true (PreventDefaultAction,
--- lua_aura.go fireAuraProc) only when the gate FAILS, so a passing
--- proc falls through and the DBC default leg applies the Decimation
--- buff 63167. Registered for rank 2 (63158) only; rank 1 (63156) is
--- unestablished (zero C++ tree hits). No HasAuraState bridge, so
--- the gate is the integer-exact HealthBelowPct proxy (the
--- seed-of-corruption-dummy idiom above). The GetSpellInfo()-nil
--- leg has no ev6 twin (event spell is not forwarded). DORMANT
+-- CountPctFromMaxHealth(35), floor(maxHealth * 35 / 100)) — and only
+-- when the event carries a spell (GetSpellInfo() nil returns false,
+-- so melee events never proc). The ev6 veto is inverted vs C++:
+-- return true (PreventDefaultAction, lua_aura.go fireAuraProc) when
+-- the gate FAILS, so a passing proc falls through and the DBC default
+-- leg applies the Decimation buff 63167. Registered for rank 2 (63158)
+-- only; rank 1 (63156) is unestablished (zero C++ tree hits). No
+-- HasAuraState bridge, so the gate is the integer-exact HealthBelowPct
+-- proxy (the seed-of-corruption-dummy idiom above). The nil-spell leg
+-- rides the forwarded proc event (procEventObject, lua_aura.go):
+-- GetSpellId() == 0 vetoes. DORMANT
 -- until Spell.dbc ships the 63158 proc entry.
-local function decimationProc(event, aura, target, actor, procTarget, damage)
-    if procTarget == nil then
+local function decimationProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procTarget == nil or procEvent == nil or procEvent:GetSpellId() == 0 then
         return true
     end
     if procTarget:GetHealth() < math.floor(procTarget:GetMaxHealth() * 35 / 100) then

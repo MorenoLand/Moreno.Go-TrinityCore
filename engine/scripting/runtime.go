@@ -491,19 +491,32 @@ const (
 // charge/cooldown consumption) and before that effect's default leg
 // (the DBC trigger-spell cast, the scriptAuraProcCast dummy arm, or the
 // putricide/vampiric special cases). Args are (event, aura, target,
-// actor, procTarget, damage): target is the aura holder (the
+// actor, procTarget, damage, procEvent): target is the aura holder (the
 // periodic-hook convention), actor is the proc actor as a unit object
 // (nil when the event carries no actor GUID), procTarget is the proc
 // target as a unit object (the triggerTargetGUID — the damage victim
 // on the done side, the attacker on the taken side), damage is the
 // proc event's damage (0 for non-damage events — the handler gates on
-// it, like the C++ damageInfo->GetDamage() early return). A handler
+// it, like the C++ damageInfo->GetDamage() early return), and
+// procEvent is the ProcEventInfo object (lua_aura.go procEventObject):
+// GetSpellId/GetSpellIconId (0 when the event carries no spell —
+// melee/kill events), GetSchoolMask (the event spell's school, or the
+// melee/damage school), GetTypeMask/GetSpellTypeMask/GetSpellPhaseMask/
+// GetHitMask (the raw proc masks), GetDamage/GetHeal/GetEffectiveHeal,
+// GetActor/GetActionTarget/GetProcTarget, IsTriggered. The C++
+// CheckProc gate (DoCheckProc) has no separate hook: a port expresses
+// it by returning true (PreventDefaultAction, skipping the default
+// leg) when the gate FAILS — the inverted veto, e.g. decimation
+// (spell_warlock.lua) and culling the herd (spell_pet_hunter.lua).
+// Absorb/resist/block/overkill and the weapon attack type are not
+// forwarded (Go proc events carry no DamageInfo breakdown or
+// WeaponAttackType). A handler
 // returning boolean true is PreventDefaultAction(): the default leg
 // for that effect is skipped, matching C++ where the script handler
-// replaces the trigger cast. Only the session-side proc loop fires it
-// today (player and pet mod-owner auras); creature auras have no proc
-// evaluation site in Go, so creature-held proc auras stay out until
-// one is built.
+// replaces the trigger cast. Both proc loops fire it: the session
+// loop (player and pet mod-owner auras) and the creature loop
+// (boss_ai.go fireCreatureAuraProcLoop, creature-held auras including
+// hunter pets).
 // OnCheckAreaTarget mirrors AuraScript::DoCheckAreaTarget
 // (AuraCheckAreaTargetFn, SpellScript.cpp:727-729, SpellAuras.cpp:2233-
 // 2248): it fires when an area aura's target map is (re)computed for a

@@ -913,21 +913,69 @@ func (s *Server) hasAuraProcHook(spellID uint32) bool {
 	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnProc)
 }
 
+// procEventObject builds the Lua proc-event object forwarded as the
+// seventh OnProc arg (ProcEventInfo, Unit.h:465-500): GetSpellId /
+// GetSpellIconId read the event spell (0 when the event carries none —
+// melee/kill events, Unit.cpp:258-288: GetSpellInfo falls back to the
+// damage/heal info, which Go never threads, so a nil event spell reads
+// 0 here); GetSchoolMask reads ev.schoolMask, which every construction
+// site fills with the event spell's school (0 falls back to 1, the
+// physical mask) or the melee/damage school, matching C++
+// GetSchoolMask; GetTypeMask / GetSpellTypeMask / GetSpellPhaseMask /
+// GetHitMask read the raw proc masks; GetDamage / GetHeal /
+// GetEffectiveHeal read the event's damage and heal amounts (the
+// DamageInfo/HealInfo twins — absorb/resist/block/overkill have no Go
+// model, proc events carry no DamageInfo breakdown); GetActor /
+// GetActionTarget / GetProcTarget read the resolved unit objects (the
+// action target via procActionTargetGUID, procs.go); IsTriggered reads
+// ev.triggered. The object is a snapshot: the unit objects resolve
+// live, like the positional args.
+func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID uint64, mapID, instanceID uint32) *scripting.Object {
+	spellID := uint32(0)
+	iconID := uint32(0)
+	if ev.eventSpell != nil {
+		spellID = ev.eventSpell.ID
+		iconID = ev.eventSpell.SpellIconID
+	}
+	actor := s.luaUnitObjectForGUID(mapID, instanceID, ev.actorGUID)
+	actionTarget := s.luaUnitObjectForGUID(mapID, instanceID, procActionTargetGUID(ev.actorGUID, holderGUID, triggerTargetGUID))
+	procTarget := s.luaUnitObjectForGUID(mapID, instanceID, triggerTargetGUID)
+	methods := map[string]scripting.ObjectMethod{
+		"GetObjectType":     luaNoArgs(func() any { return "ProcEvent" }),
+		"GetSpellId":        luaNoArgs(func() any { return spellID }),
+		"GetSpellIconId":    luaNoArgs(func() any { return iconID }),
+		"GetSchoolMask":     luaNoArgs(func() any { return ev.schoolMask }),
+		"GetTypeMask":       luaNoArgs(func() any { return ev.typeMask }),
+		"GetSpellTypeMask":  luaNoArgs(func() any { return ev.spellTypeMask }),
+		"GetSpellPhaseMask": luaNoArgs(func() any { return ev.spellPhaseMask }),
+		"GetHitMask":        luaNoArgs(func() any { return ev.hitMask }),
+		"GetDamage":         luaNoArgs(func() any { return ev.damage }),
+		"GetHeal":           luaNoArgs(func() any { return ev.heal }),
+		"GetEffectiveHeal":  luaNoArgs(func() any { return ev.effectiveHeal }),
+		"GetActor":          luaNoArgs(func() any { return actor }),
+		"GetActionTarget":   luaNoArgs(func() any { return actionTarget }),
+		"GetProcTarget":     luaNoArgs(func() any { return procTarget }),
+		"IsTriggered":       luaNoArgs(func() any { return ev.triggered }),
+	}
+	return &scripting.Object{Type: "ProcEvent", Fields: map[string]any{"SpellId": spellID}, Methods: methods}
+}
+
 // fireAuraProc dispatches the RegisterAuraEvent OnProc hook for one
 // eligible proc effect (args (event, aura, target, actor, procTarget,
-// damage); target is the aura holder, actor the proc actor, procTarget
-// the proc target, damage the proc event's damage) and reports whether
+// damage, procEvent); target is the aura holder, actor the proc actor, procTarget
+// the proc target, damage the proc event's damage, procEvent the
+// ProcEventInfo object above) and reports whether
 // any handler returned boolean true. That is the Go model of AuraScript
 // PreventDefaultAction() in an OnEffectProc handler: the caller skips
 // the effect's default leg. The hook fires after the proc gates and
 // charge/cooldown consumption, like C++ (PrepareProcToTrigger runs
 // before TriggerProcOnEvent), so a veto never refunds a spent charge.
 // Lua errors are logged by the runtime, never propagated.
-func (s *Server) fireAuraProc(ctx context.Context, aura *activeAura, auraObj *scripting.Object, target any, actor any, procTarget any, damage uint32) bool {
+func (s *Server) fireAuraProc(ctx context.Context, aura *activeAura, auraObj *scripting.Object, target any, actor any, procTarget any, damage uint32, procEvent *scripting.Object) bool {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || aura == nil || auraObj == nil {
 		return false
 	}
-	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnProc, scripting.AuraEventOnProc, auraObj, target, actor, procTarget, damage)
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, aura.SpellID, scripting.AuraEventOnProc, scripting.AuraEventOnProc, auraObj, target, actor, procTarget, damage, procEvent)
 	return luaHookVeto(results)
 }
 
