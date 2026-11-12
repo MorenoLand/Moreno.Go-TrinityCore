@@ -496,13 +496,14 @@ RegisterSpellEvent(SPELL_CHOOSE_LOC, 4, chooseLocHit)
 --   13811/13814 (Among the Champions). ev5 fires on the creature
 --   path (boss_ai.go:3402 loop inside castCreatureSpellInternalWith-
 --   BasePoints); the caster is the defeated champion creature.
---   KNOWN DELTAS: no GetCharmerOrOwnerOrSelf bridge — a creature hit
---   resolves its owner via GetOwner (lua_creature_events.go:627,
---   owner player or nil); a charmed-but-unowned hit (mind control)
---   falls through to self, since no player-by-GUID bridge exists to
---   resolve a GetCharmerGUID. KNOWN LIMIT: player:CastSpell ignores
---   the triggered flag (see header note above), same as all prior
---   player ports.
+--   GetCharmerOrOwnerOrSelf is bridged exactly: GetControllerGUIDS
+--   (charmer else owner else own GUID — lua_creature_events.go:524,
+--   lua_player.go:232) resolved via the GetPlayerByGUID global
+--   (scripting/runtime.go:1366) or, for creature targets,
+--   GetCreatureByGUID (lua_creature_events.go:4050); unresolvable
+--   GUIDs fall through to the hit unit. KNOWN LIMIT: player:CastSpell
+--   ignores the triggered flag (see header note above), same as all
+--   prior player ports.
 
 local BESTED_TRIGGER_SPELLS = {13665, 13745, 13750, 13756, 13761, 13767, 13772, 13777, 13782, 13787, 13790, 13793, 13811, 13814} -- spell_quest.cpp:2696-2697
 
@@ -514,10 +515,14 @@ local function bestedTriggerHit(event, spell, hitTarget, effectIndex)
         return
     end
     local target = hitTarget
-    if hitTarget:GetObjectType() == "Creature" then
-        local owner = hitTarget:GetOwner()
-        if owner ~= nil then
-            target = owner
+    local guid = hitTarget:GetControllerGUIDS()
+    if guid ~= 0 then
+        local resolved = GetPlayerByGUID(guid)
+        if resolved == nil and hitTarget:GetObjectType() == "Creature" then
+            resolved = hitTarget:GetCreatureByGUID(guid)
+        end
+        if resolved ~= nil then
+            target = resolved
         end
     end
     local spellId = spell:GetEffectValue(0)
