@@ -272,3 +272,70 @@ for _, spellId in ipairs(SPELL_GEN_BANDAGE) do
     RegisterSpellEvent(spellId, 8, bandageCheckCast)
     RegisterSpellEvent(spellId, 3, bandageAfterHit)
 end
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_elune_candle::HandleScript
+--   (spell_generic.cpp:1595-1645): EFFECT_0 DUMMY. The caster casts
+--   on the hit unit, triggered: a random one of the four Omen
+--   spells (urand(0, 3)) when the hit unit is Omen (entry 15467),
+--   else the normal candle spell. Binding 26374 (AC
+--   'spell_gen_elune_candle'; TDB 26091 renames it
+--   'spell_lunar_festival_elune_candle').
+local SPELL_ELUNE_CANDLE = 26374 -- spell_generic.cpp:1595
+local NPC_OMEN = 15467 -- spell_generic.cpp:1585
+local SPELL_ELUNE_CANDLE_NORMAL = 26636 -- spell_generic.cpp:1592
+local SPELL_ELUNE_CANDLE_OMEN = { 26622, 26624, 26625, 26649 } -- spell_generic.cpp:1588-1591
+
+local function eluneCandleHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local spellId = SPELL_ELUNE_CANDLE_NORMAL
+    if hitTarget:GetEntry() == NPC_OMEN then
+        spellId = SPELL_ELUNE_CANDLE_OMEN[math.random(1, 4)]
+    end
+    caster:CastSpell(hitTarget, spellId, true)
+end
+
+RegisterSpellEvent(SPELL_ELUNE_CANDLE, 5, eluneCandleHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnCheckCast = 8):
+--   spell_gen_arcane_charge::CheckRequirement
+--   (spell_generic.cpp:225-245): the cast is refused with
+--   SPELL_FAILED_DONT_REPORT unless the explicit target unit is
+--   a demon or undead (CREATURE_TYPEMASK_DEMON_OR_UNDEAD, the
+--   (1 << (type - 1)) mask of Unit::GetCreatureTypeMask); no
+--   explicit target passes. GetCreatureType reads the template
+--   type on creatures and the race/shapeshift type on players
+--   (lua_creature_events.go:4862, lua_player.go:342), so the
+--   same 3/6 comparison covers both. Binding 45072 (AC
+--   'spell_gen_arcane_charge').
+local SPELL_ARCANE_CHARGE = 45072 -- spell_generic.cpp:225
+local SPELL_FAILED_DONT_REPORT = 27 -- SharedDefines.h:1009
+local CREATURE_TYPE_DEMON = 3 -- UnitMethods.h:1109
+local CREATURE_TYPE_UNDEAD = 6 -- UnitMethods.h:1112
+local TYPEID_UNIT = 3
+local TYPEID_PLAYER = 4
+
+local function arcaneChargeCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target ~= nil then
+        local typeId = target:GetTypeId()
+        if typeId == TYPEID_UNIT or typeId == TYPEID_PLAYER then
+            local creatureType = target:GetCreatureType()
+            if creatureType ~= CREATURE_TYPE_DEMON and creatureType ~= CREATURE_TYPE_UNDEAD then
+                return SPELL_FAILED_DONT_REPORT
+            end
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_ARCANE_CHARGE, 8, arcaneChargeCheckCast)

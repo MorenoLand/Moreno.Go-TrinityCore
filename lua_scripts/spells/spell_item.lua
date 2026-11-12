@@ -509,3 +509,131 @@ local function purifyHelboarMeatHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_PURIFY_HELBOAR_MEAT, 5, purifyHelboarMeatHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_create_heart_candy::HandleScript
+--   (spell_item.cpp:2400-2419): EFFECT_0 SCRIPT_EFFECT.
+--   PreventHitDefaultEffect; the hit player gains one of the 8
+--   heart candies (urand(0, 7), 1-based here). Binding 26678 (AC
+--   'spell_item_create_heart_candy'; TDB 26091 renames it
+--   'spell_love_is_in_the_air_create_heart_candy').
+local SPELL_CREATE_HEART_CANDY = 26678 -- spell_item.cpp:2400
+local ITEM_HEART_CANDY = { 21818, 21817, 21821, 21819, 21816, 21823, 21822, 21820 } -- spell_item.cpp:2390-2397
+
+local function createHeartCandyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    spell:PreventHitDefaultEffect(effectIndex)
+    if hitTarget == nil or hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    hitTarget:AddItem(ITEM_HEART_CANDY[math.random(1, 8)], 1)
+end
+
+RegisterSpellEvent(SPELL_CREATE_HEART_CANDY, 5, createHeartCandyHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_reindeer_transformation::HandleDummy
+--   (spell_item.cpp:2734-2783): EFFECT_0 DUMMY. Only while the
+--   caster has a SPELL_AURA_MOUNTED aura: the mount aura is removed
+--   and the caster self-casts the reindeer matching the mounted
+--   speed rates (GetSpeedRate bands 4.1 / 3.8 / 1.6 flight, 2.0
+--   run), triggered. Player GetSpeed returns rate * base speed
+--   (lua_player.go:5109; playerBaseMoveSpeed MOVE_RUN and
+--   MOVE_FLIGHT are both 7.0), so rate = GetSpeed / 7.0.
+--   Binding 25860 (AC 'spell_item_reindeer_transformation'; TDB
+--   26091 renames it 'spell_winter_veil_reindeer_transformation').
+local SPELL_REINDEER_TRANSFORMATION = 25860 -- spell_item.cpp:2734
+local SPELL_FLYING_REINDEER_310 = 44827 -- spell_item.cpp:2726
+local SPELL_FLYING_REINDEER_280 = 44825 -- spell_item.cpp:2727
+local SPELL_FLYING_REINDEER_60 = 44824 -- spell_item.cpp:2728
+local SPELL_REINDEER_100 = 25859 -- spell_item.cpp:2729
+local SPELL_REINDEER_60 = 25858 -- spell_item.cpp:2730
+local SPELL_AURA_MOUNTED = 78 -- SpellAuraDefines.h:158
+local MOVE_RUN = 1 -- Unit.h:263
+local MOVE_FLIGHT = 6 -- Unit.h:270
+local BASE_MOVE_SPEED = 7.0 -- Unit.cpp:101-112 playerBaseMoveSpeed
+
+local function reindeerTransformationHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if not caster:HasAuraType(SPELL_AURA_MOUNTED) then
+        return
+    end
+    local flyspeed = caster:GetSpeed(MOVE_FLIGHT) / BASE_MOVE_SPEED
+    local speed = caster:GetSpeed(MOVE_RUN) / BASE_MOVE_SPEED
+    caster:RemoveAurasByType(SPELL_AURA_MOUNTED)
+    if flyspeed >= 4.1 then
+        caster:CastSpell(caster, SPELL_FLYING_REINDEER_310, true)
+    elseif flyspeed >= 3.8 then
+        caster:CastSpell(caster, SPELL_FLYING_REINDEER_280, true)
+    elseif flyspeed >= 1.6 then
+        caster:CastSpell(caster, SPELL_FLYING_REINDEER_60, true)
+    elseif speed >= 2.0 then
+        caster:CastSpell(caster, SPELL_REINDEER_100, true)
+    else
+        caster:CastSpell(caster, SPELL_REINDEER_60, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_REINDEER_TRANSFORMATION, 5, reindeerTransformationHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_shimmering_vessel::HandleDummy
+--   (spell_item.cpp:2640-2654): EFFECT_0 DUMMY. A hit creature is
+--   set to JUST_RESPAWNED (Unit.h:206; the Go SetDeathState twin
+--   promotes JUST_RESPAWNED -> ALIVE inside the call,
+--   lua_creature_events.go:2119). Binding 31225 (AC
+--   'spell_item_shimmering_vessel').
+local SPELL_SHIMMERING_VESSEL = 31225 -- spell_item.cpp:2640
+local TYPEID_UNIT = 3
+local DEATH_STATE_JUST_RESPAWNED = 4 -- Unit.h:206
+
+local function shimmeringVesselHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetTypeId() ~= TYPEID_UNIT then
+        return
+    end
+    hitTarget:SetDeathState(DEATH_STATE_JUST_RESPAWNED)
+end
+
+RegisterSpellEvent(SPELL_SHIMMERING_VESSEL, 5, shimmeringVesselHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_socrethars_stone::HandleDummy
+--   (spell_item.cpp:2851-2881): EFFECT_0 DUMMY. The C++ Load gate
+--   (caster area 3900 or 3742) is folded into the handler since
+--   Lua has no Load hook: area 3900 self-casts 35743 (to the seat),
+--   area 3742 self-casts 35744 (from the seat), triggered; any
+--   other area no-ops. Binding 35745 (AC
+--   'spell_item_socrethars_stone'; TDB 26091 renames it
+--   'spell_netherstorm_socrethars_stone').
+local SPELL_SOCRETHARS_STONE = 35745 -- spell_item.cpp:2851
+local SPELL_SOCRETHAR_TO_SEAT = 35743 -- spell_item.cpp:2845
+local SPELL_SOCRETHAR_FROM_SEAT = 35744 -- spell_item.cpp:2846
+
+local function socretharsStoneHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local areaId = caster:GetAreaId()
+    if areaId == 3900 then
+        caster:CastSpell(caster, SPELL_SOCRETHAR_TO_SEAT, true)
+    elseif areaId == 3742 then
+        caster:CastSpell(caster, SPELL_SOCRETHAR_FROM_SEAT, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_SOCRETHARS_STONE, 5, socretharsStoneHit)
