@@ -1399,19 +1399,6 @@ local HUNT = {
     NPC_DRAKKARI_CHIEFTAINK = 29099,
     QUEST_STATUS_INCOMPLETE = 3,
     BURST_52510_DESPAWN_MS = 2000,
-    -- spell_q12308_escape_from_silverbrook (spell_quest.cpp:2242)
-    SPELL_ESCAPE_FROM_SILVERBROOK = 48682,
-    SPELL_SUMMON_WORGEN = 48681,
-    -- spell_q12641_death_comes_from_on_high (spell_quest.cpp:2318)
-    SPELL_DEATH_COMES_FROM_ON_HIGH = 51858,
-    SPELL_FORGE_CREDIT = 51974,
-    SPELL_TOWN_HALL_CREDIT = 51977,
-    SPELL_SCARLET_HOLD_CREDIT = 51980,
-    SPELL_CHAPEL_CREDIT = 51982,
-    NPC_NEW_AVALON_FORGE = 28525,
-    NPC_NEW_AVALON_TOWN_HALL = 28543,
-    NPC_SCARLET_HOLD = 28542,
-    NPC_CHAPEL_OF_THE_CRIMSON_FLAME = 28544,
     -- spell_q12641_recall_eye_of_acherus (spell_quest.cpp:2381)
     SPELL_RECALL_EYE_OF_ACHERUS = 52694,
     SPELL_THE_EYE_OF_ACHERUS = 51852,
@@ -1422,9 +1409,6 @@ local HUNT = {
     -- spell_q12919_gymers_throw (spell_quest.cpp:2515)
     SPELL_GYMERS_THROW = 55421,
     SPELL_VARGUL_EXPLOSION = 55569,
-    -- spell_q14100_q14111_make_player_destroy_totems (spell_quest.cpp:2592)
-    SPELL_MAKE_PLAYER_DESTROY_TOTEMS = 66744,
-    SPELL_TOTEM_OF_THE_EARTHEN_RING = 66747,
     -- spell_q11896_weakness_to_lightning_46444 (spell_quest.cpp:2892)
     SPELL_WEAKNESS_TO_LIGHTNING = 46444,
     -- spell_q12372_cast_from_gossip_trigger (spell_quest.cpp:1424)
@@ -1767,18 +1751,23 @@ RegisterAuraEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59579, 3, burstAtTheSeams59579Re
 --   Binding 52510 is the class-name suffix (enum
 --   SPELL_BURST_AT_THE_SEAMS_52510 = 52510, spell_quest.cpp:2012).
 --   spell_q12308_escape_from_silverbrook (spell_quest.cpp:2242-2272):
---   EFFECT_0 DUMMY OnEffectHit (ev4, RegisterSpellEvent 4): the
---   caster self-casts 48681, triggered. Binding 48682 is the
---   `// 48682 - Escape from Silverbrook` comment (:2241). ev4 fires
---   on the player path (spells.go:14648-14660) and the creature
---   path (boss_ai.go:3373).
+--   EFFECT_0 DUMMY OnEffectHit (ev4): the caster self-casts 48681,
+--   triggered. PORTED IN GO, not Lua (spells.go dummy legs :16970
+--   + :28692): finishSpellCast fires ev4 (:14817) and the funnel
+--   fires ev4 (:27863) before the Go legs, so a Lua handler would
+--   cast 48681 twice (same double-fire pattern as e40198fa).
+--   Binding 48682 is the `// 48682 - Escape from Silverbrook`
+--   comment (:2241).
 --   spell_q12641_death_comes_from_on_high (spell_quest.cpp:2318-2380):
 --   EFFECT_0 DUMMY ev5: the hit creature's entry picks the credit
 --   spell (28525 -> 51974, 28543 -> 51977, 28542 -> 51980,
 --   28544 -> 51982; any other entry returns), and the caster casts
---   it on nil, triggered (the CastSpell(nil, ...) idiom,
---   spell_rogue.lua:164). Binding 51858 is the `// 51858 - Siphon
---   of Acherus` comment (:2317).
+--   it on nil, triggered. PORTED IN GO, not Lua
+--   (siphonOfAcherusDummyEffect, spells.go:16982 + :28730): ev5
+--   fires (:14892 / :28574) before the Go legs, so a Lua handler
+--   would cast the credit twice per hit creature (same pattern as
+--   e40198fa). Binding 51858 is the `// 51858 - Siphon of Acherus`
+--   comment (:2317).
 --
 -- STAY OUT (same tick):
 --   spell_q12308_escape_from_silverbrook_summon_worgen
@@ -1835,49 +1824,6 @@ local function burst52510ScriptHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_52510, 5, burst52510ScriptHit)
-
-local function escapeFromSilverbrookHit(event, spell, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    caster:CastSpell(caster, HUNT.SPELL_SUMMON_WORGEN, true)
-end
-
-RegisterSpellEvent(HUNT.SPELL_ESCAPE_FROM_SILVERBROOK, 4, escapeFromSilverbrookHit)
-
-local function deathComesFromOnHighHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    local credit = nil
-    local entry = hitTarget:GetEntry()
-    if entry == HUNT.NPC_NEW_AVALON_FORGE then
-        credit = HUNT.SPELL_FORGE_CREDIT
-    elseif entry == HUNT.NPC_NEW_AVALON_TOWN_HALL then
-        credit = HUNT.SPELL_TOWN_HALL_CREDIT
-    elseif entry == HUNT.NPC_SCARLET_HOLD then
-        credit = HUNT.SPELL_SCARLET_HOLD_CREDIT
-    elseif entry == HUNT.NPC_CHAPEL_OF_THE_CRIMSON_FLAME then
-        credit = HUNT.SPELL_CHAPEL_CREDIT
-    end
-    if credit == nil then
-        return
-    end
-    caster:CastSpell(nil, credit, true)
-end
-
-RegisterSpellEvent(HUNT.SPELL_DEATH_COMES_FROM_ON_HIGH, 5, deathComesFromOnHighHit)
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_q12919_gymers_grab (spell_quest.cpp:2474-2514): EFFECT_0
@@ -1942,27 +1888,15 @@ end
 
 RegisterSpellEvent(HUNT.SPELL_GYMERS_THROW, 5, gymersThrowHit)
 
--- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+-- PORTED IN GO, not Lua (case 66744, handleEffectScriptEffect,
+--   spells.go:54050; creature-caster twin boss_ai.go:8035):
 --   spell_q14100_q14111_make_player_destroy_totems
---   (spell_quest.cpp:2597-2617): EFFECT_0 SCRIPT_EFFECT ev5,
---   binding 66744 (census row 240, in-file comment). The hit player
---   self-casts Totem of the Earthen Ring 66747, TRIGGERED_FULL_MASK
---   (triggered twin; the C++ comment notes the reagent cost is
---   ignored, consumed by quest). GetHitPlayer is the ev5 hitTarget
---   arg; the Player type check is its twin.
-
-local function destroyTotemsHit(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 then
-        return
-    end
-    if hitTarget == nil or hitTarget:GetObjectType() ~= "Player" then
-        return
-    end
-    hitTarget:CastSpell(hitTarget, HUNT.SPELL_TOTEM_OF_THE_EARTHEN_RING, true)
-end
-
-RegisterSpellEvent(HUNT.SPELL_MAKE_PLAYER_DESTROY_TOTEMS, 5, destroyTotemsHit)
-
+--   (spell_quest.cpp:2592-2621): EFFECT_0 SCRIPT_EFFECT ev5, the
+--   hit player self-casts Totem of the Earthen Ring 66747,
+--   TRIGGERED_FULL_MASK (reagent cost ignored, consumed by quest).
+--   A Lua handler would double-fire: ev5 fires (:14892, creature
+--   path boss_ai.go:3541/3544) before the script-effect legs
+--   (same pattern as e40198fa).
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_q12641_recall_eye_of_acherus (spell_quest.cpp:2381-2412):
 --   EFFECT_0 SCRIPT_EFFECT ev5, binding 52694 (`// 52694` comment +
