@@ -1213,7 +1213,7 @@ RegisterSpellEvent(SPELL_FLING_TORCH_CATCH, 5, flingTorchCatchHit)
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_midsummer_torch_toss_land (46054, spell_holiday.cpp:1567-1589):
 --   EFFECT_0 SCRIPT_EFFECT. The hit unit casts 45724 (braziers hit,
---   already ported as an aura at :223) on the caster, triggered.
+--   ported as an aura on ev4 above) on the caster, triggered.
 --   Binding 46054 (TDB 26091 + 25101; AC carries no row).
 -- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
 --   spell_midsummer_juggle_torch (45819, spell_holiday.cpp:1691-1743):
@@ -1310,3 +1310,287 @@ local function juggleTorchHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(45819, 4, juggleTorchHit)
+
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_pilgrims_bounty_well_fed::HandleScript
+--   (spell_holiday.cpp:699-726, registered OnEffectHitTarget EFFECT_1
+--   SCRIPT_EFFECT at :728): on a hit player, if the spell's own aura
+--   sits at 5 stacks the player self-casts the dish trigger, and if
+--   all five helpins auras sit at 5 stacks the player self-casts the
+--   Spirit of Sharing 61849 and drops all five helpins auras. Dish
+--   triggers (spell_holiday.cpp:467-471): turkey 61842 -> 65414 AP,
+--   cranberry 61841 -> 65412 ZM, stuffing 61843 -> 65416 HIT, sweet
+--   potatoes 61844 -> 65410 HASTE, pie 61845 -> 65415 SPIRIT. The
+--   loader names come from TDB 26091 spell_script_names; the helpins
+--   consts are the feast_on block above. ev5 fires on the creature
+--   path (boss_ai.go:3435) — the helpins spells are cast by the table
+--   — and the triggered funnel. RemoveAurasDueToSpell rides
+--   RemoveAura, the in-file twin.
+local PILGRIMS_WELL_FED = {
+    triggers = {
+        [SPELL_CRANBERRY_HELPINS] = 65412,
+        [SPELL_TURKEY_HELPINS] = 65414,
+        [SPELL_STUFFING_HELPINS] = 65416,
+        [SPELL_SWEET_POTATO_HELPINS] = 65410,
+        [SPELL_PIE_HELPINS] = 65415,
+    },
+    spirit = 61849, -- spell_holiday.cpp:667 SPELL_THE_SPIRIT_OF_SHARING
+}
+
+local PILGRIMS_WELL_FED_IDS = {
+    SPELL_CRANBERRY_HELPINS,
+    SPELL_TURKEY_HELPINS,
+    SPELL_STUFFING_HELPINS,
+    SPELL_SWEET_POTATO_HELPINS,
+    SPELL_PIE_HELPINS,
+}
+
+local function pilgrimsBountyWellFedHit(event, spell, target, effectIndex)
+    if effectIndex ~= 1 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local aura = target:GetAura(spell:GetEntry())
+    if aura ~= nil and aura:GetStackAmount() == 5 then
+        local trigger = PILGRIMS_WELL_FED.triggers[spell:GetEntry()]
+        if trigger ~= nil then
+            target:CastSpell(target, trigger, true)
+        end
+    end
+    local turkey = target:GetAura(SPELL_TURKEY_HELPINS)
+    local cranberries = target:GetAura(SPELL_CRANBERRY_HELPINS)
+    local stuffing = target:GetAura(SPELL_STUFFING_HELPINS)
+    local sweetPotatoes = target:GetAura(SPELL_SWEET_POTATO_HELPINS)
+    local pie = target:GetAura(SPELL_PIE_HELPINS)
+    if turkey ~= nil and turkey:GetStackAmount() == 5 and cranberries ~= nil and cranberries:GetStackAmount() == 5 and stuffing ~= nil and stuffing:GetStackAmount() == 5 and sweetPotatoes ~= nil and sweetPotatoes:GetStackAmount() == 5 and pie ~= nil and pie:GetStackAmount() == 5 then
+        target:CastSpell(target, PILGRIMS_WELL_FED.spirit, true)
+        target:RemoveAura(SPELL_TURKEY_HELPINS)
+        target:RemoveAura(SPELL_CRANBERRY_HELPINS)
+        target:RemoveAura(SPELL_STUFFING_HELPINS)
+        target:RemoveAura(SPELL_SWEET_POTATO_HELPINS)
+        target:RemoveAura(SPELL_PIE_HELPINS)
+    end
+end
+
+for _, wellFedId in ipairs(PILGRIMS_WELL_FED_IDS) do
+    RegisterSpellEvent(wellFedId, 5, pilgrimsBountyWellFedHit)
+end
+
+-- PORTED (this tick, RegisterAuraEvent AfterEffectApply = 2 +
+-- OnEffectRemove = 3):
+--   spell_pilgrims_bounty_a_serving_of::OnApply/OnRemove
+--   (spell_holiday.cpp:920-948, registered AfterEffectApply +
+--   OnEffectRemove EFFECT_0 DUMMY AURA_EFFECT_HANDLE_REAL at :951-952):
+--   on apply the target self-casts the aura effect-0 amount (a spell
+--   id by DBC design) and the plate spell on the plate in the target's
+--   seat on the bountiful table; on remove both are dropped. Plate
+--   spells (spell_holiday.cpp:773-783): cranberries 61833, turkey
+--   61835, stuffing 61836, sweet potatoes 61837, pie 61838. Both the
+--   server auras (61793-61797) and the chair auras (61804-61808) bind
+--   to the same loader name (TDB 26091); AC binds the chair set to
+--   the phantom 'spell_pilgrims_bounty_serve_generic', which has no
+--   C++ class. The plate leg rides the new GetVehicle / GetVehicleKit
+--   / GetTransSeat bridges (this tick); RemoveAurasDueToSpell rides
+--   RemoveAura, the in-file twin.
+local PILGRIMS_SERVING = {
+    seatPlateHolder = 6, -- spell_holiday.cpp:739 SEAT_PLATE_HOLDER
+    plates = {
+        [61793] = 61833,
+        [61804] = 61833,
+        [61794] = 61838,
+        [61805] = 61838,
+        [61795] = 61836,
+        [61806] = 61836,
+        [61796] = 61835,
+        [61807] = 61835,
+        [61797] = 61837,
+        [61808] = 61837,
+    },
+}
+
+local function pilgrimsServingPlate(target, plateId, apply)
+    local veh = target:GetVehicle()
+    if veh == nil then
+        return
+    end
+    local holderUnit = veh:GetPassenger(PILGRIMS_SERVING.seatPlateHolder)
+    if holderUnit == nil then
+        return
+    end
+    local holder = holderUnit:GetVehicleKit()
+    if holder == nil then
+        return
+    end
+    local plate = holder:GetPassenger(target:GetTransSeat())
+    if plate == nil then
+        return
+    end
+    if apply then
+        target:CastSpell(plate, plateId, true)
+    else
+        plate:RemoveAura(plateId)
+    end
+end
+
+local function makeServingApply(plateId)
+    return function(event, aura, target)
+        if target == nil then
+            return
+        end
+        target:CastSpell(target, aura:GetAmount(), true)
+        pilgrimsServingPlate(target, plateId, true)
+    end
+end
+
+local function makeServingRemove(plateId)
+    return function(event, aura, target)
+        if target == nil then
+            return
+        end
+        target:RemoveAura(aura:GetAmount())
+        pilgrimsServingPlate(target, plateId, false)
+    end
+end
+
+for servingId, plateId in pairs(PILGRIMS_SERVING.plates) do
+    RegisterAuraEvent(servingId, 2, makeServingApply(plateId))
+    RegisterAuraEvent(servingId, 3, makeServingRemove(plateId))
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_pilgrims_bounty_on_plate::HandleDummy
+--   (spell_holiday.cpp:818-868, registered OnEffectHitTarget EFFECT_0
+--   DUMMY at :879): the caster and the hit target must sit at the
+--   same bountiful table (32823); the caster's chair seat-0 passenger
+--   is the passing player, who always self-casts the pass-the credit
+--   spell, and when the target's seat holds a plate the player target
+--   is hit with the on-plate spell and the caster hits the target's
+--   chair with the serving chair aura, while a non-player target gets
+--   the food visual on its plate instead. Dish quads
+--   (spell_holiday.cpp:1942-1946, on-plate / pass-the / visual /
+--   chair): turkey 66250 (61928, 66373, 61822, 61807), cranberries
+--   66261 (61925, 66372, 61821, 61804), stuffing 66259 (61927, 66375,
+--   61823, 61806), sweet potatoes 66262 (61929, 66376, 61824, 61808),
+--   pie 66260 (61926, 66374, 61825, 61805). TDB 26091 bindings; AC
+--   binds the set to the phantom 'spell_pilgrims_bounty_pass_generic',
+--   which has no C++ class. The vehicle legs ride the new
+--   GetVehicle / GetVehicleBase / GetTransSeat bridges (this tick);
+--   unit identity rides GUID comparison (Lua unit objects are fresh
+--   wrappers per lookup, so == would never match).
+local PILGRIMS_ON_PLATE = {
+    tableEntry = 32823, -- spell_holiday.cpp:741 NPC_BOUNTIFUL_TABLE
+    seatPlayer = 0, -- spell_holiday.cpp:740 SEAT_PLAYER
+    seatPlateHolder = 6, -- spell_holiday.cpp:739 SEAT_PLATE_HOLDER
+    dishes = {
+        [66250] = {61928, 66373, 61822, 61807},
+        [66261] = {61925, 66372, 61821, 61804},
+        [66259] = {61927, 66375, 61823, 61806},
+        [66262] = {61929, 66376, 61824, 61808},
+        [66260] = {61926, 66374, 61825, 61805},
+    },
+}
+
+local function pilgrimsOnPlateTable(target)
+    if target == nil then
+        return nil
+    end
+    if target:GetObjectType() == "Player" then
+        local vehBase = target:GetVehicleBase()
+        if vehBase == nil then
+            return nil
+        end
+        local veh = vehBase:GetVehicle()
+        if veh == nil then
+            return nil
+        end
+        local owner = veh:GetOwner()
+        if owner == nil or owner:GetEntry() ~= PILGRIMS_ON_PLATE.tableEntry then
+            return nil
+        end
+        return owner
+    end
+    local veh = target:GetVehicle()
+    if veh == nil then
+        return nil
+    end
+    local owner = veh:GetOwner()
+    if owner == nil or owner:GetEntry() ~= PILGRIMS_ON_PLATE.tableEntry then
+        return nil
+    end
+    return owner
+end
+
+local function pilgrimsOnPlatePlate(tableBase, seat)
+    local kit = tableBase:GetVehicleKit()
+    if kit == nil then
+        return nil
+    end
+    local holderUnit = kit:GetPassenger(PILGRIMS_ON_PLATE.seatPlateHolder)
+    if holderUnit == nil then
+        return nil
+    end
+    local holder = holderUnit:GetVehicleKit()
+    if holder == nil then
+        return nil
+    end
+    return holder:GetPassenger(seat)
+end
+
+local function pilgrimsOnPlateHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetGUID() == target:GetGUID() then
+        return
+    end
+    local dish = PILGRIMS_ON_PLATE.dishes[spell:GetEntry()]
+    if dish == nil then
+        return
+    end
+    local casterTable = pilgrimsOnPlateTable(caster)
+    if casterTable == nil then
+        return
+    end
+    local targetTable = pilgrimsOnPlateTable(target)
+    if targetTable == nil or targetTable:GetGUID() ~= casterTable:GetGUID() then
+        return
+    end
+    local casterChair = caster:GetVehicleKit()
+    if casterChair == nil then
+        return
+    end
+    local casterPlr = casterChair:GetPassenger(PILGRIMS_ON_PLATE.seatPlayer)
+    if casterPlr == nil or casterPlr:GetGUID() == target:GetGUID() then
+        return
+    end
+    casterPlr:CastSpell(casterPlr, dish[2], true)
+    local seat = target:GetTransSeat()
+    if target:GetObjectType() == "Player" then
+        local vehBase = target:GetVehicleBase()
+        if vehBase ~= nil then
+            seat = vehBase:GetTransSeat()
+        end
+    end
+    local plate = pilgrimsOnPlatePlate(casterTable, seat)
+    if plate == nil then
+        return
+    end
+    if target:GetObjectType() == "Player" then
+        casterPlr:CastSpell(target, dish[1], true)
+        local targetChair = target:GetVehicleBase()
+        if targetChair ~= nil then
+            caster:CastSpell(targetChair, dish[4], true)
+        end
+    else
+        casterPlr:CastSpell(plate, dish[3], true)
+        caster:CastSpell(target, dish[4], true)
+    end
+end
+
+for plateId, _ in pairs(PILGRIMS_ON_PLATE.dishes) do
+    RegisterSpellEvent(plateId, 5, pilgrimsOnPlateHit)
+end
