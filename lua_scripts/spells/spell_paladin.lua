@@ -612,7 +612,9 @@ local function infusionOfLightProc(event, aura, target, actor, procTarget, damag
     if (bit32.band(procEvent:GetSpellFamilyFlags(0), 0x200000) ~= 0 or bit32.band(procEvent:GetSpellFamilyFlags(1), 0x10000) ~= 0) and bit32.band(procEvent:GetHitMask(), PROC_HIT_CRITICAL) == 0 then
         return true
     end
-    return true
+    -- Critical Holy Shock (and any other proc spell): C++ calls no
+    -- PreventDefaultAction here, so the default leg fires.
+    return
 end
 
 RegisterAuraEvent(SPELL_PALADIN_INFUSION_OF_LIGHT_R1, 6, infusionOfLightProc)
