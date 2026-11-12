@@ -16,9 +16,12 @@ import (
 // kit keyed on the origin map/instance (the findVehicleKits comment in
 // vehicle.go), so a same-key miss falls back to the GUID scan, the same
 // twin the logout path uses. The only Eluna entry point to a Vehicle
-// object is Unit:GetVehicleKit (LuaFunctions.cpp registers it; the
-// Unit:GetVehicle twin is commented out there, so it stays out): a unit
+// object is Unit:GetVehicleKit (LuaFunctions.cpp registers it): a unit
 // with no kit yields nil, never a vehicle object over a kit-less base.
+// The Unit:GetVehicle / GetVehicleBase / GetTransSeat twins (commented
+// out in LuaFunctions.cpp) are built on the player, motion-creature and
+// session-creature surfaces beside GetVehicleKit; they resolve through
+// luaVehicleObject / luaUnitObjectForGUID on the VehicleGUID stamp.
 type luaVehicleRef struct {
 	server     *Server
 	mapID      uint32

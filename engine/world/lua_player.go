@@ -3192,13 +3192,45 @@ func (s *session) luaPlayer() *scripting.Object {
 	}
 	// GetVehicleKit is Unit::GetVehicleKit (UnitMethods.h, registered in
 	// LuaFunctions.cpp): the Vehicle object for the unit's own kit, or
-	// nil when the unit is not a vehicle base. The GetVehicle twin is
-	// commented out in LuaFunctions.cpp, so it stays out.
+	// nil when the unit is not a vehicle base.
 	methods["GetVehicleKit"] = func(_ context.Context, _ []any) ([]any, error) {
 		if s.server == nil {
 			return []any{nil}, nil
 		}
 		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.playerGUID)}, nil
+	}
+	// GetVehicle is Unit::GetVehicle (UnitMethods.h; commented out in
+	// LuaFunctions.cpp, built here because the pilgrims a_serving_of /
+	// on_plate arms ride it): the Vehicle object the unit rides, or
+	// nil when not riding — the same body as IsOnVehicle below.
+	methods["GetVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.player.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaVehicleObject(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)}, nil
+	}
+	// GetVehicleBase is Unit::GetVehicleBase (UnitMethods.h): the base
+	// unit the player rides, or nil — resolved through the unit-object
+	// funnel (player sessions first, then motions).
+	methods["GetVehicleBase"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.player.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)}, nil
+	}
+	// GetTransSeat is Unit::GetTransSeat (UnitMethods.h): the seat id
+	// the player sits in on the ridden vehicle, or -1 when not riding
+	// (Vehicle::GetSeatForPassenger returns -1, Vehicle.cpp:646-653).
+	methods["GetTransSeat"] = func(_ context.Context, _ []any) ([]any, error) {
+		if s.server == nil || s.player.VehicleGUID == 0 {
+			return []any{-1}, nil
+		}
+		kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+		if kit == nil {
+			return []any{-1}, nil
+		}
+		seat, _, _ := kit.GetSeatForPassenger(s.playerGUID)
+		return []any{int(seat)}, nil
 	}
 	// IsOnVehicle is Unit::IsOnVehicle (UnitMethods.h): despite the doc
 	// claiming bool, the Trinity arm pushes GetVehicle(), the Vehicle

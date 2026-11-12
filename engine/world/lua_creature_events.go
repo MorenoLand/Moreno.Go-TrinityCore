@@ -3397,8 +3397,9 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return []any{s.getVehicleKit(motion.Map, motion.InstanceID, motion.GUID) != nil}, nil
 	}
 	// GetVehicleKit / IsOnVehicle are the motion-creature twins of the
-	// player arms in lua_player.go (UnitMethods.h; GetVehicle stays out,
-	// commented out in LuaFunctions.cpp).
+	// player arms in lua_player.go (UnitMethods.h). GetVehicle,
+	// GetVehicleBase and GetTransSeat ride the same motion stamp
+	// (VehicleGUID / VehicleSeat) the IsOnVehicle arm reads.
 	methods["GetVehicleKit"] = func(_ context.Context, _ []any) ([]any, error) {
 		if motion == nil {
 			return []any{nil}, nil
@@ -3410,6 +3411,24 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return []any{nil}, nil
 		}
 		return []any{s.luaVehicleObject(motion.Map, motion.InstanceID, motion.VehicleGUID)}, nil
+	}
+	methods["GetVehicle"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil || motion.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.luaVehicleObject(motion.Map, motion.InstanceID, motion.VehicleGUID)}, nil
+	}
+	methods["GetVehicleBase"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil || motion.VehicleGUID == 0 {
+			return []any{nil}, nil
+		}
+		return []any{s.luaUnitObjectForGUID(motion.Map, motion.InstanceID, motion.VehicleGUID)}, nil
+	}
+	methods["GetTransSeat"] = func(_ context.Context, _ []any) ([]any, error) {
+		if motion == nil || motion.VehicleGUID == 0 {
+			return []any{-1}, nil
+		}
+		return []any{int(motion.VehicleSeat)}, nil
 	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
