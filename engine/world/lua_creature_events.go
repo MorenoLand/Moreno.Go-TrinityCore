@@ -3430,6 +3430,28 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{int(motion.VehicleSeat)}, nil
 	}
+	// GetAllMinionsByEntry(entry) is the motion-creature twin of the
+	// player arm in lua_player.go (Unit::GetAllMinionsByEntry,
+	// Unit.cpp:6184-6194; see minionsByEntry in pet_combat.go): every
+	// summoned creature of entry owned by this creature, in the same
+	// map+instance, as a Lua array of creature objects (GUID-sorted).
+	methods["GetAllMinionsByEntry"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if motion == nil {
+			return []any{[]any{}}, nil
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		out := make([]any, 0)
+		for _, m := range s.minionsByEntry(mapID, instanceID, guid, entry) {
+			out = append(out, s.luaMotionCreature(m))
+		}
+		return []any{out}, nil
+	}
 	// Teleport is Unit::NearTeleportTo (Unit.cpp:13332-13346) for creatures:
 	// DisableSpline (motion.Moving cleared, the in-flight spline twin) +
 	// SendTeleportPacket (MSG_MOVE_TELEPORT carrying the creature GUID to

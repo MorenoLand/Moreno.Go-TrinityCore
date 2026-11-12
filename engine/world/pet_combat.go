@@ -489,6 +489,36 @@ func (s *Server) luaUnitObjectForGUID(mapID, instanceID uint32, guid uint64) any
 	return nil
 }
 
+// minionsByEntry mirrors Unit::GetAllMinionsByEntry (Unit.cpp:6184-6194):
+// every creature in the same map+instance whose OwnerGUID is the owner,
+// whose entry matches, and which IsSummon()s (IsTempSummon on the motion).
+// The IsTempSummon gate is the C++ IsSummon() leg: without it the
+// OwnerGUID scan would conflate charmed victims (OwnerGUID = charmer,
+// creaturemotion.go:3436) with summons, the conflation boss_ai.go:12127
+// warns about for the pet slot. No health gate: C++ keeps dead minions
+// in m_Controlled until despawn and IsAIEnabled (Unit.h:762) is only a
+// nil-AI check, so a dead motion still lists and the cast path fizzles
+// it, like C++ Spell::CheckCast on a dead caster. GUID-sorted for
+// determinism (the GetCreaturesInGrid convention); the C++
+// m_Controlled order is insertion order. Backs the lich-pet aura proc
+// (spell_generic.cpp:1893-1920).
+func (s *Server) minionsByEntry(mapID, instanceID uint32, ownerGUID uint64, entry uint32) []*creatureMotion {
+	if s == nil || ownerGUID == 0 {
+		return nil
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	var found []*creatureMotion
+	for _, m := range s.motionMapLocked(mapID, instanceID) {
+		if m.GUID == ownerGUID || m.OwnerGUID != ownerGUID || m.Entry != entry || !m.IsTempSummon {
+			continue
+		}
+		found = append(found, m)
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].GUID < found[j].GUID })
+	return found
+}
+
 // triggerPetDefensive triggers the owner's controlled creatures into attack
 // mode when the owner either attacks (assist) or takes damage (defend).
 // Mirrors TrinityCore PetAI::OwnerAttackedBy / PetAI::OwnerAttacked

@@ -3232,6 +3232,26 @@ func (s *session) luaPlayer() *scripting.Object {
 		seat, _, _ := kit.GetSeatForPassenger(s.playerGUID)
 		return []any{int(seat)}, nil
 	}
+	// GetAllMinionsByEntry(entry) is Unit::GetAllMinionsByEntry
+	// (Unit.cpp:6184-6194): every summoned creature of entry owned by
+	// this unit, in the same map+instance, as a Lua array of creature
+	// objects (GUID-sorted; see minionsByEntry in pet_combat.go). Backs
+	// the lich-pet aura proc (spell_generic.cpp:1893-1920), whose owner
+	// is the player holding the aura.
+	methods["GetAllMinionsByEntry"] = func(_ context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return []any{[]any{}}, nil
+		}
+		out := make([]any, 0)
+		for _, m := range s.server.minionsByEntry(s.player.Map, s.player.InstanceID, s.playerGUID, entry) {
+			out = append(out, s.server.luaMotionCreature(m))
+		}
+		return []any{out}, nil
+	}
 	// IsOnVehicle is Unit::IsOnVehicle (UnitMethods.h): despite the doc
 	// claiming bool, the Trinity arm pushes GetVehicle(), the Vehicle
 	// object the unit rides (nil when not riding), so the Go arm pushes

@@ -652,3 +652,64 @@ local function cannonBlastHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_GEN_CANNON_BLAST, 5, cannonBlastHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_lich_pet_aura::HandleProc + CheckProc (spell_generic.cpp:1893-1919):
+--   EFFECT_0 PROC_TRIGGER_SPELL. CheckProc gates on the proc target
+--   being a player (TYPEID_PLAYER); the handler returns true on both
+--   paths — the C++ PreventDefaultAction veto plus the CheckProc veto
+--   (a failed CheckProc fires neither the handler nor the default
+--   trigger leg). Each owned lich-pet minion (entry 36979, temp
+--   summon, GetAllMinionsByEntry bridge) self-casts Lich Pet Aura
+--   OnKill 69731, non-triggered (DoCastSelf default args).
+--   IsAIEnabled has no Go model (no AI-disabled motion state), so
+--   the gate is vacuous in-tree. DORMANT until Spell.dbc ships the
+--   69732 proc entry.
+local SPELL_LICH_PET_AURA = 69732 -- spell_generic.cpp:1893 (class spell_gen_lich_pet_aura)
+local NPC_LICH_PET = 36979 -- spell_generic.cpp:1887
+local SPELL_LICH_PET_AURA_ONKILL = 69731 -- spell_generic.cpp:1890
+
+local function lichPetAuraProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return true
+    end
+    if procTarget == nil or procTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return true
+    end
+    for _, minion in ipairs(target:GetAllMinionsByEntry(NPC_LICH_PET)) do
+        minion:CastSpell(minion, SPELL_LICH_PET_AURA_ONKILL, false)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_LICH_PET_AURA, 6, lichPetAuraProc)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_lich_pet_onsummon::HandleScriptEffect (spell_generic.cpp:1921-1941):
+--   EFFECT_0 SCRIPT_EFFECT. The hit unit casts Lich Pet Aura 69732
+--   on itself, triggered. DORMANT until Spell.dbc ships the 69735 row.
+local SPELL_LICH_PET_ONSUMMON = 69735 -- spell_generic.cpp:1921 (class spell_gen_lich_pet_onsummon)
+
+local function lichPetOnSummonHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_LICH_PET_AURA, true)
+end
+
+RegisterSpellEvent(SPELL_LICH_PET_ONSUMMON, 5, lichPetOnSummonHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_lich_pet_aura_remove::HandleScriptEffect (spell_generic.cpp:1943-1957):
+--   EFFECT_0 SCRIPT_EFFECT. The hit unit drops Lich Pet Aura 69732.
+--   DORMANT until Spell.dbc ships the 69736 row.
+local SPELL_LICH_PET_AURA_REMOVE = 69736 -- spell_generic.cpp:1943 (class spell_gen_lich_pet_aura_remove)
+
+local function lichPetAuraRemoveHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_LICH_PET_AURA)
+end
+
+RegisterSpellEvent(SPELL_LICH_PET_AURA_REMOVE, 5, lichPetAuraRemoveHit)
