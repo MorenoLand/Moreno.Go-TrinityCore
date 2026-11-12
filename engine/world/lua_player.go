@@ -393,6 +393,31 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetTeam"] = luaNoArgs(func() any { return effectiveTeamFor(state) })
 	methods["IsAlliance"] = luaNoArgs(func() any { return effectiveTeamFor(state) == 0 })
 	methods["IsHorde"] = luaNoArgs(func() any { return effectiveTeamFor(state) == 1 })
+	// IsInDisallowedMountForm is Unit::IsInDisallowedMountForm
+	// (Unit.cpp:9170-9185) via isInDisallowedMountForm (spells.go): a
+	// live form whose SpellShapeshiftForm.dbc flags lack 0x1 rejects,
+	// as does a missing form row; the transform-spell carve-out and
+	// display-ID arms are unbridged/vacuous per that helper. Backs the
+	// flight-form CheckCast port (spell_druid.lua).
+	methods["IsInDisallowedMountForm"] = luaNoArgs(func() any { return s.isInDisallowedMountForm() })
+	// GetWGDefenderTeam is Battlefield::GetDefenderTeam for Wintergrasp
+	// (Battlefield.h:274; BattlefieldWG.cpp:457 reads the persisted
+	// WS_BATTLEFIELD_WG_DEFENDER world state, Alliance when unset): 0
+	// Alliance / 1 Horde (TeamId, SharedDefines.h:793; WGTeamAlliance /
+	// WGTeamHorde, battleground_wg.go:38-39). getOrCreateWGState mirrors
+	// the always-registered C++ battlefield (BattlefieldMgr registers WG
+	// at startup); a fresh state defaults to Alliance, the unset-world-
+	// state value. Backs the WG defender-teleport CheckCast port
+	// (spell_wintergrasp.lua).
+	methods["GetWGDefenderTeam"] = luaNoArgs(func() any {
+		if s.server == nil {
+			return uint32(0)
+		}
+		wg := s.server.getOrCreateWGState()
+		wg.mu.Lock()
+		defer wg.mu.Unlock()
+		return wg.DefenderTeam
+	})
 	// SetFactionForRace is Player::SetFactionForRace (Player.cpp:6636):
 	// m_team + UNIT_FIELD_FACTIONTEMPLATE from the GIVEN race's
 	// ChrRaces row (0 when the row is missing). Go stores the race

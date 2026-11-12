@@ -283,6 +283,30 @@ end
 
 RegisterSpellEvent(SPELL_DRUID_SURVIVAL_INSTINCTS, 8, survivalInstinctsCheckCast)
 
+local SPELL_DRUID_FLIGHT_FORM = 33943 -- spell_druid.cpp:423 (class spell_dru_flight_form)
+local SPELL_DRUID_SWIFT_FLIGHT_FORM = 40120 -- spell_ranks rank 2 of 33943
+local SPELL_FAILED_NOT_SHAPESHIFT = 68 -- SharedDefines.h:1050
+
+-- C++ spell_dru_flight_form::CheckCast (spell_druid.cpp:427-434): a
+-- caster in a disallowed mount form fails SPELL_FAILED_NOT_SHAPESHIFT.
+-- IsInDisallowedMountForm (Unit.cpp:9170-9185) rides the new
+-- player:IsInDisallowedMountForm bridge (spells.go, SpellShapeshiftForm
+-- flags lacking 0x1 or a missing form row; transform-spell carve-out
+-- and display-ID arms unbridged/vacuous per that helper).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding is the -33943 AC spell_script_names row (all ranks), so both
+-- 33943 and its rank-2 40120 register here.
+local function flightFormCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:IsInDisallowedMountForm() then
+        return SPELL_FAILED_NOT_SHAPESHIFT
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_DRUID_FLIGHT_FORM, 8, flightFormCheckCast)
+RegisterSpellEvent(SPELL_DRUID_SWIFT_FLIGHT_FORM, 8, flightFormCheckCast)
+
 -- C++ spell_dru_moonkin_form_passive::Absorb (spell_druid.cpp:936-976):
 -- 69366 EFFECT_0 SPELL_AURA_SCHOOL_ABSORB. The pool is unlimited
 -- (CalculateAmount sets -1), so the handler always returns an explicit

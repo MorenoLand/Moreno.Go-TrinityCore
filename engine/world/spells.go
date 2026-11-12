@@ -7008,6 +7008,26 @@ func (s *session) checkCharmCast(spell wotlk.Spell, target protocol.SpellTargetD
 // Returns the SPELL_FAILED_* result code, 0 on success. Neither failure
 // code carries extra WriteCastResultInfo params, so castFailedExtParams
 // needs no case (verified Spell.cpp:3974-4160).
+// isInDisallowedMountForm is Unit::IsInDisallowedMountForm
+// (Unit.cpp:9170-9185): a live shapeshift form whose
+// SpellShapeshiftForm.dbc flags lack 0x1 rejects, as does a missing form
+// row. DELTAS vs C++: the transform-spell carve-out has no bridge (Go
+// tracks no transform-spell state), and the native/display-ID arms are
+// vacuous on the client path (Go never changes the player display ID
+// for an aura). Shared by checkMountedCast and the
+// player:IsInDisallowedMountForm bridge (flight-form CheckCast port).
+func (s *session) isInDisallowedMountForm() bool {
+	if s == nil || s.player == nil || s.server == nil {
+		return false
+	}
+	form := s.player.ShapeshiftForm
+	if form == 0 {
+		return false
+	}
+	shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
+	return err != nil || !found || shape.Flags&0x1 == 0
+}
+
 func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8 {
 	if s == nil || s.player == nil || s.server == nil {
 		return 0
@@ -7038,18 +7058,15 @@ func (s *session) checkMountedCast(ctx context.Context, spell wotlk.Spell) uint8
 	if !allowMount && spell.AreaGroupID == 0 {
 		return spellFailedNoMountsAllowed
 	}
-	if form := s.player.ShapeshiftForm; form != 0 {
-		shape, found, err := s.server.Data.ShapeshiftForm(uint32(form))
-		if err != nil || !found || shape.Flags&0x1 == 0 {
-			// Spell::SendMountResult(MountResult::Shapeshifted,
-			// Spell.cpp:4199-4212): the single-int32 SMSG_MOUNT_RESULT packet
-			// (WorldPackets::Spells::MountResult::Write, SpellPackets.cpp:195)
-			// goes out before the cast result.
-			buf := protocol.NewBuffer(4)
-			buf.WriteI32(mountResultShapeshifted)
-			_ = s.write(uint16(protocol.OpcodeSMSG_MOUNT_RESULT), buf.Bytes(), true)
-			return spellFailedDontReport
-		}
+	if s.isInDisallowedMountForm() {
+		// Spell::SendMountResult(MountResult::Shapeshifted,
+		// Spell.cpp:4199-4212): the single-int32 SMSG_MOUNT_RESULT packet
+		// (WorldPackets::Spells::MountResult::Write, SpellPackets.cpp:195)
+		// goes out before the cast result.
+		buf := protocol.NewBuffer(4)
+		buf.WriteI32(mountResultShapeshifted)
+		_ = s.write(uint16(protocol.OpcodeSMSG_MOUNT_RESULT), buf.Bytes(), true)
+		return spellFailedDontReport
 	}
 	return 0
 }
