@@ -612,8 +612,9 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   heal removing 53504 — no binding aura ID in-tree.
 --   spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy
 --   (:1808-1843): ev5 DUMMY; hit creature casts 59319 triggered on
---   the caster — no binding spell ID (comment holds quest IDs only);
---   also player-cast, so no ev5 direct-path fire site.
+--   the caster — no binding spell ID (comment holds quest IDs only).
+--   (Corrected tick 2026-11-12: the ev5 player-path fire site IS live
+--   (a910c39d), so the binding ID is the sole blocker.)
 --   spell_q13011_bear_flank_master (:1907-1956): ev5 SCRIPT_EFFECT,
 --   caster-is-creature Load gate, hit player 50% casts 56569 on the
 --   creature + AI Talk(0) else self-casts 56566 — no binding ID.
@@ -993,4 +994,141 @@ local function ahunaesKnifeHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_AHUNAES_KNIFE, 5, ahunaesKnifeHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q11010_q11102_q11023_aggro_check (spell_quest.cpp:1565-1592):
+--   EFFECT_0 DUMMY ev5, binding 40112 (comment :1564; SPELL_AGGRO_CHECK
+--   const already in-file). The hit player with a FLY (201) or
+--   MOD_INCREASE_MOUNTED_FLIGHT_SPEED (207) aura self-casts Flak
+--   Cannon Trigger 40110. DELTA: C++ casts with
+--   TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE; Lua takes only a
+--   triggered bool (player:CastSpell ignores it, see header note;
+--   creature:CastSpell routes triggered through
+--   castCreatureSpellTriggered, lua_creature_events.go:936-960) — the
+--   ignore-mounted leg has no twin. The 40113/40119 aura arms and
+--   40056 were already ported; only this SpellScript arm was missing.
+--   COLLISION (same tick, sibling landed mid-strip — see the block
+--   below): this tick first ported 50287 + 49370, then found the
+--   sibling's versions already in the file and removed its own
+--   duplicates. 50287 stays ported via the sibling's block
+--   (GetControllerGUID, lua_creature_events.go:519, is the exact
+--   GetCharmerOrOwnerGUID twin). 49370 stays out per the sibling's
+--   GetOriginalCaster finding (no bridge; lua_spell.go has no
+--   OriginalCaster method, server.go:763 is Go-internal only) —
+--   this tick's GetCaster() substitution was withdrawn; parent to
+--   adjudicate whether the direct-cast identity holds.
+--
+-- STAY OUT (same tick, rows 698-704):
+--   spell_q14076_14092_pound_drum (spell_quest.cpp:1173-1210): no
+--   binding spell ID (no comment; the enum holds only 66510/66492);
+--   OnCast ev1 50/50 summon leg + GO SetLootState leg both
+--   unbindable. spell_q12279_cast_net (:1210-1235): single GO
+--   SetLootState leg, no binding ID (no comment, no enum).
+--   spell_q12987_read_pronouncement (:1237-1280): AuraScript
+--   AfterEffectApply; no binding aura ID in-tree; also the
+--   sCreatureTextMgr SendChat(CHAT_MSG_ADDON) leg has no bridge
+--   (creature:Talk is AI::Talk, a different channel).
+--   Rows 701-704 stay out per the sibling's block below (same
+--   verdicts: no binding IDs; q12277 arm otherwise bridgeable).
+--   spell_q9452_cast_net GO leg (:1157), re-verified this tick:
+--   STAY OUT — ev5 never fires for GO targets on the player path
+--   (spells.go:14727, the 0xF110 continue) and GO Use is unbridged
+--   (zero "Use" methods in lua_objects.go); SetLootState
+--   (lua_objects.go:4324) + SetRespawnTime (:4353) are bridged but
+--   unreachable. Rows 691/694/695/696 re-confirmed STAY OUT: no
+--   binding spell ID resolvable in-tree (classes :803-841, :930-971,
+--   :975-1013, :1083-1116 carry no comment ID).
+
+local SPELL_FLAK_CANNON_TRIGGER = 40110 -- spell_quest.cpp:1528 (Quest11010_11102_11023Data)
+
+local function aggroCheckHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    if hitTarget:HasAuraType(SPELL_AURA_FLY) or hitTarget:HasAuraType(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED) then
+        hitTarget:CastSpell(hitTarget, SPELL_FLAK_CANNON_TRIGGER, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_AGGRO_CHECK, 5, aggroCheckHit)
+
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12372_azure_on_death_force_whisper (spell_quest.cpp:1496-1522):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 50287 (in-file comment :1491).
+--   The hit creature, if a Wyrmrest Defender 27629, whispers Talk(1)
+--   to its charmer-or-owner. GetControllerGUID is the exact
+--   GetCharmerOrOwnerGUID twin (0 when none, lua_creature_events.go
+--   :519) — NOT GetControllerGUIDS, which falls back to the own GUID
+--   and would whisper to self. The controller resolves via
+--   GetPlayerByGUID / GetCreatureByGUID (the bested-trigger pattern);
+--   an absent or unresolvable controller calls Talk(1) with no
+--   target, and broadcastCreatureTalk drops whisper rows for a null
+--   target exactly like C++ (creature_text.go).
+--
+-- STAY OUT (same tick, census rows 701-706, verified name-by-name;
+--   all six classes have ZERO hits in engine/ + lua_scripts/ outside
+--   this note, so the census go_hit/lua_hit=true flags are phantoms):
+--   spell_q12987_read_pronouncement (spell_quest.cpp:1244-1277):
+--   AuraScript AfterEffectApply; the player target's nearest Ice
+--   Spike Bunny 30215 sends chat 1/2 + KilledMonsterCredit(30210) —
+--   no binding aura ID in-tree (enum HodirsHelm holds NPCs only);
+--   also no SendChat bridge anywhere in engine/world.
+--   spell_q12277_wintergarde_mine_explosion (:1288-1334): EFFECT_0
+--   DUMMY ev5; the caster must be TYPEID_UNIT with an owner, hit
+--   creature 27436/27437 -> caster casts 48744/48745 on the owner,
+--   triggered — no binding spell ID in-tree (enum holds NPCs +
+--   credit spells only).
+--   spell_q12066_bunny_kill_credit (:1341-1366): EFFECT_0 DUMMY
+--   ev5; hit creature casts 47390 on the caster, NON-triggered —
+--   no binding spell ID in-tree (enum holds only 47390).
+--   spell_q12735_song_of_cleansing (:1379-1417): EFFECT_0
+--   SCRIPT_EFFECT ev5; caster area 4385/4290/4388 -> self-cast
+--   52954/52958/52959, non-triggered — no binding spell ID
+--   in-tree (enum holds areas + summon spells only).
+--   spell_q12372_cast_from_gossip_trigger (:1424-1449): EFFECT_0
+--   SCRIPT_EFFECT ev5; caster self-casts 49207 triggered — no
+--   binding spell ID in-tree (enum holds only 49207).
+--   spell_q12372_destabilize_azure_dragonshrine_dummy (:1460-1490):
+--   EFFECT_0 DUMMY ev5; binding 49370 IS grounded in-file
+--   (comment :1451) and GetVehicleKit / GetPassenger /
+--   KilledMonsterCredit are all bridged — but the arm reads
+--   GetOriginalCaster, which has NO Lua bridge (lua_spell.go has
+--   no OriginalCaster method; Go-internal only, server.go:763).
+--   Substituting spell:GetCaster() would diverge in the triggered
+--   chain the C++ code explicitly handles, so this stays out until
+--   a GetOriginalCaster bridge lands.
+
+local SPELL_AZURE_ON_DEATH_FORCE_WHISPER = 50287 -- spell_quest.cpp:1491 (class spell_q12372_azure_on_death_force_whisper)
+local NPC_WYRMREST_DEFENDER = 27629 -- spell_quest.cpp:1494
+local TALK_AZURE_ON_DEATH_WHISPER = 1 -- spell_quest.cpp:1457 (WHISPER_ON_HIT_BY_FORCE_WHISPER)
+
+local function azureOnDeathForceWhisperHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    if hitTarget:GetEntry() ~= NPC_WYRMREST_DEFENDER then
+        return
+    end
+    local guid = hitTarget:GetControllerGUID()
+    if guid ~= 0 then
+        local controller = GetPlayerByGUID(guid)
+        if controller == nil then
+            controller = hitTarget:GetCreatureByGUID(guid)
+        end
+        if controller ~= nil then
+            hitTarget:Talk(TALK_AZURE_ON_DEATH_WHISPER, controller)
+            return
+        end
+    end
+    hitTarget:Talk(TALK_AZURE_ON_DEATH_WHISPER)
+end
+
+RegisterSpellEvent(SPELL_AZURE_ON_DEATH_FORCE_WHISPER, 5, azureOnDeathForceWhisperHit)
 
