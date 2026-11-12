@@ -103,9 +103,9 @@ RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 3, forceShieldRemove)
 --   (a910c39d, spells.go:14668-14737: one fire per (effect, live hit
 --   target), effect-major, before that effect's default), so direct
 --   player-cast ev5 legs port (rows 675-686 + 690 ported below).
---   Also staying out: quenching_mist + read_pronouncement (aura IDs
---   live only in the world DB spell_script_names, unresolvable in
---   workspace), and the q12619 emblazon effect SpellScript.
+--   Also staying out: the q12619 emblazon effect SpellScript only —
+--   quenching_mist (53350) + read_pronouncement (56278) are PORTED
+--   below (tick 2026-11-12, hunt-resolved binding IDs).
 
 local SPELL_THAUMATURGY_CHANNEL_AURA = 9712 -- spell_quest.cpp:117 (class spell_q2203_thaumaturgy_channel)
 local SPELL_THAUMATURGY_CHANNEL = 21029 -- spell_quest.cpp:120
@@ -342,31 +342,13 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   to suppress. KNOWN LIMIT: player:CastSpell ignores the triggered
 --   flag (see header note above), same as all prior player ports.
 --
--- STAY OUT (same tick):
---   spell_q10041_q10040_who_are_they (spell_quest.cpp:803-841):
---   EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget; GetHitPlayer casts the
---   gendered disguise 38080/38081 + generic 32756, triggered
---   (player:GetNativeGender bridged, lua_player.go:360; reachable via
---   ev4 + spell:GetTarget()) — no binding spell ID resolvable
---   in-tree (no comment; the enum holds only the disguise spells;
---   spell_script_names lives in the world DB, not the workspace).
---   spell_q9874_liquid_fire (spell_quest.cpp:930-971): EFFECT_0 DUMMY
---   OnEffectHitTarget; hit creature without Flames 39199 gives the
---   caster Villager kill credit 18240, self-casts 39199 triggered,
---   despawns after 60s (all bridges live: HasAura, KilledMonsterCredit,
---   CastSpell, DespawnOrUnsummon(ms)) — no binding spell ID
---   resolvable in-tree (no comment; the enum holds only 18240/39199).
---   spell_q12805_lifeblood_dummy (spell_quest.cpp:975-1013): EFFECT_0
---   SCRIPT_EFFECT OnEffectHitTarget; kill credit 29303, hit creature
---   self-casts its EFFECT_0 DBC value (spell:GetEffectValue(0),
---   lua_spell.go:215), despawns after 2s — no binding spell ID
---   resolvable in-tree (no comment; the enum holds only 29303).
---   spell_q14112_14145_chum_the_water (spell_quest.cpp:1083-1116):
---   EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget; caster-only self-cast
---   of RAND(66737, 66738, 66739, 66740), NON-triggered in C++ (Lua
---   funnel is triggered-only — would be a noted deviation) — no
---   binding spell ID resolvable in-tree (no comment; the enum holds
---   only the four summon spells).
+-- PORTED (tick 2026-11-12, hunt-resolved bindings 48917/32146/54190/
+--   66741 — see the HUNT block at the end of the file):
+--   spell_q10041_q10040_who_are_they (spell_quest.cpp:803-841),
+--   spell_q9874_liquid_fire (:930-971), spell_q12805_lifeblood_dummy
+--   (:975-1013), spell_q14112_14145_chum_the_water (:1083-1116).
+--   STAY OUT (same tick, hunt-confirmed 2026-11-12: the binding-ID
+--   hunt agent found no binding ID for either):
 --   spell_q14076_14092_pound_drum (spell_quest.cpp:1173-1210):
 --   HandleSummon OnCast (ev1, which DOES fire on the player path,
 --   spells.go:10861) 50/50 self-cast 66510/66492 triggered, plus a
@@ -607,14 +589,15 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): ev5
 --   EFFECT_1 SCRIPT_EFFECT; hit-aura stack >= SpellInfo StackAmount
 --   gates a triggered 50928 summon + creature despawn — no
---   spell:GetHitAura bridge, no binding spell ID in-tree.
---   spell_q12730_quenching_mist (:1767-1806): AuraScript periodic
---   heal removing 53504 — no binding aura ID in-tree.
+--   spell:GetHitAura bridge, and the binding-ID hunt agent
+--   (984fe72c, run af65ab02) found no binding spell ID for it.
+--   spell_q12730_quenching_mist (:1767-1806): PORTED tick 2026-11-12
+--   (binding 53350, HUNT block at end of file).
 --   spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy
---   (:1808-1843): ev5 DUMMY; hit creature casts 59319 triggered on
---   the caster — no binding spell ID (comment holds quest IDs only).
---   (Corrected tick 2026-11-12: the ev5 player-path fire site IS live
---   (a910c39d), so the binding ID is the sole blocker.)
+--   (:1808-1843): PORTED tick 2026-11-12 (binding 59318, HUNT block
+--   at end of file). Its sibling armored_decoy_summon_skytalon
+--   (59303) stays out: no OnDestinationTargetSelect bridge, and
+--   the +20 Z leg is already in Go (see the HUNT block).
 --   spell_q13011_bear_flank_master (:1907-1956): ev5 SCRIPT_EFFECT,
 --   caster-is-creature Load gate, hit player 50% casts 56569 on the
 --   creature + AI Talk(0) else self-casts 56566 — no binding ID.
@@ -949,10 +932,11 @@ RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
 --   check); hit creature despawns at once, caster takes
 --   KilledMonsterCredit(28622). Same ev5 fire site as the strip above
 --   (a910c39d, spells.go:14668-14737).
---   NEXT: q10041 (SCRIPT_EFFECT, GetNativeGender + PreventHitDefaultEffect
---   both bridged) and q9874 (39199/18240 in-tree) have NO binding spell
---   id anywhere in the C++ file or census (both "no-id") — stay out
---   until a binding id is resolvable; then q12805/q14112/q9452.
+--   NEXT (tick 2026-11-12): q10041/q9874/q12805/q14112 are PORTED
+--   (hunt-resolved bindings, HUNT block at end of file); the next
+--   no-id classes are q14076 pound_drum, q12279 cast_net, q12372
+--   gossip trigger, q12527 zuldrak rat, q13280 jump_jets — all
+--   hunt-confirmed unresolvable (see the stay-out blocks).
 
 local SPELL_HEALING_FINISHED = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
 local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
@@ -1024,20 +1008,21 @@ RegisterSpellEvent(SPELL_AHUNAES_KNIFE, 5, ahunaesKnifeHit)
 --   OnCast ev1 50/50 summon leg + GO SetLootState leg both
 --   unbindable. spell_q12279_cast_net (:1210-1235): single GO
 --   SetLootState leg, no binding ID (no comment, no enum).
---   spell_q12987_read_pronouncement (:1237-1280): AuraScript
---   AfterEffectApply; no binding aura ID in-tree; also the
---   sCreatureTextMgr SendChat(CHAT_MSG_ADDON) leg has no bridge
---   (creature:Talk is AI::Talk, a different channel).
---   Rows 701-704 stay out per the sibling's block below (same
---   verdicts: no binding IDs; q12277 arm otherwise bridgeable).
+--   spell_q12987_read_pronouncement (:1237-1280): PORTED tick
+--   2026-11-12 (binding 56278, HUNT block at end of file) with the
+--   SendChat(CHAT_MSG_ADDON) legs DROPPED (no bridge — see the
+--   HUNT block delta); the kill-credit leg ports.
+--   Rows 701-704 (q12987/q12277/q12066/q12735) are PORTED tick
+--   2026-11-12 (bindings 56278/48742/50546/52941, HUNT block at
+--   end of file); see the sibling's block below for the same
+--   verdicts, now updated to ported pointers.
 --   spell_q9452_cast_net GO leg (:1157), re-verified this tick:
 --   STAY OUT — ev5 never fires for GO targets on the player path
 --   (spells.go:14727, the 0xF110 continue) and GO Use is unbridged
 --   (zero "Use" methods in lua_objects.go); SetLootState
 --   (lua_objects.go:4324) + SetRespawnTime (:4353) are bridged but
---   unreachable. Rows 691/694/695/696 re-confirmed STAY OUT: no
---   binding spell ID resolvable in-tree (classes :803-841, :930-971,
---   :975-1013, :1083-1116 carry no comment ID).
+--   unreachable. Rows 691/694/695/696 are PORTED tick 2026-11-12
+--   (bindings 48917/32146/54190/66741, HUNT block at end of file).
 
 local SPELL_FLAK_CANNON_TRIGGER = 40110 -- spell_quest.cpp:1528 (Quest11010_11102_11023Data)
 
@@ -1073,25 +1058,18 @@ RegisterSpellEvent(SPELL_AGGRO_CHECK, 5, aggroCheckHit)
 --   all six classes have ZERO hits in engine/ + lua_scripts/ outside
 --   this note, so the census go_hit/lua_hit=true flags are phantoms):
 --   spell_q12987_read_pronouncement (spell_quest.cpp:1244-1277):
---   AuraScript AfterEffectApply; the player target's nearest Ice
---   Spike Bunny 30215 sends chat 1/2 + KilledMonsterCredit(30210) —
---   no binding aura ID in-tree (enum HodirsHelm holds NPCs only);
---   also no SendChat bridge anywhere in engine/world.
---   spell_q12277_wintergarde_mine_explosion (:1288-1334): EFFECT_0
---   DUMMY ev5; the caster must be TYPEID_UNIT with an owner, hit
---   creature 27436/27437 -> caster casts 48744/48745 on the owner,
---   triggered — no binding spell ID in-tree (enum holds NPCs +
---   credit spells only).
---   spell_q12066_bunny_kill_credit (:1341-1366): EFFECT_0 DUMMY
---   ev5; hit creature casts 47390 on the caster, NON-triggered —
---   no binding spell ID in-tree (enum holds only 47390).
---   spell_q12735_song_of_cleansing (:1379-1417): EFFECT_0
---   SCRIPT_EFFECT ev5; caster area 4385/4290/4388 -> self-cast
---   52954/52958/52959, non-triggered — no binding spell ID
---   in-tree (enum holds areas + summon spells only).
+--   PORTED tick 2026-11-12 (binding 56278, HUNT block at end of
+--   file); the SendChat legs are dropped, no bridge (see there).
+--   spell_q12277_wintergarde_mine_explosion (:1288-1334): PORTED
+--   tick 2026-11-12 (binding 48742, HUNT block at end of file).
+--   spell_q12066_bunny_kill_credit (:1341-1366): PORTED tick
+--   2026-11-12 (binding 50546, HUNT block at end of file).
+--   spell_q12735_song_of_cleansing (:1379-1417): PORTED tick
+--   2026-11-12 (binding 52941, HUNT block at end of file).
 --   spell_q12372_cast_from_gossip_trigger (:1424-1449): EFFECT_0
 --   SCRIPT_EFFECT ev5; caster self-casts 49207 triggered — no
---   binding spell ID in-tree (enum holds only 49207).
+--   binding spell ID in-tree (enum holds only 49207), and the
+--   binding-ID hunt agent (984fe72c, run af65ab02) found none.
 --   spell_q12372_destabilize_azure_dragonshrine_dummy (:1460-1490):
 --   EFFECT_0 DUMMY ev5; binding 49370 IS grounded in-file
 --   (comment :1451) and GetVehicleKit / GetPassenger /
@@ -1163,7 +1141,7 @@ RegisterSpellEvent(SPELL_AZURE_ON_DEATH_FORCE_WHISPER, 5, azureOnDeathForceWhisp
 --   would skip the credit leg only.
 --   STAY OUT (same tick): spell_q13280_13283_jump_jets (:1057-1081):
 --   OnCast ev1, no binding spell ID in-tree (enum holds only 4340);
---   the binding-ID hunt agent covers it.
+--   the binding-ID hunt agent (984fe72c, run af65ab02) found none.
 
 local SPELL_DESTABILIZE_AZURE_DRAGONSHRINE = 49370 -- spell_quest.cpp:1451 (class spell_q12372_destabilize_azure_dragonshrine_dummy)
 local NPC_WYRMREST_TEMPLE_CREDIT = 27698 -- spell_quest.cpp:1455 (Quest12372Data)
@@ -1230,3 +1208,291 @@ end
 RegisterSpellEvent(SPELL_PLANT_HORDE_BATTLE_STANDARD, 5, plantBattleStandardHit)
 RegisterSpellEvent(SPELL_PLANT_ALLIANCE_BATTLE_STANDARD, 5, plantBattleStandardHit)
 
+-- PORTED (tick 2026-11-12, binding-ID hunt agent 984fe72c, run af65ab02):
+--   10 spell_quest.cpp classes whose binding IDs the hunt resolved via
+--   the AzerothCore spell_script_names.sql mirror, each cross-checked
+--   against its Wowhead effect layout (full report /tmp/hunt_report.txt).
+--   spell_q10041_q10040_who_are_they (spell_quest.cpp:803-841): EFFECT_0
+--   SCRIPT_EFFECT ev5, binding 48917. The hit player self-casts the
+--   gendered disguise (38080 male / 38081 female, GetNativeGender,
+--   lua_player.go:360; GENDER_MALE 0, SharedDefines.h:76) + generic
+--   32756, triggered.
+--   spell_q9874_liquid_fire (spell_quest.cpp:930-971): EFFECT_0 DUMMY
+--   ev5, binding 32146. Caster-is-player Load gate (explicit check);
+--   hit creature without Flames 39199 gives the caster Villager kill
+--   credit 18240, self-casts 39199 triggered, despawns after 60s.
+--   spell_q12805_lifeblood_dummy (spell_quest.cpp:975-1013): EFFECT_0
+--   SCRIPT_EFFECT ev5, binding 54190. Caster-is-player Load gate;
+--   kill credit 29303, hit creature self-casts its EFFECT_0 DBC
+--   value (54189 per the hunt's Wowhead check; spell:GetEffectValue(0),
+--   lua_spell.go:195), despawns after 2s.
+--   spell_q14112_14145_chum_the_water (spell_quest.cpp:1083-1116):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 66741. Caster self-casts
+--   RAND(66737, 66738, 66739, 66740), NON-triggered in C++ — the
+--   player:CastSpell flag is ignored on the player path (see header
+--   note), so it lands non-triggered, matching C++; a creature
+--   caster passes false explicitly.
+--   spell_q12987_read_pronouncement (spell_quest.cpp:1244-1280):
+--   AuraScript AfterEffectApply, EFFECT_0 SPELL_AURA_NONE, binding
+--   56278. The player target's nearest Ice Spike Bunny 30215 within
+--   25yd gates KilledMonsterCredit(30210).
+--   DELTA: both sCreatureTextMgr SendChat(CHAT_MSG_ADDON) legs are
+--   DROPPED — no SendChat bridge exists anywhere in engine/world
+--   (creature_text.go's broadcastCreatureTalk serves Talk only);
+--   creature:Talk is AI::Talk, a different channel, and is NOT
+--   substituted. Go event 2 is OnApply vs C++ AfterEffectApply;
+--   the arm reads no aura state, so the timing is immaterial
+--   (the goingBearback precedent).
+--   spell_q12277_wintergarde_mine_explosion (spell_quest.cpp:1288-1334):
+--   EFFECT_0 DUMMY ev5, binding 48742. Caster must be TYPEID_UNIT
+--   (GetTypeId() == 3, the generic fallback, object.go:168) with an
+--   owner (creature:GetOwner, lua_creature_events.go:627); hit
+--   creature 27436/27437 -> caster casts 48744/48745 on the owner,
+--   triggered. DELTA: GetOwner resolves player owners only
+--   (findSessionByGUID); the bomb's owner is the planting player.
+--   spell_q12066_bunny_kill_credit (spell_quest.cpp:1341-1366):
+--   EFFECT_0 DUMMY ev5, binding 50546. Hit creature casts the
+--   47390 beam on the caster, NON-triggered.
+--   spell_q12735_song_of_cleansing (spell_quest.cpp:1379-1417):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 52941. Caster area
+--   4385/4290/4388 -> self-cast 52954/52958/52959, non-triggered
+--   (GetAreaId on player + creature surfaces, lua_player.go:180 /
+--   lua_creature_events.go:3653).
+--   spell_q12730_quenching_mist (spell_quest.cpp:1767-1806):
+--   AuraScript OnEffectPeriodic, EFFECT_0 SPELL_AURA_PERIODIC_HEAL,
+--   binding 53350. The target's Flickering Flames 53504 is removed
+--   each tick (RegisterAuraEvent 1).
+--   spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy
+--   (spell_quest.cpp:1808-1843): EFFECT_0 DUMMY ev5, binding 59318.
+--   Hit creature casts Ride 59319 on the caster, triggered (the
+--   C++ TODO calls the triggered flag a hack; ported as written).
+--   DELTAS: C++ PreventHitDefaultEffect has no ev5 twin
+--   (notification-only, as on ev4); the q10041/q12805 script-effect
+--   defaults have no Go leg to suppress. C++ Load() gates are
+--   explicit GetTypeId() checks (ev5 fires on both paths).
+--   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
+--   header note above), same as all prior player ports.
+--   One table local holds all new consts: the file sits at 159
+--   top-level locals and the 200-local main-chunk limit leaves no
+--   room for 31 individual consts + 10 handlers (the LK-table
+--   precedent).
+--
+-- STAY OUT (same tick):
+--   spell_q13291_q13292_q13239_q13261_armored_decoy_summon_skytalon
+--   (spell_quest.cpp:1844-1876): binding 59303 IS resolved (hunt:
+--   AC table L3571 + in-file comment "59303 - Summon Frost Wyrm"),
+--   but the arm is OnDestinationTargetSelect (EFFECT_0
+--   TARGET_DEST_CASTER_BACK, +20 Z RelocateOffset) and there is NO
+--   bridge for it anywhere in engine/ (zero hits). The leg is
+--   ALREADY ported in Go: resolveImplicitSpellDestinationWithSnapshots
+--   carries the 59303 +20 Z offset (CHECKPOINT rows 231-235,
+--   a5affd0d), dormant until Spell.dbc ships the rows — nothing
+--   left for Lua to do.
+
+local HUNT = {
+    -- spell_q10041_q10040_who_are_they (spell_quest.cpp:803)
+    SPELL_WHO_ARE_THEY = 48917,
+    SPELL_MALE_DISGUISE = 38080,
+    SPELL_FEMALE_DISGUISE = 38081,
+    SPELL_GENERIC_DISGUISE = 32756,
+    GENDER_MALE = 0,
+    -- spell_q9874_liquid_fire (spell_quest.cpp:930)
+    SPELL_LIQUID_FIRE = 32146,
+    SPELL_FLAMES = 39199,
+    NPC_VILLAGER_KILL_CREDIT = 18240,
+    LIQUID_FIRE_DESPAWN_MS = 60000,
+    -- spell_q12805_lifeblood_dummy (spell_quest.cpp:975)
+    SPELL_LIFEBLOOD_DUMMY = 54190,
+    NPC_SHARD_KILL_CREDIT = 29303,
+    LIFEBLOOD_DESPAWN_MS = 2000,
+    -- spell_q14112_14145_chum_the_water (spell_quest.cpp:1083)
+    SPELL_CHUM_THE_WATER = 66741,
+    CHUM_THE_WATER_SUMMONS = {66737, 66738, 66739, 66740},
+    -- spell_q12987_read_pronouncement (spell_quest.cpp:1244)
+    SPELL_READ_PRONOUNCEMENT = 56278,
+    NPC_HODIRS_HELM_KC = 30210,
+    NPC_ICE_SPIKE_BUNNY = 30215,
+    -- spell_q12277_wintergarde_mine_explosion (spell_quest.cpp:1288)
+    SPELL_WINTERGARDE_MINE_EXPLOSION = 48742,
+    NPC_UPPER_MINE_SHAFT = 27436,
+    NPC_LOWER_MINE_SHAFT = 27437,
+    SPELL_UPPER_MINE_SHAFT_CREDIT = 48744,
+    SPELL_LOWER_MINE_SHAFT_CREDIT = 48745,
+    TYPEID_UNIT = 3,
+    -- spell_q12066_bunny_kill_credit (spell_quest.cpp:1341)
+    SPELL_BUNNY_KILL_CREDIT = 50546,
+    SPELL_BUNNY_CREDIT_BEAM = 47390,
+    -- spell_q12735_song_of_cleansing (spell_quest.cpp:1379)
+    SPELL_SONG_OF_CLEANSING = 52941,
+    SONG_OF_CLEANSING_SUMMONS = {[4385] = 52954, [4290] = 52958, [4388] = 52959},
+    -- spell_q12730_quenching_mist (spell_quest.cpp:1767)
+    SPELL_QUENCHING_MIST = 53350,
+    SPELL_FLICKERING_FLAMES = 53504,
+    -- spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy (spell_quest.cpp:1808)
+    SPELL_GRAB_FAKE_SOLDIER = 59318,
+    SPELL_RIDE = 59319,
+}
+
+local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    if hitTarget:GetNativeGender() == HUNT.GENDER_MALE then
+        hitTarget:CastSpell(hitTarget, HUNT.SPELL_MALE_DISGUISE, true)
+    else
+        hitTarget:CastSpell(hitTarget, HUNT.SPELL_FEMALE_DISGUISE, true)
+    end
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_GENERIC_DISGUISE, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_WHO_ARE_THEY, 5, whoAreTheyHit)
+
+local function liquidFireHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    if not hitTarget:HasAura(HUNT.SPELL_FLAMES) then
+        caster:KilledMonsterCredit(HUNT.NPC_VILLAGER_KILL_CREDIT)
+        hitTarget:CastSpell(hitTarget, HUNT.SPELL_FLAMES, true)
+        hitTarget:DespawnOrUnsummon(HUNT.LIQUID_FIRE_DESPAWN_MS)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_LIQUID_FIRE, 5, liquidFireHit)
+
+local function lifebloodDummyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:KilledMonsterCredit(HUNT.NPC_SHARD_KILL_CREDIT)
+    local spellId = spell:GetEffectValue(0)
+    if spellId > 0 then
+        hitTarget:CastSpell(hitTarget, spellId, true)
+    end
+    hitTarget:DespawnOrUnsummon(HUNT.LIFEBLOOD_DESPAWN_MS)
+end
+
+RegisterSpellEvent(HUNT.SPELL_LIFEBLOOD_DUMMY, 5, lifebloodDummyHit)
+
+local function chumTheWaterHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local summons = HUNT.CHUM_THE_WATER_SUMMONS
+    caster:CastSpell(caster, summons[math.random(1, 4)], false)
+end
+
+RegisterSpellEvent(HUNT.SPELL_CHUM_THE_WATER, 5, chumTheWaterHit)
+
+local function readPronouncementApply(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return
+    end
+    local bunny = target:FindNearestCreature(HUNT.NPC_ICE_SPIKE_BUNNY, 25)
+    if bunny == nil then
+        return
+    end
+    target:KilledMonsterCredit(HUNT.NPC_HODIRS_HELM_KC)
+end
+
+RegisterAuraEvent(HUNT.SPELL_READ_PRONOUNCEMENT, 2, readPronouncementApply)
+
+local function wintergardeMineExplosionHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= HUNT.TYPEID_UNIT then
+        return
+    end
+    local owner = caster:GetOwner()
+    if owner == nil then
+        return
+    end
+    local entry = hitTarget:GetEntry()
+    if entry == HUNT.NPC_UPPER_MINE_SHAFT then
+        caster:CastSpell(owner, HUNT.SPELL_UPPER_MINE_SHAFT_CREDIT, true)
+    elseif entry == HUNT.NPC_LOWER_MINE_SHAFT then
+        caster:CastSpell(owner, HUNT.SPELL_LOWER_MINE_SHAFT_CREDIT, true)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_WINTERGARDE_MINE_EXPLOSION, 5, wintergardeMineExplosionHit)
+
+local function bunnyKillCreditHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, HUNT.SPELL_BUNNY_CREDIT_BEAM, false)
+end
+
+RegisterSpellEvent(HUNT.SPELL_BUNNY_KILL_CREDIT, 5, bunnyKillCreditHit)
+
+local function songOfCleansingHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local spellId = HUNT.SONG_OF_CLEANSING_SUMMONS[caster:GetAreaId()]
+    if spellId ~= nil then
+        caster:CastSpell(caster, spellId, false)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_SONG_OF_CLEANSING, 5, songOfCleansingHit)
+
+local function quenchingMistTick(event, aura, target)
+    target:RemoveAura(HUNT.SPELL_FLICKERING_FLAMES)
+end
+
+RegisterAuraEvent(HUNT.SPELL_QUENCHING_MIST, 1, quenchingMistTick)
+
+local function grabDecoyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, HUNT.SPELL_RIDE, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_GRAB_FAKE_SOLDIER, 5, grabDecoyHit)
