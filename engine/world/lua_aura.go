@@ -1229,6 +1229,16 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 		"GetObjectType":  luaNoArgs(func() any { return "ProcEvent" }),
 		"GetSpellId":     luaNoArgs(func() any { return spellID }),
 		"GetSpellIconId": luaNoArgs(func() any { return iconID }),
+		// GetSpellFamilyName reads the event spell's SpellFamilyName
+		// (SharedDefines.h SpellFamilyNames; 0 when the event carries
+		// no spell). Backs the black-magic CheckProc gate
+		// (spell_generic.cpp:532-566), which keys on SPELLFAMILY_DRUID.
+		"GetSpellFamilyName": luaNoArgs(func() any {
+			if ev.eventSpell == nil {
+				return uint32(0)
+			}
+			return ev.eventSpell.SpellFamilyName
+		}),
 		"GetSpellFamilyFlags": func(_ context.Context, args []any) ([]any, error) {
 			index := uint32(0)
 			if len(args) > 0 && args[0] != nil {

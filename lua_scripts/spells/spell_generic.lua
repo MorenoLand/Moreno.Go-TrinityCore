@@ -803,3 +803,142 @@ local function stealEssenceVisualRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_STEAL_ESSENCE_VISUAL_AURA, 3, stealEssenceVisualRemove)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_gen_blood_reserve::HandleProc + CheckProc (spell_generic.cpp:574-608):
+--   EFFECT_0 PROC_TRIGGER_SPELL. CheckProc gates on the proc action
+--   target being below 35% health; the handler returns true on both
+--   paths — the C++ PreventDefaultAction veto plus the CheckProc veto.
+--   The action target (procEvent:GetActionTarget(), the damaged unit —
+--   the aura holder on a damage-taken proc) casts Blood Reserve Heal
+--   64569 on itself with BP0 = the aura effect amount (CastCustomSpell
+--   4-arg form, cannon_blast precedent; C++ CastSpellExtraArgs(aurEff)
+--   + AddSpellBP0, triggered defaults false), then drops the 64568 aura.
+--   HealthBelowPct rides GetHealthPct (generic object fallback);
+--   strict < 35 matches the C++ strict-below comparison.
+--   DORMANT until Spell.dbc ships the 64568 row.
+local SPELL_BLOOD_RESERVE_AURA = 64568 -- spell_generic.cpp:570
+local SPELL_BLOOD_RESERVE_HEAL = 64569 -- spell_generic.cpp:571
+
+local function bloodReserveProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or procEvent == nil then
+        return true
+    end
+    local actionTarget = procEvent:GetActionTarget()
+    if actionTarget == nil or actionTarget:GetHealthPct() >= 35 then
+        return true
+    end
+    actionTarget:CastCustomSpell(actionTarget, SPELL_BLOOD_RESERVE_HEAL, false, aura:GetAmount())
+    actionTarget:RemoveAura(SPELL_BLOOD_RESERVE_AURA)
+    return true
+end
+
+RegisterAuraEvent(SPELL_BLOOD_RESERVE_AURA, 6, bloodReserveProc)
+
+-- PORTED (this tick, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
+--   spell_gen_burning_depths_necrolyte_image::HandleApply + HandleRemove
+--   (spell_generic.cpp:799-824): EFFECT_0 TRANSFORM, REAL handles.
+--   On apply the caster casts the EFFECT_2 value (the image spell id,
+--   read here as aura:GetAmount(2) — the CalcValue twin; guarded to
+--   never fire a bogus 0-id cast) on the target, non-triggered; on
+--   remove the target drops that aura. ONE DELTA: C++ removes only the
+--   auras cast by this caster (RemoveAurasDueToSpell + GetCasterGUID);
+--   Lua RemoveAura has no caster scope, so it drops all stacks of the
+--   image spell. DORMANT until Spell.dbc ships the 48750 row.
+local SPELL_BURNING_DEPTHS_NECROLYTE_IMAGE = 48750 -- spell_generic.cpp:798
+
+local function burningDepthsApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    local imageSpell = aura:GetAmount(2)
+    if imageSpell == 0 then
+        return
+    end
+    caster:CastSpell(target, imageSpell, false)
+end
+
+RegisterAuraEvent(SPELL_BURNING_DEPTHS_NECROLYTE_IMAGE, 2, burningDepthsApply)
+
+local function burningDepthsRemove(event, aura, target)
+    if target == nil then
+        return
+    end
+    local imageSpell = aura:GetAmount(2)
+    if imageSpell == 0 then
+        return
+    end
+    target:RemoveAura(imageSpell)
+end
+
+RegisterAuraEvent(SPELL_BURNING_DEPTHS_NECROLYTE_IMAGE, 3, burningDepthsRemove)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6, aura half only):
+--   spell_gen_decay_over_time_aura::Decay + CheckProc (spell_generic.cpp:1340-1363),
+--   bound to 36659 by RegisterSpellAndAuraScriptPair (spell_generic.cpp:4382).
+--   CheckProc gates on the proc event's spell being this aura's own spell
+--   (procEvent:GetSpellId() == 36659; a spell-less event reads 0 and vetoes);
+--   Decay vetoes the default leg and drops one stack
+--   (SetStackAmount(GetStackAmount() - 1), the ModStackAmount(-1) twin).
+--   SPELL HALF STAYS OUT: spell_gen_decay_over_time_spell::ModAuraStack
+--   (AfterHit, :1324-1338) needs GetHitAura (no Lua bridge) plus the DBC
+--   StackAmount value (no bridge). DORMANT until Spell.dbc ships 36659.
+local SPELL_DECAY_OVER_TIME_TAIL_STING = 36659 -- spell_generic.cpp:1393
+
+local function decayOverTimeProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if procEvent == nil or procEvent:GetSpellId() ~= SPELL_DECAY_OVER_TIME_TAIL_STING then
+        return true
+    end
+    aura:SetStackAmount(aura:GetStackAmount() - 1)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DECAY_OVER_TIME_TAIL_STING, 6, decayOverTimeProc)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6, veto-only gate):
+--   spell_gen_black_magic::CheckProc (spell_generic.cpp:532-566).
+--   The class registers ONLY DoCheckProc — no proc handler of its own —
+--   so the Lua port is a pure gate on the engine default leg: the ev6
+--   hook fires before the default trigger (procs.go/boss_ai.go fire
+--   sites), a true return vetoes it, a nil return lets it run. The
+--   handler mirrors the C++ if/elif/elif chain exactly: no event spell
+--   -> veto; magic-damage-class-negative -> allow; melee-damage-class
+--   -> allow only for druid Shred/Mangle (family flags [0] 0x8000 /
+--   [1] 0x400); none-damage-class-negative -> allow only for druid
+--   Infected Wounds (icon 2857); anything else -> veto. The family
+--   check rides the new procEvent:GetSpellFamilyName bridge
+--   (lua_aura.go); flags/icon/typeMask were already bridged.
+--   DORMANT until Spell.dbc ships the 59630 row.
+local SPELL_GEN_BLACK_MAGIC = 59630 -- spell_generic.cpp:532
+local PROC_FLAG_DONE_SPELL_MELEE_DMG_CLASS = 0x10 -- SpellMgr.h:123
+local PROC_FLAG_DONE_SPELL_NONE_DMG_CLASS_NEG = 0x1000 -- SpellMgr.h:135
+local PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG = 0x10000 -- SpellMgr.h:141
+local SPELLFAMILY_DRUID = 7 -- SharedDefines.h:3588
+
+local function blackMagicProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    local typeMask = procEvent:GetTypeMask()
+    if bit32.band(typeMask, PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG) ~= 0 then
+        return
+    end
+    if bit32.band(typeMask, PROC_FLAG_DONE_SPELL_MELEE_DMG_CLASS) ~= 0 then
+        if procEvent:GetSpellFamilyName() == SPELLFAMILY_DRUID
+            and (procEvent:GetSpellFamilyFlags(0) == 0x8000 or procEvent:GetSpellFamilyFlags(1) == 0x400) then
+            return
+        end
+        return true
+    end
+    if bit32.band(typeMask, PROC_FLAG_DONE_SPELL_NONE_DMG_CLASS_NEG) ~= 0 then
+        if procEvent:GetSpellFamilyName() == SPELLFAMILY_DRUID
+            and procEvent:GetSpellIconId() == 2857 then -- SPELLICON_DRUID_INFECTED_WOUNDS, spell_generic.cpp:529
+            return
+        end
+        return true
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_GEN_BLACK_MAGIC, 6, blackMagicProc)
