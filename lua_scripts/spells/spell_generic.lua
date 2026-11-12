@@ -411,8 +411,28 @@ end
 RegisterSpellEvent(SPELL_EJECT_PASSENGER_1, 5, ejectPassengerHit)
 RegisterSpellEvent(SPELL_EJECT_PASSENGER_2, 5, ejectPassengerHit)
 
--- STAYS OUT (this tick): spell_gen_burn_brutallus (46394,
--- spell_generic.cpp:782-800) — OnEffectUpdatePeriodic only: every
--- 11th tick doubles the periodic-damage amount. The AuraEvents set
--- (runtime.go:544-551) has no update-periodic event, so there is no
--- hook to port it on. Binding 46394 (AC 'spell_gen_burn_brutallus').
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_gen_burn_brutallus (46394, spell_generic.cpp:782-800):
+--   OnEffectUpdatePeriodic only: every 11th tick doubles the
+--   periodic-damage amount (GetTickNumber() % 11 == 0 ->
+--   SetAmount(GetAmount() * 2)). The update-periodic hook has no
+--   dedicated AuraEvent, but it is exactly reproducible on ev1:
+--   C++ AuraEffect::Update does ++_ticksDone, then calls the
+--   update-periodic handlers, then the periodic tick
+--   (SpellAuraEffects.cpp:827-834), and Go ev1 fires before the
+--   default tick with _ticksDone already incremented (spells.go
+--   comment at the fire site) — so the ev1 handler sees the same
+--   tick number and the doubled amount applies to the same tick.
+--   This is the kalecgos precedent (boss_kalecgos.lua:951-959,
+--   tick % 5 == 1 -> SetAmount(GetAmount() * 2); SetAmount
+--   lua_aura.go:945, GetAmount :418). Binding 46394 (AC
+--   'spell_gen_burn_brutallus').
+local SPELL_BURN_BRUTALLUS = 46394 -- spell_generic.cpp:782
+
+local function burnBrutallusTick(event, aura, target)
+    if aura:GetTickNumber() % 11 == 0 then
+        aura:SetAmount(aura:GetAmount() * 2)
+    end
+end
+
+RegisterAuraEvent(SPELL_BURN_BRUTALLUS, 1, burnBrutallusTick)
