@@ -19760,8 +19760,11 @@ func init() {
 	// entry-unverifiable; DoCastAOE bridge absent) — zero registration,
 	// documented-only. spell_bullet_controller,
 	// spell_valkyr_essences, spell_power_of_the_twins — stay out:
-	// essences has no OnEffectAbsorb hook (AuraEvents 1-7 only),
-	// power_of_the_twins has no EnableDualWield bridge; join the
+	// essences: AuraEventOnEffectAbsorb = 9 exists now (runtime.go:573)
+	// but ev9 args carry no damage-spell ID, so the vortex/unleashed
+	// gates are inexpressible — engine work: thread the damaging spell
+	// ID into fireAuraAbsorb; power_of_the_twins has no
+	// EnableDualWield bridge; join the
 	// SpellScript/AuraScript queue. spell_powering_up is PORTED in
 	// lua_scripts/northrend/boss_twin_valkyr.lua (RegisterSpellEvent
 	// ev5 on the 67590-helper pool) — the binding bridge is live.

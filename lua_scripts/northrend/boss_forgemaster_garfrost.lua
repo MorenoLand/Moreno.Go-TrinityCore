@@ -151,8 +151,10 @@
 --   melee targeting is engine-driven in Go, no bridge needed.
 -- spell_garfrost_permafrost (:261-333, SpellScriptLoader: BeforeHit
 --   saronite-rock LoS check + ApplySpellImmune/PreventHit legs,
---   AfterHit immunity restore) — no SpellScript bridge (the
---   boss_moragg optic-link precedent), stays in the standing queue.
+--   AfterHit immunity restore) — PORTED 2026-11-12 below
+--   (permafrostBeforeHit / permafrostAfterHit, ev6/ev3 on 70326;
+--   the old "no SpellScript bridge" claim is retired — ev6/ev3 fire
+--   on the creature path, boss_ai.go:3829/:4351).
 -- achievement_doesnt_go_to_eleven (:335-353, OnCheck GetData <= 10) —
 --   PORTED 2026-11-08 (tick 416): the SpellHitTarget peak latch rides
 --   garfrostSpellHitTarget below; Go case in
@@ -606,3 +608,72 @@ end
 RegisterCreatureEvent(ENTRY_GARFROST, 15, garfrostSpellHitTarget)
 RegisterCreatureEvent(ENTRY_GARFROST, 9, garfrostDamageTaken)
 RegisterCreatureEvent(ENTRY_GARFROST, 23, garfrostReset)
+
+-- C++ spell_garfrost_permafrost (boss_forgemaster_garfrost.cpp:261-333):
+-- BeforeHit (miss-inclusive; returns unless missInfo == SPELL_MISS_NONE
+-- :277-279): for each hit unit, gather saronite rocks (GO_SARONITE_ROCK
+-- 196485, pit_of_saron.h:100) within 100.0f; if a rock IsInBetween(caster,
+-- target, 4.0f), the target gains spell-immunity to 70326 for the cast
+-- and PreventHitDefaultEffect(0/1/2) fires (:294-301). AfterHit: the
+-- immunity is removed (:308-315). DORMANT until Spell.dbc ships 70326.
+-- Gaps vs C++ (documented): PreventHitDamage() has no Go model (likely
+-- vacuous — 70326's effect list is DBC-bound); PreventHitAura() + the
+-- per-cast `prevented` quirk are not reproduced — the flag has no
+-- Go-observable consumer, its aura-suppression job rides
+-- PreventHitDefaultEffect via the ApplyAura arm (boss_ai.go:9255);
+-- IsInvisibleDueToDespawn has no Lua method, the grid list is trusted;
+-- PreventHitDefaultEffect collapses to per-effect in Go, so a blocked
+-- target suppresses the effect for every hit target of that effect.
+local GO_SARONITE_ROCK = 196485
+
+-- WorldObject::IsInBetween (Object.cpp:1395-1410), 2D: the rock must lie
+-- strictly inside the caster->target segment (dist < segment length)
+-- and within size of the point on the caster->target ray at the rock's
+-- distance from the caster.
+local function rockInBetween(rock, caster, target, size)
+    local rx, ry = rock:GetX(), rock:GetY()
+    local cx, cy = caster:GetX(), caster:GetY()
+    local tx, ty = target:GetX(), target:GetY()
+    local dx, dy = rx - cx, ry - cy
+    local distSq = dx * dx + dy * dy
+    local segX, segY = tx - cx, ty - cy
+    local segSq = segX * segX + segY * segY
+    if distSq >= segSq then
+        return false
+    end
+    local dist = math.sqrt(distSq)
+    local angle = math.atan2(segY, segX)
+    local px, py = cx + math.cos(angle) * dist, cy + math.sin(angle) * dist
+    local pdx, pdy = rx - px, ry - py
+    return size * size >= pdx * pdx + pdy * pdy
+end
+
+local function permafrostBeforeHit(event, spell, target, missInfo)
+    if missInfo ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local rocks = caster:GetGameObjectsInGrid(GO_SARONITE_ROCK, 100.0)
+    for _, rock in ipairs(rocks) do
+        if rockInBetween(rock, caster, target, 4.0) then
+            target:ApplySpellImmune(SPELL_PERMAFROST, 6, SPELL_PERMAFROST, true)
+            spell:PreventHitDefaultEffect(0)
+            spell:PreventHitDefaultEffect(1)
+            spell:PreventHitDefaultEffect(2)
+            return
+        end
+    end
+end
+
+local function permafrostAfterHit(event, spell, target)
+    if target == nil then
+        return
+    end
+    target:ApplySpellImmune(SPELL_PERMAFROST, 6, SPELL_PERMAFROST, false)
+end
+
+RegisterSpellEvent(SPELL_PERMAFROST, 6, permafrostBeforeHit)
+RegisterSpellEvent(SPELL_PERMAFROST, 3, permafrostAfterHit)

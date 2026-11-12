@@ -1454,12 +1454,26 @@ end
 RegisterSpellEvent(SPELL_SPAWN_LIVING_EMBERS, 7, spawnLivingEmbersFilter)
 RegisterSpellEvent(SPELL_SPAWN_LIVING_EMBERS, 5, spawnLivingEmbersHit)
 
--- C++ spell_halion_blazing_aura (boss_halion.cpp:1877-1902): the
--- ev22 caster leg above is ported; the SpellScript itself stays out.
--- OnEffectHitTarget EFFECT_1 SPELL_EFFECT_FORCE_CAST would
--- PreventHitDefaultEffect + have the hit unit cast
--- Effects[1].TriggerSpell on itself non-triggered (:1887-1890) —
--- but the trigger id is DBC-side (no Spell.dbc in-tree), so the
--- replacement cast cannot be named. Documented deviation: Go's
--- default EffectForceCast casts the trigger triggered at the aura
--- caster, while the script casts it non-triggered at the hit unit.
+-- C++ spell_halion_blazing_aura (boss_halion.cpp:1877-1902):
+-- OnEffectHitTarget EFFECT_1 SPELL_EFFECT_FORCE_CAST —
+-- PreventHitDefaultEffect(1) + the hit unit casts
+-- Effects[1].TriggerSpell on itself non-triggered (:1887-1890).
+-- PORTED 2026-11-12: GetTriggerSpell IS bridged (lua_spell.go:574)
+-- and the ev5 veto is consulted by the Go ForceCast arm
+-- (boss_ai.go:3987), so the replacement cast can be named — the old
+-- "trigger id unnameable" stay-out is retired. DORMANT until Spell.dbc
+-- ships the 75885 record; without the veto Go's default ForceCast
+-- would cast the trigger triggered at the aura caster instead of
+-- non-triggered at the hit unit.
+local function blazingAuraHit(event, spell, target, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    spell:PreventHitDefaultEffect(1)
+    local trig = spell:GetTriggerSpell(1)
+    if trig ~= nil and trig ~= 0 and target ~= nil then
+        target:CastSpell(target, trig)
+    end
+end
+
+RegisterSpellEvent(SPELL_BLAZING_AURA, 5, blazingAuraHit)
