@@ -607,16 +607,13 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   exists, lua_spell.go:91, but no CastSpell(x,y,z) arm).
 --   spell_q12641_recall_eye_of_acherus (:2381-2415): ev5; caster's
 --   charmer-or-owner player stops charm/bindsight + removes the Eye
---   aura — GetCharmerOrOwner object + StopCastingCharm/BindSight
---   unbridged, no binding ID.
---   spell_q12919_gymers_grab (:2474-2514): ev5; hit creature casts
---   43671 on the caster with BP0=2 + 55424 on itself — no binding
---   ID; Lua CastSpell takes no base-points arg.
---   spell_q12919_gymers_throw (:2515-2551): ev5; caster vehicle
---   passenger(1) exits + caster casts 55569 on it — no binding ID
---   only: GetVehicleKit (lua_creature_events.go:3282) + GetPassenger
---   (lua_vehicle.go:74) ARE bridged, so the arm ports once a binding
---   ID is found.
+--   aura — StopCastingCharm/BindSight unbridged (GetCharmerOrOwner
+--   IS bridged via GetControllerGUID; binding 52694, in-file comment
+--   :2375 — corrected tick 2026-11-12).
+--   spell_q12919_gymers_grab (:2474-2514): PORTED tick 2026-11-12
+--   (binding 55516, HUNT block at end of file).
+--   spell_q12919_gymers_throw (:2515-2551): PORTED tick 2026-11-12
+--   (binding 55421, HUNT block at end of file).
 --   spell_q13400_illidan_kill_master (:2552-2590): ev5 DUMMY; caster
 --   vehicle passenger(0) self-casts 61748 — no binding ID only, same
 --   vehicle bridges live.
@@ -1375,6 +1372,13 @@ local HUNT = {
     NPC_NEW_AVALON_TOWN_HALL = 28543,
     NPC_SCARLET_HOLD = 28542,
     NPC_CHAPEL_OF_THE_CRIMSON_FLAME = 28544,
+    -- spell_q12919_gymers_grab (spell_quest.cpp:2474)
+    SPELL_GYMERS_GRAB = 55516,
+    SPELL_RIDE_GYMER = 43671,
+    SPELL_GRABBED = 55424,
+    -- spell_q12919_gymers_throw (spell_quest.cpp:2515)
+    SPELL_GYMERS_THROW = 55421,
+    SPELL_VARGUL_EXPLOSION = 55569,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -1798,3 +1802,68 @@ local function deathComesFromOnHighHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_DEATH_COMES_FROM_ON_HIGH, 5, deathComesFromOnHighHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12919_gymers_grab (spell_quest.cpp:2474-2514): EFFECT_0
+--   SCRIPT_EFFECT ev5, binding 55516 (checkpoint-recorded AC +
+--   Wowhead verification: single Script Effect, Value 43671 =
+--   SPELL_RIDE_GYMER). The hit creature casts 43671 on the caster
+--   with TRIGGERED_FULL_MASK + BP0=2 — CastCustomSpell is the exact
+--   twin (lua_creature_events.go:977: triggered sets
+--   TRIGGERED_FULL_MASK, supplied base points override only their
+--   effects) — then self-casts 55424, triggered. The header's "Lua
+--   CastSpell takes no base-points arg" is superseded: CastSpell
+--   takes none, CastCustomSpell does.
+--   spell_q12919_gymers_throw (spell_quest.cpp:2515-2551): EFFECT_0
+--   SCRIPT_EFFECT ev5, binding 55421 (checkpoint-recorded AC +
+--   Wowhead verification: single Script Effect). The caster, if a
+--   vehicle, drops its seat-1 passenger (GetVehicleKit +
+--   GetPassenger(1), lua_vehicle.go:74; ExitVehicle on both unit
+--   surfaces) and casts 55569 on the passenger, triggered. The hit
+--   target is unused in C++; the arm repeats per hit target in both
+--   (a second fire finds the seat empty and no-ops).
+--
+-- STAY OUT (same tick):
+--   spell_q13400_illidan_kill_master (spell_quest.cpp:2552-2590):
+--   EFFECT_0 DUMMY ev5; caster vehicle passenger(0) self-casts
+--   61748, triggered — no binding ID (no in-file comment, no AC
+--   spell_script_names row per the checkpoint-recorded verification;
+--   joins the no-id stay-outs). The vehicle bridges are live
+--   (IsVehicle/GetVehicleKit/GetPassenger/ExitVehicle), so this ports
+--   once a binding ID is found.
+
+local function gymersGrabHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastCustomSpell(caster, HUNT.SPELL_RIDE_GYMER, true, 2)
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_GRABBED, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_GYMERS_GRAB, 5, gymersGrabHit)
+
+local function gymersThrowHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:IsVehicle() then
+        local passenger = caster:GetVehicleKit():GetPassenger(1)
+        if passenger ~= nil then
+            passenger:ExitVehicle()
+            caster:CastSpell(passenger, HUNT.SPELL_VARGUL_EXPLOSION, true)
+        end
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_GYMERS_THROW, 5, gymersThrowHit)
