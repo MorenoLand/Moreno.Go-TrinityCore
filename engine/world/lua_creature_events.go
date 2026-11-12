@@ -6231,6 +6231,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if field == 59 {
 			s.motionMu.Lock()
 			motion.UnitFlags |= flags
+			motion.UnitFlagsKnown = true
 			unitFlags, unitFlagsDirty = motion.UnitFlags, true
 			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
@@ -6315,6 +6316,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if field == 59 {
 			s.motionMu.Lock()
 			motion.UnitFlags &^= flags
+			motion.UnitFlagsKnown = true
 			unitFlags, unitFlagsDirty = motion.UnitFlags, true
 			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
@@ -6455,6 +6457,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.Faction = faction
+		motion.FactionKnown = true
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
@@ -6478,6 +6481,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.Level = level
+		motion.LevelKnown = true
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.motionMu.Unlock()
 		s.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,

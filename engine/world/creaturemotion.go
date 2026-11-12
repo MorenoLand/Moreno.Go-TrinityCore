@@ -79,10 +79,12 @@ type creatureMotion struct {
 	WanderSteps int
 
 	Faction               uint32
+	FactionKnown          bool   // set by the event-surface SetFaction bridge; gates the sweep re-affirm so a scripted faction survives until respawn (NPCFlagsKnown precedent)
 	PhaseMask             uint32 // WorldObject::GetPhaseMask live value (Object.h:323): the spawn c.phaseMask row for DB creatures (updateActiveCreatures sweep), the summoner phase for temp summons and pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the totem phase helper
 	Level                 uint32
 	LevelKnown            bool // set by an explicit level override (wp show on mimic, SetLevel in C++ is a live slot the sweep must not re-affirm from the template); mirrors the ReactStateKnown pattern below
 	UnitFlags             uint32
+	UnitFlagsKnown        bool // set by the event-surface SetFlag/RemoveFlag(59) bridges; gates the sweep re-affirm so scripted UNIT_FIELD_FLAGS survive until respawn (NPCFlagsKnown precedent)
 	DynamicFlags          uint32
 	FlagsExtra            uint32
 	TypeFlags             uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
@@ -1087,6 +1089,9 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		motion.Fleeing = false
 		motion.FleeingUntil = time.Time{}
 		motion.NPCFlagsKnown = false
+		motion.FactionKnown = false
+		motion.UnitFlagsKnown = false
+		motion.LevelKnown = false
 		motion.Moving = false
 		motion.Evading = false
 		values[unitFieldHealth] = motion.Health
@@ -4988,11 +4993,15 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			// transform (C++ keeps the same AI object with its new
 			// template until respawn).
 			if !motion.EntryOverride {
-				motion.Faction = uint32(faction)
+				if !motion.FactionKnown {
+					motion.Faction = uint32(faction)
+				}
 				if !motion.LevelKnown {
 					motion.Level = uint32(level)
 				}
-				motion.UnitFlags = uint32(unitFlags)
+				if !motion.UnitFlagsKnown {
+					motion.UnitFlags = uint32(unitFlags)
+				}
 				motion.DynamicFlags = uint32(dynamicFlags)
 				motion.FlagsExtra = uint32(flagsExtra)
 				motion.PhaseMask = uint32(phaseMask)
