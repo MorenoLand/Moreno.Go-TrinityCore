@@ -1698,6 +1698,23 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
 	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })
 	methods["GetPetGUID"] = luaNoArgs(func() any { return state.PetGUID })
+	// GetPet is Player::GetPet (Player.h): the player's pet from the
+	// pet slot (state.PetGUID), resolved to its live creature object,
+	// else nil. Unlike GetGuardianPet below it carries no IsGuardian
+	// filter — pets read IsGuardian false (lua_creature_events.go
+	// IsGuardian comment), so the guardian bridge returns nil for
+	// hunter pets. Backs the aspect-of-the-beast OnRemove port
+	// (spell_hunter.cpp:103-109).
+	methods["GetPet"] = luaNoArgs(func() any {
+		if state.PetGUID == 0 || s.server == nil {
+			return nil
+		}
+		motion := s.server.findCreatureMotion(state.Map, state.InstanceID, state.PetGUID)
+		if motion == nil {
+			return nil
+		}
+		return s.server.luaMotionCreature(motion)
+	})
 	// GetCharmerGUID is Unit::GetCharmerGUID (Unit.h:1158):
 	// UNIT_FIELD_CHARMEDBY. Go stores no charmer for players (the
 	// GetControllerGUID precedent), so this reads 0.

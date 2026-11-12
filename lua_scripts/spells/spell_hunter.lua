@@ -40,11 +40,6 @@ RegisterAuraEvent(SPELL_ASPECT_OF_THE_BEAST_PET, 2, aspectOfTheBeastPetApply)
 --   player gate holds by construction (the aura is player-only).
 --   The triggered flag rides the same pre-existing gap as the other
 --   ports (player:CastSpell ignores it, lua_player.go:2577).
--- NOT PORTED: OnRemove (spell_hunter.cpp:103-109) — the pet must
---   drop 61669, but there is no player-side bridge to resolve the
---   pet GUID into a creature object (GetCreatureByGUID lives only
---   on creature objects, lua_creature_events.go:4050; no global).
---   The pet keeps 61669 until it is re-applied and self-removes.
 local function aspectOfTheBeastApply(event, aura, target)
     if target:GetPetGUID() == 0 then
         return
@@ -53,6 +48,21 @@ local function aspectOfTheBeastApply(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_HUNTER_ASPECT_OF_THE_BEAST, 2, aspectOfTheBeastApply)
+
+-- PORTED (RegisterAuraEvent OnRemove = 3):
+--   spell_hun_aspect_of_the_beast::OnRemove
+--   (spell_hunter.cpp:103-109): EFFECT_0 SPELL_AURA_UNTRACKABLE,
+--   AfterEffectRemove REAL. The pet drops the 61669 aura via the
+--   new player:GetPet bridge (lua_player.go; GetGuardianPet returns
+--   nil for hunter pets — pets read IsGuardian false).
+local function aspectOfTheBeastRemove(event, aura, target)
+    local pet = target:GetPet()
+    if pet ~= nil then
+        pet:RemoveAura(SPELL_ASPECT_OF_THE_BEAST_PET)
+    end
+end
+
+RegisterAuraEvent(SPELL_HUNTER_ASPECT_OF_THE_BEAST, 3, aspectOfTheBeastRemove)
 
 -- PORTED (this tick, RegisterAuraEvent OnProc = 6):
 --   spell_hun_cobra_strikes_triggered::HandleStackDrop
