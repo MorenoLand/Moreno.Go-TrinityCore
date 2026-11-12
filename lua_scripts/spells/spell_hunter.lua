@@ -615,17 +615,47 @@ end
 
 RegisterAuraEvent(SPELL_HUNTER_PIERCING_SHOTS_TALENT, 6, piercingShotsProc)
 
--- NOT IN LUA: spell_hun_rapid_recuperation_trigger (53228,
--- spell_hunter.cpp:1161-1217) — EFFECT_0 PROC_TRIGGER_SPELL arm is
--- a pure gate (veto unless the proc spell carries family flag [0]
--- 0x20, Rapid Fire) and EFFECT_1 DUMMY casts the rank mana spell
--- (56654/58882) when the proc spell carries family flag [1]
--- 0x01000000 (Rapid Killing); ev6 carries no proc-spell object, so
--- neither flag is readable. STAYS OUT until ev6 event-spell
--- forwarding lands (open engine work, same as rows 547-551 + 572 +
--- 597 + 603 + 608). The 599/600 periodic legs it feeds are ported
--- above (ev1). CENSUS CORRECTION: row 601 hooks (HandleDummy /
--- OnEffectHitTarget) are phantom; real is OnEffectProc x2.
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_hun_rapid_recuperation_trigger (53228,
+--   spell_hunter.cpp:1161-1217) — EFFECT_0 PROC_TRIGGER_SPELL arm
+--   is a pure gate (HandleRapidFireProc: veto unless the proc spell
+--   carries family flag [0] 0x20, Rapid Fire; a pass falls through
+--   to the DBC default leg) and EFFECT_1 DUMMY arm
+--   (HandleRapidKillingProc) PreventDefaultActions and casts the
+--   rank mana spell (56654/58882, aura rank) when the proc spell
+--   carries family flag [1] 0x01000000 (Rapid Killing); the actor
+--   casts on nil (the spell's own implicit targets). One handler
+--   serves both arms (ev6 fires once per eligible effect, no effect
+--   index): a Rapid Fire event passes twice (EFFECT_0 default fires
+--   once; the EFFECT_1 default is a TriggerSpell==0 no-op) and a
+--   Rapid Killing event casts the mana aura twice — both casts
+--   refresh the same aura, benign per the lock-and-load precedent
+--   above. The two flags ride mutually exclusive event spells, so
+--   the arms never overlap. DORMANT until Spell.dbc ships the 53228
+--   proc entry. CENSUS CORRECTION: row 601 hooks (HandleDummy /
+--   OnEffectHitTarget) are phantom; real is OnEffectProc x2.
+local SPELL_HUNTER_RAPID_RECUPERATION_TRIGGER = 53228 -- spell_hunter.cpp:1161
+local SPELL_HUNTER_RAPID_RECUPERATION_TRIGGER_SPELLS = {SPELL_HUNTER_RAPID_RECUPERATION_R1, SPELL_HUNTER_RAPID_RECUPERATION_R2} -- spell_hunter.cpp:1184-1185
+local SPELL_FAMILY_FLAG_HUNTER_RAPID_FIRE = 0x20 -- spell_hunter.cpp:1186
+local SPELL_FAMILY_FLAG_HUNTER_RAPID_KILLING = 0x01000000 -- spell_hunter.cpp:1200
+
+local function rapidRecuperationTriggerProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if aura == nil or procEvent == nil then
+        return true
+    end
+    if bit32.band(procEvent:GetSpellFamilyFlags(1), SPELL_FAMILY_FLAG_HUNTER_RAPID_KILLING) ~= 0 then
+        local trigger = SPELL_HUNTER_RAPID_RECUPERATION_TRIGGER_SPELLS[aura:GetRank()]
+        if trigger ~= nil and actor ~= nil then
+            actor:CastSpell(nil, trigger, true)
+        end
+        return true
+    end
+    if bit32.band(procEvent:GetSpellFamilyFlags(0), SPELL_FAMILY_FLAG_HUNTER_RAPID_FIRE) == 0 then
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_TRIGGER, 6, rapidRecuperationTriggerProc)
 -- NOT IN LUA: spell_hun_sniper_training (53302,
 -- spell_hunter.cpp:1350-1420) — the countdown lives in
 -- OnEffectUpdatePeriodic (no Lua event: only OnPeriodic/Apply/
