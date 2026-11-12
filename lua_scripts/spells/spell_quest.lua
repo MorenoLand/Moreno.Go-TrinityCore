@@ -598,9 +598,9 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   at end of file). Its sibling armored_decoy_summon_skytalon
 --   (59303) stays out: no OnDestinationTargetSelect bridge, and
 --   the +20 Z leg is already in Go (see the HUNT block).
---   spell_q13011_bear_flank_master (:1907-1956): ev5 SCRIPT_EFFECT,
---   caster-is-creature Load gate, hit player 50% casts 56569 on the
---   creature + AI Talk(0) else self-casts 56566 — no binding ID.
+--   spell_q13011_bear_flank_master (:1907-1956): PORTED tick
+--   2026-11-12 (binding 56565, HUNT block at end of file) — the
+--   "no binding ID" line above is superseded by 349bdee8.
 --   spell_q13086_cannons_target (:1957-1985): ev4 DUMMY; caster casts
 --   GetEffectValue() triggered at the explicit dest — no binding ID;
 --   no position-targeted CastSpell bridge (spell:GetTargetDest
@@ -1353,6 +1353,28 @@ local HUNT = {
     SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER = 59590,
     SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER = 60041,
     SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER = 60039,
+    -- spell_q12690_burst_at_the_seams_52510 (spell_quest.cpp:2176)
+    SPELL_BURST_AT_THE_SEAMS_52510 = 52510,
+    SPELL_BURST_AT_THE_SEAMS_52508 = 52508,
+    SPELL_DRAKKARI_SKULLCRUSHER_CREDIT = 52590,
+    SPELL_SUMMON_DRAKKARI_CHIEFTAIN = 52616,
+    QUEST_FUEL_FOR_THE_FIRE = 12690,
+    NPC_DRAKKARI_CHIEFTAINK = 29099,
+    QUEST_STATUS_INCOMPLETE = 3,
+    BURST_52510_DESPAWN_MS = 2000,
+    -- spell_q12308_escape_from_silverbrook (spell_quest.cpp:2242)
+    SPELL_ESCAPE_FROM_SILVERBROOK = 48682,
+    SPELL_SUMMON_WORGEN = 48681,
+    -- spell_q12641_death_comes_from_on_high (spell_quest.cpp:2318)
+    SPELL_DEATH_COMES_FROM_ON_HIGH = 51858,
+    SPELL_FORGE_CREDIT = 51974,
+    SPELL_TOWN_HALL_CREDIT = 51977,
+    SPELL_SCARLET_HOLD_CREDIT = 51980,
+    SPELL_CHAPEL_CREDIT = 51982,
+    NPC_NEW_AVALON_FORGE = 28525,
+    NPC_NEW_AVALON_TOWN_HALL = 28543,
+    NPC_SCARLET_HOLD = 28542,
+    NPC_CHAPEL_OF_THE_CRIMSON_FLAME = 28544,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -1544,10 +1566,10 @@ RegisterSpellEvent(HUNT.SPELL_GRAB_FAKE_SOLDIER, 5, grabDecoyHit)
 --   52520 + 52578 x2 + 52580 + 52516, triggered. OnRemove (3): by
 --   target entry the target casts the master-credit spell on the aura
 --   caster (31142 -> 59590, 31147 -> 60041, 31205 -> 60039; 31692 has
---   no credit case in C++), then self-casts 59580, triggered. DELTA:
---   Go OnApply is fresh-only vs C++ REAL_OR_REAPPLY (goingBearback
---   precedent); a re-apply after expiry re-casts nothing while the
---   1s aura holds, and the arm only casts.
+--   no credit case in C++), then self-casts 59580, triggered. No
+--   re-apply delta: C++ registers AfterEffectApply/Remove with
+--   AURA_EFFECT_HANDLE_REAL (fresh apply only), matching Go
+--   events 2/3 (see the tick-295 note above).
 --
 -- STAY OUT (same tick):
 --   spell_q13086_cannons_target (spell_quest.cpp:1957-1990): EFFECT_0
@@ -1636,3 +1658,143 @@ local function burstAtTheSeams59579Remove(event, aura, target)
 end
 
 RegisterAuraEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_59579, 3, burstAtTheSeams59579Remove)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12690_burst_at_the_seams_52510 (spell_quest.cpp:2176-2233):
+--   EFFECT_1 KNOCK_BACK ev5: hit creature; the caster creature's
+--   charmer-or-owner player (GetControllerGUID, the exact
+--   GetCharmerOrOwnerGUID twin, lua_creature_events.go:519, resolved
+--   via the GetPlayerByGUID global) with quest 12690 INCOMPLETE
+--   (GetQuestStatus, lua_player.go:4548; INCOMPLETE = 3,
+--   QuestDef.h:106) gates the burst: the hit creature self-casts
+--   52516 + 52520 + 52523 + 52508 + 59580, triggered, and the
+--   player self-casts the 52590 skullcrusher credit, triggered,
+--   then self-casts 52616 when GetReqKillOrCastCurrentCount
+--   (12690, 29099) is a multiple of 20 (lua_player.go:4653; count 0
+--   counts, as in C++ — no count > 0 guard there either).
+--   EFFECT_0 SCRIPT_EFFECT ev5: the caster creature despawns after
+--   2s (DespawnOrUnsummon, lua_creature_events.go:3189). Load gate
+--   caster TYPEID_UNIT is an explicit GetTypeId() == 3 check.
+--   Binding 52510 is the class-name suffix (enum
+--   SPELL_BURST_AT_THE_SEAMS_52510 = 52510, spell_quest.cpp:2012).
+--   spell_q12308_escape_from_silverbrook (spell_quest.cpp:2242-2272):
+--   EFFECT_0 DUMMY OnEffectHit (ev4, RegisterSpellEvent 4): the
+--   caster self-casts 48681, triggered. Binding 48682 is the
+--   `// 48682 - Escape from Silverbrook` comment (:2241). ev4 fires
+--   on the player path (spells.go:14648-14660) and the creature
+--   path (boss_ai.go:3373).
+--   spell_q12641_death_comes_from_on_high (spell_quest.cpp:2318-2380):
+--   EFFECT_0 DUMMY ev5: the hit creature's entry picks the credit
+--   spell (28525 -> 51974, 28543 -> 51977, 28542 -> 51980,
+--   28544 -> 51982; any other entry returns), and the caster casts
+--   it on nil, triggered (the CastSpell(nil, ...) idiom,
+--   spell_rogue.lua:164). Binding 51858 is the `// 51858 - Siphon
+--   of Acherus` comment (:2317).
+--
+-- STAY OUT (same tick):
+--   spell_q12308_escape_from_silverbrook_summon_worgen
+--   (spell_quest.cpp:2274-2317): OnDestinationTargetSelect
+--   (EFFECT_0 TARGET_DEST_CASTER_SUMMON) — no bridge, same as the
+--   59303 armored-decoy leg. Binding 48681 is the `// 48681`
+--   comment (:2273).
+--   spell_q12641_recall_eye_of_acherus (spell_quest.cpp:2381-2412):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 52694 (`// 52694` comment
+--   + sibling AC verification, 02:39 entry). The caster's
+--   charmer-or-owner player stops charm/bindsight and removes the
+--   51852 Eye aura — StopCastingCharm / StopCastingBindSight have
+--   no Lua binding (only the session-internal stopCastingBindSight,
+--   spells.go:36170); the charmer resolution (GetControllerGUID +
+--   GetPlayerByGUID) and RemoveAura ARE bridged, so this ports
+--   once the two StopCasting* methods are exposed.
+
+local function burst52510KnockbackHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= HUNT.TYPEID_UNIT then
+        return
+    end
+    local guid = caster:GetControllerGUID()
+    if guid == 0 then
+        return
+    end
+    local player = GetPlayerByGUID(guid)
+    if player == nil then
+        return
+    end
+    if player:GetQuestStatus(HUNT.QUEST_FUEL_FOR_THE_FIRE) ~= HUNT.QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_BURST_AT_THE_SEAMS_BONE, true)
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_EXPLODE_ABOMINATION_MEAT, true)
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_EXPLODE_ABOMINATION_BLOODY_MEAT, true)
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_BURST_AT_THE_SEAMS_52508, true)
+    hitTarget:CastSpell(hitTarget, HUNT.SPELL_BURST_AT_THE_SEAMS_59580, true)
+    player:CastSpell(player, HUNT.SPELL_DRAKKARI_SKULLCRUSHER_CREDIT, true)
+    local count = player:GetReqKillOrCastCurrentCount(HUNT.QUEST_FUEL_FOR_THE_FIRE, HUNT.NPC_DRAKKARI_CHIEFTAINK)
+    if count % 20 == 0 then
+        player:CastSpell(player, HUNT.SPELL_SUMMON_DRAKKARI_CHIEFTAIN, true)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_52510, 5, burst52510KnockbackHit)
+
+local function burst52510ScriptHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    caster:DespawnOrUnsummon(HUNT.BURST_52510_DESPAWN_MS)
+end
+
+RegisterSpellEvent(HUNT.SPELL_BURST_AT_THE_SEAMS_52510, 5, burst52510ScriptHit)
+
+local function escapeFromSilverbrookHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, HUNT.SPELL_SUMMON_WORGEN, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_ESCAPE_FROM_SILVERBROOK, 4, escapeFromSilverbrookHit)
+
+local function deathComesFromOnHighHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local credit = nil
+    local entry = hitTarget:GetEntry()
+    if entry == HUNT.NPC_NEW_AVALON_FORGE then
+        credit = HUNT.SPELL_FORGE_CREDIT
+    elseif entry == HUNT.NPC_NEW_AVALON_TOWN_HALL then
+        credit = HUNT.SPELL_TOWN_HALL_CREDIT
+    elseif entry == HUNT.NPC_SCARLET_HOLD then
+        credit = HUNT.SPELL_SCARLET_HOLD_CREDIT
+    elseif entry == HUNT.NPC_CHAPEL_OF_THE_CRIMSON_FLAME then
+        credit = HUNT.SPELL_CHAPEL_CREDIT
+    end
+    if credit == nil then
+        return
+    end
+    caster:CastSpell(nil, credit, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_DEATH_COMES_FROM_ON_HIGH, 5, deathComesFromOnHighHit)
