@@ -4050,6 +4050,54 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		}
 		return []any{nil}, nil
 	}
+	// GetContactPoint is WorldObject::GetContactPoint (Object.cpp:3334-3338):
+	// GetNearPoint(searcher, CONTACT_DISTANCE, GetAbsoluteAngle(searcher)).
+	// GetNearPoint2D folds both combat reaches plus the default 0.5yd
+	// CONTACT_DISTANCE (ObjectDefines.h:23) into the offset along the angle
+	// from this object to the searcher, and GetNearPoint pins z to this
+	// object's z. A GameObject's own combat reach is 0 (Object.h:313, the
+	// virtual returns 0.0f, overridden only in Unit), so the offset is the
+	// searcher's combat reach + 0.5; a creature searcher resolves its live
+	// motion reach, anything else falls back to the 1.5 C++
+	// UNIT_FIELD_COMBATREACH default. DELTAS: the hover-offset reach
+	// correction (both legs 0 here — a GO is not a unit, and no hover
+	// applies) and UpdateAllowedPositionZ (no terrain-height query on this
+	// path) are out; the LoS sweep (16 angles around the first point) is
+	// out — Go returns the first point, which C++ also returns when LoS
+	// passes or when the sweep exhausts. Backs the scarlet courier stage
+	// machine (chapter2.cpp:405-411).
+	methods["GetContactPoint"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("GetContactPoint requires a WorldObject target")
+		}
+		searcher, ok := args[0].(*scripting.Object)
+		if !ok || searcher == nil {
+			return nil, fmt.Errorf("GetContactPoint requires a WorldObject target")
+		}
+		sx, ok := objectFloat32Field(searcher, "X")
+		if !ok {
+			return nil, fmt.Errorf("GetContactPoint requires a WorldObject target with a position")
+		}
+		sy, ok := objectFloat32Field(searcher, "Y")
+		if !ok {
+			return nil, fmt.Errorf("GetContactPoint requires a WorldObject target with a position")
+		}
+		reach := float32(1.5)
+		if searcher.Type == "Creature" {
+			if guid := luaObjectGUID(searcher); guid != 0 {
+				if motion := srv.findCreatureMotion(state.Map, state.InstanceID, guid); motion != nil {
+					srv.motionMu.Lock()
+					reach = motion.combatReachOrDefault()
+					srv.motionMu.Unlock()
+				}
+			}
+		}
+		angle := math.Atan2(float64(sy-state.Y), float64(sx-state.X))
+		dist := float64(reach) + 0.5
+		x := float64(state.X) + dist*math.Cos(angle)
+		y := float64(state.Y) + dist*math.Sin(angle)
+		return []any{float32(x), float32(y), state.Z}, nil
+	}
 	// AddUse/GetUseCount are GameObject::AddUse/GetUseCount
 	// (GameObject.h:202-204): the soulwell charge counter. Static DB
 	// spawns have no live state object, so AddUse is a no-op for them.

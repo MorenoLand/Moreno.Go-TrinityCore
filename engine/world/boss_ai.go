@@ -16486,16 +16486,15 @@ func init() {
 	RegisterLuaBoss("npc_koltira_deathweaver", 28912)
 
 	// npc_scarlet_courier (The Scarlet Enclave, chapter2.cpp lines
-	// 340-428): JustEngagedWith's Talk(SAY_TREE2 = 1) arm is ported
-	// via OnEnterCombat(1) in lua_scripts/eastern_kingdoms/
-	// npc_scarlet_courier.lua (the Dismount leg has no bridge and is
-	// a documented deviation); the out-of-combat stage machine
-	// (FindNearestGameObject(191144)/SetWalk/GetContactPoint/
-	// MovePoint/MovementInform/tree->GetOwner()/AttackStart), Reset's
-	// Mount(14338) and the unused SPELL_SHOOT (52818) are
-	// documented-only. Entry 29076 verifiable from the C++ sources:
-	// chapter2.cpp's own ScarletCourierEnum (line 336) names
-	// NPC_SCARLET_COURIER = 29076.
+	// 340-428): ported in lua_scripts/eastern_kingdoms/
+	// npc_scarlet_courier.lua — Reset Mount(14338) + stage machine
+	// (stage 1 SetWalk/FindNearestGameObject(191144)/GetContactPoint/
+	// MoveTo, ev28 MovementInform -> stage 2 tree->GetOwner()/
+	// EngageWithTarget), JustEngagedWith Talk(SAY_TREE2 = 1) +
+	// Dismount. The unused SPELL_SHOOT (52818) stays out (no
+	// C++-verifiable use in the AI body). Entry 29076 verifiable
+	// from the C++ sources: chapter2.cpp's own ScarletCourierEnum
+	// (line 336) names NPC_SCARLET_COURIER = 29076.
 	RegisterLuaBoss("npc_scarlet_courier", 29076)
 	// deadmines.cpp zone script: single ItemScript item_defias_gunpowder
 	// (AddSC_deadmines). OnUse(player, item, targets): null instance ->
