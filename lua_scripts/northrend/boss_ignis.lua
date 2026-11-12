@@ -527,3 +527,11 @@ end
 
 RegisterAuraEvent(SPELL_SLAG_POT, 1, slagPotPeriodic)
 RegisterAuraEvent(SPELL_SLAG_POT, 3, slagPotRemove)
+
+-- Heroic twin: TDB binds 63477 to the same spell_ignis_slag_pot
+-- loader, so it rides the same handlers (boss_ignis.cpp itself
+-- only casts 62717, :248; 63477's application is DBC-side).
+local SPELL_SLAG_POT_HEROIC = 63477 -- TDB spell_script_names -> spell_ignis_slag_pot
+
+RegisterAuraEvent(SPELL_SLAG_POT_HEROIC, 1, slagPotPeriodic)
+RegisterAuraEvent(SPELL_SLAG_POT_HEROIC, 3, slagPotRemove)

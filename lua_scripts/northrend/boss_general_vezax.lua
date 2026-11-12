@@ -179,11 +179,13 @@
 -- spell_general_vezax_mark_of_the_faceless_leech (63278
 -- SPELL_MARK_OF_THE_FACELESS_DAMAGE — target filter removing
 -- expl target, FinishCast on empty — PORTED below via
--- RegisterSpellEvent (63278, 7)); spell_general_vezax_saronite_vapors (63323 —
+-- RegisterSpellEvent (63278, 7)); spell_general_vezax_saronite_vapors (63322 —
 -- OnApply: bp * 2^stack mana restore -> SPELL_SARONITE_VAPORS_
 -- ENERGIZE 63337 + DAMAGE 63338 at 2x — PORTED tick 422 below
--- via RegisterAuraEvent (63323, 2 + 4); the "no AuraScript
--- bridge" claim is retired).
+-- via RegisterAuraEvent (63322, 2 + 4); the "no AuraScript
+-- bridge" claim is retired). CORRECTED 2026-11-12: TDB binds the
+-- loader to 63322, not 63323 — 63323 is the spell the vapor NPC
+-- casts on itself (boss_general_vezax.cpp:422).
 -- (Achievements: see the SpellHitTarget / Reset notes above —
 -- smell_saronite write leg PORTED tick 417; shadowdodger BLOCKED
 -- on the 62659 spell-id key.)
@@ -698,15 +700,16 @@ RegisterSpellEvent(SPELL_MARK_OF_THE_FACELESS_DAMAGE, 7, markOfTheFacelessLeechF
 -- casts SPELL_SARONITE_VAPORS_ENERGIZE 63337 (bp0 = amount *
 -- 2^stack) + SPELL_SARONITE_VAPORS_DAMAGE 63338 (bp0 = mana * 2)
 -- on the aura target, triggered. PORTED tick 422 via
--- RegisterAuraEvent (63323, 2) + (63323, 4): event 4
+-- RegisterAuraEvent (63322, 2) + (63322, 4): event 4
 -- (OnChangeAmount) is the Go twin of the C++ REAPPLY arm —
 -- REAPPLY fires only from AuraEffect::ChangeAmount with
 -- onStackOrReapply (SpellAuraEffects.cpp:662-672), i.e. on stack
 -- change, never on a pure duration refresh (RefreshDuration calls
 -- no HandleEffect, SpellAuras.cpp:905-927). Fully dormant: 63323
--- is cast only by the unported vapors DamageTaken leg (:436) on an
--- entry-unverifiable bearer, so no aura can apply yet.
-local SPELL_SARONITE_VAPORS = 63323 -- boss_general_vezax.cpp:58
+-- is applied only via the DBC-side chain from the vapor's 63323
+-- self-cast (boss_general_vezax.cpp:422), so no aura can apply yet.
+local SPELL_SARONITE_VAPORS = 63323 -- boss_general_vezax.cpp:58 (vapor NPC self-cast)
+local SPELL_SARONITE_VAPORS_AURA = 63322 -- TDB spell_script_names -> spell_general_vezax_saronite_vapors
 local SPELL_SARONITE_VAPORS_ENERGIZE = 63337 -- boss_general_vezax.cpp:59
 local SPELL_SARONITE_VAPORS_DAMAGE = 63338 -- boss_general_vezax.cpp:60
 
@@ -720,5 +723,5 @@ local function saroniteVaporsApply(event, aura, target)
     caster:CastCustomSpell(target, SPELL_SARONITE_VAPORS_DAMAGE, true, mana * 2)
 end
 
-RegisterAuraEvent(SPELL_SARONITE_VAPORS, 2, saroniteVaporsApply)
-RegisterAuraEvent(SPELL_SARONITE_VAPORS, 4, saroniteVaporsApply)
+RegisterAuraEvent(SPELL_SARONITE_VAPORS_AURA, 2, saroniteVaporsApply)
+RegisterAuraEvent(SPELL_SARONITE_VAPORS_AURA, 4, saroniteVaporsApply)

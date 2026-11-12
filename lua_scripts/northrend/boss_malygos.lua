@@ -923,8 +923,8 @@ local giftBeamGifts = {} -- target GUID -> summoned gift GO GUID (OnRemove leg, 
 -- below (tick 427) — the GO RemoveFlag bridge is live
 -- (engine/world/lua_objects.go:4488), retiring the "no GO flag
 -- bridge" stay-out. The outer beam aura's own spell ID is DB-side
--- only (spell_script_names), so its apply (cast 61023) / remove
--- (drop 61023) legs cannot be registered.
+-- only (spell_script_names); its apply (cast 61023) / remove
+-- (drop 61023) legs are PORTED below (2026-11-12).
 local function alexstraszaGiftBeamVisualApply(event, aura, target)
     local caster = aura:GetCaster()
     if caster == nil or caster:GetObjectType() ~= "Creature" then
@@ -962,7 +962,7 @@ RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL, 2, alexstraszaGiftBeamVis
 -- target GUID; both legs are nil-guarded (the C++ gift pointer is
 -- never nil when OnApply ran, but the Lua table is empty if the
 -- apply leg never fired). DORMANT: the 61023 aura is applied only
--- by the unported outer beam (DB-side spell id).
+-- by the outer beam (61028, PORTED below; dormant, no cast site).
 local function alexstraszaGiftBeamVisualRemove(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
         return
@@ -987,6 +987,39 @@ local function alexstraszaGiftBeamVisualRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL, 3, alexstraszaGiftBeamVisualRemove)
+
+local SPELL_ALEXSTRASZAS_GIFT_BEAM = 61028 -- TDB spell_script_names -> spell_alexstrasza_gift_beam
+
+-- C++ spell_alexstrasza_gift_beam::OnApply
+-- (boss_malygos.cpp:2332-2337): Load admits creature casters only;
+-- the creature target casts SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL
+-- 61023 on itself, non-triggered. PORTED 2026-11-12. DORMANT:
+-- 61028 has no cast site in the C++ tree (the Alexstrasza driver
+-- is DB-side); no Spell.dbc ships in the Go repo.
+local function alexstraszaGiftBeamApply(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:CastSpell(target, SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL)
+end
+
+RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM, 2, alexstraszaGiftBeamApply)
+
+-- C++ spell_alexstrasza_gift_beam::OnRemove
+-- (boss_malygos.cpp:2339-2344): AfterEffectRemove, REAL; the
+-- creature target drops the 61023 visual aura. PORTED 2026-11-12.
+local function alexstraszaGiftBeamRemove(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    target:RemoveAura(SPELL_ALEXSTRASZAS_GIFT_BEAM_VISUAL)
+end
+
+RegisterAuraEvent(SPELL_ALEXSTRASZAS_GIFT_BEAM, 3, alexstraszaGiftBeamRemove)
 
 -- C++ spell_malygos_destroy_platform_channel_AuraScript::OnRemove
 -- (boss_malygos.cpp:2025-2057): AfterEffectRemove, EFFECT_0,

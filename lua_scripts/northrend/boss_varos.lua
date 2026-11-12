@@ -291,6 +291,47 @@ end
 
 RegisterSpellEvent(SPELL_ENERGIZE_CORES, 7, energizeCoreAreaEnemyFilter)
 
+local SPELL_ENERGIZE_CORE_AREA_ENTRY = {54069, 56251, 61407, 62136} -- TDB spell_script_names -> spell_varos_energize_core_area_entry
+
+-- C++ spell_varos_energize_core_area_entry::FilterTargets
+-- (boss_varos.cpp:366-397): identical shape to the enemy leg
+-- above, on TARGET_UNIT_SRC_AREA_ENTRY. Caster must be NPC_VAROS;
+-- keeps only targets whose absolute angle from Varos is within
+-- 1.0f of the AI's GetCoreEnergizeOrientation() (fabs,
+-- unnormalized diff — the C++ wrap-around quirk is kept verbatim).
+-- PORTED 2026-11-12. DORMANT: the four bound spells are cast only
+-- via 50785's DBC-side effect legs. (62136 doubles as the
+-- boss-cast ENERGIZE_CORES_VISUAL; its entry leg is filtered here
+-- per the TDB binding.)
+local function energizeCoreAreaEntryFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if caster:GetEntry() ~= ENTRY_VAROS then
+        return
+    end
+    local orientation = coreEnergizeOrientation[caster:GetGUIDLow()] or 0.0
+    local kept = {}
+    for _, target in ipairs(targets:GetTargets()) do
+        local angle = caster:GetAngle(target:GetX(), target:GetY())
+        if math.abs(orientation - angle) <= 1.0 then
+            kept[#kept + 1] = target
+        end
+    end
+    targets:Clear()
+    for _, target in ipairs(kept) do
+        targets:Add(target)
+    end
+end
+
+for _, id in ipairs(SPELL_ENERGIZE_CORE_AREA_ENTRY) do
+    RegisterSpellEvent(id, 7, energizeCoreAreaEntryFilter)
+end
+
 -- C++ EVENT_CALL_AZURE (:138-143): Talk(SAY_AZURE) +
 -- Talk(SAY_AZURE_EMOTE), 15s/30s init -> 20s/25s loop. The 51002
 -- summon leg stays out (no summon/event-send bridge).
