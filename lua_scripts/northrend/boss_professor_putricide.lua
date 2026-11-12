@@ -206,13 +206,27 @@
 -- The four spell-script candidates, one hook-fire check each,
 -- tick 498: slime-puddle PORTED (ev7 OnObjectAreaTargetSelect,
 -- lua_spell.go:738, spellKnown-gated — dormant until Spell.dbc
--- ships; binding 70341 is the TC name-match, spell_script_names
--- is DB-side in this clone); clear-aura-effect-value PORTED on
+-- ships; 2026-11-12 CORRECTION: the tick-498 70341/70343
+-- registrations carried no spell_script_names row in any DB —
+-- the class binds to 70346/72456/72868/72869 (filter) and
+-- 72868/72869 (ReplaceAura, TDB only); re-registered below);
+-- clear-aura-effect-value PORTED on
 -- 71620 only (the sole C++-verifiable binding — other bindings
 -- DB-side); stinky-precious-decimate PORTED on 71123 (festergut
 -- :56 / rotface :77); ooze-eruption-searcher STAYS OUT — ev5 has
 -- no fire site for aura-periodic dummy effects (fireSpellEffectHitTarget
 -- callers are the cast path only, boss_ai.go:3417/3420).
+-- 2026-11-12: mutated_transformation (summon leg, ev4) +
+-- abomination_mutated_transformation (resist calc) +
+-- mutated_transformation_dmg (ev7 owner filter) STAY OUT — no
+-- GetOriginalCaster/GetEffectMiscValue spell methods, summon
+-- properties are DBC, JustSummoned has no bridge, resist/absorb
+-- calc is not forwarded (runtime.go:518); the _dmg filter is a
+-- no-op for the player caster (CreatorGUID 0) and ev7 never fires
+-- on the player path (lua_spell.go fireSpellTargetSelects takes a
+-- creatureMotion). Gaseous bloat re-confirmed OUT (no
+-- RemoveAuraFromStack Lua method, no SPELLVALUE_AURA_STACK
+-- cast-mod bridge — only RADIUS_MOD exists in-tree).
 -- DOCUMENTED-ENTRY EVIDENCE (not registered): icecrown_citadel.h —
 -- NPC_VOLATILE_OOZE = 37697 (line 238); NPC_GAS_CLOUD = 37562
 -- (line 237); instance_icecrown_citadel.cpp OnCreatureCreate binds
@@ -262,6 +276,8 @@ local SPELL_GROW_STACKER = 70345
 local SPELL_SLIME_PUDDLE_AURA = 70343
 local SPELL_SLIME_PUDDLE_10 = 70346 -- boss_professor_putricide.cpp:950 (10-man)
 local SPELL_SLIME_PUDDLE_25 = 72456 -- boss_professor_putricide.cpp:950 (25-man)
+local SPELL_SLIME_PUDDLE_72868 = 72868 -- TDB 25101+26091 spell_script_names (slime_puddle + slime_puddle_aura); AC binds slime_puddle only
+local SPELL_SLIME_PUDDLE_72869 = 72869 -- TDB 25101+26091 spell_script_names (slime_puddle + slime_puddle_aura); AC binds slime_puddle only
 local SPELL_GROW = 70347
 local SPELL_CHOKING_GAS_BOMB_PERIODIC = 71259
 local SPELL_CHOKING_GAS_EXPLOSION_TRIGGER = 71280
@@ -844,8 +860,9 @@ RegisterCreatureEvent(NPC_GAS_CLOUD, 15, oozeSpellHitTarget)
 -- 2.5x the caster's scale (2D exact distance; the file-local
 -- ExactDistanceCheck :911-923 returns dist > _dist, and remove_if
 -- drops those). Go ev7 fires per selecting effect (lua_spell.go:738),
--- spellKnown-gated — dormant until Spell.dbc ships. Binding 70341 is
--- the TC name-match (spell_script_names is DB-side in this clone).
+-- spellKnown-gated — dormant until Spell.dbc ships. Bound in all
+-- three DBs to 70346/72456/72868/72869 (2026-11-12: the tick-498
+-- 70341 registration carried no spell_script_names row — rebind).
 local function slimePuddleFilter(event, spell, effectIndex, targets)
     if effectIndex ~= 0 and effectIndex ~= 1 then
         return
@@ -861,7 +878,9 @@ local function slimePuddleFilter(event, spell, effectIndex, targets)
         end
     end
 end
-RegisterSpellEvent(SPELL_SLIME_PUDDLE_TRIGGER, 7, slimePuddleFilter)
+for _, spellId in ipairs({ SPELL_SLIME_PUDDLE_10, SPELL_SLIME_PUDDLE_25, SPELL_SLIME_PUDDLE_72868, SPELL_SLIME_PUDDLE_72869 }) do
+    RegisterSpellEvent(spellId, 7, slimePuddleFilter)
+end
 
 -- C++ spell_putricide_slime_puddle_aura::ReplaceAura
 -- (boss_professor_putricide.cpp:943-956): OnHit. The puddle summon
@@ -872,9 +891,11 @@ RegisterSpellEvent(SPELL_SLIME_PUDDLE_TRIGGER, 7, slimePuddleFilter)
 -- both surfaces, so the C++ caster:AddAura(spell, target) twin is
 -- target:AddAura(spell). The caster itself is never a hit target in
 -- C++ (TARGET_UNIT_DEST_AREA_ENEMY filter, :937-938), so a self-hit
--- is skipped. Dormant until Spell.dbc ships (no area hit resolution
--- yet — the self-cast hit list carries only the caster, rotface
--- precedent).
+-- is skipped. Bound to 72868/72869 in TDB 25101+26091 (AC binds the
+-- _aura class to no id — AC gap); 2026-11-12: the tick-498 70343
+-- registration carried no spell_script_names row — rebind. Dormant
+-- until Spell.dbc ships (no area hit resolution yet — the self-cast
+-- hit list carries only the caster, rotface precedent).
 local function slimePuddleReplaceAura(event, spell, target)
     if target == nil then
         return
@@ -892,7 +913,9 @@ local function slimePuddleReplaceAura(event, spell, target)
         target:AddAura(SPELL_SLIME_PUDDLE_10)
     end
 end
-RegisterSpellEvent(SPELL_SLIME_PUDDLE_AURA, 2, slimePuddleReplaceAura)
+for _, spellId in ipairs({ SPELL_SLIME_PUDDLE_72868, SPELL_SLIME_PUDDLE_72869 }) do
+    RegisterSpellEvent(spellId, 2, slimePuddleReplaceAura)
+end
 
 -- C++ spell_putricide_clear_aura_effect_value::HandleScript
 -- (:1392-1409): OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT

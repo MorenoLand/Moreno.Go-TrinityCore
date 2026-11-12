@@ -551,6 +551,26 @@ for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE
     RegisterSpellEvent(spellId, 8, paladinImmunitiesCheckCast)
 end
 
+-- C++ spell_pal_immunities::TriggerDebuffs (spell_paladin.cpp:1223-1232):
+-- AfterHit, the hit unit gains Forbearance (25771) and both markers
+-- (61987, 61988). C++ is GetCaster()->AddAura(id, target); Lua AddAura
+-- is self-only on both surfaces, so the twin is hitTarget:AddAura(id)
+-- (slime-puddle ReplaceAura precedent). Base IDs only, same scope as
+-- the CheckCast port above (-1022 all-ranks binding: higher HoP rank
+-- IDs unestablished in-tree). RegisterSpellEvent AfterHit = 3.
+local function paladinImmunitiesAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    hitTarget:AddAura(SPELL_PALADIN_FORBEARANCE)
+    hitTarget:AddAura(SPELL_PALADIN_AVENGING_WRATH_MARKER)
+    hitTarget:AddAura(SPELL_PALADIN_IMMUNE_SHIELD_MARKER)
+end
+
+for _, spellId in ipairs({ SPELL_PALADIN_DIVINE_PROTECTION, SPELL_PALADIN_DIVINE_SHIELD, SPELL_PALADIN_HAND_OF_PROTECTION }) do
+    RegisterSpellEvent(spellId, 3, paladinImmunitiesAfterHit)
+end
+
 local SPELL_PALADIN_INFUSION_OF_LIGHT_R1 = 53569 -- spell_paladin.cpp:1340 (class spell_pal_infusion_of_light)
 local SPELL_PALADIN_INFUSION_OF_LIGHT_R2 = 53576 -- bot_paladin_ai.cpp:111 (rank 2)
 local SPELL_PALADIN_SACRED_SHIELD = 53601 -- spell_paladin.cpp:98
