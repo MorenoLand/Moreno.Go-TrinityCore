@@ -1055,3 +1055,53 @@ end
 for _, spellId in ipairs({ SPELL_MUTATED_TRANSFORMATION_DMG, SPELL_MUTATED_TRANSFORMATION_DMG_25, SPELL_MUTATED_TRANSFORMATION_DMG_10H, SPELL_MUTATED_TRANSFORMATION_DMG_25H }) do
     RegisterSpellEvent(spellId, 7, mutatedTransformationDmgFilter)
 end
+
+-- C++ spell_putricide_mutation_init::CheckRequirement
+-- (boss_professor_putricide.cpp:1223-1266, spell 70308, AC
+-- spell_script_names row): the explicit target must be a player
+-- (BAD_TARGETS / TARGET_NOT_PLAYER 122), then the professor must
+-- exist and be alive and out of phase 3 or the potions are spent
+-- (CUSTOM_ERROR 172 + ALL_POTIONS_USED 88), and no Mutated
+-- Abomination may already be active (CUSTOM_ERROR 172 +
+-- TOO_MANY_ABOMINATIONS 87). Instance-script GetGuidData is twinned
+-- by target:FindNearestCreature (same map/instance, entry 36678,
+-- 100yd — the potion is drunk in the professor's room, so the
+-- range-bounded lookup matches the instance-wide one in practice);
+-- AI GetData DATA_PHASE rides the file-local phase table (Lua-model
+-- 3 = C++ PHASE_COMBAT_3 = 6, flipped by the 35% DamageTaken latch)
+-- and DATA_ABOMINATION rides the summons check (summons.HasEntry,
+-- :550) twinned by a nearest-creature scan for 37672/38285. The
+-- SendCastResult-to-target leg rides the engine's SMSG_CAST_FAILED
+-- to the caster (the potion is self-cast, so caster == target).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+local SPELL_PUTRICIDE_MUTATION_INIT = 70308 -- boss_professor_putricide.cpp:1219 (class spell_putricide_mutation_init)
+local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_FAILED_TARGET_NOT_PLAYER = 122 -- SharedDefines.h:1104
+local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h:1155
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_TOO_MANY_ABOMINATIONS = 87 -- SharedDefines.h:1263
+local SPELL_CUSTOM_ERROR_ALL_POTIONS_USED = 88 -- SharedDefines.h:1264
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+local function mutationInitCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target == nil then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if target:GetObjectType() ~= "Player" then
+        return SPELL_FAILED_TARGET_NOT_PLAYER
+    end
+    local professor = target:FindNearestCreature(ENTRY_PROFESSOR_PUTRICIDE, 100, false)
+    if professor == nil then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    if (phase[professor:GetGUIDLow()] or 1) == 3 or not professor:IsAlive() then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_ALL_POTIONS_USED
+    end
+    if target:FindNearestCreature(NPC_MUTATED_ABOMINATION_10, 100, false) ~= nil or target:FindNearestCreature(NPC_MUTATED_ABOMINATION_25, 100, false) ~= nil then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_TOO_MANY_ABOMINATIONS
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_PUTRICIDE_MUTATION_INIT, 8, mutationInitCheckCast)

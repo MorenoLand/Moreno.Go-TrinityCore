@@ -294,8 +294,9 @@ local SPELL_FAILED_NOT_SHAPESHIFT = 68 -- SharedDefines.h:1050
 -- flags lacking 0x1 or a missing form row; transform-spell carve-out
 -- and display-ID arms unbridged/vacuous per that helper).
 -- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
--- Binding is the -33943 AC spell_script_names row (all ranks), so both
--- 33943 and its rank-2 40120 register here.
+-- Binding is the -33943 TDB spell_script_names row (all ranks), so both
+-- 33943 and its rank-2 40120 register here; no AC spell_script_names row
+-- exists for 33943/-33943/40120 (grep count 0).
 local function flightFormCheckCast(event, spell)
     local caster = spell:GetCaster()
     if caster ~= nil and caster:IsInDisallowedMountForm() then

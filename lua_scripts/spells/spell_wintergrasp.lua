@@ -15,9 +15,11 @@ local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to t
 -- the always-registered C++ battlefield is getOrCreateWGState, so the
 -- defender read never misses. The 54643 trigger HandleDummy leg stays
 -- out: the player path has no OnEffectHitTarget site (death-gate
--- precedent). Binding 54640 is the AC spell_script_names row; the
--- second 54640 row (spell_gen_cast_target_to_target) has no C++ loader
--- and is a stale TDB row. RegisterSpellEvent OnCheckCast = 8
+-- precedent). The second 54640 row (spell_gen_cast_target_to_target)
+-- has no C++ loader in this tree. Binding 54640 is the TDB 26091
+-- spell_script_names row (spell_wintergrasp_defender_teleport); no AC
+-- spell_script_names row exists for 54640 (grep count 0).
+-- RegisterSpellEvent OnCheckCast = 8
 -- (lua_spell.go fireSpellCheckCast).
 local function wgDefenderTeleportCheckCast(event, spell)
     local target = spell:GetTarget()
