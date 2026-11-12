@@ -307,3 +307,170 @@ local function takeSputumSampleHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
+--   spell_symbol_of_life_dummy (spell_quest.cpp:845-881): EFFECT_0
+--   DUMMY OnEffectHitTarget, reached via ev4 + spell:GetTarget()
+--   (ev5 has no direct-path fire site; only the triggered funnel
+--   fires it, spells.go:28261). If the hit creature has Permanent
+--   Feign Death 29266, the aura is removed, UNIT_DYNAMIC_FLAGS (79)
+--   and UNIT_FIELD_FLAGS_2 (60) are cleared to 0 (RemoveFlag with a
+--   full mask is the SetUInt32Value twin, lua_creature_events.go:6130),
+--   health is set to half max and mana to 75% of max.
+--   spell_q12659_ahunaes_knife (spell_quest.cpp:888-924): EFFECT_0
+--   DUMMY OnEffectHitTarget, same ev4 + spell:GetTarget() route.
+--   Caster-is-player Load gate rides the player fire site. The hit
+--   creature despawns, then the caster takes Scalps kill credit 28622.
+--   spell_q9452_cast_net (spell_quest.cpp:1123-1169): EFFECT_0 DUMMY
+--   OnEffectHit is ev4-native (no target needed): 66% AddItem Red
+--   Snapper 23614, else the caster self-casts Fished Up Murloc 29869,
+--   triggered. Binding 29866 is enum-grounded (SPELL_CAST_NET,
+--   :1128; effect layout EFFECT_0 DUMMY + EFFECT_1 ACTIVATE_OBJECT
+--   matches the Register at :1156-1157).
+--   KNOWN DELTAS: ev4 fires ahead of the effects loop, before miss
+--   filtering — the C++ arms fire only on a hit target; all three
+--   spells target friendly/helpless units, so a miss is
+--   near-impossible. C++ PreventHitDefaultEffect has no ev4 twin
+--   (notification-only); the q9452 dummy effect has no Go default leg
+--   to suppress. KNOWN LIMIT: player:CastSpell ignores the triggered
+--   flag (see header note above), same as all prior player ports.
+--
+-- STAY OUT (same tick):
+--   spell_q10041_q10040_who_are_they (spell_quest.cpp:803-841):
+--   EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget; GetHitPlayer casts the
+--   gendered disguise 38080/38081 + generic 32756, triggered
+--   (player:GetNativeGender bridged, lua_player.go:360; reachable via
+--   ev4 + spell:GetTarget()) — no binding spell ID resolvable
+--   in-tree (no comment; the enum holds only the disguise spells;
+--   spell_script_names lives in the world DB, not the workspace).
+--   spell_q9874_liquid_fire (spell_quest.cpp:930-971): EFFECT_0 DUMMY
+--   OnEffectHitTarget; hit creature without Flames 39199 gives the
+--   caster Villager kill credit 18240, self-casts 39199 triggered,
+--   despawns after 60s (all bridges live: HasAura, KilledMonsterCredit,
+--   CastSpell, DespawnOrUnsummon(ms)) — no binding spell ID
+--   resolvable in-tree (no comment; the enum holds only 18240/39199).
+--   spell_q12805_lifeblood_dummy (spell_quest.cpp:975-1013): EFFECT_0
+--   SCRIPT_EFFECT OnEffectHitTarget; kill credit 29303, hit creature
+--   self-casts its EFFECT_0 DBC value (spell:GetEffectValue(0),
+--   lua_spell.go:215), despawns after 2s — no binding spell ID
+--   resolvable in-tree (no comment; the enum holds only 29303).
+--   spell_q14112_14145_chum_the_water (spell_quest.cpp:1083-1116):
+--   EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget; caster-only self-cast
+--   of RAND(66737, 66738, 66739, 66740), NON-triggered in C++ (Lua
+--   funnel is triggered-only — would be a noted deviation) — no
+--   binding spell ID resolvable in-tree (no comment; the enum holds
+--   only the four summon spells).
+--   spell_q14076_14092_pound_drum (spell_quest.cpp:1173-1210):
+--   HandleSummon OnCast (ev1, which DOES fire on the player path,
+--   spells.go:10861) 50/50 self-cast 66510/66492 triggered, plus a
+--   GO SetLootState(3) OnEffectHitTarget leg — no binding spell ID
+--   resolvable in-tree (no comment; the enum holds only the two
+--   summon spells).
+--   spell_q12279_cast_net (spell_quest.cpp:1210-1235): single
+--   EFFECT_1 ACTIVATE_OBJECT OnEffectHitTarget leg, GO SetLootState
+--   only — no binding spell ID resolvable in-tree (no comment, no
+--   enum); secondary: ev5-only + GO Use unbridged (no methods["Use"]
+--   on GO objects; SetLootState/SetRespawnTime are bridged,
+--   lua_objects.go:4324/4353), which also blocks the q9452
+--   HandleActiveObject leg (:1157) and the q14076 GO leg.
+--   Census go_hit/lua_hit true on 691/693/694/695/696/697/698/699 are
+--   phantoms (zero class-name hits in engine/ + lua_scripts/).
+
+local SPELL_SYMBOL_OF_LIFE = 8593 -- spell_quest.cpp:844 (class spell_symbol_of_life_dummy)
+local SPELL_PERMANENT_FEIGN_DEATH = 29266 -- spell_quest.cpp:842
+local POWER_MANA = 0
+local CLEAR_ALL_FLAGS = 0xFFFFFFFF -- RemoveFlag full-mask twin of SetUInt32Value(field, 0)
+local SPELL_AHUNAES_KNIFE = 52090 -- spell_quest.cpp:887 (class spell_q12659_ahunaes_knife)
+local NPC_SCALPS_KC_BUNNY = 28622 -- spell_quest.cpp:891
+local SPELL_CAST_NET = 29866 -- spell_quest.cpp:1128 (class spell_q9452_cast_net)
+local ITEM_RED_SNAPPER = 23614 -- spell_quest.cpp:1127
+local SPELL_FISHED_UP_MURLOC = 29869 -- spell_quest.cpp:1129
+
+local function symbolOfLifeHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local target = spell:GetTarget()
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    if target:HasAura(SPELL_PERMANENT_FEIGN_DEATH) then
+        target:RemoveAura(SPELL_PERMANENT_FEIGN_DEATH)
+        target:RemoveFlag(UNIT_DYNAMIC_FLAGS, CLEAR_ALL_FLAGS)
+        target:RemoveFlag(UNIT_FIELD_FLAGS_2, CLEAR_ALL_FLAGS)
+        target:SetHealth(math.floor(target:GetMaxHealth() / 2))
+        target:SetPower(POWER_MANA, math.floor(target:GetMaxPower(POWER_MANA) * 0.75))
+    end
+end
+
+RegisterSpellEvent(SPELL_SYMBOL_OF_LIFE, 4, symbolOfLifeHit)
+
+local function ahunaesKnifeHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local target = spell:GetTarget()
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    target:DespawnOrUnsummon()
+    caster:KilledMonsterCredit(NPC_SCALPS_KC_BUNNY)
+end
+
+RegisterSpellEvent(SPELL_AHUNAES_KNIFE, 4, ahunaesKnifeHit)
+
+local function castNetHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(1, 100) <= 66 then
+        caster:AddItem(ITEM_RED_SNAPPER, 1)
+    else
+        caster:CastSpell(caster, SPELL_FISHED_UP_MURLOC, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q9452_cast_net (spell_quest.cpp:1123-1168): EFFECT_0 DUMMY
+--   OnEffectHit. Caster-is-player Load gate rides the fire site
+--   (player-cast quest spell, as q5206 above). 66% roll: AddItem Red
+--   Snapper 23614, else triggered self-cast Fished Up Murloc 29869.
+--   PARTIAL: the EFFECT_1 ACTIVATE_OBJECT OnEffectHitTarget arm
+--   (HandleActiveObject: GO SetRespawnTime/Use/SetLootState) stays
+--   out — GO TargetInfo legs never fire in Go (runtime.go) and the
+--   GO methods are unbridged. The ev4 handler guards effectIndex 0:
+--   Go fires ev4 once per non-zero effect, so EFFECT_1 would
+--   otherwise double-trigger the roll.
+--   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
+--   header note above), same as all prior player ports.
+
+local SPELL_CAST_NET = 29866 -- spell_quest.cpp:1119 (class spell_q9452_cast_net)
+local ITEM_RED_SNAPPER = 23614 -- spell_quest.cpp:1118
+local SPELL_FISHED_UP_MURLOC = 29869 -- spell_quest.cpp:1120
+
+local function castNetHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(1, 100) <= 66 then
+        caster:AddItem(ITEM_RED_SNAPPER, 1)
+    else
+        caster:CastSpell(caster, SPELL_FISHED_UP_MURLOC, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_CAST_NET, 4, castNetHit)
