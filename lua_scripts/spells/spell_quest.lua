@@ -1132,3 +1132,101 @@ end
 
 RegisterSpellEvent(SPELL_AZURE_ON_DEATH_FORCE_WHISPER, 5, azureOnDeathForceWhisperHit)
 
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12372_destabilize_azure_dragonshrine_dummy (spell_quest.cpp:1460-1490):
+--   EFFECT_0 DUMMY ev5, binding 49370 (in-file comment :1451).
+--   ADJUDICATION (parent tick, overruling the 01:54/01:56 stay-out):
+--   the arm reads GetOriginalCaster, which has no Lua bridge, but
+--   spell:GetCaster() is EXACT here, not approximate: 49370 is a
+--   vehicle-cast spell (SpellInfo.cpp:1756: "if vehicle cast this to
+--   master" — the Wyrmrest Defender casts it on its passenger), a
+--   direct cast with no trigger chain anywhere in the C++ tree (zero
+--   49370 sites outside the comment), so original caster IS caster;
+--   and Go carries no original-caster concept at all (spells.go
+--   :47760 comment), so no bridge could distinguish them. The kit
+--   resolves the same from either side: caster = defender -> its
+--   kit, passenger 0 is the riding player -> KilledMonsterCredit
+--   (27698, Quest12372Data :1455). The hit creature is a presence
+--   gate only (C++ ignores it past the null check).
+--   spell_q13280_13283_plant_battle_standard (spell_quest.cpp:1029-1055):
+--   EFFECT_0 DUMMY ev5, bindings 59643 (horde) + 4338 (alliance),
+--   both comment-grounded (:1014-1019); the C++ GetSpellInfo()->Id
+--   check reads spell:GetEntry(). The caster roars
+--   (EMOTE_ONESHOT_ROAR 15, SharedDefines.h:1950, via PerformEmote,
+--   the HandleEmoteCommand twin); a vehicle caster credits its
+--   seat-0 player rider 31766 (enum :1022); the hit unit's auras are
+--   stripped and it self-casts the faction state spell (59642 horde
+--   / 4339 alliance, enum :1024-1025), triggered. NOTE: the credit
+--   leg needs the caster to BE the vehicle (the C++ IsVehicle gate);
+--   vehicle action-bar casts ride castCreatureSpell in Go, so the
+--   creature path reports the vehicle as caster — a player-path cast
+--   would skip the credit leg only.
+--   STAY OUT (same tick): spell_q13280_13283_jump_jets (:1057-1081):
+--   OnCast ev1, no binding spell ID in-tree (enum holds only 4340);
+--   the binding-ID hunt agent covers it.
+
+local SPELL_DESTABILIZE_AZURE_DRAGONSHRINE = 49370 -- spell_quest.cpp:1451 (class spell_q12372_destabilize_azure_dragonshrine_dummy)
+local NPC_WYRMREST_TEMPLE_CREDIT = 27698 -- spell_quest.cpp:1455 (Quest12372Data)
+local SPELL_PLANT_HORDE_BATTLE_STANDARD = 59643 -- spell_quest.cpp:1017 (class spell_q13280_13283_plant_battle_standard)
+local SPELL_PLANT_ALLIANCE_BATTLE_STANDARD = 4338 -- spell_quest.cpp:1018
+local SPELL_HORDE_BATTLE_STANDARD_STATE = 59642 -- spell_quest.cpp:1024
+local SPELL_ALLIANCE_BATTLE_STANDARD_STATE = 4339 -- spell_quest.cpp:1025
+local NPC_KING_OF_THE_MOUNTAINT_KC = 31766 -- spell_quest.cpp:1022
+local EMOTE_ONESHOT_ROAR = 15 -- SharedDefines.h:1950
+
+local function destabilizeAzureDragonshrineHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local kit = caster:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    local passenger = kit:GetPassenger(0)
+    if passenger == nil or passenger:GetObjectType() ~= "Player" then
+        return
+    end
+    passenger:KilledMonsterCredit(NPC_WYRMREST_TEMPLE_CREDIT)
+end
+
+RegisterSpellEvent(SPELL_DESTABILIZE_AZURE_DRAGONSHRINE, 5, destabilizeAzureDragonshrineHit)
+
+local function plantBattleStandardHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:PerformEmote(EMOTE_ONESHOT_ROAR)
+    if caster:IsVehicle() then
+        local kit = caster:GetVehicleKit()
+        if kit ~= nil then
+            local player = kit:GetPassenger(0)
+            if player ~= nil and player:GetObjectType() == "Player" then
+                player:KilledMonsterCredit(NPC_KING_OF_THE_MOUNTAINT_KC)
+            end
+        end
+    end
+    if hitTarget == nil then
+        return
+    end
+    local triggeredSpellID = SPELL_ALLIANCE_BATTLE_STANDARD_STATE
+    if spell:GetEntry() == SPELL_PLANT_HORDE_BATTLE_STANDARD then
+        triggeredSpellID = SPELL_HORDE_BATTLE_STANDARD_STATE
+    end
+    hitTarget:RemoveAllAuras()
+    hitTarget:CastSpell(hitTarget, triggeredSpellID, true)
+end
+
+RegisterSpellEvent(SPELL_PLANT_HORDE_BATTLE_STANDARD, 5, plantBattleStandardHit)
+RegisterSpellEvent(SPELL_PLANT_ALLIANCE_BATTLE_STANDARD, 5, plantBattleStandardHit)
+
