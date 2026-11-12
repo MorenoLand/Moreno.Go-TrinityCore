@@ -291,10 +291,12 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   669 pain_and_suffering_dummy (47580, :916-942): DoCheckEffectProc
 --   returning false (pure proc gate, no arm); ev6 has no CheckProc
 --   model and its hook fires after charge/cooldown consumption.
---   670 penance (47540, :980-1064): HandleDummy rides ev5 (spell hit)
---   + spell-level GetSpellWithRank (47758/47757) + IsFriendlyTo; the
---   CheckCast arm is PORTED this tick (OnCheckCast ev8 below, R1 only)
---   and the ev5 player path is dormant.
+--   670 penance (47540, :980-1064): HandleDummy PORTED tick 2026-11-12
+--   (ev5 below, R1 only: friendly hit -> 47757 heal, hostile -> 47758
+--   damage, both triggered; the binding id IS the rank match — no
+--   spell-level GetSpellWithRank bridge exists); the CheckCast arm is
+--   PORTED (OnCheckCast ev8 above, R1 only). The "ev5 player path is
+--   dormant" claim is STALE (a910c39d, spells.go:14668-14737).
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
@@ -324,9 +326,16 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   + OnEffectProc EFFECT_0 DUMMY; census phantom HandleDamage/OnHit.
 --   shadow_word_death (32379, :1316-1350): STAY OUT. OnHit HandleDamage
 --   needs GetHitDamage (Pain and Suffering icon 2874 EFFECT_1 pct, then
---   caster casts 32409 on self triggered BP0=damage); the player-path hit
---   state is nil so GetHitDamage reads 0 at OnHit and AfterHit
---   (lua_spell.go:91-93). Go-leg candidate in the spells.go damage path.
+--   caster casts 32409 on self triggered BP0=damage). CORRECTION tick
+--   2026-11-12: the player path DOES thread hit damage now (spells.go:14637
+--   + :14668, a910c39d) — but C++ OnHit itself reads m_damage = 0: the
+--   damage is still TargetInfo.Damage = 0 (Spell.h:681) at PreprocessTarget
+--   (Spell.cpp:2344 sets m_damage before CallScriptOnHitHandlers at :2377;
+--   the effects run after, DoProcessTargetContainer :3554-3565), so a
+--   faithful ev2 port casts a 0-BP0 backlash, and an ev3 AfterHit port
+--   would read post-mitigation damage (spells.go:19795-19805) C++ never
+--   sees at OnHit. No Go damage-path twin exists (only 32409 aura-dispel
+--   carve-outs: boss_ai.go:4484, procs.go:4526, spells.go:7429/46357).
 --   Real hook OnHit only; census phantom HandleDamage.
 --   vampiric_embrace (15286, :1351-1392): CLOSED IN GO (procs.go:5261-5280
 --   + boss_ai.go:11307-11322: actor casts 15290 on null, BP0=selfHeal/5,
@@ -355,10 +364,14 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   power_infusion (10060, :1586-1604): PORTED this tick (OnCheckCast
 --   ev8 above: target with Arcane Power 12042 -> SPELL_FAILED_AURA_BOUNCED).
 --   Census rows 224-229 + 672-673 now all closed in Go except the
---   SW:D / VT-Replenishment legs noted above; the next
---   unworked census row is 674 (spell_q55_sacred_cleansing, spell_quest.cpp).
+--   SW:D leg noted above; the next unworked census row is 691
+--   (spell_q12937_relief_for_the_fallen, spell_quest.cpp) — rows
+--   675-686 + 690 (1-based) all closed this tick; the 9293c104 note
+--   calling 674 "q55" is off by one (674 is vampiric_touch).
 
 local SPELL_PRIEST_PENANCE_R1 = 47540 -- spell_priest.cpp:49 (class spell_pri_penance)
+local SPELL_PRIEST_PENANCE_R1_HEAL = 47757 -- spell_priest.cpp:51
+local SPELL_PRIEST_PENANCE_R1_DAMAGE = 47758 -- spell_priest.cpp:50
 local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
 local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 
@@ -387,3 +400,37 @@ local function penanceCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_PRIEST_PENANCE_R1, 8, penanceCheckCast)
+
+-- C++ spell_pri_penance_SpellScript::HandleDummy (spell_priest.cpp:1016-1031):
+-- EFFECT_0 DUMMY OnEffectHitTarget. A dead hit unit casts nothing; a
+-- friendly hit unit gets the rank-matched heal, a hostile one the
+-- rank-matched damage, both TRIGGERED_DISALLOW_PROC_EVENTS (a triggered
+-- cast — the true flag; the player path ignores it, see the quest-file
+-- header note). Rank 1 only: the binding is the R1 id itself, so the
+-- R1 heal/damage ids ARE the rank match (higher-rank IDs are not in
+-- the file, never guessed); no spell-level GetSpellWithRank bridge
+-- exists (lua_spell.go has no Rank method — the aura twin does not
+-- apply here). The C++ NPCBot caster exception has no Go twin — the
+-- Load gate is the player-type check below (ev5 fires on the creature
+-- path too, boss_ai.go:3435-3438). RegisterSpellEvent
+-- OnEffectHitTarget = 5; the player-path fire site is spells.go:14668-14737
+-- (a910c39d, one fire per (effect, live hit target), before the default).
+local function penanceHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or not hitTarget:IsAlive() then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if caster:IsFriendlyTo(hitTarget) then
+        caster:CastSpell(hitTarget, SPELL_PRIEST_PENANCE_R1_HEAL, true)
+    else
+        caster:CastSpell(hitTarget, SPELL_PRIEST_PENANCE_R1_DAMAGE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_PRIEST_PENANCE_R1, 5, penanceHit)

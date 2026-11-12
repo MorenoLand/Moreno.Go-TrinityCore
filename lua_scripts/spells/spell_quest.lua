@@ -96,17 +96,16 @@ RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 3, forceShieldRemove)
 --
 -- CLOSED (tick 295 census, corrected 2026-11-11): the remaining quest
 --   classes are SpellScript-only. The "no RegisterSpellScript bridge"
---   claim is now STALE in one direction: RegisterSpellEvent ev4
+--   claim is now STALE in both directions: RegisterSpellEvent ev4
 --   (OnEffectHit) EXISTS and fires on the player path (spells.go:14625),
 --   so no-target OnEffectHit legs port (q5206/q12634/q12683 ported
---   below); ev5 (OnEffectHitTarget) fires on the player path ONLY
---   inside the triggered-cast funnel (spells.go:28261) — direct casts
---   (finishSpellCast) have no per-effect fire site, so all direct
---   player-cast ev5 legs stay out. Also staying out: going_bearback
---   (AfterApply credit via GetCharmerOrOwnerPlayer — unbridged),
---   quenching_mist + read_pronouncement (aura IDs live only in the
---   world DB spell_script_names, unresolvable in workspace), and the
---   q12619 emblazon effect SpellScript.
+--   below); ev5 (OnEffectHitTarget) ALSO fires on the player path now
+--   (a910c39d, spells.go:14668-14737: one fire per (effect, live hit
+--   target), effect-major, before that effect's default), so direct
+--   player-cast ev5 legs port (rows 675-686 + 690 ported below).
+--   Also staying out: quenching_mist + read_pronouncement (aura IDs
+--   live only in the world DB spell_script_names, unresolvable in
+--   workspace), and the q12619 emblazon effect SpellScript.
 
 local SPELL_THAUMATURGY_CHANNEL_AURA = 9712 -- spell_quest.cpp:117 (class spell_q2203_thaumaturgy_channel)
 local SPELL_THAUMATURGY_CHANNEL = 21029 -- spell_quest.cpp:120
@@ -236,9 +235,9 @@ RegisterAuraEvent(SPELL_BLOATED_ABOMINATION_FEIGN_DEATH, 3, bloatedAbomFeignDeat
 --   retired.
 --   The ev4 hook fires on the player path (spells.go:14625, ahead of
 --   the effects loop, matching C++ HIT-phase order); the ev5
---   OnEffectHitTarget hook fires on the player path ONLY inside the
---   triggered-cast funnel (spells.go:28261), so direct-cast ev5 legs
---   stay out on that leg alone.
+--   OnEffectHitTarget hook fires on the player path too (a910c39d,
+--   spells.go:14668-14737) — the funnel-only claim is STALE,
+--   corrected tick 2026-11-12.
 --   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
 --   header note above), same as all prior player ports.
 
@@ -317,8 +316,8 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 -- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
 --   spell_symbol_of_life_dummy (spell_quest.cpp:845-881): EFFECT_0
 --   DUMMY OnEffectHitTarget, reached via ev4 + spell:GetTarget()
---   (ev5 has no direct-path fire site; only the triggered funnel
---   fires it, spells.go:28261). If the hit creature has Permanent
+--   (ev5 has a direct-path fire site too now, a910c39d — the ev4
+--   route stands, fired ahead of the effects loop). If the hit creature has Permanent
 --   Feign Death 29266, the aura is removed, UNIT_DYNAMIC_FLAGS (79)
 --   and UNIT_FIELD_FLAGS_2 (60) are cleared to 0 (RemoveFlag with a
 --   full mask is the SetUInt32Value twin, lua_creature_events.go:6130),
@@ -673,3 +672,291 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   spell_q11306_mixing_vrykul_blood (:2794-2835): ev5 EFFECT_1
 --   DUMMY; caster self-casts 43376/43378/43970 (30/30/30) or 43377
 --   (10%), triggered — no binding ID.
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   The ev5 player-path fire site is live (a910c39d,
+--   spells.go:14668-14737): one fire per (effect, live hit target),
+--   effect-major, before that effect's default; missed, immune and
+--   GO targets never fire. The tick-295 header claim that ev5 fires
+--   on the player path only inside the triggered funnel is STALE.
+--   spell_generic_quest_update_entry_SpellScript
+--   (spell_quest.cpp:35-77): OnEffectHitTarget, hit creature, not a
+--   pet, entry == original -> UpdateEntry(new) + EngageWithTarget
+--   (shouldAttack, all three rows) + despawn when set (none here).
+--   The IsPet gate has no bridge and is vacuous behind the entry
+--   check (the entry pins the exact quest NPC). One factory covers
+--   all three bindings: q55_sacred_cleansing (8913, EFFECT_1,
+--   Morbent 1200 -> Weakened Morbent 24782), q10255_administer_
+--   antidote (34665, EFFECT_0, Helboar 16880 -> Dreadtusk 16992),
+--   q11515_fel_siphon_dummy (44936, EFFECT_0, Felblood Initiate
+--   24918 -> Emaciated Felblood 24955).
+--   spell_q6124_6129_apply_salve (spell_quest.cpp:215-275): EFFECT_0
+--   DUMMY ev5. Caster-is-player Load gate + cast-item gate (both
+--   explicit checks); Horde cures the sickly gazelle 12296 -> 12297,
+--   Alliance the sickly deer 12298 -> 12299, then 30s despawn +
+--   KilledMonsterCredit(new entry). player:GetTeam (lua_player.go:386,
+--   characters.go teamForRace: Alliance 0, Horde 1) is the C++
+--   TeamId twin.
+--   spell_q11396_11399_scourging_crystal_controller
+--   (spell_quest.cpp:332-367): EFFECT_0 DUMMY ev5, binding 50133.
+--   Hit creature with the 43874 force shield and without the 43878
+--   controller aura gets 43878 cast on it, non-triggered with the
+--   cast item (Go player CastSpell takes no item arg — the cast
+--   rides un-attributed; the triggered flag is ignored on the player
+--   path, see header note).
+--   spell_q11396_11399_scourging_crystal_controller_dummy
+--   (spell_quest.cpp:368-397): EFFECT_0 DUMMY ev5, binding 43882.
+--   Hit creature loses the 43874 force shield (RemoveAurasDueToSpell
+--   twin is creature:RemoveAura, lua_creature_events.go:1676 — the
+--   symbolOfLife precedent).
+--   spell_q11587_arcane_prisoner_rescue (spell_quest.cpp:428-461):
+--   EFFECT_0 DUMMY ev5, binding 45449. 50/50 self-cast Summon Arcane
+--   Prisoner Male 45446 / Female 45448, triggered.
+--   spell_q11730_ultrasonic_screwdriver (spell_quest.cpp:480-551):
+--   EFFECT_0 DUMMY ev5, binding 46023. Caster-is-player + cast-item
+--   Load gate (explicit checks); hit creature entry picks the summon
+--   (25752 -> 46063, 25753 -> 46068, 25758 -> 46058, 25792 -> 46066,
+--   25793 -> 46034), non-triggered self-cast with the cast item (same
+--   no-item-arg delta as 50133), then Robot Kill Credit 46027
+--   triggered + immediate despawn.
+--   spell_q12459_seeds_of_natures_wrath (spell_quest.cpp:556-601):
+--   EFFECT_0 DUMMY ev5, binding 49587. Hit creature entry picks the
+--   weakened entry (26841 -> 27821, 27808 -> 27809, 27122 -> 27807).
+--   spell_q12851_going_bearback (spell_quest.cpp:696-746): AuraScript
+--   ONLY, no SpellScript arm — ported as RegisterAuraEvent OnApply
+--   = 2 (no AfterApply aura event exists; the arm only reads
+--   HasAura(54683) and casts, so the after-vs-on timing is
+--   immaterial). Target already ablaze (54683) -> nothing; else the
+--   caster's charmer-or-owner-player (GetControllerGUIDS +
+--   GetPlayerByGUID, the bested-trigger pattern — a player caster
+--   resolves to itself, an unresolvable controller casts nothing,
+--   like the C++ null) gets the entry's credit (Frostworg 29358 ->
+--   58183, Frostgiant 29351 -> 58184) from the target, and the target
+--   self-casts Immolation 54690 + Ablaze 54683, all triggered.
+--   DELTAS: Go OnApply is fresh-only vs C++ REAL_OR_REAPPLY, so a
+--   re-apply after Ablaze expires re-grants nothing (the HasAura
+--   gate makes re-applies no-ops while Ablaze holds).
+--   KNOWN LIMIT: player:CastSpell ignores the triggered flag (see
+--   header note above), same as all prior player ports.
+
+local SPELL_SACRED_CLEANSING = 8913 -- spell_quest.cpp:79 (class spell_q55_sacred_cleansing)
+local NPC_MORBENT = 1200 -- spell_quest.cpp:75
+local NPC_WEAKENED_MORBENT = 24782 -- spell_quest.cpp:76
+local SPELL_ADMINISTER_ANTIDOTE = 34665 -- spell_quest.cpp:276 (class spell_q10255_administer_antidote)
+local NPC_HELBOAR = 16880 -- spell_quest.cpp:272
+local NPC_DREADTUSK = 16992 -- spell_quest.cpp:273
+local SPELL_FEL_SIPHON_DUMMY = 44936 -- spell_quest.cpp:409 (class spell_q11515_fel_siphon_dummy)
+local NPC_FELBLOOD_INITIATE = 24918 -- spell_quest.cpp:405
+local NPC_EMACIATED_FELBLOOD = 24955 -- spell_quest.cpp:406
+local SPELL_APPLY_SALVE = 19512 -- spell_quest.cpp:215 (class spell_q6124_6129_apply_salve)
+local NPC_SICKLY_GAZELLE = 12296 -- spell_quest.cpp:207
+local NPC_CURED_GAZELLE = 12297 -- spell_quest.cpp:208
+local NPC_SICKLY_DEER = 12298 -- spell_quest.cpp:209
+local NPC_CURED_DEER = 12299 -- spell_quest.cpp:210
+local TEAM_ALLIANCE = 0 -- SharedDefines.h TeamId
+local TEAM_HORDE = 1 -- SharedDefines.h TeamId
+local SALVE_DESPAWN_MS = 30000 -- spell_quest.cpp:213 (30s)
+local SPELL_SCOURGING_CRYSTAL_CONTROLLER = 50133 -- spell_quest.cpp:332 (class spell_q11396_11399_scourging_crystal_controller)
+local SPELL_SCOURGING_CRYSTAL_CHANNEL = 43878 -- spell_quest.cpp:292 (SPELL_SCOURGING_CRYSTAL_CONTROLLER enum)
+local SPELL_SCOURGING_CRYSTAL_CONTROLLER_DUMMY = 43882 -- spell_quest.cpp:368 (class spell_q11396_11399_scourging_crystal_controller_dummy)
+local SPELL_ARCANE_PRISONER_RESCUE = 45449 -- spell_quest.cpp:428 (class spell_q11587_arcane_prisoner_rescue)
+local SPELL_SUMMON_ARCANE_PRISONER_MALE = 45446 -- spell_quest.cpp:424
+local SPELL_SUMMON_ARCANE_PRISONER_FEMALE = 45448 -- spell_quest.cpp:425
+local SPELL_ULTRASONIC_SCREWDRIVER = 46023 -- spell_quest.cpp:480 (class spell_q11730_ultrasonic_screwdriver)
+local SPELL_ROBOT_KILL_CREDIT = 46027 -- spell_quest.cpp:472
+local NPC_SCAVENGEBOT_004A8 = 25752 -- spell_quest.cpp:473
+local NPC_SENTRYBOT_57K = 25753 -- spell_quest.cpp:474
+local NPC_DEFENDOTANK_66D = 25758 -- spell_quest.cpp:475
+local NPC_SCAVENGEBOT_005B6 = 25792 -- spell_quest.cpp:476
+local NPC_55D_COLLECTATRON = 25793 -- spell_quest.cpp:477
+local ULTRASONIC_ROBOT_SUMMONS = {[NPC_SCAVENGEBOT_004A8] = 46063, [NPC_SENTRYBOT_57K] = 46068, [NPC_DEFENDOTANK_66D] = 46058, [NPC_SCAVENGEBOT_005B6] = 46066, [NPC_55D_COLLECTATRON] = 46034} -- spell_quest.cpp:467-471
+local SPELL_SEEDS_OF_NATURES_WRATH = 49587 -- spell_quest.cpp:556 (class spell_q12459_seeds_of_natures_wrath)
+local NPC_REANIMATED_FROSTWYRM = 26841 -- spell_quest.cpp:546
+local NPC_WEAK_REANIMATED_FROSTWYRM = 27821 -- spell_quest.cpp:547
+local NPC_TURGID = 27808 -- spell_quest.cpp:549
+local NPC_WEAK_TURGID = 27809 -- spell_quest.cpp:550
+local NPC_DEATHGAZE = 27122 -- spell_quest.cpp:552
+local NPC_WEAK_DEATHGAZE = 27807 -- spell_quest.cpp:553
+local SEEDS_WEAK_ENTRIES = {[NPC_REANIMATED_FROSTWYRM] = NPC_WEAK_REANIMATED_FROSTWYRM, [NPC_TURGID] = NPC_WEAK_TURGID, [NPC_DEATHGAZE] = NPC_WEAK_DEATHGAZE} -- spell_quest.cpp:572-574
+local SPELL_GOING_BEARBACK = 54798 -- spell_quest.cpp:696 (class spell_q12851_going_bearback)
+local NPC_FROSTGIANT = 29351 -- spell_quest.cpp:688
+local NPC_FROSTWORG = 29358 -- spell_quest.cpp:689
+local SPELL_FROSTGIANT_CREDIT = 58184 -- spell_quest.cpp:690
+local SPELL_FROSTWORG_CREDIT = 58183 -- spell_quest.cpp:691
+local SPELL_IMMOLATION = 54690 -- spell_quest.cpp:692
+local SPELL_ABLAZE = 54683 -- spell_quest.cpp:693
+
+local function questUpdateEntryHit(oldEntry, newEntry, effIndex)
+    return function(event, spell, hitTarget, effectIndex)
+        if effectIndex ~= effIndex then
+            return
+        end
+        if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+            return
+        end
+        if hitTarget:GetEntry() == oldEntry then
+            hitTarget:UpdateEntry(newEntry)
+            local caster = spell:GetCaster()
+            if caster ~= nil then
+                hitTarget:EngageWithTarget(caster)
+            end
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_SACRED_CLEANSING, 5, questUpdateEntryHit(NPC_MORBENT, NPC_WEAKENED_MORBENT, 1))
+RegisterSpellEvent(SPELL_ADMINISTER_ANTIDOTE, 5, questUpdateEntryHit(NPC_HELBOAR, NPC_DREADTUSK, 0))
+RegisterSpellEvent(SPELL_FEL_SIPHON_DUMMY, 5, questUpdateEntryHit(NPC_FELBLOOD_INITIATE, NPC_EMACIATED_FELBLOOD, 0))
+
+local function applySalveHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if spell:GetCastItem() == nil then
+        return
+    end
+    local team = caster:GetTeam()
+    local newEntry = 0
+    if team == TEAM_HORDE and hitTarget:GetEntry() == NPC_SICKLY_GAZELLE then
+        newEntry = NPC_CURED_GAZELLE
+    elseif team == TEAM_ALLIANCE and hitTarget:GetEntry() == NPC_SICKLY_DEER then
+        newEntry = NPC_CURED_DEER
+    end
+    if newEntry ~= 0 then
+        hitTarget:UpdateEntry(newEntry)
+        hitTarget:DespawnOrUnsummon(SALVE_DESPAWN_MS)
+        caster:KilledMonsterCredit(newEntry)
+    end
+end
+
+RegisterSpellEvent(SPELL_APPLY_SALVE, 5, applySalveHit)
+
+local function scourgingCrystalControllerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    if hitTarget:HasAura(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3) and not hitTarget:HasAura(SPELL_SCOURGING_CRYSTAL_CHANNEL) then
+        local caster = spell:GetCaster()
+        if caster ~= nil then
+            caster:CastSpell(hitTarget, SPELL_SCOURGING_CRYSTAL_CHANNEL, false)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_SCOURGING_CRYSTAL_CONTROLLER, 5, scourgingCrystalControllerHit)
+
+local function scourgingCrystalControllerDummyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3)
+end
+
+RegisterSpellEvent(SPELL_SCOURGING_CRYSTAL_CONTROLLER_DUMMY, 5, scourgingCrystalControllerDummyHit)
+
+local function arcanePrisonerRescueHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(0, 1) == 0 then
+        caster:CastSpell(caster, SPELL_SUMMON_ARCANE_PRISONER_MALE, true)
+    else
+        caster:CastSpell(caster, SPELL_SUMMON_ARCANE_PRISONER_FEMALE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_ARCANE_PRISONER_RESCUE, 5, arcanePrisonerRescueHit)
+
+local function ultrasonicScrewdriverHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 4 then
+        return
+    end
+    if spell:GetCastItem() == nil then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local spellId = ULTRASONIC_ROBOT_SUMMONS[hitTarget:GetEntry()]
+    if spellId == nil then
+        return
+    end
+    caster:CastSpell(caster, spellId, false)
+    caster:CastSpell(caster, SPELL_ROBOT_KILL_CREDIT, true)
+    hitTarget:DespawnOrUnsummon()
+end
+
+RegisterSpellEvent(SPELL_ULTRASONIC_SCREWDRIVER, 5, ultrasonicScrewdriverHit)
+
+local function seedsOfNaturesWrathHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local newEntry = SEEDS_WEAK_ENTRIES[hitTarget:GetEntry()]
+    if newEntry ~= nil then
+        hitTarget:UpdateEntry(newEntry)
+    end
+end
+
+RegisterSpellEvent(SPELL_SEEDS_OF_NATURES_WRATH, 5, seedsOfNaturesWrathHit)
+
+local function goingBearbackApply(event, aura, target)
+    if target:HasAura(SPELL_ABLAZE) then
+        return
+    end
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    local player = nil
+    if caster:GetObjectType() == "Player" then
+        player = caster
+    else
+        local guid = caster:GetControllerGUIDS()
+        if guid ~= 0 then
+            player = GetPlayerByGUID(guid)
+        end
+    end
+    if player == nil then
+        return
+    end
+    local entry = target:GetEntry()
+    local credit = nil
+    if entry == NPC_FROSTWORG then
+        credit = SPELL_FROSTWORG_CREDIT
+    elseif entry == NPC_FROSTGIANT then
+        credit = SPELL_FROSTGIANT_CREDIT
+    end
+    if credit == nil then
+        return
+    end
+    target:CastSpell(player, credit, true)
+    target:CastSpell(target, SPELL_IMMOLATION, true)
+    target:CastSpell(target, SPELL_ABLAZE, true)
+end
+
+RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
