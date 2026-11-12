@@ -82,11 +82,10 @@
 -- instance hooks), the Algalon summon timer + _algalonTimer
 -- world states, SaveToDB (the C++ per-bit SaveToDB in OnUnitDeath
 -- has no Lua twin; the mask persists with the table).
--- spell_ulduar_teleporter (instance_ulduar.cpp:1085-1114) STAYS OUT —
--- OnCheckCast only (expl target must be a player, not in combat), and
--- there is no spell OnCheckCast event (spell events 1-7,
--- runtime.go:601-607); the loader carries no spell ID either, so
--- there is nothing to register — DBC-bound.
+-- spell_ulduar_teleporter (instance_ulduar.cpp:1094-1106): PORTED at the
+-- end of this file (OnCheckCast ev8). The old "no ev8 / no spell ID"
+-- note is stale: ev8 exists (runtime.go) and the nine binding IDs come
+-- from spell_script_names.
 local MAP_ULDUAR = 603
 local INSTANCE_EVENT_ON_CREATURE_CREATE = 5
 local INSTANCE_EVENT_ON_UPDATE = 3
@@ -248,3 +247,30 @@ RegisterMapEvent(MAP_ULDUAR, INSTANCE_EVENT_ON_UNIT_DEATH, function(event, insta
         end
     end
 end)
+
+local SPELL_FAILED_DONT_REPORT = 27 -- SharedDefines.h:1009
+local SPELL_FAILED_AFFECTING_COMBAT = 1 -- SharedDefines.h:983
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_ulduar_teleporter::CheckRequirement
+-- (instance_ulduar.cpp:1094-1106, registered OnCheckCast): the explicit
+-- target must be a player (DONT_REPORT otherwise) and not in combat
+-- (AFFECTING_COMBAT otherwise; C++ also sends the cast result to the
+-- target player, which the Go fire site already does for the caster).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding is the nine AC spell_script_names rows (64014, 64024, 64025,
+-- 64028-64032, 65042).
+local function ulduarTeleporterCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return SPELL_FAILED_DONT_REPORT
+    end
+    if target:IsInCombat() then
+        return SPELL_FAILED_AFFECTING_COMBAT
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs({ 64014, 64024, 64025, 64028, 64029, 64030, 64031, 64032, 65042 }) do
+    RegisterSpellEvent(spellId, 8, ulduarTeleporterCheckCast)
+end

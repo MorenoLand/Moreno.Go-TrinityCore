@@ -33,3 +33,26 @@ local function deathboltHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_DEATHBOLT, 5, deathboltHit)
+
+local SPELL_SHOOT_RJR = 51330 -- zone_sholazar_basin.cpp:460 (class spell_q12589_shoot_rjr)
+local NPC_LUCKY_WILHELM = 28054 -- zone_sholazar_basin.cpp:440
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_MUST_TARGET_WILHELM = 27 -- SharedDefines.h:1203
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_q12589_shoot_rjr::CheckCast (zone_sholazar_basin.cpp:470-478):
+-- the explicit target must be Lucky Wilhelm (28054) or the cast fails
+-- SPELL_FAILED_CUSTOM_ERROR with MUST_TARGET_WILHELM. RegisterSpellEvent
+-- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast); the second return
+-- is the custom-error id the fire site sends with the failure. Binding
+-- 51330 is the AC spell_script_names row. The HandleDummy roll arm
+-- (EVENT_MISS/HIT/MISS_BIRD) stays out.
+local function shootRjrCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target ~= nil and target:GetEntry() == NPC_LUCKY_WILHELM then
+        return SPELL_CAST_OK
+    end
+    return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_TARGET_WILHELM
+end
+
+RegisterSpellEvent(SPELL_SHOOT_RJR, 8, shootRjrCheckCast)

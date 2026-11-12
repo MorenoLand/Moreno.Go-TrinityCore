@@ -166,8 +166,9 @@
 -- no AuraScript / ConditionScript / achievement bridges. SpellScript
 -- OnEffectHitTarget IS bridged (RegisterSpellEvent ev5, skadi/gal_darah
 -- precedent): 64767/64909 ported below; 62042's FilterTargets (ev7) +
--- HandleScript (ev5) ported below, LoseHammer AfterCast stays out
--- (no AfterCast bridge, spells.go:19257); 62580/62604 frostbolt
+-- HandleScript (ev5) ported below, LoseHammer AfterCast PORTED below
+-- (ev9, tick 2026-11-12; the ev9 bridge landed in 7263ac00);
+-- 62580/62604 frostbolt
 -- volley FilterTargets (ev7) ported below; 62057/62058 runic smash
 -- HandleScript (ev5) ported below.
 
@@ -236,6 +237,7 @@ local DATA_DONT_STAND_IN_THE_LIGHTNING = 29712972
 local DATA_LOSE_YOUR_ILLUSION = 31763183
 local SPELL_TOUCH_OF_DOMINION_TRIGGERED = 62565 -- boss_thorim.cpp:47
 local SPELL_LIGHTNING_RELEASE = 62466 -- boss_thorim.cpp:51
+local SPELL_LIGHTNING_CHARGE = 62279 -- boss_thorim.cpp:50
 
 local EMOTE_RUNIC_BARRIER = 0
 local SPELL_RUNIC_BARRIER = 62338
@@ -1023,6 +1025,23 @@ RegisterCreatureEvent(ENTRY_THORIM, 14, thorimSpellHit)
 RegisterCreatureEvent(ENTRY_THORIM, 15, thorimSpellHitTarget)
 RegisterCreatureEvent(ENTRY_THORIM, 23, thorimReset)
 RegisterCreatureEvent(ENTRY_THORIM, 19, thorimJustSummoned)
+
+-- C++ spell_thorim_lightning_charge::HandleCharge (boss_thorim.cpp:1837-1840):
+-- AfterCast on SPELL_LIGHTNING_RELEASE (62466) — the caster casts
+-- SPELL_LIGHTNING_CHARGE (62279) on itself, non-triggered. The BeforeCast
+-- HandleFocus leg (:1831-1835, SetSpellFocus) stays out: no spell-focus
+-- bridge. PORTED 2026-11-12 (ev9, 7263ac00). LATENT — the 62466 cast rides
+-- EVENT_LIGHTNING_CHARGE behind the unported phase-2 / pillar machine, so
+-- the charge never fires in Lua yet. DORMANT until Spell.dbc ships 62466.
+local function lightningChargeAfterCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_LIGHTNING_CHARGE)
+end
+
+RegisterSpellEvent(SPELL_LIGHTNING_RELEASE, 9, lightningChargeAfterCast)
 RegisterCreatureEvent(ENTRY_THORIM, 38, thorimDoAction)
 
 RegisterCreatureEvent(ENTRY_RUNIC_COLOSSUS, 1, colossusEnterCombat)
@@ -1088,9 +1107,9 @@ RegisterCreatureEvent(ENTRY_DARK_RUNE_ACOLYTE_PRE, 4, preAddDied)
 -- EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget — the hit unit casts
 -- SPELL_STORMHAMMER_BOOMERANG (64909) on the caster, triggered, and
 -- casts SPELL_SIF_TRANSFORM (64778) on itself, triggered. The AfterCast
--- LoseHammer leg (caster UNIT_VIRTUAL_ITEM_SLOT_ID = 0, :1978-1981)
--- stays out: CallScriptAfterCastHandlers is a Go no-op (spells.go:19257),
--- no AfterCast bridge. LATENT — the hard-mode outro cast (EVENT_OUTRO_1,
+-- LoseHammer leg (caster UNIT_VIRTUAL_ITEM_SLOT_ID = 0, :1978-1981) is
+-- PORTED below (ev9, tick 2026-11-12; the ev9 AfterCast bridge landed in
+-- 7263ac00). LATENT — the hard-mode outro cast (EVENT_OUTRO_1,
 -- :798-799) stays out, so 64767 never lands yet. DORMANT until Spell.dbc
 -- ships the 64767 record.
 local function stormhammerSifHit(event, spell, hitTarget, effectIndex)
@@ -1106,6 +1125,21 @@ local function stormhammerSifHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_STORMHAMMER_SIF, 5, stormhammerSifHit)
+
+-- C++ spell_thorim_stormhammer_sif::LoseHammer (boss_thorim.cpp:1978-1981):
+-- AfterCast — the caster clears UNIT_VIRTUAL_ITEM_SLOT_ID (slot 0).
+-- SetEquipmentSlots(main, 0xFFFFFFFF, 0xFFFFFFFF) writes slot 0 only
+-- (boomerang RecoverHammer precedent). LATENT — the hard-mode outro cast
+-- stays out, so 64767 never lands yet. DORMANT until Spell.dbc ships 64767.
+local function stormhammerSifLoseHammer(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
+end
+
+RegisterSpellEvent(SPELL_STORMHAMMER_SIF, 9, stormhammerSifLoseHammer)
 
 -- C++ spell_thorim_stormhammer_boomerang::RecoverHammer
 -- (boss_thorim.cpp:2007-2010): EFFECT_0 DUMMY OnEffectHitTarget — the
@@ -1130,9 +1164,9 @@ RegisterSpellEvent(SPELL_STORMHAMMER_BOOMERANG, 5, stormhammerBoomerangHit)
 -- (2135.178, -321.122, r 32.0, inverted)); an empty list fails the cast
 -- (FinishCast SPELL_FAILED_NO_VALID_TARGETS), else one random target
 -- is kept. The AfterCast LoseHammer leg (caster
--- UNIT_VIRTUAL_ITEM_SLOT_ID = 0, :1935-1938) stays out:
--- CallScriptAfterCastHandlers is a Go no-op (spells.go:19257), no
--- AfterCast bridge. DELTA: no FinishCast bridge — an emptied list
+-- UNIT_VIRTUAL_ITEM_SLOT_ID = 0, :1935-1938) is PORTED below (ev9,
+-- tick 2026-11-12; the ev9 AfterCast bridge landed in 7263ac00).
+-- DELTA: no FinishCast bridge — an emptied list
 -- leaves the cast to resolve with no script-effect hit, so the
 -- damage/stun arms still land on the victim where C++ aborts the
 -- whole cast. DORMANT until Spell.dbc ships the 62042 record.
@@ -1171,6 +1205,20 @@ local function stormhammerHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_STORMHAMMER, 5, stormhammerHit)
+
+-- C++ spell_thorim_stormhammer::LoseHammer (boss_thorim.cpp:1935-1938):
+-- AfterCast — the caster clears UNIT_VIRTUAL_ITEM_SLOT_ID (slot 0).
+-- SetEquipmentSlots(main, 0xFFFFFFFF, 0xFFFFFFFF) writes slot 0 only
+-- (boomerang RecoverHammer precedent). DORMANT until Spell.dbc ships 62042.
+local function stormhammerLoseHammer(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:SetEquipmentSlots(0, 0xFFFFFFFF, 0xFFFFFFFF)
+end
+
+RegisterSpellEvent(SPELL_STORMHAMMER, 9, stormhammerLoseHammer)
 
 -- C++ spell_thorim_activate_lightning_orb_periodic::PeriodicTick
 -- (boss_thorim.cpp:2090-2109): PreventDefaultAction; the aura caster

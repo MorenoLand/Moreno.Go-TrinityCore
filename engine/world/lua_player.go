@@ -7173,12 +7173,15 @@ func (s *session) luaPlayer() *scripting.Object {
 	for name, fn := range luaUnitFriendlyMethods(s.server, s.luaRangeOriginForPlayer) {
 		methods[name] = fn
 	}
-	// FindNearestCreature(entry, dist) is the player-surface twin of the
-	// creature bridge (lua_creature_events.go:2435): the nearest live
+	// FindNearestCreature(entry, dist[, alive]) is the player-surface twin of the
+	// creature bridge (lua_creature_events.go:2435): the nearest
 	// creature of entry within dist yards (3D gate with both combat
 	// reaches added, winner by reach-adjusted distance) on the player's
-	// map+instance; nil when none. Backs the area-trigger dedup arms
-	// (at_scent_larkorwi, at_sentry_point, at_brewfest).
+	// map+instance; nil when none. The optional third arg is the C++
+	// alive parameter (default true): false includes dead creatures,
+	// which the demon-broiled-surprise CheckCast needs (a dead
+	// Abyssal Flamebringer within 10yd). Backs the area-trigger
+	// dedup arms (at_scent_larkorwi, at_sentry_point, at_brewfest).
 	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
 		entry, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -7188,6 +7191,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
+		alive := luaOptionalBoolArg(args, 2, true)
 		if s.server == nil || dist32 < 0 {
 			return []any{nil}, nil
 		}
@@ -7200,7 +7204,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		var best *creatureMotion
 		bestAdj := dist
 		for _, m := range s.server.motionMapLocked(state.Map, state.InstanceID) {
-			if m.Entry != entry || m.Health == 0 {
+			if m.Entry != entry || (alive && m.Health == 0) {
 				continue
 			}
 			dx := float64(m.X - state.X)

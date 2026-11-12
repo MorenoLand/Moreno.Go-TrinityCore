@@ -833,3 +833,85 @@ local function dimensionalRipperEverlookHit(event, spell, hitTarget, effectIndex
 end
 
 RegisterSpellEvent(SPELL_DIMENSIONAL_RIPPER_EVERLOOK, 5, dimensionalRipperEverlookHit)
+
+local SPELL_MAP_OF_THE_GEYSER_FIELDS = 45853 -- spell_item.cpp:2493 (class spell_item_map_of_the_geyser_fields)
+local NPC_SOUTH_SINKHOLE = 25664 -- spell_item.cpp:2488
+local NPC_NORTHEAST_SINKHOLE = 25665 -- spell_item.cpp:2489
+local NPC_NORTHWEST_SINKHOLE = 25666 -- spell_item.cpp:2490
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_MUST_BE_CLOSE_TO_SINKHOLE = 22 -- SharedDefines.h:1198
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_item_map_of_the_geyser_fields::CheckSinkholes
+-- (spell_item.cpp:2497-2507, registered OnCheckCast): OK only when a
+-- sinkhole (25664/25665/25666) is within 30yd, else
+-- SPELL_FAILED_CUSTOM_ERROR with MUST_BE_CLOSE_TO_SINKHOLE.
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding 45853 is the AC spell_script_names row.
+local function geyserFieldsMapCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_BE_CLOSE_TO_SINKHOLE
+    end
+    if caster:FindNearestCreature(NPC_SOUTH_SINKHOLE, 30) ~= nil
+        or caster:FindNearestCreature(NPC_NORTHEAST_SINKHOLE, 30) ~= nil
+        or caster:FindNearestCreature(NPC_NORTHWEST_SINKHOLE, 30) ~= nil then
+        return SPELL_CAST_OK
+    end
+    return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_BE_CLOSE_TO_SINKHOLE
+end
+
+RegisterSpellEvent(SPELL_MAP_OF_THE_GEYSER_FIELDS, 8, geyserFieldsMapCheckCast)
+
+local SPELL_DEMON_BROILED_SURPRISE = 43723 -- spell_item.cpp:2893 (class spell_item_demon_broiled_surprise; AC spell_script_names row)
+local QUEST_SUPER_HOT_STEW = 11379 -- spell_item.cpp:2888
+local NPC_ABYSSAL_FLAMEBRINGER = 19973 -- spell_item.cpp:2890
+local QUEST_STATUS_INCOMPLETE = 3
+local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h:1155
+local SPELL_FAILED_NOT_HERE = 60 -- SharedDefines.h:1042
+
+-- C++ spell_item_demon_broiled_surprise::CheckRequirement
+-- (spell_item.cpp:2915-2925, registered OnCheckCast): quest 11379 must
+-- be incomplete (CANT_DO_THAT_RIGHT_NOW otherwise) and a dead Abyssal
+-- Flamebringer (19973) must be within 10yd (NOT_HERE otherwise).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- The 43723 binding is the AC spell_script_names row — the triage's
+-- 43753 is the spell the dummy arm creates, not the checked spell. The
+-- dead-creature search rides the new optional FindNearestCreature
+-- alive=false leg (player + creature surfaces). The HandleDummy arm
+-- (cast 43753) stays out.
+local function demonBroiledSurpriseCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    if caster:GetQuestStatus(QUEST_SUPER_HOT_STEW) ~= QUEST_STATUS_INCOMPLETE then
+        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    local creature = caster:FindNearestCreature(NPC_ABYSSAL_FLAMEBRINGER, 10, false)
+    if creature ~= nil and creature:IsDead() then
+        return SPELL_CAST_OK
+    end
+    return SPELL_FAILED_NOT_HERE
+end
+
+RegisterSpellEvent(SPELL_DEMON_BROILED_SURPRISE, 8, demonBroiledSurpriseCheckCast)
+
+local SPELL_ROCKET_BOOTS = 51582 -- spell_item.cpp:3174 (class spell_item_rocket_boots; AC spell_script_names row)
+local SPELL_FAILED_ONLY_ABOVEWATER = 88 -- SharedDefines.h:1070
+
+-- C++ spell_item_rocket_boots::CheckCast (spell_item.cpp:3198-3203,
+-- registered OnCheckCast): a caster in water fails
+-- SPELL_FAILED_ONLY_ABOVEWATER. RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast). Binding 51582 is the AC
+-- spell_script_names row. The HandleDummy arm (flag drop + cooldown
+-- reset + proc 30452) stays out.
+local function rocketBootsCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:IsInWater() then
+        return SPELL_FAILED_ONLY_ABOVEWATER
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_ROCKET_BOOTS, 8, rocketBootsCheckCast)

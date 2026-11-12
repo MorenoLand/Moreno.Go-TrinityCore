@@ -6536,14 +6536,18 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		defer s.motionMu.Unlock()
 		return motion.Faction
 	})
-	// FindNearestCreature(entry, dist) is WorldObject::FindNearestCreature /
-	// GetClosestCreatureWithEntry (ScriptedCreature.h): the nearest live
+	// FindNearestCreature(entry, dist[, alive]) is
+	// WorldObject::FindNearestCreature /
+	// GetClosestCreatureWithEntry (ScriptedCreature.h): the nearest
 	// creature of entry within dist yards (3D gate with both combat reaches
 	// added — the C++ IsWithinDistInMap metric; winner picked by
 	// reach-adjusted distance, the C++ GetDistance i_range narrowing) in
-	// the same map+instance, excluding
-	// self; nil when none. Backs the creature-search arms (flame-tsunami
-	// lava-blaze buff) that headers documented as bridge-blocked.
+	// the same map+instance, excluding self; nil when none. The
+	// optional third arg is the C++ alive parameter (default true);
+	// false includes dead creatures, the player-surface twin of the
+	// demon-broiled-surprise CheckCast leg. Backs the creature-search
+	// arms (flame-tsunami lava-blaze buff) that headers documented as
+	// bridge-blocked.
 	methods["FindNearestCreature"] = func(_ context.Context, args []any) ([]any, error) {
 		entry, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -6554,12 +6558,13 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		dist := float64(dist32)
+		alive := luaOptionalBoolArg(args, 2, true)
 		srcReach := float64(motion.combatReachOrDefault())
 		s.motionMu.Lock()
 		var best *creatureMotion
 		bestAdj := dist
 		for guid, m := range s.motionMapLocked(motion.Map, motion.InstanceID) {
-			if guid == motion.GUID || m.Entry != entry || m.Health == 0 {
+			if guid == motion.GUID || m.Entry != entry || (alive && m.Health == 0) {
 				continue
 			}
 			dx := float64(m.X - motion.X)

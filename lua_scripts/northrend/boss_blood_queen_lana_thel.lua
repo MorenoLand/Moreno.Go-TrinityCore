@@ -598,3 +598,55 @@ local function pactOfTheDarkfallenDmgTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PACT_OF_THE_DARKFALLEN, 1, pactOfTheDarkfallenDmgTick)
+
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_CANT_TARGET_VAMPIRES = 84 -- SharedDefines.h:1260
+local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ vampireAuras (boss_blood_queen_lana_thel.cpp:87-92): the three
+-- vampire aura families indexed by map spawn mode (10N, 25N, 10H, 25H).
+local VAMPIRE_AURAS = {
+    { 70867, 71473, 71532, 71533 },
+    { 70879, 71525, 71530, 71531 },
+    { 70877, 71474, 70877, 71474 },
+}
+
+-- C++ spell_blood_queen_vampiric_bite::CheckTarget
+-- (boss_blood_queen_lana_thel.cpp:527-536, registered OnCheckCast):
+-- a target carrying any vampire aura fails SPELL_FAILED_CUSTOM_ERROR
+-- with CANT_TARGET_VAMPIRES. RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast). The script binds in C++ via
+-- spell_script_names to 70946/71475/71476/71477 (the player-castable
+-- bite variants), NOT 71726 — the boss-cast 71726 carries no script
+-- binding in C++, and creature casts run no CheckCast gauntlet in Go,
+-- so only the four bound IDs register here. The difficulty index is
+-- the caster's raid difficulty: caster and target share the ICC map,
+-- so it equals the C++ target-map spawn mode. A nil target fails
+-- BAD_TARGETS (oozeZap precedent); C++ would dereference it. The
+-- BeforeHit OnCast + EFFECT_1 HandlePresence arms stay out.
+local function vampiricBiteCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target == nil then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    local caster = spell:GetCaster()
+    local difficulty = 0
+    if caster ~= nil then
+        difficulty = caster:GetDifficulty()
+    end
+    local index = difficulty + 1
+    if index < 1 or index > 4 then
+        index = 1
+    end
+    for i = 1, 3 do
+        if target:HasAura(VAMPIRE_AURAS[i][index]) then
+            return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_CANT_TARGET_VAMPIRES
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs({ 70946, 71475, 71476, 71477 }) do
+    RegisterSpellEvent(spellId, 8, vampiricBiteCheckCast)
+end
