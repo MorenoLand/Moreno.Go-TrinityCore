@@ -1113,3 +1113,47 @@ end
 for _, spellId in ipairs(SPELL_TOURNAMENT_MOUNT_SPELLS) do
     RegisterSpellEvent(spellId, 8, tournamentMountCheckCast)
 end
+
+-- C++ spell_gen_cannibalize::CheckIfCorpseNear + HandleDummy
+-- (spell_generic.cpp:831-870, spell 20577): OnCheckCast searches for
+-- any dead enemy unit within the spell's max range (5 yards, Wowhead
+-- WotLK Classic spell 20577) else SPELL_FAILED_NO_EDIBLE_CORPSES
+-- (141); the dummy leg self-casts the triggered 20578, non-triggered.
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast);
+-- OnEffectHit = 4 (the carrion-feeder twin in spell_hunter.lua).
+-- Binding 20577 is the AC spell_script_names row. The C++ Corpse-object
+-- arm has no Go twin (no Corpse kind on the range surface); dead players
+-- surface as player sessions and dead creatures as Health-0 motions,
+-- both gated dead = 2 (lua_worldobject_range.go passes()).
+local SPELL_CANNIBALIZE = 20577 -- spell_generic.cpp:826-831
+local SPELL_CANNIBALIZE_TRIGGERED = 20578 -- spell_generic.cpp:826-829
+local SPELL_CANNIBALIZE_RANGE = 5 -- Wowhead WotLK Classic spell 20577
+local SPELL_FAILED_NO_EDIBLE_CORPSES = 141 -- SharedDefines.h:1123
+
+local function cannibalizeCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_FAILED_NO_EDIBLE_CORPSES
+    end
+    if #caster:GetCreaturesInRange(SPELL_CANNIBALIZE_RANGE, 0, 1, 2) > 0 then
+        return SPELL_CAST_OK
+    end
+    if #caster:GetPlayersInRange(SPELL_CANNIBALIZE_RANGE, 1, 2) > 0 then
+        return SPELL_CAST_OK
+    end
+    return SPELL_FAILED_NO_EDIBLE_CORPSES
+end
+
+local function cannibalizeDummy(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_CANNIBALIZE_TRIGGERED, false)
+end
+
+RegisterSpellEvent(SPELL_CANNIBALIZE, 8, cannibalizeCheckCast)
+RegisterSpellEvent(SPELL_CANNIBALIZE, 4, cannibalizeDummy)

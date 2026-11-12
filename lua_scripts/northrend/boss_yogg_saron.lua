@@ -251,10 +251,11 @@
 -- ModifyThreatByPercent -100; bound by the ToC worm Emerge DoCastAOE).
 -- keeper_aura (62650/62670/62671/62702) STAYS OUT — no DoCheckAreaTarget
 -- aura event (aura events 1-7, runtime.go); in_the_maws_of_the_old_god
--- (64184) STAYS OUT — no OnCheckCast spell event (spell events 1-7);
--- its loot-mode leg is already ported via the Yogg SpellHit handler
--- above. Census go_hit=true is a FALSE POSITIVE on all five (zero Go
--- hits); lua_hit true only via consts/comments.
+-- (64184) PORTED below (RegisterSpellEvent OnCheckCast = 8) — the old
+-- "no OnCheckCast spell event" note is stale (ev8 landed, lua_spell.go
+-- fireSpellCheckCast); its loot-mode leg is already ported via the Yogg
+-- SpellHit handler above. Census go_hit=true is a FALSE POSITIVE on all
+-- five (zero Go hits); lua_hit true only via consts/comments.
 -- Census hooks wrong on 477/479/480 (OnCheckCast phantoms; 477 also
 -- lists OnObjectAreaTargetSelect); 478's OnObjectAreaTargetSelect is
 -- real; 481's OnCheckCast is real but unbridged.
@@ -367,6 +368,11 @@ local PHASE3 = {
     LUNATIC_GAZE_DAMAGE_2 = 64168, -- loader comment :2981 (no in-tree enum name; Load :2992 stacks 2)
     HATE_TO_ZERO = 63984, -- :271
     TITANIC_STORM_SCRIPT = 64172, -- loader comment :3111 (64171 SPELL_TITANIC_STORM is the Thorim-cast spell, a different spell)
+    SPELL_FAILED_OUT_OF_RANGE = 97, -- SharedDefines.h:1079
+    SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173, -- SharedDefines.h:1155
+    SPELL_CAST_OK = 255, -- SharedDefines.h:1171 (custom value, never sent to the client)
+    SPELL_DEAFENING_ROAR_CAST_MS = 2300, -- Wowhead WotLK Classic spell 64189 cast time 2.3s
+    roarCasting = {}, -- GUID -> true while the deafening-roar cast window is live (64184 CheckCast twin; see yoggPhase3Tick)
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -484,6 +490,7 @@ local function yoggSaronReset(event, creature)
     -- (:931-932) — the Lua phase latch only tracks PHASE_THREE, so Reset
     -- clears it.
     yoggPhase[guid] = nil
+    PHASE3.roarCasting[guid] = nil -- the roar-window clear timer is cancelled with the rest, so the flag clears here too
     -- C++ Reset: DoCast(me, SHADOWY_BARRIER_YOGG);
     -- DoCast(me, KNOCK_AWAY) (boss_yogg_saron.cpp:931-937). Alive-gated.
     if creature:IsAlive() then
@@ -530,6 +537,40 @@ end
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 4, yoggSaronDied)
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 14, yoggSaronSpellHit)
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 23, yoggSaronReset)
+
+-- C++ spell_yogg_saron_in_the_maws_of_the_old_god::CheckRequirement
+-- (boss_yogg_saron.cpp:3084-3099, spell 64184, Val'anyr fragment throw):
+-- the caster must be within 20y of Yogg while Yogg is casting
+-- Deafening Roar (64189), else OUT_OF_RANGE; no instance/Yogg or no
+-- live roar fails CANT_DO_THAT_RIGHT_NOW. RegisterSpellEvent
+-- OnCheckCast = 8 (lua_spell.go fireSpellCheckCast). Binding 64184 is
+-- the AC spell_script_names row. Instance-script GetCreature is
+-- twinned by caster:GetNearestCreature (same map/instance, entry
+-- 33288); FindCurrentSpellBySpellId rides the Lua roar window
+-- (PHASE3.roarCasting, set by yoggPhase3Tick for the 2.3s DBC cast
+-- time) because Go tracks no pending creature spell without Spell.dbc.
+-- Distance is the C++ WorldObject::GetDistance twin (exact 3D minus
+-- both combat reaches, clamped >= 0; Object.cpp:1169-1173).
+PHASE3.inTheMawsCheckCast = function(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return PHASE3.SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    local yogg = caster:GetNearestCreature(200, ENTRY_YOGG_SARON)
+    if yogg == nil or not PHASE3.roarCasting[yogg:GetGUIDLow()] then
+        return PHASE3.SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW
+    end
+    local dist = caster:GetDistance(yogg) - 1.5 - yogg:GetCombatReach()
+    if dist < 0 then
+        dist = 0
+    end
+    if dist > 20.0 then
+        return PHASE3.SPELL_FAILED_OUT_OF_RANGE
+    end
+    return PHASE3.SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_IN_THE_MAWS_OF_THE_OLD_GOD, 8, PHASE3.inTheMawsCheckCast)
 
 -- Timer-driven cast arms (the maiden CreateLuaEvent convention —
 -- GUID-keyed timers table, cancel on events 2/4/23;
@@ -652,6 +693,17 @@ local function yoggPhase3Tick(creature, guid, key, spellId, talk1, talk2, delay)
         return
     end
     creature:CastSpell(creature, spellId)
+    -- C++ FindCurrentSpellBySpellId(SPELL_DEAFENING_ROAR) (the 64184
+    -- CheckCast leg) reads the live generic cast, but Go has no DBC
+    -- cast time (castMs 0, no pending spell) — the roar's 2.3s cast
+    -- window is tracked in Lua instead, cleared by its own timer and
+    -- on reset/evade/death below.
+    if spellId == PHASE3.SPELL_DEAFENING_ROAR then
+        PHASE3.roarCasting[guid] = true
+        schedule(guid, "roarwindow", PHASE3.SPELL_DEAFENING_ROAR_CAST_MS, function()
+            PHASE3.roarCasting[guid] = nil
+        end)
+    end
     if talk1 then
         creature:Talk(talk1)
     end
@@ -697,6 +749,7 @@ end
 local function yoggCancelAll(event, creature)
     cancelTimers(creature:GetGUIDLow())
     yoggPhase[creature:GetGUIDLow()] = nil
+    PHASE3.roarCasting[creature:GetGUIDLow()] = nil -- roar-window clear timer cancelled above, so the flag clears here too
 end
 
 RegisterCreatureEvent(ENTRY_YOGG_SARON, 2, yoggCancelAll)

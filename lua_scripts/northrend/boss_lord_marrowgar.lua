@@ -449,6 +449,11 @@ end)
 -- the target-cast-summon-on-self :590 twin — the spike's ev22 impaled +
 -- ride-vehicle + 8s fail-boned legs below are now live); Talk
 -- SAY_BONESPIKE after the loop. Re-arm {15s,20s} always (C++ :203).
+-- The CheckCast leg (:568-571, no valid BoneSpikeTargetSelector target
+-- -> SPELL_FAILED_NO_VALID_TARGETS) needs no ev8: the cast is skipped
+-- and the #picks > 0 guard below IS the check — an empty pool summons
+-- nothing, talks nothing, and re-arms on schedule, exactly like a
+-- failed CheckCast (no cast, no cooldown consumed).
 -- The dead-target spike-despawn leg stays out (no aura-caster-GUID bridge).
 onGraveyard = function(creature, guid)
     -- Gated-loop arm (pre-loop :193): the spike summons wait out a cast
