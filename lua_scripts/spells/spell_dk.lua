@@ -76,11 +76,11 @@
 --   player-path twin. Rime (49188), scent_of_blood_trigger (49004)
 --   and sudden_doom (49018) are PORTED below (ev6, ticks 568/570/571).
 --   Vendetta (49015) is PORTED below (ev6, tick 573). Threat of
---   Thassarian (65661, tick 572) stays out — the ev6 args carry no
---   proc spell id/family flags (dancing_rune_weapon precedent,
---   procs.go procAuraTriggerLoopFiltered), no GetSpellWithRank
---   bridge, and the offhand gate is only approximable via
---   GetEquippedItemBySlot(16). Wandering Plague (49217, tick 574)
+--   Thassarian (65661, tick 572) is PORTED below (ev6, this tick) —
+--   the stale stay-out is corrected: ev6 forwards the proc spell id,
+--   family flags and rank, GetSpellWithRank is bridged, and the
+--   offhand gate rides the new player:HasOffhandWeapon bridge.
+--   Wandering Plague (49217, tick 574)
 --   stays out — no GetUnitCriticalChanceAgainst bridge anywhere in
 --   the engine; the crit-chance roll is the whole gate.
 -- GO-PORTED (this tick, engine/world/spells.go — NOT Lua: the player
@@ -516,6 +516,71 @@ local function vendettaProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_DK_VENDETTA, 6, vendettaProc)
+
+local SPELL_DK_THREAT_OF_THASSARIAN = 65661 -- spell_dk.cpp:2432 (class spell_dk_threat_of_thassarian)
+local SPELL_DK_THREAT_OF_THASSARIAN_PLAGUE_STRIKE = 66216 -- spell_dk.cpp:96
+local SPELL_DK_THREAT_OF_THASSARIAN_DEATH_STRIKE = 66188 -- spell_dk.cpp:97
+local SPELL_DK_THREAT_OF_THASSARIAN_BLOOD_STRIKE = 66215 -- spell_dk.cpp:99
+local SPELL_DK_THREAT_OF_THASSARIAN_FROST_STRIKE = 66196 -- spell_dk.cpp:95
+local SPELL_DK_THREAT_OF_THASSARIAN_OBLITERATE = 66198 -- spell_dk.cpp:94
+local SPELL_DK_THREAT_OF_THASSARIAN_RUNE_STRIKE = 66217 -- spell_dk.cpp:98
+
+-- C++ spell_dk_threat_of_thassarian::HandleProc (spell_dk.cpp:2440-2489):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction (the
+-- true return on every path); rolls the EFFECT_0 amount, then maps the
+-- proc spell's family flags to the rank-matched off-hand strike
+-- (aura:GetSpellWithRank with procEvent:GetRank) and the actor casts
+-- it on the proc target, triggered via the aurEff overload. The
+-- offhand gate rides the new player:HasOffhandWeapon bridge (session
+-- haveOffhandWeapon, combat.go). CENSUS CORRECTION: row 572 hooks
+-- (DoEffectCalcAmount) are phantom; real is OnEffectProc EFFECT_0
+-- DUMMY. The tick-572 stay-out is stale: ev6 now forwards the proc
+-- spell id, family flags and rank, and GetSpellWithRank is bridged.
+-- DORMANT until Spell.dbc ships the 65661 proc entry.
+local function threatOfThassarianProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if aura == nil or actor == nil or procTarget == nil or procEvent == nil then
+        return true
+    end
+    if math.random(0, 99) >= aura:GetAmount(0) then
+        return true
+    end
+    if procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if actor:GetTypeId() ~= 4 or not actor:HasOffhandWeapon() then
+        return true
+    end
+    local spellId = 0
+    local flags0 = procEvent:GetSpellFamilyFlags(0)
+    local flags1 = procEvent:GetSpellFamilyFlags(1)
+    if bit32.band(flags0, 0x00000001) ~= 0 then
+        spellId = SPELL_DK_THREAT_OF_THASSARIAN_PLAGUE_STRIKE
+    elseif bit32.band(flags0, 0x00000010) ~= 0 then
+        spellId = SPELL_DK_THREAT_OF_THASSARIAN_DEATH_STRIKE
+    elseif bit32.band(flags0, 0x00400000) ~= 0 then
+        spellId = SPELL_DK_THREAT_OF_THASSARIAN_BLOOD_STRIKE
+    elseif bit32.band(flags1, 0x00000004) ~= 0 then
+        spellId = SPELL_DK_THREAT_OF_THASSARIAN_FROST_STRIKE
+    elseif bit32.band(flags1, 0x00020000) ~= 0 then
+        spellId = SPELL_DK_THREAT_OF_THASSARIAN_OBLITERATE
+    elseif bit32.band(flags1, 0x20000000) ~= 0 then
+        spellId = SPELL_DK_THREAT_OF_THASSARIAN_RUNE_STRIKE
+    end
+    if spellId == 0 then
+        return true
+    end
+    spellId = aura:GetSpellWithRank(spellId, procEvent:GetRank())
+    if spellId == 0 then
+        return true
+    end
+    actor:CastSpell(procTarget, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_THREAT_OF_THASSARIAN, 6, threatOfThassarianProc)
 
 local SPELL_DK_BLADE_BARRIER = 49182 -- spell_dk.cpp:429 (class spell_dk_blade_barrier)
 local CLASS_DEATH_KNIGHT = 6 -- SharedDefines.h:132

@@ -2917,6 +2917,15 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.hasAuraType(auraType)}, nil
 	}
+	// HasOffhandWeapon is Unit::haveOffhandWeapon (Unit.cpp): whether
+	// the player has an offhand weapon equipped, the session twin in
+	// combat.go (OffhandAttackTime/MaxOffhandDamage live state).
+	// Backs the Threat of Thassarian offhand gate
+	// (spell_dk.cpp:2456-2458), which a DB item-slot read can only
+	// approximate (shields and off-hand frills share slot 16).
+	methods["HasOffhandWeapon"] = func(_ context.Context, args []any) ([]any, error) {
+		return []any{s.haveOffhandWeapon()}, nil
+	}
 	// RemoveAurasWithMechanic(mask) is Unit::RemoveAurasWithMechanic
 	// (Unit.cpp:4217-4232): removes every applied aura whose
 	// GetAllEffectsMechanicMask intersects the mask. Backs AfterHit

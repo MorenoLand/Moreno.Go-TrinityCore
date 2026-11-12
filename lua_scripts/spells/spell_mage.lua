@@ -456,15 +456,43 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 --   621 master_of_elements PORTED this tick (ev6: CheckProc damage
 --   spell via procEvent:GetSpellId; HandleProc BP0 = pct(CalcPowerCost,
 --   EFFECT_0 amount), mana > 0 gate, holder casts 29077 self).
---   622 missile_barrage STAYS OUT — CheckProc needs the proc
---   spell's family flags (Arcane Blast [0] 0x20000000 full chance,
---   else 50% roll); ev6 has no event spell. Recipe: ev6
---   event-spell forwarding.
+--   622 missile_barrage PORTED below (ev6, this tick): the stay-out
+--   is stale — ev6 forwards the proc spell's family flags
+--   (procEvent:GetSpellFamilyFlags, a910c39d), so the Arcane Blast
+--   full-chance gate and the 50% roll are both expressible.
 -- CENSUS CORRECTION: row 610 hooks are HandleDummy only; real is
 -- OnEffectProc EFFECT_0 PROC_TRIGGER_SPELL. Rows 608/611/612 hooks
 -- are likewise wrong (608: DoCheckProc + OnEffectProc; 611: DoCheckProc
 -- + OnEffectProc EFFECT_1 DUMMY; 612: OnEffectProc EFFECT_0
 -- OVERRIDE_CLASS_SCRIPTS).
+
+local SPELL_MAGE_MISSILE_BARRAGE = 44404 -- spell_mage.cpp:1301 (class spell_mage_missile_barrage)
+local SPELL_FAMILY_FLAG_MAGE_ARCANE_BLAST = 0x20000000 -- spell_mage.cpp:1314
+
+-- C++ spell_mage_missile_barrage::CheckProc (spell_mage.cpp:1309-1321):
+-- DoCheckProc only, no HandleProc — the DBC default trigger leg fires
+-- when the check passes. Passes outright when the proc spell is Arcane
+-- Blast (family flags [0] 0x20000000), else a 50% roll. A failed check
+-- vetoes (return true); a pass returns nothing so the default leg
+-- fires, the blade-barrier precedent. No effectIndex gate (same
+-- shape as blade_barrier 49182: the check is per-aura, not per
+-- effect). CENSUS CORRECTION: row 622 hooks (HandleDummy /
+-- OnEffectHitTarget) are phantom; real is DoCheckProc. DORMANT until
+-- Spell.dbc ships the 44404 proc entry.
+local function missileBarrageProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if bit32.band(procEvent:GetSpellFamilyFlags(0), SPELL_FAMILY_FLAG_MAGE_ARCANE_BLAST) ~= 0 then
+        return
+    end
+    if math.random(0, 99) < 50 then
+        return
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_MISSILE_BARRAGE, 6, missileBarrageProc)
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_mage_polymorph_cast_visual::HandleDummy (spell_mage.cpp:1386-1418):
