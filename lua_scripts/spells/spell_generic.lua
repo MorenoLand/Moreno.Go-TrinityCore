@@ -713,3 +713,93 @@ local function lichPetAuraRemoveHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_LICH_PET_AURA_REMOVE, 5, lichPetAuraRemoveHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_ethereal_pet_aura::HandleProc + CheckProc (spell_generic.cpp:1659-1691):
+--   EFFECT_0 PROC_TRIGGER_SPELL. CheckProc gates on the level gap
+--   between the aura target (owner) and the proc target being <= 9;
+--   the handler returns true on both paths — the C++ PreventDefaultAction
+--   veto plus the CheckProc veto (a failed CheckProc fires neither the
+--   handler nor the default trigger leg). Each owned ethereal soul
+--   trader minion (entry 27914, temp summon, GetAllMinionsByEntry
+--   bridge) says SAY_STEAL_ESSENCE (1) and casts Steal Essence Visual
+--   50101 on the proc target, non-triggered (C++ CastSpell default args).
+--   IsAIEnabled has no Go model (no AI-disabled motion state), so the
+--   gate is vacuous in-tree. DORMANT until Spell.dbc ships the 50051 row.
+local SPELL_ETHEREAL_PET_AURA_PROC = 50051 -- spell_generic.cpp:1659 (class spell_ethereal_pet_aura)
+local NPC_ETHEREAL_SOUL_TRADER = 27914 -- spell_generic.cpp:1647
+local SAY_STEAL_ESSENCE = 1 -- spell_generic.cpp:1650
+local SPELL_STEAL_ESSENCE_VISUAL = 50101 -- spell_generic.cpp:1656
+
+local function etherealPetAuraProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 or target == nil or procTarget == nil then
+        return true
+    end
+    if math.abs(target:GetLevel() - procTarget:GetLevel()) > 9 then
+        return true
+    end
+    for _, minion in ipairs(target:GetAllMinionsByEntry(NPC_ETHEREAL_SOUL_TRADER)) do
+        minion:Talk(SAY_STEAL_ESSENCE)
+        minion:CastSpell(procTarget, SPELL_STEAL_ESSENCE_VISUAL, false)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_ETHEREAL_PET_AURA_PROC, 6, etherealPetAuraProc)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_ethereal_pet_onsummon::HandleScriptEffect (spell_generic.cpp:1693-1713):
+--   EFFECT_0 SCRIPT_EFFECT. The hit unit casts Ethereal Pet Aura 50051
+--   on itself, triggered. DORMANT until Spell.dbc ships the 50052 row.
+local SPELL_ETHEREAL_PET_ONSUMMON = 50052 -- spell_generic.cpp:1693 (class spell_ethereal_pet_onsummon)
+
+local function etherealPetOnSummonHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, SPELL_ETHEREAL_PET_AURA_PROC, true)
+end
+
+RegisterSpellEvent(SPELL_ETHEREAL_PET_ONSUMMON, 5, etherealPetOnSummonHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_ethereal_pet_aura_remove::HandleScriptEffect (spell_generic.cpp:1716-1734):
+--   EFFECT_0 SCRIPT_EFFECT. The hit unit drops the ethereal pet aura.
+--   NOTE: the C++ enum names SPELL_ETHEREAL_PET_AURA = 50055, so the
+--   remove leg drops aura 50055 (the spell's own id), not 50051 — ported
+--   exactly as written. DORMANT until Spell.dbc ships the 50055 row.
+local SPELL_ETHEREAL_PET_AURA_REMOVE = 50055 -- spell_generic.cpp:1716 (class spell_ethereal_pet_aura_remove)
+local SPELL_ETHEREAL_PET_AURA = 50055 -- spell_generic.cpp:1654 (enum EtherealPet)
+
+local function etherealPetAuraRemoveHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:RemoveAura(SPELL_ETHEREAL_PET_AURA)
+end
+
+RegisterSpellEvent(SPELL_ETHEREAL_PET_AURA_REMOVE, 5, etherealPetAuraRemoveHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnRemove = 3):
+--   spell_steal_essence_visual::HandleRemove (spell_generic.cpp:1737-1755):
+--   EFFECT_0 DUMMY, AURA_EFFECT_HANDLE_REAL. On remove the caster casts
+--   Create Token 50063 on itself, triggered, and — when the caster is a
+--   creature — the soul trader says SAY_CREATE_TOKEN (2). The C++
+--   ToCreature() gate is the TYPEID_UNIT check. DORMANT until Spell.dbc
+--   ships the 50101 row.
+local SPELL_STEAL_ESSENCE_VISUAL_AURA = 50101 -- spell_generic.cpp:1737 (class spell_steal_essence_visual)
+local SPELL_CREATE_TOKEN = 50063 -- spell_generic.cpp:1655 (enum EtherealPet)
+local SAY_CREATE_TOKEN = 2 -- spell_generic.cpp:1651
+
+local function stealEssenceVisualRemove(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, SPELL_CREATE_TOKEN, true)
+    if caster:GetTypeId() == TYPEID_UNIT then
+        caster:Talk(SAY_CREATE_TOKEN)
+    end
+end
+
+RegisterAuraEvent(SPELL_STEAL_ESSENCE_VISUAL_AURA, 3, stealEssenceVisualRemove)
