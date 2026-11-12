@@ -82,17 +82,19 @@
 -- unmodeled (its trigger rides the unregistered bunny phase
 -- machine); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript
 -- bridge, and only one AuraScript bridge (RegisterAuraEvent,
--- AuraEventOnPeriodic = 1) — six of the nine script classes
+-- AuraEventOnPeriodic = 1) — three of the nine script classes
 -- in this file
--- (spell_ahune_synch_health, spell_ice_spear_target_picker,
--- spell_slippery_floor_periodic, spell_ahune_spanky_hands,
--- spell_ahune_minion_despawner, spell_ice_bombardment_dest_picker)
+-- (spell_ahune_synch_health, spell_ahune_spanky_hands,
+-- spell_ahune_minion_despawner)
 -- are documented only; spell_ice_spear_control_aura is PORTED
 -- tick 189 below (RegisterAuraEvent 46371, iceSpearControlTick),
 -- its delayer sibling spell_summon_ice_spear_delayer is PORTED
 -- tick 191 below (RegisterAuraEvent 46878, iceSpearDelayerTick,
--- aura:GetTickNumber bridge), and spell_summoning_rhyme_aura is
--- PORTED below (RegisterAuraEvent 45926, summoningRhymeTick);
+-- aura:GetTickNumber bridge), spell_summoning_rhyme_aura is
+-- PORTED below (RegisterAuraEvent 45926, summoningRhymeTick), and
+-- spell_ice_spear_target_picker / spell_slippery_floor_periodic /
+-- spell_ice_bombardment_dest_picker are PORTED at the end of the
+-- file (RegisterSpellEvent 46372 ev7+ev5, 46320 ev5, 46398 ev4);
 -- npc_earthen_ring_flamecaller (25754) is
 -- PORTED 2026-11-10 (npc_earthen_ring_flamecaller.lua: MovementInform
 -- + SpellHit + DoAction + look-for-opening chain; its bunny-side
@@ -328,3 +330,102 @@ local function summoningRhymeTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SUMMONING_RHYME_AURA, 1, summoningRhymeTick)
+
+-- C++ spell_ice_spear_target_picker (boss_ahune.cpp:749-779):
+-- FilterTargets keeps one random target from the EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENTRY list; HandleDummy then has the caster
+-- cast SPELL_SUMMON_ICE_SPEAR_BUNNY (46359) on that hit unit,
+-- triggered. PORTED via RegisterSpellEvent (46372,
+-- OnObjectAreaTargetSelect = 7 + OnEffectHitTarget = 5); the ev7
+-- handler (event, spell, effectIndex, targets) picks via
+-- targets:GetTargets()/Clear()/Add (lua_spell.go target-list
+-- object) and the ev5 handler casts on the surviving hit unit.
+-- The picker is cast by the creature control-aura tick above, so
+-- both hooks ride the creature-cast path (boss_ai.go:3151/3373).
+-- Bindings 46372 (AC 'spell_ice_spear_target_picker'; TDB 26091
+-- renames it 'spell_ahune_ice_spear_target_picker').
+local SPELL_SUMMON_ICE_SPEAR_BUNNY = 46359 -- boss_ahune.cpp:73
+
+local function iceSpearTargetPickerFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    if targets:GetCount() == 0 then
+        return
+    end
+    local all = targets:GetTargets()
+    local picked = all[math.random(#all)]
+    if picked == nil then
+        return
+    end
+    targets:Clear()
+    targets:Add(picked)
+end
+
+local function iceSpearTargetPickerHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_SUMMON_ICE_SPEAR_BUNNY, true)
+end
+
+RegisterSpellEvent(SPELL_ICE_SPEAR_TARGET_PICKER, 7, iceSpearTargetPickerFilter)
+RegisterSpellEvent(SPELL_ICE_SPEAR_TARGET_PICKER, 5, iceSpearTargetPickerHit)
+
+-- C++ spell_slippery_floor_periodic::HandleScriptEffect
+-- (boss_ahune.cpp:781-801): EFFECT_0 SCRIPT_EFFECT — a moving hit
+-- unit self-casts SPELL_SLIPPERY_FLOOR_SLIP (45947) and
+-- SPELL_SLIPPERY_FLOOR_YOU_SLIPPED (45946), both triggered; a
+-- stationary hit unit gets nothing. PORTED via RegisterSpellEvent
+-- (46320, OnEffectHitTarget = 5); IsMoving is bridged on both
+-- surfaces (lua_player.go:2028, lua_creature_events.go:493).
+-- Bindings 46320 (AC 'spell_slippery_floor_periodic'; TDB 26091
+-- renames it 'spell_ahune_slippery_floor_periodic').
+local SPELL_SLIPPERY_FLOOR_PERIODIC = 46320 -- boss_ahune.cpp:83
+local SPELL_SLIPPERY_FLOOR_SLIP = 45947 -- boss_ahune.cpp:84
+local SPELL_SLIPPERY_FLOOR_YOU_SLIPPED = 45946 -- boss_ahune.cpp:85
+
+local function slipperyFloorHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:IsMoving() then
+        target:CastSpell(target, SPELL_SLIPPERY_FLOOR_SLIP, true)
+        target:CastSpell(target, SPELL_SLIPPERY_FLOOR_YOU_SLIPPED, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_SLIPPERY_FLOOR_PERIODIC, 5, slipperyFloorHit)
+
+-- C++ spell_ice_bombardment_dest_picker::HandleScriptEffect
+-- (boss_ahune.cpp:846-867): EFFECT_0 DUMMY — the caster casts
+-- SPELL_ICE_BOMBARDMENT (46396) triggered at the hit destination.
+-- PORTED via RegisterSpellEvent (46398, OnEffectHit = 4); the dest
+-- reads via spell:GetExplTargetDest() (lua_spell.go:501, three
+-- values or three nils) and the cast lands via creature
+-- CastSpellAoF with the triggered arg (lua_creature_events.go:1052).
+-- Bindings 46398 (AC 'spell_ice_bombardment_dest_picker'; TDB
+-- 26091 renames it 'spell_ahune_ice_bombardment_dest_picker').
+local SPELL_ICE_BOMBARDMENT_DEST_PICKER = 46398 -- boss_ahune.cpp:69
+local SPELL_ICE_BOMBARDMENT = 46396 -- boss_ahune.cpp:70
+
+local function iceBombardmentDestPickerHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local destX, destY, destZ = spell:GetExplTargetDest()
+    if destX == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpellAoF(destX, destY, destZ, SPELL_ICE_BOMBARDMENT, true)
+end
+
+RegisterSpellEvent(SPELL_ICE_BOMBARDMENT_DEST_PICKER, 4, iceBombardmentDestPickerHit)
