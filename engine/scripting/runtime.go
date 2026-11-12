@@ -686,8 +686,10 @@ const (
 // OnCast: the handler cannot veto anything, it runs after the
 // effects — the gunship incinerating-blast energy drain
 // (spell_igb_incinerating_blast::RemoveEnergy, SetPower(ENERGY, 0))
-// rides it. Creature path only for now: the player path's
-// finishSpellCast / triggered funnel run no AfterCast fire yet.
+// rides it. Creature path (boss_ai.go, after the AfterHit loop) and
+// player path (finishSpellCast, before the spell_linked tail on both
+// branches — cast time, not missile arrival, on the delayed branch);
+// the triggered funnel runs no AfterCast fire yet.
 // OnEffectLaunchTarget mirrors the SpellScript hook of the same name
 // (SpellScript.h:397, fired from Spell::HandleLaunchPhase,
 // Spell.cpp:7753, per (effect, unit target) with m_damage reset to 0
@@ -698,7 +700,9 @@ const (
 // rewrites m_spell->damage for that (effect, target), and the
 // creature damage arms apply the rewrite when they compute that
 // target's base; GetEffectValue reads the rewritten value.
-// Creature path only for now, same as AfterCast.
+// Creature path (boss_ai.go launch pre-pass) and player path
+// (finishSpellCast, at _cast time ahead of the delayed/immediate
+// split); the triggered funnel runs no launch-target fire yet.
 // TRIGGERED_IGNORE_CAST_CHECK, and creature casts run no CheckCast
 // gauntlet in Go, so neither path fires it yet.
 const (

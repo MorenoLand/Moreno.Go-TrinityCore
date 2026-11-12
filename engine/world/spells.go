@@ -2207,12 +2207,14 @@ func (s *session) takeSpellReagents(ctx context.Context, spell wotlk.Spell, cast
 }
 
 const (
-	spellDisablePlayer          uint16 = 0x01  // SPELL_DISABLE_PLAYER (DisableMgr.h:37)
-	spellDisableDeprecatedSpell uint16 = 0x08  // SPELL_DISABLE_DEPRECATED_SPELL (DisableMgr.h:40)
-	spellDisableMap             uint16 = 0x10  // SPELL_DISABLE_MAP (DisableMgr.h:41)
-	spellDisableArea            uint16 = 0x20  // SPELL_DISABLE_AREA (DisableMgr.h:42)
-	spellDisableArenas          uint16 = 0x100 // SPELL_DISABLE_ARENAS (DisableMgr.h:45)
-	spellDisableBattlegrounds   uint16 = 0x200 // SPELL_DISABLE_BATTLEGROUNDS (DisableMgr.h:46)
+	spellDisablePlayer          uint16 = 0x01  // SPELL_DISABLE_PLAYER (DisableMgr.h:40)
+	spellDisableCreature        uint16 = 0x02  // SPELL_DISABLE_CREATURE (DisableMgr.h:41)
+	spellDisablePet             uint16 = 0x04  // SPELL_DISABLE_PET (DisableMgr.h:42)
+	spellDisableDeprecatedSpell uint16 = 0x08  // SPELL_DISABLE_DEPRECATED_SPELL (DisableMgr.h:43)
+	spellDisableMap             uint16 = 0x10  // SPELL_DISABLE_MAP (DisableMgr.h:44)
+	spellDisableArea            uint16 = 0x20  // SPELL_DISABLE_AREA (DisableMgr.h:45)
+	spellDisableArenas          uint16 = 0x100 // SPELL_DISABLE_ARENAS (DisableMgr.h:48)
+	spellDisableBattlegrounds   uint16 = 0x200 // SPELL_DISABLE_BATTLEGROUNDS (DisableMgr.h:49)
 )
 
 // spellDisabledForCaster mirrors DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL,
@@ -2222,8 +2224,10 @@ const (
 // session is always a player). The SPELL_DISABLE_LOS sub-arm plays no role here
 // (prepare calls with no flags); the aura-LOS spell arms evaluate it per call.
 // A missing disables row, missing table, or query error is permissive
-// (terrain.go convention); the deprecated-spell bit (DisableMgr.cpp:366-367)
-// still disables the cast outright when the PLAYER bit is absent.
+// (terrain.go convention). The deprecated-spell bit plays no role here:
+// C++ consults it only when the caller passes no caster
+// (DisableMgr.cpp:366-367), and prepare always passes one, so a row
+// without the PLAYER bit does not disable the cast.
 func (s *session) spellDisabledForCaster(ctx context.Context, spellID uint32) bool {
 	db := s.server.WorldStore.DB
 	if db == nil {
@@ -2235,7 +2239,7 @@ func (s *session) spellDisabledForCaster(ctx context.Context, spellID uint32) bo
 		return false
 	}
 	if flags&spellDisablePlayer == 0 {
-		return flags&spellDisableDeprecatedSpell != 0
+		return false
 	}
 	if flags&(spellDisableArenas|spellDisableBattlegrounds) != 0 {
 		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found {
@@ -2390,24 +2394,22 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	learned := s.hasActiveSpell(spellID)
 	gmMode := s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0
-	// HandleCastSpellOpcode vehicle-caster arm (SpellHandler.cpp:386-397):
+	// HandleCastSpellOpcode vehicle-caster arm (SpellHandler.cpp:373-384):
 	// while riding a vehicle the client sends the vehicle's own spells on
 	// this opcode; in C++ the mover is the vehicle creature and its HasSpell
-	// decides. Go has no mover model (the session caster is always the
-	// player), so the arm keys on VehicleGUID instead: a spell the ridden
-	// vehicle's creature entry knows is castable even though the player
-	// never learned it. Delta: C++ casts with the vehicle creature as the
-	// caster (range measured from the vehicle, threat attributed to it); Go
-	// has no creature-caster pipeline on this path, so the cast still runs
-	// as the player — positions coincide because the passenger rides the
-	// vehicle. The IsOnVehicle/CheckVehicle half is vacuous here
-	// (VehicleGUID != 0 already means the player rides it); the CheckVehicle
-	// seat-flag gate belongs to the CheckCast arm (Spell.cpp:5332), not
-	// this one.
-	vehicleSpell := false
-	if !learned && !gmMode && s.player.VehicleGUID != 0 {
-		vehicleSpell = s.vehicleKnowsSpell(ctx, spellID)
+	// decides the caster. vehicleKnows is the pure HasSpell test, kept
+	// separate from vehicleSpell (which also keys the unlearned-spell
+	// arms): the caster-selection arms below — the silent drop when the
+	// vehicle lacks the spell, and the vehicle-caster route when it has
+	// it — both key on it, regardless of whether the player learned the
+	// spell or is in GM mode. Positions coincide because the passenger
+	// rides the vehicle, but range, threat, power and the SpellScript
+	// hooks now run on the vehicle motion through the creature path.
+	vehicleKnows := false
+	if s.player.VehicleGUID != 0 {
+		vehicleKnows = s.vehicleKnowsSpell(ctx, spellID)
 	}
+	vehicleSpell := !learned && !gmMode && vehicleKnows
 	// HandleCastSpellOpcode isPossessing arm (SpellHandler.cpp:413-415):
 	// a possessing player's CAST_SPELL casts never reach the Spell
 	// object — the possessed creature's spells arrive via
@@ -2427,6 +2429,27 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if s.possessedCreatureGUID() != 0 {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", "possessing player cast spell")
 		return true
+	}
+	// HandleCastSpellOpcode caster-selection fallback (SpellHandler.cpp:373-384):
+	// when the mover is a vehicle creature that does NOT know the spell,
+	// the caster falls back to the player only if the player rides that
+	// vehicle and SpellInfo::CheckVehicle(player) passes; otherwise the
+	// packet is dropped silently — no Spell object exists yet, so no
+	// CAST_FAILED is ever sent (unlike the CheckCast vehicle arm below,
+	// which reports CANT_DO_THAT_RIGHT_NOW for a player caster that
+	// reaches it). The kit/seat reads make the IsOnVehicle half explicit:
+	// a missing kit or seat means the player is not on the vehicle.
+	if s.player.VehicleGUID != 0 && !vehicleKnows {
+		kit := s.server.getVehicleKit(s.player.Map, s.player.InstanceID, s.player.VehicleGUID)
+		if kit == nil {
+			s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", "vehicle does not know spell and no vehicle kit")
+			return true
+		}
+		_, seatInfo, _ := kit.GetSeatForPassenger(s.playerGUID)
+		if seatInfo == nil || s.checkVehicleCast(spell) != 0 {
+			s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", "vehicle does not know spell and seat forbids player cast")
+			return true
+		}
 	}
 	// HandleCastSpellOpcode unlearned-spell arms (SpellHandler.cpp:392-410).
 	// The lock-case arm (GameObject::GetSpellForLock, GameObject.cpp:2765)
@@ -2484,6 +2507,40 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !found || spell.Attributes&spellAttributePassive != 0 || (!vehicleSpell && !lockAllowed && !canPlayerCastSpell(learned, gmMode)) {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
+	}
+	// Vehicle-caster route (SpellHandler.cpp:373: caster = mover): when the
+	// ridden vehicle knows the spell, the cast runs on the vehicle creature
+	// through the creature path — not the player gauntlet below. That path
+	// carries the SpellScript hooks (OnCast ev1, AfterCast ev9,
+	// OnEffectLaunchTarget ev10) the gunship ports need, measures range
+	// from the vehicle, attributes threat to it, drains its power pool,
+	// and enforces its spell-history cooldown. CheckCast failures there
+	// fizzle silently, matching C++ (Spell::SendCastResult returns early
+	// for a non-player caster, Spell.cpp:4160-4166). The route sits ahead
+	// of the player disabled / in-progress / school gates below, which all
+	// read player state C++ never consults for a vehicle caster; the
+	// creature path carries its own disabled gate (DisableMgr creature
+	// arm) and its own in-progress model. A missing vehicle motion falls
+	// through to the player path (the pre-route behavior); the packet dest
+	// rides as the explicit dest, the wire unit target as the target GUID.
+	// Deltas: the creature path sends START/GO with cast count 0 (the
+	// packet count is not threaded through it) and carries no trajectory
+	// elevation/speed.
+	if vehicleKnows {
+		if vehicleMotion := s.findCreatureMotion(s.player.VehicleGUID); vehicleMotion != nil {
+			var targetGUID uint64
+			if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 {
+				targetGUID = target.UnitGUID
+			}
+			var explicitDest *[3]float32
+			if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+				dest := [3]float32{target.Destination.X, target.Destination.Y, target.Destination.Z}
+				explicitDest = &dest
+			}
+			s.server.castCreatureSpellInternalWithBasePoints(ctx, vehicleMotion, spellID, targetGUID, false, nil, explicitDest, false, 0)
+			s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "reason", "vehicle caster")
+			return true
+		}
 	}
 	// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
 	// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster)
@@ -10278,6 +10335,82 @@ func (s *session) fireSpellScriptEffectHitNoTarget(ctx context.Context, spell wo
 	}
 }
 
+// fireSpellScriptLaunchTarget fires the SpellScript OnEffectLaunchTarget
+// hook once per (effect, live hit target) in effect-major order
+// (Spell.cpp:7753, CallScriptEffectHandlers in
+// SPELL_EFFECT_HANDLE_LAUNCH_TARGET mode from Spell::HandleLaunchPhase).
+// The per-effect list derivation mirrors the ev5 loop inside applyEffects
+// (friendly-area -> friendlyEffectTargets, ref-centered ->
+// refCenteredFriendlyTargets, cone legs -> the cone partitions, else the
+// merged hitTargets, with the reflected-trip caster join); missed targets
+// never fire (a reflected entry with a clean return trip is not a miss,
+// so the caster entry in hitTargets still fires) and GO targets never
+// fire. A handler's SetEffectValue lands in the per-cast launch record
+// the SCHOOL_DAMAGE arm consults. The call site is finishSpellCast's
+// _cast tail, ahead of the delayed/immediate split: C++ runs
+// HandleLaunchPhase at _cast time, before the missile is even armed, so
+// a delayed spell's launch hooks fire at cast time, not at arrival —
+// the launch record is then captured by applyEffects' closure for both
+// branches. The spell object carries the launch state (one object for
+// the whole loop, like the creature path), so GetEffectValue reads the
+// DBC base on first call per effect and the rewrite after SetEffectValue.
+func (s *session) fireSpellScriptLaunchTarget(ctx context.Context, spell wotlk.Spell, spellID uint32, castTimeMs int32, target protocol.SpellTargetData, castItemGUID uint64, hitTargets []uint64, missStatus []protocol.SpellMissStatus, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips []uint64, launch *spellLaunchDamageState) {
+	if s == nil || s.server == nil || launch == nil {
+		return
+	}
+	missedTargets := make(map[uint64]struct{}, len(missStatus))
+	for _, miss := range missStatus {
+		if miss.Reason == protocol.SpellMissReflect && miss.ReflectStatus == protocol.SpellMissNone {
+			continue
+		}
+		missedTargets[miss.TargetGUID] = struct{}{}
+	}
+	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0, launch: launch})
+	for effectIndex, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		effectList := hitTargets
+		effectSwitched := friendlyEffectTargets != nil && (effectHasFriendlyAreaLeg(eff) ||
+			(!hasFriendlyAreaEffect(spell) && effectHasRefCenteredLeg(eff)))
+		effectRefCentered := refCenteredFriendlyTargets != nil && effectHasRefCenteredLeg(eff)
+		if effectRefCentered {
+			effectSwitched = true
+		}
+		if effectSwitched {
+			effectList = friendlyEffectTargets
+			effectTrips := reflectedAllyTrips
+			if effectRefCentered {
+				effectList = refCenteredFriendlyTargets
+				effectTrips = refCenteredAllyTrips
+			}
+			if len(effectTrips) > 0 {
+				joined := make([]uint64, len(effectList), len(effectList)+len(effectTrips))
+				copy(joined, effectList)
+				for range effectTrips {
+					joined = append(joined, s.playerGUID)
+				}
+				effectList = joined
+			}
+		}
+		if friendlyConeEffectTargets != nil && effectHasFriendlyConeLeg(eff) && !effectSwitched {
+			effectList = friendlyConeEffectTargets
+		}
+		if enemyConeEffectTargets != nil && effectHasEnemyConeLeg(eff) && !effectSwitched {
+			effectList = enemyConeEffectTargets
+		}
+		for _, guid := range effectList {
+			if guid == 0 || uint16(guid>>48) == 0xF110 {
+				continue
+			}
+			if _, missed := missedTargets[guid]; missed {
+				continue
+			}
+			s.server.fireSpellEffectLaunchTarget(ctx, spellID, spellObj, s.server.luaUnitObjectForGUID(s.player.Map, s.player.InstanceID, guid), effectIndex, guid, launch)
+		}
+	}
+}
+
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData, wireObjectGUID uint64, castItemGUID uint64, castItemEntry uint32, queuedSwing *activeCastState) {
 	if s.player == nil {
 		return
@@ -14307,6 +14440,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// processed (Spell.cpp:3738-3752).
 	var comboGainTarget uint64
 	var comboGain int8
+	// spellLaunchDamageState for this cast: the OnEffectLaunchTarget
+	// handlers' SetEffectValue rewrites, filled by the launch fire at
+	// the _cast tail below (cast time, ahead of the delayed/immediate
+	// split) and consulted per hit target by the SCHOOL_DAMAGE arm
+	// inside applyEffects. Declared here so the closure captures it;
+	// the delayed branch's arrival closure reads the same record.
+	launch := &spellLaunchDamageState{}
 	applyEffects := func(effCtx context.Context) {
 		// Spell::CalculateDamage (Spell.cpp:6456) -> WorldObject::CalculateSpellDamage
 		// (Object.cpp:2271) -> SpellEffectInfo::CalcValue (SpellInfo.cpp:402): the
@@ -15212,6 +15352,28 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected || dmgCasterIsTarget) {
 						targetDamage := chainScaledAmount(damage, chainMult, chainJumpIndex[effectTarget])
+						// SpellScript OnEffectLaunchTarget SetEffectValue
+						// rewrite for this (effect, target): the launch
+						// fire at the _cast tail wrote the override into
+						// the per-cast record; it replaces the DBC base
+						// the chain multiplier scales, like the creature
+						// path's per-target recompute. Weapon-damage
+						// effects keep their computed swing base (the
+						// C++ launch value for those is the weapon
+						// computation, not a CalcValue). A negative
+						// rewrite clamps to 0. The share-damage division
+						// above ran on the DBC base, so a shared-damage
+						// spell with a launch rewrite skips that
+						// division — no such spell carries a launch
+						// handler in-tree.
+						if !weaponDamageEffect {
+							if ov, ok := launch.valueFor(effectIndex, effectTarget); ok {
+								if ov < 0 {
+									ov = 0
+								}
+								targetDamage = chainScaledAmount(uint32(ov), chainMult, chainJumpIndex[effectTarget])
+							}
+						}
 						// Spell::EffectWeaponDmg (SpellEffects.cpp:3181-3192):
 						// the Devastate arm (Warrior family, SpellFamilyFlags[1]
 						// & 0x40 — "player ones" per the C++ comment) applies
@@ -20029,11 +20191,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// but SetDelayStart(0) with no travel speed means the delay timer
 	// fires on the next update tick — behaviorally identical to the
 	// immediate path, which is where it falls through here.
+	// SpellScript OnEffectLaunchTarget (Spell.cpp:7753,
+	// CallScriptEffectHandlers in SPELL_EFFECT_HANDLE_LAUNCH_TARGET
+	// mode from Spell::HandleLaunchPhase): fires here, at _cast time
+	// ahead of the delayed/immediate split — C++ runs the launch phase
+	// before the missile is armed, so a delayed spell's launch hooks
+	// fire now, not at arrival; the launch record the handlers fill
+	// is captured by applyEffects for both branches. Target selection
+	// is final at this point (the hit/miss lists and the per-effect
+	// partitions are settled above), matching C++'s post-selection
+	// launch phase.
+	s.fireSpellScriptLaunchTarget(ctx, spell, spellID, castTimeMs, target, castItemGUID, hitTargets, missStatus, friendlyEffectTargets, refCenteredFriendlyTargets, friendlyConeEffectTargets, enemyConeEffectTargets, reflectedAllyTrips, refCenteredAllyTrips, launch)
 	// Spell::_cast (Spell.cpp:3497-3500): the npcbot hook runs only for
 	// TYPEID_UNIT casters — Creature::OnSpellGo (Creature.cpp:3751) just
 	// forwards to bot_AI/bot_pet_AI. finishSpellCast serves player casts
 	// only and Go has no npcbot model, so the leg is a no-op here.
-	// CallScriptAfterCastHandlers is a no-op (no SpellScript bridge).
 	isDelayedBranch := (spell.Speed > 0 && !isChanneledSpell(spell)) || spell.AttributesEx4&spellAttr4TreatAsDelayed != 0
 	// Spell::handle_delayed (Spell.cpp:3640) re-arms SetSpellModTakingSpell
 	// on the SAME Spell object, so its m_appliedMods registrations from
@@ -20216,6 +20388,17 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			// handle_delayed tick; handleSpellInitialThreat ran at cast
 			// start like HandleThreatSpells at the _cast/_handle_immediate
 			// head.
+			// Spell::_cast (Spell.cpp:3501): CallScriptAfterCastHandlers
+			// fires at _cast end, after the immediate/launch legs and
+			// before the spell_linked tail below — on the delayed branch
+			// that is cast time, not missile arrival: the arrival
+			// closure runs later, so AfterCast lands before the effects
+			// here, exactly like C++ for a delayed spell.
+			// The object carries no hit-damage record: the player path
+			// threads no per-cast damage record out of applyEffects, so
+			// a handler's GetHitDamage reads 0 here (the creature path
+			// threads it).
+			s.server.fireSpellAfterCast(ctx, spellID, s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0}))
 			// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail
 			// runs at _cast end on both branches — linked triggers fire at
 			// cast completion, not at missile arrival.
@@ -20376,6 +20559,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Player::UpdatePotionCooldown). It runs in finish, before the
 	// _cast tail (spell_linked_spell) below.
 
+	// Spell::_cast (Spell.cpp:3501): CallScriptAfterCastHandlers fires
+	// at _cast end, after handle_immediate and before the spell_linked
+	// tail below. The object carries no hit-damage record: the player
+	// path threads no per-cast damage record out of applyEffects, so a
+	// handler's GetHitDamage reads 0 here (the creature path threads
+	// it).
+	s.server.fireSpellAfterCast(ctx, spellID, s.luaSpellObject(spellObjectParams{spell: spell, castTimeMs: castTimeMs, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, castItemGUID: castItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0}))
 	// Spell::_cast (Spell.cpp:3502-3511): the spell_linked_spell tail runs
 	// after handle_immediate for immediate spells — positive ids are cast
 	// triggered on the unit target (or the caster when there is none),

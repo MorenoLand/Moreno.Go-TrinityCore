@@ -45,6 +45,7 @@ type spellObjectParams struct {
 	hasDest        bool
 	action         *spellScriptAction
 	hitDamage      *spellHitDamageState
+	launch         *spellLaunchDamageState
 }
 
 // spellHitPhase identifies which SpellScript hook a spell object's
@@ -211,6 +212,7 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 	if s.player != nil {
 		casterLevel = uint32(s.player.Level)
 	}
+	launch := p.launch
 	effectValues := map[int]int32{}
 	methods["GetEffectValue"] = func(_ context.Context, args []any) ([]any, error) {
 		index, err := luaUint32Arg(args, 0)
@@ -220,12 +222,35 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		if index >= uint32(len(p.spell.Effects)) {
 			return []any{int32(0)}, nil
 		}
+		// A launch-target rewrite for this (effect, target) wins over
+		// the DBC value: the override is per target, the memo below is
+		// not, so the lookup precedes it (the creature-path twin).
+		if launch != nil {
+			if value, ok := launch.valueFor(int(index), launch.currentTarget); ok {
+				return []any{value}, nil
+			}
+		}
 		if value, ok := effectValues[int(index)]; ok {
 			return []any{value}, nil
 		}
 		value := p.spell.Effects[index].CalcValueForLevel(p.spell, casterLevel)
 		effectValues[int(index)] = value
 		return []any{value}, nil
+	}
+	// SetEffectValue(value) is SpellScript::SetEffectValue
+	// (SpellScript.cpp:677-686): writes m_spell->damage for the
+	// effect/target the launch-target fire is currently on. A no-op
+	// outside that fire (the launch state is inactive, matching the
+	// C++ IsInEffectHook gate); the creature-path twin.
+	methods["SetEffectValue"] = func(_ context.Context, args []any) ([]any, error) {
+		value, err := luaInt32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if launch != nil {
+			launch.setValue(value)
+		}
+		return nil, nil
 	}
 	methods["IsAutoRepeat"] = luaNoArgs(func() any {
 		if p.action != nil && p.action.autoRepeatSet {
@@ -526,8 +551,7 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 	// (SpellScript.cpp:677-686): writes m_spell->damage for the
 	// effect/target the launch-target fire is currently on. A no-op
 	// outside that fire (the launch state is inactive, matching the
-	// C++ IsInEffectHook gate); the player-path builder carries no
-	// launch state, so it has no twin there.
+	// C++ IsInEffectHook gate); the session builder carries the twin.
 	methods["SetEffectValue"] = func(_ context.Context, args []any) ([]any, error) {
 		value, err := luaInt32Arg(args, 0)
 		if err != nil {

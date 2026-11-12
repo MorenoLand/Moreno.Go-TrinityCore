@@ -1716,6 +1716,55 @@ func (s *Server) castCreatureSpellInternal(ctx context.Context, m *creatureMotio
 	s.castCreatureSpellInternalWithBasePoints(ctx, m, spellID, targetGUID, triggered, nil, nil, false, 0)
 }
 
+// spellDisabledForCreature mirrors DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL,
+// entry, caster) (DisableMgr.cpp:320-368) for a creature caster — the
+// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) on the creature
+// path, which previously had no disabled check at all. The type-flag arm
+// takes SPELL_DISABLE_CREATURE, plus SPELL_DISABLE_PET for a pet motion;
+// a row carrying neither type flag does not disable the creature cast:
+// C++ consults the deprecated bit only when the caller passes no caster
+// (DisableMgr.cpp:366-367), and prepare always passes one. The arena/battleground
+// and map legs read the motion's map; the area leg has no motion-side
+// area id, so it reads as not-listed (permissive, matching C++ when the
+// area is not the disabled one). A missing disables row, missing table,
+// or query error is permissive (terrain.go convention).
+func (s *Server) spellDisabledForCreature(ctx context.Context, m *creatureMotion, spellID uint32) bool {
+	if s == nil || m == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return false
+	}
+	var flags uint16
+	var mapList, areaList string
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT flags, params_0, params_1 FROM disables WHERE sourceType = ? AND entry = ?", disableTypeSpell, spellID).Scan(&flags, &mapList, &areaList); err != nil {
+		return false
+	}
+	typeMatch := flags&spellDisableCreature != 0 || (motionIsPet(m) && flags&spellDisablePet != 0)
+	if !typeMatch {
+		return false
+	}
+	if flags&(spellDisableArenas|spellDisableBattlegrounds) != 0 && s.Data != nil {
+		if mapInfo, found, err := s.Data.Map(m.Map); err == nil && found {
+			if flags&spellDisableArenas != 0 && mapInfo.IsBattleArena() {
+				return true
+			}
+			if flags&spellDisableBattlegrounds != 0 && mapInfo.IsBattleground() {
+				return true
+			}
+		}
+	}
+	if flags&spellDisableMap != 0 {
+		if disabledIDListContains(mapList, m.Map) {
+			return true
+		}
+		if flags&spellDisableArea == 0 {
+			return false
+		}
+	}
+	if flags&spellDisableArea != 0 {
+		return false
+	}
+	return true
+}
+
 // castCreatureSpellInternalWithBasePoints is castCreatureSpellInternal
 // with a SpellValue base-point override: when basePointOverrides is
 // non-nil the listed effects take the override values
@@ -1818,6 +1867,15 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	var immuneTargets map[uint64]bool
 	var missTargets map[uint64]uint8
 	if spellKnown {
+		// Spell::prepare disabled-spell gate (Spell.cpp:3074-3080) via
+		// DisableMgr::IsDisabledFor(DISABLE_TYPE_SPELL, id, caster)
+		// (DisableMgr.cpp:320-368), creature arm: fires before the
+		// CheckCast arms below, matching C++ relative order (prepare
+		// precedes CheckCast). A disabled creature spell fizzles
+		// silently — the caster has no client to report to.
+		if s.spellDisabledForCreature(ctx, m, spellID) {
+			return
+		}
 		// Spell::CheckCast death-state arm (Spell.cpp:5177-5178): a dead
 		// caster fails unless the spell is passive, castable while dead,
 		// or triggered outside an aura. Go's triggered flag cannot tell

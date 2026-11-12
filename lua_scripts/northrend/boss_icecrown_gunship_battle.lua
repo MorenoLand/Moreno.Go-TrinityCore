@@ -125,6 +125,12 @@
 -- (false) then SetControlled(true) (the "cannon root flags") — no
 -- PassengerBoarded bridge: all stay out.
 -- The 17 spell_igb_* SpellScripts join the no-SpellScript-bridge queue;
+-- PORTED 2026-11-12: spell_igb_incinerating_blast (69401/70174, ev1+ev9+
+-- ev10), spell_igb_cannon_blast (69399/70172, ev3) and
+-- spell_igb_check_for_players (70332, ev7+ev9+ev5) below — the AfterCast /
+-- OnEffectLaunchTarget bridges fire on the creature and player paths, and
+-- the vehicle-caster route sends gunship casts through the creature path,
+-- so 14 remain in the queue.
 -- achievement_im_on_a_boat — PORTED 2026-11-08 (tick 416): the deck-aura
 -- visit counter rides deckAuraApply below; Go case in
 -- engine/world/achievement_criteria_scripts.go.
@@ -403,6 +409,133 @@ RegisterCreatureEvent(ENTRY_KOR_KRON_ROCKETEER, 1, rocketeerEnterCombat)
 RegisterCreatureEvent(ENTRY_KOR_KRON_ROCKETEER, 2, rocketeerLeaveCombat)
 RegisterCreatureEvent(ENTRY_KOR_KRON_ROCKETEER, 23, rocketeerReset)
 
+-- spell_igb_check_for_players (boss_icecrown_gunship_battle.cpp:2126-2167):
+-- 70332, cast TRIGGERED by the raid's own gunship at combat start
+-- (:907/:1160). OnObjectAreaTargetSelect CountTargets (:2141-2144):
+-- _playerCount = targets.size(). AfterCast TriggerWipe (:2146-2150): no
+-- players -> the caster ship's JustDied. OnEffectHitTarget TeleportPlayer
+-- (:2152-2157, EFFECT_0 DUMMY): a hit unit more than 10yd below the caster
+-- casts gunship-fall-teleport 67335 on itself, triggered.
+-- TriggerWipe's JustDied leg: the ship's JustDied (:703-710) sets the boss
+-- state from isVictory = transport entry in {GO_THE_SKYBREAKER_H,
+-- GO_ORGRIMS_HAMMER_A}; the wipe check is always cast by the raid's OWN
+-- ship (transport GO_ORGRIMS_HAMMER_H / GO_THE_SKYBREAKER_A), so isVictory
+-- is false and the state is FAIL — ported as SetBossState(2, 2) directly.
+-- The rest of JustDied (encounter-frame disengage, music, stalker sweep,
+-- explosion spell) rides the instance/transport machine and stays out.
+-- Per-cast count keyed by the casting ship's GUID. Load() (:2136-2139)
+-- requires a TYPEID_UNIT caster, so all three handlers gate on it.
+-- DORMANT until Spell.dbc ships the 70332 record.
+local SPELL_CHECK_FOR_PLAYERS = 70332
+local SPELL_GUNSHIP_FALL_TELEPORT = 67335
+local DATA_ICECROWN_GUNSHIP_BATTLE = 2
+local BOSS_STATE_FAIL = 2
+local TYPEID_UNIT = 3 -- SharedDefines.h TYPEID_UNIT
+
+local checkPlayerCounts = {}
+
+local function checkForPlayersCount(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster and caster:GetTypeId() == TYPEID_UNIT then
+        checkPlayerCounts[caster:GetGUIDLow()] = targets:GetCount()
+    end
+end
+
+local function checkForPlayersWipe(event, spell)
+    local caster = spell:GetCaster()
+    if not caster or caster:GetTypeId() ~= TYPEID_UNIT then
+        return
+    end
+    local guid = caster:GetGUIDLow()
+    local count = checkPlayerCounts[guid]
+    checkPlayerCounts[guid] = nil
+    if (count or 0) == 0 then
+        caster:SetBossState(DATA_ICECROWN_GUNSHIP_BATTLE, BOSS_STATE_FAIL)
+    end
+end
+
+local function checkForPlayersTeleport(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or not target then
+        return
+    end
+    local caster = spell:GetCaster()
+    if not caster or caster:GetTypeId() ~= TYPEID_UNIT then
+        return
+    end
+    if target:GetZ() < caster:GetZ() - 10.0 then
+        target:CastSpell(target, SPELL_GUNSHIP_FALL_TELEPORT, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_CHECK_FOR_PLAYERS, 7, checkForPlayersCount)
+RegisterSpellEvent(SPELL_CHECK_FOR_PLAYERS, 9, checkForPlayersWipe)
+RegisterSpellEvent(SPELL_CHECK_FOR_PLAYERS, 5, checkForPlayersTeleport)
+
+-- spell_igb_incinerating_blast (boss_icecrown_gunship_battle.cpp:1870-1902):
+-- 69401 + 70174 bind it in TDB spell_script_names. OnCast (ev1)
+-- stores the caster's energy minus 10; OnEffectLaunchTarget (ev10,
+-- EFFECT_1) adds energyLeft^2 * 8 to the effect value;
+-- AfterCast (ev9) drains the caster's energy to 0. The three hooks
+-- are separate RegisterSpellEvent fires in one synchronous cast, so
+-- the per-cast energy rides a per-caster-GUID table (the
+-- moroes-frenzy pattern), cleared by AfterCast. The C++ uint32
+-- underflow below 10 energy is clamped to 0 — the cannon never casts
+-- this below 10 energy in practice.
+-- DORMANT until Spell.dbc ships the 69401/70174 rows; the gunship use
+-- rides the vehicle-caster route (spells.go), which sends the cast
+-- through the creature path where ev1/ev9/ev10 fire.
+local SPELL_IGB_INCINERATING_BLAST_1 = 69401 -- TDB spell_script_names -> spell_igb_incinerating_blast
+local SPELL_IGB_INCINERATING_BLAST_2 = 70174 -- TDB spell_script_names -> spell_igb_incinerating_blast
+local POWER_ENERGY = 3 -- SharedDefines.h POWER_ENERGY
+
+local incineratingEnergy = {}
+
+local function incineratingBlastStore(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local energy = caster:GetPower(POWER_ENERGY)
+    if energy == nil then
+        return
+    end
+    incineratingEnergy[caster:GetGUIDLow()] = math.max(energy - 10, 0)
+end
+
+local function incineratingBlastRemove(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    incineratingEnergy[caster:GetGUIDLow()] = nil
+    caster:SetPower(POWER_ENERGY, 0)
+end
+
+local function incineratingBlastDamage(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local energyLeft = incineratingEnergy[caster:GetGUIDLow()]
+    if energyLeft == nil then
+        return
+    end
+    spell:SetEffectValue(spell:GetEffectValue(1) + energyLeft * energyLeft * 8)
+end
+
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 1, incineratingBlastStore)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 9, incineratingBlastRemove)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 10, incineratingBlastDamage)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 1, incineratingBlastStore)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 9, incineratingBlastRemove)
+RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 10, incineratingBlastDamage)
+
 -- C++ spell_igb_on_gunship_deck::HandleApply
 -- (boss_icecrown_gunship_battle.cpp:1808-1817): when the enemy-deck aura
 -- applies to a player, the nearest gunship's AI counts one visit for
@@ -450,75 +583,24 @@ end
 RegisterAuraEvent(SPELL_ON_SKYBREAKER_DECK, 2, deckAuraApply)
 RegisterAuraEvent(SPELL_ON_ORGRIMS_HAMMER_DECK, 2, deckAuraApply)
 
--- PORTED (this tick, RegisterSpellEvent): the gunship spell scripts.
---   spell_igb_incinerating_blast (boss_icecrown_gunship_battle.cpp:1870-1902):
---   69401 + 70174 bind it in TDB spell_script_names. OnCast (ev1)
---   stores the caster's energy minus 10; OnEffectLaunchTarget (ev10,
---   EFFECT_1) adds energyLeft^2 * 8 to the effect value;
---   AfterCast (ev9) drains the caster's energy to 0. The three hooks
---   are separate RegisterSpellEvent fires in one synchronous cast, so
---   the per-cast energy rides a per-caster-GUID table (the
---   moroes-frenzy pattern), cleared by AfterCast. The C++ uint32
---   underflow below 10 energy is clamped to 0 — the cannon never casts
---   this below 10 energy in practice.
---   spell_igb_cannon_blast (:1844-1866): 69399 + 70172 bind it in TDB
---   spell_script_names. AfterHit (ev3) casts OVERHEAT 69487 on the
---   caster (triggered) when its energy reached 100. The SAY_OVERHEAT
---   chat leg STAYS OUT: no creature-text-by-id bridge exists on the
---   Lua surface (the vehicle GetPassenger(0) bridge exists, but the
---   text id has no Lua twin). AfterHit fires per hit target in C++
---   too, so a multi-target blast re-checks per target exactly like
---   the C++ hook.
--- DORMANT until Spell.dbc ships the 69399/69401/70172/70174 rows — and
--- the gunship use itself waits on the vehicle-caster pipeline: these
--- casts are player-path vehicle casts (spells.go vehicle-caster arm),
--- where ev9/ev10 do not fire yet, so the ports fire today only for
--- creature casts of these spells and activate for the gunship cannons
--- when that pipeline routes the cast through the creature path.
-local SPELL_IGB_INCINERATING_BLAST_1 = 69401 -- TDB spell_script_names -> spell_igb_incinerating_blast
-local SPELL_IGB_INCINERATING_BLAST_2 = 70174 -- TDB spell_script_names -> spell_igb_incinerating_blast
+-- spell_igb_cannon_blast (boss_icecrown_gunship_battle.cpp:1844-1866):
+-- 69399 + 70172 bind it in TDB spell_script_names. AfterHit (ev3) casts
+-- OVERHEAT 69487 on the caster (triggered) when its energy reached 100.
+-- The SAY_OVERHEAT chat leg STAYS OUT: no creature-text-by-id bridge
+-- exists on the Lua surface (the vehicle GetPassenger(0) bridge exists,
+-- but the text id has no Lua twin). AfterHit fires per hit target in C++
+-- too, so a multi-target blast re-checks per target exactly like the
+-- C++ hook. (spell_igb_incinerating_blast lives above with the
+-- check-for-players port — a duplicate registration of it added this
+-- tick was removed in reconciliation; one handler per (spell, event)
+-- fires, so a second ev10 registration would have doubled the
+-- energy^2*8 damage.)
+-- DORMANT until Spell.dbc ships the 69399/70172 rows; the gunship use
+-- rides the vehicle-caster route (spells.go), which sends the cast
+-- through the creature path where ev3 fires.
 local SPELL_IGB_CANNON_BLAST_1 = 69399 -- TDB spell_script_names -> spell_igb_cannon_blast
 local SPELL_IGB_CANNON_BLAST_2 = 70172 -- TDB spell_script_names -> spell_igb_cannon_blast
 local SPELL_IGB_OVERHEAT = 69487 -- boss_icecrown_gunship_battle.cpp:191
-local POWER_ENERGY = 3 -- SharedDefines.h POWER_ENERGY
-
-local incineratingEnergy = {}
-
-local function incineratingBlastStore(event, spell)
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    local energy = caster:GetPower(POWER_ENERGY)
-    if energy == nil then
-        return
-    end
-    incineratingEnergy[caster:GetGUIDLow()] = math.max(energy - 10, 0)
-end
-
-local function incineratingBlastRemove(event, spell)
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    incineratingEnergy[caster:GetGUIDLow()] = nil
-    caster:SetPower(POWER_ENERGY, 0)
-end
-
-local function incineratingBlastDamage(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 1 then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    local energyLeft = incineratingEnergy[caster:GetGUIDLow()]
-    if energyLeft == nil then
-        return
-    end
-    spell:SetEffectValue(spell:GetEffectValue(1) + energyLeft * energyLeft * 8)
-end
 
 local function cannonBlastCheck(event, spell, hitTarget)
     local caster = spell:GetCaster()
@@ -532,11 +614,5 @@ local function cannonBlastCheck(event, spell, hitTarget)
     caster:CastSpell(caster, SPELL_IGB_OVERHEAT, true)
 end
 
-RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 1, incineratingBlastStore)
-RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 9, incineratingBlastRemove)
-RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_1, 10, incineratingBlastDamage)
-RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 1, incineratingBlastStore)
-RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 9, incineratingBlastRemove)
-RegisterSpellEvent(SPELL_IGB_INCINERATING_BLAST_2, 10, incineratingBlastDamage)
 RegisterSpellEvent(SPELL_IGB_CANNON_BLAST_1, 3, cannonBlastCheck)
 RegisterSpellEvent(SPELL_IGB_CANNON_BLAST_2, 3, cannonBlastCheck)
