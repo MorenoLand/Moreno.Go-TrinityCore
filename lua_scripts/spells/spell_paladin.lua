@@ -86,8 +86,14 @@
 --   auraSpellMechanicMask + mechanicStun=12 twins, no removal
 --   helper); 626 holy_shock PORTED this tick (OnCheckCast ev8 below;
 --   the HandleDummy damage/heal legs stay out — ev5 player path
---   dormant + no spell-level GetSpellWithRank); 627 illumination + 629 infusion_of_light +
---   636 spiritual_attunement + 637 sheath_of_light + 638 t8_2p_bonus
+--   dormant + no spell-level GetSpellWithRank); 627 illumination
+--   STAYS OUT — the GetSpellWithRank(firstSpellID, rank) rank arg
+--   landed (34153d9d) and ev6 forwards heal + family flags, but
+--   CalcPowerCost is still unbridged and the proc event never
+--   threads the heal spell (lua_aura.go procEventObject: a nil
+--   event spell reads 0), so the Holy Shock rank / original-spell
+--   leg cannot resolve; 629 infusion_of_light + 636
+--   spiritual_attunement + 637 sheath_of_light + 638 t8_2p_bonus
 --   (all need heal info / proc-spell family flags / CalcPowerCost,
 --   ev6 carries damage only); 632 lay_on_hands PORTED this tick
 --   (OnCheckCast ev8 + AfterHit ev3 below); 634/635

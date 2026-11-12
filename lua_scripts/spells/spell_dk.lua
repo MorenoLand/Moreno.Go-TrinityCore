@@ -514,6 +514,34 @@ end
 
 RegisterAuraEvent(SPELL_DK_VENDETTA, 6, vendettaProc)
 
+local SPELL_DK_BLADE_BARRIER = 49182 -- spell_dk.cpp:429 (class spell_dk_blade_barrier)
+local CLASS_DEATH_KNIGHT = 6 -- SharedDefines.h:132
+local RUNE_BLOOD = 0 -- Player.h:269
+
+-- C++ spell_dk_blade_barrier::CheckProc (spell_dk.cpp:440-450):
+-- DoCheckProc only, no HandleProc — the DBC default trigger leg
+-- fires when the check passes. Passes only when the proc event
+-- carries a spell (GetSpellInfo() != nil; a nil event spell reads
+-- 0 via procEvent:GetSpellId) and the actor is a death knight
+-- player whose base blood rune slots are all on cooldown
+-- (IsBaseRuneSlotsOnCooldown, lua_player.go). A failed check
+-- vetoes (return true); a pass returns nothing so the default leg
+-- fires, the rime precedent. DORMANT until Spell.dbc ships the
+-- 49182 proc entry.
+local function bladeBarrierProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if actor == nil or actor:GetTypeId() ~= 4 or actor:GetClass() ~= CLASS_DEATH_KNIGHT then
+        return true
+    end
+    if not actor:IsBaseRuneSlotsOnCooldown(RUNE_BLOOD) then
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_DK_BLADE_BARRIER, 6, bladeBarrierProc)
+
 local SPELL_DK_ACCLIMATION = 49200 -- spell_dk.cpp:120 (rank 1; ranks 2-3 IDs are not in the file, never guessed)
 local SPELL_DK_ACCLIMATION_HOLY = 50490 -- spell_dk.cpp:43
 local SPELL_DK_ACCLIMATION_FIRE = 50362 -- spell_dk.cpp:44

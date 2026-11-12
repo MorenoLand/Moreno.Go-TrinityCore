@@ -216,6 +216,83 @@ end
 
 RegisterAuraEvent(SPELL_MAGE_MAGIC_ABSORPTION_AURA, 6, magicAbsorptionProc)
 
+local SPELL_MAGE_HOT_STREAK = 44445 -- spell_mage.cpp:919 (class spell_mage_hot_streak; rank 1; ranks 2-3 IDs are not in the file, never guessed)
+local SPELL_MAGE_HOT_STREAK_PROC = 48108 -- spell_mage.cpp:61
+local PROC_HIT_CRITICAL = 2 -- SharedDefines.h: PROC_HIT_CRITICAL (procs.go procHitCritical)
+
+-- C++ spell_mage_hot_streak::HandleProc (spell_mage.cpp:935-957):
+-- EFFECT_0 SPELL_AURA_DUMMY OnEffectProc. PreventDefaultAction (the
+-- true return on every path); the EFFECT_1 counter doubles on a
+-- spell crit (hit mask PROC_HIT_CRITICAL) and resets to 25 on any
+-- path that reaches the end — a non-crit, or a crit that rolls the
+-- EFFECT_0 chance at 100 and casts 48108 on the actor, triggered
+-- via the aurEff overload. A crit below 100 or a failed roll returns
+-- early with the doubled counter kept. The ev6 effectIndex 8th arg
+-- (lua_aura.go fireAuraProc) gates the arm to EFFECT_0: both effects
+-- are DUMMY, so without it the counter would double twice per crit;
+-- other indices veto the no-op default leg. DORMANT until Spell.dbc
+-- ships the 44445 proc entry.
+local function hotStreakProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if aura == nil or actor == nil or procEvent == nil then
+        return true
+    end
+    local counter = aura:GetAmount(1)
+    if bit32.band(procEvent:GetHitMask(), PROC_HIT_CRITICAL) ~= 0 then
+        counter = counter * 2
+        if counter < 100 then
+            aura:SetAmount(counter, 1)
+            return true
+        end
+        if math.random(0, 99) >= aura:GetAmount(0) then
+            aura:SetAmount(counter, 1)
+            return true
+        end
+        actor:CastSpell(actor, SPELL_MAGE_HOT_STREAK_PROC, true)
+    end
+    aura:SetAmount(25, 1)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_HOT_STREAK, 6, hotStreakProc)
+
+local SPELL_MAGE_EMPOWERED_FIRE = 31656 -- spell_mage.cpp:538 (class spell_mage_empowered_fire)
+local SPELL_MAGE_EMPOWERED_FIRE_PROC = 67545 -- spell_mage.cpp:65
+
+-- C++ spell_mage_empowered_fire::CheckProc + HandleProc
+-- (spell_mage.cpp:556-572): EFFECT_0 SPELL_AURA_ADD_FLAT_MODIFIER
+-- OnEffectProc. CheckProc passes only when the proc spell is Ignite
+-- 12654 (procEvent:GetSpellId); HandleProc PreventDefaultActions
+-- (the true return on every path) and the holder casts 67545 on
+-- itself with BP0 = pct(base mana, EFFECT_0 CalcValue of 67545) —
+-- GetCreateMana (lua_player.go) + GetSpellEffectCalcValue
+-- (lua_aura.go). C++ casts non-triggered; Lua CastCustomSpell rides
+-- the triggered-only funnel (standing gap, same as ignite). The
+-- effectIndex gate keeps the arm on EFFECT_0. DORMANT until
+-- Spell.dbc ships the 31656 proc entry.
+local function empoweredFireProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetSpellId() ~= SPELL_MAGE_IGNITE then
+        return true
+    end
+    if aura == nil or target == nil or target:GetTypeId() ~= 4 then
+        return true
+    end
+    local percent = aura:GetSpellEffectCalcValue(SPELL_MAGE_EMPOWERED_FIRE_PROC, 0)
+    if percent == 0 then
+        return true
+    end
+    local bp0 = math.floor(target:GetCreateMana() * percent / 100)
+    target:CastCustomSpell(target, SPELL_MAGE_EMPOWERED_FIRE_PROC, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_EMPOWERED_FIRE, 6, empoweredFireProc)
+
 local SPELL_MAGE_ARCANE_POTENCY = 31571 -- spell_mage.cpp:143
 local SPELL_MAGE_ARCANE_POTENCY_TRIGGER = {57529, 57531} -- spell_mage.cpp:156-157
 local SPELL_ICON_MAGE_CLEARCASTING = 212 -- spell_mage.cpp:79
@@ -300,21 +377,20 @@ RegisterAuraEvent(SPELL_MAGE_ARCANE_POTENCY, 6, arcanePotencyProc)
 --   first; the CalculateAmount spellpower leg and the incanter's-
 --   absorption Trigger leg stay out with it (SpellBaseHealing-
 --   BonusDone / GetAuraEffectOfRankedSpell unbridged).
---   613 empowered_fire STAYS OUT — CheckProc (proc spell is Ignite
---   12654) is forwardable now via procEvent:GetSpellId(), but
---   HandleProc needs GetCreateMana + CalcValue of 67545; no
---   GetCreateMana bridge exists. Recipe: add unit:GetCreateMana,
---   then port ev6.
+--   613 empowered_fire PORTED this tick (ev6, above): CheckProc
+--   (proc spell is Ignite 12654 via procEvent:GetSpellId) +
+--   HandleProc (BP0 = pct(GetCreateMana, CalcValue of 67545),
+--   holder casts 67545 on itself). KNOWN DEVIATION: C++ casts
+--   non-triggered; Lua CastCustomSpell rides the triggered-only
+--   funnel (same as ignite). DORMANT until Spell.dbc ships the
+--   31656 proc entry.
 --   614 fire_frost_ward STAYS OUT — CalculateAmount needs
 --   SpellBaseHealingBonusDone + level penalty; Absorb needs
 --   OnEffectAbsorb + GetAuraEffectOfRankedSpell. Both unbridged.
---   615 hot_streak STAYS OUT — the port was written and REVERTED
---   this tick: ev6 fires once per eligible effect (procs.go
---   eligible loop; both EFFECT_0 and EFFECT_1 are DUMMY, a
---   proc-trigger type), so the EFFECT_1 counter would double
---   twice per crit with no effect index to gate on. Recipe: an
---   ev6 effect index, or a DBC check that EFFECT_1 fails
---   checkEffectProc; the hit-mask + counter bridges are live.
+--   615 hot_streak PORTED this tick (ev6, above): the ev6
+--   effectIndex 8th arg gates the EFFECT_1 counter arm to
+--   EFFECT_0, so the counter doubles once per crit. DORMANT until
+--   Spell.dbc ships the 44445 proc entry.
 --   616 ice_barrier STAYS OUT — CalculateAmount needs
 --   SpellBaseHealingBonusDone + ApplyEffectModifiers + level
 --   penalty; AfterRemove needs GetDummyAuraEffect + ProcChance.
