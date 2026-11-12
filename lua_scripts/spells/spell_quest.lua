@@ -625,12 +625,10 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   no-id/comment-block rows are phantoms, as are the go_hit=true
 --   flags on bested rows 724/727/731/732 — those IDs appear in Go
 --   only as unrelated constants):
---   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): ev5
---   EFFECT_1 SCRIPT_EFFECT; hit-aura stack >= SpellInfo StackAmount
---   gates a triggered 50928 summon + creature despawn — binding
---   50894 RESOLVED tick 2026-11-12 per TDB 335.26091
---   spell_script_names ('spell_zuldrak_zuldrak_rat'); blocked only
---   on the missing spell:GetHitAura bridge (+ StackAmount source).
+--   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): PORTED tick
+--   2026-11-12 (binding 50894, HUNT block at end of file). The
+--   GetHitAura gate is ported as a pre-hit aura read +1 (see the
+--   handler note); no bridge build was needed.
 --   spell_q12730_quenching_mist (:1767-1806): PORTED tick 2026-11-12
 --   (binding 53350, HUNT block at end of file).
 --   spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy
@@ -982,9 +980,10 @@ RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
 --   spell_script_names then resolved the rest — gossip trigger 49213,
 --   jump_jets 4336, pound_drum 66512 (ev1 only), cannons_target
 --   57385/57412, area_restrict 76245, assign_credit 59590/60039/60041,
---   all PORTED tick 2026-11-12. Remaining: zuldrak rat 50894 (binding
---   resolved, GetHitAura bridge missing) and q12279 cast_net (no TDB
---   row at all — binding unidentifiable, stays out).
+--   all PORTED tick 2026-11-12, including zuldrak rat 50894 (pre-hit
+--   aura read +1 gate, HUNT block at end of file). Remaining:
+--   q12279 cast_net (no TDB row at all — binding unidentifiable,
+--   stays out).
 
 local SPELL_HEALING_FINISHED = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
 local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
@@ -1468,6 +1467,10 @@ local HUNT = {
     SPELL_FAILED_MIX_2 = 43378,
     SPELL_FAILED_MIX_3 = 43970,
     SPELL_SUCCESSFUL_MIX = 43377,
+    -- spell_q12527_zuldrak_rat (spell_quest.cpp:1697)
+    SPELL_ZULDRAK_RAT = 50894,
+    SPELL_SUMMON_GORGED_LURKING_BASILISK = 50928,
+    ZULDRAK_RAT_STACKS = 5,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -2319,3 +2322,43 @@ local function mixingBloodHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_MIXING_BLOOD, 4, mixingBloodHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): EFFECT_1
+--   SCRIPT_EFFECT ev5, binding 50894 per TDB 335.26091
+--   spell_script_names ('spell_zuldrak_zuldrak_rat'). The hit unit
+--   (basilisk) casts Summon Gorged Lurking Basilisk 50928 on nil,
+--   triggered, then despawns when its 50894 aura reaches the DBC
+--   StackAmount (5 — quest 12527 'Gluttonous Lurkers': 'after eating
+--   five'). ORDERING ADJUDICATION: C++ reads the aura AFTER the
+--   EFFECT_0 merge (Spell.cpp:2842 ModStackAmount(+1) runs before the
+--   EFFECT_1 hook); Go fires every ev5 hook before every default
+--   (spells.go:14670-14690), so the hook reads pre-hit stacks and the
+--   gate adds the pending +1 — pre+1 >= 5 is exactly post >= 5, since
+--   the merge adds exactly one stack per hit, capped at the max.
+--   Read via hitTarget:GetAura(50894):GetStackAmount() (live dose
+--   count, lua_aura.go:374; slad_ran precedent) — NOT
+--   creature:GetStackAmount(id), which returns the DBC max
+--   (dispel.go:1243).
+
+local function zuldrakRatHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local stacks = 0
+    local aura = hitTarget:GetAura(HUNT.SPELL_ZULDRAK_RAT)
+    if aura ~= nil then
+        stacks = aura:GetStackAmount()
+    end
+    if stacks + 1 >= HUNT.ZULDRAK_RAT_STACKS then
+        hitTarget:CastSpell(nil, HUNT.SPELL_SUMMON_GORGED_LURKING_BASILISK, true)
+        if hitTarget:GetTypeId() == HUNT.TYPEID_UNIT then
+            hitTarget:DespawnOrUnsummon()
+        end
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_ZULDRAK_RAT, 5, zuldrakRatHit)

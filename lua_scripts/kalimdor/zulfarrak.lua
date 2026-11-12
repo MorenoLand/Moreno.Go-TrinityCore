@@ -10,9 +10,10 @@
 --   the wrong entry; 128308/128403 are gameobject_template rows, not
 --   SAI rows.
 --   at_zumrah: areatrigger_scripts row (962, 'at_zumrah') — trigger 962.
---   go_troll_cage stays out: no gameobject_template ScriptName row
---   for it in TDB (cage GO entry not in C++ / TDB; machine's only
---   starter, waves never start in-game until sourced).
+--   go_troll_cage: PORTED in lua_scripts/kalimdor/instance_zulfarrak.lua
+--   (59d43ef9): gameobject_template entries 141070-141074 ('Troll Cage',
+--   ScriptName 'go_troll_cage', TDB 335.26091) + 5 spawns map 209.
+--   The stay-out note above was wrong — the TDB rows exist.
 --
 -- PORTED ARMS (C++ line refs):
 --   go_shallow_grave (zulfarrak.cpp:392-434): OnGossipHello.
