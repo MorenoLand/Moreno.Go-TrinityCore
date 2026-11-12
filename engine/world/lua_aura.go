@@ -181,6 +181,105 @@ func (r *luaAuraRef) ownerObject() any {
 	return nil
 }
 
+// auraRemoveModeArg parses the optional remove-mode arg (the Remove
+// method's 0-5 validation, SpellAuraDefines.h:61-69 twin), defaulting
+// to auraRemoveByDefault, the C++ DropCharge/ModCharges default
+// (SpellAuras.h:158-159).
+func auraRemoveModeArg(args []any, index int) (auraRemoveMode, error) {
+	mode := auraRemoveByDefault
+	if len(args) > index && args[index] != nil {
+		v, err := luaInt64Arg(args, index)
+		if err != nil {
+			return mode, err
+		}
+		if v < 0 || v > 5 {
+			return mode, fmt.Errorf("invalid aura remove mode")
+		}
+		mode = auraRemoveMode(v)
+	}
+	return mode, nil
+}
+
+// modAuraCharges is Aura::ModCharges (SpellAuras.cpp:964-985): adds
+// num to the live charge count and reports whether the aura was
+// removed. No-op (false) when the aura uses no charges: Go carries no
+// m_isUsingCharges flag, so "using charges" is the DBC max
+// (calcAuraMaxCharges, the CalcMaxCharges twin) above zero, or a live
+// RemainingCharges above zero (a record loaded with saved charges
+// while the DBC is unloaded). A positive num clamps at the max (the
+// DBC max when known, else the live count — charges never grow
+// without DBC data); a count at or below zero removes the aura with
+// the given mode and reports true. The creature side mutates under
+// auraMu and removes after unlocking (the remove funnel takes auraMu
+// itself); the player side is unlocked from Lua (the file-header
+// precedent).
+func (r *luaAuraRef) modAuraCharges(num int32, mode auraRemoveMode) bool {
+	if r == nil {
+		return false
+	}
+	maxCharges := uint8(0)
+	if r.server != nil && r.server.Data != nil {
+		if sp, found, err := r.server.Data.Spell(r.spellID); err == nil && found {
+			if aura := r.resolve(); aura != nil {
+				maxCharges = r.server.calcAuraMaxCharges(sp, r.mapID, r.instanceID, aura.CasterGUID)
+			}
+		}
+	}
+	if r.server != nil && r.player == nil {
+		r.server.auraMu.Lock()
+		aura := r.server.activeCreatureAuras[r.creatureKey][r.spellID]
+		if aura == nil {
+			r.server.auraMu.Unlock()
+			return false
+		}
+		max := maxCharges
+		if max == 0 {
+			max = aura.RemainingCharges
+		}
+		if max == 0 {
+			r.server.auraMu.Unlock()
+			return false
+		}
+		charges := int32(aura.RemainingCharges) + num
+		if num > 0 && charges > int32(max) {
+			charges = int32(max)
+		}
+		if charges <= 0 {
+			r.server.auraMu.Unlock()
+			r.server.removeCreatureAuraWithMode(r.creatureKey, r.spellID, mode)
+			return true
+		}
+		aura.RemainingCharges = uint8(charges)
+		r.server.auraMu.Unlock()
+		return false
+	}
+	aura := r.resolve()
+	if aura == nil {
+		return false
+	}
+	max := maxCharges
+	if max == 0 {
+		max = aura.RemainingCharges
+	}
+	if max == 0 {
+		return false
+	}
+	charges := int32(aura.RemainingCharges) + num
+	if num > 0 && charges > int32(max) {
+		charges = int32(max)
+	}
+	if charges <= 0 {
+		if r.player != nil {
+			r.player.removeAuraWithMode(r.spellID, mode)
+		} else if r.server != nil {
+			r.server.removeCreatureAuraWithMode(r.creatureKey, r.spellID, mode)
+		}
+		return true
+	}
+	aura.RemainingCharges = uint8(charges)
+	return false
+}
+
 // luaAuraObject builds the Eluna Aura object (AuraMethods.h, all 12
 // methods) plus the AuraEffect periodic reads the RegisterAuraEvent
 // hook needs: GetTickNumber/GetTotalTicks/GetAmount are C++
@@ -201,7 +300,11 @@ func (r *luaAuraRef) ownerObject() any {
 // Eluna's SetStackAmount doc; Remove runs the side's plain remove
 // funnel (removeAura / removeCreatureAura, both auraRemoveByDefault,
 // the Aura::Remove() default), so linked-aura and stat-fold remove
-// arms run exactly as for Unit::RemoveAura.
+// arms run exactly as for Unit::RemoveAura. GetCharges/SetCharges/
+// ModCharges/DropCharge are Aura::GetCharges/SetCharges/ModCharges/
+// DropCharge (SpellAuras.h:154-159, SpellAuras.cpp:941-985) on the
+// live RemainingCharges counter; GetScriptValue/SetScriptValue are the
+// per-aura script store (the AuraScript member-variable twin).
 func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 	if r == nil {
 		return nil
@@ -665,6 +768,121 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		if r.server != nil {
 			r.server.removeCreatureAuraWithMode(r.creatureKey, r.spellID, mode)
 		}
+		return nil, nil
+	}
+	// GetCharges is Aura::GetCharges (SpellAuras.h:154): the live
+	// proc-charge count (m_procCharges), 0 when the aura uses no
+	// charges (infinite). Reads RemainingCharges, the counter the
+	// proc loops decrement (the PrepareProcToTrigger twin).
+	methods["GetCharges"] = luaNoArgs(func() any {
+		if aura := r.resolve(); aura != nil {
+			return uint32(aura.RemainingCharges)
+		}
+		return uint32(0)
+	})
+	// SetCharges(charges) is Aura::SetCharges (SpellAuras.cpp:941-949):
+	// writes the live proc-charge count directly, with no clamp and no
+	// removal — a 0 write stops the aura using charges, the
+	// m_isUsingCharges twin the charge gates derive. C++ takes uint8:
+	// truncate, the SetStackAmount value-width precedent.
+	methods["SetCharges"] = func(_ context.Context, args []any) ([]any, error) {
+		charges, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if r.server != nil && r.player == nil {
+			r.server.auraMu.Lock()
+			defer r.server.auraMu.Unlock()
+			aura := r.server.activeCreatureAuras[r.creatureKey][r.spellID]
+			if aura == nil {
+				return nil, nil
+			}
+			aura.RemainingCharges = uint8(charges)
+			return nil, nil
+		}
+		aura := r.resolve()
+		if aura == nil {
+			return nil, nil
+		}
+		aura.RemainingCharges = uint8(charges)
+		return nil, nil
+	}
+	// ModCharges(num[, mode]) is Aura::ModCharges
+	// (SpellAuras.cpp:964-985), returning whether the aura was
+	// removed; DropCharge([mode]) is Aura::DropCharge
+	// (SpellAuras.h:159), ModCharges(-1, mode) — the one-charge drop
+	// a proc handler calls when its latch is spent, e.g. the
+	// lightwell_renew arm (spell_priest.cpp:824-827) dropping with
+	// AURA_REMOVE_BY_ENEMY_SPELL (3). Mode defaults to
+	// AURA_REMOVE_BY_DEFAULT (1); 0-5 validated like Remove.
+	methods["ModCharges"] = func(_ context.Context, args []any) ([]any, error) {
+		num, err := luaInt64Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		mode, err := auraRemoveModeArg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		return []any{r.modAuraCharges(int32(num), mode)}, nil
+	}
+	methods["DropCharge"] = func(_ context.Context, args []any) ([]any, error) {
+		mode, err := auraRemoveModeArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{r.modAuraCharges(-1, mode)}, nil
+	}
+	// GetScriptValue(key) / SetScriptValue(key, value) are the
+	// per-aura script store: the Go twin of the member variables
+	// AuraScripts keep per aura instance (e.g.
+	// spell_pri_lightwell_renew's _remainingAmount,
+	// spell_priest.cpp:841). A fresh application starts empty; a
+	// merge/refresh keeps the stored values (the OnApply fresh-only
+	// delta). An unset key reads 0; writes to a removed aura land on
+	// the detached snapshot and are inert (the file-header
+	// convention).
+	methods["GetScriptValue"] = func(_ context.Context, args []any) ([]any, error) {
+		key, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		aura := r.resolve()
+		if aura == nil || aura.ScriptValues == nil {
+			return []any{int64(0)}, nil
+		}
+		return []any{aura.ScriptValues[key]}, nil
+	}
+	methods["SetScriptValue"] = func(_ context.Context, args []any) ([]any, error) {
+		key, err := luaStringArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		value, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if r.server != nil && r.player == nil {
+			r.server.auraMu.Lock()
+			defer r.server.auraMu.Unlock()
+			aura := r.server.activeCreatureAuras[r.creatureKey][r.spellID]
+			if aura == nil {
+				return nil, nil
+			}
+			if aura.ScriptValues == nil {
+				aura.ScriptValues = make(map[string]int64)
+			}
+			aura.ScriptValues[key] = value
+			return nil, nil
+		}
+		aura := r.resolve()
+		if aura == nil {
+			return nil, nil
+		}
+		if aura.ScriptValues == nil {
+			aura.ScriptValues = make(map[string]int64)
+		}
+		aura.ScriptValues[key] = value
 		return nil, nil
 	}
 	// SetAmount(amount[, effectIndex]) is AuraEffect::SetAmount: writes

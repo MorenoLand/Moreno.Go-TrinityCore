@@ -33761,6 +33761,13 @@ type activeAura struct {
 	// Backstab triggered spell (63975) has added to this Rupture aura,
 	// capped at 6000 over its base max duration.
 	RuptureBonusDurationMs uint32
+	// ScriptValues is the per-aura script store (lua_aura.go
+	// GetScriptValue/SetScriptValue): the Go twin of the member
+	// variables AuraScripts keep per aura instance (e.g.
+	// spell_pri_lightwell_renew's _remainingAmount,
+	// spell_priest.cpp:841), keyed by name. A fresh application
+	// starts empty; a merge/refresh keeps the stored values.
+	ScriptValues map[string]int64
 }
 
 func isHarmfulAura(auraType uint32) bool {

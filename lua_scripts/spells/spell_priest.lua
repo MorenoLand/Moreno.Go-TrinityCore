@@ -90,6 +90,58 @@ end
 
 RegisterAuraEvent(SPELL_PRIEST_IMP_SHADOWFORM, 6, impShadowformProc)
 
+local SPELL_PRIEST_LIGHTWELL_RENEW = 7001 -- spell_priest.cpp:788 (class spell_pri_lightwell_renew)
+local SPELL_PRIEST_GLYPH_OF_LIGHTWELL = 55673 -- spell_priest.cpp:43
+local AURA_REMOVE_BY_ENEMY_SPELL = 3 -- SpellAuraDefines.h:61-69
+local LIGHTWELL_REMAINING = "remainingAmount"
+
+-- C++ spell_pri_lightwell_renew_AuraScript::InitializeAmount
+-- (spell_priest.cpp:805-808): AfterEffectApply, EFFECT_0
+-- PERIODIC_HEAL — attacks equalling 30% of the target's total health
+-- cancel the effect, so the latch starts at CountPctFromMaxHealth(30)
+-- (CalculatePct float-truncate, the renewApply math.floor twin).
+-- DELTA: C++ registers REAL_OR_REAPPLY, so a refresh resets the
+-- latch; the Go OnApply hook is fresh-only (the renewApply note), so
+-- a reapply keeps the old remaining amount.
+local function lightwellRenewApply(event, aura, target)
+    if target == nil then
+        return
+    end
+    aura:SetScriptValue(LIGHTWELL_REMAINING, math.floor(target:GetMaxHealth() * 30 / 100))
+end
+
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW, 2, lightwellRenewApply)
+
+-- C++ spell_pri_lightwell_renew_AuraScript::HandleProc
+-- (spell_priest.cpp:810-826): OnEffectProc, EFFECT_0 PERIODIC_HEAL —
+-- no DamageInfo (a zero-damage event here, the fireAuraProc proxy)
+-- returns; damage at or above the latch drops one charge with
+-- AURA_REMOVE_BY_ENEMY_SPELL, else the latch falls by the damage.
+-- No PreventDefaultAction in C++, so no true return: the EFFECT_0
+-- default leg is a no-op (TriggerSpell 0). DORMANT on two gates:
+-- (1) 7001 needs an explicit spell_proc DB row — PERIODIC_HEAL is
+-- not a trigger aura (SpellMgr.cpp:1686 isTriggerAura), so
+-- LoadSpellProcs generates no entry for it and Go loads no
+-- spell_proc table (spells.go calcAuraMaxChargesFor note);
+-- (2) even with the row, serverSpellProcEntryFor builds generated
+-- entries only, so it would need a DB-row-first lookup before the
+-- ev6 loops can fire this handler. The CalculateAmount glyph arm
+-- (:797-804, AddPct by the 55673 aura's EFFECT_0 amount) stays out:
+-- no DoEffectCalcAmount fire site at the apply paths.
+local function lightwellRenewProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 then
+        return
+    end
+    local remaining = aura:GetScriptValue(LIGHTWELL_REMAINING)
+    if remaining <= damage then
+        aura:DropCharge(AURA_REMOVE_BY_ENEMY_SPELL)
+        return
+    end
+    aura:SetScriptValue(LIGHTWELL_REMAINING, remaining - damage)
+end
+
+RegisterAuraEvent(SPELL_PRIEST_LIGHTWELL_RENEW, 6, lightwellRenewProc)
+
 local SPELL_PRIEST_POWER_WORD_SHIELD = 17 -- spell_priest.cpp:1064 (class spell_pri_power_word_shield)
 local SPELL_PRIEST_WEAKENED_SOUL = 6788 -- PW:S ExcludeTargetAuraSpell (Unit.cpp:7272 Renewed Hope HasAura gate; spell_stats.go:1563 twin)
 
@@ -224,9 +276,15 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   666 improved_spirit_tap (15337, :632-676): PORTED this tick (ev6,
 --   above): rank of SW:D 32379 / Mind Blast 8092 passes via the new
 --   procEvent:IsRankOf bridge, Mind Flay 58381 at 50%, all else vetoes.
---   667 lightwell_renew (7001, :788-846): CalculateAmount glyph bonus
---   (55673) unbridged; HandleProc DropCharge unbridged (no aura charge
---   bridge); the per-aura _remainingAmount latch has no per-aura key.
+--   667 lightwell_renew (7001, :788-846): PORTED this tick (ev2
+--   InitializeAmount latch + ev6 HandleProc DropCharge, above):
+--   the DropCharge/ModCharges bridge + per-aura ScriptValues latch
+--   landed in lua_aura.go (GetCharges/SetCharges/ModCharges/
+--   DropCharge + GetScriptValue/SetScriptValue). DORMANT: 7001 needs
+--   an explicit spell_proc DB row (PERIODIC_HEAL is no trigger aura)
+--   and a DB-row-first proc-entry lookup in Go. The CalculateAmount
+--   glyph-bonus arm (55673) stays out: no DoEffectCalcAmount fire
+--   site at the apply paths.
 --   668 mind_sear (49821, :889-915): SpellScript target filter (drop
 --   the channel object from the area list); no bridge.
 --   669 pain_and_suffering_dummy (47580, :916-942): DoCheckEffectProc
