@@ -21813,8 +21813,8 @@ func init() {
 	// partial + UNBALANCING_STRIKE / CHAIN_LIGHTNING + EVENT_BERSERK
 	// (timer + DoAction receiver, tick 478) are ported on the
 	// thorimPhase latch. Still bridge-blocked — documented in
-	// the lua header: SAY_SIF_START / START_SIF_CHANNEL,
-	// SUMMON_ADDS, ACTIVATE_LIGHTNING_FIELD, START_PERIODIC_CHARGE,
+	// the lua header: SUMMON_ADDS, ACTIVATE_LIGHTNING_FIELD,
+	// START_PERIODIC_CHARGE,
 	// LIGHTNING_CHARGE, JUMPDOWN MoveJump, the berserk sender
 	// (EnterEvadeMode, no EvadeReason in Go ev2), cross-creature
 	// Talk(SAY_SIF_DESPAWN 1) in the pre-phase SpellHit leg,
@@ -21825,12 +21825,13 @@ func init() {
 	// detonation / fortification one-shot) defer 500ms on
 	// creature:IsCasting(), no repeat re-arm — colossus
 	// pre-loop :1456 + in-loop :1488, giant pre-loop :1552 +
-	// in-loop :1576. Boss-thorim gates (:690/:814), trash
-	// gates (:1107/:1114) and sif gates (:1640/:1673) cover
-	// unported arms only; the ported boss timer ticks (tick 478:
+	// in-loop :1576. Boss-thorim gates (:690/:814) and trash
+	// gates (:1107/:1114) cover unported arms only; the ported
+	// boss timer ticks (tick 478:
 	// stormhammer / charge-orb / unbalancing-strike / chain-lightning /
 	// berserk) carry the same 500ms defer.
 	RegisterLuaBoss("boss_thorim", 32865)
+	RegisterLuaBoss("boss_thorim", 33196)
 
 	// boss_yogg_saron.lua (lua_scripts/northrend/boss_yogg_saron.lua):
 	// 33134 Sara + 33288 Yogg-Saron (boss_sara / boss_yogg_saron —

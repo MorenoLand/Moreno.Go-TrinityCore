@@ -85,13 +85,19 @@
 -- (SetControlled ROOT twin) + UNBALANCING_STRIKE (62130 DoCastVictim,
 -- 15s, Repeat {15s,20s}) + CHAIN_LIGHTNING (62131 random player 100y,
 -- 20s, Repeat {7s,15s}); MoveJump leg stays out (no bridge).
+-- npc_sifAI DoAction(ACTION_START_HARD_MODE 4) PORTED this tick
+-- (sifDoAction, ev38; sender thorimJumpdownTick hard-mode leg):
+-- SetReactState AGGRESSIVE + DoZoneInCombat + Talk(SAY_SIF_EVENT 2) +
+-- FROSTBOLT 2s / FROSTBOLT_VOLLEY 15s Repeat {15s,20s} / BLINK {20s,25s}
+-- + FROST_NOVA 0s / BLIZZARD 30s Repeat {35s,45s}; SpellHit (64767 ->
+-- InterruptSpell + REACT_PASSIVE + AttackStop) PORTED (sifSpellHit,
+-- ev14; DORMANT until the hard-mode outro cast lands 64767).
+-- SetCombatMovement(false) ctor leg rides thorimJustSummoned.
+-- boss_thorimAI EVENT_SAY_SIF_START (16.5s) + EVENT_START_SIF_CHANNEL
+-- (22.5s) PORTED this tick (phase-1-gated ticks): Sif Talk(0) + Sif
+-- casts SPELL_TOUCH_OF_DOMINION 62507 on Thorim.
 --
 -- DOCUMENTED-ONLY (no bridge; not registered):
--- boss_thorimAI EVENT_SAY_SIF_START (lines 700-702) / EVENT_START_SIF_CHANNEL
--- (lines 703-705) — cross-creature sif Talk / cast; no cross-creature bridge.
--- (The phase-1 arms around them — SAY_AGGRO_2 / STORMHAMMER / CHARGE_ORB /
--- BERSERK — are PORTED 2026-11-08, tick 478, on the thorimPhase latch; the
--- gothik stay-out is retired where the phase IS modeled.)
 -- boss_thorimAI EVENT_SUMMON_ADDS (lines 716-718) — SummonWave() summon leg.
 -- The SummonWave summon-time SetReactState arms ride the same unported
 -- leg: JustSummoned -> summon->SetReactState(REACT_PASSIVE) (lines 651
@@ -129,8 +135,10 @@
 -- despawn): stale "no SpellHit bridge" retracted (2026-10-21) — ev14
 -- CreatureEventOnHitBySpell is bridged; the _hardMode = false latch leg
 -- is PORTED 2026-11-08 (tick 417, thorimSpellHit below; LATENT — Sif is
--- unregistered and EVENT_START_SIF_CHANNEL is unported, so 62565 never
--- lands yet; the Go gate stays HELD). The Sif Talk(SAY_SIF_DESPAWN) /
+-- registered and EVENT_START_SIF_CHANNEL is ported this tick, so the
+-- 62565 landing now rides Go's aura modeling of the 62507 channel
+-- (DORMANT until Spell.dbc ships the records); the Go gate stays
+-- HELD). The Sif Talk(SAY_SIF_DESPAWN) /
 -- DespawnOrUnsummon cross-creature relay in the same arm is PORTED
 -- 2026-11-09 (thorimSpellHit below; BPC cross-creature Talk +
 -- freya DespawnOrUnsummon precedents).
@@ -151,8 +159,10 @@
 -- PORTED in colossusDied below (500yd FindNearestCreature sweeps, 60yd
 -- grid sweep for the giant's honor-guard/acolyte summons).
 -- npc_sifAI (entry 33196) — all events gated by DoAction(ACTION_START_HARD_MODE);
--- ev38 IS bridged (tick 206) but the sender is EVENT_JUMPDOWN, unported
--- (MoveJump leg has no bridge); not registered.
+-- PORTED this tick (sifDoAction, ev38; sender thorimJumpdownTick hard-mode
+-- leg — the "EVENT_JUMPDOWN unported" claim was stale, the tick landed
+-- tick 478 and only its MoveJump leg stays out). SpellHit (64767) + the
+-- phase-1 Sif channel events ride the same tick.
 -- npc_thorim_pre_phaseAI / npc_thorim_arena_phaseAI — per-entry trash-ability
 -- tables (separate trash creature entries, not the boss file scope); the
 -- DARK_RUNE_WARBRINGER AURA_OF_CELERITY engage arm is ported (see PORTED
@@ -194,6 +204,7 @@ local ENTRY_DARK_RUNE_ACOLYTE = 33110 -- ulduar.h:187
 local ACTION_INCREASE_PREADDS_COUNT = 0 -- boss_thorim.cpp:268
 local ACTION_ACTIVATE_RUNIC_SMASH = 1 -- boss_thorim.cpp:269
 local ACTION_BERSERK = 5 -- boss_thorim.cpp:273
+local ACTION_START_HARD_MODE = 4 -- boss_thorim.cpp:272
 local SPELL_LIGHTNING_DESTRUCTION = 62393 -- boss_thorim.cpp:45
 
 local SAY_AGGRO_1 = 0
@@ -205,6 +216,8 @@ local SAY_BERSERK = 5 -- boss_thorim.cpp:149
 local SAY_WIPE = 6 -- boss_thorim.cpp:150
 local SAY_DEATH = 7
 local SAY_SIF_DESPAWN = 1 -- Sif text ids (boss_thorim.cpp:166-168): SAY_SIF_START 0, SAY_SIF_DESPAWN 1, SAY_SIF_EVENT 2
+local SAY_SIF_START = 0 -- boss_thorim.cpp:166
+local SAY_SIF_EVENT = 2 -- boss_thorim.cpp:168
 
 local SPELL_CREDIT_KILL = 64985
 local FACTION_FRIENDLY = 35
@@ -217,6 +230,11 @@ local SPELL_DEAFENING_THUNDER = 62470 -- boss_thorim.cpp:42
 local SPELL_SIF_TRANSFORM = 64778 -- boss_thorim.cpp:73
 local SPELL_FROSTBOLT_VOLLEY = 62580 -- boss_thorim.cpp:70
 local SPELL_FROSTBOLT_VOLLEY_HEROIC = 62604 -- boss_thorim.cpp:1733
+local SPELL_FROSTBOLT = 62583 -- boss_thorim.cpp:71
+local SPELL_BLINK = 62578 -- boss_thorim.cpp:69
+local SPELL_BLIZZARD = 62577 -- boss_thorim.cpp:68
+local SPELL_FROSTNOVA = 62597 -- boss_thorim.cpp:72
+local SPELL_TOUCH_OF_DOMINION = 62507 -- boss_thorim.cpp:46
 local THORIM_WEAPON_DISPLAY_ID = 45900 -- boss_thorim.cpp:323
 local SPELL_CHARGE_ORB = 62016 -- boss_thorim.cpp:43
 local SPELL_UNBALANCING_STRIKE = 62130 -- boss_thorim.cpp:54
@@ -326,6 +344,31 @@ local function thorimSayAggro2Tick(creature, guid)
     creature:Talk(SAY_AGGRO_2)
 end
 
+-- C++ EVENT_SAY_SIF_START (boss_thorim.cpp:700-702): Sif Talk(SAY_SIF_START 0),
+-- 16.5s init, PHASE_1 group. Phase-gated like the other phase-1 ticks.
+local function thorimSaySifStartTick(creature, guid)
+    if thorimPhase[guid] ~= 1 then
+        return
+    end
+    local sif = creature:FindNearestCreature(ENTRY_SIF, 200)
+    if sif then
+        sif:Talk(SAY_SIF_START)
+    end
+end
+
+-- C++ EVENT_START_SIF_CHANNEL (boss_thorim.cpp:703-705): Sif casts
+-- SPELL_TOUCH_OF_DOMINION 62507 on Thorim (non-triggered), 22.5s init,
+-- PHASE_1 group. Phase-gated like the other phase-1 ticks.
+local function thorimStartSifChannelTick(creature, guid)
+    if thorimPhase[guid] ~= 1 then
+        return
+    end
+    local sif = creature:FindNearestCreature(ENTRY_SIF, 200)
+    if sif then
+        sif:CastSpell(creature, SPELL_TOUCH_OF_DOMINION)
+    end
+end
+
 -- C++ EVENT_STORMHAMMER (boss_thorim.cpp:708-710): DoCast(SPELL_STORMHAMMER
 -- 62042) = DoCastVictim, non-triggered, 40s init, Repeat(15s, 20s), PHASE_1.
 local function thorimStormhammerTick(creature, guid)
@@ -391,14 +434,24 @@ end
 local thorimUnbalancingStrikeTick, thorimChainLightningTick
 
 -- C++ EVENT_JUMPDOWN (boss_thorim.cpp:720-732): 8s after the DamageTaken
--- transition. PORTED legs in C++ order: hard-mode Sif DoAction stays out
--- (Sif unregistered); RemoveAurasDueToSpell(SPELL_SHEATH_OF_LIGHTNING);
+-- transition. PORTED legs in C++ order: hard-mode Sif DoAction
+-- (ACTION_START_HARD_MODE — sifDoAction, ev38, PORTED this tick; Sif
+-- registered in boss_ai.go); RemoveAurasDueToSpell(SPELL_SHEATH_OF_LIGHTNING);
 -- SetReactState(REACT_AGGRESSIVE); SetDisableGravity(false);
 -- SetControlled(false, UNIT_STATE_ROOT) — the SetRooted(false) twin
 -- (thorimReset uses SetRooted(true) for the same leg); MoveJump stays out
 -- (no bridge — deviation: the boss stays on the balcony, but the combat
 -- arms below still land); then the PHASE_2 schedules.
 local function thorimJumpdownTick(creature, guid)
+    -- C++ EVENT_JUMPDOWN hard-mode leg (:722-723): Sif DoAction
+    -- (ACTION_START_HARD_MODE) — the _hardMode read is the same
+    -- DATA_LOSE_YOUR_ILLUSION latch the DamageTaken arm reads.
+    if creature:GetData(DATA_LOSE_YOUR_ILLUSION) == 1 then
+        local sif = creature:FindNearestCreature(ENTRY_SIF, 200)
+        if sif then
+            sif:DoAction(ACTION_START_HARD_MODE)
+        end
+    end
     creature:RemoveAura(SPELL_SHEATH_OF_LIGHTNING)
     creature:SetReactState(2) -- REACT_AGGRESSIVE
     creature:SetDisableGravity(false)
@@ -472,6 +525,12 @@ local function thorimEnterCombat(event, creature, target)
     thorimOrbSummoned[guid] = false
     schedule(guid, "sayAggro2", 9000, function()
         thorimSayAggro2Tick(creature, guid)
+    end)
+    schedule(guid, "saySifStart", 16500, function()
+        thorimSaySifStartTick(creature, guid)
+    end)
+    schedule(guid, "startSifChannel", 22500, function()
+        thorimStartSifChannelTick(creature, guid)
     end)
     schedule(guid, "stormhammer", 40000, function()
         thorimStormhammerTick(creature, guid)
@@ -973,7 +1032,9 @@ local function thorimJustSummoned(_, creature, summoned)
         -- C++ JustSummoned NPC_SIF (:673-675): bare SetReactState
         -- (REACT_PASSIVE) — unlike the dark-rune trash, Sif gets no
         -- TrashJumpEvent, so this leg is complete on its own.
+        -- C++ npc_sifAI ctor (:1597-1600): SetCombatMovement(false).
         summoned:SetReactState(0) -- REACT_PASSIVE
+        summoned:SetCombatMovement(false)
     end
 end
 
@@ -1015,6 +1076,146 @@ local function thorimSpellHitTarget(event, creature, target, spellId)
         creature:SetData(DATA_DONT_STAND_IN_THE_LIGHTNING, 0)
     end
 end
+
+-- C++ npc_sifAI::DoAction(ACTION_START_HARD_MODE) (boss_thorim.cpp:1618-1624):
+-- SetReactState(REACT_AGGRESSIVE) + DoZoneInCombat + Talk(SAY_SIF_EVENT 2) +
+-- _events.Reset() + EVENT_FROSTBOLT 2s / EVENT_FROSTBOLT_VOLLEY 15s /
+-- EVENT_BLINK 20-25s / EVENT_BLIZZARD 30s. Sender is Thorim EVENT_JUMPDOWN
+-- (:723, hard-mode-gated) — the send rides thorimJumpdownTick above.
+-- Sif UpdateAI (:1636-1675) gates the whole machine on UpdateVictim(); the
+-- ticks below twin that with a GetAITargets() non-empty check (500ms poll,
+-- events stay pending) — plus the 500ms IsCasting defer the other Ulduar
+-- ticks carry (tick 478 precedent).
+local function sifFrostboltTick(creature, guid)
+    if #creature:GetAITargets() == 0 or creature:IsCasting() then
+        schedule(guid, "sifFrostbolt", 500, function()
+            sifFrostboltTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomPlayerInRange(creature, 0, 100)
+    if target then
+        creature:CastSpell(target, SPELL_FROSTBOLT)
+    end
+    schedule(guid, "sifFrostbolt", 2000, function()
+        sifFrostboltTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FROSTBOLT_VOLLEY (:1663-1664): DoCastAOE(SPELL_FROSTBOLT_VOLLEY
+-- 62580), Repeat(15s, 20s). The 62604 25-man twin rides the spell-script
+-- filter below (frostboltVolleyFilter); the cast itself is the C++ id.
+local function sifFrostboltVolleyTick(creature, guid)
+    if #creature:GetAITargets() == 0 or creature:IsCasting() then
+        schedule(guid, "sifFrostboltVolley", 500, function()
+            sifFrostboltVolleyTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_FROSTBOLT_VOLLEY)
+    schedule(guid, "sifFrostboltVolley", {15000, 20000}, function()
+        sifFrostboltVolleyTick(creature, guid)
+    end)
+end
+
+-- Forward declare: sifBlinkTick schedules sifFrostNovaTick, defined below;
+-- a bare `local function` there would shadow this slot (malown precedent).
+local sifFrostNovaTick
+
+-- C++ EVENT_BLINK (:1650-1656): random player 100y DoCast(SPELL_BLINK 62578),
+-- ScheduleEvent(EVENT_FROST_NOVA, 0s), Repeat(20s, 25s). The 0s nova leg
+-- rides a 1ms schedule (next-tick twin).
+local function sifBlinkTick(creature, guid)
+    if #creature:GetAITargets() == 0 or creature:IsCasting() then
+        schedule(guid, "sifBlink", 500, function()
+            sifBlinkTick(creature, guid)
+        end)
+        return
+    end
+    local target = randomPlayerInRange(creature, 0, 100)
+    if target then
+        creature:CastSpell(target, SPELL_BLINK)
+    end
+    schedule(guid, "sifFrostNova", 1, function()
+        sifFrostNovaTick(creature, guid)
+    end)
+    schedule(guid, "sifBlink", {20000, 25000}, function()
+        sifBlinkTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_FROST_NOVA (:1657-1659): DoCastAOE(SPELL_FROSTNOVA 62597), one-shot.
+sifFrostNovaTick = function(creature, guid)
+    if #creature:GetAITargets() == 0 or creature:IsCasting() then
+        schedule(guid, "sifFrostNova", 500, function()
+            sifFrostNovaTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_FROSTNOVA)
+end
+
+-- C++ EVENT_BLIZZARD (:1665-1666): DoCastAOE(SPELL_BLIZZARD 62577), Repeat(35s, 45s).
+local function sifBlizzardTick(creature, guid)
+    if #creature:GetAITargets() == 0 or creature:IsCasting() then
+        schedule(guid, "sifBlizzard", 500, function()
+            sifBlizzardTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_BLIZZARD)
+    schedule(guid, "sifBlizzard", {35000, 45000}, function()
+        sifBlizzardTick(creature, guid)
+    end)
+end
+
+local function sifDoAction(event, creature, action)
+    if action ~= ACTION_START_HARD_MODE then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    creature:DoZoneInCombat()
+    creature:Talk(SAY_SIF_EVENT)
+    cancelTimers(guid)
+    schedule(guid, "sifFrostbolt", 2000, function()
+        sifFrostboltTick(creature, guid)
+    end)
+    schedule(guid, "sifFrostboltVolley", 15000, function()
+        sifFrostboltVolleyTick(creature, guid)
+    end)
+    schedule(guid, "sifBlink", {20000, 25000}, function()
+        sifBlinkTick(creature, guid)
+    end)
+    schedule(guid, "sifBlizzard", 30000, function()
+        sifBlizzardTick(creature, guid)
+    end)
+end
+
+-- C++ npc_sifAI::SpellHit (boss_thorim.cpp:1605-1614): on SPELL_STORMHAMMER_SIF
+-- 64767 — InterruptSpell(CURRENT_GENERIC_SPELL) + SetReactState(REACT_PASSIVE)
+-- + AttackStop. DORMANT: the 64767 cast rides the unported hard-mode outro,
+-- so the arm never fires yet (stormhammerSifHit precedent above).
+local function sifSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_STORMHAMMER_SIF then
+        return
+    end
+    creature:InterruptSpell(1) -- CURRENT_GENERIC_SPELL (renataki precedent)
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:AttackStop()
+end
+
+-- C++ npc_sifAI::Reset (:1602-1604): _events.Reset() — the cancelTimers twin;
+-- ev2/ev4 ride the same wipe (leave-combat / death cancels the pumps).
+local function sifCancelTimers(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+RegisterCreatureEvent(ENTRY_SIF, 2, sifCancelTimers)
+RegisterCreatureEvent(ENTRY_SIF, 4, sifCancelTimers)
+RegisterCreatureEvent(ENTRY_SIF, 14, sifSpellHit)
+RegisterCreatureEvent(ENTRY_SIF, 23, sifCancelTimers)
+RegisterCreatureEvent(ENTRY_SIF, 38, sifDoAction)
 
 RegisterCreatureEvent(ENTRY_THORIM, 1, thorimEnterCombat)
 RegisterCreatureEvent(ENTRY_THORIM, 2, thorimLeaveCombat)
