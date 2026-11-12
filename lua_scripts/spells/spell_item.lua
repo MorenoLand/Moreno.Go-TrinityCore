@@ -777,3 +777,59 @@ local function universalRemoteHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_GNOMISH_UNIVERSAL_REMOTE, 5, universalRemoteHit)
+
+-- PORTED (this tick, RegisterAuraEvent OnProc = 6):
+--   spell_item_harm_prevention_belt::HandleProc (spell_item.cpp:1075-1078):
+--   whole-aura OnProc (AuraProcFn, no effect binding). No
+--   PreventDefaultAction in C++ — the proc effect is a dummy, so the
+--   default leg is a no-op and the handler returns nothing. The aura
+--   target self-casts Forcefield Collapse 13235, triggered.
+--   DORMANT until Spell.dbc ships the 13234 proc entry.
+local SPELL_HARM_PREVENTION_BELT = 13234 -- spell_item.cpp:1066 (class spell_item_harm_prevention_belt)
+local SPELL_FORCEFIELD_COLLAPSE = 13235 -- spell_item.cpp:1063
+
+local function harmPreventionBeltProc(event, aura, target)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_FORCEFIELD_COLLAPSE, true)
+end
+
+RegisterAuraEvent(SPELL_HARM_PREVENTION_BELT, 6, harmPreventionBeltProc)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_dimensional_ripper_everlook::HandleScript (spell_item.cpp:1794-1807):
+--   EFFECT_0 TELEPORT_UNITS. C++ Load gate (caster is a player) rides
+--   GetTypeId (teach-language precedent in this file). irand(0, 119):
+--   <=70 the default teleport proceeds; <100 the caster self-casts
+--   Evil Twin 23445, triggered; else Transporter Malfunction (Fire)
+--   23449, triggered. No PreventHitDefaultEffect in C++ — the
+--   teleport fires on the malfunction paths too, matching the
+--   ultrasafe/area52 transporter siblings (spell_item.cpp:1838-1877,
+--   1893+). The ev5 fire site covers the player path
+--   (spells.go:14735).
+--   DORMANT until Spell.dbc ships the 23442 row.
+local SPELL_DIMENSIONAL_RIPPER_EVERLOOK = 23442 -- spell_item.cpp:1780 (class spell_item_dimensional_ripper_everlook)
+local SPELL_EVIL_TWIN = 23445 -- spell_item.cpp:1768
+local SPELL_TRANSPORTER_MALFUNCTION_FIRE = 23449 -- spell_item.cpp:1769
+
+local function dimensionalRipperEverlookHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local r = math.random(0, 119)
+    if r <= 70 then
+        return
+    end
+    if r < 100 then
+        caster:CastSpell(caster, SPELL_EVIL_TWIN, true)
+    else
+        caster:CastSpell(caster, SPELL_TRANSPORTER_MALFUNCTION_FIRE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_DIMENSIONAL_RIPPER_EVERLOOK, 5, dimensionalRipperEverlookHit)

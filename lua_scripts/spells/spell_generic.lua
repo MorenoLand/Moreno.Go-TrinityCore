@@ -576,3 +576,79 @@ end
 for _, spellId in ipairs(SPELL_GEN_CHAINS_OF_ICE) do
     RegisterAuraEvent(spellId, 1, chainsOfIceTick)
 end
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_gen_nitrous_boost::PeriodicTick (spell_generic.cpp:2456-2464):
+--   EFFECT_1 PERIODIC_TRIGGER_SPELL. PreventDefaultAction (return
+--   true); if the aura still has a caster and the target holds >= 10
+--   mana, drain 10 mana, else the aura removes itself. The mana read
+--   rides GetPower(POWER_MANA) (player surface, lua_player.go:1340;
+--   the creature fallback reads the current-power field) and the
+--   drain rides ModifyPower(-10, POWER_MANA).
+--   DORMANT until Spell.dbc ships the 27746 periodic entry.
+local SPELL_GEN_NITROUS_BOOST = 27746 -- spell_generic.cpp:2451 (class spell_gen_nitrous_boost)
+
+local function nitrousBoostTick(event, aura, target)
+    if target == nil then
+        return true
+    end
+    if aura:GetCaster() ~= nil and target:GetPower(POWER_MANA) >= 10 then
+        target:ModifyPower(-10, POWER_MANA)
+    else
+        aura:Remove()
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_GEN_NITROUS_BOOST, 1, nitrousBoostTick)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_orc_disguise::HandleScript (spell_generic.cpp:2621-2631):
+--   EFFECT_0 SCRIPT_EFFECT. On a player hit target the caster casts
+--   the gendered disguise on the target, triggered: male 45760,
+--   female 45762 (GetNativeGender; GENDER_MALE = 0, SharedDefines.h:76).
+--   The player gate rides GetTypeId (TYPEID_PLAYER local in this file);
+--   ev5 fires on the player path (spells.go:14735).
+--   DORMANT until Spell.dbc ships the 45759 row.
+local SPELL_GEN_ORC_DISGUISE = 45759 -- spell_generic.cpp:2605 (class spell_gen_orc_disguise)
+local SPELL_ORC_DISGUISE_MALE = 45760 -- spell_generic.cpp:2600
+local SPELL_ORC_DISGUISE_FEMALE = 45762 -- spell_generic.cpp:2601
+
+local function orcDisguiseHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if hitTarget:GetNativeGender() == GENDER_MALE then
+        caster:CastSpell(hitTarget, SPELL_ORC_DISGUISE_MALE, true)
+    else
+        caster:CastSpell(hitTarget, SPELL_ORC_DISGUISE_FEMALE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_GEN_ORC_DISGUISE, 5, orcDisguiseHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_cannon_blast::HandleScript (spell_generic.cpp:4331-4338):
+--   EFFECT_0 SCRIPT_EFFECT. bp is the effect-0 CalcValue
+--   (spell:GetEffectValue(0)); the hit unit self-casts Cannon Blast
+--   Damage 42576, triggered, with BP0 = bp (CastCustomSpell 4-arg
+--   form, savage-defense precedent in spell_druid.lua).
+--   DORMANT until Spell.dbc ships the 42578 row.
+local SPELL_GEN_CANNON_BLAST = 42578 -- spell_generic.cpp:4321 (class spell_gen_cannon_blast)
+local SPELL_CANNON_BLAST_DAMAGE = 42576 -- spell_generic.cpp:4318
+
+local function cannonBlastHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastCustomSpell(hitTarget, SPELL_CANNON_BLAST_DAMAGE, true, spell:GetEffectValue(0))
+end
+
+RegisterSpellEvent(SPELL_GEN_CANNON_BLAST, 5, cannonBlastHit)
