@@ -10,7 +10,9 @@
 -- "npc_anachronos_quest_trigger", "npc_anachronos_the_ancient",
 -- "npc_qiraj_war_spawn", "go_wind_stone",
 -- "spell_silithus_summon_cultist_periodic") hits only
--- zone_silithus.cpp (sole-source verified); zero sql/ hits.
+-- zone_silithus.cpp (sole-source verified); zero sql/ hits except
+-- go_wind_stone, which has 12 TDB 26091 gameobject_template rows and
+-- is ported in zone_silithus.lua (2026-11-12).
 -- Entries: zone_silithus.cpp enum AnachronosTheAncient names
 -- NPC_QIRAJI_WASP = 15414, NPC_QIRAJI_TANK = 15422,
 -- NPC_KALDOREI_INFANTRY = 15423, NPC_ANUBISATH_CONQUEROR = 15424 —
