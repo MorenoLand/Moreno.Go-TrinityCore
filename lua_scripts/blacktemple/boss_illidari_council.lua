@@ -133,9 +133,11 @@
 -- Talk on finish), and aura scripts: balance_of_power (41341
 -- absorb -> 41342 shared rule), reflective_shield (41475 absorb ->
 -- 33619 reflect),
--- seal (41469/41459 remove -> the other seal). dampen_magic
--- (41478 remove-by-expire/enemy -> ACTION_REFRESH_DAMPEN DoAction)
--- is PORTED below (tick 213, RegisterAuraEvent OnRemove + ev38).
+-- dampen_magic (41478 remove-by-expire/enemy ->
+-- ACTION_REFRESH_DAMPEN DoAction) is PORTED below (tick 213,
+-- RegisterAuraEvent OnRemove + ev38). seal (41469/41459 remove ->
+-- the other seal) is PORTED below (this tick, RegisterAuraEvent
+-- OnRemove = 3).
 -- deadly_strike (41480 periodic -> 41485 deadly poison) is PORTED
 -- below (tick 190, RegisterAuraEvent). deadly_poison (41485 remove
 -- -> 41487 envenom + 41509 visual) and vanish (41476 remove ->
@@ -221,6 +223,7 @@ local SPELL_BLESS_SPELL_WARDING = 41451
 local SPELL_CONSECRATION = 41541
 local SPELL_HAMMER_OF_JUSTICE = 41468
 local SPELL_SEAL_OF_BLOOD = 41459
+local SPELL_SEAL_OF_COMMAND = 41469 -- boss_illidari_council.cpp:69
 local SPELL_CHROMATIC_AURA = 41453
 local SPELL_DEVOTION_AURA = 41452
 local SPELL_JUDGEMENT = 41467
@@ -1078,3 +1081,26 @@ local function dampenMagicRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_DAMPEN_MAGIC, 3, dampenMagicRemove)
+
+-- C++ spell_illidari_council_seal::OnRemove
+-- (boss_illidari_council.cpp:763-772): OnEffectRemove EFFECT_2 DUMMY,
+-- AURA_EFFECT_HANDLE_REAL — when either seal aura is removed and the
+-- target is in-world and alive, the target casts the OTHER seal
+-- triggered on itself (41469 remove -> 41459, 41459 remove -> 41469).
+-- The Go OnRemove hook fires once per removal (RegisterAuraEvent,
+-- AuraEventOnRemove = 3; dampen-magic precedent above); the aura
+-- object reads the removed record's snapshot. Delta: IsInWorld has
+-- no bridge — the dead-target gate (generic IsDead fallback,
+-- object.go) covers the live gameplay case, and a removal for an
+-- out-of-world unit never reaches the hook through the Go funnels.
+local function sealRemove(otherSeal)
+    return function(event, aura, target)
+        if target == nil or target:IsDead() then
+            return
+        end
+        target:CastSpell(target, otherSeal, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_SEAL_OF_BLOOD, 3, sealRemove(SPELL_SEAL_OF_COMMAND))
+RegisterAuraEvent(SPELL_SEAL_OF_COMMAND, 3, sealRemove(SPELL_SEAL_OF_BLOOD))
