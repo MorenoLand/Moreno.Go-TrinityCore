@@ -82,26 +82,27 @@
 -- unmodeled (its trigger rides the unregistered bunny phase
 -- machine); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript
 -- bridge, and only one AuraScript bridge (RegisterAuraEvent,
--- AuraEventOnPeriodic = 1) — eight of the nine script classes
+-- AuraEventOnPeriodic = 1) — six of the nine script classes
 -- in this file
--- (spell_ahune_synch_health, spell_summoning_rhyme_aura,
--- spell_summon_ice_spear_delayer, spell_ice_spear_target_picker,
+-- (spell_ahune_synch_health, spell_ice_spear_target_picker,
 -- spell_slippery_floor_periodic, spell_ahune_spanky_hands,
 -- spell_ahune_minion_despawner, spell_ice_bombardment_dest_picker)
 -- are documented only; spell_ice_spear_control_aura is PORTED
--- tick 189 below (RegisterAuraEvent 46371, iceSpearControlTick)
--- and its delayer sibling spell_summon_ice_spear_delayer is PORTED
+-- tick 189 below (RegisterAuraEvent 46371, iceSpearControlTick),
+-- its delayer sibling spell_summon_ice_spear_delayer is PORTED
 -- tick 191 below (RegisterAuraEvent 46878, iceSpearDelayerTick,
--- aura:GetTickNumber bridge); npc_earthen_ring_flamecaller (25754) is
+-- aura:GetTickNumber bridge), and spell_summoning_rhyme_aura is
+-- PORTED below (RegisterAuraEvent 45926, summoningRhymeTick);
+-- npc_earthen_ring_flamecaller (25754) is
 -- PORTED 2026-11-10 (npc_earthen_ring_flamecaller.lua: MovementInform
 -- + SpellHit + DoAction + look-for-opening chain; its bunny-side
 -- triggers stay unregistered); go_ahune_ice_stone (187882) is a
 -- GameObjectScript — RegisterGameObjectEvent exists, but the stone's
 -- select body stays blocked (bunny DoAction + instance lookup);
--- SAY_PLAYER_TEXT_1/2/3 (0/1/2), EMOTE_EARTHEN_ASSAULT 0,
--- EMOTE_RETREAT 0, EMOTE_RESURFACE 1 and the Events/Actions/
--- Phases/Points/Misc enums are referenced only by the
--- unregistered arms above.
+-- EMOTE_EARTHEN_ASSAULT 0, EMOTE_RETREAT 0, EMOTE_RESURFACE 1
+-- and the Events/Actions/Phases/Points/Misc enums are referenced
+-- only by the unregistered arms above (SAY_PLAYER_TEXT_1/2/3
+-- (0/1/2) ride the ported 45926 below).
 
 local SPELL_STAND = 37752
 local SPELL_AHUNE_SPANKY_HANDS = 46146
@@ -278,3 +279,52 @@ local function iceSpearDelayerTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_SUMMON_ICE_SPEAR_DELAYER, 1, iceSpearDelayerTick)
+
+-- C++ spell_summoning_rhyme_aura::PeriodicTick
+-- (boss_ahune.cpp:644-685): the aura is cast on the player by Luma
+-- Skymother (25697, the_slave_pens.h:52) from the ice-stone gossip;
+-- every tick the player self-casts SPELL_FORCE_WHISP_FLIGHT (46603),
+-- non-triggered in C++ (the Go player funnel is triggered-only,
+-- castSpellDirectWithOverrides — documented delta); tick 1: Luma
+-- says SAY_PLAYER_TEXT_1 (group 0, creature_text 25697) to the
+-- player and the player self-casts SPELL_SUMMONING_RHYME_BONFIRE
+-- (45930) triggered; tick 2: SAY_PLAYER_TEXT_2 (group 1); tick 3:
+-- SAY_PLAYER_TEXT_3 (group 2) and the aura is removed. The
+-- GetCaster()/GetTarget() nil + type gates are the C++ ToCreature/
+-- ToPlayer null checks. Binding 45926 (AC
+-- 'spell_summoning_rhyme_aura'; TDB 26091 renames it
+-- 'spell_ahune_summoning_rhyme_aura', a name this TC tree never
+-- registers). PORTED via RegisterAuraEvent (45926,
+-- AuraEventOnPeriodic = 1); aura:GetTickNumber reads 1 on the
+-- first tick, like C++ (lua_aura.go).
+local SPELL_SUMMONING_RHYME_AURA = 45926 -- boss_ahune.cpp:644
+local SPELL_SUMMONING_RHYME_BONFIRE = 45930 -- boss_ahune.cpp:64
+local SPELL_FORCE_WHISP_FLIGHT = 46603 -- boss_ahune.cpp:65
+local SAY_PLAYER_TEXT_1 = 0 -- boss_ahune.cpp:104
+local SAY_PLAYER_TEXT_2 = 1 -- boss_ahune.cpp:105
+local SAY_PLAYER_TEXT_3 = 2 -- boss_ahune.cpp:106
+local TYPEID_UNIT = 3
+local TYPEID_PLAYER = 4
+
+local function summoningRhymeTick(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster == nil or target == nil then
+        return
+    end
+    if caster:GetTypeId() ~= TYPEID_UNIT or target:GetTypeId() ~= TYPEID_PLAYER then
+        return
+    end
+    target:CastSpell(target, SPELL_FORCE_WHISP_FLIGHT)
+    local tick = aura:GetTickNumber()
+    if tick == 1 then
+        caster:Talk(SAY_PLAYER_TEXT_1, target)
+        target:CastSpell(target, SPELL_SUMMONING_RHYME_BONFIRE, true)
+    elseif tick == 2 then
+        caster:Talk(SAY_PLAYER_TEXT_2, target)
+    elseif tick == 3 then
+        caster:Talk(SAY_PLAYER_TEXT_3, target)
+        aura:Remove()
+    end
+end
+
+RegisterAuraEvent(SPELL_SUMMONING_RHYME_AURA, 1, summoningRhymeTick)

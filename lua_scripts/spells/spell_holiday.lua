@@ -1023,3 +1023,124 @@ for _, bunnyId in ipairs({
 }) do
     RegisterAuraEvent(bunnyId, 2, brewfestBarkerBunnyApply)
 end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
+--   spell_midsummer_fling_torch (46747, spell_holiday.cpp:1785-1805):
+--   EFFECT_0 DUMMY. The caster flings a torch to a point 30.0 yards
+--   away at a uniform random angle (rand_norm() * 2 * M_PI) and casts
+--   the triggered missile 45669 there, plus the shadow 46105
+--   non-triggered. No PreventDefaultAction in C++, so the ev4
+--   notification-only fire is exact. Deltas: GetFirstCollisionPosition
+--   has no Go model (no collision/height query), so the dest is the
+--   plain trig point at the caster's Z (felmyst point-at-angle
+--   precedent); player CastSpellAoF takes no triggered arg, so the
+--   45669 missile lands non-triggered (same known-limit class as the
+--   file header note). The 45669 triggered sibling
+--   (spell_midsummer_fling_torch_triggered, HandleTriggerMissile) stays
+--   out: its PreventHitEffect leg is unmodeled on the player/funnel
+--   path (runtime.go contract — no prevent record threaded there), so
+--   the >3yd missile suppression would not take. Binding 46747 (AC
+--   sql:1284 + TDB 26091:1177; AC also binds 45671 to this class name,
+--   contradicting the C++ '// 46747 - Fling torch' comment and TDB,
+--   which bind 45671 to the catch class below — AC row is a data
+--   error, not followed).
+local SPELL_FLING_TORCH = 46747 -- spell_holiday.cpp:1785 (class), :1973 (register)
+local SPELL_FLING_TORCH_TRIGGERED = 45669 -- spell_holiday.cpp:1775
+local SPELL_FLING_TORCH_SHADOW = 46105 -- spell_holiday.cpp:1776
+
+local function flingTorchHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local angle = math.random() * 2 * math.pi
+    local destX = caster:GetX() + 30.0 * math.cos(angle)
+    local destY = caster:GetY() + 30.0 * math.sin(angle)
+    local destZ = caster:GetZ()
+    caster:CastSpellAoF(destX, destY, destZ, SPELL_FLING_TORCH_TRIGGERED)
+    caster:CastSpellAoF(destX, destY, destZ, SPELL_FLING_TORCH_SHADOW)
+end
+
+RegisterSpellEvent(SPELL_FLING_TORCH, 4, flingTorchHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_midsummer_fling_torch_catch (45671, spell_holiday.cpp:1837-1896):
+--   EFFECT_0 SCRIPT_EFFECT. Only the caster can catch (hit player
+--   GUID == caster GUID); no expl-target dest means no catch. The
+--   required catch count is 3 on the normal torch-catching quest
+--   (11657/11923 incomplete) and 9 on the daily (11924/11925
+--   incomplete); with no such quest incomplete the spell does
+--   nothing. At/above the count the player self-casts the faction
+--   success spell (46081 Alliance / 46654 Horde) plus 46084 and the
+--   torches-caught aura is removed; below it the player gains one
+--   torches-caught stack and re-flings the torch 15.0 yards at a
+--   random angle (45669 triggered + 46105). Deltas: GetAuraCount has
+--   no bridge, so the count reads via GetAura(45693):GetStackAmount()
+--   (nil aura = 0, zuldrak-rat precedent); GetFirstCollisionPosition
+--   has no Go model, so the re-fling dest is the plain trig point at
+--   the player's Z (felmyst precedent); the 45676 missed sibling
+--   stays out (OnObjectAreaTargetSelect has no bridge). Binding 45671
+--   (TDB 26091:1109 'spell_midsummer_fling_torch_catch').
+local SPELL_FLING_TORCH_CATCH = 45671 -- spell_holiday.cpp:1837 (class), :1975 (register)
+local SPELL_TORCHES_CAUGHT = 45693 -- spell_holiday.cpp:1778
+local SPELL_TORCH_CATCHING_SUCCESS_ALLIANCE = 46081 -- spell_holiday.cpp:1779
+local SPELL_TORCH_CATCHING_SUCCESS_HORDE = 46654 -- spell_holiday.cpp:1780
+local SPELL_TORCH_CATCHING_REMOVE_TORCHES = 46084 -- spell_holiday.cpp:1781
+local QUEST_TORCH_CATCHING_A = 11657 -- spell_holiday.cpp:1684
+local QUEST_TORCH_CATCHING_H = 11923 -- spell_holiday.cpp:1685
+local QUEST_MORE_TORCH_CATCHING_A = 11924 -- spell_holiday.cpp:1686
+local QUEST_MORE_TORCH_CATCHING_H = 11925 -- spell_holiday.cpp:1687
+
+local function flingTorchCatchHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    if target:GetObjectType() ~= "Player" then
+        return
+    end
+    local destX, destY, destZ = spell:GetExplTargetDest()
+    if destX == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or target:GetGUID() ~= caster:GetGUID() then
+        return
+    end
+    local requiredCatches = 0
+    if target:GetQuestStatus(QUEST_TORCH_CATCHING_A) == QUEST_STATUS_INCOMPLETE
+        or target:GetQuestStatus(QUEST_TORCH_CATCHING_H) == QUEST_STATUS_INCOMPLETE then
+        requiredCatches = 3
+    elseif target:GetQuestStatus(QUEST_MORE_TORCH_CATCHING_A) == QUEST_STATUS_INCOMPLETE
+        or target:GetQuestStatus(QUEST_MORE_TORCH_CATCHING_H) == QUEST_STATUS_INCOMPLETE then
+        requiredCatches = 9
+    end
+    if requiredCatches == 0 then
+        return
+    end
+    local caughtAura = target:GetAura(SPELL_TORCHES_CAUGHT)
+    local caught = 0
+    if caughtAura ~= nil then
+        caught = caughtAura:GetStackAmount()
+    end
+    if caught >= requiredCatches then
+        if target:GetTeam() == TEAM_ALLIANCE then
+            target:CastSpell(target, SPELL_TORCH_CATCHING_SUCCESS_ALLIANCE)
+        else
+            target:CastSpell(target, SPELL_TORCH_CATCHING_SUCCESS_HORDE)
+        end
+        target:CastSpell(target, SPELL_TORCH_CATCHING_REMOVE_TORCHES)
+        target:RemoveAura(SPELL_TORCHES_CAUGHT)
+    else
+        local angle = math.random() * 2 * math.pi
+        local reX = target:GetX() + 15.0 * math.cos(angle)
+        local reY = target:GetY() + 15.0 * math.sin(angle)
+        target:CastSpell(target, SPELL_TORCHES_CAUGHT)
+        target:CastSpellAoF(reX, reY, target:GetZ(), SPELL_FLING_TORCH_TRIGGERED, true)
+        target:CastSpellAoF(reX, reY, target:GetZ(), SPELL_FLING_TORCH_SHADOW)
+    end
+end
+
+RegisterSpellEvent(SPELL_FLING_TORCH_CATCH, 5, flingTorchCatchHit)

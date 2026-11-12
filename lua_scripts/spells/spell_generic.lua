@@ -339,3 +339,80 @@ local function arcaneChargeCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_ARCANE_CHARGE, 8, arcaneChargeCheckCast)
+
+-- PORTED (this tick, RegisterAuraEvent OnCheckAreaTarget = 8):
+--   spell_gen_av_drekthar_presence (45831, spell_generic.cpp:458-490):
+--   DoCheckAreaTarget only — an area-aura target is accepted when its
+--   entry is one of the five Alliance marshals (14762-14765, 11948
+--   Vandar Stormspike) or the five Horde warmasters/Drek'thar
+--   (14772, 14776, 14773, 14777, 11946); everything else is rejected.
+--   The ev8 handler signature (event, aura, target) -> bool is the
+--   thorim blizzard precedent (boss_thorim.lua). C++ receives Unit*
+--   targets; players fall through to the default reject, so the Lua
+--   guard rejects non-creatures the same way.
+--   (AC sql:1223-1230 + TDB 26091 bind all eight presence ranks
+--   45822/45823/45824/45826/45828/45829/45830/45831 to this one
+--   class; the whitelist check is identical for each.)
+local SPELL_AV_DREKTHAR_PRESENCE = {
+    45822, 45823, 45824, 45826, 45828, 45829, 45830, 45831,
+} -- spell_generic.cpp:458
+
+local DREKTHAR_PRESENCE_ENTRIES = {
+    [14762] = true, -- Dun Baldar North Marshal
+    [14763] = true, -- Dun Baldar South Marshal
+    [14764] = true, -- Icewing Marshal
+    [14765] = true, -- Stonehearth Marshal
+    [11948] = true, -- Vandar Stormspike
+    [14772] = true, -- East Frostwolf Warmaster
+    [14776] = true, -- Tower Point Warmaster
+    [14773] = true, -- Iceblood Warmaster
+    [14777] = true, -- West Frostwolf Warmaster
+    [11946] = true, -- Drek'thar
+}
+
+local function drektharPresenceCheckAreaTarget(event, aura, target)
+    if target == nil or target:GetObjectType() ~= "Creature" then
+        return false
+    end
+    return DREKTHAR_PRESENCE_ENTRIES[target:GetEntry()] == true
+end
+
+for _, spellId in ipairs(SPELL_AV_DREKTHAR_PRESENCE) do
+    RegisterAuraEvent(spellId, 8, drektharPresenceCheckAreaTarget)
+end
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_eject_passenger (49259/49261, spell_generic.cpp:3631-3655):
+--   EFFECT_0 SCRIPT_EFFECT. The hit unit's vehicle kit ejects the
+--   passenger in seat (GetEffectValue() - 1) — the DBC CalcValue is
+--   the 1-based seat (Validate requires >= 1). GetVehicleKit /
+--   GetPassenger / ExitVehicle are all bridged on both surfaces
+--   (lua_player.go:3183/3204, lua_creature_events.go:3387/3463,
+--   lua_vehicle.go:74); GetEffectValue is bridged on the spell object
+--   (lua_spell.go:215). A missing kit or empty seat is a no-op, as in
+--   C++. Bindings 49259/49261 (AC 'spell_gen_eject_passenger').
+local SPELL_EJECT_PASSENGER_1 = 49259 -- spell_generic.cpp:3631
+local SPELL_EJECT_PASSENGER_2 = 49261 -- spell_generic.cpp:3631
+
+local function ejectPassengerHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local kit = target:GetVehicleKit()
+    if kit == nil then
+        return
+    end
+    local passenger = kit:GetPassenger(spell:GetEffectValue(0) - 1)
+    if passenger ~= nil then
+        passenger:ExitVehicle()
+    end
+end
+
+RegisterSpellEvent(SPELL_EJECT_PASSENGER_1, 5, ejectPassengerHit)
+RegisterSpellEvent(SPELL_EJECT_PASSENGER_2, 5, ejectPassengerHit)
+
+-- STAYS OUT (this tick): spell_gen_burn_brutallus (46394,
+-- spell_generic.cpp:782-800) — OnEffectUpdatePeriodic only: every
+-- 11th tick doubles the periodic-damage amount. The AuraEvents set
+-- (runtime.go:544-551) has no update-periodic event, so there is no
+-- hook to port it on. Binding 46394 (AC 'spell_gen_burn_brutallus').
