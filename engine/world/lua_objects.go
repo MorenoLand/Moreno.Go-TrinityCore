@@ -1466,6 +1466,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			motion.Mount = displayID
 		}
 		motion.UnitFlags |= 0x08000000
+		motion.UnitFlagsKnown = true
 		motion.MountKnown = true
 		s.server.motionMu.Unlock()
 		return nil, nil
@@ -1482,6 +1483,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		motion.Mount = 0
 		motion.UnitFlags &^= 0x08000000
+		motion.UnitFlagsKnown = true
 		motion.MountKnown = true
 		s.server.motionMu.Unlock()
 		return nil, nil
@@ -1681,6 +1683,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		s.server.motionMu.Lock()
 		motion.Faction = faction
+		motion.FactionKnown = true
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.server.motionMu.Unlock()
 		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
@@ -1783,6 +1786,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		}
 		s.server.motionMu.Lock()
 		motion.Level = level
+		motion.LevelKnown = true
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		s.server.motionMu.Unlock()
 		s.server.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid,
@@ -3301,6 +3305,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 			} else {
 				motion.UnitFlags |= unitFlagImmuneToNPC
 			}
+			motion.UnitFlagsKnown = true
 		}
 		s.server.motionMu.Unlock()
 		if motion != nil {

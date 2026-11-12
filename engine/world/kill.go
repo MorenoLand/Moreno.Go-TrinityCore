@@ -2851,6 +2851,17 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.RespawnDelayKnown = false
 				motion.RespawnDelaySec = 0
 				motion.AlreadySearchedAssistance = false
+				// Creature::Respawn re-inits from the DB row (fresh C++
+				// Creature): the scripted faction/flags/level/dynamic-
+				// flags/phase latches die with the old incarnation, as
+				// the JustRespawned death-state arm already does — the
+				// sweep then re-affirms template values on next tick.
+				motion.NPCFlagsKnown = false
+				motion.FactionKnown = false
+				motion.UnitFlagsKnown = false
+				motion.LevelKnown = false
+				motion.DynamicFlagsKnown = false
+				motion.PhaseMaskKnown = false
 				// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
 				// SetLootRecipient(nullptr) + ResetPlayerDamageReq().
 				motion.TapPlayerGUID, motion.TapGroupID = 0, 0
@@ -2935,6 +2946,16 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			motion.RespawnDelayKnown = false
 			motion.RespawnDelaySec = 0
 			motion.AlreadySearchedAssistance = false
+			// Creature::Respawn re-inits from the DB row (fresh C++
+			// Creature): the scripted faction/flags/level/dynamic-
+			// flags/phase latches die with the old incarnation, as
+			// the JustRespawned death-state arm already does.
+			motion.NPCFlagsKnown = false
+			motion.FactionKnown = false
+			motion.UnitFlagsKnown = false
+			motion.LevelKnown = false
+			motion.DynamicFlagsKnown = false
+			motion.PhaseMaskKnown = false
 			motion.Refreshed = now
 			// Creature::JUST_RESPAWNED (Creature.cpp:2121-2125):
 			// SetLootRecipient(nullptr) + ResetPlayerDamageReq().

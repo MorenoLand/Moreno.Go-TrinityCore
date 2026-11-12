@@ -804,6 +804,7 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) bool {
 	s.server.motionMu.Lock()
 	changed := motion.PhaseMask != mask
 	motion.PhaseMask = mask
+	motion.PhaseMaskKnown = true
 	mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 	s.server.motionMu.Unlock()
 	if changed && s.server != nil {
@@ -811,6 +812,7 @@ func (s *session) handleNPCSetPhase(ctx context.Context, args []string) bool {
 		for _, m := range s.server.motionMapLocked(mapID, instanceID) {
 			if m != nil && (m.CharmerGUID == guid || m.OwnerGUID == guid) {
 				m.PhaseMask = mask
+				m.PhaseMaskKnown = true
 			}
 		}
 		s.server.motionMu.Unlock()

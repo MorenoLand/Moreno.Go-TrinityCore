@@ -220,6 +220,7 @@ func (s *session) handleModifyFaction(ctx context.Context, args []string) bool {
 	}
 	srv.motionMu.Lock()
 	motion.Faction, motion.UnitFlags, motion.NPCFlags, motion.DynamicFlags = faction, flags, npcflags, dyflags
+	motion.FactionKnown, motion.UnitFlagsKnown, motion.NPCFlagsKnown, motion.DynamicFlagsKnown = true, true, true, true
 	srv.motionMu.Unlock()
 	srv.broadcastCreatureValuesUpdateInInstance(mapID, instanceID, guid, map[int]uint32{unitFieldFaction: faction, unitFieldFlags: flags, unitFieldNPCFlags: npcflags, unitFieldDynamicFlags: dyflags})
 	s.sendSysMessage(fmt.Sprintf("You changed faction for creature %d to %d, flags %d, npcflags %d, dyflags %d.", low, faction, flags, npcflags, dyflags))
@@ -248,6 +249,7 @@ func (s *session) handleModifyPhase(ctx context.Context, args []string) bool {
 		srv := s.server
 		srv.motionMu.Lock()
 		motion.PhaseMask = mask
+		motion.PhaseMaskKnown = true
 		srv.motionMu.Unlock()
 		return true
 	}

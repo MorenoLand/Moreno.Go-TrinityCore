@@ -37,6 +37,33 @@ const (
 // position — C++ consumes 69 and 97 in separate CalcAbsorbResist loops
 // (Unit.cpp:1864 vs 1914), so the merged pass is already a Go-side
 // approximation; generic 69s stay ahead of mana shield, matching C++.
+// absorbHookPending is one deferred OnEffectAbsorb hook: the aura, the
+// pool candidate and the remaining damage at its turn in the absorb
+// order. The hook fires after the absorb lock is released (see
+// fireAuraAbsorb), so the loop records the C++ hook inputs here and
+// the post-lock pass applies the returned amount.
+type absorbHookPending struct {
+	aura   *activeAura
+	pool   uint32
+	damage uint32
+}
+
+// absorbHookPoolUnlimited reports whether the C++ script for the spell
+// sets an unlimited (-1) absorb pool via DoEffectCalcAmount, so the
+// hook's absorb is never consumed from the Go pool and the aura is
+// never exhausted by it (Unit.cpp:1909-1914). Go stores the DBC base
+// in Amount instead, so the set is per-spell knowledge, like the
+// scriptAbsorbHit switch: moonkin form passive (69366) and primal
+// tenacity (33851) both set -1. Any other hook spell's pool is
+// finite and decrements like the generic leg.
+func absorbHookPoolUnlimited(spellID uint32) bool {
+	switch spellID {
+	case 69366, 33851:
+		return true
+	}
+	return false
+}
+
 func (s *Server) absorbAuraPriority(aura *activeAura) int {
 	if aura == nil {
 		return 99
@@ -742,6 +769,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 	remainingDamage = damage
 	var exhaustedSpells []uint32
 	var guardianHeal uint32
+	var absorbPending []absorbHookPending
 
 	// The mana-shield leg resolves each shield caster's spell-mod owner
 	// through findCreatureMotion (motionMu) for pet casters, so those
@@ -758,7 +786,11 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 	}
 	if s.activeAuras != nil {
 		for _, aura := range s.activeAuras {
-			if aura != nil && !aura.Stopped && aura.Amount > 0 {
+			// A school-absorb aura with a registered OnEffectAbsorb
+			// hook joins even with a zero pool: the C++ -1
+			// (unlimited) pool reads 0 at the hook, and the handler
+			// computes the absorb from the damage.
+			if aura != nil && !aura.Stopped && (aura.Amount > 0 || (aura.AuraType == SpellAuraSchoolAbsorb && s.server.hasAuraAbsorbHook(aura.SpellID))) {
 				shieldList = append(shieldList, aura)
 				if aura.AuraType == SpellAuraManaShield {
 					modOwnerGUIDs = append(modOwnerGUIDs, aura.CasterGUID)
@@ -835,6 +867,17 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 						}
 						continue
 					}
+					// OnEffectAbsorb (Unit.cpp:1897-1903): a
+					// hook-registered aura defers to the post-lock
+					// pass instead of applying the pool here — Lua
+					// never runs under castMu (see the
+					// AuraEventOnEffectAbsorb contract). The pool
+					// arg is the live Amount; damage is the
+					// remaining damage at this aura's turn.
+					if s.server.hasAuraAbsorbHook(aura.SpellID) {
+						absorbPending = append(absorbPending, absorbHookPending{aura: aura, pool: aura.Amount, damage: remainingDamage})
+						continue
+					}
 					absorbThis := aura.Amount
 					if absorbThis > remainingDamage {
 						absorbThis = remainingDamage
@@ -906,6 +949,48 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 	}
 	s.castMu.Unlock()
 
+	// OnEffectAbsorb hook pass (Unit.cpp:1897-1912): the deferred Lua
+	// fire for hook-registered school-absorb auras, after castMu is
+	// released so a handler may read the aura object and cast without
+	// deadlocking on the absorb lock. Each aura fires with the at-turn
+	// damage recorded in the loop; the returned amount is clamped to
+	// the running remaining damage and, for a finite pool, to the live
+	// pool at apply time (a concurrent damage event may have consumed
+	// part of it between the loop and this pass — C++ has no such
+	// race, this clamp is the Go-only guard). A vetoed aura absorbs
+	// nothing; an unlimited-pool aura never consumes or exhausts.
+	for _, pend := range absorbPending {
+		aura := pend.aura
+		if aura == nil || aura.Stopped || remainingDamage == 0 {
+			continue
+		}
+		auraObj := (&luaAuraRef{server: s.server, spellID: aura.SpellID, player: s, mapID: mapID, instanceID: instanceID}).luaAuraObject()
+		amount, prevented := s.server.fireAuraAbsorb(context.Background(), aura.SpellID, auraObj, s.luaPlayer(), pend.damage, pend.pool)
+		if prevented || amount == 0 {
+			continue
+		}
+		if amount > remainingDamage {
+			amount = remainingDamage
+		}
+		if absorbHookPoolUnlimited(aura.SpellID) {
+			remainingDamage -= amount
+			absorbed += amount
+			continue
+		}
+		if amount > aura.Amount {
+			amount = aura.Amount
+		}
+		if amount == 0 {
+			continue
+		}
+		aura.Amount -= amount
+		remainingDamage -= amount
+		absorbed += amount
+		if aura.Amount == 0 {
+			exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+		}
+	}
+
 	// Remove exhausted shields outside the lock; a shield that hits zero
 	// absorbed amount is destroyed by an enemy spell, not a default remove
 	// (Unit.cpp:1895, 1965).
@@ -934,6 +1019,7 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 	remainingDamage = damage
 	var exhaustedSpells []uint32
 	var guardianHeal uint32
+	var absorbPending []absorbHookPending
 
 	// The mana-shield leg drains the creature's mana pool (Powers[0], filled
 	// from the template mana row at spawn); resolved ahead of the aura lock
@@ -945,7 +1031,9 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 		if auras, ok := s.activeCreatureAuras[key]; ok && auras != nil {
 			var shieldList []*activeAura
 			for _, aura := range auras {
-				if aura != nil && !aura.Stopped && aura.Amount > 0 {
+				// A school-absorb aura with a registered OnEffectAbsorb
+				// hook joins even with a zero pool (player-leg twin).
+				if aura != nil && !aura.Stopped && (aura.Amount > 0 || (aura.AuraType == SpellAuraSchoolAbsorb && s.hasAuraAbsorbHook(aura.SpellID))) {
 					shieldList = append(shieldList, aura)
 				}
 			}
@@ -986,6 +1074,13 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 							if depleted {
 								exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 							}
+							continue
+						}
+						// OnEffectAbsorb (Unit.cpp:1897-1903): the
+						// player-leg twin — defer to the post-lock
+						// pass, Lua never runs under auraMu.
+						if s.hasAuraAbsorbHook(aura.SpellID) {
+							absorbPending = append(absorbPending, absorbHookPending{aura: aura, pool: aura.Amount, damage: remainingDamage})
 							continue
 						}
 						absorbThis := aura.Amount
@@ -1044,6 +1139,45 @@ func (s *Server) applyCreatureAbsorptionShields(key creatureAuraKey, damage uint
 		}
 	}
 	s.auraMu.Unlock()
+
+	// OnEffectAbsorb hook pass (Unit.cpp:1897-1912): the player-leg
+	// twin, after auraMu is released. The holder is the creature
+	// motion object; a despawned creature (nil motion) cannot fire.
+	for _, pend := range absorbPending {
+		aura := pend.aura
+		if aura == nil || aura.Stopped || remainingDamage == 0 {
+			continue
+		}
+		target := s.luaMotionCreature(motion)
+		if target == nil {
+			continue
+		}
+		auraObj := (&luaAuraRef{server: s, spellID: aura.SpellID, creatureKey: key, mapID: key.Map, instanceID: key.InstanceID}).luaAuraObject()
+		amount, prevented := s.fireAuraAbsorb(context.Background(), aura.SpellID, auraObj, target, pend.damage, pend.pool)
+		if prevented || amount == 0 {
+			continue
+		}
+		if amount > remainingDamage {
+			amount = remainingDamage
+		}
+		if absorbHookPoolUnlimited(aura.SpellID) {
+			remainingDamage -= amount
+			absorbed += amount
+			continue
+		}
+		if amount > aura.Amount {
+			amount = aura.Amount
+		}
+		if amount == 0 {
+			continue
+		}
+		aura.Amount -= amount
+		remainingDamage -= amount
+		absorbed += amount
+		if aura.Amount == 0 {
+			exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+		}
+	}
 
 	// Unit.cpp:1965: an exhausted shield is removed with
 	// AURA_REMOVE_BY_ENEMY_SPELL, not the default mode.

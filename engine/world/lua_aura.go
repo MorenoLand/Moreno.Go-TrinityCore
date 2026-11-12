@@ -1313,6 +1313,51 @@ func (s *Server) hasAuraCheckAreaTargetHook(spellID uint32) bool {
 	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnCheckAreaTarget)
 }
 
+// hasAuraAbsorbHook reports whether any RegisterAuraEvent(...,
+// OnEffectAbsorb, ...) handler is registered for the spell, so the
+// absorb loops can defer the aura to the post-lock hook pass only
+// when a handler could run (the hasAuraProcHook twin).
+func (s *Server) hasAuraAbsorbHook(spellID uint32) bool {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil {
+		return false
+	}
+	return s.Features.Scripts.HasHook("aura:"+strconv.FormatUint(uint64(spellID), 10), scripting.AuraEventOnEffectAbsorb)
+}
+
+// fireAuraAbsorb dispatches the RegisterAuraEvent OnEffectAbsorb hook
+// for one school-absorb aura (args (event, aura, target, damage,
+// absorbAmount); damage is the remaining damage at the aura's turn,
+// absorbAmount the pool candidate) and returns the absorb amount to
+// apply plus whether any handler vetoed. That is the Go model of
+// AuraEffect::CallScriptEffectAbsorbHandlers (Unit.cpp:1897-1903): a
+// numeric first return rewrites the amount (the first numeric return
+// wins; out-of-range or negative values are ignored, mirroring
+// lua_isnumber/CHECKVAL<uint32> in the damage-taken twin), boolean
+// true is PreventDefaultAction (the aura absorbs nothing this hit),
+// and nil keeps the pool candidate. The caller clamps the returned
+// amount to the running remaining damage and the live pool. Lua
+// errors are logged by the runtime, never propagated.
+func (s *Server) fireAuraAbsorb(ctx context.Context, spellID uint32, auraObj *scripting.Object, target any, damage uint32, absorbAmount uint32) (uint32, bool) {
+	if s == nil || s.Features == nil || s.Features.Scripts == nil || auraObj == nil {
+		return absorbAmount, false
+	}
+	results, _ := s.Features.Scripts.TriggerAuraEvent(ctx, spellID, scripting.AuraEventOnEffectAbsorb, scripting.AuraEventOnEffectAbsorb, auraObj, target, damage, absorbAmount)
+	amount := absorbAmount
+	rewritten := false
+	for _, result := range results {
+		if blocked, ok := result.(bool); ok && blocked {
+			return 0, true
+		}
+		if !rewritten {
+			if n, ok := result.(float64); ok && n >= 0 && n <= 4294967295 {
+				amount = uint32(n)
+				rewritten = true
+			}
+		}
+	}
+	return amount, false
+}
+
 // fireAuraCheckAreaTarget dispatches the RegisterAuraEvent
 // OnCheckAreaTarget hook for a candidate dynobj-aura target (args
 // (event, aura, target)) and reports whether the aura may be applied.

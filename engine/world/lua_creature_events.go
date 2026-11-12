@@ -1576,6 +1576,22 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// HasAuraWithMechanic(mechanicMask) is Unit::HasAuraWithMechanic
+	// (Unit.cpp:4727-4740) for handler creatures: whether the creature
+	// carries any live aura whose spell-level mechanic falls inside
+	// the mask (1 << mechanic, SharedDefines.h; stun is 1 << 12 =
+	// 4096). The player twin backs the druid absorb gates; this twin
+	// keeps the creature object at parity.
+	methods["HasAuraWithMechanic"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.creatureHasAuraMechanic(motion, mask)}, nil
+	}
 	// GetAuraEffectOfRankedSpell(spellID[, effIndex]) is
 	// Unit::GetAuraEffectOfRankedSpell (Unit.cpp:4498-4508) for
 	// handler creatures: the live amount of the effect on any
@@ -3741,6 +3757,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		motion.PhaseMask = mask
+		motion.PhaseMaskKnown = true
 		s.motionMu.Unlock()
 		return nil, nil
 	}
@@ -6093,6 +6110,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			motion.Mount = displayID
 		}
 		motion.UnitFlags |= 0x08000000 // UNIT_FLAG_MOUNT
+		motion.UnitFlagsKnown = true
 		motion.MountKnown = true
 		s.motionMu.Unlock()
 		return nil, nil
@@ -6109,6 +6127,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		motion.Mount = 0
 		motion.UnitFlags &^= 0x08000000
+		motion.UnitFlagsKnown = true
 		motion.MountKnown = true
 		s.motionMu.Unlock()
 		return nil, nil
@@ -6264,14 +6283,17 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		} else if field == unitFieldDynamicFlags {
 			// UNIT_DYNAMIC_FLAGS (UpdateFields.h:136: OBJECT_END+0x49 = 79),
 			// the live value behind the lootable/dead/tapped bits the
-			// client corpse/loot gates read (motion.DynamicFlags is the
-			// live slot — spawn rebuilds sync from it, so no Known flag
-			// is needed). C++ SetFlag ORs the bits; the values-update
-			// broadcast twin mirrors the 59/82 arms. Backs script
-			// lootable/dead legs such as twin_valkyr JustDied and the
-			// opera Romulo/Julianne cross-kill.
+			// client corpse/loot gates read. The sweep re-affirms the DB
+			// template value every tick, so the write latches
+			// DynamicFlagsKnown exactly like the 59/82 arms (the old
+			// "no Known flag is needed" claim was wrong — the sweep, not
+			// the spawn rebuild, owns the wipe). C++ SetFlag ORs the
+			// bits; the values-update broadcast twin mirrors the 59/82
+			// arms. Backs script lootable/dead legs such as twin_valkyr
+			// JustDied and the opera Romulo/Julianne cross-kill.
 			s.motionMu.Lock()
 			motion.DynamicFlags |= flags
+			motion.DynamicFlagsKnown = true
 			dynFlags, dynDirty = motion.DynamicFlags, true
 			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
@@ -6340,6 +6362,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			// the bits. Backs the twin_valkyr sister-alive un-lootable leg.
 			s.motionMu.Lock()
 			motion.DynamicFlags &^= flags
+			motion.DynamicFlagsKnown = true
 			dynFlags, dynDirty = motion.DynamicFlags, true
 			mapID, instanceID, guid = motion.Map, motion.InstanceID, motion.GUID
 			s.motionMu.Unlock()
@@ -6389,6 +6412,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		} else {
 			motion.UnitFlags &^= immuneFlags
 		}
+		motion.UnitFlagsKnown = true
 		unitFlags := motion.UnitFlags
 		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
 		x, y, z, phase := motion.X, motion.Y, motion.Z, motion.PhaseMask

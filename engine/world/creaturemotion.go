@@ -81,11 +81,13 @@ type creatureMotion struct {
 	Faction               uint32
 	FactionKnown          bool   // set by the event-surface SetFaction bridge; gates the sweep re-affirm so a scripted faction survives until respawn (NPCFlagsKnown precedent)
 	PhaseMask             uint32 // WorldObject::GetPhaseMask live value (Object.h:323): the spawn c.phaseMask row for DB creatures (updateActiveCreatures sweep), the summoner phase for temp summons and pets; 0 = unset, read as PHASEMASK_NORMAL (1) by the totem phase helper
+	PhaseMaskKnown        bool   // set by the SetPhaseMask bridge / GM phase writes; gates the sweep re-affirm so a scripted phase survives until respawn (FactionKnown precedent)
 	Level                 uint32
 	LevelKnown            bool // set by an explicit level override (wp show on mimic, SetLevel in C++ is a live slot the sweep must not re-affirm from the template); mirrors the ReactStateKnown pattern below
 	UnitFlags             uint32
 	UnitFlagsKnown        bool // set by the event-surface SetFlag/RemoveFlag(59) bridges; gates the sweep re-affirm so scripted UNIT_FIELD_FLAGS survive until respawn (NPCFlagsKnown precedent)
 	DynamicFlags          uint32
+	DynamicFlagsKnown     bool // set by the SetFlag/RemoveFlag(79) bridges and the indexed SetUInt32Value(79) twin; gates the sweep re-affirm so scripted UNIT_DYNAMIC_FLAGS survive until respawn (FactionKnown precedent)
 	FlagsExtra            uint32
 	TypeFlags             uint32 // creature_template.type_flags (CreatureData.h:180); the BOSS_MOB bit (0x4, SharedDefines.h:2731) feeds Creature::isWorldBoss (Creature.cpp:2353) gates
 	Rank                  uint32 // creature_template.rank (SharedDefines.h CreatureEliteType: 0 NORMAL, 4 RARE); feeds Creature::isElite (Creature.cpp:2344-2350), banked at spawn via loadCreatureStats
@@ -456,17 +458,19 @@ type creatureMotion struct {
 	EncounterMapID      uint32
 	EncounterInstanceID uint32
 
-	OwnerGUID      uint64
-	CreatedByGUID  uint64    // UNIT_FIELD_CREATEDBY (Unit.h:1149): the summoner/owner GUID, script-settable via SetCreatorGUID; seeded by summonTempCreature from the summoner (TempSummon::InitStats, TemporarySummon.cpp:356), 0 = Empty otherwise
-	ObjectSlots    [4]uint64 // Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 on this creature, mirroring the player ObjectSlots twin (player_state.go)
-	CharmerGUID    uint64
-	CritterGUID    uint64 // UNIT_FIELD_CRITTER mirror (Unit.h:1156): the vanity-critter GUID, script-settable via SetCritterGUID; creatures carry none unless a script sets one.
-	PetGUID        uint64 // Unit::m_SummonSlot[SUMMON_SLOT_PET] (Unit.h:1153-1154): the pet-slot GUID, script-settable via SetPetGUID/SetMinionGUID; 0 = empty slot (the C++ default).
-	Charmed        bool
-	Possessed      bool // CHARM_TYPE_POSSESS marker: drives the uncharm POSSESSED-flag and charmer REMOVE_CLIENT_CONTROL arms (HandleModPossess, SpellAuraEffects.cpp:2866)
-	CharmUnitFlags uint32
-	CharmFaction   uint32
-	CharmOwnerGUID uint64
+	OwnerGUID           uint64
+	CreatedByGUID       uint64    // UNIT_FIELD_CREATEDBY (Unit.h:1149): the summoner/owner GUID, script-settable via SetCreatorGUID; seeded by summonTempCreature from the summoner (TempSummon::InitStats, TemporarySummon.cpp:356), 0 = Empty otherwise
+	ObjectSlots         [4]uint64 // Unit::m_ObjectSlot[4] (Unit.h): the GUIDs of the game objects summoned by SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 on this creature, mirroring the player ObjectSlots twin (player_state.go)
+	CharmerGUID         uint64
+	CritterGUID         uint64 // UNIT_FIELD_CRITTER mirror (Unit.h:1156): the vanity-critter GUID, script-settable via SetCritterGUID; creatures carry none unless a script sets one.
+	PetGUID             uint64 // Unit::m_SummonSlot[SUMMON_SLOT_PET] (Unit.h:1153-1154): the pet-slot GUID, script-settable via SetPetGUID/SetMinionGUID; 0 = empty slot (the C++ default).
+	Charmed             bool
+	Possessed           bool // CHARM_TYPE_POSSESS marker: drives the uncharm POSSESSED-flag and charmer REMOVE_CLIENT_CONTROL arms (HandleModPossess, SpellAuraEffects.cpp:2866)
+	CharmUnitFlags      uint32
+	CharmFaction        uint32
+	CharmOwnerGUID      uint64
+	CharmFactionKnown   bool // pre-charm FactionKnown, restored on uncharm so a scripted faction survives the charm round-trip
+	CharmUnitFlagsKnown bool // pre-charm UnitFlagsKnown, restored on uncharm
 	// CharmOldReact saves the creature's PetReact at charm time so
 	// uncharm restores it (CharmInfo::RestoreState, Unit.cpp:9936-9940:
 	// the CharmInfo ctor banks _oldReactState and DeleteCharmInfo
@@ -1092,6 +1096,8 @@ func (s *Server) applyCreatureDeathState(ctx context.Context, motion *creatureMo
 		motion.FactionKnown = false
 		motion.UnitFlagsKnown = false
 		motion.LevelKnown = false
+		motion.DynamicFlagsKnown = false
+		motion.PhaseMaskKnown = false
 		motion.Moving = false
 		motion.Evading = false
 		values[unitFieldHealth] = motion.Health
@@ -3420,6 +3426,8 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		motion.CharmUnitFlags = motion.UnitFlags
 		motion.CharmFaction = motion.Faction
 		motion.CharmOwnerGUID = motion.OwnerGUID
+		motion.CharmFactionKnown = motion.FactionKnown
+		motion.CharmUnitFlagsKnown = motion.UnitFlagsKnown
 		// CharmInfo ctor banks _oldReactState (Unit.cpp:9919-9934) for
 		// the DeleteCharmInfo restore below.
 		motion.CharmOldReact = motion.PetReact
@@ -3438,6 +3446,11 @@ func (s *Server) charmCreatureFaction(ctx context.Context, key creatureAuraKey, 
 		motion.UnitFlags |= unitFlagPlayerControlled
 	}
 	motion.Faction = charmerFaction
+	// The sweep re-affirms template faction/flags every tick: a charmed
+	// unit's faction and control flags are live charm state, so latch
+	// them until uncharm restores the banked values (and their latches).
+	motion.FactionKnown = true
+	motion.UnitFlagsKnown = true
 	motion.OwnerGUID = charmerGUID
 	motion.PetCommand = PetCommandFollow
 	motion.PetReact = PetReactDefensive
@@ -3518,6 +3531,8 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 		motion.UnitFlags &^= unitFlagPossessed
 	}
 	motion.Faction = motion.CharmFaction
+	motion.FactionKnown = motion.CharmFactionKnown
+	motion.UnitFlagsKnown = motion.CharmUnitFlagsKnown
 	motion.OwnerGUID = motion.CharmOwnerGUID
 	motion.PetCommand = PetCommandStay
 	// CharmInfo::RestoreState (Unit.cpp:9936-9940): the pre-charm react
@@ -3533,6 +3548,8 @@ func (s *Server) uncharmCreature(key creatureAuraKey, charmerGUID uint64) {
 	motion.CharmUnitFlags = 0
 	motion.CharmFaction = 0
 	motion.CharmOwnerGUID = 0
+	motion.CharmFactionKnown = false
+	motion.CharmUnitFlagsKnown = false
 	// Unit::RemoveCharmedBy ends charm with CombatStop() (Unit.cpp:11940+):
 	// the unit leaves combat before the restored AI's OnCharmed runs.
 	// Threat is kept — C++ CombatStop does not clear the threat table.
@@ -5002,9 +5019,13 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 				if !motion.UnitFlagsKnown {
 					motion.UnitFlags = uint32(unitFlags)
 				}
-				motion.DynamicFlags = uint32(dynamicFlags)
+				if !motion.DynamicFlagsKnown {
+					motion.DynamicFlags = uint32(dynamicFlags)
+				}
 				motion.FlagsExtra = uint32(flagsExtra)
-				motion.PhaseMask = uint32(phaseMask)
+				if !motion.PhaseMaskKnown {
+					motion.PhaseMask = uint32(phaseMask)
+				}
 				if !motion.ReactStateKnown {
 					if reactState, known, aiName := s.loadCreatureReaction(ctx, uint32(entry)); known {
 						motion.ReactState = reactState

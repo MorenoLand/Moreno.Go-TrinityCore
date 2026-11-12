@@ -798,8 +798,10 @@ func motionIndexedValueBackend(s *Server, motion *creatureMotion) indexedValueBa
 			motion.Level = value
 		case unitFieldFaction:
 			motion.Faction = value
+			motion.FactionKnown = true
 		case unitFieldFlags:
 			motion.UnitFlags = value
+			motion.UnitFlagsKnown = true
 		case unitFieldFlags2:
 			motion.UnitFlags2 = value
 		case unitFieldAttackTime:
@@ -823,6 +825,7 @@ func motionIndexedValueBackend(s *Server, motion *creatureMotion) indexedValueBa
 			motion.bytes1CacheKnown = true
 		case unitFieldDynamicFlags:
 			motion.DynamicFlags = value
+			motion.DynamicFlagsKnown = true
 		case unitFieldNPCFlags:
 			motion.NPCFlags = value
 			motion.NPCFlagsKnown = true

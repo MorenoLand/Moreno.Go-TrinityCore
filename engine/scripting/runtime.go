@@ -540,6 +540,27 @@ const (
 // target-map passes and the creature cast-time leg — not from
 // single-target or non-dynobj area-aura applies, so unit area auras
 // (paladin auras, yogg keeper aura) do not fire it yet.
+// OnEffectAbsorb mirrors AuraScript::OnEffectAbsorb
+// (AuraEffectAbsorbFn, SpellScript.h): it fires once per school-absorb
+// aura effect in Unit::CalcAbsorbResist (Unit.cpp:1882-1912), with args
+// (event, aura, target, damage, absorbAmount) — damage is the remaining
+// damage at that aura's turn in the absorb order (dmgInfo.GetDamage()),
+// absorbAmount is the pool the aura would absorb (GetAmount(), 0 for an
+// unlimited -1 pool, NOT yet clamped to the remaining damage). A handler
+// returning a number rewrites the absorb amount (clamped to [0,
+// remaining damage] by the caller, like C++ RoundToInterval); a handler
+// returning boolean true is PreventDefaultAction and the aura absorbs
+// nothing this hit; nil keeps the pool candidate. The fire is deferred
+// past the absorb loop's lock (absorption.go): Lua never runs under
+// castMu/auraMu, so the hook sees the at-turn damage recorded in the
+// loop while later shields have already applied — the total absorbed
+// is identical to C++, only the pool-drain split across coexisting
+// shields can differ. The mana-shield leg has no twin: C++ fires the
+// separate OnEffectManaShield hook there and no in-tree script uses
+// it. The special Go absorb legs (guardian spirit, ardent defender,
+// astral shift, scriptAbsorbHit) run before the hook, so a Lua port
+// of one of those spells would never fire its hook — those spells
+// are Go-owned.
 const (
 	AuraEventOnPeriodic        = 1
 	AuraEventOnApply           = 2
@@ -549,6 +570,7 @@ const (
 	AuraEventOnProc            = 6
 	AuraEventOnBeforeDispel    = 7
 	AuraEventOnCheckAreaTarget = 8
+	AuraEventOnEffectAbsorb    = 9
 )
 
 // SpellEvents contract for RegisterSpellEvent(spellID, event, fn). There

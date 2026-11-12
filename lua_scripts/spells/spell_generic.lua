@@ -1015,3 +1015,18 @@ end
 
 RegisterAuraEvent(SPELL_STASIS_FIELD_AURA, 1, plagueFieldTick)
 RegisterAuraEvent(SPELL_CORRUPTING_PLAGUE_AURA, 1, plagueFieldTick)
+
+-- C++ spell_gen_absorb0_hitlimit1::Absorb (spell_generic.cpp:45-67):
+-- 64765 EFFECT_0 SPELL_AURA_SCHOOL_ABSORB. The per-hit absorb caps at
+-- the EFFECT_1 dummy CalcValue (Load): absorbAmount = min(limit,
+-- absorbAmount). The Go event passes the pool as absorbAmount and the
+-- remaining damage as damage; returning the capped amount rewrites it.
+-- DORMANT until Spell.dbc ships the 64765 row.
+local SPELL_ABSORB0_HITLIMIT1 = 64765 -- spell_generic.cpp:45
+
+local function absorb0Hitlimit1(event, aura, target, damage, absorbAmount)
+    local limit = aura:GetSpellEffectCalcValue(SPELL_ABSORB0_HITLIMIT1, 1)
+    return math.min(limit, absorbAmount)
+end
+
+RegisterAuraEvent(SPELL_ABSORB0_HITLIMIT1, 9, absorb0Hitlimit1)

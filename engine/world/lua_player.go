@@ -3114,6 +3114,23 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// HasAuraWithMechanic(mechanicMask) is Unit::HasAuraWithMechanic
+	// (Unit.cpp:4727-4740): whether the player carries any live aura
+	// whose spell-level or applied-effect mechanic falls inside the
+	// mask (1 << mechanic, SharedDefines.h; stun is 1 << 12 = 4096).
+	// Backs the moonkin-form / primal-tenacity absorb gates
+	// (spell_druid.cpp:966-970, 1128-1132), which pair the flag
+	// check with the mechanic-aura check.
+	methods["HasAuraWithMechanic"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{false}, nil
+		}
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.targetHasAuraWithMechanic(ctx, s.playerGUID, mask)}, nil
+	}
 	// GetAuraEffectOfRankedSpell(spellID[, effIndex]) is
 	// Unit::GetAuraEffectOfRankedSpell (Unit.cpp:4498-4508): the
 	// live amount of the effect on any rank of the queried spell,

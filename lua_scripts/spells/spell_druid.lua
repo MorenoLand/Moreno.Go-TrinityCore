@@ -55,6 +55,13 @@
 --   is the absorb buff itself (Wowhead/wotlkdb 3.3.5a: 62600 triggers
 --   62606); TDB's 62600 binding is the DBC-true one. No rank-2 proc
 --   aura is bound in either DB's spell_script_names.
+--   spell_dru_moonkin_form_passive (spell_druid.cpp:936-976): aura
+--   69366, mode 9 (OnEffectAbsorb). Unlimited pool; stunned +
+--   stun-mechanic aura gates CalculatePct(damage, EFFECT_0 CalcValue),
+--   else 0. New AuraEvent 9 bridge + HasAuraWithMechanic (this tick).
+--   spell_dru_primal_tenacity (spell_druid.cpp:1102-1140): aura 33851,
+--   mode 9 (OnEffectAbsorb). Same shape on EFFECT_1, plus the cat-form
+--   gate. Both DORMANT until Spell.dbc ships.
 -- STAY-OUT (tick 294): every other spell_druid class — CalcAmount/
 --   hooks absent, or SpellScript-only with no RegisterSpellScript in
 --   the engine. Notable: rip (combo points + attack power), berserk
@@ -233,3 +240,65 @@ local function formsTrinketProc(event, aura, target, actor, procTarget, damage, 
 end
 
 RegisterAuraEvent(SPELL_DRUID_FORMS_TRINKET, 6, formsTrinketProc)
+
+-- C++ spell_dru_moonkin_form_passive::Absorb (spell_druid.cpp:936-976):
+-- 69366 EFFECT_0 SPELL_AURA_SCHOOL_ABSORB. The pool is unlimited
+-- (CalculateAmount sets -1), so the handler always returns an explicit
+-- amount: while the target is stunned (UNIT_FLAG_STUNNED) with a
+-- stun-mechanic aura, absorb = CalculatePct(damage, EFFECT_0
+-- CalcValue); otherwise 0. The Go pool candidate is the DBC base, not
+-- C++'s 0, so returning nil would keep a bogus pool absorb. DORMANT
+-- until Spell.dbc ships the 69366 row.
+local SPELL_DRUID_MOONKIN_FORM_PASSIVE = 69366
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117
+local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+local MECHANIC_STUN_MASK = 4096 -- 1 << MECHANIC_STUN (12), SharedDefines.h:1369
+
+local function moonkinFormPassiveAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil then
+        return 0
+    end
+    if not target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED) then
+        return 0
+    end
+    if not target:HasAuraWithMechanic(MECHANIC_STUN_MASK) then
+        return 0
+    end
+    local pct = aura:GetSpellEffectCalcValue(SPELL_DRUID_MOONKIN_FORM_PASSIVE, 0)
+    if pct <= 0 then
+        return 0
+    end
+    return math.floor(damage * pct / 100)
+end
+
+RegisterAuraEvent(SPELL_DRUID_MOONKIN_FORM_PASSIVE, 9, moonkinFormPassiveAbsorb)
+
+-- C++ spell_dru_primal_tenacity::Absorb (spell_druid.cpp:1102-1140):
+-- 33851 EFFECT_1 SPELL_AURA_SCHOOL_ABSORB. Same shape as moonkin:
+-- unlimited pool (-1), absorb = CalculatePct(damage, EFFECT_1
+-- CalcValue) only while the target is in cat form, stunned, with a
+-- stun-mechanic aura; otherwise 0. DORMANT until Spell.dbc ships the
+-- 33851 row.
+local SPELL_DRUID_PRIMAL_TENACITY = 33851
+
+local function primalTenacityAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil then
+        return 0
+    end
+    if target:GetShapeshiftForm() ~= FORM_CAT then
+        return 0
+    end
+    if not target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED) then
+        return 0
+    end
+    if not target:HasAuraWithMechanic(MECHANIC_STUN_MASK) then
+        return 0
+    end
+    local pct = aura:GetSpellEffectCalcValue(SPELL_DRUID_PRIMAL_TENACITY, 1)
+    if pct <= 0 then
+        return 0
+    end
+    return math.floor(damage * pct / 100)
+end
+
+RegisterAuraEvent(SPELL_DRUID_PRIMAL_TENACITY, 9, primalTenacityAbsorb)
