@@ -441,10 +441,17 @@ func (s *Server) resolveCreatureSpellDestinationWithTrajSnapshots(ctx context.Co
 				// flame spheres spawn above the boss. Same hardcoded-leg
 				// style as the player-path 55368/59303/12601 offsets
 				// (target_dest_targets.go); the snapshot carries it into
-				// creatureEffectSummonType.
+				// creatureEffectSummonType. The oculus call-drake leg
+				// (oculus.cpp:424-428) has the same shape: 49345/49461/
+				// 49462 raise the EFFECT_0 TARGET_DEST_CASTER_FRONT
+				// destination 12 yards.
 				if effIndex == 0 && targetType == implicitTargetDestCaster &&
 					(spell.ID == 55895 || spell.ID == 59511 || spell.ID == 59512) {
 					z += 5.5
+				}
+				if effIndex == 0 && targetType == implicitTargetDestCasterFront &&
+					(spell.ID == 49345 || spell.ID == 49461 || spell.ID == 49462) {
+					z += 12
 				}
 			case isTargetDestTarget(targetType):
 				otherDest = true

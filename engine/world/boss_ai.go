@@ -3684,7 +3684,7 @@ func (s *Server) castCreatureSpellInternalWithBasePoints(ctx context.Context, m 
 	// per cast, not once per effect-6 effect. Gated on spellKnown like
 	// the tail.
 	if spellKnown {
-		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets)
+		s.creatureEffectApplyAura(ctx, m, spellInfo, bossConeUnionTargets(spellInfo, bossConeAuraEffect, hitTargets, bossConePart), reflectedTargets, evadedTargets, immuneTargets, missTargets, prevent)
 	}
 	// Spell::TargetInfo::PreprocessTarget (Spell.cpp:2334-2381) runs
 	// its SpellScript hooks before the per-effect DoTargetSpellHit
@@ -9108,7 +9108,7 @@ func (s *Server) creatureEffectDurabilityDamage(ctx context.Context, m *creature
 	}
 }
 
-func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8) {
+func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion, spell wotlk.Spell, hitTargets []uint64, reflected map[uint64]uint8, evaded map[uint64]bool, immune map[uint64]bool, missed map[uint64]uint8, prevent *spellEffectPreventState) {
 	if s == nil || m == nil {
 		return
 	}
@@ -9120,6 +9120,24 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 		}
 	}
 	if !hasAura {
+		return
+	}
+	// SpellScript PreventHitDefaultEffect (SpellScript.cpp): an ev4/ev5
+	// handler's veto skips the default APPLY_AURA leg for that effect.
+	// The player-target loop below applies the spell record as a whole
+	// (applyAuraFromCaster is spell-level), so when every apply-aura
+	// effect of the cast is prevented the whole arm is skipped; the
+	// creature-target loops below skip per effect instead. A nil
+	// prevent (the inline path, which fires no SpellScript hooks)
+	// prevents nothing.
+	allPrevented := true
+	for i, eff := range spell.Effects {
+		if eff.Effect == spellEffectApplyAura && !prevent.defaultPrevented(i) {
+			allPrevented = false
+			break
+		}
+	}
+	if allPrevented {
 		return
 	}
 	var durationMs uint32
@@ -9191,6 +9209,9 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 				if eff.Aura == 0 {
 					continue
 				}
+				if prevent.defaultPrevented(i) {
+					continue
+				}
 				amount := uint32(0)
 				bp := s.scaledEffectValue(spell, eff, casterLevel(m), creatureIsPlayerControlled(m), eff.CalcValueForLevel(spell, casterLevel(m)))
 				if bp > 0 {
@@ -9200,7 +9221,7 @@ func (s *Server) creatureEffectApplyAura(ctx context.Context, m *creatureMotion,
 			}
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, durationMs, guid, prevent)
 	}
 }
 
@@ -9326,7 +9347,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 		if friendly != s.creatureFriendlyToTarget(m, tm.guid) {
 			continue
 		}
-		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid)
+		s.serverApplyAuraToCreatureTarget(ctx, m, spell, uint32(durationMs), tm.guid, nil)
 	}
 }
 
@@ -9342,7 +9363,7 @@ func (s *Server) creatureEffectPersistentAreaAura(ctx context.Context, m *creatu
 // wild-cast DoT/HoT record lands and expires but does not tick),
 // the linked-aura apply arms, and the charm, vehicle, dummy,
 // feign-death and phase effect tails.
-func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64) {
+func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatureMotion, spell wotlk.Spell, durationMs uint32, targetGUID uint64, prevent *spellEffectPreventState) {
 	if s == nil || m == nil || targetGUID == 0 {
 		return
 	}
@@ -9376,6 +9397,9 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 	for i := range spell.Effects {
 		eff := spell.Effects[i]
 		if eff.Aura == 0 {
+			continue
+		}
+		if prevent.defaultPrevented(i) {
 			continue
 		}
 		if creatureImmuneToSpellEffect(s, targetKey, spell, i, stats, s.isTotemGUID(targetGUID), nil, s.creatureFriendlyToTarget(m, targetGUID)) {

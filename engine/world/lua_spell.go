@@ -583,8 +583,10 @@ func (s *Server) fireSpellAfterHit(ctx context.Context, spellID uint32, spellObj
 
 // fireSpellEffectHit dispatches the RegisterSpellEvent OnEffectHit hook
 // for one effect index (SpellEventOnEffectHit, args (event, spell,
-// effectIndex)). Notification-only like fireSpellCast: the C++
-// PreventHitDefaultEffect veto has no Go model.
+// effectIndex)). A handler's PreventHitDefaultEffect call lands in the
+// per-cast veto record the creature path threads (lua_spell.go) and is
+// consulted by the default arms below; the player and funnel paths
+// thread no prevent record, so the veto is a no-op there.
 func (s *Server) fireSpellEffectHit(ctx context.Context, spellID uint32, spellObj *scripting.Object, effectIndex int) {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
 		return
@@ -595,7 +597,9 @@ func (s *Server) fireSpellEffectHit(ctx context.Context, spellID uint32, spellOb
 // fireSpellEffectHitTarget dispatches the RegisterSpellEvent
 // OnEffectHitTarget hook for one (effect, hit target) pair
 // (SpellEventOnEffectHitTarget, args (event, spell, hitTarget,
-// effectIndex)). Notification-only like fireSpellEffectHit.
+// effectIndex)). Like fireSpellEffectHit: a handler's
+// PreventHitDefaultEffect call lands in the per-cast veto record on
+// the creature path and is consulted by the default arms below.
 func (s *Server) fireSpellEffectHitTarget(ctx context.Context, spellID uint32, spellObj *scripting.Object, hitTarget any, effectIndex int) {
 	if s == nil || s.Features == nil || s.Features.Scripts == nil || spellObj == nil {
 		return

@@ -563,11 +563,16 @@ const (
 // AfterHit reads the recorded final damage everywhere; the inline
 // victim-spell path fires no SpellScript hooks at all, so no
 // hit-damage model is needed there. GetHitHeal/SetHitHeal and
-// PreventHitDamage/PreventHitDefaultEffect have no Go model: the
-// default effect still runs — for SCRIPT_EFFECT legs the Go default
-// is a per-spell no-op unless a case exists in
-// creatureEffectScriptEffect / handleEffectScriptEffect, so a
-// PreventHitDefaultEffect leg ports as hook-only. The hitTarget is
+// PreventHitDamage have no Go model. PreventHitDefaultEffect IS
+// modeled on the creature path: the ev4/ev5 spell object records the
+// veto in the per-cast spellEffectPreventState (lua_spell.go), which
+// the TriggerSpell, ForceCast, TriggerMissile, ScriptEffect and
+// ApplyAura arms consult before running; the player and funnel paths
+// thread no prevent record, so a player-cast
+// PreventHitDefaultEffect leg ports as hook-only, and for
+// SCRIPT_EFFECT legs the Go default is a per-spell no-op unless a
+// case exists in creatureEffectScriptEffect / handleEffectScriptEffect.
+// The hitTarget is
 // the Lua unit object (player or creature) or nil when the target
 // GUID resolves to nothing; GO, item and corpse TargetInfo legs
 // (Spell.cpp:2661-2707) have no Go model and never fire.

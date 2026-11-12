@@ -359,7 +359,7 @@ func (s *Server) updateCreatureDynobjTargetMap(ctx context.Context, object *dyna
 		if vs, ok := playerTargets[guid]; ok && vs != nil {
 			vs.applyAuraFromCaster(spellID, object.AuraDurationMs, caster.GUID, uint8(caster.Level))
 		} else {
-			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid)
+			s.serverApplyAuraToCreatureTarget(ctx, caster, spell, object.AuraDurationMs, guid, nil)
 		}
 		object.AuraHolders[guid] = struct{}{}
 	}

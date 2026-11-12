@@ -129,9 +129,11 @@
 -- retracted: MoveFollow (lua_creature_events.go:4636) and
 -- DespawnOrUnsummon (:6121) are both bridged, and no summon-death
 -- arm exists on this class.
--- spell_mark_of_nature (SpellScriptLoader) — NOT registered: its
--- HandleEffect needs PreventHitDefaultEffect, which has no Go model
--- (runtime.go:556-561) and the default APPLY_AURA would still land.
+-- spell_mark_of_nature (SpellScriptLoader) — PORTED (this tick,
+-- RegisterSpellEvent ev7 + ev5): the ev7 filter and the ev5
+-- PreventHitDefaultEffect + self-cast legs below; the bridge is the
+-- creature-path spellEffectPreventState (lua_spell.go), consulted
+-- per effect by the ApplyAura arm (boss_ai.go).
 -- spell_dream_fog_sleep — PORTED (this tick, RegisterSpellEvent ev7):
 -- the ev7 OnObjectAreaTargetSelect bridge (runtime.go:607,
 -- lua_spell.go:717-743) retires the old "no-SpellScript bridge" claim
@@ -853,3 +855,41 @@ local function dreamFogSleepFilter(event, spell, effectIndex, targets)
 end
 
 RegisterSpellEvent(SPELL_SLEEP, 7, dreamFogSleepFilter)
+
+local SPELL_AURA_OF_NATURE = 25043 -- boss_emerald_dragons.cpp:55
+local SPELL_MARK_OF_NATURE_SCRIPT = 25042 -- boss_emerald_dragons.cpp:54 (scripted trigger of 25041)
+
+-- C++ spell_mark_of_nature::FilterTargets (boss_emerald_dragons.cpp:784-787):
+-- OnObjectAreaTargetSelect EFFECT_0 TARGET_UNIT_SRC_AREA_ENEMY — keep only
+-- targets that carry Mark of Nature (25040) and do NOT carry Aura of Nature
+-- (25043); the C++ selector removes everything else. ev7 (runtime.go:607)
+-- fires on the creature cast; GetTargets() is a snapshot, so Remove during
+-- the loop is safe (dream-fog twin above).
+local function markOfNatureFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, unit in ipairs(targets:GetTargets()) do
+        if not unit:HasAura(SPELL_MARK_OF_NATURE) or unit:HasAura(SPELL_AURA_OF_NATURE) then
+            targets:Remove(unit)
+        end
+    end
+end
+
+-- C++ spell_mark_of_nature::HandleEffect (boss_emerald_dragons.cpp:789-793):
+-- OnEffectHitTarget EFFECT_0 SPELL_EFFECT_APPLY_AURA — suppress the default
+-- Mark of Nature aura apply and have the hit unit cast Aura of Nature
+-- (25043) on itself, triggered. PreventHitDefaultEffect is modeled on the
+-- creature path (spellEffectPreventState, lua_spell.go; the ApplyAura arm
+-- consults it per effect), so the DBC aura does not land. DORMANT until
+-- Spell.dbc ships 25042.
+local function markOfNatureHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    spell:PreventHitDefaultEffect(0)
+    hitTarget:CastSpell(hitTarget, SPELL_AURA_OF_NATURE, true)
+end
+
+RegisterSpellEvent(SPELL_MARK_OF_NATURE_SCRIPT, 7, markOfNatureFilter)
+RegisterSpellEvent(SPELL_MARK_OF_NATURE_SCRIPT, 5, markOfNatureHit)

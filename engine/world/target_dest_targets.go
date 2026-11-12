@@ -492,13 +492,18 @@ func (s *session) resolveImplicitSpellDestinationWithSnapshots(ctx context.Conte
 				// offset like the C++ RelocateOffset. The effect-28
 				// summon arm still spawns at the caster (handleSummonPet
 				// ignores dest slots); the spawn-at-dest gap is
-				// pre-existing, not introduced here.
+				// pre-existing, not introduced here. The oculus
+				// call-drake leg below (oculus.cpp:424-428) has the same
+				// shape: 49345/49461/49462 raise the EFFECT_0
+				// TARGET_DEST_CASTER_FRONT destination 12 yards.
 				if effIndex == 0 {
 					switch {
 					case (spellID == 55368 || spellID == 59303) && targetType == implicitTargetDestCasterBack:
 						z += 20
 					case spellID == 12601 && targetType == implicitTargetDestCaster:
 						z += 2.5
+					case (spellID == 49345 || spellID == 49461 || spellID == 49462) && targetType == implicitTargetDestCasterFront:
+						z += 12
 					case spellID == 48681 && targetType == implicitTargetDestCasterSummon:
 						// spell_q12308_escape_from_silverbrook_summon_worgen::ModDest
 						// (spell_quest.cpp:2283-2290): the EFFECT_0

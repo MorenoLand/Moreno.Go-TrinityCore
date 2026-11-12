@@ -8092,7 +8092,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				for _, trip := range creatureReflectTrips {
 					reflected[trip.guid] = trip.status
 				}
-				s.creatureEffectApplyAura(ctx, motion, inlineSpell, bossConeUnionTargets(inlineSpell, bossConeAuraEffect, hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet)
+				s.creatureEffectApplyAura(ctx, motion, inlineSpell, bossConeUnionTargets(inlineSpell, bossConeAuraEffect, hitTargets, inlineConePart), reflected, evadedSet, immuneSet, missSet, nil)
 				// Spell::EffectPersistentAreaAura (SpellEffects.cpp) on the
 				// inline path, same dispatch-ahead-of-damage position:
 				// a victim-targeted AI spell carrying effect 27 spawns
