@@ -76,10 +76,10 @@
 -- damage over chain targets) — no SpellScript bridge; the 66765 casts
 -- from meteorFistsProc therefore do not split.
 -- spell_flame_warder_meteor_fists (AuraScript :198-225; firing
--- SPELL_FW_METEOR_FISTS_DAMAGE 66809) — no SpellScript/AuraScript
--- bridge, and the warder aura spell id is not named in the C++ file
--- (no spell_script_names data in-tree to resolve the loader binding),
--- so no RegisterAuraEvent binding can be written without guessing.
+-- SPELL_FW_METEOR_FISTS_DAMAGE 66809) — PORTED below
+-- (flameWarderMeteorFistsProc, ev6; aura IDs 66808/68160 from TDB
+-- spell_script_names 26091 — the old "no bridge / unguessable ID"
+-- note is stale).
 -- DoMeleeAttackIfReady() (:103) — no bridge.
 
 local ENTRY_KORALON = 35013
@@ -90,6 +90,9 @@ local SPELL_BURNING_FURY = 66721
 local SPELL_FLAME_CINDER_A = 66684
 local SPELL_METEOR_FISTS = 66725
 local SPELL_METEOR_FISTS_DAMAGE = 66765
+local SPELL_FW_METEOR_FISTS = 66808 -- TDB spell_script_names 26091
+local SPELL_FW_METEOR_FISTS_HEROIC = 68160 -- TDB spell_script_names 26091
+local SPELL_FW_METEOR_FISTS_DAMAGE = 66809 -- boss_koralon.cpp:50
 
 local SPELL_EARTH_WIND_FIRE_ACHIEVEMENT_CHECK = 68308
 
@@ -272,3 +275,20 @@ local function meteorFistsProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_METEOR_FISTS, 6, meteorFistsProc)
+
+-- C++ spell_flame_warder_meteor_fists_AuraScript::TriggerFists
+-- (boss_koralon.cpp:210-213): PreventDefaultAction() +
+-- GetTarget()->CastSpell(eventInfo.GetProcTarget(),
+-- SPELL_FW_METEOR_FISTS_DAMAGE 66809, aurEff). Same shape as
+-- meteorFistsProc above; aura IDs 66808/68160 are TDB-bound, not
+-- named in the C++ file (only 66809 is, :50).
+local function flameWarderMeteorFistsProc(event, aura, target, actor, procTarget, damage)
+    if target == nil or procTarget == nil then
+        return false
+    end
+    target:CastSpell(procTarget, SPELL_FW_METEOR_FISTS_DAMAGE, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_FW_METEOR_FISTS, 6, flameWarderMeteorFistsProc)
+RegisterAuraEvent(SPELL_FW_METEOR_FISTS_HEROIC, 6, flameWarderMeteorFistsProc)

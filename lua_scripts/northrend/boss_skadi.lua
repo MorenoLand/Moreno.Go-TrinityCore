@@ -170,10 +170,9 @@
 -- spell_freezing_cloud_area_left / right, spell_skadi_reset_check and
 -- spell_skadi_poisoned_spear are PORTED 2026-11-09 (D5) via
 -- RegisterSpellEvent ev5/ev7 (runtime.go:506-589). Stay out:
--- spell_freezing_cloud_damage (DoCheckAreaTarget has no aura-event
--- twin: the RegisterAuraEvent set is Periodic 1 / Apply 2 / Remove 3 /
--- ChangeAmount 4 / Dispel 5 / Proc 6 / BeforeDispel 7,
--- engine/scripting/runtime.go:497-503) and spell_skadi_launch_harpoon
+-- spell_freezing_cloud_damage is PORTED below
+-- (freezingCloudDamageCheckFor, ev8 — AuraEventOnCheckAreaTarget = 8;
+-- the old "no aura-event twin" note is stale) and spell_skadi_launch_harpoon
 -- (cone target filter stays out — no Go target-select hook for this
 -- spell; the 35%-max-health damage calc is PORTED in the Go OnHit
 -- table, engine/world/spell_onhit.go:48642).
@@ -208,6 +207,7 @@ local SPELL_STRIKE = 48640
 local SPELL_SHADOW_BOLT = 49084
 local SPELL_CRUSH = 50234
 local SPELL_POISONED_SPEAR = 50255
+local SPELL_POISONED_SPEAR_HEROIC = 59331 -- TDB spell_script_names 26091
 local SPELL_WHIRLWIND = 50228
 local SPELL_SKADI_TELEPORT = 61790
 local SPELL_SHRINK = 49089
@@ -229,6 +229,7 @@ local EMOTE_BREATH = 0 -- boss_skadi.cpp:72
 local EMOTE_ON_RANGE = 1 -- boss_skadi.cpp:73
 local ACTION_DRAKE_BREATH = 1 -- boss_skadi.cpp:98
 local SPELL_FREEZING_CLOUD = 47579 -- boss_skadi.cpp:42
+local SPELL_FREEZING_CLOUD_HEROIC = 60020 -- TDB spell_script_names 26091
 local SPELL_FREEZING_CLOUD_RIGHT_PERIODIC = 47592 -- boss_skadi.cpp:43
 local SPELL_FREEZING_CLOUD_LEFT_PERIODIC = 47590 -- boss_skadi.cpp:44
 local SPELL_FREEZING_CLOUD_RIGHT_AREA = 47594 -- boss_skadi.cpp:45
@@ -1047,12 +1048,43 @@ RegisterSpellEvent(SPELL_FREEZING_CLOUD_LEFT_AREA, 5, function(event, spell, hit
     end
 end)
 
+-- C++ spell_freezing_cloud_damage::CanBeAppliedOn (boss_skadi.cpp:718-725):
+-- DoCheckAreaTarget rejects the aura when the target already holds it
+-- from a different dynobj owner, so two overlapping clouds never stack.
+-- The pending aura's owner (the dynobj) has no Lua object, so the caster
+-- GUID is the proxy: left/right clouds are cast by distinct trigger
+-- creatures, so same-caster means same dynobj.
+local function freezingCloudDamageCheckFor(spellId)
+    return function(event, aura, target)
+        if target == nil then
+            return true
+        end
+        local existing = target:GetAura(spellId)
+        if existing ~= nil and existing:GetCasterGUID() ~= aura:GetCasterGUID() then
+            return false
+        end
+        return true
+    end
+end
+
+RegisterAuraEvent(SPELL_FREEZING_CLOUD, 8, freezingCloudDamageCheckFor(SPELL_FREEZING_CLOUD))
+RegisterAuraEvent(SPELL_FREEZING_CLOUD_HEROIC, 8, freezingCloudDamageCheckFor(SPELL_FREEZING_CLOUD_HEROIC))
+
 -- C++ spell_skadi_poisoned_spear (:817-847): HandleScript (EFFECT_0,
 -- SCHOOL_DAMAGE) has the hit unit self-cast
 -- SPELL_POISONED_SPEAR_PERIODIC 50258, triggered. The ev5 hook carries
 -- no effect-type gate; effectIndex == 0 is the C++ registration, and
 -- the spell's effect 0 IS the school-damage effect by construction.
+-- Heroic twin 59331 (TDB spell_script_names 26091) binds the same class;
+-- the handler casts 50258 unconditionally regardless of which bound
+-- spell triggered it (boss_skadi.cpp:832-835).
 RegisterSpellEvent(SPELL_POISONED_SPEAR, 5, function(event, spell, hitTarget, effectIndex)
+    if effectIndex == 0 and hitTarget ~= nil then
+        hitTarget:CastSpell(hitTarget, SPELL_POISONED_SPEAR_PERIODIC, true)
+    end
+end)
+
+RegisterSpellEvent(SPELL_POISONED_SPEAR_HEROIC, 5, function(event, spell, hitTarget, effectIndex)
     if effectIndex == 0 and hitTarget ~= nil then
         hitTarget:CastSpell(hitTarget, SPELL_POISONED_SPEAR_PERIODIC, true)
     end

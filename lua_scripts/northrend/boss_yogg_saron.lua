@@ -265,9 +265,10 @@
 -- on hitTarget type — creature hitTarget:Kill(caster), player
 -- hitTarget:Kill(hitTarget) self-kill; fixes 5da47a5f's
 -- caster:Kill(hitTarget), which killed the caster); hodirs_protective_gaze
--- (64174) STAYS OUT — DoCheckAreaTarget unbridged AND no OnEffectAbsorb
--- aura event (aura events 1-7, runtime.go); the Hodir engage cast of
--- 64174 is already ported (keeperEnterCombat). ulduar_teleporter
+-- (64174) PORTED below (hodirsProtectiveGazeCanApply / Absorb, ev8/ev9;
+-- the old "unbridged" note is stale — AuraEventOnCheckAreaTarget = 8
+-- and AuraEventOnEffectAbsorb = 9 both exist and fire); the Hodir engage
+-- cast of 64174 is already ported (keeperEnterCombat). ulduar_teleporter
 -- STAYS OUT — OnCheckCast only, no spell OnCheckCast event (spell
 -- events 1-7); no spell ID in the loader, DBC-bound (note in
 -- instance_ulduar.lua). ingvar woe_strike (42730) VERIFIED-EXISTING
@@ -1205,6 +1206,37 @@ local SPELL_HODIRS_PROTECTIVE_GAZE = 64174
 local SPELL_FURY_OF_THE_STORM = 62702
 local SPELL_SPEED_OF_INVENTION = 62671
 
+-- C++ spell_yogg_saron_hodirs_protective_gaze (boss_yogg_saron.cpp:3138-3184):
+-- DoCheckAreaTarget CanApply (:3155-3160) passes players and the caster;
+-- OnEffectAbsorb OnAbsorb (:3162-3169) absorbs the full hit and casts
+-- FLASH_FREEZE 64175 triggered when the damage is lethal, else
+-- PreventDefaultAction (absorbs nothing). The ev8 leg fires only at the
+-- dynobj apply sites (boss_ai.go:9453/9481); the ev9 rewrite is clamped
+-- to the live pool by the Go absorb loop (lua_aura.go:1340).
+PHASE3.hodirsProtectiveGazeCanApply = function(event, aura, target)
+    if target == nil then
+        return true
+    end
+    if target:GetObjectType() == "Player" then
+        return true
+    end
+    return target:GetGUID() == aura:GetCasterGUID()
+end
+
+PHASE3.hodirsProtectiveGazeAbsorb = function(event, aura, target, damage, absorbAmount)
+    if target == nil then
+        return true
+    end
+    if damage >= target:GetHealth() then
+        target:CastSpell(target, PHASE3.FLASH_FREEZE, true)
+        return damage
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_HODIRS_PROTECTIVE_GAZE, 8, PHASE3.hodirsProtectiveGazeCanApply)
+RegisterAuraEvent(SPELL_HODIRS_PROTECTIVE_GAZE, 9, PHASE3.hodirsProtectiveGazeAbsorb)
+
 -- C++ spell_yogg_saron_sanity::DummyTick
 -- (boss_yogg_saron.cpp:2863-2871): on each tick of the sanity aura
 -- (63050) on a player, standing in a sanity well (64169) restores
@@ -2118,10 +2150,11 @@ RegisterAuraEvent(PHASE3.SPELL_GRIM_REPRISAL, 6, PHASE3.yoggGrimReprisalProc)
 -- removes SANITY (63050) with AURA_REMOVE_BY_ENEMY_SPELL (mode 3
 -- — which fires the sanityRemove ev3 leg, the drive-me-crazy /
 -- INSANE chain) and the aura named by the effect value. The
--- AfterCast ClearShatteredIllusion leg (:2811-2820: caster casts
--- 65238 nil-target + voice DoAction(9)) stays out — no spell
--- AfterCast event in the Go runtime (runtime.go:601-607, events
--- 1-7 only). Bound 64059 (Sara DoCastAOE :1110,
+-- AfterCast ClearShatteredIllusion leg (:2804-2811: caster casts
+-- 65238 + voice DoAction(9)) is PORTED below
+-- (yoggInduceMadnessAfterCast, ev9; the old "no spell AfterCast
+-- event" note is stale — SpellEventAfterCast = 9 fires on the
+-- creature cast path, boss_ai.go:4379). Bound 64059 (Sara DoCastAOE :1110,
 -- ACTION_INDUCE_MADNESS). The census AfterEffectApply hook is a
 -- phantom — the class registers OnEffectHitTarget + AfterCast.
 -- DORMANT until Spell.dbc ships.
@@ -2137,6 +2170,24 @@ PHASE3.yoggInduceMadnessHit = function(event, spell, hitTarget, effectIndex)
     end
 end
 RegisterSpellEvent(SPELL_INDUCE_MADNESS, 5, PHASE3.yoggInduceMadnessHit)
+
+-- C++ spell_yogg_saron_induce_madness::ClearShatteredIllusion
+-- (boss_yogg_saron.cpp:2804-2811): AfterCast — the caster self-casts
+-- SPELL_SHATTERED_ILLUSION_REMOVE 65238 (non-triggered; explicit
+-- self-target — Go nil-target CastSpell falls back to TargetGUID, not
+-- self) and the Voice of Yogg-Saron does DoAction(9).
+PHASE3.yoggInduceMadnessAfterCast = function(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, PHASE3.SPELL_SHATTERED_ILLUSION_REMOVE)
+    local voice = caster:GetInstanceCreature(40) -- DATA_VOICE_OF_YOGG_SARON, ulduar.h:436
+    if voice ~= nil then
+        voice:DoAction(ACTION_TOGGLE_SHATTERED_ILLUSION)
+    end
+end
+RegisterSpellEvent(SPELL_INDUCE_MADNESS, 9, PHASE3.yoggInduceMadnessAfterCast)
 
 -- C++ spell_yogg_saron_insane::OnApply / OnRemove
 -- (boss_yogg_saron.cpp:2915-2926): AfterEffectApply EFFECT_0
