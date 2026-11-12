@@ -923,7 +923,12 @@ func (s *Server) hasAuraProcHook(spellID uint32) bool {
 // of range); GetRank reads SpellInfo::GetRank (SpellInfo.cpp:3251-3255:
 // the chain rank, 1 when the spell has no chain entry — Go spellRank
 // returns 0 there, so the method folds 0 to 1; 0 only when the event
-// carries no spell at all). GetSchoolMask reads ev.schoolMask, which every construction
+// carries no spell at all). IsRankOf(spellId) mirrors
+// SpellInfo::IsRankOf (SpellInfo.cpp:3323-3326): the event spell and
+// the given spell share a first-rank spell (Go spellFirstRank, the
+// spell_ranks world table; an unchained spell is its own first rank,
+// so with no rank row it is true only for the same id); false when
+// the event carries no spell. GetSchoolMask reads ev.schoolMask, which every construction
 // site fills with the event spell's school (0 falls back to 1, the
 // physical mask) or the melee/damage school, matching C++
 // GetSchoolMask; GetTypeMask / GetSpellTypeMask / GetSpellPhaseMask /
@@ -970,7 +975,17 @@ func (s *Server) procEventObject(ev procEventInfo, holderGUID, triggerTargetGUID
 			}
 			return []any{familyFlags[index]}, nil
 		},
-		"GetRank":           luaNoArgs(func() any { return rank }),
+		"GetRank": luaNoArgs(func() any { return rank }),
+		"IsRankOf": func(_ context.Context, args []any) ([]any, error) {
+			if ev.eventSpell == nil || len(args) == 0 || args[0] == nil {
+				return []any{false}, nil
+			}
+			id, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			return []any{s.spellFirstRank(spellID) == s.spellFirstRank(id)}, nil
+		},
 		"GetSchoolMask":     luaNoArgs(func() any { return ev.schoolMask }),
 		"GetTypeMask":       luaNoArgs(func() any { return ev.typeMask }),
 		"GetSpellTypeMask":  luaNoArgs(func() any { return ev.spellTypeMask }),

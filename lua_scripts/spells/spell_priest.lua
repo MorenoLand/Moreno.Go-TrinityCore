@@ -168,20 +168,62 @@ end
 
 RegisterAuraEvent(SPELL_PRIEST_DIVINE_AEGIS_TALENT, 6, divineAegisProc)
 
+local SPELL_PRIEST_IMPROVED_SPIRIT_TAP = 15337 -- spell_priest.cpp:632
+local SPELL_PRIEST_SHADOW_WORD_DEATH_R1 = 32379 -- spell_priest.cpp:69
+local SPELL_PRIEST_MIND_BLAST_R1 = 8092 -- spell_priest.cpp:68
+local SPELL_PRIEST_MIND_FLAY_DAMAGE = 58381 -- spell_priest.cpp:70
+
+-- C++ spell_pri_improved_spirit_tap::CheckProc (spell_priest.cpp:650-662):
+-- DoCheckProc only, gates the default trigger: pass when the event
+-- spell is a rank of Shadow Word: Death (32379) or Mind Blast (8092)
+-- (procEvent:IsRankOf, lua_aura.go — the spell_ranks world table; with
+-- no rank row it is true only for the R1 id itself), or Mind Flay
+-- damage (58381) at 50% (roll_chance_i twin: math.random(0, 99) < 50,
+-- the spell_generic idiom); every other event spell vetoes (the true
+-- return = PreventDefaultAction, which skips the default trigger leg
+-- for this effect). A nil event spell vetoes, like the C++ nil
+-- GetSpellInfo() path. The ev6 hook fires after charge/cooldown
+-- consumption, so a veto never refunds a spent charge — the known ev6
+-- CheckProc approximation (lua_aura.go fireAuraProc). DORMANT until
+-- Spell.dbc ships the 15337 proc entry.
+local function improvedSpiritTapCheckProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if procEvent:IsRankOf(SPELL_PRIEST_SHADOW_WORD_DEATH_R1) or procEvent:IsRankOf(SPELL_PRIEST_MIND_BLAST_R1) then
+        return
+    end
+    if procEvent:GetSpellId() == SPELL_PRIEST_MIND_FLAY_DAMAGE then
+        if math.random(0, 99) < 50 then
+            return
+        end
+        return true
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckProc)
+
 -- TRIAGED STAY OUT (tick 2026-11-11 18:32, census rows 662-664 + 666-670):
---   662 body_and_soul (64127, :236-295): both arms need the event spell
---   (EFFECT_0 PROC_TRIGGER_SPELL vetoes unless family flags [0] & 0x1
---   Power Word: Shield; EFFECT_1 DUMMY casts 64136 only on self-cast
---   Abolish Disease 552 + roll); ev6 carries no event spell.
+--   662 body_and_soul (64127, :236-295): PORTED IN GO this tick
+--   (procs.go per-effect legs, session loop only — a priest talent):
+--   EFFECT_0 PROC_TRIGGER_SPELL vetoes unless the event spell carries
+--   family flag [0] 0x1 (Power Word: Shield), else falls through to the
+--   generic trigger leg; EFFECT_1 DUMMY casts 64136 on the caster only
+--   on self-cast Abolish Disease 552 (actor == proc target) + the
+--   EFFECT_1 amount roll. No Lua ev6 twin: ev6 fires once per eligible
+--   effect with no effect index, so one handler could not veto
+--   EFFECT_0 without also vetoing EFFECT_1, and would double-roll /
+--   double-cast 64136.
 --   663 circle_of_healing (34861, :296-335): SpellScript target filter
 --   (raid check, glyph 6 vs 5 targets, lowest-health sort); no
 --   OnObjectAreaTargetSelect bridge.
 --   664 divine_aegis (47509, :336-389): PORTED this tick (ev6, heal
 --   forwarding: pct(heal, amount) + existing-aegis stack +
 --   level*125 cap, holder casts 47753 on the proc target).
---   666 improved_spirit_tap (15337, :632-676): DoCheckProc only, gates
---   the default trigger on the event spell (rank of SW:D 32379 / Mind
---   Blast 8092, or Mind Flay 58381 at 50%); ev6 carries no event spell.
+--   666 improved_spirit_tap (15337, :632-676): PORTED this tick (ev6,
+--   above): rank of SW:D 32379 / Mind Blast 8092 passes via the new
+--   procEvent:IsRankOf bridge, Mind Flay 58381 at 50%, all else vetoes.
 --   667 lightwell_renew (7001, :788-846): CalculateAmount glyph bonus
 --   (55673) unbridged; HandleProc DropCharge unbridged (no aura charge
 --   bridge); the per-aura _remainingAmount latch has no per-aura key.

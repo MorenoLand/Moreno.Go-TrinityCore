@@ -4070,6 +4070,38 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 69961, casterGUID: ev.actorGUID, targetGUID: triggerTargetGUID})
 				continue
 			}
+			if auraSpell.ID == 64127 && i == 0 && eff.Aura == spellAuraProcTriggerSpell {
+				// spell_pri_body_and_soul::HandleProcTriggerSpell
+				// (spell_priest.cpp:254-263): PreventDefaultAction unless the
+				// proc spell carries family flag [0] 0x1 (Power Word: Shield);
+				// a pass falls through to the generic leg below, which casts
+				// the DBC trigger spell. No Lua ev6 twin: ev6 fires once per
+				// eligible effect with no effect index, so a Lua handler could
+				// not veto EFFECT_0 without also vetoing the EFFECT_1 arm
+				// below. DORMANT until Spell.dbc ships the 64127 proc entry.
+				if ev.eventSpell == nil || ev.eventSpell.SpellFamilyFlags[0]&0x00000001 == 0 {
+					continue
+				}
+			}
+			if auraSpell.ID == 64127 && i == 1 && eff.Aura == spellAuraDummy {
+				// spell_pri_body_and_soul::HandleProcDummy
+				// (spell_priest.cpp:265-280): PreventDefaultAction; proc only
+				// on a self-cast Abolish Disease (552) — the event spell id
+				// must match and the actor must be the proc target — then a
+				// roll against the EFFECT_1 amount casts the poison trigger
+				// (64136) on the caster. No Lua ev6 twin: see the EFFECT_0
+				// leg above (no effect index in the ev6 args; a single handler
+				// would double-roll and double-cast 64136). DORMANT until
+				// Spell.dbc ships the 64127 proc entry.
+				if ev.eventSpell == nil || ev.eventSpell.ID != 552 || ev.actorGUID == 0 || ev.actorGUID != triggerTargetGUID {
+					continue
+				}
+				if amount := scriptProcEffAmount(aura, i); amount <= 0 || rand.Float64()*100 >= float64(amount) {
+					continue
+				}
+				s.server.fireScriptProcCast(ctx, s.player.Map, s.player.InstanceID, scriptProcCast{spellID: 64136, casterGUID: ev.actorGUID, targetGUID: ev.actorGUID})
+				continue
+			}
 			if auraSpell.ID == 50240 && i == 2 && eff.Aura == spellAuraProcTriggerSpell {
 				// spell_oculus_evasive_maneuvers::HandleProc
 				// (oculus.cpp:488-493): PreventDefaultAction; the holder
