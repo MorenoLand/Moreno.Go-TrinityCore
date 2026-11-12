@@ -646,16 +646,24 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   spell_q12414_hand_over_reins (:2666-2697): ev5 EFFECT_1; hit unit
 --   ExitVehicle + caster creature despawns — no binding ID
 --   (ExitVehicle itself IS bridged, lua_player.go:2889).
---   spell_59064_59439_portals (:2726-2765): ev5 SCRIPT_EFFECT; hit
---   unit self-casts GetEffectValue() NON-triggered — binding IDs in
---   the class name, but the caster is the player casting directly,
---   so no ev5 direct-path fire site (triggered funnel only).
+--   spell_59064_59439_portals (:2726-2765): PORTED tick 2026-11-12
+--   (bindings 59064/59439, class name) — the old stay-out reason
+--   (no ev5 direct-path fire site) was stale: the ev5 player-path
+--   site is live (a910c39d, spells.go:14668-14737).
 --   spell_q11306_mixing_blood (:2766-2793): ev4 EFFECT_1 SEND_EVENT;
 --   nearest trigger 24042 DoCastSelf(38594) — no binding ID; no
 --   DoCastSelf bridge (nearest-creature + self-cast pieces exist).
 --   spell_q11306_mixing_vrykul_blood (:2794-2835): ev5 EFFECT_1
 --   DUMMY; caster self-casts 43376/43378/43970 (30/30/30) or 43377
 --   (10%), triggered — no binding ID.
+--   spell_q12661_q12669_q12676_q12677_q12713_summon_stefan (:1734-1764):
+--   OnDestinationTargetSelect ONLY (+20Z on TARGET_DEST_CASTER_BACK) —
+--   no bridge; the leg is already in Go (target_dest_targets.go:512,
+--   spell 55368).
+--   spell_q12847_summon_soul_moveto_bunny (:1873-1907):
+--   OnDestinationTargetSelect ONLY (+2.5Z on TARGET_DEST_CASTER) —
+--   no bridge; binding spell ID not in the C++ tree (TDB-blocked:
+--   the Go +2.5Z leg keys on 12601 only).
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
 --   The ev5 player-path fire site is live (a910c39d,
@@ -1411,6 +1419,8 @@ local HUNT = {
     -- spell_q14100_q14111_make_player_destroy_totems (spell_quest.cpp:2592)
     SPELL_MAKE_PLAYER_DESTROY_TOTEMS = 66744,
     SPELL_TOTEM_OF_THE_EARTHEN_RING = 66747,
+    -- spell_q11896_weakness_to_lightning_46444 (spell_quest.cpp:2892)
+    SPELL_WEAKNESS_TO_LIGHTNING = 46444,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -1953,3 +1963,58 @@ local function recallEyeHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_RECALL_EYE_OF_ACHERUS, 5, recallEyeHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_59064_59439_portals (spell_quest.cpp:2726-2765):
+--   EFFECT_0 SCRIPT_EFFECT ev5, bindings 59064/59439 in the class name.
+--   The hit unit self-casts the effect's DBC value
+--   (spell:GetEffectValue(0)), NON-triggered. >0 guard per the
+--   emblazon/bested precedent (C++ CastSpell with id 0 fails the
+--   SpellInfo lookup, so no cast).
+
+local PORTAL_SPELLS = {59064, 59439} -- spell_quest.cpp:2726
+
+local function portalsHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local spellId = spell:GetEffectValue(0)
+    if spellId > 0 then
+        hitTarget:CastSpell(hitTarget, spellId)
+    end
+end
+
+for _, spellId in ipairs(PORTAL_SPELLS) do
+    RegisterSpellEvent(spellId, 5, portalsHit)
+end
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q11896_weakness_to_lightning_46444 (spell_quest.cpp:2892-2910):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 46444 in the class name. The hit
+--   unit casts the effect's DBC value (spell:GetEffectValue(0)) TRIGGERED
+--   at its owner, null-guarded (GetOwner nil twin). KNOWN LIMITS:
+--   creature GetOwner resolves player owners only (lua_creature_events.go:627),
+--   and player:CastSpell ignores the triggered flag — the same accepted
+--   deltas as the q12277/bested ports.
+
+local function weaknessToLightningHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local owner = hitTarget:GetOwner()
+    if owner == nil then
+        return
+    end
+    local spellId = spell:GetEffectValue(0)
+    if spellId > 0 then
+        hitTarget:CastSpell(owner, spellId, true)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_WEAKNESS_TO_LIGHTNING, 5, weaknessToLightningHit)
