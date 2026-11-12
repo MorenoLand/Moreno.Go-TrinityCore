@@ -340,7 +340,16 @@ end
 -- DoCastSelf(SPELL_UNCHAINED_MAGIC) non-triggered, init {9s,14s}
 -- (:246), re-arm {30s,35s} (:484-487), land-phase group. The
 -- spell_sindragosa_unchained_magic healer/caster target filter stays
--- out (no IsPlayerHealer / specialization bridge).
+-- out (no IsPlayerHealer / specialization bridge). CORRECTION
+-- 2026-11-12: ev7 OnObjectAreaTargetSelect IS live (runtime.go:669,
+-- lua_spell.go:849, boss_ai.go:3151; kologarn precedent) — the hook
+-- is not the block. The block is the spec-tree derivation:
+-- GetPlayerSpecialization (CommonHelpers.cpp:248, tree index via
+-- HasSpell on the 99-entry PlayerSpecializationIconicSpells table,
+-- :185) + IsPlayerHealer (:264) are unbridged as methods; Lua could
+-- derive them only via player:HasSpell (bridged, lua_player.go:2151)
+-- with the iconic-spell ids resolved from C++ — engine work or a
+-- data-lift tick, not a filter port.
 local function onUnchainedMagic(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "unchained_magic", 500, function() onUnchainedMagic(creature, guid) end)

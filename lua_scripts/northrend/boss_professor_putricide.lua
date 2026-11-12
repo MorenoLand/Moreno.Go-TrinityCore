@@ -216,14 +216,15 @@
 -- no fire site for aura-periodic dummy effects (fireSpellEffectHitTarget
 -- callers are the cast path only, boss_ai.go:3417/3420).
 -- 2026-11-12: mutated_transformation (summon leg, ev4) +
--- abomination_mutated_transformation (resist calc) +
--- mutated_transformation_dmg (ev7 owner filter) STAY OUT — no
+-- abomination_mutated_transformation (resist calc) STAY OUT — no
 -- GetOriginalCaster/GetEffectMiscValue spell methods, summon
 -- properties are DBC, JustSummoned has no bridge, resist/absorb
--- calc is not forwarded (runtime.go:518); the _dmg filter is a
--- no-op for the player caster (CreatorGUID 0) and ev7 never fires
--- on the player path (lua_spell.go fireSpellTargetSelects takes a
--- creatureMotion). Gaseous bloat PORTED this tick (RemoveAuraFromStack
+-- calc is not forwarded (runtime.go:518). mutated_transformation_dmg
+-- PORTED below (ev7 owner filter) — the same-day stay-out is
+-- superseded: the caster is the Mutated Abomination creature (its
+-- CreatorGUID is set to the drinking player, :1347), not the player,
+-- so the filter is not a no-op, and ev7 fires on the creature cast
+-- path (boss_ai.go:3151).
 -- bridge built; stack-10 re-cast via CastSpell + SetStackAmount(10));
 -- the 05:16 stay-out is superseded.
 -- DOCUMENTED-ENTRY EVIDENCE (not registered): icecrown_citadel.h —
@@ -292,6 +293,10 @@ local SPELL_GASEOUS_BLOAT_10H = 72832 -- boss_professor_putricide.cpp:121 RAID_M
 local SPELL_GASEOUS_BLOAT_25H = 72833 -- boss_professor_putricide.cpp:121 RAID_MODE 25-man heroic
 local SPELL_EXPUNGED_GAS = 70701 -- boss_professor_putricide.cpp:100
 local SPELL_DECIMATE = 71123 -- boss_festergut.cpp:56 / boss_rotface.cpp:77
+local SPELL_MUTATED_TRANSFORMATION_DMG = 70402 -- boss_professor_putricide.cpp:1435
+local SPELL_MUTATED_TRANSFORMATION_DMG_25 = 72511 -- boss_professor_putricide.cpp:1435
+local SPELL_MUTATED_TRANSFORMATION_DMG_10H = 72512 -- boss_professor_putricide.cpp:1435
+local SPELL_MUTATED_TRANSFORMATION_DMG_25H = 72513 -- boss_professor_putricide.cpp:1435
 local NPC_ABOMINATION_WING_MAD_SCIENTIST_STALKER = 37824 -- icecrown_citadel.h:235
 
 local NPC_MALLEABLE_OOZE_STALKER = 38556
@@ -1020,3 +1025,33 @@ local function stinkyPreciousDecimate(event, spell, hitTarget, effectIndex)
     end
 end
 RegisterSpellEvent(SPELL_DECIMATE, 5, stinkyPreciousDecimate)
+
+-- C++ spell_putricide_mutated_transformation_dmg::FilterTargetsInitial
+-- (boss_professor_putricide.cpp:1358-1376): OnObjectAreaTargetSelect
+-- EFFECT_0 TARGET_UNIT_SRC_AREA_ALLY — remove the caster's creator
+-- from the targets. The caster is the Mutated Abomination creature:
+-- the summon leg (:1310-1347) sets its CreatorGUID to the drinking
+-- player, so the removed owner is the player riding it. GetSummonerUnit
+-- reads the same UNIT_FIELD_CREATEDBY (lua_creature_events.go) and
+-- resolves the player object, so targets:Remove(owner) matches by
+-- GUID field (lua_player.go:84); a missing summoner is a no-op, as in
+-- C++ (GetUnit returns null). Go ev7 fires on the creature cast path
+-- (boss_ai.go:3151), spellKnown-gated — dormant until Spell.dbc ships.
+-- Difficulty order follows the file's 10N/25N/10H/25H convention
+-- (gaseous bloat :121); the four ids share one class (:1435).
+local function mutatedTransformationDmgFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local owner = caster:GetSummonerUnit()
+    if owner ~= nil then
+        targets:Remove(owner)
+    end
+end
+for _, spellId in ipairs({ SPELL_MUTATED_TRANSFORMATION_DMG, SPELL_MUTATED_TRANSFORMATION_DMG_25, SPELL_MUTATED_TRANSFORMATION_DMG_10H, SPELL_MUTATED_TRANSFORMATION_DMG_25H }) do
+    RegisterSpellEvent(spellId, 7, mutatedTransformationDmgFilter)
+end
