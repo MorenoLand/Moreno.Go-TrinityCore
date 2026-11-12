@@ -1799,6 +1799,73 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{s.spellHasCooldown(spell)}, nil
 	}
+	// AddSpellCooldown is SpellHistory::AddCooldown
+	// (SpellHistory.cpp:395-407): records a per-spell cooldown of
+	// durationMs milliseconds, overwriting any live entry for the
+	// spell (replaceSpellCooldownEntry's single-entry map semantics).
+	// The cheat-death absorb leg writes the 1-minute 31231 cooldown
+	// here because the 31231 cast itself carries no DBC cooldown.
+	methods["AddSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("AddSpellCooldown requires a spell id and a duration in milliseconds")
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		durationMs, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s.player == nil || durationMs <= 0 {
+			return nil, nil
+		}
+		s.replaceSpellCooldownEntry(spellCooldown{Spell: spell, End: time.Now().Unix() + durationMs/1000})
+		return nil, nil
+	}
+	// GetUnitCriticalChanceAgainst is Unit::GetUnitCriticalChanceAgainst
+	// (Unit.cpp:2901-2905): the attacker's crit-done chance against the
+	// target unit, in percent. attackType is the WeaponAttackType
+	// (0 base, 1 offhand, 2 ranged). The done arm is the melee-roll
+	// model (getMeleeCritPct for base/offhand — OffhandCrit equals
+	// MeleeCrit, player_state.go:2800 — getRangedCritPct for ranged);
+	// the taken arms come from critTakenBP; resilience applies only
+	// against a player victim (the creature-victim arm no-ops,
+	// combat.go). An unresolvable target reads 0.
+	methods["GetUnitCriticalChanceAgainst"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("GetUnitCriticalChanceAgainst requires an attack type and a target")
+		}
+		attackType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if attackType > uint32(protocol.RangedAttack) {
+			return nil, fmt.Errorf("GetUnitCriticalChanceAgainst requires attack type 0 (base), 1 (offhand) or 2 (ranged)")
+		}
+		targetGUID := luaObjectGUID(args[1])
+		if targetGUID == 0 || s.server == nil || s.player == nil {
+			return []any{float64(0)}, nil
+		}
+		ranged := attackType == uint32(protocol.RangedAttack)
+		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
+		if ranged {
+			critBonusBP = int32(math.Round(s.getRangedCritPct() * 100))
+		}
+		flatBP, weaponBP, isPlayerVictim, victimLevel, victimSess := s.server.critTakenBP(s.player.GUID, targetGUID, s.player.Map, s.player.InstanceID, ranged)
+		critReductionBP := int32(0)
+		if isPlayerVictim && victimSess != nil {
+			resilCR := CombatRatingCritTakenMelee
+			if ranged {
+				resilCR = CombatRatingCritTakenRanged
+			}
+			resilBaseBP := int32(500) + critBonusBP + flatBP
+			victimSess.applyResilienceToMeleeCritChance(true, resilCR, &resilBaseBP)
+			critReductionBP = int32(500) + critBonusBP + flatBP - resilBaseBP
+		}
+		bp := meleeCritChanceAgainstBP(s.player.Level, victimLevel, isPlayerVictim, critBonusBP, flatBP, weaponBP, critReductionBP, 0)
+		return []any{float64(bp) / 100}, nil
+	}
 	// cooldownUpdate mirrors Eluna CHECKVAL<bool>(L, 3, true): an omitted
 	// update argument means true, a non-boolean argument is an error.
 	cooldownUpdate := func(method string, args []any) (bool, error) {

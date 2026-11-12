@@ -3524,6 +3524,75 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		_, active := luaSpellCooldownEnd(spell)
 		return []any{active}, nil
 	}
+	// AddSpellCooldown is SpellHistory::AddCooldown
+	// (SpellHistory.cpp:395-407) for creatures: the per-spell entry in
+	// motion.SpellCooldowns, written under the motion lock like the
+	// boss_ai.go cast path. The cheat-death npcbot leg writes the
+	// 1-minute 31231 cooldown here.
+	methods["AddSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("AddSpellCooldown requires a spell id and a duration in milliseconds")
+		}
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		durationMs, err := luaInt64Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if durationMs <= 0 || s.server == nil {
+			return nil, nil
+		}
+		end := time.Now().Add(time.Duration(durationMs) * time.Millisecond)
+		s.server.motionMu.Lock()
+		if motion := s.server.findCreatureMotionLocked(state.Map, state.InstanceID, state.GUID); motion != nil {
+			if motion.SpellCooldowns == nil {
+				motion.SpellCooldowns = make(map[uint32]time.Time)
+			}
+			motion.SpellCooldowns[spell] = end
+		}
+		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// GetUnitCriticalChanceAgainst is Unit::GetUnitCriticalChanceAgainst
+	// (Unit.cpp:2901-2905) for creatures, in percent: the 5% base plus
+	// SPELL_AURA_MOD_WEAPON_CRIT_PERCENT (52) and SPELL_AURA_MOD_CRIT_PCT
+	// (290), gated on !CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) — the
+	// creaturemotion roll arm — against the critTakenBP victim arms.
+	// A pet attacker cannot apply resilience here (no attacker session),
+	// so the reduction reads 0, the creaturemotion roll convention. An
+	// unresolvable target reads 0.
+	methods["GetUnitCriticalChanceAgainst"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("GetUnitCriticalChanceAgainst requires an attack type and a target")
+		}
+		attackType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if attackType > uint32(protocol.RangedAttack) {
+			return nil, fmt.Errorf("GetUnitCriticalChanceAgainst requires attack type 0 (base), 1 (offhand) or 2 (ranged)")
+		}
+		targetGUID := luaObjectGUID(args[1])
+		if targetGUID == 0 || s.server == nil {
+			return []any{float64(0)}, nil
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return []any{float64(0)}, nil
+		}
+		ranged := attackType == uint32(protocol.RangedAttack)
+		attackerKey := creatureAuraKeyForMotion(motion)
+		adjustBP := s.server.creatureAuraTypeSum(attackerKey, spellAuraModWeaponCritPercent)*100 +
+			s.server.creatureAuraTypeSum(attackerKey, spellAuraModCritPct)*100
+		if motion.FlagsExtra&0x00020000 != 0 {
+			adjustBP = -500
+		}
+		flatBP, weaponBP, isPlayerVictim, victimLevel, _ := s.server.critTakenBP(motion.GUID, targetGUID, motion.Map, motion.InstanceID, ranged)
+		bp := meleeCritChanceAgainstBP(uint8(motion.Level), victimLevel, isPlayerVictim, 0, flatBP, weaponBP, 0, adjustBP)
+		return []any{float64(bp) / 100}, nil
+	}
 	// GetCreatureSpellCooldownDelay is
 	// CreatureMethods::GetCreatureSpellCooldownDelay
 	// (CreatureMethods.h:590-605, Trinity):

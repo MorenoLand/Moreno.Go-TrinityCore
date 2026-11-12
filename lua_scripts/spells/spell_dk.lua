@@ -517,6 +517,37 @@ end
 
 RegisterAuraEvent(SPELL_DK_VENDETTA, 6, vendettaProc)
 
+-- C++ spell_dk_wandering_plague::HandleProc (spell_dk.cpp:2627-2667):
+-- -49217 EFFECT_0 SPELL_AURA_DUMMY. PreventDefaultAction; the proc
+-- actor rolls its BASE_ATTACK crit chance against the proc target
+-- (GetUnitCriticalChanceAgainst, the new bridge — the roll is
+-- independent of whether the triggering hit crit), and on a pass
+-- casts 50526 on the proc target, triggered, with BP0 =
+-- CalculatePct(triggering damage, EFFECT_0 amount). A failed roll
+-- or zero damage casts nothing. Rank 1 only — higher-rank IDs are
+-- not in spell_script_names, never guessed (vendetta precedent).
+-- DORMANT until Spell.dbc ships the 49217 proc entry.
+local SPELL_DK_WANDERING_PLAGUE = 49217 -- spell_dk.cpp:2627
+local SPELL_DK_WANDERING_PLAGUE_DAMAGE = 50526 -- spell_dk.cpp:101
+
+local function wanderingPlagueProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if actor == nil or procTarget == nil or aura == nil then
+        return true
+    end
+    local critChance = actor:GetUnitCriticalChanceAgainst(0, procTarget)
+    if critChance <= 0 or math.random() * 100 >= critChance then
+        return true
+    end
+    if damage == nil or damage == 0 then
+        return true
+    end
+    local bp0 = math.floor(damage * aura:GetAmount() / 100)
+    actor:CastCustomSpell(procTarget, SPELL_DK_WANDERING_PLAGUE_DAMAGE, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DK_WANDERING_PLAGUE, 6, wanderingPlagueProc)
+
 local SPELL_DK_THREAT_OF_THASSARIAN = 65661 -- spell_dk.cpp:2432 (class spell_dk_threat_of_thassarian)
 local SPELL_DK_THREAT_OF_THASSARIAN_PLAGUE_STRIKE = 66216 -- spell_dk.cpp:96
 local SPELL_DK_THREAT_OF_THASSARIAN_DEATH_STRIKE = 66188 -- spell_dk.cpp:97

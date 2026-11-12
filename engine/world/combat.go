@@ -3396,6 +3396,90 @@ func victimAttackerHitChanceBP(s *session, targetGUID uint64, isPlayerVictim boo
 // totals (Unit::GetUnitCriticalChanceDone, Unit.cpp:2839-2842), and
 // CREATURE_FLAG_EXTRA_NO_CRIT (0x20000) zeroes the whole base, so callers pass
 // -500 plus the aura totals. Absent means none (player/pet callers).
+// meleeCritChanceAgainstBP composes Unit::GetUnitCriticalChanceAgainst
+// (Unit.cpp:2901-2905) in basis points, exactly like rollMeleeOutcome's
+// crit arm below: the 5% base, the victim-type skill arm (player
+// -skillDiff*0.04%, creature -skillDiff*0.12% minus 3% when
+// skillDiff>=15, skillDiff = 5/level by the no-skill-bonus-model
+// convention), the attacker's crit bonus, the victim-side 187/188+308
+// flat (pre-resilience), the resilience reduction, the 197 total
+// (post-resilience) and the creature 52/290 adjustment (NO_CRIT zeroes
+// the base, -500). Clamped at zero like C++. Callers gather the arms
+// from the same helpers the melee rolls use, so the bridge and the
+// roll can never drift apart.
+func meleeCritChanceAgainstBP(attackerLevel, victimLevel uint8, isPlayerVictim bool, critBonusBP, victimFlatCritTakenBP, victimSpellWeaponCritBP, critReductionBP, attackerCritAdjustBP int32) int32 {
+	if attackerLevel == 0 {
+		attackerLevel = 1
+	}
+	if victimLevel == 0 {
+		victimLevel = 1
+	}
+	skillDiff := (int32(victimLevel) - int32(attackerLevel)) * 5
+	critChance := int32(500)
+	if isPlayerVictim {
+		critChance -= skillDiff * 4
+	} else {
+		critChance -= skillDiff * 12
+		if skillDiff >= 15 {
+			critChance -= 300
+		}
+	}
+	if critBonusBP > 0 {
+		critChance += critBonusBP
+	}
+	if victimFlatCritTakenBP != 0 {
+		critChance += victimFlatCritTakenBP
+	}
+	if critReductionBP > 0 {
+		critChance -= critReductionBP
+	}
+	if victimSpellWeaponCritBP != 0 {
+		critChance += victimSpellWeaponCritBP
+	}
+	if attackerCritAdjustBP != 0 {
+		critChance += attackerCritAdjustBP
+	}
+	if critChance < 0 {
+		critChance = 0
+	}
+	return critChance
+}
+
+// critTakenBP gathers the victim-side arms of
+// Unit::GetUnitCriticalChanceTaken (Unit.cpp:2858-2880) for the unit
+// behind victimGUID: the pre-resilience 187/188+308 flat and the
+// post-resilience 197 total, both in basis points, plus whether the
+// victim is a player, its level and its session (nil for creatures).
+// An unresolvable victim reads zero arms at level 1, so the bridge
+// answers 0 rather than failing the handler.
+func (srv *Server) critTakenBP(attackerGUID, victimGUID uint64, mapID, instanceID uint32, ranged bool) (flatBP, weaponBP int32, isPlayerVictim bool, victimLevel uint8, victimSess *session) {
+	if srv == nil || victimGUID == 0 {
+		return 0, 0, false, 1, nil
+	}
+	if vicSess := srv.findSessionByGUID(victimGUID); vicSess != nil && vicSess.player != nil {
+		flatMod := uint32(spellAuraModAttackerMeleeCritChance)
+		if ranged {
+			flatMod = spellAuraModAttackerRangedCritChance
+		}
+		flatBP = int32(math.Round(float64(vicSess.playerAuraModifier(flatMod))*100)) +
+			int32(math.Round(vicSess.victimCritChanceForCaster(attackerGUID)*100))
+		weaponBP = int32(math.Round(float64(vicSess.playerAuraModifier(spellAuraModAttackerSpellAndWeaponCritChance)) * 100))
+		return flatBP, weaponBP, true, vicSess.player.Level, vicSess
+	}
+	if m := srv.findCreatureMotion(mapID, instanceID, victimGUID); m != nil {
+		key := creatureAuraKey{Map: mapID, InstanceID: instanceID, GUID: victimGUID}
+		flatMod := uint32(spellAuraModAttackerMeleeCritChance)
+		if ranged {
+			flatMod = spellAuraModAttackerRangedCritChance
+		}
+		flatBP = creatureAuraModifierSum(srv, key, flatMod)*100 +
+			int32(math.Round(creatureVictimCritChanceForCaster(srv, key, attackerGUID)*100))
+		weaponBP = creatureAuraModifierSum(srv, key, spellAuraModAttackerSpellAndWeaponCritChance) * 100
+		return flatBP, weaponBP, false, uint8(m.Level), nil
+	}
+	return 0, 0, false, 1, nil
+}
+
 func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerOrPetAttacker, isPlayerVictim, isPetVictim, attackerNoCrush, attackerCanCrush, victimSitting bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1

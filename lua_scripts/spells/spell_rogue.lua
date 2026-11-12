@@ -73,11 +73,11 @@
 --   lua_hit is a false positive (boss_faction_champions.lua:240
 --   casts 65956 as npc_toc_rogue Blade Flurry, not the aura
 --   script).
---   cheat_death (31228, row 745): DoEffectCalcAmount (amount -1)
---   + OnEffectAbsorb; there is no absorb AuraEvent (modes 1-7
---   cover periodic/apply/remove/change-amount/dispel/proc/
---   before-dispel only), and the cooldown-history writes are
---   unbridged. Engine work.
+--   cheat_death (31228, row 745): PORTED below (ev9 + the new
+--   AddSpellCooldown bridges, this tick); the tick-294/298 stay-out
+--   (no absorb hook, unbridged cooldown writes) is superseded by
+--   the AuraEventOnEffectAbsorb bridge and the 31228 unlimited-pool
+--   leg in absorption.go.
 --   deadly_poison (2818, row 748): SpellScript BeforeHit/
 --   AfterHit only; no RegisterSpellScript in the engine, and
 --   GetCastItem is open engine work; GetItemByPos is a nil stub
@@ -131,6 +131,8 @@ local SPELL_ROGUE_HONOR_AMONG_THIEVES_R1 = 51698
 local SPELL_ROGUE_HONOR_AMONG_THIEVES_R2 = 51700
 local SPELL_ROGUE_HONOR_AMONG_THIEVES_R3 = 51701
 local SPELL_ROGUE_TURN_THE_TABLES = 51627
+local SPELL_ROGUE_CHEAT_DEATH = 31228 -- spell_rogue.cpp:109
+local SPELL_ROGUE_CHEAT_DEATH_COOLDOWN = 31231 -- spell_rogue.cpp:39
 
 local SPELL_AURA_MOD_STALKED = 68
 
@@ -304,3 +306,42 @@ local function turnTheTablesProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_ROGUE_TURN_THE_TABLES, 6, turnTheTablesProc)
+
+-- C++ spell_rog_cheat_death::Absorb (spell_rogue.cpp:109-192):
+-- 31228 EFFECT_0 SPELL_AURA_SCHOOL_ABSORB. The pool is unlimited
+-- (DoEffectCalcAmount sets -1; absorption.go's unlimited set), so the
+-- handler computes the absorb from the damage: on a lethal hit, with
+-- the 31231 cooldown clear and the EFFECT_0 CalcValue chance roll
+-- passed, the rogue casts 31231 on itself (triggered), writes the
+-- 1-minute 31231 cooldown, and absorbs down to 10% of max health
+-- (or all of the damage when already below 10%). A non-lethal hit,
+-- a live cooldown, or a failed roll absorbs nothing (return 0). The
+-- player leg is the live one (Load gates on TYPEID_PLAYER); the
+-- npcbot creature leg shares the shape — one handler covers both,
+-- the absorb hook passes the holder as target on either leg.
+-- DORMANT until Spell.dbc ships the 31228 row (the chance reads 0
+-- without it, like moonkin 69366).
+local function cheatDeathAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil then
+        return 0
+    end
+    if damage < target:GetHealth() then
+        return 0
+    end
+    if target:HasSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN) then
+        return 0
+    end
+    local chance = aura:GetSpellEffectCalcValue(SPELL_ROGUE_CHEAT_DEATH, 0)
+    if chance <= 0 or math.random(1, 100) > chance then
+        return 0
+    end
+    target:CastSpell(target, SPELL_ROGUE_CHEAT_DEATH_COOLDOWN, true)
+    target:AddSpellCooldown(SPELL_ROGUE_CHEAT_DEATH_COOLDOWN, 60000)
+    local health10 = target:CountPctFromMaxHealth(10)
+    if target:GetHealth() > health10 then
+        return damage - target:GetHealth() + health10
+    end
+    return damage
+end
+
+RegisterAuraEvent(SPELL_ROGUE_CHEAT_DEATH, 9, cheatDeathAbsorb)
