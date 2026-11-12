@@ -375,18 +375,19 @@ RegisterSpellEvent(SPELL_TAKE_SPUTUM_SAMPLE, 4, takeSputumSampleHit)
 --   STAY OUT (same tick, hunt-confirmed 2026-11-12: the binding-ID
 --   hunt agent found no binding ID for either):
 --   spell_q14076_14092_pound_drum (spell_quest.cpp:1173-1210):
---   HandleSummon OnCast (ev1, which DOES fire on the player path,
---   spells.go:10861) 50/50 self-cast 66510/66492 triggered, plus a
---   GO SetLootState(3) OnEffectHitTarget leg — no binding spell ID
---   resolvable in-tree (no comment; the enum holds only the two
---   summon spells).
+--   PORTED IN PART tick 2026-11-12 (binding 66512 per TDB 335.26091
+--   spell_script_names 'spell_icecrown_pound_drum'): the OnCast ev1
+--   50/50 self-cast 66510/66492 triggered is in; the GO
+--   SetLootState(3) OnEffectHitTarget leg STAYS OUT (ev5 never fires
+--   for GO targets, spells.go; no GetHitGObj bridge).
 --   spell_q12279_cast_net (spell_quest.cpp:1210-1235): single
 --   EFFECT_1 ACTIVATE_OBJECT OnEffectHitTarget leg, GO SetLootState
---   only — no binding spell ID resolvable in-tree (no comment, no
---   enum); secondary: ev5-only + GO Use unbridged (no methods["Use"]
---   on GO objects; SetLootState/SetRespawnTime are bridged,
---   lua_objects.go:4324/4353), which also blocks the q9452
---   HandleActiveObject leg (:1157) and the q14076 GO leg.
+--   only — STAYS OUT, TDB-verified tick 2026-11-12: no 'cast_net' row
+--   in TDB 335.26091 spell_script_names (nor any AC row), so the
+--   binding spell is unidentifiable from C++ (no comment, no enum);
+--   secondary: ev5-only + GO targets never fire (spells.go), which
+--   also blocks the q9452 HandleActiveObject leg (:1157) and the
+--   q14076 GO leg.
 --   Census go_hit/lua_hit true on 691/693/694/695/696/697/698/699 are
 --   phantoms (zero class-name hits in engine/ + lua_scripts/).
 
@@ -613,9 +614,10 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   only as unrelated constants):
 --   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): ev5
 --   EFFECT_1 SCRIPT_EFFECT; hit-aura stack >= SpellInfo StackAmount
---   gates a triggered 50928 summon + creature despawn — no
---   spell:GetHitAura bridge, and the binding-ID hunt agent
---   (984fe72c, run af65ab02) found no binding spell ID for it.
+--   gates a triggered 50928 summon + creature despawn — binding
+--   50894 RESOLVED tick 2026-11-12 per TDB 335.26091
+--   spell_script_names ('spell_zuldrak_zuldrak_rat'); blocked only
+--   on the missing spell:GetHitAura bridge (+ StackAmount source).
 --   spell_q12730_quenching_mist (:1767-1806): PORTED tick 2026-11-12
 --   (binding 53350, HUNT block at end of file).
 --   spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy
@@ -626,12 +628,12 @@ RegisterSpellEvent(SPELL_THROW_BOMB, 8, checkFlyMountCheckCast)
 --   spell_q13011_bear_flank_master (:1907-1956): PORTED tick
 --   2026-11-12 (binding 56565, HUNT block at end of file) — the
 --   "no binding ID" line above is superseded by 349bdee8.
---   spell_q13086_cannons_target (:1957-1985): ev4 DUMMY; caster casts
---   GetEffectValue() triggered at the explicit dest — no binding ID
---   only (corrected tick 2026-11-12: CastSpellAoF(x,y,z,id[,triggered])
---   IS bridged on both surfaces — lua_creature_events.go:1045,
---   lua_player.go:3344, triggered defaults true; spell:GetTargetDest
---   exists, lua_spell.go:305, not :91 as the old note claimed).
+--   spell_q13086_cannons_target (:1957-1985): PORTED tick 2026-11-12
+--   (bindings 57385 + 57412 per TDB 335.26091 spell_script_names
+--   'spell_icecrown_cannons_target'); ev4 DUMMY, caster casts
+--   GetEffectValue() triggered at the explicit dest via CastSpellAoF
+--   (bridged both surfaces) + the new player-surface
+--   spell:GetExplTargetDest (lua_spell.go).
 --   spell_q12641_recall_eye_of_acherus (:2381-2415): PORTED tick
 --   2026-11-12 (binding 52694, HUNT block at end of file) — the
 --   StopCastingCharm/BindSight bridges were built this tick
@@ -964,10 +966,13 @@ RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
 --   KilledMonsterCredit(28622). Same ev5 fire site as the strip above
 --   (a910c39d, spells.go:14668-14737).
 --   NEXT (tick 2026-11-12): q10041/q9874/q12805/q14112 are PORTED
---   (hunt-resolved bindings, HUNT block at end of file); the next
---   no-id classes are q14076 pound_drum, q12279 cast_net, q12372
---   gossip trigger, q12527 zuldrak rat, q13280 jump_jets — all
---   hunt-confirmed unresolvable (see the stay-out blocks).
+--   (hunt-resolved bindings, HUNT block at end of file); TDB 335.26091
+--   spell_script_names then resolved the rest — gossip trigger 49213,
+--   jump_jets 4336, pound_drum 66512 (ev1 only), cannons_target
+--   57385/57412, area_restrict 76245, assign_credit 59590/60039/60041,
+--   all PORTED tick 2026-11-12. Remaining: zuldrak rat 50894 (binding
+--   resolved, GetHitAura bridge missing) and q12279 cast_net (no TDB
+--   row at all — binding unidentifiable, stays out).
 
 local SPELL_HEALING_FINISHED = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
 local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
@@ -1421,6 +1426,22 @@ local HUNT = {
     SPELL_TOTEM_OF_THE_EARTHEN_RING = 66747,
     -- spell_q11896_weakness_to_lightning_46444 (spell_quest.cpp:2892)
     SPELL_WEAKNESS_TO_LIGHTNING = 46444,
+    -- spell_q12372_cast_from_gossip_trigger (spell_quest.cpp:1424)
+    SPELL_CAST_FROM_GOSSIP_TRIGGER = 49213,
+    SPELL_SUMMON_WYRMREST_DEFENDER = 49207,
+    -- spell_q13280_13283_jump_jets (spell_quest.cpp:1057)
+    SPELL_JUMP_JETS = 4336,
+    SPELL_JUMP_ROCKET_BLAST = 4340,
+    -- spell_q14076_14092_pound_drum (spell_quest.cpp:1173)
+    SPELL_POUND_DRUM = 66512,
+    SPELL_SUMMON_DEEP_JORMUNGAR = 66510,
+    SPELL_STORMFORGED_MOLE_MACHINE = 66492,
+    -- spell_q13086_cannons_target (spell_quest.cpp:1957)
+    SPELL_CANNONS_TARGET = {57385, 57412},
+    -- spell_q13264_q13276_q13288_q13289_area_restrict_abom (spell_quest.cpp:2136)
+    SPELL_AREA_RESTRICT_ABOM = 76245,
+    AREA_THE_BROKEN_FRONT = 4507,
+    AREA_MORD_RETHAR_THE_DEATH_GATE = 4508,
 }
 
 local function whoAreTheyHit(event, spell, hitTarget, effectIndex)
@@ -2018,3 +2039,152 @@ local function weaknessToLightningHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(HUNT.SPELL_WEAKNESS_TO_LIGHTNING, 5, weaknessToLightningHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q12372_cast_from_gossip_trigger (spell_quest.cpp:1424-1445):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 49213 per TDB 335.26091
+--   spell_script_names ('spell_dragonblight_defending_wyrmrest_temple_cast_from_gossip').
+--   The caster self-casts SPELL_SUMMON_WYRMREST_DEFENDER (49207) TRIGGERED.
+--   (The hunt's "49207" was the cast spell, not the binding; TDB resolves the binding as 49213.)
+
+local function gossipTriggerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, HUNT.SPELL_SUMMON_WYRMREST_DEFENDER, true)
+end
+
+RegisterSpellEvent(HUNT.SPELL_CAST_FROM_GOSSIP_TRIGGER, 5, gossipTriggerHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnCast = 1):
+--   spell_q13280_13283_jump_jets (spell_quest.cpp:1057-1072): OnCast,
+--   binding 4336 per TDB 335.26091 spell_script_names
+--   ('spell_icecrown_jump_jets'). If the caster is a vehicle, the
+--   seat-1 passenger casts SPELL_JUMP_ROCKET_BLAST (4340) TRIGGERED on itself.
+--   (The hunt's stay-out was ID-only; TDB resolves the binding as 4336.)
+
+local function jumpJetsHit(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:IsVehicle() then
+        local passenger = caster:GetVehicleKit():GetPassenger(1)
+        if passenger ~= nil then
+            passenger:CastSpell(passenger, HUNT.SPELL_JUMP_ROCKET_BLAST, true)
+        end
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_JUMP_JETS, 1, jumpJetsHit)
+
+-- PORTED IN PART (tick 2026-11-12, RegisterSpellEvent OnCast = 1):
+--   spell_q14076_14092_pound_drum (spell_quest.cpp:1173-1208): OnCast,
+--   binding 66512 per TDB 335.26091 spell_script_names
+--   ('spell_icecrown_pound_drum'). 50% roll: the caster self-casts
+--   SPELL_SUMMON_DEEP_JORMUNGAR (66510) else SPELL_STORMFORGED_MOLE_MACHINE
+--   (66492), both TRIGGERED. STAYS OUT: the EFFECT_0 ACTIVATE_OBJECT leg
+--   (GetHitGObj()->SetLootState(GO_JUST_DEACTIVATED)) — the ev5 fire site
+--   never fires for GO targets (spells.go) and GetHitGObj is unbridged,
+--   though GameObject:SetLootState itself is live (lua_objects.go:4324).
+
+local function poundDrumHit(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if math.random(1, 100) <= 50 then
+        caster:CastSpell(caster, HUNT.SPELL_SUMMON_DEEP_JORMUNGAR, true)
+    else
+        caster:CastSpell(caster, HUNT.SPELL_STORMFORGED_MOLE_MACHINE, true)
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_POUND_DRUM, 1, poundDrumHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q13086_cannons_target (spell_quest.cpp:1957-1980): EFFECT_0 DUMMY
+--   ev4, bindings 57385 + 57412 per TDB 335.26091 spell_script_names
+--   ('spell_icecrown_cannons_target', two rows). The caster casts the
+--   effect's DBC value (spell:GetEffectValue(0)) TRIGGERED at the explicit
+--   target destination (spell:GetExplTargetDest; the player-surface twin
+--   was added this tick in lua_spell.go). The >0 guard is the Lua twin of
+--   never firing a 0-id cast (same idiom as the portals port).
+
+local function cannonsTargetHit(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local x, y, z = spell:GetExplTargetDest()
+    if x == nil then
+        return
+    end
+    local spellId = spell:GetEffectValue(0)
+    if spellId > 0 then
+        caster:CastSpellAoF(x, y, z, spellId, true)
+    end
+end
+
+for _, spellId in ipairs(HUNT.SPELL_CANNONS_TARGET) do
+    RegisterSpellEvent(spellId, 4, cannonsTargetHit)
+end
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q13264_q13276_q13288_q13289_area_restrict_abom (spell_quest.cpp:2136-2153):
+--   EFFECT_0 SCRIPT_EFFECT ev5, binding 76245 per TDB 335.26091
+--   spell_script_names ('spell_icecrown_area_restrict_abom'). A hit
+--   creature outside areas 4507/4508 despawns (DespawnOrUnsummon).
+
+local function areaRestrictAbomHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Creature" then
+        return
+    end
+    local area = hitTarget:GetAreaId()
+    if area ~= HUNT.AREA_THE_BROKEN_FRONT and area ~= HUNT.AREA_MORD_RETHAR_THE_DEATH_GATE then
+        hitTarget:DespawnOrUnsummon()
+    end
+end
+
+RegisterSpellEvent(HUNT.SPELL_AREA_RESTRICT_ABOM, 5, areaRestrictAbomHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q13264_q13276_q13288_q13289_assign_credit_to_master (spell_quest.cpp:2155-2175):
+--   EFFECT_0 SCRIPT_EFFECT ev5, bindings 59590/60039/60041 per TDB 335.26091
+--   spell_script_names ('spell_icecrown_assign_credit_to_master', three rows).
+--   The hit unit's owner casts the effect's DBC value TRIGGERED on itself.
+--   (The three binding spells are the ones the burst 59576 arm casts; see
+--   HUNT.SPELL_ASSIGN_*_KILL_CREDIT_TO_MASTER above.) KNOWN LIMIT:
+--   creature/player GetOwner resolves player owners only
+--   (lua_creature_events.go:627, lua_player.go:3508).
+
+local function assignCreditToMasterHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local owner = hitTarget:GetOwner()
+    if owner == nil then
+        return
+    end
+    local spellId = spell:GetEffectValue(0)
+    if spellId > 0 then
+        owner:CastSpell(owner, spellId, true)
+    end
+end
+
+for _, spellId in ipairs({HUNT.SPELL_ASSIGN_GHOUL_KILL_CREDIT_TO_MASTER, HUNT.SPELL_ASSIGN_SKELETON_KILL_CREDIT_TO_MASTER, HUNT.SPELL_ASSIGN_GEIST_KILL_CREDIT_TO_MASTER}) do
+    RegisterSpellEvent(spellId, 5, assignCreditToMasterHit)
+end

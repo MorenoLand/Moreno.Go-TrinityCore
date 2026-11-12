@@ -308,6 +308,17 @@ func (s *session) luaSpellObject(p spellObjectParams) *scripting.Object {
 		}
 		return []any{p.dest.X, p.dest.Y, p.dest.Z}, nil
 	}
+	// GetExplTargetDest is SpellScript::GetExplTargetDest (SpellScript.h):
+	// the same explicit-destination triple as GetTargetDest (the
+	// creature-surface twin at the second builder below); the C++
+	// name was missing on the player surface, which the q13086
+	// cannons_target port needs.
+	methods["GetExplTargetDest"] = func(_ context.Context, _ []any) ([]any, error) {
+		if !p.hasDest {
+			return []any{nil, nil, nil}, nil
+		}
+		return []any{p.dest.X, p.dest.Y, p.dest.Z}, nil
+	}
 	attachSpellHitDamageMethods(methods, p.hitDamage)
 	return &scripting.Object{Type: "Spell", Fields: map[string]any{"Entry": spellID}, Methods: methods}
 }
