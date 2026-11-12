@@ -127,19 +127,20 @@
 -- spell_sindragosa_mystic_buffet (ev7 LOS filter),
 -- spell_rimefang_icy_blast (ev5 effect 1, GetExplTargetDest),
 -- spell_frostwarden_handler_order_whelp (ev7 filter + ev5 force-cast).
--- The remaining 7 Sindragosa-specific legs + the 2 generic
+-- The remaining 6 Sindragosa-specific legs + the 2 generic
 -- spell_trigger_spell_from_caster with-args legs stay out, each for a
 -- named missing bridge, not a class queue: s_fury (BeforeCast dest
 -- select + resistance damage split, no GetResistance / DealSpellDamage
--- bridge), unchained_magic (healer/caster-class/spec filter, no
--- IsPlayerHealer / specialization bridge), frost_breath (Shadowmourne
--- quest infusion, no GetQuestStatus bridge), instability (OnRemove
--- expire -> BACKLASH with AddSpellBP0, no cast-mod bridge),
--- ice_tomb_trap (trap-aura summon + SetGUID, binding not C++-verifiable),
--- focus_fire + focus_fire_aura (AddThreat legs, no AddThreat bridge),
--- ice_tomb_target filter (FrostBeaconSelector tank exclusion, no tank
--- bridge — the untargetable-aura leg already rides randomPlayerTarget),
+-- bridge), frost_breath (Shadowmourne quest infusion, no GetQuestStatus
+-- bridge), instability (OnRemove expire -> BACKLASH with AddSpellBP0,
+-- no cast-mod bridge), ice_tomb_trap (trap-aura summon + SetGUID,
+-- binding not C++-verifiable), focus_fire + focus_fire_aura (AddThreat
+-- legs, no AddThreat bridge), ice_tomb_target filter
+-- (FrostBeaconSelector tank exclusion, no tank bridge — the
+-- untargetable-aura leg already rides randomPlayerTarget),
 -- spell_trigger_spell_from_caster x2 (DBC trigger-spell wiring).
+-- unchained_magic PORTED 2026-11-12 (ev7 filter + iconic-table spec
+-- derivation, see onUnchainedMagic).
 -- All 6 Talk() calls in the file accounted for (6 =
 -- SAY_AGGRO 0 (1) + SAY_DEATH 10 (1) + SAY_KILL 8 (1) +
 -- EMOTE_BERSERK_RAID 11 (1, scheduler) + SAY_BERSERK 9 (1,
@@ -339,17 +340,8 @@ end
 -- C++ EVENT_UNCHAINED_MAGIC: Talk(SAY_UNCHAINED_MAGIC) +
 -- DoCastSelf(SPELL_UNCHAINED_MAGIC) non-triggered, init {9s,14s}
 -- (:246), re-arm {30s,35s} (:484-487), land-phase group. The
--- spell_sindragosa_unchained_magic healer/caster target filter stays
--- out (no IsPlayerHealer / specialization bridge). CORRECTION
--- 2026-11-12: ev7 OnObjectAreaTargetSelect IS live (runtime.go:669,
--- lua_spell.go:849, boss_ai.go:3151; kologarn precedent) — the hook
--- is not the block. The block is the spec-tree derivation:
--- GetPlayerSpecialization (CommonHelpers.cpp:248, tree index via
--- HasSpell on the 99-entry PlayerSpecializationIconicSpells table,
--- :185) + IsPlayerHealer (:264) are unbridged as methods; Lua could
--- derive them only via player:HasSpell (bridged, lua_player.go:2151)
--- with the iconic-spell ids resolved from C++ — engine work or a
--- data-lift tick, not a filter port.
+-- spell_sindragosa_unchained_magic healer/caster target filter is
+-- PORTED below (ev7, iconic-table spec lift).
 local function onUnchainedMagic(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "unchained_magic", 500, function() onUnchainedMagic(creature, guid) end)
@@ -362,6 +354,135 @@ local function onUnchainedMagic(creature, guid)
     creature:CastSpell(creature, SPELL_UNCHAINED_MAGIC)
     schedule(guid, "unchained_magic", {30000, 35000}, function() onUnchainedMagic(creature, guid) end)
 end
+
+-- C++ spell_sindragosa_unchained_magic::FilterTargets
+-- (boss_sindragosa.cpp:1088-1155): OnObjectAreaTargetSelect EFFECT_0
+-- TARGET_UNIT_SRC_AREA_ENEMY — partition the area-enemy targets into
+-- healers and casters, then rebuild the list: up to 3 healers (1 in
+-- 10-man) + casters up to 6 total targets (2 in 10-man), each a uniform
+-- random subset (C++ RandomResize/RandomShuffle twins: the
+-- order-preserving keep-scan, moroes precedent). Non-players and
+-- non-healer/non-caster players are dropped by the rebuild
+-- (targets.clear() + re-add). PORTED 2026-11-12 via the iconic-table
+-- lift below (ev7 IS live: runtime.go:669, lua_spell.go:849,
+-- boss_ai.go:3151; spellKnown-gated, dormant until Spell.dbc ships).
+-- PlayerSpecializationIconicSpells (CommonHelpers.cpp:26-246):
+-- [class][tree][tier], tier order as listed in the C++ table literal
+-- (99 entries; CLASS_NONE 0 / CLASS_UNK 10 rows are all 0, omitted).
+local SPEC_ICONIC_SPELLS = {
+    [1] = { {46924, 12294, 12328}, {46917, 23881, 12292}, {46968, 20243, 50720} }, -- Warrior: Arms, Fury, Protection
+    [2] = { {53563, 20473, 20215}, {53595, 20925, 20911}, {53385, 35395, 20375} }, -- Paladin: Holy, Protection, Retribution
+    [3] = { {53270, 34692, 19574}, {53209, 19506, 19434}, {56344, 19386, 53301} }, -- Hunter: Beast Mastery, Marksmanship, Survival
+    [4] = { {51662, 1329, 14177}, {51690, 13750, 13877}, {51713, 14183, 16511} }, -- Rogue: Assassination, Combat, Subtlety
+    [5] = { {47540, 10060, 63574}, {47788, 19236, 20711}, {34914, 15473, 15286} }, -- Priest: Discipline, Holy, Shadow
+    [6] = { {55050, 49016, 48982}, {49184, 49143, 50887}, {55090, 52143, 49194} }, -- Death Knight: Blood, Frost, Unholy
+    [7] = { {51490, 30706, 16164}, {51533, 60103, 16268}, {61295, 590, 591} }, -- Shaman: Elemental, Enhancement, Restoration
+    [8] = { {44425, 12042, 54646}, {44457, 11129, 11366}, {44572, 11426, 12472} }, -- Mage: Arcane, Fire, Frost
+    [9] = { {48181, 30108, 63108}, {59672, 47193, 19028}, {50796, 17962, 17877} }, -- Warlock: Affliction, Demonology, Destruction
+    [11] = { {48505, 24858, 5570}, {50334, 33917, 61336}, {48438, 33891, 18562} }, -- Druid: Balance, Feral, Restoration
+}
+local CLASS_PALADIN = 2 -- SharedDefines.h:130
+local CLASS_PRIEST = 5
+local CLASS_SHAMAN = 7
+local CLASS_MAGE = 8
+local CLASS_WARLOCK = 9
+local CLASS_DRUID = 11
+local SPEC_PALADIN_HOLY = 0 -- SharedDefines.h:156
+local SPEC_PRIEST_SHADOW = 2
+local SPEC_SHAMAN_ENHANCEMENT = 1
+local SPEC_SHAMAN_RESTORATION = 2
+local SPEC_DRUID_FERAL = 1
+local SPEC_DRUID_RESTORATION = 2
+
+-- Trinity::Helpers::Entity::GetPlayerSpecialization
+-- (CommonHelpers.cpp:248-262): tier-outer / tree-inner scan, first tree
+-- with any known iconic spell wins; 0 when none match (same as tree 0).
+-- player:HasSpell is bridged (lua_player.go:2151).
+local function getPlayerSpecialization(player)
+    local trees = SPEC_ICONIC_SPELLS[player:GetClass()]
+    if trees == nil then
+        return 0
+    end
+    for tier = 1, 3 do
+        for tree = 1, 3 do
+            local spellId = trees[tree][tier]
+            if spellId ~= 0 and player:HasSpell(spellId) then
+                return tree - 1
+            end
+        end
+    end
+    return 0
+end
+
+-- Trinity::Helpers::Entity::IsPlayerHealer (CommonHelpers.cpp:264-283).
+local function isPlayerHealer(player)
+    local class = player:GetClass()
+    if class == CLASS_PALADIN then
+        return getPlayerSpecialization(player) == SPEC_PALADIN_HOLY
+    elseif class == CLASS_PRIEST then
+        return getPlayerSpecialization(player) ~= SPEC_PRIEST_SHADOW
+    elseif class == CLASS_SHAMAN then
+        return getPlayerSpecialization(player) == SPEC_SHAMAN_RESTORATION
+    elseif class == CLASS_DRUID then
+        return getPlayerSpecialization(player) == SPEC_DRUID_RESTORATION
+    end
+    return false
+end
+
+local function unchainedMagicFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local healers, casters = {}, {}
+    for _, target in ipairs(targets:GetTargets()) do
+        if target:GetObjectType() == "Player" then
+            if isPlayerHealer(target) then
+                healers[#healers + 1] = target
+            else
+                local class = target:GetClass()
+                if class == CLASS_PRIEST or class == CLASS_MAGE or class == CLASS_WARLOCK then
+                    casters[#casters + 1] = target
+                elseif class == CLASS_SHAMAN then
+                    if getPlayerSpecialization(target) ~= SPEC_SHAMAN_ENHANCEMENT then
+                        casters[#casters + 1] = target
+                    end
+                elseif class == CLASS_DRUID then
+                    if getPlayerSpecialization(target) ~= SPEC_DRUID_FERAL then
+                        casters[#casters + 1] = target
+                    end
+                end
+            end
+        end
+    end
+    targets:Clear()
+    local is25Man = caster:Is25ManRaid()
+    local kept = 0
+    local keep, left = is25Man and 3 or 1, #healers
+    for _, healer in ipairs(healers) do
+        if math.random(left) <= keep then
+            targets:Add(healer)
+            kept = kept + 1
+            keep = keep - 1
+        end
+        left = left - 1
+    end
+    local maxSize = is25Man and 6 or 2
+    keep, left = maxSize - kept, #casters
+    if keep > 0 then
+        for _, casterTarget in ipairs(casters) do
+            if math.random(left) <= keep then
+                targets:Add(casterTarget)
+                keep = keep - 1
+            end
+            left = left - 1
+        end
+    end
+end
+RegisterSpellEvent(SPELL_UNCHAINED_MAGIC, 7, unchainedMagicFilter)
 
 -- C++ EVENT_BLISTERING_COLD_YELL: Talk(SAY_BLISTERING_COLD) (:502-504).
 local function onBlisteringColdYell(creature, guid)
