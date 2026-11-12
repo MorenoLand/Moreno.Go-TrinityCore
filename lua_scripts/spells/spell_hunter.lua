@@ -668,13 +668,63 @@ RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_TRIGGER, 6, rapidRecuperationT
 -- CENSUS CORRECTION: row 602 hooks (OnCheckCast) are phantom; real
 -- is OnEffectPeriodic + OnEffectUpdatePeriodic.
 -- CENSUS CORRECTION: row 603 spell_hun_thrill_of_the_hunt (34497)
--- is NOT covered — the census go/lua hits are Fjola Lightbane's
--- creature entry 34497 (boss_twin_valkyr), not the talent. The
--- talent STAYS OUT: both arms need the proc spell (Explosive Shot
--- family flag [2] 0x200 + GetAuraEffect family lookup +
--- ManaCostPercentage + GetMaxTicks; else CalcPowerCost(caster,
--- school mask)), and ev6 carries no proc-spell object. Same open
--- engine work as row 601; GetMaxTicks shares the 598 recipe.
+-- is NOT covered by the census go/lua hits — those are Fjola
+-- Lightbane's creature entry 34497 (boss_twin_valkyr), not the talent.
+local SPELL_HUNTER_THRILL_OF_THE_HUNT = 34497 -- spell_hunter.cpp:1518 (class spell_hun_thrill_of_the_hunt; rank 1; ranks 2-3 IDs are not in the file, never guessed)
+local SPELL_HUNTER_THRILL_OF_THE_HUNT_MANA = 34720 -- spell_hunter.cpp:67
+local SPELL_AURA_PERIODIC_DUMMY = 226 -- SpellAuraDefines.h:306
+local SPELLFAMILY_HUNTER = 9 -- SharedDefines.h:3590
+local SPELL_FAMILY_FLAG_HUNTER_EXPLOSIVE_SHOT = 0x200 -- spell_hunter.cpp:1540 (SpellFamilyFlags[2])
+local SPELL_FAMILY_FLAG_HUNTER_EXPLOSIVE_SHOT_AURA = 0x80000000 -- spell_hunter.cpp:1541 (SpellFamilyFlags[1])
+
+-- C++ spell_hun_thrill_of_the_hunt_AuraScript::HandleProc
+-- (spell_hunter.cpp:1533-1563): OnEffectProc EFFECT_0 DUMMY, no
+-- CheckProc — a proc with no event spell returns early. The hunter
+-- (actor) casts 34720 on itself with BP0 = amount, triggered
+-- (CastSpellExtraArgs(aurEff) = TRIGGERED_FULL_MASK). Explosive Shot
+-- leg (event spell flags [2] & 0x200): the proc target's own
+-- Explosive Shot PERIODIC_DUMMY aura (family flags [1] 0x80000000,
+-- cast by this hunter — actor:GetGUID, a player GUID, exact in Lua)
+-- prices the return manually (Lock and Load can zero CalcPowerCost):
+-- pct(pct(GetCreateMana, the aura spell's ManaCostPercentage),
+-- aurEff amount) / the aura spell's GetMaxTicks. Else leg: pct(
+-- CalcPowerCost of the event spell, aurEff amount) via
+-- actor:GetSpellPowerCost. No amount -> no cast. The effectIndex
+-- gate keeps the arm on EFFECT_0. DORMANT until Spell.dbc ships the
+-- 34497 proc entry.
+local function thrillOfTheHuntProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if aura == nil or actor == nil then
+        return true
+    end
+    local amount = 0
+    if bit32.band(procEvent:GetSpellFamilyFlags(2), SPELL_FAMILY_FLAG_HUNTER_EXPLOSIVE_SHOT) ~= 0 then
+        if procTarget ~= nil then
+            local explosiveShot = procTarget:GetAuraEffectSpellIdByFamily(SPELL_AURA_PERIODIC_DUMMY, SPELLFAMILY_HUNTER, 0, SPELL_FAMILY_FLAG_HUNTER_EXPLOSIVE_SHOT_AURA, 0, actor:GetGUID())
+            if explosiveShot ~= nil then
+                local maxTicks = aura:GetSpellMaxTicks(explosiveShot)
+                if maxTicks > 0 then
+                    local base = math.floor(actor:GetCreateMana() * aura:GetSpellManaCostPercentage(explosiveShot) / 100)
+                    amount = math.floor(math.floor(base * aura:GetAmount(0) / 100) / maxTicks)
+                end
+            end
+        end
+    else
+        amount = math.floor(actor:GetSpellPowerCost(procEvent:GetSpellId()) * aura:GetAmount(0) / 100)
+    end
+    if amount == 0 then
+        return true
+    end
+    actor:CastCustomSpell(actor, SPELL_HUNTER_THRILL_OF_THE_HUNT_MANA, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_HUNTER_THRILL_OF_THE_HUNT, 6, thrillOfTheHuntProc)
 
 local SPELL_HUNTER_DISENGAGE = 781 -- spell_hunter.cpp:379 (class spell_hun_disengage_SpellScript)
 local SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW = 173 -- SharedDefines.h:1155
