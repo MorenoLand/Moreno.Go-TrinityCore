@@ -1425,6 +1425,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.auraMu.Unlock()
 		return []any{found}, nil
 	}
+	// HasAuraType(auraType) is Unit::HasAuraType (Unit.cpp) for handler
+	// creatures: whether the creature carries a live (unstopped) aura of
+	// the given SPELL_AURA_* type, via the creatureHasAuraType live fold.
+	methods["HasAuraType"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.creatureHasAuraType(auraKey(), auraType)}, nil
+	}
 	// GetAura is Unit::GetAura (UnitMethods.h) for handler creatures:
 	// the engine record for the spell, or nil when absent. The Lua
 	// AddAura presence set (creatureAuras) carries no record, so a

@@ -84,13 +84,15 @@
 -- STAYS OUT (this tick): 623 divine_purpose (no
 --   unit:RemoveAurasWithMechanic bridge; Go has the
 --   auraSpellMechanicMask + mechanicStun=12 twins, no removal
---   helper); 626 holy_shock (no OnCheckCast bridge + spell-level
---   GetSpellWithRank); 627 illumination + 629 infusion_of_light +
+--   helper); 626 holy_shock (player-surface IsFriendlyTo /
+--   IsValidAttackTarget unbridged; the OnCheckCast ev8 bridge itself
+--   is live since this tick); 627 illumination + 629 infusion_of_light +
 --   636 spiritual_attunement + 637 sheath_of_light + 638 t8_2p_bonus
 --   (all need heal info / proc-spell family flags / CalcPowerCost,
---   ev6 carries damage only); 632 lay_on_hands (no OnCheckCast
---   bridge); 634/635 seal_of_righteousness (needs attack-power /
---   spellpower / attack-time math, unbridged).
+--   ev6 carries damage only); 632 lay_on_hands PORTED this tick
+--   (OnCheckCast ev8 + AfterHit ev3 below); 634/635
+--   seal_of_righteousness (needs attack-power / spellpower /
+--   attack-time math, unbridged).
 
 local POWER_MANA = 0 -- Powers::POWER_MANA (Powers.h)
 
@@ -394,3 +396,45 @@ local function righteousVengeanceProc(event, aura, target, actor, procTarget, da
 end
 
 RegisterAuraEvent(SPELL_PALADIN_RIGHTEOUS_VENGEANCE, 6, righteousVengeanceProc)
+
+local SPELL_PALADIN_LAY_ON_HANDS = 633 -- spell_paladin.cpp:1774 (class spell_pal_lay_on_hands_SpellScript)
+local SPELL_PALADIN_FORBEARANCE = 25771 -- spell_paladin.cpp:63
+local SPELL_FAILED_TARGET_AURASTATE = 111 -- SharedDefines.h:1093
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_pal_lay_on_hands_SpellScript::CheckCast (spell_paladin.cpp:1774-1783):
+-- a self-cast onto a target carrying Forbearance (25771), the Avenging
+-- Wrath marker (61987) or the Immune Shield marker (61988) fails with
+-- SPELL_FAILED_TARGET_AURASTATE. The caster==target test compares
+-- GetGUIDLow + GetObjectType (the file's GetGUIDLow convention:
+-- packed GUIDs lose bits through Lua numbers; same-type lows are
+-- unique within a cast). RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast).
+local function layOnHandsCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    local target = spell:GetTarget()
+    if caster ~= nil and target ~= nil and caster:GetGUIDLow() == target:GetGUIDLow() and caster:GetObjectType() == target:GetObjectType() then
+        if target:HasAura(SPELL_PALADIN_FORBEARANCE) or target:HasAura(SPELL_PALADIN_AVENGING_WRATH_MARKER) or target:HasAura(SPELL_PALADIN_IMMUNE_SHIELD_MARKER) then
+            return SPELL_FAILED_TARGET_AURASTATE
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS, 8, layOnHandsCheckCast)
+
+-- C++ spell_pal_lay_on_hands_SpellScript::HandleScript
+-- (spell_paladin.cpp:1785-1793): AfterHit, when the caster is the hit
+-- unit, the caster gains Forbearance (25771) and both markers (61987,
+-- 61988), all triggered. RegisterSpellEvent AfterHit = 3.
+local function layOnHandsAfterHit(event, spell, hitTarget)
+    local caster = spell:GetCaster()
+    if caster == nil or hitTarget == nil or caster:GetGUIDLow() ~= hitTarget:GetGUIDLow() or caster:GetObjectType() ~= hitTarget:GetObjectType() then
+        return
+    end
+    caster:CastSpell(caster, SPELL_PALADIN_FORBEARANCE, true)
+    caster:CastSpell(caster, SPELL_PALADIN_AVENGING_WRATH_MARKER, true)
+    caster:CastSpell(caster, SPELL_PALADIN_IMMUNE_SHIELD_MARKER, true)
+end
+
+RegisterSpellEvent(SPELL_PALADIN_LAY_ON_HANDS, 3, layOnHandsAfterHit)

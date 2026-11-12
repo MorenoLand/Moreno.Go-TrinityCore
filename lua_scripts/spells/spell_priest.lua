@@ -112,6 +112,26 @@ end
 
 RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD, 3, powerWordShieldAfterHit)
 
+local SPELL_PRIEST_POWER_INFUSION = 10060 -- spell_priest.cpp:1586 (class spell_pri_power_infusion)
+local SPELL_MAGE_ARCANE_POWER = 12042 -- spell_priest.cpp:99
+local SPELL_FAILED_AURA_BOUNCED = 9 -- SharedDefines.h:991
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_pri_power_infusion::CheckCast (spell_priest.cpp:1590-1597):
+-- the target carrying Arcane Power (12042) fails the cast with
+-- SPELL_FAILED_AURA_BOUNCED. The check is the script's only arm, so
+-- this ports the whole script. RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast).
+local function powerInfusionCheckCast(event, spell)
+    local target = spell:GetTarget()
+    if target ~= nil and target:HasAura(SPELL_MAGE_ARCANE_POWER) then
+        return SPELL_FAILED_AURA_BOUNCED
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_PRIEST_POWER_INFUSION, 8, powerInfusionCheckCast)
+
 -- TRIAGED STAY OUT (tick 2026-11-11 18:32, census rows 662-664 + 666-670):
 --   662 body_and_soul (64127, :236-295): both arms need the event spell
 --   (EFFECT_0 PROC_TRIGGER_SPELL vetoes unless family flags [0] & 0x1
@@ -136,8 +156,10 @@ RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD, 3, powerWordShieldAfterHit)
 --   model and its hook fires after charge/cooldown consumption.
 --   670 penance (47540, :980-1064): HandleDummy rides ev5 (spell hit)
 --   + spell-level GetSpellWithRank (47758/47757) + IsFriendlyTo; the
---   CheckCast arm (IsValidAttackTarget / isInFront) has no OnCheckCast
---   bridge and the ev5 player path is dormant.
+--   CheckCast arm (IsValidAttackTarget / isInFront) needs the
+--   player-surface IsFriendlyTo / IsValidAttackTarget reads (the
+--   OnCheckCast ev8 bridge itself is live since this tick) and the
+--   ev5 player path is dormant.
 --   Census hooks wrong on 661/662/664/666/667/668/669/670 (phantom
 --   OnObjectAreaTargetSelect / HandleDummy / OnCheckCast / OnEffectHitTarget;
 --   real hooks are in the notes above).
@@ -195,9 +217,8 @@ RegisterSpellEvent(SPELL_PRIEST_POWER_WORD_SHIELD, 3, powerWordShieldAfterHit)
 --   + boss_ai.go:11387-11424: actor casts 70772 on the proc target,
 --   BP0=pct(heal, amount)/70772 max ticks). Real hook OnEffectProc
 --   EFFECT_0 DUMMY; census phantom OnCheckCast.
---   power_infusion (10060, :1586-1604): STAY OUT. OnCheckCast only
---   (target with Arcane Power 12042 -> SPELL_FAILED_AURA_BOUNCED); no
---   OnCheckCast bridge exists in lua_spell.go or engine/scripting.
+--   power_infusion (10060, :1586-1604): PORTED this tick (OnCheckCast
+--   ev8 above: target with Arcane Power 12042 -> SPELL_FAILED_AURA_BOUNCED).
 --   Census rows 224-229 + 672-673 now all closed in Go except the
---   SW:D / VT-Replenishment / power-infusion legs noted above; the next
+--   SW:D / VT-Replenishment legs noted above; the next
 --   unworked census row is 674 (spell_q55_sacred_cleansing, spell_quest.cpp).

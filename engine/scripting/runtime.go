@@ -619,6 +619,23 @@ const (
 // GO-area legs (51/52/108) never fire it — the list holds units
 // only. The deferred-fire call re-runs the cast function, so a
 // cast-time cast fires it once, at fire time, like OnCast.
+// OnCheckCast mirrors the SpellScript hook of the same name
+// (SpellScript.h:342-344, fired from Spell::CheckCast, Spell.cpp:5515,
+// via CallScriptCheckCastHandlers at :7977-7996), fired once per
+// player-path cast at the end of the CheckCast gauntlet in
+// handleCastSpell, after the last generic gate and before the cast is
+// registered, with args (event, spell). Unlike the other SpellEvents it
+// is NOT notification-only: a handler returns a SpellCastResult number;
+// the first non-OK result fails the cast with that code (C++ keeps the
+// first failure, Spell.cpp:7988-7990). SPELL_CAST_OK is 255 in C++
+// (SharedDefines.h:1171, custom value, never sent to the client), so a
+// nil, 0, or 255 return passes and any other 1-254 value fails the
+// cast. GetCastTime reads 0 here — C++ calculates
+// m_casttime only after the first CheckCast (Spell.cpp:3130-3136) — and
+// m_CastItem is nil on this path, so GetCastItem reads nil. Triggered
+// casts never reach handleCastSpell, matching C++
+// TRIGGERED_IGNORE_CAST_CHECK, and creature casts run no CheckCast
+// gauntlet in Go, so neither path fires it yet.
 const (
 	SpellEventOnCast                   = 1
 	SpellEventOnHit                    = 2
@@ -627,6 +644,7 @@ const (
 	SpellEventOnEffectHitTarget        = 5
 	SpellEventBeforeHit                = 6
 	SpellEventOnObjectAreaTargetSelect = 7
+	SpellEventOnCheckCast              = 8
 )
 
 type Hook struct {

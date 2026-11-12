@@ -578,6 +578,57 @@ func (s *Server) fireSpellCast(ctx context.Context, spellID uint32, spellObj *sc
 	_, _ = s.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnCast, scripting.SpellEventOnCast, spellObj)
 }
 
+// fireSpellCheckCast dispatches the RegisterSpellEvent OnCheckCast hook
+// for the spell (SpellEventOnCheckCast, args (event, spell)) and returns
+// the SpellCastResult the cast fails with, or 0 when no handler vetoes
+// it (0 is Go-internal OK; C++ SPELL_CAST_OK is 255, SharedDefines.h:1171,
+// so a handler returning 255 passes like a nil or 0 return). All
+// registered handlers run (TriggerSpellEvent collects every return) and
+// the first non-OK numeric result wins, mirroring
+// CallScriptCheckCastHandlers (Spell.cpp:7977-7996); non-numeric,
+// negative, and >254 returns pass. The spell object is built from the
+// in-flight cast like fireSpellScriptPreprocessTwins, with castTimeMs 0
+// (C++ calculates m_casttime only after the first CheckCast,
+// Spell.cpp:3130-3136) and no cast item (m_CastItem is nil on the
+// handleCastSpell path). Skipped entirely when no handler is registered,
+// so unscripted casts pay only the HasHook lookup.
+func (s *session) fireSpellCheckCast(ctx context.Context, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) uint8 {
+	if s == nil || s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
+		return 0
+	}
+	if !s.server.Features.Scripts.HasHook("spell:"+strconv.FormatUint(uint64(spellID), 10), scripting.SpellEventOnCheckCast) {
+		return 0
+	}
+	spellObj := s.luaSpellObject(spellObjectParams{spell: spell, targetGUID: target.UnitGUID, targetItemGUID: target.ItemGUID, dest: target.Destination, hasDest: target.Flags&protocol.SpellTargetFlagDestLocation != 0})
+	if spellObj == nil {
+		return 0
+	}
+	results, _ := s.server.Features.Scripts.TriggerSpellEvent(ctx, spellID, scripting.SpellEventOnCheckCast, scripting.SpellEventOnCheckCast, spellObj)
+	for _, result := range results {
+		var failure float64
+		switch n := result.(type) {
+		case float64:
+			failure = n
+		case float32:
+			failure = float64(n)
+		case int:
+			failure = float64(n)
+		case int64:
+			failure = float64(n)
+		case uint32:
+			failure = float64(n)
+		case int32:
+			failure = float64(n)
+		default:
+			continue
+		}
+		if failure >= 1 && failure <= 254 && failure == float64(uint8(failure)) {
+			return uint8(failure)
+		}
+	}
+	return 0
+}
+
 // fireSpellHit dispatches the RegisterSpellEvent OnHit hook for one hit
 // target (SpellEventOnHit, args (event, spell, hitTarget)).
 // Notification-only like fireSpellCast: the C++ damage/healing rewrite

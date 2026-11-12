@@ -515,3 +515,26 @@ end
 for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_AURAS) do
     RegisterAuraEvent(spellId, 6, seedOfCorruptionGenericProc)
 end
+
+local SPELL_WARLOCK_LIFE_TAP_R1 = 1454 -- spell_warlock.cpp (class spell_warl_life_tap_SpellScript)
+local SPELL_FAILED_FIZZLE = 33 -- SharedDefines.h:1015
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_warl_life_tap_SpellScript::CheckCast (spell_warlock.cpp:922-927):
+-- the caster must have strictly more health than the EFFECT_0 health
+-- cost (spell:GetEffectValue(0), the CalcValue twin) or the cast
+-- fizzles. Check-only port: the energize leg still needs
+-- spellpower-coefficient / ModifyHealth bridges (census row 796).
+-- Rank 1 only — higher Life Tap ranks are DB-bound via
+-- spell_script_names, unestablished in-tree (the drain_soul
+-- rank-1-only precedent). RegisterSpellEvent OnCheckCast = 8
+-- (lua_spell.go fireSpellCheckCast).
+local function lifeTapCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and caster:GetHealth() > spell:GetEffectValue(0) then
+        return SPELL_CAST_OK
+    end
+    return SPELL_FAILED_FIZZLE
+end
+
+RegisterSpellEvent(SPELL_WARLOCK_LIFE_TAP_R1, 8, lifeTapCheckCast)

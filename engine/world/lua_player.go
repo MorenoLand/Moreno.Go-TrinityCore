@@ -2737,6 +2737,20 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, ok := s.auras[spell]
 		return []any{ok}, nil
 	}
+	// HasAuraType(auraType) is Unit::HasAuraType (Unit.cpp): whether the
+	// player carries any aura of the given SPELL_AURA_* type
+	// (SpellAuraDefines.h), live or presence-only — the session twin
+	// folds activeAuras plus the DBC-backed presence set, like
+	// hasAuraType. Backs OnCheckCast handlers such as the skyguard
+	// fly-mount check (SPELL_AURA_FLY=201,
+	// SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED=207).
+	methods["HasAuraType"] = func(_ context.Context, args []any) ([]any, error) {
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{s.hasAuraType(auraType)}, nil
+	}
 	// GetAura is Unit::GetAura (UnitMethods.h, Unit.cpp GetAura(spellID)):
 	// the engine record for the spell, or nil when absent. Presence-only
 	// auras (s.auras without an activeAuras record) have no Aura object;

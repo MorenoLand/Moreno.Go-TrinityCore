@@ -4311,6 +4311,19 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// SpellScript OnCheckCast (Spell.cpp:5515, CallScriptCheckCastHandlers
+	// at :7977-7996): the script hook runs at the end of Spell::CheckCast,
+	// after CheckCasterAuras, and the first non-OK result fails the cast.
+	// Go fires it here, after the last generic gate, before
+	// SetCurrentCastSpell registers the cast. Triggered casts never reach
+	// handleCastSpell, matching C++ TRIGGERED_IGNORE_CAST_CHECK; creature
+	// casts run no CheckCast gauntlet in Go, so that path does not fire it.
+	if failure := s.fireSpellCheckCast(ctx, spellID, spell, target); failure != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failure), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "OnCheckCast script hook", "failure", failure)
+		return true
+	}
+
 	// Unit::SetCurrentCastSpell (Unit.cpp:3064-3090): registering the new cast
 	// breaks the other containers. A generic cast breaks the active channel
 	// ("generic spells always break channeled not delayed spells") and any
