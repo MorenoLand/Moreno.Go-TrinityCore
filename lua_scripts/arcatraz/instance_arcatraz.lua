@@ -43,16 +43,21 @@
 -- (npc_mellichar.lua ev5 SetGuidData) and is the only live
 -- GetGuidData consumer (Skyriss kill leg). OnGameObjectCreate
 -- GO latches (stasis pods 183961-183965, Wardens Shield
--- 184802, :78-104) — static GOs never fire event 6; the only
--- consumers are Mellichar's phase machine (HandleGameObject,
--- no Lua method) and SmartAI warden scripts. SetData/
--- GetData(DATA_WARDEN_1..5, :106-145) — creature:GetData is
--- the per-creature ScriptData store (lua_creature_events.go:
--- 809), no instance GetData/SetData bridge; the warden states
--- have no live writer (Mellichar DoPrepareForPhase, blocked)
--- or reader, so the SetBossState NOT_STARTED/FAIL warden-reset
--- leg (:169-177) is a no-op in the ported model and stays out
--- with them. DATA_CONVERSATION (4, :115-116/:133-134) — sole
+-- 184802, :78-104) — static GOs never fire event 6; the
+-- consumers are Mellichar's phase machine (ported in
+-- npc_mellichar.lua via FindNearestGameObject + SetGoState)
+-- and SmartAI warden scripts. SetData/
+-- GetData(DATA_WARDEN_1..5, :106-145) — no instance
+-- GetData/SetData bridge, so the warden states ride
+-- Mellichar's per-creature ScriptData store (creature:
+-- SetData/GetData, lua_creature_events.go:792/809) with
+-- all C++ instance writers redirected onto it
+-- (npc_mellichar.lua: DoPrepareForPhase IN_PROGRESS,
+-- Millhouse phase-7 DONE, wave-mob death DONE relays);
+-- the SetBossState NOT_STARTED/FAIL warden-reset leg
+-- (:169-177) is ported as the store clear inside Mellichar's
+-- doReset, and the pod-open side effect (:106-113) as the
+-- SetGoState arms in doPrepareForPhase. DATA_CONVERSATION (4, :115-116/:133-134) — sole
 -- writer is Soccothrates's MoveInLOS 70y proximity arm
 -- (boss_wrath_scryer_soccothrates.cpp:129-132), PORTED
 -- 2026-11-10 in boss_wrath_scryer_soccothrates.lua via the ev7

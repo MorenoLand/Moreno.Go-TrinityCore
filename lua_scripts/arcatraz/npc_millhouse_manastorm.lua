@@ -50,12 +50,13 @@
 -- ARMOR 36881), re-arm 7000; phase 5 — Talk(SAY_DRINK) +
 -- DoCastSelf(SPELL_ARCANE_INTELLECT 36880), re-arm 7000;
 -- phase 6 — Talk(SAY_READY), re-arm 6000; phase 7 — the
--- instance->SetData(DATA_WARDEN_2, DONE) arm is instance-
--- blocked, the me->SetImmuneToNPC(false) arm is PORTED via the
--- bridged unit-flags surface (executioner precedent), so the
--- observable remainder is Init = true — the pump self-cancels
--- (the C++ ++Phase takes it to 8 and the `Phase < 8` gate ends
--- the machine).
+-- instance->SetData(DATA_WARDEN_2, DONE) arm is PORTED via
+-- the redirect onto Mellichar's per-creature store
+-- (npc_mellichar.lua) and the me->SetImmuneToNPC(false) arm
+-- is PORTED via the bridged unit-flags surface (executioner
+-- precedent), so the observable remainder is Init = true —
+-- the pump self-cancels (the C++ ++Phase takes it to 8 and
+-- the `Phase < 8` gate ends the machine).
 -- OnEnterCombat(1): per-GUID reset to the C++ Initialize()
 -- combat values (LowHp = false / Pyroblast_Timer = 1000 /
 -- Fireball_Timer = 2500 — the C++ has no JustEngagedWith
@@ -84,57 +85,45 @@
 -- (arcatraz.cpp:64-66); FailQuest bridged, lua_player.go:4511). OnLeaveCombat(2): cancel the combat pump + drop
 -- combat state, and restart the intro machine when it had not
 -- completed (the C++ Reset() re-Initialize()s — Phase = 1 /
--- Init = false — and the instance DATA_WARDEN_2 gate is
--- blocked, so the replay models the pre-phase-7 evade case;
--- once phase 7 completed, DATA_WARDEN_2 would be DONE in the
--- real instance and the intro stays done, C++-exact for the
--- reachable timeline). OnReset(23): cancel the combat pump +
+-- Init = false — and the DATA_WARDEN_2 gate now rides the
+-- ev5 respawn check below, so the replay models the
+-- pre-phase-7 evade case; once phase 7 completed,
+-- DATA_WARDEN_2 is DONE in Mellichar's store and the intro
+-- stays done, C++-exact for the reachable timeline). OnReset(23): cancel the combat pump +
 -- drop combat state only — Eluna's On_Reset also fires ahead
 -- of OnDied and OnSpawn (verified in engine/world/lua_
 -- creature_events.go), so the intro restart stays on the
 -- evade hook to avoid double pumps.
--- npc_warden_mellichar is registered only as the DATA_MELLICHAR
--- guid latch (npc_mellichar.lua); its AI stays documented here
--- (omor-heads precedent): entry NPC_MELLICHAR = 20904
--- (arcatraz.h). Its Reset() (SetFlag(UNIT_FLAG_NON_ATTACKABLE)
--- — SetFlag is bridged; DoCastSelf(SPELL_TARGET_OMEGA 36852);
--- instance->SetBossState(DATA_HARBINGER_SKYRISS, NOT_STARTED)
--- — SetBossState is bridged, lua_creature_events.go:6605 —
--- the Reset arms are individually portable, next strip), its
--- empty AttackStart override, its MoveInLineOfSight proximity
--- arm (ev27 is engage-only, so the LoS-aggro trigger itself is
--- unreachable — gargolmar precedent), its JustEngagedWith
--- (Talk(YELL_INTRO1) + DoCastSelf(SPELL_BUBBLE_VISUAL 36849) +
--- instance SetBossState(IN_PROGRESS) + HandleGameObject(DATA_WARDENS_
--- SHIELD) + IsRunning = true), its whole UpdateAI phase
--- machine (CanProgress gated on instance GetData(DATA_WARDEN_
--- 1..4)/GetBossState(DATA_HARBINGER_SKYRISS); DoPrepareFor
--- Phase: InterruptNonMeleeSpells + RemoveAurasByType + DoCast
--- (me, SPELL_TARGET_ALPHA 36856 / BETA 36854 / DELTA 36857 /
--- GAMMA 36858) + instance SetData + HandleGameObject arms;
--- the SummonCreature arms — 20905/20906 at (472.231,
--- -150.86, 42.6573), 20977 at (417.242, -149.795, 42.6548),
--- 20908/20909 at (420.851, -174.337, 42.6655), 20910/20911 at
--- (470.364, -174.656, 42.6753), 20912 at (446.086, -182.506,
--- 44.0852) — SummonCreature is bridged (lua_creature_events.go:
--- 3828), so the summon arms are portable once the phase
--- machine's instance-data gate lifts) and its
--- JustSummoned DoZoneInCombat/AttackStart relay (DoZoneInCombat
--- is bridged, lua_creature_events.go:2063; AttackStart :6831)
--- all await the true blockers: instance DATA_WARDEN_* data,
--- HandleGameObject, CanCreatureAttack/GetDistanceZ/SelectTarget. Its yells (YELL_INTRO1 = 0 / YELL_INTRO2 = 1 /
--- YELL_RELEASE1 = 2 / YELL_RELEASE2A = 3 / YELL_RELEASE2B = 4
--- / YELL_RELEASE3 = 5 / YELL_RELEASE4 = 6 / YELL_WELCOME = 7)
--- are carried here for the record.
+-- npc_warden_mellichar is PORTED whole in npc_mellichar.lua
+-- (entry NPC_MELLICHAR = 20904, arcatraz.h): ev27 MoveInLOS
+-- trigger + JustEngagedWith, the 7-phase UpdateAI poller,
+-- DoPrepareForPhase, the summon arms, JustSummoned, the
+-- FAIL -> Reset leg, and the Reset arms. Its yells
+-- (YELL_INTRO1 = 0 / YELL_INTRO2 = 1 / YELL_RELEASE1 = 2 /
+-- YELL_RELEASE2A = 3 / YELL_RELEASE2B = 4 / YELL_RELEASE3
+-- = 5 / YELL_RELEASE4 = 6 / YELL_WELCOME = 7) live there.
+-- The 05:33 head-entry unblock stands: InterruptNonMeleeSpells
+-- + SummonCreature + RemoveAurasByType are bridged, the
+-- HandleGameObject arms ride FindNearestGameObject +
+-- SetGoState, and the instance DATA_WARDEN_* data rides
+-- Mellichar's per-creature store with all writers redirected
+-- (this file's phase-7 write, the wave-mob death relays).
+-- CORRECTION to the earlier note here: ev27 is NOT
+-- unreachable for Mellichar — the Go sight scan does not
+-- gate on UNIT_FLAG_NON_ATTACKABLE (creaturemotion.go:9438)
+-- and his faction (16, TDB creature_template) is hostile,
+-- so the scan fires ev27 and the handler vetoes the engage.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — the DATA_WARDEN_2 read in Reset()
--- and the phase-7 SetData arm are skipped (the DATA_HARBINGER_
--- SKYRISS read is PORTED as the SAY_COMPLETE arm in ev23 below;
--- instance_arcatraz.cpp stays blocked on the instance-script
--- model); the Reset() instance-gated
--- SetImmuneToNPC(false) arm stays fused to its unported
--- instance gate (the phase-7 arm is PORTED via the bridged
--- unit-flags surface — see introTick); the AttackStart
+-- and the phase-7 SetData arm are PORTED via the redirect
+-- onto Mellichar's per-creature store (npc_mellichar.lua:
+-- the ev5 respawn check reads it, the introTick phase-7 arm
+-- writes it; the DATA_HARBINGER_SKYRISS read is PORTED as
+-- the SAY_COMPLETE arm in ev23 below; instance_arcatraz.cpp
+-- stays blocked on the instance-script model); the Reset()
+-- instance-gated SetImmuneToNPC(false) arm stays fused to
+-- its unported instance gate (the phase-7 arm is PORTED via
+-- the bridged unit-flags surface — see introTick); the AttackStart
 -- MoveChase(who, 25.0f) arm is PORTED in ev1 below (MoveChase
 -- bridged, lua_creature_events.go:5252); the pyroblast
 -- IsNonMeleeSpellCast(false) early-return gate is PORTED
@@ -170,6 +159,8 @@ local SPELL_PYROBLAST = 33975
 local SPELL_FIREBALL = 14034
 
 local ENTRY_MILLHOUSE = 20977
+local ENTRY_MELLICHAR = 20904 -- arcatraz.h AZCreatureIds
+local DATA_WARDEN_2 = 6 -- arcatraz.h:43
 
 local introTimers = {}
 local introState = {}
@@ -232,13 +223,21 @@ local function introTick(creature, guid)
             st.timer = 6000
         else
             -- Phase 7: the instance->SetData(DATA_WARDEN_2,
-            -- DONE) arm is instance-blocked; C++ arcatraz.cpp:182
-            -- me->SetImmuneToNPC(false) = RemoveFlag(UNIT_FIELD_FLAGS
-            -- = 59, UNIT_FLAG_IMMUNE_TO_NPC 0x200; Unit.cpp:8476-8495)
-            -- is PORTED via the bridged unit-flags surface; the
-            -- observable remainder is Init = true.
+            -- DONE) arm (C++ arcatraz.cpp:180) is PORTED via the
+            -- redirect onto Mellichar's per-creature store
+            -- (npc_mellichar.lua — the sole C++ reader is
+            -- Mellichar's CanProgress phase-5 gate); C++ arcatraz.
+            -- cpp:182 me->SetImmuneToNPC(false) = RemoveFlag(
+            -- UNIT_FIELD_FLAGS = 59, UNIT_FLAG_IMMUNE_TO_NPC
+            -- 0x200; Unit.cpp:8476-8495) is PORTED via the bridged
+            -- unit-flags surface; the observable remainder is
+            -- Init = true.
             introDone[guid] = true
             creature:RemoveFlag(59, 0x200)
+            local mellichar = creature:FindNearestCreature(ENTRY_MELLICHAR, 200)
+            if mellichar ~= nil then
+                mellichar:SetData(DATA_WARDEN_2, 3)
+            end
             cancelIntro(guid)
             introState[guid] = nil
             return
@@ -295,7 +294,18 @@ local function combatTick(creature, guid)
 end
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 5, function(_, creature)
-    startIntro(creature, creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    -- C++ Reset() (arcatraz.cpp:104-110): DATA_WARDEN_2 DONE
+    -- -> Init = true, SetImmuneToNPC(false). The read rides
+    -- Mellichar's store (npc_mellichar.lua redirect); on a
+    -- fresh instance the key is unset (0) and the intro runs.
+    local mellichar = creature:FindNearestCreature(ENTRY_MELLICHAR, 200)
+    if mellichar ~= nil and mellichar:GetData(DATA_WARDEN_2) == 3 then
+        introDone[guid] = true
+        creature:RemoveFlag(59, 0x200)
+        return
+    end
+    startIntro(creature, guid)
 end)
 
 RegisterCreatureEvent(ENTRY_MILLHOUSE, 1, function(_, creature, target)
