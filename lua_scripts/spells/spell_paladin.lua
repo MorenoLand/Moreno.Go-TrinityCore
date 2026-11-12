@@ -1,6 +1,19 @@
 -- Paladin spell aura scripts -- Lua ports of the AuraScript arms in
 -- src/server/scripts/Spells/spell_paladin.cpp.
 --
+-- CLOSED (this tick, verified, no code): spell_pal_seals
+--   (spell_paladin.cpp:2241; bindings 20375/31801/31892/33127/38008/
+--   41459/53720/53736): the class is a veto only — CheckDummyProc
+--   returns false on EFFECT_2 SPELL_AURA_DUMMY "to avoid console
+--   logging of unknown spell trigger". Go needs no twin:
+--   checkEffectProcGates treats absent script check handlers as
+--   passing (procs.go:3636-3641) and the default leg then silently
+--   skips the TriggerSpell == 0 effect (procs.go:5618-5622) — no log,
+--   no cast, no state change, the same observable behavior as the
+--   veto. No Lua check-proc hook exists (ev6 is OnProc only). The
+--   two ids with real EFFECT_0 proc arms (31801/53736, seal of
+--   vengeance) already ride the Go hardcoded leg (procs.go:4891).
+--
 -- PORTED (tick 201, RegisterAuraEvent OnApply = 2 / OnRemove = 3):
 --   spell_pal_blessing_of_sanctuary (20911 Blessing of Sanctuary and
 --   25899 Greater Blessing of Sanctuary, spell_paladin.cpp:476-529):

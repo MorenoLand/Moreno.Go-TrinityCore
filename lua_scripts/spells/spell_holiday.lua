@@ -191,7 +191,10 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   ev5, 26275) left it this tick; mistletoe (586, ev5, 26218) and
 --   barker_bunny (589-592, ev2, 43259-43262) left it on the next tick
 --   — mistletoe's binding is the AC spell_script_names row, and the
---   bunny rides the player:Talk bridge built that tick.
+--   bunny rides the player:Talk bridge built that tick. Ribbon-pole
+--   channel (29705/29726/29727, ev1+ev3) left it this tick — the
+--   45406 visual was already ported (ev1) and the channel's
+--   RefreshDuration leg rides SetMaxDuration + SetDuration.
 --   relay_race_turn_in 588 stays out (no binding ID in-tree — 44501
 --   is the credit spell it casts, not its own ID). The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
@@ -375,6 +378,58 @@ local function midsummerRibbonPoleVisualTick(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_MIDSUMMER_RIBBON_POLE_PERIODIC_VISUAL, 1, midsummerRibbonPoleVisualTick)
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1 / OnRemove = 3):
+--   spell_midsummer_test_ribbon_pole_channel::PeriodicTick/HandleRemove
+--   (spell_holiday.cpp:1610-1640): EFFECT_1 PERIODIC_TRIGGER_SPELL.
+--   Every tick the target self-casts the periodic visual 45406,
+--   triggered; if it holds Ribbon Dance 29175 its max duration grows
+--   by 180000ms capped at 3600000ms and refreshes, and at the cap
+--   with the full midsummer set 58933 it self-casts Burning Hot Pole
+--   Dance 58934, triggered; otherwise it self-casts 29175,
+--   triggered. On remove the visual 45406 is dropped. No
+--   PreventDefaultAction in C++, so the ev1 handler returns nothing
+--   and the Go default trigger-spell tick still fires — the same
+--   script-plus-default pair C++ runs. SetMaxDuration + SetDuration
+--   is the RefreshDuration twin (lua_aura.go: no RefreshDuration
+--   method; SetDuration rewrites remaining + re-arms the timer).
+--   DORMANT until Spell.dbc ships the 29705/29726/29727 periodic
+--   entries (the GO ribbon-pole cast is already ported).
+local SPELL_RIBBON_DANCE = 29175 -- spell_holiday.cpp:1592
+local SPELL_HAS_FULL_MIDSUMMER_SET = 58933 -- spell_holiday.cpp:1589
+local SPELL_BURNING_HOT_POLE_DANCE = 58934 -- spell_holiday.cpp:1590
+
+local function midsummerRibbonPoleChannelTick(event, aura, target)
+    target:CastSpell(target, SPELL_MIDSUMMER_RIBBON_POLE_PERIODIC_VISUAL, true)
+    local dance = target:GetAura(SPELL_RIBBON_DANCE)
+    if dance ~= nil then
+        local maxDuration = dance:GetMaxDuration()
+        if maxDuration < 0 then
+            maxDuration = 0
+        end
+        maxDuration = math.min(3600000, maxDuration + 180000)
+        dance:SetMaxDuration(maxDuration)
+        dance:SetDuration(maxDuration)
+        if dance:GetMaxDuration() == 3600000 and target:HasAura(SPELL_HAS_FULL_MIDSUMMER_SET) then
+            target:CastSpell(target, SPELL_BURNING_HOT_POLE_DANCE, true)
+        end
+    else
+        target:CastSpell(target, SPELL_RIBBON_DANCE, true)
+    end
+end
+
+local function midsummerRibbonPoleChannelRemove(event, aura, target)
+    target:RemoveAura(SPELL_MIDSUMMER_RIBBON_POLE_PERIODIC_VISUAL)
+end
+
+for _, channelId in ipairs({
+    SPELL_TEST_RIBBON_POLE_1,
+    SPELL_TEST_RIBBON_POLE_2,
+    SPELL_TEST_RIBBON_POLE_3,
+}) do
+    RegisterAuraEvent(channelId, 1, midsummerRibbonPoleChannelTick)
+    RegisterAuraEvent(channelId, 3, midsummerRibbonPoleChannelRemove)
+end
 
 -- PORTED (this tick, RegisterSpellEvent OnEffectHit = 4):
 --   spell_brewfest_dismount_ram::HandleScript
