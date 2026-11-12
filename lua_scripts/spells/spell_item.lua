@@ -730,3 +730,50 @@ local function teachLanguageHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_TEACH_LANGUAGE, 5, teachLanguageHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_item_universal_remote::HandleDummy (spell_item.cpp:4052-4086):
+--   EFFECT_0 DUMMY. The C++ Load gate (cast from an item) rides
+--   spell:GetCastItem() (lua_spell.go:294). On a hit unit the caster
+--   rolls urand(0, 99): <15 casts Target Lock 8347, <25 Mobility
+--   Malfunction 8346, else Control Machine 8345 — all on the hit
+--   unit with the cast item. Binding 8344 per TDB 335.26091
+--   spell_script_names ('spell_item_universal_remote'); AC binds it
+--   to 'spell_item_gnomish_universal_remote', a loader name that
+--   exists nowhere in the C++ tree — a dead row, not followed.
+--   The item rides CastCustomSpell's castItem arg (the
+--   itemTriggerSpell precedent above); the ev5 fire site covers the
+--   player path (spells.go:14735).
+local SPELL_GNOMISH_UNIVERSAL_REMOTE = 8344 -- spell_item.cpp:4052
+local SPELL_UNIVERSAL_REMOTE_CONTROL_MACHINE = 8345 -- spell_item.cpp:4047
+local SPELL_UNIVERSAL_REMOTE_MOBILITY_MALFUNCTION = 8346 -- spell_item.cpp:4048
+local SPELL_UNIVERSAL_REMOTE_TARGET_LOCK = 8347 -- spell_item.cpp:4049
+
+local function universalRemoteHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local item = spell:GetCastItem()
+    if item == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local chance = math.random(0, 99)
+    local triggered
+    if chance < 15 then
+        triggered = SPELL_UNIVERSAL_REMOTE_TARGET_LOCK
+    elseif chance < 25 then
+        triggered = SPELL_UNIVERSAL_REMOTE_MOBILITY_MALFUNCTION
+    else
+        triggered = SPELL_UNIVERSAL_REMOTE_CONTROL_MACHINE
+    end
+    caster:CastCustomSpell(hitTarget, triggered, true, nil, nil, nil, item)
+end
+
+RegisterSpellEvent(SPELL_GNOMISH_UNIVERSAL_REMOTE, 5, universalRemoteHit)

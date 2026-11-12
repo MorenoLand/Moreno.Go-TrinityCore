@@ -1687,6 +1687,9 @@ RegisterSpellEvent(HUNT.SPELL_GRAB_FAKE_SOLDIER, 5, grabDecoyHit)
 --   (:2158-2174): RegisterSpellScript classes with no AC table rows
 --   and no class-name spell suffix; bindings unestablished, same
 --   bucket as the hunt-unresolved.
+--   SUPERSEDED (tick 2026-11-12): both PORTED in the HUNT block below
+--   (area_restrict 76245, assign_credit 59590/60039/60041) on the TDB
+--   335.26091 spell_script_names rows; the stay-out above predates it.
 
 local function bearFlankMasterHit(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 then

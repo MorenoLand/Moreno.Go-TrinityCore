@@ -548,3 +548,31 @@ end
 for _, spellId in ipairs(SPELL_GEN_RESTORATION) do
     RegisterAuraEvent(spellId, 1, restorationTick)
 end
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_gen_chains_of_ice::UpdatePeriodic (spell_generic.cpp:870-889):
+--   EFFECT_1 PERIODIC_DUMMY. Each tick the slow (EFFECT_0) amount
+--   grows by the periodic effect's amount, capped at 0
+--   (min(sum, 0)); a missing EFFECT_0 returns early in C++.
+--   OnEffectUpdatePeriodic has no Go twin, but it fires once per
+--   periodic tick ahead of the tick in C++ (AuraEffect::Update),
+--   which is exactly the ev1 fire site (runtime.go: the hook runs
+--   before the default tick for every periodic aura type), so the
+--   ramp rides ev1. No PreventDefaultAction in C++, so the handler
+--   returns nothing and the Go default tick still fires. Bindings
+--   45524/66020 per TDB 335.26091 spell_script_names
+--   ('spell_gen_chains_of_ice'); AC binds 45524 to
+--   'spell_dk_chains_of_ice', a loader name that exists nowhere in
+--   the C++ tree — a dead row, not followed. DORMANT until Spell.dbc
+--   ships the 45524/66020 periodic entries.
+local SPELL_GEN_CHAINS_OF_ICE = { 45524, 66020 }
+
+local function chainsOfIceTick(event, aura, target)
+    local slow = aura:GetAmount(0)
+    local step = aura:GetAmount(1)
+    aura:SetAmount(math.min(slow + step, 0), 0)
+end
+
+for _, spellId in ipairs(SPELL_GEN_CHAINS_OF_ICE) do
+    RegisterAuraEvent(spellId, 1, chainsOfIceTick)
+end
