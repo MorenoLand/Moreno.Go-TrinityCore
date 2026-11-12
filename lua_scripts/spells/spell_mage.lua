@@ -465,3 +465,35 @@ RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 -- are likewise wrong (608: DoCheckProc + OnEffectProc; 611: DoCheckProc
 -- + OnEffectProc EFFECT_1 DUMMY; 612: OnEffectProc EFFECT_0
 -- OVERRIDE_CLASS_SCRIPTS).
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_mage_polymorph_cast_visual::HandleDummy (spell_mage.cpp:1386-1418):
+--   EFFECT_0 DUMMY. The caster finds the nearest Aurosalia (18744)
+--   within 30 yards; when found (and a creature — FindNearestCreature
+--   returns creatures only, the C++ TYPEID_UNIT check is vacuous
+--   here), that creature casts a random polymorph form on itself,
+--   triggered: squirrel 32813 / giraffe 32816 / serpent 32817 /
+--   dragonhawk 32818 / worgen 32819 / sheep 32820 (PolymorphForms[6],
+--   spell_mage.cpp:1422-1430; urand(0, 5) rides math.random(1, 6)).
+--   No PreventDefaultAction in C++ — the default dummy leg still runs.
+--   DORMANT until Spell.dbc ships the 32826 row.
+local SPELL_MAGE_POLYMORPH_VISUAL = 32826 -- spell_mage.cpp:1386 (class spell_mage_polymorph_cast_visual)
+local NPC_AUROSALIA = 18744 -- spell_mage.cpp:1382
+local SPELL_MAGE_POLYMORPH_FORMS = { 32813, 32816, 32817, 32818, 32819, 32820 } -- spell_mage.cpp:1422-1430
+
+local function polymorphVisualHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local target = caster:FindNearestCreature(NPC_AUROSALIA, 30.0)
+    if target == nil then
+        return
+    end
+    target:CastSpell(target, SPELL_MAGE_POLYMORPH_FORMS[math.random(1, 6)], true)
+end
+
+RegisterSpellEvent(SPELL_MAGE_POLYMORPH_VISUAL, 5, polymorphVisualHit)
