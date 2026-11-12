@@ -50,7 +50,10 @@
 --   PORTED below (ev1, tick 547); ranks 3-4 (49939/49940) stay out —
 --   consecutive IDs with no in-tree citation.
 --   spell_dk_blood_tap needs the rune system; spell_dk_hysteria
---   needs DealDamage; spell_dk_raise_ally needs ghoul AI push/pop.
+--   (49016, ev1 self-damage) and spell_dk_death_grip_initial
+--   (49576, ev8 + ev5) are PORTED below — the tick-294
+--   "hysteria needs DealDamage" stay-out is stale, the bridge
+--   exists. spell_dk_raise_ally needs ghoul AI push/pop.
 --   spell_dk_death_coil ranks 1-4 (47541/52375/59134/62900): CheckCast
 --   arm PORTED this tick (OnCheckCast ev8 below); the Go
 --   finishSpellCast dummy leg stays PORTED (spells.go deathCoilDummyEffect
@@ -600,6 +603,8 @@ end
 RegisterAuraEvent(SPELL_DK_ACCLIMATION, 6, acclimationProc)
 
 local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_FAILED_MOVING = 51 -- SharedDefines.h:1033
+local SPELL_FAILED_TOO_CLOSE = 128 -- SharedDefines.h:1110
 local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
 local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
@@ -646,3 +651,79 @@ local function deathGateCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_DK_DEATH_GATE, 8, deathGateCheckCast)
+
+local SPELL_DK_HYSTERIA = 49016 -- spell_dk.cpp:1327 (class spell_dk_hysteria)
+
+-- C++ spell_dk_hysteria::PeriodicTick (spell_dk.cpp:1327-1342):
+-- EFFECT_1 PERIODIC_DUMMY tick deals CountPctFromMaxHealth of the
+-- effect-1 amount as self damage (SELF_DAMAGE, school NORMAL, no
+-- durability loss). RegisterAuraEvent OnEffectPeriodic = 1. The
+-- tick-294 "needs DealDamage" stay-out is stale: DealDamage is
+-- bridged on player + creature + objects (lua_player.go:3460,
+-- lua_creature_events.go:1874, lua_objects.go:2585) with the
+-- algalon self-damage precedent, and GetAmount(1) reads the
+-- EFFECT_1 live amount (lua_aura.go:418).
+local function hysteriaTick(event, aura, target)
+    if target == nil then
+        return
+    end
+    local damage = target:CountPctFromMaxHealth(aura:GetAmount(1))
+    target:DealDamage(target, damage, false, 0)
+end
+
+RegisterAuraEvent(SPELL_DK_HYSTERIA, 1, hysteriaTick)
+
+local SPELL_DK_DEATH_GRIP_INITIAL = 49576 -- spell_dk.cpp:2740
+local SPELL_DK_DEATH_GRIP = 49560 -- spell_dk.cpp:60
+local PLAYER_COMBAT_REACH = 1.5 -- ObjectDefines.h:40 DEFAULT_PLAYER_COMBAT_REACH
+
+-- C++ spell_dk_death_grip_initial (spell_dk.cpp:2740-2781):
+-- CheckCast (OnCheckCast = 8, lua_spell.go fireSpellCheckCast):
+-- jumping or falling fails SPELL_FAILED_MOVING; a player target
+-- closer than 8 yards fails SPELL_FAILED_TOO_CLOSE. The jumping
+-- leg is unported, not ported dead: HasUnitState(JUMPING) has no
+-- live model, it reads the script mask only (lua_unit_state.go),
+-- so it could never fire; the falling leg rides the player-only
+-- IsFalling session flag (lua_player.go:838), gated on the caster
+-- being a player. The 8-yard leg is C++-exact:
+-- WorldObject::GetDistance subtracts both combat reaches
+-- (Object.cpp:1169-1173) while the Go twin is raw 3D, so the
+-- player reaches come off as the 1.5 constant (maiden_of_virtue
+-- precedent; GetCombatReach is creature-surface only).
+-- HandleDummy (OnEffectHitTarget = 5, EFFECT_0 DUMMY): the caster
+-- casts Death Grip 49560 on the hit unit, triggered.
+local function deathGripInitialCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_CAST_OK
+    end
+    if caster:GetObjectType() == "Player" and caster:IsFalling() then
+        return SPELL_FAILED_MOVING
+    end
+    local target = spell:GetTarget()
+    if target ~= nil and target:GetObjectType() == "Player" then
+        local dist = caster:GetDistance(target) - PLAYER_COMBAT_REACH - PLAYER_COMBAT_REACH
+        if dist < 0 then
+            dist = 0
+        end
+        if dist < 8 then
+            return SPELL_FAILED_TOO_CLOSE
+        end
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_DK_DEATH_GRIP_INITIAL, 8, deathGripInitialCheckCast)
+
+local function deathGripInitialHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_DK_DEATH_GRIP, true)
+end
+
+RegisterSpellEvent(SPELL_DK_DEATH_GRIP_INITIAL, 5, deathGripInitialHit)
