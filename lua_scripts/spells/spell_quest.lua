@@ -485,3 +485,150 @@ local function chooseLocHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_CHOOSE_LOC, 4, chooseLocHit)
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_q13665_q13790_bested_trigger (spell_quest.cpp:2698-2724):
+--   EFFECT_0 SCRIPT_EFFECT OnEffectHitTarget. The hit unit's
+--   charmer-or-owner-or-self self-casts the effect's DBC value
+--   (spell:GetEffectValue(0)), triggered. Binding: the 14 spell IDs
+--   in the C++ comment (:2696-2697) — 13665/13745/13750/13756/13761/
+--   13767/13772/13777/13782/13787 (The Grand Melee) + 13790/13793/
+--   13811/13814 (Among the Champions). ev5 fires on the creature
+--   path (boss_ai.go:3402 loop inside castCreatureSpellInternalWith-
+--   BasePoints); the caster is the defeated champion creature.
+--   KNOWN DELTAS: no GetCharmerOrOwnerOrSelf bridge — a creature hit
+--   resolves its owner via GetOwner (lua_creature_events.go:627,
+--   owner player or nil); a charmed-but-unowned hit (mind control)
+--   falls through to self, since no player-by-GUID bridge exists to
+--   resolve a GetCharmerGUID. KNOWN LIMIT: player:CastSpell ignores
+--   the triggered flag (see header note above), same as all prior
+--   player ports.
+
+local BESTED_TRIGGER_SPELLS = {13665, 13745, 13750, 13756, 13761, 13767, 13772, 13777, 13782, 13787, 13790, 13793, 13811, 13814} -- spell_quest.cpp:2696-2697
+
+local function bestedTriggerHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local target = hitTarget
+    if hitTarget:GetObjectType() == "Creature" then
+        local owner = hitTarget:GetOwner()
+        if owner ~= nil then
+            target = owner
+        end
+    end
+    local spellId = spell:GetEffectValue(0)
+    if spellId > 0 then
+        target:CastSpell(target, spellId, true)
+    end
+end
+
+for _, spellId in ipairs(BESTED_TRIGGER_SPELLS) do
+    RegisterSpellEvent(spellId, 5, bestedTriggerHit)
+end
+
+-- PORTED (tick 2026-11-11, RegisterSpellEvent OnEffectHit = 4):
+--   spell_q11306_failed_mix_43376 (spell_quest.cpp:2836-2863):
+--   EFFECT_1 SEND_EVENT OnEffectHit. The caster finds the nearest
+--   Generic Trigger Lab 24042 within 100yd; it whispers Talk(0) to
+--   the caster. Binding 43376 is in the class name.
+--   spell_q11306_failed_mix_43378 (spell_quest.cpp:2864-2892):
+--   EFFECT_2 SEND_EVENT OnEffectHit, same shape, Talk(1). Binding
+--   43378 is in the class name. ev4 fires on the player path
+--   (spells.go:14625); the caster is the player mixing the blood.
+--   Talk(textId, whisperTarget) is the bridged AI::Talk twin
+--   (lua_creature_events.go:1196); FindNearestCreature(entry, dist)
+--   is bridged on player + creature surfaces.
+
+local SPELL_FAILED_MIX_43376 = 43376 -- spell_quest.cpp:2836 (class spell_q11306_failed_mix_43376)
+local SPELL_FAILED_MIX_43378 = 43378 -- spell_quest.cpp:2864 (class spell_q11306_failed_mix_43378)
+local CREATURE_GENERIC_TRIGGER_LAB = 24042 -- spell_quest.cpp:2762 (ApplyHeatAndStir enum)
+local TALK_FAILED_MIX_0 = 0 -- spell_quest.cpp:2764
+local TALK_FAILED_MIX_1 = 1 -- spell_quest.cpp:2765
+
+local function failedMix43376Hit(event, spell, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local trigger = caster:FindNearestCreature(CREATURE_GENERIC_TRIGGER_LAB, 100)
+    if trigger ~= nil then
+        trigger:Talk(TALK_FAILED_MIX_0, caster)
+    end
+end
+
+RegisterSpellEvent(SPELL_FAILED_MIX_43376, 4, failedMix43376Hit)
+
+local function failedMix43378Hit(event, spell, effectIndex)
+    if effectIndex ~= 2 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local trigger = caster:FindNearestCreature(CREATURE_GENERIC_TRIGGER_LAB, 100)
+    if trigger ~= nil then
+        trigger:Talk(TALK_FAILED_MIX_1, caster)
+    end
+end
+
+RegisterSpellEvent(SPELL_FAILED_MIX_43378, 4, failedMix43378Hit)
+
+-- STAY OUT (tick 2026-11-11 census rows 712-721 + 736-738, verified
+--   name-by-name: all 13 classes have ZERO hits in engine/ +
+--   lua_scripts/, so the census go_hit/lua_hit=true flags on these
+--   no-id/comment-block rows are phantoms, as are the go_hit=true
+--   flags on bested rows 724/727/731/732 — those IDs appear in Go
+--   only as unrelated constants):
+--   spell_q12527_zuldrak_rat (spell_quest.cpp:1697-1736): ev5
+--   EFFECT_1 SCRIPT_EFFECT; hit-aura stack >= SpellInfo StackAmount
+--   gates a triggered 50928 summon + creature despawn — no
+--   spell:GetHitAura bridge, no binding spell ID in-tree.
+--   spell_q12730_quenching_mist (:1767-1806): AuraScript periodic
+--   heal removing 53504 — no binding aura ID in-tree.
+--   spell_q13291_q13292_q13239_q13261_frostbrood_skytalon_grab_decoy
+--   (:1808-1843): ev5 DUMMY; hit creature casts 59319 triggered on
+--   the caster — no binding spell ID (comment holds quest IDs only);
+--   also player-cast, so no ev5 direct-path fire site.
+--   spell_q13011_bear_flank_master (:1907-1956): ev5 SCRIPT_EFFECT,
+--   caster-is-creature Load gate, hit player 50% casts 56569 on the
+--   creature + AI Talk(0) else self-casts 56566 — no binding ID.
+--   spell_q13086_cannons_target (:1957-1985): ev4 DUMMY; caster casts
+--   GetEffectValue() triggered at the explicit dest — no binding ID;
+--   no position-targeted CastSpell bridge (spell:GetTargetDest
+--   exists, lua_spell.go:91, but no CastSpell(x,y,z) arm).
+--   spell_q12641_recall_eye_of_acherus (:2381-2415): ev5; caster's
+--   charmer-or-owner player stops charm/bindsight + removes the Eye
+--   aura — GetCharmerOrOwner object + StopCastingCharm/BindSight
+--   unbridged, no binding ID.
+--   spell_q12919_gymers_grab (:2474-2514): ev5; hit creature casts
+--   43671 on the caster with BP0=2 + 55424 on itself — no binding
+--   ID; Lua CastSpell takes no base-points arg.
+--   spell_q12919_gymers_throw (:2515-2551): ev5; caster vehicle
+--   passenger(1) exits + caster casts 55569 on it — no binding ID
+--   only: GetVehicleKit (lua_creature_events.go:3282) + GetPassenger
+--   (lua_vehicle.go:74) ARE bridged, so the arm ports once a binding
+--   ID is found.
+--   spell_q13400_illidan_kill_master (:2552-2590): ev5 DUMMY; caster
+--   vehicle passenger(0) self-casts 61748 — no binding ID only, same
+--   vehicle bridges live.
+--   spell_q12414_hand_over_reins (:2666-2697): ev5 EFFECT_1; hit unit
+--   ExitVehicle + caster creature despawns — no binding ID
+--   (ExitVehicle itself IS bridged, lua_player.go:2889).
+--   spell_59064_59439_portals (:2726-2765): ev5 SCRIPT_EFFECT; hit
+--   unit self-casts GetEffectValue() NON-triggered — binding IDs in
+--   the class name, but the caster is the player casting directly,
+--   so no ev5 direct-path fire site (triggered funnel only).
+--   spell_q11306_mixing_blood (:2766-2793): ev4 EFFECT_1 SEND_EVENT;
+--   nearest trigger 24042 DoCastSelf(38594) — no binding ID; no
+--   DoCastSelf bridge (nearest-creature + self-cast pieces exist).
+--   spell_q11306_mixing_vrykul_blood (:2794-2835): ev5 EFFECT_1
+--   DUMMY; caster self-casts 43376/43378/43970 (30/30/30) or 43377
+--   (10%), triggered — no binding ID.
