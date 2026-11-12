@@ -266,7 +266,11 @@ local POWER_MANA = 0
 -- default leg, like a failed CheckProc); the improved Drain Soul
 -- mana leg casts 18371 on the caster, triggered, BP0 = the
 -- EFFECT_2 pct of the caster's max mana. GetAuraOfRankedSpell is
--- player-only, so a non-player actor vetoes after the gate.
+-- player-only, so a non-player actor vetoes after the gate. The
+-- CheckProc gate is rank-1-only: procTarget:GetAura(1120) matches
+-- the exact spell ID, and GetAuraApplicationOfRankedSpell is
+-- unbridged, so higher-rank Drain Soul auras cannot satisfy the
+-- gate (consistent with the rank-1-only tick-195 note above).
 -- DORMANT until Spell.dbc ships the 1120 proc entry. Residual:
 -- Go fires ev6 after charge/cooldown consumption, so a vetoed
 -- (failed-gate) proc still spends a charge where C++ would not.
@@ -358,9 +362,14 @@ local SPELL_WARLOCK_SEED_OF_CORRUPTION_DAMAGE_R1 = 27285 -- spell_warlock.cpp:75
 -- damage is eaten from the buffer (EFFECT_1 amount); a surviving
 -- buffer only detonates when the target's health after the hit
 -- drops below 1% (HealthBelowPctDamaged: health - damage <
--- maxHealth * 1 / 100, Unit.h:873). On detonation the aura is
--- removed and the caster casts the rank-matched Seed of
--- Corruption damage spell on the proc target, triggered.
+-- maxHealth * 1 / 100, Unit.h:873 — C++ reads post-damage health
+-- too, DealSpellDamage precedes ProcSkillsAndAuras in
+-- DoDamageAndTriggers, Spell.cpp:2548/2586, so the subtraction
+-- is the C++ formula, not a double-count). On detonation the aura
+-- is removed and the caster casts the rank-matched Seed of
+-- Corruption damage spell on the ACTION TARGET (the seeded holder,
+-- GetActionTarget(); the ev6 procTarget is the attacker on the
+-- taken side, Unit.cpp:10412-10417), triggered.
 -- BLOCKED leg: CalculateBuffer (:1192-1200, SP-scaled buffer via
 -- SpellDamageBonusDone) has no DoEffectCalcAmount bridge, so the
 -- buffer starts at its DBC base. DORMANT until Spell.dbc ships
@@ -388,8 +397,61 @@ local function seedOfCorruptionDummyProc(event, aura, target, actor, procTarget,
     if rankSpell == 0 then
         return true
     end
-    caster:CastSpell(procTarget, rankSpell, true)
+    caster:CastSpell(target, rankSpell, true)
     return true
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_SEED_OF_CORRUPTION_DUMMY, 6, seedOfCorruptionDummyProc)
+
+-- C++ spell_warl_haunt_SpellScript::HandleAfterHit
+-- (spell_warlock.cpp:772-778): AfterHit. The hit aura's EFFECT_1
+-- amount becomes pct of the final hit damage. The aura is applied
+-- earlier in the same cast (spells.go applyAuraToTarget), and
+-- GetHitDamage reads the final damage at AfterHit (runtime.go
+-- contract). The GetCasterGUID guard is the GetHitAura twin: only
+-- this cast's aura is rescaled, never another caster's Haunt.
+local function hauntAfterHit(event, spell, hitTarget)
+    if hitTarget == nil then
+        return
+    end
+    local aura = hitTarget:GetAura(SPELL_WARLOCK_HAUNT)
+    if aura == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster ~= nil and aura:GetCasterGUID() ~= caster:GetGUID() then
+        return
+    end
+    aura:SetAmount(math.floor(spell:GetHitDamage() * aura:GetAmount(1) / 100), 1)
+end
+
+RegisterSpellEvent(SPELL_WARLOCK_HAUNT, 3, hauntAfterHit)
+
+local SPELL_WARLOCK_DECIMATION_R2 = 63158 -- spell_warlock.cpp:306, bot_warlock_ai.cpp:85
+local SPELL_WARLOCK_DECIMATION_BUFF = 63167 -- bot_warlock_ai.cpp:109
+
+-- C++ spell_warl_decimation::CheckProc (spell_warlock.cpp:316-324):
+-- DoCheckProc only. The proc passes only when the action target
+-- carries AURA_STATE_HEALTHLESS_35_PERCENT, which Unit.cpp:468
+-- maintains as HealthBelowPct(35) (Unit.h:872: health <
+-- CountPctFromMaxHealth(35), floor(maxHealth * 35 / 100)). The
+-- ev6 veto is inverted vs C++: return true (PreventDefaultAction,
+-- lua_aura.go fireAuraProc) only when the gate FAILS, so a passing
+-- proc falls through and the DBC default leg applies the Decimation
+-- buff 63167. Registered for rank 2 (63158) only; rank 1 (63156) is
+-- unestablished (zero C++ tree hits). No HasAuraState bridge, so
+-- the gate is the integer-exact HealthBelowPct proxy (the
+-- seed-of-corruption-dummy idiom above). The GetSpellInfo()-nil
+-- leg has no ev6 twin (event spell is not forwarded). DORMANT
+-- until Spell.dbc ships the 63158 proc entry.
+local function decimationProc(event, aura, target, actor, procTarget, damage)
+    if procTarget == nil then
+        return true
+    end
+    if procTarget:GetHealth() < math.floor(procTarget:GetMaxHealth() * 35 / 100) then
+        return
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_DECIMATION_R2, 6, decimationProc)

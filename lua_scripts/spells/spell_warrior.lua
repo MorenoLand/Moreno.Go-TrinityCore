@@ -104,3 +104,103 @@ local function intimidatingShoutFilter(event, spell, effectIndex, targets)
 end
 
 RegisterSpellEvent(SPELL_WARRIOR_INTIMIDATING_SHOUT, 7, intimidatingShoutFilter)
+
+local SPELL_WARRIOR_DAMAGE_SHIELD = 58872 -- spell_warrior.cpp:229
+local SPELL_WARRIOR_DAMAGE_SHIELD_DAMAGE = 59653 -- spell_warrior.cpp:41
+
+-- C++ spell_warr_damage_shield_AuraScript::OnProc (spell_warrior.cpp:246-255):
+-- PreventDefaultAction; damage is pct of the holder's shield block value by
+-- the EFFECT_0 amount (CalculatePct truncation); the holder casts 59653 on
+-- the proc target, triggered (CastSpellExtraArgs(aurEff) sets
+-- TRIGGERED_FULL_MASK, SpellDefines.h:166), BP0. DORMANT until Spell.dbc
+-- ships the 58872 proc entry.
+local function damageShieldProc(event, aura, target, actor, procTarget, damage)
+    if target == nil or procTarget == nil then
+        return true
+    end
+    local dmg = math.floor(target:GetShieldBlockValue() * aura:GetAmount(0) / 100)
+    target:CastCustomSpell(procTarget, SPELL_WARRIOR_DAMAGE_SHIELD_DAMAGE, true, dmg)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_DAMAGE_SHIELD, 6, damageShieldProc)
+
+local SPELL_WARRIOR_SUDDEN_DEATH_R1 = 29723 -- spell_warrior.cpp:57
+local SPELL_WARRIOR_BLOODSURGE_R1 = 46913 -- spell_warrior.cpp:39
+local SPELL_WARRIOR_T10_MELEE_4P_BONUS = 70847 -- spell_warrior.cpp:77
+local SPELL_WARRIOR_EXTRA_CHARGE = 70849 -- spell_warrior.cpp:48
+local SPELL_WARRIOR_SLAM_GCD_REDUCED = 71072 -- spell_warrior.cpp:61
+local SPELL_WARRIOR_EXECUTE_GCD_REDUCED = 71069 -- spell_warrior.cpp:47
+
+-- C++ spell_warr_extra_proc_AuraScript::HandleProc (spell_warrior.cpp:458-476):
+-- no PreventDefaultAction. If the holder has the T10 melee 4P bonus (70847)
+-- and its EFFECT_0 amount wins the roll (roll_chance_i twin:
+-- math.random(0, 99) < amount, the spell_generic idiom), cast 70849 on
+-- self, then the talent's GCD-reduced spell on self (71072 Bloodsurge /
+-- 71069 Sudden Death), both triggered (CastSpell with the triggering
+-- aura effect). The IsRankOf branch is decided by which spell id the
+-- handler is registered for. Higher ranks share the class; only the R1
+-- ids are established in-tree. DORMANT until Spell.dbc ships the
+-- 29723/46913 proc entries.
+local function extraProc(gcdReduced)
+    return function(event, aura, target, actor, procTarget, damage)
+        if target == nil then
+            return
+        end
+        local bonus = target:GetAuraEffect(SPELL_WARRIOR_T10_MELEE_4P_BONUS, 0)
+        if bonus == nil then
+            return
+        end
+        if math.random(0, 99) >= bonus then
+            return
+        end
+        target:CastSpell(nil, SPELL_WARRIOR_EXTRA_CHARGE, true)
+        target:CastSpell(nil, gcdReduced, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_SUDDEN_DEATH_R1, 6, extraProc(SPELL_WARRIOR_EXECUTE_GCD_REDUCED))
+RegisterAuraEvent(SPELL_WARRIOR_BLOODSURGE_R1, 6, extraProc(SPELL_WARRIOR_SLAM_GCD_REDUCED))
+
+local SPELL_WARRIOR_DAMAGE_SHIELD = 58872 -- spell_warrior.cpp:229
+local SPELL_WARRIOR_DAMAGE_SHIELD_DAMAGE = 59653 -- spell_warrior.cpp:41
+
+-- C++ spell_warr_damage_shield_AuraScript::OnProc (spell_warrior.cpp:246-255):
+-- PreventDefaultAction; damage is pct of the holder's shield block value by
+-- the EFFECT_0 amount; the holder casts 59653 on the proc target, triggered,
+-- BP0 (CastSpellExtraArgs(aurEff) carries TRIGGERED_FULL_MASK). DORMANT
+-- until Spell.dbc ships the 58872 proc entry.
+local function damageShieldProc(event, aura, target, actor, procTarget, damage)
+    local dmg = math.floor(target:GetShieldBlockValue() * aura:GetAmount(0) / 100)
+    target:CastCustomSpell(procTarget, SPELL_WARRIOR_DAMAGE_SHIELD_DAMAGE, true, dmg)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_DAMAGE_SHIELD, 6, damageShieldProc)
+
+local SPELL_WARRIOR_SUDDEN_DEATH = 29723 -- spell_warrior.cpp:39
+local SPELL_WARRIOR_BLOODSURGE = 46913 -- spell_warrior.cpp:39
+local SPELL_WARRIOR_T10_MELEE_4P_BONUS = 70847 -- spell_warrior.cpp:77
+local SPELL_WARRIOR_EXTRA_CHARGE = 70849 -- spell_warrior.cpp:48
+local SPELL_WARRIOR_SLAM_GCD_REDUCED = 71072 -- spell_warrior.cpp:61
+local SPELL_WARRIOR_EXECUTE_GCD_REDUCED = 71069 -- spell_warrior.cpp:56
+
+-- C++ spell_warr_extra_proc_AuraScript::HandleProc (spell_warrior.cpp:458-476):
+-- no PreventDefaultAction, so the DBC default trigger leg still runs. If the
+-- holder has the T10 melee 4P bonus (70847) and its EFFECT_0 amount wins the
+-- roll, cast 70849 on self, then the talent's GCD-reduced spell on self
+-- (71072 Bloodsurge / 71069 Sudden Death); the IsRankOf branch is decided by
+-- which spell id the handler is registered for. DORMANT until Spell.dbc
+-- ships the 29723/46913 proc entries.
+local function extraProc(gcdReduced)
+    return function(event, aura, target, actor, procTarget, damage)
+        local bonus = target:GetAuraEffect(SPELL_WARRIOR_T10_MELEE_4P_BONUS, 0)
+        if bonus == nil then return end
+        if math.random(100) > bonus then return end
+        target:CastSpell(nil, SPELL_WARRIOR_EXTRA_CHARGE, true)
+        target:CastSpell(nil, gcdReduced, true)
+    end
+end
+
+RegisterAuraEvent(SPELL_WARRIOR_SUDDEN_DEATH, 6, extraProc(SPELL_WARRIOR_EXECUTE_GCD_REDUCED))
+RegisterAuraEvent(SPELL_WARRIOR_BLOODSURGE, 6, extraProc(SPELL_WARRIOR_SLAM_GCD_REDUCED))
