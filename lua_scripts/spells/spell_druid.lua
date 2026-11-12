@@ -175,3 +175,59 @@ end
 RegisterAuraEvent(SPELL_DRUID_SURVIVAL_INSTINCTS, 2, survivalInstinctsApply)
 RegisterAuraEvent(SPELL_DRUID_SURVIVAL_INSTINCTS, 4, survivalInstinctsApply)
 RegisterAuraEvent(SPELL_DRUID_SURVIVAL_INSTINCTS, 3, survivalInstinctsRemove)
+
+-- C++ spell_dru_forms_trinket::CheckProc + HandleProc
+-- (spell_druid.cpp:348-421): aura 37336, EFFECT_0
+-- SPELL_AURA_PROC_TRIGGER_SPELL. CheckProc allows only the forms
+-- the trinket knows (bear/direbear, cat, moonkin, none, tree);
+-- any other form vetoes the proc. HandleProc calls
+-- PreventDefaultAction and casts the form's trigger spell on the
+-- proc actor, triggered (the aurEff CastSpell overload). The Lua
+-- return-true veto is both legs: a disallowed form suppresses the
+-- default trigger exactly as CheckProc false does, and an allowed
+-- form suppresses it as PreventDefaultAction does. Form values are
+-- SpellAuraDefines.h:409-438. DORMANT until Spell.dbc ships the
+-- 37336 proc entry (serverSpellProcEntryFor needs the DBC
+-- ProcTypeMask, the savage-defense 62600 precedent).
+local SPELL_DRUID_FORMS_TRINKET = 37336 -- spell_druid.cpp:348
+local SPELL_DRUID_FORMS_TRINKET_BEAR = 37340 -- spell_druid.cpp:44
+local SPELL_DRUID_FORMS_TRINKET_CAT = 37341 -- spell_druid.cpp:45
+local SPELL_DRUID_FORMS_TRINKET_MOONKIN = 37343 -- spell_druid.cpp:46
+local SPELL_DRUID_FORMS_TRINKET_NONE = 37344 -- spell_druid.cpp:47
+local SPELL_DRUID_FORMS_TRINKET_TREE = 37342 -- spell_druid.cpp:48
+local FORM_NONE = 0 -- SpellAuraDefines.h:409
+local FORM_CAT = 1 -- SpellAuraDefines.h:410
+local FORM_TREE = 2 -- SpellAuraDefines.h:411
+local FORM_BEAR = 5 -- SpellAuraDefines.h:414
+local FORM_DIREBEAR = 8 -- SpellAuraDefines.h:417
+local FORM_MOONKIN = 31 -- SpellAuraDefines.h:438
+
+local FORM_TRINKET_SPELLS = {
+    [FORM_BEAR] = SPELL_DRUID_FORMS_TRINKET_BEAR,
+    [FORM_DIREBEAR] = SPELL_DRUID_FORMS_TRINKET_BEAR,
+    [FORM_CAT] = SPELL_DRUID_FORMS_TRINKET_CAT,
+    [FORM_MOONKIN] = SPELL_DRUID_FORMS_TRINKET_MOONKIN,
+    [FORM_NONE] = SPELL_DRUID_FORMS_TRINKET_NONE,
+    [FORM_TREE] = SPELL_DRUID_FORMS_TRINKET_TREE,
+}
+
+local function formsTrinketProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    local unit = actor
+    if unit == nil and procEvent ~= nil then
+        unit = procEvent:GetActor()
+    end
+    if unit == nil then
+        return true
+    end
+    local triggerSpell = FORM_TRINKET_SPELLS[unit:GetShapeshiftForm()]
+    if triggerSpell == nil then
+        return true
+    end
+    unit:CastSpell(unit, triggerSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_DRUID_FORMS_TRINKET, 6, formsTrinketProc)

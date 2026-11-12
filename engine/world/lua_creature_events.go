@@ -457,6 +457,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return unitClassRaceMask(motion.UnitClass)
 	})
 	methods["GetRaceMask"] = luaNoArgs(func() any { return uint32(0) })
+	// GetShapeshiftForm is Unit::GetShapeshiftForm (Unit.h): creatures
+	// carry no shapeshift form in the Go model, so this reads FORM_NONE
+	// (0, SpellAuraDefines.h:409) — the C++ default for a unit whose
+	// form was never set. The player-surface twin reads the live state.
+	methods["GetShapeshiftForm"] = luaNoArgs(func() any { return uint32(0) })
 	methods["IsPvPFlagged"] = luaNoArgs(func() any {
 		s.motionMu.Lock()
 		defer s.motionMu.Unlock()

@@ -942,3 +942,47 @@ local function blackMagicProc(event, aura, target, actor, procTarget, damage, pr
 end
 
 RegisterAuraEvent(SPELL_GEN_BLACK_MAGIC, 6, blackMagicProc)
+
+-- C++ spell_stasis_field_aura::OnPeriodic (spell_generic.cpp:4200-4229)
+-- and spell_corrupting_plague_aura::OnPeriodic
+-- (spell_generic.cpp:4142-4171): EFFECT_0
+-- SPELL_AURA_PERIODIC_TRIGGER_SPELL on 40306 / 40349. Each tick
+-- searches for a creature of the field's entries within 15yd that
+-- lacks the field aura (40307 / 40350); if one is found the tick's
+-- default trigger fires (return nothing), otherwise
+-- PreventDefaultAction (return true). DELTAS: FindNearestCreature
+-- is the 3D reach-adjusted bridge (lua_creature_events.go:6490)
+-- where C++ uses GetDistance2d < 15; and only the nearest of each
+-- entry is checked, where C++ scans the whole grid — a farther
+-- matching creature without the aura is missed. DORMANT until
+-- Spell.dbc ships the 40306/40349 rows.
+local SPELL_STASIS_FIELD_AURA = 40306 -- spell_generic.cpp:4200
+local SPELL_CORRUPTING_PLAGUE_AURA = 40349 -- spell_generic.cpp:4142
+local SPELL_STASIS_FIELD = 40307 -- spell_generic.cpp:4175
+local SPELL_CORRUPTING_PLAGUE = 40350 -- spell_generic.cpp:4117
+local NPC_APEXIS_FLAYER = 22175 -- spell_generic.cpp:4114
+local NPC_SHARD_HIDE_BOAR = 22180 -- spell_generic.cpp:4115
+local NPC_AETHER_RAY = 22181 -- spell_generic.cpp:4116
+local NPC_DAGGERTAIL_LIZARD = 22255 -- spell_generic.cpp:4174
+
+local PLAGUE_FIELD_SEARCH = {
+    [SPELL_STASIS_FIELD_AURA] = { aura = SPELL_STASIS_FIELD, entries = { NPC_APEXIS_FLAYER, NPC_SHARD_HIDE_BOAR, NPC_AETHER_RAY, NPC_DAGGERTAIL_LIZARD } },
+    [SPELL_CORRUPTING_PLAGUE_AURA] = { aura = SPELL_CORRUPTING_PLAGUE, entries = { NPC_APEXIS_FLAYER, NPC_SHARD_HIDE_BOAR, NPC_AETHER_RAY } },
+}
+
+local function plagueFieldTick(event, aura, target)
+    local field = PLAGUE_FIELD_SEARCH[aura:GetAuraId()]
+    if field == nil or target == nil then
+        return
+    end
+    for _, entry in ipairs(field.entries) do
+        local creature = target:FindNearestCreature(entry, 15)
+        if creature ~= nil and not creature:HasAura(field.aura) then
+            return
+        end
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_STASIS_FIELD_AURA, 1, plagueFieldTick)
+RegisterAuraEvent(SPELL_CORRUPTING_PLAGUE_AURA, 1, plagueFieldTick)

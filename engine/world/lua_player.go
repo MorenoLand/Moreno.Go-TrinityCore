@@ -187,6 +187,13 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Player" })
 	methods["GetZ"] = luaNoArgs(func() any { return state.Z })
 	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
+	// GetShapeshiftForm is Unit::GetShapeshiftForm (Unit.h): the
+	// player's current shapeshift form (SpellAuraDefines.h:409-438 —
+	// FORM_NONE 0, FORM_CAT 1, FORM_TREE 2, FORM_BEAR 5,
+	// FORM_DIREBEAR 8, FORM_MOONKIN 31), read live from the player
+	// state. Backs the druid forms-trinket CheckProc gate
+	// (spell_druid.cpp:367-385).
+	methods["GetShapeshiftForm"] = luaNoArgs(func() any { return uint32(state.ShapeshiftForm) })
 	methods["GetRace"] = luaNoArgs(func() any { return state.Race })
 	methods["GetClass"] = luaNoArgs(func() any { return state.Class })
 	// GetClassMask/GetRaceMask are Unit::GetClassMask/GetRaceMask
