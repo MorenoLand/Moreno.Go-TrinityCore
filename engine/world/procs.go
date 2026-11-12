@@ -129,9 +129,13 @@ const (
 	// Mjolnir Runestone - 45s ICD
 	ProcSpellMjolnirRunestone = 60298 // +665 ArP
 
-	// Ashen Band (Ashen Verdict Exalted Rings) - 60s ICD
-	ProcSpellAshenBandMight       = 71562 // +480 AP
-	ProcSpellAshenBandDestruction = 71563 // +285 SP
+	// Ashen Band rings have no hand-rolled proc here: 71562 is the
+	// Deathbringer's Will heroic aura and 71563 the Deadly Precision
+	// dummy (spell_item.cpp:518,561), not ring buffs — the old
+	// constants cast the wrong spells live. The rings' item spells
+	// (Vengeance 71650, Destruction 71581, TDB item_template
+	// spellid_1, trigger 5) are equip auras whose
+	// SPELL_AURA_PROC_TRIGGER_SPELL buffs ride Spell.dbc, unmodeled.
 
 	// Sundial of the Exiled - 45s ICD
 	ProcSpellSundialOfTheExiled = 59626 // +590 SP
@@ -165,11 +169,6 @@ const (
 	ItemDMCGSpirit    = 44256
 
 	ItemMjolnirRunestone = 45931
-
-	ItemAshenBandMight277       = 50402
-	ItemAshenBandMight268       = 50401
-	ItemAshenBandDestruction277 = 50398
-	ItemAshenBandDestruction268 = 50397
 
 	ItemSundialOfTheExiled = 40682
 
@@ -1116,11 +1115,6 @@ func (s *session) procItemAndTrinketEffects(ctx context.Context, target combatTa
 				s.triggerProcCooldown(ProcSpellMjolnirRunestone, 45*time.Second)
 			}
 
-		case ItemAshenBandMight277, ItemAshenBandMight268:
-			if !s.isProcOnCooldown(ProcSpellAshenBandMight) && rand.Float64() < s.procChanceDefault(ProcSpellAshenBandMight, 0.30) {
-				s.castSpellDirect(ctx, ProcSpellAshenBandMight, s.playerGUID)
-				s.triggerProcCooldown(ProcSpellAshenBandMight, 60*time.Second)
-			}
 		}
 	}
 }
@@ -1145,13 +1139,6 @@ func (s *session) procSpellCastAndHitEffects(ctx context.Context, target combatT
 			if !s.isProcOnCooldown(ProcSpellSundialOfTheExiled) && rand.Float64() < s.procChanceDefault(ProcSpellSundialOfTheExiled, 0.10) {
 				s.castSpellDirect(ctx, ProcSpellSundialOfTheExiled, s.playerGUID)
 				s.triggerProcCooldown(ProcSpellSundialOfTheExiled, 45*time.Second)
-			}
-
-		case ItemAshenBandDestruction277, ItemAshenBandDestruction268:
-			// 10% chance on spell cast, 60s ICD
-			if !s.isProcOnCooldown(ProcSpellAshenBandDestruction) && rand.Float64() < s.procChanceDefault(ProcSpellAshenBandDestruction, 0.10) {
-				s.castSpellDirect(ctx, ProcSpellAshenBandDestruction, s.playerGUID)
-				s.triggerProcCooldown(ProcSpellAshenBandDestruction, 60*time.Second)
 			}
 
 		case ItemReignOfTheDeadNorm:
@@ -4323,10 +4310,10 @@ func (s *session) procAuraTriggerLoopFiltered(ctx context.Context, triggerTarget
 				// cast the DBC trigger on the proc target instead. The
 				// cast carries the triggering-aura attribution (the C++
 				// aurEff overload), mirroring the generic leg below
-				// (67151 precedent). The census go_hit is a false
-				// positive: 71562 in-tree is the Ashen Band proc
-				// constant (procs.go:125), not this trinket. DORMANT
-				// until Spell.dbc ships the 71519/71562 proc entries.
+				// (67151 precedent). DORMANT until Spell.dbc ships the
+				// 71519/71562 proc entries; 71562 is this trinket's
+				// heroic aura (spell_item.cpp:561), not an Ashen Band
+				// buff — the old Ashen Band constants were removed.
 				if s.player == nil {
 					continue
 				}
