@@ -1582,3 +1582,43 @@ local function blizzardCheckAreaTarget(event, aura, target)
 end
 RegisterAuraEvent(SPELL_BLIZZARD_AURA, 8, blizzardCheckAreaTarget)
 RegisterAuraEvent(SPELL_BLIZZARD_AURA_HEROIC, 8, blizzardCheckAreaTarget)
+
+-- C++ spell_thorim_arena_leap::HandleScript
+-- (boss_thorim.cpp:1856-1880; HandleScript :1870-1874, Register
+-- :1876-1879): OnEffectLaunch EFFECT_0 SPELL_EFFECT_JUMP_DEST — when
+-- the arena trash leaps (TrashJumpEvent casts SPELL_LEAP 61934 on
+-- itself, boss_thorim.cpp:396, stage 0 of the 2s jump chain), the
+-- caster creature's home position moves to the leap destination, so
+-- an evade returns it to the landing point instead of the spawn.
+-- Load() (:1865-1868) requires a unit caster. The arm reads only
+-- GetHitDest() and writes only the home position — no damage, heal or
+-- target-state interaction, so the launch-vs-hit phase difference is
+-- immaterial. There is no LAUNCH-mode Lua event (runtime.go events
+-- 1-10; ev10 OnEffectLaunchTarget fires per unit hit target and never
+-- fires for this dest-only spell, whose ev10 loop iterates unit
+-- targets), so the arm rides ev4 OnEffectHit, which fires once per
+-- non-zero effect per cast with the dest triple on the spell object —
+-- the same once-per-cast cardinality. Deltas: the orientation comes
+-- from the caster's live facing (GetTargetDest returns x,y,z only;
+-- the C++ dest Position's orientation is set by the DBC dest selector
+-- and is unverifiable without Spell.dbc — mandokir/kodo precedent);
+-- the Load() gate rides GetObjectType() == "Creature". DORMANT until
+-- Spell.dbc ships the 61934 record (the JUMP_DEST default arm is a
+-- Go no-op, spells.go:17875-17880, so this handler is the only live
+-- leg).
+local SPELL_LEAP = 61934 -- boss_thorim.cpp:189 (SPELL_LEAP)
+local function arenaLeapHandleScript(event, spell, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    local x, y, z = spell:GetTargetDest()
+    if x == nil then
+        return
+    end
+    caster:SetHomePosition(x, y, z, caster:GetO())
+end
+RegisterSpellEvent(SPELL_LEAP, 4, arenaLeapHandleScript)

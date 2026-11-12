@@ -47,8 +47,8 @@
 -- latch (instance_drak_tharon_keep.lua); the original-caster GUID
 -- (Trollgore) has no Lua arm, so each trigger casts as its own caster
 -- (CastCustomSpell's originalCaster arg is accepted-and-ignored in Go);
--- the invader landing AI (MovementInform -> dismount/taunt) stays out
--- (motion-master bridge absent).
+-- the invader landing AI (MovementInform -> dismount/taunt) is PORTED
+-- below (trollgoreJustSummoned + invaderMovementInform).
 -- EVENT_CRUSH DoCastVictim(Crush 49639), randtime(1s,5s) init,
 -- 10-15s repeat (math.random — slad_ran precedent);
 -- EVENT_INFECTED_WOUND DoCastVictim(Infected Wound 49637),
@@ -83,9 +83,10 @@
 -- GetData(DATA_CONSUMPTION_JUNCTION 1) — no cross-AI GetData bridge;
 -- its only caller is achievement_consumption_junction, whose Go case
 -- reads the Lua SetData store instead — see below.
--- JustSummoned — summon->GetMotionMaster()->MovePoint(POINT_LANDING,
--- Landing) + summons.Summon — motion-master bridge absent (summon
--- STRAND absent — standing).
+-- JustSummoned -- PORTED below (trollgoreJustSummoned: summon MoveTo
+-- POINT_LANDING); the summons.Summon bookkeeping leg has no Lua twin
+-- (no summon-list bridge), so evade-time despawn of invaders stays
+-- unmodeled.
 -- UpdateAI HasUnitState(UNIT_STATE_CASTING) pre-loop + in-loop gates
 -- PORTED: all 4 ported timer arms defer 500ms while casting (no
 -- repeat re-arm — the event stays queued in C++); KilledUnit/JustDied
@@ -93,18 +94,12 @@
 -- _consumptionJunction latch is PORTED tick 418 (1s poll, see
 -- consumptionJunctionTick below) — the old "stays out (write-only)"
 -- verdict is superseded by the Go bossLatchData dispatch.
--- npc_drakkari_invader — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (27709 /
--- 27753 / 27754 — drak_tharon_keep.h NPC_DRAKKARI_INVADER_A/B/C,
--- kalecgos pass): zero registration. The whole AI is MovementInform(
--- POINT_MOTION_TYPE, POINT_LANDING) -> me->Dismount() +
--- SetImmuneToAll(false) + DoCastAOE(SPELL_INVADER_TAUNT 49405) —
--- motion-master bridge absent; Dismount bridge live (lua_creature_events.go) —
--- the arm rides the unbridged MovementInform, so it stays out; the
--- SetImmuneToAll(false) leg's flag twin RemoveFlag(59, 0x300) is bridged but
--- never fires without its movement gate (SetImmuneToAll sweep 2026-10-23);
--- the taunt effect is SpellScript-delivered anyway
--- (spell_trollgore_invader_taunt). Joins the
--- entry-verifiable-but-bridge-blocked queue.
+-- npc_drakkari_invader -- PORTED below (invaderMovementInform, ev28 on
+-- 27709 / 27753 / 27754 -- drak_tharon_keep.h NPC_DRAKKARI_INVADER_A/B/C,
+-- kalecgos pass): MovementInform(POINT_MOTION_TYPE, POINT_LANDING) ->
+-- Dismount + SetImmuneToAll(false) via RemoveFlag(59, 0x300) +
+-- DoCastAOE(SPELL_INVADER_TAUNT 49405). The taunt effect itself is
+-- SpellScript-delivered (spell_trollgore_invader_taunt, stays out).
 -- spell_trollgore_consume (49380/59803 SpellScript: OnEffectHitTarget
 -- EFFECT_1 SCRIPT_EFFECT -> target->CastSpell(GetCaster(),
 -- SPELL_CONSUME_BUFF 49381, true)) / spell_trollgore_invader_taunt
@@ -144,6 +139,15 @@ local SPELL_CONSUME_BUFF_HEROIC = 59805 -- boss_trollgore.cpp:35
 local SPELL_SUMMON_INVADER_A = 49456 -- boss_trollgore.cpp:40
 local SPELL_SUMMON_INVADER_B = 49457 -- boss_trollgore.cpp:41
 local SPELL_SUMMON_INVADER_C = 49458 -- boss_trollgore.cpp:42
+local SPELL_INVADER_TAUNT = 49405 -- boss_trollgore.cpp:41
+local POINT_LANDING = 1 -- boss_trollgore.cpp:58
+local POINT_MOTION_TYPE = 8 -- runtime.go:393 (POINT MotionType id)
+local LANDING_X = -263.0534 -- boss_trollgore.cpp:70
+local LANDING_Y = -660.8658
+local LANDING_Z = 26.50903
+local ENTRY_DRAKKARI_INVADER_A = 27709 -- drak_tharon_keep.h NPC_DRAKKARI_INVADER_A
+local ENTRY_DRAKKARI_INVADER_B = 27753 -- drak_tharon_keep.h NPC_DRAKKARI_INVADER_B
+local ENTRY_DRAKKARI_INVADER_C = 27754 -- drak_tharon_keep.h NPC_DRAKKARI_INVADER_C
 local DATA_CONSUMPTION_JUNCTION = 1 -- boss_trollgore.cpp:57
 
 local timers = {}
@@ -278,7 +282,7 @@ end
 -- original caster (me->GetGUID()); Lua CastSpell has no original-caster
 -- arm, so the trigger is its own caster — the summon still spawns the
 -- invader at the trigger. The invader landing AI (MovementInform ->
--- dismount/taunt) stays out (motion-master bridge absent). A nil
+-- dismount/taunt) is PORTED below. A nil
 -- summoners table (summoners not yet latched) skips the cast but still
 -- re-arms, exactly like the C++ event re-schedule.
 local function spawnTick(creature, guid)
@@ -352,6 +356,32 @@ local function trollgoreDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
 end
 
+-- C++ boss_trollgoreAI::JustSummoned (boss_trollgore.cpp:186-190):
+-- summon->GetMotionMaster()->MovePoint(POINT_LANDING, Landing) +
+-- summons.Summon(summon). MoveTo(id, x, y, z) is the MovePoint twin
+-- (lua_creature_events.go:5292, fires ev28 POINT arrival); the
+-- summons.Summon bookkeeping leg has no Lua twin (no summon-list
+-- bridge), so evade-time despawn of invaders stays unmodeled.
+local function trollgoreJustSummoned(event, creature, summon)
+    if summon then
+        summon:MoveTo(POINT_LANDING, LANDING_X, LANDING_Y, LANDING_Z)
+    end
+end
+
+-- C++ npc_drakkari_invaderAI::MovementInform (boss_trollgore.cpp
+-- :211-219): POINT_MOTION_TYPE + POINT_LANDING -> Dismount +
+-- SetImmuneToAll(false) + DoCastAOE(SPELL_INVADER_TAUNT 49405,
+-- non-triggered self-cast per UnitAI.h:322). SetImmuneToAll(false)
+-- rides the flag twin RemoveFlag(59, 0x300) (mandokir precedent).
+local function invaderMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_LANDING then
+        return
+    end
+    creature:Dismount()
+    creature:RemoveFlag(59, 0x300)
+    creature:CastSpell(creature, SPELL_INVADER_TAUNT)
+end
+
 local function trollgoreReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -371,6 +401,10 @@ RegisterCreatureEvent(ENTRY_TROLLGORE, 2, trollgoreLeaveCombat)
 RegisterCreatureEvent(ENTRY_TROLLGORE, 3, trollgoreTargetDied)
 RegisterCreatureEvent(ENTRY_TROLLGORE, 4, trollgoreDied)
 RegisterCreatureEvent(ENTRY_TROLLGORE, 23, trollgoreReset)
+RegisterCreatureEvent(ENTRY_TROLLGORE, 19, trollgoreJustSummoned)
+RegisterCreatureEvent(ENTRY_DRAKKARI_INVADER_A, 28, invaderMovementInform)
+RegisterCreatureEvent(ENTRY_DRAKKARI_INVADER_B, 28, invaderMovementInform)
+RegisterCreatureEvent(ENTRY_DRAKKARI_INVADER_C, 28, invaderMovementInform)
 
 -- C++ spell_trollgore_consume::HandleConsume
 -- (boss_trollgore.cpp:243-247): OnEffectHitTarget EFFECT_1
