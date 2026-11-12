@@ -331,11 +331,70 @@ RegisterAuraEvent(SPELL_MAGE_ARCANE_POTENCY, 6, arcanePotencyProc)
 -- NOT IN LUA: spell_mage_blast_wave (11113, spell_mage.cpp:195-226)
 -- — SpellScript OnEffectHitTarget KNOCK_BACK (glyph 62126 gate);
 -- no RegisterSpellScript bridge. STAYS OUT.
--- NOT IN LUA: spell_mage_burnout (44449, spell_mage.cpp:294-333)
--- — CheckProc needs damageInfo->GetSpellInfo() and HandleProc needs
--- CalcPowerCost(target, school mask); ev6 passes only a damage
--- number, no damage-info spell/school. STAYS OUT until ev6
--- damage-info forwarding lands.
+local SPELL_MAGE_BURNOUT_AURA = 44449 -- spell_mage.cpp:293 (class spell_mage_burnout; rank 1; ranks 2-3 IDs are not in the file, never guessed)
+local SPELL_MAGE_BURNOUT = 44450 -- spell_mage.cpp:36
+
+-- C++ spell_mage_burnout::CheckProc + HandleProc (spell_mage.cpp:311-328):
+-- OnEffectProc EFFECT_1 DUMMY. CheckProc passes only when the damage
+-- event carries a spell (procEvent:GetSpellId, the damage-info spell
+-- twin — procs.go threads the casting spell on damage events);
+-- HandleProc PreventDefaultActions (the true return on every path)
+-- and the holder casts 44450 on itself with BP0 = pct(CalcPowerCost
+-- of the damage spell, EFFECT_1 amount) — GetSpellPowerCost
+-- (lua_player.go) on the session-player holder. C++ casts with
+-- CastSpellExtraArgs(aurEff), i.e. TRIGGERED_FULL_MASK
+-- (SpellDefines.h), so the Lua triggered CastCustomSpell is exact.
+-- The effectIndex gate keeps the arm on EFFECT_1. DORMANT until
+-- Spell.dbc ships the 44449 proc entry.
+local function burnoutProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 1 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if aura == nil or target == nil then
+        return true
+    end
+    local mana = math.floor(target:GetSpellPowerCost(procEvent:GetSpellId()) * aura:GetAmount(1) / 100)
+    target:CastCustomSpell(target, SPELL_MAGE_BURNOUT, true, mana)
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_BURNOUT_AURA, 6, burnoutProc)
+
+local SPELL_MAGE_MASTER_OF_ELEMENTS_AURA = 29074 -- spell_mage.cpp:1226 (class spell_mage_master_of_elements; rank 1; ranks 2-3 IDs are not in the file, never guessed)
+local SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE = 29077 -- spell_mage.cpp:44
+
+-- C++ spell_mage_master_of_elements::CheckProc + HandleProc
+-- (spell_mage.cpp:1243-1268): OnEffectProc EFFECT_0 DUMMY. CheckProc
+-- passes only when the damage event carries a spell
+-- (procEvent:GetSpellId); HandleProc PreventDefaultActions (the true
+-- return on every path) and, when the pct is positive, the holder
+-- casts 29077 on itself with BP0 = pct(CalcPowerCost of the damage
+-- spell, EFFECT_0 amount) — GetSpellPowerCost (lua_player.go). C++
+-- casts with CastSpellExtraArgs(aurEff), i.e. TRIGGERED_FULL_MASK
+-- (SpellDefines.h), so the Lua triggered CastCustomSpell is exact.
+-- The effectIndex gate keeps the arm on EFFECT_0. DORMANT until
+-- Spell.dbc ships the 29074 proc entry.
+local function masterOfElementsProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if aura == nil or target == nil then
+        return true
+    end
+    local mana = math.floor(target:GetSpellPowerCost(procEvent:GetSpellId()) * aura:GetAmount(0) / 100)
+    if mana > 0 then
+        target:CastCustomSpell(target, SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE, true, mana)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_MAGE_MASTER_OF_ELEMENTS_AURA, 6, masterOfElementsProc)
 -- PORTED (this tick, RegisterAuraEvent OnProc = 6):
 --   spell_mage_imp_blizzard (11185, spell_mage.cpp:471-501):
 --   OnEffectProc EFFECT_0 OVERRIDE_CLASS_SCRIPTS. PreventDefaultAction
@@ -394,10 +453,9 @@ RegisterAuraEvent(SPELL_MAGE_ARCANE_POTENCY, 6, arcanePotencyProc)
 --   616 ice_barrier STAYS OUT — CalculateAmount needs
 --   SpellBaseHealingBonusDone + ApplyEffectModifiers + level
 --   penalty; AfterRemove needs GetDummyAuraEffect + ProcChance.
---   621 master_of_elements STAYS OUT — CheckProc needs the
---   damage event's spell (ev6 has no event spell); HandleProc needs
---   CalcPowerCost. Recipe: ev6 event-spell forwarding + a
---   CalcPowerCost bridge.
+--   621 master_of_elements PORTED this tick (ev6: CheckProc damage
+--   spell via procEvent:GetSpellId; HandleProc BP0 = pct(CalcPowerCost,
+--   EFFECT_0 amount), mana > 0 gate, holder casts 29077 self).
 --   622 missile_barrage STAYS OUT — CheckProc needs the proc
 --   spell's family flags (Arcane Blast [0] 0x20000000 full chance,
 --   else 50% roll); ev6 has no event spell. Recipe: ev6

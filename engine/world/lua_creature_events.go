@@ -1604,6 +1604,56 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetAuraEffectSpellIdByFamily(auraType, familyName, flag0, flag1,
+	// flag2 [, casterGUID]) is the spell-id half of
+	// Unit::GetAuraEffect(auraType, familyName, f0, f1, f2, casterGUID)
+	// (Unit.cpp:4524-4545) for handler creatures: the spell id of the
+	// first live aura effect of the given type whose spell matches
+	// the family name and flag96 mask, cast by the given caster when
+	// a nonzero caster GUID is passed — or nil when no live effect
+	// matches. The player-object twin (lua_player.go) backs the
+	// thrill-of-the-hunt Explosive Shot leg.
+	methods["GetAuraEffectSpellIdByFamily"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 5 {
+			return []any{nil}, nil
+		}
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		family, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var flags [3]uint32
+		for i := 0; i < 3; i++ {
+			flags[i], err = luaUint32Arg(args, 2+i)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var casterGUID uint64
+		if len(args) > 5 && args[5] != nil {
+			v, err := luaInt64Arg(args, 5)
+			if err != nil {
+				return nil, err
+			}
+			if v > 0 {
+				casterGUID = uint64(v)
+			}
+		}
+		key := auraKey()
+		s.auraMu.Lock()
+		auras := make([]*activeAura, 0, len(s.activeCreatureAuras[key]))
+		for _, aura := range s.activeCreatureAuras[key] {
+			auras = append(auras, aura)
+		}
+		s.auraMu.Unlock()
+		if spellID, ok := s.familyAuraEffectSpellID(auras, auraType, family, flags[0], flags[1], flags[2], casterGUID); ok {
+			return []any{spellID}, nil
+		}
+		return []any{nil}, nil
+	}
 	// IsPolymorphed is Unit::IsPolymorphed (Unit.cpp:10572): a live
 	// SPELL_AURA_TRANSFORM (56) aura, via the creatureIsPolymorphed twin.
 	methods["IsPolymorphed"] = func(_ context.Context, _ []any) ([]any, error) {

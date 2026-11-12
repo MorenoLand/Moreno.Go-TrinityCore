@@ -87,15 +87,15 @@
 --   helper); 626 holy_shock PORTED this tick (OnCheckCast ev8 below;
 --   the HandleDummy damage/heal legs stay out — ev5 player path
 --   dormant + no spell-level GetSpellWithRank); 627 illumination
---   STAYS OUT — the GetSpellWithRank(firstSpellID, rank) rank arg
---   landed (34153d9d) and ev6 forwards heal + family flags, but
---   CalcPowerCost is still unbridged and the proc event never
---   threads the heal spell (lua_aura.go procEventObject: a nil
---   event spell reads 0), so the Holy Shock rank / original-spell
---   leg cannot resolve; 629 infusion_of_light + 636
---   spiritual_attunement + 637 sheath_of_light + 638 t8_2p_bonus
---   (all need heal info / proc-spell family flags / CalcPowerCost,
---   ev6 carries damage only); 632 lay_on_hands PORTED this tick
+--   PORTED this tick (ev6, below: Holy Shock family flag via
+--   procEvent:GetSpellFamilyFlags(1), rank-matched Holy Shock via
+--   aura:GetSpellWithRank(20473, rank), CalcPowerCost via
+--   player:GetSpellPowerCost; the "proc event never threads the heal
+--   spell" note is STALE — procs.go procSpellHealAuraTriggers sets
+--   eventSpell on direct-heal events, disproven in-tree); 629
+--   infusion_of_light + 636 spiritual_attunement + 637 sheath_of_light
+--   + 638 t8_2p_bonus need re-triage next tick (same bridges now live:
+--   heal spell threads, CalcPowerCost bridged); 632 lay_on_hands PORTED this tick
 --   (OnCheckCast ev8 + AfterHit ev3 below); 634/635
 --   seal_of_righteousness (needs attack-power / spellpower /
 --   attack-time math, unbridged).
@@ -402,6 +402,56 @@ local function righteousVengeanceProc(event, aura, target, actor, procTarget, da
 end
 
 RegisterAuraEvent(SPELL_PALADIN_RIGHTEOUS_VENGEANCE, 6, righteousVengeanceProc)
+
+local SPELL_PALADIN_ILLUMINATION = 20210 -- spell_paladin.cpp:1132 (class spell_pal_illumination)
+local SPELL_PALADIN_HOLY_SHOCK_R1 = 20473 -- spell_paladin.cpp:41
+local SPELL_PALADIN_ILLUMINATION_ENERGIZE = 20272 -- spell_paladin.cpp:44
+
+-- C++ spell_pal_illumination::HandleProc (spell_paladin.cpp:1154-1177):
+-- OnEffectProc EFFECT_0 PROC_TRIGGER_SPELL. PreventDefaultAction (the
+-- true return on every path); only heal procs carry a heal spell
+-- (procEvent:GetSpellId — the direct-heal proc site threads the
+-- casting spell, procs.go procSpellHealAuraTriggers; the "never
+-- threads the heal spell" note above is STALE, disproven in-tree).
+-- When the heal spell carries the Holy Shock family flag
+-- (SpellFamilyFlags[1] & 0x10000), the original spell is the
+-- rank-matched Holy Shock (aura:GetSpellWithRank, lua_aura.go,
+-- rank from procEvent:GetRank); otherwise the heal spell itself.
+-- The paladin (actor) casts 20272 on itself with BP0 =
+-- pct(CalcPowerCost of the original spell, EFFECT_1 CalcValue of
+-- 20210) — GetSpellPowerCost (lua_player.go) +
+-- GetSpellEffectCalcValue (lua_aura.go). C++ casts with
+-- CastSpellExtraArgs(aurEff), i.e. TRIGGERED_FULL_MASK
+-- (SpellDefines.h), so the Lua triggered CastCustomSpell is exact.
+-- The effectIndex gate keeps the arm on EFFECT_0. DORMANT until
+-- Spell.dbc ships the 20210 proc entry.
+local function illuminationProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return true
+    end
+    if procEvent == nil or procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if aura == nil or actor == nil then
+        return true
+    end
+    local originalSpell = procEvent:GetSpellId()
+    if bit32.band(procEvent:GetSpellFamilyFlags(1), 0x10000) ~= 0 then
+        originalSpell = aura:GetSpellWithRank(SPELL_PALADIN_HOLY_SHOCK_R1, procEvent:GetRank())
+        if originalSpell == 0 then
+            return true
+        end
+    end
+    local pct = aura:GetSpellEffectCalcValue(SPELL_PALADIN_ILLUMINATION, 1)
+    if pct == 0 then
+        return true
+    end
+    local bp0 = math.floor(actor:GetSpellPowerCost(originalSpell) * pct / 100)
+    actor:CastCustomSpell(actor, SPELL_PALADIN_ILLUMINATION_ENERGIZE, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_PALADIN_ILLUMINATION, 6, illuminationProc)
 
 local SPELL_PALADIN_LAY_ON_HANDS = 633 -- spell_paladin.cpp:1774 (class spell_pal_lay_on_hands_SpellScript)
 local SPELL_PALADIN_FORBEARANCE = 25771 -- spell_paladin.cpp:63

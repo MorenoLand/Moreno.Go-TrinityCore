@@ -31980,6 +31980,53 @@ func (s *session) targetHasFamilyAuraEffectByCaster(ctx context.Context, targetG
 	return false
 }
 
+// familyAuraEffectSpellID mirrors the spell-id half of
+// Unit::GetAuraEffect(auraType, familyName, f0, f1, f2, casterGUID)
+// (Unit.cpp:4524-4545): the spell id of the first live aura effect
+// of the given type whose spell matches the family name and the
+// flag96 mask (flag96::HasFlag, Util.h:401-404 — OR across the
+// three words, a word matching only when its mask is nonzero,
+// the dummyAuraItemGUIDForFamily precedent), cast by the given
+// caster when casterGUID is nonzero. 0/false when no live effect
+// matches. Backs the thrill-of-the-hunt Explosive Shot leg
+// (spell_hunter.cpp:1538-1540), which needs the found effect's
+// spell for ManaCostPercentage + GetMaxTicks.
+func (s *Server) familyAuraEffectSpellID(auras []*activeAura, auraType, family, flag0, flag1, flag2 uint32, casterGUID uint64) (uint32, bool) {
+	if s == nil || s.Data == nil {
+		return 0, false
+	}
+	want := [3]uint32{flag0, flag1, flag2}
+	for _, aura := range auras {
+		if aura == nil || aura.Stopped || (casterGUID != 0 && aura.CasterGUID != casterGUID) {
+			continue
+		}
+		auraSpell, found, err := s.Data.Spell(aura.SpellID)
+		if err != nil || !found || auraSpell.SpellFamilyName != family {
+			continue
+		}
+		matched := false
+		for i := 0; i < 3; i++ {
+			if want[i] != 0 && auraSpell.SpellFamilyFlags[i]&want[i] != 0 {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		for index, eff := range auraSpell.Effects {
+			if index >= len(aura.Amounts) || index >= 8 || aura.EffectMask&(1<<uint(index)) == 0 {
+				continue
+			}
+			if !spellEffectIsAuraEffect(eff) || eff.Aura != auraType {
+				continue
+			}
+			return aura.SpellID, true
+		}
+	}
+	return 0, false
+}
+
 // targetHasBloodPlague mirrors the Blood Boil gate of Spell::EffectSchoolDMG
 // (SpellEffects.cpp:771): the victim carries the caster's own Blood Plague —
 // a SPELL_AURA_PERIODIC_DAMAGE aura whose spell is DeathKnight-family with

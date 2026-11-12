@@ -533,6 +533,31 @@ func (r *luaAuraRef) luaAuraObject() *scripting.Object {
 		}
 		return []any{r.server.serverSpellMaxTicks(sp)}, nil
 	}
+	// GetSpellManaCostPercentage(spellID) is the
+	// SpellInfo::ManaCostPercentage read for the given spell: the
+	// DBC ManaCostPct column. Reads the loaded Spell.dbc record
+	// for the given spell, not this aura's spell. An unknown spell
+	// reads 0, the GetSpellMaxTicks convention. Default this
+	// aura's spell. Backs the thrill-of-the-hunt Explosive Shot
+	// leg (spell_hunter.cpp:1541-1544).
+	methods["GetSpellManaCostPercentage"] = func(_ context.Context, args []any) ([]any, error) {
+		targetSpell := spellID
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaUint32Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			targetSpell = v
+		}
+		if r.server == nil || r.server.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		sp, found, err := r.server.Data.Spell(targetSpell)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{sp.ManaCostPct}, nil
+	}
 	// GetSpellWithRank(firstSpellID[, rank]) is sSpellMgr->GetSpellWithRank
 	// (SpellMgr.cpp): the spell id of the given rank in
 	// firstSpellID's chain, or 0 when the chain has no such rank. The

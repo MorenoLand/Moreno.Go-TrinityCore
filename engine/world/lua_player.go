@@ -1273,6 +1273,35 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{true}, nil
 	}
+	// GetSpellPowerCost(spellID) is SpellInfo::CalcPowerCost
+	// (SpellInfo.cpp:3154-3242) for this player, the
+	// calculateSpellPowerCost twin (spells.go): base + percentage
+	// cost, the flat/pct school modifiers, the Shiv arm, the
+	// SPELLMOD_COST fold, clamped at zero; the school comes from
+	// the spell record, matching the C++ call sites that pass the
+	// damage/heal info's school mask (the event spell's own
+	// school). An unknown spell reads 0, the
+	// GetSpellEffectCalcValue convention, so a port that casts
+	// only on a nonzero cost never fires a bogus 0-cost energize.
+	// Backs the burnout / master of elements / illumination /
+	// thrill of the hunt HandleProc mana legs.
+	methods["GetSpellPowerCost"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return []any{uint32(0)}, nil
+		}
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil || s.server.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{s.calculateSpellPowerCost(spell)}, nil
+	}
 	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
 	// GetArmor is Unit::GetArmor (Unit.h:860: GetResistance(SPELL_SCHOOL_NORMAL)):
 	// the Player::UpdateArmor result (player_state.go), the same value the
@@ -3042,6 +3071,50 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		if amount, ok := s.server.rankedAuraEffectAmount(s.loadedAuras(), spell, effIndex); ok {
 			return []any{amount}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetAuraEffectSpellIdByFamily(auraType, familyName, flag0, flag1,
+	// flag2 [, casterGUID]) is the spell-id half of
+	// Unit::GetAuraEffect(auraType, familyName, f0, f1, f2, casterGUID)
+	// (Unit.cpp:4524-4545) for the player: the spell id of the first
+	// live aura effect of the given type whose spell matches the
+	// family name and flag96 mask, cast by the given caster when a
+	// nonzero caster GUID is passed — or nil when no live effect
+	// matches. Backs the thrill-of-the-hunt Explosive Shot leg
+	// (spell_hunter.cpp:1538-1540), which needs the found effect's
+	// spell for ManaCostPercentage + GetMaxTicks.
+	methods["GetAuraEffectSpellIdByFamily"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 5 || s.server == nil {
+			return []any{nil}, nil
+		}
+		auraType, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		family, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		var flags [3]uint32
+		for i := 0; i < 3; i++ {
+			flags[i], err = luaUint32Arg(args, 2+i)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var casterGUID uint64
+		if len(args) > 5 && args[5] != nil {
+			v, err := luaInt64Arg(args, 5)
+			if err != nil {
+				return nil, err
+			}
+			if v > 0 {
+				casterGUID = uint64(v)
+			}
+		}
+		if spellID, ok := s.server.familyAuraEffectSpellID(s.victimAurasForLookup(ctx, s.playerGUID), auraType, family, flags[0], flags[1], flags[2], casterGUID); ok {
+			return []any{spellID}, nil
 		}
 		return []any{nil}, nil
 	}
