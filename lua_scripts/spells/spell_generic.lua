@@ -1087,3 +1087,29 @@ local function absorb0Hitlimit1(event, aura, target, damage, absorbAmount)
 end
 
 RegisterAuraEvent(SPELL_ABSORB0_HITLIMIT1, 9, absorb0Hitlimit1)
+
+-- C++ spell_gen_summon_tournament_mount::CheckIfLanceEquiped
+-- (spell_generic.cpp:3207-3219, registered OnCheckCast): the caster
+-- must have the lance aura 62853, else SPELL_FAILED_CUSTOM_ERROR
+-- with MUST_HAVE_LANCE_EQUIPPED. The shapeshift-strip leg stays out:
+-- IsInDisallowedMountForm has no bridge (DBC shapeshift-store +
+-- transform-spell attribute, taxi.go:520).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Bindings are the AC spell_script_names rows.
+local SPELL_TOURNAMENT_MOUNT_SPELLS = { 62774, 62779, 62780, 62781, 62782, 62783, 62784, 62785, 62786, 62787, 63215, 63663, 63791, 63792 }
+local SPELL_LANCE_EQUIPPED = 62853 -- spell_generic.cpp:3195
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_MUST_HAVE_LANCE_EQUIPPED = 60 -- SharedDefines.h:1236
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+local function tournamentMountCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster ~= nil and not caster:HasAura(SPELL_LANCE_EQUIPPED) then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_HAVE_LANCE_EQUIPPED
+    end
+    return SPELL_CAST_OK
+end
+
+for _, spellId in ipairs(SPELL_TOURNAMENT_MOUNT_SPELLS) do
+    RegisterSpellEvent(spellId, 8, tournamentMountCheckCast)
+end

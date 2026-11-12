@@ -285,9 +285,13 @@ RegisterSpellEvent(SPELL_HUNTER_INVIGORATION, 5, invigorationScript)
 --   SPELL_EFFECT_SCRIPT_EFFECT. The hit unit casts the triggered
 --   freedom effect 62305 on itself (C++ nullptr target = self-cast;
 --   the Lua self-target is the twin, mend-pet precedent).
--- NOT PORTED: DoCheckCast (spell_hunter.cpp:838-869) — no Lua
---   OnCheckCast bridge, and Go's default enforces none of the
---   pet-alive / charmed / stunned / fleeing / confused / LOS legs.
+-- PORTED (this tick, RegisterSpellEvent OnCheckCast = 8):
+--   spell_hun_masters_call::DoCheckCast (spell_hunter.cpp:838-869)
+--   (mastersCallCheckCast, below): the guardian-pet alive / charmed /
+--   stunned / fleeing / confused / target / LOS legs ride the new
+--   GetGuardianPet player bridge (lua_player.go) + IsPet creature
+--   bridge (lua_creature_events.go); the nil-pet arm twins the
+--   generic Spell::CheckCast no-guardian-pet gate (Spell.cpp:5422).
 --   HandleDummy eff0 (spell_hunter.cpp:871-874) — the pet casts
 --   GetEffectValue() on the hit unit; spell:GetEffectValue(0)
 --   exists (lua_spell.go:215) but there is no player-side
@@ -304,6 +308,61 @@ local function mastersCallScript(event, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_HUNTER_MASTERS_CALL, 5, mastersCallScript)
+
+local SPELL_FAILED_NO_PET = 84 -- SharedDefines.h:1066
+local SPELL_FAILED_CHARMED = 24 -- SharedDefines.h:1006
+local SPELL_FAILED_STUNNED = 108 -- SharedDefines.h:1090
+local SPELL_FAILED_FLEEING = 34 -- SharedDefines.h:1016
+local SPELL_FAILED_CONFUSED = 26 -- SharedDefines.h:1008
+local SPELL_FAILED_BAD_TARGETS = 12 -- SharedDefines.h:994
+local SPELL_FAILED_LINE_OF_SIGHT = 47 -- SharedDefines.h:1029
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h:117
+local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+local UNIT_FLAG_FLEEING = 0x00800000 -- UnitDefines.h:147
+local UNIT_FLAG_CONFUSED = 0x00400000 -- UnitDefines.h:146
+
+-- C++ spell_hun_masters_call::DoCheckCast (spell_hunter.cpp:838-869):
+-- the guardian pet must be a live pet (SPELL_FAILED_NO_PET), then
+-- charmed / stunned / fleeing / confused in that order, the explicit
+-- target must exist (SPELL_FAILED_BAD_TARGETS), and the pet must have
+-- line of sight to it (SPELL_FAILED_LINE_OF_SIGHT). The nil-pet arm
+-- twins the generic Spell::CheckCast no-guardian-pet gate
+-- (Spell.cpp:5422, SPELL_FAILED_NO_PET).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding 53271 is the AC spell_script_names row.
+local function mastersCallCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_CAST_OK
+    end
+    local pet = caster:GetGuardianPet()
+    if pet == nil or not pet:IsPet() or not pet:IsAlive() then
+        return SPELL_FAILED_NO_PET
+    end
+    if pet:GetCharmerGUID() ~= 0 then
+        return SPELL_FAILED_CHARMED
+    end
+    if pet:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED) then
+        return SPELL_FAILED_STUNNED
+    end
+    if pet:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING) then
+        return SPELL_FAILED_FLEEING
+    end
+    if pet:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_CONFUSED) then
+        return SPELL_FAILED_CONFUSED
+    end
+    local target = spell:GetTarget()
+    if target == nil then
+        return SPELL_FAILED_BAD_TARGETS
+    end
+    if not pet:IsWithinLOS(target) then
+        return SPELL_FAILED_LINE_OF_SIGHT
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_HUNTER_MASTERS_CALL, 8, mastersCallCheckCast)
 
 -- PORTED (this tick, RegisterAuraEvent OnProc = 6):
 --   spell_hun_misdirection::HandleProc (spell_hunter.cpp:917-921):

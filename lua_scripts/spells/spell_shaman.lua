@@ -181,9 +181,10 @@
 --   762 earthliving_weapon — CheckProc-only; GetCastItem and the proc
 --   attack-type mask are unbridged, so the roll-only twin would
 --   over-fire on off-hand / unenchanted attacks.
---   763 fire_nova — OnCheckCast has no Lua mode; HandleDummy needs
---   spell-side GetSpellWithRank (aura-side only) and
---   GetSpellMaxRangeForTarget (unbridged); player-cast ev5 gap.
+--   763 fire_nova — CheckCast PORTED ev8 (fireNovaCheckCast, this file):
+--   fire totem via GetTotem(0) + GetSpellMaxRangeForTarget bridge
+--   (lua_player.go). HandleDummy stays out: it needs spell-side
+--   GetSpellWithRank (aura-side only); player-cast ev5 gap.
 --   764 flame_shock — AfterDispel (mode 5) and GetDummyAuraEffect are
 --   bridged, but the rank-matched Lava Flows triggered cast is not:
 --   aura:GetSpellWithRank keys off the dispelled aura's rank, and the
@@ -568,3 +569,40 @@ end
 for _, spellId in ipairs(SPELL_SHAMAN_MANA_SPRING_TOTEM_SPELLS) do
     RegisterSpellEvent(spellId, 5, manaSpringTotemHit)
 end
+
+local SPELL_SHAMAN_FIRE_NOVA_R1 = 1535 -- spell_shaman.cpp:626 (class spell_sha_fire_nova)
+local SPELL_FAILED_OUT_OF_RANGE = 97 -- SharedDefines.h:1079
+local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
+local SPELL_CUSTOM_ERROR_MUST_HAVE_FIRE_TOTEM = 83 -- SharedDefines.h:1259
+local SPELL_CAST_OK = 255 -- SharedDefines.h:1171 (custom value, never sent to the client)
+
+-- C++ spell_sha_fire_nova_SpellScript::CheckFireTotem
+-- (spell_shaman.cpp:626-641): the fire totem (m_SummonSlot[1]) must exist
+-- else SPELL_FAILED_CUSTOM_ERROR with MUST_HAVE_FIRE_TOTEM; beyond the
+-- spell's max range for the totem it fails SPELL_FAILED_OUT_OF_RANGE.
+-- GetDistance is the generic-fallback WorldObject::GetDistance
+-- (object.go:282: raw center-to-center 3D; the C++ reach subtraction
+-- is unmodeled on generic objects, so the totem's reach term rides
+-- inside GetSpellMaxRangeForTarget's maxRange instead, and the
+-- caster's reach is the residual gap vs C++ IsWithinDistInMap).
+-- RegisterSpellEvent OnCheckCast = 8 (lua_spell.go fireSpellCheckCast).
+-- Binding 1535 is the AC spell_script_names row (R1 only). The HandleDummy
+-- leg stays out: it casts the rank-matched triggered nova via
+-- GetSpellWithRank, which exists only on the aura surface.
+local function fireNovaCheckCast(event, spell)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return SPELL_CAST_OK
+    end
+    local totem = caster:GetTotem(TOTEM_SLOT_FIRE)
+    if totem == nil then
+        return SPELL_FAILED_CUSTOM_ERROR, SPELL_CUSTOM_ERROR_MUST_HAVE_FIRE_TOTEM
+    end
+    local maxRange = caster:GetSpellMaxRangeForTarget(totem, SPELL_SHAMAN_FIRE_NOVA_R1)
+    if maxRange ~= nil and caster:GetDistance(totem) > maxRange then
+        return SPELL_FAILED_OUT_OF_RANGE
+    end
+    return SPELL_CAST_OK
+end
+
+RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R1, 8, fireNovaCheckCast)

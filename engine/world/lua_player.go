@@ -3706,6 +3706,58 @@ func (s *session) luaPlayer() *scripting.Object {
 		}
 		return []any{nil}, nil
 	}
+	// GetGuardianPet is Unit::GetGuardianPet (Unit.cpp:6023-6036): the
+	// m_SummonSlot[SUMMON_SLOT_PET] creature when it carries
+	// UNIT_MASK_GUARDIAN (the motion IsGuardian flag), else nil. A
+	// despawned or non-guardian pet reads nil (the GetTotem
+	// precedent); unlike C++, a stale PetGUID is not cleared. Backs
+	// the masters-call DoCheckCast port (spell_hunter.cpp:838-869).
+	methods["GetGuardianPet"] = luaNoArgs(func() any {
+		if state.PetGUID == 0 || s.server == nil {
+			return nil
+		}
+		motion := s.server.findCreatureMotion(state.Map, state.InstanceID, state.PetGUID)
+		if motion == nil || !motion.IsGuardian {
+			return nil
+		}
+		return s.server.luaMotionCreature(motion)
+	})
+	// GetSpellMaxRangeForTarget is WorldObject::GetSpellMaxRangeForTarget
+	// (Object.cpp:2277-2303) via spellRangeBounds (Spell::GetMinMaxRange,
+	// Spell.cpp:6584-6630): the DBC range pair selected by caster-vs-target
+	// hostility plus the combat-reach, SPELLMOD_RANGE and moving-target
+	// terms — the same inputs validateSpellRange passes, so the Lua read
+	// matches the engine's own range gate. Backs the fire-nova CheckCast
+	// port (spell_shaman.cpp:626-641). An unknown spell or range row, or
+	// an unresolvable target, reads nil and the caller passes through
+	// like the engine's unresolvable-target arm.
+	methods["GetSpellMaxRangeForTarget"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("GetSpellMaxRangeForTarget requires a target and a spell id")
+		}
+		targetGUID := luaObjectGUID(args[0])
+		if targetGUID == 0 || s.server == nil {
+			return []any{nil}, nil
+		}
+		spellID, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		spell, ok, err := s.server.Data.Spell(spellID)
+		if err != nil || !ok {
+			return []any{nil}, nil
+		}
+		rangeEntry, ok, _ := s.server.Data.SpellRange(spell.RangeIndex)
+		if !ok {
+			return []any{nil}, nil
+		}
+		tgt, ok := s.getCombatTarget(ctx, targetGUID)
+		if !ok {
+			return []any{nil}, nil
+		}
+		_, maxRange := s.spellRangeBounds(ctx, spell, rangeEntry, false, float64(tgt.CombatReach), true, false, false, uint16(targetGUID>>48) == 0, s.spellRangeTargetHostile(targetGUID, tgt))
+		return []any{maxRange}, nil
+	}
 	// IsCharmed is Unit::IsCharmed (UnitMethods.h:376): the
 	// UNIT_FIELD_CHARMEDBY read. Go stores no charmer for players
 	// (GetCharmerGUID reads 0), so this reads false.

@@ -4344,6 +4344,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SummonProperties (summonPropertiesIsGuardian); DB spawns, pets
 	// and Lua SummonCreature summons read false.
 	methods["IsGuardian"] = luaNoArgs(func() any { return motion.IsGuardian })
+	// IsPet is Unit::IsPet (Unit.h:839 — the UNIT_MASK_PET bit of
+	// m_unitTypeMask): the motionIsPet twin (creature_auras.go:572,
+	// PetID != 0). Backs the masters-call DoCheckCast port
+	// (spell_hunter.cpp:838-869).
+	methods["IsPet"] = luaNoArgs(func() any { return motionIsPet(motion) })
 	// GetGameObject is Unit::GetGameObject(spellId) (Unit.cpp:5199): the
 	// owned gameobject summoned by that spell, or nil — the creature
 	// twin of the player bridge (the demonic-circle arms are
