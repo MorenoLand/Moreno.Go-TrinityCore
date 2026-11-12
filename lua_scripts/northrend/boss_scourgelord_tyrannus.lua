@@ -50,8 +50,8 @@
 -- Ported arms (C++ line refs; C++-exact for all modeled arms):
 -- Tyrannus JustEngagedWith (:164) — Talk(SAY_AGGRO 8); NO BossAI
 --   base call, so NO SetBossState(IN_PROGRESS) on engage — it lives
---   in DoAction(ACTION_START_INTRO) (:217) behind the unported
---   area-trigger machine. The EVENT_COMBAT_START seed legs (:250-252)
+--   in DoAction(ACTION_START_INTRO) (:217), driven by the ported
+--   area-trigger machine (at_tyrannus_event_starter.lua, 2026-11-12). The EVENT_COMBAT_START seed legs (:250-252)
 --   land here because Eluna event 1 fires when DoZoneInCombat()
 --   (:249) puts Tyrannus in combat — the faithful combat-start
 --   anchor: OVERLORD_BRAND 69172 {5000,7000}ms, FORCEFUL_SMASH 69155
@@ -79,15 +79,16 @@
 -- Tyrannus Reset (:150-162) / EnterEvadeMode (:178-186) — PORTED in
 --   tyrannusReset (ev23): FAIL on the evade path (state was
 --   IN_PROGRESS), NOT_STARTED otherwise (!= DONE); the REACT_PASSIVE
---   + NON_ATTACKABLE arms stay out (see documented-only note).
+--   + NON_ATTACKABLE arms are PORTED on the spawn path too (live
+--   since 2026-11-12 — the intro now has a sender to clear them).
 -- Rimefang DoAction(ACTION_START_RIMEFANG) (:328-336) — PORTED
 --   2026-11-08 (tick 490) on the ev38 receiver below: the :335
 --   EVENT_ICY_BLAST seed (15s) lands on Rimefang's own Eluna event 1
 --   (DoZoneInCombat :333 fires it, the faithful anchor); the :332
 --   phase flip is the chain's existence (the patrol only runs once the
---   receiver starts it). The receiver has no live sender yet — its
---   only caller is tyrannus's EVENT_COMBAT_START (:244), itself driven
---   by the dormant intro machine above.
+--   receiver starts it). Its caller is tyrannus's EVENT_COMBAT_START
+--   (:244), driven by the intro machine — live since 2026-11-12 via
+--   the ported area-trigger sender.
 -- Rimefang EVENT_ICY_BLAST (:368-371) — SelectTarget(Random, 0)
 -- (playerOnly=false default, UnitAI.h:170) -> random threat-listed unit
 -- (GetAITargets pick, no Player filter); DoCast(target, 69232);
@@ -123,21 +124,20 @@
 --   NON_ATTACKABLE), SetReactState(REACT_AGGRESSIVE), DoCast(
 --   SPELL_FULL_HEAL 43979), DoZoneInCombat — which fires ev1, where
 --   the brand/smash/mark seeds already live, so COMBAT_START does
---   NOT re-seed). DORMANT: the only sender is the unported
---   at_tyrannus_event_starter area trigger (see below), so the
---   receiver has no live sender in Go yet (the terenas DoAction
---   precedent: receiver ported, sender unported). EVENT_INTRO_1
+--   NOT re-seed). LIVE since 2026-11-12: the sender is ported in
+--   at_tyrannus_event_starter.lua (event 24, trigger 5633).
+--   EVENT_INTRO_1
 --   (:232-234) is a dead case — its only leg is a commented-out
 --   Talk(SAY_GORKUN_INTRO_2) — so nothing is scheduled for it.
 -- Tyrannus Reset / InitializeAI (:142-162) — the SetBossState legs
 --   are PORTED in tyrannusReset below (Reset :156 NOT_STARTED direct
 --   instance call; EnterEvadeMode :180 FAIL on the evade path; the
 --   skadi / palehoof ev23 idiom). REACT_PASSIVE + UNIT_FLAG_NON_
---   ATTACKABLE stay out: the intro DoAction/area-trigger machine has
---   no live sender, and players engage by attacking — setting
---   NON_ATTACKABLE on spawn would block the only engage path and
---   strand the boss passive (the header's old "intro unported" note
---   understated this: it is a soft-lock, not a cosmetic gap).
+--   ATTACKABLE are PORTED in tyrannusReset too (Reset :156-159,
+--   spawn path only — C++ EnterEvadeMode never calls Reset), live
+--   since 2026-11-12: the ported area-trigger sender starts the
+--   intro that clears both at 36s, so the spawn flags no longer
+--   strand the boss.
 --   InitializeAI (:142-148: GetBossState != DONE -> Reset, else
 --   DespawnOrUnsummon) has no spawn-hook fire site in Go — ev23's
 --   spawn pre-fire is a Reset, not InitializeAI, and a spawn-time
@@ -204,15 +204,16 @@
 -- spell_tyrannus_rimefang_icy_blast SpellScript (:507-539: EFFECT_1
 --   SPELL_EFFECT_TRIGGER_MISSILE -> SummonCreature(NPC_ICY_BLAST 36731) +
 --   triggered SPELL_ICY_BLAST_AURA 69238) — no SpellScript / summon bridge.
--- at_tyrannus_event_starter (:541-560) — the area-trigger SENDER stays
---   out: server event 24 IS bridged (areatrigger.go:64, the
---   at_scripts.lua precedent), but the trigger ID lives only in the DB
---   areatrigger_scripts row (TDB: 5633 -> at_tyrannus_event_starter) —
---   no in-file ID in C++, so no handler can dispatch on it (gelihast
---   precedent). RE-TRIAGED 2026-11-12: the GM veto (:545) IS now
---   expressible — player:IsGM() is bridged (lua_player.go:1411) — so
---   the dispatch ID is the sole remaining blocker. The DoAction
---   receiver it would trigger is ported above (dormant).
+-- at_tyrannus_event_starter (:541-560) — PORTED 2026-11-12 in
+--   at_tyrannus_event_starter.lua (event 24, trigger 5633): the GM
+--   veto (:545) rides player:IsGM() (lua_player.go:1411) and the
+--   boss-state gate reads the bound Tyrannus creature (the
+--   GetGuidData mirror). The dispatch ID lives only in the DB
+--   areatrigger_scripts row (TDB 25101 + 26091 agree: 5633 ->
+--   at_tyrannus_event_starter) — a TDB-only ID is a source, not a
+--   guess (the at_zumrah 962 precedent, d8b1a516; the 12:21 TDB-ID
+--   ruling overturns the d9946689 gelihast stay-out). The DoAction
+--   receiver it triggers is ported above — live now.
 -- Upstream C++ findings: EVENT_INTRO_1 (:232-234) is a dead case — its only
 -- leg is a commented-out Talk(SAY_GORKUN_INTRO_2); the SAY_GORKUN_*
 -- (:34-36), SAY_JAYNA_OUTRO_* (:53-55) and SAY_SYLVANAS_OUTRO_* (:58-59)
@@ -274,6 +275,7 @@ local ACTION_END_COMBAT = 4
 -- UNIT_FLAG_NON_ATTACKABLE = 0x00000002; REACT_AGGRESSIVE = 2.
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x00000002
+local REACT_PASSIVE = 0
 local REACT_AGGRESSIVE = 2
 
 -- instance_pit_of_saron.cpp:31 EventLeaderPos2; pit_of_saron.h:60.
@@ -462,10 +464,8 @@ end
 -- when not on a vehicle); EVENT_COMBAT_START at 36s (:242-252, the
 -- tyrannusCombatStart leg above). EVENT_INTRO_1 (:232-234) is a dead
 -- case — its only leg is a commented-out Talk — so nothing is
--- scheduled for it. DORMANT: the only sender is the unported
--- at_tyrannus_event_starter area trigger, so the receiver has no live
--- sender in Go yet (the terenas DoAction precedent: receiver ported,
--- sender unported).
+-- scheduled for it. LIVE since 2026-11-12: the sender is ported in
+-- at_tyrannus_event_starter.lua (event 24, trigger 5633).
 local function tyrannusDoAction(event, creature, action)
     if action ~= ACTION_START_INTRO then
         return
@@ -487,8 +487,8 @@ end
 -- BossAI bosses in this strip, tyrannus does NOT call BossAI::
 -- JustEngagedWith here, so NO SetBossState(IN_PROGRESS) lands on
 -- engage (the trap a naive port would fall into). IN_PROGRESS is set
--- only by DoAction(ACTION_START_INTRO) (:217) — the receiver above
--- (its only sender, the area trigger, stays out; see the header).
+-- only by DoAction(ACTION_START_INTRO) (:217) — the receiver above,
+-- live since 2026-11-12 via the ported area-trigger sender.
 -- The :250-252 EVENT_COMBAT_START seed legs land here — Eluna event 1
 -- fires at the same combat-start moment (DoZoneInCombat :249).
 local function tyrannusEnterCombat(event, creature, target)
@@ -547,6 +547,13 @@ local function tyrannusReset(event, creature)
             end
         end
     elseif creature:GetBossState(DATA_TYRANNUS) ~= 3 then
+        -- C++ :156-159 Reset: REACT_PASSIVE + NON_ATTACKABLE + NOT_STARTED.
+        -- The evade path above takes no Reset legs (C++ EnterEvadeMode
+        -- never calls Reset); the flag/react legs land only here, on
+        -- the spawn pre-fire. Live since 2026-11-12: the area-trigger
+        -- sender now starts the intro that clears both at 36s.
+        creature:SetReactState(REACT_PASSIVE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         creature:SetBossState(DATA_TYRANNUS, 0) -- NOT_STARTED: Reset / spawn path
     end
     initState(creature:GetGUIDLow())
@@ -641,9 +648,10 @@ end
 -- DoZoneInCombat (fires ev1, where the 15s EVENT_ICY_BLAST seed
 -- lives) + the EVENT_MOVE_NEXT 500ms seed (:335); ACTION_END_COMBAT
 -- is the _EnterEvadeMode twin (creature:EnterEvadeMode,
--- lua_creature_events.go:5014). The receiver has no live sender yet
--- — its only callers are tyrannus's EVENT_COMBAT_START (:244, the
--- intro machine above) and JustDied (:204, above).
+-- lua_creature_events.go:5014). Its callers are tyrannus's
+-- EVENT_COMBAT_START (:244, the intro machine above) and JustDied
+-- (:204, above) — both live since 2026-11-12 via the ported
+-- area-trigger sender.
 local function rimefangDoAction(event, creature, action)
     local guid = creature:GetGUIDLow()
     if action == ACTION_START_RIMEFANG then
