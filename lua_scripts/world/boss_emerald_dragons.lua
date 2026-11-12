@@ -129,8 +129,13 @@
 -- retracted: MoveFollow (lua_creature_events.go:4636) and
 -- DespawnOrUnsummon (:6121) are both bridged, and no summon-death
 -- arm exists on this class.
--- spell_dream_fog_sleep + spell_mark_of_nature (SpellScriptLoaders) —
--- no-SpellScript bridge — NOT registered.
+-- spell_mark_of_nature (SpellScriptLoader) — NOT registered: its
+-- HandleEffect needs PreventHitDefaultEffect, which has no Go model
+-- (runtime.go:556-561) and the default APPLY_AURA would still land.
+-- spell_dream_fog_sleep — PORTED (this tick, RegisterSpellEvent ev7):
+-- the ev7 OnObjectAreaTargetSelect bridge (runtime.go:607,
+-- lua_spell.go:717-743) retires the old "no-SpellScript bridge" claim
+-- for filter-only loaders (rocket-strike precedent).
 -- All Talk() calls in the file accounted for (4 ported above +
 -- SAY_YSONDRE_SUMMON_DRUIDS 1 + SAY_LETHON_DRAW_SPIRIT 1 +
 -- SAY_EMERISS_CAST_CORRUPTION 1 + SAY_TAERAR_SUMMON_SHADES 1
@@ -825,3 +830,26 @@ RegisterCreatureEvent(ENTRY_TAERAR,  3, dragonKilledUnit)
 RegisterCreatureEvent(ENTRY_TAERAR,  9, taerarDamageTaken)
 RegisterCreatureEvent(ENTRY_TAERAR,  21, taerarSummonedDies)
 RegisterCreatureEvent(ENTRY_TAERAR,  23, taerarReset)
+
+local SPELL_SLEEP = 24778 -- boss_emerald_dragons.cpp:49
+
+-- C++ spell_dream_fog_sleep::FilterTargets (boss_emerald_dragons.cpp:731-734):
+-- OnObjectAreaTargetSelect EFFECT_0 TARGET_UNIT_DEST_AREA_ENEMY — drop
+-- every target that already has the Sleep aura, so the fog never re-sleeps
+-- a sleeping unit. ev7 (runtime.go:607, lua_spell.go:717-743) fires on the
+-- creature cast; GetTargets() is a snapshot, so Remove during the loop is
+-- safe. Binding is DB-side (spell_script_names, not in-tree): 24778 is the
+-- supported id (24777 is the aura on the fog NPC itself, :48); if the DB
+-- binds 24777, move this registration. DORMANT until Spell.dbc ships 24778.
+local function dreamFogSleepFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    for _, unit in ipairs(targets:GetTargets()) do
+        if unit:HasAura(SPELL_SLEEP) then
+            targets:Remove(unit)
+        end
+    end
+end
+
+RegisterSpellEvent(SPELL_SLEEP, 7, dreamFogSleepFilter)

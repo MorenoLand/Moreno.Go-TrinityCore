@@ -455,3 +455,63 @@ local function decimationProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_WARLOCK_DECIMATION_R2, 6, decimationProc)
+
+local SPELL_WARLOCK_NIGHTFALL = 18094 -- spell_warlock.cpp:665
+local SPELL_WARLOCK_GLYPH_OF_CORRUPTION = 56218 -- spell_warlock.cpp:666
+local SPELL_WARLOCK_SHADOW_TRANCE = 17941 -- spell_warlock.cpp:77
+
+-- C++ spell_warl_glyph_of_corruption_nightfall::HandleProc
+-- (spell_warlock.cpp:679-684): PreventDefaultAction; the proc actor casts
+-- Shadow Trance (17941) on itself. Same handler for both ids bound to the
+-- class (Nightfall 18094, Glyph of Corruption 56218). DORMANT until
+-- Spell.dbc ships the proc entries.
+local function nightfallProc(event, aura, target, actor, procTarget, damage)
+    local caster = actor or target
+    if caster == nil then
+        return true
+    end
+    caster:CastSpell(caster, SPELL_WARLOCK_SHADOW_TRANCE, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_NIGHTFALL, 6, nightfallProc)
+RegisterAuraEvent(SPELL_WARLOCK_GLYPH_OF_CORRUPTION, 6, nightfallProc)
+
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC = 32865 -- spell_warlock.cpp:76
+-- Class ids per spell_warlock.cpp:1246-1252. 39367 shares the class but has
+-- no census row in 865-879.
+local SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_AURAS = { 32863, 36123, 38252, 39367, 44141, 70388 }
+
+-- C++ spell_warl_seed_of_corruption_generic::HandleProc
+-- (spell_warlock.cpp:1260-1283): PreventDefaultAction; the proc damage is
+-- eaten from the EFFECT_1 buffer. A surviving buffer persists (no
+-- HealthBelowPctDamaged gate, unlike the 27243 dummy class); on depletion
+-- the aura is removed and the caster casts 32865 on the ACTION TARGET (the
+-- seeded holder, the ev6 target — the seed-of-corruption-dummy idiom,
+-- spell_warlock.lua:360-404). DORMANT until Spell.dbc ships the proc
+-- entries. Session-side ev6 only: fires when the seeded holder is a
+-- player; a creature-held seed has no proc evaluation site.
+local function seedOfCorruptionGenericProc(event, aura, target, actor, procTarget, damage)
+    if damage == nil or damage == 0 then
+        return true
+    end
+    if target == nil then
+        return true
+    end
+    local amount = aura:GetAmount(1) - damage
+    if amount > 0 then
+        aura:SetAmount(amount, 1)
+        return true
+    end
+    local caster = aura:GetCaster()
+    aura:Remove()
+    if caster == nil then
+        return true
+    end
+    caster:CastSpell(target, SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC, true)
+    return true
+end
+
+for _, spellId in ipairs(SPELL_WARLOCK_SEED_OF_CORRUPTION_GENERIC_AURAS) do
+    RegisterAuraEvent(spellId, 6, seedOfCorruptionGenericProc)
+end

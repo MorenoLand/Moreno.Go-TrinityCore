@@ -57,8 +57,9 @@
 --   still up. Swift Retribution's own apply/remove legs are census
 --   row 862 (same class, loader spell_pal_swift_retribution); the
 --   remove-leg cross-check here only reads 53379. The
---   concentration/devotion registrations (63510/63514) have no census
---   rows and are not registered here.
+--   concentration/devotion registrations (63510/63514) are census rows
+--   860-861, ported below via the same apply/remove legs; Swift
+--   Retribution (53379) is row 862.
 --   DELTA: C++ removes the aura by (spell, caster GUID); Go
 --   target:RemoveAura(id) takes no caster filter (same delta as the
 --   blessing above). The remove-leg presence check reads
@@ -214,6 +215,49 @@ local function sanctifiedRetributionRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_R1, 3, sanctifiedRetributionRemove)
+
+local SPELL_PALADIN_IMPROVED_DEVOTION_AURA = 20138 -- spell_paladin.cpp:1245
+local SPELL_PALADIN_IMPROVED_DEVOTION_EFFECT = 63514 -- spell_paladin.cpp:91
+local SPELL_PALADIN_IMPROVED_CONCENTRATION_AURA = 20254 -- spell_paladin.cpp:1244
+local SPELL_PALADIN_IMPROVED_CONCENTRATION_EFFECT = 63510 -- spell_paladin.cpp:90
+
+-- C++ spell_pal_improved_aura_AuraScript::HandleEffectApply
+-- (spell_paladin.cpp:1275-1280): the target drops its owned effect aura,
+-- then casts it on itself, triggered, so the spellmod re-applies.
+-- C++ HandleEffectRemove (spell_paladin.cpp:1282-1289): the target drops
+-- the effect aura, unless the twin talent is still up (Sanctified kept
+-- while Swift Retribution is present, Swift kept while Sanctified
+-- Retribution is present). Devotion/concentration removes are
+-- unconditional: their first-rank ids match neither cross-check branch.
+-- Same (spell, caster GUID) removal delta as the Sanctified leg above.
+-- Census rows 860-862 (Improved Devotion / Concentration / Swift
+-- Retribution); the 31869 Sanctified leg above shares this factory's
+-- shape. NOT dormant: apply/remove legs need no proc entry.
+local function improvedAuraLegs(effectId, twinTalentId)
+    local function apply(event, aura, target)
+        target:RemoveAura(effectId)
+        target:CastSpell(target, effectId, true)
+    end
+    local function remove(event, aura, target)
+        if twinTalentId ~= nil and target:GetAuraEffectOfRankedSpell(twinTalentId, 0) ~= nil then
+            return
+        end
+        target:RemoveAura(effectId)
+    end
+    return apply, remove
+end
+
+local devotionApply, devotionRemove = improvedAuraLegs(SPELL_PALADIN_IMPROVED_DEVOTION_EFFECT, nil)
+RegisterAuraEvent(SPELL_PALADIN_IMPROVED_DEVOTION_AURA, 2, devotionApply)
+RegisterAuraEvent(SPELL_PALADIN_IMPROVED_DEVOTION_AURA, 3, devotionRemove)
+
+local concentrationApply, concentrationRemove = improvedAuraLegs(SPELL_PALADIN_IMPROVED_CONCENTRATION_EFFECT, nil)
+RegisterAuraEvent(SPELL_PALADIN_IMPROVED_CONCENTRATION_AURA, 2, concentrationApply)
+RegisterAuraEvent(SPELL_PALADIN_IMPROVED_CONCENTRATION_AURA, 3, concentrationRemove)
+
+local swiftApply, swiftRemove = improvedAuraLegs(SPELL_PALADIN_SANCTIFIED_RETRIBUTION_AURA, SPELL_PALADIN_SANCTIFIED_RETRIBUTION_R1)
+RegisterAuraEvent(SPELL_PALADIN_SWIFT_RETRIBUTION_R1, 2, swiftApply)
+RegisterAuraEvent(SPELL_PALADIN_SWIFT_RETRIBUTION_R1, 3, swiftRemove)
 
 local SPELL_PALADIN_EYE_FOR_AN_EYE = 9799 -- spell_paladin.cpp:761 (class spell_pal_eye_for_an_eye)
 local SPELL_PALADIN_EYE_FOR_AN_EYE_DAMAGE = 25997 -- spell_paladin.cpp:61
