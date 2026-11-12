@@ -35611,6 +35611,13 @@ func (s *session) refreshCommandAura(spellID, durationMs uint32) bool {
 	// Aura::RefreshTimers(resetPeriodicTimer) (Spell.cpp:2854): a
 	// non-triggered re-cast resets the periodic timer only for
 	// non-stackable auras; the tick counter zeroes on every refresh.
+	// spell_rog_rupture::ResetDuration (spell_rogue.cpp:745-748):
+	// AfterEffectApply with AURA_EFFECT_HANDLE_REAPPLY zeroes the
+	// script's BonusDuration on every re-cast refresh, so a reapplied
+	// Rupture earns the Glyph of Backstab +6000 again from the new base
+	// max. The merge keeps the old record, so the bookkeeping resets
+	// here; a fresh apply starts at zero by construction.
+	existing.RuptureBonusDurationMs = 0
 	resetPeriodic := spell.StackAmount < 2
 	if existing.Timer != nil {
 		existing.Timer.Stop()
@@ -39478,6 +39485,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
+			// spell_rog_rupture::ResetDuration (spell_rogue.cpp:745-748):
+			// AfterEffectApply with AURA_EFFECT_HANDLE_REAPPLY zeroes the
+			// script's BonusDuration on every re-cast refresh, so a reapplied
+			// Rupture earns the Glyph of Backstab +6000 again from the new base
+			// max. The merge keeps the old record, so the bookkeeping resets
+			// here; a fresh apply starts at zero by construction.
+			existing.RuptureBonusDurationMs = 0
 			// Aura::RefreshTimers(resetPeriodicTimer) (Spell.cpp:2854):
 			// resetPeriodicTimer = StackAmount < 2 &&
 			// !(triggeredCastFlags & TRIGGERED_DONT_RESET_PERIODIC_TIMER).
@@ -40556,6 +40570,13 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		existing.DurationMs = durationMs
 		existing.RemainingMs = durationMs
 		existing.DurationUpdatedAt = time.Now()
+		// spell_rog_rupture::ResetDuration (spell_rogue.cpp:745-748):
+		// AfterEffectApply with AURA_EFFECT_HANDLE_REAPPLY zeroes the
+		// script's BonusDuration on every re-cast refresh, so a reapplied
+		// Rupture earns the Glyph of Backstab +6000 again from the new base
+		// max. The merge keeps the old record, so the bookkeeping resets
+		// here; a fresh apply starts at zero by construction.
+		existing.RuptureBonusDurationMs = 0
 		// Creature-side mirror of the player merge above: a triggered re-cast
 		// keeps the periodic tick countdown (Spell.cpp:2854 —
 		// TRIGGERED_DONT_RESET_PERIODIC_TIMER rides TRIGGERED_FULL_MASK on
@@ -53834,10 +53855,13 @@ func (s *session) handleEffectScriptEffect(ctx context.Context, spellID uint32, 
 		// unit gains 2000ms of duration and max duration, up to +6000ms
 		// over its base max (BonusDuration bookkeeping). No Rupture aura,
 		// or the cap reached, takes nothing. PreventHitDefaultEffect is
-		// vacuous: the Go SCRIPT_EFFECT default is a per-spell no-op. A
-		// Lua ev5 port would never fire: the player path has no
-		// OnEffectHitTarget site (60533 precedent above). DORMANT until
-		// Spell.dbc ships the 63975 record.
+		// vacuous: the Go SCRIPT_EFFECT default is a per-spell no-op. No
+		// Lua ev5 port: finishSpellCast fires ev5 (fireSpellEffectHitTarget,
+		// :14735) on this same cast before this default leg, so a Lua leg
+		// would double-apply +2000ms and defeat the +6000 cap (the Lua leg
+		// cannot see RuptureBonusDurationMs). The 60533 "no ev5 site"
+		// precedent is stale. DORMANT until Spell.dbc ships the 63975
+		// record.
 		s.glyphOfBackstabTriggeredScriptEffect(ctx, targetGUID)
 	case 57347:
 		// Retrieving (Wintergrasp RP-GG pickup, SpellEffects.cpp:3711-3716):

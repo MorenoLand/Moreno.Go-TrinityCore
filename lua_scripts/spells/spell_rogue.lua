@@ -102,8 +102,11 @@
 --   only by the stay-out SpellScript. preparation (14185, row 243):
 --   SpellScript, ResetCooldowns with a family-flag predicate; no
 --   RegisterSpellScript. glyph_of_backstab_triggered (63975, row
---   245): SpellScript; the rupture BonusDuration leg needs
---   GetScript, unbridged. shiv (5938, row 246): SpellScript only.
+--   245): SpellScript; stays out — the Go default leg owns it
+--   (spells.go:53830 player + boss_ai.go:7952 creature); a Lua ev5
+--   leg would double-fire (finishSpellCast fires ev5 at
+--   spells.go:14735 on the same cast). shiv (5938, row 246):
+--   SpellScript only.
 --   tricks_of_the_trade (57934/59628): proc + redirect-target
 --   state via GetScript + threat redirect, unbridged.
 --   prey_on_the_weak 51685 VERIFIED CLOSED (ported tick 294).
@@ -223,9 +226,10 @@ RegisterAuraEvent(SPELL_ROGUE_CUT_TO_THE_CHASE, 6, cutToTheChaseProc)
 --   SPELL_AURA_DUMMY. PreventDefaultAction (the true return); the
 --   actor casts the triggered leg (63975) on the proc target,
 --   triggered (the aurEff overload). The 63975 SpellScript leg
---   (rupture BonusDuration via GetScript) stays out: no
---   RegisterSpellScript and no script-object bridge. DORMANT until
---   Spell.dbc ships the 56800 proc entry.
+--   stays out: the Go default leg owns it (spells.go:53830 player
+--   + boss_ai.go:7952 creature) — a Lua ev5 leg would double-fire,
+--   since finishSpellCast fires ev5 at spells.go:14735 on the same
+--   cast. DORMANT until Spell.dbc ships the 56800 proc entry.
 local function glyphOfBackstabProc(event, aura, target, actor, procTarget, damage)
     if actor == nil or procTarget == nil then
         return true

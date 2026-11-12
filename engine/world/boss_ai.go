@@ -9475,6 +9475,13 @@ func (s *Server) serverApplyAuraToCreatureTarget(ctx context.Context, m *creatur
 			existing.DurationMs = durationMs
 			existing.RemainingMs = durationMs
 			existing.DurationUpdatedAt = time.Now()
+			// spell_rog_rupture::ResetDuration (spell_rogue.cpp:745-748):
+			// AfterEffectApply with AURA_EFFECT_HANDLE_REAPPLY zeroes the
+			// script's BonusDuration on every re-cast refresh, so a reapplied
+			// Rupture earns the Glyph of Backstab +6000 again from the new base
+			// max. The merge keeps the old record, so the bookkeeping resets
+			// here; a fresh apply starts at zero by construction.
+			existing.RuptureBonusDurationMs = 0
 			if existing.Timer != nil {
 				existing.Timer.Stop()
 				existing.Timer = nil
