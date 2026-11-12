@@ -251,9 +251,9 @@ RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_SET_DATA, function(event
         -- (instance_eye_of_eternity.cpp:234-236) -> VortexHandling
         -- (:180-207): for each vortex trigger, up to 5 threat-list
         -- players each cast SPELL_VORTEX_4 on the trigger to enter
-        -- the vehicle (the GM skip has no bridge — the player
-        -- surface exposes no IsGameMaster; same documented deviation
-        -- as the vortexLand handler in boss_malygos.lua). Rides the
+        -- the vehicle (the GM skip rides target:IsGM(),
+        -- lua_player.go:1411 — the same twin as the vortexLand
+        -- handler in boss_malygos.lua). Rides the
         -- Go-only InstanceEventOnSetData bridge (event 8,
         -- InstanceData:SetData); the writer is the
         -- ACTION_EXECUTE_VORTEX leg in boss_malygos.lua, emulating
@@ -270,7 +270,7 @@ RegisterMapEvent(MAP_EYE_OF_ETERNITY, INSTANCE_EVENT_ON_SET_DATA, function(event
                 if counter >= 5 then
                     break
                 end
-                if target:GetObjectType() == "Player" and not target:HasAura(SPELL_VORTEX_4) then
+                if target:GetObjectType() == "Player" and not target:IsGM() and not target:HasAura(SPELL_VORTEX_4) then
                     target:CastSpell(trigger, SPELL_VORTEX_4, true)
                     counter = counter + 1
                 end

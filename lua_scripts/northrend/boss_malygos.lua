@@ -433,8 +433,8 @@ end
 
 -- C++ spell_malygos_vortex_visual::OnRemove (boss_malygos.cpp:1800-1829,
 -- AfterEffectRemove EFFECT_0 SPELL_AURA_DUMMY): every threat-list
--- player (the GM skip has no bridge — the player surface exposes no
--- IsGameMaster; documented deviation) is teleported by the vortex
+-- player (the GM skip rides target:IsGM(), lua_player.go:1411) is
+-- teleported by the vortex
 -- trigger (instance GetGuidData(DATA_TRIGGER); the Go guid store is
 -- never latched for it, so the live twin is the instanceData
 -- vortexTriggers list bound by instance_eye_of_eternity.lua), then
@@ -458,7 +458,7 @@ local function vortexLand(caster)
     end
     if trigger ~= nil then
         for _, target in ipairs(caster:GetAITargets()) do
-            if target:GetObjectType() == "Player" then
+            if target:GetObjectType() == "Player" and not target:IsGM() then
                 trigger:CastSpell(target, SPELL_VORTEX_6, true)
             end
         end

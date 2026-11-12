@@ -206,12 +206,13 @@
 --   triggered SPELL_ICY_BLAST_AURA 69238) — no SpellScript / summon bridge.
 -- at_tyrannus_event_starter (:541-560) — the area-trigger SENDER stays
 --   out: server event 24 IS bridged (areatrigger.go:64, the
---   at_scripts.lua precedent), but the trigger ID lives only in
---   AreaTrigger.dbc / the DB areatrigger_template — neither is in-tree,
---   and this clone carries no sql/ tree — so no handler can dispatch
---   on it; player:IsGameMaster has no bridge either, so the GM veto
---   (:545) could not be expressed. The DoAction receiver it would
---   trigger is ported above (dormant).
+--   at_scripts.lua precedent), but the trigger ID lives only in the DB
+--   areatrigger_scripts row (TDB: 5633 -> at_tyrannus_event_starter) —
+--   no in-file ID in C++, so no handler can dispatch on it (gelihast
+--   precedent). RE-TRIAGED 2026-11-12: the GM veto (:545) IS now
+--   expressible — player:IsGM() is bridged (lua_player.go:1411) — so
+--   the dispatch ID is the sole remaining blocker. The DoAction
+--   receiver it would trigger is ported above (dormant).
 -- Upstream C++ findings: EVENT_INTRO_1 (:232-234) is a dead case — its only
 -- leg is a commented-out Talk(SAY_GORKUN_INTRO_2); the SAY_GORKUN_*
 -- (:34-36), SAY_JAYNA_OUTRO_* (:53-55) and SAY_SYLVANAS_OUTRO_* (:58-59)
