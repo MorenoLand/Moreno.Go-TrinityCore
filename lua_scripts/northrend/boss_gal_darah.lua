@@ -502,6 +502,12 @@ local function galDarahSpellHitTarget(event, creature, target, spellId)
     if target == nil then
         return
     end
+    -- C++ Load() (boss_gal_darah.cpp:263-266) requires the caster to
+    -- have a vehicle kit (and be Gal'Darah, guaranteed by the ev15
+    -- binding); a dismounted cast never reaches HandleScript.
+    if creature:GetVehicleKit() == nil then
+        return
+    end
     -- C++ HandleScript (boss_gal_darah.cpp:269-277): the hit target
     -- casts 54958 triggered on the caster BEFORE SetGUID — the cast
     -- is unconditional per hit, so it sits outside the dedupe below.

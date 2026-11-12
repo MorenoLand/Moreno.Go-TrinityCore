@@ -1169,6 +1169,7 @@ RegisterSpellEvent(SPELL_RANDOM_PORTAL, 5, randomPortalDummy)
 
 local SPELL_ARCANE_STORM_P_I = 61693 -- boss_malygos.cpp:112
 local SPELL_ARCANE_STORM_P_III = 57459 -- boss_malygos.cpp:151
+local SPELL_ARCANE_STORM_EXTRA_VISUAL = 57473 -- boss_malygos.cpp:154
 
 -- C++ spell_malygos_arcane_storm::FilterTargets
 -- (boss_malygos.cpp:1707-1722): OnObjectAreaTargetSelect, EFFECT_0
@@ -1181,9 +1182,9 @@ local SPELL_ARCANE_STORM_P_III = 57459 -- boss_malygos.cpp:151
 -- RAID_DIFFICULTY_10MAN_NORMAL as 4). PORTED 2026-11-11.
 -- DORMANT until Spell.dbc ships (no cast flows through the Go
 -- spell path yet). The HandleVisual leg (OnEffectLaunchTarget,
--- caster casts 57473 triggered per hit unit) STAYS OUT — no
--- launch-target Lua event exists (runtime.go spell events end at
--- ev7) and an ev5 substitution would mistime the lead missile.
+-- caster casts 57473 triggered per hit unit) is ported below on
+-- ev10 (SpellEventOnEffectLaunchTarget, runtime.go:718); the
+-- 2026-11-11 "no launch-target event" note was stale.
 local function makeArcaneStormFilter(phaseThree)
     return function(event, spell, effectIndex, targets)
         if effectIndex ~= 0 then
@@ -1217,6 +1218,30 @@ end
 
 RegisterSpellEvent(SPELL_ARCANE_STORM_P_I, 7, makeArcaneStormFilter(false))
 RegisterSpellEvent(SPELL_ARCANE_STORM_P_III, 7, makeArcaneStormFilter(true))
+
+-- C++ spell_malygos_arcane_storm::HandleVisual
+-- (boss_malygos.cpp:1725-1730): OnEffectLaunchTarget, EFFECT_0
+-- SPELL_EFFECT_SCHOOL_DAMAGE. The caster casts
+-- SPELL_ARCANE_STORM_EXTRA_VISUAL 57473 triggered on each hit unit
+-- (the lead missile); ev10 fires per launch target on the creature
+-- cast path (boss_ai.go fireSpellEffectLaunchTarget).
+-- PORTED 2026-11-12. DORMANT until Spell.dbc ships.
+local function arcaneStormVisual(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_ARCANE_STORM_EXTRA_VISUAL, true)
+end
+
+RegisterSpellEvent(SPELL_ARCANE_STORM_P_I, 10, arcaneStormVisual)
+RegisterSpellEvent(SPELL_ARCANE_STORM_P_III, 10, arcaneStormVisual)
 
 local SPELL_ALIGN_DISK_AGGRO = 61210 -- boss_malygos.cpp:121
 

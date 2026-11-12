@@ -20120,8 +20120,8 @@ func init() {
 	// moroes-ready but sender-blocked),
 	// npc_gothik_trigger's SpellHit anchor machine (ev14 fires, but the
 	// ANCHOR_2 skull-pile selection needs the spawn-ID bridge — no
-	// CGUID_TRIGGER lookup), spell_gothik_shadow_bolt_volley (no
-	// SpellScript binding bridge).
+	// CGUID_TRIGGER lookup), spell_gothik_shadow_bolt_volley (ported,
+	// boss_gothik.lua:1114-1129, ev7 mark filter).
 	RegisterLuaBoss("boss_gothik", 16060)
 
 	// Thaddius (15928), Stalagg (15929), Feugen (15930), Naxxramas —
@@ -20205,9 +20205,9 @@ func init() {
 	// position, type 3 TIMED_DESPAWN_OUT_OF_COMBAT, timer 0.
 	// DOCUMENTED-BLOCKED: instance bookkeeping; poison-cloud AI
 	// (entry not in the C++ file — spell-effect arrival, DB-side);
-	// both SpellScripts (mutating-injection remove, poison-cloud
-	// periodic trigger — no SpellScript bridge); BOMBARD_SLIME
-	// 28280 is enum-only in the file.
+	// mutating-injection remove — no SpellScript bridge; poison-cloud
+	// periodic trigger is ported (boss_grobbulus.lua:220-235, ev1);
+	// BOMBARD_SLIME 28280 is enum-only in the file.
 	// CASTING gates: NONE — boss UpdateAI :72 plain while loop,
 	// per-case returns (not gates), zero HasUnitState hits; Lua pumps
 	// stay gateless, C++-exact.
