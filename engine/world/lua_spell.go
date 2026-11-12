@@ -465,6 +465,28 @@ func (s *Server) luaCreatureSpellObject(m *creatureMotion, spellID uint32, targe
 		}
 		return []any{spell.Effects[index].TriggerSpell}, nil
 	}
+	// GetEffectType([effectIndex]) is SpellInfo::Effects[eff].Effect
+	// (SpellInfo.h, the DBC effect id: SPELL_EFFECT_DUMMY = 3,
+	// SPELL_EFFECT_SCRIPT_EFFECT = 77, SharedDefines.h:814/888).
+	// The GetTriggerSpell twin for scripts whose arm keys on the
+	// effect kind, e.g. spell_gen_despawn_self (spell_generic.cpp:
+	// 1473-1494, DUMMY or SCRIPT_EFFECT only). Default effect 0;
+	// an unknown spell, an out-of-range index, or a missing row
+	// reads 0, which matches no gated effect kind.
+	methods["GetEffectType"] = func(_ context.Context, args []any) ([]any, error) {
+		index := 0
+		if len(args) > 0 && args[0] != nil {
+			v, err := luaInt64Arg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			index = int(v)
+		}
+		if index < 0 || index >= len(spell.Effects) {
+			return []any{uint32(0)}, nil
+		}
+		return []any{spell.Effects[index].Effect}, nil
+	}
 	// GetExplTargetDest returns the cast's explosion-target destination
 	// (SpellScript::GetExplTargetDest, SpellScript.cpp:466-471:
 	// m_targets dst when HasDst) as three values, or three nils when

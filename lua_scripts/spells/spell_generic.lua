@@ -199,3 +199,36 @@ local function manaBurnAfterHit(event, spell, hitTarget)
 end
 
 RegisterSpellEvent(SPELL_MANA_BURN, 3, manaBurnAfterHit)
+
+-- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_gen_despawn_self::HandleDummy (spell_generic.cpp:1473-1494):
+--   OnEffectHitTarget, EFFECT_ALL, SPELL_EFFECT_ANY. Load gate is
+--   caster TYPEID_UNIT (GetTypeId()==3, checked in the handler since
+--   Lua has no Load hook); when the hit effect is SPELL_EFFECT_DUMMY
+--   (3) or SPELL_EFFECT_SCRIPT_EFFECT (77) the caster despawns
+--   (GetCaster()->ToCreature()->DespawnOrUnsummon()). The effect-kind
+--   read is the new creature-path spell:GetEffectType(effectIndex)
+--   bridge (lua_spell.go, GetTriggerSpell twin). Bindings 25952 /
+--   42268 / 52267 share the class (AC 'spell_gen_despawn_self';
+--   TDB 335.26091 renames 42268 to
+--   'spell_fjord_mindless_abomination_explosion_fx_master').
+local SPELL_GEN_DESPAWN_SELF_1 = 25952 -- spell_generic.cpp:1473
+local SPELL_GEN_DESPAWN_SELF_2 = 42268
+local SPELL_GEN_DESPAWN_SELF_3 = 52267
+local SPELL_EFFECT_DUMMY = 3 -- SharedDefines.h:814
+local SPELL_EFFECT_SCRIPT_EFFECT = 77 -- SharedDefines.h:888
+
+local function despawnSelfHit(event, spell, hitTarget, effectIndex)
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetTypeId() ~= 3 then
+        return
+    end
+    local effectType = spell:GetEffectType(effectIndex)
+    if effectType == SPELL_EFFECT_DUMMY or effectType == SPELL_EFFECT_SCRIPT_EFFECT then
+        caster:DespawnOrUnsummon()
+    end
+end
+
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_1, 5, despawnSelfHit)
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_2, 5, despawnSelfHit)
+RegisterSpellEvent(SPELL_GEN_DESPAWN_SELF_3, 5, despawnSelfHit)
