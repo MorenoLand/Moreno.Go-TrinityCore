@@ -38,8 +38,9 @@
 --   around the citizen's position, same Z; type 5
 --   CORPSE_TIMED_DESPAWN, 600000ms). The summoned soul has no Lua
 --   bearer, so its MoveFollow/quest-credit legs stay out.
--- - ReceiveEmote dance -> EnterEvadeMode: no EnterEvadeMode bridge,
---   documented-only. The rude arm IS ported (see onReceiveEmote):
+-- - ReceiveEmote dance -> EnterEvadeMode ported (see onReceiveEmote):
+--   creature:EnterEvadeMode is the leash twin (lua_creature_events.go:
+--   5624), ev8 fires per emote.go:217. The rude arm IS ported:
 --   IsWithinDist is in the object.go generic fallback so the 5yd gate
 --   needs no player X/Y; the wave/bow/kiss visual arms ride
 --   creature:PerformEmote.
@@ -64,6 +65,7 @@ local NPC_RESTLESS = 11122
 -- alone nil-calls here).
 local SPELL_SLAP = 6754
 
+local TEXT_EMOTE_DANCE = 34
 local TEXT_EMOTE_BOW = 17
 local TEXT_EMOTE_KISS = 58
 local TEXT_EMOTE_RUDE = 77
@@ -77,9 +79,13 @@ local EMOTE_ONESHOT_FLEX = 23
 -- C++ stratholme.cpp:297-320: rude -> DoCast(player, SPELL_SLAP, false)
 -- within 5yd (IsWithinDistInMap; IsWithinDist is the object.go fallback
 -- twin), else HandleEmoteCommand(EMOTE_ONESHOT_RUDE) == PerformEmote per
--- the handler twin; dance -> EnterEvadeMode stays out (no bridge).
+-- the handler twin; dance -> EnterEvadeMode ported (lua_creature_events.
+-- go:5624 leash twin; C++ switch order: dance first, then rude/wave/
+-- bow/kiss).
 local function onReceiveEmote(_, creature, player, textEmote)
-    if textEmote == TEXT_EMOTE_WAVE then
+    if textEmote == TEXT_EMOTE_DANCE then
+        creature:EnterEvadeMode()
+    elseif textEmote == TEXT_EMOTE_WAVE then
         creature:PerformEmote(EMOTE_ONESHOT_WAVE)
     elseif textEmote == TEXT_EMOTE_BOW then
         creature:PerformEmote(EMOTE_ONESHOT_BOW)

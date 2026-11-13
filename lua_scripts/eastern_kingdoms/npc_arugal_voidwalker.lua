@@ -24,7 +24,12 @@
 --   nil -> self-cast fallback.
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - JustDied: instance->SetData(TYPE_FENRUS, instance->GetData(
---   TYPE_FENRUS) + 1) (instance-script model blocked, standing).
+--   TYPE_FENRUS) + 1) stays out: the write path is reachable
+--   (creature:GetMap():GetInstanceData():SetData, BWL precedent)
+--   but the read half has no bridge (no GetData on the InstanceData
+--   object, instance_hooks.go), the handle is nil-gated (map 33 has
+--   no Lua instance script), and there is no consumer (no
+--   instance_shadowfang_keep.lua).
 -- - GetShadowfangKeepAI -> GetInstanceAI leg (instance-model
 --   blocked, standing).
 

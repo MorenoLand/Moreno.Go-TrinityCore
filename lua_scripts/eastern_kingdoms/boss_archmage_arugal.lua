@@ -58,10 +58,13 @@
 -- - SpellHitTarget: Talk(SAY_TRANSFORM 2) fires when SPELL_ARUGAL_CURSE
 --   (7621) lands (event 15; the curse cast is ported in onCurse, so the
 --   trigger is live in Go — the old "event 15 never fires" note was
---   stale; event 15 fires from the Go spell path, boss_ai.go:1904).
+--   stale; event 15 fires from the Go spell path, boss_ai.go:4492-4509
+--   (call sites :4268/:4290).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
--- - AttackStart -> AttackStartCaster(who, 100.0f): no attack-start
---   bridge on the Lua surface.
+-- - AttackStart -> AttackStartCaster(who, 100.0f): AttackStart IS
+--   bridged (lua_creature_events.go:7325, alias of EngageWithTarget
+--   :1463) but takes the target only, no range argument, so the 100yd
+--   caster-range variant stays out on the range leg.
 -- - The BossAI(creature, BOSS_ARUGAL) constructor and
 --   GetShadowfangKeepAI -> GetInstanceAI legs (instance-script model
 --   blocked, standing).

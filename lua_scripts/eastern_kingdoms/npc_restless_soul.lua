@@ -24,13 +24,16 @@
 -- - UpdateAI Die_Timer (stratholme.cpp:176-188): 5s after the tag,
 --   resolve the tagger and credit + kill. C++ resolves map-wide via
 --   ObjectAccessor::GetUnit(Tagger) and re-checks every AI tick while
---   unresolved; the Lua surface has no player-by-GUID bridge, so
---   the tagger is found by GUID among creature:GetPlayersInGrid
---   (100yd scan). The 5s movement bound makes 100yd effectively
---   exact (mounted speed covers < 75yd in 5s); a miss re-arms 1s
---   (jeklik gate-retry precedent), matching C++'s per-tick
---   re-check. KilledMonsterCredit(11122) is the player bridge
---   (lua_player.go); Kill() is the Creature::KillSelf twin.
+--   unresolved; the tagger is found by GUID among creature:
+--   GetPlayersInGrid (100yd scan). Global GetPlayerByGUID exists
+--   (runtime.go:1523, globals.go:187-199, map-wide lookup) but the
+--   grid-scan twin is kept: it filters dead/ghost players, matching
+--   the 5s-window revive case (a tagger who died/ghosted is missed
+--   until revive; the 1s re-arm covers it). The 5s movement bound
+--   makes 100yd effectively exact (mounted speed covers < 75yd in
+--   5s); a miss re-arms 1s (jeklik gate-retry precedent), matching
+--   C++'s per-tick re-check. KilledMonsterCredit(11122) is the player
+--   bridge (lua_player.go); Kill() is the Creature::KillSelf twin.
 -- - JustDied (stratholme.cpp:170-174): if tagged, SummonCreature
 --   (11136 at own position, C++ TEMPSUMMON_TIMED_DESPAWN = 3 ->
 --   Go type 2, 300000ms, willey/ramstein numbering precedent).
@@ -92,7 +95,9 @@ end
 -- C++ UpdateAI Die_Timer: 5s after the tag, credit the tagger and
 -- KillSelf; unresolved tagger re-checks every AI tick (1s re-arm
 -- here). The tagger is the only player in range with the stored
--- GUID; GetPlayersInGrid is the only player-lookup bridge.
+-- GUID; GetPlayersInGrid is the lookup twin used here (global
+-- GetPlayerByGUID also exists, runtime.go:1523, but does not filter
+-- dead/ghost players).
 local function findTagger(creature, guid)
     local taggerGuid = tagger[guid]
     if taggerGuid == nil then

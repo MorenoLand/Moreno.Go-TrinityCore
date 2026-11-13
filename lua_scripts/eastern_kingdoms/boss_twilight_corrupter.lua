@@ -65,10 +65,11 @@
 -- — area-trigger summon machine documented-only; boss_twilight_
 -- corrupter — JustEngagedWith / combat rotation / KilledUnit
 -- arms ported for 15625, all C++-exact except: the
--- creature-of-nightmare random-target pick degrades to the
--- victim, the kill-yell loses its victim targeting, the level-
--- up cast's triggered flag collapses to the standard cast
--- path, and the UNIT_STATE_CASTING pump-skip is PORTED via the combatTick gate).
+-- creature-of-nightmare pick is randomThreatPlayer (random alive
+-- threat-list player, no distance gate), the kill-yell loses its
+-- victim targeting, the level-up cast's triggered flag collapses
+-- to the standard cast path, and the UNIT_STATE_CASTING pump-skip
+-- is PORTED via the combatTick gate).
 
 local SPELL_SOUL_CORRUPTION = 25805
 local SPELL_CREATURE_OF_NIGHTMARE = 25806
