@@ -74,7 +74,10 @@
 -- guid lookups and MovePoint choreography, SummonPositions/
 -- FlameCallerSpots coords) is summon/instance/GO/movement
 -- driven and stays unregistered (naga-distiller empty-skeleton
--- precedent) — so the retreat/emerge machine (Submerge, the
+-- precedent) — except npc_ahune_bunny JustSummoned (ev19),
+-- PORTED below (entry 25745; its _summons bookkeeping's
+-- DespawnAll legs ride ev4/ev38, out of scope) — so the
+-- retreat/emerge machine (Submerge, the
 -- EVENT_EMERGE 35s re-arm, Emerge's triggered RESURFACE 46402
 -- self-cast and its RemoveAurasDueToSpell(STAY_SUBMERGED/
 -- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
@@ -111,6 +114,7 @@ local SPELL_AHUNE_SPANKY_HANDS = 46146
 local SPELL_AHUNES_SHIELD = 45954
 
 local ENTRY_AHUNE = 25740
+local ENTRY_AHUNE_BUNNY = 25745 -- NPC_AHUNE_LOC_BUNNY, the_slave_pens.h:53
 local ENTRY_FROZEN_CORE = 25865
 
 local timers = {}
@@ -208,7 +212,7 @@ RegisterCreatureEvent(ENTRY_AHUNE, 4, function(_, creature)
     -- (already ported) ev4 — loot-missile + minion-despawner casts —
     -- C++-exact cascade. Recursion-safe: Kill on an already-dead
     -- target is a Health == 0 no-op (boss_ai.go:9697-9700).
-    local bunny = creature:FindNearestCreature(25745, 100.0)
+    local bunny = creature:FindNearestCreature(ENTRY_AHUNE_BUNNY, 100.0)
     if bunny then bunny:Kill(creature) end
     local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
     if core then core:Kill(creature) end
@@ -217,6 +221,34 @@ end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 23, function(_, creature)
     resetBoss(creature:GetGUIDLow())
+end)
+
+-- C++ npc_ahune_bunny::JustSummoned (boss_ahune.cpp:350-357):
+-- a summon whose entry is Ahune himself (25740, the
+-- EVENT_SUMMON_AHUNE summon at :425) is skipped; every other
+-- summon — in practice the three bonfire bunnies 25971-25973
+-- from ACTION_START_EVENT (:370-372) — is zone-engaged.
+-- summon:DoZoneInCombat() is the C++ DoZoneInCombat(summon)
+-- twin (lua_creature_events.go:2255; npc_mellichar.lua:383 ev19
+-- precedent); summon:GetEntry() rides lua_objects.go:278. The
+-- _summons.Summon() leg (:356) is pure bookkeeping with no
+-- observable effect at summon time — its only effects are
+-- DespawnAll on JustDied (:359-362) and ACTION_STOP_EVENT
+-- (:389), separate arms (ev4/ev38) outside this row, so
+-- DoZoneInCombat alone is the faithful port of this arm. No
+-- RegisterLuaBoss row is needed for 25745: Runtime.Load walks
+-- every .lua file (runtime.go:899) and ev19 fires by entry
+-- (fireCreatureSummoned, lua_creature_events.go:7880-7903).
+-- Reachability caveat: the bunny's own summon arms (DoAction
+-- ACTION_START_EVENT, EVENT_SUMMON_AHUNE) stay unported, so
+-- this hook goes live when that machine lands — the same
+-- receiver-ported/sender-later pattern as the flamecaller
+-- SpellHit below, whose sender cast is likewise unported.
+RegisterCreatureEvent(ENTRY_AHUNE_BUNNY, 19, function(_, creature, summon)
+    if summon:GetEntry() == ENTRY_AHUNE then
+        return
+    end
+    summon:DoZoneInCombat()
 end)
 
 -- C++ spell_ice_spear_control_aura::PeriodicTick

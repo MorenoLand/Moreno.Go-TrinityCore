@@ -111,8 +111,18 @@
 -- target IS Novos. The stale "no cross-AI GetData bridge" claim is
 -- retired: the only caller is achievement_oh_novos and it reads the
 -- target's own AI.
--- JustSummoned — summons.Summon — summon STRAND absent (standing) —
--- documented-only.
+-- JustSummoned — summons.Summon — PORTED: per-GUID summons list
+-- (novosSummons below, vancleef precedent); the consumers are
+-- BossAI::_Reset / _JustDied summons.DespawnAll()
+-- (ScriptedCreature.cpp:507/516), wired into novosReset (ev23) /
+-- novosDied (ev4). Live source in Go: heroic EVENT_SUMMON_MINIONS
+-- pump -> 59910 -> ev5 2x 59933 -> DBC SPELL_EFFECT_SUMMON ->
+-- creatureEffectSummonType -> summonTempCreature -> ev19 fire
+-- (lua_creature_events.go:190). The crystal-channel-target adds
+-- (27597/27598/27600, 26627) would land in the same list via their
+-- JustSummoned forward if that AI ever ports. No DoZoneInCombat leg
+-- — Novos overrides BossAI::JustSummoned without the base call.
+-- ev20 prunes the list (BossAI::SummonedCreatureDespawn, :568).
 -- npc_crystal_channel_target — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
 -- (26712 — drak_tharon_keep.h NPC_CRYSTAL_CHANNEL_TARGET, kalecgos
 -- pass): zero registration. The whole AI is the cross-AI timer
@@ -179,6 +189,13 @@ local ohNovos = true
 -- per-creature pump in this tree.
 local timers = {}
 
+-- C++ boss_novos::JustSummoned (boss_novos.cpp:207-210): bare
+-- summons.Summon — the SummonList bookkeeping. Lua twin is a per-GUID
+-- list (vancleef blackguards precedent); the consumers are
+-- BossAI::_Reset / _JustDied summons.DespawnAll()
+-- (ScriptedCreature.cpp:507/516), wired into novosReset / novosDied.
+local novosSummons = {}
+
 local function cancelTimers(guid)
     local per = timers[guid]
     if per then
@@ -199,6 +216,67 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ BossAI::_Reset / _JustDied summons.DespawnAll()
+-- (ScriptedCreature.cpp:507/516). The list is nilled before the
+-- despawn loop: each Despawn() fires ev20 on Novos, and the ev20
+-- prune below then sees a nil list and returns — no
+-- mutation-during-iteration. Despawn() on an already-gone motion is
+-- a no-op (lua_creature_events.go:3305).
+local function despawnNovosSummons(creature)
+    local guid = creature:GetGUIDLow()
+    local list = novosSummons[guid]
+    if not list then
+        return
+    end
+    novosSummons[guid] = nil
+    for _, summon in ipairs(list) do
+        summon:Despawn()
+    end
+end
+
+-- C++ boss_novos::JustSummoned (boss_novos.cpp:207-210):
+-- summons.Summon(summon) only. ev19 fires on the summoner with
+-- (event, creature, summon) — fireCreatureSummoned
+-- (lua_creature_events.go:7889); handler-signature precedent is
+-- curatorJustSummoned (boss_curator.lua:166). No DoZoneInCombat leg:
+-- Novos overrides BossAI::JustSummoned without calling the base, so
+-- the base's engaged-DoZoneInCombat arm never runs for it.
+local function novosJustSummoned(event, creature, summon)
+    if summon == nil then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local list = novosSummons[guid]
+    if not list then
+        list = {}
+        novosSummons[guid] = list
+    end
+    table.insert(list, summon)
+end
+
+-- C++ BossAI::SummonedCreatureDespawn (ScriptedCreature.cpp:568):
+-- summons.Despawn — prunes one entry when a tracked summon despawns
+-- (ev20 fires on the summoner, lua_creature_events.go:3336). Matched
+-- by GUID: object identity is not stable across handlers (the tick
+-- 510 GUID-key fix). Keeps the 15s heroic summon pump from growing
+-- the list unboundedly.
+local function novosSummonDespawned(event, creature, summon)
+    if summon == nil then
+        return
+    end
+    local list = novosSummons[creature:GetGUIDLow()]
+    if not list then
+        return
+    end
+    local guid = summon:GetGUIDLow()
+    for i, tracked in ipairs(list) do
+        if tracked:GetGUIDLow() == guid then
+            table.remove(list, i)
+            return
+        end
+    end
 end
 
 -- C++ boss_novos::MoveInLineOfSight (boss_novos.cpp:178-189) as a
@@ -326,6 +404,10 @@ end
 
 local function novosDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ JustDied -> BossAI::_JustDied summons.DespawnAll()
+    -- (ScriptedCreature.cpp:516); ev23 fires ahead of ev4, so this
+    -- is a guard — the Reset-path despawn below already ran.
+    despawnNovosSummons(creature)
     creature:Talk(SAY_DEATH)
 end
 
@@ -342,6 +424,9 @@ local function novosReset(event, creature)
     -- too, so the initial true is written before any kill can read it).
     creature:SetData(DATA_NOVOS_ACHIEV, 1)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ Reset -> BossAI::_Reset summons.DespawnAll()
+    -- (ScriptedCreature.cpp:507).
+    despawnNovosSummons(creature)
     setCrystalsStatus(creature, false)
     if creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
@@ -404,6 +489,8 @@ RegisterCreatureEvent(ENTRY_NOVOS, 3, novosTargetDied)
 RegisterCreatureEvent(ENTRY_NOVOS, 4, novosDied)
 RegisterCreatureEvent(ENTRY_NOVOS, 23, novosReset)
 RegisterCreatureEvent(ENTRY_NOVOS, 38, novosDoAction)
+RegisterCreatureEvent(ENTRY_NOVOS, 19, novosJustSummoned)
+RegisterCreatureEvent(ENTRY_NOVOS, 20, novosSummonDespawned)
 
 -- C++ spell_novos_summon_minions::HandleScript
 -- (boss_novos.cpp:375-398): OnEffectHitTarget EFFECT_0

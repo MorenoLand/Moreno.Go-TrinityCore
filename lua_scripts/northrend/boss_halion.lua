@@ -145,11 +145,14 @@
 -- the CastStop leg is ported (creature:StopSpellCast() in the 75%
 -- latch, 2026-11-05); the controller SetData(PHASE_TWO) leg rides
 -- the no-cross-AI bridge.
--- boss_halion SpellHit — Talk(SAY_REGENERATE 0) rides
--- SPELL_TWILIGHT_MENDING 75509 — stays out: the trigger is the
--- unported npc_halion_controller's EVENT_TWILIGHT_MENDING cast
--- (boss_halion.cpp:732-735), so event 14 can never fire with
--- this ID (the old "SpellHit-15-never-fires" label was stale —
+-- boss_halion SpellHit — PORTED below (halionSpellHit, ev14):
+-- Talk(SAY_REGENERATE 0) on SPELL_TWILIGHT_MENDING 75509
+-- (boss_halion.cpp:311-314). DORMANT in Go today: the only C++
+-- caster is the unregistered controller's EVENT_TWILIGHT_MENDING
+-- leg (:732-735) — but the arm is exact, ev14 forwards spellId
+-- (creature_area_targets.go:2667; boss_ai.go:4267/4280;
+-- spells.go:19914/30192), and it fires the moment any 75509 cast
+-- lands (the old "SpellHit-15-never-fires" label was stale —
 -- event 14 fires from the Go spell path).
 -- boss_halion UpdateAI — CASTING gates (material :327 pre-loop,
 -- PHASE_TWO early-return handled by the 75% latch; twilight
@@ -251,12 +254,14 @@
 -- ev24 handler: C++ sets no FAIL on halion's JustReachedHome
 -- (BossAI::_JustReachedHome is setActive(false) only,
 -- ScriptedCreature.cpp:522-523).
--- boss_twilight_halion SpellHit — Talk(SAY_REGENERATE 0) rides
--- SPELL_TWILIGHT_MENDING 75509 — stays out on the same unported-
--- controller trigger (boss_halion.cpp:732-735); the SPELL_TWILIGHT_
--- DIVISION -> controller DoAction(ACTION_MONITOR_CORPOREALITY)
--- leg stays out: the DoAction bridge (event 38) is live, but the
--- receiver (controller 40146) is unregistered — see triage above.
+-- boss_twilight_halion SpellHit — PORTED below
+-- (twilightHalionSpellHit, ev14): Talk(SAY_REGENERATE 0) on
+-- SPELL_TWILIGHT_MENDING 75509 (boss_halion.cpp:503-505); DORMANT
+-- on the same unported-controller trigger (:732-735) as the
+-- material arm. The SPELL_TWILIGHT_DIVISION -> controller
+-- DoAction(ACTION_MONITOR_CORPOREALITY) leg (:500-502) stays out:
+-- the DoAction bridge (event 38) is live, but the receiver
+-- (controller 40146) is unregistered — see triage above.
 -- boss_twilight_halion JustDied — zero Talk; NO _JustDied() call in
 -- C++ (:448-466), so DATA_TWILIGHT_HALION is never set DONE — no
 -- state leg on ev4 (verified by whole-Ruby-Sanctum grep). The
@@ -315,7 +320,8 @@
 -- All 13 Talk() calls in the file accounted for (SAY_AGGRO 2 +
 -- SAY_DEATH 5 + SAY_KILL 6 + SAY_METEOR_STRIKE 3 ported; SAY_PHASE_TWO 4
 -- + SAY_PHASE_THREE 2 ported via the DamageTaken latches;
--- SAY_REGENERATE 0 x2 + SAY_INTRO 1 +
+-- SAY_REGENERATE 0 x2 ported via the ev14 SpellHit handlers below;
+-- SAY_INTRO 1 +
 -- EMOTE_CORPOREALITY_TOT/TIT/POT/PIP + EMOTE_WARN_LASER 0 +
 -- SAY_SPHERE_PULSE 1 documented above).
 -- Missing-cast audit 2026-10-16 (all 11): PORTED — 74808
@@ -343,6 +349,7 @@ local DATA_HALION = 3 -- ruby_sanctum.h:34 (RSDataTypes)
 local DATA_TWILIGHT_HALION = 4 -- ruby_sanctum.h:37
 local ENTRY_HALION_CONTROLLER = 40146 -- ruby_sanctum.h:82
 
+local SAY_REGENERATE = 0 -- C++ enum Texts :37
 local SAY_INTRO    = 1 -- (documented-only, rides the controller's cross-AI intro)
 local SAY_AGGRO    = 2
 local SAY_METEOR_STRIKE = 3
@@ -361,6 +368,7 @@ local SPELL_SUMMON_TWILIGHT_PORTAL = 74809 -- C++ enum :112 (summons GO 202794)
 local SPELL_SOUL_CONSUMPTION = 74792 -- C++ enum :81
 local SPELL_TWILIGHT_REALM = 74807 -- C++ enum :115 (SelectTarget aura filter)
 local SPELL_TWILIGHT_DIVISION = 75063 -- C++ enum :109 ("Phase spell from phase 2 to phase 3")
+local SPELL_TWILIGHT_MENDING = 75509 -- C++ enum :114
 local SPELL_TWILIGHT_PRECISION = 78243 -- C++ enum :117 (AddAura self-cast, both engages)
 local SPELL_METEOR_STRIKE = 74637 -- C++ enum :64
 local SPELL_METEOR_STRIKE_COUNTDOWN = 74641 -- C++ enum :96
@@ -826,10 +834,21 @@ local function twilightHalionKilledUnit(event, creature, victim)
     creature:CastSpell(victim, SPELL_LEAVE_TWILIGHT_REALM, true)
 end
 
+-- C++ boss_halion::SpellHit (boss_halion.cpp:311-314):
+-- if (spellInfo->Id == SPELL_TWILIGHT_MENDING 75509)
+-- Talk(SAY_REGENERATE 0). Handler signature (event, creature,
+-- caster, spellId) is the faerlina/freya ev14 precedent.
+local function halionSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_TWILIGHT_MENDING then
+        creature:Talk(SAY_REGENERATE)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HALION, 1, halionEnterCombat)
 RegisterCreatureEvent(ENTRY_HALION, 2, halionCombatEnd)
 RegisterCreatureEvent(ENTRY_HALION, 4, halionDied)
 RegisterCreatureEvent(ENTRY_HALION, 9, halionDamageTaken)
+RegisterCreatureEvent(ENTRY_HALION, 14, halionSpellHit)
 RegisterCreatureEvent(ENTRY_HALION, 23, halionReset)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 3, twilightHalionKilledUnit)
 
@@ -1134,10 +1153,26 @@ local function twilightHalionDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ boss_twilight_halion::SpellHit (boss_halion.cpp:495-510),
+-- switch on spell id: case SPELL_TWILIGHT_DIVISION 75063 ->
+-- controller DoAction(ACTION_MONITOR_CORPOREALITY) (:500-502,
+-- stays out — receiver controller 40146 unregistered); case
+-- SPELL_TWILIGHT_MENDING 75509 -> Talk(SAY_REGENERATE 0)
+-- (:503-505) — PORTED. Note the 75063 self-cast from the 50%
+-- latch also hits this unit, so it may reach this handler; the
+-- arm ignores it, matching the stay-out above. Handler signature (event,
+-- creature, caster, spellId) is the faerlina/freya ev14 precedent.
+local function twilightHalionSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_TWILIGHT_MENDING then
+        creature:Talk(SAY_REGENERATE)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 1, twilightHalionEnterCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 2, twilightHalionLeaveCombat)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 4, twilightHalionDied)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 9, twilightHalionDamageTaken)
+RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 14, twilightHalionSpellHit)
 RegisterCreatureEvent(ENTRY_TWILIGHT_HALION, 23, twilightHalionReset)
 
 -- C++ npc_living_infernoAI::JustDied (boss_halion.cpp:1292-1296) and

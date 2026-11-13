@@ -109,7 +109,21 @@
 -- are now computable; the unit stays blocked on its unregistered
 -- owner + unported DoAction-sender/MovePoint engage model, not on the
 -- health/DamageTaken surface.
--- JustSummoned summons.Summon leg — summon STRAND absent.
+-- JustSummoned (boss_hadronox.cpp:372-376) summons.Summon leg — STAY OUT
+-- (row 5): ev19 IS bridged and forwards (event, creature, summon)
+-- (fireCreatureSummoned, lua_creature_events.go:7897-7908; summonTempCreature
+-- :190 fires it for group summons too), but no producer exists in Lua —
+-- SummonCrusherPack (SummonCreatureGroup 1/2/3, :186-195) is unported and
+-- Hadronox casts no summon spells (the 53064-53092 periodic summons are
+-- cast by world trigger 23472, so their ev19 fires on the trigger, not
+-- Hadronox). No live consumer either: the C++ consumers are BossAI
+-- _Reset/_JustDied + EnterEvadeMode summons.DespawnAll
+-- (ScriptedCreature.cpp:507/516; boss_hadronox.cpp:266), whose Lua twins
+-- (hadronoxReset/hadronoxDied/hadronoxLeaveCombat) have nothing to
+-- despawn. When the producer lands, SummonCreatureGroup returns the
+-- summoned array, so it can populate the tracking table directly — ev19
+-- adds no coverage; revisit only if a summon source outside the producer
+-- appears.
 -- npc_anub_ar_crusher — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28922 from
 -- the file's Creatures enum — NPC_CRUSHER — kalecgos pass): zero
 -- registration. The whole npc_hadronox_crusherPackAI engagement model is
