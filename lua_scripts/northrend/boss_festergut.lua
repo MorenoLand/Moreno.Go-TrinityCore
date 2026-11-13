@@ -117,12 +117,13 @@
 -- written by Putricide's MovementInform POINT_FESTERGUT
 -- (boss_professor_putricide.cpp:376) when he reaches the table, i.e.
 -- it rides the unported ACTION_FESTERGUT_COMBAT chain above.
--- SpellHitTarget (boss_festergut.cpp:160-168) — STAYS OUT, retracted
--- 2026-10-20: the 11:55 tick's ev15 port stripped INOCULATED from the
--- boss himself (Go's cast path carries only the explicit target, so the
--- self-cast trigger delivers target=self); C++ strips it from the
--- players hit by the blight AoE, whom Go never enumerates. Fabricating
--- the per-player legs would invent hit targets — trigger-path blocked.
+-- SpellHitTarget (boss_festergut.cpp:160-168) — PORTED in
+-- festergutSpellHitTarget below (ev15; PUNGENT_BLIGHT_HELPER strips
+-- INOCULATED_HELPER from the hit unit). The 2026-10-20 retraction is
+-- superseded: the live handler gates on target:GetObjectType() ==
+-- "Player", so the self-cast ev15 delivery (target=self) is a no-op
+-- and only real blight hit targets are stripped. (Header corrected
+-- 2026-11-13, hook strip round 7.)
 -- All 10 Talk() calls in the file accounted for (10 =
 -- SAY_STINKY_DEAD 0 (1, cross-AI from npc_stinky_icc) + SAY_AGGRO 1
 -- (1) + EMOTE_GAS_SPORE 2 (1) + EMOTE_WARN_GAS_SPORE 3 (1) +

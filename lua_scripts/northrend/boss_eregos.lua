@@ -113,16 +113,27 @@
 -- (tick 427, eregosDamageTaken below; dormant until the DBC
 -- ships — see the handler note). creature:IsHeroic()
 -- (lua_creature_events.go:3749) and creature:GetHealthPct()
--- (scripting/object.go:190) are bridged; the DespawnAll leg is
--- emulated with Lua-tracked anomalies + DespawnOrUnsummon.
+-- (scripting/object.go:209) are bridged; the DespawnAll leg is
+-- emulated with the Lua-tracked summons list (every summon, strip 7)
+-- + DespawnOrUnsummon.
 -- JustSummoned — BossAI::JustSummoned + NPC_PLANAR_ANOMALY
 -- 30879: CombatStop + REACT_PASSIVE ARE bridged 2026-10-24
 -- (lua_creature_events.go); the MoveRandom(100.0f) leg is PORTED
 -- 2026-11-08 (tick 427) — creature:MoveRandom is bridged
--- (lua_creature_events.go:4719), retiring the "no bridge" note
+-- (lua_creature_events.go:5467), retiring the "no bridge" note
 -- (eregosJustSummoned, ev19, LATENT per the anubrekhan precedent:
 -- anomalies are never delivered yet, so the arm fires only if a
--- future path summons via eregos). SummonedCreatureDespawn —
+-- future path summons via eregos). Strip 7: the BossAI::JustSummoned
+-- leg is now FULLY ported — every summon is tracked in eregosSummons
+-- (ScriptedCreature.cpp:559-561; the tick-427 table held anomalies
+-- only, so C++ :196 DespawnAll would have missed ley whelps) and
+-- non-anomaly summons are zoned into combat when the boss is engaged
+-- (ScriptedCreature.cpp:562-563; IsInCombat + DoZoneInCombat bridged,
+-- curator precedent). The spell-summon path DOES fire ev19
+-- (creatureEffectSummonType routes through summonTempCreature,
+-- boss_ai.go:4938/:5181), so the arm goes live with the DBC; the ev20
+-- untrack now covers every summon (BossAI::SummonedCreatureDespawn,
+-- ScriptedCreature.cpp:566-569). SummonedCreatureDespawn —
 -- NPC_PLANAR_ANOMALY: CastSpell(summon, SPELL_PLANAR_BLAST
 -- 57976, true) TRIGGERED self-cast (boss_eregos.cpp:177) — PORTED
 -- 2026-11-08 (tick 427, eregosSummonedDespawn, ev20); event 20
@@ -209,7 +220,12 @@ local voidRuby = {}
 local voidEmerald = {}
 local voidAmber = {}
 local eregosPhase = {} -- per-GUID _phase latch (Initialize PHASE_NORMAL)
-local planarAnomalies = {} -- per-GUID {summon GUID -> anomaly} (DespawnAll emulation)
+local eregosSummons = {} -- per-GUID {summon GUID -> summon}: the BossAI
+-- summons.Summon list twin (ScriptedCreature.cpp:559-561). EVERY summon
+-- is tracked, not just planar anomalies: C++ DamageTaken
+-- summons.DespawnAll() (boss_eregos.cpp:196) despawns the whole list,
+-- including ley whelps from SPELL_SUMMON_LEY_WHELP — the old
+-- anomaly-only table missed them (strip 7).
 
 -- C++ EVENT_ARCANE_BARRAGE (:215-218): DoCastVictim(50804)
 -- non-triggered, 3s/10s init -> 3s/10s loop.
@@ -400,10 +416,10 @@ end
 -- reads are pre-damage on both sides (ev9 fires before damage is
 -- applied), so no postDamage guard — the nefarian-form guard is
 -- for UpdateAI HealthBelowPct arms, not DamageTaken.
--- summons.DespawnAll() is emulated with the Lua-tracked anomalies
--- (ev19, below) + DespawnOrUnsummon, the vancleef precedent; each
--- despawn fires ev20, so each anomaly blasts exactly as C++
--- summons.DespawnAll() does. DORMANT: the 51162 self-cast and the
+-- summons.DespawnAll() is emulated with the Lua-tracked summons
+-- (ev19, below; strip 7: every summon, not just anomalies) +
+-- DespawnOrUnsummon, the vancleef precedent; each despawn fires ev20,
+-- so each anomaly blasts exactly as C++ summons.DespawnAll() does. DORMANT: the 51162 self-cast and the
 -- 57959 anomaly summons ride the DBC spell path (no Spell.dbc in
 -- tree), so the shift aura never applies and no anomalies arrive
 -- until the DBC ships; the re-arm below fires if the aura ever
@@ -428,12 +444,12 @@ local function eregosDamageTaken(event, creature, attacker, damage)
     cancelTimers(guid)
     creature:Talk(SAY_SHIELD)
     creature:CastSpell(creature, SPELL_PLANAR_SHIFT)
-    local tracked = planarAnomalies[guid]
+    local tracked = eregosSummons[guid]
     if tracked then
-        for _, anomaly in pairs(tracked) do
-            anomaly:DespawnOrUnsummon()
+        for _, summon in pairs(tracked) do
+            summon:DespawnOrUnsummon()
         end
-        planarAnomalies[guid] = nil
+        eregosSummons[guid] = nil
     end
     for _ = 1, 6 do
         creature:CastSpell(creature, SPELL_PLANAR_ANOMALIES)
@@ -459,26 +475,38 @@ end
 
 RegisterAuraEvent(SPELL_PLANAR_SHIFT, 3, planarShiftRemove)
 
--- C++ JustSummoned NPC_PLANAR_ANOMALY (boss_eregos.cpp:160-170):
--- CombatStop(true) + SetReactState(REACT_PASSIVE) in C++ order; the
--- MoveRandom(100.0f) leg is PORTED 2026-11-08 (tick 427) —
--- creature:MoveRandom is bridged (engine/world/lua_creature_events.go:4719),
--- retiring the "no bridge" note. The anomaly is tracked for the
--- DespawnAll emulation in eregosDamageTaken (above). LATENT:
--- anomalies spawn only from the DBC-side SPELL_PLANAR_ANOMALIES
--- 57959 spell-summon (anubrekhan latent precedent).
+-- C++ JustSummoned (boss_eregos.cpp:160-170): BossAI::JustSummoned
+-- (ScriptedCreature.cpp:559-564) FIRST — summons.Summon(summon) +
+-- DoZoneInCombat(summon) if the boss is engaged — then the anomaly
+-- legs CombatStop(true) + SetReactState(REACT_PASSIVE) +
+-- MoveRandom(100.0f) in C++ order. The anomaly legs are PORTED
+-- 2026-11-08 (tick 427); strip 7 completes the BossAI leg: EVERY
+-- summon is tracked in eregosSummons for the DespawnAll emulation in
+-- eregosDamageTaken (above), and non-anomaly summons are zoned into
+-- combat when the boss is engaged (IsInCombat + DoZoneInCombat are
+-- bridged; curator precedent for summon:DoZoneInCombat()). The zone
+-- leg is moot for anomalies (CombatStop clears it — the Go CombatStop
+-- is RemoveMeFromThreatLists + ClearAllThreat + InCombat=false,
+-- lua_creature_events.go:3168). creature:MoveRandom is bridged
+-- (engine/world/lua_creature_events.go:5467). LATENT: summons arrive
+-- only from DBC-side spell-summons (SPELL_SUMMON_LEY_WHELP 51175 /
+-- SPELL_PLANAR_ANOMALIES 57959; anubrekhan latent precedent) — the
+-- spell-summon path fires ev19 via summonTempCreature
+-- (boss_ai.go:4938/:5181), so the arm goes live with the DBC.
 local function eregosJustSummoned(_, creature, summoned)
+    local guid = creature:GetGUIDLow()
+    local tracked = eregosSummons[guid]
+    if not tracked then
+        tracked = {}
+        eregosSummons[guid] = tracked
+    end
+    tracked[summoned:GetGUIDLow()] = summoned
     if summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
         summoned:CombatStop(true)
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:MoveRandom(100)
-        local guid = creature:GetGUIDLow()
-        local tracked = planarAnomalies[guid]
-        if not tracked then
-            tracked = {}
-            planarAnomalies[guid] = tracked
-        end
-        tracked[summoned:GetGUIDLow()] = summoned
+    elseif creature:IsInCombat() then
+        summoned:DoZoneInCombat()
     end
 end
 
@@ -486,18 +514,22 @@ end
 -- NPC_PLANAR_ANOMALY: triggered self-cast SPELL_PLANAR_BLAST
 -- 57976 (the C++ @todo "See why the spell is not cast" notes the
 -- cast itself; the hook is exact). PORTED 2026-11-08 (tick 427);
--- also untracks the anomaly for the DespawnAll emulation.
--- DespawnOrUnsummon on a TempSummon fires ev20 (the UnSummon
--- leg), so the DamageTaken DespawnAll above blasts each anomaly
--- exactly as C++ summons.DespawnAll() does. DORMANT: anomalies
--- never arrive until the DBC ships.
+-- strip 7: untracks EVERY summon (BossAI::SummonedCreatureDespawn,
+-- ScriptedCreature.cpp:566-569, summons.Despawn); the blast stays
+-- anomaly-gated. DespawnOrUnsummon on a TempSummon fires ev20 (the
+-- UnSummon leg), so the DamageTaken DespawnAll above blasts each
+-- anomaly exactly as C++ summons.DespawnAll() does. DORMANT:
+-- anomalies never arrive until the DBC ships.
 local function eregosSummonedDespawn(_, creature, summoned)
-    if summoned ~= nil and summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
-        local guid = creature:GetGUIDLow()
-        local tracked = planarAnomalies[guid]
-        if tracked then
-            tracked[summoned:GetGUIDLow()] = nil
-        end
+    if summoned == nil then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local tracked = eregosSummons[guid]
+    if tracked then
+        tracked[summoned:GetGUIDLow()] = nil
+    end
+    if summoned:GetEntry() == ENTRY_PLANAR_ANOMALY then
         summoned:CastSpell(summoned, SPELL_PLANAR_BLAST, true)
     end
 end

@@ -90,6 +90,20 @@
 -- not bridged), summon->SetPhaseMask(1<<(4+_insanityHandled)) +
 -- player phase-mask aura bookkeeping (no phase-mask bridge),
 -- SetControlled(true, UNIT_STATE_STUNNED) (no stun-control bridge).)
+-- Re-verified 2026-11-13 (hook strip round 7, group D): STAY OUT
+-- still holds, but three bridge claims above are now stale —
+-- player:CastSpell IS bridged (lua_player.go:3501), SummonCreature
+-- IS bridged (lua_creature_events.go:4097), SetPhaseMask IS bridged
+-- (lua_creature_events.go:3836). What still blocks a standalone
+-- ev15 port (C++ arm boss_herald_volazj.cpp:135-171): SetControlled
+-- has NO bridge (zero hits in engine/); the first-hit leg sets
+-- NOT_SELECTABLE whose only clearing path is the UpdateAI wait-state
+-- (:262-270, _insanityHandled + summons.empty() + ev20 rollback,
+-- unported) — porting ev15 alone would strand the boss
+-- unattackable; and player-hit reachability (57496 DBC implicit
+-- targets) cannot be settled in-repo (no Spell.dbc here). Revisit
+-- only as a whole-machine port (ev15 + ev20 + wait-state +
+-- summons list).
 -- Reset: SetPhaseMask((1|16|32|64|128|256), true) (no phase-mask
 -- bridge); ResetPlayersPhaseMask() is PORTED below via
 -- resetPlayersPhaseMask (player:RemoveAura x5 — the old

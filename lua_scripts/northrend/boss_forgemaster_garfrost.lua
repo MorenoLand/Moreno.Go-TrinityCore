@@ -141,6 +141,10 @@
 -- SpellHitTarget (:174-186) — SPELL_PERMAFROST_HELPER aura-stack
 --   capture into _permafrostStack: PORTED 2026-11-08 (tick 416) in
 --   garfrostSpellHitTarget below (the achievement bridge now exists).
+--   (2026-11-13: helper selector Is25ManRaid -> IsHeroic — C++
+--   RAID_MODE(68786, 70336) takes 70336 on heroic dungeons
+--   (Difficulty 1 = the 25-man slot); Is25ManRaid is raid-only, so
+--   the old code never matched 70336 hits on heroic.)
 -- GetData (:187-190) — creature:GetData IS bridged (ScriptData store,
 -- 2026-10-24); the blocker is the achievement bridge (the boss_zuramat
 -- precedent).
@@ -199,7 +203,7 @@ local SAY_TYRANNUS_DEATH = 0 -- garfrost's own enum (boss_forgemaster_garfrost.c
 
 local SPELL_PERMAFROST = 70326
 local SPELL_PERMAFROST_HELPER_10 = 68786 -- RAID_MODE 10-man
-local SPELL_PERMAFROST_HELPER_25 = 70336 -- RAID_MODE 25-man (heroic falls through)
+local SPELL_PERMAFROST_HELPER_25 = 70336 -- RAID_MODE 25-man (heroic dungeon selects it)
 local ACHIEV_DOESNT_GO_TO_ELEVEN = 0 -- boss_forgemaster_garfrost.cpp:66
 local SPELL_THROW_SARONITE = 68788
 local SPELL_THUNDERING_STOMP = 68771
@@ -589,7 +593,7 @@ RegisterCreatureEvent(ENTRY_GARFROST, 28, garfrostMovementInform)
 -- the helper hits never occur and the slot stays 0.
 local function garfrostSpellHitTarget(event, creature, target, spellId)
     local helper = SPELL_PERMAFROST_HELPER_10
-    if creature:Is25ManRaid() then
+    if creature:IsHeroic() then
         helper = SPELL_PERMAFROST_HELPER_25
     end
     if spellId ~= helper or not target then
