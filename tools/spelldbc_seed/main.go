@@ -282,32 +282,39 @@ var spells = []spell{
 	// 68415 Corrupted Rage (boss_general_vezax.cpp:68, :244-251 —
 	// CheckShamanisticRage casts it on shamans who know Shamanistic
 	// Rage 30823; Lua leg live, boss_general_vezax.lua:448-461).
-	// REAL CLIENT DBC (wago.tools DB2, build 3.4.0.43659, read
-	// 2026-11-13 — 3.3.5.12340 is unhosted; wow.tools retired May
-	// 2025): SpellEffect 981024/981025, SpellMisc 621919, SpellDuration
-	// 21 (-1 infinite), SpellClassOptions 66466 family 11. eff0:
-	// APPLY_AURA ADD_PCT_MODIFIER (108), DBC BP -91 (effective -90
-	// per the TC CalcValue +1 convention), MiscValue 0 SPELLMOD_DAMAGE,
-	// mask [448, 524288, 16] = [0x1C0, 0x80000, 0x10]: HW 0x40 / LHW
-	// 0x80 / Chain Heal 0x100 (spell_shaman.cpp:1157-1160), Earthliving
-	// 0x80000 word1 (its own flags [0,524288,0] per SpellClassOptions),
-	// Riptide 0x10 word2 (:356). The union of the 46 Wowhead Modifies
-	// spells' flags is exactly this mask. eff1: ADD_PCT_MODIFIER, DBC
-	// BP +99 (effective +100), MiscValue 3 SPELLMOD_EFFECT1, mask
-	// [0,0,0] — zero mask + family 11 matches EVERY shaman spell (TC
-	// SpellInfo.cpp:1305 IsAffected; Go spellAffectedBySpellFamilyMask),
-	// so +100% to effect-0 value of all shaman spells: heals net 2.0x
-	// * 0.1x = 0.2x (-80%), damage spells 2x effect-0. That is the real
-	// DBC design, not a seed artifact; the Shamanistic-Rage-bit
-	// hypothesis is refuted (30823 absent from the Modifies 46 and
-	// eff1's mask is 0). DurationIndex 21 (-1 infinite) via seed
-	// SpellDuration row 21. DBC ImplicitTarget 6 is overridden by the
-	// C++ explicit self-target (CastSpell(player, ...)), so the seed
-	// keeps targetCaster. RangeIndex 13 (50000y) maps to seed range
-	// 93008; school 0x20 Shadow; CastingTimeIndex 1 Instant.
+	// REAL CLIENT DATA (wago.tools DB2, build 3.4.0.43659, read
+	// 2026-11-13 — 68415 added in Classic 3.4.0 per Wowhead, so
+	// this IS the spell's client data; 3.3.5.12340 is unhosted
+	// anywhere since wow.tools retired May 2025): SpellMisc row
+	// 621919: DurationIndex 21, RangeIndex 13, SchoolMask 0x20
+	// (Shadow), CastingTimeIndex 1 (instant). SpellDuration ID 21:
+	// Duration -1, MaxDuration -1 (permanent — kills the 15s
+	// hypothesis; aura is removed by script, not by expiry).
+	// SpellClassOptions row 66466: family 11 (Shaman), mask 0.
+	// SpellEffect rows 981024/981025: both APPLY_AURA (6),
+	// aura 108 ADD_PCT_MODIFIER, DieSides 1, target 6, BP -91 /
+	// 99 (DBC stores value-1; CalcValue +1 -> -90 / +100, matching
+	// the Wowhead tooltip). eff0 MiscValue 0 SPELLMOD_DAMAGE,
+	// mask [448, 524288, 16] = [0x1C0, 0x80000, 0x10]: LHW 0x80
+	// + Chain Heal 0x100 + Healing Wave 0x40 (word 0, per
+	// spell_shaman.cpp), Earthliving 0x80000 (word 1 — the 6
+	// Earthliving ranks read [0, 524288, 0] on the same build),
+	// Riptide 0x10 (word 2, per spell_shaman.cpp:356). eff1
+	// MiscValue 3 SPELLMOD_EFFECT1, mask [0, 0, 0] — EMPTY, not
+	// the shared heal mask: C++ IsAffected skips the flag check
+	// on an empty mask (SpellInfo.cpp IsAffected), and Go
+	// spellAffectedBySpellFamilyMask does the same, so eff1
+	// applies +100% to effect 0 of EVERY Shaman spell —
+	// Shamanistic Rage 30823's mana-regen effect included.
+	// DELIBERATE DEVIATIONS from the 3.4.0 rows (behavior, not
+	// data): targetA stays 1 (caster/self) — the C++ leg casts
+	// with an explicit self target; real implicit target 6 would
+	// re-resolve through Go's implicit-target legs. RangeIndex
+	// stays synthetic 93008 (50000 yd, same value as real 13);
+	// cast time stays default 0 (instant); attributes unwritten.
 	{id: 68415, durIdx: 21, rangeIdx: 93008, school: schoolShadow, family: familyShaman, effects: [3]effect{
-		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: -90, misc: spellModDamage, targetA: targetCaster, mask: [3]uint32{0x1C0, 0x80000, 0x10}},
-		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: 100, misc: spellModEffect1, targetA: targetCaster, mask: [3]uint32{0, 0, 0}},
+		{effect: effApplyAura, aura: auraAddPctModifier, dieSides: 1, basePoints: -91, misc: spellModDamage, targetA: targetCaster, mask: [3]uint32{0x1C0, 0x80000, 0x10}},
+		{effect: effApplyAura, aura: auraAddPctModifier, dieSides: 1, basePoints: 99, misc: spellModEffect1, targetA: targetCaster, mask: [3]uint32{0, 0, 0}},
 	}},
 }
 
