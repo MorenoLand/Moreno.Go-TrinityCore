@@ -23855,10 +23855,12 @@ func init() {
 	// boss_leviathan_mk_ii (Ulduar, Mimiron phase 1) — ported arm
 	// in lua_scripts/northrend/boss_leviathan_mk_ii.lua: Reset
 	// (NON_ATTACKABLE|NOT_SELECTABLE + react passive + self-cast
-	// FREEZE_ANIM 16245). Combat timers, DamageTaken lethal clamp,
+	// FREEZE_ANIM 16245 + _Reset boss-state NOT_STARTED, alive-gated
+	// and skipped when DONE). Combat timers, DamageTaken lethal clamp,
 	// KilledUnit/MovementInform, DoAction phase machine and the
 	// boss_mimiron / aerial-command / computer / fire-bot arms ported;
-	// vehicle kit / MovePoint legs stay out.
+	// vehicle kit ported (GetVehicleKit + kit:GetPassenger turret kill);
+	// MovePoint via the MoveTo twin + ev28 arrival.
 	RegisterLuaBoss("boss_leviathan_mk_ii", 33432)
 	// Cast-state: pre-loop + in-loop CASTING gates; all pumps defer 500ms on IsCasting.
 	// boss_mimiron (Ulduar, phase-machine controller) — ported arms in

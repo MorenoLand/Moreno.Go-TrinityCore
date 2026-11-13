@@ -82,6 +82,10 @@ local DATA_FIREFIGHTER = 4
 -- instance GUID key for this creature (instance_ulduar.cpp:817).
 local DATA_LEVIATHAN_MK_II = 32
 
+-- ulduar.h:46 BossData: MKII's BossAI _bossId is BOSS_MIMIRON (its
+-- _Reset() sets boss state 10 NOT_STARTED).
+local BOSS_MIMIRON = 10
+
 -- UnitDefines.h:125/149; SetFlag on UNIT_FIELD_FLAGS (59) is
 -- bridged (engine/world/lua_creature_events.go:5056).
 local UNIT_FIELD_FLAGS = 59
@@ -354,10 +358,13 @@ local function leviathanMkIIDoAction(event, creature, action)
 end
 
 -- C++ boss_leviathan_mk_iiAI::Reset (:827-837): BossAI::_Reset
--- (instance boss-state reset) has no bridge and stays out; the
--- creature-local legs port C++-exact, in C++ order: set
--- NON_ATTACKABLE | NOT_SELECTABLE, react passive, self-cast
--- FREEZE_ANIM. The _fireFighter/_setupMine/_setupBomb/_setupRocket
+-- (ScriptedCreature.cpp:499-511) ports the instance boss-state leg
+-- via creature:SetBossState (bridged, lua_creature_events.go:7099;
+-- alive-gated + skipped when DONE, C++-exact); the summons.DespawnAll
+-- half of _Reset stays out (no bridge). The creature-local legs port
+-- C++-exact, in C++ order: set NON_ATTACKABLE | NOT_SELECTABLE, react
+-- passive, self-cast FREEZE_ANIM. The _fireFighter/_setupMine/
+-- _setupBomb/_setupRocket
 -- latch resets ARE modeled (tick 417): Reset re-arms them to the
 -- ctor defaults (false/true/true/true), the write leg the Go
 -- achievement gates (achievement_setup_boom/mine/rocket) read off
@@ -376,6 +383,11 @@ local function leviathanMkIIReset(event, creature)
     -- before the gates read them; the spawn handler sets the ctor
     -- defaults.
     if creature:IsAlive() then
+        -- BossAI::_Reset (ScriptedCreature.cpp:509-510): the boss-state
+        -- leg runs only when alive and the encounter is not DONE.
+        if creature:GetBossState(BOSS_MIMIRON) ~= 3 then
+            creature:SetBossState(BOSS_MIMIRON, 0)
+        end
         creature:SetData(DATA_SETUP_MINE, 1)
         creature:SetData(DATA_SETUP_BOMB, 1)
         creature:SetData(DATA_SETUP_ROCKET, 1)

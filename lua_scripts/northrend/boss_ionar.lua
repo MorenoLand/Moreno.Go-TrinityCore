@@ -391,8 +391,9 @@ local function ionarCombatEnd(event, creature)
     -- C++ Reset (boss_ionar.cpp:114-122): lSparkList.DespawnAll() (the
     -- spark summon list is unmodeled) + Initialize() (flag/timer clears,
     -- covered by cancelTimers) + RemoveFlag(NON_ATTACKABLE |
-    -- NOT_SELECTABLE) (PORTED below; the set side rides the unported
-    -- SpellHit DISPERSE split machine, so the clear is a restore)
+    -- NOT_SELECTABLE) (PORTED below; the set side rides the ported
+    -- SpellHit DISPERSE split machine (ionarSplit, 2026-11-03), so the
+    -- clear is a restore)
     -- + SetControlled(false, UNIT_STATE_ROOT) (SetRooted
     -- bridge, below) + if (!me->IsVisible()) me->SetVisible(true)
     -- (creature:SetVisible bridge, Unit::SetVisible Unit.cpp:8656 —
