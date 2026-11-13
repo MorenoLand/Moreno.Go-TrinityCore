@@ -95,6 +95,7 @@ local SPELL_SHADE_SOUL_CHANNEL = 40401 -- boss_shade_of_akama.cpp:59
 local SPELL_SHADE_SOUL_CHANNEL_2 = 40520 -- boss_shade_of_akama.cpp:60
 
 local ENTRY_ASHTONGUE_CHANNELER = 23421
+local ENTRY_ASHTONGUE_BROKEN = 23319 -- boss_shade_of_akama.cpp:85
 
 -- Declared here (rather than in the akama section below) so shadeDied
 -- can sweep it: Lua locals scope from their declaration line.
@@ -261,16 +262,46 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+-- C++ npc_akama_shade::JustSummoned (boss_shade_of_akama.cpp:377-380):
+-- every summon is tracked in _summons. Akama's only summons are the
+-- 18 Ashtongue Broken from SummonBrokens (:438-451); tracked here
+-- per Akama GUID (marli precedent) and consumed by the JustDied /
+-- Reset DespawnAll arms below. (The npc_creature_generator_akama
+-- JustSummoned at :613 belongs to the unregistered spawner AI — its
+-- wave spawns stay out with the spawn machine.)
+local akamaSummons = {}
+
+local function akamaShadeJustSummoned(event, creature, summoned)
+    local guid = creature:GetGUIDLow()
+    local tracked = akamaSummons[guid]
+    if tracked == nil then
+        tracked = {}
+        akamaSummons[guid] = tracked
+    end
+    tracked[summoned:GetGUIDLow()] = summoned
+end
+
 -- C++ npc_akama_shade::JustDied (boss_shade_of_akama.cpp:527-534):
--- Talk(SAY_DEAD 4), unconditional — the sjonnir JustDied-Talk
--- precedent. The _summons.DespawnAll() and the cross-creature
--- EnterEvadeMode(EVADE_REASON_OTHER) on the shade ride the
--- instance/summon bridges — documented-only.
+-- _summons.DespawnAll() then Talk(SAY_DEAD 4), unconditional — the
+-- sjonnir JustDied-Talk precedent. The DespawnAll arm is PORTED
+-- below via the ev19-tracked brokens (2026-11-13); the
+-- cross-creature EnterEvadeMode(EVADE_REASON_OTHER) on the shade
+-- rides the instance bridge — documented-only.
 local SAY_DEAD = 4
 
 local function akamaShadeDied(event, creature, killer)
     akamaInCombat[creature:GetGUIDLow()] = nil
     cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    local tracked = akamaSummons[guid]
+    if tracked ~= nil then
+        for _, broken in pairs(tracked) do
+            if broken:IsAlive() then
+                broken:Despawn()
+            end
+        end
+        akamaSummons[guid] = nil
+    end
     creature:Talk(SAY_DEAD)
 end
 
@@ -290,6 +321,21 @@ local function akamaShadeReset(event, creature)
     akamaInCombat[creature:GetGUIDLow()] = nil
     cancelTimers(creature:GetGUIDLow())
     if creature:IsAlive() then
+        -- C++ npc_akama_shade::Reset -> Initialize()
+        -- (boss_shade_of_akama.cpp:362-366): _summons.DespawnAll(),
+        -- alive-gated like the stealth cast below (C++ Reset never
+        -- runs on death) — PORTED 2026-11-13 via the ev19-tracked
+        -- brokens.
+        local guid = creature:GetGUIDLow()
+        local tracked = akamaSummons[guid]
+        if tracked ~= nil then
+            for _, broken in pairs(tracked) do
+                if broken:IsAlive() then
+                    broken:Despawn()
+                end
+            end
+            akamaSummons[guid] = nil
+        end
         creature:SetFaction(1820)
         creature:CastSpell(creature, SPELL_STEALTH)
         if creature:GetBossState(2) ~= 3 then -- DATA_SHADE_OF_AKAMA != DONE
@@ -382,6 +428,7 @@ end
 
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 14, akamaShadeSpellHit)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
+RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 19, akamaShadeJustSummoned)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 9, akamaShadeDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)
 RegisterCreatureGossipEvent(ENTRY_AKAMA_SHADE, 2, akamaShadeGossipSelect)

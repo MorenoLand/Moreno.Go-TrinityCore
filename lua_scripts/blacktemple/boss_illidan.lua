@@ -145,8 +145,10 @@
 -- 72s cancel-demon timer is kept, C++-exact) / else start phase 4:
 -- cancel the phase-1/2/3 timers, triggered self-cast shadow prison
 -- 40647 (the REACT_PASSIVE arm is PORTED 2026-10-20 —
--- creature:SetReactState; the flag and summon-DoAction arms have
--- no bridges),
+-- creature:SetReactState; the flag arm is PORTED in startPhase4
+-- and the summon-DoAction arms are PORTED 2026-11-13 via the
+-- ev19-tracked summons list — the stale "no bridge" claim is
+-- retracted),
 -- Talk(SAY_ILLIDAN_SHADOW_PRISON) 500ms, non-triggered self-cast
 -- summon maiev 40403 9s (cast kept; the creature cast path
 -- dispatches SPELL_EFFECT_SUMMON (creatureEffectSummonType),
@@ -343,6 +345,7 @@ local ENTRY_DB_TARGET = 23070
 local ENTRY_MAIEV = 23197
 local ENTRY_BLADE_OF_AZZINOTH = 22996
 local ENTRY_PARASITIC_SHADOWFIEND = 23498 -- black_temple.h:110
+local ENTRY_ILLIDARI_ELITE = 23226 -- black_temple.h:106
 local SPELL_SUMMON_TEAR_OF_AZZINOTH = 39855 -- boss_illidan.cpp:109
 local ENTRY_DEMON_FIRE = 23069
 local ENTRY_BLAZE = 23259
@@ -505,10 +508,51 @@ local function getIllidanState(guid)
     local state = illidanState[guid]
     if state == nil then
         state = { phase = PHASE_1, dead = false, isDemon = false,
-                  pillarIndex = 0, flameCount = 0 }
+                  pillarIndex = 0, flameCount = 0, minionsCount = 0 }
         illidanState[guid] = state
     end
     return state
+end
+
+-- C++ boss_illidan_stormrage::JustSummoned (boss_illidan.cpp:503-509):
+-- every summon is tracked in the BossAI summons list (the
+-- shadowfiend branch and the else branch both end in
+-- summons.Summon). Tracked here per boss GUID (marli precedent:
+-- summoned object keyed by GUIDLow); consumed by the phase-4 /
+-- resume DoAction deliveries and the evade DespawnAll in
+-- illidanCleanup below. Declared here so startPhase4 /
+-- onResumeCombat4 (defined below) close over the live table.
+local illidanSummons = {}
+
+local function illidanJustSummoned(event, creature, summoned)
+    local guid = creature:GetGUIDLow()
+    local tracked = illidanSummons[guid]
+    if tracked == nil then
+        tracked = {}
+        illidanSummons[guid] = tracked
+    end
+    tracked[summoned:GetGUIDLow()] = summoned
+end
+
+-- C++ boss_illidan_stormrage::SummonedCreatureDies
+-- (boss_illidan.cpp:558-562): an illidari elite death decrements
+-- _minionsCount, the SummonMinions refill count (:706). The elite
+-- summon itself stays out (the summon-side AttackStart /
+-- CanAIAttack gate — see header), so the counter never rises above
+-- 0 here and the decrement is clamped; the dead summon leaves the
+-- tracked list either way.
+local function illidanSummonedCreatureDies(event, creature, summoned, killer)
+    local guid = creature:GetGUIDLow()
+    local tracked = illidanSummons[guid]
+    if tracked ~= nil then
+        tracked[summoned:GetGUIDLow()] = nil
+    end
+    if summoned:GetEntry() == ENTRY_ILLIDARI_ELITE then
+        local state = getIllidanState(guid)
+        if state.minionsCount > 0 then
+            state.minionsCount = state.minionsCount - 1
+        end
+    end
 end
 
 -- Forward declarations: armPhase1's timer closures reference
@@ -1067,9 +1111,20 @@ local function startPhase4(creature, guid)
     -- (GROUP_PHASE_ALL) survives, C++-exact.
     cancelAirPhase(guid)
     creature:CastSpell(creature, SPELL_SHADOW_PRISON, true)
+    -- C++ boss_illidan.cpp:625: summons.DoAction(ACTION_START_PHASE_4,
+    -- EntryCheckPredicate(NPC_PARASITIC_SHADOWFIEND)) — the fiends go
+    -- passive and stop attacking (npc_parasitic_shadowfiend::DoAction,
+    -- boss_illidan.cpp:1400-1404), delivered here to the ev19-tracked
+    -- fiends (PORTED 2026-11-13; the stale "no bridge" claim is
+    -- retracted — tracked objects resolve directly, marli precedent).
+    for _, fiend in pairs(illidanSummons[guid] or {}) do
+        if fiend:GetEntry() == ENTRY_PARASITIC_SHADOWFIEND and fiend:IsAlive() then
+            fiend:SetReactState(0) -- REACT_PASSIVE
+            fiend:AttackStop()
+        end
+    end
     -- C++ boss_illidan.cpp:626: me->SetReactState(REACT_PASSIVE)
-    -- (ACTION_START_PHASE_4: the summons.DoAction co-arm stays out
-    -- on no-bridge grounds; the flip fires unconditionally here).
+    -- (ACTION_START_PHASE_4; the flip fires unconditionally here).
     creature:SetReactState(0) -- REACT_PASSIVE
     -- C++ boss_illidan.cpp:627: me->AttackStop(), in C++ arm order
     -- between the react flip and the flag set.
@@ -1149,6 +1204,20 @@ onResumeCombat4 = function(creature, guid)
     creature:RemoveFlag(59, 0x2000000)
     creature:SetReactState(2) -- REACT_AGGRESSIVE
     armPhaseSchedule(creature, guid, PHASE_4)
+    -- C++ boss_illidan.cpp:1002: summons.DoAction(ACTION_RESUME_COMBAT,
+    -- EntryCheckPredicate(NPC_PARASITIC_SHADOWFIEND)) — the fiends go
+    -- aggressive again (npc_parasitic_shadowfiend::DoAction,
+    -- boss_illidan.cpp:1405-1410: 2s then REACT_AGGRESSIVE +
+    -- DoZoneInCombat), delivered here to the ev19-tracked fiends
+    -- (PORTED 2026-11-13).
+    schedule(guid, "resumeFiends", 2000, function()
+        for _, fiend in pairs(illidanSummons[guid] or {}) do
+            if fiend:GetEntry() == ENTRY_PARASITIC_SHADOWFIEND and fiend:IsAlive() then
+                fiend:SetReactState(2) -- REACT_AGGRESSIVE
+                fiend:DoZoneInCombat()
+            end
+        end
+    end)
 end
 
 -- C++ EVENT_PHASE_4_DELAYED (12s, GROUP_PHASE_ALL): the delayed
@@ -1453,6 +1522,23 @@ local function illidanCleanup(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     illidanState[guid] = nil
+    -- C++ boss_illidan_stormrage::EnterEvadeMode (boss_illidan.cpp:565-570)
+    -- and BossAI::_Reset (ScriptedCreature.cpp): summons.DespawnAll()
+    -- on evade (event 2) and on reset (event 23) — delivered here to
+    -- the ev19-tracked summons (PORTED 2026-11-13). Event 4 (death)
+    -- only drops the table: C++ JustDied (:649-651) never despawns
+    -- summons, so the tracked creatures live on.
+    local tracked = illidanSummons[guid]
+    if tracked ~= nil then
+        if event == 2 or event == 23 then
+            for _, summoned in pairs(tracked) do
+                if summoned:IsAlive() then
+                    summoned:Despawn()
+                end
+            end
+        end
+        illidanSummons[guid] = nil
+    end
     if event == 2 or event == 23 then
         -- C++ boss_illidan_stormrage::Reset (boss_illidan.cpp:479-480):
         -- me->SetControlled(false, UNIT_STATE_ROOT) — ports via
@@ -1503,6 +1589,8 @@ RegisterCreatureEvent(ENTRY_ILLIDAN, 4, illidanCleanup)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 38, illidanDoAction)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 9, illidanDamageTaken)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 23, illidanCleanup)
+RegisterCreatureEvent(ENTRY_ILLIDAN, 19, illidanJustSummoned)
+RegisterCreatureEvent(ENTRY_ILLIDAN, 21, illidanSummonedCreatureDies)
 
 --
 -- Akama (23089)

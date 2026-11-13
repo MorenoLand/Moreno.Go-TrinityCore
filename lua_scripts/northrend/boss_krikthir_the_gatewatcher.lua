@@ -42,6 +42,9 @@ local DATA_GATEWATCHER_GREET = 8 -- azjol_nerub.h ANDataTypes
 local ACTION_GATEWATCHER_GREET = 1 -- azjol_nerub.h InstanceActions
 local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 local SAY_PREFIGHT = 4 -- boss_krikthir_the_gatewatcher.cpp:124
+local SAY_SLAY = 1 -- boss_krikthir_the_gatewatcher.cpp:121
+local SAY_SEND_GROUP = 5 -- boss_krikthir_the_gatewatcher.cpp:125
+local SPELL_SUBBOSS_AGGRO_TRIGGER = 52343 -- boss_krikthir_the_gatewatcher.cpp:67
 local NPC_WATCHER_NARJIL = 28729 -- azjol_nerub.h:50
 local NPC_WATCHER_GASHRA = 28730 -- azjol_nerub.h:51
 local NPC_WATCHER_SILTHIK = 28731 -- azjol_nerub.h:52
@@ -139,9 +142,40 @@ local function watcherSpawned(event, creature)
     creature:SetGuidData(WATCHER_GUID_DATA[creature:GetEntry()])
 end
 
+-- C++ boss_krik_thir::KilledUnit (boss_krikthir_the_gatewatcher.cpp:166-170):
+-- Talk(SAY_SLAY 1) when the victim is a player (event 3, ionar precedent).
+local function krikthirKilledUnit(event, creature, victim)
+    if victim and victim:GetObjectType() == "Player" then
+        creature:Talk(SAY_SLAY)
+    end
+end
+
+-- C++ boss_krik_thir::SpellHit (boss_krikthir_the_gatewatcher.cpp:297-301)
+-- and npc_gatewatcher_petAI::SpellHit (:384-387, base of the three
+-- watchers): SPELL_SUBBOSS_AGGRO_TRIGGER 52343 -> DoZoneInCombat.
+local function krikthirSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_SUBBOSS_AGGRO_TRIGGER then
+        creature:DoZoneInCombat()
+    end
+end
+
+-- C++ boss_krik_thir::SpellHitTarget (boss_krikthir_the_gatewatcher.cpp:303-307):
+-- SPELL_SUBBOSS_AGGRO_TRIGGER 52343 -> Talk(SAY_SEND_GROUP 5).
+local function krikthirSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_SUBBOSS_AGGRO_TRIGGER then
+        creature:Talk(SAY_SEND_GROUP)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_KRIKTHIR, 5, krikthirSpawned)
 RegisterCreatureEvent(ENTRY_KRIKTHIR, 4, krikthirDied)
 RegisterCreatureEvent(ENTRY_KRIKTHIR, 38, krikthirDoAction)
+RegisterCreatureEvent(ENTRY_KRIKTHIR, 3, krikthirKilledUnit)
+RegisterCreatureEvent(ENTRY_KRIKTHIR, 14, krikthirSpellHit)
+RegisterCreatureEvent(ENTRY_KRIKTHIR, 15, krikthirSpellHitTarget)
+RegisterCreatureEvent(NPC_WATCHER_NARJIL, 14, krikthirSpellHit)
+RegisterCreatureEvent(NPC_WATCHER_GASHRA, 14, krikthirSpellHit)
+RegisterCreatureEvent(NPC_WATCHER_SILTHIK, 14, krikthirSpellHit)
 RegisterCreatureEvent(NPC_WATCHER_NARJIL, 4, watcherDied)
 RegisterCreatureEvent(NPC_WATCHER_GASHRA, 4, watcherDied)
 RegisterCreatureEvent(NPC_WATCHER_SILTHIK, 4, watcherDied)
