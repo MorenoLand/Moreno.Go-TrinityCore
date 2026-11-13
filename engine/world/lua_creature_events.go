@@ -3695,6 +3695,57 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.syncCreatureVehiclePassengers(m)
 		return nil, nil
 	}
+	// EnterVehicle is Unit::EnterVehicle (Unit.cpp:13073-13079) for
+	// creatures: C++ casts VEHICLE_SPELL_RIDE_HARDCODED on the base,
+	// whose SPELL_AURA_CONTROL_VEHICLE application runs _EnterVehicle
+	// (Unit.cpp:13080-13100) — a dead passenger refuses, a passenger
+	// seated on another vehicle exits it first, and the same-vehicle
+	// same-seat re-entry is a no-op. The Go runtime has no ride-aura
+	// model, so the boarding rides the kit-level funnel
+	// luaVehicleAddPassenger (lua_vehicle.go, the Vehicle::AddPassenger
+	// twin): the exit-first, occupied-seat, ev5 and relocation legs
+	// live there, shared with Vehicle:AddPassenger. The vehicle
+	// argument is a unit object or GUID (the Kill idiom); the optional
+	// seat defaults to -1, first available (the C++ seatId default).
+	// A vehicle with no kit — the base's template VehicleId never
+	// materialized one (the motionFor/combat kit gates require a
+	// Vehicle.dbc row) — is a no-op, matching C++ when the base has
+	// no vehicle kit. Eluna exposes no EnterVehicle on Unit
+	// (LuaFunctions.cpp registers GetVehicleKit/IsOnVehicle only),
+	// so this is a Go-surface bridge on the C++ Unit method.
+	methods["EnterVehicle"] = func(ctx context.Context, args []any) ([]any, error) {
+		if motion == nil {
+			return nil, nil
+		}
+		if len(args) < 1 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		vehicleGUID := luaObjectGUID(args[0])
+		if vehicleGUID == 0 {
+			return nil, fmt.Errorf("argument 1 must be a unit")
+		}
+		seat := int8(-1)
+		if len(args) > 1 {
+			var err error
+			seat, err = luaVehicleSeatArg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if pm := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID); pm == nil || pm.Health == 0 {
+			return nil, nil
+		}
+		mapID, instanceID := motion.Map, motion.InstanceID
+		if vm := s.findCreatureMotion(motion.Map, motion.InstanceID, vehicleGUID); vm != nil {
+			mapID, instanceID = vm.Map, vm.InstanceID
+		} else if vs := s.findSessionByGUID(vehicleGUID); vs != nil && vs.player != nil {
+			mapID, instanceID = vs.player.Map, vs.player.InstanceID
+		} else {
+			return nil, nil
+		}
+		s.luaVehicleAddPassenger(ctx, &luaVehicleRef{server: s, mapID: mapID, instanceID: instanceID, baseGUID: vehicleGUID}, motion.GUID, seat)
+		return nil, nil
+	}
 	// Relocate is Object::Relocate (Object.h): a pure position write
 	// with no packet — the client learns the new coordinates from the
 	// next movement broadcast (the Kologarn stone-grip leg's MoveFall

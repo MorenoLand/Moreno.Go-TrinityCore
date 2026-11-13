@@ -24,8 +24,11 @@
 -- phases; each transform-back adds a fresh concurrent 15s cycle —
 -- C++ ScheduleEvent never dedups) / hatch spider egg 24082 30s then
 -- {12s,17s} (non-triggered self-cast; only the re-arm cycle is modeled
--- — no summon model, so eggs never hatch into spiders; the cycle is
--- canceled at transform and re-armed at transform-back, C++-exact).
+-- — DBC verdict 2026-11-13: 24082 is SPELL_EFFECT_ACTIVATE_OBJECT
+-- (86), TARGET_GAMEOBJECT_NEARBY_ENTRY (40), Open (MiscValue 8) per
+-- TDB spell_dbc — NOT a summon, so the eggs hatch by GO Use, not by
+-- spawning; the cycle is canceled at transform and re-armed at
+-- transform-back, C++-exact).
 -- Transform: Talk(SAY_TRANSFORM=1),
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (PORTED 2026-10-24),
@@ -51,9 +54,14 @@
 -- Deviations from C++: no instance-script model — boss admission via
 -- the luaBossAI shim (a no-op BossAI slot; the SetBossState legs are
 -- ported below via creature:SetBossState, bridge live 2026-11-05, and
--- the GetZulGurubAI bookkeeping stays out); no summon model — the HATCH_EGGS 24083 AoE and the
--- HATCH_SPIDER_EGG 24082 casts spawn nothing (only their re-arm cycles
--- are modeled); the Reset egg Respawn scan is PORTED (marliReset,
+-- the GetZulGurubAI bookkeeping stays out); no hatch model — the HATCH_EGGS 24083 AoE and the
+-- HATCH_SPIDER_EGG 24082 casts are not issued (only their re-arm cycles
+-- are modeled): DBC verdict 2026-11-13, 24082 is ACTIVATE_OBJECT/Open on
+-- nearby egg GOs (TDB spell_dbc; 24083 has no override row), and the Go
+-- Open leg needs a player owner session (boss_ai.go:8337) plus Spell.dbc
+-- data — an ownerless boss caster no-ops on both counts, so the eggs
+-- never hatch until that chain lands (goober Use -> summon 15041 ->
+-- egg JustSummoned forward); the Reset egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
 -- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
 -- the charge "not aggro leader" exclusion is the Random,1 skip-first
@@ -64,8 +72,10 @@
 -- movement model — the charge AttackStart arm is skipped (cast lands,
 -- the boss keeps its current victim); the summoned-spider
 -- JustSummoned AttackStart-random arm has no bearer (nothing ever
--- summons); spell_hatch_spiders (SpellScript target-select sort/
--- resize) is a SpellScript — not modeled (standing gap).
+-- hatches the eggs yet); spell_hatch_spiders (SpellScript target-select sort/
+-- resize) is a SpellScript — not modeled (standing gap; note the
+-- script hooks TARGET_GAMEOBJECT_DEST_AREA (52) while the DBC target
+-- is NEARBY_ENTRY (40), so the hook likely never fires in C++ either).
 
 local ENTRY_MARLI = 14510
 local ENTRY_SPAWN = 15041
@@ -196,9 +206,11 @@ end
 
 -- C++ EVENT_HATCH_SPIDER_EGG: non-triggered self-cast 24082; re-arm
 -- {12s,17s}. Phase-all EXCEPT the transform CancelEvent kills the
--- cycle (re-armed fresh {12s,17s} at transform-back, C++-exact). No
--- summon model, so the cast itself has no bearer — only the re-arm
--- cycle is modeled (jeklik six-bat convention).
+-- cycle (re-armed fresh {12s,17s} at transform-back, C++-exact). The
+-- cast itself is not issued — 24082 hatches by GO activation, not
+-- summoning (see header DBC verdict), and the Go Open leg no-ops for
+-- an ownerless boss caster — only the re-arm cycle is modeled
+-- (jeklik six-bat convention).
 local function onHatchEgg(creature, guid)
     schedule(guid, "hatchegg", math.random(12000, 17000), function()
         onHatchEgg(creature, guid)
@@ -332,8 +344,8 @@ onTransformBack = function(creature, guid)
 end
 
 -- C++ EVENT_SPAWN_START_SPIDERS (1s after engage): Talk
--- (SAY_SPIDER_SPAWN), the 24083 AoE hatch has no summon-model bearer
--- (skipped); arm aspect 12s, transform 45s (duplicate skipped — inert),
+-- (SAY_SPIDER_SPAWN), the 24083 AoE hatch has no GO-activation bearer
+-- (skipped — see header DBC verdict); arm aspect 12s, transform 45s (duplicate skipped — inert),
 -- poison volley 15s, hatch egg 30s; phase -> 2.
 local function onSpawnStartSpiders(creature, guid)
     creature:Talk(SAY_SPIDER_SPAWN)

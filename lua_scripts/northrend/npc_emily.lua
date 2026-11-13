@@ -37,9 +37,10 @@
 -- Emily MoveTo + Mrfloppy SetDeathState(ALIVE 0) + SetHealth(max) +
 -- MoveFollow + Talk(7), wp24 GroupEventHappens(12027) + Talk(12,
 -- player) + SetWalk(false), wp25 Talk(8), wp27 double
--- DespawnOrUnsummon (DisappearAndDie twin). STILL BLOCKED: waypoint 19
--- EnterVehicle has no bridge (no methods["EnterVehicle"] in the
--- engine) — comment-only branch in the handler. OnQuestAccept Talk
+-- DespawnOrUnsummon (DisappearAndDie twin). Waypoint 19 EnterVehicle
+-- is PORTED below on the creature:EnterVehicle bridge (live
+-- 2026-11-13; fires once the deployment's Vehicle.dbc carries the
+-- ravenous worg's VehicleId 35 kit row — TDB-verified). OnQuestAccept Talk
 -- SAY_QUEST_ACCEPT 11 is PORTED below (event 31), including the
 -- Mrfloppy MoveFollow + StartEscort + MoveWaypoint legs
 -- (zone_grizzly_hills.cpp:187-196).
@@ -264,12 +265,21 @@ local function emilyWaypointReached(event, creature)
             creature:CastSpell(mrfloppy, SPELL_MRFLOPPY)
         end
     elseif wp == 19 then
-        -- :119-128 BLOCKED: Mrfloppy:EnterVehicle(RWORG), gated on
-        -- HasAura(47184) — the gate is checkable (creature:HasAura)
-        -- but EnterVehicle has no creature bridge (no
-        -- methods["EnterVehicle"] in the engine; only the debug
-        -- command + vehicle.go internals). Nothing fires here until
-        -- that bridge lands.
+        -- :119-128: Mrfloppy boards the ravenous worg, gated on the
+        -- vehicle aura (47184) — creature:EnterVehicle is the
+        -- Unit::EnterVehicle bridge (lua_creature_events.go); the
+        -- worg's kit comes from its template VehicleId 35
+        -- (TDB-verified), so the leg no-ops until the deployment's
+        -- Vehicle.dbc carries row 35.
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            if mrfloppy:HasAura(SPELL_MRFLOPPY) then
+                local rworg = getRavenousWorg(creature)
+                if rworg ~= nil then
+                    mrfloppy:EnterVehicle(rworg)
+                end
+            end
+        end
     elseif wp == 20 then
         -- :129-132: ravenous worg plays the wound-critical emote
         -- (PerformEmote is the HandleEmoteCommand twin).

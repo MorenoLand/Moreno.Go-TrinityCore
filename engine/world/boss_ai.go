@@ -15470,11 +15470,11 @@ func init() {
 	// (event 31, fires live). The WaypointReached escort cinematic
 	// Talk chain (SAY_WORGHAGGRO1 0 / SAY_WORGRAGGRO3 2 / SAY_VICTORY2
 	// 6 / SAY_VICTORY3 7 / SAY_VICTORY4 8 / SAY_QUEST_COMPLETE 12) +
-	// SummonCreature / DoCast / faction / MovePoint legs is UNPORTED,
-	// not bridge-blocked (2026-11-13): StartEscort / MoveWaypoint /
-	// OnReachWP ev6 / MoveFollow / SetFaction / GroupEventHappens /
-	// Kill / ExitVehicle / SetDeathState are all live — only
-	// waypoint-19 EnterVehicle has no bridge. Entry
+	// SummonCreature / DoCast / faction / MovePoint legs is PORTED
+	// in npc_emily.lua (2026-11-13 follow-up strip 2; waypoint-19
+	// EnterVehicle ported this tick on the new creature:EnterVehicle
+	// bridge — fires once the deployment's Vehicle.dbc carries the
+	// worg's VehicleId 35 kit row). Entry
 	// 26588 verifiable from the C++ Floppy enum — see
 	// lua_scripts/northrend/npc_emily.lua. npc_mrfloppy
 	// (JustEngagedWith cross-creature Emily Talk only — bridged:
@@ -15496,7 +15496,7 @@ func init() {
 	// 27570 DB-verified), npc_lake_frog (EVENT_LAKEFROG_1..5 chain +
 	// ReceiveEmote ev8 + gossip arms — all PORTED in
 	// lua_scripts/northrend/zone_grizzly_hills.lua; the kissed-frog
-	// MoveFollow leg stays unported), npc_rocket_propelled_warhead
+	// MoveFollow leg is PORTED 2026-11-13 follow-up strip 2), npc_rocket_propelled_warhead
 	// (VehicleAI PassengerBoarded / DoAction + spell_z_check 61678 /
 	// spell_warhead_fuse 49181 — ported 2026-11-05 in
 	// lua_scripts/northrend/npc_rocket_propelled_warhead.lua:

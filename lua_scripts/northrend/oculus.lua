@@ -465,6 +465,8 @@ local function stopTimeApply(event, aura, target)
     end
 end
 
+RegisterAuraEvent(SPELL_STOP_TIME, 2, stopTimeApply)
+
 local SPELL_EVASIVE_MANEUVERS = 50240 -- oculus.cpp:57
 local SPELL_EVASIVE_CHARGES = 50241 -- oculus.cpp:56
 local SPELL_TEMPORAL_RIFT = 49592 -- oculus.cpp:71
