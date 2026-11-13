@@ -61,6 +61,19 @@
 --   leg stays out (rupture BonusDuration via GetScript,
 --   unbridged). DORMANT until Spell.dbc ships the 56800 proc
 --   entry.
+-- PORTED (census rows 729-760, RegisterAuraEvent OnProc = 6):
+--   spell_rog_quick_recovery (spell_rogue.cpp:646-685, census row
+--   751): aura 31244. PreventDefaultAction (the true return); the
+--   proc spell's power cost (player GetSpellPowerCost, the
+--   CalcPowerCost twin) times the effect amount pct is cast as
+--   Quick Recovery Energy 31663 on the actor (the C++ nil-target
+--   self-cast), triggered, BP0 = the amount. A proc with no event
+--   spell or a zero amount casts nothing. Player surface only:
+--   GetSpellPowerCost has no creature twin, and C++ carries no
+--   npcbot leg here. The tick-294/298 stay-out ("no CalcPowerCost
+--   bridge") is superseded by the GetSpellPowerCost bridge.
+--   DORMANT until Spell.dbc ships the 31244 proc entry and the
+--   31663 + proc-spell cost rows.
 -- STAY-OUT (tick 294, re-verified tick 298 against current
 --   runtime): blade_flurry (13877/33735/51211/65956, census rows
 --   741-744; census hook label DoEffectCalcAmount is WRONG, real
@@ -85,10 +98,6 @@
 --   positive (SpellInfo.cpp line numbers in comments).
 --   nerves_of_steel (31130, row 749): CalcAmount + OnEffectAbsorb;
 --   no absorb hook. Engine work.
---   quick_recovery (31244, row 751): OnEffectProc DUMMY, but the
---   arm needs the proc spell's power cost (CalcPowerCost); ev6
---   carries no proc-spell object (glyph_of_arcane_shot
---   precedent in spell_hunter.lua). Engine work.
 --   rupture (1943, row 752): CalcAmount (AP x combo points) +
 --   AfterEffectApply reapply reset; no CalcAmount bridge and no
 --   GetTotalAttackPowerValue bridge; the REAPPLY-only leg is
@@ -133,6 +142,8 @@ local SPELL_ROGUE_HONOR_AMONG_THIEVES_R3 = 51701
 local SPELL_ROGUE_TURN_THE_TABLES = 51627
 local SPELL_ROGUE_CHEAT_DEATH = 31228 -- spell_rogue.cpp:109
 local SPELL_ROGUE_CHEAT_DEATH_COOLDOWN = 31231 -- spell_rogue.cpp:39
+local SPELL_ROGUE_QUICK_RECOVERY = 31244 -- spell_rogue.cpp:645 (class spell_rog_quick_recovery)
+local SPELL_ROGUE_QUICK_RECOVERY_ENERGY = 31663 -- spell_rogue.cpp:55
 
 local SPELL_AURA_MOD_STALKED = 68
 
@@ -345,3 +356,36 @@ local function cheatDeathAbsorb(event, aura, target, damage, absorbAmount)
 end
 
 RegisterAuraEvent(SPELL_ROGUE_CHEAT_DEATH, 9, cheatDeathAbsorb)
+
+-- C++ spell_rog_quick_recovery_AuraScript::HandleProc
+-- (spell_rogue.cpp:651-685): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction (the true return); the proc spell's power
+-- cost (player GetSpellPowerCost, the CalcPowerCost twin) times the
+-- effect amount pct is cast as Quick Recovery Energy 31663 on the
+-- actor (the C++ nil-target self-cast), triggered, BP0 = the amount.
+-- A proc with no event spell (melee/kill procs) or a zero amount
+-- casts nothing. Player surface only: GetSpellPowerCost has no
+-- creature twin, and C++ carries no npcbot leg here. DORMANT until
+-- Spell.dbc ships the 31244 proc entry and the 31663 + proc-spell
+-- cost rows.
+local function quickRecoveryProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if actor == nil or actor:GetTypeId() ~= 4 then
+        return true
+    end
+    if procEvent == nil then
+        return true
+    end
+    local procSpellId = procEvent:GetSpellId()
+    if procSpellId == nil or procSpellId == 0 then
+        return true
+    end
+    local cost = actor:GetSpellPowerCost(procSpellId)
+    local amount = math.floor(cost * aura:GetAmount() / 100)
+    if amount <= 0 then
+        return true
+    end
+    actor:CastCustomSpell(actor, SPELL_ROGUE_QUICK_RECOVERY_ENERGY, true, amount)
+    return true
+end
+
+RegisterAuraEvent(SPELL_ROGUE_QUICK_RECOVERY, 6, quickRecoveryProc)

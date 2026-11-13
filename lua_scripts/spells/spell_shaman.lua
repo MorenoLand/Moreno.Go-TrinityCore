@@ -54,7 +54,8 @@
 --   (spell_shaman.cpp:169-180): EFFECT_0 DUMMY. Per hit unit the caster
 --   casts 52752 triggered with BP0 = GetEffectValue(). The FilterTargets
 --   arm (lowest-health-pct raid target only, when 2+ targets) has no Go
---   hook. The ancestral awakening aura proc arm stays out.
+--   hook. The ancestral awakening aura proc arm is PORTED below
+--   (ev6, census row 758).
 --   spell_sha_astral_shift::Absorb (spell_shaman.cpp:224-231): the
 --   SCHOOL_ABSORB leg for 51474, gated on the stun/fear/silence flags
 --   (stun also needs a stun-mechanic aura); the CalculateAmount -1 pool
@@ -141,8 +142,9 @@
 --
 -- PORTED (census rows 758-789, RegisterAuraEvent OnProc = 6,
 --   RegisterSpellEvent OnEffectHitTarget = 5): supersedes the tick-295
---   closure for earth shield, lightning shield, healing stream totem,
---   and mana spring totem (re-verified against the current runtime):
+--   closure for ancestral awakening, earth shield, lightning shield,
+--   healing stream totem, and mana spring totem (re-verified against
+--   the current runtime):
 --   spell_sha_earth_shield::HandleProc (spell_shaman.cpp:437-447):
 --   EFFECT_0 DUMMY, rank 1 (974) only. On proc the holder self-casts
 --   Earth Shield Heal (379), triggered, BP0 = the effect amount.
@@ -153,6 +155,19 @@
 --   damage chain's first rank, not the aura. On proc the attacker casts
 --   the rank-matched damage spell (aura:GetSpellWithRank(26364)) on the
 --   holder, triggered.
+--   spell_sha_ancestral_awakening::HandleProc
+--   (spell_shaman.cpp:105-143, census row 758): EFFECT_0 DUMMY.
+--   PreventDefaultAction (the true return); a nil/zero heal returns;
+--   the actor casts the dummy 52759 on itself (the C++ nil-target
+--   cast), triggered, BP0 = pct of the heal by the effect amount.
+--   Direct heals only (no periodic-heal proc path forwards a heal
+--   to ev6); the 52759 lowest-health-only FilterTargets arm is
+--   unmodeled on the player path (pre-existing Go deviation,
+--   inherited); the creature path has no 52759 dummy twin. The
+--   tick-295 stay-out ("ev6 forwards damage only") is superseded:
+--   fireAuraProc passes procEvent with GetHeal (lua_aura.go:1273).
+--   DORMANT until Spell.dbc ships the 51556 proc entry and the
+--   52759/52752 rows.
 --   spell_sha_healing_stream_totem::HandleDummy
 --   (spell_shaman.cpp:1056-1085): all 9 ranks, EFFECT_0 DUMMY. Each hit
 --   unit is healed by 52042 with BP0 = the effect value, raised by the
@@ -168,16 +183,17 @@
 --   spell_ranks data (not in-tree) to resolve.
 --
 -- STAY OUT (census rows 758-789, verified against the current runtime):
---   758 ancestral_awakening aura arm — ev6 forwards damage only;
---   procEventInfo.heal exists engine-side (procs.go:1919) but
---   fireAuraProc never passes it (lua_aura.go:918). The 52759 proc arm
---   is Go-ported (spells.go:28452, 53025); FilterTargets has no
---   player-path hook (runtime.go, OnObjectAreaTargetSelect).
+--   758 ancestral_awakening aura arm: PORTED below (ev6, this tick);
+--   the tick-295 stay-out is superseded by the procEvent GetHeal
+--   bridge. The 52759 proc arm is Go-ported (spells.go:28452,
+--   53025); FilterTargets has no player-path hook (runtime.go,
+--   OnObjectAreaTargetSelect).
 --   759 astral_shift_aura — DoCheckProc only; ev6 carries no event
 --   spell info / mechanic mask, and Lua has no CheckProc hook.
 --   760 chain_heal — GetHitHeal/SetHitHeal have no Go model
 --   (runtime.go); the Riptide leg needs the family-flag GetAuraEffect
---   overload (unbridged) and the player path fires no ev5.
+--   overload (unbridged). (The old "player path fires no ev5" note
+--   was wrong — the player path fires ev5 per effect/target.)
 --   762 earthliving_weapon — CheckProc-only; GetCastItem and the proc
 --   attack-type mask are unbridged, so the roll-only twin would
 --   over-fire on off-hand / unenchanted attacks.
@@ -591,6 +607,8 @@ for _, spellId in ipairs(SPELL_SHAMAN_MANA_SPRING_TOTEM_SPELLS) do
 end
 
 local SPELL_SHAMAN_FIRE_NOVA_R1 = 1535 -- spell_shaman.cpp:626 (class spell_sha_fire_nova)
+local SPELL_SHAMAN_ANCESTRAL_AWAKENING = 51556 -- spell_shaman.cpp:105 (class spell_sha_ancestral_awakening)
+local SPELL_SHAMAN_ANCESTRAL_AWAKENING_DUMMY = 52759 -- spell_shaman.cpp:37
 local SPELL_FAILED_OUT_OF_RANGE = 97 -- SharedDefines.h:1079
 local SPELL_FAILED_CUSTOM_ERROR = 172 -- SharedDefines.h:1154
 local SPELL_CUSTOM_ERROR_MUST_HAVE_FIRE_TOTEM = 83 -- SharedDefines.h:1259
@@ -626,3 +644,32 @@ local function fireNovaCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_SHAMAN_FIRE_NOVA_R1, 8, fireNovaCheckCast)
+
+-- C++ spell_sha_ancestral_awakening_AuraScript::HandleProc
+-- (spell_shaman.cpp:110-143): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction (the true return); a nil/zero heal returns;
+-- the actor casts the dummy 52759 on itself (the C++ nil-target
+-- cast), triggered, BP0 = pct of the heal by the effect amount.
+-- Direct heals only (no periodic-heal proc path forwards a heal to
+-- ev6); the 52759 lowest-health-only FilterTargets arm is unmodeled
+-- on the player path (pre-existing Go deviation, inherited); the
+-- creature path has no 52759 dummy twin. DORMANT until Spell.dbc
+-- ships the 51556 proc entry and the 52759/52752 rows.
+local function ancestralAwakeningProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if actor == nil or procEvent == nil then
+        return true
+    end
+    local heal = procEvent:GetHeal()
+    if heal == nil or heal == 0 then
+        return true
+    end
+    local amount = aura:GetAmount(0)
+    if amount == nil or amount == 0 then
+        return true
+    end
+    local bp0 = math.floor(heal * amount / 100)
+    actor:CastCustomSpell(actor, SPELL_SHAMAN_ANCESTRAL_AWAKENING_DUMMY, true, bp0)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_ANCESTRAL_AWAKENING, 6, ancestralAwakeningProc)
