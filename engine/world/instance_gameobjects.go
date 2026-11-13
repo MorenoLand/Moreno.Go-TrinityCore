@@ -348,6 +348,145 @@ func (s *Server) useDoorOrButton(mapID, instanceID uint32, guid uint64, alternat
 	}
 }
 
+// serverActivateGameObjectUse is the Server-level twin of the session
+// activateGameObjectUse (gameobjects.go:1068) for a creature caster with no
+// player session: Spell::EffectActivateObject Disturb/Open
+// (SpellEffects.cpp:3956-3960) calls GameObject::Use on the target for any
+// unit caster, and the player-only head arms (immunity, mounted, ClearMenus,
+// gossip hello — GameObject.cpp:1491-1505) sit inside `if (Player*)`, so a
+// creature user skips them; only the template-cooldown gate
+// (GameObject.cpp:1513-1518) and the type dispatch run. Door/button,
+// questgiver, trap and chair arms stay out: door/button already run through
+// useDoorOrButton on the other effect arms, and the rest are player-only in
+// C++ (GameObject.cpp:1520-1560).
+func (s *Server) serverActivateGameObjectUse(ctx context.Context, m *creatureMotion, guid uint64) {
+	if s == nil || m == nil || guid == 0 {
+		return
+	}
+	entry := uint32((guid >> 24) & 0xFFFFFF)
+	lowGUID := uint32(guid & 0xFFFFFF)
+	goState, err := s.getOrLoadGameObjectState(ctx, guid, lowGUID, entry, m.Map, m.InstanceID)
+	if err != nil || goState == nil {
+		return
+	}
+	// GameObject::IsInvisibleDueToDespawn (GameObject.cpp:1293): the
+	// spell-effect target resolves from the map, so a despawned GO never
+	// reaches Use — same guard as the session twin.
+	if s.isGameObjectHiddenInInstance(m.Map, m.InstanceID, guid) {
+		return
+	}
+	if !s.admitServerGameObjectUse(entry, goState) {
+		return
+	}
+	switch goState.Type {
+	case GameObjectTypeGoober:
+		s.serverUseGooberGameObject(ctx, guid, entry, goState)
+	}
+}
+
+// admitServerGameObjectUse is the Server-level twin of the session
+// admitGameObjectUse (gameobjects.go:562): the GameObject::Use
+// template-cooldown gate (GameObject.cpp:1513-1518) for a use with no player
+// session.
+func (s *Server) admitServerGameObjectUse(entry uint32, goState *dynamicGameObjectState) bool {
+	if s == nil || goState == nil {
+		return true
+	}
+	if goState.Type != GameObjectTypeTrap && goState.Type != GameObjectTypeGoober {
+		return true
+	}
+	cd := s.gameObjectTemplateCooldown(entry, goState.Type)
+	if cd <= 0 {
+		return true
+	}
+	now := time.Now().UnixMilli()
+	s.objectsMu.Lock()
+	blocked := now < goState.CooldownUntilMS
+	if !blocked {
+		goState.CooldownUntilMS = now + int64(cd)*1000
+	}
+	s.objectsMu.Unlock()
+	return !blocked
+}
+
+// serverGooberTemplateData carries the gameobject_template fields the
+// server-side goober arm reads (GameObjectData.h goober struct): data0
+// lockId, data3 autoCloseTime, data4 customAnim, data5 consumable,
+// data10 spellId.
+type serverGooberTemplateData struct {
+	lockID, autoCloseTime, customAnim, consumable, spellID uint32
+}
+
+// loadServerGooberTemplate is the Server-level twin of the session
+// loadGooberTemplate (gameobjects.go:1448), extended with the consumable
+// flag the GO_JUST_DEACTIVATED despawn leg reads.
+func (s *Server) loadServerGooberTemplate(ctx context.Context, entry uint32) serverGooberTemplateData {
+	var tpl serverGooberTemplateData
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return tpl
+	}
+	var lockID, autoCloseTime, customAnim, consumable, spellID int64
+	err := s.WorldStore.DB.QueryRowContext(ctx,
+		`SELECT COALESCE(Data0, 0), COALESCE(Data3, 0), COALESCE(Data4, 0), COALESCE(Data5, 0), COALESCE(Data10, 0)
+		FROM gameobject_template WHERE entry = ? LIMIT 1`, entry).
+		Scan(&lockID, &autoCloseTime, &customAnim, &consumable, &spellID)
+	if err != nil {
+		return tpl
+	}
+	tpl.lockID = uint32(lockID)
+	tpl.autoCloseTime = uint32(autoCloseTime)
+	tpl.customAnim = uint32(customAnim)
+	tpl.consumable = uint32(consumable)
+	tpl.spellID = uint32(spellID)
+	return tpl
+}
+
+// serverUseGooberGameObject is the Server-level twin of the session
+// useGooberGameObject (gameobjects.go:583) for a creature user:
+// GameObject::Use GAMEOBJECT_TYPE_GOOBER arm (GameObject.cpp:1630-1696).
+// The page, gossip, eventId, quest-gate and KillCreditGO legs sit inside
+// `if (Player*)` in C++ and never run for a creature user; the linked-trap
+// leg has no Go trap model (same as the session twin). What runs is the
+// state flip, the autoCloseTime re-arm, the reset schedule, and the
+// template-spell cast with the GO as caster (GameObject.cpp:2075-2097).
+func (s *Server) serverUseGooberGameObject(ctx context.Context, guid uint64, entry uint32, goState *dynamicGameObjectState) {
+	if s == nil || goState == nil {
+		return
+	}
+	tpl := s.loadServerGooberTemplate(ctx, entry)
+	if tpl.customAnim != 0 {
+		s.broadcastGameObjectCustomAnimInInstance(goState.Map, goState.InstanceID, guid, uint32(goState.AnimProgress))
+	} else {
+		s.setGameObjectStateInInstance(goState.Map, goState.InstanceID, guid, GameObjectStateActive)
+	}
+	// GameObject.cpp:1689: m_cooldownTime = GetGameTimeMS() +
+	// GetAutoCloseTime() overwrites the head gate's data6 re-arm, same as
+	// the session twin.
+	s.objectsMu.Lock()
+	goState.CooldownUntilMS = time.Now().UnixMilli() + int64(tpl.autoCloseTime)
+	s.objectsMu.Unlock()
+	// The GO_ACTIVATED update arm fires at the next tick and the
+	// GO_JUST_DEACTIVATED arm re-readies the state when the template
+	// carries a lockId or an autoCloseTime (GameObject.cpp:797-798); a
+	// consumable goober with neither still reaches deactivation at the
+	// next tick, so it schedules the zero-delay reset that despawns it.
+	if tpl.autoCloseTime > 0 {
+		s.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, time.Duration(tpl.autoCloseTime)*time.Millisecond, false)
+	} else if tpl.lockID != 0 {
+		s.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 0, false)
+	} else if tpl.consumable != 0 {
+		s.scheduleGameObjectResetInInstance(goState.Map, goState.InstanceID, guid, 0, false)
+	}
+	// GameObject::Use tail (GameObject.cpp:2093-2094): the GO casts the
+	// template spell on the user. The zero duration lets the GO-origin
+	// summon helper fall back to the spell's DurationIndex (its doc
+	// asserts 5 minutes for 24081); the helper stays silent with no
+	// Spell.dbc.
+	if tpl.spellID != 0 {
+		s.serverSummonFromGameObject(ctx, goState, tpl.spellID, 0)
+	}
+}
+
 // setGameObjectFlag mirrors GameObject::SetFlag(GAMEOBJECT_FLAGS, flag)
 // (GameObject.cpp ApplyModFlag path): ORs the bits into the live dynamic
 // state and broadcasts the flags field, the same values-update twin
@@ -523,6 +662,21 @@ func (s *Server) gameObjectTemplateCooldown(entry uint32, goType uint8) uint32 {
 	return uint32(d)
 }
 
+// gameObjectTemplateGooberConsumable mirrors GameObjectTemplate::
+// IsDespawnAtAction (GameObjectData.h:431) for goobers: goober.consumable
+// (data5) != 0.
+func (s *Server) gameObjectTemplateGooberConsumable(entry uint32) bool {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return false
+	}
+	var d int64
+	if err := s.WorldStore.DB.QueryRowContext(context.Background(),
+		"SELECT COALESCE(data5, 0) FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&d); err != nil || d <= 0 {
+		return false
+	}
+	return true
+}
+
 // resetDoorOrButtonLocked mirrors GameObject::ResetDoorOrButton
 // (GameObject.cpp:1422-1431); the caller must hold objectsMu. It is a no-op
 // when the door/button was never activated (or already reset) — the IN_USE
@@ -607,6 +761,18 @@ func (s *Server) scheduleGameObjectResetInInstance(mapID, instanceID uint32, gui
 			// old re-ready behavior. Previously a spell-summoned goober
 			// lingered after its auto-close instead of vanishing.
 			if current != nil && (current.OwnerGUID != 0 || current.SpellID != 0) && current.DespawnTimer != nil {
+				s.objectsMu.Unlock()
+				s.despawnDynamicGameObjectInInstance(mapID, instanceID, guid)
+				return
+			}
+			// GameObjectTemplate::IsDespawnAtAction (GameObjectData.h:431):
+			// a consumable goober fails the GO_JUST_DEACTIVATED keep-alive
+			// (GameObject.cpp:810) and despawns instead of re-readying —
+			// the spider egg (consumable=1) vanishes at deactivation and
+			// comes back on the scripted respawn scan, not on re-ready.
+			// Gated on goober: chest.consumable shares the data5 column
+			// but chests never reach this branch.
+			if current.Type == GameObjectTypeGoober && s.gameObjectTemplateGooberConsumable(current.Entry) {
 				s.objectsMu.Unlock()
 				s.despawnDynamicGameObjectInInstance(mapID, instanceID, guid)
 				return

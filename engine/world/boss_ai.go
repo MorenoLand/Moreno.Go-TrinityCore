@@ -8322,8 +8322,10 @@ func (s *Server) creatureEffectScriptEffect(ctx context.Context, m *creatureMoti
 // even though the wire target is unit-only. Server-state arms run on the
 // caster's map/instance; the Disturb/Open GameObject::Use arm delegates
 // to the owner/charm session when one resolves (the dispel delegation
-// precedent) and stays out for wild casters (Use needs a player for
-// gossip/menus). ToggleOpen, Creation, SetTapList and None have no C++
+// precedent) and runs the Server-level GO Use twin for wild casters (the
+// player-only legs — gossip, page, quest credit — sit inside `if (Player*)`
+// in GameObject::Use and never run for a creature user). ToggleOpen,
+// Creation, SetTapList and None have no C++
 // arm and stay no-ops, like the session twin.
 func (s *Server) creatureEffectActivateObjectMasked(ctx context.Context, m *creatureMotion, spellTarget protocol.SpellTargetData, eff wotlk.SpellEffect, effIndex int, hitTargets []uint64, masks map[uint64]uint32) {
 	if s == nil || m == nil {
@@ -8337,6 +8339,8 @@ func (s *Server) creatureEffectActivateObjectMasked(ctx context.Context, m *crea
 		case action == goActionDisturb || action == goActionOpen:
 			if owner := s.creatureCasterOwnerSession(m); owner != nil {
 				owner.activateGameObjectUse(ctx, goGUID)
+			} else {
+				s.serverActivateGameObjectUse(ctx, m, goGUID)
 			}
 		case action == goActionOpenAndUnlock:
 			s.useDoorOrButton(m.Map, m.InstanceID, goGUID, false, 0)
@@ -8376,6 +8380,8 @@ func (s *Server) creatureEffectActivateObject(ctx context.Context, m *creatureMo
 		case action == goActionDisturb || action == goActionOpen:
 			if owner := s.creatureCasterOwnerSession(m); owner != nil {
 				owner.activateGameObjectUse(ctx, goGUID)
+			} else {
+				s.serverActivateGameObjectUse(ctx, m, goGUID)
 			}
 		case action == goActionOpenAndUnlock:
 			s.useDoorOrButton(m.Map, m.InstanceID, goGUID, false, 0)

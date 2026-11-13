@@ -8013,6 +8013,54 @@ func (s *Server) fireCreatureSummoned(ctx context.Context, owner *creatureMotion
 	_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, owner.GUID, owner.InstanceID, event, args...)
 }
 
+// forwardGameObjectSummon is the gob_spider_eggAI::JustSummoned twin
+// (boss_marli.cpp:243-246): a spider egg (179985) forwards each creature it
+// summons to Mar'li's AI, resolved through the instance script
+// (_instance->GetCreature(DATA_MARLI), zulgurub.h:32). Go has no
+// instance-creature registry, so Mar'li is resolved by scanning the live
+// motions in the egg's map/instance for entry 14510; a missing Mar'li is
+// the C++ null-GetCreature no-op. The forward fires
+// CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE (19) on Mar'li through
+// fireCreatureSummoned, the same entry-then-unique dispatch
+// summonTempCreature uses for creature origins (:189-190) — Mar'li's Lua
+// arm (boss_marli.lua marliJustSummoned) does the AttackStart-random +
+// summons tracking, so the summoned entry is not filtered here, matching
+// the C++ forward. This is a targeted forward, not a generic GO summon
+// event: C++ GameObjectAI::JustSummoned is a virtual, not a hook, and
+// Eluna defines no GO summon event (scripting/runtime.go GO events 1-14).
+// The SetRespawnCompatibilityMode(true) tail of the C++ arm has no Go twin
+// and is not modeled. Must be called with motionMu released: the scan
+// copies the motion set under the lock and fireCreatureSummoned requires
+// it released.
+func (s *Server) forwardGameObjectSummon(summonerGO *dynamicGameObjectState, summoned *creatureMotion) {
+	if s == nil || summonerGO == nil || summoned == nil {
+		return
+	}
+	if summonerGO.Entry != 179985 {
+		return
+	}
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(summonerGO.Map, summonerGO.InstanceID)
+	live := make([]*creatureMotion, 0, len(motions))
+	for _, cand := range motions {
+		if cand != nil {
+			live = append(live, cand)
+		}
+	}
+	s.motionMu.Unlock()
+	var marli *creatureMotion
+	for _, cand := range live {
+		if cand.Entry == 14510 {
+			marli = cand
+			break
+		}
+	}
+	if marli == nil {
+		return
+	}
+	s.fireCreatureSummoned(context.Background(), marli, scripting.CreatureEventOnJustSummonedCreature, summoned)
+}
+
 // fireCreatureSpellClick dispatches the Go-side CREATURE_EVENT_ON_SPELL_CLICK (39)
 // hook on the clicked creature. C++ (Unit::HandleSpellClick, Unit.cpp:12982-13070)
 // calls CreatureAI::OnSpellClick(clicker, spellClickHandled) after the click-spell
