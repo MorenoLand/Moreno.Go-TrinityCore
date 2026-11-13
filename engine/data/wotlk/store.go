@@ -435,6 +435,13 @@ func (s *Store) File(name string) (*dbc.File, error) {
 	}
 	loaded, err := dbc.Open(filepath.Join(s.Dir, name+".dbc"))
 	if err != nil {
+		if seed, ok := seedDBC(name); ok {
+			if parsed, perr := dbc.Parse(seed); perr == nil {
+				loaded, err = parsed, nil
+			}
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", name, err)
 	}
 	s.mu.Lock()

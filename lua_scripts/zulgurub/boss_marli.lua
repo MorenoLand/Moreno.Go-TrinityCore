@@ -28,8 +28,9 @@
 -- TARGET_GAMEOBJECT_NEARBY_ENTRY (40), Open (MiscValue 8) per TDB
 -- spell_dbc — NOT a summon, so the eggs hatch by GO Use, not by
 -- spawning; the cast reaches the Go activate-object arm but stays
--- dormant until the ownerless-Open engine leg lands; the cycle is
--- canceled at transform and re-armed at transform-back, C++-exact).
+-- dormant until Spell.dbc data lands (the ownerless-Open engine leg
+-- is live since cb1079e5; the cycle is canceled at transform and
+-- re-armed at transform-back, C++-exact).
 -- Transform: Talk(SAY_TRANSFORM=1),
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (PORTED 2026-10-24),
@@ -51,7 +52,7 @@
 -- convention). Spawn of Mar'li (15041): non-triggered self-cast 24312
 -- (level up) every 3s while in combat (C++-exact); melee is
 -- engine-driven; the hatch chain summons them (24081, 5-min duration)
--- once the ownerless-Open engine leg lands; registered so any that
+-- once Spell.dbc data lands; registered so any that
 -- exist fight correctly.
 -- Deviations from C++: no instance-script model — boss admission via
 -- the luaBossAI shim (a no-op BossAI slot; the SetBossState legs are
@@ -64,10 +65,10 @@
 -- nearby egg GOs (TDB spell_dbc, column-mapped: Effect_1 86,
 -- ImplicitTargetA_1 40, MiscValue_1 8) and 24083 is the same effect
 -- (wowhead wotlk: Activate Object, Radius 100y, Max targets 4) —
--- neither summons; the Go Open leg needs a player owner session
--- (boss_ai.go:8337) plus Spell.dbc data — an ownerless boss caster
--- no-ops on both counts, so the eggs never hatch until that chain
--- lands (goober Use -> 24081 summon 15041 -> egg JustSummoned
+-- neither summons; the ownerless-Open leg is live since cb1079e5
+-- (boss_ai.go:8339-8343, serverActivateGameObjectUse) — the remaining
+-- gap is Spell.dbc data (embedded seed lands 2026-11-13; the chain is
+-- goober Use -> 24081 summon 15041 -> egg JustSummoned
 -- forward); the Reset egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
 -- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
@@ -235,9 +236,9 @@ end
 -- {12s,17s}. Phase-all EXCEPT the transform CancelEvent kills the
 -- cycle (re-armed fresh {12s,17s} at transform-back, C++-exact). The
 -- cast is ISSUED (24082 is ACTIVATE_OBJECT/Open on nearby egg GOs,
--- see header DBC verdict); it reaches the Go activate-object arm but
--- stays dormant until the ownerless-Open engine leg lands (the arm
--- delegates Open to an owner session, wild casters no-op).
+-- see header DBC verdict); it reaches the Go activate-object arm and
+-- the ownerless-Open leg is live since cb1079e5 — only Spell.dbc data
+-- gates it (embedded seed lands 2026-11-13).
 local function onHatchEgg(creature, guid)
     creature:CastSpell(creature, SPELL_HATCH_SPIDER_EGG)
     schedule(guid, "hatchegg", math.random(12000, 17000), function()
@@ -475,7 +476,8 @@ RegisterCreatureEvent(ENTRY_MARLI, 23, marliReset)
 -- (creature). Fires for any spider the hatch chain summons (ev19 is
 -- live on the summon path, lua_creature_events.go:190); dormant
 -- until the egg GO chain hatches one (24082/24083 reach the Go
--- activate-object arm but the ownerless-Open leg is still missing).
+-- activate-object arm; the ownerless-Open leg is live since cb1079e5
+-- and only Spell.dbc data gates the chain).
 local function marliJustSummoned(event, creature, summoned)
     if summoned:GetEntry() ~= ENTRY_SPAWN then
         return
