@@ -14,8 +14,15 @@
 -- GetStratholmeAI -> GetInstanceAI) (loader lines 134/312).
 -- npc_summoned_skeleton (SpellHit -> SPELL_DEATH_PACT_2 (17471) ->
 -- DoCastSelf(SPELL_DEATH_PACT_3 = 17472, TRIGGERED)) is registered
--- by the same AddSC but has no C++-verifiable NPC entry and its
--- SpellHit hook fires via event 15, but the skeleton entry is unverifiable — queued.
+-- by the same AddSC but has no C++-verifiable NPC entry — STAY OUT,
+-- re-verified 2026-11-13 (hook-coverage round 4): the SpellHit arm
+-- belongs to npc_summoned_skeleton (boss_baron_rivendare.cpp:155-164),
+-- not to Rivendare himself; its entry lives only in the DB-side
+-- ScriptName binding (RegisterStratholmeCreatureAI, stratholme.h:111)
+-- and the raise-spell summon entries in spell data, neither in the
+-- C++ tree. The ev14 bridge itself is live (CreatureEventOnHitBySpell
+-- = 14, scripting/runtime.go:379; the old "event 15" note was wrong —
+-- 15 is SpellHitTarget).
 -- The Stratholme block is OPEN.
 -- Entry (verifiable from the C++ sources): STRCreatureIds names
 -- NPC_BARON = 10440 in stratholme.h, and instance_stratholme.
@@ -75,11 +82,16 @@
 --   GetStratholmeAI -> GetInstanceAI leg (instance-script model
 --   blocked, standing).
 -- - npc_summoned_skeleton's SpellHit(17471) -> DoCastSelf(17472,
---   TRIGGERED) leg (no skeleton NPC entry is C++-verifiable from
---   code — the 17475-17480 raise spells are summoners, not entry
---   evidence — and the skeleton entry is unverifiable (the SpellHit
---   hook itself fires via event 15):
---   AuraScript/SpellScript-check-handler-blocked class).
+--   TRIGGERED) leg (boss_baron_rivendare.cpp:159-163): STAY OUT — no
+--   skeleton NPC entry is C++-verifiable from code (no NPC_ const in
+--   the file or stratholme.h:50-66; whole-tree grep for 17475-17480
+--   hits only the spell enum at boss_baron_rivendare.cpp:39-44,58-59;
+--   the summon entries live in spell data, and engine/data/dbc/
+--   holds no Spell.dbc to check — probing would materialize stubs).
+--   The ev14 hook itself is live (dispatch sites in spells.go,
+--   boss_ai.go, pet_combat.go; args (event, creature, caster,
+--   spellID)); the block is purely the missing entry, so no
+--   RegisterCreatureEvent can be written.
 
 local NPC_BARON = 10440
 

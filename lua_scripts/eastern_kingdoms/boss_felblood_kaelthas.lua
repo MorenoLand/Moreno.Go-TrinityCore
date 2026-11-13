@@ -142,22 +142,28 @@
 --   (3x triggered self-cast 44265) + beam 5s (DoCastAOE 44251 as
 --   self-cast) + POWER_FEEDBACK 35s (Talk + DoCastAOE 44232 as self-cast
 --   + self-cast 44233) -> PREPARE again 11s (Talk SAY_GRAVITY_LAPSE_2).
---   Still out, with exact blockers: the SpellHitTarget arm (44224 hits ->
---   counter-indexed directional teleports 44219-44223 + 400ms delayed
---   damage/fly self-casts on player targets) — event 15 IS live (gruul /
---   svala precedent; the old "no SpellHitTarget bridge" note was stale),
---   but the teleport spells need spell-effect dispatch (DBC-gated, Go
---   casts are packet-only), the damage/fly legs would need player
---   self-casts whose effects likewise never land (player:CastSpell IS
---   bridged, lua_player.go:504 — the 2026-10-24 "no bridge" claim
---   was stale; the blocker is effect dispatch, not the cast call),
---   and the CLEAR_FLIGHT leg is vacuous
---   in-port (lifted-player auras never exist) with AoE hit-player
---   iteration unmodeled (gruul precedent); the arcane-sphere
---   MoveFollow arms — spheres never spawn (no SPELL_EFFECT_SUMMON
---   dispatch), so summons.DespawnEntry(24708) is vacuous; the
---   RemoveAurasDueToSpell legs — the CLEAR_FLIGHT cast is ported but
---   aura removal on players is engine-side and absent.
+-- - SpellHitTarget now PORTED (below, onSpellHitTarget, ev15): the
+--   44224 arm (counter-indexed directional teleports 44219-44223 +
+--   400ms delayed damage/fly self-casts on the hit player) and the
+--   44232 CLEAR_FLIGHT arm (RemoveAura 44227 + raid-mode damage
+--   44226/49887 on the hit unit). Prior stay-out rationale retracted
+--   2026-11-13: Lua CastSpell routes through the real creature cast
+--   path (lua_creature_events.go:954 -> castCreatureSpellInternal),
+--   which fans AoE hits out per DBC area-enemy targets and fires ev15
+--   once per hit target (boss_ai.go:4268-4290); the teleport effect
+--   is implemented for creature casters (creatureEffectTeleportUnits,
+--   boss_ai.go:5360, DBC-gated like every effect leg); player:CastSpell
+--   (lua_player.go:3501) and player/creature RemoveAura (lua_player.go:
+--   4329, lua_creature_events.go:1748) are bridged. Two guards carry
+--   the C++-vs-Go delta: the self-cast wire target (the boss) is also
+--   reported as a hit, so self-hits are skipped (C++ never hits the
+--   boss with either spell; gruul wire-target precedent), and the
+--   teleport index is guarded at < 5 (C++ array has 5 entries; pets
+--   can push hits past it — C++ reads OOB, UB). The counter resets
+--   in onGravityLapse (C++ :340) and on Reset (Initialize, :140).
+-- - Still out: the arcane-sphere MoveFollow arms — spheres never spawn
+--   (no SPELL_EFFECT_SUMMON dispatch), so summons.DespawnEntry(24708)
+--   is vacuous.
 -- - npc_felblood_kaelthas_phoenix (second CreatureScript class in
 --   the file): IsSummonedBy's DoZoneInCombat + self-casts 44197/
 --   44196, the lethal DamageTaken egg sequence (DoSummon(NPC_
@@ -188,6 +194,10 @@ local SPELL_GRAVITY_LAPSE_INITIAL = 44224
 local SPELL_GRAVITY_LAPSE_BEAM_VISUAL = 44251
 local SPELL_SUMMON_ARCANE_SPHERE = 44265
 local SPELL_POWER_FEEDBACK = 44233
+local SPELL_GRAVITY_LAPSE_FLY = 44227
+local SPELL_GRAVITY_LAPSE_DAMAGE = 44226
+local SPELL_GRAVITY_LAPSE_DAMAGE_HEROIC = 49887
+local GRAVITY_LAPSE_TELEPORT_SPELLS = { 44219, 44220, 44221, 44222, 44223 }
 
 local SAY_GRAVITY_LAPSE_1 = 2
 local SAY_GRAVITY_LAPSE_2 = 3
@@ -202,6 +212,7 @@ local ENTRY_KAELTHAS = 24664
 local timers = {}
 local phaseTwo = {}
 local outroFired = {}
+local gravityLapseCount = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -270,15 +281,17 @@ onCenterTeleport = function(creature, guid)
     schedule(guid, "gravity_lapse", 1000, function() onGravityLapse(creature, guid) end)
 end
 
--- C++ EVENT_GRAVITY_LAPSE (:339-345): DoCastAOE 44224 as self-cast
--- (DoCastAOE convention) + spheres 4s + beam 5s + power feedback 35s.
--- The _gravityLapseTargetCount counter is write-only here — its only
--- consumer is the unported SpellHitTarget arm (see header).
+-- C++ EVENT_GRAVITY_LAPSE (:339-345): reset _gravityLapseTargetCount
+-- (:340) + DoCastAOE 44224 as self-cast (DoCastAOE convention) +
+-- spheres 4s + beam 5s + power feedback 35s. The counter reset lands
+-- here, ahead of the cast, so the ev15 arm (onSpellHitTarget, below)
+-- indexes from 0 per lapse cycle.
 onGravityLapse = function(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "gravity_lapse", 500, function() onGravityLapse(creature, guid) end)
         return
     end
+    gravityLapseCount[guid] = 0
     creature:CastSpell(creature, SPELL_GRAVITY_LAPSE_INITIAL)
     schedule(guid, "gravity_spheres", 4000, function() onSummonArcaneSphere(creature, guid) end)
     schedule(guid, "gravity_beam", 5000, function() onBeamVisual(creature, guid) end)
@@ -414,6 +427,7 @@ local function onEnterCombat(_, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    gravityLapseCount[guid] = nil
     -- BossAI::JustEngagedWith base-first (boss_felblood_kaelthas.cpp:144-146
     -- -> ScriptedCreature.cpp:527-542): SetBossState IN_PROGRESS, then
     -- pulse 5 + DoZoneInCombat.
@@ -440,6 +454,7 @@ local function onLeaveCombat(_, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    gravityLapseCount[guid] = nil
 end
 
 -- C++ JustDied (boss_felblood_kaelthas.cpp:162-166): explicit
@@ -451,6 +466,7 @@ local function onDied(_, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    gravityLapseCount[guid] = nil
     creature:SetBossState(3, 3) -- DATA_KAELTHAS_SUNSTRIDER, DONE
 end
 
@@ -464,6 +480,7 @@ local function onReset(_, creature)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
+    gravityLapseCount[guid] = nil
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0) -- DATA_KAELTHAS_SUNSTRIDER, NOT_STARTED
     end
@@ -509,8 +526,57 @@ local function onDamageTaken(_, creature, attacker, damage)
     return false, newDamage
 end
 
+-- C++ boss_felblood_kaelthas::SpellHitTarget (:221-249): fires once per
+-- hit target of 44224 (gravity lapse) or 44232 (clear flight). Event 15
+-- (CREATURE_EVENT_ON_SPELL_HIT_TARGET) fires once per hit target from
+-- the creature cast path (boss_ai.go:4268-4290, AoE fan-out per DBC
+-- area-enemy targets); the self-cast wire target (the boss) is also
+-- reported, so self-hits are skipped — C++ never hits the boss with
+-- either spell (gruul wire-target precedent). The nil-target guard
+-- mirrors C++ target->ToUnit() (fireCreatureSpellHitTarget passes nil
+-- for an unresolvable target, boss_ai.go:4499-4511).
+local function onSpellHitTarget(_, creature, target, spellId)
+    if not target then
+        return
+    end
+    if target:GetGUIDLow() == creature:GetGUIDLow() then
+        return
+    end
+    if spellId == SPELL_GRAVITY_LAPSE_INITIAL then
+        local guid = creature:GetGUIDLow()
+        local count = gravityLapseCount[guid] or 0
+        -- C++ gravityLapseTeleportSpells[] has 5 entries; a 5-man caps
+        -- players at 5, but pets can push hits past it (C++ reads OOB —
+        -- UB). Guard the index; the count still increments (C++-exact).
+        if count < 5 then
+            creature:CastSpell(target, GRAVITY_LAPSE_TELEPORT_SPELLS[count + 1], true)
+        end
+        gravityLapseCount[guid] = count + 1
+        local damageSpell = SPELL_GRAVITY_LAPSE_DAMAGE
+        if creature:IsHeroic() then
+            damageSpell = SPELL_GRAVITY_LAPSE_DAMAGE_HEROIC
+        end
+        -- C++ target->m_Events.AddEventAtOffset 400ms (:233-238): the hit
+        -- player casts the damage + fly spells on itself (non-triggered).
+        -- Untracked in the boss timers (the C++ event lives on the
+        -- target, not the boss, so it outlives evade/death like C++).
+        CreateLuaEvent(function()
+            target:CastSpell(target, damageSpell)
+            target:CastSpell(target, SPELL_GRAVITY_LAPSE_FLY)
+        end, 400)
+    elseif spellId == SPELL_CLEAR_FLIGHT then
+        local damageSpell = SPELL_GRAVITY_LAPSE_DAMAGE
+        if creature:IsHeroic() then
+            damageSpell = SPELL_GRAVITY_LAPSE_DAMAGE_HEROIC
+        end
+        target:RemoveAura(SPELL_GRAVITY_LAPSE_FLY)
+        target:RemoveAura(damageSpell)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_KAELTHAS, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 4, onDied)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 9, onDamageTaken)
+RegisterCreatureEvent(ENTRY_KAELTHAS, 15, onSpellHitTarget)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 23, onReset)

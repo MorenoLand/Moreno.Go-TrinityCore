@@ -24,11 +24,10 @@
 -- EVENT_SPAWN_ADD: SpawnedAdds grows by 2 per wave (C++ sums two
 -- drakonids per 4s firing); at >= 42 the C++ summons Nefarian and
 -- drops Nefarius out of the fight — modeled as: SetVisible(false)
--- (creature:SetVisible bridge, Unit.cpp:8656) + cancel all timers
--- (the drakonid/Nefarian summons stay out behind the unported
--- wave machine — SummonCreature IS bridged, lua_creature_events.go,
--- see deviations). The adds themselves never spawn — only the 4s
--- re-arm/count cycle is kept (jeklik six-bat convention).
+-- (creature:SetVisible bridge, Unit.cpp:8656) + cancel all timers.
+-- The drakonid waves ARE summoned in Lua now (onNefariusSpawnAdd:
+-- SummonCreature + SetFaction + EngageWithTarget, C++ :340-349);
+-- only the cap-42 Nefarian summon stays out (see deviations).
 -- Nefarian (C++-exact for the modeled arms): OnEnterCombat:
 -- Talk(SAY_RANDOM=0), arm shadowflame 22539 12s then 12s /
 -- bellowing roar 22686 {25s,35s} / veil of shadow 7068 {25s,35s} /
@@ -52,7 +51,9 @@
 -- !Phase3 && HealthBelowPct(20) every tick — modeled on the
 -- pre-damage hook as post-damage health strictly below 20% (moroes
 -- convention), once, Talk(SAY_RAISE_SKELETONS=1); the bone-construct
--- respawn loop has no bearer. OnLeaveCombat(2)/OnReset(23): cancel
+-- respawn loop stays out: constructs now exist via the ev21 port,
+-- but DoZoneInCombat(construct) has no bearer (Go bridge is me-form
+-- only, lua_creature_events.go:2255). OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, clear state. Nil-target ticks cast nothing but keep the
 -- schedule (jeklik convention).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
@@ -84,10 +85,11 @@
 -- (boss_nefarian.cpp:215); the barrier-cast / AttackStart legs still
 -- have no bridges — the timers are armed from the gossip select (the
 -- BeginEvent site) and combat begins on pull; no
--- summon model — the drakonid waves, the Nefarian summon, the
--- chromatic-chaos/vaelastrasz-spawn UBRS casts, and the
--- SummonedCreatureDies bone-construct transformation (dead
--- drakonids -> entry 14605, not-selectable, passive) never happen;
+-- summon model — the Nefarian summon and the
+-- chromatic-chaos/vaelastrasz-spawn UBRS casts stay out; the drakonid
+-- waves ARE summoned (onNefariusSpawnAdd) and the SummonedCreatureDies
+-- bone-construct transformation IS PORTED below (dead drakonids ->
+-- entry 14605, not-selectable, passive, boss_nefarian.cpp:223-232);
 -- no movement model — the Nefarian summon's MovePoint-to-throne and
 -- the MovementInform point-1 DoZoneInCombat/AttackStart arms are
 -- skipped (nefarian fights from where it stands); no SetData
@@ -145,6 +147,9 @@ local SPELL_NEFARIANS_BARRIER = 22663
 -- SetStandState bridge).
 local UNIT_STAND_STATE_STAND = 0
 local UNIT_STAND_STATE_SIT_HIGH_CHAIR = 6
+local UNIT_STAND_STATE_DEAD = 7
+local REACT_PASSIVE = 0
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local FACTION_FRIENDLY = 35
 local FACTION_DRAGONFLIGHT_BLACK = 103
@@ -152,6 +157,7 @@ local FACTION_DRAGONFLIGHT_BLACK = 103
 -- C++ boss_nefarian.cpp:100-106 (drakonid entries) + :151-155
 -- (DrakeSpawnLoc) + :164 (Entry[5] order).
 local NPC_CHROMATIC_DRAKANOID = 14302
+local NPC_BONE_CONSTRUCT = 14605
 local DRAKONID_ENTRIES = { 14263, 14261, 14264, 14262, 14265 }
 local DRAKE_SPAWN_LOC = {
     { -7591.151855, -1204.051880, 476.800476, 3.0 },
@@ -653,7 +659,9 @@ end
 -- C++ UpdateAI sub-20% phase 3: !Phase3 && HealthBelowPct(20). The
 -- damage hook fires pre-application, so the post-damage health
 -- decides (moroes convention); strictly below 20 like C++; once.
--- The bone-construct respawn loop has no bearer.
+-- The bone-construct respawn loop stays out: its constructs now exist
+-- via the ev21 port, but its DoZoneInCombat(construct) leg has no
+-- bearer (Go bridge is me-form only, lua_creature_events.go:2255).
 local function nefarianDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUIDLow()
     local st = nefarianState[guid]
@@ -764,6 +772,29 @@ local function nefarianReset(event, creature)
     end, 30000)
 end
 
+-- C++ boss_victor_nefariusAI::SummonedCreatureDies
+-- (boss_nefarian.cpp:223-232): every dying summon except Nefarian
+-- himself is re-seated as a bone construct (entry 14605), made
+-- not-selectable, passive, and laid dead — C++ arm order:
+-- UpdateEntry, SetFlag, SetReactState, SetStandState. Bearer is
+-- live: the drakonids ARE summoned in Lua (onNefariusSpawnAdd,
+-- creature:SummonCreature) and summonTempCreature stamps OwnerGUID,
+-- so ev21 dispatches on Nefarius (entry 10162) with (event, creature,
+-- summon, killer) (lua_creature_events.go:7746-7768). The !=
+-- NPC_NEFARIAN guard is vacuous today (the cap-42 Nefarian summon
+-- stays unported) but is kept C++-exact. UpdateEntry flips the
+-- corpse's live entry (seatCreatureEntry, :7348-7350), so the
+-- phase-3 respawn and FAIL-despawn GetCreaturesInGrid(14605) sweeps
+-- find it; the dead creature stays dead (health 0 preserved).
+local function onNefariusSummonedCreatureDies(event, creature, summon, killer)
+    if summon ~= nil and summon:GetEntry() ~= ENTRY_NEFARIAN then
+        summon:UpdateEntry(NPC_BONE_CONSTRUCT)
+        summon:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+        summon:SetReactState(REACT_PASSIVE)
+        summon:SetStandState(UNIT_STAND_STATE_DEAD)
+    end
+end
+
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 1, onNefariusGossipHello)
 RegisterCreatureGossipEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusGossipSelect)
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 2, onNefariusReset)
@@ -783,6 +814,7 @@ end)
 -- C++ boss_victor_nefariusAI::JustReachedHome (boss_nefarian.cpp:200-203)
 -- calls Reset() outright; onNefariusReset is its idempotent twin.
 RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 24, onNefariusReset)
+RegisterCreatureEvent(ENTRY_VICTOR_NEFARIUS, 21, onNefariusSummonedCreatureDies)
 
 RegisterCreatureEvent(ENTRY_NEFARIAN, 1, nefarianEnterCombat)
 RegisterCreatureEvent(ENTRY_NEFARIAN, 2, nefarianLeaveCombat)

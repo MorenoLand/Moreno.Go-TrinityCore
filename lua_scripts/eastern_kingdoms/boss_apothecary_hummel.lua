@@ -89,7 +89,7 @@
 --   check runs on every summon death, outside the entry gate). Bearer
 --   is live: group spawns via SummonCreatureGroup(1) flow through
 --   summonTempCreature stamping OwnerGUID, so ev21 reaches Hummel
---   (lua_creature_events.go:7357).
+--   (lua_creature_events.go:7746).
 -- - JustDied: RemoveFlag + instance->SetBossState(DATA_APOTHECARY_HUMMEL,
 --   DONE) + sLFGMgr->FinishDungeon(288) — the SetBossState leg stays out
 --   as a C++ DEAD WRITE (tick 380: instance_shadowfang_keep.cpp never

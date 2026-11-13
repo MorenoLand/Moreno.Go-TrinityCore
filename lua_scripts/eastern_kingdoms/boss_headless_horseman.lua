@@ -94,9 +94,12 @@
 --   stale "no bridge" retracted); the POINT_HORSEMAN_FINISH_PATH
 --   disable legs ride the unported intro flight-path machine (DoAction
 --   ACTION_HORSEMAN_EVENT_START / MoveSmoothPath, documented above).
--- - Reset/JustReachedHome legs: _summons.DespawnAll (moot — zero summons
---   are modeled in this file; the stale "no despawn bridge"
---   parenthetical is retracted, supremus precedent), SetReactState (SetReactState
+-- - Reset/JustReachedHome legs: _summons.DespawnAll (not wired — the
+--   summons table IS tracked now (horsemanSummons, ev19/ev21 ported
+--   2026-11-13: Sir Thomas + aura-spawned pumpkins), but no Reset
+--   handler drains it; the stale "no despawn bridge" parenthetical is
+--   retracted, supremus precedent — creature:Despawn is bridged,
+--   lua_creature_events.go:3292), SetReactState (SetReactState
 --   IS bridged — frozen_core precedent, lua_creature_events.go:524;
 --   the JustReachedHome REACT_AGGRESSIVE leg is a no-op in the Lua
 --   model since the REACT_PASSIVE phase-machine leg is unported),
@@ -309,13 +312,32 @@ local function onReachHome(_, creature)
 end
 
 -- C++ boss_headless_horseman::JustSummoned (boss_headless_horseman.cpp:391-395):
--- _summons.Summon is bookkeeping only; DoZoneInCombat(summon) engages
--- the summon in zone combat (drakkari precedent).
--- SummonedCreatureDies (:397-400) is _summons.Despawn(summon), list
--- bookkeeping only — the list has no modeled consumer (see Reset note
--- above) — documented-only, no ev21 handler.
+-- _summons.Summon(summon) + DoZoneInCombat(summon). The Summon leg is
+-- the C++ SummonList (ScriptedCreature.cpp:43-45: GUID appended, no
+-- spawn side effect); horsemanSummons is its Lua twin, keyed by the
+-- summoned creature's GUIDLow. DoZoneInCombat engages the summon in
+-- zone combat (drakkari precedent). Live summoners in this file: the
+-- boss's own onDied SummonCreature(NPC_SIR_THOMAS 23904) below, and
+-- aura-spawned pulsing pumpkins when the summon effect stamps the
+-- horseman as owner (both arrive here via fireCreatureSummoned,
+-- lua_creature_events.go:7897, args (event, creature, summoned)).
+-- SummonedCreatureDies (:397-400) is _summons.Despawn(summon):
+-- ScriptedCreature.cpp:47-50 removes the GUID from the list ONLY — no
+-- DespawnOrUnsummon — so the ev21 handler drops the GUID and despawns
+-- nothing. Dispatched live on the summoner via the summon's OwnerGUID
+-- (lua_creature_events.go:7744-7771, args (event, summoner, summon,
+-- killer)). The list's only consumer, Reset's DespawnAll, is not wired
+-- (see Reset note above); the table exists so a future Reset port has
+-- the C++-exact list to drain.
+local horsemanSummons = {}
+
 local function onJustSummoned(_, creature, summoned)
+    horsemanSummons[summoned:GetGUIDLow()] = true
     summoned:DoZoneInCombat()
+end
+
+local function onSummonedCreatureDies(_, creature, summon)
+    horsemanSummons[summon:GetGUIDLow()] = nil
 end
 
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 1, onEnterCombat)
@@ -326,6 +348,7 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 24, onReachHome)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 19, onJustSummoned)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 21, onSummonedCreatureDies)
 
 -- npc_headless_horseman_head (23775, scarlet_monastery.h:70):
 -- JustDied schedules EVENT_RAIN_OF_TREATS at 11s, C++
