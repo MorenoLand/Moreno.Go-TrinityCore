@@ -54,12 +54,14 @@ type absorbHookPending struct {
 // never exhausted by it (Unit.cpp:1909-1914). Go stores the DBC base
 // in Amount instead, so the set is per-spell knowledge, like the
 // scriptAbsorbHit switch: moonkin form passive (69366) and primal
-// tenacity (33851) both set -1, and cheat death (31228) sets -1 via
-// DoEffectCalcAmount (spell_rogue.cpp:137-141). Any other hook
-// spell's pool is finite and decrements like the generic leg.
+// tenacity (33851) both set -1, cheat death (31228) sets -1 via
+// DoEffectCalcAmount (spell_rogue.cpp:137-141), and nerves of steel
+// (31130) sets -1 via DoEffectCalcAmount (spell_rogue.cpp:495-498).
+// Any other hook spell's pool is finite and decrements like the
+// generic leg.
 func absorbHookPoolUnlimited(spellID uint32) bool {
 	switch spellID {
-	case 69366, 33851, 31228:
+	case 69366, 33851, 31228, 31130:
 		return true
 	}
 	return false

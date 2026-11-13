@@ -74,6 +74,19 @@
 --   bridge") is superseded by the GetSpellPowerCost bridge.
 --   DORMANT until Spell.dbc ships the 31244 proc entry and the
 --   31663 + proc-spell cost rows.
+-- PORTED (census rows 729-760, RegisterAuraEvent OnEffectAbsorb = 9):
+--   spell_rog_nerves_of_steel (spell_rogue.cpp:470-514, census row
+--   749): aura 31130. The pool is unlimited (DoEffectCalcAmount
+--   sets -1; absorption.go's unlimited set, this tick). While the
+--   target is fleeing, or stunned AND carrying a stun-mechanic aura,
+--   the hit absorbs absorbPct% of the damage (EFFECT_0 CalcValue,
+--   DBC read); otherwise it absorbs nothing. No cooldown, no lethal
+--   gate. Minor deviation: C++ prices absorbPct with
+--   CalcValue(GetCaster()) while Lua's GetSpellEffectCalcValue is
+--   the no-caster overload — identical unless the DBC row carries
+--   per-level scaling. The tick-294/298 stay-out ("no absorb hook")
+--   is superseded by the ev9 bridge and the 31130 unlimited-pool
+--   leg. DORMANT until Spell.dbc ships the 31130 row.
 -- STAY-OUT (tick 294, re-verified tick 298 against current
 --   runtime): blade_flurry (13877/33735/51211/65956, census rows
 --   741-744; census hook label DoEffectCalcAmount is WRONG, real
@@ -96,8 +109,9 @@
 --   GetCastItem is open engine work; GetItemByPos is a nil stub
 --   and there is no enchantment-store read. The go_hit is a false
 --   positive (SpellInfo.cpp line numbers in comments).
---   nerves_of_steel (31130, row 749): CalcAmount + OnEffectAbsorb;
---   no absorb hook. Engine work.
+--   nerves_of_steel (31130, row 749): PORTED below (ev9 + the
+--   31130 unlimited-pool leg in absorption.go, this tick); the
+--   tick-294/298 stay-out ("no absorb hook") is superseded.
 --   rupture (1943, row 752): CalcAmount (AP x combo points) +
 --   AfterEffectApply reapply reset; no CalcAmount bridge and no
 --   GetTotalAttackPowerValue bridge; the REAPPLY-only leg is
@@ -144,6 +158,7 @@ local SPELL_ROGUE_CHEAT_DEATH = 31228 -- spell_rogue.cpp:109
 local SPELL_ROGUE_CHEAT_DEATH_COOLDOWN = 31231 -- spell_rogue.cpp:39
 local SPELL_ROGUE_QUICK_RECOVERY = 31244 -- spell_rogue.cpp:645 (class spell_rog_quick_recovery)
 local SPELL_ROGUE_QUICK_RECOVERY_ENERGY = 31663 -- spell_rogue.cpp:55
+local SPELL_ROGUE_NERVES_OF_STEEL = 31130 -- spell_rogue.cpp:465
 
 local SPELL_AURA_MOD_STALKED = 68
 
@@ -356,6 +371,43 @@ local function cheatDeathAbsorb(event, aura, target, damage, absorbAmount)
 end
 
 RegisterAuraEvent(SPELL_ROGUE_CHEAT_DEATH, 9, cheatDeathAbsorb)
+
+-- C++ spell_rog_nerves_of_steel_AuraScript::Absorb
+-- (spell_rogue.cpp:492-501): 31130 EFFECT_0 SPELL_AURA_SCHOOL_ABSORB.
+-- The pool is unlimited (DoEffectCalcAmount sets -1; absorption.go's
+-- unlimited set), so the handler computes the absorb from the damage:
+-- while the target is fleeing (UNIT_FLAG_FLEEING 0x00800000), or
+-- stunned (UNIT_FLAG_STUNNED 0x00040000) AND carrying a stun-mechanic
+-- aura (1<<MECHANIC_STUN = 4096), the hit absorbs absorbPct% of the
+-- damage (EFFECT_0 CalcValue, DBC read, 0 absorbs nothing).
+-- Otherwise absorbs nothing (return 0). No cooldown, no lethal gate.
+-- C++ prices absorbPct with CalcValue(GetCaster()); Lua's
+-- GetSpellEffectCalcValue is the no-caster overload — identical
+-- unless the DBC row carries per-level scaling. DORMANT until
+-- Spell.dbc ships the 31130 row (the pct reads 0 without it, like
+-- moonkin 69366).
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_STUNNED = 0x00040000
+local UNIT_FLAG_FLEEING = 0x00800000
+local MECHANIC_STUN_MASK = 4096
+
+local function nervesOfSteelAbsorb(event, aura, target, damage, absorbAmount)
+    if target == nil then
+        return 0
+    end
+    if not target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING)
+        and not (target:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+            and target:HasAuraWithMechanic(MECHANIC_STUN_MASK)) then
+        return 0
+    end
+    local pct = aura:GetSpellEffectCalcValue(SPELL_ROGUE_NERVES_OF_STEEL, 0)
+    if pct <= 0 then
+        return 0
+    end
+    return math.floor(damage * pct / 100)
+end
+
+RegisterAuraEvent(SPELL_ROGUE_NERVES_OF_STEEL, 9, nervesOfSteelAbsorb)
 
 -- C++ spell_rog_quick_recovery_AuraScript::HandleProc
 -- (spell_rogue.cpp:651-685): OnEffectProc, EFFECT_0 DUMMY.
