@@ -793,8 +793,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// handler interprets its own types, e.g. the outhouse bunny reads
 	// type 1 as gender, zone_grizzly_hills.cpp:296). Absent types read
 	// 0, the C++ member default. Backs the go_amberpine_outhouse select
-	// arm (go_scripts.cpp:624) and the bunny gender-sound arm.
-	methods["SetData"] = func(_ context.Context, args []any) ([]any, error) {
+	// arm (go_scripts.cpp:624) and the bunny gender-sound arm. The
+	// write also fires CreatureEventOnSetData (41) on the entry then
+	// unique bindings, the SetGUID-40 twin, so a ported AI can run its
+	// SetData switch (npc_alchemist_finklestein, zone_zuldrak.cpp:487).
+	methods["SetData"] = func(ctx context.Context, args []any) ([]any, error) {
 		typ, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
@@ -809,6 +812,16 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		motion.ScriptData[typ] = data
 		s.motionMu.Unlock()
+		if s == nil || s.Features == nil || s.Features.Scripts == nil {
+			return nil, nil
+		}
+		creature := s.luaMotionCreature(motion)
+		if creature == nil {
+			return nil, nil
+		}
+		setArgs := []any{scripting.CreatureEventOnSetData, creature, typ, data}
+		_, _ = s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnSetData, setArgs...)
+		_, _ = s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnSetData, setArgs...)
 		return nil, nil
 	}
 	methods["GetData"] = func(_ context.Context, args []any) ([]any, error) {

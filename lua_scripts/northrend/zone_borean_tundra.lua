@@ -32,3 +32,29 @@ local function windsoulTotemAuraRemove(event, aura, target)
 end
 
 RegisterAuraEvent(SPELL_WINDSOUL_TOTEM_AURA, 3, windsoulTotemAuraRemove)
+
+local SPELL_BLOODSPORE_RUINATION = 45997 -- zone_borean_tundra.cpp:1705 (class spell_q11719_bloodspore_ruination_45997)
+local NPC_BLOODMAGE_LAURITH = 25381 -- zone_borean_tundra.cpp:1699
+
+-- C++ spell_q11719_bloodspore_ruination_45997::HandleEffect
+-- (zone_borean_tundra.cpp:1714-1719): OnEffectHit, EFFECT_1
+-- SPELL_EFFECT_SEND_EVENT — the caster finds Bloodmage Laurith
+-- within 100yd and hands the AI the caster's GUID via SetGUID.
+-- ev4 = OnEffectHit (lua_spell.go:588-594; sonicBoomHit precedent).
+-- DORMANT: npc_bloodmage_laurith AI is unported, so the ev40
+-- SetGUID hook fires into nothing until then; no Spell.dbc 45997.
+local function bloodsporeRuinationHit(event, spell, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local laurith = caster:FindNearestCreature(NPC_BLOODMAGE_LAURITH, 100.0)
+    if laurith ~= nil then
+        laurith:SetGUID(caster:GetGUIDLow(), 0)
+    end
+end
+
+RegisterSpellEvent(SPELL_BLOODSPORE_RUINATION, 4, bloodsporeRuinationHit)

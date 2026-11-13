@@ -3,9 +3,10 @@
 -- (npc_torturer_lecraftAI — JustEngagedWith schedule + UpdateAI
 -- combat rotation arms only). Zone-script unit per
 -- northrend_script_loader.cpp order (borean_tundra done;
--- dragonblight: npc_commander_eligor_dawnbringer, spell_q12096_
--- q12092_dummy, spell_q12096_q12092_bark, npc_wyrmrest_defender
--- documented-only, npc_torturer_lecraft ported).
+-- dragonblight: npc_commander_eligor_dawnbringer, npc_wyrmrest_defender
+-- documented-only, spell_q12096_q12092_dummy ported,
+-- spell_q12096_q12092_bark handler written pending its spell ID,
+-- npc_torturer_lecraft ported).
 -- Entry (TorturerLeCraft enum, verifiable from the C++ sources):
 -- 27394 (NPC_TORTURER_LECRAFT). The creature_template ScriptName
 -- binding is DB-side (no TDB in this workspace).
@@ -56,16 +57,15 @@
 -- legs ride the no-movement / no-world-search /
 -- no-entry-update / no-summon bridges.
 -- spell_q12096_q12092_dummy — Strengthen the Ancients On Interact
--- Dummy to Woodlands Walker (roll 1: CastSpell-on-player 47550
--- item bark + Talk SAY_WALKER_FRIENDLY + DespawnOrUnsummon 1s;
--- roll 0: Talk SAY_WALKER_ENEMY + SetFaction(FACTION_MONSTER) +
--- Attack) — the bridge exists (RegisterSpellEvent; the blasted_lands
--- / gordunni precedents are stale: 27686 is ported, gordunni is
--- blocked on the GO caster) — documented-only pending its own audit.
+-- Dummy to Woodlands Walker — ported below (RegisterSpellEvent 47575
+-- ev5; roll 1: CastSpell-on-player 47550 item bark NON-triggered +
+-- Talk SAY_WALKER_FRIENDLY + DespawnOrUnsummon 1s; roll 0: Talk
+-- SAY_WALKER_ENEMY + SetFaction(FACTION_MONSTER) + Attack).
+-- Dormant until Spell.dbc ships the 47575 record.
 -- spell_q12096_q12092_bark — Bark of the Walkers (Lothalor
 -- entry-gated Talk SAY_LOTHALOR + RemoveAura(SPELL_CONFUSED 47044) +
--- DespawnOrUnsummon 4s) — bridge exists (RegisterSpellEvent) —
--- documented-only pending its own audit.
+-- DespawnOrUnsummon 4s) — handler written below; registration pending
+-- the bark spell ID (no spell_script_names binding in AC or TDB 26091).
 -- npc_wyrmrest_defender (VehicleAI) — UpdateAI low-hp arm
 -- (GetHealthPct() <= 30% -> CastSpell(me, 52421), 20s renew
 -- recovery re-arm gate) sits behind the unmodeled VehicleAI
@@ -91,6 +91,22 @@ local SPELL_HIGH_EXECUTORS_BRANDING_IRON = 48603
 local TORTURER_LECRAFT_ENTRY = 27394
 
 local SAY_AGGRO = 0
+
+local SPELL_Q12096_Q12092_DUMMY = 47575 -- AC spell_script_names :1315
+local SPELL_CREATE_ITEM_BARK = 47550
+local SPELL_CONFUSED = 47044
+local NPC_LOTHALOR = 26321
+local UNIT_NPC_FLAGS = 82 -- UpdateFields.h:139 (boss_marwyn precedent)
+local UNIT_NPC_FLAG_SPELLCLICK = 0x01000000 -- UnitDefines.h:210
+local FACTION_MONSTER = 14
+local SAY_WALKER_FRIENDLY = 0
+local SAY_WALKER_ENEMY = 1
+local SAY_LOTHALOR = 0
+-- TODO: spell_q12096_q12092_bark has no spell_script_names binding in AC
+-- (ac_spell_script_names.sql), TDB 26091 (spell_script_names_26091.txt,
+-- full TDB SQL), or any divergence list — resolve the bark spell ID
+-- before registering barkOfTheWalkers; do NOT guess a number.
+local SPELL_Q12096_Q12092_BARK = nil
 
 local lecraftState = {}
 local lecraftPump = {}
@@ -211,6 +227,66 @@ local function onSpellHit(event, creature, caster, spellId)
         st.textCounter = 6
     end
 end
+
+-- C++ spell_q12096_q12092_dummy (zone_dragonblight.cpp:386-431):
+-- OnEffectHitTarget EFFECT_0 DUMMY — roll = rand32() % 2; tree =
+-- GetHitCreature(), player = GetCaster()->ToPlayer(); RemoveFlag
+-- UNIT_NPC_FLAGS SPELLCLICK; roll 1: tree casts 47550 on the player
+-- NON-triggered + Talk(0) + DespawnOrUnsummon 1s; roll 0: Talk(1) +
+-- SetFaction(FACTION_MONSTER) + Attack(player, true). ev5 handler args
+-- are (event, spell, hitTarget, effectIndex) (xevozz precedent).
+local function strengthenAncientsDummy(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local roll = math.random(0, 1)
+    local tree = hitTarget
+    if tree == nil or tree:GetObjectType() ~= "Creature" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    local player = caster:ToPlayer()
+    if player == nil then
+        return
+    end
+    tree:RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_SPELLCLICK)
+    if roll == 1 then
+        tree:CastSpell(player, SPELL_CREATE_ITEM_BARK)
+        tree:Talk(SAY_WALKER_FRIENDLY, player)
+        tree:DespawnOrUnsummon(1000)
+    else
+        tree:Talk(SAY_WALKER_ENEMY, player)
+        tree:SetFaction(FACTION_MONSTER)
+        tree:Attack(player, true)
+    end
+end
+
+-- C++ spell_q12096_q12092_bark (zone_dragonblight.cpp:433-462):
+-- OnEffectHitTarget EFFECT_0 DUMMY — lothalor = GetHitCreature();
+-- return unless entry == NPC_LOTHALOR 26321; Talk(0) +
+-- RemoveAura(SPELL_CONFUSED 47044) + DespawnOrUnsummon 4s.
+local function barkOfTheWalkers(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local lothalor = hitTarget
+    if lothalor == nil or lothalor:GetObjectType() ~= "Creature" then
+        return
+    end
+    if lothalor:GetEntry() ~= NPC_LOTHALOR then
+        return
+    end
+    lothalor:Talk(SAY_LOTHALOR)
+    lothalor:RemoveAura(SPELL_CONFUSED)
+    lothalor:DespawnOrUnsummon(4000)
+end
+
+RegisterSpellEvent(SPELL_Q12096_Q12092_DUMMY, 5, strengthenAncientsDummy)
+-- RegisterSpellEvent(SPELL_Q12096_Q12092_BARK, 5, barkOfTheWalkers)
+-- — pending the bark spell ID (see TODO above); do NOT register blind.
 
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 2, onReset)

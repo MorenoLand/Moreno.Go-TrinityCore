@@ -35,3 +35,57 @@ local function wgDefenderTeleportCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_WINTERGRASP_DEFENDER_TELEPORT, 8, wgDefenderTeleportCheckCast)
+
+local SPELL_WINTERGRASP_GRAB_PASSENGER = 61178 -- zone_wintergrasp.cpp:440 (class spell_wintergrasp_grab_passenger); battleground_wg.go WGSpellGrabPassenger
+local SPELL_RIDE_WG_VEHICLE = 60968 -- zone_wintergrasp.cpp:61
+
+-- C++ spell_wintergrasp_grab_passenger::HandleScript
+-- (zone_wintergrasp.cpp:449-453): OnEffectHitTarget, EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT — the hit player casts Ride WG
+-- Vehicle (60968) on the caster, non-triggered. ev5 fires once
+-- per (effect, live hit target) from the creature cast path
+-- (xevozzSummonPlayers precedent). DORMANT: Go never casts
+-- 61178 (WGSpellGrabPassenger unused) and no Spell.dbc.
+local function wgGrabPassenger(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    if hitTarget:GetObjectType() ~= "Player" then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    hitTarget:CastSpell(caster, SPELL_RIDE_WG_VEHICLE)
+end
+
+RegisterSpellEvent(SPELL_WINTERGRASP_GRAB_PASSENGER, 5, wgGrabPassenger)
+
+local SPELL_BUILD_CATAPULT_FORCE = 56664 -- zone_wintergrasp.cpp:58
+local SPELL_BUILD_DEMOLISHER_FORCE = 56659 -- zone_wintergrasp.cpp:59
+local SPELL_BUILD_SIEGE_VEHICLE_FORCE_ALLIANCE = 56662 -- zone_wintergrasp.cpp:57
+local SPELL_BUILD_SIEGE_VEHICLE_FORCE_HORDE = 61409 -- zone_wintergrasp.cpp:56
+
+-- C++ spell_wintergrasp_force_building::HandleScript
+-- (zone_wintergrasp.cpp:425-429): OnEffectHitTarget, EFFECT_0
+-- SPELL_EFFECT_SCRIPT_EFFECT — the hit unit casts GetEffectValue()
+-- on itself, non-triggered. PreventHitDefaultEffect omitted per the
+-- azuregos precedent: the player-path spell object has no such method
+-- and the player funnel never consults the veto. Do NOT use the
+-- battleground_wg.go WGSpellBuild*Force constants (56663/56575/56661/
+-- 61408) — those are the effect-value build spells, each one off from
+-- its force spell; the handler casts GetEffectValue(), not a constant.
+-- DORMANT: no Spell.dbc; the only cast site (demolisher-engineer
+-- gossip DoCast, zone_wintergrasp.cpp:161-168) is unported in Go.
+local function wgForceBuilding(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    hitTarget:CastSpell(hitTarget, spell:GetEffectValue(0), false)
+end
+
+RegisterSpellEvent(SPELL_BUILD_CATAPULT_FORCE, 5, wgForceBuilding)
+RegisterSpellEvent(SPELL_BUILD_DEMOLISHER_FORCE, 5, wgForceBuilding)
+RegisterSpellEvent(SPELL_BUILD_SIEGE_VEHICLE_FORCE_ALLIANCE, 5, wgForceBuilding)
+RegisterSpellEvent(SPELL_BUILD_SIEGE_VEHICLE_FORCE_HORDE, 5, wgForceBuilding)

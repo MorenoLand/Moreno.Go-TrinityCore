@@ -93,9 +93,13 @@
 -- loop only); the MEDIUM_4 / MEDIUM_5 /
 -- HARD_6 ingredient events (player GUID lookup -> Talk(say, player) +
 -- DoCast(player, 51154/51157) + ++try, dispatched by the cauldron's
--- SetData(1,1)), and the cauldron GO arm (player->CastSpell(player,
--- SPELL_POT_CHECK 51046)) stay documented-only: no GO SetData /
--- player-self-cast bridges. OnGossipSelect (zone_zuldrak.cpp:
+-- SetData(1,1)) are PORTED below — creature:SetData fires
+-- CreatureEventOnSetData (41, Go hook added with this port), the
+-- per-GUID try counter is seeded 1 at gossip select and ++'d in the
+-- event arms (zone_zuldrak.cpp:571, :528-560); the cauldron GO arm
+-- (player->CastSpell(player, SPELL_POT_CHECK 51046)) stays
+-- documented-only: registration only (no C++ GO entry const).
+-- OnGossipSelect (zone_zuldrak.cpp:
 -- 575-583: CloseGossipMenuFor + DoCast(player,
 -- SPELL_ALCHEMIST_APPRENTICE_INVISBUFF 51216) + ScheduleEvent
 -- (EVENT_EASY_123, 100ms) -> Talk(SAY_EASY_123 0, player) +
@@ -115,22 +119,22 @@
 -- is stale.
 -- spell_random_ingredient — SpellScript (hit-player urand 0-10
 -- / 11-15 / 16-20 -> closest 28205 25yd CastSpell(player,
--- FetchIngredients[ingredient][0]) + Talk(say, player)): the
--- caster is the player (aura-tick self-cast), so the blocker is
--- the ev5 player-cast fire site (finishSpellCast never fires
--- ev5); the legs are live (player:FindNearestCreature,
--- creature:CastSpell(player), creature:Talk) — documented-only.
+-- FetchIngredients[ingredient][0]) + Talk(say, player)): PORTED in
+-- lua_scripts/northrend/zone_zuldrak.lua (RegisterSpellEvent ev5);
+-- the old "finishSpellCast never fires ev5" blocker is stale
+-- (finishSpellCast fires ev5, spells.go:14892).
 -- spell_pot_check — SpellScript (21-slot Have/Fetch aura scan
 -- -> SPELL_THROW_INGREDIENT 51025 + Have-aura / item-count
 -- gates -> DestroyItemCount / SetData(1,1) ingredient-advance
 -- vs RemoveItems + RemoveAura(51216) + Talk(4, player) ruin
 -- path; hard-tier completion -> quest-12541 INCOMPLETE gate ->
 -- RemoveAura(51216) + CastSpell(player, 51111)): the caster is
--- the player (cauldron gossip self-cast), so the blocker is the
--- ev5 player-cast fire site plus the Finklestein AI SetData(1,1)
--- leg (no AI SetData bridge); GetQuestStatus + DestroyItemCount
--- + player HasAura/RemoveAura/CastSpell are all bridged —
--- documented-only. The full FetchIngredients
+-- the player (cauldron gossip self-cast); PORTED in
+-- lua_scripts/northrend/zone_zuldrak.lua — the ev5 player-cast
+-- fire site is live (finishSpellCast fires ev5, spells.go:14892)
+-- and the SetData(1,1) leg rides CreatureEventOnSetData (41),
+-- added with this port. GetQuestStatus + DestroyItemCount
+-- + player HasAura/RemoveAura/CastSpell are all bridged. The full FetchIngredients
 -- table (21 ingredients: 51018-51104 fetch/have pairs, item
 -- ids 38336-38398, SAY 5-25) and 51015/51154/51157 + 51134/
 -- 51105/51107 + 51046 + 51025 + 51111 + 51216 + 12541
@@ -176,9 +180,16 @@ RegisterCreatureEvent(STORM_CLOUD_ENTRY, 23, onSpawnOrReset)
 local NPC_FINKLESTEIN = 28205
 local SPELL_ALCHEMIST_APPRENTICE_INVISBUFF = 51216
 local SPELL_RANDOM_INGREDIENT_EASY_AURA = 51015
+local SPELL_RANDOM_INGREDIENT_MEDIUM_AURA = 51154
+local SPELL_RANDOM_INGREDIENT_HARD_AURA = 51157
 local SAY_EASY_123 = 0
+local SAY_MEDIUM_4 = 1
+local SAY_MEDIUM_5 = 2
+local SAY_HARD_6 = 3
 
 local finklesteinTimers = {}
+local finklesteinTries = {}
+local finklesteinPlayers = {}
 
 local function finklesteinCancelTimers(guid)
     local per = finklesteinTimers[guid]
@@ -202,25 +213,34 @@ local function finklesteinSchedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ EVENT_EASY_123 (zone_zuldrak.cpp:528-533): Talk(SAY_EASY_123 0,
--- player) + DoCast(player, SPELL_RANDOM_INGREDIENT_EASY_AURA 51015) +
--- ++try. The player is captured in the closure (the C++ _playerGUID
--- stash); the try counter gates only the unbridged cauldron SetData
--- dispatch, so it is not modeled.
-local function finklesteinEasy123(creature, player)
-    creature:Talk(SAY_EASY_123, player)
-    creature:CastSpell(player, SPELL_RANDOM_INGREDIENT_EASY_AURA)
+-- C++ EVENT_EASY_123 / EVENT_MEDIUM_4 / EVENT_MEDIUM_5 / EVENT_HARD_6
+-- (zone_zuldrak.cpp:528-560): Talk(SAY_*, player) + DoCast(player,
+-- *_AURA) + ++_getingredienttry. The player rides the per-GUID stash
+-- (the C++ _playerGUID); a missing player skips the arm with no
+-- try increment, as in C++. The try counter is seeded 1 at gossip
+-- select (:571) and gates the SetData(1,1) dispatch below.
+local function finklesteinIngredientArm(creature, guid, say, aura)
+    local player = finklesteinPlayers[guid]
+    if player == nil then
+        return
+    end
+    creature:Talk(say, player)
+    creature:CastSpell(player, aura)
+    finklesteinTries[guid] = (finklesteinTries[guid] or 0) + 1
 end
 
 -- C++ OnGossipSelect (zone_zuldrak.cpp:575-583): CloseGossipMenuFor +
 -- DoCast(player, SPELL_ALCHEMIST_APPRENTICE_INVISBUFF 51216) +
--- ScheduleEvent(EVENT_EASY_123, 100ms). No menuId/gossipListId gate.
+-- _getingredienttry = 1 + ScheduleEvent(EVENT_EASY_123, 100ms).
+-- No menuId/gossipListId gate.
 local function finklesteinGossipSelect(event, player, creature, sender, action)
     player:GossipComplete()
     creature:CastSpell(player, SPELL_ALCHEMIST_APPRENTICE_INVISBUFF)
     local guid = creature:GetGUIDLow()
+    finklesteinPlayers[guid] = player
+    finklesteinTries[guid] = 1
     finklesteinSchedule(guid, "easy123", 100, function()
-        finklesteinEasy123(creature, player)
+        finklesteinIngredientArm(creature, guid, SAY_EASY_123, SPELL_RANDOM_INGREDIENT_EASY_AURA)
     end)
     -- C++ OnGossipSelect returns false: the AI/native select arms
     -- proceed (Eluna GOSSIP_EVENT_ON_SELECT: a Lua false lets them
@@ -265,17 +285,52 @@ finklesteinTurnBack = function(creature, guid)
 end
 
 -- C++ Reset seed: cancel (Reset clears the event map) then schedule
--- the first TURN_TO_POT at 15-26s. Spawn (5) and reset (23) both
--- run Reset in C++; leave-combat (2) / death (4) stay cancel-only.
+-- the first TURN_TO_POT at 15-26s. Reset also clears _playerGUID and
+-- _getingredienttry (zone_zuldrak.cpp:482-483), so the stash clears
+-- here too. Spawn (5) and reset (23) both run Reset in C++; leave-combat (2) / death (4) stay cancel-only.
 local function finklesteinReset(event, creature)
     local guid = creature:GetGUIDLow()
     finklesteinCancelTimers(guid)
+    finklesteinTries[guid] = nil
+    finklesteinPlayers[guid] = nil
     finklesteinSchedule(guid, "turnpot", {15000, 26000}, function()
         finklesteinTurnToPot(creature, guid)
     end)
 end
 
+-- C++ npc_alchemist_finklestein::SetData (zone_zuldrak.cpp:487-510):
+-- type 1 / data 1 schedules by try-count — 2/3 -> EASY_123, 4 ->
+-- MEDIUM_4, 5 -> MEDIUM_5, 6 -> HARD_6, each at 100ms; any other
+-- try (0/1/7+) schedules nothing. Fires via CreatureEventOnSetData
+-- (41): the Go SetData bridge triggers it after the store write,
+-- the SetGUID-40 twin.
+local function finklesteinOnSetData(event, creature, setType, setData)
+    if setType ~= 1 or setData ~= 1 then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local try = finklesteinTries[guid] or 0
+    if try == 2 or try == 3 then
+        finklesteinSchedule(guid, "easy123", 100, function()
+            finklesteinIngredientArm(creature, guid, SAY_EASY_123, SPELL_RANDOM_INGREDIENT_EASY_AURA)
+        end)
+    elseif try == 4 then
+        finklesteinSchedule(guid, "medium4", 100, function()
+            finklesteinIngredientArm(creature, guid, SAY_MEDIUM_4, SPELL_RANDOM_INGREDIENT_MEDIUM_AURA)
+        end)
+    elseif try == 5 then
+        finklesteinSchedule(guid, "medium5", 100, function()
+            finklesteinIngredientArm(creature, guid, SAY_MEDIUM_5, SPELL_RANDOM_INGREDIENT_MEDIUM_AURA)
+        end)
+    elseif try == 6 then
+        finklesteinSchedule(guid, "hard6", 100, function()
+            finklesteinIngredientArm(creature, guid, SAY_HARD_6, SPELL_RANDOM_INGREDIENT_HARD_AURA)
+        end)
+    end
+end
+
 RegisterCreatureGossipEvent(NPC_FINKLESTEIN, 2, finklesteinGossipSelect)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 41, finklesteinOnSetData)
 -- Evade order (engine triggerCreatureEvade, creaturemotion.go): ev23
 -- fires BEFORE ev2, so a cancel-only ev2 handler undoes the ev23
 -- Reset re-seed and the turn-to-pot loop dies after the first evade

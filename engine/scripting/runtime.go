@@ -428,6 +428,16 @@ const (
 	// receivers resolve it with GetCreatureByGUID. 40 is the next free
 	// slot after the DoAction-38 / SpellClick-39 precedents.
 	CreatureEventOnSetGUID = 40
+	// CreatureEventOnSetData is a Go-side extension (no C++ Eluna hook):
+	// CreatureAI::SetData dispatches through the AI virtual table, which
+	// Lua-ported AIs have no bearer of, so creature:SetData(type, data) is
+	// the transport — it fires (event, creature, type, data) on the entry
+	// then unique bindings, the void-hook twin of the other creature
+	// events (C++ SetData returns void, so returns are discarded). The
+	// store write still lands first, so a handler reading GetData sees
+	// the new value. 41 is the next free slot after the SetGUID-40
+	// precedent.
+	CreatureEventOnSetData = 41
 )
 
 // AuraEvents contract for RegisterAuraEvent(spellID, event, fn). There is

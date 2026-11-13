@@ -308,3 +308,28 @@ end
 
 RegisterAuraEvent(SPELL_INFECTED_WORGEN_BITE, 2, infectedWorgenBiteApply)
 RegisterAuraEvent(SPELL_INFECTED_WORGEN_BITE, 4, infectedWorgenBiteApply)
+
+-- spell_shredder_delivery (zone_grizzly_hills.cpp:801-836):
+-- OnEffectHitTarget EFFECT_0 SPELL_EFFECT_SCRIPT_EFFECT; Load() gates
+-- on the caster being a unit, and the handler despawns the caster when
+-- it is a broken-down shredder (27354). ev5 is the twin
+-- (boss_xevozz.lua:372 xevozzSummonPlayers precedent); the hit target
+-- is unused — the registration is purely the trigger. DORMANT until
+-- Spell.dbc ships 48610.
+local SPELL_SHREDDER_DELIVERY = 48610 -- AC spell_script_names :1352
+local NPC_BROKEN_DOWN_SHREDDER = 27354 -- zone_grizzly_hills.cpp:798
+
+local function shredderDelivery(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Creature" then
+        return
+    end
+    if caster:GetEntry() == NPC_BROKEN_DOWN_SHREDDER then
+        caster:DespawnOrUnsummon()
+    end
+end
+
+RegisterSpellEvent(SPELL_SHREDDER_DELIVERY, 5, shredderDelivery)
