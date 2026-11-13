@@ -107,7 +107,9 @@ local function lookOpening(creature, guid, activate, spot)
         return
     end
     if activate then
-        bonfire:CastSpell(bonfire, SPELL_FIND_OPENING_TRIGGER)
+        -- C++ DoCast(bonfireBunny, ...) — the flamecaller casts on
+        -- the bonfire bunny; the bunny is the target, not the caster.
+        creature:CastSpell(bonfire, SPELL_FIND_OPENING_TRIGGER)
         bonfire:CastSpell(beam, SPELL_FIND_OPENING_VISUAL, true)
     else
         creature:CastSpell(creature, SPELL_FIND_OPENING_CHANNEL)

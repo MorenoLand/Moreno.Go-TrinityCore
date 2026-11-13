@@ -55,8 +55,11 @@
 -- UNIT_FLAG_MOUNT, Unit.cpp:8310/8365); the Ohgan and chained-spirit
 -- summon arms ARE ported at engage (live SummonCreature bridge, see
 -- below), and SummonedCreatureDies' Ohgan frenzy 24318 +
--- Talk(SAY_OHGAN_DEAD=4) arm ports via the Ohgan Died handler's
--- FindNearestCreature boss relay; the
+-- Talk(SAY_OHGAN_DEAD=4) arm ports via direct ev21 on Mandokir (see
+-- mandokirSummonedDied — the old Ohgan-ev4 FindNearestCreature relay
+-- is retired: ev21 is live in the current runtime, fireCreatureDied /
+-- fireCreatureDiedByCreature dispatch it on the OwnerGUID summoner,
+-- and the relay's 100 yd cap missed kited Ohgan kills); the
 -- KilledUnit jindo Talk(SAY_GRATS_JINDO) arm rides GetCreaturesInGrid
 -- (11380 is unique in Zul'Gurub); the mortal strike HealthBelowPct(50) check
 -- uses post-damage GetHealthPct (no pre-damage health bridge);
@@ -310,6 +313,23 @@ local function mandokirTargetDied(event, creature, victim)
     end
 end
 
+-- C++ SummonedCreatureDies (boss_mandokir.cpp:184-190): only Ohgan
+-- (14988) trips it — non-triggered self-cast 24318 (frenzy) + Talk
+-- SAY_OHGAN_DEAD(4). Direct ev21: fireCreatureDied /
+-- fireCreatureDiedByCreature dispatch ev21 on the OwnerGUID summoner
+-- (lua_creature_events.go:7729/:7775), and the Lua SummonCreature
+-- bridge stamps OwnerGUID (summonTempCreature), so the entry check
+-- also filters the 20 chained spirits (15117), which raise ev21 too.
+-- Temp-summon expiry / Despawn fire ev20, not ev21, so the 35 s
+-- Ohgan timer and the evade despawn never trip this arm (C++-exact:
+-- UnSummon -> SummonedCreatureDespawn, not Dies).
+local function mandokirSummonedDied(event, creature, summon, killer)
+    if summon:GetEntry() == ENTRY_OHGAN then
+        creature:CastSpell(creature, SPELL_FRENZY)
+        creature:Talk(SAY_OHGAN_DEAD)
+    end
+end
+
 local function despawnMandokirSpirits(guid)
     local spirits = mandokirSpirits[guid]
     if spirits then
@@ -391,6 +411,7 @@ RegisterCreatureEvent(ENTRY_MANDOKIR, 1, mandokirEnterCombat)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 2, mandokirLeaveCombat)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 3, mandokirTargetDied)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 4, mandokirDied)
+RegisterCreatureEvent(ENTRY_MANDOKIR, 21, mandokirSummonedDied)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 23, mandokirReset)
 RegisterCreatureEvent(ENTRY_MANDOKIR, 24, mandokirReachHome)
 
@@ -422,17 +443,10 @@ RegisterCreatureEvent(ENTRY_OHGAN, 2, function(event, creature)
 end)
 RegisterCreatureEvent(ENTRY_OHGAN, 4, function(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
-    -- C++ SummonedCreatureDies (boss_mandokir.cpp:184-190): frenzy
-    -- self-cast + Talk on the boss; relayed via FindNearestCreature
-    -- (garaxxas/delrissa liveness twin — the boss object is not
-    -- reachable from the summon's own Died handler otherwise).
-    -- Temp-summon expiry is UnSummon, not death, so this fires only on
-    -- a real kill; a missing boss (already dead/gone) skips silently.
-    local boss = creature:FindNearestCreature(ENTRY_MANDOKIR, 100.0)
-    if boss then
-        boss:CastSpell(boss, SPELL_FRENZY)
-        boss:Talk(SAY_OHGAN_DEAD)
-    end
+    -- C++ SummonedCreatureDies (boss_mandokir.cpp:184-190) ports via
+    -- direct ev21 on Mandokir (mandokirSummonedDied), not here — the
+    -- old FindNearestCreature relay is retired (its 100 yd cap missed
+    -- kited Ohgan kills, and it would double-fire now that ev21 lands).
 end)
 RegisterCreatureEvent(ENTRY_OHGAN, 23, function(event, creature)
     local guid = creature:GetGUIDLow()

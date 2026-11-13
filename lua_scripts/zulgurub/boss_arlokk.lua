@@ -454,8 +454,9 @@ RegisterCreatureEvent(ENTRY_ARLOKK, 23, arlokkReset)
 -- npc_zulian_prowler (15101, C++ ScriptName "npc_zulian_prowler"):
 -- OnReset self-casts sneak auras 22766 + 7939; OnEnterCombat removes
 -- both (C++ JustEngagedWith); melee is engine-driven. The MovePoint to
--- Arlokk, the 6s random-attack timer (no Attack bridge) and the
--- SpellHit(24211) attack arm have no bridge and are not modeled. The
+-- Arlokk and the 6s random-attack timer stay out (the timer's
+-- victimless SelectTarget pick has no bridge); the SpellHit(24211)
+-- attack arm IS ported below (creature:Attack is bridged). The
 -- JustDied arlokk-SetData(_sideData, 0) leg is cross-creature summon
 -- bookkeeping with no bridge (stays out); the JustDied 4s
 -- DespawnOrUnsummon leg is PORTED below (prowlerDied) as a one-shot
