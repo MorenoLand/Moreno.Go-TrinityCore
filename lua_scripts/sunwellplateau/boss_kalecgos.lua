@@ -129,9 +129,8 @@
 -- START_OUTRO relay ports via grid sweep + 1s outro-start (below).
 -- OnSpellHit(14): hit
 -- by 46733 (tap check damage) -> triggered self-cast teleport back
--- 46020; the Unit::Kill(unitCaster, me) arm stays out — creature:Kill()
--- is self-killer only, and this arm credits the kill to the caster
--- (player kill chain), which no bridge expresses — skipped.
+-- 46020, then Unit::Kill(unitCaster, me) via creature:Kill(caster)
+-- (bridge live, lua_creature_events.go:3432; killer arg = C++ form).
 -- OnLeaveCombat(2)/OnReset(23): the kalecgos EnterEvadeMode relay
 -- ports via grid sweep + dragon:EnterEvadeMode (below).
 -- Registered: go_kalecgos_spectral_rift (GO 187055) via
@@ -646,10 +645,10 @@ end
 -- ENTRY_SATHROVARR is the entry proxy for the sath-GUID compare.
 -- The health-threshold Talks use pre-damage health (C++ HealthBelowPct
 -- is evaluated before the damage is applied).
+-- C++ DamageTaken (boss_kalecgos.cpp:373-390): non-Sathrovarr hits deal
+-- 0 damage, but the say-phase checks run on EVERY hit.
 local function humanDamageTaken(event, creature, attacker, damage)
-    if attacker == nil or attacker:GetEntry() ~= ENTRY_SATHROVARR then
-        return false, 0
-    end
+    local sathHit = attacker ~= nil and attacker:GetEntry() == ENTRY_SATHROVARR
     local guid = creature:GetGUIDLow()
     local phase = humanSayPhase[guid] or 1
     if belowPct(creature, 75) and phase == 1 then
@@ -661,6 +660,9 @@ local function humanDamageTaken(event, creature, attacker, damage)
     elseif belowPct(creature, 10) and phase == 3 then
         creature:Talk(SAY_GOOD_NEAR_DEATH_2)
         humanSayPhase[guid] = 4
+    end
+    if not sathHit then
+        return false, 0
     end
 end
 
@@ -910,12 +912,13 @@ local function sathrovarrDamageTaken(event, creature, attacker, damage)
     end
 end
 
--- C++ SpellHit: hit by 46733 (tap check damage) -> triggered
--- self-cast teleport back 46020. The Unit::Kill(caster) arm has no
--- kill bridge — skipped.
+-- C++ SpellHit (boss_kalecgos.cpp:477-487): hit by 46733 (tap check
+-- damage) -> triggered self-cast teleport back 46020, then
+-- Unit::Kill(unitCaster, me) via creature:Kill(caster).
 local function sathrovarrSpellHit(event, creature, caster, spellId)
     if spellId == SPELL_TAP_CHECK_DAMAGE then
         creature:CastSpell(creature, SPELL_TELEPORT_BACK, true)
+        creature:Kill(caster)
     end
 end
 
