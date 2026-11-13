@@ -21,7 +21,7 @@
 -- 38s), so plain ms delays carry the C++-exact timing — no
 -- {minMs, maxMs} randtime table.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset.
+-- 19 OnJustSummonedCreature, 20 OnSummonedCreatureDespawn, 23 OnReset.
 -- Ported arms (C++-exact for all modeled arms; line refs are
 -- boss_toravon.cpp):
 -- boss_toravon::JustEngagedWith (:50-60) — the immediate DoCastSelf
@@ -42,6 +42,11 @@
 -- (ScriptedCreature.cpp:499-511) — SetBossState(DATA_TORAVON 3,
 -- NOT_STARTED), != DONE-gated, PORTED tick 262 in toravonReset
 -- (new ev23, split from ev2 — leave-combat does not call Reset).
+-- BossAI::JustSummoned (no override in this file):
+-- ScriptedCreature.cpp:559-564 — summons.Summon + DoZoneInCombat when
+-- engaged — PORTED round 26 in toravonJustSummoned (ev19, ev20 prune);
+-- the _Reset/_JustDied summons.DespawnAll() legs ride
+-- despawnToravonSummons in toravonReset/toravonJustDied.
 -- EVENT_FROZEN_ORB (:76-82) — me->CastSpell(me, SPELL_FROZEN_ORB
 -- 72091, AddSpellMod(SPELLVALUE_MAX_TARGETS, RAID_MODE(1, 3)))
 -- (:79) -> CastSpell(creature, 72091); the max-targets raid-mode leg
@@ -80,11 +85,13 @@
 -- npc_frozen_orb::IsSummonedBy (:111-133) — the three triggered
 -- DoCastSelf legs (SPELL_FROZEN_ORB_AURA 72067, SPELL_FROZEN_ORB_DMG
 -- 72081, SPELL_RANDOM_AGGRO 72084) plus the instance->
--- GetCreature(DATA_TORAVON) leg (JustSummoned passthrough /
--- DoZoneInCombat / DespawnOrUnsummon): the orb entry id lives in the
--- Spell.dbc summon effect of 72091 / creature_template, neither
--- in-tree — no RegisterCreatureEvent binding can be written without
--- guessing it.
+-- GetCreature(DATA_TORAVON) leg (the in-combat branch's own
+-- DoZoneInCombat / the out-of-combat DespawnOrUnsummon): the orb entry
+-- id lives in the Spell.dbc summon effect of 72091 / creature_template,
+-- neither in-tree — no RegisterCreatureEvent binding can be written
+-- without guessing it. The toravon-side JustSummoned passthrough half
+-- of that leg IS ported now (ev19, see above) — it needs no orb entry,
+-- it fires on Toravon for any summon.
 -- spell_toravon_random_aggro (SpellScript :137-160 — 46523 Random
 -- Aggro: ResetAllThreat + 1M threat on a random non-tank player) —
 -- no SpellScript bridge.
@@ -120,6 +127,64 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- BossAI summons tracking (ScriptedCreature.cpp:559-561): the
+-- summons.Summon list twin (eregos precedent).
+local toravonSummons = {}
+
+-- C++ BossAI::_Reset / _JustDied summons.DespawnAll()
+-- (ScriptedCreature.cpp:507/516, eregos precedent). The list is nilled
+-- before the despawn loop: each DespawnOrUnsummon fires ev20 on
+-- Toravon, and the ev20 prune below then sees a nil list and returns.
+-- DespawnOrUnsummon on an already-gone motion is a no-op
+-- (lua_creature_events.go:7230). Called from toravonReset and
+-- toravonJustDied; the dead case is moot (toravonJustDied already
+-- cleared the list, so a later ev23 finds nil).
+local function despawnToravonSummons(creature)
+    local guid = creature:GetGUIDLow()
+    local tracked = toravonSummons[guid]
+    if not tracked then
+        return
+    end
+    toravonSummons[guid] = nil
+    for _, summon in pairs(tracked) do
+        summon:DespawnOrUnsummon()
+    end
+end
+
+-- C++ BossAI::JustSummoned (no override in boss_toravon.cpp):
+-- ScriptedCreature.cpp:559-564 — summons.Summon(summon) +
+-- DoZoneInCombat(summon) when the boss is engaged. The zone leg rides
+-- summon:DoZoneInCombat() (curator precedent) gated on
+-- creature:IsInCombat(). No entry gate: Toravon's only summon source
+-- is SPELL_FROZEN_ORB 72091, and the base applies to every summon.
+-- Fires via the spell-summon path (ev19 on the summoner,
+-- summonTempCreature; boss_ai.go:4938) when the 72091 summon effect
+-- resolves; the orb's own IsSummonedBy legs stay out (entry unknown).
+local function toravonJustSummoned(event, creature, summon)
+    local guid = creature:GetGUIDLow()
+    local tracked = toravonSummons[guid]
+    if not tracked then
+        tracked = {}
+        toravonSummons[guid] = tracked
+    end
+    tracked[summon:GetGUIDLow()] = summon
+    if creature:IsInCombat() then
+        summon:DoZoneInCombat()
+    end
+end
+
+-- C++ BossAI::SummonedCreatureDespawn (ScriptedCreature.cpp:566-569):
+-- summons.Despawn — prune the tracked summon (eregos precedent).
+local function toravonSummonedDespawn(event, creature, summon)
+    if summon == nil then
+        return
+    end
+    local tracked = toravonSummons[creature:GetGUIDLow()]
+    if tracked then
+        tracked[summon:GetGUIDLow()] = nil
+    end
 end
 
 -- C++ SelectTarget(SelectTargetMethod::Random, 1) — random threat-listed
@@ -250,6 +315,7 @@ end
 -- (instance_vault_of_archavon.cpp:57-83).
 local function toravonJustDied(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    despawnToravonSummons(creature) -- BossAI::_JustDied summons.DespawnAll() (ScriptedCreature.cpp:516)
     creature:SetBossState(DATA_TORAVON, 3)
 end
 
@@ -257,15 +323,30 @@ end
 -- (ScriptedCreature.cpp:499-511) — events.Reset() + SetBossState
 -- (DATA_TORAVON 3, NOT_STARTED) only when the stored state != DONE.
 -- Split from ev2 (the keleseth/svala precedent): ev2 leave-combat
--- does not call Reset in C++, so it stays wipe-only.
+-- does not call Reset in C++, so it stays wipe-only. The _Reset
+-- summons.DespawnAll() leg (ScriptedCreature.cpp:507) rides
+-- despawnToravonSummons in toravonReset (below).
+-- C++ BossAI::JustSummoned (no override in boss_toravon.cpp):
+-- ScriptedCreature.cpp:559-564 — summons.Summon(summon) +
+-- DoZoneInCombat(summon) when engaged — PORTED round 26 in
+-- toravonJustSummoned (ev19): the summon is tracked in toravonSummons
+-- (eregos precedent) for the _Reset/_JustDied summons.DespawnAll()
+-- legs (ScriptedCreature.cpp:507/516); the zone leg rides
+-- summon:DoZoneInCombat() (curator precedent) gated on
+-- creature:IsInCombat(). No entry gate: Toravon's only summon source
+-- is SPELL_FROZEN_ORB 72091, and the base applies to every summon.
+-- The orb's own IsSummonedBy legs stay out (see DOCUMENTED-ONLY).
 local function toravonReset(event, creature)
     if creature:GetBossState(DATA_TORAVON) ~= 3 then
         creature:SetBossState(DATA_TORAVON, 0)
     end
     cancelTimers(creature:GetGUIDLow())
+    despawnToravonSummons(creature) -- BossAI::_Reset summons.DespawnAll() (ScriptedCreature.cpp:507)
 end
 
 RegisterCreatureEvent(ENTRY_TORAVON, 1, toravonEnterCombat)
 RegisterCreatureEvent(ENTRY_TORAVON, 2, toravonCancelCombatTimers)
 RegisterCreatureEvent(ENTRY_TORAVON, 4, toravonJustDied)
+RegisterCreatureEvent(ENTRY_TORAVON, 19, toravonJustSummoned)
+RegisterCreatureEvent(ENTRY_TORAVON, 20, toravonSummonedDespawn)
 RegisterCreatureEvent(ENTRY_TORAVON, 23, toravonReset)

@@ -41,8 +41,9 @@ local NPC_BLOODMAGE_LAURITH = 25381 -- zone_borean_tundra.cpp:1699
 -- SPELL_EFFECT_SEND_EVENT — the caster finds Bloodmage Laurith
 -- within 100yd and hands the AI the caster's GUID via SetGUID.
 -- ev4 = OnEffectHit (lua_spell.go:588-594; sonicBoomHit precedent).
--- DORMANT: npc_bloodmage_laurith AI is unported, so the ev40
--- SetGUID hook fires into nothing until then; no Spell.dbc 45997.
+-- PORTED (round 26): npc_bloodmage_laurith AI lives in
+-- npc_bloodmage_laurith.lua (ev40 SetGUID + 1s Talk + 5s orientation
+-- reset); this leg now fires into the registered AI.
 local function bloodsporeRuinationHit(event, spell, effectIndex)
     if effectIndex ~= 1 then
         return

@@ -23696,6 +23696,16 @@ func init() {
 	// C++ LastRites enum (zone_borean_tundra.cpp:413).
 	RegisterLuaBoss("npc_counselor_talbot", 25301)
 	// Checked-no-gate: zero HasUnitState hits in zone_borean_tundra.cpp — combat-start ShadowBolt/Deflection/SoulBlast pumps stay ungated (UpdateVictim-gated, not cast-gated).
+	// npc_bloodmage_laurith (Borean Tundra, quest 11719) — ported arms in
+	// lua_scripts/northrend/npc_bloodmage_laurith.lua: Reset() (event cancel +
+	// player-GUID clear) and the SetGUID (ev40) / EVENT_TALK (1s, Talk 0 to the
+	// player) / EVENT_RESET_ORIENTATION (5s, face home) machine, fired by the
+	// ported spell_q11719 bloodspore leg in zone_borean_tundra.lua. Entry 25381
+	// verifiable from the C++ BloodsporeRuination enum (zone_borean_tundra.cpp:1699).
+	// Checked-no-gate: the event machine advances only while UpdateVictim() is false
+	// in C++; the Lua chain runs ungated — the only producer is the out-of-combat
+	// quest cast, so the delta is behaviorally nil.
+	RegisterLuaBoss("npc_bloodmage_laurith", 25381)
 	// npc_mageguard_dalaran (Dalaran, trespasser guards) — ported arm
 	// in lua_scripts/northrend/npc_mageguard_dalaran.lua: constructor
 	// SetFlag NON_ATTACKABLE + ApplySpellImmune normal/magic damage

@@ -26,8 +26,14 @@
 --   (2) the only consumer of the SetData writes is
 --   instance_utgarde_keep::SetData -> HandleGameObject on the forge
 --   anvil/bellow/fire GOs (instance_utgarde_keep.cpp:141-160), and
---   there is no GO-state bridge in Go — the writes would land in a
---   store nothing reads. Re-activates when the forge GO machine lands.
+--   instance_utgarde_keep.lua registers no OnSetData handler while the
+--   OnGameObjectCreate GO-GUID latches are vacuous (static template GOs
+--   never pass the Go GO-create funnel) — the writes would fire an
+--   event nothing consumes. (Round-26 correction: the SetData WRITE
+--   bridge itself exists — instance_hooks.go:51, razorgore precedent —
+--   and GO:SetGoState exists; the block is the missing consumer +
+--   vacuous latches, not the write.) Re-activates when the forge GO
+--   machine lands.
 --   npc_enslaved_proto_drake (24083) is ported in
 --   npc_enslaved_proto_drake.lua; spell_fixate is ported below
 --   (40414 ev5) and spell_uk_second_wind (ported in procs.go) are
