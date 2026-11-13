@@ -5,7 +5,8 @@
 -- Entry: 25850 (NPC_TRAPPED_MAMMOTH_CALF, World/item_scripts.cpp:167,
 -- quest-11876 item script — the GO_MAMMOTH_TRAP_1..22 lists there match
 -- this file's enum entry-for-entry, cross-confirming the binding).
--- Eluna creature events: 23 OnReset.
+-- Eluna creature events: 23 OnReset, 38 OnDoAction, 2 OnLeaveCombat,
+-- 4 OnDied, 28 OnMovementInform.
 -- Ported arms (C++ order, zone_borean_tundra.cpp:1330-1343):
 -- - Reset: scan the 22 mammoth-trap GOs in enum order; the first found
 --   within 11.0 yards gets SetGoState(0) (GO_STATE_ACTIVE), then return.
@@ -17,14 +18,18 @@
 --   then clears the latch. The trigger is the now-ported
 --   item_dehta_trap_smasher OnUse (lua_scripts/world/item_scripts.lua,
 --   entry 35228).
--- Unmodeled (documented-only, no bridges):
--- - MovementInform arrival leg: DisappearAndDie + trap SetLootState
---   (GO_JUST_DEACTIVATED) — no MovementInform bridge (SetLootState
---   itself is bridged on the GO object, but unreachable without it);
---   the calf remains at its MovePoint destination instead of
---   disappearing, and the trap keeps the READY state the item set.
+-- - MovementInform (zone_borean_tundra.cpp:1367-1382): on
+--   POINT_MOTION_TYPE arrival, DisappearAndDie (Despawn twin, halazzi
+--   precedent) + the trap scan in enum order, first hit within 11yd
+--   gets SetLootState(GO_JUST_DEACTIVATED). Event 28 is the
+--   MovementInform bridge (kalecgos precedent); the scan runs before
+--   the despawn because Despawn drops the motion record the scan
+--   reads — C++ order is unobservable here (purely positional).
 
 local ENTRY_CALF = 25850
+
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:36
+local GO_JUST_DEACTIVATED = 3 -- GameObject.h LootState
 
 local MAMMOTH_TRAPS = {
     188022, 188024, 188025, 188026, 188027, 188028, 188029, 188030,
@@ -98,6 +103,25 @@ local function onCalfDoAction(event, creature, action)
     schedule(guid, "calf_run", 1500, function() calfRun(creature, guid) end)
 end
 
+-- C++ npc_trapped_mammoth_calfAI::MovementInform (zone_borean_tundra.cpp:1367-1382):
+-- on POINT_MOTION_TYPE arrival, DisappearAndDie + the trap scan in
+-- enum order, first hit within 11yd gets SetLootState(GO_JUST_DEACTIVATED).
+-- The scan runs before the despawn (see header): Despawn drops the motion
+-- record FindNearestGameObject reads.
+local function calfMovementInform(event, creature, type, id)
+    if type ~= POINT_MOTION_TYPE then
+        return
+    end
+    for _, trapEntry in ipairs(MAMMOTH_TRAPS) do
+        local trap = creature:FindNearestGameObject(trapEntry, 11.0)
+        if trap then
+            trap:SetLootState(GO_JUST_DEACTIVATED)
+            break
+        end
+    end
+    creature:Despawn()
+end
+
 local function onCalfCancel(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
@@ -106,3 +130,4 @@ RegisterCreatureEvent(ENTRY_CALF, 23, calfReset)
 RegisterCreatureEvent(ENTRY_CALF, 38, onCalfDoAction)
 RegisterCreatureEvent(ENTRY_CALF, 2, onCalfCancel)
 RegisterCreatureEvent(ENTRY_CALF, 4, onCalfCancel)
+RegisterCreatureEvent(ENTRY_CALF, 28, calfMovementInform)

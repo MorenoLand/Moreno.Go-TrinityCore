@@ -45,10 +45,12 @@
 --   talbotInPosition cross-AI latch (:860-868): no MovementInform /
 --   cross-AI-ENSURE bridge.
 -- - JustDied (:913-938): the Talk / RemoveAura / ClearUnitState /
---   SetWalk / MovePoint legs are bridgeable now, but arlos
---   KillSelf and RewardPlayerAndGroupAtEvent have no bridges, and
---   the latch above never arms — the tail stays out on those
---   grounds (not motion/unit-state, as previously claimed).
+--   SetWalk / MovePoint legs are bridgeable now, and arlos KillSelf
+--   IS bridged (creature:Kill, the Creature::KillSelf twin,
+--   lua_creature_events.go:3447) — but RewardPlayerAndGroupAtEvent
+--   has no Lua bridge and the latch above never arms, so the tail
+--   stays out on those grounds (not motion/unit-state, as previously
+--   claimed).
 -- - npc_thassarian escort-scene react arms (zone_borean_tundra.cpp
 --   :509/:566/:604/:667/:675: arthas->SetReactState(PASSIVE) on
 --   WaypointReached(3), talbot->SetReactState(PASSIVE) at scene phase

@@ -14,10 +14,12 @@
 -- AttackStart and UpdateAI are all empty, so spawn is the only bearer.
 -- Unmodeled: MoveInLineOfSight (:82-141) — the trespasser teleport.
 -- ev27 fires from the aggro-engage branch only (engage-only bridge,
--- insufficient for a sighting arm), and its gates need IsInBack (not
--- in the handler-creature fallback), zone/team reads and
--- GetClosestCreature indoor/outdoor branching; the teleport casts
--- (SPELL_TRESPASSER_A/H) would also fire on engage, not on sighting.
+-- insufficient for a sighting arm), and its gates need isInBackInMap
+-- (:104/:116, 12yd + back-arc; plain creature:IsInBack IS bridged,
+-- lua_creature_events.go:910, but the combined distance+arc call has
+-- no bridge), zone/team reads and GetClosestCreature indoor/outdoor
+-- branching; the teleport casts (SPELL_TRESPASSER_A/H) would also
+-- fire on engage, not on sighting.
 -- Porting the constructor arm alone strands nothing: the guards keep
 -- their non-attackable, damage-immune posture with or without it.
 

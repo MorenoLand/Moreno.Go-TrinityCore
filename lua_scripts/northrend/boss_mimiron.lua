@@ -73,19 +73,19 @@
 --   (boss_mimiron.cpp:2760-2772); the passenger GetVehicleBase twin
 --   is target:IsOnVehicle():GetOwner() (see below).
 -- DOCUMENTED-ONLY (no behavior fabricated):
---   Activation-chain legs with no bridge: vehicle-base legs (SEAT_6/7/5/2
---     casts, SetFacingTo on the base -- GetVehicleBase (:3522) and
---     SetFacingTo (:5270) ARE bridged; GetVehicleCreatureBase has no
---     binding. The chain steps stay out pending re-triage — this tick
---     ports only the JustEngagedWith SEAT_6, see below),
---     MovePoint legs (no MovePoint binding), elevator/button GameObject
---     legs (no GO bridge), MKII legs in the activation chains
---     (vehicle-base SetFacingTo / MOUNT / MovePoint legs; the
---     instance-GUID MKII ref itself is live — INTRO_2/3 use it),
---     worldtrigger legs (EVENT_SUMMON_FLAMES, elevator
---     knockback), aerial EnterEvadeMode on Reset (bridged,
+--   Activation-chain legs with no bridge: elevator/button GameObject
+--     legs (VX001 steps 4/5 elevator states, worldtrigger knockback;
+--     no GO bridge) and the GetVehicleCreatureBase legs (no binding;
+--     the VX-001 / ACU DoAction relays ride the stored summon refs).
+--     The vehicle-base legs are PORTED this tick: VX001 steps 1
+--     (SetFacingTo 3.686), 2 (SEAT_6) and 8 (SEAT_2), AERIAL step 1
+--     (SEAT_5) — GetVehicleBase (:3522) and SetFacingTo
+--     (lua_objects.go:1538) are bridged; the casts are DBC-gated
+--     (63313/63316/63344/63345 unseeded, wago verdicts pending).
+--     MovePoint legs ride the MoveTo twin (vol7ron steps 1/3);
+--     aerial EnterEvadeMode on Reset stays out (bridged,
 --     lua_creature_events.go:5188, but runs the base evade, not the ACU
---     override — summons.DespawnAll unbridged, so it stays out).
+--     override — summons.DespawnAll unbridged).
 --   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base
 --     PORTED (GetVehicleBase, instance-GUID fallback; DBC-gated 63344);
 --     button GO flag leg -- out (no GO bridge); EVENT_SUMMON_FLAMES --
@@ -459,12 +459,12 @@ end
 
 -- C++ DoAction DO_ACTIVATE_VX001 (:397-400) schedules
 -- EVENT_VX001_ACTIVATION_1 in 1s. Steps are defined last-to-first so
--- each schedules the next without forward declarations. Steps 1/2
--- (vehicle-base SetFacingTo / SEAT_6), step 4 (elevator GO + worldtrigger
--- knockback) and step 8 (SEAT_2 on the vehicle base) stay out
--- (GetVehicleBase / SetFacingTo are bridged, re-triage pending — this
--- tick ports only the JustEngagedWith SEAT_6; step 4 stays on no GO
--- bridge); the Talk, summon and DoAction legs are ported. The summoned
+-- each schedules the next without forward declarations. Steps 1
+-- (vehicle-base SetFacingTo 3.686), 2 (SEAT_6 on the vehicle base)
+-- and 8 (SEAT_2 on the vehicle base) are PORTED this tick
+-- (GetVehicleBase :3522 + SetFacingTo, instance-GUID MKII fallback);
+-- step 4 (elevator GO + worldtrigger knockback) stays out on no GO
+-- bridge. The Talk, summon and DoAction legs are ported. The summoned
 -- VX-001 is kept in per-GUID state, the Lua twin of the DATA_VX_001
 -- instance GUID the later steps read.
 local function vx001Activation9(creature, guid)
@@ -476,6 +476,14 @@ local function vx001Activation9(creature, guid)
 end
 
 local function vx001Activation8(creature, guid)
+    -- C++ :560-562: DoCast SEAT_2 on the vehicle base (the local is
+    -- named vx001 in C++ but the target is me->GetVehicleBase()).
+    -- DBC-gated (63313 unseeded).
+    local base = creature:GetVehicleBase()
+        or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if base then
+        creature:CastSpell(base, SPELL_SEAT_2)
+    end
     schedule(guid, "vx001act9", 3000, function()
         vx001Activation9(creature, guid)
     end)
@@ -524,12 +532,27 @@ local function vx001Activation3(creature, guid)
 end
 
 local function vx001Activation2(creature, guid)
+    -- C++ :528-530: DoCast SEAT_6 on the vehicle base (MKII).
+    -- DBC-gated (63344 unseeded), like the engage SEAT_6.
+    local base = creature:GetVehicleBase()
+        or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if base then
+        creature:CastSpell(base, SPELL_SEAT_6)
+    end
     schedule(guid, "vx001act3", 1000, function()
         vx001Activation3(creature, guid)
     end)
 end
 
 local function vx001Activation1(creature, guid)
+    -- C++ :523-525: the vehicle base (MKII) faces 3.686f (the "fix
+    -- magic number" facing). GetVehicleBase (:3522) is bridged, with
+    -- the instance-GUID MKII twin as the fallback (engage precedent).
+    local base = creature:GetVehicleBase()
+        or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if base then
+        base:SetFacingTo(3.686)
+    end
     schedule(guid, "vx001act2", 1000, function()
         vx001Activation2(creature, guid)
     end)
@@ -537,8 +560,10 @@ end
 
 -- C++ DoAction DO_ACTIVATE_AERIAL (:401-403) schedules
 -- EVENT_AERIAL_ACTIVATION_1 in 5s. Step 1 (SEAT_5 on the vehicle base)
--- stays out; the Talk, summon and DoAction legs are ported. The
--- summoned ACU is kept in per-GUID state (DATA_AERIAL_COMMAND_UNIT twin).
+-- is PORTED this tick (GetVehicleBase :3522, instance-GUID MKII
+-- fallback; DBC-gated 63316). The Talk, summon and DoAction legs are
+-- ported. The summoned ACU is kept in per-GUID state
+-- (DATA_AERIAL_COMMAND_UNIT twin).
 local function aerialActivation6(creature, guid)
     local st = bossState[guid]
     local aerial = st and st.aerial
@@ -583,6 +608,13 @@ local function aerialActivation2(creature, guid)
 end
 
 local function aerialActivation1(creature, guid)
+    -- C++ :569-571: DoCast SEAT_5 on the vehicle base (MKII).
+    -- DBC-gated (63316 unseeded).
+    local base = creature:GetVehicleBase()
+        or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if base then
+        creature:CastSpell(base, SPELL_SEAT_5)
+    end
     schedule(guid, "aerialact2", 2500, function()
         aerialActivation2(creature, guid)
     end)
