@@ -81,14 +81,14 @@
 -- SetReactState(REACT_PASSIVE) + SetFaction(FACTION_FRIENDLY)
 -- (:783-790); only the _events Reset/SetPhase(PHASE_ONE) legs stay
 -- unmodeled (phase machine, no bridge).
--- Voice JustSummoned — the triggered one-shot legs are PORTED
--- (voiceJustSummoned, event 19): constrictor Lunge, descend portal
--- visual, immortal simple teleport (all triggered), Yogg emerge emote.
--- The crusher/corruptor REACT_PASSIVE (:660-665) + StartAttackEvent
--- attack kick (:430-439, 1s/5s delayed BasicEvent) stay out: the
--- passive arm without the AttackStart kick would strand the summons,
--- and AttackStart has no bridge (DoZoneInCombat seeds whole-map threat,
--- not C++'s single-target AttackStart).
+-- Voice JustSummoned — PORTED (voiceJustSummoned, event 19):
+-- constrictor Lunge, descend portal visual, immortal simple teleport
+-- (all triggered), Yogg emerge emote, crusher/corruptor REACT_PASSIVE
+-- + emerge emote, and the guardian 1s / crusher-corruptor 5s
+-- StartAttackEvent kicks (:430-439) via the AttackStart bridge
+-- (lua_creature_events.go:7220) + GetAITarget(0, false, 0, 300.0);
+-- the old "no AttackStart bridge" stay-out is stale. Only the
+-- BossAI::JustSummoned (:674) SummonList leg stays out (no bridge).
 -- Sara timer Talks — 2026-10-14 retraction re-audit: none ported on
 -- combat-start timers; all six are phase-gated with unbridged schedule
 -- legs (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a
@@ -1870,15 +1870,16 @@ local function voiceEnterCombat(event, creature, target)
     end)
 end
 
--- C++ boss_voice_of_yogg_saronAI::JustSummoned (:647-675): only the
--- plain one-shot legs port — constrictor Lunge (triggered, :658),
--- descend portal visual (triggered, :667), immortal simple teleport
--- (triggered, :670), Yogg emerge emote (:655), crusher/corruptor
--- emerge emote (:660-665, passive + attack-kick legs withheld).
--- The guardian 1s and
--- crusher/corruptor 5s StartAttackEvent kicks + the crusher/corruptor
--- REACT_PASSIVE arm (:651-652, :660-665) stay out (AttackStart has no
--- bridge; passive without the kick would strand the summons).
+-- C++ boss_voice_of_yogg_saronAI::JustSummoned (:647-675): constrictor
+-- Lunge (triggered, :658), descend portal visual (triggered, :667),
+-- immortal simple teleport (triggered, :670), Yogg emerge emote
+-- (:655), crusher/corruptor emerge emote + REACT_PASSIVE (:660-665)
+-- and the guardian 1s / crusher-corruptor 5s StartAttackEvent kicks
+-- (:651-652, :660-665) — the kicks port on the AttackStart bridge
+-- (lua_creature_events.go:7220) with the random pick as
+-- GetAITarget(0, false, 0, 300.0); the old "no AttackStart bridge"
+-- stay-out is stale. The BossAI::JustSummoned (:674) SummonList leg
+-- has no bridge and stays out (no Lua SummonList model).
 local ENTRY_DESCEND_INTO_MADNESS = 34072 -- ulduar.h:226
 local SPELL_LUNGE = 64131
 local SPELL_TELEPORT_PORTAL_VISUAL = 64416
@@ -1886,6 +1887,28 @@ local SPELL_SIMPLE_TELEPORT = 64195
 local EMOTE_ONESHOT_EMERGE = 449
 local function voiceJustSummoned(event, creature, summoned)
     local entry = summoned:GetEntry()
+    local guid = creature:GetGUIDLow()
+    -- C++ StartAttackEvent::Execute (:430-439): SetReactState(
+    -- REACT_AGGRESSIVE) + summoner-AI SelectTarget(Random, 0, 300.0f)
+    -- + AttackStart(target). The BasicEvent delay rides the file
+    -- schedule() helper, keyed per summon so concurrent guardians /
+    -- tentacles keep their own kick; the summoned:IsAlive gate is the
+    -- summon-death twin (the C++ event dies with the summon) and the
+    -- voice-alive gate is the GetCreature(summoner) nil twin. The
+    -- voice 2/4/23 cancelTimers also clears a pending kick on voice
+    -- death/evade/reset (C++ would still flip the summon aggressive;
+    -- the encounter is over then, so no live difference).
+    local function startAttackKick(delay)
+        schedule(guid, "startAttack" .. summoned:GetGUIDLow(), delay, function()
+            if summoned:IsAlive() and creature:IsAlive() then
+                summoned:SetReactState(2) -- REACT_AGGRESSIVE
+                local target = creature:GetAITarget(0, false, 0, 300.0)
+                if target ~= nil then
+                    summoned:AttackStart(target)
+                end
+            end
+        end)
+    end
     if entry == ENTRY_CONSTRICTOR_TENTACLE then
         summoned:CastSpell(summoned, SPELL_LUNGE, true)
     elseif entry == ENTRY_DESCEND_INTO_MADNESS then
@@ -1893,12 +1916,16 @@ local function voiceJustSummoned(event, creature, summoned)
     elseif entry == ENTRY_IMMORTAL_GUARDIAN then
         summoned:CastSpell(summoned, SPELL_SIMPLE_TELEPORT, true)
     elseif entry == ENTRY_CRUSHER_TENTACLE or entry == ENTRY_CORRUPTOR_TENTACLE then
-        -- C++ voice JustSummoned (:660-665): emerge emote only — the
-        -- REACT_PASSIVE + StartAttackEvent kick legs stay out (no
-        -- AttackStart bridge; passive without the kick would strand).
+        -- C++ voice JustSummoned (:660-665): REACT_PASSIVE now, emerge
+        -- emote, then the 5s StartAttackEvent kick.
+        summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
+        startAttackKick(5000)
     elseif entry == ENTRY_YOGG_SARON then
         summoned:PerformEmote(EMOTE_ONESHOT_EMERGE)
+    elseif entry == ENTRY_GUARDIAN_OF_YOGG_SARON then
+        -- C++ voice JustSummoned (:651-652): 1s StartAttackEvent kick.
+        startAttackKick(1000)
     end
 end
 
