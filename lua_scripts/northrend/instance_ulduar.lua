@@ -115,6 +115,17 @@ local BOSS_MIMIRON = 10 -- ulduar.h:46
 local BOSS_BRIGHTLEAF = 14 -- ulduar.h:50
 local BOSS_IRONBRANCH = 15 -- ulduar.h:51
 local BOSS_STONEBARK = 16 -- ulduar.h:52
+local BOSS_LEVIATHAN = 0 -- ulduar.h:36
+
+local NPC_SALVAGED_DEMOLISHER = 33109 -- ulduar.h:59
+local NPC_SALVAGED_SIEGE_ENGINE = 33060 -- ulduar.h:60
+local NPC_SALVAGED_CHOPPER = 33062 -- ulduar.h:61
+local NPC_IRONBRANCH = 32913 -- ulduar.h:136
+local NPC_BRIGHTLEAF = 32915 -- ulduar.h:137
+local NPC_STONEBARK = 32914 -- ulduar.h:138
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local SPELL_LUMBERJACKED_CREDIT = 65296 -- ulduar.h:493
 
@@ -148,6 +159,28 @@ RegisterMapEvent(MAP_ULDUAR, INSTANCE_EVENT_ON_CREATURE_CREATE, function(event, 
     instanceData.anyCreature = creature
     if instanceData.illusion == nil then
         instanceData.illusion = 0
+    end
+    -- C++ OnCreatureCreate (instance_ulduar.cpp:283-296, :324-340):
+    -- Flame Leviathan's salvaged vehicles and Freya's elders latch
+    -- instance GUIDs and despawn at once when their boss is already
+    -- DONE. The GUID lists have no Lua consumer, so only the despawn
+    -- legs port. Vehicles ride DespawnLeviatanVehicle (:1029-1037):
+    -- the vehicle-kit gate (creature:GetVehicleKit), the
+    -- NOT_SELECTABLE flag, DespawnOrUnsummon(5min); DELTA: the
+    -- RemoveAllPassengers leg has no bridge, so riders stay aboard
+    -- until the 5-min despawn. Elders despawn at once
+    -- (DespawnOrUnsummon(), no delay). GetBossState rides the
+    -- created creature (any-creature probe precedent above).
+    local entry = creature:GetEntry()
+    if entry == NPC_SALVAGED_DEMOLISHER or entry == NPC_SALVAGED_SIEGE_ENGINE or entry == NPC_SALVAGED_CHOPPER then
+        if creature:GetBossState(BOSS_LEVIATHAN) == BOSS_STATE_DONE and creature:GetVehicleKit() ~= nil then
+            creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            creature:DespawnOrUnsummon(300000)
+        end
+    elseif entry == NPC_IRONBRANCH or entry == NPC_BRIGHTLEAF or entry == NPC_STONEBARK then
+        if creature:GetBossState(BOSS_FREYA) == BOSS_STATE_DONE then
+            creature:DespawnOrUnsummon()
+        end
     end
 end)
 

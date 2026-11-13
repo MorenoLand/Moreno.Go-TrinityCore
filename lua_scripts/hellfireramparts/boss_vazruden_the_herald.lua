@@ -69,6 +69,7 @@
 -- scripts in this file.
 
 local SAY_INTRO = 0
+local SAY_KILL = 2 -- boss_vazruden_the_herald.cpp:40
 
 local ENTRY_VAZRUDEN_THE_HERALD = 17307
 local ENTRY_VAZRUDEN = 17537
@@ -240,6 +241,12 @@ RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 1,
 -- (MOVE_RUN=1 only) and AttackStartNoMove(victim) on the
 -- herald stays out (no bridge). Any other summon:
 -- AttackStart(herald's victim) via EngageWithTarget.
+local function vazrudenKilledUnit(event, creature, victim)
+    if victim and victim:GetEntry() ~= ENTRY_VAZRUDEN then
+        creature:Talk(SAY_KILL)
+    end
+end
+
 local function heraldJustSummoned(_, creature, summon)
     if not summon then
         return
@@ -255,6 +262,7 @@ local function heraldJustSummoned(_, creature, summon)
 end
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 19, heraldJustSummoned)
+RegisterCreatureEvent(ENTRY_VAZRUDEN, 3, vazrudenKilledUnit)
 
 RegisterCreatureEvent(ENTRY_VAZRUDEN_THE_HERALD, 2,
     function(_, creature)
