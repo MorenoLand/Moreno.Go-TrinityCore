@@ -11,7 +11,8 @@
 -- Entry (Floppy enum, verifiable from the C++ sources): 26588
 -- (NPC_EMILY). The creature_template ScriptName binding is DB-side
 -- (no TDB in this workspace).
--- Eluna creature events: 1 OnEnterCombat. The C++ overrides no
+-- Eluna creature events: 1 OnEnterCombat, 19 OnJustSummoned,
+-- 31 OnQuestAccept. The C++ overrides no
 -- KilledUnit / JustDied (no events 3/4); no SpellHit arm (event 14,
 -- runtime.go:195-214), no MoveInLOS (event 27) or QuestAccept (event
 -- 31) arm for emily is PORTED below (event 31 fires live from
@@ -135,6 +136,29 @@ end
 
 RegisterCreatureEvent(ENTRY_EMILY, 1, emilyEnterCombat)
 RegisterCreatureEvent(ENTRY_EMILY, 31, emilyQuestAccept)
+
+-- C++ npc_emilyAI::JustSummoned (zone_grizzly_hills.cpp:70-76): a
+-- creature Emily summons attacks Mrfloppy (26589) if one is within
+-- 50yd, else Emily's current victim. EngageWithTarget is the
+-- AttackStart twin (midnight precedent); a nil victim means no
+-- engage (C++ AttackStart on a null victim is a no-op in practice).
+-- LATENT: Emily's summons ride the unported WaypointReached escort
+-- machine (waypoints 10/17 summon 26586/26590), so nothing summons
+-- through her in the Go model yet; the arm is wired so the escort
+-- port inherits it (nesingwary-trapper latent-AI precedent).
+local function emilyJustSummoned(event, creature, summon)
+    local mrfloppy = creature:FindNearestCreature(ENTRY_MRFLOPPY, 50.0)
+    if mrfloppy ~= nil then
+        summon:EngageWithTarget(mrfloppy)
+    else
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            summon:EngageWithTarget(victim)
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_EMILY, 19, emilyJustSummoned)
 
 -- C++ npc_mrfloppyAI::JustEngagedWith (zone_grizzly_hills.cpp:223-235):
 -- GetClosestCreatureWithEntry(me, NPC_EMILY 26588, 50.0f); switch on

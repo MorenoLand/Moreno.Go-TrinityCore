@@ -69,15 +69,19 @@
 -- DespawnGolem port, but the chain head EVENT_SHATTER is gated on
 -- m_bCanShatterGolem, set only by the unported STOMP machine, so the
 -- arm can never legitimately fire).
--- JustSummoned (NPC_MOLTEN_GOLEM 28695 SummonList latch +
--- random-target MoveFollow + non-triggered SPELL_HEAT 52387
--- cast via the CastSpellExtraArgs overload with SetOriginalCaster
--- only (boss_volkhan.cpp:204 — no trigger flags; earlier header
--- claim of "triggered" corrected 2026-10-14) — stay-out: no Lua
--- summon source (phase 5 unported, so ev19 never fires), no
--- summon-list bridge, and SelectTarget (random) still unbridged;
--- MoveFollow + CastSpell ARE bridged now (2026-11-05 re-check), so
--- motion/cast no longer block.
+-- JustSummoned (NPC_MOLTEN_GOLEM 28695) — PORTED (volkhanJustSummoned,
+-- event 19, LATENT — hook-coverage round 18): random-target MoveFollow
+-- (GetAITargets + dead-filter + math.random, the midnight
+-- randomTargetAnywhere twin — the header's "SelectTarget (random)
+-- still unbridged" is STALE, lua_creature_events.go:4486) +
+-- non-triggered SPELL_HEAT 52387 self-cast (boss_volkhan.cpp:204 —
+-- no trigger flags; earlier header claim of "triggered" corrected
+-- 2026-10-14). The GUID-list latch leg is skipped (no Lua consumer:
+-- DespawnGolem rides the grid sweep in volkhanDied, ShatterGolem
+-- stays out with the stomp machine) and SetOriginalCaster has no
+-- bridge (golem-as-caster deviation, visible effect identical).
+-- Dormant: the only summon source is the unported phase-5 forge
+-- cast (SPELL_SUMMON_MOLTEN_GOLEM 52405, :349-351).
 -- MovementInform POINT_MOTION_TYPE / EVENT_FORGE_CAST (m_uiSummonPhase
 -- 2 -> SetOrientation(2.29f) (SetFacingTo twin bridged; the leg rides
 -- MovementInform POINT_MOTION_TYPE, ev28 — bridged, runtime.go:371;
@@ -224,6 +228,41 @@ end
 -- C++ JustEngagedWith: Talk(AGGRO) + SetPhase(PHASE_NORMAL) +
 -- three ScheduleEvent legs + BossAI passthrough last — the Talk arm
 -- and the base arms port (below). The phase flip cancels the PHASE_INTRO forge cast.
+-- C++ boss_volkhanAI::JustSummoned (boss_volkhan.cpp:194-204):
+-- molten golem (28695) -> GUID-list latch + MoveFollow a random
+-- threat target + non-triggered SPELL_HEAT 52387 self-cast with
+-- volkhan as original caster. PORTED (LATENT, hook-coverage round
+-- 18): the only summon source is the phase-5 forge cast
+-- (SPELL_SUMMON_MOLTEN_GOLEM 52405, :349-351, volkhan himself is
+-- the caster — `me->CastSpell(creatureTarget, ...)` — so ev19
+-- fires on volkhan), unported, so ev19 never fires in Go until
+-- the forge machine ports (saraJustSummoned / xt002DoAction latent
+-- precedent). The GUID-list leg has no Lua consumer — DespawnGolem
+-- rides the grid sweep in volkhanDied and ShatterGolem stays out
+-- with the stomp machine — so no list is kept. Random target is
+-- the midnight randomTargetAnywhere twin (GetAITargets +
+-- dead-filter + math.random; SelectTarget(Random, 0) skips
+-- offline/dead refs, UnitAI.h / Creature.cpp:2508). Original
+-- caster has no bridge: the golem casts Heat on itself (visible
+-- effect identical — the golem is healed; only spell attribution
+-- differs).
+local SPELL_HEAT = 52387
+local function volkhanJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_MOLTEN_GOLEM then
+        return
+    end
+    local alive = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if not t:IsDead() then
+            alive[#alive + 1] = t
+        end
+    end
+    if #alive > 0 then
+        summoned:MoveFollow(alive[math.random(#alive)], 0.0, 0.0)
+    end
+    summoned:CastSpell(summoned, SPELL_HEAT)
+end
+
 local function volkhanEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO)
     volkhanForgeCancel(creature:GetGUIDLow())
@@ -273,6 +312,7 @@ end
 RegisterCreatureEvent(ENTRY_VOLKHAN, 1, volkhanEnterCombat)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 3, volkhanTargetDied)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 4, volkhanDied)
+RegisterCreatureEvent(ENTRY_VOLKHAN, 19, volkhanJustSummoned)
 RegisterCreatureEvent(ENTRY_VOLKHAN, 23, volkhanForgeStart)
 
 local SPELL_BLAST_WAVE = 23113

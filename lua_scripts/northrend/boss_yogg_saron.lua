@@ -67,10 +67,16 @@
 -- only the cross-creature DoAction legs staying out (see the handler).
 -- Sara SpellHitTarget — Talk(SAY_SARA_FERVOR_HIT /
 -- SAY_SARA_BLESSING_HIT / SAY_SARA_PSYCHOSIS_HIT) gated on
--- roll_chance_i(30) and !PHASE_TRANSFORM — stays out on trigger-path
--- grounds: the EVENT_SARAS_FERVOR / BLESSING / ANGER casts are unported
--- and the phase gate has no bridge, so event 15 never fires for them in
--- Go (event 15 itself is live — boss_ai.go:1904).
+-- roll_chance_i(30) and !PHASE_TRANSFORM — PORTED
+-- (PHASE3.saraSpellHitTarget, event 15, LATENT — hook-coverage
+-- round 18; zero new top-level locals, PHASE3 fields, the file is
+-- at the 200-local limit). The PHASE_TRANSFORM gate rides the
+-- ported transform window (PHASE3.saraTransforming — the header's
+-- "phase gate has no bridge" is stale). Dormant: the
+-- EVENT_SARAS_FERVOR / BLESSING / ANGER casts are unported, so
+-- event 15 never fires for them in Go until the schedule legs port
+-- (saraJustSummoned latent precedent); ev15 itself is live
+-- (boss_ai.go:4492) and spellKnown-gated.
 -- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on NPC_DEATH_ORB
 -- summon + self-cast SPELL_DEATH_RAY_ORIGIN_VISUAL + the 4
 -- NPC_DEATH_RAY summons are PORTED (saraJustSummoned; the orb arrives
@@ -338,6 +344,12 @@ local PHASE3 = {
     SARAS_FERVOR = 63747, -- :128
     PSYCHOSIS = 63795, -- :137
     PSYCHOSIS_HEROIC = 65301, -- class comment :2022 (no in-tree enum/cast site; paired-comment precedent, cf. 62604)
+    SARAS_FERVOR_AURA = 63138, -- :127 (the hit aura, not the 63747 target selector)
+    SARAS_BLESSING_AURA = 63134, -- :129 (the hit aura, not the 63745 target selector)
+    SAY_SARA_FERVOR_HIT = 3, -- :42
+    SAY_SARA_BLESSING_HIT = 4, -- :43
+    SAY_SARA_PSYCHOSIS_HIT = 11, -- :50
+    saraTransforming = {}, -- GUID -> true while Sara is in PHASE_TRANSFORM (lethal hit -> TRANSFORM_4); SpellHitTarget gate twin
     MALADY = 63830, -- :138
     MALADY_JUMP = 63881, -- :269
     BRAIN_LINK_DAMAGE = 63803, -- :140
@@ -1082,6 +1094,7 @@ local function saraDamageTaken(event, creature, attacker, damage)
         local guid = creature:GetGUIDLow()
         if not saraTransformed[guid] then
             saraTransformed[guid] = true
+            PHASE3.saraTransforming[guid] = true -- PHASE_TRANSFORM window opens here (cleared at TRANSFORM_4 / on cancel)
             -- C++ DamageTaken (:728-729): voice DoAction(
             -- ACTION_PHASE_TRANSFORM) BEFORE the Talk, in C++ order.
             local data = yoggInstanceData(creature)
@@ -1120,6 +1133,7 @@ local function saraDamageTaken(event, creature, attacker, damage)
                 end
             end)
             schedule(guid, "saratransform4", 14500, function()
+                PHASE3.saraTransforming[guid] = nil -- TRANSFORM_4 sets PHASE_TWO: the SpellHitTarget gate re-opens
                 if creature:IsAlive() then
                     creature:CastSpell(creature, SPELL_PHASE_2_TRANSFORM)
                     creature:CastSpell(creature, SPELL_SHADOWY_BARRIER_SARA)
@@ -1133,6 +1147,7 @@ end
 local function saraCancelTransform(event, creature)
     cancelTimers(creature:GetGUIDLow())
     saraTransformed[creature:GetGUIDLow()] = nil
+    PHASE3.saraTransforming[creature:GetGUIDLow()] = nil
 end
 
 -- C++ boss_saraAI::Reset (:783-790): RemoveAllAuras + SetReactState
@@ -1150,6 +1165,37 @@ RegisterCreatureEvent(ENTRY_SARA, 9, saraDamageTaken)
 RegisterCreatureEvent(ENTRY_SARA, 2, saraCancelTransform)
 RegisterCreatureEvent(ENTRY_SARA, 4, saraCancelTransform)
 RegisterCreatureEvent(ENTRY_SARA, 23, saraReset)
+
+-- C++ boss_saraAI::SpellHitTarget (boss_yogg_saron.cpp:740-755):
+-- 30% roll, skip if PHASE_TRANSFORM; SPELL_SARAS_FERVOR 63138 ->
+-- Talk(SAY_SARA_FERVOR_HIT 3), SPELL_SARAS_BLESSING 63134 -> Talk(4),
+-- SPELL_PSYCHOSIS 63795 -> Talk(11). PORTED (LATENT, hook-coverage
+-- round 18): ev15 is live (fireCreatureSpellHitTarget, boss_ai.go:4492;
+-- the gruul/magtheridon (event, creature, target, spellId) signature);
+-- the PHASE_TRANSFORM gate rides the ported transform window
+-- (PHASE3.saraTransforming, set on the lethal hit, cleared at
+-- TRANSFORM_4 / on cancel — the header's "phase gate has no bridge"
+-- is stale). Dormant: the three casts ride the unported phase-1/2
+-- schedule legs, so ev15 never fires for Sara in Go until those port
+-- (saraJustSummoned latent precedent); spellKnown-gated like all ev15
+-- legs. Roll first, phase check second, per C++ arm order. Zero new
+-- top-level locals (PHASE3 fields; the file is at the 200-local limit).
+PHASE3.saraSpellHitTarget = function(event, creature, target, spellId)
+    if math.random(100) > 30 then
+        return
+    end
+    if PHASE3.saraTransforming[creature:GetGUIDLow()] then
+        return
+    end
+    if spellId == PHASE3.SARAS_FERVOR_AURA then
+        creature:Talk(PHASE3.SAY_SARA_FERVOR_HIT)
+    elseif spellId == PHASE3.SARAS_BLESSING_AURA then
+        creature:Talk(PHASE3.SAY_SARA_BLESSING_HIT)
+    elseif spellId == PHASE3.PSYCHOSIS then
+        creature:Talk(PHASE3.SAY_SARA_PSYCHOSIS_HIT)
+    end
+end
+RegisterCreatureEvent(ENTRY_SARA, 15, PHASE3.saraSpellHitTarget)
 
 -- C++ npc_guardian_of_yogg_saronAI::JustDied (:1190-1194): non-triggered
 -- DoCastAOE(SPELL_SHADOW_NOVA 62714) + DoCastAOE(SPELL_SHADOW_NOVA_2

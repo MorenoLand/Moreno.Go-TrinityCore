@@ -171,13 +171,15 @@
 -- no scheduler / movement / vehicle bridges — no registration);
 -- npc_pummeller (no Talk arms; TaskScheduler trample / arcing
 -- smash / uppercut legs — no bridges — no registration);
--- npc_boombot (no Talk arms; DamageTaken boom leg + SPELL_BOOM
--- 62834 — the damage=0 rewrite is bridgeable (event 9 numeric return,
--- moroes/hodir precedent) but the add never spawns in Go
--- (spell_xt002_energy_orb 62826 — no SpellScript bridge) and Reset
--- carries unbridged legs (SetFloatValue min/max-damage hack,
--- SetReactState, instance gate, MoveFollow, DoAction, despawn) —
--- no registration);
+-- npc_boombot (no Talk arms; DamageTaken boom leg PORTED below
+-- (boombotDamageTaken, event 9, LATENT — hook-coverage round 18;
+-- entry 33346 'XE-321 Boombot' verified in creature_template.sql,
+-- the C++ tree carries no NPC_BOOMBOT constant). Reset stays out:
+-- the add never spawns in Go (spell_xt002_energy_orb 62826 — no
+-- SpellScript bridge) and Reset carries unbridged legs
+-- (SetFloatValue min/max-damage hack, SetReactState, instance gate,
+-- MoveFollow, DoAction, despawn) — no Reset registration; the
+-- _boomed latch needs none (C++ Reset never clears it));
 -- npc_xt_void_zone (PassiveAI — no Talk arms; SPELL_CONSUMPTION
 -- 64208 periodic scheduler leg + SpellInfo BP0 machine — no
 -- bridges — no registration).
@@ -534,3 +536,32 @@ end
 
 RegisterAuraEvent(SPELL_GRAVITY_BOMB, 1, gravityBombTick)
 RegisterAuraEvent(SPELL_GRAVITY_BOMB_HEROIC, 1, gravityBombTick)
+
+-- C++ npc_boombot::DamageTaken (boss_xt002.cpp:598-606): if damage >=
+-- (health - maxHealth * 0.5) and !_boomed: _boomed = true, damage = 0,
+-- DoCastAOE(SPELL_BOOM 62834). PORTED (LATENT, hook-coverage round 18):
+-- boombots spawn only via spell_xt002_energy_orb (62826, no SpellScript
+-- bridge), so ev9 never fires in Go until the energy-orb chain ports
+-- (xt002DoAction latent precedent). Entry 33346 'XE-321 Boombot'
+-- (ScriptName 'npc_xt002_boombot') verified in creature_template.sql
+-- (ac-db dump) — the C++ tree carries no NPC_BOOMBOT constant. The
+-- Reset SetFloatValue min/max-damage hack (:574-575, 15000/18000) stays
+-- out (no SetFloatValue bridge), so Boom damage rides the DB values.
+-- The _boomed latch is per-GUID and persists across evade like C++
+-- (Reset never clears it; a respawned boombot is a new GUID). No
+-- postDamage>0 guard: DamageTaken arms fire on lethal hits, and the
+-- damage=0 rewrite is the arm's purpose (immortal precedent).
+local ENTRY_XE321_BOOMBOT = 33346
+local SPELL_BOOM = 62834
+local boombotBoomed = {}
+
+local function boombotDamageTaken(event, creature, attacker, damage)
+    local guid = creature:GetGUIDLow()
+    if not boombotBoomed[guid] and damage >= creature:GetHealth() - creature:GetMaxHealth() * 0.5 then
+        boombotBoomed[guid] = true
+        creature:CastSpell(creature, SPELL_BOOM) -- DoCastAOE self-cast form
+        return false, 0
+    end
+end
+
+RegisterCreatureEvent(ENTRY_XE321_BOOMBOT, 9, boombotDamageTaken)
