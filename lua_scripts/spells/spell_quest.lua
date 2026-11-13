@@ -38,13 +38,15 @@ RegisterAuraEvent(SPELL_FUMPING, 3, fumpingRemove)
 
 local SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3 = 43874 -- spell_quest.cpp:296
 local UNIT_FLAG_IMMUNE_TO_PC = 0x00000100 -- UnitDefines.h:132
+local UNIT_STATE_ROOT = 0x400 -- Unit.h:221
 
 -- C++ spell_q11396_11399_force_shield_arcane_purple_x3_AuraScript::
 -- HandleEffectApply (spell_quest.cpp:308-314): EFFECT_0 DUMMY, REAL.
--- Target immune to PC. STILL BLOCKED leg: AddUnitState(UNIT_STATE_ROOT)
--- (no bridge).
+-- Target immune to PC + AddUnitState(UNIT_STATE_ROOT) (bridged,
+-- lua_objects.go:2424; flame-leviathan aura-apply precedent).
 local function forceShieldApply(event, aura, target)
     target:SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC)
+    target:AddUnitState(UNIT_STATE_ROOT)
 end
 
 RegisterAuraEvent(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3, 2, forceShieldApply)
@@ -957,7 +959,8 @@ RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
 
 -- PORTED (tick 2026-11-12, RegisterSpellEvent OnEffectHitTarget = 5):
 --   spell_q12937_relief_for_the_fallen (spell_quest.cpp:754-794):
---   EFFECT_0 DUMMY ev5, binding 55804. Caster-is-player Load gate
+--   EFFECT_0 DUMMY ev5, binding 59557 (AC; C++ comment :747 says 55804).
+--   Caster-is-player Load gate
 --   (explicit check); hit creature -> caster self-casts 55809
 --   triggered, KilledMonsterCredit(30035), target despawns at once.
 --   spell_q12659_ahunaes_knife (spell_quest.cpp:888-924): EFFECT_0
@@ -975,7 +978,7 @@ RegisterAuraEvent(SPELL_GOING_BEARBACK, 2, goingBearbackApply)
 --   q12279 cast_net (no TDB row at all — binding unidentifiable,
 --   stays out).
 
-local SPELL_HEALING_FINISHED = 55804 -- spell_quest.cpp:747 (class spell_q12937_relief_for_the_fallen)
+local SPELL_HEALING_FINISHED = 59557 -- ac_spell_script_names.sql:1807 (C++ comment spell_quest.cpp:747 says 55804; AC binding wins per the 52308/54798/52090 precedent)
 local SPELL_TRIGGER_AID_OF_THE_EARTHEN = 55809 -- spell_quest.cpp:750
 local NPC_FALLEN_EARTHEN_DEFENDER = 30035 -- spell_quest.cpp:751
 local SPELL_AHUNAES_KNIFE = 52090 -- spell_quest.cpp:882 (class spell_q12659_ahunaes_knife)

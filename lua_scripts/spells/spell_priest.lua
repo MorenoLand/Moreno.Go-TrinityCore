@@ -263,10 +263,10 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   family flag [0] 0x1 (Power Word: Shield), else falls through to the
 --   generic trigger leg; EFFECT_1 DUMMY casts 64136 on the caster only
 --   on self-cast Abolish Disease 552 (actor == proc target) + the
---   EFFECT_1 amount roll. No Lua ev6 twin: ev6 fires once per eligible
---   effect with no effect index, so one handler could not veto
---   EFFECT_0 without also vetoing EFFECT_1, and would double-roll /
---   double-cast 64136.
+--   EFFECT_1 amount roll. No Lua ev6 twin: ev6 DOES pass effectIndex
+--   (lua_aura.go:1303, 8th handler arg), so per-effect gating is
+--   possible — but a Lua port would double-fire with the Go legs, so
+--   the arm stays Go-only.
 --   663 circle_of_healing (34861, :296-335): SpellScript target filter
 --   (raid check, glyph 6 vs 5 targets, lowest-health sort); no
 --   OnObjectAreaTargetSelect bridge.
@@ -342,14 +342,16 @@ RegisterAuraEvent(SPELL_PRIEST_IMPROVED_SPIRIT_TAP, 6, improvedSpiritTapCheckPro
 --   BP1=selfHeal). Real hook OnEffectProc EFFECT_0 DUMMY.
 --   vampiric_touch (34914, :1393-1458): PARTIAL. HandleDispel arm is Go
 --   (dispel.go:1781-1805: 64085 backlash, 8 * EFFECT_1 amount; OPEN
---   DEVIATION: no SpellDamageBonusTaken scaling, C++ :1428-1430). The
---   Replenishment arm (OnEffectProc EFFECT_2, actor casts 57669 on null)
---   is Go (procs.go specific leg, 34914 i==2, added this tick); NO Lua
---   port: ev6 fires once per eligible effect with no effect index in
---   its args, and EFFECT_0 + EFFECT_2 are both DUMMY, so a handler
---   would cast twice per proc; the EFFECT_0 CheckDummy gate has no Lua
---   model. Real hooks DoCheckEffectProc EFFECT_0 + AfterDispel +
---   OnEffectProc EFFECT_2; census hooks empty.
+--   DEVIATION: the pre-multiply SpellDamageBonusTaken fold (C++
+--   :1428-1430, VT spell/DOT type) is missing — the pipeline applies
+--   taken once post-multiply (spells.go:23965, 64085-record-gated),
+--   same tolerated order-residual class as UA (dispel.go:1732-1737)).
+--   The Replenishment arm (OnEffectProc EFFECT_2, actor casts 57669 on
+--   null) is Go (procs.go specific leg, 34914 i==2, added this tick);
+--   NO Lua port: ev6 DOES pass effectIndex (lua_aura.go:1303), but a
+--   Lua port would double-fire with the Go leg; the EFFECT_0
+--   CheckDummy gate has no Lua model. Real hooks DoCheckEffectProc
+--   EFFECT_0 + AfterDispel + OnEffectProc EFFECT_2; census hooks empty.
 --   t3_4p_bonus (28809, :1459-1491): CLOSED IN GO (procs.go:5285-5301 +
 --   boss_ai.go:11324-11331: actor casts 28810 on the proc target). Real
 --   hook OnEffectProc EFFECT_0 DUMMY; census phantom OnCheckCast.
