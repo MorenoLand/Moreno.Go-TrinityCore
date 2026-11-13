@@ -46,6 +46,10 @@
 -- (boss_yogg_saron.lua, the C++ KeeperGUIDs[3] leg,
 -- instance_ulduar.cpp:374-377). The GO brain-room doors
 -- (194635-194637) have no latch: HandleGameObject has no bridge.
+-- Algalon relay (instance_ulduar.cpp:388-394: void-zone/asteroid
+-- stalkers -> Algalon JustSummoned) stays out on the same funnel
+-- bypass (temp summons never pass ON_CREATURE_CREATE); the
+-- boss-side arms are triaged in boss_algalon_the_observer.lua.
 --
 -- PORTED (tick 259) — observation-ring keeper summons +
 -- lumberjacked credit (instance_ulduar.cpp SetBossState override
