@@ -543,8 +543,11 @@ local SPELL_FAILED_UNIT_NOT_INFRONT = 134 -- SharedDefines.h:1116
 -- no explicit target fails SPELL_FAILED_BAD_TARGETS; a hostile target
 -- must pass IsValidAttackTarget (else BAD_TARGETS) and be in front
 -- (else SPELL_FAILED_UNIT_NOT_INFRONT); friendly targets pass.
--- Check-only port: the HandleDummy damage/heal legs ride ev5 (dormant,
--- no player path) + spell-level GetSpellWithRank. Rank 1 only —
+-- The HandleDummy damage/heal legs are ported below (ev5) — the old
+-- "no player path / no spell-level GetSpellWithRank" stay-out is
+-- overturned: ev5 fires on the player path (spells.go:14892) and the
+-- binding is R1-only (TDB/AC -20473), so 25914/25912 ARE the rank
+-- match for the only bound spell (penance precedent). Rank 1 only —
 -- higher-rank IDs are not in the file, never guessed (life_tap
 -- precedent). RegisterSpellEvent OnCheckCast = 8 (lua_spell.go
 -- fireSpellCheckCast).
@@ -566,6 +569,32 @@ local function holyShockCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 8, holyShockCheckCast)
+
+-- C++ spell_pal_holy_shock_SpellScript::HandleDummy (spell_paladin.cpp:1088-1098):
+-- OnEffectHitTarget EFFECT_0 DUMMY: friendly hit unit -> rank-matched
+-- healing spell, hostile -> rank-matched damage spell, both triggered.
+-- No dead-target or caster-type guard in C++, none added. Binding is
+-- R1-only (TDB/AC -20473), so the R1 heal/damage IDs below are the
+-- rank match (penance precedent). Dormant until Spell.dbc ships 20473.
+local SPELL_PALADIN_HOLY_SHOCK_R1_HEALING = 25914 -- spell_paladin.cpp:43
+local SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE = 25912 -- spell_paladin.cpp:42
+
+local function holyShockHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    if caster:IsFriendlyTo(hitTarget) then
+        caster:CastSpell(hitTarget, SPELL_PALADIN_HOLY_SHOCK_R1_HEALING, true)
+    else
+        caster:CastSpell(hitTarget, SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE, true)
+    end
+end
+
+RegisterSpellEvent(SPELL_PALADIN_HOLY_SHOCK_R1, 5, holyShockHit)
 
 local SPELL_PALADIN_RIGHTEOUS_DEFENSE = 31789 -- spell_paladin.cpp:1888 (class spell_pal_righteous_defense)
 local SPELL_PALADIN_RIGHTEOUS_DEFENSE_TAUNT = 31790 -- spell_paladin.cpp:79

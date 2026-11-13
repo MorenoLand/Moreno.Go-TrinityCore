@@ -195,8 +195,9 @@ RegisterAuraEvent(SPELL_BREWFEST_GIDDYUP, 4, giddyupChange)
 --   channel (29705/29726/29727, ev1+ev3) left it this tick — the
 --   45406 visual was already ported (ev1) and the channel's
 --   RefreshDuration leg rides SetMaxDuration + SetDuration.
---   relay_race_turn_in 588 stays out (no binding ID in-tree — 44501
---   is the credit spell it casts, not its own ID). The tick-295 "no RegisterSpellScript bridge"
+--   relay_race_turn_in (588, ev5, 43755) left it this tick — the
+--   binding is TDB spell_script_names:936; 44501 is the credit spell
+--   it casts, not its own ID. The tick-295 "no RegisterSpellScript bridge"
 --   line was imprecise: OnEffectHit rides RegisterSpellEvent ev4,
 --   which is how 24930 Hallow's End Candy is ported above, and 43876
 --   Dismount Ram this tick (tail). 43714 relay-race intro force is
@@ -1011,6 +1012,40 @@ local function winterVeilMistletoeHit(event, spell, target, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_WINTER_VEIL_MISTLETOE, 5, winterVeilMistletoeHit)
+
+-- PORTED (this tick, RegisterSpellEvent OnEffectHitTarget = 5):
+--   spell_brewfest_relay_race_turn_in::HandleDummy
+--   (spell_holiday.cpp:1355-1363, registered OnEffectHitTarget EFFECT_0
+--   DUMMY at :1366): if the hit unit holds Swift Work Ram (43880),
+--   +30s to the aura and the caster casts Relay Race Turn In (44501)
+--   on the hit unit, triggered. No aura -> no-op. Binding ID 43755
+--   from TDB spell_script_names:936 — overturns the stay-out above
+--   (no binding ID in-tree). C++ dereferences GetHitUnit() without a
+--   nil check; the port adds the target-nil guard. PreventHitDefaultEffect
+--   is vacuous on the ev5 notification-only fire (lua_spell.go:599).
+--   Known delta: the player CastSpell path ignores the triggered flag,
+--   so 44501 lands non-triggered (same accepted delta as the other
+--   player-target ports in this file).
+local SPELL_BREWFEST_RELAY_RACE_TURN_IN = 43755 -- TDB spell_script_names:936
+local SPELL_RELAY_RACE_TURN_IN = 44501 -- spell_holiday.cpp:1078
+
+local function brewfestRelayRaceTurnInHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local aura = target:GetAura(SPELL_SWIFT_WORK_RAM)
+    if aura == nil then
+        return
+    end
+    aura:SetDuration(aura:GetDuration() + 30000)
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(target, SPELL_RELAY_RACE_TURN_IN, true)
+end
+
+RegisterSpellEvent(SPELL_BREWFEST_RELAY_RACE_TURN_IN, 5, brewfestRelayRaceTurnInHit)
 
 -- PORTED (this tick, RegisterAuraEvent OnApply = 2):
 --   spell_brewfest_barker_bunny::OnApply
