@@ -107,7 +107,8 @@
 -- it never fires on the absorbed lethal hit): InterruptNonMeleeSpells
 -- + Holy Nova 66546 + Shield 66515 + Summon Memory 66545 + Confess
 -- 66680 as self-casts (DoCastAOE convention; the Summon Memory leg
--- is DORMANT until Spell.dbc ships 66545 + the 25 MEMORY_* rows);
+-- is live since Spell.dbc seeds 66545 + the 25 MEMORY_* rows
+-- (29c53513/7baf46e2));
 -- JustSummoned MemoryGUID latch — PORTED below (paletressJustSummoned,
 -- ev19). Entry 34928 verifiable (trial_of_the_champion.h
 -- NPC_PALETRESS — kalecgos pass); the remaining stay-outs are the
@@ -159,8 +160,8 @@
 -- urand(0, 24)], caster GUID)) — PORTED below via RegisterSpellEvent
 -- ev7 (filter) + ev5 (hit); the MEMORY_* cast comes from Paletress
 -- (Go's player-cast summon would mint a pet, not the TempSummon
--- npc_memory needs — see summonMemoryHit). DORMANT until Spell.dbc
--- ships 66545 + the 25 MEMORY_* rows.
+-- npc_memory needs — see summonMemoryHit). Live since Spell.dbc
+-- seeds 66545 + the 25 MEMORY_* rows (29c53513/7baf46e2).
 -- C++ "Known Issues" note carried: SD%Complete is 50 % —
 -- ScriptData comment states AI for Argent Soldiers is not
 -- implemented and boss AI needs improvements.
@@ -562,8 +563,8 @@ RegisterCreatureEvent(ENTRY_PALETRESS, 19, paletressJustSummoned)
 -- makes the JustDied shield-removal leg work (C++ EffectSummonType
 -- uses m_originalCaster = Paletress as the summon owner,
 -- SpellEffects.cpp:2211-2212; Go stamps CreatedByGUID from the caster,
--- lua_creature_events.go:139). DORMANT until Spell.dbc ships 66545
--- and the 25 MEMORY_* rows (seed pending — see memory_spell_notes.md).
+-- lua_creature_events.go:139). Live since Spell.dbc seeds 66545
+-- and the 25 MEMORY_* rows (29c53513/7baf46e2).
 local function summonMemoryFilter(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then
         return

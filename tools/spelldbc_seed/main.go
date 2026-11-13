@@ -373,6 +373,19 @@ var spells = []spell{
 	// (creature_area_targets.go:63), so without it the ev7 filter
 	// would see no area-enemy list.
 	{id: 66545, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effScriptEffect, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28}}},
+
+	// 72585 Soul Missile (icecrown_citadel.cpp:91, :1479-1492) —
+	// wago.tools 3.4.0.43659 SpellMisc/SpellEffect rows, 2026-11-13
+	// 16:15 verdict: DurationIndex 0 (no SpellDuration row),
+	// RangeIndex 1, SchoolMask 0x60 (shadow + arcane),
+	// CastingTimeIndex 1 (instant); single effect 3 DUMMY, BP 0,
+	// DieSides 0, Misc 0/0, TargetA 18 (TARGET_DEST_CASTER),
+	// TargetB 0 (NONE), RadiusIndex 0 (no SpellRadius row).
+	// RangeIndex stays synthetic 93001 (0 yd = real 1's value);
+	// cast time stays default 0 (instant = real 1). The C++
+	// RelocateDest +200z leg (spell_icc_soul_missile) has no Go
+	// handler — the visual dest stays at caster pos.
+	{id: 72585, rangeIdx: 93001, school: schoolShadow + schoolArcane, effects: [3]effect{{effect: effDummy, targetA: targetDestCaster}}},
 }
 
 func main() {

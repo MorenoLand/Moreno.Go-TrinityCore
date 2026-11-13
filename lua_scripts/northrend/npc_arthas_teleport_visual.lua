@@ -11,10 +11,11 @@
 -- Sindragosa are all DONE, schedule the soul-missile leg at {1,6}s.
 -- UpdateAI (:580-594): DoCastAOE(SPELL_SOUL_MISSILE 72585), re-arm
 -- {5,7}s; empty event map = no-op.
--- DORMANT: 72585 has no seed Spell.dbc row (tools/spelldbc_seed/
--- main.go) — the cast no-ops until the row ships (needs the same
--- wago.tools read queue as 66545's SpellRadius 28). The gate +
--- scheduling are live now.
+-- 72585 seeded (tools/spelldbc_seed/main.go, wago.tools 3.4.0.43659:
+-- DUMMY eff0, TARGET_DEST_CASTER, no duration/radius rows) — the
+-- cast resolves now. The C++ RelocateDest +200z leg
+-- (spell_icc_soul_missile, icecrown_citadel.cpp:1479-1492) has no Go
+-- handler, so the visual dest stays at caster pos.
 -- DoCastAOE twin: creature:CastSpell(creature, id) (boss_ai.go
 -- convention). At Reset the creature is at home (spawn / evade
 -- return), so the home position carries both gate checks.

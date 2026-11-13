@@ -33,9 +33,12 @@
 -- the flag — C++ restores it nowhere (ctor-only), so a reset NPC keeps
 -- its post-select flag state.
 -- The soul-sickness AuraScript (69131 -> lethargy 69133 on expire)
--- joins the no-AuraScript-bridge queue; the instance script
--- (team latch, GUID latching, GetGuidData, boss boundaries) joins the
--- no-instance-script-bridge queue.
+-- stays out: the bridge exists (RegisterAuraEvent ev2/ev3 +
+-- GetRemoveMode, AURA_REMOVE_BY_EXPIRE=4 — spell_icecrown_citadel.lua
+-- 70227/70304/70733 precedent), but no live 69131 caster exists
+-- anywhere in-tree, so a handler could never fire. The instance
+-- script (team latch, GUID latching, GetGuidData, boss boundaries)
+-- joins the no-instance-script-bridge queue.
 
 local ENTRY_SYLVANAS_PART1 = 37596
 local ENTRY_JAINA_PART1 = 37597
