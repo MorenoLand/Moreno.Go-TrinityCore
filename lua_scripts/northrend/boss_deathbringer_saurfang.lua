@@ -160,6 +160,16 @@
 --   (event 15 itself is live — boss_ai.go:1904; the old "rides the
 --   unported ACTION machine" note is retired — the machine ports
 --   below via ev38 + the blood-link ev1 tick.)
+-- boss_deathbringer_saurfang SpellHit (:443-446) — STAY OUT (hook-coverage
+--   strip round 6, row 12): if spellInfo->Id == SPELL_BLOOD_LINK_POWER
+--   72195 and me->GetAura(SPELL_BLOOD_POWER 72371) exists, the aura's
+--   RecalculateAmountOfEffects() runs. ev14 itself is a live event
+--   (other files register it), but Aura:RecalculateAmountOfEffects has
+--   NO Lua bridge — engine/world/lua_aura.go exposes GetAmount/SetAmount
+--   and no Recalculate method, and no RecalculateAmountOfEffects symbol
+--   exists anywhere under engine/. A SetAmount emulation would fabricate
+--   the DBC-driven amount formula, so no ev14 registration. Same blocker
+--   as the :591 DoAction recalc leg (stays out, see bloodLinkTick note).
 -- boss_deathbringer_saurfang intro machine — PORTED 2026-11-09 (this tick):
 --   the tick-556 "all three DoAction arms STAY OUT" verdict is retired —
 --   all three blockers fell: RegisterCreatureGossipEvent is a live bridge

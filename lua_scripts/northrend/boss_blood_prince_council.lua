@@ -270,6 +270,7 @@
 local ENTRY_KELESETH = 37972
 local ENTRY_TALDARAM = 37973
 local ENTRY_VALANAR = 37970
+local TEMPSUMMON_CORPSE_DESPAWN = 4 -- Go 0-based TempSummonType scheme (creaturemotion.go:507-512): 4 CORPSE_DESPAWN (C++ TemporarySummon.h value is 5; the C++ enum is 1-based, the Go bridge is 0-based)
 local ENTRY_KINETIC_BOMB = 38454 -- icecrown_citadel.h:254 (NPC_KINETIC_BOMB)
 local ENTRY_KINETIC_BOMB_TARGET = 38458 -- icecrown_citadel.h:253 (NPC_KINETIC_BOMB_TARGET)
 local ENTRY_SHOCK_VORTEX = 38422 -- icecrown_citadel.h:255 (NPC_SHOCK_VORTEX)
@@ -1469,18 +1470,24 @@ RegisterCreatureEvent(ENTRY_KELESETH, 19, function(_, creature, summoned)
     end
     -- C++ ICC keleseth JustSummoned (:634-642): MovePositionToFirstCollision
     -- from the boss position along the boss->summon angle for the
-    -- boss->summon distance, then NearTeleportTo. No collision-query
-    -- bridge, so the open-space result ports: the computed point is
-    -- the summon's own position (a wall would only shorten it).
-    -- Orientation is the boss's (C++ pos = me->GetPosition(), :635-640).
-    -- SetTempSummonType(CORPSE_DESPAWN) stays out.
+    -- boss->summon distance, then NearTeleportTo. MovePositionToFirstCollision
+    -- ADDS the boss orientation to the passed angle (Object.cpp:3388), so
+    -- the open-space destination is boss + dist at (absolute angle +
+    -- boss orientation) — NOT the summon's own position unless the boss
+    -- happens to face along the summon bearing. No collision-query
+    -- bridge, so the raycast/vmap shorten leg stays out; the Z stays the
+    -- summon's (flat-floor open-space result). Teleport orientation is
+    -- the boss's (C++ pos = me->GetPosition(), :635-640).
+    -- SetTempSummonType(CORPSE_DESPAWN) is bridged
+    -- (lua_creature_events.go:5874, type 4).
     local dx = summoned:GetX() - creature:GetX()
     local dy = summoned:GetY() - creature:GetY()
     local dist = math.sqrt(dx * dx + dy * dy)
-    local angle = math.atan2(dy, dx)
+    local angle = math.atan2(dy, dx) + creature:GetO()
     summoned:NearTeleport(creature:GetX() + dist * math.cos(angle),
         creature:GetY() + dist * math.sin(angle), summoned:GetZ(),
         creature:GetO())
+    summoned:SetTempSummonType(TEMPSUMMON_CORPSE_DESPAWN)
     local guid = creature:GetGUIDLow()
     local list = kelesethSummons[guid]
     if not list then

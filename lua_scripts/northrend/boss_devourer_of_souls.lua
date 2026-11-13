@@ -581,8 +581,8 @@ end
 -- SetControlled(false, UNIT_STATE_ROOT) + SetDisplayId(
 -- DISPLAY_ANGER) + SetReactState(REACT_AGGRESSIVE) (bridge live since
 -- 2026-10-20 — the 13:00 "no bridge" claim was stale) +
--- Initialize() (threeFaced latch — its only consumer is the unregistered
--- ev15 SpellHitTarget arm, so it stays out).
+-- Initialize() (threeFaced latch — cleared by the ev15 SpellHitTarget
+-- arm below, registered at line 642; Reset re-arms it to 1).
 local function devourerReset(event, creature)
     if creature:GetBossState(DATA_DEVOURER_OF_SOULS) ~= 3 then
         creature:SetBossState(DATA_DEVOURER_OF_SOULS, 0)

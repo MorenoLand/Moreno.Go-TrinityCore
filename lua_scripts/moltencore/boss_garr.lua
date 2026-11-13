@@ -23,21 +23,24 @@
 -- lua_creature_events.go:5917): ev1 IN_PROGRESS (JustEngagedWith
 -- :53-55 calls the base first), ev23 NOT_STARTED (no Reset override on
 -- the boss — base runs), ev4 DONE (no JustDied override — base runs by
--- virtual dispatch); the npc_firesworn AI in the
--- same file (immolate schedule 4s then {5s,10s} on a random target,
--- separation-anxiety check vs NPC_GARR 20 yd, eruption+despawn below
--- 10% health) is not registered — no NPC_FIRESWORN constant exists in
--- the C++ tree and the creature_template ScriptName binding is DB-side,
--- so the add entry cannot be verified from the C++ sources alone; the
--- eruption damage-zeroing arm would need a pre-damage hook plus
--- creature:Despawn() (stale "no despawn bridge" retracted — bridged,
--- lua_creature_events.go:214); the true blocker is the unregistered
--- firesworn add (entry-unverifiable, razorgore convention).
+-- virtual dispatch); the npc_firesworn DamageTaken arm (eruption +
+-- despawn below 10% health) IS ported below — entry 12099 verified
+-- from the world DB (TDB creature_template row 12099, name 'Firesworn',
+-- ScriptName 'npc_firesworn'; the C++ file carries no entry constant and
+-- AddSC_boss_garr only registers the AI class, so the prior
+-- "entry-unverifiable" note is retracted). The firesworn immolate
+-- schedule (4s then {5s,10s} on a random target) and separation-anxiety
+-- check (vs NPC_GARR 20 yd) are NOT ported here — separate arms, not
+-- this row. The eruption damage-zeroing arm rides the ev9 pre-damage
+-- hook (fireCreatureDamageTaken rewrites the second return) plus
+-- creature:Despawn() (bridged, lua_creature_events.go:3305).
 
 local ENTRY_GARR = 12057
+local ENTRY_FIRESWORN = 12099
 
 local SPELL_ANTIMAGIC_PULSE = 19492
 local SPELL_MAGMA_SHACKLES = 19496
+local SPELL_ERUPTION = 19497
 
 local timers = {}
 
@@ -143,3 +146,34 @@ RegisterCreatureEvent(ENTRY_GARR, 1, garrEnterCombat)
 RegisterCreatureEvent(ENTRY_GARR, 2, garrLeaveCombat)
 RegisterCreatureEvent(ENTRY_GARR, 4, garrDied)
 RegisterCreatureEvent(ENTRY_GARR, 23, garrReset)
+
+-- Firesworn (npc_firesworn, C++ ScriptName for 12099): the DamageTaken
+-- arm (boss_garr.cpp:132-141) is the add's death-by-eruption rule — if
+-- the incoming hit would drop it below 10% of max health, the damage is
+-- zeroed, it casts eruption 19497 on its victim, and it despawns.
+-- C++-exact gate: health10pct = CountPctFromMaxHealth(10) =
+-- floor(maxHealth * 10 / 100); the hit triggers when
+-- (int32)health - (int32)damage < (int32)health10pct, i.e. strictly
+-- below 10% post-damage (a lethal hit also triggers — the subtraction
+-- goes negative). The ev9 hook fires pre-application and the second
+-- return rewrites the damage (lua_creature_events.go:7548-7589, the
+-- julianneDamageTaken precedent: return false, 0); a non-triggering hit
+-- passes its damage through unchanged. C++ arm order kept: damage = 0
+-- (the rewrite), DoCastVictim (non-triggered 2-arg cast; C++
+-- DoCastVictim no-ops with no victim, hence the nil guard), then
+-- DespawnOrUnsummon (creature:Despawn, lua_creature_events.go:3305).
+-- GetHealth/GetMaxHealth ride the object.go:203 field fallback.
+local function fireswornDamageTaken(event, creature, attacker, damage)
+    local health10pct = math.floor(creature:GetMaxHealth() * 10 / 100)
+    if creature:GetHealth() - damage < health10pct then
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            creature:CastSpell(victim, SPELL_ERUPTION)
+        end
+        creature:Despawn()
+        return false, 0
+    end
+    return false, damage
+end
+
+RegisterCreatureEvent(ENTRY_FIRESWORN, 9, fireswornDamageTaken)
