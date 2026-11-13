@@ -16402,9 +16402,11 @@ func init() {
 	// acherus (charmer lookup / RemoveAurasDueToSpell / flight spline;
 	// no charmer/movement bridges), npc_death_knight_initiate (duel
 	// machine: SpellHit 52996 accept, DamageTaken clamp-to-1 victory
-	// arms, gossip duel menu; no damage-hook / player-self-cast / gossip
-	// bridges), npc_dark_rider_of_acherus (TempSummon summoner chain,
-	// MoveChase, DespawnOrUnsummon; no summon/movement bridges), npc_
+	// arms, gossip duel menu unpresentable (no AddGossipItemFor bridge;
+	// ev9/ev14/player:CastSpell/gossip-select live), npc_dark_rider_of_acherus
+	// (TempSummon summoner chain, MoveChase, DespawnOrUnsummon; entry unverified
+	// — 52266 summon target conflicts with 28654 ros registration;
+	// MoveChase/GetSummonerUnit/ev15 bridged), npc_
 	// salanar_the_horseman (gossip 9739 realm-of-shadows cast, MoveInLineOf
 	// Sight vehicle machine; no gossip/vehicle bridges), spell_stable_
 	// master_repo (AuraScript; no bridge), spell_deliver_stolen_horse
@@ -16415,14 +16417,15 @@ func init() {
 	// ported/registered below (tick 380): its JustDied deathcharger
 	// flip (SetFlag SPELLCLICK + RemoveFlag NOT_SELECTABLE + SetFaction
 	// 2096) rides the live creature:IsVehicle bridge (the Oct-7 "no
-	// vehicle bridge" claim is stale for that arm); its Reset/engage
-	// EnterVehicle legs stay out — no creature EnterVehicle bridge.
+	// vehicle bridge" claim is stale); its Reset (faction-snapshot restore
+	// + EnterVehicle mount) and engage (ExitVehicle) legs are ported too
+	// (creature EnterVehicle/ExitVehicle bridged, lua_creature_events.go:3716/3639).
 	// npc_ros_dark_rider (entry 28654, wowhead-verified via spell 52266
 	// summon link; no NPC_ constant in chapter1.cpp): JustDied
 	// deathcharger flip ported in lua_scripts/eastern_kingdoms/
 	// npc_ros_dark_rider.lua (FindNearestCreature 28782 + killer
-	// player gate + IsVehicle + flag/faction legs); Reset/engage
-	// EnterVehicle legs stay out (no bridge).
+	// player gate + IsVehicle + flag/faction legs); Reset (ev23) +
+	// engage ExitVehicle (ev1) ported in the same file.
 	RegisterLuaBoss("npc_ros_dark_rider", 28654)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver

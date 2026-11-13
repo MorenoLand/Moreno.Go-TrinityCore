@@ -10,9 +10,10 @@
 -- alone: spell 52266 SPELL_CALL_DARK_RIDER lists "Effect #1 Summon
 -- (Dark Rider of Acherus)" pointing at 28654; the other Wowhead
 -- "Dark Rider of Acherus" hits (28768, 28909) do not match the summon.
--- Eluna creature events: 4 OnDied. No timers; melee is engine-driven
--- in Go (creature combat tick), like C++ DoMeleeAttackIfReady.
--- Ported arm:
+-- Eluna creature events: 1 OnEnterCombat, 4 OnDied, 23 OnReset. No
+-- timers; melee is engine-driven in Go (creature combat tick), like
+-- C++ DoMeleeAttackIfReady.
+-- Ported arms:
 -- - JustDied (C++ JustDied, chapter1.cpp:932-944): FindNearestCreature(
 --   28782 Acherus Deathcharger, 30.0); if a deathcharger is found AND
 --   the killer is a player (killer:GetTypeId() == 4 TYPEID_PLAYER) AND
@@ -23,22 +24,30 @@
 --   FindNearestCreature returns creatures only. The !deathcharger /
 --   !killer early return is C++-exact (kill.go defaults a nil killer
 --   to the creature itself, so the killer gate still applies).
--- Unmodeled (documented-only, no bridges):
--- - JustEngagedWith (chapter1.cpp:915-918): me->ExitVehicle() —
---   ExitVehicle is bridged on the PLAYER surface only
---   (lua_player.go:2796); no creature ExitVehicle bridge.
--- - Reset (chapter1.cpp:920-930): the deathcharger faction restore +
---   SPELLCLICK clear + NOT_SELECTABLE set + EnterVehicle mount legs —
---   EnterVehicle / GetVehicleKit()->HasEmptySeat have no bridges.
---   The Oct-7 boss_ai.go audit line ("no vehicle bridge") is stale
---   ONLY for the JustDied arm: creature:IsVehicle IS bridged
---   (lua_creature_events.go:3113), which is all JustDied needs.
+-- - JustEngagedWith (chapter1.cpp:914-918): me->ExitVehicle(), no-arg
+--   unseat at current position (lua_creature_events.go:3639); a
+--   creature that is not seated is a no-op, matching C++.
+-- - Reset (chapter1.cpp:919-930): FindNearestCreature(28782, 30.0);
+--   restore the deathcharger faction from the per-GUID snapshot taken
+--   in onDied before the 2096 flip (the literal RestoreFaction() has
+--   no bridge; the snapshot is the template faction — the only flip is
+--   onDied, and a charger with no snapshot was never flipped, so
+--   skipping the restore is a faithful no-op); RemoveFlag SPELLCLICK
+--   + SetFlag NOT_SELECTABLE; if not seated and the charger IsVehicle
+--   with seat 0 empty (kit:GetPassenger(0) == nil), EnterVehicle
+--   (lua_creature_events.go:3716, default seat -1 first-available).
+--   The Oct-7 boss_ai.go audit line ("no vehicle bridge") is stale:
+--   creature EnterVehicle / ExitVehicle / IsVehicle / GetVehicleKit
+--   are all bridged (lua_creature_events.go:3716/3639/3494/3504).
+-- Unmodeled (documented-only):
 -- - The sibling scripts in chapter1.cpp are not in this file:
 --   npc_dark_rider_of_acherus (TempSummon summoner chain, MoveChase,
---   DespawnOrUnsummon — no summon/movement bridges), npc_salanar_
---   the_horseman (gossip 9739 realm-of-shadows cast, MoveInLineOfSight
---   vehicle machine — no gossip/vehicle bridges), spell_deliver_
---   stolen_horse (SpellScript — no bridge).
+--   DespawnOrUnsummon — bridges exist, entry unverified: spell 52266
+--   summon target conflicts with 28654's registration here; round-44
+--   entry check in flight), npc_salanar_the_horseman (gossip 9739
+--   realm-of-shadows cast, MoveInLineOfSight vehicle machine — no
+--   gossip/vehicle bridges), spell_deliver_stolen_horse (SpellScript
+--   — no bridge).
 
 local ENTRY_DARK_RIDER = 28654
 local ENTRY_DEATHCHARGER = 28782
@@ -55,6 +64,13 @@ local FACTION_SCARLET_CRUSADE_2 = 2096
 
 local TYPEID_PLAYER = 4
 
+-- Per-charger template-faction snapshot (C++ RestoreFaction() twin):
+-- the charger starts at its template faction and the only flip is the
+-- onDied SetFaction(2096) below, which snapshots first and never
+-- overwrites. A Reset with no snapshot means the charger was never
+-- flipped, so its faction is already the template faction.
+local chargerFaction = {}
+
 -- C++ npc_ros_dark_riderAI::JustDied (chapter1.cpp:932-944).
 local function onDied(event, creature, killer)
     local deathcharger = creature:FindNearestCreature(ENTRY_DEATHCHARGER, 30.0)
@@ -62,10 +78,41 @@ local function onDied(event, creature, killer)
         return
     end
     if killer:GetTypeId() == TYPEID_PLAYER and deathcharger:IsVehicle() then
+        local guid = deathcharger:GetGUIDLow()
+        if chargerFaction[guid] == nil then
+            chargerFaction[guid] = deathcharger:GetFaction()
+        end
         deathcharger:SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_SPELLCLICK)
         deathcharger:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
         deathcharger:SetFaction(FACTION_SCARLET_CRUSADE_2)
     end
 end
 
+-- C++ npc_ros_dark_riderAI::JustEngagedWith (chapter1.cpp:914-918).
+local function onEnterCombat(_, creature)
+    creature:ExitVehicle()
+end
+
+-- C++ npc_ros_dark_riderAI::Reset (chapter1.cpp:919-930).
+local function onReset(_, creature)
+    local deathcharger = creature:FindNearestCreature(ENTRY_DEATHCHARGER, 30.0)
+    if not deathcharger then
+        return
+    end
+    local faction = chargerFaction[deathcharger:GetGUIDLow()]
+    if faction then
+        deathcharger:SetFaction(faction)
+    end
+    deathcharger:RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_SPELLCLICK)
+    deathcharger:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    if not creature:IsOnVehicle() and deathcharger:IsVehicle() then
+        local kit = deathcharger:GetVehicleKit()
+        if kit and kit:GetPassenger(0) == nil then
+            creature:EnterVehicle(deathcharger)
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_DARK_RIDER, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_DARK_RIDER, 4, onDied)
+RegisterCreatureEvent(ENTRY_DARK_RIDER, 23, onReset)
