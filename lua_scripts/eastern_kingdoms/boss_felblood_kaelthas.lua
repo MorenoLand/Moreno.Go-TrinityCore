@@ -109,8 +109,9 @@
 -- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden
 -- convention). The outro's damage cap (lethal non-self damage is
 -- clamped to health-1 so the boss survives at 1 HP through the
--- death sequence); the outro damage cap + summons.DespawnAll
--- legs have no bridges, but AttackStop, REACT_PASSIVE,
+-- death sequence) is PORTED below; the outro summons.DespawnAll leg
+-- is ported for the ev19-latched sphere subset (phoenix half stays
+-- out — no phoenix latch); AttackStop, REACT_PASSIVE,
 -- InterruptNonMeleeSpells(true), RemoveAurasDueToSpell(POWER_
 -- FEEDBACK) and DoCastAOE(CLEAR_FLIGHT) are all PORTED below;
 -- the outro chain plays as the observable remnant (documented).
@@ -122,10 +123,14 @@
 -- IN_PROGRESS (base-first JustEngagedWith) and ev23 NOT_STARTED
 -- (_Reset, alive + != DONE gated) legs are ported below too.
 -- EnterEvadeMode's ClearFlight cast is ported (above); the
--- summons.DespawnAll + _DespawnAtEvade legs have no bridge.
--- JustSummoned's arcane-sphere MoveFollow and
--- flame-strike-trigger dummy-cast arms have no summon/MotionMaster
--- bridges (the_beast precedent).
+-- summons.DespawnAll leg is ported for the ev19-latched sphere
+-- subset (phoenix half stays out); the _DespawnAtEvade leg has no
+-- bridge. JustSummoned is PORTED below (ev19): arcane-sphere
+-- MoveFollow (MoveFollow bridged, lua_objects.go:543) and
+-- flame-strike-trigger dummy-cast + 15s despawn — the stale "no
+-- summon/MotionMaster bridges (the_beast precedent)" claim is
+-- retracted; the spell summon dispatch is live
+-- (creatureEffectSummonType, boss_ai.go:4866).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - EVENT_FLAME_STRIKE now ported (above); stale "no SelectTarget
 --   bridge" claim retracted (maiden_of_virtue random-player precedent).
@@ -161,9 +166,14 @@
 --   teleport index is guarded at < 5 (C++ array has 5 entries; pets
 --   can push hits past it — C++ reads OOB, UB). The counter resets
 --   in onGravityLapse (C++ :340) and on Reset (Initialize, :140).
--- - Still out: the arcane-sphere MoveFollow arms — spheres never spawn
---   (no SPELL_EFFECT_SUMMON dispatch), so summons.DespawnEntry(24708)
---   is vacuous.
+-- - JustSummoned now PORTED (below, onJustSummoned, ev19): the
+--   arcane-sphere MoveFollow arm (random player in 70yd via this
+--   file's randomTargetInRange picker; spheres latched per-guid for
+--   the DespawnEntry/DespawnAll legs) and the flame-strike dummy-cast
+--   + 15s despawn arm. Stale claims retracted: "no SPELL_EFFECT_SUMMON
+--   dispatch" (creatureEffectSummonType, boss_ai.go:4866, fires ev19
+--   via the summonTempCreature funnel) and "no summon/MotionMaster
+--   bridges" (MoveFollow bridged, lua_objects.go:543).
 -- - npc_felblood_kaelthas_phoenix (second CreatureScript class in
 --   the file): IsSummonedBy's DoZoneInCombat + self-casts 44197/
 --   44196, the lethal DamageTaken egg sequence (DoSummon(NPC_
@@ -193,6 +203,9 @@ local SPELL_GRAVITY_LAPSE_CENTER_TELEPORT = 44218
 local SPELL_GRAVITY_LAPSE_INITIAL = 44224
 local SPELL_GRAVITY_LAPSE_BEAM_VISUAL = 44251
 local SPELL_SUMMON_ARCANE_SPHERE = 44265
+local SPELL_FLAME_STRIKE_DUMMY = 44191 -- boss_felblood_kaelthas.cpp:70
+local NPC_ARCANE_SPHERE = 24708 -- magisters_terrace.h:55
+local NPC_FLAME_STRIKE = 24666 -- magisters_terrace.h:56
 local SPELL_POWER_FEEDBACK = 44233
 local SPELL_GRAVITY_LAPSE_FLY = 44227
 local SPELL_GRAVITY_LAPSE_DAMAGE = 44226
@@ -213,6 +226,7 @@ local timers = {}
 local phaseTwo = {}
 local outroFired = {}
 local gravityLapseCount = {}
+local arcaneSpheres = {} -- per-guid latched arcane spheres (C++ summons list subset for entry 24708; no DespawnEntry bridge, corenSisters precedent)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -248,6 +262,58 @@ local function randomTargetInRange(creature, range)
         return nil
     end
     return candidates[math.random(#candidates)]
+end
+
+-- C++ summons.DespawnEntry(NPC_ARCANE_SPHERE) (:357) / DespawnAll
+-- (:172 evade, :185 lethal outro, _Reset on reset) twin for the
+-- latched-sphere subset: no DespawnEntry bridge exists in engine/,
+-- so the ev19-latched spheres are despawned directly. The phoenix
+-- half of DespawnAll stays out (no phoenix latch — its AI unported).
+local function despawnArcaneSpheres(guid)
+    local spheres = arcaneSpheres[guid]
+    if spheres then
+        for _, sphere in ipairs(spheres) do
+            if sphere then
+                sphere:Despawn()
+            end
+        end
+        arcaneSpheres[guid] = nil
+    end
+end
+
+-- C++ boss_felblood_kaelthas::JustSummoned (:251-268): summons.Summon
+-- bookkeeping + entry switch. Arcane sphere: random player within
+-- 70yd -> MoveFollow(target, 0, 0) (MoveFollow bridged,
+-- lua_objects.go:543; randomTargetInRange is this file's threat-list
+-- player picker, flame-strike precedent). Flame strike: self-cast
+-- dummy 44191 + DespawnOrUnsummon(15s) (bridged,
+-- lua_creature_events.go:7230, ms). Phoenix: no arm beyond the
+-- bookkeeping (default: break). The summon dispatch itself is the
+-- creature cast path's creatureEffectSummonType (boss_ai.go:4866,
+-- called :3580, DBC spellKnown-gated) firing ev19 through the shared
+-- summonTempCreature funnel (lua_creature_events.go:190) — the old
+-- "no SPELL_EFFECT_SUMMON dispatch" claim is stale.
+local function onJustSummoned(_, creature, summon)
+    if not summon then
+        return
+    end
+    local entry = summon:GetEntry()
+    if entry == NPC_ARCANE_SPHERE then
+        local target = randomTargetInRange(creature, 70)
+        if target then
+            summon:MoveFollow(target, 0, 0)
+        end
+        local guid = creature:GetGUIDLow()
+        local list = arcaneSpheres[guid]
+        if not list then
+            list = {}
+            arcaneSpheres[guid] = list
+        end
+        list[#list + 1] = summon
+    elseif entry == NPC_FLAME_STRIKE then
+        summon:CastSpell(summon, SPELL_FLAME_STRIKE_DUMMY)
+        summon:DespawnOrUnsummon(15000)
+    end
 end
 
 -- Gravity-lapse chain (boss_felblood_kaelthas.cpp:327-357). Cyclic
@@ -299,8 +365,10 @@ onGravityLapse = function(creature, guid)
 end
 
 -- C++ EVENT_SUMMON_ARCANE_SPHERE (:349-351): 3x triggered self-cast
--- 44265. The spheres never spawn in Go (no SPELL_EFFECT_SUMMON
--- dispatch) — the casts are the packet-visual remainder.
+-- 44265. The spheres spawn via the creature cast path's summon
+-- dispatch (boss_ai.go:4866) and reach onJustSummoned (ev19) below,
+-- which runs the MoveFollow arm and latches them for the power
+-- feedback / evade / outro / reset despawn legs.
 onSummonArcaneSphere = function(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "gravity_spheres", 500, function() onSummonArcaneSphere(creature, guid) end)
@@ -322,8 +390,9 @@ onBeamVisual = function(creature, guid)
 end
 
 -- C++ EVENT_POWER_FEEDBACK (:353-357): Talk + DoCastAOE 44232 as
--- self-cast + self-cast 44233 + PREPARE again 11s. The
--- summons.DespawnEntry(24708) leg is vacuous (spheres never spawn).
+-- self-cast + self-cast 44233 + summons.DespawnEntry(24708) + PREPARE
+-- again 11s. The DespawnEntry leg runs on the ev19-latched spheres
+-- (despawnArcaneSpheres above, C++ order: after the casts).
 onPowerFeedback = function(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "gravity_feedback", 500, function() onPowerFeedback(creature, guid) end)
@@ -332,6 +401,7 @@ onPowerFeedback = function(creature, guid)
     creature:Talk(SAY_POWER_FEEDBACK)
     creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
     creature:CastSpell(creature, SPELL_POWER_FEEDBACK)
+    despawnArcaneSpheres(guid)
     schedule(guid, "gravity_prepare", 11000, function() onPrepareGravityLapse(creature, guid) end)
 end
 
@@ -428,6 +498,7 @@ local function onEnterCombat(_, creature)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
     gravityLapseCount[guid] = nil
+    arcaneSpheres[guid] = nil
     -- BossAI::JustEngagedWith base-first (boss_felblood_kaelthas.cpp:144-146
     -- -> ScriptedCreature.cpp:527-542): SetBossState IN_PROGRESS, then
     -- pulse 5 + DoZoneInCombat.
@@ -445,12 +516,14 @@ end
 -- C++ boss_felblood_kaelthas::EnterEvadeMode (:168):
 -- DoCastAOE(SPELL_CLEAR_FLIGHT 44232, true) TRIGGERED, ungated — modeled
 -- as triggered self-cast (the in-tree CastSpell(..., true) idiom). The
--- summons.DespawnAll / _DespawnAtEvade legs have no bridge — documented.
+-- summons.DespawnAll leg (:172) runs on the ev19-latched spheres
+-- (despawnArcaneSpheres above); the _DespawnAtEvade leg has no bridge.
 -- Event 2 gets a dedicated handler (the urom split precedent) so the cast
 -- fires on evade only, not on death/reset.
 local function onLeaveCombat(_, creature)
     local guid = creature:GetGUIDLow()
     creature:CastSpell(creature, SPELL_CLEAR_FLIGHT, true)
+    despawnArcaneSpheres(guid)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
@@ -481,6 +554,14 @@ local function onReset(_, creature)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
     gravityLapseCount[guid] = nil
+    -- C++ Reset -> _Reset() -> summons.DespawnAll: alive-gated like the
+    -- boss-state write below (Go fires ev23 on the death path before
+    -- ev4, and C++ spheres persist past death — JustDied :162-166 calls
+    -- no _JustDied — so a dead-path reset leaves the latch for the later
+    -- live reset to consume).
+    if creature:IsAlive() then
+        despawnArcaneSpheres(guid)
+    end
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0) -- DATA_KAELTHAS_SUNSTRIDER, NOT_STARTED
     end
@@ -503,6 +584,7 @@ local function onDamageTaken(_, creature, attacker, damage)
         creature:SetReactState(0) -- REACT_PASSIVE
         creature:InterruptNonMeleeSpells(true)
         creature:RemoveAura(SPELL_POWER_FEEDBACK)
+        despawnArcaneSpheres(guid) -- C++ :185 summons.DespawnAll, sphere subset
         creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
         creature:Talk(SAY_DEATH)
         schedule(guid, "outro_1", 1000, function() onOutroStep(creature, guid, "outro_1", SPELL_EMOTE_TALK_EXCLAMATION) end)
@@ -579,4 +661,5 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 4, onDied)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 15, onSpellHitTarget)
+RegisterCreatureEvent(ENTRY_KAELTHAS, 19, onJustSummoned)
 RegisterCreatureEvent(ENTRY_KAELTHAS, 23, onReset)

@@ -268,6 +268,17 @@ local function reliquaryReset(event, creature)
     creature:SetReactState(0) -- REACT_PASSIVE
 end
 
+-- C++ boss_reliquary_of_souls::JustSummoned (:152-156): summons.Summon +
+-- summon->AI()->DoZoneInCombat(). The summons.Summon leg is bookkeeping
+-- with no live Lua consumer (its readers are the evade-side DespawnAll
+-- and the enslaved-soul DoAction, whose targets never exist here), so
+-- only the DoZoneInCombat leg is ported. The only summons in this model
+-- are the essences (submerge timer); they are hostile, so engaging them
+-- is C++-exact, and the arm is ungated in C++ too.
+local function reliquaryJustSummoned(event, creature, summon)
+    summon:DoZoneInCombat()
+end
+
 -- C++ npc_enslaved_soul::Reset: triggered self-cast 41535
 -- (C++-exact). The REACT_PASSIVE and 3s REACT_AGGRESSIVE arms are
 -- PORTED 2026-10-20 — creature:SetReactState; the reliquary
@@ -362,6 +373,7 @@ end
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 1, reliquaryEnterCombat)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 2, reliquaryLeaveCombat)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 4, reliquaryDied)
+RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 19, reliquaryJustSummoned)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 23, reliquaryReset)
 
 RegisterCreatureEvent(ENTRY_ENSLAVED_SOUL, 2, soulLeaveCombat)
