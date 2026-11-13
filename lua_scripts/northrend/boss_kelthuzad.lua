@@ -104,11 +104,15 @@
 -- DamageTaken — PORTED 2026-11-05 in kelthuzadDamageTaken (event 9):
 -- damage = 0 in PHASE_ONE via the phase-two latch (return false, 0
 -- rewrite, malchezaar precedent). Reset (boss_kelthuzad.cpp:223-235) —
--- SetReactState(REACT_PASSIVE) + NOT_SELECTABLE + SetImmuneToPC(true) —
--- the bridges exist (creature:SetReactState; SetFlag/RemoveFlag(59) for
--- the immunity pair, 07:47 sweep) but Reset itself is unported (the
--- whole encounter is intro/DoAction-machine-gated), so the legs stay
--- out with it; EnterEvadeMode — portal GO-state legs — instance model;
+-- PORTED 2026-11-13 (hook strip 8) in kelthuzadReset (ev23): the C++
+-- alive gate (:224-225) is an early return (Go fires ev23 on death
+-- too; the death path is owned by ev4 kelthuzadDied), then the _Reset
+-- twin (timers, NOT_STARTED != DONE-gated, summons despawn) +
+-- SetReactState(REACT_PASSIVE) (:228) + SetFlag NOT_SELECTABLE (:229)
+-- + SetImmuneToPC(true) (:230, SetFlag(59, 0x100) twin) + the count
+-- zeroes (:231-235); the ev2 EnterEvadeMode twin repeats the
+-- react/flag/immune legs. EnterEvadeMode — portal GO-state legs —
+-- instance model;
 -- DoAction(ACTION_BEGIN_ENCOUNTER) — PORTED 2026-11-05 in
 -- kelthuzadDoAction (event 38; latent — the at_kelthuzad_center
 -- sender has no area-trigger bridge, krick precedent): NOT_STARTED
@@ -437,24 +441,39 @@ local function despawnMinionsTick(creature, guid)
     creature:Talk(SAY_AGGRO)
 end
 
--- C++ BossAI::_Reset (Reset, :223-235: events cancelled, counts zeroed,
--- summons despawned) — timer/summons/counter twins only; the
--- ReactState/NOT_SELECTABLE/immune legs stay out with Reset itself.
+-- C++ boss_kelthuzadAI::Reset (boss_kelthuzad.cpp:223-235), PORTED
+-- 2026-11-13 (hook strip 8): the alive gate (:224-225) is an early
+-- return — Go fires ev23 on the death path too (fireCreatureDied
+-- runs 23 then 4, lua_creature_events.go:7729), and C++ Reset never
+-- runs on death: the death path is owned by ev4 kelthuzadDied below
+-- (non-guardian despawn + guardian flee + DONE). The old handler ran
+-- its _Reset twin on death, which despawned the latched guardians
+-- before their flee leg could run; the early return fixes that and
+-- subsumes the old alive-gated abomination-death-count zero (the
+-- counter now survives death exactly as in C++, until the respawn
+-- ev23 zeroes it). _Reset twin: cancelTimers (events/scheduler) +
+-- SetBossState NOT_STARTED (!= DONE-gated) + summons despawn; then
+-- SetReactState(REACT_PASSIVE) (:228, lua_creature_events.go:4651),
+-- SetFlag NOT_SELECTABLE (:229) and SetImmuneToPC(true) (:230, the
+-- SetFlag(59, 0x100) twin — kelthuzadDoAction / guardian-flee
+-- precedent, lua_creature_events.go:6347), then the count zeroes
+-- (:231-235; _guardianCount is NOT reset here, only by the
+-- phase-three leg).
 local function kelthuzadReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     if creature:GetBossState(BOSS_KELTHUZAD) ~= BOSS_STATE_DONE then
         creature:SetBossState(BOSS_KELTHUZAD, BOSS_STATE_NOT_STARTED) -- BossAI::_Reset (ScriptedCreature.cpp:510), != DONE-gated
     end
     despawnKelthuzadSummons(guid, false)
-    -- Alive-gated: ev23 fires on death too (fireCreatureDied runs
-    -- Reset before the kill-credit criteria read, kill.go:1091/:1400),
-    -- and a death-time zero would clobber the fight's counter before
-    -- the achievement gate reads it; the wipe re-arm is preserved.
-    if creature:IsAlive() then
-        creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
-    end
-    -- C++ Reset (:223-235) zeroes the spawn-chain counts and _phaseThree;
+    creature:SetReactState(REACT_PASSIVE) -- C++ Reset :228
+    creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE) -- C++ Reset :229
+    creature:SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC) -- C++ Reset :230, SetImmuneToPC(true) twin
+    creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0) -- C++ Reset :234
+    -- C++ Reset (:231-233, :235) zeroes the spawn-chain counts and _phaseThree;
     -- _guardianCount is NOT reset there (only the phase-three leg zeroes
     -- it), so latch 6 is left alone.
     creature:SetData(DATA_SKELETON_COUNT, 0)
@@ -465,13 +484,20 @@ local function kelthuzadReset(event, creature)
 end
 
 -- C++ EnterEvadeMode (:237-245) -> Reset() + _DespawnAtEvade(): the
--- ev2 twin of the Reset bookkeeping above.
+-- ev2 twin of the Reset bookkeeping above. Go fires ev23 ahead of ev2
+-- on evade (triggerCreatureEvade, creaturemotion.go:4732-4733), so
+-- kelthuzadReset already applied the react/flag/immune legs; they are
+-- repeated here to keep the twin identical, matching the duplicated
+-- count-zeroing below.
 local function kelthuzadLeaveCombat(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     despawnKelthuzadSummons(guid, false)
-    -- C++ EnterEvadeMode calls Reset (:237-245), which zeroes the same
-    -- count latches as the ev23 handler above.
+    -- C++ EnterEvadeMode calls Reset (:237-245), which sets the same
+    -- react/flag/immune legs as the ev23 handler above.
+    creature:SetReactState(REACT_PASSIVE)
+    creature:SetFlag(59, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC)
     creature:SetData(DATA_ABOMINATION_DEATH_COUNT, 0)
     creature:SetData(DATA_SKELETON_COUNT, 0)
     creature:SetData(DATA_BANSHEE_COUNT, 0)

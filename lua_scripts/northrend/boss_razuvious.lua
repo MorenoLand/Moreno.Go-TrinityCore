@@ -61,12 +61,15 @@
 -- "unbridged SelectTarget" claim was stale).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_razuvious SpellHit — SPELL_UNDERSTUDY_TAUNT 29060 ->
--- Talk(SAY_TAUNTED 2, caster) stays out: the MC'd understudy's taunt
--- routes through the pet cast path (handlePetCastSpell /
--- executePetSpellWithOptions, pets.go), which has no event-14 fire
--- site — only the creature-cast path (boss_ai.go:1885) and the
--- player-cast path (spells.go:9427) fire it (re-audit 2026-10-15:
--- the 22:34 "trigger live in Go" claim was wrong);
+-- Talk(SAY_TAUNTED 2, caster) PORTED 2026-11-13 (strip 8,
+-- razyviousSpellHit, event 14): the 2026-10-15 stay-out is retired —
+-- ev14 DOES fire on the pet cast path (pet_combat.go:8073,
+-- executePetSpellZeroDamageTail, the zero-damage leg a taunt takes;
+-- handlePetCastSpell accepts charmer motions, spells.go:2417), so
+-- the MC'd understudy's taunt reaches Razuvious; Talk(textId[,
+-- target]) is bridged (lua_creature_events.go:1252) and the
+-- broadcastCreatureTalk twin drops a non-player whisper target
+-- exactly like C++ SendChat (creature_text.go:140-150);
 -- JustEngagedWith EVENT_ATTACK (7s, one-shot, boss_razuvious.cpp:140-146)
 -- — SetCombatMovement(true) is a mid-combat flag no-op per the
 -- ScriptedAI NOTE, but the paired MoveChase(victim) IS the real
@@ -119,12 +122,14 @@ local ENTRY_DK_UNDERSTUDY = 16803
 
 local SAY_AGGRO = 0
 local SAY_SLAY = 1
+local SAY_TAUNTED = 2
 local SAY_DEATH = 3
 
 local SPELL_UNBALANCING_STRIKE = 26613
 local SPELL_DISRUPTING_SHOUT = 29107 -- boss_razuvious.cpp:37
 local SPELL_JAGGED_KNIFE = 55550 -- boss_razuvious.cpp:38
 local SPELL_HOPELESS = 29125 -- boss_razuvious.cpp:39
+local SPELL_UNDERSTUDY_TAUNT = 29060 -- boss_razuvious.cpp:40
 
 local BOSS_RAZUVIOUS = 10 -- naxxramas.h NAXEncounter (ANUBREKHAN 0 ... RAZUVIOUS 10)
 local DATA_RAZUVIOUS = 2 -- naxxramas.h NAXData64 (ANUBREKHAN 0, FAERLINA 1, RAZUVIOUS 2)
@@ -306,6 +311,17 @@ local function razyviousTargetDied(event, creature, victim)
     end
 end
 
+-- C++ boss_razuviousAI::SpellHit (boss_razuvious.cpp:102-106):
+-- SPELL_UNDERSTUDY_TAUNT 29060 -> Talk(SAY_TAUNTED 2, caster).
+-- No gate: every taunt hit yells. The caster is the MC'd understudy
+-- creature (pet cast path, pet_combat.go:8073); Talk's optional
+-- target arg carries it verbatim (arlockk precedent).
+local function razyviousSpellHit(event, creature, caster, spellId)
+    if spellId == SPELL_UNDERSTUDY_TAUNT then
+        creature:Talk(SAY_TAUNTED, caster)
+    end
+end
+
 local function razyviousDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     -- C++ JustDied (:108-118): Talk(SAY_DEATH) then DoCastAOE(Hopeless
@@ -352,6 +368,7 @@ RegisterCreatureEvent(ENTRY_RAZUVIOUS, 2, razyviousLeaveCombat)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 3, razyviousTargetDied)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 4, razyviousDied)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 5, razuviousSpawn)
+RegisterCreatureEvent(ENTRY_RAZUVIOUS, 14, razyviousSpellHit)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 23, razyviousReset)
 RegisterCreatureEvent(ENTRY_RAZUVIOUS, 24, razuviousReachHome)
 

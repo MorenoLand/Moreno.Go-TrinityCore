@@ -56,13 +56,18 @@
 -- JustDied — Talk(SAY_DEATH 4) (event 4; the _JustDied
 -- SetBossState(DONE) leg is PORTED in eregosDied (Talk-first,
 -- 2026-11-05 — C++ calls Talk before _JustDied here,
--- boss_eregos.cpp:247-251).
+-- boss_eregos.cpp:247-251); the _JustDied summons.DespawnAll() leg
+-- (ScriptedCreature.cpp:516) is PORTED 2026-11-13 (strip 8) via the
+-- Lua-tracked list + DespawnOrUnsummon, novos precedent).
 -- Unmodeled (no bridges — documented, not wired):
 -- Reset — _Reset() SetBossState(NOT_STARTED, != DONE-gated)
 -- PORTED 2026-11-05 in eregosReset (event 23; _Reset() is first in
 -- C++ Reset) + Initialize() (_phase = PHASE_NORMAL, all three void
 -- booleans = true) + DoAction(ACTION_SET_NORMAL_EVENTS) — the
--- timer legs seed on engage per the krystallus convention.
+-- timer legs seed on engage per the krystallus convention. The
+-- _Reset summons.DespawnAll() leg (ScriptedCreature.cpp:507) is
+-- PORTED 2026-11-13 (strip 8), alive-gated per _Reset's early
+-- return, with an ev2 safety net in eregosCombatEnd.
 -- DoAction(ACTION_SET_NORMAL_EVENTS) — events.SetPhase(
 -- PHASE_NORMAL) + ScheduleEvent x4 (EVENT_ARCANE_BARRAGE
 -- 3s/10s, EVENT_ARCANE_VOLLEY 10s/25s, EVENT_ENRAGED_ASSAULT
@@ -227,6 +232,27 @@ local eregosSummons = {} -- per-GUID {summon GUID -> summon}: the BossAI
 -- including ley whelps from SPELL_SUMMON_LEY_WHELP — the old
 -- anomaly-only table missed them (strip 7).
 
+-- C++ BossAI::_Reset / _JustDied summons.DespawnAll()
+-- (ScriptedCreature.cpp:507/516), the novos precedent. The list is
+-- nilled before the despawn loop: each DespawnOrUnsummon fires ev20
+-- on Eregos, and the ev20 prune below then sees a nil list and
+-- returns — no mutation-during-iteration. DespawnOrUnsummon on an
+-- already-gone motion is a no-op (lua_creature_events.go:7230).
+-- Consumers: eregosReset (alive-gated, _Reset's early return),
+-- eregosCombatEnd (ev2 safety net — ev23 already ran on the evade
+-- path, creaturemotion.go:4732-4733) and eregosDied.
+local function despawnEregosSummons(creature)
+    local guid = creature:GetGUIDLow()
+    local tracked = eregosSummons[guid]
+    if not tracked then
+        return
+    end
+    eregosSummons[guid] = nil
+    for _, summon in pairs(tracked) do
+        summon:DespawnOrUnsummon()
+    end
+end
+
 -- C++ EVENT_ARCANE_BARRAGE (:215-218): DoCastVictim(50804)
 -- non-triggered, 3s/10s init -> 3s/10s loop.
 local function arcaneBarrageTick(creature, guid)
@@ -359,6 +385,11 @@ end
 
 local function eregosCombatEnd(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ _Reset summons.DespawnAll() safety net (ScriptedCreature.cpp:507):
+    -- on the evade path ev23 already nilled the list
+    -- (creaturemotion.go:4732-4733), so this only fires when combat
+    -- ends without a preceding Reset.
+    despawnEregosSummons(creature)
 end
 
 -- C++ Reset (boss_eregos.cpp:105-110): _Reset() FIRST —
@@ -377,6 +408,12 @@ local function eregosReset(event, creature)
     -- (kill.go:1091 -> fireCreatureDied) and an unguarded re-arm would
     -- overwrite the engage-time clears before the gate reads them.
     if not creature:IsDead() then
+        -- C++ Reset -> BossAI::_Reset summons.DespawnAll()
+        -- (ScriptedCreature.cpp:507). Alive-gated: _Reset early-returns
+        -- when dead (ScriptedCreature.cpp:500-501), so the death path
+        -- leaves the list for eregosDied below — C++ JustDied Talks
+        -- before _JustDied despawns (boss_eregos.cpp:247-251).
+        despawnEregosSummons(creature)
         creature:SetData(DATA_RUBY_VOID, 1)
         creature:SetData(DATA_EMERALD_VOID, 1)
         creature:SetData(DATA_AMBER_VOID, 1)
@@ -398,6 +435,11 @@ local function eregosDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SetBossState(DATA_EREGOS, BOSS_STATE_DONE)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ JustDied -> BossAI::_JustDied summons.DespawnAll()
+    -- (ScriptedCreature.cpp:516), Talk-first per boss_eregos.cpp:247-251.
+    -- Each despawn fires ev20, so anomalies blast exactly as C++
+    -- summons.DespawnAll() does (eregosSummonedDespawn, below).
+    despawnEregosSummons(creature)
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()

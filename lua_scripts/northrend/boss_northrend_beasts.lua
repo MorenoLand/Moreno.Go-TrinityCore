@@ -102,8 +102,8 @@
 -- (:283) + disengage (:284) + FAIL write (:285-287) + self-despawn
 -- (:291); the combatStalker despawn (:288-289) stays out (no
 -- SetGuidData(24) latch, stalker only exists via the unported
--- EVENT_ENGAGE summon), summons.DespawnAll (:290) stays out (no
--- summons-enumeration bridge), and the instance FAIL cascade's
+-- EVENT_ENGAGE summon), summons.DespawnAll (:290) PORTED hook strip
+-- 8 row 1 via the per-GUID wormSummons list (novos precedent), and the instance FAIL cascade's
 -- vehicle-removal leg stays out (no vehicle bridge; SnoboldCount = 0
 -- is PORTED tick 411 U3 in beastsEvaded — it resets the achievement
 -- counter mirror) — the Tirion wipe DoAction + heroic TrialCounter
@@ -200,7 +200,11 @@
 -- MovementInform — no hook; no door / immune / phase / zone
 -- bridges); EVENT_SUMMON_ACIDMAW — SummonCreature(NPC_ACIDMAW) (summon
 -- leg bridged; blocked by the submerge/phase machine, not the bridge);
--- JustSummoned summons bookkeeping (no summon bridge); JustDied —
+-- JustSummoned — PORTED hook strip 8 row 1 (wormJustSummoned /
+-- wormSummonDespawned below, ev19/ev20): the ACIDMAW branch is
+-- BossAI::JustSummoned (track + DoZoneInCombat if engaged) and the
+-- else branch is bare summons.Summon (track only); the list feeds
+-- Reset (:216) + EnterEvadeMode (:290) DespawnAll. JustDied —
 -- PORTED tick 405 U2 (shared boss_jormungarAI :701-720, both worm
 -- entries via wormDied + ev5 SetGuidData latches): disengage +
 -- SNAKES_SPECIAL / SNAKES_DONE count legs via beastsCountDeath +
@@ -525,6 +529,98 @@ local function stompTick(creature, guid)
     end)
 end
 
+-- C++ boss_jormungarAI::JustSummoned (boss_northrend_beasts.cpp:671-677)
+-- + BossAI::JustSummoned / SummonedCreatureDespawn
+-- (ScriptedCreature.cpp:559-568) — PORTED hook strip 8 row 1.
+-- Branch: summon entry == NPC_ACIDMAW (35144) -> BossAI::JustSummoned
+-- (summons.Summon + DoZoneInCombat(summon) if the worm is engaged);
+-- any other summon -> bare summons.Summon (track only, no zone-in).
+-- In practice Dreadscale's EVENT_SUMMON_ACIDMAW (:834) is the only
+-- Acidmaw leg, and both worms' EVENT_SLIME_POOL (:830) DoCastSelf
+-- (SUMMON_SLIME_POOL 66883) is the else-branch leg (slime-pool entry
+-- is DB-side; the entry filter below only special-cases Acidmaw).
+-- Lua twin is a per-GUID summons list (novos novosSummons precedent);
+-- ev19 fires on the summoner for SummonCreature + spell-effect
+-- summons alike (fireCreatureSummoned, lua_creature_events.go:190 /
+-- :7889), ev20 prunes on despawn (:3336). The engaged gate is
+-- creature:IsInCombat() (lua_creature_events.go:652, motion InCombat)
+-- for C++ me->IsEngaged() (CreatureAI.h:105): summons only ever fire
+-- from engaged UpdateAI here, so the gates coincide. The
+-- DoZoneInCombat(summon) leg rides summon:DoZoneInCombat() — the
+-- bridge zones the object it is called on (lua_creature_events.go:2255),
+-- curator boss_curator.lua:175 precedent. Consumers: Reset
+-- summons.DespawnAll (boss_northrend_beasts.cpp:216, wormReset below)
+-- + EnterEvadeMode summons.DespawnAll (:290, beastsEvaded below).
+-- NOT wired into wormDied: the worm JustDied override (:701-720)
+-- never calls _JustDied and carries no DespawnAll leg.
+local wormSummons = {}
+
+local function despawnWormSummons(creature)
+    local guid = creature:GetGUIDLow()
+    local list = wormSummons[guid]
+    if not list then
+        return
+    end
+    wormSummons[guid] = nil
+    for _, summon in ipairs(list) do
+        summon:Despawn()
+    end
+end
+
+local function wormJustSummoned(event, creature, summon)
+    if summon == nil then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local list = wormSummons[guid]
+    if not list then
+        list = {}
+        wormSummons[guid] = list
+    end
+    table.insert(list, summon)
+    if summon:GetEntry() == ENTRY_ACIDMAW and creature:IsInCombat() then
+        summon:DoZoneInCombat()
+    end
+end
+
+local function wormSummonDespawned(event, creature, summon)
+    if summon == nil then
+        return
+    end
+    local list = wormSummons[creature:GetGUIDLow()]
+    if not list then
+        return
+    end
+    local guid = summon:GetGUIDLow()
+    for i, tracked in ipairs(list) do
+        if tracked:GetGUIDLow() == guid then
+            table.remove(list, i)
+            return
+        end
+    end
+end
+
+-- C++ boss_northrend_beastsAI::Reset (boss_northrend_beasts.cpp:214-221)
+-- for the worm entries: events.Reset (cancelTimers) +
+-- summons.DespawnAll (despawnWormSummons above) +
+-- SetCombatPulseDelay(0) (the gormok reset() twin). The
+-- events.SetPhase(PHASE_EVENT) leg has no phase bridge and
+-- HandleInitialMovement (MoveAlongSplineChain) has no motion bridge;
+-- SetReactState(REACT_PASSIVE) stays out on the header's paired-arm
+-- rule (its re-arm rides the unbridged MovementInform intro machine).
+-- Alive-gated despawn: Go ev23 pre-fires on death (magtheridon
+-- reset-then-died order), but C++ Reset never runs on death and the
+-- worm JustDied override (:701-720) carries no DespawnAll — an
+-- ungated despawn would kill Dreadscale's Acidmaw summon on the
+-- SNAKES_SPECIAL path, where C++ keeps it alive and enrages it.
+local function wormReset(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+    if creature:IsAlive() then
+        despawnWormSummons(creature)
+    end
+    creature:SetCombatPulseDelay(0)
+end
+
 -- C++ boss_northrend_beastsAI::JustEngagedWith -> ScheduleTasks().
 -- (C++ EVENT_THROW, the third scheduled task, is vehicle-bound —
 -- documented-only above.)
@@ -644,8 +740,11 @@ local function beastsEvaded(event, creature)
     -- :288-289 combatStalker DespawnOrUnsummon stays out: no
     -- SetGuidData(24) latch exists and the stalker only ever exists
     -- via the unported EVENT_ENGAGE summon. :290 summons.DespawnAll
-    -- stays out: no summons-enumeration bridge on the Lua surface.
+    -- PORTED hook strip 8 row 1 via despawnWormSummons (the per-GUID
+    -- list is the enumeration twin, novos precedent; no-op for
+    -- Gormok/Icehowl, whose lists are always nil).
     -- :291 me->DespawnOrUnsummon (midnight attumen ev2 precedent).
+    despawnWormSummons(creature)
     creature:DespawnOrUnsummon()
 end
 
@@ -761,10 +860,16 @@ RegisterCreatureEvent(ENTRY_GORMOK, 4, gormokDied)
 RegisterCreatureEvent(ENTRY_GORMOK, 23, reset)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 4, wormDied)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 5, wormSpawned)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 19, wormJustSummoned)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 20, wormSummonDespawned)
+RegisterCreatureEvent(ENTRY_DREADSCALE, 23, wormReset)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 38, wormDoAction)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 4, wormDied)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 5, wormSpawned)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 19, wormJustSummoned)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 20, wormSummonDespawned)
+RegisterCreatureEvent(ENTRY_ACIDMAW, 23, wormReset)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 38, wormDoAction)
 RegisterCreatureEvent(ENTRY_ACIDMAW, 2, beastsEvaded)
 RegisterCreatureEvent(ENTRY_ICEHOWL, 4, icehowlDied)
