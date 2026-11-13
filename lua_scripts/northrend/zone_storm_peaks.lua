@@ -47,8 +47,9 @@
 --   wyrm; remove clears both. Cast by the wyrm on itself at dead-phase
 --   (:814); the dead-phase machine (DamageTaken latch, MoveFall) is
 --   PORTED below (hook strip 19, ev9 + ev23 latch clear) — the rest
---   of the wyrm AI (SpellHit mount, DoAction, MovementInform,
---   PassengerBoarded) stays unported.
+--   of the wyrm AI (SpellHit mount + POINT_START_FIGHT arrival are
+--   PORTED below, hook strip 27; DoAction, POINT_FALL arrival,
+--   PassengerBoarded stay unported).
 --   spell_player_mount_wyrm (56672, :1411-1445): EFFECT_0 DUMMY. On
 --   remove the player casts SPELL_FIGHT_WYRM (56673) on itself,
 --   triggered. Cast by the wyrm on the player at POINT_START_FIGHT
@@ -380,9 +381,9 @@ RegisterSpellEvent(SPELL_REMOVE_COLLAPSING_CAVE_AURA, 5, removeCollapsingCaveAur
 --   attumen return-false-newDamage precedent). The Async deferral
 --   is a 100ms one-shot CreateLuaEvent so the clamped damage lands
 --   first. InitSpellsForPhase + VehicleSpellInitialize stay out:
---   no m_spells bridge, and both read _playerGuid, which the
---   unported SpellHit mount leg never sets — no-ops with no
---   mounted player. The POINT_FALL arrival (DoCastAOE Eject All
+--   no m_spells bridge (the SpellHit mount leg below now sets
+--   _playerGuid, but the vehicle-spell init arms stay unported).
+--   The POINT_FALL arrival (DoCastAOE Eject All
 --   Passengers 50630 + KillSelf, :786-790) is MovementInform ev28
 --   scope, not this row — Go's MoveFall sends only the fall
 --   packet, no landing callback. ev23 clears the dead latch:
@@ -395,8 +396,17 @@ local SPELL_PRY_JAWS_OPEN = 56706 -- zone_storm_peaks.cpp:649
 local UNIT_DYNAMIC_FLAGS = 79 -- UpdateFields.h:136 (eredar-twins precedent)
 local UNIT_DYNFLAG_DEAD = 0x20 -- SharedDefines.h:3133
 local UNIT_NPC_FLAGS_WYRM = 82 -- UpdateFields.h:139 (nefarian precedent)
+local SPELL_SPEAR_OF_HODIR = 56671 -- zone_storm_peaks.cpp:635
+local SPELL_FULL_HEAL_MANA = 32432 -- zone_storm_peaks.cpp:643
+local POINT_START_FIGHT = 1 -- zone_storm_peaks.cpp:671
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31 (kalecgos precedent)
 
 local wildWyrmDead = {}
+
+-- C++ npc_wild_wyrmAI::_playerGuid (zone_storm_peaks.cpp:707):
+-- per-wyrm latch (full player GUID), set by the SpellHit mount leg,
+-- cleared on Reset; the arrival handler resolves it via GetPlayerByGUID.
+local wildWyrmMount = {}
 
 local function wildWyrmDeadPhase(creature)
     creature:CastSpell(creature, SPELL_WYRM_KILL_CREDIT)
@@ -426,8 +436,60 @@ local function wildWyrmDamageTaken(event, creature, attacker, damage)
 end
 
 local function wildWyrmReset(event, creature)
-    wildWyrmDead[creature:GetGUIDLow()] = nil
+    local guid = creature:GetGUIDLow()
+    wildWyrmDead[guid] = nil
+    wildWyrmMount[guid] = nil
+end
+
+-- C++ npc_wild_wyrmAI::SpellHit (zone_storm_peaks.cpp:757-768, event 14):
+-- Spear of Hodir (56671) only, once per wyrm (the _playerGuid latch).
+-- Full Heal + Mana on self, triggered (the DoCastAOE self-cast
+-- convention), then MovePoint(POINT_START_FIGHT, caster) —
+-- creature:MoveTo (troll_volunteer precedent; caster:GetX/Y/Z via
+-- the object.go coordinate fallback; the arrival fires ev28 below).
+-- SetImmuneToPC(true) stays out: no bridge (no methods["SetImmuneToPC"]
+-- in engine/world) — the wyrm stays attackable in the spear-to-mount
+-- window; C++ Reset sets immune false, so pre-spear behavior matches.
+-- DORMANT until Spell.dbc ships 56671/32432: ev14 fires only when
+-- spellKnown, and CastSpell is spellKnown-gated.
+local function wildWyrmSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_SPEAR_OF_HODIR or caster == nil then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if wildWyrmMount[guid] then
+        return
+    end
+    wildWyrmMount[guid] = caster:GetGUID()
+    creature:CastSpell(creature, SPELL_FULL_HEAL_MANA, true)
+    creature:MoveTo(POINT_START_FIGHT, caster:GetX(), caster:GetY(), caster:GetZ())
+end
+
+-- C++ npc_wild_wyrmAI::MovementInform (zone_storm_peaks.cpp:773-790,
+-- event 28): POINT_START_FIGHT arrival — the latched player is mounted
+-- (DoCast(player, SPELL_PLAYER_MOUNT_WYRM 56672); the motion-master
+-- Clear() is a post-arrival no-op — the spline is finished — so no
+-- bridge call is made for it). GetPlayerByGUID is the
+-- ObjectAccessor::GetPlayer twin (phase_hunter precedent); a departed
+-- player resolves nil and skips, C++-exact. POINT_FALL arrival
+-- (:786-790, eject + KillSelf) stays out: Go's MoveFall sends no
+-- landing callback (see the ev9 header above), so it can never fire.
+local function wildWyrmMovementInform(event, creature, moveType, id)
+    if moveType ~= POINT_MOTION_TYPE or id ~= POINT_START_FIGHT then
+        return
+    end
+    local playerGuid = wildWyrmMount[creature:GetGUIDLow()]
+    if playerGuid == nil then
+        return
+    end
+    local player = GetPlayerByGUID(playerGuid)
+    if player == nil then
+        return
+    end
+    creature:CastSpell(player, SPELL_PLAYER_MOUNT_WYRM)
 end
 
 RegisterCreatureEvent(ENTRY_WILD_WYRM, 9, wildWyrmDamageTaken)
+RegisterCreatureEvent(ENTRY_WILD_WYRM, 14, wildWyrmSpellHit)
 RegisterCreatureEvent(ENTRY_WILD_WYRM, 23, wildWyrmReset)
+RegisterCreatureEvent(ENTRY_WILD_WYRM, 28, wildWyrmMovementInform)

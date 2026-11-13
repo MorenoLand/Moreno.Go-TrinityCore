@@ -129,7 +129,8 @@
 -- 2026-11-07), but the flag would strand the boss untargetable
 -- whenever the flames are ignored; see the entry comment);
 -- the two flame-of-azzinoth summons spawn from the DB summon
--- group (Reset :476, no SummonCreatureGroup bridge), so the
+-- group (Reset :476 — SummonCreatureGroup(1) PORTED 2026-11-13
+-- in illidanCleanup, bridge landed 2026-11-05), so the
 -- both-flames-dead finalize
 -- arm (middle move, glaive returns, land, resume-combat phase 3)
 -- HAS a bearer since 2026-11-07 (illidanDoAction — the middle
@@ -172,8 +173,11 @@
 -- and equipment arms have no bridges)). OnTargetDied(3):
 -- Talk(SAY_ILLIDAN_KILL), GetObjectType() == "Player" gate (terestian convention).
 -- OnDied(4)/OnLeaveCombat(2)/OnReset(23): cancel timers, drop
--- per-GUID state (the Reset summon-group/equipment arms and the
--- akama-intro DoAction have no bridges; the root arm ports via
+-- per-GUID state (the Reset summon-group arm IS PORTED 2026-11-13
+-- in illidanCleanup — SummonCreatureGroup(1), alive-gated ev23-only,
+-- plus the _Reset() SetBossState(NOT_STARTED) leg; the equipment arm
+-- has no bridge and the akama-intro DoAction has no instance-GUID
+-- bridge — both stay out; the root arm ports via
 -- creature:SetRooted (2026-10-21), the gravity arm via
 -- creature:SetDisableGravity(false) (illidanCleanup) and the
 -- sheath arm via creature:SetSheath(0) (2026-10-22); the
@@ -1460,6 +1464,27 @@ local function illidanCleanup(event, creature)
         creature:SetRooted(false)
         creature:SetDisableGravity(false)
         creature:SetSheath(0) -- SHEATH_STATE_UNARMED (boss_illidan.cpp:478)
+    end
+    if event == 23 and creature:IsAlive() then
+        -- C++ boss_illidan_stormrage::Reset (boss_illidan.cpp:472-490),
+        -- PORTED 2026-11-13 (hook-coverage round 27): the BossAI::_Reset()
+        -- legs (ScriptedCreature.cpp:499-510) — SetCombatPulseDelay(0)
+        -- (:504) and SetBossState(NOT_STARTED) unless DONE (:509-510;
+        -- DATA_ILLIDAN_STORMRAGE = 8, DONE = 3) — then
+        -- SummonCreatureGroup(SUMMON_GROUP = 1) (:476), the two Flame of
+        -- Azzinoth (22997) from the DB summon group. The stale "no
+        -- SummonCreatureGroup bridge" header claim is retracted: the
+        -- bridge landed 2026-11-05 (lua_creature_events.go:4154;
+        -- magtheridon/illidari-council Reset precedent). Event 23 fires
+        -- on death too (engine reset-then-died order), so both arms are
+        -- alive-gated (magtheridon precedent); the LoadEquipment(1) leg
+        -- has no bridge and the instance akama-intro leg has no
+        -- instance-GUID bridge — both stay out.
+        creature:SetCombatPulseDelay(0)
+        if creature:GetBossState(8) ~= 3 then
+            creature:SetBossState(8, 0)
+        end
+        creature:SummonCreatureGroup(1)
     end
     if event == 4 then
         -- C++ boss_illidan_stormrage::JustDied (boss_illidan.cpp:649-651):

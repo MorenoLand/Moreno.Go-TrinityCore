@@ -303,3 +303,69 @@ local function engineerHeliceDied(_, creature)
 end
 
 RegisterCreatureEvent(ENTRY_ENGINEER_HELICE, 4, engineerHeliceDied)
+
+-- C++ npc_haiphoonAI::SpellHitTarget (zone_sholazar_basin.cpp:578-591):
+-- OnSpellHitTarget = 15. When a Devour Wind (52862) / Devour Water
+-- (52864) cast by Haiphoon lands on a target other than itself, and
+-- Haiphoon is controlled by a player, it transforms: wind -> air form
+-- (28985), water -> water form (28999), via UpdateEntry.
+-- The C++ gate is me->GetCharmerOrOwnerPlayerOrPlayerItself(). Its two
+-- halves ride different bridges: the spell-charm/possess half is the
+-- bested-trigger pattern (GetControllerGUIDS, lua_creature_events.go:529
+-- — charmer else owner else self — resolved via the GetPlayerByGUID
+-- global, scripting/runtime.go:1523; spell_quest.lua:476), while the
+-- vehicle half cannot ride it — Go tracks vehicle control in the kit,
+-- not the motion charm slot (VehicleKit.CharmerGUID, vehicle.go:347;
+-- enterVehicle never sets motion.CharmerGUID), so a ridden Haiphoon
+-- reads uncharmed there. The vehicle half instead checks the kit for
+-- a player passenger (GetVehicleKit/GetPassenger, lua_vehicle.go:77;
+-- claw-swipe precedent, zone_storm_peaks.lua:284), seat-agnostic —
+-- Haiphoon carries only its driver seat, so any player aboard is the
+-- controller. seatCreatureEntry (lua_creature_events.go:7275) leaves
+-- the kit untouched, so the rider stays aboard across the transform.
+-- Entries DB-verified: TDB creature_template rows 28985/28999 both
+-- carry ScriptName 'npc_haiphoon' (AC rows carry no ScriptName).
+local SPELL_DEVOUR_WIND = 52862 -- zone_sholazar_basin.cpp:562
+local SPELL_DEVOUR_WATER = 52864 -- zone_sholazar_basin.cpp:563
+local NPC_HAIPHOON_WATER = 28999 -- zone_sholazar_basin.cpp:565
+local NPC_HAIPHOON_AIR = 28985 -- zone_sholazar_basin.cpp:566
+
+local function haiphoonSpellHitTarget(event, creature, target, spellId)
+    if target == nil then
+        return
+    end
+    if target:GetGUIDLow() == creature:GetGUIDLow() then
+        return
+    end
+    if spellId ~= SPELL_DEVOUR_WIND and spellId ~= SPELL_DEVOUR_WATER then
+        return
+    end
+    local controlled = false
+    local guid = creature:GetControllerGUIDS()
+    if guid ~= 0 and GetPlayerByGUID(guid) ~= nil then
+        controlled = true
+    end
+    if not controlled then
+        local kit = creature:GetVehicleKit()
+        if kit ~= nil then
+            for seat = 0, 7 do
+                local passenger = kit:GetPassenger(seat)
+                if passenger ~= nil and passenger:GetObjectType() == "Player" then
+                    controlled = true
+                    break
+                end
+            end
+        end
+    end
+    if not controlled then
+        return
+    end
+    if spellId == SPELL_DEVOUR_WIND then
+        creature:UpdateEntry(NPC_HAIPHOON_AIR)
+    else
+        creature:UpdateEntry(NPC_HAIPHOON_WATER)
+    end
+end
+
+RegisterCreatureEvent(NPC_HAIPHOON_AIR, 15, haiphoonSpellHitTarget)
+RegisterCreatureEvent(NPC_HAIPHOON_WATER, 15, haiphoonSpellHitTarget)

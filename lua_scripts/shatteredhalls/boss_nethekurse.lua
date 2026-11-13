@@ -21,7 +21,7 @@
 -- intro/peon SetData machine (cross-creature/instance
 -- gated) — unreachable in this model.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLua
+-- OnTargetDied, 4 OnDied, 19 OnJustSummoned, 23 OnReset. Timers via CreateLua
 -- Event (per-GUID scheduler pump); melee is engine-driven in
 -- Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- C++ DoCast default is triggered=false (vaelastrasz
@@ -95,13 +95,20 @@
 -- unmodeled — their paired removal rides the unported peon-relay /
 -- intro-timer machine, and porting SetFlag alone would strand the
 -- bit (thespia/kalithresh precedent);
--- summon bridge live, but spell 30496 has no Go spell-effect
--- producer (zero engine hits) — the fissure NPC never spawns
--- in Go, so the JustSummoned setup (SetFaction +
+-- summon bridge live, and the JustSummoned setup (SetFaction +
 -- NON_ATTACKABLE/NOT_SELECTABLE flags + triggered TEMPORARY_
 -- VISUAL 39312 + CONSUMPTION 30497 with original-caster
--- args) is unreachable on producer grounds, not bridge
--- grounds (steamrigger precedent); npc_lesser_shadow_fissure
+-- args) is PORTED below as the ev19 handler — the old "spell
+-- 30496 has no Go spell-effect producer (zero engine hits)"
+-- claim was stale: the producer is the generic
+-- SPELL_EFFECT_SUMMON path (creatureEffectSummonType,
+-- boss_ai.go:4866), DBC-driven, and summonTempCreature fires
+-- ev19 on the summoner (lua_creature_events.go:190); only the
+-- original-caster leg is unmodeled (CastCustomSpell accepts and
+-- ignores it, lua_creature_events.go:983-986). The fissure
+-- spawn itself still rides the DBC row + world-DB template for
+-- the fissure entry, as does the 30496 cast in the pump;
+-- npc_lesser_shadow_fissure
 -- documented only, not registered — all four of its AI
 -- overrides are empty (ahune bunny empty-skeleton precedent); H_SPELL_DEATH_COIL
 -- 30741 / H_SPELL_SHADOW_SLAM 35953 are unused C++ enum
@@ -124,12 +131,19 @@ local SPELL_DEATH_COIL = 30500
 local SPELL_SHADOW_FISSURE = 30496
 local SPELL_DARK_SPIN = 30502
 local SPELL_SHADOW_CLEAVE = 30495
+local SPELL_TEMPORARY_VISUAL = 39312
+local SPELL_CONSUMPTION = 30497
 
 local SAY_AGGRO = 4
 local SAY_SLAY = 5
 local SAY_DIE = 6
 
 local ENTRY_NETHEKURSE = 16807
+
+local FACTION_MONSTER_2 = 16
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
 local states = {}
@@ -294,3 +308,29 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 23, function(_, creature)
     creature:SetBossState(0, 0) -- DATA_NETHEKURSE, NOT_STARTED
     resetBoss(creature:GetGUIDLow())
 end)
+
+-- C++ JustSummoned (boss_nethekurse.cpp:208-216): the fissure
+-- summoned by SPELL_SHADOW_FISSURE 30496 gets the monster
+-- faction, both flags, then the triggered temporary visual and
+-- Consumption with Nethekurse as original caster. The producer
+-- chain is live in the runtime: the pump's 30496 cast runs the
+-- generic SPELL_EFFECT_SUMMON producer (creatureEffectSummonType,
+-- boss_ai.go:4866, inside the castCreatureSpell funnel,
+-- boss_ai.go:1791) and summonTempCreature fires ev19 on the
+-- summoner (lua_creature_events.go:190). The original-caster leg
+-- has no Go model — CastCustomSpell accepts and ignores it
+-- (lua_creature_events.go:983-986), the cast itself still fires;
+-- kill-credit attribution only. C++ applies to any summon and
+-- Nethekurse's only summon source is 30496, so no entry gate.
+local function nethekurseJustSummoned(_, creature, summoned)
+    if summoned == nil then
+        return
+    end
+    summoned:SetFaction(FACTION_MONSTER_2)
+    summoned:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    summoned:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    summoned:CastSpell(summoned, SPELL_TEMPORARY_VISUAL, true)
+    summoned:CastCustomSpell(summoned, SPELL_CONSUMPTION, false, nil, nil, nil, nil, creature)
+end
+
+RegisterCreatureEvent(ENTRY_NETHEKURSE, 19, nethekurseJustSummoned)
