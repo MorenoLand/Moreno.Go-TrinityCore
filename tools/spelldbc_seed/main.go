@@ -282,27 +282,32 @@ var spells = []spell{
 	// 68415 Corrupted Rage (boss_general_vezax.cpp:68, :244-251 —
 	// CheckShamanisticRage casts it on shamans who know Shamanistic
 	// Rage 30823; Lua leg live, boss_general_vezax.lua:448-461).
-	// Wowhead WotLK spell=68415 (read 2026-11-13): School Shadow,
-	// Range 50000 (93008), Instant, Duration n/a (no durIdx —
-	// DurationIndex 0, permanent until removed), Requires Shaman.
-	// eff0: APPLY_AURA ADD_PCT_MODIFIER (108) -90, MiscValue 0
-	// SPELLMOD_DAMAGE ("Modifies Damage/Healing Done"); eff1:
-	// ADD_PCT_MODIFIER +100, MiscValue 3 SPELLMOD_EFFECT1
-	// ("Modifies Effect #1's Value (3)"). Mask [0x1C0, 0, 0x10]
-	// INFERRED from the 34 affected ranks on the tooltip (Healing
-	// Wave x14, Lesser Healing Wave x9, Chain Heal x7, Riptide x4):
-	// Healing Wave 0x40 / LHW 0x80 / Chain Heal 0x100 per
-	// spell_shaman.cpp:1157-1160 (:1392-1398 same bits); Riptide
-	// Flags[2] 0x10 per spell_shaman.cpp:356 (Chain Heal script's
-	// Riptide aura check). Healing Wave 0x40 is table-derived, not
-	// C++-verified in-tree. eff1's mask is unverified (Wowhead's
-	// per-effect list shows no affected spells for eff1; the
-	// Modifies tab's 12 extra rows are NPC variants of the same
-	// mask) — shared heal mask assumed; real client DBC replaces
-	// the row per-file.
-	{id: 68415, rangeIdx: 93008, school: schoolShadow, family: familyShaman, effects: [3]effect{
-		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: -90, misc: spellModDamage, targetA: targetCaster, mask: [3]uint32{0x1C0, 0, 0x10}},
-		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: 100, misc: spellModEffect1, targetA: targetCaster, mask: [3]uint32{0x1C0, 0, 0x10}},
+	// REAL CLIENT DBC (wago.tools DB2, build 3.4.0.43659, read
+	// 2026-11-13 — 3.3.5.12340 is unhosted; wow.tools retired May
+	// 2025): SpellEffect 981024/981025, SpellMisc 621919, SpellDuration
+	// 21 (-1 infinite), SpellClassOptions 66466 family 11. eff0:
+	// APPLY_AURA ADD_PCT_MODIFIER (108), DBC BP -91 (effective -90
+	// per the TC CalcValue +1 convention), MiscValue 0 SPELLMOD_DAMAGE,
+	// mask [448, 524288, 16] = [0x1C0, 0x80000, 0x10]: HW 0x40 / LHW
+	// 0x80 / Chain Heal 0x100 (spell_shaman.cpp:1157-1160), Earthliving
+	// 0x80000 word1 (its own flags [0,524288,0] per SpellClassOptions),
+	// Riptide 0x10 word2 (:356). The union of the 46 Wowhead Modifies
+	// spells' flags is exactly this mask. eff1: ADD_PCT_MODIFIER, DBC
+	// BP +99 (effective +100), MiscValue 3 SPELLMOD_EFFECT1, mask
+	// [0,0,0] — zero mask + family 11 matches EVERY shaman spell (TC
+	// SpellInfo.cpp:1305 IsAffected; Go spellAffectedBySpellFamilyMask),
+	// so +100% to effect-0 value of all shaman spells: heals net 2.0x
+	// * 0.1x = 0.2x (-80%), damage spells 2x effect-0. That is the real
+	// DBC design, not a seed artifact; the Shamanistic-Rage-bit
+	// hypothesis is refuted (30823 absent from the Modifies 46 and
+	// eff1's mask is 0). DurationIndex 21 (-1 infinite) via seed
+	// SpellDuration row 21. DBC ImplicitTarget 6 is overridden by the
+	// C++ explicit self-target (CastSpell(player, ...)), so the seed
+	// keeps targetCaster. RangeIndex 13 (50000y) maps to seed range
+	// 93008; school 0x20 Shadow; CastingTimeIndex 1 Instant.
+	{id: 68415, durIdx: 21, rangeIdx: 93008, school: schoolShadow, family: familyShaman, effects: [3]effect{
+		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: -90, misc: spellModDamage, targetA: targetCaster, mask: [3]uint32{0x1C0, 0x80000, 0x10}},
+		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: 100, misc: spellModEffect1, targetA: targetCaster, mask: [3]uint32{0, 0, 0}},
 	}},
 }
 
@@ -324,6 +329,7 @@ func main() {
 	// SpellDuration.dbc: ID, Duration, DurationPerLevel, MaxDuration.
 	durations := [][]uint32{
 		{1, 300000, 0, 300000},
+		{21, 0xFFFFFFFF, 0, 0xFFFFFFFF}, // real SpellDuration 21 (-1 infinite) for 68415
 		{90001, 2000, 0, 2000},
 		{90002, 6000, 0, 6000},
 		{90003, 8000, 0, 8000},
