@@ -35,13 +35,13 @@
 -- keristrasza).
 -- JustDied — Talk(SAY_DEATH 6) (event 4; the _JustDied
 -- SetBossState(DONE) leg is PORTED in uromDied (base-first,
--- 2026-11-05). The DoCastSelf(
--- SPELL_DEATH_SPELL 50415, true) leg STAYS OUT, decided 2026-10-14:
--- the triggered cast bridge exists (CastSpell(creature, id, true)),
--- but the engine's creature-cast path has no SPELL_EFFECT_SUMMON
--- (28) delivery leg (castCreatureSpellInternal, boss_ai.go: GO
--- packet + effect-50 Transmitted + spell_linked + event hooks only)
--- — the shazzrah no-op-cast precedent.
+-- 2026-11-05) + the DoCastSelf(SPELL_DEATH_SPELL 50415, true) leg
+-- PORTED 2026-11-13 (round-45 re-triage: the "no effect-28" ground
+-- was false — creatureEffectSummonType dispatches from the
+-- creature-cast path, boss_ai.go:3574-3581, gated on spellKnown;
+-- 50415 seeded from wago.tools 3.4.0.43659: single effect 28 SUMMON,
+-- MiscValue 28012 Amber Drake, MiscValueB 64; the summon needs a
+-- creature_template 28012 row in the deployment world DB).
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith / StartAttack — the Talk arms are _platform-
 -- state-gated, not stateless: on the first three engages
@@ -141,6 +141,7 @@ local SAY_PLAYER_KILL = 7
 local SAY_DEATH = 6
 
 local SPELL_EVOCATE = 51602
+local SPELL_DEATH_SPELL = 50415 -- oculus.h:83
 
 local DATA_UROM = 2 -- oculus.h:33 (OCDataTypes)
 local BOSS_STATE_NOT_STARTED = 0
@@ -157,12 +158,12 @@ end
 
 -- C++ JustDied: _JustDied() first (boss_urom.cpp:310-314) —
 -- SetBossState(DONE) (ScriptedCreature.cpp:519), then Talk(SAY_DEATH);
--- the DoCastSelf(SPELL_DEATH_SPELL 50415, true) leg stays out — no
--- SPELL_EFFECT_SUMMON delivery leg on the engine's creature-cast
--- path, shazzrah precedent.
+-- + DoCastSelf(SPELL_DEATH_SPELL 50415, true) (triggered self-cast;
+-- the summon rides creatureEffectSummonType, boss_ai.go:3574-3581).
 local function uromDied(event, creature, killer)
     creature:SetBossState(DATA_UROM, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
+    creature:CastSpell(creature, SPELL_DEATH_SPELL, true)
     local mapObj = creature:GetMap()
     if mapObj then
         local data = mapObj:GetInstanceData()

@@ -48,52 +48,53 @@ func writeWDBC(path string, fieldCount int, rows [][]uint32) error {
 func f32(v float32) uint32 { return math.Float32bits(v) }
 
 const (
-	effSchoolDamage     = 2
-	effDummy            = 3
-	effApplyAura        = 6
-	effHealthLeech      = 9
-	effSummon           = 28
-	effEnergize         = 30
-	effTriggerMiss      = 32
-	effSendEvent        = 61
-	effTriggerSpell     = 64
-	effScriptEffect     = 77
-	effActivateObj      = 86
-	effCharge           = 96
-	effKnockBack        = 98
-	effWeaponDamage     = 58
-	auraPeriodicDmg     = 3
-	auraDummy           = 4
-	auraStun            = 12
-	auraPeriodicTrig    = 23
-	auraRoot            = 26
-	auraSilence         = 27
-	auraDecSpeed        = 33
-	auraEffImmunity     = 37
-	auraTransform       = 56
-	auraModScale        = 61
-	auraModDmgDone      = 79
-	auraModDmgTaken     = 87
-	auraModResistPct    = 101
-	auraModMeleeHaste   = 138
-	auraPeriodicDummy   = 226
-	auraLinked          = 284
-	auraPreventRegen    = 294
-	schoolPhysical      = 1
-	schoolFire          = 4
-	schoolNature        = 8
-	schoolShadow        = 32
-	schoolArcane        = 64
-	targetCaster        = 1
-	targetEnemy         = 6
-	targetSrcAreaEnemy  = 15
-	targetDestCaster    = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
-	targetSrcCaster     = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
-	targetGONearbyEntry = 40
-	auraAddPctModifier  = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
-	spellModDamage      = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
-	spellModEffect1     = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
-	familyShaman        = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
+	effSchoolDamage           = 2
+	effDummy                  = 3
+	effApplyAura              = 6
+	effHealthLeech            = 9
+	effSummon                 = 28
+	effEnergize               = 30
+	effTriggerMiss            = 32
+	effSendEvent              = 61
+	effTriggerSpell           = 64
+	effScriptEffect           = 77
+	effActivateObj            = 86
+	effCharge                 = 96
+	effKnockBack              = 98
+	effWeaponDamage           = 58
+	auraPeriodicDmg           = 3
+	auraDummy                 = 4
+	auraStun                  = 12
+	auraPeriodicTrig          = 23
+	auraRoot                  = 26
+	auraSilence               = 27
+	auraDecSpeed              = 33
+	auraEffImmunity           = 37
+	auraTransform             = 56
+	auraModScale              = 61
+	auraModDmgDone            = 79
+	auraModDmgTaken           = 87
+	auraModResistPct          = 101
+	auraModMeleeHaste         = 138
+	auraPeriodicDummy         = 226
+	auraLinked                = 284
+	auraPreventRegen          = 294
+	schoolPhysical            = 1
+	schoolFire                = 4
+	schoolNature              = 8
+	schoolShadow              = 32
+	schoolArcane              = 64
+	targetCaster              = 1
+	targetEnemy               = 6
+	targetSrcAreaEnemy        = 15
+	targetDestCaster          = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetDestCasterBackRight = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
+	targetSrcCaster           = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
+	targetGONearbyEntry       = 40
+	auraAddPctModifier        = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
+	spellModDamage            = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
+	spellModEffect1           = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
+	familyShaman              = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
 )
 
 type effect struct {
@@ -386,6 +387,23 @@ var spells = []spell{
 	// RelocateDest +200z leg (spell_icc_soul_missile) has no Go
 	// handler — the visual dest stays at caster pos.
 	{id: 72585, rangeIdx: 93001, school: schoolShadow + schoolArcane, effects: [3]effect{{effect: effDummy, targetA: targetDestCaster}}},
+
+	// 50415 Death Spell (oculus.h:83; boss_urom.cpp:284-289 JustDied
+	// DoCastSelf + boss_varos.cpp:160-165 JustDied DoCast, both
+	// triggered) — wago.tools 3.4.0.43659 Spell/SpellEffect/SpellMisc
+	// rows, 2026-11-13 22:11 verdict: single effect 28 SUMMON,
+	// MiscValue 28012 (Amber Drake entry), MiscValueB 64
+	// (SummonProperties 64, seeded INFERRED row), TargetA 42
+	// (TARGET_DEST_CASTER_BACK_RIGHT), TargetB 0 (NONE), RadiusIndex
+	// 36, DieSides 1, BasePoints 0; DurationIndex 21 (infinite,
+	// seeded row), RangeIndex 1, SchoolMask 0x1 (physical),
+	// CastingTimeIndex 1 (instant); Attributes_0 0x100 not encoded
+	// (seed has no attributes field). RangeIndex stays synthetic
+	// 93001 (0 yd = real 1's value); cast time stays default 0
+	// (instant = real 1). The summon needs a creature_template
+	// 28012 row in the deployment world DB (summonTempCreature
+	// returns nil without one).
+	{id: 50415, durIdx: 21, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, targetA: targetDestCasterBackRight, radiusIdx: 36, misc: 28012, miscB: 64}}},
 }
 
 func main() {
@@ -428,6 +446,7 @@ func main() {
 	radii := [][]uint32{
 		{1, f32(100), f32(0), f32(100)},
 		{28, f32(50000), f32(0), f32(50000)}, // real SpellRadius 28 for 66545 (wago.tools 3.4.0.43659)
+		{36, f32(0), f32(0), f32(0)},         // real SpellRadius 36 for 50415 (wago.tools 3.4.0.43659, 2026-11-13 22:17 verdict: all zeros)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},

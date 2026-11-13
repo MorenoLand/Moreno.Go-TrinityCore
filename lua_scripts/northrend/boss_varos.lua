@@ -39,10 +39,10 @@
 -- lua_creature_events.go:5917; SetBossState census).
 -- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied
 -- SetBossState(DONE) leg is PORTED in varosDied (base-first,
--- 2026-11-05); the DoCast(me, SPELL_DEATH_SPELL 50415, true) leg
--- STAYS OUT — the urom verdict: the triggered cast bridge exists,
--- but the engine's creature-cast path has no SPELL_EFFECT_SUMMON
--- (28) delivery leg).
+-- 2026-11-05) + the DoCast(me, SPELL_DEATH_SPELL 50415, true) leg
+-- PORTED 2026-11-13 (round-45 re-triage: effect-28 delivery exists,
+-- boss_ai.go:3574-3581; 50415 seeded, single effect 28 SUMMON,
+-- MiscValue 28012 Amber Drake).
 -- Unmodeled (no bridges — documented, not wired):
 -- InitializeAI — DoCast(me, SPELL_CENTRIFUGE_SHIELD 50053) gated
 -- on instance->GetBossState(DATA_DRAKOS) != DONE — PORTED
@@ -147,6 +147,7 @@ local SAY_AZURE_EMOTE = 2
 
 local SPELL_ENERGIZE_CORES_VISUAL = 62136
 local SPELL_CALL_AMPLIFY_MAGIC = 51054
+local SPELL_DEATH_SPELL = 50415 -- oculus.h:83
 
 local DATA_VAROS = 1 -- oculus.h:32 (OCDataTypes)
 local DATA_DRAKOS = 0 -- oculus.h:31 (OCDataTypes)
@@ -396,12 +397,12 @@ end
 
 -- C++ JustDied: _JustDied() first (boss_varos.cpp:158-162) —
 -- SetBossState(DONE) (ScriptedCreature.cpp:519), then Talk(SAY_DEATH)
--- + DoCast(me, SPELL_DEATH_SPELL 50415, true); the DoCast leg stays
--- out (urom verdict: no SPELL_EFFECT_SUMMON delivery leg on the
--- engine's creature-cast path).
+-- + DoCast(me, SPELL_DEATH_SPELL 50415, true) (triggered; the
+-- summon rides creatureEffectSummonType, boss_ai.go:3574-3581).
 local function varosDied(event, creature, killer)
     creature:SetBossState(DATA_VAROS, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
+    creature:CastSpell(creature, SPELL_DEATH_SPELL, true)
     cancelTimers(creature:GetGUIDLow())
     local mapObj = creature:GetMap()
     if mapObj then
