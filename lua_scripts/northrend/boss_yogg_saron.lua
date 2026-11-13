@@ -72,11 +72,13 @@
 -- and the phase gate has no bridge, so event 15 never fires for them in
 -- Go (event 15 itself is live — boss_ai.go:1904).
 -- Sara JustSummoned — Talk(SAY_SARA_DEATH_RAY) on NPC_DEATH_ORB
--- summon + self-cast SPELL_DEATH_RAY_ORIGIN_VISUAL are PORTED
--- (saraJustSummoned; the orb arrives via a spell summon leg, unported
--- — LATENT). The 4 NPC_DEATH_RAY summons in the same arm stay out
--- (map GetHeight terrain bridge absent — frost-sphere precedent);
--- the voice-of-Yogg forward stays out (cross-AI, no bridge).
+-- summon + self-cast SPELL_DEATH_RAY_ORIGIN_VISUAL + the 4
+-- NPC_DEATH_RAY summons are PORTED (saraJustSummoned; the orb arrives
+-- via a spell summon leg, unported — LATENT). The old "map GetHeight
+-- bridge absent" stay-out is stale (Map:GetHeight is bridged,
+-- globals.go:1411). The voice-of-Yogg forward stays out (cross-AI
+-- JustSummoned call, no bridge; it would only add the orb/ray to the
+-- voice's SummonList and the rays self-despawn in 20s).
 -- Sara Reset — PORTED (saraReset, event 23): RemoveAllAuras +
 -- SetReactState(REACT_PASSIVE) + SetFaction(FACTION_FRIENDLY)
 -- (:783-790); only the _events Reset/SetPhase(PHASE_ONE) legs stay
@@ -87,8 +89,10 @@
 -- + emerge emote, and the guardian 1s / crusher-corruptor 5s
 -- StartAttackEvent kicks (:430-439) via the AttackStart bridge
 -- (lua_creature_events.go:7220) + GetAITarget(0, false, 0, 300.0);
--- the old "no AttackStart bridge" stay-out is stale. Only the
--- BossAI::JustSummoned (:674) SummonList leg stays out (no bridge).
+-- the old "no AttackStart bridge" stay-out is stale. The
+-- BossAI::JustSummoned (:674) SummonList leg is PORTED too
+-- (PHASE3.voiceSummons, brainSummons precedent; consumed by the
+-- voiceReset/voiceDied DespawnAll legs).
 -- Sara timer Talks — 2026-10-14 retraction re-audit: none ported on
 -- combat-start timers; all six are phase-gated with unbridged schedule
 -- legs (stale "no-timer-bridge" claim RETRACTED — CreateLuaEvent is a
@@ -374,6 +378,7 @@ local PHASE3 = {
     SPELL_CAST_OK = 255, -- SharedDefines.h:1171 (custom value, never sent to the client)
     SPELL_DEAFENING_ROAR_CAST_MS = 2300, -- Wowhead WotLK Classic spell 64189 cast time 2.3s
     roarCasting = {}, -- GUID -> true while the deafening-roar cast window is live (64184 CheckCast twin; see yoggPhase3Tick)
+    voiceSummons = {}, -- GUID -> { summoned objects }, voice BossAI::JustSummoned (:674) SummonList twin (brainSummons precedent)
 }
 local yoggPhase = {} -- GUID -> PHASE_THREE once yoggDoAction fires
 
@@ -513,7 +518,8 @@ RegisterCreatureEvent(ENTRY_SARA, 1, saraEnterCombat)
 RegisterCreatureEvent(ENTRY_SARA, 3, saraKilledUnit)
 -- C++ boss_saraAI::JustSummoned (:870-895): every summon
 -- SetReactState(REACT_PASSIVE); NPC_DEATH_ORB -> Talk + self-cast
--- (non-triggered, C++ :877) in C++ order; NPC_DEATH_RAY -> self-cast
+-- (non-triggered, C++ :877) in C++ order, then the 4 NPC_DEATH_RAY
+-- summons (:878-887); NPC_DEATH_RAY -> self-cast
 -- SPELL_DEATH_RAY_WARNING_VISUAL (non-triggered, C++ :890). LATENT: orbs spawn only
 -- from the unported SPELL_DEATH_RAY cast (anubrekhan precedent).
 local function saraJustSummoned(_, creature, summoned)
@@ -521,6 +527,24 @@ local function saraJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == ENTRY_DEATH_ORB then
         creature:Talk(SAY_SARA_DEATH_RAY)
         summoned:CastSpell(summoned, SPELL_DEATH_RAY_ORIGIN_VISUAL)
+        -- C++ :878-887: 4x NPC_DEATH_RAY at frand(25,50) radius around
+        -- YoggSaronSpawnPos (:385; the YOGG_SARON_SPAWN_* locals below
+        -- carry the same values but are declared after this handler, so
+        -- the literals are inlined here), z from map GetHeight,
+        -- TEMPSUMMON_TIMED_DESPAWN 20s. Each ray re-fires this handler
+        -- (event 19 on Sara) for its own REACT_PASSIVE + warning visual.
+        local mapObj = creature:GetMap()
+        for i = 1, 4 do
+            local radius = 25.0 + math.random() * 25.0
+            local angle = math.random() * 2 * math.pi
+            local x = 1980.43 + radius * math.cos(angle)
+            local y = -25.7708 + radius * math.sin(angle)
+            local z = mapObj and mapObj:GetHeight(x, y) or nil
+            if z == nil then
+                z = 324.9724
+            end
+            creature:SummonCreature(ENTRY_DEATH_RAY, x, y, z, 0, 2, 20000)
+        end
     elseif summoned:GetEntry() == ENTRY_DEATH_RAY then
         -- C++ boss_saraAI::JustSummoned (:889-890): non-triggered self-cast.
         summoned:CastSpell(summoned, SPELL_DEATH_RAY_WARNING_VISUAL)
@@ -1879,7 +1903,8 @@ end
 -- (lua_creature_events.go:7220) with the random pick as
 -- GetAITarget(0, false, 0, 300.0); the old "no AttackStart bridge"
 -- stay-out is stale. The BossAI::JustSummoned (:674) SummonList leg
--- has no bridge and stays out (no Lua SummonList model).
+-- ports as PHASE3.voiceSummons below (the old "no Lua SummonList
+-- model" stay-out is stale — brainSummons is the model in this file).
 local ENTRY_DESCEND_INTO_MADNESS = 34072 -- ulduar.h:226
 local SPELL_LUNGE = 64131
 local SPELL_TELEPORT_PORTAL_VISUAL = 64416
@@ -1927,6 +1952,15 @@ local function voiceJustSummoned(event, creature, summoned)
         -- C++ voice JustSummoned (:651-652): 1s StartAttackEvent kick.
         startAttackKick(1000)
     end
+    -- C++ BossAI::JustSummoned (:674): summons.Summon(summon) — every
+    -- voice summon joins the list, consumed by the voiceReset/voiceDied
+    -- DespawnAll legs; the stored-object twin is brainSummons above.
+    local voiceList = PHASE3.voiceSummons[guid]
+    if not voiceList then
+        voiceList = {}
+        PHASE3.voiceSummons[guid] = voiceList
+    end
+    voiceList[#voiceList + 1] = summoned
 end
 
 -- C++ spell_yogg_saron_constrictor_tentacle::OnApply
@@ -2266,6 +2300,7 @@ RegisterAuraEvent(SPELL_INSANE, 3, PHASE3.yoggInsaneRemoved)
 -- tick 238); the clouds' own Reset visual cast rides ominousCloudReset
 -- (event 23) below. Reset also clears the phase-two latch, the
 -- shattered flag and the stored Yogg object (voiceDoAction state).
+-- The _Reset() summons.DespawnAll() leg is PORTED below (PHASE3.voiceSummons).
 local function voiceReset(event, creature)
     creature:SetBossState(BOSS_YOGG_SARON, 0) -- _Reset() SetBossState(BOSS_YOGG_SARON 12, NOT_STARTED), first per C++ :490-492 (PORTED tick 259)
     cancelTimers(creature:GetGUIDLow())
@@ -2276,6 +2311,16 @@ local function voiceReset(event, creature)
     local data = yoggInstanceData(creature)
     if data then
         data.driveMeCrazyEligible = 1 -- C++ Reset: instance->SetData(DATA_DRIVE_ME_CRAZY, true) (:495)
+    end
+    -- C++ BossAI::_Reset (:507, via _Reset() :490): summons.DespawnAll()
+    -- — the voice SummonList leg (BossAI::JustSummoned :674), stored-summon
+    -- twin (brainDespawnSummons precedent); before the cloud re-summon.
+    local voiceList = PHASE3.voiceSummons[creature:GetGUIDLow()]
+    if voiceList then
+        for _, summon in ipairs(voiceList) do
+            summon:DespawnOrUnsummon()
+        end
+        PHASE3.voiceSummons[creature:GetGUIDLow()] = nil
     end
     creature:SummonCreatureGroup(0) -- CREATURE_GROUP_CLOUDS
 end
@@ -2806,12 +2851,24 @@ end
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 1, voiceEnterCombat)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 2, cancelAll)
 -- C++ boss_voice_of_yogg_saronAI::JustDied (:530-536): summons.Despawn(
--- yogg) (no bridge — removes Yogg from the voice's summon list without
--- despawning his corpse) + _JustDied() SetBossState(BOSS_YOGG_SARON 12,
--- DONE). PORTED tick 259. Fires when Yogg's own JustDied kills the voice
+-- yogg) (yogg leaves the voice's summon list, his corpse stays) +
+-- _JustDied() summons.DespawnAll (:516) + SetBossState(BOSS_YOGG_SARON 12,
+-- DONE). PORTED tick 259 (boss-state leg); the SummonList legs are PORTED
+-- below (PHASE3.voiceSummons). Fires when Yogg's own JustDied kills the voice
 -- (boss_yogg_saron.cpp:962-963) and on any direct voice kill.
 local function voiceDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
+    -- C++ JustDied (:530-536): summons.Despawn(yogg) + _JustDied()
+    -- summons.DespawnAll (:516) — the voice SummonList legs.
+    local voiceList = PHASE3.voiceSummons[creature:GetGUIDLow()]
+    if voiceList then
+        for _, summon in ipairs(voiceList) do
+            if summon:GetEntry() ~= ENTRY_YOGG_SARON then
+                summon:DespawnOrUnsummon()
+            end
+        end
+        PHASE3.voiceSummons[creature:GetGUIDLow()] = nil
+    end
     creature:SetBossState(BOSS_YOGG_SARON, 3)
 end
 

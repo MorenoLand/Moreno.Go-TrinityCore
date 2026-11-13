@@ -52,8 +52,9 @@
 -- (SetStandState/SetHealth/SetFlag are all bridged): no
 -- ModifyAuraState / ClearComboPointHolders / RemoveAllAurasOnDeath
 -- bridges (zero Lua-method hits), the resurrection machine
--- (SPELL_RESSURECTION SpellHit -> EVENT_DELAYED_RESSURECTION) rides
--- the unported instance phase machine, and the JustDied(killer) ->
+-- (SPELL_RESSURECTION SpellHit -> EVENT_DELAYED_RESSURECTION) is
+-- PORTED below (advisorSpellHit, dormant until Kael's phase
+-- machine casts 36450), and the JustDied(killer) ->
 -- Kael DoAction(ACTION_ACTIVE_ADVISOR) relay has no bearer (Lua ev4
 -- fires only on real death).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
@@ -141,8 +142,9 @@
 -- npc_phoenix_egg_tk (21364) — no Talk arms (15s rebirth timer
 -- summoning NPC_PHOENIX 21362 — driver unmodeled, summon bridge
 -- live); spawned only by the phoenix's
--- JustDied (summon chain, unreachable) — documented only, no
--- registration. spell_kael_gravity_lapse (25 teleport spells
+-- JustDied (summon chain, unreachable) — its JustSummoned
+-- AddThreat + SPELL_REBIRTH leg is PORTED below (dormant until the
+-- 15s timer lands). spell_kael_gravity_lapse (25 teleport spells
 -- 35966-35990 + SPELL_GRAVITY_LAPSE_PERIODIC 34480 /
 -- SPELL_GRAVITY_LAPSE_FLIGHT_AURA 39432) — PORTED below (ev4
 -- counter reset + ev5 per-target arm; the "no SpellScript bridge"
@@ -162,7 +164,8 @@
 -- EnterEvadeMode + MoveTo/ev28 MovementInform bridges are live
 -- (lua_creature_events.go:5200/:4989, kalecgos precedent); the 7-weapon summon
 -- machine (SPELL_SUMMON_WEAPONS 36976 + SPELL_SUMMON_
--- WEAPONA-G 36958-36964 — driver unmodeled, summon bridge live); the EVENT_
+-- WEAPONA-G 36958-36964 — driver unmodeled, summon bridge live;
+-- the JustSummoned engage leg is PORTED below, dormant); the EVENT_
 -- RESUME path after the phase-5 transition MovePoints (rides
 -- the unported transition machine; MoveTo/ev28 bridged); gravity
 -- lapse / nether beam / pyroblast / mind control / phoenix
@@ -170,9 +173,10 @@
 -- phased event machine; the 50% DamageTaken transition
 -- latch (MovePoint POINT_START_TRANSITION) rides the unported
 -- transition machine (MoveTo/ev28 bridged); BossAI ctor/_Reset()/JustReachedHome()/
--- JustSummoned() bookkeeping (DATA_KAELTHAS = 0) has no
+-- JustSummoned() summons.Summon bookkeeping (DATA_KAELTHAS = 0) has no
 -- instance-script bridge (instance_the_eye.cpp stays in the
--- no-instance-script-bridge queue). Melee engine-driven.
+-- no-instance-script-bridge queue); the JustSummoned engage leg is
+-- PORTED below (kaelJustSummoned, dormant). Melee engine-driven.
 
 local SPELL_SILENCE = 30225
 local SPELL_REND = 36965
@@ -183,6 +187,8 @@ local SPELL_CONFLAGRATION = 37018
 local SPELL_ARCANE_EXPLOSION = 36970 -- boss_kaelthas.cpp:158 (capernian)
 local SPELL_BOMB = 37036
 local SPELL_REMOTE_TOY = 37027
+local SPELL_RESSURECTION = 36450 -- boss_kaelthas.cpp:84
+local SPELL_REBIRTH = 41587 -- boss_kaelthas.cpp:167
 
 local KAEL_SAY_SLAY = 9
 local KAEL_SAY_DEATH = 13
@@ -190,6 +196,9 @@ local KAEL_SAY_DEATH = 13
 local ENTRY_KAELTHAS = 19622
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local UNIT_FLAG_STUNNED = 0x00040000 -- UnitDefines.h:142
+local UNIT_STAND_STATE_STAND = 0 -- UnitDefines.h:33
+local NPC_PHOENIX = 21362 -- boss_kaelthas.cpp:166
 local ENTRY_THALADRED = 20064
 local ENTRY_SANGUINAR = 20060
 local ENTRY_CAPERNIAN = 20062
@@ -197,6 +206,8 @@ local ENTRY_TELONICUS = 20063
 
 local combatTimers = {}
 local combatStates = {}
+local advisorResurrected = {}
+local advisorResTimers = {}
 
 local function cancelCombatPump(guid)
     local id = combatTimers[guid]
@@ -208,6 +219,12 @@ end
 
 local function fullReset(guid)
     cancelCombatPump(guid)
+    local resId = advisorResTimers[guid]
+    if resId then
+        RemoveEventById(resId)
+        advisorResTimers[guid] = nil
+    end
+    advisorResurrected[guid] = nil
     combatStates[guid] = nil
 end
 
@@ -320,6 +337,64 @@ RegisterCreatureEvent(ENTRY_KAELTHAS, 23, function(_, creature)
     kaelPreEncounter[creature:GetGUIDLow()] = nil
 end)
 
+-- C++ boss_kaelthasAI::JustSummoned (boss_kaelthas.cpp:644-655):
+-- a non-phoenix summon (one of the 7 weapons) engages a random
+-- threat-list target. summons.Summon bookkeeping stays
+-- documented-only (no summon-tracking bridge — the syth ev19
+-- precedent, boss_darkweaver_syth.lua). DORMANT: the weapons
+-- summon only via the unported EVENT_SUMMON_WEAPONS machine
+-- (boss_kaelthas.cpp:697-704); Kael summons nothing in this model.
+local function kaelJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() == NPC_PHOENIX then
+        return
+    end
+    local target = randomThreatUnit(creature)
+    if target ~= nil then
+        summoned:AttackStart(target)
+    end
+end
+RegisterCreatureEvent(ENTRY_KAELTHAS, 19, kaelJustSummoned)
+
+-- C++ advisorbase_ai::SpellHit (boss_kaelthas.cpp:361-371, shared by
+-- all four advisors): SPELL_RESSURECTION (36450) sets
+-- _hasRessurrected, clears NOT_SELECTABLE|STUNNED, stands the
+-- advisor up, and schedules EVENT_DELAYED_RESSURECTION 2s out.
+-- DORMANT until Kael's EVENT_REVIVE_ADVISORS arm casts 36450
+-- (boss_kaelthas.cpp:705-709) — the sole producer in the C++ tree;
+-- the gate is the spell ID itself, no phase proxy.
+local function advisorSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_RESSURECTION then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    advisorResurrected[guid] = true
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE + UNIT_FLAG_STUNNED)
+    creature:SetStandState(UNIT_STAND_STATE_STAND)
+    local oldId = advisorResTimers[guid]
+    if oldId then
+        RemoveEventById(oldId)
+    end
+    advisorResTimers[guid] = CreateLuaEvent(function()
+        advisorResTimers[guid] = nil
+        -- C++ advisorbase_ai::UpdateAI EVENT_DELAYED_RESSURECTION
+        -- (boss_kaelthas.cpp:419-437): _inFakeDeath = false (the
+        -- fake-death latch itself is unported — header); Target is
+        -- DelayRes_Target, never assigned in the C++ file (:328
+        -- clear only), so it always falls back to GetVictim();
+        -- ResetThreatList + AttackStart + MoveChase + AddThreat 0.
+        -- The C++ GetMotionMaster()->Clear() leg is subsumed by the
+        -- MoveChase bridge (chase-slot overwrite + follow clear,
+        -- lua_creature_events.go:5571).
+        creature:ResetAllThreat()
+        local target = creature:GetVictim()
+        if target ~= nil then
+            creature:AttackStart(target)
+            creature:MoveChase(target)
+            creature:AddThreat(target, 0)
+        end
+    end, 2000)
+end
+
 -- Thaladred the Darkener (20064): C++ UpdateAI in arm order
 -- (gaze first; the !UpdateVictim / _inFakeDeath early return
 -- collapses into the pump) — 1s granularity exact for all
@@ -394,6 +469,7 @@ RegisterCreatureEvent(ENTRY_THALADRED, 1, function(_, creature, target)
         thaladredTick(creature, guid)
     end, 1000, 0)
 end)
+RegisterCreatureEvent(ENTRY_THALADRED, 14, advisorSpellHit)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_THALADRED, 2, function(_, creature)
@@ -450,6 +526,7 @@ RegisterCreatureEvent(ENTRY_SANGUINAR, 1, function(_, creature)
         sanguinarTick(creature, guid)
     end, 1000, 0)
 end)
+RegisterCreatureEvent(ENTRY_SANGUINAR, 14, advisorSpellHit)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_SANGUINAR, 2, function(_, creature)
@@ -550,6 +627,7 @@ RegisterCreatureEvent(ENTRY_CAPERNIAN, 1, function(_, creature)
         capernianTick(creature, guid)
     end, 1000, 0)
 end)
+RegisterCreatureEvent(ENTRY_CAPERNIAN, 14, advisorSpellHit)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_CAPERNIAN, 2, function(_, creature)
@@ -615,6 +693,7 @@ RegisterCreatureEvent(ENTRY_TELONICUS, 1, function(_, creature)
         telonicusTick(creature, guid)
     end, 1000, 0)
 end)
+RegisterCreatureEvent(ENTRY_TELONICUS, 14, advisorSpellHit)
 
 -- C++ Reset() (called on evade): fullReset — see above.
 RegisterCreatureEvent(ENTRY_TELONICUS, 2, function(_, creature)
@@ -645,6 +724,22 @@ local function phoenixDied(event, creature, killer)
     creature:SummonCreature(NPC_PHOENIX_EGG, 0, 0, 0, 0, 0, 16000)
 end
 RegisterCreatureEvent(ENTRY_PHOENIX_TK, 4, phoenixDied)
+
+-- C++ npc_phoenix_egg_tkAI::JustSummoned (boss_kaelthas.cpp:1421-1425):
+-- the reborn phoenix takes the egg's victim at 0 threat, then
+-- self-casts SPELL_REBIRTH (41587) non-triggered. The nil-victim
+-- arm is a C++ no-op (ScriptedAI::AddThreat returns on a nil
+-- victim, ScriptedCreature.cpp:202-204), so the Lua guards it.
+-- DORMANT until the egg's 15s Rebirth_Timer UpdateAI arm
+-- (boss_kaelthas.cpp:1427-1443) lands — the egg has no other summon.
+local function phoenixEggJustSummoned(event, creature, summoned)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        summoned:AddThreat(victim, 0)
+    end
+    summoned:CastSpell(summoned, SPELL_REBIRTH)
+end
+RegisterCreatureEvent(NPC_PHOENIX_EGG, 19, phoenixEggJustSummoned)
 
 local SPELL_GRAVITY_LAPSE = 35941 -- boss_kaelthas.cpp:117
 local SPELL_GRAVITY_LAPSE_PERIODIC = 34480 -- boss_kaelthas.cpp:118
