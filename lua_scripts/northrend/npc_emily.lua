@@ -13,11 +13,13 @@
 -- (no TDB in this workspace).
 -- Eluna creature events: 1 OnEnterCombat, 19 OnJustSummoned,
 -- 31 OnQuestAccept. The C++ overrides no
--- KilledUnit / JustDied (no events 3/4); no SpellHit arm (event 14,
--- runtime.go:195-214), no MoveInLOS (event 27) or QuestAccept (event
--- 31) arm for emily is PORTED below (event 31 fires live from
--- engine/world/quest_details.go); DoAction has no Eluna event at all
--- — no bridge;
+-- KilledUnit / JustDied (no events 3/4); no SpellHit arm (event 14)
+-- or MoveInLOS (event 27) arm exists for emily; the QuestAccept
+-- (event 31) arm IS PORTED below (event 31 fires live from
+-- engine/world/quest_details.go:311/607 + gossip.go:1361). DoAction
+-- DOES have a bridge — event 38 (lua_creature_events.go:845, the
+-- rocket-warhead precedent) — emily simply has no DoAction arm; the
+-- old "no Eluna event at all" claim is retracted (2026-11-13).
 -- no OnReset work worth wiring (GUID clears only).
 -- Fight shape (C++-exact for all modeled arms):
 -- OnEnterCombat(1): Talk(SAY_RANDOMAGGRO 4, no target — C++ calls
@@ -31,11 +33,20 @@
 -- 26586/26590 + DoCast 47184 + EnterVehicle + faction swaps +
 -- MovePoint/MoveFollow + DisappearAndDie legs) — the 27-waypoint
 -- EscortAI cinematic (WaypointReached, zone_grizzly_hills.cpp:81-175)
--- has no escort-waypoint bridge; the single cast arm (DoCast 47184 on
+-- is UNPORTED, not bridge-blocked (2026-11-13 correction): the escort
+-- spine is live — StartEscort (lua_creature_events.go:2655),
+-- MoveWaypoint (:4641), OnReachWP arrival ev6 (runtime.go:371, fired
+-- creaturemotion.go:5313), MoveFollow (:5610), SummonCreature
+-- (:4097), SetFaction (:6593), SetWalk (:3956), CastSpell (:954),
+-- Kill (:3436), ExitVehicle (:3626), SetDeathState (:2212),
+-- DespawnOrUnsummon (:7230), player:GroupEventHappens
+-- (lua_player.go:5306). The single cast arm (DoCast 47184 on
 -- Mrfloppy, :116) is waypoint-18-gated, not timer-driven
--- (thassarian/borean_tundra precedent); OnQuestAccept Talk
--- SAY_QUEST_ACCEPT 11 is PORTED below (event 31) — the Start escort
--- + Mrfloppy MoveFollow legs stay out (no bridges).
+-- (thassarian/borean_tundra precedent). STILL BLOCKED: waypoint 19
+-- EnterVehicle has no bridge (no methods["EnterVehicle"] in the
+-- engine); waypoint 20 HandleEmoteCommand needs a per-leg
+-- PerformEmote (:4475) twin check at port time. OnQuestAccept Talk
+-- SAY_QUEST_ACCEPT 11 is PORTED below (event 31).
 -- npc_mrfloppy: JustEngagedWith Talk arms are all cross-creature
 -- (Emily->AI()->Talk SAY_WORGHAGGRO2 1 / SAY_WORGRAGGRO4 3 /
 -- SAY_RANDOMAGGRO 4, entry-gated on 26586/26590) — PORTED below via
@@ -59,40 +70,47 @@
 -- npc_amberpine_woodsman (Amberpine woodsman skinning event): zero Talk;
 -- UpdateAI UNIT_NPC_EMOTESTATE state machine (0.2f FindNearestCreature
 -- 26363) — unregistered AI (no C++ entry constant), stays out.
--- npc_wounded_skirmisher (Overwhelmed 12288): SpellHit
--- SPELL_RENEW_SKIRMISHER 48812 -> Talk(SAY_RANDOM) + DoCast
--- SPELL_KILL_CREDIT 48813 — bridgeable (event 14 SpellHit + cast), but
--- the skirmisher carries NO entry constant anywhere in the C++ tree
--- (DB ScriptName binding only, unverifiable — laughing-skull
--- precedent), so no entry-verifiable registration can be wired.
--- npc_venture_co_straggler (Smoke 'Em Out 12323/12324): Talk(SAY_SEO)
--- rides EVENT_STRAGGLER_2 timer + MovePoint chain + DisappearAndDie;
--- SpellHit SPELL_SMOKE_BOMB 49075 -> pacify + event chain — the
--- SpellHit arm itself bridges now (event 14), but the smoke-bomb arm
--- is gated on the unbridged MovePoint/DisappearAndDie/SetImmuneToPC
--- chain, and the straggler carries NO entry constant anywhere in
--- the C++ tree (DB ScriptName binding only, unverifiable), so no
--- entry-verifiable registration can be wired. EVENT_CHOP
--- (DoCastVictim SPELL_CHOP 43410, 2-arg non-triggered,
--- JustEngagedWith init (3s,6s), unconditional Repeat(10s,12s),
--- zone_grizzly_hills.cpp:572-574/:610-616) is SEPARABLE from the
--- SpellHit chain (scheduled in JustEngagedWith independently, not
--- gated on the SpellHit flip) and would bridge in isolation — but
--- no entry (see above), so the full spec stays documented-only.
+-- npc_wounded_skirmisher (Overwhelmed 12288): PORTED round 21
+-- (2026-11-13) in lua_scripts/northrend/zone_grizzly_hills.lua:347-388
+-- — SpellHit 48812 -> Talk(SAY_RANDOM) + DoCast 48813 + MovePoint /
+-- despawn legs (ev14 + ev28). Entry 27463 DB-verified: TDB +
+-- AC creature_template rows bind ScriptName 'npc_wounded_skirmisher'
+-- (re-verified 2026-11-13). The old "no entry constant, unverifiable,
+-- entry-blocked queue" wording is retracted — the DB-verification
+-- ruling governs (a creature_template row carrying the exact C++
+-- ScriptName IS the binding evidence); no C++ entry constant exists,
+-- but none is needed.
+-- npc_venture_co_straggler (Smoke 'Em Out 12323/12324): PORTED round 21
+-- (2026-11-13) in lua_scripts/northrend/zone_grizzly_hills.lua:390-509
+-- — SpellHit 49075 -> pacify + CreateLuaEvent chain (credit cast
+-- 49093, Talk SAY_SEO, three MovePoint legs, DisappearAndDie twin)
+-- + EVENT_CHOP (DoCastVictim SPELL_CHOP 43410, JustEngagedWith init
+-- (3s,6s), Repeat(10s,12s)). Entry 27570 DB-verified: TDB + AC
+-- creature_template rows bind ScriptName 'npc_venture_co_straggler'
+-- (re-verified 2026-11-13). The old "unbridged MovePoint /
+-- DisappearAndDie / SetImmuneToPC chain" and "no entry, unverifiable"
+-- wordings are retracted — MoveTo / DespawnOrUnsummon / SetFlag
+-- (59, 0x100) are all live, and the DB-verification ruling governs.
 -- npc_lake_frog: Talk SAY_MAIDEN_0 / SAY_MAIDEN_1 ride
 -- EVENT_LAKEFROG_2/5 timers (SetEntry 33220 maiden transform,
 -- SPELL_MAIDEN_OF_ASHWOOD_LAKE_TRANSFORM 62550, gossip-flag
--- toggling, DespawnOrUnsummon) — the transform sequence rides
--- EVENT_LAKEFROG timers + entry-update/gossip legs with no bridge
--- for the sequence machine; ReceiveEmote TEXT_EMOTE_KISS + item 44986 /
+-- toggling, DespawnOrUnsummon) — the EVENT_LAKEFROG_1..5 transform
+-- sequence IS PORTED (2026-10-24) in zone_grizzly_hills.lua
+-- (lakeFrogChain1-5, CreateLuaEvent pumps; UpdateEntry, SetFlag /
+-- RemoveFlag, Talk all live); the old "no bridge for the sequence
+-- machine" claim is retracted. The kissed-frog MoveFollow leg
+-- (zone_grizzly_hills.cpp:765) stays unported — MoveFollow IS bridged
+-- (lua_creature_events.go:5610), so that leg is unported work, not
+-- bridge-blocked. ReceiveEmote TEXT_EMOTE_KISS + item 44986 /
 -- auras 62537/62574/62581 legs are PORTED in
 -- lua_scripts/northrend/zone_grizzly_hills.lua (lakeFrogReceiveEmote,
 -- event 8 on 33211/33224, 2026-10-23) — the stale "no-emote / no-item
 -- bridge" claim is retracted; not duplicated here (two handlers would
 -- double-fire, see note at end of file).
 -- OnGossipSelect (zone_grizzly_hills.cpp:777-781: ungated DoCast(player,
--- SPELL_SUMMON_ASHWOOD_BRAND 62554)) is PORTED below — no menuId or
--- gossipListId gate in C++, so the Lua port gates on nothing either.
+-- SPELL_SUMMON_ASHWOOD_BRAND 62554)) is PORTED in zone_grizzly_hills.lua
+-- (lakeFrogGossipSelect) — no menuId or gossipListId gate in C++, so the
+-- Lua port gates on nothing either.
 -- npc_rocket_propelled_warhead + spell_z_check / spell_warhead_fuse:
 -- PORTED 2026-11-05 in lua_scripts/northrend/
 -- npc_rocket_propelled_warhead.lua (DoAction bridge event 38,

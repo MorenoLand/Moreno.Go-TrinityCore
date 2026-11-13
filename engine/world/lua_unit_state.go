@@ -176,7 +176,7 @@ func (s *Server) creatureUnitStateHas(m *creatureMotion, requested uint32) bool 
 	facts := unitStateFacts{
 		Casting:         now.Before(m.CastingUntil),
 		Rooted:          m.ScriptRooted || rootedAura,
-		Stunned:         stunned,
+		Stunned:         stunned || m.ScriptStunned,
 		Confused:        confused || m.Confused,
 		Fleeing:         feared || now.Before(m.FleeingUntil) || m.Fleeing,
 		MeleeAttacking:  m.InCombat && m.TargetGUID != 0,
@@ -203,6 +203,9 @@ func (s *Server) creatureUnitStateAdd(m *creatureMotion, add uint32) {
 	if add&unitStateRoot != 0 {
 		m.ScriptRooted = true
 	}
+	if add&unitStateStunned != 0 {
+		m.ScriptStunned = true
+	}
 }
 
 // creatureUnitStateClear is the creature half of ClearUnitState: a pure
@@ -216,6 +219,9 @@ func (s *Server) creatureUnitStateClear(m *creatureMotion, clear uint32) {
 	m.ScriptUnitState &^= clear
 	if clear&unitStateRoot != 0 {
 		m.ScriptRooted = false
+	}
+	if clear&unitStateStunned != 0 {
+		m.ScriptStunned = false
 	}
 }
 

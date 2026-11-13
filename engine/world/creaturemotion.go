@@ -123,6 +123,7 @@ type creatureMotion struct {
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
 	ScriptScaleKnown      bool
 	ScriptRooted          bool                // UNIT_STATE_ROOT script override: Lua CreatureMethods::SetRooted (Unit::SetControlled twin, Unit.h:256 UNIT_STATE_NOT_MOVE leg); honored by the chase-pause and waypoint-launch gates, so feign-death / phase-change root arms (stalagg, feugen, thekal, kologarn) port with real effect
+	ScriptStunned         bool                // UNIT_STATE_STUNNED script override: Lua CreatureMethods::SetStunned (Unit::SetControlled twin, Unit.h:214; Unit::SetStunned, Unit.cpp:11582); honored by the same NOT_MOVE gates as ScriptRooted (chase-pause, waypoint-launch, knockback, MoveFall), so stun-control arms (volazj Reset) port with real effect; melee still fires while stunned (DoMeleeAttackIfReady gates CASTING only, UnitAI.cpp:61-63)
 	ScriptUnitState       uint32              // Unit::m_state script half for the Eluna Has/Add/ClearUnitState trio (lua_unit_state.go): bits AddUnitState wrote for states with no live leg; read by HasUnitState, never by engine gates
 	NoCombatMovement      bool                // inverted _isCombatMovementAllowed: Lua CreatureMethods::SetCombatMovement (ScriptedAI::SetCombatMovement twin, ScriptedCreature.h:233); when true the AttackStart chase leg never launches, so ranged-AI bosses (alythess, murmur, kologarn, ...) stand and cast instead of chasing the victim to melee; zero value = chase allowed (C++ default true)
 	NoMeleeAttack         bool                // boss-class custom UpdateAIs that never call DoMeleeAttackIfReady (UnitAI.cpp:61-83): Lua CreatureMethods::SetMeleeAttack; when true the engine-driven combat-tick swing below is suppressed, so muru / the twins / gothik / novos / sara / voice-of-yogg / rimefang / krosh / flame-leviathan / kalecgos-kj cast-only like C++ (julianne excluded: she swings via boss_julianneAI::UpdateAI); zero value = swing allowed (ScriptedAI/BossAI/SmartAI/CombatAI default)
@@ -8541,7 +8542,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				// not paused here. The melee swing below still fires while
 				// stunned or rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING
 				// only, UnitAI.cpp:61-63), so only the pursuit pauses.
-				if !motion.ScriptRooted && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
+				if !motion.ScriptRooted && !motion.ScriptStunned && !motion.NoCombatMovement && !s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) {
 					// ChaseMovementGenerator re-paths whenever the target moves
 					// (_lastTargetPosition, ChaseMovementGenerator.cpp:157-159):
 					// relaunch the spline when the victim left the launch
@@ -9829,7 +9830,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	// path while stunned. UNIT_STATE_LOST_CONTROL (fear/confuse generators)
 	// stays unmodeled (no Go fear/confuse generator), matching the chase arm's
 	// documented delta.
-	if motion.ScriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
+	if motion.ScriptRooted || motion.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(motion)) || now.Before(motion.CastingUntil) {
 		return
 	}
 	// ConfusedMovementGenerator::DoUpdate

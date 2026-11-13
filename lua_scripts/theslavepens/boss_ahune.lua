@@ -52,7 +52,9 @@
 -- C++ (frozen-core event-5 ctor precedent).
 -- EnterEvadeMode is instance/cross-creature/
 -- summon gated (ahuneBunny DoAction STOP_EVENT,
--- summons.DespawnAll, DespawnOrUnsummon) — unmodeled.
+-- summons.DespawnAll, DespawnOrUnsummon) — unmodeled
+-- (the bunny-side STOP receiver is PORTED below; only the
+-- ahune-side send is still unmodeled).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (the DATA_AHUNE NOT_STARTED/IN_PROGRESS/DONE bookkeeping in
@@ -61,29 +63,28 @@
 -- instance_the_slave_pens.cpp is PORTED 2026-11-10
 -- (instance_the_slave_pens.lua: LoadObjectData entry latches +
 -- flamecaller GUID capture via creature:SetGuidData, event 5);
--- no cross-creature bridge — the DoAction(ACTION_AHUNE_RETREAT) entry to
--- Submerge() is unreachable: it is fired only cross-creature
--- by npc_ahune_bunny's EVENT_AHUNE_PHASE_TWO, and the whole
+-- the DoAction(ACTION_AHUNE_RETREAT) entry to Submerge() is still
+-- unported on the receiver side: the sender now fires from
+-- npc_ahune_bunny's EVENT_AHUNE_PHASE_TWO (ported below), and the whole
 -- bunny phase machine (ACTION_START_EVENT from the
 -- go_ahune_ice_stone gossip, EVENT_SUMMON_AHUNE/FROZEN_CORE
 -- summons, EVENT_SUMMON_HAILSTONE/COLDWEAVE/FROSTWIND casts,
 -- EVENT_START_LOOKING_FOR_OPENING + the cross-creature
 -- SHAMANS_LOOK_FOR_OPENING/FOUND_OPENING relay, EVENT_CLOSE_
 -- OPENING/EVENT_AHUNE_PHASE_ONE/TWO phase flips with the
--- DATA_FLAMECALLER_*/DATA_BONFIRE_BUNNY_*/DATA_BEAM_BUNNY_*
--- guid lookups and MovePoint choreography, SummonPositions/
--- FlameCallerSpots coords) is summon/instance/GO/movement
--- driven and stays unregistered (naga-distiller empty-skeleton
--- precedent) — except npc_ahune_bunny JustSummoned (ev19),
--- PORTED below (entry 25745; its _summons bookkeeping's
--- DespawnAll legs ride ev4/ev38, out of scope) — so the
+-- DATA_FLAMECALLER_* guid lookups and MovePoint choreography,
+-- SummonPositions/FlameCallerSpots coords) is PORTED below
+-- (follow-up strip 1, unit C, 2026-11-13: DoAction ev38 START/STOP +
+-- JustDied ev4 + the UpdateAI phase machine; npc_ahune_bunny
+-- JustSummoned ev19 was already ported, and its _summons
+-- DespawnAll legs now ride the new ev4/ev38) — so the
 -- retreat/emerge machine (Submerge, the
 -- EVENT_EMERGE 35s re-arm, Emerge's triggered RESURFACE 46402
 -- self-cast and its RemoveAurasDueToSpell(STAY_SUBMERGED/
 -- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
 -- documented only — the Emerge NOT_SELECTABLE flip stays
--- unmodeled (its trigger rides the unregistered bunny phase
--- machine); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript
+-- unmodeled (its trigger rides the bunny phase machine, ported
+-- below; the receiver itself is the follow-up); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript
 -- bridge, and only one AuraScript bridge (RegisterAuraEvent,
 -- AuraEventOnPeriodic = 1) — three of the nine script classes
 -- in this file
@@ -101,9 +102,10 @@
 -- npc_earthen_ring_flamecaller (25754) is
 -- PORTED 2026-11-10 (npc_earthen_ring_flamecaller.lua: MovementInform
 -- + SpellHit + DoAction + look-for-opening chain; its bunny-side
--- triggers stay unregistered); go_ahune_ice_stone (187882) is a
--- GameObjectScript — RegisterGameObjectEvent exists, but the stone's
--- select body stays blocked (bunny DoAction + instance lookup);
+-- triggers are PORTED below, follow-up strip 1, unit C);
+-- go_ahune_ice_stone (187882) is PORTED at the end of this file
+-- (RegisterGameObjectGossipEvent select: bunny DoAction START +
+-- Luma rhyme-aura cast via grid lookup, go:Despawn);
 -- EMOTE_EARTHEN_ASSAULT 0, EMOTE_RETREAT 0, EMOTE_RESURFACE 1
 -- and the Events/Actions/Phases/Points/Misc enums are referenced
 -- only by the unregistered arms above (SAY_PLAYER_TEXT_1/2/3
@@ -239,16 +241,338 @@ end)
 -- RegisterLuaBoss row is needed for 25745: Runtime.Load walks
 -- every .lua file (runtime.go:899) and ev19 fires by entry
 -- (fireCreatureSummoned, lua_creature_events.go:7880-7903).
--- Reachability caveat: the bunny's own summon arms (DoAction
--- ACTION_START_EVENT, EVENT_SUMMON_AHUNE) stay unported, so
--- this hook goes live when that machine lands — the same
+-- Reachability note: the bunny's own summon arms (DoAction
+-- ACTION_START_EVENT, EVENT_SUMMON_AHUNE) are PORTED below
+-- (follow-up strip 1, unit C), so this hook is live — the same
 -- receiver-ported/sender-later pattern as the flamecaller
--- SpellHit below, whose sender cast is likewise unported.
+-- SpellHit, whose sender cast is likewise ported below.
 RegisterCreatureEvent(ENTRY_AHUNE_BUNNY, 19, function(_, creature, summon)
     if summon:GetEntry() == ENTRY_AHUNE then
         return
     end
     summon:DoZoneInCombat()
+end)
+
+-- C++ npc_ahune_bunny (boss_ahune.cpp:342-474) — PORTED follow-up strip 1,
+-- unit C, 2026-11-13. The bunny is the Ahune event driver: the ice-stone
+-- gossip sends ACTION_START_EVENT (see the go_ahune_ice_stone handler at
+-- the end of this file), and the phase machine below drives the flamecaller
+-- SHAMANS_LOOK_FOR_OPENING (46422) / FOUND_OPENING (46421) sender casts
+-- feeding the already-ported flamecaller ev14 receiver
+-- (npc_earthen_ring_flamecaller.lua:148). Entry 25745 NPC_AHUNE_LOC_BUNNY
+-- (the_slave_pens.h:53); the instance guid store
+-- (instance_the_slave_pens.lua) latches DATA_AHUNE=4 and
+-- DATA_FLAMECALLER_000/001/002=7/8/9, read back via
+-- creature:GetInstanceCreature (lua_creature_events.go:7081).
+-- Phase machine: per-GUID state + one-shot CreateLuaEvent timers
+-- (repeats default 1); each callback checks the phase it was scheduled
+-- under (the EventMap phase gate) and drops if the phase flipped; every
+-- phase flip cancels all pending timers first (the C++ _events.Reset()
+-- on SetPhase). C++ UpdateAI has no CASTING/UpdateVictim gate on this AI
+-- (it never enters combat itself), so the timers carry none.
+-- _summons tracks ONLY the three bonfire bunnies: C++ JustSummoned
+-- (:350-357, ported as ev19 above) skips Ahune himself, and the frozen
+-- core is summoned by Ahune, not the bunny, so neither enters the
+-- bunny's summon list; DespawnAll therefore despawns only the bonfires.
+-- summonType numbers are the C++ TempSummonType values (Go twin,
+-- summonTempCreature): MANUAL_DESPAWN 7, DEAD_DESPAWN 6, CORPSE_DESPAWN 4.
+-- The bunny's summons resolve only with creature_template rows at runtime
+-- (repo world.db is a 0-byte placeholder) — the same dormancy class as
+-- every other SummonCreature port.
+
+local ACTION_START_EVENT = -2574500 -- boss_ahune.cpp:128
+local ACTION_STOP_EVENT = -2574501 -- boss_ahune.cpp:129
+local ACTION_AHUNE_RETREAT = -2586500 -- boss_ahune.cpp:130
+local ACTION_EMOTE_RESURFACE = -2575400 -- boss_ahune.cpp:132
+local EMOTE_EARTHEN_ASSAULT = 0 -- boss_ahune.cpp:97
+local PHASE_ONE = 0 -- boss_ahune.cpp:138
+local PHASE_TWO = 1 -- boss_ahune.cpp:139
+local DATA_AHUNE = 4 -- the_slave_pens.h:33
+local DATA_FLAMECALLER_000 = 7 -- the_slave_pens.h:36
+local NPC_SHAMAN_BONFIRE_BUNNY_000 = 25971 -- the_slave_pens.h:55
+local NPC_SHAMAN_BONFIRE_BUNNY_001 = 25972 -- the_slave_pens.h:56
+local NPC_SHAMAN_BONFIRE_BUNNY_002 = 25973 -- the_slave_pens.h:57
+local SPELL_SUMMONING_VISUAL_1 = 45937 -- boss_ahune.cpp:61
+local SPELL_SHAMANS_LOOK_FOR_OPENING = 46422 -- boss_ahune.cpp:66
+local SPELL_FOUND_OPENING = 46421 -- boss_ahune.cpp:56
+local SPELL_CLOSE_OPENING_VISUAL = 46236 -- boss_ahune.cpp:67
+local SPELL_ICE_BOMBARD = 46397 -- boss_ahune.cpp:68
+local SPELL_SUMMON_HAILSTONE = 46176 -- boss_ahune.cpp:60
+local SPELL_SUMMON_COLDWEAVE = 46143 -- boss_ahune.cpp:58
+local SPELL_SUMMON_FROSTWIND = 46382 -- boss_ahune.cpp:59
+local SPELL_RESURFACE = 46402 -- boss_ahune.cpp:48
+local GO_ICE_STONE = 187882 -- the_slave_pens.h:66
+
+-- boss_ahune.cpp:155-161 SummonPositions (Ahune, frozen core, bonfires).
+local BUNNY_SUMMON_POSITIONS = {
+    { -99.1021, -233.7526, -1.22307, 1.588250 }, -- Ahune
+    { -98.0151, -230.4555, -1.21089, 1.797689 }, -- Frozen core
+    { -143.172, -147.6801, -3.16113, 4.852015 }, -- Bonfire bunny 000
+    { -134.304, -145.7803, -1.70332, 4.677482 }, -- Bonfire bunny 001
+    { -125.036, -144.2065, -1.91660, 4.991642 }, -- Bonfire bunny 002
+}
+
+-- boss_ahune.cpp:164-172 FlameCallerSpots.
+local FLAMECALLER_SPOTS = {
+    { -145.2233, -137.5543, -1.59056, 5.427049 },
+    { -137.4383, -136.4050, -1.72384, 5.336747 },
+    { -129.0413, -132.1494, -2.09285, 5.460842 },
+}
+
+local bunnyStates = {}
+
+local function bunnyFreshState()
+    return { phase = PHASE_ONE, submerged = false, timers = {}, summons = {} }
+end
+
+local function bunnyCancelTimers(guid)
+    local st = bunnyStates[guid]
+    if not st then
+        return
+    end
+    for _, id in pairs(st.timers) do
+        RemoveEventById(id)
+    end
+    st.timers = {}
+end
+
+-- One-shot schedule under a phase: the callback drops if the bunny has
+-- left that phase since (EventMap phase gate); re-scheduling a key
+-- cancels its pending timer first (vezax schedule idiom).
+local function bunnySchedule(creature, guid, key, delayMs, phase, fn)
+    local st = bunnyStates[guid]
+    if not st then
+        return
+    end
+    local old = st.timers[key]
+    if old then
+        RemoveEventById(old)
+    end
+    st.timers[key] = CreateLuaEvent(function()
+        st.timers[key] = nil
+        local cur = bunnyStates[guid]
+        if not cur or cur.phase ~= phase then
+            return
+        end
+        fn(creature, guid)
+    end, delayMs)
+end
+
+-- C++ ResetFlameCallers (boss_ahune.cpp:462-467): each flamecaller
+-- EnterEvadeMode — the evade fires the flamecaller's ev23 Reset, which
+-- cancels its look-for-opening chain (npc_earthen_ring_flamecaller.lua).
+local function bunnyResetFlameCallers(creature)
+    for counter = 0, 2 do
+        local flamecaller = creature:GetInstanceCreature(DATA_FLAMECALLER_000 + counter)
+        if flamecaller then
+            flamecaller:EnterEvadeMode()
+        end
+    end
+end
+
+-- C++ _summons.DespawnAll() (:359-362, :389): despawn the tracked
+-- bonfire bunnies. Despawn() on an already-gone motion is a no-op
+-- (lua_creature_events.go:3305), so no alive guard is needed.
+local function bunnyDespawnSummons(guid)
+    local st = bunnyStates[guid]
+    if not st then
+        return
+    end
+    for _, summon in ipairs(st.summons) do
+        summon:Despawn()
+    end
+    st.summons = {}
+end
+
+-- C++ EVENT_START_LOOKING_FOR_OPENING (:405-410): Talk(EMOTE_EARTHEN_
+-- ASSAULT) + DoCast(flamecaller, SPELL_SHAMANS_LOOK_FOR_OPENING, true)
+-- per flamecaller — the sender cast for the flamecaller ev14 receiver.
+local function bunnyStartLooking(creature, guid)
+    creature:Talk(EMOTE_EARTHEN_ASSAULT)
+    for counter = 0, 2 do
+        local flamecaller = creature:GetInstanceCreature(DATA_FLAMECALLER_000 + counter)
+        if flamecaller then
+            creature:CastSpell(flamecaller, SPELL_SHAMANS_LOOK_FOR_OPENING, true)
+        end
+    end
+end
+
+-- C++ EVENT_SUMMON_HAILSTONE (:411-413): DoCast(SPELL_SUMMON_HAILSTONE),
+-- one-shot (re-armed only by phase-one entry).
+local function bunnySummonHailstone(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_HAILSTONE)
+end
+
+-- C++ EVENT_SUMMON_FROSTWIND (:421-423): DoCast(SPELL_SUMMON_FROSTWIND).
+local function bunnySummonFrostwind(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_FROSTWIND)
+end
+
+-- C++ EVENT_SUMMON_COLDWEAVE (:414-420): DoCast(SPELL_SUMMON_COLDWEAVE)
+-- twice + Repeat(8s); while _submerged, schedule EVENT_SUMMON_FROSTWIND
+-- in 4s (PHASE_ONE).
+local function bunnySummonColdweave(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMON_COLDWEAVE)
+    creature:CastSpell(creature, SPELL_SUMMON_COLDWEAVE)
+    local st = bunnyStates[guid]
+    if not st then
+        return
+    end
+    bunnySchedule(creature, guid, "coldweave", 8000, PHASE_ONE, bunnySummonColdweave)
+    if st.submerged then
+        bunnySchedule(creature, guid, "frostwind", 4000, PHASE_ONE, bunnySummonFrostwind)
+    end
+end
+
+-- C++ EVENT_SUMMON_AHUNE (:424-431): SummonCreature(NPC_AHUNE,
+-- TEMPSUMMON_DEAD_DESPAWN); the summoned Ahune summons the frozen core
+-- (TEMPSUMMON_CORPSE_DESPAWN) + DoZoneInCombat(ahune) + DoCast(ahune,
+-- SPELL_RESURFACE). Neither Ahune nor the core enters the bunny's
+-- _summons list (see header note above).
+local function bunnySummonAhune(creature, guid)
+    local pos = BUNNY_SUMMON_POSITIONS[1]
+    local ahune = creature:SummonCreature(ENTRY_AHUNE, pos[1], pos[2], pos[3], pos[4], 6)
+    if not ahune then
+        return
+    end
+    local corePos = BUNNY_SUMMON_POSITIONS[2]
+    ahune:SummonCreature(ENTRY_FROZEN_CORE, corePos[1], corePos[2], corePos[3], corePos[4], 4)
+    ahune:DoZoneInCombat()
+    creature:CastSpell(ahune, SPELL_RESURFACE)
+end
+
+-- C++ EVENT_CLOSE_OPENING (:432-436): flamecaller[0] DoAction
+-- (ACTION_EMOTE_RESURFACE) + DoCast(SPELL_CLOSE_OPENING_VISUAL) +
+-- DoCastSelf(SPELL_ICE_BOMBARD).
+local function bunnyCloseOpening(creature, guid)
+    local flamecaller = creature:GetInstanceCreature(DATA_FLAMECALLER_000)
+    if flamecaller then
+        flamecaller:DoAction(ACTION_EMOTE_RESURFACE)
+    end
+    creature:CastSpell(creature, SPELL_CLOSE_OPENING_VISUAL)
+    creature:CastSpell(creature, SPELL_ICE_BOMBARD)
+end
+
+-- Phase flips reference each other: forward-declare with plain
+-- assignments below (never re-`local function` after a forward declare).
+local bunnyPhaseOne, bunnyPhaseTwo
+
+-- C++ EVENT_AHUNE_PHASE_ONE (:447-455): _submerged = true; Reset;
+-- SetPhase(PHASE_ONE); schedule COLDWEAVE 8s / HAILSTONE 5s /
+-- START_LOOKING 5s / PHASE_TWO 100s (all PHASE_ONE).
+bunnyPhaseOne = function(creature, guid)
+    local st = bunnyStates[guid]
+    if not st then
+        return
+    end
+    st.submerged = true
+    bunnyCancelTimers(guid)
+    st.phase = PHASE_ONE
+    bunnySchedule(creature, guid, "coldweave", 8000, PHASE_ONE, bunnySummonColdweave)
+    bunnySchedule(creature, guid, "hailstone", 5000, PHASE_ONE, bunnySummonHailstone)
+    bunnySchedule(creature, guid, "start_looking", 5000, PHASE_ONE, bunnyStartLooking)
+    bunnySchedule(creature, guid, "phase_two", 100000, PHASE_ONE, bunnyPhaseTwo)
+end
+
+-- C++ EVENT_AHUNE_PHASE_TWO (:437-445): DoCast(flamecaller[0],
+-- SPELL_FOUND_OPENING) — the sender cast for the flamecaller ev14
+-- EMOTE_RETREAT leg — + Ahune DoAction(ACTION_AHUNE_RETREAT); Reset;
+-- SetPhase(PHASE_TWO); schedule CLOSE_OPENING 25s / PHASE_ONE 35s
+-- (both PHASE_TWO). The retreat receiver (Ahune Submerge/Emerge) is
+-- still unported, so the DoAction send is dormant until it lands.
+bunnyPhaseTwo = function(creature, guid)
+    local flamecaller = creature:GetInstanceCreature(DATA_FLAMECALLER_000)
+    if flamecaller then
+        creature:CastSpell(flamecaller, SPELL_FOUND_OPENING)
+    end
+    local ahune = creature:GetInstanceCreature(DATA_AHUNE)
+    if ahune then
+        ahune:DoAction(ACTION_AHUNE_RETREAT)
+    end
+    bunnyCancelTimers(guid)
+    local st = bunnyStates[guid]
+    if st then
+        st.phase = PHASE_TWO
+    end
+    bunnySchedule(creature, guid, "close_opening", 25000, PHASE_TWO, bunnyCloseOpening)
+    bunnySchedule(creature, guid, "phase_one", 35000, PHASE_TWO, bunnyPhaseOne)
+end
+
+-- C++ DoAction(ACTION_START_EVENT) (:367-386): DoCastSelf
+-- (SPELL_SUMMONING_VISUAL_1); summon the three bonfire bunnies
+-- (TEMPSUMMON_MANUAL_DESPAWN); MovePoint each flamecaller to its
+-- FlameCallerSpot; _submerged = false; Reset; SetPhase(PHASE_ONE);
+-- schedule SUMMON_AHUNE 10s / START_LOOKING 14s / COLDWEAVE 22s /
+-- HAILSTONE 14s / PHASE_TWO 108s (all PHASE_ONE).
+local function bunnyStartEvent(creature, guid)
+    creature:CastSpell(creature, SPELL_SUMMONING_VISUAL_1)
+    local st = bunnyStates[guid]
+    if not st then
+        return
+    end
+    local bonfireEntries = {
+        NPC_SHAMAN_BONFIRE_BUNNY_000,
+        NPC_SHAMAN_BONFIRE_BUNNY_001,
+        NPC_SHAMAN_BONFIRE_BUNNY_002,
+    }
+    for counter = 0, 2 do
+        local pos = BUNNY_SUMMON_POSITIONS[3 + counter]
+        local bonfire = creature:SummonCreature(bonfireEntries[counter + 1],
+            pos[1], pos[2], pos[3], pos[4], 7)
+        if bonfire then
+            table.insert(st.summons, bonfire)
+        end
+    end
+    for counter = 0, 2 do
+        local flamecaller = creature:GetInstanceCreature(DATA_FLAMECALLER_000 + counter)
+        if flamecaller then
+            local spot = FLAMECALLER_SPOTS[counter + 1]
+            flamecaller:MoveTo(counter, spot[1], spot[2], spot[3])
+        end
+    end
+    st.submerged = false
+    bunnyCancelTimers(guid)
+    st.phase = PHASE_ONE
+    bunnySchedule(creature, guid, "summon_ahune", 10000, PHASE_ONE, bunnySummonAhune)
+    bunnySchedule(creature, guid, "start_looking", 14000, PHASE_ONE, bunnyStartLooking)
+    bunnySchedule(creature, guid, "coldweave", 22000, PHASE_ONE, bunnySummonColdweave)
+    bunnySchedule(creature, guid, "hailstone", 14000, PHASE_ONE, bunnySummonHailstone)
+    bunnySchedule(creature, guid, "phase_two", 108000, PHASE_ONE, bunnyPhaseTwo)
+end
+
+-- C++ DoAction(ACTION_STOP_EVENT) (:387-396): _summons.DespawnAll();
+-- _events.Reset(); ResetFlameCallers(); SummonGameObject(GO_ICE_STONE,
+-- 0s). The GO re-summon is template-gated at runtime like SummonCreature;
+-- the quaternion (0,0,0.9366722,0.3502074) encodes the same yaw passed
+-- as o=2.426008, so the Go (entry,x,y,z,o[,respawnSecs]) call is exact.
+local function bunnyStopEvent(creature, guid)
+    bunnyDespawnSummons(guid)
+    bunnyCancelTimers(guid)
+    bunnyResetFlameCallers(creature)
+    creature:SummonGameObject(GO_ICE_STONE, -69.90455, -162.2449, -2.366563, 2.426008, 0)
+end
+
+-- C++ npc_ahune_bunny::DoAction (:364-366 / :387-396).
+RegisterCreatureEvent(ENTRY_AHUNE_BUNNY, 38, function(_, creature, action)
+    local guid = creature:GetGUIDLow()
+    if not bunnyStates[guid] then
+        bunnyStates[guid] = bunnyFreshState()
+    end
+    if action == ACTION_START_EVENT then
+        bunnyStartEvent(creature, guid)
+    elseif action == ACTION_STOP_EVENT then
+        bunnyStopEvent(creature, guid)
+    end
+end)
+
+-- C++ npc_ahune_bunny::JustDied (:358-362): _summons.DespawnAll() +
+-- ResetFlameCallers(); timers and state are dropped with the bunny.
+RegisterCreatureEvent(ENTRY_AHUNE_BUNNY, 4, function(_, creature)
+    local guid = creature:GetGUIDLow()
+    bunnyDespawnSummons(guid)
+    bunnyCancelTimers(guid)
+    bunnyResetFlameCallers(creature)
+    bunnyStates[guid] = nil
 end)
 
 -- C++ spell_ice_spear_control_aura::PeriodicTick
@@ -461,3 +785,39 @@ local function iceBombardmentDestPickerHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_ICE_BOMBARDMENT_DEST_PICKER, 4, iceBombardmentDestPickerHit)
+
+-- C++ go_ahune_ice_stone::OnGossipSelect (boss_ahune.cpp:589-610) —
+-- PORTED follow-up strip 1, unit C, 2026-11-13: ClearGossipMenuFor +
+-- bunny DoAction(ACTION_START_EVENT) + Luma CastSpell(player,
+-- SPELL_SUMMONING_RHYME_AURA 45926, true) + CloseGossipMenuFor +
+-- me->Delete(). RegisterGameObjectGossipEvent select (event 2,
+-- GossipEventOnSelect, engine/scripting/runtime.go:158) with args
+-- (event, player, go, sender, action, code, listID)
+-- (gameobject_hooks.go:226). The instance lookups
+-- (_instance->GetCreature(DATA_AHUNE_BUNNY/DATA_LUMA_SKYMOTHER)) have
+-- no GO-side guid-store reader, so the grid lookup approximates them
+-- (go:FindNearestCreature, 100.0 — the same idiom as this file's
+-- JustDied leg); go:Despawn() is the me->Delete() twin
+-- (sapphiron-birth precedent). Returns true (handled — C++ returns
+-- true, vetoing the native select arms).
+local NPC_LUMA_SKYMOTHER = 25697 -- the_slave_pens.h:52
+
+local function iceStoneGossipSelect(_, player, go, sender, action, code, listId)
+    if player == nil then
+        return true
+    end
+    player:GossipClearMenu()
+    local bunny = go:FindNearestCreature(ENTRY_AHUNE_BUNNY, 100.0)
+    if bunny then
+        bunny:DoAction(ACTION_START_EVENT)
+    end
+    local luma = go:FindNearestCreature(NPC_LUMA_SKYMOTHER, 100.0)
+    if luma then
+        luma:CastSpell(player, SPELL_SUMMONING_RHYME_AURA, true)
+    end
+    player:GossipComplete()
+    go:Despawn()
+    return true
+end
+
+RegisterGameObjectGossipEvent(GO_ICE_STONE, 2, iceStoneGossipSelect)

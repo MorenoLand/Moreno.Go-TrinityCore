@@ -31,8 +31,11 @@
 -- Talk SAY_MAIDEN_0/1, gossip-flag windows, despawn 4s after the last
 -- Talk); the old "no bridges" line was stale — SetFacingTo,
 -- UpdateEntry, SetFlag/RemoveFlag and Talk are all live on the
--- creature surface. Stays out: MoveFollow (no movement bridge) and
--- MoveIdle (vacuous — the frog stands still).
+-- creature surface. Stays out: the kissed-frog MoveFollow leg
+-- (zone_grizzly_hills.cpp:765) — MoveFollow IS bridged
+-- (lua_creature_events.go:5610), so the leg is unported work, not
+-- bridge-blocked (2026-11-13 correction) — and MoveIdle (vacuous —
+-- the frog stands still).
 -- PORTED 2026-11-13 (round 21): npc_venture_co_straggler
 -- (zone_grizzly_hills.cpp:562-651) + npc_wounded_skirmisher
 -- (:460-560), appended below. The 2026-10-24 "no entry constant,
@@ -51,8 +54,12 @@
 -- (:420 — EMOTE_STATE_USE_STANDING vs. the EVENT_WOODSMAN_1/2
 -- loot/attack emote loop) has a live bridge twin, but the AI is not
 -- registered in boss_ai.go and carries no NPC_ entry constant anywhere
--- in the C++ tree (DB ScriptName binding only, unverifiable —
--- wounded-skirmisher precedent); stays out as unregistered AI.
+-- in the C++ tree. Entry is TDB-verifiable, not entry-blocked: TDB
+-- binds 27293 'Amberpine Woodsman' to ScriptName
+-- 'npc_amberpine_woodsman' (AC binds SmartAI on the same row) —
+-- the "unverifiable — wounded-skirmisher precedent" citation is
+-- stale (2026-11-13: the skirmisher itself was DB-verified and
+-- ported round 21). Port pending as follow-up work; stays out here.
 -- Ported (find-nearest-gameobject axis): npc_tallhorn_stag
 -- (zone_grizzly_hills.cpp:339-390 — npc_tallhorn_stag : public
 -- CreatureScript, registered in AddSC_zone_grizzly_hills()). Entry

@@ -1318,6 +1318,19 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{rooted}, nil
 	}
+	// IsStunned is Unit::IsStunned (UnitMethods.h, Trinity arm): the
+	// UNIT_FLAG_STUNNED read, the IsRooted twin — motion.ScriptStunned
+	// (SetStunned) or a SPELL_AURA_MOD_STUN caster-aura effect. A
+	// script-set stun reads true exactly like an aura stun.
+	methods["IsStunned"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		stunned := motion.ScriptStunned
+		s.motionMu.Unlock()
+		if !stunned {
+			stunned = len(s.creatureCasterAuraEffectsByType(motion, spellAuraModStun)) > 0
+		}
+		return []any{stunned}, nil
+	}
 	// GetCorpseDelay is Creature::GetCorpseDelay (CreatureMethods.h:615,
 	// Creature.h:94): the rank-mapped corpse-decay delay in seconds, the
 	// same value creatureCorpseDelaySeconds feeds the corpse-removal
@@ -3727,15 +3740,15 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// opcode — sent fire-and-forget. MOVEMENTFLAG_FALLING is transient
 	// in C++ (cleared on landing), so no latch is kept on the motion.
 	// Rooted units do not fall in C++ (MotionMaster.cpp:937-939); the
-	// ScriptRooted gate is the Go twin, and the stunned half stays out
-	// (no creature stun-state read on the motion).
+	// ScriptRooted gate is the Go twin, and the stunned half rides the
+	// ScriptStunned slot (same HasUnitState(ROOT|STUNNED) gate).
 	methods["MoveFall"] = func(_ context.Context, _ []any) ([]any, error) {
 		if motion == nil {
 			return nil, nil
 		}
 		s.motionMu.Lock()
 		m, ok := s.motionMapLocked(motion.Map, motion.InstanceID)[motion.GUID]
-		if !ok || m.ScriptRooted {
+		if !ok || m.ScriptRooted || m.ScriptStunned {
 			s.motionMu.Unlock()
 			return nil, nil
 		}
@@ -4802,8 +4815,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// feign-death / phase-change root arms (stalagg, feugen, thekal,
 	// kologarn) port with real effect; melee swings still fire while
 	// rooted (DoMeleeAttackIfReady gates UNIT_STATE_CASTING only,
-	// UnitAI.cpp:61-63). STUNNED has no bridge (cast/melee blocking
-	// needs new engine state) — a future dimension.
+	// UnitAI.cpp:61-63). The STUNNED leg rides the SetStunned twin
+	// below (same slot/gate pattern).
 	methods["SetRooted"] = func(_ context.Context, args []any) ([]any, error) {
 		if len(args) < 1 {
 			return nil, fmt.Errorf("SetRooted requires a bool, got no args")
@@ -4815,6 +4828,47 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Lock()
 		motion.ScriptRooted = rooted
 		s.motionMu.Unlock()
+		return nil, nil
+	}
+	// SetStunned is Unit::SetControlled(state, UNIT_STATE_STUNNED)
+	// (Unit.cpp:11484-11560): sets or clears the stun leg of
+	// UNIT_STATE_NOT_MOVE (Unit.h:256) on the handler creature, the
+	// SetRooted twin. Apply runs the CastStop leg (Unit.cpp:11492:
+	// SetControlled calls CastStop() when state & UNIT_STATE_CONTROLLED)
+	// via the InterruptNonMeleeSpells bridge pattern; the clear is a
+	// plain slot write — the HasUnitState live leg still reads true
+	// while a MOD_STUN aura holds the state, matching the C++ clear
+	// early-return (Unit.cpp:11532-11535). The engine honors
+	// motion.ScriptStunned in the chase-pause, waypoint-launch,
+	// knockback and MoveFall gates (the NOT_MOVE set); melee swings
+	// still fire while stunned (DoMeleeAttackIfReady gates
+	// UNIT_STATE_CASTING only, UnitAI.cpp:61-63), and Lua casts are
+	// ungated (the engine models no SPELL_FAILED_STUNNED gate for
+	// creature casts, not even aura-stun). First consumer: volazj
+	// Reset SetControlled(false, STUNNED).
+	methods["SetStunned"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetStunned requires a bool, got no args")
+		}
+		stunned, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetStunned requires a bool")
+		}
+		s.motionMu.Lock()
+		wasStunned := motion.ScriptStunned
+		motion.ScriptStunned = stunned
+		var interrupted []interruptedCreatureCast
+		if stunned && !wasStunned {
+			interrupted = s.interruptCreatureNonMeleeCasts(motion)
+			if len(interrupted) == 0 {
+				motion.CastingUntil = time.Time{}
+				s.cancelPendingCreatureCast(motion)
+			}
+		}
+		s.motionMu.Unlock()
+		for _, arm := range interrupted {
+			s.sendCreatureInterruptPackets(motion, arm)
+		}
 		return nil, nil
 	}
 	// SetCombatMovement is ScriptedAI::SetCombatMovement

@@ -67,18 +67,23 @@
 -- ScriptName 'boss_drakkari_elemental' in both AC and TDB; the strip-15
 -- "ENTRY UNVERIFIABLE" verdict is retracted — gundrak.h has no NPC
 -- constant, but the DB row is binding evidence per the hook-coverage
--- rule). SpellHitTarget MERGE (ev15) PORTED below. Remaining elemental
--- arms are still unported (separate hooks, entry block now lifted for
--- them too): EVENT_SURGE (5-15s) — DoCastSelf(Surge Visual
--- 54827) + randomPlayer-targeted DoCast(Surge 54801); Reset's
--- AddAura(Mojo Volley 54849, self); JustDied Talk(EMOTE_ACTIVATE_ALTAR 1)
--- + Unit::Kill(colossus) via GetInstanceCreature; DamageTaken
--- HealthBelowPct(50) -> cross-AI GetData(DATA_COLOSSUS_PHASE) +
--- DoAction(ACTION_RETURN_TO_COLOSSUS) (ev38 dispatch IS bridged;
--- the :313-321 MovePoint leg is commented out in C++ — correctly
--- not ported); EnterEvadeMode DespawnOrUnsummon via ev2 +
--- creature:Despawn. Ctor Spawn Effect 54888 stays out on
--- first spawn (ev5 respawn-only).
+-- rule). PORTED (follow-up strip 1, unit B): EVENT_SURGE (5-15s) —
+-- DoCastSelf(Surge Visual 54827) + random-player DoCast(Surge 54801),
+-- skipping the top-threat player (C++ SelectTarget(Random, 1) offset —
+-- see surgeTick; Go GetAITarget(0, true, 1) would pick among the first
+-- two instead, so the GetAITargets idiom is used); Reset's AddAura(Mojo
+-- Volley 54849, self) on ev23 (fires at summon time — fireCreatureSpawned);
+-- JustDied Talk(EMOTE_ACTIVATE_ALTAR 1) + Unit::Kill(colossus) via
+-- GetInstanceCreature (colossus GUID latched by the new ev5 colossusSpawn
+-- below — without it both cross-AI arms nil-guarded to no-ops);
+-- DamageTaken HealthBelowPct(50) -> cross-AI GetData(DATA_COLOSSUS_PHASE)
+-- + DoAction(ACTION_RETURN_TO_COLOSSUS) with the damage-0 rewrite before
+-- the UNIT_STATE_CHARGING gate (the :313-321 MovePoint leg is commented
+-- out in C++ — correctly not ported); EnterEvadeMode DespawnOrUnsummon
+-- via ev2 + creature:Despawn (opera precedent). SpellHitTarget MERGE (ev15)
+-- was already ported. Ctor Spawn Effect 54888 stays out (no ctor hook;
+-- the old "ev5 respawn-only" rationale is stale — motionFor fires ev5 on
+-- first spawn too — but the ctor arm itself was out of this unit's scope).
 -- npc_living_mojo — ENTRY UNVERIFIABLE (same ground as the
 -- elemental): zero registration. Port-pattern-ready but entry-blocked
 -- arms: JustEngagedWith DoCastVictim(Mojo Wave 55626, 2s init, 15s
@@ -102,6 +107,9 @@ local SPELL_MIGHTY_BLOW = 54719
 local SPELL_FREEZE_ANIM = 16245
 local SPELL_EMERGE = 54850
 local SPELL_MERGE = 54878 -- boss_drakkari_colossus.cpp:42
+local SPELL_MOJO_VOLLEY = 54849
+local SPELL_SURGE_VISUAL = 54827
+local SPELL_SURGE = 54801
 
 local DATA_COLOSSUS_PHASE = 1
 local DATA_INTRO_DONE = 2
@@ -113,6 +121,11 @@ local COLOSSUS_PHASE_SECOND_ELEMENTAL_SUMMON = 3
 local ACTION_SUMMON_ELEMENTAL = 1
 local ACTION_FREEZE_COLOSSUS = 2
 local ACTION_UNFREEZE_COLOSSUS = 3
+local ACTION_RETURN_TO_COLOSSUS = 1 -- elemental's own enum (boss_drakkari_colossus.cpp:74-77)
+
+local EMOTE_MOJO = 0
+local EMOTE_ACTIVATE_ALTAR = 1
+local UNIT_STATE_CHARGING = 0x00020000 -- Unit.h:228
 
 local REACT_PASSIVE = 0
 local REACT_AGGRESSIVE = 2
@@ -294,8 +307,8 @@ end
 -- creature:Despawn is DespawnOrUnsummon (lua_creature_events.go:3305).
 -- MERGE itself is cast only by the elemental's DoAction
 -- RETURN_TO_COLOSSUS (:288-296), fired from its DamageTaken <50% arm
--- (:299-326) — both still unported (separate hooks), so this handler
--- is live-registered and fires as soon as those legs land.
+-- (:299-326) — both ported this tick (elementalDoAction /
+-- elementalDamageTaken below), so this handler is live end-to-end.
 local function elementalSpellHitTarget(event, creature, target, spellId)
     if spellId ~= SPELL_MERGE then
         return
@@ -307,6 +320,135 @@ local function elementalSpellHitTarget(event, creature, target, spellId)
     creature:Despawn()
 end
 
+-- C++ boss_drakkari_elemental::Reset (:239-245): events.Reset() (cancel
+-- timers) + AddAura(Mojo Volley 54849, self). ev23 fires at summon time
+-- (fireCreatureSpawned; temp summons ride motionFor via summonTempCreature),
+-- so the aura applies on spawn, C++-exact (Creature.cpp:2198 ai->Reset()).
+-- The EVENT_SURGE schedule from the same Reset rides enterCombat below
+-- (mighty-blow precedent — UpdateAI needs a victim either way); evade
+-- despawns the elemental, so no Reset re-schedule is needed.
+local function elementalReset(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+    creature:AddAura(SPELL_MOJO_VOLLEY)
+end
+
+-- C++ EVENT_SURGE (:269-274): DoCastSelf(Surge Visual 54827), then a
+-- random player target (SelectTarget(Random, 1, 0.0f, true) — offset 1
+-- skips the first MaxThreat entry, uniform random among the remaining
+-- players; nil when <=1 player) takes DoCast(Surge 54801); reschedule
+-- 5-15s. The CASTING gate (:262, :277) defers 500ms (mal_ganis idiom).
+-- GetAITargets is the threat-ordered list (lua_creature_events.go:4495);
+-- Go's GetAITarget(0, true, 1, 0) would pick among the FIRST TWO
+-- (creaturemotion.go:2505-2510), not skip-then-random, so the midnight
+-- randomTargetAnywhere idiom is used instead (player + alive filter).
+local function surgeTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "surge", 500, function()
+            surgeTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SURGE_VISUAL)
+    local players = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:GetObjectType() == "Player" and not t:IsDead() then
+            players[#players + 1] = t
+        end
+    end
+    if #players > 1 then
+        local target = players[math.random(2, #players)]
+        creature:CastSpell(target, SPELL_SURGE)
+    end
+    schedule(guid, "surge", math.random(5000, 15000), function()
+        surgeTick(creature, guid)
+    end)
+end
+
+-- C++ Reset schedules EVENT_SURGE 5-15s; in Lua the pump starts on
+-- enterCombat (the colossus JustSummoned already DoZoneInCombats the
+-- elemental, so ev1 fires at summon time). No SetCombatPulseDelay:
+-- that is a BossAI::_JustEngagedWith arm (ScriptedCreature.cpp:540)
+-- and the elemental is ScriptedAI.
+local function elementalEnterCombat(event, creature, target)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    schedule(guid, "surge", math.random(5000, 15000), function()
+        surgeTick(creature, guid)
+    end)
+end
+
+-- C++ EnterEvadeMode (:328-331): DespawnOrUnsummon. ev2 is Go's
+-- EnterEvadeMode/OnLeaveCombat hook (triggerCreatureEvade fires ev23
+-- then ev2; opera precedent despawns summoned adds in ev2).
+local function elementalLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+    creature:Despawn()
+end
+
+-- C++ JustDied (:247-253): Talk(EMOTE_ACTIVATE_ALTAR 1), then
+-- Unit::Kill(killer, colossus) via GetInstanceCreature. colossus:Kill
+-- fires the colossus's ev4, so colossusDied sets boss state DONE —
+-- the C++-exact chain (kalecgos creature:Kill(caster) idiom).
+local function elementalDied(event, creature, killer)
+    cancelTimers(creature:GetGUIDLow())
+    creature:Talk(EMOTE_ACTIVATE_ALTAR)
+    local colossus = creature:GetInstanceCreature(DATA_DRAKKARI_COLOSSUS)
+    if colossus then
+        if killer then
+            colossus:Kill(killer)
+        else
+            colossus:Kill()
+        end
+    end
+end
+
+-- C++ DamageTaken (:298-326): HealthBelowPct(50) + colossus phase FIRST
+-- -> damage 0, then (unless UNIT_STATE_CHARGING) DoAction
+-- RETURN_TO_COLOSSUS. The damage-0 rewrite precedes the charging check
+-- in C++, so both sub-branches return false, 0. NO post-damage guard:
+-- DamageTaken arms fire on lethal hits (nefarian/yazzai convention).
+-- CHARGING has no live model in Go (lua_unit_state.go — mask-only) but
+-- the elemental never charges in C++ either (its only movement leg is
+-- the commented-out MovePoint), so the gate reads false in both.
+local function elementalDamageTaken(event, creature, attacker, damage)
+    local maxHealth = creature:GetMaxHealth()
+    if maxHealth > 0 and creature:GetHealth() < math.floor(maxHealth * 50 / 100) then
+        local colossus = creature:GetInstanceCreature(DATA_DRAKKARI_COLOSSUS)
+        if colossus and colossus:GetData(DATA_COLOSSUS_PHASE) == COLOSSUS_PHASE_FIRST_ELEMENTAL_SUMMON then
+            if creature:HasUnitState(UNIT_STATE_CHARGING) then
+                return false, 0
+            end
+            creature:DoAction(ACTION_RETURN_TO_COLOSSUS)
+            return false, 0
+        end
+    end
+end
+
+-- C++ DoAction RETURN_TO_COLOSSUS (:284-296): Talk(EMOTE_MOJO 0),
+-- DoCastSelf(Surge Visual 54827), DoCast(colossus, MERGE 54878, true).
+-- The MERGE cast lands in elementalSpellHitTarget (ev15) above, which
+-- unfreezes the colossus and despawns the elemental.
+local function elementalDoAction(event, creature, action)
+    if action ~= ACTION_RETURN_TO_COLOSSUS then
+        return
+    end
+    creature:Talk(EMOTE_MOJO)
+    creature:CastSpell(creature, SPELL_SURGE_VISUAL)
+    local colossus = creature:GetInstanceCreature(DATA_DRAKKARI_COLOSSUS)
+    if colossus then
+        creature:CastSpell(colossus, SPELL_MERGE, true)
+    end
+end
+
+-- Prerequisite latch for the elemental's cross-AI arms: the instance guid
+-- store only resolves GetInstanceCreature(1) if the colossus latched its
+-- GUID (instance_guid_store.go). ev5 ON_SPAWN fires on first spawn too
+-- (motionFor, creaturemotion.go:1272-1279) — illidari-council /
+-- magtheridon SetGuidData idiom.
+local function colossusSpawn(event, creature)
+    creature:SetGuidData(DATA_DRAKKARI_COLOSSUS)
+end
+
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 1, colossusEnterCombat)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 2, colossusLeaveCombat)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 4, colossusDied)
@@ -314,4 +456,11 @@ RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 9, colossusDamageTaken)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 23, colossusReset)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 38, colossusDoAction)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 19, colossusJustSummoned)
+RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 5, colossusSpawn)
 RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 15, elementalSpellHitTarget)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 1, elementalEnterCombat)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 2, elementalLeaveCombat)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 4, elementalDied)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 9, elementalDamageTaken)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 23, elementalReset)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 38, elementalDoAction)

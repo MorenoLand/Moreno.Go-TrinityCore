@@ -89,29 +89,37 @@
 -- summon, Spell Clone Player 57507, triggered) (player CastSpell
 -- not bridged), summon->SetPhaseMask(1<<(4+_insanityHandled)) +
 -- player phase-mask aura bookkeeping (no phase-mask bridge),
--- SetControlled(true, UNIT_STATE_STUNNED) (no stun-control bridge).)
+-- SetControlled(true, UNIT_STATE_STUNNED) (SetStunned bridged
+-- 2026-11-13, follow-up strip 1 unit A — the leg itself stays out
+-- with the rest of the ev15 machine, see below).)
 -- Re-verified 2026-11-13 (hook strip round 7, group D): STAY OUT
 -- still holds, but three bridge claims above are now stale —
 -- player:CastSpell IS bridged (lua_player.go:3501), SummonCreature
 -- IS bridged (lua_creature_events.go:4097), SetPhaseMask IS bridged
 -- (lua_creature_events.go:3836). What still blocks a standalone
--- ev15 port (C++ arm boss_herald_volazj.cpp:135-171): SetControlled
--- has NO bridge (zero hits in engine/); the first-hit leg sets
+-- ev15 port (C++ arm boss_herald_volazj.cpp:135-171): SetStunned IS
+-- bridged as of 2026-11-13 (follow-up strip 1, unit A — the
+-- SetControlled claim above is retired); the first-hit leg sets
 -- NOT_SELECTABLE whose only clearing path is the UpdateAI wait-state
 -- (:262-270, _insanityHandled + summons.empty() + ev20 rollback,
 -- unported) — porting ev15 alone would strand the boss
 -- unattackable; and player-hit reachability (57496 DBC implicit
--- targets) cannot be settled in-repo (no Spell.dbc here). Revisit
+-- targets) cannot be settled in-repo (no Spell.dbc here — re-checked
+-- 2026-11-13, follow-up strip 1 unit A: no Spell.dbc on disk,
+-- world.db is a 0-byte placeholder, and s.Data.Spell(57496) cannot
+-- resolve, so spellKnown=false and ev15 never fires for 57496 at
+-- all, boss_ai.go:1825-1830/4240). Revisit
 -- only as a whole-machine port (ev15 + ev20 + wait-state +
--- summons list).
+-- summons list) once Spell.dbc ships.
 -- Reset: SetPhaseMask((1|16|32|64|128|256), true) (no phase-mask
 -- bridge); ResetPlayersPhaseMask() is PORTED below via
 -- resetPlayersPhaseMask (player:RemoveAura x5 — the old
 -- "no aura-removal bridge (aeranas precedent)" claim was stale,
 -- player:RemoveAura is bridged, engine/world/lua_player.go:219);
 -- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) PORTED (2026-10-20);
--- SetControlled(false, UNIT_STATE_STUNNED) stays out (no
--- stun-control bridge).
+-- SetControlled(false, UNIT_STATE_STUNNED) PORTED 2026-11-13
+-- (follow-up strip 1, unit A — creature:SetStunned(false) in
+-- volazjReset below).
 -- SummonedCreatureDespawn visage-phase roll-back machine
 -- (ObjectAccessor::GetCreature per-summon phase walk, player
 -- phasing-aura re-roll 57508-57512): summon STRAND + cross-AI
@@ -122,7 +130,8 @@
 -- + phase mask + stun-control); the DamageTaken crossing arm is
 -- ported above and ev15 is live but unreachable for 57496.
 -- The wait-state cleanup leg's SetControlled(false, UNIT_STATE_STUNNED)
--- (boss_herald_volazj.cpp:269) stays out too — no stun-control bridge.
+-- (boss_herald_volazj.cpp:269) stays out too — the wait-state machine
+-- is unported (the SetStunned bridge itself exists since 2026-11-13).
 -- npc_twisted_visage: NO AI EXISTS in C++ (file header comment
 -- "Missing AI for Twisted Visages" — zero Register* lines for it);
 -- NPC_TWISTED_VISAGE = 30625 is entry-verifiable (ahnkahet.h —
@@ -333,9 +342,13 @@ local function volazjReset(event, creature)
                                      -- arm order (after the SetPhaseMask
                                      -- leg, whose bridge is absent)
     -- boss_herald_volazj.cpp:83 — C++ arm order after ResetPlayersPhaseMask
-    -- (ported 2026-10-20); the SetControlled(false) leg stays out
-    -- (no stun-control bridge)
+    -- (ported 2026-10-20); boss_herald_volazj.cpp:84 SetControlled(false,
+    -- UNIT_STATE_STUNNED) PORTED 2026-11-13 (follow-up strip 1, unit A —
+    -- creature:SetStunned is bridged, lua_creature_events.go). In the
+    -- ported model nothing ever sets the stun (the ev15 machine stays
+    -- out), so this is a no-op clear — C++-exact, harmless.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetStunned(false)
 end
 
 -- C++ DamageTaken (cpp:114-134): GetHealthPct(damage) with

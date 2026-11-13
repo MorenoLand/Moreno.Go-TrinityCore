@@ -5850,7 +5850,7 @@ func (s *Server) knockBackCreatureTarget(tm *creatureMotion, fromX, fromY float6
 	if s == nil || tm == nil {
 		return
 	}
-	if tm.ScriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
+	if tm.ScriptRooted || tm.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
 		return
 	}
 	for _, arm := range s.interruptCreatureNonMeleeCasts(tm) {
@@ -5917,7 +5917,7 @@ func (s *Server) sendDrivenVehicleKnockBack(mapID, instanceID uint32, vehicleGUI
 	// Spell::EffectKnockBack gates the vehicle unit itself on ROOT/STUN
 	// before KnockbackFrom ever runs; a rooted/stunned base sends no
 	// packet to its driver.
-	if tm.ScriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
+	if tm.ScriptRooted || tm.ScriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
 		return false
 	}
 	ddx := float64(tm.X) - fromX
@@ -5976,6 +5976,7 @@ func (s *Server) sendPossessedCreatureKnockBack(mapID, instanceID uint32, target
 	charmerGUID := tm.CharmerGUID
 	tx, ty := tm.X, tm.Y
 	scriptRooted := tm.ScriptRooted
+	scriptStunned := tm.ScriptStunned
 	s.motionMu.Unlock()
 	if !possessed || charmerGUID == 0 {
 		return false
@@ -5984,7 +5985,7 @@ func (s *Server) sendPossessedCreatureKnockBack(mapID, instanceID uint32, target
 	if charmer == nil || charmer.player == nil {
 		return false
 	}
-	if scriptRooted || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
+	if scriptRooted || scriptStunned || s.creatureHasNotMoveAura(creatureAuraKeyForMotion(tm)) {
 		return false
 	}
 	for _, arm := range s.interruptCreatureNonMeleeCasts(tm) {
@@ -15465,28 +15466,36 @@ func init() {
 	// npc_emily (Grizzly Hills zone script): the JustEngagedWith arm —
 	// Talk(SAY_RANDOMAGGRO 4, no target) — the event-1 auriaya
 	// precedent (EscortAI base, but the arm is a bare self-Talk);
-	// the WaypointReached escort cinematic Talk chain (SAY_WORGHAGGRO1
-	// 0 / SAY_WORGRAGGRO3 2 / SAY_VICTORY2 6 / SAY_VICTORY3 7 /
-	// SAY_VICTORY4 8 / SAY_QUEST_COMPLETE 12) + SummonCreature /
-	// DoCast / vehicle / faction / MovePoint legs await the escort /
-	// summon / cast / movement / faction bridges; OnQuestAccept
-	// SAY_QUEST_ACCEPT 11 awaits the quest-accept bridge. Entry
+	// OnQuestAccept SAY_QUEST_ACCEPT 11 is PORTED in npc_emily.lua
+	// (event 31, fires live). The WaypointReached escort cinematic
+	// Talk chain (SAY_WORGHAGGRO1 0 / SAY_WORGRAGGRO3 2 / SAY_VICTORY2
+	// 6 / SAY_VICTORY3 7 / SAY_VICTORY4 8 / SAY_QUEST_COMPLETE 12) +
+	// SummonCreature / DoCast / faction / MovePoint legs is UNPORTED,
+	// not bridge-blocked (2026-11-13): StartEscort / MoveWaypoint /
+	// OnReachWP ev6 / MoveFollow / SetFaction / GroupEventHappens /
+	// Kill / ExitVehicle / SetDeathState are all live — only
+	// waypoint-19 EnterVehicle has no bridge. Entry
 	// 26588 verifiable from the C++ Floppy enum — see
 	// lua_scripts/northrend/npc_emily.lua. npc_mrfloppy
 	// (JustEngagedWith cross-creature Emily Talk only — bridged:
 	// FindNearestCreature returns the luaMotionCreature object and
 	// Talk is called on it, ported in npc_emily.lua), npc_outhouse_bunny
-	// (SpellHit 48382 emote/cast arms — ev14 bridge live, but no
-	// C++-verifiable entry, so unregistered — entry-blocked queue),
+	// (SpellHit 48382 emote/cast arms — PORTED in
+	// npc_outhouse_bunny.lua, entry 27326 TDB-verified),
 	// npc_amberpine_woodsman (Talk-free emote-state machine —
-	// unregistered AI, no C++ entry constant), npc_wounded_skirmisher (SpellHit
-	// 48812 Talk(SAY_RANDOM) + 48813 — ev14 bridge live, entry
-	// unverifiable, so unregistered — entry-blocked queue),
-	// npc_venture_co_straggler (EVENT_STRAGGLER_2 timer Talk(SAY_SEO)
-	// + MovePoint chain — no-timer bridge; SpellHit 49075 —
-	// ev14 bridge live, entry unverifiable), npc_lake_frog (EVENT_LAKEFROG_2/5
-	// timer Talk SAY_MAIDEN_0/1 — no-timer bridge; ReceiveEmote /
-	// gossip arms — no bridges), npc_rocket_propelled_warhead
+	// unregistered AI, no C++ entry constant; TDB binds 27293 to the
+	// ScriptName, AC binds SmartAI — entry TDB-verifiable, port
+	// pending), npc_wounded_skirmisher (PORTED round 21 in
+	// lua_scripts/northrend/zone_grizzly_hills.lua:347-388 — ev14
+	// SpellHit 48812 Talk(SAY_RANDOM) + 48813 + ev28 MovementInform;
+	// entry 27463 DB-verified),
+	// npc_venture_co_straggler (PORTED round 21 in
+	// lua_scripts/northrend/zone_grizzly_hills.lua:390-509 — ev14
+	// SpellHit 49075 + CreateLuaEvent chain + EVENT_CHOP; entry
+	// 27570 DB-verified), npc_lake_frog (EVENT_LAKEFROG_1..5 chain +
+	// ReceiveEmote ev8 + gossip arms — all PORTED in
+	// lua_scripts/northrend/zone_grizzly_hills.lua; the kissed-frog
+	// MoveFollow leg stays unported), npc_rocket_propelled_warhead
 	// (VehicleAI PassengerBoarded / DoAction + spell_z_check 61678 /
 	// spell_warhead_fuse 49181 — ported 2026-11-05 in
 	// lua_scripts/northrend/npc_rocket_propelled_warhead.lua:

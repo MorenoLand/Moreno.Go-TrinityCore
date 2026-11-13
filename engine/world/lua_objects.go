@@ -1334,6 +1334,13 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		return motion != nil && motion.ScriptRooted
 	})
+	// IsStunned is Unit::IsStunned over the live motion's
+	// ScriptStunned slot, the handler twin's read (IsRooted twin);
+	// a motion that no longer resolves reads false.
+	methods["IsStunned"] = luaNoArgs(func() any {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		return motion != nil && motion.ScriptStunned
+	})
 	// GetSpeed is UnitMethods::GetSpeed over the live motion's walk
 	// and run speeds with the handler twin's base fallbacks and
 	// move-type gate (MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6); a
@@ -1445,6 +1452,39 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		s.server.motionMu.Lock()
 		motion.ScriptRooted = rooted
 		s.server.motionMu.Unlock()
+		return nil, nil
+	}
+	// SetStunned is Unit::SetControlled(state, UNIT_STATE_STUNNED)
+	// over the live motion's ScriptStunned slot, the handler twin's
+	// write (same required-bool argument shape, same NOT_MOVE gate
+	// effect, same CastStop-on-apply leg, no broadcast).
+	methods["SetStunned"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("SetStunned requires a bool, got no args")
+		}
+		stunned, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("SetStunned requires a bool")
+		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil {
+			return nil, nil
+		}
+		s.server.motionMu.Lock()
+		wasStunned := motion.ScriptStunned
+		motion.ScriptStunned = stunned
+		var interrupted []interruptedCreatureCast
+		if stunned && !wasStunned {
+			interrupted = s.server.interruptCreatureNonMeleeCasts(motion)
+			if len(interrupted) == 0 {
+				motion.CastingUntil = time.Time{}
+				s.server.cancelPendingCreatureCast(motion)
+			}
+		}
+		s.server.motionMu.Unlock()
+		for _, arm := range interrupted {
+			s.server.sendCreatureInterruptPackets(motion, arm)
+		}
 		return nil, nil
 	}
 	// Mount/Dismount are Unit::Mount/Unit::Dismount (Unit.cpp:8310/
