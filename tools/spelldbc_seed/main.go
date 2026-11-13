@@ -331,10 +331,8 @@ var spells = []spell{
 	// TargetB 0, RadiusIndex 0. RangeIndex stays synthetic 93008
 	// (50000 yd, same value as real 13, 68415 precedent); cast time
 	// stays default 0 (instant = real 1); family stays 0 (no
-	// SpellClassOptions row read). 66545 Summon Memory is NOT seeded
-	// here yet: its RadiusIndex 28 value is unread (SpellRadius row
-	// 28) and Go silently resolves a missing radius row to 0, which
-	// would leave the ev7 filter with no targets.
+	// SpellClassOptions row read). 66545 Summon Memory is seeded
+	// below (RadiusIndex 28 = 50000/0/50000, real SpellRadius row).
 	{id: 66715, durIdx: 6, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 35052, miscB: 64, targetA: targetDestCaster}}},
 	{id: 66704, durIdx: 6, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 35041, miscB: 64, targetA: targetDestCaster}}},
 	{id: 66697, durIdx: 6, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 35033, miscB: 64, targetA: targetDestCaster}}},
