@@ -456,7 +456,7 @@ local function chooseLocHit(event, spell, effectIndex)
     end
     for _, player in ipairs(caster:GetPlayersInRange(65)) do
         if player:IsFlying() then
-            caster:SummonCreature(NPC_FEL_CANNON2, player:GetPositionX(), player:GetPositionY(), player:GetPositionZ(), 0)
+            caster:SummonCreature(NPC_FEL_CANNON2, player:GetX(), player:GetY(), player:GetZ(), 0)
         end
     end
 end
