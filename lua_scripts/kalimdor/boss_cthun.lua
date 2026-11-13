@@ -36,8 +36,14 @@
 -- read instance->GetData(DATA_CTHUN_PHASE); the bridged
 -- creature:GetData is the per-AI ScriptData store
 -- (lua_creature_events.go:800-835), NOT the instance store, and no
--- instance GetData/SetData bridge exists; the phase writers are all
--- in the unported phase machine), JustDied PHASE_DONE SetData (:849-851), DoAction
+-- instance GetData/SetData bridge exists; re-checked round 23:
+-- the global GetInstanceData (scripting/globals.go:1442) returns a
+-- Lua-side per-(map,instance) table populated only by Lua instance
+-- scripts — the C++ InstanceScript store is not mirrored into it,
+-- and the AQ40 instance script is unported (boss_ai.go:18280 audit,
+-- no-instance-script-bridge queue), so the C++ phase writes at
+-- boss_cthun.cpp:216/227/307/367/429/529/627/671/815/840 never reach
+-- Lua; the phase writers are all in the unported phase machine), JustDied PHASE_DONE SetData (:849-851), DoAction
 -- FLESH_TENTACLE_KILLED counter (:878-886, consumer of the flesh
 -- tentacle JustDied relay — DoAction IS bridged, but the counter
 -- lives in the unported phase machine, so the relay stays out).

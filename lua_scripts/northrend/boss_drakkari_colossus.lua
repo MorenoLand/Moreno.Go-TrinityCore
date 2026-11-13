@@ -38,9 +38,10 @@
 -- C++ Initialize() twin.
 -- DoAction machine (:128-163) — ev38 (illidan/magtheridon precedent),
 -- fired by the colossus's own DamageTaken above (SUMMON_ELEMENTAL /
--- FREEZE) and, once the elemental/mojo senders land, by them
--- (UNFREEZE): SUMMON_ELEMENTAL self-casts Emerge 54850; FREEZE
--- MoveIdle (the Clear + MoveIdle collapse twin) + REACT_PASSIVE +
+-- FREEZE) and, once the mojo sender lands, by it (UNFREEZE) — plus the
+-- elemental's SpellHitTarget MERGE leg, ported below (ev15).
+-- SUMMON_ELEMENTAL self-casts Emerge 54850; FREEZE MoveIdle (the
+-- Clear + MoveIdle collapse twin) + REACT_PASSIVE +
 -- SetFlag(59, 0x100) UNIT_FLAG_IMMUNE_TO_PC (the
 -- SetImmuneToPC(true) twin — algalon/BPC/saurfang precedent) +
 -- self-cast Freeze Anim 16245; UNFREEZE returns early while
@@ -62,11 +63,13 @@
 -- constructor has no Lua lifecycle equivalent (no ctor hook).
 -- JustDied — _JustDied() DONE ports in colossusDied below
 -- (SetBossState + instance flag); the _Reset half has no bridge.
--- boss_drakkari_elemental — ENTRY UNVERIFIABLE (gundrak.h
--- GDCreatureIds has no NPC_DRAKKARI_ELEMENTAL; the .cpp enum names
--- only spells/texts; belnistrasz/willix precedent — no invented
--- identifiers): zero registration. Port-pattern-ready but
--- entry-blocked arms: EVENT_SURGE (5-15s) — DoCastSelf(Surge Visual
+-- boss_drakkari_elemental — ENTRY VERIFIED (29573, DB creature_template
+-- ScriptName 'boss_drakkari_elemental' in both AC and TDB; the strip-15
+-- "ENTRY UNVERIFIABLE" verdict is retracted — gundrak.h has no NPC
+-- constant, but the DB row is binding evidence per the hook-coverage
+-- rule). SpellHitTarget MERGE (ev15) PORTED below. Remaining elemental
+-- arms are still unported (separate hooks, entry block now lifted for
+-- them too): EVENT_SURGE (5-15s) — DoCastSelf(Surge Visual
 -- 54827) + randomPlayer-targeted DoCast(Surge 54801); Reset's
 -- AddAura(Mojo Volley 54849, self); JustDied Talk(EMOTE_ACTIVATE_ALTAR 1)
 -- + Unit::Kill(colossus) via GetInstanceCreature; DamageTaken
@@ -74,10 +77,8 @@
 -- DoAction(ACTION_RETURN_TO_COLOSSUS) (ev38 dispatch IS bridged;
 -- the :313-321 MovePoint leg is commented out in C++ — correctly
 -- not ported); EnterEvadeMode DespawnOrUnsummon via ev2 +
--- creature:Despawn; SpellHitTarget MERGE (ev15) -> colossus
--- UNFREEZE + self-despawn. Ctor Spawn Effect 54888 stays out on
--- first spawn (ev5 respawn-only). Joins the bridgeable-but-entry-
--- blocked queue.
+-- creature:Despawn. Ctor Spawn Effect 54888 stays out on
+-- first spawn (ev5 respawn-only).
 -- npc_living_mojo — ENTRY UNVERIFIABLE (same ground as the
 -- elemental): zero registration. Port-pattern-ready but entry-blocked
 -- arms: JustEngagedWith DoCastVictim(Mojo Wave 55626, 2s init, 15s
@@ -93,12 +94,14 @@
 -- bookkeeping has no bridge.
 
 local ENTRY_DRAKKARI_COLOSSUS = 29307
+local ENTRY_DRAKKARI_ELEMENTAL = 29573 -- DB-verified: AC + TDB creature_template carry ScriptName 'boss_drakkari_elemental' on 'Drakkari Elemental' (strip-15 entry block lifted)
 local DATA_DRAKKARI_COLOSSUS = 1 -- gundrak.h DATA_DRAKKARI_COLOSSUS
 local BOSS_STATE_DONE = 3 -- EncounterState DONE (InstanceScript.h:68-76)
 
 local SPELL_MIGHTY_BLOW = 54719
 local SPELL_FREEZE_ANIM = 16245
 local SPELL_EMERGE = 54850
+local SPELL_MERGE = 54878 -- boss_drakkari_colossus.cpp:42
 
 local DATA_COLOSSUS_PHASE = 1
 local DATA_INTRO_DONE = 2
@@ -249,8 +252,9 @@ end
 -- self-cast Freeze Anim; UNFREEZE returns early while AGGRESSIVE,
 -- else clears the flag, sets AGGRESSIVE, removes Freeze Anim,
 -- DoZoneInCombat. ev38 (illidan/magtheridon precedent); senders are
--- the colossus's own DamageTaken above plus the entry-blocked
--- elemental SpellHitTarget / mojo MovementInform chains.
+-- the colossus's own DamageTaken above, the elemental's SpellHitTarget
+-- MERGE leg (ev15, ported below), and the mojo MovementInform chain
+-- (still entry-blocked).
 local function colossusDoAction(event, creature, action)
     if action == ACTION_SUMMON_ELEMENTAL then
         creature:CastSpell(creature, SPELL_EMERGE)
@@ -279,6 +283,30 @@ local function colossusJustSummoned(_, creature, summoned)
     end
 end
 
+-- C++ boss_drakkari_elemental::SpellHitTarget (:333-342): if the
+-- spell is MERGE 54878 and the target is a creature, that creature's
+-- AI gets DoAction(ACTION_UNFREEZE_COLOSSUS) and the elemental
+-- despawns. ev15 (boss_ai.go:4509 fires CreatureEventOnSpellHitTarget;
+-- onyxia/nazan handler idiom (event, creature, target, spellId)).
+-- The GetTypeId() == 3 check is the C++ target->ToCreature() null
+-- test (vx_001 precedent); target:DoAction rides the bridged ev38
+-- dispatch straight into colossusDoAction's UNFREEZE leg above, and
+-- creature:Despawn is DespawnOrUnsummon (lua_creature_events.go:3305).
+-- MERGE itself is cast only by the elemental's DoAction
+-- RETURN_TO_COLOSSUS (:288-296), fired from its DamageTaken <50% arm
+-- (:299-326) — both still unported (separate hooks), so this handler
+-- is live-registered and fires as soon as those legs land.
+local function elementalSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_MERGE then
+        return
+    end
+    if not target or target:GetTypeId() ~= 3 then -- TYPEID_UNIT
+        return
+    end
+    target:DoAction(ACTION_UNFREEZE_COLOSSUS)
+    creature:Despawn()
+end
+
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 1, colossusEnterCombat)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 2, colossusLeaveCombat)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 4, colossusDied)
@@ -286,3 +314,4 @@ RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 9, colossusDamageTaken)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 23, colossusReset)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 38, colossusDoAction)
 RegisterCreatureEvent(ENTRY_DRAKKARI_COLOSSUS, 19, colossusJustSummoned)
+RegisterCreatureEvent(ENTRY_DRAKKARI_ELEMENTAL, 15, elementalSpellHitTarget)

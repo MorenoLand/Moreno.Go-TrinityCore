@@ -32,8 +32,14 @@
 --   The aura + Talk + cast-visual legs are live; the summon leg is
 --   the engine gap, not a script gap.
 -- - The sibling npc_tiger_matriarch (entry 40312, cata/mop-verified)
---   stays out: IsSummonedBy rides summoner->GetVehicle() (no bridge),
---   and its pounce/nosummon timers are gated on the vehicle-derived
+--   stays out: the session path still has no summon executor (see
+--   above), so the matriarch itself never spawns and its ev22/ev1/
+--   ev3/ev9 arms can never fire. Narrowed 2026-11-13 (round 23):
+--   GetVehicle IS bridged now (player lua_player.go:3360, creature
+--   lua_creature_events.go:3503, plus GetVehicleBase) and ev22 fires
+--   (fireCreaturePetSummoned :7934) — the old "no GetVehicle bridge"
+--   claim is stale; the summon executor is the sole remaining blocker.
+--   Its pounce/nosummon timers are gated on the vehicle-derived
 --   _tigerGuid — porting them alone would fabricate casts.
 -- The spell_mount_check / spell_voljin_war_drums / spell_voodoo
 -- SpellScripts in the same file stay out (no SpellScript bridge).

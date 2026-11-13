@@ -61,10 +61,12 @@
 -- - JustDied: PORTED — me->DespawnOrUnsummon() as creature:Despawn()
 --   at the top of onDied (illidari_spawn precedent, C++-exact:
 --   despawn first, then the blocked leg). LiveCounter() on the
---   trigger AI via MobGUID stays documented-only: no cross-AI
---   GUID-lookup bridge (the true bar; the old "no despawn bridge"
+--   trigger AI via MobGUID stays documented-only: GetCreatureByGUID
+--   IS bridged (lua_creature_events.go:4319) so the lookup exists;
+--   the true bar is invoking another creature AI's method (CAST_AI
+--   LiveCounter), which has no bridge. (The old "no despawn bridge"
 --   was stale — creature:Despawn() is bridged,
---   lua_creature_events.go:214).
+--   lua_creature_events.go:214.)
 
 local ENTRY_QIRAJI_WASP       = 15414
 local ENTRY_QIRAJI_TANK       = 15422
