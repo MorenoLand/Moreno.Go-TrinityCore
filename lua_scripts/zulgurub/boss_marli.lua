@@ -50,21 +50,25 @@
 -- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention). Spawn of Mar'li (15041): non-triggered self-cast 24312
 -- (level up) every 3s while in combat (C++-exact); melee is
--- engine-driven; never spawns in this build (no summon model) but is
--- registered so any that exist fight correctly.
+-- engine-driven; the hatch chain summons them (24081, 5-min duration)
+-- once the ownerless-Open engine leg lands; registered so any that
+-- exist fight correctly.
 -- Deviations from C++: no instance-script model — boss admission via
 -- the luaBossAI shim (a no-op BossAI slot; the SetBossState legs are
 -- ported below via creature:SetBossState, bridge live 2026-11-05, and
--- the GetZulGurubAI bookkeeping stays out); no hatch model — the HATCH_EGGS 24083 AoE and the
--- HATCH_SPIDER_EGG 24082 casts are not issued (only their re-arm cycles
--- are modeled): DBC verdict 2026-11-13, 24082 is ACTIVATE_OBJECT/Open on
+-- the GetZulGurubAI bookkeeping stays out); hatch model PARTIAL —
+-- the HATCH_EGGS 24083 AoE and the HATCH_SPIDER_EGG 24082 casts ARE
+-- issued (PORTED 2026-11-13) and the ev19 JustSummoned
+-- AttackStart-random arm + summons tracking + Reset DespawnAll are
+-- PORTED: DBC verdict 2026-11-13, 24082 is ACTIVATE_OBJECT/Open on
 -- nearby egg GOs (TDB spell_dbc, column-mapped: Effect_1 86,
 -- ImplicitTargetA_1 40, MiscValue_1 8) and 24083 is the same effect
 -- (wowhead wotlk: Activate Object, Radius 100y, Max targets 4) —
 -- neither summons; the Go Open leg needs a player owner session
 -- (boss_ai.go:8337) plus Spell.dbc data — an ownerless boss caster
 -- no-ops on both counts, so the eggs never hatch until that chain
--- lands (goober Use -> summon 15041 -> egg JustSummoned forward); the Reset egg Respawn scan is PORTED (marliReset,
+-- lands (goober Use -> 24081 summon 15041 -> egg JustSummoned
+-- forward); the Reset egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
 -- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
 -- the charge "not aggro leader" exclusion is the Random,1 skip-first
@@ -74,8 +78,8 @@
 -- 2026-10-26); no
 -- movement model — the charge AttackStart arm is skipped (cast lands,
 -- the boss keeps its current victim); the summoned-spider
--- JustSummoned AttackStart-random arm has no bearer (nothing ever
--- hatches the eggs yet); spell_hatch_spiders (SpellScript target-select sort/
+-- JustSummoned AttackStart-random arm is PORTED (marliJustSummoned,
+-- ev19; dormant until the egg GO chain hatches one); spell_hatch_spiders (SpellScript target-select sort/
 -- resize) is a SpellScript — not modeled (standing gap; note the
 -- script hooks TARGET_GAMEOBJECT_DEST_AREA (52) while the DBC target
 -- is NEARBY_ENTRY (40), so the hook likely never fires in C++ either).
@@ -406,6 +410,19 @@ local function marliWipe(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
+    -- C++ Reset summons.DespawnAll (boss_marli.cpp:102) rides here,
+    -- alive-gated: evade runs Reset (EnterEvadeMode ends with Reset),
+    -- so the wipe must despawn; on death the creature is not alive,
+    -- so the spiders linger as in C++ (no Reset on death). The gate
+    -- also makes the ev2/ev23 firing order irrelevant.
+    if creature:IsAlive() then
+        local tracked = summons[guid]
+        if tracked then
+            for _, summon in pairs(tracked) do
+                summon:Despawn()
+            end
+        end
+    end
     summons[guid] = nil
 end
 
@@ -420,16 +437,10 @@ local function marliReset(event, creature)
     -- C++ Reset (boss_marli.cpp:92): the PHASE_THREE damage rollback
     -- runs before the egg scan; the alive gate restores C++
     -- Reset-never-runs-on-death (Go fires 23 before 4 on death).
-    -- summons.DespawnAll (:102) is PORTED below: tracked summons
-    -- (ev19) are despawned before the wipe clears the list.
+    -- summons.DespawnAll (:102) rides marliWipe's alive gate above
+    -- (evade despawns, death lingers, firing order irrelevant).
     local guid = creature:GetGUIDLow()
     local wasPhaseThree = marliState(guid).phase == PHASE_THREE
-    local tracked = summons[guid]
-    if tracked then
-        for _, summon in pairs(tracked) do
-            summon:Despawn()
-        end
-    end
     marliWipe(event, creature)
     if creature:IsAlive() then
         if wasPhaseThree then
