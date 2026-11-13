@@ -16,7 +16,7 @@
 --     (BossAI::JustEngagedWith passthrough, base-first) + SetFlag
 --     NON_ATTACKABLE + WELD removal + SEAT_6 cast on the vehicle base
 --     PORTED this tick (GetVehicleBase, instance-GUID fallback;
---     DBC-gated 63344), on enter combat (1). See DEVIATION note below
+--     seeded 63344), on enter combat (1). See DEVIATION note below
 --     for the unmodeled vehicle gate.
 --   JustDied (:442) + EVENT_OUTTRO_1/2/3 chain: SetBossState DONE
 --     PORTED tick 259 (first per C++), CombatStop, gravity off,
@@ -80,14 +80,18 @@
 --     The vehicle-base legs are PORTED this tick: VX001 steps 1
 --     (SetFacingTo 3.686), 2 (SEAT_6) and 8 (SEAT_2), AERIAL step 1
 --     (SEAT_5) — GetVehicleBase (:3522) and SetFacingTo
---     (lua_objects.go:1538) are bridged; the casts are DBC-gated
---     (63313/63316/63344/63345 unseeded, wago verdicts pending).
+--     (lua_objects.go:1538) are bridged; the casts are SEEDED
+--     (63313/63316/63344/63345, wago 3.4.0.47659 verdicts + real
+--     SpellRange 152, tools/spelldbc_seed) and wake the Go
+--     creature-caster CONTROL_VEHICLE boarding leg (spells.go:40344;
+--     seat = BP+1-1). The aura-leave exit half is still unbridged, so
+--     a boarded caster stays seated when the aura leaves.
 --     MovePoint legs ride the MoveTo twin (vol7ron steps 1/3);
 --     aerial EnterEvadeMode on Reset stays out (bridged,
 --     lua_creature_events.go:5188, but runs the base evade, not the ACU
 --     override — summons.DespawnAll unbridged).
 --   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base
---     PORTED (GetVehicleBase, instance-GUID fallback; DBC-gated 63344);
+--     PORTED (GetVehicleBase, instance-GUID fallback; seeded 63344);
 --     button GO flag leg -- out (no GO bridge); EVENT_SUMMON_FLAMES --
 --     out (worldtrigger via instance GUID).
 --     (INTRO_2/INTRO_3 are ported — see the INTRO_1 bullet — via the
@@ -321,7 +325,7 @@ end
 -- C++ JustEngagedWith (:424), creature-local legs in C++ order:
 -- BossAI::JustEngagedWith SetBossState IN_PROGRESS (base-first),
 -- SetFlag NON_ATTACKABLE, remove WELD, SEAT_6 cast on the vehicle
--- base (GetVehicleBase, instance-GUID fallback; DBC-gated 63344).
+-- base (GetVehicleBase, instance-GUID fallback; seeded 63344).
 -- The `if (!me->GetVehicleBase()) return` gate stays out (see header
 -- DEVIATIONS); button GO leg and SUMMON_FLAMES stay out; EVENT_INTRO_1
 -- is scheduled at 1500ms (latch-gated Talk, see intro1).
@@ -333,7 +337,7 @@ local function mimironEnterCombat(event, creature, target)
     -- (MKII). GetVehicleBase is bridged (lua_creature_events.go:3522)
     -- and returns the base creature object when the accessory install
     -- seated him; the instance-GUID twin is the fallback (INTRO_2
-    -- precedent). The cast is DBC-gated (63344 unseeded), like SEAT_7.
+    -- precedent). The cast is seeded (63344), like SEAT_7.
     local base = creature:GetVehicleBase()
         or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
     if base then
@@ -478,7 +482,7 @@ end
 local function vx001Activation8(creature, guid)
     -- C++ :560-562: DoCast SEAT_2 on the vehicle base (the local is
     -- named vx001 in C++ but the target is me->GetVehicleBase()).
-    -- DBC-gated (63313 unseeded).
+    -- Seeded (63313).
     local base = creature:GetVehicleBase()
         or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
     if base then
@@ -533,7 +537,7 @@ end
 
 local function vx001Activation2(creature, guid)
     -- C++ :528-530: DoCast SEAT_6 on the vehicle base (MKII).
-    -- DBC-gated (63344 unseeded), like the engage SEAT_6.
+    -- Seeded (63344), like the engage SEAT_6.
     local base = creature:GetVehicleBase()
         or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
     if base then
@@ -561,7 +565,7 @@ end
 -- C++ DoAction DO_ACTIVATE_AERIAL (:401-403) schedules
 -- EVENT_AERIAL_ACTIVATION_1 in 5s. Step 1 (SEAT_5 on the vehicle base)
 -- is PORTED this tick (GetVehicleBase :3522, instance-GUID MKII
--- fallback; DBC-gated 63316). The Talk, summon and DoAction legs are
+-- fallback; seeded 63316). The Talk, summon and DoAction legs are
 -- ported. The summoned ACU is kept in per-GUID state
 -- (DATA_AERIAL_COMMAND_UNIT twin).
 local function aerialActivation6(creature, guid)
@@ -609,7 +613,7 @@ end
 
 local function aerialActivation1(creature, guid)
     -- C++ :569-571: DoCast SEAT_5 on the vehicle base (MKII).
-    -- DBC-gated (63316 unseeded).
+    -- Seeded (63316).
     local base = creature:GetVehicleBase()
         or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
     if base then

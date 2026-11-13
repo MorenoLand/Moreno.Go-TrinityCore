@@ -77,6 +77,7 @@ const (
 	auraModResistPct          = 101
 	auraModMeleeHaste         = 138
 	auraPeriodicDummy         = 226
+	auraControlVehicle        = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	auraLinked                = 284
 	auraPreventRegen          = 294
 	schoolPhysical            = 1
@@ -422,6 +423,39 @@ var spells = []spell{
 	// TargetA 25 / TargetB 63 legs are live in Go (chain_targets.go:360,
 	// target_dest_targets.go:14).
 	{id: 52267, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effScriptEffect, targetA: targetUnitTargetAny, targetB: targetDestTargetAny}}},
+
+	// Mimiron seat spells 63313 SEAT_2 / 63316 SEAT_5 / 63344 SEAT_6 /
+	// 63345 SEAT_7 (boss_mimiron.cpp activation chains + JustEngagedWith
+	// SEAT_6 + INTRO_2 SEAT_7) — wago.tools 3.4.0.47659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-13 22:51 verdict: two
+	// effects each, both effect 6 APPLY_AURA; eff0 aura 236
+	// CONTROL_VEHICLE, DieSides 1, BasePoints = seat-1 (1/4/5/6),
+	// TargetA 25 (TARGET_UNIT_TARGET_ANY), TargetB 0, RadiusIndex 0;
+	// eff1 aura 4 DUMMY, BP 0, TargetA 1 (TARGET_UNIT_CASTER);
+	// DurationIndex 21 (infinite, seeded row), RangeIndex 152 (real
+	// SpellRange 152 = 0-150 yd, seeded below), SchoolMask 0x40
+	// (arcane), CastingTimeIndex 1 (instant); Attributes not encoded
+	// (seed has no attributes field). Cast time stays default 0
+	// (instant = real 1). Seeding wakes the Go creature-caster
+	// CONTROL_VEHICLE boarding leg (spells.go:40344, seat = amount-1
+	// = BP); the aura-leave exit half is still unbridged, so a boarded
+	// caster stays seated when the aura leaves.
+	{id: 63313, durIdx: 21, rangeIdx: 152, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, dieSides: 1, basePoints: 1, aura: auraControlVehicle, targetA: targetUnitTargetAny},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
+	{id: 63316, durIdx: 21, rangeIdx: 152, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, dieSides: 1, basePoints: 4, aura: auraControlVehicle, targetA: targetUnitTargetAny},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
+	{id: 63344, durIdx: 21, rangeIdx: 152, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, dieSides: 1, basePoints: 5, aura: auraControlVehicle, targetA: targetUnitTargetAny},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
+	{id: 63345, durIdx: 21, rangeIdx: 152, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, dieSides: 1, basePoints: 6, aura: auraControlVehicle, targetA: targetUnitTargetAny},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
 }
 
 func main() {
@@ -486,6 +520,7 @@ func main() {
 	// SpellRange.dbc: ID, MinHostile, MinFriendly, MaxHostile,
 	// MaxFriendly, Flags (floats for the ranges).
 	ranges := [][]uint32{
+		{152, f32(0), f32(0), f32(150), f32(150), 0}, // real SpellRange 152 "Super Long" for seat spells (wago.tools 3.4.0.47659, 2026-11-13 23:00 verdict)
 		{93001, f32(0), f32(0), f32(0), f32(0), 0},
 		{93002, f32(0), f32(0), f32(5), f32(5), 0},
 		{93003, f32(8), f32(8), f32(25), f32(25), 0},
