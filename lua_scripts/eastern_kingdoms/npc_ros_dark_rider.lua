@@ -4,12 +4,16 @@
 -- npc_ros_dark_riderAI : public ScriptedAI }; AddSC_the_scarlet_enclave_c1
 -- registers it with the other 13 chapter1 scripts; EK loader decl :95 /
 -- call :273 per kalimdor_script_loader.cpp — the EK loader block).
--- Entry: 28654 wowhead-verified (classic.wowhead.com/wotlk/npc=28654/
+-- Entry: 28768 wowhead-verified (classic.wowhead.com/wotlk/npc=28768/
 -- dark-rider-of-acherus; no NPC_ constant in the C++ tree — belnistrasz
--- precedent). The entry is pinned by the summon clue, not the name
--- alone: spell 52266 SPELL_CALL_DARK_RIDER lists "Effect #1 Summon
--- (Dark Rider of Acherus)" pointing at 28654; the other Wowhead
--- "Dark Rider of Acherus" hits (28768, 28909) do not match the summon.
+-- precedent). The fightable rider: level 55, 123 Scarlet Enclave
+-- locations, 4 abilities, duel quotes ("Come, weakling! Strike me
+-- down!", Salanar / Realm of Shadows context). Correction (round-44
+-- browser check 2026-11-13): the old 28654 claim was wrong — spell
+-- 52266 SPELL_CALL_DARK_RIDER summons 28654, but 28654 is the summoned
+-- chaser (npc_dark_rider_of_acherus: 7 locations, no abilities, "The
+-- realm of shadows awaits..."), not the rider you fight; 28654 is the
+-- verified entry for the future chaser port, 28909 is neither.
 -- Eluna creature events: 1 OnEnterCombat, 4 OnDied, 23 OnReset. No
 -- timers; melee is engine-driven in Go (creature combat tick), like
 -- C++ DoMeleeAttackIfReady.
@@ -42,14 +46,14 @@
 -- Unmodeled (documented-only):
 -- - The sibling scripts in chapter1.cpp are not in this file:
 --   npc_dark_rider_of_acherus (TempSummon summoner chain, MoveChase,
---   DespawnOrUnsummon — bridges exist, entry unverified: spell 52266
---   summon target conflicts with 28654's registration here; round-44
---   entry check in flight), npc_salanar_the_horseman (gossip 9739
+--   DespawnOrUnsummon — bridges exist, entry verified 28654 via spell
+--   52266 summon target, browser check 2026-11-13; chaser port pending),
+--   npc_salanar_the_horseman (gossip 9739
 --   realm-of-shadows cast, MoveInLineOfSight vehicle machine — no
 --   gossip/vehicle bridges), spell_deliver_stolen_horse (SpellScript
 --   — no bridge).
 
-local ENTRY_DARK_RIDER = 28654
+local ENTRY_DARK_RIDER = 28768
 local ENTRY_DEATHCHARGER = 28782
 
 -- UnitDefines.h:210 UNIT_NPC_FLAG_SPELLCLICK = 0x01000000, on field 82

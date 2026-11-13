@@ -16420,13 +16420,15 @@ func init() {
 	// vehicle bridge" claim is stale); its Reset (faction-snapshot restore
 	// + EnterVehicle mount) and engage (ExitVehicle) legs are ported too
 	// (creature EnterVehicle/ExitVehicle bridged, lua_creature_events.go:3716/3639).
-	// npc_ros_dark_rider (entry 28654, wowhead-verified via spell 52266
-	// summon link; no NPC_ constant in chapter1.cpp): JustDied
+	// npc_ros_dark_rider (entry 28768, wowhead-verified — the fightable
+	// rider, duel quotes + Salanar context; the old 28654 claim was wrong:
+	// spell 52266 summons 28654, the chaser; no NPC_ constant in
+	// chapter1.cpp): JustDied
 	// deathcharger flip ported in lua_scripts/eastern_kingdoms/
 	// npc_ros_dark_rider.lua (FindNearestCreature 28782 + killer
 	// player gate + IsVehicle + flag/faction legs); Reset (ev23) +
 	// engage ExitVehicle (ev1) ported in the same file.
-	RegisterLuaBoss("npc_ros_dark_rider", 28654)
+	RegisterLuaBoss("npc_ros_dark_rider", 28768)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
 	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727
@@ -16500,8 +16502,16 @@ func init() {
 	// player-targeted whisper (broadcast Talk has no whisper target,
 	// hiborne-lamenter precedent); IsResurrectRequested and
 	// DisappearAndDie are unbridged. Entry is not C++-verifiable
-	// (DB-side ScriptName binding only) — documented-only,
-	// unregistered, zero Lua file.
+	// (DB-side ScriptName binding only) — but is now wowhead-verified
+	// as 28534 (the starting-zone resurrector: Revive ability +
+	// "It is not yet your time, champion. Rise!" whisper; 28487/29111/
+	// 31095 ruled out, browser check 2026-11-13), and the Reset arm IS
+	// ported (all legs bridged: SetFarVisible/SetVisible/SetCanFly/
+	// SetFlag/GetX-Y-Z/Relocate/MoveClear) in lua_scripts/
+	// eastern_kingdoms/npc_valkyr_battle_maiden.lua (ev23); setActive
+	// stays out (no per-creature active model in Go, likely vacuous)
+	// and the UpdateAI revive machine stays out (see the Lua header).
+	RegisterLuaBoss("npc_valkyr_battle_maiden", 28534)
 	// npc_koltira_deathweaver (The Scarlet Enclave, Bloody Breakout
 	// quest-12727 intro): OnQuestAccept(12727) -> 500ms Talk(0) ->
 	// 5s Talk(1) intro legs + OnGossipHello 13425 event-menu arm
