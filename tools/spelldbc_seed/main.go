@@ -88,6 +88,7 @@ const (
 	targetEnemy         = 6
 	targetSrcAreaEnemy  = 15
 	targetDestCaster    = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetSrcCaster     = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
 	targetGONearbyEntry = 40
 	auraAddPctModifier  = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
 	spellModDamage      = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
@@ -101,6 +102,7 @@ type effect struct {
 	basePoints int32
 	mechanic   uint32
 	targetA    uint32
+	targetB    uint32
 	radiusIdx  uint32
 	aura       uint32
 	auraPeriod uint32
@@ -143,6 +145,7 @@ func (s spell) row() []uint32 {
 		r[80+i] = uint32(e.basePoints)
 		r[83+i] = e.mechanic
 		r[86+i] = e.targetA
+		r[89+i] = e.targetB
 		r[92+i] = e.radiusIdx
 		r[95+i] = e.aura
 		r[98+i] = e.auraPeriod
@@ -357,6 +360,21 @@ var spells = []spell{
 	{id: 66703, durIdx: 6, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 35040, miscB: 64, targetA: targetDestCaster}}},
 	{id: 66699, durIdx: 6, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 35036, miscB: 64, targetA: targetDestCaster}}},
 	{id: 66714, durIdx: 6, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 35051, miscB: 64, targetA: targetDestCaster}}},
+
+	// 66545 Summon Memory (boss_argent_challenge.cpp:77, :646-684) —
+	// wago.tools 3.4.0.43659 SpellMisc/SpellEffect rows, 2026-11-13
+	// 14:55 verdict + SpellRadius row 28 read 15:52: DurationIndex 0
+	// (no SpellDuration row), RangeIndex 1, SchoolMask 0x1,
+	// CastingTimeIndex 1 (instant); effect 77 SCRIPT_EFFECT, BP 0,
+	// DieSides 0, Misc 0/0, TargetA 22 (TARGET_SRC_CASTER), TargetB
+	// 15 (TARGET_UNIT_SRC_AREA_ENEMY), RadiusIndex 28 (real SpellRadius
+	// 28 = 50000/0/50000, seeded below). RangeIndex stays synthetic
+	// 93001 (0 yd = real 1's value); cast time stays default 0
+	// (instant = real 1). The seed row() now writes targetB (field
+	// 89+i, store.go:1168) — Go's area legs read ImplicitTargetB
+	// (creature_area_targets.go:63), so without it the ev7 filter
+	// would see no area-enemy list.
+	{id: 66545, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effScriptEffect, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28}}},
 }
 
 func main() {
@@ -398,6 +416,7 @@ func main() {
 	// when level > 0 — Unit A gotcha).
 	radii := [][]uint32{
 		{1, f32(100), f32(0), f32(100)},
+		{28, f32(50000), f32(0), f32(50000)}, // real SpellRadius 28 for 66545 (wago.tools 3.4.0.43659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},
