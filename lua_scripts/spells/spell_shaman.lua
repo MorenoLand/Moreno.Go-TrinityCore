@@ -143,8 +143,10 @@
 -- PORTED (census rows 758-789, RegisterAuraEvent OnProc = 6,
 --   RegisterSpellEvent OnEffectHitTarget = 5): supersedes the tick-295
 --   closure for ancestral awakening, earth shield, earthliving,
---   frozen power, lightning shield, healing stream totem, and mana
---   spring totem (re-verified against the current runtime):
+--   frozen power, lightning shield, healing stream totem, mana
+--   spring totem, imp water shield, lightning overload (LB leg
+--   only), nature guardian, and static shock (re-verified against
+--   the current runtime):
 --   spell_sha_earth_shield::HandleProc (spell_shaman.cpp:437-447):
 --   EFFECT_0 DUMMY, rank 1 (974) only. On proc the holder self-casts
 --   Earth Shield Heal (379), triggered, BP0 = the effect amount.
@@ -231,21 +233,37 @@
 --   the tick-295 stay-out ("no bridge reads another spell's effect
 --   value") is superseded by aura:GetSpellEffectCalcValue
 --   (lua_aura.go:471), which reads Freeze's EFFECT_0 CalcValue.
---   776 imp_water_shield — CheckProc needs family flags; HandleProc
---   needs the family-flag GetAuraEffect overload to find Water Shield
---   and read its trigger spell.
---   777 lightning_overload — HandleProc branches on family flags and
---   ChainTarget, neither forwarded to ev6.
---   787 nature_guardian — ev6 fires once per eligible proc effect with
---   no effect-index arg, and EFFECT_1 is a DUMMY threshold carrier (in
---   isProcTriggerAuraType), so the EFFECT_0-only arm would double-fire
---   (two 31616 heals + two 39301 threats per proc). Ranks 2-5 also
---   unsourced (30882 is the twilight egg NPC entry).
---   788 static_shock — needs the family-flag GetAuraEffect overload
---   and DropCharge; neither is bridged.
---   789 thunderstorm — player-cast ev5 gap: PreventHitDefaultEffect has
---   a real veto record on the creature-path spell object
---   (lua_spell.go:455), but the hook never fires for player casts.
+--   776 imp_water_shield — PORTED below (ev6, census row 776, this
+--   tick); the tick-295 stay-out ("family-flag GetAuraEffect overload")
+--   is superseded by GetAuraEffectSpellIdByFamily + GetAura /
+--   GetTriggerSpell (lua_player.go:3294, lua_aura.go:442). The
+--   trigger-spell scan is DBC-dependent (MUST-VERIFY: exactly one
+--   Water Shield effect per rank carries a nonzero TriggerSpell).
+--   777 lightning_overload — PORTED below (ev6, census row 777, this
+--   tick, Lightning Bolt leg only); the tick-295 stay-out ("family
+--   flags and ChainTarget, neither forwarded") is superseded for the
+--   LB leg by procEvent:GetSpellFamilyFlags + explicit-rank
+--   GetSpellWithRank. The Chain Lightning leg is vetoed without
+--   casting: per-rank ChainTarget is unverifiable in-tree (no
+--   Spell.dbc, no Lua accessor), so the C++-comment divisor 3
+--   (spell_shaman.cpp:1231-1233) is NOT trusted for every rank.
+--   787 nature_guardian — PORTED below (ev6, census row 787, this
+--   tick); the tick-295 stay-out ("no effect-index arg, EFFECT_1
+--   double-fire") is superseded: ev6 forwards effectIndex
+--   (lua_aura.go:1297-1301) and the handler returns nil off EFFECT_0,
+--   so the EFFECT_1 call is a no-op. Rank 1 only (30881); 30882 is
+--   the twilight-egg NPC entry, not a rank.
+--   788 static_shock — PORTED below (ev6, census row 788, this tick);
+--   the tick-295 stay-out ("family-flag GetAuraEffect overload and
+--   DropCharge, neither bridged") is superseded by
+--   GetAuraEffectSpellIdByFamily (lua_player.go:3294) and aura
+--   DropCharge (lua_aura.go:879).
+--   789 thunderstorm — STAYS OUT: ev5 does fire on the player path
+--   (spells.go:14892), but the player path threads no
+--   PreventHitDefaultEffect record (lua_spell.go:846-856) and the
+--   knock-back default never consults one, so the glyph veto would be
+--   a no-op handler. (The old "hook never fires for player casts"
+--   half-sentence was wrong.)
 --   Census go_hit/lua_hit for rows 760/761/763/764/765/776/778 are
 --   phantoms (no real engine/Lua hits for 1064/974/1535/8050/10400/
 --   16180/26364); the census hooks for 759, 767-775, and 779-786 list
@@ -765,3 +783,211 @@ local function ancestralAwakeningProc(event, aura, target, actor, procTarget, da
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_ANCESTRAL_AWAKENING, 6, ancestralAwakeningProc)
+
+local SPELL_SHAMAN_IMP_WATER_SHIELD = 16180 -- spell_shaman.cpp:1136 (class spell_sha_imp_water_shield)
+local SPELL_SHAMAN_LIGHTNING_OVERLOAD = 30675 -- spell_shaman.cpp:1196 (class spell_sha_lightning_overload)
+local SPELL_SHAMAN_LIGHTNING_BOLT_OVERLOAD_R1 = 45284 -- spell_shaman.cpp:86
+local SPELL_SHAMAN_NATURE_GUARDIAN = 30881 -- spell_shaman.cpp:1709 (class spell_sha_nature_guardian)
+local SPELL_SHAMAN_NATURE_GUARDIAN_HEAL = 31616 -- spell_shaman.cpp:59
+local SPELL_SHAMAN_NATURE_GUARDIAN_THREAT = 39301 -- spell_shaman.cpp:60
+local SPELL_SHAMAN_STATIC_SHOCK = 51525 -- spell_shaman.cpp:1931 (class spell_sha_static_shock)
+local SPELL_AURA_PROC_TRIGGER_SPELL = 42 -- procs.go:1911
+
+-- C++ spell_sha_imp_water_shield_AuraScript::CheckProc + HandleProc
+-- (spell_shaman.cpp:1146-1181): EFFECT_0 DUMMY. CheckProc: the event
+-- spell must exist; chance 100 (Healing Wave / Riptide), 60 (Lesser
+-- Healing Wave, family flags[0] & 0x80), 30 (Chain Heal, flags[0] &
+-- 0x100) — expressed as the ev6 inverted veto (return true when the
+-- gate fails). HandleProc: PreventDefaultAction; the proc actor casts
+-- its Water Shield trigger spell on nil, triggered. The Water Shield
+-- find uses GetAuraEffectSpellIdByFamily (lua_player.go:3294); the
+-- trigger spell is read off the found aura, scanning effect indices
+-- for the first nonzero TriggerSpell (lua_aura.go:442) — the found
+-- effect's index is not returned by any bridge. MUST-VERIFY against
+-- Spell.dbc when it ships: exactly one Water Shield effect per rank
+-- must carry a nonzero TriggerSpell, else the scan reads the wrong
+-- leg. The effectIndex gate returns nil (not true): C++ registers
+-- EFFECT_0 only, so other effects' default legs must proceed
+-- untouched (frozen-power idiom). DORMANT until Spell.dbc ships the
+-- 16180 proc entry and the Water Shield ranks.
+local function impWaterShieldProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if actor == nil or procEvent == nil then
+        return true
+    end
+    if procEvent:GetSpellId() == 0 then
+        return true
+    end
+    local flags = procEvent:GetSpellFamilyFlags(0)
+    local chance = 100
+    if bit32.band(flags, 0x80) ~= 0 then
+        chance = 60
+    elseif bit32.band(flags, 0x100) ~= 0 then
+        chance = 30
+    end
+    if math.random(0, 99) >= chance then
+        return true
+    end
+    local guid = actor:GetGUID()
+    local waterShield = actor:GetAuraEffectSpellIdByFamily(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0, 0x20, 0, guid)
+    if waterShield == nil then
+        return true
+    end
+    local wsAura = actor:GetAura(waterShield)
+    if wsAura == nil then
+        return true
+    end
+    local triggerSpell = 0
+    for i = 0, 2 do
+        local id = wsAura:GetTriggerSpell(i)
+        if id ~= nil and id ~= 0 then
+            triggerSpell = id
+            break
+        end
+    end
+    if triggerSpell == 0 then
+        return true
+    end
+    actor:CastSpell(nil, triggerSpell, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_IMP_WATER_SHIELD, 6, impWaterShieldProc)
+
+-- C++ spell_sha_lightning_overload_AuraScript::HandleProc
+-- (spell_shaman.cpp:1218-1241): EFFECT_0 DUMMY. PreventDefaultAction;
+-- the event spell must exist. Lightning Bolt (family flags[0] & 0x1)
+-- casts the rank-matched 45284 overload on the proc target, triggered.
+-- Chain Lightning (else branch) is VETOED without casting: C++ rolls
+-- 100 / ChainTarget per target hit (spell_shaman.cpp:1231-1233, "A
+-- maxed LO would have a 33% / 3 = 11%"), but per-rank ChainTarget is
+-- unverifiable in-tree — no Spell.dbc (engine/data/dbc/ holds only
+-- dbc.go) and no Lua accessor — so the hardcoded divisor 3 is NOT
+-- trusted for every Chain Lightning rank. MUST-VERIFY against
+-- Spell.dbc Effects[0].ChainTarget for every Chain Lightning rank; if
+-- all ranks read 3, restore the else leg with the rank-matched 45297
+-- cast. The talent-% proc chance is the engine-side aura proc roll,
+-- already applied before ev6 fires — do NOT re-roll it
+-- (spell_shaman.cpp:1233). The rank keys off the EVENT spell
+-- (procEvent:GetRank()), not the LO aura's rank — hence the explicit
+-- rank arg to aura:GetSpellWithRank (lua_aura.go:585). The effectIndex
+-- gate returns nil (not true): C++ registers EFFECT_0 only, so other
+-- effects' default legs must proceed untouched (frozen-power idiom).
+-- DORMANT until Spell.dbc ships the 30675 proc entry and the 45284
+-- chain.
+local function lightningOverloadProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if actor == nil or procEvent == nil then
+        return true
+    end
+    if procEvent:GetSpellId() == 0 then
+        return true
+    end
+    if bit32.band(procEvent:GetSpellFamilyFlags(0), 0x1) == 0 then
+        -- Chain Lightning leg: vetoed, not cast (see comment above).
+        return true
+    end
+    local spellId = aura:GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_BOLT_OVERLOAD_R1, procEvent:GetRank())
+    if spellId == 0 then
+        return true
+    end
+    if procTarget == nil then
+        return true
+    end
+    actor:CastSpell(procTarget, spellId, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_LIGHTNING_OVERLOAD, 6, lightningOverloadProc)
+
+-- C++ spell_sha_nature_guardian_AuraScript::CheckProc + HandleProc
+-- (spell_shaman.cpp:1733-1753): DoCheckProc + OnEffectProc, EFFECT_0
+-- PROC_TRIGGER_SPELL. CheckProc: the action target must drop below
+-- the EFFECT_1 CalcValue percent of max health AFTER the damage
+-- (HealthBelowPctDamaged); victim-side procs fire BEFORE the health
+-- reduction, so the live health at ev6 time is pre-damage and
+-- GetHealth() - damage is the C++ formula. HandleProc:
+-- PreventDefaultAction; BP0 = pct of max health by the EFFECT_0
+-- amount; the target self-casts Nature Guardian (31616), triggered,
+-- and casts the threat spell (39301) on the attacker, triggered.
+-- The threshold rides aura:GetSpellEffectCalcValue(30881, 1)
+-- (lua_aura.go:471), the Effects[EFFECT_1].CalcValue() twin; a 0 read
+-- vetoes (unknown DBC row). The effectIndex gate returns nil (not
+-- true): C++ registers EFFECT_0 only, so other effects' default legs
+-- must proceed untouched (frozen-power idiom). Rank 1 only (30881);
+-- 30882 is the twilight-egg NPC entry, not a rank. DORMANT until
+-- Spell.dbc ships the 30881 proc entry.
+local function natureGuardianProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if damage == nil or damage == 0 or target == nil then
+        return true
+    end
+    local threshold = aura:GetSpellEffectCalcValue(SPELL_SHAMAN_NATURE_GUARDIAN, 1)
+    if threshold == nil or threshold == 0 then
+        return true
+    end
+    if target:GetHealth() - damage >= math.floor(target:GetMaxHealth() * threshold / 100) then
+        return true
+    end
+    local amount = aura:GetAmount(0)
+    if amount == nil or amount == 0 then
+        return true
+    end
+    local bp0 = math.floor(target:GetMaxHealth() * amount / 100)
+    target:CastCustomSpell(target, SPELL_SHAMAN_NATURE_GUARDIAN_HEAL, true, bp0)
+    if actor ~= nil then
+        target:CastSpell(actor, SPELL_SHAMAN_NATURE_GUARDIAN_THREAT, true)
+    end
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_NATURE_GUARDIAN, 6, natureGuardianProc)
+
+-- C++ spell_sha_static_shock_AuraScript::HandleProc
+-- (spell_shaman.cpp:1939-1963): OnEffectProc, EFFECT_0 DUMMY.
+-- PreventDefaultAction; the actor finds its Lightning Shield via the
+-- family-flag lookup (PROC_TRIGGER_SPELL, flags 0x400) and casts the
+-- rank-matched damage spell (26364 chain) on the proc target,
+-- triggered, then drops one Lightning Shield charge — cast first,
+-- DropCharge after, mirroring C++ order. The rank keys off the
+-- Lightning Shield aura's own rank (lsAura:GetRank()); a 0 rank
+-- vetoes, since GetSpellWithRank with a 0 rank arg would fall back to
+-- the static-shock aura's own rank. The defensive effectIndex gate
+-- returns nil (not true): C++ registers EFFECT_0 only, so other
+-- effects' default legs must proceed untouched (frozen-power idiom).
+-- DORMANT until Spell.dbc ships the 51525 proc entry.
+local function staticShockProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local lsSpell = actor:GetAuraEffectSpellIdByFamily(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x400, 0, 0, actor:GetGUID())
+    if lsSpell == nil then
+        return true
+    end
+    local lsAura = actor:GetAura(lsSpell)
+    if lsAura == nil then
+        return true
+    end
+    local rank = lsAura:GetRank()
+    if rank == 0 then
+        return true
+    end
+    local dmgSpell = aura:GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, rank)
+    if dmgSpell == 0 then
+        return true
+    end
+    actor:CastSpell(procTarget, dmgSpell, true)
+    lsAura:DropCharge()
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_STATIC_SHOCK, 6, staticShockProc)

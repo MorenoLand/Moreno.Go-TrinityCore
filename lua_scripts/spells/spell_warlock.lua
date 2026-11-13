@@ -447,6 +447,7 @@ end
 
 RegisterSpellEvent(SPELL_WARLOCK_HAUNT, 3, hauntAfterHit)
 
+local SPELL_WARLOCK_DECIMATION_R1 = 63156 -- ac_spell_script_names.sql: (-63156, 'spell_warl_decimation')
 local SPELL_WARLOCK_DECIMATION_R2 = 63158 -- spell_warlock.cpp:306, bot_warlock_ai.cpp:85
 local SPELL_WARLOCK_DECIMATION_BUFF = 63167 -- bot_warlock_ai.cpp:109
 
@@ -460,12 +461,16 @@ local SPELL_WARLOCK_DECIMATION_BUFF = 63167 -- bot_warlock_ai.cpp:109
 -- return true (PreventDefaultAction, lua_aura.go fireAuraProc) when
 -- the gate FAILS, so a passing proc falls through and the DBC default
 -- leg applies the Decimation buff 63167. Registered for rank 2 (63158)
--- only; rank 1 (63156) is unestablished (zero C++ tree hits). No
+-- and rank 1 (63156): the loader binds rank 1 (-63156,
+-- ac_spell_script_names.sql) while 63158 has no binding row — the
+-- 63158 id comes from the npcbot enum (bot_warlock_ai.cpp:85), not a
+-- binding. The handler is rank-agnostic, so both registrations ride
+-- it (row 792 resolves to the bound spell 63156). No
 -- HasAuraState bridge, so the gate is the integer-exact HealthBelowPct
 -- proxy (the seed-of-corruption-dummy idiom above). The nil-spell leg
 -- rides the forwarded proc event (procEventObject, lua_aura.go):
 -- GetSpellId() == 0 vetoes. DORMANT
--- until Spell.dbc ships the 63158 proc entry.
+-- until Spell.dbc ships the 63156/63158 proc entries.
 local function decimationProc(event, aura, target, actor, procTarget, damage, procEvent)
     if procTarget == nil or procEvent == nil or procEvent:GetSpellId() == 0 then
         return true
@@ -476,6 +481,7 @@ local function decimationProc(event, aura, target, actor, procTarget, damage, pr
     return true
 end
 
+RegisterAuraEvent(SPELL_WARLOCK_DECIMATION_R1, 6, decimationProc)
 RegisterAuraEvent(SPELL_WARLOCK_DECIMATION_R2, 6, decimationProc)
 
 local SPELL_WARLOCK_NIGHTFALL = 18094 -- spell_warlock.cpp:665
@@ -560,3 +566,90 @@ local function lifeTapCheckCast(event, spell)
 end
 
 RegisterSpellEvent(SPELL_WARLOCK_LIFE_TAP_R1, 8, lifeTapCheckCast)
+
+local SPELL_WARLOCK_FEL_SYNERGY = 47230 -- spell_warlock.cpp:617 (class spell_warl_fel_synergy)
+local SPELL_WARLOCK_FEL_SYNERGY_HEAL = 54181 -- spell_warlock.cpp:50
+
+-- C++ spell_warl_fel_synergy::CheckProc + OnProc
+-- (spell_warlock.cpp:631-650): EFFECT_0 DUMMY. PreventDefaultAction;
+-- the damage gate (non-zero damage info) and the guardian-pet gate ride
+-- early returns returning true (the inverted veto, runtime.go:524-527);
+-- the heal is pct of the proc damage by the effect amount, cast
+-- triggered on the pet — C++ casts on nil (DBC TARGET_UNIT_PET), the
+-- port names the pet explicitly via GetPet (GetGuardianPet false-nils
+-- for player pets, lua_creature_events.go:4373 comment). DORMANT until
+-- Spell.dbc ships the 47230 proc entry (and the 54181 row).
+local function felSynergyProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 0 then
+        return
+    end
+    if damage == nil or damage == 0 then
+        return true
+    end
+    if target == nil or target:GetObjectType() ~= "Player" then
+        return true
+    end
+    local pet = target:GetPet()
+    if pet == nil then
+        return true
+    end
+    local pct = aura:GetAmount(0)
+    if pct == nil or pct == 0 then
+        return true
+    end
+    local heal = math.floor(damage * pct / 100)
+    target:CastCustomSpell(pet, SPELL_WARLOCK_FEL_SYNERGY_HEAL, true, heal)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_FEL_SYNERGY, 6, felSynergyProc)
+
+local SPELL_WARLOCK_NETHER_PROTECTION = 30299 -- spell_warlock.cpp:943 (class spell_warl_nether_protection)
+-- spell_warlock.cpp:65-70, keyed by school mask (SharedDefines.h:325-330).
+local SPELL_WARLOCK_NETHER_PROTECTION_TRIGGERS = {
+    [2] = 54370, -- HOLY
+    [4] = 54371, -- FIRE
+    [8] = 54375, -- NATURE
+    [16] = 54372, -- FROST
+    [32] = 54374, -- SHADOW
+    [64] = 54373, -- ARCANE
+}
+-- GetFirstSchoolInMask order: lowest set bit wins.
+local NETHER_PROTECTION_SCHOOLS = { 2, 4, 8, 16, 32, 64 }
+
+-- C++ spell_warl_nether_protection::CheckProc + HandleProc
+-- (spell_warlock.cpp:965-1022): EFFECT_0 PROC_TRIGGER_SPELL.
+-- PreventDefaultAction; the school gate rides an early return returning
+-- true (the inverted veto, runtime.go:524-527) — a mask with no set bit
+-- in the six schools vetoes exactly like C++'s CheckProc-false. The
+-- action target is the aura holder on the taken side (the DBC proc
+-- flags are taken-spell-damage), so the cast target is `target`.
+-- KNOWN DELTA: the holder is the warlock (player), and player:CastSpell
+-- ignores the triggered flag, so the trigger self-cast lands
+-- non-triggered where C++ casts triggered — same KNOWN LIMIT as rows
+-- 754/757 (the creature path would honor it,
+-- lua_creature_events.go:954 / :981). DORMANT until Spell.dbc ships
+-- the 30299 proc entry (and the 54370-54375 rows).
+local function netherProtectionProc(event, aura, target, actor, procTarget, damage, procEvent)
+    if procEvent == nil or target == nil then
+        return true
+    end
+    local mask = procEvent:GetSchoolMask()
+    if mask == nil or mask == 0 then
+        return true
+    end
+    local trigger = nil
+    for _, schoolMask in ipairs(NETHER_PROTECTION_SCHOOLS) do
+        if mask % (schoolMask * 2) >= schoolMask then
+            trigger = SPELL_WARLOCK_NETHER_PROTECTION_TRIGGERS[schoolMask]
+            break
+        end
+    end
+    if trigger == nil then
+        return true
+    end
+    target:CastSpell(target, trigger, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_WARLOCK_NETHER_PROTECTION, 6, netherProtectionProc)
