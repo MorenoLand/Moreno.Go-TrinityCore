@@ -90,6 +90,12 @@
 -- waves ARE summoned (onNefariusSpawnAdd) and the SummonedCreatureDies
 -- bone-construct transformation IS PORTED below (dead drakonids ->
 -- entry 14605, not-selectable, passive, boss_nefarian.cpp:223-232);
+-- JustSummoned (boss_nefarian.cpp:234) stays out C++-exact: Nefarius's
+-- override is an empty body, deliberately suppressing the BossAI base
+-- legs (no SummonList record, no DoZoneInCombat); the drakes' combat
+-- entry is inline at :344-347 and already ported in onNefariusSpawnAdd.
+-- Nefarian himself has no JustSummoned override and summons nothing
+-- (the file's only SummonCreature calls are :344/:352, both Nefarius's).
 -- no movement model — the Nefarian summon's MovePoint-to-throne and
 -- the MovementInform point-1 DoZoneInCombat/AttackStart arms are
 -- skipped (nefarian fights from where it stands); no SetData

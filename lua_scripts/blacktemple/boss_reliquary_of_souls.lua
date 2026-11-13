@@ -12,16 +12,18 @@
 -- Creature entries: 22856 Reliquary of Souls (C++ ScriptName
 -- "boss_reliquary_of_souls" per RegisterBlackTempleCreatureAI in
 -- AddSC_boss_reliquary_of_souls; the creature_template ScriptName
--- binding is DB-side — no TDB in this workspace, so only the
--- C++-side naming is verified); 23469 Enslaved Soul (ScriptName
+-- binding is DB-side); 23469 Enslaved Soul (ScriptName
 -- "npc_enslaved_soul"); 23417 Reliquary combat trigger (ScriptName
 -- "npc_reliquary_combat_trigger"). The three essence bosses bind
 -- the ScriptNames "boss_essence_of_suffering" /
--- "boss_essence_of_desire" / "boss_essence_of_anger" DB-side, but
--- no essence entry constant or literal exists anywhere in the C++
+-- "boss_essence_of_desire" / "boss_essence_of_anger" DB-side; no
+-- essence entry constant or literal exists anywhere in the C++
 -- tree (only the summon spells 41488/41493/41496, whose summon
--- targets are DB-side), so the entries cannot be verified from
--- the C++ sources alone and the essence AIs are not registered
+-- targets are DB-side), but the entries ARE verified from the AC
+-- creature_template dump (data/sql/base/db_world/creature_template
+-- .sql:17455-17457: 23418/23419/23420 carry the exact ScriptNames),
+-- so the essence entries are registered for the ported ev3 slay
+-- Talks only — all other essence arms stay unregistered
 -- (garr firesworn convention).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied, 9 OnDamageTaken (returns false, newDamage; the boolean
@@ -92,7 +94,7 @@
 -- DoAction(ACTION_KILL_SELF) -> KillSelf arm stays out — ev38 dispatch
 -- bridged, but the sender is the unregistered essence of anger JustDied
 -- (boss_reliquary_of_souls.cpp:517-521).
--- Not registered (entries unverifiable from the C++ sources):
+-- Not registered except ev3 (see KilledUnit below):
 -- boss_essence_of_suffering — Reset triggered-AoE 41292 (aura of
 -- suffering); pull: soul drain 41303 20s then {30s,35s} self-cast
 -- (the SPELLVALUE_MAX_TARGETS=5 arm has no bridge) / frenzy 41305
@@ -143,12 +145,24 @@
 -- DATA_RELIQUARY_OF_SOULS / DATA_ESSENCE_OF_*/DATA_RELIQUARY_
 -- COMBAT_TRIGGER bookkeeping arms skipped).
 -- KilledUnit: C++ boss_reliquary_of_souls has NO KilledUnit (struct
--- :140-283); the slay Talks live on the unregistered essence AIs
--- (SUFF_SAY_SLAY :342-345, DESI_SAY_SLAY :443-446) — nothing ported.
+-- :140-283); the slay Talks live on the essence AIs
+-- (SUFF_SAY_SLAY=1 :342-345, DESI_SAY_SLAY=1 :443-446) — PORTED
+-- 2026-11-13 (round 21): entries 23418/23419 DB-verified via the
+-- AC creature_template dump (exact ScriptNames), shared
+-- essenceTargetDied handler, player-gated Talk(1); essence of
+-- anger has no KilledUnit override, so nothing registers on 23420.
 
 local ENTRY_RELIQUARY_OF_SOULS = 22856
 local ENTRY_ENSLAVED_SOUL = 23469
 local ENTRY_RELIQUARY_COMBAT_TRIGGER = 23417
+-- Essence entries DB-verified (AC creature_template.sql:17455-17456:
+-- 23418/23419 carry the exact C++ ScriptNames boss_essence_of_
+-- suffering / boss_essence_of_desire). Anger 23420 has no KilledUnit.
+local ENTRY_ESSENCE_OF_SUFFERING = 23418
+local ENTRY_ESSENCE_OF_DESIRE = 23419
+-- SUFF_SAY_SLAY = 1 (boss_reliquary_of_souls.cpp:32) and
+-- DESI_SAY_SLAY = 1 (:40) — one shared slay id.
+local SAY_ESSENCE_SLAY = 1
 
 local SPELL_SUBMERGE_VISUAL = 28819
 local SPELL_SUMMON_ESSENCE_OF_SUFFERING = 41488
@@ -279,6 +293,17 @@ local function reliquaryJustSummoned(event, creature, summon)
     summon:DoZoneInCombat()
 end
 
+-- C++ boss_essence_of_suffering::KilledUnit (:342-345) and
+-- boss_essence_of_desire::KilledUnit (:443-446): TYPEID_PLAYER-gated
+-- Talk(SLAY=1). The essences spawn via the ported submerge timer and
+-- enter combat through reliquaryJustSummoned above, so the slay Talk
+-- can fire live (illidanTargetDied precedent for the gate + Talk).
+local function essenceTargetDied(event, creature, victim)
+    if victim:GetObjectType() == "Player" then
+        creature:Talk(SAY_ESSENCE_SLAY)
+    end
+end
+
 -- C++ npc_enslaved_soul::Reset: triggered self-cast 41535
 -- (C++-exact). The REACT_PASSIVE and 3s REACT_AGGRESSIVE arms are
 -- PORTED 2026-10-20 — creature:SetReactState; the reliquary
@@ -375,6 +400,9 @@ RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 2, reliquaryLeaveCombat)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 4, reliquaryDied)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 19, reliquaryJustSummoned)
 RegisterCreatureEvent(ENTRY_RELIQUARY_OF_SOULS, 23, reliquaryReset)
+
+RegisterCreatureEvent(ENTRY_ESSENCE_OF_SUFFERING, 3, essenceTargetDied)
+RegisterCreatureEvent(ENTRY_ESSENCE_OF_DESIRE, 3, essenceTargetDied)
 
 RegisterCreatureEvent(ENTRY_ENSLAVED_SOUL, 2, soulLeaveCombat)
 RegisterCreatureEvent(ENTRY_ENSLAVED_SOUL, 4, soulDied)
