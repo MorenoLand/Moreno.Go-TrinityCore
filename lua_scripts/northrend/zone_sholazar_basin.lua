@@ -173,3 +173,133 @@ end
 
 RegisterSpellEvent(SPELL_CORRECT_TRACKS, 5, shangoTracks)
 RegisterSpellEvent(SPELL_INCORRECT_TRACKS, 5, shangoTracks)
+
+-- C++ npc_jungle_punch_targetAI::SpellHit (zone_sholazar_basin.cpp:307-335):
+-- OnHitBySpell = 14. SPELL_OFFER 51962 only, caster must be a player
+-- with QUEST_TASTE_TEST 12645 INCOMPLETE whose objective count for this
+-- entry is still 0 (player:GetReqKillOrCastCurrentCount is the
+-- CreatureOrGOCount/RequiredNpcOrGo twin, lua_player.go:5013-5037): then
+-- KilledMonsterCredit(entry), the player Says the offer line, and the
+-- UpdateAI say loop starts — Talk(0..2) at 3.5s then every 3s
+-- (:288-306; sayTimer 3500 from Reset, 3000 between lines, stops after
+-- the third line). The MoveInLineOfSight orphan phase machine (:229-281)
+-- stays out: ev27 is engage-only, and the phase-6 MoveFollow leg has no
+-- bridge. Entries DB-verified in creature_template.sql (ScriptName
+-- npc_jungle_punch_target): Hemet Nesingwary 27986, Hadrius Harlowe
+-- 28047, Tamara Wobblesprocket 28568 — no C++ NPC_ constant exists for
+-- them (the C++ reads me->GetEntry() against the quest template).
+local SPELL_OFFER = 51962 -- zone_sholazar_basin.cpp:166
+local QUEST_TASTE_TEST = 12645 -- zone_sholazar_basin.cpp:167
+local QUEST_STATUS_INCOMPLETE = 3 -- quests.go:19
+local LANG_UNIVERSAL = 0 -- SharedDefines.h:768
+local SAY_OFFER = "Care to try Grimbooze Thunderbrew's new jungle punch?" -- zone_sholazar_basin.cpp:164
+local SAY_JUNGLE_PUNCH_1 = 0 -- zone_sholazar_basin.cpp:169
+local SAY_JUNGLE_PUNCH_2 = 1 -- zone_sholazar_basin.cpp:170
+local SAY_JUNGLE_PUNCH_3 = 2 -- zone_sholazar_basin.cpp:171
+local ENTRY_HEMET_NESINGWARY = 27986
+local ENTRY_HADRIUS_HARLOWE = 28047
+local ENTRY_TAMARA_WOBBLESPROCKET = 28568
+
+local junglePunchTimers = {}
+
+local function junglePunchCancelTimers(guid)
+    local per = junglePunchTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        junglePunchTimers[guid] = nil
+    end
+end
+
+local function junglePunchSchedule(guid, key, delay, fn)
+    local per = junglePunchTimers[guid]
+    if not per then
+        per = {}
+        junglePunchTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Defined tail-first so no forward declaration is needed.
+local function junglePunchSay3(creature, guid)
+    creature:Talk(SAY_JUNGLE_PUNCH_3)
+    junglePunchTimers[guid] = nil
+end
+
+local function junglePunchSay2(creature, guid)
+    creature:Talk(SAY_JUNGLE_PUNCH_2)
+    junglePunchSchedule(guid, "say3", 3000, function()
+        junglePunchSay3(creature, guid)
+    end)
+end
+
+local function junglePunchSay1(creature, guid)
+    creature:Talk(SAY_JUNGLE_PUNCH_1)
+    junglePunchSchedule(guid, "say2", 3000, function()
+        junglePunchSay2(creature, guid)
+    end)
+end
+
+local function junglePunchSpellHit(_, creature, caster, spellId)
+    if spellId ~= SPELL_OFFER or caster == nil then
+        return
+    end
+    local player = caster:ToPlayer()
+    if player == nil then
+        return
+    end
+    if player:GetQuestStatus(QUEST_TASTE_TEST) ~= QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    local entry = creature:GetEntry()
+    if player:GetReqKillOrCastCurrentCount(QUEST_TASTE_TEST, entry) ~= 0 then
+        return
+    end
+    player:KilledMonsterCredit(entry)
+    player:Say(SAY_OFFER, LANG_UNIVERSAL)
+    local guid = creature:GetGUIDLow()
+    junglePunchSchedule(guid, "say1", 3500, function()
+        junglePunchSay1(creature, guid)
+    end)
+end
+
+-- C++ Reset (:213-221) re-inits sayStep to 0, which stops the UpdateAI
+-- say loop; cancel any pending say timers with it.
+local function junglePunchReset(_, creature)
+    junglePunchCancelTimers(creature:GetGUIDLow())
+end
+
+RegisterCreatureEvent(ENTRY_HEMET_NESINGWARY, 14, junglePunchSpellHit)
+RegisterCreatureEvent(ENTRY_HADRIUS_HARLOWE, 14, junglePunchSpellHit)
+RegisterCreatureEvent(ENTRY_TAMARA_WOBBLESPROCKET, 14, junglePunchSpellHit)
+RegisterCreatureEvent(ENTRY_HEMET_NESINGWARY, 23, junglePunchReset)
+RegisterCreatureEvent(ENTRY_HADRIUS_HARLOWE, 23, junglePunchReset)
+RegisterCreatureEvent(ENTRY_TAMARA_WOBBLESPROCKET, 23, junglePunchReset)
+
+-- C++ npc_engineer_heliceAI::JustDied (zone_sholazar_basin.cpp:116-122):
+-- OnDied = 4. If the escort is running, the escort player fails
+-- QUEST_DISASTER 12688. IsEscorted/GetEscortPlayer/FailQuest are all
+-- bridged (lua_creature_events.go:2639/2678, lua_player.go:5237).
+-- Dormant until the escort machine lands: OnQuestAccept/StartEscort and
+-- the WaypointReached chain (:65-113, :140-154) are unported, so
+-- IsEscorted never reads true live. Entry DB-verified in
+-- creature_template.sql (ScriptName npc_engineer_helice): 28787 — no
+-- C++ NPC_ constant exists for it.
+local ENTRY_ENGINEER_HELICE = 28787
+local QUEST_DISASTER = 12688 -- zone_sholazar_basin.cpp:50
+
+local function engineerHeliceDied(_, creature)
+    if not creature:IsEscorted() then
+        return
+    end
+    local player = creature:GetEscortPlayer()
+    if player ~= nil then
+        player:FailQuest(QUEST_DISASTER)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ENGINEER_HELICE, 4, engineerHeliceDied)

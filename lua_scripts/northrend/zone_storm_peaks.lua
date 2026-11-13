@@ -45,8 +45,10 @@
 --   spell_falling_dragon_feign_death (55795, :1376-1408): EFFECT_0
 --   DUMMY. Apply sets UNIT_FLAG_UNK_29 + UNIT_FLAG2_FEIGN_DEATH on the
 --   wyrm; remove clears both. Cast by the wyrm on itself at dead-phase
---   (:814); the dead-phase machine itself (DamageTaken latch, MoveFall)
---   is npc_wild_wyrm AI, unported.
+--   (:814); the dead-phase machine (DamageTaken latch, MoveFall) is
+--   PORTED below (hook strip 19, ev9 + ev23 latch clear) — the rest
+--   of the wyrm AI (SpellHit mount, DoAction, MovementInform,
+--   PassengerBoarded) stays unported.
 --   spell_player_mount_wyrm (56672, :1411-1445): EFFECT_0 DUMMY. On
 --   remove the player casts SPELL_FIGHT_WYRM (56673) on itself,
 --   triggered. Cast by the wyrm on the player at POINT_START_FIGHT
@@ -363,3 +365,68 @@ local function removeCollapsingCaveAuraHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_REMOVE_COLLAPSING_CAVE_AURA, 5, removeCollapsingCaveAuraHit)
+
+-- PORTED (hook strip 19, RegisterCreatureEvent ev9 = OnDamageTaken /
+-- ev23 = OnReset):
+--   npc_wild_wyrmAI::DamageTaken (zone_storm_peaks.cpp:795-826):
+--   lethal damage clamps to health-1 and latches PHASE_DEAD; the
+--   _scheduler.Async body casts Wyrm Kill Credit (56703) + Falling
+--   Dragon Feign Death (55795) on self (triggered), removes Jaws of
+--   Death Periodic (56692) + Pry Jaws Open (56706), sets
+--   UNIT_DYNFLAG_DEAD, clears UNIT_NPC_FLAGS, and MoveFalls
+--   (POINT_FALL 2). ev9 bridge is the damage-rewrite hook
+--   (fireCreatureDamageTaken, lua_creature_events.go:7565; the
+--   attumen return-false-newDamage precedent). The Async deferral
+--   is a 100ms one-shot CreateLuaEvent so the clamped damage lands
+--   first. InitSpellsForPhase + VehicleSpellInitialize stay out:
+--   no m_spells bridge, and both read _playerGuid, which the
+--   unported SpellHit mount leg never sets — no-ops with no
+--   mounted player. The POINT_FALL arrival (DoCastAOE Eject All
+--   Passengers 50630 + KillSelf, :786-790) is MovementInform ev28
+--   scope, not this row — Go's MoveFall sends only the fall
+--   packet, no landing callback. ev23 clears the dead latch:
+--   C++ Reset re-runs Initialize() (_phase = PHASE_INITIAL) and
+--   a respawned wyrm reuses its GUIDLow.
+local ENTRY_WILD_WYRM = 30275 -- creature_template.sql (ScriptName 'npc_wild_wyrm')
+local SPELL_WYRM_KILL_CREDIT = 56703 -- zone_storm_peaks.cpp:661
+local SPELL_JAWS_OF_DEATH_PERIODIC = 56692 -- zone_storm_peaks.cpp:652
+local SPELL_PRY_JAWS_OPEN = 56706 -- zone_storm_peaks.cpp:649
+local UNIT_DYNAMIC_FLAGS = 79 -- UpdateFields.h:136 (eredar-twins precedent)
+local UNIT_DYNFLAG_DEAD = 0x20 -- SharedDefines.h:3133
+local UNIT_NPC_FLAGS_WYRM = 82 -- UpdateFields.h:139 (nefarian precedent)
+
+local wildWyrmDead = {}
+
+local function wildWyrmDeadPhase(creature)
+    creature:CastSpell(creature, SPELL_WYRM_KILL_CREDIT, true)
+    creature:CastSpell(creature, SPELL_FALLING_DRAGON_FEIGN_DEATH, true)
+    creature:RemoveAura(SPELL_JAWS_OF_DEATH_PERIODIC)
+    creature:RemoveAura(SPELL_PRY_JAWS_OPEN)
+    creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD)
+    creature:SetUInt32Value(UNIT_NPC_FLAGS_WYRM, 0)
+    creature:MoveFall()
+end
+
+local function wildWyrmDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    if health == 0 or damage < health then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local newDamage = health - 1
+    if wildWyrmDead[guid] then
+        return false, newDamage
+    end
+    wildWyrmDead[guid] = true
+    CreateLuaEvent(function()
+        wildWyrmDeadPhase(creature)
+    end, 100)
+    return false, newDamage
+end
+
+local function wildWyrmReset(event, creature)
+    wildWyrmDead[creature:GetGUIDLow()] = nil
+end
+
+RegisterCreatureEvent(ENTRY_WILD_WYRM, 9, wildWyrmDamageTaken)
+RegisterCreatureEvent(ENTRY_WILD_WYRM, 23, wildWyrmReset)

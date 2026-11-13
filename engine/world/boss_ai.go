@@ -15650,6 +15650,15 @@ func init() {
 	// Delete leg stay documented-only (no movement or GO-by-GUID
 	// bridge). Entry 31810 verifiable from the file's own enum.
 	RegisterLuaBoss("npc_brann_bronzebeard_keystone", 31810)
+	// npc_brunnhildar_prisoner (Storm Peaks zone script): Reset
+	// self-cast Ice Prison (54894) + SpellHit Ice Lance (55046)
+	// free-seat gate (seats 1-3 via GetPassenger; GetAvailableSeatCount
+	// has no Lua bridge) then Free Prisoner / Ride Drake / Shard Impact
+	// (zone_storm_peaks.cpp:208-247) — see
+	// lua_scripts/northrend/npc_brunnhildar_prisoner.lua. Entry 29639
+	// verified in creature_template.sql (ScriptName
+	// 'npc_brunnhildar_prisoner').
+	RegisterLuaBoss("npc_brunnhildar_prisoner", 29639)
 	// npc_av_marshal_or_warmaster (Alterac Valley zone script) — the first
 	// unit of the Eastern Kingdoms pass (eastern_kingdoms_script_loader.cpp
 	// order: AddSC_alterac_valley; boss_balinda follows). The combat event

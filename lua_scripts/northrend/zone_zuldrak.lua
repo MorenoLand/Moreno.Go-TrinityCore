@@ -323,3 +323,296 @@ local function potCheckHit(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_POT_CHECK, 5, potCheckHit)
+
+-- PORTED (hook strip 19, RegisterCreatureEvent ev14 = OnHitBySpell /
+-- ev23 = OnReset / ev28 = MovementInform / ev41 = OnSetData +
+-- RegisterCreatureGossipEvent select = 2):
+--   npc_drakuru_shackles (29700, zone_zuldrak.cpp:47-127): Reset
+--   summons the Captured Rageclaw (29686) at GetClosePoint and
+--   faces both to each other; SpellHit (Unlock Shackle 55083,
+--   player caster, quest 12861 incomplete) frees it — DoCast Free
+--   Rageclaw 55223 on the rageclaw, KilledMonsterCredit 29686
+--   (the Player::KilledMonster quest-credit twin, colonel_jules
+--   precedent), RemoveAura Chain Right 54990, DespawnOrUnsummon;
+--   rageclaw not found -> SetDeathState JUST_DIED (1).
+--   npc_captured_rageclaw (29686, :129-170): Reset sets faction
+--   friendly + Chain Right self-cast; SpellHit (Free Rageclaw
+--   55223) removes Chain Left (55009), stands, restores the
+--   template faction (2117, creature_template.sql), casts
+--   Unshackled (55085), talks, wanders off (MoveRandom 10) and
+--   despawns in 10s.
+--   npc_storm_cloud (29939, :901-961 — STORM_COULD): Reset
+--   self-casts Storm Visual (55708). SpellHit (Gymer's Grab
+--   55516 -> Ride Vehicle 43671 + Healing Winds 55549 on the
+--   caster's vehicle) STAYS OUT: the seat-count gate
+--   (GetAvailableSeatCount) has no bridge on the Lua vehicle
+--   object (lua_vehicle.go:62-115 — GetObjectType / GetOwner /
+--   GetEntry / GetPassenger / IsOnBoard / AddPassenger /
+--   RemovePassenger only).
+--   npc_released_offspring_harkoa (28526, :172-217): Reset walks
+--   to a close point (MoveTo id 0); MovementInform (ev28, POINT
+--   type 8) despawns on arrival.
+--   npc_crusade_recruit (28090, :219-303): Reset sets the gossip
+--   flag + cower emotestate and records the spawn heading for the
+--   unported UpdateAI/gossip machine (ev7 + gossip scope, not
+--   this row).
+--   npc_alchemist_finklestein (28205, :468-587): full AI port —
+--   Reset clears the player/try state and starts the turn-to-pot
+--   cycle (15-26s); turn legs face the pot / back with the
+--   matching emotes; gossip select casts the invisbuff (51216)
+--   and starts the ingredient chain; SetData (ev41, the
+--   pot_check call site above) schedules the try-gated
+--   ingredient event.
+--   go_scourge_enclosure / go_finklesteins_cauldron are
+--   GameObjectScripts — no creature ev23 applies.
+--   All ev23 handlers below are IsAlive-gated (attumen /
+--   broodlord precedent — Go fires ev23 on the death path too).
+local ENTRY_DRAKURU_SHACKLES = 29700 -- creature_template.sql (name 'Drakuru Shackles')
+local NPC_RAGECLAW = 29686 -- zone_zuldrak.cpp:38
+local QUEST_TROLLS_IS_GONE_CRAZY = 12861 -- zone_zuldrak.cpp:39
+local SPELL_CHAIN_OF_THE_SCURGE_RIGHT = 54990 -- zone_zuldrak.cpp:40
+local SPELL_CHAIN_OF_THE_SCURGE_LEFT = 55009 -- zone_zuldrak.cpp:41
+local SPELL_UNLOCK_SHACKLE = 55083 -- zone_zuldrak.cpp:42
+local SPELL_FREE_RAGECLAW = 55223 -- zone_zuldrak.cpp:43
+local SPELL_UNSHACKLED = 55085 -- zone_zuldrak.cpp:131
+local SAY_RAGECLAW = 0 -- zone_zuldrak.cpp:132
+local ENTRY_STORM_CLOUD = 29939 -- zone_zuldrak.cpp:903 (STORM_COULD)
+local SPELL_STORM_VISUAL = 55708 -- zone_zuldrak.cpp:905
+local ENTRY_RELEASED_OFFSPRING_HARKOA = 28526 -- creature_template.sql (name 'Released Offspring of Har'koa')
+local ENTRY_CRUSADE_RECRUIT = 28090 -- creature_template.sql (name 'Crusade Recruit')
+local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h (curator precedent)
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- SharedDefines.h (curator precedent)
+local UNIT_NPC_FLAGS = 82 -- UpdateFields.h:139 (nefarian precedent)
+local UNIT_NPC_FLAG_GOSSIP = 0x00000001 -- UnitDefines.h:186
+local UNIT_NPC_EMOTESTATE = 83 -- UpdateFields.h:140 (OBJECT_END + 0x4D)
+local EMOTE_STATE_COWER = 431 -- SharedDefines.h:2068
+local EMOTE_STATE_NONE = 30 -- SharedDefines.h:1965
+local EMOTE_STATE_USE_STANDING_NO_SHEATHE = 133 -- SharedDefines.h:1994
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
+local TEMPSUMMON_DEAD_DESPAWN = 7 -- ObjectDefines.h:65
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:36 (flamecaller precedent)
+local SAY_EASY_123 = 0 -- zone_zuldrak.cpp:425
+local SAY_MEDIUM_4 = 1 -- zone_zuldrak.cpp:426
+local SAY_MEDIUM_5 = 2 -- zone_zuldrak.cpp:427
+local SAY_HARD_6 = 3 -- zone_zuldrak.cpp:428
+
+local shacklesState = {}
+
+local function shacklesReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    local reach = creature:GetCombatReach()
+    local x, y, z = creature:GetRelativePoint(0.1 - 2 * reach / 3, 0)
+    local rageclaw = creature:SummonCreature(NPC_RAGECLAW, x, y, z, 0, TEMPSUMMON_DEAD_DESPAWN, 1000)
+    if rageclaw ~= nil then
+        shacklesState[creature:GetGUIDLow()] = { rageclawGUID = rageclaw:GetGUIDLow() }
+        creature:SetFacingToObject(rageclaw)
+        rageclaw:SetFacingToObject(creature)
+    end
+end
+
+local function shacklesSpellHit(event, creature, caster, spellId)
+    if caster == nil or caster:GetObjectType() ~= "Player" then
+        return
+    end
+    if spellId ~= SPELL_UNLOCK_SHACKLE then
+        return
+    end
+    if caster:GetQuestStatus(QUEST_TROLLS_IS_GONE_CRAZY) ~= QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    local state = shacklesState[creature:GetGUIDLow()]
+    local rageclaw = state ~= nil and creature:GetCreatureByGUID(state.rageclawGUID) or nil
+    if rageclaw ~= nil then
+        rageclaw:CastSpell(rageclaw, SPELL_FREE_RAGECLAW, true)
+        creature:SetDeathState(3) -- UnlockRageclaw :80 setDeathState(DEAD)
+        caster:KilledMonsterCredit(NPC_RAGECLAW)
+        creature:RemoveAura(SPELL_CHAIN_OF_THE_SCURGE_RIGHT)
+        creature:DespawnOrUnsummon()
+    else
+        creature:SetDeathState(1) -- JUST_DIED (Unit.h:200-207)
+    end
+end
+
+local function rageclawReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:SetFaction(FACTION_FRIENDLY)
+    creature:CastSpell(creature, SPELL_CHAIN_OF_THE_SCURGE_RIGHT, true)
+end
+
+local function rageclawSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_FREE_RAGECLAW then
+        return
+    end
+    creature:RemoveAura(SPELL_CHAIN_OF_THE_SCURGE_LEFT)
+    creature:SetStandState(0) -- UNIT_STAND_STATE_STAND (UnitDefines.h:33)
+    creature:SetFaction(2117) -- template faction, creature_template.sql row 29686
+    creature:CastSpell(creature, SPELL_UNSHACKLED, true)
+    creature:Talk(SAY_RAGECLAW)
+    creature:MoveRandom(10)
+    creature:DespawnOrUnsummon(10000)
+end
+
+local function stormCloudReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:CastSpell(creature, SPELL_STORM_VISUAL, true)
+end
+
+local function harkoaReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    local reach = creature:GetCombatReach()
+    local x, y, z = creature:GetRelativePoint(25.0 - 2 * reach / 3, 0)
+    creature:MoveTo(0, x, y, z)
+end
+
+local function harkoaMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    creature:DespawnOrUnsummon()
+end
+
+local recruitState = {}
+
+local function crusadeRecruitReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP)
+    creature:SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_COWER)
+    recruitState[creature:GetGUIDLow()] = { heading = creature:GetO() }
+end
+
+local finklesteinState = {}
+local finklesteinTimers = {}
+
+local function cancelFinklesteinTimers(guid)
+    local per = finklesteinTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        finklesteinTimers[guid] = nil
+    end
+end
+
+local function scheduleFinklestein(guid, key, delay, fn)
+    local per = finklesteinTimers[guid]
+    if not per then
+        per = {}
+        finklesteinTimers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local finklesteinTurnToPot, finklesteinTurnBack
+
+finklesteinTurnBack = function(creature, guid)
+    creature:SetFacingTo(4.886922)
+    creature:SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_NONE)
+    scheduleFinklestein(guid, "turntopot", {25000, 41000}, function()
+        finklesteinTurnToPot(creature, guid)
+    end)
+end
+
+finklesteinTurnToPot = function(creature, guid)
+    creature:SetFacingTo(6.230825)
+    creature:SetUInt32Value(UNIT_NPC_EMOTESTATE, EMOTE_STATE_USE_STANDING_NO_SHEATHE)
+    scheduleFinklestein(guid, "turnback", 11000, function()
+        finklesteinTurnBack(creature, guid)
+    end)
+end
+
+local function finklesteinReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    cancelFinklesteinTimers(guid)
+    finklesteinState[guid] = { playerGUID = nil, tryCount = 0 }
+    scheduleFinklestein(guid, "turntopot", {15000, 26000}, function()
+        finklesteinTurnToPot(creature, guid)
+    end)
+end
+
+local function finklesteinIngredient(creature, guid, say, aura)
+    local state = finklesteinState[guid]
+    if state == nil or state.playerGUID == nil then
+        return
+    end
+    local player = GetPlayerByGUID(state.playerGUID)
+    if player ~= nil then
+        creature:Talk(say, player)
+        creature:CastSpell(player, aura)
+        state.tryCount = state.tryCount + 1
+    end
+end
+
+local function finklesteinGossipSelect(event, player, creature, sender, action, code, listId)
+    player:GossipClearMenu()
+    player:GossipComplete()
+    creature:CastSpell(player, SPELL_ALCHEMIST_APPRENTICE_INVISBUFF)
+    local guid = creature:GetGUIDLow()
+    local state = finklesteinState[guid]
+    if state == nil then
+        state = { playerGUID = nil, tryCount = 0 }
+        finklesteinState[guid] = state
+    end
+    state.playerGUID = player:GetGUIDLow()
+    state.tryCount = 1
+    scheduleFinklestein(guid, "ingredient", 100, function()
+        finklesteinIngredient(creature, guid, SAY_EASY_123, SPELL_RANDOM_INGREDIENT_EASY_AURA)
+    end)
+    return false
+end
+
+local function finklesteinSetData(event, creature, type, data)
+    if type ~= 1 or data ~= 1 then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local state = finklesteinState[guid]
+    if state == nil then
+        return
+    end
+    if state.tryCount == 2 or state.tryCount == 3 then
+        scheduleFinklestein(guid, "ingredient", 100, function()
+            finklesteinIngredient(creature, guid, SAY_EASY_123, SPELL_RANDOM_INGREDIENT_EASY_AURA)
+        end)
+    elseif state.tryCount == 4 then
+        scheduleFinklestein(guid, "ingredient", 100, function()
+            finklesteinIngredient(creature, guid, SAY_MEDIUM_4, SPELL_RANDOM_INGREDIENT_MEDIUM_AURA)
+        end)
+    elseif state.tryCount == 5 then
+        scheduleFinklestein(guid, "ingredient", 100, function()
+            finklesteinIngredient(creature, guid, SAY_MEDIUM_5, SPELL_RANDOM_INGREDIENT_MEDIUM_AURA)
+        end)
+    elseif state.tryCount == 6 then
+        scheduleFinklestein(guid, "ingredient", 100, function()
+            finklesteinIngredient(creature, guid, SAY_HARD_6, SPELL_RANDOM_INGREDIENT_HARD_AURA)
+        end)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_DRAKURU_SHACKLES, 23, shacklesReset)
+RegisterCreatureEvent(ENTRY_DRAKURU_SHACKLES, 14, shacklesSpellHit)
+RegisterCreatureEvent(NPC_RAGECLAW, 23, rageclawReset)
+RegisterCreatureEvent(NPC_RAGECLAW, 14, rageclawSpellHit)
+RegisterCreatureEvent(ENTRY_STORM_CLOUD, 23, stormCloudReset)
+RegisterCreatureEvent(ENTRY_RELEASED_OFFSPRING_HARKOA, 23, harkoaReset)
+RegisterCreatureEvent(ENTRY_RELEASED_OFFSPRING_HARKOA, 28, harkoaMovementInform)
+RegisterCreatureEvent(ENTRY_CRUSADE_RECRUIT, 23, crusadeRecruitReset)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinReset)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 41, finklesteinSetData)
+RegisterCreatureGossipEvent(NPC_FINKLESTEIN, 2, finklesteinGossipSelect)

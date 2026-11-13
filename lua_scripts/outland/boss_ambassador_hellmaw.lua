@@ -33,14 +33,17 @@
 -- _instance->SetBossState(DATA_AMBASSADOR_HELLMAW, DONE) leg rides
 -- the no-instance bridge (documented-only).
 -- DOCUMENTED-ONLY (in this header; only entry 18731 registered):
--- boss_ambassador_hellmawAI::Reset — _events.Reset() +
--- _instance->SetBossState(NOT_STARTED) (no-instance bridge) +
--- DoAction(ACTION_AMBASSADOR_HELLMAW_BANISH) (instance-driven,
--- unbridged) + the ScheduleEvent inits (EVENT_CORROSIVE_ACID 5-10s,
--- EVENT_FEAR 25-30s — now the ported timers' init values;
--- EVENT_BERSERK 3min heroic-only is PORTED below (the "no heroic
--- bridge" claim was stale — creature:IsHeroic() is bridged,
--- lua_creature_events.go:260, kelidan precedent).
+-- boss_ambassador_hellmawAI::Reset — PORTED below (hook strip 19,
+-- ev23, IsAlive-gated per C++ :67-68): _events.Reset() rides
+-- cancelTimers, _instance->SetBossState(NOT_STARTED) rides
+-- creature:SetBossState(0, 0) (the "no-instance bridge" claim was
+-- stale — the died handler below already ports SetBossState).
+-- The ScheduleEvent inits are NOT re-armed here: C++ EventMap only
+-- ticks in UpdateAI, while CreateLuaEvent would fire out of combat;
+-- enterCombat arms the same init values (acid 5-10s, fear 25-30s,
+-- berserk 3min heroic-only). DoAction BANISH stays
+-- documented-only (no live DATA_FEL_OVERSEER source — the instance
+-- script is unported and shadow_labyrinth.lua is spell-only).
 -- boss_ambassador_hellmawAI::DoAction INTRO leg —
 -- hellmaw->AI()->DoAction(ACTION_AMBASSADOR_HELLMAW_INTRO) is called
 -- from instance_shadow_labyrinth.cpp:137 (the InstanceMapScript —
@@ -188,6 +191,19 @@ local function hellmawLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ boss_ambassador_hellmawAI::Reset (:67-80): IsAlive gate,
+-- _events.Reset() (cancelTimers), SetBossState(NOT_STARTED).
+-- The ScheduleEvent inits stay in enterCombat (see header); the
+-- DoAction BANISH leg stays documented-only (no live
+-- DATA_FEL_OVERSEER source).
+local function hellmawReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    cancelTimers(creature:GetGUIDLow())
+    creature:SetBossState(0, 0) -- DATA_AMBASSADOR_HELLMAW, NOT_STARTED
+end
+
 -- C++ boss_ambassador_hellmawAI::KilledUnit:
 -- if (who->GetTypeId() == TYPEID_PLAYER) Talk(SAY_SLAY) — the
 -- razuvious player-gated precedent (event 3 — the illidan
@@ -212,3 +228,4 @@ RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 1, hellmawEnterCombat)
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 2, hellmawLeaveCombat)
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 3, hellmawTargetDied)
 RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 4, hellmawDied)
+RegisterCreatureEvent(ENTRY_AMBASSADOR_HELLMAW, 23, hellmawReset)
