@@ -639,14 +639,6 @@ end
 RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R1, 1, rapidRecuperationTick)
 RegisterAuraEvent(SPELL_HUNTER_RAPID_RECUPERATION_R2, 1, rapidRecuperationTick)
 
--- PORTED (this tick, RegisterSpellEvent OnCheckCast = 8):
---   spell_hun_disengage (781, spell_hunter.cpp:379-400) — CheckCast
---   only (a player caster out of combat fails the cast with
---   SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW); the ev8 fire site is the
---   player cast path only, so the C++ TYPEID_PLAYER arm is vacuous
---   here. The 2026-11-10 census row 594 go/lua hits were the verb
---   "disengage" in unrelated comments, not this class.
-
 -- PORTED (this tick, RegisterAuraEvent OnProc = 6):
 --   spell_hun_lock_and_load::HandleProc
 --   (spell_hunter.cpp:787-793): OnProc. PreventDefaultAction (the

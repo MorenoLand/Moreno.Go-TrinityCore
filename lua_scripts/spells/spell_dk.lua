@@ -496,7 +496,7 @@ local function suddenDoomProc(event, aura, target, actor, procTarget, damage)
     if known == 0 then
         return true
     end
-    actor:CastSpell(procTarget, known)
+    actor:CastSpell(procTarget, known, true)
     return true
 end
 

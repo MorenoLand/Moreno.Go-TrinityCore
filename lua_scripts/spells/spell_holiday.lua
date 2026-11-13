@@ -1629,3 +1629,51 @@ end
 for plateId, _ in pairs(PILGRIMS_ON_PLATE.dishes) do
     RegisterSpellEvent(plateId, 5, pilgrimsOnPlateHit)
 end
+
+-- PORTED (this tick, RegisterAuraEvent OnPeriodic = 1):
+--   spell_pilgrims_bounty_buff_food::HandleTriggerSpell
+--   (spell_holiday.cpp:493-501, registered OnEffectPeriodic EFFECT_2
+--   PERIODIC_TRIGGER_SPELL at :505): on every periodic tick the
+--   handler prevents the default trigger (PreventDefaultAction) and
+--   on the first tick only (the _handled latch) the target self-casts
+--   the dish's Well Fed trigger, triggered. The five loader instances
+--   (spell_holiday.cpp:1930-1934) pair the dishes with their triggers
+--   (turkey 65414 AP, cranberry 65412 ZM, stuffing 65416 HIT, sweet
+--   potatoes 65410 HASTE, pie 65415 SPIRIT; enum :464-471). Binding
+--   IDs 65418-65422 come from AzerothCore spell_script_names
+--   ('spell_pilgrims_bounty_food') — all five verified on wowhead as
+--   30s Food auras whose EFFECT_2 is PERIODIC_TRIGGER_SPELL at a 10s
+--   interval, the exact C++ registration; 66041 (Drink, the mana
+--   regen aura the foods also trigger on hit) and 66477 (Bountiful
+--   Feast, a SpellScript, not an aura) are not buff_food bindings.
+--   The per-dish trigger rides aura:GetTriggerSpell(2) — the DBC
+--   trigger of EFFECT_2, i.e. the spell the Go default case 23 leg
+--   would fire (lua_aura.go:433) — so no dish-to-ID guess is needed;
+--   the _handled latch rides aura:GetTickNumber() == 1 (both tick
+--   executors increment before the hook fires, lua_aura.go:376, so
+--   the first tick reads 1 and a re-application restarts the count).
+--   The veto (return true) is the PreventDefaultAction twin
+--   (fireAuraPeriodicTick, lua_aura.go:1061; totemic-mastery
+--   precedent in spell_shaman.lua) and is returned on every tick,
+--   as in C++. Overturns the tick-295 stay-out (DB-bound IDs only
+--   in world DB spell_script_names). DORMANT until Spell.dbc ships
+--   the 65418-65422 rows (GetTriggerSpell reads 0 without them, so
+--   no cast fires); the Well Fed triggers land non-triggered on the
+--   player path (file KNOWN LIMIT).
+local PILGRIMS_BUFF_FOOD = {
+    ids = { 65418, 65419, 65420, 65421, 65422 },
+}
+
+local function pilgrimsBountyBuffFoodTick(event, aura, target)
+    if aura:GetTickNumber() == 1 and target ~= nil then
+        local trigger = aura:GetTriggerSpell(2)
+        if trigger ~= 0 then
+            target:CastSpell(target, trigger, true)
+        end
+    end
+    return true
+end
+
+for _, foodId in ipairs(PILGRIMS_BUFF_FOOD.ids) do
+    RegisterAuraEvent(foodId, 1, pilgrimsBountyBuffFoodTick)
+end
