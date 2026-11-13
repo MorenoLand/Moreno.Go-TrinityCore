@@ -147,29 +147,31 @@
 -- so nothing exists to despawn in the Go model). DORMANT until
 -- Spell.dbc ships 63081/63364/63145: the 30s cast fires on
 -- schedule but the summon effect resolves only with the DBC row.
--- boss_saronite_animus (no creature-entry enum in C++ —
--- spell-summoned via 63145; entry-unverifiable — no
--- registration): Reset one-shot DoCast(me,
+-- boss_saronite_animus — PORTED 2026-11-13 (new-axis strip 1,
+-- unit D reconciliation): entry 33524 is DBC-verified (wowhead
+-- npc=33524 + AC creature_template 'Saronite Animus', script
+-- 'npc_ulduar_saronite_animus'; C++ carries no entry enum —
+-- spell-summoned via 63145). Reset one-shot DoCast(me,
 -- SPELL_VISUAL_SARONITE_ANIMUS 63319); EVENT_PROFOUND_OF_
 -- DARKNESS — DoCastAOE(SPELL_PROFOUND_OF_DARKNESS 63420,
--- TRIGGERED), 3s init, 3s repeat — timer-driven but the add
--- exists only via the unbridged summon machine (task
--- exclusion: summon/add legs out); JustDied -> vezax DoAction
+-- TRIGGERED), 3s init, 3s repeat; JustDied -> vezax DoAction
 -- (ACTION_ANIMUS_DIE) (boss_general_vezax.cpp:338) — ev38 dispatch
--- IS bridged (lua_creature_events.go:802); the animus bearer is
--- entry-unverifiable and unregistered; no Talk arms.
--- npc_saronite_vapors (no creature-entry enum in C++ —
--- spell-summoned via 63081; entry-unverifiable — no
--- registration): Talk(EMOTE_VAPORS 0) in the constructor — no
--- spawn / constructor bridge; Reset EVENT_RANDOM_MOVE 5s-7.5s
--- -> MoveRandom(30.0f) — no scheduler / movement bridges;
--- DamageTaken (lethal -> damage = 0 + flags + root +
--- stand-state-dead + DoCast SPELL_SARONITE_VAPORS 63323 +
--- DespawnOrUnsummon(30s) + vezax DoAction(ACTION_VAPORS_DIE)) —
--- event 9 DamageTaken IS bridged and ev38 dispatch IS bridged
--- (lua_creature_events.go:802); the sender is the vapors
--- DamageTaken (boss_general_vezax.cpp:436) on an
--- entry-unverifiable, unregistered bearer.
+-- IS bridged (lua_creature_events.go:802). DORMANT until Spell.dbc
+-- ships 63145: the add itself only exists via the summon effect.
+-- npc_saronite_vapors — PORTED 2026-11-13 (new-axis strip 1,
+-- unit D reconciliation): entry 33488 is DBC-verified (wowhead
+-- npc=33488 + AC creature_template 'Saronite Vapors', script
+-- 'npc_ulduar_saronite_vapors'; C++ carries no entry enum —
+-- spell-summoned via 63081). Talk(EMOTE_VAPORS 0) in the
+-- constructor (ev5 spawn twin) + ApplySpellImmune(0, IMMUNITY_ID,
+-- 49560, true) + SetReactState(REACT_PASSIVE); Reset
+-- EVENT_RANDOM_MOVE 5s-7.5s -> MoveRandom(30.0f); DamageTaken
+-- (lethal -> damage = 0 + flags + root + stand-state-dead +
+-- DoCast SPELL_SARONITE_VAPORS 63323 + DespawnOrUnsummon(30s) +
+-- vezax DoAction(ACTION_VAPORS_DIE)) — event 9 DamageTaken IS
+-- bridged (second return rewrites damage) and ev38 dispatch IS
+-- bridged (lua_creature_events.go:802). DORMANT until Spell.dbc
+-- ships 63081: the bearer only exists via the summon effect.
 -- spell_general_vezax_mark_of_the_faceless (63276 — periodic
 -- dummy AuraScript: caster casts
 -- SPELL_MARK_OF_THE_FACELESS_DAMAGE 63278 with bp1 =
@@ -592,12 +594,11 @@ end
 -- smellSaronite = false. Sent by the vapors DamageTaken lethal leg
 -- (:436) via vezax->AI()->DoAction; the ev38 dispatch is bridged
 -- (lua_creature_events.go:802; elderDoAction precedent in
--- boss_freya.lua). Dormant until the vapors bearer lands: the sender
--- is npc_saronite_vapors, spell-summoned via 63081 with no creature
--- entry anywhere in the C++ tree (ENTRY-BLOCKED), and the vapor
--- summon effect is DBC-gated — so in the Go-modeled fight no
--- vapor can die and the latch stays 1, matching C++ for a
--- zero-vapor-death fight. shadowDodger deliberately has NO write leg
+-- boss_freya.lua). The sender is now PORTED below (vapors bearer
+-- entry 33488, registered; DBC-verified 2026-11-13): the latch
+-- still stays 1 until Spell.dbc ships the 63081 summon effect, so
+-- in the Go-modeled fight no vapor can die yet — matching C++ for
+-- a zero-vapor-death fight. shadowDodger deliberately has NO write leg
 -- here: its clear leg is the ev15 SpellHitTarget handler below
 -- (SPELL_SHADOW_CRASH_HIT 62659, player-gated).
 -- C++ DoAction(ACTION_ANIMUS_DIE) (boss_general_vezax.cpp:271-276):
@@ -605,10 +606,11 @@ end
 -- ScheduleEvent(EVENT_SEARING_FLAMES, 7s, 12s) + animusDead = true.
 -- PORTED tick 473: RemoveAura(63364) (lua_creature_events.go:1504)
 -- + schedule(guid, "searing_flames", {7000, 12000}); animusDead
--- stays out (written only, never read in C++). Dormant until the
--- animus bearer lands: the sender is the animus JustDied (:338),
--- entry-unverifiable (spell-summoned via 63145, no creature entry
--- in the C++ tree), so no ANIMUS_DIE ever fires in the Go model.
+-- stays out (written only, never read in C++). The sender is now
+-- PORTED below (animus bearer entry 33524, registered;
+-- DBC-verified 2026-11-13): the leg still stays dormant until
+-- Spell.dbc ships the 63145 summon effect, so no ANIMUS_DIE fires
+-- in the Go model yet.
 local function vezaxDoAction(event, creature, action)
     if action == ACTION_VAPORS_DIE then
         creature:SetData(DATA_SMELL_SARONITE, 0)
@@ -725,3 +727,145 @@ end
 
 RegisterAuraEvent(SPELL_SARONITE_VAPORS_AURA, 2, saroniteVaporsApply)
 RegisterAuraEvent(SPELL_SARONITE_VAPORS_AURA, 4, saroniteVaporsApply)
+
+-- Saronite Animus (33524) + Saronite Vapors (33488) bearers —
+-- PORTED 2026-11-13 (new-axis strip 1, unit D reconciliation).
+-- Entries DBC-verified (wowhead npc links + AC creature_template
+-- names/scripts); C++ carries no entry enums — both are
+-- spell-summoned (63145 / 63081). DORMANT until Spell.dbc ships
+-- those summon effects: the bearers only exist via the summon
+-- machine, so no handler fires in the Go model yet.
+local ENTRY_SARONITE_ANIMUS = 33524
+local ENTRY_SARONITE_VAPORS = 33488
+local SPELL_VISUAL_SARONITE_ANIMUS = 63319 -- boss_general_vezax.cpp:65
+local SPELL_PROFOUND_OF_DARKNESS = 63420 -- boss_general_vezax.cpp:66
+local EMOTE_VAPORS = 0 -- boss_general_vezax.cpp:48
+local SPELL_DEATH_GRIP_JUMP = 49560 -- boss_general_vezax.cpp:398
+local IMMUNITY_ID = 6 -- immunity.go:49 (SpellImmunity)
+local REACT_PASSIVE = 0 -- UnitDefines.h:340
+local UNIT_STAND_STATE_DEAD = 7 -- UnitDefines.h:40
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- UnitDefines.h:125
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:128
+
+-- C++ boss_saronite_animus UpdateAI (:355-372): DoCastAOE
+-- (SPELL_PROFOUND_OF_DARKNESS 63420, TRIGGERED), 3s repeat, gated
+-- on UpdateVictim + CASTING (the event stays queued while casting
+-- — 500ms IsCasting defer, mal_ganis idiom; the out-of-combat
+-- re-queue mirrors C++ events.Update never running without a
+-- victim). DoMeleeAttackIfReady is engine-driven in Go.
+local function profoundOfDarknessTick(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "profound", 500, function()
+            profoundOfDarknessTick(creature, guid)
+        end)
+        return
+    end
+    if not creature:IsInCombat() then
+        schedule(guid, "profound", 500, function()
+            profoundOfDarknessTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_PROFOUND_OF_DARKNESS, true)
+    schedule(guid, "profound", 3000, function()
+        profoundOfDarknessTick(creature, guid)
+    end)
+end
+
+-- C++ boss_saronite_animus Reset (:335-340): DoCast(me,
+-- SPELL_VISUAL_SARONITE_ANIMUS 63319) + ScheduleEvent
+-- (EVENT_PROFOUND_OF_DARKNESS, 3s). Alive-gated: ev23 fires on
+-- death too (vezaxReset precedent).
+local function animusReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    creature:CastSpell(creature, SPELL_VISUAL_SARONITE_ANIMUS)
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "profound", 3000, function()
+        profoundOfDarknessTick(creature, guid)
+    end)
+end
+
+-- C++ boss_saronite_animus JustDied (:342-346): vezax->AI()->
+-- DoAction(ACTION_ANIMUS_DIE) via instance GetCreature(BOSS_VEZAX)
+-- — the FindNearestCreature(33271, 200) idiom (midnight
+-- precedent) with the C++ nil-guard.
+local function animusDied(event, creature, killer)
+    cancelTimers(creature:GetGUIDLow())
+    local vezax = creature:FindNearestCreature(ENTRY_GENERAL_VEZAX, 200)
+    if vezax then
+        vezax:DoAction(ACTION_ANIMUS_DIE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SARONITE_ANIMUS, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SARONITE_ANIMUS, 4, animusDied)
+RegisterCreatureEvent(ENTRY_SARONITE_ANIMUS, 23, animusReset)
+
+-- C++ npc_saronite_vapors ctor (:395-401): Talk(EMOTE_VAPORS 0) +
+-- ApplySpellImmune(0, IMMUNITY_ID, 49560, true) + SetReactState
+-- (REACT_PASSIVE). Ev5 is the ctor twin (vezaxSpawned precedent).
+local function vaporsSpawned(event, creature)
+    creature:Talk(EMOTE_VAPORS)
+    creature:ApplySpellImmune(0, IMMUNITY_ID, SPELL_DEATH_GRIP_JUMP, true)
+    creature:SetReactState(REACT_PASSIVE)
+end
+
+-- C++ npc_saronite_vapors UpdateAI (:404-419): EVENT_RANDOM_MOVE
+-- -> MoveRandom(30.0f), re-arm {5s, 7.5s}; no UpdateVictim gate,
+-- so the timer runs out of combat too (unlike the animus leg).
+local function vaporsRandomMoveTick(creature, guid)
+    creature:MoveRandom(30.0)
+    schedule(guid, "vapors_random_move", {5000, 7500}, function()
+        vaporsRandomMoveTick(creature, guid)
+    end)
+end
+
+-- C++ npc_saronite_vapors Reset (:403-407): ScheduleEvent
+-- (EVENT_RANDOM_MOVE, 5s, 7500ms). Alive-gated: ev23 fires on
+-- death too (vezaxReset precedent).
+local function vaporsReset(event, creature)
+    if not creature:IsAlive() then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "vapors_random_move", {5000, 7500}, function()
+        vaporsRandomMoveTick(creature, guid)
+    end)
+end
+
+-- C++ npc_saronite_vapors DamageTaken (:426-444): lethal -> damage
+-- = 0 + SetFlag(NON_ATTACKABLE | NOT_SELECTABLE) + SetControlled
+-- (true, ROOT) (SetRooted twin) + SetStandState(DEAD) +
+-- SetHealth(max) + RemoveAllAuras + DoCast(me, SPELL_SARONITE_
+-- VAPORS 63323) + DespawnOrUnsummon(30s) + vezax DoAction
+-- (ACTION_VAPORS_DIE). Arm order kept. The ev9 second return
+-- rewrites damage (malchezaar precedent: return false, 0).
+local function vaporsDamageTaken(event, creature, attacker, damage)
+    if damage >= creature:GetHealth() then
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE + UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetRooted(true)
+        creature:SetStandState(UNIT_STAND_STATE_DEAD)
+        creature:SetHealth(creature:GetMaxHealth())
+        creature:RemoveAllAuras()
+        creature:CastSpell(creature, SPELL_SARONITE_VAPORS)
+        creature:DespawnOrUnsummon(30000)
+        local vezax = creature:FindNearestCreature(ENTRY_GENERAL_VEZAX, 200)
+        if vezax then
+            vezax:DoAction(ACTION_VAPORS_DIE)
+        end
+        return false, 0
+    end
+end
+
+local function vaporsDied(event, creature, killer)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+RegisterCreatureEvent(ENTRY_SARONITE_VAPORS, 2, cancelCombatTimers)
+RegisterCreatureEvent(ENTRY_SARONITE_VAPORS, 4, vaporsDied)
+RegisterCreatureEvent(ENTRY_SARONITE_VAPORS, 5, vaporsSpawned)
+RegisterCreatureEvent(ENTRY_SARONITE_VAPORS, 9, vaporsDamageTaken)
+RegisterCreatureEvent(ENTRY_SARONITE_VAPORS, 23, vaporsReset)

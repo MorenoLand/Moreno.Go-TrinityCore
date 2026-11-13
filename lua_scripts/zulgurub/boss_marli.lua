@@ -23,12 +23,13 @@
 -- {10s,20s} on the victim (triggered DoCastVictim, C++-exact, all
 -- phases; each transform-back adds a fresh concurrent 15s cycle —
 -- C++ ScheduleEvent never dedups) / hatch spider egg 24082 30s then
--- {12s,17s} (non-triggered self-cast; only the re-arm cycle is modeled
--- — DBC verdict 2026-11-13: 24082 is SPELL_EFFECT_ACTIVATE_OBJECT
--- (86), TARGET_GAMEOBJECT_NEARBY_ENTRY (40), Open (MiscValue 8) per
--- TDB spell_dbc — NOT a summon, so the eggs hatch by GO Use, not by
--- spawning; the cycle is canceled at transform and re-armed at
--- transform-back, C++-exact).
+-- {12s,17s} (non-triggered self-cast, ISSUED 2026-11-13 — DBC verdict
+-- below: 24082 is SPELL_EFFECT_ACTIVATE_OBJECT (86),
+-- TARGET_GAMEOBJECT_NEARBY_ENTRY (40), Open (MiscValue 8) per TDB
+-- spell_dbc — NOT a summon, so the eggs hatch by GO Use, not by
+-- spawning; the cast reaches the Go activate-object arm but stays
+-- dormant until the ownerless-Open engine leg lands; the cycle is
+-- canceled at transform and re-armed at transform-back, C++-exact).
 -- Transform: Talk(SAY_TRANSFORM=1),
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (PORTED 2026-10-24),
@@ -57,11 +58,13 @@
 -- the GetZulGurubAI bookkeeping stays out); no hatch model — the HATCH_EGGS 24083 AoE and the
 -- HATCH_SPIDER_EGG 24082 casts are not issued (only their re-arm cycles
 -- are modeled): DBC verdict 2026-11-13, 24082 is ACTIVATE_OBJECT/Open on
--- nearby egg GOs (TDB spell_dbc; 24083 has no override row), and the Go
--- Open leg needs a player owner session (boss_ai.go:8337) plus Spell.dbc
--- data — an ownerless boss caster no-ops on both counts, so the eggs
--- never hatch until that chain lands (goober Use -> summon 15041 ->
--- egg JustSummoned forward); the Reset egg Respawn scan is PORTED (marliReset,
+-- nearby egg GOs (TDB spell_dbc, column-mapped: Effect_1 86,
+-- ImplicitTargetA_1 40, MiscValue_1 8) and 24083 is the same effect
+-- (wowhead wotlk: Activate Object, Radius 100y, Max targets 4) —
+-- neither summons; the Go Open leg needs a player owner session
+-- (boss_ai.go:8337) plus Spell.dbc data — an ownerless boss caster
+-- no-ops on both counts, so the eggs never hatch until that chain
+-- lands (goober Use -> summon 15041 -> egg JustSummoned forward); the Reset egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
 -- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
 -- the charge "not aggro leader" exclusion is the Random,1 skip-first
@@ -87,6 +90,8 @@ local SPELL_ENVOLWINGWEB = 24110
 local SPELL_POISON_VOLLEY = 24099
 local SPELL_SPIDER_FORM = 24084
 local SPELL_LEVELUP = 24312
+local SPELL_HATCH_EGGS = 24083
+local SPELL_HATCH_SPIDER_EGG = 24082
 
 local SAY_AGGRO = 0
 local SAY_TRANSFORM = 1
@@ -100,6 +105,7 @@ local POWER_MANA = 0
 
 local timers = {}
 local state = {}
+local summons = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -177,6 +183,23 @@ local function randomThreatPlayerSkipFirstInRange(creature, maxDist)
     return out[math.random(#out)]
 end
 
+-- C++ JustSummoned (boss_marli.cpp:117-121): SelectTarget(Random, 0,
+-- 0.f, true) — a random alive threat-list player, ANY distance, no
+-- skip-first (unlike the charge arm's Random,1). GetAITargets is
+-- threat-sorted; no positional drop, just player/alive filters.
+local function randomThreatPlayer(creature)
+    local out = {}
+    for _, unit in ipairs(creature:GetAITargets()) do
+        if unit:GetObjectType() == "Player" and not unit:IsDead() then
+            out[#out + 1] = unit
+        end
+    end
+    if #out == 0 then
+        return nil
+    end
+    return out[math.random(#out)]
+end
+
 -- C++ EVENT_POISON_VOLLEY: triggered DoCastVictim(24099); re-arm
 -- {10s,20s}. Phase-all: fires in every phase, C++-exact. C++
 -- ScheduleEvent never dedups — every TRANSFORM_BACK schedules a fresh
@@ -207,11 +230,12 @@ end
 -- C++ EVENT_HATCH_SPIDER_EGG: non-triggered self-cast 24082; re-arm
 -- {12s,17s}. Phase-all EXCEPT the transform CancelEvent kills the
 -- cycle (re-armed fresh {12s,17s} at transform-back, C++-exact). The
--- cast itself is not issued — 24082 hatches by GO activation, not
--- summoning (see header DBC verdict), and the Go Open leg no-ops for
--- an ownerless boss caster — only the re-arm cycle is modeled
--- (jeklik six-bat convention).
+-- cast is ISSUED (24082 is ACTIVATE_OBJECT/Open on nearby egg GOs,
+-- see header DBC verdict); it reaches the Go activate-object arm but
+-- stays dormant until the ownerless-Open engine leg lands (the arm
+-- delegates Open to an owner session, wild casters no-op).
 local function onHatchEgg(creature, guid)
+    creature:CastSpell(creature, SPELL_HATCH_SPIDER_EGG)
     schedule(guid, "hatchegg", math.random(12000, 17000), function()
         onHatchEgg(creature, guid)
     end)
@@ -344,11 +368,13 @@ onTransformBack = function(creature, guid)
 end
 
 -- C++ EVENT_SPAWN_START_SPIDERS (1s after engage): Talk
--- (SAY_SPIDER_SPAWN), the 24083 AoE hatch has no GO-activation bearer
--- (skipped — see header DBC verdict); arm aspect 12s, transform 45s (duplicate skipped — inert),
+-- (SAY_SPIDER_SPAWN), the 24083 AoE hatch (DoCastAOE, non-triggered —
+-- self-cast, DoCastAOE convention) is ISSUED; arm aspect 12s,
+-- transform 45s (duplicate skipped — inert),
 -- poison volley 15s, hatch egg 30s; phase -> 2.
 local function onSpawnStartSpiders(creature, guid)
     creature:Talk(SAY_SPIDER_SPAWN)
+    creature:CastSpell(creature, SPELL_HATCH_EGGS)
     marliState(guid).phase = PHASE_TWO
     schedule(guid, "aspect", 12000, function()
         onAspectOfMarli(creature, guid)
@@ -380,6 +406,7 @@ local function marliWipe(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     state[guid] = nil
+    summons[guid] = nil
 end
 
 -- C++ Reset's spider-egg scan (boss_marli.cpp:91-99): every spider
@@ -393,10 +420,16 @@ local function marliReset(event, creature)
     -- C++ Reset (boss_marli.cpp:92): the PHASE_THREE damage rollback
     -- runs before the egg scan; the alive gate restores C++
     -- Reset-never-runs-on-death (Go fires 23 before 4 on death).
-    -- summons.DespawnAll (:102) is vacuous here: no Lua arm summons
-    -- (hatch casts spawn nothing, spawn-of-marli never spawns), so
-    -- the summons list is always empty in this model.
-    local wasPhaseThree = marliState(creature:GetGUIDLow()).phase == PHASE_THREE
+    -- summons.DespawnAll (:102) is PORTED below: tracked summons
+    -- (ev19) are despawned before the wipe clears the list.
+    local guid = creature:GetGUIDLow()
+    local wasPhaseThree = marliState(guid).phase == PHASE_THREE
+    local tracked = summons[guid]
+    if tracked then
+        for _, summon in pairs(tracked) do
+            summon:Despawn()
+        end
+    end
     marliWipe(event, creature)
     if creature:IsAlive() then
         if wasPhaseThree then
@@ -425,6 +458,31 @@ RegisterCreatureEvent(ENTRY_MARLI, 4, function(event, creature, killer)
     marliWipe(event, creature)
 end)
 RegisterCreatureEvent(ENTRY_MARLI, 23, marliReset)
+
+-- C++ JustSummoned (boss_marli.cpp:117-121): creature->AI()->
+-- AttackStart(SelectTarget(Random, 0, 0.f, true)) + summons.Summon
+-- (creature). Fires for any spider the hatch chain summons (ev19 is
+-- live on the summon path, lua_creature_events.go:190); dormant
+-- until the egg GO chain hatches one (24082/24083 reach the Go
+-- activate-object arm but the ownerless-Open leg is still missing).
+local function marliJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_SPAWN then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local tracked = summons[guid]
+    if not tracked then
+        tracked = {}
+        summons[guid] = tracked
+    end
+    tracked[summoned:GetGUIDLow()] = summoned
+    local target = randomThreatPlayer(creature)
+    if target then
+        summoned:AttackStart(target)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_MARLI, 19, marliJustSummoned)
 
 -- Spawn of Mar'li (npc_spawn_of_marli, C++ ScriptName for 15041):
 -- non-triggered self-cast 24312 (level up) every 3s while in combat
