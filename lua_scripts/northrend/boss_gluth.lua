@@ -305,9 +305,17 @@ local function gluthReset(event, creature)
     creature:SetSpeedRate(1, 12.0 / 7.0)
 end
 
+-- C++ boss_gluthAI::SummonedCreatureDies (boss_gluth.cpp:127-130):
+-- summons.Despawn(summoned) — SummonList housekeeping, vacuous with
+-- no Lua summon list to drain (summonTick fires SummonCreatureGroup
+-- and forgets); dead zombies despawn via the engine death path.
+local function gluthSummonedCreatureDied(event, creature, summon, killer)
+end
+
 RegisterCreatureEvent(ENTRY_GLUTH, 1, gluthEnterCombat)
 RegisterCreatureEvent(ENTRY_GLUTH, 2, gluthLeaveCombat)
 RegisterCreatureEvent(ENTRY_GLUTH, 4, gluthDied)
+RegisterCreatureEvent(ENTRY_GLUTH, 21, gluthSummonedCreatureDied)
 RegisterCreatureEvent(ENTRY_GLUTH, 23, gluthReset)
 
 -- C++ spell_gluth_decimate::HandleScriptEffect (boss_gluth.cpp:313-326):

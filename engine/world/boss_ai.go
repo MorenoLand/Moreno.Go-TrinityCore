@@ -17110,7 +17110,8 @@ func init() {
 	// (68965/68644/69038/68966/68798/68614), npc_apothecary_genericAI
 	// DoAction/MovementInform legs, summon-DoAction/DoZoneInCombat relays,
 	// SetImmuneToPC/SetFaction/SetFlag/RemoveAurasDueToSpell arms,
-	// SummonedCreatureDies (no event-21 fire site — the lethal clamp
+	// SummonedCreatureDies (ev21 fires in Go — fireCreatureDied dispatches
+	// it on the summoner — but no handler is registered, so the lethal clamp
 	// persists and the QUIET_SUICIDE arm cannot fire), instance SetBossState
 	// / SetData / LFG FinishDungeon(288) legs, DoCastAOE(68821), the
 	// EVENT_CRAZED_APOTHECARY SetData-only timer. UpdateAI pre-loop
