@@ -155,7 +155,8 @@
 -- machine — every arm above is ported. The sibling units in the
 -- same C++ file (npc_oscillating_frequency_scanner_master_bunny
 -- is already ported in npc_oscillating_frequency_scanner_master_
--- bunny.lua; spell_oscillating_field has no SpellScript bridge)
+-- bunny.lua; spell_oscillating_field is ported (RegisterSpellEvent
+-- 37408 ev5, npc_oscillating_frequency_scanner_master_bunny.lua))
 -- are not this unit.
 
 local NPC_SIMON_BUNNY = 22923

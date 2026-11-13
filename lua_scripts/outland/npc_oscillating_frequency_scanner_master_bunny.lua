@@ -31,14 +31,19 @@
 --   pump runs for the bunny's whole 50s life, combat or not. A nil
 --   player (summoned by a creature, or the player gone) skips the
 --   cast but still re-arms 3000ms, like C++.
--- Unmodeled (documented-only, no bridges):
--- - spell_oscillating_field SpellScript (no SpellScript bridge).
+-- spell_oscillating_field SpellScript (zone_blades_edge_mountains.cpp:
+-- 988-1013) PORTED below (RegisterSpellEvent 37408 ev5): hit player
+-- with aura 37408 at 5 stacks and quest 10594 INCOMPLETE gets
+-- CompleteQuest(10594). Dormant until Spell.dbc ships 37408.
 
 local ENTRY_MASTER_BUNNY = 21760
 local NPC_TOP_BUNNY = 21759
 local GO_SCANNER = 184926
 
 local SPELL_OSCILLATION_FIELD = 37408
+
+local QUEST_GAUGING_THE_RESONANT_FREQUENCY = 10594 -- zone_blades_edge_mountains.cpp:928
+local QUEST_STATUS_INCOMPLETE = 3 -- lua_player.go:4902
 
 local timers = {}
 local playerGuid = {}
@@ -126,3 +131,18 @@ end
 RegisterCreatureEvent(ENTRY_MASTER_BUNNY, 4, scannerDied)
 RegisterCreatureEvent(ENTRY_MASTER_BUNNY, 22, scannerSummoned)
 RegisterCreatureEvent(ENTRY_MASTER_BUNNY, 23, scannerReset)
+
+-- C++ spell_oscillating_field::HandleEffect
+-- (zone_blades_edge_mountains.cpp:996-1001): OnEffectHitTarget,
+-- EFFECT_0, SPELL_EFFECT_APPLY_AURA — hit player with aura 37408
+-- at 5 stacks and quest 10594 INCOMPLETE completes the quest.
+local function oscillatingField(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then return end
+    if hitTarget == nil or hitTarget:GetObjectType() ~= "Player" then return end
+    local aura = hitTarget:GetAura(SPELL_OSCILLATION_FIELD)
+    if aura == nil or aura:GetStackAmount() ~= 5 then return end
+    if hitTarget:GetQuestStatus(QUEST_GAUGING_THE_RESONANT_FREQUENCY) == QUEST_STATUS_INCOMPLETE then
+        hitTarget:CompleteQuest(QUEST_GAUGING_THE_RESONANT_FREQUENCY)
+    end
+end
+RegisterSpellEvent(SPELL_OSCILLATION_FIELD, 5, oscillatingField)

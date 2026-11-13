@@ -13,9 +13,10 @@
 -- creature_template ScriptName bindings are DB-side (no TDB
 -- in this workspace). No talk lines fire in this model (no
 -- SAY_ enums in the AI — C++-exact).
--- spell_unlocking_zuluheds_chains (NPC_KARYNAKU = 22112) is
--- documented-only: SpellScript, no SpellScript bridge
--- (standing blocker). npc_shadowmoon_tuber_node is
+-- spell_unlocking_zuluheds_chains (NPC_KARYNAKU = 22112) PORTED
+-- below (RegisterSpellEvent 38790 ev3): player caster with Karynaku
+-- within 15.0 gets KilledMonsterCredit(22112). Dormant until
+-- Spell.dbc ships 38790. npc_shadowmoon_tuber_node is
 -- documented-only: no entry constant for the tuber node
 -- itself anywhere in the C++ sources (only SPELL_WHISTLE
 -- 36652, SPELL_SHADOWMOON_TUBER 36462, NPC_BOAR_ENTRY 21195,
@@ -107,7 +108,7 @@
 -- Talk and sub-30% heal pump ported in npc_earthmender_wilda.lua
 -- (21027); npc_illidari_spawn ported for 22075/22074/19797;
 -- npc_enraged_spirit ported for 21050/21061/21060/21059;
--- spell_unlocking_zuluheds_chains + npc_shadowmoon_tuber_
+-- spell_unlocking_zuluheds_chains ported below; npc_shadowmoon_tuber_
 -- node documented-only. Next per outland_script_loader.cpp
 -- order: zone_terokkar_forest.cpp.
 
@@ -137,6 +138,9 @@ local SOUL_ENTRY = {
 local FACTION_FRIENDLY = 35 -- SharedDefines.h
 
 local SPELL_SOUL_CAPTURED = 36115
+
+local SPELL_UNLOCKING_ZULUHEDS_CHAINS = 38790 -- TDB 26091 spell_script_names (AC has no row)
+local NPC_KARYNAKU = 22112 -- zone_shadowmoon_valley.cpp:1501
 
 -- C++ JustDied kill-credit entries (zone_shadowmoon_valley.cpp:1329-1332).
 local CREDIT_ENTRY = {
@@ -342,3 +346,21 @@ for _, entry in ipairs({
     -- this lands the same reset as the evade hook.
     RegisterCreatureEvent(entry, 23, onLeaveCombat)
 end
+
+-- C++ spell_unlocking_zuluheds_chains::HandleAfterHit
+-- (zone_shadowmoon_valley.cpp:1515-1520): player caster with
+-- Karynaku (22112) within 15.0 gets KilledMonsterCredit(22112).
+-- Go ev3 fires once per unit hit target (runtime.go contract),
+-- not once per cast like C++ AfterHit — no per-target logic
+-- added; the credit is a 1-credit objective, so a repeat call
+-- is harmless.
+local function unlockingZuluhedsChains(event, spell, hitTarget)
+    local player = spell:GetCaster()
+    if player == nil then return end
+    player = player:ToPlayer()
+    if player == nil then return end
+    if player:FindNearestCreature(NPC_KARYNAKU, 15.0) ~= nil then
+        player:KilledMonsterCredit(NPC_KARYNAKU)
+    end
+end
+RegisterSpellEvent(SPELL_UNLOCKING_ZULUHEDS_CHAINS, 3, unlockingZuluhedsChains)

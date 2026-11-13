@@ -89,7 +89,8 @@
 -- (creature:FindNearestCreature, lua_creature_events.go:2114), and the
 -- summon bridges themselves exist — so only the entry + capture legs
 -- block a future bunny port, and the quest-completion SpellScript
--- (no quest-status/complete bridge) blocks the quest itself;
+-- is ported (npc_oscillating_frequency_scanner_master_bunny.lua,
+-- RegisterSpellEvent 37408 ev5);
 -- stale 'no gossip bridge' retracted (RegisterGameObjectGossipEvent
 -- bridged, engine/world/gameobject_hooks.go); go_legion_obelisk,
 -- go_simon_cluster
@@ -98,9 +99,9 @@
 -- NearTeleportTo) stay out — the whole game is unreachable
 -- behind the missing GO-gossip -> bunny SetGUID/SetData dispatch
 -- (SetCanFly / FindNearestGameObject / Teleport / PlayDistanceSound
--- bridges exist now; NearTeleportTo does not, Teleport is its twin); no SpellScript bridge —
--- spell_oscillating_field documented only (standing
--- blocker).
+-- bridges exist now; NearTeleportTo does not, Teleport is its twin);
+-- spell_oscillating_field is ported (RegisterSpellEvent 37408 ev5,
+-- npc_oscillating_frequency_scanner_master_bunny.lua).
 
 local SPELL_ARCANE_BLAST = 38881
 local SPELL_MANA_BURN = 38884

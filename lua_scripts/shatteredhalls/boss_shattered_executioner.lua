@@ -10,12 +10,12 @@
 -- GetGuidData(NPC_KARGATH_BLADEFIST)/GetGuidData(NPC_
 -- SHATTERED_EXECUTIONER), SummonCreature, DoAction(ACTION_
 -- EXECUTIONER_TAUNT = 1)); spell_kargath_executioner is an
--- AuraScript (DoCheckAreaTarget only — no aura event for
--- it, and the map-540 filter is a no-op in practice) and
--- spell_remove_kargath_executioner is a SpellScript whose
--- caster is the player (Load() gate) — the ev5 player path
--- has no per-effect list site yet (runtime.go); both
--- documented only, not registered (census rows 537/538).
+-- AuraScript (DoCheckAreaTarget only — RegisterAuraEvent ev8,
+-- runtime.go) and spell_remove_kargath_executioner is a
+-- SpellScript whose caster is the player (Load() gate) —
+-- RegisterSpellEvent ev5 fires on the player path
+-- (runtime.go:648-652); both PORTED below (census rows
+-- 537/538).
 -- Zone .cpp in the Shattered Halls set per outland_script_
 -- loader.cpp order (boss roster 3/3 closed with kargath;
 -- instance_shattered_halls.lua ported 3fe088b3).
@@ -26,8 +26,8 @@
 -- SPELL_CLEAVE = 15284 is the .cpp's own enum; SPELL_
 -- KARGATH_EXECUTIONER_1/2/3 (39288/39289/39290) and SPELL_
 -- REMOVE_KARGATH_EXECUTIONER (39291) from shattered_halls.h
--- are data only here (their AuraScript/SpellScript scripts
--- have no bridge).
+-- are ported below (rows 537/538); dormant until Spell.dbc
+-- ships the records (TDB spell_script_names only, no AC row).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 4 OnDied, 23 OnReset, 38 OnDoAction (the SetData relay —
 -- the instance file fires it after each SetData(4) write).
@@ -71,10 +71,9 @@
 -- unbridgeable; GetShatteredHallsAI is an AI-factory helper,
 -- not a script); no Lua area-trigger bridge — at_nethekurse_
 -- exit unported (its whole OnTrigger body is instance-gated
--- anyway); spell_kargath_executioner (537: DoCheckAreaTarget
--- only, no aura event) and spell_remove_kargath_executioner
--- (538: player-cast, ev5 player path missing) stay
--- documented only, not registered; the Kargath-DONE Reset trigger is PORTED
+-- anyway); spell_kargath_executioner (537) and spell_remove_
+-- kargath_executioner (538) are PORTED below (ev8 map-540
+-- filter; ev5 caster aura removal); the Kargath-DONE Reset trigger is PORTED
 -- 2026-11-10 via the ev38 relay — the kargath file fires
 -- ACTION_KARGATH_DONE_RESET on death (instance_shattered_halls.
 -- cpp:155-156 calls executioner->AI()->Reset() when Kargath
@@ -103,6 +102,15 @@ local LOOT_MODE_HARD_MODE_2 = 0x4
 local LOOT_MODE_HARD_MODE_3 = 0x8
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
+
+-- shattered_halls.h:81-85 (TDB spell_script_names only; the AC
+-- dump has no row for any of the four). Dormant until Spell.dbc
+-- ships the records.
+local SPELL_KARGATH_EXECUTIONER_1 = 39288
+local SPELL_KARGATH_EXECUTIONER_2 = 39289
+local SPELL_KARGATH_EXECUTIONER_3 = 39290
+local SPELL_REMOVE_KARGATH_EXECUTIONER = 39291
+local MAP_SHATTERED_HALLS = 540
 
 -- Lua-side transport id (no C++ counterpart — the executioner
 -- AI has no DoAction override): the instance file fires this
@@ -301,3 +309,42 @@ RegisterCreatureEvent(ENTRY_SHATTERED_EXECUTIONER, 38, function(_, creature, act
         applyResetArms(creature)
     end
 end)
+
+-- C++ spell_kargath_executioner (shattered_halls.cpp:186-218,
+-- census row 537): AuraScript DoCheckAreaTarget only — the area
+-- check passes only if the candidate target's map is 540
+-- (Shattered Halls). Load() gates the whole script on a player
+-- caster; a non-player caster loads no script, so no filter.
+-- RegisterAuraEvent ev8 = OnCheckAreaTarget (runtime.go:582;
+-- results ANDed, a handler returning false rejects the target).
+-- Fires only from the dynobj (persistent-area-aura) apply sites
+-- (boss_ai.go:9450-9481, dynamic_spells.go:268-372), so if the
+-- 39288/39289/39290 auras never dynobj-apply the hook never fires
+-- and the filter is moot, the same as C++ for a non-area apply.
+local function kargathExecutionerCheckAreaTarget(event, aura, target)
+    local caster = aura:GetCaster()
+    if caster ~= nil and caster:GetObjectType() == "Player" then
+        return target:GetMapId() == MAP_SHATTERED_HALLS
+    end
+    return true -- C++ Load(): non-player caster loads no script, so no filter
+end
+RegisterAuraEvent(SPELL_KARGATH_EXECUTIONER_1, 8, kargathExecutionerCheckAreaTarget)
+RegisterAuraEvent(SPELL_KARGATH_EXECUTIONER_2, 8, kargathExecutionerCheckAreaTarget)
+RegisterAuraEvent(SPELL_KARGATH_EXECUTIONER_3, 8, kargathExecutionerCheckAreaTarget)
+
+-- C++ spell_remove_kargath_executioner (shattered_halls.cpp:
+-- 220-254, census row 538): SpellScript OnEffectHitTarget
+-- EFFECT_0 — the caster (player) removes auras 39288/39289/
+-- 39290 from itself; Load() gates on a player caster. The hit
+-- target is never used. RegisterSpellEvent ev5 fires on the
+-- player path (runtime.go:648-652); the removal is idempotent,
+-- so a per-hit-target repeat of the handler is harmless.
+local function removeKargathExecutioner(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 then return end
+    local caster = spell:GetCaster()
+    if caster == nil or caster:GetObjectType() ~= "Player" then return end
+    caster:RemoveAura(SPELL_KARGATH_EXECUTIONER_1)
+    caster:RemoveAura(SPELL_KARGATH_EXECUTIONER_2)
+    caster:RemoveAura(SPELL_KARGATH_EXECUTIONER_3)
+end
+RegisterSpellEvent(SPELL_REMOVE_KARGATH_EXECUTIONER, 5, removeKargathExecutioner)

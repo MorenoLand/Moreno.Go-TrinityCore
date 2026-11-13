@@ -14993,8 +14993,9 @@ func init() {
 	// master_bunny.lua (entry 21760 sourced from Wowhead TBC
 	// Classic, no C++ entry constant — DB-side ScriptName
 	// binding); its IsSummonedBy player-capture has no bridge
-	// (ev22 is pet-funnel-only) and spell_oscillating_field is a
-	// SpellScript — both documented only; see
+	// (ev22 is pet-funnel-only) and spell_oscillating_field is
+	// ported (RegisterSpellEvent 37408 ev5,
+	// npc_oscillating_frequency_scanner_master_bunny.lua); see
 	// hidden_files/CHECKPOINT.md.
 	RegisterLuaBoss("npc_oscillating_frequency_scanner_master_bunny", 21760)
 	// boss_doomlord_kazzak (18728) and boss_doomwalker (17711):
@@ -15127,9 +15128,9 @@ func init() {
 	// KilledMonsterCredit / DoCast(SOUL_CAPTURED) legs have no
 	// movement / quest-credit / dead-caster-cast bridges —
 	// documented only;
-	// spell_unlocking_zuluheds_chains (SpellScript) and
-	// npc_shadowmoon_tuber_node (unverifiable entry, SetData /
-	// SpellHit arms) are documented-only.
+	// spell_unlocking_zuluheds_chains is ported (RegisterSpellEvent
+	// 38790 ev3, npc_enraged_spirit.lua) and npc_shadowmoon_tuber_node
+	// (unverifiable entry, SetData / SpellHit arms) is documented-only.
 	RegisterLuaBoss("npc_enraged_spirit", 21050)
 	RegisterLuaBoss("npc_enraged_spirit", 21061)
 	RegisterLuaBoss("npc_enraged_spirit", 21060)
