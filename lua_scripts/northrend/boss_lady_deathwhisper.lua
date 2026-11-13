@@ -207,10 +207,13 @@
 -- _cultistQueue itself is not modeled (the port's DoImproveCultist twin
 -- pools live adds via GetCreaturesInGrid + the improvedCultists latch,
 -- which already filters IsDead) — documented-only.
--- npc_vengeful_shade (38222) — zero own Talk lines; the
--- VengefulBlast passive / KillSelf / SpellHitTarget legs have no
--- bridge — NOT registered (the bronjahm npc_corrupted_soul_fragment
--- precedent). npc_cult_fanatic / npc_cult_adherent ARE registered
+-- npc_vengeful_shade (38222) — PORTED 2026-11-13 (round 17): ev19
+-- JustSummoned SetGUID leg + ev40 SetGUID store + ev23 Reset
+-- (REACT_PASSIVE + Vengeful Blast passive aura + 2s AttackStart /
+-- 7s KillSelf ticks) + ev15 Vengeful Blast KillSelf + ev4 timer
+-- cancel; zero own Talk lines. DORMANT until Spell.dbc ships 72478
+-- (the whole chain is spellKnown-gated, npc_portal_eoe precedent).
+-- npc_cult_fanatic / npc_cult_adherent ARE registered
 -- (timer arms ported above); the fanatic/adherent SpellHit transformation
 -- and reanimate arms (:622-660 / :714-752) are PORTED 2026-10-22 — event 14
 -- CREATURE_EVENT_ON_HIT_BY_SPELL IS bridged
@@ -313,6 +316,18 @@ local SPELL_DEATHCHILL_BOLT = 70594
 local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
 local SPELL_SUMMON_SPIRITS = 72478 -- :439-443
+
+local ENTRY_VENGEFUL_SHADE = 38222 -- icecrown_citadel.h:181
+local SPELL_VENGEFUL_BLAST = 71544 -- boss_lady_deathwhisper.cpp:111
+local SPELL_VENGEFUL_BLAST_PASSIVE = 71494 -- :112
+local SPELL_VENGEFUL_BLAST_25N = 72010 -- :113
+local SPELL_VENGEFUL_BLAST_10H = 72011 -- :114
+local SPELL_VENGEFUL_BLAST_25H = 72012 -- :115
+
+-- C++ npc_vengeful_shade::_targetGUID (:787-790, set by the boss
+-- JustSummoned SetGUID leg); per-shade-GUID low GUID of the player
+-- the shade must attack at 2s.
+local shadeTargetGUIDs = {}
 
 local vengefulShadeTargets = {}
 local SPELL_DEATH_AND_DECAY = 71001 -- :63
@@ -1250,8 +1265,8 @@ end
 -- _nextVengefulShadeTargetGUID (cleared on Reset :211, consumed
 -- front-first by JustSummoned :476-479 to SetGUID the next
 -- Vengeful Shade). The cast is ported (summonSpiritsTick), so
--- ev15 fires live. The consumer (shade SetGUID) is a separate
--- unported arm; the queue only pays off when that lands.
+-- ev15 fires live. The consumer (shade SetGUID) is PORTED below
+-- (deathwhisperJustSummoned ev19 + shade ev40/ev23/ev15/ev4).
 local function deathwhisperSpellHitTarget(event, creature, target, spellId)
     if spellId ~= SPELL_SUMMON_SPIRITS or target == nil then
         return
@@ -1266,6 +1281,97 @@ local function deathwhisperSpellHitTarget(event, creature, target, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 15, deathwhisperSpellHitTarget)
+
+-- C++ boss_lady_deathwhisper::JustSummoned (:466-488): a Vengeful
+-- Shade (38222) pops the front of _nextVengefulShadeTargetGUID (the
+-- ev15 queue above) and is SetGUID with it (the shade stores it as
+-- _targetGUID :787-790). Empty queue -> no SetGUID (C++ break, falls
+-- through to summons bookkeeping only). The darnavan/cultist legs
+-- stay out: both entries are summoned only by the unported
+-- SummonWaveP1 (:515-538), so neither is ever summoned in Go.
+local function deathwhisperJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= ENTRY_VENGEFUL_SHADE then
+        return
+    end
+    local queue = vengefulShadeTargets[creature:GetGUIDLow()]
+    if not queue or #queue == 0 then
+        return
+    end
+    summon:SetGUID(table.remove(queue, 1), 0)
+end
+
+RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 19, deathwhisperJustSummoned)
+
+-- C++ npc_vengeful_shade::SetGUID (:787-790): stores the target GUID
+-- the boss SetGUIDs at JustSummoned; per-shade-GUID (the
+-- shadeTargetGUIDs table above).
+local function shadeSetGUID(event, creature, targetGuid, id)
+    shadeTargetGUIDs[creature:GetGUIDLow()] = targetGuid
+end
+
+-- C++ npc_vengeful_shade::Reset (:772-785): REACT_PASSIVE + the
+-- Vengeful Blast passive aura; 2s -> REACT_AGGRESSIVE + AttackStart
+-- on the SetGUID target; 7s -> KillSelf. The 2s leg resolves the
+-- target via GetPlayerByGUID (player low GUIDs are the full GUID);
+-- a nil resolve (pet/totem target, which C++ ObjectAccessor would
+-- have found) skips the attack — documented delta, narrow: 72478
+-- targets players in practice.
+local function shadeAttackTick(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    creature:SetReactState(REACT_AGGRESSIVE)
+    local targetGuid = shadeTargetGUIDs[guid]
+    if targetGuid == nil then
+        return
+    end
+    local target = GetPlayerByGUID(targetGuid)
+    if target == nil then
+        return
+    end
+    creature:AttackStart(target)
+end
+
+local function shadeKillTick(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    creature:Kill()
+end
+
+local function shadeReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:AddAura(SPELL_VENGEFUL_BLAST_PASSIVE)
+    schedule(guid, "attack", 2000, function() shadeAttackTick(creature, guid) end)
+    schedule(guid, "kill", 7000, function() shadeKillTick(creature, guid) end)
+end
+
+-- No C++ JustDied override; the ev4 leg only cancels the Reset
+-- timers (the file's cancelTimers idiom) so a dead shade's 7s Kill
+-- tick cannot fire late.
+local function shadeJustDied(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    shadeTargetGUIDs[guid] = nil
+end
+
+-- C++ npc_vengeful_shade::SpellHitTarget (:792-808): any Vengeful
+-- Blast hit (71544/72010/72011/72012) -> KillSelf.
+local function shadeSpellHitTarget(event, creature, target, spellId)
+    if spellId == SPELL_VENGEFUL_BLAST
+        or spellId == SPELL_VENGEFUL_BLAST_25N
+        or spellId == SPELL_VENGEFUL_BLAST_10H
+        or spellId == SPELL_VENGEFUL_BLAST_25H then
+        creature:Kill()
+    end
+end
+
+RegisterCreatureEvent(ENTRY_VENGEFUL_SHADE, 40, shadeSetGUID)
+RegisterCreatureEvent(ENTRY_VENGEFUL_SHADE, 23, shadeReset)
+RegisterCreatureEvent(ENTRY_VENGEFUL_SHADE, 4, shadeJustDied)
+RegisterCreatureEvent(ENTRY_VENGEFUL_SHADE, 15, shadeSpellHitTarget)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 1, deathwhisperJustEngagedWith)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 2, deathwhisperLeaveCombat)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 3, deathwhisperKilledUnit)
