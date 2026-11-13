@@ -18762,7 +18762,10 @@ func init() {
 	// (engine gap, documented in the lua file). Sibling
 	// npc_tiger_matriarch (40312) stays out: IsSummonedBy rides
 	// GetVehicle (no bridge) and its timers gate on _tigerGuid.
+	// Its KilledUnit + DamageTaken arms are ported in
+	// lua_scripts/kalimdor/npc_tiger_matriarch.lua (round 30).
 	RegisterLuaBoss("npc_tiger_matriarch_credit", 40301)
+	RegisterLuaBoss("npc_tiger_matriarch", 40312)
 
 	// npc_nat_pagle: Dustwallow Marsh zone script, entry 12919
 	// (wowhead.com/classic/npc=12919, verified 2026-11-06). Ported
