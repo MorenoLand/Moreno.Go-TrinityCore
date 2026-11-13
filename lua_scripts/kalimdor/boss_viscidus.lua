@@ -66,10 +66,12 @@
 --   the hitcounter (CRACK 50 + Talk 3, SHATTER 100 + Talk 4,
 --   EXPLODE 150 + Talk 5, self-cast VISCIDUS_EXPLODE 25938,
 --   SetVisible(false), RemoveAura(TOXIN/FREEZE)) is dead code here
---   — documented, not ported. (The EXPLODE branch also needs
---   HasUnitState(UNIT_STATE_MELEE_ATTACKING) — no casting-state
---   bridge — plus SummonCreature for the globe ring, which has
---   zero Lua usage.)
+--   — documented, not ported. (HasUnitState(MELEE_ATTACKING) IS
+--   bridged — lua_creature_events.go:2476, state 0x2,
+--   lua_unit_state.go:182 — and creature:SummonCreature is live
+--   (onyxia whelp/lair-guard legs); the blocker is the PHASE_MELEE
+--   gate itself, chained on the row-43 frost-school SpellHit gate.
+--   Corrected 2026-11-13, round-14 row 44.)
 -- - The glob explosion / rejoin machinery: NPC_GLOB_OF_VISCIDUS
 --   15667 spawns on a 40yd ring around ViscidusCoord
 --   (-7992.36, 908.19, -52.62) — the creature:SummonCreature bridge

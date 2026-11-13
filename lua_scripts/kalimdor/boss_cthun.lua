@@ -32,7 +32,12 @@
 -- (:622-665), stomach acid/enter/knockback/teleport legs, giant
 -- tentacle spawn timers, weaken Talk + purple coloration + kick-out
 -- (:675-720), DamageTaken 99% reduction / death prevention
--- (:853-876), JustDied PHASE_DONE SetData (:849-851), DoAction
+-- (:843-876, re-triaged round 14: STAY OUT — both DamageTaken arms
+-- read instance->GetData(DATA_CTHUN_PHASE); the bridged
+-- creature:GetData is the per-AI ScriptData store
+-- (lua_creature_events.go:800-835), NOT the instance store, and no
+-- instance GetData/SetData bridge exists; the phase writers are all
+-- in the unported phase machine), JustDied PHASE_DONE SetData (:849-851), DoAction
 -- FLESH_TENTACLE_KILLED counter (:878-886, consumer of the flesh
 -- tentacle JustDied relay — DoAction IS bridged, but the counter
 -- lives in the unported phase machine, so the relay stays out).

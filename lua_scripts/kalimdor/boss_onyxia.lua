@@ -16,7 +16,8 @@
 -- summon-strength bind); creature_template ScriptName binding stays
 -- DB-side. Eluna creature events: 1
 -- OnEnterCombat, 2 OnLeaveCombat, 3 OnKilledUnit, 4 OnDied, 9
--- OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
+-- OnDamageTaken, 14 OnHitBySpell, 15 OnSpellHitTarget, 23 OnReset.
+-- Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs; movement /
 -- instance legs below):
@@ -76,7 +77,8 @@
 -- - Phase-2/3 travel legs: MovePoint 10 to Phase2Location,
 --   MoveTakeoff 11 to Phase2Floating, MovePoint cascade (ids 8 /
 --   10 / 11), MovePoint 9 to home+12, flight speed legs,
---   SpellHit breath-direction redirect (MovePoint-8), the
+--   SpellHit breath-direction redirect travel (MovePoint-8;
+--   the index write IS ported, onSpellHit below), the
 --   trigger summon + SetFacingToObject facing (C++ :408 — the
 --   facing leg is bridgeable via the atan2 twin,
 --   devourer_of_souls precedent — but the trigger comes from
@@ -92,8 +94,10 @@
 --   instance SetGuidData(DATA_FLOOR_ERUPTION_GUID) into the
 --   instance-script BFS eruption machine) — no GO-enumeration /
 --   instance-data bridges.
--- - SpellHit (breath-direction redirect, ev14 live) stays out on the
---   flight machine (MovePoint-8 redirect, no motion bridge).
+-- - SpellHit (breath-direction redirect, ev14 live): the
+--   MovePoint-8 travel + SetSpeedRate(1.5) legs stay out (no
+--   motion bridge); the MovePoint = LocIdEnd index write IS
+--   ported (onSpellHit, position-twin class like onMovement).
 --   SpellHitTarget (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL)
 --   on player breath-spell hits) IS ported (onyxiaSpellHitTarget,
 --   ev15): the ranges are Onyxia's own SPELL_BREATH_* direction
@@ -165,6 +169,19 @@ local NPC_LAIRGUARD = 36561
 -- C++ MoveData[8] (boss_onyxia.cpp): LocId -> deep-breath spell.
 -- LocIds 0..7 are west/east/north-west/north-east/south-east/
 -- south-west/south/north; the spell is what DEEP_BREATH casts on self.
+-- LocIdEnd per row (boss_onyxia.cpp:102-110) drives the SpellHit
+-- redirect (onSpellHit below): the breath's destination row.
+local BREATH_END = {
+    [0] = 1, -- WEST_TO_EAST ends east
+    [1] = 0, -- EAST_TO_WEST ends west
+    [2] = 4, -- NW_TO_SE ends south-east
+    [3] = 5, -- NE_TO_SW ends south-west
+    [4] = 2, -- SE_TO_NW ends north-west
+    [5] = 3, -- SW_TO_NE ends north-east
+    -- Rows 6/7 (SOUTH_TO_NORTH / NORTH_TO_SOUTH) have no SpellHit
+    -- leg: the C++ switch (boss_onyxia.cpp:200-205) covers only the
+    -- six spells above, so no entry is needed here.
+}
 local BREATH_SPELLS = {
     [0] = 18609, -- SPELL_BREATH_WEST_TO_EAST
     [1] = 18576, -- SPELL_BREATH_EAST_TO_WEST
@@ -675,6 +692,40 @@ local function onDied(event, creature, killer)
     creature:SetBossState(DATA_ONYXIA, BOSS_STATE_DONE)
 end
 
+-- C++ SpellHit (boss_onyxia.cpp:199-215): hit by one of the six
+-- diagonal/east-west breath spells -> PointData = GetMoveData();
+-- MovePoint = PointData->LocIdEnd; SetSpeedRate(MOVE_FLIGHT, 1.5);
+-- MovePoint(8, MiddleRoomLocation). The travel + speed legs stay out
+-- (no MovePoint bridge — verified: no methods["MovePoint"] in
+-- lua_creature_events.go / lua_objects.go; SetSpeedRate IS bridged
+-- at lua_creature_events.go:5960 but moves nothing without travel).
+-- The index write PORTS as a position-twin leg, same class as
+-- onMovement: the next MOVEMENT tick's SetNextRandomPoint excludes
+-- the DESTINATION row, not the origin row. ev14 is live
+-- (CreatureEventOnHitBySpell, runtime.go:381; fired per hit target
+-- in the creature spell path, boss_ai.go:4282 — the self-cast breath
+-- hits Onyxia herself, same loop as the ported ev15 arm; midnight
+-- attumenSpellHit precedent for the (event, creature, caster,
+-- spellId) signature). No phase gate in C++ — the filter is the
+-- six-spell switch only; the north/south rows (18351/17086) are NOT
+-- in it, so a north/south breath leaves the index untouched. Only
+-- Onyxia casts these spells (deep breath, self-cast), so no caster
+-- check is needed.
+local function onSpellHit(event, creature, caster, spellId)
+    if spellId ~= 18609 and spellId ~= 18576 and spellId ~= 18584 and
+        spellId ~= 18617 and spellId ~= 18564 and spellId ~= 18596 then
+        return
+    end
+    local st = onyxiaState[creature:GetGUIDLow()]
+    if st == nil or st.movePoint == nil then
+        return
+    end
+    local dest = BREATH_END[st.movePoint]
+    if dest ~= nil then
+        st.movePoint = dest
+    end
+end
+
 -- C++ SpellHitTarget (boss_onyxia.cpp:276-294): a breath spell
 -- hitting a player fails the She Deep Breaths More latch
 -- (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL)). The ranges
@@ -718,5 +769,6 @@ RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
 end)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
+RegisterCreatureEvent(ENTRY, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY, 15, onyxiaSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 23, onReset)

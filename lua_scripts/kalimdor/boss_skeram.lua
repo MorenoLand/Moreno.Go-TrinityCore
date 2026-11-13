@@ -13,7 +13,8 @@
 -- NPC_SKERAM = 15263; creature_template ScriptName binding stays
 -- DB-side). DATA_SKERAM = 0 (temple_of_ahnqiraj.h:30).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
--- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 23 OnReset.
+-- 3 OnTargetDied, 4 OnDied, 9 OnDamageTaken, 19 OnJustSummoned,
+-- 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- The C++ UpdateAI IsWithinMeleeRange gate for the Earth Shock
@@ -46,15 +47,19 @@
 --   The DoCastAOE SPELL_SUMMON_IMAGES 747 leg is PORTED below as a
 --   triggered self-cast (DoCastAOE = self-cast convention).
 --   SetVisible(false) PORTED via the creature:SetVisible bridge (Unit.cpp:8656).
+-- - JustSummoned (event 19, PORTED 2026-11-13, onJustSummoned):
+--   the BlinkSpells shuffle over boss + images (_flag bit
+--   machine), health seeding (10/20/50% by boss HP), AttackStart
+--   on a random target (C++ boss_skeram.cpp:88-125). The trigger
+--   chain is live: the split leg casts 747, whose effect-28 summon
+--   runs creatureEffectSummonType (boss_ai.go:4844) through the
+--   shared summonTempCreature funnel, firing ev19 on the caster
+--   (lua_creature_events.go:190; balinda/kaelthas precedent).
+--   SpellKnown-gated: dormant until Spell.dbc ships 747.
+--   summons.Summon bookkeeping stays out (engine tracks OwnerGUID).
 -- - Talk: SAY_AGGRO 0 on engage, SAY_SLAY 1 on kill,
 --   SAY_SPLIT 2 at split thresholds, SAY_DEATH 3 on death.
 -- Unmodeled (documented-only, no bridges):
--- - JustSummoned image-positioning leg: BlinkSpells shuffle over
---   the summoned images, health seeding (10/20/50% by boss HP),
---   AttackStart on random target, summons.Summon bookkeeping —
---   all inside the summon-image AI (spell-effect spawns,
---   unreachable from the boss script — the images are not Lua
---   summons, so no event-19 handler can position them).
 -- - JustDied !IsSummon gate + image DespawnOrUnsummon PORTED
 --   below (creature:IsSummon bridge, engine/world/
 --   lua_creature_events.go + lua_objects.go; the BossAI::JustDied
@@ -69,10 +74,9 @@
 --   on !IsSummon (see onDied).
 -- - SelectTarget/AttackStart/GetThreatModifiers — the
 --   fulfillment pool now uses the threat list (GetAITargets,
---   anastari precedent); the remaining SelectTarget arm is the
---   JustSummoned image AttackStart pick (boss_skeram.cpp:109),
---   which stays out with the summon-image AI (AttackStart is
---   bridged, but the image AI itself is unreachable).
+--   anastari precedent); the JustSummoned image AttackStart pick
+--   (boss_skeram.cpp:109) is PORTED in onJustSummoned (random
+--   alive threat-list unit, any type — onyxia idiom).
 local DATA_SKERAM = 0 -- temple_of_ahnqiraj.h:30
 local ENTRY = 15263
 
@@ -119,7 +123,7 @@ end
 local function st(guid)
     local s = flags[guid]
     if not s then
-        s = { splitHpct = 75 }
+        s = { splitHpct = 75, flag = 0 }
         flags[guid] = s
     end
     return s
@@ -283,6 +287,82 @@ local function onDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ JustSummoned (boss_skeram.cpp:88-125), event 19: per summoned
+-- image, the boss/image BlinkSpells shuffle over the _flag bit
+-- machine, AttackStart on a random target, and the health seeding
+-- (10/20/50% of boss max by boss HP). The trigger chain is live:
+-- the split leg casts SPELL_SUMMON_IMAGES 747, whose effect-28
+-- summon runs creatureEffectSummonType (boss_ai.go:4844) through
+-- the shared summonTempCreature funnel, which fires ev19 on the
+-- caster (lua_creature_events.go:190; balinda/kaelthas precedent,
+-- round-12 strip-1). SpellKnown-gated: dormant until Spell.dbc
+-- ships 747 (same caveat as the True Fulfillment SpellScript
+-- above). The _flag machine, in C++ order: if any bit is set, the
+-- boss blinks with a free slot and sets that bit + bit 7; the
+-- image then blinks with a free slot; if bit 7 is set the flag
+-- resets (a split summons exactly 2 images, so the reset lands
+-- on the second summon). bit32 is live in-tree (zulaman /
+-- vaelastrasz precedent). summons.Summon bookkeeping stays out
+-- (the engine tracks OwnerGUID; no consumer — no ev21 in C++).
+local function randomAliveThreatUnit(creature)
+    local candidates = {}
+    for _, t in ipairs(creature:GetAITargets()) do
+        if t:IsAlive() then
+            candidates[#candidates + 1] = t
+        end
+    end
+    if #candidates > 0 then
+        return candidates[math.random(#candidates)]
+    end
+    return nil
+end
+
+local function onJustSummoned(event, creature, summoned)
+    local guid = creature:GetGUIDLow()
+    local s = st(guid)
+    -- C++ uint8 rand = 0; the loops re-roll while the slot is taken.
+    local rand = 0
+    if s.flag ~= 0 then
+        while bit32.band(s.flag, bit32.lshift(1, rand)) ~= 0 do
+            rand = math.random(0, 2)
+        end
+        creature:CastSpell(creature, BLINK_SPELLS[rand + 1])
+        s.flag = bit32.bor(s.flag, bit32.lshift(1, rand))
+        s.flag = bit32.bor(s.flag, bit32.lshift(1, 7))
+    end
+    while bit32.band(s.flag, bit32.lshift(1, rand)) ~= 0 do
+        rand = math.random(0, 2)
+    end
+    summoned:CastSpell(summoned, BLINK_SPELLS[rand + 1])
+    s.flag = bit32.bor(s.flag, bit32.lshift(1, rand))
+    if bit32.band(s.flag, bit32.lshift(1, 7)) ~= 0 then
+        s.flag = 0
+    end
+    -- C++ SelectTarget(Random) — any-type alive threat-list unit
+    -- (onyxia randomAliveThreatUnit idiom); AttackStart twin is
+    -- EngageWithTarget (lua_creature_events.go:1450).
+    local target = randomAliveThreatUnit(creature)
+    if target then
+        summoned:EngageWithTarget(target)
+    end
+    -- C++ health seeding: boss HP < 25% -> 50% of boss max,
+    -- < 50% -> 20%, else 10%; the image's health is the same
+    -- fraction of ITS new max (SetHealth reads the post-SetMaxHealth
+    -- max, C++ order). math.floor mirrors the float->uint32
+    -- truncation in SetMaxHealth/SetHealth.
+    local pct = creature:GetHealthPct()
+    local imagePct
+    if pct < 25.0 then
+        imagePct = 0.50
+    elseif pct < 50.0 then
+        imagePct = 0.20
+    else
+        imagePct = 0.10
+    end
+    summoned:SetMaxHealth(math.floor(creature:GetMaxHealth() * imagePct))
+    summoned:SetHealth(math.floor(summoned:GetMaxHealth() * (pct / 100.0)))
+end
+
 local function onEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -357,4 +437,5 @@ RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
+RegisterCreatureEvent(ENTRY, 19, onJustSummoned)
 RegisterCreatureEvent(ENTRY, 23, onReset)

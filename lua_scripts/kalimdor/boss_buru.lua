@@ -47,9 +47,12 @@
 --   all triggered); the ManageRespawn leg stays out (cross-AI
 --   dynamic_cast to boss_buruAI, no bridge — the Eggs GuidList +
 --   EVENT_RESPAWN_EGG scheduling with it).
--- - npc_buru_egg's cross-AI legs (JustEngagedWith/JustSummoned
---   buru retargeting via instance GetGuidData(DATA_BURU)):
---   no bridge.
+-- - npc_buru_egg's cross-AI legs: JustSummoned PORTED 2026-11-13
+--   (eggJustSummoned below — the header's old "no bridge" claim for it
+--   is stale: GetInstanceCreature + the ev5 SetGuidData latch + ev19
+--   all exist now). JustEngagedWith (boss_buru.cpp:213-216, Buru
+--   AttackStart when Buru not in combat) stays out — the IsInCombat
+--   read needs a bridge check first (follow-up, not this tick).
 -- - spell_egg_explosion (SpellScript): the distance-scaled dummy
 --   damage arm is PORTED below (RegisterSpellEvent 19593 ev5); the
 --   AfterCast arm (FindNearestCreature Buru at 5yd -> DoAction
@@ -85,6 +88,7 @@ local SPELL_THORNS = 25640
 local SPELL_BURU_TRANSFORM = 24721
 
 local ENTRY_BURU_EGG = 15514 -- Wowhead-verified 2026-11-07, see header
+local ENTRY_HATCHLING = 15521 -- ruins_of_ahnqiraj.h:52, NPC_HATCHLING
 local SPELL_EXPLODE = 19593 -- boss_buru.cpp:39
 local SPELL_EXPLODE_2 = 5255 -- boss_buru.cpp:40
 local SPELL_SUMMON_HATCHLING = 1881 -- boss_buru.cpp:38
@@ -296,6 +300,51 @@ RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
 RegisterCreatureEvent(ENTRY_BURU_EGG, 4, eggDied)
+
+-- C++ instance OnCreatureCreate latching (instance_ruins_of_ahnqiraj.cpp
+-- :36/:85, DATA_BURU) has no Go equivalent — the instance guid store is
+-- Lua-populated (instance_guid_store.go header), so Buru latches its own
+-- GUID from ev5 OnSpawn (fired by motionFor on first spawn and respawn),
+-- the mirror of the C++ create leg. Consumed by eggJustSummoned below.
+local function onSpawn(event, creature)
+    creature:SetGuidData(DATA_BURU)
+end
+
+RegisterCreatureEvent(ENTRY, 5, onSpawn)
+
+-- C++ npc_buru_eggAI::JustSummoned (boss_buru.cpp:217-223): summoned
+-- entry == NPC_HATCHLING (15521) -> Buru via instance
+-- GetGuidData(DATA_BURU) -> SelectTarget(Random) from Buru's threat
+-- list -> hatchling AttackStart(target). The ev19 fire reaches the egg
+-- because the hatchling summon (SPELL_SUMMON_HATCHLING 1881, cast in
+-- eggDied) resolves through the creature spell-summon funnels
+-- (creatureEffectSummonType boss_ai.go:4866 / creatureEffectSummonPet
+-- :5138), both routing via summonTempCreature with SummonerMotion, whose
+-- ev19 fire is lua_creature_events.go:190. GetInstanceCreature is the
+-- ObjectAccessor::GetCreature twin (lua_creature_events.go:~7075);
+-- EngageWithTarget is the AttackStart twin (ayamiss swarmer precedent).
+-- C++ SelectTarget(Random) with no args takes any threat-list unit, so
+-- the pool is alive-only, not player-only (onSwarmerAttack precedent).
+local function eggJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() ~= ENTRY_HATCHLING then
+        return
+    end
+    local buru = creature:GetInstanceCreature(DATA_BURU)
+    if buru == nil then
+        return
+    end
+    local candidates = {}
+    for _, unit in ipairs(buru:GetAITargets()) do
+        if not unit:IsDead() then
+            candidates[#candidates + 1] = unit
+        end
+    end
+    if #candidates > 0 then
+        summoned:EngageWithTarget(candidates[math.random(#candidates)])
+    end
+end
+
+RegisterCreatureEvent(ENTRY_BURU_EGG, 19, eggJustSummoned)
 
 -- C++ boss_buruAI::DoAction(ACTION_EXPLODE) (boss_buru.cpp:100-105):
 -- phase EGG only -> Unit::DealDamage(me, me, 45000). Reached via

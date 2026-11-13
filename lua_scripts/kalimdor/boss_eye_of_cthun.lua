@@ -98,6 +98,16 @@
 -- arm rides the cross-AI hand-off to the cthun body (DoAction has no
 -- bridge); PHASE_CTHUN_DONE (:396-:400, FindNearestCreature +
 -- DespawnOrUnsummon — no bridge).
+-- DamageTaken (:406-:435, fake death on lethal damage in GREEN/RED
+-- phases — InterruptNonMeleeSpells, RemoveAurasDueToSpell, SetFlag,
+-- SetTarget, SetHealth(0), damage = 0, RemoveAllAuras, then instance
+-- SetData TRANSITION): BLOCKED, round-14 re-triage — every leg except
+-- the instance SetData write is individually bridged, but the arm only
+-- runs while instance->GetData(DATA_CTHUN_PHASE) is GREEN/RED and no
+-- instance GetData/SetData bridge exists (the bridged creature:GetData
+-- is per-AI ScriptData, lua_creature_events.go:800-835, not the
+-- instance store). Porting the legs without the gate would fake-kill
+-- the eye on any lethal hit, including in STOMACH/WEAK/DONE.
 --
 -- The 4 tentacle NPCs' own AIs are ported separately
 -- (npc_eye_tentacle 15726, npc_claw_tentacle 15725,

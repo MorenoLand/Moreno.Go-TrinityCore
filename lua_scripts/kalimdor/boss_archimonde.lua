@@ -123,8 +123,9 @@
 --   18104 at target+15,+15, TEMPSUMMON_TIMED_DESPAWN 27s) and
 --   SummonCreature(NPC_DOOMFIRE 18095 at target-15,-15,
 --   TEMPSUMMON_TIMED_DESPAWN 27s), JustSummoned pairing via
---   DoomfireSpiritGUID, the doomfire self-casts SPELL_DOOMFIRE_SPAWN
---   32074 + SPELL_DOOMFIRE 31945 and MoveFollows the spirit — no
+--   DoomfireSpiritGUID (PORTED 2026-11-13 as ev19 onJustSummoned —
+--   self-casts 32074 + 31945 and MoveFollow the spirit; only the
+--   SummonCreature timer below stays out) — no
 --   summon-with-position or movement bridge. Timer not armed; the
 --   SAY_DOOMFIRE Talk is tied to the unbridgeable choreography.
 -- - EVENT_DISTANCE_CHECK 30s -> 5s: instance->GetCreature(
@@ -141,8 +142,12 @@
 --   event 24 (this tick — the old "evade-home recast documented-only"
 --   note was stale; self-DoAction = inline at the ported call site,
 --   baltharus precedent).
--- - JustSummoned GUID legs (ANCIENT_WISP AttackStart on the boss,
---   DOOMFIRE_SPIRIT GUID capture) — no summon model.
+-- - JustSummoned (ev19) PORTED 2026-11-13 (onJustSummoned): wisp
+--   AttackStart via EngageWithTarget, spirit GUID latch as a stored
+--   summon object, doomfire self-casts 32074 + 31945 + MoveFollow the
+--   spirit. Dormant until the EVENT_DOOMFIRE / EVENT_SUMMON_WHISP
+--   summon timers are armed (below); the pairing half of those
+--   bullets is done, only the summon timers stay out.
 -- - npc_doomfire (NPC_DOOMFIRE 18095): DamageTaken zeroes damage — no
 --   bridge; entry unverified (below).
 -- - npc_doomfire_targetting (NPC_DOOMFIRE_SPIRIT 18104): the
@@ -198,6 +203,13 @@ local SPELL_DRAIN_WORLD_TREE    = 39140
 local SPELL_DRAIN_WORLD_TREE_DUMMY = 39142 -- boss_archimonde.cpp:542
 local SPELL_DRAIN_WORLD_TREE_TRIGGERED = 39141 -- boss_archimonde.cpp:53
 
+-- boss_archimonde.cpp:84-88 (enum Summons) + :59-61.
+local NPC_ANCIENT_WISP = 17946
+local NPC_DOOMFIRE_SPIRIT = 18104
+local NPC_DOOMFIRE = 18095
+local SPELL_DOOMFIRE_SPAWN = 32074
+local SPELL_DOOMFIRE = 31945
+
 local SPELL_UNLEASH_SOUL_RED    = 32053
 local SPELL_UNLEASH_SOUL_YELLOW = 32054
 local SPELL_UNLEASH_SOUL_GREEN  = 32057
@@ -236,7 +248,8 @@ local function bossState(guid)
     local st = state[guid]
     if not st then
         st = { enraged = false, protected = false,
-               charges = { red = 0, yellow = 0, green = 0 } }
+               charges = { red = 0, yellow = 0, green = 0 },
+               doomfireSpirit = nil }
         state[guid] = st
     end
     return st
@@ -603,6 +616,46 @@ RegisterCreatureEvent(ENTRY, 5, onSpawn)
 RegisterCreatureEvent(ENTRY, 24, onReachHome)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ boss_archimondeAI::JustSummoned (boss_archimonde.cpp:465-491):
+-- ANCIENT_WISP 17946 -> summoned->AI()->AttackStart(me);
+-- DOOMFIRE_SPIRIT 18104 -> DoomfireSpiritGUID capture;
+-- DOOMFIRE 18095 -> non-triggered self-cast SPELL_DOOMFIRE_SPAWN
+-- 32074, self-cast SPELL_DOOMFIRE 31945 with originalCaster = the
+-- boss GUID (no Lua twin — CastSpell takes target + id + triggered
+-- only; the cast itself is C++-exact), then MoveFollow(the latched
+-- spirit, 0, 0) + clear the latch. ev19 fires on the summoner with
+-- (event, summoner, summon) (lua_creature_events.go:190, 7897-7909).
+-- The latch stores the summon object, not a GUID (no
+-- GetCreature-by-GUID bridge; a stored object is exact here — the
+-- spirit is summoned in the same SummonDoomfire call as the doomfire,
+-- so it cannot despawn between capture and use, and the latch is
+-- cleared on use). DORMANT until EVENT_DOOMFIRE / EVENT_SUMMON_WHISP
+-- are armed (both summon timers stay out — see header); the handler
+-- is C++-faithful and fires the moment the summon timers land.
+local function onJustSummoned(event, creature, summon)
+    if not summon then
+        return
+    end
+    local entry = summon:GetEntry()
+    if entry == NPC_ANCIENT_WISP then
+        summon:EngageWithTarget(creature)
+    elseif entry == NPC_DOOMFIRE_SPIRIT then
+        local st = bossState(creature:GetGUIDLow())
+        st.doomfireSpirit = summon
+    elseif entry == NPC_DOOMFIRE then
+        summon:CastSpell(summon, SPELL_DOOMFIRE_SPAWN)
+        summon:CastSpell(summon, SPELL_DOOMFIRE)
+        local st = bossState(creature:GetGUIDLow())
+        local spirit = st.doomfireSpirit
+        st.doomfireSpirit = nil
+        if spirit then
+            summon:MoveFollow(spirit, 0, 0)
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY, 19, onJustSummoned)
 
 -- C++ spell_archimonde_drain_world_tree_dummy::HandleScript
 -- (boss_archimonde.cpp:558-561): EFFECT_0 DUMMY OnEffectHitTarget —
