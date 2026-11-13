@@ -868,6 +868,15 @@ type timer struct {
 	delay    int64
 	repeats  int
 	elapsed  int64
+	// owner is the WorldObject GUID the timer belongs to (Eluna
+	// WorldObject:RegisterEvent, WorldObjectMethods.h:867-897); 0 is a
+	// global CreateLuaEvent timer. object re-resolves the owner at
+	// fire time and returns the object to push as the fourth
+	// callback arg (C++ OnTimedEvent, ServerHooks.cpp:67-82); a false
+	// return drops the timer without firing, which is the Go model of
+	// Eluna destroying an object's event processor with the object.
+	owner  uint64
+	object func(ctx context.Context) (any, bool)
 }
 
 func NewRuntime(c Config) *Runtime {
@@ -1415,7 +1424,23 @@ func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
 			r.state.PushInteger(current.id)
 			r.state.PushInteger(int(callbackDelay))
 			r.state.PushInteger(remainingRepeats)
-			if err := r.state.ProtectedCall(3, 0, 0); err != nil && r.config.Logger != nil {
+			callArgs := 3
+			if current.object != nil {
+				obj, ok := current.object(ctx)
+				if !ok {
+					removeCurrent = true
+					break
+				}
+				if err := pushValue(r.state, obj); err != nil {
+					if r.config.Logger != nil {
+						r.config.Logger.Error("lua timer failed", "id", current.id, "error", err)
+					}
+					removeCurrent = true
+					break
+				}
+				callArgs = 4
+			}
+			if err := r.state.ProtectedCall(callArgs, 0, 0); err != nil && r.config.Logger != nil {
 				r.config.Logger.Error("lua timer failed", "id", current.id, "error", err)
 			}
 			if remove {
@@ -2365,33 +2390,85 @@ func (r *Runtime) storeFunction(state *lua.State, index int) int {
 	return ref
 }
 
-func (r *Runtime) createLuaEvent(state *lua.State) int {
-	if !state.IsFunction(1) {
-		lua.ArgumentError(state, 1, "function expected")
+// parseTimerArgs reads the (function, delay|{min,max}, repeats)
+// tail shared by CreateLuaEvent and CreateObjectTimer (Eluna
+// WorldObject:RegisterEvent, WorldObjectMethods.h:867-897: delay table
+// {min, max}, repeats default 1, 0 infinite; min > max is an error).
+// functionIndex is the stack index of the callback; bad args raise a
+// Lua error like the original CreateLuaEvent body did.
+func parseTimerArgs(state *lua.State, functionIndex int) (minDelay, maxDelay int64, repeats int) {
+	if !state.IsFunction(functionIndex) {
+		lua.ArgumentError(state, functionIndex, "function expected")
 	}
-	var minDelay, maxDelay int64
-	if state.IsTable(2) {
-		state.RawGetInt(2, 1)
+	delayIndex := functionIndex + 1
+	if state.IsTable(delayIndex) {
+		state.RawGetInt(delayIndex, 1)
 		minDelay = int64(lua.CheckInteger(state, -1))
 		state.Pop(1)
-		state.RawGetInt(2, 2)
+		state.RawGetInt(delayIndex, 2)
 		maxDelay = int64(lua.CheckInteger(state, -1))
 		state.Pop(1)
 	} else {
-		minDelay = int64(lua.CheckInteger(state, 2))
+		minDelay = int64(lua.CheckInteger(state, delayIndex))
 		maxDelay = minDelay
 	}
 	if minDelay < 1 || maxDelay < minDelay {
-		lua.ArgumentError(state, 2, "invalid delay range")
+		lua.ArgumentError(state, delayIndex, "invalid delay range")
 	}
-	repeats := 1
-	if state.Top() >= 3 && state.IsNumber(3) {
-		repeats = lua.CheckInteger(state, 3)
+	repeats = 1
+	if state.Top() >= delayIndex+1 && state.IsNumber(delayIndex+1) {
+		repeats = lua.CheckInteger(state, delayIndex+1)
 	}
+	return minDelay, maxDelay, repeats
+}
+
+func (r *Runtime) createLuaEvent(state *lua.State) int {
+	minDelay, maxDelay, repeats := parseTimerArgs(state, 1)
 	id := r.nextRef
 	r.timers = append(r.timers, timer{id: id, ref: r.storeFunction(state, 1), minDelay: minDelay, maxDelay: maxDelay, delay: timerDelay(minDelay, maxDelay), repeats: repeats})
 	state.PushInteger(id)
 	return 1
+}
+
+// CreateObjectTimer registers a WorldObject:RegisterEvent timer (Eluna
+// WorldObjectMethods.h:867-897) for owner: the callback fires as
+// (eventId, delay, repeats, object) like C++ OnTimedEvent, with object
+// re-resolved at fire time; when the owner no longer resolves the
+// timer is dropped, matching Eluna destroying the object's event
+// processor with the object. functionIndex is the callback's stack
+// index in the calling method dispatch (self is index 1, so 2 for
+// obj:RegisterEvent(fn, ...)). The id comes from the same counter as
+// CreateLuaEvent, so global and object ids never collide.
+func (r *Runtime) CreateObjectTimer(state *lua.State, functionIndex int, owner uint64, object func(ctx context.Context) (any, bool)) int {
+	minDelay, maxDelay, repeats := parseTimerArgs(state, functionIndex)
+	id := r.nextRef
+	r.timers = append(r.timers, timer{id: id, ref: r.storeFunction(state, functionIndex), minDelay: minDelay, maxDelay: maxDelay, delay: timerDelay(minDelay, maxDelay), repeats: repeats, owner: owner, object: object})
+	return id
+}
+
+// RemoveObjectTimer aborts one object timer by id (WorldObject:
+// RemoveEventById, WorldObjectMethods.h:903-911); timers owned by
+// another object or global timers are untouched, matching C++ where
+// the per-object processor only holds its own events.
+func (r *Runtime) RemoveObjectTimer(owner uint64, id int) {
+	for index, current := range r.timers {
+		if current.owner == owner && current.id == id {
+			r.timers = append(r.timers[:index], r.timers[index+1:]...)
+			return
+		}
+	}
+}
+
+// RemoveObjectTimers aborts every timer owned by owner (WorldObject:
+// RemoveEvents, WorldObjectMethods.h:914-919); global timers survive.
+func (r *Runtime) RemoveObjectTimers(owner uint64) {
+	remaining := r.timers[:0]
+	for _, current := range r.timers {
+		if current.owner != owner {
+			remaining = append(remaining, current)
+		}
+	}
+	r.timers = remaining
 }
 
 func timerDelay(minDelay, maxDelay int64) int64 {
@@ -2404,7 +2481,7 @@ func timerDelay(minDelay, maxDelay int64) int64 {
 func (r *Runtime) removeEvent(state *lua.State) int {
 	id := lua.CheckInteger(state, 1)
 	for index, current := range r.timers {
-		if current.id == id {
+		if current.owner == 0 && current.id == id {
 			r.timers = append(r.timers[:index], r.timers[index+1:]...)
 			break
 		}
@@ -2413,7 +2490,13 @@ func (r *Runtime) removeEvent(state *lua.State) int {
 }
 
 func (r *Runtime) removeEvents(state *lua.State) int {
-	r.timers = nil
+	remaining := r.timers[:0]
+	for _, current := range r.timers {
+		if current.owner != 0 {
+			remaining = append(remaining, current)
+		}
+	}
+	r.timers = remaining
 	return 0
 }
 

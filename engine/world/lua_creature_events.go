@@ -6730,6 +6730,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	for name, fn := range luaUnitFriendlyMethods(s, func() luaRangeOrigin { return s.luaRangeOriginForMotion(motion) }) {
 		methods[name] = fn
 	}
+	// WorldObject timed events (WorldObjectMethods.h:867-919); see
+	// luaWorldObjectEventMethods in lua_worldobject_events.go. The
+	// owner re-resolves through the live motion, so a despawned
+	// creature's timers are dropped at fire time.
+	for name, fn := range luaWorldObjectEventMethods(s, motion.GUID, func(ctx context.Context) (any, bool) {
+		live := s.findCreatureMotion(motion.Map, motion.InstanceID, motion.GUID)
+		if live == nil {
+			return nil, false
+		}
+		obj := s.luaMotionCreature(live)
+		if obj == nil {
+			return nil, false
+		}
+		return obj, true
+	}) {
+		methods[name] = fn
+	}
 	// GetGameObjectsInGrid(entry, dist) is
 	// WorldObject::GetGameObjectListWithEntryInGrid (Object.cpp:3220):
 	// every gameobject of entry within dist yards (2D metric, no

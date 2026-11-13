@@ -3945,6 +3945,23 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	}) {
 		methods[name] = fn
 	}
+	// WorldObject timed events (WorldObjectMethods.h:867-919); see
+	// luaWorldObjectEventMethods in lua_worldobject_events.go. The
+	// owner re-resolves through the live motion, so a despawned
+	// creature's timers are dropped at fire time.
+	for name, fn := range luaWorldObjectEventMethods(s.server, state.GUID, func(ctx context.Context) (any, bool) {
+		motion := luaTapMotion()
+		if motion == nil {
+			return nil, false
+		}
+		obj := s.server.luaMotionCreature(motion)
+		if obj == nil {
+			return nil, false
+		}
+		return obj, true
+	}) {
+		methods[name] = fn
+	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(s.server, nil, state.GUID, methods)
 	// Indexed values (ObjectMethods.h) delegate to the motion backend
@@ -4737,6 +4754,30 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 	}
 	// Eluna WorldObject sound methods (WorldObjectMethods.h:1161-1242).
 	luaWorldObjectSoundMethods(srv, nil, state.GUID, methods)
+	// WorldObject timed events (WorldObjectMethods.h:867-919); see
+	// luaWorldObjectEventMethods in lua_worldobject_events.go. The
+	// owner re-resolves from the DB row; a deleted row drops the
+	// timer at fire time. DELTA: a statically spawned GO removed
+	// from the world still resolves from its DB row, so its timers
+	// keep firing where C++ would have destroyed the processor —
+	// only dynamic (despawned) GOs drop.
+	for name, fn := range luaWorldObjectEventMethods(srv, state.GUID, func(ctx context.Context) (any, bool) {
+		loaded, ok := srv.loadLuaGameObject(ctx, state.LowGUID, state.Entry)
+		if !ok {
+			return nil, false
+		}
+		loaded.InstanceID = state.InstanceID
+		if srv.isGameObjectHiddenInInstance(loaded.Map, loaded.InstanceID, loaded.GUID) {
+			return nil, false
+		}
+		obj := srv.luaGameObjectObject(loaded)
+		if obj == nil {
+			return nil, false
+		}
+		return obj, true
+	}) {
+		methods[name] = fn
+	}
 	// Indexed values (ObjectMethods.h); see goIndexedValueBackend in
 	// lua_values.go for the dyn/static read model and write rules.
 	registerIndexedValueMethods(methods, goIndexedValueBackend(srv, state))

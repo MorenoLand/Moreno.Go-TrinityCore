@@ -7378,6 +7378,19 @@ func (s *session) luaPlayer() *scripting.Object {
 	for name, fn := range luaUnitFriendlyMethods(s.server, s.luaRangeOriginForPlayer) {
 		methods[name] = fn
 	}
+	// WorldObject timed events (WorldObjectMethods.h:867-919); see
+	// luaWorldObjectEventMethods in lua_worldobject_events.go. The
+	// owner re-resolves through the live session player, so a logged
+	// out player's timers are dropped at fire time.
+	for name, fn := range luaWorldObjectEventMethods(s.server, state.GUID, func(ctx context.Context) (any, bool) {
+		obj := s.luaPlayer()
+		if obj == nil {
+			return nil, false
+		}
+		return obj, true
+	}) {
+		methods[name] = fn
+	}
 	// FindNearestCreature(entry, dist[, alive]) is the player-surface twin of the
 	// creature bridge (lua_creature_events.go:2435): the nearest
 	// creature of entry within dist yards (3D gate with both combat

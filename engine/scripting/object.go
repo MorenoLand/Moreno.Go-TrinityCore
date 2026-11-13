@@ -102,6 +102,17 @@ func objectNewIndex(state *lua.State) int {
 	return 0
 }
 
+type luaCallStateKey struct{}
+
+// CallState returns the *lua.State of the method call in progress, if
+// ctx is a method-dispatch context from objectIndex. Object methods
+// that need raw stack access — WorldObject:RegisterEvent stores its
+// callback function ref — read it here; plain value methods never do.
+func CallState(ctx context.Context) (*lua.State, bool) {
+	state, ok := ctx.Value(luaCallStateKey{}).(*lua.State)
+	return state, ok
+}
+
 func objectIndex(state *lua.State) int {
 	object := lua.CheckUserData(state, 1, objectMetaTable).(*Object)
 	name := lua.CheckString(state, 2)
@@ -127,7 +138,7 @@ func objectIndex(state *lua.State) int {
 			for index := 2; index <= call.Top(); index++ {
 				args = append(args, luaValue(call, index))
 			}
-			values, err := method(context.Background(), args)
+			values, err := method(context.WithValue(context.Background(), luaCallStateKey{}, call), args)
 			if err != nil {
 				lua.Errorf(call, "%s: %s", name, err)
 			}
