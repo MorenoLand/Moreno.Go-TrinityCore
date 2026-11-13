@@ -54,10 +54,11 @@
 -- target self) -- the aura carries the 10-min timer itself.
 -- KilledUnit — C++-GATED on who->GetTypeId() == TYPEID_PLAYER,
 -- then Talk(SAY_KILLED_PLAYER_P_ONE 3 / P_TWO 8 / P_THREE 15)
--- selected by the AI's internal _phase (PHASE_ONE / PHASE_TWO /
--- PHASE_THREE) with a 5s kill-spam filter — DOCUMENTED-ONLY:
--- the phase-select has no bridge (no phase model in Lua), so no
--- faithful port exists.
+-- selected by the AI's internal _phase with a 5s kill-spam filter —
+-- the PHASE_ONE leg is PORTED this tick (malygosKilledUnit, below):
+-- health > 50 is the airtight PHASE_ONE proxy (the C++ flip is at
+-- GetHealthPct() <= 50); the P_TWO / P_THREE Talks stay out, no
+-- proxy distinguishes them.
 -- npc_arcane_overload (NPC_ARCANE_OVERLOAD 30282, own file
 -- npc_arcane_overload.lua, registered via
 -- engine/world/boss_ai.go:RegisterLuaBoss("npc_arcane_overload",
@@ -145,8 +146,11 @@
 -- that same unbridged MovementInform: stays out, except the
 -- vortex + random-portal points (PORTED below). DamageTaken is only the lethal clamp (damage > health &&
 -- _phase != PHASE_THREE -> damage = health - 1); ev9 IS bridged
--- pre-damage with a rewrite (lua_creature_events.go:6955) but the
--- arm stays out — no phase model to tell PHASE_THREE. UpdateAI (phase-one arcane event machine,
+-- pre-damage with a rewrite (fireCreatureDamageTaken,
+-- lua_creature_events.go:7565) and the clamp is PORTED this tick
+-- (malygosDamageTaken, below), gated on the airtight not-PHASE_THREE
+-- proxy health > 50 — C++-exact in PHASE_ONE; lethal hits in
+-- PHASE_TWO still kill in Go (no P2/P3 proxy). UpdateAI (phase-one arcane event machine,
 -- phase-three disk/scion machine) — no timer-event / cast /
 -- phase bridges; EVENT_VORTEX + EVENT_POWER_SPARKS are PORTED
 -- (CreateLuaEvent timers + DoAction / instance SetData, below).
@@ -154,7 +158,11 @@
 -- (Talk SAY_BUFF_SPARK 14 + despawn the spark) stays out: the
 -- trigger is Malygos's MoveInLineOfSight arm (event 27 exists,
 -- but the arm is PHASE_ONE-gated with no phase model in Lua —
--- next bullet), so event 14 can never fire with this ID;
+-- next bullet), so event 14 can never fire with this ID
+-- (re-verified this tick: whole-tree grep — the only 56152 cast
+-- site is that MIOS arm, boss_malygos.cpp:652, and the spark's
+-- MoveFollow approach is unported, so no spark ever reaches
+-- 2.5 yd; ev14 itself is spellKnown-gated, boss_ai.go:1825);
 -- SPELL_MALYGOS_BERSERK 47008 -> Talk(EMOTE_HIT_BERSERKER_TIMER
 -- 19) stays out: the trigger is the self-cast SPELL_BERSERK 60670
 -- aura's 10-minute tick delivering 47008, but the Go creature-cast
@@ -277,6 +285,7 @@ local HEART_OF_MAGIC_SPAWN_O = 0.0 -- boss_malygos.cpp:291
 local NPC_ALEXSTRASZA = 32295 -- eye_of_eternity.h:57
 
 local SAY_START_P_ONE = 1
+local SAY_KILLED_PLAYER_P_ONE = 3
 local SAY_DEATH = 17
 
 -- C++ SPELL_BERSERK = 60670 (boss_malygos.cpp :105): DoCast(SPELL_BERSERK)
@@ -736,6 +745,58 @@ end
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
+-- C++ boss_malygosAI::KilledUnit (boss_malygos.cpp:603-629): player
+-- victim only, then Talk by _phase (P_ONE 3 / P_TWO 8 / P_THREE 15)
+-- with a 5s kill-spam filter (EVENT_PREVENT_SAY_SPAM_ON_KILL). The
+-- phase select has no Lua model, but health > 50 is the airtight
+-- PHASE_ONE proxy (C++ flips to PHASE_TWO at GetHealthPct() <= 50,
+-- UpdateAI :740, and PHASE_THREE health never exceeds 50%), so the
+-- PHASE_ONE leg is PORTED this tick; the P_TWO / P_THREE Talks stay
+-- out — no proxy distinguishes them. The filter is the per-GUID bool
+-- below, cleared by the 5s timer (timers-table idiom) and by
+-- Reset/JustDied (C++ events.Reset). Residual: a kill landing in the
+-- sub-second window where health just crossed 50% but UpdateAI has
+-- not flipped yet says nothing (C++ would still Talk P_ONE — _phase
+-- is still PHASE_ONE at KilledUnit time).
+local killSpamFilter = {}
+
+local function malygosKilledUnit(event, creature, victim)
+    if victim == nil or victim:GetObjectType() ~= "Player" then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if killSpamFilter[guid] then
+        return
+    end
+    if creature:GetHealthPct() > 50 then
+        creature:Talk(SAY_KILLED_PLAYER_P_ONE)
+        killSpamFilter[guid] = true
+        schedule(guid, "killSpam", 5000, function()
+            killSpamFilter[guid] = nil
+        end)
+    end
+end
+
+-- C++ boss_malygosAI::DamageTaken (boss_malygos.cpp:726-730): the
+-- lethal clamp only — damage > health && _phase != PHASE_THREE ->
+-- damage = health - 1. ev9 IS bridged pre-damage with a rewrite
+-- (fireCreatureDamageTaken, lua_creature_events.go:7565; args
+-- (event, creature, attacker, damage); `return false, newDamage`
+-- is the midnight precedent). The PHASE_THREE gate has no Lua
+-- model, but health > 50 is the airtight not-PHASE_THREE proxy
+-- (PHASE_TWO starts at the <= 50 flip and PHASE_THREE health never
+-- exceeds 50%), so the clamp is PORTED this tick gated on it —
+-- C++-exact in PHASE_ONE (strict `damage > health`, so a hit for
+-- exactly current health still kills, as in C++). Residual: lethal
+-- hits in PHASE_TWO still kill in Go (C++ would clamp to 1 HP);
+-- no proxy separates PHASE_TWO from PHASE_THREE.
+local function malygosDamageTaken(event, creature, attacker, damage)
+    local health = creature:GetHealth()
+    if health > 0 and damage > health and creature:GetHealthPct() > 50 then
+        return false, health - 1
+    end
+end
+
 -- C++ JustEngagedWith (boss_malygos.cpp :563-:579): me->setActive(true) +
 -- instance->CheckRequiredBosses gate +
 -- instance->SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE)
@@ -789,6 +850,7 @@ local function malygosDied(event, creature, killer)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     vortexState[guid] = nil
+    killSpamFilter[guid] = nil
     creature:SetBossState(DATA_MALYGOS_EVENT, BOSS_STATE_DONE)
     creature:Talk(SAY_DEATH)
     -- C++ arm order: the gift-box-bunny SummonGameObject leg
@@ -830,6 +892,7 @@ local function malygosReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     vortexState[guid] = nil
+    killSpamFilter[guid] = nil
     -- C++ Reset (boss_malygos.cpp:345/:371/:381): _despawned is the
     -- boss state == FAIL read at AI construction (the ctor; the AI
     -- is rebuilt on respawn, so the read below is the ctor's read);
@@ -862,7 +925,9 @@ local function malygosReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_MALYGOS, 1, malygosEnterCombat)
+RegisterCreatureEvent(ENTRY_MALYGOS, 3, malygosKilledUnit)
 RegisterCreatureEvent(ENTRY_MALYGOS, 4, malygosDied)
+RegisterCreatureEvent(ENTRY_MALYGOS, 9, malygosDamageTaken)
 RegisterCreatureEvent(ENTRY_MALYGOS, 23, malygosReset)
 RegisterCreatureEvent(ENTRY_MALYGOS, 28, malygosMovementInform)
 RegisterCreatureEvent(ENTRY_MALYGOS, 38, malygosDoAction)
