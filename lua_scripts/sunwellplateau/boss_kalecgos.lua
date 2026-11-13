@@ -811,7 +811,7 @@ end
 -- kalecgos-human -> EnterEvadeMode (EVADE_REASON_OTHER)
 -- (boss_kalecgos.cpp:496-505), which relays to the dragon
 -- (:471-474) — ported via grid sweep + dragon:EnterEvadeMode
--- (bridge live, lua_creature_events.go:5194; muru precedent).
+-- (bridge live, lua_creature_events.go:5519; muru precedent).
 local function sathrovarrTargetDied(event, creature, victim)
     if victim:GetObjectType() == "Player" then
         creature:Talk(SAY_SATH_SLAY)
@@ -877,7 +877,7 @@ end
 
 -- C++ EnterEvadeMode (boss_kalecgos.cpp:471-474): relay to the
 -- dragon via grid sweep + dragon:EnterEvadeMode (bridge live,
--- lua_creature_events.go:5194). No self-evade in C++ — Sathrovarr
+-- lua_creature_events.go:5519). No self-evade in C++ — Sathrovarr
 -- is _DespawnAtEvade'd by the dragon after 10s (no bridge). No
 -- recursion risk: the dragon's ev2 handler has no relay back, and
 -- triggerCreatureEvade no-ops when already evading.
@@ -916,6 +916,9 @@ end
 -- damage) -> triggered self-cast teleport back 46020, then
 -- Unit::Kill(unitCaster, me) via creature:Kill(caster).
 local function sathrovarrSpellHit(event, creature, caster, spellId)
+    if caster == nil then
+        return
+    end
     if spellId == SPELL_TAP_CHECK_DAMAGE then
         creature:CastSpell(creature, SPELL_TELEPORT_BACK, true)
         creature:Kill(caster)

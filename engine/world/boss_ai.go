@@ -14033,7 +14033,7 @@ func init() {
 	// shadowbolt/corruption-strike Talk+schedule arms, the spectral-
 	// realm-aura-filtered agony curse pick, the enrage/banish check
 	// timer, the lethal-damage-to-0 rewrite, the kill Talk and the
-	// tap-check SpellHit arm (kill-caster skipped — no kill bridge);
+	// tap-check SpellHit arm (kill-caster ported — creature:Kill bridge);
 	// its kalecgos enrage/banish/outro relays have no cross-creature
 	// bridge. The spectral-rift GO script and the five
 	// spell/aura scripts have no script bridges.
