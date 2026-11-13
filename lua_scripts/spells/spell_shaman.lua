@@ -142,9 +142,9 @@
 --
 -- PORTED (census rows 758-789, RegisterAuraEvent OnProc = 6,
 --   RegisterSpellEvent OnEffectHitTarget = 5): supersedes the tick-295
---   closure for ancestral awakening, earth shield, lightning shield,
---   healing stream totem, and mana spring totem (re-verified against
---   the current runtime):
+--   closure for ancestral awakening, earth shield, earthliving,
+--   frozen power, lightning shield, healing stream totem, and mana
+--   spring totem (re-verified against the current runtime):
 --   spell_sha_earth_shield::HandleProc (spell_shaman.cpp:437-447):
 --   EFFECT_0 DUMMY, rank 1 (974) only. On proc the holder self-casts
 --   Earth Shield Heal (379), triggered, BP0 = the effect amount.
@@ -181,6 +181,22 @@
 --   (totem caster = creature path); the original-caster legs have no Go
 --   model. Rank 2+ of the shield auras need spell_script_names /
 --   spell_ranks data (not in-tree) to resolve.
+--   spell_sha_earthliving_weapon::CheckProc
+--   (spell_shaman.cpp:581-591, census row 762): DoCheckProc ONLY. Base
+--   20% chance, plus the Blessing of the Eternals EFFECT_1 amount when
+--   the proc target is below 35% health. The ev6 inverted veto expresses
+--   CheckProc: return true when the gate fails, nil when it passes so
+--   the DBC default trigger leg fires. PORTED below (ev6, this tick);
+--   the tick-295 stay-out ("GetCastItem / attack-type mask") is
+--   superseded — CheckProc never touches either.
+--   spell_sha_frozen_power::HandleProc (spell_shaman.cpp:867-884,
+--   census row 766): EFFECT_1 DUMMY. PreventDefaultAction (the true
+--   return); roll the EFFECT_1 amount; the caster must be at least
+--   Freeze's EFFECT_0 CalcValue away from the proc target, else no
+--   cast; otherwise the caster casts Freeze (63685) on the proc target,
+--   triggered. PORTED below (ev6, this tick); the tick-295 stay-out
+--   ("no bridge reads another spell's effect value") is superseded by
+--   aura:GetSpellEffectCalcValue (lua_aura.go:471).
 --
 -- STAY OUT (census rows 758-789, verified against the current runtime):
 --   758 ancestral_awakening aura arm: PORTED below (ev6, this tick);
@@ -194,9 +210,12 @@
 --   (runtime.go); the Riptide leg needs the family-flag GetAuraEffect
 --   overload (unbridged). (The old "player path fires no ev5" note
 --   was wrong — the player path fires ev5 per effect/target.)
---   762 earthliving_weapon — CheckProc-only; GetCastItem and the proc
---   attack-type mask are unbridged, so the roll-only twin would
---   over-fire on off-hand / unenchanted attacks.
+--   762 earthliving_weapon — PORTED below (ev6, census row 762, this
+--   tick); the tick-295 stay-out ("GetCastItem / attack-type mask") is
+--   superseded: CheckProc (spell_shaman.cpp:581-591) never touches
+--   either — base 20% + Blessing of the Eternals EFFECT_1 when the
+--   proc target is below 35% health, expressed as the ev6 inverted
+--   veto.
 --   763 fire_nova — CheckCast PORTED ev8 (fireNovaCheckCast, this file):
 --   fire totem via GetTotem(0) + GetSpellMaxRangeForTarget bridge
 --   (lua_player.go). HandleDummy stays out: it needs spell-side
@@ -208,9 +227,10 @@
 --   765 flametongue_weapon — CheckProc needs GetCastItem + proc type
 --   mask; HandleProc needs attack time / spellpower / aura-modifier
 --   math and SetCastItem, all unbridged.
---   766 frozen_power — the min-distance gate reads SPELL_SHAMAN_FREEZE
---   (63685) EFFECT_0 CalcValue; no bridge reads another spell's effect
---   value (GetDistance itself is bridged).
+--   766 frozen_power — PORTED below (ev6, census row 766, this tick);
+--   the tick-295 stay-out ("no bridge reads another spell's effect
+--   value") is superseded by aura:GetSpellEffectCalcValue
+--   (lua_aura.go:471), which reads Freeze's EFFECT_0 CalcValue.
 --   776 imp_water_shield — CheckProc needs family flags; HandleProc
 --   needs the family-flag GetAuraEffect overload to find Water Shield
 --   and read its trigger spell.
@@ -514,6 +534,78 @@ local function earthShieldProc(event, aura, target, actor, procTarget, damage)
 end
 
 RegisterAuraEvent(SPELL_SHAMAN_EARTH_SHIELD, 6, earthShieldProc)
+
+local SPELL_SHAMAN_EARTHLIVING_WEAPON = 51940 -- spell_shaman.cpp:567 (class spell_sha_earthliving_weapon)
+local SPELL_SHAMAN_BLESSING_OF_THE_ETERNALS_R1 = 51554 -- spell_shaman.cpp:94
+local EARTHLIVING_WEAPON_BASE_CHANCE = 20 -- spell_shaman.cpp:582
+
+-- C++ spell_sha_earthliving_weapon_AuraScript::CheckProc
+-- (spell_shaman.cpp:581-591): DoCheckProc ONLY. Base 20% chance, plus
+-- the Blessing of the Eternals EFFECT_1 amount when the proc target is
+-- below 35% health (AURA_STATE_HEALTHLESS_35_PERCENT is purely
+-- health-derived, Unit.cpp:468, so GetHealthPct() < 35 is the twin;
+-- there is no HasAuraState bridge). The ev6 inverted veto expresses
+-- CheckProc: return true (PreventDefaultAction) when the gate FAILS,
+-- nil when it passes so the DBC default trigger leg fires.
+-- DORMANT until Spell.dbc ships the 51940 proc entry (and the 51554
+-- row for the bonus leg; without it the chance stays 20).
+local function earthlivingWeaponProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local chance = EARTHLIVING_WEAPON_BASE_CHANCE
+    if procTarget:GetHealthPct() < 35 then
+        local blessing = actor:GetAuraEffectOfRankedSpell(SPELL_SHAMAN_BLESSING_OF_THE_ETERNALS_R1, 1)
+        if blessing ~= nil then
+            chance = chance + blessing
+        end
+    end
+    if math.random(0, 99) >= chance then
+        return true
+    end
+    -- Gate passed: return nil so the DBC default trigger leg fires.
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_EARTHLIVING_WEAPON, 6, earthlivingWeaponProc)
+
+local SPELL_SHAMAN_FROZEN_POWER = 63373 -- spell_shaman.cpp:853 (class spell_sha_frozen_power)
+local SPELL_SHAMAN_FREEZE = 63685 -- spell_shaman.cpp:84
+
+-- C++ spell_sha_frozen_power_AuraScript::HandleProc
+-- (spell_shaman.cpp:867-884): EFFECT_1 DUMMY. PreventDefaultAction (the
+-- true return); roll the EFFECT_1 amount; the caster must be at least
+-- Freeze's EFFECT_0 CalcValue away from the proc target, else no cast;
+-- otherwise the caster casts Freeze (63685) on the proc target,
+-- triggered. The min-distance read rides
+-- aura:GetSpellEffectCalcValue(63685, 0) (lua_aura.go:471), which reads
+-- another spell's DBC effect value. DORMANT until Spell.dbc ships the
+-- 63373 proc entry and the 63685 row.
+local function frozenPowerProc(event, aura, target, actor, procTarget, damage, procEvent, effectIndex)
+    if effectIndex ~= 1 then
+        return
+    end
+    if actor == nil or procTarget == nil then
+        return true
+    end
+    local amount = aura:GetAmount(1)
+    if amount == nil or amount == 0 then
+        return true
+    end
+    if math.random(0, 99) >= amount then
+        return true
+    end
+    local minDistance = aura:GetSpellEffectCalcValue(SPELL_SHAMAN_FREEZE, 0)
+    if minDistance == nil or minDistance == 0 then
+        return true
+    end
+    if actor:GetDistance(procTarget) < minDistance then
+        return true
+    end
+    actor:CastSpell(procTarget, SPELL_SHAMAN_FREEZE, true)
+    return true
+end
+
+RegisterAuraEvent(SPELL_SHAMAN_FROZEN_POWER, 6, frozenPowerProc)
 
 -- C++ spell_sha_lightning_shield_AuraScript::HandleProc
 -- (spell_shaman.cpp:1531-1537): EFFECT_0 PROC_TRIGGER_SPELL. On proc
