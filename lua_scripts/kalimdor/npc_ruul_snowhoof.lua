@@ -21,10 +21,15 @@
 -- Unmodeled (documented-only, no bridges):
 -- - WaypointReached cage-open leg (waypoint 0: cage SetGoState
 --   GO_STATE_ACTIVE) + Thistlefur summon waves (waypoints 13/19)
---   + finish Talk/credit (waypoint 27): the waypoint machine has
---   no bridge; JustSummoned AttackStart has no bridge.
+--   + finish Talk/credit (waypoint 27): the WaypointReached ARMS
+--   (ev6 handlers) are unported; the walk itself rides MoveWaypoint
+--   + OnReachWP (6). JustSummoned AttackStart IS bridged (ev19 fires
+--   on the summoner, lua_creature_events.go:190/:8002-8013; AttackStart
+--   :7325) but stays out for lack of a fire site — the summons never
+--   occur while the waypoint arms are unported.
 -- - EnterEvadeMode shapechange re-apply (RUUL_SHAPECHANGE):
---   EnterEvadeMode has no Lua bridge (boss_ai.go explicit).
+--   EnterEvadeMode IS bridged (lua_creature_events.go:5624); the
+--   re-apply leg is outside the 8-hook set, port status unaudited.
 
 local ENTRY_RUUL_SNOWHOOF = 12818
 

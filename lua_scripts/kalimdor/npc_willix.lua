@@ -30,8 +30,10 @@
 --   GetPlayerForEscort() nil-guard at the top). wp3 Talk(SAY_POINT
 --   1); wp4/14/43 summon boar 4514 (TEMPSUMMON_TIMED_DESPAWN_OUT_OF_
 --   COMBAT, 25s) + AttackStart(Willix) at the summon site (the C++
---   JustSummoned leg — ev19 fires on the summoned creature in Go,
---   so the order rides the summon call instead); wp8 Talk(3), wp9
+--   JustSummoned leg — ev19 fires on the summoner in Go
+--   (fireCreatureSummoned, lua_creature_events.go:190/:8002-8013),
+--   so the inline form stands on the double-apply, not on the
+--   fire site; wp8 Talk(3), wp9
 --   Talk(4), wp13 Talk(5), wp25 Talk(6), wp31 Talk(7), wp42
 --   Talk(8); wp45 Talk(9) + questgiver-flag restore (SetFlag(82, 2))
 --   + player:GroupEventHappens(1144, creature); wp46 Talk(10) +
@@ -41,7 +43,7 @@
 -- - Engage (C++ JustEngagedWith): Talk(SAY_AGGRO1 2), ungated (the
 --   C++ Talk targets the player; the bridge broadcasts — deviation,
 --   documented).
--- - JustDied (razorfen_kraul.cpp:77-81): GetPlayerForEscort latch
+-- - JustDied (razorfen_kraul.cpp:124-127): GetPlayerForEscort latch
 --   (quest-1144 accept captures the escort player's GUID, mirroring
 --   EscortAI Start's capture) + player:FailQuest(1144) via the
 --   GetPlayersInWorld GUID scan (black-stalker precedent). No

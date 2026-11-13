@@ -24,14 +24,21 @@
 --   6641) (hanes precedent uses a GUID latch; the bridge idiom is
 --   the legoso healing arm).
 -- Unmodeled (documented-only, no bridges):
--- - JustEngagedWith Talk(SAY_MUG_ON_GUARD 3, player-targeted) and
+-- - JustEngagedWith Talk(SAY_MUG_ON_GUARD 4, player-targeted) and
 --   JustSummoned AttackStart — both escort-state-gated, and the
---   waypoint machine that produces the summons is unported, so the
---   arms would never fire in the Go model.
--- - WaypointReached (waypoints 0/24/...): Talk arms SAY_MUG_START2
---   1 / SAY_MUG_BRAZIER 2 / SAY_MUG_ON_GUARD 3 / SAY_MUG_VORSHA 4,
---   plus SummonCreature naga-wave legs — the waypoint machine and
---   summons have no bridges.
+--   waypoint arms that produce the summons are unported, so the
+--   arms would never fire in the Go model. (ev19 fires on the
+--   summoner and AttackStart is bridged — the stay-out is the
+--   missing fire site, not a missing bridge.)
+-- - WaypointReached (waypoints 0/24/25/26/27): Talk arms
+--   SAY_MUG_START2 1 (wp0) / SAY_MUG_BRAZIER 2 (wp24) /
+--   SAY_MUG_GRATITUDE 7 (wp25) / SAY_MUG_PATROL 8 (wp26) /
+--   SAY_MUG_RETURN 9 (wp27), plus SAY_MUG_DONE 6 on wave 4 and
+--   SummonCreature naga-wave legs — the WaypointReached ARMS (ev6
+--   handlers) are unported; the walk rides MoveWaypoint + OnReachWP
+--   (6) and SummonCreature is bridged (lua_creature_events.go:4161).
+--   No SAY_MUG_VORSHA exists (enum zone_ashenvale.cpp:149-158;
+--   SAY_MUG_BRAZIER_WAIT is 3, SAY_MUG_ON_GUARD is 4).
 
 local ENTRY_MUGLASH = 12717
 

@@ -15,9 +15,12 @@
 -- is a template concern, not scripted here. The rizzle
 -- escort/blackjack machine (MoveInLineOfSight quest-status gate,
 -- SPELL_RIZZLE_BLACKJACK 39865, SPELL_RIZZLE_ESCAPE teleport timer,
--- zone_azshara.cpp:150-163) stays documented-only: no MovementInform
--- hook (no event 28) and no AttackStart-override hook; the quest-status
--- bridge itself exists (lua_player.go) and now gates the gossip hello.
+-- zone_azshara.cpp:194-216) stays documented-only: MovementInform IS
+-- bridged (CreatureEventOnMovementInform = 28, runtime.go:397) so
+-- the wp-57 despawn leg is in principle addressable via ev28, but
+-- it is outside the 8-hook set and unaudited here; no
+-- AttackStart-override hook. The quest-status bridge itself exists
+-- (lua_player.go) and now gates the gossip hello.
 -- Rizzle's gossip arms are PORTED below — entry NPC_RIZZLE 23002 is C++-verifiable
 -- (go_scripts.cpp:268, Southfury enum).
 local ENTRY = 23025

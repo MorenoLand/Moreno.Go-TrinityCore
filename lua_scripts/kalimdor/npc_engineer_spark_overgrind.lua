@@ -45,13 +45,13 @@
 --   only runtime flip is the gossip-select arm above (still Attack-
 --   blocked), so the restore stays documented-only.
 -- - The rest of zone_azuremyst_isle.cpp, documented-only:
---   npc_draenei_survivor (MoveInLineOfSight help-call +
---   SpellHit heal leg + timed thanks/run-away) — entry ID not
---   C++-verifiable (no NPC constant; azshara wailing_caverns /
---   ashenvale cannot-verify precedent), SpellFamilyFlags / MovePoint /
---   stand-state legs have no bridge.
---   npc_injured_draenei — cosmetic only (IN_COMBAT flag + 15% health
---   + sit/sleep standstate); unit-flag bridge absent.
+--   npc_draenei_survivor — Reset ported in
+--   npc_draenei_survivor.lua (entry 16483, Wowhead-verified); the
+--   MoveInLineOfSight help-call, SpellHit heal leg and timed
+--   thanks/run-away machine stay out (no SpellInfo / MovePoint /
+--   ev27-engage-only bridges).
+--   npc_injured_draenei — Reset ported in npc_injured_draenei.lua
+--   (entry 16971, Wowhead-verified); that Reset is the whole script.
 --   npc_magwin — EscortAI (OnQuestAccept / WaypointReached /
 --   events): no escort / quest bridge (ashenvale npc_muglash
 --   precedent).
