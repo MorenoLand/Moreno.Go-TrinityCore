@@ -129,7 +129,9 @@
 -- (player:CastSpell bridged 2026-10-24, lua_player.go:309 — caster
 -- now C++-exact). Spell.dbc seed row for 68415 ships
 -- (tools/spelldbc_seed, 2026-11-13) — cast resolves via the
--- Store.File seed fallback; mask INFERRED, real DBC replaces.
+-- Store.File seed fallback; row verified exact vs real 3.4.0.43659
+-- DBC (durIdx 21, eff0 mask [0x1C0,0x80000,0x10], BP -91/+99,
+-- DieSides 1).
 -- EVENT_SARONITE_VAPORS (:194-208) — DoCast
 -- (SPELL_SUMMON_SARONITE_VAPORS 63081) self-cast (2-arg
 -- DoCast(uint32) resolves SELF — UnitAI.cpp:113), 30s init

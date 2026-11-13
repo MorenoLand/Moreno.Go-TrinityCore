@@ -56,8 +56,8 @@
 -- trial_of_the_champion.cpp:385-386) has no bearer, so a one-sided
 -- port would leave the boss permanently passive/non-attackable.
 -- boss_eadric DamageTaken — PORTED: damage >= health -> damage =
--- 0 + EnterEvadeMode (AttackStop + ClearThreatList approximation —
--- no evade bridge; the MotionMaster MovePoint home leg stays out)
+-- 0 + EnterEvadeMode (bridged, lua_creature_events.go:5624; the
+-- MotionMaster MovePoint home leg stays out)
 -- + SetFaction(FACTION_FRIENDLY 35, bridged) — the stale "no
 -- DamageTaken hook / no faction bridge" note is retracted: event 9
 -- is bridged and fires pre-damage (the alar return-0,0 convention);
@@ -116,7 +116,7 @@
 -- memory/soldier/SpellScript machines above.
 -- boss_paletress DamageTaken — PORTED (same arm as boss_eadric,
 -- boss_argent_challenge.cpp:320-328): damage >= health -> damage =
--- 0 + EnterEvadeMode (AttackStop + ClearThreatList) +
+-- 0 + EnterEvadeMode (bridged) +
 -- SetFaction(FACTION_FRIENDLY 35). Entry 34928 verifiable
 -- (trial_of_the_champion.h NPC_PALETRESS — kalecgos pass), so this
 -- arm registers here on its own entry even though the rest of
@@ -335,13 +335,14 @@ end
 -- C++ boss_eadricAI::DamageTaken (boss_argent_challenge.cpp:192-200)
 -- and boss_paletressAI::DamageTaken (:320-328) — identical arms: a
 -- lethal hit is absorbed (damage = 0) and the champion evades as a
--- friendly (EnterEvadeMode -> AttackStop + ClearThreatList, the
--- MovePoint home leg unbridged; SetFaction bridged). Incoming-damage
+-- friendly (EnterEvadeMode bridged, lua_creature_events.go:5624:
+-- fires On_Reset (23) then On_LeaveCombat (2), then base evade
+-- threat-clear / CombatStop / aura-clear / health-restore / home
+-- walk; the MovePoint home leg stays out). Incoming-damage
 -- check, so no postDamage guard.
 local function argentDamageTaken(event, creature, attacker, damage)
     if damage >= creature:GetHealth() then
-        creature:AttackStop()
-        creature:ClearThreatList()
+        creature:EnterEvadeMode()
         creature:SetFaction(FACTION_FRIENDLY)
         return false, 0
     end
