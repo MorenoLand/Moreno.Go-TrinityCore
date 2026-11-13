@@ -208,15 +208,17 @@
 --   event 14 (the stale "event 15 never fires / no aura bridge"
 --   claim is retracted — event 14, HasAura, RemoveAura and
 --   Talk(id, target) are all bridged).
--- boss_sister_svalna SpellHitTarget (:452-476) — Talk(
---   EMOTE_SVALNA_IMPALE 7, unitTarget) on SPELL_IMPALING_SPEAR
---   71443 rides the SpellHitTarget arm — event 15 IS bridged
---   (boss_ai.go:2196-2206) but the stay-out holds: the
---   SPELL_IMPALING_SPEAR_KILL Unit::Kill leg and the
---   NPC_IMPALING_SPEAR summon + vehicle-cast legs have no bridge
---   (DespawnOrUnsummon/GetVehicle zero hits), and the Talk is
---   conditional on summon success — Talk-alone would be
---   C++-inexact.
+-- boss_sister_svalna SpellHitTarget (:452-476) — 71443 arm PORTED
+--   2026-11-13 (ev15, svalnaSpellHitTarget below): SummonCreature(
+--   NPC_IMPALING_SPEAR 38248) at the target + Talk(EMOTE_SVALNA_IMPALE
+--   7, unitTarget) + summon CastCustomSpell(VEHICLE_SPELL_RIDE_HARDCODED
+--   46598, bp0=1) + SetFlag(UNIT_FIELD_FLAGS_2, 0x0002|0x4000); the
+--   2026-10-20 "no bridge" rationale is retracted — SummonCreature,
+--   CastCustomSpell(bp0), SetFlag(field 60) and Talk(id, target) are
+--   all bridged. The SPELL_IMPALING_SPEAR_KILL 70196 Unit::Kill leg
+--   stays out: its only caster is the spell_svalna_caress_of_death
+--   SpellScript trigger (:1505), no SpellScript bridge, so 70196 is
+--   never cast in Go.
 -- boss_sister_svalna JustReachedHome (:389-395) /
 --   MovementInform (:439-450) — SetReactState / SetDisableGravity
 --   / SetHover legs, no Talk of Svalna's own (no MovementInform
@@ -240,11 +242,14 @@
 --   1s EVENT_HEALTH_CHECK loop with ModifyHealth(+5% max) and
 --   HealthAbovePct(15) re-arm) are not a single-flip floored
 --   latch. Stays parked — the corrected blockers are the
---   FrostwingGauntletRespawner mass-DespawnOrUnsummon+reposition
---   machine (DespawnOrUnsummon unbridged), cross-AI
---   DoAction(ACTION_RESET_EVENT), ModifyHealth (zero hits) and
---   the _isEventActive-gated Talk; event 9 DOES support numeric
---   damage rewrite (lua_creature_events.go:303-324), so the old
+--   FrostwingGauntletRespawner mass grid action (DoAction(RESET_EVENT)
+--   fan-out + DespawnOrUnsummon + reposition-to-spawn; the method
+--   itself IS bridged, lua_creature_events.go:7230 — the machine is
+--   not), cross-AI DoAction(ACTION_RESET_EVENT), ModifyHealth (zero
+--   hits in engine/, re-verified 2026-11-13) and the _isEventActive-
+--   gated Talk; SetCorpseDelay is comment-only (lua_creature_events.go:
+--   1324). Re-verified STAY OUT 2026-11-13 (round-9 remainder).
+--   event 9 DOES support numeric damage rewrite (lua_creature_events.go:303-324), so the old
 --   "event-9 cannot express damage rewrite" claim was stale.
 -- npc_crok_scourgebane SetGUID / WaypointReached / WaypointStarted
 --   (:591-689) — gauntlet waypoint machine, no bridge.
@@ -360,6 +365,12 @@ local SPELL_ICE_TRAP = 71249
 local SPELL_VOLLEY = 71252
 local SPELL_BANISH = 71298
 local SPELL_IMPALING_SPEAR = 71443
+local NPC_IMPALING_SPEAR = 38248 -- icecrown_citadel.h:284
+local EMOTE_SVALNA_IMPALE = 7 -- :47
+local VEHICLE_SPELL_RIDE_HARDCODED = 46598 -- VehicleDefines.h:52
+local UNIT_FIELD_FLAGS_2 = 60 -- UpdateFields.h:118
+local UNIT_FLAG2_UNK1 = 0x2 -- UnitDefines.h:162
+local UNIT_FLAG2_ALLOW_ENEMY_INTERACT = 0x4000 -- UnitDefines.h:174
 local SPELL_AETHER_SHIELD = 71463
 local SPELL_HURL_SPEAR = 71466 -- :84
 local EMOTE_SVALNA_BROKEN_SHIELD = 8 -- :48
@@ -642,6 +653,34 @@ local function svalnaSpellHit(event, creature, caster, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 14, svalnaSpellHit)
+
+-- C++ boss_sister_svalna::SpellHitTarget (:452-476), SPELL_IMPALING_SPEAR
+-- 71443 arm — PORTED 2026-11-13 (ev15): the 71443 cast is live in Go
+-- (onSvalnaImpalingSpear scheduler, 20-25s), so ev15 fires on Svalna
+-- when it hits the target. SummonCreature at the target's position
+-- (Position overload, *unitTarget); default summon type is the C++
+-- 2-arg default (MANUAL_DESPAWN, Object.h:412 — Go SummonCreature
+-- default 7 = MANUAL). The impaling-spear despawn rides the unported
+-- npc_impaling_spear vehicle-check AI, documented. The 70196 KILL leg
+-- stays out (SpellScript trigger only, no bridge).
+local function svalnaSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_IMPALING_SPEAR then
+        return
+    end
+    if target == nil then
+        return
+    end
+    local summon = target:SummonCreature(NPC_IMPALING_SPEAR, target:GetX(), target:GetY(), target:GetZ(), target:GetO())
+    if summon then
+        creature:Talk(EMOTE_SVALNA_IMPALE, target)
+        summon:CastCustomSpell(target, VEHICLE_SPELL_RIDE_HARDCODED, false, 1)
+        -- C++ UNIT_FLAG2_UNK1 | UNIT_FLAG2_ALLOW_ENEMY_INTERACT: disjoint
+        -- bits, so + is the Lua 5.1 OR twin.
+        summon:SetFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_UNK1 + UNIT_FLAG2_ALLOW_ENEMY_INTERACT)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 15, svalnaSpellHitTarget)
 
 -- C++ npc_crok_scourgebane::Reset :544-551 seeds
 -- EVENT_SCOURGE_STRIKE {7500,12500}ms and EVENT_DEATH_STRIKE
