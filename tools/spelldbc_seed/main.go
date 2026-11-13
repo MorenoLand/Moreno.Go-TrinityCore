@@ -87,6 +87,10 @@ const (
 	targetEnemy         = 6
 	targetSrcAreaEnemy  = 15
 	targetGONearbyEntry = 40
+	auraAddPctModifier  = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
+	spellModDamage      = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
+	spellModEffect1     = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
+	familyShaman        = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
 )
 
 type effect struct {
@@ -101,6 +105,7 @@ type effect struct {
 	misc       int32
 	miscB      int32
 	trigger    uint32
+	mask       [3]uint32 // EffectSpellClassMask (store.go fields 122-130)
 }
 
 type spell struct {
@@ -112,6 +117,7 @@ type spell struct {
 	rangeIdx    uint32
 	maxTargets  uint32
 	school      uint32
+	family      uint32 // SpellFamilyName (store.go field 208)
 	effects     [3]effect
 }
 
@@ -123,6 +129,7 @@ func (s spell) row() []uint32 {
 	r[28] = s.castTimeIdx
 	r[40] = s.durIdx
 	r[46] = s.rangeIdx
+	r[208] = s.family
 	r[212] = s.maxTargets
 	r[225] = s.school
 	for i, e := range s.effects {
@@ -140,6 +147,9 @@ func (s spell) row() []uint32 {
 		r[110+i] = uint32(e.misc)
 		r[113+i] = uint32(e.miscB)
 		r[116+i] = e.trigger
+		for j := range e.mask {
+			r[122+3*i+j] = e.mask[j]
+		}
 	}
 	return r
 }
@@ -269,10 +279,32 @@ var spells = []spell{
 	{id: 30787, durIdx: 90010, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
 	}},
+	// 68415 Corrupted Rage (boss_general_vezax.cpp:68, :244-251 —
+	// CheckShamanisticRage casts it on shamans who know Shamanistic
+	// Rage 30823; Lua leg live, boss_general_vezax.lua:448-461).
+	// Wowhead WotLK spell=68415 (read 2026-11-13): School Shadow,
+	// Range 50000 (93008), Instant, Duration n/a (no durIdx —
+	// DurationIndex 0, permanent until removed), Requires Shaman.
+	// eff0: APPLY_AURA ADD_PCT_MODIFIER (108) -90, MiscValue 0
+	// SPELLMOD_DAMAGE ("Modifies Damage/Healing Done"); eff1:
+	// ADD_PCT_MODIFIER +100, MiscValue 3 SPELLMOD_EFFECT1
+	// ("Modifies Effect #1's Value (3)"). Mask [0x1C0, 0, 0x10]
+	// INFERRED from the 34 affected ranks on the tooltip (Healing
+	// Wave x14, Lesser Healing Wave x9, Chain Heal x7, Riptide x4):
+	// Healing Wave 0x40 / LHW 0x80 / Chain Heal 0x100 per
+	// spell_shaman.cpp:1157-1160 (:1392-1398 same bits); Riptide
+	// Flags[2] 0x10 per spell_shaman.cpp:356 (Chain Heal script's
+	// Riptide aura check). Healing Wave 0x40 is table-derived, not
+	// C++-verified in-tree. eff1's mask is unverified (Wowhead's
+	// per-effect list shows no affected spells for eff1; the
+	// Modifies tab's 12 extra rows are NPC variants of the same
+	// mask) — shared heal mask assumed; real client DBC replaces
+	// the row per-file.
+	{id: 68415, rangeIdx: 93008, school: schoolShadow, family: familyShaman, effects: [3]effect{
+		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: -90, misc: spellModDamage, targetA: targetCaster, mask: [3]uint32{0x1C0, 0, 0x10}},
+		{effect: effApplyAura, aura: auraAddPctModifier, basePoints: 100, misc: spellModEffect1, targetA: targetCaster, mask: [3]uint32{0x1C0, 0, 0x10}},
+	}},
 }
-
-// 68415 NOT shipped: aura types + SpellClassMask not derivable from
-// Wowhead (needs eff0/eff1 aura types + 3-word class mask).
 
 func main() {
 	out := "engine/data/wotlk/seeddbc"

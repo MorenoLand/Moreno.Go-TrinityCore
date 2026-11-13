@@ -127,7 +127,9 @@
 -- GetPlayersInWorld + map/instance filter -> player:HasSpell
 -- (30823) -> player:CastSpell(player, 68415, false) non-triggered
 -- (player:CastSpell bridged 2026-10-24, lua_player.go:309 — caster
--- now C++-exact).
+-- now C++-exact). Spell.dbc seed row for 68415 ships
+-- (tools/spelldbc_seed, 2026-11-13) — cast resolves via the
+-- Store.File seed fallback; mask INFERRED, real DBC replaces.
 -- EVENT_SARONITE_VAPORS (:194-208) — DoCast
 -- (SPELL_SUMMON_SARONITE_VAPORS 63081) self-cast (2-arg
 -- DoCast(uint32) resolves SELF — UnitAI.cpp:113), 30s init
