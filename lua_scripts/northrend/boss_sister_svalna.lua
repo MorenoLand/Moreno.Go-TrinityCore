@@ -600,10 +600,15 @@ local function svalnaReachHome(event, creature)
     creature:SetHover(false)
 end
 
--- C++ boss_sister_svalna::JustSummoned (boss_sister_svalna.cpp:1221-1230):
+-- C++ npc_frostwing_ymirjar_vrykul::JustSummoned (boss_sister_svalna.cpp:1221-1230):
 -- warhawk summons go REACT_DEFENSIVE (1); _summons.Summon is
--- bookkeeping only; engaged summons get DoZoneInCombat.
-local function svalnaJustSummoned(_, creature, summoned)
+-- bookkeeping only; engaged summons get DoZoneInCombat. RE-HOMED
+-- 2026-11-13: the handler was registered on Svalna (37126), which
+-- summons nothing — the arm belongs to the ymirjar vrykul (only the
+-- huntress 37134 summons, via Reset DoCast 71705, 25-man only; that
+-- summon leg is still unported, so this handler is dormant until it
+-- lands). IsInCombat is the IsEngaged twin.
+local function ymirjarJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == ENTRY_YMIRJAR_WARHAWK then
         summoned:SetReactState(1) -- REACT_DEFENSIVE
     end
@@ -618,7 +623,6 @@ RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 3, svalnaKilledUnit)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 4, svalnaJustDied)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 23, svalnaReset)
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 24, svalnaReachHome)
-RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 19, svalnaJustSummoned)
 
 -- C++ boss_sister_svalna::SpellHit :430-437 — ungated arm:
 -- if (spellInfo->Id == SPELL_HURL_SPEAR (71466) &&
@@ -976,6 +980,7 @@ for _, entry in ipairs(YMIRJAR_ENTRIES) do
     RegisterCreatureEvent(entry, 1, ymirjarEnterCombat)
     RegisterCreatureEvent(entry, 2, ymirjarLeaveCombat)
     RegisterCreatureEvent(entry, 4, ymirjarDied)
+    RegisterCreatureEvent(entry, 19, ymirjarJustSummoned)
     RegisterCreatureEvent(entry, 23, ymirjarReset)
 end
 

@@ -400,15 +400,16 @@ end
 -- mirror: SetImmuneToPC(false/true) = RemoveFlag/SetFlag(
 -- UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC) (thekal / lurker_below
 -- precedent); caster:Talk; CastStop is the bridged
--- creature:StopSpellCast (lua_creature_events.go:1010) — the
--- :874/:882 legs stay out because 28111 is channeled with NO finite
--- DBC duration (Wowhead 2026-11-05: Channeled flag, duration n/a) —
--- Go stamps a channel only when dur > 0 (boss_ai.go:2994), so no
--- ChannelSpellID can ever be live for the coil to interrupt; the
--- beam ends via the RemoveAura leg above, C++-exact. No-op-safe
--- forms recorded in caststop_tick225_verdicts.md (kept out: dead
--- code in Go's model); home-distance via the handler-surface
--- GetHomePosition bridge (3D, OVERLOAD_DISTANCE 28).
+-- creature:StopSpellCast (lua_creature_events.go:1196-1226,
+-- except-spellId semantics = C++ Unit::CastStop, Unit.cpp:980-985:
+-- interrupts live generic/channel casts whose ID differs from the
+-- arg; bare call interrupts all). The :874/:882 legs are PORTED
+-- 2026-11-13, overriding the tick-225 STAY-OUT (UNVERIFIED-DBC):
+-- the call interrupts exactly what C++ interrupts and no-ops when
+-- nothing is live, so the 28111 DBC-duration question is moot; the
+-- beam ends via the RemoveAura leg above, C++-exact; home-distance
+-- via the handler-surface GetHomePosition bridge (3D,
+-- OVERLOAD_DISTANCE 28).
 local function feugenSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_FEUGEN_TESLA_PERIODIC then
         return
@@ -431,11 +432,13 @@ local function feugenSpellHit(event, creature, caster, spellId)
         end
         local target = randomThreatTarget(creature, 0)
         if target then
+            caster:StopSpellCast(SPELL_TESLA_SHOCK) -- C++ :874
             caster:CastSpell(target, SPELL_TESLA_SHOCK, true)
         end
     elseif feugenOverload[guid] or feugenRefreshBeam[guid] then
         feugenOverload[guid] = false
         feugenRefreshBeam[guid] = false
+        caster:StopSpellCast() -- C++ :882
         caster:CastSpell(creature, SPELL_FEUGEN_CHAIN_VISUAL, true)
         caster:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
     end
