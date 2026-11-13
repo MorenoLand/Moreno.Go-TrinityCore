@@ -205,10 +205,10 @@
 --   also broadcast ACTION_CHARGE (guard MoveCharge to chargePos[index]
 --   at 13.0, self MoveCharge to chargePos[0] at 8.5).
 --   Stay-outs: GO_SAURFANG_S_DOOR HandleGameObject (:669/:868, no
---   instance-GO bridge); SpellHit GRIP legs (event NPC + guards MovePoint
---   CHOKE, :700-706/:908-914/:970-976) — ev14 exists but the GRIP hit
---   path is DBC-targeting-side, unverifiable from in-tree sources;
---   the WAYPOINT outro chain (POINT_EXIT guards, :763-771/:933-940).
+--   instance-GO bridge); the WAYPOINT outro chain (POINT_EXIT guards,
+--   :763-771/:933-940). SpellHit GRIP legs (event NPC + guards MovePoint
+--   CHOKE, :700-706/:908-914/:970-976) are PORTED via ev14
+--   (eventNpcSpellHit below).
 --   The ACTION_INTERRUPT_INTRO relay (relayInterruptIntro below) now
 --   also cancels the event NPC's pending intro timers (C++ _events.
 --   Reset, :689/:898) — the pre-existing relay only despawned guards.
@@ -261,8 +261,8 @@
 --   move-arrival chain (PORTED this tick via
 --   deathbringer:GetRelativePoint(0, 0) = GetClosePoint twin);
 --   the muradin outro chain rides waypoint/movement events (no bridge).
---   SpellHit(SPELL_GRIP_OF_AGONY) movement legs stay out (see intro
---   machine note above). The cross-AI deathbringer->AI()->DoAction(
+--   SpellHit(SPELL_GRIP_OF_AGONY) movement legs PORTED via ev14
+--   (eventNpcSpellHit below). The cross-AI deathbringer->AI()->DoAction(
 --   PHASE_INTRO_*/ACTION_CONTINUE_INTRO) legs are live receivers in
 --   saurfangDoAction below (dispatch IS bridged — creature:DoAction
 --   fires ev38).
@@ -271,7 +271,8 @@
 --   DoAction(ACTION_DESPAWN) ports via the relay guard sweeps below;
 --   DoAction(ACTION_CHARGE) ports via the intro charge broadcast
 --   (chargeEventGuards below — the _index sort lives in guardSortIndex,
---   guards unregistered); SpellHit GRIP legs stay out.
+--   guards otherwise unregistered); SpellHit GRIP legs PORTED via ev14
+--   (eventNpcSpellHit below — guards carry only the ev14 handler).
 -- spell_deathbringer_blood_link / spell_deathbringer_blood_power /
 -- spell_deathbringer_rune_of_blood / spell_deathbringer_blood_nova /
 -- spell_deathbringer_blood_nova_targeting /
@@ -325,6 +326,7 @@ local ACTION_CONTINUE_INTRO = -3781301
 local POINT_SAURFANG = 3781300 -- boss_deathbringer_saurfang.cpp:213-222
 local POINT_FIRST_STEP = 3781301
 local POINT_CHARGE = 3781302
+local POINT_CHOKE = 3781303
 local POINT_CORPSE = 3781304
 local POINT_FINAL = 3781305
 local FACTION_UNDEAD_SCOURGE = 974 -- SharedDefines.h:253
@@ -370,6 +372,17 @@ local CHARGE_POS = {
     { -506.6607, 2211.367, 539.2870 },
     { -506.1137, 2213.306, 539.2870 },
     { -509.0040, 2211.743, 539.2870 },
+}
+-- chokePos[0] is the event NPC's own slot; [1..5] are the guards'
+-- (C++ chokePos[0..5], boss_deathbringer_saurfang.cpp:236-244;
+-- guard _index 1..5 -> Lua slots 2..6).
+local CHOKE_POS = {
+    { -514.4834, 2211.334, 549.2887 },
+    { -510.1081, 2211.592, 546.3773 },
+    { -513.3210, 2211.396, 551.2882 },
+    { -507.3684, 2210.353, 545.7497 },
+    { -507.0486, 2212.999, 545.5512 },
+    { -510.7041, 2211.069, 546.5298 },
 }
 
 local SAY_AGGRO = 7
@@ -1337,6 +1350,31 @@ local function eventNpcMovementInform(event, creature, motionType, id)
     end
 end
 
+-- C++ SpellHit(SPELL_GRIP_OF_AGONY) (:700-706/:908-914 event NPCs;
+-- :970-976 guards): SetDisableGravity(true) + MovePoint(POINT_CHOKE,
+-- chokePos[0] / chokePos[_index]). PORTED via ev14 (yogg-saron
+-- signature precedent): the event is live per hit target of a creature
+-- cast (boss_ai.go:4282), SetDisableGravity / MoveTo are bridged
+-- (lua_creature_events.go:3776/:5305), and the handler is purely
+-- reactive — it runs only when the engine delivers the 70572 hit from
+-- the boss's GRIP self-casts (EVENT_INTRO_ALLIANCE_6 / HORDE_9 /
+-- first engage). Guards read guardSortIndex (C++ _index, SetData
+-- 1..5); unsorted guards fall back to slot 1, the C++ _index=0 twin.
+-- POINT_CHOKE arrival fires ev28 on the event NPCs, which the
+-- MovementInform handler ignores (no C++ POINT_CHOKE case there).
+local function eventNpcSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_GRIP_OF_AGONY then
+        return
+    end
+    local p = CHOKE_POS[1]
+    local idx = guardSortIndex[creature:GetGUIDLow()]
+    if idx then
+        p = CHOKE_POS[idx + 1]
+    end
+    creature:SetDisableGravity(true)
+    creature:MoveTo(POINT_CHOKE, p[1], p[2], p[3])
+end
+
 -- C++ Reset (:624-627/:823-826): _events.Reset() only.
 local function eventNpcReset(event, creature)
     local guid = creature:GetGUIDLow()
@@ -1350,6 +1388,10 @@ RegisterCreatureEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 23, eventNpcReset)
 RegisterCreatureEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 28, eventNpcMovementInform)
 RegisterCreatureGossipEvent(ENTRY_SE_HIGH_OVERLORD_SAURFANG, 2, eventNpcGossipSelect)
 RegisterCreatureGossipEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 2, eventNpcGossipSelect)
+RegisterCreatureEvent(ENTRY_SE_HIGH_OVERLORD_SAURFANG, 14, eventNpcSpellHit)
+RegisterCreatureEvent(ENTRY_SE_MURADIN_BRONZEBEARD, 14, eventNpcSpellHit)
+RegisterCreatureEvent(ENTRY_SE_KOR_KRON_REAVER, 14, eventNpcSpellHit)
+RegisterCreatureEvent(ENTRY_SE_SKYBREAKER_MARINE, 14, eventNpcSpellHit)
 
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 1, saurfangJustEngagedWith)
 RegisterCreatureEvent(ENTRY_DEATHBRINGER_SAURFANG, 2, saurfangLeaveCombat)

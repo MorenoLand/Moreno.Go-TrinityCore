@@ -90,7 +90,11 @@
 -- creature:SetBossState (lua_creature_events.go:5917) + flag resets
 -- + grid RESPAWN of entry 34014 within 500.0f — PORTED 2026-10-24
 -- in auriayaReset (creature:Respawn bridge, lua_creature_events.go);
--- the HandleCats(false) despawn half is ported in auriayaDied;
+-- the HandleCats(false) despawn half is ported in auriayaDied; the
+-- BossAI::JustSummoned SummonList bookkeeping (relays :362/:473/:498)
+-- ports as its DespawnAll twin — despawnSummonedAdds in
+-- auriayaReset/auriayaDied (round 15; no ev19 registration, the grid
+-- twin covers it — see despawnSummonedAdds).
 -- stale "no grid bridge" retracted — creature:GetCreaturesInGrid is
 -- bridged, lua_creature_events.go:1204.
 -- DoAction (:178-193, ACTION_CRAZY_CAT_LADY 0 / ACTION_DEFENDER_DIED
@@ -131,15 +135,16 @@
 -- verified this tick, npc=34034, Ulduar, WotLK) — Reset (:464-474):
 -- REACT_PASSIVE + 1s scheduler -> REACT_AGGRESSIVE + DoCastSelf
 -- SPELL_AGRO_CREATOR 63709 PORTED this tick in guardianReset (the
--- Auriaya JustSummoned relay is a no-op: boss_auriaya defines no
--- JustSummoned override; the 63709 pounce/threat leg is PORTED in
+-- Auriaya JustSummoned relay feeds the SummonList whose DespawnAll
+-- twin is despawnSummonedAdds in auriayaReset/auriayaDied; the 63709
+-- pounce/threat leg is PORTED in
 -- guardianDummyEffect (ev30 dummy-effect event)); registered in
 -- boss_ai.go this tick.
 -- npc_seeping_essence_stalker — entry 34098 (no constant in C++;
 -- Wowhead-verified this tick, npc=34098, Ulduar, WotLK) — Reset
 -- one-shot self-cast SPELL_SEEPING_ESSENCE 64458 (:494-499) PORTED
--- this tick in stalkerReset (JustSummoned relay no-op, as the
--- guardian; UpdateAI empty); registered in boss_ai.go this tick.
+-- this tick in stalkerReset (JustSummoned relay feeds the SummonList
+-- twin, as the guardian; UpdateAI empty); registered in boss_ai.go this tick.
 -- spell_auriaya_strenght_of_the_pack (64381),
 -- spell_auriaya_sentinel_blast (64392 / 64679),
 -- spell_auriaya_feral_essence_removal (64456),
@@ -532,6 +537,29 @@ end
 -- snapshot Health via the object.go fallback; creature:Respawn restores
 -- full health at home and fires event 23 on the sentry, running its
 -- Reset arm as C++ ai->Reset() does.
+-- C++ BossAI::JustSummoned — the relay target of the three adds'
+-- Reset arms (boss_auriaya.cpp:362/:473/:498). boss_auriaya defines
+-- no override, so the base arm is pure SummonList bookkeeping, and
+-- its one observable effect is summons.DespawnAll() in _Reset() and
+-- _JustDied(). The Lua twin is a grid despawn of the three summoned
+-- add entries (the sentry HandleCats idiom, 500.0f); creature:Despawn
+-- fires no ev4 (lua_creature_events.go:3305 — ev20 on the summoner
+-- only), so the defenders' JustDied nine-lives relay never fires
+-- spuriously on a wipe/kill despawn. No ev19 registration: ev19
+-- fires for these spell summons (creatureEffectSummonType funnels
+-- through summonTempCreature, boss_ai.go:4938 /
+-- lua_creature_events.go:190), but a tracking handler would only
+-- duplicate this grid twin — the adds' own Reset arms already run.
+local SUMMONED_ADD_ENTRIES = { ENTRY_FERAL_DEFENDER, ENTRY_SWARMING_GUARDIAN, ENTRY_SEEPING_ESSENCE_STALKER }
+
+local function despawnSummonedAdds(creature)
+    for _, entry in ipairs(SUMMONED_ADD_ENTRIES) do
+        for _, add in ipairs(creature:GetCreaturesInGrid(entry, 500)) do
+            add:Despawn()
+        end
+    end
+end
+
 local function auriayaReset(event, creature)
     creature:SetBossState(BOSS_AURIAYA_DATA, 0)
     cancelCombatTimers(event, creature)
@@ -549,6 +577,7 @@ local function auriayaReset(event, creature)
             sentry:Respawn()
         end
     end
+    despawnSummonedAdds(creature)
 end
 
 local function auriayaDied(event, creature, killer)
@@ -559,6 +588,7 @@ local function auriayaDied(event, creature, killer)
     for _, sentry in ipairs(creature:GetCreaturesInGrid(ENTRY_SANCTUM_SENTRY, 500)) do
         sentry:Despawn()
     end
+    despawnSummonedAdds(creature)
 end
 
 -- C++ EnterEvadeMode (:214-218): disengage first, then
@@ -889,7 +919,8 @@ end
 -- 64455, me, 8) — no bridge; AddAura + defenderStacks twin, see
 -- DamageTaken — + DoCastSelf(RANDOM_AGRO_PERIODIC 61906, triggered)
 -- + phase NONE + EVENT_START_COMBAT in 1s; the JustSummoned relay
--- (:361-362) is a no-op (no boss override, as the guardian).
+-- (:361-362) feeds the SummonList whose DespawnAll twin is
+-- despawnSummonedAdds in auriayaReset/auriayaDied (see above).
 -- The 61906 periodic retarget rides defenderRetargetTick (5s, from
 -- Reset, re-arming — the AuraScript itself has no bridge).
 local function feralDefenderReset(event, creature)
@@ -912,8 +943,9 @@ end
 -- npc_swarming_guardian — C++ Reset (:464-474): SetReactState(PASSIVE)
 -- + 1s TaskScheduler arm -> SetReactState(AGGRESSIVE) +
 -- DoCastSelf(SPELL_AGRO_CREATOR 63709) (2-arg non-triggered); the
--- Auriaya JustSummoned relay (:472-473) is a no-op — boss_auriaya
--- defines no JustSummoned override. The 63709 dummy-effect pounce /
+-- Auriaya JustSummoned relay (:472-473) feeds the SummonList whose
+-- DespawnAll twin is despawnSummonedAdds in auriayaReset/auriayaDied
+-- (see above). The 63709 dummy-effect pounce /
 -- threat leg is PORTED in guardianDummyEffect (ev30, below); the
 -- scheduler arm runs outside
 -- UpdateVictim / the CASTING gate in C++, so no 500ms defer.
@@ -959,8 +991,9 @@ end
 
 -- npc_seeping_essence_stalker — C++ Reset (:493-499): one-shot
 -- DoCastSelf(SPELL_SEEPING_ESSENCE 64458) (2-arg non-triggered); the
--- Auriaya JustSummoned relay (:498) is a no-op (no override, as the
--- guardian); UpdateAI is empty.
+-- Auriaya JustSummoned relay (:498) feeds the SummonList whose
+-- DespawnAll twin is despawnSummonedAdds in auriayaReset/auriayaDied
+-- (see above); UpdateAI is empty.
 local function stalkerReset(event, creature)
     creature:CastSpell(creature, SPELL_SEEPING_ESSENCE)
 end
