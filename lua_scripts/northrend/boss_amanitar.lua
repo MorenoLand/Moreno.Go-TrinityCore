@@ -446,7 +446,7 @@ local function amanitarEnterCombat(event, creature, target)
     -- C++ JustEngagedWith (boss_amanitar.cpp:96-101): EVENT_ROOT
     -- 5-9s, EVENT_BASH 10-14s, EVENT_BOLT 15-20s, EVENT_MINI
     -- 12-18s, EVENT_SPAWN 1s (PORTED — one-shot, above),
-    -- EVENT_RESPAWN 40-60s (summon machine — unbridged).
+    -- EVENT_RESPAWN 40-60s (PORTED — respawnTick, above).
     schedule(guid, "spawn", 1000, function()
         spawnTick(creature, guid)
     end)

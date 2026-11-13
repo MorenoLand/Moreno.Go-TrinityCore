@@ -354,7 +354,7 @@ end
 
 -- C++ boss_massive_jormungarAI::JustSummoned (:514-520): worm entry
 -- 27228 -> WormAttackEvent at 2s (SetReactState(REACT_AGGRESSIVE) +
--- SetTempSummonType(CORPSE_DESPAWN = 5) + DoZoneInCombat) +
+-- SetTempSummonType(CORPSE_DESPAWN = 4, Go 0-based; C++ value is 5) + DoZoneInCombat) +
 -- MoveRandom(5.0) now.
 local function jormungarJustSummoned(event, creature, summoned)
     if summoned:GetEntry() ~= NPC_JORMUNGAR_WORM then
@@ -370,7 +370,7 @@ local function jormungarJustSummoned(event, creature, summoned)
     worms[#worms + 1] = summoned
     CreateLuaEvent(function()
         summoned:SetReactState(2) -- REACT_AGGRESSIVE
-        summoned:SetTempSummonType(5) -- TEMPSUMMON_CORPSE_DESPAWN
+        summoned:SetTempSummonType(4) -- TEMPSUMMON_CORPSE_DESPAWN (Go 0-based; C++ value is 5)
         summoned:DoZoneInCombat()
     end, 2000)
 end

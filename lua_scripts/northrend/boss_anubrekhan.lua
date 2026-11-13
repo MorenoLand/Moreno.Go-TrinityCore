@@ -50,8 +50,9 @@
 -- on 2/4/23 (gargolmar precedent). No JustDied Talk in C++.
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_anubrekhan intro/summon machine — InitializeAI / Reset
--- (guardCorpses.clear) — the guardCorpses GUID-set bookkeeping stays
--- out (see SummonedCreatureDies below); the group spawns are PORTED
+-- (guardCorpses.clear) — the clear is modeled: cancelTimers nils
+-- swarmState[guid], which holds the guardCorpses set (see
+-- SummonedCreatureDies below); the group spawns are PORTED
 -- below (summonGuards / spawnGuardTick, events 5/24 + engage/locust
 -- one-shots — creature:SummonCreatureGroup bridged 2026-11-05,
 -- tick 238);
@@ -65,9 +66,17 @@
 -- jindo precedents; summoned object carries Talk); latent until
 -- SummonCreatureGroup ports, entry-gated so inert otherwise.
 -- SummonedCreatureDies/Despawn: guardCorpses GUID-set bookkeeping —
--- ev21 (SummonedCreatureDied) IS bridged (lua_creature_events.go:3672),
--- but the scarab port below re-derives the pool from the grid instead
--- of tracking GUIDs (see EVENT_SCARABS);
+-- PORTED hook strip 6 (anubrekhanSummonedCreatureDies ev21 +
+-- anubrekhanSummonedCreatureDespawn ev20 below): ev21
+-- (SummonedCreatureDied, lua_creature_events.go:7759) inserts the dead
+-- crypt guard's GUID-low, ev20 (SummonedCreatureDespawn,
+-- runtime.go:382, fired on temp-summon UnSummon incl. corpse expiry
+-- via expireTempSummonGuardian) erases it; the set lives in
+-- swarmState[guid].corpses and feeds scarabTick via GetCreatureByGUID
+-- (lua_creature_events.go:4319). Group-spawned guards carry the boss
+-- as OwnerGUID (summonTempCreature stamps it, lua_creature_events.go:138),
+-- so both hooks fire on the boss for them. The old grid re-derivation
+-- is retired — the set is range-free like C++ (see EVENT_SCARABS);
 -- EVENT_IMPALE — PORTED 2026-10-25: SelectTarget(Random,0) ->
 -- DoCast(Impale 28783 / 25-man 56090, raid-moded via
 -- creature:Is25ManRaid() — C++ casts auto-resolve difficulty at
@@ -86,8 +95,11 @@
 -- Single-key-timer delta: a C++ impale still pending past swarm end
 -- would coexist with the LOCUST_ENDS re-schedule (two interleaved
 -- impale timers); the Lua harness replaces it — timing-only delta.
--- EVENT_SCARABS — PORTED 2026-10-26 (scarabTick below): random
--- guardCorpses corpse -> corpse CastSpell(self, 28864) +
+-- EVENT_SCARABS — PORTED 2026-10-26 (scarabTick below), REWIRED hook
+-- strip 6 to the faithful guardCorpses set: random set element ->
+-- GetCreatureByGUID -> corpse CastSpell(self, 28864, triggered — the
+-- C++ origCaster ctor sets TRIGGERED_FULL_MASK, SpellDefines.h:167;
+-- the old non-triggered cast was a fidelity bug, fixed here) +
 -- Talk(EMOTE_SCARAB 2) + DespawnOrUnsummon, init randtime(20s,30s),
 -- repeat randtime(40s,60s) unconditional (Repeat sits outside the
 -- empty-check); PHASE_NORMAL-only with the EventMap erase rule
@@ -209,18 +221,20 @@ local function impaleTick(creature, guid)
 end
 
 -- C++ EVENT_SCARABS (boss_anubrekhan.cpp:197-208): random
--- guardCorpses corpse -> corpse CastSpell(self,
--- SUMMON_CORPSE_SCARABS_MOB 28864) + Talk(EMOTE_SCARAB 2) +
--- DespawnOrUnsummon, init randtime(20s,30s), repeat randtime(40s,60s)
--- unconditional (Repeat sits outside the empty-check). The C++
--- guardCorpses set (SummonedCreatureDies insert /
--- SummonedCreatureDespawn erase) is modeled by re-deriving the pool
--- from the grid each fire: dead creatures stay in the motion map for
--- their corpse window (kill.go corpse-removal phase), so
--- GetCreaturesInGrid(16573) + not-IsAlive == the set in practice;
--- the 150yd bound is a room-scale approximation of the range-free set
--- (guards die in combat near the boss; crypt guards exist only as
--- boss summons, so no foreign entry-16573 corpses pollute the pool).
+-- guardCorpses element -> ObjectAccessor::GetCreature -> corpse
+-- CastSpell(self, SUMMON_CORPSE_SCARABS_MOB 28864, me->GetGUID()) +
+-- Talk(EMOTE_SCARAB 2) + DespawnOrUnsummon, init randtime(20s,30s),
+-- repeat randtime(40s,60s) unconditional (Repeat sits outside the
+-- empty-check). The pool is the faithful ev21/ev20 GUID set
+-- (swarmState[guid].corpses), resolved via GetCreatureByGUID —
+-- range-free like C++, retiring the old 150yd grid re-derivation.
+-- The 28864 cast is triggered: the C++ CastSpellExtraArgs(origCaster)
+-- ctor sets TRIGGERED_FULL_MASK (SpellDefines.h:167), same as the
+-- 29105 leg in anubrekhanTargetDied. Prune-and-retry: a corpse whose
+-- expiry path never fired ev20 leaves a stale GUID; dropping it and
+-- re-picking keeps the draw uniform over live corpses, the C++ set's
+-- exact content (C++ itself can never pick a stale entry, so the
+-- single-pick null-guard there is belt-and-braces too).
 -- PHASE_NORMAL-only: a scarab expiring during PHASE_SWARM is dropped
 -- with no re-arm (EventMap erase rule, see EVENT_IMPALE above).
 -- OrigCaster attribution (me->GetGUID()) has no Lua slot (29105
@@ -231,17 +245,27 @@ local function scarabTick(creature, guid)
     if st and st.swarm then
         return
     end
-    local corpses = {}
-    for _, c in ipairs(creature:GetCreaturesInGrid(NPC_CRYPT_GUARD, 150)) do
-        if not c:IsAlive() then
-            corpses[#corpses + 1] = c
+    local corpses = st and st.corpses or nil
+    if corpses then
+        while true do
+            local guids = {}
+            for guidLow in pairs(corpses) do
+                guids[#guids + 1] = guidLow
+            end
+            if #guids == 0 then
+                break
+            end
+            local picked = guids[math.random(#guids)]
+            local corpse = creature:GetCreatureByGUID(picked)
+            if corpse == nil then
+                corpses[picked] = nil
+            else
+                corpse:CastSpell(corpse, SPELL_SUMMON_CORPSE_SCARABS_MOB, true)
+                corpse:Talk(EMOTE_SCARAB)
+                corpse:Despawn()
+                break
+            end
         end
-    end
-    if #corpses > 0 then
-        local corpse = corpses[math.random(#corpses)]
-        corpse:CastSpell(corpse, SPELL_SUMMON_CORPSE_SCARABS_MOB)
-        corpse:Talk(EMOTE_SCARAB)
-        corpse:Despawn()
     end
     schedule(guid, "scarab", math.random(40000, 60000), function()
         scarabTick(creature, guid)
@@ -390,6 +414,44 @@ end
 -- 1). The Talk's second arg (me, the whisper target) has no Lua twin
 -- — single-arg Talk per the midnight precedent. Latent until
 -- SummonCreatureGroup ports: no Lua path summons guards yet.
+-- C++ SummonedCreatureDies (boss_anubrekhan.cpp:127-133):
+-- BossAI base (summons-list bookkeeping, no Lua-visible effect) +
+-- crypt-guard entry gate -> guardCorpses.insert(summon->GetGUID()).
+-- ev21 (event, creature=summoner, summon, killer) — magtheridon
+-- precedent; the set lives in swarmState[guid].corpses (guidLow ->
+-- true), cleared with the state on Reset/leave-combat (C++ :109
+-- guardCorpses.clear()). Lazy-creates the state so a guard dying
+-- outside the combat window still records (C++ has no combat gate
+-- here); enterCombat overwrites the state fresh.
+local function anubrekhanSummonedCreatureDies(event, creature, summon, killer)
+    if summon == nil or summon:GetEntry() ~= NPC_CRYPT_GUARD then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local st = swarmState[guid]
+    if not st then
+        st = { swarm = false, soon = false }
+        swarmState[guid] = st
+    end
+    st.corpses = st.corpses or {}
+    st.corpses[summon:GetGUIDLow()] = true
+end
+
+-- C++ SummonedCreatureDespawn (boss_anubrekhan.cpp:135-141):
+-- BossAI base + crypt-guard entry gate ->
+-- guardCorpses.erase(summon->GetGUID()). ev20 (event, creature,
+-- summon) — novos precedent; fires on temp-summon UnSummon incl.
+-- corpse expiry (expireTempSummonGuardian, pet_combat.go).
+local function anubrekhanSummonedCreatureDespawn(event, creature, summon)
+    if summon == nil or summon:GetEntry() ~= NPC_CRYPT_GUARD then
+        return
+    end
+    local st = swarmState[creature:GetGUIDLow()]
+    if st and st.corpses then
+        st.corpses[summon:GetGUIDLow()] = nil
+    end
+end
+
 local function anubrekhanJustSummoned(_, creature, summoned)
     if creature:IsInCombat() and summoned:GetEntry() == NPC_CRYPT_GUARD then
         summoned:Talk(EMOTE_SPAWN)
@@ -424,5 +486,7 @@ RegisterCreatureEvent(ENTRY_ANUBREKHAN, 3, anubrekhanTargetDied)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 4, anubrekhanDied)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 5, anubrekhanSpawn)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 19, anubrekhanJustSummoned)
+RegisterCreatureEvent(ENTRY_ANUBREKHAN, 20, anubrekhanSummonedCreatureDespawn)
+RegisterCreatureEvent(ENTRY_ANUBREKHAN, 21, anubrekhanSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 23, anubrekhanReset)
 RegisterCreatureEvent(ENTRY_ANUBREKHAN, 24, anubrekhanJustReachedHome)

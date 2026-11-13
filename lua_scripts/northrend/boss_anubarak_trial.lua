@@ -84,7 +84,10 @@
 -- Churning Ground self-cast — PORTED 2026-10-24 (anubarakJustSummoned,
 -- ev19, LATENT per the anubrekhan precedent: burrows spawn only from
 -- the unported EVENT_SUMMON_NERUBIAN spell-summon, so the arm fires
--- only if a future path summons via anubarak); JustSummoned
+-- only if a future path summons via anubarak); the _burrowGUID push
+-- (:254) is PORTED hook strip 6 (anubarakState[guid].burrows below;
+-- its consumer EVENT_SUMMON_SCARAB stays phase-gated, see below).
+-- JustSummoned
 -- NPC_SPIKE 34660 leg — PORTED 2026-10-25 (anubarakJustSummoned,
 -- ev19, LATENT as the burrow leg: spikes spawn only from the unported
 -- EVENT_PURSUING_SPIKE spell-summon): SelectTarget(Random,0,0.0f,true)
@@ -127,10 +130,18 @@
 -- was stale — documented-only.
 -- boss_anubarak_trial EVENT_PURSUING_SPIKE — DoCast(
 -- Spike Call 66169) (rides the unbridged phase machine).
--- boss_anubarak_trial EVENT_SUMMON_SCARAB — burrow GUID-list
--- walk + ObjectAccessor::GetCreature + burrow->CastSpell(
--- burrow, 66340) — no ObjectAccessor / cross-AI cast bridges —
--- documented-only.
+-- boss_anubarak_trial EVENT_SUMMON_SCARAB (boss_anubarak_trial.cpp:351-367)
+-- — random _burrowGUID element -> ObjectAccessor::GetCreature ->
+-- burrow->CastSpell(burrow, 66340, false) + 4s re-arm, PHASE_SUBMERGED.
+-- The list itself is PORTED hook strip 6 (anubarakState[guid].burrows
+-- in anubarakJustSummoned below; the GUID-lookup bridge is live —
+-- creature:GetCreatureByGUID, lua_creature_events.go:4319, razorgore /
+-- muru precedent). The CONSUMER stays out: it is scheduled only from
+-- EVENT_SUBMERGE (:344, PHASE_SUBMERGED) and re-arms inside itself
+-- (:363, PHASE_SUBMERGED), and the submerge phase machine is unported —
+-- firing the 4s scarab tick in the port's permanent melee phase would
+-- fabricate submerged-phase summons (tharon_ja bar). When a future
+-- submerge port wires it, the cast is non-triggered (66340, false).
 -- boss_anubarak_trial EVENT_EMERGE (boss_anubarak_trial.cpp:372-390) —
 -- DoCast(Spike Tele 66170) + summons.DespawnEntry(NPC_SPIKE) +
 -- RemoveAurasDueToSpell(SUBMERGE_ANUBARAK) + RemoveFlag(
@@ -542,14 +553,25 @@ end
 -- C++ JustSummoned NPC_SPIKE (boss_anubarak_trial.cpp:259-266): SetDisplayId(Modelid1)
 -- + random-player EngageWithTarget + Talk(EMOTE_SPIKE, target) — see header.
 -- C++ JustSummoned NPC_BURROW (boss_anubarak_trial.cpp:253-257):
+-- _burrowGUID.push_back(summoned->GetGUID()) FIRST, then
 -- SetReactState(REACT_PASSIVE) + CastSpell(summon, SPELL_CHURNING_GROUND
--- 66969, non-triggered) + SetDisplayId(Modelid2) in C++ order; the
--- _burrowGUID push is summons bookkeeping with no Lua twin. The handler
+-- 66969, non-triggered) + SetDisplayId(Modelid2) in C++ order. The push
+-- is PORTED hook strip 6 (anubarakState[guid].burrows; cleared with the
+-- state on Reset/leave-combat — C++ :205 _burrowGUID.clear()); its
+-- consumer EVENT_SUMMON_SCARAB stays phase-gated (see header). The handler
 -- is live via the engage burrow summons (ported in anubarakEnterCombat);
 -- the EVENT_SUMMON_NERUBIAN spell-summon source stays unported. The spike
 -- case is PORTED below (random alive player + EngageWithTarget + Talk).
 local function anubarakJustSummoned(_, creature, summoned)
     if summoned:GetEntry() == NPC_BURROW then
+        local guid = creature:GetGUIDLow()
+        local st = anubarakState[guid]
+        if not st then
+            st = {}
+            anubarakState[guid] = st
+        end
+        st.burrows = st.burrows or {}
+        st.burrows[#st.burrows + 1] = summoned:GetGUIDLow()
         summoned:SetReactState(0) -- REACT_PASSIVE
         summoned:CastSpell(summoned, SPELL_CHURNING_GROUND)
         summoned:SetDisplayId(summoned:GetTemplateModelId(2))
