@@ -32,19 +32,25 @@
 -- + cleanup. OnLeaveCombat(2)/OnReset(23): cleanup.
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — the _instance GetCreature arms
--- skipped (instance_the_slave_pens.cpp is a placeholder and
--- stays blocked on the instance-script model); no
--- cross-creature bridge — the DoAction(ACTION_AHUNE_RETREAT/
--- ACTION_AHUNE_RESURFACE) arms are unreachable: they are fired
--- only cross-creature by boss_ahune's Submerge()/Emerge(),
--- which are themselves unreachable in this model (the bunny
--- phase machine is unregistered), and their inner arms —
--- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE), SetImmuneToPC,
--- RemoveAurasDueToSpell(SPELL_ICE_SPEAR_AURA) — have no flag/
--- immunity/per-spell-removal bridges anyway — so the whole
--- retreat/resurface state machine and the phase-two
--- EVENT_SYNCH_HEALTH event (DoCast(ahune, 46430, true), else
--- DoCastSelf(SPELL_SUICIDE 45254)) are documented only; no
+-- skipped (the core reads its own motion only; the instance
+-- guid store is latched by instance_the_slave_pens.lua). The
+-- DoAction(ACTION_AHUNE_RETREAT/ACTION_AHUNE_RESURFACE) machine
+-- is PORTED below (follow-up strip 2, unit D, 2026-11-13: ev38
+-- receiver + phase-two EVENT_SYNCH_HEALTH pump) — the sender is
+-- boss_ahune's Submerge()/Emerge() (boss_ahune.lua, same strip),
+-- ev38 is the CreatureAI::DoAction dispatch twin
+-- (lua_creature_events.go:837-859), and the inner arms ride live
+-- bridges: SetFlag/RemoveFlag(59) (lua_creature_events.go:6401/
+-- 6489), RemoveAura as the RemoveAurasDueToSpell twin
+-- (lua_creature_events.go:1761), SetImmuneToPC as the
+-- SetFlag/RemoveFlag(59, 0x100) twin (C++ Unit.cpp:8453-8475:
+-- apply = SetFlag + ValidateAttackers + end player combat refs,
+-- moot — the core is REACT_PASSIVE and never in combat; remove =
+-- RemoveFlag exactly). The 46430 synch-health leg is modeled
+-- directly via SetHealth (bossTick precedent in boss_ahune.lua).
+-- The phase-two pump is a global CreateLuaEvent (owner 0, NOT
+-- auto-cancelled on despawn — runtime.go:2425), so ev37 OnRemove
+-- cancels it: the Ahune-evade despawn path never fires ev4. No
 -- player bridge — the watery-grave style player arms have no
 -- bridge (morogrim precedent).
 
@@ -52,8 +58,43 @@ local SPELL_FROZEN_CORE_GETS_HIT = 46810
 local SPELL_ICE_SPEAR_AURA = 46371
 local SPELL_SUMMON_LOOT_MISSILE = 45941
 local SPELL_MINION_DESPAWNER = 46843
+local SPELL_SYNCH_HEALTH = 46430 -- boss_ahune.cpp:39
+local SPELL_SUICIDE = 45254 -- boss_ahune.cpp:88
+local ACTION_AHUNE_RETREAT = -2586500 -- boss_ahune.cpp:132
+local ACTION_AHUNE_RESURFACE = -2586501 -- boss_ahune.cpp:133
+local UNIT_FIELD_FLAGS = 59 -- boss_curator.lua:37 precedent
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
+local UNIT_FLAG_IMMUNE_TO_PC = 0x00000100 -- UnitDefines.h:132
+local ENTRY_AHUNE = 25740
 
 local ENTRY_FROZEN_CORE = 25865
+
+local coreTimers = {}
+
+local function coreCancelPump(guid)
+    local id = coreTimers[guid]
+    if id then
+        RemoveEventById(id)
+        coreTimers[guid] = nil
+    end
+end
+
+-- C++ npc_frozen_core::UpdateAI EVENT_SYNCH_HEALTH (boss_ahune.cpp:324):
+-- DoCast(ahune, SPELL_SYNCH_HEALTH, true), else DoCastSelf(SPELL_SUICIDE);
+-- Repeat 3s. The 46430 script leg (hit health = caster health) is modeled
+-- directly via SetHealth — the bossTick precedent in boss_ahune.lua (the
+-- spell_ahune_synch_health SpellScript has no bridge). First fire at 3s,
+-- matching the C++ ScheduleEvent(3s); repeats 0 = infinite (runtime.go
+-- Tick: only repeats == 1 removes), cancelled by the RESURFACE leg and
+-- the ev2/ev4/ev23/ev37 cancels below.
+local function coreSynchTick(creature)
+    local ahune = creature:FindNearestCreature(ENTRY_AHUNE, 100.0)
+    if ahune then
+        ahune:SetHealth(creature:GetHealth())
+    else
+        creature:CastSpell(creature, SPELL_SUICIDE)
+    end
+end
 
 -- C++ ctor Initialize() (boss_ahune.cpp:282-287): SetReactState(
 -- REACT_PASSIVE) first, then SetRegenerateHealth(false), then the two
@@ -66,20 +107,62 @@ RegisterCreatureEvent(ENTRY_FROZEN_CORE, 5, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 2, function(_, creature)
+    coreCancelPump(creature:GetGUIDLow())
 end)
 
 -- C++ JustDied (boss_ahune.cpp:289-296): Unit::Kill(me, ahune)
 -- FIRST, then the two self casts. Recursion-safe: Kill on the
 -- already-dead Ahune (the normal case — the core dies because Ahune
--- died) is a Health == 0 no-op (boss_ai.go:9697-9700).
+-- died) is a Health == 0 no-op (boss_ai.go:9697-9700). The pump cancel
+-- is Lua bookkeeping, not a C++ arm: the phase-two pump is a global
+-- timer that would outlive the corpse.
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 4, function(_, creature)
-    local ahune = creature:FindNearestCreature(25740, 100.0)
+    coreCancelPump(creature:GetGUIDLow())
+    local ahune = creature:FindNearestCreature(ENTRY_AHUNE, 100.0)
     if ahune then ahune:Kill(creature) end
     creature:CastSpell(creature, SPELL_SUMMON_LOOT_MISSILE)
     creature:CastSpell(creature, SPELL_MINION_DESPAWNER)
 end)
 
 RegisterCreatureEvent(ENTRY_FROZEN_CORE, 23, function(_, creature)
+    coreCancelPump(creature:GetGUIDLow())
+end)
+
+-- C++ npc_frozen_core::DoAction (boss_ahune.cpp:298-313): RETREAT →
+-- RemoveFlag(NOT_SELECTABLE); SetImmuneToPC(false); RemoveAurasDueToSpell
+-- (ICE_SPEAR_AURA); ScheduleEvent(EVENT_SYNCH_HEALTH, 3s, PHASE_TWO).
+-- RESURFACE → _events.Reset(); DoCastSelf(ICE_SPEAR_AURA);
+-- SetFlag(NOT_SELECTABLE); SetImmuneToPC(true). PORTED follow-up strip 2,
+-- unit D. Sender: boss_ahune's Submerge()/Emerge() (boss_ahune.lua, same
+-- strip); ev38 is the CreatureAI::DoAction dispatch twin
+-- (lua_creature_events.go:837-859). SetImmuneToPC rides the
+-- SetFlag/RemoveFlag(59, 0x100) twin (see header note). C++-exact arm order.
+RegisterCreatureEvent(ENTRY_FROZEN_CORE, 38, function(_, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_AHUNE_RETREAT then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:RemoveAura(SPELL_ICE_SPEAR_AURA)
+        coreCancelPump(guid)
+        coreTimers[guid] = CreateLuaEvent(function()
+            coreSynchTick(creature)
+        end, 3000, 0)
+    elseif action == ACTION_AHUNE_RESURFACE then
+        coreCancelPump(guid)
+        creature:CastSpell(creature, SPELL_ICE_SPEAR_AURA)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    end
+end)
+
+-- CreateLuaEvent timers are global (owner 0) and are NOT auto-cancelled
+-- when the creature despawns (runtime.go:2425) — and the Ahune-evade
+-- despawn path never fires ev4 — so ev37 OnRemove cancels the phase-two
+-- pump (Despawn fires ev31 then ev37, lua_creature_events.go:3352-3362;
+-- kiljaeden ev37 cleanup precedent). Idempotent with the ev2/ev4/ev23
+-- cancels above.
+RegisterCreatureEvent(ENTRY_FROZEN_CORE, 37, function(_, creature)
+    coreCancelPump(creature:GetGUIDLow())
 end)
 
 -- C++ spell_ahune_minion_despawner::HandleScript

@@ -50,11 +50,10 @@
 -- so the 2026-10-24 engage-time placement is retired to a redundant
 -- re-assert below) + OnEnterCombat(1): the root is never cleared in
 -- C++ (frozen-core event-5 ctor precedent).
--- EnterEvadeMode is instance/cross-creature/
--- summon gated (ahuneBunny DoAction STOP_EVENT,
--- summons.DespawnAll, DespawnOrUnsummon) — unmodeled
--- (the bunny-side STOP receiver is PORTED below; only the
--- ahune-side send is still unmodeled).
+-- EnterEvadeMode is PORTED below on ev2 (follow-up strip 2, unit D,
+-- 2026-11-13): bunny DoAction(ACTION_STOP_EVENT) + summons.DespawnAll
+-- (the frozen core) + self DespawnOrUnsummon, with a veto return so the
+-- base evade never runs — the C++ override twin (boss_ahune.cpp:185-192).
 -- Deliberate deviations (all await engine bridges): no
 -- instance-script model — boss admission via the luaBossAI shim
 -- (the DATA_AHUNE NOT_STARTED/IN_PROGRESS/DONE bookkeeping in
@@ -63,29 +62,17 @@
 -- instance_the_slave_pens.cpp is PORTED 2026-11-10
 -- (instance_the_slave_pens.lua: LoadObjectData entry latches +
 -- flamecaller GUID capture via creature:SetGuidData, event 5);
--- the DoAction(ACTION_AHUNE_RETREAT) entry to Submerge() is still
--- unported on the receiver side: the sender now fires from
--- npc_ahune_bunny's EVENT_AHUNE_PHASE_TWO (ported below), and the whole
--- bunny phase machine (ACTION_START_EVENT from the
--- go_ahune_ice_stone gossip, EVENT_SUMMON_AHUNE/FROZEN_CORE
--- summons, EVENT_SUMMON_HAILSTONE/COLDWEAVE/FROSTWIND casts,
--- EVENT_START_LOOKING_FOR_OPENING + the cross-creature
--- SHAMANS_LOOK_FOR_OPENING/FOUND_OPENING relay, EVENT_CLOSE_
--- OPENING/EVENT_AHUNE_PHASE_ONE/TWO phase flips with the
--- DATA_FLAMECALLER_* guid lookups and MovePoint choreography,
--- SummonPositions/FlameCallerSpots coords) is PORTED below
--- (follow-up strip 1, unit C, 2026-11-13: DoAction ev38 START/STOP +
--- JustDied ev4 + the UpdateAI phase machine; npc_ahune_bunny
--- JustSummoned ev19 was already ported, and its _summons
--- DespawnAll legs now ride the new ev4/ev38) — so the
--- retreat/emerge machine (Submerge, the
--- EVENT_EMERGE 35s re-arm, Emerge's triggered RESURFACE 46402
--- self-cast and its RemoveAurasDueToSpell(STAY_SUBMERGED/
--- AHUNE_SELF_STUN) + RemoveFlag(NOT_SELECTABLE) arms) is
--- documented only — the Emerge NOT_SELECTABLE flip stays
--- unmodeled (its trigger rides the bunny phase machine, ported
--- below; the receiver itself is the follow-up); BossAI base CASTING gate PORTED on the synch-health tick (see pump gate note; live creature:IsCasting bridge, lua_creature_events.go:1950); no SpellScript
--- bridge, and only one AuraScript bridge (RegisterAuraEvent,
+-- the DoAction(ACTION_AHUNE_RETREAT) receiver (Submerge + the 35s
+-- EVENT_EMERGE re-arm + Emerge's triggered RESURFACE 46402 self-cast and
+-- its RemoveAurasDueToSpell(STAY_SUBMERGED/AHUNE_SELF_STUN) +
+-- RemoveFlag(NOT_SELECTABLE) arms) is PORTED below (follow-up strip 2,
+-- unit D, 2026-11-13: ahuneSubmerge/ahuneEmerge + ev38); the frozen-core
+-- DoAction legs ride the core's own ev38 in npc_frozen_core.lua, and the
+-- synch-health pump stops while submerged (events.Reset) and restarts on
+-- Emerge while the core's phase-two pump runs the 46430 leg instead.
+-- BossAI base CASTING gate PORTED on the synch-health tick (see pump gate
+-- note; live creature:IsCasting bridge, lua_creature_events.go:1950); no
+-- SpellScript bridge, and only one AuraScript bridge (RegisterAuraEvent,
 -- AuraEventOnPeriodic = 1) — three of the nine script classes
 -- in this file
 -- (spell_ahune_synch_health, spell_ahune_spanky_hands,
@@ -114,6 +101,14 @@
 local SPELL_STAND = 37752
 local SPELL_AHUNE_SPANKY_HANDS = 46146
 local SPELL_AHUNES_SHIELD = 45954
+local SPELL_SUBMERGED = 37751 -- boss_ahune.cpp:47
+local SPELL_STAY_SUBMERGED = 46981 -- boss_ahune.cpp:41
+local SPELL_AHUNE_SELF_STUN = 46416 -- boss_ahune.cpp:42
+local UNIT_FIELD_FLAGS = 59 -- boss_curator.lua:37 precedent
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- UnitDefines.h:149
+local EMOTE_ONESHOT_SUBMERGE = 374 -- SharedDefines.h:2012
+local ACTION_STOP_EVENT = -2574501 -- boss_ahune.cpp:129; top placement (not the
+-- bunny const block below) so the ev2 EnterEvadeMode relay above can use it
 
 local ENTRY_AHUNE = 25740
 local ENTRY_AHUNE_BUNNY = 25745 -- NPC_AHUNE_LOC_BUNNY, the_slave_pens.h:53
@@ -132,6 +127,13 @@ end
 
 local function resetBoss(guid)
     cancelPump(guid)
+    -- A pending EVENT_EMERGE one-shot dies with the boss (evade/death/
+    -- re-engage): C++ EnterEvadeMode/JustDied never let it fire after.
+    local st = states[guid]
+    if st and st.emergeId then
+        RemoveEventById(st.emergeId)
+        st.emergeId = nil
+    end
     states[guid] = nil
 end
 
@@ -139,6 +141,7 @@ end
 local function freshState()
     return {
         synchHealth = 3000,
+        submerged = false,
     }
 end
 
@@ -203,7 +206,32 @@ RegisterCreatureEvent(ENTRY_AHUNE, 1, function(_, creature)
 end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 2, function(_, creature)
+    -- C++ boss_ahune::EnterEvadeMode (boss_ahune.cpp:185-192): bunny
+    -- DoAction(ACTION_STOP_EVENT); summons.DespawnAll(); me->
+    -- DespawnOrUnsummon(). PORTED follow-up strip 2, unit D. ev2 IS the
+    -- EnterEvadeMode hook — the engine fires ev23 then ev2 from
+    -- EnterEvadeMode when wasInCombat (creaturemotion.go:4718-4740) — so
+    -- this handler is the override twin, not just a LeaveCombat cleanup.
+    -- The bunny STOP relay re-arms the ice stone via the ported bunny
+    -- ev38 (bunnyStopEvent below); the core is Ahune's summon
+    -- (bunnySummonAhune), so summons.DespawnAll() = core:Despawn()
+    -- (FindNearestCreature idiom, as in JustDied). Despawn is the
+    -- DespawnOrUnsummon twin (lua_creature_events.go:3318). Returning
+    -- true vetoes the base evade (creaturemotion.go:4734-4740) —
+    -- C++-exact, since the override never runs the base evade (no threat
+    -- clear / move home / heal-to-full / aura wipe); without the veto
+    -- the base evade would run those on the despawned motion.
+    local bunny = creature:FindNearestCreature(ENTRY_AHUNE_BUNNY, 100.0)
+    if bunny then
+        bunny:DoAction(ACTION_STOP_EVENT)
+    end
+    local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
+    if core then
+        core:Despawn()
+    end
     resetBoss(creature:GetGUIDLow())
+    creature:Despawn()
+    return true
 end)
 
 RegisterCreatureEvent(ENTRY_AHUNE, 4, function(_, creature)
@@ -281,9 +309,9 @@ end)
 -- every other SummonCreature port.
 
 local ACTION_START_EVENT = -2574500 -- boss_ahune.cpp:128
-local ACTION_STOP_EVENT = -2574501 -- boss_ahune.cpp:129
-local ACTION_AHUNE_RETREAT = -2586500 -- boss_ahune.cpp:130
-local ACTION_EMOTE_RESURFACE = -2575400 -- boss_ahune.cpp:132
+local ACTION_AHUNE_RETREAT = -2586500 -- boss_ahune.cpp:132
+local ACTION_AHUNE_RESURFACE = -2586501 -- boss_ahune.cpp:133
+local ACTION_EMOTE_RESURFACE = -2575400 -- boss_ahune.cpp:134
 local EMOTE_EARTHEN_ASSAULT = 0 -- boss_ahune.cpp:97
 local PHASE_ONE = 0 -- boss_ahune.cpp:138
 local PHASE_TWO = 1 -- boss_ahune.cpp:139
@@ -300,7 +328,7 @@ local SPELL_ICE_BOMBARD = 46397 -- boss_ahune.cpp:68
 local SPELL_SUMMON_HAILSTONE = 46176 -- boss_ahune.cpp:60
 local SPELL_SUMMON_COLDWEAVE = 46143 -- boss_ahune.cpp:58
 local SPELL_SUMMON_FROSTWIND = 46382 -- boss_ahune.cpp:59
-local SPELL_RESURFACE = 46402 -- boss_ahune.cpp:48
+local SPELL_RESURFACE = 46402 -- boss_ahune.cpp:46
 local GO_ICE_STONE = 187882 -- the_slave_pens.h:66
 
 -- boss_ahune.cpp:155-161 SummonPositions (Ahune, frozen core, bonfires).
@@ -479,7 +507,8 @@ end
 -- EMOTE_RETREAT leg — + Ahune DoAction(ACTION_AHUNE_RETREAT); Reset;
 -- SetPhase(PHASE_TWO); schedule CLOSE_OPENING 25s / PHASE_ONE 35s
 -- (both PHASE_TWO). The retreat receiver (Ahune Submerge/Emerge) is
--- still unported, so the DoAction send is dormant until it lands.
+-- PORTED below (ahuneSubmerge/ahuneEmerge + ev38, follow-up strip 2,
+-- unit D), so this DoAction send now lands.
 bunnyPhaseTwo = function(creature, guid)
     local flamecaller = creature:GetInstanceCreature(DATA_FLAMECALLER_000)
     if flamecaller then
@@ -573,6 +602,100 @@ RegisterCreatureEvent(ENTRY_AHUNE_BUNNY, 4, function(_, creature)
     bunnyCancelTimers(guid)
     bunnyResetFlameCallers(creature)
     bunnyStates[guid] = nil
+end)
+
+-- C++ boss_ahune::Submerge (boss_ahune.cpp:260-270): frozen core
+-- DoAction(ACTION_AHUNE_RETREAT); RemoveAurasDueToSpell(AHUNES_SHIELD);
+-- DoCastSelf(SUBMERGED, true); DoCastSelf(SELF_STUN, true);
+-- DoCastSelf(STAY_SUBMERGED, true); HandleEmoteCommand(SUBMERGE);
+-- events.Reset(). PORTED follow-up strip 2, unit D. The core send uses
+-- the file's FindNearestCreature idiom (bossTick/JustDied); the core's
+-- own ev38 receiver lives in npc_frozen_core.lua. RemoveAura is the
+-- RemoveAurasDueToSpell twin (lua_creature_events.go:1761 — one aura per
+-- spell per unit in the Go store). PerformEmote is the
+-- HandleEmoteCommand twin (lua_creature_events.go:4488).
+-- events.Reset() = cancelPump: the synch-health pump stops while
+-- submerged, and the core's phase-two synch pump (npc_frozen_core.lua)
+-- runs the 46430 leg instead. C++-exact arm order.
+local function ahuneSubmerge(creature, guid)
+    local st = states[guid]
+    if not st then
+        return
+    end
+    local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
+    if core then
+        core:DoAction(ACTION_AHUNE_RETREAT)
+    end
+    creature:RemoveAura(SPELL_AHUNES_SHIELD)
+    creature:CastSpell(creature, SPELL_SUBMERGED, true)
+    creature:CastSpell(creature, SPELL_AHUNE_SELF_STUN, true)
+    creature:CastSpell(creature, SPELL_STAY_SUBMERGED, true)
+    creature:PerformEmote(EMOTE_ONESHOT_SUBMERGE)
+    cancelPump(guid)
+    st.submerged = true
+end
+
+-- C++ boss_ahune::Emerge (boss_ahune.cpp:246-258): frozen core
+-- DoAction(ACTION_AHUNE_RESURFACE); DoCastSelf(AHUNES_SHIELD);
+-- RemoveAurasDueToSpell(SELF_STUN); RemoveAurasDueToSpell(STAY_SUBMERGED);
+-- DoCastSelf(STAND); DoCastSelf(RESURFACE, true);
+-- RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE);
+-- ScheduleEvent(EVENT_SYNCH_HEALTH, 3s). PORTED follow-up strip 2,
+-- unit D. RemoveFlag is bridged on the creature event surface
+-- (lua_creature_events.go:6489, field 59); the synch-health re-arm
+-- restarts the 1s pump with a fresh 3s countdown (freshState + bossTick,
+-- the ev1 idiom). The submerged guard makes a stray/duplicate emerge a
+-- no-op; the normal path always schedules it from a submerged state.
+-- C++-exact arm order.
+local function ahuneEmerge(creature, guid)
+    local st = states[guid]
+    if not st or not st.submerged then
+        return
+    end
+    local core = creature:FindNearestCreature(ENTRY_FROZEN_CORE, 100.0)
+    if core then
+        core:DoAction(ACTION_AHUNE_RESURFACE)
+    end
+    creature:CastSpell(creature, SPELL_AHUNES_SHIELD)
+    creature:RemoveAura(SPELL_AHUNE_SELF_STUN)
+    creature:RemoveAura(SPELL_STAY_SUBMERGED)
+    creature:CastSpell(creature, SPELL_STAND)
+    creature:CastSpell(creature, SPELL_RESURFACE, true)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    st.submerged = false
+    states[guid] = freshState()
+    timers[guid] = CreateLuaEvent(function()
+        bossTick(creature, guid)
+    end, 1000, 0)
+end
+
+-- C++ boss_ahune::DoAction (boss_ahune.cpp:213-220): ACTION_AHUNE_RETREAT
+-- → Submerge() + ScheduleEvent(EVENT_EMERGE, 35s). PORTED follow-up
+-- strip 2, unit D. Sender: the bunny phase machine
+-- (EVENT_AHUNE_PHASE_TWO, ported above) — ev38 is the
+-- CreatureAI::DoAction dispatch twin (lua_creature_events.go:837-859),
+-- so the send lands here. The 35s emerge is scheduled AFTER Submerge()
+-- returns, so Submerge's events.Reset() (cancelPump) cannot eat it; a
+-- pending emerge is cancelled first on re-schedule (vezax idiom — C++
+-- would double-schedule, this is the safe equivalent).
+RegisterCreatureEvent(ENTRY_AHUNE, 38, function(_, creature, action)
+    if action ~= ACTION_AHUNE_RETREAT then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local st = states[guid]
+    if not st then
+        states[guid] = freshState()
+        st = states[guid]
+    end
+    ahuneSubmerge(creature, guid)
+    if st.emergeId then
+        RemoveEventById(st.emergeId)
+    end
+    st.emergeId = CreateLuaEvent(function()
+        st.emergeId = nil
+        ahuneEmerge(creature, guid)
+    end, 35000)
 end)
 
 -- C++ spell_ice_spear_control_aura::PeriodicTick

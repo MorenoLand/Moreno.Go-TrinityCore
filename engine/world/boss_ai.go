@@ -15483,9 +15483,10 @@ func init() {
 	// (SpellHit 48382 emote/cast arms — PORTED in
 	// npc_outhouse_bunny.lua, entry 27326 TDB-verified),
 	// npc_amberpine_woodsman (Talk-free emote-state machine —
-	// unregistered AI, no C++ entry constant; TDB binds 27293 to the
-	// ScriptName, AC binds SmartAI — entry TDB-verifiable, port
-	// pending), npc_wounded_skirmisher (PORTED round 21 in
+	// PORTED 2026-11-13 follow-up strip 2 unit B in
+	// lua_scripts/northrend/zone_grizzly_hills.lua — Reset stag
+	// gate + EVENT_WOODSMAN_1/2 emote loop; entry 27293
+	// TDB-verified), npc_wounded_skirmisher (PORTED round 21 in
 	// lua_scripts/northrend/zone_grizzly_hills.lua:347-388 — ev14
 	// SpellHit 48812 Talk(SAY_RANDOM) + 48813 + ev28 MovementInform;
 	// entry 27463 DB-verified),
@@ -15510,6 +15511,7 @@ func init() {
 	// zone_grizzly_hills.lua (RegisterAuraEvent 53094 ev2/ev4).
 	RegisterLuaBoss("npc_rocket_propelled_warhead", 27593)
 	RegisterLuaBoss("npc_emily", 26588)
+	RegisterLuaBoss("npc_amberpine_woodsman", 27293)
 	// npc_apothecary_hanes (Howling Fjord zone script): the
 	// UpdateAI health arm — below 75% health the 10s PotTimer
 	// ticks -> triggered self-cast SPELL_HEALING_POTION 17534

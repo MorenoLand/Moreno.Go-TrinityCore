@@ -31,11 +31,12 @@
 -- Talk SAY_MAIDEN_0/1, gossip-flag windows, despawn 4s after the last
 -- Talk); the old "no bridges" line was stale — SetFacingTo,
 -- UpdateEntry, SetFlag/RemoveFlag and Talk are all live on the
--- creature surface. Stays out: the kissed-frog MoveFollow leg
--- (zone_grizzly_hills.cpp:765) — MoveFollow IS bridged
--- (lua_creature_events.go:5610), so the leg is unported work, not
--- bridge-blocked (2026-11-13 correction) — and MoveIdle (vacuous —
--- the frog stands still).
+-- creature surface. Ported 2026-11-13 (follow-up strip 2, unit C):
+-- the kissed-frog MoveFollow leg (zone_grizzly_hills.cpp:764,
+-- 33211-only, after FROG_KISS + FROG_LOVE) — MoveFollow(player, 0.3,
+-- frand(PI/2, 3PI/2)) rides the bridged methods["MoveFollow"]
+-- (lua_creature_events.go:5664; the header's old :5610 line number
+-- had drifted). MoveIdle stays out (vacuous — the frog stands still).
 -- PORTED 2026-11-13 (round 21): npc_venture_co_straggler
 -- (zone_grizzly_hills.cpp:562-651) + npc_wounded_skirmisher
 -- (:460-560), appended below. The 2026-10-24 "no entry constant,
@@ -48,18 +49,21 @@
 -- creature:MoveTo (the MovePoint twin — the id is recorded so the
 -- arrival fires MovementInform, ev28); DisappearAndDie rides
 -- DespawnOrUnsummon (halazzi/marzon Despawn-twin precedent).
--- Documented-only (nearest-creature axis): npc_amberpine_woodsman
--- (zone_grizzly_hills.cpp:409-457): Reset's
+-- PORTED 2026-11-13 (follow-up strip 2, unit B): npc_amberpine_woodsman
+-- (zone_grizzly_hills.cpp:409-457), appended below. Reset's
 -- FindNearestCreature(NPC_TALLHORN_STAG 26363, 0.2f) emote-state gate
 -- (:420 — EMOTE_STATE_USE_STANDING vs. the EVENT_WOODSMAN_1/2
--- loot/attack emote loop) has a live bridge twin, but the AI is not
--- registered in boss_ai.go and carries no NPC_ entry constant anywhere
--- in the C++ tree. Entry is TDB-verifiable, not entry-blocked: TDB
--- binds 27293 'Amberpine Woodsman' to ScriptName
--- 'npc_amberpine_woodsman' (AC binds SmartAI on the same row) —
--- the "unverifiable — wounded-skirmisher precedent" citation is
--- stale (2026-11-13: the skirmisher itself was DB-verified and
--- ported round 21). Port pending as follow-up work; stays out here.
+-- loot/attack emote loop, :436-442). Entry 27293 TDB-verified:
+-- TDB binds 'Amberpine Woodsman' to ScriptName
+-- 'npc_amberpine_woodsman' (AC binds SmartAI on the same row).
+-- The 0.2f gate is reach-adjusted in C++ (Object.cpp:1169-1173 —
+-- GetDistance subtracts both combat reaches), while the Lua
+-- FindNearestCreature bridge gates on raw 3D
+-- (lua_creature_events.go:6705), so the port re-checks the returned
+-- stag with the manual reach subtraction (lake-frog precedent).
+-- The 0s EVENT_WOODSMAN_1 delay runs synchronously: CreateLuaEvent
+-- rejects delay < 1 (runtime.go parseTimerArgs). Registered in
+-- boss_ai.go as RegisterLuaBoss("npc_amberpine_woodsman", 27293).
 -- Ported (find-nearest-gameobject axis): npc_tallhorn_stag
 -- (zone_grizzly_hills.cpp:339-390 — npc_tallhorn_stag : public
 -- CreatureScript, registered in AddSC_zone_grizzly_hills()). Entry
@@ -211,6 +215,11 @@ local function lakeFrogReceiveEmote(_, creature, player, textEmote)
             creature:CastSpell(player, SPELL_FROG_KISS)
             if creature:GetEntry() == ENTRY_LAKE_FROG then
                 creature:AddAura(SPELL_FROG_LOVE)
+                -- C++ :764 MoveFollow(player, 0.3f, frand(PI/2, PI + PI/2)):
+                -- 0.3yd at a uniform random rear-half angle [PI/2, 3PI/2];
+                -- math.random() is the uniform [0,1) twin (troll_volunteer
+                -- precedent); MoveFollow bridged, lua_creature_events.go:5664.
+                creature:MoveFollow(player, 0.3, math.random() * math.pi + math.pi / 2)
                 schedule(guid, "fadinglove", 61000, function()
                     frogLoveWatch(creature, guid)
                 end)
@@ -514,3 +523,74 @@ RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 2, stragglerCleanup)
 RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 4, stragglerCleanup)
 RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 14, stragglerSpellHit)
 RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 23, stragglerCleanup)
+
+-- npc_amberpine_woodsman (zone_grizzly_hills.cpp:409-457).
+-- Reset (:418-426): if a tallhorn stag (26363) is within 0.2yd the
+-- woodsman stands at it — SetUInt32Value(UNIT_NPC_EMOTESTATE,
+-- EMOTE_STATE_USE_STANDING 69); otherwise EVENT_WOODSMAN_1 fires at
+-- 0s. UpdateAI (:428-447): EVENT_WOODSMAN_1 sets EMOTE_STATE_LOOT
+-- (428) + EVENT_WOODSMAN_2 in 3s; EVENT_WOODSMAN_2 sets
+-- EMOTE_ONESHOT_ATTACK1H (36) + EVENT_WOODSMAN_1 in 4s. No Talk,
+-- no cast, no combat legs — the UpdateVictim tail (:446) is engine
+-- default. EmoteState is the SetUInt32Value(UNIT_NPC_EMOTESTATE)
+-- twin (lua_creature_events.go:4747; razorscale/culling precedent).
+-- The 0.2f gate is reach-adjusted in C++ (Object.cpp:1169-1173:
+-- GetDistance = exact 3D minus both combat reaches, floored at 0),
+-- so the port re-checks the bridge's raw-3D hit with the manual
+-- subtraction (lake-frog GetDistance/GetCombatReach precedent);
+-- same-entry stags share one combat reach, so the nearest-by-raw
+-- stag is also nearest-by-adjusted and checking it alone is exact.
+-- The 0s first event runs synchronously in the reset handler:
+-- CreateLuaEvent rejects delay < 1 (runtime.go parseTimerArgs),
+-- and C++ fires it on the first UpdateAI tick anyway. Entry
+-- 27293 TDB-verified (see file header).
+local ENTRY_AMBERPINE_WOODSMAN = 27293
+local EMOTE_STATE_USE_STANDING = 69 -- SharedDefines.h:1987
+local EMOTE_STATE_LOOT = 428 -- SharedDefines.h:2065
+local EMOTE_ONESHOT_ATTACK1H = 36 -- SharedDefines.h:1969
+local WOODSMAN_STAG_RANGE = 0.2
+
+-- Single alternating function (no cyclic forward-declare pair):
+-- true = EVENT_WOODSMAN_1 (loot, 3s to stage 2),
+-- false = EVENT_WOODSMAN_2 (attack, 4s to stage 1).
+local function woodsmanLoop(creature, guid, isLoot)
+    if isLoot then
+        creature:EmoteState(EMOTE_STATE_LOOT)
+        schedule(guid, "woodsman", 3000, function()
+            woodsmanLoop(creature, guid, false)
+        end)
+    else
+        creature:EmoteState(EMOTE_ONESHOT_ATTACK1H)
+        schedule(guid, "woodsman", 4000, function()
+            woodsmanLoop(creature, guid, true)
+        end)
+    end
+end
+
+local function woodsmanReset(_, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    local stag = creature:FindNearestCreature(ENTRY_TALLHORN_STAG, WOODSMAN_STAG_RANGE)
+    if stag ~= nil then
+        local adjusted = creature:GetDistance(stag) - creature:GetCombatReach() - stag:GetCombatReach()
+        if adjusted < 0 then
+            adjusted = 0
+        end
+        if adjusted <= WOODSMAN_STAG_RANGE then
+            creature:EmoteState(EMOTE_STATE_USE_STANDING)
+            return
+        end
+    end
+    -- C++ :425 schedules EVENT_WOODSMAN_1 at 0s — synchronous here
+    -- (CreateLuaEvent rejects delay < 1).
+    woodsmanLoop(creature, guid, true)
+end
+
+local function woodsmanCleanup(_, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+RegisterCreatureEvent(ENTRY_AMBERPINE_WOODSMAN, 5, woodsmanReset)
+RegisterCreatureEvent(ENTRY_AMBERPINE_WOODSMAN, 23, woodsmanReset)
+RegisterCreatureEvent(ENTRY_AMBERPINE_WOODSMAN, 2, woodsmanCleanup)
+RegisterCreatureEvent(ENTRY_AMBERPINE_WOODSMAN, 4, woodsmanCleanup)

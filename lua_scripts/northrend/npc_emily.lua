@@ -26,27 +26,23 @@
 -- Talk(4) with no who) — the event-1 auriaya precedent. The AI
 -- class is EscortAI-based, but the JustEngagedWith arm is a bare
 -- self-Talk, fully covered by the event-1 Talk bridge.
--- Unmodeled (no bridges — documented, not wired):
--- npc_emily: WaypointReached escort cinematic (Talk SAY_WORGHAGGRO1
--- 0 / SAY_WORGRAGGRO3 2 / SAY_VICTORY2 6 / SAY_VICTORY3 7 /
--- SAY_VICTORY4 8 / SAY_QUEST_COMPLETE 12 + SummonCreature
--- 26586/26590 + DoCast 47184 + EnterVehicle + faction swaps +
--- MovePoint/MoveFollow + DisappearAndDie legs) — the 27-waypoint
--- EscortAI cinematic (WaypointReached, zone_grizzly_hills.cpp:81-175)
--- is UNPORTED, not bridge-blocked (2026-11-13 correction): the escort
--- spine is live — StartEscort (lua_creature_events.go:2655),
--- MoveWaypoint (:4641), OnReachWP arrival ev6 (runtime.go:371, fired
--- creaturemotion.go:5313), MoveFollow (:5610), SummonCreature
--- (:4097), SetFaction (:6593), SetWalk (:3956), CastSpell (:954),
--- Kill (:3436), ExitVehicle (:3626), SetDeathState (:2212),
--- DespawnOrUnsummon (:7230), player:GroupEventHappens
--- (lua_player.go:5306). The single cast arm (DoCast 47184 on
--- Mrfloppy, :116) is waypoint-18-gated, not timer-driven
--- (thassarian/borean_tundra precedent). STILL BLOCKED: waypoint 19
+-- WaypointReached escort cinematic (zone_grizzly_hills.cpp:78-175)
+-- PORTED 2026-11-13 (follow-up strip 2, unit A): ev6
+-- emilyWaypointReached below, GetCurrentWaypointId switch (wilda
+-- precedent) — wp9 Mrfloppy GUID latch, wp10 Talk(0) + SummonCreature
+-- 26586, wp11 MoveFollow, wp17 MoveTo + Talk(2) + SummonCreature 26590
+-- + SetFaction(35), wp18 MoveTo + DoCast 47184 on Mrfloppy, wp20
+-- PerformEmote(34) (HandleEmoteCommand twin), wp21 Kill + ExitVehicle
+-- + SetFaction(14) + MoveTo + Talk(6), wp22 RWORG DespawnOrUnsummon +
+-- Emily MoveTo + Mrfloppy SetDeathState(ALIVE 0) + SetHealth(max) +
+-- MoveFollow + Talk(7), wp24 GroupEventHappens(12027) + Talk(12,
+-- player) + SetWalk(false), wp25 Talk(8), wp27 double
+-- DespawnOrUnsummon (DisappearAndDie twin). STILL BLOCKED: waypoint 19
 -- EnterVehicle has no bridge (no methods["EnterVehicle"] in the
--- engine); waypoint 20 HandleEmoteCommand needs a per-leg
--- PerformEmote (:4475) twin check at port time. OnQuestAccept Talk
--- SAY_QUEST_ACCEPT 11 is PORTED below (event 31).
+-- engine) — comment-only branch in the handler. OnQuestAccept Talk
+-- SAY_QUEST_ACCEPT 11 is PORTED below (event 31), including the
+-- Mrfloppy MoveFollow + StartEscort + MoveWaypoint legs
+-- (zone_grizzly_hills.cpp:187-196).
 -- npc_mrfloppy: JustEngagedWith Talk arms are all cross-creature
 -- (Emily->AI()->Talk SAY_WORGHAGGRO2 1 / SAY_WORGRAGGRO4 3 /
 -- SAY_RANDOMAGGRO 4, entry-gated on 26586/26590) — PORTED below via
@@ -130,30 +126,211 @@ local ENTRY_EMILY = 26588
 local ENTRY_MRFLOPPY = 26589 -- zone_grizzly_hills.cpp:36 (NPC_MRFLOPPY)
 local NPC_HUNGRY_WORG = 26586 -- zone_grizzly_hills.cpp:37
 local NPC_RAVENOUS_WORG = 26590 -- zone_grizzly_hills.cpp:38
+local SAY_WORGHAGGRO1 = 0 -- Um... I think one of those wolves is back...
 local SAY_WORGHAGGRO2 = 1 -- He's going for Mr. Floppy!
+local SAY_WORGRAGGRO3 = 2 -- Oh, no! Look, it's another wolf, and it's a biiiiiig one!
 local SAY_WORGRAGGRO4 = 3 -- He's gonna eat Mr. Floppy! You gotta help Mr. Floppy! You just gotta!
 local SAY_RANDOMAGGRO = 4 -- There's a big meanie attacking Mr. Floppy! Help!
+local SAY_VICTORY2 = 6 -- Don't go toward the light, Mr. Floppy!
+local SAY_VICTORY3 = 7 -- Mr. Floppy, you're ok! Thank you so much for saving Mr. Floppy!
+local SAY_VICTORY4 = 8 -- I think I see the camp! We're almost home, Mr. Floppy! Let's go!
 local SAY_QUEST_ACCEPT = 11 -- Are you ready, Mr. Floppy? Stay close to me and watch out for those wolves!
+local SAY_QUEST_COMPLETE = 12 -- Thank you for helping me get back to the camp. Go tell Walter that I'm safe now!
+local SPELL_MRFLOPPY = 47184 -- zone_grizzly_hills.cpp:43 (vehicle aura)
+local FACTION_FRIENDLY = 35 -- SharedDefines.h:231
+local FACTION_MONSTER = 14 -- SharedDefines.h:226
+local EMOTE_ONESHOT_WOUND_CRITICAL = 34 -- SharedDefines.h:1967
+local PET_FOLLOW_DIST = 1.0 -- PetDefines.h:84
+local PET_FOLLOW_ANGLE = math.pi / 2 -- PetDefines.h:85 (M_PI/2)
+local TEMPSUMMON_TIMED_OR_DEAD_DESPAWN = 1 -- ObjectDefines.h:59
+local SUMMON_DESPAWN_MS = 120000 -- 2min (zone_grizzly_hills.cpp:94, :105)
+local DEATHSTATE_ALIVE = 0 -- Unit.h:202
+local WORG_SUMMON_ORIENTATION = 3.229 -- zone_grizzly_hills.cpp:94, :105
 
 local QUEST_PERILOUS_ADVENTURE = 12027
+
+-- Per-Emily GUID latches (C++ _mrfloppyGUID / _RavenousworgGUID,
+-- zone_grizzly_hills.cpp:200-201), keyed by Emily's GUIDLow — the
+-- legoso guid-keyed-table precedent. Resolved via GetCreatureByGUID
+-- (lua_creature_events.go:4332); nil when the creature is gone, the
+-- C++ ObjectAccessor::GetCreature null-guard twin.
+local escortGUIDs = {}
+
+local function emilyState(creature)
+    local guid = creature:GetGUIDLow()
+    local st = escortGUIDs[guid]
+    if st == nil then
+        st = {}
+        escortGUIDs[guid] = st
+    end
+    return st
+end
+
+local function getMrfloppy(creature)
+    local guid = emilyState(creature).mrfloppy
+    if guid == nil then
+        return nil
+    end
+    return creature:GetCreatureByGUID(guid)
+end
+
+local function getRavenousWorg(creature)
+    local guid = emilyState(creature).rworg
+    if guid == nil then
+        return nil
+    end
+    return creature:GetCreatureByGUID(guid)
+end
 
 -- C++ JustEngagedWith: Talk(SAY_RANDOMAGGRO) (no target).
 local function emilyEnterCombat(event, creature, target)
     creature:Talk(SAY_RANDOMAGGRO)
 end
 
--- C++ OnQuestAccept (zone_grizzly_hills.cpp:186-195): quest 12027
--- -> Talk(SAY_QUEST_ACCEPT), untargeted. The Mrfloppy MoveFollow and
--- EscortAI::Start legs have no bridges (muglash/ranshalla precedent).
+-- C++ OnQuestAccept (zone_grizzly_hills.cpp:187-196): quest 12027
+-- -> Talk(SAY_QUEST_ACCEPT), Mrfloppy MoveFollow, EscortAI::Start.
+-- C++ order: Talk, MoveFollow, Start (wilda Talk/SetFaction/
+-- StartEscort/MoveWaypoint precedent for the StartEscort +
+-- MoveWaypoint tail).
 local function emilyQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_PERILOUS_ADVENTURE then
         return
     end
     creature:Talk(SAY_QUEST_ACCEPT)
+    local mrfloppy = creature:FindNearestCreature(ENTRY_MRFLOPPY, 180.0)
+    if mrfloppy ~= nil then
+        mrfloppy:MoveFollow(creature, PET_FOLLOW_DIST, PET_FOLLOW_ANGLE)
+    end
+    creature:StartEscort(player)
+    creature:MoveWaypoint()
 end
 
 RegisterCreatureEvent(ENTRY_EMILY, 1, emilyEnterCombat)
 RegisterCreatureEvent(ENTRY_EMILY, 31, emilyQuestAccept)
+
+-- C++ WaypointReached (zone_grizzly_hills.cpp:78-175): the waypoint id
+-- is the DB point (GetCurrentWaypointId, wilda precedent); the player
+-- nil-guard mirrors `if (!player) return` (:80-82). Arm order and
+-- spell/entry IDs are C++-exact per leg; see the header for the
+-- bridge file:line of each method used.
+local function emilyWaypointReached(event, creature)
+    local player = creature:GetEscortPlayer()
+    if player == nil then
+        return
+    end
+    local wp = creature:GetCurrentWaypointId()
+    if wp == 9 then
+        -- :86-89: latch the closest Mrfloppy within 100yd.
+        local mrfloppy = creature:FindNearestCreature(ENTRY_MRFLOPPY, 100.0)
+        if mrfloppy ~= nil then
+            emilyState(creature).mrfloppy = mrfloppy:GetGUIDLow()
+        end
+    elseif wp == 10 then
+        -- :90-96: Talk(0) + summon the hungry worg (feeds the latent
+        -- ev19 emilyJustSummoned arm, already ported).
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            creature:Talk(SAY_WORGHAGGRO1)
+            creature:SummonCreature(NPC_HUNGRY_WORG, creature:GetX() + 5, creature:GetY() + 2, creature:GetZ() + 1, WORG_SUMMON_ORIENTATION, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, SUMMON_DESPAWN_MS)
+        end
+    elseif wp == 11 then
+        -- :97-100: Mrfloppy follows Emily.
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            mrfloppy:MoveFollow(creature, PET_FOLLOW_DIST, PET_FOLLOW_ANGLE)
+        end
+    elseif wp == 17 then
+        -- :101-110: Mrfloppy MovePoint is Mrfloppy-gated; Talk(2) and
+        -- the ravenous-worg summon are ungated in C++.
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            mrfloppy:MoveTo(0, creature:GetX(), creature:GetY(), creature:GetZ())
+        end
+        creature:Talk(SAY_WORGRAGGRO3)
+        local rworg = creature:SummonCreature(NPC_RAVENOUS_WORG, creature:GetX() + 10, creature:GetY() + 8, creature:GetZ() + 2, WORG_SUMMON_ORIENTATION, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, SUMMON_DESPAWN_MS)
+        if rworg ~= nil then
+            rworg:SetFaction(FACTION_FRIENDLY)
+            emilyState(creature).rworg = rworg:GetGUIDLow()
+        end
+    elseif wp == 18 then
+        -- :111-118: ravenous worg runs to Mrfloppy; Emily casts the
+        -- vehicle aura (47184) on Mrfloppy.
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            local rworg = getRavenousWorg(creature)
+            if rworg ~= nil then
+                rworg:MoveTo(0, mrfloppy:GetX(), mrfloppy:GetY(), mrfloppy:GetZ())
+            end
+            creature:CastSpell(mrfloppy, SPELL_MRFLOPPY)
+        end
+    elseif wp == 19 then
+        -- :119-128 BLOCKED: Mrfloppy:EnterVehicle(RWORG), gated on
+        -- HasAura(47184) — the gate is checkable (creature:HasAura)
+        -- but EnterVehicle has no creature bridge (no
+        -- methods["EnterVehicle"] in the engine; only the debug
+        -- command + vehicle.go internals). Nothing fires here until
+        -- that bridge lands.
+    elseif wp == 20 then
+        -- :129-132: ravenous worg plays the wound-critical emote
+        -- (PerformEmote is the HandleEmoteCommand twin).
+        local rworg = getRavenousWorg(creature)
+        if rworg ~= nil then
+            rworg:PerformEmote(EMOTE_ONESHOT_WOUND_CRITICAL)
+        end
+    elseif wp == 21 then
+        -- :133-145: the ravenous worg kills Mrfloppy (C++
+        -- Unit::Kill(RWORG, Mrfloppy), attacker first), Mrfloppy
+        -- exits the vehicle, worg flips hostile and runs off; Talk(6).
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            local rworg = getRavenousWorg(creature)
+            if rworg ~= nil then
+                mrfloppy:Kill(rworg)
+                mrfloppy:ExitVehicle()
+                rworg:SetFaction(FACTION_MONSTER)
+                rworg:MoveTo(0, rworg:GetX() + 10, rworg:GetY() + 80, rworg:GetZ())
+                creature:Talk(SAY_VICTORY2)
+            end
+        end
+    elseif wp == 22 then
+        -- :146-159: if Mrfloppy is dead, the worg disappears, Emily
+        -- runs to Mrfloppy, Mrfloppy revives and follows; Talk(7).
+        -- SetDeathState(ALIVE) alone leaves Health 0 in the Go model
+        -- (IsDead is health-based; the ALIVE arm sets the field only),
+        -- so SetHealth(max) rides along — the skyriss
+        -- SetDeathState+SetHealth pairing precedent.
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil and mrfloppy:IsDead() then
+            local rworg = getRavenousWorg(creature)
+            if rworg ~= nil then
+                rworg:DespawnOrUnsummon()
+            end
+            creature:MoveTo(0, mrfloppy:GetX(), mrfloppy:GetY(), mrfloppy:GetZ())
+            mrfloppy:SetDeathState(DEATHSTATE_ALIVE)
+            mrfloppy:SetHealth(mrfloppy:GetMaxHealth())
+            mrfloppy:MoveFollow(creature, PET_FOLLOW_DIST, PET_FOLLOW_ANGLE)
+            creature:Talk(SAY_VICTORY3)
+        end
+    elseif wp == 24 then
+        -- :160-164: quest credit + Talk(12) to the player
+        -- + walk mode off.
+        player:GroupEventHappens(QUEST_PERILOUS_ADVENTURE, creature)
+        creature:Talk(SAY_QUEST_COMPLETE, player)
+        creature:SetWalk(false)
+    elseif wp == 25 then
+        -- :165-167: Talk(8).
+        creature:Talk(SAY_VICTORY4)
+    elseif wp == 27 then
+        -- :168-172: both disappear (DisappearAndDie twin).
+        creature:DespawnOrUnsummon()
+        local mrfloppy = getMrfloppy(creature)
+        if mrfloppy ~= nil then
+            mrfloppy:DespawnOrUnsummon()
+        end
+    end
+end
+
+RegisterCreatureEvent(ENTRY_EMILY, 6, emilyWaypointReached)
 
 -- C++ npc_emilyAI::JustSummoned (zone_grizzly_hills.cpp:70-76): a
 -- creature Emily summons attacks Mrfloppy (26589) if one is within
