@@ -52,8 +52,10 @@
 -- (SUBBOSS_AGGRO_TRIGGER 52343, triggered), 70s repeat, driven by the
 -- DoAction machine below (PET_ENGAGED schedules it; a watcher death
 -- reschedules it 5s out). The trigger's SpellScript watcher-target
--- selection stays out (no SpellScript-binding bridge, razelikh
--- precedent); the cast itself is C++-exact and inert without it.
+-- selection is PORTED below via RegisterSpellEvent ev7 (2026-11-11);
+-- both it and the SpellHit/SpellHitTarget legs ride the spellKnown
+-- gate (boss_ai.go:1825), dormant until Spell.dbc ships the 52343
+-- record — live-registered, not inert.
 -- EVENT_SWARM (DoCastAOE(SPELL_SWARM 52440) + Talk(SAY_SWARM 3), 5s
 -- EVENT_FRENZY (HealthBelowPct(10) _hadFrenzy latch -> DoCastSelf(Frenzy
 -- 28747) + DoCastAOE(CURSE_OF_FATIGUE 52592), 1s init, 15s repeat) —
@@ -74,9 +76,15 @@
 -- live). ACTION_GATEWATCHER_GREET (-1, instance SetData + Talk
 -- SAY_PREFIGHT 4) stays out: instance-script model absent (standing).
 -- SpellHit / SpellHitTarget (SUBBOSS_AGGRO_TRIGGER -> DoZoneInCombat
--- / Talk SAY_SEND_GROUP 5) stay out: the trigger cast has no modeled
--- targets in Go, so event 15 never fires for it (event 15 itself is
--- live — boss_ai.go:1904).
+-- / Talk SAY_SEND_GROUP 5) — PORTED 2026-11-13 (round 25): ev14
+-- krikThirSpellHit + ev15 krikThirSpellHitTarget below. The round-25
+-- "trigger cast unported" premise was stale — the cast landed tick
+-- 390 and the ev7 target filter 2026-11-11. NOTE: under the current
+-- self-cast rendering the boss is the hit target, so the ev14 leg
+-- rides the first send-group cast; C++ hits the boss only when no
+-- watcher is available (:941-944) — exact once the area-target
+-- strand lands. The pet-base SpellHit arm (:384, adds -> DoZoneInCombat)
+-- stays out with the entry-blocked adds.
 -- npc_watcher_gashra / npc_watcher_narjil / npc_watcher_silthik —
 -- PORTED 2026-11-07 (tick 390): entries 28730 / 28729 / 28731
 -- (azjol_nerub.h). Engage relays (petAI JustEngagedWith :330-352:
@@ -336,6 +344,34 @@ local function krikThirDamageTaken(event, creature, attacker, damage)
     end
 end
 
+-- C++ boss_krik_thirAI::SpellHit (:297-301): if the spell is
+-- SUBBOSS_AGGRO_TRIGGER 52343, DoZoneInCombat. ev14 args are
+-- (event, creature, caster, spellId) (vx_001 precedent); the fire
+-- site is gated on spellKnown (boss_ai.go:1825/:4244), dormant until
+-- Spell.dbc ships the 52343 record — same dormancy as the ev7
+-- target filter above. See the header note on the self-cast
+-- rendering: the boss is the hit target until the area-target
+-- strand lands.
+local function krikThirSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_SUBBOSS_AGGRO_TRIGGER then
+        return
+    end
+    creature:DoZoneInCombat()
+end
+
+-- C++ boss_krik_thirAI::SpellHitTarget (:303-307): if the spell is
+-- SUBBOSS_AGGRO_TRIGGER 52343, Talk(SAY_SEND_GROUP 5). ev15 args
+-- are (event, creature, target, spellId) (drakkari MERGE precedent);
+-- one Talk per hit target, and C++ hits exactly one target per
+-- cast (:952-954), so the count is exact. Same spellKnown dormancy
+-- as the ev14 leg above.
+local function krikThirSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_SUBBOSS_AGGRO_TRIGGER then
+        return
+    end
+    creature:Talk(SAY_SEND_GROUP)
+end
+
 
 -- C++ _watchersActive / _petsInCombat, keyed by boss GUID (Reset
 -- clears both; JustEngagedWith clears _petsInCombat only).
@@ -555,6 +591,8 @@ RegisterCreatureEvent(ENTRY_KRIK_THIR, 9, krikThirDamageTaken)
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 23, krikThirReset)
 
 RegisterCreatureEvent(ENTRY_KRIK_THIR, 38, krikThirDoAction)
+RegisterCreatureEvent(ENTRY_KRIK_THIR, 14, krikThirSpellHit)
+RegisterCreatureEvent(ENTRY_KRIK_THIR, 15, krikThirSpellHitTarget)
 RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 1, makeWatcherEnterCombat(watcherRotations[ENTRY_WATCHER_GASHRA]))
 RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 2, watcherLeaveCombat)
 RegisterCreatureEvent(ENTRY_WATCHER_GASHRA, 4, makeWatcherDied(ACTION_GASHRA_DIED))

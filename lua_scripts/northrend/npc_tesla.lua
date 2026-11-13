@@ -14,7 +14,13 @@
 -- Sole-source verified: whole-server-tree grep for "npc_tesla"
 -- hits boss_thaddius.cpp only (loader carries only the decl/call
 -- lines); zero sql/ hits. No tesla lua existed.
--- Eluna creature events: 9 OnDamageTaken. The C++ AI is otherwise
+-- Eluna creature events: 9 OnDamageTaken. No RegisterLuaBoss line
+-- is needed: the runtime loads every lua_scripts file
+-- (runtime.go:899 WalkDir), so RegisterCreatureEvent handlers fire
+-- without one — RegisterLuaBoss only installs the no-op luaBossAI
+-- for instance encounter admission (boss_ai.go:13482), which a
+-- trash add never needs. (Round-25 group-D open question, closed
+-- 2026-11-13.) The C++ AI is otherwise
 -- inert: EnterEvadeMode/UpdateAI/JustEngagedWith are empty
 -- overrides (boss_thaddius.cpp:970-973); the coil only talks
 -- (EMOTE_TESLA_OVERLOAD / EMOTE_TESLA_LINK_BREAKS via the stalagg/feugen
