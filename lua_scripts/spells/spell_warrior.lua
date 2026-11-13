@@ -205,11 +205,14 @@ local SPELL_WARRIOR_UNRELENTING_ASSAULT_TRIGGER_2 = 64850 -- spell_warrior.cpp:6
 -- C++ spell_warr_overpower_SpellScript::HandleEffect (spell_warrior.cpp:725-743):
 -- OnEffectHitTarget EFFECT_0 ANY — if the caster has Unrelenting Assault
 -- R1/R2 and the hit target is a player currently casting a non-melee
--- spell, the target casts 64849/64850 on itself, triggered. The
--- IsNonMeleeSpellCast(false, false, true) twin reads the target's live
--- cast slots (Unit.cpp): a generic-slot cast with a cast time
--- (skipInstant), or a channeled spell; autorepeat is skipped. The
--- GetObjectType() gate is the GetHitPlayer() twin (vigilanceTrigger
+-- spell, the target casts 64849/64850 on itself, triggered.
+-- IsNonMeleeSpellCast(false, false, true) (Unit.cpp:3182): withDelayed=false,
+-- skipChanneled=false, skipAutorepeat=true; skipInstant defaults false, so
+-- ANY live non-delayed generic cast counts (instant included) plus any live
+-- channeled cast; autorepeat is skipped. The Go twin is the live-slot read:
+-- GetCurrentSpell(1) is non-nil only while a cast is unfinished (spells.go
+-- clears activeCast on completion), GetCurrentSpell(2) while channeling.
+-- The GetObjectType() gate is the GetHitPlayer() twin (vigilanceTrigger
 -- precedent above). ev5 fires on the player direct-cast path
 -- (spells.go:14892). DORMANT until Spell.dbc ships the records.
 local function overpowerEffect(event, spell, hitTarget, effectIndex)
@@ -229,8 +232,7 @@ local function overpowerEffect(event, spell, hitTarget, effectIndex)
     if triggerId == nil then
         return
     end
-    local generic = hitTarget:GetCurrentSpell(1)
-    if generic ~= nil and generic:GetCastTime() > 0 then
+    if hitTarget:GetCurrentSpell(1) ~= nil then
         hitTarget:CastSpell(hitTarget, triggerId, true)
         return
     end
