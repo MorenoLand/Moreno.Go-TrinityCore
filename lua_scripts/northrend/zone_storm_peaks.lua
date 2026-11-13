@@ -371,7 +371,8 @@ RegisterSpellEvent(SPELL_REMOVE_COLLAPSING_CAVE_AURA, 5, removeCollapsingCaveAur
 --   npc_wild_wyrmAI::DamageTaken (zone_storm_peaks.cpp:795-826):
 --   lethal damage clamps to health-1 and latches PHASE_DEAD; the
 --   _scheduler.Async body casts Wyrm Kill Credit (56703) + Falling
---   Dragon Feign Death (55795) on self (triggered), removes Jaws of
+--   Dragon Feign Death (55795) on self (non-triggered — C++
+--   DoCastAOE default args are TRIGGERED_NONE, volkhan precedent)
 --   Death Periodic (56692) + Pry Jaws Open (56706), sets
 --   UNIT_DYNFLAG_DEAD, clears UNIT_NPC_FLAGS, and MoveFalls
 --   (POINT_FALL 2). ev9 bridge is the damage-rewrite hook
@@ -398,8 +399,8 @@ local UNIT_NPC_FLAGS_WYRM = 82 -- UpdateFields.h:139 (nefarian precedent)
 local wildWyrmDead = {}
 
 local function wildWyrmDeadPhase(creature)
-    creature:CastSpell(creature, SPELL_WYRM_KILL_CREDIT, true)
-    creature:CastSpell(creature, SPELL_FALLING_DRAGON_FEIGN_DEATH, true)
+    creature:CastSpell(creature, SPELL_WYRM_KILL_CREDIT)
+    creature:CastSpell(creature, SPELL_FALLING_DRAGON_FEIGN_DEATH)
     creature:RemoveAura(SPELL_JAWS_OF_DEATH_PERIODIC)
     creature:RemoveAura(SPELL_PRY_JAWS_OPEN)
     creature:SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD)

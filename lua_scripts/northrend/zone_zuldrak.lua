@@ -404,7 +404,7 @@ local function shacklesReset(event, creature)
     end
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     local reach = creature:GetCombatReach()
-    local x, y, z = creature:GetRelativePoint(0.1 - 2 * reach / 3, 0)
+    local x, y, z = creature:GetRelativePoint(reach / 3 + 0.1, 0) -- GetClosePoint(reach/3, 0.1): total reach + reach/3 + 0.1 (king_dred precedent)
     local rageclaw = creature:SummonCreature(NPC_RAGECLAW, x, y, z, 0, TEMPSUMMON_DEAD_DESPAWN, 1000)
     if rageclaw ~= nil then
         shacklesState[creature:GetGUIDLow()] = { rageclawGUID = rageclaw:GetGUIDLow() }
@@ -469,7 +469,7 @@ local function harkoaReset(event, creature)
         return
     end
     local reach = creature:GetCombatReach()
-    local x, y, z = creature:GetRelativePoint(25.0 - 2 * reach / 3, 0)
+    local x, y, z = creature:GetRelativePoint(reach / 3 + 25.0, 0) -- GetClosePoint(reach/3, 25.0): total reach + reach/3 + 25.0 (king_dred precedent)
     creature:MoveTo(0, x, y, z)
 end
 
