@@ -80,14 +80,13 @@
 -- un-gating has no bearer; Reset's RemoveAllAuras is PORTED below
 -- (paletressReset, ev23) and Initialize re-inits the timers/latches;
 -- the paired ObjectAccessor::GetCreature(MemoryGUID) RemoveFromWorld
--- leg stays out (cross-AI, no creature bridge, unregistered
--- npc_memory bearer);
+-- leg is PORTED below (Despawn on the stored MemoryGUID, ev19);
 -- SetData(1) ->
--- RemoveAura(SPELL_SHIELD 66515) — the "no aura-removal" wording
--- is stale (creature:RemoveAura is bridged), but the arm is
--- triggered cross-AI via SetData from unregistered npc_memory
--- JustDied (no SetData dispatch event — the write would land in
--- the ScriptData store unread); DamageTaken / MovementInform — same bridges
+-- RemoveAura(SPELL_SHIELD 66515) — PORTED below as a direct
+-- RemoveAura on the summoner in memoryDied (SetData fires no dispatch
+-- event, so the cross-AI write is wired directly; GetSummonerUnit
+-- resolves Paletress because she casts the MEMORY_* spell — see
+-- summonMemoryHit); DamageTaken / MovementInform — same bridges
 -- absent as
 -- boss_eadric; uiHolyFireTimer — PORTED below: SelectTarget(Random,
 -- 0, 250, true) via threat-list randomPlayer -> DoCast(Holy Fire
@@ -97,50 +96,44 @@
 -- uiHolySmiteTimer — PORTED below: same pick -> DoCast(Smite 66536),
 -- 5-7s init, 9s shielded / 5-7s unshielded repeat; Renew
 -- machine — PORTED below (HasAura(SPELL_SHIELD) gate, bridged
--- lua_objects.go:228; urand(0,1): self-cast Renew 66537 on 0, the
--- cross-AI DoCast(pMemory, Renew) leg on 1 stays out — no memory
--- bearer — while the re-arm stays unconditional per C++; the
--- shielded-only decrement is modeled by a 1s poll + remainder
--- counter, since the timer freezes while Shield is absent); the 25%
+-- lua_objects.go:228; urand(0,1): self-cast Renew 66537 on 0, memory
+-- Renew on 1 PORTED via memoryForPaletress; the re-arm stays
+-- unconditional per C++; the shielded-only decrement is modeled by a
+-- 1s poll + remainder counter, since the timer freezes while Shield
+-- is absent); the 25%
 -- HealthAbovePct one-shot — PORTED below as an ev9 postDamage latch
 -- (UpdateAI !HealthAbovePct(25) form, Unit.h:874: fires when
 -- postDamage <= floor(max*25/100) with the postDamage > 0 guard, so
 -- it never fires on the absorbed lethal hit): InterruptNonMeleeSpells
--- + Holy Nova 66546 + Shield 66515 + Confess 66680 as self-casts
--- (DoCastAOE convention); Summon Memory 66545 stays out (DB-side
--- summon effect, no Go producer — Army of the Dead precedent);
--- JustSummoned MemoryGUID latch — summon STRAND absent
--- (standing). Entry 34928 verifiable (trial_of_the_champion.h
+-- + Holy Nova 66546 + Shield 66515 + Summon Memory 66545 + Confess
+-- 66680 as self-casts (DoCastAOE convention; the Summon Memory leg
+-- is DORMANT until Spell.dbc ships 66545 + the 25 MEMORY_* rows);
+-- JustSummoned MemoryGUID latch — PORTED below (paletressJustSummoned,
+-- ev19). Entry 34928 verifiable (trial_of_the_champion.h
 -- NPC_PALETRESS — kalecgos pass); the remaining stay-outs are the
--- constructor/intro-machine legs, MovementInform, and the
--- memory/soldier/SpellScript machines above.
+-- constructor/intro-machine legs and MovementInform.
 -- boss_paletress DamageTaken — PORTED (same arm as boss_eadric,
 -- boss_argent_challenge.cpp:320-328): damage >= health -> damage =
 -- 0 + EnterEvadeMode (bridged) +
 -- SetFaction(FACTION_FRIENDLY 35). Entry 34928 verifiable
 -- (trial_of_the_champion.h NPC_PALETRESS — kalecgos pass), so this
--- arm registers here on its own entry even though the rest of
--- paletress stays out (constructor/Reset/UpdateAI legs on absent
--- bridges — see below).
--- npc_memory — ENTRY UNVERIFIABLE (no NPC constant in
--- trial_of_the_champion.h or anywhere in the C++ sources; the
--- memory creatures materialize through the DB-side summon spells
--- (SPELL_MEMORY_HOGGER 66543 et al.) — belnistrasz/willix
--- precedent, no invented identifiers): zero registration; joins
--- the bridgeable-but-entry-blocked queue. Port-pattern-ready
--- rotation arms: uiWakingNightmare — DoCastSelf(Waking Nightmare
--- 66552), 7s init, 7s repeat; uiOldWoundsTimer —
--- SelectTarget(Random, 0) -> DoCast(Old Wounds 66620), 12s
--- repeat; uiShadowPastTimer — SelectTarget(Random, 1) ->
--- DoCast(Shadows Past 66619), 5s repeat — the random-target bridge
--- now EXISTS (randomPlayer) but npc_memory has zero registration
--- (entry-unverifiable). JustDied cross-AI leg
--- (ToTempSummon()->GetSummonerUnit()->GetAI()->SetData(1, 0)) —
--- the bridges EXIST now (GetSummonerUnit, lua_creature_events.go:4999;
--- creature:SetData store, :792) — the old "no cross-AI SetData bridge"
--- verdict is retracted (2026-11-07 tick 378): the blocker is
--- entry-only, and the paletress SetData(1) consumer would need a
--- GetData poll since SetData fires no dispatch event.
+-- arm registers here on its own entry; the rest of paletress is
+-- PORTED below (Reset/UpdateAI legs — see above).
+-- npc_memory — PORTED below (2026-11-13): entries VERIFIED — no NPC
+-- constant exists in the C++ sources, but the 25 memory entries are
+-- the MEMORY_* summon MiscValues, read from wago.tools 3.4.0.43659
+-- SpellEffect rows (MEMORY_ENTRIES, same order as MEMORY_SPELLS in
+-- memorySpellId order): 34942-35052. Rotation arms ported:
+-- uiWakingNightmare — DoCastSelf(Waking Nightmare 66552), 7s init,
+-- 7s repeat; uiOldWoundsTimer — SelectTarget(Random, 0) -> DoCast
+-- (Old Wounds 66620), 12s repeat; uiShadowPastTimer —
+-- SelectTarget(Random, 1) -> DoCast(Shadows Past 66619), 5s repeat
+-- (uniform randomPlayer approximates the position-1 pick). JustDied
+-- cross-AI leg (ToTempSummon()->GetSummonerUnit()->GetAI()->
+-- SetData(1, 0)) — PORTED below as a direct RemoveAura(SHIELD) on
+-- the summoner: SetData fires no dispatch event, so the write is
+-- wired directly; GetSummonerUnit resolves Paletress because she
+-- casts the MEMORY_* spell (see summonMemoryHit).
 -- npc_argent_soldier — JustDied PORTED below (2026-11-07 tick 378):
 -- instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED, +1) via the shared
 -- instanceData table (boss_aeonus.lua precedent); the 9-deaths
@@ -163,8 +156,11 @@
 -- spell_paletress_summon_memory — SpellScript (66545 Summon
 -- Memory: random single-target filter + EFFECT_0
 -- SPELL_EFFECT_SCRIPT_EFFECT -> target CastSpell(memorySpellId[
--- urand(0, 24)], caster GUID)) — no SpellScript binding bridge
--- (razelikh precedent) — documented-only.
+-- urand(0, 24)], caster GUID)) — PORTED below via RegisterSpellEvent
+-- ev7 (filter) + ev5 (hit); the MEMORY_* cast comes from Paletress
+-- (Go's player-cast summon would mint a pet, not the TempSummon
+-- npc_memory needs — see summonMemoryHit). DORMANT until Spell.dbc
+-- ships 66545 + the 25 MEMORY_* rows.
 -- C++ "Known Issues" note carried: SD%Complete is 50 % —
 -- ScriptData comment states AI for Argent Soldiers is not
 -- implemented and boss AI needs improvements.
@@ -187,6 +183,16 @@ local SPELL_RENEW = 66537 -- boss_argent_challenge.cpp:72
 local SPELL_SHIELD = 66515 -- boss_argent_challenge.cpp:75
 local SPELL_HOLY_NOVA = 66546 -- boss_argent_challenge.cpp:74
 local SPELL_CONFESS = 66680 -- boss_argent_challenge.cpp:76
+local SPELL_SUMMON_MEMORY = 66545 -- boss_argent_challenge.cpp:77
+local SPELL_OLD_WOUNDS = 66620 -- boss_argent_challenge.cpp:107
+local SPELL_SHADOWS_PAST = 66619 -- boss_argent_challenge.cpp:109
+local SPELL_WAKING_NIGHTMARE = 66552 -- boss_argent_challenge.cpp:111
+
+-- memorySpellId order (boss_argent_challenge.cpp:638-644); each spell
+-- summons one memory entry — MiscValues verified from wago.tools
+-- 3.4.0.43659 SpellEffect rows (Effect 28 SUMMON, MiscValueB 64).
+local MEMORY_SPELLS = { 66715, 66704, 66697, 66709, 66706, 66710, 66707, 66702, 66698, 66712, 66694, 66543, 66713, 66705, 66708, 66700, 66695, 66701, 66692, 66711, 66696, 66691, 66703, 66699, 66714 }
+local MEMORY_ENTRIES = { 35052, 35041, 35033, 35046, 35043, 35047, 35044, 35039, 35034, 35049, 35030, 34942, 35050, 35042, 35045, 35037, 35031, 35038, 35029, 35048, 35032, 35028, 35040, 35036, 35051 }
 
 local timers = {}
 
@@ -360,6 +366,23 @@ local function getPaletressState(guid)
     return st
 end
 
+
+-- C++ boss_paletressAI::MemoryGUID (boss_argent_challenge.cpp:294),
+-- set by JustSummoned (ev19) and read by Reset + the Renew leg.
+local paletressMemory = {}
+
+local function memoryForPaletress(creature, guid)
+    local memGuid = paletressMemory[guid]
+    if memGuid == nil then
+        return nil
+    end
+    local mem = creature:GetCreatureByGUID(memGuid)
+    if mem ~= nil and mem:IsAlive() then
+        return mem
+    end
+    return nil
+end
+
 -- C++ uiHolyFireTimer: SelectTarget(Random, 0, 250, true) -> Holy Fire,
 -- urand(9000,12000) init; re-arm 13000 if shielded else
 -- urand(9000,12000). Re-arm unconditional (the SelectTarget if only
@@ -400,9 +423,9 @@ end
 
 -- C++ uiRenewTimer: decrements ONLY while HasAura(SHIELD); on fire,
 -- InterruptNonMeleeSpells(true) + urand(0,1): self Renew on 0, memory
--- Renew on 1 (cross-AI leg stays out, re-arm unconditional). The freeze
--- is modeled by a 1s poll holding the remainder counter (cthun poll
--- precedent); re-arm urand(15000,17000).
+-- Renew on 1 (PORTED via memoryForPaletress — the stored MemoryGUID;
+-- re-arm unconditional). The freeze is modeled by a 1s poll holding
+-- the remainder counter (cthun poll precedent); re-arm urand(15000,17000).
 local function renewTick(creature, guid)
     local st = getPaletressState(guid)
     if not creature:HasAura(SPELL_SHIELD) then
@@ -421,6 +444,13 @@ local function renewTick(creature, guid)
     creature:InterruptNonMeleeSpells(true)
     if math.random(0, 1) == 0 then
         creature:CastSpell(creature, SPELL_RENEW)
+    else
+        -- C++ Renew case 1: DoCast(pMemory, SPELL_RENEW) when the
+        -- memory is alive (boss_argent_challenge.cpp:394-396).
+        local mem = memoryForPaletress(creature, guid)
+        if mem ~= nil then
+            creature:CastSpell(mem, SPELL_RENEW)
+        end
     end
     st.renewRemaining = math.random(15000, 17000)
     schedule(guid, "renew", 1000, function()
@@ -454,20 +484,35 @@ local function paletressDied(event, creature, killer)
 end
 
 -- C++ boss_paletressAI::Reset: RemoveAllAuras + Initialize (timers /
--- latches re-init); the MemoryGUID RemoveFromWorld leg stays out.
+-- latches re-init); the MemoryGUID RemoveFromWorld leg is PORTED below
+-- (creature:Despawn, the RemoveFromWorld twin for a TempSummon).
 local function paletressReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     getPaletressState(guid).shieldHealth = false
     creature:RemoveAllAuras()
+    local memGuid = paletressMemory[guid]
+    if memGuid ~= nil then
+        local mem = creature:GetCreatureByGUID(memGuid)
+        if mem ~= nil and mem:IsAlive() then
+            mem:Despawn()
+        end
+        paletressMemory[guid] = nil
+    end
+end
+
+-- C++ boss_paletressAI::JustSummoned (boss_argent_challenge.cpp:413-416):
+-- MemoryGUID = summon->GetGUID().
+local function paletressJustSummoned(event, creature, summon)
+    paletressMemory[creature:GetGUIDLow()] = summon:GetGUIDLow()
 end
 
 -- C++ UpdateAI 25% one-shot (!bHealth && !HealthAbovePct(25)):
--- InterruptNonMeleeSpells + Holy Nova + Shield + Confess (Summon
--- Memory stays out). Ev9 postDamage form: fires when the hit leaves
--- health at or below floor(max*25/100) without killing (postDamage >
--- 0 guard — the lethal hit is absorbed by argentDamageTaken, which
--- runs first and chains damage to 0).
+-- InterruptNonMeleeSpells + Holy Nova + Shield + Summon Memory +
+-- Confess (DoCastAOE convention, self-casts). Ev9 postDamage form:
+-- fires when the hit leaves health at or below floor(max*25/100)
+-- without killing (postDamage > 0 guard — the lethal hit is absorbed
+-- by argentDamageTaken, which runs first and chains damage to 0).
 local function paletressHealthLatch(event, creature, attacker, damage)
     local guid = creature:GetGUIDLow()
     local st = getPaletressState(guid)
@@ -481,6 +526,7 @@ local function paletressHealthLatch(event, creature, attacker, damage)
         creature:InterruptNonMeleeSpells(true)
         creature:CastSpell(creature, SPELL_HOLY_NOVA)
         creature:CastSpell(creature, SPELL_SHIELD)
+        creature:CastSpell(creature, SPELL_SUMMON_MEMORY)
         creature:CastSpell(creature, SPELL_CONFESS)
     end
 end
@@ -496,6 +542,132 @@ RegisterCreatureEvent(ENTRY_PALETRESS, 4, paletressDied)
 RegisterCreatureEvent(ENTRY_PALETRESS, 9, argentDamageTaken)
 RegisterCreatureEvent(ENTRY_PALETRESS, 9, paletressHealthLatch)
 RegisterCreatureEvent(ENTRY_PALETRESS, 23, paletressReset)
+RegisterCreatureEvent(ENTRY_PALETRESS, 19, paletressJustSummoned)
+
+-- C++ spell_paletress_summon_memory SpellScript
+-- (boss_argent_challenge.cpp:646-684): FilterTargets keeps ONE random
+-- enemy in the area; HandleScript has the hit unit cast a random
+-- memorySpellId on itself with Paletress as the original caster.
+-- Lua twin via RegisterSpellEvent ev7 (filter, ahune precedent) +
+-- ev5 (hit, muru precedent). Deviation, forced by Go's summon model:
+-- the MEMORY_* cast comes from Paletress herself
+-- (caster:CastSpell(caster, ...)) — a player-cast summon would take
+-- Go's player path (handleSummonPet, pets.go) and mint a pet instead
+-- of the TempSummon creature npc_memory needs, and the ev19
+-- MemoryGUID store would never fire (ev19 fires on the summoner
+-- motion only when the summoner is a creature,
+-- lua_creature_events.go:189-190). Consequence: the memory spawns at
+-- Paletress (TARGET_DEST_CASTER) rather than at the random enemy
+-- player, and its summoner resolves to Paletress — which is what
+-- makes the JustDied shield-removal leg work (C++ EffectSummonType
+-- uses m_originalCaster = Paletress as the summon owner,
+-- SpellEffects.cpp:2211-2212; Go stamps CreatedByGUID from the caster,
+-- lua_creature_events.go:139). DORMANT until Spell.dbc ships 66545
+-- and the 25 MEMORY_* rows (seed pending — see memory_spell_notes.md).
+local function summonMemoryFilter(event, spell, effectIndex, targets)
+    if effectIndex ~= 0 then
+        return
+    end
+    local all = targets:GetTargets()
+    if #all == 0 then
+        return
+    end
+    local picked = all[math.random(#all)]
+    targets:Clear()
+    targets:Add(picked)
+end
+
+local function summonMemoryHit(event, spell, target, effectIndex)
+    if effectIndex ~= 0 or target == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(caster, MEMORY_SPELLS[math.random(#MEMORY_SPELLS)])
+end
+
+RegisterSpellEvent(SPELL_SUMMON_MEMORY, 7, summonMemoryFilter)
+RegisterSpellEvent(SPELL_SUMMON_MEMORY, 5, summonMemoryHit)
+
+-- npc_memory (boss_argent_challenge.cpp:425-501): the 25 MEMORY_*
+-- summon MiscValues (MEMORY_ENTRIES, same order as MEMORY_SPELLS),
+-- verified from wago.tools 3.4.0.43659 SpellEffect rows. C++:
+-- Reset = Initialize (timers only); UpdateAI Old Wounds 66620 12s
+-- random-target, Waking Nightmare 66552 7s self-cast, Shadows Past
+-- 66619 5s random-target(1); JustDied: the summoner (Paletress —
+-- the MEMORY_* caster, see summonMemoryHit) alive -> SetData(1, 0)
+-- -> RemoveAura(SHIELD). SetData fires no dispatch event, so the leg
+-- is wired directly as RemoveAura on the summoner (GetSummonerUnit
+-- reads CreatedByGUID, stamped by the summon bridge). The C++
+-- SelectTarget(Random, 1) for Shadows Past excludes one shuffled
+-- threat member; the file's uniform randomPlayer is the approximation.
+-- Heroic variants (67679/67678/67677) stay out per the file's
+-- non-heroic convention. Melee is engine-driven.
+local function oldWoundsTick(creature, guid)
+    local target = randomPlayer(creature, 250)
+    if target then
+        creature:CastSpell(target, SPELL_OLD_WOUNDS)
+    end
+    schedule(guid, "old_wounds", 12000, function()
+        oldWoundsTick(creature, guid)
+    end)
+end
+
+local function wakingNightmareTick(creature, guid)
+    creature:CastSpell(creature, SPELL_WAKING_NIGHTMARE)
+    schedule(guid, "waking_nightmare", 7000, function()
+        wakingNightmareTick(creature, guid)
+    end)
+end
+
+local function shadowsPastTick(creature, guid)
+    local target = randomPlayer(creature, 250)
+    if target then
+        creature:CastSpell(target, SPELL_SHADOWS_PAST)
+    end
+    schedule(guid, "shadows_past", 5000, function()
+        shadowsPastTick(creature, guid)
+    end)
+end
+
+local function memoryEnterCombat(event, creature, target)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    schedule(guid, "old_wounds", 12000, function()
+        oldWoundsTick(creature, guid)
+    end)
+    schedule(guid, "waking_nightmare", 7000, function()
+        wakingNightmareTick(creature, guid)
+    end)
+    schedule(guid, "shadows_past", 5000, function()
+        shadowsPastTick(creature, guid)
+    end)
+end
+
+local function memoryLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+local function memoryDied(event, creature, killer)
+    cancelTimers(creature:GetGUIDLow())
+    local summoner = creature:GetSummonerUnit()
+    if summoner ~= nil and summoner:IsAlive() then
+        summoner:RemoveAura(SPELL_SHIELD)
+    end
+end
+
+local function memoryReset(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+for _, entry in ipairs(MEMORY_ENTRIES) do
+    RegisterCreatureEvent(entry, 1, memoryEnterCombat)
+    RegisterCreatureEvent(entry, 2, memoryLeaveCombat)
+    RegisterCreatureEvent(entry, 4, memoryDied)
+    RegisterCreatureEvent(entry, 23, memoryReset)
+end
 
 -- npc_argent_soldier JustDied (boss_argent_challenge.cpp:603-606):
 -- instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED,

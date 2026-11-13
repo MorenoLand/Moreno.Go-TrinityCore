@@ -19406,33 +19406,63 @@ func init() {
 	// (34928 NPC_PALETRESS — kalecgos pass): combat arms PORTED in
 	// boss_eadric.lua (ev1/2/4/9/23) — Holy Fire 66538 9-12s +
 	// Smite 66536 5-7s (threat-list picks, HasAura-gated re-arms),
-	// shield-gated Renew 66537 machine (self-cast leg only),
+	// shield-gated Renew 66537 machine (self + memory legs),
 	// 25% one-shot as an ev9 postDamage latch (Holy Nova 66546 /
-	// Shield 66515 / Confess 66680; Summon Memory 66545 stays out),
-	// Reset RemoveAllAuras. Still out: constructor intro-machine legs,
-	// SetData(1) RemoveAura(SHIELD) (cross-AI SetData from unregistered npc_memory
-	// JustDied — no SetData dispatch event; the write lands in the ScriptData store unread),
-	// MovementInform, JustSummoned MemoryGUID latch (summon STRAND
-	// absent), memory/soldier/SpellScript machines. npc_memory: ENTRY UNVERIFIABLE (no NPC constant in C++
-	// — the memory creatures materialize via DB-side summon spells
-	// SPELL_MEMORY_* — belnistrasz/willix precedent): joins the
-	// bridgeable-but-entry-blocked queue (Waking Nightmare 66552
-	// 7s/7s self-cast port-pattern-ready; Old Wounds 66620 /
-	// Shadows Past 66619 behind the random-target bridge; JustDied
-	// cross-AI SetData(1,0) — bridges exist now (GetSummonerUnit +
-	// SetData store); blocker is entry-only, tick 378).
+	// Shield 66515 / Summon Memory 66545 / Confess 66680; the summon
+	// leg is DORMANT until Spell.dbc ships 66545 + the MEMORY_* rows),
+	// Reset RemoveAllAuras + MemoryGUID despawn, JustSummoned
+	// MemoryGUID latch (ev19). Still out: constructor intro-machine
+	// legs, MovementInform. npc_memory: PORTED in boss_eadric.lua
+	// (2026-11-13) — entries VERIFIED as the 25 MEMORY_* summon
+	// MiscValues from wago.tools 3.4.0.43659 SpellEffect rows
+	// (34942-35052, MEMORY_ENTRIES in memorySpellId order): Waking
+	// Nightmare 66552 7s/7s self-cast, Old Wounds 66620 12s,
+	// Shadows Past 66619 5s (random-target bridge); JustDied
+	// cross-AI SetData(1,0) wired directly as RemoveAura(SHIELD) on
+	// the summoner via GetSummonerUnit (Paletress casts the MEMORY_*
+	// spell, so CreatedByGUID resolves to her — C++
+	// EffectSummonType uses m_originalCaster the same way).
 	// npc_argent_soldier: JustDied PORTED in boss_eadric.lua (tick 378) —
 	// instance SetData(DATA_ARGENT_SOLDIER_DEFEATED,+1) via the shared
 	// instanceData table; the 9-deaths un-gate leg polls it in
 	// instance_trial_of_the_champion.lua. Whole AI is the EscortAI
 	// waypoint machine (escort queue precedent) — stays out.
-	// spell_eadric_radiance / spell_paletress_summon_memory: no SpellScript
-	// binding bridge (razelikh precedent).
+	// spell_eadric_radiance: PORTED via RegisterSpellEvent ev7.
+	// spell_paletress_summon_memory: PORTED via RegisterSpellEvent
+	// ev7 (filter) + ev5 (hit) — the MEMORY_* cast comes from
+	// Paletress, since a player-cast summon would take Go's pet path.
 	// C++ SD%Complete 50 % note carried.
 	RegisterLuaBoss("boss_eadric", 35119)
 	// Paletress (34928 NPC_PALETRESS): combat arms ported in boss_eadric.lua
-	// (ev1/2/4/9/23); same no-op factory convention as the eadric binding above.
+	// (ev1/2/4/9/19/23); same no-op factory convention as the eadric binding above.
 	RegisterLuaBoss("boss_paletress", 34928)
+	// npc_memory (25 entries, MEMORY_ENTRIES in boss_eadric.lua):
+	// same file, one binding per entry (faction_champions precedent).
+	RegisterLuaBoss("boss_eadric", 35052)
+	RegisterLuaBoss("boss_eadric", 35041)
+	RegisterLuaBoss("boss_eadric", 35033)
+	RegisterLuaBoss("boss_eadric", 35046)
+	RegisterLuaBoss("boss_eadric", 35043)
+	RegisterLuaBoss("boss_eadric", 35047)
+	RegisterLuaBoss("boss_eadric", 35044)
+	RegisterLuaBoss("boss_eadric", 35039)
+	RegisterLuaBoss("boss_eadric", 35034)
+	RegisterLuaBoss("boss_eadric", 35049)
+	RegisterLuaBoss("boss_eadric", 35030)
+	RegisterLuaBoss("boss_eadric", 34942)
+	RegisterLuaBoss("boss_eadric", 35050)
+	RegisterLuaBoss("boss_eadric", 35042)
+	RegisterLuaBoss("boss_eadric", 35045)
+	RegisterLuaBoss("boss_eadric", 35037)
+	RegisterLuaBoss("boss_eadric", 35031)
+	RegisterLuaBoss("boss_eadric", 35038)
+	RegisterLuaBoss("boss_eadric", 35029)
+	RegisterLuaBoss("boss_eadric", 35048)
+	RegisterLuaBoss("boss_eadric", 35032)
+	RegisterLuaBoss("boss_eadric", 35028)
+	RegisterLuaBoss("boss_eadric", 35040)
+	RegisterLuaBoss("boss_eadric", 35036)
+	RegisterLuaBoss("boss_eadric", 35051)
 
 	// boss_black_knight: Trial of the Champion dungeon boss script,
 	// CAST-STATE GATE CHECK (2026-11-04): none — ScriptedAI
