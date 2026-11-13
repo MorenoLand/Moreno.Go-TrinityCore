@@ -236,21 +236,36 @@
 --   Talk(SAY_CROK_INTRO_3 1)) + EVENT_START_PATHING (35s,
 --   Start(true,true)) — machine-gated escort legs, no escort /
 --   DoAction bridge (joins the escort queue).
--- npc_crok_scourgebane DamageTaken (:691-731) — the wipe check
---   (player search, damage *= 100, FrostwingGauntletRespawner
---   machine) and the 10%-latch chew machine (damage = 0 latch +
---   1s EVENT_HEALTH_CHECK loop with ModifyHealth(+5% max) and
---   HealthAbovePct(15) re-arm) are not a single-flip floored
---   latch. Stays parked — the corrected blockers are the
---   FrostwingGauntletRespawner mass grid action (DoAction(RESET_EVENT)
---   fan-out + DespawnOrUnsummon + reposition-to-spawn; the method
---   itself IS bridged, lua_creature_events.go:7230 — the machine is
---   not), cross-AI DoAction(ACTION_RESET_EVENT), ModifyHealth (zero
---   hits in engine/, re-verified 2026-11-13) and the _isEventActive-
---   gated Talk; SetCorpseDelay is comment-only (lua_creature_events.go:
---   1324). Re-verified STAY OUT 2026-11-13 (round-9 remainder).
---   event 9 DOES support numeric damage rewrite (lua_creature_events.go:303-324), so the old
---   "event-9 cannot express damage rewrite" claim was stale.
+-- npc_crok_scourgebane DamageTaken (:691-731) — SPLIT 2026-11-13:
+--   the 10%-health latch is PORTED (crokDamageTaken, ev9): damage = 0
+--   + Talk(SAY_CROK_WEAKENING_*) + DoCast(70714) + 1s
+--   EVENT_HEALTH_CHECK loop (HealthAbovePct(15) -> remove aura +
+--   clear latch; else SetHealth(+CountPctFromMaxHealth(5)) + re-arm).
+--   The ModifyHealth leg rides a SetHealth emulation — exact, not a
+--   fabrication: C++ ModifyHealth clamps at max (Unit.cpp:8519) and
+--   Go SetHealth clamps at MaxHealth (lua_creature_events.go:2863),
+--   and CountPctFromMaxHealth is bridged. The _isEventActive Talk
+--   gate rides a boss-state proxy (NOT_STARTED -> GAUNTLET talk,
+--   else SVALNA talk; faithful in every reachable context —
+--   gauntlet vs Svalna fight vs post-fight; pre-gauntlet crok takes
+--   no damage, so the proxy's one blind spot is unreachable).
+--   The wipe-check leg STAYS OUT: damage *= 100 + lethal ->
+--   FrostwingGauntletRespawner (:258-300) + Talk(SAY_CROK_DEATH 8)
+--   needs SetCorpseDelay (no bridge), UpdatePosition(DB spawnPoint)
+--   (no bridge — GetHomePosition is NOT the spawn point: home is
+--   re-stamped on engage for escorted creatures,
+--   creaturemotion.go:1483 atEngageSetHomePosition, the C++
+--   Creature::AtEngage twin) and the Svalna RESET_EVENT setActive
+--   leg (no bridge; SetFarVisible + Reset-equivalent would be
+--   portable via ev38). DoAction ev38 dispatch,
+--   GetCreaturesInRange(333), SetRespawnDelay and
+--   DespawnOrUnsummon are all bridged — the blockers are the three
+--   legs above, not the enumeration. Known cost of the stayed-out
+--   wipe leg: on a true wipe (no player within 60 yd) C++ x100-kills
+--   crok and resets the gauntlet while Lua holds him at <10% under
+--   the armor loop; event 9 DOES support numeric damage rewrite
+--   (lua_creature_events.go:303-324), so the old "event-9 cannot
+--   express damage rewrite" claim was stale.
 -- npc_crok_scourgebane SetGUID / WaypointReached / WaypointStarted
 --   (:591-689) — gauntlet waypoint machine, no bridge.
 -- npc_frostwing_ymirjar_vrykul UpdateAI random-target arms —
@@ -319,12 +334,16 @@ local SAY_SVALNA_AGGRO = 3
 local SAY_SVALNA_KILL = 4
 local SAY_SVALNA_DEATH = 6
 local SAY_CROK_COMBAT_SVALNA = 5 -- boss_sister_svalna.cpp:58
+local SAY_CROK_WEAKENING_GAUNTLET = 6 -- :65
+local SAY_CROK_WEAKENING_SVALNA = 7 -- :66
 
 local SAY_CAPTAIN_DEATH = 0
 local SAY_CAPTAIN_SECOND_DEATH = 3
 local SAY_CAPTAIN_KILL = 2 -- :62
 
 local SPELL_DIVINE_SURGE = 71465
+
+local SPELL_ICEBOUND_ARMOR = 70714 -- boss_sister_svalna.cpp:73
 
 local SPELL_SCOURGE_STRIKE = 71488
 local SPELL_DEATH_STRIKE = 71489
@@ -376,6 +395,12 @@ local SPELL_HURL_SPEAR = 71466 -- :84
 local EMOTE_SVALNA_BROKEN_SHIELD = 8 -- :48
 
 local timers = {}
+
+-- GUID-keyed _didUnderTenPercentText twin (boss_sister_svalna.cpp:808):
+-- set on the first Talk of a dip, cleared by the health-check loop when
+-- health recovers above 15% (:774-775) and by Reset via Initialize()
+-- (:540). NOT cleared on death/leave — C++ keeps the member until Reset.
+local crokWeakeningSaid = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -719,6 +744,58 @@ local function onCrokDeathStrike(creature, guid)
         function() onCrokDeathStrike(creature, guid) end)
 end
 
+-- C++ npc_crok_scourgebane::DamageTaken (:691-731), 10%-health latch
+-- only (the wipe-check leg stays out — see the header note): while
+-- health is below 10%, every hit is zeroed, ICEBOUND_ARMOR (70714) is
+-- re-cast, and a 1s EVENT_HEALTH_CHECK loop heals 5% of max per tick
+-- until health is above 15%, when the aura is removed and the Talk
+-- latch clears (so the Talk can re-fire on a later dip). The Talk
+-- fires once per dip: GAUNTLET (6) while the gauntlet is in progress,
+-- SVALNA (7) once Svalna is engaged or done — the _isEventActive gate
+-- rides the boss-state proxy (NOT_STARTED -> GAUNTLET, else SVALNA;
+-- faithful in every reachable context, see header). DamageTaken is
+-- pre-damage (ev9), so no postDamage guard. The schedule-by-key loop
+-- replaces rather than stacks: under sustained fire C++ queues a
+-- health-check per hit (EventMap allows duplicates), so C++ heals
+-- faster than this single 5%/s loop — known minor divergence, the
+-- in-tree single-loop idiom.
+local function onCrokHealthCheck(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    if creature:HealthAbovePct(15) then
+        creature:RemoveAura(SPELL_ICEBOUND_ARMOR)
+        crokWeakeningSaid[guid] = false
+    else
+        -- C++ me->ModifyHealth(me->CountPctFromMaxHealth(5)) (:779):
+        -- the SetHealth emulation is exact, not a fabrication —
+        -- ModifyHealth clamps at max (Unit.cpp:8519) and Go SetHealth
+        -- clamps at MaxHealth (lua_creature_events.go:2863).
+        creature:SetHealth(creature:GetHealth() + creature:CountPctFromMaxHealth(5))
+        schedule(guid, "healthcheck", 1000,
+            function() onCrokHealthCheck(creature, guid) end)
+    end
+end
+
+local function crokDamageTaken(event, creature, attacker, damage)
+    if not creature:HealthBelowPct(10) then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if not crokWeakeningSaid[guid] then
+        crokWeakeningSaid[guid] = true
+        if creature:GetBossState(DATA_SISTER_SVALNA) == BOSS_STATE_NOT_STARTED then
+            creature:Talk(SAY_CROK_WEAKENING_GAUNTLET)
+        else
+            creature:Talk(SAY_CROK_WEAKENING_SVALNA)
+        end
+    end
+    creature:CastSpell(creature, SPELL_ICEBOUND_ARMOR)
+    schedule(guid, "healthcheck", 1000,
+        function() onCrokHealthCheck(creature, guid) end)
+    return false, 0
+end
+
 -- crok has NO JustEngagedWith in C++ (npc_crok_scourgebane :526-809,
 -- EscortAI, no override); the scourge/death-strike seeds below re-key
 -- the DoAction gauntlet arms (:547-548) to combat start (svalna precedent).
@@ -740,12 +817,15 @@ local function crokDied(event, creature, killer)
 end
 
 local function crokReset(event, creature)
+    -- C++ Reset -> Initialize() (:540) clears _didUnderTenPercentText.
+    crokWeakeningSaid[creature:GetGUIDLow()] = false
     cancelTimers(creature:GetGUIDLow())
 end
 
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 1, crokEnterCombat)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 2, crokLeaveCombat)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 4, crokDied)
+RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 9, crokDamageTaken)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 23, crokReset)
 
 -- C++ npc_frostwing_ymirjar_vrykul::JustEngagedWith :1237-1273 —

@@ -1258,6 +1258,14 @@ local function sindragosaJustSummoned(_, creature, summoned)
         -- the file's schedule() helper — its single per-GUID key would
         -- collapse concurrent bombs into one timer. The paired
         -- SPELL_FROST_BOMB 69845 cast stays out (no exact Lua form).
+        -- Re-verified 2026-11-13 (hook strip round 10), FINAL: C++ cast is
+        -- CastSpell(nullptr, 69845, CastSpellExtraArgs().SetOriginalCaster)
+        -- = TRIGGERED_NONE (SpellDefines.h:162/:178) with the target riding
+        -- the originalCaster + DBC implicit targets; Go creature CastSpell
+        -- nil-target falls back to the victim (lua_creature_events.go:963-965)
+        -- and the originalCaster leg is unmodeled on either path (:988-993),
+        -- so self-cast, victim-cast and triggered forms are all guesses.
+        -- 69845 has no other cast site in the C++ tree or Go engine.
         CreateLuaEvent(function()
             summoned:RemoveAura(SPELL_FROST_BOMB_VISUAL)
         end, 5500)

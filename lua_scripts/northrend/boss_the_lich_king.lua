@@ -98,6 +98,13 @@
 -- fires" rationale conflated the two events: event 15
 -- (OnSpellHitTarget) fires on the CASTER's bindings and was never the
 -- right hook for this boss-side arm. Corrected 2026-10-17.
+-- Re-verified 2026-11-13 (hook strip round 10): STAY OUT, permanent
+-- dead — no local SAY_LK_FROSTMOURNE_KILL const exists (name in comments
+-- only); sole 72679 casters re-checked (:2551/:2701); Go player CastSpell
+-- nil-target falls back to self (lua_player.go:3509-3511) and the
+-- originalCaster slot is unmodeled (lua_player.go:3517-3522), so the cast
+-- can never hit the LK and ev14 can never see 72679. Revival needs a Go
+-- original-caster/implicit-target model, not a Lua edit.
 -- The second SpellHit arm (:818-820, REMORSELESS_WINTER_1/2 68981/
 -- 72259 —> SetZoneOverrideLight + LIGHT_SNOW weather + shadow-trap
 -- despawn) is PORTED 2026-11-08 (lichKingSpellHit, ev14): the trigger
