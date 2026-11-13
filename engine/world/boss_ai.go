@@ -16404,9 +16404,10 @@ func init() {
 	// machine: SpellHit 52996 accept, DamageTaken clamp-to-1 victory
 	// arms, gossip duel menu unpresentable (no AddGossipItemFor bridge;
 	// ev9/ev14/player:CastSpell/gossip-select live), npc_dark_rider_of_acherus
-	// (TempSummon summoner chain, MoveChase, DespawnOrUnsummon; entry unverified
-	// — 52266 summon target conflicts with 28654 ros registration;
-	// MoveChase/GetSummonerUnit/ev15 bridged), npc_
+	// (TempSummon summoner chain, MoveChase, DespawnOrUnsummon; entry 28654
+	// verified — spell 52266 summons the chaser, not the ros rider;
+	// MoveChase/GetSummonerUnit/ev15 bridged; JustAppeared rides ev22,
+	// not ev5 — ev5 fires before CreatedByGUID is stamped), npc_
 	// salanar_the_horseman (gossip 9739 realm-of-shadows cast, MoveInLineOf
 	// Sight vehicle machine; no gossip/vehicle bridges), spell_stable_
 	// master_repo (AuraScript; no bridge), spell_deliver_stolen_horse
@@ -16429,6 +16430,13 @@ func init() {
 	// player gate + IsVehicle + flag/faction legs); Reset (ev23) +
 	// engage ExitVehicle (ev1) ported in the same file.
 	RegisterLuaBoss("npc_ros_dark_rider", 28768)
+	// npc_dark_rider_of_acherus (entry 28654, the 52266-summoned chaser)
+	// is ported in lua_scripts/eastern_kingdoms/
+	// npc_dark_rider_of_acherus.lua: JustAppeared summoner chain on ev22,
+	// 1s MoveChase machine, 5s Talk + triggered 52267 cast, 2s despawn,
+	// ev15 horse-despawn leg. Spell 52267 is seeded (wago.tools
+	// 3.4.0.43659 verdict 2026-11-13: effect 77, TargetA 25/TargetB 63).
+	RegisterLuaBoss("npc_dark_rider_of_acherus", 28654)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
 	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727

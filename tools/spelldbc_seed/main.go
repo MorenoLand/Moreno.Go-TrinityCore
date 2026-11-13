@@ -89,6 +89,8 @@ const (
 	targetSrcAreaEnemy        = 15
 	targetDestCaster          = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	targetDestCasterBackRight = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
+	targetUnitTargetAny       = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
+	targetDestTargetAny       = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
 	targetSrcCaster           = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
 	targetGONearbyEntry       = 40
 	auraAddPctModifier        = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
@@ -404,6 +406,22 @@ var spells = []spell{
 	// 28012 row in the deployment world DB (summonTempCreature
 	// returns nil without one).
 	{id: 50415, durIdx: 21, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, targetA: targetDestCasterBackRight, radiusIdx: 36, misc: 28012, miscB: 64}}},
+
+	// 52267 Despawn Horse (chapter1.cpp:706; npc_dark_rider_of_acherus
+	// EVENT_DESPAWN_HORSE DoCast, triggered) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-13 22:35 verdict: single
+	// effect 77 SCRIPT_EFFECT, TargetA 25 (TARGET_UNIT_TARGET_ANY),
+	// TargetB 63 (TARGET_DEST_TARGET_ANY), RadiusIndex 0, DieSides 0,
+	// BasePoints 0, Misc 0/0; DurationIndex 0 (no SpellDuration row),
+	// RangeIndex 13 (Anywhere - Unlimited, 0-50000 yd), SchoolMask 0x1
+	// (physical), CastingTimeIndex 1 (instant); Attributes_0 0x20000180
+	// not encoded (seed has no attributes field). RangeIndex stays
+	// synthetic 93008 (0-50000 yd = real 13's value); cast time stays
+	// default 0 (instant = real 1). Effect 77 is what the
+	// spell_gen_despawn_self handler keys on (spell_generic.lua); the
+	// TargetA 25 / TargetB 63 legs are live in Go (chain_targets.go:360,
+	// target_dest_targets.go:14).
+	{id: 52267, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effScriptEffect, targetA: targetUnitTargetAny, targetB: targetDestTargetAny}}},
 }
 
 func main() {

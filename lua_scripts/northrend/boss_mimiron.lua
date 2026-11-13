@@ -14,8 +14,10 @@
 --     death-path reset (the thorim finished-guard precedent).
 --   JustEngagedWith (:424): SetBossState IN_PROGRESS PORTED tick 259
 --     (BossAI::JustEngagedWith passthrough, base-first) + SetFlag
---     NON_ATTACKABLE + WELD removal, on enter combat (1). See
---     DEVIATION note below for the unmodeled vehicle gate.
+--     NON_ATTACKABLE + WELD removal + SEAT_6 cast on the vehicle base
+--     PORTED this tick (GetVehicleBase, instance-GUID fallback;
+--     DBC-gated 63344), on enter combat (1). See DEVIATION note below
+--     for the unmodeled vehicle gate.
 --   JustDied (:442) + EVENT_OUTTRO_1/2/3 chain: SetBossState DONE
 --     PORTED tick 259 (first per C++), CombatStop, gravity off,
 --     SLEEP_VISUAL_1, DESPAWN_ASSAULT_BOTS (DoCastAOE = self-cast
@@ -72,8 +74,10 @@
 --   is target:IsOnVehicle():GetOwner() (see below).
 -- DOCUMENTED-ONLY (no behavior fabricated):
 --   Activation-chain legs with no bridge: vehicle-base legs (SEAT_6/7/5/2
---     casts, SetFacingTo on the base -- GetVehicleBase /
---     GetVehicleCreatureBase have no binding on the handler surface),
+--     casts, SetFacingTo on the base -- GetVehicleBase (:3522) and
+--     SetFacingTo (:5270) ARE bridged; GetVehicleCreatureBase has no
+--     binding. The chain steps stay out pending re-triage — this tick
+--     ports only the JustEngagedWith SEAT_6, see below),
 --     MovePoint legs (no MovePoint binding), elevator/button GameObject
 --     legs (no GO bridge), MKII legs in the activation chains
 --     (vehicle-base SetFacingTo / MOUNT / MovePoint legs; the
@@ -82,9 +86,10 @@
 --     knockback), aerial EnterEvadeMode on Reset (bridged,
 --     lua_creature_events.go:5188, but runs the base evade, not the ACU
 --     override — summons.DespawnAll unbridged, so it stays out).
---   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base --
---     out (no GetVehicleBase binding); button GO flag leg -- out (no GO
---     bridge); EVENT_SUMMON_FLAMES -- out (worldtrigger via instance GUID).
+--   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base
+--     PORTED (GetVehicleBase, instance-GUID fallback; DBC-gated 63344);
+--     button GO flag leg -- out (no GO bridge); EVENT_SUMMON_FLAMES --
+--     out (worldtrigger via instance GUID).
 --     (INTRO_2/INTRO_3 are ported — see the INTRO_1 bullet — via the
 --     instance-GUID MKII twin, not the vehicle base.)
 --   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode,
@@ -96,9 +101,13 @@
 --
 -- DEVIATIONS (checked against the CURRENT runtime, not memory):
 --   * JustEngagedWith's `if (!me->GetVehicleBase()) return` gate is not
---     modeled: no GetVehicleBase binding exists on the creature handler
---     surface (grep of lua_creature_events.go / lua_objects.go /
---     scripting/object.go). The self legs below fire unconditionally.
+--     modeled as a literal early return: GetVehicleBase IS bridged
+--     (lua_creature_events.go:3522), but the seating precondition (the
+--     vehicle_accessory install stamping Mimiron.VehicleGUID) is
+--     DB/timing-dependent and unverifiable here (no world DB in env),
+--     and a literal gate would no-op the whole engage whenever he is
+--     unseated in Go. The self legs below fire unconditionally; the
+--     SEAT_6 cast rides GetVehicleBase with the instance-GUID fallback.
 --     (The weld aura arm below does NOT use this gate: its target is a
 --     passenger, and the passenger twin target:IsOnVehicle():GetOwner()
 --     — the Vehicle object the player rides, whose owner is the base
@@ -193,9 +202,10 @@ local SAY_V07TRON_DEATH = 13
 -- UlduarData instance GUID key for Leviathan Mk II (ulduar.h /
 -- instance_ulduar.cpp:817; the npc_mimiron_proximity_mine.lua ev15
 -- precedent): the Lua twin of C++ me->GetVehicleBase() /
--- GetVehicleCreatureBase() for the INTRO_2/INTRO_3 MKII legs — the
--- vehicle-base resolution has no binding, but the target creature
--- is the same MKII whose GUID the instance latches here.
+-- GetVehicleCreatureBase() for the INTRO_2/INTRO_3 MKII legs —
+-- GetVehicleBase is bridged (:3522) and is the first choice where
+-- the arm needs the live seating (JustEngagedWith SEAT_6); the twin
+-- stays as the fallback for the INTRO legs, same target creature.
 local DATA_LEVIATHAN_MK_II = 32
 local DATA_COMPUTER = 35 -- ulduar.h UlduarData (DATA_AERIAL_COMMAND_UNIT = 34, counting up)
 
@@ -310,13 +320,25 @@ end
 
 -- C++ JustEngagedWith (:424), creature-local legs in C++ order:
 -- BossAI::JustEngagedWith SetBossState IN_PROGRESS (base-first),
--- SetFlag NON_ATTACKABLE, remove WELD. Vehicle-base cast, button GO leg
--- and SUMMON_FLAMES stay out (see header); EVENT_INTRO_1 is scheduled
--- at 1500ms (latch-gated Talk, see intro1).
+-- SetFlag NON_ATTACKABLE, remove WELD, SEAT_6 cast on the vehicle
+-- base (GetVehicleBase, instance-GUID fallback; DBC-gated 63344).
+-- The `if (!me->GetVehicleBase()) return` gate stays out (see header
+-- DEVIATIONS); button GO leg and SUMMON_FLAMES stay out; EVENT_INTRO_1
+-- is scheduled at 1500ms (latch-gated Talk, see intro1).
 local function mimironEnterCombat(event, creature, target)
     creature:SetBossState(BOSS_MIMIRON, 1)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     creature:RemoveAura(SPELL_WELD)
+    -- C++ JustEngagedWith (:432): DoCast SEAT_6 on the vehicle base
+    -- (MKII). GetVehicleBase is bridged (lua_creature_events.go:3522)
+    -- and returns the base creature object when the accessory install
+    -- seated him; the instance-GUID twin is the fallback (INTRO_2
+    -- precedent). The cast is DBC-gated (63344 unseeded), like SEAT_7.
+    local base = creature:GetVehicleBase()
+        or creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
+    if base then
+        creature:CastSpell(base, SPELL_SEAT_6)
+    end
     local guid = creature:GetGUIDLow()
     schedule(guid, "intro1", 1500, function()
         intro1(creature, guid)
@@ -335,9 +357,10 @@ end
 
 -- C++ UpdateAI EVENT_INTRO_2: on the vehicle base (MKII): cast SEAT_7,
 -- remove FREEZE_ANIM, remove NON_ATTACKABLE | NOT_SELECTABLE; then
--- EVENT_INTRO_3 in 2s. The vehicle-base resolution has no binding; the
--- MKII is resolved via the instance GUID instead (DATA_LEVIATHAN_MK_II
--- twin, see above) — same target creature, different lookup.
+-- EVENT_INTRO_3 in 2s. The MKII is resolved via the instance GUID
+-- (DATA_LEVIATHAN_MK_II twin, see above) — same target creature,
+-- different lookup; GetVehicleBase (:3522) is the first choice only
+-- where the arm needs the live seating (JustEngagedWith SEAT_6).
 intro2 = function(creature, guid)
     local mkii = creature:GetInstanceCreature(DATA_LEVIATHAN_MK_II)
     if mkii then
@@ -438,11 +461,12 @@ end
 -- EVENT_VX001_ACTIVATION_1 in 1s. Steps are defined last-to-first so
 -- each schedules the next without forward declarations. Steps 1/2
 -- (vehicle-base SetFacingTo / SEAT_6), step 4 (elevator GO + worldtrigger
--- knockback) and step 8 (SEAT_2 on the vehicle base) stay out (no
--- GetVehicleBase / GO / instance-GUID bridge); the Talk, summon and
--- DoAction legs are ported. The summoned VX-001 is kept in per-GUID
--- state, the Lua twin of the DATA_VX_001 instance GUID the later
--- steps read.
+-- knockback) and step 8 (SEAT_2 on the vehicle base) stay out
+-- (GetVehicleBase / SetFacingTo are bridged, re-triage pending — this
+-- tick ports only the JustEngagedWith SEAT_6; step 4 stays on no GO
+-- bridge); the Talk, summon and DoAction legs are ported. The summoned
+-- VX-001 is kept in per-GUID state, the Lua twin of the DATA_VX_001
+-- instance GUID the later steps read.
 local function vx001Activation9(creature, guid)
     local st = bossState[guid]
     local vx001 = st and st.vx001
@@ -725,8 +749,7 @@ RegisterAuraEvent(SPELL_SUMMON_FLAMES_SPREAD_TRIGGER, 1, summonFlamesSpreadTick)
 -- (boss_mimiron.cpp:2760-2772): the aura target (the player riding in
 -- Mimiron's vehicle) casts one of the four RepairSpells on the vehicle
 -- base every fifth tick (GetTickNumber() % 5 == 0) and faces the
--- vehicle every tick. GetVehicleBase has no direct binding; the
--- passenger twin is target:IsOnVehicle():GetOwner() — the Vehicle
+-- vehicle every tick. The passenger twin is target:IsOnVehicle():GetOwner() — the Vehicle
 -- object the player rides, whose owner is the base unit
 -- (lua_player.go IsOnVehicle, lua_vehicle.go GetOwner). The repair
 -- cast is non-triggered (C++ passes no triggered flag) and rides the
