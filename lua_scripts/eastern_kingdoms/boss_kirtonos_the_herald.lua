@@ -80,6 +80,19 @@
 --   via player:SummonCreature on the same hook; me->PlayDirectSound(SOUND_SCREECH = 557)
 --   is ported via go:PlayDirectSound on the same hook. (The 2026-10-18
 --   "no door bridge" claim was stale; corrected 2026-10-19.)
+-- - ev19 JustSummoned (2026-11-13 triage): ALREADY PORTED / no-op —
+--   no handler, no SummonList twin. C++
+--   boss_kirtonos_the_herald.cpp:136-139 is bare BossAI::JustSummoned
+--   (ScriptedCreature.cpp:559-564): summons.Summon(summon) plus
+--   DoZoneInCombat(summon) if engaged. The boss AI summons nothing —
+--   the file's only SummonCreature is the brazier's
+--   player->SummonCreature(NPC_KIRTONOS, ...) at :293, which summons
+--   Kirtonos himself — so the SummonList stays empty and the
+--   _Reset/_JustDied DespawnAll legs have nothing to despawn. ev19 IS
+--   bridged (fireCreatureSummoned, lua_creature_events.go:7878), but it
+--   can never fire for entry 10506 as summoner; player summoners pass
+--   nil SummonerMotion, so no ev19 fires for the brazier summon either
+--   (lua_creature_events.go:67-72). No terestian-style twin needed.
 
 local ENTRY_KIRTONOS = 10506
 

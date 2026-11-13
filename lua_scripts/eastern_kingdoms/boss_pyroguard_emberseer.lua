@@ -40,15 +40,21 @@
 -- ticks it out of combat as well; the port starts it on
 -- OnEnterCombat(1) — the out-of-combat ticks are unmodeled.
 -- Unmodeled (documented-only): the whole pre-fight event is gated on
--- instance / SetData bridges that do not exist on the Lua surface
--- (SpellHit IS bridged — event 14 — but the SpellHit arms stay out on
--- trigger-path grounds, verified 2026-10-24: 15281 is self-cast by the
--- PORTED incarcerator machine (ev5/ev24), but Go's cast path fans out
--- to the explicit target + chain jumps only (no AoE fan-out), so the
--- self-cast never lands on emberseer; 16049's trigger is the
--- aura-periodic trigger of 16048 from the unported EVENT_PRE_FIGHT_2
--- machine, and Go has no periodic-aura-trigger engine) —
--- RemoveAura(16047/16048/16049) + EVENT_RESPAWN 5s (instance->SetData
+-- instance / SetData bridges that do not exist on the Lua surface.
+-- The SpellHit arms ARE ported below (ev14 onSpellHit, DORMANT —
+-- hook + handler fully bridged, producers unported; see the handler
+-- comment). The 2026-10-24 stay-out grounds are stale on both legs:
+-- Go's cast path DOES fan out entry-area implicit targets
+-- (boss_ai.go:2452 isEntryAreaSpell leg), so the incarcerator's
+-- self-cast 15281 may resolve onto emberseer via its DBC implicit
+-- target (no Spell.dbc in this workspace to confirm the 15281
+-- record); and the periodic-trigger engine IS live (spells.go:44960
+-- case 23 -> castPeriodicTriggerFromCreature, a full triggered
+-- cast), so 16048's ticks would fire 16049 once 16048 is applied —
+-- but 16048 itself is applied only by the unported EVENT_PRE_FIGHT_2
+-- machine (instance ProcessEvent -> SetData, unbridged).
+-- Reset's RemoveAura(16047/16048/16049) rides the SpellHit leg-1
+-- Reset twin below; EVENT_RESPAWN 5s (instance->SetData
 -- (DATA_BLACKHAND_INCARCERATOR, 1) + SetBossState(NOT_STARTED));
 -- (Reset's UNIT_FLAG_NOT_SELECTABLE + SetImmuneToPC(true) pair IS
 -- ported — creature:SetFlag(59, 0x2000000) / SetFlag(59, 0x100),
@@ -68,10 +74,13 @@
 -- (creature:SetData is a per-motion store, tick-222 precedent);
 -- EVENT_PRE_FIGHT_2 (self-cast 16245 +
 -- 16048, Talk(EMOTE_ONE_STACK)); EVENT_ENTER_COMBAT (AttackStart(
--- SelectNearestPlayer(30.0f))); SpellHit 15281 (SPELL_ENCAGE_EMBERSEER) -> self-cast 15282 (SPELL_ENCAGED_EMBERSEER) +
--- Reset if no aura; SpellHit 16049 stack latches (EMOTE_TEN_STACK at
--- 10, at 20: remove 16245, cast 16047, Talk(EMOTE_FREE_OF_BONDS /
--- YELL_FREE_OF_BONDS), clear flags, EVENT_ENTER_COMBAT at 2s)
+-- SelectNearestPlayer(30.0f)) — the 2s ENTER_COMBAT leg IS ported
+-- inside the SpellHit 16049 20-stack arm below). The SpellHit arms
+-- (15281 -> self-cast 15282 + Reset if no aura; 16049 stack latches:
+-- EMOTE_TEN_STACK at 10, at 20 remove 16245, cast 16047, Talk
+-- EMOTE_FREE_OF_BONDS / YELL_FREE_OF_BONDS, clear flags,
+-- EVENT_ENTER_COMBAT at 2s) are PORTED below (ev14 onSpellHit,
+-- DORMANT — see above).
 -- (instance / SetData / SelectTarget precedents: instance / the_beast /
 -- draenei_survivor).
 -- Reset's _Reset() and JustDied's _JustDied() are NOT called in C++
@@ -92,6 +101,16 @@ local SPELL_FIRE_SHIELD = 13376
 local SPELL_FIRENOVA = 23462
 local SPELL_FLAMEBUFFET = 23341
 local SPELL_PYROBLAST = 17274
+local SPELL_ENCAGE_EMBERSEER = 15281
+local SPELL_ENCAGED_EMBERSEER = 15282
+local SPELL_FREEZE_ANIM = 16245
+local SPELL_EMBERSEER_GROWING = 16048
+local SPELL_EMBERSEER_GROWING_TRIGGER = 16049
+local SPELL_EMBERSEER_FULL_STRENGTH = 16047
+
+local EMOTE_TEN_STACK = 1
+local EMOTE_FREE_OF_BONDS = 2
+local YELL_FREE_OF_BONDS = 3
 
 local ENTRY_PYROGAURD_EMBERSEER = 9816
 local DATA_PYROGAURD_EMBERSEER = 9 -- blackrock_spire.h:39
@@ -119,6 +138,28 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- C++ boss_pyroguard_emberseerAI::Reset
+-- (boss_pyroguard_emberseer.cpp:83-99) as invoked from the SpellHit
+-- 15281 leg: flags first (NOT_SELECTABLE + SetImmuneToPC(true), the
+-- SetFlag(59, 0x100) twin already used by onCombatEnd), timers
+-- cancelled (events.Reset), the growing/full-strength auras removed,
+-- and EVENT_RESPAWN re-scheduled 5s out (its SetBossState(NOT_STARTED)
+-- write; the companion instance->SetData(DATA_BLACKHAND_INCARCERATOR,
+-- 1) leg stays out — no instance SetData bridge). The Reset
+-- EVENT_FIRE_SHIELD 3s re-arm stays unmodeled with the other
+-- out-of-combat fireshield ticks (see header).
+local function resetEmberseer(creature, guid)
+    creature:SetFlag(59, 0x2000000)
+    creature:SetFlag(59, 0x100)
+    cancelTimers(guid)
+    creature:RemoveAura(SPELL_EMBERSEER_FULL_STRENGTH)
+    creature:RemoveAura(SPELL_EMBERSEER_GROWING)
+    creature:RemoveAura(SPELL_EMBERSEER_GROWING_TRIGGER)
+    schedule(guid, "respawn", 5000, function()
+        creature:SetBossState(DATA_PYROGAURD_EMBERSEER, 0) -- NOT_STARTED
+    end)
 end
 
 local function onFireShield(creature, guid)
@@ -227,7 +268,71 @@ local function onCombatEnd(event, creature)
     end
 end
 
+-- PORTED (DORMANT) — C++ boss_pyroguard_emberseerAI::SpellHit
+-- (boss_pyroguard_emberseer.cpp:127-156), event 14
+-- (boss_ai.go:4231-4243: CREATURE_EVENT_ON_HIT_BY_SPELL, args
+-- (event, creature, caster, spellid); magtheridonSpellHit precedent).
+-- DORMANT: the hook + handler are fully bridged, but neither
+-- producer fires on a live path yet — leg 1 needs the incarcerator's
+-- self-cast 15281 to resolve onto emberseer via its DBC implicit
+-- target (entry-area fan-out exists, boss_ai.go:2452; no Spell.dbc
+-- in this workspace to confirm the 15281 record), and leg 2 needs
+-- 16048 applied by the unported EVENT_PRE_FIGHT_2 machine (its
+-- periodic trigger itself IS live, spells.go:44960 case 23).
+-- Count reads: no GetAuraCount bridge, but GetStackAmount(spell) IS
+-- the count twin (lua_creature_events.go:1804; GetAuraCount sums
+-- stack amounts, Unit.cpp:4644-4656 — single-aura case; spell_holiday
+-- precedent). Ordering is C++-exact as a literal ==10 / ==20 read:
+-- C++ applies the hit's aura effects in the per-effect
+-- DoTargetSpellHit loop BEFORE DoDamageAndTriggers fires AI SpellHit
+-- (Spell.cpp:3555-3566, :2629), and Go likewise applies auras
+-- (creatureEffectApplyAura, boss_ai.go:3793) before the OnHit
+-- fireSpellHit (boss_ai.go:3866) — the read sees the post-hit stack.
+-- (The npc_imprisoned_beryl_sorcerer header claim that SpellHit fires
+-- before aura apply is wrong for this hook: its Spell.cpp:2629 cite
+-- IS the post-effects DoDamageAndTriggers arm.)
+-- Leg 1 (:129-136): 15281 with no 15282 aura -> self-cast 15282 +
+-- Reset(). Leg 2 (:138-155): 16049 stacks — 10: Talk(EMOTE_TEN_STACK
+-- = 1); 20: RemoveAura(16245), self-cast 16047, Talk(EMOTE_FREE_OF_
+-- BONDS = 2) + Talk(YELL_FREE_OF_BONDS = 3), clear NOT_SELECTABLE +
+-- the SetImmuneToPC(false) leg (no direct bridge — RemoveFlag(59,
+-- 0x100), the inverse of this file's SetFlag(59, 0x100) =
+-- SetImmuneToPC(true) twin), EVENT_ENTER_COMBAT 2s -> AttackStart(
+-- SelectNearestPlayer(30.0f)) = GetNearestPlayer(30.0), alive-only
+-- by default (lua_worldobject_range.go:21-25).
+local function onSpellHit(_, creature, _, spellId)
+    if spellId == SPELL_ENCAGE_EMBERSEER then
+        if creature:GetStackAmount(SPELL_ENCAGED_EMBERSEER) == 0 then
+            creature:CastSpell(creature, SPELL_ENCAGED_EMBERSEER)
+            resetEmberseer(creature, creature:GetGUIDLow())
+        end
+        return
+    end
+    if spellId == SPELL_EMBERSEER_GROWING_TRIGGER then
+        local stacks = creature:GetStackAmount(SPELL_EMBERSEER_GROWING_TRIGGER)
+        if stacks == 10 then
+            creature:Talk(EMOTE_TEN_STACK)
+        end
+        if stacks == 20 then
+            creature:RemoveAura(SPELL_FREEZE_ANIM)
+            creature:CastSpell(creature, SPELL_EMBERSEER_FULL_STRENGTH)
+            creature:Talk(EMOTE_FREE_OF_BONDS)
+            creature:Talk(YELL_FREE_OF_BONDS)
+            creature:RemoveFlag(59, 0x2000000)
+            creature:RemoveFlag(59, 0x100)
+            local guid = creature:GetGUIDLow()
+            schedule(guid, "entercombat", 2000, function()
+                local target = creature:GetNearestPlayer(30.0)
+                if target then
+                    creature:AttackStart(target)
+                end
+            end)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_PYROGAURD_EMBERSEER, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_PYROGAURD_EMBERSEER, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_PYROGAURD_EMBERSEER, 4, onCombatEnd)
+RegisterCreatureEvent(ENTRY_PYROGAURD_EMBERSEER, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY_PYROGAURD_EMBERSEER, 23, onCombatEnd)

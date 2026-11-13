@@ -20,14 +20,47 @@
 --   schedule POISONBOLT_VOLLEY 25991 (10-15s init -> 10-15s) and
 --   POISON_SHOCK 25993 (7-12s init -> 7-12s).
 -- Unmodeled (documented-only, no bridges):
--- - The whole frost/slow/freeze machine (SpellHit event 14): C++
---   counts hits whose GetSchoolMask() has SPELL_SCHOOL_MASK_FROST
---   while phase is FROST and health > 5%, applying SLOWED 26034
---   + Talk(EMOTE_SLOW 0) at 100 hits, SLOWED_MORE 26036 +
---   Talk(EMOTE_FREEZE 1) at 150, FREEZE 25937 + Talk(EMOTE_FROZEN
---   2) at 200 (phase -> MELEE, 15s EVENT_RESET_PHASE back to
---   FROST). No spell-school bridge exists in Lua — porting by
---   spellId would misfire on every school, so this leg stays out.
+-- - The whole frost/slow/freeze machine (SpellHit event 14):
+--   STAY OUT, re-verified 2026-11-13 against the CURRENT runtime.
+--   C++ (boss_viscidus.cpp:154-181): gate is
+--   (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_FROST) &&
+--   _phase == PHASE_FROST (1) && GetHealthPct() > 5.0; ++_hitcounter
+--   (uint8, ctor/Reset Initialize() :109-116, 0/FROST); >=100
+--   HITCOUNTER_SLOW: Talk(EMOTE_SLOW 0) + DoCast SLOWED 26034;
+--   >=150 HITCOUNTER_SLOW_MORE: Talk(EMOTE_FREEZE 1) +
+--   RemoveAura(SLOWED) + DoCast SLOWED_MORE 26036; >=200
+--   HITCOUNTER_FREEZE: counter = 0, Talk(EMOTE_FROZEN 2),
+--   _phase = PHASE_MELEE (2), DoCast FREEZE 25937,
+--   RemoveAura(SLOWED_MORE), ScheduleEvent(EVENT_RESET_PHASE, 15s)
+--   (UpdateAI :269-272 resets counter/phase to FROST). Thresholds
+--   are >= with an else-if chain, so the SLOW/SLOW_MORE legs re-fire
+--   on EVERY hit in range (no once-guard) — a port would replicate
+--   that, not a one-shot.
+--   Blocker: ev14 itself IS bridged (runtime.go:379
+--   CreatureEventOnHitBySpell = 14; fire sites boss_ai.go:4267-4282
+--   creature-caster, spells.go:19914/30192 player-caster,
+--   creature_area_targets.go:2667, pet_combat.go:8073/8486/9232),
+--   args (event, creature, caster, spellId) — spellId ONLY, no
+--   spell object and no school mask. GetSchoolMask exists solely on
+--   the aura ProcEventInfo (lua_aura.go:1267; runtime.go:516-517),
+--   unreachable from a creature ev14 handler, and there is no
+--   spell-info-by-ID lookup in Lua (globals.go GetSpellId is
+--   item-template only); spells.go:681 spellSchoolMaskFrost = 16 is
+--   Go-internal. Porting by spellId enumeration would misfire on
+--   non-frost spells and miss unlisted frost ones — the C++ gate is
+--   any frost-school spell, an unbounded set. In-tree ev14 ports
+--   (ossirian, veklor, zuljin vortex) all gate on one exact spellId;
+--   no school-gated precedent exists.
+--   Everything ELSE in the arm is bridged and would port cleanly if
+--   the gate ever lands: GetHealthPct (object.go:209 fallback,
+--   lua_objects.go:338), Talk(textId) (lua_creature_events.go:1252),
+--   RemoveAura (:1748), CastSpell (used elsewhere in this file),
+--   15s reset via the existing CreateLuaEvent schedule() helper.
+--   Lua currently models no _phase/_hitcounter state at all, so
+--   there is nothing partial to wire — and the freeze leg's whole
+--   purpose is entering PHASE_MELEE, which the ev9 DamageTaken arm
+--   (also unported) depends on. No dormant port: a spellId-gated
+--   approximation would enter MELEE on wrong hits.
 -- - DamageTaken (event 9): C++ only acts in PHASE_MELEE, which is
 --   unreachable in Lua while the SpellHit freeze leg is absent, so
 --   the hitcounter (CRACK 50 + Talk 3, SHATTER 100 + Talk 4,

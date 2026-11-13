@@ -31,9 +31,9 @@
 -- SetBossState NOT_STARTED leg is PORTED below —
 -- instance_magtheridons_lair.lua), non-triggered self-cast 30205 (C++ DoCastSelf(SPELL_
 -- SHADOW_CAGE_C)), channelers=5 (C++-exact init — the
--- SummonedCreatureDies decrement relay is cross-creature
--- blocked), phase="banish", taunt timer armed {4min,5min}
--- repeat -> Talk(SAY_TAUNT) (C++-exact schedule; the
+-- SummonedCreatureDies decrement is PORTED on the boss as ev21
+-- (magtheridonSummonedCreatureDies below), phase="banish", taunt
+-- timer armed {4min,5min} repeat -> Talk(SAY_TAUNT) (C++-exact schedule; the
 -- SummonCreatureGroup(1) arm is PORTED 2026-11-05 in magtheridonReset
 -- below). OnEnterCombat
 -- (1): see the deviation note — the fight starts on pull in
@@ -92,8 +92,9 @@
 -- arm is PORTED (InterruptNonMeleeSpells(false) first in
 -- channelerEnterCombat, boss_magtheridon.cpp:335). OnDied(4):
 -- non-triggered DoCastAOE self-cast soul transfer 30531
--- (kalecgos convention) + the "Hit Kill" DoAction relay and
--- the SummonedCreatureDies count leg (both PORTED) + cleanup.
+-- (kalecgos convention) + the "Hit Kill" DoAction relay (PORTED) +
+-- cleanup; the SummonedCreatureDies count leg lives on the boss
+-- as ev21 (PORTED below, magtheridonSummonedCreatureDies), not here.
 -- OnLeaveCombat(2)/
 -- OnReset(23): cancel timers, drop per-GUID state. Magtheridon
 -- Room (17516, PassiveAI). OnReset(23): non-triggered self-cast
@@ -107,10 +108,9 @@
 -- _Reset/_JustDied/_DespawnAtEvade bookkeeping are PORTED below);
 -- the channeler->
 -- magtheridon ACTION_START_CHANNELERS_EVENT relay, the "Hit
--- Kill" relay, the SummonedCreatureDies count leg and the
--- break-free phase machine (PHASE_BANISH -> PHASE_1 ->
--- CombatStart -> RELEASED, 2min auto-start, 6s release delay)
--- are PORTED 2026-11-05 via the ev38 DoAction bridge with a
+-- Kill" relay and the break-free phase machine (PHASE_BANISH ->
+-- PHASE_1 -> CombatStart -> RELEASED, 2min auto-start, 6s release
+-- delay) are PORTED 2026-11-05 via the ev38 DoAction bridge with a
 -- FindNearestCreature grid twin for the instance GetCreature
 -- lookup (unique 17257 in the room); the summons.DoZoneInCombat
 -- (channelers) leg stays unmodeled and the world-trigger
@@ -674,6 +674,38 @@ end
 
 RegisterCreatureEvent(ENTRY_MAGTHERIDON, 38, magtheridonDoAction)
 
+-- C++ SummonedCreatureDies (boss_magtheridon.cpp:161-169): summon
+-- entry == NPC_HELLFIRE_CHANNELLER (17256) and events.IsInPhase(PHASE_1)
+-- -> _channelersCount--, at == 0 CombatStart(). Event 21 fires on the
+-- summoner with (event, creature, summon, killer)
+-- (lua_creature_events.go:7744-7761 fireCreatureDied, :7796-7798
+-- fireCreatureDiedByCreature; scripting/runtime.go:383); the summoner
+-- link is the summon's OwnerGUID, stamped by summonTempCreature, so the
+-- SummonCreatureGroup(1) channelers from magtheridonReset reach this
+-- handler (nadox/ragnaros ev21 precedents). summon:GetEntry() is the
+-- generic object bridge (scripting/object.go:164). The old channelerDied
+-- cross-creature count leg is removed below — keeping it would decrement
+-- twice per death and fire CombatStart after 3 deaths instead of 5.
+-- Ordering: Go fires ev4 (channelerDied, incl. its Hit Kill DoAction
+-- relay) before ev21, so a channeler dying pre-phase1 flips to phase1
+-- first; in the normal flow the phase flipped at engage already.
+local function magtheridonSummonedCreatureDies(event, creature, summon, killer)
+    if summon == nil or summon:GetEntry() ~= ENTRY_CHANNELER then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local st = magState[guid]
+    if not st or st.phase ~= "phase1" then
+        return
+    end
+    st.channelers = (st.channelers or 5) - 1
+    if st.channelers == 0 then
+        magtheridonCombatStart(creature, guid)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_MAGTHERIDON, 21, magtheridonSummonedCreatureDies)
+
 -- C++ DamageTaken: HealthBelowPctDamaged(30, damage) (Unit.h:873 --
 -- int64(health) - int64(damage) < CountPctFromMaxHealth(30), so killing
 -- and overkill blows fire the arms too) -> collapse arms, once.
@@ -960,22 +992,15 @@ end
 -- C++ JustDied: non-triggered DoCastAOE soul transfer (kalecgos
 -- convention); the "Hit Kill" DoAction relay is PORTED
 -- (boss_magtheridon.cpp:351-354, same grid twin as the engage
--- relay) and the SummonedCreatureDies count leg is PORTED
--- (boss_magtheridon.cpp:159-166): a channeler death in PHASE_1
--- decrements the boss-side count, at zero CombatStart fires.
+-- relay). The SummonedCreatureDies count leg (boss_magtheridon.cpp:
+-- 161-169) is NOT here: it lives on the boss as ev21
+-- (magtheridonSummonedCreatureDies above) — a count leg here would
+-- double-decrement with ev21.
 local function channelerDied(event, creature, killer)
     creature:CastSpell(creature, SPELL_SOUL_TRANSFER)
     local magtheridon = creature:FindNearestCreature(ENTRY_MAGTHERIDON, 100.0)
     if magtheridon then
         magtheridon:DoAction(ACTION_START_CHANNELERS_EVENT)
-        local magGuid = magtheridon:GetGUIDLow()
-        local st = magState[magGuid]
-        if st and st.phase == "phase1" then
-            st.channelers = (st.channelers or 5) - 1
-            if st.channelers <= 0 then
-                magtheridonCombatStart(magtheridon, magGuid)
-            end
-        end
     end
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)

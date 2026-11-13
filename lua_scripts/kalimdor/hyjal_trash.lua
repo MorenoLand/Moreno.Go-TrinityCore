@@ -103,15 +103,32 @@
 --   bridge (onReset, entry-gated); the Zpos-descending MovePoint
 --   approach and forcemove random-target AttackStart have no bridges
 --   (the JustDied ground drop is ported — see Ported arms).
--- - npc_necromancer: KilledUnit PORTED (hyjal_trash.cpp:808-823 +
---   JustSummoned :789-795): urand(0,2) -> 2x 17902 at +/-3, 2x 17903 at
---   +/-3, or 1x RAND(17902,17903) at +3; DoSpawnCreature = SummonCreature
---   at (x+dx, y, z, o=0, Go type 2 = C++ TIMED_DESPAWN, 60s); each skeleton
---   engages a random threat-list player within 30 (SelectTarget Random,0,
---   30,true) via EngageWithTarget; Reset despawns tracked skeletons
---   (SummonList/DespawnAll twin). The old "no summon model / event 3 not
---   registered" claim was stale: event 3 (OnTargetDied) + SummonCreature +
---   EngageWithTarget are all live.
+-- - npc_necromancer (entry 17899 only — the sole KilledUnit/JustSummoned
+--   owner in this file; no other class defines either hook):
+--   (a) ev3 KilledUnit ALREADY PORTED (hyjal_trash.cpp:808-823):
+--   urand(0,2) -> 2x 17902 at +/-3, 2x 17903 at +/-3, or 1x
+--   RAND(17902,17903) at +3; DoSpawnCreature = SummonCreature at
+--   (x+dx, y, z, o=0, Go type 2 = C++ TIMED_DESPAWN, 60s) — raw-offset
+--   add confirmed in ScriptedCreature.cpp:286-289. Handler
+--   onNecromancerKilledUnit + RegisterCreatureEvent(17899, 3, ...);
+--   no edit this tick.
+--   (b) ev19 JustSummoned PORTED (hyjal_trash.cpp:776-782 — the old
+--   :789-795 citation was wrong; those lines are SummonedCreatureDespawn
+--   / WaypointReached): the engage+track leg lived inline in
+--   spawnSkeleton; it now runs as a real ev19 handler
+--   (onNecromancerJustSummoned, registered for 17899 only) because
+--   creature:SummonCreature fires CREATURE_EVENT_ON_JUST_SUMMONED_CREATURE
+--   (19) on the summoner (lua_creature_events.go:190, args (event,
+--   summoner, summoned) per fireCreatureSummoned :7897-7911; midnight
+--   precedent). SelectTarget(Random,0,30,player-only) = random
+--   threat-list player within 30 via GetAITargets + EngageWithTarget
+--   (lua_creature_events.go:1450/:4495); summons.Summon = the
+--   necroSummons per-GUID list (SummonList twin; Reset despawns it,
+--   DespawnAll twin). spawnSkeleton now only spawns — the ev19 fire
+--   inside SummonCreature does the engage+track, so no double-add.
+--   C++ SummonedCreatureDespawn (:784-786, summons.Despawn single) has
+--   no ev20 handler here — out of scope for this row; the list is
+--   consumed wholesale on Reset/death.
 -- - npc_banshee / crypt fiend / fel stalker / abomination / ghoul:
 --   IsEvent escort start legs (Start(false/true, true) with
 --   DATA_ALLIANCE_RETREAT-dependent HordeWPs/AllianceWPs) — no bridge.
@@ -628,13 +645,26 @@ local SKELETON_1 = 17902
 local SKELETON_2 = 17903
 necroSummons = {}
 
+-- C++ DoSpawnCreature (ScriptedCreature.cpp:286-289) is a raw-offset
+-- SummonCreature; the JustSummoned engage+track leg runs as the ev19
+-- handler below (SummonCreature fires it synchronously on the summoner),
+-- so this spawns only — no inline engage/track (that would double-add).
 local function spawnSkeleton(creature, guid, entry, dx)
-    local skel = creature:SummonCreature(entry,
+    creature:SummonCreature(entry,
         creature:GetX() + dx, creature:GetY(), creature:GetZ(),
         0, 2, 60000)
-    if skel == nil then
-        return
-    end
+end
+
+-- C++ npc_necromancerAI::JustSummoned (hyjal_trash.cpp:776-782):
+-- SelectTarget(Random, 0, 30, true) -> summon->Attack(target, false);
+-- summons.Summon(summon). The GetAITargets filter is the threat-list
+-- twin (player-only, alive, within 30); EngageWithTarget is the
+-- Attack(target, false) twin (lua_creature_events.go:1450); the
+-- necroSummons append is the summons.Summon twin. Fires via the
+-- SummonCreature funnel (lua_creature_events.go:190), so it also covers
+-- any future summon source on this entry, not just KilledUnit spawns.
+local function onNecromancerJustSummoned(event, creature, summon)
+    local guid = creature:GetGUIDLow()
     local cands = {}
     for _, t in ipairs(creature:GetAITargets()) do
         if t:GetObjectType() == "Player" and not t:IsDead()
@@ -643,14 +673,14 @@ local function spawnSkeleton(creature, guid, entry, dx)
         end
     end
     if #cands > 0 then
-        skel:EngageWithTarget(cands[math.random(1, #cands)])
+        summon:EngageWithTarget(cands[math.random(1, #cands)])
     end
     local list = necroSummons[guid]
     if not list then
         list = {}
         necroSummons[guid] = list
     end
-    list[#list + 1] = skel
+    list[#list + 1] = summon
 end
 
 local function onNecromancerKilledUnit(event, creature, victim)
@@ -681,3 +711,4 @@ for name, entry in pairs(MOB) do
 end
 
 RegisterCreatureEvent(17899, 3, onNecromancerKilledUnit)
+RegisterCreatureEvent(17899, 19, onNecromancerJustSummoned)
