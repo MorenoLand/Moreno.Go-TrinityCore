@@ -33,20 +33,18 @@
 -- UpdateEntry, SetFlag/RemoveFlag and Talk are all live on the
 -- creature surface. Stays out: MoveFollow (no movement bridge) and
 -- MoveIdle (vacuous — the frog stands still).
--- npc_venture_co_straggler (zone_grizzly_hills.cpp:562-651) — NOT
--- registered: no entry constant anywhere in the C++ tree (DB ScriptName
--- binding only, unverifiable — wounded-skirmisher precedent), so no
--- entry-verifiable registration can be wired. The arms themselves are
--- mostly bridgeable now (Reset's RemoveFlag NON_ATTACKABLE +
--- SetImmuneToPC(false) (= RemoveFlag(59, 0x100)) + SetReactState
--- (REACT_AGGRESSIVE); the SpellHit SMOKE_BOMB 49075 arm rides event 14
--- (live fire sites: boss_ai.go:2125/2134, spells.go:11765) with the
--- caster available for the _playerGUID credit leg; SetFlag
--- NON_ATTACKABLE + SetFlag(59, 0x100) + SetReactState(REACT_PASSIVE) +
--- Talk(SAY_SEO) + the EVENT_STRAGGLER_1..4 CreateLuaEvent chain) — but
--- CombatStop is bridged (2026-10-24) but the three MovePoint legs +
--- DisappearAndDie have no bridges, and without an entry the separable CHOP/Reset arms can't be
--- registered either. Revisit only if an entry becomes C++-verifiable.
+-- PORTED 2026-11-13 (round 21): npc_venture_co_straggler
+-- (zone_grizzly_hills.cpp:562-651) + npc_wounded_skirmisher
+-- (:460-560), appended below. The 2026-10-24 "no entry constant,
+-- DB ScriptName binding only, unverifiable" rationale is stale —
+-- the DB-verification ruling governs (a creature_template row
+-- carrying the exact C++ ScriptName IS the binding evidence), and
+-- TDB_full_world_335.26091_2026_09_09.sql + the AC db_world dump
+-- both bind 27463 'npc_wounded_skirmisher' and 27570
+-- 'npc_venture_co_straggler'. The three MovePoint legs ride
+-- creature:MoveTo (the MovePoint twin — the id is recorded so the
+-- arrival fires MovementInform, ev28); DisappearAndDie rides
+-- DespawnOrUnsummon (halazzi/marzon Despawn-twin precedent).
 -- Documented-only (nearest-creature axis): npc_amberpine_woodsman
 -- (zone_grizzly_hills.cpp:409-457): Reset's
 -- FindNearestCreature(NPC_TALLHORN_STAG 26363, 0.2f) emote-state gate
@@ -333,3 +331,179 @@ local function shredderDelivery(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_SHREDDER_DELIVERY, 5, shredderDelivery)
+
+-- npc_wounded_skirmisher (zone_grizzly_hills.cpp:460-560) — SpellHit
+-- (:503-524): player-cast SPELL_RENEW_SKIRMISHER 48812 with
+-- QUEST_OVERWHELMED 12288 INCOMPLETE -> non-triggered DoCast(player,
+-- SPELL_KILL_CREDIT 48813), Talk(SAY_RANDOM 0) to the player, then
+-- standing -> MovePoint(1, +7,+7) with the MovementInform(1) despawn
+-- 5s, else SetStandState(STAND) + DespawnOrUnsummon(5s). MovePoint
+-- rides creature:MoveTo (the MovePoint twin — the id is recorded so
+-- the arrival fires MovementInform, POINT_MOTION_TYPE 8, ev28).
+-- Reset (:496-499) only re-inits the 5s timer constant — nothing to
+-- port. UpdateAI (:527-533) is UpdateVictim + melee — engine
+-- default, no port. Entry DB-verified: TDB + AC creature_template
+-- rows bind 27463 to ScriptName 'npc_wounded_skirmisher'.
+local ENTRY_WOUNDED_SKIRMISHER = 27463
+local QUEST_OVERWHELMED = 12288
+local SPELL_RENEW_SKIRMISHER = 48812
+local SPELL_KILL_CREDIT = 48813
+local QUEST_STATUS_INCOMPLETE = 3 -- quests.go:19 (sholazar precedent)
+local SAY_RANDOM = 0
+local UNIT_STAND_STATE_STAND = 0
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31 (flamecaller precedent)
+local DESPAWN_TIMER_MS = 5000
+
+local function woundedSkirmisherSpellHit(_, creature, caster, spellId)
+    if spellId ~= SPELL_RENEW_SKIRMISHER or caster == nil then
+        return
+    end
+    local player = caster:ToPlayer()
+    if player == nil then
+        return
+    end
+    if player:GetQuestStatus(QUEST_OVERWHELMED) ~= QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    creature:CastSpell(player, SPELL_KILL_CREDIT)
+    creature:Talk(SAY_RANDOM, player)
+    if creature:IsStandState() then
+        creature:MoveTo(1, creature:GetX() + 7, creature:GetY() + 7, creature:GetZ())
+    else
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+        creature:DespawnOrUnsummon(DESPAWN_TIMER_MS)
+    end
+end
+
+-- C++ MovementInform (zone_grizzly_hills.cpp:501-505): id 1 ->
+-- DespawnOrUnsummon(5s). The first arg is the motion type, gated on
+-- POINT_MOTION_TYPE like the flamecaller ev28 handler.
+local function woundedSkirmisherMovementInform(_, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE or pointId ~= 1 then
+        return
+    end
+    creature:DespawnOrUnsummon(DESPAWN_TIMER_MS)
+end
+
+RegisterCreatureEvent(ENTRY_WOUNDED_SKIRMISHER, 14, woundedSkirmisherSpellHit)
+RegisterCreatureEvent(ENTRY_WOUNDED_SKIRMISHER, 28, woundedSkirmisherMovementInform)
+
+-- npc_venture_co_straggler (zone_grizzly_hills.cpp:562-651).
+-- SpellHit (:627-640): player-cast SPELL_SMOKE_BOMB 49075 ->
+-- SetFlag NON_ATTACKABLE + SetImmuneToPC(true) (= SetFlag(59,
+-- 0x100), tallhorn precedent) + SetReactState(REACT_PASSIVE) +
+-- CombatStop(false) + store the caster GUID + EVENT_STRAGGLER_1 in
+-- 3500ms. The chain (:587-625, tail-first below): 1 credit cast
+-- 49093 on the stored player + MovePoint(0, -7,+7) + 2 in 2500ms;
+-- 2 Talk(SAY_SEO 0) + MovePoint(0, -7,-5) + 3 in 2500ms; 3
+-- MovePoint(0, -5,-5) + 4 in 2500ms; 4 DisappearAndDie, ported as
+-- DespawnOrUnsummon(0) (halazzi/marzon Despawn-twin precedent).
+-- MovePoint rides creature:MoveTo (id 0; the straggler has no
+-- MovementInform override, so no ev28 handler is needed). Reset
+-- (:578-586) clears the player GUID + RemoveFlag NON_ATTACKABLE +
+-- SetImmuneToPC(false) + SetReactState(REACT_AGGRESSIVE).
+-- JustEngagedWith (:574-577) schedules EVENT_CHOP in 3-6s; CHOP
+-- (:619-623) casts SPELL_CHOP 43410 on the victim if any and repeats
+-- in 10-12s. The chain + CHOP timers cancel on ev2/ev4/ev23 (the
+-- file's cancelTimers idiom); C++ keeps the chain across evade, but
+-- the despawn at the end of the chain makes the timers one-shot per
+-- spawn in practice. Entry DB-verified: TDB + AC creature_template
+-- rows bind 27570 to ScriptName 'npc_venture_co_straggler'.
+local ENTRY_VENTURE_CO_STRAGGLER = 27570
+local SPELL_SMOKE_BOMB = 49075
+local SPELL_CHOP = 43410
+local SPELL_VENTURE_STRAGGLER_CREDIT = 49093
+local SAY_SEO = 0
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local REACT_PASSIVE = 0
+local REACT_AGGRESSIVE = 2
+
+local stragglerPlayer = {}
+
+local function stragglerStage4(creature, guid)
+    creature:DespawnOrUnsummon(0)
+    cancelTimers(guid)
+    stragglerPlayer[guid] = nil
+end
+
+local function stragglerStage3(creature, guid)
+    creature:MoveTo(0, creature:GetX() - 5, creature:GetY() - 5, creature:GetZ())
+    schedule(guid, "straggler", 2500, function()
+        stragglerStage4(creature, guid)
+    end)
+end
+
+local function stragglerStage2(creature, guid)
+    creature:Talk(SAY_SEO)
+    creature:MoveTo(0, creature:GetX() - 7, creature:GetY() - 5, creature:GetZ())
+    schedule(guid, "straggler", 2500, function()
+        stragglerStage3(creature, guid)
+    end)
+end
+
+local function stragglerStage1(creature, guid)
+    local playerGuid = stragglerPlayer[guid]
+    if playerGuid ~= nil then
+        local player = GetPlayerByGUID(playerGuid)
+        if player ~= nil then
+            creature:CastSpell(player, SPELL_VENTURE_STRAGGLER_CREDIT)
+        end
+    end
+    creature:MoveTo(0, creature:GetX() - 7, creature:GetY() + 7, creature:GetZ())
+    schedule(guid, "straggler", 2500, function()
+        stragglerStage2(creature, guid)
+    end)
+end
+
+local function stragglerChop(creature, guid)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        creature:CastSpell(victim, SPELL_CHOP)
+    end
+    schedule(guid, "chop", {10000, 12000}, function()
+        stragglerChop(creature, guid)
+    end)
+end
+
+local function stragglerSpellHit(_, creature, caster, spellId)
+    if spellId ~= SPELL_SMOKE_BOMB or caster == nil then
+        return
+    end
+    local player = caster:ToPlayer()
+    if player == nil then
+        return
+    end
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+    creature:SetReactState(REACT_PASSIVE)
+    creature:CombatStop(false)
+    local guid = creature:GetGUIDLow()
+    stragglerPlayer[guid] = player:GetGUID()
+    schedule(guid, "straggler", 3500, function()
+        stragglerStage1(creature, guid)
+    end)
+end
+
+local function stragglerEnterCombat(_, creature)
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "chop", {3000, 6000}, function()
+        stragglerChop(creature, guid)
+    end)
+end
+
+local function stragglerCleanup(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    stragglerPlayer[guid] = nil
+    if event == 23 then
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC)
+        creature:SetReactState(REACT_AGGRESSIVE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 1, stragglerEnterCombat)
+RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 2, stragglerCleanup)
+RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 4, stragglerCleanup)
+RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 14, stragglerSpellHit)
+RegisterCreatureEvent(ENTRY_VENTURE_CO_STRAGGLER, 23, stragglerCleanup)
