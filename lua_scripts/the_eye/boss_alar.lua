@@ -18,8 +18,9 @@
 -- Talk: boss_alar.cpp defines no SAY_ enums — no talks fire
 -- anywhere in the fight (C++-exact).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
--- OnDied, 9 OnDamageTaken, 23 OnReset (the C++ does not
--- override KilledUnit — no event 3, laj precedent).
+-- OnDied, 9 OnDamageTaken, 19 OnJustSummoned, 23 OnReset, 28
+-- OnMovementInform (the C++ does not override KilledUnit —
+-- no event 3, laj precedent).
 -- Timers via a 1s CreateLuaEvent pump (a port of UpdateAI in
 -- C++ arm order); melee is engine-driven in Go (creature
 -- combat tick), like C++ DoMeleeAttackIfReady. C++ DoCast
@@ -79,13 +80,14 @@
 --    land (+1s — C++ WaitTimer = 1000 + floor(dist/80*1000),
 --    dist in {3.0, 5.0} -> {1037, 1062}ms, 1s granularity
 --    exact); summon (+2s, C++-exact) — the two CREATURE_EMBER_
---    OF_ALAR 19551 summons (DoSpawnCreature is a plain
---    SummonCreature wrapper — bridge live) stay out on the
---    paired boss_alar::JustSummoned AttackStart relay (:204-
---    208, unbridged cross-creature relay; embers' role is
---    combat); only the TRIGGERED DoCast(me, SPELL_REBIRTH_
---    2 35369, true) is bridged (C++-exact; the bounding-
---    radius/display/flag arms have no bridges — unmodeled).
+--    OF_ALAR 19551 summons are PORTED (2026-11-13, round 28)
+--    and the paired boss_alar::JustSummoned AttackStart relay
+--    (:181-186) is PORTED below (the stale "unbridged
+--    cross-creature relay" claim is retracted — AttackStart
+--    is bridged); only the TRIGGERED DoCast(me, SPELL_REBIRTH_
+--    2 35369, true) besides them is bridged (C++-exact; the
+--    bounding-radius/display/flag arms have no bridges —
+--    unmodeled).
 -- 4. Phase 1 arms: platforms-move cycle — 0 init, cur_wp = 4
 --    (C++ Initialize(), modeled as state): cur_wp == 4 ->
 --    forced WE_PLATFORM move, re-arm 30000+rand()%5000, no
@@ -93,10 +95,11 @@
 --    4) == 0 (C++-exact): TRIGGERED DoCast(me, SPELL_FLAME_
 --    QUILLS 34229, true) (the WE_QUILL arm, C++-exact), then
 --    the 10s WE_DUMMY wait before the next platform decision
---    (C++-exact); else next platform (cur_wp = 3 -> 0),
+--    (C++-exact); else next platform (cur_wp = 3 -> 0) + one
+--    ember summon (PORTED 2026-11-13, round 28),
 --    re-arm 30000+rand()%5000 (C++-exact). The platform
---    MovePoints, the ember DoSpawnCreature and the WE_DUMMY
---    movement-completion arms have no movement/summon bridge
+--    MovePoints are PORTED below and the WE_DUMMY
+--    movement-completion arms have no movement bridge
 --    (steamrigger / omor precedents). The phase-1
 --    !IsThreatened() evade arm has no threat model —
 --    unmodeled (nightbane precedent).
@@ -147,9 +150,9 @@
 -- double as its fallback); the WE_DIVE UpdatePosition
 -- teleport is PORTED via creature:Teleport + StopMoving;
 -- 'no summon bridge' is stale (the bridge is live) — per-arm: phase-1 ember DoSpawnCreature
--- (:376) and dive-bomb two-ember DoSpawnCreature (:335-337) stay
--- out on the paired JustSummoned AttackStart relay (:204-208,
--- unbridged; embers' role is combat); flame-patch arm stays out
+-- (:376) and dive-bomb two-ember DoSpawnCreature (:335-337) are PORTED (2026-11-13,
+-- round 28), as is the paired JustSummoned AttackStart relay (:181-186, ev19 below —
+-- the stale "unbridged relay" claim is retracted); flame-patch arm stays out
 -- on the paired summon-side self-cast (:444); npc_ember_of_alar (19551)
 -- documented only, not registered — its DamageTaken latch
 -- (TRIGGERED SPELL_EMBER_BLAST 34133 + the 3% Al'ar health
@@ -195,6 +198,8 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000 -- SharedDefines.h
 -- summon arm (boss_alar.cpp:432-447).
 local CREATURE_FLAME_PATCH_ALAR = 20602
 local SPELL_FLAME_PATCH = 35380
+-- CREATURE_EMBER_OF_ALAR (boss_alar.cpp:47) — the JustSummoned relay target.
+local CREATURE_EMBER_OF_ALAR = 19551
 
 local ENTRY_ALAR = 19514
 
@@ -340,12 +345,20 @@ local function advanceDive(creature, guid)
         -- WE_LAND -> WE_SUMMON after 2s (C++-exact).
         st.dive = { step = "summon", wait = 2000 }
     elseif step == "summon" then
-        -- WE_SUMMON: the two ember summons have no summon
-        -- bridge (steamrigger precedent) — only the TRIGGERED
-        -- rebirth cast is bridged (C++-exact). C++ arm order
+        -- WE_SUMMON: the two ember summons are PORTED (2026-11-13,
+        -- round 28 — DoSpawnCreature is a plain SummonCreature wrapper;
+        -- the stale "no summon bridge" claim is retracted). C++ arm order
         -- (boss_alar.cpp:335-340): ember summons -> SetFloatValue(
         -- BOUNDINGRADIUS, 10) (no slot, stays out) -> RemoveFlag(
         -- NOT_SELECTABLE) -> SetDisplayId(native) -> rebirth cast.
+        -- DoSpawnCreature offsets are 0,0,0,0 = the boss position;
+        -- summon type 3 = TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 5s.
+        -- The JustSummoned relay below engages each ember on a random
+        -- threat-list unit (C++-exact).
+        for _ = 1, 2 do
+            creature:SummonCreature(CREATURE_EMBER_OF_ALAR,
+                creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 5000)
+        end
         -- The flag clear pairs with the dive-bomb-arm set above;
         -- the native-display restore is ported via alarNative.
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -460,8 +473,12 @@ local function combatTick(creature, guid)
                 st.platform = 10000
             else
                 -- WE_PLATFORM: next platform in the cycle
-                -- (C++-exact); the MovePoint/ember-summon arms
-                -- have no movement/summon bridge.
+                -- (C++-exact); the ember summon (:376) is PORTED
+                -- (2026-11-13, round 28 — same SummonCreature form
+                -- as the WE_SUMMON pair above); the MovePoint is
+                -- PORTED below.
+                creature:SummonCreature(CREATURE_EMBER_OF_ALAR,
+                    creature:GetX(), creature:GetY(), creature:GetZ(), 0, 3, 5000)
                 if st.curWp == 3 then
                     st.curWp = 0
                 else
@@ -707,6 +724,28 @@ RegisterCreatureEvent(ENTRY_ALAR, 28, function(_, creature, moveType, pointId)
         st.dive.wait = 0
     end
 end)
+
+-- C++ boss_alarAI::JustSummoned (boss_alar.cpp:181-186): an ember
+-- summon (CREATURE_EMBER_OF_ALAR 19551) is engaged on a random
+-- threat-list unit via summon->AI()->AttackStart(target); nil pick
+-- attacks nothing (C++-exact). The flame-patch summon (20602) also
+-- fires ev19 but is filtered out by the entry check. PORTED
+-- 2026-11-13 (round 28) — the "unbridged cross-creature relay"
+-- claim is stale: creature:AttackStart is bridged
+-- (lua_creature_events.go:7215-7220, EngageWithTarget twin) and
+-- ev19 fires from creature:SummonCreature (:190); halazzi precedent
+-- for the (event, creature, summon) form.
+local function alarJustSummoned(event, creature, summon)
+    if summon:GetEntry() ~= CREATURE_EMBER_OF_ALAR then
+        return
+    end
+    local target = randomThreatUnit(creature)
+    if target then
+        summon:AttackStart(target)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_ALAR, 19, alarJustSummoned)
 
 -- C++ spell_alar_flame_quills::PeriodicTick
 -- (boss_alar.cpp:605-616): PreventDefaultAction; the aura target

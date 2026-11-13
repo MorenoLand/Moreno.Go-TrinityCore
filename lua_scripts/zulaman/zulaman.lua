@@ -20,7 +20,10 @@
 -- SetFacingTo / equipment (SetEquipmentSlots bridged) / emote
 -- (PerformEmote bridged) / SetByteValue DEAD (SetStandState bridged)
 -- arms ride that unported machine, not a
--- missing bridge — verdict unchanged. Instance GetGameObject/SetData arms (no instance-script
+-- missing bridge — verdict unchanged. Its Reset() (zulaman.cpp:188)
+-- only zeroes _gongEvent/_gongTimer, state owned by that same unported
+-- machine, so ev23 is a no-op without it and is not registered either
+-- (round-28 triage). Instance GetGameObject/SetData arms (no instance-script
 -- model), and GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
 -- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
 -- only for the creature-cast SPELL_COSMETIC_SPEAR_THROW 43647, which has
