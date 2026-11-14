@@ -11,7 +11,7 @@
 -- Entry: ruins_of_ahnqiraj.h:45 names NPC_AYAMISS = 15369; the
 -- creature_template ScriptName binding stays DB-side.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 9 OnDamageTaken, 23 OnReset. Timers via CreateLuaEvent; melee is
+-- 9 OnDamageTaken, 23 OnReset, 28 OnMovementInform. Timers via CreateLuaEvent; melee is
 -- engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady (ground phase only in C++; Lua cannot gate
 -- melee on phase without a motion bridge — documented below).
@@ -37,8 +37,9 @@
 --   GetHealthPct() < 70 check): phase AIR -> GROUND,
 --   SetCombatMovement(true) (bridged, boss_ayamiss.cpp:166),
 --   cancel POISON_STINGER, schedule LASH (5-8s) + TRASH (3-6s).
---   The motion leg (MovePoint to victim) has no bridge —
---   documented below; SetCanFly(true/false) PORTED 2026-10-23
+--   The motion leg (MovePoint to victim) PORTED 2026-11-14
+--   (creature:MoveTo, the MovePoint twin — the old "no bridge"
+--   claim was stale); SetCanFly(true/false) PORTED 2026-10-23
 --   (creature:SetCanFly, lua_creature_events.go); the SetCombatMovement(false) Reset arm PORTED
 --   2026-10-22 (creature:SetCombatMovement, lua_creature_events.go —
 --   C++ boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
@@ -50,9 +51,11 @@
 --   FRENZY 8269, Talk(EMOTE_FRENZY 0), latched (kurinnaxx enrage
 --   convention).
 -- Unmodeled (documented-only, no bridges):
--- - Motion: MovePoint(POINT_AIR) on engage, MovePoint
---   (POINT_GROUND) at phase change, UNIT_STATE_ROOT via MovementInform
---   — no Lua bridge for motion or unit states (SetCanFly PORTED
+-- - Motion PORTED 2026-11-14: MovePoint(POINT_AIR) on engage and
+--   MovePoint(POINT_GROUND) at phase change via creature:MoveTo
+--   (the MovePoint twin — the old "no bridge" claim was stale),
+--   UNIT_STATE_ROOT via MovementInform ev28 + creature:SetRooted,
+--   EnterEvadeMode root clear via ev2 (SetCanFly PORTED
 --   2026-10-23, creature:SetCanFly). Engage's
 --   SetDisableGravity(true) ports via the creature:SetDisableGravity
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
@@ -99,6 +102,12 @@ local ALTAR_POS_X = -9717.18 -- boss_ayamiss.cpp:69 AltarPos
 local ALTAR_POS_Y = 1517.72
 local ALTAR_POS_Z = 27.4677
 local POINT_PARALYZE = 2 -- boss_ayamiss.cpp:61
+local POINT_AIR = 0 -- boss_ayamiss.cpp:61
+local POINT_GROUND = 1 -- boss_ayamiss.cpp:62
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31 (kalecgos precedent)
+local AYAMISS_AIR_POS_X = -9689.292 -- boss_ayamiss.cpp:66 AyamissAirPos
+local AYAMISS_AIR_POS_Y = 1547.912
+local AYAMISS_AIR_POS_Z = 48.02729
 
 local PHASE_AIR = 0
 local PHASE_GROUND = 1
@@ -271,7 +280,8 @@ end
 -- PHASE_GROUND, cancel POISON_STINGER, arm LASH + TRASH. Checked on
 -- damage (event 9); event 9 fires pre-damage so the subtraction
 -- mirrors the post-damage C++ read (buru transform convention).
--- Motion has no bridge; ResetThreatList PORTED 2026-10-19
+-- Motion PORTED 2026-11-14 (creature:MoveTo, the MovePoint twin);
+-- ResetThreatList PORTED 2026-10-19
 -- (creature:ResetAllThreat, bridged lua_creature_events.go:2343).
 local function checkGroundPhase(creature, guid, damage)
     local state = ayamissState[guid]
@@ -290,13 +300,19 @@ local function checkGroundPhase(creature, guid, damage)
         -- C++ ground-phase arm (boss_ayamiss.cpp:162-176): _phase =
         -- PHASE_GROUND -> SetCombatMovement(true) (:166) ->
         -- SetCanFly(false) (PORTED 2026-10-23, below) -> MovePoint(POINT_GROUND,
-        -- victim pos) (no movement bridge) -> ResetThreatList() ->
-        -- schedule LASH/TRASH -> cancel POISON_STINGER.
+        -- victim pos) (PORTED 2026-11-14, creature:MoveTo) ->
+        -- ResetThreatList() -> schedule LASH/TRASH -> cancel POISON_STINGER.
         creature:SetCombatMovement(true)
         creature:SetCanFly(false) -- C++ :166, right after SetCombatMovement
+        -- C++ :168-171, victim-gated exactly as C++ (GetVictim() nil
+        -- skips the leg); the motion leg PORTED 2026-11-14.
+        local victim = creature:GetVictim()
+        if victim ~= nil then
+            creature:MoveTo(POINT_GROUND, victim:GetX(), victim:GetY(), victim:GetZ())
+        end
         -- C++ ground-phase leg: ResetThreatList() (bridged
         -- lua_objects.go:389; the old "no bridge" header claims were
-        -- stale); the motion leg has no bridge.
+        -- stale).
         creature:ResetAllThreat()
         cancelTimer(guid, "poison")
         schedule(guid, "lash", math.random(5000, 8000), function()
@@ -365,15 +381,20 @@ local function onEnterCombat(event, creature, target)
     end)
     -- C++ JustEngagedWith (boss_ayamiss.cpp:140-152): schedules (above),
     -- SetCanFly(true) (:150), me->SetDisableGravity(true) (:151),
-    -- MovePoint(POINT_AIR) (no movement bridge).
+    -- MovePoint(POINT_AIR) (PORTED 2026-11-14, creature:MoveTo).
     creature:SetCanFly(true)
     creature:SetDisableGravity(true)
+    creature:MoveTo(POINT_AIR, AYAMISS_AIR_POS_X, AYAMISS_AIR_POS_Y, AYAMISS_AIR_POS_Z)
 end
 
 local function onLeaveCombat(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     ayamissState[guid] = nil
+    -- C++ EnterEvadeMode (boss_ayamiss.cpp:134-137): ClearUnitState
+    -- (UNIT_STATE_ROOT); Go fires ev2 ahead of the base evade
+    -- (creaturemotion.go:4746), the faithful slot.
+    creature:SetRooted(false)
 end
 
 local function onReset(event, creature)
@@ -411,6 +432,25 @@ RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ MovementInform (boss_ayamiss.cpp:118-132): POINT_MOTION_TYPE
+-- only; POINT_AIR arrival -> AddUnitState(UNIT_STATE_ROOT),
+-- POINT_GROUND arrival -> ClearUnitState(UNIT_STATE_ROOT).
+-- creature:MoveTo fires ev28 with (POINT_MOTION_TYPE, id) on
+-- landing (creaturemotion.go:5784); SetRooted is the UNIT_STATE_ROOT
+-- twin (lua_creature_events.go:5123). PORTED 2026-11-14.
+local function onMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if pointId == POINT_AIR then
+        creature:SetRooted(true)
+    elseif pointId == POINT_GROUND then
+        creature:SetRooted(false)
+    end
+end
+
+RegisterCreatureEvent(ENTRY, 28, onMovementInform)
 
 -- C++ JustSummoned (boss_ayamiss.cpp:101-116): SWARMER -> track in
 -- _swarmers (already ported at the summon site in onSummonSwarmer,
