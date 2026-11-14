@@ -776,6 +776,14 @@ var spells = []spell{
 	// with a real DBC row when client data ships. Self-cast DUMMY
 	// like 7267 Grovel: TargetA 1 (TARGET_UNIT_CASTER), range 93001.
 	{id: 52693, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
+	// 52517 Gothik collect (chapter1.cpp:985; npc_dkc1_gothik
+	// MoveInLineOfSight arm) -- INFERRED row, derived from in-tree
+	// C++/Go constraints, not a client DBC row; replace with a real
+	// DBC row when client data ships. The ghoul casts it on its
+	// owner (the player), triggered, within 10yd: TargetA 25
+	// (TARGET_UNIT_TARGET_ANY) at synthetic range 93005 (0-20 yd),
+	// like 52994 Duel Victory.
+	{id: 52517, rangeIdx: 93005, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetUnitTargetAny}}},
 }
 
 func main() {

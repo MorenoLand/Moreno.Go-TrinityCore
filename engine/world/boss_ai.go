@@ -16560,12 +16560,10 @@ func init() {
 	// npc_salanar_the_horseman.lua (tick 2026-11-14): OnGossipSelect
 	// (menu 9739 option 0 -> player:CastSpell(player, 52693) +
 	// GossipComplete, C++ order, no ClearGossipMenu -- the C++ arm
-	// has none). MoveInLineOfSight vehicle machine stays out (ev27
-	// engage-only; GetCharmer + RemoveAurasDueToSpell bridges live
-	// since tick 2026-11-14; the remaining blocker is the ev27
-	// proximity dispatch, which only fires on aggro engage);
-	// 28788 ships npcflag 0/menu 0 so the select arm cannot fire
-	// in the current DB state (same in TC).
+	// has none). MoveInLineOfSight vehicle machine PORTED same tick
+	// on the ev27 proximity dispatch (stepCreatureMoveInLOSProximity,
+	// creaturemotion.go); 28788 ships npcflag 0/menu 0 so the select
+	// arm cannot fire in the current DB state (same in TC).
 	RegisterLuaBoss("npc_salanar_the_horseman", 28788)
 	// npc_scarlet_ghoul (entry 28845 ONLY -- TDB 26091: sole Scarlet
 	// Ghoul row with ScriptName 'npc_scarlet_ghoul') is ported in
@@ -16575,6 +16573,18 @@ func init() {
 	// owner/ghost/minion AttackStart legs on ev7 (no veto -- engine
 	// melee still runs); in-combat ghost melee leg engine-covered.
 	RegisterLuaBoss("npc_scarlet_ghoul", 28845)
+	// npc_dkc1_gothik (entry 28658 ONLY -- TDB 26091: sole Gothik
+	// the Harvester row with ScriptName 'npc_dkc1_gothik', faction
+	// 2084) is ported in lua_scripts/eastern_kingdoms/
+	// npc_dkc1_gothik.lua (tick 2026-11-14): MoveInLineOfSight is
+	// the AI's only arm -- ghoul (28845) within 10yd whose owner
+	// is a player: quest 12698 incomplete -> ghoul casts 52517 on
+	// the owner, triggered; ghoul despawns; quest complete ->
+	// owner removes all minions by entry 28846 (ghosts). Rides
+	// the ev27 proximity dispatch (Gothik is friendly to the
+	// ghouls); 52517 is an INFERRED seed row in
+	// tools/spelldbc_seed/main.go.
+	RegisterLuaBoss("npc_dkc1_gothik", 28658)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
 	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727
