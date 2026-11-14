@@ -16628,6 +16628,16 @@ func init() {
 	// from the C++ sources: chapter2.cpp's own ScarletCourierEnum
 	// (line 336) names NPC_SCARLET_COURIER = 29076.
 	RegisterLuaBoss("npc_scarlet_courier", 29076)
+	// npc_highlord_darion_mograine (The Scarlet Enclave, chapter5.cpp
+	// lines 32-1650): ported in lua_scripts/eastern_kingdoms/
+	// chapter5.lua — gossip start, escort WaypointReached 0-8,
+	// uiStep intro machine (steps 0-9, step 10 no-op), SpawnNPC /
+	// NPCChangeTarget waves, 5-minute battle pump + battle end.
+	// Steps 11-73 (post-battle dialogue machine) are the next unit.
+	// npc_the_lich_king_tirion_dawn (29183) is a no-op script
+	// (empty Reset/UpdateAI/JustDied) — nothing to port;
+	// spell_teleport_leaders_blessing is SpellScript (no bridge).
+	RegisterLuaBoss("npc_highlord_darion_mograine", 29173)
 	// deadmines.cpp zone script: single ItemScript item_defias_gunpowder
 	// (AddSC_deadmines). OnUse(player, item, targets): null instance ->
 	// SendNotification("Instance script not initialized"), return true;
