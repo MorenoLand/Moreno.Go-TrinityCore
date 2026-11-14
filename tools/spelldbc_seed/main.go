@@ -144,6 +144,8 @@ type spell struct {
 	rangeIdx    uint32
 	maxTargets  uint32
 	school      uint32
+	manaCost    uint32 // Spell.dbc field 42 (store.go:1070)
+	manaCostPct uint32 // Spell.dbc field 204 (store.go:1073)
 	family      uint32 // SpellFamilyName (store.go field 208)
 	effects     [3]effect
 }
@@ -159,6 +161,8 @@ func (s spell) row() []uint32 {
 	r[208] = s.family
 	r[212] = s.maxTargets
 	r[225] = s.school
+	r[42] = s.manaCost
+	r[204] = s.manaCostPct
 	for i, e := range s.effects {
 		if e.effect == 0 {
 			continue
