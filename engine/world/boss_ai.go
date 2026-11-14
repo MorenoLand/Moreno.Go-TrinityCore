@@ -16608,14 +16608,28 @@ func init() {
 	// (no MotionMaster / gameobject-contact / owner bridges).
 	// npc_a_special_surprise (10 execution-scene entries 29032/29061/
 	// 29065/29067/29068/29070/29074/29072/29073/29071, script "signed
-	// for 29032") is documented-only: the quest-status MoveInLineOfSight
-	// trigger + 12-step Talk machine (stand-state / SetImmuneToPC /
-	// setDeathState / Plaguefist Talk) have no bridges. spell_death_
+	// for 29032") is ported in lua_scripts/eastern_kingdoms/
+	// npc_a_special_surprise.lua — Reset only: SetImmuneToPC(true)
+	// rides ev23 as the flag twin creature:SetFlag(59, 0x100)
+	// (Unit.cpp:8453, motion.UnitFlags honored by the threat/aggro
+	// gates). The quest-status MoveInLineOfSight trigger + 12-step
+	// Talk machine (stand-state / setDeathState / Plaguefist Talk)
+	// stay documented-only (no bridges). spell_death_
 	// knight_devour_humanoid (SpellScript OnEffectHitTarget: GetHitUnit
 	// ->CastSpell(GetCaster(), GetEffectValue()), true) is documented-
 	// only — no SpellScript bridge (nightbane precedent).
 	RegisterLuaBoss("npc_koltira_deathweaver", 28912)
 	RegisterLuaBoss("npc_scarlet_courier", 29076)
+	RegisterLuaBoss("npc_a_special_surprise", 29032)
+	RegisterLuaBoss("npc_a_special_surprise", 29061)
+	RegisterLuaBoss("npc_a_special_surprise", 29065)
+	RegisterLuaBoss("npc_a_special_surprise", 29067)
+	RegisterLuaBoss("npc_a_special_surprise", 29068)
+	RegisterLuaBoss("npc_a_special_surprise", 29070)
+	RegisterLuaBoss("npc_a_special_surprise", 29074)
+	RegisterLuaBoss("npc_a_special_surprise", 29072)
+	RegisterLuaBoss("npc_a_special_surprise", 29073)
+	RegisterLuaBoss("npc_a_special_surprise", 29071)
 	// AddSC_the_scarlet_enclave_c5 (chapter5.cpp, EK loader decl :97 /
 	// call :275): full-file audit 2026-10-07 — 3 scripts, zero Lua
 	// bridges, documented-only. npc_highlord_darion_mograine (entry
