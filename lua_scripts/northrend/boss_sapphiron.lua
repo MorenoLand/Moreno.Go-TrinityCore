@@ -63,10 +63,11 @@
 -- pops at 3s to BREATH at 2s, breath Talk + missile to EXPLOSION
 -- at 8s, breath + anticheat + player icebolt-aura strip to LAND at
 -- 3.5s, land Talk + hover off + delayed-drain + ground re-seed at
--- 3.5s. Approximations, all documented at the arms: MovePoint-home
--- travel is skipped (no motion bridge — liftoff starts at once),
--- the wing buffet is never summoned (no position getter on the
--- handler surface; visual-only, no AI arms), liftoff/land emotes
+-- 3.5s. Approximations, all documented at the arms: the wing
+-- buffet is SUMMONED at liftoff now (creature:SummonCreature with
+-- GetX/GetY/GetZ/GetO — the old "no position getter" bar is
+-- RETIRED) and despawned 1s after LAND (C++-exact) or on evade/
+-- reset (BossAI _Reset summons.DespawnAll); liftoff/land emotes
 -- port via creature:PerformEmote (254/293, tick 224).
 -- EVENT_BERSERK — Talk(EMOTE_ENRAGE 3) + DoCastSelf(Berserk 26662),
 -- 15min init, fires ONCE (C++ schedules it once, never rescheduled
@@ -109,9 +110,14 @@
 -- latch is set in Reset (alive-gated) and InitializeAI (ev5) below.
 -- The old "no creature:GetResistance bridge" bar is RETIRED:
 -- player/creature GetResistance are bridged (Unit.h:863).
--- MovementInform (MovePoint 1 -> liftoff) — no motion bridge;
--- the flight chain is timer-driven instead (see the port note
--- above), so the travel leg is approximated away, not ported.
+-- MovementInform (MovePoint 1 -> liftoff) — PORTED 2026-11-14
+-- (MovePoint re-triage; onyxia/nightbane precedent): EVENT_FLIGHT
+-- runs creature:MoveTo(1, home) and the ev28 (8, 1) arrival fires
+-- liftoffTick — the stale "no motion bridge" claim is retired.
+-- The flight chain is still timer-driven past liftoff (icebolt ->
+-- breath -> explosion -> land -> ground), exactly like C++'s
+-- event schedule; only the home travel leg was approximated away,
+-- and now it ports too.
 -- DoAction(ACTION_BIRTH) — PORTED 2026-11-05 (ev38 receiver +
 -- 23s birth tick; creature:DoAction is bridged, thaddius tick-248
 -- precedent; sender is go_sapphiron_birth.lua).
@@ -135,8 +141,12 @@
 -- no spell-effect-summon executor (jaraxxus precedent) — a
 -- summon-less cast would be dead code, so the arm stays out
 -- with its machine, not on a phase bar.
--- Wing-buffet summon — no position getter on the handler surface
--- (DoSummon spawns at the boss); visual-only, no AI arms.
+-- Wing-buffet summon — PORTED 2026-11-14 (MovePoint re-triage):
+-- creature:SummonCreature(NPC_WING_BUFFET 17025, boss x/y/z/o,
+-- type 7 MANUAL_DESPAWN) in liftoffTick; the old "no position
+-- getter" bar is RETIRED (GetX/GetY/GetZ/GetO are bridged,
+-- object.go:196 — this file already uses target:GetX() for the
+-- iceblock summon). Visual-only, no AI arms in the file.
 -- Liftoff/land emote commands — PORTED tick 224 via
 -- creature:PerformEmote (254 LIFTOFF / 293 LAND).
 -- Explosion / Reset includePets/includeControlled aura-strip legs
@@ -195,6 +205,9 @@ local SPELL_CHECK_RESISTS = 60539
 local DATA_THE_HUNDRED_CLUB = 21462147 -- boss_sapphiron.cpp:88
 local SPELL_SCHOOL_FROST = 4 -- SharedDefines.h:315
 local MAX_FROST_RESISTANCE = 100 -- boss_sapphiron.cpp:89
+local NPC_WING_BUFFET = 17025 -- boss_sapphiron.cpp:84
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:36
+local POINT_LIFTOFF = 1 -- boss_sapphiron.cpp:321 (MovePoint id)
 
 local REACT_PASSIVE = 0
 local REACT_AGGRESSIVE = 2
@@ -204,6 +217,7 @@ local flying = {}
 local delayedDrain = {}
 local iceboltTargets = {}
 local iceboltBlocks = {} -- target GUID -> summoned GO_ICEBLOCK GUID (the C++ _block member)
+local buffetGuid = {} -- boss GUID -> wing-buffet GUID (the C++ _buffet member)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -345,7 +359,7 @@ explosionTick = function(creature, guid)
 end
 
 -- C++ EVENT_LAND: delayed-drain CastDrain if flagged, buffet
--- despawn (never summoned — see liftoffTick), land emote
+-- DespawnOrUnsummon(1s) + clear, land emote
 -- (PerformEmote(293), EMOTE_ONESHOT_LAND, SharedDefines.h:2007),
 -- Talk(EMOTE_GROUND_PHASE), hover off, phase GROUND, then the
 -- GROUND event at 3.5s.
@@ -355,6 +369,19 @@ landTick = function(creature, guid)
         creature:CastSpell(creature, SPELL_LIFE_DRAIN)
         schedule(guid, "drain", {22000, 28000}, function()
             drainTick(creature, guid)
+        end)
+    end
+    -- C++ EVENT_LAND (boss_sapphiron.cpp:392-396): the buffet
+    -- despawns 1s after landing (DespawnOrUnsummon(1s)); the
+    -- razorgore GetCreatureByGUID + :Despawn() idiom carries it.
+    local bGuid = buffetGuid[guid]
+    if bGuid ~= nil then
+        buffetGuid[guid] = nil
+        schedule(guid, "buffetDespawn", 1000, function()
+            local buffet = creature:GetCreatureByGUID(bGuid)
+            if buffet then
+                buffet:Despawn()
+            end
         end)
     end
     creature:PerformEmote(293) -- C++ EVENT_LAND (boss_sapphiron.cpp:397)
@@ -385,15 +412,19 @@ end
 -- C++ EVENT_LIFTOFF: Talk(EMOTE_AIR_PHASE) + wing-buffet summon +
 -- liftoff emote (PerformEmote(254), EMOTE_ONESHOT_LIFTOFF,
 -- SharedDefines.h:2003) + hover on + ICEBOLT at 7s + icebolt targets
--- (RAID_MODE 2/3 random players, 200yd, playerOnly). The buffet
--- summon stays out: DoSummon spawns at the boss's position and
--- the handler surface has no position getter — and the buffet is
--- visual-only (no AI arms in the file), so nothing gameplay rides
--- it.
+-- (RAID_MODE 2/3 random players, 200yd, playerOnly). The buffet is
+-- DoSummon(NPC_WING_BUFFET, me, 0.0f, 0s, TEMPSUMMON_MANUAL_DESPAWN)
+-- — at the boss's position, type 7 MANUAL — so SummonCreature with
+-- the boss's own x/y/z/o carries it (the old "no position getter"
+-- bar is retired; object.go:196).
 local function liftoffTick(creature, guid)
     creature:Talk(EMOTE_AIR_PHASE)
     creature:PerformEmote(254) -- C++ EVENT_LIFTOFF (boss_sapphiron.cpp:345)
     creature:SetHover(true)
+    local buffet = creature:SummonCreature(NPC_WING_BUFFET, creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO(), 7, 0)
+    if buffet then
+        buffetGuid[guid] = buffet:GetGUIDLow()
+    end
     local candidates = {}
     -- C++ SelectTargetList dist gate is IsWithinCombatRange
     -- (Unit.cpp:583-598: 3D dist < nominal + both combat reaches;
@@ -429,10 +460,11 @@ end
 -- if NOT HealthAbovePct(10) (health > floor(max*10/100),
 -- Unit.h:874) the arm dies with no re-arm (C++ breaks without
 -- Repeat). Otherwise REACT_PASSIVE + AttackStop + MovePoint home
--- -> MovementInform -> LIFTOFF. MovePoint has no bridge, so the
--- travel leg is skipped and liftoff starts at once — the air-chain
--- timing shifts by the (unknowable, position-dependent) travel
--- time; documented approximation.
+-- -> MovementInform -> LIFTOFF. The travel leg ports via
+-- creature:MoveTo(1, home) + ev28 (onyxia/nightbane precedent);
+-- the phase latch is set here, C++-exact (C++ sets PHASE_FLIGHT
+-- at EVENT_FLIGHT, before the travel), so ground ticks stay
+-- masked while the boss flies home and liftoff fires on arrival.
 flightTick = function(creature, guid)
     if creature:GetHealth() <= math.floor(creature:GetMaxHealth() * 10 / 100) then
         return
@@ -440,6 +472,26 @@ flightTick = function(creature, guid)
     flying[guid] = true
     creature:SetReactState(REACT_PASSIVE)
     creature:AttackStop()
+    local hx, hy, hz = creature:GetHomePosition()
+    creature:MoveTo(POINT_LIFTOFF, hx, hy, hz)
+end
+
+-- C++ MovementInform (boss_sapphiron.cpp:211-215): id 1 schedules
+-- EVENT_LIFTOFF at 0s (PHASE_FLIGHT) — the arrival fires liftoff.
+-- The type gate is POINT_MOTION_TYPE (nightbane precedent); the
+-- flying latch is the phase gate (C++ schedules only in
+-- PHASE_FLIGHT, and the flight branch only runs while flying).
+local function sapphironMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    if pointId ~= POINT_LIFTOFF then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if not flying[guid] then
+        return
+    end
     liftoffTick(creature, guid)
 end
 
@@ -496,7 +548,18 @@ local function sapphironEnterCombat(event, creature, target)
 end
 
 local function sapphironLeaveCombat(event, creature)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    -- BossAI::_Reset (ScriptedCreature.cpp:499-516) despawns all
+    -- summons on evade — the buffet rides it (razorgore idiom).
+    local bGuid = buffetGuid[guid]
+    if bGuid ~= nil then
+        buffetGuid[guid] = nil
+        local buffet = creature:GetCreatureByGUID(bGuid)
+        if buffet then
+            buffet:Despawn()
+        end
+    end
 end
 
 -- C++ SpellHitTarget (boss_sapphiron.cpp:193-203): SPELL_CHECK_RESISTS
@@ -572,6 +635,17 @@ local function sapphironReset(event, creature)
         creature:SetReactState(REACT_AGGRESSIVE)
         creature:PerformEmote(293) -- C++ Reset :162 (EMOTE_ONESHOT_LAND)
         creature:SetHover(false)
+        -- BossAI::_Reset summons.DespawnAll() — the buffet rides it
+        -- (same leg as sapphironLeaveCombat; idempotent via the nil
+        -- check, so a double fire on evade + reset is harmless).
+        local bGuid = buffetGuid[guid]
+        if bGuid ~= nil then
+            buffetGuid[guid] = nil
+            local buffet = creature:GetCreatureByGUID(bGuid)
+            if buffet then
+                buffet:Despawn()
+            end
+        end
         local mapId, instanceId = creature:GetMapId(), creature:GetInstanceId()
         for _, plr in ipairs(GetPlayersInWorld()) do
             if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId then
@@ -640,6 +714,7 @@ end
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 1, sapphironEnterCombat)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 15, sapphironSpellHitTarget)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 5, sapphironSpawn)
+RegisterCreatureEvent(ENTRY_SAPPHIRON, 28, sapphironMovementInform)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 38, sapphironDoAction)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 2, sapphironLeaveCombat)
 RegisterCreatureEvent(ENTRY_SAPPHIRON, 4, sapphironDied)

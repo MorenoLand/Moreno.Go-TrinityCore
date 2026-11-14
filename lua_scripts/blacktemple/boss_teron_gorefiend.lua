@@ -370,10 +370,12 @@ RegisterCreatureEvent(ENTRY_TERON_GOREFIEND, 23, teronReset)
 -- 40185), Repeat(2s). The blossom arrives via the 40188 spell-effect
 -- summon, so its Reset arm rides the boss event-19 relay (supremus
 -- volcano precedent): if the spell-effect summon never spawns, this
--- never fires and nothing is fabricated. The +8z lift itself stays out
--- (no MovePoint bridge); the hover leg, the 40186 cast and
--- DoZoneInCombat are PORTED in teronJustSummoned below; the blossom's
--- timers die with Teron's timers on leave/died/reset.
+-- never fires and nothing is fabricated. The +8z lift is PORTED via
+-- creature:MoveTakeoff in teronJustSummoned below (the stale "no
+-- MovePoint bridge" claim is retired — MoveTakeoff is the
+-- EFFECT_MOTION_TYPE twin, lua_creature_events.go:5733); the hover
+-- leg, the 40186 cast and DoZoneInCombat are PORTED there too; the
+-- blossom's timers die with Teron's timers on leave/died/reset.
 local function blossomShadowboltTick(blossom, bossGuid, blossomGuid)
     -- C++ npc_doom_blossom::UpdateAI (boss_teron_gorefiend.cpp:250-255):
     -- the CASTING pre-loop gate skips the scheduler while a cast is
@@ -398,10 +400,15 @@ local function teronJustSummoned(event, creature, summon)
         local bossGuid = creature:GetGUIDLow()
         local blossomGuid = summon:GetGUIDLow()
         -- C++ npc_doom_blossom::Reset (boss_teron_gorefiend.cpp:225-236):
-        -- MoveTakeoff +8z -> non-triggered self-cast 40186 -> DoZoneInCombat,
-        -- C++ order. The +8z lift itself stays out (no MovePoint bridge);
-        -- the hover leg rides SetDisableGravity(true), the takeoff state
-        -- twin (the C++ comment frames the takeoff as the hover workaround).
+        -- MoveTakeoff(0, pos+8z) -> non-triggered self-cast 40186 ->
+        -- DoZoneInCombat, C++ order. MoveTakeoff IS bridged
+        -- (creature:MoveTakeoff(id, x, y, z), lua_creature_events.go:5733,
+        -- the EFFECT_MOTION_TYPE twin — MotionMaster.cpp:686, Hover tier);
+        -- no arrival arm exists in C++ (no MovementInform in the file),
+        -- so the ev28 (16, 0) landing is unhandled, C++-exact.
+        -- SetDisableGravity(true) stays as the Hover-tier twin (the
+        -- C++ comment frames the takeoff as the hover workaround).
+        summon:MoveTakeoff(0, summon:GetX(), summon:GetY(), summon:GetZ() + 8)
         summon:SetDisableGravity(true)
         summon:CastSpell(summon, SPELL_SUMMON_BLOSSOM_MOVE_TARGET)
         summon:DoZoneInCombat()
