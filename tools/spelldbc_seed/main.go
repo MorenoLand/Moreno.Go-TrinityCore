@@ -102,6 +102,7 @@ const (
 	targetDestCasterSummon     = 32 // TARGET_DEST_CASTER_SUMMON
 	targetDestCasterRadius     = 73 // TARGET_DEST_CASTER_RADIUS
 	targetUnitTargetAny        = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
+	targetUnitConeEnemy        = 24 // TARGET_UNIT_CONE_ENEMY_24 (SharedDefines.h:1460)
 	targetDestTargetAny        = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
 	targetDestTargetEnemy      = 53 // TARGET_DEST_TARGET_ENEMY
 	targetSrcCaster            = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
@@ -791,6 +792,24 @@ var spells = []spell{
 	// self-casts it, triggered, when hit by 17471: TargetA 1
 	// (TARGET_UNIT_CASTER), range 93001 (self only), like 7267.
 	{id: 17472, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
+	// 38576 Depth Charge Trap (npc_depth_chargeAI MoveInLineOfSight,
+	// zone_azshara.cpp:348-360; depth-charge ev27 leg) — wago.tools
+	// 3.4.0.43659 SpellEffect row (2026-11-14 verdict) + Wowhead
+	// WotLK spell page: single effect 98 KNOCK_BACK, DieSides 1,
+	// BasePoints 224 (Wowhead "Value: 225"), TargetA 24
+	// (TARGET_UNIT_CONE_ENEMY_24), TargetB 0, RadiusIndex 13
+	// (10 yd, seeded real row below), MiscValue 15, MiscValueB 0;
+	// DurationIndex 0 (no SpellDuration row, by design), RangeIndex 1
+	// (Self Only, 0-0 yd, seeded real row below), SchoolMask 0x1
+	// (physical), CastingTimeIndex 0 (instant, default). The knockback
+	// leg is live in Go (boss_ai.go:3763 creatureEffectKnockBack;
+	// MiscValue*0.1 = speedXY, rolled BasePoints*0.1 = speedZ; 65100
+	// precedent). C++ casts on every MIOS fire with a player in range
+	// (no cast latch) — the per-tick ev27 refire matches that shape,
+	// and the cone gate bounds it to players in the charge's front
+	// arc (bossConeEffectTargetsFiltered); the knockback itself pushes
+	// the player out of the 5yd gate within a tick or two.
+	{id: 38576, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effKnockBack, dieSides: 1, basePoints: 224, targetA: targetUnitConeEnemy, radiusIdx: 13, misc: 15}}},
 }
 
 func main() {
