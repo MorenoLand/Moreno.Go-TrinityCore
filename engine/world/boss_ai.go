@@ -16483,9 +16483,9 @@ func init() {
 	// spell 51520-51552 equip map; no SpellScript bridge), npc_eye_of_
 	// acherus (charmer lookup / RemoveAurasDueToSpell / flight spline;
 	// no charmer/movement bridges), npc_death_knight_initiate (duel
-	// machine: SpellHit 52996 accept, DamageTaken clamp-to-1 victory
-	// arms, gossip duel menu unpresentable (no AddGossipItemFor bridge;
-	// ev9/ev14/player:CastSpell/gossip-select live), npc_dark_rider_of_acherus
+	// machine -- PORTED tick 2026-11-14, see the registration below:
+	// gossip hello/select, ev14 SpellHit latch, ev9 DamageTaken
+	// clamp-to-1 victory, 5s duel timer, beg/lose polls), npc_dark_rider_of_acherus
 	// (TempSummon summoner chain, MoveChase, DespawnOrUnsummon; entry 28654
 	// verified — spell 52266 summons the chaser, not the ros rider;
 	// MoveChase/GetSummonerUnit/ev15 bridged; JustAppeared rides ev22,
@@ -16519,6 +16519,32 @@ func init() {
 	// ev15 horse-despawn leg. Spell 52267 is seeded (wago.tools
 	// 3.4.0.43659 verdict 2026-11-13: effect 77, TargetA 25/TargetB 63).
 	RegisterLuaBoss("npc_dark_rider_of_acherus", 28654)
+	// npc_death_knight_initiate (entries 28390-28394 + 28406, TDB 26091
+	// creature_template name/spawn/gossip-menu evidence -- the dump's
+	// ScriptName column is unpopulated, so no DB binding is verifiable;
+	// 28406 is the gossip/duel NPC: npcflag 1, menu 9765, 16 map-609
+	// spawns, faction 2084; 28390-28394 faction 1770, no gossip flag)
+	// is ported in lua_scripts/eastern_kingdoms/
+	// npc_death_knight_initiate.lua (tick 2026-11-14): gossip hello
+	// (quest 12733 gate + "I challenge you, death knight!" option) /
+	// select (SPELL_DUEL 52996 + SPELL_DUEL_FLAG 52991 casts), ev14
+	// SpellHit duel latch + 5s faction-2068 AttackStart timer, ev9
+	// DamageTaken non-dueler zeroing + lethal-clamp victory leg
+	// (DUEL_VICTORY 52994 + GROVEL 7267 + template-faction restore),
+	// 500ms victim-below-10% beg poll + 1s lose-evade poll, ev23
+	// Reset (template faction + SWIMMING flag). The Oct-7 "gossip
+	// duel menu unpresentable (no AddGossipItemFor bridge)" claim is
+	// stale: player GossipMenuAddItem/GossipSendMenu/GossipClearMenu/
+	// GossipComplete are live (lua_player.go:5939-5942, zulaman
+	// precedent). Duel spells 52996/52994/52991/7267 are INFERRED
+	// seed rows (tools/spelldbc_seed/main.go); the 52991 flag-GO
+	// summon leg stays unmodeled.
+	RegisterLuaBoss("npc_death_knight_initiate", 28390)
+	RegisterLuaBoss("npc_death_knight_initiate", 28391)
+	RegisterLuaBoss("npc_death_knight_initiate", 28392)
+	RegisterLuaBoss("npc_death_knight_initiate", 28393)
+	RegisterLuaBoss("npc_death_knight_initiate", 28394)
+	RegisterLuaBoss("npc_death_knight_initiate", 28406)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
 	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727

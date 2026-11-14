@@ -728,6 +728,29 @@ var spells = []spell{
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 101, basePoints: 949, auraPeriod: 2000, targetA: targetUnitDestAreaEnemy, radiusIdx: 13},
 		{effect: effPersistentAreaAura, aura: auraModIncreaseSpeed, dieSides: 1, basePoints: -71, radiusIdx: 13},
 	}},
+	// 52996 Duel / 52994 Duel Victory / 52991 Duel Flag / 7267 Grovel
+	// (chapter1.cpp:521-527 Spells_DKI; npc_death_knight_initiate duel
+	// machine) -- INFERRED rows, derived from in-tree C++/Go
+	// constraints, not client DBC rows; replace with real DBC rows
+	// when client data ships. No wago.tools verdict was obtainable
+	// for these four ids this tick (search surfaced no spell rows).
+	// 52996 is the gossip-arm player cast on the initiate whose hit
+	// fires the ev14 SpellHit latch; 52994 is the creature's
+	// triggered victory cast on the dueler; 52991 is the player's
+	// triggered self-cast that summons the duel flag (the flag-GO
+	// summon leg has no Go handler, so the row is a DUMMY self
+	// target and RemoveGameObject rides as a no-op); 7267 Grovel is
+	// the kneel/beg self-cast the Go engine already treats as
+	// visual-only (combat.go:4025). All four ride single DUMMY
+	// effects: 52996/52994 TargetA 25 (TARGET_UNIT_TARGET_ANY) at
+	// synthetic range 93005 (0-20 yd -- the gossip cast happens at
+	// melee range); 52991/7267 TargetA 1 (TARGET_UNIT_CASTER) at
+	// 93001 (self only). School physical (0x1) is the inferred
+	// default; cast time stays default 0 (instant).
+	{id: 52996, rangeIdx: 93005, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetUnitTargetAny}}},
+	{id: 52994, rangeIdx: 93005, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetUnitTargetAny}}},
+	{id: 52991, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
+	{id: 7267, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
 }
 
 func main() {
