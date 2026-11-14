@@ -19,8 +19,8 @@
 -- OnDamageTaken, 14 OnHitBySpell, 15 OnSpellHitTarget, 23 OnReset.
 -- Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady.
--- Ported arms (the self-contained in-combat legs; movement /
--- instance legs below):
+-- Ported arms (movement legs ported 2026-11-14 via creature:MoveTo /
+-- MoveTakeoff + ev28 MovementInform; instance legs below):
 -- - Engage (C++ JustEngagedWith): Talk SAY_AGGRO (0) + arm each timer
 --   at its C++ ScheduleEvent cooldown ({10s,20s} / {15s,20s} /
 --   {2s,5s} / {10s,20s}); BossAI::JustEngagedWith pulse + me-DoZone +
@@ -50,13 +50,16 @@
 --   guard; a hit crossing both gates runs phase 2 then phase 3
 --   in C++ order):
 --   - 65% phase 2: SetReactState(PASSIVE), AttackStop,
---     SetCombatMovement(false), SetCanFly(true) +
---     SetDisableGravity(true) (the MovementInform-10 legs), Talk
---     SAY_PHASE_2_TRANS (2; C++ talks at takeoff after the
---     MovePoint-10 travel, Lua talks at the latch — no travel
---     leg), phase-1 timers cancelled, phase-2 timers seeded at
---     their C++ takeoff values (whelp 5s, lair guard 15s, deep
---     breath 75s, movement 10s, fireball 18s).
+--     SetCombatMovement(false), tank GUID stored, MoveTo(10,
+--     Phase2Location) — the dive; on arrival (ev28 id 10,
+--     onMovementInform) SetCanFly(true) + SetDisableGravity(true),
+--     SetFacingTo(orientation + PI), the NPC_TRIGGER (14495)
+--     summon at MiddleRoomLocation, MoveTakeoff(11,
+--     Phase2Floating), Talk SAY_PHASE_2_TRANS (2), the instance
+--     SetData(DATA_ONYXIA_PHASE, PHASE_BREATH) liftoff leg, and
+--     the phase-2 timers seeded at their C++ takeoff values
+--     (whelp 5s, lair guard 15s, deep breath 75s, movement 10s,
+--     fireball 18s). Phase-1 timers cancelled at the latch.
 --   - Phase-2 timers: whelp spawns (2 per fire at SpawnLocations
 --     [0]/[1], Go summon type 4 = C++ TEMPSUMMON_CORPSE_DESPAWN,
 --     DoZoneInCombat each, count reset + 90s re-arm at
@@ -64,27 +67,39 @@
 --     [2], 30s repeats), deep breath (Talk EMOTE_BREATH 4 +
 --     self-cast of the current MoveData row's spell, 75s),
 --     fireball (random alive threat-list unit, any type, 8s
---     repeats), movement (position twin only — the 25s tick
---     advances the MoveData index via SetNextRandomPoint,
---     including its 1/8 off-by-one to an invalid row, after
---     which the tick stops and deep breath casts nothing).
---   - 40% phase 3: SetCanFly(false) + SetDisableGravity(false),
---     SetReactState(AGGRESSIVE), SetCombatMovement(true), Talk
---     SAY_PHASE_3_TRANS (3), Bellowing Roar 18431 at the landing
---     cadence (5s first, 30s repeats), phase-1 timers re-seeded
---     at their C++ landing values (wing buffet {15s,30s}).
+--     repeats; the 1s IsMoving re-arm while she flies between
+--     rows), movement (the 25s tick advances the MoveData index
+--     via SetNextRandomPoint, including its 1/8 off-by-one to an
+--     invalid row, after which the tick stops and deep breath
+--     casts nothing — and issues the real MoveTo to the new row,
+--     IsMoving latched until the ev28 row arrival; 500ms re-arm
+--     while moving or casting). While stationary in phase 2 she
+--     faces the trigger (the per-UpdateAI SetFacingToObject leg,
+--     1s poll).
+--   - 40% phase 3: MoveTo(9, home + 12z) at the latch, Talk
+--     SAY_PHASE_3_TRANS (3), SetCombatMovement(true); on landing
+--     (ev28 id 9, onMovementInform) SetCanFly(false) +
+--     SetDisableGravity(false), the trigger killed, SetReactState
+--     (AGGRESSIVE), MoveChase on the stored phase-1 tank (nearest
+--     alive threat unit if it no longer resolves), Bellowing Roar
+--     18431 at the landing cadence (5s first, 30s repeats),
+--     phase-1 timers re-seeded at their C++ landing values (wing
+--     buffet {15s,30s}). The latch also schedules the C++ 30s
+--     roar, replaced by the 5s landing schedule (keyed schedule
+--     helper).
 -- Unmodeled (documented-only, no bridges):
--- - Phase-2/3 travel legs: MovePoint 10 to Phase2Location,
---   MoveTakeoff 11 to Phase2Floating, MovePoint cascade (ids 8 /
---   10 / 11), MovePoint 9 to home+12, flight speed legs,
---   SpellHit breath-direction redirect travel (MovePoint-8;
---   the index write IS ported, onSpellHit below), the
---   trigger summon + SetFacingToObject facing (C++ :408 — the
---   facing leg is bridgeable via the atan2 twin,
---   devourer_of_souls precedent — but the trigger comes from
---   ObjectAccessor::GetCreature via triggerGUID, no
---   world-access bridge), the trigger kill and tank MoveChase
---   at landing — no movement / MotionMaster bridges.
+-- - MovementInform case 11 is DEAD in C++: MoveTakeoff arrives as
+--   EFFECT_MOTION_TYPE, which the POINT_MOTION_TYPE gate
+--   (boss_onyxia.cpp:218) drops — the case-11 MovePoint + MoveIdle
+--   never run (GenericMovementGenerator.cpp:83-88; the 10s MOVEMENT
+--   tick drives the first row move). The Lua ev28 handler gates on
+--   POINT_MOTION_TYPE the same way, so no case-11 branch exists.
+--   The flight SetSpeedRate(MOVE_FLIGHT, 1.5/1.0) legs stay out:
+--   the bridge is MOVE_RUN-only (lua_creature_events.go:6332) and
+--   rejects MOVE_FLIGHT, so the SpellHit redirect and the takeoff
+--   fly at default spline speed. The evade-home travel
+--   (EnterEvadeMode MoveTargetedHome) stays out with the rest of
+--   the evade machine — no change from the pre-travel port.
 -- - JustSummoned remainder (summons.Summon, lair-guard setActive) —
 --   the ported summons carry DoZoneInCombat + the AttackStart random
 --   target leg (EngageWithTarget twin, whelp/lair-guard spawns above)
@@ -95,9 +110,10 @@
 --   instance-script BFS eruption machine) — no GO-enumeration /
 --   instance-data bridges.
 -- - SpellHit (breath-direction redirect, ev14 live): the
---   MovePoint-8 travel + SetSpeedRate(1.5) legs stay out (no
---   motion bridge); the MovePoint = LocIdEnd index write IS
---   ported (onSpellHit, position-twin class like onMovement).
+--   MovePoint-8 travel IS ported (onSpellHit, MoveTo 8 to
+--   MiddleRoomLocation; the MovePoint = LocIdEnd index write
+--   rides with it); only the SetSpeedRate(MOVE_FLIGHT, 1.5) leg
+--   stays out (bridge is MOVE_RUN-only).
 --   SpellHitTarget (instance SetData(DATA_SHE_DEEP_BREATH_MORE, FAIL)
 --   on player breath-spell hits) IS ported (onyxiaSpellHitTarget,
 --   ev15): the ranges are Onyxia's own SPELL_BREATH_* direction
@@ -169,6 +185,25 @@ local SPELL_BELLOWING_ROAR = 18431
 
 local NPC_WHELP     = 11262
 local NPC_LAIRGUARD = 36561
+local NPC_TRIGGER   = 14495 -- onyxias_lair.h:58
+
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31 (kalecgos precedent)
+
+-- C++ MoveData[8] rows (boss_onyxia.cpp:102-110): LocId -> flight point.
+local MOVE_ROWS = {
+    [0] = { -33.5561, -182.682, -56.9457 },
+    [1] = { -31.4963, -250.123, -55.1278 },
+    [2] = { 6.8951, -180.246, -55.896 },
+    [3] = { 10.2191, -247.912, -55.896 },
+    [4] = { -63.5156, -240.096, -55.477 },
+    [5] = { -58.2509, -189.020, -55.790 },
+    [6] = { -65.8444, -213.809, -55.2985 },
+    [7] = { 22.8763, -217.152, -55.0548 },
+}
+
+local MIDDLE_ROOM_LOCATION = { -23.6155, -215.357, -55.7344 }
+local PHASE2_LOCATION = { -80.924, -214.299, -82.942 }
+local PHASE2_FLOATING = { -80.924, -214.299, -57.942 }
 
 -- C++ MoveData[8] (boss_onyxia.cpp): LocId -> deep-breath spell.
 -- LocIds 0..7 are west/east/north-west/north-east/south-east/
@@ -224,7 +259,8 @@ end
 local function stateFor(guid)
     local st = onyxiaState[guid]
     if not st then
-        st = { phase2 = false, phase3 = false, whelps = 0, movePoint = nil }
+        st = { phase2 = false, phase3 = false, whelps = 0, movePoint = nil,
+            isMoving = false, flying = false, triggerGuid = nil, tankGuid = nil }
         onyxiaState[guid] = st
     end
     return st
@@ -399,7 +435,8 @@ end
 -- repeats. A nil movePoint (the SetNextRandomPoint off-by-one,
 -- below) skips only the cast: C++ Talks unconditionally inside the
 -- !IsMoving branch and guards only the DoCast on PointData, so the
--- emote still fires; the 75s re-arm is unchanged.
+-- emote still fires; the 75s re-arm is unchanged. While IsMoving
+-- the arm re-arms 1s with neither talk nor cast (C++ :420-428).
 local function onDeepBreath(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "deepbreath", 500, function()
@@ -408,6 +445,12 @@ local function onDeepBreath(creature, guid)
         return
     end
     local st = stateFor(guid)
+    if st.isMoving then
+        schedule(guid, "deepbreath", 1000, function()
+            onDeepBreath(creature, guid)
+        end)
+        return
+    end
     creature:Talk(EMOTE_BREATH)
     if st.movePoint ~= nil then
         creature:CastSpell(creature, BREATH_SPELLS[st.movePoint])
@@ -420,11 +463,18 @@ end
 -- C++ EVENT_FIREBALL (phase BREATH): DoCast(random target, 18392),
 -- non-triggered; 18s first, 8s repeats. C++ SelectTarget(Random, 0)
 -- defaults playerOnly=false/dist 0, so the pool is alive threat-list
--- units of any type (volazj idiom); IsMoving is always false in the
--- Lua model, so the 1s moving re-arm never applies.
+-- units of any type (volazj idiom). While IsMoving the arm re-arms
+-- 1s without casting (C++ :438-446).
 local function onFireball(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "fireball", 500, function()
+            onFireball(creature, guid)
+        end)
+        return
+    end
+    local st = stateFor(guid)
+    if st.isMoving then
+        schedule(guid, "fireball", 1000, function()
             onFireball(creature, guid)
         end)
         return
@@ -443,20 +493,20 @@ local function onFireball(creature, guid)
     end)
 end
 
--- C++ EVENT_MOVEMENT (phase BREATH), position twin only: the
--- MovePoint travel has no bridge, but the point index drives
--- DEEP_BREATH's spell, so the tick models SetNextRandomPoint
--- exactly: iTemp = urand(0, 7); if iTemp >= MovePoint then iTemp++.
--- That yields 8 (no MoveData row) with probability 1/8 per tick, and
--- C++ then returns without re-arming MOVEMENT and leaves PointData
--- nil, so deep breath stops casting for the rest of phase 2; the
--- Lua tick mirrors it by stopping here. 10s first, 25s repeats.
+-- C++ EVENT_MOVEMENT (phase BREATH): SetNextRandomPoint + MovePoint
+-- to the new row, IsMoving latched until the ev28 row arrival.
+-- iTemp = urand(0, 7); if iTemp >= MovePoint then iTemp++ — that
+-- yields 8 (no MoveData row) with probability 1/8 per tick, and C++
+-- then returns without re-arming MOVEMENT and leaves PointData nil,
+-- so deep breath stops casting for the rest of phase 2; the Lua
+-- tick mirrors it by stopping here. While IsMoving or casting the
+-- tick re-arms 500ms (C++ :430-446). 10s first, 25s repeats.
 local function onMovement(creature, guid)
     local st = stateFor(guid)
     if st.movePoint == nil then
         return
     end
-    if creature:IsCasting() then
+    if st.isMoving or creature:IsCasting() then
         schedule(guid, "movement", 500, function()
             onMovement(creature, guid)
         end)
@@ -471,15 +521,21 @@ local function onMovement(creature, guid)
         st.movePoint = nil
         return
     end
+    local row = MOVE_ROWS[st.movePoint]
+    creature:MoveTo(st.movePoint, row[1], row[2], row[3])
+    st.isMoving = true
+    st.flying = true
     schedule(guid, "movement", 25000, function()
         onMovement(creature, guid)
     end)
 end
 
 -- C++ EVENT_BELLOWING_ROAR (phase END): DoCastVictim(18431),
--- non-triggered; the phase-3 entry schedules 30s but the landing
--- re-schedules 5s, and the Lua model has no travel leg, so the
--- landing value (5s first, 30s repeats) is the effective cadence.
+-- non-triggered; the phase-3 latch schedules 30s and the landing
+-- re-schedules 5s — the keyed schedule helper replaces the latch
+-- timer at arrival, so 5s first / 30s repeats is the effective
+-- cadence (and the 30s latch schedule still fires if the landing
+-- never arrives).
 local function onBellowingRoar(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "bellowingroar", 500, function()
@@ -496,18 +552,15 @@ end
 -- C++ phase transition at HealthBelowPct(65), checked in UpdateAI
 -- (post-damage, never on the killing blow — nefarian form, so the
 -- Lua DamageTaken twin uses post = health - damage with a
--- post > 0 guard). Ported legs: SetReactState(PASSIVE),
--- AttackStop, SetCombatMovement(false), SetCanFly(true) +
--- SetDisableGravity(true) (the MovementInform-10 legs), Talk
--- SAY_PHASE_2_TRANS (C++ talks at takeoff after the MovePoint-10
--- travel; the Lua model has no travel leg, so the Talk lands at
--- the latch), phase-1 timers cancelled (C++ consumes them as
--- no-ops in the BREATH branch), phase-2 timers seeded at their
--- C++ takeoff values. The instance SetData(DATA_ONYXIA_PHASE,
--- PHASE_BREATH) leg IS ported at this latch (the liftoff reset:
--- latch false, counter 0, timer 10000 — the Lua model has no
--- MovePoint-10 travel leg, so the latch is the arrival twin);
--- MovePoint-10/11 travel, the trigger summon and facing stay out.
+-- post > 0 guard). Latch legs (boss_onyxia.cpp:332-341): the
+-- phase-1 tank GUID is stored, SetCombatMovement(false),
+-- SetReactState(PASSIVE), AttackStop, MovePoint(10,
+-- Phase2Location). Phase-1 timers are cancelled (C++ consumes them
+-- as no-ops in the BREATH branch). Everything else — SetCanFly /
+-- SetDisableGravity, the 180-degree facing, the trigger summon,
+-- MoveTakeoff(11), Talk SAY_PHASE_2_TRANS, the instance SetData
+-- liftoff leg, the phase-2 timer seeds — runs on the ev28
+-- arrival-10 arm (onMovementInform below, C++ :248-265).
 local function enterPhase2(creature, guid)
     local st = stateFor(guid)
     st.phase2 = true
@@ -515,77 +568,43 @@ local function enterPhase2(creature, guid)
         st.movePoint = math.random(0, 5)
     end
     cancelTimers(guid)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        st.tankGuid = victim:GetGUIDLow()
+    end
+    creature:SetCombatMovement(false)
     creature:SetReactState(0)
     creature:AttackStop()
-    creature:SetCombatMovement(false)
-    creature:SetCanFly(true)
-    creature:SetDisableGravity(true)
-    creature:Talk(SAY_PHASE_2_TRANS)
-    -- C++ MovementInform-10 SetData(DATA_ONYXIA_PHASE, PHASE_BREATH)
-    -- (instance_onyxias_lair.cpp:163-168): the whelp latch clears,
-    -- the hatch counter resets, the 10s liftoff timer starts. The
-    -- instance Update pump consumes the timer
-    -- (instance_onyxias_lair.lua); the shared-table write is the VoA
-    -- precedent (no instance SetData bridge).
-    local mapObj = creature:GetMap()
-    if mapObj then
-        local data = mapObj:GetInstanceData()
-        if data then
-            data.manyWhelpsHandleIt = 0
-            data.manyWhelpsCounter = 0
-            data.onyxiaLiftoffTimer = 10000
-        end
-    end
-    schedule(guid, "whelpspawn", 5000, function()
-        onWhelpSpawn(creature, guid)
-    end)
-    schedule(guid, "lairguard", 15000, function()
-        onLairGuard(creature, guid)
-    end)
-    schedule(guid, "deepbreath", 75000, function()
-        onDeepBreath(creature, guid)
-    end)
-    schedule(guid, "movement", 10000, function()
-        onMovement(creature, guid)
-    end)
-    schedule(guid, "fireball", 18000, function()
-        onFireball(creature, guid)
-    end)
+    creature:MoveTo(10, PHASE2_LOCATION[1], PHASE2_LOCATION[2], PHASE2_LOCATION[3])
+    st.flying = true
 end
 
 -- C++ phase transition at HealthBelowPct(40) in the BREATH branch
--- (same UpdateAI/nefarian form as phase 2). Ported legs:
--- SetCanFly(false) + SetDisableGravity(false) (landing legs),
--- SetReactState(AGGRESSIVE), SetCombatMovement(true),
--- Talk SAY_PHASE_3_TRANS, Bellowing Roar at the landing cadence,
--- phase-1 timers re-seeded at their C++ landing values (wing
--- buffet {15s,30s}, not the engage {10s,20s}). Phase-2 timers are
--- cancelled (C++ consumes them as no-ops in the START/END
--- branch). The MovePoint-9 landing travel, trigger kill, tank
--- MoveChase, and floor-eruption GO search stay out.
+-- (same UpdateAI/nefarian form as phase 2). Latch legs
+-- (boss_onyxia.cpp:393-405): SetCombatMovement(true), IsMoving
+-- cleared, Talk SAY_PHASE_3_TRANS, MovePoint(9, home + 12z),
+-- Bellowing Roar scheduled at 30s. The instance SetData
+-- (DATA_ONYXIA_PHASE, PHASE_END) call is a C++ no-op (SetData only
+-- acts on PHASE_BREATH, instance_onyxias_lair.cpp:159-166), so no
+-- shared-table write rides here. Phase-2 timers are cancelled
+-- (C++ consumes them as no-ops in the START/END branch). The
+-- landing legs — SetCanFly(false) + SetDisableGravity(false),
+-- trigger kill, SetReactState(AGGRESSIVE), tank MoveChase, the
+-- 5s roar and the phase-1 timer re-seeds — run on the ev28
+-- arrival-9 arm (onMovementInform below, C++ :230-247); the
+-- floor-eruption GO search stays out (no GO-enumeration bridge).
 local function enterPhase3(creature, guid)
     local st = stateFor(guid)
     st.phase3 = true
+    st.isMoving = false
     cancelTimers(guid)
-    creature:SetCanFly(false)
-    creature:SetDisableGravity(false)
-    creature:SetReactState(2)
     creature:SetCombatMovement(true)
     creature:Talk(SAY_PHASE_3_TRANS)
-    schedule(guid, "bellowingroar", 5000, function()
+    local hx, hy, hz = creature:GetHomePosition()
+    creature:MoveTo(9, hx, hy, hz + 12.0)
+    st.flying = true
+    schedule(guid, "bellowingroar", 30000, function()
         onBellowingRoar(creature, guid)
-    end)
-    schedule(guid, "flamebreath", math.random(10000, 20000), function()
-        onFlameBreath(creature, guid)
-    end)
-    schedule(guid, "tailsweep", math.random(15000, 20000), function()
-        onTailSweep(creature, guid)
-    end)
-    schedule(guid, "cleave", math.random(2000, 5000), function()
-        onCleave(creature, guid)
-    end)
-    schedule(guid, "wingbuffet", math.random(15000, 30000), function()
-        onWingBuffet(creature, guid)
     end)
 end
 
@@ -669,6 +688,13 @@ local function despawnSummons(creature)
     for _, guard in ipairs(creature:GetCreaturesInGrid(NPC_LAIRGUARD, 200)) do
         guard:DespawnOrUnsummon()
     end
+    -- The phase-2 trigger (14495) is a SummonCreature summon too, so
+    -- C++ _Reset()/_JustDied() despawn it with the rest (summons
+    -- list, boss_onyxia.cpp:183-195); TDB 26091 has zero static
+    -- spawns of 14495, so the sweep can only catch Onyxia's own.
+    for _, trigger in ipairs(creature:GetCreaturesInGrid(NPC_TRIGGER, 200)) do
+        trigger:DespawnOrUnsummon()
+    end
 end
 
 local function onReset(event, creature)
@@ -723,13 +749,12 @@ end
 -- C++ SpellHit (boss_onyxia.cpp:199-215): hit by one of the six
 -- diagonal/east-west breath spells -> PointData = GetMoveData();
 -- MovePoint = PointData->LocIdEnd; SetSpeedRate(MOVE_FLIGHT, 1.5);
--- MovePoint(8, MiddleRoomLocation). The travel + speed legs stay out
--- (no MovePoint bridge — verified: no methods["MovePoint"] in
--- lua_creature_events.go / lua_objects.go; SetSpeedRate IS bridged
--- at lua_creature_events.go:6065 but moves nothing without travel).
--- The index write PORTS as a position-twin leg, same class as
--- onMovement: the next MOVEMENT tick's SetNextRandomPoint excludes
--- the DESTINATION row, not the origin row. ev14 is live
+-- MovePoint(8, MiddleRoomLocation). The travel PORTS (creature:MoveTo,
+-- the MovePoint twin); the flight speed leg stays out (the bridge
+-- is MOVE_RUN-only, lua_creature_events.go:6332). The index write
+-- rides with it, same class as onMovement: the next MOVEMENT tick's
+-- SetNextRandomPoint excludes the DESTINATION row, not the origin
+-- row. ev14 is live
 -- (CreatureEventOnHitBySpell, runtime.go:381; fired per hit target
 -- in the creature spell path, boss_ai.go:4282 — the self-cast breath
 -- hits Onyxia herself, same loop as the ported ev15 arm; midnight
@@ -752,6 +777,12 @@ local function onSpellHit(event, creature, caster, spellId)
     if dest ~= nil then
         st.movePoint = dest
     end
+    -- C++ :211-212, in order after the index write; IsMoving is NOT
+    -- touched here (only the MOVEMENT tick sets it), so a redirect
+    -- issued mid-row-flight leaves the bool alone, exactly as C++.
+    creature:MoveTo(8, MIDDLE_ROOM_LOCATION[1], MIDDLE_ROOM_LOCATION[2],
+        MIDDLE_ROOM_LOCATION[3])
+    st.flying = true
 end
 
 -- C++ SpellHitTarget (boss_onyxia.cpp:276-294): a breath spell
@@ -790,6 +821,175 @@ local function onyxiaSpellHitTarget(event, creature, target, spellId)
     end
 end
 
+-- C++ UpdateAI BREATH branch (boss_onyxia.cpp:408-410): every tick,
+-- while not moving, she faces the trigger (SetFacingToObject). The
+-- 1s poll is the UpdateAI-tick twin (orphan sighting precedent);
+-- it self-perpetuates only while phase 2 runs and is cancelled by
+-- cancelTimers on leave combat / reset / death / phase 3. The
+-- flying gate is the physical isMoving() read, distinct from the
+-- IsMoving bool the timer arms use.
+local function onFaceTrigger(creature, guid)
+    local st = onyxiaState[guid]
+    if st == nil or not st.phase2 or st.phase3 then
+        return
+    end
+    if not st.flying and st.triggerGuid ~= nil then
+        local trigger = creature:GetCreatureByGUID(st.triggerGuid)
+        if trigger ~= nil then
+            creature:SetFacingToObject(trigger)
+        end
+    end
+    schedule(guid, "facetrigger", 1000, function()
+        onFaceTrigger(creature, guid)
+    end)
+end
+
+-- C++ MovementInform (boss_onyxia.cpp:217-272): POINT_MOTION_TYPE
+-- only; creature:MoveTo fires ev28 with (POINT_MOTION_TYPE, id) on
+-- landing (creaturemotion.go:5784), and MoveTakeoff arrivals carry
+-- EFFECT_MOTION_TYPE, which the C++ gate drops — so case 11 never
+-- fires here, exactly as in C++ (see header). st.flying clears on
+-- every arrival (the physical isMoving() twin); st.isMoving clears
+-- only on a row arrival (ids 0-7, the default case).
+local function onMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local st = stateFor(guid)
+    st.flying = false
+    if pointId == 10 then
+        -- C++ :248-265: dive arrival. SetCanFly + SetDisableGravity,
+        -- SetFacingTo(orientation + PI) (GetO is the generic
+        -- fallback, object.go:197; SetFacingTo writes the raw slot,
+        -- so the turn is normalized here), the trigger summon at
+        -- MiddleRoomLocation, MoveTakeoff(11, Phase2Floating),
+        -- Talk SAY_PHASE_2_TRANS, the instance SetData liftoff leg,
+        -- the phase-2 timer seeds. The flight SetSpeedRate(1.0) leg
+        -- stays out (bridge is MOVE_RUN-only).
+        creature:SetCanFly(true)
+        creature:SetDisableGravity(true)
+        local face = creature:GetO() + math.pi
+        if face >= 2 * math.pi then
+            face = face - 2 * math.pi
+        end
+        creature:SetFacingTo(face)
+        local trigger = creature:SummonCreature(NPC_TRIGGER,
+            MIDDLE_ROOM_LOCATION[1], MIDDLE_ROOM_LOCATION[2],
+            MIDDLE_ROOM_LOCATION[3], 0.0, 4, 0)
+        if trigger ~= nil then
+            st.triggerGuid = trigger:GetGUIDLow()
+        end
+        creature:MoveTakeoff(11, PHASE2_FLOATING[1], PHASE2_FLOATING[2],
+            PHASE2_FLOATING[3])
+        st.flying = true
+        creature:Talk(SAY_PHASE_2_TRANS)
+        -- C++ MovementInform-10 SetData(DATA_ONYXIA_PHASE, PHASE_BREATH)
+        -- (instance_onyxias_lair.cpp:163-168): the whelp latch clears,
+        -- the hatch counter resets, the 10s liftoff timer starts. The
+        -- instance Update pump consumes the timer
+        -- (instance_onyxias_lair.lua); the shared-table write is the VoA
+        -- precedent (no instance SetData bridge).
+        local mapObj = creature:GetMap()
+        if mapObj then
+            local data = mapObj:GetInstanceData()
+            if data then
+                data.manyWhelpsHandleIt = 0
+                data.manyWhelpsCounter = 0
+                data.onyxiaLiftoffTimer = 10000
+            end
+        end
+        schedule(guid, "whelpspawn", 5000, function()
+            onWhelpSpawn(creature, guid)
+        end)
+        schedule(guid, "lairguard", 15000, function()
+            onLairGuard(creature, guid)
+        end)
+        schedule(guid, "deepbreath", 75000, function()
+            onDeepBreath(creature, guid)
+        end)
+        schedule(guid, "movement", 10000, function()
+            onMovement(creature, guid)
+        end)
+        schedule(guid, "fireball", 18000, function()
+            onFireball(creature, guid)
+        end)
+        schedule(guid, "facetrigger", 1000, function()
+            onFaceTrigger(creature, guid)
+        end)
+    elseif pointId == 9 then
+        -- C++ :230-247: landing arrival. SetCanFly + SetDisableGravity
+        -- off, the trigger killed (Unit::Kill, creature:Kill() twin),
+        -- SetReactState(AGGRESSIVE), MoveChase on the stored phase-1
+        -- tank (nearest alive threat unit if it no longer resolves —
+        -- the C++ SelectTarget(MinDistance, 0) fallback), then the
+        -- phase-3 timer seeds at their C++ landing values. The
+        -- Bellowing Roar 5s re-schedule replaces the latch 30s via
+        -- the keyed schedule helper. The floor-eruption GO search
+        -- stays out (no GO-enumeration bridge).
+        creature:SetCanFly(false)
+        creature:SetDisableGravity(false)
+        if st.triggerGuid ~= nil then
+            local trigger = creature:GetCreatureByGUID(st.triggerGuid)
+            if trigger ~= nil then
+                trigger:Kill()
+            end
+            st.triggerGuid = nil
+        end
+        creature:SetReactState(2)
+        local tank = nil
+        if st.tankGuid ~= nil then
+            tank = creature:GetCreatureByGUID(st.tankGuid)
+            if tank ~= nil and not tank:IsAlive() then
+                tank = nil
+            end
+        end
+        if tank == nil then
+            local best = nil
+            for _, t in ipairs(creature:GetAITargets()) do
+                if t:IsAlive() then
+                    local d = creature:GetDistance(t)
+                    if best == nil or d < best then
+                        best = d
+                        tank = t
+                    end
+                end
+            end
+        end
+        if tank ~= nil then
+            creature:MoveChase(tank)
+        end
+        schedule(guid, "bellowingroar", 5000, function()
+            onBellowingRoar(creature, guid)
+        end)
+        schedule(guid, "flamebreath", math.random(10000, 20000), function()
+            onFlameBreath(creature, guid)
+        end)
+        schedule(guid, "tailsweep", math.random(15000, 20000), function()
+            onTailSweep(creature, guid)
+        end)
+        schedule(guid, "cleave", math.random(2000, 5000), function()
+            onCleave(creature, guid)
+        end)
+        schedule(guid, "wingbuffet", math.random(15000, 30000), function()
+            onWingBuffet(creature, guid)
+        end)
+    elseif pointId == 8 then
+        -- C++ :219-228: redirect arrival. PointData = GetMoveData()
+        -- for the post-SpellHit index (already written by onSpellHit);
+        -- the flight SetSpeedRate(1.0) leg stays out (MOVE_RUN-only
+        -- bridge). IsMoving is NOT touched here.
+        if st.movePoint ~= nil then
+            local row = MOVE_ROWS[st.movePoint]
+            creature:MoveTo(st.movePoint, row[1], row[2], row[3])
+            st.flying = true
+        end
+    else
+        -- C++ :267-269 (default): a row arrival clears IsMoving.
+        st.isMoving = false
+    end
+end
+
 RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 3, function(event, creature, victim)
@@ -800,3 +1000,4 @@ RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY, 15, onyxiaSpellHitTarget)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+RegisterCreatureEvent(ENTRY, 28, onMovementInform)
