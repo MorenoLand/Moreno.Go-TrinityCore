@@ -35,26 +35,51 @@
 -- - FindMinions (chapter1.cpp:1019-1037): the owner's minions by
 --   entry 28845 (player GetAllMinionsByEntry, live on both
 --   surfaces); for each minion whose owner GUID equals my owner
---   GUID, if it is in combat and has a victim (GetVictim is the
---   getAttackerForHelper twin -- creaturemotion.go:3980, "the
---   engaged victim"), AttackStart that victim. No break: C++
---   AttackStarts each qualifying minion's attacker in turn.
+--   GUID, if it is in combat and getAttackerForHelper() yields a
+--   unit, AttackStart it. No break: C++ AttackStarts each
+--   qualifying minion's attacker in turn.
 -- - UpdateAI (chapter1.cpp:1039-1073): out of combat, if the owner
---   is a player in combat, AttackStart the owner's victim when it
---   is a ghost (entry 28846, victim type-gated -- a player victim
---   has no entry, so it falls through to FindMinions exactly like
---   C++ GetEntry() == 0 != 28846), else FindMinions(owner). The
---   in-combat ghost leg (EnsureVictim is a ghost + isAttackReady +
---   IsWithinMeleeRange -> AttackerStateUpdate + resetAttackTimer)
---   is NOT ported: the Go engine combat tick covers melee
---   (initiate header precedent) and porting AttackerStateUpdate
---   would double-swing.
+--   is a player in combat, AttackStart the owner's attacker-for-
+--   helper when it is a ghost (entry 28846, victim type-gated -- a
+--   player attacker has no entry, so it falls through to FindMinions
+--   exactly like C++ GetEntry() == 0 != 28846), else
+--   FindMinions(owner). The in-combat ghost leg (EnsureVictim is a
+--   ghost + isAttackReady + IsWithinMeleeRange -> AttackerStateUpdate
+--   + resetAttackTimer) is NOT ported: the Go engine combat tick
+--   covers melee (initiate header precedent) and porting
+--   AttackerStateUpdate would double-swing.
+-- getAttackerForHelper (Unit.cpp:5627): the victim first -- the
+-- ghoul (TempSummon, not a pet) and the player owner both take the
+-- (!IsPet() && !GetPlayerMovingMe()) branch, and a unit in combat
+-- with its victim takes the IsInCombatWith(victim) branch either
+-- way -- else the first combat-manager ref (own PvP > owner PvP >
+-- own PvE > owner PvE). The Go twin is GetVictim() then the first
+-- of GetAttackers() (attackersOf, pet_combat.go:551; GUID-sorted,
+-- current-victim only -- C++ picks its combat-manager begin(), same
+-- candidate set). GetVictim() alone MISSES the engaged-but-
+-- victimless case: a ghost attacking the owner while the owner
+-- attacks nothing returns nil, so the whole assist leg stayed
+-- dead; the fallback is the fix.
 
 local ENTRY_SCARLET_GHOUL = 28845
 local NPC_GHOULS = 28845
 local NPC_GHOSTS = 28846
 local SAY_LINE_0 = 0
 local REACT_DEFENSIVE = 1
+
+-- C++ Unit::getAttackerForHelper (Unit.cpp:5627) twin: victim
+-- first, else the first unit attacking this unit (GetAttackers).
+local function getAttackerForHelper(unit)
+    local victim = unit:GetVictim()
+    if victim ~= nil then
+        return victim
+    end
+    local attackers = unit:GetAttackers()
+    if attackers ~= nil and #attackers > 0 then
+        return attackers[1]
+    end
+    return nil
+end
 
 -- C++ npc_scarlet_ghoul constructor (chapter1.cpp:1004-1007).
 local function onSpawn(_, creature)
@@ -80,7 +105,7 @@ local function findMinions(creature, owner)
     local myOwnerGUID = creature:GetOwnerGUID()
     for _, minion in ipairs(minions) do
         if minion:GetOwnerGUID() == myOwnerGUID and minion:IsInCombat() then
-            local target = minion:GetVictim()
+            local target = getAttackerForHelper(minion)
             if target ~= nil then
                 creature:AttackStart(target)
             end
@@ -98,7 +123,7 @@ local function onAIUpdate(_, creature)
     if owner == nil or not owner:IsInCombat() then
         return
     end
-    local attacker = owner:GetVictim()
+    local attacker = getAttackerForHelper(owner)
     if attacker ~= nil and attacker:GetObjectType() == "Creature" and attacker:GetEntry() == NPC_GHOSTS then
         creature:AttackStart(attacker)
         return
