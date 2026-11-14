@@ -16,39 +16,30 @@
 --   elapsed timer after combat; the Lua port re-arms full delay.
 -- - DoMeleeAttackIfReady — engine-driven in Go (ouro precedent).
 -- - IsTreeEvent latch (GetAreaId() == AREA_COVE 3579 / AREA_ISLE
---   3639, zone_azuremyst_isle.cpp:212-216, latched at construct and
+--   3639, zone_azuremyst_isle.cpp:213-216, latched at construct and
 --   Reset): creature:GetAreaId() (engine/world/lua_creature_events.go,
 --   Map::GetZoneAndAreaId twin). The dynamite seed (enter combat) and
 --   the emote re-arms (leave combat / reset) skip when the latch is
 --   set — C++ UpdateAI returns before both pumps when IsTreeEvent
 --   (:251-252), so the tree-event Spark never casts or emotes;
---   JustEngagedWith's Talk stays unconditional (:219-222). Known
+--   JustEngagedWith's Talk stays unconditional (:227-230). Known
 --   engine-driven deviation: C++ also skips DoMeleeAttackIfReady on
 --   the early return, but melee is engine-driven in Go (ouro
 --   precedent) and not Lua-gatable — a deliberately attacked
 --   tree-event Spark fights back in Go where C++ stands still.
--- - Reset's UNIT_NPC_FLAGS restore (zone_azuremyst_isle.cpp:224):
---   constructor-captured value cached per GUID, restored via
---   creature:SetNPCFlags() (engine/world/lua_objects.go:657) — C++
---   arm order after Initialize(); the old "no Lua bridge" claim was
---   stale for NPC flags (SetFaction is now bridged too, but the
---   gossip-select flip still needs Attack — the method exists on
---   the event surface (lua_creature_events.go:1945) yet has zero
---   in-tree Lua call sites, so its from-Lua semantics are unproven
---   and the arm stays documented-only pending re-audit).
+-- - Reset's UNIT_NPC_FLAGS restore (zone_azuremyst_isle.cpp:224)
+--   + SetFaction(NormFaction) restore (:223): constructor-captured
+--   values cached per GUID, restored via creature:SetNPCFlags()
+--   (engine/world/lua_objects.go:3274) and creature:SetFaction()
+--   (lua_creature_events.go:6712) — C++ arm order after
+--   Initialize().
+-- - OnGossipSelect (zone_azuremyst_isle.cpp:232-239): PORTED below
+--   — player:GossipComplete() (CloseGossipMenuFor twin, rizzle
+--   precedent) + SetFaction(FACTION_MONSTER = 14,
+--   SharedDefines.h:226) + creature:Attack(player, true)
+--   (lua_creature_events.go:1945, arlokk precedent); returns
+--   false, C++-exact.
 -- Documented-only (no bridges):
--- - OnGossipSelect (CloseGossipMenuFor + SetFaction(FACTION_MONSTER)
---   + Attack): gossip IS bridged (RegisterCreatureGossipEvent — the
---   "gossip bridge absent" claim was stale; live at
---   engine/world/gossip.go:129/369); SetFaction is now bridged on the
---   event surface and creature:Attack exists
---   (lua_creature_events.go:1945) but has zero in-tree Lua call
---   sites, so the arm stays documented-only pending re-audit
---   against the existing method.
--- - Reset's NormFaction restore: SetFaction is now bridged, but the
---   only runtime flip is the gossip-select arm above (Attack
---   unproven from Lua, see above), so the restore stays
---   documented-only pending the same re-audit.
 -- - The rest of zone_azuremyst_isle.cpp, documented-only:
 --   npc_draenei_survivor — Reset ported in
 --   npc_draenei_survivor.lua (entry 16483, Wowhead-verified); the
@@ -80,6 +71,8 @@ local ATTACK_YELL = 2
 
 local SPELL_DYNAMITE = 7978
 
+local FACTION_MONSTER = 14 -- SharedDefines.h:226
+
 local DYNAMITE_DELAY_MS = 8000
 local EMOTE_MIN_MS = 120000
 local EMOTE_MAX_MS = 150000
@@ -89,6 +82,10 @@ local timers = {}
 -- guid -> AI-constructor-captured UNIT_NPC_FLAGS
 -- (zone_azuremyst_isle.cpp:205: NpcFlags = creature->GetUInt32Value(UNIT_NPC_FLAGS))
 local npcFlags = {}
+
+-- guid -> AI-constructor-captured faction
+-- (zone_azuremyst_isle.cpp:204: NormFaction = creature->GetFaction())
+local normFaction = {}
 
 -- guid -> Initialize() IsTreeEvent latch
 -- (zone_azuremyst_isle.cpp:212-216: GetAreaId() == AREA_COVE (3579)
@@ -157,7 +154,7 @@ local function onEnterCombat(event, creature, target)
     -- C++ UpdateAI returns before the dynamite pump when IsTreeEvent
     -- (zone_azuremyst_isle.cpp:251-252): the tree-event Spark never
     -- casts. JustEngagedWith's Talk above is unconditional in C++
-    -- (:219-222), so it stays outside the gate.
+    -- (:227-230), so it stays outside the gate.
     if not isTreeEvent(creature, guid) then
         schedule(guid, "dynamite", DYNAMITE_DELAY_MS, function()
             onDynamite(creature, guid)
@@ -190,21 +187,27 @@ end
 local function onReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
-    -- zone_azuremyst_isle.cpp:224 — Reset restores the constructor-captured
-    -- UNIT_NPC_FLAGS via SetUInt32Value; the SetFaction(NormFaction) leg
-    -- (:223) stays documented-only (bridge exists; the only runtime flip
-    -- is the Attack-blocked gossip-select arm). creature:SetNPCFlags()
-    -- (engine/world/lua_objects.go:657); Go fires event 23 only on
-    -- respawn/evade (lua_creature_events.go:539-549), so the capture
-    -- lands at first reset — equal to the C++ constructor capture,
-    -- since nothing mutates this creature's NPC flags before then.
+    -- zone_azuremyst_isle.cpp:223-224 — Reset restores the
+    -- constructor-captured faction + UNIT_NPC_FLAGS via SetFaction /
+    -- SetUInt32Value, C++ order after Initialize().
+    -- creature:SetFaction (lua_creature_events.go:6712);
+    -- creature:SetNPCFlags (lua_objects.go:3274). Event 23 fires
+    -- on spawn/respawn (:7989), evade (:3475-3477,
+    -- creaturemotion.go:4733) and the kill path (:7857-7859,
+    -- :7906-7908), so the capture lands at first reset — equal to
+    -- the C++ constructor capture, since nothing mutates this
+    -- creature's faction/flags before then.
+    if normFaction[guid] == nil then
+        normFaction[guid] = creature:GetFaction()
+    end
+    creature:SetFaction(normFaction[guid])
     if npcFlags[guid] == nil then
         npcFlags[guid] = creature:GetNPCFlags()
     end
     creature:SetNPCFlags(npcFlags[guid])
-    -- C++ Reset -> Initialize() re-latches IsTreeEvent (:212-216, :221).
+    -- C++ Reset -> Initialize() re-latches IsTreeEvent (:213-216, :221).
     treeEvent[guid] = (creature:GetAreaId() == 3579 or creature:GetAreaId() == 3639)
-    -- C++ UpdateAI never runs while dead (zone_azuremyst_isle.cpp:238-261);
+    -- C++ UpdateAI never runs while dead (zone_azuremyst_isle.cpp:240-264);
     -- a death-reset (23 fires before 4 on the kill path) must not re-arm
     -- the emote timer, or the corpse Talks every 120-150s until respawn.
     -- The emote re-arm is also IsTreeEvent-gated (:242): the tree-event
@@ -220,3 +223,19 @@ RegisterCreatureEvent(ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ OnGossipSelect (zone_azuremyst_isle.cpp:232-239):
+-- CloseGossipMenuFor + SetFaction(FACTION_MONSTER) +
+-- Attack(player, true); returns false. player:GossipComplete()
+-- is the CloseGossipMenuFor twin (depth_charge rizzle
+-- precedent); creature:Attack(player, true) is the arlokk
+-- precedent (lua_creature_events.go:1945, Attack(target[,
+-- meleeAttack])).
+local function onGossipSelect(event, player, creature)
+    player:GossipComplete()
+    creature:SetFaction(FACTION_MONSTER)
+    creature:Attack(player, true)
+    return false
+end
+
+RegisterCreatureGossipEvent(ENTRY, 2, onGossipSelect)

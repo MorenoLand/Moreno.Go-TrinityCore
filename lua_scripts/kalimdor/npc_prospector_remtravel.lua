@@ -6,13 +6,13 @@
 -- no NPC_ constant exists in the C++ file).
 -- Eluna creature events: 31 OnQuestAccept, 4 JustDied.
 -- Ported arms:
--- - OnQuestAccept (zone_darkshore.cpp:284-289, event 31): quest id
+-- - OnQuestAccept (zone_darkshore.cpp:283-290, event 31): quest id
 --   731 (QUEST_ABSENT_MINDED_PT2) -> SetFaction(10
 --   FACTION_ESCORTEE_A_NEUTRAL_PASSIVE) + StartEscort(player).
 -- - JustDied (zone_darkshore.cpp:292-296, event 4): if escorting,
 --   the escort player fails quest 731 (muglash / injured-goblin
 --   precedent; IsEscorted + GetEscortPlayer bridges live,
---   lua_creature_events.go:2328/:2361).
+--   lua_creature_events.go:2652/:2691).
 -- Unmodeled (documented-only, no bridges):
 -- - WaypointReached 0-42 (Talk progress lines + GroupEventHappens
 --   credit at waypoint 42): the escort walk rides MoveWaypoint +

@@ -15209,60 +15209,48 @@ func init() {
 	// overrides); entry 23025 verifiable from the C++ enum —
 	// see lua_scripts/kalimdor/npc_depth_charge.lua. The Reset
 	// SetHover/SetSwim/NOT_SELECTABLE arms are ported in
-	// npc_depth_charge.lua onReset (bridged); the summoning leg
+	// npc_depth_charge.lua onReset (bridged), as is the
+	// Initialize() leg (pending-despawn cancel on reset); the summoning leg
 	// (SPELL_PERIODIC_DEPTH_CHARGE) and npc_rizzle_sprysprocket
 	// (escort / quest-status / MotionMaster machine) are
 	// documented-only, though rizzle gossip itself is ported
 	// (entry 23002, World/go_scripts.cpp:268).
 	RegisterLuaBoss("npc_depth_charge", 23025)
 	// npc_engineer_spark_overgrind (Azuremyst Isle zone script): Reset
-	// restores UNIT_NPC_FLAGS via per-GUID first-seen capture +
-	// SetNPCFlags (C++-exact, 7fe143eb); entry 17243 = NPC_SPARK
+	// restores UNIT_NPC_FLAGS + NormFaction via per-GUID first-seen
+	// capture + SetNPCFlags/SetFaction (C++-exact); OnGossipSelect
+	// flip PORTED (GossipComplete + SetFaction(FACTION_MONSTER) +
+	// Attack, arlokk precedent); entry 17243 = NPC_SPARK
 	// (zone_azuremyst_isle.cpp:463) — see
-	// lua_scripts/kalimdor/npc_engineer_spark_overgrind.lua. The
-	// SetFaction leg awaits the faction bridge — documented only.
+	// lua_scripts/kalimdor/npc_engineer_spark_overgrind.lua.
 	RegisterLuaBoss("npc_engineer_spark_overgrind", 17243)
 	// npc_sironas (Bloodmyst Isle zone script): combat rotation
-	// only — uppercut (10966, 15s init then 10-12s), immolate
-	// (12742, 10s init then 15-20s), curse of blood (8282, 5s
-	// init then 20-25s), all non-triggered DoCastVictim
-	// (C++-exact); entry 17678 verifiable from the C++
-	// EndingTheirWorldMisc enum — see
-	// lua_scripts/kalimdor/npc_sironas.lua. The JustDied
-	// cross-creature legoso DoAction cascade and the
-	// sironas-channel DoAction arms have no cross-creature /
-	// DoAction bridges; the Reset display-id arm and the
-	// JustDied scale reset have no display / scale bridges —
-	// documented only; npc_webbed_creature (no-summon /
-	// quest-credit bridges, unverifiable entry) and
-	// npc_demolitionist_legoso (no-escort / quest-accept /
-	// summon / movement / gameobject bridges) are
-	// documented-only.
+	// (uppercut 10966, immolate 12742, curse of blood 8282, all
+	// non-triggered DoCastVictim, C++-exact) + JustDied cascade
+	// PORTED — SetScale(1.0), timer reset, killer guard,
+	// FindNearestCreature legoso (533.33), loot-recipient-group
+	// gate, event-starter-GUID gate, DoAction(1) into legoso's
+	// ported onDoAction; Reset display-id arm PORTED
+	// (GetTemplateModelId(2)); entry 17678 verifiable from the
+	// C++ EndingTheirWorldMisc enum — see
+	// lua_scripts/kalimdor/npc_sironas.lua. npc_webbed_creature
+	// stays documented-only (no-summon / quest-credit bridges,
+	// unverifiable entry).
 	RegisterLuaBoss("npc_sironas", 17678)
 	// npc_demolitionist_legoso (Bloodmyst Isle zone script):
-	// combat rotation only — frost shock (8056, 1s init then
-	// 10-15s, DelayEvents(1s)), searing totem (38116, 15s init
-	// then 110-130s, DelayEvents(1s)), strength of earth totem
-	// (31633, 20s init then 110-130s, DelayEvents(1s)),
-	// healing surge (8004, 5s init, strict self-health <85% ->
-	// 10s re-arm else 2s re-arm, no DelayEvents), all
-	// non-triggered (C++-exact); entry 17982 verifiable from
-	// the C++ EndingTheirWorldMisc enum — see
-	// lua_scripts/kalimdor/npc_demolitionist_legoso.lua. The
-	// 40-phase escort event machine (quest 9759 start,
-	// waypoint kneel/plant/detonate choreography,
-	// draenei-explosives gameobjects, sironas-meeting
-	// phases, post-slay quest credit) awaits the escort /
-	// quest-accept / summon / movement / gameobject bridges —
-	// documented only; the escort-player healing-surge arm
-	// is PORTED (GetEscortPlayer bridge + legoso Lua, tick
-	// 373); the Reset SetCanDualWield arm has no dual-wield
-	// bridge; no SAY_LEGOSO_* line fires (no talk bridge);
-	// ACTION_LEGOSO_SIRONAS_KILLED: ev38 DoAction dispatch IS bridged
-	// (creature:DoAction, lua_creature_events.go:827); the arm stays out
-	// because the sender is unported — npc_sironas JustDied
-	// (zone_bloodmyst_isle.cpp:278) cross-creature cascade, gated on
-	// killer/group/event-starter GUID, into legoso's unported escort machine.
+	// combat rotation (frost shock 8056, searing totem 38116,
+	// strength of earth totem 31633, healing surge 8004, all
+	// non-triggered, C++-exact) + 40-phase escort event machine
+	// PORTED (quest 9759 start, waypoint kneel/plant/detonate
+	// choreography, draenei-explosives gameobjects,
+	// sironas-meeting phases, post-slay quest credit; events
+	// 31/6/38/1/2/4/23; SAY_LEGOSO_* Talk lines fire); entry
+	// 17982 verifiable from the C++ EndingTheirWorldMisc enum
+	// — see lua_scripts/kalimdor/npc_demolitionist_legoso.lua.
+	// The Reset SetCanDualWield arm stays out (no dual-wield
+	// bridge); ACTION_LEGOSO_SIRONAS_KILLED is received from
+	// the ported npc_sironas JustDied cascade
+	// (zone_bloodmyst_isle.cpp:278).
 	RegisterLuaBoss("npc_demolitionist_legoso", 17982)
 	// npc_prospector_remtravel (Darkshore zone script):
 	// OnQuestAccept quest-731 escort start + JustDied FailQuest

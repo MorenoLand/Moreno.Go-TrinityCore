@@ -155,7 +155,7 @@ local function onEnterCombat(_, creature)
     end, 1000, 0)
 end
 
--- C++ JustDied (zone_bloodmyst_isle.cpp:271-280): the scale
+-- C++ JustDied (zone_bloodmyst_isle.cpp:263-280): the scale
 -- reset is PORTED (creature:SetScale(1.0) — the legoso 3.0f
 -- flip rides the ported escort machine now); the legoso
 -- DoAction (ACTION_LEGOSO_SIRONAS_KILLED) cascade is PORTED
@@ -174,7 +174,7 @@ local function onDied(_, creature, killer)
     if not killer then
         return
     end
-    local legoso = creature:FindNearestCreature(LEGOSO_ENTRY, 533.0)
+    local legoso = creature:FindNearestCreature(LEGOSO_ENTRY, 533.33)
     if not legoso then
         return
     end
@@ -197,13 +197,13 @@ end
 -- C++ Reset() (called on evade): fullReset — see above.
 local function onLeaveCombat(_, creature)
     fullReset(creature:GetGUIDLow())
-    -- C++ npc_sironasAI::Reset() (zone_bloodmyst_isle.cpp:258-262):
+    -- C++ npc_sironasAI::Reset() (zone_bloodmyst_isle.cpp:250-254):
     -- _events.Reset() then SetDisplayId(Modelid2) — ported
     -- 2026-10-22 via creature:GetTemplateModelId(2).
     creature:SetDisplayId(creature:GetTemplateModelId(2))
 end
 
--- C++ DoAction (zone_bloodmyst_isle.cpp:314-344): CHANNEL_START
+-- C++ DoAction (zone_bloodmyst_isle.cpp:313-344): CHANNEL_START
 -- self-casts SPELL_SIRONAS_CHANNELING (31612) and every tesla
 -- coil (17979) in the grid casts SPELL_BLOODMYST_TESLA (31611)
 -- on itself (GetCreaturesInGrid twin of
