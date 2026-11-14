@@ -17470,9 +17470,10 @@ func init() {
 	// TYPE_RAMSTEIN-DONE->TYPE_BARON-NOT_STARTED leg, JustEngagedWith's
 	// TYPE_BARON IN_PROGRESS leg, JustDied's TYPE_BARON DONE leg,
 	// GetStratholmeAI factory; melee engine-driven. npc_summoned_skeleton's SpellHit(17471) ->
-	// DoCastSelf(17472, TRIGGERED) leg not registered — no C++-verifiable
-	// NPC entry (ev14 SpellHit bridge live; entry-unverifiable queue).
+	// DoCastSelf(17472, TRIGGERED) leg PORTED this tick (entry 11197,
+	// TDB 26091 sole ScriptName 'npc_summoned_skeleton' row; ev14).
 	RegisterLuaBoss("boss_baron_rivendare", 10440)
+	RegisterLuaBoss("boss_baron_rivendare", 11197)
 	// boss_dathrohan_balnazzar.cpp audit (EK loader decl :135 / call :313
 	// follows baron_rivendare): 1 script, ScriptedAI via GetStratholmeAI
 	// (no BossAI, no instance bookkeeping). Fresh port —

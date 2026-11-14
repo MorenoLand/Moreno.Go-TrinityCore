@@ -784,6 +784,13 @@ var spells = []spell{
 	// (TARGET_UNIT_TARGET_ANY) at synthetic range 93005 (0-20 yd),
 	// like 52994 Duel Victory.
 	{id: 52517, rangeIdx: 93005, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetUnitTargetAny}}},
+	// 17472 Death Pact 3 (boss_baron_rivendare.cpp:159-163;
+	// npc_summoned_skeleton SpellHit arm) -- INFERRED row, derived
+	// from in-tree C++/Go constraints, not a client DBC row; replace
+	// with a real DBC row when client data ships. The skeleton
+	// self-casts it, triggered, when hit by 17471: TargetA 1
+	// (TARGET_UNIT_CASTER), range 93001 (self only), like 7267.
+	{id: 17472, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
 }
 
 func main() {

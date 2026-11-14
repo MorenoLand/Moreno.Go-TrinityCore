@@ -13,16 +13,20 @@
 -- casting re-gate + DoMeleeAttackIfReady; GetAI via
 -- GetStratholmeAI -> GetInstanceAI) (loader lines 134/312).
 -- npc_summoned_skeleton (SpellHit -> SPELL_DEATH_PACT_2 (17471) ->
--- DoCastSelf(SPELL_DEATH_PACT_3 = 17472, TRIGGERED)) is registered
--- by the same AddSC but has no C++-verifiable NPC entry — STAY OUT,
--- re-verified 2026-11-13 (hook-coverage round 4): the SpellHit arm
--- belongs to npc_summoned_skeleton (boss_baron_rivendare.cpp:155-164),
--- not to Rivendare himself; its entry lives only in the DB-side
--- ScriptName binding (RegisterStratholmeCreatureAI, stratholme.h:111)
--- and the raise-spell summon entries in spell data, neither in the
--- C++ tree. The ev14 bridge itself is live (CreatureEventOnHitBySpell
--- = 14, scripting/runtime.go:379; the old "event 15" note was wrong —
--- 15 is SpellHitTarget).
+-- DoCastSelf(SPELL_DEATH_PACT_3 = 17472, TRIGGERED)) is PORTED
+-- below (tick 2026-11-14): the entry IS TDB-verifiable after all —
+-- TDB 26091 creature_template row 11197 'Mindless Skeleton' is the
+-- SOLE row with ScriptName 'npc_summoned_skeleton' (59-col layout
+-- from the dump's own CREATE TABLE, ScriptName f[56]); 0 static
+-- spawns, summoned-only via Rivendare's Raise Dead, which is why
+-- the 2026-11-13 round-4 stay-out ("no C++-verifiable entry") missed
+-- it. The ev14 bridge is live (CreatureEventOnHitBySpell = 14,
+-- scripting/runtime.go:379; the old "event 15" note was wrong —
+-- 15 is SpellHitTarget). 17472 is seeded INFERRED DUMMY in
+-- tools/spelldbc_seed/main.go (self-target, range 93001); 17471 is
+-- unseeded — it reaches the skeleton via 17473's spell effects, and
+-- 17473 itself is unseeded, same state as Rivendare's own 17473
+-- cast, so the chain goes live when real DBC rows ship.
 -- The Stratholme block is OPEN.
 -- Entry (verifiable from the C++ sources): STRCreatureIds names
 -- NPC_BARON = 10440 in stratholme.h, and instance_stratholme.
@@ -82,16 +86,8 @@
 --   GetStratholmeAI -> GetInstanceAI leg (instance-script model
 --   blocked, standing).
 -- - npc_summoned_skeleton's SpellHit(17471) -> DoCastSelf(17472,
---   TRIGGERED) leg (boss_baron_rivendare.cpp:159-163): STAY OUT — no
---   skeleton NPC entry is C++-verifiable from code (no NPC_ const in
---   the file or stratholme.h:50-66; whole-tree grep for 17475-17480
---   hits only the spell enum at boss_baron_rivendare.cpp:39-44,58-59;
---   the summon entries live in spell data, and engine/data/dbc/
---   holds no Spell.dbc to check — probing would materialize stubs).
---   The ev14 hook itself is live (dispatch sites in spells.go,
---   boss_ai.go, pet_combat.go; args (event, creature, caster,
---   spellID)); the block is purely the missing entry, so no
---   RegisterCreatureEvent can be written.
+--   TRIGGERED) leg (boss_baron_rivendare.cpp:159-163): PORTED this
+--   tick (entry 11197, ev14; see header) — no longer a stay-out.
 
 local NPC_BARON = 10440
 
@@ -99,6 +95,10 @@ local SPELL_SHADOWBOLT = 17393
 local SPELL_CLEAVE = 15284
 local SPELL_MORTALSTRIKE = 15708
 local SPELL_RAISE_DEAD = 17473
+local SPELL_DEATH_PACT_2 = 17471
+local SPELL_DEATH_PACT_3 = 17472
+
+local NPC_SUMMONED_SKELETON = 11197
 
 local RAISE_DEAD_SPELLS = {17475, 17476, 17477, 17478, 17479, 17480}
 
@@ -217,7 +217,17 @@ local function onReset(_, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ SpellHit (boss_baron_rivendare.cpp:159-163): npc_summoned_skeleton
+-- casts Death Pact 3 on itself, triggered, when hit by Death Pact 2.
+local function onSkeletonSpellHit(_, creature, _, spellId)
+    if spellId ~= SPELL_DEATH_PACT_2 then
+        return
+    end
+    creature:CastSpell(creature, SPELL_DEATH_PACT_3, true)
+end
+
 RegisterCreatureEvent(NPC_BARON, 1, onEnterCombat)
 RegisterCreatureEvent(NPC_BARON, 2, onCombatEnd)
 RegisterCreatureEvent(NPC_BARON, 4, onCombatEnd)
 RegisterCreatureEvent(NPC_BARON, 23, onReset)
+RegisterCreatureEvent(NPC_SUMMONED_SKELETON, 14, onSkeletonSpellHit)
