@@ -69,8 +69,10 @@
 -- Dormant until Spell.dbc ships the 47575 record.
 -- spell_q12096_q12092_bark — Bark of the Walkers (Lothalor
 -- entry-gated Talk SAY_LOTHALOR + RemoveAura(SPELL_CONFUSED 47044) +
--- DespawnOrUnsummon 4s) — handler written below; registration pending
--- the bark spell ID (no spell_script_names binding in AC or TDB 26091).
+-- DespawnOrUnsummon 4s) — REGISTERED below (47530, verdict 2026-11-14:
+-- EFFECT_0 DUMMY; dormant until Spell.dbc ships the row, 47575
+-- precedent). No spell_script_names binding in AC or TDB 26091 — the
+-- C++ script is DB-unbound in both.
 -- npc_wyrmrest_defender (VehicleAI) — UpdateAI low-hp arm
 -- (GetHealthPct() <= 30% -> CastSpell(me, 52421), 20s renew
 -- recovery re-arm gate) sits behind the unmodeled VehicleAI
@@ -109,11 +111,16 @@ local FACTION_MONSTER = 14
 local SAY_WALKER_FRIENDLY = 0
 local SAY_WALKER_ENEMY = 1
 local SAY_LOTHALOR = 0
--- TODO: spell_q12096_q12092_bark has no spell_script_names binding in AC
--- (ac_spell_script_names.sql), TDB 26091 (spell_script_names_26091.txt,
--- full TDB SQL), or any divergence list — resolve the bark spell ID
--- before registering barkOfTheWalkers; do NOT guess a number.
-local SPELL_Q12096_Q12092_BARK = nil
+-- VERDICT 2026-11-14 (browser task 4872f25b, corroborated Wowhead WotLK /
+-- WoWDB / wotlkdb 3.3.5a / Cavernoftime): spell 47530 "Bark of the
+-- Walkers" — EFFECT_0 DUMMY (effect 3), single effect only, range 5 yd
+-- (Interact), cast 3s, school Physical, no trigger spell. Item-side
+-- confirmed (TDB 26091 item_template spellid_1 = 47530; quests 12096 /
+-- 12092 require Lothalor 26321). Dormant until Spell.dbc ships the
+-- 47530 record (same as the 47575 dummy above — no seed row yet; the
+-- seed needs RangeIndex/CastingTimeIndex numbers, still unverified,
+-- do NOT guess).
+local SPELL_Q12096_Q12092_BARK = 47530
 
 local lecraftState = {}
 local lecraftPump = {}
@@ -292,8 +299,7 @@ local function barkOfTheWalkers(event, spell, hitTarget, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_Q12096_Q12092_DUMMY, 5, strengthenAncientsDummy)
--- RegisterSpellEvent(SPELL_Q12096_Q12092_BARK, 5, barkOfTheWalkers)
--- — pending the bark spell ID (see TODO above); do NOT register blind.
+RegisterSpellEvent(SPELL_Q12096_Q12092_BARK, 5, barkOfTheWalkers)
 
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 1, onEnterCombat)
 RegisterCreatureEvent(TORTURER_LECRAFT_ENTRY, 2, onReset)
