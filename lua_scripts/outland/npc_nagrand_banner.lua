@@ -37,13 +37,13 @@
 -- claims are retracted. The validator's melee-callback leg stays
 -- unmodeled: melee is engine-driven in Go, not pump-driven.
 -- npc_maghar_captive / npc_kurenai_captive (the other two
--- CreatureScripts AddSC_nagrand registers) are EscortAI:
--- the waypoint machine, the OnQuestAccept escort start /
--- quest fail+credit, the waypoint SummonCreature ambushes
--- and the JustSummoned move/attack choreography sit behind
--- the no-escort / no-quest-accept / no-summon / no-movement
--- bridges (omor / hellfire_peninsula precedents) —
--- documented only. condition_nagrand_banner is a
+-- CreatureScripts AddSC_nagrand registers) are PORTED at
+-- lua_scripts/outland/npc_nagrand_captive.lua (quest accept,
+-- combat pump, SpellHitTarget ev15, JustSummoned, waypoint
+-- arms); only the escort walk itself stays out on the
+-- orphaned waypoint_data path binding. The stale
+-- "no-escort / no-quest-accept / no-summon / no-movement
+-- bridges" claim is retracted. condition_nagrand_banner is a
 -- ConditionScript — no ConditionScript bridge — documented
 -- only (its only input is the bannered latch of the base
 -- AI, also unmodeled).
@@ -118,17 +118,20 @@
 -- OnSpawn — millhouse note — so both hooks land the same
 -- reset).
 -- Deliberate deviations (all await engine bridges): no
--- escort / quest-accept / summon / movement bridges — the
--- maghar and kurenai captive AIs documented only; no
 -- ConditionScript bridge — condition_nagrand_banner
--- documented only; the maghar/kurenai escort pre-loop CASTING
--- gates (zone_nagrand.cpp:171/:371) stay with those unported
--- EscortAIs — no pump exists to gate, so the gate verdict rides
--- the escort block, not a missing cast bridge. The TaskScheduler
+-- documented only. The maghar/kurenai captives are PORTED
+-- (see npc_nagrand_captive.lua), including their escort
+-- pre-loop CASTING gates (zone_nagrand.cpp:171/:371) as the
+-- combat pump's IsCasting gate; only the escort walk itself
+-- stays out on the orphaned waypoint_data path binding. The TaskScheduler
 -- validator (:444) and the spellbinder self-cast return (:519)
 -- and victim-cast interrupt arm (:522) are PORTED, see above;
--- SpellHit (event 14) IS bridged (stale "no
--- SpellHit bridge" label retracted) — the base banner AI's
+-- SpellHitTarget (event 15, caster-side) IS bridged — the
+-- captive arms use it (see npc_nagrand_captive.lua). The
+-- base banner AI's own latch below is the victim-side
+-- SpellHit (event 14, C++ zone_nagrand.cpp:453) — that
+-- number was correct for it, not a mislabel. The base
+-- banner AI's
 -- bannered latch (SPELL_PLANT_WARMAUL_OGRE_BANNER
 -- 32307 / SPELL_PLANT_KIL_SORROW_BANNER 32314) still stays out:
 -- its only observable is the ConditionScript (no ConditionScript

@@ -15061,16 +15061,21 @@ func init() {
 	// TaskScheduler validator (:444) and self-cast early return
 	// (:519) are PORTED via live IsCasting gates; the base AI's
 	// SpellHit bannered latch (17138 Warmaul reaver — no-op
-	// model), the maghar/kurenai captive EscortAIs (whose
-	// pre-loop gates :171/:371 ride the escort block) and
-	// condition_nagrand_banner have no SpellHit-observable /
-	// escort / quest-accept / summon / movement /
-	// ConditionScript bridges — documented only.
+	// model) and condition_nagrand_banner have no
+	// SpellHit-observable / ConditionScript bridges —
+	// documented only. The maghar/kurenai captive EscortAIs
+	// are PORTED at lua_scripts/outland/npc_nagrand_captive.lua
+	// (quest accept, combat pump, SpellHitTarget ev15,
+	// JustSummoned, waypoint arms); only the escort walk itself
+	// stays out on the orphaned waypoint_data path binding (no
+	// script_waypoint loader, no creature_addon.path_id row).
 	RegisterLuaBoss("npc_nagrand_banner", 17146)
 	RegisterLuaBoss("npc_nagrand_banner", 17147)
 	RegisterLuaBoss("npc_nagrand_banner", 17148)
 	RegisterLuaBoss("npc_nagrand_banner", 18391)
 	RegisterLuaBoss("npc_nagrand_banner", 18064)
+	RegisterLuaBoss("npc_nagrand_captive", 18210)
+	RegisterLuaBoss("npc_nagrand_captive", 18209)
 	// npc_commander_dawnforge (Netherstorm zone script, first in
 	// the file per AddSC_netherstorm order — before phase_hunter):
 	// quest-10198 "Information Gathering" area-trigger event —
