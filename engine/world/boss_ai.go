@@ -23908,6 +23908,24 @@ func init() {
 	// read, neural step-4 kill credit, Talk(step, caster)). Entry 25478 verifiable from the C++
 	// ImprisionedBerylSorcerer enum.
 	RegisterLuaBoss("npc_imprisoned_beryl_sorcerer", 25478)
+	// npc_beryl_sorcerer (Borean Tundra) — ported arms in
+	// lua_scripts/northrend/npc_beryl_sorcerer.lua: Reset()
+	// (react aggressive + bEnslaved=false), the SpellHit
+	// enslavement arm (45611 Arcane Chains + health <= 50% +
+	// !bEnslaved -> EnterEvadeMode, react passive, StartFollow,
+	// UpdateEntry(25474), triggered 45631 self-cast,
+	// KilledMonsterCredit(25474)) and the MoveInLineOfSight
+	// Donathan leg (1s poll twin: 25262 within 5.0y ->
+	// SetFollowComplete + Despawn). Entry 25316 'Beryl Sorcerer'
+	// (12 static spawns, TDB 26091, ScriptName empty in this DB —
+	// the nerubar/imprisoned precedent); both entries registered
+	// so the handlers persist across the UpdateEntry transform
+	// (nether-drake precedent). Round-45 "STAY OUT on missing
+	// StartFollow/DisappearAndDie" verdict is stale: StartFollow,
+	// SetFollowComplete, UpdateEntry and EnterEvadeMode are all
+	// bridged now; Despawn is the DisappearAndDie twin.
+	RegisterLuaBoss("npc_beryl_sorcerer", 25316)
+	RegisterLuaBoss("npc_beryl_sorcerer", 25474)
 	// Checked-no-gate: zone_borean_tundra.cpp has zero HasUnitState hits — rebuff timer + SpellHit arms stay ungated.
 	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arms in
 	// lua_scripts/northrend/npc_hidden_cultist.lua: Reset()
