@@ -37,19 +37,19 @@
 --   BURNING_COSMETIC) -> OnDied (4) (maiden precedent: cancel timers,
 --   then the death arm); the cosmetic cast is packet-visual like all
 --   creature self-casts on this surface.
--- Deviations from C++: C++ re-arms cleave phase-pinned (16s in PHASE_2,
--- 9s in PHASE_3) and drives the whole headless-phase machine from
--- DamageTaken's cheat-death latches (damage >= health -> damage = 0 +
--- StartPhase); that phase machine (head reposition/send/return spells,
--- cross-creature DoActions, MovementInform pathing) has no bridges, so
--- the port runs the phase-1 cleave cadence flat. JustDied's
--- _instance->SetData(DATA_HORSEMAN_EVENT_STATE, DONE) leg is blocked on
--- the instance-script model; the SummonCreature(NPC_SIR_THOMAS) leg is
--- PORTED (creature:SummonCreature bridge, lua_creature_events.go:4161 —
--- the stale "no summon bridge" claim retracted; Eluna type 7 =
--- TEMPSUMMON_MANUAL_DESPAWN, the C++ default); the LFG FinishDungeon leg
--- has no LFG bridge. JustEngagedWith's setActive leg has no bridge;
--- its SetCombatPulseDelay(5) arm is PORTED (creature:SetCombatPulseDelay
+-- Deviations from C++: the 42410 reposition leg has no bridge
+-- (NearTeleportTo zero hits engine-wide) and is skipped — the head's
+-- MoveRandom(30) in HandleStartPhase repositions it anyway. The 42603
+-- HP check runs on a 1s poll (live path) plus the RegisterAuraEvent
+-- below (DBC path); the DBC period for 42603 is unverified in-repo.
+-- JustDied's _instance->SetData(DATA_HORSEMAN_EVENT_STATE, DONE) leg
+-- is blocked on the instance-script model; the SummonCreature
+-- (NPC_SIR_THOMAS) leg is PORTED (creature:SummonCreature bridge,
+-- lua_creature_events.go:4161 — the stale "no summon bridge" claim
+-- retracted; Eluna type 7 = TEMPSUMMON_MANUAL_DESPAWN, the C++
+-- default); the LFG FinishDungeon leg has no LFG bridge.
+-- JustEngagedWith's setActive leg has no bridge; its
+-- SetCombatPulseDelay(5) arm is PORTED (creature:SetCombatPulseDelay
 -- bridge, lua_creature_events.go; event 1, C++ arm order). Its
 -- EVENT_RANDOM_LAUGH arm is ported as the
 -- onLaugh timer via creature:PlayDirectSound (SMSG_PLAY_SOUND); its
@@ -63,46 +63,32 @@
 --   Pumpkin/bunny/sir-thomas arms carry no UpdateAI override in C++
 --   (ScriptedAI::UpdateAI is the empty base), so nothing gates there.
 -- Unmodeled (documented-only — no bridges on the Lua surface):
--- - DamageTaken's phase-transition latch (damage negation + StartPhase's
---   immune aura / REACT_PASSIVE / AttackStop / EVENT_START_NEXT_
---   HEADLESS_PHASE -> DoCastAOE(42410) + DoCast(head, 42399) + confuse/
---   transform auras): porting the damage negation alone, with no head
---   phase machine to hand off to, would make the boss unkillable — the
---   whole arm strands on the unbridged instance-script head/phase model.
+-- - DamageTaken's phase-transition latch + StartPhase + the whole
+--   head-phase machine: PORTED 2026-11-14 (round109) — ev9 damage
+--   rewrite, Lua-side phase variable, DoAction/ev38 cross-AI dispatch
+--   with FindNearestCreature head/boss lookups, MoveTo + ev28 arrival,
+--   conflagrate + pumpkin phase timers. See the machine code below.
 -- - DoAction's ACTION_HORSEMAN_EVENT_START (flight-path intro via
---   MoveSmoothPath + yell-timer/laugh auras), ACTION_HORSEMAN_REQUEST_
---   BODY (MovePoint(POINT_HEAD) chase), ACTION_HEAD_RETURN_TO_BODY
---   (phase-delayed re-arm + Talk(SAY_REJOINED)), ACTION_HEAD_IS_DEAD:
---   no MoveSmoothPath bridge (MoveRandom/MoveClear/RemoveAllAttackers/StopMoving/MoveTo are live now), no MovementInform
---   bridge (kalecgos precedent), and every head lookup goes through
---   _instance->GetCreature(DATA_HORSEMAN_HEAD) (instance-script model
---   blocked).
--- - EVENT_CONFLAGRATE (phase 2): phase-pinned on the unmodeled
---   phase machine — the true blocker. SelectTarget(Random, 0, 30.0f,
---   true, false) is bridgeable per the random-player-in-range
---   convention (GetPlayersInWorld + IsWithinDist), and DoCastSelf
---   48149/48148 (triggered) + Talk(SAY_CONFLAGRATION) + the
---   Repeat(18s,21s) timer are bridgeable too; porting them flat would
---   fabricate phase-1 casts, so they stay out until a phase machine
---   exists (gothik counterpoint).
--- - EVENT_SUMMON_PUMPKIN (phase 3): phase-pinned; the C++ AI arm is
---   only DoCastSelf(52236) + Repeat(30s) — the Talk(SAY_SPROUTING_
---   PUMPKINS) leg is PORTED below (tick 190, RegisterAuraEvent);
---   the pumpkin-spawn machinery is the aura's DBC effect.
+--   MoveSmoothPath + yell-timer/laugh auras) stays out (no
+--   MoveSmoothPath bridge); REQUEST_BODY / RETURN_TO_BODY / IS_DEAD
+--   are PORTED on ev38 (below).
+-- - EVENT_CONFLAGRATE (phase 2) and EVENT_SUMMON_PUMPKIN (phase 3):
+--   PORTED 2026-11-14 (round109) as phase timers (conflagrateTick /
+--   pumpkinTick); the 52236 pumpkin-spawn machinery itself is the
+--   aura's DBC effect, and the Talk(SAY_SPROUTING_PUMPKINS) leg rides
+--   the RegisterAuraEvent below.
 -- - Reset/JustReachedHome/InitializeAI legs: the SetDisableGravity/
 --   SetHover legs port on event 5 (InitializeAI twin, both bridged —
 --   stale "no bridge" retracted); the POINT_HORSEMAN_FINISH_PATH
 --   disable legs ride the unported intro flight-path machine (DoAction
 --   ACTION_HORSEMAN_EVENT_START / MoveSmoothPath, documented above).
--- - Reset/JustReachedHome legs: _summons.DespawnAll (not wired — the
---   summons table IS tracked now (horsemanSummons, ev19/ev21 ported
---   2026-11-13: Sir Thomas + aura-spawned pumpkins), but no Reset
---   handler drains it; the stale "no despawn bridge" parenthetical is
---   retracted, supremus precedent — creature:Despawn is bridged,
---   lua_creature_events.go:3292), SetReactState (SetReactState
---   IS bridged — frozen_core precedent, lua_creature_events.go:524;
---   the JustReachedHome REACT_AGGRESSIVE leg is a no-op in the Lua
---   model since the REACT_PASSIVE phase-machine leg is unported),
+-- - Reset/JustReachedHome legs: _summons.DespawnAll is PORTED
+--   2026-11-14 (round109) — the tracked horsemanSummons table (now
+--   storing the summoned objects, felblood phoenix precedent) drains
+--   in onCombatEnd, alive-gated (the death path returns early, moroes
+--   precedent); SetReactState (SetReactState IS bridged — frozen_core
+--   precedent, lua_creature_events.go:524; the JustReachedHome
+--   REACT_AGGRESSIVE leg is PORTED in onReachHome below),
 --   SetImmuneToPC (twin bridged — SetFlag/RemoveFlag(59, 0x100); the Reset
 --   clear stays out on its _introDone gate: _introDone is set only by the
 --   unported POINT_HORSEMAN_FINISH_PATH flight-path leg, so no clear can
@@ -113,16 +99,15 @@
 --   exact C++ JustAppeared moments (fireCreatureSpawned, initial + respawn).
 -- - npc_headless_horseman_head (23775): REGISTERED — JustDied's
 --   EVENT_RAIN_OF_TREATS 11s -> DoCastSelf(43344) ports cleanly as a
---   single-arm registration. The rest strands: SpellScript/AuraScript
---   effects (42399 send-head; 42603 head-periodic HP-check, audited
---   tick 189 — its whole arm is DoAction(ACTION_HEAD_HP_34/67), sent by
---   the unported 42603 AuraScript HP-check (boss_headless_horseman.cpp:
---   869-878), so it stays out — ev38 dispatch IS bridged, but the
---   AuraScript sender and the head phase machine are unported;
---   HealthBelowPct itself is bridged), DoAction
---   legs (ACTION_HEAD_START_HEAD_PHASE/HP_67/HP_34), the triggered
---   DoCastSelf(42428) head-is-dead SpellScript cast, and
---   _instance->GetCreature(DATA_HEADLESS_HORSEMAN).
+--   single-arm registration. The head-phase machine (DoAction
+--   START_HEAD_PHASE / HP_67 / HP_34, the 42603 HP check, STOP +
+--   return, head-is-dead) is PORTED 2026-11-14 (round109) on ev38 +
+--   the 42603 aura event + a 1s HP poll (see below); the head's
+--   _instance->GetCreature(DATA_HEADLESS_HORSEMAN) lookups ride
+--   FindNearestCreature. Still out: SetGUID(ACTION_HEAD_PLAYER_TEXT)
+--   (no SetGUID bridge; the GO gossip senders are unported too) and
+--   the JustReachedHome motion Clear (StopMoving twin is live but the
+--   head carries no Lua motion to clear).
 -- - spell_headless_horseman_summoning_rhyme_aura (42879, tick 189
 --   audit): the PeriodicTick switch is keyed on
 --   aurEff->GetTickNumber() (1/3/5/8) — PORTED below (tick 191,
@@ -189,6 +174,41 @@ local SAY_PLAYER_DEMISE = 5 -- boss_headless_horseman.cpp:47
 
 local ENTRY_HEADLESS_HORSEMAN = 23682
 local ENTRY_HORSEMAN_HEAD = 23775
+-- boss_headless_horseman.cpp HeadlessActions (HeadlessActions enum):
+-- the head's DoAction arms ride ev38 (below); the boss's ride ev38 too.
+local ACTION_HEAD_START_HEAD_PHASE = 1
+local ACTION_HEAD_HP_67 = 2
+local ACTION_HEAD_HP_34 = 3
+local ACTION_HEAD_IS_DEAD = 4
+local ACTION_HORSEMAN_REQUEST_BODY = 5
+local ACTION_HEAD_RETURN_TO_BODY = 6
+-- EventMap phases (HeadlessHorsemanMisc): the boss phase machine runs
+-- on a Lua-side phase variable (horsemanPhase, below); the head's own
+-- _phase runs on headPhase.
+local PHASE_1 = 1
+local PHASE_2 = 2
+local PHASE_3 = 3
+local PHASE_LAST = 4
+local HEAD_PHASE_DEAD = 5
+local POINT_HEAD = 2
+local SAY_REJOINED = 1
+local SAY_CONFLAGRATION = 2
+local SAY_HEAD_REQUEST_BODY = 1
+local SPELL_BODY_REGEN_IMMUNE = 42556
+local SPELL_BODY_REGEN_CONFUSE = 43105
+local SPELL_BODY_REGEN_TRANSFORM = 42403
+local SPELL_HEAD_PERIODIC = 42603
+local SPELL_HEAL_BODY = 43306
+local SPELL_HEAD_PAUSE = 42504
+local SPELL_SPEAKS = 43129
+local SPELL_BODY_STAGE_1 = 42547
+local SPELL_BODY_STAGE_2 = 42548
+local SPELL_BODY_STAGE_3 = 42549
+local SPELL_HORSEMANS_WHIRLWIND = 43116
+local SPELL_BODY_DEATH = 42429
+local SPELL_CONFLAGRATION_SOUND = 48149
+local SPELL_CONFLAGRATION_SOUND_THROTTLE = 48148
+local SPELL_CONFLAGRATION = 42380
 local ENTRY_SIR_THOMAS = 23904 -- NPC_SIR_THOMAS, scarlet_monastery.h:75
 local SPELL_WISP_INVIS = 42823 -- boss_headless_horseman.cpp:106
 local SPELL_WISP_FLIGHT_PORT = 42818 -- boss_headless_horseman.cpp:108
@@ -219,6 +239,16 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+-- Cancel one keyed timer (the HP-check poll cancels itself when its
+-- arm fires — the C++ 42603 aura is removed by the same arm).
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
 end
 
 -- C++ boss_headless_horseman::UpdateAI pre-loop + in-loop CASTING
@@ -257,6 +287,239 @@ local function onLaugh(creature, guid)
     schedule(guid, "laugh", math.random(30000, 60000), function() onLaugh(creature, guid) end)
 end
 
+-- The head-phase machine (boss_headless_horseman.cpp:459-502, 540-603,
+-- PORTED 2026-11-14 round109): the boss phase lives in horsemanPhase
+-- (EventMap phase twin; C++ SetPhase has no Lua bridge). The 42410
+-- reposition leg has no bridge (NearTeleportTo zero hits engine-wide)
+-- and is SKIPPED as a documented deviation — HandleStartPhase's
+-- MoveRandom(30) repositions the head anyway.
+local horsemanPhase = {}
+
+-- Forward-declared here (tharon_ja / gal_darah idiom): the
+-- horsemanSummons table itself is declared with the JustSummoned
+-- handler further below, but drainHorsemanSummons (called from
+-- onCombatEnd) reads it — without this forward declaration the
+-- reference would bind the nil global (malown time-bomb; the
+-- use-before-def scan flags exactly this).
+local horsemanSummons
+
+-- Forward declarations (tharon_ja / gal_darah idiom): startPhase and
+-- startNextPhaseDelayed call these before their definitions below;
+-- plain assignments, never re-local-function (malown time-bomb).
+local startNextHeadlessPhase, conflagrateTick, pumpkinTick
+
+local function drainHorsemanSummons()
+    for guid, summoned in pairs(horsemanSummons) do
+        if summoned then
+            summoned:DespawnOrUnsummon()
+        end
+        horsemanSummons[guid] = nil
+    end
+end
+
+-- C++ StartPhase (boss_headless_horseman.cpp:473-502): immune self-cast
+-- (triggered), SetPhase, REACT_PASSIVE, AttackStop, whirlwind removal,
+-- SetWalk(false), stage-aura removal per phase, then the 1ms
+-- EVENT_START_NEXT_HEADLESS_PHASE. The phase-1 cleave is phase-pinned
+-- in C++ (never fires again); the Lua twin cancels it here and the
+-- delayed re-engage re-arms it phase-pinned (16s / 9s).
+local function startPhase(creature, guid, nextPhase)
+    creature:CastSpell(creature, SPELL_BODY_REGEN_IMMUNE, true)
+    horsemanPhase[guid] = nextPhase
+    creature:SetReactState(0) -- REACT_PASSIVE
+    creature:AttackStop()
+    creature:RemoveAura(SPELL_HORSEMANS_WHIRLWIND)
+    creature:SetWalk(false)
+    if nextPhase == PHASE_2 then
+        creature:RemoveAura(SPELL_BODY_STAGE_1)
+    elseif nextPhase == PHASE_3 then
+        creature:RemoveAura(SPELL_BODY_STAGE_2)
+        cancelKey(guid, "conflagrate")
+    elseif nextPhase == PHASE_LAST then
+        creature:RemoveAura(SPELL_BODY_STAGE_3)
+        creature:RemoveAura(SPELL_SUMMON_PUMPKIN_BURST_DELAY)
+        cancelKey(guid, "pumpkin")
+    end
+    cancelKey(guid, "cleave")
+    schedule(guid, "start_head_phase", 1, function()
+        startNextHeadlessPhase(creature, guid)
+    end)
+end
+
+-- C++ EVENT_START_NEXT_HEADLESS_PHASE (boss_headless_horseman.cpp:
+-- 560-569): DoCastAOE(42410) skipped (no bridge, see above);
+-- DoCast(head, 42399, triggered) collapses to head:DoAction(1) (the
+-- 42399 SpellScript is a pure DoAction dispatcher); confuse +
+-- transform self-casts (triggered); head-visual removal.
+startNextHeadlessPhase = function(creature, guid)
+    local head = creature:FindNearestCreature(ENTRY_HORSEMAN_HEAD, 200)
+    if head ~= nil then
+        head:DoAction(ACTION_HEAD_START_HEAD_PHASE)
+    end
+    creature:CastSpell(creature, SPELL_BODY_REGEN_CONFUSE, true)
+    creature:RemoveAura(SPELL_HEAD_VISUAL)
+    creature:CastSpell(creature, SPELL_BODY_REGEN_TRANSFORM, true)
+end
+
+-- C++ EVENT_START_NEXT_PHASE_DELAYED (boss_headless_horseman.cpp:
+-- 571-585): re-engage, head-visual self-cast, phase stage aura +
+-- phase timers (conflagrate 5s / cleave 16s in phase 2; pumpkin 1s /
+-- cleave 9s in phase 3; LAST re-engages with no phase timers), then
+-- AttackStart on the max-threat target (GetAITargets is threat-sorted).
+local function startNextPhaseDelayed(creature, guid)
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    creature:CastSpell(creature, SPELL_HEAD_VISUAL)
+    local phase = horsemanPhase[guid] or PHASE_1
+    if phase == PHASE_2 then
+        creature:CastSpell(creature, SPELL_BODY_STAGE_2)
+        schedule(guid, "conflagrate", 5000, function()
+            conflagrateTick(creature, guid)
+        end)
+        schedule(guid, "cleave", 16000, function() onCleave(creature, guid) end)
+    elseif phase == PHASE_3 then
+        creature:CastSpell(creature, SPELL_BODY_STAGE_3)
+        schedule(guid, "pumpkin", 1000, function()
+            pumpkinTick(creature, guid)
+        end)
+        schedule(guid, "cleave", 9000, function() onCleave(creature, guid) end)
+    end
+    local targets = creature:GetAITargets()
+    if targets ~= nil and targets[1] ~= nil then
+        creature:AttackStart(targets[1])
+    end
+end
+
+-- C++ EVENT_CONFLAGRATE (boss_headless_horseman.cpp:586-595): random
+-- player within 30yd; sound self-casts (triggered) + DoCast(target,
+-- 42380) + Talk(SAY_CONFLAGRATION); Repeat(18s, 21s) even with no
+-- target. CASTING gate PORTED as the 500ms defer (file convention).
+conflagrateTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "conflagrate", 500, function()
+            conflagrateTick(creature, guid)
+        end)
+        return
+    end
+    local targets = creature:GetAITargets()
+    local candidates = {}
+    if targets ~= nil then
+        for _, target in ipairs(targets) do
+            if target:GetObjectType() == "Player" then
+                local dx = target:GetX() - creature:GetX()
+                local dy = target:GetY() - creature:GetY()
+                local dz = target:GetZ() - creature:GetZ()
+                if dx * dx + dy * dy + dz * dz <= 900 then
+                    candidates[#candidates + 1] = target
+                end
+            end
+        end
+    end
+    if #candidates > 0 then
+        local target = candidates[math.random(#candidates)]
+        creature:CastSpell(creature, SPELL_CONFLAGRATION_SOUND, true)
+        creature:CastSpell(creature, SPELL_CONFLAGRATION_SOUND_THROTTLE, true)
+        creature:CastSpell(target, SPELL_CONFLAGRATION)
+        creature:Talk(SAY_CONFLAGRATION)
+    end
+    schedule(guid, "conflagrate", math.random(18000, 21000), function()
+        conflagrateTick(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SUMMON_PUMPKIN (boss_headless_horseman.cpp:596-599):
+-- DoCastSelf(52236), Repeat(30s). The 52236 aura itself is unseeded,
+-- so the cast is a no-op until a real Spell.dbc ships it; the Talk
+-- leg rides the RegisterAuraEvent below when it applies.
+pumpkinTick = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pumpkin", 500, function()
+            pumpkinTick(creature, guid)
+        end)
+        return
+    end
+    creature:CastSpell(creature, SPELL_SUMMON_PUMPKIN_BURST_DELAY)
+    schedule(guid, "pumpkin", 30000, function()
+        pumpkinTick(creature, guid)
+    end)
+end
+
+-- C++ boss_headless_horseman::DamageTaken (boss_headless_horseman.cpp:
+-- 459-471): lethal non-self hit -> damage = 0 + StartPhase(next);
+-- PHASE_LAST takes full damage (no arm). ev9 rewrite convention:
+-- the second return rewrites damage (fireCreatureDamageTaken,
+-- lua_creature_events.go:7684). The attacker-vs-self gate compares
+-- GUIDs; a missing GetGUIDLow (non-unit attacker) falls through as
+-- non-self, matching C++ in practice (no self-damage source exists
+-- in this fight).
+local function onDamageTaken(_, creature, attacker, damage)
+    if damage >= creature:GetHealth() then
+        local guid = creature:GetGUIDLow()
+        local attackerGuid = nil
+        if attacker ~= nil and attacker.GetGUIDLow ~= nil then
+            attackerGuid = attacker:GetGUIDLow()
+        end
+        if attackerGuid ~= guid then
+            local phase = horsemanPhase[guid] or PHASE_1
+            if phase == PHASE_1 then
+                startPhase(creature, guid, PHASE_2)
+            elseif phase == PHASE_2 then
+                startPhase(creature, guid, PHASE_3)
+            elseif phase == PHASE_3 then
+                startPhase(creature, guid, PHASE_LAST)
+            end
+            return true, 0
+        end
+    end
+end
+
+-- C++ boss_headless_horseman::DoAction (boss_headless_horseman.cpp:
+-- 430-469) on ev38 (creature:DoAction bridge, lua_creature_events.go:
+-- 845). ACTION_HORSEMAN_EVENT_START (intro flight path) stays out
+-- (no MoveSmoothPath bridge).
+local function onDoAction(_, creature, action)
+    if action == ACTION_HORSEMAN_REQUEST_BODY then
+        -- :447-457: remove confuse, clear motion, whirlwind self-cast
+        -- (triggered), then walk to the head (MoveTo bridges MovePoint,
+        -- lua_creature_events.go:5424; arrival via ev28 below).
+        creature:RemoveAura(SPELL_BODY_REGEN_CONFUSE)
+        creature:StopMoving()
+        creature:CastSpell(creature, SPELL_HORSEMANS_WHIRLWIND, true)
+        local head = creature:FindNearestCreature(ENTRY_HORSEMAN_HEAD, 200)
+        if head ~= nil then
+            creature:SetWalk(true)
+            creature:MoveTo(POINT_HEAD, head:GetX(), head:GetY(), head:GetZ())
+        end
+    elseif action == ACTION_HEAD_RETURN_TO_BODY then
+        -- :458-464: remove confuse/immune/transform, Talk(SAY_REJOINED),
+        -- re-engage delayed 3s.
+        creature:RemoveAura(SPELL_BODY_REGEN_CONFUSE)
+        creature:RemoveAura(SPELL_BODY_REGEN_IMMUNE)
+        creature:RemoveAura(SPELL_BODY_REGEN_TRANSFORM)
+        creature:Talk(SAY_REJOINED)
+        local guid = creature:GetGUIDLow()
+        schedule(guid, "next_phase_delayed", 3000, function()
+            startNextPhaseDelayed(creature, guid)
+        end)
+    elseif action == ACTION_HEAD_IS_DEAD then
+        -- :465-469: remove immune, self-cast body-death (triggered).
+        creature:RemoveAura(SPELL_BODY_REGEN_IMMUNE)
+        creature:CastSpell(creature, SPELL_BODY_DEATH, true)
+    end
+end
+
+-- C++ boss_headless_horseman::MovementInform (boss_headless_horseman.
+-- cpp:515-534) on ev28: POINT_HEAD arrival -> walk off, whirlwind
+-- removal, confuse self-cast (triggered). The intro finish-path leg
+-- stays out (MoveSmoothPath). MoveTo is the only motion the boss uses
+-- in this file, so the pointId gate alone is exact.
+local function onMovementInform(_, creature, moveType, pointId)
+    if pointId == POINT_HEAD then
+        creature:SetWalk(false)
+        creature:RemoveAura(SPELL_HORSEMANS_WHIRLWIND)
+        creature:CastSpell(creature, SPELL_BODY_REGEN_CONFUSE, true)
+    end
+end
+
 local function onEnterCombat(_, creature)
     creature:SetCombatPulseDelay(5) -- boss_headless_horseman.cpp:382 (arm 1 of JustEngagedWith; setActive leg has no bridge)
     local guid = creature:GetGUIDLow()
@@ -266,6 +529,15 @@ end
 
 local function onCombatEnd(_, creature)
     cancelTimers(creature:GetGUIDLow())
+    if creature:IsAlive() then
+        -- C++ Reset (boss_headless_horseman.cpp:378-388): phase 1 +
+        -- _summons.DespawnAll + SetWalk(false). Ev2/ev23 both route
+        -- through Reset on evade; the death path returns early
+        -- (moroes precedent), so a dead boss keeps its summons.
+        horsemanPhase[creature:GetGUIDLow()] = PHASE_1
+        drainHorsemanSummons()
+        creature:SetWalk(false)
+    end
 end
 
 local function onTargetDied(_, creature, victim)
@@ -326,13 +598,16 @@ end
 -- DespawnOrUnsummon — so the ev21 handler drops the GUID and despawns
 -- nothing. Dispatched live on the summoner via the summon's OwnerGUID
 -- (lua_creature_events.go:7744-7771, args (event, summoner, summon,
--- killer)). The list's only consumer, Reset's DespawnAll, is not wired
--- (see Reset note above); the table exists so a future Reset port has
--- the C++-exact list to drain.
-local horsemanSummons = {}
+-- killer)). Reset's DespawnAll leg drains the table in onCombatEnd
+-- (above); the table exists so a future Reset port has the C++-exact
+-- list to drain.
+horsemanSummons = {}
 
 local function onJustSummoned(_, creature, summoned)
-    horsemanSummons[summoned:GetGUIDLow()] = true
+    -- The table now stores the summoned object (felblood phoenix
+    -- precedent) so Reset's DespawnAll leg can drain it; ev21 still
+    -- drops the GUID on death.
+    horsemanSummons[summoned:GetGUIDLow()] = summoned
     summoned:DoZoneInCombat()
 end
 
@@ -345,8 +620,11 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 3, onTargetDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 4, onDied)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 5, onSpawn)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 23, onCombatEnd)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 24, onReachHome)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 28, onMovementInform)
+RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 38, onDoAction)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 19, onJustSummoned)
 RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 21, onSummonedCreatureDies)
 
@@ -361,8 +639,179 @@ RegisterCreatureEvent(ENTRY_HEADLESS_HORSEMAN, 21, onSummonedCreatureDies)
 -- SOIL 186314 at 1765.28, 1347.46, 17.5514, o 0.100363, 7 days) +
 -- RemoveGameObject. 7_days = 604800s. QuaternionData rotation is
 -- cosmetic and dropped (Go bridge uses identity rotation).
+-- The head phase machine (boss_headless_horseman.cpp:189-335, PORTED
+-- 2026-11-14 round109): the head's _phase lives in headPhase
+-- (EventMap phase twin). The 42603 HP check has TWO delivery paths
+-- sharing headPeriodicCheck: the RegisterAuraEvent below (live when a
+-- real Spell.dbc ships 42603) and a 1s poll (the live path today —
+-- the DBC period for 42603 is unverified in-repo, so the poll is a
+-- documented 1s approximation). Double delivery is harmless: both
+-- arms are phase-gated, and firing one removes the aura / cancels
+-- the poll. The 42410/42399/43101/42401/42428 SpellScript dispatchers
+-- collapse to direct DoAction calls (they are pure dispatchers).
+local headPhase = {}
+
+-- Forward declarations (tharon_ja / gal_darah idiom — plain
+-- assignments below, never re-local-function).
+local stopHeadPhase, handleStartPhase, hpCheckTick
+
+-- C++ DoAction ACTION_HEAD_HP_67 (boss_headless_horseman.cpp:226-233):
+-- phase 1 only: advance, remove the 42603 aura (also cancels the
+-- poll), heal-body self-cast, STOP in 1s.
+local function headHp67(creature)
+    local guid = creature:GetGUIDLow()
+    if (headPhase[guid] or PHASE_1) ~= PHASE_1 then
+        return
+    end
+    headPhase[guid] = PHASE_2
+    cancelKey(guid, "hpcheck")
+    creature:RemoveAura(SPELL_HEAD_PERIODIC)
+    creature:CastSpell(creature, SPELL_HEAL_BODY)
+    schedule(guid, "stop_head_phase", 1000, function()
+        stopHeadPhase(creature, guid)
+    end)
+end
+
+-- C++ DoAction ACTION_HEAD_HP_34 (:234-243): phase 2 only: advance,
+-- remove the 42603 aura, pause + heal-body self-casts (heal
+-- triggered), STOP in 1s.
+local function headHp34(creature)
+    local guid = creature:GetGUIDLow()
+    if (headPhase[guid] or PHASE_1) ~= PHASE_2 then
+        return
+    end
+    headPhase[guid] = PHASE_3
+    cancelKey(guid, "hpcheck")
+    creature:RemoveAura(SPELL_HEAD_PERIODIC)
+    creature:CastSpell(creature, SPELL_HEAD_PAUSE)
+    creature:CastSpell(creature, SPELL_HEAL_BODY, true)
+    schedule(guid, "stop_head_phase", 1000, function()
+        stopHeadPhase(creature, guid)
+    end)
+end
+
+-- C++ spell_headless_horseman_head_periodic::HandleHPCheck (:869-878):
+-- 34 first, then 67 (else-if); HealthBelowPct is strict.
+local function headPeriodicCheck(creature)
+    local pct = creature:GetHealthPct()
+    if pct < 34 then
+        headHp34(creature)
+    elseif pct < 67 then
+        headHp67(creature)
+    end
+end
+
+-- 1s poll twin of the 42603 periodic ticks. Re-schedules only while
+-- a head phase is live (phase 1/2, boss alive and mid head-phase);
+-- stops on evade/death/reset, where the boss phase var is back to 1.
+hpCheckTick = function(creature, guid)
+    if creature:IsDead() then
+        return
+    end
+    local boss = creature:FindNearestCreature(ENTRY_HEADLESS_HORSEMAN, 200)
+    if boss == nil or boss:IsDead() then
+        return
+    end
+    if (horsemanPhase[boss:GetGUIDLow()] or PHASE_1) == PHASE_1 then
+        return
+    end
+    local before = headPhase[guid] or PHASE_1
+    if before == PHASE_3 then
+        return
+    end
+    headPeriodicCheck(creature)
+    if (headPhase[guid] or PHASE_1) == before then
+        schedule(guid, "hpcheck", 1000, function()
+            hpCheckTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ HandleStartPhase (boss_headless_horseman.cpp:260-290): stun
+-- removal, visual self-cast (triggered), NOT_SELECTABLE removal,
+-- MoveRandom(30); phase 1: 42603 self-cast (triggered); phase 2:
+-- 42603 + speaks + request-body (triggered) + Talk(SAY_REQUEST_BODY);
+-- phase 3: speaks + request-body + Talk. The 43101 cast collapses
+-- to horseman:DoAction(5) (pure dispatcher). The poll starts in
+-- phases 1/2 only (phase 3 has no HP arm left).
+handleStartPhase = function(creature, guid)
+    creature:RemoveAura(SPELL_HEAD_STUN)
+    creature:CastSpell(creature, SPELL_HEAD_VISUAL, true)
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:MoveRandom(30)
+    local phase = headPhase[guid] or PHASE_1
+    if phase == PHASE_1 then
+        creature:CastSpell(creature, SPELL_HEAD_PERIODIC, true)
+    elseif phase == PHASE_2 then
+        creature:CastSpell(creature, SPELL_HEAD_PERIODIC, true)
+        creature:CastSpell(creature, SPELL_SPEAKS, true)
+        local horseman = creature:FindNearestCreature(ENTRY_HEADLESS_HORSEMAN, 200)
+        if horseman ~= nil then
+            horseman:DoAction(ACTION_HORSEMAN_REQUEST_BODY)
+        end
+        creature:Talk(SAY_HEAD_REQUEST_BODY)
+    elseif phase == PHASE_3 then
+        creature:CastSpell(creature, SPELL_SPEAKS, true)
+        local horseman = creature:FindNearestCreature(ENTRY_HEADLESS_HORSEMAN, 200)
+        if horseman ~= nil then
+            horseman:DoAction(ACTION_HORSEMAN_REQUEST_BODY)
+        end
+        creature:Talk(SAY_HEAD_REQUEST_BODY)
+    end
+    if phase == PHASE_1 or phase == PHASE_2 then
+        schedule(guid, "hpcheck", 1000, function()
+            hpCheckTick(creature, guid)
+        end)
+    end
+end
+
+-- C++ EVENT_STOP_HEAD_PHASE (boss_headless_horseman.cpp:308-317):
+-- stun self-cast, visual removal, DoCast(horseman, 42401, triggered)
+-- collapses to horseman:DoAction(6), RemoveAllAttackers, motion
+-- Clear (StopMoving twin), NOT_SELECTABLE flag.
+stopHeadPhase = function(creature, guid)
+    cancelKey(guid, "hpcheck")
+    creature:CastSpell(creature, SPELL_HEAD_STUN)
+    creature:RemoveAura(SPELL_HEAD_VISUAL)
+    local horseman = creature:FindNearestCreature(ENTRY_HEADLESS_HORSEMAN, 200)
+    if horseman ~= nil then
+        horseman:DoAction(ACTION_HEAD_RETURN_TO_BODY)
+    end
+    creature:RemoveAllAttackers()
+    creature:StopMoving()
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+end
+
+-- C++ npc_headless_horseman_head::DoAction (boss_headless_horseman.cpp:
+-- 214-245) on ev38. START_HEAD_PHASE schedules the 1s delayed start.
+local function onHeadDoAction(_, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_HEAD_START_HEAD_PHASE then
+        schedule(guid, "start_head_delayed", 1000, function()
+            handleStartPhase(creature, guid)
+        end)
+    elseif action == ACTION_HEAD_HP_67 then
+        headHp67(creature)
+    elseif action == ACTION_HEAD_HP_34 then
+        headHp34(creature)
+    end
+end
+
 local function onHeadDied(_, creature)
     local guid = creature:GetGUIDLow()
+    -- C++ JustDied (boss_headless_horseman.cpp:296-300): phase DEAD,
+    -- self-cast 42428 (collapses to horseman:DoAction(4) — the 42428
+    -- SpellScript is a pure dispatcher; the pumpkin KillSelf leg
+    -- rides the unseeded 52236 aura and stays out), then the 11s
+    -- raintreats timer. A pending STOP can no longer fire (dead
+    -- creatures don't tick UpdateAI), so it is cancelled with the poll.
+    cancelKey(guid, "hpcheck")
+    cancelKey(guid, "stop_head_phase")
+    headPhase[guid] = HEAD_PHASE_DEAD
+    local horseman = creature:FindNearestCreature(ENTRY_HEADLESS_HORSEMAN, 200)
+    if horseman ~= nil then
+        horseman:DoAction(ACTION_HEAD_IS_DEAD)
+    end
     schedule(guid, "raintreats", 11000, function()
         creature:CastSpell(creature, SPELL_RAIN_OF_TREATS)
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
@@ -388,6 +837,12 @@ end
 -- clear rides the unported head-phase machine (HandleStartPhase), the same
 -- standing limitation as the raintreats set above.
 local function onHeadReachHome(_, creature)
+    local guid = creature:GetGUIDLow()
+    -- C++ JustReachedHome (:206-214): _events.Reset (pending head-phase
+    -- timers die) + HandleInitialSetup (_phase back to 1).
+    cancelKey(guid, "hpcheck")
+    cancelKey(guid, "stop_head_phase")
+    headPhase[guid] = PHASE_1
     creature:CastSpell(creature, SPELL_HEAD_STUN)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
 end
@@ -395,6 +850,17 @@ end
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 4, onHeadDied)
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 5, onHeadSpawn)
 RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 24, onHeadReachHome)
+RegisterCreatureEvent(ENTRY_HORSEMAN_HEAD, 38, onHeadDoAction)
+
+-- C++ spell_headless_horseman_head_periodic (boss_headless_horseman.cpp:
+-- 862-878): the 42603 aura's periodic HP check, delivered by the
+-- shared headPeriodicCheck above (see the poll note — the aura path
+-- goes live when a real Spell.dbc ships 42603).
+local function headPeriodicAura(event, aura, target)
+    headPeriodicCheck(target)
+end
+
+RegisterAuraEvent(SPELL_HEAD_PERIODIC, 1, headPeriodicAura)
 
 -- C++ npc_sir_thomas::Reset (boss_headless_horseman.cpp:708-720):
 -- RemoveFlag(QUESTGIVER) + SetFlag(NOT_SELECTABLE) + self-cast
