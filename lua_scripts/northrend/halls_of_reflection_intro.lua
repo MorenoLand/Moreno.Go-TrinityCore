@@ -20,7 +20,9 @@
 --   SetStandState(STAND), WALK_INTRO1 at 3000ms.
 -- WALK_INTRO1: Talk(0), then WALK_INTRO2 at 7000ms (Jaina) /
 --   9000ms (Sylvanas); WALK_INTRO2: Talk(1) + gossip|questgiver
---   flags set. Movement legs stay out (no MovePoint bridge).
+--   flags set. Movement legs stay out (MoveTo bridges MovePoint,
+--   lua_creature_events.go:5424, arrival via ev28 — legs pending
+--   re-examination, round100).
 -- OnGossipSelect case 0 (see select note): close menu, flags
 --   cleared, START_INTRO at 1000ms, then the faction chain at 0s.
 -- Jaina chain (A2_1..A2_19): Talk(2) 7s, Talk(3) 10s, cast
@@ -57,10 +59,13 @@
 -- OnGossipSelect case 1 (SKIP_INTRO): PORTED — the creature select
 -- hook now carries the trailing listID arg (gossip.go), so case 1
 -- branches to the skip chain: LK summoned at 1s with REACT_PASSIVE
--- (movement/door legs stay out, no motion/GO bridges), then LK_4
+-- (movement legs stay out pending the MovePoint re-examination,
+-- door legs stay out — no GO bridge), then LK_4
 -- (takeFrostmourne) at +15s, reusing the LK_STEPS tail from index 4.
 -- All MovePoint legs (intro walks, LK walk-away, Falric/Marwyn
--- intro walks, Koreln/Loralen moves): no movement bridge.
+-- intro walks, Koreln/Loralen moves): MoveTo bridges MovePoint
+-- (lua_creature_events.go:5424, round100) — legs stay out pending
+-- re-examination, not for want of a bridge.
 -- Koreln/Loralen arms: the feign-death 29266 leg is PORTED 2026-11-08
 --   (tick 492) via the instanceData mirror (korelnOrLoralen bind);
 --   the MovePoint legs stay out (no movement bridge). Frostmourne /
@@ -71,14 +76,17 @@
 --   binds falric/marwyn; the old "instance GetGuidData, no bridge"
 --   claim is retracted — the mirror IS the GetGuidData bridge, and
 --   the fetch rule is the C++ GUID fetch, not a proximity lookup).
---   The MovePoint legs in the same steps stay out (no movement
---   bridge). ProcessEvent(EVENT_SPAWN_WAVES) in LK_9 is PORTED
+--   The MovePoint legs in the same steps stay out (MoveTo bridged
+--   :5424; pending re-examination). ProcessEvent(EVENT_SPAWN_WAVES)
+--   in LK_9 is PORTED
 --   2026-11-08 (tick 492) via the Go-only signal
 --   instanceData:SetData(HOR_SETDATA_SPAWN_WAVES 1001, 0), run by the
 --   instance event-8 handler (tick 491).
 -- Instance SetData(DATA_INTRO_EVENT, DONE) is PORTED 2026-11-08
 --   (tick 492) in introEnd via the same event-8 bridge. LK
---   SetWalk(true): no SetWalk bridge, moot without movement.
+--   SetWalk(true): SetWalk IS bridged (lua_creature_events.go:4020,
+--   used in-tree by boss_the_lich_king.lua); the walk legs stay out
+--   with the MovePoint legs, pending re-examination.
 
 local ENTRY_JAINA_INTRO = 37221
 local ENTRY_SYLVANAS_INTRO = 37223

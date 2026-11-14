@@ -17,8 +17,11 @@
 -- insufficient for a sighting arm), and its gates need isInBackInMap
 -- (:104/:116, 12yd + back-arc; plain creature:IsInBack IS bridged,
 -- lua_creature_events.go:910, but the combined distance+arc call has
--- no bridge), zone/team reads and GetClosestCreature indoor/outdoor
--- branching; the teleport casts (SPELL_TRESPASSER_A/H) would also
+-- no bridge), zone/team reads (player:GetTeam lua_player.go:393,
+-- player:GetZoneId :173, player:HasAura :3019 — all bridged) and the
+-- indoor/outdoor branch (FindNearestCreature IS bridged,
+-- lua_creature_events.go:6770, covering GetClosestCreatureWithEntry —
+-- round101); the teleport casts (SPELL_TRESPASSER_A/H) would also
 -- fire on engage, not on sighting.
 -- Porting the constructor arm alone strands nothing: the guards keep
 -- their non-attackable, damage-immune posture with or without it.

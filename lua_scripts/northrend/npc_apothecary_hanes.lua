@@ -184,7 +184,10 @@ local function onReset(_, creature)
     else
         armPump(creature)
     end
-    -- C++ Reset -> Initialize() re-schedules EVENT_EMOTE_BEG at 2s.
+    -- C++ Reset -> Initialize() re-applies KNEEL (:93) and re-schedules
+    -- EVENT_EMOTE_BEG at 2s (round102: the escort never stands him in
+    -- the ported model, so the KNEEL re-apply is the live leg here).
+    creature:SetStandState(8)
     armEmote(creature)
 end
 
