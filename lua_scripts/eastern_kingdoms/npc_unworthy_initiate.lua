@@ -18,9 +18,11 @@
 -- Entries (verifiable from the C++ sources): the file's own
 -- acherus_unworthy_initiate[5] array (lines 89-96) names the five
 -- initiate entries 29519, 29520, 29565, 29566, 29567. The creature_
--- template ScriptName binding is DB-side (no TDB in this workspace),
--- but the entries themselves are C++-verifiable so the port is
--- registered for all five (boss_felblood_kaelthas precedent).
+-- template ScriptName binding is DB-side — TDB 26091 verified
+-- 2026-11-14: all five faction 7, ScriptName npc_unworthy_initiate,
+-- VerifiedBuild 12340; 12 spawns (3/2/1/3/3), all map 609, every
+-- equipment_id 0 — so the port is registered for all five
+-- (boss_felblood_kaelthas precedent).
 -- Script name is the stringified class name (CreatureScript(
 -- "npc_unworthy_initiate"); RegisterCreatureAIWithFactory
 -- convention, felblood precedent).

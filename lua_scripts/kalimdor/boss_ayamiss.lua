@@ -29,8 +29,10 @@
 --   phase per C++.
 -- - EVENT_PARALYZE: random threat-list player alive, no dist
 --   (C++ SelectTarget Random,0,0,true), DoCast 25725,
---   reschedule 15s. The larva summon + instance SetGuidData(DATA_PARALYZED)
---   have no bridge — documented below.
+--   reschedule 15s. The larva summon IS ported (onParalyze, 2026-11-14
+--   — the old "no bridge" claim was wrong: SummonCreature is
+--   bridged, same file); only the instance SetGuidData(DATA_PARALYZED)
+--   leg stays out, so the larva's FEED cast has no target.
 -- - Ground phase (event 9 damage leg, C++ UpdateAI's per-tick
 --   GetHealthPct() < 70 check): phase AIR -> GROUND,
 --   SetCombatMovement(true) (bridged, boss_ayamiss.cpp:166),
@@ -56,9 +58,13 @@
 --   bridge (onEnterCombat); C++ leaves gravity disabled in ground
 --   phase (no re-enable arm), so the port does too.
 -- - SummonCreature: SWARMER leg PORTED (below); the larva's paired
---   JustSummoned leg is a MovePoint to AltarPos — vacuous: the larva
---   is never summoned in Lua (PARALYZE ports only the cast), and the
---   MovePoint twin (MoveTo, slad'ran precedent) has no summon to carry.
+--   JustSummoned leg is a MovePoint to AltarPos — PORTED
+--   (ayamissJustSummoned, ev19, MoveTo POINT_PARALYZE, 2026-11-14);
+--   the larva walks to the altar and idles there — its MovementInform
+--   FEED (25721 on the DATA_PARALYZED player) stays out: no
+--   SetGuidData bridge stores the target and no larva AI file carries
+--   a MovementInform handler. The HORNET arm is vacuous (no summon
+--   site in the C++ tree).
 -- - EVENT_SWARMER_ATTACK PORTED 2026-10-26 (see onSwarmerAttack);
 --   the old "no bridge" claims are retracted — EngageWithTarget is
 --   the AttackStart twin (lua_creature_events.go:1463).
@@ -86,6 +92,13 @@ local ENTRY_SWARMER = 15546 -- ruins_of_ahnqiraj.h:54
 local SWARMER_POS_X = -9647.352 -- boss_ayamiss.cpp:83 SwarmerPos
 local SWARMER_POS_Y = 1578.062
 local SWARMER_POS_Z = 55.32
+
+local ENTRY_LARVA = 15555 -- ruins_of_ahnqiraj.h:53
+local LARVA_POS = { { -9674.4707, 1528.4133, 22.457 }, { -9701.6005, 1566.9993, 24.118 } } -- boss_ayamiss.cpp:69-74
+local ALTAR_POS_X = -9717.18 -- boss_ayamiss.cpp:69 AltarPos
+local ALTAR_POS_Y = 1517.72
+local ALTAR_POS_Z = 27.4677
+local POINT_PARALYZE = 2 -- boss_ayamiss.cpp:61
 
 local PHASE_AIR = 0
 local PHASE_GROUND = 1
@@ -155,6 +168,12 @@ local function onParalyze(creature, guid)
     if #candidates > 0 then
         local target = candidates[math.random(#candidates)]
         creature:CastSpell(target, SPELL_PARALYZE)
+        -- C++ EVENT_PARALYZE (boss_ayamiss.cpp:202-208) also summons
+        -- a larva at LarvaPos[urand(0,1)] (TEMPSUMMON_TIMED_OR_CORPSE_
+        -- DESPAWN, 30s); the instance SetGuidData(DATA_PARALYZED)
+        -- leg has no bridge (the FEED leg stays out, see below).
+        local pos = LARVA_POS[math.random(2)]
+        creature:SummonCreature(ENTRY_LARVA, pos[1], pos[2], pos[3], 0, 1, 30000)
     end
     schedule(guid, "paralyze", 15000, function()
         onParalyze(creature, guid)
@@ -392,3 +411,20 @@ RegisterCreatureEvent(ENTRY, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY, 4, onDied)
 RegisterCreatureEvent(ENTRY, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY, 23, onReset)
+
+-- C++ JustSummoned (boss_ayamiss.cpp:101-116): SWARMER -> track in
+-- _swarmers (already ported at the summon site in onSummonSwarmer,
+-- so the ev19 fire for swarmers is a no-op here); LARVA -> MovePoint
+-- (POINT_PARALYZE, AltarPos); HORNET -> AttackStart on a random
+-- target (vacuous: entry 15934 has no summon site anywhere in the
+-- C++ tree, enum + dead case only). The larva walks to the altar and
+-- idles: its MovementInform FEED (25721 on the DATA_PARALYZED
+-- player, npc_hive_zara_larvaAI) stays out — no SetGuidData bridge
+-- stores the target and no larva AI file carries a handler.
+local function ayamissJustSummoned(event, creature, summoned)
+    if summoned:GetEntry() == ENTRY_LARVA then
+        summoned:MoveTo(POINT_PARALYZE, ALTAR_POS_X, ALTAR_POS_Y, ALTAR_POS_Z)
+    end
+end
+
+RegisterCreatureEvent(ENTRY, 19, ayamissJustSummoned)
