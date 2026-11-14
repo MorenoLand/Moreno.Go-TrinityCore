@@ -2770,6 +2770,183 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return nil, nil
 	}
+	// resolveFollowLeader is the FollowerAI::GetLeaderForFollower
+	// (ScriptedFollowerAI.cpp) resolution shared by the follow
+	// bridges: the armed leader object when it resolves and is alive,
+	// nil otherwise. The group-migration leg (a dead leader hands off
+	// to a live group member within 100y) stays out: no
+	// group-iteration bridge exists, so a dead leader resolves to nil
+	// and the caller's watchdog despawns — the same visible outcome
+	// for a solo leader.
+	resolveFollowLeader := func() *scripting.Object {
+		s.motionMu.Lock()
+		leaderGUID := motion.FollowLeaderGUID
+		mapID, instanceID := motion.Map, motion.InstanceID
+		s.motionMu.Unlock()
+		if leaderGUID == 0 {
+			return nil
+		}
+		player := s.findPlayer(leaderGUID)
+		if player == nil {
+			return nil
+		}
+		// ObjectAccessor::GetPlayer(*me, guid) resolves in the
+		// creature's map only (SelectVictim precedent): a leader who
+		// left the map/instance is unresolvable here.
+		if sess := s.findSessionByGUID(leaderGUID); sess == nil || sess.player == nil || sess.player.Health == 0 || sess.player.Map != mapID || sess.player.InstanceID != instanceID {
+			return nil
+		}
+		return player
+	}
+	// StartFollow is FollowerAI::StartFollow (ScriptedFollowerAI.cpp):
+	// arms the follow leader, quest and INPROGRESS state on the motion
+	// record (followState* consts, kill.go), flips the faction, clears
+	// UNIT_NPC_FLAGS and the waypoint motion, and launches the follow
+	// movement at PET_FOLLOW_DIST 1.0 / PET_FOLLOW_ANGLE PI/2
+	// (PetDefines.h:84-85). The respawn-queue leg rides
+	// queueEscortRespawnTime, ordered before the engaged /
+	// already-following returns exactly as in C++ (see StartEscort).
+	// DELTA: C++ PauseMovement has no Go twin; the cleared waypoint
+	// state + armed follow slot is the visible twin.
+	methods["StartFollow"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		target, ok := args[0].(*scripting.Object)
+		if !ok || target == nil {
+			return nil, fmt.Errorf("player is required")
+		}
+		playerGUID, ok := objectUint64Field(target, "GUID")
+		if !ok || playerGUID == 0 {
+			return nil, fmt.Errorf("player is required")
+		}
+		var faction uint32
+		if len(args) >= 2 {
+			var err error
+			if faction, err = luaUint32Arg(args, 1); err != nil {
+				return nil, err
+			}
+		}
+		var quest uint32
+		if len(args) >= 3 {
+			var err error
+			if quest, err = luaUint32Arg(args, 2); err != nil {
+				return nil, err
+			}
+		}
+		s.queueEscortRespawnTime(ctx, motion)
+		s.motionMu.Lock()
+		if motion.TargetGUID != 0 {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		if motion.FollowState&followStateInProgress != 0 {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		motion.FollowLeaderGUID = playerGUID
+		motion.FollowQuestID = quest
+		motion.FollowState |= followStateInProgress
+		motion.MoveType = 0
+		motion.Moving = false
+		s.motionMu.Unlock()
+		if faction != 0 {
+			if _, err := methods["SetFaction"](ctx, []any{faction}); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := methods["SetNPCFlags"](ctx, []any{uint32(0)}); err != nil {
+			return nil, err
+		}
+		if _, err := methods["MoveFollow"](ctx, []any{target, float64(1.0), float64(math.Pi / 2)}); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	// HasFollowState is FollowerAI::HasFollowState
+	// (ScriptedFollowerAI.h:57): (_followState & mask) != 0 — true
+	// when ANY masked bit is set, so a combined INPROGRESS|PAUSED
+	// mask gates on either bit, C++-verbatim.
+	methods["HasFollowState"] = func(_ context.Context, args []any) ([]any, error) {
+		mask, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		defer s.motionMu.Unlock()
+		return []any{motion.FollowState&mask != 0}, nil
+	}
+	// SetFollowPaused is FollowerAI::SetFollowPaused
+	// (ScriptedFollowerAI.cpp): a no-op while no follow runs or the
+	// follow is COMPLETE. Pausing sets PAUSED and drops the follow
+	// motion (FOLLOW_MOTION_TYPE removal); resuming clears PAUSED and
+	// re-arms MoveFollow to the resolved leader.
+	methods["SetFollowPaused"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("paused is required")
+		}
+		paused, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("paused must be a boolean")
+		}
+		s.motionMu.Lock()
+		if motion.FollowState&followStateInProgress == 0 || motion.FollowState&followStateComplete != 0 {
+			s.motionMu.Unlock()
+			return nil, nil
+		}
+		if paused {
+			motion.FollowState |= followStatePaused
+			motion.ScriptFollowTargetGUID = 0
+			motion.ScriptFollowDist = 0
+			motion.ScriptFollowAngle = 0
+		} else {
+			motion.FollowState &^= followStatePaused
+		}
+		s.motionMu.Unlock()
+		if !paused {
+			if leader := resolveFollowLeader(); leader != nil {
+				if _, err := methods["MoveFollow"](ctx, []any{leader, float64(1.0), float64(math.Pi / 2)}); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return nil, nil
+	}
+	// GetLeaderForFollower is FollowerAI::GetLeaderForFollower
+	// (ScriptedFollowerAI.cpp): the armed leader object when it
+	// resolves and is alive, nil otherwise (see resolveFollowLeader).
+	methods["GetLeaderForFollower"] = func(_ context.Context, _ []any) ([]any, error) {
+		if leader := resolveFollowLeader(); leader != nil {
+			return []any{leader}, nil
+		}
+		return []any{nil}, nil
+	}
+	// SetFollowComplete is FollowerAI::SetFollowComplete
+	// (ScriptedFollowerAI.cpp): drops the follow motion and adds the
+	// COMPLETE bit (INPROGRESS stays set — the UpdateAI watchdog reads
+	// COMPLETE && !POSTEVENT). withEndEvent adds POSTEVENT instead of
+	// clearing it.
+	methods["SetFollowComplete"] = func(_ context.Context, args []any) ([]any, error) {
+		withEndEvent := false
+		if len(args) >= 1 {
+			var ok bool
+			if withEndEvent, ok = args[0].(bool); !ok {
+				return nil, fmt.Errorf("withEndEvent must be a boolean")
+			}
+		}
+		s.motionMu.Lock()
+		motion.ScriptFollowTargetGUID = 0
+		motion.ScriptFollowDist = 0
+		motion.ScriptFollowAngle = 0
+		if withEndEvent {
+			motion.FollowState |= followStatePostEvent
+		} else {
+			motion.FollowState &^= followStatePostEvent
+		}
+		motion.FollowState |= followStateComplete
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	// GetLootRecipient is CreatureMethods::GetLootRecipient: the tapping
 	// player object, nil when untapped (Eluna::Push((Player*)nullptr)).
 	// Handler-surface twin of the session binding (lua_objects.go:990).
