@@ -32,7 +32,7 @@
 --   HITCOUNTER_FREEZE: counter = 0, Talk(EMOTE_FROZEN 2),
 --   _phase = PHASE_MELEE (2), DoCast FREEZE 25937,
 --   RemoveAura(SLOWED_MORE), ScheduleEvent(EVENT_RESET_PHASE, 15s)
---   (UpdateAI :269-272 resets counter/phase to FROST). Thresholds
+--   (UpdateAI :243-246 resets counter/phase to FROST). Thresholds
 --   are >= with an else-if chain, so the SLOW/SLOW_MORE legs re-fire
 --   on EVERY hit in range (no once-guard) — a port would replicate
 --   that, not a one-shot.
@@ -67,7 +67,7 @@
 --   EXPLODE 150 + Talk 5, self-cast VISCIDUS_EXPLODE 25938,
 --   SetVisible(false), RemoveAura(TOXIN/FREEZE)) is dead code here
 --   — documented, not ported. (HasUnitState(MELEE_ATTACKING) IS
---   bridged — lua_creature_events.go:2476, state 0x2,
+--   bridged — lua_creature_events.go:2489, state 0x2,
 --   lua_unit_state.go:182 — and creature:SummonCreature is live
 --   (onyxia whelp/lair-guard legs); the blocker is the PHASE_MELEE
 --   gate itself, chained on the row-43 frost-school SpellHit gate.

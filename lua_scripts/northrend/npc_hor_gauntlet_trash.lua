@@ -87,15 +87,18 @@
 -- EVENT_ICE_SHOT (:1831-1835) — random player within 40 yd, cast
 --   72268 (:1841), re-arm 15000ms (:1842).
 --
--- DOCUMENTED-ONLY (no registration beyond the five entries above):
--- npc_phantom_hallucination (C++ :1649-1679) — inherits the
---   phantom-mage AI and adds JustDied DoCastAOE(SPELL_HALLUCINATION_2
---   72344) (:1667-1671); its entry is data-driven (summoned by
---   SPELL_HALLUCINATION 72342; no NPC_ constant in
---   halls_of_reflection.h), so nothing is registered (the
---   moroes/valithria add-registration rule). Its Reset's
---   DoZoneInCombat (:1655-1658) and the owner-aura EnterEvadeMode
---   guard (:1660-1665) have no bridges.
+-- PORTED 2026-11-13 (round 58, R58-1): npc_phantom_hallucination
+-- (C++ :1649-1679) — entry 38567 TDB-verified ('Phantom Hallucination',
+-- ScriptName 'npc_phantom_hallucination', 0 spawns, summon-only via
+-- 72342). Reset DoZoneInCombat (:1655-1658) rides ev23
+-- (hallucinationReset below, no Well of Souls cast — the override
+-- replaces the base Reset); JustDied DoCastAOE 72344 (:1667-1671)
+-- rides ev4 (hallucinationDied); the owner-aura EnterEvadeMode guard
+-- (:1660-1665) rides ev2 (hallucinationEvade, via GetSummonerUnit —
+-- GetOwner resolves players only); the mage rotation rides ev1
+-- (mageEngaged). The old "no bridges / nothing is registered" note
+-- is retracted: DoZoneInCombat is bridged (lua_creature_events.go:2268)
+-- and the TDB row supplies the entry.
 -- npc_gauntlet_trash::Reset (C++ :1470-1474) — PORTED 2026-11-08
 --   (tick 492): the triggered self-cast SPELL_WELL_OF_SOULS 72630
 --   (halls_of_reflection.h :157) rides ev23 (trashReset below). The
@@ -148,7 +151,8 @@ local SPELL_WELL_OF_SOULS         = 72630
 local DATA_WAVE_COUNT             = 6 -- halls_of_reflection.h:45
 local BOSS_STATE_NOT_STARTED      = 0 -- InstanceScript.h:68-76
 
-local SPELL_SHADOW_WORD_PAIN      = 72318
+local ENTRY_PHANTOM_HALLUCINATION = 38567
+local SPELL_HALLUCINATION_2       = 72344
 local SPELL_CIRCLE_OF_DESTRUCTION = 72320
 local SPELL_COWER_IN_FEAR         = 72321
 local SPELL_FIREBALL              = 72163
@@ -413,6 +417,53 @@ local function mageReset(event, creature)
     trashReset(event, creature)
 end
 
+-- Phantom hallucination ------------------------------------------------
+-- C++ npc_phantom_hallucinationAI :1649-1679 inherits the mage AI:
+-- the mage rotation rides ev1 (mageEngaged above); the mage evade
+-- guard rides ev2 through hallucinationEvade below. Entry
+-- TDB-verified: 38567 'Phantom Hallucination', ScriptName
+-- 'npc_phantom_hallucination', 0 static spawns (summon-only, via
+-- SPELL_HALLUCINATION 72342). Caveat: the 72342 summon-effect target
+-- was not re-read from DBC here (not in the 63-record seed
+-- Spell.dbc); the registration fires only if the live DBC's 72342
+-- summons 38567.
+--
+-- C++ Reset :1655-1658: DoZoneInCombat(me) ONLY — the hallucination
+-- overrides the base gauntlet_trash Reset, so no Well of Souls cast.
+-- Go fires ev23 on evade too (On_Reset-first order); C++ base
+-- EnterEvadeMode calls Reset() (CreatureAI.cpp:214) but the
+-- gauntlet_trash override does not, so on evade this re-engages the
+-- zone where C++ would not — same accepted pattern as the mage's
+-- Well-of-Souls re-cast on evade, noted here because the effect is
+-- combat, not a visual.
+local function hallucinationReset(event, creature)
+    creature:DoZoneInCombat()
+end
+
+-- C++ EnterEvadeMode :1660-1665: if the owner (the summoning mage)
+-- exists and lacks AURA_HALLUCINATION, run the mage evade; otherwise
+-- skip the whole evade. creature:GetOwner() cannot serve here — it
+-- resolves player sessions only — so the summoner comes from
+-- creature:GetSummonerUnit() (TempSummon::GetSummonerUnit,
+-- lua_creature_events.go:5940).
+local function hallucinationEvade(event, creature)
+    local summoner = creature:GetSummonerUnit()
+    if summoner and not summoner:HasAura(AURA_HALLUCINATION) then
+        return mageEvade(event, creature)
+    end
+    if event == 2 then
+        return true
+    end
+end
+
+-- C++ JustDied :1667-1671: DoCastAOE(SPELL_HALLUCINATION_2 72344) =
+-- self-cast; the timer cancel is the port's ev4 bookkeeping, as in
+-- onLeaveOrDiedOrReset for the other five entries.
+local function hallucinationDied(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+    creature:CastSpell(creature, SPELL_HALLUCINATION_2)
+end
+
 -- Shadowy mercenary ----------------------------------------------------
 -- C++ :1710-1714: random player 100 yd, cast 72326, re-arm 8000.
 local function mercenaryShadowStep(creature, guid)
@@ -609,3 +660,8 @@ RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 1, riflemanEngaged)
 RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 2, trashEvade)
 RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 4, onLeaveOrDiedOrReset)
 RegisterCreatureEvent(ENTRY_TORTURED_RIFLEMAN, 23, trashReset)
+
+RegisterCreatureEvent(ENTRY_PHANTOM_HALLUCINATION, 1, mageEngaged)
+RegisterCreatureEvent(ENTRY_PHANTOM_HALLUCINATION, 2, hallucinationEvade)
+RegisterCreatureEvent(ENTRY_PHANTOM_HALLUCINATION, 4, hallucinationDied)
+RegisterCreatureEvent(ENTRY_PHANTOM_HALLUCINATION, 23, hallucinationReset)

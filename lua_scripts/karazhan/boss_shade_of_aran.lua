@@ -25,8 +25,9 @@
 -- from the cast point), or circular blizzard. Below 40% health once, four
 -- water elementals; at 12 minutes and every 60s after, 5 shadow-of-Aran
 -- summons (Talk + summon + Attack via EngageWithTarget). The drink/potion/pyroblast mana sequence needs
--- mana to drain; the repo carries no Spell.dbc, so creature spell costs
--- resolve to 0 and the mana pool never moves — see deviations.
+-- mana to drain; only a 63-record seed Spell.dbc ships and none of
+-- Aran's 17 spells is in it, so creature spell costs resolve to 0 and
+-- the mana pool never moves — see deviations.
 -- Deviations from C++: the 4 water elementals (17167) ARE summoned now
 -- (2026-10-22 summon bridge — creature:SummonCreature on the handler
 -- surface; type 2 TIMED_DESPAWN, 90s) and their Attack(victim, true)
@@ -53,7 +54,7 @@
 -- drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink 30024,
 -- potion 32453, AOE pyroblast 29978, the drink-interrupt damage hook, the
 -- 10s interrupt timer) is skipped anyway: creature casts deduct no mana
--- (no Spell.dbc, costs resolve to 0), so the C++ "< 20% mana" trigger can
+-- (none of Aran's spells is in the seed Spell.dbc, costs resolve to 0), so the C++ "< 20% mana" trigger can
 -- never fire and a port would be dead code; SAY_4 never fires.
 -- The drink aura's periodic mana refill has no tick executor in Go, so
 -- the machine's refill model (drink ticks + SetPower(max-32000)) cannot be
@@ -460,9 +461,8 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 4, aranDied)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 23, aranReset)
 
 -- Water elemental (npc_aran_elemental, C++ ScriptName for 17167): casts
--- waterbolt 31012 on its victim every 2-5s. The elementals themselves are
--- never summoned (no summon model), but the AI is registered so any that
--- exist fight correctly.
+-- waterbolt 31012 on its victim every 2-5s. The elementals ARE summoned
+-- (2026-10-22 summon bridge; see deviations) and fight via this AI.
 local onWaterbolt
 
 local function elementalEnterCombat(event, creature, target)
