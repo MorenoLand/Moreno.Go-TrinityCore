@@ -24,17 +24,19 @@
 -- 58854; 10 Talk(SAY_BRANN_2 1, player) + KilledMonsterCredit
 -- (31810); 11 SetFacingTo(2.932153) + Talk(SAY_BRANN_3 2, player);
 -- 13 DisappearAndDie via the halazzi Despawn twin.
--- Step 11's GameObject Delete leg stays out, refined 2026-10-24:
--- no GO-by-GUID lookup exists, and FindNearestGameObject is
--- DB-table-only (lua_objects.go nearestGameObjectByEntry queries
+-- Stays out, documented: step 11's GameObject Delete leg, refined
+-- 2026-10-24: no GO-by-GUID lookup exists, and FindNearestGameObject
+-- is DB-table-only (lua_objects.go nearestGameObjectByEntry queries
 -- the gameobject table), so the Lua-summoned signals are not
 -- findable by entry either — the five signals persist past step
 -- 11 instead of despawning (their summon legs port).
--- Stays out, documented: steps 2 and 12 are movement-only
--- (SetWalk + MovePoint) and MovePoint/SetWalk have no bridge on
--- the creature event surface (storm_cloud precedent) — those steps
--- are pure delays preserving step timing; the MotionMaster Clear
--- in step 12 likewise has no bridge.
+-- Steps 2 and 12 port this tick: SetWalk IS bridged
+-- (lua_creature_events.go:4227, Creature::SetWalk twin) and
+-- creature:MoveTo is the MovePoint twin (no MovementInform in the
+-- C++ AI — both legs are pure timer-driven steps, no ev28 gate);
+-- the step-12 MotionMaster Clear is subsumed by the MoveTo (it
+-- replaces the generator; the step-2 walk finished in its 6s
+-- window, so Clear is a no-op by step 12).
 -- The C++ signal orientations are carried as the Lua o argument
 -- (the quaternion leg has no Lua twin). OnDied(4)/OnReset(23)
 -- cancel the chain and drop state, the twin of the C++ Reset
@@ -110,7 +112,10 @@ runStep = function(creature, guid, step)
             VOICE_Z, VOICE_O, 0, 49000)
         scheduleStep(creature, guid, 2, 4000)
     elseif step == 2 then
-        -- SetWalk(true) + MovePoint: no movement bridge, delay only.
+        -- C++ :529-532: SetWalk(true) + MovePoint(0, 7861.488,
+        -- -1396.376, 1534.059); no MovementInform in the C++ AI.
+        creature:SetWalk(true)
+        creature:MoveTo(0, 7861.488, -1396.376, 1534.059)
         scheduleStep(creature, guid, 3, 6000)
     elseif step == 3 then
         creature:EmoteState(EMOTE_STATE_WORK_MINING)
@@ -159,8 +164,12 @@ runStep = function(creature, guid, step)
         -- are not findable by entry).
         scheduleStep(creature, guid, 12, 6000)
     elseif step == 12 then
-        -- MotionMaster Clear + SetWalk(false) + MovePoint: no
-        -- movement bridge, delay only.
+        -- C++ :597-600: MotionMaster Clear (subsumed by the MoveTo
+        -- below, which replaces the generator) + SetWalk(false) +
+        -- MovePoint(0, 7799.908, -1413.561, 1534.829); no
+        -- MovementInform in the C++ AI.
+        creature:SetWalk(false)
+        creature:MoveTo(0, 7799.908, -1413.561, 1534.829)
         scheduleStep(creature, guid, 13, 10000)
     elseif step == 13 then
         brannState[guid] = nil

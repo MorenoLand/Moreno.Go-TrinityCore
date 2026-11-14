@@ -18,13 +18,22 @@
 -- then the fly phase: Rain of Bones after a breath emote, Smoking Blast
 -- 1400ms, Smoking Blast target-cast 5-7s, landing ~33s later, and the
 -- ground phase is re-armed on touchdown.
--- Deviations from C++: the engine has no spline-chain model, so the
--- intro flight path (ACTION_SUMMON / DoAction) and the fly-to-landing /
--- return spline travels are approximated as 5s delays; the MovePoint
--- legs PORT via creature:MoveTo + ev28 (nearest-of-three pre-fly choice,
--- POINT_PHASE_TWO_FLY arrival seeding the fly timers — 2026-11-14
--- re-triage of the stale "no MovePoint bridge" claim, onyxia precedent);
--- liftoff/land emotes
+-- Deviations from C++: the intro flight path (ACTION_SUMMON /
+-- DoAction) stays out — its machine (EMOTE_SUMMON, IMMUNE_TO_PC until
+-- landing, DoZoneInCombat) is unported, so the port starts directly
+-- at the landing combat state. The phase-two spline travels PORT via
+-- creature:MoveAlongSplineChain + ev28 (SPLINE_CHAIN_MOTION_TYPE 17)
+-- — EVENT_LAND launches chain 5 (POINT_PHASE_TWO_END), whose arrival
+-- schedules EVENT_END_PHASE_TWO in 1ms, which launches chain 4
+-- (POINT_PHASE_TWO_LANDING), whose arrival sets PHASE_GROUND, drops
+-- gravity, plays the land emote and schedules EVENT_LANDED in 3s
+-- (2026-11-14 re-triage of the stale "no spline-chain model" claim;
+-- chains seeded by sql update 2026111402, TDB 26091 verbatim; the
+-- bridge returns false with no DB rows and the Lua falls back to
+-- the old 5s timers). The MovePoint legs port via creature:MoveTo +
+-- ev28 (nearest-of-three pre-fly choice, POINT_PHASE_TWO_FLY arrival
+-- seeding the fly timers — 2026-11-14 re-triage of the stale "no
+-- MovePoint bridge" claim, onyxia precedent); liftoff/land emotes
 -- port via creature:PerformEmote (254/293), and the react-state flips
 -- port via the bridged creature:SetReactState (startPhaseFly ->
 -- REACT_PASSIVE, onLanded -> REACT_AGGRESSIVE) — suppressing engine
@@ -77,7 +86,10 @@ local FLY_POSITION = { -11160.13, -1870.683, 97.73876 }
 local FLY_POSITION_LEFT = { -11094.42, -1866.992, 107.8375 }
 local FLY_POSITION_RIGHT = { -11193.77, -1921.983, 107.9845 }
 local POINT_PHASE_TWO_FLY, POINT_PHASE_TWO_PRE_FLY = 3, 4
+local POINT_PHASE_TWO_LANDING, POINT_PHASE_TWO_END = 5, 6
+local SPLINE_CHAIN_SECOND_LANDING, SPLINE_CHAIN_PHASE_TWO = 4, 5
 local POINT_MOTION_TYPE = 8
+local SPLINE_CHAIN_MOTION_TYPE = 17 -- MovementDefines.h:45
 
 local PHASE_GROUND, PHASE_FLY = 1, 2
 
@@ -262,20 +274,35 @@ local function onLanded(creature, guid)
     creature:SetReactState(2) -- REACT_AGGRESSIVE
 end
 
+-- C++ MovementInform SPLINE_CHAIN POINT_PHASE_TWO_LANDING arrival
+-- (boss_nightbane.cpp:225-229): SetPhase(PHASE_GROUND),
+-- me->SetDisableGravity(false) (:226), then
+-- me->HandleEmoteCommand(EMOTE_ONESHOT_LAND) (SharedDefines.h:2007,
+-- value 293), before the 3s EVENT_LANDED schedule.
+local function onPhaseTwoLanding(creature, guid)
+    local st = nightbaneState[guid]
+    if st == nil then
+        return
+    end
+    st.phase = PHASE_GROUND
+    creature:SetDisableGravity(false) -- C++ :226, before the land emote
+    creature:PerformEmote(293)
+    schedule(guid, "f_landed", 3000, function() onLanded(creature, guid) end)
+end
+
 local function onEndPhaseTwo(creature, guid)
     if nightbaneState[guid] == nil then
         return
     end
-    -- C++ MovementInform POINT_PHASE_TWO_LANDING arrival
-    -- (boss_nightbane.cpp:224-229): SetPhase(PHASE_GROUND),
-    -- me->SetDisableGravity(false) (:225), then
-    -- me->HandleEmoteCommand(EMOTE_ONESHOT_LAND) (SharedDefines.h:2007,
-    -- value 293), before the 3s EVENT_LANDED schedule.
-    creature:SetDisableGravity(false) -- C++ :225, before the land emote
-    creature:PerformEmote(293)
-    -- C++ MoveAlongSplineChain(POINT_PHASE_TWO_LANDING, ...) arrival —
-    -- 5s approximates the descent with no movement model.
-    schedule(guid, "f_landed", 5000, function() onLanded(creature, guid) end)
+    -- C++ EVENT_END_PHASE_TWO (boss_nightbane.cpp:298-299):
+    -- MoveAlongSplineChain(POINT_PHASE_TWO_LANDING,
+    -- SPLINE_CHAIN_SECOND_LANDING, false); arrival lands on ev28
+    -- (SPLINE_CHAIN, 5) -> onPhaseTwoLanding above. The bridge
+    -- returns false when the DB carries no chain rows (sql update
+    -- 2026111402 seeds them); the 5s timer is the fallback.
+    if not creature:MoveAlongSplineChain(POINT_PHASE_TWO_LANDING, SPLINE_CHAIN_SECOND_LANDING, false) then
+        schedule(guid, "f_landed", 5000, function() onPhaseTwoLanding(creature, guid) end)
+    end
 end
 
 local function onLand(creature, guid)
@@ -283,15 +310,17 @@ local function onLand(creature, guid)
         return
     end
     creature:Talk(YELL_LAND_PHASE)
-    -- C++ EVENT_LAND (boss_nightbane.cpp:304-308): Talk(YELL_LAND_PHASE),
+    -- C++ EVENT_LAND (boss_nightbane.cpp:305-308): Talk(YELL_LAND_PHASE),
     -- me->SetDisableGravity(true) (:306) — already true since
     -- startPhaseFly, idempotent but C++-order-exact — then the
-    -- MoveAlongSplineChain(POINT_PHASE_TWO_END) whose arrival is
-    -- approximated below.
+    -- MoveAlongSplineChain(POINT_PHASE_TWO_END, SPLINE_CHAIN_PHASE_TWO,
+    -- false); arrival lands on ev28 (SPLINE_CHAIN, 6) -> EVENT_END_PHASE_TWO
+    -- in 1ms. The bridge returns false with no DB rows (sql update
+    -- 2026111402 seeds them); the 5s timer is the fallback.
     creature:SetDisableGravity(true)
-    -- C++ MoveAlongSplineChain(POINT_PHASE_TWO_END, SPLINE_CHAIN_PHASE_TWO)
-    -- arrival — 5s approximates the return flight with no movement model.
-    schedule(guid, "f_endphasetwo", 5000, function() onEndPhaseTwo(creature, guid) end)
+    if not creature:MoveAlongSplineChain(POINT_PHASE_TWO_END, SPLINE_CHAIN_PHASE_TWO, false) then
+        schedule(guid, "f_endphasetwo", 5000, function() onEndPhaseTwo(creature, guid) end)
+    end
 end
 
 local function onPreLand(creature, guid)
@@ -350,8 +379,9 @@ local function startPhaseFly(creature, guid)
     -- Talk(YELL_FLY_PHASE), cancel ground group, interrupt casts,
     -- liftoff emote, gravity on, SetReactState(REACT_PASSIVE) (:260),
     -- AttackStop (:261), MovePoint — C++ arm order kept for the modeled
-    -- legs (the intro SPLINE_CHAIN still has no bridge). PASSIVE while
-    -- airborne: the engine's isCreaturePassive gate suppresses melee
+    -- legs (the intro spline chains ride the unported ACTION_SUMMON
+    -- machine, not a missing bridge — MoveAlongSplineChain is bridged).
+    -- PASSIVE while airborne: the engine's isCreaturePassive gate suppresses melee
     -- during the fly-phase timer chain, matching C++ (no melee mid-air).
     creature:SetDisableGravity(true) -- C++ :258, between emote and react
     creature:SetReactState(0) -- REACT_PASSIVE
@@ -387,12 +417,11 @@ local function nightbaneEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     nightbaneInitState(guid)
-    -- The intro (ACTION_SUMMON spline chain, IMMUNE_TO_PC, DoZoneInCombat)
-    -- is skipped — no spline-chain bridge (stale 'no gameobject-gossip
-    -- bridge' retracted — RegisterGameObjectGossipEvent bridged,
-    -- engine/world/gameobject_hooks.go) — so combat
-    -- starts directly at the landing state: Talk + SetupGroundPhase, like
-    -- C++ JustEngagedWith.
+    -- The intro (ACTION_SUMMON spline chains 1-3, IMMUNE_TO_PC,
+    -- DoZoneInCombat) is skipped — the machine is unported, not the
+    -- bridge (MoveAlongSplineChain is bridged; chains 1-3 seed with
+    -- sql update 2026111402) — so combat starts directly at the
+    -- landing state: Talk + SetupGroundPhase, like C++ JustEngagedWith.
     creature:Talk(YELL_AGGRO)
     setupGroundPhase(creature, guid)
 end
@@ -493,19 +522,29 @@ local function nightbaneDamageTaken(event, creature, attacker, damage)
     return false, newDamage
 end
 
--- C++ MovementInform POINT_MOTION_TYPE (boss_nightbane.cpp:238-249):
+-- C++ MovementInform (boss_nightbane.cpp:214-249): POINT_MOTION_TYPE
 -- POINT_PHASE_TWO_FLY arrival seeds the fly timers (onFlyArrived);
 -- POINT_PHASE_TWO_PRE_FLY arrival schedules EVENT_PRE_FLY_END (1ms),
--- whose MovePoint(POINT_PHASE_TWO_FLY) re-enters here. Gated on
+-- whose MovePoint(POINT_PHASE_TWO_FLY) re-enters here. SPLINE_CHAIN
+-- POINT_PHASE_TWO_END arrival schedules EVENT_END_PHASE_TWO (1ms);
+-- POINT_PHASE_TWO_LANDING arrival is the touchdown leg. Gated on
 -- PHASE_FLY: a spline still in flight when the boss evades is dropped
 -- (nightbaneLeaveCombat resets phase to GROUND).
 local function nightbaneMovementInform(event, creature, moveType, pointId)
-    if moveType ~= POINT_MOTION_TYPE then
-        return
-    end
     local guid = creature:GetGUIDLow()
     local st = nightbaneState[guid]
     if st == nil or st.phase ~= PHASE_FLY then
+        return
+    end
+    if moveType == SPLINE_CHAIN_MOTION_TYPE then
+        if pointId == POINT_PHASE_TWO_END then
+            schedule(guid, "f_endphasetwo", 1, function() onEndPhaseTwo(creature, guid) end)
+        elseif pointId == POINT_PHASE_TWO_LANDING then
+            onPhaseTwoLanding(creature, guid)
+        end
+        return
+    end
+    if moveType ~= POINT_MOTION_TYPE then
         return
     end
     if pointId == POINT_PHASE_TWO_FLY then

@@ -15742,9 +15742,11 @@ func init() {
 	// Talk / voice-resurrection / signal-summon / kill-credit /
 	// facing / Despawn steps port (zone_storm_peaks.cpp:474-624) —
 	// see lua_scripts/northrend/npc_brann_bronzebeard_keystone.lua.
-	// The SetWalk/MovePoint locomotion steps and the step-11 signal
-	// Delete leg stay documented-only (no movement or GO-by-GUID
-	// bridge). Entry 31810 verifiable from the file's own enum.
+	// The SetWalk/MovePoint locomotion steps port
+	// (lua_creature_events.go SetWalk + MoveTo twins); only the
+	// step-11 signal Delete leg stays documented-only (no
+	// GO-by-GUID bridge). Entry 31810 verifiable from the file's
+	// own enum.
 	RegisterLuaBoss("npc_brann_bronzebeard_keystone", 31810)
 	// npc_brunnhildar_prisoner (Storm Peaks zone script): Reset
 	// self-cast Ice Prison (54894) + SpellHit Ice Lance (55046)
