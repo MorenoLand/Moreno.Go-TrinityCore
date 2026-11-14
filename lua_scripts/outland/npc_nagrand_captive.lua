@@ -100,9 +100,11 @@
 --   have no rows and stay silent. Talk ids are ported
 --   C++-verbatim -- C++ itself reads the same rows against
 --   this DB. Maghar 18210 groups 0-4 map clean.
--- - Totem ev19 gate is moot in Go: totems.go summonTotem
---   fires no JustSummoned event, so the totem never reaches
---   ev19; the entry-2630 guard stays as C++-faithful defense.
+-- - Totem ev19 gate is LIVE (15786 seeded): the creature path
+--   fires ev19 via summonTempCreature (lua_creature_events.go:
+--   190), so the summoned earthbind totem reaches ev19 and the
+--   entry-2630 guard skips it; only the player summonTotem path
+--   fires no ev19 (and players have no AI to notify).
 -- - C++ Start() while-engaged / already-escorting error
 --   returns have no Go twin (StartEscort only arms the GUID);
 --   a re-accept guard is a Lua-side latch (none needed: the

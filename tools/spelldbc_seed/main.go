@@ -48,71 +48,72 @@ func writeWDBC(path string, fieldCount int, rows [][]uint32) error {
 func f32(v float32) uint32 { return math.Float32bits(v) }
 
 const (
-	effSchoolDamage           = 2
-	effDummy                  = 3
-	effApplyAura              = 6
-	effHealthLeech            = 9
-	effSummon                 = 28
-	effPersistentAreaAura     = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
-	effEnergize               = 30
-	effTriggerMiss            = 32
-	effSendEvent              = 61
-	effTriggerSpell           = 64
-	effScriptEffect           = 77
-	effActivateObj            = 86
-	effCharge                 = 96
-	effKnockBack              = 98
-	effKillCredit2            = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
-	effWeaponDamage           = 58
-	effHealMaxHealth          = 67 // SPELL_EFFECT_HEAL_MAX_HEALTH
-	auraPeriodicDmg           = 3
-	auraDummy                 = 4
-	auraStun                  = 12
-	auraModInvisibility       = 18 // SPELL_AURA_MOD_INVISIBILITY
-	auraPeriodicTrig          = 23
-	auraRoot                  = 26
-	auraSilence               = 27
-	auraModIncreaseSpeed      = 31 // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
-	auraDecSpeed              = 33
-	auraEffImmunity           = 37
-	auraTransform             = 56
-	auraModScale              = 61
-	auraModDmgDone            = 79
-	auraModDmgTaken           = 87
-	auraModResistPct          = 101
-	auraModMeleeHaste         = 138
-	auraModTotalStatPct       = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
-	auraPeriodicDummy         = 226
-	auraControlVehicle        = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
-	auraLinked                = 284
-	auraPreventRegen          = 294
-	schoolPhysical            = 1
-	schoolFire                = 4
-	schoolNature              = 8
-	schoolFrost               = 16
-	schoolShadow              = 32
-	schoolArcane              = 64
-	targetCaster              = 1
-	targetEnemy               = 6
-	targetSrcAreaEnemy        = 15
-	targetDestCaster          = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
-	targetUnitDestAreaEnemy   = 16 // TARGET_UNIT_DEST_AREA_ENEMY
-	targetDestCasterBackRight = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
-	targetDestCasterSummon    = 32 // TARGET_DEST_CASTER_SUMMON
-	targetDestCasterRadius    = 73 // TARGET_DEST_CASTER_RADIUS
-	targetUnitTargetAny       = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
-	targetDestTargetAny       = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
-	targetDestTargetEnemy     = 53 // TARGET_DEST_TARGET_ENEMY
-	targetSrcCaster           = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
-	targetUnitSrcAreaAlly     = 30 // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
-	targetUnitSrcAreaEntry    = 7  // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
-	targetUnitNearbyEntry     = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
-	targetGONearbyEntry       = 40
-	auraAddPctModifier        = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
-	spellModDamage            = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
-	spellModEffect1           = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
-	familyShaman              = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
-	familyMage                = 3   // SPELLFAMILY_MAGE (SpellClassOptions SpellClassSet 3, wago 3.4.0.43659)
+	effSchoolDamage            = 2
+	effDummy                   = 3
+	effApplyAura               = 6
+	effHealthLeech             = 9
+	effSummon                  = 28
+	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
+	effEnergize                = 30
+	effTriggerMiss             = 32
+	effSendEvent               = 61
+	effTriggerSpell            = 64
+	effScriptEffect            = 77
+	effActivateObj             = 86
+	effCharge                  = 96
+	effKnockBack               = 98
+	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
+	effWeaponDamage            = 58
+	effHealMaxHealth           = 67 // SPELL_EFFECT_HEAL_MAX_HEALTH
+	auraPeriodicDmg            = 3
+	auraDummy                  = 4
+	auraStun                   = 12
+	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
+	auraPeriodicTrig           = 23
+	auraRoot                   = 26
+	auraSilence                = 27
+	auraModIncreaseSpeed       = 31 // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
+	auraDecSpeed               = 33
+	auraEffImmunity            = 37
+	auraTransform              = 56
+	auraModScale               = 61
+	auraModDmgDone             = 79
+	auraModDmgTaken            = 87
+	auraModResistPct           = 101
+	auraModMeleeHaste          = 138
+	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
+	auraPeriodicDummy          = 226
+	auraControlVehicle         = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
+	auraLinked                 = 284
+	auraPreventRegen           = 294
+	schoolPhysical             = 1
+	schoolFire                 = 4
+	schoolNature               = 8
+	schoolFrost                = 16
+	schoolShadow               = 32
+	schoolArcane               = 64
+	targetCaster               = 1
+	targetEnemy                = 6
+	targetSrcAreaEnemy         = 15
+	targetDestCaster           = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetUnitDestAreaEnemy    = 16 // TARGET_UNIT_DEST_AREA_ENEMY
+	targetDestCasterBackRight  = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
+	targetDestCasterFrontRight = 41 // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
+	targetDestCasterSummon     = 32 // TARGET_DEST_CASTER_SUMMON
+	targetDestCasterRadius     = 73 // TARGET_DEST_CASTER_RADIUS
+	targetUnitTargetAny        = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
+	targetDestTargetAny        = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
+	targetDestTargetEnemy      = 53 // TARGET_DEST_TARGET_ENEMY
+	targetSrcCaster            = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
+	targetUnitSrcAreaAlly      = 30 // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
+	targetUnitSrcAreaEntry     = 7  // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
+	targetUnitNearbyEntry      = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
+	targetGONearbyEntry        = 40
+	auraAddPctModifier         = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
+	spellModDamage             = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
+	spellModEffect1            = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
+	familyShaman               = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
+	familyMage                 = 3   // SPELLFAMILY_MAGE (SpellClassOptions SpellClassSet 3, wago 3.4.0.43659)
 )
 
 type effect struct {
@@ -571,6 +572,24 @@ var spells = []spell{
 	// BasePoints*0.1 = speedZ; 62659 precedent).
 	{id: 65100, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effKnockBack, dieSides: 1, basePoints: 99, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, misc: 200}}},
 
+	// 15786 Earthbind Totem (zone_nagrand.cpp:99/:287, captive
+	// escort totem cast) — wago.tools 3.4.0.43659 Spell/SpellEffect/
+	// SpellMisc rows, 2026-11-14 verdict: single effect 28 SUMMON,
+	// DieSides 1, BasePoints 4 (CalcValue +1 = 5, matching Wowhead
+	// "Value: 5"), TargetA 41 (TARGET_DEST_CASTER_FRONT_RIGHT),
+	// TargetB 0, RadiusIndex 0 (no SpellRadius row), MiscValue 2630
+	// (Earthbind Totem entry, TDB 26091), MiscValueB 81
+	// (SummonProperties 81 — real row seeded below, wago.tools
+	// 3.4.0.43659: Control 1/Guardian, Faction 0, Title 4/TOTEM,
+	// Slot 2, Flags_0 0x100002); DurationIndex 22 (45000 ms, seeded
+	// real row below), RangeIndex 1 (Self Only, 0-0 yd = synthetic
+	// 93001's value), SchoolMask 0x8 (nature), CastingTimeIndex 1
+	// (instant, default 0). The 50% slow is the totem creature's
+	// own aura, not an effect of this spell. Creature path live in
+	// Go (boss_ai.go creatureEffectSummonType -> summonTempCreature
+	// -> ev19, entry-2630 skip in npc_nagrand_captive.lua).
+	{id: 15786, durIdx: 22, rangeIdx: 93001, school: schoolNature, effects: [3]effect{{effect: effSummon, dieSides: 1, basePoints: 4, targetA: targetDestCasterFrontRight, misc: 2630, miscB: 81}}},
+
 	// Felblood Kael'thas phoenix spells (boss_felblood_kaelthas.cpp
 	// enum :62-78) — wago.tools 3.4.0.43659 Spell/SpellEffect/
 	// SpellMisc rows, 2026-11-14 verdict. All RangeIndex 1 (Self Only,
@@ -778,6 +797,7 @@ func main() {
 		{28, 5000, 0, 5000},             // real SpellDuration 28 for 31308 (wago.tools 3.4.0.43659)
 		{21, 0xFFFFFFFF, 0, 0xFFFFFFFF}, // real SpellDuration 21 (-1 infinite) for 68415
 		{32, 6000, 0, 6000},             // real SpellDuration 32 for 54690 (wago.tools 3.4.0.43659)
+		{22, 45000, 0, 45000},           // real SpellDuration 22 for 15786 (wago.tools 3.4.0.43659)
 		{90001, 2000, 0, 2000},
 		{90002, 6000, 0, 6000},
 		{90003, 8000, 0, 8000},
@@ -860,8 +880,10 @@ func main() {
 	// client data ships. Row 61 is REAL (wago.tools 3.4.0.43659
 	// SummonProperties: Control 1/Guardian, Faction 0, Title 2,
 	// Slot 0, Flags_0 0x2; Flags_1 0x0 is not encoded — the seed has
-	// one Flags field).
-	summonProps := [][]uint32{{64, 0, 14, 2, 0, 0}, {61, 1, 0, 2, 0, 2}}
+	// one Flags field). Row 81 is REAL (wago.tools 3.4.0.43659
+	// SummonProperties: Control 1/Guardian, Faction 0, Title 4/
+	// TOTEM, Slot 2 (earth totem), Flags_0 0x100002).
+	summonProps := [][]uint32{{64, 0, 14, 2, 0, 0}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}}
 	if err := writeWDBC(filepath.Join(out, "SummonProperties.dbc"), 6, summonProps); err != nil {
 		panic(err)
 	}
