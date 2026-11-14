@@ -31,7 +31,7 @@
 --   1); wp4/14/43 summon boar 4514 (TEMPSUMMON_TIMED_DESPAWN_OUT_OF_
 --   COMBAT, 25s) + AttackStart(Willix) at the summon site (the C++
 --   JustSummoned leg — ev19 fires on the summoner in Go
---   (fireCreatureSummoned, lua_creature_events.go:190/:8002-8013),
+--   (fireCreatureSummoned, lua_creature_events.go:190/:8016),
 --   so the inline form stands on the double-apply, not on the
 --   fire site; wp8 Talk(3), wp9
 --   Talk(4), wp13 Talk(5), wp25 Talk(6), wp31 Talk(7), wp42
@@ -43,7 +43,7 @@
 -- - Engage (C++ JustEngagedWith): Talk(SAY_AGGRO1 2), ungated (the
 --   C++ Talk targets the player; the bridge broadcasts — deviation,
 --   documented).
--- - JustDied (razorfen_kraul.cpp:124-127): GetPlayerForEscort latch
+-- - JustDied (razorfen_kraul.cpp:124-128): GetPlayerForEscort latch
 --   (quest-1144 accept captures the escort player's GUID, mirroring
 --   EscortAI Start's capture) + player:FailQuest(1144) via the
 --   GetPlayersInWorld GUID scan (black-stalker precedent). No
@@ -80,8 +80,7 @@ local QUEST_WILLIX_THE_IMPORTER = 1144
 -- Field 82 = UNIT_NPC_FLAGS (UpdateFields.h:139).
 local UNIT_NPC_FLAG_QUESTGIVER = 2
 
--- C++ WaypointReached boar summons (razorfen_kraul.cpp:77-83/96-101/
--- 119-124): TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 25s — Go
+-- C++ WaypointReached boar summons (razorfen_kraul.cpp:75/87/99): TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 25s — Go
 -- summon type 3 (C++ enum 4, minus-one convention per the
 -- restless-soul port; ObjectDefines.h:57-67).
 local BOAR_SUMMON_TYPE = 3
@@ -94,7 +93,7 @@ local BOAR_SUMMONS = {
 
 local willixEscortPlayer = {}
 
--- C++ OnQuestAccept for quest 1144 (razorfen_kraul.cpp:52-59, C++ order:
+-- C++ OnQuestAccept for quest 1144 (razorfen_kraul.cpp:52-60, C++ order:
 -- Start, Talk, SetFaction): StartEscort + MoveWaypoint + Talk(READY) +
 -- SetFaction(113).
 local function onQuestAccept(event, player, creature, quest)
@@ -118,7 +117,7 @@ local function onEnterCombat(event, creature, target)
     creature:Talk(SAY_AGGRO1)
 end
 
--- C++ WaypointReached (razorfen_kraul.cpp:61-127): every arm requires
+-- C++ WaypointReached (razorfen_kraul.cpp:62-110): every arm requires
 -- the escort player (GetPlayerForEscort() nil-guard at the top).
 local function onReachWP(_, creature)
     local player = creature:GetEscortPlayer()
@@ -134,9 +133,9 @@ local function onReachWP(_, creature)
         local pos = BOAR_SUMMONS[wp]
         local boar = creature:SummonCreature(ENTRY_BOAR, pos[1], pos[2], pos[3], pos[4], BOAR_SUMMON_TYPE, BOAR_SUMMON_MS)
         if boar then
-            -- C++ JustSummoned (razorfen_kraul.cpp:135-138):
+            -- C++ JustSummoned (razorfen_kraul.cpp:119-122):
             -- summoned->AI()->AttackStart(me) — ordered at the summon
-            -- site (ev19 fires on the summoned creature in Go).
+            -- site (ev19 fires on the summoner in Go).
             boar:AttackStart(creature)
         end
     elseif wp == 8 then
