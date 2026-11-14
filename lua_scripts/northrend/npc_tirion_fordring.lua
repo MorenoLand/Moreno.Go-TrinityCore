@@ -43,13 +43,17 @@
 -- LK-voice Talk(4)/(5) + Arthas-portal 3s cast/weather legs.
 -- + Tirion/Fizzlebang/LK emote legs + EVENT_SUMMON_VALKYR (round-72
 -- apply 2026-11-14 — see the Unmodeled note for bridges/cites).
+-- + JustSummoned _summons feed + EnterEvadeMode DespawnAll (round-98
+-- apply 2026-11-14 — marli ev19/ev2 twin; ev23-before-ev2 order is
+-- net-state exact since C++ EnterEvadeMode never calls base Reset).
 -- The DONE/WIPE relays that feed this file's DoAction arms live in the
 -- boss files (beasts 6/5, jaraxxus 9/24, champions 13/25, valkyr
 -- 19/26) — this file is only the receiver.
 -- Unmodeled (no bridges — documented, not wired):
--- npc_tirion_toc EnterEvadeMode _summons.DespawnAll (no
--- summons-enumeration bridge); ev19 JustSummoned (:381-384) is the
--- one-line _summons.Summon feed for that leg and stays out with it;
+-- npc_tirion_toc EnterEvadeMode _summons.DespawnAll PORTED via the
+-- marli ev19-tracked-table + ev2 alive-gated despawn twin (round-98
+-- apply 2026-11-14); ev19 JustSummoned (:381-384) is the one-line
+-- _summons.Summon feed, no entry filter — C++ tracks all summons;
 -- ev23 fires during evade too (creaturemotion.go:4699) but is not
 -- evade-distinct (also spawn + death-path), so it cannot carry the
 -- DespawnAll leg. DoAction arms' HandleEmoteCommand legs
@@ -169,6 +173,7 @@ local CHAMPIONS_CONTROLLER_POS = { 563.672974, 139.571, 393.837006, 0.0 }
 
 local timers = {}
 local ford = {}
+local fordringSummons = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -513,6 +518,43 @@ local function fordringDoAction(event, creature, action)
     end
 end
 
+-- C++ npc_tirion_toc::JustSummoned (trial_of_the_crusader.cpp:381-384):
+-- _summons.Summon(summoned) — one line, no entry filter; every Fordring
+-- summon is tracked (marli ev19-tracked-table precedent, boss_marli.lua).
+-- ev19 fires on the summoner for SummonCreature and SummonCreatureGroup
+-- alike (fireCreatureSummoned, lua_creature_events.go:190/:8016).
+local function fordringJustSummoned(event, creature, summoned)
+    local guid = creature:GetGUIDLow()
+    local tracked = fordringSummons[guid]
+    if not tracked then
+        tracked = {}
+        fordringSummons[guid] = tracked
+    end
+    tracked[summoned:GetGUIDLow()] = summoned
+end
+
+-- C++ npc_tirion_toc::EnterEvadeMode (trial_of_the_crusader.cpp:518-521):
+-- _summons.DespawnAll() only — the override never calls base Reset, so no
+-- Reset runs on evade. Go fires ev23 then ev2 on the evade path
+-- (creaturemotion.go:4734, only when wasInCombat); ev2 is the evade twin.
+-- Alive-gated (marli precedent): DespawnAll runs only on evade, never on
+-- death, so death lets summons linger. The ev23-before-ev2 order is
+-- net-state exact: ev23 re-summons Barrett, ev2 despawns it again in the
+-- same evade, matching C++ (no Barrett after evade).
+local function fordringLeaveCombat(event, creature)
+    local guid = creature:GetGUIDLow()
+    local tracked = fordringSummons[guid]
+    fordringSummons[guid] = nil
+    if not creature:IsAlive() then
+        return
+    end
+    if tracked then
+        for _, summon in pairs(tracked) do
+            summon:Despawn()
+        end
+    end
+end
+
 -- C++ npc_tirion_toc::Reset (trial_of_the_crusader.cpp:355-362).
 local function fordringReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
@@ -523,6 +565,8 @@ local function fordringReset(event, creature)
     handleBarrettSummon(creature)
 end
 
+RegisterCreatureEvent(ENTRY_FORDRING, 2, fordringLeaveCombat)
+RegisterCreatureEvent(ENTRY_FORDRING, 19, fordringJustSummoned)
 RegisterCreatureEvent(ENTRY_FORDRING, 23, fordringReset)
 RegisterCreatureEvent(ENTRY_FORDRING, 38, fordringDoAction)
 
