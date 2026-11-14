@@ -42,16 +42,18 @@
 -- 0x100)) ride creature:GetBossState / RemoveFlag (both live).
 -- CanAIAttack stays out (no Lua hook for the CanAIAttack query).
 -- boss_general_zarithrian JustSummoned — summons.Summon(summon)
--- add-registration leg (pure registration — ev19 IS live, but
--- Zarithrian summons nothing directly; the flamecaller path goes
--- through the unported cross-AI forward).
+-- add-registration leg PORTED 2026-11-14 (round107) via ev22 on the
+-- flamecaller (39814): the flamecaller's IsSummonedBy forward
+-- (:208-211) rides Go's ev22 (summonTempCreature funnel,
+-- lua_creature_events.go:189-198); per-GUID table below, DespawnAll
+-- twin on ev2/ev23. Dormant until the stalker latch lands (see below).
 -- boss_general_zarithrian EnterEvadeMode — the _DespawnAtEvade()
 -- SetBossState(FAIL) leg is PORTED 2026-11-06 on event 2 (ev2 fires
 -- only from triggerCreatureEvade, creaturemotion.go:4699); the
--- summons.DespawnAll() leg (pure registration — ev19 live; the
--- per-guid Lua-table latch is the in-tree registry substitute) and the
+-- summons.DespawnAll() leg PORTED 2026-11-14 (round107) via the
+-- ev22-latched per-GUID table (despawnFlamecallers, below); the
 -- DespawnOrUnsummon(0s, 30s) respawn leg (creature:Despawn takes no
--- delay arg and deletes the motion mid-evade) stay out. No ev24
+-- delay arg and deletes the motion mid-evade) stays out. No ev24
 -- handler: BossAI::_JustReachedHome is setActive(false) only
 -- (ScriptedCreature.cpp:522-524) and Zarithrian overrides nothing
 -- there — no FAIL leg exists on reach-home; ev2 carries FAIL.
@@ -88,9 +90,9 @@
 -- with the 3-cast latch (_lavaGoutCount >= 3 -> reset + 8s re-arm;
 -- else cast, count++, 1s re-arm); zero Talk lines; Reset's
 -- MoveAlongSplineChain (POINT_GENERAL_ROOM) (no-motion-master
--- bridge), MovementInform DoZoneInCombat (no-movement-inform
--- bridge), IsSummonedBy zarithrian->AI()->JustSummoned(me) (no
--- cross-AI-summon bridge) stay out.
+-- bridge) and MovementInform DoZoneInCombat (no-movement-inform
+-- bridge) stay out. IsSummonedBy zarithrian->AI()->JustSummoned(me)
+-- PORTED 2026-11-14 (round107) via ev22 (flamecallerSummoned, below).
 -- All 4 Talk() calls in the file accounted for and ported
 -- (SAY_AGGRO 0 + SAY_KILL 1 + SAY_ADDS 2 + SAY_DEATH 3).
 
@@ -104,7 +106,7 @@
 -- SetBossState(FAIL) (ScriptedCreature.cpp:617). NO ev24 handler: no
 -- reach-home state leg exists in C++ (see EnterEvadeMode note above).
 -- Bridge re-checks this run: SetBossState/GetBossState live
--- (lua_creature_events.go:7099/7118); GetInstanceCreature live (:7186)
+-- (lua_creature_events.go:7099/7118); GetInstanceCreature live (:7200)
 -- with :CastSpell(target, spell, triggered) (:954); Is25ManRaid live
 -- (:4477); RemoveFlag(59, ...) live (:6540); SetImmuneToPC has NO
 -- method — ported as RemoveFlag(59, 0x100) per Unit.cpp:8453.
@@ -112,9 +114,10 @@
 -- 'Reset legs ride no instance bridge', 'stalker casts have no instance
 -- bridge' (bridges live; stalker casts dormant only for lack of a Go
 -- stalker-GUID latch — see retraction note). Stay-outs re-verified:
--- CanAIAttack (no Lua hook); JustSummoned summons.Summon (pure
--- registration — ev19 live, summoner is the stalker); flamecaller MoveToGeneral / MovementInform /
--- IsSummonedBy (no motion-master / movement-inform / cross-AI bridges);
+-- CanAIAttack (no Lua hook); JustSummoned summons.Summon PORTED
+-- 2026-11-14 (round107) via ev22 + per-GUID table (dormant until the
+-- stalker latch lands); flamecaller MoveToGeneral / MovementInform
+-- (no motion-master / movement-inform bridges);
 -- DoMeleeAttackIfReady (no melee-model bridge).
 -- Combat-arm re-verification this run: cleave (DoCastVictim 74367,
 -- non-triggered, 8s/15s fixed) ✓; roar (DoCastSelf 74384,
@@ -158,6 +161,14 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
+
+-- Per-Zarithrian-GUID latched flamecallers (C++ summons list subset;
+-- felblood phoenixes precedent). despawnFlamecallers is
+-- forward-declared: defined in the flamecaller section below, called
+-- from zarithrianLeaveCombat/zarithrianReset above it (tharon_ja /
+-- gal_darah idiom — plain assignment, never re-local-function).
+local zarithrianSummons = {}
+local despawnFlamecallers
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -307,11 +318,12 @@ end
 local function zarithrianLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_general_zarithrian.cpp:114-118):
-    -- summons.DespawnAll() (pure registration — see header) +
+    -- summons.DespawnAll() (ev22-latched flamecallers, below) +
     -- _DespawnAtEvade() -> instance->SetBossState(FAIL)
     -- (ScriptedCreature.cpp:596-617). Event 2 fires only from
     -- triggerCreatureEvade (creaturemotion.go:4699), after event 23,
     -- so the ev23 NOT_STARTED arm lands first and FAIL is final.
+    despawnFlamecallers(creature:GetGUIDLow())
     creature:SetBossState(DATA_GENERAL_ZARITHRIAN, 2) -- FAIL
 end
 
@@ -326,9 +338,10 @@ local function zarithrianReset(event, creature)
         return
     end
     -- C++ _Reset (ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0),
-    -- events.Reset / summons.DespawnAll / scheduler.CancelAll (timers
-    -- above; the summon-registry leg is pure registration (ev19 live), then SetBossState
+    -- events.Reset / summons.DespawnAll (ev22-latched flamecallers,
+    -- below) / scheduler.CancelAll (timers above), then SetBossState
     -- NOT_STARTED unless already DONE.
+    despawnFlamecallers(creature:GetGUIDLow())
     creature:SetCombatPulseDelay(0)
     if creature:GetBossState(DATA_GENERAL_ZARITHRIAN) ~= 3 then
         creature:SetBossState(DATA_GENERAL_ZARITHRIAN, 0) -- NOT_STARTED
@@ -377,6 +390,48 @@ RegisterCreatureEvent(ENTRY_GENERAL_ZARITHRIAN, 23, zarithrianReset)
 -- spawned 39814 gets this AI in Go too. Dormant in-engine until the
 -- stalker summon path lands (unchanged). Zero Talk lines in C++.
 local flamecallerState = {}
+
+-- C++ summons.DespawnAll twin for the latched-flamecaller subset
+-- (boss EnterEvadeMode :114-118 + _Reset summons.DespawnAll leg).
+-- Plain assignment to the forward declaration above (tharon_ja /
+-- gal_darah idiom — never re-local-function, malown time-bomb).
+despawnFlamecallers = function(guid)
+    local list = zarithrianSummons[guid]
+    if list then
+        for _, flamecaller in ipairs(list) do
+            if flamecaller then
+                flamecaller:DespawnOrUnsummon()
+            end
+        end
+        zarithrianSummons[guid] = nil
+    end
+end
+
+-- C++ npc_onyx_flamecaller::IsSummonedBy (:208-211): the flamecaller
+-- forwards itself to zarithrian->AI()->JustSummoned(me), which is the
+-- summons.Summon registration (boss :103-106). Go fires ev22 on the
+-- summoned creature for creature summons (summonTempCreature funnel,
+-- lua_creature_events.go:189-198) — the exact IsSummonedBy twin, so
+-- the forward rides ev22 here (round107; the old "no cross-AI-summon
+-- bridge" header claim was stale). Dormant until the stalker latch
+-- lands (see header): no flamecaller spawns in-engine today.
+local function flamecallerSummoned(event, creature, summoner)
+    local zarithrian = creature:GetInstanceCreature(DATA_GENERAL_ZARITHRIAN)
+    if zarithrian == nil and summoner ~= nil and summoner.GetEntry ~= nil
+        and summoner:GetEntry() == ENTRY_GENERAL_ZARITHRIAN then
+        zarithrian = summoner
+    end
+    if zarithrian == nil then
+        return
+    end
+    local guid = zarithrian:GetGUIDLow()
+    local list = zarithrianSummons[guid]
+    if not list then
+        list = {}
+        zarithrianSummons[guid] = list
+    end
+    list[#list + 1] = creature
+end
 
 local function flamecallerCancel(guid)
     cancelTimers(guid)
@@ -463,4 +518,5 @@ end
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 1, flamecallerEnterCombat)
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 2, flamecallerLeaveCombat)
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 4, flamecallerDied)
+RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 22, flamecallerSummoned)
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 23, flamecallerReset)
