@@ -107,18 +107,24 @@
 -- conditional (:653), gunner DoSpellAttackIfReady / zafod gossip
 -- (:1370-1377, no cast arms). MovementInform SetControlled(UNIT_STATE_
 -- ROOT) legs — boarding_add (:1590), rocketeer (:1616), mage (:1667),
--- all POINT_MOTION_TYPE EVENT_CHARGE_PREPATH — no MovementInform
--- bridge; the slot-machine react arms ride the same unbridged
+-- all POINT_MOTION_TYPE EVENT_CHARGE_PREPATH — MovementInform IS
+-- bridged (ev28, engine/scripting/runtime.go:397) but the arms stay
+-- out: the root legs ride the unported charge-path/slot machine (no
+-- sender sets a slot in the ported model — see below).
 -- hooks — gunship_npc_AI::SetData ACTION_SET_SLOT
 -- SetReactState(REACT_PASSIVE) (:560), boarding_addAI::SetData
 -- (:1390) PASSIVE, MovementInform EVENT_CHARGE_PREPATH
--- SetReactState(REACT_AGGRESSIVE) (:604 / :1450) — no SetData /
--- MovementInform bridges (SetReactState itself IS bridged).
+-- SetReactState(REACT_AGGRESSIVE) (:604 / :1450) — SetData IS bridged
+-- (ev41, engine/world/lua_creature_events.go:800) and MovementInform
+-- IS bridged (ev28); the arms stay out because ACTION_SET_SLOT has
+-- no sender in the ported model (no instance/transport machine sets
+-- slots) — SetReactState itself IS bridged.
 -- gunship_npc_AI::JustDied (:587-591): Slot-gated
 -- FindNearestCreature captain (HORDE ? 36948 Muradin : 36939
 -- Saurfang, 200.0f) -> captain->AI()->SetData(
--- ACTION_CLEAR_SLOT, Index) — cross-creature AI SetData has no
--- bridge, and Slot only ever comes from the unbridged
+-- ACTION_CLEAR_SLOT, Index) — creature:SetData is bridged (ev41)
+-- but the call targets the captain's AI via AI()->SetData with no
+-- sender, and Slot only ever comes from the unported
 -- ACTION_SET_SLOT machine above; none of the 6 derived entries
 -- registers event 4 (OnDied) either — documented-only.
 -- cannon (:1712-1713) PassengerBoarded !apply -> SetControlled
