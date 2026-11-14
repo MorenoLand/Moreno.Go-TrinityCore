@@ -25,8 +25,8 @@
 -- - uiStep machine steps 0-9 (phase pump, CreateLuaEvent
 --   one-shots, maiden idiom): step 1 world states + gossip-flag
 --   clear; step 2 Talk(3) + nearest Koltira/Orbaz/Thassarian
---   capture (GetCreaturesInRange, distance-ordered, illidan
---   precedent — no GetClosestCreatureWithEntry bridge); step 3
+--   capture (FindNearestCreature, the GetClosestCreatureWithEntry
+--   twin, lua_creature_events.go:7013); step 3
 --   Talk(4); steps 4-7 ghoul/abomination/warrior/behemoth
 --   summon loops (500ms re-fire, shack 33271 each tick);
 --   step 8 Talk(5); step 9 escort resume + charge scatter.
@@ -125,7 +125,7 @@ local STAND_KNEEL = 8
 local GOSSIP_ICON_CHAT = 0
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
-local SUMMON_TYPE_CORPSE = 5 -- Go 0-based TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN
+local SUMMON_TYPE_CORPSE = 1 -- Go 0-based TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN (spells.go:536-539; bridge type 1, hazzarah/kiljaeden/ragnaros precedent)
 
 local COUNT_DEFENDER = 10
 local COUNT_EARTHSHATTER = 1
@@ -235,12 +235,10 @@ local function storeGuid(creature)
     return creature:GetGUIDLow()
 end
 
+-- GetClosestCreatureWithEntry twin (lua_creature_events.go:7013):
+-- nearest creature of entry within range, alive by default.
 local function nearestEntry(creature, entry, range)
-    local list = creature:GetCreaturesInRange(range, entry, 0, 0)
-    if list ~= nil and #list > 0 then
-        return list[1]
-    end
-    return nil
+    return creature:FindNearestCreature(entry, range)
 end
 
 -- Forward declarations: the pumps reference each other. They must sit
@@ -354,11 +352,14 @@ npcChangeTarget = function(creature, guid)
     if not temp or temp:IsDead() then
         return
     end
-    local players = creature:GetPlayersInRange(100)
-    if players == nil or #players == 0 then
+    -- C++ SelectTarget(Random, 0): a random entry off Darion's threat
+    -- list — no range cap, no player filter (GetAITargets, moroes
+    -- precedent; the dawn summons sit on the list at 0 threat).
+    local targets = creature:GetAITargets()
+    if targets == nil or #targets == 0 then
         return
     end
-    local target = players[math.random(#players)]
+    local target = targets[math.random(#targets)]
     if target and not target:IsDead() then
         temp:AddThreat(target, 0)
         temp:AttackStart(target)
