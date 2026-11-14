@@ -5,7 +5,8 @@
 -- Entry: 16483 (Wowhead WotLK Classic NPC page, verified 2026-11-13;
 -- no entry constant in the C++ sources — the creature_template
 -- ScriptName binding is DB-side). Quest 9283 "Rescue the Survivors!".
--- Eluna creature events: 23 OnReset, 14 OnHitBySpell, 4 OnDied.
+-- Eluna creature events: 23 OnReset, 14 OnHitBySpell, 4 OnDied,
+-- 27 MoveInLineOfSight (proximity dispatch).
 -- Ported arms (C++ order):
 -- - Reset (zone_azuremyst_isle.cpp:88-98): DoCast(me,
 --   SPELL_IRRIDATION 35046, true) + SetFlag(UNIT_FIELD_FLAGS,
@@ -37,10 +38,17 @@
 --   Despawn() (the DespawnOrUnsummon twin). A missing player
 --   nil-guards the Talk/TalkedToCreature legs only (C++
 --   GetPlayer nil check); the walk + despawn still run.
--- Unmodeled (documented-only, no bridges):
 -- - MoveInLineOfSight SayHelp Talk (zone_azuremyst_isle.cpp:
---   100-112): the friendly-player-within-25y Talk has no Go
---   twin — ev27 fires only from the aggro-engage branch.
+--   100-112): rides the ev27 proximity dispatch (f40e36a0 —
+--   fires for any detectable unit, in/out of combat, not just
+--   the aggro-engage branch): friendly player within 25y while
+--   CanSayHelp -> Talk(SAY_HELP 1, player) + SayHelpTimer 20000
+--   + CanSayHelp false. The SayHelpTimer machine runs as a
+--   self-re-arming one-shot chain (10s first, then 20s cycles),
+--   re-initialized by Reset exactly like C++ Initialize().
+-- Unmodeled (documented-only, no bridges): none — all four
+-- C++ hooks (Reset / SpellHit / UpdateAI timers / MIOS) are
+-- ported; the UpdateAI machine is one-shot timers, not a pump.
 
 local ENTRY_DRAENEI_SURVIVOR = 16483
 
@@ -48,6 +56,11 @@ local SPELL_IRRIDATION = 35046
 local SPELL_STUNNED = 28630
 
 local SAY_HEAL = 0
+local SAY_HELP = 1
+
+local SAY_HELP_RANGE = 25.0
+local SAY_HELP_INITIAL_MS = 10000
+local SAY_HELP_REARM_MS = 20000
 
 local SPELL_FAMILY_FLAGS_HEAL = 0x80000000
 
@@ -71,8 +84,33 @@ local function cancelSurvivor(guid)
         if st.runaway ~= nil then
             RemoveEventById(st.runaway)
         end
+        if st.help ~= nil then
+            RemoveEventById(st.help)
+        end
     end
     survivor[guid] = nil
+end
+
+-- C++ SayHelpTimer machine (zone_azuremyst_isle.cpp:66-77, 154-161):
+-- one-shot chain; on fire CanSayHelp goes true and the chain re-arms
+-- at 20s. The callback no-ops if the state was replaced (Reset
+-- rebuilds the table; SpellHit keeps it) or the creature died.
+local function armHelp(guid, delay)
+    local st = survivor[guid]
+    if st == nil then
+        return
+    end
+    if st.help ~= nil then
+        RemoveEventById(st.help)
+    end
+    st.help = CreateLuaEvent(function()
+        if survivor[guid] ~= st then
+            return
+        end
+        st.help = nil
+        st.canSayHelp = true
+        armHelp(guid, SAY_HELP_REARM_MS)
+    end, delay)
 end
 
 -- C++ npc_draenei_survivorAI::Reset (zone_azuremyst_isle.cpp:88-98).
@@ -81,6 +119,9 @@ local function onReset(event, creature)
     if creature:IsDead() then
         return
     end
+    local guid = creature:GetGUIDLow()
+    survivor[guid] = { canSayHelp = true }
+    armHelp(guid, SAY_HELP_INITIAL_MS)
     creature:CastSpell(creature, SPELL_IRRIDATION, true)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED)
     creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT)
@@ -98,9 +139,24 @@ local function onSpellHit(event, creature, caster, spellId)
     creature:SetStandState(UNIT_STAND_STATE_STAND)
     creature:CastSpell(creature, SPELL_STUNNED, true)
     local guid = creature:GetGUIDLow()
-    cancelSurvivor(guid)
-    local st = {}
-    survivor[guid] = st
+    -- SpellHit touches only the thanks machine in C++ (the
+    -- SayHelpTimer countdown keeps running); cancel thanks /
+    -- runaway only and keep the help chain on the same table.
+    local st = survivor[guid]
+    if st == nil then
+        st = { canSayHelp = true }
+        survivor[guid] = st
+        armHelp(guid, SAY_HELP_INITIAL_MS)
+    else
+        if st.thanks ~= nil then
+            RemoveEventById(st.thanks)
+            st.thanks = nil
+        end
+        if st.runaway ~= nil then
+            RemoveEventById(st.runaway)
+            st.runaway = nil
+        end
+    end
     if caster ~= nil then
         st.playerGuid = caster:GetGUID()
     end
@@ -124,6 +180,32 @@ local function onDied(event, creature)
     cancelSurvivor(creature:GetGUIDLow())
 end
 
+-- C++ npc_draenei_survivorAI::MoveInLineOfSight
+-- (zone_azuremyst_isle.cpp:100-112): friendly player within 25y
+-- while CanSayHelp -> Talk(SAY_HELP, player) + SayHelpTimer 20000
+-- + CanSayHelp false. Per-tick ev27 refire is safe: the latch
+-- closes after the first Talk until the help chain re-arms it.
+local function onMoveInLOS(event, creature, who)
+    local guid = creature:GetGUIDLow()
+    local st = survivor[guid]
+    if st == nil or not st.canSayHelp then
+        return
+    end
+    if who:GetObjectType() ~= "Player" then
+        return
+    end
+    if not creature:IsFriendlyTo(who) then
+        return
+    end
+    if not creature:IsWithinDistInMap(who, SAY_HELP_RANGE) then
+        return
+    end
+    creature:Talk(SAY_HELP, who)
+    st.canSayHelp = false
+    armHelp(guid, SAY_HELP_REARM_MS)
+end
+
 RegisterCreatureEvent(ENTRY_DRAENEI_SURVIVOR, 23, onReset)
 RegisterCreatureEvent(ENTRY_DRAENEI_SURVIVOR, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY_DRAENEI_SURVIVOR, 4, onDied)
+RegisterCreatureEvent(ENTRY_DRAENEI_SURVIVOR, 27, onMoveInLOS)
