@@ -97,6 +97,7 @@ const (
 	targetDestCasterRadius    = 73 // TARGET_DEST_CASTER_RADIUS
 	targetUnitTargetAny       = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
 	targetDestTargetAny       = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
+	targetDestTargetEnemy     = 53 // TARGET_DEST_TARGET_ENEMY
 	targetSrcCaster           = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
 	targetUnitSrcAreaEntry    = 7  // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
 	targetUnitNearbyEntry     = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
@@ -105,6 +106,7 @@ const (
 	spellModDamage            = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
 	spellModEffect1           = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
 	familyShaman              = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
+	familyMage                = 3   // SPELLFAMILY_MAGE (SpellClassOptions SpellClassSet 3, wago 3.4.0.43659)
 )
 
 type effect struct {
@@ -615,6 +617,39 @@ var spells = []spell{
 	// 17683 Full Heal: single effect 67 HEAL_MAX_HEALTH, DieSides 1,
 	// BasePoints 0, TargetA 1; DurationIndex 0 (no row, by design).
 	{id: 17683, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effHealMaxHealth, dieSides: 1, basePoints: 0, targetA: targetCaster}}},
+
+	// 31331 Feral Spirit (hyjalAI.h:39 SPELL_SUMMON_DIRE_WOLF; the
+	// DB2 name is "Feral Spirit", description "Summons two dire wolves
+	// to assist Thrall") — wago.tools 3.4.0.43659 Spell/SpellEffect/
+	// SpellMisc rows, 2026-11-14 verdict: single effect 28 SUMMON,
+	// DieSides 1, BasePoints 1 (CalcValue +1 = 2 wolves, matching the
+	// description), MiscValue 17854 (dire wolf entry), MiscValueB 64
+	// (SummonProperties 64, seeded INFERRED row — on the Go
+	// multi-summon list, go_origin_summon.go), TargetA 18
+	// (TARGET_DEST_CASTER), TargetB 0, RadiusIndex 0; DurationIndex 3
+	// (60000 ms, seeded real row below), RangeIndex 12 (Interact
+	// Range, 0-5 yd = synthetic 93002's value), SchoolMask 0x1
+	// (physical), CastingTimeIndex 1 (instant, default 0). No
+	// SpellClassOptions row. The summon needs a creature_template
+	// 17854 row in the deployment world DB.
+	{id: 31331, durIdx: 3, rangeIdx: 93002, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, basePoints: 1, targetA: targetDestCaster, misc: 17854, miscB: 64}}},
+	// 31263 Pyroblast (hyjalAI.h SPELL_PYROBLAST; Jaina's UpdateAI
+	// cast) — wago.tools 3.4.0.43659 Spell/SpellEffect/SpellMisc/
+	// SpellClassOptions rows, 2026-11-14 verdict: eff0 2 SCHOOL_DAMAGE,
+	// BasePoints 4624, DieSides 751, TargetA 6 (TARGET_UNIT_TARGET_ENEMY),
+	// RadiusIndex 0; eff1 6 APPLY_AURA, aura 3 PERIODIC_DAMAGE,
+	// BasePoints 499, DieSides 1, AuraPeriod 3000, TargetA 53
+	// (TARGET_DEST_TARGET_ENEMY), TargetB 16
+	// (TARGET_UNIT_DEST_AREA_ENEMY), RadiusIndex 8 (5 yd, seeded real
+	// row below); DurationIndex 105 (9000 ms, seeded real row below),
+	// RangeIndex 5 (Long Range, 0-40 yd, seeded real row below),
+	// SchoolMask 0x4 (fire), CastingTimeIndex 6 (5000 ms, seeded real
+	// row below); SpellClassOptions family 3 (Mage), mask 0. Attributes
+	// not encoded (seed has no attributes field).
+	{id: 31263, durIdx: 105, rangeIdx: 5, castTimeIdx: 6, school: schoolFire, family: familyMage, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 751, basePoints: 4624, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 499, auraPeriod: 3000, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8},
+	}},
 }
 
 func main() {
@@ -636,6 +671,8 @@ func main() {
 	durations := [][]uint32{
 		{1, 300000, 0, 300000},
 		{6, 600000, 0, 600000},          // real SpellDuration 6 (10 min) for MEMORY_* summons
+		{3, 60000, 0, 60000},            // real SpellDuration 3 for 31331 (wago.tools 3.4.0.43659)
+		{105, 9000, 0, 9000},            // real SpellDuration 105 for 31263 (wago.tools 3.4.0.43659)
 		{21, 0xFFFFFFFF, 0, 0xFFFFFFFF}, // real SpellDuration 21 (-1 infinite) for 68415
 		{32, 6000, 0, 6000},             // real SpellDuration 32 for 54690 (wago.tools 3.4.0.43659)
 		{90001, 2000, 0, 2000},
@@ -663,6 +700,7 @@ func main() {
 		{14, f32(8), f32(0), f32(8)},         // real SpellRadius 14 for 59335 (wago.tools 3.4.0.43659)
 		{9, f32(20), f32(0), f32(20)},        // real SpellRadius 9 for 44194 (wago.tools 3.4.0.43659)
 		{18, f32(15), f32(0), f32(15)},       // real SpellRadius 18 for 44196 (wago.tools 3.4.0.43659)
+		{8, f32(5), f32(0), f32(5)},          // real SpellRadius 8 for 31263 (wago.tools 3.4.0.43659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},
@@ -679,6 +717,7 @@ func main() {
 	// SpellCastTimes.dbc: ID, Base, PerLevel (real "nif" layout).
 	castTimes := [][]uint32{
 		{5, 2000, 0}, // real SpellCastTimes 5 for 44196 (wago.tools 3.4.0.43659)
+		{6, 5000, 0}, // real SpellCastTimes 6 for 31263 (wago.tools 3.4.0.43659)
 		{92001, 2000, 0},
 		{92002, 3000, 0},
 	}
@@ -691,6 +730,7 @@ func main() {
 		{152, f32(0), f32(0), f32(150), f32(150), 0}, // real SpellRange 152 "Super Long" for seat spells (wago.tools 3.4.0.47659, 2026-11-13 23:00 verdict)
 		{4, f32(0), f32(0), f32(30), f32(30), 0},     // real SpellRange 4 "Medium Range" for 54690 (wago.tools 3.4.0.43659)
 		{74, f32(0), f32(0), f32(30), f32(30), 2},    // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
+		{5, f32(0), f32(0), f32(40), f32(40), 0},     // real SpellRange 5 "Long Range" for 31263 (wago.tools 3.4.0.43659)
 		{93001, f32(0), f32(0), f32(0), f32(0), 0},
 		{93002, f32(0), f32(0), f32(5), f32(5), 0},
 		{93003, f32(8), f32(8), f32(25), f32(25), 0},
