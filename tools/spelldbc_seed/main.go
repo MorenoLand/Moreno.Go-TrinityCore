@@ -528,6 +528,21 @@ var spells = []spell{
 	// in Go (boss_ai.go:4057, creatureEffectKillCredit :8650,
 	// MiscValue = credit entry).
 	{id: 63049, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effKillCredit2, dieSides: 1, basePoints: -1, targetA: targetCaster, misc: 38595}}},
+
+	// 65096 Elevator Knockback (boss_mimiron.cpp:171,541; VX001 step 4
+	// worldtrigger self-cast) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-14 verdict: single
+	// effect 6 APPLY_AURA, aura 23 PERIODIC_TRIGGER_SPELL, DieSides 1,
+	// BasePoints -1, TargetA 1 (TARGET_UNIT_CASTER), TargetB 0,
+	// RadiusIndex 0 (no SpellRadius row), AuraPeriod 2000,
+	// TriggerSpell 65100; DurationIndex 32 (6000 ms, seeded real row),
+	// RangeIndex 1 (Self Only, 0-0 yd = synthetic 93001's value),
+	// SchoolMask 0x1 (physical), CastingTimeIndex 1 (instant, default
+	// 0). Attributes_0 0x20000100 / Attributes_1 0x10000000 not encoded
+	// (seed has no attributes field). Trigger spell 65100 NOT seeded
+	// yet (verdict pending) — the aura ticks dormant until it lands.
+	// The periodic-trigger leg is live in Go (spells.go:42157).
+	{id: 65096, durIdx: 32, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, dieSides: 1, basePoints: -1, aura: auraPeriodicTrig, auraPeriod: 2000, trigger: 65100, targetA: targetCaster}}},
 }
 
 func main() {
