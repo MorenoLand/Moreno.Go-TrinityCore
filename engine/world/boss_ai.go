@@ -13885,6 +13885,16 @@ func init() {
 	// the shadow of death / spiritual vengeance AuraScripts have no
 	// AuraScript bridge.
 	RegisterLuaBoss("boss_teron_gorefiend", 22871)
+	// Wrathbone Flayer (Black Temple trash) — Reset channeler
+	// machine + JustEngagedWith cleave/ignored timers ported in
+	// lua_scripts/blacktemple/npc_wrathbone_flayer.lua (entry 22953,
+	// TDB-verified).
+	RegisterLuaBoss("npc_wrathbone_flayer", 22953)
+	// Angered Soul Fragment (Black Temple trash) — Reset
+	// invisibility cycle + JustEngagedWith Anger task ported in
+	// lua_scripts/blacktemple/npc_angered_soul_fragment.lua (entry
+	// 23398, TDB-verified).
+	RegisterLuaBoss("npc_angered_soul_fragment", 23398)
 	// RegisterLuaBoss wires lua_scripts/blacktemple/boss_gurtogg_bloodboil.lua.
 	// The UpdateAI casting gates (boss_gurtogg_bloodboil.cpp:181 pre-loop,
 	// :264 in-loop) are PORTED in Lua via the IsCasting 500ms defer
@@ -14601,11 +14611,12 @@ func init() {
 	RegisterLuaBoss("boss_warchief_kargath_bladefist", 16808)
 
 	// boss_shattered_executioner (17301, NPC_SHATTERED_
-	// EXECUTIONER): cleave-only BossAI; the zone-file
-	// area-trigger and the two script hooks stay
-	// unregistered (no area-trigger/AuraScript/SpellScript
-	// bridges); the loot-mode/immune/quest/SetData arms
-	// have no bridges — see lua_scripts/shatteredhalls/
+	// EXECUTIONER): cleave-only BossAI; the loot-mode/immune/
+	// quest/SetData arms are ported (ev23 :289, ev4 :270, ev38
+	// :305) and the aura + spell hooks are registered in the Lua
+	// file (RegisterAuraEvent x3, RegisterSpellEvent); only the
+	// zone-file area-trigger stays out (no area-trigger bridge)
+	// — see lua_scripts/shatteredhalls/
 	// boss_shattered_executioner.lua; own UpdateAI override,
 	// zero CASTING checks — cleave ungated.
 	RegisterLuaBoss("boss_shattered_executioner", 17301)

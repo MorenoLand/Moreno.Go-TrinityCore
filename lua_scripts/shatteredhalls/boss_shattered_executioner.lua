@@ -13,15 +13,16 @@
 -- AuraScript (DoCheckAreaTarget only — RegisterAuraEvent ev8,
 -- runtime.go) and spell_remove_kargath_executioner is a
 -- SpellScript whose caster is the player (Load() gate) —
--- RegisterSpellEvent ev5 fires on the player path
--- (runtime.go:648-652); both PORTED below (census rows
--- 537/538).
+-- RegisterSpellEvent ev5 fires on all three paths (creature,
+-- triggered funnel, player — runtime.go:651-652); both PORTED below
+-- (census rows 537/538).
 -- Zone .cpp in the Shattered Halls set per outland_script_
 -- loader.cpp order (boss roster 3/3 closed with kargath;
 -- instance_shattered_halls.lua ported 3fe088b3).
 -- Entry: NPC_SHATTERED_EXECUTIONER = 17301 from shattered_
 -- halls.h (SHCreatureIds); the creature_template ScriptName
--- bindings are DB-side (no TDB in this workspace). The
+-- binding is DB-side (TDB 26091 in this workspace; 17301
+-- ScriptName 'boss_shattered_executioner' verified). The
 -- executioner defines no Say enum — it never Talk()s.
 -- SPELL_CLEAVE = 15284 is the .cpp's own enum; SPELL_
 -- KARGATH_EXECUTIONER_1/2/3 (39288/39289/39290) and SPELL_
@@ -52,7 +53,7 @@
 -- + the quest leg (prisonersExecuted > 0 -> return; else each
 -- instance player with the quest incomplete completes 9524
 -- Alliance / 9525 Horde). SetData(DATA_PRISONERS_EXECUTED)
--- arrives as a store write (lua_creature_events.go:792) plus
+-- arrives as a store write (lua_creature_events.go:800) plus
 -- an ev38 relay from the instance file (broggok precedent):
 -- victim kill via GetInstanceCreature(DATA_FIRST_PRISONER +
 -- data - 1) (nil in practice — prisoner GUIDs are never
@@ -336,8 +337,8 @@ RegisterAuraEvent(SPELL_KARGATH_EXECUTIONER_3, 8, kargathExecutionerCheckAreaTar
 -- 220-254, census row 538): SpellScript OnEffectHitTarget
 -- EFFECT_0 — the caster (player) removes auras 39288/39289/
 -- 39290 from itself; Load() gates on a player caster. The hit
--- target is never used. RegisterSpellEvent ev5 fires on the
--- player path (runtime.go:648-652); the removal is idempotent,
+-- target is never used. RegisterSpellEvent ev5 fires on all three
+-- paths (runtime.go:651-652); the removal is idempotent,
 -- so a per-hit-target repeat of the handler is harmless.
 local function removeKargathExecutioner(event, spell, hitTarget, effectIndex)
     if effectIndex ~= 0 then return end

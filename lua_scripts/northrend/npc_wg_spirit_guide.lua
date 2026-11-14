@@ -1,7 +1,8 @@
 -- Wintergrasp spirit guides — Lua port of npc_wg_spirit_guideAI in
--- src/server/scripts/Northrend/zone_wintergrasp.cpp (lines 231-263).
--- Entries (wowhead, no C++ NPC_ constant exists for these — the
--- wg_queue wowhead-only precedent, never guessed): 31841
+-- src/server/scripts/Northrend/zone_wintergrasp.cpp (class :202-257; AI struct :207-251).
+-- Entries (TDB-verified with ScriptName 'npc_wg_spirit_guide':
+-- no C++ NPC_ constant exists for these — the wg_queue
+-- wowhead-only precedent, never guessed): 31841
 -- "Taunka Spirit Guide" (Horde) and 31842 "Dwarven Spirit Guide"
 -- (Alliance), both wowhead <Wintergrasp> pages.
 local NPC_WG_SPIRIT_GUIDE_HORDE = 31841
@@ -38,7 +39,7 @@ end
 -- C++ UpdateAI: DoCast(me, SPELL_CHANNEL_SPIRIT_HEAL), non-triggered,
 -- whenever the guide is not already casting. Ported as a 500ms
 -- IsCasting defer (mal_ganis idiom; IsCasting live,
--- lua_creature_events.go:1950 — the old vacuous-false claim is
+-- lua_creature_events.go:2480 — the old vacuous-false claim is
 -- stale, deathwhisper precedent); the 1s re-arm is not consumed
 -- while casting. One-shot chain, not a repeat
 -- count (the wg_queue schedule idiom).

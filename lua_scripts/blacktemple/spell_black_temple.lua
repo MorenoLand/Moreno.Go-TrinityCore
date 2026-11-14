@@ -1,9 +1,12 @@
 -- Black Temple spell scripts — Lua port of
 -- src/server/scripts/Outland/BlackTemple/black_temple.cpp
 -- (spell_illidari_nightlord_shadow_inferno only; the file's
--- creature AIs live in their boss_*.lua files, and
--- spell_soul_fragment_anger stays out — its AfterCast caster-
--- despawn leg has no spell-cast hook on the Lua surface).
+-- creature AIs live in blacktemple/npc_wrathbone_flayer.lua and
+-- blacktemple/npc_angered_soul_fragment.lua, and
+-- spell_soul_fragment_anger's AfterCast caster-despawn leg ports
+-- as an inline 200ms delayed Despawn in the soul-fragment file
+-- (SpellEventAfterCast = 9 also exists, runtime.go:727, firing on
+-- the creature path at boss_ai.go:4379).
 
 -- C++ spell_illidari_nightlord_shadow_inferno::OnPeriodic
 -- (black_temple.cpp:254-274): 39645 EFFECT_0 SPELL_AURA_
