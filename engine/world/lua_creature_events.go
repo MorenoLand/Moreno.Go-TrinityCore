@@ -4627,6 +4627,37 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{s.luaMotionCreature(target)}, nil
 	}
+	// GetPlayerByGUID is ObjectAccessor::GetPlayer
+	// (ObjectAccessor.cpp:208-219): the player object when the GUID
+	// resolves in the creature's map/instance and is alive, nil
+	// otherwise. Same gate as resolveFollowLeader above (the
+	// FollowerAI twin): a leader/player who left the map/instance or
+	// died is unresolvable here, so the caller's UpdateAI watchdog
+	// resets — the same visible outcome as C++ returning null.
+	// Backs the childrens_week orphan phase machines
+	// (childrens_week.cpp): each UpdateAI tick re-resolves the
+	// captured player GUID exactly as C++ re-resolves it through
+	// ObjectAccessor, and resets when it no longer resolves.
+	methods["GetPlayerByGUID"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("argument 1 is required")
+		}
+		guid, err := luaUint64(args[0])
+		if err != nil {
+			return nil, err
+		}
+		if guid == 0 || s == nil {
+			return []any{nil}, nil
+		}
+		player := s.findPlayer(guid)
+		if player == nil {
+			return []any{nil}, nil
+		}
+		if sess := s.findSessionByGUID(guid); sess == nil || sess.player == nil || sess.player.Health == 0 || sess.player.Map != motion.Map || sess.player.InstanceID != motion.InstanceID {
+			return []any{nil}, nil
+		}
+		return []any{player}, nil
+	}
 	// IsHeroic is ScriptedAI::_isHeroic (ScriptedCreature.cpp:129): the
 	// map spawn mode fixed when the instance was created. The Go
 	// instance table stores exactly that difficulty per instance id

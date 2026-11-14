@@ -13924,9 +13924,11 @@ func init() {
 	// HandleSpirits world-trigger scheduling and the enslaved-soul
 	// DoAction(ACTION_KILL_SELF) propagation have no
 	// instance/DoAction bridge, and the trigger's MoveInLineOfSight
-	// start is modeled as pull; the three essence boss AIs are not
-	// registered (no essence entry constants in the C++ tree —
-	// ScriptName bindings are DB-side); the enslaved-soul
+	// start is modeled as pull; the essence boss AIs (BossAI:
+	// suffering :285 / desire :385 / anger :490; entries +
+	// ScriptNames DB-verified, TDB 26091) are registered below
+	// (anger 23420 stays out — no Lua handler registers on it);
+	// the enslaved-soul
 	// REACT/DoZoneInCombat arms are PORTED (SetReactState +
 	// DoZoneInCombat) and the 500ms KillSelf arm is PORTED
 	// (creature:Kill); the reliquary submerge tick carries the
@@ -13937,6 +13939,8 @@ func init() {
 	// submerge and spite AuraScripts and the frenzy SpellScript
 	// have no script bridges.
 	RegisterLuaBoss("boss_reliquary_of_souls", 22856)
+	RegisterLuaBoss("boss_essence_of_suffering", 23418)
+	RegisterLuaBoss("boss_essence_of_desire", 23419)
 	// Enslaved Soul (Black Temple) — fight logic in
 	// lua_scripts/blacktemple/boss_reliquary_of_souls.lua.
 	RegisterLuaBoss("npc_enslaved_soul", 23469)
@@ -15694,6 +15698,16 @@ func init() {
 	// npc_the_etymidian.lua and lua_scripts/northrend/
 	// npc_injured_goblin.lua.
 	RegisterLuaBoss("npc_the_etymidian", 28092)
+	// Childrens Week orphan phase machines (childrens_week.cpp):
+	// winterfin / snowfall playmates, biggest tree, soo-roo, kekek —
+	// see lua_scripts/northrend/npc_winterfin_playmate.lua,
+	// npc_snowfall_glade_playmate.lua, npc_the_biggest_tree.lua,
+	// npc_high_oracle_soo_roo.lua, npc_elder_kekek.lua.
+	RegisterLuaBoss("npc_winterfin_playmate", 34489)
+	RegisterLuaBoss("npc_snowfall_glade_playmate", 34490)
+	RegisterLuaBoss("npc_the_biggest_tree", 34381)
+	RegisterLuaBoss("npc_high_oracle_soo_roo", 34386)
+	RegisterLuaBoss("npc_elder_kekek", 34387)
 	RegisterLuaBoss("npc_injured_goblin", 29434)
 	// npc_engineer_helice (Sholazar Basin zone script):
 	// OnQuestAccept quest-12688 escort start + JustDied FailQuest
@@ -19840,6 +19854,11 @@ func init() {
 	RegisterLuaBoss("boss_faction_champions", 34454)
 	RegisterLuaBoss("boss_faction_champions", 34471)
 	RegisterLuaBoss("boss_faction_champions", 34456)
+	// Faction-champions controller (Trial of the Crusader) —
+	// boss_toc_champion_controllerAI : BossAI
+	// (boss_faction_champions.cpp:372); the roster-delivery
+	// controller locks raid admission on aggro.
+	RegisterLuaBoss("boss_toc_champion_controller", 34781)
 	// boss_twin_valkyr: Trial of the Crusader dungeon boss script,
 	// entries 34497 Fjola Lightbane (trial_of_the_crusader.h
 	// NPC_FJOLA_LIGHTBANE — kalecgos pass;
@@ -19940,6 +19959,13 @@ func init() {
 	// unported arms only; combat-stalker UpdateAI :606 ungated
 	// (zero HasUnitState hits).
 	RegisterLuaBoss("boss_gormok", 34796)
+	// Northrend Beasts phases — boss_dreadscale / boss_acidmaw :
+	// boss_jormungarAI (BossAI) and boss_icehowl :
+	// boss_northrend_beastsAI (BossAI); each phase locks raid
+	// admission on aggro once Gormok's clears on death.
+	RegisterLuaBoss("boss_dreadscale", 34799)
+	RegisterLuaBoss("boss_acidmaw", 35144)
+	RegisterLuaBoss("boss_icehowl", 34797)
 	// Anub'Rekhan (Naxxramas) — fight logic in
 	// lua_scripts/northrend/boss_anubrekhan.lua. PORTED: boss_anubrekhan
 	// (15956) JustEngagedWith Talk(SAY_AGGRO 0) (BossAI bookkeeping,
@@ -22228,6 +22254,13 @@ func init() {
 	// ungated per C++ (separate hooks); stale "ungated" header claims
 	// corrected in the lua header.
 	RegisterLuaBoss("boss_palehoof", 26687)
+	// Palehoof minions (Utgarde Pinnacle) — PalehoofMinionsBossAI :
+	// BossAI (boss_palehoof.cpp:325); each wave boss locks raid
+	// admission on aggro like the main boss.
+	RegisterLuaBoss("boss_frenzied_worgen", 26683)
+	RegisterLuaBoss("boss_ravenous_furbolg", 26684)
+	RegisterLuaBoss("boss_massive_jormungar", 26685)
+	RegisterLuaBoss("boss_ferocious_rhino", 26686)
 	// AddSC_boss_skadi: Skadi the Ruthless (Utgarde Pinnacle) — ported
 	// arms (lua_scripts/northrend/boss_skadi.lua): KilledUnit
 	// player-gated Talk(SAY_KILL 1) (event 3 — the razuvious
