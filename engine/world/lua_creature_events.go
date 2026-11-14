@@ -5517,8 +5517,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// SetFacingToObject(obj) has no direct bridge — Lua ports compute the
 	// facing with math.atan2 from creature:GetX()/GetY() and the target's
 	// coordinates (the Unit::GetAbsoluteAngle twin, atan2 normalized to
-	// [0, 2pi) per creaturemotion.go:2430), then call this bridge. Creature::SetOrientation (the
-	// raw slot write with no packet) is the slot half of this bridge.
+	// [0, 2pi) per creaturemotion.go:2430), then call this bridge.
+	// SetOrientation is WorldObject::SetOrientation (Object.h, via
+	// Position::SetOrientation, Position.h:72-75): the raw orientation
+	// slot write, normalized to [0, 2pi), with no client packet — the
+	// slot half of the SetFacingTo bridge above. Backs the alexstrasza
+	// SetData orientation legs (childrens_week.cpp:795-811) and the
+	// phase-6 home-orientation restore.
+	methods["SetOrientation"] = func(_ context.Context, args []any) ([]any, error) {
+		ori, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		motion.Orientation = normalizeOrientation(ori)
+		s.motionMu.Unlock()
+		return nil, nil
+	}
 	methods["SetFacingTo"] = func(_ context.Context, args []any) ([]any, error) {
 		ori, err := luaFloat32Arg(args, 0)
 		if err != nil {

@@ -130,7 +130,10 @@ orphanTick = function(creature, guid)
     local player = creature:GetPlayerByGUID(st.playerGUID)
     local orphan = creature:GetCreatureByGUID(st.orphanGUID)
     if player == nil or orphan == nil then
-        states[guid] = nil
+        -- C++ UpdateAI null-guard calls Reset(): back to phase 0,
+        -- poll re-arms for the next player.
+        states[guid] = { phase = 0, delay = 0, playerGUID = 0, orphanGUID = 0 }
+        armPump(guid, creature)
         return
     end
     if st.delay > 1000 then
@@ -158,7 +161,9 @@ orphanTick = function(creature, guid)
         orphan:Talk(3)
         player:GroupEventHappens(QUEST_PLAYMATE_WOLVAR, creature)
         orphan:MoveFollow(player, PET_FOLLOW_DIST, PET_FOLLOW_ANGLE)
-        states[guid] = nil
+        -- C++ Reset(): back to phase 0, poll re-arms for the next player.
+        states[guid] = { phase = 0, delay = 0, playerGUID = 0, orphanGUID = 0 }
+        armPump(guid, creature)
         return
     else
         states[guid] = nil

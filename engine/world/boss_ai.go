@@ -15708,6 +15708,27 @@ func init() {
 	RegisterLuaBoss("npc_the_biggest_tree", 34381)
 	RegisterLuaBoss("npc_high_oracle_soo_roo", 34386)
 	RegisterLuaBoss("npc_elder_kekek", 34387)
+	// Childrens Week alexstrasza phase machine (childrens_week.cpp:
+	// npc_alexstraza_the_lifebinder, oracle/wolvar dragon-queen
+	// quests; entry + ScriptName DB-verified, TDB 26091) — see
+	// lua_scripts/northrend/npc_alexstraza_the_lifebinder.lua.
+	RegisterLuaBoss("npc_alexstraza_the_lifebinder", 26917)
+	// Childrens Week area triggers (childrens_week.cpp:
+	// npc_cw_area_trigger, 8 entries, all ScriptName-bound in
+	// TDB 26091) — see lua_scripts/world/npc_cw_area_trigger.lua.
+	RegisterLuaBoss("npc_cw_area_trigger", 22872)
+	RegisterLuaBoss("npc_cw_area_trigger", 22851)
+	RegisterLuaBoss("npc_cw_area_trigger", 22905)
+	RegisterLuaBoss("npc_cw_area_trigger", 22838)
+	RegisterLuaBoss("npc_cw_area_trigger", 22831)
+	RegisterLuaBoss("npc_cw_area_trigger", 22829)
+	RegisterLuaBoss("npc_cw_area_trigger", 22839)
+	RegisterLuaBoss("npc_cw_area_trigger", 22866)
+	// Childrens Week grizzlemaw trigger (childrens_week.cpp:
+	// npc_grizzlemaw_cw_trigger, entry + ScriptName DB-verified,
+	// TDB 26091) — see lua_scripts/northrend/
+	// npc_grizzlemaw_cw_trigger.lua.
+	RegisterLuaBoss("npc_grizzlemaw_cw_trigger", 36209)
 	RegisterLuaBoss("npc_injured_goblin", 29434)
 	// npc_engineer_helice (Sholazar Basin zone script):
 	// OnQuestAccept quest-12688 escort start + JustDied FailQuest
