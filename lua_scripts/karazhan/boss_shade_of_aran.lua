@@ -61,9 +61,11 @@
 -- reproduced — a partial port would re-drink in a loop. The SpellHit
 -- interrupt arm IS ported (ev14 + creature:HasSpellEffect, bridge live
 -- 2026-11-14): an interrupt-effect spell landing mid-cast interrupts it
--- and arms the 5s school cooldown. The arm stays inert until the player
--- interrupt spells are seeded in Spell.dbc (wago read in flight). The
--- flame-wreath 3-yd check is 2D
+-- and arms the 5s school cooldown. Interrupt spells seeded 2026-11-14
+-- (13 rows: Shield Bash 72/1671/1672, Kick 1766-1769, Pummel 6552/6554,
+-- Counterspell 2139, Spell Lock 19244, Mind Freeze 47528, Wind Shear
+-- 57994); missing ranks (Kick r5, Shield Bash r4, Spell Lock r2) still
+-- need SpellMisc rows. The flame-wreath 3-yd check is 2D
 -- distance from the cast point — C++-exact
 -- (unit->IsWithinDist2d(FWTargPosX[i], FWTargPosY[i], 3); no facing
 -- involved); the C++ punishment is the moved unit casting 20476 on itself

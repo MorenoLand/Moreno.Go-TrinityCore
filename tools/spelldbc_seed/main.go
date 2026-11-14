@@ -57,6 +57,7 @@ const (
 	effEnergize                = 30
 	effTriggerMiss             = 32
 	effSendEvent               = 61
+	effThreat                  = 63 // SPELL_EFFECT_THREAT (SharedDefines.h)
 	effTriggerSpell            = 64
 	effScriptEffect            = 77
 	effActivateObj             = 86
@@ -65,6 +66,7 @@ const (
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage            = 58
 	effHealMaxHealth           = 67 // SPELL_EFFECT_HEAL_MAX_HEALTH
+	effInterruptCast           = 68 // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
 	auraStun                   = 12
@@ -810,6 +812,69 @@ var spells = []spell{
 	// arc (bossConeEffectTargetsFiltered); the knockback itself pushes
 	// the player out of the 5yd gate within a tick or two.
 	{id: 38576, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effKnockBack, dieSides: 1, basePoints: 224, targetA: targetUnitConeEnemy, radiusIdx: 13, misc: 15}}},
+
+	// Player interrupt spells (Shade of Aran SpellHit arm,
+	// boss_shade_of_aran.cpp:481-501 + creature:HasSpellEffect bridge):
+	// every row below is a wago.tools 3.4.0.43659 Spell/SpellEffect/
+	// SpellMisc verdict (2026-11-14), all TargetA 6
+	// (TARGET_UNIT_TARGET_ENEMY), TargetB 0, RadiusIndex 0, Misc 0/0
+	// unless stated. CastingTimeIndex 1 (instant, SpellCastTimes 1:
+	// Base 0) rides the seed default castTimeIdx 0 (38576 precedent).
+	// DurationIndex 28/32 rows already seeded; 31/35/39 added below.
+	// RangeIndex 4 row already seeded; 2/34 added below.
+	// CORRECTIONS from the same verdict: Earth Shock player ranks are
+	// NOT interrupt spells in this build (effects 6 APPLY_AURA 138 +
+	// 2 SCHOOL_DAMAGE, no effect 68; ranks 8042/8044/8045/8046/10412/
+	// 10413/10414/25454/49230/49231; 8047-8049 do not exist; 8050/8052/
+	// 8053 are Flame Shock) — do NOT seed them as interrupts. NOT YET
+	// SEEDED (SpellMisc rows not in the verdict — follow-up wago read):
+	// Kick Rank 5 (38768, 45356), Shield Bash Rank 4 (29704), Spell
+	// Lock Rank 2 (19647, 67519). Trigger targets 29703 (Shield Bash
+	// 72) and 24259 (Spell Lock 19244) are unseeded — the trigger arm
+	// no-ops on unknown spells (spellKnown gate), same as any
+	// unseeded trigger in the seed.
+	// Shield Bash 72 (Rank 1): durIdx 32 (6000), rangeIdx 2 (5 yd),
+	// school 0x1; eff0 68 INTERRUPT_CAST Die 1 Base -1; eff1 64
+	// TRIGGER_SPELL Die 1 Base -1 Trigger 29703.
+	{id: 72, durIdx: 32, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effTriggerSpell, dieSides: 1, basePoints: -1, targetA: targetEnemy, trigger: 29703}}},
+	// Shield Bash 1671 (Rank 2): durIdx 32, rangeIdx 2, school 0x1;
+	// eff0 68 Die 1 Base -1; eff1 2 SCHOOL_DAMAGE Die 1 Base 17.
+	{id: 1671, durIdx: 32, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effSchoolDamage, dieSides: 1, basePoints: 17, targetA: targetEnemy}}},
+	// Shield Bash 1672 (Rank 3): durIdx 32, rangeIdx 2, school 0x1;
+	// eff0 68 Die 1 Base -1; eff1 2 SCHOOL_DAMAGE Die 1 Base 44.
+	{id: 1672, durIdx: 32, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effSchoolDamage, dieSides: 1, basePoints: 44, targetA: targetEnemy}}},
+	// Kick 1766 (Rank 1): durIdx 28 (5000), rangeIdx 2, school 0x1;
+	// eff0 68 INTERRUPT_CAST Die 0 Base 0 (single effect).
+	{id: 1766, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 0, basePoints: 0, targetA: targetEnemy}}},
+	// Kick 1767 (Rank 2): durIdx 28, rangeIdx 2, school 0x1; eff0 68
+	// Die 0 Base 0; eff1 2 SCHOOL_DAMAGE Die 1 Base 29.
+	{id: 1767, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 0, basePoints: 0, targetA: targetEnemy}, {effect: effSchoolDamage, dieSides: 1, basePoints: 29, targetA: targetEnemy}}},
+	// Kick 1768 (Rank 3): durIdx 28, rangeIdx 2, school 0x1; eff0 68
+	// Die 0 Base 0; eff1 2 SCHOOL_DAMAGE Die 1 Base 44.
+	{id: 1768, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 0, basePoints: 0, targetA: targetEnemy}, {effect: effSchoolDamage, dieSides: 1, basePoints: 44, targetA: targetEnemy}}},
+	// Kick 1769 (Rank 4): durIdx 28, rangeIdx 2, school 0x1; eff0 68
+	// Die 1 Base -1; eff1 2 SCHOOL_DAMAGE Die 1 Base 79.
+	{id: 1769, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effSchoolDamage, dieSides: 1, basePoints: 79, targetA: targetEnemy}}},
+	// Pummel 6552 (Rank 1): durIdx 35 (4000), rangeIdx 2, school 0x1;
+	// eff0 68 INTERRUPT_CAST Die 0 Base 0 (single effect).
+	{id: 6552, durIdx: 35, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 0, basePoints: 0, targetA: targetEnemy}}},
+	// Pummel 6554 (Rank 2): durIdx 35, rangeIdx 2, school 0x1; eff0 68
+	// Die 0 Base 0; eff1 2 SCHOOL_DAMAGE Die 1 Base 49.
+	{id: 6554, durIdx: 35, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effInterruptCast, dieSides: 0, basePoints: 0, targetA: targetEnemy}, {effect: effSchoolDamage, dieSides: 1, basePoints: 49, targetA: targetEnemy}}},
+	// Counterspell 2139 (single rank): durIdx 31 (8000), rangeIdx 4
+	// (30 yd), school 0x40; eff0 68 Die 1 Base -1 (single effect).
+	{id: 2139, durIdx: 31, rangeIdx: 4, school: schoolArcane, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
+	// Spell Lock 19244 (Rank 1): durIdx 28 (5000), rangeIdx 4,
+	// school 0x20; eff0 68 Die 1 Base -1; eff1 64 TRIGGER_SPELL
+	// Die 1 Base -1 Trigger 24259.
+	{id: 19244, durIdx: 28, rangeIdx: 4, school: schoolShadow, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effTriggerSpell, dieSides: 1, basePoints: -1, targetA: targetEnemy, trigger: 24259}}},
+	// Mind Freeze 47528 (single rank): durIdx 35 (4000), rangeIdx 2,
+	// school 0x10; eff0 68 Die 1 Base -1 (single effect).
+	{id: 47528, durIdx: 35, rangeIdx: 2, school: schoolFrost, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
+	// Wind Shear 57994 (single rank): durIdx 39 (2000), rangeIdx 34
+	// (25 yd), school 0x8; eff0 68 Die 1 Base -1; eff1 63 THREAT
+	// Die 1 Base -1.
+	{id: 57994, durIdx: 39, rangeIdx: 34, school: schoolNature, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effThreat, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
 }
 
 func main() {
@@ -838,6 +903,9 @@ func main() {
 		{21, 0xFFFFFFFF, 0, 0xFFFFFFFF}, // real SpellDuration 21 (-1 infinite) for 68415
 		{32, 6000, 0, 6000},             // real SpellDuration 32 for 54690 (wago.tools 3.4.0.43659)
 		{22, 45000, 0, 45000},           // real SpellDuration 22 for 15786 (wago.tools 3.4.0.43659)
+		{31, 8000, 0, 8000},             // real SpellDuration 31 for 2139 Counterspell (wago.tools 3.4.0.43659)
+		{35, 4000, 0, 4000},             // real SpellDuration 35 for 6552 Pummel / 47528 Mind Freeze (wago.tools 3.4.0.43659)
+		{39, 2000, 0, 2000},             // real SpellDuration 39 for 57994 Wind Shear (wago.tools 3.4.0.43659)
 		{90001, 2000, 0, 2000},
 		{90002, 6000, 0, 6000},
 		{90003, 8000, 0, 8000},
@@ -899,6 +967,8 @@ func main() {
 		{74, f32(0), f32(0), f32(30), f32(30), 2},    // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
 		{5, f32(0), f32(0), f32(40), f32(40), 0},     // real SpellRange 5 "Long Range" for 31263 (wago.tools 3.4.0.43659)
 		{1, f32(0), f32(0), f32(0), f32(0), 0},       // real SpellRange 1 "Self Only" for 31308 (wago.tools 3.4.0.43659)
+		{2, f32(0), f32(0), f32(5), f32(5), 1},       // real SpellRange 2 "Combat Range" for interrupt spells (wago.tools 3.4.0.43659, Flags 0x1)
+		{34, f32(0), f32(0), f32(25), f32(25), 0},    // real SpellRange 34 "Twenty-Five yards" for 57994 (wago.tools 3.4.0.43659)
 		{93001, f32(0), f32(0), f32(0), f32(0), 0},
 		{93002, f32(0), f32(0), f32(5), f32(5), 0},
 		{93003, f32(8), f32(8), f32(25), f32(25), 0},
