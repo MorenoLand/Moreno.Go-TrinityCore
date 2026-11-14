@@ -519,6 +519,21 @@ func (s *Server) minionsByEntry(mapID, instanceID uint32, ownerGUID uint64, entr
 	return found
 }
 
+// removeAllMinionsByEntry mirrors Unit::RemoveAllMinionsByEntry
+// (Unit.cpp): every IsSummon minion of the owner with the entry is
+// despawned, GUID order (the minionsByEntry order), through the
+// shared despawnCreatureMotion path (destroy broadcast, temp-summon
+// event-20 leg, respawn bookkeeping). A minion already gone reads
+// as a no-op inside the despawn.
+func (s *Server) removeAllMinionsByEntry(ctx context.Context, mapID, instanceID uint32, ownerGUID uint64, entry uint32) {
+	if s == nil {
+		return
+	}
+	for _, m := range s.minionsByEntry(mapID, instanceID, ownerGUID, entry) {
+		s.despawnCreatureMotion(ctx, m.Map, m.InstanceID, m.GUID)
+	}
+}
+
 // controlledUnits mirrors the Unit::m_Controlled iteration (Unit.h:762):
 // every creature motion in the same map+instance whose OwnerGUID is the
 // owner, GUID-sorted. Unlike minionsByEntry there is no entry or

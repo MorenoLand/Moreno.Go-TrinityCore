@@ -3060,6 +3060,19 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.removeAurasWithMechanic(mask)
 		return nil, nil
 	}
+	// RemoveAurasDueToSpell(spellId) is Unit::RemoveAurasDueToSpell
+	// (Unit.cpp) for players: drops the spell's aura regardless of
+	// caster, via the session removeAura path. Backs the salanar MIOS
+	// realm-of-shadows strip (chapter1.cpp:827) and the gothik-adjacent
+	// eye-of-acherus arms (chapter1.cpp:449-450).
+	methods["RemoveAurasDueToSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.removeAura(spell)
+		return nil, nil
+	}
 	// IsFriendlyTo(target) is WorldObject::IsFriendlyTo
 	// (Object.cpp:2847-2850) on the player surface, via the
 	// playerFriendlyToTarget twin (creature_explicit_target_faction.go):
@@ -3405,6 +3418,23 @@ func (s *session) luaPlayer() *scripting.Object {
 			out = append(out, s.server.luaMotionCreature(m))
 		}
 		return []any{out}, nil
+	}
+	// RemoveAllMinionsByEntry(entry) is Unit::RemoveAllMinionsByEntry
+	// (Unit.cpp) for players: every IsSummon minion of this player
+	// with the entry is despawned, GUID order (the minionsByEntry
+	// order), via the shared despawnCreatureMotion path. Backs the
+	// gothik ghoul-collect arm (chapter1.cpp:993-994), which clears
+	// the player's ghost minions when quest 12698 completes.
+	methods["RemoveAllMinionsByEntry"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s.server == nil {
+			return nil, nil
+		}
+		s.server.removeAllMinionsByEntry(ctx, s.player.Map, s.player.InstanceID, s.playerGUID, entry)
+		return nil, nil
 	}
 	// GetControlledUnits is the Unit::m_Controlled iteration
 	// (Unit.h:762): every creature owned by this player in the same

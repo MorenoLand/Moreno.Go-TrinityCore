@@ -356,6 +356,76 @@ func luaCastCustomBasePoints(args []any) (map[int]int32, error) {
 	return out, nil
 }
 
+// despawnCreatureMotion is the shared DespawnOrUnsummon core
+// (Creature.cpp:2271 / TemporarySummon.cpp:274-298): motion-map
+// delete, in-flight cast interrupt, destroy broadcast, the
+// temp-summon event-20 leg on the summoner, the world delete
+// event, then DB-spawn respawn bookkeeping. Factored out of
+// the Eluna Despawn binding so RemoveAllMinionsByEntry can
+// despawn minions through the identical path.
+func (s *Server) despawnCreatureMotion(ctx context.Context, mapID, instanceID uint32, guid uint64) {
+	s.motionMu.Lock()
+	motions := s.motionMapLocked(mapID, instanceID)
+	m, ok := motions[guid]
+	if !ok {
+		s.motionMu.Unlock()
+		return
+	}
+	delete(motions, guid)
+	maxHealth := m.MaxHealth
+	isTempSummon, ownerGUID := m.IsTempSummon, m.OwnerGUID
+	x, y, z := m.X, m.Y, m.Z
+	s.motionMu.Unlock()
+	// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
+	// cast in flight before RemoveFromWorld, ahead of destroy.
+	s.interruptCreatureCastsOnRemove(m)
+	destroyBuf := protocol.NewBuffer(9)
+	destroyBuf.WriteU64(guid)
+	destroyBuf.WriteU8(0)
+	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
+	// DespawnOrUnsummon on a TempSummon runs UnSummon
+	// (TemporarySummon.cpp:274-284) FIRST, firing
+	// SummonedCreatureDespawn on the summoner creature's AI;
+	// the Eluna twin is event 20 on the summoner (the
+	// expireTempSummonGuardian precedent). Player owners have
+	// no creature hook, so the motion lookup skips them, and
+	// non-temp creatures carry no summoner leg. MotionMu is
+	// released above, as fireCreatureSummoned requires.
+	if isTempSummon {
+		if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
+			s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, m)
+		}
+	}
+	// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): DespawnOrUnsummon
+	// (Creature.cpp:2271) runs ForcedDespawn (Creature.cpp:2219;
+	// delay 0 queues the delete at :2267 in both respawn modes)
+	// or, for a TempSummon, UnSummon (TemporarySummon.cpp:298) —
+	// both end at AddObjectToRemoveList, so the delete event fires
+	// here even for DB creatures that later respawn as a new object.
+	// The helper fires 31 then the RemoveFromWorld leg 37, in C++
+	// order (previously this leg fired 37 before 31, and 20 last).
+	s.fireServerDeleteCreature(ctx, m)
+	if maxHealth == 0 {
+		maxHealth = 1
+	}
+	dbGUID := uint32(guid & 0x00FFFFFF)
+	dbSpawned := false
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		var one int
+		dbSpawned = s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature WHERE guid = ?", dbGUID).Scan(&one) == nil
+	}
+	if !dbSpawned {
+		return
+	}
+	if instanceID == 0 {
+		_, _ = s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", dbGUID)
+		s.scheduleCreatureRespawn(ctx, dbGUID, maxHealth, time.Now())
+	} else {
+		s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, MaxHealth: maxHealth}, maxHealth, time.Now())
+	}
+	return
+}
+
 func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	if s == nil || motion == nil {
 		return nil
@@ -638,6 +708,25 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		if owner := s.findSessionByGUID(ownerGUID); owner != nil {
 			return []any{owner.luaPlayer()}, nil
+		}
+		return []any{nil}, nil
+	}
+	// GetCharmer is Unit::GetCharmer (Unit.h) for handler creatures:
+	// the motion's CharmerGUID resolved to a live unit object (player
+	// or creature), or nil when uncharmed or the charmer is gone. The
+	// luaUnitObjectForGUID twin of the GetOwner session-only read:
+	// GetOwner resolves players only, but a charmer can be a creature
+	// (a charmed vehicle). Backs the salanar MoveInLineOfSight
+	// vehicle arm (chapter1.cpp:810).
+	methods["GetCharmer"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.motionMu.Lock()
+		mapID, instanceID, charmerGUID := motion.Map, motion.InstanceID, motion.CharmerGUID
+		s.motionMu.Unlock()
+		if charmerGUID == 0 {
+			return []any{nil}, nil
+		}
+		if obj := s.luaUnitObjectForGUID(mapID, instanceID, charmerGUID); obj != nil {
+			return []any{obj}, nil
 		}
 		return []any{nil}, nil
 	}
@@ -1546,6 +1635,20 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			return nil, err
 		}
 		s.removeCreatureAurasWithMechanic(auraKey(), mask)
+		return nil, nil
+	}
+	// RemoveAurasDueToSpell(spellId) is Unit::RemoveAurasDueToSpell
+	// (Unit.cpp) for handler creatures: drops the spell's aura
+	// regardless of caster, via the removeCreatureAura remove path
+	// (charm/possess/vehicle/taunt/feign-death legs and the
+	// presence-only Lua-AddAura set are both cleared). Backs the
+	// salanar MIOS overtake strip (chapter1.cpp:819).
+	methods["RemoveAurasDueToSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.removeCreatureAura(auraKey(), spell)
 		return nil, nil
 	}
 	// GetAura is Unit::GetAura (UnitMethods.h) for handler creatures:
@@ -3523,66 +3626,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// (SummonedCreatureDespawn) on its summoner creature below,
 	// the UnSummon leg; see the inline note at the fire site.
 	methods["Despawn"] = func(ctx context.Context, _ []any) ([]any, error) {
-		s.motionMu.Lock()
-		motions := s.motionMapLocked(motion.Map, motion.InstanceID)
-		m, ok := motions[motion.GUID]
-		if !ok {
-			s.motionMu.Unlock()
-			return nil, nil
-		}
-		delete(motions, motion.GUID)
-		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
-		maxHealth := m.MaxHealth
-		isTempSummon, ownerGUID := m.IsTempSummon, m.OwnerGUID
-		x, y, z := m.X, m.Y, m.Z
-		s.motionMu.Unlock()
-		// CleanupBeforeRemoveFromMap (Unit.cpp:9826-9829) cancels a
-		// cast in flight before RemoveFromWorld, ahead of destroy.
-		s.interruptCreatureCastsOnRemove(m)
-		destroyBuf := protocol.NewBuffer(9)
-		destroyBuf.WriteU64(guid)
-		destroyBuf.WriteU8(0)
-		s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), destroyBuf.Bytes(), mapID, instanceID, x, y, z, m.PhaseMask)
-		// DespawnOrUnsummon on a TempSummon runs UnSummon
-		// (TemporarySummon.cpp:274-284) FIRST, firing
-		// SummonedCreatureDespawn on the summoner creature's AI;
-		// the Eluna twin is event 20 on the summoner (the
-		// expireTempSummonGuardian precedent). Player owners have
-		// no creature hook, so the motion lookup skips them, and
-		// non-temp creatures carry no summoner leg. MotionMu is
-		// released above, as fireCreatureSummoned requires.
-		if isTempSummon {
-			if ownerMotion := s.findCreatureMotion(mapID, instanceID, ownerGUID); ownerMotion != nil {
-				s.fireCreatureSummoned(ctx, ownerMotion, scripting.CreatureEventOnSummonedCreatureDespawn, m)
-			}
-		}
-		// Eluna WORLD_EVENT_ON_DELETE_CREATURE (31): DespawnOrUnsummon
-		// (Creature.cpp:2271) runs ForcedDespawn (Creature.cpp:2219;
-		// delay 0 queues the delete at :2267 in both respawn modes)
-		// or, for a TempSummon, UnSummon (TemporarySummon.cpp:298) —
-		// both end at AddObjectToRemoveList, so the delete event fires
-		// here even for DB creatures that later respawn as a new object.
-		// The helper fires 31 then the RemoveFromWorld leg 37, in C++
-		// order (previously this leg fired 37 before 31, and 20 last).
-		s.fireServerDeleteCreature(ctx, m)
-		if maxHealth == 0 {
-			maxHealth = 1
-		}
-		dbGUID := uint32(guid & 0x00FFFFFF)
-		dbSpawned := false
-		if s.WorldStore != nil && s.WorldStore.DB != nil {
-			var one int
-			dbSpawned = s.WorldStore.DB.QueryRowContext(ctx, "SELECT 1 FROM creature WHERE guid = ?", dbGUID).Scan(&one) == nil
-		}
-		if !dbSpawned {
-			return nil, nil
-		}
-		if instanceID == 0 {
-			_, _ = s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", dbGUID)
-			s.scheduleCreatureRespawn(ctx, dbGUID, maxHealth, time.Now())
-		} else {
-			s.scheduleInstanceCreatureRespawn(ctx, combatTarget{GUID: guid, Map: mapID, InstanceID: instanceID, X: x, Y: y, Z: z, MaxHealth: maxHealth}, maxHealth, time.Now())
-		}
+		s.despawnCreatureMotion(ctx, motion.Map, motion.InstanceID, motion.GUID)
 		return nil, nil
 	}
 	// Respawn is Creature::Respawn (Creature.cpp:2156-2215, force=true
@@ -3759,6 +3803,23 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			out = append(out, s.luaMotionCreature(m))
 		}
 		return []any{out}, nil
+	}
+	// RemoveAllMinionsByEntry(entry) is Unit::RemoveAllMinionsByEntry
+	// (Unit.cpp) for handler creatures: every IsSummon minion of this
+	// unit with the entry is despawned, GUID order (the
+	// minionsByEntry order), via the shared despawnCreatureMotion
+	// path. Backs the gothik ghoul-collect arm
+	// (chapter1.cpp:993-994).
+	methods["RemoveAllMinionsByEntry"] = func(ctx context.Context, args []any) ([]any, error) {
+		entry, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.motionMu.Lock()
+		mapID, instanceID, guid := motion.Map, motion.InstanceID, motion.GUID
+		s.motionMu.Unlock()
+		s.removeAllMinionsByEntry(ctx, mapID, instanceID, guid, entry)
+		return nil, nil
 	}
 	// GetAttackers is the motion-creature twin of the player arm in
 	// lua_player.go (Unit::getAttackers, Unit.h; see attackersOf in

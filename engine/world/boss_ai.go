@@ -16492,12 +16492,16 @@ func init() {
 	// not ev5 — ev5 fires before CreatedByGUID is stamped), npc_
 	// salanar_the_horseman (gossip 9739 realm-of-shadows cast PORTED tick
 	// 2026-11-14, see the registration below; MoveInLineOfSight vehicle
-	// machine stays out -- ev27 engage-only, no GetCharmer/RemoveAuras
-	// bridges), spell_stable_
+	// machine stays out -- ev27 engage-only (GetCharmer +
+	// RemoveAurasDueToSpell bridges live since tick 2026-11-14; the
+	// remaining blocker is the ev27 proximity dispatch, which only
+	// fires on aggro engage)), spell_stable_
 	// master_repo (AuraScript; no bridge), spell_deliver_stolen_horse
 	// (SpellScript; no bridge), npc_dkc1_gothik
 	// (MoveInLineOfSight ghoul-collect; no proximity bridge -- ev27
-	// engage-only, no GetCharmer/RemoveAllMinionsByEntry bridges),
+	// engage-only (GetCharmer + RemoveAllMinionsByEntry bridges live
+	// since tick 2026-11-14; the remaining blocker is the ev27
+	// proximity dispatch, which only fires on aggro engage)),
 	// npc_scarlet_ghoul (owner/minion machines PORTED tick 2026-11-14,
 	// see the registration below -- the Oct-7 "no minion bridges" claim
 	// is stale: GetAllMinionsByEntry + GetVictim are live),
@@ -16557,7 +16561,9 @@ func init() {
 	// (menu 9739 option 0 -> player:CastSpell(player, 52693) +
 	// GossipComplete, C++ order, no ClearGossipMenu -- the C++ arm
 	// has none). MoveInLineOfSight vehicle machine stays out (ev27
-	// engage-only + no GetCharmer/RemoveAurasDueToSpell bridges);
+	// engage-only; GetCharmer + RemoveAurasDueToSpell bridges live
+	// since tick 2026-11-14; the remaining blocker is the ev27
+	// proximity dispatch, which only fires on aggro engage);
 	// 28788 ships npcflag 0/menu 0 so the select arm cannot fire
 	// in the current DB state (same in TC).
 	RegisterLuaBoss("npc_salanar_the_horseman", 28788)
