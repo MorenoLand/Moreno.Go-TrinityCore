@@ -14,7 +14,8 @@
 -- sources; DATA_ALAR = 1 — instance-side constant,
 -- unbridgeable). instance_the_eye.cpp OnCreatureCreate maps
 -- NPC_ALAR to Alar (verified). The creature_template
--- ScriptName bindings are DB-side (no TDB in this workspace).
+-- ScriptName bindings are DB-side (TDB in-workspace at
+-- hidden_files/tdb/TDB_full_world_335.26091_2026_09_09.sql).
 -- Talk: boss_alar.cpp defines no SAY_ enums — no talks fire
 -- anywhere in the fight (C++-exact).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
@@ -48,7 +49,7 @@
 --    charge 7000 / dive bomb 40000+rand()%5000 / flame patch
 --    30000 (PORTED 2026-10-23 — the stale "no summon-object
 --    drive" claim was retracted: creature:SummonCreature is
---    bridged, lua_creature_events.go:728); the WE_DIE /
+--    bridged, lua_creature_events.go:4161); the WE_DIE /
 --    WE_REVIVE MovePoint leg stays unbridged (the :208 Interrupt
 --    leg is PORTED in OnDamageTaken below, no-op twin) — the WE_DIE
 --    5.0f speed arm rides the unbridged MovePoint (SetSpeedRate is
@@ -73,7 +74,7 @@
 --    arm is ported below (stale "no aura bridge" claim
 --    retracted — creature RemoveAura is bridged); the UpdatePosition
 --    teleport is PORTED 2026-10-23 via creature:Teleport (NearTeleportTo
---    twin, lua_creature_events.go:523 — stale "no movement bridge"
+--    twin, lua_creature_events.go:3582 — stale "no movement bridge"
 --    claim retracted) + StopMoving, with the C++ dist-based wait,
 --    no target -> evade
 --    (C++ EnterEvadeMode — the evade hooks land the reset);
@@ -157,7 +158,8 @@
 -- documented only, not registered — its DamageTaken latch
 -- (TRIGGERED SPELL_EMBER_BLAST 34133 + the 3% Al'ar health
 -- cut via instance->GetGuidData(DATA_ALAR)) sits behind the
--- summon bridge (unreachable — nothing spawns it) and the
+-- summon bridge (embers ARE spawned in Lua — phase-1 + WE_SUMMON
+-- pair, round 28; only the ember AI registration stays out) and the
 -- cross-creature/instance bridges (skyriss-illusion /
 -- warp_splinter-treant precedent); npc_flame_patch_alar
 -- (20602) documented only, not registered — its C++ AI is a
@@ -604,7 +606,7 @@ RegisterCreatureEvent(ENTRY_ALAR, 2, function(_, creature)
     -- C++ Reset() :164: SetDisplayId(GetNativeDisplayId()) — ported
     -- via the alarNative capture (the stale "no display bridge"
     -- claim retracted; creature:SetDisplayId is bridged,
-    -- lua_creature_events.go:643).
+    -- lua_creature_events.go:5037).
     if alarNative[guid] ~= nil then
         creature:SetDisplayId(alarNative[guid])
         alarNative[guid] = nil
@@ -660,7 +662,7 @@ RegisterCreatureEvent(ENTRY_ALAR, 9, function(_, creature, attacker, damage)
         -- boss_alar.cpp:209 — C++ arm order after Interrupt / before
         -- SetFlag(:210); the "no aura bridge" note from the 14:24 tick
         -- is retracted — creature:RemoveAllAuras is bridged
-        -- (lua_creature_events.go:169, venoxis precedent).
+        -- (lua_creature_events.go:1872, venoxis precedent).
         creature:RemoveAllAuras()
         -- boss_alar.cpp:210 — C++ arm order after RemoveAllAuras
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
@@ -732,7 +734,7 @@ end)
 -- fires ev19 but is filtered out by the entry check. PORTED
 -- 2026-11-13 (round 28) — the "unbridged cross-creature relay"
 -- claim is stale: creature:AttackStart is bridged
--- (lua_creature_events.go:7215-7220, EngageWithTarget twin) and
+-- (lua_creature_events.go:7325, EngageWithTarget twin) and
 -- ev19 fires from creature:SummonCreature (:190); halazzi precedent
 -- for the (event, creature, summon) form.
 local function alarJustSummoned(event, creature, summon)

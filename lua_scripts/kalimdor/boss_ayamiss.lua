@@ -40,7 +40,7 @@
 --   (creature:SetCanFly, lua_creature_events.go); the SetCombatMovement(false) Reset arm PORTED
 --   2026-10-22 (creature:SetCombatMovement, lua_creature_events.go —
 --   C++ boss_ayamiss.cpp:98). ResetThreatList PORTED 2026-10-19
---   (creature:ResetAllThreat, bridged lua_objects.go).
+--   (creature:ResetAllThreat, bridged lua_creature_events.go:2343).
 -- - EVENT_LASH: DoCastVictim 25852, reschedule 8-15s.
 -- - EVENT_TRASH: DoCastVictim 3391 (kurinnaxx convention),
 --   reschedule 5-7s.
@@ -61,7 +61,7 @@
 --   MovePoint twin (MoveTo, slad'ran precedent) has no summon to carry.
 -- - EVENT_SWARMER_ATTACK PORTED 2026-10-26 (see onSwarmerAttack);
 --   the old "no bridge" claims are retracted — EngageWithTarget is
---   the AttackStart twin (lua_creature_events.go:498).
+--   the AttackStart twin (lua_creature_events.go:1463).
 -- - npc_hive_zara_larva: MovementInform/AttackStart/MoveInLineOfSight
 --   all gated on instance GetBossState(DATA_AYAMISS) — no bridge.
 -- - instance->SetGuidData(DATA_PARALYZED, ...) — no bridge.
@@ -225,7 +225,7 @@ end
 -- pool is built once per fire (the C++ re-pick cannot change the
 -- pool mid-loop); a dead swarmer is skipped (its C++ AttackStart is
 -- a no-op); a non-player pick no-ops in the EngageWithTarget funnel
--- (lua_creature_events.go:498, player-session only), noted per port.
+-- (lua_creature_events.go:1463, player-session only), noted per port.
 local function onSwarmerAttack(creature, guid)
     local state = ayamissState[guid]
     local swarmers = state and state.swarmers or {}
@@ -253,7 +253,7 @@ end
 -- damage (event 9); event 9 fires pre-damage so the subtraction
 -- mirrors the post-damage C++ read (buru transform convention).
 -- Motion has no bridge; ResetThreatList PORTED 2026-10-19
--- (creature:ResetAllThreat, bridged lua_objects.go).
+-- (creature:ResetAllThreat, bridged lua_creature_events.go:2343).
 local function checkGroundPhase(creature, guid, damage)
     local state = ayamissState[guid]
     if state == nil or state.phase ~= PHASE_AIR then
@@ -319,7 +319,7 @@ local function onEnterCombat(event, creature, target)
     -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
     -- base-first in boss_ayamiss.cpp:142): instance->SetBossState
     -- (DATA_AYAMISS, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
-    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    -- arms below (creature:SetBossState, lua_creature_events.go:7099).
     -- The CheckRequiredBosses gate is vacuous (no instance override
     -- in instance_ruins_of_ahnqiraj.cpp).
     creature:SetBossState(DATA_AYAMISS, BOSS_STATE_IN_PROGRESS)

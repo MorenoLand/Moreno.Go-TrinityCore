@@ -50,7 +50,7 @@
 -- SetBossState(BOSS_BLACK_KNIGHT, DONE) on event 4 — the SetBossState
 -- leg is PORTED (2026-11-07 tick 378; the old "no bridge" verdict is
 -- retracted — creature:SetBossState is bridged,
--- lua_creature_events.go:6088). OnLeaveCombat(2) /
+-- lua_creature_events.go:7099). OnLeaveCombat(2) /
 -- OnDied(4) / OnReset(23) cancel the scheduler (gargolmar precedent).
 -- Ported arms, continued:
 -- boss_black_knight DamageTaken + resurrect machine — PORTED:
@@ -85,7 +85,11 @@
 -- 7s one-shot clear; the STUNNED half has no bridge, so rotation casts
 -- gate on the armyWindow latch while re-arming, as in the fake-death
 -- window). DoCastSelf(Army of the Dead 67761) stays out (DB-side summon
--- effect, ghoul entry unverifiable, no Go spell-effect producer);
+-- effect, 67761 absent from the 63-record seed Spell.dbc so the Go cast
+-- is a no-op; ghoul entry 35545 verified 2026-11-13, round 60 — the
+-- Army summon count/positions need full Spell.dbc effect data for
+-- 67761, unverifiable in-workspace, so no direct SummonCreature leg
+-- is modeled yet — open follow-up);
 -- uiDesecration PORTED below (skeleton-entry + urand(15000,16000));
 -- uiGhoulExplode
 -- PORTED 2026-10-24 — DoCastSelf (67751), 8000 repeat, scheduled at
@@ -103,28 +107,32 @@
 -- urand(5000,7000), threat-list pick).
 -- boss_black_knight Reset — summons.DespawnAll() + SetDisplayId(native)
 -- + ClearUnitState(ROOT | STUNNED) — the despawn leg stays out: the
--- ghoul entry is unverifiable (DB-side SPELL_ARMY_DEAD summon) so no
--- grid twin exists; display/root legs are bridged (see DamageTaken). JustSummoned — summons.Summon + cross-AI AttackStart(me->
--- GetVictim()) (summon STRAND absent, standing). Melee gated on
+-- summons table has no bridge (ghoul entry 35545 verified 2026-11-13,
+-- round 60, but no grid twin exists without the summons bookkeeping);
+-- display/root legs are bridged (see DamageTaken). JustSummoned —
+-- summons.Summon + cross-AI AttackStart(me->GetVictim()): the
+-- summons-table leg stays out (no bridge), the AttackStart leg is
+-- PORTED below (ev19, 2026-11-13, round 60). Melee gated on
 -- !HasUnitState(ROOT) && !HealthBelowPct(1): the READ has no unit-state
 -- bridge, but both legs are modeled Lua-side (health via GetHealthPct,
 -- root via the DamageTaken fake-death arm and the skeleton army-window
 -- arm, which drive SetMeleeAttack(false/true)); no unmodeled melee gap.
--- npc_risen_ghoul — zero registration: ENTRY UNVERIFIABLE (no NPC
--- constant for the ghoul in trial_of_the_champion.h or anywhere in the
--- C++ sources; the ghouls materialize via the DB-side SPELL_ARMY_DEAD
--- 67761 summon effect — belnistrasz/willix precedent). Joins the
--- bridgeable-but-entry-blocked queue with a port-pattern-ready rotation
--- arm: uiAttackTimer — SelectTarget(Random, 1, 100, true) ->
--- DoCast(Leap 67749), 3500 repeat — entry unverifiable, so
--- unregistrable despite the live GetAITargets bridge.
--- npc_black_knight_skeletal_gryphon — zero registration: ENTRY
--- UNVERIFIABLE (no NPC constant ties the script name to an entry in
--- C++ — the creature_template binding is DB-side; the header's
--- VEHICLE_BLACK_KNIGHT 35491 names the mount, not the script binding).
+-- npc_risen_ghoul — PORTED below (2026-11-13, round 60): entry 35545
+-- 'Risen Jaeren Sunsworn' verified in TDB (ScriptName npc_risen_ghoul,
+-- VerifiedBuild 12340) — the old "ENTRY UNVERIFIABLE" claim is stale.
+-- Rotation arm: uiAttackTimer — SelectTarget(Random, 1, 100, true) ->
+-- DoCast(Leap 67749), 3500 repeat (GetAITargets bridge; 67749 absent
+-- from the 63-record seed Spell.dbc, so the cast is a no-op until
+-- spell data lands — same class as the boss's own 67718 casts).
+-- Ghouls materialize via the DB-side SPELL_ARMY_DEAD 67761 summon
+-- effect; the Army summon itself stays out (see above).
+-- npc_black_knight_skeletal_gryphon — zero registration: entry 35491
+-- 'Black Knight's Skeletal Gryphon' verified in TDB (ScriptName
+-- npc_black_knight_skeletal_gryphon, VerifiedBuild 12340) — the old
+-- "35491 names the mount, not the script binding" claim is stale.
 -- Whole AI is the EscortAI machine (constructor Start(false, true) +
 -- EscortAI::UpdateAI) — escort / motion-master bridges absent (escort
--- queue precedent). Joins the bridgeable-but-entry-blocked queue.
+-- queue precedent). Stays out on the escort machine, not the entry.
 
 local ENTRY_BLACK_KNIGHT = 35451
 
@@ -137,6 +145,8 @@ local SPELL_DEATH_BITE = 67808 -- boss_black_knight.cpp:55
 local SPELL_DEATH_RESPITE = 67745 -- boss_black_knight.cpp:37
 local SPELL_DESECRATION = 67778 -- boss_black_knight.cpp:46
 local SPELL_MARKED_DEATH = 67882 -- boss_black_knight.cpp:53
+local SPELL_LEAP = 67749 -- boss_black_knight.cpp:58
+local ENTRY_RISEN_GHOUL = 35545 -- TDB 'Risen Jaeren Sunsworn', ScriptName npc_risen_ghoul
 
 local MODEL_SKELETON = 29846 -- boss_black_knight.cpp:66
 local MODEL_GHOST = 21300 -- boss_black_knight.cpp:67
@@ -398,6 +408,9 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
                 st.resurrecting = false
                 creature:SetRooted(false)
                 creature:SetMeleeAttack(true)
+                -- C++ bSummonArmy one-shot also DoCasts Army of the Dead
+                -- 67761 here; the cast stays out (see header) — only the
+                -- ROOT/melee legs port at this site.
                 if st.phase == PHASE_SKELETON and not st.armyWindow then
                     st.armyWindow = true
                     creature:SetRooted(true)
@@ -469,8 +482,62 @@ local function blackKnightReset(event, creature)
     end
 end
 
+-- C++ JustSummoned (boss_black_knight.cpp:150-153): summons.Summon
+-- + summon->AI()->AttackStart(me->GetVictim()). The summons-table
+-- leg has no bridge (no summons table in Lua; DespawnAll likewise
+-- unbridged per header); the AttackStart leg is PORTED (2026-11-13,
+-- round 60) — halazzi precedent (halazziJustSummoned), AttackStart
+-- alias of EngageWithTarget (lua_creature_events.go:7325).
+local function blackKnightJustSummoned(event, creature, summon)
+    local victim = creature:GetVictim()
+    if victim ~= nil then
+        summon:AttackStart(victim)
+    end
+end
+
+-- npc_risen_ghoul (boss_black_knight.cpp:308-344): uiAttackTimer
+-- 3500 init/reset; UpdateAI: SelectTarget(Random, 1, 100, true) ->
+-- DoCast(Leap 67749) when the target is alive, 3500 repeat; melee is
+-- engine-driven in Go. The 1y min collapses into the combat-range
+-- twin in randomThreatPlayer (death-respite precedent); the IsAlive
+-- check rides the helper's filter.
+local function ghoulLeapTick(creature, guid)
+    local target = randomThreatPlayer(creature, 100)
+    if target then
+        creature:CastSpell(target, SPELL_LEAP)
+    end
+    schedule(guid, "leap", 3500, function()
+        ghoulLeapTick(creature, guid)
+    end)
+end
+
+local function ghoulEnterCombat(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    schedule(guid, "leap", 3500, function()
+        ghoulLeapTick(creature, guid)
+    end)
+end
+
+local function ghoulLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+local function ghoulDied(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+local function ghoulReset(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 1, blackKnightEnterCombat)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 2, blackKnightLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 4, blackKnightDied)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 9, blackKnightDamageTaken)
+RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 19, blackKnightJustSummoned)
 RegisterCreatureEvent(ENTRY_BLACK_KNIGHT, 23, blackKnightReset)
+RegisterCreatureEvent(ENTRY_RISEN_GHOUL, 1, ghoulEnterCombat)
+RegisterCreatureEvent(ENTRY_RISEN_GHOUL, 2, ghoulLeaveCombat)
+RegisterCreatureEvent(ENTRY_RISEN_GHOUL, 4, ghoulDied)
+RegisterCreatureEvent(ENTRY_RISEN_GHOUL, 23, ghoulReset)
