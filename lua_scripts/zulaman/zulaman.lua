@@ -8,28 +8,34 @@
 -- Deviations from C++: instance->SetData(DATA_CHESTLOOTED, 0) has no
 -- bearer (no instance-script model); the chest SummonGameObject IS
 -- ported (creature:SummonGameObject bridged — onSelect above);
--- player->GetGossipTextId has no bridge, so the menu title id is 0.
+-- player->GetGossipTextId is bridged (lua_player.go:5954) and onHello
+-- passes it (C++ zulaman.cpp:62 SendGossipMenuFor with GetGossipTextId).
 -- (The old "no HasFlag/RemoveFlag on the creature Lua object" claim was
 -- stale — the Eluna gossip creature has GetNPCFlags/SetNPCFlags,
--- engine/world/lua_objects.go:657/666 — so the one-shot below is the
+-- engine/world/lua_objects.go:3265/3274 — so the one-shot below is the
 -- C++-exact UNIT_NPC_FLAG_GOSSIP removal.)
 -- The npc_harrison_jones script from the same C++ file is NOT registered:
 -- its OnGossipSelect gates on the creature's GossipMenuId and its entire
--- gong-event machine is MovePath/MovePoint waypoint work (no movement
--- model); the SetEntry (UpdateEntry bridged) / SetDisplayId /
+-- gong-event machine is MovePath-by-ID work (no bridge; MovePoint IS
+-- bridged via creature:MoveTo, lua_creature_events.go:5417, but the chain
+-- cannot start without MovePath); the SetEntry (UpdateEntry bridged) / SetDisplayId /
 -- SetFacingTo / equipment (SetEquipmentSlots bridged) / emote
 -- (PerformEmote bridged) / SetByteValue DEAD (SetStandState bridged)
 -- arms ride that unported machine, not a
 -- missing bridge — verdict unchanged. Its Reset() (zulaman.cpp:188)
 -- only zeroes _gongEvent/_gongTimer, state owned by that same unported
 -- machine, so ev23 is a no-op without it and is not registered either
--- (round-28 triage). Instance GetGameObject/SetData arms (no instance-script
--- model), and GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
+-- (round-28 triage). Instance GetGameObject arms (no instance-script
+-- GetGameObject bridge; SetData itself rides Map:GetInstanceData +
+-- InstanceData:SetData, scripting/globals.go:1442, instance_hooks.go:51,
+-- but no Zul'Aman instance consumer exists), and
+-- GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
 -- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
 -- only for the creature-cast SPELL_COSMETIC_SPEAR_THROW 43647, which has
 -- zero casters anywhere in the C++/Go trees (trigger-absence), so the arm
--- never fires. (ev14 fires on creature-cast hits too, boss_ai.go:2125-2134;
--- the earlier "ev14 fires only for player casts" rationale was stale.)
+-- never fires. (ev14 fires on creature-cast hits too, boss_ai.go:4268/4290
+-- fireCreatureSpellHitTarget, inside castCreatureSpellInternalWithBasePoints
+-- :1791; the earlier "ev14 fires only for player casts" rationale was stale.)
 
 local HOSTAGE_ENTRIES = {23790, 23999, 24024, 24001}
 
@@ -51,7 +57,7 @@ local function onHello(event, player, creature)
     -- C++ adds the item unconditionally; the hook only fires while the
     -- flag is set, so the option is inherently one-shot.
     player:GossipMenuAddItem(GOSSIP_ICON_CHAT, GOSSIP_HOSTAGE1, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1)
-    player:GossipSendMenu(0, creature)
+    player:GossipSendMenu(player:GetGossipTextId(creature), creature)
 end
 
 local function onSelect(event, player, creature, sender, action)
