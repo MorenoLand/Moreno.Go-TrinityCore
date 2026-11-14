@@ -1226,6 +1226,13 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget, kil
 				// respawned incarnation is not escorting.
 				motion.EscortPlayerGUID = 0
 				motion.EscortPaused = false
+				// Same FollowerAI-state clear: the follow leader,
+				// state bitmask and quest die with the old
+				// incarnation (ScriptedFollowerAI.h: the AI object
+				// dies with the creature).
+				motion.FollowLeaderGUID = 0
+				motion.FollowState = 0
+				motion.FollowQuestID = 0
 				motion.DynamicFlags &^= unitDynFlagTapped | unitDynFlagLootable
 				flags := motion.DynamicFlags
 				s.server.motionMu.Unlock()
@@ -2725,10 +2732,22 @@ func (s *Server) checkRespawnLinkedDeferral(ctx context.Context, respawn creatur
 	return time.Time{}, false, false
 }
 
+// FollowerAI STATE_FOLLOW_* bitmask (ScriptedFollowerAI.h:25-33).
+const (
+	followStateInProgress = 0x001
+	followStatePaused     = 0x002
+	followStateComplete   = 0x004
+	followStatePreEvent   = 0x008
+	followStatePostEvent  = 0x010
+)
+
 // IsEscorted mirrors CreatureAI::IsEscorted via ScriptedEscortAI
 // (ScriptedEscortAI.h:58): the escort-player GUID is non-empty.
+// FollowerAI::IsEscorted (ScriptedFollowerAI.h:52) is the same
+// predicate on the follow state — HasFollowState(INPROGRESS) — so a
+// following creature counts as escorted too.
 func (m *creatureMotion) IsEscorted() bool {
-	return m != nil && m.EscortPlayerGUID != 0
+	return m != nil && (m.EscortPlayerGUID != 0 || m.FollowState&followStateInProgress != 0)
 }
 
 // escortRespawnExempt mirrors the escort arm of Map::CheckRespawn
@@ -2871,6 +2890,13 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				// until an escort starts again.
 				motion.EscortPlayerGUID = 0
 				motion.EscortPaused = false
+				// Same FollowerAI-state clear: the follow leader,
+				// state bitmask and quest die with the old
+				// incarnation (ScriptedFollowerAI.h: the AI object
+				// dies with the creature).
+				motion.FollowLeaderGUID = 0
+				motion.FollowState = 0
+				motion.FollowQuestID = 0
 				motion.PlayerDamageReq = respawn.Health / 2
 			}
 			s.motionMu.Unlock()

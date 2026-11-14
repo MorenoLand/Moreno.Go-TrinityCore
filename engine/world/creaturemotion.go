@@ -575,6 +575,18 @@ type creatureMotion struct {
 	// escort state (StopEscort, respawn) — the C++ escort AI object
 	// dies with the escort, so a fresh escort starts unpaused.
 	EscortPaused bool
+	// FollowLeaderGUID / FollowState / FollowQuestID are the
+	// FollowerAI twins (ScriptedFollowerAI.h:25-60): the leader GUID,
+	// the STATE_FOLLOW_* bitmask (INPROGRESS 0x001, PAUSED 0x002,
+	// COMPLETE 0x004, PREEVENT 0x008, POSTEVENT 0x010), and the quest
+	// the follow is bound to. Armed by the StartFollow bridge and
+	// consumed by HasFollowState / SetFollowPaused /
+	// GetLeaderForFollower / SetFollowComplete; cleared with the
+	// escort state on death/respawn — the C++ FollowerAI object dies
+	// with the creature.
+	FollowLeaderGUID uint64
+	FollowState      uint32
+	FollowQuestID    uint32
 	// PlayerDamageReq mirrors Creature::m_PlayerDamageReq
 	// (Creature.h:322-325): MaxHealth/2 at spawn, lowered by every
 	// player-attributed hit (Creature::LowerPlayerDamageReq,
