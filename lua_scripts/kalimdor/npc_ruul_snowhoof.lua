@@ -39,10 +39,15 @@
 --   twin) + Talk(0, player) + player:GroupEventHappens(6482) +
 --   StopEscort (the C++ escort ends at the last waypoint; Go paths
 --   repeat by default — willix/thrall precedent).
--- Unmodeled (documented-only, no bridges):
--- - EnterEvadeMode shapechange re-apply (RUUL_SHAPECHANGE):
---   EnterEvadeMode IS bridged (lua_creature_events.go:5638); the
---   re-apply leg is outside the 8-hook set, port status unaudited.
+-- - EnterEvadeMode shapechange re-apply (RUUL_SHAPECHANGE,
+--   zone_ashenvale.cpp:138-142): PORTED in ruulReset below — no
+--   evade event exists (event 25 unassigned), but Go fires ev23
+--   from the evade path with motion.Evading set, so
+--   IsInEvadeMode() gates the leg to evade-Resets only. No
+--   RegisterLuaBoss needed: the loader walks lua_scripts/ and
+--   entry-keyed RegisterCreatureEvent hooks fire regardless
+--   (RegisterLuaBoss only adds BossAI instance-encounter
+--   admission, which a world escort NPC does not need).
 
 local ENTRY_RUUL_SNOWHOOF = 12818
 
@@ -79,9 +84,21 @@ local SUMMON_MS = 60000
 local templateFaction = {}
 
 -- C++ npc_ruul_snowhoofAI::Reset (zone_ashenvale.cpp:74-78).
+-- EnterEvadeMode (:138-142) re-applies RUUL_SHAPECHANGE when the
+-- aura is missing, ahead of the base evade's Reset()
+-- (CreatureAI::EnterEvadeMode calls Reset() at the end). Go fires
+-- ev23 from the evade path with motion.Evading already set
+-- (creaturemotion.go: triggerCreatureEvade), so IsInEvadeMode()
+-- gates this leg to evade-Resets only — spawn/death Resets never
+-- apply the aura, exactly as C++ Reset does not. HasAura/AddAura
+-- are bridged on the event surface (lua_creature_events.go:1483 /
+-- :2857, single-arg self-cast = me->AddAura(spell, me)).
 local function ruulReset(event, creature)
     if creature:IsDead() then
         return
+    end
+    if creature:IsInEvadeMode() and not creature:HasAura(RUUL_SHAPECHANGE) then
+        creature:AddAura(RUUL_SHAPECHANGE)
     end
     local guid = creature:GetGUIDLow()
     if templateFaction[guid] == nil then

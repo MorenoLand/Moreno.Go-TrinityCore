@@ -32,18 +32,23 @@
 --   creature:SetNPCFlags() (engine/world/lua_objects.go:657) — C++
 --   arm order after Initialize(); the old "no Lua bridge" claim was
 --   stale for NPC flags (SetFaction is now bridged too, but the
---   gossip-select flip still needs Attack — zero Lua usage — so the
---   arm stays documented-only).
+--   gossip-select flip still needs Attack — the method exists on
+--   the event surface (lua_creature_events.go:1945) yet has zero
+--   in-tree Lua call sites, so its from-Lua semantics are unproven
+--   and the arm stays documented-only pending re-audit).
 -- Documented-only (no bridges):
 -- - OnGossipSelect (CloseGossipMenuFor + SetFaction(FACTION_MONSTER)
 --   + Attack): gossip IS bridged (RegisterCreatureGossipEvent — the
 --   "gossip bridge absent" claim was stale; live at
 --   engine/world/gossip.go:129/369); SetFaction is now bridged on the
---   event surface but Attack has zero Lua usage (ouro), so the arm
---   stays documented-only.
+--   event surface and creature:Attack exists
+--   (lua_creature_events.go:1945) but has zero in-tree Lua call
+--   sites, so the arm stays documented-only pending re-audit
+--   against the existing method.
 -- - Reset's NormFaction restore: SetFaction is now bridged, but the
---   only runtime flip is the gossip-select arm above (still Attack-
---   blocked), so the restore stays documented-only.
+--   only runtime flip is the gossip-select arm above (Attack
+--   unproven from Lua, see above), so the restore stays
+--   documented-only pending the same re-audit.
 -- - The rest of zone_azuremyst_isle.cpp, documented-only:
 --   npc_draenei_survivor — Reset ported in
 --   npc_draenei_survivor.lua (entry 16483, Wowhead-verified); the
@@ -53,11 +58,15 @@
 --   npc_injured_draenei — Reset ported in npc_injured_draenei.lua
 --   (entry 16971, Wowhead-verified); that Reset is the whole script.
 --   npc_magwin — EscortAI (OnQuestAccept / WaypointReached /
---   events): no escort / quest bridge (ashenvale npc_muglash
---   precedent).
---   npc_geezle — SummonCreature has zero Lua usage (zulfarrak
---   go_shallow_grave precedent); MotionMaster, quest-status,
---   gameobject-respawn legs absent bridges.
+--   events): escort IS bridged now (StartEscort / MoveWaypoint /
+--   GetEscortPlayer / StopEscort, ev6 + ev31 — ruul port), so the
+--   old "no escort bridge" claim is stale; magwin needs its own
+--   audit.
+--   npc_geezle — creature:SummonCreature IS bridged
+--   (lua_creature_events.go:4161) and used in-tree (ruul wp13/wp19
+--   waves), so the old "zero Lua usage" claim is stale; the
+--   MotionMaster / quest-status / gameobject-respawn legs still
+--   need their own audit.
 --   spell_inoculate_nestlewood — AuraScript/PeriodicTick: the
 --   bridge exists (RegisterAuraEvent ev1); its arms are unassessed
 --   here, so it stays out pending its own audit (the ashenvale

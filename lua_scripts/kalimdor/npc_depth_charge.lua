@@ -39,8 +39,7 @@ local function onMoveInLOS(event, creature, player)
         creature:CastSpell(player, SPELL_DEPTH_CHARGE_TRAP)
         local guid = creature:GetGUIDLow()
         if not despawnPending[guid] then
-            despawnPending[guid] = true
-            CreateLuaEvent(function()
+            despawnPending[guid] = CreateLuaEvent(function()
                 despawnPending[guid] = nil
                 creature:Despawn()
             end, DESPAWN_DELAY_MS)
@@ -57,11 +56,24 @@ end)
 -- C++ npc_depth_chargeAI::Reset (zone_azshara.cpp:336-342): SetHover(true)
 -- + SetSwim(true) ported (bridged, lua_creature_events.go);
 -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) ported, in
--- C++ arm order after the hover/swim legs.
+-- C++ arm order after the hover/swim legs. The Initialize() leg
+-- (:322-332: WeMustDie=false, timer reset) ports as cancelling the
+-- pending despawn event + clearing the latch (RemoveEventById,
+-- hyjal/maiden precedent) — a reset inside the 1s window cancels
+-- the despawn exactly as C++ does, and a later re-trigger re-arms
+-- a fresh 1000ms timer. The latch now stores the event id, not
+-- true, so the cancel has something to remove (same table serves
+-- the rizzle 3s arm, keyed per GUID — no cross-talk).
 local function onReset(event, creature)
     creature:SetHover(true)
     creature:SetSwim(true)
     creature:SetFlag(59, 0x2000000)
+    local guid = creature:GetGUIDLow()
+    local pending = despawnPending[guid]
+    if pending then
+        RemoveEventById(pending)
+        despawnPending[guid] = nil
+    end
 end
 
 RegisterCreatureEvent(ENTRY, 23, onReset)
@@ -106,8 +118,7 @@ local function rizzleGossipSelect(event, player, creature, sender, action)
         creature:CastSpell(player, SPELL_GIVE_SOUTHFURY_MOONSTONE, true)
         local guid = creature:GetGUIDLow()
         if not despawnPending[guid] then
-            despawnPending[guid] = true
-            CreateLuaEvent(function()
+            despawnPending[guid] = CreateLuaEvent(function()
                 despawnPending[guid] = nil
                 creature:Despawn()
             end, RIZZLE_DESPAWN_DELAY_MS)
