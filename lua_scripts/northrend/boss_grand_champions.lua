@@ -34,7 +34,9 @@
 -- (runtime.go InstanceEvents are 1-7 only), so the instance-side
 -- counter stays out — faithfully, not as a gap.
 -- The combat rotations (UpdateAI timers, mounted-vehicle legs) stay out:
--- this file ports the JustDied census arm only.
+-- this file ports the JustDied census arm only. All six Reset() arms
+-- are timer-seed-only for the unported rotations, so ev23 resets
+-- nothing in this file's model (round-80 re-verification).
 -- The waypoint legs stay out too: SetData cases 1/2/3 (AddWaypoint +
 -- Start) and WaypointReached :220/:223 (instance SetData
 -- DATA_MOVEMENT_DONE, GetData+1) have no waypoint bridge; the instance

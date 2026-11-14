@@ -16194,15 +16194,16 @@ func init() {
 	// IsCasting defers under each timer arm's own key (mal_ganis
 	// idiom); 50% latch path stays ungated on OnDamageTaken
 	// (DamageTaken-latch precedent). npc_felblood_kaelthas_phoenix
-	// class unmodeled (summon/instance/zone-in-combat bridges
-	// absent); flame-strike AuraScript not modeled; SpellHitTarget
-	// directional-teleport leg + sphere MoveFollow unmodeled
-	// (effect-dispatch/MotionMaster bridges absent). Script name
+	// class PORTED (npc_felblood_kaelthas_phoenix.lua, entry 24674);
+	// flame-strike AuraScript not modeled; SpellHitTarget
+	// directional-teleport leg + sphere MoveFollow ported
+	// (boss_felblood_kaelthas.lua). Script name
 	// is the stringified AI type (ScriptMgr.h:1234,
 	// RegisterCreatureAIWithFactory). Entry 24664 verifiable
 	// from the C++ sources: magisters_terrace.h:50 names
 	// BOSS_KAELTHAS_SUNSTRIDER = 24664 (boss_vaelastrasz precedent).
 	RegisterLuaBoss("boss_felblood_kaelthas", 24664)
+	RegisterLuaBoss("npc_felblood_kaelthas_phoenix", 24674)
 	// boss_selin_fireheart (Magister's Terrace): combat-entry
 	// Talk(SAY_AGGRO) + fel-explosion self-cast 44314 2100ms->2s loop
 	// (DoCastAOE = DoCast(nullptr) self-cast convention); KilledUnit
@@ -23386,7 +23387,7 @@ func init() {
 	// src/server/scripts/Northrend/ChamberOfAspects/RubySanctum/boss_general_zarithrian.cpp
 	// (2 CreatureScripts: boss_general_zarithrian (BossAI, DATA_GENERAL_ZARITHRIAN = 1)
 	// + npc_onyx_flamecaller (ScriptedAI, NPC_ONYX_FLAMECALLER = 39814, zero Talk —
-	// not registered, the bronjahm precedent)); both registered from inside
+	// registered in the Lua file, ev 1/2/4/23); both registered from inside
 	// AddSC_boss_general_zarithrian(); loader decl 192 / call 387 per
 	// northrend_script_loader.cpp — the FIFTH group of the
 	// "// Ruby Sanctum" block. Entry-verifiable: ruby_sanctum.h
@@ -23406,9 +23407,10 @@ func init() {
 	// Saviana/Baltharus-DONE gate, ev2 FAIL via _DespawnAtEvade);
 	// CanAIAttack stays out (no hook); the JustSummoned
 	// add-registration and EnterEvadeMode summons.DespawnAll() legs
-	// stay out (no summon-registry bridge); the DoCastSelf/DoCastVictim
-	// legs (no-cast bridge); npc_onyx_flamecaller zero Talk (not
-	// registered) — all documented in the lua header. Fifth group of
+	// stay out (pure registration — ev19 is live, Zarithrian summons
+	// nothing directly); the DoCastSelf/DoCastVictim legs (ported
+	// 2026-10-13 per the Lua header); npc_onyx_flamecaller zero Talk —
+	// all documented in the lua header. Fifth group of
 	// the "// Ruby Sanctum" block. UpdateAI CASTING gates (boss :133
 	// pre-loop + :166 in-loop; flamecaller pre-loop-only :233) ported
 	// as 500ms IsCasting defer on cleave/roar/adds + blast-nova/lava-gout.

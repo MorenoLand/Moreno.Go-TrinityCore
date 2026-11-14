@@ -42,11 +42,14 @@
 -- 0x100)) ride creature:GetBossState / RemoveFlag (both live).
 -- CanAIAttack stays out (no Lua hook for the CanAIAttack query).
 -- boss_general_zarithrian JustSummoned — summons.Summon(summon)
--- add-registration leg (no summon-registry bridge).
+-- add-registration leg (pure registration — ev19 IS live, but
+-- Zarithrian summons nothing directly; the flamecaller path goes
+-- through the unported cross-AI forward).
 -- boss_general_zarithrian EnterEvadeMode — the _DespawnAtEvade()
 -- SetBossState(FAIL) leg is PORTED 2026-11-06 on event 2 (ev2 fires
 -- only from triggerCreatureEvade, creaturemotion.go:4699); the
--- summons.DespawnAll() leg (no summon-registry bridge) and the
+-- summons.DespawnAll() leg (pure registration — ev19 live; the
+-- per-guid Lua-table latch is the in-tree registry substitute) and the
 -- DespawnOrUnsummon(0s, 30s) respawn leg (creature:Despawn takes no
 -- delay arg and deletes the motion mid-evade) stay out. No ev24
 -- handler: BossAI::_JustReachedHome is setActive(false) only
@@ -109,8 +112,8 @@
 -- 'Reset legs ride no instance bridge', 'stalker casts have no instance
 -- bridge' (bridges live; stalker casts dormant only for lack of a Go
 -- stalker-GUID latch — see retraction note). Stay-outs re-verified:
--- CanAIAttack (no Lua hook); JustSummoned summons.Summon (no
--- summon-registry bridge); flamecaller MoveToGeneral / MovementInform /
+-- CanAIAttack (no Lua hook); JustSummoned summons.Summon (pure
+-- registration — ev19 live, summoner is the stalker); flamecaller MoveToGeneral / MovementInform /
 -- IsSummonedBy (no motion-master / movement-inform / cross-AI bridges);
 -- DoMeleeAttackIfReady (no melee-model bridge).
 -- Combat-arm re-verification this run: cleave (DoCastVictim 74367,
@@ -304,7 +307,7 @@ end
 local function zarithrianLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
     -- C++ EnterEvadeMode (boss_general_zarithrian.cpp:114-118):
-    -- summons.DespawnAll() (no summon-registry bridge) +
+    -- summons.DespawnAll() (pure registration — see header) +
     -- _DespawnAtEvade() -> instance->SetBossState(FAIL)
     -- (ScriptedCreature.cpp:596-617). Event 2 fires only from
     -- triggerCreatureEvade (creaturemotion.go:4699), after event 23,
@@ -324,7 +327,7 @@ local function zarithrianReset(event, creature)
     end
     -- C++ _Reset (ScriptedCreature.cpp:499-510): SetCombatPulseDelay(0),
     -- events.Reset / summons.DespawnAll / scheduler.CancelAll (timers
-    -- above; the summon-registry leg has no bridge), then SetBossState
+    -- above; the summon-registry leg is pure registration (ev19 live), then SetBossState
     -- NOT_STARTED unless already DONE.
     creature:SetCombatPulseDelay(0)
     if creature:GetBossState(DATA_GENERAL_ZARITHRIAN) ~= 3 then

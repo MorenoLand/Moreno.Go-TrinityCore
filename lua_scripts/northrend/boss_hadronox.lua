@@ -59,8 +59,8 @@
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
--- summon STRAND + cross-AI SetData bridges absent; ev38 DoAction
--- dispatch IS bridged (lua_creature_events.go:845) but the senders
+-- summon STRAND bridges are LIVE now (SummonCreatureGroup :4223,
+-- cross-AI SetData ev41 :800, DoAction ev38 :845); the senders
 -- (SummonCrusherPack, boss_hadronox.cpp:192, and the crusher
 -- JustEngagedWith, :527) ride the unported summon machine.
 -- MovementInform: SetReactState(REACT_AGGRESSIVE) on EVERY step
@@ -125,14 +125,14 @@
 -- adds no coverage; revisit only if a summon source outside the producer
 -- appears.
 -- npc_anub_ar_crusher — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28922 from
--- the file's Creatures enum — NPC_CRUSHER — kalecgos pass): zero
--- registration. The whole npc_hadronox_crusherPackAI engagement model is
+-- the file's Creatures enum — NPC_CRUSHER — kalecgos pass): registered
+-- below (ev 1/2/4/9/23, :648-652). The whole npc_hadronox_crusherPackAI engagement model is
 -- unbridged: SetData(DATA_CRUSHER_PACK_ID) -> SetReactState(REACT_PASSIVE)
--- (cross-AI SetData pack-ID bridge absent — SetReactState itself is
+-- (cross-AI SetData ev41 is live now — SetReactState itself is
 -- bridged, lua_creature_events.go:4715), DoAction(
 -- ACTION_PACK_WALK) -> MotionMaster MovePoint(_positions[pack]) + the
--- _doFacing SetFacingTo choreography (motion-master bridge absent;
--- sender is SummonCrusherPack, boss_hadronox.cpp:192; ev38 dispatch
+-- _doFacing SetFacingTo choreography (MoveTo is bridged per the
+-- tick-416 note; sender is SummonCrusherPack, boss_hadronox.cpp:192; ev38 dispatch
 -- IS bridged, lua_creature_events.go:845), MovementInform,
 -- MoveInLineOfSight passive-engage leg
 -- (CanStartAttack + IsWithinDistInMap(attackDistance + m_CombatDistance)

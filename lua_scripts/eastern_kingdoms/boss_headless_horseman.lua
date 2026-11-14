@@ -73,7 +73,7 @@
 --   MoveSmoothPath + yell-timer/laugh auras), ACTION_HORSEMAN_REQUEST_
 --   BODY (MovePoint(POINT_HEAD) chase), ACTION_HEAD_RETURN_TO_BODY
 --   (phase-delayed re-arm + Talk(SAY_REJOINED)), ACTION_HEAD_IS_DEAD:
---   no MotionMaster bridge (selin_fireheart precedent), no MovementInform
+--   no MoveSmoothPath bridge (MoveRandom/MoveClear/RemoveAllAttackers/StopMoving/MoveTo are live now), no MovementInform
 --   bridge (kalecgos precedent), and every head lookup goes through
 --   _instance->GetCreature(DATA_HORSEMAN_HEAD) (instance-script model
 --   blocked).

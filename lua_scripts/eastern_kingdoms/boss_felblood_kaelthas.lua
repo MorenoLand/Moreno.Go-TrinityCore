@@ -61,8 +61,9 @@
 -- OnReset(23)):
 -- - EVENT_FIREBALL: victim-cast 44189, 1ms init -> 2s500ms loop.
 -- - EVENT_PHOENIX: Talk(SAY_SUMMON_PHOENIX) + self-cast 44194,
---   12s init -> 45s loop (the phoenix add's own AI is unbridgeable
---   — see below; the summon spell itself is real).
+--   12s init -> 45s loop (the phoenix add's own AI is ported in
+--   npc_felblood_kaelthas_phoenix.lua; the summon spell itself is
+--   real, seeded 2026-11-14).
 -- - EVENT_FLAME_STRIKE: Talk(SAY_FLAME_STRIKE) + random-player
 --   (SelectTarget(Random, 0, 40.0f, true) — GetPlayersInWorld + map/
 --   instance/alive/IsWithinDist filter, maiden_of_virtue precedent)
@@ -112,8 +113,8 @@
 -- convention). The outro's damage cap (lethal non-self damage is
 -- clamped to health-1 so the boss survives at 1 HP through the
 -- death sequence) is PORTED below; the outro summons.DespawnAll leg
--- is ported for the ev19-latched sphere subset (phoenix half stays
--- out — no phoenix latch); AttackStop, REACT_PASSIVE,
+-- is ported for the ev19-latched sphere subset and the ev19-latched
+-- phoenix subset (below); AttackStop, REACT_PASSIVE,
 -- InterruptNonMeleeSpells(true), RemoveAurasDueToSpell(POWER_
 -- FEEDBACK) and DoCastAOE(CLEAR_FLIGHT) are all PORTED below;
 -- the outro chain plays as the observable remnant (documented).
@@ -126,8 +127,8 @@
 -- (_Reset, alive + != DONE gated) legs are ported below too.
 -- EnterEvadeMode's ClearFlight cast is ported (above); the
 -- summons.DespawnAll leg is ported for the ev19-latched sphere
--- subset (phoenix half stays out); the _DespawnAtEvade leg has no
--- bridge. JustSummoned is PORTED below (ev19): arcane-sphere
+-- subset and the ev19-latched phoenix subset (below); the
+-- _DespawnAtEvade leg has no bridge. JustSummoned is PORTED below (ev19): arcane-sphere
 -- MoveFollow (MoveFollow bridged, lua_objects.go:543) and
 -- flame-strike-trigger dummy-cast + 15s despawn — the stale "no
 -- summon/MotionMaster bridges (the_beast precedent)" claim is
@@ -177,16 +178,12 @@
 --   via the summonTempCreature funnel) and "no summon/MotionMaster
 --   bridges" (MoveFollow bridged, lua_objects.go:543).
 -- - npc_felblood_kaelthas_phoenix (second CreatureScript class in
---   the file): IsSummonedBy's DoZoneInCombat + self-casts 44197/
---   44196, the lethal DamageTaken egg sequence (DoSummon(NPC_
---   PHOENIX_EGG 24675) + instance->GetCreature(DATA_KAELTHAS_
---   SUNSTRIDER)->AI()->JustSummoned + ember blast 44199 + damage
---   clamped to health-1), EVENT_HATCH_FROM_EGG (ObjectAccessor egg
---   despawn), EVENT_REBIRTH (self-cast 44196), EVENT_PREPARE_
---   REENGAGE (self-cast 17683 + 44197) — every arm gates on the
---   summon / instance / creature-list / zone-in-combat bridges
---   absent from the Lua surface (razorgore / go_suppression_device
---   precedent); no file written.
+--   the file) is PORTED in npc_felblood_kaelthas_phoenix.lua
+--   (entry 24674): IsSummonedBy (ev5) + lethal DamageTaken egg
+--   sequence (ev9) + SummonedCreatureDies (ev21) + HATCH/REBIRTH/
+--   PREPARE timer chain; the :422 cross-AI JustSummoned call and
+--   the :459 GetCreature-by-GUID leg are resolved per that file's
+--   header (default-leg bookkeeping + stored egg object).
 -- - spell_felblood_kaelthas_flame_strike AuraScript (AfterEffect-
 --   Remove -> dummy 44191): AuraScript not modeled (standing
 --   blocker).
@@ -208,6 +205,7 @@ local SPELL_SUMMON_ARCANE_SPHERE = 44265
 local SPELL_FLAME_STRIKE_DUMMY = 44191 -- boss_felblood_kaelthas.cpp:70
 local NPC_ARCANE_SPHERE = 24708 -- magisters_terrace.h:55
 local NPC_FLAME_STRIKE = 24666 -- magisters_terrace.h:56
+local NPC_PHOENIX = 24674 -- magisters_terrace.h
 local SPELL_POWER_FEEDBACK = 44233
 local SPELL_GRAVITY_LAPSE_FLY = 44227
 local SPELL_GRAVITY_LAPSE_DAMAGE = 44226
@@ -229,6 +227,7 @@ local phaseTwo = {}
 local outroFired = {}
 local gravityLapseCount = {}
 local arcaneSpheres = {} -- per-guid latched arcane spheres (C++ summons list subset for entry 24708; no DespawnEntry bridge, corenSisters precedent)
+local phoenixes = {} -- per-guid latched phoenixes (C++ summons list subset for entry 24674; same DespawnEntry-less twin as spheres)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -270,7 +269,9 @@ end
 -- (:172 evade, :185 lethal outro, _Reset on reset) twin for the
 -- latched-sphere subset: no DespawnEntry bridge exists in engine/,
 -- so the ev19-latched spheres are despawned directly. The phoenix
--- half of DespawnAll stays out (no phoenix latch — its AI unported).
+-- half of DespawnAll runs on the ev19-latched phoenixes below
+-- (despawnPhoenixes; the egg itself is owned by the phoenix file,
+-- not this list — see its header).
 local function despawnArcaneSpheres(guid)
     local spheres = arcaneSpheres[guid]
     if spheres then
@@ -283,14 +284,31 @@ local function despawnArcaneSpheres(guid)
     end
 end
 
+-- C++ summons.DespawnAll twin for the latched-phoenix subset (same
+-- DespawnEntry-less pattern as the spheres). The egg is not latched
+-- here — it is summoned by the phoenix, so ev19 fires on the
+-- phoenix, not Kael'thas; the phoenix file despawns its own egg.
+local function despawnPhoenixes(guid)
+    local list = phoenixes[guid]
+    if list then
+        for _, phoenix in ipairs(list) do
+            if phoenix then
+                phoenix:Despawn()
+            end
+        end
+        phoenixes[guid] = nil
+    end
+end
+
 -- C++ boss_felblood_kaelthas::JustSummoned (:251-268): summons.Summon
 -- bookkeeping + entry switch. Arcane sphere: random player within
 -- 70yd -> MoveFollow(target, 0, 0) (MoveFollow bridged,
 -- lua_objects.go:543; randomTargetInRange is this file's threat-list
 -- player picker, flame-strike precedent). Flame strike: self-cast
 -- dummy 44191 + DespawnOrUnsummon(15s) (bridged,
--- lua_creature_events.go:7335, ms). Phoenix: no arm beyond the
--- bookkeeping (default: break). The summon dispatch itself is the
+-- lua_creature_events.go:7335, ms). Phoenix: latched per-guid for
+-- the DespawnAll legs (C++ summons.Summon twin); no AI arm beyond
+-- the bookkeeping (default: break). The summon dispatch itself is the
 -- creature cast path's creatureEffectSummonType (boss_ai.go:4866,
 -- called :3580, DBC spellKnown-gated) firing ev19 through the shared
 -- summonTempCreature funnel (lua_creature_events.go:190) — the old
@@ -315,6 +333,14 @@ local function onJustSummoned(_, creature, summon)
     elseif entry == NPC_FLAME_STRIKE then
         summon:CastSpell(summon, SPELL_FLAME_STRIKE_DUMMY)
         summon:DespawnOrUnsummon(15000)
+    elseif entry == NPC_PHOENIX then
+        local guid = creature:GetGUIDLow()
+        local list = phoenixes[guid]
+        if not list then
+            list = {}
+            phoenixes[guid] = list
+        end
+        list[#list + 1] = summon
     end
 end
 
@@ -519,13 +545,15 @@ end
 -- DoCastAOE(SPELL_CLEAR_FLIGHT 44232, true) TRIGGERED, ungated — modeled
 -- as triggered self-cast (the in-tree CastSpell(..., true) idiom). The
 -- summons.DespawnAll leg (:172) runs on the ev19-latched spheres
--- (despawnArcaneSpheres above); the _DespawnAtEvade leg has no bridge.
+-- (despawnArcaneSpheres above) and phoenixes (despawnPhoenixes
+-- below); the _DespawnAtEvade leg has no bridge.
 -- Event 2 gets a dedicated handler (the urom split precedent) so the cast
 -- fires on evade only, not on death/reset.
 local function onLeaveCombat(_, creature)
     local guid = creature:GetGUIDLow()
     creature:CastSpell(creature, SPELL_CLEAR_FLIGHT, true)
     despawnArcaneSpheres(guid)
+    despawnPhoenixes(guid)
     cancelTimers(guid)
     phaseTwo[guid] = nil
     outroFired[guid] = nil
@@ -563,6 +591,7 @@ local function onReset(_, creature)
     -- live reset to consume).
     if creature:IsAlive() then
         despawnArcaneSpheres(guid)
+        despawnPhoenixes(guid)
     end
     if creature:IsAlive() and creature:GetBossState(3) ~= 3 then
         creature:SetBossState(3, 0) -- DATA_KAELTHAS_SUNSTRIDER, NOT_STARTED
@@ -587,6 +616,7 @@ local function onDamageTaken(_, creature, attacker, damage)
         creature:InterruptNonMeleeSpells(true)
         creature:RemoveAura(SPELL_POWER_FEEDBACK)
         despawnArcaneSpheres(guid) -- C++ :185 summons.DespawnAll, sphere subset
+        despawnPhoenixes(guid) -- C++ :185 summons.DespawnAll, phoenix subset
         creature:CastSpell(creature, SPELL_CLEAR_FLIGHT)
         creature:Talk(SAY_DEATH)
         schedule(guid, "outro_1", 1000, function() onOutroStep(creature, guid, "outro_1", SPELL_EMOTE_TALK_EXCLAMATION) end)

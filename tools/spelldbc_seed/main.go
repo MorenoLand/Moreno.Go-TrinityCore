@@ -63,9 +63,11 @@ const (
 	effKnockBack              = 98
 	effKillCredit2            = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage           = 58
+	effHealMaxHealth          = 67 // SPELL_EFFECT_HEAL_MAX_HEALTH
 	auraPeriodicDmg           = 3
 	auraDummy                 = 4
 	auraStun                  = 12
+	auraModInvisibility       = 18 // SPELL_AURA_MOD_INVISIBILITY
 	auraPeriodicTrig          = 23
 	auraRoot                  = 26
 	auraSilence               = 27
@@ -90,7 +92,9 @@ const (
 	targetEnemy               = 6
 	targetSrcAreaEnemy        = 15
 	targetDestCaster          = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetUnitDestAreaEnemy   = 16 // TARGET_UNIT_DEST_AREA_ENEMY
 	targetDestCasterBackRight = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
+	targetDestCasterRadius    = 73 // TARGET_DEST_CASTER_RADIUS
 	targetUnitTargetAny       = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
 	targetDestTargetAny       = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
 	targetSrcCaster           = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
@@ -558,6 +562,47 @@ var spells = []spell{
 	// handleEffectKnockBack: MiscValue*0.1 = speedXY, rolled
 	// BasePoints*0.1 = speedZ; 62659 precedent).
 	{id: 65100, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effKnockBack, dieSides: 1, basePoints: 99, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, misc: 200}}},
+
+	// Felblood Kael'thas phoenix spells (boss_felblood_kaelthas.cpp
+	// enum :62-78) — wago.tools 3.4.0.43659 Spell/SpellEffect/
+	// SpellMisc rows, 2026-11-14 verdict. All RangeIndex 1 (Self Only,
+	// 0-0 yd = synthetic 93001's value); CastingTimeIndex 1 = instant
+	// (default 0) except 44196 (index 5, 2000 ms, seeded real row
+	// below). Attributes_0 not encoded (seed has no attributes field).
+	// 44194 Phoenix: single effect 28 SUMMON, DieSides 1, BasePoints 0,
+	// TargetA 73 (TARGET_DEST_CASTER_RADIUS), RadiusIndex 9 (20 yd,
+	// seeded real row below), MiscValue 24674 (NPC_PHOENIX 24674),
+	// MiscValueB 64; DurationIndex 21 (-1, seeded real row).
+	{id: 44194, durIdx: 21, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, basePoints: 0, targetA: targetDestCasterRadius, radiusIdx: 9, misc: 24674, miscB: 64}}},
+	// 44196 Rebirth: eff0 2 SCHOOL_DAMAGE, BasePoints 1749, DieSides
+	// 501, TargetA 18 / TargetB 16 (TARGET_UNIT_DEST_AREA_ENEMY),
+	// RadiusIndex 18 (15 yd, seeded real row below); eff1 98
+	// KNOCK_BACK, BasePoints 249, DieSides 1, same targets/radius,
+	// MiscValue 400. DurationIndex 0 (no SpellDuration row, by design).
+	{id: 44196, castTimeIdx: 5, rangeIdx: 93001, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 501, basePoints: 1749, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 18},
+		{effect: effKnockBack, dieSides: 1, basePoints: 249, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 18, misc: 400},
+	}},
+	// 44197 Burn: single effect 6 APPLY_AURA, aura 23
+	// PERIODIC_TRIGGER_SPELL, DieSides 0, BasePoints 0, TargetA 1,
+	// AuraPeriod 2000, TriggerSpell 44198 (UNSEEDED — aura ticks
+	// dormant until 44198 seeds; fetch dispatched 2026-11-14);
+	// DurationIndex 21.
+	{id: 44197, durIdx: 21, rangeIdx: 93001, school: schoolFire, effects: [3]effect{{effect: effApplyAura, dieSides: 0, basePoints: 0, aura: auraPeriodicTrig, auraPeriod: 2000, trigger: 44198, targetA: targetCaster}}},
+	// 44199 Ember Blast: eff0 2 SCHOOL_DAMAGE, BasePoints 1749,
+	// DieSides 501, TargetA 18 / TargetB 16, RadiusIndex 14 (8 yd,
+	// seeded real row); eff1 98 KNOCK_BACK, BasePoints 49, DieSides 1,
+	// same targets/radius, MiscValue 100; eff2 6 APPLY_AURA, aura 18
+	// MOD_INVISIBILITY, BasePoints 9998, DieSides 1, TargetA 1,
+	// MiscValue 4. DurationIndex 21.
+	{id: 44199, durIdx: 21, rangeIdx: 93001, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 501, basePoints: 1749, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 14},
+		{effect: effKnockBack, dieSides: 1, basePoints: 49, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, misc: 100},
+		{effect: effApplyAura, dieSides: 1, basePoints: 9998, aura: auraModInvisibility, targetA: targetCaster, misc: 4},
+	}},
+	// 17683 Full Heal: single effect 67 HEAL_MAX_HEALTH, DieSides 1,
+	// BasePoints 0, TargetA 1; DurationIndex 0 (no row, by design).
+	{id: 17683, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effHealMaxHealth, dieSides: 1, basePoints: 0, targetA: targetCaster}}},
 }
 
 func main() {
@@ -604,6 +649,8 @@ func main() {
 		{36, f32(0), f32(0), f32(0)},         // real SpellRadius 36 for 50415 (wago.tools 3.4.0.43659, 2026-11-13 22:17 verdict: all zeros)
 		{13, f32(10), f32(0), f32(10)},       // real SpellRadius 13 for 65100 (wago.tools 3.4.0.43659)
 		{14, f32(8), f32(0), f32(8)},         // real SpellRadius 14 for 59335 (wago.tools 3.4.0.43659)
+		{9, f32(20), f32(0), f32(20)},        // real SpellRadius 9 for 44194 (wago.tools 3.4.0.43659)
+		{18, f32(15), f32(0), f32(15)},       // real SpellRadius 18 for 44196 (wago.tools 3.4.0.43659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},
@@ -618,7 +665,11 @@ func main() {
 		panic(err)
 	}
 	// SpellCastTimes.dbc: ID, Base, PerLevel (real "nif" layout).
-	castTimes := [][]uint32{{92001, 2000, 0}, {92002, 3000, 0}}
+	castTimes := [][]uint32{
+		{5, 2000, 0}, // real SpellCastTimes 5 for 44196 (wago.tools 3.4.0.43659)
+		{92001, 2000, 0},
+		{92002, 3000, 0},
+	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
 	}
