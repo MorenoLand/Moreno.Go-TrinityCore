@@ -1065,6 +1065,37 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{spell.SpellFamilyFlags[index]}, nil
 	}
+	// HasSpellEffect(spellId, effect) reports whether any of the spell's
+	// three DBC effects carries the given effect enum (Spell.dbc
+	// Effects[i].Effect) — the SpellInfo::Effects[i].Effect read behind
+	// C++ SpellHit gates such as Shade of Aran's interrupt check
+	// (boss_shade_of_aran.cpp:484: any of Effects[0..2] ==
+	// SPELL_EFFECT_INTERRUPT_CAST, 68). The GetSpellFamilyFlags twin:
+	// same s.Data.Spell lookup, false for an unknown spell id. Lets Lua
+	// model effect-gated SpellHit arms without hard-coding per-spell lists.
+	methods["HasSpellEffect"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		effect, err := luaUint32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.Data == nil {
+			return []any{false}, nil
+		}
+		spell, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			return []any{false}, nil
+		}
+		for _, eff := range spell.Effects {
+			if eff.Effect == effect {
+				return []any{true}, nil
+			}
+		}
+		return []any{false}, nil
+	}
 	// CastSpell(target, spellId[, triggered]) casts a creature spell through
 	// the server's creature cast path (SMSG_SPELL_GO broadcast, the same path
 	// the Go BossAI implementations use). Eluna argument order. The target

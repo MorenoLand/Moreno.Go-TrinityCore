@@ -13,10 +13,10 @@
 -- and cannot be gated on the missing interrupt, so the port melees where
 -- C++ does not — a genuine bridge gap.
 -- Fight shape: every 1s a random normal bolt (frostbolt 29954 / fireball
--- 29953 / arc missile 29955 — the three 5s school cooldowns are only ever
--- armed by the interrupt arm (event 14 fires, but C++ needs the
--- SPELL_EFFECT_INTERRUPT_CAST effect data the hook does not carry, so the
--- arm has no Lua-modelable input and all three schools stay available);
+-- 29953 / arc missile 29955 — drawn only from the schools whose 5s
+-- cooldown is clear; the interrupt arm (ev14, creature:HasSpellEffect)
+-- arms the cooldown of the school being cast when an interrupt-effect
+-- spell lands mid-cast);
 -- every 5-20s a secondary (AOE counterspell
 -- 29961 or chains of ice 29991); every 35-40s a super spell that never
 -- repeats the previous one — arcane explosion (blink center 29967,
@@ -59,10 +59,11 @@
 -- The drink aura's periodic mana refill has no tick executor in Go, so
 -- the machine's refill model (drink ticks + SetPower(max-32000)) cannot be
 -- reproduced — a partial port would re-drink in a loop. The SpellHit
--- interrupt arm stays out: CreatureEventOnHitBySpell
--- (14) is wired and fires with caster + spell id, but C++ gates on
--- spellInfo->Effects[i].Effect == SPELL_EFFECT_INTERRUPT_CAST and no
--- bridge exposes a spell's effect list. The flame-wreath 3-yd check is 2D
+-- interrupt arm IS ported (ev14 + creature:HasSpellEffect, bridge live
+-- 2026-11-14): an interrupt-effect spell landing mid-cast interrupts it
+-- and arms the 5s school cooldown. The arm stays inert until the player
+-- interrupt spells are seeded in Spell.dbc (wago read in flight). The
+-- flame-wreath 3-yd check is 2D
 -- distance from the cast point — C++-exact
 -- (unit->IsWithinDist2d(FWTargPosX[i], FWTargPosY[i], 3); no facing
 -- involved); the C++ punishment is the moved unit casting 20476 on itself
@@ -98,9 +99,8 @@ local SPELL_BLINK_CENTER = 29967
 local SPELL_CIRCULAR_BLIZZARD = 29951
 local SPELL_WATERBOLT = 31012
 local SPELL_FLAMEWREATH_PUNISH = 20476
+local SPELL_EFFECT_INTERRUPT_CAST = 68 -- SharedDefines.h:879
 local SPELL_FLAMEWREATH_DOT = 11027
-
-local NORMAL_SPELLS = { SPELL_ARCMISSLE, SPELL_FIREBALL, SPELL_FROSTBOLT }
 
 local SUPER_FLAME = 0
 local SUPER_BLIZZARD = 1
@@ -186,13 +186,18 @@ local onNormalCast, onSecondaryCast, onSuperCast, onBerserk, onFlameWreathCheck
 
 local function aranInitState(guid)
     -- C++ Initialize: LastSuperSpell = rand32() % 3; the school cooldowns
-    -- stay 0 without the interrupt arm; drink state omitted (no power
-    -- bridge); elementalsSpawned per encounter.
+    -- start 0 and are armed 5s by the SpellHit interrupt arm (ev14);
+    -- drink state omitted (no power bridge); elementalsSpawned per
+    -- encounter.
     aranState[guid] = {
         lastSuper = math.random(3) - 1,
         elementalsSpawned = false,
         fwRemaining = 0,
         fwTargets = { nil, nil, nil },
+        currentNormal = nil,
+        arcaneCd = 0,
+        fireCd = 0,
+        frostCd = 0,
     }
 end
 
@@ -276,12 +281,25 @@ onNormalCast = function(creature, guid)
         -- !IsNonMeleeSpellCast(false); NormalCastTimer resets to 1s even
         -- while casting, so the 1s re-arm below already matches the retry.
         -- (The elemental spawn below is a separate health arm, ungated.)
+        -- C++ :227-246: the school cooldowns tick down by diff each
+        -- UpdateAI; the 1s pump decrements them here, ahead of selection.
+        st.arcaneCd = math.max(0, st.arcaneCd - 1000)
+        st.fireCd = math.max(0, st.fireCd - 1000)
+        st.frostCd = math.max(0, st.frostCd - 1000)
         if not creature:IsCasting() then
-            -- C++: SelectTarget Random 100 yd; random school from those not on
-            -- cooldown (all three here — the interrupt arm has no Lua input).
-            local target = randomPlayer(creature, 100)
-            if target then
-                creature:CastSpell(target, NORMAL_SPELLS[math.random(#NORMAL_SPELLS)])
+            -- C++ :296-328: SelectTarget Random 100 yd; the bolt is drawn
+            -- uniformly from the schools whose cooldown is 0; with none
+            -- available nothing casts and the 1s retry below re-arms.
+            local available = {}
+            if st.arcaneCd == 0 then available[#available + 1] = SPELL_ARCMISSLE end
+            if st.fireCd == 0 then available[#available + 1] = SPELL_FIREBALL end
+            if st.frostCd == 0 then available[#available + 1] = SPELL_FROSTBOLT end
+            if #available > 0 then
+                local target = randomPlayer(creature, 100)
+                if target then
+                    st.currentNormal = available[math.random(#available)]
+                    creature:CastSpell(target, st.currentNormal)
+                end
             end
         end
         if not st.elementalsSpawned and healthBelowPct(creature, 40) then
@@ -451,6 +469,35 @@ local function aranReset(event, creature)
     if libraryDoor then libraryDoor:SetGoState(0) end
 end
 
+-- C++ SpellHit (boss_shade_of_aran.cpp:481-501): any spell whose
+-- Effects[0..2] carries SPELL_EFFECT_INTERRUPT_CAST (68) interrupts the
+-- cast in progress (InterruptNonMeleeSpells) and arms a 5s cooldown on
+-- the school of the normal bolt being cast (CurrentNormalSpell); the
+-- effect read rides creature:HasSpellEffect (bridge live this tick).
+-- The melee gate (all three cooldowns armed -> DoMeleeAttackIfReady,
+-- :471) stays unported: Go melee is engine-driven and ungated.
+local function onSpellHit(_, creature, caster, spellId)
+    local st = aranState[creature:GetGUIDLow()]
+    if not st then
+        return
+    end
+    if not creature:HasSpellEffect(spellId, SPELL_EFFECT_INTERRUPT_CAST) then
+        return
+    end
+    if not creature:IsCasting() then
+        return
+    end
+    creature:InterruptNonMeleeSpells()
+    if st.currentNormal == SPELL_ARCMISSLE then
+        st.arcaneCd = 5000
+    elseif st.currentNormal == SPELL_FIREBALL then
+        st.fireCd = 5000
+    elseif st.currentNormal == SPELL_FROSTBOLT then
+        st.frostCd = 5000
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 1, aranEnterCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 2, aranLeaveCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 3, function(event, creature, victim)
