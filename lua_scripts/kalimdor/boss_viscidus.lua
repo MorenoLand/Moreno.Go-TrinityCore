@@ -12,7 +12,9 @@
 -- NPC_GLOB_OF_VISCIDUS = 15667 (:69); DATA_VISCIDUS = 7 (:37). The
 -- creature_template ScriptName bindings stay DB-side.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
--- OnDied, 9 OnDamageTaken, 14 OnSpellHit, 23 OnReset. Timers via
+-- OnDied, 23 OnReset. (Header correction 2026-11-14, round116:
+-- ev9/ev14 are NOT registered — the DamageTaken/SpellHit arms stay
+-- out, see below.) Timers via
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady.
 -- Ported arms (the self-contained in-combat legs):

@@ -11,8 +11,10 @@
 -- from the same C++ file are not registered (npc_mana_feeder is ported
 -- in its own script — the six ApplySpellImmune school arms ride the
 -- creature:ApplySpellImmune bridge); Barnes is an
--- EscortAI with gossip waypoints and instance-script arms (no gossip /
--- escort / instance-script bridge), and Medivh's dialogue machine is
+-- EscortAI with gossip waypoints and instance-script arms (escort
+-- bridges exist now — see karazhan.lua, round116; the Barnes port is
+-- assembly work, not a missing bridge), and Medivh's Reset is ported
+-- in karazhan.lua (ev23, 2026-11-14); its dialogue machine is
 -- triggered by MovementInform after a MovePoint (no movement model).
 
 local ENTRY = 16504

@@ -121,9 +121,13 @@
 -- ACTION_CALL_DRAGON_EVENT) — varos via instance GetGuidData(
 -- DATA_VAROS) -> SelectTarget(Random) -> REACT_PASSIVE +
 -- MovePoint(victim + 20.0f z) (the ACTION_CALL_DRAGON_EVENT = 1
--- oculus.h leg) — no instance / motion / react-state / despawn /
--- random-target bridges (event 15 fires; the SpellHit legs stay out
--- on the summon/despawn blockers above).
+-- oculus.h leg) — STALE-CLAIM CORRECTION 2026-11-14 (round116
+-- second pass): GetGuidData (lua_creature_events.go:7166),
+-- SetReactState (:4729), MoveTo (:5424) and Despawn (:3318) are ALL
+-- bridged now; the leg stays out on no-random-SelectTarget (zero
+-- creature SelectTarget hits in engine/) + no-instance-ProcessEvent
+-- grounds only (event 15 fires; the SpellHit legs stay out on the
+-- summon/despawn blockers above).
 -- spell_varos_centrifuge_shield — AuraScript OnApply / OnRemove
 -- (EFFECT_0 SPELL_AURA_DUMMY): PORTED (tick 204, RegisterAuraEvent
 -- OnApply = 2 / OnRemove = 3, below). SetImmuneToAll twin is
