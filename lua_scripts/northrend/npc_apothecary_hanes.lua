@@ -8,7 +8,7 @@
 -- ported).
 -- Entry (file's own Entries enum, verifiable from the C++
 -- sources): 23784 (NPC_APOTHECARY_HANES). The creature_template
--- ScriptName binding is DB-side (no TDB in this workspace).
+-- ScriptName binding is DB-side (TDB 26091 in this workspace).
 -- Eluna creature events: 5 OnSpawn, 2 OnLeaveCombat, 4 OnDied,
 -- 23 OnReset, 31 OnQuestAccept.
 -- Ported arm (C++ UpdateAI head): HealthBelowPct(75) -> 10s
@@ -27,7 +27,7 @@
 -- is the vaelastrasz self-cast convention.
 -- Unmodeled: the whole escort cinematic (OnQuestAccept quest-
 -- 11241 launch — EscortAI Start, waypoint
--- 1-40 Talk/emote chain, DoCastAOE 42684 burn-crate arms,
+-- 1-40 Talk/emote chain, DoCastAOE 42685 burn-crate arms,
 -- SetFaction/SetReactState, GroupEventHappens quest credit)
 -- behind the escort / movement / emote / faction
 -- / quest bridges; the EVENT_EMOTE_BEG 25s beg-emote arm is PORTED
@@ -36,20 +36,19 @@
 -- bridge" claim is retracted); the SetDespawnAtFar(false) Reset leg
 -- stays out (no SetDespawnAtFar bridge in the runtime — zero hits
 -- in engine/); the melee arm is engine-driven.
--- npc_daegarn — no NPC_ entry constant anywhere in the C++
--- sources (the creature_template ScriptName binding is DB-side,
--- no TDB in this workspace — minigob precedent): no Lua file
--- written. The gladiator event (OnQuestAccept quest-11300 chain:
--- 24213 -> 24215 -> 24214 -> 23931 summon waves + JustSummoned
+-- npc_daegarn — the Reset 40s idle-Talk(SAY_TEXT 0) arm is PORTED
+-- in northrend/npc_daegarn.lua (entry 24151, TDB-verified,
+-- ScriptName npc_daegarn; ev23 re-arms the 40s repeat, ev31 quest
+-- 11300 cancels it). The gladiator event (OnQuestAccept quest-11300
+-- chain: 24213 -> 24215 -> 24214 -> 23931 summon waves + JustSummoned
 -- MovePoint home-position machine + 20s/5s stuck-reset scheduler)
--- sits behind the quest-accept / summon / movement / world-search
--- bridges; the 40s idle Talk(SAY_TEXT 0) scheduler arm is
--- bridgeable in principle but unregistered without an entry.
+-- stays out (no fire site — no summons exist in Lua).
 -- npc_mindless_abomination — the EVENT_CHECK_CHARMED 1s arm
 -- (IsCharmedOwnedByPlayerOrPlayer gate -> DespawnOrUnsummon)
 -- now has its bridges (creature:IsCharmed + creature:Despawn)
--- but no NPC_ entry constant exists in the C++ sources, so it
--- stays unregistered; the charm-semantics gap also stands
+-- but the sole TDB name-match 23575 'Mindless Abomination' carries
+-- an empty ScriptName (SmartAI), so the script cannot attach —
+-- DB-gated; the charm-semantics gap also stands
 -- (Go IsCharmed = any charm, C++ requires player-owned charm).
 -- spell_mindless_abomination_explosion_fx_master — SpellScript
 -- (creature-gated 43401 blood-explosion self-cast + 10x 42266
@@ -65,8 +64,8 @@
 -- spells 43275-43285)) KilledMonsterCredit is bridged and
 -- player:CastSpell is bridged, but the session cast path has no
 -- SPELL_EFFECT_SUMMON executor (lua_player.go) — the summon
--- spells would fire visuals without spawning — documented-only. No NPC_ entry constant for the cocoon in the
--- C++ sources either.
+-- spells would fire visuals without spawning (documented deviation).
+-- PORTED in northrend/npc_riven_widow_cocoon.lua (entry 24210, ev4).
 
 local SPELL_HEALING_POTION = 17534
 local EMOTE_ONESHOT_BEG = 20 -- SharedDefines.h:1955
@@ -128,7 +127,7 @@ end
 
 -- zone_howling_fjord.cpp:138-141 — EVENT_EMOTE_BEG: HandleEmoteCommand
 -- (EMOTE_ONESHOT_BEG) then re-schedule at 25s. creature:PerformEmote
--- is the exact HandleEmoteCommand twin (lua_creature_events.go:1053;
+-- is the exact HandleEmoteCommand twin (lua_creature_events.go:4539;
 -- spectral_ghostly_citizen precedent). C++ skips the EventMap update
 -- while in combat (:132-133), so the handler skips in-combat fires
 -- (documented deviation: C++ pauses the 25s countdown in combat rather
@@ -160,7 +159,7 @@ local function armPump(creature)
         potionTick(creature, guid)
     end, 1000, 0)
     -- zone_howling_fjord.cpp:93 — Initialize() stands the apothecary in
-    -- KNEEL (SetStandState bridged 2026-10-21, lua_creature_events.go:568)
+    -- KNEEL (SetStandState bridged 2026-10-21, lua_creature_events.go:4824)
     -- and re-arms EVENT_EMOTE_BEG at 2s (ported above); only the
     -- SetDespawnAtFar(false) Reset leg stays unmodeled (no bridge).
     creature:SetStandState(8)
@@ -189,7 +188,7 @@ local function onReset(_, creature)
     armEmote(creature)
 end
 
--- C++ OnQuestAccept (zone_howling_fjord.cpp:240-243): quest 11241
+-- C++ OnQuestAccept (zone_howling_fjord.cpp:239-243): quest 11241
 -- starts the escort (StartEscort captures the player GUID); the escort
 -- itself stays unported, but the GUID latch lets JustDied FailQuest the
 -- escort player C++-exactly.
@@ -204,7 +203,7 @@ end
 
 -- C++ JustDied: FailQuest(QUEST_TRAIL_OF_FIRE 11241) on the
 -- escorted player — PORTED below (quest-11241 accept latch +
--- player:FailQuest bridge, lua_player.go:4442). Death
+-- player:FailQuest bridge, lua_player.go:5237). Death
 -- ends the machine: cancel the pump + emote event and drop per-GUID
 -- state (mushroom precedent).
 local function onDied(_, creature)

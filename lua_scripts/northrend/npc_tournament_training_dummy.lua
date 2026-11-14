@@ -16,8 +16,8 @@
 -- Entries (TournamentDummy enum, zone_icecrown.cpp:169-191,
 -- C++-verifiable): NPC_CHARGE_TARGET = 33272,
 -- NPC_MELEE_TARGET = 33229, NPC_RANGED_TARGET = 33243.
--- The creature_template ScriptName binding is DB-side (no TDB in
--- this workspace).
+-- The creature_template ScriptName binding is DB-side (TDB 26091 in
+-- this workspace; all three entries TDB-verified).
 -- Eluna creature events: 5 OnSpawn, 23 OnReset, 14 OnHitBySpell,
 -- 9 OnDamageTaken, 2 OnLeaveCombat (evade re-arm, see below), 4 OnDied.
 -- Spells (TournamentDummy enum): SPELL_CHARGE_CREDIT 62658,
@@ -27,19 +27,19 @@
 -- SPELL_CHARGE_DEFEND 64100, SPELL_VULNERABLE 62665,
 -- SPELL_COUNTERATTACK 62709.
 -- Ported arm 1 (C++ Reset() :214-221 -> EVENT_DUMMY_RECAST_DEFEND
--- :278-294): Reset-seeded 5s repeating timer (first fire 5s after
+-- :277-296): Reset-seeded 5s repeating timer (first fire 5s after
 -- reset — C++ schedules, not immediate); entry-switched: 33272 leg
 -- if (!me->HasAura(SPELL_CHARGE_DEFEND)) DoCast(me, 64100, true) —
 -- triggered self-cast, HasAura gate bridged (gunship precedent);
 -- the 33243 leg (aura stack < 3 / duration <= 8000 gate) is
 -- ported via creature:GetStackAmount(spell) and
 -- creature:GetDuration(spell) (both bridged —
--- lua_creature_events.go:416; an absent aura reads 0, subsuming
+-- lua_creature_events.go:1817/:1842; an absent aura reads 0, subsuming
 -- the !defend leg), C++-exact. The 33229 entry
 -- has no recast leg. All entries: isVulnerable=false (:293) and the 5s re-arm.
--- The SetControlled(STUNNED) Reset leg has no control-state
--- bridge (documented).
--- Ported arm 2 (C++ SpellHit :237-267, entry-switched):
+-- The SetControlled(STUNNED) Reset leg ports via creature:SetStunned(true)
+-- (bridged, lua_objects.go:1461) — applied in dummySpawnOrReset below.
+-- Ported arm 2 (C++ SpellHit :237-269, entry-switched):
 -- 33272: 62874 SPELL_PLAYER_CHARGE, isVulnerable-gated ->
 -- DoCast(unitCaster, 62658 SPELL_CHARGE_CREDIT, true);
 -- 33229: 62544 SPELL_PLAYER_THRUST -> DoCast(unitCaster,
@@ -52,30 +52,31 @@
 -- precedent). The 62626 latch leg (:266-269, outside the entry
 -- switch — applies to all entries): if (!HasAura(64100) &&
 -- !HasAura(62719)) isVulnerable = true — creature:HasAura bridged
--- (lua_creature_events.go:141). isVulnerable is per-GUID lua state
+-- (lua_creature_events.go:1483). isVulnerable is per-GUID lua state
 -- (C++ member :210, init false in Initialize :207/:215 — reset
 -- here on spawn/reset; cleared on leave-combat/died via the
 -- evade-Reset path, halycon precedent).
--- Ported arm 3 (C++ DamageTaken :226-230, shared AI — all three
+-- Ported arm 3 (C++ DamageTaken :231-235, shared AI — all three
 -- entries): damage = 0 unconditionally -> event-9 damage-rewrite
 -- returns (true, 0) (lich_king_escape precedent) + the
 -- EVENT_DUMMY_RESET 10s reschedule (IsInCombat-gated
--- EnterEvadeMode + 10s re-arm, :296-302; bridges live:
--- IsInCombat lua_creature_events.go:647, EnterEvadeMode :5188 —
+-- EnterEvadeMode + 10s re-arm, :297-302; bridges live:
+-- IsInCombat lua_creature_events.go:652, EnterEvadeMode :5624 —
 -- the old "unbridged evade machine" note was stale). The evade ->
 -- Reset defend re-arm IS modeled (ev23 then ev2 both re-arm —
 -- see the ev2 registration note below).
--- Unmodeled: the 62709 counterattack; the
--- SetControlled stunned leg; npc_argent_valiant's charge /
--- shield-breaker combat timers (no NPC_ARGENT_VALIANT entry
--- constant anywhere in-tree — entry-blocked, stinky precedent);
--- DamageTaken kill-credit machine (faction/despawn/evade legs);
--- npc_guardian_pavilion (MoveInLineOfSight area/team/aura gates —
--- no area/team bridges); npc_frostbrood_skytalon (VehicleAI);
+-- Unmodeled: the 62709 counterattack; npc_argent_valiant's charge /
+-- shield-breaker combat timers (UpdateAI — entry 33448 TDB-verified;
+-- its DamageTaken kill-credit machine is ported in
+-- npc_argent_valiant.lua); npc_guardian_pavilion (MoveInLineOfSight
+-- proximity / facing / player-self-cast legs — GetAreaId :3880 and
+-- player:GetTeam lua_player.go:393 ARE bridged);
+-- npc_frostbrood_skytalon (VehicleAI UpdateAI only — its SpellHit
+-- legs are ported in npc_frostbrood_skytalon.lua);
 -- blessed_banner summon/intro/wave machines (Reset arm ported in
 -- npc_blessed_banner.lua).
 -- No RegisterLuaBoss entry exists for the dummy entries
--- (boss_ai.go registers blessed_banner 30891 only); the file
+-- (verified by grep); the file
 -- is event-driven, and the no-op boss AI is not required for
 -- the ev5/23/14/9/2/4/27 bindings.
 
@@ -120,7 +121,7 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
--- C++ :278-294 EVENT_DUMMY_RECAST_DEFEND: 33272 leg
+-- C++ :277-296 EVENT_DUMMY_RECAST_DEFEND: 33272 leg
 -- (!HasAura(64100) -> triggered self-cast 64100) + 33243 leg
 -- (!HasAura(62719) or stack < 3 or duration <= 8000 ->
 -- triggered self-cast 62719, C++-exact via GetStackAmount /
@@ -143,13 +144,15 @@ local function onRecastDefend(creature, guid)
     schedule(guid, "recast_defend", RECAST_INTERVAL, function() onRecastDefend(creature, guid) end)
 end
 
--- C++ Reset() :214-221: Initialize() (isVulnerable=false) +
--- schedule EVENT_DUMMY_RECAST_DEFEND 5s (first fire delayed).
+-- C++ Reset() :214-221: SetControlled(true, UNIT_STATE_STUNNED) +
+-- Initialize() (isVulnerable=false) + schedule
+-- EVENT_DUMMY_RECAST_DEFEND 5s (first fire delayed).
 -- C++ ctor (:203) SetCombatMovement(false) rides here too
 -- (re-applied on reset/evade — value-idempotent).
 local function dummySpawnOrReset(event, creature)
     local guid = creature:GetGUIDLow()
     creature:SetCombatMovement(false)
+    creature:SetStunned(true) -- C++ Reset SetControlled(true, UNIT_STATE_STUNNED)
     cancelTimers(guid)
     vulnerable[guid] = false
     schedule(guid, "recast_defend", RECAST_INTERVAL, function() onRecastDefend(creature, guid) end)
@@ -200,7 +203,7 @@ end
 -- assignment there binds this slot (never re-`local function`).
 local onDummyReset
 
--- C++ DamageTaken :226-230: damage = 0 unconditionally +
+-- C++ DamageTaken :231-235: damage = 0 unconditionally +
 -- RescheduleEvent(EVENT_DUMMY_RESET, 10s).
 local function dummyDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUIDLow()
@@ -208,7 +211,7 @@ local function dummyDamageTaken(event, creature, attacker, damage)
     return true, 0
 end
 
--- C++ EVENT_DUMMY_RESET :296-302: UpdateVictim-gated
+-- C++ EVENT_DUMMY_RESET :297-302: UpdateVictim-gated
 -- EnterEvadeMode (evade -> Reset -> defend re-arm) + 10s
 -- re-arm. UpdateVictim() reads as IsInCombat here (the dummy
 -- has a victim exactly while players are attacking it);

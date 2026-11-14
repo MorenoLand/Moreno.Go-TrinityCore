@@ -7,9 +7,14 @@
 -- documented-only, spell_q12096_q12092_dummy ported,
 -- spell_q12096_q12092_bark handler written pending its spell ID,
 -- npc_torturer_lecraft ported).
--- Entry (TorturerLeCraft enum, verifiable from the C++ sources):
--- 27394 (NPC_TORTURER_LECRAFT). The creature_template ScriptName
--- binding is DB-side (no TDB in this workspace).
+-- Entry: creature 27209 'Torturer LeCraft' (TDB-verified,
+-- spawn guid 102544, map 571); the C++ constant
+-- NPC_TORTURER_LECRAFT = 27394 is the KILL-CREDIT entry, not
+-- the creature — 27394 'Torture the Torturer Kill Credit Bunny'
+-- has zero spawns and an empty ScriptName. The combat rotation
+-- + SpellHit ladder register on the creature (27209); the
+-- KilledMonsterCredit at counter 5 stays 27394 (quest 12252
+-- 'Torture the Torturer' RequiredNpcOrGo 27394 + 27209).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 4 OnDied, 23 OnReset, 14 OnHitBySpell (the C++ overrides no
 -- DamageTaken / MovementInform arms — no event 9; event 14
@@ -22,7 +27,7 @@
 -- gate at all — a plain EventMap loop with zero CASTING hits, so there
 -- is no gate to port; the old "pump-skip unmodeled" claim was wrong
 -- twice over (no C++ gate exists, and IsCasting IS a live bridge,
--- lua_creature_events.go:1950, twilight_corrupter precedent).
+-- lua_creature_events.go:2480, twilight_corrupter precedent).
 -- C++ DoCastVictim default is triggered=false (vaelastrasz
 -- convention): creature:CastSpell(nil, spell) = DoCastVictim
 -- (boss_twilight_corrupter.lua comment).
@@ -70,7 +75,8 @@
 -- (GetHealthPct() <= 30% -> CastSpell(me, 52421), 20s renew
 -- recovery re-arm gate) sits behind the unmodeled VehicleAI
 -- base UpdateAI pass; the defender has no NPC_ entry constant in
--- the C++ sources (entry DB-side only) but IS registered —
+-- the C++ sources but IS TDB-verifiable (27629 'Wyrmrest
+-- Defender', ScriptName npc_wyrmrest_defender) and IS registered —
 -- AddSC_dragonblight() (zone_dragonblight.cpp:690-696, loader call
 -- 395) — so the old "unregistered file = dead code" parenthetical
 -- is retracted (2026-10-23 SetImmuneToAll sweep); the
@@ -88,7 +94,8 @@ local SPELL_HEMORRHAGE = 30478
 local SPELL_KIDNEY_SHOT = 30621
 local SPELL_HIGH_EXECUTORS_BRANDING_IRON = 48603
 
-local TORTURER_LECRAFT_ENTRY = 27394
+local TORTURER_LECRAFT_ENTRY = 27209
+local TORTURER_LECRAFT_CREDIT = 27394 -- kill-credit bunny, not the creature
 
 local SAY_AGGRO = 0
 
@@ -169,7 +176,7 @@ local function onEnterCombat(_, creature, target)
     if target and target:GetObjectType() == "Player" then
         creature:Talk(SAY_AGGRO, target)
     end
-    -- C++ JustEngagedWith (zone_dragonblight.cpp:617-624) re-schedules
+    -- C++ JustEngagedWith (zone_dragonblight.cpp:619-627) re-schedules
     -- the two timers and Talks but does NOT touch _textCounter /
     -- _playerGUID (only Reset() clears them) — preserve any pre-combat
     -- SpellHit latch state across combat entry.
@@ -191,14 +198,14 @@ local function onReset(_, creature)
     fullReset(creature:GetGUIDLow())
 end
 
--- C++ SpellHit arm (:628-650) — the High Executor's Branding
+-- C++ SpellHit arm (:628-651) — the High Executor's Branding
 -- Iron (48603) talk ladder. The first qualifying hit latches
 -- the caster's GUID (textCounter starts 1, the C++ ctor value);
 -- only the latched caster's subsequent hits advance the ladder.
 -- Talk(textCounter, player) passes the latched player as Talk's
 -- whisper-target arg (C++-exact); KilledMonsterCredit(
--- NPC_TORTURER_LECRAFT 27394) at counter 5 via player:
--- KilledMonsterCredit (lua_player.go:4130); counter wraps 13 -> 6.
+-- NPC_TORTURER_LECRAFT credit 27394) at counter 5 via player:
+-- KilledMonsterCredit (lua_player.go:5267); counter wraps 13 -> 6.
 local function onSpellHit(event, creature, caster, spellId)
     if spellId ~= SPELL_HIGH_EXECUTORS_BRANDING_IRON then
         return
@@ -220,7 +227,7 @@ local function onSpellHit(event, creature, caster, spellId)
     end
     creature:Talk(st.textCounter, caster)
     if st.textCounter == 5 then
-        caster:KilledMonsterCredit(TORTURER_LECRAFT_ENTRY)
+        caster:KilledMonsterCredit(TORTURER_LECRAFT_CREDIT)
     end
     st.textCounter = st.textCounter + 1
     if st.textCounter == 13 then

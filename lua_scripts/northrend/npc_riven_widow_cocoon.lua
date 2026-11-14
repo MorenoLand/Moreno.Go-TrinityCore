@@ -9,7 +9,7 @@
 -- JustEngagedWith / MoveInLineOfSight overrides are empty. No quest
 -- gate in C++ — the arm fires for any player killer.
 -- Ported arm:
--- - JustDied (zone_howling_fjord.cpp:577-585, event 4): killer must be
+-- - JustDied (zone_howling_fjord.cpp:562-575, event 4): killer must be
 --   a player (killer:GetTypeId() == 4, dark-rider precedent);
 --   roll_chance_i(20) -> player:CastSpell(me,
 --   SPELL_SUMMON_FREED_MIST_WHISPER_SCOUT 43289, triggered) +
@@ -30,7 +30,7 @@ local NPC_MIST_WHISPER_SCOUT = 24211
 
 local SPELL_SUMMON_FREED_MIST_WHISPER_SCOUT = 43289
 
--- C++ rivenWidowCocoonVictims (zone_howling_fjord.cpp:534-546), C++ order.
+-- C++ rivenWidowCocoonVictims (zone_howling_fjord.cpp:534-547), C++ order.
 local COCOON_VICTIMS = {
     43275, -- SPELL_SUMMON_BABY_RIVEN_WIDOWS
     43276, -- SPELL_SUMMON_DARKCLAW_BAT
@@ -47,7 +47,7 @@ local COCOON_VICTIMS = {
 
 local TYPEID_PLAYER = 4
 
--- C++ npc_riven_widow_cocoonAI::JustDied (zone_howling_fjord.cpp:577-585).
+-- C++ npc_riven_widow_cocoonAI::JustDied (zone_howling_fjord.cpp:562-575).
 local function onDied(event, creature, killer)
     if not killer or killer:GetTypeId() ~= TYPEID_PLAYER then
         return

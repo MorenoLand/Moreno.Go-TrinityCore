@@ -7,8 +7,9 @@
 -- documented-only, npc_blessed_banner ported).
 -- Entry (BlessedBanner enum, verifiable from the C++ sources):
 -- 30891 (NPC_BLESSED_BANNER). The creature_template ScriptName
--- binding is DB-side (no TDB in this workspace).
--- Eluna creature events: 5 OnSpawn, 23 OnReset.
+-- binding is DB-side (TDB 26091 in this workspace).
+-- Eluna creature events: 5 OnSpawn, 23 OnReset, 21 OnSummonedDied,
+-- 4 OnDied, 2 OnLeaveCombat, 27 OnMoveInLOS, 1 OnEnterCombat.
 -- Ported arm (C++ Reset()): DoCast(SPELL_THREAT_PULSE 58113) —
 -- the non-targeted self-cast — creature:CastSpell(creature,
 -- spell) is the vaelastrasz self-cast convention — + Talk(
@@ -55,22 +56,21 @@
 -- as the staging approximation.
 -- 58084 + 58113 + 58121 + 30891 + 31003/30919/30900/30986/
 -- 30984/30987/30989/31013 verifiable.
--- npc_argent_valiant — no NPC_ entry constant anywhere in the
--- C++ sources (the creature_template ScriptName binding is
--- DB-side, no TDB in this workspace — minigob precedent): no
--- Lua file written. The combat rotation (UpdateVictim -> charge
+-- npc_argent_valiant — the DamageTaken duel-end machine is PORTED
+-- in northrend/npc_argent_valiant.lua (entry 33448, TDB-verified;
+-- all three recorded blockers dead: entry, player self-cast 63049,
+-- EnterEvadeMode). The combat rotation (UpdateVictim -> charge
 -- 63010 7s / shield-breaker 65147 10s via the omen 1s-pump
--- pattern) is stranded without an entry; the DamageTaken
+-- pattern) stays out (UpdateAI); the DamageTaken
 -- duel-end machine (killing blow by a player -> damage = 0 +
 -- pDoneBy->CastSpell(pDoneBy, 63049 kill credit, true) +
 -- SetFaction(FACTION_FRIENDLY) + DespawnOrUnsummon(5s) +
--- SetHomePosition + EnterEvadeMode) now has its DamageTaken hook (ev9 rewrite), SetFaction,
--- Despawn, SetHomePosition bridges; the remaining blockers are
--- the missing entry, player self-cast 63049, and EnterEvadeMode; the ctor
+-- SetHomePosition + EnterEvadeMode) ports via the ev9 rewrite, SetFaction,
+-- Despawn, SetHomePosition bridges; the ctor
 -- MovePoint + SetFaction(FACTION_FRIENDLY) arm and the
 -- MovementInform POINT_MOTION_TYPE -> SetFaction(FACTION_
 -- MONSTER) flip sit behind the movement bridge (SetFaction IS
--- bridged — lua_creature_events.go:1125 — but the MovePoint /
+-- bridged — lua_creature_events.go:6698 — but the MovePoint /
 -- MovementInform machine that drives the flip is not) —
 -- documented-only. 63010/65147/63049 verifiable.
 -- npc_guardian_pavilion — the trespasser machine is entirely
@@ -80,18 +80,18 @@
 -- lua_creature_events.go — but the proximity / facing / team legs
 -- below still block the machine), IsHostileTo + isInBackInMap(who, 5.0f)
 -- gates (no proximity / facing bridges), HasAura(63987/63986)
--- trespasser gates (player:HasAura is bridged — lua_player.go:203;
+-- trespasser gates (player:HasAura is bridged — lua_player.go:3019;
 -- still blocked by the proximity / area-ID / facing /
 -- player-self-cast bridges),
 -- GetTeamId() == TEAM_ALLIANCE branch (player:GetTeam IS bridged -
--- lua_player.go:87, teamForRace 0 = Alliance per achievement code;
+-- lua_player.go:393, teamForRace 0 = Alliance per achievement code;
 -- the stale "no team bridge" note is retracted, the branch gate is
 -- portable but the machine still stays out below),
 -- who->CastSpell(who, 63987/63986, true)
 -- self-cast on the player (no player-self-cast path from a
--- creature AI — corastrasza precedent) — documented-only. No
--- NPC_ entry constant in the C++ sources; 63987/63986/4676/
--- 4677 verifiable.
+-- creature AI — corastrasza precedent) — documented-only. TDB
+-- 33543/33643 exist (machine still stays out on the proximity /
+-- facing / player-self-cast legs); 63987/63986/4676/4677 verifiable.
 -- npc_tournament_training_dummy — ported in
 -- northrend/npc_tournament_training_dummy.lua (all three
 -- entries 33272/33229/33243): SpellHit credit machines,
@@ -101,17 +101,16 @@
 -- 02:3x tick's duplicate block lived in this file and is removed
 -- (it double-registered event 14 on 33272); this file keeps the
 -- banner arms only.
--- npc_frostbrood_skytalon (VehicleAI) — the UpdateAI low-hp /
--- periodic arms run through VehicleAI::UpdateAI (the base is
--- unmodeled — wyrmrest_defender precedent); SpellHit 59335 ->
--- self-cast 54690 / 59319 -> DoCastAOE(59375) + EVENT_FLY_AWAY
--- 100ms (ev14 IS bridged — nagrand_banner precedent; the arms stay
--- out behind the unmodeled VehicleAI base and movement / summon
--- bridges); IsSummonedBy
+-- npc_frostbrood_skytalon (VehicleAI) — the UpdateAI arms run
+-- through VehicleAI::UpdateAI (the base is unmodeled —
+-- wyrmrest_defender precedent); the SpellHit 59335 ->
+-- self-cast 54690 / 59319 -> DoCastAOE(59375) legs are PORTED in
+-- northrend/npc_frostbrood_skytalon.lua (entry 31583,
+-- TDB-verified; the EVENT_FLY_AWAY 100ms leg stays out — no
+-- GetNearPoint2D bridge); IsSummonedBy
 -- MovePoint(POINT_GRAB_DECOY) + MovementInform -> DoCast(
 -- summoner, 59318) behind the movement / summon bridges —
--- documented-only. No NPC_ entry constant in the C++ sources;
--- 59318/59375/54690/59335/59319 verifiable.
+-- documented-only. 59318/59375/54690/59335/59319 verifiable.
 
 local SPELL_THREAT_PULSE = 58113
 
@@ -139,7 +138,7 @@ local LK_TALK_2 = 1
 local LK_TALK_3 = 2
 local LK_TALK_4 = 3
 
--- C++ position arrays (zone_icecrown.cpp:363-404): DalforsPos[2] fight
+-- C++ position arrays (zone_icecrown.cpp:363-407): DalforsPos[2] fight
 -- pos; MasonNPos[0] wave-spawn pos; MasonNPos[2] action pos; DalforsPos[0]
 -- Halof spawn pos; PriestNPos[1] intro pos (facing 5.7421 for all three).
 local DALFORS_FIGHT_POS = {6426.343, 420.515, 508.650, 0.0}
@@ -160,7 +159,7 @@ local PRIEST_INTRO_POS = {
     {6423.516, 425.782, 510.774, 5.7421},
 }
 
--- C++ EVENT_SPAWN crew (zone_icecrown.cpp:465-514): {entry, spawnX,
+-- C++ EVENT_SPAWN crew (zone_icecrown.cpp:467-505): {entry, spawnX,
 -- spawnY, spawnZ, spawnO, walkX, walkY, walkZ} — [0] spawn + [1] walk-in
 -- positions; [2] fight/action positions belong to the unported INTRO_3
 -- leg and stay out.
@@ -216,7 +215,7 @@ end
 -- plain assignments below, never re-local, or pumps call nil).
 local intro1, intro2, intro3, startFight, waveSpawn, halofEvent, masonAction, endedEvent
 
--- Wave/Halof summon leg (zone_icecrown.cpp:600-660, 665-688):
+-- Wave/Halof summon leg (zone_icecrown.cpp:593-644, 645-667):
 -- DoSummon default (type 5 + 30000ms, crew precedent) + SetHomePosition
 -- to the Dalfors fight pos + AttackStart on the closest banner.
 -- C++ target (zone_icecrown.cpp:608): GetClosestCreatureWithEntry(me,
@@ -261,7 +260,7 @@ local function talkLK(creature, textId)
     end
 end
 
--- C++ EVENT_INTRO_1 (zone_icecrown.cpp:515-522): 15s after SPAWN,
+-- C++ EVENT_INTRO_1 (zone_icecrown.cpp:507-513): 15s after SPAWN,
 -- Dalfors Talk(PRE_1), then INTRO_2 in 5s. Nil-check = C++
 -- ObjectAccessor nil-check; crew cannot die pre-fight in practice
 -- (no enemies exist until the waves start).
@@ -278,7 +277,7 @@ intro1 = function(creature, guid)
     end)
 end
 
--- C++ EVENT_INTRO_2 (zone_icecrown.cpp:523-532): Dalfors faces 6.215
+-- C++ EVENT_INTRO_2 (zone_icecrown.cpp:514-523): Dalfors faces 6.215
 -- + Talk(PRE_2), then INTRO_3 in 5s.
 intro2 = function(creature, guid)
     local st = bannerState[guid]
@@ -294,7 +293,7 @@ intro2 = function(creature, guid)
     end)
 end
 
--- C++ EVENT_INTRO_3 (zone_icecrown.cpp:533-574): Dalfors MovePoint +
+-- C++ EVENT_INTRO_3 (zone_icecrown.cpp:524-564): Dalfors MovePoint +
 -- home to the fight pos; priests face 5.7421 + home to intro pos;
 -- masons MovePoint + home to action pos; then START_FIGHT in 5s
 -- and MASON_ACTION in 15s.
@@ -330,7 +329,7 @@ intro3 = function(creature, guid)
     end)
 end
 
--- C++ EVENT_START_FIGHT (zone_icecrown.cpp:586-594): LK Talk 0 +
+-- C++ EVENT_START_FIGHT (zone_icecrown.cpp:584-592): LK Talk 0 +
 -- Dalfors Talk(START), then WAVE_SPAWN in 1s.
 startFight = function(creature, guid)
     local st = bannerState[guid]
@@ -346,7 +345,7 @@ startFight = function(creature, guid)
     end)
 end
 
--- C++ EVENT_WAVE_SPAWN (zone_icecrown.cpp:595-660): LK Talk 2 at
+-- C++ EVENT_WAVE_SPAWN (zone_icecrown.cpp:593-644): LK Talk 2 at
 -- PhaseCount == 3 (4th wave) and Talk 3 at == 6 (7th wave), checked
 -- before the increment; 1x drudge at the mason-3 spawn pos + 2x
 -- plagebringer (urand(0,1) == 0, math.random() < 0.5 twin) or 2x
@@ -382,7 +381,7 @@ waveSpawn = function(creature, guid)
     end
 end
 
--- C++ EVENT_HALOF (zone_icecrown.cpp:661-688): LK Talk 4 + 2x drudge
+-- C++ EVENT_HALOF (zone_icecrown.cpp:645-667): LK Talk 4 + 2x drudge
 -- at the mason-1/2 spawn pos + Halof at the Dalfors spawn pos.
 halofEvent = function(creature, guid)
     talkLK(creature, LK_TALK_4)
@@ -391,7 +390,7 @@ halofEvent = function(creature, guid)
     summonWaveCreature(creature, guid, NPC_HALOF_THE_DEATHBRINGER, DALFORS_SPAWN_POS)
 end
 
--- C++ EVENT_MASON_ACTION (zone_icecrown.cpp:575-585): masons face
+-- C++ EVENT_MASON_ACTION (zone_icecrown.cpp:565-583): masons face
 -- their action-pos orientations + AI()->SetData(1, 1). The facing
 -- legs are real; SetData stores type 1 = 1 on the mason but no SAI
 -- dispatch reads it in the model, so the torch actions stay out.
@@ -408,7 +407,7 @@ masonAction = function(creature, guid)
     end
 end
 
--- C++ EVENT_ENDED (zone_icecrown.cpp:689-692): Summons.DespawnAll()
+-- C++ EVENT_ENDED (zone_icecrown.cpp:668-673): Summons.DespawnAll()
 -- + self-despawn, in that order.
 endedEvent = function(creature, guid)
     despawnBannerSummons(guid)
@@ -416,7 +415,7 @@ endedEvent = function(creature, guid)
     creature:Despawn()
 end
 
--- C++ victory machine (zone_icecrown.cpp:693-707): every UpdateAI tick,
+-- C++ victory machine (zone_icecrown.cpp:676-689): every UpdateAI tick,
 -- PhaseCount == 8 + Halof dead -> triggered victory self-cast +
 -- DespawnEntry waves + Dalfors Talk(FINISHED) + EVENT_ENDED 10s.
 -- Lua has no per-tick UpdateAI pump for the banner, so event 21
@@ -463,7 +462,7 @@ end
 
 RegisterCreatureEvent(BLESSED_BANNER_ENTRY, 21, onSummonedDied)
 
--- C++ EVENT_SPAWN (zone_icecrown.cpp:465-514): 7 DoSummon (default
+-- C++ EVENT_SPAWN (zone_icecrown.cpp:467-505): 7 DoSummon (default
 -- 30s CORPSE_TIMED_DESPAWN = Lua type 5 + 30000ms, slad'ran precedent)
 -- + MovePoint(0, walk-in) each; no DoZoneInCombat/AttackStart in C++.
 local function spawnBannerCrew(creature, guid)
@@ -506,7 +505,7 @@ end
 -- self-cast SPELL_THREAT_PULSE + Talk(BANNER_SAY) -> ScheduleEvent
 -- (EVENT_SPAWN, 3s). The banner never engages, so the fragment is
 -- one-shot per spawn / reset; the 3s EVENT_SPAWN crew (7 DoSummon +
--- MovePoint walk-ins, zone_icecrown.cpp:465-514) ports via the MoveTo
+-- MovePoint walk-ins, zone_icecrown.cpp:467-505) ports via the MoveTo
 -- twin with return-value latching (coren precedent); per-NPC GUID vars
 -- port as the crew table in spawnBannerCrew, driving the intro/wave
 -- legs below.

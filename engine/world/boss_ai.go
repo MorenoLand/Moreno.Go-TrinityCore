@@ -15449,7 +15449,8 @@ func init() {
 	// 1s-pump pattern; the SpellHit text-counter machine is
 	// ported via ev14 (onSpellHit, branding-iron ladder) —
 	// the old "no SpellHit bridge" claim is stale.
-	// Entry 27394 verifiable from the C++ TorturerLeCraft enum
+	// Entry 27209 (creature); the C++ TorturerLeCraft enum constant
+	// 27394 is the kill-credit bunny, kept as the credit target only
 	// — see lua_scripts/northrend/npc_torturer_lecraft.lua.
 	// npc_commander_eligor_dawnbringer (Naxxramas-wings talk
 	// cinematic: MovePoint + MovementInform image-change chain +
@@ -15468,7 +15469,7 @@ func init() {
 	// sources and sits behind the VehicleAI / SpellHit / gossip
 	// / flag bridges — documented only. Dragonblight is the
 	// third Northrend zone (dalaran, borean_tundra closed).
-	RegisterLuaBoss("npc_torturer_lecraft", 27394)
+	RegisterLuaBoss("npc_torturer_lecraft", 27209)
 	// npc_emily (Grizzly Hills zone script): the JustEngagedWith arm —
 	// Talk(SAY_RANDOMAGGRO 4, no target) — the event-1 auriaya
 	// precedent (EscortAI base, but the arm is a bare self-Talk);
@@ -15531,9 +15532,10 @@ func init() {
 	// emote / faction / quest bridges — documented only. Entry
 	// 23784 verifiable from the C++ Entries enum — see
 	// lua_scripts/northrend/npc_apothecary_hanes.lua.
-	// npc_daegarn (gladiator quest-11300 event + 40s idle Talk
-	// loop) has no NPC_ entry constant in the C++ sources —
-	// minigob precedent, no registration. npc_mindless_
+	// npc_daegarn: the Reset 40s idle-Talk leg is ported in
+	// lua_scripts/northrend/npc_daegarn.lua (entry 24151,
+	// TDB-verified); the gladiator quest-11300 summon chain
+	// stays out (no fire site). npc_mindless_
 	// abomination (EVENT_CHECK_CHARMED despawn arm) awaits the
 	// charm-check / despawn bridges; spell_mindless_abomination_
 	// explosion_fx_master has no SpellScript bridge;
@@ -15548,6 +15550,7 @@ func init() {
 	RegisterLuaBoss("npc_apothecary_hanes", 23784)
 	// npc_riven_widow_cocoon — see the hanes comment above.
 	RegisterLuaBoss("npc_riven_widow_cocoon", 24210)
+	RegisterLuaBoss("npc_daegarn", 24151)
 	// npc_nerubar_victim (Borean Tundra zone script): the JustDied
 	// player-killer freed-peon machine (quest 11611 gate, one
 	// urand(0, 99) draw, 25% freed-peon cast + credit / 50% random
@@ -15579,12 +15582,11 @@ func init() {
 	// (self-cast 58084 + DespawnEntry chain + EVENT_ENDED despawn)
 	// sit behind the movement / summon / world-search /
 	// cross-creature-Talk / despawn bridges — documented only.
-	// npc_argent_valiant (combat rotation 63010/65147 bridgeable
-	// in principle) has no NPC_ entry constant in the C++
-	// sources — minigob precedent, no registration; its
-	// DamageTaken duel-end machine has its damage-hook (ev9),
-	// faction, despawn, home-position bridges; blockers are the
-	// missing entry, player self-cast 63049, and EnterEvadeMode.
+	// npc_argent_valiant: the DamageTaken duel-end machine is
+	// ported in lua_scripts/northrend/npc_argent_valiant.lua
+	// (entry 33448, TDB-verified; all three recorded blockers
+	// dead — entry, player self-cast 63049, EnterEvadeMode);
+	// the combat rotation 63010/65147 stays out (UpdateAI).
 	// npc_guardian_pavilion (MoveInLineOfSight trespasser machine:
 	// GetAreaId 4676/4677 gates, HasAura 63987/63986 gates,
 	// GetTeamId branch, player self-cast) sits behind the
@@ -15597,15 +15599,18 @@ func init() {
 	// gated recast-defend self-casts 64100/62719 and the vulnerable latch
 	// are ported in
 	// lua_scripts/northrend/npc_tournament_training_dummy.lua.
-	// npc_frostbrood_skytalon
-	// (VehicleAI) — the UpdateAI arms run through the unmodeled
-	// VehicleAI base; SpellHit 59335/59319 rides ev14 but the
-	// unit has no NPC_ entry constant, so it stays unregistered. Entry 30891 verifiable from the C++ BlessedBanner
+	// npc_frostbrood_skytalon (VehicleAI) — the UpdateAI arms
+	// run through the unmodeled VehicleAI base; the SpellHit
+	// 59335/59319 cast legs are ported in
+	// lua_scripts/northrend/npc_frostbrood_skytalon.lua (entry
+	// 31583, TDB-verified). Entry 30891 verifiable from the C++ BlessedBanner
 	// enum — see lua_scripts/northrend/npc_blessed_banner.lua.
 	// Icecrown is the fifth Northrend zone (dalaran,
 	// borean_tundra, dragonblight, grizzly_hills, howling_fjord
 	// closed).
 	RegisterLuaBoss("npc_blessed_banner", 30891)
+	RegisterLuaBoss("npc_argent_valiant", 33448)
+	RegisterLuaBoss("npc_frostbrood_skytalon", 31583)
 	// npc_storm_cloud (Zul'Drak zone script): the Reset() /
 	// JustAppeared() arm — triggered self-cast STORM_VISUAL
 	// 55708 (vaelastrasz self-cast convention; the triggered
