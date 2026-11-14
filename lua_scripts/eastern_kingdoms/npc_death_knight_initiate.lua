@@ -6,15 +6,16 @@
 -- npc_death_knight_initiateAI line 545 : CombatAI, no spells
 -- attached -- "@todo spells" -- so CombatAI::UpdateAI is melee-only
 -- and the Go engine-driven combat tick covers it).
--- Entries (TDB 26091 creature_template, name + spawn + gossip-menu
--- evidence -- the dump's ScriptName column is unpopulated, 16/29923
--- rows, so no ScriptName binding is verifiable from it): 28390,
--- 28391, 28392, 28393, 28394 (lvl 55, faction 1770, no gossip flag,
--- map 609 spawns) and 28406 (lvl 55, faction 2084, npcflag 1 GOSSIP,
--- gossip_menu_id 9765, 16 map-609 spawns). The duel flow only ever
--- targets 28406 (the gossip arm casts SPELL_DUEL on `me`); the other
--- five register the same combat arms (harmless: no latch without a
--- SPELL_DUEL hit, damage passes through unchanged).
+-- Entries: 28406 ONLY (TDB 26091 creature_template, verified
+-- against the dump's own CREATE TABLE column order -- the earlier
+-- tick's remembered TC column list was off by one at the tail and
+-- misread ScriptName): 28406 is the sole Death Knight Initiate row
+-- carrying ScriptName 'npc_death_knight_initiate' (lvl 55, faction
+-- 2084, npcflag 1 GOSSIP, gossip_menu_id 9765, 16 map-609 spawns).
+-- 28390-28394 are the same-named, faction-1770, no-gossip initiates
+-- with EMPTY ScriptName (28391/28394 run SmartAI) -- they run no
+-- C++ script and are NOT registered here. The duel flow targets
+-- 28406 (the gossip arm casts SPELL_DUEL on `me`).
 -- Gossip menu 9765 option 0: "I challenge you, death knight!"
 -- (gossip_menu_option OptionText, broadcast 29255), icon 0, sender
 -- MAIN, action GOSSIP_ACTION_INFO_DEF (1000).
@@ -61,7 +62,7 @@
 --   (attacker, SPELL_DUEL_VICTORY 52994, true), self-cast GROVEL
 --   7267, RestoreFaction. RestoreFaction has no bridge -- it is the
 --   template-faction SetFaction twin (Unit.cpp:12027-12044: normal
---   creature -> cinfo->faction), 1770 / 2084 per entry below.
+--   creature -> cinfo->faction), 2084 for entry 28406.
 -- - UpdateAI lose arm (chapter1.cpp:626-633): after the victory, if
 --   the GROVEL aura is gone the creature evades -- 1s poll (the Go
 --   model treats 7267 as a visual-only kneel, combat.go:4025, so no
@@ -108,15 +109,11 @@ local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_IMMUNE_TO_PC = 0x100
 local UNIT_FLAG_SWIMMING = 0x8000
 
-local ENTRIES = { 28390, 28391, 28392, 28393, 28394, 28406 }
-local DUEL_ENTRY = 28406
+local ENTRIES = { 28406 }
 
--- Template factions (TDB 26091 creature_template): 28390-28394 ship
--- 1770, 28406 ships 2084. RestoreFaction's template-faction twin.
-local TEMPLATE_FACTION = {
-    [28390] = 1770, [28391] = 1770, [28392] = 1770,
-    [28393] = 1770, [28394] = 1770, [28406] = 2084,
-}
+-- Template faction (TDB 26091 creature_template): 28406 ships 2084.
+-- RestoreFaction's template-faction twin (Unit.cpp:12027-12044).
+local TEMPLATE_FACTION = 2084
 
 local timers = {}
 local state = {}
@@ -162,10 +159,7 @@ local function clearState(guid)
 end
 
 local function restoreFaction(creature)
-    local faction = TEMPLATE_FACTION[creature:GetEntry()]
-    if faction then
-        creature:SetFaction(faction)
-    end
+    creature:SetFaction(TEMPLATE_FACTION)
 end
 
 -- C++ UpdateAI duel timer (chapter1.cpp:609-623): 5s out-of-combat
@@ -237,10 +231,10 @@ end
 
 -- C++ OnGossipSelect (chapter1.cpp:648-669).
 local function onGossipSelect(_, player, creature, sender, action)
+    player:GossipClearMenu()
     if sender ~= GOSSIP_SENDER_MAIN or action ~= GOSSIP_ACTION_INFO_DEF then
         return
     end
-    player:GossipClearMenu()
     player:GossipComplete()
     if player:IsInCombat() or creature:IsInCombat() then
         return

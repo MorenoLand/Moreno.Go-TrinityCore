@@ -16519,31 +16519,29 @@ func init() {
 	// ev15 horse-despawn leg. Spell 52267 is seeded (wago.tools
 	// 3.4.0.43659 verdict 2026-11-13: effect 77, TargetA 25/TargetB 63).
 	RegisterLuaBoss("npc_dark_rider_of_acherus", 28654)
-	// npc_death_knight_initiate (entries 28390-28394 + 28406, TDB 26091
-	// creature_template name/spawn/gossip-menu evidence -- the dump's
-	// ScriptName column is unpopulated, so no DB binding is verifiable;
-	// 28406 is the gossip/duel NPC: npcflag 1, menu 9765, 16 map-609
-	// spawns, faction 2084; 28390-28394 faction 1770, no gossip flag)
+	// npc_death_knight_initiate (entry 28406 ONLY -- TDB 26091
+	// creature_template, verified against the dump's own CREATE TABLE
+	// column order: 28406 is the sole Death Knight Initiate row with
+	// ScriptName 'npc_death_knight_initiate'; 28390-28394 have empty
+	// ScriptName, faction 1770, no gossip flag, and 28391/28394 run
+	// SmartAI -- they run no C++ script and are NOT registered.
+	// 28406: npcflag 1, menu 9765, 16 map-609 spawns, faction 2084)
 	// is ported in lua_scripts/eastern_kingdoms/
-	// npc_death_knight_initiate.lua (tick 2026-11-14): gossip hello
-	// (quest 12733 gate + "I challenge you, death knight!" option) /
-	// select (SPELL_DUEL 52996 + SPELL_DUEL_FLAG 52991 casts), ev14
-	// SpellHit duel latch + 5s faction-2068 AttackStart timer, ev9
-	// DamageTaken non-dueler zeroing + lethal-clamp victory leg
-	// (DUEL_VICTORY 52994 + GROVEL 7267 + template-faction restore),
-	// 500ms victim-below-10% beg poll + 1s lose-evade poll, ev23
-	// Reset (template faction + SWIMMING flag). The Oct-7 "gossip
-	// duel menu unpresentable (no AddGossipItemFor bridge)" claim is
-	// stale: player GossipMenuAddItem/GossipSendMenu/GossipClearMenu/
-	// GossipComplete are live (lua_player.go:5939-5942, zulaman
-	// precedent). Duel spells 52996/52994/52991/7267 are INFERRED
-	// seed rows (tools/spelldbc_seed/main.go); the 52991 flag-GO
-	// summon leg stays unmodeled.
-	RegisterLuaBoss("npc_death_knight_initiate", 28390)
-	RegisterLuaBoss("npc_death_knight_initiate", 28391)
-	RegisterLuaBoss("npc_death_knight_initiate", 28392)
-	RegisterLuaBoss("npc_death_knight_initiate", 28393)
-	RegisterLuaBoss("npc_death_knight_initiate", 28394)
+	// npc_death_knight_initiate.lua (tick 2026-11-14, corrected same
+	// tick): gossip hello (quest 12733 gate + "I challenge you, death
+	// knight!" option) / select (SPELL_DUEL 52996 + SPELL_DUEL_FLAG
+	// 52991 casts), ev14 SpellHit duel latch + 5s faction-2068
+	// AttackStart timer, ev9 DamageTaken non-dueler zeroing +
+	// lethal-clamp victory leg (DUEL_VICTORY 52994 + GROVEL 7267 +
+	// template-faction restore 2084), 500ms victim-below-10% beg poll
+	// + 1s lose-evade poll, ev23 Reset (template faction + SWIMMING
+	// flag). The Oct-7 "gossip duel menu unpresentable (no
+	// AddGossipItemFor bridge)" claim is stale: player
+	// GossipMenuAddItem/GossipSendMenu/GossipClearMenu/GossipComplete
+	// are live (lua_player.go:5939-5942, zulaman precedent). Duel
+	// spells 52996/52994/52991/7267 are INFERRED seed rows
+	// (tools/spelldbc_seed/main.go); the 52991 flag-GO summon leg
+	// stays unmodeled.
 	RegisterLuaBoss("npc_death_knight_initiate", 28406)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
