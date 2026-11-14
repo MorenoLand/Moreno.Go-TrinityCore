@@ -50,10 +50,10 @@
 --   SetOrientation is the new raw-slot bridge
 --   (lua_creature_events.go: Position::SetOrientation twin, no
 --   packet — C++ WorldObject::SetOrientation is a pure slot write).
--- creature_text holds NO 26917/27990/33533/33532 rows in TDB 26091
--- (the table has exactly 2 rows, entries 6/23383 — the captive
--- precedent); all Talk ids are ported verbatim and are silent
--- data-side.
+-- creature_text in TDB 26091: 26917 groups 0/2, 27990 groups 0-8,
+-- 33533 groups 1-14, 33532 groups 1-13 — every Talk id used here
+-- resolves (the "no rows" claim in the 09:23 head entry is the stale
+-- first-tuple misread from the 07:31 captive entry).
 
 local ENTRY_ALEXSTRASZA = 26917
 

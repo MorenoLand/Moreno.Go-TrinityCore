@@ -16,6 +16,14 @@
 -- handler below; in-file trigger IDs 3551/3549/3547/3546/3552/3548/4356,
 -- aura-caster orphan check via player:GetAura + aura:GetCaster, quest
 -- INCOMPLETE gate, AreaExploredOrEventHappens credit).
+-- MOVED 2026-11-14 (8116ba35): the orphan arm now lives in the dedicated
+-- lua_scripts/world/at_bring_your_orphan_to.lua — RegisterServerEvent(24)
+-- fires EVERY registered handler (runtime.go triggerNUpdated), so the
+-- duplicate arm here double-credited the same quest; removed below.
+-- PORTED (2026-11-14): at_scent_larkorwi (triggers 1726-1740),
+-- at_sentry_point (302), at_nats_landing (4752) — handler below; trigger
+-- IDs from TDB 26091 areatrigger_scripts (the old "DB-side only" block
+-- is retracted for these three).
 -- Remaining classes documented-only; bridges verified against the current
 -- runtime this run (player method table at
 -- engine/world/lua_player.go, creature table at
@@ -24,41 +32,32 @@
 -- Gap classes (spell IDs exact from the C++ enum blocks):
 -- 1. at_stormwright_shelf (:159-177; SPELL_CREATE_TRUE_POWER_OF_THE_TEMPEST
 --    53067 gated on GetQuestStatus(12741)==INCOMPLETE(3)) stays out on its
---    trigger ID only — it lives only in the DB areatrigger_scripts row
---    (gelihast precedent); the player:CastSpell leg is bridged
---    (lua_player.go:2549), so the old "no player:CastSpell bridge"
+--    trigger ID only — TDB 26091 areatrigger_scripts holds NO row for it
+--    (verified 2026-11-14; the old "lives only in the DB row" claim is
+--    retracted, there is no row to bind). The player:CastSpell leg is
+--    bridged (lua_player.go:2549), so the old "no player:CastSpell bridge"
 --    claim for this class is retracted. at_legion_teleporter and
 --    at_sholazar_waygate PORTED below (their IDs are in-file: ContentData
 --    4560 for legion, enum AT_SHOLAZAR 5046 / AT_UNGORO 5047).
--- 2. player:GetQuestStatus + player:FindNearestCreature bridged 2026-10-24
---    (lua_player.go). at_scent_larkorwi (:192-212; quest 4291 gate +
---    FindNearestCreature(9683, 15) dedup + SummonCreature(9683)) and
---    at_sentry_point (:298-326; quest 1265 gate + FindNearestCreature(4967,
---    100) dedup + SummonCreature(4967) + tervosh self-cast 799) are now
---    bridge-complete but UNPORTED: their trigger IDs live only in the DB
---    areatrigger_scripts rows (ObjectMgr.cpp:6653), not in the C++ file —
---    dispatching on a guessed ID would invent an identifier (gelihast
---    precedent). at_nats_landing (:261-293) stays out on its trigger ID
---    only; its AttackStart leg now has the EngageWithTarget twin
---    (2026-10-26, grandmother/sartura precedent);
---    at_area_52_entrance PORTED below (was in this class).
--- 3. at_frostgrips_hollow (:449-512; quest 12877 + SummonCreature(29862/29861)
---    + MovePath(NPC*100)): the old "no creature-motion bridges
---    (SetWalk/MovePath/AddUnitState)" note is stale — SetWalk bridged
---    (lua_creature_events.go:3258) and AddUnitState bridged (:2153);
---    MovePath still has no bridge. Verdict unchanged: its trigger ID is
---    DB-side only (not in the C++ file), so the class stays out.
--- 4. at_brewfest PORTED below (:331-376): FindNearestCreature(24711/24710)
+-- 2. at_frostgrips_hollow (:398-464; quest 12877 + SummonCreature
+--    (29862/29861) + MovePath(NPC*100)): trigger ID 5173 found in TDB
+--    26091 areatrigger_scripts, and SetWalk (lua_creature_events.go:3258)
+--    + AddUnitState (:2153) are bridged — but MovePath still has no
+--    bridge, and the path walk IS the pair's purpose (summon-only would
+--    strand them at spawn for 1min). Stays out on MovePath alone.
+-- 3. at_brewfest PORTED below (:331-376): FindNearestCreature(24711/24710)
 --    bridged 2026-10-24 (lua_player.go), Talk(SAY_WELCOME 4, player) via the
 --    creature Talk whisper-target arm; 5s per-trigger cooldown on
 --    AT_BREWFEST_DUROTAR 4829 / AT_BREWFEST_DUN_MOROGH 4820.
 -- NOTE: RegisterServerEvent(24, areaTriggerHandler) below dispatches on the
 -- triggerID argument (hooks are per-event, not per-trigger ID). Trigger IDs:
 -- 4591 coilfang (PORTED), 4560 legion (PORTED), 5046/5047 sholazar (PORTED),
--- 4829/4820 brewfest (PORTED), 4472/4466/4471/4422 area52 (PORTED);
--- scent/sentry/nats/frostgrips/stormwright IDs live only in the DB
--- areatrigger_scripts rows (ObjectMgr.cpp:6653), not in the C++ file —
--- no guessed dispatch.
+-- 4829/4820 brewfest (PORTED), 4472/4466/4471/4422 area52 (PORTED),
+-- 1726-1740 scent (PORTED), 302 sentry (PORTED), 4752 nats (PORTED);
+-- 3551/3549/3547/3546/3552/3548/4356 orphan live in the dedicated
+-- at_bring_your_orphan_to.lua (8116ba35), NOT here — one handler only, or
+-- the credit double-fires; stormwright has no TDB row and frostgrips 5173
+-- stays out on MovePath (see items 1-2 above) — no guessed dispatch.
 
 -- PORTED ARMS (areatrigger_scripts.cpp; RegisterServerEvent 24 handler).
 -- Go/Eluna summonType is 0-based (lua_creature_events.go:1241): TIMED_DESPAWN
@@ -77,21 +76,15 @@ local BREWFEST_TAPPER = {
     [4820] = 24710, -- DUN MOROGH: Ipfelkofer Ironkeg
 }
 
--- at_bring_your_orphan_to (childrens_week.cpp:935-990): trigger ID ->
--- { quest ID, orphan entry }; Dark Portal (4356) picks the faction pair
--- at dispatch (Alliance quest 10952 / draenei orphan 22818, Horde quest
--- 10951 / blood elf orphan 22817). SPELL_ORPHAN_OUT = 58818.
-local ORPHAN_TRIGGER = {
-    [3551] = { 910, 14444 }, -- AT_DOWN_AT_THE_DOCKS, orcish orphan
-    [3549] = { 911, 14444 }, -- AT_GATEWAY_TO_THE_FRONTIER, orcish orphan
-    [3547] = { 1800, 14444 }, -- AT_LORDAERON_THRONE_ROOM, orcish orphan
-    [3546] = { 1479, 14305 }, -- AT_BOUGHT_OF_ETERNALS, human orphan
-    [3552] = { 1687, 14305 }, -- AT_SPOOKY_LIGHTHOUSE, human orphan
-    [3548] = { 1558, 14305 }, -- AT_STONEWROUGHT_DAM, human orphan
-}
+-- at_scent_larkorwi (areatrigger_scripts.cpp:137-164): TDB
+-- areatrigger_scripts rows 1726-1740 (15 triggers, same arm — the C++
+-- class ignores the trigger ID).
+local SCENT_TRIGGER = {}
+for _i = 1726, 1740 do SCENT_TRIGGER[_i] = true end
 
+local QUEST_STATUS_NONE = 0
 local QUEST_STATUS_INCOMPLETE = 3
-local SPELL_ORPHAN_OUT = 58818
+local QUEST_STATUS_REWARDED = 6
 
 local lastTrigger = {}
 
@@ -159,40 +152,51 @@ local function areaTriggerHandler(_, player, triggerID)
         lastTrigger[triggerID] = now
         return
     end
-    local orphanArm = ORPHAN_TRIGGER[triggerID]
-    if orphanArm then
-        -- at_bring_your_orphan_to (:935-990): not dead + ORPHAN_OUT aura
-        -- whose caster is this trigger's orphan + quest INCOMPLETE ->
-        -- AreaExploredOrEventHappens. getOrphanGUID (:136-143) lowers to
-        -- aura:GetCaster():GetEntry(); a presence-only 58818 record has
-        -- no Aura object (lua_player.go GetAura), so the caster check
-        -- skips and no credit lands rather than a wrong credit.
-        if not player:IsDead() and player:HasAura(SPELL_ORPHAN_OUT) then
-            local questId, orphanId = orphanArm[1], orphanArm[2]
-            local aura = player:GetAura(SPELL_ORPHAN_OUT)
-            local caster = aura and aura:GetCaster()
-            if caster and caster:GetEntry() == orphanId
-                and player:GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE then
-                player:AreaExploredOrEventHappens(questId)
+    if SCENT_TRIGGER[triggerID] then
+        -- at_scent_larkorwi (:137-164): not dead + quest 4291 INCOMPLETE
+        -- + no Lar'korwi Mate (9683) within 15y -> summon the mate at
+        -- playerX+5, orientation 3.3, TIMED_DESPAWN_OUT_OF_COMBAT (3),
+        -- 100s. C++ returns false; the Go handler returns nothing per
+        -- the PORTED-arm convention.
+        if not player:IsDead()
+            and player:GetQuestStatus(4291) == QUEST_STATUS_INCOMPLETE
+            and not player:FindNearestCreature(9683, 15.0) then
+            player:SummonCreature(9683, player:GetX() + 5, player:GetY(),
+                player:GetZ(), 3.3, 3, 100000)
+        end
+        return
+    end
+    if triggerID == 302 then
+        -- at_sentry_point (:242-279): alive + quest 1265 neither NONE
+        -- nor REWARDED + no Tervosh (4967) within 100y -> summon Tervosh
+        -- at the fixed point, TIMED_DESPAWN (2), 1min, then its
+        -- triggered self-cast 799 (SPELL_TELEPORT_VISUAL). TDB
+        -- areatrigger_scripts row 302.
+        local questStatus = player:GetQuestStatus(1265)
+        if player:IsAlive() and questStatus ~= QUEST_STATUS_NONE
+            and questStatus ~= QUEST_STATUS_REWARDED
+            and not player:FindNearestCreature(4967, 100.0) then
+            local tervosh = player:SummonCreature(4967, -3476.51,
+                -4105.94, 17.1, 5.3816, 2, 60000)
+            if tervosh then
+                tervosh:CastSpell(tervosh, 799, true)
             end
         end
         return
     end
-    if triggerID == 4356 then
-        -- at_bring_your_orphan_to AT_DARK_PORTAL (:977-980): faction
-        -- pair, same gates as the table arms above.
-        local questId, orphanId
-        if player:GetTeam() == 0 then
-            questId, orphanId = 10952, 22818
-        else
-            questId, orphanId = 10951, 22817
-        end
-        if not player:IsDead() and player:HasAura(SPELL_ORPHAN_OUT) then
-            local aura = player:GetAura(SPELL_ORPHAN_OUT)
-            local caster = aura and aura:GetCaster()
-            if caster and caster:GetEntry() == orphanId
-                and player:GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE then
-                player:AreaExploredOrEventHappens(questId)
+    if triggerID == 4752 then
+        -- at_nats_landing (:207-240): alive + SPELL_FISH_PASTE aura
+        -- 42644 + quest 11209 INCOMPLETE + no Lurking Shark (23928)
+        -- within 20y -> summon the shark at the fixed point,
+        -- TIMED_DESPAWN_OUT_OF_COMBAT (3), 100s, then EngageWithTarget
+        -- (the AttackStart twin). TDB areatrigger_scripts row 4752.
+        if player:IsAlive() and player:HasAura(42644)
+            and player:GetQuestStatus(11209) == QUEST_STATUS_INCOMPLETE
+            and not player:FindNearestCreature(23928, 20.0) then
+            local shark = player:SummonCreature(23928, -4246.243,
+                -3922.356, -7.488, 5.0, 3, 100000)
+            if shark then
+                shark:EngageWithTarget(player)
             end
         end
         return
