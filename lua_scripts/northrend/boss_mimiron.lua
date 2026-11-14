@@ -80,8 +80,9 @@
 --     ELEVATOR_KNOCKBACK 65096) and 5 (elevator DESTROYED), Reset
 --     (elevator ACTIVE + button READY / NOT_SELECTABLE clear) — via
 --     the nearest-object twins (FindNearestGameObject /
---     FindNearestCreature); 65096 is unseeded so the knockback cast
---     stays dormant until Spell.dbc data lands.
+--     FindNearestCreature); 65096 + its trigger 65100 are seeded
+--     (Spell.dbc records 68-69), so the knockback chain is live
+--     in code.
 --     The vehicle-base legs are PORTED this tick: VX001 steps 1
 --     (SetFacingTo 3.686), 2 (SEAT_6) and 8 (SEAT_2), AERIAL step 1
 --     (SEAT_5) — GetVehicleBase (:3522) and SetFacingTo
@@ -495,8 +496,8 @@ end
 -- and 8 (SEAT_2 on the vehicle base) are PORTED this tick
 -- (GetVehicleBase :3522 + SetFacingTo, instance-GUID MKII fallback);
 -- step 4 (elevator READY + worldtrigger knockback) and 5 (elevator
--- DESTROYED) are PORTED (nearest-object twins; 65096 unseeded, cast
--- dormant). The Talk, summon and DoAction legs are ported. The summoned
+-- DESTROYED) are PORTED (nearest-object twins; 65096 + 65100 seeded).
+-- The Talk, summon and DoAction legs are ported. The summoned
 -- VX-001 is kept in per-GUID state, the Lua twin of the DATA_VX_001
 -- instance GUID the later steps read.
 local function vx001Activation9(creature, guid)
@@ -565,8 +566,8 @@ local function vx001Activation4(creature, guid)
     -- FindNearestCreature, netherspite/moroes precedents) — the
     -- instance-GUID route stays nil: DATA_MIMIRON_WORLD_TRIGGER (36)
     -- is never latched (no Lua latches it; instance_guid_store.go).
-    -- 65096 is UNSEEDED: the cast is issued and stays dormant until
-    -- Spell.dbc data lands (marli hatch-chain precedent).
+    -- 65096 + trigger 65100 seeded (Spell.dbc records 68-69); the
+    -- periodic-trigger leg is live (spells.go:42157).
     local elevator = creature:FindNearestGameObject(GO_MIMIRON_ELEVATOR, 100.0)
     if elevator then
         elevator:SetGoState(1) -- GO_STATE_READY

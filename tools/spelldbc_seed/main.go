@@ -539,10 +539,25 @@ var spells = []spell{
 	// RangeIndex 1 (Self Only, 0-0 yd = synthetic 93001's value),
 	// SchoolMask 0x1 (physical), CastingTimeIndex 1 (instant, default
 	// 0). Attributes_0 0x20000100 / Attributes_1 0x10000000 not encoded
-	// (seed has no attributes field). Trigger spell 65100 NOT seeded
-	// yet (verdict pending) — the aura ticks dormant until it lands.
+	// (seed has no attributes field). Trigger spell 65100 seeded below
+	// (verdict 2026-11-14) — the chain is live in code.
 	// The periodic-trigger leg is live in Go (spells.go:42157).
 	{id: 65096, durIdx: 32, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, dieSides: 1, basePoints: -1, aura: auraPeriodicTrig, auraPeriod: 2000, trigger: 65100, targetA: targetCaster}}},
+
+	// 65100 Elevator Knockback (trigger of 65096's periodic aura;
+	// boss_mimiron.cpp:171,541) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-14 verdict: single
+	// effect 98 KNOCK_BACK, DieSides 1, BasePoints 99, TargetA 22
+	// (TARGET_SRC_CASTER), TargetB 15 (TARGET_UNIT_SRC_AREA_ENEMY),
+	// RadiusIndex 13 (10 yd, seeded real row below), MiscValue 200,
+	// MiscValueB 0; DurationIndex 0 (no SpellDuration row, by design),
+	// RangeIndex 1 (Self Only, 0-0 yd = synthetic 93001's value),
+	// SchoolMask 0x1 (physical), CastingTimeIndex 1 (instant, default
+	// 0). Attributes_0 0x20000100 not encoded (seed has no attributes
+	// field). The knockback leg is live in Go (spells.go:18835,
+	// handleEffectKnockBack: MiscValue*0.1 = speedXY, rolled
+	// BasePoints*0.1 = speedZ; 62659 precedent).
+	{id: 65100, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effKnockBack, dieSides: 1, basePoints: 99, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, misc: 200}}},
 }
 
 func main() {
@@ -587,6 +602,7 @@ func main() {
 		{1, f32(100), f32(0), f32(100)},
 		{28, f32(50000), f32(0), f32(50000)}, // real SpellRadius 28 for 66545 (wago.tools 3.4.0.43659)
 		{36, f32(0), f32(0), f32(0)},         // real SpellRadius 36 for 50415 (wago.tools 3.4.0.43659, 2026-11-13 22:17 verdict: all zeros)
+		{13, f32(10), f32(0), f32(10)},       // real SpellRadius 13 for 65100 (wago.tools 3.4.0.43659)
 		{14, f32(8), f32(0), f32(8)},         // real SpellRadius 14 for 59335 (wago.tools 3.4.0.43659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
