@@ -14,7 +14,8 @@
 -- "AddSC_halls_of_reflection" hits halls_of_reflection.cpp only (+ the
 -- loader decl/call lines).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. Timers via CreateLuaEvent, GUID-keyed, cancelled on
+-- 23 OnReset, 28 OnMovementInform. Timers via CreateLuaEvent,
+-- GUID-keyed, cancelled on
 -- events 2/4/23 (the bronjahm / devourer_of_souls convention);
 -- creature:CastSpell(nil, spellId) = victim-cast (bridge falls back to
 -- TargetGUID); creature:CastSpell(creature, spellId) = self-cast (the
@@ -42,34 +43,44 @@
 --   SPELL_HEROIC_STRIKE 29426 (:2705), re-arm 6000ms (:2706).
 -- EVENT_QUEL_DELAR_WHIRLWIND (:2708-2711) — DoCastAOE(SPELL_WHIRLWIND
 --   67716) (:2709), self-cast, re-arm 1000ms (:2710).
+-- Reset (:2611-2620) — _events.Reset, SetSpeedRate(MOVE_FLIGHT, 4.5),
+--   _intro-gated INIT schedule / SetImmuneToAll(false) clear.
+-- EVENT_QUEL_DELAR_INIT / FLIGHT_INIT / FLIGHT / LAND / FIGHT
+--   (:2663-2695) — frostmourne-bunny Talk, MoveTakeoff,
+--   MoveCirclePath, MoveLand, MoveTo, Talk, SetImmuneToAll(false);
+--   MovementInform (:2635-2645) rides ev28.
+--
+-- FLIGHT-MACHINE NOTES (2026-11-14 port):
+-- The _intro latch is per-GUID introDone (false only after INIT
+--   runs); Reset's non-intro leg (:2619) clears immunity through it.
+--   Flight timers ride their own table: ev23 cancels both tables
+--   then re-arms, ev2 cancels combat only (C++ evade re-runs Reset,
+--   so the INIT re-arm must survive the leave-combat fire that
+--   follows it), ev4 cancels both (Go fires ev23 ahead of ev4 on
+--   death, so the death re-arm is wiped). The bunny Talk rides the
+--   FindNearestCreature(37704, 100) grid twin (the uther-DoAction
+--   precedent: entry 37704 NPC_FROSTMOURNE_ALTAR_BUNNY,
+--   halls_of_reflection.h:69, unique in the instance).
+--   MoveCirclePath rides the new bridge (MotionMaster.cpp:827-865
+--   twin, cyclic single-link chain run); SetSpeedRate(MOVE_FLIGHT,
+--   4.5) rides the SetSpeedRate MOVE_FLIGHT=6 bridge.
 --
 -- DOCUMENTED-ONLY:
--- The quest flight machine — EVENT_QUEL_DELAR_INIT (:2667-2672),
---   EVENT_QUEL_DELAR_FLIGHT_INIT (:2673-2675), EVENT_QUEL_DELAR_FLIGHT
---   (:2676-2680), EVENT_QUEL_DELAR_LAND (:2681-2686),
---   EVENT_QUEL_DELAR_FIGHT (:2687-2695) with the MoveTakeoff /
---   MoveCirclePath / MoveLand / MovePoint legs and the frostmourne-bunny
---   Talk (:2669) — no movement bridge. (The old header's
---   SetImmuneToAll(true) pre-fight leg (:2614-2619, cleared at :2693)
---   does not exist in the C++ — only SetImmuneToAll(false) at :2619
---   and :2687 — so its "fidelity gap" claim is retracted as
---   unfounded; the engage-gated arms are C++-exact.)
--- Reset's SetImmuneToAll(false) (:2619) is gated on the _intro latch
---   (false only after the unported EVENT_QUEL_DELAR_INIT flight seed)
---   and EVENT_QUEL_DELAR_FIGHT's clear (:2687) rides the unported
---   flight machine — both stay out (2026-10-23 SetImmuneToAll sweep);
---   an unconditional clear would fabricate an intro-phase clear the
---   C++ never performs. The flag twin (creature:RemoveFlag(59,
---   0x300)) is bridged but the gating state is not modeled.
--- Reset's DoCast(SPELL_WHIRLWIND_VISUAL 70300) (:2614-2616) fires on
---   the C++ spawn path; Go fires events 23/5 only on the respawn path
---   (engine/world/lua_creature_events.go:368-395), so the leg is
---   unmodeled rather than fabricated on a wrong hook.
--- MovementInform (:2635-2645): no-MovementInform bridge.
+-- Reset's DoCast(SPELL_WHIRLWIND_VISUAL 70300) (:2614-2616) — spell
+--   70300 unseeded (no Spell.dbc row, no seed-tool row); the cast
+--   would be silent until a wago seed lands.
+-- First-spawn gap: Go fires ev23/ev5 only on the respawn path
+--   (fireCreatureSpawned in lua_creature_events.go), so a freshly
+--   summoned sword never runs Reset/INIT — the flight machine
+--   starts on respawn, and never starts at all until the instance
+--   SummonCreature bridge lands (uther EVENT_UTHER_3 stays out).
 -- The ctor's SetDisplayId(Modelid2) (:2610) is display-bridgeable
 --   (creature:SetDisplayId) but has no construction/first-spawn hook
---   (event 5 fires respawn-only); Reset()'s SetSpeedRate(MOVE_FLIGHT,
---   4.5f) (:2615) is rejected by the MOVE_RUN-only speed bridge.
+--   (event 5 fires respawn-only).
+-- (The old header's SetImmuneToAll(true) pre-fight leg (:2614-2619,
+--   cleared at :2693) does not exist in the C++ — only
+--   SetImmuneToAll(false) at :2619 and :2687 — so its "fidelity gap"
+--   claim is retracted as unfounded.)
 --
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (creature
 -- casts are packet-visual), so timers fire unconditionally (the maiden
@@ -82,6 +93,17 @@ local ACTION_UTHER_OUTRO = 2
 local SPELL_BLADESTORM  = 67541
 local SPELL_HEROIC_STRIKE = 29426
 local SPELL_WHIRLWIND   = 67716
+
+local MOVE_FLIGHT = 6
+local EFFECT_MOTION_TYPE = 16
+local POINT_TAKE_OFF = 1
+local ENTRY_FROSTMOURNE_ALTAR_BUNNY = 37704 -- halls_of_reflection.h:69
+local SAY_FROSTMOURNE_BUNNY = 0 -- halls_of_reflection.cpp:2439
+local SAY_QUEL_DELAR_SWORD = 0 -- halls_of_reflection.cpp:2434
+local QUEL_DELAR_CENTER = { 5309.259, 2006.390, 718.046 } -- halls_of_reflection.cpp:2443
+local QUEL_DELAR_MOVE_TAKEOFF = { 5292.870, 1998.950, 718.046 } -- QuelDelarMovement[0]
+local QUEL_DELAR_MOVE_LAND = { 5295.819, 1991.912, 707.707 } -- QuelDelarMovement[1]
+local QUEL_DELAR_MOVE_FIGHT = { 5295.301, 1989.782, 708.696 } -- QuelDelarMovement[2]
 
 local timers = {}
 
@@ -100,6 +122,31 @@ local function schedule(guid, key, delay, fn)
     if not per then
         per = {}
         timers[guid] = per
+    end
+    if per[key] then
+        RemoveEventById(per[key])
+    end
+    per[key] = CreateLuaEvent(fn, delay)
+end
+
+local flightTimers = {}
+local introDone = {}
+
+local function cancelFlightTimers(guid)
+    local per = flightTimers[guid]
+    if per then
+        for _, id in pairs(per) do
+            RemoveEventById(id)
+        end
+        flightTimers[guid] = nil
+    end
+end
+
+local function scheduleFlight(guid, key, delay, fn)
+    local per = flightTimers[guid]
+    if not per then
+        per = {}
+        flightTimers[guid] = per
     end
     if per[key] then
         RemoveEventById(per[key])
@@ -143,8 +190,95 @@ local function swordEngaged(event, creature, target)
     schedule(guid, "whirlwind", 6000, function() whirlwindTick(creature, guid) end)
 end
 
+-- C++ EVENT_QUEL_DELAR_FIGHT :2687-2695.
+local function fightStep(creature, guid)
+    if flightTimers[guid] == nil then
+        return
+    end
+    creature:Talk(SAY_QUEL_DELAR_SWORD)
+    creature:MoveTo(0, QUEL_DELAR_MOVE_FIGHT[1], QUEL_DELAR_MOVE_FIGHT[2], QUEL_DELAR_MOVE_FIGHT[3])
+    creature:SetImmuneToAll(false)
+end
+
+-- C++ EVENT_QUEL_DELAR_LAND :2681-2686.
+local function landStep(creature, guid)
+    if flightTimers[guid] == nil then
+        return
+    end
+    creature:StopMoving()
+    creature:MoveLand(0, QUEL_DELAR_MOVE_LAND[1], QUEL_DELAR_MOVE_LAND[2], QUEL_DELAR_MOVE_LAND[3])
+    scheduleFlight(guid, "fight", 6000, function() fightStep(creature, guid) end)
+end
+
+-- C++ EVENT_QUEL_DELAR_FLIGHT :2676-2680.
+local function flightStep(creature, guid)
+    if flightTimers[guid] == nil then
+        return
+    end
+    creature:MoveCirclePath(QUEL_DELAR_CENTER[1], QUEL_DELAR_CENTER[2], QUEL_DELAR_CENTER[3], 18.0, true, 16)
+    scheduleFlight(guid, "land", 15000, function() landStep(creature, guid) end)
+end
+
+-- C++ MovementInform :2635-2645 — EFFECT_MOTION_TYPE, POINT_TAKE_OFF.
+local function swordMovementInform(event, creature, moveType, pointId)
+    if moveType ~= EFFECT_MOTION_TYPE or pointId ~= POINT_TAKE_OFF then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if flightTimers[guid] == nil then
+        return
+    end
+    scheduleFlight(guid, "flight", 0, function() flightStep(creature, guid) end)
+end
+
+-- C++ EVENT_QUEL_DELAR_FLIGHT_INIT :2673-2675.
+local function flightInitStep(creature, guid)
+    if flightTimers[guid] == nil then
+        return
+    end
+    creature:MoveTakeoff(POINT_TAKE_OFF, QUEL_DELAR_MOVE_TAKEOFF[1], QUEL_DELAR_MOVE_TAKEOFF[2], QUEL_DELAR_MOVE_TAKEOFF[3])
+end
+
+-- C++ EVENT_QUEL_DELAR_INIT :2667-2672.
+local function initStep(creature, guid)
+    if flightTimers[guid] == nil then
+        return
+    end
+    local bunny = creature:FindNearestCreature(ENTRY_FROSTMOURNE_ALTAR_BUNNY, 100)
+    if bunny then
+        bunny:Talk(SAY_FROSTMOURNE_BUNNY)
+    end
+    introDone[guid] = true
+    scheduleFlight(guid, "flightInit", 2500, function() flightInitStep(creature, guid) end)
+end
+
+-- C++ Reset :2611-2620 — _events.Reset, SetSpeedRate(MOVE_FLIGHT,
+-- 4.5), _intro-gated INIT schedule / SetImmuneToAll(false) clear.
+-- (DoCast SPELL_WHIRLWIND_VISUAL 70300 stays out: unseeded.)
 local function swordReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    cancelFlightTimers(guid)
+    creature:SetSpeedRate(MOVE_FLIGHT, 4.5)
+    if not introDone[guid] then
+        scheduleFlight(guid, "init", 0, function() initStep(creature, guid) end)
+    else
+        creature:SetImmuneToAll(false)
+    end
+end
+
+-- Leave-combat cancels combat timers only (C++ evade re-runs Reset
+-- first, so the INIT re-arm must survive the leave-combat fire);
+-- death cancels both tables (Go fires ev23 ahead of ev4 on death,
+-- so the death re-arm is wiped).
+local function swordLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
+end
+
+local function swordOnDied(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    cancelFlightTimers(guid)
 end
 
 -- C++ JustDied :2629-2633 — uther->AI()->DoAction(ACTION_UTHER_OUTRO).
@@ -163,7 +297,8 @@ local function swordDied(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 1, swordEngaged)
-RegisterCreatureEvent(ENTRY_QUEL_DELAR, 2, swordReset)
-RegisterCreatureEvent(ENTRY_QUEL_DELAR, 4, swordReset)
+RegisterCreatureEvent(ENTRY_QUEL_DELAR, 2, swordLeaveCombat)
+RegisterCreatureEvent(ENTRY_QUEL_DELAR, 4, swordOnDied)
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 4, swordDied)
 RegisterCreatureEvent(ENTRY_QUEL_DELAR, 23, swordReset)
+RegisterCreatureEvent(ENTRY_QUEL_DELAR, 28, swordMovementInform)

@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -62,6 +63,7 @@ type splineChainRun struct {
 	PointIndex     int // next point within Links[LinkIndex] to send
 	PointID        uint32
 	Walk           bool
+	Cyclic         bool // MoveCirclePath twin: the run loops to point 0 at the final landing with no wait and no inform, until superseded
 	LinkLaunchedAt time.Time
 	LinkActualMs   uint32 // summed leg durations of the current link
 	WaitUntil      time.Time
@@ -207,6 +209,57 @@ func (s *Server) sendSplineChainLink(ctx context.Context, motion *creatureMotion
 	return s.launchCreatureScriptSplineSpeed(motion, pt.X, pt.Y, pt.Z, walk, movementGeneratorSplineChain, pointID, true, speed)
 }
 
+// moveCirclePath is MotionMaster::MoveCirclePath
+// (MotionMaster.cpp:827-865): a GenericMovementGenerator
+// (EFFECT_MOTION_TYPE 16) whose spline is the owner's current
+// position followed by stepCount points around the circle
+// (center + radius at angle, step 2*PI/stepCount, clockwise
+// negated), SetCyclic so it loops until superseded. Go walks it
+// as a single-link cyclic spline-chain run: the chain walker
+// sends one point at a time and wraps to point 0 at the end with
+// no wait and no inform, matching the C++ cyclic spline. The
+// points take the passed z (the flying branch — IsFlying reads
+// the given z; the ground branch's GetMapHeight + hover offset
+// has no Go twin). All in-tree callers fly (quel_delar sword,
+// malygos phase 3, yogg-saron). Speed is the flight speed
+// (creatureBaseFlightSpeed, folded by a script-set MOVE_FLIGHT
+// rate), the MoveSplineInit::Launch MOVE_FLIGHT selection for a
+// flying unit. A non-chain launch supersedes the run (the LAND
+// leg's MoveLand); StopMoving alone does not clear a chain run
+// (the standing MoveClear collapse delta), so callers halt a
+// circle with a fresh launch. stepCount 0 or radius <= 0 fails
+// validation with no spline, like the sub-0.001 speed leg.
+func (s *Server) moveCirclePath(ctx context.Context, motion *creatureMotion, centerX, centerY, centerZ, radius float32, clockwise bool, stepCount uint8) bool {
+	if s == nil || motion == nil || stepCount == 0 || radius <= 0 {
+		return false
+	}
+	s.motionMu.Lock()
+	angle := math.Atan2(float64(motion.Y-centerY), float64(motion.X-centerX))
+	step := 2 * math.Pi / float64(stepCount)
+	if clockwise {
+		step = -step
+	}
+	speed := float32(creatureBaseFlightSpeed)
+	if motion.ScriptFlightRateKnown {
+		speed *= motion.ScriptFlightRate
+	}
+	points := make([]splineChainPoint, 0, int(stepCount))
+	for i := uint8(0); i < stepCount; i++ {
+		points = append(points, splineChainPoint{
+			X: centerX + radius*float32(math.Cos(angle)),
+			Y: centerY + radius*float32(math.Sin(angle)),
+			Z: centerZ,
+		})
+		angle += step
+	}
+	motion.SplineChain = &splineChainRun{
+		Links:  []splineChainLink{{Velocity: speed, Points: points}},
+		Cyclic: true,
+	}
+	s.motionMu.Unlock()
+	return s.sendSplineChainLink(ctx, motion, time.Now())
+}
+
 // landSplineChainLink is the SplineChainMovementGenerator::Update /
 // Finalize twin for one landed leg: the next point of the link goes
 // out immediately; at the link's end the next link is armed after
@@ -246,6 +299,18 @@ func (s *Server) landSplineChainLink(ctx context.Context, motion *creatureMotion
 		return
 	}
 	if lastLink {
+		if run.Cyclic {
+			// MoveCirclePath cyclic twin (MotionMaster.cpp:827-865):
+			// the path is one spline with SetCyclic, so the run
+			// never finalizes — the next revolution starts at once
+			// with no wait and no MovementInform, until a fresh
+			// launch supersedes it (the LAND leg's MoveLand).
+			run.LinkIndex = 0
+			run.PointIndex = 0
+			s.motionMu.Unlock()
+			s.sendSplineChainLink(ctx, motion, now)
+			return
+		}
 		pointID := run.PointID
 		motion.SplineChain = nil
 		motion.ScriptMoveType = 0

@@ -118,6 +118,8 @@ type creatureMotion struct {
 	MountKnown            bool
 	ScriptRunRate         float32 // m_speed_rate[MOVE_RUN] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), replaces the aura fold while known; rate is a multiplier on base move speed
 	ScriptRunRateKnown    bool
+	ScriptFlightRate      float32 // m_speed_rate[MOVE_FLIGHT] script override: Lua CreatureMethods::SetSpeedRate (Unit::SetSpeedRate twin, Unit.cpp:8821), multiplies the base flight speed while known; rate is a multiplier on base flight speed (7.0 yd/s)
+	ScriptFlightRateKnown bool
 	ScriptHidden          bool    // m_serverSideVisibility SERVERSIDE_VISIBILITY_GM arm script override: Lua CreatureMethods::SetVisible (Unit::SetVisible twin, Unit.cpp:8656); true = visible to GM seers only (SEC_GAMEMASTER), false = normal visibility (SEC_PLAYER); honored by the nearby-creature update filter, so script hide/unhide arms port with real effect
 	FarVisible            bool    // m_isFarVisible script override: Lua CreatureMethods::SetFarVisible (WorldObject::SetFarVisible twin, Object.cpp:1049-1055); true = visible out to MAX_VISIBILITY_DISTANCE (Object.cpp:1521, GetVisibilityRange arm) instead of the map default; honored by the nearby-creature update filter, so script far-visible arms port with real effect
 	ScriptScale           float32 // OBJECT_FIELD_SCALE_X script override: Lua CreatureMethods::SetScale (Creature::SetObjectScale twin, Creature.cpp:3199), replaces the template base in the scale twin while known
@@ -684,6 +686,8 @@ const creatureTypeFlagBossMob = 0x4
 // GetSpeed(MOVE_FLIGHT) = 1.0 * 7.0 (Creature::Initialize sets the flight
 // rate to 1.0, Creature.cpp:532). Go tracks the flying analog on
 // motion.CanFly, so flyers use the flight velocity regardless of walk.
+// A script-set flight rate (SetSpeedRate MOVE_FLIGHT) multiplies the
+// flight velocity, the m_speed_rate[MOVE_FLIGHT] slot.
 // Documented no-bridge arms of the same Launch block: the SWIMMING leg of
 // SelectSpeedType (creatureMotion carries no swim flag) and the client
 // speed cap min(velocity, catmullrom||flying ? 50 : max(28, run*4)) —
@@ -696,6 +700,9 @@ func creatureSplineVelocity(motion *creatureMotion, walk bool) float32 {
 	var speed float32
 	if motion != nil && motion.CanFly {
 		speed = creatureBaseFlightSpeed
+		if motion.ScriptFlightRateKnown {
+			speed *= motion.ScriptFlightRate
+		}
 	} else if walk || (motion != nil && motion.Walking) {
 		speed = motion.Speed
 	} else {

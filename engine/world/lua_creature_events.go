@@ -5842,6 +5842,51 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.launchCreatureScriptSpline(motion, x, y, z, false, movementGeneratorEffect, id, true)
 		return nil, nil
 	}
+	// MoveCirclePath is MotionMaster::MoveCirclePath
+	// (MotionMaster.cpp:827-865): a GenericMovementGenerator
+	// (EFFECT_MOTION_TYPE 16) circling (centerX, centerY,
+	// centerZ) at radius, clockwise when true, in stepCount
+	// points, cyclic until superseded. Backs the quel_delar
+	// sword EVENT_QUEL_DELAR_FLIGHT leg
+	// (halls_of_reflection.cpp:2676-2680) and the malygos /
+	// yogg-saron circle legs. The player surface stays out
+	// (client-driven movement).
+	methods["MoveCirclePath"] = func(ctx context.Context, args []any) ([]any, error) {
+		centerX, err := luaFloat32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		centerY, err := luaFloat32Arg(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		centerZ, err := luaFloat32Arg(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		radius, err := luaFloat32Arg(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		if len(args) < 5 {
+			return nil, fmt.Errorf("MoveCirclePath requires a clockwise bool")
+		}
+		clockwise, ok := args[4].(bool)
+		if !ok {
+			return nil, fmt.Errorf("MoveCirclePath requires a clockwise bool")
+		}
+		steps, err := luaUint32Arg(args, 5)
+		if err != nil {
+			return nil, err
+		}
+		if steps == 0 || steps > 255 {
+			return nil, fmt.Errorf("MoveCirclePath stepCount must be 1-255, got %d", steps)
+		}
+		if !s.moveCirclePath(ctx, motion, centerX, centerY, centerZ, radius, clockwise, uint8(steps)) {
+			return nil, fmt.Errorf("MoveCirclePath failed validation")
+		}
+		return nil, nil
+	}
 	// MoveCharge is MotionMaster::MoveCharge (MotionMaster.cpp:698-720)
 	// = a PointMovementGenerator (POINT_MOTION_TYPE 8), the same
 	// generator type MovePoint runs, so it shares the script-spline
@@ -6353,7 +6398,8 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// MOVE_WALK=0 reads the motion walk speed (template walk speed,
 	// 2.5 fallback), MOVE_RUN=1 the engine run speed (base 7.0 times
 	// the creatureRunSpeedRate fold, 7.0 fallback), MOVE_FLIGHT=6 the
-	// Creature::Initialize flight speed (1.0 * 7.0, creaturemotion.go:507).
+	// Creature::Initialize flight speed (1.0 * 7.0, creaturemotion.go:507),
+	// folded by a script-set MOVE_FLIGHT rate while known.
 	// Other move types have no Go creature model and error, mirroring
 	// the SetSpeedRate rejection.
 	methods["GetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
@@ -6363,6 +6409,7 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		s.motionMu.Lock()
 		walk, run := motion.Speed, motion.RunSpeed
+		flightRate, flightKnown := motion.ScriptFlightRate, motion.ScriptFlightRateKnown
 		s.motionMu.Unlock()
 		switch mt {
 		case 0:
@@ -6376,7 +6423,11 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			}
 			return []any{run}, nil
 		case 6:
-			return []any{float32(creatureBaseFlightSpeed)}, nil
+			flight := float32(creatureBaseFlightSpeed)
+			if flightKnown {
+				flight *= flightRate
+			}
+			return []any{flight}, nil
 		default:
 			return nil, fmt.Errorf("GetSpeed supports MOVE_WALK=0, MOVE_RUN=1, MOVE_FLIGHT=6 only, got %d", mt)
 		}
@@ -6385,18 +6436,34 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// creatures: the Trinity arm calls SetSpeedRate(type, rate) with
 	// the rate form (the forced flag is voided in C++), so this is the
 	// SetSpeedRate bridge below with the third argument ignored:
-	// MOVE_RUN=1 only, rate <= 0 clears the script override.
+	// MOVE_RUN=1 and MOVE_FLIGHT=6, rate <= 0 clears the script
+	// override. The flight leg stores the m_speed_rate[MOVE_FLIGHT]
+	// slot with no refresh — Go has no SMSG_SPLINE_SET_FLIGHT_SPEED
+	// broadcast twin, so legs launched after the set read the rate
+	// (MoveCirclePath, creatureSplineVelocity for flyers).
 	methods["SetSpeed"] = func(_ context.Context, args []any) ([]any, error) {
 		mt, err := luaUint32Arg(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		if mt != 1 {
-			return nil, fmt.Errorf("SetSpeed supports MOVE_RUN=1 only, got %d", mt)
+		if mt != 1 && mt != 6 {
+			return nil, fmt.Errorf("SetSpeed supports MOVE_RUN=1 and MOVE_FLIGHT=6 only, got %d", mt)
 		}
 		rate, err := luaFloat32Arg(args, 1)
 		if err != nil {
 			return nil, err
+		}
+		if mt == 6 {
+			s.motionMu.Lock()
+			if rate <= 0 {
+				motion.ScriptFlightRate = 0
+				motion.ScriptFlightRateKnown = false
+			} else {
+				motion.ScriptFlightRate = rate
+				motion.ScriptFlightRateKnown = true
+			}
+			s.motionMu.Unlock()
+			return nil, nil
 		}
 		s.motionMu.Lock()
 		if rate <= 0 {
@@ -6411,11 +6478,14 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		return nil, nil
 	}
 	// SetSpeedRate is Unit::SetSpeedRate (Unit.cpp:8821) for MOVE_RUN=1
-	// only: the rate is the raw m_speed_rate multiplier on base move speed
-	// (7.0 yd/s run; C++ SetSpeed's absolute form divides by that base in
-	// Lua with a citation). Go has no creature MOVE_WALK/SWIM/FLIGHT
-	// model — the Unit::UpdateSpeed twin (creatureRunSpeedRate) is
-	// MOVE_RUN-only — so other move types are rejected. rate <= 0 clears
+	// and MOVE_FLIGHT=6: the rate is the raw m_speed_rate multiplier on
+	// base move speed (7.0 yd/s run, 7.0 yd/s flight; C++ SetSpeed's
+	// absolute form divides by that base in Lua with a citation). The
+	// flight leg stores the m_speed_rate[MOVE_FLIGHT] slot with no
+	// refresh — Go has no SMSG_SPLINE_SET_FLIGHT_SPEED broadcast twin,
+	// so legs launched after the set read the rate (MoveCirclePath,
+	// creatureSplineVelocity for flyers). Other move types have no Go
+	// creature model and are rejected. rate <= 0 clears
 	// the script override, restoring the aura-fold/template rate (the C++
 	// Reset arms that restore _baseSpeed/DefaultMoveSpeedRate/SPEED_RUN).
 	// The normal refresh path recomputes RunSpeed, rescales in-flight
@@ -6426,12 +6496,24 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		if mt != 1 {
-			return nil, fmt.Errorf("SetSpeedRate supports MOVE_RUN=1 only, got %d", mt)
+		if mt != 1 && mt != 6 {
+			return nil, fmt.Errorf("SetSpeedRate supports MOVE_RUN=1 and MOVE_FLIGHT=6 only, got %d", mt)
 		}
 		rate, err := luaFloat32Arg(args, 1)
 		if err != nil {
 			return nil, err
+		}
+		if mt == 6 {
+			s.motionMu.Lock()
+			if rate <= 0 {
+				motion.ScriptFlightRate = 0
+				motion.ScriptFlightRateKnown = false
+			} else {
+				motion.ScriptFlightRate = rate
+				motion.ScriptFlightRateKnown = true
+			}
+			s.motionMu.Unlock()
+			return nil, nil
 		}
 		s.motionMu.Lock()
 		if rate <= 0 {
