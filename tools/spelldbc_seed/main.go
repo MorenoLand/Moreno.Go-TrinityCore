@@ -61,6 +61,7 @@ const (
 	effActivateObj            = 86
 	effCharge                 = 96
 	effKnockBack              = 98
+	effKillCredit2            = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage           = 58
 	auraPeriodicDmg           = 3
 	auraDummy                 = 4
@@ -93,6 +94,8 @@ const (
 	targetUnitTargetAny       = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
 	targetDestTargetAny       = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
 	targetSrcCaster           = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
+	targetUnitSrcAreaEntry    = 7  // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
+	targetUnitNearbyEntry     = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
 	targetGONearbyEntry       = 40
 	auraAddPctModifier        = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
 	spellModDamage            = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
@@ -456,6 +459,75 @@ var spells = []spell{
 		{effect: effApplyAura, dieSides: 1, basePoints: 6, aura: auraControlVehicle, targetA: targetUnitTargetAny},
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
 	}},
+
+	// 59335 Explode Frost Wyrm (zone_icecrown.cpp:763-775; skytalon
+	// SpellHit -> DoCast(me, 54690)) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-14 verdict: single
+	// effect 2 SCHOOL_DAMAGE, DieSides 1, BasePoints 499999,
+	// TargetA 22 (TARGET_SRC_CASTER), TargetB 7
+	// (TARGET_UNIT_SRC_AREA_ENTRY), RadiusIndex 14, Misc 0/0;
+	// DurationIndex 0 (no SpellDuration row), RangeIndex 74
+	// (Ranged Weapon, 0-30 yd, Flags 0x2, seeded real row below),
+	// SchoolMask 0x1 (physical), CastingTimeIndex 1 (instant);
+	// Attributes_0 0x100 not encoded (seed has no attributes field).
+	// Cast time stays default 0 (instant = real 1). The
+	// src-area-entry leg is live in Go (entry_area_targets.go:13,
+	// creature_area_targets.go:344, spells.go:11518).
+	{id: 59335, rangeIdx: 74, school: schoolPhysical, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1, basePoints: 499999, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 14}}},
+
+	// 59319 Ride Frost Wyrm (zone_icecrown.cpp:763-775; skytalon
+	// SpellHit -> DoCastAOE(59375) + FLY_AWAY 100ms) — wago.tools
+	// 3.4.0.43659 Spell/SpellEffect/SpellMisc rows, 2026-11-14
+	// verdict: single effect 6 APPLY_AURA, aura 236 CONTROL_VEHICLE,
+	// DieSides 0, BasePoints 0, TargetA 25 (TARGET_UNIT_TARGET_ANY),
+	// TargetB 0, RadiusIndex 0, Misc 0/0; DurationIndex 21 (infinite,
+	// seeded row), RangeIndex 13 (Anywhere - Unlimited, 0-50000 yd),
+	// SchoolMask 0x1 (physical), CastingTimeIndex 1 (instant).
+	// RangeIndex stays synthetic 93008 (0-50000 yd = real 13's value);
+	// cast time stays default 0 (instant = real 1). The boarding leg
+	// is live in Go (spells.go:40344, seat = amount-1; BP 0 rides the
+	// any-usable-seat fallback).
+	{id: 59319, durIdx: 21, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, aura: auraControlVehicle, targetA: targetUnitTargetAny}}},
+
+	// 54690 Cosmetic - Immolation (Whole Body) 6 Sec
+	// (zone_icecrown.cpp:767-768; skytalon SpellHit 59335 ->
+	// DoCast(me, 54690)) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-14 verdict: single
+	// effect 6 APPLY_AURA, aura 4 DUMMY, DieSides 1, BasePoints -1,
+	// TargetA 1 (TARGET_UNIT_CASTER), TargetB 0, RadiusIndex 0, Misc
+	// 0/0; DurationIndex 32 (6000 ms, seeded real row below),
+	// RangeIndex 4 (Medium Range, 0-30 yd, seeded real row below),
+	// SchoolMask 0x4 (fire), CastingTimeIndex 1 (instant). Cast time
+	// stays default 0 (instant = real 1).
+	{id: 54690, durIdx: 32, rangeIdx: 4, school: schoolFire, effects: [3]effect{{effect: effApplyAura, dieSides: 1, basePoints: -1, aura: auraDummy, targetA: targetCaster}}},
+
+	// 59375 Ping Explosion Bunny (zone_icecrown.cpp:770-772; skytalon
+	// SpellHit 59319 -> DoCastAOE(59375)) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-14 verdict: single
+	// effect 3 DUMMY, DieSides 0, BasePoints 0, TargetA 38
+	// (TARGET_UNIT_NEARBY_ENTRY), TargetB 0, RadiusIndex 0, Misc 0/0;
+	// DurationIndex 0 (no SpellDuration row), RangeIndex 3 (Twenty
+	// yards, 0-20 yd), SchoolMask 0x1 (physical), CastingTimeIndex 1
+	// (instant). RangeIndex stays synthetic 93005 (0-20 yd = real 3's
+	// value); cast time stays default 0 (instant = real 1). Misc 0
+	// means the nearby-entry leg carries no entry filter in the DBC
+	// row (Go targetCheckEntry, chain_targets.go:356).
+	{id: 59375, rangeIdx: 93005, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetUnitNearbyEntry}}},
+
+	// 63049 Mounted Melee Victory (zone_icecrown.cpp:75-86; valiant
+	// DamageTaken lethal + player -> self-cast kill credit) —
+	// wago.tools 3.4.0.43659 Spell/SpellEffect/SpellMisc rows,
+	// 2026-11-14 verdict: single effect 134 KILL_CREDIT2, DieSides 1,
+	// BasePoints -1, TargetA 1 (TARGET_UNIT_CASTER), TargetB 0,
+	// RadiusIndex 0, MiscValue 38595 (kill-credit creature entry),
+	// MiscValueB 0; DurationIndex 0 (no SpellDuration row), RangeIndex
+	// 13 (Anywhere - Unlimited, 0-50000 yd), SchoolMask 0x1
+	// (physical), CastingTimeIndex 1 (instant). RangeIndex stays
+	// synthetic 93008 (0-50000 yd = real 13's value); cast time stays
+	// default 0 (instant = real 1). The group kill-credit leg is live
+	// in Go (boss_ai.go:4057, creatureEffectKillCredit :8650,
+	// MiscValue = credit entry).
+	{id: 63049, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{{effect: effKillCredit2, dieSides: 1, basePoints: -1, targetA: targetCaster, misc: 38595}}},
 }
 
 func main() {
@@ -478,6 +550,7 @@ func main() {
 		{1, 300000, 0, 300000},
 		{6, 600000, 0, 600000},          // real SpellDuration 6 (10 min) for MEMORY_* summons
 		{21, 0xFFFFFFFF, 0, 0xFFFFFFFF}, // real SpellDuration 21 (-1 infinite) for 68415
+		{32, 6000, 0, 6000},             // real SpellDuration 32 for 54690 (wago.tools 3.4.0.43659)
 		{90001, 2000, 0, 2000},
 		{90002, 6000, 0, 6000},
 		{90003, 8000, 0, 8000},
@@ -499,6 +572,7 @@ func main() {
 		{1, f32(100), f32(0), f32(100)},
 		{28, f32(50000), f32(0), f32(50000)}, // real SpellRadius 28 for 66545 (wago.tools 3.4.0.43659)
 		{36, f32(0), f32(0), f32(0)},         // real SpellRadius 36 for 50415 (wago.tools 3.4.0.43659, 2026-11-13 22:17 verdict: all zeros)
+		{14, f32(8), f32(0), f32(8)},         // real SpellRadius 14 for 59335 (wago.tools 3.4.0.43659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},
@@ -521,6 +595,8 @@ func main() {
 	// MaxFriendly, Flags (floats for the ranges).
 	ranges := [][]uint32{
 		{152, f32(0), f32(0), f32(150), f32(150), 0}, // real SpellRange 152 "Super Long" for seat spells (wago.tools 3.4.0.47659, 2026-11-13 23:00 verdict)
+		{4, f32(0), f32(0), f32(30), f32(30), 0},     // real SpellRange 4 "Medium Range" for 54690 (wago.tools 3.4.0.43659)
+		{74, f32(0), f32(0), f32(30), f32(30), 2},    // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
 		{93001, f32(0), f32(0), f32(0), f32(0), 0},
 		{93002, f32(0), f32(0), f32(5), f32(5), 0},
 		{93003, f32(8), f32(8), f32(25), f32(25), 0},

@@ -42,7 +42,7 @@
 -- DOCTRINE RETRACTION (2026-10-13): the earlier port of this file
 -- ported Talk arms only under the "no-timer-bridge" doctrine. That
 -- doctrine is disproved and stale — CreateLuaEvent is a real registered
--- bridge (engine/scripting/runtime.go:798), and timer-driven cast arms
+-- bridge (engine/scripting/runtime.go:1569), and timer-driven cast arms
 -- port on the maiden_of_virtue / moroes / curator / nightbane convention
 -- (see boss_falric.lua for the exact idiom): timers table keyed by
 -- creature GUID, cancelled on Eluna events 2 (leave combat), 4 (death),
@@ -134,7 +134,7 @@
 -- prince case).
 -- BloodPrincesBossAI::DoAction (:549-580) — Talk(SelectInvocationSay())
 -- + DoCastSelf(SPELL_INVOCATION_VISUAL_ACTIVE 71596, true) ride
--- ACTION_CAST_INVOCATION, which arrives via SpellHit (:535-539) from the
+-- ACTION_CAST_INVOCATION, which arrives via SpellHit (:537-540) from the
 -- controller's unbridged invocation cast (no bridge); the
 -- ACTION_REMOVE_INVOCATION health/aura reset rides the controller's
 -- cross-AI DoAction (dispatch IS bridged, ev38 — the controller
@@ -857,7 +857,7 @@ end
 -- MoveCharge bridge (lua_creature_events.go) with the
 -- POINT_KINETIC_BOMB_IMPACT id (384540). The 3s reschedule is
 -- unconditional in C++ (outside the HasAura gate) and fires once
--- (no repeat). Bridges: SetVisible (lua_creature_events.go:4977),
+-- (no repeat). Bridges: SetVisible (lua_creature_events.go:6158),
 -- DespawnOrUnsummon (:6011), HasAura, GetSpeed(1) = MOVE_RUN,
 -- MoveClear (MotionMaster::Clear twin); 1s/3s delays via the file's
 -- GUID-keyed schedule (CreateLuaEvent, the princes' timer idiom).
@@ -1017,7 +1017,7 @@ end
 local function nucleusReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
     -- C++ npc_dark_nucleus::Reset (boss_blood_prince_council.cpp:
-    -- 1045-1048): REACT_DEFENSIVE = 1 (lua_creature_events.go:524)
+    -- 1045-1048): REACT_DEFENSIVE = 1 (lua_creature_events.go:4710)
     -- + triggered self-cast 72980.
     creature:SetReactState(1)
     creature:CastSpell(creature, SPELL_SHADOW_RESONANCE_AURA, true)
@@ -1052,7 +1052,7 @@ end
 -- invocation spell + _isEmpowered = false). SelectInvocationSay returns
 -- 0 for all three entries (the valanar SAY_KELESETH_INVOCATION quirk
 -- :585-590). Arrives via ev38 from the controller rotation below
--- (the C++ SpellHit relay :535-539 is folded into the direct dispatch:
+-- (the C++ SpellHit relay :537-540 is folded into the direct dispatch:
 -- the visual/invocation casts carry no Lua-visible payload beyond it).
 -- ACTION_STAND_UP (:552-563) PORTED tick 558 below (receiver only;
 -- sender is the controller INTRO_DONE relay, ported in
@@ -1114,7 +1114,7 @@ end
 -- events.Reset + summons.DespawnAll (ported as the cancelTimers /
 -- despawn*Summons calls below) + instance->SendEncounterUnit
 -- (ENCOUNTER_FRAME_DISENGAGE, me) — PORTED tick 386 via
--- creature:SendEncounterUnit(1, creature) (lua_creature_events.go:6185;
+-- creature:SendEncounterUnit(1, creature) (lua_creature_events.go:7214;
 -- the controllerLeaveCombat precedent in this file) — then the
 -- switch (me->GetEntry()) Talk(death text) — the sjonnir
 -- JustDied-Talk precedent.
@@ -1318,8 +1318,8 @@ end
 -- (:373-398): old prince DoAction(ACTION_REMOVE_INVOCATION), old casts
 -- the new prince's visual spell on the new prince, new prince takes the
 -- controller's health + Talk(textId), controller DoCastSelf(spellId),
--- re-arm 46.5s. The C++ SpellHit relay (:535-539) is folded into direct
--- ev38 dispatches (creature:DoAction, lua_creature_events.go:827): the
+-- re-arm 46.5s. The C++ SpellHit relay (:537-540) is folded into direct
+-- ev38 dispatches (creature:DoAction, lua_creature_events.go:845): the
 -- new prince's ACTION_CAST_INVOCATION is sent here instead of relying
 -- on the spell hit, which carries no Lua-visible payload beyond it.
 local function onInvocationOfBlood(controller, guid)

@@ -40,7 +40,7 @@
 -- AttackIfReady. UpdateAI's UNIT_STATE_CASTING gates (pre-loop
 -- gate and in-loop post-event gate, boss_baron_rivendare.cpp:105/
 -- 144): PORTED — each arm defers 500ms while creature:IsCasting()
--- (live CastingUntil window, lua_creature_events.go:1950;
+-- (live CastingUntil window, lua_creature_events.go:2480;
 -- broodkeeper / kirtonos precedent), no re-arm consumed. The C++
 -- JustEngagedWith arms map onto OnEnterCombat timers with the
 -- C++-exact init delays (maiden convention).

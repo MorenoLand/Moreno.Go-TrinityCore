@@ -12,31 +12,31 @@
 -- timers (maiden_of_virtue precedent); melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady (unused here —
 -- the chaser never engages).
--- Ported arms (chapter1.cpp:709-781):
--- - JustAppeared (chapter1.cpp:714-720): TempSummon summoner GUID is
+-- Ported arms (chapter1.cpp:709-765):
+-- - JustAppeared (chapter1.cpp:713-719): TempSummon summoner GUID is
 --   stored, EVENT_START_MOVING scheduled in 1s. Go fire site is ev22
 --   (IsSummonedBy), NOT ev5: summonTempCreature fires ev23+ev5 inside
 --   motionFor BEFORE stamping CreatedByGUID (lua_creature_events.go:
 --   136-150), so an ev5 handler would see GetSummonerUnit() == nil;
 --   ev22 fires after the stamp with the summoner as the extra argument
 --   (:189-196) — the live JustAppeared twin for a TempSummon.
--- - EVENT_START_MOVING (chapter1.cpp:741-747): SetTarget(horse GUID),
+-- - EVENT_START_MOVING (chapter1.cpp:734-739): SetTarget(horse GUID),
 --   MoveChase(horse) when the horse resolves, EVENT_DESPAWN_HORSE in
 --   5s. The MoveChase bridge arms ScriptChaseTargetGUID and the chase
 --   generator runs out of combat (creaturemotion.go:4496, before the
 --   InCombat case), so the chase moves. The despawn leg is scheduled
 --   unconditionally, matching C++ (it schedules even when the horse
 --   lookup fails).
--- - EVENT_DESPAWN_HORSE (chapter1.cpp:748-754): Talk(SAY_DARK_RIDER 0),
+-- - EVENT_DESPAWN_HORSE (chapter1.cpp:740-745): Talk(SAY_DARK_RIDER 0),
 --   DoCast(horse, 52267, triggered), EVENT_END_SCRIPT in 2s. C++
 --   arm order: Talk, then cast.
--- - EVENT_END_SCRIPT (chapter1.cpp:755-757): DespawnOrUnsummon().
--- - SpellHitTarget (chapter1.cpp:763-768): spell 52267 hitting the
+-- - EVENT_END_SCRIPT (chapter1.cpp:746-748): DespawnOrUnsummon().
+-- - SpellHitTarget (chapter1.cpp:755-760): spell 52267 hitting the
 --   horse despawns the horse in 2s (GUID-gated). The same hit also
 --   despawns the CASTER via spell_gen_despawn_self (spell_generic.lua:
 --   25952/42268/52267) — C++-exact: the spell script despawns the
 --   caster, the AI hook despawns the horse.
--- - Reset (chapter1.cpp:722-725): _events.Reset() — cancelTimers.
+-- - Reset (chapter1.cpp:721-724): _events.Reset() — cancelTimers.
 -- DBC: spell 52267 is seeded (tools/spelldbc_seed/main.go, wago.tools
 -- 3.4.0.43659 verdict 2026-11-13: effect 77 SCRIPT_EFFECT, TargetA 25 /
 -- TargetB 63, RangeIndex 13 = 0-50000 yd, school physical), so the
@@ -100,7 +100,7 @@ local function onStartMoving(creature, guid)
     end)
 end
 
--- C++ npc_dark_rider_of_acherus::JustAppeared (chapter1.cpp:714-720).
+-- C++ npc_dark_rider_of_acherus::JustAppeared (chapter1.cpp:713-719).
 local function onSummoned(_, creature, summoner)
     if not summoner then
         return
@@ -112,7 +112,7 @@ local function onSummoned(_, creature, summoner)
     end)
 end
 
--- C++ npc_dark_rider_of_acherus::SpellHitTarget (chapter1.cpp:763-768).
+-- C++ npc_dark_rider_of_acherus::SpellHitTarget (chapter1.cpp:755-760).
 local function onSpellHitTarget(_, creature, target, spellId)
     if spellId ~= SPELL_DESPAWN_HORSE or target == nil then
         return
@@ -127,7 +127,7 @@ local function onDied(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
--- C++ npc_dark_rider_of_acherus::Reset (chapter1.cpp:722-725).
+-- C++ npc_dark_rider_of_acherus::Reset (chapter1.cpp:721-723).
 local function onReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end

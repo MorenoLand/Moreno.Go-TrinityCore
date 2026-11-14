@@ -50,6 +50,12 @@
 -- init -> 5000ms loop, same conventions.
 -- Timers start on OnEnterCombat(1), cancelled on OnLeaveCombat(2)/
 -- OnDied(4)/OnReset(23) (maiden convention).
+-- Reset legs (chapter1.cpp:131-139) on OnReset(23): events.Reset()
+-- (cancelTimers) + SetFaction(FACTION_CREATURE 7) +
+-- SetImmuneToPC(true) (SetFlag(59, 0x100)) +
+-- SetStandState(UNIT_STAND_STATE_KNEEL 8) + LoadEquipment(0, true)
+-- (SetEquipmentSlots(0, 0, 0)); Initialize()'s phase reset is
+-- internal to the unported phase machine.
 -- Deviations from C++: no UNIT_STATE_CASTING model in Go (casts are
 -- packet-visual), so the timers fire unconditionally and the in-loop
 -- casting gates are dropped (maiden precedent). Each C++ event arm
@@ -58,9 +64,9 @@
 -- casting gates. The C++ scheduler is driven from UpdateAI after
 -- UpdateVictim; the port schedules from OnEnterCombat(1) and cancels
 -- on 2/4/23 (maiden convention).
--- Reset()/Initialize()/::UpdateAI() machinery is internal to the
--- unmodeled phase machine and covered by the cancel/re-arm on combat
--- events (halycon precedent).
+-- Initialize()/UpdateAI() machinery is internal to the unmodeled
+-- phase machine; the Reset() legs themselves are ported on
+-- OnReset(23) (see onReset below).
 -- Unmodeled (documented-only, no bridges on the Lua surface):
 -- - The whole pre-combat phase state machine: PHASE_CHAINED's
 --   FindNearestCreature(29521, 30) anchor acquisition + anchor
@@ -184,10 +190,10 @@ end
 
 local function onCombatEnd(_, creature)
     -- C++ Reset (chapter1.cpp:136): SetImmuneToPC(true) ≡
-    -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100), in C++
-    -- arm order after SetFaction(FACTION_CREATURE) (unported —
-    -- documented-only; see header) and before the KNEEL stand
-    -- (unported, see header).
+    -- SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC 0x100), in
+    -- C++ arm order after SetFaction(FACTION_CREATURE) and before
+    -- the KNEEL stand — both ride OnReset(23) (see onReset below);
+    -- leave-combat keeps the immune flag + timer cancel only.
     creature:SetFlag(59, 0x100)
     cancelTimers(creature:GetGUIDLow())
 end
@@ -196,9 +202,29 @@ local function onDied(_, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+local function onReset(_, creature)
+    -- C++ Reset (chapter1.cpp:131-139), in C++ arm order:
+    -- Initialize() (phase = PHASE_CHAINED, internal to the unported
+    -- phase machine) + events.Reset() + SetFaction(FACTION_CREATURE
+    -- 7, SharedDefines.h:224) + SetImmuneToPC(true) +
+    -- SetStandState(UNIT_STAND_STATE_KNEEL 8, UnitDefines.h:41) +
+    -- LoadEquipment(0, true). SetImmuneToPC(true) is the SetFlag(59,
+    -- 0x100) twin (UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PC); the
+    -- faction leg restores 7 after any mid-fight change (templates
+    -- ship faction 7, sibling TDB check). LoadEquipment(0, true)
+    -- clears the three virtual item slots (Creature.cpp:1798-1808),
+    -- the SetEquipmentSlots(0, 0, 0) twin (lua_creature_events.go:
+    -- 4508); SetStandState bridge :4824, SetFaction bridge :6698.
+    cancelTimers(creature:GetGUIDLow())
+    creature:SetFaction(7)
+    creature:SetFlag(59, 0x100)
+    creature:SetStandState(8)
+    creature:SetEquipmentSlots(0, 0, 0)
+end
+
 for _, entry in ipairs(ENTRIES) do
     RegisterCreatureEvent(entry, 1, onEnterCombat)
     RegisterCreatureEvent(entry, 2, onCombatEnd)
     RegisterCreatureEvent(entry, 4, onDied)
-    RegisterCreatureEvent(entry, 23, onCombatEnd)
+    RegisterCreatureEvent(entry, 23, onReset)
 end

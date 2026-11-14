@@ -22,19 +22,30 @@
 --   so the handler must use GetOwner, never the third arg.
 -- Unmodeled (documented-only, no bridges / no fire site):
 -- - InitializeAI (pet_dk.cpp:49-68): AnyUnfriendlyUnitInObjectRangeCheck
---   grid scan for the 49206-aura victim — no grid-search bridge, and
---   the 30 yd aura-holder search has no Go twin. Stays out.
+--   grid scan for the 49206-aura victim — the grid-search bridge EXISTS
+--   now (round-73 correction: creature:GetUnfriendlyUnitsInRange(30),
+--   lua_creature_events.go:6832-6836 via luaUnitFriendlyMethods). The
+--   leg stays out for lack of a summon-spawn hook, not the grid search:
+--   ev5 fires respawn-only (lua_creature_events.go:7948-7962 comment)
+--   and ev23 never fires on summon (fire sites: evade :4733, respawn
+--   :3475, death pre-fire :7843/:7892, leave-combat :8149) — a summoned
+--   guardian gets neither. Second gap if a hook lands: HasAura :1483
+--   takes spellId only, no caster arg — C++ gates on the OWNER's aura
+--   (ownerGuid), so a Lua port would cross-pick in multi-DK cases
+--   (documented deviation, single-DK case exact).
 -- - SpellHit dismiss (pet_dk.cpp:79-110, spell 50515 from the owner):
 --   no fire site in Go — Dismiss Gargoyle is never cast as a spell
 --   (zero 50515 hits in the Go engine); the Go dismiss path is
 --   EffectDismissPet -> handleDismissPet -> unsummonPet (pets.go),
---   which fires no Lua events at all. The fly-away legs
---   (ApplyModFlag NON_ATTACKABLE, SetCanFly, SetSpeedRate,
---   MovePoint, DespawnOrUnsummon) are additionally unbridged.
---   Verified this tick: the spells.go ev14 loop filters hit targets
---   to 0xF130 creature GUIDs while pet motions carry 0xF140 GUIDs
---   (makePetGUID), so no player-cast spell ever fires ev14 on a pet
---   motion through that path either.
+--   which fires no Lua events at all. The fly-away legs are mostly
+--   bridged now (round-73 re-verified: CastSpell :954, SetReactState
+--   :4715, SetCanFly :3988, SetFlag :6452 UNIT_FIELD_FLAGS=59,
+--   MoveTo :5410, Despawn :3318; only SetSpeedRate MOVE_FLIGHT is
+--   unbridged — :6065-6071 rejects mt != 1). Moot while the trigger
+--   is unreachable: ev14 itself accepts pet GUIDs now (spells.go
+--   :19909-10/:30191-94 take 0xF130/0xF140/0xF150; the old 0xF130-only
+--   filter claim is retracted) — the stay-out ground is the no-cast
+--   proof, not the GUID filter.
 -- - Gargoyle endings that fire no ev4 in Go (verified this tick):
 --   temp-summon expiry (expireTempSummonGuardian) and every
 --   unsummonPet path (dismiss, owner death/logout) delete the motion
