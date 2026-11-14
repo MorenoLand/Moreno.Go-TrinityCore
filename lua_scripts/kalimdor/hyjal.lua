@@ -28,14 +28,18 @@
 --   interval; if no valid target, C++ leaves the timer expired so the
 --   next UpdateAI tick retries — modeled as a 1s retry (batrider
 --   bomb precedent).
--- - Death: Talk DEATH (6) (C++ JustDied leg; the respawn/invisible legs
---   stay out on the unbridgeable IsDummy gate, tick 380: creature:Respawn
---   and creature:SetVisible ARE bridged now, but the overrun dummy Jaina
+-- - Death: Talk DEATH (6) (C++ JustDied leg) + Summons.DespawnAll
+--   (hyjalAI.cpp:897): the tracked summons despawn via
+--   GetCreatureByGUID + creature:Despawn. The respawn/invisible legs
+--   stay out on the IsDummy gate, tick 380: creature:Respawn and
+--   creature:SetVisible ARE bridged now, but the overrun dummy Jaina
 --   is summoned with the SAME entry 17772 (hyjalAI.cpp:632) and retreat
 --   sets IsDummy on the real NPCs (:778), so an unconditional
 --   Respawn + 120s re-show would revive copies C++ leaves dead; the
---   wave RespawnNearPos / Summons.DespawnAll / instance SetData legs
---   have no bridge).
+--   wave RespawnNearPos / instance SetData legs have no bridge.
+--   The dummy's own JustDied returns early in C++ (no Talk, no
+--   DespawnAll) — the port gates onDied on the dummy GUID latched
+--   when Thrall summons entry 17772 (see onSummoned).
 -- - Reset / leave combat: timers canceled (no C++ timer arm on Reset; the
 --   timers arm only on engage); Reset re-casts SPELL_BRILLIANCE_AURA
 --   31260 triggered on self for Jaina (hyjalAI.cpp:395) and sets
@@ -48,8 +52,9 @@
 -- GetInstanceData DATA_RAGEWINTERCHILLEVENT/DATA_ANETHERONEVENT/
 -- DATA_ALLIANCE_RETREAT/DATA_KAZROGALEVENT/DATA_AZGALOREVENT — no
 -- instance-data bridge); all OnGossipSelect arms (StartEvent/Retreat/
--- Debug toggle/DeSpawnVeins); Summons/respawn/wave-failure
--- bookkeeping in JustDied.
+-- Debug toggle/DeSpawnVeins); respawn/instance-SetData/wave-failure
+-- bookkeeping in JustDied (the Summons.DespawnAll leg IS ported now
+-- — see onDied).
 -- npc_tyrande_whisperwind: NOT registered — no bridgeable hooks. Its
 -- constructor sets zero spells, and its gossip is entirely
 -- instance-gated (item offer only when DATA_AZGALOREVENT == DONE and the
@@ -222,20 +227,89 @@ local function onReset(event, creature)
     end
 end
 
--- C++ JustDied: Talk DEATH (the respawn/invisible legs stay out on the
--- unbridgeable IsDummy gate — see header — and the wave/instance
--- bookkeeping has no bridge).
+-- C++ hyjalAI::JustSummoned (hyjalAI.cpp:373-376): Summons.Summon.
+-- The live producer is the spell-summon funnel: creature casts of
+-- SPELL_SUMMON_ELEMENTALS 31264 / SPELL_SUMMON_DIRE_WOLF 31331 route
+-- through creatureEffectSummonType (boss_ai.go:4850+) which fires ev19
+-- on the caster (fireCreatureSummoned, lua_creature_events.go:190).
+-- Caveat: both spell IDs are absent from the seed Spell.dbc (76 rows),
+-- so the casts resolve nothing server-side until those rows are seeded
+-- (tools/spelldbc_seed); the tracking below is live the moment they are.
+-- The dummy Jaina (same entry 17772, summoned by Thrall at :632) lands
+-- in Thrall's SummonList too, so it is tracked like any summon — its
+-- GUID is additionally latched in dummyGuids for the onDied gate.
+local summons = {}
+local dummyGuids = {}
+
+local function onSummoned(event, creature, summoned)
+    local guid = creature:GetGUIDLow()
+    local list = summons[guid]
+    if not list then
+        list = {}
+        summons[guid] = list
+    end
+    local sguid = summoned:GetGUIDLow()
+    list[#list + 1] = sguid
+    if summoned:GetEntry() == ENTRY_JAINA then
+        dummyGuids[sguid] = true
+    end
+end
+
+-- C++ hyjalAI::SummonedCreatureDespawn (hyjalAI.cpp:378-381):
+-- Summons.Despawn — prune the GUID from the summoner's list.
+local function onSummonDespawn(event, creature, summoned)
+    local list = summons[creature:GetGUIDLow()]
+    if not list then
+        return
+    end
+    local sguid = summoned:GetGUIDLow()
+    for i, g in ipairs(list) do
+        if g == sguid then
+            table.remove(list, i)
+            return
+        end
+    end
+end
+
+local function despawnSummons(creature)
+    local guid = creature:GetGUIDLow()
+    local list = summons[guid]
+    summons[guid] = nil
+    if not list then
+        return
+    end
+    for _, g in ipairs(list) do
+        local summoned = creature:GetCreatureByGUID(g)
+        if summoned then
+            summoned:Despawn()
+        end
+    end
+end
+
+-- C++ JustDied: if IsDummy return (no Talk, no DespawnAll); else
+-- Talk DEATH + Summons.DespawnAll (hyjalAI.cpp:897). The respawn /
+-- invisible / instance-SetData legs stay out (see header).
 local function onDied(event, creature, killer)
-    cancelTimers(creature:GetGUIDLow())
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    if dummyGuids[guid] then
+        dummyGuids[guid] = nil
+        return
+    end
     creature:Talk(YELL_DEATH)
+    despawnSummons(creature)
 end
 
 RegisterCreatureEvent(ENTRY_JAINA, 1, onEnterCombat("npc_jaina_proudmoore"))
 RegisterCreatureEvent(ENTRY_JAINA, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_JAINA, 4, onDied)
+RegisterCreatureEvent(ENTRY_JAINA, 19, onSummoned)
+RegisterCreatureEvent(ENTRY_JAINA, 20, onSummonDespawn)
 RegisterCreatureEvent(ENTRY_JAINA, 23, onReset)
 
 RegisterCreatureEvent(ENTRY_THRALL, 1, onEnterCombat("npc_thrall"))
 RegisterCreatureEvent(ENTRY_THRALL, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_THRALL, 4, onDied)
+RegisterCreatureEvent(ENTRY_THRALL, 19, onSummoned)
+RegisterCreatureEvent(ENTRY_THRALL, 20, onSummonDespawn)
 RegisterCreatureEvent(ENTRY_THRALL, 23, onReset)
