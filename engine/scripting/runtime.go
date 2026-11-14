@@ -1171,6 +1171,14 @@ func (r *Runtime) TriggerCreatureEvent(ctx context.Context, entry uint32, event 
 	return r.Trigger(ctx, "creature:"+strconv.FormatUint(uint64(entry), 10), event, args...)
 }
 
+// HasCreatureEvent reports whether at least one non-cancelled hook is
+// registered for the given creature entry and event — the entry-binding
+// half of HasHook, so per-tick sighting loops can skip the Lua dispatch
+// entirely when no handler could fire (Eluna Bindings::HasBindingsFor).
+func (r *Runtime) HasCreatureEvent(entry uint32, event int) bool {
+	return r.HasHook("creature:"+strconv.FormatUint(uint64(entry), 10), event)
+}
+
 // TriggerCreatureEvent2 fires hooks registered with
 // RegisterCreatureEvent(entry, event, fn) for the given creature entry,
 // capturing two return values per handler. It exists for Eluna hooks whose

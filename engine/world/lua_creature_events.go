@@ -8125,8 +8125,10 @@ func (s *Server) fireCreatureMoveInLOS(ctx context.Context, motion *creatureMoti
 // with who built from the victim motion (luaMotionCreature) instead of a
 // session's luaPlayer. C++ CreatureUnitRelocationWorker passes any unit to
 // Eluna MIOS, so a scanner sighting a creature victim fires the same hook
-// with a creature who. Placement stays the engage branch, mirroring the
-// player scan; passive scanners never reach it.
+// with a creature who. Placement is the engage branch, mirroring the
+// player scan; passive scanners never reach it. The friendly proximity
+// arm (fireCreatureMoveInLOSProximity below) reuses this twin and
+// discards the veto.
 func (s *Server) fireCreatureMoveInLOSCreature(ctx context.Context, motion, victim *creatureMotion) bool {
 	if s == nil || motion == nil || victim == nil || s.Features == nil || s.Features.Scripts == nil {
 		return false
@@ -8140,6 +8142,22 @@ func (s *Server) fireCreatureMoveInLOSCreature(ctx context.Context, motion, vict
 	results, _ := s.Features.Scripts.TriggerCreatureEvent(ctx, motion.Entry, scripting.CreatureEventOnMoveInLOS, args...)
 	uniqueResults, _ := s.Features.Scripts.TriggerUniqueCreatureEvent(ctx, motion.GUID, motion.InstanceID, scripting.CreatureEventOnMoveInLOS, args...)
 	return luaHookVeto(results) || luaHookVeto(uniqueResults)
+}
+
+// fireCreatureMoveInLOSProximity dispatches Eluna
+// CREATURE_EVENT_ON_MOVE_IN_LOS (27) for a creature victim that entered
+// a friendly scanner's sight range without engaging it — the C++
+// CreatureUnitRelocationWorker arm (GridNotifiers.cpp:129-141), which
+// fires MoveInLineOfSight for any detectable unit in range, hostile or
+// not. It reuses the creature-victim twin's entry+unique passes but
+// discards the boolean returns: outside the engage branch there is no
+// default aggro for a veto to suppress, so a handler returning true
+// (the cyanigosa veto-only precedent) is a no-op here while proximity
+// arms (salanar's vehicle machine, gothik's ghoul collect) run their
+// own legs. The caller gates on HasHook, so this fires only
+// for scanners with a registered ev27 handler.
+func (s *Server) fireCreatureMoveInLOSProximity(ctx context.Context, motion, victim *creatureMotion) {
+	s.fireCreatureMoveInLOSCreature(ctx, motion, victim)
 }
 
 // fireCreatureDied dispatches Eluna CREATURE_EVENT_ON_DIED (4) for a

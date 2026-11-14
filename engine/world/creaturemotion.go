@@ -5469,6 +5469,103 @@ func (s *Server) creatureIsPolymorphed(motion *creatureMotion) bool {
 	return false
 }
 
+// creatureMoveInLOSSightRange is the proximity radius of the
+// MoveInLineOfSight dispatch: the creature sight distance
+// (MonsterSight, World.cpp:772; Creature::m_SightDistance,
+// Creature.cpp:271), 50 yards by default. C++ fires MIOS when a
+// unit relocates inside this range, not at the shorter aggro
+// distance, so intro latches gated on 100/150yd in Lua
+// (maladaar, vorpil, ikiss) fire at 50yd here, matching C++.
+const creatureMoveInLOSSightRange = 50.0
+
+// stepCreatureMoveInLOSProximity runs the CreatureUnitRelocationWorker
+// proximity arm of Eluna CREATURE_EVENT_ON_MOVE_IN_LOS (27)
+// (GridNotifiers.cpp:128-141): whenever a detectable unit is inside
+// the creature's sight range, the hook fires — for friendly and
+// non-attackable units too, which the aggro-engage branch never
+// reaches (salanar's charmed vehicle, gothik's ghouls). The worker
+// gates are the CanSeeOrDetect legs only — both alive, not self,
+// not in flight, invisibility/stealth/phase/ghost detection, line
+// of sight — with NO aggro gates (no passive, faction, gray-aggro,
+// home-distance, or CanStartAttack filter): in C++ the Eluna hook
+// fires before ScriptedAI::MoveInLineOfSight, and only the default
+// aggro action is gated. The boolean veto is therefore discarded
+// here: outside the engage branch there is no default action to
+// block, and the engage branch still fires ev27 and honors the
+// veto, so engage-suppressor handlers (akilzon eagle, cyanigosa,
+// blessed banner, ...) keep their exact behavior. The hook fires
+// on every 100ms tick while a unit stays in range, mirroring C++
+// relocation-driven repeat firing; the 24 surveyed handlers are
+// all repeat-safe (pure vetoes, or one-shot latches with their
+// own range checks — ossirian, loken, maladaar, vorpil, ikiss,
+// shaffar, vashj, kaelthas — or repeat-by-design casts like
+// depth_charge). The Runtime.HasHook pre-check (the ev7 idiom)
+// keeps the pass a no-op for creatures with no ev27 handler.
+// Runs in and out of combat: the worker has no combat gate, and
+// gothik collects ghouls mid-fight.
+func (s *Server) stepCreatureMoveInLOSProximity(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
+	if s == nil || motion == nil || motion.Evading || s.Features == nil || s.Features.Scripts == nil {
+		return
+	}
+	scripts := s.Features.Scripts
+	entryKind := "creature:" + strconv.FormatUint(uint64(motion.Entry), 10)
+	uniqueKind := "creature_unique:" + strconv.FormatUint(motion.GUID, 10) + ":" + strconv.FormatUint(uint64(motion.InstanceID), 10)
+	if !scripts.HasHook(entryKind, scripting.CreatureEventOnMoveInLOS) && !scripts.HasHook(uniqueKind, scripting.CreatureEventOnMoveInLOS) {
+		return
+	}
+	if s.creatureSightlessScanner(motion, now) {
+		return
+	}
+	for _, p := range players {
+		if p.Map != motion.Map || p.InstanceID != motion.InstanceID || p.IsGM || p.IsDead || p.Sess == nil {
+			continue
+		}
+		if p.Sess.player != nil && p.Sess.player.TaxiPath != "" {
+			continue
+		}
+		if s.creatureSightInvisibilityBlocked(motion, p.Sess) || s.spellGateCreatureNeverSeesPlayer(motion, p.Sess) {
+			continue
+		}
+		dist := float32(distance3D(p.X, p.Y, p.Z, motion.X, motion.Y, motion.Z))
+		if dist > creatureMoveInLOSSightRange {
+			continue
+		}
+		if !s.creatureSightCanDetectStealthOfPlayer(motion, p.Sess, dist) {
+			continue
+		}
+		if !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, p.X, p.Y, p.Z) {
+			continue
+		}
+		s.fireCreatureMoveInLOS(ctx, motion, p.Sess)
+	}
+	s.motionMu.Lock()
+	registry := s.motionMapLocked(motion.Map, motion.InstanceID)
+	victims := make([]*creatureMotion, 0, len(registry))
+	for _, victim := range registry {
+		victims = append(victims, victim)
+	}
+	s.motionMu.Unlock()
+	for _, victim := range victims {
+		if victim == nil || victim.GUID == motion.GUID || victim.Health == 0 || victim.Evading {
+			continue
+		}
+		if s.spellGateCreatureNeverSeesCreature(motion, victim) || creatureSightGhostBlocked(motion, victim) {
+			continue
+		}
+		if !s.creatureSightCanDetectCreature(motion, victim) {
+			continue
+		}
+		dist := float32(distance3D(victim.X, victim.Y, victim.Z, motion.X, motion.Y, motion.Z))
+		if dist > creatureMoveInLOSSightRange {
+			continue
+		}
+		if !s.hasLineOfSight(motion.Map, motion.X, motion.Y, motion.Z, victim.X, victim.Y, victim.Z) {
+			continue
+		}
+		s.fireCreatureMoveInLOSProximity(ctx, motion, victim)
+	}
+}
+
 // summoned marks the temp-summon step: a temp summon carries its summoner's
 // OwnerGUID, but TempSummon::Update (TemporarySummon.cpp:66) runs
 // Creature::Update, not PetAI, so the summoned step bypasses the pet
@@ -5544,6 +5641,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.TargetGUID = 0
 		motion.Moving = false
 	}
+
+	// Proximity MIOS dispatch (relocation worker): runs ahead of the
+	// ev7 hook and the combat swing so it fires in and out of
+	// combat, like C++; the ev7 veto must not suppress it.
+	s.stepCreatureMoveInLOSProximity(ctx, motion, players, now)
 
 	// Eluna CREATURE_EVENT_ON_AIUPDATE (7): ElunaCreatureAI::UpdateAI
 	// (ElunaCreatureAI.h:37-68) fires (event, creature, diff) on every AI

@@ -38,19 +38,16 @@
 --   Spell 52693 is an INFERRED seed row (tools/spelldbc_seed/
 --   main.go, DUMMY self-cast like 7267 Grovel); replace with a
 --   real DBC row when client data ships.
--- - MoveInLineOfSight (chapter1.cpp:805-831): NOT ported. The
---   vehicle machine (who IsVehicle within 5yd, charmer is a player
---   with quest 12687 incomplete, entry 28788 -> GroupEventHappens
---   + Talk SALANAR_SAY 0 + charmer RemoveAurasDueToSpell 52349 +
---   vehicle DespawnOrUnsummon + player RemoveAurasDueToSpell
---   52693) needs ev27, which fires only from the aggro-engage
---   branch (lua_creature_events.go fireCreatureMoveInLOS) -- a
---   friendly vehicle never reaches it -- and GetCharmer +
---   RemoveAurasDueToSpell have no bridges (zero hits in
---   lua_creature_events.go / lua_player.go / lua_objects.go /
---   scripting/object.go). Talk group 0 has no creature_text row
---   for 28788 in TDB 26091, so the Talk leg would be silent even
---   if the trigger fired.
+-- - MoveInLineOfSight (chapter1.cpp:805-831): PORTED via the ev27
+--   proximity dispatch (stepCreatureMoveInLOSProximity,
+--   creaturemotion.go: 50yd MonsterSight, CanSeeOrDetect gates,
+--   veto discarded) -- a friendly vehicle never reaches the
+--   aggro-engage branch, so the proximity pass is the trigger.
+--   Bridges live since 2026-11-14: creature:GetCharmer,
+--   creature/player RemoveAurasDueToSpell, player
+--   GroupEventHappens (lua_player.go:5306). Talk group 0 has no
+--   creature_text row for 28788 in TDB 26091, so the Talk leg is
+--   silent until DB text ships.
 -- REACHABILITY: 28788 ships npcflag 0 + gossip_menu_id 0, so no
 -- gossip window opens on it in the current DB state and the select
 -- arm cannot fire -- the same holds in live TC (HandleGossipHello
@@ -61,6 +58,10 @@
 
 local ENTRY_SALANAR = 28788
 local SPELL_REALM_OF_SHADOWS = 52693
+local SPELL_EFFECT_OVERTAKE = 52349
+local QUEST_INTO_REALM_OF_SHADOWS = 12687
+local QUEST_STATUS_INCOMPLETE = 3
+local SALANAR_SAY = 0
 local GOSSIP_SENDER_MAIN = 1
 local GOSSIP_ACTION_INFO_DEF = 1000
 
@@ -74,3 +75,38 @@ local function onGossipSelect(_, player, creature, sender, action)
 end
 
 RegisterCreatureGossipEvent(ENTRY_SALANAR, 2, onGossipSelect)
+
+-- C++ MoveInLineOfSight (chapter1.cpp:805-831), in C++ order:
+-- ScriptedAI::MoveInLineOfSight first (no veto here — the Lua
+-- handler returns nothing, so the engage branch proceeds exactly
+-- as C++), then the vehicle machine. The player
+-- RemoveAurasDueToSpell(52693) leg sits OUTSIDE the quest/entry
+-- gate but inside the charmer-is-player gate, as in C++.
+local function onMoveInLOS(_, creature, who)
+    if who:GetObjectType() ~= "Creature" then
+        return
+    end
+    if not who:IsVehicle() then
+        return
+    end
+    if not creature:IsWithinDistInMap(who, 5.0) then
+        return
+    end
+    local charmer = who:GetCharmer()
+    if not charmer then
+        return
+    end
+    if charmer:GetObjectType() ~= "Player" then
+        return
+    end
+    if creature:GetEntry() == ENTRY_SALANAR
+            and charmer:GetQuestStatus(QUEST_INTO_REALM_OF_SHADOWS) == QUEST_STATUS_INCOMPLETE then
+        charmer:GroupEventHappens(QUEST_INTO_REALM_OF_SHADOWS, creature)
+        creature:Talk(SALANAR_SAY)
+        charmer:RemoveAurasDueToSpell(SPELL_EFFECT_OVERTAKE)
+        who:DespawnOrUnsummon()
+    end
+    charmer:RemoveAurasDueToSpell(SPELL_REALM_OF_SHADOWS)
+end
+
+RegisterCreatureEvent(ENTRY_SALANAR, 27, onMoveInLOS)
