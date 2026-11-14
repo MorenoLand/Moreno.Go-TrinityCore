@@ -6,9 +6,12 @@
 -- Priestess Mar'li (C++ ScriptName "boss_marli" per AddSC_boss_marli);
 -- 15041 Spawn of Mar'li (C++ ScriptName "npc_spawn_of_marli",
 -- NPC_SPIDER). The spider eggs (gameobject 179985, C++ ScriptName
--- "gob_spider_egg") are NOT registered — the gob_spider_egg
--- JustSummoned forward to Mar'li's AI has no gameobject-summon
--- bridge, but Mar'li's Reset egg Respawn scan IS ported (marliReset,
+-- "gob_spider_egg", TDB type 10 Goober / Data10 24081 / VerifiedBuild
+-- 11723, ~100 spawns map 309) need no Lua registration — the
+-- gob_spider_egg JustSummoned forward is ported in-engine
+-- (forwardGameObjectSummon, lua_creature_events.go:8016, since
+-- cb1079e5; Mar'li's ev19 arm does the AttackStart-random + summons
+-- tracking), and Mar'li's Reset egg Respawn scan IS ported (marliReset,
 -- GetGameObjectsInGrid 250yd; the UpdateObjectVisibility(true) leg
 -- has no bridge).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
@@ -27,10 +30,10 @@
 -- below: 24082 is SPELL_EFFECT_ACTIVATE_OBJECT (86),
 -- TARGET_GAMEOBJECT_NEARBY_ENTRY (40), Open (MiscValue 8) per TDB
 -- spell_dbc — NOT a summon, so the eggs hatch by GO Use, not by
--- spawning; the cast reaches the Go activate-object arm but stays
--- dormant until Spell.dbc data lands (the ownerless-Open engine leg
--- is live since cb1079e5; the cycle is canceled at transform and
--- re-armed at transform-back, C++-exact).
+-- spawning; the cast reaches the Go activate-object arm; 24082 is
+-- seeded (Spell.dbc record 1) and the ownerless-Open engine leg is
+-- live since cb1079e5, so the chain is live in code (the cycle is
+-- canceled at transform and re-armed at transform-back, C++-exact).
 -- Transform: Talk(SAY_TRANSFORM=1),
 -- non-triggered self-cast 24084 (spider form), non-triggered
 -- DoCastVictim(24110) envolwing web, threat wipe (PORTED 2026-10-24),
@@ -51,8 +54,8 @@
 -- no live UNIT_STATE_CASTING read bridge (IsCasting is constant-false — Go casts are fire-and-forget) — timers fire unconditionally (jeklik
 -- convention). Spawn of Mar'li (15041): non-triggered self-cast 24312
 -- (level up) every 3s while in combat (C++-exact); melee is
--- engine-driven; the hatch chain summons them (24081, 5-min duration)
--- once Spell.dbc data lands; registered so any that
+-- engine-driven; the hatch chain summons them (24081, 5-min duration;
+-- seeded, Spell.dbc record 0); registered so any that
 -- exist fight correctly.
 -- Deviations from C++: no instance-script model — boss admission via
 -- the luaBossAI shim (a no-op BossAI slot; the SetBossState legs are
@@ -66,12 +69,13 @@
 -- ImplicitTargetA_1 40, MiscValue_1 8) and 24083 is the same effect
 -- (wowhead wotlk: Activate Object, Radius 100y, Max targets 4) —
 -- neither summons; the ownerless-Open leg is live since cb1079e5
--- (boss_ai.go:8339-8343, serverActivateGameObjectUse) — the remaining
--- gap is Spell.dbc data (embedded seed lands 2026-11-13; the chain is
--- goober Use -> 24081 summon 15041 -> egg JustSummoned
--- forward); the Reset egg Respawn scan is PORTED (marliReset,
+-- (boss_ai.go:8339-8343, serverActivateGameObjectUse) and the chain
+-- is live in code (24081/24082/24083 seeded, Spell.dbc records 0-2:
+-- goober Use -> 24081 summon 15041 -> egg JustSummoned forward via
+-- forwardGameObjectSummon, lua_creature_events.go:8016); the Reset
+-- egg Respawn scan is PORTED (marliReset,
 -- alive-gated vancleef idiom) and the gob_spider_egg
--- JustSummoned->Mar'li AI forward has no bearer; the transform -100% threat wipe is PORTED 2026-10-24;
+-- JustSummoned->Mar'li AI forward rides that engine twin; the transform -100% threat wipe is PORTED 2026-10-24;
 -- the charge "not aggro leader" exclusion is the Random,1 skip-first
 -- threat entry (offset-before-filter, UnitAI.h:173-174); no
 -- the DamageIncrease/Decrease ApplyStatPctModifier hack (including
@@ -80,7 +84,7 @@
 -- movement model — the charge AttackStart arm is skipped (cast lands,
 -- the boss keeps its current victim); the summoned-spider
 -- JustSummoned AttackStart-random arm is PORTED (marliJustSummoned,
--- ev19; dormant until the egg GO chain hatches one); spell_hatch_spiders (SpellScript target-select sort/
+-- ev19; live now that the egg GO chain is seeded); spell_hatch_spiders (SpellScript target-select sort/
 -- resize) is a SpellScript — not modeled (standing gap; note the
 -- script hooks TARGET_GAMEOBJECT_DEST_AREA (52) while the DBC target
 -- is NEARBY_ENTRY (40), so the hook likely never fires in C++ either).
@@ -237,8 +241,8 @@ end
 -- cycle (re-armed fresh {12s,17s} at transform-back, C++-exact). The
 -- cast is ISSUED (24082 is ACTIVATE_OBJECT/Open on nearby egg GOs,
 -- see header DBC verdict); it reaches the Go activate-object arm and
--- the ownerless-Open leg is live since cb1079e5 — only Spell.dbc data
--- gates it (embedded seed lands 2026-11-13).
+-- the ownerless-Open leg is live since cb1079e5 — 24082 is seeded
+-- (Spell.dbc record 1), so the chain is live in code.
 local function onHatchEgg(creature, guid)
     creature:CastSpell(creature, SPELL_HATCH_SPIDER_EGG)
     schedule(guid, "hatchegg", math.random(12000, 17000), function()
@@ -474,10 +478,9 @@ RegisterCreatureEvent(ENTRY_MARLI, 23, marliReset)
 -- C++ JustSummoned (boss_marli.cpp:117-121): creature->AI()->
 -- AttackStart(SelectTarget(Random, 0, 0.f, true)) + summons.Summon
 -- (creature). Fires for any spider the hatch chain summons (ev19 is
--- live on the summon path, lua_creature_events.go:190); dormant
--- until the egg GO chain hatches one (24082/24083 reach the Go
--- activate-object arm; the ownerless-Open leg is live since cb1079e5
--- and only Spell.dbc data gates the chain).
+-- live on the summon path, lua_creature_events.go:190); live now
+-- that 24082/24083 are seeded (Spell.dbc records 1-2) — the chain
+-- hatches via the Go activate-object arm + forwardGameObjectSummon.
 local function marliJustSummoned(event, creature, summoned)
     if summoned:GetEntry() ~= ENTRY_SPAWN then
         return
@@ -499,8 +502,9 @@ RegisterCreatureEvent(ENTRY_MARLI, 19, marliJustSummoned)
 
 -- Spawn of Mar'li (npc_spawn_of_marli, C++ ScriptName for 15041):
 -- non-triggered self-cast 24312 (level up) every 3s while in combat
--- (C++-exact); melee is engine-driven. Never spawns in this build (no
--- summon model) but is registered so any that exist fight correctly.
+-- (C++-exact); melee is engine-driven. The hatch chain summons them
+-- (24081, 5-min duration; seeded, Spell.dbc record 0); registered so
+-- any that exist fight correctly.
 local function onSpawnLevelUp(creature, guid)
     creature:CastSpell(creature, SPELL_LEVELUP)
     schedule(guid, "levelup", 3000, function()

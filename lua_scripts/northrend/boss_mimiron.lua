@@ -73,10 +73,15 @@
 --   (boss_mimiron.cpp:2760-2772); the passenger GetVehicleBase twin
 --   is target:IsOnVehicle():GetOwner() (see below).
 -- DOCUMENTED-ONLY (no behavior fabricated):
---   Activation-chain legs with no bridge: elevator/button GameObject
---     legs (VX001 steps 4/5 elevator states, worldtrigger knockback;
---     no GO bridge) and the GetVehicleCreatureBase legs (no binding;
---     the VX-001 / ACU DoAction relays ride the stored summon refs).
+--   Activation-chain legs with no bridge: the GetVehicleCreatureBase
+--     legs (no binding; the VX-001 / ACU DoAction relays ride the
+--     stored summon refs). The elevator/button GameObject legs are
+--     PORTED (this tick): VX001 steps 4 (elevator READY + worldtrigger
+--     ELEVATOR_KNOCKBACK 65096) and 5 (elevator DESTROYED), Reset
+--     (elevator ACTIVE + button READY / NOT_SELECTABLE clear) — via
+--     the nearest-object twins (FindNearestGameObject /
+--     FindNearestCreature); 65096 is unseeded so the knockback cast
+--     stays dormant until Spell.dbc data lands.
 --     The vehicle-base legs are PORTED this tick: VX001 steps 1
 --     (SetFacingTo 3.686), 2 (SEAT_6) and 8 (SEAT_2), AERIAL step 1
 --     (SEAT_5) — GetVehicleBase (:3522) and SetFacingTo
@@ -92,12 +97,14 @@
 --     override — summons.DespawnAll unbridged).
 --   JustEngagedWith vehicle-base leg: DoCast SEAT_6 on the vehicle base
 --     PORTED (GetVehicleBase, instance-GUID fallback; seeded 63344);
---     button GO flag leg -- out (no GO bridge); EVENT_SUMMON_FLAMES --
+--     button GO flag leg PORTED in Reset (FindNearestGameObject +
+--     RemoveFlag(9, 0x10)); EVENT_SUMMON_FLAMES --
 --     out (worldtrigger via instance GUID).
 --     (INTRO_2/INTRO_3 are ported — see the INTRO_1 bullet — via the
 --     instance-GUID MKII twin, not the vehicle base.)
---   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode,
---     elevator/button GO legs -- out (SEAT_3 on MKII is PORTED below).
+--   Reset instance/GO/cross-creature legs: aerial EnterEvadeMode stays
+--     out; elevator/button GO legs PORTED below (SetGoState +
+--     RemoveFlag; SEAT_3 on MKII is PORTED below).
 --   Bomb/rocket/mine SpellHitTarget legs live in the npc files, not
 --     here: npc_mimiron_bomb_bot.lua / npc_mimiron_rocket_visual.lua /
 --     npc_mimiron_proximity_mine.lua register ev15 (the frost-bomb has
@@ -158,14 +165,19 @@ local SPELL_MOUNT_VX_001 = 64388
 local SPELL_MOUNT_MKII = 64387 -- boss_mimiron.cpp:100
 local SPELL_TORSO_DISABLED = 64120 -- boss_mimiron.cpp:101
 local SPELL_HALF_HEAL = 64188
+local SPELL_ELEVATOR_KNOCKBACK = 65096 -- boss_mimiron.cpp:171
 
 local NPC_VX_001 = 33651
 local NPC_AERIAL_COMMAND_UNIT = 33670
+local NPC_WORLD_TRIGGER_MIMIRON = 21252 -- ulduar.h:132
 
 local GO_CACHE_OF_INNOVATION = 194789
 local GO_CACHE_OF_INNOVATION_HERO = 194956
 local GO_CACHE_OF_INNOVATION_FIREFIGHTER = 194957
 local GO_CACHE_OF_INNOVATION_FIREFIGHTER_HERO = 194958
+
+local GO_MIMIRON_ELEVATOR = 194749 -- ulduar.h:294
+local GO_MIMIRON_BUTTON = 194739 -- ulduar.h:295
 
 local SAY_HARDMODE_ON = 1
 local SAY_MKII_ACTIVATE = 2
@@ -216,6 +228,9 @@ local DATA_COMPUTER = 35 -- ulduar.h UlduarData (DATA_AERIAL_COMMAND_UNIT = 34, 
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+
+local GAMEOBJECT_FLAGS = 9 -- gameobjects.go:21
+local GO_FLAG_NOT_SELECTABLE = 0x10 -- SharedDefines.h:1641
 
 local REACT_PASSIVE = 0
 local FACTION_FRIENDLY = 35
@@ -305,6 +320,11 @@ local function mimironReset(event, creature)
         st.aerial = nil
     end
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+    -- C++ Reset (:467-468): elevator SetGoState(GO_STATE_ACTIVE).
+    local elevator = creature:FindNearestGameObject(GO_MIMIRON_ELEVATOR, 100.0)
+    if elevator then
+        elevator:SetGoState(0) -- GO_STATE_ACTIVE
+    end
     -- C++ Reset (:471-472): when _fireFighter, the computer gets
     -- DoAction(DO_DEACTIVATE_COMPUTER) before the latch clears.
     if stateFor(creature:GetGUIDLow()).fireFighter then
@@ -312,6 +332,13 @@ local function mimironReset(event, creature)
         if computer then
             computer:DoAction(DO_DEACTIVATE_COMPUTER)
         end
+    end
+    -- C++ Reset (:473-477): button SetGoState(GO_STATE_READY) +
+    -- RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE).
+    local button = creature:FindNearestGameObject(GO_MIMIRON_BUTTON, 100.0)
+    if button then
+        button:SetGoState(1) -- GO_STATE_READY
+        button:RemoveFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE)
     end
     stateFor(creature:GetGUIDLow()).fireFighter = false
     creature:CastSpell(creature, SPELL_WELD)
@@ -467,8 +494,9 @@ end
 -- (vehicle-base SetFacingTo 3.686), 2 (SEAT_6 on the vehicle base)
 -- and 8 (SEAT_2 on the vehicle base) are PORTED this tick
 -- (GetVehicleBase :3522 + SetFacingTo, instance-GUID MKII fallback);
--- step 4 (elevator GO + worldtrigger knockback) stays out on no GO
--- bridge. The Talk, summon and DoAction legs are ported. The summoned
+-- step 4 (elevator READY + worldtrigger knockback) and 5 (elevator
+-- DESTROYED) are PORTED (nearest-object twins; 65096 unseeded, cast
+-- dormant). The Talk, summon and DoAction legs are ported. The summoned
 -- VX-001 is kept in per-GUID state, the Lua twin of the DATA_VX_001
 -- instance GUID the later steps read.
 local function vx001Activation9(creature, guid)
@@ -512,6 +540,13 @@ local function vx001Activation6(creature, guid)
 end
 
 local function vx001Activation5(creature, guid)
+    -- C++ :544-549: elevator SetGoState(GO_STATE_DESTROYED) first, then
+    -- SummonCreature(NPC_VX_001, CORPSE_TIMED_DESPAWN 120s) + the
+    -- FREEZE_ANIM self-cast on it.
+    local elevator = creature:FindNearestGameObject(GO_MIMIRON_ELEVATOR, 100.0)
+    if elevator then
+        elevator:SetGoState(2) -- GO_STATE_DESTROYED
+    end
     local vx001 = creature:SummonCreature(NPC_VX_001, VX001_SUMMON_POS[1], VX001_SUMMON_POS[2], VX001_SUMMON_POS[3], VX001_SUMMON_POS[4], 5, 120000)
     if vx001 then
         vx001:CastSpell(vx001, SPELL_FREEZE_ANIM)
@@ -523,6 +558,23 @@ local function vx001Activation5(creature, guid)
 end
 
 local function vx001Activation4(creature, guid)
+    -- C++ :537-542: elevator SetGoState(GO_STATE_READY) + the
+    -- worldtrigger self-cast ELEVATOR_KNOCKBACK (65096, non-triggered).
+    -- The elevator (194749, ~9yd) and worldtrigger (21252, ~9yd) ride
+    -- the nearest-object twins (FindNearestGameObject /
+    -- FindNearestCreature, netherspite/moroes precedents) — the
+    -- instance-GUID route stays nil: DATA_MIMIRON_WORLD_TRIGGER (36)
+    -- is never latched (no Lua latches it; instance_guid_store.go).
+    -- 65096 is UNSEEDED: the cast is issued and stays dormant until
+    -- Spell.dbc data lands (marli hatch-chain precedent).
+    local elevator = creature:FindNearestGameObject(GO_MIMIRON_ELEVATOR, 100.0)
+    if elevator then
+        elevator:SetGoState(1) -- GO_STATE_READY
+    end
+    local worldtrigger = creature:FindNearestCreature(NPC_WORLD_TRIGGER_MIMIRON, 100.0)
+    if worldtrigger then
+        worldtrigger:CastSpell(worldtrigger, SPELL_ELEVATOR_KNOCKBACK)
+    end
     schedule(guid, "vx001act5", 6000, function()
         vx001Activation5(creature, guid)
     end)
