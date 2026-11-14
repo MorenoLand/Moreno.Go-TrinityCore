@@ -15506,13 +15506,19 @@ func init() {
 	// (RegisterSpellEvent; the blasted_lands / gordunni precedents
 	// are stale: 27686 is ported, gordunni is blocked on the GO
 	// caster) — documented only pending their own arm audit.
-	// npc_wyrmrest_defender
-	// (VehicleAI low-hp warn arm + SpellHit / gossip / charm
-	// arms) has no verifiable NPC_ entry constant in the C++
-	// sources and sits behind the VehicleAI / SpellHit / gossip
-	// / flag bridges — documented only. Dragonblight is the
-	// third Northrend zone (dalaran, borean_tundra closed).
+	// npc_wyrmrest_defender (Dragonblight zone script): the
+	// SpellHit ladder is PORTED in npc_wyrmrest_defender.lua
+	// (ev14: mount 49256 whisper + immune-clear + PLAYER_
+	// CONTROLLED flag, low-health emote 52421 whisper, renew
+	// 49263 recovery latch; ev23 Reset state drop) — entry
+	// 27629 TDB-verified (creature_template ScriptName
+	// 'npc_wyrmrest_defender'; no NPC_ constant in the C++
+	// sources). Dormant until 49256/52421/49263 are seeded
+	// in Spell.dbc (ev14 is spellKnown-gated). The per-tick
+	// UpdateAI low-hp machine, OnGossipSelect (player
+	// CastSpell unbridged) and OnCharmed stay out.
 	RegisterLuaBoss("npc_torturer_lecraft", 27209)
+	RegisterLuaBoss("npc_wyrmrest_defender", 27629)
 	// npc_emily (Grizzly Hills zone script): the JustEngagedWith arm —
 	// Talk(SAY_RANDOMAGGRO 4, no target) — the event-1 auriaya
 	// precedent (EscortAI base, but the arm is a bare self-Talk);
