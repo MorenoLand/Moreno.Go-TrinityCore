@@ -16,7 +16,7 @@
 -- precedent); the BossAI _JustDied SetBossState(DATA_HADRONOX,
 -- DONE) + instanceData.hadronoxDone flag is PORTED in hadronoxDied
 -- below (tick 509; the old "no bridge" claim is stale —
--- creature:SetBossState, lua_creature_events.go:6419). The ev5
+-- creature:SetBossState, lua_creature_events.go:7099). The ev5
 -- SetGuidData(DATA_HADRONOX) latch is ported in hadronoxSpawn.
 -- Ported arms (C++-exact for the modeled arms):
 -- boss_hadronox: EVENT_PIERCE_ARMOR DoCastVictim(Pierce Armor 53418),
@@ -34,7 +34,7 @@
 -- EVENT_ACID_CLOUD — DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD
 -- 53400), randtime(7s,13s) init, randtime(16s,23s) repeat (math.random);
 -- position=0 so no threat-head exclusion; threat-list pool via
--- GetAITargets (lua_creature_events.go:345; midnight precedent).
+-- GetAITargets (lua_creature_events.go:4559; midnight precedent).
 -- npc_anub_ar_crusher DamageTaken (boss_hadronox.cpp:533-540):
 -- pre-damage HealthBelowPctDamaged(25) latch -> Talk(2) +
 -- DoCastSelf(SPELL_FRENZY 53801); latch wiped on event 4 (C++ ctor
@@ -44,7 +44,7 @@
 -- The whole pre-fight/step movement machine — InitializeAI
 -- SetReactState(REACT_AGGRESSIVE)/SetFloatValue bounding/combat reach
 -- (SetReactState IS bridged — frozen_core precedent,
--- lua_creature_events.go:524; SetHomePosition IS bridged on the event
+-- lua_creature_events.go:4715; SetHomePosition IS bridged on the event
 -- surface — 796 tick; the COMBATREACH leg IS ported (hadronoxSpawn,
 -- ev5, SetCombatReach bridge) — only BOUNDINGRADIUS has no creature
 -- motion slot and stays out)
@@ -55,12 +55,12 @@
 -- the old "motion-master bridge absent" claim is stale). The
 -- DoAction(ACTION_HADRONOX_MOVE) driver (sender: crusher JustDied,
 -- boss_hadronox.cpp:556; ev38 dispatch IS bridged,
--- lua_creature_events.go:802) rides the crusherDied relay below.
+-- lua_creature_events.go:845) rides the crusherDied relay below.
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
 -- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
 -- summon STRAND + cross-AI SetData bridges absent; ev38 DoAction
--- dispatch IS bridged (lua_creature_events.go:802) but the senders
+-- dispatch IS bridged (lua_creature_events.go:845) but the senders
 -- (SummonCrusherPack, boss_hadronox.cpp:192, and the crusher
 -- JustEngagedWith, :527) ride the unported summon machine.
 -- MovementInform: SetReactState(REACT_AGGRESSIVE) on EVERY step
@@ -83,7 +83,7 @@
 -- NO_HOSTILES) — instance-script model absent (standing), motion-master
 -- bridge absent.
 -- The DoAction machine (ev38 dispatch IS bridged,
--- creature:DoAction, lua_creature_events.go:802): the sender of
+-- creature:DoAction, lua_creature_events.go:845): the sender of
 -- ACTION_CRUSHER_ENGAGED is the crusher pack-1 JustEngagedWith
 -- (boss_hadronox.cpp:527) — pack-1 membership is stamped by the
 -- unported SummonCrusherPack, so no Lua crusher can know it is
@@ -98,7 +98,7 @@
 -- UpdateAI CASTING gates PORTED: own UpdateAI pre-loop (:303) +
 -- in-loop (:353) — pierce/leech/webgrab/acid defer 500ms while
 -- casting, no repeat re-arm (mal_ganis idiom; IsCasting live,
--- lua_creature_events.go:1950). EVENT_PLAYER_CHECK stays out
+-- lua_creature_events.go:2480). EVENT_PLAYER_CHECK stays out
 -- (instance/motion). Crusher pack AI UpdateAI (:473) has NO
 -- casting gate (plain while loop, zero HasUnitState hits), so
 -- crusherSmashTick stays ungated per C++.
@@ -111,7 +111,7 @@
 -- health/DamageTaken surface.
 -- JustSummoned (boss_hadronox.cpp:372-376) summons.Summon leg — STAY OUT
 -- (row 5): ev19 IS bridged and forwards (event, creature, summon)
--- (fireCreatureSummoned, lua_creature_events.go:7897-7908; summonTempCreature
+-- (fireCreatureSummoned, lua_creature_events.go:8002; summonTempCreature
 -- :190 fires it for group summons too), but no producer exists in Lua —
 -- SummonCrusherPack (SummonCreatureGroup 1/2/3, :186-195) is unported and
 -- Hadronox casts no summon spells (the 53064-53092 periodic summons are
@@ -129,11 +129,11 @@
 -- registration. The whole npc_hadronox_crusherPackAI engagement model is
 -- unbridged: SetData(DATA_CRUSHER_PACK_ID) -> SetReactState(REACT_PASSIVE)
 -- (cross-AI SetData pack-ID bridge absent — SetReactState itself is
--- bridged, lua_creature_events.go:1934), DoAction(
+-- bridged, lua_creature_events.go:4715), DoAction(
 -- ACTION_PACK_WALK) -> MotionMaster MovePoint(_positions[pack]) + the
 -- _doFacing SetFacingTo choreography (motion-master bridge absent;
 -- sender is SummonCrusherPack, boss_hadronox.cpp:192; ev38 dispatch
--- IS bridged, lua_creature_events.go:802), MovementInform,
+-- IS bridged, lua_creature_events.go:845), MovementInform,
 -- MoveInLineOfSight passive-engage leg
 -- (CanStartAttack + IsWithinDistInMap(attackDistance + m_CombatDistance)
 -- -> JustEngagedWith — pack-ID bridge absent; the distance leg is
@@ -154,7 +154,7 @@
 -- + the unported sender (crusher JustEngagedWith,
 -- boss_hadronox.cpp:527 — pack-1 membership is stamped by the
 -- unported SummonCrusherPack); ev38 dispatch IS bridged
--- (lua_creature_events.go:802).
+-- (lua_creature_events.go:845).
 -- DamageTaken frenzy (HealthBelowPctDamaged(25) -> _hadFrenzy latch +
 -- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — the old
 -- "no DamageTaken hook + no health-pct bridge" claim was stale
@@ -163,7 +163,7 @@
 -- HealthBelowPct(70) / HealthBelowPctDamaged(5, damage) zeroing +
 -- GetHealthPct() damage scaling) needs attacker->IsControlledByPlayer(),
 -- which has no Lua-surface bridge (the Go mirror
--- creatureIsPlayerControlled, boss_ai.go:894, is unexported) — that
+-- creatureIsPlayerControlled, boss_ai.go:683, is unexported) — that
 -- missing attacker-classification bridge is the true blocker, and a
 -- GetObjectType()=="Player" approximation would wrongly reduce
 -- pet/charm damage that C++ lets through at full). JustDied ->
@@ -197,7 +197,7 @@
 -- (RegisterAuraEvent ev1, the template's three instantiations share one
 -- factory). The old "no SpellScript/AuraScript binding bridge" claim is
 -- stale: AuraEventOnPeriodic (1) / OnApply (2) / OnRemove (3) are live
--- (runtime.go:508-514; muru 46041 ev1 precedent). Deviations: the
+-- (runtime.go:575-577; muru 46041 ev1 precedent). Deviations: the
 -- HandleApply 2-17ms first-tick re-arm has no SetPeriodicTimer bridge,
 -- so the first tick fires at the DBC AuraPeriod; the HavePlayers gate
 -- reads the map IsEmpty twin (globals.go:1223-1227, per-instance); the
@@ -416,7 +416,7 @@ end
 -- C++ EVENT_ACID_CLOUD (boss_hadronox.cpp:314-317):
 -- DoCast(SelectTarget(Random, 0, 100.0f), ACID_CLOUD 53400);
 -- position=0 — no threat-head exclusion (contrast skeram position=1).
--- Threat-list pool via GetAITargets (lua_creature_events.go:345;
+-- Threat-list pool via GetAITargets (lua_creature_events.go:4559;
 -- midnight precedent), C++ dist=100.0f = max range; DoCast default
 -- triggered=false (vaelastrasz convention). Init randtime(7s,13s)
 -- (:229), repeat randtime(16s,23s) (math.random).

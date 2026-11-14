@@ -38,7 +38,7 @@
 -- Unmodeled (no bridges — documented, not wired):
 -- The passive pre-fight model — Reset leg SetReactState(REACT_PASSIVE)
 -- (SetReactState IS bridged — frozen_core precedent,
--- lua_creature_events.go:524); JustAppeared -> SummonAdds()
+-- lua_creature_events.go:4715); JustAppeared -> SummonAdds()
 -- (instance->GetBossState(DATA_KRIKTHIR)==DONE gate +
 -- SummonCreatureGroup(1..3) with DATA_PET_GROUP stamping — the summon
 -- STRAND is absent, standing) — so nothing below is emulated.

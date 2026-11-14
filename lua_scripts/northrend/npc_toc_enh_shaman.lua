@@ -12,6 +12,9 @@
 -- observable arm; JustSummoned/SummonedCreatureDespawn only feed
 -- that counter, and Reset/JustDied DespawnAll stays vacuous
 -- in-model.
+-- JustSummoned ev19 stays out (round-62): the arm only feeds the
+-- _totemCount counter and no summon-registry bridge exists; the AI
+-- itself IS ported (this file) and registered (boss_ai.go:19783-19784).
 -- Entries: 34463 Alliance enhancement shaman / 34455 Horde enhancement
 -- shaman (trial_of_the_crusader.h:190/205 NPC_ALLIANCE_SHAMAN_ENHANCEMENT
 -- / NPC_HORDE_SHAMAN_ENHANCEMENT).

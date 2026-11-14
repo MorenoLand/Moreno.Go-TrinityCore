@@ -9,7 +9,7 @@
 -- rotation arms for hunter / dk / rogue (see below) — the rest of
 -- each champion's rotation is unported (single-arm territory). Creature entries from trial_of_the_crusader.h NPC_ALLIANCE_*
 -- / NPC_HORDE_* (lines 180-208).
--- C++ arm shape (e.g. npc_toc_druid EVENT_HEAL_BARKSKIN :817):
+-- C++ arm shape (e.g. npc_toc_druid EVENT_HEAL_BARKSKIN :816):
 --   case EVENT_HEAL_BARKSKIN:
 --       if (HealthBelowPct(30))
 --       { DoCast(me, SPELL_BARKSKIN); events.RescheduleEvent(EVENT_HEAL_BARKSKIN, 60s); }
@@ -43,7 +43,7 @@
 --   (:646) + SetCombatPulseDelay(5) (:647) + DoZoneInCombat (:649) are
 --   PORTED 2026-10-23 in C++ arm order (the old "no bridges" claim was
 --   stale — triggered CastSpell and the SetCombatPulseDelay bridge at
---   engine/world/lua_creature_events.go:902 are both live); :648
+--   engine/world/lua_creature_events.go:4123 are both live); :648
 --   setActive(true) has no bridge; the :650-651 SetData(2, IN_PROGRESS)
 --   -> summons.DoZoneInCombat() leg is PORTED 2026-11-07 via the
 --   shared instanceData counter (championEncounterStart below;
@@ -63,7 +63,7 @@
 --   below); the controller struct (:367-578) has no UpdateAI override
 --   at all (SetData-only), so there is no cast gate to port there.
 --   The champion-summon side (SelectChampions :394-461 /
---   SummonChampions :464-501) is PORTED 2026-11-07 in the controller
+--   SummonChampions :464-503) is PORTED 2026-11-07 in the controller
 --   section below (tick 410 U1): the controller's own ev23 Reset is
 --   the SetData(0, team) twin (fires synchronously inside Fordring's
 --   SummonCreature call) and a 3s timer is the SetData(1) twin.
@@ -110,7 +110,7 @@ end
 -- files carry compact twins of these three helpers (each Lua file
 -- loads in its own state, so they cannot call these directly).
 -- C++ controller SetData(2, IN_PROGRESS) (boss_faction_champions.cpp:
--- 537-545): reset the counters + SetBossState IN_PROGRESS, once per
+-- 535-545): reset the counters + SetBossState IN_PROGRESS, once per
 -- pull (gated on !_inProgress in C++; the boss-state guard below is
 -- the Lua twin). The instance IN_PROGRESS leg also zeroes the
 -- Resilience timer (instance_trial_of_the_crusader.cpp:197-199).
@@ -368,8 +368,8 @@ end
 -- (object.go fallback); the type never changes in combat for these
 -- champions (SetPowerType only on rogue Reset), so the snapshot is
 -- exact; GetMaxPower(0) is the live typed read
--- (lua_creature_events.go:1049) and ModifyPower the live clamped write
--- (:1074).
+-- (lua_creature_events.go:3067) and ModifyPower the live clamped write
+-- (:3092).
 -- C++ boss_faction_championsAI::UpdateThreat (:611-619) on EVENT_THREAT
 -- (:721-724, UpdatePower first, UpdateThreat second): per threat-list
 -- ref, player victims only get ScaleThreat(0) then AddThreat(1000000 *
@@ -635,7 +635,7 @@ local function championEnterCombat(event, creature, target)
     -- :646 DoCast(me, SPELL_ANTI_AOE, true) — triggered self-cast, PORTED
     -- 2026-10-23 (the old "no bridge" claim was stale — CastSpell triggered
     -- is live); :647 SetCombatPulseDelay(5) — PORTED 2026-10-23 (bridge live
-    -- at engine/world/lua_creature_events.go:902, same twin bpc uses; the
+    -- at engine/world/lua_creature_events.go:4123, same twin bpc uses; the
     -- old "no bridge" claim was stale); :648 setActive(true) has no bridge;
     -- :649 DoZoneInCombat() PORTED 2026-10-23 (creature:DoZoneInCombat);
     -- the :650-651 SetData(2, IN_PROGRESS) -> summons.DoZoneInCombat()
@@ -789,7 +789,7 @@ end
 -- Faction-champions controller (34781) roster delivery — PORTED tick 410 U1.
 -- C++ boss_toc_champion_controllerAI (boss_faction_champions.cpp:367-578)
 -- is SetData-only (no UpdateAI override): SetData(0, team) -> SummonChampions
--- (:505-510, :464-501) and SetData(1, _) -> aggressive/unflag (:511-522).
+-- (:505-510, :464-503) and SetData(1, _) -> aggressive/unflag (:511-522).
 -- Fordring drives both (trial_of_the_crusader.cpp:611-619): EVENT_SUMMON_
 -- CHAMPIONS summons the controller at ToCCommonLoc[1] then calls SetData(0,
 -- team) synchronously, and EVENT_START_CHAMPIONS 3s later calls SetData(1,
@@ -797,24 +797,23 @@ end
 -- per-creature ScriptData store, not a dispatch — fordring header note), so
 -- the twins are: the controller's own ev23 Reset for SetData(0) — ev23 fires
 -- synchronously inside Fordring's SummonCreature call (fireCreatureSpawned,
--- lua_creature_events.go:7000-7014, via motionForLocked, creaturemotion.go:
--- 1262) — and a 3s CreateLuaEvent timer for SetData(1). No boss_ai.go entry
+-- lua_creature_events.go:7962, via motionForLocked, creaturemotion.go:1285) — and a 3s CreateLuaEvent timer for SetData(1). No boss_ai.go entry
 -- is needed (RegisterCreatureEvent needs none — terestian precedent; the
 -- gothik trigger 16137 and the jaraxxus volcano/portal have none either).
 -- Team derives from the first player on the map (DATA_TEAM, set on first
 -- player enter, instance_trial_of_the_crusader.cpp:135-136; no instance
 -- GetData bridge — fordring deriveFactionLeader precedent).
 -- Bridges (all live, verified this tick): SummonCreature
--- (lua_creature_events.go:3510, default type 7 = TEMPSUMMON_MANUAL_DESPAWN),
--- SetReactState (:4021; REACT_PASSIVE 0 / REACT_AGGRESSIVE 2, UnitDefines.h),
--- SetFlag/RemoveFlag (:5572/:5637; UNIT_FIELD_FLAGS 59, UNIT_FLAG_NON_
--- ATTACKABLE 0x2), SetHomePosition (:6104), MoveJump (:4879; Lua args
+-- (lua_creature_events.go:4161, default type 7 = TEMPSUMMON_MANUAL_DESPAWN),
+-- SetReactState (:4715; REACT_PASSIVE 0 / REACT_AGGRESSIVE 2, UnitDefines.h),
+-- SetFlag/RemoveFlag (:6452/:6540; UNIT_FIELD_FLAGS 59, UNIT_FLAG_NON_
+-- ATTACKABLE 0x2), SetHomePosition (:7048), MoveJump (:5753; Lua args
 -- (x,y,z,speedXY,speedZ) map positionally onto C++ MoveJump(pos,20,20) via
--- launchCreatureJumpSpline, creaturemotion.go:4290), Is25ManRaid (:3783),
--- SetGuidData (:6193) + GetInstanceCreature (:6224, instance guid store).
+-- launchCreatureJumpSpline, creaturemotion.go:4325), Is25ManRaid (:4477),
+-- SetGuidData (:7137) + GetInstanceCreature (:7186, instance guid store).
 -- No bridge: SetImmuneToPC (default false — no-op leg), SetOrientation
 -- (jump leaves facing untouched; C++ sets 0 Alliance / 3 Horde after the
--- jump). Evade re-fires ev23 (creaturemotion.go:4698, ev23 then ev2), so
+-- jump). Evade re-fires ev23 (creaturemotion.go:4699, ev23 then ev2), so
 -- the per-GUID summoned guard below is load-bearing: without it an evade
 -- would re-summon the whole roster (C++ Reset never re-summons — only
 -- SetData(0) does, once per controller).
@@ -890,7 +889,7 @@ end
 -- controllerReset keys off it. Same file state as the champion handlers.
 local controllerChampions = {}
 
--- C++ SummonChampions (:464-501): origins are the faction initial
+-- C++ SummonChampions (:464-503): origins are the faction initial
 -- positions (Horde 0-4 for Alliance players, Alliance 5-9 for Horde
 -- players), picked at random WITH replacement; targets are the 10 final
 -- positions picked at random WITHOUT replacement (erased after each
@@ -903,7 +902,7 @@ local controllerChampions = {}
 -- 2*ToCCommonLoc[1].x - target.x, home orientation 3, MoveJump(mirrored,
 -- target.o=0, 20, 20) + SetOrientation(3) [no bridge]. Origin orientations
 -- are all 0, so the Lua o=0 -> summoner-orientation fallback
--- (lua_creature_events.go:139-141) lands the same 0 the C++ Position
+-- (lua_creature_events.go:60/:112 comment) lands the same 0 the C++ Position
 -- carries (controller itself spawns at o=0).
 local function summonChampions(creature, isAlliancePlayers, is25Man)
     local origins = {}

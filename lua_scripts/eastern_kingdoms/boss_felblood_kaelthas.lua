@@ -13,15 +13,17 @@
 -- SpellScript; AddSC_boss_felblood_kaelthas next in the Magister's
 -- Terrace block; instance_magisters_terrace blocked on the
 -- instance-script model).
--- Entry (verifiable from the C++ sources): magisters_terrace.h:50
+-- Entry (verifiable from the C++ sources): magisters_terrace.h:48
 -- names BOSS_KAELTHAS_SUNSTRIDER = 24664 in the MT creatures enum.
 -- Script name: no explicit CreatureScript string in the file —
 -- AddSC registers via RegisterMagistersTerraceCreatureAI(
 -- boss_felblood_kaelthas) = RegisterCreatureAIWithFactory, which
 -- stringifies the type name (ScriptMgr.h:1234), so "boss_felblood_
--- kaelthas". The creature_template ScriptName binding is DB-side (no
--- TDB in this workspace), but the entry itself is C++-verifiable so
--- the port is registered (boss_vaelastrasz precedent).
+-- kaelthas". TDB: 24664 'Kael'thas Sunstrider', ScriptName
+-- boss_felblood_kaelthas; 24674 'Phoenix', ScriptName
+-- npc_felblood_kaelthas_phoenix; 24675 'Phoenix Egg', ScriptName '';
+-- all VerifiedBuild 12340 — the port is registered
+-- (boss_vaelastrasz precedent).
 -- Whole-server-tree grep confirms the .cpp file +
 -- eastern_kingdoms_script_loader.cpp (fwd-decl, call) as the only
 -- sources of the class name.
@@ -67,7 +69,7 @@
 --   cast 46162, 44s init -> 44s loop.
 -- - EVENT_SHOCK_BARRIER (heroic-only): OnEnterCombat schedules it
 --   61s only under creature:IsHeroic() (C++-exact JustEngagedWith
---   gate, lua_creature_events.go:260; the "no difficulty bridge"
+--   gate, lua_creature_events.go:4417; the "no difficulty bridge"
 --   claim was stale, retracted). Fire arm in C++ order:
 --   Talk(SAY_ANNOUNCE_PYROBLAST) + self-cast 46165 + fireball
 --   reschedule 2s500ms (schedule() cancel-on-reschedule = EventMap
@@ -98,7 +100,7 @@
 -- Deviations from C++: the UpdateAI pre-loop CASTING gate
 -- (boss_felblood_kaelthas.cpp:277) is ported as a 500ms IsCasting
 -- defer under each timer arm's own key (mal_ganis/rend idiom,
--- lua_creature_events.go:1950; the defer re-queues the arm and
+-- lua_creature_events.go:2480; the defer re-queues the arm and
 -- its repeat schedules only after the gate passes, so no re-arm
 -- is consumed). In-loop same-tick co-expiry suppression is
 -- unmodeled (independent callbacks, AV precedent). The 50% latch's
@@ -136,7 +138,7 @@
 --   bridge" claim retracted (maiden_of_virtue random-player precedent).
 -- - EVENT_SHOCK_BARRIER + EVENT_PYROBLAST: now PORTED (above).
 --   Stale claims retracted: "no difficulty bridge" (IsHeroic bridged
---   at lua_creature_events.go:260, keristrasza crystallize precedent)
+--   at lua_creature_events.go:4417, keristrasza crystallize precedent)
 --   and "no SelectTarget bridge" (maiden_of_virtue random-player
 --   precedent, already in this file). The shock-barrier arm is the
 --   heroic-gated leg of JustEngagedWith; pyroblast fires only from
@@ -159,7 +161,7 @@
 --   is implemented for creature casters (creatureEffectTeleportUnits,
 --   boss_ai.go:5360, DBC-gated like every effect leg); player:CastSpell
 --   (lua_player.go:3501) and player/creature RemoveAura (lua_player.go:
---   4329, lua_creature_events.go:1748) are bridged. Two guards carry
+--   4329, lua_creature_events.go:1761) are bridged. Two guards carry
 --   the C++-vs-Go delta: the self-cast wire target (the boss) is also
 --   reported as a hit, so self-hits are skipped (C++ never hits the
 --   boss with either spell; gruul wire-target precedent), and the
@@ -287,7 +289,7 @@ end
 -- lua_objects.go:543; randomTargetInRange is this file's threat-list
 -- player picker, flame-strike precedent). Flame strike: self-cast
 -- dummy 44191 + DespawnOrUnsummon(15s) (bridged,
--- lua_creature_events.go:7230, ms). Phoenix: no arm beyond the
+-- lua_creature_events.go:7335, ms). Phoenix: no arm beyond the
 -- bookkeeping (default: break). The summon dispatch itself is the
 -- creature cast path's creatureEffectSummonType (boss_ai.go:4866,
 -- called :3580, DBC spellKnown-gated) firing ev19 through the shared

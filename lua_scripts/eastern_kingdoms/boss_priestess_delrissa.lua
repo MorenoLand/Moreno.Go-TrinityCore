@@ -81,7 +81,7 @@
 -- UpdateAIs (delrissa :251, lackey-common :450) — so no gate exists to
 -- port and the timers fire unconditionally per C++ itself, not by a
 -- dropped-gate approximation (creature:IsCasting() is a live bridge,
--- lua_creature_events.go:1950, but has nothing to gate here). The C++ scheduler is
+-- lua_creature_events.go:2480, but has nothing to gate here). The C++ scheduler is
 -- driven from JustEngagedWith and drained by UpdateAI; the port
 -- schedules from OnEnterCombat(1) and cancels on 2/4/23 (maiden
 -- convention).
@@ -100,7 +100,7 @@
 --   home arrival, creaturemotion.go).
 -- - JustEngagedWith's lackey AddThreat(who, 0.0f, pAdd) ring: stays
 --   out — the AddThreat bridge is self-threat only (the 3rd-arg
---   who-redirect is not expressible, lua_creature_events.go:581),
+--   who-redirect is not expressible, lua_creature_events.go:2404),
 --   AttackStart is not on the creature surface, and DoZoneInCombat
 --   engages only the caller; no bridge makes ANOTHER creature engage.
 --   The SetBossState IN_PROGRESS arm is PORTED below (ev1, after Talk
@@ -121,9 +121,10 @@
 --   support yet"), so the "dropped (no difficulty bridge)" claim was
 --   stale and is retracted.
 -- - ResetTimer's home-position Z+10 evade check (EnterEvadeMode) —
---   GetHomePosition IS bridged (lua_creature_events.go:1475) but EnterEvadeMode
---   has no bridge (boss_ai.go:5753-5754 explicit) — the check stays out
---   (the_beast evade precedent).
+--   PORTED 2026-11-14 as a 5s onEvadeCheck poll (GetHomePosition
+--   lua_creature_events.go:6976, GetZ :1546, EnterEvadeMode :5624 —
+--   the old "no bridge (boss_ai.go:5753-5754)" claim was stale;
+--   bridge exists via triggerCreatureEvade, creaturemotion.go:4699).
 -- - The eight lackey CreatureScript classes + commented-out
 --   npc_high_explosive_sheep: each lackey inherits
 --   boss_priestess_lackey_commonAI (AcquireGUIDs / threat-reset timer
@@ -360,6 +361,19 @@ local function onSwPain(creature, guid)
     schedule(guid, "swpain", 10000, function() onSwPain(creature, guid) end)
 end
 
+-- C++ UpdateAI ResetTimer (boss_priestess_delrissa.cpp:256-266): every
+-- 5s while engaged, evade if live Z is home Z + 10 or more. First
+-- check 5s after engage (ResetTimer = 5000 at Reset); on evade no
+-- re-arm (evade cancels the timers via onCombatEnd).
+local function onEvadeCheck(creature, guid)
+    local _, _, homeZ = creature:GetHomePosition()
+    if creature:GetZ() >= homeZ + 10 then
+        creature:EnterEvadeMode()
+        return
+    end
+    schedule(guid, "evadecheck", 5000, function() onEvadeCheck(creature, guid) end)
+end
+
 local function onReset(_, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -383,6 +397,7 @@ local function onEnterCombat(_, creature)
     schedule(guid, "shield", 2000, function() onShield(creature, guid) end)
     schedule(guid, "dispel", 7500, function() onDispel(creature, guid) end)
     schedule(guid, "swpain", 5000, function() onSwPain(creature, guid) end)
+    schedule(guid, "evadecheck", 5000, function() onEvadeCheck(creature, guid) end)
 end
 
 local function onCombatEnd(_, creature)

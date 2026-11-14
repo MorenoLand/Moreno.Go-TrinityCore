@@ -61,7 +61,7 @@
 -- DATA_HALION 3 (:34), DATA_TWILIGHT_HALION 4 (:37); EncounterState
 -- NOT_STARTED 0 / IN_PROGRESS 1 / FAIL 2 / DONE 3, InstanceScript.h:
 -- 68-76; bridges creature:SetBossState / GetBossState,
--- lua_creature_events.go:5917/:5936):
+-- lua_creature_events.go:7099/:7118):
 -- material halion ev1 IN_PROGRESS (base-first, :242-248), ev4 DONE
 -- (_JustDied first, :263-268), ev23 FAIL-if-IN_PROGRESS else
 -- NOT_STARTED-if-!= DONE (skadi idiom; _Reset :499-510 + controller
@@ -76,7 +76,7 @@
 -- base-first per C++ :242-248; pulse-5 + DoZoneInCombat already
 -- ported) + AddAura SPELL_TWILIGHT_PRECISION 78243 (PORTED tick 270;
 -- the old "absent bridge" claim was stale — creature:AddAura is
--- self-only, lua_creature_events.go:2416) + the phase-ungated
+-- self-only, lua_creature_events.go:2857) + the phase-ungated
 -- timer arms (event 1 — the auriaya precedent):
 -- EVENT_CLEAVE — DoCastVictim(SPELL_CLEAVE 74524) non-triggered,
 -- randtime(6s,10s) init / randtime(8s,10s) re-arm ->
@@ -214,9 +214,9 @@
 -- Health sync / phase-mask / react-state / combat-flag legs: the
 -- phase-mask leg stays out for want of the same construction-time
 -- hook, NOT for want of a bridge — creature:SetPhaseMask IS bridged
--- (lua_creature_events.go:3176), retracting the old "no creature
+-- (lua_creature_events.go:3900), retracting the old "no creature
 -- SetPhaseMask method" claim.
--- SetReactState and SetFlag ARE bridged (lua_creature_events.go:524;
+-- SetReactState and SetFlag ARE bridged (lua_creature_events.go:4715/:6452;
 -- e.g. SetFlag(59,0x300) in the incarcerator port) — the react-state /
 -- IN_COMBAT-flag legs stay out for want of a construction-time hook, not
 -- a bridge: CREATURE_EVENT_ON_SPAWN (5) fires on first grid activation
@@ -245,9 +245,11 @@
 -- PORTED tick 270 via the twilightEngaged latch.
 -- boss_halion EnterEvadeMode (:236) — forwards the evade to the
 -- controller creature when why == EVADE_REASON_BOUNDARY or the phase
--- machine is in PHASE_ONE — stays out (EnterEvadeMode has no Lua
--- bridge, boss_ai.go:5753-5754; the cross-creature forward rides the
--- no-cross-AI bridge). Its encounter-state outcome is NOT lost: the
+-- machine is in PHASE_ONE — stays out (EnterEvadeMode IS bridged —
+-- triggerCreatureEvade, creaturemotion.go:4699, called from
+-- lua_creature_events.go:5632; the stay-out is the cross-creature
+-- forward, which rides the no-cross-AI bridge). Its encounter-state
+-- outcome is NOT lost: the
 -- controller's engagement-over JustExitedCombat sets DATA_HALION
 -- FAIL (:619-634), and that leg is borne by halionReset's ev23
 -- evade-fire (skadi idiom — see the SetBossState block above). No
@@ -295,7 +297,7 @@
 -- JustEngagedWith cross-AI SetData(DATA_FIGHT_PHASE, PHASE_ONE) ->
 -- DoZoneInCombat (:259-260/:791), and creature:SetData is a generic
 -- per-motion store, NOT virtual AI dispatch
--- (lua_creature_events.go:767) — the write would never engage it.
+-- (lua_creature_events.go:800) — the write would never engage it.
 -- Registering 40146 for an ev2 handler that can never fire is dead
 -- code; stays unregistered until the cross-AI SetData engagement chain
 -- is bridged. The 30s respawn leg of me->DespawnOrUnsummon(0s, 30s)
@@ -545,7 +547,7 @@ end
 -- DoAction(ACTION_METEOR_STRIKE_AOE 2) — the npc_meteor_strike_initial
 -- leg (DoCastSelf 74648 + 74713, triggered, + BURN relay to its four
 -- meteors, :1005-1010). PORTED 2026-11-11 via RegisterAuraEvent ev3
--- + creature:DoAction (lua_creature_events.go:827, event-38 dispatch).
+-- + creature:DoAction (lua_creature_events.go:845, event-38 dispatch).
 -- DORMANT twice over: the countdown aura is applied by the
 -- initial's unported IsSummonedBy (:1024), and the DoAction consumer
 -- stays out — the initial's entry is DB-bound (ScriptName
@@ -643,7 +645,7 @@ local function halionEnterCombat(event, creature, target)
     -- arm order); CheckRequiredBosses / setActive / ScheduleTasks
     -- legs out. The AddAura SPELL_TWILIGHT_PRECISION leg (:249)
     -- follows the base call (creature:AddAura is self-only,
-    -- lua_creature_events.go:2416 — state-only in Go's aura map).
+    -- lua_creature_events.go:2857 — state-only in Go's aura map).
     creature:SetBossState(DATA_HALION, 1) -- IN_PROGRESS (EncounterState, InstanceScript.h:68-76)
     creature:SetCombatPulseDelay(5)
     creature:DoZoneInCombat()
@@ -793,7 +795,7 @@ end
 -- FIRST, before Talk(SAY_DEATH) (:267); SendEncounterUnit
 -- DISENGAGE (:268); twilight KillSelf (:270-272) + controller
 -- KillSelf (:274-276), each alive-guarded. The KillSelf legs ride
--- creature:Kill (lua_creature_events.go:2971) over the grid scan
+-- creature:Kill (lua_creature_events.go:3449) over the grid scan
 -- (the hexlord JustDied precedent — no GUID->creature bridge, and
 -- the instance guid store is never latched for these temp summons).
 local function halionDied(event, creature, killer)
@@ -986,7 +988,7 @@ local twilightEngaged = {}
 -- DoZoneInCombat, after the phase set, before the timer schedules
 -- (C++ arm order); instance/setActive/ScheduleTasks legs out.
 -- AddAura SPELL_TWILIGHT_PRECISION (:429) follows the base call
--- (creature:AddAura is self-only, lua_creature_events.go:2416 —
+-- (creature:AddAura is self-only, lua_creature_events.go:2857 —
 -- state-only in Go's aura map). The four timer arms bridge (the
 -- TAIL_LASH arm moves here from its constructor schedule;
 -- SOUL_CONSUMPTION's constructor schedule is re-anchored the same
@@ -1424,8 +1426,8 @@ RegisterAuraEvent(SPELL_LEAVE_TWILIGHT_REALM, 3, leaveTwilightRealmOnRemove)
 -- blockers: the sole cast is npc_orb_carrier::TriggerCutter (:978,
 -- entry 40081 unregistered, driven only by the unregistered
 -- controller 40146's DoAction chain), so the cast never happens in
--- Go; and the filter needs GetChannelObjectGuid (setter only,
--- lua_creature_events.go:1093, no getter) + IsInBetween (zero hits
+-- Go; and the filter needs SetChannelObjectGuid (setter only,
+-- lua_creature_events.go:1149, no getter) + IsInBetween (zero hits
 -- in engine/ and lua_scripts/).
 
 -- C++ npc_living_infernoAI::IsSummonedBy (boss_halion.cpp:1273-1290):

@@ -15,7 +15,7 @@
 -- GO_PUMPKIN_SHRINE = 186267 / GO_LOOSELY_TURNED_SOIL = 186314.
 -- Whole-server-tree grep confirms boss_headless_horseman.cpp as the
 -- only source of "boss_headless_horseman" (struct line 340,
--- AddSC_ line 1051).
+-- AddSC_ line 1049).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3 OnTargetDied,
 -- 4 OnDied, 23 OnReset. Melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady.
@@ -45,7 +45,7 @@
 -- the port runs the phase-1 cleave cadence flat. JustDied's
 -- _instance->SetData(DATA_HORSEMAN_EVENT_STATE, DONE) leg is blocked on
 -- the instance-script model; the SummonCreature(NPC_SIR_THOMAS) leg is
--- PORTED (creature:SummonCreature bridge, lua_creature_events.go:728 —
+-- PORTED (creature:SummonCreature bridge, lua_creature_events.go:4161 —
 -- the stale "no summon bridge" claim retracted; Eluna type 7 =
 -- TEMPSUMMON_MANUAL_DESPAWN, the C++ default); the LFG FinishDungeon leg
 -- has no LFG bridge. JustEngagedWith's setActive leg has no bridge;

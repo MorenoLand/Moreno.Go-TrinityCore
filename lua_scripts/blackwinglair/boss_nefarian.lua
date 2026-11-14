@@ -53,18 +53,18 @@
 -- convention), once, Talk(SAY_RAISE_SKELETONS=1); the bone-construct
 -- respawn loop stays out: constructs now exist via the ev21 port,
 -- but DoZoneInCombat(construct) has no bearer (Go bridge is me-form
--- only, lua_creature_events.go:2255). OnLeaveCombat(2)/OnReset(23): cancel
+-- only, lua_creature_events.go:2268). OnLeaveCombat(2)/OnReset(23): cancel
 -- timers, clear state. Nil-target ticks cast nothing but keep the
 -- schedule (jeklik convention).
 -- Deviations from C++: the UpdateAI UNIT_STATE_CASTING queue gates
 -- (boss_nefarian.cpp Nefarius combat branch :305/:372, Nefarian
 -- :487/:566) are ported as a 500ms IsCasting defer on every ported
 -- timer tick (mal_ganis idiom; IsCasting live,
--- lua_creature_events.go:1950; defer precedes target picks, casts,
+-- lua_creature_events.go:2480; defer precedes target picks, casts,
 -- Talks and re-arms, no re-arm consumed); no instance-script model —
 -- the instance SetData / SetBossState-override arms have no bearer;
 -- the bosses' own SetBossState legs ARE ported (bridge live
--- lua_creature_events.go:5917): Nefarius BeginEvent :203-207 calls
+-- lua_creature_events.go:7099): Nefarius BeginEvent :203-207 calls
 -- _JustEngagedWith -> IN_PROGRESS, his Reset :182-199 calls _Reset()
 -- only when no live Nefarian is found in 1000 yd -> NOT_STARTED, and
 -- his death (no JustDied override — base runs, ScriptedCreature.h:330)
@@ -103,7 +103,7 @@
 -- (EVENT_PATH_2/EVENT_PATH_3 MovePath, EVENT_CHAOS_1/2 gyth-facing
 -- 10339, EVENT_SUCCESS_1/2 portcullis gameobjects 164726/175186 +
 -- DespawnOrUnsummon, FindNearestGameObject) are not modeled.
--- FindNearestCreature IS bridged (lua_creature_events.go:1237) — the
+-- FindNearestCreature IS bridged (lua_creature_events.go:6756) — the
 -- stale claim lumped it with FindNearestGameObject — and Reset()'s
 -- FindNearestCreature(NPC_NEFARIAN 11583, 1000.0f, true) gate IS
 -- ported now (see onNefariusReset): it guards the _Reset()
@@ -667,7 +667,7 @@ end
 -- decides (moroes convention); strictly below 20 like C++; once.
 -- The bone-construct respawn loop stays out: its constructs now exist
 -- via the ev21 port, but its DoZoneInCombat(construct) leg has no
--- bearer (Go bridge is me-form only, lua_creature_events.go:2255).
+-- bearer (Go bridge is me-form only, lua_creature_events.go:2268).
 local function nefarianDamageTaken(event, creature, attacker, damage)
     local guid = creature:GetGUIDLow()
     local st = nefarianState[guid]

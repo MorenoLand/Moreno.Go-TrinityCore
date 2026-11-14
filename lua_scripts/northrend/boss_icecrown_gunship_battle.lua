@@ -80,7 +80,7 @@
 -- DISENGAGE legs (other ship via FindNearestCreature 200yd + me) and the
 -- :902/:906/:1155/:1159 DoAction(ACTION_ENEMY_GUNSHIP_TALK) ENGAGE legs
 -- stay out as live code. The SetBossState call itself IS bridged now
--- (creature:SetBossState, lua_creature_events.go:5917, the tick-266
+-- (creature:SetBossState, lua_creature_events.go:7099, the tick-266
 -- falric/marwyn precedent) — the blockers are the senders, not the
 -- frame call. ENGAGE (:899/:1152 IN_PROGRESS) sender is
 -- instance_icecrown_citadel.cpp:1433 ProcessEvent(

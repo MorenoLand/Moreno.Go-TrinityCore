@@ -48,7 +48,7 @@
 -- (me) non-triggered self-cast, re-arm 24000 (C++-exact). The
 -- UpdateAI pre-loop (:82) + in-loop (:110) UNIT_STATE_CASTING
 -- gates are ported per arm (see pump gate note; live creature:
--- IsCasting bridge, lua_creature_events.go:1950). OnDied(4): cleanup (the _JustDied
+-- IsCasting bridge, lua_creature_events.go:2480). OnDied(4): cleanup (the _JustDied
 -- arm is instance-blocked). OnLeaveCombat(2)/OnReset(23):
 -- cancel the pump, drop per-GUID state (the _Reset arm is
 -- instance-blocked). Melee is engine-driven.

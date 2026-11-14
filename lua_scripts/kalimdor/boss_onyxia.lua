@@ -25,7 +25,7 @@
 --   at its C++ ScheduleEvent cooldown ({10s,20s} / {15s,20s} /
 --   {2s,5s} / {10s,20s}); BossAI::JustEngagedWith pulse + me-DoZone +
 --   SetBossState(DATA_ONYXIA, IN_PROGRESS) PORTED (bridge live,
---   lua_creature_events.go:5917); DoStartTimedAchievement + the
+--   lua_creature_events.go:7099); DoStartTimedAchievement + the
 --   CheckRequiredBosses SEQUENCE_BREAK leg stay blocked.
 -- - Flame Breath (EVENT_FLAME_BREATH): DoCastVictim
 --   (SPELL_FLAME_BREATH 18435), non-triggered; init {10s,20s} ->
@@ -109,7 +109,7 @@
 --   the _Reset() SetBossState(DATA_ONYXIA, NOT_STARTED) leg (:157,
 --   BossAI::_Reset ScriptedCreature.cpp:499-511 — alive-gated and
 --   != DONE-gated) are PORTED in onReset (bridges live,
---   lua_creature_events.go:4070/5917); the instance SetData
+--   lua_creature_events.go:4937/7099); the instance SetData
 --   (DATA_ONYXIA_PHASE, PHASE_BREATH) leg is PORTED at the phase-2
 --   latch (enterPhase2, shared-table write — the Reset call is a
 --   C++ no-op, SetData only acts on PHASE_BREATH); the
@@ -618,7 +618,7 @@ local function onEnterCombat(event, creature, target)
     -- C++ BossAI::_JustEngagedWith (ScriptedCreature.cpp:527-542,
     -- base-first in boss_onyxia.cpp:163-165): instance->SetBossState
     -- (DATA_ONYXIA, IN_PROGRESS) ahead of the pulse / DoZoneInCombat
-    -- arms below (creature:SetBossState, lua_creature_events.go:5917).
+    -- arms below (creature:SetBossState, lua_creature_events.go:7099).
     creature:SetBossState(DATA_ONYXIA, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::JustEngagedWith arm (ScriptedCreature.cpp:540; base-first in boss_onyxia.cpp:163-165)
     creature:DoZoneInCombat() -- BossAI::JustEngagedWith me-form arm (ScriptedCreature.cpp:542; instance/setActive/ScheduleTasks legs out)
@@ -688,7 +688,7 @@ local function onDied(event, creature, killer)
     -- SetBossState(DATA_ONYXIA, DONE) (ScriptedCreature.cpp:513-520);
     -- the mal_ganis precedent. Without this leg the boss stayed
     -- IN_PROGRESS after the kill (Go writes boss state only via the
-    -- Lua bridge, lua_creature_events.go:5929).
+    -- Lua bridge, lua_creature_events.go:7099).
     creature:SetBossState(DATA_ONYXIA, BOSS_STATE_DONE)
 end
 
@@ -698,7 +698,7 @@ end
 -- MovePoint(8, MiddleRoomLocation). The travel + speed legs stay out
 -- (no MovePoint bridge — verified: no methods["MovePoint"] in
 -- lua_creature_events.go / lua_objects.go; SetSpeedRate IS bridged
--- at lua_creature_events.go:5960 but moves nothing without travel).
+-- at lua_creature_events.go:6065 but moves nothing without travel).
 -- The index write PORTS as a position-twin leg, same class as
 -- onMovement: the next MOVEMENT tick's SetNextRandomPoint excludes
 -- the DESTINATION row, not the origin row. ev14 is live

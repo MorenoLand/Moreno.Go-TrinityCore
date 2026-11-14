@@ -44,7 +44,7 @@
 --   so a fresh re-summon starts aura-clean exactly as C++ does.
 -- Deviations from C++: UpdateAI UNIT_STATE_CASTING queue gate PORTED:
 -- each combat arm below defers 500ms while creature:IsCasting() (live
--- CastingUntil window, lua_creature_events.go:1950; broodkeeper
+-- CastingUntil window, lua_creature_events.go:2480; broodkeeper
 -- precedent) — no re-arm consumed; the non-victim intro machine branch
 -- is unmodeled, so only the 8 combat timer callbacks are gated;
 -- the transform arm's SetCanFly(true/false) legs are PORTED 2026-10-22
@@ -59,7 +59,7 @@
 --   unique in the instance; C++ used instance GetGuidData).
 --   ResetDoorOrButton stays out (no bridge); _JustDied() leg stays out;
 --   the old "no despawn bridge" on the 5s DespawnOrUnsummon arm was
---   stale (creature:Despawn() is bridged, lua_creature_events.go:214).
+--   stale (creature:Despawn() is bridged, lua_creature_events.go:3318).
 -- - IsSummonedBy + MovementInform INTRO_1..6 choreography: MovePath(
 --   KIRTONOS_PATH = 105061) and MovePoint (no MotionMaster bridge —
 --   selin_fireheart precedent); the gate SetGoState(GO_STATE_READY) arm
@@ -89,7 +89,7 @@
 --   player->SummonCreature(NPC_KIRTONOS, ...) at :293, which summons
 --   Kirtonos himself — so the SummonList stays empty and the
 --   _Reset/_JustDied DespawnAll legs have nothing to despawn. ev19 IS
---   bridged (fireCreatureSummoned, lua_creature_events.go:7878), but it
+--   bridged (fireCreatureSummoned, lua_creature_events.go:8002), but it
 --   can never fire for entry 10506 as summoner; player summoners pass
 --   nil SummonerMotion, so no ev19 fires for the brazier summon either
 --   (lua_creature_events.go:67-72). No terestian-style twin needed.

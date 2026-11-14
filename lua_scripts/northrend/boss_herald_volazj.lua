@@ -54,7 +54,7 @@
 -- C++ DamageTaken 66%/33% health-crossing -> DoCastSelf(Insanity
 -- 57496) (event 9, pre-damage damage arg; InterruptNonMeleeSpells
 -- (false) has no bridge — documented; NOT_SELECTABLE damage=0
--- leg reads creature:HasFlag (bridged, lua_creature_events.go:1765)
+-- leg reads creature:HasFlag (bridged, lua_creature_events.go:6374)
 -- but the flag is never set in the ported model — the only SetFlag
 -- leg rides the unported SpellHitTarget insanity machine, so the
 -- read would be dead code (documented only).
@@ -95,8 +95,8 @@
 -- Re-verified 2026-11-13 (hook strip round 7, group D): STAY OUT
 -- still holds, but three bridge claims above are now stale —
 -- player:CastSpell IS bridged (lua_player.go:3501), SummonCreature
--- IS bridged (lua_creature_events.go:4097), SetPhaseMask IS bridged
--- (lua_creature_events.go:3836). What still blocks a standalone
+-- IS bridged (lua_creature_events.go:4161), SetPhaseMask IS bridged
+-- (lua_creature_events.go:3900). What still blocks a standalone
 -- ev15 port (C++ arm boss_herald_volazj.cpp:135-171): SetStunned IS
 -- bridged as of 2026-11-13 (follow-up strip 1, unit A — the
 -- SetControlled claim above is retired); the first-hit leg sets
@@ -115,7 +115,7 @@
 -- bridge); ResetPlayersPhaseMask() is PORTED below via
 -- resetPlayersPhaseMask (player:RemoveAura x5 — the old
 -- "no aura-removal bridge (aeranas precedent)" claim was stale,
--- player:RemoveAura is bridged, engine/world/lua_player.go:219);
+-- player:RemoveAura is bridged, engine/world/lua_player.go:4329);
 -- RemoveFlag(UNIT_FLAG_NOT_SELECTABLE) PORTED (2026-10-20);
 -- SetControlled(false, UNIT_STATE_STUNNED) PORTED 2026-11-13
 -- (follow-up strip 1, unit A — creature:SetStunned(false) in
@@ -128,7 +128,7 @@
 -- _insanityHandled / summons.empty() gate): whole machine rides
 -- the unported insanity payload (summon strand + player-cast clone
 -- + phase mask + stun-control); the DamageTaken crossing arm is
--- ported above and ev15 is live but unreachable for 57496.
+-- ported above and ev15 is unregistered (no ev15 handler below) and unreachable for 57496.
 -- The wait-state cleanup leg's SetControlled(false, UNIT_STATE_STUNNED)
 -- (boss_herald_volazj.cpp:269) stays out too — the wait-state machine
 -- is unported (the SetStunned bridge itself exists since 2026-11-13).
@@ -151,7 +151,7 @@ local SPELL_SHIVER = 57949
 local SPELL_INSANITY = 57496 -- boss_herald_volazj.cpp:34
 
 -- UnitDefines.h:149; RemoveFlag on UNIT_FIELD_FLAGS (59) is bridged
--- (engine/world/lua_creature_events.go:725).
+-- (engine/world/lua_creature_events.go:6540).
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
@@ -187,7 +187,7 @@ end
 -- player:GetPhaseMask() has no bridge, so the port strips all five
 -- phasing auras per same-map/instance player instead: absent auras
 -- are no-ops, so the net state is C++-exact. player:RemoveAura is
--- bridged (engine/world/lua_player.go:219); the GetPlayersInWorld +
+-- bridged (engine/world/lua_player.go:4329); the GetPlayersInWorld +
 -- map/instance filter pool is the archavon / anomalus precedent.
 local function resetPlayersPhaseMask(creature)
     local mapId = creature:GetMapId()

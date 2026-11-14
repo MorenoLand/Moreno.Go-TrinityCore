@@ -18,8 +18,9 @@
 -- are DB-side as usual.
 -- Sole-source verified: whole-server-tree grep for
 -- "AddSC_boss_general_zarithrian" hits boss_general_zarithrian.cpp
--- only (+ the loader decl/call lines); this clone carries no sql/ tree,
--- so ScriptName bindings are DB-side by construction.
+-- only (+ the loader decl/call lines); TDB: 39746 'General
+-- Zarithrian', ScriptName boss_general_zarithrian; 39814 'Onyx
+-- Flamecaller', ScriptName npc_onyx_flamecaller; VerifiedBuild 12340.
 -- Eluna creature events: 1 OnEnterCombat, 3 OnKill, 4 OnDied.
 -- Ported arms (C++-exact for all modeled arms):
 -- boss_general_zarithrian JustEngagedWith — Talk(SAY_AGGRO 0)
@@ -33,7 +34,7 @@
 -- boss_general_zarithrian JustDied — _JustDied() SetBossState(DONE) then
 -- Talk(SAY_DEATH 3) (event 4 — the sjonnir precedent; PORTED
 -- 2026-11-06 via creature:SetBossState, live bridge
--- lua_creature_events.go:5917).
+-- lua_creature_events.go:7099).
 -- DOCUMENTED-ONLY (in this header; only entry 39746 registered):
 -- boss_general_zarithrian Reset — PORTED 2026-11-06: _Reset()'s gated
 -- SetBossState(NOT_STARTED) + the Saviana/Baltharus-DONE gate
@@ -44,12 +45,12 @@
 -- add-registration leg (no summon-registry bridge).
 -- boss_general_zarithrian EnterEvadeMode — the _DespawnAtEvade()
 -- SetBossState(FAIL) leg is PORTED 2026-11-06 on event 2 (ev2 fires
--- only from triggerCreatureEvade, creaturemotion.go:4487); the
+-- only from triggerCreatureEvade, creaturemotion.go:4699); the
 -- summons.DespawnAll() leg (no summon-registry bridge) and the
 -- DespawnOrUnsummon(0s, 30s) respawn leg (creature:Despawn takes no
 -- delay arg and deletes the motion mid-evade) stay out. No ev24
 -- handler: BossAI::_JustReachedHome is setActive(false) only
--- (ScriptedCreature.cpp:520-523) and Zarithrian overrides nothing
+-- (ScriptedCreature.cpp:522-524) and Zarithrian overrides nothing
 -- there — no FAIL leg exists on reach-home; ev2 carries FAIL.
 -- boss_general_zarithrian UpdateAI — CASTING gates (boss :133
 -- pre-loop + :166 in-loop; flamecaller pre-loop-only :233) ported as
@@ -57,7 +58,7 @@
 -- 2026-10-14 retraction re-audit:
 -- stale "no-timer-bridge" claim RETRACTED (CreateLuaEvent is a real
 -- bridge); Talk(SAY_ADDS 2) rides EVENT_SUMMON_ADDS unconditionally
--- (:128-129, Talk then [[fallthrough]]) and is now PORTED on
+-- (:141, Talk then [[fallthrough]]) and is now PORTED on
 -- 15s-init / 45s-repeat CreateLuaEvent (addsTick, below — the maiden
 -- precedent). 2026-11-06: the stalker CastSpell(SPELL_SUMMON_FLAMECALLER
 -- 74398, triggered) legs are PORTED nil-guarded via
@@ -66,7 +67,7 @@
 -- (25-man only, 16s init, no Talk) is PORTED as adds2Tick on
 -- creature:Is25ManRaid(). DORMANT in-engine: no Go Ruby Sanctum
 -- instance script latches the stalker GUIDs (instance_ruby_sanctum.cpp
--- OnCreatureCreate :106-114 has no Go twin; setInstanceGuidData's only
+-- OnCreatureCreate :102-112 has no Go twin; setInstanceGuidData's only
 -- Go caller is Lua SetGuidData), so GetInstanceCreature(8/9) returns
 -- nil until a stalker latch lands — the casts then fire with no edit.
 -- DoCastSelf(SPELL_INTIMIDATING_ROAR 74384) /
@@ -100,9 +101,9 @@
 -- SetBossState(FAIL) (ScriptedCreature.cpp:617). NO ev24 handler: no
 -- reach-home state leg exists in C++ (see EnterEvadeMode note above).
 -- Bridge re-checks this run: SetBossState/GetBossState live
--- (lua_creature_events.go:5917/5936); GetInstanceCreature live (:5986)
--- with :CastSpell(target, spell, triggered) (:883); Is25ManRaid live
--- (:3651); RemoveFlag(59, ...) live (:5445); SetImmuneToPC has NO
+-- (lua_creature_events.go:7099/7118); GetInstanceCreature live (:7186)
+-- with :CastSpell(target, spell, triggered) (:954); Is25ManRaid live
+-- (:4477); RemoveFlag(59, ...) live (:6540); SetImmuneToPC has NO
 -- method — ported as RemoveFlag(59, 0x100) per Unit.cpp:8453.
 -- Stale claims retracted: '_JustDied() instance leg has no bridge',
 -- 'Reset legs ride no instance bridge', 'stalker casts have no instance
@@ -302,16 +303,16 @@ end
 
 local function zarithrianLeaveCombat(event, creature)
     cancelTimers(creature:GetGUIDLow())
-    -- C++ EnterEvadeMode (boss_general_zarithrian.cpp:120-124):
+    -- C++ EnterEvadeMode (boss_general_zarithrian.cpp:114-118):
     -- summons.DespawnAll() (no summon-registry bridge) +
     -- _DespawnAtEvade() -> instance->SetBossState(FAIL)
     -- (ScriptedCreature.cpp:596-617). Event 2 fires only from
-    -- triggerCreatureEvade (creaturemotion.go:4487), after event 23,
+    -- triggerCreatureEvade (creaturemotion.go:4699), after event 23,
     -- so the ev23 NOT_STARTED arm lands first and FAIL is final.
     creature:SetBossState(DATA_GENERAL_ZARITHRIAN, 2) -- FAIL
 end
 
--- C++ boss_general_zarithrian::Reset (:80-88): _Reset() first, then the
+-- C++ boss_general_zarithrian::Reset (:76-84): _Reset() first, then the
 -- Saviana/Baltharus-DONE gate. Go fires event 23 on evade, on the death
 -- path (before event 4) and on spawn/respawn; the death path returns
 -- early like the moroes precedent (C++ _Reset returns early when the
@@ -329,7 +330,7 @@ local function zarithrianReset(event, creature)
     if creature:GetBossState(DATA_GENERAL_ZARITHRIAN) ~= 3 then
         creature:SetBossState(DATA_GENERAL_ZARITHRIAN, 0) -- NOT_STARTED
     end
-    -- C++ Reset gate (:84-87): once Saviana Ragefire and Baltharus are
+    -- C++ Reset gate (:79-83): once Saviana Ragefire and Baltharus are
     -- both DONE, the boss becomes selectable and attackable.
     if creature:GetBossState(DATA_SAVIANA_RAGEFIRE) == 3
         and creature:GetBossState(DATA_BALTHARUS_THE_WARBORN) == 3 then
@@ -349,7 +350,7 @@ local function zarithrianKilledUnit(event, creature, victim)
     end
 end
 
--- C++ boss_general_zarithrian::JustDied (:115-118):
+-- C++ boss_general_zarithrian::JustDied (:108-112):
 -- _JustDied(); Talk(SAY_DEATH) — the sjonnir precedent. _JustDied()
 -- (ScriptedCreature.cpp:513-519) sets SetBossState(DONE) first;
 -- PORTED 2026-11-06 via creature:SetBossState (live bridge).
@@ -379,7 +380,7 @@ local function flamecallerCancel(guid)
     flamecallerState[guid] = nil
 end
 
--- C++ EVENT_BLAST_NOVA (:226-229): DoCastAOE(SPELL_BLAST_NOVA 74392)
+-- C++ EVENT_BLAST_NOVA (:242-245): DoCastAOE(SPELL_BLAST_NOVA 74392)
 -- non-triggered self-cast; Repeat(15s, 20s).
 local function flamecallerBlastNovaTick(creature, guid)
     -- C++ UpdateAI pre-loop gate :233: 500ms IsCasting defer, no re-arm
@@ -424,9 +425,9 @@ local function flamecallerLavaGoutTick(creature, guid)
     end)
 end
 
--- C++ npc_onyx_flamecaller::JustEngagedWith (:200-204):
+-- C++ npc_onyx_flamecaller::JustEngagedWith (:197-201):
 -- ScheduleEvent(EVENT_BLAST_NOVA, 17s) + ScheduleEvent(EVENT_LAVA_GOUT,
--- 3s). Reset (:195-199): _events.Reset() + _lavaGoutCount = 0 (the
+-- 3s). Reset (:189-195): _events.Reset() + _lavaGoutCount = 0 (the
 -- motion leg has no bridge; the REACT_DEFENSIVE arm is PORTED
 -- 2026-10-20 — creature:SetReactState).
 local function flamecallerEnterCombat(event, creature, target)

@@ -45,7 +45,7 @@
 -- JustEngagedWith — SetBossState(IN_PROGRESS) + Talk(SAY_START_P_ONE 1) +
 -- DoCast(SPELL_BERSERK 60670) (event 1; the setActive /
 -- CheckRequiredBosses / DoStartTimedAchievement legs have no
--- bridges (EnterEvadeMode IS bridged, lua_creature_events.go:5014,
+-- bridges (EnterEvadeMode IS bridged, lua_creature_events.go:5614,
 -- but the gate needs CheckRequiredBosses) —
 -- the tharon_ja BossAI-bookkeeping precedent; the state leg is
 -- PORTED 2026-11-05 in malygosEnterCombat, C++ order: state
@@ -118,7 +118,7 @@
 -- SetBossState NOT_STARTED leg is PORTED 2026-11-05 in
 -- malygosReset (!= DONE-gated, _Reset() position first in C++
 -- Reset :372); immunity / flight-speed / phase legs stay out
--- (SetImmuneToAll IS bridged, lua_creature_events.go:5966 — the
+-- (SetImmuneToAll IS bridged, lua_creature_events.go:6621 — the
 -- Reset apply below writes the same 0x100|0x200 flags; no speed
 -- literal, no phase bridge).
 -- DoAction (the ~60-action event/phase
@@ -126,7 +126,7 @@
 -- intro, surge-of-power legs — all gated on
 -- MotionMaster / instance GUIDs / timed events) — dispatch IS
 -- bridged (creature:DoAction fires ev38,
--- lua_creature_events.go:802); the VORTEX actions are PORTED
+-- lua_creature_events.go:845); the VORTEX actions are PORTED
 -- (ACTION_EXECUTE_VORTEX + ACTION_LIFT_IN_AIR, below) and
 -- ACTION_HANDLE_RESPAWN is PORTED 2026-11-08 (tick 432, below —
 -- dormant, FAIL-gated); ACTION_LAND_ENCOUNTER_START is PORTED
@@ -197,7 +197,7 @@
 -- EVENT_NUKE_DUMMY / EVENT_ARCANE_SHOCK / EVENT_HASTE_BUFF
 -- event machine (DoCast SPELL_ARCANE_SHOCK / haste, nuke the
 -- disk the player rides) — DoAction-gated, but dispatch IS bridged
--- (creature:DoAction fires ev38, lua_creature_events.go:802): the
+-- (creature:DoAction fires ev38, lua_creature_events.go:845): the
 -- sender is the melee hover disk's MovementInform waypoint arrival
 -- (boss_malygos.cpp:1222), an unported vehicle/motion machine, so
 -- the machine never starts (stale "no timer-event bridge" re-keyed:
