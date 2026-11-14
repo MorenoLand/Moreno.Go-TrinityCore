@@ -25,10 +25,10 @@
 -- against the CURRENT engine/world/lua_creature_events.go method
 -- list — no stale header claims used):
 --
--- - :233 (SpawnEyeTentacle target pick): BLOCKED. The arm is
+-- - :230 (SpawnEyeTentacle target pick): BLOCKED. The arm is
 --   DoSpawnCreature(NPC_EYE_TENTACLE 15726) followed by
 --   Spawned->AI()->AttackStart(random target). creature:SummonCreature
---   IS bridged (engine/world/lua_creature_events.go:940;
+--   IS bridged (engine/world/lua_creature_events.go:4161;
 --   DoSpawnCreature = SummonCreature at own pos + offsets,
 --   ScriptedCreature.cpp:288; TEMPSUMMON_CORPSE_DESPAWN = Lua type 1,
 --   500ms — noxxion precedent). A spawned tentacle self-aggros via the
@@ -40,7 +40,7 @@
 --   unported body writes — a Lua-local 45s pump would keep spawning
 --   through TRANSITION/DONE. Not ported.
 --
--- - :272 (green beam): BLOCKED. Arm: SelectTarget(Random, 0) ->
+-- - :275 (green beam): BLOCKED. Arm: SelectTarget(Random, 0) ->
 --   InterruptNonMeleeSpells(false) -> DoCast(target,
 --   SPELL_GREEN_BEAM 26134) -> SetTarget, on a 3s timer that fires
 --   ONLY while instance->GetData(DATA_CTHUN_PHASE) ==
@@ -60,15 +60,15 @@
 --   dark-glare phase, where C++ never casts it — fabricated wrong
 --   behavior. Not ported.
 --
--- - :288 (claw tentacle spawn target): BLOCKED. Arm:
+-- - :293 (claw tentacle spawn target): BLOCKED. Arm:
 --   SelectTarget(Random, 0) ->
 --   SummonCreature(NPC_CLAW_TENTACLE 15725, *target,
 --   TEMPSUMMON_CORPSE_DESPAWN) -> Spawned->AI()->AttackStart.
---   Same as :233 — summon bridge is live (lua_creature_events.go:940);
+--   Same as :230 — summon bridge is live (lua_creature_events.go:4161);
 --   blocker is the instance-phase gate (ClawTentacleTimer ticks only in
 --   the GREEN switch arm, cthun.cpp:292-301). Not ported.
 --
--- - :316 (dark-glare start target): BLOCKED. Arm:
+-- - :319 (dark-glare start target): BLOCKED. Arm:
 --   SelectTarget(Random, 0) -> DarkGlareAngle =
 --   me->GetAbsoluteAngle(target), seeding the PHASE_EYE_RED_BEAM
 --   sweep machine (:340-:361: per-tick SetOrientation(DarkGlareAngle
@@ -83,14 +83,14 @@
 -- wired): Reset (:210-:220) — its two aura clears port below on event
 -- 23; the SetVisible + FindNearestCreature(NPC_CTHUN_PORTAL) passive
 -- legs stay out — the arm rides the instance SetData leg
--- (FindNearestCreature IS bridged, lua_creature_events.go:6268, and
+-- (FindNearestCreature IS bridged, lua_creature_events.go:6756, and
 -- SetVisible IS bridged — creature:SetVisible — but neither leg can
 -- run without the instance phase write); JustEngagedWith (:224-:228): the
 -- DoZoneInCombat leg PORTS below (event 1 handler, 2026-10-23
 -- re-triage) — only the instance->SetData(DATA_CTHUN_PHASE,
 -- PHASE_EYE_GREEN_BEAM) leg stays out (no instance bridge);
 -- EyeTentacleTimer 45s 8-spot spawn block (:247-:263,
--- instance-phase-gate blocker — summon bridge live, :233 verdict
+-- instance-phase-gate blocker — summon bridge live, :230 verdict
 -- re-triaged 2026-10-23); PhaseTimer transitions (:303-:335 green->red,
 -- :363-:383 red->green — phase SetData legs, no bridge);
 -- PHASE_CTHUN_TRANSITION (:388-:393, SetTarget — bridged 2026-10-20 via

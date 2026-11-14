@@ -12,19 +12,18 @@
 -- grep for "AddSC_boss_exarch_maladaar" hits
 -- boss_exarch_maladaar.cpp (+ the loader decl/call lines) only).
 -- Entry: 18373 — DB-side (no NPC_ constant for the boss in the
--- file); verified this run against the wowhead TBC Classic NPC
--- page (/tbc/npc=18373/exarch-maladaar — page title "Exarch
--- Maladaar - NPC - TBC Classic", second and final boss of
--- Auchenai Crypts).
+-- file); verified in TDB ('Exarch Maladaar', ScriptName
+-- boss_exarch_maladaar, VerifiedBuild 12340) — the wowhead-only
+-- justification is superseded.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat,
 -- 3 OnTargetDied, 4 OnDied, 23 OnReset, 27 OnMoveInLOS.
 -- Ported arms (C++-exact for all modeled arms):
--- boss_exarch_maladaarAI::JustEngagedWith (:185-188) —
+-- boss_exarch_maladaarAI::JustEngagedWith (:218-221) —
 -- Talk(SAY_AGGRO 2) (event 1 — the auriaya precedent); the combat
 -- timers start here mirroring the C++ UpdateVictim-gated block:
 -- Fear_timer 15000+rand(5000), Ribbon_of_Souls_timer 5000,
 -- StolenSoul_Timer 25000+rand(10000).
--- Avatar latch (:230-240) — the C++ checks
+-- Avatar latch (:260-269) — the C++ checks
 -- !Avatar_summoned && HealthBelowPct(25) every UpdateAI tick:
 -- ported as a 1s repeating checker (the per-tick check has no
 -- bridge). On latch: the IsNonMeleeSpellCast gate is unmodeled
@@ -34,7 +33,7 @@
 -- spell); Avatar_summoned latches; StolenSoul_Timer re-armed
 -- 15000+rand(15000). HealthBelowPct via creature:GetHealthPct()
 -- (the sindragosa generic-fallback precedent — object.go).
--- StolenSoul_Timer (:242-262) — SelectTarget(Random, 0): UnitAI.h
+-- StolenSoul_Timer (:272-295) — SelectTarget(Random, 0): UnitAI.h
 -- :162-174 — offset 0 = random over the full threat list in
 -- MaxThreat order (no skip). playerOnly defaults false, so the
 -- C++ then gates target->GetTypeId() == TYPEID_PLAYER explicitly:
@@ -47,18 +46,18 @@
 -- interrupt legs ported (InterruptNonMeleeSpells(true), C++ :279; avatar arm :263 also ported); Talk(SAY_ROAR 3);
 -- DoCast(target, SPELL_STOLEN_SOUL 32346) 2-arg (non-triggered) —
 -- CastSpell(target, spell); re-arm 20000+rand(10000).
--- Ribbon_of_Souls (:264-270) — SelectTarget(Random, 0) with NO
+-- Ribbon_of_Souls (:295-301) — SelectTarget(Random, 0) with NO
 -- player gate in C++: random threat target, DoCast(target,
 -- SPELL_RIBBON_OF_SOULS 32422) 2-arg; re-arm
 -- 5000 + rand(0,19)*1000 (the C++ 5000 + (rand32() % 20 * 1000)).
--- Fear (:272-276) — DoCast(me, SPELL_SOUL_SCREAM 32421) 2-arg
+-- Fear (:303-307) — DoCast(me, SPELL_SOUL_SCREAM 32421) 2-arg
 -- self-cast; re-arm 15000+rand(15000).
--- boss_exarch_maladaarAI::KilledUnit (:211-217) — rand32() % 2
+-- boss_exarch_maladaarAI::KilledUnit (:240-246) — rand32() % 2
 -- gate: Talk(SAY_SLAY 4) on math.random(2) == 1 (the curator
 -- precedent) (event 3).
--- boss_exarch_maladaarAI::JustDied (:219-224) — Talk(SAY_DEATH 5)
+-- boss_exarch_maladaarAI::JustDied (:248-253) — Talk(SAY_DEATH 5)
 -- (event 4 — the sjonnir precedent).
--- boss_exarch_maladaarAI::MoveInLineOfSight (:192-202) — the
+-- boss_exarch_maladaarAI::MoveInLineOfSight (:206-216) — the
 -- HasTaunted one-shot Talk(SAY_INTRO 0) when a unit is within
 -- 150.0f: PORTED on event 27 (CREATURE_EVENT_ON_MOVE_IN_LOS) with
 -- a per-GUID never-cleared latch (HasTaunted is ctor-only in
@@ -76,7 +75,7 @@
 -- precedent); avatarLatched re-latches too. HasTaunted does NOT
 -- re-latch (ctor-only) and is never cleared.
 -- DOCUMENTED-ONLY (in this header; only entry 18373 registered):
--- boss_exarch_maladaarAI::JustSummoned (:204-209, ENTRY_STOLEN_SOUL
+-- boss_exarch_maladaarAI::JustSummoned (:223-238, ENTRY_STOLEN_SOUL
 -- 18441) — summoned:CastSpell(summoned, SPELL_STOLEN_SOUL_VISUAL
 -- 32395, false) (triggered self-cast — the visual's shapeshift is
 -- unimplemented in TC per the file comment) +
@@ -86,7 +85,7 @@
 -- returns the soul object, so SetMyClass is a soulClass table store,
 -- AttackStart is EngageWithTarget, and SetDisplayId(soulmodel) is
 -- PORTED 2026-10-24 via the player:GetDisplayId bridge (lua_player.go).
--- StolenSoul_Timer summon leg (:256) — PORTED 2026-10-24 in
+-- StolenSoul_Timer summon leg (:288) — PORTED 2026-10-24 in
 -- stolenSoulTick (SummonCreature type 3, 10s + JustSummoned arms).
 -- boss_exarch_maladaarAI::JustDied D'ore leg (:248-253) — PORTED
 -- (me->SummonCreature(19412, TEMPSUMMON_MANUAL_DESPAWN) on the live
@@ -108,7 +107,7 @@
 -- SPELL_MOONFIRE 37328 10s — all 2-arg (non-triggered)
 -- victim casts + DoMeleeAttackIfReady.
 
-local ENTRY_MALADAAR = 18373 -- DB-side; wowhead-TBC-verified this run
+local ENTRY_MALADAAR = 18373 -- TDB 'Exarch Maladaar', ScriptName boss_exarch_maladaar
 local ENTRY_DORE = 19412 -- D'ore (boss_exarch_maladaar.cpp:252)
 
 local SAY_INTRO  = 0
@@ -197,7 +196,7 @@ local function randomThreatTarget(creature)
     return pool[math.random(#pool)]
 end
 
--- C++ StolenSoul_Timer (:242-262).
+-- C++ StolenSoul_Timer (:272-295).
 local function stolenSoulTick(creature, guid)
     local target = randomThreatTarget(creature)
     if target and target:GetObjectType() == "Player" then
@@ -206,8 +205,8 @@ local function stolenSoulTick(creature, guid)
         creature:InterruptNonMeleeSpells(true)
         creature:Talk(SAY_ROAR)
         creature:CastSpell(target, SPELL_STOLEN_SOUL)
-        -- C++ StolenSoul_Timer summon leg (:256) + JustSummoned
-        -- (:204-209): SummonCreature(18441, 0,0,0,0,
+        -- C++ StolenSoul_Timer summon leg (:288) + JustSummoned
+        -- (:223-238): SummonCreature(18441, 0,0,0,0,
         -- TIMED_DESPAWN_OUT_OF_COMBAT type 3, 10s) then the
         -- JustSummoned arms — visual self-cast, faction copy,
         -- SetMyClass (stored in soulClass), AttackStart(soulholder).
@@ -233,7 +232,7 @@ local function stolenSoulTick(creature, guid)
     end
 end
 
--- C++ Ribbon_of_Souls (:264-270): no player gate on the pick.
+-- C++ Ribbon_of_Souls (:295-301): no player gate on the pick.
 local function ribbonTick(creature, guid)
     local target = randomThreatTarget(creature)
     if target then
@@ -244,7 +243,7 @@ local function ribbonTick(creature, guid)
     end)
 end
 
--- C++ Fear (:272-276).
+-- C++ Fear (:303-307).
 local function fearTick(creature, guid)
     creature:CastSpell(creature, SPELL_SOUL_SCREAM)
     schedule(guid, "fear", {15000, 29999}, function()
@@ -252,7 +251,7 @@ local function fearTick(creature, guid)
     end)
 end
 
--- C++ Avatar latch (:230-240): checked every UpdateAI tick — the
+-- C++ Avatar latch (:260-269): checked every UpdateAI tick — the
 -- 1s checker is the bridgeable approximation.
 local function avatarCheck(creature, guid)
     if not avatarLatched[guid] then
@@ -275,7 +274,7 @@ local function avatarCheck(creature, guid)
     end)
 end
 
--- C++ boss_exarch_maladaarAI::JustEngagedWith (:185-188).
+-- C++ boss_exarch_maladaarAI::JustEngagedWith (:218-221).
 local function maladaarEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     clearState(guid)
@@ -302,26 +301,26 @@ local function maladaarReset(event, creature)
     clearState(creature:GetGUIDLow())
 end
 
--- C++ boss_exarch_maladaarAI::KilledUnit (:211-217): 50% gate.
+-- C++ boss_exarch_maladaarAI::KilledUnit (:240-246): 50% gate.
 local function maladaarTargetDied(event, creature, victim)
     if math.random(2) == 1 then
         creature:Talk(SAY_SLAY)
     end
 end
 
--- C++ boss_exarch_maladaarAI::JustDied (:219-224, Talk(SAY_DEATH 5)) +
+-- C++ boss_exarch_maladaarAI::JustDied (:248-253, Talk(SAY_DEATH 5)) +
 -- the D'ore leg (:248-253): me->SummonCreature(19412, -4.40722f,
 -- -387.277f, 40.6294f, 6.26573f, TEMPSUMMON_MANUAL_DESPAWN) — the arm
 -- carries no follow-up legs (the AttackStart/SetMyClass arms are
 -- ported in the stolen-soul leg above), so it ports whole on the
--- live summon bridge (lua_creature_events.go:877).
+-- live summon bridge (lua_creature_events.go:4161).
 local function maladaarDied(event, creature, killer)
     creature:Talk(SAY_DEATH)
     creature:SummonCreature(ENTRY_DORE, -4.40722, -387.277, 40.6294, 6.26573, 7)
     clearState(creature:GetGUIDLow())
 end
 
--- C++ boss_exarch_maladaarAI::MoveInLineOfSight (:192-202).
+-- C++ boss_exarch_maladaarAI::MoveInLineOfSight (:206-216).
 -- No veto: the C++ calls the base AI, so aggro proceeds.
 local function maladaarMoveInLOS(event, creature, player)
     local guid = creature:GetGUIDLow()

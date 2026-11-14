@@ -16,7 +16,7 @@
 -- boss_black_knight.cpp only (loader carries only the AddSC decl/call
 -- lines); zero sql/ hits.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
+-- 9 OnDamageTaken, 19 OnJustSummonedCreature, 23 OnReset. Timers via CreateLuaEvent; melee is engine-driven in Go
 -- (creature combat tick), like C++ DoMeleeAttackIfReady. C++ DoCast
 -- default is triggered=false (vaelastrasz convention):
 -- creature:CastSpell(nil, spell) = DoCastVictim (moroes precedent);
@@ -73,7 +73,8 @@
 -- latch is modeled as the Lua-side resurrecting flag so repeat
 -- lethal hits in the fake-death window re-run the idempotent legs
 -- without re-arming the timer (C++ never re-arms uiResurrectTimer
--- mid-window either). summons.DespawnAll() has no summon bridge.
+-- mid-window either). summons.DespawnAll() is modeled via the tracked
+-- army list + creature:Despawn() (see Army below).
 -- Unmodeled (no bridges — documented, not wired):
 -- boss_black_knight uiDeathRespiteTimer (PHASE_UNDEAD) — PORTED below
 -- (threat-list pick, urand(15000,16000), phase + fake-death gating
@@ -84,12 +85,17 @@
 -- 2026-10-24 (SetRooted(true) + SetMeleeAttack(false) at skeleton entry,
 -- 7s one-shot clear; the STUNNED half has no bridge, so rotation casts
 -- gate on the armyWindow latch while re-arming, as in the fake-death
--- window). DoCastSelf(Army of the Dead 67761) stays out (DB-side summon
--- effect, 67761 absent from the 63-record seed Spell.dbc so the Go cast
--- is a no-op; ghoul entry 35545 verified 2026-11-13, round 60 — the
--- Army summon count/positions need full Spell.dbc effect data for
--- 67761, unverifiable in-workspace, so no direct SummonCreature leg
--- is modeled yet — open follow-up);
+-- window). DoCastSelf(Army of the Dead 67761) stays out as a cast
+-- (67761 absent from the 63-record seed Spell.dbc so the Go cast is a
+-- no-op), but the summon leg is PORTED directly (2026-11-13, browser
+-- verdict): 67761 is a 6s channeled aura triggering 67762 every
+-- 750ms; each trigger summons 1x entry 35590 Risen Champion at a
+-- random point within 15yd (wago 3.4.5.63697 SpellEffect rows;
+-- 3.3.5 corroboration: TDB 35590 'Risen Champion' VerifiedBuild
+-- 12340 + the C++ 7s uiDeathArmyCheckTimer corroborating the 6s
+-- channel) — modeled as the 8 x 750ms Army pump at skeleton entry
+-- (see armyTick); the 35545 ghoul is NOT the Army summon (see
+-- npc_risen_ghoul below);
 -- uiDesecration PORTED below (skeleton-entry + urand(15000,16000));
 -- uiGhoulExplode
 -- PORTED 2026-10-24 — DoCastSelf (67751), 8000 repeat, scheduled at
@@ -106,13 +112,13 @@
 -- ghost). uiMarkedDeathTimer — PORTED below (ghost-entry +
 -- urand(5000,7000), threat-list pick).
 -- boss_black_knight Reset — summons.DespawnAll() + SetDisplayId(native)
--- + ClearUnitState(ROOT | STUNNED) — the despawn leg stays out: the
--- summons table has no bridge (ghoul entry 35545 verified 2026-11-13,
--- round 60, but no grid twin exists without the summons bookkeeping);
--- display/root legs are bridged (see DamageTaken). JustSummoned —
+-- + ClearUnitState(ROOT | STUNNED) — the despawn leg is PORTED via the
+-- tracked army list (despawnArmy, see Army below); display/root legs
+-- are bridged (see DamageTaken). JustSummoned —
 -- summons.Summon + cross-AI AttackStart(me->GetVictim()): the
--- summons-table leg stays out (no bridge), the AttackStart leg is
--- PORTED below (ev19, 2026-11-13, round 60). Melee gated on
+-- summons-table bookkeeping is modeled as the Lua-side army list
+-- (tracked in ev19), the AttackStart leg is PORTED below (ev19,
+-- 2026-11-13, round 60). Melee gated on
 -- !HasUnitState(ROOT) && !HealthBelowPct(1): the READ has no unit-state
 -- bridge, but both legs are modeled Lua-side (health via GetHealthPct,
 -- root via the DamageTaken fake-death arm and the skeleton army-window
@@ -124,8 +130,13 @@
 -- DoCast(Leap 67749), 3500 repeat (GetAITargets bridge; 67749 absent
 -- from the 63-record seed Spell.dbc, so the cast is a no-op until
 -- spell data lands — same class as the boss's own 67718 casts).
--- Ghouls materialize via the DB-side SPELL_ARMY_DEAD 67761 summon
--- effect; the Army summon itself stays out (see above).
+-- CORRECTION (2026-11-13, browser verdict): 35545 is NOT the Army
+-- summon — it comes from Raise Dead Jaeren Sunsworn 67715 (and 35564
+-- from 67705), separate summon spells with no caster anywhere in the
+-- C++ tree (whole-tree grep zero hits) and no smart_scripts rows; the
+-- Army summons 35590 Risen Champion (see above). The 35545
+-- registration stands on its own (TDB ScriptName binding + the real
+-- C++ class), but its summon source is unmodeled in-tree.
 -- npc_black_knight_skeletal_gryphon — zero registration: entry 35491
 -- 'Black Knight's Skeletal Gryphon' verified in TDB (ScriptName
 -- npc_black_knight_skeletal_gryphon, VerifiedBuild 12340) — the old
@@ -140,13 +151,14 @@ local SPELL_ICY_TOUCH = 67718
 local SPELL_OBLITERATE = 67725
 local SPELL_KILL_CREDIT = 68663
 local SPELL_BLACK_KNIGHT_RES = 67693 -- boss_black_knight.cpp:56
-local SPELL_GHOUL_EXPLODE = 67751 -- boss_black_knight.cpp:51
-local SPELL_DEATH_BITE = 67808 -- boss_black_knight.cpp:55
+local SPELL_GHOUL_EXPLODE = 67751 -- boss_black_knight.cpp:48
+local SPELL_DEATH_BITE = 67808 -- boss_black_knight.cpp:52
 local SPELL_DEATH_RESPITE = 67745 -- boss_black_knight.cpp:37
 local SPELL_DESECRATION = 67778 -- boss_black_knight.cpp:46
 local SPELL_MARKED_DEATH = 67882 -- boss_black_knight.cpp:53
 local SPELL_LEAP = 67749 -- boss_black_knight.cpp:58
 local ENTRY_RISEN_GHOUL = 35545 -- TDB 'Risen Jaeren Sunsworn', ScriptName npc_risen_ghoul
+local ENTRY_RISEN_CHAMPION = 35590 -- TDB 'Risen Champion', subname "Black Knight's Minion", ScriptName '' (default AI); the Army summon entry (see Army below)
 
 local MODEL_SKELETON = 29846 -- boss_black_knight.cpp:66
 local MODEL_GHOST = 21300 -- boss_black_knight.cpp:67
@@ -185,10 +197,28 @@ local nativeDisplay = {}
 local function getBlackKnightState(guid)
     local st = bkState[guid]
     if not st then
-        st = { phase = PHASE_UNDEAD, resurrecting = false, armyWindow = false }
+        st = { phase = PHASE_UNDEAD, resurrecting = false, armyWindow = false, army = {} }
         bkState[guid] = st
     end
     return st
+end
+
+-- C++ summons.DespawnAll() (Reset :135, DamageTaken :275): the
+-- summons table has no bridge, but the observable leg is modeled —
+-- every summon the boss makes is tracked in st.army via ev19 (the
+-- boss summons nothing else in Lua) and despawned here with
+-- creature:Despawn() (moroes precedent; the bridge no-ops on an
+-- already-gone motion).
+local function despawnArmy(guid)
+    local st = bkState[guid]
+    if st and st.army then
+        for _, champion in ipairs(st.army) do
+            if champion ~= nil then
+                champion:Despawn()
+            end
+        end
+        st.army = {}
+    end
 end
 
 -- C++ uiIcyTouchTimer: DoCastVictim(Icy Touch), urand(5000,9000) init,
@@ -360,6 +390,38 @@ local function markedDeathTick(creature, guid)
     end)
 end
 
+-- C++ bSummonArmy one-shot (boss_black_knight.cpp:209-214): DoCastSelf
+-- (Army of the Dead 67761) — a 6s channeled aura triggering 67762
+-- every 750ms; each trigger summons 1x entry 35590 Risen Champion at
+-- a random destination within 15yd of the caster (wago 3.4.5.63697
+-- SpellEffect rows for 67761/67762; 3.3.5 corroboration: TDB 35590
+-- 'Risen Champion' VerifiedBuild 12340 + the C++ 7s
+-- uiDeathArmyCheckTimer corroborating the 6s channel). 6s / 750ms =
+-- 8 summons; the cast itself stays out (67761 absent from the
+-- 63-record seed Spell.dbc, so a Go cast is a no-op) and the summon
+-- leg is modeled directly. TARGET_DEST_CASTER_RANDOM is a uniform
+-- point in the 15yd disc (angle uniform, radius 15*sqrt(rand));
+-- the boss's z is used (ToC arena floor). The pump stops without
+-- re-arm if the phase leaves SKELETON (fake-death mid-Army ends the
+-- channel in C++); ev19 engages each champion on the victim.
+local function armyTick(creature, guid, remaining)
+    local st = getBlackKnightState(guid)
+    if st.phase ~= PHASE_SKELETON then
+        return
+    end
+    local a = math.random() * 2 * math.pi
+    local r = 15 * math.sqrt(math.random())
+    creature:SummonCreature(ENTRY_RISEN_CHAMPION,
+        creature:GetX() + r * math.cos(a),
+        creature:GetY() + r * math.sin(a),
+        creature:GetZ(), 0, 7)
+    if remaining > 1 then
+        schedule(guid, "army", 750, function()
+            armyTick(creature, guid, remaining - 1)
+        end)
+    end
+end
+
 local function blackKnightEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -380,7 +442,7 @@ local function blackKnightEnterCombat(event, creature, target)
     end)
 end
 
--- C++ boss_black_knight::DamageTaken (boss_black_knight.cpp:268-290)
+-- C++ boss_black_knight::DamageTaken (boss_black_knight.cpp:268-287)
 -- + the UpdateAI resurrect machine (:159-170): while the phase is
 -- UNDEAD or SKELETON a killing blow is absorbed (damage = 0), the
 -- knight plays dead at 0 health rooted in the next form's display,
@@ -394,6 +456,7 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
         creature:SetHealth(0)
         creature:SetRooted(true)
         creature:SetMeleeAttack(false)
+        despawnArmy(guid)
         if st.phase == PHASE_UNDEAD then
             creature:SetDisplayId(MODEL_SKELETON)
         else
@@ -408,13 +471,18 @@ local function blackKnightDamageTaken(event, creature, attacker, damage)
                 st.resurrecting = false
                 creature:SetRooted(false)
                 creature:SetMeleeAttack(true)
-                -- C++ bSummonArmy one-shot also DoCasts Army of the Dead
-                -- 67761 here; the cast stays out (see header) — only the
-                -- ROOT/melee legs port at this site.
+                -- C++ bSummonArmy one-shot DoCasts Army of the Dead 67761
+                -- here; the cast itself stays out (see header) but the
+                -- summon leg is modeled directly by the Army pump below
+                -- (8 x 750ms, entry 35590) — only the ROOT/melee legs
+                -- ported at this site before the pump was modeled.
                 if st.phase == PHASE_SKELETON and not st.armyWindow then
                     st.armyWindow = true
                     creature:SetRooted(true)
                     creature:SetMeleeAttack(false)
+                    schedule(guid, "army", 750, function()
+                        armyTick(creature, guid, 8)
+                    end)
                     schedule(guid, "army_window", 7000, function()
                         creature:SetRooted(false)
                         creature:SetMeleeAttack(true)
@@ -469,6 +537,7 @@ end
 local function blackKnightReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
+    despawnArmy(guid)
     bkState[guid] = nil
     creature:SetMeleeAttack(true)
     creature:SetRooted(false)
@@ -482,13 +551,19 @@ local function blackKnightReset(event, creature)
     end
 end
 
--- C++ JustSummoned (boss_black_knight.cpp:150-153): summons.Summon
+-- C++ JustSummoned (boss_black_knight.cpp:142-146): summons.Summon
 -- + summon->AI()->AttackStart(me->GetVictim()). The summons-table
--- leg has no bridge (no summons table in Lua; DespawnAll likewise
--- unbridged per header); the AttackStart leg is PORTED (2026-11-13,
--- round 60) — halazzi precedent (halazziJustSummoned), AttackStart
+-- leg is modeled as the Lua-side army list (tracked here, consumed
+-- by the Reset/DamageTaken despawn legs); the AttackStart leg is
+-- PORTED (2026-11-13, round 60) — halazzi precedent (halazziJustSummoned), AttackStart
 -- alias of EngageWithTarget (lua_creature_events.go:7325).
 local function blackKnightJustSummoned(event, creature, summon)
+    local guid = creature:GetGUIDLow()
+    local st = getBlackKnightState(guid)
+    if not st.army then
+        st.army = {}
+    end
+    st.army[#st.army + 1] = summon
     local victim = creature:GetVictim()
     if victim ~= nil then
         summon:AttackStart(victim)

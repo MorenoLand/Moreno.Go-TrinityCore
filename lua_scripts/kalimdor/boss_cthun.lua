@@ -4,8 +4,8 @@
 -- registered in AddSC_boss_cthun()).
 -- Entry: 15727 — NOT a C++ constant (temple_of_ahnqiraj.h names only
 -- the eye 15589, portal 15896, tentacles and body-of-cthun 15809);
--- verified from the wowhead classic npc=15727/cthun link (telestra
--- precedent: wowhead-only entry accepted, never guessed).
+-- verified in TDB ('C'Thun', ScriptName boss_cthun, VerifiedBuild
+-- 12340) — the wowhead-only justification is superseded.
 -- Ported: the out-of-combat whisper arm (boss_cthun.cpp:585-596).
 -- C++ UpdateAI runs it only on the no-victim branch: while the body
 -- has no victim (before pull, and throughout the eye phase, when
@@ -16,12 +16,12 @@
 -- Lua shape: spawn/reset-started pump (event 5 spawn fires after
 -- event 23 reset, so the start cancels first and is idempotent;
 -- felmyst/muru spawn-pump precedent). Each tick checks
--- IsInCombat (lua_creature_events.go:203): while the body has a
+-- IsInCombat (lua_creature_events.go:652): while the body has a
 -- victim the C++ timer freezes, so Lua polls every 5s without
 -- playing and resumes the long re-arm once combat drops — the
 -- only deviation, documented here, since a Lua timer cannot freeze
 -- mid-flight. PlayDirectSound broadcasts with a nil source
--- (lua_creature_events.go:636); C++ plays per-player to the map,
+-- (lua_objects.go:168, generic object method); C++ plays per-player to the map,
 -- so the audible set is broadcast-nearby rather than map-wide.
 -- Cancelled on death (event 4); restarted on reset/evade (event
 -- 23, matching C++ Reset re-initialising the 90s timer).
@@ -32,19 +32,21 @@
 -- (:622-665), stomach acid/enter/knockback/teleport legs, giant
 -- tentacle spawn timers, weaken Talk + purple coloration + kick-out
 -- (:675-720), DamageTaken 99% reduction / death prevention
--- (:843-876, re-triaged round 14: STAY OUT — both DamageTaken arms
+-- (:843-867, re-triaged round 14: STAY OUT — both DamageTaken arms
 -- read instance->GetData(DATA_CTHUN_PHASE); the bridged
 -- creature:GetData is the per-AI ScriptData store
 -- (lua_creature_events.go:800-835), NOT the instance store, and no
--- instance GetData/SetData bridge exists; re-checked round 23:
+-- instance GetData read bridge exists (a Lua-side InstanceData:SetData
+-- write bridge exists at instance_hooks.go:51, but there is no AQ40
+-- Lua instance script to consume it); re-checked round 23:
 -- the global GetInstanceData (scripting/globals.go:1442) returns a
 -- Lua-side per-(map,instance) table populated only by Lua instance
 -- scripts — the C++ InstanceScript store is not mirrored into it,
--- and the AQ40 instance script is unported (boss_ai.go:18280 audit,
+-- and the AQ40 instance script is unported (boss_ai.go:18360-18411 audit,
 -- no-instance-script-bridge queue), so the C++ phase writes at
 -- boss_cthun.cpp:216/227/307/367/429/529/627/671/815/840 never reach
--- Lua; the phase writers are all in the unported phase machine), JustDied PHASE_DONE SetData (:849-851), DoAction
--- FLESH_TENTACLE_KILLED counter (:878-886, consumer of the flesh
+-- Lua; the phase writers are all in the unported phase machine), JustDied PHASE_DONE SetData (:838-842), DoAction
+-- FLESH_TENTACLE_KILLED counter (:869-877, consumer of the flesh
 -- tentacle JustDied relay — DoAction IS bridged, but the counter
 -- lives in the unported phase machine, so the relay stays out).
 -- SetBossState legs (tick 278): ev1 IN_PROGRESS + ev23 NOT_STARTED
@@ -116,7 +118,7 @@ local function onEnterCombat(event, creature, target)
     -- C++ cthunAI has no JustEngagedWith override (boss_cthun.cpp:462-890) —
     -- base BossAI::JustEngagedWith writes SetBossState(DATA_CTHUN,
     -- IN_PROGRESS) (ScriptedCreature.cpp:499-542; creature:SetBossState,
-    -- lua_creature_events.go:5917).
+    -- lua_creature_events.go:7099).
     creature:SetBossState(DATA_CTHUN, BOSS_STATE_IN_PROGRESS)
     creature:SetCombatPulseDelay(5) -- BossAI::_JustEngagedWith arm 1 (ScriptedCreature.cpp:540)
     creature:DoZoneInCombat() -- BossAI::_JustEngagedWith me-form arm (ScriptedCreature.cpp:542)
