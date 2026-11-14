@@ -887,6 +887,56 @@ var spells = []spell{
 	// (25 yd), school 0x8; eff0 68 Die 1 Base -1; eff1 63 THREAT
 	// Die 1 Base -1.
 	{id: 57994, durIdx: 39, rangeIdx: 34, school: schoolNature, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effThreat, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
+
+	// Shade of Aran normal-cast bolts (boss_shade_of_aran.lua:96-99
+	// SPELL_FROSTBOLT/FIREBALL/ARCMISSLE/CHAINSOFICE; the 1s pump
+	// draws from these schools) — wago.tools 3.4.0.43659
+	// Spell/SpellMisc/SpellEffect/SpellPower/SpellLevels rows,
+	// browser task c0a20af1 PARTIAL verdict 2026-11-14 (4 of 16
+	// spells read; the site blocked the other 12 — follow-up read
+	// still needed for 30035/29946/29961/32265/29973/29967/29951/
+	// 29963/29975/30024/32453/29978 + cannon 42442). All four below
+	// are DifficultyID 0; TargetB 0, RadiusIndex 0, Misc 0/0 unless
+	// stated. No SpellClassOptions row was read for any of the four
+	// (family stays 0); SpellLevel (70, 30 on 29991) is not encoded
+	// — the seed has no SpellLevel field. ManaCost now real, so the
+	// pump's non-triggered casts drain Aran's mana toward the <20%
+	// drink trigger (boss_ai.go:608-622; triggered casts skip
+	// TakePower :509).
+	// 29954 Frostbolt: castTimeIdx 5 (2000), durIdx 35 (4000),
+	// rangeIdx 6 (Vision Range 0-100, seeded real row below),
+	// school 0x10; ManaCost 2500, PowerCostPct 0; eff0 2
+	// SCHOOL_DAMAGE Die 1001 Base 3499 TargetA 6; eff1 6 APPLY_AURA
+	// aura 33 MOD_DECREASE_SPEED Die 1 Base -66 TargetA 6,
+	// Mechanic 11.
+	{id: 29954, castTimeIdx: 5, durIdx: 35, rangeIdx: 6, school: schoolFrost, manaCost: 2500, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1001, basePoints: 3499, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -66, mechanic: 11, targetA: targetEnemy},
+	}},
+	// 29953 Fireball: castTimeIdx 5 (2000), durIdx 0, rangeIdx 6,
+	// school 0x4; ManaCost 2500; single effect 2 SCHOOL_DAMAGE
+	// Die 1381 Base 3909 TargetA 6.
+	{id: 29953, castTimeIdx: 5, rangeIdx: 6, school: schoolFire, manaCost: 2500, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1381, basePoints: 3909, targetA: targetEnemy}}},
+	// 29955 Arcane Missiles: castTimeIdx 4 (1000), durIdx 28 (5000),
+	// rangeIdx 6, school 0x40; ManaCost 2850; eff0 6 APPLY_AURA
+	// aura 23 PERIODIC_TRIGGER_SPELL AuraPeriod 1000 Trigger 29956
+	// TargetA 6; eff1 77 SCRIPT_EFFECT TargetA 6; eff2 6 APPLY_AURA
+	// aura 4 DUMMY TargetA 1. The DifficultyID 175 SpellMisc row
+	// (castTimeIdx 10, otherwise identical) is not seeded — the
+	// seed is difficulty-0 only. Trigger 29956 is unseeded (not in
+	// the verdict) — the periodic-trigger leg no-ops on the
+	// spellKnown gate until a follow-up read fills it.
+	{id: 29955, castTimeIdx: 4, durIdx: 28, rangeIdx: 6, school: schoolArcane, manaCost: 2850, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, trigger: 29956, targetA: targetEnemy},
+		{effect: effScriptEffect, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
+	// 29991 Chains of Ice: castTimeIdx 1 (instant, rides the seed
+	// default 0 — 38576 precedent), durIdx 1 (10000), rangeIdx 4
+	// (30 yd), school 0x10; ManaCost 350; single effect 6 APPLY_AURA
+	// aura 26 MOD_ROOT Die 1 Base -1 TargetA 6, Mechanic 0 as
+	// stored. SpellLevel is 30, not 70.
+	{id: 29991, durIdx: 1, rangeIdx: 4, school: schoolFrost, manaCost: 350, effects: [3]effect{{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
 }
 
 func main() {
@@ -978,6 +1028,7 @@ func main() {
 		{4, f32(0), f32(0), f32(30), f32(30), 0},     // real SpellRange 4 "Medium Range" for 54690 (wago.tools 3.4.0.43659)
 		{74, f32(0), f32(0), f32(30), f32(30), 2},    // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
 		{5, f32(0), f32(0), f32(40), f32(40), 0},     // real SpellRange 5 "Long Range" for 31263 (wago.tools 3.4.0.43659)
+		{6, f32(0), f32(0), f32(100), f32(100), 0},   // real SpellRange 6 "Vision Range" for Aran bolts 29954/29953/29955 (wago.tools 3.4.0.43659)
 		{1, f32(0), f32(0), f32(0), f32(0), 0},       // real SpellRange 1 "Self Only" for 31308 (wago.tools 3.4.0.43659)
 		{2, f32(0), f32(0), f32(5), f32(5), 1},       // real SpellRange 2 "Combat Range" for interrupt spells (wago.tools 3.4.0.43659, Flags 0x1)
 		{34, f32(0), f32(0), f32(25), f32(25), 0},    // real SpellRange 34 "Twenty-Five yards" for 57994 (wago.tools 3.4.0.43659)
