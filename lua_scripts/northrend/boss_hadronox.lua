@@ -58,11 +58,17 @@
 -- lua_creature_events.go:845) rides the crusherDied relay below.
 -- SummonCrusherPack(SUMMON_GROUP_CRUSHER_1/2/3): SummonCreatureGroup +
 -- per-summon SetData(DATA_CRUSHER_PACK_ID) + DoAction(ACTION_PACK_WALK)
--- (JustAppeared leg; DoAction(ACTION_CRUSHER_ENGAGED) re-summon legs) —
--- summon STRAND bridges are LIVE now (SummonCreatureGroup :4223,
--- cross-AI SetData ev41 :800, DoAction ev38 :845); the senders
--- (SummonCrusherPack, boss_hadronox.cpp:192, and the crusher
--- JustEngagedWith, :527) ride the unported summon machine.
+-- — PORTED 2026-11-14 in summonCrusherPack below (JustAppeared group 1
+-- in hadronoxSpawn; groups 2/3 from the ev38 ACTION_CRUSHER_ENGAGED
+-- handler). The 9 TDB creature_summon_groups rows (summoner 28921,
+-- groups 1-3, TDB 26091; hidden_files/hadronox_summon_groups_tdb.txt)
+-- drive the bridge query; the table is auto-created at server start by
+-- EnsureSchemas (bootstrap.go) from sql/sqlite/world.sql:296, and the
+-- rows arrive with the TDB world import (dbtool import-sql) — the
+-- producer returns an empty table until then (C++ `if (!data) return;`
+-- twin). Go fix this tick: SummonCreatureGroup translated the DB's C++
+-- 1-based summonType raw into the 0-based funnel (TDB 6 CORPSE_TIMED
+-- became DEAD); it now subtracts one (lua_creature_events.go:4223).
 -- MovementInform: SetReactState(REACT_AGGRESSIVE) on EVERY step
 -- arrival, but DoCastAOE(WEB_FRONT_DOORS 53177) +
 -- DoCastAOE(WEB_SIDE_DOORS 53185) + _doorsWebbed latch + DoZoneInCombat
@@ -70,8 +76,13 @@
 -- hadronoxMovementInform below (ev28 is bridged). Both spells' aura-
 -- removal effects are PORTED below (RegisterSpellEvent ev5) — the
 -- casts are the ported arm.
--- GetData(DATA_HADRONOX_ENTERED_COMBAT) + SetGUID(_anubar GUID list) +
--- ObjectAccessor cross-AI — cross-AI GetData/SetGUID bridges absent.
+-- GetData(DATA_HADRONOX_ENTERED_COMBAT) — PORTED 2026-11-14: GetData
+-- IS bridged (lua_creature_events.go:827, ScriptData store) and the
+-- ev38 handler mirrors the _enteredCombat latch into it via
+-- SetData(2, 1), so the crusher's cross-AI read (:521-525) is live.
+-- SetGUID(_anubar GUID list) + ObjectAccessor cross-AI — the foe
+-- InitializeAI SetGUID leg stays out: its only consumer is the
+-- unported EnterEvadeMode _anubar despawn sweep.
 -- GetData(DATA_HADRONOX_WEBBED_DOORS) — PORTED 2026-11-08 (tick 416):
 -- the latch rides hadronoxMovementInform; Go case in
 -- engine/world/achievement_criteria_scripts.go.
@@ -82,14 +93,14 @@
 -- Point-motion cancel + AttackStart(victim), else EnterEvadeMode(
 -- NO_HOSTILES) — instance-script model absent (standing), motion-master
 -- bridge absent.
--- The DoAction machine (ev38 dispatch IS bridged,
--- creature:DoAction, lua_creature_events.go:845): the sender of
+-- The DoAction machine — PORTED 2026-11-14 in hadronoxDoAction
+-- (ev38, lua_creature_events.go:845): the sender of
 -- ACTION_CRUSHER_ENGAGED is the crusher pack-1 JustEngagedWith
 -- (boss_hadronox.cpp:527) — pack-1 membership is stamped by the
--- unported SummonCrusherPack, so no Lua crusher can know it is
--- pack 1 — and the payload (instance SetBossState(DATA_HADRONOX,
--- IN_PROGRESS) + _enteredCombat latch + SummonCrusherPack(2/3))
--- needs the absent instance model.
+-- ported SummonCrusherPack via ev41 — and the payload (instance
+-- SetBossState(DATA_HADRONOX, IN_PROGRESS) + _enteredCombat latch +
+-- SummonCrusherPack(2/3)) rides the ev38 handler with the latch in a
+-- Lua table mirrored into ScriptData.
 -- EnterEvadeMode: GetCreatureListWithEntryInGrid(NPC_WORLDTRIGGER_LARGE
 -- 23472) aura-scan (periodic-summon/web-door auras) + _DespawnAtEvade(25s)
 -- legs, summons.DespawnAll (terestian precedent), _anubar ObjectAccessor::
@@ -106,55 +117,54 @@
 -- HealthBelowPctDamaged(5) -> damage=0 else damage *= (GetHealthPct()-5)/
 -- 65) — Eluna event 9 (DamageTaken) IS bridged and GetHealth/
 -- GetMaxHealth exist, so HealthBelowPct(70)/HealthBelowPctDamaged(5)
--- are now computable; the unit stays blocked on its unregistered
--- owner + unported DoAction-sender/MovePoint engage model, not on the
--- health/DamageTaken surface.
+-- are now computable; the owner (28921) is registered and the
+-- DoAction-sender/MovePoint engage model is ported — the unit stays
+-- blocked ONLY on the missing attacker-classification bridge (the
+-- next paragraph), not on the health/DamageTaken surface.
 -- JustSummoned (boss_hadronox.cpp:372-376) summons.Summon leg — STAY OUT
 -- (row 5): ev19 IS bridged and forwards (event, creature, summon)
 -- (fireCreatureSummoned, lua_creature_events.go:8002; summonTempCreature
--- :190 fires it for group summons too), but no producer exists in Lua —
--- SummonCrusherPack (SummonCreatureGroup 1/2/3, :186-195) is unported and
--- Hadronox casts no summon spells (the 53064-53092 periodic summons are
--- cast by world trigger 23472, so their ev19 fires on the trigger, not
--- Hadronox). No live consumer either: the C++ consumers are BossAI
--- _Reset/_JustDied + EnterEvadeMode summons.DespawnAll
--- (ScriptedCreature.cpp:507/516; boss_hadronox.cpp:266), whose Lua twins
+-- :190 fires it for group summons too), and the producer IS ported now
+-- (summonCrusherPack, 2026-11-14) — but SummonCreatureGroup returns
+-- the summoned array directly, so it populates the tracking table
+-- itself; ev19 adds no coverage. Hadronox casts no summon spells (the
+-- 53064-53092 periodic summons are cast by world trigger 23472, so
+-- their ev19 fires on the trigger, not Hadronox). No live consumer
+-- either: the C++ consumers are BossAI _Reset/_JustDied + EnterEvadeMode
+-- summons.DespawnAll (ScriptedCreature.cpp:507/516;
+-- boss_hadronox.cpp:266), whose Lua twins
 -- (hadronoxReset/hadronoxDied/hadronoxLeaveCombat) have nothing to
--- despawn. When the producer lands, SummonCreatureGroup returns the
--- summoned array, so it can populate the tracking table directly — ev19
--- adds no coverage; revisit only if a summon source outside the producer
+-- despawn; revisit only if a summon source outside the producer
 -- appears.
--- npc_anub_ar_crusher — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED (28922 from
--- the file's Creatures enum — NPC_CRUSHER — kalecgos pass): registered
--- below (ev 1/2/4/9/23, :648-652). The whole npc_hadronox_crusherPackAI engagement model is
--- unbridged: SetData(DATA_CRUSHER_PACK_ID) -> SetReactState(REACT_PASSIVE)
--- (cross-AI SetData ev41 is live now — SetReactState itself is
--- bridged, lua_creature_events.go:4715), DoAction(
--- ACTION_PACK_WALK) -> MotionMaster MovePoint(_positions[pack]) + the
--- _doFacing SetFacingTo choreography (MoveTo is bridged per the
--- tick-416 note; sender is SummonCrusherPack, boss_hadronox.cpp:192; ev38 dispatch
--- IS bridged, lua_creature_events.go:845), MovementInform,
--- MoveInLineOfSight passive-engage leg
--- (CanStartAttack + IsWithinDistInMap(attackDistance + m_CombatDistance)
--- -> JustEngagedWith — pack-ID bridge absent; the distance leg is
--- Go's aggro-scan guard), group
--- pack-aggro JustEngagedWith (GetCreatureListWithEntryInGrid 40.0f,
--- same-pack SetReactState(AGGRESSIVE) + AttackStart — pack-ID bridge
--- absent; grid + EngageWithTarget are bridged), EnterEvadeMode ->
--- hadronox AI EnterEvadeMode
--- (cross-AI absent). EVENT_SMASH — PORTED (2026-11-03):
+-- npc_anub_ar_crusher (28922, TDB creature_template ScriptName
+-- npc_anub_ar_crusher, VerifiedBuild 12340) — the
+-- npc_hadronox_crusherPackAI engagement model is PORTED 2026-11-14
+-- (ev 1/2/4/9/23/28/38/41): SetData(DATA_CRUSHER_PACK_ID) ->
+-- SetReactState(REACT_PASSIVE) (ev41, lua_creature_events.go:800),
+-- DoAction(ACTION_PACK_WALK) -> MoveTo(_positions[pack]) + the
+-- _doFacing SetFacingTo choreography (ev38 :845, ev28 arrival), the
+-- group pack-aggro JustEngagedWith (40.0f sweep over the four pack
+-- entries, same-pack SetReactState(AGGRESSIVE) + AttackStart — C++
+-- sweeps entry 0, the pack-id table filters identically). STAY OUT:
+-- MoveInLineOfSight passive-engage leg (CanStartAttack +
+-- IsWithinDistInMap(attackDistance + m_CombatDistance) ->
+-- JustEngagedWith — ev27 is engage-only, 2026-10-24 note; the
+-- distance leg is Go's aggro-scan guard) and EnterEvadeMode ->
+-- hadronox AI EnterEvadeMode (the cross-AI evade machine is
+-- unported; the hadronox-side evade legs are the leave-combat
+-- Despawn above). EVENT_SMASH — PORTED (2026-11-03):
 -- _JustEngagedWith schedules it unconditionally (all packs);
 -- DoCastVictim(SMASH 53318) 8-12s init, 13-21s repeat. Timers do not
 -- drive engagement (the engine does), so the port cannot make the
 -- crusher engage where C++ holds it passive; it only gives an
 -- already-in-combat crusher its C++ rotation — the same standing as
--- the DamageTaken port on this entry. The pack-1-only legs stay out:
--- Talk(CRUSHER_SAY_AGGRO 1) + instance DoAction(ACTION_CRUSHER_ENGAGED)
--- need the absent instance GetData(DATA_HADRONOX_ENTERED_COMBAT) model
--- + the unported sender (crusher JustEngagedWith,
--- boss_hadronox.cpp:527 — pack-1 membership is stamped by the
--- unported SummonCrusherPack); ev38 dispatch IS bridged
--- (lua_creature_events.go:845).
+-- the DamageTaken port on this entry. The pack-1-only legs — PORTED
+-- 2026-11-14 in crusherEnterCombat: Talk(CRUSHER_SAY_AGGRO 1) +
+-- Hadronox DoAction(ACTION_CRUSHER_ENGAGED), gated on the cross-AI
+-- GetData(DATA_HADRONOX_ENTERED_COMBAT) read (ScriptData mirror,
+-- lua_creature_events.go:827); the sender is the crusher
+-- JustEngagedWith (boss_hadronox.cpp:527) with pack-1 membership
+-- stamped by the ported SummonCrusherPack.
 -- DamageTaken frenzy (HealthBelowPctDamaged(25) -> _hadFrenzy latch +
 -- Talk(CRUSHER_EMOTE_FRENZY 2) + DoCastSelf(FRENZY 53801)) — the old
 -- "no DamageTaken hook + no health-pct bridge" claim was stale
@@ -171,11 +181,18 @@
 -- DoAction(ACTION_HADRONOX_MOVE) — the Talk leg ports in crusherDied
 -- below (step-gated sweep); the SetStep movement machine stays out.
 -- npc_anub_ar_crusher_champion / npc_anub_ar_crusher_crypt_fiend /
--- npc_anub_ar_crusher_necromancer + npc_anub_ar_champion /
--- npc_anub_ar_crypt_fiend / npc_anub_ar_necromancer — ENTRY UNVERIFIABLE
--- (no NPC constants in azjol_nerub.h or anywhere in the C++ sources; the
--- adds spawn from DB-side periodic-summon spell/summon-group data, not
--- C++ evidence — belnistrasz/willix precedent, no invented identifiers):
+-- npc_anub_ar_crusher_necromancer — ENTRY-VERIFIED 2026-11-14 (TDB
+-- creature_template: 29117 'Anub'ar Champion' /
+-- npc_anub_ar_crusher_champion, 29118 'Anub'ar Crypt Fiend' /
+-- npc_anub_ar_crusher_crypt_fiend, 29119 'Anub'ar Necromancer' /
+-- npc_anub_ar_crusher_necromancer, all VerifiedBuild 12340; the
+-- summon-group rows place them in packs 1-3): REGISTERED below
+-- (ev 1/2/4/23/28/38/41) with the shared pack model + their
+-- _JustEngagedWith rotations. npc_anub_ar_champion /
+-- npc_anub_ar_crypt_fiend / npc_anub_ar_necromancer (the foe adds) —
+-- ENTRY STILL UNVERIFIABLE (no NPC constants in azjol_nerub.h or
+-- anywhere in the C++ sources; they spawn from the periodic-summon
+-- spells 53064-53092, whose DBC summon entries are unseeded):
 -- zero registration; they join the bridgeable-but-entry-blocked queue.
 -- Port-pattern-ready rotation arms: crusher_champion/champion EVENT_REND
 -- DoCastVictim(59343) 4-8s init, 12-16s repeat + EVENT_PUMMEL DoCastVictim
@@ -270,6 +287,170 @@ local SPELL_CRUSHER_FRENZY = 53801
 local SPELL_CRUSHER_SMASH = 53318
 local CRUSHER_EMOTE_FRENZY = 2
 local HADRONOX_EMOTE_MOVE = 1 -- boss_hadronox.cpp:132
+local SUMMON_GROUP_CRUSHER_1 = 1 -- boss_hadronox.cpp:102
+local SUMMON_GROUP_CRUSHER_2 = 2
+local SUMMON_GROUP_CRUSHER_3 = 3
+local ACTION_HADRONOX_MOVE = 1 -- boss_hadronox.cpp:110
+local ACTION_CRUSHER_ENGAGED = 2
+local ACTION_PACK_WALK = 3
+local DATA_CRUSHER_PACK_ID = 1 -- boss_hadronox.cpp:117
+local DATA_HADRONOX_ENTERED_COMBAT = 2
+local BOSS_STATE_IN_PROGRESS = 1 -- EncounterState IN_PROGRESS (InstanceScript.h:68-76)
+local ENTRY_CHAMPION = 29117
+local ENTRY_CRYPT_FIEND = 29118
+local ENTRY_NECROMANCER = 29119
+local CRUSHER_SAY_AGGRO = 1 -- boss_hadronox.cpp:127
+local SPELL_REND = 59343
+local SPELL_PUMMEL = 59344
+local SPELL_CRUSHING_WEBS = 59347
+local SPELL_INFECTED_WOUND = 59348
+local SPELL_SHADOW_BOLT = 53333
+local SPELL_ANIMATE_BONES_1 = 53334
+local SPELL_ANIMATE_BONES_2 = 53336
+local SPELL_TAUNT = 53798
+
+-- C++ crusherWaypoints / championWaypoints / cryptFiendWaypoints /
+-- necromancerWaypoints (boss_hadronox.cpp:492-497, 570-575, 616-621,
+-- 662-667): {x, y, z, orientation}, indexed by pack (1-based Lua).
+-- The zero slots are the C++ `{ }` default Position (0,0,0,0) —
+-- unreachable by group composition (group 3 has no champion, group 2
+-- no crypt fiend, group 1 no necromancer; the 9 TDB rows), encoded
+-- verbatim rather than omitted.
+local CRUSHER_WAYPOINTS = {
+    { 529.6913, 547.1257, 731.9155, 4.79965 },
+    { 517.51, 561.439, 734.0306, 4.520403 },
+    { 543.414, 551.728, 732.0522, 3.996804 },
+}
+local CHAMPION_WAYPOINTS = {
+    { 539.2076, 549.7539, 732.8668, 4.55531 },
+    { 527.3098, 559.5197, 732.9407, 4.742493 },
+    { 0, 0, 0, 0 },
+}
+local CRYPT_FIEND_WAYPOINTS = {
+    { 520.3911, 548.7895, 732.0118, 5.0091 },
+    { 0, 0, 0, 0 },
+    { 550.9611, 545.1674, 731.9031, 3.996804 },
+}
+local NECROMANCER_WAYPOINTS = {
+    { 0, 0, 0, 0 },
+    { 507.6937, 563.3471, 734.8986, 4.520403 },
+    { 535.1049, 552.8961, 732.8441, 3.996804 },
+}
+local PACK_ENTRIES = { ENTRY_CRUSHER, ENTRY_CHAMPION, ENTRY_CRYPT_FIEND, ENTRY_NECROMANCER }
+
+-- Pack membership stamped by SummonCrusherPack via ev41 SetData
+-- (boss_hadronox.cpp:427-435), keyed by GUID; cleared on ev4 (the
+-- C++ _myPack lives on the AI instance, so it dies with it).
+local crusherPack = {}
+-- Hadronox _enteredCombat latch (boss_hadronox.cpp:240-246), keyed by
+-- GUID; cleared on ev5 (ctor/InitializeAI twin). Mirrored into
+-- ScriptData via SetData(2, 1) so the crusher's cross-AI GetData read
+-- (boss_hadronox.cpp:521-525) sees it (GetData bridge,
+-- lua_creature_events.go:827).
+local hadronoxEnteredCombat = {}
+
+-- C++ boss_hadronoxAI::SummonCrusherPack (boss_hadronox.cpp:185-195):
+-- SummonCreatureGroup(group) then per summon SetData(DATA_CRUSHER_PACK_ID,
+-- group) + DoAction(ACTION_PACK_WALK). SetData fires ev41 (pack stamp +
+-- REACT_PASSIVE); DoAction fires ev38 (PACK_WALK MoveTo). The bridge
+-- returns the summoned array directly (Lua twin of the &list out-param);
+-- an empty table when the DB rows are absent (dormant until the TDB
+-- world import lands the 9 creature_summon_groups rows).
+local function summonCrusherPack(creature, group)
+    local summoned = creature:SummonCreatureGroup(group)
+    for _, summon in ipairs(summoned) do
+        summon:SetData(DATA_CRUSHER_PACK_ID, group)
+        summon:DoAction(ACTION_PACK_WALK)
+    end
+end
+
+-- C++ npc_hadronox_crusherPackAI::SetData (boss_hadronox.cpp:427-435):
+-- _myPack = value; SetReactState(value and REACT_PASSIVE or
+-- REACT_AGGRESSIVE). ev41 carries (event, creature, type, value).
+local function packSetData(event, creature, dataType, value)
+    if dataType ~= DATA_CRUSHER_PACK_ID then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if value ~= 0 then
+        crusherPack[guid] = value
+        creature:SetReactState(REACT_PASSIVE)
+    else
+        crusherPack[guid] = nil
+        creature:SetReactState(REACT_AGGRESSIVE)
+    end
+end
+
+-- C++ npc_hadronox_crusherPackAI::DoAction (boss_hadronox.cpp:398-411):
+-- ACTION_PACK_WALK -> MovePoint(ACTION_PACK_WALK,
+-- _positions[_myPack - SUMMON_GROUP_CRUSHER_1]). The factory closes
+-- over the entry's waypoint table.
+local function makePackDoAction(waypoints)
+    return function(event, creature, action)
+        if action ~= ACTION_PACK_WALK then
+            return
+        end
+        local pack = crusherPack[creature:GetGUIDLow()]
+        if pack == nil then
+            return
+        end
+        local wp = waypoints[pack]
+        if wp == nil then
+            return
+        end
+        creature:MoveTo(ACTION_PACK_WALK, wp[1], wp[2], wp[3])
+    end
+end
+
+-- C++ npc_hadronox_crusherPackAI::MovementInform (boss_hadronox.cpp:414-419)
+-- + UpdateAI _doFacing leg (:473-477): on PACK_WALK arrival, face the
+-- waypoint orientation. C++ defers the facing to the next UpdateAI tick;
+-- Lua sets it on arrival (ev28), the only observable twin (no UpdateAI
+-- hook in Lua).
+local function makePackMovementInform(waypoints)
+    return function(event, creature, moveType, id)
+        if moveType ~= POINT_MOTION_TYPE or id ~= ACTION_PACK_WALK then
+            return
+        end
+        local pack = crusherPack[creature:GetGUIDLow()]
+        if pack == nil then
+            return
+        end
+        local wp = waypoints[pack]
+        if wp == nil then
+            return
+        end
+        creature:SetFacingTo(wp[4])
+    end
+end
+
+-- C++ npc_hadronox_crusherPackAI::JustEngagedWith (boss_hadronox.cpp:440-454):
+-- while REACT_PASSIVE, every creature in 40.0f with the same pack id
+-- goes AGGRESSIVE and AttackStarts the attacker. C++ sweeps entry 0
+-- (any); GetCreaturesInGrid matches one entry, so the four pack entries
+-- are swept and the pack-id table filters — the only creatures passing
+-- are same-pack members (foes/Hadronox read pack nil). Self is skipped:
+-- C++ includes it but the flip + AttackStart on self is a no-op (the
+-- engine is already engaging it).
+local function packAggroSweep(creature, target)
+    if creature:GetReactState() ~= REACT_PASSIVE then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local pack = crusherPack[guid]
+    if pack == nil then
+        return
+    end
+    for _, entry in ipairs(PACK_ENTRIES) do
+        for _, other in ipairs(creature:GetCreaturesInGrid(entry, 40)) do
+            local otherGuid = other:GetGUIDLow()
+            if otherGuid ~= guid and crusherPack[otherGuid] == pack then
+                other:SetReactState(REACT_AGGRESSIVE)
+                other:AttackStart(target)
+            end
+        end
+    end
+end
 
 -- C++ spell_hadronox_periodic_summon_template_AuraScript::HandlePeriodic
 -- (boss_hadronox.cpp:960-979): EFFECT_0 PERIODIC_DUMMY. On each tick the
@@ -465,6 +646,11 @@ local function hadronoxSpawn(event, creature)
     -- (instance_hooks.go:553-562), so the latch rides ev5 here.
     creature:SetGuidData(DATA_HADRONOX)
     hadronoxStep[creature:GetGUIDLow()] = nil -- C++ ctor _step(0) twin
+    hadronoxEnteredCombat[creature:GetGUIDLow()] = nil -- C++ ctor _enteredCombat(false) twin
+    -- C++ JustAppeared (boss_hadronox.cpp:288-294): SetCombatMovement(true)
+    -- + SummonCrusherPack(SUMMON_GROUP_CRUSHER_1).
+    creature:SetCombatMovement(true)
+    summonCrusherPack(creature, SUMMON_GROUP_CRUSHER_1)
 end
 
 local function hadronoxEnterCombat(event, creature, target)
@@ -563,6 +749,33 @@ local function hadronoxMovementInform(event, creature, moveType, id)
     creature:DoZoneInCombat()
 end
 
+-- C++ boss_hadronoxAI::DoAction (boss_hadronox.cpp:239-256), ev38.
+-- ACTION_CRUSHER_ENGAGED: latch-gated (the _enteredCombat check lives
+-- here, not in the crusher — the crusher's GetData read is only the
+-- early-out); SetBossState(IN_PROGRESS) + SummonCrusherPack(2/3).
+-- ACTION_HADRONOX_MOVE: step-gated SetStep + Talk; the Talk fires even
+-- when SetStep early-returns (engaged), so it stays outside the
+-- SetStep call but inside the step gate.
+local function hadronoxDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_CRUSHER_ENGAGED then
+        if hadronoxEnteredCombat[guid] then
+            return
+        end
+        creature:SetBossState(DATA_HADRONOX, BOSS_STATE_IN_PROGRESS)
+        hadronoxEnteredCombat[guid] = true
+        creature:SetData(DATA_HADRONOX_ENTERED_COMBAT, 1)
+        summonCrusherPack(creature, SUMMON_GROUP_CRUSHER_2)
+        summonCrusherPack(creature, SUMMON_GROUP_CRUSHER_3)
+    elseif action == ACTION_HADRONOX_MOVE then
+        local step = hadronoxStep[guid] or 0
+        if step < 3 then
+            hadronoxSetStep(creature, step + 1)
+            creature:Talk(HADRONOX_EMOTE_MOVE)
+        end
+    end
+end
+
 -- C++ npc_anub_ar_crusher::DamageTaken (boss_hadronox.cpp:533-540):
 -- if (!_hadFrenzy && me->HealthBelowPctDamaged(25, damage)): latch,
 -- Talk(CRUSHER_EMOTE_FRENZY 2), DoCastSelf(SPELL_FRENZY 53801). The
@@ -601,9 +814,29 @@ end
 local function crusherEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
+    -- C++ base JustEngagedWith (boss_hadronox.cpp:440-454): the
+    -- same-pack aggro sweep runs before the _JustEngagedWith schedules.
+    packAggroSweep(creature, target)
     schedule(guid, "smash", math.random(8000, 12000), function()
         crusherSmashTick(creature, guid)
     end)
+    -- C++ npc_anub_ar_crusherAI::_JustEngagedWith (boss_hadronox.cpp:510-527):
+    -- pack-1 only: if Hadronox has not entered combat, DoAction(
+    -- ACTION_CRUSHER_ENGAGED) on her AI, then Talk(CRUSHER_SAY_AGGRO).
+    -- The GetData check reads the ScriptData mirror the ev38 handler
+    -- maintains (lua_creature_events.go:827).
+    if crusherPack[guid] ~= SUMMON_GROUP_CRUSHER_1 then
+        return
+    end
+    for _, hadronox in ipairs(creature:GetCreaturesInGrid(ENTRY_HADRONOX, 250)) do
+        if hadronox:IsAlive() then
+            if hadronox:GetData(DATA_HADRONOX_ENTERED_COMBAT) == 0 then
+                hadronox:DoAction(ACTION_CRUSHER_ENGAGED)
+                creature:Talk(CRUSHER_SAY_AGGRO)
+            end
+            break
+        end
+    end
 end
 
 local function crusherLeaveCombat(event, creature)
@@ -617,30 +850,136 @@ end
 local function crusherDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
     crusherFrenzy[creature:GetGUIDLow()] = nil
+    crusherPack[creature:GetGUIDLow()] = nil
     -- C++ npc_anub_ar_crusherAI::JustDied (boss_hadronox.cpp:554-557) ->
-    -- hadronox DoAction(ACTION_HADRONOX_MOVE) (:248-254): if _step <
-    -- NUM_STEPS-1 (3), SetStep(_step + 1) + Talk(HADRONOX_EMOTE_MOVE).
-    -- The SetStep movement machine (react/home/MovePoint) stays out;
-    -- the Talk leg ports via a 250yd grid sweep for the unique
-    -- hadronox (instance-lookup twin, rotface relayProfessor idiom:
-    -- first alive match), step-gated exactly like C++.
+    -- hadronox DoAction(ACTION_HADRONOX_MOVE) (:248-254). The grid sweep
+    -- finds the unique hadronox (instance-lookup twin, rotface
+    -- relayProfessor idiom: first alive match); the step gate + Talk
+    -- live in the ev38 hadronoxDoAction handler.
     for _, hadronox in ipairs(creature:GetCreaturesInGrid(ENTRY_HADRONOX, 250)) do
         if hadronox:IsAlive() then
-            local step = hadronoxStep[hadronox:GetGUIDLow()] or 0
-            if step < 3 then
-                -- C++ DoAction(ACTION_HADRONOX_MOVE) :248-254 — the Talk
-                -- fires even when SetStep early-returns (engaged); only
-                -- the movement is suppressed, so Talk stays outside.
-                hadronoxSetStep(hadronox, step + 1)
-                hadronox:Talk(HADRONOX_EMOTE_MOVE)
-            end
+            hadronox:DoAction(ACTION_HADRONOX_MOVE)
             break
         end
     end
 end
 
+-- C++ npc_anub_ar_crusher_champion::_JustEngagedWith / DoEvent
+-- (boss_hadronox.cpp:578-602): EVENT_REND DoCastVictim(59343) 4-8s
+-- init, 12-16s repeat; EVENT_PUMMEL DoCastVictim(59344) 15-19s init,
+-- 12-17s repeat. The pack-AI UpdateAI has no casting gate (plain
+-- while loop, zero HasUnitState hits), so these ticks stay ungated
+-- per C++, like crusherSmashTick.
+local function rendTick(creature, guid)
+    creature:CastSpell(nil, SPELL_REND)
+    schedule(guid, "rend", math.random(12000, 16000), function()
+        rendTick(creature, guid)
+    end)
+end
+
+local function pummelTick(creature, guid)
+    creature:CastSpell(nil, SPELL_PUMMEL)
+    schedule(guid, "pummel", math.random(12000, 17000), function()
+        pummelTick(creature, guid)
+    end)
+end
+
+local function championEnterCombat(event, creature, target)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    packAggroSweep(creature, target)
+    schedule(guid, "rend", math.random(4000, 8000), function()
+        rendTick(creature, guid)
+    end)
+    schedule(guid, "pummel", math.random(15000, 19000), function()
+        pummelTick(creature, guid)
+    end)
+end
+
+-- C++ npc_anub_ar_crusher_crypt_fiend::_JustEngagedWith / DoEvent
+-- (boss_hadronox.cpp:624-648): EVENT_CRUSHING_WEBS DoCastVictim(59347)
+-- 4-8s init, 12-16s repeat; EVENT_INFECTED_WOUND DoCastVictim(59348)
+-- 15-19s init, 16-25s repeat.
+local function crushingWebsTick(creature, guid)
+    creature:CastSpell(nil, SPELL_CRUSHING_WEBS)
+    schedule(guid, "crushingwebs", math.random(12000, 16000), function()
+        crushingWebsTick(creature, guid)
+    end)
+end
+
+local function infectedWoundTick(creature, guid)
+    creature:CastSpell(nil, SPELL_INFECTED_WOUND)
+    schedule(guid, "infectedwound", math.random(16000, 25000), function()
+        infectedWoundTick(creature, guid)
+    end)
+end
+
+local function cryptFiendEnterCombat(event, creature, target)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    packAggroSweep(creature, target)
+    schedule(guid, "crushingwebs", math.random(4000, 8000), function()
+        crushingWebsTick(creature, guid)
+    end)
+    schedule(guid, "infectedwound", math.random(15000, 19000), function()
+        infectedWoundTick(creature, guid)
+    end)
+end
+
+-- C++ npc_anub_ar_crusher_necromancer::_JustEngagedWith / DoEvent
+-- (boss_hadronox.cpp:670-694): EVENT_SHADOW_BOLT DoCastVictim(53333)
+-- 2-4s init, 2-5s repeat; EVENT_ANIMATE_BONES DoCastVictim(urand(0,1)
+-- ? 53336 : 53334) 37-45s init, 35-50s repeat.
+local function shadowBoltTick(creature, guid)
+    creature:CastSpell(nil, SPELL_SHADOW_BOLT)
+    schedule(guid, "shadowbolt", math.random(2000, 5000), function()
+        shadowBoltTick(creature, guid)
+    end)
+end
+
+local function animateBonesTick(creature, guid)
+    local spell = SPELL_ANIMATE_BONES_1
+    if math.random(0, 1) == 1 then
+        spell = SPELL_ANIMATE_BONES_2
+    end
+    creature:CastSpell(nil, spell)
+    schedule(guid, "animatebones", math.random(35000, 50000), function()
+        animateBonesTick(creature, guid)
+    end)
+end
+
+local function necromancerEnterCombat(event, creature, target)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    packAggroSweep(creature, target)
+    schedule(guid, "shadowbolt", math.random(2000, 4000), function()
+        shadowBoltTick(creature, guid)
+    end)
+    schedule(guid, "animatebones", math.random(37000, 45000), function()
+        animateBonesTick(creature, guid)
+    end)
+end
+
+-- Shared pack-mate lifecycle (no C++ overrides beyond the base):
+-- cancel timers; the pack stamp dies with the AI (ev4), like the
+-- crusher's frenzy latch. _myPack survives evade (no Reset override
+-- touches it), so ev2/ev23 keep the stamp.
+local function packLeaveCombat(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+local function packReset(event, creature)
+    cancelTimers(creature:GetGUIDLow())
+end
+
+local function packDied(event, creature, killer)
+    cancelTimers(creature:GetGUIDLow())
+    crusherPack[creature:GetGUIDLow()] = nil
+end
+
 RegisterCreatureEvent(ENTRY_HADRONOX, 5, hadronoxSpawn)
 RegisterCreatureEvent(ENTRY_HADRONOX, 28, hadronoxMovementInform)
+RegisterCreatureEvent(ENTRY_HADRONOX, 38, hadronoxDoAction)
 RegisterCreatureEvent(ENTRY_HADRONOX, 1, hadronoxEnterCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 2, hadronoxLeaveCombat)
 RegisterCreatureEvent(ENTRY_HADRONOX, 4, hadronoxDied)
@@ -650,3 +989,27 @@ RegisterCreatureEvent(ENTRY_CRUSHER, 2, crusherLeaveCombat)
 RegisterCreatureEvent(ENTRY_CRUSHER, 4, crusherDied)
 RegisterCreatureEvent(ENTRY_CRUSHER, 9, crusherDamageTaken)
 RegisterCreatureEvent(ENTRY_CRUSHER, 23, crusherReset)
+RegisterCreatureEvent(ENTRY_CRUSHER, 28, makePackMovementInform(CRUSHER_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_CRUSHER, 38, makePackDoAction(CRUSHER_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_CRUSHER, 41, packSetData)
+RegisterCreatureEvent(ENTRY_CHAMPION, 1, championEnterCombat)
+RegisterCreatureEvent(ENTRY_CHAMPION, 2, packLeaveCombat)
+RegisterCreatureEvent(ENTRY_CHAMPION, 4, packDied)
+RegisterCreatureEvent(ENTRY_CHAMPION, 23, packReset)
+RegisterCreatureEvent(ENTRY_CHAMPION, 28, makePackMovementInform(CHAMPION_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_CHAMPION, 38, makePackDoAction(CHAMPION_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_CHAMPION, 41, packSetData)
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 1, cryptFiendEnterCombat)
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 2, packLeaveCombat)
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 4, packDied)
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 23, packReset)
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 28, makePackMovementInform(CRYPT_FIEND_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 38, makePackDoAction(CRYPT_FIEND_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_CRYPT_FIEND, 41, packSetData)
+RegisterCreatureEvent(ENTRY_NECROMANCER, 1, necromancerEnterCombat)
+RegisterCreatureEvent(ENTRY_NECROMANCER, 2, packLeaveCombat)
+RegisterCreatureEvent(ENTRY_NECROMANCER, 4, packDied)
+RegisterCreatureEvent(ENTRY_NECROMANCER, 23, packReset)
+RegisterCreatureEvent(ENTRY_NECROMANCER, 28, makePackMovementInform(NECROMANCER_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_NECROMANCER, 38, makePackDoAction(NECROMANCER_WAYPOINTS))
+RegisterCreatureEvent(ENTRY_NECROMANCER, 41, packSetData)

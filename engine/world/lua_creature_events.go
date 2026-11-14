@@ -4205,16 +4205,27 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 	// group) in creature_summon_groups (ObjectMgr::LoadTempSummonData,
 	// ObjectMgr.cpp:1996) and summons every row via SummonCreature with the
 	// row's position, summonType and summonTime (milliseconds), collecting
-	// the TempSummon*s into the out-param list. The per-call world-DB query
-	// mirrors summonTempCreature's own per-call creature_template check —
-	// no startup loader or cache; the group rows live only in TDB, not in
-	// the C++ tree. Returns the summoned creatures as a Lua array (the
-	// &list sites — Kel'Thuzad guardians/minions, Yogg clouds, Valithria
-	// archmages — iterate it); a missing table or no rows yields an empty
-	// table, the C++ `if (!data) return;` twin (Object.cpp:2136-2140),
-	// required because the repo's world.db placeholder carries no such
-	// table. Rows whose template is unknown are skipped by the funnel
-	// (nil return), exactly C++ logging null for a missing template.
+	// the TempSummon*s into the out-param list. The row's summonType is the
+	// C++ 1-based TempSummonType enum (ObjectDefines.h:57-68: 1
+	// TIMED_OR_DEAD_DESPAWN ... 8 MANUAL_DESPAWN), stored verbatim by
+	// LoadTempSummons (ObjectMgr.cpp:2057) and passed straight through by
+	// SummonCreatureGroup (Object.cpp:2147) — the Go funnel's scheme is
+	// 0-based (0 TIMED_OR_DEAD ... 7 MANUAL), so the value is translated
+	// down by one here; passing it raw landed every group summon one
+	// despawn family off (a TDB 6 CORPSE_TIMED_DESPAWN became Go 6
+	// DEAD_DESPAWN, losing the 45s/30s corpse linger). Rows outside 1..8
+	// are skipped, the C++ `> TEMPSUMMON_MANUAL_DESPAWN` skip twin
+	// (ObjectMgr.cpp:2059-2063); TDB 26091 carries only 1/2/3/4/6/8.
+	// The per-call world-DB query mirrors summonTempCreature's own
+	// per-call creature_template check — no startup loader or cache; the
+	// group rows live only in TDB, not in the C++ tree. Returns the
+	// summoned creatures as a Lua array (the &list sites — Kel'Thuzad
+	// guardians/minions, Yogg clouds, Valithria archmages — iterate it);
+	// a missing table or no rows yields an empty table, the C++
+	// `if (!data) return;` twin (Object.cpp:2136-2140), required because
+	// the repo's world.db placeholder carries no such table. Rows whose
+	// template is unknown are skipped by the funnel (nil return), exactly
+	// C++ logging null for a missing template.
 	methods["SummonCreatureGroup"] = func(ctx context.Context, args []any) ([]any, error) {
 		groupID, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -4242,7 +4253,10 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 			if err := rows.Scan(&entry, &x, &y, &z, &o, &summonType, &summonTime); err != nil {
 				continue
 			}
-			if summoned := s.summonTempCreature(ctx, origin, uint32(entry), float32(x), float32(y), float32(z), float32(o), uint8(summonType), uint32(summonTime)); summoned != nil {
+			if summonType < 1 || summonType > 8 {
+				continue
+			}
+			if summoned := s.summonTempCreature(ctx, origin, uint32(entry), float32(x), float32(y), float32(z), float32(o), uint8(summonType-1), uint32(summonTime)); summoned != nil {
 				out = append(out, s.luaMotionCreature(summoned))
 			}
 		}
