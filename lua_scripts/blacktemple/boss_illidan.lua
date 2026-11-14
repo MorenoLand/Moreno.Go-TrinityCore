@@ -111,20 +111,19 @@
 -- {2s,4s} non-triggered on a random threat-list player alive
 -- within 150 yd (C++ SelectTarget(Random, 0, 150.0f, true)) / eye
 -- blast {1s,30s} one-shot: Talk(SAY_ILLIDAN_EYE_BLAST) — the db-
--- target summon (SummonCreature now bridged, boss_illidan.cpp:906)
--- stays out: the db target is a moving beam vehicle whose purpose
--- is the summon-side MovePoint sweep (POINT_DB_TARGET, :910 — no
--- movement bridge) with unmodeled _pillarIndex/pillar positions;
--- without the sweep the arm is gutted (kiljaeden shield-orb
--- precedent), so the 39908 beam cast on it is skipped with it /
+-- target summon + 39908 beam cast + MovePoint sweep are PORTED
+-- 2026-11-14 (onEyeBlast: SummonCreature at the pillar-indexed
+-- spawn, 39908 cast on it, MoveTo sweep to the pillar-indexed
+-- point; the arrival removes the 40017/39908 auras via ev28) /
 -- dark barrage 40585 50% {1s,20s} one-shot, non-
 -- triggered on a random threat-list player alive within 150 yd, then re-arm
 -- eye blast 5s and re-arm the pillar timer 30s (C++ adds 30s to
 -- the pending pillar time — approximated, documented); the liftoff
 -- emote/sound/react/attack-stop/gravity arms are PORTED at the
 -- 65% entry (the warglaive-point movement and the pillar
--- MovePoints have no movement bridge — the chain keeps the
--- timers, the positions are unmodeled; the NOT_SELECTABLE flag
+-- MovePoints are PORTED 2026-11-14 via creature:MoveTo + ev28 —
+-- the phase-2 casts now arm on the pillar arrival, C++-exact;
+-- the NOT_SELECTABLE flag
 -- arm stays out — the finalize bearer exists now (illidanDoAction,
 -- 2026-11-07), but the flag would strand the boss untargetable
 -- whenever the flames are ignored; see the entry comment);
@@ -134,8 +133,8 @@
 -- both-flames-dead finalize
 -- arm (middle move, glaive returns, land, resume-combat phase 3)
 -- HAS a bearer since 2026-11-07 (illidanDoAction — the middle
--- MovePoint stays unmodeled, the landing + resume-combat legs
--- are ported), so phase 3 starts when both flames die; the
+-- MovePoint is PORTED 2026-11-14 via creature:MoveTo + ev28, so
+-- phase 3 starts when both flames die); the
 -- pillar loop is the fallback while they live.
 -- 30% & phase<PHASE_4: _isDemon -> _isDemon=false,
 -- cancel the demon-spell timers, triggered self-cast 40511, phase-4
@@ -223,8 +222,8 @@
 -- OnLeaveCombat(2)/OnDied(4)/OnReset(23): cancel timers.
 -- Illidan DB target (23070): OnReset: non-triggered self-cast eye
 -- blast trigger 40017 (C++ DoCastSelf default is triggered=false —
--- vaelastrasz convention; the MovementInform aura-removal arm has
--- no movement bridge).
+-- vaelastrasz convention; the MovementInform aura-removal arm is
+-- PORTED 2026-11-14 via ev28 — 40017 + 39908 removed on arrival).
 -- Maiev Shadowsong (23197): OnEnterCombat arms cage trap 40694
 -- 30s then 30s, non-triggered self-cast + Talk(SAY_MAIEV_
 -- SHADOWSONG_TRAP) — the illidan->CastSpell(CAGED_TRAP_TELEPORT
@@ -291,11 +290,12 @@
 -- DATA_ILLIDAN_MUSIC_CONTROLLER bookkeeping arms and the
 -- instance->GetCreature DoAction relays skipped, except the
 -- flame-dead relay, which rides the FindNearestCreature
--- substitute (illidanDoAction, below)); no movement bridge —
--- the illidan liftoff/pillar/
--- glaive-point/middle MovePoints and the akama spline chains are
--- unmodeled (the illidan air-phase timer chain is kept, the
--- positions are not); 'no summon bridge' is stale as a blanket
+-- substitute (illidanDoAction, below)); the illidan MovePoints
+-- (liftoff/pillar/glaive-point/middle) are PORTED 2026-11-14 via
+-- creature:MoveTo + ev28; the akama spline chains stay unmodeled
+-- (the MoveAlongSplineChain bridge is live — nightbane 2026-11-14 —
+-- but the intro rides the unported gossip/door/instance machine,
+-- so the chains have no bearer yet); 'no summon bridge' is stale as a blanket
 -- statement (the bridge is live): per-arm — db-target stays out on
 -- the unbridged MovePoint sweep (:910); minion (illidari elite) on
 -- the summon-side AttackStart via instance GUID (:1791-1797);
@@ -319,8 +319,8 @@
 -- sheath arm IS ported (illidanDoAction, below)); the air-phase
 -- finalize arm (both flames dead -> middle, glaive returns, land,
 -- phase 3) HAS a bearer since 2026-11-07 (illidanDoAction: the
--- MovePoint middle itself stays unmodeled, the landing + 3s
--- resume-combat legs are ported, so phase 3 starts when both
+-- MovePoint middle is PORTED 2026-11-14 via creature:MoveTo + ev28,
+-- so phase 3 starts when both
 -- flames die instead of only via the resume-demon path);
 -- the 30s dark-barrage pillar extension is approximated by
 -- re-arming the pillar timer 30s from the barrage tick.
@@ -434,6 +434,46 @@ local SPELL_HEALING_POTION = 40535
 -- charge target must stay 25 yd (2D) away from.
 local BLADE_X1, BLADE_Y1 = 676.226013, 325.230988
 local BLADE_X2, BLADE_Y2 = 678.059998, 285.220001
+
+-- C++ IllidanPoints (boss_illidan.cpp:253-267) + MovementDefines.h:36:
+-- the MovePoint legs port via creature:MoveTo + ev28 (2026-11-14
+-- re-triage of the stale "no movement bridge" claims; onyxia /
+-- nightbane precedent). POINT_MOTION_TYPE = 8 (ILLIDAN_MOVE.motionType).
+-- ONE table local, not
+-- 13 separate ones: the file is near the 200 top-level-local limit
+-- (LK-table precedent). Position tables are Lua 1-indexed:
+-- pillarIndex 0-3 in C++ reads slot pillarIndex + 1.
+local ILLIDAN_MOVE = {
+    throwGlaive = 7, randomPillar = 8, dbTarget = 9, middle = 10,
+    motionType = 8,
+    glaiveTrigger = 22515, -- black_temple.h:108
+    glaiveReturns = 39873, -- boss_illidan.cpp:111
+    warglaiveSound = 11480, -- boss_illidan.cpp:82
+    eyeBlast = 39908, -- boss_illidan.cpp:192
+    -- C++ IllidanPhase2Positions[4] (boss_illidan.cpp:394-400).
+    phase2Positions = {
+        { 705.921997, 337.145996, 370.083008, 3.961900 },
+        { 706.226990, 273.264008, 370.083008, 2.251072 },
+        { 658.830017, 265.098999, 370.083008, 0.850345 },
+        { 656.859009, 344.071991, 370.083008, 5.235990 },
+    },
+    -- C++ IllidanMiddlePoint (boss_illidan.cpp:402).
+    middlePoint = { 676.6479, 304.7606, 354.1909, 6.230825 },
+    -- C++ IllidanDBTargetSpawnPositions[4] / IllidanDBTargetPoints[4]
+    -- (boss_illidan.cpp:404-420).
+    dbTargetSpawns = {
+        { 710.8815, 306.4028, 353.5962, 2.391101 },
+        { 652.105, 259.5127, 353.0794, 0.122173 },
+        { 642.7164, 305.2436, 353.5596, 3.438299 },
+        { 710.8815, 306.4028, 353.5962, 2.391101 },
+    },
+    dbTargetPoints = {
+        { 660.3492, 345.5749, 353.2961 },
+        { 701.6755, 297.3358, 354.041 },
+        { 706.7507, 269.4593, 353.2778 },
+        { 660.3492, 345.5749, 353.2961 },
+    },
+}
 
 local timers = {}
 
@@ -938,9 +978,15 @@ local function onFireball(creature, guid)
     end)
 end
 
--- C++ EVENT_EYE_BLAST: cancels the pending dark barrage, Talk;
--- the db-target summon and the 39908 cast on it have no summon
--- bridge — skipped; one-shot.
+-- C++ EVENT_EYE_BLAST (boss_illidan.cpp:899-909): cancels the pending
+-- dark barrage, Talk, summons the db target at the pillar-indexed
+-- spawn position, casts 39908 on it, and the db target sweeps to
+-- the pillar-indexed point (MoveTo is the MovePoint twin; the
+-- arrival removes the 40017/39908 auras in dbTargetMovementInform
+-- below). SummonCreature with no summonType defaults to
+-- TEMPSUMMON_MANUAL_DESPAWN (7) — C++-exact (:906); the summon is
+-- ev19-tracked, so evade/reset despawns it via illidanCleanup.
+-- One-shot.
 local function onEyeBlast(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "eyeBlast", 500, function()
@@ -950,6 +996,15 @@ local function onEyeBlast(creature, guid)
     end
     cancelTimer(guid, "darkBarrage")
     creature:Talk(SAY_ILLIDAN_EYE_BLAST)
+    local state = getIllidanState(guid)
+    local spawn = ILLIDAN_MOVE.dbTargetSpawns[state.pillarIndex + 1]
+    local dbTarget = creature:SummonCreature(ENTRY_DB_TARGET,
+        spawn[1], spawn[2], spawn[3], spawn[4])
+    if dbTarget then
+        creature:CastSpell(dbTarget, ILLIDAN_MOVE.eyeBlast, false)
+        local point = ILLIDAN_MOVE.dbTargetPoints[state.pillarIndex + 1]
+        dbTarget:MoveTo(ILLIDAN_MOVE.dbTarget, point[1], point[2], point[3])
+    end
 end
 
 -- Forward declaration: onDarkBarrage's timer closure references
@@ -980,24 +1035,12 @@ local function onDarkBarrage(creature, guid)
     end)
 end
 
--- C++ EVENT_FLY_TO_RANDOM_PILLAR (30s cycle): cancel the phase-2
--- timers, random pillar index, arm the phase-2 casts (the MovePoint
--- and the MovementInform->ScheduleEvents arms have no movement
--- bridge — the chain keeps the timers, the positions are
--- unmodeled).
-onPillar = function(creature, guid)
-    if creature:IsCasting() then
-        schedule(guid, "pillar", 500, function()
-            onPillar(creature, guid)
-        end)
-        return
-    end
-    local state = getIllidanState(guid)
-    for _, key in ipairs({ "fireball", "eyeBlast",
-            "darkBarrage" }) do
-        cancelTimer(guid, key)
-    end
-    state.pillarIndex = math.random(0, 3)
+-- C++ ScheduleEvents(GROUP_PHASE_2, GROUP_PHASE_2)
+-- (boss_illidan.cpp:534-540): fireball {1s,8s}, eye blast {1s,30s},
+-- dark barrage 50% {1s,20s}. Fires from the pillar arrival
+-- (illidanMovementInform), not from the move start — C++ arms the
+-- phase-2 casts in MovementInform POINT_RANDOM_PILLAR (:668-673).
+local function armPhase2Casts(creature, guid)
     schedule(guid, "fireball", 1000 + math.random(0, 7000),
         function()
             onFireball(creature, guid)
@@ -1012,6 +1055,28 @@ onPillar = function(creature, guid)
                 onDarkBarrage(creature, guid)
             end)
     end
+end
+
+-- C++ EVENT_FLY_TO_RANDOM_PILLAR (30s cycle, boss_illidan.cpp:888-894):
+-- cancel the phase-2 timers, random pillar index, MovePoint to the
+-- pillar (MoveTo is the MovePoint twin; the arrival faces the
+-- pillar orientation and arms the phase-2 casts in
+-- illidanMovementInform below), repeat 30s.
+onPillar = function(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "pillar", 500, function()
+            onPillar(creature, guid)
+        end)
+        return
+    end
+    local state = getIllidanState(guid)
+    for _, key in ipairs({ "fireball", "eyeBlast",
+            "darkBarrage" }) do
+        cancelTimer(guid, key)
+    end
+    state.pillarIndex = math.random(0, 3)
+    local pos = ILLIDAN_MOVE.phase2Positions[state.pillarIndex + 1]
+    creature:MoveTo(ILLIDAN_MOVE.randomPillar, pos[1], pos[2], pos[3])
     schedule(guid, "pillar", 30000, function()
         onPillar(creature, guid)
     end)
@@ -1048,12 +1113,40 @@ local function onThrowGlaive(creature, guid)
     end)
 end
 
--- C++ EVENT_MOVE_TO_WARGLAIVE_POINT (6s): the glaive-trigger scan
--- and the MovePoint have no bridges — the timer chain is kept,
--- the movement is unmodeled; then throw glaive 2s (the
--- POINT_THROW_GLAIVE MovementInform arms: no MovementInform bridge
--- (the sound bridge is live — creature:PlayDirectSound — but the arm
--- rides the movement leg, so it stays out).
+-- C++ EVENT_MOVE_TO_WARGLAIVE_POINT (boss_illidan.cpp:851-876): the
+-- glaive world triggers (22515) within 150 yd with Z in [355, 365]
+-- sort by distance and the nearest is the move target (the range
+-- query returns distance order — archaedas precedent — but the
+-- minimum is computed explicitly, so order is not load-bearing).
+-- C++ breaks the chain when none is in the band: no throw glaive,
+-- no pillar timer. The music-controller leg stays out (no instance
+-- GO bridge).
+local function nearestGlaiveTrigger(creature)
+    local triggers = creature:GetCreaturesInRange(150,
+        ILLIDAN_MOVE.glaiveTrigger, 0, 0)
+    if not triggers then
+        return nil
+    end
+    local best = nil
+    local bestDist = nil
+    for _, trigger in ipairs(triggers) do
+        local z = trigger:GetZ()
+        if z >= 355.0 and z <= 365.0 then
+            local dist = creature:GetDistance(trigger:GetX(),
+                trigger:GetY(), trigger:GetZ())
+            if best == nil or dist < bestDist then
+                best = trigger
+                bestDist = dist
+            end
+        end
+    end
+    return best
+end
+
+-- C++ EVENT_MOVE_TO_WARGLAIVE_POINT (6s): MovePoint to the nearest
+-- glaive trigger (MoveTo is the MovePoint twin); the arrival plays
+-- the warglaive sound and schedules the throw 2s + face-middle 1ms
+-- in illidanMovementInform below.
 local function onWarglaivePoint(creature, guid)
     if creature:IsCasting() then
         schedule(guid, "warglaivePoint", 500, function()
@@ -1061,9 +1154,12 @@ local function onWarglaivePoint(creature, guid)
         end)
         return
     end
-    schedule(guid, "throwGlaive", 2000, function()
-        onThrowGlaive(creature, guid)
-    end)
+    local trigger = nearestGlaiveTrigger(creature)
+    if trigger == nil then
+        return
+    end
+    creature:MoveTo(ILLIDAN_MOVE.throwGlaive, trigger:GetX(),
+        trigger:GetY(), trigger:GetZ())
 end
 
 -- C++ EVENT_FLY (boss_illidan.cpp:884-887): ChangeOrientation(3.137039f)
@@ -1496,11 +1592,14 @@ local function illidanDoAction(event, creature, action)
     -- InterruptNonMeleeSpells(false), motion Clear (no movement
     -- bridge — skipped, documented), CancelEventGroup(GROUP_PHASE_2)
     -- + CancelEvent(EVENT_FLY_TO_RANDOM_PILLAR), _phase = PHASE_3,
-    -- MovePoint(POINT_ILLIDAN_MIDDLE) (no movement bridge — skipped,
-    -- documented). GROUP_PHASE_2 is fireball/eyeBlast/darkBarrage
-    -- (:533-540); the pillar timer is the Lua's FLY_TO_RANDOM_PILLAR.
-    -- The GLAIVE_EMOTE landing legs (:928-932: SetDisableGravity(false),
-    -- SetSheath(MELEE), RESUME_COMBAT in 3s) follow here in C++ arm
+    -- MovePoint(POINT_ILLIDAN_MIDDLE) (MoveTo is the MovePoint twin;
+    -- the arrival faces the middle orientation, casts the glaive
+    -- returns on the blade triggers and schedules the glaive emote
+    -- 3s in illidanMovementInform below). GROUP_PHASE_2 is
+    -- fireball/eyeBlast/darkBarrage (:533-540); the pillar timer is
+    -- the Lua's FLY_TO_RANDOM_PILLAR. The GLAIVE_EMOTE landing legs
+    -- (:928-932: SetDisableGravity(false), SetSheath(MELEE),
+    -- RESUME_COMBAT in 3s) follow in the arrival chain in C++ arm
     -- order; RESUME_COMBAT (:934-938: RemoveFlag NOT_SELECTABLE,
     -- REACT_AGGRESSIVE, ScheduleEvents(GROUP_PHASE_3)) lands in the
     -- 3s callback — the flag arm stays out (the flag was never set at
@@ -1511,11 +1610,78 @@ local function illidanDoAction(event, creature, action)
         cancelTimer(guid, key)
     end
     state.phase = PHASE_3
+    creature:MoveTo(ILLIDAN_MOVE.middle, ILLIDAN_MOVE.middlePoint[1],
+        ILLIDAN_MOVE.middlePoint[2], ILLIDAN_MOVE.middlePoint[3])
+end
+
+-- C++ EVENT_GLAIVE_EMOTE (boss_illidan.cpp:928-932): gravity off,
+-- land emote (EMOTE_ONESHOT_LAND = 293, SharedDefines.h:2007),
+-- sheath melee, RESUME_COMBAT in 3s.
+local function onGlaiveEmote(creature, guid)
     creature:SetDisableGravity(false)
+    creature:PerformEmote(293) -- EMOTE_ONESHOT_LAND
     creature:SetSheath(1) -- SHEATH_STATE_MELEE
     schedule(guid, "resumeCombat", 3000, function()
         onResumeCombat(creature, guid)
     end)
+end
+
+-- C++ MovementInform (boss_illidan.cpp:656-690): POINT_MOTION_TYPE
+-- arrivals land on ev28. POINT_THROW_GLAIVE (:663-666): warglaive
+-- sound + throw glaive 2s + face middle 1ms. POINT_RANDOM_PILLAR
+-- (:668-673): face the pillar orientation (ChangeOrientation is a
+-- 1ms SetFacingTo — onFly idiom) + ScheduleEvents(GROUP_PHASE_2).
+-- POINT_ILLIDAN_MIDDLE (:675-687): face the middle orientation +
+-- each blade-of-azzinoth trigger in 150 yd casts glaive returns
+-- 39873 on itself (triggered) + glaive emote 3s. EFFECT_MOTION_TYPE
+-- arrivals are not used by this boss (no MoveLand/MoveFall legs).
+local function illidanMovementInform(event, creature, moveType, pointId)
+    if moveType ~= ILLIDAN_MOVE.motionType then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    -- A spline still in flight when the boss evades is dropped
+    -- (illidanCleanup cancels the timers and drops the state;
+    -- nightbane precedent) — do not resurrect it via
+    -- getIllidanState, which auto-creates.
+    local state = illidanState[guid]
+    if state == nil then
+        return
+    end
+    if pointId == ILLIDAN_MOVE.throwGlaive then
+        creature:PlayDirectSound(ILLIDAN_MOVE.warglaiveSound)
+        schedule(guid, "throwGlaive", 2000, function()
+            onThrowGlaive(creature, guid)
+        end)
+        -- C++ EVENT_FACE_MIDDLE (boss_illidan.cpp:896-900): the angle
+        -- to the middle point, then SetFacingTo (GetAbsoluteAngle
+        -- twin via atan2, normalized to [0, 2pi) — nightbane idiom).
+        schedule(guid, "faceMiddle", 1, function()
+            local face = math.atan2(ILLIDAN_MOVE.middlePoint[2]
+                - creature:GetY(), ILLIDAN_MOVE.middlePoint[1]
+                - creature:GetX())
+            if face < 0 then
+                face = face + 2 * math.pi
+            end
+            creature:SetFacingTo(face)
+        end)
+    elseif pointId == ILLIDAN_MOVE.randomPillar then
+        local pos = ILLIDAN_MOVE.phase2Positions[state.pillarIndex + 1]
+        creature:SetFacingTo(pos[4])
+        armPhase2Casts(creature, guid)
+    elseif pointId == ILLIDAN_MOVE.middle then
+        creature:SetFacingTo(ILLIDAN_MOVE.middlePoint[4])
+        local blades = creature:GetCreaturesInRange(150,
+            ENTRY_BLADE_OF_AZZINOTH, 0, 0)
+        if blades then
+            for _, blade in ipairs(blades) do
+                blade:CastSpell(blade, ILLIDAN_MOVE.glaiveReturns, true)
+            end
+        end
+        schedule(guid, "glaiveEmote", 3000, function()
+            onGlaiveEmote(creature, guid)
+        end)
+    end
 end
 
 local function illidanCleanup(event, creature)
@@ -1591,6 +1757,7 @@ RegisterCreatureEvent(ENTRY_ILLIDAN, 9, illidanDamageTaken)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 23, illidanCleanup)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 19, illidanJustSummoned)
 RegisterCreatureEvent(ENTRY_ILLIDAN, 21, illidanSummonedCreatureDies)
+RegisterCreatureEvent(ENTRY_ILLIDAN, 28, illidanMovementInform)
 
 --
 -- Akama (23089)
@@ -1673,10 +1840,12 @@ RegisterAuraEvent(SPELL_AKAMA_DOOR_CHANNEL, 3, akamaDoorChannelRemove)
 -- SetGoState(0) (GO_STATE_ACTIVE = open, the HandleGameObject(true)
 -- twin; 200yd sweep — Akama channels at the gate, DB positions
 -- unverified). EVENT_AKAMA_THANKS (:1270-1273) Talks
--- SAY_AKAMA_SALUTE; the spirit-salute/spline tail stays out (no
--- movement bridge).
+-- SAY_AKAMA_SALUTE; the spirit-salute/spline tail stays out (the
+-- MoveAlongSplineChain bridge is live — nightbane 2026-11-14 — but
+-- the tail rides the unported akama outro machine).
 -- C++ EVENT_AKAMA_THANKS (boss_illidan.cpp:1270-1273): Talk; the
--- spirit-salute/spline tail stays out (no movement bridge).
+-- spirit-salute/spline tail stays out (bridge live, outro machine
+-- unported).
 -- Events-map arm, gated (mal_ganis idiom) — extracted from
 -- akamaDoAction's anonymous closure 2026-11-09.
 local function onAkamaThanks(creature, guid)
@@ -1840,8 +2009,8 @@ RegisterCreatureEvent(ENTRY_FLAME_OF_AZZINOTH, 23, flameReset)
 --
 
 -- C++ Reset: non-triggered self-cast 40017 (vaelastrasz
--- convention; the MovementInform aura-removal arm has no movement
--- bridge).
+-- convention; the MovementInform aura-removal arm is PORTED
+-- 2026-11-14 below — the sweep now arrives on ev28).
 local function dbTargetReset(event, creature)
     -- C++ Reset(): DoCastSelf(SPELL_EYE_BLAST_TRIGGER), non-triggered,
     -- Reset-only (boss_illidan.cpp). Alive-gated like bladeReset.
@@ -1850,7 +2019,21 @@ local function dbTargetReset(event, creature)
     end
 end
 
+-- C++ npc_illidan_db_target::MovementInform (boss_illidan.cpp:1563-1570):
+-- on POINT_MOTION_TYPE POINT_DB_TARGET arrival the eye-blast trigger
+-- aura (40017) and the eye-blast aura (39908) are removed. The
+-- JustSummoned demon-fire passive arm stays out (demon fire is
+-- unregistered; no arm to deliver it to).
+local function dbTargetMovementInform(event, creature, moveType, pointId)
+    if moveType ~= ILLIDAN_MOVE.motionType or pointId ~= ILLIDAN_MOVE.dbTarget then
+        return
+    end
+    creature:RemoveAura(SPELL_EYE_BLAST_TRIGGER)
+    creature:RemoveAura(ILLIDAN_MOVE.eyeBlast)
+end
+
 RegisterCreatureEvent(ENTRY_DB_TARGET, 23, dbTargetReset)
+RegisterCreatureEvent(ENTRY_DB_TARGET, 28, dbTargetMovementInform)
 
 --
 -- Maiev Shadowsong (23197)
@@ -2316,13 +2499,13 @@ RegisterAuraEvent(SPELL_PARASITIC_SHADOWFIEND_PROC, 6, parasiticShadowfiendProc)
 -- mode guard in C++). On removal the target creature despawns
 -- itself. The C++ GetTarget()->ToCreature() nil-check is the
 -- GetObjectType() guard below. PORTED 2026-11-08 (tick 425).
--- DORMANT-BY-CONSTRUCTION: the sender, EVENT_EYE_BLAST
+-- DORMANT-BY-CONSTRUCTION no longer: the sender, EVENT_EYE_BLAST
 -- (boss_illidan.cpp:899-909, Illidan summoning the db-target 23070
--- and casting 39908 on it), stays out per the boss_illidan.lua
--- header (the db-target summon + MovePoint sweep have no movement
--- bridge), so 39908 never lands in Go yet; this handler is exact
--- and goes live if that arm ever ports.
-local SPELL_EYE_BLAST = 39908 -- boss_illidan.cpp:192
+-- and casting 39908 on it), is PORTED 2026-11-14 (onEyeBlast below:
+-- SummonCreature + 39908 cast + MoveTo sweep); this handler is live
+-- whenever the db target arrives and the auras are removed.
+-- SPELL_EYE_BLAST lives in the ILLIDAN_MOVE table above so
+-- onEyeBlast (defined earlier in the file) can see it.
 
 local function eyeBlastRemove(event, aura, target)
     if target == nil or target:GetObjectType() ~= "Creature" then
@@ -2331,4 +2514,4 @@ local function eyeBlastRemove(event, aura, target)
     target:DespawnOrUnsummon()
 end
 
-RegisterAuraEvent(SPELL_EYE_BLAST, 3, eyeBlastRemove)
+RegisterAuraEvent(ILLIDAN_MOVE.eyeBlast, 3, eyeBlastRemove)
