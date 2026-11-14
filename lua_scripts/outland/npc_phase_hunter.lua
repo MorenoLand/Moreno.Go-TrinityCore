@@ -10,7 +10,10 @@
 -- per-entry switch), so both register the same handlers
 -- (C++-exact). The creature_template ScriptName bindings are
 -- DB-side (no TDB in this workspace).
--- npc_commander_dawnforge and at_commander_dawnforge are
+-- npc_commander_dawnforge is PORTED (outland/npc_commander_
+-- dawnforge.lua, Reset :109 / JustEngagedWith :114 / JustSummoned
+-- :116) — the "documented-only" claim below was stale, corrected
+-- 2026-11-13 (round 56). at_commander_dawnforge stays
 -- documented-only: the whole event machine sits behind the
 -- blocked arms — cross-creature GUID coordination with
 -- Ardonis (19830) via FindNearestCreature, Pathaleon's image
@@ -18,8 +21,8 @@
 -- midnight precedent — so the JustSummoned GUID latch is
 -- replaceable, not a blocker),
 -- SetFacingToObject / SetStandState kneel choreography (the facing
--- legs — me->SetFacingToObject(pathaleon) C++ :131, me->
--- SetFacingToObject(ardonis) C++ :147 — are bridgeable via the atan2
+-- legs — me->SetFacingToObject(pathaleon) C++ :122-140, me->
+-- SetFacingToObject(ardonis) C++ :142-160 — are bridgeable via the atan2
 -- twin, devourer_of_souls precedent, but the choreography rides the
 -- cross-creature GUID machine — re-keyed 2026-10-24:
 -- FindNearestCreature (lua_creature_events.go:2350), SummonCreature,
@@ -63,7 +66,10 @@
 -- MATERIALIZE 34804) (C++-exact; in C++ it fires on the
 -- first UpdateAI regardless of combat state — the Lua pump
 -- is combat-only, so it fires at the first combat tick, see
--- deviations); mana-burn arm — 5-7s init then 8-18s: if a
+-- deviations); phase-slip arm — every tick: slowed/rooted
+-- -> non-triggered DoCastSelf(SPELL_PHASE_SLIP 36574),
+-- PORTED round 56 (same combat-only deviation class);
+-- mana-burn arm — 5-7s init then 8-18s: if a
 -- threat target has mana: non-triggered DoCast(random mana
 -- target, SPELL_MANA_BURN 13321) (C++-exact — the C++ picks
 -- a random mana-holder from the threat list; the Lua model
@@ -86,27 +92,31 @@
 -- stays unmodeled behind the LowerPlayerDamageReq +
 -- SetInCombatWith legs (no Lua surface for either; its
 -- HasAura(34219) gate, UpdateEntry and SetHealth pct legs
--- ARE bridged, so they no longer block it); no
--- aura-type bridge — the phase-slip arm
--- (HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) or UNIT_STATE_
--- ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574)) stays out on
--- the unbridged HasAuraType leg alone (the ROOT leg's
--- HasUnitState IS bridged, lua_creature_events.go:1959, but
--- the OR needs both legs; a ROOT-only port would miss the
--- slow-only case); the stale "no
+-- ARE bridged, so they no longer block it); the phase-slip
+-- arm (HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) or
+-- UNIT_STATE_ROOT -> DoCast(me, SPELL_PHASE_SLIP 36574))
+-- is PORTED in the pump below (round 56, 2026-11-13) —
+-- both legs bridged (HasAuraType lua_creature_events.go:
+-- 1500, HasUnitState :2489); the old "no aura-type
+-- bridge" claim was stale; the stale "no
 -- quest-INCOMPLETE status bridge" claim is retracted —
--- player:GetQuestStatus is bridged (lua_player.go:690,
+-- player:GetQuestStatus is bridged (lua_player.go:4902,
 -- INCOMPLETE = 3, QuestDef.h:106) — so the Weak latch
 -- (Talk(EMOTE_WEAK 0) at HealthBelowPct (WeakPct 25-40)
 -- while the engaging player's quest 10190 is incomplete)
 -- is PORTED in the pump above; the millhouse SAY_ICEBLOCK
 -- precedent for Talk not firing is retired with it.
 -- Zone set status: zone_netherstorm.cpp closed — commander_
--- dawnforge + at_commander_dawnforge documented-only,
--- npc_phase_hunter ported for both entries.
+-- dawnforge PORTED, at_commander_dawnforge documented-only,
+-- npc_phase_hunter ported for both entries (phase-slip arm
+-- added round 56, 2026-11-13).
 
 local SPELL_MATERIALIZE = 34804
 local SPELL_MANA_BURN = 13321
+local SPELL_PHASE_SLIP = 36574
+
+local SPELL_AURA_MOD_DECREASE_SPEED = 33 -- SpellAuraDefines.h:113
+local UNIT_STATE_ROOT = 0x400 -- Unit.h:221
 
 local POWER_MANA = 0
 
@@ -182,6 +192,19 @@ local function combatTick(creature, guid)
     if not st.materialized then
         creature:CastSpell(creature, SPELL_MATERIALIZE)
         st.materialized = true
+    end
+
+    -- Phase-slip arm — C++ UpdateAI :415-417, every tick, no
+    -- timer, no once-guard: slowed (SPELL_AURA_MOD_DECREASE_
+    -- SPEED 33) or rooted (UNIT_STATE_ROOT 0x400) ->
+    -- non-triggered DoCastSelf(SPELL_PHASE_SLIP 36574). Both
+    -- legs bridged (HasAuraType lua_creature_events.go:1500,
+    -- HasUnitState :2489). (C++ fires pre-UpdateVictim, i.e.
+    -- out of combat too; the Lua pump is combat-only — same
+    -- deviation class as materialize.)
+    if creature:HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED)
+        or creature:HasUnitState(UNIT_STATE_ROOT) then
+        creature:CastSpell(creature, SPELL_PHASE_SLIP)
     end
 
     -- Mana-burn arm — 5-7s init then 8-18s: cast on a random
