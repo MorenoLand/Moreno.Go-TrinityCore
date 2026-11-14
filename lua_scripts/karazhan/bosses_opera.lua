@@ -24,7 +24,8 @@
 -- Romulo (17533), and the wolf (grandmother gossip, 17603) ARE summoned
 -- now (2026-10-22 summon bridge — creature:SummonCreature on the handler
 -- surface); the cyclone summon still has no bearer. The C++ aggro legs
--- (AttackStart / Attack have no bridge; DoZoneInCombat is bridged since
+-- (AttackStart IS bridged, lua_creature_events.go:7325, EngageWithTarget alias;
+-- Attack IS bridged, :1945; DoZoneInCombat is bridged since
 -- 2026-10-23 and Romulo's summon-leg DoZoneInCombat(pRomulo) IS ported
 -- in the SummonRomuloTimer leg below — receiver-agnostic bridge, the
 -- summon object in hand; other summon legs still idle until the engine
@@ -57,8 +58,9 @@
 -- is not registered: movement-only AI, no combat hooks ever fire.
 -- npc_grandmother (17603) IS registered now (2026-10-22 summon bridge):
 -- the gossip select summons the Big Bad Wolf at her position and despawns
--- her, C++-exact; the wolf's AttackStart(player) leg has no bridge
--- (documented gap). The wolf's
+-- her, C++-exact; the wolf's AttackStart(player) leg IS PORTED in
+-- grandmotherGossipSelect below (wolf:EngageWithTarget(player)) — the
+-- "no bridge" claim was stale (AttackStart bridged, lua_creature_events.go:7325). The wolf's
 -- death sound (9275) is ported via creature:PlayDirectSound in
 -- wolfDied (SMSG_PLAY_SOUND = WorldObject::PlayDirectSound). Julianne's and
 -- Romulo's pre-combat EntryYell/AggroYell timers have no Lua-modelable
@@ -270,7 +272,8 @@ end
 -- close-point fallback (C++-exact). TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3),
 -- 30s = 30000ms, then Talk(SAY_DOROTHEE_SUMMON). The ENSURE_AI
 -- DorotheeGUID write is the titoDorothee module link above;
--- pTito->AI()->AttackStart(victim) has no bridge (documented gap).
+-- pTito->AI()->AttackStart(victim) IS bridged (lua_creature_events.go:7325,
+-- EngageWithTarget alias) but unported — no victim handle in the Lua model.
 local function dorotheeSummonTito(creature, guid)
     local tito = creature:SummonCreature(ENTRY_TITO, 0, 0, 0, 0, 3, 30000)
     if tito ~= nil then

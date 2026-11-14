@@ -13534,8 +13534,8 @@ func init() {
 	RegisterLuaBoss("boss_terestian_illhoof", 15688)
 	// Opera Event (Karazhan) — fight logic in
 	// lua_scripts/karazhan/bosses_opera.lua (Tito 17548 AI "npc_tito" in
-	// the same file; cyclone 18412 and grandmother 17603 have no
-	// Lua-modelable hooks).
+	// the same file; cyclone 18412 has no Lua-modelable hooks, grandmother
+	// 17603 has a gossip-select handler in the same file).
 	RegisterLuaBoss("boss_dorothee", 17535)
 	RegisterLuaBoss("boss_strawman", 17543)
 	RegisterLuaBoss("boss_tinhead", 17547)

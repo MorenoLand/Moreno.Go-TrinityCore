@@ -56,7 +56,7 @@
 -- base arms (SetBossState(DATA_UROM, IN_PROGRESS) + pulse + me-form
 -- DoZone) are PORTED in uromEnterCombat (base call first,
 -- boss_urom.cpp:147-150; SetBossState PORTED 2026-11-05,
--- creature:SetBossState bridged, lua_creature_events.go:5917);
+-- creature:SetBossState bridged, lua_creature_events.go:7099);
 -- StartAttack + the platform Talk legs stay out (see above).
 -- Reset — SetControlled(false, UNIT_STATE_ROOT) ports via
 -- creature:SetRooted(false) (uromReset); SetDisableGravity(false) is
@@ -75,14 +75,14 @@
 -- EnterEvadeMode — gated on _platform > 2 (center only): _EnterEvade-
 -- Mode + NearTeleportTo(1118.3101, 1080.3800, 508.3610, 4.25) or
 -- MoveTargetedHome + Reset + events.Reset — creature:EnterEvadeMode
--- IS bridged (lua_creature_events.go:5014) and the MoveTargetedHome
--- twin creature:MoveHome IS bridged (:4989); the stay-out holds on
+-- IS bridged (lua_creature_events.go:5624) and the MoveTargetedHome
+-- twin creature:MoveHome IS bridged (:5599); the stay-out holds on
 -- different grounds: no ev25 hook exists (runtime.go CreatureEvents:
 -- 25 unused, no Go constant — engine-initiated evade has no Lua
 -- hook), and the _platform > 2 / _isInCenter gates ride the unported
 -- platform machine (boss_urom.cpp:114-130, :189-219).
 -- AttackStart — z-position-gated DoStartNoMovement vs BossAI::
--- AttackStart — creature:AttackStart IS bridged (lua_creature_events.go:5984,
+-- AttackStart — creature:AttackStart IS bridged (lua_creature_events.go:7325,
 -- EngageWithTarget alias); DoStartNoMovement itself has no bridge, and
 -- that, not movement, is the blocker here.
 -- UpdateAI — the full teleport event machine: EVENT_TELEPORT (30s)
@@ -125,7 +125,8 @@
 -- The arm STAYS OUT on its trigger alone: the StartAttack platform
 -- machine (summons + the teleport casts that produce the menagerie
 -- SpellHit) is unported — this file registers no JustEngagedWith /
--- StartAttack handler (events 3/4/23/24 only) — so event 14 could
+-- StartAttack handler (events 1/3/4/23/24; ev1 is base arms only,
+-- no StartAttack) — so event 14 could
 -- never fire these IDs. SetHomePosition IS bridged, and the teardown
 -- is bridged too; porting the SpellHit arm without its trigger would
 -- be dead code. No aura-application bridge on the Lua creature object.
@@ -174,7 +175,7 @@ local function uromDied(event, creature, killer)
 end
 
 -- C++ Reset (boss_urom.cpp:132-140): the SetDisableGravity(false) leg is
--- PORTED in uromReset below (bridge live, lua_creature_events.go:800),
+-- PORTED in uromReset below (bridge live, lua_creature_events.go:3840),
 -- and SetReactState(REACT_AGGRESSIVE) is vacuous here (Lua never sets
 -- REACT_PASSIVE), but the DoCastSelf(SPELL_EVOCATE) leg is ungated and
 -- port-pattern-ready — self-cast on the reset path (halion

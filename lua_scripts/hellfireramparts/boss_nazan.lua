@@ -86,7 +86,7 @@
 -- liquidFireSummoned below; the event-19 binding was FIXED 2026-10-24
 -- (was registered on the summoned entry, never fired); the stale "no summon bridge" claim was
 -- retracted — creature:SummonCreature is bridged,
--- lua_creature_events.go:728); the JustSummoned SetLevel leg is PORTED
+-- lua_creature_events.go:4161); the JustSummoned SetLevel leg is PORTED
 -- via the new SetLevel bridge; no SpellScript/AuraScript scripts in this file.
 
 local SPELL_FIREBALL = 34653

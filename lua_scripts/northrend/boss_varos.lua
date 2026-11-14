@@ -36,7 +36,7 @@
 -- (SetBossState(DATA_VAROS, IN_PROGRESS) + pulse + me-form DoZone,
 -- base-first per C++; instance/setActive/ScheduleTasks legs out).
 -- SetBossState PORTED 2026-11-05 (creature:SetBossState bridged,
--- lua_creature_events.go:5917; SetBossState census).
+-- lua_creature_events.go:7099; SetBossState census).
 -- JustDied — Talk(SAY_DEATH 3) (event 4; the _JustDied
 -- SetBossState(DONE) leg is PORTED in varosDied (base-first,
 -- 2026-11-05) + the DoCast(me, SPELL_DEATH_SPELL 50415, true) leg
@@ -86,7 +86,7 @@
 -- cast / cast / Talk legs; the event stays queued, no re-arm
 -- consumed). The stale "UNIT_STATE_CASTING gates have no bridge"
 -- claim is retracted — IsCasting is live
--- (lua_creature_events.go:1950).
+-- (lua_creature_events.go:2480).
 -- EVENT_ENERGIZE_CORES DoCast(me, SPELL_ENERGIZE_CORES 50785)
 -- one-shot 4s after each VISUAL then CancelEvent — STAYS OUT:
 -- the spell’s area targeting is SpellScript-filtered (the cone
@@ -94,22 +94,28 @@
 -- targets — shazzrah no-op-cast precedent; the 4s chain dies
 -- with this stay-out. The UNIT_STATE_CASTING gates have no bridge
 -- (documented deviation); DoMeleeAttackIfReady is engine-driven.
--- npc_azure_ring_captain — ENTRY-UNVERIFIABLE, documented-only
--- (the entry-unverifiable queue, eleventh script group after
--- npc_unstable_sphere; the local enum holds only
--- NPC_AZURE_RING_GUARDIAN 28236 (summoned by instance code) — no
--- NPC_AZURE_RING_CAPTAIN enum anywhere in the C++ tree and zero
--- ScriptName sql/ hits, so there is no C++-evidenced entry to
--- register): Reset — SetWalk(true) + MOVEMENTFLAG_FLYING +
+-- npc_azure_ring_captain — ENTRY VERIFIED 2026-11-14 (round-70):
+-- TDB 28236 'Azure Ring Captain', ScriptName npc_azure_ring_captain,
+-- spawns 0 (summoned by instance code); the "zero ScriptName sql/
+-- hits" claim is RETRACTED. The local enum holds only
+-- NPC_AZURE_RING_GUARDIAN 28236 (oculus.h:46) — the enum name and
+-- the TDB name disagree; the TDB ScriptName binding is operative
+-- for registration. The leg stays out on its TRIGGER alone (the
+-- captain is never summoned: the CALL_AZURE_RING_CAPTAIN 51002
+-- summon/event-send leg is unported and the DoAction/MovementInform
+-- machine below is unported): Reset — SetWalk(true) + MOVEMENTFLAG_FLYING +
 -- SetReactState(REACT_AGGRESSIVE); SpellHitTarget — SPELL_ICE_BEAM
 -- 49549 -> target CastSpell(SPELL_SUMMON_ARCANE_BEAM 51017, true)
 -- + me->DespawnOrUnsummon() — NOTE: SpellHitTarget (event 15) IS
--- dispatched in the current runtime (runtime.go:201 /
--- boss_ai.go:2052); the leg stays out because 51017 is a summon with
--- no spell-effect delivery leg (urom verdict) — DespawnOrUnsummon DOES
--- have a Lua binding (creature:Despawn(), lua_creature_events.go:3097;
--- the old "no binding" claim is retracted 2026-11-10) — and because
--- the entry is unverifiable, not because the event never fires; UpdateAI — DoMeleeAttackIfReady only; MovementInform
+-- dispatched in the current runtime (engine/scripting/runtime.go:380 /
+-- boss_ai.go:4499); the leg stays out because the captain is never
+-- summoned (trigger machine unported, see above) — NOT for lack of a
+-- summon-delivery leg (creatureEffectSummonType exists,
+-- boss_ai.go:3574-3581, 50415 precedent) and NOT because the event
+-- never fires; 51017 itself is unseeded in the Go Spell.dbc so its
+-- effect type is unverified (round-70). DespawnOrUnsummon DOES have a
+-- Lua binding (creature:Despawn(), lua_creature_events.go:3318; the
+-- old "no binding" claim is retracted 2026-11-10); UpdateAI — DoMeleeAttackIfReady only; MovementInform
 -- (POINT_MOTION_TYPE / ACTION_CALL_DRAGON_EVENT) — MoveIdle +
 -- DoCast(target, SPELL_ICE_BEAM) (the target-GUID leg); DoAction(
 -- ACTION_CALL_DRAGON_EVENT) — varos via instance GetGuidData(
@@ -131,7 +137,7 @@
 -- GetCoreEnergizeOrientation(). The "no SpellScript bridge" claim
 -- is STALE (2026-11-11): ev7 is the OnObjectAreaTargetSelect bridge
 -- (runtime.go:607, malygos 402/412/413 precedent), GetAngle is the
--- GetAbsoluteAngle twin (object.go:449), GetO() the orientation
+-- GetAbsoluteAngle twin (object.go:460), GetO() the orientation
 -- read, and the latch is modeled per-GUID in energizeVisualTick
 -- below (first tick = GetO(), later ticks -= 2.0 normalized).
 -- ENEMY PORTED 2026-11-11 (ev7); _ENTRY is the same filter shape
@@ -263,7 +269,7 @@ end
 -- the AI's GetCoreEnergizeOrientation() (fabs, unnormalized diff
 -- — the C++ wrap-around quirk is kept verbatim). PORTED
 -- 2026-11-11 via ev7 (runtime.go:607); GetAngle is the
--- GetAbsoluteAngle twin (object.go:449). DORMANT: 50785 is cast
+-- GetAbsoluteAngle twin (object.go:460). DORMANT: 50785 is cast
 -- only by the energizeCoresTick above, which rides Spell.dbc.
 local function energizeCoreAreaEnemyFilter(event, spell, effectIndex, targets)
     if effectIndex ~= 0 then

@@ -41,7 +41,7 @@
 -- nothing).
 -- Ported arms (C++-exact for all modeled arms) — phase machine PORTED
 -- 2026-11-05 (tick 248: creature:DoAction IS bridged — ev38 dispatch,
--- lua_creature_events.go:814, kelthuzad/razorgore precedent — the "no
+-- lua_creature_events.go:858, kelthuzad/razorgore precedent — the "no
 -- cross-AI bridge" claims are retracted):
 -- boss_thaddius: inherited BossAI::JustEngagedWith base arms (event 1:
 -- SetCombatPulseDelay(5) + me-form DoZoneInCombat) PORTED 2026-11-03;

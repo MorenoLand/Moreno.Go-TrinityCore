@@ -48,8 +48,8 @@
 -- they fire unconditionally (same convention as the other Karazhan ports),
 -- and InterruptNonMeleeSpells gates are skipped; the normal-cast
 -- IsNonMeleeSpellCast gate IS ported in onNormalCast via IsCasting
--- (lua_creature_events.go:2102). SetPower (lua_creature_events.go:288), SetStandState (:568), and
--- GetPower/GetMaxPower (object.go:101) are all bridged — the old "no
+-- (lua_creature_events.go:2480). SetPower (lua_creature_events.go:2982), SetStandState (:4824), and
+-- GetPower/GetMaxPower (scripting/object.go:203) are all bridged — the old "no
 -- GetPower" / "No SetPower/SetStandState" claims are stale. The whole
 -- drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink 30024,
 -- potion 32453, AOE pyroblast 29978, the drink-interrupt damage hook, the

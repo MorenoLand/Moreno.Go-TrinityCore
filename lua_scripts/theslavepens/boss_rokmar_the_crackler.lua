@@ -45,7 +45,7 @@
 -- set. The UpdateAI pre-loop (:89) + in-loop (:112)
 -- UNIT_STATE_CASTING gates are ported per arm (see pump gate
 -- note; live creature:IsCasting bridge,
--- lua_creature_events.go:1950). OnDied(4):
+-- lua_creature_events.go:2480). OnDied(4):
 -- cleanup (the _JustDied arm is instance-blocked). OnLeave-
 -- Combat(2)/OnReset(23): cancel the pump, drop per-GUID state
 -- (the _Reset/Initialize arm is instance-blocked). Melee is

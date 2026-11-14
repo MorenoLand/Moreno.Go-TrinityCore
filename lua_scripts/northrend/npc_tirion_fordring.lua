@@ -41,22 +41,26 @@
 -- LK chain (spline arrival via ev28, Talk, FOG weather, 3x self-cast
 -- platform break + Fordring DoAction(20) + SetBossState(4, DONE)) +
 -- LK-voice Talk(4)/(5) + Arthas-portal 3s cast/weather legs.
+-- + Tirion/Fizzlebang/LK emote legs + EVENT_SUMMON_VALKYR (round-72
+-- apply 2026-11-14 — see the Unmodeled note for bridges/cites).
 -- The DONE/WIPE relays that feed this file's DoAction arms live in the
 -- boss files (beasts 6/5, jaraxxus 9/24, champions 13/25, valkyr
 -- 19/26) — this file is only the receiver.
 -- Unmodeled (no bridges — documented, not wired):
 -- npc_tirion_toc EnterEvadeMode _summons.DespawnAll (no
--- summons-enumeration bridge); DoAction arms' HandleEmoteCommand legs
--- (EVENT_GORMOK_EXCLAMATION / EVENT_EXCLAMATION / EVENT_EMOTE_SHEATHE
--- — pure emotes; their downstream schedules are kept) and
--- SetUInt32Value(UNIT_NPC_EMOTESTATE) legs (Fizzlebang EMOTE_TALK /
--- REMOVE_EMOTE_TALK, LK EMOTE_TALK/EXCLAMATION/KNEEL — no emote-state
--- bridge; the LK EMOTE_TALK weather leg IS ported); EVENT_SUMMON_VALKYR
--- SummonCreatureGroup(1) (bridge exists — lua_creature_events.go:3567
--- — but the group rows live only in TDB creature_summon_groups for
--- summoner 34996/group 1, which this repo's world DB does not ship;
--- the call would return an empty table, so it stays out until the DB
--- ships the rows — palehoof dormant precedent); EVENT_SUMMON_CHAMPIONS
+-- summons-enumeration bridge); ev19 JustSummoned (:381-384) is the
+-- one-line _summons.Summon feed for that leg and stays out with it;
+-- ev23 fires during evade too (creaturemotion.go:4699) but is not
+-- evade-distinct (also spawn + death-path), so it cannot carry the
+-- DespawnAll leg. DoAction arms' HandleEmoteCommand legs
+-- (EVENT_GORMOK_EXCLAMATION / EVENT_EXCLAMATION / EVENT_EMOTE_SHEATHE)
+-- and SetUInt32Value(UNIT_NPC_EMOTESTATE) legs (Fizzlebang EMOTE_TALK /
+-- REMOVE_EMOTE_TALK, LK EMOTE_TALK/EXCLAMATION/KNEEL) PORTED 2026-11-14
+-- (round-72 apply) via PerformEmote (lua_creature_events.go:4539) and
+-- EmoteState (:4798); EVENT_SUMMON_VALKYR SummonCreatureGroup(1) PORTED
+-- the same tick (bridge :4218; TDB 26091 ships 6 rows for 34996/group 1,
+-- dormant until the repo world.db seeds creature_summon_groups —
+-- illidan/council precedent); EVENT_SUMMON_CHAMPIONS
 -- controller SetData(0, team) + EVENT_START_CHAMPIONS SetData(1, 0)
 -- (boss_faction_champions.cpp:505-562: SummonChampions roster machine
 -- + aggressive/flag legs — PORTED tick 410 in boss_faction_champions.lua
@@ -284,8 +288,8 @@ end
 
 -- C++ npc_tirion_toc::UpdateAI events, as CreateLuaEvent timer chains
 -- keyed by the Fordring GUID. EVENT_EXCLAMATION /
--- EVENT_EMOTE_SHEATHE are pure HandleEmoteCommand legs with no
--- downstream — their schedules are skipped, not the downstream.
+-- EVENT_EMOTE_SHEATHE are HandleEmoteCommand legs, ported via PerformEmote
+-- (lua_creature_events.go:4539) — their downstream schedules are kept.
 local function fordringGormokIntro(creature, guid)
     creature:Talk(1)
     local leader = creature:GetInstanceCreature(fordringState(creature).leader)
@@ -293,7 +297,8 @@ local function fordringGormokIntro(creature, guid)
         leader:DoAction(ACTION_START_GORMOK)
     end
     schedule(guid, "gormokExclamation", 6000, function()
-        -- EVENT_GORMOK_EXCLAMATION: emote only; schedules SPAWM_GORMOK.
+        -- EVENT_GORMOK_EXCLAMATION: emote, then schedules SPAWN_GORMOK.
+        creature:PerformEmote(5) -- C++ EMOTE_ONESHOT_EXCLAMATION
         schedule(guid, "spawnGormok", 6000, function()
             openMainGate(creature)
             creature:SummonCreature(ENTRY_GORMOK, BEASTS_POS_GORMOK[1], BEASTS_POS_GORMOK[2], BEASTS_POS_GORMOK[3], BEASTS_POS_GORMOK[4], SUMMON_CORPSE_TIMED_DESPAWN, 12000)
@@ -361,7 +366,9 @@ local function fordringDoAction(event, creature, action)
         creature:Talk(2)
         openMainGate(creature)
         creature:SummonCreature(ENTRY_DREADSCALE, BEASTS_POS_DREADSCALE[1], BEASTS_POS_DREADSCALE[2], BEASTS_POS_DREADSCALE[3], BEASTS_POS_DREADSCALE[4])
-        -- EVENT_EXCLAMATION 7s: pure emote, no downstream — skipped.
+        schedule(guid, "exclamationJormungars", 7000, function()
+            creature:PerformEmote(5) -- C++ EVENT_EXCLAMATION: EMOTE_ONESHOT_EXCLAMATION
+        end)
     elseif action == ACTION_START_ICEHOWL then
         if st.icehowlSummoned then
             return
@@ -370,7 +377,9 @@ local function fordringDoAction(event, creature, action)
         creature:Talk(3)
         openMainGate(creature)
         creature:SummonCreature(ENTRY_ICEHOWL, BEASTS_POS_GORMOK[1], BEASTS_POS_GORMOK[2], BEASTS_POS_GORMOK[3], BEASTS_POS_GORMOK[4], SUMMON_DEAD_DESPAWN)
-        -- EVENT_EXCLAMATION 6s: pure emote, no downstream — skipped.
+        schedule(guid, "exclamationIcehowl", 6000, function()
+            creature:PerformEmote(5) -- C++ EVENT_EXCLAMATION: EMOTE_ONESHOT_EXCLAMATION
+        end)
     elseif action == ACTION_NORTHREND_BEASTS_WIPE then
         st.jormungarsSummoned = false
         st.icehowlSummoned = false
@@ -380,7 +389,9 @@ local function fordringDoAction(event, creature, action)
         end)
     elseif action == ACTION_NORTHREND_BEASTS_DEFEATED then
         creature:Talk(4)
-        -- EVENT_EXCLAMATION 2s: pure emote, no downstream — skipped.
+        schedule(guid, "exclamationBeastsDefeated", 2000, function()
+            creature:PerformEmote(5) -- C++ EVENT_EXCLAMATION: EMOTE_ONESHOT_EXCLAMATION
+        end)
         schedule(guid, "summonBarrett", 6000, function()
             handleBarrettSummon(creature)
         end)
@@ -395,7 +406,9 @@ local function fordringDoAction(event, creature, action)
     elseif action == ACTION_KILL_JARAXXUS then
         schedule(guid, "killJaraxxus", 6000, function()
             creature:Talk(7)
-            -- EVENT_EMOTE_SHEATHE 2s: pure emote, no downstream.
+            schedule(guid, "emoteSheathe", 2000, function()
+                creature:PerformEmote(396) -- C++ EVENT_EMOTE_SHEATHE: EMOTE_ONESHOT_TALK_NO_SHEATHE
+            end)
         end)
     elseif action == ACTION_JARAXXUS_DEFEATED then
         schedule(guid, "tirionLament", 7000, function()
@@ -451,8 +464,7 @@ local function fordringDoAction(event, creature, action)
     elseif action == ACTION_START_VALKYR then
         creature:Talk(13)
         schedule(guid, "summonValkyr", 17000, function()
-            -- SummonCreatureGroup(1) stays out (header note); the gate
-            -- leg is independent and ported.
+            creature:SummonCreatureGroup(1) -- C++ EVENT_SUMMON_VALKYR: GROUP_VALKYR
             schedule(guid, "openGate", 3000, function()
                 openMainGate(creature)
             end)
@@ -460,7 +472,7 @@ local function fordringDoAction(event, creature, action)
     elseif action == ACTION_START_VALKYR_ENGAGE then
         creature:Talk(14)
         schedule(guid, "summonValkyr", 5000, function()
-            -- SummonCreatureGroup(1) stays out (header note).
+            creature:SummonCreatureGroup(1) -- C++ EVENT_SUMMON_VALKYR: GROUP_VALKYR
             schedule(guid, "openGate", 3000, function()
                 openMainGate(creature)
             end)
@@ -637,9 +649,8 @@ RegisterCreatureEvent(ENTRY_GARROSH, 23, leaderReset)
 RegisterCreatureEvent(ENTRY_GARROSH, 38, leaderDoAction)
 
 -- C++ npc_fizzlebang_toc (trial_of_the_crusader.cpp:602-682). The
--- emote-state legs (EVENT_EMOTE_TALK / EVENT_REMOVE_EMOTE_TALK) are
--- skipped — no emote-state bridge — but the timers they ride on carry
--- no downstream, so nothing else is dropped.
+-- emote-state legs (EVENT_EMOTE_TALK / EVENT_REMOVE_EMOTE_TALK) PORTED
+-- 2026-11-14 via creature:EmoteState (lua_creature_events.go:4798).
 local function fizzlebangLastTalk(creature, guid)
     creature:Talk(3)
     sendToFordring(creature, ACTION_KILL_JARAXXUS)
@@ -650,8 +661,9 @@ local function fizzlebangSetTarget(creature, guid)
     if jaraxxus ~= nil then
         creature:SetTarget(jaraxxus:GetGUID())
     end
-    -- EVENT_EMOTE_SHEATHE 6s: emote only; schedules LAST_TALK 9s.
+    -- EVENT_EMOTE_SHEATHE 6s: emote, then schedules LAST_TALK 9s.
     schedule(guid, "emoteSheathe", 6000, function()
+        creature:PerformEmote(396) -- C++ EVENT_EMOTE_SHEATHE: EMOTE_ONESHOT_TALK_NO_SHEATHE
         schedule(guid, "lastTalk", 9000, function()
             fizzlebangLastTalk(creature, guid)
         end)
@@ -666,6 +678,12 @@ local function fizzlebangOblivion(creature, guid)
     schedule(guid, "summonJaraxxus", 11000, function()
         sendToFordring(creature, ACTION_SUMMON_JARAXXUS)
         creature:Talk(2)
+        schedule(guid, "emoteTalk", 2000, function()
+            creature:EmoteState(378) -- C++ EVENT_EMOTE_TALK: EMOTE_STATE_TALK
+        end)
+        schedule(guid, "removeEmoteTalk", 7000, function()
+            creature:EmoteState(0) -- C++ EVENT_REMOVE_EMOTE_TALK: EMOTE_ONESHOT_NONE
+        end)
         schedule(guid, "setTarget", 4000, function()
             fizzlebangSetTarget(creature, guid)
         end)
@@ -684,6 +702,12 @@ local function fizzlebangMovementInform(event, creature, type, id)
     if type == SPLINE_CHAIN_MOTION_TYPE and id == POINT_SUMMON then
         openMainGate(creature)
         creature:Talk(0)
+        schedule(creature:GetGUIDLow(), "emoteTalk", 2000, function()
+            creature:EmoteState(378) -- C++ EVENT_EMOTE_TALK: EMOTE_STATE_TALK
+        end)
+        schedule(creature:GetGUIDLow(), "removeEmoteTalk", 9000, function()
+            creature:EmoteState(0) -- C++ EVENT_REMOVE_EMOTE_TALK: EMOTE_ONESHOT_NONE
+        end)
         schedule(creature:GetGUIDLow(), "oblivion", 11000, function()
             fizzlebangOblivion(creature, creature:GetGUIDLow())
         end)
@@ -699,7 +723,7 @@ RegisterCreatureEvent(ENTRY_FIZZLEBANG, 28, fizzlebangMovementInform)
 
 -- C++ boss_lich_king_toc (trial_of_the_crusader.cpp:303-353). The
 -- emote-state legs (EVENT_EMOTE_TALK's SetUInt32Value + EXCLAMATION /
--- KNEEL) are skipped — no emote-state bridge — but EMOTE_TALK's
+-- KNEEL) PORTED 2026-11-14 via EmoteState/PerformEmote — and EMOTE_TALK's
 -- SetZoneWeather(FOG) leg IS ported, and BREAK_PLATFORM's floor
 -- SetDestructibleState leg stays out (no GO destructible-state bridge).
 local function lichKingReset(event, creature)
@@ -716,10 +740,17 @@ local function lichKingMovementInform(event, creature, type, id)
         schedule(creature:GetGUIDLow(), "startTalk", 4000, function()
             creature:Talk(0)
             schedule(creature:GetGUIDLow(), "emoteTalk", 4000, function()
+                creature:EmoteState(378) -- C++ EVENT_EMOTE_TALK: EMOTE_STATE_TALK
                 local mapObj = creature:GetMap()
                 if mapObj ~= nil then
                     mapObj:SetZoneWeather(AREA_TRIAL_OF_THE_CRUSADER, WEATHER_FOG, 0.0)
                 end
+                schedule(creature:GetGUIDLow(), "emoteExclamation", 10000, function()
+                    creature:PerformEmote(5) -- C++ EVENT_EMOTE_EXCLAMATION: EMOTE_ONESHOT_EXCLAMATION
+                    schedule(creature:GetGUIDLow(), "emoteKneel", 3000, function()
+                        creature:PerformEmote(16) -- C++ EVENT_EMOTE_KNEEL: EMOTE_ONESHOT_KNEEL
+                    end)
+                end)
             end)
             schedule(creature:GetGUIDLow(), "breakPlatform", 18000, function()
                 creature:CastSpell(creature, SPELL_LK_FROST_NOVA, true)

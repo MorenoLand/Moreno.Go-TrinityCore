@@ -109,7 +109,11 @@
 --   the _Reset() SetBossState(DATA_ONYXIA, NOT_STARTED) leg (:157,
 --   BossAI::_Reset ScriptedCreature.cpp:499-511 — alive-gated and
 --   != DONE-gated) are PORTED in onReset (bridges live,
---   lua_creature_events.go:4937/7099); the instance SetData
+--   lua_creature_events.go:4937/7099), and the _Reset() / _JustDied()
+--   summons.DespawnAll legs (:507/:516) are PORTED in onReset/onDied
+--   via the entry grid sweep (despawnSummons below; Go keeps no
+--   per-summoner SummonList, so live whelps/lair-guards survived
+--   wipes and kills until this tick); the instance SetData
 --   (DATA_ONYXIA_PHASE, PHASE_BREATH) leg is PORTED at the phase-2
 --   latch (enterPhase2, shared-table write — the Reset call is a
 --   C++ no-op, SetData only acts on PHASE_BREATH); the
@@ -651,6 +655,22 @@ local function onLeaveCombat(event, creature)
     clearState(creature:GetGUIDLow())
 end
 
+-- C++ BossAI::_Reset (ScriptedCreature.cpp:507) and _JustDied (:516)
+-- both run summons.DespawnAll(); Go keeps no per-summoner SummonList
+-- (no engine auto-clear on reset/death), so the leg ports via the
+-- entry grid sweep (tirion despawnEssences / supremus LeaveCombat
+-- precedent). TDB has zero static spawns of 11262/36561 anywhere, so
+-- the sweep can only catch Onyxia's own whelps/lair-guards; the 200y
+-- radius covers the whole lair from any in-room position.
+local function despawnSummons(creature)
+    for _, whelp in ipairs(creature:GetCreaturesInGrid(NPC_WHELP, 200)) do
+        whelp:DespawnOrUnsummon()
+    end
+    for _, guard in ipairs(creature:GetCreaturesInGrid(NPC_LAIRGUARD, 200)) do
+        guard:DespawnOrUnsummon()
+    end
+end
+
 local function onReset(event, creature)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -677,6 +697,9 @@ local function onReset(event, creature)
     if creature:IsAlive() and creature:GetBossState(DATA_ONYXIA) ~= BOSS_STATE_DONE then
         creature:SetBossState(DATA_ONYXIA, BOSS_STATE_NOT_STARTED)
     end
+    -- C++ _Reset() summons.DespawnAll (ScriptedCreature.cpp:507), in
+    -- C++ order before the SetReactState leg below.
+    despawnSummons(creature)
     creature:SetReactState(2) -- REACT_AGGRESSIVE
 end
 
@@ -689,6 +712,11 @@ local function onDied(event, creature, killer)
     -- the mal_ganis precedent. Without this leg the boss stayed
     -- IN_PROGRESS after the kill (Go writes boss state only via the
     -- Lua bridge, lua_creature_events.go:7099).
+    -- C++ _JustDied() summons.DespawnAll (ScriptedCreature.cpp:516),
+    -- before the SetBossState DONE leg below. ev23 already ran the
+    -- sweep on the death-path pre-fire, so this is a no-op on that
+    -- path; it covers any death where the pre-fire did not run.
+    despawnSummons(creature)
     creature:SetBossState(DATA_ONYXIA, BOSS_STATE_DONE)
 end
 

@@ -13,7 +13,8 @@
 -- 16809. The two heads are C++ Creatures-enum constants in
 -- the .cpp itself: NPC_LEFT_HEAD = 19523, NPC_RIGHT_HEAD =
 -- 19524. The creature_template ScriptName bindings are
--- DB-side (no TDB in this workspace).
+-- DB-side (TDB present at ~/.cache/tc-db/TDB_full_world_335.26091_2026_09_09.sql;
+-- 16809/19523/19524 verified 2026-11-14, round-71).
 -- Talk: the boss itself only ever talks EMOTE_ENRAGE = 2
 -- (fired from the burning-maul arm, C++-exact); YELL_DIE_L
 -- = 0 / YELL_DIE_R = 1 and the whole GoCombat/GoCombatDelay/

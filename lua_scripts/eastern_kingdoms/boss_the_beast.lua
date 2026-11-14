@@ -68,7 +68,7 @@
 -- and ev14 fires per landed hit target in the same finishSpellCast
 -- (spells.go:19914, 30186-30197) — skinning the dead Beast WOULD fire it.
 -- The sole block is the effect gate: fireCreatureLuaEvent
--- (lua_creature_events.go:7492-7505) passes (event, creature, caster,
+-- (lua_creature_events.go:7597) passes (event, creature, caster,
 -- spellId) only — every ev14 fire site passes caster + spellID, no
 -- SpellInfo/effect list reaches Lua — and no source-grounded spell-ID
 -- substitute exists: C++ gates on effect, not ID; no skinning spell ID
@@ -76,12 +76,12 @@
 -- absent from the workspace (engine/data/dbc/ holds only dbc.go), so
 -- hard-coding an ID would be fabrication. Bridgeable legs, for the
 -- record if the effect gate is ever exposed: creature:IsAlive()
--- (object.go:260, lua_objects.go:2152) and CastSpell(target, id[,
+-- (object.go:260, lua_objects.go:2192) and CastSpell(target, id[,
 -- triggered]) (lua_creature_events.go:949-986); luaMotionCreature has no
 -- alive gate (lua_creature_events.go:359). No ev14 registration.
 -- CASTING gates ported: C++ UpdateAI pre-loop gate (:166) + in-loop
 -- gate (:201) are a 500ms IsCasting defer under each arm's own key
--- (live, lua_creature_events.go:1950; mal_ganis idiom) — a gated arm
+-- (live, lua_creature_events.go:2480; mal_ganis idiom) — a gated arm
 -- fires nothing and consumes no re-arm, staying due until the cast
 -- ends. The in-loop gate's same-tick co-expiry suppression has no
 -- timer-arm model (independent callbacks, AV precedent). The C++

@@ -10,8 +10,9 @@
 -- Entry: NPC_KARGATH_BLADEFIST = 16808 from shattered_halls.
 -- h (SHCreatureIds), mapped in instance_shattered_halls.cpp
 -- OnCreatureCreate (line 111) plus GetGuidData (line 170).
--- The creature_template ScriptName bindings are DB-side (no
--- TDB in this workspace).
+-- The creature_template ScriptName bindings are DB-side (TDB
+-- present at ~/.cache/tc-db/TDB_full_world_335.26091_2026_09_09.sql;
+-- 16808/17621/17622/17623/17695/17301 verified 2026-11-14, round-71).
 -- Talk: SAY_AGGRO = 0 fires from the C++ JustEngagedWith
 -- (C++-exact); SAY_SLAY = 1 fires from the C++ KilledUnit
 -- override gated on the victim being a player (C++-exact);
@@ -82,12 +83,12 @@
 -- SetSpeedRate(MOVE_RUN, 2) / MoveChase(victim) /
 -- Blade_Dance_Timer = 30000 — none of it can run without a
 -- movement bridge; the speed-rate arms (SetSpeedRate MOVE_RUN is
--- bridged, lua_creature_events.go:735) stay out with the unbridged
+-- bridged, lua_creature_events.go:6065) stay out with the unbridged
 -- MovePoint/MovementInform machine; the IsHeroic()-gated Charge_timer = 5000 arm at
 -- blade-dance end and its DoCast(SelectTarget(Random, 0),
 -- H_SPELL_CHARGE 25821) fire arm stay unmodeled — the "no
 -- difficulty bridge" claim was stale and is retracted
--- (creature:IsHeroic() is bridged, lua_creature_events.go:260),
+-- (creature:IsHeroic() is bridged, lua_creature_events.go:4417),
 -- but the arm still has no landing point: Charge_timer is only
 -- ever armed by the blade-dance-end leg (no movement bridge —
 -- MovePoint/MovementInform); the fire arm's random threat-list pick

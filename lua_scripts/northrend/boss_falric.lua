@@ -28,7 +28,7 @@
 -- treated the whole EventMap machine as unbridgeable under the
 -- "no-timer-bridge" doctrine and ported Talk arms only. That doctrine is
 -- disproved and stale — CreateLuaEvent is a real registered bridge
--- (engine/scripting/runtime.go:798), and timer-driven cast arms port on
+-- (engine/scripting/runtime.go:2425), and timer-driven cast arms port on
 -- the maiden_of_virtue / moroes / curator / nightbane convention:
 -- timers table keyed by creature GUID, cancelled on Eluna events 2
 -- (leave combat), 4 (death), 23 (reset); CastSpell(nil, spellId) =
@@ -46,7 +46,7 @@
 -- JustEngagedWith (:78-84) — Talk(SAY_AGGRO 0) (:78) unconditional;
 --   DoZoneInCombat (:79) PORTED 2026-10-23; instance->SetBossState
 --   (DATA_FALRIC 0, IN_PROGRESS) (:80) PORTED 2026-11-05 via
---   creature:SetBossState (lua_creature_events.go:5917, the garfrost
+--   creature:SetBossState (lua_creature_events.go:7099, the garfrost
 --   precedent) — in C++ arm order, after Talk + DoZoneInCombat and
 --   before the timer seeds; the three ScheduleEvent seeds:
 --   EVENT_QUIVERING_STRIKE at 23000ms (:82),
@@ -83,7 +83,7 @@
 --   (_hopelessnessCount = 0, :67). The SetVisible(false) /
 --   SetImmuneToAll(true) / REACT_PASSIVE legs (:30-32) are PORTED
 --   2026-11-08 (tick 491) — all three bridges are live
---   (lua_creature_events.go:5548/:5966/:4229) and the clear half
+--   (lua_creature_events.go:6158/:6621/:4715) and the clear half
 --   (DoAction ACTION_ENTER_COMBAT, see above) is ported, so the
 --   toggle pair is complete. The GetData(DATA_WAVE_COUNT) /
 --   ProcessEvent(EVENT_DO_WIPE) leg (:33-34) is PORTED 2026-11-08
@@ -122,6 +122,13 @@
 --   "both halves stay out" note (2026-10-23 SetImmuneToAll sweep)
 --   is retracted. Initialize (_hopelessnessCount =
 --   0, :67) is the per-GUID state seed on enter combat.
+-- JustSummoned (boss_horAI.cpp:50-53) — summons.Summon bookkeeping
+--   only; Falric summons NOTHING (zero SummonCreature in
+--   boss_falric.cpp), so the SummonList is always empty and the
+--   DespawnAll consumers are no-ops — already covered by the ported
+--   Reset/JustDied state clears above. No ev19 registration; the
+--   scanner row is suppressed via INLINE_PORTED (round-72 verified,
+--   delrissa precedent; Marwyn shares boss_horAI, same verdict).
 -- JustEngagedWith :79 DoZoneInCombat — PORTED 2026-10-23
 -- (creature:DoZoneInCombat, in arm order after Talk; bridge live at
 -- engine/world/lua_creature_events.go; the old "no bridge" claim was
@@ -129,7 +136,7 @@
 -- (creature:SetBossState, see the PORTED ARMS note above).
 -- UpdateAI :120 HasUnitState(UNIT_STATE_CASTING) gate — PORTED: the
 --   gate sits before ExecuteEvent (:123), so all three timer ticks
---   defer 500ms via creature:IsCasting() (lua_creature_events.go:1950)
+--   defer 500ms via creature:IsCasting() (lua_creature_events.go:2480)
 --   without consuming their re-arm (the mal_ganis idiom); the
 --   DamageTaken hopelessness latch is a separate hook and stays
 --   ungated per C++. The old "no unit-state bridge; timers fire
