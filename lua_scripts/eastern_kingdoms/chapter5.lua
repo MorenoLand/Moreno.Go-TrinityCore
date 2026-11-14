@@ -5,7 +5,7 @@
 -- (NPC_HIGHLORD_DARION_MOGRAINE, chapter5.cpp:139). The Light of
 -- Dawn event: gossip start -> intro step machine (steps 0-9) ->
 -- escort waypoints 0-1 -> 5-minute battle -> post-battle steps
--- 11-73 (next tick) -> escort waypoints 2-8.
+-- 11-73 -> escort waypoints 2-8.
 -- Ported arms (this tick):
 -- - Reset (ev23): Initialize + Mount(25279) + SetVisible(true) +
 --   world states REMAINS 0 / EVENT_BEGIN 0 + stored-creature
@@ -30,6 +30,18 @@
 --   Talk(4); steps 4-7 ghoul/abomination/warrior/behemoth
 --   summon loops (500ms re-fire, shack 33271 each tick);
 --   step 8 Talk(5); step 9 escort resume + charge scatter.
+-- - uiStep machine steps 11-73 (post-battle dialogue machine):
+--   Tirion/Alexandros/ghost/Lich King talks (ids 27-67 + emotes
+--   73-84), Alexandros + Darion-ghost summons, ghost JUST_DIED,
+--   Lich King soul feasts, Darion charge (step 33) + kick (35),
+--   Maxwell charge (step 42, one defender + Rimblat on the lich
+--   king's live position), kicked heroes (43), stand-up (44-46),
+--   Ashbringer rebirth (47, Tirion equips 13262 + 53702),
+--   Light of Dawn GO summon (48) + 41542 burst + roar, Tirion
+--   charge + LK Relocate (52), LK teleport visual + Kill (59-60),
+--   Tirion farewell walk (61-69), Darion stand + Talk (70),
+--   quest credit to players in 500yd + fresh Darion (71),
+--   escort end (72), despawn sweep (73).
 -- - SpawnNPC (waypoint 1 + 1s battle spawncheck): refills every
 --   wave from the stored GUIDs, dawn side set to Darion's
 --   faction + AddThreat 0, scourge side to 2084.
@@ -59,11 +71,26 @@
 -- - EngagementOver (CreatureAI.cpp:282, engagement-flag reset)
 --   has no bridge; subsumed by the battle-end CombatStop(true)
 --   + InterruptNonMeleeSpells + RemoveAllAuras sequence.
+-- - Steps 34 and 36 have NO case in C++ (cases run 33 -> 35,
+--   35 -> 37): the machine stalls there until the resumed escort
+--   reaches waypoint 6/7, whose JumpToNextStep advances it. The
+--   Lua 1s poll stands in for the per-tick no-op re-fire.
+-- - HandleEmoteCommand has no bridge: oneshot kick/roar ride
+--   PerformEmote (wp6 precedent); EMOTESTATE writes ride
+--   EmoteState (SetUInt32Value is not on the creature surface);
+--   KillSelf rides Kill(); the virtual-item equip rides
+--   SetEquipmentSlots. SummonGameObject / Relocate / SetSpeedRate
+--   (MOVE_RUN=1 only) / SetDeathState / DespawnOrUnsummon are
+--   bridged and verified in lua_creature_events.go.
+-- - Step 42 overwrites st.defender[1]/st.earthshatter[1] with the
+--   10s charge summons, C++-exact (uiDefenderGUID[0] /
+--   uiEarthshatterGUID[0] are reused); the SpawnNPC defender
+--   previously in slot 1 is orphaned in both versions.
 -- - MoveInLineOfSight 20yd + LOS aggro leg stays out (ev27 is
 --   engage-only, no LOS-gated bridge); engine aggro covers the
 --   approach. PrepareQuestMenu has no bridge (gossip hello
---   omits it). Steps 11-73 (post-battle dialogue machine) are
---   the next unit, same file.
+--   omits it). Chapter5 is fully ported: steps 0-73 + waypoints
+--   0-8 + battle + gossip + Reset.
 -- - npc_the_lich_king_tirion_dawn (29183): empty Reset/UpdateAI/
 --   JustDied, AttackStart suppressed — nothing to port.
 -- - spell_teleport_leaders_blessing: SpellScript, no bridge.
@@ -97,6 +124,23 @@ local SPELL_MOGRAINE_CHARGE = 53679
 local SPELL_ASHBRINGER = 53701
 local SPELL_SHACK = 33271
 local SPELL_THE_LIGHT_OF_DAWN_Q = 53606
+local SPELL_ALEXANDROS_SPAWN = 53667
+local SPELL_SOUL_FEAST_ALEX = 53677
+local SPELL_SOUL_FEAST_TIRION = 53685
+local SPELL_REBIRTH_ASHBRINGER = 53702
+local SPELL_TIRION_CHARGE = 53705
+local SPELL_TELEPORT_VISUAL = 52233
+local SPELL_LIGHT_BURST = 41542 -- workaround light explosion, chapter5.cpp:1107
+local GO_LIGHT_OF_DAWN = 191330
+local EQUIP_TIRION_ASHBRINGER = 13262
+local STAND_DEAD = 7
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
+local DEATH_JUST_DIED = 1
+local MOVE_RUN = 1
+local EMOTE_KICK = 60 -- EMOTE_ONESHOT_KICK
+local EMOTE_ROAR = 15 -- EMOTE_ONESHOT_ROAR
+local EMOTE_ATTACK_UNARMED = 438 -- EMOTE_STATE_ATTACK_UNARMED
 
 local SAY_INTRO = 3 -- SAY_LIGHT_OF_DAWN04
 local SAY_RISE = 4 -- SAY_LIGHT_OF_DAWN05
@@ -393,10 +437,10 @@ despawnNPC = function(creature, guid)
     end
 end
 
--- chapter5.cpp:584-733 uiStep machine, steps 0-9 (+ step 10 no-op).
+-- chapter5.cpp:584-1310 uiStep machine, steps 0-73 (+ step 10 no-op).
 stepTick = function(creature, guid)
     local st = getState(guid)
-    if st.isBattle or st.step >= 11 then
+    if st.isBattle or st.step >= 74 then
         return
     end
     local step = st.step
@@ -495,6 +539,560 @@ stepTick = function(creature, guid)
             scatterMove(st.warrior[i])
         end
         jumpToNextStep(creature, guid, 5000)
+    elseif step == 11 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(27) -- SAY_LIGHT_OF_DAWN28
+        end
+        jumpToNextStep(creature, guid, 21000)
+    elseif step == 12 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(28) -- SAY_LIGHT_OF_DAWN29
+        end
+        jumpToNextStep(creature, guid, 13000)
+    elseif step == 13 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(29) -- SAY_LIGHT_OF_DAWN30
+        end
+        jumpToNextStep(creature, guid, 13000)
+    elseif step == 14 then
+        creature:SetStandState(STAND_STAND)
+        creature:Talk(30) -- SAY_LIGHT_OF_DAWN31
+        jumpToNextStep(creature, guid, 7000)
+    elseif step == 15 then
+        -- Summon gate: Alexandros at Loc[22].
+        local loc = LOC[23]
+        local temp = creature:SummonCreature(ENTRY_ALEXANDROS,
+            loc[1], loc[2], loc[3], loc[4], SUMMON_TYPE_CORPSE, 300000)
+        if temp then
+            temp:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            temp:CastSpell(temp, SPELL_ALEXANDROS_SPAWN, true)
+            temp:Talk(73) -- EMOTE_LIGHT_OF_DAWN06
+            st.alexandros = storeGuid(temp)
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 16 then
+        local temp = getc(creature, st.alexandros)
+        if temp then
+            temp:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+            local loc = LOC[24]
+            temp:MoveTo(0, loc[1], loc[2], loc[3])
+            temp:Talk(31) -- SAY_LIGHT_OF_DAWN32
+        end
+        creature:SetEscortPaused(false)
+        jumpToNextStep(creature, guid, 5000)
+    elseif step == 17 then
+        creature:SetStandState(STAND_KNEEL)
+        creature:Talk(33) -- SAY_LIGHT_OF_DAWN34
+        jumpToNextStep(creature, guid, 5000)
+    elseif step == 18 then
+        -- Darion's spirit out at Loc[24].
+        local loc = LOC[25]
+        local temp = creature:SummonCreature(ENTRY_DARION_GHOST,
+            loc[1], loc[2], loc[3], loc[4], SUMMON_TYPE_CORPSE, 300000)
+        if temp then
+            temp:Talk(34) -- SAY_LIGHT_OF_DAWN35
+            temp:SetWalk(false)
+            st.darionGhost = storeGuid(temp)
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 19 then
+        local temp = getc(creature, st.darionGhost)
+        if temp then
+            temp:Talk(74) -- EMOTE_LIGHT_OF_DAWN07
+            local loc = LOC[26]
+            temp:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 20 then
+        local temp = getc(creature, st.darionGhost)
+        if temp then
+            temp:Talk(35) -- SAY_LIGHT_OF_DAWN36
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 21 then
+        local temp = getc(creature, st.darionGhost)
+        if temp then
+            temp:Talk(75) -- EMOTE_LIGHT_OF_DAWN08
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 22 then
+        local temp = getc(creature, st.alexandros)
+        if temp then
+            temp:Talk(36) -- SAY_LIGHT_OF_DAWN37
+        end
+        jumpToNextStep(creature, guid, 8000)
+    elseif step == 23 then
+        local temp = getc(creature, st.darionGhost)
+        if temp then
+            temp:Talk(37) -- SAY_LIGHT_OF_DAWN38
+        end
+        jumpToNextStep(creature, guid, 8000)
+    elseif step == 24 then
+        local temp = getc(creature, st.alexandros)
+        if temp then
+            temp:Talk(38) -- SAY_LIGHT_OF_DAWN39
+        end
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            local loc = LOC[2]
+            tirion:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        jumpToNextStep(creature, guid, 15000)
+    elseif step == 25 then
+        local temp = getc(creature, st.darionGhost)
+        if temp then
+            temp:Talk(39) -- SAY_LIGHT_OF_DAWN40
+        end
+        jumpToNextStep(creature, guid, 11000)
+    elseif step == 26 then
+        local temp = getc(creature, st.alexandros)
+        if temp then
+            temp:Talk(40) -- SAY_LIGHT_OF_DAWN41
+        end
+        jumpToNextStep(creature, guid, 5000)
+    elseif step == 27 then
+        local temp = getc(creature, st.darionGhost)
+        if temp then
+            temp:SetDeathState(DEATH_JUST_DIED)
+        end
+        jumpToNextStep(creature, guid, 24000)
+    elseif step == 28 then
+        local temp = getc(creature, st.alexandros)
+        if temp then
+            temp:Talk(41) -- SAY_LIGHT_OF_DAWN42
+        end
+        jumpToNextStep(creature, guid, 6000)
+    elseif step == 29 then
+        -- Lich king spawns at Loc[26].
+        local loc = LOC[27]
+        local temp = creature:SummonCreature(ENTRY_LICH_KING,
+            loc[1], loc[2], loc[3], loc[4], SUMMON_TYPE_CORPSE, 300000)
+        if temp then
+            temp:Talk(42) -- SAY_LIGHT_OF_DAWN43
+            st.lichKing = storeGuid(temp)
+            local alex = getc(creature, st.alexandros)
+            if alex then
+                temp:CastSpell(alex, SPELL_SOUL_FEAST_ALEX, false)
+            end
+        end
+        jumpToNextStep(creature, guid, 2000)
+    elseif step == 30 then
+        local alex = getc(creature, st.alexandros)
+        if alex then
+            alex:Talk(76) -- EMOTE_LIGHT_OF_DAWN09
+            alex:SetVisible(false)
+        end
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:InterruptNonMeleeSpells(false)
+            lk:Talk(44) -- SAY_LIGHT_OF_DAWN45
+        end
+        jumpToNextStep(creature, guid, 3000)
+    elseif step == 31 then
+        creature:SetStandState(STAND_STAND)
+        creature:Talk(77) -- EMOTE_LIGHT_OF_DAWN10
+        creature:Talk(43) -- SAY_LIGHT_OF_DAWN44
+        jumpToNextStep(creature, guid, 3000)
+    elseif step == 32 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            local loc = LOC[28]
+            lk:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        jumpToNextStep(creature, guid, 6000)
+    elseif step == 33 then
+        -- Darion charges the lich king; the escort resumes and
+        -- waypoint 6 advances the machine past the step-34 hole.
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            creature:CastSpell(creature, SPELL_MOGRAINE_CHARGE)
+        end
+        creature:SetSpeedRate(MOVE_RUN, 3.0)
+        creature:SetWalk(false)
+        creature:SetEscortPaused(false)
+        jumpToNextStep(creature, guid, 0)
+    elseif step == 34 or step == 36 then
+        -- No case in C++ (cases run 33 -> 35, 35 -> 37): the 1s
+        -- poll stands in for the per-tick no-op re-fire; waypoint
+        -- 6/7 JumpToNextStep advances past the hole.
+        schedule(guid, "phase", 1000, function()
+            stepTick(creature, guid)
+        end)
+    elseif step == 35 then
+        -- Lich king counterattacks: Darion kicked, escort resumes
+        -- and waypoint 7 advances past the step-36 hole.
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:PerformEmote(EMOTE_KICK)
+            lk:Talk(45) -- SAY_LIGHT_OF_DAWN46
+        end
+        creature:SetSpeedRate(MOVE_RUN, 6.0)
+        creature:SetStandState(STAND_DEAD)
+        creature:SetEscortPaused(false)
+        jumpToNextStep(creature, guid, 0)
+    elseif step == 37 then
+        creature:SetStandState(STAND_KNEEL)
+        jumpToNextStep(creature, guid, 3000)
+    elseif step == 38 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(46) -- SAY_LIGHT_OF_DAWN47
+        end
+        jumpToNextStep(creature, guid, 8000)
+    elseif step == 39 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(47) -- SAY_LIGHT_OF_DAWN48
+        end
+        jumpToNextStep(creature, guid, 15000)
+    elseif step == 40 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(48) -- SAY_LIGHT_OF_DAWN49
+        end
+        jumpToNextStep(creature, guid, 17000)
+    elseif step == 41 then
+        -- Lich king - Apocalypse: soul feast on Tirion.
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(78) -- EMOTE_LIGHT_OF_DAWN11
+            lk:Talk(50) -- SAY_LIGHT_OF_DAWN51
+            local tirion = getc(creature, st.tirion)
+            if tirion then
+                tirion:SetStandState(STAND_KNEEL)
+                lk:CastSpell(tirion, SPELL_SOUL_FEAST_TIRION, false)
+                tirion:Talk(79) -- EMOTE_LIGHT_OF_DAWN12
+            end
+        end
+        jumpToNextStep(creature, guid, 2000)
+    elseif step == 42 then
+        -- Maxwell yells for attack: one defender + Rimblat charge
+        -- the lich king's position; the dawn heroes follow.
+        local lk = getc(creature, st.lichKing)
+        local lx, ly, lz = 0, 0, 0
+        if lk then
+            lx, ly, lz = lk:GetX(), lk:GetY(), lk:GetZ()
+        end
+        if lx ~= 0 and ly ~= 0 then
+            local loc0 = LOC[1]
+            local function chargeSummon(entry, key)
+                local temp = creature:SummonCreature(entry,
+                    loc0[1] + math.random(0, 9),
+                    loc0[2] + math.random(0, 9), loc0[3],
+                    0, SUMMON_TYPE_CORPSE, 10000)
+                if temp then
+                    temp:EmoteState(EMOTE_ATTACK_UNARMED)
+                    temp:SetWalk(false)
+                    temp:SetSpeedRate(MOVE_RUN, 2.0)
+                    temp:SetFaction(creature:GetFaction())
+                    temp:MoveTo(0, lx, ly, lz)
+                    st[key][1] = storeGuid(temp)
+                end
+            end
+            chargeSummon(ENTRY_DEFENDER, "defender")
+            chargeSummon(ENTRY_RIMBLAT, "earthshatter")
+        end
+        local function chargeHero(guidKey, talk)
+            local temp = getc(creature, guidKey)
+            if not temp then
+                return
+            end
+            temp:EmoteState(EMOTE_ATTACK_UNARMED)
+            temp:SetWalk(false)
+            temp:SetSpeedRate(MOVE_RUN, 2.0)
+            temp:MoveTo(0, lx, ly, lz)
+            if talk then
+                temp:Talk(talk)
+            end
+        end
+        chargeHero(st.maxwell, 49) -- SAY_LIGHT_OF_DAWN50
+        chargeHero(st.korfax, nil)
+        chargeHero(st.eligor, nil)
+        jumpToNextStep(creature, guid, 4500)
+    elseif step == 43 then
+        -- They all got kicked.
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(80) -- EMOTE_LIGHT_OF_DAWN13
+        end
+        local function kicked(guidKey, locIndex)
+            local temp = getc(creature, guidKey)
+            if not temp then
+                return
+            end
+            temp:EmoteState(0) -- EMOTE_ONESHOT_NONE
+            temp:SetSpeedRate(MOVE_RUN, 6.0)
+            temp:SetStandState(STAND_DEAD)
+            local loc = LOC[locIndex]
+            temp:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        kicked(st.maxwell, 15) -- Loc[14]
+        kicked(st.korfax, 12) -- Loc[11]
+        kicked(st.eligor, 18) -- Loc[17]
+        local function kickedWave(guidKey)
+            local temp = getc(creature, guidKey)
+            if not temp then
+                return
+            end
+            temp:SetSpeedRate(MOVE_RUN, 6.0)
+            temp:SetStandState(STAND_DEAD)
+            local loc0 = LOC[1]
+            temp:MoveTo(0, loc0[1] + math.random(0, 9),
+                loc0[2] + math.random(0, 9), loc0[3])
+        end
+        kickedWave(st.defender[1])
+        kickedWave(st.earthshatter[1])
+        jumpToNextStep(creature, guid, 3000)
+    elseif step == 44 then
+        -- Make them stand up.
+        local function stand(guidKey)
+            local temp = getc(creature, guidKey)
+            if temp then
+                temp:SetStandState(STAND_STAND)
+            end
+        end
+        stand(st.maxwell)
+        stand(st.korfax)
+        stand(st.eligor)
+        jumpToNextStep(creature, guid, 1000)
+    elseif step == 45 then
+        creature:Talk(51) -- SAY_LIGHT_OF_DAWN52
+        jumpToNextStep(creature, guid, 5000)
+    elseif step == 46 then
+        -- Darion stands up, "not today"; throws sword.
+        creature:SetSpeedRate(MOVE_RUN, 1.0)
+        creature:SetWalk(true)
+        creature:SetStandState(STAND_STAND)
+        creature:Talk(52) -- SAY_LIGHT_OF_DAWN53
+        creature:SetEscortPaused(false)
+        jumpToNextStep(creature, guid, 7000)
+    elseif step == 47 then
+        -- Ashbringer rebirth.
+        creature:SetStandState(STAND_KNEEL)
+        creature:Talk(82) -- EMOTE_LIGHT_OF_DAWN15
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:SetStandState(STAND_STAND)
+            tirion:SetEquipmentSlots(EQUIP_TIRION_ASHBRINGER, 0xFFFFFFFF, 0xFFFFFFFF)
+            tirion:CastSpell(tirion, SPELL_REBIRTH_ASHBRINGER, false)
+        end
+        jumpToNextStep(creature, guid, 1000)
+    elseif step == 48 then
+        -- Show the cleansing effect (dawn of light).
+        creature:SummonGameObject(GO_LIGHT_OF_DAWN,
+            2283.896, -5287.914, 83.066, 0, 30)
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            if tirion:HasAura(SPELL_REBIRTH_ASHBRINGER) then
+                tirion:RemoveAura(SPELL_REBIRTH_ASHBRINGER)
+            end
+            tirion:CastSpell(tirion, SPELL_LIGHT_BURST, false)
+            tirion:PerformEmote(EMOTE_ROAR)
+        end
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:InterruptNonMeleeSpells(false)
+        end
+        jumpToNextStep(creature, guid, 2500)
+    elseif step == 49 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(53) -- SAY_LIGHT_OF_DAWN54
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 50 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(54) -- SAY_LIGHT_OF_DAWN55
+        end
+        jumpToNextStep(creature, guid, 5000)
+    elseif step == 51 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(55) -- SAY_LIGHT_OF_DAWN56
+        end
+        jumpToNextStep(creature, guid, 1000)
+    elseif step == 52 then
+        -- Tirion charges; the lich king is relocated (kicked back).
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(83) -- EMOTE_LIGHT_OF_DAWN16
+            tirion:CastSpell(tirion, SPELL_TIRION_CHARGE, false)
+            tirion:EmoteState(EMOTE_READY_2H)
+            tirion:SetSpeedRate(MOVE_RUN, 3.0)
+            tirion:SetWalk(false)
+            local loc = LOC[3]
+            tirion:MoveTo(0, loc[1], loc[2], loc[3])
+            local lk = getc(creature, st.lichKing)
+            if lk then
+                local kloc = LOC[29]
+                lk:Relocate(kloc[1], kloc[2], kloc[3], kloc[4])
+            end
+        end
+        jumpToNextStep(creature, guid, 1500)
+    elseif step == 53 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(56) -- SAY_LIGHT_OF_DAWN57
+        end
+        jumpToNextStep(creature, guid, 1000)
+    elseif step == 54 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:SetSpeedRate(MOVE_RUN, 1.0)
+            creature:SetWalk(true)
+            local loc = LOC[30]
+            lk:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        jumpToNextStep(creature, guid, 4000)
+    elseif step == 55 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:SetStandState(STAND_KNEEL)
+        end
+        jumpToNextStep(creature, guid, 2000)
+    elseif step == 56 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:SetStandState(STAND_STAND)
+        end
+        jumpToNextStep(creature, guid, 1500)
+    elseif step == 57 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(57) -- SAY_LIGHT_OF_DAWN58
+        end
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 58 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(58) -- SAY_LIGHT_OF_DAWN59
+        end
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 59 then
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:CastSpell(lk, SPELL_TELEPORT_VISUAL, false)
+        end
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:EmoteState(0) -- EMOTE_ONESHOT_NONE
+            tirion:SetSpeedRate(MOVE_RUN, 1.0)
+            local loc = LOC[7]
+            tirion:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        jumpToNextStep(creature, guid, 2500)
+    elseif step == 60 then
+        -- Lich king disappears here.
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:Talk(84) -- EMOTE_LIGHT_OF_DAWN17
+            lk:Kill()
+        end
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 61 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(59) -- SAY_LIGHT_OF_DAWN60
+        end
+        jumpToNextStep(creature, guid, 3000)
+    elseif step == 62 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:SetWalk(true)
+            local loc = LOC[8]
+            tirion:MoveTo(0, loc[1], loc[2], loc[3])
+        end
+        jumpToNextStep(creature, guid, 5500)
+    elseif step == 63 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            local loc = LOC[9]
+            tirion:MoveTo(0, loc[1], loc[2], loc[3])
+            tirion:Talk(60) -- SAY_LIGHT_OF_DAWN61
+        end
+        jumpToNextStep(creature, guid, 15000)
+    elseif step == 64 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(61) -- SAY_LIGHT_OF_DAWN62
+        end
+        jumpToNextStep(creature, guid, 7000)
+    elseif step == 65 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(62) -- SAY_LIGHT_OF_DAWN63
+        end
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 66 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(63) -- SAY_LIGHT_OF_DAWN64
+        end
+        jumpToNextStep(creature, guid, 11000)
+    elseif step == 67 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(64) -- SAY_LIGHT_OF_DAWN65
+        end
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 68 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(65) -- SAY_LIGHT_OF_DAWN66
+        end
+        jumpToNextStep(creature, guid, 8000)
+    elseif step == 69 then
+        local tirion = getc(creature, st.tirion)
+        if tirion then
+            tirion:Talk(66) -- SAY_LIGHT_OF_DAWN67
+        end
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 70 then
+        creature:SetStandState(STAND_STAND)
+        creature:Talk(67) -- SAY_LIGHT_OF_DAWN68
+        jumpToNextStep(creature, guid, 10000)
+    elseif step == 71 then
+        -- Quest credit for players within 500yd, then a fresh
+        -- Darion spawns for the quest turn-in.
+        local players = creature:GetPlayersInRange(500)
+        if players then
+            for _, player in ipairs(players) do
+                player:CastSpell(player, SPELL_THE_LIGHT_OF_DAWN_Q)
+            end
+        end
+        creature:SetVisible(false)
+        creature:SummonCreature(ENTRY_DARION,
+            creature:GetX(), creature:GetY(), creature:GetZ(),
+            0, SUMMON_TYPE_CORPSE, 180000)
+        jumpToNextStep(creature, guid, 1000)
+    elseif step == 72 then
+        -- Escort ends.
+        creature:SetEscortPaused(false)
+        jumpToNextStep(creature, guid, 25000)
+    elseif step == 73 then
+        local koltira = getc(creature, st.koltira)
+        if koltira then
+            koltira:DespawnOrUnsummon()
+        end
+        local orbaz = getc(creature, st.orbaz)
+        if orbaz then
+            orbaz:DespawnOrUnsummon()
+        end
+        local thassarian = getc(creature, st.thassarian)
+        if thassarian then
+            thassarian:DespawnOrUnsummon()
+        end
+        local lk = getc(creature, st.lichKing)
+        if lk then
+            lk:DespawnOrUnsummon()
+        end
+        creature:DespawnOrUnsummon()
+        -- No JumpToNextStep: C++ leaves the timer unset, so step 73
+        -- would re-fire as a no-op; the despawn ends the machine.
     else
         -- Step 10: no case in C++; the 1s poll stands in for the
         -- per-tick no-op re-fire (waypoint 3 advances past it).
