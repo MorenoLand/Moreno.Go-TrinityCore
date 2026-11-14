@@ -53,6 +53,7 @@ const (
 	effApplyAura              = 6
 	effHealthLeech            = 9
 	effSummon                 = 28
+	effPersistentAreaAura     = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize               = 30
 	effTriggerMiss            = 32
 	effSendEvent              = 61
@@ -71,6 +72,7 @@ const (
 	auraPeriodicTrig          = 23
 	auraRoot                  = 26
 	auraSilence               = 27
+	auraModIncreaseSpeed      = 31 // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
 	auraDecSpeed              = 33
 	auraEffImmunity           = 37
 	auraTransform             = 56
@@ -86,6 +88,7 @@ const (
 	schoolPhysical            = 1
 	schoolFire                = 4
 	schoolNature              = 8
+	schoolFrost               = 16
 	schoolShadow              = 32
 	schoolArcane              = 64
 	targetCaster              = 1
@@ -94,6 +97,7 @@ const (
 	targetDestCaster          = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	targetUnitDestAreaEnemy   = 16 // TARGET_UNIT_DEST_AREA_ENEMY
 	targetDestCasterBackRight = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
+	targetDestCasterSummon    = 32 // TARGET_DEST_CASTER_SUMMON
 	targetDestCasterRadius    = 73 // TARGET_DEST_CASTER_RADIUS
 	targetUnitTargetAny       = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
 	targetDestTargetAny       = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
@@ -175,7 +179,7 @@ func (s spell) row() []uint32 {
 var spells = []spell{
 	// Mar'li hatch chain (boss_marli.cpp; 24082/24083 Wowhead WotLK,
 	// 24081 Wowhead Classic; 24083 MiscValue 8, not 1 — Unit B).
-	{id: 24081, durIdx: 1, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{
+	{id: 24081, durIdx: 90006, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 1, targetA: targetCaster, radiusIdx: 91009, misc: 15041, miscB: 64},
 	}},
 	{id: 24082, rangeIdx: 93008, school: schoolShadow, effects: [3]effect{
@@ -650,6 +654,59 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 751, basePoints: 4624, targetA: targetEnemy},
 		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 499, auraPeriod: 3000, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8},
 	}},
+
+	// 31260 Brilliance Aura (hyjalAI.h:32 SPELL_BRILLIANCE_AURA;
+	// Jaina's aura, "database must handle via creature_addon") —
+	// wago.tools 3.4.0.43659 Spell/SpellEffect/SpellMisc rows,
+	// 2026-11-14 verdict: eff0 6 APPLY_AURA, aura 4 DUMMY, DieSides 1,
+	// BasePoints 0, TargetA 1 (TARGET_UNIT_CASTER); eff1 6 APPLY_AURA,
+	// aura 23 PERIODIC_TRIGGER_SPELL, AuraPeriod 4000, TriggerSpell
+	// 31308 (NOT seeded — no wago row yet; the periodic-trigger leg
+	// will not resolve it until then), TargetA 1; DurationIndex 21
+	// (infinite, seeded row), RangeIndex 1 (Self Only, 0-0 yd =
+	// synthetic 93001's value), SchoolMask 0x40 (arcane),
+	// CastingTimeIndex 1 (instant, default 0). No SpellClassOptions
+	// row (family 0). Attributes not encoded (seed has no attributes
+	// field).
+	{id: 31260, durIdx: 21, rangeIdx: 93001, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, dieSides: 1, aura: auraDummy, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 4000, trigger: 31308, targetA: targetCaster},
+	}},
+	// 31264 Summon Water Elementals (hyjalAI.h:35
+	// SPELL_SUMMON_ELEMENTALS; Jaina's summon) — wago.tools 3.4.0.43659
+	// Spell/SpellEffect/SpellMisc rows, 2026-11-14 verdict: single
+	// effect 28 SUMMON, EffectAmplitude -3 (not encoded — the seed has
+	// no amplitude field; C++ EffectSummonType does not use amplitude
+	// for the count), BasePoints 2, DieSides 1 (CalcValue +1 = 3
+	// elementals, matching "$s1 powerful water elementals"),
+	// MiscValue 18001 (water elemental entry), MiscValueB 61
+	// (SummonProperties 61 — row NOT seeded, no wago values yet; the
+	// GO-summon leg skips when the row is missing, so the summon stays
+	// inert until row 61 lands), TargetA 32
+	// (TARGET_DEST_CASTER_SUMMON), RadiusIndex 15 (3 yd, seeded real
+	// row below); DurationIndex 23 (90000 ms, seeded real row below),
+	// RangeIndex 1 (Self Only, 0-0 yd = synthetic 93001's value),
+	// SchoolMask 0x1 (physical), CastingTimeIndex 3 (500 ms, seeded
+	// real row below). No SpellClassOptions row (family 0).
+	{id: 31264, durIdx: 23, rangeIdx: 93001, castTimeIdx: 3, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, basePoints: 2, targetA: targetDestCasterSummon, radiusIdx: 15, misc: 18001, miscB: 61}}},
+	// 31266 Blizzard (hyjalAI.h:33 SPELL_BLIZZARD; Jaina's UpdateAI
+	// cast) — wago.tools 3.4.0.43659 Spell/SpellEffect/SpellMisc rows,
+	// 2026-11-14 verdict: eff0 27 PERSISTENT_AREA_AURA, aura 3
+	// PERIODIC_DAMAGE, BasePoints 949, DieSides 101, AuraPeriod 2000,
+	// TargetA 16 (TARGET_UNIT_DEST_AREA_ENEMY), RadiusIndex 13 (10 yd,
+	// seeded real row); eff1 27 PERSISTENT_AREA_AURA, aura 31
+	// MOD_INCREASE_SPEED, BasePoints -71, DieSides 1, TargetA 0
+	// (NONE), RadiusIndex 13; DurationIndex 1 (10000 ms, real row 1 —
+	// the old fixture value 300000 was invented for 24081's assumed
+	// DurationIndex; 24081 now rides synthetic 90006 until its real
+	// DurationIndex lands from wago), RangeIndex 4 (Medium Range,
+	// 0-30 yd, seeded real row), SchoolMask 0x10 (frost),
+	// CastingTimeIndex 4 (1000 ms, seeded real row below). No
+	// SpellClassOptions row (family 0).
+	{id: 31266, durIdx: 1, rangeIdx: 4, castTimeIdx: 4, school: schoolFrost, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 101, basePoints: 949, auraPeriod: 2000, targetA: targetUnitDestAreaEnemy, radiusIdx: 13},
+		{effect: effPersistentAreaAura, aura: auraModIncreaseSpeed, dieSides: 1, basePoints: -71, radiusIdx: 13},
+	}},
 }
 
 func main() {
@@ -669,10 +726,11 @@ func main() {
 	}
 	// SpellDuration.dbc: ID, Duration, DurationPerLevel, MaxDuration.
 	durations := [][]uint32{
-		{1, 300000, 0, 300000},
+		{1, 10000, 0, 10000},            // real SpellDuration 1 for 31266 (wago.tools 3.4.0.43659)
 		{6, 600000, 0, 600000},          // real SpellDuration 6 (10 min) for MEMORY_* summons
 		{3, 60000, 0, 60000},            // real SpellDuration 3 for 31331 (wago.tools 3.4.0.43659)
 		{105, 9000, 0, 9000},            // real SpellDuration 105 for 31263 (wago.tools 3.4.0.43659)
+		{23, 90000, 0, 90000},           // real SpellDuration 23 for 31264 (wago.tools 3.4.0.43659)
 		{21, 0xFFFFFFFF, 0, 0xFFFFFFFF}, // real SpellDuration 21 (-1 infinite) for 68415
 		{32, 6000, 0, 6000},             // real SpellDuration 32 for 54690 (wago.tools 3.4.0.43659)
 		{90001, 2000, 0, 2000},
@@ -701,6 +759,7 @@ func main() {
 		{9, f32(20), f32(0), f32(20)},        // real SpellRadius 9 for 44194 (wago.tools 3.4.0.43659)
 		{18, f32(15), f32(0), f32(15)},       // real SpellRadius 18 for 44196 (wago.tools 3.4.0.43659)
 		{8, f32(5), f32(0), f32(5)},          // real SpellRadius 8 for 31263 (wago.tools 3.4.0.43659)
+		{15, f32(3), f32(0), f32(3)},         // real SpellRadius 15 for 31264 (wago.tools 3.4.0.43659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},
@@ -718,6 +777,8 @@ func main() {
 	castTimes := [][]uint32{
 		{5, 2000, 0}, // real SpellCastTimes 5 for 44196 (wago.tools 3.4.0.43659)
 		{6, 5000, 0}, // real SpellCastTimes 6 for 31263 (wago.tools 3.4.0.43659)
+		{3, 500, 0},  // real SpellCastTimes 3 for 31264 (wago.tools 3.4.0.43659)
+		{4, 1000, 0}, // real SpellCastTimes 4 for 31266 (wago.tools 3.4.0.43659)
 		{92001, 2000, 0},
 		{92002, 3000, 0},
 	}

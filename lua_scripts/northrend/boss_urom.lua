@@ -113,8 +113,14 @@
 -- guards only the unported machine.
 -- DamageTaken — _isInCenter-gated NearTeleportTo(1124.0432,
 -- 1078.2109, 508.3597, 5.4623) on lethal damage — Teleport is
--- bridged; the blocker is the _isInCenter state, which rides the
--- unported _platform machine, plus the lethal-damage gate.
+-- bridged (creature:Teleport, lua_creature_events.go:3582; alias
+-- NearTeleport :3625) and the lethal gate IS computable
+-- (damage >= creature:GetHealth(), GetHealth bridged object.go:203;
+-- ev9 fires on killing blows, combat.go:1499/2326 — the old
+-- "lethal-damage gate" blocker was wrong, re-verified 2026-11-14
+-- round113). The sole blocker is the _isInCenter state, which rides
+-- the unported _platform machine (set only by EVENT_TELEPORT :258,
+-- cleared by EVENT_TELEPORT_BACK :272 / Reset :133 / this arm).
 -- SpellHit — SPELL_SUMMON_MENAGERIE(3) x3: SetHomePosition (three
 -- platform coords) + LeaveCombat (RemoveAllAuras + CombatStop +
 -- EngagementOver) + DoCastSelf(SPELL_EVOCATE 51602, true) — STAY-

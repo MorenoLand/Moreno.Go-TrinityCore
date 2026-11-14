@@ -53,7 +53,7 @@
 -- (at_trigger_the_beast_movement AT 2066, at_the_beast_room) and the
 -- instance script; no area-trigger / instance / MotionMaster bridges
 -- on the Lua surface (coren_direbrew / instance precedent).
--- Documented-only (STAY OUT, re-verified 2026-11-13). SpellHit skinning
+-- Documented-only (STAY OUT, re-verified 2026-11-14 round113). SpellHit skinning
 -- arm (boss_the_beast.cpp:88-94): loops MAX_SPELL_EFFECTS (:90), fires
 -- only if an effect IsEffect(SPELL_EFFECT_SKINNING = 95,
 -- SharedDefines.h:906) (:91), then only if !me->IsAlive() (:92, nested
@@ -68,17 +68,22 @@
 -- and ev14 fires per landed hit target in the same finishSpellCast
 -- (spells.go:19914, 30186-30197) — skinning the dead Beast WOULD fire it.
 -- The sole block is the effect gate: fireCreatureLuaEvent
--- (lua_creature_events.go:7597) passes (event, creature, caster,
+-- (lua_creature_events.go:7611) passes (event, creature, caster,
 -- spellId) only — every ev14 fire site passes caster + spellID, no
--- SpellInfo/effect list reaches Lua — and no source-grounded spell-ID
--- substitute exists: C++ gates on effect, not ID; no skinning spell ID
--- appears anywhere in either tree (grep 8613: zero hits), Spell.dbc is
--- absent from the workspace (engine/data/dbc/ holds only dbc.go), so
--- hard-coding an ID would be fabrication. Bridgeable legs, for the
--- record if the effect gate is ever exposed: creature:IsAlive()
--- (object.go:260, lua_objects.go:2192) and CastSpell(target, id[,
--- triggered]) (lua_creature_events.go:949-986); luaMotionCreature has no
--- alive gate (lua_creature_events.go:359). No ev14 registration.
+-- SpellInfo/effect list reaches Lua. spell:GetEffectType DOES exist
+-- now, but only on the session spell object (lua_spell.go:588-596);
+-- no Lua global builds a spell object from an ID, and the
+-- creature-path builder lacks it — unreachable from ev14. And no
+-- source-grounded spell-ID substitute exists: C++ gates on effect,
+-- not ID; no skinning spell ID appears anywhere in either tree
+-- (grep 8613: zero hits), and the seed Spell.dbc (embedded,
+-- engine/data/wotlk/seed.go, 81 rows) holds no 8613 row and no row
+-- with a SKINNING effect (95) — so hard-coding an ID would still be
+-- fabrication. Bridgeable legs, for the record if the effect gate is
+-- ever exposed: creature:IsAlive() (object.go:260,
+-- lua_objects.go:2192) and CastSpell(target, id[, triggered])
+-- (lua_creature_events.go:949-986); luaMotionCreature has no alive
+-- gate (lua_creature_events.go:359). No ev14 registration.
 -- CASTING gates ported: C++ UpdateAI pre-loop gate (:166) + in-loop
 -- gate (:201) are a 500ms IsCasting defer under each arm's own key
 -- (live, lua_creature_events.go:2480; mal_ganis idiom) — a gated arm
