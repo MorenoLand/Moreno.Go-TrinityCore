@@ -15263,6 +15263,17 @@ func init() {
 	// the waypoint Talk / GroupEventHappens machine stays out.
 	// Entry 2917 wowhead-verified this tick.
 	RegisterLuaBoss("npc_prospector_remtravel", 2917)
+	// npc_kerlonian (Darkshore zone script, FollowerAI):
+	// OnQuestAccept quest-5321 StartFollow start + SpellHit
+	// 17536 ClearSleeping + 1s sleep-machine / Liladris
+	// GroupEventHappens / SetFollowComplete pump + JustDied
+	// FailQuest leg PORTED in lua_scripts/kalimdor/npc_kerlonian.lua
+	// on the new StartFollow/HasFollowState/SetFollowPaused/
+	// GetLeaderForFollower/SetFollowComplete bridges
+	// (lua_creature_events.go); entry 11218 verified from TDB
+	// 26091 creature_template ScriptName. Group-migration /
+	// assist legs stay out (no group-iteration / assist bridges).
+	RegisterLuaBoss("npc_kerlonian", 11218)
 	// npc_aged_dying_ancient_kodo (Desolace zone script):
 	// SpellHit arm only — hit by SPELL_KODO_KOMBO_ITEM 18153
 	// -> if entry is 4700/4701/4702 and neither the caster has
