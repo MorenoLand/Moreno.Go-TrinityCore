@@ -23926,6 +23926,16 @@ func init() {
 	// bridged now; Despawn is the DisappearAndDie twin.
 	RegisterLuaBoss("npc_beryl_sorcerer", 25316)
 	RegisterLuaBoss("npc_beryl_sorcerer", 25474)
+	// npc_valiance_keep_cannoneer (Borean Tundra) — ported arms in
+	// lua_scripts/northrend/npc_valiance_keep_cannoneer.lua: Reset()
+	// (timer re-roll) and the UpdateAI timer leg (13-18s: kneel emote
+	// + nearest cannon Use). Entry 25306 'Valiance Keep Cannoneer'
+	// (6 static spawns on map 571, TDB 26091, ScriptName binds).
+	// The cannon Use runs through the new gameObject:Use bridge
+	// (lua_objects.go), which calls the Server-level
+	// serverActivateGameObjectUse goober twin. Template spell 42442
+	// stays unseeded, so the twin's cast leg is silent until seeded.
+	RegisterLuaBoss("npc_valiance_keep_cannoneer", 25306)
 	// Checked-no-gate: zone_borean_tundra.cpp has zero HasUnitState hits — rebuff timer + SpellHit arms stay ungated.
 	// npc_hidden_cultist (Borean Tundra, quest 11794) — ported arms in
 	// lua_scripts/northrend/npc_hidden_cultist.lua: Reset()

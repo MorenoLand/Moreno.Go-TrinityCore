@@ -4530,6 +4530,20 @@ func (srv *Server) luaGameObjectObject(state luaGameObjectState) *scripting.Obje
 		srv.setGameObjectStateInInstance(state.Map, state.InstanceID, state.GUID, uint8(value))
 		return nil, nil
 	}
+	// Use is LuaGameObject::Use (GameObjectMethods.h):
+	// GameObject::Use (GameObject.cpp:1484) for a creature user. The
+	// player-only legs (immunity, mounted, gossip hello) sit inside
+	// `if (Player*)` and never run; the template-cooldown gate and the
+	// type dispatch run through the Server-level twin
+	// serverActivateGameObjectUse (instance_gameobjects.go:362), the
+	// same twin the spell-effect Disturb/Open arm uses. The twin only
+	// reads the user's map/instance, so the call carries a minimal
+	// motion for this GO's map+instance. Backs the Valiance Keep
+	// cannoneer's cannon arm (zone_borean_tundra.cpp:1436-1441).
+	methods["Use"] = func(ctx context.Context, _ []any) ([]any, error) {
+		srv.serverActivateGameObjectUse(ctx, &creatureMotion{Map: state.Map, InstanceID: state.InstanceID}, state.GUID)
+		return nil, nil
+	}
 	// SetLootState is LuaGameObject::SetLootState (GameObjectMethods.h):
 	// GameObject::SetLootState(state) — the single-arg Eluna arm (the
 	// (state, unit) overload is internal; m_lootStateUnitGUID has no
