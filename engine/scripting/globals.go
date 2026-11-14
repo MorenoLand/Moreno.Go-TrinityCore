@@ -1149,7 +1149,13 @@ type MapLive struct {
 	// SetZoneOverrideLight (zone, area, override, transition).
 	SetZoneLightOverride func(context.Context, uint32, uint32, uint32, uint32)
 	WorldObject          func(context.Context, uint64) *Object
-	AreaID               func(x, y, z float32) uint32
+	// GameObjectByLowGuid resolves a gameobject by its DB counter
+	// half (the GetGUIDLow convention): Lua numbers cannot carry a
+	// packed 64-bit GO GUID, so callers pass the low GUID and the
+	// callback rebuilds the packed GUID from the row. A nil callback
+	// reads nil.
+	GameObjectByLowGuid func(context.Context, uint32) *Object
+	AreaID              func(x, y, z float32) uint32
 	// Height reads the .map grid height for Map::GetHeight's Eluna
 	// call shape; false means no readable height chunk, and the
 	// method turns that (and the INVALID_HEIGHT sentinel) into nil.
@@ -1368,6 +1374,22 @@ func NewMapObject(mapID, instanceID uint32, live MapLive) *Object {
 				return []any{nil}, nil
 			}
 			return []any{live.WorldObject(ctx, guid)}, nil
+		},
+		// GetGameObjectByLowGuid is the low-GUID twin of
+		// GetWorldObject's gameobject arm: the caller passes the DB
+		// counter half (GetGUIDLow convention) and the live
+		// callback rebuilds the packed GUID from the row, so a
+		// packed 64-bit GUID never crosses the Lua-number boundary.
+		// Nil when no such GO exists on this map instance.
+		"GetGameObjectByLowGuid": func(ctx context.Context, args []any) ([]any, error) {
+			low, err := objectArgumentUint32(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			if live.GameObjectByLowGuid == nil {
+				return []any{nil}, nil
+			}
+			return []any{live.GameObjectByLowGuid(ctx, low)}, nil
 		},
 		// GetAreaId is MapMethods.h (x, y, z, phasemask = 1):
 		// Map::GetAreaId (Map.cpp:2595) — the WMO area when the point

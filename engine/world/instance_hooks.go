@@ -252,6 +252,9 @@ func (s *Server) mapLive(mapID, instanceID uint32) scripting.MapLive {
 	live.WorldObject = func(ctx context.Context, guid uint64) *scripting.Object {
 		return s.mapWorldObject(ctx, mapID, instanceID, guid)
 	}
+	live.GameObjectByLowGuid = func(ctx context.Context, low uint32) *scripting.Object {
+		return s.mapLuaGameObjectByLowGuid(ctx, mapID, instanceID, low)
+	}
 	// AreaID is Map::GetAreaId (Map.cpp:2595) via the same
 	// zoneAndAreaID ladder the creature/GO GetAreaId legs use:
 	// WMO area, else grid area, else the map entry's AreaTableID.
@@ -360,6 +363,37 @@ func (s *Server) mapLuaGameObject(ctx context.Context, mapID, instanceID uint32,
 		return nil
 	}
 	return s.luaGameObjectObject(state)
+}
+
+// mapLuaGameObjectByLowGuid is the low-GUID twin of mapLuaGameObject:
+// Lua numbers cannot carry a packed 64-bit GO GUID (the GetGUIDLow
+// convention — the same reason GetCreatureByGUID masks to the low 24
+// bits), so the caller passes the DB counter half and the resolver
+// rebuilds the packed GUID. Live states in this map instance win (a
+// materialized state carries the entry); otherwise the gameobject row
+// supplies the entry and mapLuaGameObject's static fallback loads it.
+// Nil when no row exists, the row sits on another map, or the GO is
+// hidden in this instance. Built for the Utgarde forge machine
+// (instance_utgarde_keep.cpp:141-167): the three anvils, bellows and
+// fires are static template spawns with no OnGameObjectCreate latch,
+// so the SetData consumer resolves them by low GUID.
+func (s *Server) mapLuaGameObjectByLowGuid(ctx context.Context, mapID, instanceID uint32, low uint32) *scripting.Object {
+	if s == nil || low == 0 {
+		return nil
+	}
+	for _, state := range s.gameObjectStatesInInstance(mapID, instanceID) {
+		if state.LowGUID == low {
+			return s.mapLuaGameObject(ctx, mapID, instanceID, state.GUID)
+		}
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return nil
+	}
+	var entry uint32
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM gameobject WHERE guid = ?", low).Scan(&entry); err != nil {
+		return nil
+	}
+	return s.mapLuaGameObject(ctx, mapID, instanceID, gameObjectGUID(low, entry))
 }
 
 // instanceMapObject builds the map argument for the Eluna

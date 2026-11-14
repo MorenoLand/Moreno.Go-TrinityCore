@@ -15,25 +15,15 @@
 -- port compares GUIDs (aura:GetCasterGUID() vs target:GetGUID()).
 --
 -- DOCUMENTED-ONLY (tick 260; no registrations beyond the aura above):
---   npc_dragonflayer_forge_master (utgarde_keep.cpp:34-117) — Reset /
---   JustDied / JustEngagedWith call instance->SetData(DATA_FORGE_1 +
---   _forgeId - 1, NOT_STARTED / DONE / IN_PROGRESS), where _forgeId
---   (1-3) is the nearest GO_GLOWING_ANVIL_* within 30yd
---   (GetForgeMasterType, :91-108). STAYS OUT on two independent
---   grounds: (1) the entry is DB-side only — no C++ NPC_ constant, no
---   sql/ tree in this clone, world.db carries no creature_template
---   table — so no entry can be registered (the tick-1514 triage);
---   (2) the only consumer of the SetData writes is
---   instance_utgarde_keep::SetData -> HandleGameObject on the forge
---   anvil/bellow/fire GOs (instance_utgarde_keep.cpp:141-160), and
---   instance_utgarde_keep.lua registers no OnSetData handler while the
---   OnGameObjectCreate GO-GUID latches are vacuous (static template GOs
---   never pass the Go GO-create funnel) — the writes would fire an
---   event nothing consumes. (Round-26 correction: the SetData WRITE
---   bridge itself exists — instance_hooks.go:51, razorgore precedent —
---   and GO:SetGoState exists; the block is the missing consumer +
---   vacuous latches, not the write.) Re-activates when the forge GO
---   machine lands.
+--   npc_dragonflayer_forge_master (utgarde_keep.cpp:34-117) is ported
+--   in npc_dragonflayer_forge_master.lua (entry 24079, TDB 26091
+--   creature_template ScriptName 'npc_dragonflayer_forge_master',
+--   3 spawns on map 574): Reset / JustDied / JustEngagedWith call
+--   instance->SetData(DATA_FORGE_1 + _forgeId - 1, NOT_STARTED /
+--   DONE / IN_PROGRESS), where _forgeId (1-3) is the nearest
+--   GO_GLOWING_ANVIL_* within 30yd (GetForgeMasterType, :91-108);
+--   the forge GO machine (low-GUID resolver bridge +
+--   instance_utgarde_keep.lua OnSetData consumer) landed with it.
 --   npc_enslaved_proto_drake (24083) is ported in
 --   npc_enslaved_proto_drake.lua; spell_fixate is ported below
 --   (40414 ev5) and spell_uk_second_wind (ported in procs.go) are
