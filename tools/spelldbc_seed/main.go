@@ -829,8 +829,9 @@ var spells = []spell{
 	// 8053 are Flame Shock) — do NOT seed them as interrupts. NOT YET
 	// SEEDED (SpellMisc rows not in the verdict — follow-up wago read):
 	// Kick Rank 5 (38768, 45356), Shield Bash Rank 4 (29704), Spell
-	// Lock Rank 2 (19647, 67519). Trigger targets 29703 (Shield Bash
-	// 72) and 24259 (Spell Lock 19244) are unseeded — the trigger arm
+	// Lock Rank 2 trigger (19647 seeded with trigger 0; the silence
+	// trigger ID needs a follow-up read). Trigger targets 29703
+	// (Shield Bash 72) and 24259 (Spell Lock 19244) are unseeded — the trigger arm
 	// no-ops on unknown spells (spellKnown gate), same as any
 	// unseeded trigger in the seed.
 	// Shield Bash 72 (Rank 1): durIdx 32 (6000), rangeIdx 2 (5 yd),
@@ -868,6 +869,13 @@ var spells = []spell{
 	// school 0x20; eff0 68 Die 1 Base -1; eff1 64 TRIGGER_SPELL
 	// Die 1 Base -1 Trigger 24259.
 	{id: 19244, durIdx: 28, rangeIdx: 4, school: schoolShadow, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effTriggerSpell, dieSides: 1, basePoints: -1, targetA: targetEnemy, trigger: 24259}}},
+	// Spell Lock 19647 (Rank 2): durIdx 32 (6000), rangeIdx 4,
+	// school 0x20; eff0 68 Die 1 Base -1; eff1 64 TRIGGER_SPELL
+	// Die 0 Base 0, trigger 0 — the trigger ID was not in the
+	// wago read (3c75dc00 verdict), so the trigger arm no-ops on
+	// the spellKnown gate until a follow-up read fills it; the
+	// interrupt arm (eff0) is live.
+	{id: 19647, durIdx: 32, rangeIdx: 4, school: schoolShadow, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}, {effect: effTriggerSpell, dieSides: 0, basePoints: 0, targetA: targetEnemy, trigger: 0}}},
 	// Mind Freeze 47528 (single rank): durIdx 35 (4000), rangeIdx 2,
 	// school 0x10; eff0 68 Die 1 Base -1 (single effect).
 	{id: 47528, durIdx: 35, rangeIdx: 2, school: schoolFrost, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
