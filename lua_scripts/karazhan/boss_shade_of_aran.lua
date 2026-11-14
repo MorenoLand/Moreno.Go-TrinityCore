@@ -25,9 +25,10 @@
 -- from the cast point), or circular blizzard. Below 40% health once, four
 -- water elementals; at 12 minutes and every 60s after, 5 shadow-of-Aran
 -- summons (Talk + summon + Attack via EngageWithTarget). The drink/potion/pyroblast mana sequence needs
--- mana to drain; only a 63-record seed Spell.dbc ships and none of
--- Aran's 17 spells is in it, so creature spell costs resolve to 0 and
--- the mana pool never moves — see deviations.
+-- mana to drain; only a 105-row seed Spell.dbc ships and none of
+-- Aran's 16 spells is in it, so creature spell costs resolve to 0 and
+-- the mana pool never moves — the drink machine below is ported but
+-- inert until those 16 seed (wago read in flight 2026-11-14).
 -- Deviations from C++: the 4 water elementals (17167) ARE summoned now
 -- (2026-10-22 summon bridge — creature:SummonCreature on the handler
 -- surface; type 2 TIMED_DESPAWN, 90s) and their Attack(victim, true)
@@ -50,15 +51,19 @@
 -- IsNonMeleeSpellCast gate IS ported in onNormalCast via IsCasting
 -- (lua_creature_events.go:2480). SetPower (lua_creature_events.go:2982), SetStandState (:4824), and
 -- GetPower/GetMaxPower (scripting/object.go:203) are all bridged — the old "no
--- GetPower" / "No SetPower/SetStandState" claims are stale. The whole
--- drink arm (SAY_DRINK=4, mass poly 29963, conjure 29975, drink 30024,
--- potion 32453, AOE pyroblast 29978, the drink-interrupt damage hook, the
--- 10s interrupt timer) is skipped anyway: creature casts deduct no mana
--- (none of Aran's spells is in the seed Spell.dbc, costs resolve to 0), so the C++ "< 20% mana" trigger can
--- never fire and a port would be dead code; SAY_4 never fires.
--- The drink aura's periodic mana refill has no tick executor in Go, so
--- the machine's refill model (drink ticks + SetPower(max-32000)) cannot be
--- reproduced — a partial port would re-drink in a loop. The SpellHit
+-- GetPower" / "No SetPower/SetStandState" claims are stale. The drink
+-- machine IS ported (2026-11-14): 1s-pump <20% trigger (SAY_DRINK=4,
+-- mass poly 29963 triggered, conjure 29975, drink 30024, SIT, 10s
+-- timer), DamageTaken ev9 latch (DrinkInturrupted on any damage while
+-- drinking), interrupt leg (RemoveAurasDueToSpell 30024, STAND,
+-- SetPower(max-32000), potion 32453), timer leg (STAND, potion
+-- triggered, AOE pyroblast 29978, latch set) — C++-exact vs
+-- boss_shade_of_aran.cpp:249-292/:475-479. Inert until the 16 Aran
+-- spells seed (costs are 0, mana never drops below 20%). The drink
+-- aura's periodic mana refill has no tick executor in Go, but the
+-- machine still terminates: the interrupt leg's SetPower(max-32000)
+-- lifts mana above 20% (max mana is far above 40000), so at most one
+-- extra SAY_DRINK + potion cycle follows a timer-expiry drink. The SpellHit
 -- interrupt arm IS ported (ev14 + creature:HasSpellEffect, bridge live
 -- 2026-11-14): an interrupt-effect spell landing mid-cast interrupts it
 -- and arms the 5s school cooldown. Interrupt spells seeded 2026-11-14
@@ -103,6 +108,15 @@ local SPELL_WATERBOLT = 31012
 local SPELL_FLAMEWREATH_PUNISH = 20476
 local SPELL_EFFECT_INTERRUPT_CAST = 68 -- SharedDefines.h:879
 local SPELL_FLAMEWREATH_DOT = 11027
+local SPELL_MASS_POLY = 29963
+local SPELL_CONJURE = 29975
+local SPELL_DRINK = 30024
+local SPELL_POTION = 32453
+local SPELL_AOE_PYROBLAST = 29978
+local SAY_DRINK = 4
+local POWER_MANA = 0
+local STAND_STATE_STAND = 0
+local STAND_STATE_SIT = 1
 
 local SUPER_FLAME = 0
 local SUPER_BLIZZARD = 1
@@ -189,8 +203,8 @@ local onNormalCast, onSecondaryCast, onSuperCast, onBerserk, onFlameWreathCheck
 local function aranInitState(guid)
     -- C++ Initialize: LastSuperSpell = rand32() % 3; the school cooldowns
     -- start 0 and are armed 5s by the SpellHit interrupt arm (ev14);
-    -- drink state omitted (no power bridge); elementalsSpawned per
-    -- encounter.
+    -- DrinkInterruptTimer = 10000, Drinking / DrinkInturrupted false;
+    -- elementalsSpawned per encounter.
     aranState[guid] = {
         lastSuper = math.random(3) - 1,
         elementalsSpawned = false,
@@ -200,6 +214,9 @@ local function aranInitState(guid)
         arcaneCd = 0,
         fireCd = 0,
         frostCd = 0,
+        drinking = false,
+        drinkInterrupted = false,
+        drinkTimer = 10000,
     }
 end
 
@@ -249,6 +266,15 @@ onFlameWreathCheck = function(creature, guid)
     if not st then
         return
     end
+    -- C++ :291-292: `if (Drinking) return` freezes the flame-wreath
+    -- timer and check; the 500ms poll below does not decrement
+    -- fwRemaining, so the freeze is exact.
+    if st.drinking then
+        schedule(timers, guid, "fwcheck", 500, function()
+            onFlameWreathCheck(creature, guid)
+        end)
+        return
+    end
     st.fwRemaining = st.fwRemaining - 500
     for i = 1, 3 do
         local slot = st.fwTargets[i]
@@ -288,7 +314,52 @@ onNormalCast = function(creature, guid)
         st.arcaneCd = math.max(0, st.arcaneCd - 1000)
         st.fireCd = math.max(0, st.fireCd - 1000)
         st.frostCd = math.max(0, st.frostCd - 1000)
-        if not creature:IsCasting() then
+        -- C++ boss_shade_of_aran.cpp:249-292: the drink legs run on the
+        -- UpdateAI tick ahead of normal casts; `if (Drinking) return`
+        -- (:291-292) gates the normal cast + elementals arm below.
+        local maxMana = creature:GetMaxPower(POWER_MANA)
+        if not st.drinking and maxMana > 0
+                and math.floor(creature:GetPower(POWER_MANA) * 100 / maxMana) < 20 then
+            st.drinking = true
+            creature:InterruptNonMeleeSpells()
+            creature:Talk(SAY_DRINK)
+            if not st.drinkInterrupted then
+                creature:CastSpell(creature, SPELL_MASS_POLY, true)
+                creature:CastSpell(creature, SPELL_CONJURE)
+                creature:CastSpell(creature, SPELL_DRINK)
+                creature:SetStandState(STAND_STATE_SIT)
+                st.drinkTimer = 10000
+            end
+        end
+        if st.drinking and st.drinkInterrupted then
+            st.drinking = false
+            creature:RemoveAurasDueToSpell(SPELL_DRINK)
+            creature:SetStandState(STAND_STATE_STAND)
+            -- C++ :273: SetPower(max-32000); the uint32 subtraction wraps
+            -- when max < 32000 and C++ SetPower clamps to max, so the
+            -- guard below reproduces the clamp instead of passing a
+            -- negative to the bridge.
+            if maxMana > 32000 then
+                creature:SetPower(POWER_MANA, maxMana - 32000)
+            else
+                creature:SetPower(POWER_MANA, maxMana)
+            end
+            creature:CastSpell(creature, SPELL_POTION)
+        end
+        if st.drinking and not st.drinkInterrupted then
+            -- C++ :277-289 with diff ~100ms fires ~10s after SIT; the 1s
+            -- pump fires on the 10th tick instead of the 11th.
+            if st.drinkTimer > 1000 then
+                st.drinkTimer = st.drinkTimer - 1000
+            else
+                creature:SetStandState(STAND_STATE_STAND)
+                creature:CastSpell(creature, SPELL_POTION, true)
+                creature:CastSpell(creature, SPELL_AOE_PYROBLAST)
+                st.drinkInterrupted = true
+                st.drinking = false
+            end
+        end
+        if not st.drinking and not creature:IsCasting() then
             -- C++ :296-328: SelectTarget Random 100 yd; the bolt is drawn
             -- uniformly from the schools whose cooldown is 0; with none
             -- available nothing casts and the 1s retry below re-arms.
@@ -304,7 +375,7 @@ onNormalCast = function(creature, guid)
                 end
             end
         end
-        if not st.elementalsSpawned and healthBelowPct(creature, 40) then
+        if not st.drinking and not st.elementalsSpawned and healthBelowPct(creature, 40) then
             st.elementalsSpawned = true
             -- C++ boss_shade_of_aran.cpp:419-431: 4x SummonCreature(
             -- CREATURE_WATER_ELEMENTAL = 17167, 0,0,0,0,
@@ -333,6 +404,16 @@ onNormalCast = function(creature, guid)
 end
 
 onSecondaryCast = function(creature, guid)
+    local st = aranState[guid]
+    -- C++ :291-292: `if (Drinking) return` freezes the secondary timer
+    -- while drinking; the 1s poll re-fires ~1s after the drink ends
+    -- instead of resuming the exact remaining time.
+    if st and st.drinking then
+        schedule(timers, guid, "secondary", 1000, function()
+            onSecondaryCast(creature, guid)
+        end)
+        return
+    end
     if math.random(2) == 1 then
         creature:CastSpell(creature, SPELL_AOE_CS)
     else
@@ -349,6 +430,15 @@ end
 onSuperCast = function(creature, guid)
     local st = aranState[guid]
     if not st then
+        return
+    end
+    -- C++ :291-292: `if (Drinking) return` freezes the super timer
+    -- while drinking; the 1s poll re-fires ~1s after the drink ends
+    -- instead of resuming the exact remaining time.
+    if st.drinking then
+        schedule(timers, guid, "super", 1000, function()
+            onSuperCast(creature, guid)
+        end)
         return
     end
     local follow = SUPER_FOLLOW[st.lastSuper]
@@ -385,6 +475,15 @@ onSuperCast = function(creature, guid)
 end
 
 onBerserk = function(creature, guid)
+    local st = aranState[guid]
+    -- C++ :291-292: `if (Drinking) return` freezes the berserk timer
+    -- while drinking; the 1s poll re-fires ~1s after the drink ends.
+    if st and st.drinking then
+        schedule(timers, guid, "berserk", 1000, function()
+            onBerserk(creature, guid)
+        end)
+        return
+    end
     -- C++ boss_shade_of_aran.cpp:433-443: 5x SummonCreature(
     -- CREATURE_SHADOW_OF_ARAN = 18254, 0,0,0,0,
     -- TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT (3), 5s = 5000ms); the
@@ -499,6 +598,18 @@ local function onSpellHit(_, creature, caster, spellId)
     end
 end
 
+-- C++ DamageTaken (boss_shade_of_aran.cpp:475-479): any damage while
+-- drinking latches DrinkInturrupted; the interrupt leg runs on the
+-- next 1s pump tick. No postDamage guard: the arm has no health
+-- condition and DamageTaken fires on lethal hits too (2026-10-19 rule).
+local function aranDamageTaken(event, creature, attacker, damage)
+    local st = aranState[creature:GetGUIDLow()]
+    if st and not st.drinkInterrupted and st.drinking and damage > 0 then
+        st.drinkInterrupted = true
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 9, aranDamageTaken)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 1, aranEnterCombat)
 RegisterCreatureEvent(ENTRY_SHADE_OF_ARAN, 2, aranLeaveCombat)
