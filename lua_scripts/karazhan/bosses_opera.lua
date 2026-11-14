@@ -23,8 +23,8 @@
 -- Deviations from C++: Tito (17548), the Crone (SummonCroneIfReady),
 -- Romulo (17533), and the wolf (grandmother gossip, 17603) ARE summoned
 -- now (2026-10-22 summon bridge — creature:SummonCreature on the handler
--- surface); the cyclone summon still has no bearer. The C++ aggro legs
--- (AttackStart IS bridged, lua_creature_events.go:7325, EngageWithTarget alias;
+-- surface); the cyclone summon IS ported below (croneCyclone, 30s). The
+-- C++ aggro legs (AttackStart IS bridged, lua_creature_events.go:7325, EngageWithTarget alias;
 -- Attack IS bridged, :1945; DoZoneInCombat is bridged since
 -- 2026-10-23 and Romulo's summon-leg DoZoneInCombat(pRomulo) IS ported
 -- in the SummonRomuloTimer leg below — receiver-agnostic bridge, the
@@ -55,7 +55,9 @@
 -- strawman fire-school SpellHit arm (Burning Straw 31075) is skipped —
 -- event 14 carries only the spell id, no school mask. The crone's
 -- RemoveFlag/SetImmuneToPC spawn hack is PORTED in croneLeaveCombat. npc_cyclone (18412)
--- is not registered: movement-only AI, no combat hooks ever fire.
+-- IS ported below (ev23 reset pump: knockback self-cast + wander MoveTo,
+-- REACT_PASSIVE for the empty MoveInLineOfSight) — the "no combat hooks"
+-- bar was stale: ev23 + CreateLuaEvent model the UpdateAI-only AI.
 -- npc_grandmother (17603) IS registered now (2026-10-22 summon bridge):
 -- the gossip select summons the Big Bad Wolf at her position and despawns
 -- her, C++-exact; the wolf's AttackStart(player) leg IS PORTED in
@@ -92,6 +94,7 @@ local ENTRY_STRAWMAN = 17543
 local ENTRY_TINHEAD = 17547
 local ENTRY_ROAR = 17546
 local ENTRY_CRONE = 18168
+local ENTRY_CYCLONE = 18412
 local ENTRY_WOLF = 17521
 local ENTRY_GRANDMOTHER = 17603
 local ENTRY_JULIANNE = 17534
@@ -680,8 +683,9 @@ RegisterCreatureEvent(ENTRY_ROAR, 23, roarReset)
 RegisterCreatureEvent(ENTRY_ROAR, 24, roarReachHome)
 
 -- The Crone (boss_crone, C++ ScriptName for 18168): chain lightning 32337
--- on the victim every 15s (first 10s). The cyclone summon (30s) never
--- fires — no summon model. The spawn-hack RemoveFlag/SetImmuneToPC arms
+-- on the victim every 15s (first 10s). The cyclone summon (30s) IS ported
+-- below (croneCyclone — the "no summon model" bar was stale, SummonCreature
+-- bridged 2026-10-22). The spawn-hack RemoveFlag/SetImmuneToPC arms
 -- are PORTED in croneLeaveCombat (ev2+ev23 = C++ Reset path).
 local CRONE_SAY_AGGRO = 0
 local CRONE_SAY_DEATH = 1
@@ -699,12 +703,37 @@ local function croneChainLightning(creature, guid)
     end)
 end
 
+local SPELL_CYCLONE_VISUAL = 32332
+
+local function croneCyclone(creature, guid)
+    -- C++ boss_croneAI::UpdateAI (bosses_opera.cpp:728-733): every 30s
+    -- DoSpawnCreature(CREATURE_CYCLONE, urand(0, 9), urand(0, 9), 0, 0,
+    -- TEMPSUMMON_TIMED_DESPAWN, 15s) — offsets relative to the Crone
+    -- (ScriptedCreature.cpp:286-288) — then the cyclone self-casts the
+    -- visual 32332 triggered. SummonCreature type 2 is TIMED_DESPAWN
+    -- (lua_creature_events.go:4344); o 0 falls back to the summoner's
+    -- orientation on the bridge (C++ spawns facing 0 — irrelevant for
+    -- the spinning visual).
+    local cyclone = creature:SummonCreature(ENTRY_CYCLONE,
+        creature:GetX() + math.random(0, 9),
+        creature:GetY() + math.random(0, 9), creature:GetZ(), 0, 2, 15000)
+    if cyclone then
+        cyclone:CastSpell(cyclone, SPELL_CYCLONE_VISUAL, true)
+    end
+    schedule(guid, "cyclone", 30000, function()
+        croneCyclone(creature, guid)
+    end)
+end
+
 local function croneEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     creature:Talk(CRONE_SAY_AGGRO)
     schedule(guid, "chain", 10000, function()
         croneChainLightning(creature, guid)
+    end)
+    schedule(guid, "cyclone", 30000, function()
+        croneCyclone(creature, guid)
     end)
 end
 
@@ -749,6 +778,67 @@ RegisterCreatureEvent(ENTRY_CRONE, 3, croneTargetDied)
 RegisterCreatureEvent(ENTRY_CRONE, 4, croneDied)
 RegisterCreatureEvent(ENTRY_CRONE, 23, croneLeaveCombat)
 RegisterCreatureEvent(ENTRY_CRONE, 24, croneReachHome)
+
+-- The Cyclone (npc_cyclone, C++ ScriptName for 18412; bosses_opera.cpp:746-789):
+-- a 15s TEMPSUMMON_TIMED_DESPAWN add the Crone spawns every 30s. Its AI is
+-- UpdateAI-only: keep the knockback aura 32334 on itself (triggered
+-- self-cast whenever the aura is missing) and wander to a random point
+-- within 10 yd every 5-8s (first move 1s after spawn). It never engages:
+-- MoveInLineOfSight and JustEngagedWith are both empty overrides, so the
+-- port sets REACT_PASSIVE on reset — the Go sight scan skips passive
+-- creatures (creaturemotion.go sight-scan guard) and the passive gate
+-- suppresses engine melee (boss_ai.go:4713), so it never acquires a
+-- victim or retaliates when attacked, exactly like C++. GetRandomNearPosition
+-- has no bridge: the wander target is the creature's own GetX/GetY plus a
+-- random offset in [-10, 10] per axis (janalai precedent). No ev28 handler:
+-- C++ has no MovementInform arm. The pump is ev23-driven (OnReset fires on
+-- spawn, lua_creature_events.go:1560); timers ride the shared keyspace and
+-- die on the next reset of the same GUID. A re-arm can outlive the 15s
+-- despawn by one tick at most; the callback then runs against the detached
+-- motion and its MoveTo is a no-op (timer errors are contained by the
+-- runtime ProtectedCall).
+local SPELL_KNOCKBACK = 32334
+
+-- C++ npc_cycloneAI::UpdateAI (bosses_opera.cpp:779-781): the knockback
+-- re-check runs every tick. A 1s poll is the Lua form (CreateLuaEvent
+-- has no per-tick hook); the move leg below keeps the 5-8s cadence.
+local function cycloneKnockback(creature, guid)
+    if not creature:HasAura(SPELL_KNOCKBACK) then
+        creature:CastSpell(creature, SPELL_KNOCKBACK, true)
+    end
+    schedule(guid, "cycloneKnockback", 1000, function()
+        cycloneKnockback(creature, guid)
+    end)
+end
+
+local function cycloneMove(creature, guid)
+    -- C++ npc_cycloneAI::UpdateAI (bosses_opera.cpp:782-789): the move
+    -- leg fires on MoveTimer expiry (re-arm urand(5000, 8000)).
+    creature:MoveTo(0, creature:GetX() + math.random(-10, 10),
+        creature:GetY() + math.random(-10, 10), creature:GetZ())
+    schedule(guid, "cycloneMove", math.random(5000, 8000), function()
+        cycloneMove(creature, guid)
+    end)
+end
+
+local function cycloneReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelTimers(guid)
+    -- C++ empty MoveInLineOfSight override (bosses_opera.cpp:774-777):
+    -- never engages.
+    creature:SetReactState(0) -- REACT_PASSIVE
+    if not creature:HasAura(SPELL_KNOCKBACK) then
+        creature:CastSpell(creature, SPELL_KNOCKBACK, true)
+    end
+    schedule(guid, "cycloneKnockback", 1000, function()
+        cycloneKnockback(creature, guid)
+    end)
+    schedule(guid, "cycloneMove", 1000, function()
+        cycloneMove(creature, guid)
+    end)
+end
+
+RegisterCreatureEvent(ENTRY_CYCLONE, 23, cycloneReset)
 
 -- The Big Bad Wolf (boss_bigbadwolf, C++ ScriptName for 17521): chase
 -- every 30s — Talk(SAY_WOLF_HOOD = 2) + triggered Little Red Riding Hood

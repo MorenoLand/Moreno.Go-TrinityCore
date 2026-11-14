@@ -13,9 +13,9 @@
 -- creature:ApplySpellImmune bridge); Barnes is an
 -- EscortAI with gossip waypoints and instance-script arms (escort
 -- bridges exist now — see karazhan.lua, round116; the Barnes port is
--- assembly work, not a missing bridge), and Medivh's Reset is ported
--- in karazhan.lua (ev23, 2026-11-14); its dialogue machine is
--- triggered by MovementInform after a MovePoint (no movement model).
+-- assembly work, not a missing bridge), and Medivh's Reset + 15-step
+-- dialogue machine are ported in karazhan.lua (ev23/ev28, 2026-11-14;
+-- MoveTo + ev28 MovementInform is the movement model).
 
 local ENTRY = 16504
 
