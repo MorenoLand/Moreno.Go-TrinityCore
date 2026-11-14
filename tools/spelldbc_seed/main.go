@@ -50,6 +50,7 @@ func f32(v float32) uint32 { return math.Float32bits(v) }
 const (
 	effSchoolDamage            = 2
 	effDummy                   = 3
+	effTeleportUnits           = 5 // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816)
 	effApplyAura               = 6
 	effHealthLeech             = 9
 	effSummon                  = 28
@@ -63,14 +64,18 @@ const (
 	effActivateObj             = 86
 	effCharge                  = 96
 	effKnockBack               = 98
+	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage            = 58
 	effHealMaxHealth           = 67 // SPELL_EFFECT_HEAL_MAX_HEALTH
 	effInterruptCast           = 68 // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
+	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraStun                   = 12
 	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
+	auraObsModHealth           = 20 // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
+	auraObsModPower            = 21 // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
 	auraPeriodicTrig           = 23
 	auraRoot                   = 26
 	auraSilence                = 27
@@ -83,12 +88,14 @@ const (
 	auraModDmgTaken            = 87
 	auraModResistPct           = 101
 	auraModMeleeHaste          = 138
+	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	auraPeriodicDummy          = 226
 	auraControlVehicle         = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	auraLinked                 = 284
 	auraPreventRegen           = 294
 	schoolPhysical             = 1
+	schoolHoly                 = 2
 	schoolFire                 = 4
 	schoolNature               = 8
 	schoolFrost                = 16
@@ -98,6 +105,7 @@ const (
 	targetEnemy                = 6
 	targetSrcAreaEnemy         = 15
 	targetDestCaster           = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetUnitCasterAreaParty  = 20 // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
 	targetUnitDestAreaEnemy    = 16 // TARGET_UNIT_DEST_AREA_ENEMY
 	targetDestCasterBackRight  = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
 	targetDestCasterFrontRight = 41 // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
@@ -106,11 +114,13 @@ const (
 	targetUnitTargetAny        = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
 	targetUnitConeEnemy        = 24 // TARGET_UNIT_CONE_ENEMY_24 (SharedDefines.h:1460)
 	targetDestTargetAny        = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
+	targetDestDest             = 87 // TARGET_DEST_DEST (SharedDefines.h:1523)
 	targetDestTargetEnemy      = 53 // TARGET_DEST_TARGET_ENEMY
 	targetSrcCaster            = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
 	targetUnitSrcAreaAlly      = 30 // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
 	targetUnitSrcAreaEntry     = 7  // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
 	targetUnitNearbyEntry      = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
+	targetDestNearbyEntry      = 46 // TARGET_DEST_NEARBY_ENTRY (SharedDefines.h:1482)
 	targetGONearbyEntry        = 40
 	auraAddPctModifier         = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
 	spellModDamage             = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
@@ -893,9 +903,9 @@ var spells = []spell{
 	// draws from these schools) — wago.tools 3.4.0.43659
 	// Spell/SpellMisc/SpellEffect/SpellPower/SpellLevels rows,
 	// browser task c0a20af1 PARTIAL verdict 2026-11-14 (4 of 16
-	// spells read; the site blocked the other 12 — follow-up read
-	// still needed for 30035/29946/29961/32265/29973/29967/29951/
-	// 29963/29975/30024/32453/29978 + cannon 42442). All four below
+	// spells read; the site blocked the other 12 — those 12 + cannon
+	// 42442 landed in the e7682859 verdict below, build 3.4.0.47659).
+	// All four below
 	// are DifficultyID 0; TargetB 0, RadiusIndex 0, Misc 0/0 unless
 	// stated. No SpellClassOptions row was read for any of the four
 	// (family stays 0); SpellLevel (70, 30 on 29991) is not encoded
@@ -937,6 +947,132 @@ var spells = []spell{
 	// aura 26 MOD_ROOT Die 1 Base -1 TargetA 6, Mechanic 0 as
 	// stored. SpellLevel is 30, not 70.
 	{id: 29991, durIdx: 1, rangeIdx: 4, school: schoolFrost, manaCost: 350, effects: [3]effect{{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, targetA: targetEnemy}}},
+	// Remaining 12 Aran spells + cannon 42442 — wago.tools 3.4.0.47659
+	// Spell/SpellMisc/SpellEffect/SpellPower rows, browser task
+	// e7682859 verdict 2026-11-14 (all 13 read; build 47659, NOT the
+	// 43659 build the first 4 used). DifficultyID 0 only (the 175
+	// rows are not seeded). TARGET NUMBER TRANSLATION (wago 3.4.0
+	// renumbered three targets vs TC 3.3.5 SharedDefines.h — the Go
+	// engine is 3.3.5-numbered, target_dest_targets.go:37): wago 50
+	// TARGET_DEST_DEST -> 87 (29951 TargetA); wago 28
+	// TARGET_UNIT_DEST_AREA_ENEMY -> 16 (29951 TargetB); wago 7
+	// TARGET_UNIT_CASTER_AREA_PARTY -> 20 (42442 TargetB). All other
+	// target numbers agree between builds. RADIUS: radiusIdx = wago
+	// RadiusIndex_0 (repo convention — 31266/38576/65100 precedent);
+	// RadiusIndex_1 is nonzero on 29961 (40), 29963 eff0/eff2 (12),
+	// 29978 (12) and is recorded in the per-spell comments, not
+	// seeded — follow-up read 54197700 settles whether the 3.3.5
+	// field holds _0 or _1. AUX ROWS STILL MISSING (follow-up read
+	// 54197700): SpellDuration 18, SpellRange 36/11/13,
+	// SpellCastTimes 7, SpellRadius 17/19/27/38/12/30 (+40 if the
+	// radius question resolves to _1). DO NOT COMMIT the regen until
+	// those rows land — a missing aux row reads as 0 (store.go).
+	// ManaCost is SpellPower.ManaCost (SpellMisc has no cost column
+	// in 3.4.0); no SpellPower row = cost 0.
+	// 30035 Mass Slow: castTimeIdx 1 (instant, default 0), durIdx 1
+	// (10000), rangeIdx 1 (Self Only), school 0x40; ManaCost 1300;
+	// eff0 6 APPLY_AURA aura 193 MELEE_SLOW Die 1 Base -36 TargetA
+	// 22 TargetB 15 RadiusIndex_0 17; eff1 6 APPLY_AURA aura 33
+	// MOD_DECREASE_SPEED Die 1 Base -61 TargetA 22/15 RadiusIndex_0
+	// 19.
+	{id: 30035, durIdx: 1, rangeIdx: 1, school: schoolArcane, manaCost: 1300, effects: [3]effect{
+		{effect: effApplyAura, aura: auraMeleeSlow, dieSides: 1, basePoints: -36, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 17},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -61, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 19},
+	}},
+	// 29946 Flame Wreath: castTimeIdx 1 (instant, default 0), durIdx
+	// 18 (row pending), rangeIdx 36 (row pending), school 0x4; no
+	// SpellPower row (cost 0); eff0 27 PERSISTENT_AREA_AURA aura 23
+	// PERIODIC_TRIGGER_SPELL AuraPeriod 500 Trigger 30023 TargetA 63
+	// TargetB 16 RadiusIndex_0 15; eff1 3 DUMMY Die 1 BasePoints
+	// 29946 TargetA 1 — the 29946 base value is verdict-literal
+	// (equals the spell ID; the DUMMY leg ignores basePoints).
+	{id: 29946, durIdx: 18, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicTrig, auraPeriod: 500, trigger: 30023, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, radiusIdx: 15},
+		{effect: effDummy, dieSides: 1, basePoints: 29946, targetA: targetCaster},
+	}},
+	// 29961 AoE Counterspell: castTimeIdx 1 (instant, default 0),
+	// durIdx 1 (10000), rangeIdx 11 (row pending), school 0x40; no
+	// SpellPower row (cost 0); single effect 68 INTERRUPT_CAST Die 1
+	// Base -1 TargetA 22 TargetB 15 RadiusIndex_0 0 (RadiusIndex_1
+	// 40 — see the radius note above; the ev14 HasSpellEffect arm
+	// keys on effect 68, not the radius).
+	{id: 29961, durIdx: 1, rangeIdx: 11, school: schoolArcane, effects: [3]effect{{effect: effInterruptCast, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy}}},
+	// 32265 Magnetic Pull (PLAYERPULL): castTimeIdx 1 (instant,
+	// default 0), durIdx 0, rangeIdx 36 (row pending), school 0x1;
+	// no SpellPower row (cost 0); single effect 124 PULL_TOWARDS
+	// MiscValue 125 TargetA 22 TargetB 15 RadiusIndex_0 27.
+	{id: 32265, rangeIdx: 36, school: schoolPhysical, effects: [3]effect{{effect: effPullTowards, misc: 125, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 27}}},
+	// 29973 Arcane Explosion: castTimeIdx 7 (row pending), durIdx 0,
+	// rangeIdx 1 (Self Only), school 0x40; ManaCost 1000; eff0 2
+	// SCHOOL_DAMAGE Die 2001 Base 8999 TargetA 22 TargetB 15
+	// RadiusIndex_0 38 (BonusCoefficient 1, not encoded — the seed
+	// has no bonus-coefficient field); eff1 98 KNOCK_BACK Die 41
+	// Base 179 MiscValue 180 TargetA 22/15 RadiusIndex_0 38.
+	{id: 29973, castTimeIdx: 7, rangeIdx: 1, school: schoolArcane, manaCost: 1000, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 2001, basePoints: 8999, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 38},
+		{effect: effKnockBack, dieSides: 41, basePoints: 179, misc: 180, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 38},
+	}},
+	// 29967 Blink Center: castTimeIdx 1 (instant, default 0), durIdx
+	// 0, rangeIdx 13 (row pending), school 0x8; no SpellPower row
+	// (cost 0); single effect 5 TELEPORT_UNITS TargetA 1 TargetB 46
+	// (wago shows no name for effect 5 — the TC number is
+	// SPELL_EFFECT_TELEPORT_UNITS, SharedDefines.h:816).
+	{id: 29967, rangeIdx: 13, school: schoolNature, effects: [3]effect{{effect: effTeleportUnits, targetA: targetCaster, targetB: targetDestNearbyEntry}}},
+	// 29951 Circular Blizzard: castTimeIdx 1 (instant, default 0),
+	// durIdx 1 (10000), rangeIdx 1 (Self Only), school 0x10; no
+	// SpellPower row (cost 0); eff0 27 PERSISTENT_AREA_AURA aura 3
+	// PERIODIC_DAMAGE AuraPeriod 2000 Die 375 Base 1312 TargetA 87
+	// (translated from wago 50) TargetB 16 (translated from wago 28)
+	// RadiusIndex_0 17; eff1 27 PERSISTENT_AREA_AURA aura 33
+	// MOD_DECREASE_SPEED Die 1 Base -66 Mechanic 11 TargetA 87/16
+	// RadiusIndex_0 17.
+	{id: 29951, durIdx: 1, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, auraPeriod: 2000, dieSides: 375, basePoints: 1312, targetA: targetDestDest, targetB: targetUnitDestAreaEnemy, radiusIdx: 17},
+		{effect: effPersistentAreaAura, aura: auraDecSpeed, dieSides: 1, basePoints: -66, mechanic: 11, targetA: targetDestDest, targetB: targetUnitDestAreaEnemy, radiusIdx: 17},
+	}},
+	// 29963 Mass Polymorph: castTimeIdx 5 (2000), durIdx 1 (10000),
+	// rangeIdx 4 (30 yd), school 0x1; ManaCost 0, PowerCostPct 10;
+	// eff0 6 APPLY_AURA aura 5 MOD_CONFUSE Die 1 Base -1 TargetA 22
+	// TargetB 15 RadiusIndex_0 0 (RadiusIndex_1 12 — see radius
+	// note); eff1 6 APPLY_AURA aura 56 TRANSFORM MiscValue 1933
+	// TargetA 22/15 RadiusIndex_0 12; eff2 6 APPLY_AURA aura 20
+	// OBS_MOD_HEALTH Die 1 Base 6 AuraPeriod 1000 TargetA 22/15
+	// RadiusIndex_0 0 (RadiusIndex_1 12 — see radius note).
+	{id: 29963, castTimeIdx: 5, durIdx: 1, rangeIdx: 4, school: schoolPhysical, manaCostPct: 10, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModConfuse, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy},
+		{effect: effApplyAura, aura: auraTransform, misc: 1933, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12},
+		{effect: effApplyAura, aura: auraObsModHealth, dieSides: 1, basePoints: 6, auraPeriod: 1000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy},
+	}},
+	// 29975 Conjure: castTimeIdx 5 (2000), durIdx 0, rangeIdx 1
+	// (Self Only), school 0x40; ManaCost 885; single effect 3 DUMMY
+	// TargetA 1.
+	{id: 29975, castTimeIdx: 5, rangeIdx: 1, school: schoolArcane, manaCost: 885, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
+	// 30024 Drink: castTimeIdx 1 (instant, default 0), durIdx 28
+	// (5000), rangeIdx 1 (Self Only), school 0x1; no SpellPower row
+	// (cost 0); single effect 6 APPLY_AURA aura 21 OBS_MOD_POWER Die
+	// 1 Base 19 AuraPeriod 1000 TargetA 1 (EffectAmplitude 1, not
+	// encoded — the seed has no amplitude field). The drink aura's
+	// periodic mana refill still has no tick executor in Go
+	// (boss_shade_of_aran.lua header) — this seed only makes the
+	// spell exist; the Lua drink machine is unchanged.
+	{id: 30024, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, aura: auraObsModPower, dieSides: 1, basePoints: 19, auraPeriod: 1000, targetA: targetCaster}}},
+	// 32453 Potion: castTimeIdx 3 (500), durIdx 0, rangeIdx 1 (Self
+	// Only), school 0x2; no SpellPower row (cost 0); single effect
+	// 30 ENERGIZE Die 1 Base 31999 TargetA 1.
+	{id: 32453, castTimeIdx: 3, rangeIdx: 1, school: schoolHoly, effects: [3]effect{{effect: effEnergize, dieSides: 1, basePoints: 31999, targetA: targetCaster}}},
+	// 29978 AoE Pyroblast (SHADOW_PYRO): castTimeIdx 3 (500), durIdx
+	// 0, rangeIdx 6 (Vision Range 0-100), school 0x4; no SpellPower
+	// row (cost 0); single effect 2 SCHOOL_DAMAGE Die 1 Base 6799
+	// TargetA 22 TargetB 15 RadiusIndex_0 0 (RadiusIndex_1 12 — see
+	// radius note; BonusCoefficient 1, not encoded).
+	{id: 29978, castTimeIdx: 3, rangeIdx: 6, school: schoolFire, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1, basePoints: 6799, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy}}},
+	// 42442 Cannon fire (Valiance Keep cannon template spell):
+	// castTimeIdx 1 (instant, default 0), durIdx 0, rangeIdx 1 (Self
+	// Only), school 0x1; no SpellPower row (cost 0); single effect 3
+	// DUMMY TargetA 22 TargetB 20 (translated from wago 7)
+	// RadiusIndex_0 30. Speed 40 in SpellMisc is not encoded — the
+	// seed has no speed field.
+	{id: 42442, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetSrcCaster, targetB: targetUnitCasterAreaParty, radiusIdx: 30}}},
 }
 
 func main() {
@@ -968,6 +1104,7 @@ func main() {
 		{31, 8000, 0, 8000},             // real SpellDuration 31 for 2139 Counterspell (wago.tools 3.4.0.43659)
 		{35, 4000, 0, 4000},             // real SpellDuration 35 for 6552 Pummel / 47528 Mind Freeze (wago.tools 3.4.0.43659)
 		{39, 2000, 0, 2000},             // real SpellDuration 39 for 57994 Wind Shear (wago.tools 3.4.0.43659)
+		{18, 20000, 0, 20000},           // real SpellDuration 18 for 29946 Flame Wreath (wago.tools 3.4.0.47659, aux read 54197700)
 		{90001, 2000, 0, 2000},
 		{90002, 6000, 0, 6000},
 		{90003, 8000, 0, 8000},
@@ -1005,6 +1142,13 @@ func main() {
 		{91007, f32(50000), f32(0), f32(50000)},
 		{91008, f32(100), f32(0), f32(100)},
 		{91009, f32(1), f32(0), f32(1)},
+		{17, f32(13), f32(0), f32(13)},   // real SpellRadius 17 for 30035/29951 (wago.tools 3.4.0.47659, aux read 54197700)
+		{19, f32(18), f32(0), f32(18)},   // real SpellRadius 19 for 30035 eff1 (wago.tools 3.4.0.47659, aux read 54197700)
+		{27, f32(50), f32(0), f32(50)},   // real SpellRadius 27 for 32265 (wago.tools 3.4.0.47659, aux read 54197700)
+		{38, f32(21), f32(0), f32(21)},   // real SpellRadius 38 for 29973 (wago.tools 3.4.0.47659, aux read 54197700)
+		{12, f32(100), f32(0), f32(100)}, // real SpellRadius 12 for 29963 eff1 (wago.tools 3.4.0.47659, aux read 54197700)
+		{30, f32(500), f32(0), f32(500)}, // real SpellRadius 30 for 42442 (wago.tools 3.4.0.47659, aux read 54197700)
+		{40, f32(9), f32(0), f32(9)},     // real SpellRadius 40 = 29961 RadiusIndex_1 (wago.tools 3.4.0.47659, aux read 54197700); UNREFERENCED — no seeded spell uses radiusIdx 40 until the _0-vs-_1 radius question settles
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
@@ -1017,6 +1161,7 @@ func main() {
 		{4, 1000, 0}, // real SpellCastTimes 4 for 31266 (wago.tools 3.4.0.43659)
 		{92001, 2000, 0},
 		{92002, 3000, 0},
+		{7, 10000, 0}, // real SpellCastTimes 7 for 29973 Arcane Explosion (wago.tools 3.4.0.47659, aux read 54197700)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
@@ -1040,6 +1185,9 @@ func main() {
 		{93006, f32(0), f32(0), f32(60), f32(60), 0},
 		{93007, f32(0), f32(0), f32(100), f32(100), 0},
 		{93008, f32(0), f32(0), f32(50000), f32(50000), 0},
+		{36, f32(0), f32(0), f32(45), f32(45), 0},       // real SpellRange 36 "Longer Range" for 29946/32265 (wago.tools 3.4.0.47659, aux read 54197700)
+		{11, f32(0), f32(0), f32(15), f32(15), 0},       // real SpellRange 11 "Fifteen yards" for 29961 (wago.tools 3.4.0.47659, aux read 54197700)
+		{13, f32(0), f32(0), f32(50000), f32(50000), 0}, // real SpellRange 13 "Anywhere - Unlimited" for 29967 (wago.tools 3.4.0.47659, aux read 54197700)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
