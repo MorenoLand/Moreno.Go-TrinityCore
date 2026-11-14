@@ -770,6 +770,12 @@ var spells = []spell{
 	{id: 52994, rangeIdx: 93005, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetUnitTargetAny}}},
 	{id: 52991, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
 	{id: 7267, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
+	// 52693 Realm of Shadows (chapter1.cpp:778 SPELL_REALM_OF_SHADOWS;
+	// npc_salanar_the_horseman gossip arm) -- INFERRED row, derived
+	// from in-tree C++/Go constraints, not a client DBC row; replace
+	// with a real DBC row when client data ships. Self-cast DUMMY
+	// like 7267 Grovel: TargetA 1 (TARGET_UNIT_CASTER), range 93001.
+	{id: 52693, rangeIdx: 93001, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
 }
 
 func main() {

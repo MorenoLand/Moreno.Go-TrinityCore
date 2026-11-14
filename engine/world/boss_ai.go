@@ -16490,12 +16490,18 @@ func init() {
 	// verified — spell 52266 summons the chaser, not the ros rider;
 	// MoveChase/GetSummonerUnit/ev15 bridged; JustAppeared rides ev22,
 	// not ev5 — ev5 fires before CreatedByGUID is stamped), npc_
-	// salanar_the_horseman (gossip 9739 realm-of-shadows cast, MoveInLineOf
-	// Sight vehicle machine; no gossip/vehicle bridges), spell_stable_
+	// salanar_the_horseman (gossip 9739 realm-of-shadows cast PORTED tick
+	// 2026-11-14, see the registration below; MoveInLineOfSight vehicle
+	// machine stays out -- ev27 engage-only, no GetCharmer/RemoveAuras
+	// bridges), spell_stable_
 	// master_repo (AuraScript; no bridge), spell_deliver_stolen_horse
 	// (SpellScript; no bridge), npc_dkc1_gothik
-	// (MoveInLineOfSight ghoul-collect; no proximity bridge), npc_scarlet_
-	// ghoul (owner/minion machines; no minion bridges), spell_gift_of_
+	// (MoveInLineOfSight ghoul-collect; no proximity bridge -- ev27
+	// engage-only, no GetCharmer/RemoveAllMinionsByEntry bridges),
+	// npc_scarlet_ghoul (owner/minion machines PORTED tick 2026-11-14,
+	// see the registration below -- the Oct-7 "no minion bridges" claim
+	// is stale: GetAllMinionsByEntry + GetVictim are live),
+	// spell_gift_of_
 	// the_harvester (SpellScript; no bridge). npc_ros_dark_rider is
 	// ported/registered below (tick 380): its JustDied deathcharger
 	// flip (SetFlag SPELLCLICK + RemoveFlag NOT_SELECTABLE + SetFaction
@@ -16543,6 +16549,26 @@ func init() {
 	// (tools/spelldbc_seed/main.go); the 52991 flag-GO summon leg
 	// stays unmodeled.
 	RegisterLuaBoss("npc_death_knight_initiate", 28406)
+	// npc_salanar_the_horseman (entry 28788 ONLY -- TDB 26091
+	// creature_template: sole Salanar row with ScriptName
+	// 'npc_salanar_the_horseman'; 28653/28908 run no C++ script)
+	// is ported in lua_scripts/eastern_kingdoms/
+	// npc_salanar_the_horseman.lua (tick 2026-11-14): OnGossipSelect
+	// (menu 9739 option 0 -> player:CastSpell(player, 52693) +
+	// GossipComplete, C++ order, no ClearGossipMenu -- the C++ arm
+	// has none). MoveInLineOfSight vehicle machine stays out (ev27
+	// engage-only + no GetCharmer/RemoveAurasDueToSpell bridges);
+	// 28788 ships npcflag 0/menu 0 so the select arm cannot fire
+	// in the current DB state (same in TC).
+	RegisterLuaBoss("npc_salanar_the_horseman", 28788)
+	// npc_scarlet_ghoul (entry 28845 ONLY -- TDB 26091: sole Scarlet
+	// Ghoul row with ScriptName 'npc_scarlet_ghoul') is ported in
+	// lua_scripts/eastern_kingdoms/npc_scarlet_ghoul.lua (tick
+	// 2026-11-14): constructor SetReactState DEFENSIVE on ev5,
+	// JustAppeared 50% Talk(0, owner) on ev22, UpdateAI
+	// owner/ghost/minion AttackStart legs on ev7 (no veto -- engine
+	// melee still runs); in-combat ghost melee leg engine-covered.
+	RegisterLuaBoss("npc_scarlet_ghoul", 28845)
 	// AddSC_the_scarlet_enclave_c2 (chapter2.cpp, EK loader decl :96 /
 	// call :274): full-file audit 2026-10-07. npc_koltira_deathweaver
 	// (entry 28912, chapter2.cpp :90 BloodyBreakout enum — quest-12727
