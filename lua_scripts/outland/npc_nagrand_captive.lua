@@ -36,6 +36,9 @@
 --   DoCastVictim(12548), re-arm urand(7500,15000). Melee is
 --   engine-driven. Pump runs only between enter-combat and
 --   leave-combat/died/reset (the !UpdateVictim gate).
+--   Enter-combat also SetEscortPaused(true) / leave-combat
+--   SetEscortPaused(false) while escorting (the C++
+--   waypoint-advance-only-while-!engaged rule).
 -- - SpellHitTarget (15, caster-side; NOT event 14, which is
 --   the victim-side OnHitBySpell — the banner file's "event
 --   14" label was the wrong number): maghar chain lightning
@@ -60,39 +63,43 @@
 --   non-nil, + 3 more summons + wp7 Talk(COMPLETE 6) +
 --   GroupEventHappens(9879) + SetWalk(false). Ambush summons
 --   spawn at the FIXED ambush-B coords, not at the waypoint.
+--   Final waypoint (maghar wp19 / kurenai wp10) StopEscort:
+--   the C++ path-end MoveIdle + drop-ESCORTING twin.
 -- - Reset (23): pump cancel + state drop; the re-latch
 --   lands on OnEnterCombat (gargolmar precedent).
 -- Deliberate deviations / blockers (all data-side, no engine
 -- work in this file):
--- - THE ESCORT WALK cannot fire against TDB 26091: C++
---   reads the path from `script_waypoint` (entry-keyed);
---   Go has no script_waypoint loader and its waypoint_data
---   loader resolves the captives to spawn GUIDs 65108/84459,
---   which have no rows; the real paths sit orphaned in
---   waypoint_data under 145674 (kurenai pts 1-10, pt7 delay
---   7500) / 145682 (maghar pts 0-19, pt7 delay 2000, pt16
---   delay 7500, pts 16-19 run) with no binding row
---   (creature_template_addon path_id = 0 for both entries).
---   MoveWaypoint() is a provable no-op here, so the ev6 arms
---   above are registered but inert until the engine loads
---   script_waypoint, gains an entry->path binding, or the
---   deployment DB gains waypoint_data rows under the spawn
---   GUIDs / a creature_addon.path_id row (wilda precedent:
---   same no-op rule, arms registered anyway). The walk loop
---   itself (Go NextIdx wraps; no end-of-path idle twin) and
---   the combat-pause question (Go's waypoint launch gate has
---   EscortPaused / casting gates but NO engaged/victim gate,
---   creaturemotion.go:9801-9830) are moot until the walk can
---   start.
--- - Talk is silent against TDB 26091: the dump's
---   creature_text table holds exactly two rows (entries 6
---   and 23383) — NO rows for 18209/18210, so every Talk(id)
---   here resolves to nothing. CORRECTION of the captive
---   re-triage report, which claimed groups 0-4 rows exist
---   (it read the npc_text gossip rows for these entries
---   instead). Talk ids are ported C++-verbatim (kurenai
---   groups 0-6 as written, incl. 5/6 with no rows anywhere);
---   they fire once the deployment DB gains the rows.
+-- - THE ESCORT WALK was blocked on the path binding; it ships
+--   with this commit: sql/*/updates/world/
+--   2026111401_nagrand_captive_path_binding.sql binds
+--   creature_template_addon.path_id 18209->145674 and
+--   18210->145682 (the orphaned waypoint_data paths: kurenai
+--   pts 1-10, pt7 delay 7500; maghar pts 0-19, pt7 delay
+--   2000, pt16 delay 7500, pts 16-19 run). Once the update
+--   applies, loadCreaturePathID resolves the paths and the
+--   ev6 arms above fire (no engine change; C++ reads the path
+--   from script_waypoint, entry-keyed, which Go never loads --
+--   the template binding is the Go-side twin of that lookup).
+--   Two walk-shape legs are ported alongside: end-of-path
+--   StopEscort at the final waypoint (maghar wp19 / kurenai
+--   wp10, the C++ path-end MoveIdle + drop-ESCORTING twin --
+--   without it Go's NextIdx wraps and the escort loops) and
+--   the combat pause (C++ EscortAI advances waypoints only
+--   while !engaged; Go's waypoint launch gate has no engaged
+--   check, so enter-combat SetEscortPaused(true) / leave-
+--   combat SetEscortPaused(false) carry it, gated on
+--   IsEscorted()).
+-- - Talk rows EXIST in TDB 26091: creature_text holds 5 rows
+--   per entry (groups 0-4) for both 18209/18210, verified by
+--   tuple count on the INSERT INTO `creature_text` VALUES
+--   lines (the "exactly two rows" claim in the 07:31 tick
+--   read only each statement's first tuple). Kurenai skew
+--   stands: C++ uses groups 0-6 but the dump has only 0-4,
+--   shifted (g0 "It's an ambush!" is NO_ESCAPE semantics,
+--   g4 is the COMPLETE text); groups 5 (SHOCK) / 6 (COMPLETE)
+--   have no rows and stay silent. Talk ids are ported
+--   C++-verbatim -- C++ itself reads the same rows against
+--   this DB. Maghar 18210 groups 0-4 map clean.
 -- - Totem ev19 gate is moot in Go: totems.go summonTotem
 --   fires no JustSummoned event, so the totem never reaches
 --   ev19; the entry-2630 guard stays as C++-faithful defense.
@@ -143,6 +150,7 @@ local configs = {
         hasShockArm = false,
         ambushWp = 7,
         completeWp = 16,
+        endWp = 19,
         -- Ambush-A summon set, C++ order: {entry, dx, dy}.
         ambushA = {
             { NPC_MURK_RAIDER, 2.5, -2.5 },
@@ -167,6 +175,7 @@ local configs = {
         hasShockArm = true,
         ambushWp = 3,
         completeWp = 7,
+        endWp = 10,
         ambushA = {
             { NPC_MURK_RAIDER, 2.5, -2.5 },
             { NPC_MURK_BRUTE, -2.5, 2.5 },
@@ -299,6 +308,11 @@ local function onReachWP(event, creature)
         end
         -- C++ SetRun(); the SetWalk(false) twin (old_hillsbrad).
         creature:SetWalk(false)
+    elseif wp == cfg.endWp then
+        -- C++ path end: EscortAI drops ESCORTING and idles
+        -- (MoveIdle); without this Go's NextIdx wraps and the
+        -- escort loops the path.
+        creature:StopEscort()
     end
 end
 
@@ -348,6 +362,8 @@ end
 
 -- C++ JustEngagedWith (zone_nagrand.cpp:94-100 / :283-289):
 -- earthbind totem + pump start with Initialize() latches.
+-- The combat pause: C++ EscortAI advances waypoints only
+-- while !engaged, so the walk pauses for the fight.
 local function onEnterCombat(event, creature)
     local guid = creature:GetGUIDLow()
     states[guid] = {
@@ -356,7 +372,19 @@ local function onEnterCombat(event, creature)
         frostShock = 6000,
     }
     creature:CastSpell(creature, SPELL_EARTHBIND_TOTEM)
+    if creature:IsEscorted() then
+        creature:SetEscortPaused(true)
+    end
     startPump(guid, creature)
+end
+
+-- C++ EscortAI resumes waypoint advance on leave-combat;
+-- then the pump/state drop.
+local function onLeaveCombat(event, creature)
+    if creature:IsEscorted() then
+        creature:SetEscortPaused(false)
+    end
+    fullReset(creature:GetGUIDLow())
 end
 
 -- C++ JustDied (zone_nagrand.cpp:102-112 / :291-301): escort
@@ -379,9 +407,7 @@ for _, entry in ipairs(captiveEntries) do
     RegisterCreatureEvent(entry, 19, onJustSummoned)
     RegisterCreatureEvent(entry, 15, onSpellHitTarget)
     RegisterCreatureEvent(entry, 1, onEnterCombat)
-    RegisterCreatureEvent(entry, 2, function(_, creature)
-        fullReset(creature:GetGUIDLow())
-    end)
+    RegisterCreatureEvent(entry, 2, onLeaveCombat)
     RegisterCreatureEvent(entry, 4, onDied)
     RegisterCreatureEvent(entry, 23, function(_, creature)
         fullReset(creature:GetGUIDLow())
