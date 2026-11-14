@@ -48,9 +48,8 @@
 --   _eggGUID) (:459) has no bridge; the egg object returned by
 --   SummonCreature is stored per-guid instead (SummonCreature
 --   returns the object + stamps OwnerGUID, mimiron precedent).
--- - BURN 44197's periodic trigger 44198 is UNSEEDED (fetch
---   dispatched 2026-11-14) — the aura applies but ticks dormant
---   until 44198 seeds (marli precedent).
+-- - BURN 44197's periodic trigger 44198 is SEEDED (verdict
+--   2026-11-14) — the aura applies and ticks live in code.
 -- - The egg is summoned with type 5 CORPSE_TIMED_DESPAWN, 0ms
 --   (C++ DoSummon default type + 0s: lives until killed or
 --   manually despawned; corpse timer 0).

@@ -585,10 +585,22 @@ var spells = []spell{
 	}},
 	// 44197 Burn: single effect 6 APPLY_AURA, aura 23
 	// PERIODIC_TRIGGER_SPELL, DieSides 0, BasePoints 0, TargetA 1,
-	// AuraPeriod 2000, TriggerSpell 44198 (UNSEEDED — aura ticks
-	// dormant until 44198 seeds; fetch dispatched 2026-11-14);
-	// DurationIndex 21.
+	// AuraPeriod 2000, TriggerSpell 44198 (seeded below — verdict
+	// 2026-11-14, the chain is live in code); DurationIndex 21.
 	{id: 44197, durIdx: 21, rangeIdx: 93001, school: schoolFire, effects: [3]effect{{effect: effApplyAura, dieSides: 0, basePoints: 0, aura: auraPeriodicTrig, auraPeriod: 2000, trigger: 44198, targetA: targetCaster}}},
+	// 44198 Burn (trigger of 44197's periodic aura;
+	// boss_felblood_kaelthas.cpp:75 SPELL_BURN trigger) — wago.tools
+	// 3.4.0.43659 Spell/SpellEffect/SpellMisc rows, 2026-11-14
+	// verdict: single effect 2 SCHOOL_DAMAGE, BasePoints 1749,
+	// DieSides 501, TargetA 22 (TARGET_SRC_CASTER), TargetB 15
+	// (TARGET_UNIT_SRC_AREA_ENEMY), RadiusIndex 14 (8 yd, seeded
+	// real row); DurationIndex 0 (no SpellDuration row, by design),
+	// RangeIndex 1 (Self Only, 0-0 yd = synthetic 93001's value),
+	// SchoolMask 0x4 (fire), CastingTimeIndex 1 (instant, default
+	// 0). Attributes_0 0x0 not encoded (seed has no attributes
+	// field). The school-damage leg is live in Go (44196/44199
+	// same shape).
+	{id: 44198, rangeIdx: 93001, school: schoolFire, effects: [3]effect{{effect: effSchoolDamage, dieSides: 501, basePoints: 1749, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14}}},
 	// 44199 Ember Blast: eff0 2 SCHOOL_DAMAGE, BasePoints 1749,
 	// DieSides 501, TargetA 18 / TargetB 16, RadiusIndex 14 (8 yd,
 	// seeded real row); eff1 98 KNOCK_BACK, BasePoints 49, DieSides 1,
