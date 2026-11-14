@@ -29,18 +29,36 @@ local PROXIMITY_YARDS = 5
 local DESPAWN_DELAY_MS = 1000
 
 local despawnPending = {}
+local trapHit = {}
 
 local function onMoveInLOS(event, creature, player)
     if creature:GetDistance(player) - creature:GetCombatReach() - 1.5 < PROXIMITY_YARDS then -- IsWithinDistInMap twin (zone_azshara.cpp:351; player reach 1.5)
-        -- C++ casts on every MoveInLineOfSight with a player in range;
-        -- the WeMustDie latch gates only the despawn. Arm the despawn
-        -- once per creature so repeated proximity fires within the 1s
-        -- window don't stack redundant untracked Despawn timers.
-        creature:CastSpell(player, SPELL_DEPTH_CHARGE_TRAP)
+        -- C++ casts on every MoveInLineOfSight with a player in range,
+        -- but MIOS fires on relocation only: a stationary player is hit
+        -- once, because the knockback itself carries them out of range
+        -- before any second relocation can re-trigger. Go's proximity
+        -- step fires ev27 every 100ms tick while a player stays in
+        -- range (the server-side position moves only when the client's
+        -- knockback ack lands), so an unlatched cast would re-fire up
+        -- to ~10x inside the 1s despawn window. Latch per (creature,
+        -- player) for this arming window: each player in range is hit
+        -- once, a second player is still hit, and the despawn arms
+        -- once per creature as before.
         local guid = creature:GetGUIDLow()
+        local hit = trapHit[guid]
+        if not hit then
+            hit = {}
+            trapHit[guid] = hit
+        end
+        local playerGuid = player:GetGUIDLow()
+        if not hit[playerGuid] then
+            hit[playerGuid] = true
+            creature:CastSpell(player, SPELL_DEPTH_CHARGE_TRAP)
+        end
         if not despawnPending[guid] then
             despawnPending[guid] = CreateLuaEvent(function()
                 despawnPending[guid] = nil
+                trapHit[guid] = nil
                 creature:Despawn()
             end, DESPAWN_DELAY_MS)
         end
@@ -73,6 +91,7 @@ local function onReset(event, creature)
     if pending then
         RemoveEventById(pending)
         despawnPending[guid] = nil
+        trapHit[guid] = nil
     end
 end
 
