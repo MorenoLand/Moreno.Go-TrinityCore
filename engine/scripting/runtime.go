@@ -825,6 +825,7 @@ type Config struct {
 	MapProvider              func(mapID, instanceID uint32) *Object
 	WorldMessageProvider     func(string)
 	AreaNameProvider         func(id uint32) (string, bool)
+	SpellFamilyFlagsProvider func(spellID uint32, index uint32) uint32
 	SpawnProvider            func(SpawnArgs) *Object
 	TaxiPathProvider         func(TaxiPathArgs) uint32
 	SendMailProvider         func(SendMailArgs) error
@@ -1552,6 +1553,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("SaveAllPlayers", r.saveAllPlayers)
 	r.state.Register("SendWorldMessage", r.sendWorldMessage)
 	r.state.Register("GetAreaName", r.getAreaName)
+	r.state.Register("GetSpellFamilyFlags", r.getSpellFamilyFlags)
 	r.state.Register("CreateInt64", r.createInt64)
 	r.state.Register("CreateUint64", r.createUint64)
 	r.state.Register("CreateLongLong", r.createInt64)
@@ -2058,6 +2060,29 @@ func (r *Runtime) getAreaName(state *lua.State) int {
 	return 1
 }
 
+// getSpellFamilyFlags is the MorenoCore GetSpellFamilyFlags global: the
+// SpellInfo::SpellFamilyFlags word for a spell id (index 0-2, default
+// 0), the DBC twin of the ProcEvent GetSpellFamilyFlags method for
+// handlers that only receive a bare spell id — the creature SpellHit
+// (ev14) and SpellHitTarget (ev15) args. An unknown spell, an
+// out-of-range index, or a missing provider reads 0, matching the
+// ProcEvent method's no-spell arm. Backs the draenei survivor
+// SpellHit gate (zone_azuremyst_isle.cpp:114-127, Gift of the Naaru
+// family flag SpellFamilyFlags[2] & 0x80000000).
+func (r *Runtime) getSpellFamilyFlags(state *lua.State) int {
+	spellID := uint32(lua.CheckUnsigned(state, 1))
+	var index uint64
+	if state.Top() >= 2 && !state.IsNil(2) {
+		index = checkLuaUint64(state, 2)
+	}
+	if r.config.SpellFamilyFlagsProvider == nil {
+		state.PushUnsigned(0)
+		return 1
+	}
+	state.PushUnsigned(uint(r.config.SpellFamilyFlagsProvider(spellID, uint32(index))))
+	return 1
+}
+
 func (r *Runtime) SetPlayerProvider(provider func() []*Object) {
 	r.mu.Lock()
 	r.config.PlayerProvider = provider
@@ -2091,6 +2116,12 @@ func (r *Runtime) SetWorldMessageProvider(provider func(string)) {
 func (r *Runtime) SetAreaNameProvider(provider func(id uint32) (string, bool)) {
 	r.mu.Lock()
 	r.config.AreaNameProvider = provider
+	r.mu.Unlock()
+}
+
+func (r *Runtime) SetSpellFamilyFlagsProvider(provider func(spellID uint32, index uint32) uint32) {
+	r.mu.Lock()
+	r.config.SpellFamilyFlagsProvider = provider
 	r.mu.Unlock()
 }
 

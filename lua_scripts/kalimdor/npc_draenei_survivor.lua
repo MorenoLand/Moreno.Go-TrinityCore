@@ -15,7 +15,7 @@
 --   marli ev23 idiom: Go fires ev23 on spawn, evade and death, while
 --   C++ Reset runs on spawn + evade only. Initialize() timers need no
 --   Lua twin — they are consumed only by the UpdateAI machine below,
---   which the pump + Reset cancel covers.
+--   which the one-shot timers + Reset cancel cover.
 -- - SpellHit (zone_azuremyst_isle.cpp:114-127): the
 --   SpellFamilyFlags[2] & 0x80000000 gate (Gift of the Naaru family)
 --   via creature:GetSpellFamilyFlags(spellId, 2)
@@ -26,14 +26,17 @@
 --   SayThanksTimer 5000. A second healing hit re-arms the timer,
 --   C++-verbatim (no already-awake guard).
 -- - UpdateAI SayThanks/RunAway machine (zone_azuremyst_isle.cpp:
---   130-165): 1s pump (captive precedent); on SayThanks expiry
---   RemoveAura(SPELL_IRRIDATION) + Talk(SAY_HEAL 0, player) +
---   player:TalkedToCreature(entry, creature) + MoveTo(0,
---   -4115.053711, -13754.831055, 73.508949) (the C++ MovePoint
---   twin) + RunAwayTimer 10000, then Despawn() (the
---   DespawnOrUnsummon twin). A missing player nil-guards the
---   Talk/TalkedToCreature legs only (C++ GetPlayer nil check);
---   the walk + despawn still run.
+--   130-165): one-shot CreateLuaEvent timers (maiden schedule
+--   idiom — a repeating pump cannot self-cancel: the runtime
+--   Tick loop rebuilds its timer list from the iterated copies,
+--   so a RemoveEventById inside a callback resurrects the
+--   timer); on SayThanks expiry RemoveAura(SPELL_IRRIDATION) +
+--   Talk(SAY_HEAL 0, player) + player:TalkedToCreature(entry,
+--   creature) + MoveTo(0, -4115.053711, -13754.831055, 73.508949)
+--   (the C++ MovePoint twin) + RunAwayTimer 10000, then
+--   Despawn() (the DespawnOrUnsummon twin). A missing player
+--   nil-guards the Talk/TalkedToCreature legs only (C++
+--   GetPlayer nil check); the walk + despawn still run.
 -- Unmodeled (documented-only, no bridges):
 -- - MoveInLineOfSight SayHelp Talk (zone_azuremyst_isle.cpp:
 --   100-112): the friendly-player-within-25y Talk has no Go
@@ -57,45 +60,19 @@ local UNIT_STAND_STATE_SLEEP = 3
 
 local RUNAWAY_X, RUNAWAY_Y, RUNAWAY_Z = -4115.053711, -13754.831055, 73.508949
 
-local survivorState = {}
+local survivor = {}
 
 local function cancelSurvivor(guid)
-    local st = survivorState[guid]
-    if st ~= nil and st.event ~= nil then
-        st.event:Cancel()
-    end
-    survivorState[guid] = nil
-end
-
-local function survivorTick(creature, guid)
-    local st = survivorState[guid]
-    if st == nil then
-        return
-    end
-    if st.thanks ~= nil then
-        if st.thanks <= 1000 then
-            st.thanks = nil
-            creature:RemoveAura(SPELL_IRRIDATION)
-            local player = GetPlayerByGUID(st.playerGuid)
-            if player ~= nil then
-                creature:Talk(SAY_HEAL, player)
-                player:TalkedToCreature(ENTRY_DRAENEI_SURVIVOR, creature)
-            end
-            creature:MoveTo(0, RUNAWAY_X, RUNAWAY_Y, RUNAWAY_Z)
-            st.runaway = 10000
-        else
-            st.thanks = st.thanks - 1000
+    local st = survivor[guid]
+    if st ~= nil then
+        if st.thanks ~= nil then
+            RemoveEventById(st.thanks)
         end
-        return
-    end
-    if st.runaway ~= nil then
-        if st.runaway <= 1000 then
-            cancelSurvivor(guid)
-            creature:Despawn()
-        else
-            st.runaway = st.runaway - 1000
+        if st.runaway ~= nil then
+            RemoveEventById(st.runaway)
         end
     end
+    survivor[guid] = nil
 end
 
 -- C++ npc_draenei_survivorAI::Reset (zone_azuremyst_isle.cpp:88-98).
@@ -121,19 +98,26 @@ local function onSpellHit(event, creature, caster, spellId)
     creature:SetStandState(UNIT_STAND_STATE_STAND)
     creature:CastSpell(creature, SPELL_STUNNED, true)
     local guid = creature:GetGUIDLow()
-    local st = survivorState[guid]
-    if st == nil then
-        st = {}
-        survivorState[guid] = st
-        st.event = CreateLuaEvent(function()
-            survivorTick(creature, guid)
-        end, 1000, 0)
-    end
-    st.thanks = 5000
-    st.runaway = nil
+    cancelSurvivor(guid)
+    local st = {}
+    survivor[guid] = st
     if caster ~= nil then
         st.playerGuid = caster:GetGUID()
     end
+    st.thanks = CreateLuaEvent(function()
+        creature:RemoveAura(SPELL_IRRIDATION)
+        local player = GetPlayerByGUID(st.playerGuid)
+        if player ~= nil then
+            creature:Talk(SAY_HEAL, player)
+            player:TalkedToCreature(ENTRY_DRAENEI_SURVIVOR, creature)
+        end
+        creature:MoveTo(0, RUNAWAY_X, RUNAWAY_Y, RUNAWAY_Z)
+        st.thanks = nil
+        st.runaway = CreateLuaEvent(function()
+            survivor[guid] = nil
+            creature:Despawn()
+        end, 10000)
+    end, 5000)
 end
 
 local function onDied(event, creature)

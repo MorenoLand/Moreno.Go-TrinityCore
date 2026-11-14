@@ -99,6 +99,23 @@ func (s *Server) luaAreaName(id uint32) (string, bool) {
 	return area.Name, true
 }
 
+// luaSpellFamilyFlags is the SpellFamilyFlagsProvider behind the
+// MorenoCore GetSpellFamilyFlags global: the Spell.dbc
+// SpellFamilyFlags word for the spell id (0 for an unknown spell or
+// an out-of-range index), the SpellInfo::SpellFamilyFlags read the
+// creature SpellHit (ev14) gate needs — the DBC fields the wotlk
+// store already loads (store.go:1056-1058).
+func (s *Server) luaSpellFamilyFlags(spellID, index uint32) uint32 {
+	if s == nil || s.Data == nil || index >= 3 {
+		return 0
+	}
+	spell, found, err := s.Data.Spell(spellID)
+	if err != nil || !found {
+		return 0
+	}
+	return spell.SpellFamilyFlags[index]
+}
+
 // luaAddTaxiPath is the TaxiPathProvider behind the Eluna AddTaxiPath
 // global: it registers the waypoints in the DBC store's taxi overlay and
 // returns the used path id. Without a data store there is nowhere to

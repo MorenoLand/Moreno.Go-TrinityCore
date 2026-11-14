@@ -946,6 +946,36 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		s.motionMu.Unlock()
 		return []any{isSummon}, nil
 	}
+	// GetSpellFamilyFlags(spellId, index) reads SpellInfo::SpellFamilyFlags
+	// (Spell.dbc fields 209-211, wotlk store.go:197) for an arbitrary spell
+	// id — the ev14 bare-spellId twin of the procEventObject's
+	// GetSpellFamilyFlags(index) (lua_aura.go:1242), which can only read
+	// its own event spell. Returns 0 for an unknown spell id or an
+	// out-of-range index. Backs family-gated SpellHit arms (draenei
+	// survivor zone_azuremyst_isle.cpp:114-127: SpellFamilyFlags[2] &
+	// 0x80000000, the Gift of the Naaru family gate).
+	methods["GetSpellFamilyFlags"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		index := uint32(0)
+		if len(args) > 1 && args[1] != nil {
+			v, err := luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			index = v
+		}
+		if s == nil || s.Data == nil || index >= 3 {
+			return []any{uint32(0)}, nil
+		}
+		spell, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{spell.SpellFamilyFlags[index]}, nil
+	}
 	// CastSpell(target, spellId[, triggered]) casts a creature spell through
 	// the server's creature cast path (SMSG_SPELL_GO broadcast, the same path
 	// the Go BossAI implementations use). Eluna argument order. The target
