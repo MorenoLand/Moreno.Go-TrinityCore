@@ -15112,26 +15112,44 @@ func init() {
 	// entries verifiable from the C++ sources (UpdateAI
 	// GetEntry() branches + the wave-spawn table) — see
 	// lua_scripts/outland/npc_illidari_spawn.lua. The JustDied
-	// DespawnOrUnsummon and the LordIllidan LiveCounter() call
-	// have no despawn / cross-creature bridges — documented
-	// only; the Torloth cinematic machine, the Illidan event
-	// controller, the mature/enslaved drake quest arms and the
-	// wilda escort all sit behind cross-AI / entry / escort
-	// bridges. The infernal attacker Reset + SpellHit arms are
-	// PORTED (lua_scripts/outland/npc_infernal_attacker.lua);
-	// the invis caster stays out (no C++ entry) with its
-	// SetData re-summon leg.
+	// Despawn leg is PORTED (Despawn bridged); the LordIllidan
+	// LiveCounter() call stays out (cross-creature bridge).
+	// The Torloth cinematic machine and the Illidan wave machine
+	// stay out; the mature/enslaved drake quest arms, the invis
+	// caster summon machine and the infernal attacker
+	// IsSummonedBy/JustDied legs are PORTED (see below).
 	RegisterLuaBoss("npc_illidari_spawn", 22075)
 	RegisterLuaBoss("npc_illidari_spawn", 22074)
 	RegisterLuaBoss("npc_illidari_spawn", 19797)
 	// npc_infernal_attacker (Shadowmoon Valley zone script): Reset
 	// invisible + MoveRandom + SpellHit 37277 unflag/unimmune/
-	// display swap — entry 21419 verifiable from the C++
+	// display swap + IsSummonedBy caster latch + JustDied SetData
+	// re-summon leg — entry 21419 verifiable from the C++
 	// InvisInfernalCaster enum; see lua_scripts/outland/
-	// npc_infernal_attacker.lua. The invis caster + JustDied
-	// SetData re-summon leg stay out (no caster entry, no
-	// creature-by-GUID bridge).
+	// npc_infernal_attacker.lua. The invis caster it reports to
+	// is PORTED (lua_scripts/outland/npc_invis_infernal_caster.lua,
+	// entry 21417 TDB-verified).
 	RegisterLuaBoss("npc_infernal_attacker", 21419)
+	// npc_invis_infernal_caster (Shadowmoon Valley zone script):
+	// Reset summon + 1-3s/12s summon-spell poll + SetData re-summon
+	// — entry 21417 TDB-verified; see lua_scripts/outland/
+	// npc_invis_infernal_caster.lua.
+	RegisterLuaBoss("npc_invis_infernal_caster", 21417)
+	// npc_mature_netherwing_drake (Shadowmoon Valley zone script):
+	// carcass-eat machine + Nether Breath pump — entry 21648
+	// TDB-verified; see lua_scripts/outland/
+	// npc_mature_netherwing_drake.lua.
+	RegisterLuaBoss("npc_mature_netherwing_drake", 21648)
+	// npc_enslaved_netherwing_drake (Shadowmoon Valley zone script):
+	// Force of Neltharaku tap + subjugator redirect + fly-away —
+	// entry 21722 TDB-verified; see lua_scripts/outland/
+	// npc_enslaved_netherwing_drake.lua.
+	RegisterLuaBoss("npc_enslaved_netherwing_drake", 21722)
+	// npc_shadowmoon_tuber_node (Shadowmoon Valley zone script):
+	// SetData tuber spawn + SpellHit whistle recall — entry 21347
+	// TDB-verified; see lua_scripts/outland/
+	// npc_shadowmoon_tuber_node.lua.
+	RegisterLuaBoss("npc_shadowmoon_tuber_node", 21347)
 	// npc_enraged_spirit (Shadowmoon Valley zone script): one
 	// CreatureScript AI class serving four entries with a
 	// per-entry timer switch in JustEngagedWith/UpdateAI —
@@ -15148,7 +15166,8 @@ func init() {
 	// documented only;
 	// spell_unlocking_zuluheds_chains is ported (RegisterSpellEvent
 	// 38790 ev3, npc_enraged_spirit.lua) and npc_shadowmoon_tuber_node
-	// (unverifiable entry, SetData / SpellHit arms) is documented-only.
+	// is PORTED (lua_scripts/outland/npc_shadowmoon_tuber_node.lua,
+	// entry 21347 TDB-verified).
 	RegisterLuaBoss("npc_enraged_spirit", 21050)
 	RegisterLuaBoss("npc_enraged_spirit", 21061)
 	RegisterLuaBoss("npc_enraged_spirit", 21060)
@@ -15158,8 +15177,13 @@ func init() {
 	// lua_scripts/outland/npc_torloth_the_magnificent.lua; the
 	// LordIllidan EnterEvadeMode leg (b) PORTED there too (bridge
 	// live in lua_creature_events.go, Illidan via FindNearest-
-	// Creature(22083, 50.0)). Entry 22076 wowhead-verified.
+	// Creature(22083, 50.0)). Entry 22076 TDB-verified.
 	RegisterLuaBoss("npc_torloth_the_magnificent", 22076)
+	// npc_lord_illidan_stormrage (Shadowmoon Valley zone script):
+	// Reset SetVisible(false) leg only — entry 22083 TDB-verified;
+	// see lua_scripts/outland/npc_lord_illidan_stormrage.lua. The
+	// wave machine stays out (no summon / cross-AI bridges).
+	RegisterLuaBoss("npc_lord_illidan_stormrage", 22083)
 	// npc_unkor_the_ruthless (Terokkar Forest zone script, last
 	// in the Outland zone set per outland_script_loader.cpp
 	// order): quest-9889 submit machine — DamageTaken below
