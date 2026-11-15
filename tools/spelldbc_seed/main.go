@@ -95,6 +95,9 @@ const (
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	auraPeriodicDummy          = 226
 	auraControlVehicle         = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
+	auraCloneCaster            = 247 // SPELL_AURA_CLONE_CASTER (SpellAuraDefines.h)
+	auraPhase                  = 261 // SPELL_AURA_PHASE (SpellAuraDefines.h)
+	auraInitializeImages       = 279 // SPELL_AURA_INITIALIZE_IMAGES (SpellAuraDefines.h)
 	auraLinked                 = 284
 	auraPreventRegen           = 294
 	schoolPhysical             = 1
@@ -1236,6 +1239,42 @@ var spells = []spell{
 	// SCHOOL_DAMAGE Die 1151 Base 9424 TargetA 6.
 	{id: 67709, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1151, basePoints: 9424, targetA: targetEnemy}}},
 	{id: 42442, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetSrcCaster, targetB: targetUnitCasterAreaParty, radiusIdx: 30}}},
+	// 57496 Insanity (herald volazj): castTimeIdx 6 (5000), durIdx 0,
+	// rangeIdx 1 (Self Only), school 0x1; single effect 3 DUMMY
+	// TargetA 22/15 RadiusIndex_0 28 ChainAmplitude 1.
+	{id: 57496, castTimeIdx: 6, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1}}},
+	// 57507 Summon Twisted Visage Spawn Effect (herald volazj):
+	// castTimeIdx 1, durIdx 21 (-1), rangeIdx 13 (Anywhere), school
+	// 0x20; eff0 6 APPLY_AURA aura 247 CLONE_CASTER TargetA 25; eff1
+	// 6 APPLY_AURA aura 279 INITIALIZE_IMAGES TargetA 25.
+	{id: 57507, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraCloneCaster, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraInitializeImages, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 57508 Insanity (phasing 1): castTimeIdx 1, durIdx 21 (-1),
+	// rangeIdx 1, school 0x20; single effect 6 APPLY_AURA aura 261
+	// PHASE MiscValue 16 MiscValueB 173 TargetA 1.
+	{id: 57508, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{{effect: effApplyAura, aura: auraPhase, misc: 16, miscB: 173, targetA: targetCaster, chainAmplitude: 1}}},
+	// 57509 Insanity (phasing 2): castTimeIdx 1, durIdx 21 (-1),
+	// rangeIdx 1, school 0x20; single effect 6 APPLY_AURA aura 261
+	// PHASE MiscValue 32 MiscValueB 174 TargetA 1.
+	{id: 57509, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{{effect: effApplyAura, aura: auraPhase, misc: 32, miscB: 174, targetA: targetCaster, chainAmplitude: 1}}},
+	// 57510 Insanity (phasing 3): castTimeIdx 1, durIdx 21 (-1),
+	// rangeIdx 1, school 0x20; single effect 6 APPLY_AURA aura 261
+	// PHASE MiscValue 64 MiscValueB 175 TargetA 1.
+	{id: 57510, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{{effect: effApplyAura, aura: auraPhase, misc: 64, miscB: 175, targetA: targetCaster, chainAmplitude: 1}}},
+	// 57511 Insanity (phasing 4): castTimeIdx 1, durIdx 21 (-1),
+	// rangeIdx 1, school 0x20; single effect 6 APPLY_AURA aura 261
+	// PHASE MiscValue 128 MiscValueB 176 TargetA 1.
+	{id: 57511, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{{effect: effApplyAura, aura: auraPhase, misc: 128, miscB: 176, targetA: targetCaster, chainAmplitude: 1}}},
+	// 57512 Insanity (phasing 5): castTimeIdx 1, durIdx 21 (-1),
+	// rangeIdx 1, school 0x20; single effect 6 APPLY_AURA aura 261
+	// PHASE MiscValue 256 MiscValueB 177 TargetA 1.
+	{id: 57512, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{{effect: effApplyAura, aura: auraPhase, misc: 256, miscB: 177, targetA: targetCaster, chainAmplitude: 1}}},
+	// 57561 Insanity Channel Visual (herald volazj): castTimeIdx 1,
+	// durIdx 21 (-1), rangeIdx 1, school 0x1; single effect 6
+	// APPLY_AURA aura 4 DUMMY TargetA 1.
+	{id: 57561, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1}}},
 }
 
 func main() {
