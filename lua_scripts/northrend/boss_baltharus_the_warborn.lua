@@ -58,11 +58,10 @@
 -- REPELLING_WAVE 74509 + Talk(SAY_CLONE 3)); the EVENT_CLONE timer
 -- rides the DamageTaken 50% latch below.
 -- boss_baltharus_the_warborn UpdateAI scheduler — Talk(SAY_BALTHARUS_INTRO
--- 0) rides EVENT_INTRO_TALK, DOCUMENTED-ONLY: the leg rides
--- DoAction(ACTION_INTRO_BALTHARUS) issued by at_baltharus_plateau (area
--- trigger, no bridge to fire it; the DoAction bridge itself exists as
--- ev38, lua_creature_events.go:804 — the issuer is the gap, not the
--- dispatch). EVENT_SUMMONS_ATTACK + the JustSummoned clone-health arm
+-- 0) rides EVENT_INTRO_TALK, PORTED 2026-11-15 via baltharusDoAction
+-- (ev38): the sender at_baltharus_plateau is ported (AT census
+-- 2026-11-15) and the 7s timer is cancelled on engage, matching C++
+-- events.Reset(). EVENT_SUMMONS_ATTACK + the JustSummoned clone-health arm
 -- (:136-141: summon->SetHealth(me->GetHealth()) + EVENT_SUMMONS_ATTACK
 -- 2s) PORTED this tick via ev19 (baltharusJustSummoned): creature
 -- spell-effect summons run creatureEffectSummonType (boss_ai.go:3298) ->
@@ -101,8 +100,7 @@
 -- HandleSiphonedMight) — PORTED this tick via ev2 (below): the
 -- triggering spell is statically 74502, aura:GetCaster() is bridged.
 -- All 5 Talk() calls in the file accounted for (SAY_AGGRO 1 +
--- SAY_DEATH 4 + SAY_KILL 2 + SAY_CLONE 3 ported; SAY_BALTHARUS_INTRO 0
--- documented above).
+-- SAY_DEATH 4 + SAY_KILL 2 + SAY_CLONE 3 + SAY_BALTHARUS_INTRO 0 ported).
 
 local ENTRY_BALTHARUS_THE_WARBORN = 39751
 local ENTRY_BALTHARUS_CLONE = 39899
@@ -125,6 +123,8 @@ local SAY_AGGRO = 1
 local SAY_KILL  = 2
 local SAY_CLONE = 3
 local SAY_DEATH = 4
+local SAY_BALTHARUS_INTRO = 0 -- boss_baltharus_the_warborn.cpp:27
+local ACTION_INTRO_BALTHARUS = -3975101 -- ruby_sanctum.h:58
 
 local ENTRY_XERESTRASZA = 40429 -- ruby_sanctum.h:102 NPC_XERESTRASZA
 local SAY_XERESTRASZA_EVENT = 0 -- ruby_sanctum.cpp:29-36
@@ -135,6 +135,7 @@ local SAY_XERESTRASZA_EVENT_4 = 4
 local SAY_XERESTRASZA_EVENT_5 = 5
 local SAY_XERESTRASZA_EVENT_6 = 6
 local SAY_XERESTRASZA_EVENT_7 = 7
+local SAY_XERESTRASZA_INTRO = 8 -- ruby_sanctum.cpp:38
 local XERESTRASZA_MOVE_X = 3151.236 -- ruby_sanctum.cpp:56 xerestraszaMovePos
 local XERESTRASZA_MOVE_Y = 379.8733
 local XERESTRASZA_MOVE_Z = 86.31996
@@ -153,6 +154,10 @@ local SPELL_SPAWN_EFFECT     = 64195
 
 local timers = {}
 local cloneCount = {}
+
+-- C++ npc_xerestraszaAI::_introDone (ruby_sanctum.cpp:97): set in the
+-- ctor, never cleared by Reset — per-GUID latch, persists across resets.
+local xerestraszaIntroDone = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -381,6 +386,43 @@ local function baltharusReset(event, creature)
     end
 end
 
+-- C++ boss_baltharus_the_warborn::DoAction(ACTION_INTRO_BALTHARUS)
+-- (:92-97): setActive(true) (no bridge, stays out) +
+-- SetFarVisible(true) + events.ScheduleEvent(EVENT_INTRO_TALK, 7s,
+-- PHASE_INTRO) -> Talk(SAY_BALTHARUS_INTRO 0) (:196-198). Sender is the
+-- ported at_baltharus_plateau (trigger 5867, AT census 2026-11-15);
+-- dispatch is ev38 (skadi precedent). The 7s timer rides the boss's
+-- timer table, so engage cancels it via the cancelTimers in
+-- baltharusEnterCombat — matching C++ events.Reset() in
+-- JustEngagedWith (:113).
+local function baltharusDoAction(event, creature, action)
+    if action ~= ACTION_INTRO_BALTHARUS then
+        return
+    end
+    creature:SetFarVisible(true)
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "intro", 7000, function()
+        creature:Talk(SAY_BALTHARUS_INTRO)
+    end)
+end
+
+-- C++ npc_xerestrasza::DoAction(ACTION_INTRO_BALTHARUS)
+-- (ruby_sanctum.cpp:97-100): latched Talk(SAY_XERESTRASZA_INTRO 8).
+-- Same sender + ev38 dispatch as above. The ACTION_BALTHARUS_DEATH
+-- leg of the same C++ DoAction stays inlined in baltharusDied above
+-- (its only sender); this handler carries the intro leg only.
+local function xerestraszaDoAction(event, creature, action)
+    if action ~= ACTION_INTRO_BALTHARUS then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if xerestraszaIntroDone[guid] then
+        return
+    end
+    xerestraszaIntroDone[guid] = true
+    creature:Talk(SAY_XERESTRASZA_INTRO)
+end
+
 -- C++ boss_baltharus_the_warborn::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER)
 --     Talk(SAY_KILL) — the razuvious player-gated variant precedent.
@@ -555,6 +597,7 @@ RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 5, baltharusSpawned)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 9, baltharusDamageTaken)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 19, baltharusJustSummoned)
 RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 23, baltharusReset)
+RegisterCreatureEvent(ENTRY_BALTHARUS_THE_WARBORN, 38, baltharusDoAction)
 
 -- C++ npc_xerestrasza::Reset (ruby_sanctum.cpp:70-74): _events.Reset() +
 -- RemoveFlag(UNIT_NPC_FLAGS, GOSSIP_OPTION_QUESTGIVER). The talk-chain
@@ -567,6 +610,7 @@ local function xerestraszaReset(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_XERESTRASZA, 23, xerestraszaReset)
+RegisterCreatureEvent(ENTRY_XERESTRASZA, 38, xerestraszaDoAction)
 
 -- C++ npc_baltharus_the_warborn_clone::JustEngagedWith (:255-264):
 -- DoZoneInCombat(); events.Reset();

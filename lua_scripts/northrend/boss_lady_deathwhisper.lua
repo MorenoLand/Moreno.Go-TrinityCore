@@ -140,14 +140,11 @@
 --
 -- DOCUMENTED-ONLY (registrations: 36855 / 37890 / 37949 / 38472 /
 -- 38485):
--- boss_lady_deathwhisper DoAction(ACTION_START_INTRO) —
--- Talk(SAY_INTRO_1 0) rides DoAction(ACTION_START_INTRO) — ev38 dispatch
--- bridged; sole sender is the unported OnlyOnceAreaTrigger
--- at_lady_deathwhisper_entrance (boss_lady_deathwhisper.cpp:1048).
--- Talk(SAY_INTRO_2 1 .. SAY_INTRO_7 6) ride the intro scheduler machine
--- (:239-269) — timers ARE bridged (CreateLuaEvent); stays out because the
--- sole trigger is the unported AreaTrigger DoAction above and the machine is
--- PHASE_INTRO-gated (set only in the DoAction receiver :238).
+-- boss_lady_deathwhisper DoAction(ACTION_START_INTRO) — PORTED
+-- 2026-11-15 (deathwhisperDoAction, ev38): Talk(SAY_INTRO_1 0) + the
+-- intro scheduler chain (Talk SAY_INTRO_2 1 .. SAY_INTRO_7 6 at
+-- 10/21/11/9/21/10s, :239-269) via CreateLuaEvent; sender
+-- at_lady_deathwhisper_entrance ported (AT census 2026-11-15).
 -- boss_lady_deathwhisper JustEngagedWith scheduler legs —
 -- Talk(SAY_BERSERK 15) is PORTED (10-min berserk timer, above);
 -- Talk(SAY_DOMINATE_MIND 10) is PORTED 2026-10-25 (onDominateMind:
@@ -240,13 +237,14 @@
 -- spell_deathwhisper_summon_spirits is PORTED below
 -- (RegisterSpellEvent 72478 ev5, summonSpiritsDummy) — the old
 -- "no-SpellScript-bridge" claim was stale; the ev5 bridge is live.
--- at_lady_deathwhisper_entrance joins the unbridged-area-trigger
--- queue (the pit_of_saron cavern-triggers precedent).
--- All 19 Talk() calls in the file accounted for (19 = ported (10): lady
+-- at_lady_deathwhisper_entrance is PORTED 2026-11-15 (AT census):
+-- northrend/at_lady_deathwhisper_entrance.lua, trigger 5709, DoAction
+-- dispatch to deathwhisperDoAction above.
+-- All 19 Talk() calls in the file accounted for (19 = ported (17): lady
 -- aggro 7 + berserk 15 + phase-2 8 + emote 9 + kill 14 + death 16 +
 -- dark empowerment 11 + dark transformation 12 + dominate 10 +
--- darnavan aggro 0; documented-only (9): intro 0-6 (7)
--- + animate-dead 13 (1) + darnavan rescued 1 (1)).
+-- darnavan aggro 0 + intro 0-6 (7); documented-only (2):
+-- animate-dead 13 (1) + darnavan rescued 1 (1)).
 
 local ENTRY_LADY_DEATHWHISPER = 36855
 local DATA_LADY_DEATHWHISPER = 1 -- icecrown_citadel.h:75
@@ -274,6 +272,15 @@ local SAY_AGGRO = 7
 local SAY_KILL = 14
 local SAY_DEATH = 16
 local SAY_BERSERK = 15
+local SAY_INTRO_1 = 0 -- boss_lady_deathwhisper.cpp:35
+local SAY_INTRO_2 = 1 -- :36
+local SAY_INTRO_3 = 2 -- :37
+local SAY_INTRO_4 = 3 -- :38
+local SAY_INTRO_5 = 4 -- :39
+local SAY_INTRO_6 = 5 -- :40
+local SAY_INTRO_7 = 6 -- :41
+local ACTION_START_INTRO = 0 -- boss_lady_deathwhisper.cpp:165-167
+local PHASE_INTRO = 1 -- boss_lady_deathwhisper.cpp:140
 local SAY_PHASE_2 = 8 -- boss_lady_deathwhisper.cpp:43
 local EMOTE_PHASE_2 = 9 -- :44
 local SAY_DARNAVAN_AGGRO = 0
@@ -697,6 +704,51 @@ local function deathwhisperDamageTaken(event, creature, attacker, damage)
             return true, newDamage
         end
     end
+end
+
+-- C++ boss_lady_deathwhisper::DoAction(ACTION_START_INTRO) (:234-269):
+-- Talk(SAY_INTRO_1) + _phase = PHASE_INTRO, then the GROUP_INTRO
+-- scheduler chain: 10s -> Talk(SAY_INTRO_2), +21s -> Talk(SAY_INTRO_3),
+-- +11s -> Talk(SAY_INTRO_4), +9s -> Talk(SAY_INTRO_5), +21s ->
+-- Talk(SAY_INTRO_6), +10s -> Talk(SAY_INTRO_7), end. Sender is the
+-- ported at_lady_deathwhisper_entrance (trigger 5709, AT census
+-- 2026-11-15); dispatch is ev38 (skadi precedent). The chain rides one
+-- "intro" timer key re-scheduled at each step (bronjahm-style), so the
+-- engage/evade/death cancelTimers in the handlers below cancels the
+-- whole chain — matching scheduler.CancelGroup(GROUP_INTRO) in
+-- JustEngagedWith (:296) and the CancelAll in EnterEvadeMode. The C++
+-- scheduler validator (no task runs while casting unless PHASE_INTRO)
+-- has no Lua twin and needs none: the chain only runs while
+-- deathwhisperPhase is PHASE_INTRO, and engage flips the phase first.
+local function onIntroStep(creature, guid, step)
+    if step == 0 then
+        creature:Talk(SAY_INTRO_2)
+        schedule(guid, "intro", 21000, function() onIntroStep(creature, guid, 1) end)
+    elseif step == 1 then
+        creature:Talk(SAY_INTRO_3)
+        schedule(guid, "intro", 11000, function() onIntroStep(creature, guid, 2) end)
+    elseif step == 2 then
+        creature:Talk(SAY_INTRO_4)
+        schedule(guid, "intro", 9000, function() onIntroStep(creature, guid, 3) end)
+    elseif step == 3 then
+        creature:Talk(SAY_INTRO_5)
+        schedule(guid, "intro", 21000, function() onIntroStep(creature, guid, 4) end)
+    elseif step == 4 then
+        creature:Talk(SAY_INTRO_6)
+        schedule(guid, "intro", 10000, function() onIntroStep(creature, guid, 5) end)
+    elseif step == 5 then
+        creature:Talk(SAY_INTRO_7)
+    end
+end
+
+local function deathwhisperDoAction(event, creature, action)
+    if action ~= ACTION_START_INTRO then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    creature:Talk(SAY_INTRO_1)
+    deathwhisperPhase[guid] = PHASE_INTRO
+    schedule(guid, "intro", 10000, function() onIntroStep(creature, guid, 0) end)
 end
 
 -- C++ boss_lady_deathwhisper::JustEngagedWith (:281-342): the
@@ -1413,6 +1465,7 @@ RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 3, deathwhisperKilledUnit)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 4, deathwhisperJustDied)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 9, deathwhisperDamageTaken)
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 23, deathwhisperReset)
+RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 38, deathwhisperDoAction)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 1, fanaticEnterCombat)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 2, fanaticLeaveCombat)
 RegisterCreatureEvent(ENTRY_CULT_FANATIC, 14, fanaticSpellHit)

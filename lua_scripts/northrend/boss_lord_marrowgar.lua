@@ -129,11 +129,8 @@
 -- the DATA_BONED_ACHIEVEMENT-reset leg PORTS via the shared instanceData
 -- bonedEligible key (marrowgarReset, below).
 -- Talk(SAY_ENTER_ZONE 0) rides DoAction(ACTION_TALK_ENTER_ZONE),
--- which only fires from at_lord_marrowgar_entrance — ev38 dispatch bridged;
--- sender area-trigger TryHandleOnce (boss_lord_marrowgar.cpp:675-681) unported,
--- no area-trigger bridge (krick relay N/A — no ported sender hook); the area trigger joins
--- the unbridged-area-trigger queue (the pit_of_saron cavern-triggers
--- precedent).
+-- PORTED 2026-11-15 (marrowgarDoAction, ev38); sender
+-- at_lord_marrowgar_entrance ported (AT census 2026-11-15).
 -- Talk(SAY_BONESPIKE 3) is called by marrowgarAI->Talk from inside
 -- spell_marrowgar_bone_spike_graveyard SpellScript HandleSpikes —
 -- no-SpellScript bridge (the boss_moragg optic-link precedent);
@@ -141,8 +138,8 @@
 -- spell_marrowgar_bone_storm / spell_marrowgar_bone_slice join the
 -- no-SpellScript-bridge queue, and spell_marrowgar_coldflame_damage
 -- joins the no-AuraScript-bridge queue.
--- All 8 Talk() calls in the file accounted for (8 = ported: aggro 1
--- + kill 4 + death 5 + berserk 6; documented-only: enter-zone 0 +
+-- All 8 Talk() calls in the file accounted for (8 = ported: enter-zone 0
+-- + aggro 1 + kill 4 + death 5 + berserk 6; documented-only:
 -- bone-storm 2 + bonespike 3 + emote-bone-storm 7).
 
 local ENTRY_LORD_MARROWGAR = 36612
@@ -157,10 +154,12 @@ local BOSS_STATE_DONE = 3
 local SPELL_IMPALED = 69065 -- boss_lord_marrowgar.cpp:54
 local SPELL_RIDE_VEHICLE = 46598 -- boss_lord_marrowgar.cpp:55
 
+local SAY_ENTER_ZONE = 0 -- boss_lord_marrowgar.cpp:34
 local SAY_AGGRO = 1
 local SAY_KILL = 4
 local SAY_DEATH = 5
 local SAY_BERSERK = 6
+local ACTION_TALK_ENTER_ZONE = 2 -- boss_lord_marrowgar.cpp:104
 
 local SPELL_BERSERK = 26662 -- icecrown_citadel.h:33
 local SPELL_BONE_STORM = 69076 -- boss_lord_marrowgar.cpp spells enum
@@ -623,6 +622,21 @@ local function marrowgarReset(event, creature)
     end
 end
 
+-- C++ boss_lord_marrowgar::DoAction(ACTION_TALK_ENTER_ZONE)
+-- (:337-340): if (me->IsAlive()) Talk(SAY_ENTER_ZONE 0). Sender is the
+-- ported at_lord_marrowgar_entrance (trigger 5732, AT census
+-- 2026-11-15); dispatch is ev38 (skadi precedent). The sibling
+-- ACTION_CLEAR_SPIKE_IMMUNITIES (1) leg stays out: its only sender is
+-- spell_marrowgar_bone_slice (:641), a SpellScript with no bridge.
+local function marrowgarDoAction(event, creature, action)
+    if action ~= ACTION_TALK_ENTER_ZONE then
+        return
+    end
+    if creature:IsAlive() then
+        creature:Talk(SAY_ENTER_ZONE)
+    end
+end
+
 -- C++ boss_lord_marrowgar::KilledUnit:
 -- if (victim->GetTypeId() == TYPEID_PLAYER) Talk(SAY_KILL) — the
 -- razuvious player-gated variant precedent.
@@ -668,6 +682,7 @@ RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 2, marrowgarLeaveCombat)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 3, marrowgarKilledUnit)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 4, marrowgarJustDied)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 23, marrowgarReset)
+RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 38, marrowgarDoAction)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 24, marrowgarReachHome)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 28, marrowgarMovementInform)
 
