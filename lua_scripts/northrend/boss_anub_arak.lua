@@ -120,8 +120,11 @@
 -- LEECHING_SWARM) (RemoveAura bridged — aeranas precedent stale),
 -- DoCastSelf(IMPALE_AURA 53456, true) (bridged in isolation —
 -- creature:CastSpell(creature, spell) — but the trigger cast is
--- blocked), SetPhase(PHASE_SUBMERGE) + the 50%/25%/0% _nextSubmerge
--- pet-count machine (_assassinCount 4->6->6, _guardianCount 2,
+-- blocked; 53456 SEEDED 2026-11-15 — wago SpellEffect 958241 +
+-- Wowhead: PERIODIC_TRIGGER_SPELL 10s trigger 53457, Physical,
+-- Instant, 100yd, dur n/a — so the stay-out is the trigger cast /
+-- phase machine alone, not the spell row), SetPhase(PHASE_SUBMERGE)
+-- + the 50%/25%/0% _nextSubmerge pet-count machine (_assassinCount 4->6->6, _guardianCount 2,
 -- _venomancerCount 0->2->2, third wave arms EVENT_DARTER) — event 14
 -- fires; stale "no SpellHit bridge" retracted (2026-10-21); arm stays
 -- out: the only hit source is the boss's own EVENT_SUBMERGE cast

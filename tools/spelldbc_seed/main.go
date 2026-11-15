@@ -1657,6 +1657,23 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 1547, basePoints: 4380, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -61, mechanic: 11, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 53456 Impale Aura (wago.tools 3.4.0.43659 SpellEffect row
+	// 958241, 2026-11-15; Wowhead WotLK cross-check: Apply Aura
+	// Periodically trigger spell, 10s interval, trigger 53457, cast
+	// Instant, range 100 yd, duration n/a, school Physical, dispel
+	// n/a, cost none): castTimeIdx 1 (instant, real row),
+	// durIdx 0 (n/a — 41342 precedent), rangeIdx 6 (Vision Range
+	// 0-100, real row), school 0x1 Physical; eff0 6 APPLY_AURA
+	// aura 23 PERIODIC_TRIGGER_SPELL Die 1 Base -1 TargetA 1
+	// TARGET_UNIT_CASTER auraPeriod 10000 trigger 53457
+	// chainAmplitude 1 (65096 precedent). NOT carried:
+	// EffectBonusCoefficient 0, EffectMechanic 0, EffectAttributes
+	// 0x0. Removes one of two anub_arak ev14 blockers; the SpellHit
+	// trigger cast itself (boss's own EVENT_SUBMERGE, unported
+	// phase machine) still stays out.
+	{id: 53456, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, targetA: targetCaster, auraPeriod: 10000, trigger: 53457, chainAmplitude: 1},
+	}},
 }
 
 func main() {
