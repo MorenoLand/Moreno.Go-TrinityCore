@@ -58,9 +58,11 @@
 -- the TurnAudience facing leg (creature->SetFacingToObject(me),
 -- C++ :290) is bridgeable via the atan2 twin (devourer_of_souls
 -- precedent), retracting the old "no-cross-creature-facing"
--- parenthetical; the machine stays documented-only — the payload
--- legs ride the no-movement / no-world-search /
--- no-entry-update / no-summon bridges.
+-- parenthetical; PORTED 2026-11-15 in npc_commander_eligor_
+-- dawnbringer.lua (entry 27784): MoveTo + ev28, GetCreaturesInGrid,
+-- FindNearestCreature, SetEntry/SetDisplayId, SetFacingToObject all
+-- verified live this tick — the old no-movement / no-world-search /
+-- no-entry-update / no-summon-bridges parentheticals are stale.
 -- spell_q12096_q12092_dummy — Strengthen the Ancients On Interact
 -- Dummy to Woodlands Walker — ported below (RegisterSpellEvent 47575
 -- ev5; roll 1: CastSpell-on-player 47550 item bark NON-triggered +

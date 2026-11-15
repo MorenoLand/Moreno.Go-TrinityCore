@@ -15513,8 +15513,14 @@ func init() {
 	// cinematic: MovePoint + MovementInform image-change chain +
 	// GetCreatureListWithEntryInGrid/FindNearestCreature target
 	// store + SetEntry/SetDisplayId image swap + audience
-	// facing) awaits the movement / world-search / entry-update
-	// / cross-creature-facing bridges — documented only.
+	// facing) — PORTED in lua_scripts/northrend/npc_commander_
+	// eligor_dawnbringer.lua: the movement / world-search /
+	// entry-update / cross-creature-facing bridges are all live
+	// (MoveTo + ev28, GetCreaturesInGrid, FindNearestCreature,
+	// SetEntry, SetDisplayId, SetFacingToObject). Entry 27784
+	// TDB-verified (ScriptName 'npc_commander_eligor_
+	// dawnbringer'; spawn guid 133420, map 571). 49519
+	// SPELL_HEROIC_IMAGE_CHANNEL stays dormant until seeded.
 	// spell_q12096_q12092_dummy + spell_q12096_q12092_bark
 	// (Strengthen the Ancients SpellScripts) — the bridge exists
 	// (RegisterSpellEvent; the blasted_lands / gordunni precedents
@@ -15532,6 +15538,7 @@ func init() {
 	// UpdateAI low-hp machine, OnGossipSelect (player
 	// CastSpell unbridged) and OnCharmed stay out.
 	RegisterLuaBoss("npc_torturer_lecraft", 27209)
+	RegisterLuaBoss("npc_commander_eligor_dawnbringer", 27784)
 	RegisterLuaBoss("npc_wyrmrest_defender", 27629)
 	// npc_emily (Grizzly Hills zone script): the JustEngagedWith arm —
 	// Talk(SAY_RANDOMAGGRO 4, no target) — the event-1 auriaya
