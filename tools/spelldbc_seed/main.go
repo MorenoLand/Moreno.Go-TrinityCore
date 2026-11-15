@@ -74,6 +74,7 @@ const (
 	effHealMaxHealth           = 67  // SPELL_EFFECT_HEAL_MAX_HEALTH
 	effInterruptCast           = 68  // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
 	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
+	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
@@ -1693,6 +1694,48 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraStun, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraTransform, misc: 24417, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 53599 Summon Darter / 53614 Summon Guardian / 53615 Summon
+	// Venomancer (boss_anubarak.cpp:44-47, trigger-cast :219-263
+	// inside the unported submerge phase machine) — wago.tools
+	// 3.4.0.43659 SpellEffect rows 957930/958189/958190 + SpellMisc
+	// 604995/605175/605176 (2026-11-15 browser read): single eff0
+	// 28 SUMMON Die 1 Base 0 MiscValue = pet entry (29213/29216/
+	// 29217) MiscValueB 64 TargetA 18 TARGET_DEST_CASTER;
+	// DurationIndex 21 (-1, 68415 precedent), RangeIndex 1 (Self
+	// Only), CastingTimeIndex 1 (instant), school 0x1 Physical.
+	// Attributes_0 0x100 not encoded (seed has no attributes
+	// field). Removes three of the four anub_arak ev4 unseeded-
+	// spell blockers; the summon trigger cast itself (world
+	// trigger inside the unported submerge machine) still stays out.
+	{id: 53599, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 29213, miscB: 64, targetA: targetDestCaster}}},
+	{id: 53614, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 29216, miscB: 64, targetA: targetDestCaster}}},
+	{id: 53615, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 29217, miscB: 64, targetA: targetDestCaster}}},
+	// 53609 Summon Assassin (boss_anubarak.cpp:45, trigger-cast
+	// :230-231) — wago.tools 3.4.0.43659 SpellEffect row 958113 +
+	// SpellMisc 605126 (2026-11-15 browser read): single eff0 140
+	// FORCE_CAST Die 0 Base 0 TargetA 22 TARGET_SRC_CASTER
+	// TargetB 7 TARGET_UNIT_SRC_AREA_ENTRY RadiusIndex 28
+	// TriggerSpell 53610; DurationIndex 0 (no duration, left at
+	// the zero default), RangeIndex 1 (Self Only), CastingTimeIndex
+	// 1 (instant), school 0x1 Physical. Attributes_0 0x100 /
+	// Attributes_2 0x4 not encoded (seed has no attributes field).
+	// effForceCast constant added above (engine twin
+	// spells.go:449, handler reads eff.TriggerSpell). The
+	// triggered 53610 (SUMMON 29214) is seeded below from its own
+	// wago read; the trigger cast itself (world trigger inside
+	// the unported submerge machine) still stays out.
+	{id: 53609, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effForceCast, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, trigger: 53610}}},
+	// 53610 Summon Assassin trigger (the spell 53609 force-casts) —
+	// wago.tools 3.4.0.43659 SpellEffect row 958114 + SpellMisc
+	// 605127 (2026-11-15 browser reads): single eff0 28 SUMMON
+	// Die 1 Base 0 MiscValue 29214 (Nerubian Assassin)
+	// MiscValueB 64 TargetA 18 TARGET_DEST_CASTER;
+	// DurationIndex 21 (-1, 68415 precedent), RangeIndex 1 (Self
+	// Only), CastingTimeIndex 1 (instant), school 0x1 Physical.
+	// Attributes_0 0x100 not encoded (seed has no attributes
+	// field). Completes the 53609 -> 53610 chain, so all four
+	// anub_arak ev4 pet summon spells now resolve in the seed.
+	{id: 53610, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 29214, miscB: 64, targetA: targetDestCaster}}},
 }
 
 func main() {

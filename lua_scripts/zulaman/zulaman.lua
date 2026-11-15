@@ -31,11 +31,18 @@
 -- but no Zul'Aman instance consumer exists), and
 -- GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
 -- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
--- only for the creature-cast SPELL_COSMETIC_SPEAR_THROW 43647, which has
--- zero casters anywhere in the C++/Go trees (trigger-absence), so the arm
--- never fires. (ev14 fires on creature-cast hits too, boss_ai.go:4268/4290
--- fireCreatureSpellHitTarget, inside castCreatureSpellInternalWithBasePoints
--- :1791; the earlier "ev14 fires only for player casts" rationale was stale.)
+-- only for SPELL_COSMETIC_SPEAR_THROW 43647, which HAS a DB-side caster
+-- (10:41 'zero casters / trigger-absence' claim corrected 2026-11-15:
+-- TDB smart_scripts (23597,0,9) Amani'shi Guardian OOC cast 43647,
+-- target_type 1 SELF; no conditions row for it in the dump, so the
+-- 10:41 'conditions row gates target to Harrison 24375' detail did NOT
+-- verify — the spell's own implicit targets decide the hit, pending the
+-- 43647 wago read). Stay-out stands on the other blockers: 43647
+-- unseeded, Harrison 24375 unregistered, gong machine unported, no
+-- creature:SetByteValue bridge. (ev14 fires on creature-cast hits too,
+-- boss_ai.go:4268/4290 fireCreatureSpellHitTarget, inside
+-- castCreatureSpellInternalWithBasePoints :1791; the earlier "ev14 fires
+-- only for player casts" rationale was stale.)
 
 local HOSTAGE_ENTRIES = {23790, 23999, 24024, 24001}
 
