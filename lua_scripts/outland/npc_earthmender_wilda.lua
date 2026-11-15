@@ -79,7 +79,7 @@ local function onQuestAccept(event, player, creature, quest)
     if not quest or quest:GetId() ~= QUEST_ESCAPE_COILSCAR then
         return
     end
-    creature:Talk(SAY_WIL_START)
+    creature:Talk(SAY_WIL_START, player)
     creature:SetFaction(FACTION_EARTHEN_RING)
     creature:StartEscort(player)
     creature:MoveWaypoint()
@@ -101,20 +101,20 @@ local function onReachWP(event, creature)
     end
     local wp = creature:GetCurrentWaypointId()
     if wp == 13 then
-        creature:Talk(SAY_WIL_PROGRESS1)
+        creature:Talk(SAY_WIL_PROGRESS1, player)
         doSpawnAssassin(creature)
     elseif wp == 14 then
         doSpawnAssassin(creature)
     elseif wp == 15 then
-        creature:Talk(SAY_WIL_FIND_EXIT)
+        creature:Talk(SAY_WIL_FIND_EXIT, player)
     elseif wp == 19 or wp == 26 or wp == 33 or wp == 37 or wp == 43 then
         creature:Talk(SAY_WIL_PROGRESS2)
     elseif wp == 20 or wp == 27 or wp == 34 or wp == 38 or wp == 44 then
         doSpawnAssassin(creature)
     elseif wp == 39 then
-        creature:Talk(SAY_WIL_JUST_AHEAD)
+        creature:Talk(SAY_WIL_JUST_AHEAD, player)
     elseif wp == 50 then
-        creature:Talk(SAY_WIL_END)
+        creature:Talk(SAY_WIL_END, player)
         player:GroupEventHappens(QUEST_ESCAPE_COILSCAR, creature)
     end
 end
