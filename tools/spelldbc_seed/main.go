@@ -86,7 +86,8 @@ const (
 	auraPeriodicTrig           = 23
 	auraRoot                   = 26
 	auraSilence                = 27
-	auraModIncreaseSpeed       = 31 // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
+	auraModIncreaseSpeed       = 31  // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
+	auraModSpeedAlways         = 129 // SPELL_AURA_MOD_SPEED_ALWAYS (SpellAuraDefines.h:209)
 	auraDecSpeed               = 33
 	auraEffImmunity            = 37
 	auraTransform              = 56
@@ -1777,6 +1778,39 @@ var spells = []spell{
 	{id: 2767, castTimeIdx: 1, durIdx: 85, rangeIdx: 4, school: schoolShadow, dispel: 1, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 54, targetA: targetEnemy, auraPeriod: 3000, chainAmplitude: 1},
 	}},
+	// 1557 Full Speed / 1834 Gathering Speed / 1881 Summon
+	// Hive'Zara Hatchling (boss_buru.cpp:34-38 enum; :154/158
+	// self-casts, :229 triggered hatchling summon; Lua
+	// boss_buru.lua:139/147/293) — wago.tools 3.4.0.43659
+	// SpellEffect rows 680182/681033/679928 + SpellMisc
+	// 315179/315947/314952 (2026-11-15 browser read): 1557
+	// single eff0 6 APPLY_AURA aura 129 MOD_SPEED_ALWAYS
+	// Base 299 Die 1 TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1 (299+1 = 300% run speed); 1834
+	// single eff0 6 APPLY_AURA aura 129 Base 24 Die 1
+	// TargetA 1 chainAmplitude 1 (24+1 = 25%); 1881 single
+	// eff0 28 SUMMON Die 1 Base 0 MiscValue 15521
+	// (Hive'Zara Hatchling) MiscValueB 64 TargetA 32
+	// TARGET_DEST_CASTER_SUMMON RadiusIndex 8 (5yd).
+	// All three: castTimeIdx 1 (instant), rangeIdx 1 (Self
+	// Only), school 0x1 Physical; 1557/1881 durIdx 21 (-1,
+	// 68415 precedent), 1834 durIdx 25 (180000ms, 3 min,
+	// real row added below). Dispel n/a (Wowhead), mechanic
+	// 0. auraModSpeedAlways=129 constant added above
+	// (engine twin movement_speed.go:16, run-speed set
+	// includes 129). Removes the last unseeded-spell
+	// blockers for boss_buru.lua (single-missing-id file in
+	// the unseeded-live-cast census); all three effects
+	// have live Go handlers.
+	{id: 1557, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModSpeedAlways, dieSides: 1, basePoints: 299, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	{id: 1834, castTimeIdx: 1, durIdx: 25, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModSpeedAlways, dieSides: 1, basePoints: 24, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	{id: 1881, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, misc: 15521, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 8},
+	}},
 }
 
 func main() {
@@ -1819,11 +1853,12 @@ func main() {
 		{90008, 604800000, 0, 604800000},
 		{90009, 4000, 0, 4000},
 		{90010, 500, 0, 500},
-		{4, 120000, 0, 120000}, // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
-		{8, 15000, 0, 15000},   // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
-		{27, 3000, 0, 3000},    // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
-		{9, 30000, 0, 30000},   // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
-		{85, 18000, 0, 18000},  // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
+		{4, 120000, 0, 120000},  // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
+		{8, 15000, 0, 15000},    // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
+		{27, 3000, 0, 3000},     // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
+		{9, 30000, 0, 30000},    // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{85, 18000, 0, 18000},   // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
+		{25, 180000, 0, 180000}, // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
