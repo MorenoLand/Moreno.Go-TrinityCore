@@ -2740,6 +2740,71 @@ var spells = []spell{
 	{id: 18269, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 18172 Kodo Kombobulator (wago name; C++ SPELL_KODO_KOMBO_PLAYER_BUFF,
+	// zone_desolace.cpp:51 enum; Lua npc_aged_dying_ancient_kodo.lua:67
+	// AddAura/HasAura/RemoveAura) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-15 browser read 900295ba, DifficultyID 0
+	// rows): single eff0 6 APPLY_AURA aura 4 DUMMY TargetA 21
+	// TARGET_UNIT_TARGET_ALLY chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 5 (300000ms, real row), rangeIdx 6 (Vision Range
+	// 100yd, real row), school 0x1 Physical, dispel 0 (no SpellCategories
+	// row). NOT carried: no SpellPower row; no SpellAuraOptions row.
+	// Engine twins: auraDummy 4 live, target 21 live
+	// (chain_targets.go:350, friendly_area_targets.go:45). Removes the
+	// last unseeded-spell blocker for npc_aged_dying_ancient_kodo.lua
+	// (single-missing-id file).
+	{id: 18172, castTimeIdx: 1, durIdx: 5, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 26476 Digestive Acid (wago name; C++ SPELL_DIGESTIVE_ACID,
+	// boss_cthun.cpp:117 enum; Lua npc_eye_tentacle.lua:66 HasAura gate
+	// on the pick) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 900295ba, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 3 PERIODIC_DAMAGE Die 1 Base 149 TargetA 25
+	// TARGET_UNIT_TARGET_ANY period 5000 chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 21 (-1 infinite, real row), rangeIdx 13
+	// (Anywhere - Unlimited, real row), school 0x8 Nature, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 / CumulativeAura 99 (no proc table,
+	// 58109 precedent). Engine twins: auraPeriodicDmg 3 live (44335/26143
+	// precedent), target 25 live (spells.go:5343, chain_targets.go:360).
+	// Removes the last unseeded-spell blocker for npc_eye_tentacle.lua
+	// (single-missing-id file).
+	{id: 26476, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 149, targetA: targetUnitTargetAny, auraPeriod: 5000, chainAmplitude: 1},
+	}},
+	// 25148 Sleep Visual DND (wago name; C++ SPELL_SLEEP_VISUAL,
+	// zone_darkshore.cpp:51 enum; Lua npc_kerlonian.lua:66 CastSpell +
+	// RemoveAura) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 900295ba, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 4 DUMMY TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21 (-1
+	// infinite, real row), rangeIdx 13 (Anywhere - Unlimited, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; no SpellAuraOptions row. Engine twin: auraDummy 4
+	// live. Removes the last unseeded-spell blocker for npc_kerlonian.lua
+	// (single-missing-id file).
+	{id: 25148, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 18953 Ranshalla Waiting (wago name; C++ SPELL_LIGHT_TORCH,
+	// zone_winterspring.cpp:80 enum; Lua npc_ranshalla.lua:66 CastSpell)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15
+	// browser read 900295ba, DifficultyID 0 rows): eff0 6 APPLY_AURA aura
+	// 26 MOD_ROOT TargetA 1 TARGET_UNIT_CASTER, eff1 6 APPLY_AURA aura 23
+	// PERIODIC_TRIGGER_SPELL TriggerSpell 18954 TargetA 1 period 300000,
+	// both chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21
+	// (-1 infinite, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; no SpellAuraOptions row. Engine twins: auraRoot 26
+	// live (cc_break.go:104), auraPeriodicTrig 23 live (spells.go:44959,
+	// spell_dummy.go:230). FOLLOW-UP 18954 (periodic trigger) unseeded,
+	// needs own wago read. Removes the last unseeded-spell blocker for
+	// npc_ranshalla.lua (single-missing-id file).
+	{id: 18953, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, targetA: targetCaster, auraPeriod: 300000, trigger: 18954, chainAmplitude: 1},
+	}},
 }
 
 func main() {
