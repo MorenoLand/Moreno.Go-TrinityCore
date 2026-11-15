@@ -359,7 +359,11 @@ RegisterSpellEvent(SPELL_POT_CHECK, 5, potCheckHit)
 --   npc_alchemist_finklestein (28205, :468-587): full AI port —
 --   Reset clears the player/try state and starts the turn-to-pot
 --   cycle (15-26s); turn legs face the pot / back with the
---   matching emotes; gossip select casts the invisbuff (51216)
+--   matching emotes; single loop — npc_storm_cloud.lua carried a
+--   second copy that double-flipped facing/emote after every
+--   Reset, removed 2026-11-15 (spawn ev5 seeds the same Reset,
+--   death ev4 cancels timers, ev1 disables melee); gossip select
+--   casts the invisbuff (51216)
 --   and starts the ingredient chain; SetData (ev41, the
 --   pot_check call site above) schedules the try-gated
 --   ingredient event.
@@ -546,6 +550,14 @@ local function finklesteinReset(event, creature)
     end)
 end
 
+-- C++ death teardown: the AI is gone with the creature, so the
+-- EventMap dies with it; Go timers persist until cancelled.
+local function finklesteinCancel(event, creature)
+    local guid = creature:GetGUIDLow()
+    cancelFinklesteinTimers(guid)
+    finklesteinState[guid] = nil
+end
+
 local function finklesteinIngredient(creature, guid, say, aura)
     local state = finklesteinState[guid]
     if state == nil or state.playerGUID == nil then
@@ -616,3 +628,8 @@ RegisterCreatureEvent(ENTRY_CRUSADE_RECRUIT, 23, crusadeRecruitReset)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinReset)
 RegisterCreatureEvent(NPC_FINKLESTEIN, 41, finklesteinSetData)
 RegisterCreatureGossipEvent(NPC_FINKLESTEIN, 2, finklesteinGossipSelect)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 5, finklesteinReset)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 4, finklesteinCancel)
+RegisterCreatureEvent(NPC_FINKLESTEIN, 1, function(_, creature)
+    creature:SetMeleeAttack(false) -- C++ UpdateAI (:505-560) never calls DoMeleeAttackIfReady (RP event machine, never melees)
+end)

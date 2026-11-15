@@ -87,10 +87,10 @@
 -- npc_alchemist_finklestein — the facing/emote loop (EVENT_TURN_TO
 -- _POT 15-26s SetFacingTo(6.230825) + EMOTE_STATE_USE_STANDING
 -- _NO_SHEATHE 133 -> EVENT_TURN_BACK 11s SetFacingTo(4.886922) +
--- EMOTE_STATE_NONE 30 -> 25-41s->TURN_TO_POT) is PORTED below
--- (SetFacingTo/EmoteState/CreateLuaEvent {min,max} bridges live —
--- the old "no facing/emote bridges" stay-out is retracted for this
--- loop only); the ingredient events (MEDIUM_4 / MEDIUM_5 / HARD_6,
+-- EMOTE_STATE_NONE 30 -> 25-41s->TURN_TO_POT) lives in
+-- zone_zuldrak.lua (canonical — this file's duplicate loop removed
+-- 2026-11-15; two loops seeded on every Reset and double-flipped
+-- facing/emote); the ingredient events (MEDIUM_4 / MEDIUM_5 / HARD_6,
 -- dispatched by the cauldron's SetData(1,1)) and OnGossipSelect
 -- (zone_zuldrak.cpp:575-583) live in zone_zuldrak.lua — this file
 -- carried a duplicate ev41+gossip pair for the same entry, removed
@@ -165,98 +165,10 @@ end
 RegisterCreatureEvent(STORM_CLOUD_ENTRY, 5, onSpawnOrReset)
 RegisterCreatureEvent(STORM_CLOUD_ENTRY, 23, onSpawnOrReset)
 
--- npc_alchemist_finklestein (zone_zuldrak.cpp:341) — entry
--- NPC_FINKLESTEIN 28205. Only the facing/emote loop lives here;
--- the gossip-select + SetData(1,1) ingredient arms are canonical
--- in zone_zuldrak.lua (duplicate ev41+gossip pair removed here
--- 2026-11-15 — see header).
-local NPC_FINKLESTEIN = 28205
-
-local finklesteinTimers = {}
-
-local function finklesteinCancelTimers(guid)
-    local per = finklesteinTimers[guid]
-    if per then
-        for _, id in pairs(per) do
-            RemoveEventById(id)
-        end
-        finklesteinTimers[guid] = nil
-    end
-end
-
-local function finklesteinSchedule(guid, key, delay, fn)
-    local per = finklesteinTimers[guid]
-    if not per then
-        per = {}
-        finklesteinTimers[guid] = per
-    end
-    if per[key] then
-        RemoveEventById(per[key])
-    end
-    per[key] = CreateLuaEvent(fn, delay)
-end
-
-local function finklesteinCancel(event, creature)
-    finklesteinCancelTimers(creature:GetGUIDLow())
-end
-
--- C++ Reset() (zone_zuldrak.cpp:482-484) seeds EVENT_TURN_TO_POT at
--- 15-26s; TURN_TO_POT (:518-521): SetFacingTo(6.230825) +
--- EmoteState(133 USE_STANDING_NO_SHEATHE) -> TURN_BACK 11s;
--- TURN_BACK (:523-526): SetFacingTo(4.886922) + EmoteState(30 NONE)
--- -> TURN_TO_POT 25-41s. Ungated ambient loop; timers ride the
--- per-GUID table so 4 cancel kills the loop, and 23 re-seeds it
--- with the Reset; ev2 re-seeds too (evade fires 23 before 2, so a
--- cancel-only ev2 would undo the re-seed). Cyclic pair uses forward declarations (tharon_ja
--- idiom): a later `local function` would shadow the nil slot.
-local FACING_TO_POT = 6.230825
-local FACING_BACK = 4.886922
-local EMOTE_STATE_USE_STANDING_NO_SHEATHE = 133
-local EMOTE_STATE_NONE = 30
-
-local finklesteinTurnToPot, finklesteinTurnBack
-
-finklesteinTurnToPot = function(creature, guid)
-    creature:SetFacingTo(FACING_TO_POT)
-    creature:EmoteState(EMOTE_STATE_USE_STANDING_NO_SHEATHE)
-    finklesteinSchedule(guid, "turnback", 11000, function()
-        finklesteinTurnBack(creature, guid)
-    end)
-end
-
-finklesteinTurnBack = function(creature, guid)
-    creature:SetFacingTo(FACING_BACK)
-    creature:EmoteState(EMOTE_STATE_NONE)
-    finklesteinSchedule(guid, "turnpot", {25000, 41000}, function()
-        finklesteinTurnToPot(creature, guid)
-    end)
-end
-
--- C++ Reset seed: cancel (Reset clears the event map) then schedule
--- the first TURN_TO_POT at 15-26s. Reset also clears _playerGUID and
--- _getingredienttry (zone_zuldrak.cpp:482-483), so the stash clears
--- here too. Spawn (5) and reset (23) both run Reset in C++; leave-combat (2) / death (4) stay cancel-only.
-local function finklesteinReset(event, creature)
-    local guid = creature:GetGUIDLow()
-    finklesteinCancelTimers(guid)
-    finklesteinSchedule(guid, "turnpot", {15000, 26000}, function()
-        finklesteinTurnToPot(creature, guid)
-    end)
-end
-
--- Evade order (engine triggerCreatureEvade, creaturemotion.go): ev23
--- fires BEFORE ev2, so a cancel-only ev2 handler undoes the ev23
--- Reset re-seed and the turn-to-pot loop dies after the first evade
--- (the dummy's old-handler bug, fixed there by re-arming on ev2).
--- C++ evade -> Reset re-seeds TURN_TO_POT, so ev2 re-seeds here too;
--- ev4 keeps the cancel (a dead finklestein runs no timers).
-RegisterCreatureEvent(NPC_FINKLESTEIN, 2, finklesteinReset)
-RegisterCreatureEvent(NPC_FINKLESTEIN, 4, finklesteinCancel)
-RegisterCreatureEvent(NPC_FINKLESTEIN, 23, finklesteinReset)
-RegisterCreatureEvent(NPC_FINKLESTEIN, 5, finklesteinReset)
-RegisterCreatureEvent(NPC_FINKLESTEIN, 1, function(_, creature)
-    creature:SetMeleeAttack(false) -- zone_zuldrak.cpp:510: custom UpdateAI never calls DoMeleeAttackIfReady (RP event machine in C++, never melees)
-end)
+-- npc_alchemist_finklestein (28205) lives in zone_zuldrak.lua
+-- (canonical — Reset/loop/gossip/SetData/state all there; this
+-- file's duplicate turn-to-pot loop removed 2026-11-15: both
+-- loops seeded on every Reset and double-flipped facing/emote).
 
 -- Aura registrations removed 2026-11-09: the 21 fetch-ingredient OnRemove (ev3)
 -- and 3 random-ingredient PeriodicTick (ev1) arms are registered by the
