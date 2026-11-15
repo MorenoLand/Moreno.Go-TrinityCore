@@ -2584,6 +2584,147 @@ var spells = []spell{
 	{id: 29907, castTimeIdx: 1, rangeIdx: 7, school: schoolArcane, effects: [3]effect{
 		{effect: effPowerBurn, dieSides: 41, basePoints: 254, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 58109 Crates Kill Credit (wago name; C++ SPELL_CRATES_KILL_CREDIT,
+	// instance_culling_of_stratholme.cpp:79 enum; Lua
+	// instance_culling_of_stratholme.lua:518 triggered cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// b476939d, DifficultyID 0 rows): single eff0 134 KILL_CREDIT
+	// TargetA 22 TARGET_SRC_CASTER TargetB 7 TARGET_UNIT_SRC_AREA_ENTRY
+	// RadiusIndex_0 28 (50000yd, real row) Misc 30996, chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration row),
+	// rangeIdx 13 (50000yd, real row), school 0x1 Physical, dispel 0
+	// (no SpellCategories row). NOT carried: SpellAuraOptions ProcChance
+	// 101 (seed has no proc table); no SpellPower row. Engine twin:
+	// effKillCredit2 134 live (spells.go:17749,
+	// handleEffectKillCreditGroup). Removes the last unseeded-spell
+	// blocker for instance_culling_of_stratholme.lua (single-missing-id
+	// file).
+	{id: 58109, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKillCredit2, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, misc: 30996, chainAmplitude: 1},
+	}},
+	// 31387 Time Rift Channel (wago name; C++ SPELL_RIFT_CHANNEL,
+	// instance_the_black_morass.cpp:37 enum; Lua
+	// instance_the_black_morass.lua:184 rift channel cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// b476939d, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 4
+	// DUMMY TargetA 25 TARGET_UNIT_TARGET_ANY; castTimeIdx 1 (instant,
+	// real row), durIdx 21 (infinite, real row), rangeIdx 13 (50000yd,
+	// real row), school 0x20 Shadow, dispel 0 (no SpellCategories row).
+	// NOT carried: no SpellPower row; no SpellAuraOptions row. Engine
+	// twin: auraDummy live. Removes the last unseeded-spell blocker for
+	// instance_the_black_morass.lua (single-missing-id file).
+	{id: 31387, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetUnitTargetAny},
+	}},
+	// 26143 Mind Flay (wago name; C++ SPELL_MIND_FLAY, boss_cthun.cpp:90
+	// enum, :950 DoCast(target, SPELL_MIND_FLAY); Lua
+	// npc_eye_tentacle.lua:67 random-target cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc + SpellCategories
+	// (2026-11-15 browser read b476939d, DifficultyID 0 rows): eff0 6
+	// APPLY_AURA aura 3 PERIODIC_DAMAGE Die 1 Base 749 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY period 1000 chainTargets 1, eff1 6
+	// APPLY_AURA aura 33 MOD_DECREASE_SPEED Die 1 Base -31 TargetA 6;
+	// castTimeIdx 1 (instant, real row), durIdx 1 (10000ms, real row),
+	// rangeIdx 13 (50000yd, real row), school 0x20 Shadow, dispel 0 /
+	// mechanic 11 (SpellCategories DispelType 0 / Mechanic 11,
+	// Category 0 / DefenseType 1 not carried — seed has no fields).
+	// NOT carried: EffectBonusCoefficient 0.1 (no field); no
+	// SpellPower row. Engine twins: auraPeriodicDmg 3 live,
+	// auraDecSpeed 33 live (spells.go:34046, movement_speed.go:342).
+	// Removes the last unseeded-spell blocker for npc_eye_tentacle.lua
+	// (single-missing-id file).
+	{id: 26143, castTimeIdx: 1, durIdx: 1, rangeIdx: 13, school: schoolShadow, mechanic: 11, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 749, targetA: targetEnemy, auraPeriod: 1000, chainTargets: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -31, targetA: targetEnemy},
+	}},
+	// 44326 Pure Energy Passive (wago name; C++ SPELL_PURE_ENERGY_PASSIVE,
+	// boss_vexallus.cpp:189 enum, :208 RemoveAurasDueToSpell in JustDied;
+	// Lua npc_pure_energy.lua:40 RemoveAura) — wago.tools 3.4.0.47659
+	// SpellEffect row 865246 + SpellMisc 460439 (2026-11-15 browser read
+	// eaa0d19d, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 42
+	// PROC_TRIGGER_SPELL Die 1 Base -1 TriggerSpell 36294 TargetA 1
+	// TARGET_UNIT_CASTER, chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 21 (infinite, real row), rangeIdx 1 (Self Only,
+	// real row), school 0x1 Physical, dispel 0 (no SpellCategories row).
+	// NOT carried: no SpellPower row; EffectBonusCoefficient 0 (no
+	// field). Engine twin: aura42 live (procs.go:1287; 29908
+	// precedent). FOLLOW-UP: 36294 (proc trigger) unseeded, needs its
+	// own wago read. Removes the last unseeded-spell blocker for
+	// npc_pure_energy.lua (single-missing-id file).
+	{id: 44326, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: -1, targetA: targetCaster, trigger: 36294, chainAmplitude: 1},
+	}},
+	// 26232 Transform C'Thun -> Phase 2 (wago name; C++ SPELL_TRANSFORM,
+	// boss_cthun.cpp:99 enum, :631 DoCast(me, SPELL_TRANSFORM, false),
+	// :525 RemoveAurasDueToSpell; Lua boss_cthun.lua:109 RemoveAura) —
+	// wago.tools 3.4.0.47659 SpellEffect row 702664 + SpellMisc 333817
+	// (2026-11-15 browser read eaa0d19d, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 56 TRANSFORM Misc 15809 TargetA 1
+	// TARGET_UNIT_CASTER, chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 21 (infinite, real row), rangeIdx 6 (Vision
+	// Range, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// EffectBonusCoefficient 1 (no field). Engine twin: auraTransform
+	// 56 live (spells.go:711, shapeshift.go:422). Removes the last
+	// unseeded-spell blocker for boss_cthun.lua (single-missing-id file).
+	{id: 26232, castTimeIdx: 1, durIdx: 21, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, targetA: targetCaster, misc: 15809, chainAmplitude: 1},
+	}},
+	// 39886 Give Southfury Moonstone (wago name; C++
+	// SPELL_GIVE_SOUTHFURY_MOONSTONE, zone_azshara.cpp:41 enum, :168
+	// CastSpell(player, ..., true); Lua npc_depth_charge.lua:137
+	// triggered player cast) — wago.tools 3.4.0.47659 SpellEffect row
+	// 859710 + SpellMisc 456143 (2026-11-15 browser read eaa0d19d,
+	// DifficultyID 0 rows): single eff0 24 CREATE_ITEM ItemType 32364
+	// TargetA 25 TARGET_UNIT_TARGET_ANY, chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration
+	// row), rangeIdx 36 (Longer Range, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row. Engine twin: effCreateItem 24 live
+	// (spells.go:52289 handleEffectCreateItem). Removes the last
+	// unseeded-spell blocker for npc_depth_charge.lua
+	// (single-missing-id file).
+	{id: 39886, castTimeIdx: 1, rangeIdx: 36, school: schoolPhysical, effects: [3]effect{
+		{effect: effCreateItem, targetA: targetUnitTargetAny, itemType: 32364, chainAmplitude: 1},
+	}},
+	// 30298 Tree Disguise (wago name; C++ SPELL_TREE_DISGUISE,
+	// zone_azuremyst_isle.cpp:451 enum, :581 HasAura check; Lua
+	// npc_geezle.lua:153 quest-status + HasAura gate) — wago.tools
+	// 3.4.0.47659 SpellEffect rows 847496-847498 + SpellMisc 447431
+	// (2026-11-15 browser read eaa0d19d, DifficultyID 0 rows): eff0 6
+	// APPLY_AURA aura 56 TRANSFORM Misc 17315 TargetA 1
+	// TARGET_UNIT_CASTER, eff1 6 APPLY_AURA aura 26 MOD_ROOT TargetA
+	// 1, eff2 61 SEND_EVENT Misc 10675 TargetA 0 (NONE), all
+	// chainAmplitude 1; castTimeIdx 14 (3000ms, real row), durIdx 23
+	// (90000ms, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row. Engine twins: auraTransform 56 live,
+	// auraRoot 26 live (cc_break.go:104), effSendEvent 61 live
+	// (spells.go:17855). Removes the last unseeded-spell blocker for
+	// npc_geezle.lua (single-missing-id file).
+	{id: 30298, castTimeIdx: 14, durIdx: 23, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, targetA: targetCaster, misc: 17315, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSendEvent, misc: 10675, chainAmplitude: 1},
+	}},
+	// 18377 Kodo Kombobulator (wago name; C++ SPELL_KODO_KOMBO_DESPAWN_BUFF,
+	// zone_desolace.cpp:52 enum; Lua npc_aged_dying_ancient_kodo.lua:107
+	// triggered self-cast, HasAura-gated) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read b476939d,
+	// DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 23
+	// PERIODIC_TRIGGER_SPELL TriggerSpell 18269 Die 1 TargetA 1
+	// TARGET_UNIT_CASTER period 300000; castTimeIdx 1 (instant, real
+	// row), durIdx 5 (300000ms, real row added below), rangeIdx 1
+	// (Self Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row; no
+	// SpellAuraOptions row. Engine twin: auraPeriodicTrig 23 live
+	// (spells.go:44959, spell_dummy.go:230). FOLLOW-UP: 18269 (periodic
+	// trigger) unseeded, needs its own wago read. Removes the last
+	// unseeded-spell blocker for npc_aged_dying_ancient_kodo.lua
+	// (single-missing-id file).
+	{id: 18377, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, targetA: targetCaster, auraPeriod: 300000, trigger: 18269},
+	}},
 }
 
 func main() {
@@ -2633,6 +2774,7 @@ func main() {
 		{85, 18000, 0, 18000},      // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
 		{25, 180000, 0, 180000},    // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
 		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
+		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
