@@ -1633,6 +1633,30 @@ var spells = []spell{
 	{id: 16710, castTimeIdx: 1, durIdx: 21, rangeIdx: 93002, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, dieSides: 1, misc: 10776, miscB: 64, radiusIdx: 8, targetA: targetDestCasterSummon},
 	}},
+	// 49549 Ice Beam (wago.tools 3.4.0.43659 SpellEffect rows
+	// 953964/953965, 2026-11-15; Wowhead WotLK cross-check: Frost
+	// damage + snare, cast 1.5 s, range 40 yd, duration 6 s, dispel
+	// Magic, cost none): castTimeIdx 16 (1500 ms, real row),
+	// durIdx 32 (6000 ms, real row), rangeIdx 5 (Long Range 0-40,
+	// real row), school 0x10 Frost, dispel 1; eff0 2 SCHOOL_DAMAGE
+	// Die 1547 Base 4380 TargetA 6 TARGET_UNIT_TARGET_ENEMY
+	// chainAmplitude 1 (Wowhead value 4381 = base + 1); eff1 6
+	// APPLY_AURA aura 33 MOD_DECREASE_SPEED Die 1 Base -61
+	// Mechanic 11 (Snared) TargetA 6 chainAmplitude 1 (Wowhead
+	// -60% = base + 1). No third effect exists (SpellEffect table
+	// returns exactly 2 rows; Wowhead lists 2). NOT carried:
+	// EffectBonusCoefficient 1/0, EffectMechanic 0 eff0,
+	// SpellMisc Attributes, ProcChance 101. NOTE: wago Spell table
+	// for this build exposes no SchoolMask/CastTime/Range/Duration
+	// columns, so those indices are carried from the Wowhead
+	// human-readable equivalents, not wago numerics. Unblocks one
+	// of two varos ev15 blockers; the captain trigger machine
+	// (51002 Send Event 12229, unseeded; no event_scripts executor)
+	// still stays out.
+	{id: 49549, castTimeIdx: 16, durIdx: 32, rangeIdx: 5, school: schoolFrost, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1547, basePoints: 4380, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -61, mechanic: 11, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {

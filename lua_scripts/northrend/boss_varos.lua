@@ -114,7 +114,10 @@
 -- boss_ai.go:3574-3581, 50415 precedent) and NOT because the event
 -- never fires; 51017 IS seeded in the Go Spell.dbc (tools/spelldbc_seed,
 -- verified in the seed binary 2026-11-15) so its effect type is
--- verified — the stay-out is the trigger machine alone.
+-- verified. 49549 IS now seeded too (tools/spelldbc_seed, wago
+-- SpellEffect rows 953964/953965, 2026-11-15) — the unseeded-spell
+-- blocker noted 2026-11-15 10:27 is gone; the stay-out is the trigger
+-- machine alone.
 -- DespawnOrUnsummon DOES have a
 -- Lua binding (creature:Despawn(), lua_creature_events.go:3318; the
 -- old "no binding" claim is retracted 2026-11-10); UpdateAI — DoMeleeAttackIfReady only; MovementInform
