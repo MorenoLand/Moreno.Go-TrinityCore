@@ -3003,6 +3003,62 @@ var spells = []spell{
 	{id: 72915, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 58854 Resurrection (wago name; C++ SPELL_RESURRECTION,
+	// zone_storm_peaks.cpp:449 enum; Lua
+	// npc_brann_bronzebeard_keystone.lua:49 const, :127 self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 618c701b, DifficultyID 0 rows): single eff0 3 DUMMY
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 0, rangeIdx 1 (Self Only, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin: effDummy 3 live.
+	// Removes the last unseeded-spell blocker for
+	// npc_brann_bronzebeard_keystone.lua (single-missing-id file).
+	{id: 58854, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47184 Mrfloppy (wago name; C++ SPELL_MRFLOPPY,
+	// zone_grizzly_hills.cpp:43 enum; Lua npc_emily.lua:140 const,
+	// :265 CastSpell on Mrfloppy) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-15 browser read 618c701b,
+	// DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 236
+	// CONTROL_VEHICLE TargetA 38 TARGET_UNIT_NEARBY_ENTRY
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21
+	// (-1 infinite, real row), rangeIdx 13 (Anywhere - Unlimited,
+	// real row), school 0x1 Physical, dispel 0 (no SpellCategories
+	// row). NOT carried: no SpellPower row; SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent). Engine twin:
+	// auraControlVehicle 236 live (spells.go:647, vehicle.go:2699),
+	// target 38 live. Removes the last unseeded-spell blocker for
+	// npc_emily.lua (single-missing-id file).
+	{id: 47184, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraControlVehicle, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
+	// 69424 Icicle Summon (wago name; C++ SPELL_ICICLE_SUMMON,
+	// pit_of_saron.h:107 enum; pit_of_saron.cpp:49 triggered self-cast;
+	// Lua instance_pit_of_saron.lua:122 const, :187 triggered CastSpell)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15
+	// browser read 618c701b, DifficultyID 0 rows): eff0 28 SUMMON
+	// MiscValue 36847 MiscValueB 1362 TargetA 18 TARGET_DEST_CASTER
+	// chainAmplitude 1, eff1 27 PERSISTENT_AREA_AURA aura 4 DUMMY
+	// TargetA 18 RadiusIndex 36 chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 31 (8000ms, real row), rangeIdx 13
+	// (Anywhere - Unlimited, real row), school 0x1 Physical, dispel 0
+	// (no SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent). SummonProperties 1362 (Control 0 / Faction 0 /
+	// Title 0 / Slot 0 / Flags 0x800) seeded as a real row below
+	// (wago.tools 3.4.0.47659 SummonProperties read, browser
+	// 7f680372); the engine reads it via eff.MiscValueB
+	// (spells.go:6401). Engine twins: effSummon 28 / effPersistent-
+	// AreaAura 27 live, auraDummy 4 live, target 18 live. Removes
+	// the last unseeded-spell blocker for instance_pit_of_saron.lua
+	// (single-missing-id file).
+	{id: 69424, castTimeIdx: 1, durIdx: 31, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, targetA: targetDestCaster, misc: 36847, miscB: 1362, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraDummy, targetA: targetDestCaster, radiusIdx: 36, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -3168,7 +3224,7 @@ func main() {
 	// one Flags field). Row 81 is REAL (wago.tools 3.4.0.43659
 	// SummonProperties: Control 1/Guardian, Faction 0, Title 4/
 	// TOTEM, Slot 2 (earth totem), Flags_0 0x100002).
-	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}}
+	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}, {1362, 0, 0, 0, 0, 0x800}} // real SummonProperties 1362 for 69424 (wago.tools 3.4.0.47659, browser 7f680372)
 	if err := writeWDBC(filepath.Join(out, "SummonProperties.dbc"), 6, summonProps); err != nil {
 		panic(err)
 	}
