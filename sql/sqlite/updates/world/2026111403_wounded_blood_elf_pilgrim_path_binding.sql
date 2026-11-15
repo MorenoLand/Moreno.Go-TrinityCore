@@ -1,0 +1,19 @@
+-- Wounded Blood Elf Pilgrim escort path binding (Hellfire Peninsula, quest 9375).
+-- TDB 335.26091 moved the C++ script_waypoint path into waypoint_data
+-- under synthetic id 135945 (pts 1-36, coords identical to the 25101
+-- script_waypoint rows for entry 16993, spawn at -1137.73, 4272.1
+-- walking up to Falcon Watch) with no binding row:
+-- creature_template_addon.path_id is 0 for 16993 and no
+-- creature_addon row exists for the spawn GUID 59383, so
+-- loadCreaturePathID (creaturemotion.go) falls back to the spawn
+-- GUID, loadWaypoints finds no rows, and MoveWaypoint() is a
+-- no-op -- the lua_scripts/outland/npc_wounded_blood_elf.lua ev6
+-- arms (ambush summons, quest credit) can never fire. This UPDATE
+-- binds the template row to the orphaned path; the existing loader
+-- then walks the escort with zero engine changes. The AND path_id
+-- = 0 guard keeps the migration a no-op on a deployment DB that
+-- already binds this entry (e.g. a future full TDB import that
+-- sets path_id). Precondition: the rows exist (any full TDB import
+-- carries them); a deployment DB missing the rows needs them from
+-- the import, the UPDATE then affects 0 rows.
+UPDATE creature_template_addon SET path_id = 135945 WHERE entry = 16993 AND path_id = 0;

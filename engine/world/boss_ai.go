@@ -24152,6 +24152,14 @@ func init() {
 	// winds pumps, 30% free arm. Entry 17085 wowhead-only.
 	RegisterLuaBoss("npc_aeranas", 17085)
 	// Checked-no-gate: zero HasUnitState hits in zone_hellfire_peninsula.cpp — shock/winds pumps stay ungated.
+	// npc_wounded_blood_elf (Hellfire Peninsula, "The Road to Falcon
+	// Watch" escort) — ported arms in
+	// lua_scripts/outland/npc_wounded_blood_elf.lua: OnQuestAccept
+	// faction 775 + StartEscort + NPC-flags clear, combat pause,
+	// JustSummoned AttackStart, waypoint 9/13/14/27 ambush/credit
+	// arms + wp36 StopEscort. Entry 16993 TDB-verified; path
+	// binding in sql/*/updates/world/2026111403 (path 135945).
+	RegisterLuaBoss("npc_wounded_blood_elf", 16993)
 	// npc_magister_aledis (Hellfire Peninsula, Arelion's Secret duel)
 	// — ported arms in lua_scripts/outland/npc_magister_aledis.lua:
 	// Reset faction/gossip/immune, gossip-select duel chain,
