@@ -16,7 +16,8 @@
 -- "boss_volazj" hits boss_herald_volazj.cpp only (loader carries
 -- only the decl/call lines); zero sql/ hits.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 23 OnReset. Timers via CreateLuaEvent;
+-- OnTargetDied, 4 OnDied, 9 OnDamageTaken, 15 OnSpellHitTarget, 20
+-- OnSummonedCreatureDespawn, 23 OnReset. Timers via CreateLuaEvent;
 -- melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady. C++ DoCast default is triggered=false
 -- (vaelastrasz convention): creature:CastSpell(nil, spell) =
@@ -40,9 +41,9 @@
 -- playerOnly defaults false and dist 0.0f = any range, so the pick
 -- is a random alive threat-list unit of any type (C++ skips
 -- offline refs, UnitAI.h; Go SortedEntries returns dead too, so
--- IsAlive filters). The insanity wait-state pause of the scheduler
--- rides the unported insanity machine and never engages in the
--- ported model — but the BossAI scheduler CASTING validator DOES
+-- IsAlive filters). The insanity wait-state pause of the scheduler rides the
+-- ported insanity machine (wait-state pump below) — but the BossAI
+-- scheduler CASTING validator DOES
 -- gate the ported arms (ScriptedCreature.cpp:493-496): mind-flay /
 -- bolt / shiver all defer 500ms while casting, no repeat re-arm
 -- (see mindFlayTick). DamageTaken / KilledUnit / JustDied stay
@@ -55,9 +56,8 @@
 -- 57496) (event 9, pre-damage damage arg; InterruptNonMeleeSpells
 -- (false) has no bridge — documented; NOT_SELECTABLE damage=0
 -- leg reads creature:HasFlag (bridged, lua_creature_events.go:6374)
--- but the flag is never set in the ported model — the only SetFlag
--- leg rides the unported SpellHitTarget insanity machine, so the
--- read would be dead code (documented only).
+-- and is LIVE since the ev15 machine port (2026-11-14): the flag is
+-- set by the first insanity hit, cleared by the wait-state pump.
 -- Unmodeled (no bridges — documented, not wired):
 -- JustEngagedWith _instance->DoStartTimedAchievement(
 -- ACHIEVEMENT_TIMED_TYPE_EVENT, ACHIEV_QUICK_DEMISE_START_EVENT
@@ -73,44 +73,17 @@
 -- and creature:GetHealth()/GetMaxHealth() are bridged);
 -- me->InterruptNonMeleeSpells(false) — PORTED below (no-op twin,
 -- curator precedent).
--- SpellHitTarget(SPELL_INSANITY 57496) insanity machinery — stays
--- out on reachability grounds: the only 57496 cast is the
--- ported 66%/33% self-cast, whose hit target is the boss itself,
--- and the C++ arm's first gate (target->GetTypeId() != TYPEID_PLAYER)
--- rejects it — the payload (first-hit Insanity Visual 57561 +
--- SetFlag NOT_SELECTABLE + stun) requires the C++ implicit
--- area-targeting that puts players in the hit list, which Go's
--- self-cast model does not produce; firing it on the self-cast
--- would fabricate player hits. (The 2026-10-11 event-15 bridge is
--- live — the old "event 15 never fires" rationale is stale; the
--- remaining payload legs also need absent bridges:
--- SummonCreature(NPC_TWISTED_VISAGE 30625, TEMPSUMMON_CORPSE_
--- DESPAWN) (summon STRAND absent — standing), player->CastSpell(
--- summon, Spell Clone Player 57507, triggered) (player CastSpell
--- not bridged), summon->SetPhaseMask(1<<(4+_insanityHandled)) +
--- player phase-mask aura bookkeeping (no phase-mask bridge),
--- SetControlled(true, UNIT_STATE_STUNNED) (SetStunned bridged
--- 2026-11-13, follow-up strip 1 unit A — the leg itself stays out
--- with the rest of the ev15 machine, see below).)
--- Re-verified 2026-11-13 (hook strip round 7, group D): STAY OUT
--- still holds, but three bridge claims above are now stale —
--- player:CastSpell IS bridged (lua_player.go:3501), SummonCreature
--- IS bridged (lua_creature_events.go:4161), SetPhaseMask IS bridged
--- (lua_creature_events.go:3900). What still blocks a standalone
--- ev15 port (C++ arm boss_herald_volazj.cpp:135-171): SetStunned IS
--- bridged as of 2026-11-13 (follow-up strip 1, unit A — the
--- SetControlled claim above is retired); the first-hit leg sets
--- NOT_SELECTABLE whose only clearing path is the UpdateAI wait-state
--- (:262-270, _insanityHandled + summons.empty() + ev20 rollback,
--- unported) — porting ev15 alone would strand the boss
--- unattackable; and player-hit reachability (57496 DBC implicit
--- targets) cannot be settled in-repo (no Spell.dbc here — re-checked
--- 2026-11-13, follow-up strip 1 unit A: no Spell.dbc on disk,
--- world.db is a 0-byte placeholder, and s.Data.Spell(57496) cannot
--- resolve, so spellKnown=false and ev15 never fires for 57496 at
--- all, boss_ai.go:1825-1830/4240). Revisit
--- only as a whole-machine port (ev15 + ev20 + wait-state +
--- summons list) once Spell.dbc ships.
+-- SpellHitTarget(SPELL_INSANITY 57496) insanity machinery — PORTED
+-- 2026-11-14 (whole machine: ev15 + ev20 + wait-state pump +
+-- visage tracking, see below): 57496 seeded from wago 3.4.0.43659
+-- (ImplicitTargetA 22 SRC_CASTER / B 15 SRC_AREA_ENEMY, radius 28)
+-- so the 66%/33% self-cast hits players and ev15 fires per player
+-- (boss_ai.go:4234-4290); the old "no Spell.dbc / spellKnown=false"
+-- stay-out is retired. First hit starts the visual (57561),
+-- NOT_SELECTABLE + stun; each hit phases its player (57508+handled)
+-- and summons a Twisted Visage per alive map player, cloned via
+-- player:CastSpell (triggered-only funnel, lua_player.go:3531) and
+-- phased 1<<(4+handled) (SetPhaseMask bridged).
 -- Reset: SetPhaseMask((1|16|32|64|128|256), true) (no phase-mask
 -- bridge); ResetPlayersPhaseMask() is PORTED below via
 -- resetPlayersPhaseMask (player:RemoveAura x5 — the old
@@ -120,18 +93,17 @@
 -- SetControlled(false, UNIT_STATE_STUNNED) PORTED 2026-11-13
 -- (follow-up strip 1, unit A — creature:SetStunned(false) in
 -- volazjReset below).
--- SummonedCreatureDespawn visage-phase roll-back machine
--- (ObjectAccessor::GetCreature per-summon phase walk, player
--- phasing-aura re-roll 57508-57512): summon STRAND + cross-AI
--- + phase + aura-removal bridges absent.
--- UpdateAI insanity wait-state (UpdateVictim early-return then the
--- _insanityHandled / summons.empty() gate): whole machine rides
--- the unported insanity payload (summon strand + player-cast clone
--- + phase mask + stun-control); the DamageTaken crossing arm is
--- ported above and ev15 is unregistered (no ev15 handler below) and unreachable for 57496.
--- The wait-state cleanup leg's SetControlled(false, UNIT_STATE_STUNNED)
--- (boss_herald_volazj.cpp:269) stays out too — the wait-state machine
--- is unported (the SetStunned bridge itself exists since 2026-11-13).
+-- SummonedCreatureDespawn visage-phase roll-back machine — PORTED
+-- 2026-11-14 (ev20, C++ :205-232): tracked visages keep summon
+-- order (hyjal precedent); a same-phase survivor blocks the roll,
+-- else players holding the despawned phase's aura roll to the last
+-- surviving phase (player:HasAura/RemoveAura/CastSpell bridged).
+-- UpdateAI insanity wait-state (C++ :262-270) — PORTED 2026-11-14
+-- as a 1s CreateLuaEvent pump: while visages remain the scheduler
+-- stays paused (rotation ticks poll insanityActive); once empty,
+-- handled resets, NOT_SELECTABLE + stun + visual clear. The
+-- DamageTaken crossing arm is ported above; ev15/ev20 registered
+-- below.
 -- npc_twisted_visage: NO AI EXISTS in C++ (file header comment
 -- "Missing AI for Twisted Visages" — zero Register* lines for it);
 -- NPC_TWISTED_VISAGE = 30625 is entry-verifiable (ahnkahet.h —
@@ -149,6 +121,10 @@ local SPELL_MIND_FLAY = 57941
 local SPELL_SHADOW_BOLT_VOLLEY = 57942
 local SPELL_SHIVER = 57949
 local SPELL_INSANITY = 57496 -- boss_herald_volazj.cpp:34
+local SPELL_INSANITY_VISUAL = 57561 -- boss_herald_volazj.cpp:35
+local SPELL_CLONE_PLAYER = 57507 -- boss_herald_volazj.cpp:40
+local NPC_TWISTED_VISAGE = 30625 -- ahnkahet.h:70
+local TEMPSUMMON_CORPSE_DESPAWN = 4 -- Go 0-based TempSummonType scheme (lua_creature_events.go:58; C++ 5)
 
 -- UnitDefines.h:149; RemoveFlag on UNIT_FIELD_FLAGS (59) is bridged
 -- (engine/world/lua_creature_events.go:6540).
@@ -167,6 +143,9 @@ local SPELL_INSANITY_PHASING_2 = 57509 -- boss_herald_volazj.cpp:42
 local SPELL_INSANITY_PHASING_3 = 57510 -- boss_herald_volazj.cpp:43
 local SPELL_INSANITY_PHASING_4 = 57511 -- boss_herald_volazj.cpp:44
 local SPELL_INSANITY_PHASING_5 = 57512 -- boss_herald_volazj.cpp:45
+-- Phase masks for the phasing auras (MiscValue): 57508->16,
+-- 57509->32, 57510->64, 57511->128, 57512->256.
+local INSANITY_PHASES = { 16, 32, 64, 128, 256 }
 
 local timers = {}
 
@@ -218,6 +197,59 @@ local function schedule(guid, key, delay, fn)
     per[key] = CreateLuaEvent(fn, delay)
 end
 
+local insanity = {} -- per-GUID { handled = n, visages = { { guid, phase } } }
+
+local function insanityState(guid)
+    local st = insanity[guid]
+    if not st then
+        st = { handled = 0, visages = {} }
+        insanity[guid] = st
+    end
+    return st
+end
+
+-- C++ UpdateAI wait-state gate (cpp:262-264): while insanity is
+-- handled the BossAI scheduler never runs — the rotation ticks poll
+-- this and re-arm on a 1s delay instead of casting.
+local function insanityActive(guid)
+    local st = insanity[guid]
+    return st ~= nil and st.handled > 0
+end
+
+local function spellForPhaseMask(phase)
+    if phase == 16 then
+        return SPELL_INSANITY_PHASING_1
+    elseif phase == 32 then
+        return SPELL_INSANITY_PHASING_2
+    elseif phase == 64 then
+        return SPELL_INSANITY_PHASING_3
+    elseif phase == 128 then
+        return SPELL_INSANITY_PHASING_4
+    elseif phase == 256 then
+        return SPELL_INSANITY_PHASING_5
+    end
+    return 0
+end
+
+-- BossAI::_Reset/_JustDied (ScriptedCreature.cpp:499-516):
+-- summons.DespawnAll() — each visage despawn fires ev20 below, but
+-- the state is cleared first so the roll-back (moot: Reset/Died
+-- strip all phasing auras right after) does not run mid-iteration.
+local function despawnVisages(creature)
+    local guid = creature:GetGUIDLow()
+    local st = insanity[guid]
+    if not st then
+        return
+    end
+    insanity[guid] = nil
+    for _, v in ipairs(st.visages) do
+        local visage = creature:GetCreatureByGUID(v.guid)
+        if visage then
+            visage:Despawn()
+        end
+    end
+end
+
 -- C++ EVENT_MIND_FLAY: JustEngagedWith-scheduled 8s init,
 -- rescheduled 20s; DoCastVictim. BossAI scheduler validator
 -- (ScriptedCreature.cpp:493-496, set in the BossAI ctor): while
@@ -227,6 +259,12 @@ end
 -- the validator gates these tasks even though volazj overrides
 -- UpdateAI, because the scheduler itself is BossAI's.
 local function mindFlayTick(creature, guid)
+    if insanityActive(guid) then
+        schedule(guid, "mindflay", 1000, function()
+            mindFlayTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "mindflay", 500, function()
             mindFlayTick(creature, guid)
@@ -243,6 +281,12 @@ end
 -- init, task.Repeat() = same 5s duration (TaskScheduler.h line
 -- 485); DoCastVictim.
 local function shadowBoltTick(creature, guid)
+    if insanityActive(guid) then
+        schedule(guid, "shadowbolt", 1000, function()
+            shadowBoltTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "shadowbolt", 500, function()
             shadowBoltTick(creature, guid)
@@ -262,6 +306,12 @@ end
 -- pool filters IsAlive (UnitAI.h; Go SortedEntries returns dead
 -- too). No cast on an empty pool; DoCast non-triggered.
 local function shiverTick(creature, guid)
+    if insanityActive(guid) then
+        schedule(guid, "shiver", 1000, function()
+            shiverTick(creature, guid)
+        end)
+        return
+    end
     if creature:IsCasting() then
         schedule(guid, "shiver", 500, function()
             shiverTick(creature, guid)
@@ -323,6 +373,7 @@ local function volazjDied(event, creature, killer)
     if data then
         data.heraldVolazjDone = true
     end
+    despawnVisages(creature) -- BossAI::_JustDied summons.DespawnAll()
     creature:Talk(SAY_DEATH)
     resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:284, C++
                                      -- arm order (after Talk)
@@ -338,15 +389,16 @@ end
 
 local function volazjReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
+    despawnVisages(creature) -- BossAI::_Reset summons.DespawnAll()
     resetPlayersPhaseMask(creature) -- boss_herald_volazj.cpp:80, C++
                                      -- arm order (after the SetPhaseMask
                                      -- leg, whose bridge is absent)
     -- boss_herald_volazj.cpp:83 — C++ arm order after ResetPlayersPhaseMask
     -- (ported 2026-10-20); boss_herald_volazj.cpp:84 SetControlled(false,
     -- UNIT_STATE_STUNNED) PORTED 2026-11-13 (follow-up strip 1, unit A —
-    -- creature:SetStunned is bridged, lua_creature_events.go). In the
-    -- ported model nothing ever sets the stun (the ev15 machine stays
-    -- out), so this is a no-op clear — C++-exact, harmless.
+    -- creature:SetStunned is bridged, lua_creature_events.go). Live
+    -- clear since the ev15 machine port (2026-11-14): the stun is set
+    -- by the first insanity hit.
     creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
     creature:SetStunned(false)
 end
@@ -357,15 +409,19 @@ end
 -- -> me->InterruptNonMeleeSpells(false) (ported below, no-op twin)
 -- + DoCast(me, SPELL_INSANITY, false) = self-cast, non-triggered
 -- (vaelastrasz convention: CastSpell(creature, spell) = DoCastSelf).
--- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg is dead code in the
--- ported model: creature:HasFlag IS bridged, but the flag is only
--- set by the unported SpellHitTarget insanity machine (stays out
--- on reachability/payload grounds — see header; 2026-10-23
--- downgrade), so it never fires in Lua. Event 9 fires pre-damage
--- carrying damage (eck precedent),
+-- The UNIT_FLAG_NOT_SELECTABLE damage=0 leg is LIVE since the ev15
+-- machine port (2026-11-14): the flag is set by the first insanity
+-- hit, and the rewrite rides the ev9 second return (garr precedent:
+-- return false, 0). Event 9 fires pre-damage carrying damage (eck
+-- precedent),
 -- so pre/post pct are C++-exact. No once-latch in C++: a re-cross
 -- after a heal re-fires.
 local function volazjDamageTaken(event, creature, attacker, damage)
+    -- C++ DamageTaken (cpp:114-117): NOT_SELECTABLE nullifies the hit;
+    -- with damage 0 the crossing check below cannot fire (post == pre).
+    if creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE) then
+        return false, 0
+    end
     local health = creature:GetHealth()
     local maxHealth = creature:GetMaxHealth()
     if maxHealth == 0 then
@@ -383,6 +439,121 @@ local function volazjDamageTaken(event, creature, attacker, damage)
         creature:InterruptNonMeleeSpells(false)
         creature:CastSpell(creature, SPELL_INSANITY)
     end
+    return false, damage
+end
+
+-- C++ UpdateAI wait-state (cpp:262-270) as a 1s pump: while visages
+-- remain, re-arm; once empty, handled resets, NOT_SELECTABLE clears,
+-- the stun clears and the visual aura drops. Runs only while insanity
+-- is handled (started by the first ev15 hit, cancelled by
+-- cancelTimers on ev2/4/23).
+local function insanityWaitTick(creature, guid)
+    local st = insanity[guid]
+    if not st or st.handled == 0 then
+        return
+    end
+    if #st.visages > 0 then
+        schedule(guid, "insanity", 1000, function()
+            insanityWaitTick(creature, guid)
+        end)
+        return
+    end
+    insanity[guid] = nil
+    creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+    creature:SetStunned(false)
+    creature:RemoveAura(SPELL_INSANITY_VISUAL)
+end
+
+-- C++ SpellHitTarget (cpp:135-171): Insanity hit on a player — up to
+-- 5 hits (handled 0-4); first hit starts the channel visual, sets
+-- NOT_SELECTABLE + stun, and starts the wait-state pump; every hit
+-- phases its player (57508+handled) and summons a Twisted Visage per
+-- alive map player, cloned from that player (57507) and phased
+-- 1<<(4+handled). The boss itself is a hit target of the self-cast
+-- (ImplicitTargetA 22) and is rejected by the player gate.
+local function volazjSpellHitTarget(event, creature, target, spellId)
+    if spellId ~= SPELL_INSANITY then
+        return
+    end
+    if not target or target:GetObjectType() ~= "Player" then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local st = insanityState(guid)
+    if st.handled > 4 then
+        return
+    end
+    if st.handled == 0 then
+        creature:CastSpell(creature, SPELL_INSANITY_VISUAL, true)
+        creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE)
+        creature:SetStunned(true)
+        schedule(guid, "insanity", 1000, function()
+            insanityWaitTick(creature, guid)
+        end)
+    end
+    target:CastSpell(target, SPELL_INSANITY_PHASING_1 + st.handled)
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    local x, y, z, o = creature:GetX(), creature:GetY(), creature:GetZ(), creature:GetO()
+    local phase = INSANITY_PHASES[st.handled + 1]
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId and plr:IsAlive() then
+            local visage = creature:SummonCreature(NPC_TWISTED_VISAGE, x, y, z, o, TEMPSUMMON_CORPSE_DESPAWN)
+            if visage then
+                plr:CastSpell(visage, SPELL_CLONE_PLAYER)
+                visage:SetPhaseMask(phase, true)
+                st.visages[#st.visages + 1] = { guid = visage:GetGUIDLow(), phase = phase }
+            end
+        end
+    end
+    st.handled = st.handled + 1
+end
+
+-- C++ SummonedCreatureDespawn (cpp:205-232): prune the visage, then
+-- if another visage in the same phase is still alive, wait; else roll
+-- every player holding this phase's aura to the last surviving phase
+-- (or strip it when none survives). The loop keeps summon order, so
+-- nextPhase is the last remaining visage's phase, C++-exact.
+local function volazjSummonDespawn(event, creature, summon)
+    local guid = creature:GetGUIDLow()
+    local st = insanity[guid]
+    if not st then
+        return
+    end
+    local sguid = summon:GetGUIDLow()
+    local phase = 0
+    for i, v in ipairs(st.visages) do
+        if v.guid == sguid then
+            phase = v.phase
+            table.remove(st.visages, i)
+            break
+        end
+    end
+    if phase == 0 then
+        return
+    end
+    local nextPhase = 0
+    for _, v in ipairs(st.visages) do
+        if v.phase == phase then
+            return
+        end
+        nextPhase = v.phase
+    end
+    local spell = spellForPhaseMask(phase)
+    local spell2 = spellForPhaseMask(nextPhase)
+    if spell == 0 then
+        return
+    end
+    local mapId = creature:GetMapId()
+    local instanceId = creature:GetInstanceId()
+    for _, plr in ipairs(GetPlayersInWorld()) do
+        if plr:GetMapId() == mapId and plr:GetInstanceId() == instanceId and plr:HasAura(spell) then
+            plr:RemoveAura(spell)
+            if spell2 ~= 0 then
+                plr:CastSpell(plr, spell2)
+            end
+        end
+    end
 end
 
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 1, volazjEnterCombat)
@@ -392,3 +563,5 @@ RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 4, volazjDied)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 5, volazjSpawned)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 23, volazjReset)
 RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 9, volazjDamageTaken)
+RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 15, volazjSpellHitTarget)
+RegisterCreatureEvent(ENTRY_HERALD_VOLAZJ, 20, volazjSummonDespawn)
