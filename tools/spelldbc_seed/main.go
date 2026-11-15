@@ -2029,6 +2029,91 @@ var spells = []spell{
 	{id: 38196, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 20, chainAmplitude: 1},
 	}},
+	// 6533 Throw Net (boss_gelihast.cpp:24 enum, :50-53 DoCastVictim
+	// on a 2s/4s init / 4s/7s re-arm timer; Lua
+	// boss_gelihast.lua:32 victim cast) — wago.tools 3.4.0.47659
+	// SpellEffect rows 686197/686198 + SpellMisc 320465
+	// (2026-11-15 browser read, DifficultyID 0 rows): eff0 6
+	// APPLY_AURA aura 26 MOD_ROOT Die 0 Base 0 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY; eff1 64 TRIGGER_SPELL trigger
+	// 11920 Die 1 TargetA 6; castTimeIdx 1 (instant, real row),
+	// durIdx 39 (2000ms, real row — 57994 precedent), rangeIdx 3
+	// (Twenty yards, real row — 15574 precedent), school 0x1
+	// Physical. NOT carried: DifficultyID 173/174 rows (durIdx 1,
+	// eff1 Base 1) — seed takes the DifficultyID 0 row per
+	// convention; no Dispel column in this build's SpellMisc, so
+	// dispel stays 0. Engine twins: auraRoot live (cc_break.go:104,
+	// lua_unit_state.go:170), effTriggerSpell live (spells.go:385).
+	// 11920 (the triggered spell) is unseeded — follow-up read.
+	// Removes the last unseeded-spell blocker for
+	// boss_gelihast.lua (single-missing-id file).
+	{id: 6533, castTimeIdx: 1, durIdx: 39, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, targetA: targetEnemy},
+		{effect: effTriggerSpell, dieSides: 1, trigger: 11920, targetA: targetEnemy},
+	}},
+	// 10101 Knock Away (boss_highlord_omokk.cpp:25 enum, :84
+	// DoCastVictim; Lua boss_highlord_omokk.lua:44 victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows 688723/688724/688725
+	// + SpellMisc 322511 (2026-11-15 browser read): eff0 58
+	// WEAPON_DAMAGE Die 1 Base 29 TargetA 6; eff1 98 KNOCK_BACK
+	// Die 75 Base 112 Misc 75 TargetA 6; eff2 6 APPLY_AURA aura 12
+	// MOD_STUN Die 0 Base 0 TargetA 6; castTimeIdx 1 (instant, real
+	// row), durIdx 0 (no SpellDuration row 0 exists in this build —
+	// the stun aura takes duration 0, store.go:2284-2287), rangeIdx
+	// 7 (Ten yards, real row — 49256 precedent), school 0x1
+	// Physical. NOT carried: EffectBonusCoefficient 1 (seed has no
+	// coefficient field); no Dispel column in this build's
+	// SpellMisc, so dispel stays 0. Engine twins:
+	// effWeaponDamage (spells.go:233, handled :15028/:15037),
+	// effKnockBack (spells.go:454, handled :18835/:18882),
+	// auraStun live (cc_break.go:104). Removes the last
+	// unseeded-spell blocker for boss_highlord_omokk.lua
+	// (single-missing-id file).
+	{id: 10101, castTimeIdx: 1, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 29, targetA: targetEnemy},
+		{effect: effKnockBack, dieSides: 75, basePoints: 112, misc: 75, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy},
+	}},
+	// 12795 Frenzy (boss_glutton.cpp:33 enum, :86 DoCast(me)
+	// self-cast; Lua boss_glutton.lua:55 self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows 691492/691493 + SpellMisc 324830
+	// (2026-11-15 browser read): eff0 6 APPLY_AURA aura 13
+	// MOD_DAMAGE_DONE Die 1 Base 0 Misc 1 RealPointsPerLevel 1
+	// TargetA 1 TARGET_UNIT_CASTER; eff1 6 APPLY_AURA aura 138
+	// MOD_MELEE_HASTE Die 1 Base 29 TargetA 1 (30% haste);
+	// castTimeIdx 1 (instant, real row), durIdx 4 (120000ms, real
+	// row — 67530 precedent), rangeIdx 1 (Self Only, real row),
+	// school 0x1 Physical. NOT carried: RealPointsPerLevel 1 (seed
+	// has no per-level field); no Dispel column in this build's
+	// SpellMisc, so dispel stays 0. Engine twins: auraModDamageDone
+	// (spells.go:689, 8269 precedent), auraModMeleeHaste (8269
+	// precedent). Removes the last unseeded-spell blocker for
+	// boss_glutton.lua (single-missing-id file).
+	{id: 12795, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, misc: 1, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 29, targetA: targetCaster},
+	}},
+	// 15531 Frost Nova (boss_amnennar_the_coldbringer.cpp:35 enum,
+	// :114 DoCast(me) self-cast; Lua
+	// boss_amnennar_the_coldbringer.lua:75 self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows 692387/692388 + SpellMisc 325606
+	// (2026-11-15 browser read): eff0 2 SCHOOL_DAMAGE Die 19 Base
+	// 110 TargetA 22 TARGET_SRC_CASTER TargetB 15
+	// TARGET_UNIT_SRC_AREA_ENEMY RadiusIndex_1 13 (10yd, real row)
+	// chainAmplitude 1 (111-129 damage); eff1 6 APPLY_AURA aura 26
+	// MOD_ROOT Die 1 Base -1 TargetA 22 TargetB 15 RadiusIndex_0
+	// 13 chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 31 (8000ms, real row — 2139 precedent), rangeIdx 1
+	// (Self Only, real row), school 0x10 Frost. NOT carried:
+	// EffectBonusCoefficient 1 (seed has no coefficient field); no
+	// Dispel column in this build's SpellMisc, so dispel stays 0.
+	// Engine twins: effSchoolDamage + auraRoot live. Removes the
+	// last unseeded-spell blocker for
+	// boss_amnennar_the_coldbringer.lua (single-missing-id file).
+	{id: 15531, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 19, basePoints: 110, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
 }
 
 func main() {
