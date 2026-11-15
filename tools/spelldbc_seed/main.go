@@ -3211,6 +3211,76 @@ var spells = []spell{
 	{id: 56142, castTimeIdx: 1, durIdx: 23, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, dieSides: 1, targetA: targetDestCaster, misc: 30084, miscB: 1362, chainAmplitude: 1},
 	}},
+	// 55852 Power Spark Death (wago name; C++ SPELL_POWER_SPARK_DEATH,
+	// boss_malygos.cpp:109 enum; Lua npc_power_spark.lua:26 const, :31
+	// JustDied triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-15 browser read 555b443f, DifficultyID 0
+	// rows): single eff0 6 APPLY_AURA aura 23 PERIODIC_TRIGGER_SPELL
+	// period 1000 basePoints -1 dieSides 1 trigger 55849 TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 3 (60000ms, real row), rangeIdx 1 (Self Only,
+	// real row), school 0x1 Physical, dispel 0 (no SpellCategories
+	// row). NOT carried: no SpellPower row; SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent). Engine twin:
+	// auraPeriodicTrig 23 live, target 1 live. Removes the last
+	// unseeded-spell blocker for npc_power_spark.lua
+	// (single-missing-id file).
+	{id: 55852, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, basePoints: -1, dieSides: 1, trigger: 55849, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 21343 Snowball (wago name; C++ SPELL_SNOWBALL,
+	// childrens_week.cpp:130 enum; Lua npc_snowfall_glade_playmate.lua:34
+	// const, :151/:158 non-triggered casts) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read 555b443f,
+	// DifficultyID 0 rows): single eff0 3 DUMMY TargetA 25
+	// TARGET_UNIT_TARGET_ANY chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 0 (no SpellDuration row), rangeIdx 4 (Medium
+	// Range, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row; Category 1197 NOT carried, no field, 30621
+	// precedent). NOT carried: no SpellPower row; no SpellAuraOptions
+	// row; Speed 25 (no speed field). Engine twins: effDummy 3 live,
+	// target 25 live. Removes the last unseeded-spell blocker for
+	// npc_snowfall_glade_playmate.lua (single-missing-id file).
+	{id: 21343, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 55708 Storm Visual (wago name; C++ STORM_VISUAL,
+	// zone_zuldrak.cpp:905 enum; Lua npc_storm_cloud.lua:150 const, :161
+	// triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 555b443f, DifficultyID 0
+	// rows): single eff0 6 APPLY_AURA aura 4 DUMMY TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 21 (-1 infinite, real row), rangeIdx 1 (Self
+	// Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent). Engine twin: auraDummy 4 live, target 1 live.
+	// Removes the last unseeded-spell blocker for npc_storm_cloud.lua
+	// (single-missing-id file).
+	{id: 55708, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 43289 Summon Freed Mist Whisper Scout (wago name; C++
+	// SPELL_SUMMON_FREED_MIST_WHISPER_SCOUT, zone_howling_fjord.cpp:530
+	// enum; Lua npc_riven_widow_cocoon.lua:31 const, :57 player
+	// triggered cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 555b443f, DifficultyID 0
+	// rows): single eff0 28 SUMMON misc 24211 miscB 66 TargetA 63
+	// TARGET_DEST_TARGET_ANY chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 3 (60000ms, real row), rangeIdx 13 (Anywhere -
+	// Unlimited, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent). Engine twins: effSummon 28 live (spells.go:6395,
+	// miscB=SummonProperties id), target 63 live
+	// (target_dest_targets.go:14), SummonProperties 66 real row added
+	// below (wago.tools 3.4.0.47659 SummonProperties read, browser
+	// 3ce851bf: Control 0 / Faction 0 / Title 0 / Slot 0, Flags 0x1).
+	// Removes the last unseeded-spell blocker for
+	// npc_riven_widow_cocoon.lua (single-missing-id file).
+	{id: 43289, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, targetA: targetDestTargetAny, misc: 24211, miscB: 66, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -3378,7 +3448,7 @@ func main() {
 	// one Flags field). Row 81 is REAL (wago.tools 3.4.0.43659
 	// SummonProperties: Control 1/Guardian, Faction 0, Title 4/
 	// TOTEM, Slot 2 (earth totem), Flags_0 0x100002).
-	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}, {1362, 0, 0, 0, 0, 0x800}} // real SummonProperties 1362 for 69424 (wago.tools 3.4.0.47659, browser 7f680372)
+	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}, {1362, 0, 0, 0, 0, 0x800}, {66, 0, 0, 0, 0, 0x1}} // real SummonProperties 1362 for 69424 (wago.tools 3.4.0.47659, browser 7f680372); real SummonProperties 66 for 43289 (wago.tools 3.4.0.47659, browser 3ce851bf)
 	if err := writeWDBC(filepath.Join(out, "SummonProperties.dbc"), 6, summonProps); err != nil {
 		panic(err)
 	}
