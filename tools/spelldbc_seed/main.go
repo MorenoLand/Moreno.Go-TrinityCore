@@ -1910,6 +1910,42 @@ var spells = []spell{
 	{id: 14894, castTimeIdx: 1, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
 		{effect: effLearnSpell, trigger: 14891, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 1106 Shadow Bolt (boss_bloodmage_thalnos.cpp:32 enum, :91-92
+	// DoCastVictim on a 2s init / 2s re-arm timer; Lua
+	// boss_bloodmage_thalnos.lua:111 victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 680338 + SpellMisc 315311
+	// (2026-11-15 browser read): single eff0 2 SCHOOL_DAMAGE Die
+	// 21 Base 141 TargetA 6 TARGET_UNIT_TARGET_ENEMY
+	// chainAmplitude 1 (141+1 .. 141+21 damage); castTimeIdx 14
+	// (3000ms, real row — 67528 precedent), durIdx 0, rangeIdx 4
+	// (Medium Range 0-30yd, real row — 54690 precedent), school
+	// 0x20 Shadow. NOT carried: EffectBonusCoefficient 0.857 /
+	// EffectRealPointsPerLevel 1.6 / Speed 20 (seed has no
+	// coefficient or speed field); no Dispel column in this
+	// build's SpellMisc, so dispel stays 0. Thalnos still casts
+	// 8814 Flame Spike + 16079 Fire Nova unseeded (follow-up read).
+	{id: 1106, castTimeIdx: 14, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 21, basePoints: 141, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 8053 Flame Shock (boss_bloodmage_thalnos.cpp:31 enum, :87-88
+	// DoCastVictim on a 10s init / {10s,15s} re-arm timer; Lua
+	// boss_bloodmage_thalnos.lua:93 victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows 686555/686556 + SpellMisc
+	// 320746 (2026-11-15 browser read): eff0 2 SCHOOL_DAMAGE
+	// Die 1 Base 85 TargetA 6; eff1 6 APPLY_AURA aura 3
+	// PERIODIC_DAMAGE auraPeriod 3000 Die 1 Base 23 TargetA 6
+	// (85 direct + 23 per 3s tick); castTimeIdx 1 (instant, real
+	// row), durIdx 85 (18000ms, real row — 2767 precedent, same
+	// DurationIndex), rangeIdx 34 (0-25yd, real row — 57994
+	// precedent), school 0x4 Fire. NOT carried:
+	// EffectBonusCoefficient 0.214/0.1 / RealPointsPerLevel 1.7
+	// (seed has no coefficient field); no Dispel column in this
+	// build's SpellMisc, so dispel stays 0. Engine twins:
+	// effSchoolDamage + auraPeriodicDmg live handlers.
+	{id: 8053, castTimeIdx: 1, durIdx: 85, rangeIdx: 34, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 85, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 23, auraPeriod: 3000, targetA: targetEnemy},
+	}},
 }
 
 func main() {
