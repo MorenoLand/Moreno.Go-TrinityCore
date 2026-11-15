@@ -2044,12 +2044,27 @@ var spells = []spell{
 	// convention; no Dispel column in this build's SpellMisc, so
 	// dispel stays 0. Engine twins: auraRoot live (cc_break.go:104,
 	// lua_unit_state.go:170), effTriggerSpell live (spells.go:385).
-	// 11920 (the triggered spell) is unseeded — follow-up read.
+	// 11920 (the triggered spell) seeded below — follow-up read landed.
 	// Removes the last unseeded-spell blocker for
 	// boss_gelihast.lua (single-missing-id file).
 	{id: 6533, castTimeIdx: 1, durIdx: 39, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraRoot, targetA: targetEnemy},
 		{effect: effTriggerSpell, dieSides: 1, trigger: 11920, targetA: targetEnemy},
+	}},
+	// 11920 Net (triggered by 6533 Throw Net eff1, boss_gelihast.cpp:24;
+	// Lua boss_gelihast.lua:32) — wago.tools 3.4.0.47659 SpellEffect row
+	// 688535 + SpellMisc 322355 (2026-11-15 browser read, DifficultyID 0
+	// rows): eff0 6 APPLY_AURA aura 4 DUMMY Die 0 Base 0 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY; castTimeIdx 1 (instant, real row),
+	// durIdx 18 (20000ms, real row — 29946 precedent), rangeIdx 13
+	// (Anywhere - Unlimited 0-50000yd, real row — 29967 precedent),
+	// school 0x1 Physical, dispel 0 (SpellCategories 73520, DispelType 0).
+	// NOT carried: no SpellPower row, no SpellAuraOptions row (no proc
+	// chance/mask); EffectBonusCoefficient 0 / RealPointsPerLevel 0
+	// (seed has no coefficient fields). Engine twin: auraDummy live
+	// handler. The 6533 trigger leg now resolves end-to-end.
+	{id: 11920, castTimeIdx: 1, durIdx: 18, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetEnemy},
 	}},
 	// 10101 Knock Away (boss_highlord_omokk.cpp:25 enum, :84
 	// DoCastVictim; Lua boss_highlord_omokk.lua:44 victim cast) —
@@ -2114,6 +2129,92 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 19, basePoints: 110, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
+	// 17234 Shadow Shock (boss_illucia_barov.cpp:82 DoCast random
+	// target (SelectTarget Random, 0, 100) SPELL_SHADOWSHOCK,
+	// triggered; Lua boss_illucia_barov.lua:110 target cast,
+	// triggered) — wago.tools 3.4.0.47659 SpellEffect row 694112 +
+	// SpellMisc 326988 + SpellCategories 75100 (2026-11-15 browser
+	// read, DifficultyID 0 rows): single eff0 2 SCHOOL_DAMAGE Die
+	// 33 Base 209 TargetA 6 TARGET_UNIT_TARGET_ENEMY
+	// chainAmplitude 1 (210-242 damage); castTimeIdx 1 (instant,
+	// real row), durIdx 0 (no SpellDuration row 0 exists in this
+	// build), rangeIdx 3 (Twenty yards, real row — 15574
+	// precedent), school 0x20 Shadow, dispel 0 (SpellCategories
+	// 75100). NOT carried: EffectBonusCoefficient 1 (seed has no
+	// coefficient field); no SpellAuraOptions row, no SpellPower
+	// row. Engine twin: effSchoolDamage live handler. Removes the
+	// last unseeded-spell blocker for boss_illucia_barov.lua
+	// (single-missing-id file).
+	{id: 17234, castTimeIdx: 1, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 33, basePoints: 209, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16791 Furious Anger (boss_magistrate_barthilas.cpp:115
+	// DoCast(me, SPELL_FURIOUS_ANGER, false) self-cast
+	// non-triggered; Lua boss_magistrate_barthilas.lua:112
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect rows
+	// 693618/693619/693620 + SpellMisc 326612 (2026-11-15 browser
+	// read, DifficultyID 0 rows): eff0 6 APPLY_AURA aura 13
+	// MOD_DAMAGE_DONE Die 1 Base 14 Misc 1 TargetA 1
+	// TARGET_UNIT_CASTER; eff1 6 APPLY_AURA aura 138
+	// MOD_MELEE_HASTE Die 1 Base 3 TargetA 1; eff2 6 APPLY_AURA
+	// aura 61 MOD_SCALE Die 1 Base 4 TargetA 1; castTimeIdx 1
+	// (instant, real row), durIdx 3 (60000ms, real row — 31331
+	// precedent), rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical. NOT carried: SpellAuraOptions ProcChance 101 /
+	// ProcTypeMask 0 (seed has no SpellAuraOptions table);
+	// EffectBonusCoefficient 0/1 (seed has no coefficient field);
+	// no SpellCategories row, so dispel stays 0. Engine twins:
+	// auraModDamageDone spells.go:689, auraModMeleeHaste
+	// aura_haste.go:44 + creature_auras.go:1735, auraModScale
+	// aura_unit.go:44-50 (8269 Frenzy precedent for all three).
+	// Removes the last unseeded-spell blocker for
+	// boss_magistrate_barthilas.lua (single-missing-id file).
+	{id: 16791, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 14, misc: 1, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 3, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 4, targetA: targetCaster},
+	}},
+	// 17470 Ravenous Claw (boss_timmy_the_cruel.cpp:89
+	// DoCastVictim(SPELL_RAVENOUSCLAW); Lua
+	// boss_timmy_the_cruel.lua:83 victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 694808 + SpellMisc 327536 +
+	// SpellCategories 75307 (2026-11-15 browser read,
+	// DifficultyID 0 rows): single eff0 9 HEALTH_LEECH Die 151
+	// Base 924 TargetA 6 TARGET_UNIT_TARGET_ENEMY; castTimeIdx 1
+	// (instant, real row), durIdx 0 (no SpellDuration row 0
+	// exists in this build), rangeIdx 2 (Combat Range 0-5yd, real
+	// row), school 0x1 Physical, dispel 0 (SpellCategories
+	// 75307). NOT carried: EffectAmplitude 1 (seed has no
+	// amplitude field, precedent main.go:762/:1083);
+	// EffectBonusCoefficient 0 (seed has no coefficient field);
+	// no SpellAuraOptions row. Engine twin: effHealthLeech
+	// spells.go:18601 case + :18638 handleEffectHealthLeech.
+	// Removes the last unseeded-spell blocker for
+	// boss_timmy_the_cruel.lua (single-missing-id file).
+	{id: 17470, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effHealthLeech, dieSides: 151, basePoints: 924, targetA: targetEnemy},
+	}},
+	// 23261 Summon Darkreaver's Fallen Charger
+	// (boss_death_knight_darkreaver.cpp:50 DoCast(me, 23261, true)
+	// triggered self-cast; Lua
+	// boss_death_knight_darkreaver.lua:33 triggered self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row 699983 + SpellMisc
+	// 331708 (2026-11-15 browser read, DifficultyID 0 rows):
+	// single eff0 28 SUMMON Die 1 Base 0 Misc 14568 MiscB 64
+	// TargetA 32 TARGET_DEST_CASTER_SUMMON RadiusIndex_0 15 (3yd,
+	// real row); castTimeIdx 1 (instant, real row), durIdx 367
+	// (7200000ms, real row added below), rangeIdx 12 (Interact
+	// Range 0-5yd, real row added below), school 0x1 Physical.
+	// NOT carried: EffectBonusCoefficient 1 (seed has no
+	// coefficient field); no SpellCategories row, so dispel stays
+	// 0; no SpellAuraOptions row. SummonProperties 64 real row
+	// pre-existing in the seed. Engine twin: effSummon live
+	// handler (50415 precedent). Removes the last unseeded-spell
+	// blocker for boss_death_knight_darkreaver.lua
+	// (single-missing-id file).
+	{id: 23261, castTimeIdx: 1, durIdx: 367, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, targetA: targetDestCasterSummon, radiusIdx: 15, misc: 14568, miscB: 64},
+	}},
 }
 
 func main() {
@@ -2162,6 +2263,7 @@ func main() {
 		{9, 30000, 0, 30000},    // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 		{85, 18000, 0, 18000},   // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
 		{25, 180000, 0, 180000}, // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
+		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
@@ -2251,6 +2353,7 @@ func main() {
 		{9, f32(10), f32(10), f32(30), f32(30), 0},      // real SpellRange 9 for 65147 (wago.tools 3.4.0.43659)
 		{7, f32(0), f32(0), f32(10), f32(10), 0},        // real SpellRange 7 for 49256 (wago.tools 3.4.0.43659)
 		{54, f32(5), f32(5), f32(30), f32(30), 0},       // real SpellRange 54 for 66081 (wago.tools 3.4.0.43659)
+		{12, f32(0), f32(0), f32(5), f32(5), 0},        // real SpellRange 12 "Interact Range" for 23261 (wago.tools 3.4.0.47659 SpellRange row 12, Flags 0)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
