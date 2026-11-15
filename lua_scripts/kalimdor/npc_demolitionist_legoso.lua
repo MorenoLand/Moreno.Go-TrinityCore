@@ -4,7 +4,7 @@
 -- escort event machine). Zone-script unit per
 -- kalimdor_script_loader.cpp order (ashenvale, azshara,
 -- azuremyst_isle closed; bloodmyst_isle: npc_sironas ported,
--- webbed creature documented-only).
+-- webbed creature ported round-171).
 -- Entry (EndingTheirWorldMisc enum, verifiable from the C++
 -- sources): 17982 (NPC_LEGOSO). The creature_template
 -- ScriptName binding is DB-side (no TDB in this workspace).
@@ -86,8 +86,7 @@
 -- has no per-spell arg in Go (the sironas channel-stop arm
 -- interrupts all non-melee casts — the only casts in play).
 -- Zone set status: zone_bloodmyst_isle.cpp closed —
--- npc_webbed_creature documented-only (no-summon /
--- quest-credit bridges, unverifiable entry),
+-- npc_webbed_creature ported for 17680 (round-171),
 -- npc_sironas ported for 17678,
 -- npc_demolitionist_legoso ported for 17982 (combat rotation
 -- + escort event machine).

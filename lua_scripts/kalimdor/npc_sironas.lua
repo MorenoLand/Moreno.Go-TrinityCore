@@ -7,12 +7,11 @@
 -- Entry (EndingTheirWorldMisc enum, verifiable from the C++
 -- sources): 17678 (NPC_SIRONAS). The creature_template
 -- ScriptName binding is DB-side (no TDB in this workspace).
--- npc_webbed_creature is documented-only: the webbed
--- creature's whole JustDied arm sits behind the no-summon /
--- quest-credit bridges (and its AI-owner entry is
--- unverifiable in the C++ sources — only
--- NPC_EXPEDITION_RESEARCHER = 17681, the summoned/credit
--- target, appears). The legoso escort event machine is
+-- npc_webbed_creature is PORTED (npc_webbed_creature.lua,
+-- round-171): the JustDied summon/credit leg rides the
+-- SummonCreature + KilledMonsterCredit bridges, entry 17680
+-- TDB-verified ('Webbed Creature', 39 spawns map 530). The
+-- legoso escort event machine is
 -- PORTED (npc_demolitionist_legoso.lua) — the no-escort /
 -- no-quest-accept / no-summon / no-movement / no-gameobject
 -- bridge claims from the 2026-11-05 port are stale.
@@ -63,8 +62,7 @@
 -- 2026-10-22) lands the Reset() SetDisplayId(Modelid2) arm in
 -- onLeaveCombat below (nether_drake precedent updated).
 -- Zone set status: zone_bloodmyst_isle.cpp closed —
--- npc_webbed_creature documented-only (no-summon /
--- quest-credit bridges, unverifiable entry),
+-- npc_webbed_creature ported for 17680 (round-171),
 -- npc_demolitionist_legoso ported for 17982 (combat rotation
 -- + escort event machine), npc_sironas ported for 17678.
 

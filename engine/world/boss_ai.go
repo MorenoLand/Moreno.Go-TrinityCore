@@ -15233,6 +15233,15 @@ func init() {
 	// (zone_azuremyst_isle.cpp:463) — see
 	// lua_scripts/kalimdor/npc_engineer_spark_overgrind.lua.
 	RegisterLuaBoss("npc_engineer_spark_overgrind", 17243)
+	// npc_geezle (Azuremyst Isle zone script): 10-step Spark machine
+	// PORTED — Reset summons Spark 17243 (CORPSE_TIMED_DESPAWN 1s,
+	// Go summonType 5) + 8s first step; timed dialogue/move/quest
+	// chain (zone_azuremyst_isle.cpp:515-571, delays C++-exact);
+	// step 9 quest credit (9531 INCOMPLETE + aura 30298 in 50yd) +
+	// step 10 despawn both + naga-flag respawn; entry 17318 =
+	// TDB-verified 'Geezle' (ScriptName 'npc_geezle', faction 47) —
+	// see lua_scripts/kalimdor/npc_geezle.lua.
+	RegisterLuaBoss("npc_geezle", 17318)
 	// npc_sironas (Bloodmyst Isle zone script): combat rotation
 	// (uppercut 10966, immolate 12742, curse of blood 8282, all
 	// non-triggered DoCastVictim, C++-exact) + JustDied cascade
@@ -15243,9 +15252,14 @@ func init() {
 	// (GetTemplateModelId(2)); entry 17678 verifiable from the
 	// C++ EndingTheirWorldMisc enum — see
 	// lua_scripts/kalimdor/npc_sironas.lua. npc_webbed_creature
-	// stays documented-only (no-summon / quest-credit bridges,
-	// unverifiable entry).
+	// PORTED round-171 (lua_scripts/kalimdor/npc_webbed_creature.lua):
+	// JustDied summon/credit leg (researcher 17681 + KilledMonsterCredit
+	// on a player killer, else one of possibleSpawns[31]); the old
+	// no-summon / quest-credit / unverifiable-entry claims are stale —
+	// SummonCreature + KilledMonsterCredit are bridged and entry 17680
+	// is TDB-verified ('Webbed Creature', 39 spawns map 530).
 	RegisterLuaBoss("npc_sironas", 17678)
+	RegisterLuaBoss("npc_webbed_creature", 17680)
 	// npc_demolitionist_legoso (Bloodmyst Isle zone script):
 	// combat rotation (frost shock 8056, searing totem 38116,
 	// strength of earth totem 31633, healing surge 8004, all
