@@ -33,6 +33,9 @@
 -- (blackrock_depths.cpp:571-604: DoGo DATA_GO_BAR_KEG/DOOR/KEG_TRAP,
 -- Phalanx faction flip, instance SetData(TYPE_BAR, DONE)) is
 -- UpdateAI scope; the escort driver above fires without it.
+-- Reset (blackrock_depths.cpp:532-538) is vacuous in-model: escort-gated
+-- Initialize() zeroes only the two timers of that unported machine, no
+-- observable leg, so no ev23 registration (clintar/marzon precedent).
 
 local ENTRY_ROCKNOT = 9503
 

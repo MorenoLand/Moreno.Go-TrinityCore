@@ -5,8 +5,16 @@
 -- struct npc_grimstoneAI : public EscortAI).
 -- Entry: 10096 (TDB 335.26091 creature_template ScriptName
 -- npc_grimstone; creature_text groups 0-5).
--- Eluna creature events: 6 OnReachWP.
--- Ported arms (C++ order, blackrock_depths.cpp:205-236):
+-- Eluna creature events: 6 OnReachWP, 23 OnReset.
+-- Ported arms (C++ order, blackrock_depths.cpp:177-182, 205-236):
+-- - Reset: SetFlag(UNIT_FIELD_FLAGS 59, UNIT_FLAG_NON_ATTACKABLE 0x2).
+--   The Initialize() half zeroes only Ring-of-Law UpdateAI-machine
+--   state (EventPhase/Event_Timer/MobCount/MobDeath_Timer/RingMobGUIDs/
+--   RingBossGUID/CanWalk — unported, see below), so the flag-set is the
+--   whole observable. TDB 335.26091 creature_template unit_flags for
+--   10096 is 832 (0x340, no 0x2 bit), so without this Grimstone spawns
+--   attackable in Go; the flag-set has real targeting effect
+--   (lua_creature_events.go SetFlag :6915, motion.UnitFlags).
 -- - WaypointReached wp0 Talk(SAY_TEXT1 0), wp1 Talk(SAY_TEXT2 1),
 --   wp3 Talk(SAY_TEXT3 2), wp4 Talk(SAY_TEXT4 3)
 --   (GrimstoneTexts :117-122).
@@ -41,12 +49,20 @@ local SAY_TEXT4 = 3
 local TYPE_RING_OF_LAW = 1 -- blackrock_depths.h:28
 local DONE = 3 -- InstanceScript.h:73
 
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2 -- UnitDefines.h:125
+
 local function instanceDataOf(creature)
     local mapObj = creature:GetMap()
     if not mapObj then
         return nil
     end
     return mapObj:GetInstanceData()
+end
+
+-- C++ npc_grimstoneAI::Reset (blackrock_depths.cpp:177-182).
+local function grimstoneReset(_, creature)
+    creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
 end
 
 -- C++ WaypointReached (blackrock_depths.cpp:205-236).
@@ -69,3 +85,4 @@ local function grimstoneReachWP(event, creature)
 end
 
 RegisterCreatureEvent(ENTRY_GRIMSTONE, 6, grimstoneReachWP)
+RegisterCreatureEvent(ENTRY_GRIMSTONE, 23, grimstoneReset)
