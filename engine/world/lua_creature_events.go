@@ -1065,6 +1065,28 @@ func (s *Server) luaMotionCreature(motion *creatureMotion) *scripting.Object {
 		}
 		return []any{spell.SpellFamilyFlags[index]}, nil
 	}
+	// GetSpellSchoolMask(spellId) reads SpellInfo::GetSchoolMask
+	// (Spell.dbc field 225, wotlk store.go:1060) for an arbitrary spell
+	// id — the ev14 bare-spellId twin of the procEventObject's
+	// GetSchoolMask (lua_aura.go:1267), which can only read its own
+	// event spell. Returns 0 for an unknown spell id. Backs
+	// school-gated SpellHit arms (Viscidus boss_viscidus.cpp:156:
+	// GetSchoolMask() & SPELL_SCHOOL_MASK_FROST, the freeze-machine
+	// gate), the GetSpellFamilyFlags twin for the same ev14 args.
+	methods["GetSpellSchoolMask"] = func(_ context.Context, args []any) ([]any, error) {
+		spellID, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil || s.Data == nil {
+			return []any{uint32(0)}, nil
+		}
+		spell, found, err := s.Data.Spell(spellID)
+		if err != nil || !found {
+			return []any{uint32(0)}, nil
+		}
+		return []any{spell.SchoolMask}, nil
+	}
 	// HasSpellEffect(spellId, effect) reports whether any of the spell's
 	// three DBC effects carries the given effect enum (Spell.dbc
 	// Effects[i].Effect) — the SpellInfo::Effects[i].Effect read behind
