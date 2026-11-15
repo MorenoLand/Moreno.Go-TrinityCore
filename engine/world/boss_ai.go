@@ -24015,6 +24015,16 @@ func init() {
 	RegisterLuaBoss("npc_mageguard_dalaran", 29254)
 	RegisterLuaBoss("npc_mageguard_dalaran", 29255)
 	// Checked-no-gate: empty UpdateAI — spawn flag/immune arm only, no gate.
+	// npc_minigob_manabonk (Dalaran) — ported arm in
+	// lua_scripts/northrend/npc_minigob_manabonk.lua: the full
+	// UpdateAI EventMap chain (select-target 1s, laugh 2s, wander
+	// 3s, pause 60s, cast 2s, laugh2 8s, blink 3s, despawn 4s) on
+	// ev23 Reset timers; entry 32838 TDB-verified (ScriptName
+	// npc_minigob_manabonk, 1 spawn map 571). MailTemplate 264
+	// body + wand 44817 verified from wago CSV + TDB
+	// mail_loot_template; spells 61839/51347/61995 unseeded,
+	// casts live-dead until a seed lands.
+	RegisterLuaBoss("npc_minigob_manabonk", 32838)
 	// npc_wg_queue (Wintergrasp battle-magi) — ported arm
 	// in lua_scripts/northrend/npc_wg_queue.lua: ungated Frost
 	// Armor self-cast (0s, 180s re-arm). Entries 32169/32170
