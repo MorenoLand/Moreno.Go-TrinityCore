@@ -34,8 +34,9 @@
 -- crystals go ACTIVE + each channel target starts the beam channel, see
 -- setCrystalsStatus below) + SetBubbled(true) (PORTED tick 510 —
 -- NON_ATTACKABLE flag + DoCast(SPELL_ARCANE_FIELD 47346)); the
--- SetSummonerStatus(true) leg stays out (cross-AI SetData bridge
--- absent — documented-only below);
+-- SetSummonerStatus(true) leg is PORTED (ev41 sender below — the
+-- "cross-AI SetData bridge absent" claim is retired: creature:SetData
+-- fires CreatureEventOnSetData, lua_creature_events.go:889-913);
 -- KilledUnit Talk(SAY_KILL 1) player-gated (event 3,
 -- who->GetTypeId() == TYPEID_PLAYER — nalorakk precedent);
 -- JustDied Talk(SAY_DEATH 2) (event 4; _JustDied instance
@@ -44,9 +45,9 @@
 -- 2026-10-22 via creature:SetCombatMovement(false) at OnEnterCombat
 -- (lua_creature_events.go:759; per-tick gate holds all fight).
 -- Unmodeled (no bridges — documented, not wired):
--- Reset's SetCrystalsStatus(false) / SetBubbled(false) legs — PORTED tick
--- 510 (see novosReset below); the SetSummonerStatus(false) leg stays out
--- (cross-AI Reset bridge absent).
+-- Reset's SetCrystalsStatus(false) / SetBubbled(false) /
+-- SetSummonerStatus(false) legs — PORTED tick 510 for the first two
+-- (see novosReset below), the summoner leg via target:SetData(0, 0).
 -- SetBubbled(true)'s DoCast(SPELL_ARCANE_FIELD 47346) + UNIT_FLAG_
 -- NON_ATTACKABLE flag set — PORTED tick 510 at engage (see
 -- novosEnterCombat below): field-59 HasFlag/SetFlag/RemoveFlag ARE
@@ -87,8 +88,8 @@
 -- (heroic-only summonMinionsTick pump); EVENT_ATTACK stays out (no
 -- SelectTarget bridge). SetSummonerStatus(false) and the
 -- per-handler-death AI()->SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000)
--- re-arm on the DATA_NOVOS_SUMMONER_4 target stay out — cross-AI SetData
--- bridge absent.
+-- re-arm on the DATA_NOVOS_SUMMONER_4 target are PORTED below (ev41
+-- sender legs — the "cross-AI SetData bridge absent" claim is retired).
 -- MoveInLineOfSight — the _ohNovos latch (Initialize/Reset true;
 -- flips false when a HULKING_CORPSE 27597 / RISEN_SHADOWCASTER 27600
 -- / FETID_TROLL_CORPSE 27598 enters LOS at y <= -771.95f — C++
@@ -100,9 +101,9 @@
 -- with FindNearestCreature (fresh objects — the add's live Y rides
 -- the snapshot) inside the Go ev27 sighting distance (45yd, the
 -- aggro-scan cap); the C++ grid visibility range is wider, so the
--- check errs toward holding the latch — the documented delta.
--- DORMANT until the unported crystal-channel-target summoner chain
--- spawns the adds (no Go path summons 27597/27598/27600 today).
+-- check errs toward holding the latch — the documented delta. The
+-- adds now spawn via the ported crystal-channel-target summoner pump
+-- below (ev41), so the poll is live once the summoners arm at engage.
 -- GetData(DATA_NOVOS_ACHIEV) (type == DATA_NOVOS_ACHIEV && _ohNovos
 -- ? 1 : 0) — PORTED 2026-11-08 (tick 469): the latch is mirrored into
 -- the SetData store (Reset writes 1, the poll writes 0), and the Go
@@ -123,16 +124,16 @@
 -- JustSummoned forward if that AI ever ports. No DoZoneInCombat leg
 -- — Novos overrides BossAI::JustSummoned without the base call.
 -- ev20 prunes the list (BossAI::SummonedCreatureDespawn, :568).
--- npc_crystal_channel_target — ENTRY-VERIFIABLE BUT BRIDGE-BLOCKED
--- (26712 — drak_tharon_keep.h NPC_CRYSTAL_CHANNEL_TARGET, kalecgos
--- pass): zero registration. The whole AI is the cross-AI timer
--- machine: novos-side SetSummonerStatus / CrystalHandlerDied drive
--- it via AI()->SetData(spell, timer), then UpdateAI DoCast(_spell)
--- on expiry; JustSummoned forwards to novos->AI()->JustSummoned and
--- runs MovePath(summon->GetEntry() * 100) (motion-master bridge
--- absent). With the cross-AI SetData activation bridge absent it can
--- never fire — documented-only. Joins the
--- entry-verifiable-but-bridge-blocked queue.
+-- npc_crystal_channel_target (26712 — drak_tharon_keep.h
+-- NPC_CRYSTAL_CHANNEL_TARGET, kalecgos pass) — PORTED: the whole AI is
+-- the cross-AI timer machine — novos-side SetSummonerStatus /
+-- CrystalHandlerDied drive it via creature:SetData(spell, timer)
+-- (ev41, lua_creature_events.go:889-913), then the pump below casts
+-- _spell on expiry; JustSummoned forwards to novos->AI()->JustSummoned
+-- and Resets when the arming spell is 49179. Only the MovePath(summon->
+-- GetEntry() * 100) leg stays out (motion-master bridge absent). The
+-- old "cross-AI SetData activation bridge absent / bridge-blocked"
+-- claim is retired.
 -- spell_novos_summon_minions (59910 SpellScript:
 -- OnEffectHitTarget EFFECT_0 SCRIPT_EFFECT -> caster double-cast
 -- SPELL_SUMMON_COPY_OF_MINIONS 59933, triggered) — PORTED
@@ -158,6 +159,16 @@ local SPELL_SUMMON_MINIONS = 59910
 local SPELL_SUMMON_COPY_OF_MINIONS = 59933
 local SPELL_ARCANE_FIELD = 47346 -- boss_novos.cpp:42
 local SPELL_BEAM_CHANNEL = 52106 -- boss_novos.cpp:41
+local SPELL_SUMMON_CRYSTAL_HANDLER = 49179 -- boss_novos.cpp:45
+
+-- C++ summoners[] (boss_novos.cpp:70-76): slot -> {summon spell, repeat ms}.
+-- Slot order matches DATA_NOVOS_SUMMONER_1..4 / instanceData.novosSummoners[1..4].
+local SUMMONER_SPELLS = {
+    { 49105, 15000 }, -- SPELL_SUMMON_RISEN_SHADOWCASTER, slot 1
+    { 49103, 5000 }, -- SPELL_SUMMON_FETID_TROLL_CORPSE, slot 2
+    { 49104, 30000 }, -- SPELL_SUMMON_HULKING_CORPSE, slot 3
+    { 49179, 30000 }, -- SPELL_SUMMON_CRYSTAL_HANDLER, slot 4
+}
 
 local ENTRY_CRYSTAL_CHANNEL_TARGET = 26712 -- drak_tharon_keep.h:69
 local CRYSTAL_ENTRIES = { 189299, 189300, 189301, 189302 } -- drak_tharon_keep.h:84-87
@@ -355,6 +366,110 @@ local function setCrystalsStatus(creature, active)
     end
 end
 
+-- C++ npc_crystal_channel_targetAI::SetData (boss_novos.cpp:326-331) +
+-- UpdateAI (boss_novos.cpp:315-324): SetData(spell, timer) arms a
+-- repeating self-cast pump — first cast after `timer` ms, then every
+-- `timer` ms (the _temp countdown twin). The write itself lands in the
+-- SetData store; the ev41 handler below starts the pump. ev41 is live
+-- (creature:SetData fires CreatureEventOnSetData, engine/world/
+-- lua_creature_events.go:889-913) — the old "cross-AI SetData bridge
+-- absent" claim is retired. A type-0 write is the Reset twin
+-- (boss_novos.cpp:311-313 Initialize zeroes _spell/_timer/_temp):
+-- it clears the pump.
+local channelState = {}
+
+local function channelCastTick(creature, guid)
+    local state = channelState[guid]
+    if state == nil then
+        return
+    end
+    creature:CastSpell(creature, state.spell)
+    schedule(guid, "channel", state.timer, function()
+        channelCastTick(creature, guid)
+    end)
+end
+
+local function channelTargetSetData(event, creature, dataType, value)
+    local guid = creature:GetGUIDLow()
+    if dataType == 0 then
+        channelState[guid] = nil
+        cancelTimers(guid)
+        return
+    end
+    channelState[guid] = { spell = dataType, timer = value }
+    schedule(guid, "channel", value, function()
+        channelCastTick(creature, guid)
+    end)
+end
+
+-- C++ npc_crystal_channel_targetAI::Reset (boss_novos.cpp:311-313) /
+-- death teardown: the pump is per-creature state, cancelled on Reset
+-- (ev23) and death (ev4) like every other pump in this file.
+local function channelTargetTeardown(event, creature)
+    local guid = creature:GetGUIDLow()
+    channelState[guid] = nil
+    cancelTimers(guid)
+end
+
+-- C++ npc_crystal_channel_targetAI::JustSummoned (boss_novos.cpp:333-345):
+-- forwards the summon to Novos's JustSummoned (the summons-list twin,
+-- so wipe/death despawns pump-summoned adds); the MovePath(summon->
+-- GetEntry() * 100) leg stays out (no motion-master path bridge). If
+-- the arming spell is SPELL_SUMMON_CRYSTAL_HANDLER (49179) the target
+-- Resets (pump off) — the C++ tail leg.
+local function channelTargetJustSummoned(event, creature, summon)
+    if summon == nil then
+        return
+    end
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    local novos = data and data.novos or nil
+    if novos ~= nil then
+        novosJustSummoned(event, novos, summon)
+    end
+    local guid = creature:GetGUIDLow()
+    local state = channelState[guid]
+    if state ~= nil and state.spell == SPELL_SUMMON_CRYSTAL_HANDLER then
+        channelState[guid] = nil
+        cancelTimers(guid)
+    end
+end
+
+-- C++ boss_novosAI::SetSummonerStatus (boss_novos.cpp:221-231): the
+-- four channel targets arm (SetData(spell, timer)) or reset. Targets
+-- resolve via the instance-latched instanceData.novosSummoners
+-- (instance_drak_tharon_keep.lua, InitializeNovosSummoner twin), with
+-- the crystal-proximity fallback (setCrystalStatus's own resolution:
+-- each crystal's channel target stands within 5y). Slot i arms with
+-- SUMMONER_SPELLS[i].
+local function resolveSummoner(creature, index)
+    local mapObj = creature:GetMap()
+    local data = mapObj and mapObj:GetInstanceData() or nil
+    local summoners = data and data.novosSummoners or nil
+    if summoners ~= nil and summoners[index] ~= nil then
+        return summoners[index]
+    end
+    local crystal = resolveCrystal(creature, index)
+    if crystal ~= nil then
+        return crystal:FindNearestCreature(ENTRY_CRYSTAL_CHANNEL_TARGET, 5)
+    end
+    return nil
+end
+
+local function setSummonerStatus(creature, active)
+    for i = 1, 4 do
+        local target = resolveSummoner(creature, i)
+        if target ~= nil then
+            if active then
+                local arm = SUMMONER_SPELLS[i]
+                target:SetData(arm[1], arm[2])
+            else
+                target:SetData(0, 0)
+            end
+        end
+    end
+end
+
 -- C++ EVENT_SUMMON_MINIONS (boss_novos.cpp:155-158): DoCast
 -- (SPELL_SUMMON_MINIONS 59910) self-cast, 15s repeat, heroic-only,
 -- seeded only after the bubble clears (CrystalHandlerDied :268-272).
@@ -384,9 +499,9 @@ local function novosEnterCombat(event, creature, target)
     creature:DoZoneInCombat()
     creature:Talk(SAY_AGGRO)
     -- C++ JustEngagedWith (boss_novos.cpp:109-117): SetCrystalsStatus(true)
-    -- + SetBubbled(true). The SetSummonerStatus(true) leg stays out
-    -- (cross-AI SetData bridge absent).
+    -- + SetSummonerStatus(true) + SetBubbled(true).
     setCrystalsStatus(creature, true)
+    setSummonerStatus(creature, true)
     if not creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
         creature:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     end
@@ -413,8 +528,9 @@ end
 
 -- C++ boss_novos::Reset (boss_novos.cpp:99-106): _Reset + Initialize
 -- zeroes _crystalHandlerCount. The SetCrystalsStatus(false) /
--- SetBubbled(false) legs are ported (tick 510); SetSummonerStatus(false)
--- stays out — cross-AI Reset bridge absent (the header's Reset note).
+-- SetBubbled(false) / SetSummonerStatus(false) legs are ported (tick 510
+-- for the first two; the summoner leg rides target:SetData(0, 0), the
+-- ev41 Reset twin).
 local function novosReset(event, creature)
     crystalHandlerCount = 0
     -- C++ boss_novos::Initialize (:95-97): _ohNovos resets true; the
@@ -428,6 +544,7 @@ local function novosReset(event, creature)
     -- (ScriptedCreature.cpp:507).
     despawnNovosSummons(creature)
     setCrystalsStatus(creature, false)
+    setSummonerStatus(creature, false)
     if creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
         creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
     end
@@ -442,13 +559,13 @@ end
 -- tick 466). The per-crystal deactivation loop (first ACTIVE crystal ->
 -- GO_STATE_READY + channel-target CastStop) is PORTED tick 510 below
 -- (go:SetGoState / go:FindNearestCreature bridges live). At 4 deaths:
--- Talk(SAY_ARCANE_FIELD 4) + SetSummonerStatus(false) (cross-AI, stays
--- out) + SetBubbled(false) (the RemoveFlag NON_ATTACKABLE + CastStop
--- legs — HasFlag/RemoveFlag and IsCasting/StopSpellCast are bridged) +
--- EVENT_SUMMON_MINIONS (15s, heroic) seeds the summonMinionsTick pump
--- (tick 510); EVENT_ATTACK (3s) stays out (no SelectTarget bridge).
--- Below 4: the SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000) re-arm on
--- the DATA_NOVOS_SUMMONER_4 target stays out — cross-AI SetData absent.
+-- Talk(SAY_ARCANE_FIELD 4) + SetSummonerStatus(false) (ported below via
+-- target:SetData(0, 0)) + SetBubbled(false) (the RemoveFlag NON_ATTACKABLE
+-- + CastStop legs — HasFlag/RemoveFlag and IsCasting/StopSpellCast are
+-- bridged) + EVENT_SUMMON_MINIONS (15s, heroic) seeds the
+-- summonMinionsTick pump (tick 510); EVENT_ATTACK (3s) stays out (no
+-- SelectTarget bridge). Below 4: the SetData(SPELL_SUMMON_CRYSTAL_HANDLER,
+-- 15000) re-arm on the DATA_NOVOS_SUMMONER_4 target is ported below.
 local function novosDoAction(event, creature, action)
     if action ~= ACTION_CRYSTAL_HANDLER_DIED then
         return
@@ -465,6 +582,7 @@ local function novosDoAction(event, creature, action)
     crystalHandlerCount = crystalHandlerCount + 1
     if crystalHandlerCount >= 4 then
         creature:Talk(SAY_ARCANE_FIELD)
+        setSummonerStatus(creature, false)
         if creature:HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE) then
             creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
         end
@@ -481,6 +599,14 @@ local function novosDoAction(event, creature, action)
                 summonMinionsTick(creature, guid)
             end)
         end
+    else
+        -- C++ CrystalHandlerDied (boss_novos.cpp:274): below 4 deaths
+        -- the DATA_NOVOS_SUMMONER_4 target re-arms with
+        -- SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000).
+        local target = resolveSummoner(creature, 4)
+        if target ~= nil then
+            target:SetData(SPELL_SUMMON_CRYSTAL_HANDLER, 15000)
+        end
     end
 end
 
@@ -491,6 +617,10 @@ RegisterCreatureEvent(ENTRY_NOVOS, 23, novosReset)
 RegisterCreatureEvent(ENTRY_NOVOS, 38, novosDoAction)
 RegisterCreatureEvent(ENTRY_NOVOS, 19, novosJustSummoned)
 RegisterCreatureEvent(ENTRY_NOVOS, 20, novosSummonDespawned)
+RegisterCreatureEvent(ENTRY_CRYSTAL_CHANNEL_TARGET, 4, channelTargetTeardown)
+RegisterCreatureEvent(ENTRY_CRYSTAL_CHANNEL_TARGET, 19, channelTargetJustSummoned)
+RegisterCreatureEvent(ENTRY_CRYSTAL_CHANNEL_TARGET, 23, channelTargetTeardown)
+RegisterCreatureEvent(ENTRY_CRYSTAL_CHANNEL_TARGET, 41, channelTargetSetData)
 
 -- C++ spell_novos_summon_minions::HandleScript
 -- (boss_novos.cpp:375-398): OnEffectHitTarget EFFECT_0

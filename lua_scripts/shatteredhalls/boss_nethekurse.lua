@@ -16,12 +16,14 @@
 -- Talk: SAY_AGGRO = 4 (pull — fired from the C++ JustEngaged
 -- With, C++-exact), SAY_SLAY = 5 (kill — the C++ KilledUnit
 -- override talks unconditionally, C++-exact), SAY_DIE = 6
--- (death); SAY_INTRO = 0 / SAY_PEON_ATTACKED = 1 / SAY_PEON_
--- DIES = 2 / SAY_TAUNT = 3 fire only from the unbridgeable
--- intro/peon SetData machine (cross-creature/instance
--- gated) — unreachable in this model.
+-- (death); SAY_PEON_ATTACKED = 1 / SAY_PEON_DIES = 2 fire from
+-- the ev41 SetData handler below (fed by the npc_fel_orc_convert
+-- relay); SAY_INTRO = 0 / SAY_TAUNT = 3 fire only from the
+-- unbridgeable intro machine (cross-creature/instance gated) —
+-- unreachable in this model.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
--- OnTargetDied, 4 OnDied, 19 OnJustSummoned, 23 OnReset. Timers via CreateLua
+-- OnTargetDied, 4 OnDied, 19 OnJustSummoned, 23 OnReset, 41
+-- OnSetData. Timers via CreateLua
 -- Event (per-GUID scheduler pump); melee is engine-driven in
 -- Go (creature combat tick), like C++ DoMeleeAttackIfReady.
 -- C++ DoCast default is triggered=false (vaelastrasz
@@ -32,9 +34,8 @@
 -- Initialize() values (deathCoil 20000 / shadowFissure 8000 /
 -- cleave 5000 — the C++ JustEngagedWith override only talks;
 -- the whole intro/peon machine (MoveInLineOfSight SAY_INTRO
--- + SetBossState IN_PROGRESS, the 90s DoTauntPeons timer,
--- the convert SetData PEON_AGGRO/DEATH relay, the NON_
--- ATTACKABLE gate until all four peons die) is instance/
+-- + SetBossState IN_PROGRESS, the 90s DoTauntPeons timer and
+-- the NON_ATTACKABLE gate until all four peons die) is instance/
 -- cross-creature/flag blocked, so the Initialize() schedule
 -- lands on the only engagement hook this model has, broggok
 -- activate-schedule precedent) + SetBossState(0, 1) IN_PROGRESS
@@ -70,10 +71,10 @@
 -- _Reset twin, ScriptedCreature.cpp:499-510 — lands before the
 -- ev4 DONE write, so the final state stays DONE). The Reset()
 -- NON_ATTACKABLE re-flag arm stays out on the
--- paired-arm rule — its removal rides the unported peon-relay /
--- intro-timer machine and porting SetFlag alone would strand the bit
--- (thespia/kalithresh precedent); SetFlag(59) itself is bridged;
--- only the flag leg stays out).
+-- paired-arm rule — the 4th-death removal now rides the ev41
+-- handler below, but porting the Reset SetFlag alone would
+-- strand the bit (thespia/kalithresh precedent); SetFlag(59)
+-- itself is bridged; only the flag leg stays out).
 -- Deliberate deviations (all await engine bridges): no
 -- intro/peon machine — boss admission via the luaBossAI
 -- shim (the BossAI ctor DATA_NETHEKURSE = 0 bookkeeping is
@@ -82,19 +83,17 @@
 -- IntroEvent_Timer -> DoTauntPeons machine (the "@todo kill
 -- the peons first" arm) stay out on sighting-bridge grounds
 -- — ev27 is engage-only, no 30yd sighting twin; the peon
--- SetData counts and the all-four-dead activation live in
--- npc_fel_orc_convert.lua as direct Talk relays, the
--- NON_ATTACKABLE removal moot in-port); no
--- cross-creature bridge — the peon SetData(SETDATA_PEON_
--- AGGRO/DEATH) relay from npc_fel_orc_convert (ObjectAccessor
--- GetCreature via instance GetGuidData), the resulting
--- SAY_PEON_ATTACKED/DIES counts and the all-four-dead
--- activation (IsMainEvent + NON_ATTACKABLE removal) are
--- unmodeled, so SAY_INTRO/PEON_ATTACKED/PEON_DIES/TAUNT are
--- unreachable; the Reset/activation NON_ATTACKABLE arms stay
--- unmodeled — their paired removal rides the unported peon-relay /
--- intro-timer machine, and porting SetFlag alone would strand the
--- bit (thespia/kalithresh precedent);
+-- SetData relay is PORTED via ev41 below (npc_fel_orc_convert
+-- calls kurse:SetData(1, 1/2); the handler owns the <4 count
+-- caps, the Talks, and the 4th-death NON_ATTACKABLE removal —
+-- the removal is a no-op in-port since Reset never sets the
+-- flag); the death relay's C++ GetBossState(IN_PROGRESS) gate
+-- stays out — its writer (the intro MoveInLineOfSight
+-- IN_PROGRESS) is unported, so gating on it would block the
+-- chain in-port (boss state stays NOT_STARTED until boss
+-- combat); SAY_INTRO/TAUNT stay unreachable; the Reset
+-- NON_ATTACKABLE re-flag arm stays out — porting SetFlag alone
+-- would strand the bit (thespia/kalithresh precedent);
 -- summon bridge live, and the JustSummoned setup (SetFaction +
 -- NON_ATTACKABLE/NOT_SELECTABLE flags + triggered TEMPORARY_
 -- VISUAL 39312 + CONSUMPTION 30497 with original-caster
@@ -138,6 +137,13 @@ local SAY_AGGRO = 4
 local SAY_SLAY = 5
 local SAY_DIE = 6
 
+local SAY_PEON_ATTACKED = 1
+local SAY_PEON_DIES = 2
+
+local SETDATA_DATA = 1
+local SETDATA_PEON_AGGRO = 1
+local SETDATA_PEON_DEATH = 2
+
 local ENTRY_NETHEKURSE = 16807
 
 local FACTION_MONSTER_2 = 16
@@ -147,6 +153,7 @@ local UNIT_FLAG_NOT_SELECTABLE = 0x02000000
 
 local timers = {}
 local states = {}
+local peonStates = {}
 
 local function cancelPump(guid)
     local id = timers[guid]
@@ -298,6 +305,49 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 4, function(_, creature)
     resetBoss(creature:GetGUIDLow())
 end)
 
+-- C++ boss_grand_warlock_nethekurseAI::SetData (boss_nethekurse.
+-- cpp:124-156): type must be SETDATA_DATA (1); value
+-- SETDATA_PEON_AGGRO (1) talks SAY_PEON_ATTACKED and counts the
+-- engaged peon (capped at 4), value SETDATA_PEON_DEATH (2) talks
+-- SAY_PEON_DIES and counts the dead peon (capped at 4); the 4th
+-- death clears the intro (IsIntroEvent false, IsMainEvent true)
+-- and removes UNIT_FLAG_NON_ATTACKABLE. The counts live in a
+-- dedicated per-GUID table, not the combat state: the relay fires
+-- pre-combat (peons engage and die while the boss is still in its
+-- intro), and ev1's freshState() would wipe them. The 4th-death
+-- RemoveFlag is a no-op in-port — Reset never sets the flag
+-- (paired-arm rule, see header) — but it is the C++-exact arm,
+-- so it rides along. Sender: npc_fel_orc_convert.lua, which
+-- calls kurse:SetData(1, 1/2); creature:SetData fires ev41 after
+-- the store write (lua_creature_events.go:889-912).
+local function nethekurseSetData(_, creature, setType, setValue)
+    if setType ~= SETDATA_DATA then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local peon = peonStates[guid]
+    if peon == nil then
+        peon = { engaged = 0, killed = 0 }
+        peonStates[guid] = peon
+    end
+    if setValue == SETDATA_PEON_AGGRO then
+        if peon.engaged >= 4 then
+            return
+        end
+        creature:Talk(SAY_PEON_ATTACKED)
+        peon.engaged = peon.engaged + 1
+    elseif setValue == SETDATA_PEON_DEATH then
+        if peon.killed >= 4 then
+            return
+        end
+        creature:Talk(SAY_PEON_DIES)
+        peon.killed = peon.killed + 1
+        if peon.killed == 4 then
+            creature:RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_NETHEKURSE, 23, function(_, creature)
     -- C++ _Reset (ScriptedCreature.cpp:499-510): SetBossState
     -- DATA_NETHEKURSE, NOT_STARTED — ev23 fires on death too
@@ -307,7 +357,12 @@ RegisterCreatureEvent(ENTRY_NETHEKURSE, 23, function(_, creature)
     -- stays out on the paired-arm rule (see header).
     creature:SetBossState(0, 0) -- DATA_NETHEKURSE, NOT_STARTED
     resetBoss(creature:GetGUIDLow())
+    -- C++ Reset() -> Initialize() zeroes PeonEngagedCount /
+    -- PeonKilledCount (boss_nethekurse.cpp:104-105).
+    peonStates[creature:GetGUIDLow()] = nil
 end)
+
+RegisterCreatureEvent(ENTRY_NETHEKURSE, 41, nethekurseSetData)
 
 -- C++ JustSummoned (boss_nethekurse.cpp:208-216): the fissure
 -- summoned by SPELL_SHADOW_FISSURE 30496 gets the monster

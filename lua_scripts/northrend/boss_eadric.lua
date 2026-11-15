@@ -82,12 +82,12 @@
 -- the paired ObjectAccessor::GetCreature(MemoryGUID) RemoveFromWorld
 -- leg is PORTED below (Despawn on the stored MemoryGUID, ev19);
 -- SetData(1) ->
--- RemoveAura(SPELL_SHIELD 66515) — PORTED below as a direct
--- RemoveAura on the summoner in memoryDied (SetData fires no dispatch
--- event, so the cross-AI write is wired directly; GetSummonerUnit
--- resolves Paletress because she casts the MEMORY_* spell — see
--- summonMemoryHit); DamageTaken / MovementInform — same bridges
--- absent as
+-- RemoveAura(SPELL_SHIELD 66515) — PORTED below via ev41
+-- (CreatureEventOnSetData, runtime.go:431): memoryDied calls
+-- summoner:SetData(1, 0) and paletressSetData removes the Shield;
+-- GetSummonerUnit resolves Paletress because she casts the MEMORY_*
+-- spell — see summonMemoryHit); DamageTaken / MovementInform — same
+-- bridges absent as
 -- boss_eadric; uiHolyFireTimer — PORTED below: SelectTarget(Random,
 -- 0, 250, true) via threat-list randomPlayer -> DoCast(Holy Fire
 -- 66538), 9-12s init, 13s shielded / 9-12s unshielded repeat
@@ -131,10 +131,10 @@
 -- SelectTarget(Random, 1) -> DoCast(Shadows Past 66619), 5s repeat
 -- (uniform randomPlayer approximates the position-1 pick). JustDied
 -- cross-AI leg (ToTempSummon()->GetSummonerUnit()->GetAI()->
--- SetData(1, 0)) — PORTED below as a direct RemoveAura(SHIELD) on
--- the summoner: SetData fires no dispatch event, so the write is
--- wired directly; GetSummonerUnit resolves Paletress because she
--- casts the MEMORY_* spell (see summonMemoryHit).
+-- SetData(1, 0)) — PORTED below via ev41 (paletressSetData):
+-- memoryDied calls summoner:SetData(1, 0); GetSummonerUnit
+-- resolves Paletress because she casts the MEMORY_* spell
+-- (see summonMemoryHit).
 -- npc_argent_soldier — JustDied PORTED below (2026-11-07 tick 378):
 -- instance->SetData(DATA_ARGENT_SOLDIER_DEFEATED, +1) via the shared
 -- instanceData table (boss_aeonus.lua precedent); the 9-deaths
@@ -532,6 +532,18 @@ local function paletressHealthLatch(event, creature, attacker, damage)
     end
 end
 
+-- C++ boss_paletressAI::SetData (boss_argent_challenge.cpp:314-318):
+-- uiId == 1 -> RemoveAura(SPELL_SHIELD 66515). ev41
+-- (CreatureEventOnSetData, runtime.go:431) carries
+-- (event, creature, type, value); the sender is npc_memory JustDied
+-- (memoryDied below), which calls summoner:SetData(1, 0). The C++
+-- id is a bare literal 1, no enum; no other type is read.
+local function paletressSetData(event, creature, dataType, value)
+    if dataType == 1 then
+        creature:RemoveAura(SPELL_SHIELD)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_EADRIC, 1, eadricEnterCombat)
 RegisterCreatureEvent(ENTRY_EADRIC, 2, eadricLeaveCombat)
 RegisterCreatureEvent(ENTRY_EADRIC, 4, eadricDied)
@@ -544,6 +556,7 @@ RegisterCreatureEvent(ENTRY_PALETRESS, 9, argentDamageTaken)
 RegisterCreatureEvent(ENTRY_PALETRESS, 9, paletressHealthLatch)
 RegisterCreatureEvent(ENTRY_PALETRESS, 23, paletressReset)
 RegisterCreatureEvent(ENTRY_PALETRESS, 19, paletressJustSummoned)
+RegisterCreatureEvent(ENTRY_PALETRESS, 41, paletressSetData)
 
 -- C++ spell_paletress_summon_memory SpellScript
 -- (boss_argent_challenge.cpp:646-684): FilterTargets keeps ONE random
@@ -599,9 +612,9 @@ RegisterSpellEvent(SPELL_SUMMON_MEMORY, 5, summonMemoryHit)
 -- random-target, Waking Nightmare 66552 7s self-cast, Shadows Past
 -- 66619 5s random-target(1); JustDied: the summoner (Paletress —
 -- the MEMORY_* caster, see summonMemoryHit) alive -> SetData(1, 0)
--- -> RemoveAura(SHIELD). SetData fires no dispatch event, so the leg
--- is wired directly as RemoveAura on the summoner (GetSummonerUnit
--- reads CreatedByGUID, stamped by the summon bridge). The C++
+-- -> RemoveAura(SHIELD), via ev41 (paletressSetData above;
+-- creature:SetData fires CreatureEventOnSetData, runtime.go:431).
+-- GetSummonerUnit reads CreatedByGUID, stamped by the summon bridge. The C++
 -- SelectTarget(Random, 1) for Shadows Past excludes one shuffled
 -- threat member; the file's uniform randomPlayer is the approximation.
 -- Heroic variants (67679/67678/67677) stay out per the file's
@@ -655,7 +668,7 @@ local function memoryDied(event, creature, killer)
     cancelTimers(creature:GetGUIDLow())
     local summoner = creature:GetSummonerUnit()
     if summoner ~= nil and summoner:IsAlive() then
-        summoner:RemoveAura(SPELL_SHIELD)
+        summoner:SetData(1, 0)
     end
 end
 

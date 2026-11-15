@@ -18,9 +18,9 @@
 -- cluster displayIds (C++-exact, :522-583) and registers the
 -- cluster gossip handlers for the discovered entries then.
 -- Eluna creature events: 40 OnSetGUID (StartGame entry point),
--- 38 OnDoAction (internal actions + cluster-press transport, see
--- below), 15 OnSpellHitTarget (bad-press damage), 2/4/23/37
--- cleanup. GO gossip: 1 hello (clusters, registered dynamically),
+-- 41 OnSetData (cluster press, C++-exact — see below), 38
+-- OnDoAction (internal actions 8/9/10 only), 15 OnSpellHitTarget
+-- (bad-press damage), 4/37 cleanup. GO gossip: 1 hello (clusters, registered dynamically),
 -- 2 select (relic/monument).
 -- Event machine: a 500ms CreateLuaEvent pump is the C++ UpdateAI
 -- EventMap twin — every C++ delay (500ms/1s/1500ms/2s/3s) is a
@@ -42,13 +42,16 @@
 -- creature never in combat); DoCast(player) arms pass the player.
 -- Transports (both ends are Lua in this file, C++ semantics kept):
 -- - Cluster press: C++ go_simon_cluster calls bunny->AI()->
---   SetData(clusterEntry, 0) (:488-511). Go creature:SetData only
---   writes a motion store and fires NO event
---   (lua_creature_events.go:792-811), so the cluster handler calls
---   bunny:DoAction(clusterEntry) instead; the ev38 handler treats
---   values 8/9/10 as the C++ DoAction actions and any other value
---   as a SetData type (cluster entry). Internal DoAction calls use
---   the local doAction directly, the C++ self-call twin.
+--   SetData(clusterEntry, 0) (:488-511). Go creature:SetData
+--   writes the ScriptData store and fires CreatureEventOnSetData
+--   (41) on the entry (lua_creature_events.go:886-913), so the
+--   cluster handler calls bunny:SetData(go:GetEntry(), 0)
+--   C++-exact and the ev41 handler below routes the type
+--   (cluster entry) to onClusterPress. (Pre-ev41 the press rode
+--   a DoAction transport; the runtime now fires 41, so the
+--   transport is retired — ev38 carries only the C++ DoAction
+--   actions 8/9/10.) Internal DoAction calls use the local
+--   doAction directly, the C++ self-call twin.
 -- - Cluster gossip registration is dynamic: entries are unknown
 --   until StartGame discovers them, so StartGame registers
 --   RegisterGameObjectGossipEvent(entry, 1, ...) per discovered
@@ -141,7 +144,7 @@
 --   ResetNode on the large too-far path a no-op (C++ plays the
 --   sound twice — inaudible difference).
 -- - go_simon_cluster OnGossipHello (:833-840): nearest bunny
---   22923 within 12.0 gets the press (DoAction transport above),
+--   22923 within 12.0 gets the press (bunny:SetData, ev41 above),
 --   AddUse, return true (handled, native goober arm suppressed).
 --   The goober-spell cast (goober.spellId) stays out: DB-side
 --   template data, unestablishable here.
@@ -486,8 +489,8 @@ local function checkPlayerSequence(creature, guid, st)
     end
 end
 
--- C++ SetData (:488-511), reached via the DoAction transport
--- (see header): the cluster entry arrives as the action value.
+-- C++ SetData (:488-511), reached via ev41 (see header):
+-- the cluster entry arrives as the SetData type.
 local function onClusterPress(creature, guid, st, clusterEntry)
     if not st.listening then
         return
@@ -669,8 +672,8 @@ local function onSetGUID(_, creature, playerGuid, id)
     startGame(creature, guid, playerGuid, id)
 end
 
--- C++ DoAction (:463-486) for 8/9/10; any other value is a
--- SetData cluster-entry press (see header).
+-- C++ DoAction (:463-486): 8/9/10 only — the SetData
+-- cluster-entry press rides ev41 now (see header).
 local function onDoAction(_, creature, action)
     local guid = creature:GetGUIDLow()
     local st = bunnyState[guid]
@@ -679,9 +682,19 @@ local function onDoAction(_, creature, action)
     end
     if action == ACTION_SIMON_CORRECT_FULL_SEQUENCE or action == ACTION_SIMON_WRONG_SEQUENCE or action == ACTION_SIMON_ROUND_FINISHED then
         doAction(creature, guid, st, action)
-    else
-        onClusterPress(creature, guid, st, action)
     end
+end
+
+-- C++ SetData (:488-511) via ev41: type is the cluster entry,
+-- data is 0 (C++-exact sender: go_simon_cluster OnGossipHello
+-- calls bunny->AI()->SetData(me->GetEntry(), 0)).
+local function onSetData(_, creature, type, data)
+    local guid = creature:GetGUIDLow()
+    local st = bunnyState[guid]
+    if not st then
+        return
+    end
+    onClusterPress(creature, guid, st, type)
 end
 
 -- C++ SpellHitTarget (:787-800).
@@ -716,7 +729,7 @@ end
 onClusterGossip = function(_, player, go)
     local bunny = go:FindNearestCreature(NPC_SIMON_BUNNY, 12.0)
     if bunny then
-        bunny:DoAction(go:GetEntry())
+        bunny:SetData(go:GetEntry(), 0)
     end
     go:AddUse()
     return true
@@ -737,6 +750,7 @@ local function onRelicSelect(_, player, go)
 end
 
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 40, onSetGUID)
+RegisterCreatureEvent(NPC_SIMON_BUNNY, 41, onSetData)
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 38, onDoAction)
 RegisterCreatureEvent(NPC_SIMON_BUNNY, 15, onSpellHitTarget)
 -- Cleanup only on died (4) / remove (37): C++ has no Reset override

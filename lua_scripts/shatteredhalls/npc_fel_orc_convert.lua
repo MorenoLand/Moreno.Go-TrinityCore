@@ -10,8 +10,9 @@
 -- TDB in this workspace).
 -- Talk lines: NONE — the convert defines no Say enum; all
 -- SAY_* lines in this file live on the boss (the peon yells
--- fire only from the unbridgeable SetData relay — unreachable
--- in this model); no event 3 registered.
+-- fire from the boss ev41 SetData handler in
+-- boss_nethekurse.lua, fed by the relay below); no event 3
+-- registered.
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4
 -- OnDied, 23 OnReset. Timers via CreateLuaEvent (per-GUID
 -- scheduler pump); melee is engine-driven in Go (creature
@@ -28,15 +29,18 @@
 -- convention), re-arm 15s regardless (C++-exact).
 -- OnDied(4): cleanup + PORTED peon-death relay (below).
 -- OnLeaveCombat(2)/OnReset(23): cleanup.
--- Deliberate deviations (all await engine bridges): no
--- instance/cross-creature bridge — the peon SetData relays
--- are PORTED below via FindNearestCreature + boss Talk (the
--- count/activation half stays boss-side: no cross-file state
--- bridge, and the in-port boss is already attackable, so the
--- 4th-death NON_ATTACKABLE removal is moot in-port); the
+-- Deliberate deviations (all await engine bridges): the peon
+-- SetData relays are PORTED below via FindNearestCreature +
+-- kurse:SetData(SETDATA_DATA, SETDATA_PEON_AGGRO/DEATH); the
+-- <4 count caps, the Talks, and the 4th-death NON_ATTACKABLE
+-- removal live in the boss ev41 handler (boss_nethekurse.lua),
+-- and the removal is a no-op in-port (the in-port boss is
+-- already attackable, Reset never sets the flag); the
 -- JustDied arm's GetBossState(IN_PROGRESS) gate has no
--- in-port equivalent (converts die while the boss is active
--- in-port), so the death Talk fires whenever the boss is
+-- in-port equivalent — its writer (the boss intro
+-- MoveInLineOfSight) is unported, so gating on it would block
+-- the chain in-port (boss state stays NOT_STARTED until boss
+-- combat), so the death relay fires whenever the boss is
 -- found alive nearby;
 -- assistance arm PORTED — the Reset() SetNoCallAssistance(true)
 -- arm runs on event 23 (bridge in lua_creature_events.go; the sticky
@@ -51,8 +55,10 @@ local SPELL_HEMORRHAGE = 30478
 
 local ENTRY_FEL_ORC_CONVERT = 17083
 local ENTRY_NETHEKURSE = 16807
-local SAY_PEON_ATTACKED = 1
-local SAY_PEON_DIES = 2
+
+local SETDATA_DATA = 1
+local SETDATA_PEON_AGGRO = 1
+local SETDATA_PEON_DEATH = 2
 
 local timers = {}
 local states = {}
@@ -73,11 +79,10 @@ end
 -- C++ JustEngagedWith: events.ScheduleEvent(EVENT_HEMORRHAGE,
 -- 3s) + the peon-aggro relay (boss_nethekurse.cpp:333-336):
 -- the 45.0yd IsWithinDist gate is the FindNearestCreature
--- range; boss:Talk(SAY_PEON_ATTACKED) is the SetData effect
--- (C++ talks once per relay while the count is below 4 — the
--- normal flow is 4 converts engaging once each, C++-exact;
--- re-engages after an evade would re-talk, as no cross-file
--- counter exists to enforce the cap).
+-- range; kurse:SetData(SETDATA_DATA, SETDATA_PEON_AGGRO) is the
+-- C++ relay verbatim — the boss ev41 handler owns the <4 count
+-- cap and the Talk, so re-engages after an evade are capped
+-- exactly as in C++.
 local function freshState()
     return {
         hemorrhage = 3000,
@@ -110,7 +115,7 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 1, function(_, creature)
     end, 1000, 0)
     local kurse = creature:FindNearestCreature(ENTRY_NETHEKURSE, 45.0)
     if kurse then
-        kurse:Talk(SAY_PEON_ATTACKED)
+        kurse:SetData(SETDATA_DATA, SETDATA_PEON_AGGRO)
     end
 end)
 
@@ -128,11 +133,12 @@ RegisterCreatureEvent(ENTRY_FEL_ORC_CONVERT, 4, function(_, creature)
     resetConvert(creature:GetGUIDLow())
     -- C++ JustDied peon-death relay (boss_nethekurse.cpp:340-346):
     -- no distance gate in C++, so a 100.0 room-scale search;
-    -- boss:Talk(SAY_PEON_DIES) is the SetData effect (same
-    -- count caveat as the aggro relay above).
+    -- kurse:SetData(SETDATA_DATA, SETDATA_PEON_DEATH) is the C++
+    -- relay verbatim — the boss ev41 handler owns the <4 count
+    -- cap, the Talk, and the 4th-death activation.
     local kurse = creature:FindNearestCreature(ENTRY_NETHEKURSE, 100.0)
     if kurse then
-        kurse:Talk(SAY_PEON_DIES)
+        kurse:SetData(SETDATA_DATA, SETDATA_PEON_DEATH)
     end
 end)
 
