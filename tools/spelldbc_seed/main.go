@@ -1485,6 +1485,23 @@ var spells = []spell{
 		{effect: effPersistentAreaAura, aura: auraDummy, dieSides: 1, basePoints: 297, targetA: targetDestDynobjEnemy, radiusIdx: 14, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, dieSides: 1, basePoints: -1, trigger: 42937, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 49519 Heroic Image Channel (wago.tools 3.4.0.43659,
+	// hotfixes OFF, browser verdict 2026-11-15 05:16 EST):
+	// castTimeIdx 1 (instant), durIdx 9 (30000 ms), rangeIdx 13
+	// (Anywhere - Unlimited, 0-50000); school 0x1 Physical; no
+	// SpellPower row (no mana cost), no SpellCooldowns row, no
+	// SpellCategories row (dispel/mechanic 0), no SpellClassOptions
+	// row (family/flags 0); single eff0 6 APPLY_AURA aura 4 DUMMY
+	// Die 0 Base 0 TargetA 38 TARGET_UNIT_NEARBY_ENTRY,
+	// chainAmplitude 1. NOT carried by the seed struct (same as
+	// all seeded rows): SpellMisc Attributes 0x100/0x4404/0x4/0/
+	// 0x80, SpellAuraOptions ProcChance 101, SpellTargetRestrictions
+	// ConeDegrees 60. Cast by the eligor image
+	// (npc_commander_eligor_dawnbringer.lua:236); the DUMMY aura
+	// has no handler, so the cast stays dormant until one lands.
+	{id: 49519, castTimeIdx: 1, durIdx: 9, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -1530,6 +1547,7 @@ func main() {
 		{4, 120000, 0, 120000}, // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},   // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},    // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
+		{9, 30000, 0, 30000},   // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)

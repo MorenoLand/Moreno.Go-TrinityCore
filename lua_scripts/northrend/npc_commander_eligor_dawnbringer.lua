@@ -48,11 +48,14 @@
 -- DEATH_KNIGHTS_2: Talk(13) + image SetEntry/SetDisplayId Blaumeux
 -- + DEATH_KNIGHTS_3 10s; DEATH_KNIGHTS_3: Talk(14) + Zeliek +
 -- DEATH_KNIGHTS_4 10s; DEATH_KNIGHTS_4: Talk(15). HEIGAN_2: Talk(25).
--- Deliberate deviations: SPELL_HEROIC_IMAGE_CHANNEL 49519 is NOT
--- seeded in Spell.dbc — the cast call is ported as-is and stays
--- dormant until the seed lands (lecraft 47575 precedent).
--- GetMotionMaster()->Clear() before MovePoint has no Lua twin;
--- the MoveTo launch replaces the motion (nightbane precedent).
+-- SPELL_HEROIC_IMAGE_CHANNEL 49519 seeded in Spell.dbc (wago
+-- 3.4.0.43659 verdict 2026-11-15): instant, 30 s, unlimited range,
+-- single APPLY_AURA DUMMY eff on TARGET_UNIT_NEARBY_ENTRY; the
+-- DUMMY aura has no handler, so the cast stays dormant until one
+-- lands (lecraft 47575 precedent).
+-- Deliberate deviations: GetMotionMaster()->Clear() before MovePoint
+-- has no Lua twin; the MoveTo launch replaces the motion
+-- (nightbane precedent).
 -- DoMeleeAttackIfReady is engine-driven melee, no port (lecraft
 -- precedent). Audience store caps at 10 (C++ audienceList[10],
 -- no bounds check; the temple spawns are fixed). urand(a, b) =
