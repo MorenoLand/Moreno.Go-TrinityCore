@@ -1,0 +1,19 @@
+-- Muglash escort path binding (Ashenvale, quest 6641).
+-- TDB 335.26091 carries the C++ script_waypoint path for Muglash
+-- (entry 12717) as waypoint_data id 101738 (pts 0-29, starting
+-- 5.7yd from the muglash spawn guid 33115, pt24 at the naga
+-- brazier, pt25-27 the credit/patrol/return nodes) with no binding
+-- row: creature_template_addon.path_id is 0 for 12717 and no
+-- creature_addon row exists for the spawn GUID 33115, so
+-- loadCreaturePathID (creaturemotion.go) falls back to the spawn
+-- GUID, loadWaypoints finds no rows, and MoveWaypoint() is a
+-- no-op -- the lua_scripts/kalimdor/npc_muglash.lua ev6 arms
+-- (brazier pause, wave machine, quest credit) can never fire.
+-- This UPDATE binds the template row to the orphaned path; the
+-- existing loader then walks the escort with zero engine changes.
+-- The AND path_id = 0 guard keeps the migration a no-op on a
+-- deployment DB that already binds this entry (e.g. a future full
+-- TDB import that sets path_id). Precondition: the rows exist (any
+-- full TDB import carries them); a deployment DB missing the rows
+-- needs them from the import, the UPDATE then affects 0 rows.
+UPDATE creature_template_addon SET path_id = 101738 WHERE entry = 12717 AND path_id = 0;
