@@ -91,6 +91,7 @@ const (
 	auraModDmgTaken            = 87
 	auraModResistPct           = 101
 	auraModMeleeHaste          = 138
+	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	auraPeriodicDummy          = 226
@@ -105,29 +106,32 @@ const (
 	schoolFire                 = 4
 	schoolNature               = 8
 	schoolFrost                = 16
+	schoolFrostfire            = 20 // Frost (16) + Fire (4), wago SpellMisc 47610
 	schoolShadow               = 32
 	schoolArcane               = 64
 	targetCaster               = 1
 	targetEnemy                = 6
 	targetSrcAreaEnemy         = 15
-	targetDestCaster           = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
-	targetUnitCasterAreaParty  = 20 // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
-	targetUnitTargetAlly       = 21 // TARGET_UNIT_TARGET_ALLY (SharedDefines.h:1457)
-	targetUnitDestAreaEnemy    = 16 // TARGET_UNIT_DEST_AREA_ENEMY
-	targetDestCasterBackRight  = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
-	targetDestCasterFrontRight = 41 // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
-	targetDestCasterSummon     = 32 // TARGET_DEST_CASTER_SUMMON
-	targetDestCasterRadius     = 73 // TARGET_DEST_CASTER_RADIUS
-	targetUnitTargetAny        = 25 // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
-	targetUnitConeEnemy        = 24 // TARGET_UNIT_CONE_ENEMY_24 (SharedDefines.h:1460)
-	targetDestTargetAny        = 63 // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
-	targetDestDest             = 87 // TARGET_DEST_DEST (SharedDefines.h:1523)
-	targetDestTargetEnemy      = 53 // TARGET_DEST_TARGET_ENEMY
-	targetSrcCaster            = 22 // TARGET_SRC_CASTER (SharedDefines.h:1459)
-	targetUnitSrcAreaAlly      = 30 // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
-	targetUnitSrcAreaEntry     = 7  // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
-	targetUnitNearbyEntry      = 38 // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
-	targetDestNearbyEntry      = 46 // TARGET_DEST_NEARBY_ENTRY (SharedDefines.h:1482)
+	targetDestCaster           = 18  // TARGET_DEST_CASTER (SharedDefines.h:1455)
+	targetUnitCasterAreaParty  = 20  // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
+	targetUnitTargetAlly       = 21  // TARGET_UNIT_TARGET_ALLY (SharedDefines.h:1457)
+	targetUnitDestAreaEnemy    = 16  // TARGET_UNIT_DEST_AREA_ENEMY
+	targetDestCasterBackRight  = 42  // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
+	targetDestCasterFrontRight = 41  // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
+	targetDestCasterSummon     = 32  // TARGET_DEST_CASTER_SUMMON
+	targetDestCasterRadius     = 73  // TARGET_DEST_CASTER_RADIUS
+	targetUnitTargetAny        = 25  // TARGET_UNIT_TARGET_ANY (SharedDefines.h:1461)
+	targetUnitConeEnemy        = 24  // TARGET_UNIT_CONE_ENEMY_24 (SharedDefines.h:1460)
+	targetDestTargetAny        = 63  // TARGET_DEST_TARGET_ANY (SharedDefines.h:1499)
+	targetDestDest             = 87  // TARGET_DEST_DEST (SharedDefines.h:1523)
+	targetDestTargetEnemy      = 53  // TARGET_DEST_TARGET_ENEMY
+	targetSrcCaster            = 22  // TARGET_SRC_CASTER (SharedDefines.h:1459)
+	targetDestDynobjEnemy      = 28  // TARGET_DEST_DYNOBJ_ENEMY (SharedDefines.h:1464)
+	targetUnitConeEnemy104     = 104 // TARGET_UNIT_CONE_ENEMY_104 (SharedDefines.h:1540)
+	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
+	targetUnitSrcAreaEntry     = 7   // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
+	targetUnitNearbyEntry      = 38  // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
+	targetDestNearbyEntry      = 46  // TARGET_DEST_NEARBY_ENTRY (SharedDefines.h:1482)
 	targetGONearbyEntry        = 40
 	auraAddPctModifier         = 108 // SPELL_AURA_ADD_PCT_MODIFIER (SpellAuraDefines.h:188)
 	spellModDamage             = 0   // SPELLMOD_DAMAGE (SpellMgr.h)
@@ -163,9 +167,10 @@ type spell struct {
 	rangeIdx    uint32
 	maxTargets  uint32
 	school      uint32
-	manaCost    uint32 // Spell.dbc field 42 (store.go:1070)
-	manaCostPct uint32 // Spell.dbc field 204 (store.go:1073)
-	family      uint32 // SpellFamilyName (store.go field 208)
+	manaCost    uint32    // Spell.dbc field 42 (store.go:1070)
+	manaCostPct uint32    // Spell.dbc field 204 (store.go:1073)
+	family      uint32    // SpellFamilyName (store.go field 208)
+	familyFlags [3]uint32 // SpellFamilyFlags (store.go fields 209-211)
 	effects     [3]effect
 }
 
@@ -178,6 +183,9 @@ func (s spell) row() []uint32 {
 	r[40] = s.durIdx
 	r[46] = s.rangeIdx
 	r[208] = s.family
+	for i, f := range s.familyFlags {
+		r[209+i] = f
+	}
 	r[212] = s.maxTargets
 	r[225] = s.school
 	r[42] = s.manaCost
@@ -1281,6 +1289,149 @@ var spells = []spell{
 	// BasePoints 0 TargetA 38 TARGET_UNIT_NEARBY_ENTRY ChainAmplitude 1
 	// (wago.tools 3.4.0.43659, browser task eb1fb12e, 2026-11-15 03:39 UTC).
 	{id: 41342, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1, basePoints: 0, targetA: targetUnitNearbyEntry, chainAmplitude: 1}}},
+	// Frost-seed batch (wago.tools 3.4.0.43659, hotfixes OFF, browser
+	// task 3a7b6385 verdict 2026-11-15): max-rank + low-rank mage
+	// frost ranks that feed the Viscidus freeze machine
+	// (boss_viscidus.cpp:156 frost-school SpellHit gate, now bridged
+	// by creature:GetSpellSchoolMask) + the Viscidus self-auras.
+	// ManaCost is SpellPower.ManaCost — no SpellPower row was in the
+	// verdict, so cost 0 (Aran precedent). RealPointsPerLevel is not
+	// carried by the seed struct (all 154 prior rows omit it).
+	// CastTimeIndex 1 = instant (41342 precedent, wago-literal).
+	// 42841 is Frostbolt Rank 15, NOT Rank 16 (42842 is Rank 16;
+	// its SpellMisc/SpellEffect were not pulled — NOT seeded).
+	// 42920 is Arcane Explosion Rank 9, NOT Blizzard (42921 is
+	// Arcane Explosion Rank 10); the mage Blizzard Rank 8 ID was
+	// not determined — NOT seeded. 31266 is already seeded above
+	// (verified against this same verdict: eff0 27/3/101/949/2000/
+	// 16/13, eff1 27/31/-71/13, durIdx 1, rangeIdx 4, castTimeIdx 4
+	// — byte-identical to the verdict, no change).
+	// 116 Frostbolt Rank 1: castTimeIdx 16 (1500), durIdx 28
+	// (5000), rangeIdx 4 (30 yd), school 0x10; family Mage (3),
+	// flags 32/0/0/0; eff0 6 APPLY_AURA aura 33 MOD_DECREASE_SPEED
+	// Die 1 Base -41 Mechanic 11 TargetA 6; eff1 2 SCHOOL_DAMAGE
+	// Die 3 Base 17 TargetA 6 (18-20 dmg); eff2 6 APPLY_AURA aura
+	// 118 MOD_HEALING_PCT Die 1 Base -1 Misc 127 TargetA 6.
+	{id: 116, castTimeIdx: 16, durIdx: 28, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{32, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -41, mechanic: 11, targetA: targetEnemy},
+		{effect: effSchoolDamage, dieSides: 3, basePoints: 17, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetEnemy},
+	}},
+	// 25304 Frostbolt Rank 11: castTimeIdx 14 (3000), durIdx 105
+	// (9000), rangeIdx 4; eff1 2 SCHOOL_DAMAGE Die 41 Base 514
+	// (515-555 dmg); eff0/eff2 identical to 116.
+	{id: 25304, castTimeIdx: 14, durIdx: 105, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{32, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -41, mechanic: 11, targetA: targetEnemy},
+		{effect: effSchoolDamage, dieSides: 41, basePoints: 514, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetEnemy},
+	}},
+	// 42841 Frostbolt Rank 15: castTimeIdx 14, durIdx 105,
+	// rangeIdx 4; eff1 2 SCHOOL_DAMAGE Die 57 Base 701 (702-758).
+	{id: 42841, castTimeIdx: 14, durIdx: 105, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{32, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -41, mechanic: 11, targetA: targetEnemy},
+		{effect: effSchoolDamage, dieSides: 57, basePoints: 701, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetEnemy},
+	}},
+	// 122 Frost Nova Rank 1: castTimeIdx 1, durIdx 31 (8000),
+	// rangeIdx 1 (Self); flags 64/0/0/0; eff0 2 SCHOOL_DAMAGE Die
+	// 3 Base 18 TargetA 22 TargetB 15 RadiusIndex_0 13 (10 yd)
+	// (19-21 dmg); eff1 6 APPLY_AURA aura 26 MOD_ROOT Die 1 Base
+	// -1 Mechanic 7 TargetA 22/15 RadiusIndex_0 13.
+	{id: 122, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{64, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 3, basePoints: 18, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, mechanic: 7, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+	}},
+	// 27088 Frost Nova Rank 5: eff0 Die 31 Base 229 (230-260).
+	{id: 27088, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{64, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 31, basePoints: 229, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, mechanic: 7, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+	}},
+	// 42917 Frost Nova Rank 6: eff0 Die 51 Base 364 (365-415).
+	{id: 42917, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{64, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 51, basePoints: 364, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, mechanic: 7, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+	}},
+	// 120 Cone of Cold Rank 1: castTimeIdx 1, durIdx 31, rangeIdx
+	// 1; flags 512/0/0/0; eff0 6 APPLY_AURA aura 33 Die 1 Base -51
+	// Mechanic 11 TargetA 104 RadiusIndex_0 13 (-50%); eff1 2
+	// SCHOOL_DAMAGE Die 11 Base 97 TargetA 104 RadiusIndex_0 13
+	// (98-108 dmg); eff2 6 APPLY_AURA aura 118 Die 1 Base -1
+	// Misc 127 TargetA 104 RadiusIndex_0 13.
+	{id: 120, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{512, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, mechanic: 11, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+		{effect: effSchoolDamage, dieSides: 11, basePoints: 97, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+	}},
+	// 27087 Cone of Cold Rank 6: eff1 Die 39 Base 409 (410-448).
+	{id: 27087, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{512, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, mechanic: 11, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+		{effect: effSchoolDamage, dieSides: 39, basePoints: 409, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+	}},
+	// 42931 Cone of Cold Rank 8: eff1 Die 67 Base 706 (707-773).
+	{id: 42931, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{512, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, mechanic: 11, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+		{effect: effSchoolDamage, dieSides: 67, basePoints: 706, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetUnitConeEnemy104, radiusIdx: 13},
+	}},
+	// 27085 Blizzard Rank 7: castTimeIdx 1, durIdx 31, rangeIdx 4;
+	// flags 524416/0/0/0; eff0 27 PERSISTENT_AREA_AURA aura 4
+	// DUMMY Die 1 Base 183 TargetA 28 RadiusIndex_0 14 (8 yd,
+	// RadiusIndex_1 14 recorded, seed carries _0 per convention);
+	// eff1 6 APPLY_AURA aura 23 PERIODIC_TRIGGER_SPELL
+	// AuraPeriod 1000 Base -1 Die 1 Trigger 42198 TargetA 1.
+	// Trigger 42198 is unseeded (29955 precedent — the
+	// periodic-trigger leg no-ops on the spellKnown gate until a
+	// follow-up read fills it).
+	{id: 27085, castTimeIdx: 1, durIdx: 31, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{524416, 0, 0}, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraDummy, dieSides: 1, basePoints: 183, targetA: targetDestDynobjEnemy, radiusIdx: 14},
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, dieSides: 1, basePoints: -1, trigger: 42198, targetA: targetCaster},
+	}},
+	// 47610 Frostfire Bolt Rank 2: castTimeIdx 14, durIdx 105,
+	// rangeIdx 5 (40 yd); school 0x14 (Frost+Fire — counts as
+	// frost under the viscidus gate's mask & 0x10); flags
+	// 0/4096/8/0; eff0 6 APPLY_AURA aura 33 Die 1 Base -41
+	// Mechanic 11 TargetA 6; eff1 2 SCHOOL_DAMAGE Die 117 Base
+	// 721 TargetA 6 (722-838 dmg); eff2 6 APPLY_AURA aura 3
+	// PERIODIC_DAMAGE AuraPeriod 3000 Die 1 Base 29 TargetA 6.
+	{id: 47610, castTimeIdx: 14, durIdx: 105, rangeIdx: 5, school: schoolFrostfire, family: familyMage, familyFlags: [3]uint32{0, 4096, 8}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -41, mechanic: 11, targetA: targetEnemy},
+		{effect: effSchoolDamage, dieSides: 117, basePoints: 721, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 1, basePoints: 29, targetA: targetEnemy},
+	}},
+	// 25937 Viscidus Freeze: castTimeIdx 1, durIdx 8 (15000),
+	// rangeIdx 1 (Self), school 0x10; no SpellClassOptions row
+	// (family/flags 0); eff0 6 APPLY_AURA aura 12 MOD_STUN Die 0
+	// Base 0 TargetA 1; eff1 6 APPLY_AURA aura 4 DUMMY Die 0
+	// Base 0 TargetA 1.
+	{id: 25937, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
+	// 26034 Viscidus Slowed: castTimeIdx 1, durIdx 21
+	// (indefinite), rangeIdx 1, school 0x1 (Physical — the slow
+	// auras are physical-school, not frost); no SpellClassOptions
+	// row; eff0 6 APPLY_AURA aura 138 MOD_MELEE_HASTE Die 1 Base
+	// -19 TargetA 1 (-18%); eff1 6 APPLY_AURA aura 33 Die 1 Base
+	// -16 TargetA 1 (-15%).
+	{id: 26034, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -19, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -16, targetA: targetCaster},
+	}},
+	// 26036 Viscidus Slowed More: eff0 Base -44 (-43%), eff1
+	// Base -31 (-30%); otherwise identical to 26034.
+	{id: 26036, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -44, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -31, targetA: targetCaster},
+	}},
+	// 25938 Viscidus Explode Trigger: castTimeIdx 1, durIdx 0
+	// (none), rangeIdx 1, school 0x1; no SpellClassOptions row;
+	// single effect 3 DUMMY TargetA 1 (the explode leg itself
+	// stays out — glob machine unported — so this row only
+	// documents the trigger; no cast site consumes it yet).
+	{id: 25938, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetCaster},
+	}},
 }
 
 func main() {
