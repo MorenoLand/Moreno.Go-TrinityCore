@@ -280,31 +280,8 @@ RegisterCreatureEvent(ENTRY_HEMET_NESINGWARY, 23, junglePunchReset)
 RegisterCreatureEvent(ENTRY_HADRIUS_HARLOWE, 23, junglePunchReset)
 RegisterCreatureEvent(ENTRY_TAMARA_WOBBLESPROCKET, 23, junglePunchReset)
 
--- C++ npc_engineer_heliceAI::JustDied (zone_sholazar_basin.cpp:116-122):
--- OnDied = 4. If the escort is running, the escort player fails
--- QUEST_DISASTER 12688. IsEscorted/GetEscortPlayer/FailQuest are all
--- bridged (lua_creature_events.go:2639/2678, lua_player.go:5237).
--- Dormant until the escort machine lands: OnQuestAccept/StartEscort and
--- the WaypointReached chain (:65-113, :140-154) are unported, so
--- IsEscorted never reads true live. Entry 28787 carries ScriptName ''
--- in TDB 335.26091 (no C++ NPC_ constant exists for it) — the
--- JustDied arm was ported on entry evidence; the ev6 chain stays out
--- (2026-11-15, ev6 C1b row 4).
-local ENTRY_ENGINEER_HELICE = 28787
-local QUEST_DISASTER = 12688 -- zone_sholazar_basin.cpp:50
-
-local function engineerHeliceDied(_, creature)
-    if not creature:IsEscorted() then
-        return
-    end
-    local player = creature:GetEscortPlayer()
-    if player ~= nil then
-        player:FailQuest(QUEST_DISASTER)
-    end
-end
-
-RegisterCreatureEvent(ENTRY_ENGINEER_HELICE, 4, engineerHeliceDied)
-
+-- Engineer Helice JustDied lives in npc_engineer_helice.lua (canonical;
+-- duplicate removed 2026-11-15: both handlers fired FailQuest twice).
 -- C++ npc_haiphoonAI::SpellHitTarget (zone_sholazar_basin.cpp:578-591):
 -- OnSpellHitTarget = 15. When a Devour Wind (52862) / Devour Water
 -- (52864) cast by Haiphoon lands on a target other than itself, and

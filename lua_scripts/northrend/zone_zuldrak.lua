@@ -380,8 +380,6 @@ local SPELL_UNLOCK_SHACKLE = 55083 -- zone_zuldrak.cpp:42
 local SPELL_FREE_RAGECLAW = 55223 -- zone_zuldrak.cpp:43
 local SPELL_UNSHACKLED = 55085 -- zone_zuldrak.cpp:131
 local SAY_RAGECLAW = 0 -- zone_zuldrak.cpp:132
-local ENTRY_STORM_CLOUD = 29939 -- zone_zuldrak.cpp:903 (STORM_COULD)
-local SPELL_STORM_VISUAL = 55708 -- zone_zuldrak.cpp:905
 local ENTRY_RELEASED_OFFSPRING_HARKOA = 28526 -- creature_template.sql (name 'Released Offspring of Har'koa')
 local ENTRY_CRUSADE_RECRUIT = 28090 -- creature_template.sql (name 'Crusade Recruit')
 local UNIT_FIELD_FLAGS = 59 -- UpdateFields.h (curator precedent)
@@ -461,13 +459,8 @@ local function rageclawSpellHit(event, creature, caster, spellId)
     creature:DespawnOrUnsummon(10000)
 end
 
-local function stormCloudReset(event, creature)
-    if not creature:IsAlive() then
-        return
-    end
-    creature:CastSpell(creature, SPELL_STORM_VISUAL, true)
-end
-
+-- Storm cloud Reset (55708 visual) lives in npc_storm_cloud.lua (canonical;
+-- duplicate removed 2026-11-15: both handlers cast the visual twice).
 local function harkoaReset(event, creature)
     if not creature:IsAlive() then
         return
@@ -621,7 +614,6 @@ RegisterCreatureEvent(ENTRY_DRAKURU_SHACKLES, 23, shacklesReset)
 RegisterCreatureEvent(ENTRY_DRAKURU_SHACKLES, 14, shacklesSpellHit)
 RegisterCreatureEvent(NPC_RAGECLAW, 23, rageclawReset)
 RegisterCreatureEvent(NPC_RAGECLAW, 14, rageclawSpellHit)
-RegisterCreatureEvent(ENTRY_STORM_CLOUD, 23, stormCloudReset)
 RegisterCreatureEvent(ENTRY_RELEASED_OFFSPRING_HARKOA, 23, harkoaReset)
 RegisterCreatureEvent(ENTRY_RELEASED_OFFSPRING_HARKOA, 28, harkoaMovementInform)
 RegisterCreatureEvent(ENTRY_CRUSADE_RECRUIT, 23, crusadeRecruitReset)
