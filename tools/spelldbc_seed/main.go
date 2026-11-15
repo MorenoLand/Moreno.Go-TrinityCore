@@ -89,6 +89,7 @@ const (
 	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
 	auraObsModHealth           = 20 // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
 	auraObsModPower            = 21 // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
+	auraModResistance          = 22 // SPELL_AURA_MOD_RESISTANCE (SpellAuraDefines.h:102)
 	auraPeriodicTrig           = 23
 	auraProcTriggerSpell       = 42 // SPELL_AURA_PROC_TRIGGER_SPELL (SpellAuraDefines.h:122)
 	auraRoot                   = 26
@@ -3281,6 +3282,78 @@ var spells = []spell{
 	{id: 43289, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, targetA: targetDestTargetAny, misc: 24211, miscB: 66, chainAmplitude: 1},
 	}},
+	// 73036 Essence of the Captured (wago name; C++
+	// SPELL_ESSENCE_OF_CAPTURED_1, halls_of_reflection.cpp:2412 enum;
+	// Lua npc_uther_quel_delar.lua:116 triggered self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// 7accea68, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 23
+	// PERIODIC_TRIGGER_SPELL period 330 basePoints -1 dieSides 1 trigger
+	// 73035 TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 35 (4000ms, real row), rangeIdx 13
+	// (Anywhere - Unlimited, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109 precedent).
+	// Engine twin: auraPeriodicTrig 23 live, target 1 live. Removes the
+	// last unseeded-spell blocker for npc_uther_quel_delar.lua
+	// (single-missing-id file).
+	{id: 73036, castTimeIdx: 1, durIdx: 35, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 330, basePoints: -1, dieSides: 1, trigger: 73035, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 57804 Control Crystal Activation (wago name; C++
+	// SPELL_CRYSTAL_ACTIVATION, violet_hold.cpp:136 enum; Lua
+	// npc_violet_hold_activation_crystal.lua:41 player triggered cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 7accea68, DifficultyID 0 rows): single eff0 61
+	// SEND_EVENT misc 20001 TargetA 0 TargetB 0 chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration row),
+	// rangeIdx 1 (Self Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOTE: wago labels effect 61 "SCRIPT_EFFECT"
+	// but SharedDefines.h:872 is SPELL_EFFECT_SEND_EVENT 61 (SCRIPT_EFFECT
+	// is 77, :888); the number is authoritative, seeded as effSendEvent.
+	// NOT carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin: spellEffectSendEvent 61
+	// live (spells.go:384/:17855). Removes the last unseeded-spell blocker
+	// for npc_violet_hold_activation_crystal.lua (single-missing-id file).
+	{id: 57804, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSendEvent, misc: 20001, chainAmplitude: 1},
+	}},
+	// 22011 Spirit Heal Channel (wago name; C++ SPELL_CHANNEL_SPIRIT_HEAL,
+	// zone_wintergrasp.cpp:66 enum; Lua npc_wg_spirit_guide.lua:11) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 7accea68, DifficultyID 0 rows): single eff0 6 APPLY_AURA
+	// aura 23 PERIODIC_TRIGGER_SPELL period 30000 trigger 22012 TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 9 (30000ms, real row), rangeIdx 1 (Self Only, real
+	// row), school 0x2 Holy, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; no SpellAuraOptions row. Engine twin:
+	// auraPeriodicTrig 23 live, target 1 live. Removes the last
+	// unseeded-spell blocker for npc_wg_spirit_guide.lua
+	// (single-missing-id file).
+	{id: 22011, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 30000, trigger: 22012, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12544 Frost Armor (wago name; C++ SPELL_FROST_ARMOR,
+	// zone_wintergrasp.cpp:261 enum; Lua npc_wg_queue.lua:77
+	// non-triggered re-arm) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-15 browser read 7accea68, DifficultyID 0 rows):
+	// eff0 6 APPLY_AURA aura 22 MOD_RESISTANCE dieSides 1 basePoints 11
+	// misc 1 TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; eff1 6
+	// APPLY_AURA aura 42 PROC_TRIGGER_SPELL trigger 6136 TargetA 1
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 30
+	// (1800000ms, real row, browser c857c690), rangeIdx 1 (Self Only, real
+	// row), school 0x10 Frost, dispel 1 (SpellCategories row). NOT carried:
+	// eff0 EffectRealPointsPerLevel 12 (seed has no field); SpellPower
+	// CostPerLevel 5 (seed has no field); SpellCategories Category 0 /
+	// DefenseSkill 1 / Prevention 1 / StartRecovery 133 (no fields, 30621
+	// precedent); SpellAuraOptions ProcChance 100 (no proc table, 58109
+	// precedent). Engine twins: auraModResistance 22 live
+	// (SpellAuraDefines.h:102), auraProcTriggerSpell 42 live, target 1
+	// live. Removes the last unseeded-spell blocker for npc_wg_queue.lua
+	// (single-missing-id file).
+	{id: 12544, dispel: 1, manaCost: 10, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModResistance, dieSides: 1, basePoints: 11, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, trigger: 6136, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -3332,6 +3405,7 @@ func main() {
 		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
 		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
 		{36, 1000, 0, 1000},        // real SpellDuration 36 for 64562 (wago.tools 3.4.0.47659 SpellDuration row 36, 2026-11-15 verdict)
+		{30, 1800000, 0, 1800000},  // real SpellDuration 30 for 12544 Frost Armor (wago.tools 3.4.0.47659 SpellDuration row 30, browser c857c690)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
