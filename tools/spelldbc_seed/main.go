@@ -65,6 +65,8 @@ const (
 	effScriptEffect            = 77
 	effActivateObj             = 86
 	effCharge                  = 96
+	effSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
+	effSkill                   = 118 // SPELL_EFFECT_SKILL (SharedDefines.h:929)
 	effKnockBack               = 98
 	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
@@ -293,8 +295,9 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 150, targetA: targetCaster},
 		{effect: effApplyAura, aura: auraLinked, targetA: targetCaster},
 	}},
-	// 63081/63145 MiscValueB 64 INFERRED (same row-64 inference as
-	// SummonProperties below); MiscValue NPC entries Wowhead-verified.
+	// 63081/63145 MiscValueB 64 (SummonProperties row 64 is REAL now,
+	// wago.tools 3.4.0.43659, 2026-11-15 — see SummonProperties note);
+	// MiscValue NPC entries Wowhead-verified.
 	{id: 63081, rangeIdx: 93006, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 1, targetA: targetCaster, radiusIdx: 91005, misc: 33488, miscB: 64},
 	}},
@@ -451,7 +454,7 @@ var spells = []spell{
 	// triggered) — wago.tools 3.4.0.43659 Spell/SpellEffect/SpellMisc
 	// rows, 2026-11-13 22:11 verdict: single effect 28 SUMMON,
 	// MiscValue 28012 (Amber Drake entry), MiscValueB 64
-	// (SummonProperties 64, seeded INFERRED row), TargetA 42
+	// (SummonProperties 64, seeded REAL row, wago 2026-11-15), TargetA 42
 	// (TARGET_DEST_CASTER_BACK_RIGHT), TargetB 0 (NONE), RadiusIndex
 	// 36, DieSides 1, BasePoints 0; DurationIndex 21 (infinite,
 	// seeded row), RangeIndex 1, SchoolMask 0x1 (physical),
@@ -688,7 +691,7 @@ var spells = []spell{
 	// SpellMisc rows, 2026-11-14 verdict: single effect 28 SUMMON,
 	// DieSides 1, BasePoints 1 (CalcValue +1 = 2 wolves, matching the
 	// description), MiscValue 17854 (dire wolf entry), MiscValueB 64
-	// (SummonProperties 64, seeded INFERRED row — on the Go
+	// (SummonProperties 64, seeded REAL row, wago 2026-11-15 — on the Go
 	// multi-summon list, go_origin_summon.go), TargetA 18
 	// (TARGET_DEST_CASTER), TargetB 0, RadiusIndex 0; DurationIndex 3
 	// (60000 ms, seeded real row below), RangeIndex 12 (Interact
@@ -1155,9 +1158,9 @@ var spells = []spell{
 	{id: 61995, durIdx: 35, rangeIdx: 1, school: schoolArcane, effects: [3]effect{{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, misc: 14, targetA: targetCaster, mask: [3]uint32{65536, 0, 0}}}},
 	// 51017 Summon Arcane Beam: castTimeIdx 1, durIdx 1 (10000),
 	// rangeIdx 1 (Self Only), school 0x1; single effect 28 SUMMON Die
-	// 1 MiscValue 28239 MiscValueB 64 (SummonProperties row 64 — the
-	// ID is real DBC, the row contents stay INFERRED per the
-	// SummonProperties note) RadiusIndex_0 8 TargetA 73.
+	// 1 MiscValue 28239 MiscValueB 64 (SummonProperties row 64 is REAL
+	// now, wago.tools 3.4.0.43659, 2026-11-15 — see SummonProperties
+	// note) RadiusIndex_0 8 TargetA 73.
 	{id: 51017, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 28239, miscB: 64, radiusIdx: 8, targetA: targetDestCasterRadius}}},
 	// 66042 Fireball (grand champion mage): castTimeIdx 19 (2500),
 	// durIdx 0, rangeIdx 5 (Long 0-40), school 0x4; single effect 2
@@ -1597,6 +1600,39 @@ var spells = []spell{
 	{id: 58025, castTimeIdx: 1, durIdx: 28, rangeIdx: 13, school: schoolFrost, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 49, targetA: targetEnemy, misc: 16, chainAmplitude: 1},
 	}},
+	// 8613 Skinning (wago.tools 3.4.0.43659, 2026-11-15; Wowhead
+	// WotLK cross-check: Skin Mob Value 1 + Learn Skill (Skinning)
+	// Value 1, Range 5 yards (Interact), Cast time 1.5 s, School
+	// Physical): castTimeIdx 16 (1500 ms), durIdx 0, RangeIndex 12
+	// carried as synthetic 93002 (0-5 yd; real SpellRange 12 row
+	// unverified), school 0x1; eff0 95 SKINNING Die 1 Base 0
+	// TargetA 25 TARGET_UNIT_TARGET_ANY (EffectRealPointsPerLevel 5,
+	// not encoded — the generator carries no such field and no Go
+	// consumer reads the skinning value); eff1 118 SKILL Die 1 Base
+	// 0 MiscValue_0 393 (Skinning) TargetA 0 NONE (BonusCoefficient
+	// 1, not encoded). NOT carried: SpellMisc Attributes_0 0x10 /
+	// Attributes_1 0x400. Unblocks the_beast ev14: HasSpellEffect
+	// (8613, 95) now resolves.
+	{id: 8613, castTimeIdx: 16, rangeIdx: 93002, school: schoolPhysical, effects: [3]effect{
+		{effect: effSkinning, dieSides: 1, targetA: targetUnitTargetAny},
+		{effect: effSkill, dieSides: 1, misc: 393},
+	}},
+	// 16710 Pip is Quickwit (wago.tools 3.4.0.43659, 2026-11-15;
+	// Wowhead WotLK: "Pip is Quickwit", Summon (Pip Quickwit)
+	// Radius 5 yd, Instant): castTimeIdx 1 (instant), durIdx 21
+	// (-1), RangeIndex 12 (5 yd) carried as synthetic 93002 (see
+	// 8613 note), school 0x1 Physical; single eff0 28 SUMMON Die 1
+	// Base 0 MiscValue_0 10776 (Finkle Einhorn, TDB
+	// creature_template 10776, level 60, faction 35, SmartAI)
+	// MiscValueB 64 RadiusIndex_0 8 (5 yd) TargetA 32
+	// TARGET_DEST_CASTER_SUMMON. C++ EffectSummon: 64 is on the
+	// multi-summon list (SpellEffects.cpp) so count = damage-or-1
+	// = 1; WILD + Flags 0x100 + Title 0 -> default TempSummon
+	// branch, not guardian (see SummonProperties 64 note). NOT
+	// carried: SpellMisc Attributes_0 0x800100.
+	{id: 16710, castTimeIdx: 1, durIdx: 21, rangeIdx: 93002, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, misc: 10776, miscB: 64, radiusIdx: 8, targetA: targetDestCasterSummon},
+	}},
 }
 
 func main() {
@@ -1734,18 +1770,26 @@ func main() {
 		panic(err)
 	}
 	// SummonProperties.dbc: ID, Control, Faction, Title, Slot, Flags.
-	// Row 64 is INFERRED, not client-DBC-verified: (Control 0/WILD,
-	// Faction 14, Title 2/GUARDIAN, Slot 0, Flags 0), forced by the
-	// C++ EffectSummonType multi-summon list + the Go GO-summon leg
-	// gates (go_origin_summon.go:89-98) + hostile-guardian fight
-	// behavior (boss_marli.cpp:119). Replace with the real row when
-	// client data ships. Row 61 is REAL (wago.tools 3.4.0.43659
+	// Row 64 is REAL (wago.tools 3.4.0.43659 SummonProperties,
+	// 2026-11-15): (Control 0/WILD, Faction 0, Title 0, Slot 0,
+	// Flags_0 0x100; Flags_1 0x0 is not encoded — the seed has one
+	// Flags field). It REPLACES the 2026-11-13 INFERRED row (Faction
+	// 14, Title 2/GUARDIAN), which was justified by C++ EffectSummon
+	// multi-summon behavior + the Go GO-summon leg gates
+	// (go_origin_summon.go:89-98) + hostile-guardian fight behavior
+	// (boss_marli.cpp:119). C++ consequence (SpellEffects.cpp
+	// EffectSummon): WILD + Flags 0x100 (no 512 bit) + Title 0 falls
+	// through to the default TempSummon branch, NOT SummonGuardian;
+	// the Go mirror (summonPropertiesIsGuardian, spells.go) does the
+	// same. The multi-summon list still names 64, so counts stay
+	// damage-or-1. A 3.3.5 client-DBC re-read is the remaining
+	// confirmation (wago build is 3.4.0). Row 61 is REAL (wago.tools 3.4.0.43659
 	// SummonProperties: Control 1/Guardian, Faction 0, Title 2,
 	// Slot 0, Flags_0 0x2; Flags_1 0x0 is not encoded — the seed has
 	// one Flags field). Row 81 is REAL (wago.tools 3.4.0.43659
 	// SummonProperties: Control 1/Guardian, Faction 0, Title 4/
 	// TOTEM, Slot 2 (earth totem), Flags_0 0x100002).
-	summonProps := [][]uint32{{64, 0, 14, 2, 0, 0}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}}
+	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}}
 	if err := writeWDBC(filepath.Join(out, "SummonProperties.dbc"), 6, summonProps); err != nil {
 		panic(err)
 	}

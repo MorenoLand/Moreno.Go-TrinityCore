@@ -112,8 +112,10 @@
 -- summoned (trigger machine unported, see above) — NOT for lack of a
 -- summon-delivery leg (creatureEffectSummonType exists,
 -- boss_ai.go:3574-3581, 50415 precedent) and NOT because the event
--- never fires; 51017 itself is unseeded in the Go Spell.dbc so its
--- effect type is unverified (round-70). DespawnOrUnsummon DOES have a
+-- never fires; 51017 IS seeded in the Go Spell.dbc (tools/spelldbc_seed,
+-- verified in the seed binary 2026-11-15) so its effect type is
+-- verified — the stay-out is the trigger machine alone.
+-- DespawnOrUnsummon DOES have a
 -- Lua binding (creature:Despawn(), lua_creature_events.go:3318; the
 -- old "no binding" claim is retracted 2026-11-10); UpdateAI — DoMeleeAttackIfReady only; MovementInform
 -- (POINT_MOTION_TYPE / ACTION_CALL_DRAGON_EVENT) — MoveIdle +

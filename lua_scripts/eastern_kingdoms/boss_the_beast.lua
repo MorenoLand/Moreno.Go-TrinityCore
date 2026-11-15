@@ -70,10 +70,10 @@
 -- hit target in finishSpellCast (spells.go:19914, 30186-30197) with
 -- (event, creature, caster, spellId), and dead motions stay findable
 -- (handleEffectSkinning, spells.go:5621) — skinning the dead Beast fires it.
--- DATA CAVEAT: the skinning spell (8613) and 16710 are absent from the
--- embedded Spell.dbc (seeddbc/Spell.dbc, 184 rows), so HasSpellEffect
--- returns false until those rows land; the arm is faithful and inert,
--- not fabricated — no spell ID is hard-coded as the trigger.
+-- DATA NOTE (2026-11-15): the skinning spell (8613) and 16710 are now
+-- seeded in the embedded Spell.dbc (tools/spelldbc_seed, wago.tools
+-- 3.4.0.43659) — HasSpellEffect(8613, 95) resolves and the 16710
+-- summon leg (Finkle Einhorn 10776, SummonProperties 64) fires.
 -- CASTING gates ported: C++ UpdateAI pre-loop gate (:166) + in-loop
 -- gate (:201) are a 500ms IsCasting defer under each arm's own key
 -- (live, lua_creature_events.go:2480; mal_ganis idiom) — a gated arm
