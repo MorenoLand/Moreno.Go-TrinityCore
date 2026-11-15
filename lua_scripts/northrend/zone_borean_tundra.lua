@@ -59,3 +59,77 @@ local function bloodsporeRuinationHit(event, spell, effectIndex)
 end
 
 RegisterSpellEvent(SPELL_BLOODSPORE_RUINATION, 4, bloodsporeRuinationHit)
+
+-- Borean Tundra: Thassarian — Lua port of the WaypointReached arms
+-- of src/server/scripts/Northrend/zone_borean_tundra.cpp
+-- (class npc_thassarian : CreatureScript("npc_thassarian");
+-- struct npc_thassarianAI : public EscortAI).
+-- Entry: 101303 (TDB 335.26091 creature_template ScriptName
+-- npc_thassarian). Eluna creature events: 6 OnReachWP.
+-- Ported arms (C++ order, zone_borean_tundra.cpp:495-547), under
+-- the GetPlayerForEscort() nil-guard (Lua twin: GetEscortPlayer()):
+-- - wp3 SetEscortPaused(true); summon NPC_IMAGE_LICH_KING 26203
+--   (3730.313, 3518.689, 473.324, 1.562, CORPSE_TIMED_DESPAWN
+--   2min) + SetFlag(UNIT_FIELD_FLAGS 59, UNIT_FLAG_NON_ATTACKABLE
+--   0x2) + SetReactState(REACT_PASSIVE 0, UnitDefines.h:340) +
+--   SetWalk(true) + MoveTo(0, 3737.374756, 3564.841309,
+--   477.433014); summon NPC_COUNSELOR_TALBOT 25301 (3747.23,
+--   3614.936, 473.321, 4.462012, same despawn) + SetWalk(true) +
+--   MoveTo(0, 3738.000977, 3568.882080, 477.433014); me:SetWalk(false).
+-- - wp4 SetEscortPaused(true) + phase = 7 latch (per-GUID; the
+--   phase machine reads it, see below).
+-- Deliberate omissions / unported scope: the UpdateAI phase machine
+-- (zone_borean_tundra.cpp:549-704: phases 1-17, Talbot/Arthas/Arlos/
+-- Leryssa dialogue chain, Valanar transform, combat start) — the
+-- wp4 phase=7 arm only arms it, and the wp3 summon GUID latches
+-- (arthasGUID/talbotGUID) live in it. The gossip driver
+-- (OnGossipSelect Start, :733-740) is with it, so this handler
+-- fires once that lands.
+
+local ENTRY_THASSARIAN = 101303
+
+local NPC_IMAGE_LICH_KING = 26203 -- zone_borean_tundra.cpp:412
+local NPC_COUNSELOR_TALBOT = 25301 -- zone_borean_tundra.cpp:413
+
+local UNIT_FIELD_FLAGS = 59
+local UNIT_FLAG_NON_ATTACKABLE = 0x2
+local REACT_PASSIVE = 0
+
+local SUMMON_CORPSE_TIMED_DESPAWN = 5
+local SUMMON_DESPAWN_MS = 120000 -- 2min
+
+local thassarianPhase = {}
+
+-- C++ WaypointReached (zone_borean_tundra.cpp:495-547).
+local function thassarianReachWP(event, creature)
+    local player = creature:GetEscortPlayer()
+    if not player then
+        return
+    end
+    local wp = creature:GetCurrentWaypointId()
+    if wp == 3 then
+        creature:SetEscortPaused(true)
+        local arthas = creature:SummonCreature(NPC_IMAGE_LICH_KING,
+            3730.313, 3518.689, 473.324, 1.562,
+            SUMMON_CORPSE_TIMED_DESPAWN, SUMMON_DESPAWN_MS)
+        if arthas then
+            arthas:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
+            arthas:SetReactState(REACT_PASSIVE)
+            arthas:SetWalk(true)
+            arthas:MoveTo(0, 3737.374756, 3564.841309, 477.433014)
+        end
+        local talbot = creature:SummonCreature(NPC_COUNSELOR_TALBOT,
+            3747.23, 3614.936, 473.321, 4.462012,
+            SUMMON_CORPSE_TIMED_DESPAWN, SUMMON_DESPAWN_MS)
+        if talbot then
+            talbot:SetWalk(true)
+            talbot:MoveTo(0, 3738.000977, 3568.882080, 477.433014)
+        end
+        creature:SetWalk(false)
+    elseif wp == 4 then
+        creature:SetEscortPaused(true)
+        thassarianPhase[creature:GetGUIDLow()] = 7
+    end
+end
+
+RegisterCreatureEvent(ENTRY_THASSARIAN, 6, thassarianReachWP)

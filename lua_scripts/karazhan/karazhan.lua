@@ -6,28 +6,15 @@
 -- the TDB creature_template ScriptName bindings are DB-side (no TDB in
 -- this workspace). Deliberately unported (documented only — neither
 -- script has a bridgeable core):
--- * npc_barnes (16812, EscortAI): the whole script is escort-machine
---   driven — waypoint 0 tuxedo + stage door, waypoint 4 spotlight
---   summon + SetEscortPaused dialogue machine (TalkCount 0..3 per
---   Oz/Hood/RAJ tables), waypoint 8 performance-ready, waypoint 9
---   PrepareEncounter summons + curtains, plus a 15s raid-wipe evade
---   poll. Escort bridges now EXIST (re-verified 2026-11-14, round116):
---   creature:StartEscort (lua_creature_events.go:2668), MoveWaypoint
---   (:4719, DB-driven via creaturemotion.go:4893), OnReachWP event 6
---   (runtime.go:371), SetEscortPaused (:2721), gameobject:UseDoorOrButton
---   (lua_objects.go:4674), GetGuidData (:7166) + GetGameObjectByGUID
---   (:4385), EnterEvadeMode (:4823), SetFlag (:6466), GetPlayersInGrid
---   (:6948) / Map:GetPlayers (globals.go:1201); live escort precedents
---   (old_hillsbrad Thrall, npc_earthmender_wilda). The Reset arm is
---   portable with the port (m_uiEventId = instance GetData
---   (DATA_OPERA_PERFORMANCE), rolled once per instance 1-3 in the
---   instance ctor — math.random(1, 3) cached per (map, instance) via
---   GetMapId/GetInstanceId) but lands WITH the Barnes port, not solo
---   (unconsumed state otherwise). Remaining gates: instance uint32
---   GetData (DATA_MOROES DONE, DATA_OPERA_OZ_DEATHCOUNT,
---   DATA_GO_STAGEDOORLEFT / DATA_GO_CURTAINS) has no instance bridge;
---   the dialogue timers, spotlight (19525) and encounter summons
---   (17535/17546/17547/17543/17603/17534) ride the escort machine.
+-- * npc_barnes (16812, EscortAI): the ev6 + Reset arms are PORTED
+--   2026-11-15 in lua_scripts/karazhan/npc_barnes.lua (wp0 tuxedo +
+--   stage door, wp4 spotlight summon + pause, wp8 performance-ready,
+--   wp9 PrepareEncounter summons + curtains; Reset rolls the opera
+--   event 1-3 per instance). Still unported here: the
+--   TalkCount/TalkTimer dialogue machine (Oz/Hood/RAJ textids 0-11),
+--   the gossip driver (OnGossipHello/Select StartEvent) and the
+--   raid-wipe evade poll — all UpdateAI/gossip scope, so the ev6
+--   handler fires once the driver lands.
 --   The gossip arms (OnGossipHello menu 8970/8975/8978, OnGossipSelect
 --   start event / GM event override) are registered gossip-event
 --   content in the engine, but the hello gate and every select arm are

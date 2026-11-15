@@ -68,12 +68,15 @@
 --   instance model blocked (standing).
 -- - npc_morridune (entry 6729, blackfathom_deeps.h:59): PORTED below —
 --   Reset's RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) twin on
---   spawn (event 5) keeps the select arm gated exactly like C++ (the
---   flag is only re-set at escort waypoint 4, which rides the
---   unported EscortAI machine), plus the OnGossipSelect teleport
---   DoCast(player, 9268) arm. Reset's Talk(0) rides the same spawn
---   hook; escort Start / WaypointReached(4) legs stay documented-only
---   (no movement/waypoint bridge).
+--   spawn (event 5) keeps the select arm gated exactly like C++
+--   (the flag is only re-set at escort waypoint 4), plus the
+--   OnGossipSelect teleport DoCast(player, 9268) arm. Reset's Talk(0)
+--   rides the same spawn hook. WaypointReached(4) PORTED 2026-11-15
+--   (ev6): SetFacingTo(1.775791) + SetFlag gossip + Talk(1); the
+--   walk rides MoveWaypoint() from the spawn hook (C++ Reset's
+--   Start(false) twin) and the permanent SetEscortPaused(true) is
+--   twinned with StopEscort() — SetEscortPaused no-ops with no
+--   escort player armed, and C++ never resumes.
 
 local ENTRY_AKU_MAI_SNAPJAW = 4825
 local ENTRY_AKU_MAI_SERVANT = 4978
@@ -276,16 +279,36 @@ local ENTRY_MORRIDUNE = 6729
 local UNIT_NPC_FLAGS_FIELD = 82
 local UNIT_NPC_FLAG_GOSSIP = 1
 local SAY_MORRIDUNE_1 = 0
+local SAY_MORRIDUNE_2 = 1
 local SPELL_TELEPORT_DARNASSUS = 9268
 
 -- C++ Reset() (:202-207): Talk(SAY_MORRIDUNE_1 0) + RemoveFlag(UNIT_NPC_FLAGS,
--- UNIT_NPC_FLAG_GOSSIP) + Start(false). The escort Start rides the unported
--- EscortAI machine; the flag removal is ported so the select arm below stays
--- gated exactly like C++ (flag re-set only at escort waypoint 4, :213-218,
--- unported). Field 82 = UNIT_NPC_FLAGS (lua_creature_events.go).
+-- UNIT_NPC_FLAG_GOSSIP) + Start(false). The escort Start rides MoveWaypoint()
+-- (StartEscort only latches a player; this escort has none — the walk
+-- starts at spawn, ruul precedent); the flag removal is ported so the
+-- select arm below stays gated exactly like C++ (flag re-set only at
+-- escort waypoint 4, :213-218). Field 82 = UNIT_NPC_FLAGS (lua_creature_events.go).
 local function morriduneSpawn(_, creature)
     creature:Talk(SAY_MORRIDUNE_1)
     creature:RemoveFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
+    creature:MoveWaypoint()
+end
+
+-- C++ WaypointReached(4) (:209-219): SetEscortPaused(true) +
+-- SetFacingTo(1.775791) + SetFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) +
+-- Talk(SAY_MORRIDUNE_2 1). The pause is permanent in C++ (OnGossipSelect
+-- only casts the teleport, never resumes), so it is twinned with
+-- StopEscort() — it halts the waypoint generator at wp4, while
+-- SetEscortPaused would no-op with no escort player armed
+-- (lua_creature_events.go:2892).
+local function morriduneReachWP(_, creature)
+    if creature:GetCurrentWaypointId() ~= 4 then
+        return
+    end
+    creature:StopEscort()
+    creature:SetFacingTo(1.775791)
+    creature:SetFlag(UNIT_NPC_FLAGS_FIELD, UNIT_NPC_FLAG_GOSSIP)
+    creature:Talk(SAY_MORRIDUNE_2)
 end
 
 -- C++ OnGossipSelect (:222-226): DoCast(player, SPELL_TELEPORT_DARNASSUS 9268),
@@ -298,4 +321,5 @@ local function morriduneGossipSelect(_, player, creature)
 end
 
 RegisterCreatureEvent(ENTRY_MORRIDUNE, 5, morriduneSpawn)
+RegisterCreatureEvent(ENTRY_MORRIDUNE, 6, morriduneReachWP)
 RegisterCreatureGossipEvent(ENTRY_MORRIDUNE, 2, morriduneGossipSelect)

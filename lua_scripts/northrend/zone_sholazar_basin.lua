@@ -286,9 +286,10 @@ RegisterCreatureEvent(ENTRY_TAMARA_WOBBLESPROCKET, 23, junglePunchReset)
 -- bridged (lua_creature_events.go:2639/2678, lua_player.go:5237).
 -- Dormant until the escort machine lands: OnQuestAccept/StartEscort and
 -- the WaypointReached chain (:65-113, :140-154) are unported, so
--- IsEscorted never reads true live. Entry DB-verified in
--- creature_template.sql (ScriptName npc_engineer_helice): 28787 — no
--- C++ NPC_ constant exists for it.
+-- IsEscorted never reads true live. Entry 28787 carries ScriptName ''
+-- in TDB 335.26091 (no C++ NPC_ constant exists for it) — the
+-- JustDied arm was ported on entry evidence; the ev6 chain stays out
+-- (2026-11-15, ev6 C1b row 4).
 local ENTRY_ENGINEER_HELICE = 28787
 local QUEST_DISASTER = 12688 -- zone_sholazar_basin.cpp:50
 
