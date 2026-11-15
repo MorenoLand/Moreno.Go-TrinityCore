@@ -97,11 +97,13 @@ const (
 	auraDecSpeed               = 33
 	auraEffImmunity            = 37
 	auraTransform              = 56
+	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
 	auraModResistPct           = 101
+	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
@@ -2864,6 +2866,58 @@ var spells = []spell{
 	// blocker for culling_of_stratholme.lua (single-missing-id file).
 	{id: 53435, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
 		{effect: effScriptEffect, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 66657 Parachute (wago name; no C++ enum hit; Lua
+	// isle_of_conquest.lua:29 CastSpell) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-15 browser read 21bf7fe7,
+	// DifficultyID 0 rows): eff0 6 APPLY_AURA aura 105 FEATHER_FALL
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1, eff1 6 APPLY_AURA
+	// aura 77 MECHANIC_IMMUNITY Die 1 Base -1 MiscA 23 TargetA 1
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21 (-1
+	// infinite, real row), rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: auraFeatherFall 105 live
+	// (spells.go:637, movement.go:1437), auraMechanicImmunity 77 live
+	// (spells.go:712, immunity.go:1368; twin reads eff.MiscValue, so the
+	// mechanic rides misc: 23 — no effect mechanic field set). Removes
+	// the last unseeded-spell blocker for isle_of_conquest.lua
+	// (single-missing-id file).
+	{id: 66657, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraFeatherFall, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, dieSides: 1, basePoints: -1, misc: 23, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 17534 Healing Potion (wago name; C++ SPELL_HEALING_POTION,
+	// zone_howling_fjord.cpp:39 enum; Lua npc_apothecary_hanes.lua:70
+	// CastSpell) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 21bf7fe7, DifficultyID 0 rows): single
+	// eff0 10 HEAL Die 701 Base 1049 TargetA 1 TARGET_UNIT_CASTER
+	// Amplitude 1 chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 0, rangeIdx 1 (Self Only, real row), school 0x1 Physical,
+	// dispel 0 (SpellCategories DispelType 0). NOT carried: no SpellPower
+	// row; no SpellAuraOptions row; SpellCategories Category 4 /
+	// DefenseType 1 (no category/defense fields in the seed struct,
+	// 30621 cat270 precedent); Amplitude 1 (no amplitude field, 29907
+	// precedent). Engine twin: effHeal 10 live. Removes the last
+	// unseeded-spell blocker for npc_apothecary_hanes.lua
+	// (single-missing-id file).
+	{id: 17534, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effHeal, dieSides: 701, basePoints: 1049, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 45631 Cosmetic - Enslave Chains Self (wago name; C++
+	// SPELL_COSMETIC_ENSLAVE_CHAINS_SELF, zone_borean_tundra.cpp:1090
+	// enum; Lua npc_beryl_sorcerer.lua:59 CastSpell) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// 21bf7fe7, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 4
+	// DUMMY TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 21 (-1 infinite, real row), rangeIdx 1
+	// (Self Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109 precedent).
+	// Engine twin: auraDummy 4 live. Removes the last unseeded-spell
+	// blocker for npc_beryl_sorcerer.lua (single-missing-id file).
+	{id: 45631, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
