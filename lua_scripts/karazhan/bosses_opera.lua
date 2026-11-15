@@ -402,14 +402,17 @@ RegisterCreatureEvent(ENTRY_TITO, 23, titoLeaveCombat)
 -- Strawman (boss_strawman, C++ ScriptName for 17543): brain bash 31046 on
 -- the victim every 15s (first 5s); brain wipe 31069 on a random alive
 -- player within 100 yd every 20s (first 7s). The fire-school SpellHit arm
--- (burning straw 31075) has no bridge — event 14 carries only the spell
--- id. The AggroTimer NON_ATTACKABLE arm is PORTED (2026-10-20).
+-- (burning straw 31075, 1-in-10 on a fire-school hit) is PORTED
+-- 2026-11-15 on creature:GetSpellSchoolMask (98dc9df7 bridge).
+-- The AggroTimer NON_ATTACKABLE arm is PORTED (2026-10-20).
 local STRAWMAN_SAY_AGGRO = 0
 local STRAWMAN_SAY_DEATH = 1
 local STRAWMAN_SAY_SLAY = 2
 
 local SPELL_BRAIN_BASH = 31046
 local SPELL_BRAIN_WIPE = 31069
+local SPELL_BURNING_STRAW = 31075
+local SPELL_SCHOOL_MASK_FIRE = 4 -- SharedDefines.h:326
 
 local function strawmanBrainBash(creature, guid)
     local victim = creature:GetVictim()
@@ -479,10 +482,23 @@ local function strawmanReachHome(event, creature)
     creature:Despawn()
 end
 
+-- C++ boss_strawmanAI::SpellHit (bosses_opera.cpp:375-386): a
+-- fire-school hit has a 1-in-10 chance to trigger burning straw 31075
+-- on self. SchoolMask is read via creature:GetSpellSchoolMask(spellId)
+-- (0 for an unseeded spell, so the gate fails closed until the incoming
+-- fire spell and 31075 land in the Spell.dbc seed).
+local function strawmanSpellHit(event, creature, caster, spellId)
+    if creature:GetSpellSchoolMask(spellId) == SPELL_SCHOOL_MASK_FIRE
+            and math.random(10) == 1 then
+        creature:CastSpell(creature, SPELL_BURNING_STRAW, true)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_STRAWMAN, 1, strawmanEnterCombat)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 2, strawmanLeaveCombat)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 3, strawmanTargetDied)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 4, strawmanDied)
+RegisterCreatureEvent(ENTRY_STRAWMAN, 14, strawmanSpellHit)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 23, strawmanReset)
 RegisterCreatureEvent(ENTRY_STRAWMAN, 24, strawmanReachHome)
 
