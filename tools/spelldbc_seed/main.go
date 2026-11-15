@@ -103,6 +103,7 @@ const (
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
+	auraModHitChance           = 54 // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
 	auraModResistPct           = 101
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
@@ -110,6 +111,7 @@ const (
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	auraPeriodicDummy          = 226
+	auraPeriodicTrigWithValue  = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
 	auraControlVehicle         = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	auraCloneCaster            = 247 // SPELL_AURA_CLONE_CASTER (SpellAuraDefines.h)
 	auraPhase                  = 261 // SPELL_AURA_PHASE (SpellAuraDefines.h)
@@ -3059,6 +3061,85 @@ var spells = []spell{
 		{effect: effSummon, targetA: targetDestCaster, misc: 36847, miscB: 1362, chainAmplitude: 1},
 		{effect: effPersistentAreaAura, aura: auraDummy, targetA: targetDestCaster, radiusIdx: 36, chainAmplitude: 1},
 	}},
+	// 70460 Coldflame Jets (wago name; C++ SPELL_COLDFLAME_JETS,
+	// icecrown_citadel.cpp:85 enum; Lua npc_frost_freeze_trap.lua:15
+	// const, :5 DoCastSelf non-triggered 22s re-arm) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser
+	// read, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 227
+	// PERIODIC_TRIGGER_SPELL_WITH_VALUE period 250 basePoints 9999
+	// dieSides 1 trigger 70461 TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; castTimeIdx 5 (2000ms, real row), durIdx 21
+	// (-1 infinite, real row), rangeIdx 1 (Self Only, real row),
+	// school 0x10 Frost, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin:
+	// auraPeriodicTriggerSpellWithValue 227 live (spells.go:38227,
+	// handled :21104), target 1 live. Removes the last
+	// unseeded-spell blocker for npc_frost_freeze_trap.lua
+	// (single-missing-id file).
+	{id: 70460, castTimeIdx: 5, durIdx: 21, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrigWithValue, auraPeriod: 250, basePoints: 9999, dieSides: 1, trigger: 70461, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64668 Magnetic Field (wago name; C++ SPELL_MAGNETIC_FIELD,
+	// boss_mimiron.cpp:162 enum; Lua npc_mimiron_assault_bot.lua:8
+	// const, :42 30s re-arm) — wago.tools 3.4.0.47659 SpellEffect rows
+	// + SpellMisc (2026-11-15 browser read, DifficultyID 0 rows):
+	// eff0 6 APPLY_AURA aura 26 MOD_ROOT TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1, eff1 6 APPLY_AURA
+	// aura 87 MOD_DAMAGE_PERCENT_TAKEN basePoints 29 dieSides 1
+	// misc 127 TargetA 6 chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 32 (6000ms, real row), rangeIdx 4 (Medium
+	// Range, real row), school 0x40 Arcane, dispel 1 (MAGIC,
+	// SpellCategories row), mechanic 7 (ROOT, SpellCategories row).
+	// NOT carried: no SpellPower row; SpellAuraOptions ProcChance 101
+	// (no proc table, 58109 precedent). Engine twins: auraRoot 26 /
+	// auraModDmgTaken 87 live, target 6 live. Removes the last
+	// unseeded-spell blocker for npc_mimiron_assault_bot.lua
+	// (single-missing-id file).
+	{id: 64668, dispel: 1, mechanic: 7, castTimeIdx: 1, durIdx: 32, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, mechanic: 7, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 29, dieSides: 1, mechanic: 7, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 63767 Bomb Bot (wago name — NOT "Bomb Bot Aura"; C++
+	// SPELL_BOMB_BOT_AURA, boss_mimiron.cpp:165 enum; Lua
+	// npc_mimiron_bomb_bot.lua:24 const, creature_template_addon aura)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-15 browser read, DifficultyID 0 rows): eff0 6
+	// APPLY_AURA aura 54 MOD_HIT_CHANCE basePoints -101 dieSides 1
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1, eff1 6 APPLY_AURA
+	// aura 42 PROC_TRIGGER_SPELL trigger 63801 TargetA 1
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 0,
+	// rangeIdx 1 (Self Only, real row), school 0x1 Physical, dispel 0
+	// (no SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 100 (not 101; no proc table, 58109
+	// precedent). Engine twins: auraModHitChance 54 live
+	// (spellAuraModHitChance, spells.go:619, used :34533),
+	// auraProcTriggerSpell 42 live, target 1 live. Removes the last
+	// unseeded-spell blocker for npc_mimiron_bomb_bot.lua
+	// (single-missing-id file).
+	{id: 63767, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModHitChance, basePoints: -101, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, trigger: 63801, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64562 Summon Flames Spread Trigger (wago name; C++
+	// SPELL_SUMMON_FLAMES_SPREAD_TRIGGER, boss_mimiron.cpp:132 enum;
+	// Lua npc_mimiron_flames.lua:16 const, :66 DoCastAOE one-shot) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read, DifficultyID 0 rows): single eff0 6 APPLY_AURA
+	// aura 23 PERIODIC_TRIGGER_SPELL period 1000 basePoints -1
+	// dieSides 1 trigger 64564 TargetA 22 TARGET_SRC_CASTER TargetB
+	// 15 TARGET_UNIT_SRC_AREA_ENEMY RadiusIndex 28 chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 36 (1000ms, real row
+	// added below), rangeIdx 13 (Anywhere - Unlimited, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin: auraPeriodicTrig 23
+	// live, targets 22/15 live, radius 28 pre-existing (50000).
+	// Removes the last unseeded-spell blocker for
+	// npc_mimiron_flames.lua (single-missing-id file).
+	{id: 64562, castTimeIdx: 1, durIdx: 36, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, basePoints: -1, dieSides: 1, trigger: 64564, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -3109,6 +3190,7 @@ func main() {
 		{25, 180000, 0, 180000},    // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
 		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
 		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
+		{36, 1000, 0, 1000},        // real SpellDuration 36 for 64562 (wago.tools 3.4.0.47659 SpellDuration row 36, 2026-11-15 verdict)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
