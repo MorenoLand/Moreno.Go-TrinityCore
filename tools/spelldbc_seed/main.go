@@ -53,9 +53,11 @@ const (
 	effTeleportUnits           = 5 // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816)
 	effApplyAura               = 6
 	effHealthLeech             = 9
+	effHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	effSummon                  = 28
 	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize                = 30
+	effWeaponPercentDamage     = 31 // SPELL_EFFECT_WEAPON_PERCENT_DAMAGE (SharedDefines.h:843)
 	effTriggerMiss             = 32
 	effSendEvent               = 61
 	effThreat                  = 63 // SPELL_EFFECT_THREAT (SharedDefines.h)
@@ -67,8 +69,9 @@ const (
 	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage            = 58
-	effHealMaxHealth           = 67 // SPELL_EFFECT_HEAL_MAX_HEALTH
-	effInterruptCast           = 68 // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
+	effHealMaxHealth           = 67  // SPELL_EFFECT_HEAL_MAX_HEALTH
+	effInterruptCast           = 68  // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
+	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
@@ -106,6 +109,7 @@ const (
 	targetSrcAreaEnemy         = 15
 	targetDestCaster           = 18 // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	targetUnitCasterAreaParty  = 20 // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
+	targetUnitTargetAlly       = 21 // TARGET_UNIT_TARGET_ALLY (SharedDefines.h:1457)
 	targetUnitDestAreaEnemy    = 16 // TARGET_UNIT_DEST_AREA_ENEMY
 	targetDestCasterBackRight  = 42 // TARGET_DEST_CASTER_BACK_RIGHT (SharedDefines.h:1478)
 	targetDestCasterFrontRight = 41 // TARGET_DEST_CASTER_FRONT_RIGHT (SharedDefines.h:1477)
@@ -130,19 +134,21 @@ const (
 )
 
 type effect struct {
-	effect     uint32
-	dieSides   int32
-	basePoints int32
-	mechanic   uint32
-	targetA    uint32
-	targetB    uint32
-	radiusIdx  uint32
-	aura       uint32
-	auraPeriod uint32
-	misc       int32
-	miscB      int32
-	trigger    uint32
-	mask       [3]uint32 // EffectSpellClassMask (store.go fields 122-130)
+	effect         uint32
+	dieSides       int32
+	basePoints     int32
+	mechanic       uint32
+	targetA        uint32
+	targetB        uint32
+	radiusIdx      uint32
+	aura           uint32
+	auraPeriod     uint32
+	misc           int32
+	miscB          int32
+	trigger        uint32
+	chainTargets   uint32    // EffectChainTargets (store.go field 104+i)
+	chainAmplitude float32   // EffectChainAmplitude (store.go fields 216-218)
+	mask           [3]uint32 // EffectSpellClassMask (store.go fields 122-130)
 }
 
 type spell struct {
@@ -189,6 +195,8 @@ func (s spell) row() []uint32 {
 		r[110+i] = uint32(e.misc)
 		r[113+i] = uint32(e.miscB)
 		r[116+i] = e.trigger
+		r[104+i] = e.chainTargets
+		r[216+i] = f32(e.chainAmplitude)
 		for j := range e.mask {
 			r[122+3*i+j] = e.mask[j]
 		}
@@ -1072,6 +1080,161 @@ var spells = []spell{
 	// DUMMY TargetA 22 TargetB 20 (translated from wago 7)
 	// RadiusIndex_0 30. Speed 40 in SpellMisc is not encoded — the
 	// seed has no speed field.
+	// Grand-champion / wyrmrest seed set (wago.tools 3.4.0.43659,
+	// 2026-11-14): all rows Diff 0 (normal 10-man) where the spell has
+	// multiple difficulties. CastTimeIndex 1 (instant) is default 0 and
+	// is omitted; DurationIndex 0 likewise. BonusCoefficient is not
+	// encoded (seed has no bonus field; 29978 precedent) and no seeded
+	// spell here has a nonzero EffectAmplitude. 66045 Haste was
+	// re-read independently (d3978dfa, 02:30 UTC): aura 193/61/31
+	// confirmed verbatim — the MELEE_SLOW +99 base is genuine DBC
+	// data for this custom NPC spell, seeded as read. 67709
+	// Eviscerate: wago 3.4.0.43659 exposes no PointsPerCombo column
+	// (36 columns, no combo column; EffectPointsPerResource 0), so
+	// no combo-point value is encoded.
+	// 63010 Charge: castTimeIdx 1, durIdx 0, rangeIdx 95 (8-25 yd),
+	// school 0x1; eff0 2 SCHOOL_DAMAGE Die 1 Base 8499 TargetA 6; eff1
+	// 96 CHARGE Base -1 TargetA 6; eff2 77 SCRIPT_EFFECT TargetA 6.
+	{id: 63010, rangeIdx: 95, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 8499, targetA: targetEnemy},
+		{effect: effCharge, dieSides: 1, basePoints: -1, targetA: targetEnemy},
+		{effect: effScriptEffect, targetA: targetEnemy},
+	}},
+	// 65147 Shield-Breaker: castTimeIdx 2 (250), durIdx 0, rangeIdx 9
+	// (10-30 yd), school 0x1; eff0 2 SCHOOL_DAMAGE Die 1 Base 1999
+	// TargetA 6; eff1 77 SCRIPT_EFFECT TargetA 6.
+	{id: 65147, castTimeIdx: 2, rangeIdx: 9, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 1999, targetA: targetEnemy},
+		{effect: effScriptEffect, targetA: targetEnemy},
+	}},
+	// 49256 Wyrmrest Defender Mount: castTimeIdx 1, durIdx 21 (-1),
+	// rangeIdx 7 (0-10 yd), school 0x1; eff0 6 APPLY_AURA aura 236
+	// CONTROL_VEHICLE TargetA 25; eff1 6 APPLY_AURA aura 4 DUMMY
+	// TargetA 1. ActiveIconFileDataID 134153 not encoded (no field).
+	{id: 49256, durIdx: 21, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraControlVehicle, targetA: targetUnitTargetAny},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster},
+	}},
+	// 52421 Wyrmrest Defender low-health emote: castTimeIdx 1, durIdx
+	// 0, rangeIdx 1 (Self Only), school 0x1; single effect 77
+	// SCRIPT_EFFECT Die 1 Base 13357 TargetA 1.
+	{id: 52421, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effScriptEffect, dieSides: 1, basePoints: 13357, targetA: targetCaster}}},
+	// 49263 Renew: castTimeIdx 1, durIdx 8 (15000), rangeIdx 1 (Self
+	// Only), school 0x1; single effect 6 APPLY_AURA aura 20
+	// OBS_MOD_HEALTH Die 1 Base 9 AuraPeriod 3000 TargetA 1
+	// (BonusCoefficient 0.25, not encoded).
+	{id: 49263, durIdx: 8, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, aura: auraObsModHealth, dieSides: 1, basePoints: 9, auraPeriod: 3000, targetA: targetCaster}}},
+	// 61839 Polymorph: Sheep: castTimeIdx 1, durIdx 28 (5000),
+	// rangeIdx 6 (Vision 0-100), school 0x40; eff0 6 APPLY_AURA aura
+	// 4 DUMMY TargetA 25; eff1 64 TRIGGER_SPELL TriggerSpell 61834
+	// TargetA 25 (61834 itself unseeded — trigger dormant).
+	{id: 61839, durIdx: 28, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetUnitTargetAny},
+		{effect: effTriggerSpell, trigger: 61834, targetA: targetUnitTargetAny},
+	}},
+	// 51347 Teleport Visual Only: castTimeIdx 1, durIdx 0, rangeIdx 1
+	// (Self Only), school 0x40; single effect 3 DUMMY TargetA 1.
+	{id: 51347, rangeIdx: 1, school: schoolArcane, effects: [3]effect{{effect: effDummy, targetA: targetCaster}}},
+	// 61995 Improved Blink: castTimeIdx 1, durIdx 35 (4000), rangeIdx
+	// 1 (Self Only), school 0x40; single effect 6 APPLY_AURA aura 4
+	// DUMMY Die 1 Base -1 MiscValue 14 SpellClassMask_0 65536 TargetA 1.
+	{id: 61995, durIdx: 35, rangeIdx: 1, school: schoolArcane, effects: [3]effect{{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, misc: 14, targetA: targetCaster, mask: [3]uint32{65536, 0, 0}}}},
+	// 51017 Summon Arcane Beam: castTimeIdx 1, durIdx 1 (10000),
+	// rangeIdx 1 (Self Only), school 0x1; single effect 28 SUMMON Die
+	// 1 MiscValue 28239 MiscValueB 64 (SummonProperties row 64 — the
+	// ID is real DBC, the row contents stay INFERRED per the
+	// SummonProperties note) RadiusIndex_0 8 TargetA 73.
+	{id: 51017, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 28239, miscB: 64, radiusIdx: 8, targetA: targetDestCasterRadius}}},
+	// 66042 Fireball (grand champion mage): castTimeIdx 19 (2500),
+	// durIdx 0, rangeIdx 5 (Long 0-40), school 0x4; single effect 2
+	// SCHOOL_DAMAGE Die 403 Base 3298 TargetA 6 (BonusCoefficient 1,
+	// not encoded).
+	{id: 66042, castTimeIdx: 19, rangeIdx: 5, school: schoolFire, effects: [3]effect{{effect: effSchoolDamage, dieSides: 403, basePoints: 3298, targetA: targetEnemy}}},
+	// 66043 Polymorph (grand champion mage): castTimeIdx 16 (1500),
+	// durIdx 39 (2000), rangeIdx 4 (Medium 0-30), school 0x40; eff0 6
+	// APPLY_AURA aura 5 MOD_CONFUSE Die 1 Base -1 TargetA 6; eff1 6
+	// APPLY_AURA aura 56 TRANSFORM MiscValue 1933 TargetA 6; eff2 108
+	// DISPEL_MECHANIC MiscValue 21 TargetA 6.
+	{id: 66043, castTimeIdx: 16, durIdx: 39, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModConfuse, dieSides: 1, basePoints: -1, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraTransform, misc: 1933, targetA: targetEnemy},
+		{effect: effDispelMechanic, misc: 21, targetA: targetEnemy},
+	}},
+	// 66044 Blast Wave (grand champion mage): castTimeIdx 1, durIdx 35
+	// (4000), rangeIdx 1 (Self Only), school 0x4; eff0 2
+	// SCHOOL_DAMAGE Die 451 Base 2774 TargetA 22/15 RadiusIndex_0 13;
+	// eff1 6 APPLY_AURA aura 33 MOD_DECREASE_SPEED Die 1 Base -51
+	// TargetA 22/15 RadiusIndex_0 13; eff2 98 KNOCK_BACK Die 1 Base 79
+	// MiscValue 100 TargetA 22/15 RadiusIndex_0 13 (BonusCoefficient
+	// 1 on eff0, not encoded).
+	{id: 66044, durIdx: 35, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 451, basePoints: 2774, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+		{effect: effKnockBack, dieSides: 1, basePoints: 79, misc: 100, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13},
+	}},
+	// 67528 Healing Wave (grand champion shaman): castTimeIdx 14
+	// (3000), durIdx 0, rangeIdx 5 (Long 0-40), school 0x8; single
+	// effect 10 HEAL Die 2301 Base 18849 TargetA 21 (BonusCoefficient
+	// 1, not encoded).
+	{id: 67528, castTimeIdx: 14, rangeIdx: 5, school: schoolNature, effects: [3]effect{{effect: effHeal, dieSides: 2301, basePoints: 18849, targetA: targetUnitTargetAlly}}},
+	// 67529 Chain Lightning (grand champion shaman): castTimeIdx 16
+	// (1500), durIdx 0, rangeIdx 4 (Medium 0-30), school 0x8; single
+	// effect 2 SCHOOL_DAMAGE Die 575 Base 4712 TargetA 6 ChainTargets
+	// 3 ChainAmplitude 0.7 (float32 0.69999998808 as read).
+	{id: 67529, castTimeIdx: 16, rangeIdx: 4, school: schoolNature, effects: [3]effect{{effect: effSchoolDamage, dieSides: 575, basePoints: 4712, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 0.7}}},
+	// 67530 Earth Shield (grand champion shaman): castTimeIdx 1,
+	// durIdx 4 (120000), rangeIdx 5 (Long 0-40), school 0x8; single
+	// effect 6 APPLY_AURA aura 4 DUMMY Die 1 Base -1 TriggerSpell
+	// 67537 TargetA 21 (BonusCoefficient 1, not encoded; 67537
+	// unseeded — trigger dormant).
+	{id: 67530, durIdx: 4, rangeIdx: 5, school: schoolNature, effects: [3]effect{{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, trigger: 67537, targetA: targetUnitTargetAlly}}},
+	// 67534 Hex of Mending (grand champion shaman): castTimeIdx 16
+	// (1500), durIdx 1 (10000), rangeIdx 4 (Medium 0-30), school 0x8;
+	// single effect 6 APPLY_AURA aura 4 DUMMY TriggerSpell 67535
+	// TargetA 6 (67535 unseeded — trigger dormant).
+	{id: 67534, castTimeIdx: 16, durIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{{effect: effApplyAura, aura: auraDummy, trigger: 67535, targetA: targetEnemy}}},
+	// 65868 Shoot (grand champion hunter): castTimeIdx 90 (1700),
+	// durIdx 0, rangeIdx 36 (Longer 0-45), school 0x1; single effect 2
+	// SCHOOL_DAMAGE Die 1951 Base 5524 TargetA 6.
+	{id: 65868, castTimeIdx: 90, rangeIdx: 36, school: schoolPhysical, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1951, basePoints: 5524, targetA: targetEnemy}}},
+	// 66081 Multi-Shot (grand champion hunter): castTimeIdx 1, durIdx
+	// 0, rangeIdx 54 (5-30 yd), school 0x1; single effect 31
+	// WEAPON_PERCENT_DAMAGE Die 1 Base 99 TargetA 6 ChainTargets 3.
+	{id: 66081, rangeIdx: 54, school: schoolPhysical, effects: [3]effect{{effect: effWeaponPercentDamage, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainTargets: 3}}},
+	// 66083 Lightning Arrows (grand champion hunter): castTimeIdx 1,
+	// durIdx 27 (3000), rangeIdx 1 (Self Only), school 0x8; single
+	// effect 6 APPLY_AURA aura 23 PERIODIC_TRIGGER_SPELL Die 1 Base
+	// -1 AuraPeriod 500 TriggerSpell 66084 TargetA 1 (66084 unseeded
+	// — trigger dormant).
+	{id: 66083, durIdx: 27, rangeIdx: 1, school: schoolNature, effects: [3]effect{{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, auraPeriod: 500, trigger: 66084, targetA: targetCaster}}},
+	// 67701 Poison Bottle (grand champion rogue): castTimeIdx 1,
+	// durIdx 0, rangeIdx 4 (Medium 0-30), school 0x8; single effect 32
+	// TRIGGER_MISSILE Die 1 Base -1 TriggerSpell 67594 TargetA 53
+	// (67594 unseeded — trigger dormant).
+	{id: 67701, rangeIdx: 4, school: schoolNature, effects: [3]effect{{effect: effTriggerMiss, dieSides: 1, basePoints: -1, trigger: 67594, targetA: targetDestTargetEnemy}}},
+	// 67706 Fan of Knives (grand champion rogue): castTimeIdx 1,
+	// durIdx 0, rangeIdx 1 (Self Only), school 0x1; eff0 31
+	// WEAPON_PERCENT_DAMAGE Die 1 Base 99 TargetA 18/16
+	// RadiusIndex_0 14 RadiusIndex_1 14 (seed stores _0 only); eff1 77
+	// SCRIPT_EFFECT TargetA 18/16 RadiusIndex_0 14.
+	{id: 67706, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, dieSides: 1, basePoints: 99, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 14},
+		{effect: effScriptEffect, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 14},
+	}},
+	// 66045 Haste (grand champion mage): castTimeIdx 1, durIdx 1
+	// (10000), rangeIdx 5 (Long 0-40), school 0x40; eff0 6 APPLY_AURA
+	// aura 193 MELEE_SLOW Die 1 Base 99 TargetA 21; eff1 6 APPLY_AURA
+	// aura 61 MOD_SCALE Die 1 Base 29 TargetA 21; eff2 6 APPLY_AURA
+	// aura 31 MOD_INCREASE_SPEED Die 1 Base 99 TargetA 21.
+	{id: 66045, durIdx: 1, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraMeleeSlow, dieSides: 1, basePoints: 99, targetA: targetUnitTargetAlly},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 29, targetA: targetUnitTargetAlly},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, dieSides: 1, basePoints: 99, targetA: targetUnitTargetAlly},
+	}},
+	// 67709 Eviscerate (grand champion rogue): castTimeIdx 1, durIdx 0,
+	// rangeIdx 2 (Combat 0-5), school 0x1; single effect 2
+	// SCHOOL_DAMAGE Die 1151 Base 9424 TargetA 6.
+	{id: 67709, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1151, basePoints: 9424, targetA: targetEnemy}}},
 	{id: 42442, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effDummy, targetA: targetSrcCaster, targetB: targetUnitCasterAreaParty, radiusIdx: 30}}},
 }
 
@@ -1115,6 +1278,9 @@ func main() {
 		{90008, 604800000, 0, 604800000},
 		{90009, 4000, 0, 4000},
 		{90010, 500, 0, 500},
+		{4, 120000, 0, 120000}, // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
+		{8, 15000, 0, 15000},   // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
+		{27, 3000, 0, 3000},    // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
@@ -1161,6 +1327,11 @@ func main() {
 		{4, 1000, 0}, // real SpellCastTimes 4 for 31266 (wago.tools 3.4.0.43659)
 		{92001, 2000, 0},
 		{92002, 3000, 0},
+		{2, 250, 0},   // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
+		{14, 3000, 0}, // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
+		{16, 1500, 0}, // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
+		{19, 2500, 0}, // real SpellCastTimes 19 for 66042 (wago.tools 3.4.0.43659)
+		{90, 1700, 0}, // real SpellCastTimes 90 for 65868 (wago.tools 3.4.0.43659)
 		{7, 10000, 0}, // real SpellCastTimes 7 for 29973 Arcane Explosion (wago.tools 3.4.0.47659, aux read 54197700)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
@@ -1188,6 +1359,10 @@ func main() {
 		{36, f32(0), f32(0), f32(45), f32(45), 0},       // real SpellRange 36 "Longer Range" for 29946/32265 (wago.tools 3.4.0.47659, aux read 54197700)
 		{11, f32(0), f32(0), f32(15), f32(15), 0},       // real SpellRange 11 "Fifteen yards" for 29961 (wago.tools 3.4.0.47659, aux read 54197700)
 		{13, f32(0), f32(0), f32(50000), f32(50000), 0}, // real SpellRange 13 "Anywhere - Unlimited" for 29967 (wago.tools 3.4.0.47659, aux read 54197700)
+		{95, f32(8), f32(8), f32(25), f32(25), 0},       // real SpellRange 95 for 63010 (wago.tools 3.4.0.43659)
+		{9, f32(10), f32(10), f32(30), f32(30), 0},      // real SpellRange 9 for 65147 (wago.tools 3.4.0.43659)
+		{7, f32(0), f32(0), f32(10), f32(10), 0},        // real SpellRange 7 for 49256 (wago.tools 3.4.0.43659)
+		{54, f32(5), f32(5), f32(30), f32(30), 0},       // real SpellRange 54 for 66081 (wago.tools 3.4.0.43659)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
