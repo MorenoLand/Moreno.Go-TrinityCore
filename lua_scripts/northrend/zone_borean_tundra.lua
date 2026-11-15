@@ -78,6 +78,10 @@ RegisterSpellEvent(SPELL_BLOODSPORE_RUINATION, 4, bloodsporeRuinationHit)
 --   MoveTo(0, 3738.000977, 3568.882080, 477.433014); me:SetWalk(false).
 -- - wp4 SetEscortPaused(true) + phase = 7 latch (per-GUID; the
 --   phase machine reads it, see below).
+-- - JustDied (zone_borean_tundra.cpp:706-718): the wp3-summoned
+--   Talbot and Arthas image are removed from the world (Despawn
+--   twin); the Leryssa/Arlos legs are dead (summoned only by the
+--   unported phase machine, so no GUID is ever latched).
 -- Deliberate omissions / unported scope: the UpdateAI phase machine
 -- (zone_borean_tundra.cpp:549-704: phases 1-17, Talbot/Arthas/Arlos/
 -- Leryssa dialogue chain, Valanar transform, combat start) — the
@@ -99,6 +103,8 @@ local SUMMON_CORPSE_TIMED_DESPAWN = 5
 local SUMMON_DESPAWN_MS = 120000 -- 2min
 
 local thassarianPhase = {}
+local thassarianTalbot = {}
+local thassarianArthas = {}
 
 -- C++ WaypointReached (zone_borean_tundra.cpp:495-547).
 local function thassarianReachWP(event, creature)
@@ -113,6 +119,9 @@ local function thassarianReachWP(event, creature)
             3730.313, 3518.689, 473.324, 1.562,
             SUMMON_CORPSE_TIMED_DESPAWN, SUMMON_DESPAWN_MS)
         if arthas then
+            -- C++ wp3 latches arthasGUID (zone_borean_tundra.cpp:507);
+            -- thassarianDied below resolves it.
+            thassarianArthas[creature:GetGUIDLow()] = arthas:GetGUIDLow()
             arthas:SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE)
             arthas:SetReactState(REACT_PASSIVE)
             arthas:SetWalk(true)
@@ -122,6 +131,9 @@ local function thassarianReachWP(event, creature)
             3747.23, 3614.936, 473.321, 4.462012,
             SUMMON_CORPSE_TIMED_DESPAWN, SUMMON_DESPAWN_MS)
         if talbot then
+            -- C++ wp3 latches talbotGUID (zone_borean_tundra.cpp:522-524);
+            -- thassarianDied below resolves it.
+            thassarianTalbot[creature:GetGUIDLow()] = talbot:GetGUIDLow()
             talbot:SetWalk(true)
             talbot:MoveTo(0, 3738.000977, 3568.882080, 477.433014)
         end
@@ -132,4 +144,34 @@ local function thassarianReachWP(event, creature)
     end
 end
 
+-- C++ npc_thassarianAI::JustDied (zone_borean_tundra.cpp:706-718):
+-- RemoveFromWorld on Talbot (talbotGUID), Leryssa (leryssaGUID),
+-- Arlos (arlosGUID) and the Arthas image (arthasGUID). The
+-- Leryssa/Arlos legs are dead in the ported model (summoned only by
+-- the unported phase machine, so no GUID is ever latched); the
+-- Talbot/Arthas legs resolve via GetCreatureByGUID
+-- (lua_creature_events.go:4696) and creature:Despawn() is the
+-- RemoveFromWorld twin (no creature RemoveFromWorld method exists;
+-- lua_objects.go:4488 is the GO-only one).
+local function thassarianDied(event, creature)
+    local guid = creature:GetGUIDLow()
+    local talbotGuid = thassarianTalbot[guid]
+    thassarianTalbot[guid] = nil
+    if talbotGuid then
+        local talbot = creature:GetCreatureByGUID(talbotGuid)
+        if talbot then
+            talbot:Despawn()
+        end
+    end
+    local arthasGuid = thassarianArthas[guid]
+    thassarianArthas[guid] = nil
+    if arthasGuid then
+        local arthas = creature:GetCreatureByGUID(arthasGuid)
+        if arthas then
+            arthas:Despawn()
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_THASSARIAN, 6, thassarianReachWP)
+RegisterCreatureEvent(ENTRY_THASSARIAN, 4, thassarianDied)
