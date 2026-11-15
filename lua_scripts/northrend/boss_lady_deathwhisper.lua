@@ -237,8 +237,9 @@
 -- RegisterAuraEvent); spell_deathwhisper_dominated_mind /
 -- spell_deathwhisper_vampiric_might join the no-AuraScript-bridge
 -- queue (the boss_moragg optic-link precedent);
--- spell_deathwhisper_summon_spirits joins the
--- no-SpellScript-bridge queue.
+-- spell_deathwhisper_summon_spirits is PORTED below
+-- (RegisterSpellEvent 72478 ev5, summonSpiritsDummy) — the old
+-- "no-SpellScript-bridge" claim was stale; the ev5 bridge is live.
 -- at_lady_deathwhisper_entrance joins the unbridged-area-trigger
 -- queue (the pit_of_saron cavern-triggers precedent).
 -- All 19 Talk() calls in the file accounted for (19 = ported (10): lady
@@ -316,6 +317,7 @@ local SPELL_DEATHCHILL_BOLT = 70594
 local SPELL_DEATHCHILL_BLAST = 70906
 local SPELL_SHROUD_OF_THE_OCCULT = 70768
 local SPELL_SUMMON_SPIRITS = 72478 -- :439-443
+local SPELL_SUMMON_SHADE = 71363 -- boss_lady_deathwhisper.cpp:69
 
 local ENTRY_VENGEFUL_SHADE = 38222 -- icecrown_citadel.h:181
 local SPELL_VENGEFUL_BLAST = 71544 -- boss_lady_deathwhisper.cpp:111
@@ -1281,6 +1283,66 @@ local function deathwhisperSpellHitTarget(event, creature, target, spellId)
 end
 
 RegisterCreatureEvent(ENTRY_LADY_DEATHWHISPER, 15, deathwhisperSpellHitTarget)
+
+-- C++ spell_deathwhisper_summon_spirits::HandleScriptEffect
+-- (boss_lady_deathwhisper.cpp:997-1000): EFFECT_0 DUMMY
+-- OnEffectHitTarget — the caster casts SPELL_SUMMON_SHADE (71363) on
+-- the hit unit, triggered. No Load() gate and no creature-only gate
+-- in C++ (unlike the malygos boom-visual Load), so the port checks
+-- only effIndex 0 and non-nil hit target / caster (archimonde
+-- 39142 shape). DBC RESOLVED 2026-11-15 (Wowhead WotLK Classic
+-- spell=72478): Effect Dummy, Radius 200 yards, flag "Can only
+-- target the player" — the hit units are players, so ev30 (the
+-- creature-entry dummy arm, BPC taldaram pattern) STAYS OUT: there
+-- is no creature entry to bind. Ported instead via
+-- RegisterSpellEvent ev5 (SpellEventOnEffectHitTarget), the
+-- archimonde/malygos/ahune dummy precedent; boss_ai.go:3544 fires
+-- ev5 for player hit targets on the creature-cast path. This is
+-- the summon half of the 72478 cast: the ev15 SpellHitTarget queue
+-- above is the targeting half, and C++ fires both on the same cast,
+-- so there is no double-apply. DORMANT until Spell.dbc ships
+-- 72478 and 71363 (neither is in the 154-record seed Spell.dbc,
+-- verified 2026-11-15) — the cast itself is spellKnown-gated, so
+-- the handler can never fire before then.
+local function summonSpiritsDummyHit(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_SUMMON_SHADE, true)
+end
+
+RegisterSpellEvent(SPELL_SUMMON_SPIRITS, 5, summonSpiritsDummyHit)
+
+-- C++ spell_deathwhisper_summon_spirits::HandleScriptEffect
+-- (boss_lady_deathwhisper.cpp:996-1000, registered :1066):
+-- EFFECT_0 DUMMY OnEffectHitTarget — the caster casts
+-- SPELL_SUMMON_SHADE (71363) on the hit unit, triggered. PORTED via
+-- RegisterSpellEvent (72478, OnEffectHitTarget = 5); the ev5 hook
+-- fires per live hit target on the creature path (runtime.go
+-- SpellEvents contract), players included, so the shade summons at
+-- the 72478 pick like C++ — this is the only shade-summon path in Go
+-- (nothing else summons 38222). DORMANT until Spell.dbc ships 72478
+-- (same gate as the shade chain above). Corrects the header's stale
+-- "no-SpellScript-bridge" claim for this leg (the ev5 bridge is live:
+-- archimonde 39142 / ahune 46372 / malygos 59084 precedents).
+local SPELL_SUMMON_SHADE = 71363 -- boss_lady_deathwhisper.cpp:69
+
+local function summonSpiritsDummy(event, spell, hitTarget, effectIndex)
+    if effectIndex ~= 0 or hitTarget == nil then
+        return
+    end
+    local caster = spell:GetCaster()
+    if caster == nil then
+        return
+    end
+    caster:CastSpell(hitTarget, SPELL_SUMMON_SHADE, true)
+end
+
+RegisterSpellEvent(SPELL_SUMMON_SPIRITS, 5, summonSpiritsDummy)
 
 -- C++ boss_lady_deathwhisper::JustSummoned (:466-488): a Vengeful
 -- Shade (38222) pops the front of _nextVengefulShadeTargetGUID (the
