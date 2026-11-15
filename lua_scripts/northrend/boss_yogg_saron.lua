@@ -177,13 +177,16 @@
 -- 33242 / 33244, ulduar.h lines 199-202.
 -- npc_yogg_saron_keeper (33410 / 33411 / 33412 / 33413,
 -- ulduar.h lines 205-208) — no Talk arms — Reset + JustEnteredCombat
--- one-shots PORTED below (events 23 / 1).
+-- one-shots PORTED below (events 23 / 1); IsSummonedBy teleport
+-- PORTED below (event 22).
 -- npc_yogg_saron_illusions / npc_garona /
 -- npc_turned_champion / npc_laughing_skull — roleplay
 -- Talks (SAY_CHAMBER_ROLEPLAY_1-5 / SAY_ICECROWN_ROLEPLAY_1-6 /
 -- SAY_STORMWIND_ROLEPLAY_1-7) fire from IsSummonedBy /
 -- the illusion UpdateAI timer machine on instance
--- DATA_ILLUSION — no bridges; no registrations (no RegisterLuaBoss
+-- DATA_ILLUSION rides the shared instanceData table (data.illusion,
+-- set by illusionTick below); the descend-portal ev39 arm is PORTED
+-- below. No registrations for the roleplay NPCs (no RegisterLuaBoss
 -- for 33437 / 33441 / 33442 / 33495 / 33523 / 33535 / 33962;
 -- creature:FindNearestCreature is live (lua_creature_events.go:1237)
 -- but has no handler to attach to). The FindNearestCreature legs
@@ -2009,6 +2012,30 @@ local function voiceJustSummoned(event, creature, summoned)
     voiceList[#voiceList + 1] = summoned
 end
 
+-- C++ npc_descend_into_madnessAI::OnSpellClick
+-- (boss_yogg_saron.cpp:1454-1466): handled-gated; clicker
+-- RemoveAurasDueToSpell(SPELL_BRAIN_LINK 63802); instance
+-- DATA_ILLUSION picks IllusionSpells[illusion] (63997 chamber /
+-- 63998 icecrown / 63989 stormwind, :413-417) cast triggered on
+-- the clicker; portal DespawnOrUnsummon. DATA_ILLUSION is the
+-- shared instanceData table's data.illusion (instance_ulduar.lua;
+-- set by illusionTick below, 0-2, so the < 3 guard always holds).
+-- Handler is a PHASE3 table field — the file is at the 200-local
+-- limit, no new top-level local may be added.
+PHASE3.descendSpellClick = function(event, creature, clicker, handled)
+    if not handled then
+        return
+    end
+    clicker:RemoveAurasDueToSpell(SPELL_BRAIN_LINK)
+    local data = yoggInstanceData(creature)
+    local illusion = data and data.illusion or 0
+    if illusion < 3 then
+        local illusionSpells = {63997, 63998, 63989}
+        creature:CastSpell(clicker, illusionSpells[illusion + 1], true)
+    end
+    creature:DespawnOrUnsummon()
+end
+
 -- C++ spell_yogg_saron_constrictor_tentacle::OnApply
 -- (boss_yogg_saron.cpp:2393-2397): AfterEffectApply EFFECT_0
 -- SPELL_AURA_DUMMY, REAL -> the aura target self-casts
@@ -2778,6 +2805,18 @@ local function yoggKeeperReset(event, creature)
     end
 end
 
+-- C++ npc_yogg_saron_keeperAI::IsSummonedBy (:1598-1602): DoCast(
+-- SPELL_SIMPLE_TELEPORT_KEEPERS 12980) (1-arg self, non-triggered,
+-- ungated) — event 22 for all four keeper entries (33410-33413).
+-- The keepers are temp-summoned by observationKeeperGossipSelect
+-- below (creature:SummonCreature -> summonTempCreature fires ev22);
+-- ev23 yoggKeeperReset never fires on the summon path, so the 12980
+-- cast was missing until this handler. Table field — the file is at
+-- the 200-local limit.
+PHASE3.keeperSummoned = function(event, creature, summoner)
+    creature:CastSpell(creature, SPELL_SIMPLE_TELEPORT_KEEPERS)
+end
+
 -- C++ npc_yogg_saron_keeperAI::JustEnteredCombat (:1614-1639):
 -- entry-gated 1-arg non-triggered one-shots: Freya (33410)
 -- SPELL_RESILIENCE_OF_NATURE 62670 + SPELL_SANITY_WELL_SUMMON 64170;
@@ -2788,7 +2827,7 @@ end
 -- precedent. The voice-driven SetInCombatWith combat-entry leg
 -- (:518-519) has no bridge — documented deviation (assembly_of_iron
 -- precedent); keeper IsSummonedBy SIMPLE_TELEPORT_KEEPERS (:1600)
--- stays out.
+-- is PORTED below (PHASE3.keeperSummoned, ev22).
 local function keeperEnterCombat(event, creature, target)
     -- C++ JustEnteredCombat: entry-gated one-shots
     -- (boss_yogg_saron.cpp:1618-1637). Alive-gated.
@@ -2922,6 +2961,7 @@ RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 4, voiceDied)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 19, voiceJustSummoned)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 23, voiceReset)
 RegisterCreatureEvent(ENTRY_VOICE_OF_YOGG_SARON, 38, voiceDoAction)
+RegisterCreatureEvent(ENTRY_DESCEND_INTO_MADNESS, 39, PHASE3.descendSpellClick)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_CONSTRICTOR_TENTACLE, 23, constrictorReset)
@@ -3048,3 +3088,7 @@ RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 2, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 4, cancelAll)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 23, yoggKeeperReset)
 RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 38, keeperDoAction)
+RegisterCreatureEvent(ENTRY_KEEPER_FREYA, 22, PHASE3.keeperSummoned)
+RegisterCreatureEvent(ENTRY_KEEPER_HODIR, 22, PHASE3.keeperSummoned)
+RegisterCreatureEvent(ENTRY_KEEPER_MIMIRON, 22, PHASE3.keeperSummoned)
+RegisterCreatureEvent(ENTRY_KEEPER_THORIM, 22, PHASE3.keeperSummoned)
