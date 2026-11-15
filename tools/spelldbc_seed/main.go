@@ -127,6 +127,7 @@ const (
 	targetDestTargetEnemy      = 53  // TARGET_DEST_TARGET_ENEMY
 	targetSrcCaster            = 22  // TARGET_SRC_CASTER (SharedDefines.h:1459)
 	targetDestDynobjEnemy      = 28  // TARGET_DEST_DYNOBJ_ENEMY (SharedDefines.h:1464)
+	targetDestChannelTarget    = 76  // TARGET_DEST_CHANNEL_TARGET (SpellInfo.cpp:296)
 	targetUnitConeEnemy104     = 104 // TARGET_UNIT_CONE_ENEMY_104 (SharedDefines.h:1540)
 	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
 	targetUnitSrcAreaEntry     = 7   // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
@@ -1298,11 +1299,12 @@ var spells = []spell{
 	// verdict, so cost 0 (Aran precedent). RealPointsPerLevel is not
 	// carried by the seed struct (all 154 prior rows omit it).
 	// CastTimeIndex 1 = instant (41342 precedent, wago-literal).
-	// 42841 is Frostbolt Rank 15, NOT Rank 16 (42842 is Rank 16;
-	// its SpellMisc/SpellEffect were not pulled — NOT seeded).
-	// 42920 is Arcane Explosion Rank 9, NOT Blizzard (42921 is
-	// Arcane Explosion Rank 10); the mage Blizzard Rank 8 ID was
-	// not determined — NOT seeded. 31266 is already seeded above
+	// 42841 is Frostbolt Rank 15, NOT Rank 16 (42842 is Rank 16,
+	// seeded below in the follow-up batch). 42920 is Arcane
+	// Explosion Rank 9, NOT Blizzard (42921 is Arcane Explosion
+	// Rank 10); the mage Blizzard Rank 8 ID is 42937 damage /
+	// 42939 channel (seeded below in the follow-up batch). 31266
+	// is already seeded above
 	// (verified against this same verdict: eff0 27/3/101/949/2000/
 	// 16/13, eff1 27/31/-71/13, durIdx 1, rangeIdx 4, castTimeIdx 4
 	// — byte-identical to the verdict, no change).
@@ -1380,9 +1382,8 @@ var spells = []spell{
 	// RadiusIndex_1 14 recorded, seed carries _0 per convention);
 	// eff1 6 APPLY_AURA aura 23 PERIODIC_TRIGGER_SPELL
 	// AuraPeriod 1000 Base -1 Die 1 Trigger 42198 TargetA 1.
-	// Trigger 42198 is unseeded (29955 precedent — the
-	// periodic-trigger leg no-ops on the spellKnown gate until a
-	// follow-up read fills it).
+	// Trigger 42198 is seeded below in the follow-up batch
+	// (browser task 1e814993 verdict).
 	{id: 27085, castTimeIdx: 1, durIdx: 31, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{524416, 0, 0}, effects: [3]effect{
 		{effect: effPersistentAreaAura, aura: auraDummy, dieSides: 1, basePoints: 183, targetA: targetDestDynobjEnemy, radiusIdx: 14},
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, dieSides: 1, basePoints: -1, trigger: 42198, targetA: targetCaster},
@@ -1431,6 +1432,56 @@ var spells = []spell{
 	// documents the trigger; no cast site consumes it yet).
 	{id: 25938, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, targetA: targetCaster},
+	}},
+	// Follow-up batch (wago.tools 3.4.0.43659, hotfixes OFF, browser
+	// task 1e814993 verdict 2026-11-15 04:04 EST): 31075 Burning
+	// Straw (Strawman fire-school SpellHit leg, bosses_opera.cpp:375
+	// — 1-in-10 triggered self-cast, dormant until this row), 42842
+	// Frostbolt Rank 16, 42198 Blizzard Rank 7 damage + 42937/42939
+	// Blizzard Rank 8 damage/channel (Rank 8 ID determined this
+	// verdict: 42937 damage, 42939 channel triggering 42937).
+	// ChainAmplitude 1 (wago) omitted per frost-batch convention
+	// (all 15 frost rows omit it; chainTargets 0, field inert).
+	// RealPointsPerLevel not carried by the seed struct.
+	// 31075 Burning Straw: castTimeIdx 1, durIdx 32, rangeIdx 1,
+	// school 0x4 (Fire); no SpellClassOptions row (family/flags 0),
+	// no SpellPower row (manaCost 0); eff0 6 APPLY_AURA aura 5
+	// MOD_CONFUSE Die 0 Base 0 TargetA 1 (TARGET_UNIT_CASTER).
+	{id: 31075, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModConfuse, targetA: targetCaster},
+	}},
+	// 42842 Frostbolt Rank 16: castTimeIdx 14, durIdx 105,
+	// rangeIdx 4; flags 32/0/0/0; SpellPower ManaCost 0,
+	// PowerCostPct 11 (manaCostPct 11, 29963 precedent); eff0/eff2
+	// identical to 42841; eff1 2 SCHOOL_DAMAGE Die 63 Base 798
+	// (799-861 dmg).
+	{id: 42842, castTimeIdx: 14, durIdx: 105, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{32, 0, 0}, manaCostPct: 11, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -41, mechanic: 11, targetA: targetEnemy},
+		{effect: effSchoolDamage, dieSides: 63, basePoints: 798, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -1, misc: 127, targetA: targetEnemy},
+	}},
+	// 42198 Blizzard Rank 7 damage (per-wave component; channel
+	// 27085 eff1 triggers it, AuraPeriod 1000): castTimeIdx 1,
+	// durIdx 0, rangeIdx 135; flags 524416/0/0/0; no SpellPower
+	// row; eff0 2 SCHOOL_DAMAGE Die 1 Base 272 TargetA 76
+	// TARGET_DEST_CHANNEL_TARGET TargetB 16 RadiusIndex_0 14.
+	{id: 42198, castTimeIdx: 1, rangeIdx: 135, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{524416, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 272, targetA: targetDestChannelTarget, targetB: targetUnitDestAreaEnemy, radiusIdx: 14},
+	}},
+	// 42937 Blizzard Rank 8 damage: as 42198, eff0 Base 349.
+	{id: 42937, castTimeIdx: 1, rangeIdx: 135, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{524416, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 349, targetA: targetDestChannelTarget, targetB: targetUnitDestAreaEnemy, radiusIdx: 14},
+	}},
+	// 42939 Blizzard Rank 8 channel: castTimeIdx 1, durIdx 31,
+	// rangeIdx 4; flags 524416/0/0/0; SpellPower ManaCost 0,
+	// PowerCostPct 74 (manaCostPct 74); eff0 27
+	// PERSISTENT_AREA_AURA aura 4 DUMMY Die 1 Base 297 TargetA 28
+	// RadiusIndex_0 14; eff1 6 APPLY_AURA aura 23
+	// PERIODIC_TRIGGER_SPELL AuraPeriod 1000 Base -1 Die 1
+	// Trigger 42937 TargetA 1 (mirrors 27085/42198 Rank 7 pair).
+	{id: 42939, castTimeIdx: 1, durIdx: 31, rangeIdx: 4, school: schoolFrost, family: familyMage, familyFlags: [3]uint32{524416, 0, 0}, manaCostPct: 74, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraDummy, dieSides: 1, basePoints: 297, targetA: targetDestDynobjEnemy, radiusIdx: 14},
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, dieSides: 1, basePoints: -1, trigger: 42937, targetA: targetCaster},
 	}},
 }
 
