@@ -1946,6 +1946,46 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 1, basePoints: 85, targetA: targetEnemy},
 		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 23, auraPeriod: 3000, targetA: targetEnemy},
 	}},
+	// 8814 Flame Spike (boss_bloodmage_thalnos.cpp:33 enum, :95-96
+	// DoCastVictim on an 8s init / 30s re-arm timer; Lua
+	// boss_bloodmage_thalnos.lua:129 victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows 687694/687695 + SpellMisc
+	// 321667 (2026-11-15 browser read): eff0 2 SCHOOL_DAMAGE
+	// Die 15 Base 92 TargetA 16 TARGET_UNIT_DEST_AREA_ENEMY
+	// RadiusIndex 8 (5yd, real row) chainAmplitude 1 (92+1 ..
+	// 92+15 direct); eff1 27 PERSISTENT_AREA_AURA aura 3
+	// PERIODIC_DAMAGE auraPeriod 3000 Die 1 Base 49 TargetA 16
+	// RadiusIndex 8 chainAmplitude 1 (49 per 3s tick in the
+	// ground zone); castTimeIdx 14 (3000ms, real row — 67528
+	// precedent), durIdx 105 (9000ms, real row — 31263
+	// precedent), rangeIdx 4 (Medium Range 0-30yd, real row —
+	// 54690 precedent), school 0x4 Fire. NOT carried:
+	// EffectBonusCoefficient 1 / RealPointsPerLevel 6/1.6 (seed
+	// has no coefficient field); no Dispel column in this
+	// build's SpellMisc, so dispel stays 0. Engine twin:
+	// effPersistentAreaAura live in the seed (e.g. :794/:1020).
+	{id: 8814, castTimeIdx: 14, durIdx: 105, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 15, basePoints: 92, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 49, auraPeriod: 3000, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 16079 Fire Nova (boss_bloodmage_thalnos.cpp:34 enum, :99-100
+	// DoCastVictim on a 40s init / 40s re-arm timer; Lua
+	// boss_bloodmage_thalnos.lua:147 victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 693277 + SpellMisc 326330
+	// (2026-11-15 browser read): single eff0 2 SCHOOL_DAMAGE
+	// Die 47 Base 294 TargetA 22 TARGET_SRC_CASTER TargetB 15
+	// TARGET_UNIT_SRC_AREA_ENEMY RadiusIndex 13 (10yd, real
+	// row) chainAmplitude 1 (294+1 .. 294+47 to all enemies
+	// around the caster); castTimeIdx 1 (instant, real row),
+	// durIdx 0, rangeIdx 1 (Self Only, real row), school 0x4
+	// Fire. NOT carried: EffectBonusCoefficient 1 (neutral;
+	// seed has no coefficient field); no Dispel column in this
+	// build's SpellMisc, so dispel stays 0. Removes the last
+	// unseeded-spell blocker for boss_bloodmage_thalnos.lua
+	// (all four timer casts 1106/8053/8814/16079 now seeded).
+	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
 }
 
 func main() {
