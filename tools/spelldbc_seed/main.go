@@ -76,6 +76,8 @@ const (
 	effInterruptCast           = 68  // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
 	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
+	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
+	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
@@ -165,6 +167,7 @@ type effect struct {
 	misc           int32
 	miscB          int32
 	trigger        uint32
+	itemType       uint32    // EffectItemType (store.go field 107+i)
 	chainTargets   uint32    // EffectChainTargets (store.go field 104+i)
 	chainAmplitude float32   // EffectChainAmplitude (store.go fields 216-218)
 	mask           [3]uint32 // EffectSpellClassMask (store.go fields 122-130)
@@ -218,6 +221,7 @@ func (s spell) row() []uint32 {
 		r[110+i] = uint32(e.misc)
 		r[113+i] = uint32(e.miscB)
 		r[116+i] = e.trigger
+		r[107+i] = e.itemType
 		r[104+i] = e.chainTargets
 		r[216+i] = f32(e.chainAmplitude)
 		for j := range e.mask {
@@ -2368,6 +2372,88 @@ var spells = []spell{
 	// blocker for npc_mana_feeder.lua (single-missing-id file).
 	{id: 29908, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraProcTriggerSpell, targetA: targetCaster, trigger: 29907, chainAmplitude: 1},
+	}},
+	// 39646 Shadow Inferno Damage (wago name; C++
+	// SPELL_SHADOW_INFERNO_DAMAGE, black_temple.cpp:37 enum; the
+	// spell_illidari_nightlord_shadow_inferno OnPeriodic
+	// (black_temple.cpp:254-274) casts it triggered on the aura
+	// owner with BP0 = tick * amount; Lua
+	// spell_black_temple.lua:26 CastCustomSpell(target, 39646,
+	// true, bp)) — wago.tools 3.4.0.47659 SpellEffect row 860931
+	// + SpellMisc 456765 + SpellCategories 116380 (2026-11-15
+	// browser read 43953a23, DifficultyID 0 rows): single eff0 2
+	// SCHOOL_DAMAGE Die 1 Base 0 TargetA 22 TARGET_SRC_CASTER
+	// TargetB 15 TARGET_UNIT_SRC_AREA_ENEMY RadiusIndex_0 9 (20yd,
+	// real row), chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 0 (no SpellDuration row), rangeIdx 1 (Self Only,
+	// real row), school 0x20 Shadow, dispel 0 (SpellCategories
+	// DispelType 0). NOT carried: no SpellPower row; no
+	// SpellAuraOptions row; Speed 0. Engine twin: effSchoolDamage
+	// live (spells.go:405). Removes the last unseeded-spell blocker
+	// for spell_black_temple.lua (single-missing-id file).
+	{id: 39646, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 37090 Highborne Aura (wago name; C++ SPELL_HIGHBORNE_AURA,
+	// zone_undercity.cpp:59 enum, :316 DoCast(me,
+	// SPELL_HIGHBORNE_AURA) on a one-shot 17500ms timer; Lua
+	// npc_highborne_lamenter.lua:66 const, one-shot CreateLuaEvent
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect rows
+	// 857735/857736 + SpellMisc 455017 (2026-11-15 browser read
+	// 43953a23, DifficultyID 0 rows): eff0 6 APPLY_AURA aura 4
+	// DUMMY TargetA 1 TARGET_UNIT_CASTER, eff1 46 SPAWN TargetA 0,
+	// both chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 21 (infinite, real row), rangeIdx 1 (Self Only, real
+	// row), school 0x1 Physical. NOT carried: no SpellCategories
+	// row, so dispel stays 0; no SpellPower row; SpellAuraOptions
+	// ProcChance 101 (seed has no proc table). Engine twins:
+	// auraDummy live; effSpawn 46 is clientside-only (spells.go:
+	// 19747 unused list) — carried verbatim, no server-side
+	// effect. Removes the last unseeded-spell blocker for
+	// npc_highborne_lamenter.lua (single-missing-id file).
+	{id: 37090, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSpawn, chainAmplitude: 1},
+	}},
+	// 23059 Create Thorium Brotherhood Contract DND (wago name; C++
+	// SPELL_CREATE_THORIUM_BROTHERHOOD_CONTRACT_DND,
+	// blackrock_depths.cpp:439 enum; player self-casts it on
+	// gossip select (Lokhtos contract arm); Lua
+	// npc_lokhtos_darkbargainer.lua:35 const, non-triggered
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect row 699977 +
+	// SpellMisc 331702 (2026-11-15 browser read 43953a23,
+	// DifficultyID 0 rows): single eff0 24 CREATE_ITEM ItemType
+	// 18628 TargetA 0, chainAmplitude 1; castTimeIdx 4 (1000ms,
+	// real row), durIdx 0 (no SpellDuration row), rangeIdx 12
+	// (Interact 5yd, real row), school 0x1 Physical. New seed
+	// field: effect.itemType (store.go field 107+i) —
+	// handleEffectCreateItem reads eff.ItemType and creates nothing
+	// when it is 0, so the row would be a no-op without it. NOT
+	// carried: EffectBonusCoefficient 1 (seed has no bonus-coefficient
+	// field); no SpellCategories row, so dispel stays 0; no
+	// SpellPower/SpellAuraOptions rows. Engine twin:
+	// handleEffectCreateItem live (spells.go:18360/:29780).
+	// Removes the last unseeded-spell blocker for
+	// npc_lokhtos_darkbargainer.lua (single-missing-id file).
+	{id: 23059, castTimeIdx: 4, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effCreateItem, itemType: 18628, chainAmplitude: 1},
+	}},
+	// 17370 Soul Freed (wago name; C++ SPELL_SOUL_FREED,
+	// stratholme.cpp:104 enum, :164 summoned->CastSpell(summoned,
+	// SPELL_SOUL_FREED, false) in JustSummoned; Lua
+	// npc_restless_soul.lua:64 const, freed-soul self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row 694101 + SpellMisc
+	// 326977 (2026-11-15 browser read 43953a23, DifficultyID 0
+	// rows): single eff0 3 DUMMY TargetA 1 TARGET_UNIT_CASTER,
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 0
+	// (no SpellDuration row), rangeIdx 1 (Self Only, real row),
+	// school 0x1 Physical. NOT carried: EffectBonusCoefficient 1
+	// (no field); no SpellCategories row, so dispel stays 0; no
+	// SpellPower/SpellAuraOptions rows. Engine twin: effDummy live
+	// (spells.go:375). Removes the last unseeded-spell blocker for
+	// npc_restless_soul.lua (single-missing-id file).
+	{id: 17370, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
