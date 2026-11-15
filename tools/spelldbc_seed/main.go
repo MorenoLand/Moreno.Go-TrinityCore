@@ -66,6 +66,7 @@ const (
 	effScriptEffect            = 77
 	effActivateObj             = 86
 	effCharge                  = 96
+	effPowerBurn               = 62  // SPELL_EFFECT_POWER_BURN (SharedDefines.h:873)
 	effSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	effSkill                   = 118 // SPELL_EFFECT_SKILL (SharedDefines.h:929)
 	effKnockBack               = 98
@@ -2454,6 +2455,134 @@ var spells = []spell{
 	// npc_restless_soul.lua (single-missing-id file).
 	{id: 17370, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 44335 Energy Feedback (wago name; C++ SPELL_ENERGY_FEEDBACK,
+	// boss_vexallus.cpp:188 enum; JustDied killer->CastSpell(killer,
+	// SPELL_ENERGY_FEEDBACK, true); Lua npc_pure_energy.lua:38
+	// triggered killer self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect rows 865344/865345/865346 + SpellMisc 460442
+	// (2026-11-15 browser read bb5173c6, DifficultyID 0 rows):
+	// eff0 6 APPLY_AURA aura 3 PERIODIC_DAMAGE Die 1 Base 299
+	// AuraPeriod 1000 TargetA 1 TARGET_UNIT_CASTER, eff1 6
+	// APPLY_AURA aura 79 MOD_DAMAGE_PERCENT_DONE Die 1 Base 49
+	// Misc 127 TargetA 1, eff2 6 APPLY_AURA aura 61 MOD_SCALE Die 1
+	// Base 29 TargetA 1, all chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 9 (30000ms, real row), rangeIdx 13
+	// (Anywhere 50000yd, real row), school 0x40 Arcane. NOT carried:
+	// no SpellPower row; no SpellCategories row, so dispel stays 0;
+	// SpellAuraOptions ProcChance 101 (seed has no proc table);
+	// Speed 0; Attributes (no fields). Engine twins: auraPeriodicDmg
+	// live, auraModDmgDone 79 live (aura_damage.go:119,
+	// creature_auras.go:460), auraModScale 61 live
+	// (aura_unit.go:44-50). Removes the last unseeded-spell blocker
+	// for npc_pure_energy.lua (single-missing-id file).
+	{id: 44335, castTimeIdx: 1, durIdx: 9, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 299, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 49, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 29, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 14872 Drunken Rage (wago name; C++ SPELL_DRUNKEN_RAGE,
+	// blackrock_depths.cpp:505 enum; Lua npc_rocknot.lua:90
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect rows
+	// 692018/692019 + SpellMisc 325291 + SpellCategories 74509
+	// (2026-11-15 browser read bb5173c6, DifficultyID 0 rows):
+	// eff0 6 APPLY_AURA aura 138 MOD_MELEE_HASTE Die 1 Base 49
+	// TargetA 1 TARGET_UNIT_CASTER, eff1 6 APPLY_AURA aura 13
+	// MOD_DAMAGE_DONE Die 1 Base 49 Misc 1 TargetA 1, both
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 8
+	// (15000ms, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (SpellCategories DispelType 0).
+	// NOT carried: SpellCategories Category 21 (seed carries no
+	// category field, 7737 precedent); EffectBonusCoefficient 1 (no
+	// field); no SpellPower/SpellAuraOptions rows. Engine twins:
+	// auraModMeleeHaste 138 live (aura_haste.go:44),
+	// auraModDamageDone 13 live (spells.go:689). Removes the last
+	// unseeded-spell blocker for npc_rocknot.lua
+	// (single-missing-id file).
+	{id: 14872, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 49, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 49, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 22120 Charge (wago name; C++ SPELL_CHARGE, boss_broggok.cpp:45
+	// enum; Lua npc_fel_orc_neophyte.lua:125 victim-cast on the
+	// 5s-init/20s pump) — wago.tools 3.4.0.47659 SpellEffect rows
+	// 699502/699503 + SpellMisc 331339 (2026-11-15 browser read
+	// bb5173c6, DifficultyID 0 rows): eff0 96 CHARGE TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY, eff1 58 WEAPON_DAMAGE Die 1 Base 74
+	// TargetA 6, both chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 0 (no SpellDuration row), rangeIdx 74
+	// (Ranged Weapon 30yd, real row), school 0x1 Physical. NOT
+	// carried: Speed 27 (no field); SpellPower row all zeros
+	// (PowerType 1, ManaCost 0); EffectBonusCoefficient 1 (no
+	// field); no SpellCategories/SpellAuraOptions rows, so dispel
+	// stays 0. Engine twins: effCharge 96 live
+	// (handleEffectCharge, spells.go:17816), effWeaponDamage live
+	// (spells.go:233/:15028). Removes the last unseeded-spell
+	// blocker for npc_fel_orc_neophyte.lua (single-missing-id file).
+	{id: 22120, castTimeIdx: 1, rangeIdx: 74, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 74, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30621 Kidney Shot (wago name; C++ SPELL_KIDNEY_SHOT,
+	// boss_vazruden_the_herald.cpp:55 enum; Lua
+	// npc_hellfire_sentry.lua:89 victim-cast on the {3s,7s}-init/20s
+	// pump) — wago.tools 3.4.0.47659 SpellEffect row 849261 +
+	// SpellMisc 448405 + SpellCategories 112829 (2026-11-15 browser
+	// read bb5173c6, DifficultyID 0 rows): single eff0 6 APPLY_AURA
+	// aura 12 MOD_STUN Die 1 Base 0 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY, chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 27 (3000ms, real row), rangeIdx 2
+	// (Combat Range 5yd, real row), school 0x1 Physical, mechanic
+	// 12 (SpellCategories Mechanic 12 = MECHANIC_STUN, feeds
+	// diminishing.go:337), dispel 0 (SpellCategories DispelType 0).
+	// NOT carried: SpellCategories Category 270 / DefenseType 2 /
+	// PreventionType 0x2 / StartRecoveryCategory 133 (no fields);
+	// SpellPower row all zeros (PowerType 3, ManaCost 0);
+	// SpellAuraOptions ProcChance 101 (no proc table). Engine twin:
+	// auraStun live (cc_break.go:104). Removes the last
+	// unseeded-spell blocker for npc_hellfire_sentry.lua
+	// (single-missing-id file).
+	{id: 30621, castTimeIdx: 1, durIdx: 27, rangeIdx: 2, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 33637 Infernal (wago name; trigger of 33814 Infernal Rain eff1
+	// TRIGGER_MISSILE, hyjal_trash.cpp:482; Lua hyjal_trash.lua:509)
+	// — wago.tools 3.4.0.47659 SpellEffect rows 851909/851910 +
+	// SpellMisc 450413 (2026-11-15 browser read bb5173c6,
+	// DifficultyID 0 rows): eff0 2 SCHOOL_DAMAGE Die 1 Base 149
+	// TargetA 16 TARGET_UNIT_DEST_AREA_ENEMY RadiusIndex_0 9 (20yd,
+	// real row), eff1 6 APPLY_AURA aura 12 MOD_STUN TargetA 16
+	// RadiusIndex_0 9 EffectMechanic 12, both chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 28 (5000ms, real
+	// row), rangeIdx 13 (Anywhere 50000yd, real row), school 0x1
+	// Physical. NOT carried: no SpellPower row; no SpellCategories
+	// row, so dispel stays 0; SpellAuraOptions ProcChance 101 (no
+	// proc table); Speed 0. Engine twins: effSchoolDamage live
+	// (spells.go:405), auraStun live (cc_break.go:104). Removes the
+	// last unseeded-spell blocker for the 33814 trigger leg.
+	{id: 33637, castTimeIdx: 1, durIdx: 28, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 149, targetA: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, targetA: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 29907 Astral Bite (wago name; proc trigger of 29908 Astral Bite
+	// eff0 PROC_TRIGGER_SPELL, karazhan.cpp:653; Lua
+	// karazhan.lua:23 mana-feeder leg) — wago.tools 3.4.0.47659
+	// SpellEffect row 847735 + SpellMisc 447004 + SpellCategories
+	// 112235 (2026-11-15 browser read bb5173c6, DifficultyID 0
+	// rows): single eff0 62 POWER_BURN Die 41 Base 254 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY, chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 0 (no SpellDuration row),
+	// rangeIdx 7 (Ten yards, real row), school 0x40 Arcane, dispel
+	// 0 (SpellCategories DispelType 0), mechanic 0. New seed const
+	// effPowerBurn=62. NOT carried: Amplitude 1 (seed does not
+	// encode EffectAmplitude, 17470 precedent); EffectBonusCoefficient
+	// 1 (no field); SpellCategories Category 0 / DefenseType 1 /
+	// PreventionType 0x1 (no fields); SpellAuraOptions ProcChance 101
+	// (no proc table). Engine twin: effPowerBurn 62 live
+	// (spells.go:16321/:29468). Removes the last unseeded-spell
+	// blocker for the 29908 proc leg.
+	{id: 29907, castTimeIdx: 1, rangeIdx: 7, school: schoolArcane, effects: [3]effect{
+		{effect: effPowerBurn, dieSides: 41, basePoints: 254, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
