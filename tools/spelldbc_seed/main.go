@@ -48,6 +48,7 @@ func writeWDBC(path string, fieldCount int, rows [][]uint32) error {
 func f32(v float32) uint32 { return math.Float32bits(v) }
 
 const (
+	effInstakill               = 1 // SPELL_EFFECT_INSTAKILL (SharedDefines.h:812)
 	effSchoolDamage            = 2
 	effDummy                   = 3
 	effTeleportUnits           = 5 // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816)
@@ -3140,6 +3141,76 @@ var spells = []spell{
 	{id: 64562, castTimeIdx: 1, durIdx: 36, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, basePoints: -1, dieSides: 1, trigger: 64564, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 28, chainAmplitude: 1},
 	}},
+	// 45532 Freed Warsong Peon (wago name; C++
+	// SPELL_FREED_WARSONG_PEON, zone_borean_tundra.cpp:117 enum; Lua
+	// npc_nerubar_victim.lua:35 const, :16 player triggered cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 44ba3f77, DifficultyID 0 rows): single eff0 28
+	// SUMMON misc 25270 miscB 64 TargetA 53 TARGET_DEST_TARGET_ENEMY
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 25
+	// (180000ms, real row), rangeIdx 37 (Extended Range 0-50yd, real
+	// row added below), school 0x1 Physical, dispel 8 (ROOT,
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent); CumulativeAura 3 (no field). Engine twins:
+	// effSummon 28 live (spells.go:6395, miscB=SummonProperties id),
+	// target 53 live (target_dest_targets.go:13), SummonProperties 64
+	// real row. Removes the last unseeded-spell blocker for
+	// npc_nerubar_victim.lua (single-missing-id file).
+	{id: 45532, dispel: 8, castTimeIdx: 1, durIdx: 25, rangeIdx: 37, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, targetA: targetDestTargetEnemy, misc: 25270, miscB: 64, chainAmplitude: 1},
+	}},
+	// 46104 Trapped! (wago name, exclamation mark; C++ SPELL_TRAPPED,
+	// zone_borean_tundra.cpp:188 enum; Lua
+	// npc_nesingwary_trapper.lua:58 const, :29 Phase 8 triggered
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 44ba3f77, DifficultyID 0 rows): single
+	// eff0 1 INSTAKILL TargetA 25 TARGET_UNIT_TARGET_ANY
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 0,
+	// rangeIdx 12 (Interact Range 0-5yd, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: effInstakill 1 live
+	// (positivity.go:34, spells.go:24311), target 25 live. Removes the
+	// last unseeded-spell blocker for npc_nesingwary_trapper.lua
+	// (single-missing-id file).
+	{id: 46104, castTimeIdx: 1, durIdx: 0, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effInstakill, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 68424 Wilfred Portal (wago name; C++ SPELL_WILFRED_PORTAL,
+	// trial_of_the_crusader.h:81 enum; Lua
+	// npc_open_portal_target_toc.lua:31 const, :20 non-triggered cast
+	// + DespawnOrUnsummon) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 44ba3f77, DifficultyID 0
+	// rows): single eff0 6 APPLY_AURA aura 4 DUMMY TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 21 (-1 infinite, real row), rangeIdx 1 (Self
+	// Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent). Engine twin: auraDummy 4 live, target 1 live.
+	// Removes the last unseeded-spell blocker for
+	// npc_open_portal_target_toc.lua (single-missing-id file).
+	{id: 68424, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 56142 Summon Power Spark (wago name — NOT "Summon Power Park";
+	// C++ SPELL_SUMMON_POWER_PARK, boss_malygos.cpp:108 enum; Lua
+	// npc_portal_eoe.lua:31 const, :8 triggered cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser
+	// read 44ba3f77, DifficultyID 0 rows): single eff0 28 SUMMON misc
+	// 30084 miscB 1362 dieSides 1 TargetA 18 TARGET_DEST_CASTER
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 23
+	// (90000ms, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; SpellAuraOptions ProcChance 101 (no proc
+	// table, 58109 precedent). Engine twins: effSummon 28 live,
+	// target 18 live, SummonProperties 1362 real row (e33ebcb8).
+	// Removes the last unseeded-spell blocker for npc_portal_eoe.lua
+	// (single-missing-id file).
+	{id: 56142, castTimeIdx: 1, durIdx: 23, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, targetA: targetDestCaster, misc: 30084, miscB: 1362, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -3275,6 +3346,7 @@ func main() {
 		{93007, f32(0), f32(0), f32(100), f32(100), 0},
 		{93008, f32(0), f32(0), f32(50000), f32(50000), 0},
 		{36, f32(0), f32(0), f32(45), f32(45), 0},       // real SpellRange 36 "Longer Range" for 29946/32265 (wago.tools 3.4.0.47659, aux read 54197700)
+		{37, f32(0), f32(0), f32(50), f32(50), 0},       // real SpellRange 37 "Extended Range" for 45532 (wago.tools 3.4.0.47659 SpellRange row 37, browser 4d453dd5)
 		{11, f32(0), f32(0), f32(15), f32(15), 0},       // real SpellRange 11 "Fifteen yards" for 29961 (wago.tools 3.4.0.47659, aux read 54197700)
 		{13, f32(0), f32(0), f32(50000), f32(50000), 0}, // real SpellRange 13 "Anywhere - Unlimited" for 29967 (wago.tools 3.4.0.47659, aux read 54197700)
 		{95, f32(8), f32(8), f32(25), f32(25), 0},       // real SpellRange 95 for 63010 (wago.tools 3.4.0.43659)
