@@ -1736,6 +1736,47 @@ var spells = []spell{
 	// field). Completes the 53609 -> 53610 chain, so all four
 	// anub_arak ev4 pet summon spells now resolve in the seed.
 	{id: 53610, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effSummon, dieSides: 1, misc: 29214, miscB: 64, targetA: targetDestCaster}}},
+	// 2676 Pulverize (zone_terokkar_forest.cpp:47 enum, :153-157
+	// DoCast(me) on a 9s timer; Lua npc_unkor_the_ruthless.lua:116
+	// self-cast 9s) — wago.tools 3.4.0.43659 SpellEffect rows
+	// 680971/870416 + SpellMisc 315891 + SpellCategories 71116
+	// (2026-11-15 browser read): eff0 2 SCHOOL_DAMAGE Die 11
+	// Base 69 TargetA 22 TARGET_SRC_CASTER TargetB 15
+	// TARGET_UNIT_SRC_AREA_ENEMY RadiusIndex 8 (5yd, real row)
+	// chainAmplitude 1; eff1 68 INTERRUPT_CAST Die 0 Base 0
+	// TargetA 22 TargetB 15 RadiusIndex 8 Mechanic 26
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 39 (2000ms, real row — 57994 precedent), rangeIdx
+	// 1 (Self Only, real row), school 0x1 Physical. NOT carried:
+	// Attributes_0 0x90010 (seed has no attributes field);
+	// ManaCost not reported by the wago read (left 0,
+	// 49549/53421/53456 precedent). Both effects have live Go
+	// handlers (school damage + creatureEffectInterruptCast,
+	// boss_ai.go:3328). Removes the last unseeded-spell blocker
+	// for npc_unkor_the_ruthless.lua (single-missing-id file).
+	{id: 2676, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 11, basePoints: 69, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effInterruptCast, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, mechanic: 26, chainAmplitude: 1},
+	}},
+	// 2767 Shadow Word: Pain (boss_interrogator_vishas.cpp:34
+	// enum, :102-104 DoCastVictim on {5s,15s}; Lua
+	// boss_interrogator_vishas.lua:96 victim cast {5s,15s}) —
+	// wago.tools 3.4.0.43659 SpellEffect row 680965 + SpellMisc
+	// 315885 + SpellCategories 71115 (2026-11-15 browser read):
+	// eff0 6 APPLY_AURA aura 3 PERIODIC_DAMAGE Die 1 Base 54
+	// TargetA 6 TARGET_UNIT_TARGET_ENEMY TargetB 0 auraPeriod
+	// 3000 chainAmplitude 1 (54+1 = 55/tick); castTimeIdx 1
+	// (instant, real row), durIdx 85 (18s, real row added below
+	// — ms from the Wowhead 18s display, wago SpellDuration
+	// re-read pending), rangeIdx 4 (Medium Range 30yd, real
+	// row), school 0x20 Shadow, dispel 1 (Magic). NOT carried:
+	// Attributes_0/2/4/6 (seed has no attributes field);
+	// ManaCost not reported by the wago read (left 0).
+	// Removes the last unseeded-spell blocker for
+	// boss_interrogator_vishas.lua (single-missing-id file).
+	{id: 2767, castTimeIdx: 1, durIdx: 85, rangeIdx: 4, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 54, targetA: targetEnemy, auraPeriod: 3000, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -1782,6 +1823,7 @@ func main() {
 		{8, 15000, 0, 15000},   // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},    // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
 		{9, 30000, 0, 30000},   // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{85, 18000, 0, 18000},  // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
