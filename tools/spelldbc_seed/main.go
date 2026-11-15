@@ -2257,12 +2257,12 @@ func main() {
 		{90008, 604800000, 0, 604800000},
 		{90009, 4000, 0, 4000},
 		{90010, 500, 0, 500},
-		{4, 120000, 0, 120000},  // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
-		{8, 15000, 0, 15000},    // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
-		{27, 3000, 0, 3000},     // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
-		{9, 30000, 0, 30000},    // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
-		{85, 18000, 0, 18000},   // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
-		{25, 180000, 0, 180000}, // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
+		{4, 120000, 0, 120000},     // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
+		{8, 15000, 0, 15000},       // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
+		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
+		{9, 30000, 0, 30000},       // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{85, 18000, 0, 18000},      // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
+		{25, 180000, 0, 180000},    // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
 		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
@@ -2353,7 +2353,7 @@ func main() {
 		{9, f32(10), f32(10), f32(30), f32(30), 0},      // real SpellRange 9 for 65147 (wago.tools 3.4.0.43659)
 		{7, f32(0), f32(0), f32(10), f32(10), 0},        // real SpellRange 7 for 49256 (wago.tools 3.4.0.43659)
 		{54, f32(5), f32(5), f32(30), f32(30), 0},       // real SpellRange 54 for 66081 (wago.tools 3.4.0.43659)
-		{12, f32(0), f32(0), f32(5), f32(5), 0},        // real SpellRange 12 "Interact Range" for 23261 (wago.tools 3.4.0.47659 SpellRange row 12, Flags 0)
+		{12, f32(0), f32(0), f32(5), f32(5), 0},         // real SpellRange 12 "Interact Range" for 23261 (wago.tools 3.4.0.47659 SpellRange row 12, Flags 0)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
