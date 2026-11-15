@@ -141,6 +141,7 @@ const (
 	targetUnitConeEnemy104     = 104 // TARGET_UNIT_CONE_ENEMY_104 (SharedDefines.h:1540)
 	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
 	targetUnitSrcAreaEntry     = 7   // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
+	targetUnitDestAreaEntry    = 8   // TARGET_UNIT_DEST_AREA_ENTRY (SharedDefines.h:1449)
 	targetUnitNearbyEntry      = 38  // TARGET_UNIT_NEARBY_ENTRY (SharedDefines.h:1474)
 	targetDestNearbyEntry      = 46  // TARGET_DEST_NEARBY_ENTRY (SharedDefines.h:1482)
 	targetGONearbyEntry        = 40
@@ -2283,6 +2284,91 @@ var spells = []spell{
 	{id: 7978, castTimeIdx: 4, rangeIdx: 4, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 9, basePoints: 25, targetA: targetUnitDestAreaEnemy, radiusIdx: 8},
 	}},
+	// 47751 Spark (boss_anomalus.cpp:27 enum, :182 DoCast(target,
+	// SPELL_SPARK) random-target 5s timer; Lua boss_anomalus.lua:188
+	// randomPlayer cast) — wago.tools 3.4.0.47659 SpellEffect row
+	// 952592 + SpellMisc 601068 + SpellPower 235741 + SpellCategories
+	// 125646 (2026-11-15 browser read, DifficultyID 0 rows): single
+	// eff0 2 SCHOOL_DAMAGE Die 451 Base 2024 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY, chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 0, rangeIdx 5 (40yd, real row),
+	// school 0x40 Arcane, manaCost 90 (SpellPower row), dispel 0
+	// (SpellCategories DispelType 0). NOT carried: Speed 12 (seed
+	// has no speed field); SpellAuraOptions ProcChance 101 (seed has
+	// no proc table). Engine twin: effSchoolDamage live
+	// (spells.go:405, boss_ai.go:1709). Removes the last
+	// unseeded-spell blocker for boss_anomalus.lua
+	// (single-missing-id file).
+	{id: 47751, castTimeIdx: 1, rangeIdx: 5, school: schoolArcane, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 451, basePoints: 2024, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52087 Web Wrap (wago name; C++ SPELL_WEB_WRAP_WRAPPED,
+	// boss_krikthir_the_gatewatcher.cpp:75 enum, :1021
+	// target->CastSpell(target, SPELL_WEB_WRAP_WRAPPED, true) in the
+	// web-wrap SpellScript; Lua boss_krikthir_the_gatewatcher.lua:59
+	// triggered self-cast on webWrapRemove) — wago.tools 3.4.0.47659
+	// SpellEffect rows 979898/979899/979900 + SpellMisc 621293
+	// (2026-11-15 browser read, DifficultyID 0 rows): eff0 6
+	// APPLY_AURA aura 12 MOD_STUN TargetA 1 TARGET_UNIT_CASTER,
+	// eff1 6 APPLY_AURA aura 56 TRANSFORM Misc 32785 TargetA 1,
+	// eff2 28 SUMMON Misc 28619 MiscB 64 TargetA 18
+	// TARGET_DEST_CASTER, all chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 1 (10000ms, real row), rangeIdx 5
+	// (40yd, real row), school 0x1 Physical. NOT carried: no
+	// SpellPower row; no SpellCategories row, so dispel stays 0;
+	// SpellAuraOptions ProcChance 101 (seed has no proc table).
+	// Engine twins: auraStun live, auraTransform 56 live
+	// (spells.go:711, shapeshift.go:422), effSummon live (:17480).
+	// Removes the last unseeded-spell blocker for
+	// boss_krikthir_the_gatewatcher.lua (single-missing-id file).
+	// 52086 Web Wrap needs no seed (RegisterAuraEvent only, no
+	// CastSpell site).
+	{id: 52087, castTimeIdx: 1, durIdx: 1, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, targetA: targetCaster, misc: 32785, chainAmplitude: 1},
+		{effect: effSummon, targetA: targetDestCaster, misc: 28619, miscB: 64, chainAmplitude: 1},
+	}},
+	// 33814 Infernal Rain (wago name; C++ SPELL_METEOR,
+	// hyjal_trash.cpp:29 enum, :482 trigger->CastSpell(me,
+	// SPELL_METEOR, true); Lua hyjal_trash.lua:509 trigger cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows 852482/852483 +
+	// SpellMisc 450435 (2026-11-15 browser read, DifficultyID 0
+	// rows): eff0 3 DUMMY RadiusIndex_0 29 (6yd, real row added
+	// below) TargetA 8 TARGET_UNIT_DEST_AREA_ENTRY, eff1 32
+	// TRIGGER_MISSILE TriggerSpell 33637 RadiusIndex_0 10 (30yd,
+	// real row) TargetA 8, both chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 0, rangeIdx 13 (50000yd, real
+	// row), school 0x1 Physical. NOT carried: Speed 20 (seed has
+	// no speed field); no SpellPower row; no SpellCategories row,
+	// so dispel stays 0; SpellAuraOptions ProcChance 101 (seed has
+	// no proc table). Engine twins: effDummy live (spells.go:375),
+	// TRIGGER_MISSILE 32 live (spells.go:387/:16544). FOLLOW-UP:
+	// 33637 (eff1 trigger) unseeded, needs its own wago read.
+	// Removes the last unseeded-spell blocker for hyjal_trash.lua
+	// (single-missing-id file).
+	{id: 33814, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetUnitDestAreaEntry, radiusIdx: 29, chainAmplitude: 1},
+		{effect: effTriggerMiss, targetA: targetUnitDestAreaEntry, radiusIdx: 10, trigger: 33637, chainAmplitude: 1},
+	}},
+	// 29908 Astral Bite (wago name; C++ SPELL_MANA_BITE,
+	// karazhan.cpp:630 enum, :653 DoCast(me, SPELL_MANA_BITE) in
+	// Reset; Lua npc_mana_feeder.lua:23 self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 847736 + SpellMisc 447072 +
+	// SpellCategories 112236 (2026-11-15 browser read, DifficultyID
+	// 0 rows): single eff0 6 APPLY_AURA aura 42 PROC_TRIGGER_SPELL
+	// TriggerSpell 29907 TargetA 1 TARGET_UNIT_CASTER,
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx
+	// 21 (infinite, real row), rangeIdx 1 (Self Only, real row),
+	// school 0x40 Arcane, dispel 0 (SpellCategories DispelType 0).
+	// NOT carried: no SpellPower row; SpellAuraOptions ProcChance
+	// 100 / ProcTypeMask 0x14 (seed has no proc table — the
+	// anetheron 15574 precedent). Engine twin: aura42 live
+	// (procs.go:1287). FOLLOW-UP: 29907 (proc trigger) unseeded,
+	// needs its own wago read. Removes the last unseeded-spell
+	// blocker for npc_mana_feeder.lua (single-missing-id file).
+	{id: 29908, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, targetA: targetCaster, trigger: 29907, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -2368,6 +2454,7 @@ func main() {
 		{30, f32(500), f32(0), f32(500)}, // real SpellRadius 30 for 42442 (wago.tools 3.4.0.47659, aux read 54197700)
 		{40, f32(9), f32(0), f32(9)},     // real SpellRadius 40 = 29961 RadiusIndex_1 (wago.tools 3.4.0.47659, aux read 54197700); UNREFERENCED — no seeded spell uses radiusIdx 40 until the _0-vs-_1 radius question settles
 		{33, f32(99), f32(0), f32(99)},   // real SpellRadius 33 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{29, f32(6), f32(0), f32(6)},     // real SpellRadius 29 for 33814 (wago.tools 3.4.0.47659)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
