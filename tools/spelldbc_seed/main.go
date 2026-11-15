@@ -1275,6 +1275,12 @@ var spells = []spell{
 	// durIdx 21 (-1), rangeIdx 1, school 0x1; single effect 6
 	// APPLY_AURA aura 4 DUMMY TargetA 1.
 	{id: 57561, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1}}},
+	// 41342 Shared Rule (lady malande): castTimeIdx 1 (instant),
+	// durIdx 0 (no duration row), rangeIdx 13 (Anywhere - Unlimited,
+	// 50000), school 0x1; single effect 2 SCHOOL_DAMAGE DieSides 1
+	// BasePoints 0 TargetA 38 TARGET_UNIT_NEARBY_ENTRY ChainAmplitude 1
+	// (wago.tools 3.4.0.43659, browser task eb1fb12e, 2026-11-15 03:39 UTC).
+	{id: 41342, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{{effect: effSchoolDamage, dieSides: 1, basePoints: 0, targetA: targetUnitNearbyEntry, chainAmplitude: 1}}},
 }
 
 func main() {
@@ -1372,6 +1378,7 @@ func main() {
 		{19, 2500, 0}, // real SpellCastTimes 19 for 66042 (wago.tools 3.4.0.43659)
 		{90, 1700, 0}, // real SpellCastTimes 90 for 65868 (wago.tools 3.4.0.43659)
 		{7, 10000, 0}, // real SpellCastTimes 7 for 29973 Arcane Explosion (wago.tools 3.4.0.47659, aux read 54197700)
+		{1, 0, 0},     // real SpellCastTimes 1 (instant) for 41342 Shared Rule (wago.tools 3.4.0.43659)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)

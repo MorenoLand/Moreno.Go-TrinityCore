@@ -27,7 +27,8 @@
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 3
 -- OnTargetDied, 4 OnDied, 9 OnDamageTaken (returns false,
 -- newDamage; the boolean is consumed by the engine, the number
--- rewrites damage — reliquary convention), 23 OnReset. Timers via
+-- rewrites damage — reliquary convention), 11 OnHealReceived
+-- (healer, heal; read-only, boss_ai.go:154), 23 OnReset. Timers via
 -- CreateLuaEvent; melee is engine-driven in Go (creature combat
 -- tick), like C++ DoMeleeAttackIfReady.
 -- Fight shape (C++-exact for the modeled arms): Illidari Council
@@ -108,10 +109,11 @@
 -- shield 41475 25s then 40s, non-triggered self-cast +
 -- Talk(SAY_COUNCIL_SPECIAL) / divine wrath 41472 32s then 20s,
 -- non-triggered DoCastVictim. The HealReceived -> shared-rule
--- 41342 arm (with -addhealth BP0 on nil target) stays out — the heal
--- hook exists (event 11, read-only Go extension,
--- lua_creature_events.go:3037) but creature:CastSpell takes no BP args,
--- so the -addhealth BP0 leg has no bridge. The DoSpellAttackIfReady
+-- 41342 arm (with -addhealth BP0 on nil target) is PORTED below (this
+-- tick, malandeHealReceived): creature:CastCustomSpell IS bridged with
+-- real BP0 support (lua_creature_events.go:336/:1145) and the nil target
+-- is harmless — 41342's implicit target 38 replaces the hit list in
+-- the engine (boss_ai.go:2345-2366). The DoSpellAttackIfReady
 -- (41471 empowered
 -- smite) filler has no spell-attack bridge — unmodeled.
 -- DamageTaken/KilledUnit/Died/LeaveCombat/Reset as Gathios.
@@ -161,8 +163,8 @@
 -- EnterEvadeMode relay (boss_illidari_council.cpp:274) has no
 -- bearer — no evade bridge; no summon
 -- bridge — SummonCreatureGroup(SUMMON_COUNCIL_GROUP) unmodeled;
--- the 41342 shared-rule Nil-target cast stays out on the no-BP-args
--- bridge (heal hook ev11 exists but read-only);
+-- the 41342 shared-rule arm is PORTED below (malandeHealReceived,
+-- CastCustomSpell BP0 bridge, lua_creature_events.go:1145);
 -- the boundary/setActive arms have no
 -- bridges; the SetCombatPulseDelay(5) arm is PORTED
 -- (creature:SetCombatPulseDelay bridge, lua_creature_events.go; event 1,
@@ -207,6 +209,7 @@ local SPELL_EMPYREAL_BALANCE = 41499
 local SPELL_EMPYREAL_EQUIVALENCY = 41333
 local SPELL_BERSERK = 45078
 local SPELL_BALANCE_OF_POWER = 41341
+local SPELL_SHARED_RULE = 41342 -- boss_illidari_council.cpp:45
 local SPELL_QUIET_SUICIDE = 3617
 
 local SPELL_FLAMESTRIKE = 41481
@@ -923,9 +926,9 @@ local function malandeWrath(creature, guid)
 end
 
 -- C++ JustEngagedWith + ScheduleEvents: the three cycle arms.
--- The HealReceived -> shared-rule arm (heal hook ev11 exists,
--- read-only; BP0 leg unbridged) and the DoSpellAttackIfReady
--- (41471) filler have no bridges — unmodeled.
+-- The HealReceived -> shared-rule arm is PORTED below
+-- (malandeHealReceived); the DoSpellAttackIfReady (41471) filler has
+-- no spell-attack bridge — unmodeled.
 local function malandeEnterCombat(event, creature, target)
     creature:SetCombatPulseDelay(5) -- boss_illidari_council.cpp:258 (base JustEngagedWith arm 1; the setActive leg still has no bridge)
     -- C++ boss_illidari_council.cpp:260-261: DoZoneInCombat(illidari) --
@@ -952,11 +955,31 @@ local function malandeEnterCombat(event, creature, target)
     end)
 end
 
+-- C++ HealReceived (boss_illidari_council.cpp:462-465): on any heal,
+-- triggered cast of shared rule 41342 with BP0 = -addhealth on a nil
+-- target. The hook is read-only (ev11, fireCreatureHealReceived,
+-- lua_creature_events.go:8147; boss_ai.go:154), so addhealth arrives
+-- as the pre-clamp amount and is never rewritten. The nil target
+-- falls back to the victim on the CastCustomSpell bridge
+-- (lua_creature_events.go:1155-1165), but 41342's implicit target 38
+-- (TARGET_UNIT_NEARBY_ENTRY) replaces the hit list in the engine
+-- (boss_ai.go:2345-2366), so the victim fallback never lands as a
+-- hit — the engine resolves the nearest unit in range, C++-exact
+-- (Spell.cpp:1036-1111, SearchNearbyTarget). BP0 lands exact: the
+-- override path subtracts 1 for DieSides 1 and the roll adds 1 back
+-- (boss_ai.go:1834-1838; store.go:168-169), so the effect value is
+-- -addhealth. No heal-amount guard: C++ casts on every HealReceived,
+-- including a 0 heal.
+local function malandeHealReceived(event, creature, healer, heal)
+    creature:CastCustomSpell(nil, SPELL_SHARED_RULE, true, -heal)
+end
+
 RegisterCreatureEvent(ENTRY_MALANDE, 1, malandeEnterCombat)
 RegisterCreatureEvent(ENTRY_MALANDE, 2, memberLeaveCombat)
 RegisterCreatureEvent(ENTRY_MALANDE, 3, memberTargetDied)
 RegisterCreatureEvent(ENTRY_MALANDE, 4, memberDied)
 RegisterCreatureEvent(ENTRY_MALANDE, 9, memberDamageTaken)
+RegisterCreatureEvent(ENTRY_MALANDE, 11, malandeHealReceived)
 RegisterCreatureEvent(ENTRY_MALANDE, 23, memberReset)
 
 ------------------------------------------------------------------
