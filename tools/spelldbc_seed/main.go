@@ -96,6 +96,7 @@ const (
 	auraTransform              = 56
 	auraModScale               = 61
 	auraModDmgDone             = 79
+	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
 	auraModResistPct           = 101
 	auraModMeleeHaste          = 138
@@ -2170,9 +2171,9 @@ var spells = []spell{
 	// Removes the last unseeded-spell blocker for
 	// boss_magistrate_barthilas.lua (single-missing-id file).
 	{id: 16791, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
-		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 14, misc: 1, targetA: targetCaster},
-		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 3, targetA: targetCaster},
-		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 4, targetA: targetCaster},
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 14, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 3, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 4, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 17470 Ravenous Claw (boss_timmy_the_cruel.cpp:89
 	// DoCastVictim(SPELL_RAVENOUSCLAW); Lua
@@ -2192,7 +2193,7 @@ var spells = []spell{
 	// Removes the last unseeded-spell blocker for
 	// boss_timmy_the_cruel.lua (single-missing-id file).
 	{id: 17470, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
-		{effect: effHealthLeech, dieSides: 151, basePoints: 924, targetA: targetEnemy},
+		{effect: effHealthLeech, dieSides: 151, basePoints: 924, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	// 23261 Summon Darkreaver's Fallen Charger
 	// (boss_death_knight_darkreaver.cpp:50 DoCast(me, 23261, true)
@@ -2213,7 +2214,74 @@ var spells = []spell{
 	// blocker for boss_death_knight_darkreaver.lua
 	// (single-missing-id file).
 	{id: 23261, castTimeIdx: 1, durIdx: 367, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
-		{effect: effSummon, dieSides: 1, targetA: targetDestCasterSummon, radiusIdx: 15, misc: 14568, miscB: 64},
+		{effect: effSummon, dieSides: 1, targetA: targetDestCasterSummon, radiusIdx: 15, misc: 14568, miscB: 64, chainAmplitude: 1},
+	}},
+	// 6421 Unlock (shadowfang_keep.cpp:55 enum, :93 DoCast(me) at
+	// waypoint 11, Ash only; Lua npc_shadowfang_prisoner.lua:66
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect row 685924 +
+	// SpellMisc 320228 (2026-11-15 browser read, DifficultyID 0
+	// rows): single eff0 3 DUMMY Die 0 Base 0 TargetA 1
+	// TARGET_UNIT_CASTER; castTimeIdx 15 (4000ms, real row),
+	// durIdx 0, rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical. NOT carried: no SpellCategories row, so dispel
+	// stays 0; no SpellPower row. Engine twin: effDummy live
+	// handler (spells.go:375). Removes the last unseeded-spell
+	// blocker for npc_shadowfang_prisoner.lua (single-missing-id
+	// file).
+	{id: 6421, castTimeIdx: 15, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetCaster},
+	}},
+	// 7154 Dark Offering (shadowfang_keep.cpp:56 enum, :182/:184
+	// DoCast(pFriend/me); Lua npc_arugal_voidwalker.lua:66
+	// CastSpell(friend or creature)) — wago.tools 3.4.0.47659
+	// SpellEffect row 685943 + SpellMisc 320242 (2026-11-15
+	// browser read, DifficultyID 0 rows): single eff0 10 HEAL Die
+	// 1 Base 199 TargetA 21 TARGET_UNIT_TARGET_ALLY; castTimeIdx 1
+	// (instant, real row), durIdx 0, rangeIdx 7 (10yd, real row),
+	// school 0x20 Shadow. NOT carried: no SpellCategories row, so
+	// dispel stays 0; no SpellPower row; Attributes 0x10/0x80000
+	// (seed carries no attribute fields). Engine twin: effHeal live
+	// (boss_ai.go:3931, creaturemotion.go:8291). Removes the last
+	// unseeded-spell blocker for npc_arugal_voidwalker.lua
+	// (single-missing-id file).
+	{id: 7154, castTimeIdx: 1, rangeIdx: 7, school: schoolShadow, effects: [3]effect{
+		{effect: effHeal, dieSides: 1, basePoints: 199, targetA: targetUnitTargetAlly},
+	}},
+	// 7737 Drink (zone_tirisfal_glades.cpp:45 enum, :104
+	// DoCastSelf; Lua npc_calvin_montague.lua:195 self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row 685872 + SpellMisc
+	// 320182 + SpellCategories 72638 (2026-11-15 browser read,
+	// DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 84
+	// MOD_REGEN Die 1 Base 9 TargetA 1 TARGET_UNIT_CASTER,
+	// EffectAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 8 (15000ms, real row), rangeIdx 1 (Self Only, real
+	// row), school 0x1 Physical, dispel 0 (SpellCategories
+	// category 11, DispelType 0). NOT carried: SpellCategories
+	// category 11 (seed has no category field); EffectAmplitude 1
+	// (seed carries no amplitude field — auraPeriod 0 per wago);
+	// no SpellPower row. Engine twin: auraModRegen live
+	// (spells.go:38723, consumed server.go:1992). Removes the last
+	// unseeded-spell blocker for npc_calvin_montague.lua
+	// (single-missing-id file).
+	{id: 7737, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModRegen, dieSides: 1, basePoints: 9, targetA: targetCaster},
+	}},
+	// 7978 Dynamite (zone_azuremyst_isle.cpp:191 enum, :259
+	// DoCastVictim; Lua npc_engineer_spark_overgrind.lua:133
+	// victim cast) — wago.tools 3.4.0.47659 SpellEffect row 685369
+	// + SpellMisc 319737 (2026-11-15 browser read, DifficultyID 0
+	// rows): single eff0 2 SCHOOL_DAMAGE Die 9 Base 25 TargetA 16
+	// TARGET_UNIT_DEST_AREA_ENEMY RadiusIndex_0 8 (5yd, real row);
+	// castTimeIdx 4 (1000ms, real row), durIdx 0, rangeIdx 4
+	// (30yd, real row), school 0x4 Fire. NOT carried:
+	// EffectBonusCoefficient 1 (seed has no coefficient field);
+	// Speed 14 (seed has no speed field); no SpellCategories row,
+	// so dispel stays 0; no SpellPower row. Engine twin:
+	// effSchoolDamage live (spells.go:405, boss_ai.go:1709).
+	// Removes the last unseeded-spell blocker for
+	// npc_engineer_spark_overgrind.lua (single-missing-id file).
+	{id: 7978, castTimeIdx: 4, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 9, basePoints: 25, targetA: targetUnitDestAreaEnemy, radiusIdx: 8},
 	}},
 }
 
