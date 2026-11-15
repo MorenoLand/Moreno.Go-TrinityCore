@@ -107,12 +107,16 @@
 --   bridges (2026-10-23 re-evaluation: the relay is a summons-container
 --   call on a DIFFERENT creature riding the unported DoAction machine;
 --   stays out); the Talk arms are modeled.
--- - npc_apothecary_genericAI DoAction legs (MovePoint to BaxterMovePos /
---   FryeMovePos + EMOTE_STATE_USE_STANDING on MovementInform;
---   ACTION_START_FIGHT immunity/combat legs) — no MotionMaster/
---   MovementInform bridges; the emote-state and immunity surfaces are
---   bridged, but the legs ride the unported DoAction machine (already
---   noted in the baxter/frye files).
+-- - npc_apothecary_genericAI DoAction legs: the ACTION_START_EVENT
+--   MovePoint to BaxterMovePos / FryeMovePos + EMOTE_STATE_USE_STANDING
+--   on MovementInform is PORTED below (startEvent issues the MoveTo leg
+--   directly — no summon-relay bridge — and the ev28 handler ports the
+--   emote arm; the old "no MotionMaster/MovementInform bridges" claim
+--   was stale, MoveTo + ev28 are live); the ACTION_START_FIGHT
+--   immunity/combat legs stay out (the DoZoneInCombat arm is covered by
+--   onStartFight's own call, the SetImmuneToAll(false) leg by its flag
+--   clear). The SetImmuneToPC/SetFaction legs on the adds themselves
+--   stay out (separate arms).
 -- - UpdateAI UNIT_STATE_CASTING gates PORTED (pre-loop :198 +
 --   in-loop :270): each ported event-loop arm defers 500ms while
 --   creature:IsCasting(), no re-arm consumed.
@@ -154,6 +158,11 @@ local SPELL_QUIET_SUICIDE = 3617
 local NPC_CROWN_APOTHECARY = 36885
 local NPC_APOTHECARY_FRYE = 36272
 local NPC_APOTHECARY_BAXTER = 36565
+
+-- C++ npc_apothecary_genericAI move positions (boss_apothecary_hummel.cpp:93-94).
+local FRYE_MOVE_POS = { -196.2483, 2197.224, 79.9315 }
+local BAXTER_MOVE_POS = { -221.4115, 2206.825, 79.93151 }
+local EMOTE_STATE_USE_STANDING = 69 -- SharedDefines.h:1987
 
 local QUEST_YOUVE_BEEN_SERVED = 14488
 
@@ -338,6 +347,22 @@ local function startEvent(creature)
     -- relay stays out (no bridge).
     creature:SetFlag(59, 0x100)
     creature:SetFaction(FACTION_MONSTER)
+    -- C++ npc_apothecary_genericAI::DoAction(ACTION_START_EVENT)
+    -- (boss_apothecary_hummel.cpp:299-306): the summons.DoAction relay
+    -- sends ACTION_START_EVENT to Frye/Baxter and each MovePoints to
+    -- its move position (point 1), whose landing fires the ev28 emote
+    -- arm below. No summon-relay bridge exists, so Hummel issues the
+    -- MoveTo leg directly via grid lookup (the adds spawn with group 1
+    -- in onReset, same room); the SetImmuneToPC/SetFaction legs on the
+    -- adds themselves stay out (separate arms, not part of this leg).
+    local frye = creature:FindNearestCreature(NPC_APOTHECARY_FRYE, 100.0)
+    if frye then
+        frye:MoveTo(1, FRYE_MOVE_POS[1], FRYE_MOVE_POS[2], FRYE_MOVE_POS[3])
+    end
+    local baxter = creature:FindNearestCreature(NPC_APOTHECARY_BAXTER, 100.0)
+    if baxter then
+        baxter:MoveTo(1, BAXTER_MOVE_POS[1], BAXTER_MOVE_POS[2], BAXTER_MOVE_POS[3])
+    end
     schedule(guid, "say", 1, function() onSay0(creature, guid) end)
 end
 
@@ -464,6 +489,17 @@ local function onSummonedCreatureDies(event, creature, summon, killer)
     end
 end
 
+-- C++ npc_apothecary_genericAI::MovementInform (boss_apothecary_hummel.cpp:313-317):
+-- POINT_MOTION_TYPE (8) arrival at point 1 -> SetUInt32Value
+-- (UNIT_NPC_EMOTESTATE, EMOTE_STATE_USE_STANDING 69). EmoteState is
+-- the SetUInt32Value twin (lua_creature_events.go:5142); the trigger
+-- MoveTo(1, ...) is issued from startEvent above.
+local function onApothecaryMovementInform(event, creature, moveType, pointId)
+    if moveType == 8 and pointId == 1 then
+        creature:EmoteState(EMOTE_STATE_USE_STANDING)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_HUMMEL, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_HUMMEL, 2, onLeaveCombat)
 RegisterCreatureEvent(ENTRY_HUMMEL, 4, onDied)
@@ -471,5 +507,7 @@ RegisterCreatureEvent(ENTRY_HUMMEL, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_HUMMEL, 21, onSummonedCreatureDies)
 RegisterCreatureEvent(ENTRY_HUMMEL, 23, onReset)
 RegisterCreatureEvent(ENTRY_HUMMEL, 34, onQuestReward)
+RegisterCreatureEvent(NPC_APOTHECARY_FRYE, 28, onApothecaryMovementInform)
+RegisterCreatureEvent(NPC_APOTHECARY_BAXTER, 28, onApothecaryMovementInform)
 RegisterCreatureGossipEvent(ENTRY_HUMMEL, 1, onGossipHello)
 RegisterCreatureGossipEvent(ENTRY_HUMMEL, 2, onGossipSelect)

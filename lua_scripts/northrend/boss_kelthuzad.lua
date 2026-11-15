@@ -171,14 +171,17 @@
 -- ACTION_KELTHUZAD_DIED — PORTED 2026-11-04 in kelthuzadDied via
 -- kelthuzadGuardianFlee (sender is kelthuzad JustDied, ev4-registered,
 -- not the guardian's DoAction receipt; MoveHome is the MoveTargetedHome
--- twin, lua_creature_events.go:4278); the old "no bridge" claims for
--- this arm are stale.
+-- twin, lua_creature_events.go:4278). The MoveHome landing fires ev24
+-- kelthuzadGuardianReachHome below, which despawns the guardian on
+-- arrival; the 30s backstop covers a home-arrival that never lands.
 -- EMOTE_GUARDIAN_APPEAR 1 rides the DoAction visibility timer,
 -- not a bridge gap.
--- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835):
--- ev24 is live, but unreachable — MoveTargetedHome never runs,
--- so home-arrival never fires; trigger-chain-blocked, not
--- entry-blocked.
+-- JustReachedHome DespawnOrUnsummon (boss_kelthuzad.cpp:832-835) —
+-- PORTED below (kelthuzadGuardianReachHome, ev24): the flee leg in
+-- kelthuzadGuardianFlee calls MoveHome (the MoveTargetedHome twin),
+-- whose landing fires ev24 (creaturemotion.go:5899); the old
+-- "unreachable (guardians unregistered)" claim was stale — guardians
+-- are registered (ev2/4/23/38) and the flee path is live.
 -- spell_kelthuzad_chains (AuraScript 28410): scale-mod apply/remove
 -- handlers — engine-covered, no Lua needed: both arms only call
 -- HandleAuraModScale -> RecalculateObjectScale, and Go folds
@@ -547,9 +550,9 @@ local GO_KELTHUZAD_THRONE = 181640 -- naxxramas.h:124
 -- backstop + MoveTargetedHome [MoveHome]. Lua has no kelthuzad summon
 -- tracking, so the freya-elder-sweep approximation applies (guardians
 -- are chamber-local; the C++ list has no range limit); latent until
--- the phase-1 guardian machine lands. JustReachedHome despawn is
--- unreachable (guardians unregistered), so the 30s backstop is the
--- despawn.
+-- the phase-1 guardian machine lands. The MoveHome landing fires ev24
+-- kelthuzadGuardianReachHome below, which despawns the guardian on
+-- arrival; the 30s backstop covers a home-arrival that never lands.
 local function kelthuzadGuardianFlee(creature)
     for _, guardian in ipairs(creature:GetCreaturesInGrid(ENTRY_GUARDIAN, 500)) do
         if guardian:IsAlive() then
@@ -616,6 +619,14 @@ bloodTapTick = function(creature, guid)
     schedule(guid, "blood_tap", math.random(18000, 26000), function()
         bloodTapTick(creature, guid)
     end)
+end
+
+-- C++ npc_kelthuzad_guardianAI::JustReachedHome (boss_kelthuzad.cpp:832-835):
+-- DespawnOrUnsummon(). Fires on the MoveHome landing from
+-- kelthuzadGuardianFlee (creaturemotion.go:5899) and on any evade-home;
+-- the body despawns unconditionally, matching C++.
+local function kelthuzadGuardianReachHome(event, creature)
+    creature:DespawnOrUnsummon()
 end
 
 local function kelthuzadGuardianLeaveCombat(event, creature)
@@ -1267,6 +1278,7 @@ RegisterCreatureEvent(ENTRY_ABOMINATION, 28, kelthuzadMinionMovementInform)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 2, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 4, kelthuzadGuardianLeaveCombat)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 23, kelthuzadGuardianReset)
+RegisterCreatureEvent(ENTRY_GUARDIAN, 24, kelthuzadGuardianReachHome)
 RegisterCreatureEvent(ENTRY_GUARDIAN, 38, kelthuzadGuardianDoAction)
 
 -- C++ spell_kelthuzad_detonate_mana_AuraScript::HandleScript

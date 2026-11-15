@@ -64,11 +64,14 @@
 -- on event 24 in C++ arm order (bridges live, lua_creature_events.go);
 -- the instance->SetBossState(FAIL) leg (:275) PORTED 2026-11-06 via
 -- creature:SetBossState (the old "no instance bridge" note was stale).
--- boss_blood_queen_lana_thel MovementInform — Talk(SAY_AIR_PHASE
--- 7) rides the POINT_AIR movement-inform leg (no MovementInform
--- bridge); the air-phase machine (MovePoint / SetDisableGravity /
--- hover legs, plus a SetReactState leg that is bridged in isolation)
--- rides the unported movement machine.
+-- boss_blood_queen_lana_thel MovementInform — PORTED 2026-11-14
+-- (ev28 lanaThelMovementInform, below): POINT_CENTER / POINT_AIR /
+-- POINT_GROUND. The old "no MovementInform bridge" claim was stale —
+-- ev28 is live (creaturemotion.go:5893; MoveTo twin
+-- lua_creature_events.go:5769). POINT_MINCHAR stays out
+-- (MoveTargetedHome unbridged; its evade leg is covered by the ported
+-- ev24 lanaThelReachHome); the two EVENT_BLOOD_MIRROR schedules stay
+-- out (Blood Mirror unported).
 -- PORTED (2026-10-13 retraction re-audit): EVENT_BERSERK —
 -- single-fire 330s — Talk(EMOTE_BERSERK_RAID 12) +
 -- Talk(SAY_BERSERK 10) + DoCastSelf(SPELL_BERSERK 26662)
@@ -172,11 +175,22 @@ local SAY_SWARMING_SHADOWS = 4
 local SAY_VAMPIRIC_BITE = 1
 local EMOTE_SWARMING_SHADOWS = 5
 local SAY_PACT_OF_THE_DARKFALLEN = 6
+local SAY_AIR_PHASE = 7
 
 local SPELL_BERSERK = 26662
 local SPELL_SWARMING_SHADOWS = 71264
 local SPELL_SHADOWS_FATE = 71169
 local SPELL_BLOOD_INFUSION_CREDIT = 72934
+local SPELL_INCITE_TERROR = 73070
+local SPELL_BLOODBOLT_WHIRL = 71772
+
+local POINT_CENTER = 1
+local POINT_AIR = 2
+local POINT_GROUND = 3
+
+-- C++ centerPos / airPos (boss_blood_queen_lana_thel.cpp:131-132).
+local CENTER_POS = { 4595.7090, 2769.4190, 400.6368 }
+local AIR_POS = { 4595.7090, 2769.4190, 422.3893 }
 
 local timers = {}
 
@@ -320,6 +334,48 @@ local function onBerserk(creature, guid)
     creature:Talk(EMOTE_BERSERK_RAID)
     creature:Talk(SAY_BERSERK)
     creature:CastSpell(creature, SPELL_BERSERK)
+end
+
+-- C++ EVENT_AIR_PHASE (boss_blood_queen_lana_thel.cpp:441-446, seeded
+-- 124s +3s on 25-man at Reset :167): DoStopAttack (AttackStop twin,
+-- lua_creature_events.go:2090) + SetReactState(REACT_PASSIVE 0) +
+-- MovePoint(POINT_CENTER, centerPos). The DelayEvents(10s,
+-- EVENT_GROUP_NORMAL) leg (:444) has no Lua twin — the swarming/pact
+-- re-arms at CENTER arrival override it, and only the twilight
+-- bloodbolt cadence drifts by up to 10s through the air phase.
+-- CancelEventGroup(CANCELLABLE) (:445) is a no-op here (Blood Mirror
+-- unported, no cancellable timer exists).
+local function onAirPhase(creature, guid)
+    -- C++ boss UpdateAI pre-loop gate :344 (+ in-loop :459, single-tick
+    -- no-op per the marrowgar precedent): 500ms IsCasting defer, no
+    -- re-arm consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "airPhase", 500, function() onAirPhase(creature, guid) end)
+        return
+    end
+    creature:AttackStop()
+    creature:SetReactState(0)
+    creature:MoveTo(POINT_CENTER, CENTER_POS[1], CENTER_POS[2], CENTER_POS[3])
+end
+
+-- C++ EVENT_AIR_START_FLYING (:448-451): SetDisableGravity(true) +
+-- MovePoint(POINT_AIR, airPos).
+local function onAirStartFlying(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "airStartFlying", 500, function() onAirStartFlying(creature, guid) end)
+        return
+    end
+    creature:SetDisableGravity(true)
+    creature:MoveTo(POINT_AIR, AIR_POS[1], AIR_POS[2], AIR_POS[3])
+end
+
+-- C++ EVENT_AIR_FLY_DOWN (:452-454): MovePoint(POINT_GROUND, centerPos).
+local function onAirFlyDown(creature, guid)
+    if creature:IsCasting() then
+        schedule(guid, "airFlyDown", 500, function() onAirFlyDown(creature, guid) end)
+        return
+    end
+    creature:MoveTo(POINT_GROUND, CENTER_POS[1], CENTER_POS[2], CENTER_POS[3])
 end
 
 local SPELL_SHROUD_OF_SORROW = 70986
@@ -494,6 +550,14 @@ local function lanaThelJustEngagedWith(event, creature, target)
     schedule(guid, "bite", 15000, function() onVampiricBite(creature, guid) end)
     schedule(guid, "pact", 15000, function() pactTick(creature, guid) end)
     schedule(guid, "bloodbolt", {20000, 25000}, function() bloodboltTick(creature, guid) end)
+    -- C++ Reset :167 — EVENT_AIR_PHASE seeded 124s +3s on 25-man
+    -- (seeded at engage here, the enrage precedent: engage follows
+    -- reset on every attempt).
+    local airPhaseDelay = 124000
+    if creature:Is25ManRaid() then
+        airPhaseDelay = 127000
+    end
+    schedule(guid, "airPhase", airPhaseDelay, function() onAirPhase(creature, guid) end)
 end
 
 -- C++ Reset() timer machinery — cancel/re-arm on combat events
@@ -561,10 +625,53 @@ local function lanaThelReachHome(event, creature)
     creature:SetBossState(DATA_BLOOD_QUEEN_LANA_THEL, BOSS_STATE_FAIL)
 end
 
+-- C++ boss_blood_queen_lana_thel::MovementInform (:299-336):
+-- POINT_CENTER (1): DoCast SPELL_INCITE_TERROR + re-schedule
+-- EVENT_AIR_PHASE 100s (+20s non-25) + reschedule swarming 30500ms /
+-- pact 25500ms + EVENT_AIR_START_FLYING @5s; POINT_AIR (2): clear
+-- _bloodboltedPlayers (no Lua set — bloodboltTick holds no GUID set)
+-- + DoCast SPELL_BLOODBOLT_WHIRL + Talk(SAY_AIR_PHASE 7) +
+-- EVENT_AIR_FLY_DOWN @10s; POINT_GROUND (3):
+-- SetDisableGravity(false) + SetReactState(REACT_AGGRESSIVE 2) +
+-- AttackStart(SelectVictim()) — the nil guard matches C++ (:322-323,
+-- victim can be nil in the same tick as EVENT_AIR_PHASE). The two
+-- EVENT_BLOOD_MIRROR schedules stay out (Blood Mirror unported).
+-- POINT_MINCHAR (4) stays out: MoveTargetedHome unbridged; its evade
+-- leg is the ported ev24 lanaThelReachHome above.
+local function lanaThelMovementInform(event, creature, mtype, id)
+    if mtype ~= 8 then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if id == POINT_CENTER then
+        creature:CastSpell(creature, SPELL_INCITE_TERROR)
+        local airDelay = 100000
+        if not creature:Is25ManRaid() then
+            airDelay = 120000
+        end
+        schedule(guid, "airPhase", airDelay, function() onAirPhase(creature, guid) end)
+        schedule(guid, "swarming", 30500, function() swarmingShadowsTick(creature, guid) end)
+        schedule(guid, "pact", 25500, function() pactTick(creature, guid) end)
+        schedule(guid, "airStartFlying", 5000, function() onAirStartFlying(creature, guid) end)
+    elseif id == POINT_AIR then
+        creature:CastSpell(creature, SPELL_BLOODBOLT_WHIRL)
+        creature:Talk(SAY_AIR_PHASE)
+        schedule(guid, "airFlyDown", 10000, function() onAirFlyDown(creature, guid) end)
+    elseif id == POINT_GROUND then
+        creature:SetDisableGravity(false)
+        creature:SetReactState(2)
+        local victim = creature:SelectVictim()
+        if victim ~= nil then
+            creature:AttackStart(victim)
+        end
+    end
+end
+
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 1, lanaThelJustEngagedWith)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 2, lanaThelLeaveCombat)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 23, lanaThelReset)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 24, lanaThelReachHome)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 28, lanaThelMovementInform)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 3, lanaThelKilledUnit)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 4, lanaThelJustDied)
 

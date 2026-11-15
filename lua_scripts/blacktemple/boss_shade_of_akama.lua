@@ -30,7 +30,9 @@
 -- this — supremus-volcano convention): npc_akama_shade (gossip
 -- intro, soul-channel sequence, chain lightning 39945 / destructive
 -- poison 40874 / soul retrieve 40902, broken-free outro sequence —
--- only the Reset stealth self-cast 34189 is registered, below),
+-- the Reset stealth self-cast 34189, gossip select, SpellHit,
+-- DamageTaken, JustDied, JustSummoned and MovementInform (ev28
+-- channel/intro legs) arms are registered below),
 -- npc_ashtongue_channeler (soul channel 40401 keepalive on the
 -- shade while it carries UNIT_FLAG_NOT_SELECTABLE), npc_creature_
 -- generator_akama (wave-B 42035 and sorcerer/defender summon
@@ -60,12 +62,14 @@
 -- lua_creature_events.go:6593); the akama DoAction(ACTION_SHADE_OF_AKAMA_DEAD) arm is PORTED below
 -- via the grid sweep, while the spawner DoAction(ACTION_START/STOP/
 -- DESPAWN_ALL_SPAWNS) arms stay out (ev38 dispatch IS bridged, but the
--- spawner AI is unregistered — no ev38 bearer); no MovementInform bridge
--- — the chase-complete phase-two
+-- spawner AI is unregistered — no ev38 bearer); the boss's own
+-- MovementInform is CHASE-gated (no ev28 finalize arm for CHASE,
+-- creaturemotion.go:5883-5886), so the chase-complete phase-two
 -- gate and the EVENT_ADD_THREAT arm (threat 41602 every 3.5s) are
 -- unmodeled; the SetImmuneToPC / UNIT_FLAG_NOT_SELECTABLE Reset
 -- arms are PORTED via the bridged unit-flags surface (see shadeReset) —
--- the MovementInform removal pair stays out (no MovementInform bridge);
+-- the MovementInform removal pair stays out (CHASE-gated, no
+-- SetImmuneToPC bridge);
 -- the Reset SetWalk(true) leg is PORTED in shadeReset via creature:SetWalk,
 -- and the SetFaction arms live in the
 -- unregistered channeler/sorcerer AIs (the EMOTE_STATE stun/none arms
@@ -104,6 +108,17 @@ local DATA_SHADE_OF_AKAMA = 2 -- black_temple.h:33
 local SPELL_THREAT = 41602 -- boss_shade_of_akama.cpp:55
 local SPELL_CHAIN_LIGHTNING = 39945 -- boss_shade_of_akama.cpp:51
 local SPELL_DESTRUCTIVE_POISON = 40874 -- boss_shade_of_akama.cpp:52
+local SPELL_FIXATE = 40607 -- boss_shade_of_akama.cpp:50
+local FACTION_MONSTER_SPAR_BUDDY = 1868 -- SharedDefines.h:260
+local FACE_THE_PLATFORM = 3.118662 -- boss_shade_of_akama.cpp:199
+local FACE_THE_DOOR = 0.08726646 -- boss_shade_of_akama.cpp:198
+local POINT_MOTION_TYPE = 8 -- creaturemotion.go:4074
+local AKAMA_CHANNEL_WAYPOINT = 0 -- boss_shade_of_akama.cpp:142
+local AKAMA_INTRO_WAYPOINT = 1 -- boss_shade_of_akama.cpp:143
+local SAY_BROKEN_FREE_0 = 0 -- boss_shade_of_akama.cpp:35
+local SAY_BROKEN_FREE_1 = 1 -- boss_shade_of_akama.cpp:36
+local SAY_BROKEN_FREE_2 = 2 -- boss_shade_of_akama.cpp:37
+local EMOTE_ONESHOT_ROAR = 15 -- SharedDefines.h:1950
 
 local akamaInCombat = {}
 
@@ -145,8 +160,9 @@ local function shadeDied(event, creature, killer)
     -- C++ JustDied then calls akama->AI()->DoAction(ACTION_SHADE_OF_AKAMA_DEAD)
     -- (boss_shade_of_akama.cpp:274-275): _isInCombat=false + CombatStop(true)
     -- + SetFaction(FACTION_ASHTONGUE_DEATHSWORN 1820) in C++ order
-    -- + SetWalk + MovePoint to AkamaWP[1] (arrival EVENT_START_SOUL_RETRIEVE
-    -- stays out — no MovementInform bridge; _events.Reset is a no-op here).
+    -- + SetWalk + MovePoint(AKAMA_INTRO_WAYPOINT 1) to AkamaWP[1] (arrival
+    -- EVENT_START_SOUL_RETRIEVE is PORTED via the ev28 handler below —
+    -- the sender id is 1, not 0: id 0 would mis-fire the channel arm).
     -- The instance GetCreature lookup is approximated by the same
     -- 100yd grid sweep as the channeler arm below.
     for _, akama in ipairs(creature:GetCreaturesInGrid(
@@ -154,7 +170,7 @@ local function shadeDied(event, creature, killer)
         akama:CombatStop(true)
         akama:SetFaction(1820)
         akama:SetWalk(true)
-        akama:MoveTo(0, 468.4435, 401.1062, 118.5379)
+        akama:MoveTo(1, 468.4435, 401.1062, 118.5379)
     end
     -- C++ boss_shade_of_akama.cpp:282 JustDied summons.DespawnEntry(NPC_
     -- ASHTONGUE_CHANNELER) via the grid-sweep idiom (illidan
@@ -192,8 +208,9 @@ local function shadeReset(event, creature)
     -- = SetFlag(59, UNIT_FLAG_IMMUNE_TO_PC 0x100), and SetFlag(59,
     -- UNIT_FLAG_NOT_SELECTABLE 0x2000000) -- both PORTED via the bridged
     -- unit-flags surface (Unit.cpp:8440-8495). The MovementInform
-    -- chase-complete removal pair (:259-260) stays out -- no
-    -- MovementInform bridge. IsAlive-gated: C++ Reset() never runs on
+    -- chase-complete removal pair (:259-260) stays out -- the boss
+    -- MI is CHASE-gated (no ev28 finalize arm) and SetImmuneToPC
+    -- has no bridge. IsAlive-gated: C++ Reset() never runs on
     -- death, and ev23 fires ahead of ev4 on the death path (the
     -- bladeReset convention in this file).
     if creature:IsAlive() then
@@ -222,9 +239,10 @@ RegisterCreatureEvent(ENTRY_SHADE_OF_AKAMA, 23, shadeReset)
 -- Akama shade (npc_akama_shade, C++ ScriptName; black_temple.h:88
 -- NPC_AKAMA_SHADE = 23191): the Reset stealth arm and the JustDied
 -- Talk(SAY_DEAD) are modeled, and the gossip-intro select legs are
--- PORTED below (akamaShadeGossipSelect) — the soul-channel
--- sequence and combat/outro arms are instance/react/threat-driven
--- and stay unregistered (see above).
+-- PORTED below (akamaShadeGossipSelect) — the MovementInform
+-- soul-channel / soul-retrieve / broken-free sequence is PORTED below
+-- (akamaShadeMovementInform, ev28); the remaining combat/outro arms
+-- are instance/react/threat-driven and stay unregistered (see above).
 -- C++ Reset: DoCastSelf(SPELL_STEALTH 34189), non-triggered (C++
 -- DoCast default is triggered=false — vaelastrasz convention).
 -- Event 23 also fires on death (reset-then-died order,
@@ -364,8 +382,8 @@ local function akamaShadeGossipSelect(event, player, creature, sender, action, c
         -- bridged, lua_creature_events.go:6593; DATA_SHADE_OF_AKAMA = 2)
         -- + RemoveFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_GOSSIP) +
         -- RemoveAurasDueToSpell(SPELL_STEALTH) + SetWalk + MovePoint
-        -- to AkamaWP[0] (arrival EVENT_SHADE_CHANNEL stays out — no
-        -- MovementInform bridge).
+        -- to AkamaWP[0] (arrival EVENT_SHADE_CHANNEL is PORTED via the
+        -- ev28 handler below).
         creature:SetBossState(2, 1) -- DATA_SHADE_OF_AKAMA, IN_PROGRESS
         creature:SetNPCFlags(bit32.band(creature:GetNPCFlags(),
             bit32.bnot(UNIT_NPC_FLAG_GOSSIP)))
@@ -426,11 +444,108 @@ local function akamaShadeSpellHit(event, creature, caster, spellId)
     end
 end
 
+-- C++ EVENT_FIXATE (boss_shade_of_akama.cpp:473-475): DoCast(SPELL_FIXATE
+-- 40607), one-shot. DoCast resolves its target via AISpellInfo
+-- (UnitAI.cpp:113) — DBC-side; the fight's fixate target is the shade
+-- (boss SpellHit on 40447 -> AttackStart(akama), :241-247: the channel
+-- makes the shade attack Akama, and Fixate is the aura that holds it
+-- there), resolved via the same instance lookup akamaShadeSpellHit uses.
+local function akamaShadeFixate(creature, guid)
+    local shade = creature:GetInstanceCreature(DATA_SHADE_OF_AKAMA)
+    if shade then
+        creature:CastSpell(shade, SPELL_FIXATE)
+    end
+end
+
+-- C++ EVENT_BROKEN_FREE_2 (boss_shade_of_akama.cpp:499-501): Talk(
+-- SAY_BROKEN_FREE_2) + schedule EVENT_BROKEN_FREE_3 15s. The chain
+-- ends here: BROKEN_FREE_3/4 (:502-514) Talk/DoAction the _chosen /
+-- _summons brokens, which ride the unported SummonBrokens.
+local function akamaShadeBrokenFree2(creature, guid)
+    creature:Talk(SAY_BROKEN_FREE_2)
+end
+
+-- C++ EVENT_BROKEN_FREE_1 (:495-497): Talk(SAY_BROKEN_FREE_1) +
+-- schedule EVENT_BROKEN_FREE_2 12s.
+local function akamaShadeBrokenFree1(creature, guid)
+    creature:Talk(SAY_BROKEN_FREE_1)
+    schedule(guid, "akama_brokenfree2", 12000, function()
+        akamaShadeBrokenFree2(creature, guid)
+    end)
+end
+
+-- C++ EVENT_START_BROKEN_FREE (:489-493): HandleEmoteCommand(EMOTE_
+-- ONESHOT_ROAR) + Talk(SAY_BROKEN_FREE_0) + SummonBrokens() + schedule
+-- EVENT_BROKEN_FREE_1 10s. SummonBrokens (:438-451, 18x MovePoint(0))
+-- stays out (unported); the emote + Talk legs are bridged
+-- (PerformEmote, lua_creature_events.go:4885).
+local function akamaShadeBrokenFree(creature, guid)
+    creature:PerformEmote(EMOTE_ONESHOT_ROAR)
+    creature:Talk(SAY_BROKEN_FREE_0)
+    schedule(guid, "akama_brokenfree1", 10000, function()
+        akamaShadeBrokenFree1(creature, guid)
+    end)
+end
+
+-- C++ EVENT_START_SOUL_RETRIEVE (:484-488): SetFacingTo(FACE_THE_DOOR)
+-- + DoCast(SPELL_AKAMA_SOUL_RETRIEVE 40902) + schedule EVENT_START_
+-- BROKEN_FREE 15s. DoCast target is the shade (boss SpellHit on 40902
+-- -> expel channel, :249-251), resolved via the instance lookup.
+local function akamaShadeSoulRetrieve(creature, guid)
+    creature:SetFacingTo(FACE_THE_DOOR)
+    local shade = creature:GetInstanceCreature(DATA_SHADE_OF_AKAMA)
+    if shade then
+        creature:CastSpell(shade, SPELL_AKAMA_SOUL_RETRIEVE)
+    end
+    schedule(guid, "akama_brokenfree", 15000, function()
+        akamaShadeBrokenFree(creature, guid)
+    end)
+end
+
+-- C++ EVENT_SHADE_CHANNEL (:467-472): SetFacingTo(FACE_THE_PLATFORM) +
+-- DoCastSelf(SPELL_AKAMA_SOUL_CHANNEL 40447) + SetFaction(FACTION_
+-- MONSTER_SPAR_BUDDY 1868) + schedule EVENT_FIXATE 5s.
+local function akamaShadeChannel(creature, guid)
+    creature:SetFacingTo(FACE_THE_PLATFORM)
+    creature:CastSpell(creature, SPELL_AKAMA_SOUL_CHANNEL)
+    creature:SetFaction(FACTION_MONSTER_SPAR_BUDDY)
+    schedule(guid, "akama_fixate", 5000, function()
+        akamaShadeFixate(creature, guid)
+    end)
+end
+
+-- C++ npc_akama_shade::MovementInform (boss_shade_of_akama.cpp:423-436):
+-- gated on POINT_MOTION_TYPE (8); POINT 0 (AKAMA_CHANNEL_WAYPOINT) ->
+-- EVENT_SHADE_CHANNEL 1s, POINT 1 (AKAMA_INTRO_WAYPOINT) -> SetWalk(false)
+-- + EVENT_START_SOUL_RETRIEVE 1s. The boss-AI chase leg (:254-268) and
+-- the broken leg (:1052-1060) stay out (no CHASE ev28 finalize arm,
+-- creaturemotion.go:5883-5886; broken sender unported). Live senders:
+-- gossip select -> MoveTo(0, AkamaWP[0]) and shadeDied -> MoveTo(1,
+-- AkamaWP[1]). Timers ride the file's schedule()/cancelTimers (cancelled
+-- on ev4/ev23 by akamaShadeDied/akamaShadeReset).
+local function akamaShadeMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    if pointId == AKAMA_CHANNEL_WAYPOINT then
+        schedule(guid, "akama_channel", 1000, function()
+            akamaShadeChannel(creature, guid)
+        end)
+    elseif pointId == AKAMA_INTRO_WAYPOINT then
+        creature:SetWalk(false)
+        schedule(guid, "akama_soulretrieve", 1000, function()
+            akamaShadeSoulRetrieve(creature, guid)
+        end)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 14, akamaShadeSpellHit)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 4, akamaShadeDied)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 19, akamaShadeJustSummoned)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 9, akamaShadeDamageTaken)
 RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 23, akamaShadeReset)
+RegisterCreatureEvent(ENTRY_AKAMA_SHADE, 28, akamaShadeMovementInform)
 RegisterCreatureGossipEvent(ENTRY_AKAMA_SHADE, 2, akamaShadeGossipSelect)
 
 -- C++ spell_shade_soul_channel_serverside::OnRemove

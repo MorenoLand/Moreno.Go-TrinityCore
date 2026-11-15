@@ -203,11 +203,16 @@
 -- takes the SetGUID store with no emote), valanar
 -- bomb-target react/cast + vortex dummy/periodic casts (bomb
 -- MovePoint ground-Z PORTED this tick; DoZoneInCombat(summon) out).
--- npc_blood_queen_lana_thel — Talk(SAY_INTRO_1 0) rides
--- ACTION_START_INTRO (:866-880, sender is the unported controller /
--- blood-queen intro machine — dispatch IS bridged, ev38);
--- Talk(SAY_INTRO_2 1) rides EVENT_INTRO_1 (:896-905, intro scheduler
--- leg, no-timer-bridge) — NOT registered.
+-- npc_blood_queen_lana_thel (38004) — PORTED: ACTION_START_INTRO
+-- (:866-880) via queenDoAction (ev38) + the 14s EVENT_INTRO_1 leg
+-- (:896-905, Talk SAY_INTRO_2 + MoveTo 380040 + controller
+-- ACTION_INTRO_DONE relay) + MovementInform (:884-888, SetVisible
+-- false on 380040 arrival, ev28) + Reset (:860-864, ev23). The
+-- controller START_INTRO relay (:340-344) is PORTED in
+-- controllerDoAction with a Lua-side once-only latch; its sender,
+-- the area trigger at_blood_prince_council_start_intro (:1338),
+-- stays out — no AreaTrigger bridge — so the machine has no live
+-- Lua trigger yet.
 -- npc_ball_of_flame — PORTED 2026-11-09 (registered in boss_ai.go):
 -- Reset one-shot aura casts (:919-924) via ev23; the
 -- flame-ball-visual AuraScript OnRemove (:1148-1160) via
@@ -451,6 +456,23 @@ local ACTION_INTRO_DONE = 2 -- :155
 local ACTION_STAND_UP = 3 -- :156
 local ACTION_KINETIC_BOMB_JUMP = 6 -- :159
 local POINT_KINETIC_BOMB_IMPACT = 384540 -- :165
+
+-- npc_blood_queen_lana_thel intro visual (boss_blood_prince_council.cpp:36-37,
+-- :69, :164, :208-210; icecrown_citadel.h:118-119, :249, :256): entry 38004
+-- is the council intro visual, distinct from the boss 37955.
+local ENTRY_BLOOD_QUEEN_LANA_THEL = 38004 -- icecrown_citadel.h:256 (NPC_BLOOD_QUEEN_LANA_THEL_COUNCIL)
+local DATA_BLOOD_QUEEN_LANA_THEL_COUNCIL = 42 -- icecrown_citadel.h:118
+local DATA_BLOOD_PRINCE_COUNCIL_INTRO = 43 -- icecrown_citadel.h:119
+local NPC_FLOATING_TRIGGER = 30298 -- icecrown_citadel.h:249
+local SPELL_OOC_INVOCATION_VISUAL = 70934 -- boss_blood_prince_council.cpp:69
+local POINT_INTRO_DESPAWN = 380040 -- boss_blood_prince_council.cpp:164
+local SAY_INTRO_1 = 0 -- boss_blood_prince_council.cpp:36
+local SAY_INTRO_2 = 1 -- boss_blood_prince_council.cpp:37
+local POINT_MOTION_TYPE = 8
+local MOVE_RUN = 1 -- SetSpeedRate bridge takes MOVE_RUN=1 / MOVE_FLIGHT=6 (lua_creature_events.go:6438)
+local TRIGGER_POS = { 4680.231, 2769.134, 379.9256, 3.121708 } -- boss_blood_prince_council.cpp:209
+local TRIGGER_END_POS = { 4680.180, 2769.150, 365.5000, 3.121708 } -- :210
+local INTRO_FINAL_POS = { 4660.490, 2769.200, 430.0, 0.0 } -- :208
 local SPELL_FEIGN_DEATH = 71598 -- boss_blood_prince_council.cpp:68
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FIELD_FLAGS_2 = 60
@@ -1185,13 +1207,18 @@ end
 -- :228-232).
 local evadeCounter = {}
 
+-- BPC intro once-only latch: C++ instance GetData(DATA_BLOOD_PRINCE_COUNCIL_INTRO
+-- 43) starts 1, is set 0 on the first ACTION_START_INTRO (:342) and is never
+-- set back; no instance GetData bridge, so the latch is Lua-side, keyed by
+-- controller GUID, and deliberately NOT cleared in controllerReset.
+local introStarted = {}
+
 -- C++ boss_blood_council_controller::DoAction (:338-360), PORTED
 -- tick 558 (receiver only; sender is the queen's EVENT_INTRO_1,
--- unported): ACTION_INTRO_DONE relays ACTION_STAND_UP to all three
+-- ported below): ACTION_INTRO_DONE relays ACTION_STAND_UP to all three
 -- princes (via the instance GUID store) and heals Valanar to full.
--- ACTION_START_INTRO stays out: its gate reads instance
--- GetData(DATA_BLOOD_PRINCE_COUNCIL_INTRO 43) (no instance GetData
--- bridge) and its leg relays to the unregistered blood queen.
+-- ACTION_START_INTRO is PORTED below (queen relay with a Lua-side
+-- once-only latch for the instance GetData(43) gate).
 local function controllerDoAction(event, creature, action)
     local guid = creature:GetGUIDLow()
     if action == ACTION_PRINCE_EVADE then
@@ -1210,6 +1237,95 @@ local function controllerDoAction(event, creature, action)
                 end
             end
         end
+    elseif action == ACTION_START_INTRO then
+        -- C++ boss_blood_council_controller::DoAction (:340-344):
+        -- once-only gate on instance GetData(DATA_BLOOD_PRINCE_COUNCIL
+        -- _INTRO 43) (starts 1, set 0 on first fire, never set back) +
+        -- boss state != DONE; no instance GetData bridge, so the gate
+        -- is the Lua-side introStarted latch above. Sender is the area
+        -- trigger at_blood_prince_council_start_intro (:1338) — no
+        -- AreaTrigger bridge, so this arm has no live Lua sender yet;
+        -- it fires if anything dispatches ACTION_START_INTRO here.
+        if introStarted[guid] then
+            return
+        end
+        if creature:GetBossState(DATA_BLOOD_PRINCE_COUNCIL) == BOSS_STATE_DONE then
+            return
+        end
+        introStarted[guid] = true
+        local queen = creature:GetInstanceCreature(DATA_BLOOD_QUEEN_LANA_THEL_COUNCIL)
+        if queen then
+            queen:DoAction(ACTION_START_INTRO)
+        end
+    end
+end
+
+-- C++ npc_blood_queen_lana_thel (boss_blood_prince_council.cpp:857-910),
+-- the BPC intro visual on entry 38004 (NOT the boss 37955).
+-- Reset (:860-864): _events.Reset() + SetDisableGravity(true) +
+-- SetVisible(boss state != DONE). The _events.Reset() leg cancels a
+-- pending EVENT_INTRO_1 timer (queenIntroTimers below).
+local queenIntroTimers = {}
+
+local function queenReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    local id = queenIntroTimers[guid]
+    if id then
+        RemoveEventById(id)
+        queenIntroTimers[guid] = nil
+    end
+    creature:SetDisableGravity(true)
+    creature:SetVisible(creature:GetBossState(DATA_BLOOD_PRINCE_COUNCIL) ~= BOSS_STATE_DONE)
+end
+
+-- C++ UpdateAI EVENT_INTRO_1 (:896-905): Talk(SAY_INTRO_2) +
+-- MovePoint(POINT_INTRO_DESPAWN, introFinalPos) + _events.Reset() +
+-- controller DoAction(ACTION_INTRO_DONE). The MoveTo landing fires
+-- the queen's ev28 handler below.
+local function queenIntroStep(creature, guid)
+    queenIntroTimers[guid] = nil
+    creature:Talk(SAY_INTRO_2)
+    creature:MoveTo(POINT_INTRO_DESPAWN, INTRO_FINAL_POS[1], INTRO_FINAL_POS[2], INTRO_FINAL_POS[3])
+    local controller = creature:GetInstanceCreature(DATA_BLOOD_PRINCES_CONTROL)
+    if controller then
+        controller:DoAction(ACTION_INTRO_DONE)
+    end
+end
+
+-- C++ npc_blood_queen_lana_thel::DoAction ACTION_START_INTRO (:866-880):
+-- Talk(SAY_INTRO_1) + schedule EVENT_INTRO_1 in 14s + summon the
+-- floating trigger (30298) at triggerPos, triggered self-cast
+-- SPELL_OOC_INVOCATION_VISUAL (70934), SetSpeedRate(MOVE_RUN, 0.14),
+-- MovePoint(0, triggerEndPos). C++ arm order kept (schedule before
+-- summon). SummonCreature type 2 = TIMED_DESPAWN (Go 0-based scheme,
+-- creaturemotion.go:507-512) with the C++ 15s lifetime as the 7th arg.
+local function queenDoAction(event, creature, action)
+    if action ~= ACTION_START_INTRO then
+        return
+    end
+    creature:Talk(SAY_INTRO_1)
+    local guid = creature:GetGUIDLow()
+    local old = queenIntroTimers[guid]
+    if old then
+        RemoveEventById(old)
+    end
+    queenIntroTimers[guid] = CreateLuaEvent(function()
+        queenIntroStep(creature, guid)
+    end, 14000)
+    local trigger = creature:SummonCreature(NPC_FLOATING_TRIGGER, TRIGGER_POS[1], TRIGGER_POS[2], TRIGGER_POS[3], TRIGGER_POS[4], 2, 15000)
+    if trigger then
+        trigger:CastSpell(trigger, SPELL_OOC_INVOCATION_VISUAL, true)
+        trigger:SetSpeedRate(MOVE_RUN, 0.14)
+        trigger:MoveTo(0, TRIGGER_END_POS[1], TRIGGER_END_POS[2], TRIGGER_END_POS[3])
+    end
+end
+
+-- C++ npc_blood_queen_lana_thel::MovementInform (:884-888): on
+-- POINT_MOTION_TYPE arrival at POINT_INTRO_DESPAWN (380040),
+-- SetVisible(false).
+local function queenMovementInform(event, creature, moveType, pointId)
+    if moveType == POINT_MOTION_TYPE and pointId == POINT_INTRO_DESPAWN then
+        creature:SetVisible(false)
     end
 end
 
@@ -1580,3 +1696,6 @@ RegisterCreatureEvent(ENTRY_DARK_NUCLEUS, 23, nucleusReset)
 
 RegisterAuraEvent(SPELL_KINETIC_BOMB, 1, kineticBombAuraTick)
 RegisterAuraEvent(SPELL_SHADOW_PRISON_DUMMY, 1, shadowPrisonTick)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 38, queenDoAction)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 28, queenMovementInform)
+RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 23, queenReset)

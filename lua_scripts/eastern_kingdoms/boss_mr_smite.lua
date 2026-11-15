@@ -8,7 +8,7 @@
 -- Whole-server-tree grep confirms boss_mr_smite.cpp as the only source
 -- of "boss_mr_smite" (loader line in eastern_kingdoms_script_loader.cpp).
 -- Eluna creature events: 1 OnEnterCombat, 2 OnLeaveCombat, 4 OnDied,
--- 5 OnSpawn, 9 OnDamageTaken, 23 OnReset. Driven by CreateLuaEvent
+-- 5 OnSpawn, 9 OnDamageTaken, 23 OnReset, 28 OnMovementInform. Driven by CreateLuaEvent
 -- timers; melee is engine-driven in Go (creature combat tick), like C++
 -- DoMeleeAttackIfReady.
 -- Verifiable numbers (file's own enums): SPELL_TRASH = 3391 /
@@ -27,6 +27,13 @@
 --   -> stomp (DoCastAOE 6432 ~ creature:CastSpell(creature, 6432)) +
 --   Talk(SAY_PHASE_1 = 2); 33% crossing -> stomp + Talk(SAY_PHASE_2 = 3).
 --   One-shot per stage via the per-guid phaseStage latch.
+-- - Phase machine (boss_mr_smite.cpp:190-220, PORTED below): 2500ms after
+--   each crossing, phase 1 walks to the chest (MoveTo point 1, chest pos
+--   -1.5/+1.4 via GetGuidData + GetGameObjectByGUID with a
+--   GetGameObjectsInGrid fallback — the Go instance store is never latched
+--   for DATA_SMITE_CHEST, see findSmiteChest); ev28 arrival kneels +
+--   faces 5.47, then phase 2 equips (axe/axe stage 1, mace stage 2) @2000ms,
+--   phase 3 stands @500ms, phase 4 re-aggresses + MoveChase @750ms.
 -- Deviations from C++: of the phase-transition ability-halt leg
 -- (boss_mr_smite.cpp:141-144), AttackStop IS ported (bridge
 -- lua_creature_events.go:180); SetCombatMovement(false) has a bridge
@@ -35,10 +42,9 @@
 -- the per-tick gate (10:19); InterruptNonMeleeSpells(false) is bridged
 -- (no-op twin, lua_creature_events.go:514) and ported in both stage arms
 -- below. SetReactState(
--- REACT_PASSIVE) is deliberately OMITTED, not unbridgeable: its restore
--- (phase 4's SetReactState(REACT_AGGRESSIVE)) rides the unbridged
--- MovePoint/kneel/equip/stand chain, so a one-sided passive port would
--- freeze the boss passive forever; Trash/Slam timers keep running
+-- REACT_PASSIVE) is PORTED at the crossings (its phase-4
+-- SetReactState(REACT_AGGRESSIVE) restore rides the ported chain below);
+-- Trash/Slam timers keep running
 -- through the phase crossings (no !uiIsMoving gate). No
 -- UNIT_STATE_CASTING model in Go (creature casts are packet-visual), so
 -- timers fire unconditionally (maiden precedent).
@@ -52,20 +58,12 @@
 --   it across the evade clear). The Reset
 --   SetEquipmentSlots arm IS ported (onSpawn / onReset via the
 --   EQUIP_NO_CHANGE sentinel), as is SetReactState(REACT_AGGRESSIVE).
--- - The SetReactState(REACT_AGGRESSIVE) restore (phase 4 of the transition
---   machine; see Deviations above) + the phase/equip event machine: phase 1's
---   instance chest lookup
---   (instance->GetGuidData(DATA_SMITE_CHEST), GO 144111) through
---   ObjectAccessor (instance-script model blocked; no ObjectAccessor
---   bridge — dark-rider precedent) + GetMotionMaster()->MovePoint(1)
---   (no MotionMaster bridge — selin_fireheart precedent);
---   MovementInform(POINT_MOTION_TYPE) -> SetFacingTo(5.47f) + kneel +
---   phase 2 (no MovementInform bridge — kalecgos precedent); phase 2's
---   SetEquipmentSlots(EQUIP_AXE x2 / EQUIP_MACE) arms fire inside the
---   same unmodeled phase machine (the bridge exists — see onReset);
---   phase 3's SetStandState(STAND) (bridge live — phase machine keeps it out);
---   phase 4's SetCombatMovement(true) (bridged 06:45 — phase machine keeps it out)
---   + MoveChase (no bridge). JustEngagedWith
+-- - The phase/equip event machine is PORTED (see Ported arms above):
+--   phase 1 chest walk via MoveTo + ev28, kneel/facing arrival, phase 2
+--   equip, phase 3 stand, phase 4 re-aggress + MoveChase. The old
+--   "no ObjectAccessor / MotionMaster / MovementInform bridge" claims are
+--   stale (GetGuidData :7593 + GetGameObjectByGUID :4671 + MoveTo :5769 +
+--   ev28, all live). JustEngagedWith
 --   is empty in C++ — nothing to port.
 
 local SPELL_TRASH = 3391
@@ -86,10 +84,19 @@ local EQUIP_NO_CHANGE = 0xFFFFFFFF
 
 -- UnitDefines.h react states (engine/world/lua_creature_events.go:524):
 -- REACT_PASSIVE = 0 / REACT_DEFENSIVE = 1 / REACT_AGGRESSIVE = 2.
+local REACT_PASSIVE = 0
 local REACT_AGGRESSIVE = 2
+
+local EQUIP_AXE = 5196 -- boss_mr_smite.cpp Equips
+local EQUIP_MACE = 7230 -- boss_mr_smite.cpp Equips
+local DATA_SMITE_CHEST = 0 -- deadmines.h DMData64 (first/only entry)
+local GO_MR_SMITE_CHEST = 144111 -- deadmines.h DMGameObjectsIds
+local SMITE_CHEST_POINT = 1 -- boss_mr_smite.cpp phase-1 MovePoint id
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31
 
 local timers = {}
 local phaseStage = {}
+local smitePhase = {}
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -103,6 +110,7 @@ end
 
 local function initState(guid)
     phaseStage[guid] = 0
+    smitePhase[guid] = 0
 end
 
 local function schedule(guid, key, delay, fn)
@@ -115,6 +123,14 @@ local function schedule(guid, key, delay, fn)
         RemoveEventById(per[key])
     end
     per[key] = CreateLuaEvent(fn, delay)
+end
+
+local function cancelKey(guid, key)
+    local per = timers[guid]
+    if per and per[key] then
+        RemoveEventById(per[key])
+        per[key] = nil
+    end
 end
 
 -- bCheckChances: urand(0, 99) <= 15 skips the cast.
@@ -135,6 +151,87 @@ local function onSlam(creature, guid)
         creature:CastSpell(victim, SPELL_SMITE_SLAM)
     end
     schedule(guid, "slam", 11000, function() onSlam(creature, guid) end)
+end
+
+-- C++ phase 4 (boss_mr_smite.cpp:208-215): SetReactState(REACT_AGGRESSIVE)
+-- + SetCombatMovement(true) + MoveChase(victim, m_CombatDistance) +
+-- uiIsMoving = false, uiPhase = 0. Fires 750ms after phase 3.
+local function smitePhase4(creature, guid)
+    smitePhase[guid] = 0
+    creature:SetReactState(REACT_AGGRESSIVE)
+    creature:SetCombatMovement(true)
+    local victim = creature:GetVictim()
+    if victim then
+        creature:MoveChase(victim)
+    end
+end
+
+-- C++ phase 3 (:203-207): SetStandState(STAND), uiTimer = 750, uiPhase = 4.
+local function smitePhase3(creature, guid)
+    creature:SetStandState(0)
+    schedule(guid, "smitePhase4", 750, function() smitePhase4(creature, guid) end)
+end
+
+-- C++ phase 2 (:196-202): equip per uiHealth — stage 1 (66% crossing)
+-- axe/axe, stage 2 (33%) mace/unequipped; uiTimer = 500, uiPhase = 3.
+-- Fires 2000ms after the ev28 arrival (MovementInform's uiTimer/uiPhase).
+local function smitePhase2(creature, guid)
+    if phaseStage[guid] == 1 then
+        creature:SetEquipmentSlots(EQUIP_AXE, EQUIP_AXE, EQUIP_NO_CHANGE)
+    else
+        creature:SetEquipmentSlots(EQUIP_MACE, EQUIP_UNEQUIP, EQUIP_NO_CHANGE)
+    end
+    schedule(guid, "smitePhase3", 500, function() smitePhase3(creature, guid) end)
+end
+
+-- C++ phase 1 (:190-195, after the 2500ms uiTimer): instance chest lookup
+-- (DATA_SMITE_CHEST) -> MovePoint(1, goX - 1.5, goY + 1.4, goZ),
+-- uiIsMoving = true. GetGuidData is bridged but the Go instance store is
+-- only populated by Lua SetGuidData (instance_guid_store.go) and nothing
+-- latches the chest, so the grid scan is the live twin (arlokk
+-- precedent, entry 144111 fight-unique); the GUID path stays first so a
+-- future instance-script port takes over. A missed lookup re-arms at
+-- 2500ms — the C++ per-tick phase-1 retry.
+local function findSmiteChest(creature)
+    local chestGuid = creature:GetGuidData(DATA_SMITE_CHEST)
+    if chestGuid ~= nil and chestGuid ~= 0 then
+        local go = creature:GetGameObjectByGUID(chestGuid)
+        if go then
+            return go
+        end
+    end
+    for _, go in ipairs(creature:GetGameObjectsInGrid(GO_MR_SMITE_CHEST, 150)) do
+        return go
+    end
+    return nil
+end
+
+local function smiteWalkToChest(creature, guid)
+    if smitePhase[guid] ~= 1 then
+        return
+    end
+    local chest = findSmiteChest(creature)
+    if not chest then
+        schedule(guid, "smiteWalk", 2500, function() smiteWalkToChest(creature, guid) end)
+        return
+    end
+    creature:MoveClear()
+    creature:MoveTo(SMITE_CHEST_POINT, chest:GetX() - 1.5, chest:GetY() + 1.4, chest:GetZ())
+end
+
+-- C++ MovementInform (boss_mr_smite.cpp:211-220): POINT_MOTION_TYPE
+-- arrival -> SetFacingTo(5.47f) + SetStandState(KNEEL) + uiTimer = 2000,
+-- uiPhase = 2. Gated on the walk leg (smitePhase 1) so a stray point
+-- arrival cannot re-run the chain.
+local function smiteMovementInform(_, creature, moveType, id)
+    local guid = creature:GetGUIDLow()
+    if moveType ~= POINT_MOTION_TYPE or id ~= SMITE_CHEST_POINT or smitePhase[guid] ~= 1 then
+        return
+    end
+    smitePhase[guid] = 2
+    creature:SetFacingTo(5.47)
+    creature:SetStandState(8)
+    schedule(guid, "smitePhase2", 2000, function() smitePhase2(creature, guid) end)
 end
 
 local function onDamageTaken(_, creature, _, damage)
@@ -165,12 +262,31 @@ local function onDamageTaken(_, creature, _, damage)
         -- untouched, re-engagement rides the assist/aggro paths).
         creature:AttackStop()
         creature:InterruptNonMeleeSpells(false)
+        creature:SetReactState(REACT_PASSIVE)
+        -- C++ boss_mr_smite.cpp:147-148: uiTimer = 2500, uiPhase = 1.
+        -- A second crossing while a chain is pending overwrites uiPhase,
+        -- so the pending phase 2/3/4 legs are cancelled with it.
+        smitePhase[guid] = 1
+        cancelKey(guid, "smitePhase2")
+        cancelKey(guid, "smitePhase3")
+        cancelKey(guid, "smitePhase4")
+        cancelKey(guid, "smiteWalk")
+        schedule(guid, "smiteWalk", 2500, function() smiteWalkToChest(creature, guid) end)
         creature:Talk(SAY_PHASE_1)
     elseif stage == 1 and health <= math.floor(maxHealth * 33 / 100) then
         phaseStage[guid] = 2
         creature:CastSpell(creature, SPELL_SMITE_STOMP)
         creature:AttackStop()
         creature:InterruptNonMeleeSpells(false)
+        creature:SetReactState(REACT_PASSIVE)
+        -- C++ boss_mr_smite.cpp:147-148: uiTimer = 2500, uiPhase = 1 (see
+        -- stage 1 above for the pending-chain cancel).
+        smitePhase[guid] = 1
+        cancelKey(guid, "smitePhase2")
+        cancelKey(guid, "smitePhase3")
+        cancelKey(guid, "smitePhase4")
+        cancelKey(guid, "smiteWalk")
+        schedule(guid, "smiteWalk", 2500, function() smiteWalkToChest(creature, guid) end)
         creature:Talk(SAY_PHASE_2)
     end
 end
@@ -214,3 +330,4 @@ RegisterCreatureEvent(ENTRY_MR_SMITE, 4, onCombatEnd)
 RegisterCreatureEvent(ENTRY_MR_SMITE, 5, onSpawn)
 RegisterCreatureEvent(ENTRY_MR_SMITE, 9, onDamageTaken)
 RegisterCreatureEvent(ENTRY_MR_SMITE, 23, onReset)
+RegisterCreatureEvent(ENTRY_MR_SMITE, 28, smiteMovementInform)

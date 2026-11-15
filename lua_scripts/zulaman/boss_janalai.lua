@@ -42,8 +42,10 @@
 -- present -> Talk(SAY_SUMMON_HATCHER=2) + two 23818 summons at the
 -- hatcherway spawn points (TEMPSUMMON_CORPSE_TIMED_DESPAWN type 5 / 10s)
 -- + 90s re-arm, none -> noeggs latches the arm off (C++-exact); the
--- hatchers' own waypoint/egg-hatching AI stays unregistered (movement-
--- driven body, fiendish-portal precedent), so summoned hatchers idle.
+-- hatchers' own waypoint/egg-hatching AI IS ported 2026-11-14 (ev28 +
+-- ev23 + CreateLuaEvent pump, hatcher section below — the old
+-- "movement-driven body, fiendish-portal precedent" rationale is
+-- stale: MoveTo + ev28 + the IN_PROGRESS gate are all live).
 -- a 5min one-shot (EnrageTimer = 5*60*1000) whose first fire triggered-
 -- casts enrage 44779, sets enraged, and re-arms 300s, and whose later
 -- fires Talk(SAY_BERSERK=4) + triggered berserk 45078 + re-arm 300s
@@ -55,10 +57,11 @@
 -- Deviations from C++: the bomb-phase MotionMaster Clear is cosmetic and
 -- skipped (the teleport lands anyway); the sub-25% enrage event-9 hook can
 -- fire mid-bombing while C++ defers it until the sequence ends (~9s
--- ordering delta); the hatcher AI is not registered at all — its whole
--- body is MovementInform waypoints, MoveInLineOfSight/AttackStart gates,
--- and instance-state checks (fiendish-portal precedent: no Lua-modelable
--- hooks fire for it), so the two summoned hatchers idle; the fire bomb
+-- ordering delta); the hatcher AI IS registered (ev28 + ev23 + timer
+-- pump, hatcher section below) — its whole body is MovementInform
+-- waypoints, MoveInLineOfSight/AttackStart gates (empty overrides in
+-- C++, correctly modeled by doing nothing), and instance-state checks
+-- (the IN_PROGRESS gate rides the pump, below); the fire bomb
 -- 23920 SpellHit arm (42628 -> triggered self-cast 42629) answers the
 -- sequence throws; the hatchling 23598 flame-buffet AI and the egg 23817
 -- SpellHit arm (42471 -> self-cast 42493) are registered so hatched eggs
@@ -127,8 +130,8 @@ local FIRE_WALL_COORDS = {
 }
 
 -- C++ hatcherway (boss_janalai.cpp:97-115): the two hatcher spawn points
--- (hatcherway[0][0] and hatcherway[1][0]); the waypoint legs are movement-
--- bridged-out, documented below.
+-- (hatcherway[0][0] and hatcherway[1][0]); the full waypoint table is
+-- HATCHERWAY in the hatcher section below.
 local HATCHER_SPAWNS = {
     {-87.46, 1170.09, 6},
     {-86.57, 1132.85, 6},
@@ -605,3 +608,185 @@ RegisterCreatureEvent(ENTRY_EGG, 14, eggSpellHit)
 RegisterCreatureEvent(ENTRY_EGG, 1, function(_, creature)
     creature:SetMeleeAttack(false) -- boss_janalai.cpp:671: empty UpdateAI in C++ (never melees)
 end)
+
+-- npc_janalai_hatcher (23818, C++ ScriptName "npc_janalai_hatcher"):
+-- PORTED 2026-11-14 — the file's documented idle-hatcher decision is
+-- reversed: MoveTo + ev28 + CreateLuaEvent pumps + GetCreaturesInGrid +
+-- GetBossState are all live. C++ body (boss_janalai.cpp:468-583):
+-- Reset sets walk + side (Y < 1150) + Initialize (waypoint 0,
+-- isHatching false, WaitTimer 1); UpdateAI gates on the instance boss
+-- state being IN_PROGRESS (else DisappearAndDie); out of hatching the
+-- WaitTimer latch issues MovePoint(0, hatcherway[side][waypoint]) and
+-- increments waypoint; MovementInform ignores its args and keys off
+-- the waypoint counter — waypoint == 5 (arrival at the 5th point)
+-- starts hatching (isHatching, HatchNum 1, 5s wait), else a 1ms
+-- re-arm; the hatching leg calls HatchEggs(HatchNum) every 10s (eggs
+-- 23817 within 50 yd, display != 11686, non-triggered HATCH_EGG
+-- 42471), increments HatchNum while it hatches the full batch, flips
+-- side once (waypoint 3, WaitTimer 1) when the eggs run out, and
+-- DisappearAndDie (Despawn twin, halazzi precedent — no
+-- DisappearAndDie bridge) on the second exhaustion. JustEngagedWith /
+-- AttackStart / MoveInLineOfSight are empty overrides in C++ — no
+-- handlers. The per-GUID state table + shared timers store follow the
+-- hatchling convention in this file.
+local POINT_MOTION_TYPE = 8 -- MovementDefines.h:31
+
+-- C++ hatcherway (boss_janalai.cpp:97-115), [side][waypoint] with
+-- 1-based Lua indexing; the step logic keeps C++'s 0-based waypoint
+-- counter and indexes [waypoint + 1].
+local HATCHERWAY = {
+    {
+        {-87.46, 1170.09, 6},
+        {-74.41, 1154.75, 6},
+        {-52.74, 1153.32, 19},
+        {-33.37, 1172.46, 19},
+        {-33.09, 1203.87, 19},
+    },
+    {
+        {-86.57, 1132.85, 6},
+        {-73.94, 1146.00, 6},
+        {-52.29, 1146.51, 19},
+        {-33.57, 1125.72, 19},
+        {-34.29, 1095.22, 19},
+    },
+}
+
+local hatcherState = {}
+
+local function hatcherCancel(guid)
+    cancelTimers(timers, guid)
+    hatcherState[guid] = nil
+end
+
+-- C++ HatchEggs (:516-533): up to num eggs (23817) within 50 yd whose
+-- display is not 11686 self-cast HATCH_EGG (42471, non-triggered);
+-- returns true when the full batch hatched (num == 0).
+local function hatcherHatchEggs(creature, num)
+    local remaining = num
+    for _, egg in ipairs(creature:GetCreaturesInGrid(ENTRY_EGG, 50)) do
+        if remaining <= 0 then
+            break
+        end
+        if egg:GetDisplayId() ~= 11686 then
+            egg:CastSpell(egg, SPELL_HATCH_EGG)
+            remaining = remaining - 1
+        end
+    end
+    return remaining == 0
+end
+
+-- C++ npc_janalai_hatcherAI::UpdateAI (:544-582) as a CreateLuaEvent
+-- pump (the felmyst flight-sequence idiom): the MovePoint legs are
+-- re-armed from ev28 arrivals, the hatching legs from 5s/10s timers.
+local function hatcherStep(creature, guid)
+    local st = hatcherState[guid]
+    if st == nil then
+        return
+    end
+    -- C++ UpdateAI gate :546-550: no instance or boss state !=
+    -- IN_PROGRESS -> DisappearAndDie (Despawn twin, halazzi
+    -- precedent). BOSS_JANALAI = 2 (zulaman.h:30).
+    if creature:GetBossState(2) ~= 1 then
+        hatcherCancel(guid)
+        creature:Despawn()
+        return
+    end
+    if not st.isHatching then
+        -- C++ :552-559: WaitTimer latch -> MovePoint(0,
+        -- hatcherway[side][waypoint]), ++waypoint, WaitTimer = 0.
+        -- MoveTo id 0 fires ev28 (POINT_MOTION_TYPE, 0) on arrival.
+        if st.wait then
+            st.wait = false
+            local pos = HATCHERWAY[st.side][st.waypoint + 1]
+            creature:MoveTo(0, pos[1], pos[2], pos[3])
+            st.waypoint = st.waypoint + 1
+        end
+        return
+    end
+    -- C++ hatching leg :561-580: HatchEggs(HatchNum) -> HatchNum++,
+    -- 10s re-arm; eggs exhausted -> flip side once (waypoint 3,
+    -- WaitTimer 1), second exhaustion -> DisappearAndDie.
+    if hatcherHatchEggs(creature, st.hatchNum) then
+        st.hatchNum = st.hatchNum + 1
+        schedule(timers, guid, "hatch", 10000, function()
+            hatcherStep(creature, guid)
+        end)
+    elseif not st.hasChangedSide then
+        st.side = st.side == 1 and 2 or 1
+        st.isHatching = false
+        st.waypoint = 3
+        st.wait = true
+        st.hasChangedSide = true
+        schedule(timers, guid, "hatch", 1, function()
+            hatcherStep(creature, guid)
+        end)
+    else
+        hatcherCancel(guid)
+        creature:Despawn()
+    end
+end
+
+-- C++ npc_janalai_hatcherAI::MovementInform (:534-543): ignores its
+-- args, keys off the waypoint counter — waypoint == 5 (arrival at
+-- the 5th point) starts hatching (isHatching, HatchNum 1, 5s wait),
+-- else a 1ms re-arm for the next MovePoint leg.
+local function hatcherMovementInform(event, creature, moveType, pointId)
+    if moveType ~= POINT_MOTION_TYPE then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    local st = hatcherState[guid]
+    if st == nil then
+        return
+    end
+    if st.waypoint == 5 then
+        st.isHatching = true
+        st.hatchNum = 1
+        schedule(timers, guid, "hatch", 5000, function()
+            hatcherStep(creature, guid)
+        end)
+    else
+        st.wait = true
+        schedule(timers, guid, "hatch", 1, function()
+            hatcherStep(creature, guid)
+        end)
+    end
+end
+
+-- C++ npc_janalai_hatcherAI::Reset (:505-511): SetWalk(true) +
+-- Initialize() + side = (GetPositionY() < 1150) — C++ side true
+-- selects hatcherway[1], the second Lua row. The first step runs on
+-- the Initialize WaitTimer = 1. The death-path ev23 pre-fire (moroes
+-- precedent) returns early without starting the pump.
+local function hatcherReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    hatcherCancel(guid)
+    if creature:IsDead() then
+        return
+    end
+    creature:SetWalk(true)
+    hatcherState[guid] = {
+        side = creature:GetY() < 1150 and 2 or 1,
+        waypoint = 0,
+        isHatching = false,
+        hatchNum = 0,
+        hasChangedSide = false,
+        wait = true,
+    }
+    schedule(timers, guid, "hatch", 1, function()
+        hatcherStep(creature, guid)
+    end)
+end
+
+local function hatcherLeaveCombat(event, creature)
+    hatcherCancel(creature:GetGUIDLow())
+end
+
+local function hatcherDied(event, creature, killer)
+    hatcherCancel(creature:GetGUIDLow())
+end
+
+RegisterCreatureEvent(ENTRY_HATCHER, 23, hatcherReset)
+RegisterCreatureEvent(ENTRY_HATCHER, 28, hatcherMovementInform)
+RegisterCreatureEvent(ENTRY_HATCHER, 2, hatcherLeaveCombat)
+RegisterCreatureEvent(ENTRY_HATCHER, 4, hatcherDied)

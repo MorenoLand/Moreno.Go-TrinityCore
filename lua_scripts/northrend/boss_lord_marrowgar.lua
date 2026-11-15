@@ -103,9 +103,10 @@
 -- (tick 493, below). WARN_BONE_STORM (Talk EMOTE 7 + BONE_STORM self-cast +
 -- BEGIN @3050ms + WARN re-arm {90s,95s}); BEGIN (GetAura SetDuration 20s/30s
 -- + speed x3 + Talk SAY_BONE_STORM 2 + END @duration+1ms, fallthrough MOVE);
--- MOVE (re-arm duration/3 + random non-tank via GetAITargets + MoveChase
--- approx — no GetX/GetY on handler creatures/players, so the MovePoint
--- position leg and the MovementInform MoveIdle leg stay out); END (MoveClear
+-- MOVE (re-arm duration/3 + random non-tank via GetAITargets + MoveTo
+-- snapshot of the target position, so the landing fires ev28 and the
+-- MovementInform MoveIdle leg ports below — the old "no GetX/GetY"
+-- claim was stale, scripting/object.go:196); END (MoveClear
 -- + MoveChase victim + speed restore + ENABLE_BONE_SLICE @10s + graveyard
 -- reschedule @15s non-heroic); ENABLE_BONE_SLICE latch; GRAVEYARD (SpellScript
 -- body replicated: 1/3 random valid players, target:SummonCreature — the
@@ -319,22 +320,23 @@ end
 
 -- C++ EVENT_BONE_STORM_MOVE (:230-238): re-arm @ duration/3, random
 -- non-tank target, MovePoint(POINT_TARGET_BONESTORM_PLAYER, *unit).
--- Documented approx: MoveChase(target) — no GetX/GetY exists on handler
--- creatures or players, so the target's position is unreadable and no
--- point arrival ever fires (the MovementInform MoveIdle leg stays out);
+-- PORTED 2026-11-14: snapshot target:GetX()/GetY()/GetZ() (generic
+-- fallback, scripting/object.go:196 — the old "no GetX/GetY" claim
+-- was stale) + MoveTo, so the landing fires ev28 and
+-- marrowgarMovementInform locks movement with MoveIdle (:282-288);
 -- the boss still runs at a fresh random non-tank target every
 -- duration/3, and END re-chases the victim.
 onBoneStormMove = function(creature, guid)
     local st = getMarrowgarState(guid)
     schedule(guid, "moveStorm", math.floor(st.stormDuration / 3), function() onBoneStormMove(creature, guid) end)
     -- Gated-loop arm (pre-loop :193): the re-arm above stays on cadence;
-    -- only the MoveChase waits out a cast in flight.
+    -- only the MoveTo waits out a cast in flight.
     if creature:IsCasting() then
         return
     end
     local target = pickRandomNonTank(creature)
     if target then
-        creature:MoveChase(target)
+        creature:MoveTo(POINT_TARGET_BONESTORM_PLAYER, target:GetX(), target:GetY(), target:GetZ())
     end
 end
 
@@ -650,12 +652,24 @@ local function marrowgarReachHome(event, creature)
     creature:SetBossState(DATA_LORD_MARROWGAR, BOSS_STATE_FAIL)
 end
 
+-- C++ boss_lord_marrowgar::MovementInform (:282-288): on
+-- POINT_MOTION_TYPE arrival at POINT_TARGET_BONESTORM_PLAYER,
+-- MoveIdle() — lock movement. The arrival is produced by
+-- onBoneStormMove's MoveTo above (MoveTo stamps the point id and its
+-- landing fires ev28 POINT, creaturemotion.go:5893).
+local function marrowgarMovementInform(event, creature, mtype, id)
+    if mtype == 8 and id == POINT_TARGET_BONESTORM_PLAYER then
+        creature:MoveIdle()
+    end
+end
+
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 1, marrowgarJustEngagedWith)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 2, marrowgarLeaveCombat)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 3, marrowgarKilledUnit)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 4, marrowgarJustDied)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 23, marrowgarReset)
 RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 24, marrowgarReachHome)
+RegisterCreatureEvent(ENTRY_LORD_MARROWGAR, 28, marrowgarMovementInform)
 
 -- C++ npc_bone_spike::JustDied (boss_lord_marrowgar.cpp:424-431): the
 -- trapped-unit aura-removal leg rides ToTempSummon()->GetSummonerUnit()

@@ -89,9 +89,12 @@
 -- Repeat(15s, 20s); LAVA_GOUT 74394 — DoCastVictim (non-triggered)
 -- with the 3-cast latch (_lavaGoutCount >= 3 -> reset + 8s re-arm;
 -- else cast, count++, 1s re-arm); zero Talk lines; Reset's
--- MoveAlongSplineChain (POINT_GENERAL_ROOM) (no-motion-master
--- bridge) and MovementInform DoZoneInCombat (no-movement-inform
--- bridge) stay out. IsSummonedBy zarithrian->AI()->JustSummoned(me)
+-- MoveAlongSplineChain (POINT_GENERAL_ROOM) + MovementInform
+-- DoZoneInCombat PORTED 2026-11-14 (ev28 flamecallerMovementInform +
+-- MoveToGeneral leg in flamecallerReset, below — the "no-motion-master
+-- / no-movement-inform bridge" claims were stale: MoveAlongSplineChain
+-- lua_creature_events.go:5940, ev28 spline_chain.go:322).
+-- IsSummonedBy zarithrian->AI()->JustSummoned(me)
 -- PORTED 2026-11-14 (round107) via ev22 (flamecallerSummoned, below).
 -- All 4 Talk() calls in the file accounted for and ported
 -- (SAY_AGGRO 0 + SAY_KILL 1 + SAY_ADDS 2 + SAY_DEATH 3).
@@ -117,7 +120,7 @@
 -- CanAIAttack (no Lua hook); JustSummoned summons.Summon PORTED
 -- 2026-11-14 (round107) via ev22 + per-GUID table (dormant until the
 -- stalker latch lands); flamecaller MoveToGeneral / MovementInform
--- (no motion-master / movement-inform bridges);
+-- PORTED 2026-11-14 (see above);
 -- DoMeleeAttackIfReady (no melee-model bridge).
 -- Combat-arm re-verification this run: cleave (DoCastVictim 74367,
 -- non-triggered, 8s/15s fixed) ✓; roar (DoCastSelf 74384,
@@ -148,6 +151,13 @@ local SPELL_INTIMIDATING_ROAR = 74384
 local SPELL_BLAST_NOVA      = 74392
 local SPELL_LAVA_GOUT       = 74394
 local SPELL_SUMMON_FLAMECALLER = 74398
+
+-- MinionsMovement (boss_general_zarithrian.cpp:62-64) + the
+-- SPLINE_CHAIN motion type (creaturemotion.go:4080).
+local POINT_GENERAL_ROOM = 3
+local SPLINE_GENERAL_EAST = 1
+local SPLINE_GENERAL_WEST = 2
+local SPLINE_CHAIN_MOTION_TYPE = 17
 
 -- ruby_sanctum.h RSDataTypes (EncounterState, InstanceScript.h:68-76:
 -- NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3).
@@ -485,9 +495,9 @@ end
 
 -- C++ npc_onyx_flamecaller::JustEngagedWith (:197-201):
 -- ScheduleEvent(EVENT_BLAST_NOVA, 17s) + ScheduleEvent(EVENT_LAVA_GOUT,
--- 3s). Reset (:189-195): _events.Reset() + _lavaGoutCount = 0 (the
--- motion leg has no bridge; the REACT_DEFENSIVE arm is PORTED
--- 2026-10-20 — creature:SetReactState).
+-- 3s). Reset (:189-195): _events.Reset() + _lavaGoutCount = 0 + the
+-- REACT_DEFENSIVE arm (PORTED 2026-10-20 — creature:SetReactState) +
+-- the MoveToGeneral leg (PORTED 2026-11-14, flamecallerReset below).
 local function flamecallerEnterCombat(event, creature, target)
     local guid = creature:GetGUIDLow()
     cancelTimers(guid)
@@ -513,6 +523,27 @@ local function flamecallerReset(event, creature)
     -- C++ boss_general_zarithrian.cpp:193: me->SetReactState(REACT_DEFENSIVE)
     -- (npc_onyx_flamecaller Reset: DEFENSIVE is the permanent baseline).
     creature:SetReactState(1) -- REACT_DEFENSIVE
+    -- C++ Reset (:194) + MoveToGeneral (:220-226): chain WEST (2) if
+    -- Y < 500 else EAST (1), target POINT_GENERAL_ROOM (3).
+    -- MoveAlongSplineChain is live (lua_creature_events.go:5940);
+    -- GetY is live (lua_objects.go:4193).
+    local chain = SPLINE_GENERAL_EAST
+    if creature:GetY() < 500 then
+        chain = SPLINE_GENERAL_WEST
+    end
+    creature:MoveAlongSplineChain(POINT_GENERAL_ROOM, chain, false)
+end
+
+-- C++ npc_onyx_flamecallerAI::MovementInform (:212-218): the
+-- OR-logic condition, replicated exactly — fires on any spline-chain
+-- arrival OR any arrival with id POINT_GENERAL_ROOM — then
+-- DoZoneInCombat (live, lua_creature_events.go:2432). ev28 carries
+-- (type, pointId); the chain arrival fires ev28 (17, 3)
+-- (spline_chain.go:322).
+local function flamecallerMovementInform(event, creature, moveType, pointId)
+    if moveType == SPLINE_CHAIN_MOTION_TYPE or pointId == POINT_GENERAL_ROOM then
+        creature:DoZoneInCombat()
+    end
 end
 
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 1, flamecallerEnterCombat)
@@ -520,3 +551,4 @@ RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 2, flamecallerLeaveCombat)
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 4, flamecallerDied)
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 22, flamecallerSummoned)
 RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 23, flamecallerReset)
+RegisterCreatureEvent(ENTRY_ONYX_FLAMECALLER, 28, flamecallerMovementInform)

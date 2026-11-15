@@ -69,24 +69,19 @@
 -- boss_gormok: Reset: events.SetPhase(PHASE_EVENT) (no phase bridge —
 -- anubarak_trial precedent) + HandleInitialMovement
 -- MoveAlongSplineChain(POINT_INITIAL_MOVEMENT, SPLINE_INITIAL_MOVEMENT)
--- (no motion bridge); Reset SetReactState(REACT_PASSIVE)
--- (boss_northrend_beasts.cpp:217) also stays out: SetReactState IS bridged
--- (frozen_core precedent), but the paired re-arm (EVENT_ENGAGE ->
--- SetReactState(REACT_AGGRESSIVE), :358) rides the unbridged MovementInform
--- intro machine (MovementInform SPLINE_CHAIN -> EVENT_ENGAGE 7s, :345-348)
--- — porting PASSIVE alone would leave the boss passive forever (paired-arm rule).
--- ScheduleEvent(EVENT_ENGAGE, 7s) (no MovementInform hook); EVENT_ENGAGE
--- — DoUseDoorOrButton(DATA_MAIN_GATE) + SetImmuneToPC(false) +
+-- + Reset SetReactState(REACT_PASSIVE) (boss_northrend_beasts.cpp:217)
+-- + MovementInform SPLINE_CHAIN -> EVENT_ENGAGE 7s (:345-348) are all
+-- PORTED below (gormokEngage / gormokMovementInform / reset; the
+-- MoveAlongSplineChain bridge is live, lua_creature_events.go:5940,
+-- and the paired-arm rule is satisfied by the ported ENGAGE re-arm).
+-- EVENT_ENGAGE — DoUseDoorOrButton(DATA_MAIN_GATE) + SetImmuneToPC(false) +
 -- SetReactState(REACT_AGGRESSIVE) + SummonCreature(
 -- NPC_BEASTS_COMBAT_STALKER) + stalker SetCombatPulseDelay(5) +
 -- DoZoneInCombat(x2) + events.SetPhase(PHASE_COMBAT) +
 -- DoCastSelf(SPELL_TANKING_GORMOK 66415, triggered — SERVERSIDE spell,
--- "No idea what it does" per the C++ comment) (no door / immune /
--- phase / zone bridges and no MovementInform hook — the summon and
--- react legs ARE bridged in isolation but ride the unbridged intro
--- machine — the self-cast is
--- port-pattern-ready in isolation (phase_hunter precedent) but rides
--- the unbridged intro machine — jedoga over-cast bar); EVENT_THROW —
+-- "No idea what it does" per the C++ comment) — PORTED below
+-- (gormokEngage, via the ev28 SPLINE_CHAIN arm; SetPhase vacuous, see
+-- the handler comment); EVENT_THROW —
 -- vehicle-passenger walk (GetVehicleKit()->GetPassenger(i) ->
 -- ExitVehicle + RemoveFlag(NON_ATTACKABLE | NOT_SELECTABLE) +
 -- cross-AI snobold DoAction(ACTION_DISABLE_FIRE_BOMB) + CastSpell(me,
@@ -312,6 +307,11 @@ local SPELL_ENRAGE = 68335 -- boss_northrend_beasts.cpp:77 (worm DoAction ACTION
 local SPELL_SLIME_POOL_EFFECT = 66882 -- boss_northrend_beasts.cpp:96
 local SPELL_FIRE_BOMB = 66313 -- boss_northrend_beasts.cpp:65
 local SPELL_FROTHING_RAGE = 66759 -- :105
+local SPELL_TANKING_GORMOK = 66415 -- boss_northrend_beasts.cpp:59 (SERVERSIDE spell)
+local ENTRY_BEASTS_COMBAT_STALKER = 36549 -- trial_of_the_crusader.h:173
+local POINT_INITIAL_MOVEMENT = 1 -- boss_northrend_beasts.cpp:179
+local SPLINE_INITIAL_MOVEMENT = 1 -- boss_northrend_beasts.cpp:189
+local SPLINE_CHAIN_MOTION_TYPE = 17 -- creaturemotion.go:4080
 local SPELL_STAGGERED_DAZE = 66758 -- :106
 
 -- trial_of_the_crusader.h: DATA_ACIDMAW 7 / DATA_DREADSCALE 8 /
@@ -319,6 +319,7 @@ local SPELL_STAGGERED_DAZE = 66758 -- :106
 local DATA_ACIDMAW = 7
 local DATA_DREADSCALE = 8
 local DATA_NORTHREND_BEASTS = 0
+local DATA_MAIN_GATE = 20 -- trial_of_the_crusader.h:55
 local DATA_ANUBARAK = 5 -- trial_of_the_crusader.h:37
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_FAIL = 2 -- EncounterState FAIL (InstanceScript.h:68-76)
@@ -604,10 +605,12 @@ end
 -- for the worm entries: events.Reset (cancelTimers) +
 -- summons.DespawnAll (despawnWormSummons above) +
 -- SetCombatPulseDelay(0) (the gormok reset() twin). The
--- events.SetPhase(PHASE_EVENT) leg has no phase bridge and
--- HandleInitialMovement (MoveAlongSplineChain) has no motion bridge;
+-- events.SetPhase(PHASE_EVENT) leg has no phase bridge and the worm
+-- HandleInitialMovement launch stays out behind the unported worm
+-- EVENT_ENGAGE (the MoveAlongSplineChain bridge itself is live,
+-- lua_creature_events.go:5940 — only Gormok's launch is ported);
 -- SetReactState(REACT_PASSIVE) stays out on the header's paired-arm
--- rule (its re-arm rides the unbridged MovementInform intro machine).
+-- rule (its re-arm rides the unported worm intro machine).
 -- Alive-gated despawn: Go ev23 pre-fires on death (magtheridon
 -- reset-then-died order), but C++ Reset never runs on death and the
 -- worm JustDied override (:701-720) carries no DespawnAll — an
@@ -768,9 +771,76 @@ local function gormokDied(event, creature, killer)
     beastsCountDeath(creature)
 end
 
+-- C++ boss_northrend_beastsAI::ExecuteEvent EVENT_ENGAGE
+-- (boss_northrend_beasts.cpp:355-371), fired 7s after the
+-- SPLINE_CHAIN POINT_INITIAL_MOVEMENT landing (:345-348):
+-- DoUseDoorOrButton(DATA_MAIN_GATE 20) + SetImmuneToPC(false) +
+-- SetReactState(REACT_AGGRESSIVE) + SummonCreature(NPC_BEASTS_COMBAT_
+-- STALKER 36549, 563.8941, 137.3333, 405.8467) + stalker DoZoneInCombat
+-- + stalker SetCombatPulseDelay(5) + DoZoneInCombat + SetPhase(PHASE_
+-- COMBAT) + DoCastSelf(SPELL_TANKING_GORMOK 66415, triggered).
+-- Bridges: GetGuidData(20) + GetGameObjectByGUID + go:UseDoorOrButton
+-- (lua_objects.go:4688); SetImmuneToPC(false) = RemoveFlag(59, 0x100)
+-- (Unit.cpp:8440-8449; bosses_opera precedent); SetReactState,
+-- SummonCreature, DoZoneInCombat and SetCombatPulseDelay are bridged
+-- (lua_creature_events.go). SetPhase has no bridge but is vacuous
+-- here — Gormok's combat tasks already schedule from Lua enterCombat.
+local function gormokEngage(creature, guid)
+    local gate = creature:GetGameObjectByGUID(creature:GetGuidData(DATA_MAIN_GATE))
+    if gate then
+        gate:UseDoorOrButton()
+    end
+    creature:RemoveFlag(59, 0x100)
+    creature:SetReactState(2) -- REACT_AGGRESSIVE
+    local stalker = creature:SummonCreature(ENTRY_BEASTS_COMBAT_STALKER, 563.8941, 137.3333, 405.8467, 0)
+    if stalker then
+        stalker:DoZoneInCombat()
+        stalker:SetCombatPulseDelay(5)
+    end
+    creature:DoZoneInCombat()
+    creature:CastSpell(creature, SPELL_TANKING_GORMOK, true)
+end
+
+-- C++ boss_northrend_beastsAI::MovementInform (:345-348):
+-- SPLINE_CHAIN_MOTION_TYPE (17) + POINT_INITIAL_MOVEMENT (1) ->
+-- ScheduleEvent(EVENT_ENGAGE, 7s). The bridge fires ev28 with
+-- (moveType, pointId) at the final landing (spline_chain.go:322;
+-- nightbane precedent). Dreadscale/Icehowl share the base
+-- MovementInform but their ENGAGE arms stay out (unported worm
+-- submerge / charge machines) — this handler is Gormok-only.
+local function gormokMovementInform(event, creature, moveType, pointId)
+    if moveType ~= SPLINE_CHAIN_MOTION_TYPE or pointId ~= POINT_INITIAL_MOVEMENT then
+        return
+    end
+    local guid = creature:GetGUIDLow()
+    schedule(guid, "engage", 7000, function()
+        gormokEngage(creature, guid)
+    end)
+end
+
 local function reset(event, creature)
     cancelTimers(creature:GetGUIDLow())
-    creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm; SetReactState leg stays out on the paired-arm rule — see header)
+    creature:SetCombatPulseDelay(0) -- boss_northrend_beasts.cpp:218 (base Reset arm)
+    -- C++ boss_northrend_beastsAI::Reset (:214-221) + HandleInitialMovement
+    -- (:223-232): SetReactState(REACT_PASSIVE) + MoveAlongSplineChain(
+    -- POINT_INITIAL_MOVEMENT 1, SPLINE_INITIAL_MOVEMENT 1, walk=false).
+    -- PORTED: the paired re-arm (EVENT_ENGAGE -> AGGRESSIVE) now rides
+    -- the bridged ev28 SPLINE_CHAIN arm above, so PASSIVE no longer
+    -- strands the boss (header paired-arm rule retired for Gormok).
+    -- Alive-gated: Go fires ev23 ahead of ev4 on the death path, and
+    -- C++ Reset never runs on death (wormReset convention). The bridge
+    -- returns false when the DB carries no chain rows — the 7s ENGAGE
+    -- timer is the fallback (nightbane precedent), so a missing chain
+    -- still engages on schedule instead of stranding the boss passive.
+    if creature:IsAlive() then
+        creature:SetReactState(0) -- REACT_PASSIVE
+        if not creature:MoveAlongSplineChain(POINT_INITIAL_MOVEMENT, SPLINE_INITIAL_MOVEMENT, false) then
+            local guid = creature:GetGUIDLow()
+            schedule(guid, "engage", 7000, function()
+                gormokEngage(creature, guid)
+            end)
+        end
+    end
 end
 
 -- C++ instance OnCreatureCreate latching
@@ -858,6 +928,7 @@ RegisterCreatureEvent(ENTRY_GORMOK, 1, enterCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 2, leaveCombat)
 RegisterCreatureEvent(ENTRY_GORMOK, 4, gormokDied)
 RegisterCreatureEvent(ENTRY_GORMOK, 23, reset)
+RegisterCreatureEvent(ENTRY_GORMOK, 28, gormokMovementInform)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 4, wormDied)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 5, wormSpawned)
 RegisterCreatureEvent(ENTRY_DREADSCALE, 19, wormJustSummoned)
