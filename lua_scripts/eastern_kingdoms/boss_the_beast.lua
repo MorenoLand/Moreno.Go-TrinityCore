@@ -57,37 +57,23 @@
 -- and no ev41 consumer for the SetData legs — the stay-out is the
 -- unported consumer machine, not the dispatch (coren_direbrew /
 -- instance precedent).
--- Documented-only (STAY OUT, re-verified 2026-11-14 round113). SpellHit skinning
--- arm (boss_the_beast.cpp:88-94): loops MAX_SPELL_EFFECTS (:90), fires
--- only if an effect IsEffect(SPELL_EFFECT_SKINNING = 95,
--- SharedDefines.h:906) (:91), then only if !me->IsAlive() (:92, nested
--- INSIDE the effect match — the alive gate does not run on non-skinning
--- hits), then DoCastAOE(SPELL_FINKLE_IS_EINHORN 16710, true) (:93,
--- enum :35, triggered). DoCastAOE is self-cast (UnitAI.h:322:
--- DoCast(nullptr, ...)), so the Lua twin would be
--- creature:CastSpell(creature, 16710, true).
--- Hook IS bridged (CreatureEventOnHitBySpell = 14, runtime.go:379) and
--- the producer IS live: dead motions stay findable (handleEffectSkinning,
--- spells.go:5621, resolves the corpse motion and opens skinning loot),
--- and ev14 fires per landed hit target in the same finishSpellCast
--- (spells.go:19914, 30186-30197) — skinning the dead Beast WOULD fire it.
--- The sole block is the effect gate: fireCreatureLuaEvent
--- (lua_creature_events.go:7611) passes (event, creature, caster,
--- spellId) only — every ev14 fire site passes caster + spellID, no
--- SpellInfo/effect list reaches Lua. spell:GetEffectType DOES exist
--- now, but only on the session spell object (lua_spell.go:588-596);
--- no Lua global builds a spell object from an ID, and the
--- creature-path builder lacks it — unreachable from ev14. And no
--- source-grounded spell-ID substitute exists: C++ gates on effect,
--- not ID; no skinning spell ID appears anywhere in either tree
--- (grep 8613: zero hits), and the seed Spell.dbc (embedded,
--- engine/data/wotlk/seed.go, 81 rows) holds no 8613 row and no row
--- with a SKINNING effect (95) — so hard-coding an ID would still be
--- fabrication. Bridgeable legs, for the record if the effect gate is
--- ever exposed: creature:IsAlive() (object.go:260,
--- lua_objects.go:2192) and CastSpell(target, id[, triggered])
--- (lua_creature_events.go:949-986); luaMotionCreature has no alive
--- gate (lua_creature_events.go:359). No ev14 registration.
+-- PORTED (2026-11-15): SpellHit skinning arm (boss_the_beast.cpp:88-94)
+-- loops MAX_SPELL_EFFECTS (:90), fires only if an effect
+-- IsEffect(SPELL_EFFECT_SKINNING = 95, SharedDefines.h:906) (:91), then
+-- only if !me->IsAlive() (:92, nested INSIDE the effect match), then
+-- DoCastAOE(SPELL_FINKLE_IS_EINHORN 16710, true) (:93, enum :35,
+-- triggered; self-cast per UnitAI.h:322 DoCast(nullptr, ...)).
+-- The effect gate rides creature:HasSpellEffect(spellId, effect)
+-- (lua_creature_events.go:1098, luaMotionCreature builder — the old
+-- "creature-path builder lacks it" stay-out is stale; the shade_of_aran
+-- ev14 interrupt arm already uses the same call). ev14 fires per landed
+-- hit target in finishSpellCast (spells.go:19914, 30186-30197) with
+-- (event, creature, caster, spellId), and dead motions stay findable
+-- (handleEffectSkinning, spells.go:5621) — skinning the dead Beast fires it.
+-- DATA CAVEAT: the skinning spell (8613) and 16710 are absent from the
+-- embedded Spell.dbc (seeddbc/Spell.dbc, 184 rows), so HasSpellEffect
+-- returns false until those rows land; the arm is faithful and inert,
+-- not fabricated — no spell ID is hard-coded as the trigger.
 -- CASTING gates ported: C++ UpdateAI pre-loop gate (:166) + in-loop
 -- gate (:201) are a 500ms IsCasting defer under each arm's own key
 -- (live, lua_creature_events.go:2480; mal_ganis idiom) — a gated arm
@@ -104,6 +90,8 @@ local SPELL_FIREBALL = 16788
 local SPELL_FIREBLAST = 16144
 local SPELL_IMMOLATE = 15570
 local SPELL_BERSERKER_CHARGE = 16636
+local SPELL_FINKLE_IS_EINHORN = 16710
+local SPELL_EFFECT_SKINNING = 95 -- SharedDefines.h:906
 
 local ENTRY_THE_BEAST = 10430
 
@@ -266,7 +254,22 @@ local function onDied(_, creature)
     creature:SetBossState(12, 3)
 end
 
+-- C++ SpellHit (boss_the_beast.cpp:88-94): any landed hit whose
+-- Effects[0..2] carries SPELL_EFFECT_SKINNING (95) casts Finkle Is
+-- Einhorn on the dead Beast (DoCastAOE self-cast, triggered); the
+-- !IsAlive gate sits inside the effect match.
+local function onSpellHit(_, creature, _, spellId)
+    if not creature:HasSpellEffect(spellId, SPELL_EFFECT_SKINNING) then
+        return
+    end
+    if creature:IsAlive() then
+        return
+    end
+    creature:CastSpell(creature, SPELL_FINKLE_IS_EINHORN, true)
+end
+
 RegisterCreatureEvent(ENTRY_THE_BEAST, 1, onEnterCombat)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 2, onCombatEnd)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 4, onDied)
+RegisterCreatureEvent(ENTRY_THE_BEAST, 14, onSpellHit)
 RegisterCreatureEvent(ENTRY_THE_BEAST, 23, onReset)
