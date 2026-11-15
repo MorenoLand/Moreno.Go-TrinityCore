@@ -65,7 +65,7 @@ RegisterSpellEvent(SPELL_BLOODSPORE_RUINATION, 4, bloodsporeRuinationHit)
 -- (class npc_thassarian : CreatureScript("npc_thassarian");
 -- struct npc_thassarianAI : public EscortAI).
 -- Entry: 101303 (TDB 335.26091 creature_template ScriptName
--- npc_thassarian). Eluna creature events: 6 OnReachWP.
+-- npc_thassarian). Eluna creature events: 6 OnReachWP, 23 OnReset.
 -- Ported arms (C++ order, zone_borean_tundra.cpp:495-547), under
 -- the GetPlayerForEscort() nil-guard (Lua twin: GetEscortPlayer()):
 -- - wp3 SetEscortPaused(true); summon NPC_IMAGE_LICH_KING 26203
@@ -82,6 +82,12 @@ RegisterSpellEvent(SPELL_BLOODSPORE_RUINATION, 4, bloodsporeRuinationHit)
 --   Talbot and Arthas image are removed from the world (Despawn
 --   twin); the Leryssa/Arlos legs are dead (summoned only by the
 --   unported phase machine, so no GUID is ever latched).
+-- - Reset (zone_borean_tundra.cpp:487-493): RestoreFaction stays out
+--   (no Lua bridge — magister_aledis/marzon precedent);
+--   RemoveStandFlags(SIT) rides GetStandState() == SIT (1) /
+--   SetStandState(STAND 0) (lua_creature_events.go:1463/:5190);
+--   Initialize() clears the per-GUID phase/Talbot/Arthas latches
+--   (no despawn — C++ Reset only forgets the GUIDs, unlike JustDied).
 -- Deliberate omissions / unported scope: the UpdateAI phase machine
 -- (zone_borean_tundra.cpp:549-704: phases 1-17, Talbot/Arthas/Arlos/
 -- Leryssa dialogue chain, Valanar transform, combat start) — the
@@ -98,6 +104,8 @@ local NPC_COUNSELOR_TALBOT = 25301 -- zone_borean_tundra.cpp:413
 local UNIT_FIELD_FLAGS = 59
 local UNIT_FLAG_NON_ATTACKABLE = 0x2
 local REACT_PASSIVE = 0
+local UNIT_STAND_STATE_STAND = 0 -- UnitDefines.h:33
+local UNIT_STAND_STATE_SIT = 1 -- UnitDefines.h:34
 
 local SUMMON_CORPSE_TIMED_DESPAWN = 5
 local SUMMON_DESPAWN_MS = 120000 -- 2min
@@ -173,5 +181,17 @@ local function thassarianDied(event, creature)
     end
 end
 
+-- C++ npc_thassarianAI::Reset (zone_borean_tundra.cpp:487-493).
+local function thassarianReset(event, creature)
+    local guid = creature:GetGUIDLow()
+    thassarianPhase[guid] = nil
+    thassarianTalbot[guid] = nil
+    thassarianArthas[guid] = nil
+    if creature:GetStandState() == UNIT_STAND_STATE_SIT then
+        creature:SetStandState(UNIT_STAND_STATE_STAND)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_THASSARIAN, 6, thassarianReachWP)
 RegisterCreatureEvent(ENTRY_THASSARIAN, 4, thassarianDied)
+RegisterCreatureEvent(ENTRY_THASSARIAN, 23, thassarianReset)
