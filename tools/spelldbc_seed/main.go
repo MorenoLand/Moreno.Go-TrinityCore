@@ -1657,22 +1657,41 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 1547, basePoints: 4380, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -61, mechanic: 11, targetA: targetEnemy, chainAmplitude: 1},
 	}},
-	// 53456 Impale Aura (wago.tools 3.4.0.43659 SpellEffect row
-	// 958241, 2026-11-15; Wowhead WotLK cross-check: Apply Aura
-	// Periodically trigger spell, 10s interval, trigger 53457, cast
-	// Instant, range 100 yd, duration n/a, school Physical, dispel
-	// n/a, cost none): castTimeIdx 1 (instant, real row),
-	// durIdx 0 (n/a — 41342 precedent), rangeIdx 6 (Vision Range
-	// 0-100, real row), school 0x1 Physical; eff0 6 APPLY_AURA
-	// aura 23 PERIODIC_TRIGGER_SPELL Die 1 Base -1 TargetA 1
+	// 53456 Impale (SpellName "Impale", not "Impale Aura"; the C++
+	// SPELL_IMPALE_AURA constant keeps the Aura name in code) —
+	// wago.tools 3.4.0.43659 SpellEffect row 958241 + SpellMisc
+	// 605213 (2026-11-15 browser read): eff0 6 APPLY_AURA aura 23
+	// PERIODIC_TRIGGER_SPELL Die 1 Base -1 TargetA 1
 	// TARGET_UNIT_CASTER auraPeriod 10000 trigger 53457
-	// chainAmplitude 1 (65096 precedent). NOT carried:
-	// EffectBonusCoefficient 0, EffectMechanic 0, EffectAttributes
-	// 0x0. Removes one of two anub_arak ev14 blockers; the SpellHit
-	// trigger cast itself (boss's own EVENT_SUBMERGE, unported
-	// phase machine) still stays out.
-	{id: 53456, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+	// chainAmplitude 1 (65096 precedent); castTimeIdx 1 (instant,
+	// real row), durIdx 21 (-1 infinite, real row — 68415
+	// precedent; the 45b49c2d Wowhead-derived durIdx 0 is
+	// superseded by the verbatim SpellMisc read), rangeIdx 135
+	// (Tower 100, 0-100, real row — SpellRange 135 added below;
+	// the 45b49c2d rangeIdx 6 was the same numeric range under the
+	// wrong index). NOT carried: EffectBonusCoefficient 0,
+	// EffectMechanic 0, EffectAttributes 0x0. Removes one of two
+	// anub_arak ev14 blockers; the SpellHit trigger cast itself
+	// (boss's own EVENT_SUBMERGE, unported phase machine) still
+	// stays out.
+	{id: 53456, castTimeIdx: 1, durIdx: 21, rangeIdx: 135, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, targetA: targetCaster, auraPeriod: 10000, trigger: 53457, chainAmplitude: 1},
+	}},
+	// 53421 Submerge (wago.tools 3.4.0.43659 SpellEffect rows
+	// 957978/957979 + SpellMisc 605029, 2026-11-15 browser read):
+	// eff0 6 APPLY_AURA aura 12 MOD_STUN TargetA 1
+	// TARGET_UNIT_CASTER; eff1 6 APPLY_AURA aura 56 TRANSFORM
+	// MiscValue_0 24417 TargetA 1; castTimeIdx 5 (2000ms, real
+	// row), durIdx 21 (-1 infinite, real row, 68415 precedent),
+	// rangeIdx 1 (Self Only, real row), school 0x1 Physical.
+	// Dispel not carried: wago SpellMisc exposes no dispel column
+	// in this build, left at the zero default. Removes the second
+	// anub_arak ev14 unseeded-spell blocker; the SpellHit trigger
+	// cast itself (boss's own EVENT_SUBMERGE, unported phase
+	// machine) still stays out.
+	{id: 53421, castTimeIdx: 5, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, misc: 24417, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
@@ -1788,6 +1807,7 @@ func main() {
 		{74, f32(0), f32(0), f32(30), f32(30), 2},    // real SpellRange 74 "Ranged Weapon" for 59335 (wago.tools 3.4.0.43659, Flags 0x2)
 		{5, f32(0), f32(0), f32(40), f32(40), 0},     // real SpellRange 5 "Long Range" for 31263 (wago.tools 3.4.0.43659)
 		{6, f32(0), f32(0), f32(100), f32(100), 0},   // real SpellRange 6 "Vision Range" for Aran bolts 29954/29953/29955 (wago.tools 3.4.0.43659)
+		{135, f32(0), f32(0), f32(100), f32(100), 0}, // real SpellRange 135 "Tower 100" for 53456 (wago.tools 3.4.0.43659); also repairs the dangling 42198/42937 rangeIdx 135 references
 		{1, f32(0), f32(0), f32(0), f32(0), 0},       // real SpellRange 1 "Self Only" for 31308 (wago.tools 3.4.0.43659)
 		{2, f32(0), f32(0), f32(5), f32(5), 1},       // real SpellRange 2 "Combat Range" for interrupt spells (wago.tools 3.4.0.43659, Flags 0x1)
 		{34, f32(0), f32(0), f32(25), f32(25), 0},    // real SpellRange 34 "Twenty-Five yards" for 57994 (wago.tools 3.4.0.43659)

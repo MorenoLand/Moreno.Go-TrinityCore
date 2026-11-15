@@ -59,9 +59,9 @@
 -- legs are unbridged; SpellHit(SPELL_SUBMERGE 53421) submerge
 -- payload — event 14 (OnHitBySpell, target-side) fires, but the
 -- trigger cast is phase-machine-blocked; DoAction(ACTION_PET_DIED) re-emerge — ev38 dispatch
--- IS bridged (creature:DoAction, lua_creature_events.go:802); sender is the unported pet
--- JustDied (boss_anubarak.cpp:425) + cross-AI SetGUID/GUID_TYPE_
--- PET bridge absent) — no phase bridge (gal_darah / moorabi
+-- IS bridged (creature:DoAction, lua_creature_events.go:934); cross-AI SetGUID IS bridged
+-- (creature:SetGUID, lua_creature_events.go:967, fires ev40 on target); sender is the unported pet
+-- JustDied (boss_anubarak.cpp:425) + the unpopulated _petCount latch) — no phase bridge (gal_darah / moorabi
 -- precedent), so ungated timers would over-cast versus C++ (Pound
 -- firing during the unbridged submerge phase — jedoga precedent):
 -- nothing phase-gated is emulated.
@@ -77,8 +77,8 @@
 -- documented-only.
 -- EVENT_IMPALE — DoCast(impaleTarget, Impale Damage 53454, triggered)
 -- 4s after SetGUID(GUID_TYPE_IMPALE) — the impale target arrives
--- via cross-AI SetGUID from npc_anubarak_impale_target (no cross-AI
--- SetGUID bridge) — documented-only.
+-- via cross-AI SetGUID from npc_anubarak_impale_target (SetGUID IS bridged,
+-- lua_creature_events.go:967 — the impale-target bearer is unregistered) — documented-only.
 -- EVENT_SUBMERGE — Talk(SAY_SUBMERGE 4) + DoCastSelf(Submerge
 -- 53421), rescheduled 0s by DamageTaken at the 75/50/25% crossings
 -- (event 9 + GetHealthPct bridges exist; the SetPhase/flag machine
@@ -100,8 +100,8 @@
 -- DoCastSelf(EMERGE 53500), SetPhase(PHASE_EMERGE) + re-armed POUND
 -- (13s-18s) / LEECHING_SWARM (3s-7s) / CARRION_BEETLES (10s-15s)
 -- (phase-gated); ACTION_PET_EVADE ->
--- EnterEvadeMode) — no cross-AI SetGUID / DoAction bridges —
--- documented-only.
+-- EnterEvadeMode) — SetGUID (:967) / DoAction (:934) bridges exist; the stay-out is the
+-- unported pet senders + the unpopulated _petCount latch — documented-only.
 -- EnterEvadeMode: summons.DespawnAll is moot (no summons modeled);
 -- _DespawnAtEvade() PORTED below as immediate creature:Despawn() in the
 -- event-2 handler (drakkari precedent; stale "no despawn bridge"
@@ -120,10 +120,10 @@
 -- LEECHING_SWARM) (RemoveAura bridged — aeranas precedent stale),
 -- DoCastSelf(IMPALE_AURA 53456, true) (bridged in isolation —
 -- creature:CastSpell(creature, spell) — but the trigger cast is
--- blocked; 53456 SEEDED 2026-11-15 — wago SpellEffect 958241 +
--- Wowhead: PERIODIC_TRIGGER_SPELL 10s trigger 53457, Physical,
--- Instant, 100yd, dur n/a — so the stay-out is the trigger cast /
--- phase machine alone, not the spell row), SetPhase(PHASE_SUBMERGE)
+-- blocked; 53421 + 53456 BOTH SEEDED 2026-11-15 (wago SpellMisc
+-- 605029/605213; 53456 durIdx/rangeIdx corrected 0/6 -> 21/135 per
+-- the verbatim SpellMisc read) — so the stay-out is the trigger cast /
+-- phase machine alone, not the spell rows), SetPhase(PHASE_SUBMERGE)
 -- + the 50%/25%/0% _nextSubmerge pet-count machine (_assassinCount 4->6->6, _guardianCount 2,
 -- _venomancerCount 0->2->2, third wave arms EVENT_DARTER) — event 14
 -- fires; stale "no SpellHit bridge" retracted (2026-10-21); arm stays
@@ -151,9 +151,10 @@
 -- entry-blocked grounds (no C++ NPC constant, summon DB-side).
 -- Additionally unbridged:
 -- the pet-template InitializeAI leg (cross-AI SetGUID(GUID_TYPE_PET)
--- -> JustSummoned — SetGUID bridge absent; GetCreature(DATA_ANUBARAK)
--- instance legs — instance model absent), JustDied
--- ACTION_PET_DIED (DoAction dispatch IS bridged, lua_creature_events.go:827 —
+-- -> JustSummoned — SetGUID IS bridged (:967); GetCreature(DATA_ANUBARAK)
+-- IS bridged (creature:GetInstanceCreature, lua_creature_events.go:7649;
+-- the boss latches DATA_ANUBARAK via SetGuidData in anubarakSpawned), JustDied
+-- ACTION_PET_DIED (DoAction dispatch IS bridged, lua_creature_events.go:934 —
 -- the gap is the unported pet sender + the unpopulated _petCount latch),
 -- EnterEvadeMode
 -- ACTION_PET_EVADE (same: dispatch bridged, sender unported); darter InitializeAI
