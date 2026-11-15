@@ -76,6 +76,7 @@ const (
 	auraDummy                  = 4
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraStun                   = 12
+	auraModDamageTaken         = 14 // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
 	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
 	auraObsModHealth           = 20 // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
 	auraObsModPower            = 21 // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
@@ -112,6 +113,7 @@ const (
 	targetCaster               = 1
 	targetEnemy                = 6
 	targetSrcAreaEnemy         = 15
+	targetDestDB               = 17  // TARGET_DEST_DB
 	targetDestCaster           = 18  // TARGET_DEST_CASTER (SharedDefines.h:1455)
 	targetUnitCasterAreaParty  = 20  // TARGET_UNIT_CASTER_AREA_PARTY (SharedDefines.h:1456)
 	targetUnitTargetAlly       = 21  // TARGET_UNIT_TARGET_ALLY (SharedDefines.h:1457)
@@ -1502,6 +1504,99 @@ var spells = []spell{
 	{id: 49519, castTimeIdx: 1, durIdx: 9, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
 	}},
+	// 50476/50495/50496 Summon Menagerie (wago.tools 3.4.0.43659,
+	// browser verdict 2026-11-15 05:43 EST): castTimeIdx 15 (4000 ms),
+	// durIdx 0 (no SpellDuration row), rangeIdx 5 (Long Range, 0-40),
+	// school 0x40 Arcane; single eff0 5 TELEPORT_UNITS Die 1 Base -1
+	// TargetA 1 TARGET_UNIT_CASTER TargetB 17 TARGET_DEST_DB,
+	// chainAmplitude 1. NOT carried by the seed struct (same as all
+	// seeded rows): SpellEffect Pos_facing (0.0035 / 4.2588 / 4.2588 —
+	// the DB-dest facing), SpellMisc Attributes all 0,
+	// SpellAuraOptions ProcChance 101. The teleport dest rides
+	// TARGET_DEST_DB (spell_target_position in the deployment world
+	// DB); the ev14 SpellHit trigger fires on the hit regardless, so
+	// the platform cycle advances even when the dest row is absent.
+	{id: 50476, castTimeIdx: 15, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, basePoints: -1, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	{id: 50495, castTimeIdx: 15, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, basePoints: -1, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	{id: 50496, castTimeIdx: 15, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, basePoints: -1, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 51112 Teleport (wago.tools 3.4.0.43659, 2026-11-15 05:43 EST):
+	// castTimeIdx 4 (1000 ms), durIdx 0, rangeIdx 1 (Self Only, 0-0),
+	// school 0x40 Arcane; single eff0 5 TELEPORT_UNITS Die 0 Base 0
+	// TargetA 1 TargetB 17, chainAmplitude 1. Pos_facing 4.7997 not
+	// carried (see 50476 note); Attributes all 0, ProcChance 101 not
+	// carried. Teleports the caster to the center of The Oculus.
+	{id: 51112, castTimeIdx: 4, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effTeleportUnits, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 51110 Empowered Arcane Explosion (wago.tools 3.4.0.43659,
+	// 2026-11-15 05:43 EST): castTimeIdx 170 (8000 ms), durIdx 0,
+	// rangeIdx 1 (Self Only), school 0x40 Arcane, dispel 1; single
+	// eff0 2 SCHOOL_DAMAGE Die 1 Base 8999 TargetA 22
+	// TARGET_SRC_CASTER TargetB 15 TARGET_UNIT_SRC_AREA_ENEMY
+	// RadiusIndex_0 33 (99 yd), chainAmplitude 1. NOT carried:
+	// SpellMisc Attributes_0 136, SpellCooldowns StartRecoveryTime
+	// 1500, BonusCoefficient 1, ProcChance 101.
+	{id: 51110, castTimeIdx: 170, rangeIdx: 1, school: schoolArcane, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 8999, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 33, chainAmplitude: 1},
+	}},
+	// 51121 Time Bomb (wago.tools 3.4.0.43659, 2026-11-15 05:43 EST):
+	// castTimeIdx 4 (1000 ms), durIdx 32 (6000 ms), rangeIdx 5
+	// (Long Range), school 0x40 Arcane; eff0 2 SCHOOL_DAMAGE Die 401
+	// Base 3799 TargetA 6 TARGET_UNIT_TARGET_ENEMY, chainAmplitude 1;
+	// eff1 6 APPLY_AURA aura 23 (PERIODIC_TRIGGER_SPELL per C++
+	// SpellAuraDefines.h:103 — the browser verdict's PERIODIC_DUMMY
+	// label is wrong; 226 is PERIODIC_DUMMY) AuraPeriod 6000 Die 1
+	// Base 0 TargetA 6, chainAmplitude 1. The delayed AoE leg rides
+	// that aura with TriggerSpell 0 in the DBC, so it has no Go model
+	// — the direct damage is the carried leg. NOT carried: SpellMisc
+	// Attributes_3 256, BonusCoefficient 1, ProcChance 101.
+	{id: 51121, castTimeIdx: 4, durIdx: 32, rangeIdx: 5, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 401, basePoints: 3799, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 6000, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 51602 Evocation (wago.tools 3.4.0.43659, 2026-11-15 05:43 EST;
+	// wago SpellName is "Evocation", the boss_urom.lua SPELL_EVOCATE
+	// label is the C++ enum name): castTimeIdx 1 (instant), durIdx 21
+	// (-1), rangeIdx 1 (Self Only), school 0x40 Arcane; single eff0
+	// 6 APPLY_AURA aura 4 DUMMY Die 1 Base 0 TargetA 1,
+	// chainAmplitude 1. NOT carried: SpellMisc Attributes
+	// 256/268435520/0/268435456, ProcChance 101.
+	{id: 51602, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 51103 Frostbomb (wago.tools 3.4.0.43659, 2026-11-15 05:43 EST):
+	// castTimeIdx 16 (1500 ms), durIdx 3 (60000 ms), rangeIdx 5
+	// (Long Range), school 0x10 Frost, manaCost 90 (SpellPower row);
+	// eff0 2 SCHOOL_DAMAGE Die 1 Base 649 TargetA 53
+	// TARGET_DEST_TARGET_ENEMY TargetB 16 TARGET_UNIT_DEST_AREA_ENEMY
+	// RadiusIndex_0 18 (15 yd); eff1 27 PERSISTENT_AREA_AURA aura 3
+	// PERIODIC_DAMAGE AuraPeriod 1000 Die 1 Base 649 TargetA 53
+	// TargetB 28 TARGET_DEST_DYNOBJ_ENEMY RadiusIndex_0 18; eff2 27
+	// PERSISTENT_AREA_AURA aura 33 MOD_DECREASE_SPEED Die 1 Base -36
+	// TargetA 53 TargetB 28 RadiusIndex_0 18; chainAmplitude 1 on
+	// all three. NOT carried: SpellMisc Attributes_0 65536 /
+	// Attributes_5 1073741824, BonusCoefficient 1, ProcChance 101.
+	{id: 51103, castTimeIdx: 16, durIdx: 3, rangeIdx: 5, school: schoolFrost, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 649, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 649, targetA: targetDestTargetEnemy, targetB: targetDestDynobjEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraDecSpeed, dieSides: 1, basePoints: -36, targetA: targetDestTargetEnemy, targetB: targetDestDynobjEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 58025 Frost Buffet (wago.tools 3.4.0.43659, 2026-11-15 05:43
+	// EST): castTimeIdx 1 (instant), durIdx 28 (5000 ms), rangeIdx 13
+	// (Anywhere - Unlimited, 0-50000), school 0x10 Frost; single
+	// eff0 6 APPLY_AURA aura 14 MOD_DAMAGE_TAKEN Die 1 Base 49
+	// MiscValue_0 16 (Frost school mask) TargetA 6,
+	// chainAmplitude 1. NOT carried: SpellAuraOptions
+	// CumulativeAura 50, SpellMisc Attributes, ProcChance 101.
+	{id: 58025, castTimeIdx: 1, durIdx: 28, rangeIdx: 13, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 49, targetA: targetEnemy, misc: 16, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -1582,6 +1677,7 @@ func main() {
 		{12, f32(100), f32(0), f32(100)}, // real SpellRadius 12 for 29963 eff1 (wago.tools 3.4.0.47659, aux read 54197700)
 		{30, f32(500), f32(0), f32(500)}, // real SpellRadius 30 for 42442 (wago.tools 3.4.0.47659, aux read 54197700)
 		{40, f32(9), f32(0), f32(9)},     // real SpellRadius 40 = 29961 RadiusIndex_1 (wago.tools 3.4.0.47659, aux read 54197700); UNREFERENCED — no seeded spell uses radiusIdx 40 until the _0-vs-_1 radius question settles
+		{33, f32(99), f32(0), f32(99)},   // real SpellRadius 33 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
@@ -1594,13 +1690,15 @@ func main() {
 		{4, 1000, 0}, // real SpellCastTimes 4 for 31266 (wago.tools 3.4.0.43659)
 		{92001, 2000, 0},
 		{92002, 3000, 0},
-		{2, 250, 0},   // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
-		{14, 3000, 0}, // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
-		{16, 1500, 0}, // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
-		{19, 2500, 0}, // real SpellCastTimes 19 for 66042 (wago.tools 3.4.0.43659)
-		{90, 1700, 0}, // real SpellCastTimes 90 for 65868 (wago.tools 3.4.0.43659)
-		{7, 10000, 0}, // real SpellCastTimes 7 for 29973 Arcane Explosion (wago.tools 3.4.0.47659, aux read 54197700)
-		{1, 0, 0},     // real SpellCastTimes 1 (instant) for 41342 Shared Rule (wago.tools 3.4.0.43659)
+		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
+		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
+		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
+		{19, 2500, 0},  // real SpellCastTimes 19 for 66042 (wago.tools 3.4.0.43659)
+		{90, 1700, 0},  // real SpellCastTimes 90 for 65868 (wago.tools 3.4.0.43659)
+		{7, 10000, 0},  // real SpellCastTimes 7 for 29973 Arcane Explosion (wago.tools 3.4.0.47659, aux read 54197700)
+		{1, 0, 0},      // real SpellCastTimes 1 (instant) for 41342 Shared Rule (wago.tools 3.4.0.43659)
+		{15, 4000, 0},  // real SpellCastTimes 15 for 50476/50495/50496 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{170, 8000, 0}, // real SpellCastTimes 170 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
