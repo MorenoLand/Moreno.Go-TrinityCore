@@ -1317,33 +1317,6 @@ end
 
 RegisterSpellEvent(SPELL_SUMMON_SPIRITS, 5, summonSpiritsDummyHit)
 
--- C++ spell_deathwhisper_summon_spirits::HandleScriptEffect
--- (boss_lady_deathwhisper.cpp:996-1000, registered :1066):
--- EFFECT_0 DUMMY OnEffectHitTarget — the caster casts
--- SPELL_SUMMON_SHADE (71363) on the hit unit, triggered. PORTED via
--- RegisterSpellEvent (72478, OnEffectHitTarget = 5); the ev5 hook
--- fires per live hit target on the creature path (runtime.go
--- SpellEvents contract), players included, so the shade summons at
--- the 72478 pick like C++ — this is the only shade-summon path in Go
--- (nothing else summons 38222). DORMANT until Spell.dbc ships 72478
--- (same gate as the shade chain above). Corrects the header's stale
--- "no-SpellScript-bridge" claim for this leg (the ev5 bridge is live:
--- archimonde 39142 / ahune 46372 / malygos 59084 precedents).
-local SPELL_SUMMON_SHADE = 71363 -- boss_lady_deathwhisper.cpp:69
-
-local function summonSpiritsDummy(event, spell, hitTarget, effectIndex)
-    if effectIndex ~= 0 or hitTarget == nil then
-        return
-    end
-    local caster = spell:GetCaster()
-    if caster == nil then
-        return
-    end
-    caster:CastSpell(hitTarget, SPELL_SUMMON_SHADE, true)
-end
-
-RegisterSpellEvent(SPELL_SUMMON_SPIRITS, 5, summonSpiritsDummy)
-
 -- C++ boss_lady_deathwhisper::JustSummoned (:466-488): a Vengeful
 -- Shade (38222) pops the front of _nextVengefulShadeTargetGUID (the
 -- ev15 queue above) and is SetGUID with it (the shade stores it as
