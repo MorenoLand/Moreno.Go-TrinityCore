@@ -448,6 +448,8 @@ local SPELL_INVOCATION_VISUAL_TALDARAM = 71081 -- boss_blood_prince_council.cpp:
 local SPELL_INVOCATION_VISUAL_KELESETH = 71080 -- boss_blood_prince_council.cpp:125
 local SPELL_EMPOWERED_SHADOW_LANCE = 71815 -- boss_blood_prince_council.cpp:80
 local SPELL_CONJURE_EMPOWERED_FLAME = 72040 -- boss_blood_prince_council.cpp:97
+local SPELL_CONJURE_FLAME_SUMMON = 71719 -- 71718 dummy eff0 value (Wowhead WotLK Classic); summons Ball of Flame 38332
+local SPELL_CONJURE_EMPOWERED_FLAME_SUMMON = 72041 -- 72040 dummy eff0 value (Wowhead WotLK Classic); summons Ball of Inferno Flame 38451
 local SPELL_EMPOWERED_SHOCK_VORTEX = 72039 -- boss_blood_prince_council.cpp:109
 local ACTION_CAST_INVOCATION = 4 -- boss_blood_prince_council.cpp:156
 local ACTION_REMOVE_INVOCATION = 5 -- boss_blood_prince_council.cpp:157
@@ -726,6 +728,30 @@ local function onTaldaramConjure(creature, guid)
         creature:Talk(SAY_TALDARAM_SPECIAL)
         schedule(guid, "conjure", {20000, 30000}, function() onTaldaramConjure(creature, guid) end)
     end
+end
+
+-- C++ spell_taldaram_summon_flame_ball::HandleScript (:1111-1129):
+-- dummy eff0 PreventHitDefaultEffect + caster casts GetEffectValue()
+-- on self, triggered. GetEffectValue() is the dummy effect's damage
+-- value (SpellScript.cpp:666-676): 71718 -> 71719 Ball of Flames Summon,
+-- 72040 -> 72041 Ball of Inferno Flame summon (Wowhead WotLK Classic,
+-- 2026-11-15). DORMANT until Spell.dbc ships the 71718/72040 records:
+-- the creature-cast dummy arm is spellKnown-gated (boss_ai.go:3648)
+-- and the seed DBC carries neither spell — the judgement/death-coil
+-- precedent in the same function.
+local FLAME_BALL_SUMMON = {
+    [SPELL_CONJURE_FLAME] = SPELL_CONJURE_FLAME_SUMMON,
+    [SPELL_CONJURE_EMPOWERED_FLAME] = SPELL_CONJURE_EMPOWERED_FLAME_SUMMON,
+}
+local function taldaramDummyEffect(event, caster, spellID, effIndex, target)
+    if effIndex ~= 0 then
+        return
+    end
+    local summonSpell = FLAME_BALL_SUMMON[spellID]
+    if not summonSpell then
+        return
+    end
+    caster:CastSpell(caster, summonSpell, true)
 end
 
 -- C++ :814-817 valanar EVENT_BERSERK: DoCastSelf(SPELL_BERSERK) +
@@ -1679,6 +1705,7 @@ RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 23, controllerReset)
 RegisterCreatureEvent(ENTRY_BLOOD_ORB_CONTROLLER, 38, controllerDoAction)
 RegisterCreatureEvent(ENTRY_KELESETH, 24, princesReachHome)
 RegisterCreatureEvent(ENTRY_TALDARAM, 24, princesReachHome)
+RegisterCreatureEvent(ENTRY_TALDARAM, 30, taldaramDummyEffect)
 RegisterCreatureEvent(ENTRY_VALANAR, 24, princesReachHome)
 RegisterCreatureEvent(ENTRY_BALL_OF_FLAME, 23, ballOfFlameReset)
 RegisterCreatureEvent(ENTRY_BALL_OF_INFERNO_FLAME, 23, ballOfFlameReset)
