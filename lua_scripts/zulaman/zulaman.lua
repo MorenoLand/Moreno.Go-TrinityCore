@@ -14,35 +14,42 @@
 -- stale — the Eluna gossip creature has GetNPCFlags/SetNPCFlags,
 -- engine/world/lua_objects.go:3265/3274 — so the one-shot below is the
 -- C++-exact UNIT_NPC_FLAG_GOSSIP removal.)
--- The npc_harrison_jones script from the same C++ file is NOT registered:
+-- The npc_harrison_jones script from the same C++ file is PARTLY ported:
 -- its OnGossipSelect gates on the creature's GossipMenuId and its entire
 -- gong-event machine is MovePath-by-ID work (no bridge; MovePoint IS
 -- bridged via creature:MoveTo, lua_creature_events.go:5417, but the chain
--- cannot start without MovePath); the SetEntry (UpdateEntry bridged) / SetDisplayId /
--- SetFacingTo / equipment (SetEquipmentSlots bridged) / emote
--- (PerformEmote bridged) / SetByteValue DEAD (SetStandState bridged)
--- arms ride that unported machine, not a
--- missing bridge — verdict unchanged. Its Reset() (zulaman.cpp:188)
--- only zeroes _gongEvent/_gongTimer, state owned by that same unported
--- machine, so ev23 is a no-op without it and is not registered either
--- (round-28 triage). Instance GetGameObject arms (no instance-script
--- GetGameObject bridge; SetData itself rides Map:GetInstanceData +
--- InstanceData:SetData, scripting/globals.go:1442, instance_hooks.go:51,
--- but no Zul'Aman instance consumer exists), and
+-- cannot start without MovePath); the SetFacingTo / equipment
+-- (SetEquipmentSlots bridged) / emote (PerformEmote bridged) arms ride
+-- that unported machine, not a missing bridge — verdict unchanged. Its
+-- Reset() (zulaman.cpp:188) only zeroes _gongEvent/_gongTimer, state
+-- owned by that same unported machine, so ev23 is a no-op without it
+-- and is not registered either (round-28 triage). Instance
+-- GetGameObject arms (no instance-script GetGameObject bridge; SetData
+-- itself rides Map:GetInstanceData + InstanceData:SetData,
+-- scripting/globals.go:1442, instance_hooks.go:51, but no Zul'Aman
+-- instance consumer exists), and
 -- GetCreatureListWithEntryInGrid/SetImmuneToPC/AI SetData
--- arms for the Amanishi guardians (no bridge); its SpellHit arm fires
+-- arms for the Amanishi guardians (no bridge). Its SpellHit arm IS
+-- ported below (harrisonSpellHit): it fires
 -- only for SPELL_COSMETIC_SPEAR_THROW 43647, which HAS a DB-side caster
 -- (10:41 'zero casters / trigger-absence' claim corrected 2026-11-15:
 -- TDB smart_scripts (23597,0,9) Amani'shi Guardian OOC cast 43647,
 -- target_type 1 SELF; no conditions row for it in the dump, so the
 -- 10:41 'conditions row gates target to Harrison 24375' detail did NOT
 -- verify — the spell's own implicit targets decide the hit, pending the
--- 43647 wago read). Stay-out stands on the other blockers: 43647
--- unseeded, Harrison 24375 unregistered, gong machine unported, no
--- creature:SetByteValue bridge. (ev14 fires on creature-cast hits too,
--- boss_ai.go:4268/4290 fireCreatureSpellHitTarget, inside
--- castCreatureSpellInternalWithBasePoints :1791; the earlier "ev14 fires
--- only for player casts" rationale was stale.)
+-- 43647 wago read; 43647 is still unseeded (sibling seed in flight).
+-- The 2026-11-15 "no creature:SetByteValue bridge" blocker was STALE:
+-- SetByteValue IS bridged on event creatures via
+-- registerIndexedValueMethods (lua_creature_events.go:7121), and the
+-- stand-state byte it writes is the SetStandState twin (:5190), used
+-- here. Registered for BOTH 24358 and 24375: the C++ AI persists across
+-- the GONG_EVENT_5 SetEntry (24358 -> 24375, zulaman.cpp:274), while Go
+-- dispatches ev14 on the live motion.Entry (fireCreatureLuaEvent,
+-- lua_creature_events.go:8060), so a 24358-only registration would never
+-- fire at spear time. (ev14 fires on creature-cast hits too,
+-- boss_ai.go:4267/4282 fireCreatureLuaEvent OnHitBySpell inside
+-- castCreatureSpellInternalWithBasePoints :1791; the earlier "ev14
+-- fires only for player casts" rationale was stale.)
 
 local HOSTAGE_ENTRIES = {23790, 23999, 24024, 24001}
 
@@ -91,3 +98,59 @@ for _, entry in ipairs(HOSTAGE_ENTRIES) do
     RegisterCreatureGossipEvent(entry, 1, onHello)
     RegisterCreatureGossipEvent(entry, 2, onSelect)
 end
+
+-- C++ zulaman.h EntryIds / DisplayIds / ZADataTypes; InstanceScript.h:73
+-- DONE = 3; zulaman.h DATA_GONGEVENT = 7 (BOSS_* 0-5, MAX_ENCOUNTER 6).
+-- 24358 is the only entry carrying ScriptName npc_harrison_jones in TDB
+-- (26091); 24375 is the GONG_EVENT_5 SetEntry target, 24365 the spear
+-- target (its TDB name is Willie's Corpse — the entry, not the name, is
+-- what C++ sets).
+local ENTRY_HARRISON_JONES = 24358
+local ENTRY_HARRISON_JONES_1 = 24375
+local ENTRY_HARRISON_JONES_2 = 24365
+local MODEL_HARRISON_JONES_2 = 22347
+local SPELL_COSMETIC_SPEAR_THROW = 43647
+local DATA_GONGEVENT = 7
+local ENCOUNTER_DONE = 3
+local UNIT_DYNAMIC_FLAGS_FIELD = 79
+local UNIT_DYNFLAG_DEAD = 0x20
+local UNIT_STAND_STATE_DEAD = 7
+
+-- The boss files reach the instance script through the shared
+-- instanceData table (razorgore precedent:
+-- creature:GetMap():GetInstanceData()); nil when no instance binding
+-- exists for the map (no instance_zulaman.lua yet).
+local function instanceDataOf(creature)
+    local mapObj = creature:GetMap()
+    return mapObj and mapObj:GetInstanceData() or nil
+end
+
+-- C++ npc_harrison_jonesAI::SpellHit (zulaman.cpp:209-224): the
+-- Amani'shi Guardian's spear (43647, smart_scripts 23597,0,9, OOC
+-- one-shot) drops Harrison where he stands and starts the 21-minute
+-- quest timer (instance SetData DATA_GONGEVENT DONE -> QuestMinute = 21,
+-- instance_zulaman.cpp:203-210). Arm order is C++-exact; SetStandState
+-- is the SetByteValue(UNIT_FIELD_BYTES_1, 0, UNIT_STAND_STATE_DEAD)
+-- twin, SetTarget(0) the SetTarget(ObjectGuid::Empty) twin, and the
+-- bare SetEntry the Object::SetEntry (Object.h:85) twin — no template
+-- reload, unlike UpdateEntry. The instance write strands until an
+-- instance_zulaman binding exists; the 43647 seed is still pending, so
+-- the arm is live only once the spell resolves.
+local function harrisonSpellHit(event, creature, caster, spellId)
+    if spellId ~= SPELL_COSMETIC_SPEAR_THROW then
+        return
+    end
+    creature:RemoveAllAuras()
+    creature:SetEntry(ENTRY_HARRISON_JONES_2)
+    creature:SetDisplayId(MODEL_HARRISON_JONES_2)
+    creature:SetTarget(0)
+    creature:SetStandState(UNIT_STAND_STATE_DEAD)
+    creature:SetFlag(UNIT_DYNAMIC_FLAGS_FIELD, UNIT_DYNFLAG_DEAD)
+    local data = instanceDataOf(creature)
+    if data ~= nil then
+        data:SetData(DATA_GONGEVENT, ENCOUNTER_DONE)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_HARRISON_JONES, 14, harrisonSpellHit)
+RegisterCreatureEvent(ENTRY_HARRISON_JONES_1, 14, harrisonSpellHit)
