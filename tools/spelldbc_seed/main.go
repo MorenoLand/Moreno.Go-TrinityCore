@@ -3390,9 +3390,9 @@ var spells = []spell{
 	// unseeded-spell blocker for spell_mimiron_fire_search.lua
 	// (single-missing-id file).
 	{id: 64619, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
-		{effect: effDummy, targetA: targetUnitConeEntry, radiusIdx: 18},
-		{effect: effKnockBack, dieSides: 1, basePoints: 199, misc: 100, targetA: targetUnitConeEnemy, radiusIdx: 18},
-		{effect: effSchoolDamage, dieSides: 2301, basePoints: 18849, targetA: targetUnitConeEnemy, radiusIdx: 18},
+		{effect: effDummy, targetA: targetUnitConeEntry, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 199, misc: 100, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 2301, basePoints: 18849, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
 	// 63666 Napalm Shell (wago name; C++ SPELL_NAPALM_SHELL,
 	// boss_mimiron.cpp:88 enum; Lua spell_mimiron_napalm_shell.lua:21) —
@@ -3410,8 +3410,8 @@ var spells = []spell{
 	// 53/16 live. Removes the last unseeded-spell blocker for
 	// spell_mimiron_napalm_shell.lua (single-missing-id file).
 	{id: 63666, castTimeIdx: 5, durIdx: 31, rangeIdx: 13, school: schoolFire, effects: [3]effect{
-		{effect: effSchoolDamage, dieSides: 921, basePoints: 7539, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8},
-		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 3999, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8},
+		{effect: effSchoolDamage, dieSides: 921, basePoints: 7539, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 3999, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
 	// 62997 Plasma Blast (wago name; C++ SPELL_PLASMA_BLAST,
 	// boss_mimiron.cpp:89 enum; Lua spell_mimiron_plasma_blast.lua:17
@@ -3428,7 +3428,7 @@ var spells = []spell{
 	// unseeded-spell blocker for spell_mimiron_plasma_blast.lua
 	// (single-missing-id file).
 	{id: 62997, castTimeIdx: 14, durIdx: 32, rangeIdx: 6, school: schoolSpellfire, effects: [3]effect{
-		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 16999, targetA: targetEnemy},
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 16999, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
