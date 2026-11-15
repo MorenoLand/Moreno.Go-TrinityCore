@@ -99,6 +99,7 @@ const (
 	auraTransform              = 56
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
+	auraModCastingSpeed        = 65 // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
@@ -2917,6 +2918,89 @@ var spells = []spell{
 	// Engine twin: auraDummy 4 live. Removes the last unseeded-spell
 	// blocker for npc_beryl_sorcerer.lua (single-missing-id file).
 	{id: 45631, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 26134 Eye Beam (wago SpellName 3.4.0.47659; C++ SPELL_GREEN_BEAM,
+	// boss_cthun.cpp:85 enum; Lua npc_giant_eye_tentacle.lua:16
+	// CastSpell) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 91b3e4be, DifficultyID 0 rows): single
+	// eff0 2 SCHOOL_DAMAGE Die 751 Base 2624 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY ChainAmplitude 1.5 ChainTargets 60;
+	// castTimeIdx 5 (2000ms, real row), durIdx 0, rangeIdx 13
+	// (Anywhere - Unlimited, real row), school 0x8 Nature, dispel 0 /
+	// mechanic 0 (SpellCategories DispelType 0 / Mechanic 0;
+	// DefenseType 1 / PreventionType 0x1 have no seed fields, 30621
+	// cat270 precedent). NOT carried: BonusCoefficient 1 (no field,
+	// 26143 precedent); no SpellPower / SpellAuraOptions rows. The
+	// seed carries no name field, so the wago "Eye Beam" vs C++
+	// "Green Beam" naming gap is comment-only. Engine twin:
+	// effSchoolDamage 2 live. Removes the last unseeded-spell blocker
+	// for npc_giant_eye_tentacle.lua (single-missing-id file).
+	{id: 26134, castTimeIdx: 5, durIdx: 0, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 751, basePoints: 2624, targetA: targetEnemy, chainTargets: 60, chainAmplitude: 1.5},
+	}},
+	// 70227 Empowered Blood (wago name; C++ SPELL_EMPOWERED_BLOOD,
+	// icecrown_citadel.h:53 enum / .cpp:1166; Lua
+	// go_empowering_blood_orb.lua:56 player CastSpell) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15 browser
+	// read 91b3e4be, DifficultyID 0 rows): eff0 6 APPLY_AURA aura 79
+	// MOD_DAMAGE_PERCENT_DONE Die 1 Base 99 MiscA 127 TargetA 25
+	// TARGET_UNIT_TARGET_ANY chainAmplitude 1, eff1 6 APPLY_AURA aura
+	// 4 DUMMY TargetA 38 TARGET_UNIT_NEARBY_ENTRY chainAmplitude 1
+	// (MiscValue 0 as read), eff2 6 APPLY_AURA aura 65
+	// MOD_CASTING_SPEED_NOT_STACK Die 1 Base 99999 TargetA 25
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 9
+	// (30000ms, real row), rangeIdx 3 (Twenty yards, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; SpellAuraOptions ProcChance 101
+	// (no proc table, 58109 precedent). New const
+	// auraModCastingSpeed 65 (SpellAuraDefines.h:145). Engine twins:
+	// auraModDmgDone 79 / auraDummy 4 / auraModCastingSpeed 65 live
+	// (aura_damage.go:119, aura_haste.go:186), target 38 live
+	// (chain_targets.go:82). Removes the last unseeded-spell blocker
+	// for go_empowering_blood_orb.lua (single-missing-id file).
+	{id: 70227, castTimeIdx: 1, durIdx: 9, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 99, misc: 127, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModCastingSpeed, dieSides: 1, basePoints: 99999, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 70860 Frozen Throne Teleport (wago name; C++ FROZEN_THRONE_
+	// TELEPORT, icecrown_citadel.h:67 enum; Lua
+	// go_icecrown_teleport.lua:107 player CastSpell) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15 browser
+	// read 91b3e4be, DifficultyID 0 rows): eff0 3 DUMMY TargetA 46
+	// TARGET_DEST_NEARBY_ENTRY chainAmplitude 1, eff1 5
+	// TELEPORT_UNITS (wago shows the effect-5 name blank) Die 1
+	// TargetA 25 TARGET_UNIT_TARGET_ANY TargetB 87 TARGET_DEST_DEST
+	// chainAmplitude 1, eff2 6 APPLY_AURA aura 12 MOD_STUN TargetA
+	// 25 chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx
+	// 39 (2000ms, real row), rangeIdx 13 (Anywhere - Unlimited, real
+	// row), school 0x10 Frost, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; SpellAuraOptions ProcChance 101
+	// (no proc table, 58109 precedent). Engine twins: effDummy 3 /
+	// effTeleportUnits 5 (spells.go:431/:17364) / auraStun 12 live,
+	// targets 46/87 live (creature_dest_targets.go:31/:466).
+	// Removes the last unseeded-spell blocker for
+	// go_icecrown_teleport.lua (single-missing-id file).
+	{id: 70860, castTimeIdx: 1, durIdx: 39, rangeIdx: 13, school: schoolFrost, effects: [3]effect{
+		{effect: effDummy, targetA: targetDestNearbyEntry, chainAmplitude: 1},
+		{effect: effTeleportUnits, dieSides: 1, targetA: targetUnitTargetAny, targetB: targetDestDest, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 72915 Arthas Teleporter Ceremony (wago name; C++
+	// SPELL_ARTHAS_TELEPORTER_CEREMONY, icecrown_citadel.h:45 enum;
+	// Lua instance_icecrown_citadel.lua:174) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read 91b3e4be,
+	// DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 4 DUMMY
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 21 (-1 infinite, real row),
+	// rangeIdx 1 (Self Only, real row), school 0x1 Physical, dispel
+	// 0 (no SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent). Engine twin: auraDummy 4 live. Removes the last
+	// unseeded-spell blocker for instance_icecrown_citadel.lua
+	// (single-missing-id file).
+	{id: 72915, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
