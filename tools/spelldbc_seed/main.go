@@ -1827,7 +1827,7 @@ var spells = []spell{
 	// EffectBonusCoefficient 0.1 (seed has no coefficient field);
 	// SpellAuraOptions ProcChance 25 / ProcCategoryRecovery 4000
 	// (seed has no SpellAuraOptions table) and the trigger spell
-	// 15574 is unseeded (follow-up wago read). Removes the last
+	// 15574 is now seeded below (follow-up wago read 2026-11-15). Removes the last
 	// unseeded-spell blocker for boss_ambassador_flamelash.lua
 	// (single-missing-id file in the unseeded-live-cast census).
 	{id: 15573, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolFire, dispel: 1, effects: [3]effect{
@@ -1886,7 +1886,7 @@ var spells = []spell{
 	// NOT carried: EffectBonusCoefficient 1 (neutral; seed has no
 	// coefficient field); SpellAuraOptions ProcChance 100 (seed
 	// has no SpellAuraOptions table). The 38196 Vampiric Aura
-	// itself stays unseeded (follow-up read) — this row removes
+	// itself is now seeded below (follow-up read 2026-11-15) — this row removes
 	// the heal-side blocker only. Removes the last unseeded-spell
 	// blocker for boss_anetheron.lua (single-missing-id file).
 	{id: 31285, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
@@ -1986,6 +1986,49 @@ var spells = []spell{
 	{id: 16079, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 47, basePoints: 294, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
+	// 15574 Fire Blast (boss_ambassador_flamelash.cpp:24 enum,
+	// :70-72 DoCastVictim 15573 on a 2s init / 7s re-arm timer; the
+	// 15573 aura 42 PROC_TRIGGER_SPELL fires this spell on proc;
+	// C++ names only 15573 — 15574 is the aura's TriggerSpell per
+	// wago) — wago.tools 3.4.0.47659 SpellEffect row 691927 +
+	// SpellMisc 325213 + SpellCategories 74494 + SpellClassOptions
+	// 45137 (2026-11-15 browser read): single eff0 2
+	// SCHOOL_DAMAGE Die 41 Base 219 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1 (220-260 damage);
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration
+	// row 0 exists in this build), rangeIdx 3 (Twenty yards, real
+	// row added below), school 0x4 Fire, dispel 0
+	// (SpellCategories 74494). NOT carried: EffectBonusCoefficient
+	// 0 / SpellClassSet 3 Mage + class mask 131074 (seed has no
+	// class fields); no SpellPower row (no mana cost), no
+	// SpellAuraOptions row. Engine twin: effSchoolDamage live
+	// handler; proc-trigger aura 42 fires it (procs.go:1287).
+	// Completes the 15573 proc leg for
+	// boss_ambassador_flamelash.lua.
+	{id: 15574, castTimeIdx: 1, rangeIdx: 3, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 41, basePoints: 219, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 38196 Vampiric Aura (boss_anetheron.cpp:29 enum; Lua
+	// boss_anetheron.lua:117 self-cast, triggered, 5s init ->
+	// {10s,20s} re-arm) — wago.tools 3.4.0.47659 SpellEffect row
+	// 858697 + SpellMisc 455942 + SpellCategories 115683
+	// (2026-11-15 browser read): single eff0 6 APPLY_AURA aura 4
+	// DUMMY Die 0 Base 0 TargetA 22 TARGET_SRC_CASTER TargetB 30
+	// TARGET_UNIT_SRC_AREA_ALLY RadiusIndex 20 (25yd, real row
+	// added below) chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 28 (5000ms, real row — 31308 precedent),
+	// rangeIdx 1 (Self Only, real row), school 0x20 Shadow,
+	// dispel 0 (SpellCategories 115683). NOT carried:
+	// SpellAuraOptions ProcChance 100 / ProcTypeMask 0x14 (seed
+	// has no SpellAuraOptions table) — the RegisterAuraEvent proc
+	// leg (boss_anetheron.lua:251-256, heal 31285) stays DORMANT
+	// on that ground; the timer self-cast arm now resolves. No
+	// SpellPower row (no mana cost), no SpellClassOptions row.
+	// Engine twin: auraDummy live handler. Removes the timer-arm
+	// blocker for boss_anetheron.lua.
+	{id: 38196, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 20, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -2052,6 +2095,7 @@ func main() {
 		{8, f32(5), f32(0), f32(5)},          // real SpellRadius 8 for 31263 (wago.tools 3.4.0.43659)
 		{15, f32(3), f32(0), f32(3)},         // real SpellRadius 15 for 31264 (wago.tools 3.4.0.43659)
 		{10, f32(30), f32(0), f32(30)},       // real SpellRadius 10 for 31308 (wago.tools 3.4.0.43659)
+		{20, f32(25), f32(0), f32(25)},       // real SpellRadius 20 for 38196 (wago.tools 3.4.0.47659)
 		{91001, f32(8), f32(0), f32(8)},
 		{91002, f32(10), f32(0), f32(10)},
 		{91003, f32(15), f32(0), f32(15)},
@@ -2106,6 +2150,7 @@ func main() {
 		{1, f32(0), f32(0), f32(0), f32(0), 0},       // real SpellRange 1 "Self Only" for 31308 (wago.tools 3.4.0.43659)
 		{2, f32(0), f32(0), f32(5), f32(5), 1},       // real SpellRange 2 "Combat Range" for interrupt spells (wago.tools 3.4.0.43659, Flags 0x1)
 		{34, f32(0), f32(0), f32(25), f32(25), 0},    // real SpellRange 34 "Twenty-Five yards" for 57994 (wago.tools 3.4.0.43659)
+		{3, f32(0), f32(0), f32(20), f32(20), 0},     // real SpellRange 3 "Twenty yards" for 15574 (wago.tools 3.4.0.47659)
 		{93001, f32(0), f32(0), f32(0), f32(0), 0},
 		{93002, f32(0), f32(0), f32(5), f32(5), 0},
 		{93003, f32(8), f32(8), f32(25), f32(25), 0},
