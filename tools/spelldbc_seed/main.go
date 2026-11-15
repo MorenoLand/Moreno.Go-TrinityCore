@@ -2718,12 +2718,27 @@ var spells = []spell{
 	// (Self Only, real row), school 0x1 Physical, dispel 0 (no
 	// SpellCategories row). NOT carried: no SpellPower row; no
 	// SpellAuraOptions row. Engine twin: auraPeriodicTrig 23 live
-	// (spells.go:44959, spell_dummy.go:230). FOLLOW-UP: 18269 (periodic
-	// trigger) unseeded, needs its own wago read. Removes the last
-	// unseeded-spell blocker for npc_aged_dying_ancient_kodo.lua
-	// (single-missing-id file).
+	// (spells.go:44959, spell_dummy.go:230). FOLLOW-UP 18269 (periodic
+	// trigger) seeded below from its own wago read (e6260189).
+	// Removes the last unseeded-spell blocker for
+	// npc_aged_dying_ancient_kodo.lua (single-missing-id file).
 	{id: 18377, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, targetA: targetCaster, auraPeriod: 300000, trigger: 18269},
+	}},
+	// 18269 Kodo Kombobulator (wago name; periodic trigger of 18377
+	// Kodo Kombobulator, zone_desolace.cpp:52; Lua
+	// npc_aged_dying_ancient_kodo.lua:107) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read e6260189,
+	// DifficultyID 0 rows): single eff0 3 DUMMY aura 0 TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 0, rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; no SpellAuraOptions row. Engine twin: effDummy
+	// live (spells.go:375). NOTE: 36294 (44326 proc trigger) has NO
+	// ROWS in 3.4.0.47659 (all tables, hotfixes on+off) — unseedable
+	// from this build; stays unseeded.
+	{id: 18269, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
