@@ -126,6 +126,7 @@ const (
 	schoolNature               = 8
 	schoolFrost                = 16
 	schoolFrostfire            = 20 // Frost (16) + Fire (4), wago SpellMisc 47610
+	schoolSpellfire            = 68 // Arcane (64) + Fire (4), wago SpellMisc 62997
 	schoolShadow               = 32
 	schoolArcane               = 64
 	targetCaster               = 1
@@ -149,6 +150,7 @@ const (
 	targetDestDynobjEnemy      = 28  // TARGET_DEST_DYNOBJ_ENEMY (SharedDefines.h:1464)
 	targetDestChannelTarget    = 76  // TARGET_DEST_CHANNEL_TARGET (SpellInfo.cpp:296)
 	targetUnitConeEnemy104     = 104 // TARGET_UNIT_CONE_ENEMY_104 (SharedDefines.h:1540)
+	targetUnitConeEntry        = 60  // TARGET_UNIT_CONE_ENTRY (SharedDefines.h:1496)
 	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
 	targetUnitSrcAreaEntry     = 7   // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
 	targetUnitDestAreaEntry    = 8   // TARGET_UNIT_DEST_AREA_ENTRY (SharedDefines.h:1449)
@@ -3353,6 +3355,80 @@ var spells = []spell{
 	{id: 12544, dispel: 1, manaCost: 10, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModResistance, dieSides: 1, basePoints: 11, misc: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraProcTriggerSpell, trigger: 6136, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 75416 Rally (wago name; C++ SPELL_RALLY, ruby_sanctum.cpp:53 enum;
+	// Lua ruby_sanctum.lua:22 triggered self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// a121c15b, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 79
+	// MOD_DAMAGE_PERCENT_DONE dieSides 1 basePoints 24 misc 127 TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 1 (10000ms, real row), rangeIdx 1 (Self Only, real
+	// row), school 0x1 Physical, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin: auraModDmgDone 79 live
+	// (aura_damage.go:119), target 1 live. Removes the last
+	// unseeded-spell blocker for ruby_sanctum.lua (single-missing-id
+	// file).
+	{id: 75416, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 24, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64619 Water Spray (wago name; C++ SPELL_WATER_SPRAY,
+	// boss_mimiron.cpp:153 enum; Lua spell_mimiron_fire_search.lua:27
+	// triggered on hit unit) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-15 browser read a121c15b, DifficultyID 0 rows):
+	// eff0 3 DUMMY TargetA 60 TARGET_UNIT_CONE_ENTRY RadiusIndex 18;
+	// eff1 98 KNOCK_BACK dieSides 1 basePoints 199 misc 100 TargetA 24
+	// TARGET_UNIT_CONE_ENEMY_24 RadiusIndex 18; eff2 2 SCHOOL_DAMAGE
+	// dieSides 2301 basePoints 18849 TargetA 24 RadiusIndex 18;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration
+	// row), rangeIdx 1 (Self Only, real row), school 0x10 Frost, dispel
+	// 0 (no SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109 precedent).
+	// Engine twins: effDummy 3 / effKnockBack 98 / effSchoolDamage 2
+	// live, targets 60/24 live (implicitTargetConeEntry 60,
+	// friendly_nearby_cone_targets.go:19). Removes the last
+	// unseeded-spell blocker for spell_mimiron_fire_search.lua
+	// (single-missing-id file).
+	{id: 64619, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effDummy, targetA: targetUnitConeEntry, radiusIdx: 18},
+		{effect: effKnockBack, dieSides: 1, basePoints: 199, misc: 100, targetA: targetUnitConeEnemy, radiusIdx: 18},
+		{effect: effSchoolDamage, dieSides: 2301, basePoints: 18849, targetA: targetUnitConeEnemy, radiusIdx: 18},
+	}},
+	// 63666 Napalm Shell (wago name; C++ SPELL_NAPALM_SHELL,
+	// boss_mimiron.cpp:88 enum; Lua spell_mimiron_napalm_shell.lua:21) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15
+	// browser read a121c15b, DifficultyID 0 rows): eff0 2 SCHOOL_DAMAGE
+	// dieSides 921 basePoints 7539 TargetA 53 TARGET_DEST_TARGET_ENEMY
+	// TargetB 16 TARGET_UNIT_DEST_AREA_ENEMY RadiusIndex 8; eff1 6
+	// APPLY_AURA aura 3 PERIODIC_DAMAGE period 1000 dieSides 1
+	// basePoints 3999 TargetA 53 TargetB 16 RadiusIndex 8; castTimeIdx
+	// 5 (2000ms, real row), durIdx 31 (8000ms, real row), rangeIdx 13
+	// (Anywhere - Unlimited, real row), school 0x4 Fire, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109 precedent).
+	// Engine twins: effSchoolDamage 2 / auraPeriodicDmg 3 live, targets
+	// 53/16 live. Removes the last unseeded-spell blocker for
+	// spell_mimiron_napalm_shell.lua (single-missing-id file).
+	{id: 63666, castTimeIdx: 5, durIdx: 31, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 921, basePoints: 7539, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8},
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 3999, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 8},
+	}},
+	// 62997 Plasma Blast (wago name; C++ SPELL_PLASMA_BLAST,
+	// boss_mimiron.cpp:89 enum; Lua spell_mimiron_plasma_blast.lua:17
+	// non-triggered) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read a121c15b, DifficultyID 0 rows):
+	// single eff0 6 APPLY_AURA aura 3 PERIODIC_DAMAGE period 1000
+	// dieSides 1 basePoints 16999 TargetA 6 TARGET_UNIT_TARGET_ENEMY
+	// chainAmplitude 1; castTimeIdx 14 (3000ms, real row), durIdx 32
+	// (6000ms, real row), rangeIdx 6 (Vision Range, real row), school
+	// 0x44 Spellfire (Arcane 64 + Fire 4), dispel 0 (no SpellCategories
+	// row). NOT carried: no SpellPower row; SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent). Engine twin:
+	// auraPeriodicDmg 3 live, target 6 live. Removes the last
+	// unseeded-spell blocker for spell_mimiron_plasma_blast.lua
+	// (single-missing-id file).
+	{id: 62997, castTimeIdx: 14, durIdx: 32, rangeIdx: 6, school: schoolSpellfire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 16999, targetA: targetEnemy},
 	}},
 }
 
