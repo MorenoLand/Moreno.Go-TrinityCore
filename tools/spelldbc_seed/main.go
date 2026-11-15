@@ -2805,6 +2805,66 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraRoot, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, targetA: targetCaster, auraPeriod: 300000, trigger: 18954, chainAmplitude: 1},
 	}},
+	// 20514 Ruul Snowhoof Shapechange (DND) (wago name; C++ RUUL_SHAPECHANGE,
+	// zone_ashenvale.cpp:49 enum; Lua npc_ruul_snowhoof.lua:64 RemoveAura)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 57f8c4bb, DifficultyID 0 rows): single eff0 6 APPLY_AURA
+	// aura 56 TRANSFORM misc 12819 TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; castTimeIdx 4 (1000ms, real row), durIdx 21 (-1
+	// infinite, real row), rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; no SpellAuraOptions row; bonus coefficient 1 (no
+	// field, 26143 precedent). Engine twin: auraTransform 56 live
+	// (spells.go:711, 26232 precedent). Removes the last unseeded-spell
+	// blocker for npc_ruul_snowhoof.lua (single-missing-id file).
+	{id: 20514, castTimeIdx: 4, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, misc: 12819, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 55761 Air Revenant Entrance (wago name; C++ SPELL_JAINA_SPAWNIN,
+	// zone_orgrimmar.cpp:524 enum; Lua npc_thrall_herald_of_war.lua:79
+	// CastSpell on Jaina) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 57f8c4bb, DifficultyID 0 rows):
+	// single eff0 46 SPAWN TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0, rangeIdx 1 (Self Only,
+	// real row), school 0x1 Physical, dispel 0 (no SpellCategories row).
+	// NOT carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin: effSpawn 46
+	// clientside-only (spells.go:19747, 37090 precedent). Removes the last
+	// unseeded-spell blocker for npc_thrall_herald_of_war.lua
+	// (single-missing-id file).
+	{id: 55761, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSpawn, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 42486 Ooze Channel Credit (wago name; C++ SPELL_OOZE_CHANNEL_CREDIT,
+	// zone_dustwallow_marsh.cpp:94 enum; Lua zone_dustwallow_marsh.lua:10
+	// triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 57f8c4bb, DifficultyID 0 rows):
+	// single eff0 134 KILL_CREDIT misc 23797 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 0, rangeIdx 13 (Anywhere - Unlimited, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; no SpellAuraOptions row. Engine twin:
+	// effKillCredit2 134 live (spells.go:17749, 58109 precedent). Removes
+	// the last unseeded-spell blocker for zone_dustwallow_marsh.lua
+	// (single-missing-id file).
+	{id: 42486, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKillCredit2, misc: 23797, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 53435 Teleport to CoT Stratholme Phase 4 (wago name; C++
+	// SPELL_TELEPORT_PLAYER, culling_of_stratholme.cpp:275 enum; Lua
+	// culling_of_stratholme.lua:133 CastSpell) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read 57f8c4bb,
+	// DifficultyID 0 rows): single eff0 77 SCRIPT_EFFECT TargetA 25
+	// TARGET_UNIT_TARGET_ANY chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 0, rangeIdx 4 (Medium Range 30yd, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twin: effScriptEffect 77 live
+	// (spells.go:18207, 66545 precedent). Removes the last unseeded-spell
+	// blocker for culling_of_stratholme.lua (single-missing-id file).
+	{id: 53435, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
 }
 
 func main() {
