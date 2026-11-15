@@ -54,6 +54,7 @@ const (
 	effApplyAura               = 6
 	effHealthLeech             = 9
 	effHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
+	effLearnSpell              = 36 // SPELL_EFFECT_LEARN_SPELL (SharedDefines.h:847)
 	effSummon                  = 28
 	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize                = 30
@@ -80,10 +81,12 @@ const (
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraStun                   = 12
 	auraModDamageTaken         = 14 // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
+	auraModDamageDone          = 13 // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
 	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
 	auraObsModHealth           = 20 // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
 	auraObsModPower            = 21 // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
 	auraPeriodicTrig           = 23
+	auraProcTriggerSpell       = 42 // SPELL_AURA_PROC_TRIGGER_SPELL (SpellAuraDefines.h:122)
 	auraRoot                   = 26
 	auraSilence                = 27
 	auraModIncreaseSpeed       = 31  // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
@@ -1810,6 +1813,102 @@ var spells = []spell{
 	}},
 	{id: 1881, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, dieSides: 1, misc: 15521, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 8},
+	}},
+	// 15573 Fireblast (boss_ambassador_flamelash.cpp:24 enum, :70-72
+	// DoCastVictim on a 2s init / 7s re-arm timer; Lua
+	// boss_ambassador_flamelash.lua:63 victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 691926 + SpellMisc 325212 +
+	// SpellCategories 74493 (2026-11-15 browser read): single eff0
+	// 6 APPLY_AURA aura 42 PROC_TRIGGER_SPELL Die 1 Base 0
+	// TriggerSpell 15574 TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 21 (-1, 68415 precedent), rangeIdx 1 (Self Only,
+	// real row), school 0x4 Fire, dispel 1 (Magic). NOT carried:
+	// EffectBonusCoefficient 0.1 (seed has no coefficient field);
+	// SpellAuraOptions ProcChance 25 / ProcCategoryRecovery 4000
+	// (seed has no SpellAuraOptions table) and the trigger spell
+	// 15574 is unseeded (follow-up wago read). Removes the last
+	// unseeded-spell blocker for boss_ambassador_flamelash.lua
+	// (single-missing-id file in the unseeded-live-cast census).
+	{id: 15573, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolFire, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, trigger: 15574, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 8269 Frenzy (boss_vectus.cpp:32 enum, :66/:95 DoCast(me) on
+	// a 24s timer; Lua boss_vectus.lua:106/:172 self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows 686250/686251/686252
+	// + SpellMisc 320508 + SpellCategories 72752 (2026-11-15
+	// browser read): eff0 6 APPLY_AURA aura 13 MOD_DAMAGE_DONE
+	// Die 1 Base 49 MiscValue 1 (Physical school mask) TargetA 1;
+	// eff1 aura 138 MOD_MELEE_HASTE Base 59 TargetA 1; eff2 aura
+	// 61 MOD_SCALE Base 14 TargetA 1; all chainAmplitude 1
+	// (49+1 = 50% damage, 59+1 = 60% haste, 14+1 = 15% size per
+	// Wowhead); castTimeIdx 1 (instant, real row), durIdx 4
+	// (120000ms, 2 min, real row — 67530 precedent), rangeIdx 1
+	// (Self Only, real row), school 0x1 Physical, dispel 0.
+	// NOT carried: eff0 EffectRealPointsPerLevel 2 (seed has no
+	// per-level field). auraModDamageDone=13 constant added above
+	// (engine twin spells.go:689). Removes the last unseeded-spell
+	// blocker for boss_vectus.lua (single-missing-id file).
+	{id: 8269, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 49, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 59, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 14, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12470 Fire Nova (boss_mordresh_fire_eye.cpp:33 enum,
+	// :117-119 DoCast(me) on {8s,12s} init / {11s,16s} re-arm;
+	// Lua boss_mordresh_fire_eye.lua:155 self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 689767 + SpellMisc 323384 +
+	// SpellCategories 73913 (2026-11-15 browser read): single
+	// eff0 2 SCHOOL_DAMAGE Die 23 Base 147 TargetA 22
+	// TARGET_SRC_CASTER TargetB 15 TARGET_UNIT_SRC_AREA_ENEMY
+	// RadiusIndex 13 (10yd, real row) chainAmplitude 1 (147+1 ..
+	// 147+23 = 148-170 damage per Wowhead); castTimeIdx 5
+	// (2000ms, real row — 44196 precedent), durIdx 0, rangeIdx 1
+	// (Self Only, real row), school 0x4 Fire, manaCost 30
+	// (Wowhead). NOT carried: EffectBonusCoefficient 1 (neutral;
+	// seed has no coefficient field). Removes the last
+	// unseeded-spell blocker for boss_mordresh_fire_eye.lua
+	// (single-missing-id file).
+	{id: 12470, castTimeIdx: 5, rangeIdx: 1, school: schoolFire, manaCost: 30, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 23, basePoints: 147, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 31285 Vampiric Aura Heal (boss_anetheron.cpp:30 enum, :277
+	// ValidateSpellInfo, :290 triggered CastSpell with
+	// SPELLVALUE_BASE_POINT0 = damage * 3; Lua
+	// boss_anetheron.lua:263 CastCustomSpell triggered) —
+	// wago.tools 3.4.0.47659 SpellEffect row 849875 + SpellMisc
+	// 448740 + SpellCategories 113032 (2026-11-15 browser read):
+	// single eff0 10 HEAL Die 1 Base 0 TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1 (the heal value comes
+	// from the custom-cast base point, damage * 3);
+	// castTimeIdx 1 (instant, real row), durIdx 0, rangeIdx 1
+	// (Self Only, real row), school 0x20 Shadow, dispel 0.
+	// NOT carried: EffectBonusCoefficient 1 (neutral; seed has no
+	// coefficient field); SpellAuraOptions ProcChance 100 (seed
+	// has no SpellAuraOptions table). The 38196 Vampiric Aura
+	// itself stays unseeded (follow-up read) — this row removes
+	// the heal-side blocker only. Removes the last unseeded-spell
+	// blocker for boss_anetheron.lua (single-missing-id file).
+	{id: 31285, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effHeal, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 14894 Learn Smelt (boss_tomb_of_seven.cpp:28 enum, :75
+	// player->CastSpell(player, 14894, false) on gossip select;
+	// Lua boss_gloomrel.lua:70 player cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row 691854 + SpellMisc 325150
+	// (2026-11-15 browser read): single eff0 36 LEARN_SPELL
+	// Die 0 Base 0 TriggerSpell 14891 (Smelt Dark Iron)
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0, rangeIdx 6
+	// (Vision Range 100yd, real row), school 0x1 Physical.
+	// No SpellCategories row exists for 14894 (wago FK search
+	// empty), so dispel stays 0. effLearnSpell=36 constant added
+	// above (engine twin spells.go:395, handler :5096/:18410 —
+	// teaches by TriggerSpell ID, so 14891 needs no seed row).
+	// Removes the last unseeded-spell blocker for
+	// boss_gloomrel.lua (single-missing-id file).
+	{id: 14894, castTimeIdx: 1, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effLearnSpell, trigger: 14891, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
