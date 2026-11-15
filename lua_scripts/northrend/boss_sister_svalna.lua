@@ -179,11 +179,13 @@
 --
 -- DOCUMENTED-ONLY (no bridgeable arm):
 -- boss_sister_svalna UpdateAI EVENT_SVALNA_START (:489-491) /
---   EVENT_SVALNA_RESURRECT (:492-495) — Talk(SAY_SVALNA_EVENT_START
---   0) / Talk(SAY_SVALNA_RESURRECT_CAPTAINS 2) + DoCast(me,
---   SPELL_REVIVE_CHAMPION 70053) ride the gauntlet/action
---   machine (scheduled from DoAction legs, :411/:417) — the
---   gothik phase-machine precedent.
+--   EVENT_SVALNA_RESURRECT (:492-495) — PORTED 2026-11-15 as the
+--   DoAction-seeded timers (svalnaDoAction, ev38): Talk(
+--   SAY_SVALNA_EVENT_START 0) / Talk(SAY_SVALNA_RESURRECT_CAPTAINS
+--   2) + DoCast(me, SPELL_REVIVE_CHAMPION 70053). The old
+--   "rides the gauntlet/action machine — gothik precedent" note is
+--   retracted: the machine's receivers are ported, only the
+--   waypoint-machine senders stay out.
 -- boss_sister_svalna JustEngagedWith EVENT_IMPALING_SPEAR
 --   (:359, 40-50s, re-arm 20-25s, :500-509) — PORTED: self-cast
 --   AETHER_SHIELD 71463 then victim-cast IMPALING_SPEAR 71443 on a
@@ -192,16 +194,17 @@
 -- boss_sister_svalna JustEngagedWith EVENT_AETHER_SHIELD
 --   (:360, 100-110s) — scheduled but has NO case in the UpdateAI
 --   switch: dead event, nothing to port (upstream finding).
--- boss_sister_svalna DoAction (:397-428) — ACTION_KILL_CAPTAIN
---   (DoCastSelf SPELL_CARESS_OF_DEATH 70078 triggered + max
---   targets 1), ACTION_START_GAUNTLET (EVENT_SVALNA_START seed),
---   ACTION_RESURRECT_CAPTAINS (EVENT_SVALNA_RESURRECT seed),
---   ACTION_CAPTAIN_DIES (Talk(SAY_SVALNA_CAPTAIN_DEATH 5)),
---   ACTION_RESET_EVENT — ev38 dispatch bridged; senders all unported —
--- KILL_CAPTAIN / RESURRECT_CAPTAINS ride the crok escort machine
--- (boss_sister_svalna.cpp:606,635,661,684), START_GAUNTLET rides the unbridged
--- gauntlet area trigger (:1490), RESET_EVENT rides crok DamageTaken wipe check
--- (:707-708), CAPTAIN_DIES is dead (zero callers); krick relay N/A.
+-- boss_sister_svalna DoAction (:397-428) — PORTED 2026-11-15
+--   (svalnaDoAction, ev38): KILL_CAPTAIN (triggered self-cast
+--   70078; max-targets-1 mod has no bridge), START_GAUNTLET
+--   (SetFarVisible + SetImmuneToAll + 25s EVENT_SVALNA_START seed;
+--   setActive + _isEventInProgress latch drop — no bridge / no Lua
+--   twin, no behavioral delta), RESURRECT_CAPTAINS (7s seed),
+--   CAPTAIN_DIES (Talk 5; zero callers tree-wide, ported dead),
+--   RESET_EVENT (SetFarVisible(false) + svalnaReset twin).
+--   START_GAUNTLET fires live (AT sender + crok forward);
+--   KILL_CAPTAIN / RESURRECT_CAPTAINS / RESET_EVENT receivers are
+--   dormant until the crok waypoint machine / wipe leg land.
 -- boss_sister_svalna SpellHit (:430-437) — PORTED this run:
 --   Talk(EMOTE_SVALNA_BROKEN_SHIELD 8, caster) + RemoveAura(
 --   SPELL_AETHER_SHIELD 71463) on SPELL_HURL_SPEAR 71466 via
@@ -230,12 +233,21 @@
 --   stays out. The _vehicleCheckTimer 500ms UpdateAI leg (:1403-1410,
 --   DespawnOrUnsummon(100ms) when !me->GetVehicle()) rides the same
 --   unported vehicle machine — stays out.
--- npc_crok_scourgebane DoAction (:553-589) — ACTION_START_GAUNTLET
---   intro Talk(SAY_CROK_INTRO_1 0) + EVENT_ARNATH_INTRO_2 (7s,
---   cross-AI Talk SAY_ARNATH_INTRO_2 5) + EVENT_CROK_INTRO_3 (14s,
---   Talk(SAY_CROK_INTRO_3 1)) + EVENT_START_PATHING (35s,
---   Start(true,true)) — machine-gated escort legs, no escort /
---   DoAction bridge (joins the escort queue).
+-- npc_crok_scourgebane DoAction (:553-589) — PORTED 2026-11-15
+--   (crokDoAction, ev38): ACTION_START_GAUNTLET latches +
+--   Svalna forward + intro Talks (0 / Arnath 5 @7s / 1 @14s) +
+--   SetFarVisible + 4-captain fan-out; LoadGrid / setActive /
+--   EVENT_START_PATHING (escort Start, no bridge) stay out.
+--   ACTION_RESET_EVENT leg ported (latches + SetFarVisible(false)),
+--   dormant until the wipe leg lands. The old "machine-gated
+--   escort legs, no escort / DoAction bridge (joins the escort
+--   queue)" note is retracted for the DoAction receivers — only
+--   the escort/waypoint machine itself stays out.
+-- npc_argent_captainAI DoAction (:838-856) — PORTED 2026-11-15
+--   (captainDoAction, ev38, all 8 entries): START_GAUNTLET
+--   (REACT_DEFENSIVE + MoveFollow(crok, dist, angle) +
+--   SetFarVisible; setActive drops, no bridge) and RESET_EVENT
+--   (_firstDeath latch clear).
 -- npc_crok_scourgebane DamageTaken (:691-731) — SPLIT 2026-11-13:
 --   the 10%-health latch is PORTED (crokDamageTaken, ev9): damage = 0
 --   + Talk(SAY_CROK_WEAKENING_*) + DoCast(70714) + 1s
@@ -255,9 +267,10 @@
 --   (no bridge — GetHomePosition is NOT the spawn point: home is
 --   re-stamped on engage for escorted creatures,
 --   creaturemotion.go:1483 atEngageSetHomePosition, the C++
---   Creature::AtEngage twin) and the Svalna RESET_EVENT setActive
---   leg (no bridge; SetFarVisible + Reset-equivalent would be
---   portable via ev38). DoAction ev38 dispatch,
+--   Creature::AtEngage twin) and the FrostwingGauntletRespawner
+--   DoAction fan-out itself (the Svalna/crok/captain RESET_EVENT
+--   receivers ARE ported via ev38 since 2026-11-15 — only the
+--   respawner sender stays out). DoAction ev38 dispatch,
 --   GetCreaturesInRange(333), SetRespawnDelay and
 --   DespawnOrUnsummon are all bridged — the blockers are the three
 --   legs above, not the enumeration. Known cost of the stayed-out
@@ -287,9 +300,12 @@
 --   registered).
 -- The 3 spell scripts join the no-SpellScript-bridge queue (the
 --   boss_moragg optic-link precedent);
---   at_icc_start_frostwing_gauntlet joins the no-AreaTrigger
---   bridge queue (the boss_anubrekhan at_anubrekhan_entrance
---   precedent).
+--   at_icc_start_frostwing_gauntlet PORTED 2026-11-15 (at_*
+--   census; at_icc_start_frostwing_gauntlet.lua) — the old
+--   "joins the no-AreaTrigger bridge queue" note is stale. Its
+--   receiver (crok ev38 DoAction) landed this run, so the
+--   trigger -> crok -> Svalna -> captains chain is live through
+--   the intro Talks; only the escort Start/waypoints stay out.
 -- All svalna Talk() calls accounted for (10 = SAY_SVALNA_KILL 4
 --   (1) + SAY_SVALNA_KILL_CAPTAIN 1 (1) + SAY_SVALNA_DEATH 6 (1)
 --   + SAY_SVALNA_CAPTAIN_DEATH 5 (1, DoAction) +
@@ -309,6 +325,13 @@ local ENTRY_SISTER_SVALNA = 37126
 local ENTRY_CROK_SCOURGEBANE = 37129
 
 local DATA_SISTER_SVALNA = 9 -- icecrown_citadel.h:83
+local DATA_CROK_SCOURGEBANE = 30 -- icecrown_citadel.h:106
+local DATA_CAPTAIN_ARNATH = 31 -- icecrown_citadel.h:107 (brandon 32, grondel 33, rupert 34)
+local ACTION_KILL_CAPTAIN = 1 -- boss_sister_svalna.cpp:197
+local ACTION_START_GAUNTLET = 2 -- :198
+local ACTION_RESURRECT_CAPTAINS = 3 -- :199
+local ACTION_CAPTAIN_DIES = 4 -- :200
+local ACTION_RESET_EVENT = 5 -- :201
 local BOSS_STATE_NOT_STARTED = 0 -- InstanceScript.h:68-76
 local BOSS_STATE_IN_PROGRESS = 1
 local BOSS_STATE_DONE = 3
@@ -329,11 +352,17 @@ local NPC_CAPTAIN_BRANDON_UNDEAD = 37493 -- icecrown_citadel.h:275
 local NPC_CAPTAIN_GRONDEL_UNDEAD = 37494 -- icecrown_citadel.h:276
 local NPC_CAPTAIN_RUPERT_UNDEAD = 37495 -- icecrown_citadel.h:277
 
+local SAY_SVALNA_EVENT_START = 0 -- boss_sister_svalna.cpp:53
 local SAY_SVALNA_KILL_CAPTAIN = 1
+local SAY_SVALNA_RESURRECT_CAPTAINS = 2 -- :57
 local SAY_SVALNA_AGGRO = 3
 local SAY_SVALNA_KILL = 4
+local SAY_SVALNA_CAPTAIN_DEATH = 5 -- :45
 local SAY_SVALNA_DEATH = 6
+local SAY_CROK_INTRO_1 = 0 -- :50
+local SAY_CROK_INTRO_3 = 1 -- :52
 local SAY_CROK_COMBAT_SVALNA = 5 -- boss_sister_svalna.cpp:58
+local SAY_ARNATH_INTRO_2 = 5 -- :51
 local SAY_CROK_WEAKENING_GAUNTLET = 6 -- :65
 local SAY_CROK_WEAKENING_SVALNA = 7 -- :66
 
@@ -342,6 +371,9 @@ local SAY_CAPTAIN_SECOND_DEATH = 3
 local SAY_CAPTAIN_KILL = 2 -- :62
 
 local SPELL_DIVINE_SURGE = 71465
+
+local SPELL_CARESS_OF_DEATH = 70078 -- boss_sister_svalna.cpp:78
+local SPELL_REVIVE_CHAMPION = 70053 -- :80
 
 local SPELL_ICEBOUND_ARMOR = 70714 -- boss_sister_svalna.cpp:73
 
@@ -707,6 +739,85 @@ end
 
 RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 15, svalnaSpellHitTarget)
 
+-- C++ boss_sister_svalna::DoAction :397-428 + UpdateAI :489-497 —
+-- PORTED 2026-11-15 (crok gauntlet receivers, ev38 dispatch bridged,
+-- lua_creature_events.go:929; creature:DoAction live, razorgore
+-- precedent). ACTION_KILL_CAPTAIN :401-402 — DoCastSelf(
+-- SPELL_CARESS_OF_DEATH 70078, TRIGGERED_FULL_MASK) with
+-- SPELLVALUE_MAX_TARGETS 1: the triggered self-cast ports; the
+-- max-targets mod has NO bridge (no CastSpellExtraArgs surface —
+-- only the DBC MaxTargets field, store.go:245), so a multi-target
+-- 70078 is the known deviation (the SpellScript trigger that
+-- consumes the hit is unported anyway). ACTION_START_GAUNTLET
+-- :404-412 — IsAlive gate, SetFarVisible(true) + SetImmuneToAll(
+-- true) (both bridged), EVENT_SVALNA_START 25s -> Talk(
+-- SAY_SVALNA_EVENT_START 0) (:489-491); setActive(true) has NO
+-- bridge (no SetActive surface in engine/) and the
+-- _isEventInProgress latch has no Lua twin — it only gates the C++
+-- UpdateAI early-return, which has no Lua counterpart (timers fire
+-- regardless), so both legs drop with no behavioral delta.
+-- ACTION_RESURRECT_CAPTAINS :414-415 — EVENT_SVALNA_RESURRECT 7s ->
+-- Talk(SAY_SVALNA_RESURRECT_CAPTAINS 2) + DoCast(me,
+-- SPELL_REVIVE_CHAMPION 70053) non-triggered (:492-495).
+-- ACTION_CAPTAIN_DIES :417-418 — Talk(SAY_SVALNA_CAPTAIN_DEATH 5);
+-- whole-tree grep finds ZERO callers (enum :200 + case :417 only),
+-- so the case is ported dead, matching C++. ACTION_RESET_EVENT
+-- :420-424 — SetFarVisible(false) + Reset() (the svalnaReset twin:
+-- boss-state NOT_STARTED unless DONE + cancelTimers +
+-- REACT_DEFENSIVE); setActive(false) drops on the same no-bridge
+-- leg. Senders: START_GAUNTLET now fires (AT sender ported
+-- 2026-11-15, crok ev38 forwards); KILL_CAPTAIN /
+-- RESURRECT_CAPTAINS ride the unported crok waypoint machine
+-- (:606,635,661,684); RESET_EVENT rides the unported wipe leg
+-- (FrostwingGauntletRespawner :276-279) — receivers ported, dormant
+-- until those machines land.
+local function onSvalnaStart(creature, guid)
+    -- C++ UpdateAI pre-loop gate :485 (single-tick no-op per the
+    -- marrowgar precedent): 500ms IsCasting defer, no re-arm
+    -- consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "svalna_start", 500, function() onSvalnaStart(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_SVALNA_EVENT_START)
+end
+
+local function onSvalnaResurrect(creature, guid)
+    -- C++ UpdateAI pre-loop gate :485 (single-tick no-op per the
+    -- marrowgar precedent): 500ms IsCasting defer, no re-arm
+    -- consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "svalna_resurrect", 500, function() onSvalnaResurrect(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_SVALNA_RESURRECT_CAPTAINS)
+    creature:CastSpell(creature, SPELL_REVIVE_CHAMPION)
+end
+
+local function svalnaDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_KILL_CAPTAIN then
+        creature:CastSpell(creature, SPELL_CARESS_OF_DEATH, true)
+    elseif action == ACTION_START_GAUNTLET then
+        if creature:IsAlive() then
+            creature:SetFarVisible(true)
+            creature:SetImmuneToAll(true)
+            schedule(guid, "svalna_start", 25000,
+                function() onSvalnaStart(creature, guid) end)
+        end
+    elseif action == ACTION_RESURRECT_CAPTAINS then
+        schedule(guid, "svalna_resurrect", 7000,
+            function() onSvalnaResurrect(creature, guid) end)
+    elseif action == ACTION_CAPTAIN_DIES then
+        creature:Talk(SAY_SVALNA_CAPTAIN_DEATH)
+    elseif action == ACTION_RESET_EVENT then
+        creature:SetFarVisible(false)
+        svalnaReset(event, creature)
+    end
+end
+
+RegisterCreatureEvent(ENTRY_SISTER_SVALNA, 38, svalnaDoAction)
+
 -- C++ npc_crok_scourgebane::Reset :544-551 seeds
 -- EVENT_SCOURGE_STRIKE {7500,12500}ms and EVENT_DEATH_STRIKE
 -- {25000,30000}ms; UpdateEscortAI :754-761: scourge strike ->
@@ -822,11 +933,103 @@ local function crokReset(event, creature)
     cancelTimers(creature:GetGUIDLow())
 end
 
+-- C++ npc_crok_scourgebane::DoAction :553-589 — PORTED 2026-11-15
+-- (crok gauntlet receivers, ev38). ACTION_START_GAUNTLET :555-579 —
+-- _isEventDone / !IsAlive guard (the ctor reads _isEventDone from
+-- the Svalna boss state == DONE, :536; the Lua tables lazy-init
+-- from the same boss state on first read — the only reader before
+-- any setter is this guard, so lazy init is exact); latches set,
+-- then the Svalna DoAction forward via GetInstanceCreature(
+-- DATA_SISTER_SVALNA 9) (:566-567), Talk(SAY_CROK_INTRO_1 0),
+-- EVENT_ARNATH_INTRO_2 7s (cross-AI Talk on Arnath,
+-- SAY_ARNATH_INTRO_2 5, :752-755), EVENT_CROK_INTRO_3 14s (Talk
+-- SAY_CROK_INTRO_3 1), SetFarVisible(true), and the 4-captain
+-- DoAction(ACTION_START_GAUNTLET) fan-out via GetInstanceCreature(
+-- DATA_CAPTAIN_ARNATH + itr, 31-34) (:577-578). LoadGrid(4356.71,
+-- 2484.33) (:564) has NO bridge (no LoadGrid surface in engine/);
+-- EVENT_START_PATHING 35s -> Start(true, true) (:572, :760-762)
+-- has NO escort bridge — the timer is NOT scheduled (a no-op timer
+-- would be a fabrication); setActive(true) has NO bridge. The
+-- _isEventActive latch now has a real Lua table, but crokDamageTaken
+-- keeps its boss-state proxy: the latch's only clearer besides
+-- ACTION_RESET_EVENT is the unported waypoint machine (wp4 :630-637),
+-- so the proxy stays more accurate in the post-wp4 window.
+-- ACTION_RESET_EVENT :580-588 — _isEventActive = false,
+-- _isEventDone re-read from the boss state, setActive(false) drops
+-- (no bridge), SetFarVisible(false); _aliveTrash.clear() +
+-- _currentWPid = 0 are escort-machine state, unported. Sender is
+-- the unported wipe leg (FrostwingGauntletRespawner :268-271), so
+-- the receiver is ported but dormant. The latches are NOT cleared on
+-- ev23: C++ Reset() -> Initialize() (:540) touches only
+-- _didUnderTenPercentText / _wipeCheckTimer.
+local crokEventDone = {}
+local crokEventActive = {}
+
+local function onCrokArnathIntro2(creature, guid)
+    -- C++ UpdateEscortAI pre-loop gate :745 (single-tick no-op per
+    -- the marrowgar precedent): 500ms IsCasting defer, no re-arm
+    -- consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "arnath2", 500, function() onCrokArnathIntro2(creature, guid) end)
+        return
+    end
+    local arnath = creature:GetInstanceCreature(DATA_CAPTAIN_ARNATH)
+    if arnath ~= nil then
+        arnath:Talk(SAY_ARNATH_INTRO_2)
+    end
+end
+
+local function onCrokIntro3(creature, guid)
+    -- C++ UpdateEscortAI pre-loop gate :745 (single-tick no-op per
+    -- the marrowgar precedent): 500ms IsCasting defer, no re-arm
+    -- consumed (the mal_ganis idiom).
+    if creature:IsCasting() then
+        schedule(guid, "crok3", 500, function() onCrokIntro3(creature, guid) end)
+        return
+    end
+    creature:Talk(SAY_CROK_INTRO_3)
+end
+
+local function crokDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_START_GAUNTLET then
+        if crokEventDone[guid] == nil then
+            crokEventDone[guid] = creature:GetBossState(DATA_SISTER_SVALNA) == BOSS_STATE_DONE
+        end
+        if crokEventDone[guid] or not creature:IsAlive() then
+            return
+        end
+        crokEventActive[guid] = true
+        crokEventDone[guid] = true
+        local svalna = creature:GetInstanceCreature(DATA_SISTER_SVALNA)
+        if svalna ~= nil then
+            svalna:DoAction(ACTION_START_GAUNTLET)
+        end
+        creature:Talk(SAY_CROK_INTRO_1)
+        schedule(guid, "arnath2", 7000,
+            function() onCrokArnathIntro2(creature, guid) end)
+        schedule(guid, "crok3", 14000,
+            function() onCrokIntro3(creature, guid) end)
+        creature:SetFarVisible(true)
+        for itr = 0, 3 do
+            local captain = creature:GetInstanceCreature(DATA_CAPTAIN_ARNATH + itr)
+            if captain ~= nil then
+                captain:DoAction(ACTION_START_GAUNTLET)
+            end
+        end
+    elseif action == ACTION_RESET_EVENT then
+        crokEventActive[guid] = false
+        crokEventDone[guid] = creature:GetBossState(DATA_SISTER_SVALNA) == BOSS_STATE_DONE
+        creature:SetFarVisible(false)
+    end
+end
+
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 1, crokEnterCombat)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 2, crokLeaveCombat)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 4, crokDied)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 9, crokDamageTaken)
 RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 23, crokReset)
+RegisterCreatureEvent(ENTRY_CROK_SCOURGEBANE, 38, crokDoAction)
 
 -- C++ npc_frostwing_ymirjar_vrykul::JustEngagedWith :1237-1273 —
 -- per-entry timer seeds, all re-keyed to event 1 (see the PORTED
@@ -1333,6 +1536,54 @@ local function captainDied(event, creature, killer)
     else
         creature:Talk(SAY_CAPTAIN_SECOND_DEATH)
     end
+end
+
+-- C++ npc_argent_captainAI::DoAction :838-856 — PORTED 2026-11-15
+-- (crok gauntlet receivers, ev38; all 8 captain entries, living +
+-- undead — the AI instance survives UpdateEntry, same struct).
+-- ACTION_START_GAUNTLET :840-851 — SetReactState(REACT_DEFENSIVE
+-- 1) + MoveFollow(crok, FollowDist, FollowAngle) with FollowAngle
+-- = GetAbsoluteAngle(crok) + GetOrientation() (:845-846) and
+-- FollowDist = GetDistance2d(crok) (:846); GetAngle /
+-- GetDistance2d / GetO are bridged (object.go fallback) and
+-- MoveFollow is bridged (lua_creature_events.go:6119). The Go
+-- GetAngle returns raw atan2 [-pi, pi] while C++
+-- GetAbsoluteAngle normalizes to [0, 2pi) — the difference is a
+-- multiple of 2pi, so the follow near-point (cos/sin) is identical.
+-- SetFarVisible(true) (:850); setActive(true) drops (no bridge).
+-- ACTION_RESET_EVENT :853-855 — _firstDeath = true, i.e. the
+-- captainFirstDeath latch clears (nil = first death, matching
+-- captainDied's `~= false` read). Sender is crok's DoAction
+-- fan-out above, which fires from the ported AT.
+local function captainDoAction(event, creature, action)
+    local guid = creature:GetGUIDLow()
+    if action == ACTION_START_GAUNTLET then
+        local crok = creature:GetInstanceCreature(DATA_CROK_SCOURGEBANE)
+        if crok ~= nil then
+            creature:SetReactState(1) -- REACT_DEFENSIVE
+            local angle = creature:GetAngle(crok) + creature:GetO()
+            local dist = creature:GetDistance2d(crok)
+            creature:MoveFollow(crok, dist, angle)
+        end
+        creature:SetFarVisible(true)
+    elseif action == ACTION_RESET_EVENT then
+        captainFirstDeath[guid] = nil
+    end
+end
+
+local CAPTAIN_DO_ACTION_ENTRIES = {
+    NPC_CAPTAIN_ARNATH,
+    NPC_CAPTAIN_ARNATH_UNDEAD,
+    NPC_CAPTAIN_BRANDON,
+    NPC_CAPTAIN_BRANDON_UNDEAD,
+    NPC_CAPTAIN_GRONDEL,
+    NPC_CAPTAIN_GRONDEL_UNDEAD,
+    NPC_CAPTAIN_RUPERT,
+    NPC_CAPTAIN_RUPERT_UNDEAD,
+}
+
+for _, entry in ipairs(CAPTAIN_DO_ACTION_ENTRIES) do
+    RegisterCreatureEvent(entry, 38, captainDoAction)
 end
 
 local BRANDON_ENTRIES = {
