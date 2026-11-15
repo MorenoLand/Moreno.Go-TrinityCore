@@ -62,15 +62,20 @@
 -- FindNearestCreature(talkerEntry, 80.0f, true) (:153) and
 -- FindNearestCreature(NPC_BELFAST, 80.0f, true) (:118) both ride
 -- npc_hearthsinger_forresten_cotAI::UpdateAI's EventMap, whose events
--- are scheduled from MoveInLineOfSight / SetData (:166 is the
--- unbridged SetGUID hook) — and the :118 arm ends in a cross-creature
--- DoAction leg. The AI is not registered in boss_ai.go; stays out as
--- unregistered AI. RE-CHECKED 2026-11-07 (tick 402) against the
--- tick-398 spline-chain bridge: Forresten has no spline chain at all
--- (Belfast's waypoint walk is DB SmartAI, not C++), and none of its
--- three triggers is bridged — ev27 is engage-only (Forresten never
--- engages), SetGUID has no dispatch, and the SetData sender is
--- Belfast's SmartAI — so the stay-out stands.
+-- are scheduled from MoveInLineOfSight / SetData — and the :118 arm
+-- ends in a cross-creature DoAction leg. The AI is not registered in
+-- boss_ai.go; the UpdateAI machine stays out as unregistered AI.
+-- RE-CHECKED 2026-11-07 (tick 402) against the tick-398 spline-chain
+-- bridge: Forresten has no spline chain at all (Belfast's waypoint
+-- walk is DB SmartAI, not C++), and none of its three triggers is
+-- bridged — ev27 is engage-only (Forresten never engages) and the
+-- SetData sender is Belfast's SmartAI — so the machine stay-out
+-- stands. CORRECTION 2026-11-15 (at_* census): "SetGUID has no
+-- dispatch" is retracted — creature:SetGUID fires ev40
+-- (lua_creature_events.go:889-916) and the trigger-fed SetGUID leg
+-- (:161-176, Belfast takeover) is PORTED in
+-- npc_hearthsinger_forresten_cot.lua with its at_stratholme_inn_stairs_cot
+-- sender; only the UpdateAI/SetData machine above stays out.
 -- Ported (crate fluff event #3, tick 402): npc_malcolm_moore (entry
 -- 27891 — crate event #3 cinematic, culling_of_stratholme.cpp:945-1081):
 -- the FindNearestCreature(NPC_SCRUFFY, 100.0f, true) arms now ride the

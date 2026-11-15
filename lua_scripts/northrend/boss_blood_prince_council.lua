@@ -211,8 +211,10 @@
 -- controller START_INTRO relay (:340-344) is PORTED in
 -- controllerDoAction with a Lua-side once-only latch; its sender,
 -- the area trigger at_blood_prince_council_start_intro (:1338),
--- stays out — no AreaTrigger bridge — so the machine has no live
--- Lua trigger yet.
+-- is PORTED 2026-11-15 (at_* census) at the foot of this file
+-- (trigger 5708, TDB areatrigger_scripts row) — the old "no
+-- AreaTrigger bridge" note is retracted (RegisterServerEvent(24)
+-- exists).
 -- npc_ball_of_flame — PORTED 2026-11-09 (registered in boss_ai.go):
 -- Reset one-shot aura casts (:919-924) via ev23; the
 -- flame-ball-visual AuraScript OnRemove (:1148-1160) via
@@ -1726,3 +1728,30 @@ RegisterAuraEvent(SPELL_SHADOW_PRISON_DUMMY, 1, shadowPrisonTick)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 38, queenDoAction)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 28, queenMovementInform)
 RegisterCreatureEvent(ENTRY_BLOOD_QUEEN_LANA_THEL, 23, queenReset)
+
+-- C++ at_blood_prince_council_start_intro
+-- (boss_blood_prince_council.cpp:1329-1342), trigger 5708 (TDB
+-- 335.26091 areatrigger_scripts row). Fire site:
+-- engine/world/areatrigger.go:64 (ServerEventAreaTrigger = 24).
+-- PORTED 2026-11-15 (at_* census). The gate lives in the
+-- receiver (controllerDoAction, ev38): its introStarted latch +
+-- boss != DONE check.
+local TRIGGER_BLOOD_PRINCE_COUNCIL_START_INTRO = 5708 -- TDB areatrigger_scripts row
+
+RegisterServerEvent(24, function(event, player, triggerId)
+    if triggerId ~= TRIGGER_BLOOD_PRINCE_COUNCIL_START_INTRO then
+        return
+    end
+    local mapObj = player:GetMap()
+    if not mapObj then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if not data then
+        return
+    end
+    local controller = data.bloodPrincesControl
+    if controller then
+        controller:DoAction(ACTION_START_INTRO)
+    end
+end)

@@ -4,12 +4,14 @@
 -- executioner — the only CreatureScript AI class
 -- AddSC_shattered_halls registers whose combat timer is
 -- bridgeable; at_nethekurse_exit is an AreaTriggerScript —
--- no Lua area-trigger bridge, not registered (hakkar/
--- zulgurub precedent); its whole OnTrigger body is
--- instance-gated anyway (GetInstanceScript, IsHeroic,
+-- the area-trigger bridge exists (RegisterServerEvent(24))
+-- but the arm stays out: its whole OnTrigger body is
+-- instance-gated (GetInstanceScript, IsHeroic,
 -- GetGuidData(NPC_KARGATH_BLADEFIST)/GetGuidData(NPC_
--- SHATTERED_EXECUTIONER), SummonCreature, DoAction(ACTION_
--- EXECUTIONER_TAUNT = 1)); spell_kargath_executioner is an
+-- SHATTERED_EXECUTIONER), LoadGrid, team data) with no
+-- instance script to resolve through (SummonCreature and
+-- DoAction(ACTION_EXECUTIONER_TAUNT = 1) are bridged, but the
+-- resolution legs are not); spell_kargath_executioner is an
 -- AuraScript (DoCheckAreaTarget only — RegisterAuraEvent ev8,
 -- runtime.go) and spell_remove_kargath_executioner is a
 -- SpellScript whose caster is the player (Load() gate) —

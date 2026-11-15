@@ -58,10 +58,13 @@
 -- areatrigger + ReadSaveDataMore consumers are unported, see
 -- below) and entry-based grid resolution is the twin where a
 -- GUID is needed. at_nethekurse_exit (shattered_halls.cpp:
--- 36-62: summon executioner + victims on heroic) — no
--- area-trigger bridge, so the executioner only ever appears
--- via a future areatrigger port or manual summon; the timer
--- machine above activates if/when it exists. Randy
+-- 36-62: summon executioner + victims on heroic) — the
+-- area-trigger bridge exists (RegisterServerEvent(24)) but the
+-- arm stays out on its instance GetGuidData / LoadGrid / team-
+-- data legs (no instance script to resolve through), so the
+-- executioner only ever appears via a future areatrigger port
+-- or manual summon; the timer machine above activates if/when
+-- it exists. Randy
 -- Whizzlesprocket -> Drisella UpdateEntry (:107-109) — the
 -- trigger is OnCreatureCreate (never fires for the static
 -- spawn); the UpdateEntry bridge itself is live

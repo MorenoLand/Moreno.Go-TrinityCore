@@ -52,9 +52,11 @@
 -- PASSIVE flag arms) stay unported — flag/react-state bridges exist
 -- since 2026-10-20 but the area trigger
 -- at_teron_gorefiend_entrance that starts the intro (instance
--- GetCreature(DATA_TERON_GOREFIEND) -> DoAction) has no
--- area-trigger bridge and the intro arms are
--- blocked on the instance-script model (standing gaps), so the
+-- GetCreature(DATA_TERON_GOREFIEND) -> DoAction) stays out: the
+-- area-trigger bridge exists (RegisterServerEvent(24)) but there
+-- is no instance_black_temple.lua to bind Teron or probe boss
+-- state, and no ev38 receiver for the intro DoAction — blocked
+-- on the instance-script model (standing gaps), so the
 -- fight starts on pull, ragnaros-intro convention. The :147
 -- SetData(DATA_TERON_GOREFIEND_INTRO, 0) inside that DoAction stays out
 -- with it — the instance stores the value with no side effect

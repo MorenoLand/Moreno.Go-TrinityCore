@@ -14,11 +14,11 @@
 --   (blackrock_depths.h:28; DONE 3, InstanceScript.h:68-76) via the
 --   InstanceData:SetData bridge (instance_hooks.go:51, fires event 8),
 --   nil-guarded through instanceDataOf (old_hillsbrad precedent).
---   The BRD gate is open (instance_blackrock_depths.lua registers
---   map 230 events), but that file documents TYPE_RING_OF_LAW
---   unmodeled with no consumer, so the write currently lands nowhere
---   — it is the faithful writer for a future instance-switch port.
---   The wp5 UpdateEncounterStateForKilledCreature leg has no bridge.
+--   The store landed 2026-11-15 (at_* census):
+--   instance_blackrock_depths.lua keeps instanceData.ringOfLaw
+--   (SetData TYPE_RING_OF_LAW 1), read back by the at_ring_of_law
+--   gate; the DONE write saves. The wp5
+--   UpdateEncounterStateForKilledCreature leg has no bridge.
 -- Deliberate omissions (documented, no bridge loss):
 -- - wp2 has no observable ev6 arm (CanWalk=false only — Ring-of-Law
 --   UpdateAI-machine state; thrall-wp98 precedent).

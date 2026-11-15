@@ -54,13 +54,15 @@
 -- Reset() + KillCount = 0 — C++-exact). OnLeaveCombat(2) and
 -- OnDied(4): cancel the pump + drop per-GUID state (gargolmar /
 -- omen precedent; the C++ Reset path covers both).
--- at_twilight_grove — the quest-8735-INCOMPLETE area trigger
+-- at_twilight_grove — PORTED 2026-11-15 (at_* census) at the foot
+-- of this file: the quest-8735-INCOMPLETE area trigger
 -- (FindNearestCreature(15625, 500yd) skip + SummonCreature of
 -- the corrupter at (-10328.16, -489.57, 49.95) + Talk respawn
--- yell) has no AreaTriggerScript dispatch hook anywhere in the
--- model (felwood at_ancient_leaf precedent) and sits behind the
--- no-quest-status / no-world-search / no-summon bridges —
--- documented-only.
+-- yell). The old "no AreaTriggerScript dispatch hook / no
+-- quest-status / no-world-search / no-summon bridges" note is
+-- retracted — RegisterServerEvent(24), player:GetQuestStatus,
+-- player:FindNearestCreature and player:SummonCreature are all
+-- bridged on the current runtime (sartura / zumrah precedent).
 -- Zone set status: zone_duskwood.cpp closed (at_twilight_grove
 -- — area-trigger summon machine documented-only; boss_twilight_
 -- corrupter — JustEngagedWith / combat rotation / KilledUnit
@@ -219,3 +221,31 @@ RegisterCreatureEvent(TWILIGHT_CORRUPTER_ENTRY, 2, onReset)
 RegisterCreatureEvent(TWILIGHT_CORRUPTER_ENTRY, 3, onTargetDied)
 RegisterCreatureEvent(TWILIGHT_CORRUPTER_ENTRY, 4, onReset)
 RegisterCreatureEvent(TWILIGHT_CORRUPTER_ENTRY, 23, onReset)
+
+-- C++ at_twilight_grove (zone_duskwood.cpp:144-161), trigger 4017
+-- (TDB 335.26091 areatrigger_scripts row). Fire site:
+-- engine/world/areatrigger.go:64 (ServerEventAreaTrigger = 24);
+-- the handler return is discarded, so the C++ `return false`
+-- is moot here. PORTED 2026-11-15 (at_* census).
+local TRIGGER_TWILIGHT_GROVE = 4017 -- TDB areatrigger_scripts row
+local QUEST_NIGHTMARES_CORRUPTION = 8735 -- zone_duskwood.cpp:44
+local YELL_TWILIGHT_CORRUPTOR_RESPAWN = 0 -- zone_duskwood.cpp:33
+local SUMMON_TYPE_MANUAL_DESPAWN = 7 -- lua_creature_events.go:3699-3704
+local QUEST_STATUS_INCOMPLETE = 3 -- lua_player.go GetQuestStatus
+
+RegisterServerEvent(24, function(event, player, triggerId)
+    if triggerId ~= TRIGGER_TWILIGHT_GROVE then
+        return
+    end
+    if player:GetQuestStatus(QUEST_NIGHTMARES_CORRUPTION) ~= QUEST_STATUS_INCOMPLETE then
+        return
+    end
+    if player:FindNearestCreature(TWILIGHT_CORRUPTER_ENTRY, 500) then
+        return
+    end
+    local corrupter = player:SummonCreature(TWILIGHT_CORRUPTER_ENTRY,
+        -10328.16, -489.57, 49.95, 0.0, SUMMON_TYPE_MANUAL_DESPAWN, 60000)
+    if corrupter then
+        corrupter:Talk(YELL_TWILIGHT_CORRUPTOR_RESPAWN, player)
+    end
+end)

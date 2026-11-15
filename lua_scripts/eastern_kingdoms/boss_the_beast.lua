@@ -51,8 +51,12 @@
 -- MovePoint, BasicEvent scheduling (OrcDeathEvent suicide 6s),
 -- SetReactState, and both are only reachable via the area triggers
 -- (at_trigger_the_beast_movement AT 2066, at_the_beast_room) and the
--- instance script; no area-trigger / instance / MotionMaster bridges
--- on the Lua surface (coren_direbrew / instance precedent).
+-- instance script. The area-trigger dispatch exists
+-- (RegisterServerEvent(24)) and creature:GetGuidData is bridged,
+-- but there is no instance_blackrock_spire.lua to bind the Beast
+-- and no ev41 consumer for the SetData legs — the stay-out is the
+-- unported consumer machine, not the dispatch (coren_direbrew /
+-- instance precedent).
 -- Documented-only (STAY OUT, re-verified 2026-11-14 round113). SpellHit skinning
 -- arm (boss_the_beast.cpp:88-94): loops MAX_SPELL_EFFECTS (:90), fires
 -- only if an effect IsEffect(SPELL_EFFECT_SKINNING = 95,

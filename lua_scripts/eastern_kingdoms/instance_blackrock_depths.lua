@@ -40,11 +40,12 @@
 --   NOT_STARTED; BarAleCount is a runtime member, never saved, so
 --   it resets to 0. Save fires on a DONE write (:258-259).
 -- Unmodeled (documented-only, no bridges / no writers):
--- - Encounter states (TYPE_RING_OF_LAW / VAULT / TOMB_OF_SEVEN /
---   LYCEUM / IRON_HALL) and their GO binds + HandleGameObject door
---   legs: no instance script port for the rest of BRD; the
---   SetData switch cases for them stay out with the instance file.
---   (TYPE_BAR is the exception above, ported for rocknot.)
+-- - Encounter states (TYPE_VAULT / TOMB_OF_SEVEN / LYCEUM /
+--   IRON_HALL) and their GO binds + HandleGameObject door legs: no
+--   instance script port for the rest of BRD; the SetData switch
+--   cases for them stay out with the instance file. (TYPE_BAR is
+--   the exception above, ported for rocknot; TYPE_RING_OF_LAW is
+--   stored since 2026-11-15 for the at_ring_of_law gate.)
 -- - SetGuidData DATA_EVENSTARTER (TombOfSevenStart/Reset): no
 --   SetGuidData bridge on the instance surface; the Doomrel gossip
 --   + evade legs that write it stay out (boss_doomrel.lua header).
@@ -61,6 +62,7 @@ local INSTANCE_EVENT_ON_LOAD = 2
 local INSTANCE_EVENT_ON_SET_DATA = 8
 
 local DATA_GHOSTKILL = 20 -- blackrock_depths.h:48
+local TYPE_RING_OF_LAW = 1 -- blackrock_depths.h:28
 local TYPE_BAR = 3 -- blackrock_depths.h:30
 local ENCOUNTER_IN_PROGRESS = 1 -- InstanceScript.h:71
 local ENCOUNTER_DONE = 3 -- InstanceScript.h:73
@@ -72,6 +74,15 @@ RegisterMapEvent(MAP_BLACKROCK_DEPTHS, INSTANCE_EVENT_ON_SET_DATA,
             -- C++ SetData DATA_GHOSTKILL (:255-257): GhostKillCount += data.
             instanceData.ghostKillCount = (instanceData.ghostKillCount or 0) + data
             if instanceData.ghostKillCount >= 7 then
+                mapObj:SaveInstanceData()
+            end
+        elseif type == TYPE_RING_OF_LAW then
+            -- C++ SetData TYPE_RING_OF_LAW (blackrock_depths.cpp:234):
+            -- encounter[0] = data. Writers: at_ring_of_law.lua
+            -- (IN_PROGRESS) and npc_grimstone.lua wp5 (DONE); the
+            -- at_ring_of_law gate reads instanceData.ringOfLaw.
+            instanceData.ringOfLaw = data
+            if data == ENCOUNTER_DONE then
                 mapObj:SaveInstanceData()
             end
         elseif type == TYPE_BAR then
@@ -104,6 +115,9 @@ RegisterMapEvent(MAP_BLACKROCK_DEPTHS, INSTANCE_EVENT_ON_LOAD,
         -- so it resets to 0.
         if (instanceData.barEncounter or 0) == ENCOUNTER_IN_PROGRESS then
             instanceData.barEncounter = 0
+        end
+        if (instanceData.ringOfLaw or 0) == ENCOUNTER_IN_PROGRESS then
+            instanceData.ringOfLaw = 0
         end
         instanceData.barAleCount = 0
     end)

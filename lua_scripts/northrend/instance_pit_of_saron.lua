@@ -59,10 +59,9 @@
 --   PORTED below (iceShardsHit, ev5 on 69425).
 --   DATA_CAVERN_ACTIVE (10): store cavernActive; data ~= 0 runs
 --   HandleCavernEventTrigger(true) (:265-276), data == 0 runs it with
---   false. DORMANT: the only writers are the cavern area triggers
---   (pit_of_saron.cpp:317-355, trigger IDs live only in
---   AreaTrigger.dbc), so no live writer exists yet — but the handler
---   is live the moment one appears.
+--   false. LIVE since 2026-11-15 (at_* census): the writers are the
+--   cavern area triggers in at_pit_cavern.lua (triggers 5580/5581,
+--   TDB areatrigger_scripts rows).
 -- - HandleCavernEventTrigger (:265-276) + ScheduledIcicleSummons
 --   (pit_of_saron.cpp:48-60) — PORTED 2026-11-08 (tick 490) as a
 --   per-trigger CreateLuaEvent chain over the bound cavernTriggers:
@@ -82,14 +81,12 @@
 -- - DoorData (:33-38: ice-wall passage doors on DATA_GARFROST /
 --   DATA_ICK, portcullis on DATA_TYRANNUS): no door model in the Go
 --   boss-state store (instance_boss_states.go:72).
--- - The area-trigger writers of DATA_CAVERN_ACTIVE / the
---   Don't-Look-Up credit (pit_of_saron.cpp:317-355): server event 24
---   IS bridged (areatrigger.go:64), but the trigger IDs live only in
---   AreaTrigger.dbc / the DB areatrigger_template — neither is
---   in-tree, and this clone carries no sql/ tree — so no handler can
---   dispatch on them. The at_pit_cavern_end achievement credit
---   (DoUpdateAchievementCriteria BE_SPELL_TARGET 72845) has no Lua
---   bridge either.
+-- - The at_pit_cavern_end achievement credit
+--   (DoUpdateAchievementCriteria BE_SPELL_TARGET 72845,
+--   pit_of_saron.cpp:348-351) has no Lua bridge. The cavern
+--   triggers themselves are PORTED in at_pit_cavern.lua
+--   (2026-11-15, at_* census; IDs from the TDB
+--   areatrigger_scripts rows, not AreaTrigger.dbc).
 -- - _jainaOrSylvanas2GUID is NEVER assigned in the C++ file (only
 --   declared :286 and returned :257) — GetGuidData(
 --   DATA_JAINA_SYLVANAS_2) always returns Empty; no bind for it.

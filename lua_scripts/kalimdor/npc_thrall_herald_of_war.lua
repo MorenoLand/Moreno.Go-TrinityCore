@@ -60,16 +60,14 @@
 -- Unmodeled (documented-only, no bridges):
 -- - The area-trigger dispatch (areatrigger_orgrimmar_herald_of_war,
 --   zone_orgrimmar.cpp:811-831: player alive + quest 13257 COMPLETE
---   + nearest thrall within 50yd -> thrall:DoAction(0)). The fire site
---   EXISTS (RegisterServerEvent(24) from engine/world/areatrigger.go,
---   at_scripts.lua convention; player:IsAlive, player:GetQuestStatus
---   (COMPLETE=1) and player:FindNearestCreature are all bridged) but
---   the trigger ID lives ONLY in the DB areatrigger_scripts row
---   (ObjectMgr.cpp:6653) — not in the C++ file, not in-tree (world.db
---   is a 0-byte placeholder, sql/ is schema-only) — and dispatching on
---   a guessed ID would invent an identifier (gelihast precedent,
---   at_scripts.lua). The scene machine above is complete and fires on
---   any DoAction(0); the trigger dispatch awaits a verified ID.
+--   + nearest thrall within 50yd -> thrall:DoAction(0)). PORTED
+--   2026-11-15 (at_* census) at the foot of this file: the trigger
+--   ID is TDB 335.26091 areatrigger_scripts row 5279 for
+--   areatrigger_orgrimmar_herald_of_war (the old "ID lives ONLY in
+--   the DB, not in-tree" blocker is resolved by that row — the
+--   gelihast no-guess rule is satisfied, the ID is verified, not
+--   guessed). The scene machine above is complete and fires on
+--   any DoAction(0).
 
 local ENTRY_HERALD = 31412
 local NPC_KORKRON_GUARD = 31417
@@ -382,3 +380,27 @@ RegisterCreatureEvent(ENTRY_HERALD, 23, heraldReset)
 RegisterCreatureEvent(ENTRY_HERALD, 4, heraldDied)
 RegisterCreatureEvent(ENTRY_HERALD, 38, heraldDoAction)
 RegisterCreatureEvent(ENTRY_HERALD, 28, heraldMovementInform)
+
+-- C++ areatrigger_orgrimmar_herald_of_war (zone_orgrimmar.cpp:811-831),
+-- trigger 5279 (TDB 335.26091 areatrigger_scripts row). Fire site:
+-- engine/world/areatrigger.go:64 (ServerEventAreaTrigger = 24).
+-- PORTED 2026-11-15 (at_* census).
+local TRIGGER_HERALD_OF_WAR = 5279 -- TDB areatrigger_scripts row
+local QUEST_HERALD_OF_WAR = 13257 -- zone_orgrimmar.cpp:813
+local QUEST_STATUS_COMPLETE = 1 -- lua_player.go GetQuestStatus
+
+RegisterServerEvent(24, function(event, player, triggerId)
+    if triggerId ~= TRIGGER_HERALD_OF_WAR then
+        return
+    end
+    if not player:IsAlive() then
+        return
+    end
+    if player:GetQuestStatus(QUEST_HERALD_OF_WAR) ~= QUEST_STATUS_COMPLETE then
+        return
+    end
+    local thrall = player:FindNearestCreature(ENTRY_HERALD, 50)
+    if thrall then
+        thrall:DoAction(ACTION_START_SCENE)
+    end
+end)

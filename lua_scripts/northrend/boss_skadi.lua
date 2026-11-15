@@ -61,17 +61,19 @@
 -- (lua_creature_events.go:5917) + SetCombatPulseDelay(5) + me-form
 -- DoZoneInCombat (ScriptedCreature.cpp:537/540/542) ported into
 -- skadiEnterCombat (instance/setActive/ScheduleTasks legs out; the
--- DoAction encounter-start legs ride the collapsed ev1 model).
+-- DoAction encounter-start legs live in the factored startEncounter
+-- body below, called from the ev38 sender and the ev1 proxy).
 -- boss_skadi gauntlet reset-check — DoAction(ACTION_START_ENCOUNTER,
 -- :241-246) 6s scheduler: FindNearestCreature(NPC_TRIGGER_RESET 23472,
 -- 200.0f) -> trigger self-cast SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_
--- CHECK 49308, triggered, Repeat 6s. PORTED on event 1 (the C++ start
--- leg is the area trigger's DoAction call (:968, unported sender —
--- dispatch IS bridged, ev38), so the Lua pump starts at first combat
--- instead of encounter-start: gauntlet-window checks are missed, the
--- 6s cadence once running is C++-exact); cancelled on 2/4/23. The
--- SetBossState(IN_PROGRESS) :232 leg rides the same event-1 hook (see
--- the engage leg above). The 2s DoCast(grauf, SPELL_RIDE_GRAUF 61791)
+-- CHECK 49308, triggered, Repeat 6s. PORTED in startEncounter below
+-- (the C++ start leg is the area trigger's DoAction call (:968),
+-- whose sender is PORTED 2026-11-15 at the foot of this file —
+-- trigger 4991, TDB row — so the pump starts at encounter-start
+-- as in C++; the ev1 proxy keeps the old first-combat start for
+-- players who engage without crossing the trigger); cancelled on
+-- 2/4/23. The SetBossState(IN_PROGRESS) :232 leg rides the same
+-- startEncounter body (see the engage leg above). The 2s DoCast(grauf, SPELL_RIDE_GRAUF 61791)
 -- leg (:247-251) stays out as a CAST — the aura->board leg for
 -- creature->creature has no Go twin in applyAuraToTarget (only the
 -- player-target leg, spells.go:38150, and the player-caster leg,
@@ -139,10 +141,10 @@
 -- stored state (!= DONE, the spawn/respawn-path fire where C++ Reset
 -- runs _Reset) sets NOT_STARTED. The death pre-fire is IsDead-guarded
 -- in skadiReset.
--- Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) (area-trigger
--- DoAction machine) — event 1 deliberately NOT registered (registering
--- it would deviate from C++: ground-phase combat entry yells nothing
--- there); Talk(SAY_DRAKE_BREATH 6) (ACTION_DRAKE_BREATH) is PORTED
+-- Talk(SAY_AGGRO 0) rides DoAction(ACTION_START_ENCOUNTER) — PORTED
+-- 2026-11-15 (at_* census) in the factored startEncounter body
+-- (trigger sender below + ev1 proxy share it, latched, so the yell
+-- fires once at encounter-start as in C++); Talk(SAY_DRAKE_BREATH 6) (ACTION_DRAKE_BREATH) is PORTED
 -- 2026-11-09 (D3) via the ev38 dispatch from the grauf spline-chain
 -- machine (:416/:435). The harpoon-hit counter itself is PORTED
 -- 2026-11-04 via the ev14 graufSpellHit handler.
@@ -224,9 +226,11 @@ local SPELL_SUMMON_YMIRJAR_HARPOONER_E = 48634 -- boss_skadi.cpp:50
 local SPELL_SUMMON_YMIRJAR_WITCH_DOCTOR_W = 48635 -- boss_skadi.cpp:51
 local SPELL_SUMMON_YMIRJAR_WITCH_DOCTOR_E = 48636 -- boss_skadi.cpp:52
 
+local SAY_AGGRO = 0 -- boss_skadi.cpp:67
 local SAY_DRAKE_BREATH = 6 -- boss_skadi.cpp:71
 local EMOTE_BREATH = 0 -- boss_skadi.cpp:72
 local EMOTE_ON_RANGE = 1 -- boss_skadi.cpp:73
+local ACTION_START_ENCOUNTER = 0 -- boss_skadi.cpp:97
 local ACTION_DRAKE_BREATH = 1 -- boss_skadi.cpp:98
 local SPELL_FREEZING_CLOUD = 47579 -- boss_skadi.cpp:42
 local SPELL_FREEZING_CLOUD_HEROIC = 60020 -- TDB spell_script_names 26091
@@ -258,6 +262,8 @@ local EMOTE_STATE_READY2HL = 425 -- SharedDefines.h:2062
 local timers = {}
 local harpoonState = {} -- per-Skadi-GUID { hits, love } for ACTION_HARPOON_HIT
 local firstWaveSummoned = {} -- per-Skadi-GUID latch, C++ Initialize :157-158
+local encounterStarted = {} -- per-Skadi-GUID latch for the factored DoAction(ACTION_START_ENCOUNTER) body (startEncounter below)
+local startEncounter -- forward: skadiDoAction (defined above startEncounter) dispatches action 0 to it; plain assignment below, never re-`local function` (tharon_ja idiom)
 
 local function cancelTimers(guid)
     local per = timers[guid]
@@ -362,6 +368,7 @@ local function skadiReset(event, creature)
     -- C++ Initialize (:157-158) via Reset (:166-172): counters re-zeroed.
     harpoonState[creature:GetGUIDLow()] = nil
     firstWaveSummoned[creature:GetGUIDLow()] = nil
+    encounterStarted[creature:GetGUIDLow()] = nil
     creature:SetData(DATA_LOVE_TO_SKADI, 0)
     -- C++ Reset (:166-172): _Reset() (DespawnAll) before re-summoning.
     despawnSkadiSummons(creature:GetGUIDLow())
@@ -426,11 +433,18 @@ end
 
 -- C++ DoAction(ACTION_DRAKE_BREATH) (:259-262): love 1->2 +
 -- Talk(SAY_DRAKE_BREATH 6). PORTED 2026-11-09 (D3) via the ev38
--- DoAction dispatch (lua_creature_events.go:827). Actions 0/2/3 are
--- deliberately ignored here: START_ENCOUNTER rides skadiEnterCombat,
--- GAUNTLET_END rides the graufJustDied proxy, HARPOON_HIT rides
--- graufSpellHit — handling them here would double-fire those kits.
+-- DoAction dispatch (lua_creature_events.go:827). ACTION_START_ENCOUNTER
+-- (0) is PORTED 2026-11-15 (at_* census): it runs the factored
+-- startEncounter body (latched — the ev1 proxy calls the same body,
+-- so a trigger-then-combat sequence starts the encounter once).
+-- Actions 2/3 are deliberately ignored here: GAUNTLET_END rides the
+-- graufJustDied proxy, HARPOON_HIT rides graufSpellHit — handling
+-- them here would double-fire those kits.
 local function skadiDoAction(event, creature, action)
+    if action == ACTION_START_ENCOUNTER then
+        startEncounter(creature)
+        return
+    end
     if action ~= ACTION_DRAKE_BREATH then
         return
     end
@@ -492,25 +506,40 @@ end
 -- C++ DoAction(ACTION_START_ENCOUNTER) reset-check scheduler
 -- (boss_skadi.cpp:241-246): 6s first tick, Repeat 6s; the trigger
 -- self-cast is the mandokir/fathomlord found-creature CastSpell
--- precedent. Starts at first combat (area-trigger sender unported —
--- see header).
--- Inherited BossAI::JustEngagedWith arms (no override — kelthuzad
--- precedent) ported at the handler tail (see header).
-local function skadiEnterCombat(event, creature)
-    -- C++ DoAction(ACTION_START_ENCOUNTER) :232 + BossAI::_JustEngagedWith
-    -- (ScriptedCreature.cpp:537): SetBossState(DATA_SKADI_THE_RUTHLESS,
-    -- IN_PROGRESS) — PORTED tick 261 via creature:SetBossState
-    -- (lua_creature_events.go:5917), first per the _JustEngagedWith order.
-    -- The area-trigger DoAction sender is unported, so the event-1 hook is
-    -- the only available one (same proxy as the reset-check pump below).
+-- precedent. The 6s cadence and the ride schedule live in
+-- startEncounter below (sender: at_skadi_gaunlet, trigger 4991).
+-- C++ DoAction(ACTION_START_ENCOUNTER) (:229-258), factored out
+-- of skadiEnterCombat 2026-11-15 (at_* census): the encounter-start
+-- legs run from the area trigger's DoAction(0) (at_skadi_gaunlet,
+-- trigger 4991, sender ported below) as in C++, with the event-1
+-- hook calling the same body as a proxy for players who engage
+-- without crossing the trigger. The per-GUID latch keeps the
+-- second call a no-op (C++ fires DoAction(0) once per trigger
+-- entry while NOT_STARTED; the latch clears on Reset with
+-- firstWaveSummoned). NOT in here: the base-engage tail
+-- (SetCombatPulseDelay + DoZoneInCombat, BossAI::JustEngagedWith)
+-- stays in skadiEnterCombat only, and the setActive(true) /
+-- timed-achievement / world-trigger + combat-trigger summon legs
+-- stay out (no bridge; the combat trigger's DoZoneInCombat is
+-- the enterCombat tail below).
+startEncounter = function(creature)
+    local guid = creature:GetGUIDLow()
+    if encounterStarted[guid] then
+        return
+    end
+    encounterStarted[guid] = true
+    -- C++ DoAction(ACTION_START_ENCOUNTER) :232: SetBossState
+    -- (DATA_SKADI_THE_RUTHLESS, IN_PROGRESS) — PORTED tick 261
+    -- via creature:SetBossState (lua_creature_events.go:5917).
     creature:SetBossState(DATA_SKADI_THE_RUTHLESS, 1)
     -- C++ DoAction(ACTION_START_ENCOUNTER) :231: SetFlag
     -- UNIT_FLAG_NOT_SELECTABLE (SetFlag bridged,
     -- lua_creature_events.go:5836); cleared at GAUNTLET_END below.
     creature:SetFlag(59, 0x02000000)
-    local guid = creature:GetGUIDLow()
     cancelTimers(guid)
     spawnFirstWave(creature)
+    -- C++ DoAction(ACTION_START_ENCOUNTER) :236: Talk(SAY_AGGRO 0).
+    creature:Talk(SAY_AGGRO)
     -- C++ DoAction(ACTION_START_ENCOUNTER) :247-251: 2s DoCast(grauf,
     -- SPELL_RIDE_GRAUF 61791) — the cast's only effect is the vehicle
     -- board. The aura->board leg for creature->creature has no Go twin
@@ -546,6 +575,12 @@ local function skadiEnterCombat(event, creature)
         schedule(guid, "resetCheck", 6000, resetCheckTick)
     end
     schedule(guid, "resetCheck", 6000, resetCheckTick)
+end
+
+-- Inherited BossAI::JustEngagedWith arms (no override — kelthuzad
+-- precedent) ported at the handler tail (see header).
+local function skadiEnterCombat(event, creature)
+    startEncounter(creature)
     -- Inherited BossAI::JustEngagedWith (no override in boss_skadiAI —
     -- kelthuzad precedent): SetCombatPulseDelay(5) + me-form
     -- DoZoneInCombat (ScriptedCreature.cpp:540/542); instance/setActive/
@@ -1124,5 +1159,38 @@ RegisterSpellEvent(SPELL_UTGARDE_PINNACLE_GAUNTLET_RESET_CHECK, 5, function(even
     end
     if hitTarget:GetBossState(DATA_SKADI_THE_RUTHLESS) == 1 then
         hitTarget:EnterEvadeMode()
+    end
+end)
+
+-- C++ at_skadi_gaunlet (boss_skadi.cpp:954-974), trigger 4991 (TDB
+-- 335.26091 areatrigger_scripts row). Fire site:
+-- engine/world/areatrigger.go:64 (ServerEventAreaTrigger = 24).
+-- PORTED 2026-11-15 (at_* census). C++ order: no instance or GM
+-- -> nothing; boss NOT_STARTED (TO_BE_DECIDED reads as
+-- NOT_STARTED, the at_hor_triggers.lua precedent) -> DoAction(0).
+local TRIGGER_SKADI_GAUNLET = 4991 -- TDB areatrigger_scripts row
+
+RegisterServerEvent(24, function(event, player, triggerId)
+    if triggerId ~= TRIGGER_SKADI_GAUNLET then
+        return
+    end
+    if player:IsGM() then
+        return
+    end
+    local mapObj = player:GetMap()
+    if not mapObj then
+        return
+    end
+    local data = mapObj:GetInstanceData()
+    if not data then
+        return
+    end
+    local skadi = data.skadi
+    if not skadi then
+        return
+    end
+    local state = skadi:GetBossState(DATA_SKADI_THE_RUTHLESS)
+    if state == 0 or state == 5 then
+        skadi:DoAction(ACTION_START_ENCOUNTER)
     end
 end)
