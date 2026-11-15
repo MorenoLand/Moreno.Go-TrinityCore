@@ -105,7 +105,8 @@
 --   the 42603 aura event + a 1s HP poll (see below); the head's
 --   _instance->GetCreature(DATA_HEADLESS_HORSEMAN) lookups ride
 --   FindNearestCreature. Still out: SetGUID(ACTION_HEAD_PLAYER_TEXT)
---   (no SetGUID bridge; the GO gossip senders are unported too) and
+--   (ev40 IS bridged, lua_creature_events.go:967 — the GO gossip
+--   senders are unported, so nothing ever calls it) and
 --   the JustReachedHome motion Clear (StopMoving twin is live but the
 --   head carries no Lua motion to clear).
 -- - spell_headless_horseman_summoning_rhyme_aura (42879, tick 189
@@ -141,9 +142,14 @@
 -- - go_loosely_turned_soil (186314) / go_headless_horseman_pumpkin
 --   (186267): OnGossipHello/OnQuestReward/OnGossipSelect all hang off
 --   _instance->GetData/SetData (DATA_HORSEMAN_EVENT_STATE/DATA_START_
---   HORSEMAN_EVENT — instance-script model blocked) plus the gossip and
---   quest-reward arms, which have no bridges on this surface.
---   Documented-only.
+--   HORSEMAN_EVENT — no instance_scarlet_monastery.lua model) plus
+--   _instance->GetCreature(DATA_HORSEMAN_HEAD) (no GetGuidData
+--   bridge; FindNearestCreature is the creature-side twin only).
+--   (Correction: the GO OnQuestReward event itself IS bridged
+--   (GameObjectEvent 5, quest_reward_grant.go:187), player:
+--   AreaExploredOrEventHappens is bridged (lua_player.go:5282), and
+--   SetGUID ev40 is bridged — the stay-out rests on the instance
+--   model + head-resolution grounds alone.) Documented-only.
 
 local SPELL_HORSEMAN_CLEAVE = 42587
 local SPELL_BURNING_COSMETIC = 42971

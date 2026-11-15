@@ -29,11 +29,22 @@
 -- - GetData DATA_GHOSTKILL: no function port — the live consumer is
 --   boss_doomrel.lua onReset, which reads instanceData.ghostKillCount
 --   directly (eye_of_eternity giftBoxBunny precedent).
+-- - SetData TYPE_BAR (instance_blackrock_depths.cpp:240-247) + the
+--   derived GetData (instance_blackrock_depths.cpp:277-283): SPECIAL
+--   only bumps the ale count, any other write sets encounter[2];
+--   GetData returns SPECIAL iff encounter[2] is IN_PROGRESS and the
+--   ale count is 3, else encounter[2]. The fields ride plain
+--   instanceData.barEncounter / .barAleCount (serpent-shrine
+--   precedent); rocknot's OnQuestReward reads the derived state
+--   from them. Load (:360-372) resets IN_PROGRESS encounters to
+--   NOT_STARTED; BarAleCount is a runtime member, never saved, so
+--   it resets to 0. Save fires on a DONE write (:258-259).
 -- Unmodeled (documented-only, no bridges / no writers):
--- - Encounter states (TYPE_RING_OF_LAW / VAULT / BAR / TOMB_OF_SEVEN /
+-- - Encounter states (TYPE_RING_OF_LAW / VAULT / TOMB_OF_SEVEN /
 --   LYCEUM / IRON_HALL) and their GO binds + HandleGameObject door
 --   legs: no instance script port for the rest of BRD; the
 --   SetData switch cases for them stay out with the instance file.
+--   (TYPE_BAR is the exception above, ported for rocknot.)
 -- - SetGuidData DATA_EVENSTARTER (TombOfSevenStart/Reset): no
 --   SetGuidData bridge on the instance surface; the Doomrel gossip
 --   + evade legs that write it stay out (boss_doomrel.lua header).
@@ -50,16 +61,31 @@ local INSTANCE_EVENT_ON_LOAD = 2
 local INSTANCE_EVENT_ON_SET_DATA = 8
 
 local DATA_GHOSTKILL = 20 -- blackrock_depths.h:48
+local TYPE_BAR = 3 -- blackrock_depths.h:30
+local ENCOUNTER_IN_PROGRESS = 1 -- InstanceScript.h:71
+local ENCOUNTER_DONE = 3 -- InstanceScript.h:73
+local ENCOUNTER_SPECIAL = 4 -- InstanceScript.h:74
 
 RegisterMapEvent(MAP_BLACKROCK_DEPTHS, INSTANCE_EVENT_ON_SET_DATA,
     function(event, instanceData, mapObj, type, data)
-        if type ~= DATA_GHOSTKILL then
-            return
-        end
-        -- C++ SetData DATA_GHOSTKILL (:255-257): GhostKillCount += data.
-        instanceData.ghostKillCount = (instanceData.ghostKillCount or 0) + data
-        if instanceData.ghostKillCount >= 7 then
-            mapObj:SaveInstanceData()
+        if type == DATA_GHOSTKILL then
+            -- C++ SetData DATA_GHOSTKILL (:255-257): GhostKillCount += data.
+            instanceData.ghostKillCount = (instanceData.ghostKillCount or 0) + data
+            if instanceData.ghostKillCount >= 7 then
+                mapObj:SaveInstanceData()
+            end
+        elseif type == TYPE_BAR then
+            -- C++ SetData TYPE_BAR (:240-247): SPECIAL only bumps the ale
+            -- count; any other write sets encounter[2].
+            if data == ENCOUNTER_SPECIAL then
+                instanceData.barAleCount = (instanceData.barAleCount or 0) + 1
+            else
+                instanceData.barEncounter = data
+            end
+            -- C++ SetData save arm (:258-259): a DONE write saves.
+            if data == ENCOUNTER_DONE then
+                mapObj:SaveInstanceData()
+            end
         end
     end)
 
@@ -72,4 +98,12 @@ RegisterMapEvent(MAP_BLACKROCK_DEPTHS, INSTANCE_EVENT_ON_LOAD,
         elseif count >= 7 then
             instanceData.ghostKillCount = 7
         end
+        -- C++ Load (:370-372): IN_PROGRESS encounters reset to
+        -- NOT_STARTED. BarAleCount is a runtime member, never saved
+        -- (GetSaveData writes only the encounters + GhostKillCount),
+        -- so it resets to 0.
+        if (instanceData.barEncounter or 0) == ENCOUNTER_IN_PROGRESS then
+            instanceData.barEncounter = 0
+        end
+        instanceData.barAleCount = 0
     end)
