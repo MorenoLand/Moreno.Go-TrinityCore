@@ -38,12 +38,16 @@
 -- trigger spell (24745/24747/... per tier, go->CastSpell(player, spell))
 -- and SPELL_PUNISHMENT 24803 on the rank-fail branch — go:CastSpell has
 -- no bridge (same open gap as the outhouse select in go_scripts_part1.lua).
--- Creature Reset legs (zone_silithus.cpp, round-72 verified): the
--- qiraj_war_spawn Reset (Initialize-only, :698-701) is PORTED in
--- npc_qiraj_war_spawn.lua onReset (ev23, entries 15414/15422/15423/
--- 15424); anachronos (15381, :362-366) + quest-trigger (15454,
--- :831-835) Resets STAY OUT — init legs of unported machines
--- (HandleAnimation 20-step cinematic / SummonNextWave wave machine).
+-- Creature Reset legs (zone_silithus.cpp, round-72 verified, r301
+-- re-verified): the qiraj_war_spawn Reset (Initialize-only, :698-701)
+-- is PORTED in npc_qiraj_war_spawn.lua onReset (ev23, entries
+-- 15414/15422/15423/15424); the quest-trigger Reset (:831-835) is
+-- PORTED in npc_anachronos_quest_trigger.lua onReset (ev23, entry
+-- 15454, SetVisible(false) only — Initialize is wave-machine state).
+-- Anachronos himself (15381, :362-366) STAYS OUT — zero world
+-- spawns, summoned only by the unported machine (:984), so his
+-- Reset (Initialize + NON_ATTACKABLE flag-set; TDB unit_flags 0)
+-- can never fire in the ported model.
 -- The scanner row keeps surfacing (mixed row, deliberately unaliased).
 -- The summon itself is NOT the trigger spell: SummonCreature spawns the
 -- NPC, so the core (stone summons a templar/duke/royal that yells and
