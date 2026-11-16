@@ -84,6 +84,8 @@ const (
 	effSummonObjectWild        = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
 	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
+	effHealPct                 = 136 // SPELL_EFFECT_HEAL_PCT (SharedDefines.h:947)
+	effEnergizePct             = 137 // SPELL_EFFECT_ENERGIZE_PCT (SharedDefines.h:948)
 	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
 	effApplyAreaAuraParty      = 35  // SPELL_EFFECT_APPLY_AREA_AURA_PARTY (SharedDefines.h:846)
 	effApplyAreaAuraEnemy      = 129 // SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (SharedDefines.h:940)
@@ -8392,6 +8394,72 @@ var spells = []spell{
 	// / ProcChance 101 / Attributes not carried.
 	{id: 50653, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 1699, dieSides: 601, radiusIdx: 18, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 28819 "Submerge Visual" (wago SpellName MATCHES;
+	// C++ SPELL_SUBMERGE_VISUAL,
+	// boss_reliquary_of_souls.cpp:59; Lua
+	// blacktemple/boss_reliquary_of_souls.lua:167,
+	// 218 — triggered self-cast on EVENT_SUBMERGE,
+	// C++ cpp:273 DoCastSelf triggered) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28819_41535_41542.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp0 die0 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur21 -1 infinite (aux row
+	// pre-existing), range13 Anywhere 0-50000yd
+	// (aux row pre-existing), school Physical;
+	// NO SpellCategories row (mechanic 0, dispel
+	// 0), NO SpellAuraOptions row; BonusCoefficient
+	// 1 / Attributes not carried (no fields in the
+	// seed struct).
+	{id: 28819, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 41535 "Enslaved Soul Passive" (wago SpellName
+	// MATCHES; C++ SPELL_ENSLAVED_SOUL_PASSIVE,
+	// boss_reliquary_of_souls.cpp:83; Lua
+	// blacktemple/boss_reliquary_of_souls.lua:172,
+	// 322 — triggered self-cast in soulReset,
+	// C++ cpp:599 DoCastSelf triggered) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28819_41535_41542.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp0 die0 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur21 -1 infinite (aux row
+	// pre-existing), range1 Self Only 0yd (aux row
+	// pre-existing), school Physical; NO
+	// SpellCategories row (mechanic 0, dispel 0);
+	// ProcChance 101 / Attributes_5 0x8 /
+	// BonusCoefficient 0 not carried (no fields in
+	// the seed struct).
+	{id: 41535, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 41542 "Soul Release" (wago SpellName MATCHES;
+	// C++ SPELL_SOUL_RELEASE,
+	// boss_reliquary_of_souls.cpp:84; Lua
+	// blacktemple/boss_reliquary_of_souls.lua:173,
+	// 376 — non-triggered self-cast on soul death,
+	// C++ cpp:620 DoCastSelf) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_28819_41535_41542.txt,
+	// DifficultyID 0 rows): eff0 HEAL_PCT bp29
+	// die1 radius13 10yd (aux row pre-existing)
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1
+	// ENERGIZE_PCT bp29 die1 radius13 tgtA/tgtB
+	// same (stored bp29 = in-game 30); cast1
+	// instant, dur0 (no SpellDuration row), range1
+	// Self Only 0yd, school Holy; NO SpellCategories
+	// row (mechanic 0, dispel 0); ProcChance 101 /
+	// Attributes not carried (no fields in the seed
+	// struct).
+	{id: 41542, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
+		{effect: effHealPct, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effEnergizePct, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
 }
 
