@@ -151,6 +151,7 @@ const (
 	targetDestChannelTarget    = 76  // TARGET_DEST_CHANNEL_TARGET (SpellInfo.cpp:296)
 	targetUnitConeEnemy104     = 104 // TARGET_UNIT_CONE_ENEMY_104 (SharedDefines.h:1540)
 	targetUnitConeEntry        = 60  // TARGET_UNIT_CONE_ENTRY (SharedDefines.h:1496)
+	targetUnitMaster           = 27  // TARGET_UNIT_MASTER (SharedDefines.h:1463)
 	targetUnitSrcAreaAlly      = 30  // TARGET_UNIT_SRC_AREA_ALLY (SharedDefines.h:1467)
 	targetUnitSrcAreaEntry     = 7   // TARGET_UNIT_SRC_AREA_ENTRY (SharedDefines.h:1448)
 	targetUnitDestAreaEntry    = 8   // TARGET_UNIT_DEST_AREA_ENTRY (SharedDefines.h:1449)
@@ -3494,6 +3495,74 @@ var spells = []spell{
 	// (single-missing-id file).
 	{id: 64621, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+
+	// 64627 Summon Frost Bomb (wago name; C++ SPELL_SUMMON_FROST_BOMB,
+	// boss_mimiron.cpp:142 enum, cast by VX-001; Lua
+	// spell_mimiron_summon_frost_bomb_target.lua:20) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15 browser read
+	// 21144a37, DifficultyID 0 rows): eff0 28 SUMMON dieSides 1
+	// basePoints 0 TargetA 63 TARGET_DEST_TARGET_ANY misc 34149 miscB 64
+	// (SummonProperties 64, real row) chainAmplitude 1; eff1 3 DUMMY
+	// TargetA 25 TARGET_UNIT_TARGET_ANY chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 21 (-1 infinite, real row), rangeIdx 13
+	// (Anywhere - Unlimited, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row; SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent). Engine twins:
+	// effSummon 28 / effDummy 3 / targets 63/25 live. Removes the last
+	// unseeded-spell blocker for spell_mimiron_summon_frost_bomb_target.lua
+	// (single-missing-id file).
+	{id: 64627, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, targetA: targetDestTargetAny, misc: 34149, miscB: 64, chainAmplitude: 1},
+		{effect: effDummy, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 63819 Summon Junk Bot (wago name; C++ SPELL_SUMMON_JUNK_BOT,
+	// boss_mimiron.cpp:155 enum; Lua spell_mimiron_summon_junk_bot.lua:18
+	// non-triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 21144a37, DifficultyID 0 rows):
+	// single eff0 28 SUMMON dieSides 1 basePoints 0 TargetA 18
+	// TARGET_DEST_CASTER misc 33855 miscB 64 (SummonProperties 64, real
+	// row) chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21
+	// (-1 infinite, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: effSummon 28 / targetDestCaster 18
+	// live. Removes the last unseeded-spell blocker for
+	// spell_mimiron_summon_junk_bot.lua (single-missing-id file).
+	{id: 63819, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, targetA: targetDestCaster, misc: 33855, miscB: 64, chainAmplitude: 1},
+	}},
+	// 64398 Summon Junk Bot Dummy (C++ SPELL_SUMMON_JUNK_BOT_DUMMY,
+	// boss_mimiron.cpp:157 enum; Lua spell_mimiron_summon_junk_bot_target.lua:16
+	// triggered self-cast on hit unit; C++ spell script boss_mimiron.cpp:2689;
+	// wago "Summon Scrap Bot" name NOT verified — SpellName lookup returned
+	// no entries) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 21144a37, DifficultyID 0 rows): single eff0
+	// 6 APPLY_AURA aura 4 DUMMY TargetA 1 TARGET_UNIT_CASTER chainAmplitude
+	// 1; castTimeIdx 1 (instant, real row), durIdx 31 (8000ms, real row),
+	// rangeIdx 1 (Self Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: no SpellPower row; SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent). Engine twin:
+	// auraDummy 4 live. Removes the last unseeded-spell blocker for
+	// spell_mimiron_summon_junk_bot_target.lua (single-missing-id file).
+	{id: 64398, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46378 Windsoul Credit (wago name; C++ SPELL_WINDSOUL_CREDT — enum
+	// typo, zone_borean_tundra.cpp:1666; Lua zone_borean_tundra.lua:21
+	// non-triggered nil-target cast) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-15 browser read 21144a37, DifficultyID 0
+	// rows): single eff0 134 KILL_CREDIT2 TargetA 27 TARGET_UNIT_MASTER
+	// misc 25987 chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 0 (no SpellDuration row), rangeIdx 13 (Anywhere - Unlimited,
+	// real row), school 0x1 Physical, dispel 0 (no SpellCategories row).
+	// NOT carried: no SpellPower row; SpellAuraOptions ProcChance 101 (no
+	// proc table, 58109 precedent). Engine twin: effKillCredit2 134 live
+	// (spells.go:17749 handleEffectKillCreditGroup). Removes the last
+	// unseeded-spell blocker for zone_borean_tundra.lua (single-missing-id
+	// file).
+	{id: 46378, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKillCredit2, targetA: targetUnitMaster, misc: 25987, chainAmplitude: 1},
 	}},
 }
 
