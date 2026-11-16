@@ -7579,6 +7579,59 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 1849, dieSides: 301, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 		{effect: effKnockBack, basePoints: 199, dieSides: 26, misc: 200, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
+	// 19716 "Gehennas' Curse" (wago SpellName —
+	// MISMATCH vs expected "Gehennas Curse" — apostrophe
+	// only; C++ SPELL_GEHENNAS_CURSE,
+	// boss_gehennas.cpp:32 enum; Lua
+	// moltencore/boss_gehennas.lua:38) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19716_19717_19728.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_HEALING_PCT bp-76
+	// die1 misc127 radius11 45yd tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur5 300000ms, range1 Self Only, school Shadow,
+	// dispel 2 (Curse); BonusCoefficient 1 not carried;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// DispelType 2, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 19716, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -76, dieSides: 1, misc: 127, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19717 "Rain of Fire" (wago SpellName — MATCH
+	// vs expected "Rain of Fire"; C++
+	// SPELL_RAIN_OF_FIRE, boss_gehennas.cpp:33 enum;
+	// Lua moltencore/boss_gehennas.lua:39) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19716_19717_19728.txt, DifficultyID 0
+	// rows): eff0 PERSISTENT_AREA_AURA PERIODIC_DAMAGE
+	// bp924 die151 period2000 radius13 10yd tgtA
+	// TARGET_DEST_DYNOBJ_ENEMY; cast1 instant, dur32
+	// 6000ms, range5 Long 40yd, school Fire;
+	// BonusCoefficient 0; SpellCategories row present
+	// (DefenseType 1 Magic, PreventionType 0x1 — not
+	// carried); Attributes not carried.
+	{id: 19717, castTimeIdx: 1, durIdx: 32, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 924, dieSides: 151, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 19728 "Shadow Bolt" (wago SpellName — MATCH
+	// vs expected "Shadow Bolt"; C++
+	// SPELL_SHADOW_BOLT, boss_gehennas.cpp:34 enum; Lua
+	// moltencore/boss_gehennas.lua:40) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19716_19717_19728.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp2249 die501 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast3 500ms, dur0 none,
+	// range5 Long 40yd, school Shadow; Speed 36 not
+	// carried (no speed field in row());
+	// BonusCoefficient 1 not carried; SpellCategories
+	// row present (DefenseType 1 Magic, PreventionType
+	// 0x1 — not carried); Attributes not carried.
+	{id: 19728, castTimeIdx: 3, durIdx: 0, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2249, dieSides: 501, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
