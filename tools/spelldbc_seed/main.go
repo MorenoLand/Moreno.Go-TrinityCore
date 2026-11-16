@@ -79,6 +79,7 @@ const (
 	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage            = 58
+	effNormalizedWeaponDmg     = 121 // SPELL_EFFECT_NORMALIZED_WEAPON_DMG (SharedDefines.h:932)
 	effHealMaxHealth           = 67  // SPELL_EFFECT_HEAL_MAX_HEALTH
 	effInterruptCast           = 68  // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
 	effSummonObjectWild        = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
@@ -150,6 +151,7 @@ const (
 	auraControlVehicle         = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
 	auraCloneCaster            = 247 // SPELL_AURA_CLONE_CASTER (SpellAuraDefines.h)
 	auraPhase                  = 261 // SPELL_AURA_PHASE (SpellAuraDefines.h)
+	auraAllowOnlyAbility       = 263 // SPELL_AURA_ALLOW_ONLY_ABILITY (SpellAuraDefines.h:343; wago.tools names it DISABLE_CASTING_EXCEPT_ABILITIES)
 	auraInitializeImages       = 279 // SPELL_AURA_INITIALIZE_IMAGES (SpellAuraDefines.h)
 	auraLinked                 = 284
 	auraPreventRegen           = 294
@@ -8461,6 +8463,75 @@ var spells = []spell{
 		{effect: effHealPct, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effEnergizePct, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 29426 "Heroic Strike" (wago SpellName MATCHES;
+	// C++ SPELL_HEROIC_STRIKE,
+	// halls_of_reflection.cpp:2418; Lua
+	// northrend/npc_quel_delar_sword.lua:94,
+	// 171 — victim-cast, re-arm 6000ms, C++
+	// cpp:2705 DoCastVictim) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_29426_67541_67716.txt,
+	// DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp19 die5 tgtA TARGET_UNIT_TARGET_ENEMY
+	// (in-game +20); cast1 instant, dur0 (no
+	// SpellDuration row), range2 Combat 0-5yd
+	// (aux row pre-existing), school Physical;
+	// NO SpellAuraOptions row (mechanic 0,
+	// dispel 0); BonusCoefficient 1 not carried
+	// (no field in the seed struct).
+	{id: 29426, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 19, dieSides: 5, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 67541 "Bladestorm" (wago SpellName MATCHES;
+	// C++ SPELL_BLADESTORM,
+	// halls_of_reflection.cpp:2420; Lua
+	// northrend/npc_quel_delar_sword.lua:93,
+	// 162 — self-cast, re-arm 10000ms, C++
+	// cpp:2701 DoCast) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16
+	// verdict file wago_spells_29426_67541_67716.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp-1 die1
+	// period1000 trigger 67716 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MECHANIC_IMMUNITY_MASK (aura 147) bp-1
+	// die1 misc 1733 tgtA caster; eff2 APPLY_AURA
+	// ALLOW_ONLY_ABILITY (aura 263, wago name
+	// DISABLE_CASTING_EXCEPT_ABILITIES) bp-1 die1
+	// mask_1 4 tgtA caster; cast1 instant, dur32
+	// 6000ms (aux row pre-existing), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Physical; ProcChance 101 / Attributes not
+	// carried (no fields in the seed struct).
+	{id: 67541, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 1000, trigger: 67716, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunityMask, basePoints: -1, dieSides: 1, misc: 1733, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraAllowOnlyAbility, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1, mask: [3]uint32{0, 4, 0}},
+	}},
+	// 67716 "Whirlwind" (wago SpellName MATCHES;
+	// C++ SPELL_WHIRLWIND,
+	// halls_of_reflection.cpp:2419; Lua
+	// northrend/npc_quel_delar_sword.lua:95,
+	// 180 — DoCastAOE self-cast, re-arm 1000ms,
+	// C++ cpp:2709 DoCastAOE; also the
+	// Bladestorm periodic trigger) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_29426_67541_67716.txt,
+	// DifficultyID 0 rows): eff0
+	// NORMALIZED_WEAPON_DMG bp-1 die1 radius52
+	// 5yd (aux row added) tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; cast1
+	// instant, dur0 (no SpellDuration row),
+	// range1 Self Only 0yd (aux row
+	// pre-existing), school Physical; NO
+	// SpellAuraOptions row (mechanic 0, dispel
+	// 0); BonusCoefficient 1 not carried (no
+	// field in the seed struct).
+	{id: 67716, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effNormalizedWeaponDmg, basePoints: -1, dieSides: 1, radiusIdx: 52, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -8566,6 +8637,7 @@ func main() {
 		{32, f32(12), f32(0), f32(12)},   // real SpellRadius 32 for 32302/36383 (wago.tools 3.4.0.47659 SpellRadius row 32, 2026-11-16 verdict wago_spells_32302_36383_42075.txt)
 		{16, f32(1), f32(0), f32(1)},     // real SpellRadius 16 for 26392 eff0 (wago.tools 3.4.0.47659 SpellRadius row 16, 2026-11-16 verdict wago_spells_15284_26392_26540.txt)
 		{24, f32(65), f32(0), f32(65)},   // real SpellRadius 24 for 32309 (wago.tools 3.4.0.47659 SpellRadius row 24, 2026-11-16 verdict wago_spells_28131_28308_32309.txt)
+		{52, f32(5), f32(0), f32(5)},     // real SpellRadius 52 for 67716 (wago.tools 3.4.0.47659 SpellRadius row 52, 2026-11-16 verdict wago_spells_29426_67541_67716.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
