@@ -107,6 +107,7 @@ const (
 	auraTransform              = 56
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
+	auraSchoolImmunity         = 39 // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
 	auraModCastingSpeed        = 65 // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraModStalked             = 68 // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
 	auraModDmgDone             = 79
@@ -4165,6 +4166,105 @@ var spells = []spell{
 	// 2-missing-id list (gandling likewise for 12040/17950).
 	{id: 18103, mechanic: 12, castTimeIdx: 1, durIdx: 39, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 15636 Avatar of Flame (wago name; C++ SPELL_AVATAROFFLAME,
+	// boss_emperor_dagran_thaurissan.cpp:33 enum; Lua
+	// eastern_kingdoms/boss_emperor_dagran_thaurissan.lua:114,
+	// victim-cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read d7c7d05e, DifficultyID 0 rows): eff0 6
+	// APPLY_AURA aura 39 SCHOOL_IMMUNITY misc 126 (0x7e, all schools
+	// but Physical) TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1;
+	// eff1 6 APPLY_AURA aura 61 MOD_SCALE dieSides 1 basePoints 59
+	// TargetA 1 chainAmplitude 1; eff2 6 APPLY_AURA aura 42
+	// PROC_TRIGGER_SPELL dieSides 1 trigger 15643 TargetA 1
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 1
+	// (10000ms, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x4 Fire, dispel 0 / mechanic 0 (no SpellCategories row). NOT
+	// carried: SpellAuraOptions ProcChance 100 / ProcTypeMask_0 0x14
+	// (no proc table; ProcChance here is 100, not the usual 101);
+	// no SpellPower row; no SpellClassOptions row (no family);
+	// BonusCoefficient 1 on all three effects (no seed-struct field);
+	// eff1 BonusCoefficientFromAP 1 / PvpMultiplier 0 /
+	// ResourceCoefficient 1 / GroupSize 0 as read (no seed-struct
+	// fields); EffectAmplitude 0 (zero-value); Attributes not encoded
+	// (seed has no attributes field). Engine twins:
+	// spellAuraSchoolImmunity 39 live (player_auras.go),
+	// spellAuraModScale 61 live (spells.go:733),
+	// auraProcTriggerSpell 42 live (procs.go:1287). Trigger 15643 is
+	// the proc target, not seeded (50514 trigger-50524 precedent).
+	{id: 15636, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolImmunity, misc: 126, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 59, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, trigger: 15643, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 17492 Hand of Thaurissan (wago name; C++
+	// SPELL_HANDOFTHAURISSAN, boss_emperor_dagran_thaurissan.cpp:32
+	// enum; Lua eastern_kingdoms/boss_emperor_dagran_thaurissan.lua:106,
+	// target cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read d7c7d05e, DifficultyID 0 rows): eff0 2
+	// SCHOOL_DAMAGE dieSides 1 basePoints 239 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; eff1 6 APPLY_AURA aura
+	// 12 MOD_STUN mechanic 12 TargetA 6 chainAmplitude 1; castTimeIdx
+	// 1 (instant, real row), durIdx 28 (5000ms, real row), rangeIdx 4
+	// (Medium Range, real row), school 0x4 Fire, family 3
+	// SPELLFAMILY_MAGE mask {131074,0,0} (SpellClassOptions row),
+	// dispel 0 / mechanic 0 (spell-level; Categories Mechanic 0).
+	// NOT carried: no SpellAuraOptions row; no SpellPower row;
+	// SpellCategories Category 19 / DefenseType 1 / PreventionType
+	// 0x1 (no struct fields); eff1 BonusCoefficient 1 (no seed-struct
+	// field); EffectAmplitude 0 (zero-value); Attributes not encoded
+	// (seed has no attributes field). Engine twins: effSchoolDamage 2
+	// live, spellAuraModStun 12 live (spells.go:718). Per-effect
+	// mechanic carried on the 982/1356 auraDecSpeed precedent.
+	{id: 17492, castTimeIdx: 1, durIdx: 28, rangeIdx: 4, school: schoolFire, family: familyMage, familyFlags: [3]uint32{131074, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 239, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16495 Fatal Bite (wago name; C++ SPELL_FATAL_BITE,
+	// boss_gizrul_the_slavener.cpp:26 enum; Lua
+	// eastern_kingdoms/boss_gizrul_the_slavener.lua:93, victim-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read d7c7d05e, DifficultyID 0 rows): single eff0 9
+	// HEALTH_LEECH dieSides 1 basePoints 99 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 0 (no SpellDuration row), rangeIdx 2
+	// (Combat Range, real row), school 0x1 Physical, dispel 0 /
+	// mechanic 0 (Categories Mechanic 0). NOT carried: no
+	// SpellAuraOptions row; no SpellClassOptions row (no family);
+	// SpellPower ManaCost 0 (zero-value); EffectAmplitude 2 /
+	// RealPointsPerLevel 16 (no seed-struct fields);
+	// BonusCoefficient 1 (no seed-struct field); SpellCategories
+	// Category 41 / DefenseType 2 / PreventionType 0x2 (no struct
+	// fields); Attributes not encoded (seed has no attributes field).
+	// Engine twin: spellEffectHealthLeech 9 live with handler
+	// (spells.go:18601).
+	{id: 16495, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effHealthLeech, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16128 Infected Bite (wago name; C++ SPELL_INFECTED_BITE,
+	// boss_gizrul_the_slavener.cpp:27 enum; Lua
+	// eastern_kingdoms/boss_gizrul_the_slavener.lua:103, self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read d7c7d05e, DifficultyID 0 rows): eff0 6 APPLY_AURA
+	// aura 3 PERIODIC_DAMAGE auraPeriod 10000 dieSides 1 basePoints 44
+	// TargetA 6 TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; eff1 6
+	// APPLY_AURA aura 14 MOD_DAMAGE_TAKEN dieSides 1 basePoints 19
+	// misc 1 TargetA 6 chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 25 (180000ms, real row), rangeIdx 2 (Combat Range,
+	// real row), school 0x8 Nature, dispel 3 (SpellCategories
+	// DispelType 3 DISEASE), mechanic 0. NOT carried: no
+	// SpellAuraOptions row; no SpellPower row; no SpellClassOptions row
+	// (no family); eff0 BonusCoefficient 0.1 / eff1 RealPointsPerLevel
+	// 1 (no seed-struct fields); SpellCategories DefenseType 2 /
+	// PreventionType 0x2 (no struct fields); EffectAmplitude 0
+	// (zero-value); Attributes not encoded (seed has no attributes
+	// field). Engine twins: auraPeriodicDmg 3 / auraModDamageTaken 14
+	// live (spells.go). With 16495, removes
+	// eastern_kingdoms/boss_gizrul_the_slavener.lua from the
+	// 2-missing-id list (thaurissan likewise for 15636/17492).
+	{id: 16128, dispel: 3, castTimeIdx: 1, durIdx: 25, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 10000, dieSides: 1, basePoints: 44, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 19, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
