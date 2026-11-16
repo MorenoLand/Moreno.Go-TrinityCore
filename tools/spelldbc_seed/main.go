@@ -4611,6 +4611,63 @@ var spells = []spell{
 	{id: 30937, dispel: 1, castTimeIdx: 4, durIdx: 4, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 999, misc: 32, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 3490 Frenzied Rage (wago name; C++ SPELL_FRENZIED_RAGE,
+	// boss_aku_mai.cpp:25 enum; Lua kalimdor/boss_aku_mai.lua:43,
+	// DamageTaken HealthBelowPctDamaged(30) one-shot self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 0b3d22c7, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_MELEE_HASTE bp74 die1 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_DAMAGE_DONE bp-16 die1 misc1 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur28 5000ms, range2 Combat
+	// Range 5yd, school Physical; SpellCategories Category 21,
+	// DefenseType 0, DispelType 0, Mechanic 0, PreventionType 0x0;
+	// Attributes_0 0x40010 not carried (no field); no SpellPower,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 3490, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 74, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: -16, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 3815 Poison Cloud (wago name; C++ SPELL_POISON_CLOUD,
+	// boss_aku_mai.cpp:24 enum; Lua kalimdor/boss_aku_mai.lua:42,
+	// JustEngagedWith DoCastVictim, init {5s,9s} -> {25s,50s}) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 0b3d22c7, DifficultyID 0 row): eff0 APPLY_AURA
+	// PERIODIC_DAMAGE bp49 die1 auraPeriod 5000 radius14 8yd tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY; cast4
+	// 1000ms, dur22 45000ms, range1 Self Only, school Nature,
+	// dispel 4 (POISON); SpellCategories Mechanic 0, DefenseType
+	// Magic, PreventionType 0x1; RealPointsPerLevel 1.5 and
+	// EffectBonusCoefficient 1 not carried (no fields); Attributes_1
+	// 0x88 not carried; no SpellPower, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 3815, dispel: 4, castTimeIdx: 4, durIdx: 22, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 49, auraPeriod: 5000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 16245 Freeze Anim (wago name; C++ SPELL_FREEZE_ANIM,
+	// boss_cthun.cpp:84 enum; Lua kalimdor/boss_eye_of_cthun.lua:122)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 0b3d22c7, DifficultyID 0 row): eff0
+	// APPLY_AURA DUMMY bp0 die1 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1/infinite, range1 Self Only, school Physical;
+	// visual/marker aura only — no damage or healing effect in DB2;
+	// no SpellCategories, SpellClassOptions, SpellAuraOptions or
+	// SpellPower rows; Attributes_0 0x100 / Attributes_1 0x10000000
+	// not carried (no fields).
+	{id: 16245, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 22518 Glowy (Red) (wago SpellName; C++ SPELL_RED_COLORATION,
+	// boss_cthun.cpp:87 enum; Lua kalimdor/boss_eye_of_cthun.lua:121)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 0b3d22c7, DifficultyID 0 row): eff0
+	// APPLY_AURA DUMMY bp0 die0 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1/infinite, range1 Self Only, school Arcane;
+	// visual/marker aura only — no damage or healing effect in DB2;
+	// no SpellCategories, SpellClassOptions, SpellAuraOptions or
+	// SpellPower rows; Attributes_0 0x180 not carried (no field).
+	{id: 22518, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
