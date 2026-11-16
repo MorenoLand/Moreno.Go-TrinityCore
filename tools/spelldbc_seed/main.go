@@ -8781,6 +8781,71 @@ var spells = []spell{
 	{id: 40094, castTimeIdx: 1, durIdx: 1, rangeIdx: 11, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
 	}},
+	// 22539 "Shadow Flame" (wago SpellName is
+	// "Shadow Flame", two words — NOT
+	// "Shadowflame"; C++ SPELL_SHADOWFLAME,
+	// boss_ebonroc.cpp:24; Lua
+	// blackwinglair/boss_ebonroc.lua:44, 83 —
+	// victim-cast, {10s,20s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_22539_23339_23340.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp3937 die1125 (in-game 3938-5063)
+	// radius11 45yd tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; cast5 2000ms
+	// (aux row pre-existing), dur0 (no
+	// SpellDuration row), range36 Longer 0-45yd
+	// (aux row pre-existing), school Shadow; NO
+	// SpellAuraOptions row; BonusCoefficient 1 /
+	// Attributes not carried (no fields in the
+	// seed struct).
+	{id: 22539, castTimeIdx: 5, durIdx: 0, rangeIdx: 36, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3937, dieSides: 1125, radiusIdx: 11, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 23339 "Wing Buffet" (wago SpellName
+	// MATCHES; C++ SPELL_WINGBUFFET,
+	// boss_ebonroc.cpp:25; Lua
+	// blackwinglair/boss_ebonroc.lua:45, 101 —
+	// victim-cast, 30s) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16
+	// verdict file wago_spells_22539_23339_23340.txt,
+	// DifficultyID 0 rows): eff0 KNOCK_BACK
+	// bp149 die1 misc 250 radius9 20yd tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; eff1
+	// SCHOOL_DAMAGE bp562 die375 (in-game
+	// 563-938) radius9 tgtA cone; cast4 1000ms
+	// (aux row pre-existing), dur0 (no
+	// SpellDuration row), range1 Self Only 0yd
+	// (aux row pre-existing), school Physical;
+	// NO SpellAuraOptions row; BonusCoefficient
+	// 1 / Attributes not carried (no fields in
+	// the seed struct).
+	{id: 23339, castTimeIdx: 4, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 149, dieSides: 1, misc: 250, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 562, dieSides: 375, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 23340 "Shadow of Ebonroc" (wago SpellName
+	// MATCHES; C++ SPELL_SHADOWOFEBONROC,
+	// boss_ebonroc.cpp:26; Lua
+	// blackwinglair/boss_ebonroc.lua:46, 119 —
+	// victim-cast, {8s,10s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_22539_23339_23340.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PROC_TRIGGER_SPELL (aura 42) bp0 die1
+	// trigger 23394 tgtA TARGET_UNIT_TARGET_ENEMY
+	// (23394 trigger-only, NOT a live-cast ID,
+	// not seeded); cast1 instant, dur31 8000ms
+	// (aux row pre-existing), range3 Twenty yards
+	// 0-20yd (aux row pre-existing), school
+	// Shadow; ProcChance 100 / ProcTypeMask 0x28
+	// / Attributes not carried (no fields in the
+	// seed struct).
+	{id: 23340, castTimeIdx: 1, durIdx: 31, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 23394, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
