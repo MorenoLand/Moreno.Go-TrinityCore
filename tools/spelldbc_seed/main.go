@@ -7689,6 +7689,65 @@ var spells = []spell{
 	{id: 20603, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 739, dieSides: 121, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
 	}},
+	// 27680 "Berserk" (wago SpellName — MATCH
+	// vs expected "Berserk"; C++
+	// SPELL_BERSERK, boss_anubrekhan.cpp:57 enum;
+	// Lua northrend/boss_anubrekhan.lua:144) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_27680_28864_29105.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// bp499 die1 misc127 tgtA TARGET_UNIT_CASTER;
+	// eff1 APPLY_AURA MOD_INCREASE_SPEED bp149 die1
+	// tgtA TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// MOD_SCALE bp29 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur6 600000ms, range1 Self
+	// Only, school Physical; SpellCategories row
+	// present (Category 21, DispelType 0 — not
+	// carried); Attributes not carried.
+	{id: 27680, castTimeIdx: 1, durIdx: 6, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 499, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: 149, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 29, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 28864 "Summon Corpse Scarabs (10)" (wago
+	// SpellName — exact-string MISMATCH vs expected
+	// "Summon Corpse Scarabs", verbatim " (10)"
+	// suffix only; C++
+	// SPELL_SUMMON_CORPSE_SCARABS_MOB,
+	// boss_anubrekhan.cpp:56 enum; Lua
+	// northrend/boss_anubrekhan.lua:146) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_27680_28864_29105.txt, DifficultyID 0
+	// rows): eff0 SUMMON bp9 (=10 summons) die1
+	// misc16698 miscB64 radius12 100yd tgtA
+	// TARGET_DEST_CASTER; cast1 instant, dur21 -1,
+	// range1 Self Only, school Physical; NO
+	// SpellCategories row (no dispel); Attributes
+	// not carried. IDs+values govern per precedent.
+	{id: 28864, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 9, dieSides: 1, misc: 16698, miscB: 64, targetA: targetDestCaster, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 29105 "Summon Corpse Scarabs (5)" (wago
+	// SpellName — exact-string MISMATCH vs expected
+	// "Summon Corpse Scarabs", verbatim " (5)"
+	// suffix only; C++
+	// SPELL_SUMMON_CORPSE_SCARABS_PLR,
+	// boss_anubrekhan.cpp:55 enum; Lua
+	// northrend/boss_anubrekhan.lua:145) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_27680_28864_29105.txt, DifficultyID 0
+	// rows): eff0 SUMMON bp4 (=5 summons) die1
+	// misc16698 miscB64 radius12 100yd tgtA
+	// TARGET_DEST_CASTER; cast1 instant, dur21 -1,
+	// range1 Self Only, school Physical; NO
+	// SpellCategories row (no dispel); Attributes
+	// not carried. IDs+values govern per precedent.
+	{id: 29105, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 4, dieSides: 1, misc: 16698, miscB: 64, targetA: targetDestCaster, radiusIdx: 12, chainAmplitude: 1},
+	}},
 }
 
 func main() {
