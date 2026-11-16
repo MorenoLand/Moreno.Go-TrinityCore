@@ -6154,6 +6154,83 @@ var spells = []spell{
 	{id: 58228, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 4, misc: 5, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 63041 "Rocket Strike" (wago SpellName — MISMATCH vs
+	// expected "Rocket Strike Damage"; C++
+	// SPELL_ROCKET_STRIKE_DAMAGE, boss_mimiron.cpp:2278
+	// comment; Lua northrend/npc_mimiron_rocket_visual.lua:23,
+	// spawn handler casts 63041) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 8bd58485, DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp4999999 die1 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius15 3yd; eff1/2
+	// SCHOOL_DAMAGE bp4712499 die575001 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY
+	// radius15 3yd (raw bp/die seeded as-is); cast1
+	// instant, dur0 (no SpellDuration row), range13
+	// unlimited 50000yd, school Fire; SpellCategories
+	// absent ("No entries found."); Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 63041, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 4999999, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 15, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 575001, basePoints: 4712499, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 15, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 575001, basePoints: 4712499, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 15, chainAmplitude: 1},
+	}},
+	// 65040 "Not-So-Friendly Fire" (wago SpellName —
+	// MISMATCH vs expected "Not So Friendly Fire"
+	// (hyphenation only); C++ SPELL_NOT_SO_FRIENDLY_FIRE,
+	// boss_mimiron.cpp:170 enum; Lua
+	// northrend/npc_mimiron_rocket_visual.lua:24, triggered
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 8bd58485,
+	// DifficultyID 0 row): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY
+	// radius28 50000yd; cast1 instant, dur0 (no
+	// SpellDuration row), range13 unlimited 50000yd, school
+	// Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 65040, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 63387 "Rapid Burst" (wago SpellName — MISMATCH vs
+	// expected "Rapid Burst Left"; C++
+	// SPELL_RAPID_BURST_LEFT, boss_mimiron.cpp:117 enum; Lua
+	// northrend/spell_mimiron_rapid_burst.lua:22-23, periodic
+	// aura casts 63387/64019 alternating by tick parity) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 8bd58485, DifficultyID 0
+	// row): eff0 SCHOOL_DAMAGE bp1413 die173 tgtA
+	// TARGET_UNIT_CONE_CASTER_TO_DEST_ENEMY radius12 100yd;
+	// EffectAttributes 0x20000 NOT carried (seed effect
+	// struct has no attributes field); cast1 instant, dur0
+	// (no SpellDuration row), range13 unlimited 50000yd,
+	// school Spellfire (0x44 Arcane+Fire), Speed 75 NOT
+	// carried (seed has no speed field); SpellCategories
+	// absent ("No entries found."); Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 63387, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolSpellfire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 173, basePoints: 1413, targetA: targetUnitConeEnemy104, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 64019 "Rapid Burst" (wago SpellName — MISMATCH vs
+	// expected "Rapid Burst Right"; C++
+	// SPELL_RAPID_BURST_RIGHT, boss_mimiron.cpp:118 enum;
+	// Lua northrend/spell_mimiron_rapid_burst.lua:22-23,
+	// periodic aura casts 63387/64019 alternating by tick
+	// parity) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 8bd58485,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp1413
+	// die173 tgtA TARGET_UNIT_CONE_CASTER_TO_DEST_ENEMY
+	// radius12 100yd; DB2-identical to 63387 except row IDs;
+	// EffectAttributes 0x20000 NOT carried (seed effect
+	// struct has no attributes field); cast1 instant, dur0
+	// (no SpellDuration row), range13 unlimited 50000yd,
+	// school Spellfire (0x44 Arcane+Fire), Speed 75 NOT
+	// carried (seed has no speed field); SpellCategories
+	// absent ("No entries found."); Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 64019, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolSpellfire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 173, basePoints: 1413, targetA: targetUnitConeEnemy104, radiusIdx: 12, chainAmplitude: 1},
+	}},
 }
 
 func main() {
