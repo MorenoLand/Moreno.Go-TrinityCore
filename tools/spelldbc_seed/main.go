@@ -53,6 +53,7 @@ const (
 	effDummy                   = 3
 	effTeleportUnits           = 5 // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816)
 	effApplyAura               = 6
+	effQuestComplete           = 16 // SPELL_EFFECT_QUEST_COMPLETE (SharedDefines.h:827)
 	effHealthLeech             = 9
 	effHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	effLearnSpell              = 36 // SPELL_EFFECT_LEARN_SPELL (SharedDefines.h:847)
@@ -5255,6 +5256,71 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 19, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, trigger: 78723, auraPeriod: 2000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 56431 Arcane Bomb (wago SpellName, NOT "Arcane Bomb
+	// Knockback Damage"; C++ SPELL_ARCANE_BOMB_KNOCKBACK_DAMAGE,
+	// boss_malygos.cpp:125 enum; Lua northrend/npc_arcane_overload.lua:38,
+	// DoCastAOE triggered) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-16 browser read df231e6d,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp4712 die575
+	// tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius13 10yd; eff1 KNOCK_BACK bp149 die1 misc 100 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY radius13
+	// 10yd; cast1 instant, dur0 (no SpellDuration row), range13
+	// unlimited 50000yd, school Arcane; SpellCategories
+	// Category 0, DefenseType 1, PreventionType 0x1 not carried;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 56431, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 575, basePoints: 4712, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 149, misc: 100, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 56432 Arcane Overload (wago SpellName, NOT "Arcane Overload
+	// 1"; C++ SPELL_ARCANE_OVERLOAD_1, boss_malygos.cpp:126 enum;
+	// Lua northrend/npc_arcane_overload.lua:39, DoCastSelf
+	// triggered) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 browser read df231e6d,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 1000 bp-1 die1 trigger
+	// 56435 tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 1000 bp-1 die1 trigger
+	// 56438 tgtA TARGET_UNIT_CASTER; cast1 instant, dur22
+	// 45000ms, range1 Self Only 0yd, school Physical as read
+	// (NOT Arcane); NO SpellCategories row; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	// Trigger spells 56435/56438 are not themselves seeded.
+	{id: 56432, castTimeIdx: 1, durIdx: 22, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, trigger: 56435, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, trigger: 56438, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 58113 Threat Pulse (wago name; C++ SPELL_THREAT_PULSE,
+	// zone_icecrown.cpp:328 enum; Lua northrend/npc_blessed_banner.lua:115,
+	// DoCast in Reset) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read df231e6d,
+	// DifficultyID 0 row): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 3000 bp-1 die1 trigger
+	// 58114 tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only 0yd, school Physical; NO
+	// SpellCategories row; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows. Trigger spell
+	// 58114 is not itself seeded.
+	{id: 58113, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, trigger: 58114, auraPeriod: 3000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 58084 Crusader's Spire Victory (wago SpellName, NOT
+	// "Crusaders' Spire Victory" — singular possessive; C++
+	// SPELL_CRUSADERS_SPIRE_VICTORY, zone_icecrown.cpp:329 enum;
+	// Lua northrend/npc_blessed_banner.lua:130, triggered self-cast
+	// on Halof-death victory) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// df231e6d, DifficultyID 0 row): eff0 QUEST_COMPLETE bp0
+	// die0 misc 13141 (quest id) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY radius12 100yd; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self Only 0yd, school
+	// Physical; NO SpellCategories row; Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 58084, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effQuestComplete, dieSides: 0, basePoints: 0, misc: 13141, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 12, chainAmplitude: 1},
 	}},
 }
 
