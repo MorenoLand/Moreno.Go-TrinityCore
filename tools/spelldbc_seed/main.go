@@ -99,6 +99,7 @@ const (
 	auraModIncreaseSpeed       = 31  // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
 	auraModSpeedAlways         = 129 // SPELL_AURA_MOD_SPEED_ALWAYS (SpellAuraDefines.h:209)
 	auraDecSpeed               = 33
+	auraModIncreaseHealth      = 34 // SPELL_AURA_MOD_INCREASE_HEALTH (SpellAuraDefines.h:114)
 	auraEffImmunity            = 37
 	auraTransform              = 56
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
@@ -3800,6 +3801,80 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModStalked, auraPeriod: 0, dieSides: 1, basePoints: -1, targetA: targetUnitTargetAny, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraRangedApAttackerBonus, dieSides: 1, basePoints: 109, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraMeleeApAttackerBonus, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26522 Lunar Fortune (wago name; C++ SPELL_LUNAR_FORTUNE,
+	// npcs_special.cpp:1761 enum; Lua world/npc_firework.lua:129,
+	// non-triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row
+	// + SpellMisc (2026-11-15 browser read 5857f249, DifficultyID 0
+	// rows): single eff0 6 APPLY_AURA aura 34 MOD_INCREASE_HEALTH
+	// dieSides 1 basePoints 249 misc 9 TargetA 22 TARGET_SRC_CASTER
+	// TargetB 8 TARGET_UNIT_DEST_AREA_ENTRY chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 30 (1800000ms, real
+	// row), rangeIdx 3 (Twenty yards, real row), school 0x1 Physical,
+	// dispel 0 (no SpellCategories row). NOT carried: NO
+	// SpellAuraOptions row, no SpellPower row; EffectAmplitude 0 /
+	// auraPeriod 0 (zero-value); Attributes not encoded (seed has no
+	// attributes field). Engine twin: auraModIncreaseHealth 34 live
+	// (aura_stats.go / creature_auras.go). Removes the last
+	// unseeded-spell blocker for world/npc_firework.lua
+	// (single-missing-id file).
+	{id: 26522, castTimeIdx: 1, durIdx: 30, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModIncreaseHealth, dieSides: 1, basePoints: 249, misc: 9, targetA: targetSrcCaster, targetB: targetUnitDestAreaEntry, chainAmplitude: 1},
+	}},
+	// 50514 Summon Gargoyle (wago name; C++ SPELL_DK_SUMMON_GARGOYLE_2,
+	// pet_dk.cpp:34 enum; Lua world/npc_pet_dk_ebon_gargoyle.lua:62,
+	// owner:RemoveAura) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 5857f249, DifficultyID 0
+	// rows): single eff0 6 APPLY_AURA aura 23 PERIODIC_TRIGGER_SPELL
+	// auraPeriod 1000 dieSides 1 basePoints 50514 (verbatim as shown;
+	// cross-checked in foreign-key view and table) trigger 50524
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 18 (20000ms, real row), rangeIdx 1
+	// (Self Only, real row), school 0x20 Shadow, dispel 0 (no
+	// SpellCategories row). NOT carried: SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent); SpellPower ManaPerSecond
+	// 30 / PowerType 6 (no seed-struct field; manaCost 0); EffectAmplitude
+	// 0 (zero-value); Attributes not encoded (seed has no attributes
+	// field). Engine twin: auraPeriodicTrig 23 live (spells.go:38224).
+	// Removes the last unseeded-spell blocker for
+	// world/npc_pet_dk_ebon_gargoyle.lua (single-missing-id file).
+	{id: 50514, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, dieSides: 1, basePoints: 50514, trigger: 50524, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50052 Ethereal Pet onSummon (wago name; C++
+	// SPELL_ETHEREAL_ONSUMMON, pet_generic.cpp:129 enum, spell script
+	// spell_generic.cpp:1693; Lua world/npc_pet_gen_soul_trader.lua:44,
+	// non-triggered owner cast) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-15 browser read 5857f249, DifficultyID
+	// 0 rows): single eff0 77 SCRIPT_EFFECT TargetA 25
+	// TARGET_UNIT_TARGET_ANY chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 0 (no SpellDuration row), rangeIdx 6 (Vision
+	// Range, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent); no SpellPower row;
+	// EffectAmplitude 0 / auraPeriod 0 (zero-value); Attributes not
+	// encoded (seed has no attributes field). Engine twin:
+	// effScriptEffect 77 live. Removes the last unseeded-spell blocker
+	// for world/npc_pet_gen_soul_trader.lua (single-missing-id file).
+	{id: 50052, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 69735 Lich Pet OnSummon (wago name; C++ SPELL_LICH_ONSUMMON,
+	// pet_generic.cpp:155 enum, spell script spell_generic.cpp:1921;
+	// Lua world/npc_pet_lich.lua:42, non-triggered owner cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 5857f249, DifficultyID 0 rows): single eff0 77
+	// SCRIPT_EFFECT TargetA 27 TARGET_UNIT_MASTER chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration
+	// row), rangeIdx 6 (Vision Range, real row), school 0x1 Physical,
+	// dispel 0 (no SpellCategories row). NOT carried: SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent); no SpellPower
+	// row; EffectAmplitude 0 / auraPeriod 0 (zero-value); Attributes
+	// not encoded (seed has no attributes field). Engine twin:
+	// effScriptEffect 77 live. Removes the last unseeded-spell blocker
+	// for world/npc_pet_lich.lua (single-missing-id file).
+	{id: 69735, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, targetA: targetUnitMaster, chainAmplitude: 1},
 	}},
 }
 
