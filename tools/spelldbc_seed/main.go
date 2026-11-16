@@ -6615,6 +6615,78 @@ var spells = []spell{
 	{id: 15281, castTimeIdx: 1, durIdx: 21, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
 	}},
+	// 47310 "Direbrew's Disarm" (wago SpellName — MISMATCH vs
+	// expected "Direbrew Disarm"; C++
+	// SPELL_DIREBREW_DISARM,
+	// boss_coren_direbrew.cpp:67 enum; Lua
+	// eastern_kingdoms/boss_coren_direbrew.lua:134) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_47310_47370_47369_47331.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_DISARM
+	// bp0 die0 mechanic3 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY radius37 7yd; eff1
+	// TRIGGER_SPELL trig47411; eff2 WEAPON_PERCENT_DAMAGE
+	// bp149 die1 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY radius37 7yd; cast15
+	// 4000ms, dur35 4000ms, range1 Self Only, school
+	// Physical; SpellCategories row present (Category 0,
+	// DefenseType 2 Melee — not carried); Attributes not
+	// carried.
+	{id: 47310, castTimeIdx: 15, durIdx: 35, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDisarm, mechanic: 3, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 37, chainAmplitude: 1},
+		{effect: effTriggerSpell, trigger: 47411, chainAmplitude: 1},
+		{effect: effWeaponPercentDamage, dieSides: 1, basePoints: 149, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 37, chainAmplitude: 1},
+	}},
+	// 47370 "Send Mug Target Picker" (wago SpellName — MATCH
+	// vs expected "Send Mug Target Picker"; C++
+	// SPELL_SEND_MUG_TARGET_PICKER,
+	// boss_coren_direbrew.cpp:71 enum; Lua
+	// eastern_kingdoms/boss_coren_direbrew.lua:130) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_47310_47370_47369_47331.txt,
+	// DifficultyID 0 rows): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY
+	// radius28 50000yd; cast1 instant, dur0 none, range1
+	// Self Only, school Physical; NO SpellCategories row;
+	// Attributes not carried.
+	{id: 47370, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+	}},
+	// 47369 "Send Mug Control Aura" (wago SpellName — MATCH
+	// vs expected "Send Mug Control Aura"; C++
+	// SPELL_SEND_MUG_CONTROL_AURA,
+	// boss_coren_direbrew.cpp:70 enum; Lua
+	// eastern_kingdoms/boss_coren_direbrew.lua:129) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_47310_47370_47369_47331.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_DUMMY bp0 die0 period12000 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only, school Physical; NO
+	// SpellCategories row; Attributes not carried.
+	{id: 47369, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDummy, auraPeriod: 12000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47331 "Has Dark Brewmaiden's Brew" (wago SpellName —
+	// MISMATCH vs expected "Has Dark Brewmaidens Brew";
+	// C++ SPELL_HAS_DARK_BREWMAIDENS_BREW,
+	// boss_coren_direbrew.cpp:75 enum; Lua
+	// eastern_kingdoms/boss_coren_direbrew.lua:71-72
+	// HasAura(47331) exclusion) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 verdict file
+	// wago_spells_47310_47370_47369_47331.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL bp0 die0 period10000
+	// trig47344 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur21 -1 infinite, range6 Vision 100yd, school
+	// Physical; NO SpellCategories row; Attributes not
+	// carried.
+	{id: 47331, castTimeIdx: 1, durIdx: 21, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 10000, trigger: 47344, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -6682,6 +6754,7 @@ func main() {
 	radii := [][]uint32{
 		{1, f32(100), f32(0), f32(100)},
 		{28, f32(50000), f32(0), f32(50000)}, // real SpellRadius 28 for 66545 (wago.tools 3.4.0.43659)
+		{37, f32(7), f32(0), f32(7)},         // real SpellRadius 37 for 47310 (wago.tools 3.4.0.47659, 2026-11-16 verdict wago_spells_47310_47370_47369_47331.txt)
 		{36, f32(0), f32(0), f32(0)},         // real SpellRadius 36 for 50415 (wago.tools 3.4.0.43659, 2026-11-13 22:17 verdict: all zeros)
 		{13, f32(10), f32(0), f32(10)},       // real SpellRadius 13 for 65100 (wago.tools 3.4.0.43659)
 		{11, f32(45), f32(0), f32(45)},       // real SpellRadius 11 for 6432 Smite Stomp (wago.tools 3.4.0.47659, 2026-11-16 verdict 8bda548f)
