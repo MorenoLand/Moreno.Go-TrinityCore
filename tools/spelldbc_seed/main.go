@@ -5380,6 +5380,71 @@ var spells = []spell{
 	{id: 46078, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDetectAmore, dieSides: 0, basePoints: 0, misc: 3, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 3616 Poison Proc (wago SpellName; C++ SPELL_POISON_PROC,
+	// razorfen_downs.cpp:302 enum; Lua
+	// kalimdor/npc_tomb_creature.lua:46, Tomb Fiend self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 7e623dca, DifficultyID 0 row):
+	// eff0 APPLY_AURA PROC_TRIGGER_SPELL bp0 die1 trigger 744
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only 0yd, school Physical; NO
+	// SpellCategories row; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows. Trigger spell
+	// 744 is not itself seeded.
+	{id: 3616, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: 0, trigger: 744, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12254 Virulent Poison Proc (wago SpellName, NOT "Virulent
+	// Poison" — the boss_tuten_kash.cpp:26 alias
+	// SPELL_VIRULENT_POISON does not change the DB2 name; C++
+	// SPELL_VIRULENT_POISON_PROC, razorfen_downs.cpp:303 enum;
+	// Lua kalimdor/npc_tomb_creature.lua:47, Tomb Reaver
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 7e623dca,
+	// DifficultyID 0 row): eff0 APPLY_AURA PROC_TRIGGER_SPELL
+	// bp0 die1 trigger 12251 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 infinite, range1 Self Only 0yd, school
+	// Physical; same template as 3616, trigger differs; NO
+	// SpellCategories row; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows. Trigger spell
+	// 12251 is not itself seeded.
+	{id: 12254, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: 0, trigger: 12251, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 24646 Avatar (wago SpellName; C++ SPELL_AVATAR,
+	// boss_grilek.cpp:24 enum; Lua zulgurub/boss_grilek.lua:31,
+	// non-triggered DoCast self) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 7e623dca, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE bp499 die1 misc 1 tgtA
+	// TARGET_UNIT_CASTER (+500%); eff1 APPLY_AURA
+	// MOD_DECREASE_SPEED bp-76 die1 tgtA TARGET_UNIT_CASTER
+	// (-75%); eff2 APPLY_AURA MOD_SCALE bp199 die1 tgtA
+	// TARGET_UNIT_CASTER (200%); cast1 instant, dur8 15000ms,
+	// range1 Self Only 0yd, school Physical; EffectBonusCoefficient
+	// 1 on all three effects NOT carried (seed has no field —
+	// established precedent); NO SpellCategories row;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 24646, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 499, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -76, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 199, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 6524 Ground Tremor (wago SpellName; C++
+	// SPELL_GROUND_TREMOR, boss_grilek.cpp:25 enum; Lua
+	// zulgurub/boss_grilek.lua:32, triggered DoCastVictim; also
+	// cast by boss_archaedas, same row) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 7e623dca, DifficultyID 0 row): eff0 APPLY_AURA MOD_STUN
+	// bp0 die1 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius9 20yd; cast1 instant,
+	// dur39 2000ms, range1 Self Only 0yd, school Physical;
+	// SpellCategories Mechanic 12 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 6524, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
 }
 
 func main() {
