@@ -70,6 +70,7 @@ const (
 	effCharge                  = 96
 	effPowerBurn               = 62  // SPELL_EFFECT_POWER_BURN (SharedDefines.h:873)
 	effSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
+	effSanctuary               = 79  // SPELL_EFFECT_SANCTUARY (SharedDefines.h:890)
 	effSkill                   = 118 // SPELL_EFFECT_SKILL (SharedDefines.h:929)
 	effKnockBack               = 98
 	effAttackMe                = 114 // SPELL_EFFECT_ATTACK_ME (SharedDefines.h:925)
@@ -94,6 +95,8 @@ const (
 	auraStun                   = 12
 	auraModDamageTaken         = 14 // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
 	auraDamageShield           = 15 // SPELL_AURA_DAMAGE_SHIELD (SpellAuraDefines.h:95)
+	auraReflectSpells          = 28 // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:108)
+	auraModPercentStat         = 80 // SPELL_AURA_MOD_PERCENT_STAT (SpellAuraDefines.h:160)
 	auraSchoolAbsorb           = 69 // SPELL_AURA_SCHOOL_ABSORB (SpellAuraDefines.h:149)
 	auraModDamageDone          = 13 // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
 	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
@@ -5788,6 +5791,83 @@ var spells = []spell{
 	{id: 38739, castTimeIdx: 1, durIdx: 0, rangeIdx: 35, school: schoolNature, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 625, basePoints: 2187, targetA: targetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 29, chainAmplitude: 1},
 	}},
+	// 32325 Void Blast (wago SpellName; C++ SPELL_VOID_BLAST,
+	// ManaTombs/boss_pandemonius.cpp:32 enum; Lua
+	// outland/boss_pandemonius.lua:74, DoCast(target, 32325))
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 74701ec4, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp1662 die475 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK bp74 die1
+	// misc 200 tgtA TARGET_UNIT_TARGET_ENEMY; cast3 500ms,
+	// dur0 (no SpellDuration row), range6 Vision 0-100yd,
+	// school Shadow; Speed 30 NOT carried (seed has no
+	// field — established precedent); SpellCategories
+	// Category 0 DefenseType 1 PreventionType 0x1 not
+	// carried; Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 32325, castTimeIdx: 3, durIdx: 0, rangeIdx: 6, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 475, basePoints: 1662, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 74, misc: 200, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 32358 Dark Shell (wago SpellName; C++
+	// SPELL_DARK_SHELL, ManaTombs/boss_pandemonius.cpp:33
+	// enum; Lua outland/boss_pandemonius.lua:75, self-cast)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 74701ec4, DifficultyID 0
+	// rows ONLY — a DifficultyID 173 variant exists
+	// (cast1 instant, dur31 8000ms, dmg-shield bp750 die0,
+	// reflect bp100 die0) and is NOT seeded per the
+	// base-rows-only precedent): eff0 APPLY_AURA
+	// DAMAGE_SHIELD bp749 die1 tgtA TARGET_UNIT_CASTER;
+	// eff1 APPLY_AURA REFLECT_SPELLS bp99 die1 tgtA
+	// TARGET_UNIT_CASTER; cast4 1000ms, dur32 6000ms, range1
+	// Self Only 0yd, school Shadow; EffectAmplitude 1 NOT
+	// carried (seed has no field); SpellCategories absent
+	// ("No entries found."); Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 32358, castTimeIdx: 4, durIdx: 32, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDamageShield, dieSides: 1, basePoints: 749, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraReflectSpells, dieSides: 1, basePoints: 99, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36643 "Shattrath Banish Teleport" (wago SpellName —
+	// MISMATCH vs expected "Banish Teleport"; C++
+	// SPELL_BANISH_TELEPORT, World/npc_guard.cpp:37 enum;
+	// Lua world/npc_guard.lua:144, self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 74701ec4, DifficultyID 0 rows): eff0
+	// TELEPORT_UNITS bp0 die0 tgtA TARGET_UNIT_CASTER tgtB
+	// TARGET_DEST_DB; eff1 SANCTUARY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur0 (no
+	// SpellDuration row), range12 0-5yd, school Physical;
+	// EffectPos_facing 2.189... and EffectAmplitude 1 NOT
+	// carried (seed has no fields); EffectBonusCoefficient 1
+	// NOT carried; SpellCategories Category 0 DefenseType 1
+	// PreventionType 0x1 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 36643, castTimeIdx: 1, durIdx: 0, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 0, basePoints: 0, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+		{effect: effSanctuary, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39533 Exile (wago SpellName; C++ SPELL_EXILE,
+	// World/npc_guard.cpp:38 enum; Lua
+	// world/npc_guard.lua:145, self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 74701ec4, DifficultyID 0 rows): eff0
+	// APPLY_AURA MOD_DECREASE_SPEED bp-21 die1 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA MOD_PERCENT_STAT
+	// bp-21 die1 misc -1 (AllStats) tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur25 30000ms
+	// (SpellDuration row 25 re-read this batch — see the
+	// corrected aux row), range12 0-5yd, school Physical;
+	// raw EffectBasePoints -21 seeded as-is (the -20% aura
+	// text follows the usual +1 adjustment); SpellCategories
+	// Category 0 DefenseType 1 PreventionType 0x1 not
+	// carried; Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 39533, castTimeIdx: 1, durIdx: 25, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -21, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModPercentStat, dieSides: 1, basePoints: -21, misc: -1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -5835,7 +5915,7 @@ func main() {
 		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
 		{9, 30000, 0, 30000},       // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 		{85, 18000, 0, 18000},      // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
-		{25, 180000, 0, 180000},    // real SpellDuration 25 for 1834 Gathering Speed (wago.tools 3.4.0.43659 SpellMisc DurationIndex 25; 180000ms = 3 min, Wowhead cross-check)
+		{25, 30000, 0, 30000},      // real SpellDuration 25 (wago.tools 3.4.0.47659 SpellDuration row 25, browser 74701ec4) — CORRECTED 2026-11-16 from 180000ms (old value was a Wowhead display cross-check for 1834, never a DBC-row read); this also re-times the other durIdx-25 spells 1834/45532/16128 to 30000ms
 		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
 		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
 		{36, 1000, 0, 1000},        // real SpellDuration 36 for 64562 (wago.tools 3.4.0.47659 SpellDuration row 36, 2026-11-15 verdict)
