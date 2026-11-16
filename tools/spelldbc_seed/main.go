@@ -7982,6 +7982,51 @@ var spells = []spell{
 		{effect: effApplyAreaAuraEnemy, aura: auraModDmgDone, basePoints: -61, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAreaAuraEnemy, aura: auraModHealingPct, basePoints: -61, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 28157 "Slime Spray" (wago SpellName — MATCH
+	// vs expected "Slime Spray"; C++
+	// SPELL_SLIME_SPRAY, boss_grobbulus.cpp:27 enum;
+	// Lua northrend/boss_grobbulus.lua:70) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_28157_28169_28240.txt, DifficultyID 0
+	// row): eff0 SCHOOL_DAMAGE bp6299 die1401
+	// radius11 45yd tgtA TARGET_UNIT_CONE_ENEMY_24;
+	// cast1 instant, dur0 none, range37 Extended
+	// Range 0-50yd, school Nature; NO SpellCategories
+	// row (no dispel); EffectAttributes 0x20000 not
+	// carried.
+	{id: 28157, castTimeIdx: 1, durIdx: 0, rangeIdx: 37, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 6299, dieSides: 1401, radiusIdx: 11, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 28169 "Mutating Injection" (wago SpellName — MATCH
+	// vs expected "Mutating Injection"; C++
+	// SPELL_MUTATING_INJECTION, boss_grobbulus.cpp:28
+	// enum; Lua northrend/boss_grobbulus.lua:71) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28157_28169_28240.txt, DifficultyID 0
+	// row): eff0 APPLY_AURA DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur1
+	// 10000ms, range37 Extended Range 0-50yd, school
+	// Physical, dispel 3 (Disease).
+	{id: 28169, castTimeIdx: 1, durIdx: 1, rangeIdx: 37, school: schoolPhysical, dispel: 3, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 28240 "Poison Cloud" (wago SpellName — MATCH
+	// vs expected "Poison Cloud"; C++
+	// SPELL_POISON_CLOUD, boss_grobbulus.cpp:30 enum;
+	// Lua northrend/boss_grobbulus.lua:72) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_28157_28169_28240.txt, DifficultyID 0
+	// row): eff0 SUMMON bp0 die1 misc16363 miscB64
+	// tgtA TARGET_DEST_CASTER; cast1 instant, dur62
+	// 75000ms (new aux row), range1 Self Only,
+	// school Physical; NO SpellCategories row (no
+	// dispel); Attributes not carried.
+	{id: 28240, castTimeIdx: 1, durIdx: 62, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 16363, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -8041,6 +8086,7 @@ func main() {
 		{38, 11000, 0, 11000},      // real SpellDuration 38 for 31673 Foul Spores (wago.tools 3.4.0.47659 SpellDuration row 38, browser 45c90da6)
 		{63, 25000, 0, 25000},      // real SpellDuration 63 for 36119 Void Zone (wago.tools 3.4.0.47659 SpellDuration row 63, 2026-11-16 verdict wago_spells_16045_36119.txt)
 		{41, 360000, 0, 360000},    // real SpellDuration 41 for 30977 Conflagration Blast (wago.tools 3.4.0.47659 SpellDuration row 41, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
+		{62, 75000, 0, 75000},      // real SpellDuration 62 for 28240 Poison Cloud (wago.tools 3.4.0.47659 SpellDuration row 62, 2026-11-16 verdict wago_spells_28157_28169_28240.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
