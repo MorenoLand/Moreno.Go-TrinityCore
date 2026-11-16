@@ -7632,6 +7632,63 @@ var spells = []spell{
 	{id: 19728, castTimeIdx: 3, durIdx: 0, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 2249, dieSides: 501, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 19702 "Impending Doom" (wago SpellName — MATCH
+	// vs expected "Impending Doom"; C++
+	// SPELL_IMPENDING_DOOM, boss_lucifron.cpp:32 enum;
+	// Lua moltencore/boss_lucifron.lua:31) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19702_19703_20603.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE bp1999
+	// die1 period10000 radius11 45yd tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur1
+	// 10000ms, range1 Self Only, school Shadow, dispel
+	// 1 (Magic); SpellCategories row present
+	// (DefenseType 1 Magic, DispelType 1,
+	// PreventionType 0x1 — not carried); Attributes
+	// not carried.
+	{id: 19702, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1999, dieSides: 1, auraPeriod: 10000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19703 "Lucifron's Curse" (wago SpellName —
+	// MATCH vs expected "Lucifron's Curse"; C++
+	// SPELL_LUCIFRON_CURSE, boss_lucifron.cpp:33 enum;
+	// Lua moltencore/boss_lucifron.lua:32) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19702_19703_20603.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_POWER_COST_SCHOOL_PCT
+	// bp99 die1 misc127 miscB127 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; RadiusIndex_0 0
+	// (RadiusIndex_1 11 = 45yd — recorded, NOT seeded,
+	// repo convention: radiusIdx = RadiusIndex_0,
+	// 29961/29963 precedent; the _0-vs-_1 question is
+	// still open); cast1 instant, dur5 300000ms,
+	// range1 Self Only, school Shadow, dispel 2
+	// (Curse); SpellCategories row present (DefenseType
+	// 1 Magic, DispelType 2, PreventionType 0x1 — not
+	// carried); Attributes not carried.
+	{id: 19703, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModPowerCostSchoolPct, basePoints: 99, dieSides: 1, misc: 127, miscB: 127, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 20603 "Shadow Shock" (wago SpellName — MATCH
+	// vs expected "Shadow Shock"; C++
+	// SPELL_SHADOW_SHOCK, boss_lucifron.cpp:34 enum;
+	// Lua moltencore/boss_lucifron.lua:33) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19702_19703_20603.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp739 die121 radius9
+	// 20yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur0
+	// none, range1 Self Only, school Shadow;
+	// SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 20603, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 739, dieSides: 121, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
 }
 
 func main() {
