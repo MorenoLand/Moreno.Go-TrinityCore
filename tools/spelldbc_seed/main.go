@@ -5646,6 +5646,74 @@ var spells = []spell{
 	{id: 35035, castTimeIdx: 16, durIdx: 8, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: -1, trigger: 35781, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 24664 Sleep (wago SpellName; C++ SPELL_SLEEP,
+	// boss_hazzarah.cpp:26 enum; Lua
+	// zulgurub/boss_hazzarah.lua:34, triggered DoCastVictim)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read f28d47f3, DifficultyID 0 row):
+	// eff0 APPLY_AURA MOD_STUN bp0 die0 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius12 100yd; cast1 instant, dur32 6000ms, range13
+	// unlimited 50000yd, school Shadow; SpellCategories
+	// DefenseType 0 PreventionType 0x0 StartRecoveryCategory
+	// 133 not carried; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 24664, castTimeIdx: 1, durIdx: 32, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 26046 Mana Burn (wago SpellName; C++ SPELL_MANABURN,
+	// boss_hazzarah.cpp:25 enum; Lua
+	// zulgurub/boss_hazzarah.lua:33, triggered DoCastVictim)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read f28d47f3, DifficultyID 0 row):
+	// eff0 POWER_BURN bp924 die151 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius10 30yd; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Shadow; EffectAmplitude 1 and
+	// EffectBonusCoefficient 0.1 NOT carried (seed has no
+	// fields — established precedent); SpellCategories
+	// DefenseType 1 PreventionType 0x1 not carried;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 26046, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effPowerBurn, dieSides: 151, basePoints: 924, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 24819 Lightning Wave (wago SpellName; C++
+	// SPELL_LIGHTNINGWAVE, boss_wushoolay.cpp:25 enum; Lua
+	// zulgurub/boss_wushoolay.lua:33) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// f28d47f3, DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp462
+	// die75 chainTargets 10 chainAmplitude 1.2 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0 (no
+	// SpellDuration row), range6 Vision 0-100yd, school
+	// Nature; EffectBonusCoefficient 1 NOT carried;
+	// SpellCategories Category 85 DefenseType 1
+	// PreventionType 0x1 StartRecoveryCategory 133 not
+	// carried; Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 24819, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 75, basePoints: 462, targetA: targetEnemy, chainTargets: 10, chainAmplitude: 1.2},
+	}},
+	// 25033 Lightning Cloud (wago SpellName; C++
+	// SPELL_LIGHTNINGCLOUD, boss_wushoolay.cpp:24 enum; Lua
+	// zulgurub/boss_wushoolay.lua:32, triggered DoCastVictim)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read f28d47f3, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp1574 die451 tgtA
+	// TARGET_UNIT_DEST_AREA_ENEMY radius13 10yd; eff1
+	// PERSISTENT_AREA_AURA PERIODIC_DAMAGE auraPeriod 2000
+	// bp1837 die525 tgtA TARGET_DEST_DYNOBJ_ENEMY radius13
+	// 10yd; cast1 instant, dur305 14000ms, range4 Medium
+	// 0-30yd, school Nature; EffectBonusCoefficient 1 NOT
+	// carried; SpellCategories Category 35 DefenseType 1
+	// PreventionType 0x1 not carried; Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows. NEW aux
+	// row SpellDuration 305 = 14000ms added, verified in
+	// SpellDuration.dbc.
+	{id: 25033, castTimeIdx: 1, durIdx: 305, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 451, basePoints: 1574, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 525, basePoints: 1837, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -5701,6 +5769,7 @@ func main() {
 		{29, 12000, 0, 12000},      // real SpellDuration 29 for 35759 Felfire Shock (wago.tools 3.4.0.47659 SpellDuration row 29, browser 2f3bd931)
 		{555, 4500, 0, 4500},       // real SpellDuration 555 for 36512 Knock Away (wago.tools 3.4.0.47659 SpellDuration row 555, browser 2f3bd931)
 		{327, 500, 0, 500},         // real SpellDuration 327 for 34799 Arcane Devastation (wago.tools 3.4.0.47659 SpellDuration row 327, browser bb66d46a)
+		{305, 14000, 0, 14000},     // real SpellDuration 305 for 25033 Lightning Cloud (wago.tools 3.4.0.47659 SpellDuration row 305, browser f28d47f3)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
