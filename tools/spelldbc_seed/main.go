@@ -4736,6 +4736,75 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 2000, trigger: 21809, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 21687 Toxic Volley (wago name; C++ SPELL_TOXICVOLLEY,
+	// boss_noxxion.cpp:31 enum; Lua kalimdor/boss_noxxion.lua:43,
+	// DoCastVictim, non-triggered, init 7s -> 9s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16 browser
+	// read 5c905176, DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp74
+	// die51 tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius11 45yd; eff1 APPLY_AURA PERIODIC_DAMAGE bp4 die1
+	// auraPeriod 3000 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius11 45yd; cast1 instant, dur8
+	// 15000ms, range4 Medium Range 30yd, school Nature, dispel 4
+	// (POISON); SpellCategories Mechanic 0, DefenseType 0,
+	// PreventionType 0x0; SpellAuraOptions CumulativeAura 20 /
+	// ProcChance 101 not carried (no fields); Attributes_0 0x80010
+	// not carried; Speed 40 not carried; no SpellPower or
+	// SpellClassOptions rows.
+	{id: 21687, castTimeIdx: 1, durIdx: 8, rangeIdx: 4, school: schoolNature, dispel: 4, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 51, basePoints: 74, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 4, auraPeriod: 3000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 22916 Uppercut (wago name; C++ SPELL_UPPERCUT,
+	// boss_noxxion.cpp:32 enum; Lua kalimdor/boss_noxxion.lua:44,
+	// DoCastVictim, non-triggered, init 16s -> 12s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16 browser
+	// read 5c905176, DifficultyID 0 rows): eff0 WEAPON_DAMAGE bp49
+	// die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK bp93
+	// die63 misc10 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range7 Ten yards 10yd, school
+	// Physical; SpellCategories Mechanic 0, DefenseType Melee,
+	// PreventionType 0x2; Attributes_0 16 not carried; no
+	// SpellPower, SpellClassOptions or SpellAuraOptions rows.
+	{id: 22916, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 49, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 63, basePoints: 93, misc: 10, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 18392 Fireball (wago name; C++ SPELL_FIREBALL,
+	// boss_onyxia.cpp:59 enum; Lua kalimdor/boss_onyxia.lua:183,
+	// DoCast(random target), phase BREATH) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read 5c905176,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp4712 die575 tgtA
+	// TARGET_DEST_TARGET_ENEMY tgtB TARGET_UNIT_DEST_AREA_ENEMY
+	// radius14 8yd; cast14 3000ms, dur0 (no SpellDuration row),
+	// range13 Anywhere - Unlimited 50000yd, school Fire, Speed 65
+	// not carried; DifficultyID 4/2 rows bp7068 die863 and
+	// DifficultyID 9 row bp1699 die601 NOT seeded (base row only);
+	// SpellCategories DefenseType Magic, PreventionType 0x1,
+	// StartRecoveryCategory 133 not carried; Attributes_0 0x10000 /
+	// Attributes_1 0x88 / Attributes_2 0x4 not carried; no
+	// SpellPower, SpellClassOptions or SpellAuraOptions rows.
+	{id: 18392, castTimeIdx: 14, durIdx: 0, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 575, basePoints: 4712, targetA: targetDestTargetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 68867 Tail Sweep (wago name; C++ SPELL_TAIL_SWEEP,
+	// boss_onyxia.cpp:55 enum; Lua kalimdor/boss_onyxia.lua:182,
+	// DoCastAOE, non-triggered, self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read 5c905176,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp8324 die1351 tgtA
+	// TARGET_UNIT_CONE_ENEMY_54 radius10 30yd; eff1 KNOCK_BACK
+	// bp149 die1 misc300 tgtA TARGET_UNIT_CONE_ENEMY_54 radius10
+	// 30yd; cast1 instant, dur0 (no SpellDuration row), range4
+	// Medium Range 30yd, school Physical, mechanic 12 (stunned);
+	// DifficultyID 4/2 rows bp12024 die1951 NOT seeded (base row
+	// only); SpellCategories DefenseType 0, PreventionType 0x0;
+	// SpellAuraOptions ProcChance 101 not carried; Attributes_1
+	// 0x88 / Attributes_3 0x100 not carried; no SpellPower or
+	// SpellClassOptions rows.
+	{id: 68867, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1351, basePoints: 8324, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 149, misc: 300, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
 }
 
 func main() {
