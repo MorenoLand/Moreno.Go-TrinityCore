@@ -5445,6 +5445,78 @@ var spells = []spell{
 	{id: 6524, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
 	}},
+	// 11831 Frost Nova (wago SpellName; C++ SPELL_FROSTNOVA,
+	// zone_hellfire_peninsula.cpp:830 enum; Lua
+	// outland/npc_magister_aledis.lua:58, self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 8da29dbe, DifficultyID 0 rows):
+	// eff0 SCHOOL_DAMAGE bp27 die5 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY, RadiusIndex_0 0 /
+	// RadiusIndex_1 13 — the _1 radius is NOT seeded: the
+	// engine reads RadiusIndex_0 only (store.go:1172, field
+	// 92+i), 29961 precedent; eff1 APPLY_AURA MOD_ROOT bp-1
+	// die1 mechanic 7 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius13 10yd; cast1 instant,
+	// dur31 8000ms, range1 Self Only 0yd, school Frost;
+	// EffectBonusCoefficient 1 on eff0 NOT carried (seed has
+	// no field — established precedent); SpellCategories
+	// DefenseType 1 DispelType 1 Mechanic 7 PreventionType 0x1
+	// not carried; Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 11831, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 5, basePoints: 27, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: -1, mechanic: 7, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 20823 Fireball (wago SpellName; C++ SPELL_FIREBALL,
+	// zone_hellfire_peninsula.cpp:829 enum; Lua
+	// outland/npc_magister_aledis.lua:57, victim-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 8da29dbe, DifficultyID 0 row):
+	// eff0 SCHOOL_DAMAGE bp89 die31 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast14 3000ms (established
+	// row 14), dur0 (no SpellDuration row), range5 Long 0-40yd,
+	// school Fire; EffectBonusCoefficient 1 NOT carried;
+	// SpellCategories DefenseType 1 PreventionType 0x1
+	// StartRecoveryCategory 133 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 20823, castTimeIdx: 14, durIdx: 0, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 31, basePoints: 89, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 12548 Frost Shock (wago SpellName; C++
+	// SPELL_FROST_SHOCK, zone_nagrand.cpp:55 enum (also
+	// SPELL_KUR_FROST_SHOCK, zone_nagrand.cpp:243, same id);
+	// Lua outland/npc_nagrand_captive.lua:118, DoCastVictim)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 8da29dbe, DifficultyID 0 rows):
+	// eff0 APPLY_AURA MOD_DECREASE_SPEED bp-51 die1 mechanic
+	// 11 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 SCHOOL_DAMAGE
+	// bp88 die7 tgtA TARGET_UNIT_TARGET_ENEMY (verdict order:
+	// aura first, damage second); cast1 instant, dur31 8000ms,
+	// range3 Twenty 0-20yd, school Frost; EffectBonusCoefficient
+	// 1 on eff1 NOT carried; SpellCategories DefenseType 1
+	// DispelType 1 PreventionType 0x1 not carried; Attributes
+	// not carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 12548, castTimeIdx: 1, durIdx: 31, rangeIdx: 3, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -51, mechanic: 11, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 7, basePoints: 88, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16006 Chain Lightning (wago SpellName; C++
+	// SPELL_CHAIN_LIGHTNING, zone_nagrand.cpp:53 enum (also
+	// SPELL_KUR_CHAIN_LIGHTNING, zone_nagrand.cpp:241, same
+	// id); Lua outland/npc_nagrand_captive.lua:116,
+	// DoCastVictim) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 8da29dbe,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp184 die31
+	// chainTargets 3 tgtA TARGET_UNIT_TARGET_ENEMY; cast14
+	// 3000ms, dur0 (no SpellDuration row), range4 Medium
+	// 0-30yd, school Nature; EffectBonusCoefficient 1 NOT
+	// carried; SpellCategories Category 85 DefenseType 1
+	// PreventionType 0x1 StartRecoveryCategory 133 not
+	// carried; Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 16006, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 31, basePoints: 184, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 1},
+	}},
 }
 
 func main() {
