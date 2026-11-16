@@ -71,6 +71,7 @@ const (
 	effSkinning                = 95  // SPELL_EFFECT_SKINNING (SharedDefines.h:906)
 	effSkill                   = 118 // SPELL_EFFECT_SKILL (SharedDefines.h:929)
 	effKnockBack               = 98
+	effAttackMe                = 114 // SPELL_EFFECT_ATTACK_ME (SharedDefines.h:925)
 	effPullTowards             = 124 // SPELL_EFFECT_PULL_TOWARDS (SharedDefines.h:935)
 	effKillCredit2             = 134 // SPELL_EFFECT_KILL_CREDIT2 (SharedDefines.h:945)
 	effWeaponDamage            = 58
@@ -172,6 +173,7 @@ const (
 	familyMage                 = 3   // SPELLFAMILY_MAGE (SpellClassOptions SpellClassSet 3, wago 3.4.0.43659)
 	familyHunter               = 9   // SPELLFAMILY_HUNTER (SharedDefines.h:3590)
 	familyDeathKnight          = 15  // SPELLFAMILY_DEATHKNIGHT (SharedDefines.h:3596)
+	familyWarlock              = 5   // SPELLFAMILY_WARLOCK (SharedDefines.h:3586)
 )
 
 type effect struct {
@@ -3885,6 +3887,103 @@ var spells = []spell{
 	{id: 69735, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
 		{effect: effScriptEffect, targetA: targetUnitMaster, chainAmplitude: 1},
 	}},
+	// 36213 Angered Earth (wago name; C++ SPELL_SHAMAN_ANGEREDEARTH,
+	// pet_shaman.cpp:28 enum; Lua world/npc_pet_shaman_earth_elemental.lua:36/76,
+	// non-triggered victim cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 2f3bd931, DifficultyID 0
+	// rows): eff0 114 ATTACK_ME dieSides 1 TargetA 22 TARGET_SRC_CASTER
+	// TargetB 15 TARGET_UNIT_SRC_AREA_ENEMY RadiusIndex 18 (15yd, real
+	// row) chainAmplitude 1; eff1 63 THREAT dieSides 1 basePoints 1099
+	// TargetA 22 TargetB 15 RadiusIndex 18 chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration row),
+	// rangeIdx 1 (Self Only, real row), school 0x1 Physical, family 5
+	// SPELLFAMILY_WARLOCK mask {0,0,0} (SpellClassOptions row; zero
+	// mask, no familyFlags carried), mechanic 16 (SpellCategories
+	// Mechanic 16), dispel 0 (DispelType 0). NOT carried: no
+	// SpellAuraOptions row; no SpellPower row; eff1 RealPointsPerLevel
+	// 25 (no seed-struct field); SpellCategories DefenseType 2 /
+	// PreventionType 0x2 / Category 0 (no struct fields);
+	// EffectAmplitude 0 (zero-value); Attributes not encoded (seed has
+	// no attributes field). Engine twins: spellEffectAttackMe 114 live
+	// (immunity.go), spellEffectThreat 63 live (spells.go:382). Removes
+	// the last unseeded-spell blocker for
+	// world/npc_pet_shaman_earth_elemental.lua (single-missing-id file;
+	// last seedable single — 59046/65296 unseedable).
+	{id: 36213, mechanic: 16, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, family: familyWarlock, effects: [3]effect{
+		{effect: effAttackMe, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effThreat, dieSides: 1, basePoints: 1099, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 35759 Felfire Shock (wago name; C++ SPELL_FELFIRE_SHOCK,
+	// boss_wrath_scryer_soccothrates.cpp:55 enum; Lua
+	// arcatraz/boss_wrath_scryer_soccothrates.lua:134, timer-driven
+	// victim cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 2f3bd931, DifficultyID 0 rows): eff0 2
+	// SCHOOL_DAMAGE dieSides 161 basePoints 1519 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; eff1 6 APPLY_AURA aura
+	// 3 PERIODIC_DAMAGE auraPeriod 3000 dieSides 1 basePoints 982
+	// TargetA 6 chainAmplitude 1; castTimeIdx 19 (2500ms, real row),
+	// durIdx 29 (12000ms, real SpellDuration row 29, added below),
+	// rangeIdx 3 (Twenty yards, real row), school 0x4 Fire, dispel 1
+	// (SpellCategories DispelType 1 MAGIC), mechanic 0. NOT carried:
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent); eff0 BonusCoefficient 1 / eff1 BonusCoefficient 0.1
+	// (no seed-struct field); no SpellClassOptions row (no family);
+	// SpellCategories Category 19 / DefenseType 1 / StartRecoveryCategory
+	// 133 (no struct fields); EffectAmplitude 0 (zero-value);
+	// Attributes not encoded (seed has no attributes field). Engine
+	// twin: auraPeriodicDmg 3 live (spells.go), effSchoolDamage 2 live.
+	{id: 35759, dispel: 1, castTimeIdx: 19, durIdx: 29, rangeIdx: 3, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 161, basePoints: 1519, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 1, basePoints: 982, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 36512 Knock Away (wago name; C++ SPELL_KNOCK_AWAY,
+	// boss_wrath_scryer_soccothrates.cpp:56 enum; Lua
+	// arcatraz/boss_wrath_scryer_soccothrates.lua:135, timer-driven
+	// area cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 2f3bd931, DifficultyID 0 rows): eff0 31
+	// WEAPON_PERCENT_DAMAGE dieSides 1 basePoints 49 TargetA 22
+	// TargetB 15 RadiusIndex 13 (10yd, real row) chainAmplitude 1;
+	// eff1 98 KNOCK_BACK dieSides 27 basePoints 116 misc 265 TargetA
+	// 22 TargetB 15 RadiusIndex 13 chainAmplitude 1; eff2 6 APPLY_AURA
+	// aura 26 MOD_ROOT TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 555 (4500ms, real
+	// SpellDuration row 555, added below), rangeIdx 7 (Ten yards, real
+	// row), school 0x1 Physical, dispel 0 / mechanic 0 (no
+	// SpellCategories row). NOT carried: SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent); no SpellClassOptions row
+	// (no family); EffectAmplitude 0 (zero-value); Attributes not
+	// encoded (seed has no attributes field). Engine twins:
+	// spellEffectKnockBack 98 live with handler (spells.go:18835),
+	// spellEffectWeaponPercentDamage 31 live, auraRoot 26 live. With
+	// 35759, removes arcatraz/boss_wrath_scryer_soccothrates.lua from
+	// the 2-missing-id list.
+	{id: 36512, castTimeIdx: 1, durIdx: 555, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, dieSides: 1, basePoints: 49, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 27, basePoints: 116, misc: 265, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 41253 Greater Invisibility (wago name; C++
+	// SPELL_GREATER_INVISIBILITY, black_temple.cpp:33 enum; Lua
+	// blacktemple/npc_angered_soul_fragment.lua:33, self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 2f3bd931, DifficultyID 0 rows): single eff0 6
+	// APPLY_AURA aura 18 MOD_INVISIBILITY dieSides 1 basePoints 299
+	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 21 (-1 infinite, real row), rangeIdx
+	// 1 (Self Only, real row), school 0x40 Arcane, family 3
+	// SPELLFAMILY_MAGE mask {0,0,0} (SpellClassOptions row; zero mask,
+	// no familyFlags carried), dispel 6 (SpellCategories DispelType 6
+	// INVISIBILITY), mechanic 0. NOT carried: SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent); eff0
+	// BonusCoefficient 1 (no seed-struct field); SpellCategories
+	// DefenseType 1 / PreventionType 0x1 (no struct fields);
+	// EffectAmplitude 0 (zero-value); Attributes not encoded (seed has
+	// no attributes field). Engine twin: spellAuraModInvisibility 18
+	// live (stealth.go). Removes the last unseeded-spell blocker for
+	// blacktemple/npc_angered_soul_fragment.lua (single-missing-id file).
+	{id: 41253, dispel: 6, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, family: familyMage, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModInvisibility, dieSides: 1, basePoints: 299, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -3937,6 +4036,8 @@ func main() {
 		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
 		{36, 1000, 0, 1000},        // real SpellDuration 36 for 64562 (wago.tools 3.4.0.47659 SpellDuration row 36, 2026-11-15 verdict)
 		{30, 1800000, 0, 1800000},  // real SpellDuration 30 for 12544 Frost Armor (wago.tools 3.4.0.47659 SpellDuration row 30, browser c857c690)
+		{29, 12000, 0, 12000},      // real SpellDuration 29 for 35759 Felfire Shock (wago.tools 3.4.0.47659 SpellDuration row 29, browser 2f3bd931)
+		{555, 4500, 0, 4500},       // real SpellDuration 555 for 36512 Knock Away (wago.tools 3.4.0.47659 SpellDuration row 555, browser 2f3bd931)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
