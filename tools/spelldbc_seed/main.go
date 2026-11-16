@@ -4312,6 +4312,58 @@ var spells = []spell{
 	{id: 17164, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effSummonPet, dieSides: 1, targetA: targetDestCasterSummon, misc: 10979, chainAmplitude: 1},
 	}},
+	// 13900 Fiery Burst (wago name; C++ SPELL_FIERYBURST,
+	// boss_magmus.cpp:25 enum; Lua
+	// eastern_kingdoms/boss_magmus.lua:45, victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 92ae141c, DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp509 die181
+	// tgtA TARGET_UNIT_DEST_AREA_ENEMY radius13 (10yd); cast16 1500ms,
+	// dur0 (no SpellDuration row), range5 Long 40yd; dispel 0,
+	// mechanic 0; no SpellPower, SpellClassOptions or SpellAuraOptions
+	// rows.
+	{id: 13900, castTimeIdx: 16, durIdx: 0, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 181, basePoints: 509, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 24375 War Stomp (wago name; C++ SPELL_WARSTOMP,
+	// boss_magmus.cpp:26 enum; Lua
+	// eastern_kingdoms/boss_magmus.lua:46, victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 92ae141c, DifficultyID 0 rows): eff0 APPLY_AURA MOD_STUN bp-1
+	// die1 tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius18 (15yd); NO EffectIndex 1 row (empty middle slot);
+	// eff2 WEAPON_DAMAGE bp499 die1 same targets/radius; cast1
+	// instant, dur28 5000ms, range1 Self Only; spell mechanic 12,
+	// dispel 0; EffectAmplitude 1 on eff0 not carried (no struct field).
+	{id: 24375, mechanic: 12, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{},
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 499, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 16496 Shoot (wago name; C++ SPELL_SHOOT,
+	// boss_quartermaster_zigris.cpp:24 enum; Lua
+	// eastern_kingdoms/boss_quartermaster_zigris.lua:47, victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 92ae141c, DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp214 die75 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// (no SpellDuration row), range54 Monster Shoot 5-30yd; family
+	// Hunter 9, familyFlags {1,0,0} (SpellClassOptions SpellClassSet 9,
+	// mask 1); dispel 0, mechanic 0.
+	{id: 16496, castTimeIdx: 1, durIdx: 0, rangeIdx: 54, school: schoolPhysical, family: familyHunter, familyFlags: [3]uint32{1, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 75, basePoints: 214, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16497 Stun Bomb (wago name; C++ SPELL_STUNBOMB,
+	// boss_quartermaster_zigris.cpp:25 enum; Lua
+	// eastern_kingdoms/boss_quartermaster_zigris.lua:48, victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 92ae141c, DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp0 die1 tgtA TARGET_UNIT_DEST_AREA_ENEMY radius8 (5yd);
+	// eff1 APPLY_AURA MOD_STUN bp0 die0 same target/radius; cast5
+	// 2000ms, dur28 5000ms, range4 Medium 30yd; spell mechanic 12,
+	// dispel 0; eff0 RealPointsPerLevel 1.5 not carried (no field).
+	{id: 16497, mechanic: 12, castTimeIdx: 5, durIdx: 28, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
 }
 
 func main() {
