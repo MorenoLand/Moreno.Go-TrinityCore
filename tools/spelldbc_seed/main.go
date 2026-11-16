@@ -7057,6 +7057,69 @@ var spells = []spell{
 		{effect: effWeaponDamage, basePoints: 74, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, mechanic: 12, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 33547 "Fear" (wago SpellName — MATCH vs
+	// expected "Fear"; C++ SPELL_FEAR,
+	// boss_ambassador_hellmaw.cpp:43 enum; Lua
+	// outland/boss_ambassador_hellmaw.lua:94) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_33547_33551_34970.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_FEAR bp-1 die1 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius11 45yd; cast1
+	// instant, dur32 6000ms, range1 Self Only, school
+	// Shadow; SpellCategories row present (DispelType 1
+	// MAGIC, Mechanic 5 — not carried); Attributes not
+	// carried.
+	{id: 33547, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 33551 "Corrosive Acid" (wago SpellName — MATCH
+	// vs expected "Corrosive Acid"; C++
+	// SPELL_CORROSIVE_ACID,
+	// boss_ambassador_hellmaw.cpp:42 enum; Lua
+	// outland/boss_ambassador_hellmaw.lua:93) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_33547_33551_34970.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE bp1093
+	// die313 period3000 tgtA TARGET_UNIT_CONE_ENEMY_24
+	// radius9 20yd; eff1 APPLY_AURA MOD_RESISTANCE
+	// bp-3939 die-1123 misc1 tgtA
+	// TARGET_UNIT_CONE_ENEMY_24 radius9 20yd; cast5
+	// 2000ms, dur8 15000ms, range1 Self Only, school
+	// Nature; BonusCoefficient 1 not carried;
+	// SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 33551, castTimeIdx: 5, durIdx: 8, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1093, dieSides: 313, auraPeriod: 3000, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistance, basePoints: -3939, dieSides: -1123, misc: 1, targetA: targetUnitConeEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 34970 "Frenzy" (wago SpellName — MISMATCH vs
+	// expected "Enrage"; wago Name_lang is "Frenzy",
+	// same ID is SPELL_FRENZY in
+	// boss_rokmar_the_crackler.cpp:34; C++
+	// SPELL_ENRAGE, boss_ambassador_hellmaw.cpp:44
+	// enum; Lua outland/boss_ambassador_hellmaw.lua:95)
+	// — IDs + values govern, seeding per precedent.
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_33547_33551_34970.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_DONE bp74
+	// die1 misc1 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_MELEE_HASTE bp59 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_SCALE
+	// bp19 die1 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur4 120000ms, range1 Self Only, school
+	// Physical; RealPointsPerLevel 3 not carried;
+	// SpellCategories row present (Category 21 — not
+	// carried); Attributes not carried.
+	{id: 34970, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 74, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 59, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
