@@ -5944,6 +5944,71 @@ var spells = []spell{
 	{id: 59687, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 1201, basePoints: 7399, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 26, chainAmplitude: 1},
 	}},
+	// 45702 Neural Needle Impact (wago SpellName; C++
+	// SPELL_NEURAL_NEEDLE_IMPACT,
+	// zone_borean_tundra.cpp:1177 enum; Lua
+	// northrend/npc_imprisoned_beryl_sorcerer.lua:60,
+	// DoCastSelf 45702) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read da0ce2f3,
+	// DifficultyID 0 row): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER radius18 15yd; cast1 instant, dur0
+	// (no SpellDuration row), range1 Self Only 0yd, school
+	// Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 45702, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 48254 Prototype Neural Needle Impact (wago SpellName;
+	// C++ SPELL_PROTOTYPE_NEURAL_NEEDLE_IMPACT,
+	// zone_borean_tundra.cpp:1178 enum; Lua
+	// northrend/npc_imprisoned_beryl_sorcerer.lua:61,
+	// DoCastSelf 48254) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read da0ce2f3,
+	// DifficultyID 0 row): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER radius18 15yd; cast1 instant, dur0
+	// (no SpellDuration row), range1 Self Only 0yd, school
+	// Physical; identical to 45702's effect except the
+	// Effect row ID (Attributes_2 0x0 vs 0x4, not carried);
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 48254, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 47044 "Cosmetic - Confused State Visual (Big)" (wago
+	// SpellName — MISMATCH vs expected "Confused"; no spell
+	// named exactly "Confused" exists in this build/locale;
+	// C++ SPELL_CONFUSED, zone_dragonblight.cpp:381 enum;
+	// Lua northrend/npc_torturer_lecraft.lua:108,
+	// RemoveAura(47044)) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read da0ce2f3,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp0 die0
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only 0yd, school Physical;
+	// EffectBonusCoefficient 1 NOT carried (seed has no
+	// field — established precedent); SpellCategories absent
+	// ("No entries found."); Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 47044, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47550 "Create Bark of the Walkers" (wago SpellName —
+	// MISMATCH vs expected "Create Item Bark"; no such spell
+	// exists in this build/locale; C++
+	// SPELL_CREATE_ITEM_BARK, zone_dragonblight.cpp:380
+	// enum; Lua northrend/npc_torturer_lecraft.lua:107,
+	// tree casts 47550 on the player) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// da0ce2f3, DifficultyID 0 row): eff0 CREATE_ITEM bp0
+	// die0 itemType 36786 tgtA TARGET_UNIT_TARGET_ANY; cast1
+	// instant, dur0 (no SpellDuration row), range12
+	// Interact 0-5yd, school Physical; SpellCategories
+	// absent ("No entries found."); Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 47550, castTimeIdx: 1, durIdx: 0, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effCreateItem, dieSides: 0, basePoints: 0, itemType: 36786, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
 }
 
 func main() {
