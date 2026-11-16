@@ -145,6 +145,7 @@ const (
 	auraRangedApAttackerBonus  = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
 	auraMeleeApAttackerBonus   = 165 // SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:245)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
+	auraModDetaunt             = 221 // SPELL_AURA_MOD_DETAUNT (SpellAuraDefines.h:301)
 	auraRaidProcFromCharge     = 223 // SPELL_AURA_RAID_PROC_FROM_CHARGE (SpellAuraDefines.h:303)
 	auraPeriodicDummy          = 226
 	auraPeriodicTrigWithValue  = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
@@ -8718,6 +8719,67 @@ var spells = []spell{
 	// in the seed struct).
 	{id: 62139, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
 		{effect: effTeleportUnits, basePoints: 0, dieSides: 0, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 15496 "Cleave" (wago SpellName MATCHES;
+	// C++ SPELL_CLEAVE, black_temple.cpp:28
+	// (also herod/hexlord/violet_hold); Lua
+	// blacktemple/npc_wrathbone_flayer.lua:41,
+	// 134 — victim-cast, re-arm {1s,2s}) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15496_39544_40094.txt,
+	// DifficultyID 0 rows): eff0
+	// WEAPON_PERCENT_DAMAGE bp109 die1
+	// (in-game 110%) chainTargets 2 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range2 Combat
+	// 0-5yd (aux row pre-existing), school
+	// Physical; SpellCategories row (DefenseType
+	// 2 Melee, mechanic 0, dispel 0); NO
+	// SpellAuraOptions row; Attributes not
+	// carried (no fields in the seed struct).
+	{id: 15496, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 109, dieSides: 1, targetA: targetEnemy, chainTargets: 2, chainAmplitude: 1},
+	}},
+	// 39544 "Ignored" (wago SpellName MATCHES;
+	// C++ SPELL_IGNORED, black_temple.cpp:29;
+	// Lua blacktemple/npc_wrathbone_flayer.lua:42,
+	// 142 — random-target cast, re-arm 10s) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15496_39544_40094.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_DETAUNT (aura 221) bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur28 5000ms (aux row pre-existing),
+	// range2 Combat 0-5yd (aux row
+	// pre-existing), school Physical;
+	// SpellCategories row (DefenseType 0,
+	// mechanic 0, dispel 0); ProcChance 101 /
+	// Attributes not carried (no fields in the
+	// seed struct).
+	{id: 39544, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDetaunt, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 40094 "Summon Channel" (wago SpellName
+	// MATCHES; C++ SPELL_SUMMON_CHANNEL,
+	// black_temple.cpp:30; Lua
+	// blacktemple/npc_wrathbone_flayer.lua:43,
+	// 94 — cast on channel target, re-arms 12s)
+	// — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15496_39544_40094.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp0 die1 tgtA
+	// TARGET_UNIT_NEARBY_ENTRY; cast1 instant,
+	// dur1 10000ms (aux row pre-existing),
+	// range11 Fifteen yards 0-15yd (aux row
+	// pre-existing), school Physical; NO
+	// SpellCategories row (mechanic 0, dispel
+	// 0); ProcChance 101 / Attributes not
+	// carried (no fields in the seed struct).
+	{id: 40094, castTimeIdx: 1, durIdx: 1, rangeIdx: 11, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
 	}},
 }
 
