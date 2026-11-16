@@ -7346,6 +7346,64 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraProcTriggerDmg, basePoints: 1499, dieSides: 1001, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraTransform, misc: 18780, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 11027 "Knockback 500" (wago SpellName —
+	// MISMATCH vs expected "Flame Wreath"; Lua
+	// SPELL_FLAMEWREATH_DOT,
+	// karazhan/boss_shade_of_aran.lua:110; C++ raw-ID
+	// CastSpell(unit, 11027, true),
+	// boss_shade_of_aran.cpp:463) — IDs + values
+	// govern, seeding per precedent. wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_11027_20476_31012.txt, DifficultyID 0
+	// rows): eff0 KNOCK_BACK bp499 die1 misc500 tgtA
+	// TARGET_UNIT_TARGET_ANY; cast1 instant, dur0
+	// none, range13 Anywhere-Unlimited 0-50000yd,
+	// school Physical; NO SpellCategories row;
+	// Attributes not carried.
+	{id: 11027, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 499, dieSides: 1, misc: 500, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 20476 "Explosion" (wago SpellName — MISMATCH vs
+	// expected "Flame Wreath"; Lua
+	// SPELL_FLAMEWREATH_PUNISH,
+	// karazhan/boss_shade_of_aran.lua:108; C++ raw-ID
+	// CastSpell(unit, 20476, me->GetGUID()),
+	// boss_shade_of_aran.cpp:462) — IDs + values
+	// govern, seeding per precedent. wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_11027_20476_31012.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp3199 die1 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ALLY radius19 18yd; eff1
+	// KNOCK_BACK bp332 die35 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur0 none, range1 Self Only,
+	// school Fire; BonusCoefficient 1 (both effects)
+	// not carried; SpellCategories row present
+	// (DefenseType 1 Magic, PreventionType 0x1 — not
+	// carried); Attributes not carried.
+	{id: 20476, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3199, dieSides: 1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 19, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 332, dieSides: 35, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31012 "Water Bolt" (wago SpellName — MISMATCH
+	// vs expected "Waterbolt" (two words vs one); C++
+	// SPELL_WATERBOLT, boss_shade_of_aran.cpp:68 enum;
+	// Lua karazhan/boss_shade_of_aran.lua:107) — IDs +
+	// values govern, seeding per precedent. wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_11027_20476_31012.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp2024 die451 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast16 1500ms, dur0
+	// none, range36 Longer 0-45yd, school Frost;
+	// SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 31012, castTimeIdx: 16, durIdx: 0, rangeIdx: 36, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2024, dieSides: 451, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
