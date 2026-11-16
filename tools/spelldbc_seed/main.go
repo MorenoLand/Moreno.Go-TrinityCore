@@ -6231,6 +6231,73 @@ var spells = []spell{
 	{id: 64019, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolSpellfire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 173, basePoints: 1413, targetA: targetUnitConeEnemy104, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 9053 Fireball (wago SpellName; C++ SPELL_FIREBALL,
+	// razorfen_downs.cpp:76 enum; Lua
+	// kalimdor/npc_belnistrasz.lua:106, DoCastVictim) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 7b31e309, DifficultyID 0
+	// row): eff0 SCHOOL_DAMAGE bp63 die23 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast14 3000ms, dur0 (no
+	// SpellDuration row), range5 Long 0-40yd, school Fire;
+	// EffectBonusCoefficient 1 NOT carried (seed effect
+	// struct has no bonusCoefficient field); Speed 24 NOT
+	// carried (seed has no speed field); SpellCategories row
+	// (Category 0, DefenseType 1, PreventionType 0x1,
+	// StartRecoveryCategory 133) not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 9053, castTimeIdx: 14, durIdx: 0, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 23, basePoints: 63, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 13326 Arcane Intellect (wago SpellName; C++
+	// SPELL_ARCANE_INTELLECT, razorfen_downs.cpp:75 enum;
+	// Lua kalimdor/npc_belnistrasz.lua:101, DoCastSelf under
+	// HasAura guard) — wago.tools 3.4.0.47659 SpellEffect row
+	// + SpellMisc (2026-11-16 browser read 7b31e309,
+	// DifficultyID 0 row): eff0 APPLY_AURA MOD_STAT bp9
+	// die1 misc 3 (Intellect) tgtA
+	// TARGET_UNIT_TARGET_ALLY; cast1 instant, dur30
+	// 1800000ms, range4 Medium 0-30yd, school Nature
+	// (SchoolMask 0x8 as read); EffectRealPointsPerLevel
+	// 0.2 NOT carried (seed effect struct has no
+	// realPointsPerLevel field); SpellCategories row
+	// (Category 0, DefenseType 1, DispelType 1,
+	// PreventionType 0x1) not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 13326, castTimeIdx: 1, durIdx: 30, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStat, dieSides: 1, basePoints: 9, misc: 3, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 69900 Spirit Burst (wago SpellName; C++
+	// SPELL_SPIRIT_BURST, halls_of_reflection.cpp:1877
+	// enum; Lua northrend/npc_hor_spiritual_reflection.lua:48,
+	// JustDied DoCastAOE) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 7b31e309, DifficultyID 0 row): eff0 SCHOOL_DAMAGE
+	// bp3237 die525 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius18 15yd; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Shadow; DifficultyID 2/4 variants (bp4624
+	// die751) NOT seeded per base-rows-only precedent;
+	// SpellCategories rows not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 69900, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 525, basePoints: 3237, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 69933 Baleful Strike (wago SpellName; C++
+	// SPELL_BALEFUL_STRIKE, halls_of_reflection.cpp:1876
+	// enum; Lua northrend/npc_hor_spiritual_reflection.lua:47,
+	// cast on aura target) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 7b31e309, DifficultyID 0 row): eff0 SCHOOL_DAMAGE
+	// bp2024 die451 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur0 (no SpellDuration row), range137 Eight
+	// yards 0-8yd, school Shadow; DifficultyID 2/4 variants
+	// (bp4499 die1001) NOT seeded per base-rows-only
+	// precedent; SpellCategories rows not carried;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 69933, castTimeIdx: 1, durIdx: 0, rangeIdx: 137, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 451, basePoints: 2024, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
