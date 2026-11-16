@@ -144,6 +144,7 @@ const (
 	auraInitializeImages       = 279 // SPELL_AURA_INITIALIZE_IMAGES (SpellAuraDefines.h)
 	auraLinked                 = 284
 	auraPreventRegen           = 294
+	schoolNone                 = 0 // SPELL_SCHOOL_MASK_NONE (SharedDefines.h:323)
 	schoolPhysical             = 1
 	schoolHoly                 = 2
 	schoolFire                 = 4
@@ -6008,6 +6009,79 @@ var spells = []spell{
 	// no SpellClassOptions or SpellAuraOptions rows.
 	{id: 47550, castTimeIdx: 1, durIdx: 0, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
 		{effect: effCreateItem, dieSides: 0, basePoints: 0, itemType: 36786, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 47533 "Camera Shake - Small" (wago SpellName — MISMATCH
+	// vs expected "Camera Shake"; C++ SPELL_CAMERA_SHAKE,
+	// zone_grizzly_hills.cpp:269 enum; Lua
+	// northrend/npc_outhouse_bunny.lua:31, DoCast(caster,
+	// 47533, TRIGGERED)) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read 9871db28,
+	// DifficultyID 0 row): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur0 (no
+	// SpellDuration row), range1 Self Only 0yd, school
+	// Arcane; SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 47533, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 48329 Dust Field (wago SpellName; C++
+	// SPELL_DUST_FIELD, zone_grizzly_hills.cpp:270 enum; Lua
+	// northrend/npc_outhouse_bunny.lua:32, DoCast(me, 48329,
+	// TRIGGERED)) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 9871db28,
+	// DifficultyID 0 row): eff0 KNOCK_BACK bp0 die0 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY
+	// radius18 15yd; cast1 instant, dur0 (no SpellDuration
+	// row), range1 Self Only 0yd, school NONE (SchoolMask
+	// 0x0 as read); SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 48329, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolNone, effects: [3]effect{
+		{effect: effKnockBack, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 51012 Dark Matter (wago SpellName; C++
+	// SPELL_DARK_MATTER, halls_of_stone.cpp:109 enum; Lua
+	// northrend/npc_tribuna_controller.lua:48, summon casts
+	// 51012 triggered on a random player) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 9871db28, DifficultyID 0 rows): eff0
+	// APPLY_AURA MOD_DAMAGE_PERCENT_TAKEN bp49 die1 misc
+	// 127 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius8 5yd; eff1 APPLY_AURA
+	// MOD_DECREASE_SPEED bp-31 die1 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius8 5yd; eff2
+	// SCHOOL_DAMAGE bp1884 die231 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius8 5yd; cast1
+	// instant, dur18 20000ms, range1 Self Only 0yd, school
+	// Shadow; SpellCategories Category 0 DefenseType 0
+	// DispelType 1 PreventionType 0x0 not carried;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 51012, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgTaken, dieSides: 1, basePoints: 49, misc: 127, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -31, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 231, basePoints: 1884, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 51136 Searing Gaze (wago SpellName; C++
+	// SPELL_SEARING_GAZE, halls_of_stone.cpp:112 enum; Lua
+	// northrend/npc_tribuna_controller.lua:49, triggered
+	// 51136) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 browser read 9871db28,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY bp-1 die1
+	// tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY
+	// radius28 50000yd; eff1 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 500 trigger 51125
+	// tgtA TARGET_UNIT_CASTER; trigger spell 51125 NOT
+	// seeded (trigger spells not seeded — established
+	// precedent; the trigger FIELD is carried); cast1
+	// instant, dur21 -1 infinite, range13 unlimited 50000yd,
+	// school Fire; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 51136, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, auraPeriod: 500, trigger: 51125, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
