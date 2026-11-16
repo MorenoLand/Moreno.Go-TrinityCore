@@ -6827,6 +6827,63 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 25054 "Holy Smite" (wago SpellName — MISMATCH vs
+	// expected "Solarium Holy Smite"; C++
+	// SPELL_SOLARIUM_HOLY_SMITE,
+	// boss_astromancer.cpp:58 enum; Lua
+	// the_eye/npc_solarium_priest.lua) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_25054_33387_33390.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp84 die31 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast19 2500ms, dur0
+	// none, range5 Long 40yd, school Holy;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1 — not carried); Attributes not
+	// carried.
+	{id: 25054, castTimeIdx: 19, durIdx: 0, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 84, dieSides: 31, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 33387 "Great Heal" (wago SpellName — MISMATCH vs
+	// expected "Solarium Great Heal"; C++
+	// SPELL_SOLARIUM_GREAT_HEAL,
+	// boss_astromancer.cpp:57 enum; Lua
+	// the_eye/npc_solarium_priest.lua:49) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_25054_33387_33390.txt, DifficultyID 0
+	// rows): eff0 HEAL bp23124 die3751 tgtA
+	// TARGET_UNIT_TARGET_ALLY (EffectAmplitude 1 not
+	// carried — no seed field); cast5 2000ms, dur0
+	// none, range6 Vision 100yd, school Holy;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1, StartRecoveryCategory 133 —
+	// not carried); Attributes not carried.
+	{id: 33387, castTimeIdx: 5, durIdx: 0, rangeIdx: 6, school: schoolHoly, effects: [3]effect{
+		{effect: effHeal, basePoints: 23124, dieSides: 3751, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 33390 "Arcane Torrent" (wago SpellName — MISMATCH
+	// vs expected "Solarium Arcane Torrent"; C++
+	// SPELL_SOLARIUM_ARCANE_TORRENT,
+	// boss_astromancer.cpp:59 enum; Lua
+	// the_eye/npc_solarium_priest.lua) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_25054_33387_33390.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_SILENCE bp-1 die1
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius14 8yd; eff1
+	// DUMMY bp33482 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur39 2000ms, range1 Self Only,
+	// school Arcane; SpellCategories row present
+	// (DefenseType 1 Magic, DispelType 1 MAGIC,
+	// Mechanic 9, PreventionType 0x1,
+	// StartRecoveryCategory 133 — not carried);
+	// Attributes not carried.
+	{id: 33390, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSilence, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 33482, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
