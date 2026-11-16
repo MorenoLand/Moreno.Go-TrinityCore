@@ -6687,6 +6687,39 @@ var spells = []spell{
 	{id: 47331, castTimeIdx: 1, durIdx: 21, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 10000, trigger: 47344, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 16045 "Encage" (wago SpellName — MATCH vs expected
+	// "Encage"; C++ SPELL_ENCAGE,
+	// boss_pyroguard_emberseer.cpp:51 enum; Lua
+	// eastern_kingdoms/npc_blackhand_incarcerator.lua:51,
+	// DoCast(target, 16045, true) triggered) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_16045_36119.txt, browser
+	// 0df1c53e, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_STUN bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY
+	// (EffectBonusCoefficient 1 not carried); cast1
+	// instant, dur9 30000ms, range4 Medium 0-30yd, school
+	// Physical; SpellCategories row present (not carried);
+	// Attributes not carried.
+	{id: 16045, castTimeIdx: 1, durIdx: 9, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 36119 "Void Zone" (wago SpellName — MATCH vs expected
+	// "Void Zone"; C++ SPELL_VOID_ZONE,
+	// arcatraz/boss_zereketh_the_unbound.cpp:32 enum; Lua
+	// arcatraz/boss_zereketh_the_unbound.lua:74, DoCast
+	// (target, 36119)) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 verdict file
+	// wago_spells_16045_36119.txt, browser 0df1c53e,
+	// DifficultyID 0 rows): eff0 SUMMON bp0 die1
+	// misc21101 miscB64 tgtA TARGET_DEST_TARGET_ENEMY
+	// (EffectBonusCoefficient 0, PvpMultiplier 1,
+	// GroupSizeBasePointsCoefficient 1 not carried);
+	// cast1 instant, dur63 25000ms, range6 Vision
+	// 0-100yd, school Shadow; SpellCategories row present
+	// (not carried); Attributes not carried.
+	{id: 36119, castTimeIdx: 1, durIdx: 63, rangeIdx: 6, school: schoolShadow, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, misc: 21101, miscB: 64, targetA: targetDestTargetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -6744,6 +6777,7 @@ func main() {
 		{327, 500, 0, 500},         // real SpellDuration 327 for 34799 Arcane Devastation (wago.tools 3.4.0.47659 SpellDuration row 327, browser bb66d46a)
 		{305, 14000, 0, 14000},     // real SpellDuration 305 for 25033 Lightning Cloud (wago.tools 3.4.0.47659 SpellDuration row 305, browser f28d47f3)
 		{38, 11000, 0, 11000},      // real SpellDuration 38 for 31673 Foul Spores (wago.tools 3.4.0.47659 SpellDuration row 38, browser 45c90da6)
+		{63, 25000, 0, 25000},      // real SpellDuration 63 for 36119 Void Zone (wago.tools 3.4.0.47659 SpellDuration row 63, 2026-11-16 verdict wago_spells_16045_36119.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
