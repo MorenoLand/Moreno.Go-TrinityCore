@@ -79,6 +79,7 @@ const (
 	effSummonObjectWild        = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
 	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
+	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
 	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
@@ -103,6 +104,7 @@ const (
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
 	auraModCastingSpeed        = 65 // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
+	auraModStalked             = 68 // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
@@ -113,6 +115,8 @@ const (
 	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
+	auraRangedApAttackerBonus  = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
+	auraMeleeApAttackerBonus   = 165 // SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:245)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
 	auraPeriodicDummy          = 226
 	auraPeriodicTrigWithValue  = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
@@ -165,6 +169,7 @@ const (
 	spellModEffect1            = 3   // SPELLMOD_EFFECT1 (SpellMgr.h)
 	familyShaman               = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
 	familyMage                 = 3   // SPELLFAMILY_MAGE (SpellClassOptions SpellClassSet 3, wago 3.4.0.43659)
+	familyHunter               = 9   // SPELLFAMILY_HUNTER (SharedDefines.h:3590)
 )
 
 type effect struct {
@@ -3708,6 +3713,93 @@ var spells = []spell{
 	{id: 37284, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 1, basePoints: 499, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effSchoolDamage, dieSides: 1, basePoints: 499, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39291 Remove Kargath's Executioner (wago name; C++
+	// SPELL_REMOVE_KARGATH_EXECUTIONER, shattered_halls.h:85 enum; Lua
+	// instance_shattered_halls.lua:109) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read 10fc9e9f,
+	// DifficultyID 0 rows): single eff0 77 SCRIPT_EFFECT TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1 (instant, real
+	// row), durIdx 0 (no SpellDuration row), rangeIdx 1 (Self Only, real
+	// row), school 0x1 Physical, dispel 0 (no SpellCategories row). NOT
+	// carried: SpellPower not read in this verdict (cost 0); no
+	// SpellClassOptions row; SpellAuraOptions ProcChance 101 (no proc
+	// table, 58109 precedent); Attributes all 0x0 not encoded (seed has
+	// no attributes field). Engine twin: effScriptEffect 77 live.
+	// Removes the last unseeded-spell blocker for
+	// instance_shattered_halls.lua (single-missing-id file).
+	{id: 39291, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 30478 Hemorrhage (wago name; C++ SPELL_HEMORRHAGE,
+	// boss_nethekurse.cpp:55 enum; Lua npc_fel_orc_convert.lua:54, 3s
+	// init then 15s non-triggered pump) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-15 browser read 10fc9e9f,
+	// DifficultyID 0 rows): eff0 58 WEAPON_DAMAGE dieSides 1
+	// basePoints 99 TargetA 6 TARGET_UNIT_TARGET_ENEMY chainAmplitude
+	// 1; eff1 6 APPLY_AURA aura 14 MOD_DAMAGE_TAKEN dieSides 1
+	// basePoints 14 misc 1 TargetA 6 chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 1 (10000ms, real row), rangeIdx 2
+	// (Combat Range, real row), school 0x1 Physical, dispel 0 /
+	// mechanic 0 (SpellCategories row exists: Category 1152,
+	// DefenseType 2 Melee, PreventionType 0x2 — no struct fields for
+	// those). NOT carried: SpellPower not read in this verdict (cost
+	// 0); no SpellClassOptions row; SpellAuraOptions ProcChance 101
+	// (no proc table, 58109 precedent); Attributes_0 0x80410 not
+	// encoded (seed has no attributes field). Engine twins:
+	// effWeaponDamage 58 / auraModDamageTaken 14 live. Removes the
+	// last unseeded-spell blocker for npc_fel_orc_convert.lua
+	// (single-missing-id file).
+	{id: 30478, castTimeIdx: 1, durIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 14, targetA: targetEnemy, misc: 1, chainAmplitude: 1},
+	}},
+	// 58818 Orphan Out (wago name; C++ SPELL_ORPHAN_OUT,
+	// childrens_week.cpp:131 enum; Lua at_bring_your_orphan_to.lua:32)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 10fc9e9f, DifficultyID 0 rows): single eff0 143
+	// APPLY_AREA_AURA_OWNER aura 4 DUMMY TargetA 1 TARGET_UNIT_CASTER
+	// RadiusIndex 12 (100yd, real row) chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 21 (-1 infinite, real row), rangeIdx
+	// 1 (Self Only, real row), school 0x1 Physical, dispel 0 (no
+	// SpellCategories row). NOT carried: SpellPower not read in this
+	// verdict (cost 0); no SpellClassOptions row; SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent); Attributes_0
+	// 0x100 / Attributes_1 0x10000800 / Attributes_6 0x400 not encoded
+	// (seed has no attributes field). Engine twin:
+	// effApplyAreaAuraOwner 143 live (spells.go:38742). Removes the
+	// last unseeded-spell blocker for at_bring_your_orphan_to.lua and
+	// npc_cw_area_trigger.lua (single-missing-id files).
+	{id: 58818, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAreaAuraOwner, aura: auraDummy, targetA: targetCaster, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 38067 Guard's Mark (wago name; C++ SPELL_GUARDS_MARK,
+	// npcs_special.cpp:49 enum; Lua npc_air_force_bots.lua:21) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15
+	// browser read 10fc9e9f, DifficultyID 0 rows): eff0 6 APPLY_AURA
+	// aura 68 MOD_STALKED dieSides 1 basePoints -1 TargetA 25
+	// TARGET_UNIT_TARGET_ANY chainAmplitude 1; eff1 6 APPLY_AURA aura
+	// 127 RANGED_ATTACK_POWER_ATTACKER_BONUS dieSides 1 basePoints 109
+	// TargetA 6 chainAmplitude 1; eff2 6 APPLY_AURA aura 165
+	// MELEE_ATTACK_POWER_ATTACKER_BONUS dieSides 0 basePoints 0
+	// TargetA 6 chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 9 (30000ms, real row), rangeIdx 6 (Vision Range, real
+	// row), school 0x40 Arcane, family Hunter (SpellClassSet 9, mask
+	// 1024), dispel 0 / mechanic 0 (SpellCategories row exists:
+	// StartRecoveryCategory 133 — no struct field). NOT carried:
+	// SpellPower not read in this verdict (cost 0); SpellAuraOptions
+	// ProcChance 101 (no proc table, 58109 precedent); EffectAmplitude
+	// 1 on eff0 (float32, no seed-struct field — store.go:1184/1188
+	// field 101+i); auraPeriod 0 on all three effects; Attributes_0
+	// 0x4010000 / Attributes_1 0x400 / Attributes_3 0x30001 not encoded
+	// (seed has no attributes field). Engine twins: aura 68/127/165
+	// named in spells.go; effApplyAura 6 live. Removes the last
+	// unseeded-spell blocker for npc_air_force_bots.lua
+	// (single-missing-id file).
+	{id: 38067, castTimeIdx: 1, durIdx: 9, rangeIdx: 6, school: schoolArcane, family: familyHunter, familyFlags: [3]uint32{1024, 0, 0}, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStalked, auraPeriod: 0, dieSides: 1, basePoints: -1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRangedApAttackerBonus, dieSides: 1, basePoints: 109, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMeleeApAttackerBonus, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
