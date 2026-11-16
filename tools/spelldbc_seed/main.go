@@ -7120,6 +7120,63 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 59, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 32302 "Fiery Blast" (wago SpellName — MATCH vs
+	// expected "Fiery Blast"; C++
+	// SPELL_FIERY_BLAST,
+	// boss_shirrak_the_dead_watcher.cpp:38 enum; Lua
+	// outland/boss_shirrak_the_dead_watcher.lua:87) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_32302_36383_42075.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp1584 die81 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius32 12yd; cast1
+	// instant, dur0 none, range1 Self Only, school
+	// Fire; BonusCoefficient 1 not carried;
+	// SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 32302, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1584, dieSides: 81, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 32, chainAmplitude: 1},
+	}},
+	// 36383 "Carnivorous Bite" (wago SpellName — MATCH
+	// vs expected "Carnivorous Bite"; C++
+	// SPELL_CARNIVOROUSBITE,
+	// boss_shirrak_the_dead_watcher.cpp:36 enum; Lua
+	// outland/boss_shirrak_the_dead_watcher.lua:85) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_32302_36383_42075.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE bp452
+	// die1 period3000 mechanic15 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius32 12yd; cast1
+	// instant, dur18 20000ms, range2 Combat Range
+	// 0-5yd, school Physical; RealPointsPerLevel 35
+	// not carried; SpellCategories row present
+	// (DefenseType 2 Melee, Mechanic 15,
+	// PreventionType 0x2 — not carried); Attributes
+	// not carried.
+	{id: 36383, castTimeIdx: 1, durIdx: 18, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 452, dieSides: 1, auraPeriod: 3000, mechanic: 15, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 32, chainAmplitude: 1},
+	}},
+	// 42075 "Headless Horseman - Visual - Large Fire"
+	// (wago SpellName — MISMATCH vs expected "Focus
+	// Fire Visual"; C++ SPELL_FOCUS_FIRE_VISUAL,
+	// boss_shirrak_the_dead_watcher.cpp:40 enum; Lua
+	// outland/boss_shirrak_the_dead_watcher.lua:86) —
+	// IDs + values govern, seeding per precedent.
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_32302_36383_42075.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DUMMY bp0 die0
+	// period1000 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 infinite, range1 Self Only,
+	// school Physical; NO SpellCategories row;
+	// Attributes not carried.
+	{id: 42075, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDummy, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -7220,6 +7277,7 @@ func main() {
 		{29, f32(6), f32(0), f32(6)},     // real SpellRadius 29 for 33814 (wago.tools 3.4.0.47659)
 		{26, f32(4), f32(0), f32(4)},     // real SpellRadius 26 for 59687 Explosion (wago.tools 3.4.0.47659 SpellRadius row 26, browser abab7d59)
 		{23, f32(40), f32(0), f32(40)},   // real SpellRadius 23 for 36127 Shadow Nova (wago.tools 3.4.0.47659 SpellRadius row 23, 2026-11-16 verdict wago_spells_36127_36123.txt)
+		{32, f32(12), f32(0), f32(12)},   // real SpellRadius 32 for 32302/36383 (wago.tools 3.4.0.47659 SpellRadius row 32, 2026-11-16 verdict wago_spells_32302_36383_42075.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
