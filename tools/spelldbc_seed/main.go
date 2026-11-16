@@ -5580,6 +5580,72 @@ var spells = []spell{
 	{id: 57984, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 21, basePoints: 109, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 18692 Improved Healthstone (wago SpellName, Rank 1; C++
+	// SPELL_IMPROVED_HEALTH_STONE_R1, go_scripts.cpp:483 enum
+	// (also SPELL_WARLOCK_IMPROVED_HEALTHSTONE_R1,
+	// spell_warlock.cpp:57); Lua world/go_scripts_part1.lua:322,
+	// HasAura gate) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read c062380b,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp9 die1 tgtA
+	// TARGET_UNIT_CASTER (9+1 = 10% per description); cast1
+	// instant, dur21 -1 infinite, range1 Self Only 0yd, school
+	// Physical; EffectBonusCoefficient 1 NOT carried; NO
+	// SpellCategories row; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	// SkillLineAbility 10577 (SkillLine 354) not carried.
+	{id: 18692, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 9, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34150 Create Master Healthstone (wago SpellName; C++
+	// SPELL_CREATE_MASTER_HEALTH_STONE_R2, go_scripts.cpp:488
+	// enum; Lua world/go_scripts_part1.lua:300-301,308,
+	// HasAura gate only — the row itself is CREATE_ITEM) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read c062380b, DifficultyID 0 row):
+	// eff0 CREATE_ITEM bp0 die1 itemType 22105 tgtA
+	// TARGET_UNIT_TARGET_ALLY; cast1 instant, dur0 (no
+	// SpellDuration row), range12 Interact 0-5yd, school
+	// Shadow; SpellCategories DefenseType 1 PreventionType
+	// 0x0 not carried; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 34150, castTimeIdx: 1, durIdx: 0, rangeIdx: 12, school: schoolShadow, effects: [3]effect{
+		{effect: effCreateItem, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAlly, itemType: 22105, chainAmplitude: 1},
+	}},
+	// 22893 Arcane Blast (wago SpellName, NOT "Knock Away" —
+	// the C++ SPELL_KNOCKAWAY const, the_eye.cpp:36, is named
+	// for the knockback effect, not the DB2 name; C++
+	// SPELL_KNOCKAWAY, the_eye.cpp:36 enum; Lua
+	// the_eye/npc_crystalcore_devastator.lua:40, triggered
+	// DoCastVictim) — wago.tools 3.4.0.47659 SpellEffect rows
+	// + SpellMisc (2026-11-16 browser read c062380b,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp99 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK bp99 die1
+	// misc 350 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range6 Vision 0-100yd,
+	// school Arcane; EffectBonusCoefficient 1 on both effects
+	// NOT carried; SpellCategories DefenseType 0
+	// PreventionType 0x1 not carried; Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 22893, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 99, misc: 350, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 35035 Countercharge (wago SpellName; C++
+	// SPELL_COUNTERCHARGE, the_eye.cpp:35 enum; Lua
+	// the_eye/npc_crystalcore_devastator.lua:39, non-triggered
+	// DoCast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read c062380b,
+	// DifficultyID 0 row): eff0 APPLY_AURA
+	// PROC_TRIGGER_SPELL bp-1 die1 trigger 35781 tgtA
+	// TARGET_UNIT_CASTER; cast16 1500ms, dur8 15000ms, range1
+	// Self Only 0yd, school Arcane; SpellCategories Category
+	// 19 DefenseType 1 PreventionType 0x1
+	// StartRecoveryCategory 133 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	// Trigger spell 35781 is not itself seeded.
+	{id: 35035, castTimeIdx: 16, durIdx: 8, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: -1, trigger: 35781, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
