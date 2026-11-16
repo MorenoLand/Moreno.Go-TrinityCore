@@ -171,6 +171,7 @@ const (
 	familyShaman               = 11  // SPELLFAMILY_SHAMAN (SharedDefines.h)
 	familyMage                 = 3   // SPELLFAMILY_MAGE (SpellClassOptions SpellClassSet 3, wago 3.4.0.43659)
 	familyHunter               = 9   // SPELLFAMILY_HUNTER (SharedDefines.h:3590)
+	familyDeathKnight          = 15  // SPELLFAMILY_DEATHKNIGHT (SharedDefines.h:3596)
 )
 
 type effect struct {
@@ -3807,8 +3808,13 @@ var spells = []spell{
 	// non-triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row
 	// + SpellMisc (2026-11-15 browser read 5857f249, DifficultyID 0
 	// rows): single eff0 6 APPLY_AURA aura 34 MOD_INCREASE_HEALTH
-	// dieSides 1 basePoints 249 misc 9 TargetA 22 TARGET_SRC_CASTER
+	// dieSides 1 basePoints 249 TargetA 22 TARGET_SRC_CASTER
+	// RadiusIndex 9 (20yd, real row) chainAmplitude 1; misc 0
 	// TargetB 8 TARGET_UNIT_DEST_AREA_ENTRY chainAmplitude 1;
+	// (9ba490eb re-read 2026-11-15 corrects the 5857f249 read: the 9 is
+	// EffectRadiusIndex_1, not EffectMiscValue_0 — 5857f249 also
+	// misread BonusCoefficientFromAP/PvpMultiplier on 50052/69735;
+	// area pattern matches the 37408 radius precedent.)
 	// castTimeIdx 1 (instant, real row), durIdx 30 (1800000ms, real
 	// row), rangeIdx 3 (Twenty yards, real row), school 0x1 Physical,
 	// dispel 0 (no SpellCategories row). NOT carried: NO
@@ -3819,7 +3825,7 @@ var spells = []spell{
 	// unseeded-spell blocker for world/npc_firework.lua
 	// (single-missing-id file).
 	{id: 26522, castTimeIdx: 1, durIdx: 30, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
-		{effect: effApplyAura, aura: auraModIncreaseHealth, dieSides: 1, basePoints: 249, misc: 9, targetA: targetSrcCaster, targetB: targetUnitDestAreaEntry, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseHealth, dieSides: 1, basePoints: 249, targetA: targetSrcCaster, targetB: targetUnitDestAreaEntry, radiusIdx: 9, chainAmplitude: 1},
 	}},
 	// 50514 Summon Gargoyle (wago name; C++ SPELL_DK_SUMMON_GARGOYLE_2,
 	// pet_dk.cpp:34 enum; Lua world/npc_pet_dk_ebon_gargoyle.lua:62,
@@ -3830,7 +3836,10 @@ var spells = []spell{
 	// cross-checked in foreign-key view and table) trigger 50524
 	// TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
 	// (instant, real row), durIdx 18 (20000ms, real row), rangeIdx 1
-	// (Self Only, real row), school 0x20 Shadow, dispel 0 (no
+	// (Self Only, real row), school 0x20 Shadow, family 15
+	// SPELLFAMILY_DEATHKNIGHT mask {0,128,0,0} (SpellClassOptions row
+	// read 9ba490eb 2026-11-15; the 5857f249 read did not cover that
+	// table), dispel 0 (no
 	// SpellCategories row). NOT carried: SpellAuraOptions ProcChance
 	// 101 (no proc table, 58109 precedent); SpellPower ManaPerSecond
 	// 30 / PowerType 6 (no seed-struct field; manaCost 0); EffectAmplitude
@@ -3838,7 +3847,7 @@ var spells = []spell{
 	// field). Engine twin: auraPeriodicTrig 23 live (spells.go:38224).
 	// Removes the last unseeded-spell blocker for
 	// world/npc_pet_dk_ebon_gargoyle.lua (single-missing-id file).
-	{id: 50514, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+	{id: 50514, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolShadow, family: familyDeathKnight, familyFlags: [3]uint32{0, 128, 0}, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, dieSides: 1, basePoints: 50514, trigger: 50524, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 50052 Ethereal Pet onSummon (wago name; C++
