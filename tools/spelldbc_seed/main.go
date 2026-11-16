@@ -8158,6 +8158,62 @@ var spells = []spell{
 	{id: 57949, castTimeIdx: 1, durIdx: 8, rangeIdx: 13, school: schoolShadow, dispel: 2, effects: [3]effect{
 		{effect: effApplyAura, aura: auraRaidProcFromCharge, basePoints: 0, dieSides: 0, radiusIdx: 9, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 28131 "Frenzy" (wago SpellName MATCHES; C++
+	// SPELL_FRENZY, boss_patchwerk.cpp:26; Lua
+	// northrend/boss_patchwerk.lua:68) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28131_28308_32309.txt, DifficultyID
+	// 0 rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// (aura 79) bp24 die1 misc127 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp39 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_SCALE
+	// (aura 61) bp24 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur5 300000ms, range1 Self Only,
+	// school Physical; SpellCategories Category 21 /
+	// dispel 0; Attributes_0 0x40010 not carried
+	// (no attributes field in the seed struct).
+	{id: 28131, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 24, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 39, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 28308 "Hateful Strike" (wago SpellName MATCHES;
+	// C++ SPELL_HATEFUL_STRIKE, boss_patchwerk.cpp:25;
+	// Lua northrend/boss_patchwerk.lua:67) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28131_28308_32309.txt, DifficultyID
+	// 0 rows): eff0 SCHOOL_DAMAGE bp19974 die7051
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0, range2 Combat 5yd, school Physical;
+	// SpellCategories DefenseType 2 Melee / dispel 0;
+	// Attributes_3 0x200 / Attributes_5 0x80000 not
+	// carried (no attributes field in the seed struct).
+	{id: 28308, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 19974, dieSides: 7051, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 32309 "Slime Bolt" (wago SpellName MATCHES; C++
+	// SPELL_SLIME_BOLT, boss_patchwerk.cpp:28; Lua
+	// northrend/boss_patchwerk.lua:70) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28131_28308_32309.txt, DifficultyID
+	// 0 rows): eff0 SCHOOL_DAMAGE bp8324 die1351
+	// radius24 65yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE bp5699 die601 period3000
+	// radius24 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur32 6000ms, range37 Extended 50yd, school
+	// Nature, dispel 4 Poison; SpellAuraOptions
+	// ProcChance 101 / Speed 40 / BonusCoefficient
+	// 1 / 0.1 not carried.
+	{id: 32309, castTimeIdx: 1, durIdx: 32, rangeIdx: 37, school: schoolNature, dispel: 4, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 8324, dieSides: 1351, radiusIdx: 24, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 5699, dieSides: 601, auraPeriod: 3000, radiusIdx: 24, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -8262,6 +8318,7 @@ func main() {
 		{23, f32(40), f32(0), f32(40)},   // real SpellRadius 23 for 36127 Shadow Nova (wago.tools 3.4.0.47659 SpellRadius row 23, 2026-11-16 verdict wago_spells_36127_36123.txt)
 		{32, f32(12), f32(0), f32(12)},   // real SpellRadius 32 for 32302/36383 (wago.tools 3.4.0.47659 SpellRadius row 32, 2026-11-16 verdict wago_spells_32302_36383_42075.txt)
 		{16, f32(1), f32(0), f32(1)},     // real SpellRadius 16 for 26392 eff0 (wago.tools 3.4.0.47659 SpellRadius row 16, 2026-11-16 verdict wago_spells_15284_26392_26540.txt)
+		{24, f32(65), f32(0), f32(65)},   // real SpellRadius 24 for 32309 (wago.tools 3.4.0.47659 SpellRadius row 24, 2026-11-16 verdict wago_spells_28131_28308_32309.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
