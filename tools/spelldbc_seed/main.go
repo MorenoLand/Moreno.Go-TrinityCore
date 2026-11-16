@@ -6083,6 +6083,77 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 28, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, auraPeriod: 500, trigger: 51125, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 54643 "Teleport" (wago SpellName — MISMATCH vs
+	// expected "Wintergrasp Teleport Trigger"; C++
+	// SPELL_WINTERGRASP_TELEPORT_TRIGGER,
+	// zone_wintergrasp.cpp:493 enum; Lua
+	// spells/spell_wintergrasp.lua:5, teleport-trigger aura)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read c5349039, DifficultyID 0
+	// rows): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_DEST_NEARBY_ENTRY; eff1 TELEPORT_UNITS bp0 die1
+	// tgtA TARGET_UNIT_CASTER tgtB TARGET_DEST_DEST; eff2
+	// APPLY_AURA DUMMY bp0 die0 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur18 20000ms, range13 unlimited
+	// 50000yd, school Physical; SpellCategories absent ("No
+	// entries found."); Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 54643, castTimeIdx: 1, durIdx: 18, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetDestNearbyEntry, chainAmplitude: 1},
+		{effect: effTeleportUnits, dieSides: 1, basePoints: 0, targetA: targetCaster, targetB: targetDestDest, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 60968 "Ride Wintergrasp Vehicle" (wago SpellName —
+	// MISMATCH vs expected "Ride WG Vehicle"; C++
+	// SPELL_RIDE_WG_VEHICLE, zone_wintergrasp.cpp:61 enum;
+	// Lua spells/spell_wintergrasp.lua:40, Vehicle (60968)
+	// on the caster) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-16 browser read c5349039,
+	// DifficultyID 0 rows): eff0 APPLY_AURA CONTROL_VEHICLE
+	// bp0 die0 tgtA TARGET_UNIT_TARGET_ANY; eff1 APPLY_AURA
+	// LINKED bp0 die0 trigger 65635 tgtA TARGET_UNIT_CASTER
+	// tgtB TARGET_UNIT_TARGET_ANY; trigger spell 65635 NOT
+	// seeded (trigger spells not seeded — established
+	// precedent; the trigger FIELD is carried); cast1
+	// instant, dur21 -1 infinite, range152 Super Long
+	// 0-150yd, school Arcane; SpellCategories Category 0
+	// DefenseType 0 PreventionType 0x0 StartRecoveryCategory
+	// 133 not carried; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 60968, castTimeIdx: 1, durIdx: 21, rangeIdx: 152, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraControlVehicle, dieSides: 0, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraLinked, dieSides: 0, basePoints: 0, trigger: 65635, targetA: targetCaster, targetB: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 57989 Shadowfiend Death (wago SpellName; C++
+	// SPELL_PRIEST_SHADOWFIEND_DEATH, pet_priest.cpp:31
+	// enum; Lua world/npc_pet_pri_shadowfiend.lua:41,
+	// DoCastAOE(57989)) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read c5349039,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp-1 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur0 (no
+	// SpellDuration row), range1 Self Only 0yd, school
+	// Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 57989, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 58228 Glyph of Shadowfiend (wago SpellName; C++
+	// SPELL_PRIEST_GLYPH_OF_SHADOWFIEND, pet_priest.cpp:30
+	// enum; Lua world/npc_pet_pri_shadowfiend.lua:40,
+	// glyph-aura summoner) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// c5349039, DifficultyID 0 row): eff0 APPLY_AURA DUMMY
+	// bp4 die1 misc 5 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Physical; SpellClassMask_1 67108864 NOT
+	// carried (seed has no field — established precedent);
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 58228, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 4, misc: 5, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
