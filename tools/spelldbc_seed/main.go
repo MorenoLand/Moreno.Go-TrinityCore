@@ -6999,6 +6999,64 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraMechanicImmunity, misc: 13, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraMechanicImmunity, misc: 7, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 33684 "Incite Chaos" (wago SpellName — MATCH vs
+	// expected "Incite Chaos"; C++
+	// SPELL_INCITE_CHAOS_B,
+	// boss_blackheart_the_inciter.cpp:32 enum; Lua
+	// outland/boss_blackheart_the_inciter.lua) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_33684_33707_33709.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_CHARM bp998 die1
+	// tgtA TARGET_UNIT_TARGET_ANY; cast1 instant, dur8
+	// 15000ms, range13 Anywhere 50000yd, school
+	// Physical; NO SpellCategories row; Attributes not
+	// carried.
+	{id: 33684, castTimeIdx: 1, durIdx: 8, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCharm, basePoints: 998, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 33707 "War Stomp" (wago SpellName — MATCH vs
+	// expected "War Stomp"; C++ SPELL_WAR_STOMP,
+	// boss_blackheart_the_inciter.cpp:34 enum; Lua
+	// outland/boss_blackheart_the_inciter.lua:106) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_33684_33707_33709.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp1749 die501 tgtA
+	// TARGET_DEST_CASTER tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY radius9 20yd; eff1
+	// KNOCK_BACK bp149 die101 misc150 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius9 20yd; cast1
+	// instant, dur0 none, range1 Self Only, school
+	// Physical; SpellCategories row present
+	// (DefenseType 1 Magic, PreventionType 0x1 — not
+	// carried); Attributes not carried.
+	{id: 33707, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1749, dieSides: 501, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 149, dieSides: 101, misc: 150, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 33709 "Charge" (wago SpellName — MATCH vs
+	// expected "Charge"; C++ SPELL_CHARGE,
+	// boss_blackheart_the_inciter.cpp:33 enum; Lua
+	// outland/boss_blackheart_the_inciter.lua:107) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_33684_33707_33709.txt, DifficultyID 0
+	// rows): eff0 CHARGE bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 WEAPON_DAMAGE
+	// bp74 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff2
+	// APPLY_AURA MOD_STUN bp-1 die1 mechanic12 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur39
+	// 2000ms, range5 Long 40yd, school Physical;
+	// Speed 27 not carried; SpellCategories row
+	// present (Category 44, Mechanic 12 — not
+	// carried); Attributes not carried.
+	{id: 33709, castTimeIdx: 1, durIdx: 39, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponDamage, basePoints: 74, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, mechanic: 12, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
