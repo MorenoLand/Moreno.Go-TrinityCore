@@ -7458,6 +7458,68 @@ var spells = []spell{
 	{id: 31635, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 35311 "Stream of Machine Fluid" (wago SpellName
+	// — MATCH vs expected "Stream of Machine Fluid";
+	// C++ SPELL_STREAM_OF_MACHINE_FLUID,
+	// boss_gatewatcher_gyrokill.cpp:39 enum; Lua
+	// mechanar/boss_gatewatcher_gyrokill.lua:59) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_35311_35318_35322.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MELEE_SLOW bp-36 die1
+	// radius18 15yd tgtA TARGET_UNIT_CONE_ENEMY_24;
+	// eff1 APPLY_AURA MOD_RESISTANCE_PCT bp-36 die1
+	// misc1 radius18 15yd tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; cast1 instant, dur1
+	// 10000ms, range3 Twenty yards 0-20yd, school
+	// Nature; EffectAttributes 0x20000 (both effects)
+	// not carried; SpellCategories row present
+	// (Category 1152, DispelType 4 — not carried);
+	// Attributes not carried.
+	{id: 35311, castTimeIdx: 1, durIdx: 1, rangeIdx: 3, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraMeleeSlow, basePoints: -36, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistPct, basePoints: -36, dieSides: 1, misc: 1, targetA: targetUnitConeEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 35318 "Saw Blade" (wago SpellName — MATCH vs
+	// expected "Saw Blade"; C++ SPELL_SAW_BLADE,
+	// boss_gatewatcher_gyrokill.cpp:40 enum; Lua
+	// mechanar/boss_gatewatcher_gyrokill.lua:60) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_35311_35318_35322.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp1757 die185
+	// chainTargets 5 chainAmp 1.2 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE bp522 die55 period2000
+	// mechanic15 chainTargets 5 chainAmp 1.1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur31
+	// 8000ms, range6 Vision 0-100yd, school Physical;
+	// BonusCoefficient 1 (eff0) and
+	// BonusCoefficientFromAP 1 (eff0) not carried; NO
+	// SpellCategories row; Attributes not carried.
+	{id: 35318, castTimeIdx: 1, durIdx: 31, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1757, dieSides: 185, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1.2},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 522, dieSides: 55, auraPeriod: 2000, mechanic: 15, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1.1},
+	}},
+	// 35322 "Shadow Power" (wago SpellName — MATCH vs
+	// expected "Shadow Power"; C++ SPELL_SHADOW_POWER,
+	// boss_gatewatcher_gyrokill.cpp:42 enum; Lua
+	// mechanar/boss_gatewatcher_gyrokill.lua:61) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_35311_35318_35322.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_MELEE_HASTE bp99 die1
+	// tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_SCALE bp19 die1 tgtA TARGET_UNIT_CASTER;
+	// cast5 2000ms, dur8 15000ms, range1 Self Only,
+	// school Shadow; BonusCoefficient 1 (both
+	// effects) not carried; SpellCategories row
+	// present (Category 1152, DispelType 1 — not
+	// carried); Attributes not carried.
+	{id: 35322, castTimeIdx: 5, durIdx: 8, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
