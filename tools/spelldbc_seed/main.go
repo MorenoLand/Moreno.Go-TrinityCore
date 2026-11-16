@@ -5517,6 +5517,69 @@ var spells = []spell{
 	{id: 16006, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolNature, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 31, basePoints: 184, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 1},
 	}},
+	// 12553 Shock (wago SpellName; C++ SPELL_SHOCK,
+	// zone_hellfire_peninsula.cpp:52 enum; Lua
+	// outland/npc_aeranas.lua:47, victim-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read a1bb46e3, DifficultyID 0 row): eff0
+	// SCHOOL_DAMAGE bp108 die9 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur0 (no SpellDuration row), range3
+	// Twenty 0-20yd, school Nature; EffectBonusCoefficient 1,
+	// RealPointsPerLevel 1, Coefficient 1 NOT carried (seed
+	// has no fields — established precedent); SpellCategories
+	// Category 19 DefenseType 1 PreventionType 0x1
+	// StartRecoveryCategory 133 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 12553, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 9, basePoints: 108, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 15535 Enveloping Winds (wago SpellName, Rank 1; C++
+	// SPELL_ENVELOPING_WINDS, zone_hellfire_peninsula.cpp:51
+	// enum; Lua outland/npc_aeranas.lua:48, victim-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read a1bb46e3, DifficultyID 0 row):
+	// eff0 APPLY_AURA MOD_STUN bp-1 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast5 2000ms, dur1 10000ms,
+	// range4 Medium 0-30yd, school Nature; SpellCategories
+	// Category 99 DefenseType 1 DispelType 1 Mechanic 12
+	// PreventionType 0x1 not carried; Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 15535, castTimeIdx: 5, durIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: -1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 13376 Fire Shield (wago SpellName; C++
+	// SPELL_SHAMAN_FIRESHIELD, pet_shaman.cpp:31 enum (also
+	// SPELL_FIRE_SHIELD, boss_pyroguard_emberseer.cpp:40,
+	// same id); Lua
+	// world/npc_pet_shaman_fire_elemental.lua:43) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read a1bb46e3, DifficultyID 0 row):
+	// eff0 SCHOOL_DAMAGE bp0 die1 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius8 5yd; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Fire; EffectBonusCoefficient 0.032,
+	// RealPointsPerLevel 1.2 NOT carried (seed has no fields
+	// — established precedent); SpellCategories DefenseType 1
+	// PreventionType 0x1 not carried; Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 13376, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 57984 Fire Blast (wago SpellName; C++
+	// SPELL_SHAMAN_FIREBLAST, pet_shaman.cpp:29 enum; Lua
+	// world/npc_pet_shaman_fire_elemental.lua:42) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read a1bb46e3, DifficultyID 0 row):
+	// eff0 SCHOOL_DAMAGE bp109 die21 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0 (no
+	// SpellDuration row), range3 Twenty 0-20yd, school Fire;
+	// EffectBonusCoefficient 0.429 NOT carried; SpellCategories
+	// Category 19 DefenseType 1 PreventionType 0x1
+	// StartRecoveryCategory 0 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 57984, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 21, basePoints: 109, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
