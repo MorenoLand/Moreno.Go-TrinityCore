@@ -8334,6 +8334,65 @@ var spells = []spell{
 		{effect: effScriptEffect, basePoints: 72143, dieSides: 1, radiusIdx: 28, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
 		{effect: effQuestComplete, basePoints: 72144, dieSides: 1, misc: 24873, radiusIdx: 28, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
 	}},
+	// 43931 "Rend" (wago SpellName MATCHES; C++
+	// SPELL_REND, utgarde_keep.cpp:253; Lua
+	// northrend/npc_enslaved_proto_drake.lua:12,49
+	// — victim-cast on the rend timer) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_43931_49722_50653.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) bp42 die1 period
+	// 3000ms tgtA TARGET_UNIT_TARGET_ENEMY,
+	// mechanic 15 (spell + effect); cast1 instant,
+	// dur8 15000ms, range2 Combat 0-5yd, school
+	// Physical; SpellCategories dispel 0;
+	// ProcChance 101 / Attributes / DefenseType /
+	// PreventionType not carried (no fields in the
+	// seed struct).
+	{id: 43931, castTimeIdx: 1, durIdx: 8, rangeIdx: 2, school: schoolPhysical, mechanic: 15, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 42, dieSides: 1, auraPeriod: 3000, mechanic: 15, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 49722 "Knock Away" (wago SpellName MATCHES;
+	// C++ SPELL_KNOCK_AWAY, utgarde_keep.cpp:255;
+	// Lua northrend/npc_enslaved_proto_drake.lua:14,
+	// 79 — victim-cast on the knockaway timer) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_43931_49722_50653.txt,
+	// DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp29 die1 radius13 10yd tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; eff1
+	// KNOCK_BACK bp112 die75 misc75 radius13
+	// tgtA/tgtB same; cast1 instant, dur0, range7
+	// Ten yards 0-10yd, school Physical;
+	// SpellCategories dispel 0 / mechanic 0;
+	// BonusCoefficient 1 / ProcChance 101 /
+	// Attributes not carried (no fields in the
+	// seed struct).
+	{id: 49722, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 112, dieSides: 75, misc: 75, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 50653 "Flame Breath" (wago SpellName MATCHES;
+	// C++ SPELL_FLAME_BREATH, utgarde_keep.cpp:254;
+	// Lua northrend/npc_enslaved_proto_drake.lua:13,
+	// 64 — victim-cast on the flame timer) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_43931_49722_50653.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp1699 die601 radius18 15yd tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; cast1 instant,
+	// dur0, range2 Combat 0-5yd, school Fire;
+	// SpellCategories dispel 0 / mechanic 0,
+	// Category 50 / StartRecoveryCategory 133 not
+	// carried (no fields in the seed struct);
+	// BonusCoefficient 1 / EffectAttributes 0x20000
+	// / ProcChance 101 / Attributes not carried.
+	{id: 50653, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1699, dieSides: 601, radiusIdx: 18, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
