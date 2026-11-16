@@ -7748,6 +7748,55 @@ var spells = []spell{
 	{id: 29105, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 4, dieSides: 1, misc: 16698, miscB: 64, targetA: targetDestCaster, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 52092 "Temporary Electrical Charge" (wago
+	// SpellName — MATCH vs expected; C++
+	// SPELL_TEMPORARY_ELECTRICAL_CHARGE,
+	// boss_bjarngrim.cpp:66 enum; Lua
+	// northrend/boss_bjarngrim.lua:66/80) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_52092_52774_59085.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp0 die0 period1000 trigger52097 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1,
+	// range1 Self Only, school Arcane (0x40); NO
+	// SpellCategories row (no dispel); Attributes
+	// not carried.
+	{id: 52092, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, trigger: 52097, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52774 "Renew Steel" (wago SpellName — MATCH
+	// vs expected; C++ SPELL_RENEW_STEEL_N,
+	// boss_bjarngrim.cpp:69 enum; Lua
+	// northrend/boss_bjarngrim.lua:342) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_52092_52774_59085.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA OBS_MOD_HEALTH bp9
+	// die1 period2000 tgtA TARGET_UNIT_NEARBY_ENTRY;
+	// cast5 2000ms, dur32 6000ms, range5 Long Range
+	// 0-40yd, school Holy; SpellCategories row
+	// present (DispelType 0 — not carried);
+	// Attributes not carried.
+	{id: 52774, castTimeIdx: 5, durIdx: 32, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAura, aura: auraObsModHealth, basePoints: 9, dieSides: 1, auraPeriod: 2000, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
+	// 59085 "Arc Weld" (wago SpellName — MATCH vs
+	// expected; C++ SPELL_ARC_WELD,
+	// boss_bjarngrim.cpp:68 enum; Lua
+	// northrend/boss_bjarngrim.lua:113) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_52092_52774_59085.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp-1 die1 period250 trigger59086 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur1 10000ms, range5 Long Range 0-40yd,
+	// school Nature; NO SpellCategories row (no
+	// dispel); Attributes not carried.
+	{id: 59085, castTimeIdx: 1, durIdx: 1, rangeIdx: 5, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 250, trigger: 59086, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
