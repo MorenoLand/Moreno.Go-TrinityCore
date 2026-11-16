@@ -5128,6 +5128,63 @@ var spells = []spell{
 	{id: 32616, castTimeIdx: 3, durIdx: 21, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraTransform, dieSides: 0, basePoints: 0, misc: 18643, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 70013 Quel'Delar's Compulsion (wago SpellName, NOT
+	// "Quel'Delar Compulsion"; C++
+	// SPELL_QUEL_DELAR_COMPULSION, halls_of_reflection.h:176;
+	// Lua northrend/at_hor_triggers.lua:93, Quel'Delar leg
+	// HasAura check) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 6827d471,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp-1 die1 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1 infinite,
+	// range1 Self Only 0yd, school Physical; no SpellCategories,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 70013, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72712 Falric/Marwyn Spawn Aura (wago SpellName, NOT "Boss
+	// Spawn Aura" — the C++ name is a generic label; C++
+	// SPELL_BOSS_SPAWN_AURA, halls_of_reflection.cpp:225; Lua
+	// northrend/at_hor_triggers.lua:94, Falric/Marwyn triggered
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 6827d471,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur29 12000ms, range1
+	// Self Only 0yd, school Physical; no SpellCategories,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 72712, castTimeIdx: 1, durIdx: 29, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50774 Thundering Stomp (wago name; C++
+	// SPELL_THUNDERING_STOMP, boss_drakos.cpp:27 enum; Lua
+	// northrend/boss_drakos.lua:104, DoCast self-cast, 15s init
+	// -> 15s repeat) — wago.tools 3.4.0.47659 SpellEffect rows
+	// + SpellMisc (2026-11-16 browser read 6827d471,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp1899 die201
+	// tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius48 60yd; eff1 KNOCK_BACK bp149 die1 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius48 60yd; cast4 1000ms, dur0 (no SpellDuration row),
+	// range1 Self Only 0yd, school Physical; SpellCategories
+	// Category 1152, DefenseType Magic, PreventionType 0x1 not
+	// carried; Attributes_1 0x88 / Attributes_2 0x4 not carried;
+	// no SpellClassOptions or SpellAuraOptions rows.
+	{id: 50774, castTimeIdx: 4, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 201, basePoints: 1899, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 48, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 149, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 48, chainAmplitude: 1},
+	}},
+	// 51336 Magic Pull (wago name; C++ SPELL_MAGIC_PULL,
+	// boss_drakos.cpp:26 enum; Lua northrend/boss_drakos.lua:103,
+	// DoCast self-cast, EVENT_MAGIC_PULL) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 6827d471, DifficultyID 0 row): eff0 DUMMY
+	// bp0 die0 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius33 99yd; cast5 2000ms,
+	// dur0 (no SpellDuration row), range1 Self Only 0yd, school
+	// Physical; no SpellCategories, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 51336, castTimeIdx: 5, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 33, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -5220,6 +5277,7 @@ func main() {
 		{30, f32(500), f32(0), f32(500)}, // real SpellRadius 30 for 42442 (wago.tools 3.4.0.47659, aux read 54197700)
 		{40, f32(9), f32(0), f32(9)},     // real SpellRadius 40 = 29961 RadiusIndex_1 (wago.tools 3.4.0.47659, aux read 54197700); UNREFERENCED — no seeded spell uses radiusIdx 40 until the _0-vs-_1 radius question settles
 		{33, f32(99), f32(0), f32(99)},   // real SpellRadius 33 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{48, f32(60), f32(0), f32(60)},   // real SpellRadius 48 for 50774 (wago.tools 3.4.0.47659, 2026-11-16 verdict 6827d471)
 		{29, f32(6), f32(0), f32(6)},     // real SpellRadius 29 for 33814 (wago.tools 3.4.0.47659)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
