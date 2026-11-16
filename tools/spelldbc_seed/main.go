@@ -7233,6 +7233,63 @@ var spells = []spell{
 	{id: 26540, castTimeIdx: 1, durIdx: 32, rangeIdx: 36, school: schoolArcane, effects: [3]effect{
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 3039, dieSides: 321, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
+	// 31326 "Corrupt Medivh" (wago SpellName —
+	// MISMATCH vs expected "Corrupt"; C++
+	// SPELL_CORRUPT,
+	// the_black_morass.cpp:50 enum; Lua
+	// kalimdor/the_black_morass.lua:118) — IDs +
+	// values govern, seeding per precedent. wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_31326_31556_37853.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp0 die0 period3000 tgtA
+	// TARGET_UNIT_NEARBY_ENTRY; cast1 instant, dur21
+	// -1 infinite, range13 Anywhere-Unlimited
+	// 0-50000yd, school Shadow; NO SpellCategories
+	// row; Attributes not carried.
+	{id: 31326, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 3000, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
+	// 31556 "Medivh Channel" (wago SpellName —
+	// MISMATCH vs expected "Channel"; C++
+	// SPELL_CHANNEL,
+	// the_black_morass.cpp:41 enum; Lua
+	// kalimdor/the_black_morass.lua:117) — IDs +
+	// values govern, seeding per precedent. wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_31326_31556_37853.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range13 Anywhere-Unlimited 0-50000yd,
+	// school Physical; NO SpellCategories row;
+	// SpellAuraOptions row (ProcChance 101) not
+	// carried (not a requested table); Attributes not
+	// carried.
+	{id: 31556, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 37853 "Corrupt Medivh" (wago SpellName —
+	// MISMATCH vs expected "Corrupt Aeonus"; C++
+	// SPELL_CORRUPT_AEONUS,
+	// the_black_morass.cpp:51 enum; Lua
+	// kalimdor/the_black_morass.lua:119) — IDs +
+	// values govern, seeding per precedent. wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_31326_31556_37853.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp0 die0 period1000 tgtA
+	// TARGET_UNIT_NEARBY_ENTRY; eff1 APPLY_AURA DUMMY
+	// bp0 die0 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 infinite, range13
+	// Anywhere-Unlimited 0-50000yd, school Shadow;
+	// NO SpellCategories row; Attributes not carried.
+	{id: 37853, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
