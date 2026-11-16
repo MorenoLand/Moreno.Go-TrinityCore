@@ -4364,6 +4364,61 @@ var spells = []spell{
 		{effect: effWeaponDamage, dieSides: 1, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
+	// 6432 Smite Stomp (wago name; C++ SPELL_SMITE_STOMP,
+	// boss_mr_smite.cpp:35 enum; Lua
+	// eastern_kingdoms/boss_mr_smite.lua:70, self cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 8bda548f, DifficultyID 0 rows): eff0 APPLY_AURA MOD_STUN bp0
+	// die0 tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius11 (45yd, real SpellRadius row added below); cast1
+	// instant, dur1 10000ms, range1 Self Only; dispel 0, mechanic 0;
+	// no SpellPower, SpellClassOptions or SpellAuraOptions rows.
+	{id: 6432, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 6435 Smite Slam (wago name; C++ SPELL_SMITE_SLAM,
+	// boss_mr_smite.cpp:36 enum; Lua
+	// eastern_kingdoms/boss_mr_smite.lua:71, victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 8bda548f, DifficultyID 0 rows): eff0 APPLY_AURA MOD_STUN bp0
+	// die0 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 SCHOOL_DAMAGE bp49
+	// die1 same target; cast1 instant, dur27 3000ms, range2 Combat
+	// 5yd; spell mechanic 12, dispel 0; eff1 BonusCoefficient 1 not
+	// carried (no field); no SpellPower, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 6435, mechanic: 12, castTimeIdx: 1, durIdx: 27, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 49, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 5568 Trample (wago name; C++ SPELL_TRAMPLE,
+	// boss_ramstein_the_gorger.cpp:33 enum; Lua
+	// eastern_kingdoms/boss_ramstein_the_gorger.lua:59, self cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 8bda548f, DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp7 die1 tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius13 (10yd); cast1 instant, dur0 (no SpellDuration row),
+	// range1 Self Only; dispel 0, mechanic 0; RealPointsPerLevel 1
+	// not carried (no field); no SpellPower, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 5568, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 7, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 17307 Knockout (wago name; C++ SPELL_KNOCKOUT,
+	// boss_ramstein_the_gorger.cpp:34 enum; Lua
+	// eastern_kingdoms/boss_ramstein_the_gorger.lua:60, victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 8bda548f, DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp299 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK
+	// bp112 die75 misc75 same target; eff2 APPLY_AURA MOD_STUN bp0
+	// die0 same target; cast1 instant, dur32 6000ms, range7 Ten yards
+	// 10yd; dispel 0, mechanic 0; eff2 BonusCoefficient 1 not carried
+	// (no field); no SpellPower, SpellClassOptions or SpellAuraOptions
+	// rows.
+	{id: 17307, castTimeIdx: 1, durIdx: 32, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 299, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 75, basePoints: 112, misc: 75, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -4431,6 +4486,7 @@ func main() {
 		{28, f32(50000), f32(0), f32(50000)}, // real SpellRadius 28 for 66545 (wago.tools 3.4.0.43659)
 		{36, f32(0), f32(0), f32(0)},         // real SpellRadius 36 for 50415 (wago.tools 3.4.0.43659, 2026-11-13 22:17 verdict: all zeros)
 		{13, f32(10), f32(0), f32(10)},       // real SpellRadius 13 for 65100 (wago.tools 3.4.0.43659)
+		{11, f32(45), f32(0), f32(45)},       // real SpellRadius 11 for 6432 Smite Stomp (wago.tools 3.4.0.47659, 2026-11-16 verdict 8bda548f)
 		{14, f32(8), f32(0), f32(8)},         // real SpellRadius 14 for 59335 (wago.tools 3.4.0.43659)
 		{9, f32(20), f32(0), f32(20)},        // real SpellRadius 9 for 44194 (wago.tools 3.4.0.43659)
 		{18, f32(15), f32(0), f32(15)},       // real SpellRadius 18 for 44196 (wago.tools 3.4.0.43659)
