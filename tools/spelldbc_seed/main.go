@@ -130,6 +130,7 @@ const (
 	auraModDmgTaken            = 87
 	auraModHitChance           = 54 // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
 	auraPeriodicLeech          = 53 // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
+	auraPeriodicManaLeech      = 64 // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
 	auraModResistPct           = 101
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
@@ -7797,6 +7798,64 @@ var spells = []spell{
 	// dispel); Attributes not carried.
 	{id: 59085, castTimeIdx: 1, durIdx: 1, rangeIdx: 5, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 250, trigger: 59086, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 55813 "Eck Bite" (wago SpellName — MATCH
+	// vs expected "Eck Bite"; C++
+	// SPELL_ECK_BITE, boss_eck.cpp:30 enum; Lua
+	// northrend/boss_eck.lua:60) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_55813_55814_55816.txt, DifficultyID 0
+	// rows): eff0 WEAPON_PERCENT_DAMAGE bp149 die1
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0 none, range2 Combat Range 0-5yd, school
+	// Physical; SpellCategories row present
+	// (Category 1152, DefenseType 2 Melee, DispelType
+	// 0 — not carried); Attributes not carried.
+	{id: 55813, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 149, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 55814 "Eck Spit" (wago SpellName — MATCH
+	// vs expected "Eck Spit"; C++
+	// SPELL_ECK_SPIT, boss_eck.cpp:31 enum; Lua
+	// northrend/boss_eck.lua:61) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_55813_55814_55816.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE bp2969
+	// die1 period1000 radius20 25yd tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; eff1 APPLY_AURA
+	// PERIODIC_MANA_LEECH bp219 die1 period1000
+	// radius20 25yd tgtA TARGET_UNIT_CONE_ENEMY_24;
+	// cast16 1500ms, dur27 3000ms, range34 0-25yd,
+	// school Nature; SpellCategories row present
+	// (Category 0, DefenseType 1 Magic, DispelType
+	// 0 — not carried); EffectBonusCoefficient 0.1
+	// (eff0) + Attributes not carried (no field).
+	{id: 55814, castTimeIdx: 16, durIdx: 27, rangeIdx: 34, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2969, dieSides: 1, auraPeriod: 1000, radiusIdx: 20, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicManaLeech, basePoints: 219, dieSides: 1, auraPeriod: 1000, radiusIdx: 20, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 55816 "Eck Berserk" (wago SpellName — MATCH
+	// vs expected "Eck Berserk"; C++
+	// SPELL_ECK_BERSERK, boss_eck.cpp:29 enum; Lua
+	// northrend/boss_eck.lua:62) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_55813_55814_55816.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// bp499 die1 misc127 tgtA TARGET_UNIT_CASTER;
+	// eff1 APPLY_AURA MOD_MELEE_HASTE bp149 die1
+	// tgtA TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// MOD_SCALE bp24 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur5 300000ms, range1 Self
+	// Only, school Physical; SpellCategories row
+	// present (Category 21, DispelType 0 — not
+	// carried); Attributes not carried.
+	{id: 55816, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 499, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 149, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
