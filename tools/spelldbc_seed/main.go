@@ -114,6 +114,7 @@ const (
 	auraSchoolImmunity         = 39 // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
 	auraModCastingSpeed        = 65 // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraModStalked             = 68 // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
+	auraModDisarm              = 67 // SPELL_AURA_MOD_DISARM (SpellAuraDefines.h:147)
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
@@ -4804,6 +4805,73 @@ var spells = []spell{
 	{id: 68867, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, mechanic: 12, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 1351, basePoints: 8324, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
 		{effect: effKnockBack, dieSides: 1, basePoints: 149, misc: 300, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 25599 Thundercrash (wago SpellName, one word; C++
+	// SPELL_THUNDERCRASH, boss_rajaxx.cpp:50 enum; Lua
+	// kalimdor/boss_rajaxx.lua:45, DoCast(me) self-cast,
+	// non-triggered) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 browser read 21a13222, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp0 die0 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius12 100yd; eff1
+	// KNOCK_BACK bp99 die1 misc250 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius12 100yd; cast1 instant,
+	// dur0 (no SpellDuration row), range13 Anywhere - Unlimited
+	// 50000yd, school Nature; SpellCategories Category 22,
+	// DefenseType Magic, PreventionType 0x1, StartRecoveryCategory
+	// 133 not carried; Attributes_0 0x20010000 / Attributes_1 0x88 /
+	// Attributes_2 0x4 not carried; no SpellPower,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 25599, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 99, misc: 250, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 6713 Disarm (wago name; C++ SPELL_DISARM,
+	// boss_rajaxx.cpp:48 enum; Lua kalimdor/boss_rajaxx.lua:44,
+	// DoCastVictim, non-triggered, init 10s -> 22s) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser
+	// read 21a13222, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_DISARM bp-1 die1 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur28 5000ms, range2 Combat Range 5yd, school
+	// Physical, mechanic 3; DifficultyID 173/174 rows bp0 die0 +
+	// dur32 NOT seeded (base row only); SpellPower row all-zero
+	// costs not carried; SpellCategories DefenseType Melee,
+	// PreventionType 0x2; Attributes_0 0x40410 not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 6713, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, mechanic: 3, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDisarm, dieSides: 1, basePoints: -1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26006 Shadow Bolt (wago name; C++ SPELL_SHADOWBOLT,
+	// boss_twinemperors.cpp:46 enum; Lua
+	// kalimdor/boss_veklor.lua:93, DoCastVictim) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser
+	// read 21a13222, DifficultyID 0 row): eff0 SCHOOL_DAMAGE
+	// bp3599 die801 tgtA TARGET_UNIT_TARGET_ENEMY; cast4 1000ms,
+	// dur0 (no SpellDuration row), range36 Longer Range 45yd,
+	// school Shadow, manaCost 90, Speed 35 not carried;
+	// SpellCategories DefenseType Magic, PreventionType 0x1,
+	// StartRecoveryCategory 133 not carried; Attributes_0 0x10000 /
+	// Attributes_1 0x88 / Attributes_2 0x4 not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 26006, castTimeIdx: 4, durIdx: 0, rangeIdx: 36, school: schoolShadow, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 801, basePoints: 3599, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 26607 Blizzard (wago name; C++ SPELL_BLIZZARD,
+	// boss_twinemperors.cpp:47 enum; Lua
+	// kalimdor/boss_veklor.lua:94, SelectTarget Random) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 21a13222, DifficultyID 0 rows):
+	// eff0 PERSISTENT_AREA_AURA PERIODIC_DAMAGE bp1387 die225
+	// auraPeriod 2000 tgtA TARGET_DEST_DYNOBJ_ENEMY radius13 10yd;
+	// eff1 PERSISTENT_AREA_AURA MOD_DECREASE_SPEED bp-31 die1
+	// tgtA TARGET_DEST_DYNOBJ_ENEMY radius13 10yd; cast1 instant,
+	// dur1 10000ms, range36 Longer Range 45yd, school Frost;
+	// SpellCategories DefenseType Magic, PreventionType 0x1;
+	// Attributes_1 0x88 / Attributes_2 0x4 / Attributes_3 0x100 not
+	// carried; no SpellPower, SpellClassOptions or SpellAuraOptions
+	// rows.
+	{id: 26607, castTimeIdx: 1, durIdx: 1, rangeIdx: 36, school: schoolFrost, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 225, basePoints: 1387, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraDecSpeed, dieSides: 1, basePoints: -31, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
 }
 
