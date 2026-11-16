@@ -5075,6 +5075,59 @@ var spells = []spell{
 	{id: 16034, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolNature, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 87, basePoints: 531, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 6660 Shoot (wago name; C++ SPELL_SHOOT, zulfarrak.cpp:253
+	// enum; Lua kalimdor/npc_weegli_blastfuse.lua:85, Shoot when
+	// victim beyond melee range) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// bc333097, DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp35
+	// die13 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// (no SpellDuration row), range54 Monster Shoot 5–30yd,
+	// school Physical, Speed 40 not carried; SpellCategories
+	// DefenseType Ranged, PreventionType 0x2 not carried;
+	// Attributes_0 0x480012 not carried; SpellClassOptions
+	// SpellClassSet 9 Hunter, SpellClassMask_0 1 carried as
+	// family + familyFlags.
+	{id: 6660, castTimeIdx: 1, durIdx: 0, rangeIdx: 54, school: schoolPhysical, family: familyHunter, familyFlags: [3]uint32{1, 0, 0}, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 13, basePoints: 35, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 8858 Bomb (wago name; C++ SPELL_BOMB, zulfarrak.cpp:251
+	// enum; Lua kalimdor/npc_weegli_blastfuse.lua:84,
+	// DoCastVictim, non-triggered) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// bc333097, DifficultyID 0 row): eff0 WEAPON_DAMAGE bp-1
+	// die1 tgtA TARGET_UNIT_DEST_AREA_ENEMY radius8 5yd; cast5
+	// 2000ms, dur0 (no SpellDuration row), range54 Monster
+	// Shoot 5–30yd, school Fire, Speed 14 not carried; no
+	// SpellCategories row (filtering by SpellID 8858 returns
+	// only 28858/38858/68858), SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 8858, castTimeIdx: 5, durIdx: 0, rangeIdx: 54, school: schoolFire, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: -1, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 25824 Spotlight (wago name; C++ SPELL_SPOTLIGHT,
+	// karazhan.cpp:45 enum; Lua karazhan/npc_barnes.lua:62,
+	// spotlight cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read bc333097,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1 infinite,
+	// range4 Medium Range 30yd, school Physical; no
+	// SpellCategories, SpellClassOptions or SpellAuraOptions
+	// rows.
+	{id: 25824, castTimeIdx: 1, durIdx: 21, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 32616 Barnes Tuxedo Transform (wago SpellName, NOT
+	// "Tuxedo"; C++ SPELL_TUXEDO, karazhan.cpp:46 enum; Lua
+	// karazhan/npc_barnes.lua:61) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// bc333097, DifficultyID 0 row): eff0 APPLY_AURA TRANSFORM
+	// bp0 die0 misc 18643 tgtA TARGET_UNIT_CASTER; cast3
+	// 500ms, dur21 -1 infinite, range1 Self Only 0yd, school
+	// Nature; no SpellCategories, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 32616, castTimeIdx: 3, durIdx: 21, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, dieSides: 0, basePoints: 0, misc: 18643, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
