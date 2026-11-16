@@ -8275,6 +8275,65 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 878, dieSides: 143, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 149, dieSides: 1, misc: 64, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 72144 "Orange Blight Residue" (wago SpellName
+	// MATCHES; C++ SPELL_ORANGE_BLIGHT_RESIDUE,
+	// icecrown_citadel.h:41; Lua
+	// northrend/npc_alchemist_adrianna.lua:23,29 —
+	// player:HasAura gate) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_72144_72145_72155.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp-1 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur30 1800000ms, range1 Self
+	// Only, school Physical; SpellCategories NO ROW
+	// (dispel 0 / mechanic 0 defaults);
+	// SpellAuraOptions ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 72144, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72145 "Green Blight Residue" (wago SpellName
+	// MATCHES; C++ SPELL_GREEN_BLIGHT_RESIDUE,
+	// icecrown_citadel.h:42; Lua
+	// northrend/npc_alchemist_adrianna.lua:24,29 —
+	// player:HasAura gate) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_72144_72145_72155.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp-1 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur30 1800000ms, range1 Self
+	// Only, school Physical; SpellCategories NO ROW
+	// (dispel 0 / mechanic 0 defaults);
+	// SpellAuraOptions ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 72145, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72155 "Harvest Blight Specimen" (wago SpellName
+	// MATCHES; C++ SPELL_HARVEST_BLIGHT_SPECIMEN,
+	// icecrown_citadel.cpp:88,553-555; Lua
+	// northrend/npc_alchemist_adrianna.lua:25,30 —
+	// creature:CastSpell self-cast, 3s cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_72144_72145_72155.txt,
+	// DifficultyID 0 rows): eff0 SCRIPT_EFFECT
+	// bp72143 die1 radius28 50000yd tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY; eff1
+	// QUEST_COMPLETE bp72144 die1 misc24873
+	// radius28 tgtA/tgtB same; cast14 3000ms,
+	// dur0, range1 Self Only, school Physical;
+	// SpellCategories NO ROW (dispel 0 defaults);
+	// heroic DifficultyID 2/4 rows NOT carried
+	// (seed takes the DifficultyID 0 row; heroic
+	// differs only in QUEST_COMPLETE misc 24878
+	// vs 24873); ProcChance 101 / Attributes not
+	// carried (no fields in the seed struct).
+	{id: 72155, castTimeIdx: 14, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 72143, dieSides: 1, radiusIdx: 28, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+		{effect: effQuestComplete, basePoints: 72144, dieSides: 1, misc: 24873, radiusIdx: 28, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+	}},
 }
 
 func main() {
