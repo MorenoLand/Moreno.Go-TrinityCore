@@ -93,16 +93,18 @@ const (
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraModCharm               = 6 // SPELL_AURA_MOD_CHARM (SpellAuraDefines.h:86)
 	auraStun                   = 12
-	auraModDamageTaken         = 14 // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
-	auraDamageShield           = 15 // SPELL_AURA_DAMAGE_SHIELD (SpellAuraDefines.h:95)
-	auraReflectSpells          = 28 // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:108)
-	auraModPercentStat         = 80 // SPELL_AURA_MOD_PERCENT_STAT (SpellAuraDefines.h:160)
-	auraSchoolAbsorb           = 69 // SPELL_AURA_SCHOOL_ABSORB (SpellAuraDefines.h:149)
-	auraModDamageDone          = 13 // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
-	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
-	auraObsModHealth           = 20 // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
-	auraObsModPower            = 21 // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
-	auraModResistance          = 22 // SPELL_AURA_MOD_RESISTANCE (SpellAuraDefines.h:102)
+	auraModTaunt               = 11  // SPELL_AURA_MOD_TAUNT (SpellAuraDefines.h:91)
+	auraMechanicImmunityMask   = 147 // SPELL_AURA_MECHANIC_IMMUNITY_MASK (SpellAuraDefines.h:227)
+	auraModDamageTaken         = 14  // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
+	auraDamageShield           = 15  // SPELL_AURA_DAMAGE_SHIELD (SpellAuraDefines.h:95)
+	auraReflectSpells          = 28  // SPELL_AURA_REFLECT_SPELLS (SpellAuraDefines.h:108)
+	auraModPercentStat         = 80  // SPELL_AURA_MOD_PERCENT_STAT (SpellAuraDefines.h:160)
+	auraSchoolAbsorb           = 69  // SPELL_AURA_SCHOOL_ABSORB (SpellAuraDefines.h:149)
+	auraModDamageDone          = 13  // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
+	auraModInvisibility        = 18  // SPELL_AURA_MOD_INVISIBILITY
+	auraObsModHealth           = 20  // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
+	auraObsModPower            = 21  // SPELL_AURA_OBS_MOD_POWER (SpellAuraDefines.h:101)
+	auraModResistance          = 22  // SPELL_AURA_MOD_RESISTANCE (SpellAuraDefines.h:102)
 	auraPeriodicTrig           = 23
 	auraProcTriggerSpell       = 42 // SPELL_AURA_PROC_TRIGGER_SPELL (SpellAuraDefines.h:122)
 	auraRoot                   = 26
@@ -5868,6 +5870,80 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -21, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModPercentStat, dieSides: 1, basePoints: -21, misc: -1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 38467 "Netherbreath" (wago SpellName — MISMATCH vs
+	// expected "Nether Breath" (no space); C++
+	// SPELL_NETHER_BREATH, zone_shadowmoon_valley.cpp:203
+	// enum; Lua outland/npc_mature_netherwing_drake.lua:41,
+	// DoCastVictim every 5s) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// abab7d59, DifficultyID 0 rows): eff0 TRIGGER_SPELL
+	// trigger 38468 tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 1000 trigger 38468
+	// tgtA TARGET_UNIT_CASTER; damage itself is in
+	// triggered spell 38468, NOT seeded (trigger spells not
+	// seeded — established precedent; the trigger FIELD is
+	// carried); cast20 2500ms, dur27 3000ms, range2 Combat
+	// 0-5yd, school Arcane; SpellCategories Category 50
+	// DefenseType 1 PreventionType 0x1 StartRecoveryCategory
+	// 133 not carried; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 38467, castTimeIdx: 20, durIdx: 27, rangeIdx: 2, school: schoolArcane, effects: [3]effect{
+		{effect: effTriggerSpell, dieSides: 0, basePoints: 0, trigger: 38468, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, auraPeriod: 1000, trigger: 38468, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 38502 "Has Eaten Recently" (wago SpellName — MISMATCH
+	// vs expected "Just Eaten"; C++ SPELL_JUST_EATEN,
+	// zone_shadowmoon_valley.cpp:202 enum; Lua
+	// outland/npc_mature_netherwing_drake.lua:40,
+	// DoCastSelf 38502 + Talk 0) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// abab7d59, DifficultyID 0 row): eff0 APPLY_AURA DUMMY
+	// bp0 die0 tgtA TARGET_UNIT_CASTER; cast1 instant, dur3
+	// 60000ms, range1 Self Only 0yd, school Physical;
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 38502, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 40415 "Fixated" (wago SpellName — MISMATCH vs expected
+	// "Fixate Trigger"; C++ SPELL_FIXATE_TRIGGER,
+	// utgarde_keep.cpp:159 enum; Lua
+	// northrend/utgarde_keep.lua:36, triggered cast on the
+	// caster) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 browser read abab7d59,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_TAUNT bp0
+	// die0 tgtA TARGET_UNIT_TARGET_ANY; eff1 APPLY_AURA
+	// MECHANIC_IMMUNITY_MASK bp0 die0 misc 1694 tgtA
+	// TARGET_UNIT_TARGET_ANY; cast1 instant, dur8 15000ms,
+	// range13 unlimited 50000yd, school Physical;
+	// SpellCategories Category 82 DefenseType 1
+	// PreventionType 0x1 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 40415, castTimeIdx: 1, durIdx: 8, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModTaunt, dieSides: 0, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunityMask, dieSides: 0, basePoints: 0, misc: 1694, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 59687 "Explosion" (wago SpellName — MISMATCH vs
+	// expected "Ticking Time Bomb Explode"; C++
+	// SPELL_TICKING_TIME_BOMB_EXPLODE, utgarde_keep.cpp:122
+	// enum; Lua northrend/utgarde_keep.lua:34, target casts
+	// 59687 on the caster) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// abab7d59, DifficultyID 0 row): eff0 SCHOOL_DAMAGE
+	// bp7399 die1201 tgtA TARGET_DEST_CASTER tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY radius26 4yd; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Fire; raw bp7399/die1201 seeded as-is
+	// (the 7400-8600 $s1 range follows the usual +1
+	// convention); SpellCategories Category 0 DefenseType 1
+	// PreventionType 0x1 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	// NEW aux row SpellRadius 26 = 4yd added, verified in
+	// SpellRadius.dbc.
+	{id: 59687, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1201, basePoints: 7399, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 26, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -5964,6 +6040,7 @@ func main() {
 		{33, f32(99), f32(0), f32(99)},   // real SpellRadius 33 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 		{48, f32(60), f32(0), f32(60)},   // real SpellRadius 48 for 50774 (wago.tools 3.4.0.47659, 2026-11-16 verdict 6827d471)
 		{29, f32(6), f32(0), f32(6)},     // real SpellRadius 29 for 33814 (wago.tools 3.4.0.47659)
+		{26, f32(4), f32(0), f32(4)},     // real SpellRadius 26 for 59687 Explosion (wago.tools 3.4.0.47659 SpellRadius row 26, browser abab7d59)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
