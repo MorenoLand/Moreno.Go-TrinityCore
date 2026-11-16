@@ -107,6 +107,7 @@ const (
 	auraModResistance          = 22  // SPELL_AURA_MOD_RESISTANCE (SpellAuraDefines.h:102)
 	auraPeriodicTrig           = 23
 	auraProcTriggerSpell       = 42 // SPELL_AURA_PROC_TRIGGER_SPELL (SpellAuraDefines.h:122)
+	auraProcTriggerDmg         = 43 // SPELL_AURA_PROC_TRIGGER_DAMAGE (SpellAuraDefines.h:123)
 	auraRoot                   = 26
 	auraSilence                = 27
 	auraModStat                = 29  // SPELL_AURA_MOD_STAT (SpellAuraDefines.h:109)
@@ -7289,6 +7290,61 @@ var spells = []spell{
 	{id: 37853, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 1000, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 30254 "Evocation" (wago SpellName — MATCH vs
+	// expected "Evocation"; C++ SPELL_EVOCATION,
+	// boss_curator.cpp:35 enum; Lua
+	// karazhan/boss_curator.lua:46) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_30254_30383_30403.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA OBS_MOD_POWER bp4 die1
+	// period1000 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_STUN bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_TAKEN bp199 die1 misc127 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur18
+	// 20000ms, range1 Self Only, school Arcane; NO
+	// SpellCategories row; Attributes not carried.
+	{id: 30254, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraObsModPower, basePoints: 4, dieSides: 1, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 199, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 30383 "Hateful Bolt" (wago SpellName — MATCH vs
+	// expected "Hateful Bolt"; C++ SPELL_HATEFUL_BOLT,
+	// boss_curator.cpp:34 enum; Lua
+	// karazhan/boss_curator.lua:45) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_30254_30383_30403.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp4434 die1565 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast4 1000ms, dur0
+	// none, range36 Longer 0-45yd, school Arcane;
+	// BonusCoefficient 1 not carried; SpellCategories
+	// row present (DefenseType 1 Magic,
+	// PreventionType 0x0 — not carried); Attributes
+	// not carried.
+	{id: 30383, castTimeIdx: 4, durIdx: 0, rangeIdx: 36, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4434, dieSides: 1565, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30403 "Arcane Infusion" (wago SpellName — MATCH
+	// vs expected "Arcane Infusion"; C++
+	// SPELL_ARCANE_INFUSION, boss_curator.cpp:36 enum;
+	// Lua karazhan/boss_curator.lua:47) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_30254_30383_30403.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PROC_TRIGGER_DAMAGE
+	// bp1499 die1001 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA TRANSFORM bp0 die0 misc18780 tgtA
+	// TARGET_UNIT_CASTER; cast4 1000ms, dur21 -1
+	// infinite, range1 Self Only, school Arcane;
+	// BonusCoefficient 1 (eff0) not carried; NO
+	// SpellCategories row; Attributes not carried.
+	{id: 30403, castTimeIdx: 4, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerDmg, basePoints: 1499, dieSides: 1001, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, misc: 18780, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
