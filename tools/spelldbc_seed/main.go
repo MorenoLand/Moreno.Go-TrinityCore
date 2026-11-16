@@ -4873,6 +4873,71 @@ var spells = []spell{
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 225, basePoints: 1387, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
 		{effect: effPersistentAreaAura, aura: auraDecSpeed, dieSides: 1, basePoints: -31, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
+	// 26027 Knockback (wago name; C++ SPELL_KNOCKBACK,
+	// boss_bug_trio.cpp:40 enum; Lua kalimdor/boss_vem.lua:29,
+	// DoCastVictim, non-triggered) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// bf85b35e, DifficultyID 0 row): eff0 KNOCK_BACK bp249 die1
+	// misc250 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius13 10yd; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self Only 0yd, school
+	// Physical; SpellCategories DefenseType Melee, PreventionType
+	// 0x2 not carried; Attributes_0 0x10 not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 26027, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effKnockBack, dieSides: 1, basePoints: 249, misc: 250, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 26561 Berserker Charge (wago SpellName, NOT "Charge"; C++
+	// SPELL_CHARGE, boss_bug_trio.cpp:39 enum; Lua
+	// kalimdor/boss_vem.lua:28, random threat-list any-unit alive)
+	// — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read bf85b35e, DifficultyID 0 rows):
+	// eff0 CHARGE bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// KNOCK_BACK bp349 die1 misc200 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff2 WEAPON_DAMAGE bp299 die1
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0 (no
+	// SpellDuration row), range5 Long Range 40yd, school
+	// Physical, Speed 27 not carried; no SpellCategories,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 26561, castTimeIdx: 1, durIdx: 0, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, dieSides: 0, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 349, misc: 200, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 299, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 11086 Ward of Zum'rah (wago name; C++
+	// SPELL_WARD_OF_ZUM_RAH, boss_zum_rah.cpp:39 enum; Lua
+	// kalimdor/boss_zum_rah.lua:60, self-cast at 1s +
+	// HealthBelowPct(40) re-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// bf85b35e, DifficultyID 0 row): eff0 SUMMON bp4 die1 misc
+	// 7785 miscB 121 tgtA TARGET_DEST_CASTER_SUMMON; cast1
+	// instant, dur18 20000ms, range1 Self Only 0yd, school
+	// Physical; no SpellCategories, SpellClassOptions or
+	// SpellAuraOptions rows. SummonProperties 121 row seeded
+	// below (wago.tools 3.4.0.47659, browser 3e2e3ba6): Control 1
+	// Guardian, Faction 0, Title 0, Slot 0, Flags_0 0x2 — the Go
+	// summon leg spawns entry 7785 as an ALLY temp summon with the
+	// caster's faction (guardian flag off: Title 0, Flags 0x2
+	// lacks the 512 bit).
+	{id: 11086, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, basePoints: 4, misc: 7785, miscB: 121, targetA: targetDestCasterSummon, chainAmplitude: 1},
+	}},
+	// 15245 Shadow Bolt Volley (wago SpellName, two words, NOT
+	// "Shadowbolt Volley"; C++ SPELL_SHADOWBOLT_VOLLEY,
+	// boss_zum_rah.cpp:38 enum; Lua kalimdor/boss_zum_rah.lua:59,
+	// DoCast(target) at 10s repeating 9s, non-triggered) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read bf85b35e, DifficultyID 0 row):
+	// eff0 SCHOOL_DAMAGE bp127 die45 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius10 30yd; cast14
+	// 3000ms, dur0 (no SpellDuration row), range4 Medium Range
+	// 30yd, school Shadow; SpellCategories DefenseType Magic,
+	// PreventionType 0x1, StartRecoveryCategory 133 not carried;
+	// Attributes_0 0x90000 / Attributes_1 0x88 not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 15245, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 45, basePoints: 127, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -5047,7 +5112,7 @@ func main() {
 	// one Flags field). Row 81 is REAL (wago.tools 3.4.0.43659
 	// SummonProperties: Control 1/Guardian, Faction 0, Title 4/
 	// TOTEM, Slot 2 (earth totem), Flags_0 0x100002).
-	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}, {1362, 0, 0, 0, 0, 0x800}, {66, 0, 0, 0, 0, 0x1}} // real SummonProperties 1362 for 69424 (wago.tools 3.4.0.47659, browser 7f680372); real SummonProperties 66 for 43289 (wago.tools 3.4.0.47659, browser 3ce851bf)
+	summonProps := [][]uint32{{64, 0, 0, 0, 0, 0x100}, {61, 1, 0, 2, 0, 2}, {81, 1, 0, 4, 2, 0x100002}, {1362, 0, 0, 0, 0, 0x800}, {66, 0, 0, 0, 0, 0x1}, {121, 1, 0, 0, 0, 0x2}} // real SummonProperties 1362 for 69424 (wago.tools 3.4.0.47659, browser 7f680372); real SummonProperties 66 for 43289 (wago.tools 3.4.0.47659, browser 3ce851bf); real SummonProperties 121 for 11086 (wago.tools 3.4.0.47659, browser 3e2e3ba6)
 	if err := writeWDBC(filepath.Join(out, "SummonProperties.dbc"), 6, summonProps); err != nil {
 		panic(err)
 	}
