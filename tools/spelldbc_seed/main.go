@@ -4668,6 +4668,74 @@ var spells = []spell{
 	{id: 22518, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 28467 Mortal Wound (wago name; C++ SPELL_MORTAL_WOUND,
+	// boss_fankriss.cpp:38 enum; Lua kalimdor/boss_fankriss.lua:60,
+	// DoCastVictim, non-triggered) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read 906b92ac,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_HEALING_PCT bp-11
+	// die1 misc126 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// WEAPON_PERCENT_DAMAGE bp149 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur8 15000ms, range7
+	// Ten yards 10yd, school Physical; SpellCategories Mechanic 0,
+	// DefenseType Melee, PreventionType 0x2; SpellAuraOptions
+	// ProcChance 101 / CumulativeAura 8 not carried (no fields);
+	// Attributes_0 538968064 / Attributes_3 262144 not carried; no
+	// SpellPower or SpellClassOptions rows.
+	{id: 28467, castTimeIdx: 1, durIdx: 8, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -11, misc: 126, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponPercentDamage, dieSides: 1, basePoints: 149, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 28858 Entangling Roots (wago SpellName; C++ SPELL_ROOT,
+	// boss_fankriss.cpp:39 enum; Lua kalimdor/boss_fankriss.lua:61,
+	// DoCast(target) non-triggered -> ModifyThreatByPercent -100) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 906b92ac, DifficultyID 0 rows): eff0 APPLY_AURA
+	// ROOT bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE bp24 die1 auraPeriod 3000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur8 15000ms, range4
+	// Medium Range 30yd, school Nature, mechanic 7 (ROOT);
+	// SpellCategories Category 99, DefenseType 0, PreventionType
+	// 0x2, StartRecoveryCategory 133 not carried; Attributes_0
+	// 1074331648 not carried; no SpellPower, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 28858, castTimeIdx: 1, durIdx: 8, rangeIdx: 4, school: schoolNature, mechanic: 7, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, dieSides: 0, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 24, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 18670 Knock Away (wago name; C++ SPELL_KNOCKAWAY,
+	// boss_landslide.cpp:31 enum; Lua kalimdor/boss_landslide.lua:44,
+	// DoCastVictim, non-triggered, init 8s -> 15s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16 browser
+	// read 906b92ac, DifficultyID 0 rows): eff0 WEAPON_DAMAGE bp29
+	// die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK bp131
+	// die87 misc125 tgtA TARGET_UNIT_TARGET_ENEMY; eff2 SCRIPT_EFFECT
+	// bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// (no SpellDuration row), range7 Ten yards 10yd, school Physical;
+	// SpellCategories Mechanic 0, DefenseType Melee, PreventionType
+	// 0x2; Attributes_0 16 not carried; no SpellPower,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 18670, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 29, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 87, basePoints: 131, misc: 125, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, dieSides: 0, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 21808 Landslide (wago name; C++ SPELL_LANDSLIDE,
+	// boss_landslide.cpp:33 enum; Lua kalimdor/boss_landslide.lua:46,
+	// non-triggered self-cast pump) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read 906b92ac,
+	// DifficultyID 0 rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp0 die1 auraPeriod 2000 trigger 21809 (NOT seeded — trigger
+	// target, see checkpoint note) tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA STUN bp0 die1 radius12 100yd tgtA TARGET_DEST_CASTER
+	// tgtB TARGET_UNIT_DEST_AREA_ENEMY; cast1 instant, dur31 8000ms,
+	// range1 Self Only, school Physical, mechanic 12 (stunned);
+	// SpellCategories DefenseType 0, PreventionType 0x0; Attributes_1
+	// 64 not carried; no SpellPower, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 21808, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 2000, trigger: 21809, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: 0, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
 }
 
 func main() {
