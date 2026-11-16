@@ -5006,6 +5006,75 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 75, basePoints: 262, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -71, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 11972 Shield Bash (wago name; C++ SPELL_SHIELD_BASH,
+	// zulfarrak.cpp:53 enum; Lua kalimdor/npc_sergeant_bly.lua:66,
+	// DoCastVictim, non-triggered) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 76ce4f8c, DifficultyID 0 rows): eff0 INTERRUPT_CAST bp4
+	// die1 mechanic 26 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// SCHOOL_DAMAGE bp9 die1 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur32 6000ms, range2 Combat Range 5yd,
+	// school Physical; SpellCategories DefenseType Melee,
+	// PreventionType 0x2 not carried; Attributes_0 0xd0010 not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 11972, castTimeIdx: 1, durIdx: 32, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effInterruptCast, dieSides: 1, basePoints: 4, mechanic: 26, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 9, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 12170 Revenge (wago name; C++ SPELL_REVENGE,
+	// zulfarrak.cpp:54 enum; Lua kalimdor/npc_sergeant_bly.lua:67,
+	// DoCastVictim, non-triggered, init 8s, reschedule 10s) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 76ce4f8c, DifficultyID 0 row,
+	// filter[SpellID] — filter[ID] is a substring filter and
+	// returns the wrong SpellMisc row 612170/SpellID 63431):
+	// eff0 SCHOOL_DAMAGE bp15 die5 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0 (no
+	// SpellDuration row), range2 Combat Range 5yd, school
+	// Physical; SpellCategories Category 65, DefenseType Melee,
+	// PreventionType 0x2 not carried; Attributes_0 0x80010 /
+	// Attributes_3 0x400 not carried; RealPointsPerLevel 0.9 NOT
+	// carried (seed has no field — established precedent); no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 12170, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 5, basePoints: 15, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16033 Chain Lightning (wago name; C++
+	// SPELL_CHAIN_LIGHTNING, zone_orgrimmar.cpp:168 enum; Lua
+	// kalimdor/npc_thrall_warchief.lua:52, DoCastVictim,
+	// non-triggered) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 76ce4f8c,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp462 die75
+	// chainTargets 10 chainAmplitude 0.9 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast14 (verdict resolves
+	// SpellCastTimes 14 as 1600ms, but that CONFLICTS with the
+	// seed's established row 14 = 3000ms, verified by the 15245
+	// verdict + the 3.4.0.43659 read for 67528 — likely a
+	// substring-filter misread of the aux row, so NO new cast row
+	// is added and cast14 resolves 3000ms here), dur0 (no
+	// SpellDuration row), range4 30yd, school Nature;
+	// SpellCategories Category
+	// 85, DefenseType Magic, PreventionType 0x1,
+	// StartRecoveryCategory 133 not carried; Attributes_0 0x90000
+	// not carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 16033, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 75, basePoints: 462, targetA: targetEnemy, chainTargets: 10, chainAmplitude: 0.9},
+	}},
+	// 16034 Shock (wago name; C++ SPELL_SHOCK,
+	// zone_orgrimmar.cpp:169 enum; Lua
+	// kalimdor/npc_thrall_warchief.lua:53, DoCastVictim,
+	// non-triggered) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 76ce4f8c,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp531 die87 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0 (no
+	// SpellDuration row), range3 20yd, school Nature;
+	// SpellCategories Category 19, DefenseType Magic,
+	// PreventionType 0x1, StartRecoveryCategory 133 not carried;
+	// Attributes_0 0xd0000 not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 16034, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 87, basePoints: 531, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
