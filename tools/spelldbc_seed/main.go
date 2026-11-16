@@ -141,6 +141,7 @@ const (
 	auraRangedApAttackerBonus  = 127 // SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:207)
 	auraMeleeApAttackerBonus   = 165 // SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS (SpellAuraDefines.h:245)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
+	auraRaidProcFromCharge     = 223 // SPELL_AURA_RAID_PROC_FROM_CHARGE (SpellAuraDefines.h:303)
 	auraPeriodicDummy          = 226
 	auraPeriodicTrigWithValue  = 227 // SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE (SpellAuraDefines.h:307)
 	auraControlVehicle         = 236 // SPELL_AURA_CONTROL_VEHICLE (SpellAuraDefines.h:301)
@@ -8040,8 +8041,8 @@ var spells = []spell{
 	// radius10 30yd tgtA TARGET_DEST_CASTER; cast1
 	// instant, dur3 60000ms, range1 Self Only, school
 	// Nature; NO SpellCategories row (no dispel);
-	// trigger 28241 unseeded — SpellMisc not in
-	// verdict, follow-up read needed; Attributes /
+	// trigger 28241 seeded below
+	// (wago_spells_28241_54363.txt); Attributes /
 	// ProcChance not carried.
 	{id: 28158, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, misc: 1, trigger: 28241, targetA: targetCaster, chainAmplitude: 1},
@@ -8061,12 +8062,101 @@ var spells = []spell{
 	// radius10 30yd tgtA TARGET_DEST_CASTER; cast1
 	// instant, dur3 60000ms, range1 Self Only, school
 	// Nature; NO SpellCategories row (no dispel);
-	// trigger 54363 unseeded — SpellMisc not in
-	// verdict, follow-up read needed; SpellAuraOptions
+	// trigger 54363 seeded below
+	// (wago_spells_28241_54363.txt); SpellAuraOptions
 	// ProcChance 101 row exists (not carried).
 	{id: 54362, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, misc: 1, trigger: 54363, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effDummy, basePoints: 0, dieSides: 0, misc: 1, radiusIdx: 10, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 28241 "Poison" (wago SpellName; C++
+	// SPELL_POISON_CLOUD trigger, boss_grobbulus.cpp
+	// enum; Lua northrend/boss_grobbulus.lua:73
+	// poisonCloudTick) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 verdict
+	// file wago_spells_28241_54363.txt, DifficultyID 0
+	// rows; re-read CORRECTS prior verdict misc 1→0,
+	// verified by SpellEffect+misc filter test):
+	// eff0 SCHOOL_DAMAGE bp2774 die451 misc0
+	// radius10 30yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0, range1 Self Only, school Nature; NO
+	// SpellCategories dispel (0); SpellAuraOptions
+	// NO row; Attributes / ProcChance not carried.
+	{id: 28241, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2774, dieSides: 451, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 54363 "Poison" (wago SpellName; C++
+	// SPELL_POISON_CLOUD trigger heroic,
+	// boss_grobbulus.cpp enum; Lua
+	// northrend/boss_grobbulus.lua:218) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_28241_54363.txt, DifficultyID 0
+	// rows; re-read CORRECTS prior verdict misc 1→0,
+	// verified by SpellEffect+misc filter test):
+	// eff0 SCHOOL_DAMAGE bp3699 die601 misc0
+	// radius10 30yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0, range1 Self Only, school Nature; NO
+	// SpellCategories dispel (0); SpellAuraOptions
+	// ProcChance 101 row exists (not carried).
+	{id: 54363, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3699, dieSides: 601, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 57941 "Mind Flay" (wago SpellName MATCHES; C++
+	// SPELL_MIND_FLAY, boss_herald_volazj.cpp:37;
+	// Lua northrend/boss_herald_volazj.lua:120) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_57941_57942_57949.txt, DifficultyID
+	// 0 rows): eff0 APPLY_AURA PERIODIC_DAMAGE
+	// bp2827 die345 period1000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// MOD_DECREASE_SPEED bp-51 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur27
+	// 3000ms, range3 20yd, school Shadow, mechanic
+	// 11 (SpellCategories, 72435 precedent);
+	// SpellCategories dispel 0; EffectBonusCoefficient
+	// 0.3 / ProcChance 101 not carried.
+	{id: 57941, castTimeIdx: 1, durIdx: 27, rangeIdx: 3, school: schoolShadow, mechanic: 11, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2827, dieSides: 345, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 57942 "Shadow Bolt Volley" (wago SpellName
+	// MATCHES; C++ SPELL_SHADOW_BOLT_VOLLEY,
+	// boss_herald_volazj.cpp:38; Lua
+	// northrend/boss_herald_volazj.lua:121) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_57941_57942_57949.txt, DifficultyID
+	// 0 rows): eff0 SCHOOL_DAMAGE bp849 die301
+	// radius48 60yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0, range14 60yd (new aux row), school
+	// Shadow; SpellCategories dispel 0;
+	// EffectAmplitude 1 / EffectBonusCoefficient 1 /
+	// Speed 20 / ProcChance 101 not carried.
+	{id: 57942, castTimeIdx: 1, durIdx: 0, rangeIdx: 14, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 849, dieSides: 301, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 57949 "Shiver" (wago SpellName MATCHES; C++
+	// SPELL_SHIVER, boss_herald_volazj.cpp:39; Lua
+	// northrend/boss_herald_volazj.lua:122) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_57941_57942_57949.txt, DifficultyID
+	// 0 rows): eff0 APPLY_AURA RAID_PROC_FROM_CHARGE
+	// (aura 223; Wago label "REMOVE_BARBER_SHOP_COST"
+	// is misaligned, value governs) bp0 die0
+	// radius9 20yd tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur8 15000ms, range13 50000yd,
+	// school Shadow, dispel 2 Curse; description
+	// references 57952 but no second effect row and
+	// trigger 0 — NOT seeded; ProcChance 100 /
+	// ProcCharges 5 / Speed 40 not carried.
+	{id: 57949, castTimeIdx: 1, durIdx: 8, rangeIdx: 13, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRaidProcFromCharge, basePoints: 0, dieSides: 0, radiusIdx: 9, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
@@ -8231,6 +8321,7 @@ func main() {
 		{137, f32(0), f32(0), f32(8), f32(8), 0},        // real SpellRange 137 \"Eight yards\" for 34697 Allergic Reaction (wago.tools 3.4.0.47659 SpellRange row 137, browser bb66d46a)
 		{35, f32(0), f32(0), f32(35), f32(35), 0},       // real SpellRange 35 "Medium-Long Range" for 38739 Acid Geyser (wago.tools 3.4.0.47659 SpellRange row 35, browser 45c90da6)
 		{134, f32(0), f32(0), f32(80), f32(80), 0},      // real SpellRange 134 "Tower 80" for 30967 Fireball (wago.tools 3.4.0.47659 SpellRange row 134, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
+		{14, f32(0), f32(0), f32(60), f32(60), 0},       // real SpellRange 14 "Extra Long Range" for 57942 (wago.tools 3.4.0.47659, 2026-11-16 verdict wago_spells_57941_57942_57949.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
