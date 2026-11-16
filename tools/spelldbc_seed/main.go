@@ -88,6 +88,8 @@ const (
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraStun                   = 12
 	auraModDamageTaken         = 14 // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
+	auraDamageShield           = 15 // SPELL_AURA_DAMAGE_SHIELD (SpellAuraDefines.h:95)
+	auraSchoolAbsorb           = 69 // SPELL_AURA_SCHOOL_ABSORB (SpellAuraDefines.h:149)
 	auraModDamageDone          = 13 // SPELL_AURA_MOD_DAMAGE_DONE (SpellAuraDefines.h:93) — NOT auraModDmgDone=79 (that is MOD_DAMAGE_PERCENT_DONE, SpellAuraDefines.h:159; pre-existing misnomer, left alone)
 	auraModInvisibility        = 18 // SPELL_AURA_MOD_INVISIBILITY
 	auraObsModHealth           = 20 // SPELL_AURA_OBS_MOD_HEALTH (SpellAuraDefines.h:100)
@@ -4078,6 +4080,91 @@ var spells = []spell{
 	// botanica/boss_laj.lua from the 2-missing-id list.
 	{id: 34673, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effTeleportUnits, dieSides: 1, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 12040 Shadow Shield (wago name; C++ SPELL_SHADOWSHIELD,
+	// boss_darkmaster_gandling.cpp:44 enum; Lua
+	// eastern_kingdoms/boss_darkmaster_gandling.lua:182, self-cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 53d71537, DifficultyID 0 rows): eff0 6 APPLY_AURA
+	// aura 69 SCHOOL_ABSORB dieSides 1 basePoints 199 misc 127 (0x7f
+	// all-schools) TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1;
+	// eff1 6 APPLY_AURA aura 15 DAMAGE_SHIELD dieSides 1 basePoints 9
+	// TargetA 1 chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 9 (30000ms, real row), rangeIdx 5 (Long Range, real row),
+	// school 0x20 Shadow, dispel 1 (SpellCategories DispelType 1
+	// MAGIC), mechanic 0, manaCost 10 (SpellPower ManaCost 10, 12544
+	// precedent). NOT carried: no SpellAuraOptions row; no
+	// SpellClassOptions row (no family); eff0 RealPointsPerLevel 10 /
+	// eff1 RealPointsPerLevel 0.5 (no seed-struct field); SpellPower
+	// ManaCostPerLevel 8 (no seed-struct field); SpellCategories
+	// DefenseType 1 / PreventionType 0x1 (no struct fields);
+	// EffectAmplitude 0 (zero-value); Attributes not encoded (seed has
+	// no attributes field). Engine twins: SpellAuraSchoolAbsorb 69
+	// live (absorption.go:15), spellAuraDamageShield 15 live
+	// (damage_shield.go).
+	{id: 12040, dispel: 1, manaCost: 10, castTimeIdx: 1, durIdx: 9, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, dieSides: 1, basePoints: 199, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDamageShield, dieSides: 1, basePoints: 9, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 17950 Shadow Portal (wago name; C++ SPELL_SHADOW_PORTAL,
+	// boss_darkmaster_gandling.cpp:46 enum; Lua
+	// eastern_kingdoms/boss_darkmaster_gandling.lua:216, TRIGGERED
+	// target cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 53d71537, DifficultyID 0 rows): single
+	// eff0 3 DUMMY dieSides 1 TargetA 6 TARGET_UNIT_TARGET_ENEMY
+	// chainAmplitude 1; castTimeIdx 4 (1000ms, real row), durIdx 0 (no
+	// SpellDuration row), rangeIdx 4 (Medium Range, real row), school
+	// 0x1 Physical, dispel 0 / mechanic 0 (no SpellCategories row).
+	// NOT carried: no SpellAuraOptions row; no SpellPower row; no
+	// SpellClassOptions row (no family); eff0 BonusCoefficient 1 (no
+	// seed-struct field); EffectAmplitude 0 (zero-value); Attributes
+	// not encoded (seed has no attributes field). Engine twin:
+	// spellEffectDummy 3 live (spells.go:375). The 6-room picker is a
+	// C++ SpellScript (boss_darkmaster_gandling.cpp:144); the DUMMY
+	// effect is the seedable leg.
+	{id: 17950, castTimeIdx: 4, durIdx: 0, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16509 Rend (wago name; C++ SPELL_REND,
+	// boss_doctor_theolen_krastinov.cpp:36 enum; Lua
+	// eastern_kingdoms/boss_doctor_theolen_krastinov.lua, TRIGGERED
+	// victim cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 53d71537, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 3 PERIODIC_DAMAGE auraPeriod 3000
+	// dieSides 1 basePoints 26 mechanic 15 TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 8 (15000ms, real row), rangeIdx 2
+	// (Combat Range, real row), school 0x1 Physical, mechanic 15
+	// (SpellCategories Mechanic 15), dispel 0. NOT carried: no
+	// SpellAuraOptions row; no SpellClassOptions row (no family);
+	// SpellPower ManaCost 0 (zero-value); SpellCategories DefenseType
+	// 2 / PreventionType 0x2 (no struct fields); EffectAmplitude 0
+	// (zero-value); Attributes not encoded (seed has no attributes
+	// field). Engine twin: auraPeriodicDmg 3 live (spells.go).
+	// Per-effect mechanic carried on the 982/1356 auraDecSpeed
+	// precedent.
+	{id: 16509, mechanic: 15, castTimeIdx: 1, durIdx: 8, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 1, basePoints: 26, mechanic: 15, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 18103 Backhand (wago name; C++ SPELL_BACKHAND,
+	// boss_doctor_theolen_krastinov.cpp:37 enum; Lua
+	// eastern_kingdoms/boss_doctor_theolen_krastinov.lua, TRIGGERED
+	// victim cast) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 53d71537, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 12 MOD_STUN TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 39 (2000ms, real row), rangeIdx 12
+	// (Interact Range, real row), school 0x1 Physical, mechanic 12
+	// (SpellCategories Mechanic 12), dispel 0. NOT carried: no
+	// SpellAuraOptions row; no SpellPower row; no SpellClassOptions row
+	// (no family); SpellCategories DefenseType 2 / PreventionType 0x2
+	// (no struct fields); EffectAmplitude 0 (zero-value); Attributes
+	// not encoded (seed has no attributes field). Engine twin:
+	// spellAuraModStun 12 live (spells.go:718). With 16509, removes
+	// eastern_kingdoms/boss_doctor_theolen_krastinov.lua from the
+	// 2-missing-id list (gandling likewise for 12040/17950).
+	{id: 18103, mechanic: 12, castTimeIdx: 1, durIdx: 39, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
