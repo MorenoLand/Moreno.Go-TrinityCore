@@ -82,6 +82,8 @@ const (
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
 	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
+	effAddExtraAttacks         = 19  // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
+	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
@@ -4265,6 +4267,50 @@ var spells = []spell{
 	{id: 16128, dispel: 3, castTimeIdx: 1, durIdx: 25, rangeIdx: 2, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 10000, dieSides: 1, basePoints: 44, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 19, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 3391 Thrash (wago name; C++ SPELL_THRASH,
+	// boss_halycon.cpp:25 enum; Lua
+	// eastern_kingdoms/boss_halycon.lua:104, self cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 7b42192d, DifficultyID 0 rows): eff0 ADD_EXTRA_ATTACKS bp1 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur0 (no SpellDuration
+	// row), range1 Self Only; dispel 0, mechanic 0; no SpellPower,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 3391, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effAddExtraAttacks, dieSides: 1, basePoints: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 13738 Rend (wago name; C++ SPELL_REND,
+	// boss_halycon.cpp:24 enum; Lua
+	// eastern_kingdoms/boss_halycon.lua:94, victim cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 7b42192d, DifficultyID 0 rows): eff0 APPLY_AURA PERIODIC_DAMAGE
+	// period3000 bp25 die1 mech15 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur8 15000ms, range2 Combat; spell mechanic 15, dispel
+	// 0; SpellPower ManaCost 0.
+	{id: 13738, mechanic: 15, castTimeIdx: 1, durIdx: 8, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 1, basePoints: 25, mechanic: 15, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 6742 Bloodlust (wago name; C++ SPELL_BLOODLUST,
+	// boss_houndmaster_loksey.cpp:30 enum; Lua
+	// eastern_kingdoms/boss_houndmaster_loksey.lua:81, self cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 7b42192d, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_MELEE_HASTE bp29 die1 tgtA TARGET_UNIT_TARGET_ALLY; cast1
+	// instant, dur9 30000ms, range4 Medium 30yd; dispel 1 (MAGIC),
+	// SpellPower ManaCost 10; school Nature.
+	{id: 6742, dispel: 1, manaCost: 10, castTimeIdx: 1, durIdx: 9, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 29, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 17164 Summon Scarlet Hound (wago name; C++
+	// SPELL_SUMMON_SCARLET_HOUND, boss_houndmaster_loksey.cpp:29 enum;
+	// Lua eastern_kingdoms/boss_houndmaster_loksey.lua:98, self cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 7b42192d, DifficultyID 0 rows): eff0 SUMMON_PET
+	// misc10979 (Scarlet Hound entry) tgtA TARGET_DEST_CASTER_SUMMON;
+	// cast1 instant, dur21 -1 infinite, range1 Self Only; school
+	// Shadow; dispel 0, mechanic 0.
+	{id: 17164, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSummonPet, dieSides: 1, targetA: targetDestCasterSummon, misc: 10979, chainAmplitude: 1},
 	}},
 }
 
