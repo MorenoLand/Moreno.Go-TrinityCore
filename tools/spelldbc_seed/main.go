@@ -4938,6 +4938,74 @@ var spells = []spell{
 	{id: 15245, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 45, basePoints: 127, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
 	}},
+	// 16636 Berserker Charge (wago name; C++
+	// SPELL_BERSERKER_CHARGE, zone_thunder_bluff.cpp:36 enum;
+	// Lua kalimdor/npc_cairne_bloodhoof.lua:53, DoCast(target),
+	// non-triggered) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 browser read 5d61aa94,
+	// DifficultyID 0 rows): eff0 CHARGE bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK bp349 die1
+	// misc200 tgtA TARGET_UNIT_TARGET_ENEMY; eff2 WEAPON_DAMAGE
+	// bp299 die1 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range5 Long Range 40yd, school
+	// Physical, Speed 27 not carried; no SpellCategories,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 16636, castTimeIdx: 1, durIdx: 0, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, dieSides: 0, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 349, misc: 200, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 299, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 23123 Cairne's Hoofprint (wago SpellName, NOT "Hoofprint";
+	// C++ zone_thunder_bluff.cpp:132, player->CastSpell(player,
+	// 23123, false), no enum name; Lua
+	// kalimdor/npc_cairne_bloodhoof.lua:160, gossip action INFO 3
+	// player self-cast, non-triggered) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 5d61aa94, DifficultyID 0 row): eff0 CREATE_ITEM bp0 die1
+	// itemType 18643 tgtA TARGET_UNIT_TARGET_ANY (25, NOT
+	// self-only — seeded as DB2 reads); cast4 1000ms, dur0 (no
+	// SpellDuration row), range13 Anywhere - Unlimited 50000yd,
+	// school Physical; no SpellCategories, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 23123, castTimeIdx: 4, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effCreateItem, dieSides: 1, basePoints: 0, itemType: 18643, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 26139 Ground Rupture (wago name; C++
+	// SPELL_GROUND_RUPTURE, boss_cthun.cpp:93 enum; Lua
+	// kalimdor/npc_claw_tentacle.lua:17, claw tentacle AoE) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 5d61aa94, DifficultyID 0 rows):
+	// eff0 SCHOOL_DAMAGE bp1349 die301 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius13 10yd; eff1
+	// KNOCK_BACK bp99 die1 misc150 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius13 10yd; eff2
+	// SCRIPT_EFFECT bp0 die0 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius13 10yd; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self Only 0yd, school
+	// Physical; no SpellCategories, SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 26139, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 301, basePoints: 1349, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 99, misc: 150, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effScriptEffect, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 26141 Hamstring (wago name; C++ SPELL_HAMSTRING,
+	// boss_cthun.cpp:94 enum; Lua kalimdor/npc_claw_tentacle.lua:18,
+	// Hamstring on victim, 2s init -> 5s repeat per C++) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 5d61aa94, DifficultyID 0 rows):
+	// eff0 SCHOOL_DAMAGE bp262 die75 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA MOD_DECREASE_SPEED
+	// bp-71 die1 tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur1 10000ms, range2 Combat Range 5yd, school Physical,
+	// mechanic 11 SNARE; SpellCategories DefenseType Melee,
+	// PreventionType 0x2 not carried; Attributes_0 0x50010 /
+	// Attributes_1 0x8000000 not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 26141, castTimeIdx: 1, durIdx: 1, rangeIdx: 2, school: schoolPhysical, mechanic: 11, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 75, basePoints: 262, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -71, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
