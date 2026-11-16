@@ -6586,6 +6586,35 @@ var spells = []spell{
 	{id: 15580, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effWeaponDamage, dieSides: 1, basePoints: 14, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 65347 "Proximity Mines" (wago SpellName — MISMATCH vs
+	// expected "Summon Proximity Mine"; C++
+	// SPELL_SUMMON_PROXIMITY_MINE, boss_mimiron.cpp:114
+	// enum; Lua northrend/spell_mimiron_proximity.lua:33,
+	// caster-cast triggered) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// dac0ae8f, DifficultyID 0 rows): eff0 TRIGGER_MISSILE
+	// bp0 die0 trig63016 tgtA TARGET_DEST_CASTER_RADIUS
+	// radius18 15yd (Speed 10 + Attributes not carried);
+	// cast1 instant, dur0 none, range1 Self Only, school
+	// Physical; NO SpellCategories row.
+	{id: 65347, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTriggerMiss, trigger: 63016, targetA: targetDestCasterRadius, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 15281 "Encage Emberseer" (wago SpellName — MATCH vs
+	// expected "Encage Emberseer"; C++
+	// SPELL_ENCAGE_EMBERSEER,
+	// boss_pyroguard_emberseer.cpp:49 enum; Lua
+	// eastern_kingdoms/npc_blackhand_incarcerator.lua:52,
+	// JustReachedHome self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// dac0ae8f, DifficultyID 0 rows): eff0 APPLY_AURA
+	// DUMMY bp0 die1 tgtA TARGET_UNIT_NEARBY_ENTRY
+	// (EffectBonusCoefficient 1 not carried); cast1
+	// instant, dur21 -1 infinite, range6 Vision 100yd,
+	// school Physical; NO SpellCategories row.
+	{id: 15281, castTimeIdx: 1, durIdx: 21, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+	}},
 }
 
 func main() {
