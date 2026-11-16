@@ -8590,6 +8590,70 @@ var spells = []spell{
 	{id: 50758, castTimeIdx: 1, durIdx: 85, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 17000, trigger: 50759, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 57912 "Arcane Lightning" (wago SpellName is
+	// "Arcane Lightning" — the "Damage" suffix is
+	// a C++/Lua label, not the stored name; C++
+	// SPELL_ARCANE_LIGHTNING_DAMAGE,
+	// violet_hold.cpp:129; Lua
+	// northrend/npc_violet_hold_defense_system.lua:19,
+	// 27 — self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_57912_57930_58152.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp12999 die1 (in-game 13000) radius12
+	// 100yd (aux row pre-existing) tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Arcane; NO SpellCategories row (mechanic
+	// 0, dispel 0); ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 57912, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 12999, dieSides: 1, radiusIdx: 12, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+	}},
+	// 57930 "Arcane Lightning" (wago SpellName is
+	// "Arcane Lightning" — the "Dummy" suffix is
+	// a C++/Lua label, not the stored name; C++
+	// SPELL_ARCANE_LIGHTNING_DUMMY,
+	// violet_hold.cpp:131; Lua
+	// northrend/npc_violet_hold_defense_system.lua:20,
+	// 28 — self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_57912_57930_58152.txt,
+	// DifficultyID 0 rows): eff0 DUMMY bp0 die1
+	// radius12 100yd (aux row pre-existing) tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Arcane; NO SpellCategories row (mechanic
+	// 0, dispel 0); ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 57930, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, radiusIdx: 12, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+	}},
+	// 58152 "Arcane Lightning" (wago SpellName is
+	// "Arcane Lightning" — the "Instakill" suffix
+	// is a C++/Lua label, not the stored name;
+	// C++ SPELL_ARCANE_LIGHTNING_INSTAKILL,
+	// violet_hold.cpp:130; Lua
+	// northrend/npc_violet_hold_defense_system.lua:21,
+	// 30 — self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_57912_57930_58152.txt,
+	// DifficultyID 0 rows): eff0 INSTAKILL bp0
+	// die1 radius12 100yd (aux row pre-existing)
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Arcane; NO SpellCategories row (mechanic
+	// 0, dispel 0); ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 58152, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effInstakill, basePoints: 0, dieSides: 1, radiusIdx: 12, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+	}},
 }
 
 func main() {
