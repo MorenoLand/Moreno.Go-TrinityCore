@@ -8532,6 +8532,64 @@ var spells = []spell{
 	{id: 67716, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effNormalizedWeaponDmg, basePoints: -1, dieSides: 1, radiusIdx: 52, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 50756 "Unstable Sphere Passive" (wago
+	// SpellName MATCHES; C++ SPELL_UNSTABLE_SPHERE_PASSIVE,
+	// boss_drakos.cpp:28; Lua
+	// northrend/npc_unstable_sphere.lua:22,
+	// 68 — AddAura self) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_50756_50757_50758.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp0 die0 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur387 16000ms (aux row
+	// added), range1 Self Only 0yd (aux row
+	// pre-existing), school Arcane; NO
+	// SpellCategories row (mechanic 0, dispel 0);
+	// ProcChance 101 / Attributes not carried
+	// (no fields in the seed struct).
+	{id: 50756, castTimeIdx: 1, durIdx: 387, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50757 "Unstable Sphere Pulse" (wago
+	// SpellName MATCHES; C++ SPELL_UNSTABLE_SPHERE_PULSE,
+	// boss_drakos.cpp:29; Lua
+	// northrend/npc_unstable_sphere.lua:24,
+	// 55 — self-cast, repeat) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_50756_50757_50758.txt,
+	// DifficultyID 0 rows): eff0 DUMMY bp0 die0
+	// tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Arcane; NO SpellCategories row (mechanic
+	// 0, dispel 0); ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 50757, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50758 "Unstable Sphere Timer" (wago
+	// SpellName MATCHES; C++ SPELL_UNSTABLE_SPHERE_TIMER,
+	// boss_drakos.cpp:30; Lua
+	// northrend/npc_unstable_sphere.lua:23,
+	// 69 — AddAura self) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_50756_50757_50758.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die0
+	// period17000 trigger 50759 tgtA
+	// TARGET_UNIT_CASTER (fires once at 17s of
+	// the 18s aura; 50759 trigger-only, NOT a
+	// live-cast ID, not seeded); cast1 instant,
+	// dur85 18000ms (aux row pre-existing,
+	// value now wago-confirmed), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Arcane; NO SpellCategories row (mechanic
+	// 0, dispel 0); ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 50758, castTimeIdx: 1, durIdx: 85, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 17000, trigger: 50759, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -8578,7 +8636,8 @@ func main() {
 		{8, 15000, 0, 15000},       // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
 		{9, 30000, 0, 30000},       // real SpellDuration 9 for 49519 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
-		{85, 18000, 0, 18000},      // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85; 18000ms from the Wowhead 18s display, wago SpellDuration re-read pending)
+		{85, 18000, 0, 18000},      // real SpellDuration 85 for 2767 (wago.tools 3.4.0.43659 SpellMisc DurationIndex 85) — value CONFIRMED 2026-11-16 by wago.tools 3.4.0.47659 SpellDuration row 85 (verdict wago_spells_50756_50757_50758.txt)
+		{387, 16000, 0, 16000},     // real SpellDuration 387 for 50756 (wago.tools 3.4.0.47659 SpellDuration row 387, 2026-11-16 verdict wago_spells_50756_50757_50758.txt)
 		{25, 30000, 0, 30000},      // real SpellDuration 25 (wago.tools 3.4.0.47659 SpellDuration row 25, browser 74701ec4) — CORRECTED 2026-11-16 from 180000ms (old value was a Wowhead display cross-check for 1834, never a DBC-row read); this also re-times the other durIdx-25 spells 1834/45532/16128 to 30000ms
 		{367, 7200000, 0, 7200000}, // real SpellDuration 367 for 23261 (wago.tools 3.4.0.47659 SpellDuration row 367)
 		{5, 300000, 0, 300000},     // real SpellDuration 5 for 18377 (wago.tools 3.4.0.47659 SpellDuration row 5, browser 32eeed6d)
