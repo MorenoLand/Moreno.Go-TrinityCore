@@ -3430,6 +3430,71 @@ var spells = []spell{
 	{id: 62997, castTimeIdx: 14, durIdx: 32, rangeIdx: 6, school: schoolSpellfire, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 1000, dieSides: 1, basePoints: 16999, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+
+	// 64427 Summon Scrap Bot (wago name; C++ SPELL_SUMMON_ASSAULT_BOT,
+	// boss_mimiron.cpp:161 enum; Lua spell_mimiron_summon_assault_bot.lua:18
+	// non-triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 51c466ff, DifficultyID 0 rows):
+	// single eff0 28 SUMMON dieSides 1 basePoints 0 TargetA 18
+	// TARGET_DEST_CASTER misc 34057 miscB 64 (SummonProperties 64, real
+	// row) chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21
+	// (-1 infinite, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: effSummon 28 / targetDestCaster 18
+	// live. Removes the last unseeded-spell blocker for
+	// spell_mimiron_summon_assault_bot.lua (single-missing-id file).
+	{id: 64427, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, targetA: targetDestCaster, misc: 34057, miscB: 64, chainAmplitude: 1},
+	}},
+	// 64426 Summon Scrap Bot dummy aura (wago name; C++
+	// SPELL_SUMMON_ASSAULT_BOT_DUMMY, boss_mimiron.cpp:160 enum; Lua
+	// spell_mimiron_summon_assault_bot_target.lua:6 triggered self-cast on
+	// hit unit; C++ spell script boss_mimiron.cpp:2434-2481) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// 51c466ff, DifficultyID 0 rows): single eff0 6 APPLY_AURA aura 4
+	// DUMMY TargetA 1 TARGET_UNIT_CASTER chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 31 (8000ms, real row), rangeIdx 1 (Self
+	// Only, real row), school 0x1 Physical, dispel 0 (no SpellCategories
+	// row). NOT carried: no SpellPower row; SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent). Engine twin: auraDummy 4
+	// live. Removes the last unseeded-spell blocker for
+	// spell_mimiron_summon_assault_bot_target.lua (single-missing-id file).
+	{id: 64426, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64622 Summon Fire Bot (wago name; C++ SPELL_SUMMON_FIRE_BOT,
+	// boss_mimiron.cpp:147 enum; Lua spell_mimiron_summon_fire_bot.lua:18
+	// non-triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-15 browser read 51c466ff, DifficultyID 0 rows):
+	// single eff0 28 SUMMON dieSides 1 basePoints 0 TargetA 18
+	// TARGET_DEST_CASTER misc 34147 miscB 64 (SummonProperties 64, real
+	// row) chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 21
+	// (-1 infinite, real row), rangeIdx 1 (Self Only, real row), school
+	// 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: effSummon 28 / targetDestCaster 18
+	// live. Removes the last unseeded-spell blocker for
+	// spell_mimiron_summon_fire_bot.lua (single-missing-id file).
+	{id: 64622, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, targetA: targetDestCaster, misc: 34147, miscB: 64, chainAmplitude: 1},
+	}},
+	// 64621 Summon Fire Bot dummy aura (wago name; C++
+	// SPELL_SUMMON_FIRE_BOT_DUMMY, boss_mimiron.cpp:148 enum; Lua
+	// spell_mimiron_summon_fire_bot_target.lua:6 triggered self-cast on
+	// hit unit) — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-15 browser read 51c466ff, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 4 DUMMY TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 31
+	// (8000ms, real row), rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twin: auraDummy 4 live. Removes the last
+	// unseeded-spell blocker for spell_mimiron_summon_fire_bot_target.lua
+	// (single-missing-id file).
+	{id: 64621, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
