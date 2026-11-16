@@ -6720,6 +6720,51 @@ var spells = []spell{
 	{id: 36119, castTimeIdx: 1, durIdx: 63, rangeIdx: 6, school: schoolShadow, effects: [3]effect{
 		{effect: effSummon, dieSides: 1, misc: 21101, miscB: 64, targetA: targetDestTargetEnemy, chainAmplitude: 1},
 	}},
+	// 36127 "Shadow Nova" (wago SpellName — MATCH vs
+	// expected "Shadow Nova"; C++
+	// SPELL_SHADOW_NOVA,
+	// boss_zereketh_the_unbound.cpp:33 enum; Lua
+	// arcatraz/boss_zereketh_the_unbound.lua:75) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_36127_36123.txt, DifficultyID 0 rows):
+	// eff0 SCHOOL_DAMAGE bp1849 die301 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// radius23 40yd; eff1 KNOCK_BACK bp99 die1 misc250
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius10 30yd; cast16
+	// 1500ms, dur0 none, range1 Self Only, school
+	// Shadow; SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 36127, castTimeIdx: 16, durIdx: 0, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1849, dieSides: 301, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 23, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 99, dieSides: 1, misc: 250, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 36123 "Seed of Corruption" (wago SpellName — MATCH
+	// vs expected "Seed of Corruption"; C++
+	// SPELL_SEED_OF_CORRUPTION,
+	// boss_zereketh_the_unbound.cpp:34 enum; Lua
+	// arcatraz/boss_zereketh_the_unbound.lua:76) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_36127_36123.txt, DifficultyID 0 rows):
+	// eff0 APPLY_AURA PERIODIC_DAMAGE bp399 die1
+	// period3000 tgtA TARGET_UNIT_TARGET_ENEMY
+	// (EffectBonusCoefficient 0.167 not carried — no
+	// seed field); eff1 APPLY_AURA DUMMY bp2499 die1
+	// tgtA TARGET_UNIT_TARGET_ENEMY; eff2 KNOCK_BACK
+	// bp74 die1 misc35 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast5 2000ms, dur85 18000ms, range4 Medium 30yd,
+	// school Shadow; Speed 28 not carried;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1, StartRecoveryCategory 133 —
+	// not carried); Attributes not carried.
+	{id: 36123, castTimeIdx: 5, durIdx: 85, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 399, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, basePoints: 2499, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 74, dieSides: 1, misc: 35, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -6819,6 +6864,7 @@ func main() {
 		{48, f32(60), f32(0), f32(60)},   // real SpellRadius 48 for 50774 (wago.tools 3.4.0.47659, 2026-11-16 verdict 6827d471)
 		{29, f32(6), f32(0), f32(6)},     // real SpellRadius 29 for 33814 (wago.tools 3.4.0.47659)
 		{26, f32(4), f32(0), f32(4)},     // real SpellRadius 26 for 59687 Explosion (wago.tools 3.4.0.47659 SpellRadius row 26, browser abab7d59)
+		{23, f32(40), f32(0), f32(40)},   // real SpellRadius 23 for 36127 Shadow Nova (wago.tools 3.4.0.47659 SpellRadius row 23, 2026-11-16 verdict wago_spells_36127_36123.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
