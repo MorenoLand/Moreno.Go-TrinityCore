@@ -76,6 +76,7 @@ const (
 	effWeaponDamage            = 58
 	effHealMaxHealth           = 67  // SPELL_EFFECT_HEAL_MAX_HEALTH
 	effInterruptCast           = 68  // SPELL_EFFECT_INTERRUPT_CAST (SharedDefines.h:879)
+	effSummonObjectWild        = 76  // SPELL_EFFECT_SUMMON_OBJECT_WILD (SharedDefines.h:887)
 	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
@@ -3635,6 +3636,78 @@ var spells = []spell{
 	// npc_invis_infernal_caster.lua (single-missing-id file).
 	{id: 37277, castTimeIdx: 1, durIdx: 0, rangeIdx: 34, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, targetA: targetUnitTargetAny, radiusIdx: 20, chainAmplitude: 1},
+	}},
+
+	// 37408 Oscillation Field (wago name; C++ SPELL_OSCILLATION_FIELD,
+	// zone_blades_edge_mountains.cpp:927 enum; Lua
+	// npc_oscillating_frequency_scanner_master_bunny.lua:35
+	// RegisterSpellEvent ev5, dormant until Spell.dbc ships 37408) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 4374951a, DifficultyID 0 rows): single eff0 6
+	// APPLY_AURA aura 4 DUMMY TargetA 22 TARGET_SRC_CASTER TargetB 7
+	// TARGET_UNIT_SRC_AREA_ENTRY RadiusIndex 23 (50yd, real row)
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 27
+	// (3000ms, real row), rangeIdx 5 (Long Range, real row), school 0x1
+	// Physical, dispel 0 (no SpellCategories row). NOT carried: no
+	// SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twin: auraDummy 4 live. Removes the last
+	// unseeded-spell blocker for
+	// npc_oscillating_frequency_scanner_master_bunny.lua
+	// (single-missing-id file).
+	{id: 37408, castTimeIdx: 1, durIdx: 27, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 23, chainAmplitude: 1},
+	}},
+	// 36462 Shadowmoon Tuber (wago name; C++ SPELL_SHADOWMOON_TUBER,
+	// zone_shadowmoon_valley.cpp:1535 enum; Lua
+	// npc_shadowmoon_tuber_node.lua:22) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-15 browser read 4374951a,
+	// DifficultyID 0 rows): single eff0 76 SUMMON_OBJECT_WILD TargetA 18
+	// TARGET_DEST_CASTER misc 184691 chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 3 (60000ms, real row), rangeIdx 1 (Self
+	// Only, real row), school 0x1 Physical, dispel 0 (no SpellCategories
+	// row). NOT carried: no SpellPower row; SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent). Engine twin:
+	// effSummonObjectWild 76 live (spells.go:19388). Removes the last
+	// unseeded-spell blocker for npc_shadowmoon_tuber_node.lua
+	// (single-missing-id file).
+	{id: 36462, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummonObjectWild, targetA: targetDestCaster, misc: 184691, chainAmplitude: 1},
+	}},
+	// 33494 Mark of Malice Triggered (wago name; C++
+	// SPELL_MARK_OF_MALICE_TRIGGERED, shadow_labyrinth.cpp:26 enum; Lua
+	// shadow_labyrinth.lua:17, DORMANT: no Spell.dbc record) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// 4374951a, DifficultyID 0 rows): single eff0 2 SCHOOL_DAMAGE
+	// dieSides 701 basePoints 3149 TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 0 (no
+	// SpellDuration row), rangeIdx 1 (Self Only, real row), school 0x1
+	// Physical, dispel 0 / mechanic 0 (SpellCategories row exists but
+	// Dispel 0, Mechanic 0). NOT carried: no SpellPower row;
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109 precedent).
+	// Engine twin: effSchoolDamage 2 live. Removes the last
+	// unseeded-spell blocker for shadow_labyrinth.lua (single-missing-id
+	// file).
+	{id: 33494, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 701, basePoints: 3149, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 37284 Scalding Water (wago name; C++ SPELL_SCALDINGWATER,
+	// instance_serpent_shrine.cpp:40 enum; Lua
+	// instance_serpent_shrine.lua:150) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-15 browser read 4374951a,
+	// DifficultyID 0 rows): eff0 6 APPLY_AURA aura 3 PERIODIC_DAMAGE
+	// period 3000 dieSides 1 basePoints 499 TargetA 1 TARGET_UNIT_CASTER
+	// chainAmplitude 1; eff1 2 SCHOOL_DAMAGE dieSides 1 basePoints 499
+	// TargetA 1 chainAmplitude 1; castTimeIdx 1 (instant, real row),
+	// durIdx 21 (-1 infinite, real row), rangeIdx 1 (Self Only, real
+	// row), school 0x4 Fire, dispel 0 (no SpellCategories row). NOT
+	// carried: no SpellPower row; NO SpellAuraOptions row, no ProcChance.
+	// Diff176 rows are a separate difficulty, excluded (not a hotfix
+	// diff). Engine twins: auraPeriodicDmg 3 / effSchoolDamage 2 live.
+	// Removes the last unseeded-spell blocker for
+	// instance_serpent_shrine.lua (single-missing-id file).
+	{id: 37284, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 1, basePoints: 499, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 499, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
