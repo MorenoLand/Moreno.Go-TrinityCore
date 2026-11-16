@@ -57,6 +57,7 @@ const (
 	effHealthLeech             = 9
 	effHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	effLearnSpell              = 36 // SPELL_EFFECT_LEARN_SPELL (SharedDefines.h:847)
+	effDispel                  = 38 // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
 	effSummon                  = 28
 	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize                = 30
@@ -7519,6 +7520,64 @@ var spells = []spell{
 	{id: 35322, castTimeIdx: 5, durIdx: 8, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 19492 "Antimagic Pulse" (wago SpellName — MATCH
+	// vs expected "Antimagic Pulse"; C++
+	// SPELL_ANTIMAGIC_PULSE, boss_garr.cpp:33 enum;
+	// Lua moltencore/boss_garr.lua:41) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19492_19496_19497.txt, DifficultyID 0
+	// rows): eff0 DISPEL bp0 die1 misc1 radius11 45yd
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur0
+	// none, range1 Self Only, school Physical;
+	// BonusCoefficient 1 not carried; SpellCategories
+	// row present (DefenseType 1 Magic,
+	// PreventionType 0x1 — not carried); Attributes
+	// not carried.
+	{id: 19492, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDispel, dieSides: 1, misc: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19496 "Magma Shackles" (wago SpellName — MATCH
+	// vs expected "Magma Shackles"; C++
+	// SPELL_MAGMA_SHACKLES, boss_garr.cpp:34 enum; Lua
+	// moltencore/boss_garr.lua:42) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19492_19496_19497.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DECREASE_SPEED bp-61
+	// die1 radius11 45yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur8
+	// 15000ms, range1 Self Only, school Fire;
+	// BonusCoefficient 1 not carried; SpellCategories
+	// row present (DefenseType 1 Magic, DispelType 1,
+	// Mechanic 11, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 19496, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -61, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 19497 "Eruption" (wago SpellName — MATCH vs
+	// expected "Eruption"; C++ SPELL_ERUPTION,
+	// boss_garr.cpp:39 enum; Lua
+	// moltencore/boss_garr.lua:43) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_19492_19496_19497.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp1849 die301
+	// radius18 15yd tgtA TARGET_DEST_CASTER tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY; eff1 KNOCK_BACK
+	// bp199 die26 misc200 radius18 15yd tgtA
+	// TARGET_DEST_CASTER tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY; cast1 instant, dur0
+	// none, range1 Self Only, school Fire;
+	// BonusCoefficient 1 (both effects) not carried;
+	// SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 19497, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1849, dieSides: 301, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 199, dieSides: 26, misc: 200, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
 }
 
