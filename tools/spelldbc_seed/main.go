@@ -88,6 +88,7 @@ const (
 	auraPeriodicDmg            = 3
 	auraDummy                  = 4
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
+	auraModCharm               = 6 // SPELL_AURA_MOD_CHARM (SpellAuraDefines.h:86)
 	auraStun                   = 12
 	auraModDamageTaken         = 14 // SPELL_AURA_MOD_DAMAGE_TAKEN (SpellAuraDefines.h:94)
 	auraDamageShield           = 15 // SPELL_AURA_DAMAGE_SHIELD (SpellAuraDefines.h:95)
@@ -101,6 +102,7 @@ const (
 	auraProcTriggerSpell       = 42 // SPELL_AURA_PROC_TRIGGER_SPELL (SpellAuraDefines.h:122)
 	auraRoot                   = 26
 	auraSilence                = 27
+	auraModStat                = 29  // SPELL_AURA_MOD_STAT (SpellAuraDefines.h:109)
 	auraModIncreaseSpeed       = 31  // SPELL_AURA_MOD_INCREASE_SPEED (SpellAuraDefines.h)
 	auraModSpeedAlways         = 129 // SPELL_AURA_MOD_SPEED_ALWAYS (SpellAuraDefines.h:209)
 	auraDecSpeed               = 33
@@ -4419,6 +4421,70 @@ var spells = []spell{
 		{effect: effKnockBack, dieSides: 75, basePoints: 112, misc: 75, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 13874 Divine Shield (wago name; C++ SPELL_DIVINE_SHIELD,
+	// boss_order_of_silver_hand.cpp:51 enum; Lua
+	// eastern_kingdoms/boss_silver_hand_bosses.lua:59, self cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 9cf61680, DifficultyID 0 rows): eff0 APPLY_AURA
+	// SCHOOL_IMMUNITY bp-1 die1 misc 0x1 tgtA TARGET_UNIT_CASTER;
+	// eff1 APPLY_AURA MOD_MELEE_HASTE bp-101 die1 same target;
+	// eff2 APPLY_AURA SCHOOL_IMMUNITY bp0 die0 misc 0x7e same
+	// target; cast1 instant, dur31 8000ms, range1 Self Only, school
+	// Holy; manaCost 75 (SpellPower row); dispel 0, mechanic 0; no
+	// SpellAuraOptions or SpellClassOptions rows.
+	{id: 13874, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolHoly, manaCost: 75, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolImmunity, dieSides: 1, basePoints: -1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -101, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSchoolImmunity, misc: 126, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 25263 Holy Light (wago name; C++ SPELL_HOLY_LIGHT,
+	// boss_order_of_silver_hand.cpp:50 enum; Lua
+	// eastern_kingdoms/boss_silver_hand_bosses.lua:58, self cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read 9cf61680, DifficultyID 0 rows): eff0 HEAL bp1093
+	// die313 tgtA TARGET_UNIT_TARGET_ALLY; cast20 2500ms (real
+	// SpellCastTimes row added below), dur0 (no SpellDuration row),
+	// range5 Long 40yd, school Holy; manaCost 150 (SpellPower row);
+	// dispel 0, mechanic 0; BonusCoefficient 1 not carried (no
+	// field); no SpellAuraOptions or SpellClassOptions rows.
+	{id: 25263, castTimeIdx: 20, durIdx: 0, rangeIdx: 5, school: schoolHoly, manaCost: 150, effects: [3]effect{
+		{effect: effHeal, dieSides: 313, basePoints: 1093, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 25805 Soul Corruption (wago name; C++ SPELL_SOUL_CORRUPTION,
+	// zone_duskwood.cpp:37 enum; Lua
+	// eastern_kingdoms/boss_twilight_corrupter.lua:76, self cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 9cf61680, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_STAT bp-101 die1 misc -1 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius11 (45yd); eff1 APPLY_AURA
+	// PERIODIC_DAMAGE bp739 die121 period5000 same targets/radius;
+	// eff2 KNOCK_BACK bp184 die1 misc125 same targets/radius; cast1
+	// instant, dur8 15000ms, range1 Self Only, school Shadow; dispel
+	// 0, mechanic 0 (no SpellCategories row); eff0/eff1
+	// BonusCoefficient 1 not carried (no field); no SpellPower,
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 25805, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStat, dieSides: 1, basePoints: -101, misc: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 121, basePoints: 739, auraPeriod: 5000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 184, misc: 125, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 25806 Creature of Nightmare (wago name; C++
+	// SPELL_CREATURE_OF_NIGHTMARE, zone_duskwood.cpp:38 enum; Lua
+	// eastern_kingdoms/boss_twilight_corrupter.lua:77, victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 9cf61680, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_CHARM bp64 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_DAMAGE_PERCENT_DONE bp199 die1 misc127 same
+	// target; eff2 APPLY_AURA MOD_MELEE_HASTE bp99 die1 same target;
+	// cast1 instant, dur9 30000ms, range13 Anywhere 50000yd, school
+	// Shadow; dispel 0, mechanic 0; eff0 RealPointsPerLevel 1 and
+	// eff1/eff2 BonusCoefficient 1 not carried (no fields); no
+	// SpellPower, SpellClassOptions or SpellAuraOptions rows.
+	{id: 25806, castTimeIdx: 1, durIdx: 9, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCharm, dieSides: 1, basePoints: 64, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 199, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -4532,6 +4598,7 @@ func main() {
 		{7, 10000, 0},  // real SpellCastTimes 7 for 29973 Arcane Explosion (wago.tools 3.4.0.47659, aux read 54197700)
 		{1, 0, 0},      // real SpellCastTimes 1 (instant) for 41342 Shared Rule (wago.tools 3.4.0.43659)
 		{15, 4000, 0},  // real SpellCastTimes 15 for 50476/50495/50496 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{20, 2500, 0},  // real SpellCastTimes 20 for 25263 Holy Light (wago.tools 3.4.0.47659, 2026-11-16 verdict 9cf61680)
 		{170, 8000, 0}, // real SpellCastTimes 170 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
