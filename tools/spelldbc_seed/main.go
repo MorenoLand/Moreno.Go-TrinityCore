@@ -8846,6 +8846,58 @@ var spells = []spell{
 	{id: 23340, castTimeIdx: 1, durIdx: 31, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 23394, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 22425 "Fireball Volley" (wago SpellName
+	// MATCHES; C++ SPELL_FIREBALLVOLLEY,
+	// boss_razorgore.cpp:44; Lua
+	// blackwinglair/boss_razorgore.lua:102, 164 —
+	// victim-cast, re-arm {12s,15s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_22425_22540_23023.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp254 die91 (in-game 255-345) radius11
+	// 45yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast5 2000ms
+	// (aux row pre-existing), dur0 (no
+	// SpellDuration row), range5 Long Range 0-40yd
+	// (aux row pre-existing), school Fire; NO
+	// SpellAuraOptions row; DefenseType 1 /
+	// PreventionType 0x1 / Attributes_0 0x90000 /
+	// Attributes_1 0x88 / BonusCoefficient 1 not
+	// carried (no fields in the seed struct).
+	{id: 22425, castTimeIdx: 5, durIdx: 0, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 254, dieSides: 91, radiusIdx: 11, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 23023 "Conflagration" (wago SpellName
+	// MATCHES; C++ SPELL_CONFLAGRATION,
+	// boss_razorgore.cpp:45; Lua
+	// blackwinglair/boss_razorgore.lua:103, 191 —
+	// victim-cast, re-arm 30s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_22425_22540_23023.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) bp299 die1 (in-game
+	// 300/tick) auraPeriod 1000 radius10 30yd tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; eff1 APPLY_AURA
+	// MOD_CONFUSE (aura 5) bp0 die1 radius10 tgtA
+	// cone; eff2 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL_WITH_VALUE (aura 227)
+	// bp299 die1 auraPeriod 1000 trigger 42170
+	// (42170 trigger-only, NOT a live-cast ID,
+	// not seeded) radius10 tgtA cone; cast1
+	// instant, dur1 10000ms (aux row pre-existing),
+	// range4 Medium Range 0-30yd (aux row
+	// pre-existing), school Fire; NO SpellCategories
+	// / SpellAuraOptions rows; EffectAttributes
+	// 0x20000 / Attributes_0 0x800 /
+	// Attributes_1 0x88 / BonusCoefficient not
+	// carried (no fields in the seed struct).
+	{id: 23023, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 299, dieSides: 1, auraPeriod: 1000, radiusIdx: 10, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModConfuse, basePoints: 0, dieSides: 1, radiusIdx: 10, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrigWithValue, basePoints: 299, dieSides: 1, auraPeriod: 1000, trigger: 42170, radiusIdx: 10, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
