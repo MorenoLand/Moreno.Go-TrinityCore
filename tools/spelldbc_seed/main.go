@@ -51,7 +51,8 @@ const (
 	effInstakill               = 1 // SPELL_EFFECT_INSTAKILL (SharedDefines.h:812)
 	effSchoolDamage            = 2
 	effDummy                   = 3
-	effTeleportUnits           = 5 // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816)
+	effTeleportUnits           = 5  // SPELL_EFFECT_TELEPORT_UNITS (SharedDefines.h:816)
+	effTeleportUnitsFaceCaster = 43 // SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER (SharedDefines.h:854)
 	effApplyAura               = 6
 	effQuestComplete           = 16 // SPELL_EFFECT_QUEST_COMPLETE (SharedDefines.h:827)
 	effHealthLeech             = 9
@@ -8213,6 +8214,66 @@ var spells = []spell{
 	{id: 32309, castTimeIdx: 1, durIdx: 32, rangeIdx: 37, school: schoolNature, dispel: 4, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 8324, dieSides: 1351, radiusIdx: 24, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 5699, dieSides: 601, auraPeriod: 3000, radiusIdx: 24, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 50770 "Magic Pull" (wago SpellName MATCHES; C++
+	// SPELL_MAGIC_PULL, boss_xevozz.cpp:54; Lua
+	// northrend/boss_xevozz.lua:119,369 — dummy aura
+	// casts it triggered on the hit target) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_50770_54202_54226.txt, DifficultyID
+	// 0 rows): eff0 TELEPORT_UNITS_FACE_CASTER
+	// (effect 43) bp0 die0 radius37 7yd tgtA
+	// TARGET_UNIT_TARGET_ANY tgtB
+	// TARGET_DEST_CASTER_RADIUS; cast1 instant,
+	// dur0, range13 Anywhere-Unlimited 50000yd,
+	// school Physical; SpellCategories NO ROW
+	// (dispel 0 / mechanic 0 defaults); radiusIdx_1
+	// 36 (0yd) not carried (seed struct carries
+	// only _0, cf. radius-40 precedent);
+	// SpellAuraOptions ProcChance 101 / Attributes
+	// not carried (no fields in the seed struct).
+	{id: 50770, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnitsFaceCaster, basePoints: 0, dieSides: 0, radiusIdx: 37, targetA: targetUnitTargetAny, targetB: targetDestCasterRadius, chainAmplitude: 1},
+	}},
+	// 54202 "Arcane Barrage Volley" (wago SpellName
+	// MATCHES; C++ SPELL_ARCANE_BARRAGE_VOLLEY,
+	// boss_xevozz.cpp:34; Lua
+	// northrend/boss_xevozz.lua:116,188 — self-cast
+	// DoCastAOE) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_50770_54202_54226.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp1757 die285 radius11 45yd tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0, range3 Twenty yards, school Arcane;
+	// SpellCategories Category 1189 / DefenseType 1
+	// Magic / PreventionType 0x1 / StartRecovery
+	// 133 / Speed 18 / ProcChance 101 not carried
+	// (no fields in the seed struct).
+	{id: 54202, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1757, dieSides: 285, radiusIdx: 11, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 54226 "Arcane Buffet" (wago SpellName MATCHES;
+	// C++ SPELL_ARCANE_BUFFET, boss_xevozz.cpp:35;
+	// Lua northrend/boss_xevozz.lua:117,206 — cast
+	// on target) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16
+	// verdict file wago_spells_50770_54202_54226.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp878 die143 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff1 APPLY_AURA MOD_DAMAGE_TAKEN (aura 14)
+	// bp149 die1 misc64 Arcane school tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur18 20000ms, range36 Longer Range 45yd,
+	// school Arcane, dispel 1 Magic; eff0
+	// BonusCoefficient 1 / SpellAuraOptions
+	// CumulativeAura 10 / ProcChance 101 not
+	// carried (no fields in the seed struct).
+	{id: 54226, castTimeIdx: 1, durIdx: 18, rangeIdx: 36, school: schoolArcane, dispel: 1, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 878, dieSides: 143, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 149, dieSides: 1, misc: 64, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
