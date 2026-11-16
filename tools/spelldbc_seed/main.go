@@ -4485,6 +4485,67 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 199, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 5200 VanCleef's Allies (wago name; C++
+	// SPELL_VANCLEEFS_ALLIES, boss_vancleef.cpp:26 enum; Lua
+	// eastern_kingdoms/boss_vancleef.lua:81, self cast at 50%) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read c95b2873, DifficultyID 0 rows): eff0 SUMMON bp1
+	// die1 misc 636 miscB 61 tgtA TARGET_DEST_CASTER_SUMMON;
+	// cast1 instant, dur5 300000ms, range1 Self Only, school
+	// Physical; dispel 0, mechanic 0; EffectAmplitude 1000 and
+	// Attributes_0 0x10 not carried (no fields); no SpellAuraOptions,
+	// SpellCategories, SpellPower or SpellClassOptions rows.
+	{id: 5200, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, basePoints: 1, misc: 636, miscB: 61, targetA: targetDestCasterSummon, chainAmplitude: 1},
+	}},
+	// 12787 Thrash (wago name; C++ SPELL_THRASH,
+	// boss_vancleef.cpp:25 enum; Lua
+	// eastern_kingdoms/boss_vancleef.lua:80, self cast on engage;
+	// also Azgalor Reset and Malchezaar phase-2) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser
+	// read c95b2873, DifficultyID 0 rows): eff0 APPLY_AURA
+	// PROC_TRIGGER_SPELL bp0 die1 trigger 3391 (seeded) tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1/infinite, range1
+	// Self Only, school Physical; dispel 0, mechanic 0;
+	// SpellAuraOptions ProcChance 35 / ProcCategoryRecovery 4000 /
+	// ProcTypeMask 0x14 and SpellCategories Category 65 DefenseType
+	// Melee PreventionType 0x2 not carried (no fields); no
+	// SpellPower or SpellClassOptions rows.
+	{id: 12787, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: 0, trigger: 3391, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12885 Teleport to Razelikh (wago name; C++
+	// SPELL_TELEPORT_SINGLE, zone_blasted_lands.cpp:32 enum; Lua
+	// eastern_kingdoms/zone_blasted_lands.lua:28, player cast on
+	// self when alone) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read c95b2873, DifficultyID 0
+	// rows): eff0 TELEPORT_UNITS bp0 die1 tgtA
+	// TARGET_UNIT_TARGET_ALLY tgtB TARGET_DEST_DB; cast1 instant,
+	// dur0 (no SpellDuration row), range3 Twenty yards 20yd, school
+	// Physical; dispel 0, mechanic 0; EffectAmplitude 1 and
+	// EffectPos_facing 4.71 not carried (no fields); SpellCategories
+	// Category 0 DefenseType Magic PreventionType 0x1 not carried;
+	// no SpellAuraOptions, SpellPower or SpellClassOptions rows.
+	{id: 12885, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAlly, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 13142 Teleport to Razelikh (wago name; C++
+	// SPELL_TELEPORT_SINGLE_IN_GROUP, zone_blasted_lands.cpp:33
+	// enum; Lua eastern_kingdoms/zone_blasted_lands.lua:29, group
+	// members cast on themselves, triggered) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser
+	// read c95b2873, DifficultyID 0 rows): DB2-identical to 12885
+	// in every reported field value except the DB2 row IDs; eff0
+	// TELEPORT_UNITS bp0 die1 tgtA TARGET_UNIT_TARGET_ALLY tgtB
+	// TARGET_DEST_DB; cast1 instant, dur0 (no SpellDuration row),
+	// range3 Twenty yards 20yd, school Physical; dispel 0,
+	// mechanic 0; EffectAmplitude 1 and EffectPos_facing 4.71 not
+	// carried (no fields); SpellCategories Category 0 DefenseType
+	// Magic PreventionType 0x1 not carried; no SpellAuraOptions,
+	// SpellPower or SpellClassOptions rows.
+	{id: 13142, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAlly, targetB: targetDestDB, chainAmplitude: 1},
+	}},
 }
 
 func main() {
