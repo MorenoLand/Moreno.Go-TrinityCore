@@ -6555,6 +6555,37 @@ var spells = []spell{
 		{effect: effCharge, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effTriggerSpell, trigger: 67573, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 41986 "Anger" (wago SpellName — MATCH vs expected
+	// "Anger"; C++ SPELL_ANGER, black_temple.cpp:34 enum,
+	// :236 "// 41986 - Anger"; Lua
+	// blacktemple/npc_angered_soul_fragment.lua:34, cast on
+	// self once) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 8d4a9a8d,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp899
+	// die201 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius18 15yd; cast14
+	// 3000ms, dur0 none, range1 Self Only, school Nature;
+	// SpellCategories row present (not carried); Attributes
+	// not carried.
+	{id: 41986, castTimeIdx: 14, durIdx: 0, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 201, basePoints: 899, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 15580 "Strike" (wago SpellName — MATCH vs expected
+	// "Strike"; C++ SPELL_STRIKE,
+	// boss_pyroguard_emberseer.cpp:50 enum,
+	// boss_urok_doomhowl.cpp:25 enum; Lua
+	// eastern_kingdoms/npc_blackhand_incarcerator.lua:50,
+	// boss_urok_doomhowl.lua:59) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 8d4a9a8d, DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp14 die1 tgtA TARGET_UNIT_TARGET_ENEMY
+	// (EffectRealPointsPerLevel 4.5 + EffectBonusCoefficient
+	// 1 not carried); cast1 instant, dur0 none, range2
+	// Combat 5yd, school Physical; SpellCategories row
+	// present (not carried); Attributes not carried.
+	{id: 15580, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: 14, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
