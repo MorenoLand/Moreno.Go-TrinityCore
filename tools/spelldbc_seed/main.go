@@ -7404,6 +7404,60 @@ var spells = []spell{
 	{id: 31012, castTimeIdx: 16, durIdx: 0, rangeIdx: 36, school: schoolFrost, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 2024, dieSides: 451, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 30967 "Fireball" (wago SpellName — MISMATCH vs
+	// expected "Fire Ball" (one word vs two); C++
+	// SPELL_FIRE_BALL, karazhan.cpp:52 enum; Lua
+	// karazhan/karazhan.lua:56) — IDs + values govern,
+	// seeding per precedent. wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 verdict
+	// file wago_spells_30967_30977_31635.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp1954
+	// die691 tgtA TARGET_UNIT_TARGET_ANY; cast6
+	// 5000ms, dur0 none, range134 Tower 80 0-80yd,
+	// school Fire; BonusCoefficient 1 not carried;
+	// SpellCategories row present (DefenseType 1
+	// Magic, PreventionType 0x1 — not carried);
+	// Attributes not carried.
+	{id: 30967, castTimeIdx: 6, durIdx: 0, rangeIdx: 134, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1954, dieSides: 691, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 30977 "Conflagration Blast" (wago SpellName —
+	// MATCH vs expected "Conflagration Blast"; C++
+	// SPELL_CONFLAGRATION_BLAST, karazhan.cpp:54 enum;
+	// Lua karazhan/karazhan.lua:57) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_30967_30977_31635.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE bp2999
+	// die1 period1000 tgtA TARGET_UNIT_TARGET_ANY;
+	// eff1 SCHOOL_DAMAGE bp155999 die1 tgtA
+	// TARGET_UNIT_TARGET_ANY; eff2 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL bp0 die1 period1000
+	// trigger16806 tgtA TARGET_UNIT_TARGET_ANY; cast1
+	// instant, dur41 360000ms, range6 Vision 0-100yd,
+	// school Fire; BonusCoefficient 1 (eff2) not
+	// carried; NO SpellCategories row; Attributes not
+	// carried.
+	{id: 30977, castTimeIdx: 1, durIdx: 41, rangeIdx: 6, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2999, dieSides: 1, auraPeriod: 1000, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 155999, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, auraPeriod: 1000, trigger: 16806, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 31635 "Mana Shield" (wago SpellName — MATCH vs
+	// expected "Mana Shield"; C++ SPELL_MANA_SHIELD,
+	// karazhan.cpp:55 enum; Lua
+	// karazhan/karazhan.lua:58) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 verdict
+	// file wago_spells_30967_30977_31635.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY bp-1
+	// die1 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur21 -1 infinite, range1 Self Only, school
+	// Arcane; EffectAmplitude 2 not carried (no
+	// amplitude field in seeder); NO SpellCategories
+	// row; Attributes not carried.
+	{id: 31635, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -7462,6 +7516,7 @@ func main() {
 		{305, 14000, 0, 14000},     // real SpellDuration 305 for 25033 Lightning Cloud (wago.tools 3.4.0.47659 SpellDuration row 305, browser f28d47f3)
 		{38, 11000, 0, 11000},      // real SpellDuration 38 for 31673 Foul Spores (wago.tools 3.4.0.47659 SpellDuration row 38, browser 45c90da6)
 		{63, 25000, 0, 25000},      // real SpellDuration 63 for 36119 Void Zone (wago.tools 3.4.0.47659 SpellDuration row 63, 2026-11-16 verdict wago_spells_16045_36119.txt)
+		{41, 360000, 0, 360000},    // real SpellDuration 41 for 30977 Conflagration Blast (wago.tools 3.4.0.47659 SpellDuration row 41, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
@@ -7564,6 +7619,7 @@ func main() {
 		{12, f32(0), f32(0), f32(5), f32(5), 0},         // real SpellRange 12 "Interact Range" for 23261 (wago.tools 3.4.0.47659 SpellRange row 12, Flags 0)
 		{137, f32(0), f32(0), f32(8), f32(8), 0},        // real SpellRange 137 \"Eight yards\" for 34697 Allergic Reaction (wago.tools 3.4.0.47659 SpellRange row 137, browser bb66d46a)
 		{35, f32(0), f32(0), f32(35), f32(35), 0},       // real SpellRange 35 "Medium-Long Range" for 38739 Acid Geyser (wago.tools 3.4.0.47659 SpellRange row 35, browser 45c90da6)
+		{134, f32(0), f32(0), f32(80), f32(80), 0},      // real SpellRange 134 "Tower 80" for 30967 Fireball (wago.tools 3.4.0.47659 SpellRange row 134, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
