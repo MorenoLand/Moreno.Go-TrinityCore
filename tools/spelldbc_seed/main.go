@@ -8027,6 +8027,47 @@ var spells = []spell{
 	{id: 28240, castTimeIdx: 1, durIdx: 62, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 16363, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
 	}},
+	// 28158 "Poison" (wago SpellName — name MISMATCH
+	// vs expected "Poison Cloud", name-only; C++
+	// SPELL_POISON_CLOUD_PASSIVE, boss_grobbulus.cpp:30
+	// enum; Lua northrend/boss_grobbulus.lua:73) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_28158_54362.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp0 die0 period1000 trigger28241 misc1 tgtA
+	// TARGET_UNIT_CASTER; eff1 DUMMY bp0 die0 misc1
+	// radius10 30yd tgtA TARGET_DEST_CASTER; cast1
+	// instant, dur3 60000ms, range1 Self Only, school
+	// Nature; NO SpellCategories row (no dispel);
+	// trigger 28241 unseeded — SpellMisc not in
+	// verdict, follow-up read needed; Attributes /
+	// ProcChance not carried.
+	{id: 28158, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, misc: 1, trigger: 28241, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 0, misc: 1, radiusIdx: 10, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 54362 "Poison" (wago SpellName — name MISMATCH
+	// vs expected "Poison Cloud", name-only; C++
+	// SPELL_POISON_CLOUD_PASSIVE heroic,
+	// boss_grobbulus.cpp:30 enum; Lua
+	// northrend/boss_grobbulus.lua:218) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_28158_54362.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp0 die0 period1000 trigger54363 misc1 tgtA
+	// TARGET_UNIT_CASTER; eff1 DUMMY bp0 die0 misc1
+	// radius10 30yd tgtA TARGET_DEST_CASTER; cast1
+	// instant, dur3 60000ms, range1 Self Only, school
+	// Nature; NO SpellCategories row (no dispel);
+	// trigger 54363 unseeded — SpellMisc not in
+	// verdict, follow-up read needed; SpellAuraOptions
+	// ProcChance 101 row exists (not carried).
+	{id: 54362, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 1000, misc: 1, trigger: 54363, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effDummy, basePoints: 0, dieSides: 0, misc: 1, radiusIdx: 10, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
