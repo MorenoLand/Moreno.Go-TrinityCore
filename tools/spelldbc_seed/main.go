@@ -82,6 +82,7 @@ const (
 	effDispelMechanic          = 108 // SPELL_EFFECT_DISPEL_MECHANIC (SharedDefines.h:919)
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
 	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
+	effApplyAreaAuraParty      = 35  // SPELL_EFFECT_APPLY_AREA_AURA_PARTY (SharedDefines.h:846)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
 	effAddExtraAttacks         = 19  // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
 	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
@@ -5714,6 +5715,79 @@ var spells = []spell{
 		{effect: effSchoolDamage, dieSides: 451, basePoints: 1574, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 525, basePoints: 1837, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
+	// 28630 "Draenei Survivor Stunned" (wago SpellName —
+	// MISMATCH vs expected "Stunned"; C++ SPELL_STUNNED,
+	// zone_azuremyst_isle.cpp:54 enum; Lua
+	// kalimdor/npc_draenei_survivor.lua:56, DoCast(me, 28630,
+	// true) + pCaster latch) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 45c90da6, DifficultyID 0 row): eff0 APPLY_AURA DUMMY
+	// bp0 die0 tgtA TARGET_UNIT_CASTER; cast1 instant, dur21
+	// -1 infinite, range2 Combat 0-5yd, school Physical;
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 28630, castTimeIdx: 1, durIdx: 21, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 35046 "Quest - Draenei Survivor Irradiation" (wago
+	// SpellName — MISMATCH vs expected "Irridation"
+	// (spelling + "Quest - Draenei Survivor " prefix); C++
+	// SPELL_IRRIDATION, zone_azuremyst_isle.cpp:53 enum; Lua
+	// kalimdor/npc_draenei_survivor.lua:55, DoCast(me, 35046,
+	// true)) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 45c90da6,
+	// DifficultyID 0 row): eff0 APPLY_AURA DUMMY bp-1 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only 0yd, school Physical;
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 35046, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: -1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31673 Foul Spores (wago SpellName; C++
+	// SPELL_FOUL_SPORES, boss_hungarfen.cpp:31 enum; Lua
+	// theunderbog/boss_hungarfen.lua:62, once-guarded when
+	// GetHealthPct() <= 20) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 45c90da6, DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 1000 trigger 31697
+	// tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA MOD_ROOT tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AREA_AURA_PARTY DUMMY
+	// tgtA TARGET_DEST_CASTER radius9 20yd; cast1 instant,
+	// dur38 11000ms, range137 Eight yards 0-8yd, school
+	// Shadow (SchoolMask 0x20 as read — note the DB2
+	// Description text says Nature damage); eff0
+	// SpellClassMask_0 0x4 and EffectBonusCoefficient 1 NOT
+	// carried (seed has no fields — established precedent);
+	// SpellCategories Category 0 DefenseType 1 DispelType 1
+	// PreventionType 0x1 StartRecoveryCategory 133 not
+	// carried; Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows. NEW aux row SpellDuration 38
+	// = 11000ms added, verified in SpellDuration.dbc.
+	{id: 31673, castTimeIdx: 1, durIdx: 38, rangeIdx: 137, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, auraPeriod: 1000, trigger: 31697, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAreaAuraParty, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetDestCaster, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 38739 Acid Geyser (wago SpellName; C++
+	// SPELL_ACID_GEYSER, boss_hungarfen.cpp:32 enum; Lua
+	// theunderbog/boss_hungarfen.lua:63, DoCast(target,
+	// 38739)) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 45c90da6,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp2187 die625
+	// tgtA TARGET_UNIT_TARGET_ENEMY tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY radius29 6yd; cast1
+	// instant, dur0 (no SpellDuration row), range35
+	// Medium-Long 0-35yd, school Nature; SpellCategories
+	// absent ("No entries found."); Attributes not carried;
+	// no SpellClassOptions or SpellAuraOptions rows. NEW aux
+	// row SpellRange 35 = 0-35yd added, verified in
+	// SpellRange.dbc.
+	{id: 38739, castTimeIdx: 1, durIdx: 0, rangeIdx: 35, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 625, basePoints: 2187, targetA: targetEnemy, targetB: targetUnitDestAreaEnemy, radiusIdx: 29, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -5770,6 +5844,7 @@ func main() {
 		{555, 4500, 0, 4500},       // real SpellDuration 555 for 36512 Knock Away (wago.tools 3.4.0.47659 SpellDuration row 555, browser 2f3bd931)
 		{327, 500, 0, 500},         // real SpellDuration 327 for 34799 Arcane Devastation (wago.tools 3.4.0.47659 SpellDuration row 327, browser bb66d46a)
 		{305, 14000, 0, 14000},     // real SpellDuration 305 for 25033 Lightning Cloud (wago.tools 3.4.0.47659 SpellDuration row 305, browser f28d47f3)
+		{38, 11000, 0, 11000},      // real SpellDuration 38 for 31673 Foul Spores (wago.tools 3.4.0.47659 SpellDuration row 38, browser 45c90da6)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
@@ -5866,6 +5941,7 @@ func main() {
 		{54, f32(5), f32(5), f32(30), f32(30), 0},       // real SpellRange 54 for 66081 (wago.tools 3.4.0.43659)
 		{12, f32(0), f32(0), f32(5), f32(5), 0},         // real SpellRange 12 "Interact Range" for 23261 (wago.tools 3.4.0.47659 SpellRange row 12, Flags 0)
 		{137, f32(0), f32(0), f32(8), f32(8), 0},        // real SpellRange 137 \"Eight yards\" for 34697 Allergic Reaction (wago.tools 3.4.0.47659 SpellRange row 137, browser bb66d46a)
+		{35, f32(0), f32(0), f32(35), f32(35), 0},       // real SpellRange 35 "Medium-Long Range" for 38739 Acid Geyser (wago.tools 3.4.0.47659 SpellRange row 35, browser 45c90da6)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
