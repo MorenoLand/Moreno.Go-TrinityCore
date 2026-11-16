@@ -146,6 +146,7 @@ const (
 	auraPreventRegen           = 294
 	auraReducePushback         = 149 // SPELL_AURA_REDUCE_PUSHBACK (SpellAuraDefines.h:229)
 	auraModAoeDamageAvoidance  = 229 // SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE (SpellAuraDefines.h:309)
+	auraModFear                = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
 	schoolNone                 = 0   // SPELL_SCHOOL_MASK_NONE (SharedDefines.h:323)
 	schoolPhysical             = 1
 	schoolHoly                 = 2
@@ -6372,6 +6373,110 @@ var spells = []spell{
 	// SpellClassOptions or SpellAuraOptions rows.
 	{id: 65354, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 64610 "Self-Destruction" (wago SpellName — MISMATCH
+	// vs expected "Self Destruction Aura"; C++
+	// SPELL_SELF_DESTRUCTION_AURA, boss_mimiron.cpp:168
+	// enum; Lua northrend/npc_mimiron_computer.lua:41,
+	// self-cast :107) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read 6085bdc6,
+	// DifficultyID 0 row): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 1000 bp0 die0
+	// trigger 64611 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 infinite, range1 Self Only 0yd,
+	// school Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 64610, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, auraPeriod: 1000, trigger: 64611, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64613 "Self-Destruction" (wago SpellName — MISMATCH
+	// vs expected "Self Destruction Visual"; C++
+	// SPELL_SELF_DESTRUCTION_VISUAL, boss_mimiron.cpp:169
+	// enum; Lua northrend/npc_mimiron_computer.lua:42,
+	// self-cast :108) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-16 browser read 6085bdc6,
+	// DifficultyID 0 rows): eff0/1/2 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 250 bp-1 die1
+	// trigger 64612 tgtA TARGET_UNIT_CASTER (all three
+	// identical); cast1 instant, dur21 -1 infinite,
+	// range1 Self Only 0yd, school Physical;
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 64613, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, auraPeriod: 250, trigger: 64612, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, auraPeriod: 250, trigger: 64612, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, auraPeriod: 250, trigger: 64612, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 65345 "Proximity Mine" (wago SpellName — MISMATCH vs
+	// expected "Proximity Mine Periodic Trigger"; C++
+	// SPELL_PROXIMITY_MINE_PERIODIC_TRIGGER,
+	// boss_mimiron.cpp:112 enum; Lua
+	// northrend/npc_mimiron_proximity_mine.lua:9, self-cast
+	// :59) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 6085bdc6,
+	// DifficultyID 0 row): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 500 bp-1 die1
+	// trigger 65346 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 infinite, range1 Self Only 0yd,
+	// school Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 65345, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, auraPeriod: 500, trigger: 65346, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 66351 "Explosion" (wago SpellName — MISMATCH vs
+	// expected "Proximity Mine Explosion"; C++
+	// SPELL_PROXIMITY_MINE_EXPLOSION, boss_mimiron.cpp:110
+	// enum; Lua northrend/npc_mimiron_proximity_mine.lua:10,
+	// cast :49) — wago.tools 3.4.0.47659 SpellEffect rows
+	// + SpellMisc (2026-11-16 browser read 6085bdc6,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp8999
+	// die1 tgtA TARGET_DEST_CASTER tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY radius15 3yd; eff1
+	// APPLY_AURA TRANSFORM bp-1 die1 misc 17286 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only 0yd, school Fire;
+	// SpellCategories row EXISTS — not carried per
+	// precedent; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 66351, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1, basePoints: 8999, targetA: targetDestCaster, targetB: targetUnitDestAreaEnemy, radiusIdx: 15, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, dieSides: 1, basePoints: -1, misc: 17286, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 65543 Psychic Scream (wago SpellName; C++
+	// SPELL_PSYCHIC_SCREAM, boss_faction_champions.cpp:83
+	// enum; Lua northrend/npc_toc_priest.lua:179, DoCastAOE
+	// :234) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 3f410a2d,
+	// DifficultyID 0 row): eff0 APPLY_AURA MOD_FEAR bp-1
+	// die1 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius14 8yd; cast1
+	// instant, dur31 8000ms, range1 Self Only 0yd, school
+	// Shadow; SpellCategories row EXISTS — not carried per
+	// precedent; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 65543, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, dieSides: 1, basePoints: -1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 66100 Mana Burn (wago SpellName; C++
+	// SPELL_MANA_BURN, boss_faction_champions.cpp:84 enum;
+	// Lua northrend/npc_toc_priest.lua:180, DoCast :248)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 3f410a2d, DifficultyID 0
+	// base row ONLY — variants 2/4/5/6 NOT seeded per
+	// precedent): eff0 POWER_BURN bp2245 die129 tgtA
+	// TARGET_UNIT_TARGET_ENEMY radiusIdx 1 (no SpellRadius
+	// row with ID 1 exists in this build); cast5 2000ms,
+	// dur0 (no SpellDuration row), range4 Medium 0-30yd,
+	// school Shadow; EffectAmplitude 3 and
+	// EffectRealPointsPerLevel 2.9 NOT carried (no seed
+	// fields); SpellCategories rows exist — not carried
+	// per precedent; Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 66100, castTimeIdx: 5, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effPowerBurn, dieSides: 129, basePoints: 2245, targetA: targetEnemy, radiusIdx: 1, chainAmplitude: 1},
 	}},
 }
 
