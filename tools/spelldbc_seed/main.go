@@ -7551,10 +7551,11 @@ var spells = []spell{
 	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur8
 	// 15000ms, range1 Self Only, school Fire;
 	// BonusCoefficient 1 not carried; SpellCategories
-	// row present (DefenseType 1 Magic, DispelType 1,
-	// Mechanic 11, PreventionType 0x1 — not carried);
+	// row present (DefenseType 1 Magic, DispelType 1
+	// carried as dispel: 1 per r[2] convention, Mechanic
+	// 11, PreventionType 0x1 — not carried);
 	// Attributes not carried.
-	{id: 19496, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+	{id: 19496, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolFire, dispel: 1, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -61, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
 	}},
 	// 19497 "Eruption" (wago SpellName — MATCH vs
