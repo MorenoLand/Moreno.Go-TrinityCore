@@ -6884,6 +6884,66 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraSilence, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
 		{effect: effDummy, basePoints: 33482, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 36513 "Intangible Presence" (wago SpellName —
+	// MATCH vs expected "Intangible Presence"; C++
+	// SPELL_INTANGIBLE_PRESENCE,
+	// zone_blades_edge_mountains.cpp:68 enum; Lua
+	// outland/npc_nether_drake.lua:108) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_36513_38881_38884.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_TAKEN
+	// bp-41 die1 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_DAMAGE_PERCENT_TAKEN bp19 die1
+	// misc126 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur31 8000ms, range4 Medium 30yd, school Shadow;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1 — not carried); Attributes not
+	// carried.
+	{id: 36513, castTimeIdx: 1, durIdx: 31, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: -41, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 19, dieSides: 1, misc: 126, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 38881 "Arcane Blast" (wago SpellName — MATCH vs
+	// expected "Arcane Blast"; C++ SPELL_ARCANE_BLAST,
+	// zone_blades_edge_mountains.cpp:66 enum; Lua
+	// outland/npc_nether_drake.lua:106) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_36513_38881_38884.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp647 die105 tgtA
+	// TARGET_UNIT_TARGET_ENEMY (EffectBonusCoefficient
+	// 0.714 + RealPointsPerLevel 5 not carried — no
+	// seed fields); eff1 APPLY_AURA
+	// MOD_CASTING_SPEED_NOT_STACK bp9 die1 tgtA
+	// TARGET_UNIT_CASTER (EffectSpellClassMask_0
+	// 536870912 not carried per 63784 precedent);
+	// cast19 2500ms, dur31 8000ms, range4 Medium 30yd,
+	// school Arcane; SpellCategories row present
+	// (DefenseType 1 Magic, PreventionType 0x1,
+	// StartRecoveryCategory 133 — not carried);
+	// Attributes not carried.
+	{id: 38881, castTimeIdx: 19, durIdx: 31, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 647, dieSides: 105, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModCastingSpeed, basePoints: 9, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 38884 "Mana Burn" (wago SpellName — MATCH vs
+	// expected "Mana Burn"; C++ SPELL_MANA_BURN,
+	// zone_blades_edge_mountains.cpp:67 enum; Lua
+	// outland/npc_nether_drake.lua:107) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_36513_38881_38884.txt, DifficultyID 0
+	// rows): eff0 POWER_BURN bp184 die13 tgtA
+	// TARGET_UNIT_TARGET_ENEMY (EffectAmplitude 0.5
+	// not carried — no seed field); cast14 3000ms,
+	// dur0 none, range4 Medium 30yd, school Arcane;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1 — not carried); Attributes not
+	// carried.
+	{id: 38884, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
+		{effect: effPowerBurn, basePoints: 184, dieSides: 13, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
