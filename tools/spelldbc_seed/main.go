@@ -5185,6 +5185,77 @@ var spells = []spell{
 	{id: 51336, castTimeIdx: 5, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 33, chainAmplitude: 1},
 	}},
+	// 47008 Berserk (wago name; C++ SPELL_BERSERK,
+	// boss_razorscale.cpp:66 enum; Lua northrend/boss_razorscale.lua:301,
+	// DoCastSelf, EVENT_BERSERK) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser read
+	// 2a7ab516, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE bp899 die1 tgtA TARGET_UNIT_CASTER;
+	// eff1 APPLY_AURA MOD_MELEE_HASTE bp149 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_SCALE bp24 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur30 1800000ms,
+	// range1 Self Only 0yd, school Physical; SpellCategories
+	// Category 21, DefenseType 0 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 47008, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 899, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 24, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 65146 Threat (wago name; C++ SPELL_THREAT,
+	// boss_razorscale.cpp:96 enum; Lua northrend/boss_razorscale.lua:1757,
+	// DoCastSelf, latent, non-triggered) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 browser read
+	// 2a7ab516, DifficultyID 0 row): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL auraPeriod 2000 bp-1 die1 trigger
+	// 65143 tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite, range1 Self Only 0yd, school Physical; NO
+	// SpellCategories row (no Category/DispelType/Mechanic);
+	// SpellAuraOptions ProcChance 101 not carried; Attributes
+	// not carried; no SpellClassOptions rows.
+	{id: 65146, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, trigger: 65143, auraPeriod: 2000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 74403 Flame Breath (wago name; C++ SPELL_FLAME_BREATH,
+	// boss_saviana_ragefire.cpp:39 enum; Lua
+	// northrend/boss_saviana_ragefire.lua:85, DoCastVictim,
+	// EVENT_FLAME_BREATH) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-16 browser read 2a7ab516,
+	// DifficultyID 0 base rows): eff0 DUMMY bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY radius10 30yd; eff1
+	// SCHOOL_DAMAGE bp24499 die7001 tgtA
+	// TARGET_UNIT_CONE_ENEMY_24 radius10 30yd; cast5 2000ms,
+	// dur0 (no SpellDuration row), range3 0-20yd, school Fire;
+	// DifficultyID 2/4 variant rows exist and DIFFER (eff1
+	// bp33686 die9626) — NOT seeded, base rows only per
+	// precedent; SpellCategories Category 50, DefenseType
+	// Magic, PreventionType 0x1, StartRecoveryCategory 133 not
+	// carried; Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 74403, castTimeIdx: 5, durIdx: 0, rangeIdx: 3, school: schoolFire, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effSchoolDamage, dieSides: 7001, basePoints: 24499, targetA: targetUnitConeEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 78722 Enrage (wago name; C++ SPELL_ENRAGE,
+	// boss_saviana_ragefire.cpp:38 enum; Lua
+	// northrend/boss_saviana_ragefire.lua:84, DoCastSelf,
+	// EVENT_ENRAGE) — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 browser read 2a7ab516,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_MELEE_HASTE
+	// bp149 die1 tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_SCALE bp19 die1 tgtA TARGET_UNIT_CASTER; eff2
+	// APPLY_AURA PERIODIC_TRIGGER_SPELL auraPeriod 2000 bp0
+	// die0 trigger 78723 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur1 10000ms, range1 Self Only 0yd, school
+	// Physical; SpellCategories DispelType 9 ENRAGE carried,
+	// Category 0 / DefenseType 1 / PreventionType 0x1 not
+	// carried; Attributes all 0x0; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 78722, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, dispel: 9, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 19, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, trigger: 78723, auraPeriod: 2000, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
