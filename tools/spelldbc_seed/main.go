@@ -7177,6 +7177,62 @@ var spells = []spell{
 	{id: 42075, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDummy, auraPeriod: 1000, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 15284 "Cleave" (wago SpellName — MISMATCH vs
+	// expected "Omen Cleave"; C++ SPELL_OMEN_CLEAVE,
+	// zone_moonglade.cpp:400 enum; Lua
+	// kalimdor/npc_omen.lua:84) — IDs + values govern,
+	// seeding per precedent. wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 verdict
+	// file wago_spells_15284_26392_26540.txt,
+	// DifficultyID 0 rows): eff0 WEAPON_PERCENT_DAMAGE
+	// bp109 die1 chainTargets 3 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// none, range2 Combat Range 0-5yd, school
+	// Physical; SpellCategories row present
+	// (DefenseType 2 Melee, PreventionType 0x2 — not
+	// carried); Attributes not carried.
+	{id: 15284, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 109, dieSides: 1, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 1},
+	}},
+	// 26392 "Omen's Moonlight" (wago SpellName —
+	// MISMATCH vs expected "Omen Summon Spotlight";
+	// C++ SPELL_OMEN_SUMMON_SPOTLIGHT,
+	// zone_moonglade.cpp:402 enum; Lua
+	// kalimdor/npc_omen.lua:86) — IDs + values govern,
+	// seeding per precedent. wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 verdict
+	// file wago_spells_15284_26392_26540.txt,
+	// DifficultyID 0 rows): eff0 SUMMON bp0 die1
+	// misc 15902 miscB 64 radius16 1yd tgtA
+	// TARGET_DEST_CASTER; eff1 SUMMON_OBJECT_WILD bp0
+	// die1 misc 180876 tgtA TARGET_DEST_CASTER; eff2
+	// SUMMON_OBJECT_WILD misc 180877 tgtA
+	// TARGET_DEST_CASTER; cast1 instant, dur5
+	// 300000ms, range4 Medium 0-30yd, school Physical;
+	// BonusCoefficient 1 (eff0) not carried; NO
+	// SpellCategories row; Attributes not carried.
+	{id: 26392, castTimeIdx: 1, durIdx: 5, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, dieSides: 1, misc: 15902, miscB: 64, targetA: targetDestCaster, radiusIdx: 16, chainAmplitude: 1},
+		{effect: effSummonObjectWild, dieSides: 1, misc: 180876, targetA: targetDestCaster, chainAmplitude: 1},
+		{effect: effSummonObjectWild, dieSides: 1, misc: 180877, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 26540 "Starfall" (wago SpellName — MISMATCH vs
+	// expected "Omen Starfall"; C++ SPELL_OMEN_STARFALL,
+	// zone_moonglade.cpp:401 enum; Lua
+	// kalimdor/npc_omen.lua:85) — IDs + values govern,
+	// seeding per precedent. wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16 verdict
+	// file wago_spells_15284_26392_26540.txt,
+	// DifficultyID 0 rows): eff0 PERSISTENT_AREA_AURA
+	// PERIODIC_DAMAGE bp3039 die321 period2000
+	// radius18 15yd tgtA TARGET_DEST_DYNOBJ_ENEMY;
+	// cast1 instant, dur32 6000ms, range36 Longer
+	// 0-45yd, school Arcane; SpellCategories row
+	// present (DefenseType 1 Magic, PreventionType
+	// 0x1 — not carried); Attributes not carried.
+	{id: 26540, castTimeIdx: 1, durIdx: 32, rangeIdx: 36, school: schoolArcane, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 3039, dieSides: 321, auraPeriod: 2000, targetA: targetDestDynobjEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -7278,6 +7334,7 @@ func main() {
 		{26, f32(4), f32(0), f32(4)},     // real SpellRadius 26 for 59687 Explosion (wago.tools 3.4.0.47659 SpellRadius row 26, browser abab7d59)
 		{23, f32(40), f32(0), f32(40)},   // real SpellRadius 23 for 36127 Shadow Nova (wago.tools 3.4.0.47659 SpellRadius row 23, 2026-11-16 verdict wago_spells_36127_36123.txt)
 		{32, f32(12), f32(0), f32(12)},   // real SpellRadius 32 for 32302/36383 (wago.tools 3.4.0.47659 SpellRadius row 32, 2026-11-16 verdict wago_spells_32302_36383_42075.txt)
+		{16, f32(1), f32(0), f32(1)},     // real SpellRadius 16 for 26392 eff0 (wago.tools 3.4.0.47659 SpellRadius row 16, 2026-11-16 verdict wago_spells_15284_26392_26540.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
