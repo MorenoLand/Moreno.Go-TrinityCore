@@ -8654,6 +8654,71 @@ var spells = []spell{
 	{id: 58152, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effInstakill, basePoints: 0, dieSides: 1, radiusIdx: 12, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
 	}},
+	// 58008 "Portal Periodic" (wago SpellName
+	// MATCHES; C++ SPELL_PORTAL_PERIODIC,
+	// violet_hold.cpp:152; Lua
+	// northrend/violet_hold.lua:79, 376 —
+	// triggered self-cast) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_58008_58012_62139.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die0
+	// period15000 trigger 0 (stored 0 despite
+	// the aura — the periodic leg fires via the
+	// Lua-side 58008 handler, not a DBC
+	// trigger) tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur0 (no SpellDuration row),
+	// range1 Self Only 0yd (aux row
+	// pre-existing), school Physical; NO
+	// SpellCategories row (mechanic 0, dispel
+	// 0); ProcChance 101 / Attributes not
+	// carried (no fields in the seed struct).
+	{id: 58008, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 15000, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 58012 "Portal Channel" (wago SpellName
+	// MATCHES; C++ SPELL_PORTAL_CHANNEL,
+	// violet_hold.cpp:154; Lua
+	// northrend/violet_hold.lua:80, 189 —
+	// cast on keeper) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_58008_58012_62139.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ANY; cast1 instant,
+	// dur21 -1 infinite (aux row pre-existing),
+	// range13 Anywhere 0-50000yd (aux row
+	// pre-existing), school Arcane; NO
+	// SpellCategories row (mechanic 0, dispel
+	// 0); ProcChance 101 / Attributes not
+	// carried (no fields in the seed struct).
+	{id: 58012, castTimeIdx: 1, durIdx: 21, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 62139 "Teleport to Inside Violet Hold"
+	// (wago SpellName is "Teleport to Inside
+	// Violet Hold" — the Lua/C++ label
+	// "Teleport Player Effect" is NOT the stored
+	// name; C++ SPELL_TELEPORT_PLAYER_EFFECT,
+	// violet_hold.cpp:181; Lua
+	// northrend/violet_hold.lua:83, 452 —
+	// triggered self-cast on hit unit) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_58008_58012_62139.txt,
+	// DifficultyID 0 rows): eff0 TELEPORT_UNITS
+	// bp0 die0 tgtA TARGET_UNIT_CASTER tgtB
+	// TARGET_DEST_DB; cast1 instant, dur0 (no
+	// SpellDuration row), range4 Medium 0-30yd
+	// (aux row pre-existing), school Physical;
+	// NO SpellCategories row (mechanic 0,
+	// dispel 0); BonusCoefficient 1 / ProcChance
+	// 101 / Attributes not carried (no fields
+	// in the seed struct).
+	{id: 62139, castTimeIdx: 1, durIdx: 0, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, basePoints: 0, dieSides: 0, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
 }
 
 func main() {
