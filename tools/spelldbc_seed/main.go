@@ -6520,6 +6520,41 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModPowerCostSchoolPct, dieSides: 1, basePoints: -101, targetA: targetUnitTargetAny, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModCastingSpeed, dieSides: 1, basePoints: 99999, targetA: targetUnitTargetAny, chainAmplitude: 1},
 	}},
+	// 63784 "Bladestorm" (wago SpellName — MATCH vs
+	// expected "Bladestorm"; C++ SPELL_BLADESTORM,
+	// boss_grand_champions.cpp:44 enum; Lua
+	// northrend/boss_grand_champions.lua:89) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 9669d5ec, DifficultyID 0 rows): eff0
+	// APPLY_AURA PERIODIC_TRIGGER_SPELL bp-1 die1 period1000
+	// trig63785 tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MECHANIC_IMMUNITY_MASK bp-1 die1 misc477 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_DECREASE_SPEED
+	// bp-31 die1 tgtA TARGET_UNIT_CASTER (SpellClassMask_1=4
+	// not carried); cast1 instant, dur31 8000ms, range1 Self
+	// Only 0yd, school Physical; SpellCategories row present
+	// (not carried); Attributes not carried.
+	{id: 63784, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: -1, auraPeriod: 1000, trigger: 63785, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunityMask, dieSides: 1, basePoints: -1, misc: 477, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, dieSides: 1, basePoints: -31, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 67540 "Intercept" (wago SpellName — MATCH vs expected
+	// "Intercept"; C++ SPELL_INTERCEPT,
+	// boss_grand_champions.cpp:45 enum; Lua
+	// northrend/boss_grand_champions.lua:88) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read 9669d5ec, DifficultyID 0 rows): eff0 CHARGE
+	// bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// TRIGGER_SPELL trig67573 tgtA TARGET_UNIT_TARGET_ENEMY
+	// (EffectBonusCoefficient 1 not carried); cast1 instant,
+	// dur0 none, range95 Charge 8-25yd, school Physical;
+	// SpellCategories row present (not carried); Attributes
+	// not carried.
+	{id: 67540, castTimeIdx: 1, durIdx: 0, rangeIdx: 95, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, trigger: 67573, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
