@@ -144,7 +144,9 @@ const (
 	auraInitializeImages       = 279 // SPELL_AURA_INITIALIZE_IMAGES (SpellAuraDefines.h)
 	auraLinked                 = 284
 	auraPreventRegen           = 294
-	schoolNone                 = 0 // SPELL_SCHOOL_MASK_NONE (SharedDefines.h:323)
+	auraReducePushback         = 149 // SPELL_AURA_REDUCE_PUSHBACK (SpellAuraDefines.h:229)
+	auraModAoeDamageAvoidance  = 229 // SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE (SpellAuraDefines.h:309)
+	schoolNone                 = 0   // SPELL_SCHOOL_MASK_NONE (SharedDefines.h:323)
 	schoolPhysical             = 1
 	schoolHoly                 = 2
 	schoolFire                 = 4
@@ -6297,6 +6299,79 @@ var spells = []spell{
 	// SpellAuraOptions rows.
 	{id: 69933, castTimeIdx: 1, durIdx: 0, rangeIdx: 137, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, dieSides: 451, basePoints: 2024, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 65860 Barkskin (wago SpellName; C++ SPELL_BARKSKIN,
+	// boss_faction_champions.cpp:51 enum; Lua
+	// northrend/npc_toc_druid.lua:30) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read d74da9a8, DifficultyID 0 rows): eff0
+	// APPLY_AURA REDUCE_PUSHBACK bp99 die1 misc 127 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_TAKEN bp-41 die1 misc 127 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// PROC_TRIGGER_SPELL bp0 die1 trigger 50411 mask
+	// 16777829 tgtA TARGET_UNIT_CASTER (trigger spell 50411
+	// NOT seeded per precedent; the trigger FIELD and mask
+	// are carried); cast1 instant, dur29 12000ms, range1
+	// Self Only 0yd, school Nature; SpellCategories row
+	// (Category 0, DefenseType 1, DispelType 1,
+	// PreventionType 0x1) not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 65860, castTimeIdx: 1, durIdx: 29, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraReducePushback, dieSides: 1, basePoints: 99, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, dieSides: 1, basePoints: -41, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, basePoints: 0, trigger: 50411, targetA: targetCaster, chainAmplitude: 1, mask: [3]uint32{16777829, 0, 0}},
+	}},
+	// 68595 "Champion's Aegis" (wago SpellName — MISMATCH
+	// vs expected "Anti-AoE"; C++ SPELL_ANTI_AOE,
+	// boss_faction_champions.cpp:42 enum; Lua
+	// northrend/npc_toc_druid.lua:31, triggered self-cast)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read d74da9a8, DifficultyID 0
+	// row): eff0 APPLY_AURA MOD_AOE_DAMAGE_AVOIDANCE bp-76
+	// die1 misc 127 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur21 -1 infinite, range1 Self Only 0yd, school
+	// Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 68595, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModAoeDamageAvoidance, dieSides: 1, basePoints: -76, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 64626 "Explosion" (wago SpellName — MISMATCH vs
+	// expected "Frost Bomb Explosion"; C++
+	// SPELL_FROST_BOMB_EXPLOSION, boss_mimiron.cpp:143
+	// enum; Lua northrend/npc_mimiron_frost_bomb.lua:9,
+	// DoCastAOE) — wago.tools 3.4.0.47659 SpellEffect rows
+	// + SpellMisc (2026-11-16 browser read d74da9a8,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp9424
+	// die1151 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius10 30yd; eff1
+	// KNOCK_BACK bp99 die1 misc 300 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY radius10 30yd; eff2
+	// DUMMY bp0 die0 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY radius10 30yd; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Frost; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no SpellClassOptions
+	// or SpellAuraOptions rows.
+	{id: 64626, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 1151, basePoints: 9424, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 99, misc: 300, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 65354 Clear Fires (wago SpellName; C++
+	// SPELL_CLEAR_FIRES, boss_mimiron.cpp:144 enum; Lua
+	// northrend/npc_mimiron_frost_bomb.lua:10, DoCastAOE) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read d74da9a8, DifficultyID 0
+	// row): eff0 DUMMY bp0 die0 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY radius10 30yd; cast1
+	// instant, dur0 (no SpellDuration row), range1 Self Only
+	// 0yd, school Physical; SpellCategories absent ("No
+	// entries found."); Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 65354, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 10, chainAmplitude: 1},
 	}},
 }
 
