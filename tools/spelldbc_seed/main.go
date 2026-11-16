@@ -109,6 +109,7 @@ const (
 	auraModResistPct           = 101
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
+	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
 	auraModTotalStatPct        = 137 // SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (SpellAuraDefines.h:217)
@@ -3563,6 +3564,77 @@ var spells = []spell{
 	// file).
 	{id: 46378, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effKillCredit2, targetA: targetUnitMaster, misc: 25987, chainAmplitude: 1},
+	}},
+
+	// 34603 Sunfury Disguise (wago name; C++ SPELL_SUNFURY_DISGUISE,
+	// zone_netherstorm.cpp:60 enum; Lua npc_commander_dawnforge.lua:53) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-15
+	// browser read 60cdf9af, DifficultyID 0 rows): eff0 6 APPLY_AURA aura
+	// 139 FORCE_REACTION dieSides 1 basePoints 3 misc 968 TargetA 1
+	// TARGET_UNIT_CASTER chainAmplitude 1; eff1 6 APPLY_AURA aura 56
+	// TRANSFORM dieSides 0 basePoints 0 misc 18850 TargetA 1
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 6
+	// (600000ms, real row), rangeIdx 12 (Interact Range, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: auraTransform 56 live (prior
+	// in-tree note); auraForceReaction 139 has NO Go model
+	// (conditions.go:1746, explicit_target_faction.go:921) — the eff0 leg
+	// stays dormant data until one lands. Removes the last unseeded-spell
+	// blocker for npc_commander_dawnforge.lua (single-missing-id file).
+	{id: 34603, castTimeIdx: 1, durIdx: 6, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraForceReaction, dieSides: 1, basePoints: 3, misc: 968, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, misc: 18850, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12491 Healing Wave (wago name; C++ SPELL_HEALING_WAVE,
+	// zone_nagrand.cpp:56 enum, also SPELL_KUR_HEALING_WAVE :244 same id;
+	// Lua npc_earthmender_wilda.lua:63 non-triggered) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15 browser read
+	// 60cdf9af, DifficultyID 0 rows): single eff0 10 HEAL dieSides 57
+	// basePoints 357 TargetA 21 TARGET_UNIT_TARGET_ALLY chainAmplitude 1;
+	// castTimeIdx 14 (3000ms, real row), durIdx 0 (no SpellDuration row),
+	// rangeIdx 5 (Long Range, real row), school 0x8 Nature, dispel 0 /
+	// mechanic 0 (SpellCategories row exists but DispelType 0, Mechanic
+	// 0). SpellPower ManaCost 145 carried (12544 precedent); no
+	// SpellAuraOptions row, no ProcChance. Engine twin: effHeal 10 live.
+	// Removes the last unseeded-spell blocker for
+	// npc_earthmender_wilda.lua (single-missing-id file).
+	{id: 12491, castTimeIdx: 14, durIdx: 0, rangeIdx: 5, school: schoolNature, manaCost: 145, effects: [3]effect{
+		{effect: effHeal, dieSides: 57, basePoints: 357, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 38775 Force of Neltharaku (wago name; C++ SPELL_FORCE_OF_NELTHARAKU,
+	// zone_shadowmoon_valley.cpp:345 enum; Lua
+	// npc_enslaved_netherwing_drake.lua:44) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-15 browser read 60cdf9af,
+	// DifficultyID 0 rows): eff0 134 KILL_CREDIT2 TargetA 21
+	// TARGET_UNIT_TARGET_ALLY misc 22316 chainAmplitude 1; eff1 6
+	// APPLY_AURA aura 193 MELEE_SLOW dieSides 1 basePoints 14 TargetA 21
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 3
+	// (60000ms, real row), rangeIdx 13 (Anywhere - Unlimited, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: effKillCredit2 134 live
+	// (spells.go:17749), auraMeleeSlow 193 recognized (aura_haste.go
+	// type-193 rival scan). Removes the last unseeded-spell blocker for
+	// npc_enslaved_netherwing_drake.lua (single-missing-id file).
+	{id: 38775, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effKillCredit2, targetA: targetUnitTargetAlly, misc: 22316, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMeleeSlow, dieSides: 1, basePoints: 14, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 37277 Summon Infernal (wago name; C++ SPELL_SUMMON_INFERNAL,
+	// zone_shadowmoon_valley.cpp:61 enum; Lua npc_invis_infernal_caster.lua:33)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-15
+	// browser read 60cdf9af, DifficultyID 0 rows): single eff0 3 DUMMY
+	// TargetA 25 TARGET_UNIT_TARGET_ANY RadiusIndex 20 (25yd, real row)
+	// chainAmplitude 1; castTimeIdx 1 (instant, real row), durIdx 0 (no
+	// SpellDuration row), rangeIdx 34 (Twenty-Five yards, real row),
+	// school 0x1 Physical, dispel 0 (no SpellCategories row). NOT carried:
+	// no SpellPower row; SpellAuraOptions ProcChance 101 (no proc table,
+	// 58109 precedent). Engine twins: effDummy 3 / target 25 live.
+	// Removes the last unseeded-spell blocker for
+	// npc_invis_infernal_caster.lua (single-missing-id file).
+	{id: 37277, castTimeIdx: 1, durIdx: 0, rangeIdx: 34, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, targetA: targetUnitTargetAny, radiusIdx: 20, chainAmplitude: 1},
 	}},
 }
 
