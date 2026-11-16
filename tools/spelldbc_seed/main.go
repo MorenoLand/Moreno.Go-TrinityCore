@@ -151,6 +151,7 @@ const (
 	auraReducePushback         = 149 // SPELL_AURA_REDUCE_PUSHBACK (SpellAuraDefines.h:229)
 	auraModAoeDamageAvoidance  = 229 // SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE (SpellAuraDefines.h:309)
 	auraModFear                = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
+	auraModDodgePercent        = 49  // SPELL_AURA_MOD_DODGE_PERCENT (SpellAuraDefines.h:129)
 	auraModPowerCostSchoolPct  = 72  // SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (SpellAuraDefines.h:152)
 	auraModMeleeRangedHaste    = 192 // SPELL_AURA_MOD_MELEE_RANGED_HASTE (SpellAuraDefines.h:272)
 	schoolNone                 = 0   // SPELL_SCHOOL_MASK_NONE (SharedDefines.h:323)
@@ -7856,6 +7857,66 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 499, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 149, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72422 "Quivering Strike" (wago SpellName — MATCH
+	// vs expected "Quivering Strike"; C++
+	// SPELL_QUIVERING_STRIKE, boss_falric.cpp:35 enum;
+	// Lua northrend/boss_falric.lua:183) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_72422_72426_72435.txt, DifficultyID 0
+	// base rows): eff0 WEAPON_PERCENT_DAMAGE bp59
+	// die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_DODGE_PERCENT bp-21 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur28
+	// 5000ms, range2 Combat Range 0-5yd, school
+	// Physical, dispel 1 (Magic); DifficultyID 2/4
+	// eff0 bp99 NOT seeded (base row only, per
+	// precedent); ProcChance 101 / Attributes not
+	// carried.
+	{id: 72422, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, dispel: 1, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 59, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDodgePercent, basePoints: -21, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 72426 "Impending Despair" (wago SpellName — MATCH
+	// vs expected "Impending Despair"; C++
+	// SPELL_IMPENDING_DESPAIR, boss_falric.cpp:36
+	// enum; Lua northrend/boss_falric.lua:184) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_72422_72426_72435.txt, DifficultyID 0
+	// only — no 2/4 variants exist): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL bp0 die0 period6000
+	// trigger72428 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur32 6000ms, range36 Longer
+	// Range 0-45yd, school Shadow, dispel 1 (Magic);
+	// trigger 72428 (stun) unseeded — no verdict row,
+	// triage separately; ProcChance 101 / Attributes
+	// not carried.
+	{id: 72426, castTimeIdx: 1, durIdx: 32, rangeIdx: 36, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 6000, trigger: 72428, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 72435 "Defiling Horror" (wago SpellName — MATCH
+	// vs expected "Defiling Horror"; C++
+	// SPELL_DEFILING_HORROR, boss_falric.cpp:37 enum;
+	// Lua northrend/boss_falric.lua:185) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_72422_72426_72435.txt, DifficultyID 0
+	// base rows): eff0 APPLY_AURA MOD_FEAR bp0 die0
+	// radius48 60yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE bp2499 die1 period1000 radius48
+	// 60yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur35
+	// 4000ms, range1 Self Only, school Shadow,
+	// mechanic 24 (Horror); DifficultyID 2/4 eff1
+	// bp3999 NOT seeded (base row only, per
+	// precedent); ProcChance 101 / Attributes not
+	// carried.
+	{id: 72435, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolShadow, mechanic: 24, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: 0, dieSides: 0, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2499, dieSides: 1, auraPeriod: 1000, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
 }
 
