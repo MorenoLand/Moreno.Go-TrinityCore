@@ -147,6 +147,8 @@ const (
 	auraReducePushback         = 149 // SPELL_AURA_REDUCE_PUSHBACK (SpellAuraDefines.h:229)
 	auraModAoeDamageAvoidance  = 229 // SPELL_AURA_MOD_AOE_DAMAGE_AVOIDANCE (SpellAuraDefines.h:309)
 	auraModFear                = 7   // SPELL_AURA_MOD_FEAR (SpellAuraDefines.h:87)
+	auraModPowerCostSchoolPct  = 72  // SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT (SpellAuraDefines.h:152)
+	auraModMeleeRangedHaste    = 192 // SPELL_AURA_MOD_MELEE_RANGED_HASTE (SpellAuraDefines.h:272)
 	schoolNone                 = 0   // SPELL_SCHOOL_MASK_NONE (SharedDefines.h:323)
 	schoolPhysical             = 1
 	schoolHoly                 = 2
@@ -6477,6 +6479,46 @@ var spells = []spell{
 	// SpellClassOptions or SpellAuraOptions rows.
 	{id: 66100, castTimeIdx: 5, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
 		{effect: effPowerBurn, dieSides: 129, basePoints: 2245, targetA: targetEnemy, radiusIdx: 1, chainAmplitude: 1},
+	}},
+	// 70232 "Empowered Blood" (wago SpellName — MISMATCH
+	// vs expected "Empowered Blood 2"; C++
+	// SPELL_EMPOWERED_BLOOD_2, icecrown_citadel.cpp:94
+	// enum; Lua northrend/spell_icecrown_citadel.lua:21,
+	// triggered cast :27) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser
+	// read 8e09b2df, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_POWER_COST_SCHOOL_PCT bp-101 die1 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA MOD_SCALE bp99
+	// die1 tgtA TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// MOD_MELEE_RANGED_HASTE bp99 die1 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur9 30000ms,
+	// range1 Self Only 0yd, school Physical;
+	// SpellCategories absent ("No entries found.");
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 70232, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModPowerCostSchoolPct, dieSides: 1, basePoints: -101, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 99, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeRangedHaste, dieSides: 1, basePoints: 99, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 70320 "Empowered Blood" (wago SpellName — MISMATCH
+	// vs expected "Empowered Blood 4"; C++
+	// SPELL_EMPOWERED_BLOOD_4, icecrown_citadel.cpp:96
+	// enum; Lua northrend/spell_icecrown_citadel.lua:23,
+	// triggered cast :41) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16 browser
+	// read 8e09b2df, DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_POWER_COST_SCHOOL_PCT bp-101 die1 tgtA
+	// TARGET_UNIT_TARGET_ANY; eff1 APPLY_AURA
+	// MOD_CASTING_SPEED_NOT_STACK bp99999 die1 tgtA
+	// TARGET_UNIT_TARGET_ANY; cast1 instant, dur9 30000ms,
+	// range13 Anywhere - Unlimited 0-50000yd, school
+	// Physical; SpellCategories absent ("No entries
+	// found."); Attributes not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 70320, castTimeIdx: 1, durIdx: 9, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModPowerCostSchoolPct, dieSides: 1, basePoints: -101, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModCastingSpeed, dieSides: 1, basePoints: 99999, targetA: targetUnitTargetAny, chainAmplitude: 1},
 	}},
 }
 
