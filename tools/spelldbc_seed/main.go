@@ -181,6 +181,7 @@ const (
 	familyHunter               = 9   // SPELLFAMILY_HUNTER (SharedDefines.h:3590)
 	familyDeathKnight          = 15  // SPELLFAMILY_DEATHKNIGHT (SharedDefines.h:3596)
 	familyWarlock              = 5   // SPELLFAMILY_WARLOCK (SharedDefines.h:3586)
+	familyWarrior              = 4   // SPELLFAMILY_WARRIOR (SharedDefines.h:3585)
 )
 
 type effect struct {
@@ -4545,6 +4546,128 @@ var spells = []spell{
 	// SpellPower or SpellClassOptions rows.
 	{id: 13142, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
 		{effect: effTeleportUnits, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAlly, targetB: targetDestDB, chainAmplitude: 1},
+	}},
+	// 22427 Concussion Blow (wago name; C++ SPELL_CONCUSSION_BLOW,
+	// boss_broggok.cpp:43 enum, DoCastVictim :216; Lua
+	// hellfirecitadel/npc_nascent_fel_orc.lua:53, victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read f1465377, DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp-1 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// MOD_STUN bp0 die0 same target; mechanic 12, cast1 instant,
+	// dur28 5000ms, range7 Ten yards 10yd, school Physical; family
+	// Warrior 4, flags {69206016, 0, 0}; dispel 0; Attributes_0 0x14
+	// not carried (no field); no SpellPower or SpellAuraOptions rows.
+	{id: 22427, mechanic: 12, castTimeIdx: 1, durIdx: 28, rangeIdx: 7, school: schoolPhysical, family: familyWarrior, familyFlags: [3]uint32{69206016, 0, 0}, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: -1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31900 Stomp (wago name; C++ SPELL_STOMP, boss_broggok.cpp:42
+	// enum, DoCastVictim :220; Lua
+	// hellfirecitadel/npc_nascent_fel_orc.lua:54, self-area cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-16
+	// browser read f1465377, DifficultyID 0 rows): eff0 WEAPON_DAMAGE
+	// bp329 die41 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radius8 (5yd); eff1 KNOCK_BACK bp44
+	// die31 misc60 same targets/radius; cast1 instant, dur0 (no
+	// SpellDuration row), range7 Ten yards 10yd, school Physical;
+	// dispel 0, mechanic 0; SpellAuraOptions ProcChance 101 /
+	// ProcTypeMask 0x0 not carried (no fields); Attributes_0 0x40010
+	// not carried; no SpellPower or SpellClassOptions rows.
+	{id: 31900, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 41, basePoints: 329, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 31, basePoints: 44, misc: 60, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 12739 Shadow Bolt (wago name; C++ SPELL_SHADOW_BOLT,
+	// boss_kelidan_the_breaker.cpp:265 enum, DoCastVictim :355; Lua
+	// hellfirecitadel/npc_shadowmoon_channeler.lua:64, victim cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read f1465377, DifficultyID 0 row): eff0 SCHOOL_DAMAGE
+	// bp127 die45 tgtA TARGET_UNIT_TARGET_ENEMY; cast14 3000ms, dur0
+	// (no SpellDuration row), range5 Long Range 40yd, school Shadow,
+	// mana90; dispel 0, mechanic 0; Speed 24 and Attributes_0 0x90000
+	// not carried (no fields); no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 12739, castTimeIdx: 14, durIdx: 0, rangeIdx: 5, school: schoolShadow, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 45, basePoints: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30937 Mark of Shadow (wago name; C++ SPELL_MARK_OF_SHADOW,
+	// boss_kelidan_the_breaker.cpp:268 enum, DoCast(target) :347; Lua
+	// hellfirecitadel/npc_shadowmoon_channeler.lua:63, target cast) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16
+	// browser read f1465377, DifficultyID 0 row): eff0 APPLY_AURA
+	// MOD_DAMAGE_TAKEN bp999 die1 misc32 (Shadow) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast4 1000ms, dur4 120000ms, range4
+	// Medium Range 30yd, school Shadow, dispel 1 (MAGIC); mechanic 0;
+	// RealPointsPerLevel 50 and SpellAuraOptions ProcChance 100 /
+	// ProcCharges 1 / ProcTypeMask 0x222a0 not carried (no fields);
+	// no SpellPower or SpellClassOptions rows. DifficultyID 174/173
+	// rows differ (bp1000 die0 rpl100) — DifficultyID 0 used.
+	{id: 30937, castTimeIdx: 4, durIdx: 4, rangeIdx: 4, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 999, misc: 32, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 22427 Concussion Blow (wago name; C++ SPELL_CONCUSSION_BLOW,
+	// boss_broggok.cpp:43 enum; Lua
+	// hellfirecitadel/npc_nascent_fel_orc.lua:53, pump 15s init then
+	// {8s,11s}) — wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read f1465377, DifficultyID 0 rows): eff0
+	// WEAPON_DAMAGE bp-1 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_STUN bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur28 5000ms, range7 Ten yards 10yd, school
+	// Physical; SpellCategories Mechanic 12 (stunned), DefenseType
+	// Melee, PreventionType 0x2; family Warrior (SpellClassSet 4)
+	// mask 69206016; Attributes_0 0x14 and EffectBonusCoefficient 1
+	// not carried (no fields); no SpellPower or SpellAuraOptions rows.
+	{id: 22427, castTimeIdx: 1, durIdx: 28, rangeIdx: 7, school: schoolPhysical, mechanic: 12, family: familyWarrior, familyFlags: [3]uint32{69206016, 0, 0}, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 1, basePoints: -1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, dieSides: 0, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31900 Stomp (wago name; C++ SPELL_STOMP, boss_broggok.cpp:42
+	// enum; Lua hellfirecitadel/npc_nascent_fel_orc.lua:54, pump 7s
+	// init then {16s,21s}) — wago.tools 3.4.0.47659 SpellEffect rows
+	// + SpellMisc (2026-11-16 browser read f1465377, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE bp329 die41 radius8 5yd tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY; eff1
+	// KNOCK_BACK bp44 die31 misc60 radius8 tgtA 22 tgtB 15; cast1
+	// instant, dur0 (no SpellDuration row), range7 Ten yards 10yd,
+	// school Physical; SpellCategories Mechanic 0, DefenseType Magic,
+	// PreventionType 0x1; SpellAuraOptions ProcChance 101 not carried
+	// (no fields); Attributes_0 0x40010 not carried; no SpellPower or
+	// SpellClassOptions rows.
+	{id: 31900, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, dieSides: 41, basePoints: 329, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 31, basePoints: 44, misc: 60, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 12739 Shadow Bolt (wago name; C++ SPELL_SHADOW_BOLT,
+	// boss_kelidan_the_breaker.cpp:265 enum; Lua
+	// hellfirecitadel/npc_shadowmoon_channeler.lua:64) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser
+	// read f1465377, DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp127
+	// die45 tgtA TARGET_UNIT_TARGET_ENEMY; cast14 3000ms, dur0 (no
+	// SpellDuration row), range5 Long Range 40yd, school Shadow,
+	// SpellPower ManaCost 90 carried, Speed 24 not carried (no
+	// field); SpellCategories Mechanic 0, DefenseType Magic,
+	// PreventionType 0x1, StartRecoveryCategory 133 not carried; no
+	// SpellClassOptions or SpellAuraOptions rows.
+	{id: 12739, castTimeIdx: 14, durIdx: 0, rangeIdx: 5, school: schoolShadow, manaCost: 90, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 45, basePoints: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30937 Mark of Shadow (wago name; C++ SPELL_MARK_OF_SHADOW,
+	// boss_kelidan_the_breaker.cpp:268 enum; Lua
+	// hellfirecitadel/npc_shadowmoon_channeler.lua:63, pump
+	// 5000+rand32()%2000 init then {15s,20s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-16 browser
+	// read f1465377, DifficultyID 0 row; heroic DifficultyID 173/174
+	// rows bp1000 die0 RealPointsPerLevel 100 NOT seeded): eff0
+	// APPLY_AURA MOD_DAMAGE_TAKEN bp999 die1 misc32 (Shadow school)
+	// tgtA TARGET_UNIT_TARGET_ENEMY; RealPointsPerLevel 50 not
+	// carried (no field); cast4 1000ms, dur4 120000ms, range4 Medium
+	// Range 30yd, school Shadow, dispel 1 (MAGIC); SpellCategories
+	// Mechanic 0, DefenseType Magic, PreventionType 0x1;
+	// SpellAuraOptions ProcChance 100 / ProcCharges 1 / ProcTypeMask
+	// 0x222a0 not carried (no fields); no SpellPower or
+	// SpellClassOptions rows.
+	{id: 30937, dispel: 1, castTimeIdx: 4, durIdx: 4, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 999, misc: 32, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
