@@ -85,6 +85,7 @@ const (
 	effForceCast               = 140 // SPELL_EFFECT_FORCE_CAST (SharedDefines.h:951)
 	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
 	effApplyAreaAuraParty      = 35  // SPELL_EFFECT_APPLY_AREA_AURA_PARTY (SharedDefines.h:846)
+	effApplyAreaAuraEnemy      = 129 // SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (SharedDefines.h:940)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
 	effAddExtraAttacks         = 19  // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
 	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
@@ -7917,6 +7918,69 @@ var spells = []spell{
 	{id: 72435, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolShadow, mechanic: 24, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModFear, basePoints: 0, dieSides: 0, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 2499, dieSides: 1, auraPeriod: 1000, radiusIdx: 48, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 72395 "Hopelessness" (wago SpellName — MATCH
+	// vs expected "Hopelessness"; C++
+	// SPELL_HOPELESSNESS_1, boss_falric.cpp:38
+	// enum; Lua northrend/boss_falric.lua:187
+	// SPELL_HOPELESSNESS[1]) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_72395_72396_72397.txt, DifficultyID 0
+	// rows): eff0 APPLY_AREA_AURA_ENEMY
+	// MOD_DAMAGE_PERCENT_DONE bp-21 die1 misc127
+	// radius12 100yd tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AREA_AURA_ENEMY MOD_HEALING_PCT bp-21
+	// die1 misc127 radius12 100yd tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1,
+	// range1 Self Only, school Shadow; NO
+	// SpellCategories row (no dispel); Attributes /
+	// ProcChance 101 not carried.
+	{id: 72395, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAreaAuraEnemy, aura: auraModDmgDone, basePoints: -21, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAreaAuraEnemy, aura: auraModHealingPct, basePoints: -21, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72396 "Hopelessness" (wago SpellName — MATCH
+	// vs expected "Hopelessness"; C++
+	// SPELL_HOPELESSNESS_2, boss_falric.cpp:39
+	// enum; Lua northrend/boss_falric.lua:187
+	// SPELL_HOPELESSNESS[2]) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_72395_72396_72397.txt, DifficultyID 0
+	// rows): eff0 APPLY_AREA_AURA_ENEMY
+	// MOD_DAMAGE_PERCENT_DONE bp-41 die1 misc127
+	// radius12 100yd tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AREA_AURA_ENEMY MOD_HEALING_PCT bp-41
+	// die1 misc127 radius12 100yd tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1,
+	// range1 Self Only, school Shadow; NO
+	// SpellCategories row (no dispel); Attributes /
+	// ProcChance 101 not carried.
+	{id: 72396, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAreaAuraEnemy, aura: auraModDmgDone, basePoints: -41, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAreaAuraEnemy, aura: auraModHealingPct, basePoints: -41, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 72397 "Hopelessness" (wago SpellName — MATCH
+	// vs expected "Hopelessness"; C++
+	// SPELL_HOPELESSNESS_3, boss_falric.cpp:40
+	// enum; Lua northrend/boss_falric.lua:187
+	// SPELL_HOPELESSNESS[3]) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_72395_72396_72397.txt, DifficultyID 0
+	// rows): eff0 APPLY_AREA_AURA_ENEMY
+	// MOD_DAMAGE_PERCENT_DONE bp-61 die1 misc127
+	// radius12 100yd tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AREA_AURA_ENEMY MOD_HEALING_PCT bp-61
+	// die1 misc127 radius12 100yd tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1,
+	// range1 Self Only, school Shadow; NO
+	// SpellCategories row (no dispel); Attributes /
+	// ProcChance 101 not carried.
+	{id: 72397, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAreaAuraEnemy, aura: auraModDmgDone, basePoints: -61, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAreaAuraEnemy, aura: auraModHealingPct, basePoints: -61, dieSides: 1, misc: 127, radiusIdx: 12, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
