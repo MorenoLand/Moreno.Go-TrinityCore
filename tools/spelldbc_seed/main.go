@@ -3984,6 +3984,101 @@ var spells = []spell{
 	{id: 41253, dispel: 6, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolArcane, family: familyMage, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModInvisibility, dieSides: 1, basePoints: 299, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 34794 Arcane Resonance (wago name; C++ SPELL_ARCANE_RESONANCE,
+	// boss_commander_sarannis.cpp:37 enum; Lua
+	// botanica/boss_commander_sarannis.lua:158, TRIGGERED victim cast)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read bb66d46a, DifficultyID 0 rows): single
+	// eff0 6 APPLY_AURA aura 14 MOD_DAMAGE_TAKEN dieSides 1 basePoints
+	// 1199 misc 64 (Arcane school mask) TargetA 6
+	// TARGET_UNIT_TARGET_ENEMY chainAmplitude 1; castTimeIdx 1
+	// (instant, real row), durIdx 9 (30000ms, real row), rangeIdx 7
+	// (Ten yards, real row), school 0x40 Arcane, dispel 1
+	// (SpellCategories DispelType 1 MAGIC), mechanic 0. NOT carried:
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent); CumulativeAura 3 (no seed-struct field); no
+	// SpellClassOptions row (no family); SpellCategories DefenseType 1
+	// / PreventionType 0x1 (no struct fields); BonusCoefficientFromAP /
+	// PvpMultiplier as read (no seed-struct fields); EffectAmplitude 0
+	// (zero-value); Attributes not encoded (seed has no attributes
+	// field). Engine twin: auraModDamageTaken 14 live (spells.go).
+	{id: 34794, dispel: 1, castTimeIdx: 1, durIdx: 9, rangeIdx: 7, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 1199, misc: 64, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34799 Arcane Devastation (wago name; C++ SPELL_ARCANE_DEVASTATION,
+	// boss_commander_sarannis.cpp:38 enum; Lua
+	// botanica/boss_commander_sarannis.lua:168, TRIGGERED victim cast)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read bb66d46a, DifficultyID 0 rows): eff0 31
+	// WEAPON_PERCENT_DAMAGE dieSides 1 basePoints 49 TargetA 6
+	// chainAmplitude 1; NO EffectIndex 1 row — slot 1 stays empty (the
+	// {} middle entry reproduces the real DBC gap); eff2 6 APPLY_AURA
+	// aura 4 DUMMY TargetA 6 chainAmplitude 1; castTimeIdx 1 (instant,
+	// real row), durIdx 327 (500ms, real SpellDuration row 327, added
+	// below), rangeIdx 2 (Combat Range, real row), school 0x40 Arcane,
+	// dispel 0 / mechanic 0 (DispelType 0). NOT carried:
+	// SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent); eff0 BonusCoefficient 1 (no seed-struct field);
+	// BonusCoefficientFromAP / PvpMultiplier / ResourceCoefficient /
+	// GroupSizeBasePointsCoefficient as read (no seed-struct fields);
+	// no SpellClassOptions row (no family); SpellCategories DefenseType
+	// 2 / PreventionType 0x2 (no struct fields); EffectAmplitude 0
+	// (zero-value); Attributes not encoded (seed has no attributes
+	// field). Engine twins: spellEffectWeaponPercentDamage 31 live,
+	// auraDummy 4 live (spells.go:666). With 34794, removes
+	// botanica/boss_commander_sarannis.lua from the 2-missing-id list.
+	{id: 34799, castTimeIdx: 1, durIdx: 327, rangeIdx: 2, school: schoolArcane, effects: [3]effect{
+		{effect: effWeaponPercentDamage, dieSides: 1, basePoints: 49, targetA: targetEnemy, chainAmplitude: 1},
+		{},
+		{effect: effApplyAura, aura: auraDummy, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34697 Allergic Reaction (wago name; C++ SPELL_ALLERGIC_REACTION,
+	// boss_laj.cpp:31 enum; Lua botanica/boss_laj.lua:170,
+	// non-triggered victim cast) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 browser read bb66d46a, DifficultyID
+	// 0 rows): eff0 6 APPLY_AURA aura 14 MOD_DAMAGE_TAKEN dieSides 1
+	// basePoints 499 misc 127 (all-schools mask) TargetA 6
+	// chainAmplitude 1; eff1 6 APPLY_AURA aura 3 PERIODIC_DAMAGE
+	// auraPeriod 3000 dieSides 95 basePoints 902 TargetA 6
+	// chainAmplitude 1; eff2 6 APPLY_AURA aura 42 PROC_TRIGGER_SPELL
+	// dieSides 1 trigger 34700 TargetA 6 chainAmplitude 1;
+	// castTimeIdx 16 (1500ms, real row), durIdx 85 (18000ms, real row),
+	// rangeIdx 137 (Eight yards, real SpellRange row 137, added below),
+	// school 0x8 Nature, dispel 3 (SpellCategories DispelType 3
+	// DISEASE), mechanic 0. NOT carried: SpellAuraOptions ProcChance
+	// 101 (no proc table, 58109 precedent); ProcTypeMask_0 0x80080000
+	// (no proc table); no SpellClassOptions row (no family);
+	// SpellCategories Category 36 / DefenseType 1 / PreventionType 0x1
+	// (no struct fields); BonusCoefficientFromAP / PvpMultiplier as
+	// read (no seed-struct fields); EffectAmplitude 0 (zero-value);
+	// Attributes not encoded (seed has no attributes field). Engine
+	// twins: auraModDamageTaken 14 / auraPeriodicDmg 3 /
+	// auraProcTriggerSpell 42 live (spells.go). Trigger 34700 is the
+	// proc target, not seeded (50514 trigger-50524 precedent).
+	{id: 34697, dispel: 3, castTimeIdx: 16, durIdx: 85, rangeIdx: 137, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 499, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, auraPeriod: 3000, dieSides: 95, basePoints: 902, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, trigger: 34700, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34673 Teleport Self (wago name; C++ SPELL_TELEPORT_SELF,
+	// boss_laj.cpp:32 enum; Lua botanica/boss_laj.lua:180,
+	// non-triggered self-cast) — wago.tools 3.4.0.47659 SpellEffect row
+	// + SpellMisc (2026-11-16 browser read bb66d46a, DifficultyID 0
+	// rows): single eff0 5 TELEPORT_UNITS dieSides 1 TargetA 1
+	// TARGET_UNIT_CASTER TargetB 17 TARGET_DEST_DB chainAmplitude 1;
+	// castTimeIdx 1 (instant, real row), durIdx 0 (no SpellDuration
+	// row), rangeIdx 13 (Anywhere - Unlimited, real row), school 0x1
+	// Physical, dispel 0 / mechanic 0 (no SpellCategories row). NOT
+	// carried: SpellAuraOptions ProcChance 101 (no proc table, 58109
+	// precedent); EffectPos_facing 0.017453 (no seed-struct field); no
+	// SpellClassOptions row (no family); EffectAmplitude 0
+	// (zero-value); Attributes not encoded (seed has no attributes
+	// field). Engine twin: spellEffectTeleportUnits 5 live with
+	// handler (spells.go:17364). With 34697, removes
+	// botanica/boss_laj.lua from the 2-missing-id list.
+	{id: 34673, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, dieSides: 1, targetA: targetCaster, targetB: targetDestDB, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -4038,6 +4133,7 @@ func main() {
 		{30, 1800000, 0, 1800000},  // real SpellDuration 30 for 12544 Frost Armor (wago.tools 3.4.0.47659 SpellDuration row 30, browser c857c690)
 		{29, 12000, 0, 12000},      // real SpellDuration 29 for 35759 Felfire Shock (wago.tools 3.4.0.47659 SpellDuration row 29, browser 2f3bd931)
 		{555, 4500, 0, 4500},       // real SpellDuration 555 for 36512 Knock Away (wago.tools 3.4.0.47659 SpellDuration row 555, browser 2f3bd931)
+		{327, 500, 0, 500},         // real SpellDuration 327 for 34799 Arcane Devastation (wago.tools 3.4.0.47659 SpellDuration row 327, browser bb66d46a)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
@@ -4130,6 +4226,7 @@ func main() {
 		{7, f32(0), f32(0), f32(10), f32(10), 0},        // real SpellRange 7 for 49256 (wago.tools 3.4.0.43659)
 		{54, f32(5), f32(5), f32(30), f32(30), 0},       // real SpellRange 54 for 66081 (wago.tools 3.4.0.43659)
 		{12, f32(0), f32(0), f32(5), f32(5), 0},         // real SpellRange 12 "Interact Range" for 23261 (wago.tools 3.4.0.47659 SpellRange row 12, Flags 0)
+		{137, f32(0), f32(0), f32(8), f32(8), 0},        // real SpellRange 137 \"Eight yards\" for 34697 Allergic Reaction (wago.tools 3.4.0.47659 SpellRange row 137, browser bb66d46a)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRange.dbc"), 6, ranges); err != nil {
 		panic(err)
