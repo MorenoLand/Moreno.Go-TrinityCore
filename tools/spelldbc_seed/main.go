@@ -6944,6 +6944,61 @@ var spells = []spell{
 	{id: 38884, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolArcane, effects: [3]effect{
 		{effect: effPowerBurn, basePoints: 184, dieSides: 13, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 13321 "Mana Burn" (wago SpellName — MATCH vs
+	// expected "Mana Burn"; C++ SPELL_MANA_BURN,
+	// zone_netherstorm.cpp:352 enum; Lua
+	// outland/npc_phase_hunter.lua:115) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_13321_34804_36574.txt, DifficultyID 0
+	// rows): eff0 POWER_BURN bp184 die13 tgtA
+	// TARGET_UNIT_TARGET_ENEMY (EffectAmplitude 0.5
+	// not carried — no seed field; same values as
+	// 38884, different school); cast14 3000ms, dur0
+	// none, range4 Medium 30yd, school Shadow;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1 — not carried); Attributes not
+	// carried.
+	{id: 13321, castTimeIdx: 14, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effPowerBurn, basePoints: 184, dieSides: 13, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34804 "Materialize" (wago SpellName — MATCH vs
+	// expected "Materialize"; C++ SPELL_MATERIALIZE,
+	// zone_netherstorm.cpp:353 enum; Lua
+	// outland/npc_phase_hunter.lua:114) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_13321_34804_36574.txt, DifficultyID 0
+	// rows): eff0 SPAWN bp0 die0 tgtA NONE tgtB NONE
+	// (clientside-only, carried verbatim per 37090
+	// precedent); cast1 instant, dur0 none, range1
+	// Self Only, school Physical; NO SpellCategories
+	// row; Attributes not carried.
+	{id: 34804, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSpawn, chainAmplitude: 1},
+	}},
+	// 36574 "Phase Slip" (wago SpellName — MATCH vs
+	// expected "Phase Slip"; C++ SPELL_PHASE_SLIP,
+	// zone_netherstorm.cpp:351 enum; Lua
+	// outland/npc_phase_hunter.lua) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_13321_34804_36574.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MECHANIC_IMMUNITY
+	// bp-1201 die1 misc11 tgtA TARGET_UNIT_CASTER;
+	// eff1 APPLY_AURA MECHANIC_IMMUNITY bp0 die0
+	// misc13 tgtA TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// MECHANIC_IMMUNITY bp0 die0 misc7 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur31 8000ms,
+	// range1 Self Only, school Arcane; SpellCategories
+	// row present (Category 44, DefenseType 1 Magic,
+	// PreventionType 0x1, StartRecoveryCategory 133 —
+	// not carried); Attributes not carried.
+	{id: 36574, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: -1201, dieSides: 1, misc: 11, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, misc: 13, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, misc: 7, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
