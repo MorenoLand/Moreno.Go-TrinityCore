@@ -112,10 +112,11 @@ const (
 	auraTransform              = 56
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
-	auraSchoolImmunity         = 39 // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
-	auraModCastingSpeed        = 65 // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
-	auraModStalked             = 68 // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
-	auraModDisarm              = 67 // SPELL_AURA_MOD_DISARM (SpellAuraDefines.h:147)
+	auraSchoolImmunity         = 39  // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
+	auraModCastingSpeed        = 65  // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
+	auraDetectAmore            = 170 // SPELL_AURA_DETECT_AMORE (SpellAuraDefines.h:250)
+	auraModStalked             = 68  // SPELL_AURA_MOD_STALKED (SpellAuraDefines.h:148)
+	auraModDisarm              = 67  // SPELL_AURA_MOD_DISARM (SpellAuraDefines.h:147)
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
@@ -5321,6 +5322,63 @@ var spells = []spell{
 	// no SpellClassOptions or SpellAuraOptions rows.
 	{id: 58084, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effQuestComplete, dieSides: 0, basePoints: 0, misc: 13141, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 28732 Widow's Embrace (wago SpellName; C++
+	// SPELL_WIDOWS_EMBRACE, boss_faerlina.cpp:43 enum; Lua
+	// northrend/npc_faerlina_add.lua:46, DoCast on Faerlina) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 browser read 7e54d10b, DifficultyID 0 rows):
+	// eff0 APPLY_AURA MOD_CASTING_SPEED_NOT_STACK bp-26 die1
+	// tgtA TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY
+	// radius18 15yd; eff1 SCRIPT_EFFECT bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur9 30000ms, range1
+	// Self Only 0yd, school Arcane; NO SpellCategories row;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows.
+	{id: 28732, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCastingSpeed, dieSides: 1, basePoints: -26, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effScriptEffect, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 54095 Fireball (wago SpellName, NOT "Add Fireball"; C++
+	// SPELL_ADD_FIREBALL, boss_faerlina.cpp:45 enum, 25-man:
+	// 54096 per C++ comment; Lua northrend/npc_faerlina_add.lua:47,
+	// DoCastVictim) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 browser read 7e54d10b,
+	// DifficultyID 0 row): eff0 SCHOOL_DAMAGE bp2024 die451
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast20 2500ms, dur0 (no
+	// SpellDuration row), range36 Longer 0-45yd, school Fire;
+	// EffectBonusCoefficient 1 not carried; SpellCategories
+	// Category 0 DefenseType 1 PreventionType 0x1
+	// StartRecoveryCategory 133 not carried; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 54095, castTimeIdx: 20, durIdx: 0, rangeIdx: 36, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, dieSides: 451, basePoints: 2024, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 46077 Shroud of the Death Cultist (wago SpellName; C++
+	// SPELL_SHROUD_OF_THE_DEATH_CULTIST, zone_borean_tundra.cpp:1459
+	// enum; Lua northrend/npc_hidden_cultist.lua:41) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 7e54d10b, DifficultyID 0 row):
+	// eff0 APPLY_AURA DUMMY bp0 die0 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur21 -1 infinite, range1 Self Only 0yd,
+	// school Physical; NO SpellCategories row; Attributes not
+	// carried; no SpellClassOptions or SpellAuraOptions rows.
+	{id: 46077, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46078 Righteous Vision (wago SpellName; C++
+	// SPELL_RIGHTEOUS_VISION, zone_borean_tundra.cpp:1460 enum;
+	// Lua northrend/npc_hidden_cultist.lua:42, player aura) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 browser read 7e54d10b, DifficultyID 0 row):
+	// eff0 APPLY_AURA DETECT_AMORE bp0 die0 misc 3 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur9 30000ms, range1
+	// Self Only 0yd, school Physical; NO SpellCategories row;
+	// Attributes not carried; no SpellClassOptions or
+	// SpellAuraOptions rows. NEW aura const auraDetectAmore=170
+	// (SpellAuraDefines.h:250).
+	{id: 46078, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDetectAmore, dieSides: 0, basePoints: 0, misc: 3, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
