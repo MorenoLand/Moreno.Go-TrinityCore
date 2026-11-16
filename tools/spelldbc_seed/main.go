@@ -127,6 +127,7 @@ const (
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
 	auraModHitChance           = 54 // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
+	auraPeriodicLeech          = 53 // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
 	auraModResistPct           = 101
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
@@ -6764,6 +6765,67 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 399, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDummy, basePoints: 2499, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effKnockBack, basePoints: 74, dieSides: 1, misc: 35, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34659 "Hellfire" (wago SpellName — MATCH vs
+	// expected "Hellfire"; C++ SPELL_HELLFIRE,
+	// boss_thorngrin_the_tender.cpp:37 enum; Lua
+	// botanica/boss_thorngrin_the_tender.lua:100) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_34659_34661_34670.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// bp-1 die1 period1000 trig34660 tgtA
+	// TARGET_UNIT_CASTER; trigger spell 34660 NOT
+	// seeded per precedent; cast1 instant, dur32
+	// 6000ms, range1 Self Only, school Fire;
+	// SpellCategories row present (DefenseType 1 Magic,
+	// PreventionType 0x1 — not carried); Attributes not
+	// carried.
+	{id: 34659, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 1000, trigger: 34660, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34661 "Sacrifice" (wago SpellName — MATCH vs
+	// expected "Sacrifice"; C++ SPELL_SACRIFICE,
+	// boss_thorngrin_the_tender.cpp:36 enum; Lua
+	// botanica/boss_thorngrin_the_tender.lua:99) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_34659_34661_34670.txt, DifficultyID 0
+	// rows): eff0 TELEPORT_UNITS bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY tgtB TARGET_DEST_DB
+	// (EffectPos_facing 4.66 not carried — no seed
+	// field); eff1 APPLY_AURA MOD_STUN bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff2 APPLY_AURA
+	// PERIODIC_LEECH bp641 die67 period1000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY (EffectAmplitude 1 not
+	// carried — no seed field); cast4 1000ms, dur31
+	// 8000ms, range5 Long 40yd, school Shadow; NO
+	// SpellCategories row; Attributes not carried.
+	{id: 34661, castTimeIdx: 4, durIdx: 31, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
+		{effect: effTeleportUnits, targetA: targetEnemy, targetB: targetDestDB, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicLeech, basePoints: 641, dieSides: 67, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34670 "Enrage" (wago SpellName — MATCH vs expected
+	// "Enrage"; C++ SPELL_ENRAGE,
+	// boss_thorngrin_the_tender.cpp:38 enum; Lua
+	// botanica/boss_thorngrin_the_tender.lua:101) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_34659_34661_34670.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// bp74 die1 misc1 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_MELEE_HASTE bp74 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_SCALE
+	// bp24 die1 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur1 10000ms, range1 Self Only, school Physical;
+	// SpellCategories row present (Category 21,
+	// DispelType 9 ENRAGE — not carried); Attributes
+	// not carried.
+	{id: 34670, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 74, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 74, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
