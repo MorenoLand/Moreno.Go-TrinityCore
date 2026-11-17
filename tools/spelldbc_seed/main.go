@@ -142,6 +142,7 @@ const (
 	auraModAttackPower         = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
+	auraModCastSpeedNotStack   = 65  // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
 	auraMeleeSlow              = 193 // SPELL_AURA_MELEE_SLOW (SpellAuraDefines.h:273)
@@ -11493,6 +11494,82 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 8876 "Thrash" (wago SpellName MATCHES; C++ SPELL_THRASH,
+	// boss_tuten_kash.cpp:24; Lua
+	// kalimdor/boss_tuten_kash.lua:68, 190 — self-cast,
+	// EVENT_THRASH) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-17 verdict file
+	// wago_spells_8876_12252_12255.txt, DifficultyID 0
+	// rows): 1 effect only, APPLY_AURA
+	// PROC_TRIGGER_SPELL (aura 42) bp0 die1 trigger
+	// 3391 tgtA TARGET_UNIT_CASTER; cast1 instant, dur21
+	// -1 (infinite), range1 Self Only 0yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 65,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (ProcChance 15,
+	// ProcTypeMask_0 0x14, ProcCategoryRecovery 4000) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0x40050 not carried
+	// (no fields in the seed struct); NOTE triggered
+	// 3391 itself unseeded.
+	{id: 8876, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, dieSides: 1, trigger: 3391, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 12252 "Web Spray" (wago SpellName MATCHES; C++
+	// SPELL_WEB_SPRAY, boss_tuten_kash.cpp:25; Lua
+	// kalimdor/boss_tuten_kash.lua:69, 130 — target-cast,
+	// EVENT_WEB_SPRAY) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_8876_12252_12255.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_ROOT
+	// (aura 26) bp0 die0 radiusIdx 9 tgtA
+	// TARGET_UNIT_CONE_ENEMY_24; eff1 TRIGGER_SPELL
+	// (effect 64) bp0 die1 trigger 11920 radiusIdx 9
+	// tgtA TARGET_UNIT_CONE_ENEMY_24; cast1 instant,
+	// dur1 10000ms, range4 Medium Range 0-30yd, radius9
+	// 20yd (aux rows pre-existing), school Physical
+	// (0x1), mechanic 7 (SpellCategories Mechanic 7);
+	// SpellCategories row EXISTS (Category 34,
+	// DefenseType 1 (Magic), DispelType 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x10 /
+	// Attributes_1 0x88, Speed 12, EffectAttributes
+	// 0x20000 not carried (no fields in the seed struct);
+	// NOTE triggered 11920 itself unseeded.
+	{id: 12252, mechanic: 7, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, dieSides: 1, trigger: 11920, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 12255 "Curse of Tuten'kash" (wago SpellName
+	// MATCHES; C++ SPELL_CURSE_OF_TUTENKASH,
+	// boss_tuten_kash.cpp:27; Lua
+	// kalimdor/boss_tuten_kash.lua:71, 146 — self-cast,
+	// EVENT_CURSE_OF_TUTENKASH) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_8876_12252_12255.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_CASTING_SPEED_NOT_STACK (aura 65) bp-16 die1
+	// radiusIdx 10 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp-19 die1 radiusIdx
+	// 10 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur347
+	// 900000ms (15 min), range1 Self Only 0yd, radius10
+	// 30yd, school Shadow (0x20), dispel 2 (CURSE,
+	// SpellCategories DispelType 2); SpellCategories row
+	// EXISTS (Category 0, DefenseType 0, Mechanic 0,
+	// PreventionType 0x0) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x10 not
+	// carried (no fields in the seed struct).
+	{id: 12255, castTimeIdx: 1, durIdx: 347, rangeIdx: 1, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCastSpeedNotStack, basePoints: -16, dieSides: 1, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -19, dieSides: 1, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -11555,6 +11632,7 @@ func main() {
 		{41, 360000, 0, 360000},    // real SpellDuration 41 for 30977 Conflagration Blast (wago.tools 3.4.0.47659 SpellDuration row 41, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
 		{62, 75000, 0, 75000},      // real SpellDuration 62 for 28240 Poison Cloud (wago.tools 3.4.0.47659 SpellDuration row 62, 2026-11-16 verdict wago_spells_28157_28169_28240.txt)
 		{86, 21000, 0, 21000},      // real SpellDuration 86 for 20294 Immolate (wago.tools 3.4.0.47659 SpellDuration row 86, 2026-11-16 verdict wago_spells_20294_17820_17467.txt)
+		{347, 900000, 0, 900000},   // real SpellDuration 347 for 12255 Curse of Tuten'kash (wago.tools 3.4.0.47659 SpellDuration row 347, 2026-11-17 verdict wago_spells_8876_12252_12255.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
