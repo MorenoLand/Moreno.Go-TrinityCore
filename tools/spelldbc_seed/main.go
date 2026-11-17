@@ -12346,6 +12346,80 @@ var spells = []spell{
 	{id: 39295, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 15000, trigger: 39296, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 39283 "Hellfire - The Exorcism, Jules goes prone"
+	// (wago SpellName MISMATCH vs expected "Jules Goes
+	// Prone" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_JULES_GOES_PRONE,
+	// zone_hellfire_peninsula.cpp:334; Lua
+	// outland/npc_colonel_jules.lua:67, 187 — AddAura on
+	// Jules, exorcism step) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_39283_39284_39294.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY (aura
+	// 4) bp0 die0 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 (infinite), range1 Self Only
+	// 0yd (aux rows pre-existing), school Physical
+	// (0x1); SpellCategories row does NOT exist at all
+	// — dispel/mechanic stay 0; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc chance/type NOT
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x8000180 not carried (no fields in
+	// the seed struct); no triggered spells.
+	{id: 39283, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39284 "Hellfire - The Exorcism, Jules threatens,
+	// aura" (wago SpellName MISMATCH vs expected "Jules
+	// Threatens Aura" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_JULES_THREATENS_AURA,
+	// zone_hellfire_peninsula.cpp:335; Lua
+	// outland/npc_colonel_jules.lua:68, 188 — AddAura on
+	// Jules, exorcism step) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_39283_39284_39294.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die0
+	// auraPeriod 2000 trigger 39280 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// (infinite), range1 Self Only 0yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row does NOT exist at all —
+	// dispel/mechanic stay 0; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc chance/type NOT
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x8000100 / Attributes_1 0x10000000
+	// not carried (no fields in the seed struct); NOTE
+	// triggered 39280 itself unseeded (trigger-only,
+	// per 17466/27383/39296 precedent).
+	{id: 39284, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 2000, trigger: 39280, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39294 "Hellfire - The Exorcism, Jules goes
+	// upright" (wago SpellName MISMATCH vs expected
+	// "Jules Goes Upright" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_JULES_GOES_UPRIGHT,
+	// zone_hellfire_peninsula.cpp:336; Lua
+	// outland/npc_colonel_jules.lua:69, 199 — AddAura on
+	// Jules, exorcism step) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_39283_39284_39294.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY (aura
+	// 4) bp0 die0 tgtA TARGET_UNIT_CASTER; cast28
+	// 3200ms (NEW aux row), dur21 -1 (infinite), range1
+	// Self Only 0yd (other aux rows pre-existing),
+	// school Physical (0x1); SpellCategories row does
+	// NOT exist at all — dispel/mechanic stay 0;
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0x8000180 not carried
+	// (no fields in the seed struct); no triggered
+	// spells.
+	{id: 39294, castTimeIdx: 28, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -12483,6 +12557,7 @@ func main() {
 		{20, 2500, 0},  // real SpellCastTimes 20 for 25263 Holy Light (wago.tools 3.4.0.47659, 2026-11-16 verdict 9cf61680)
 		{170, 8000, 0}, // real SpellCastTimes 170 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 		{50, 1300, 0},  // real SpellCastTimes 50 for 8399 (wago.tools 3.4.0.47659, 2026-11-17 verdict wago_spells_8399_8734_15587.txt)
+		{28, 3200, 0},  // real SpellCastTimes 28 for 39294 (wago.tools 3.4.0.47659 SpellCastTimes row 28, 2026-11-17 verdict wago_spells_39283_39284_39294.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
