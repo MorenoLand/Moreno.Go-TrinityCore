@@ -60,6 +60,7 @@ const (
 	effHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	effLearnSpell              = 36 // SPELL_EFFECT_LEARN_SPELL (SharedDefines.h:847)
 	effDispel                  = 38 // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
+	effDualWield               = 40 // SPELL_EFFECT_DUAL_WIELD (SharedDefines.h:851)
 	effSummon                  = 28
 	effPersistentAreaAura      = 27 // SPELL_EFFECT_PERSISTENT_AREA_AURA (SharedDefines.h)
 	effEnergize                = 30
@@ -13494,6 +13495,27 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 19, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 2000, trigger: 23462, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 42459 "Dual Wield" (Wowhead SpellName MATCH; C++
+	// SPELL_DUAL_WIELD, boss_brutallus.cpp:57, Reset
+	// DoCast(me, SPELL_DUAL_WIELD, true) :113; Lua
+	// sunwellplateau/boss_brutallus.lua:69,222,228 —
+	// triggered self-cast on Reset) — Wowhead WotLK
+	// (verdict file wago_spells_42459.txt; wago
+	// bot-blocked 38th consecutive): eff0 DUAL_WIELD
+	// (effect 40) Value 1 — bp 0, die 1; eff1
+	// APPLY_AURA MOD_HIT_CHANCE (aura 54) 20% —
+	// bp 19, die 1 (63767 precedent, tgtA CASTER);
+	// both tgtA CASTER (triggered self-cast); dur0
+	// (no duration), cast1 instant, range1 Self 0yd
+	// (real row), school Physical. Passive/Is-Ability
+	// flags not carried (seed has no attributes
+	// field). Engine twins: spellEffectDualWield 40
+	// live (spells.go:383,17850), auraModHitChance 54
+	// live (spells.go:619, :34533).
+	{id: 42459, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDualWield, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHitChance, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
