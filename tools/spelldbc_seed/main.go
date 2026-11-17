@@ -13411,6 +13411,48 @@ var spells = []spell{
 	{id: 47057, castTimeIdx: 1, durIdx: 90007, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraTransform, misc: 26267, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 29511 "Repentance" (Wowhead SpellName MATCH; C++
+	// SPELL_REPENTANCE, boss_maiden_of_virtue.cpp:24,
+	// DoCastVictim; Lua karazhan/boss_maiden_of_virtue.lua:18,63
+	// CastSpell(nil, 29511)) — Wowhead WotLK (verdict
+	// file wago_spells_29511_29522_29523_32445.txt):
+	// eff0 SCHOOL_DAMAGE Holy Value 1750 — bp 1750,
+	// die 0 (flat per 35108; not in the tooltip, Wowhead
+	// effect data only); eff1 APPLY_AURA STUN (aura 12)
+	// Value 1 — bp 0, die 1, mechanic 12 (STUN: TC
+	// 3.3.5 Mechanics has NO incapacitate entry, MAX
+	// 32 — Wowhead's "Incapacitated" maps to the
+	// stun aura); both radius 100yd (real row 12) +
+	// tgtA SRC_CASTER tgtB SRC_AREA_ENEMY per the
+	// 15578 self-AoE-with-radius precedent (Range is
+	// Self 0yd; the DoCastVictim framing is the cast
+	// call, the spell itself is self-centered AoE);
+	// spell mechanic 12; cast92003 600ms (synthetic
+	// seed-local row — no real 600ms row in the
+	// table, 92001/92002 precedent), dur29 12000ms
+	// (real row), range1 Self 0yd (real row), school
+	// Holy.
+	{id: 29511, mechanic: 12, castTimeIdx: 92003, durIdx: 29, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1750, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
+	}},
+	// 29522 "Holy Fire" (Wowhead SpellName MATCH; C++
+	// SPELL_HOLYFIRE, boss_maiden_of_virtue.cpp:25,
+	// DoCast on random target within 50yd; Lua
+	// boss_maiden_of_virtue.lua:19,71) — Wowhead WotLK
+	// (same verdict file): eff0 SCHOOL_DAMAGE Fire
+	// Value 3238 — bp 3238, die 0 (flat per 35108;
+	// no upfront number in the tooltip); eff1
+	// APPLY_AURA PERIODIC_DAMAGE (aura 3) Value 1750
+	// every 2s — bp 1749, die 1, auraPeriod 2000;
+	// both tgtA ENEMY; dispel 1 (Magic,
+	// SharedDefines.h:1405); cast4 1000ms (real row),
+	// dur29 12000ms (real row), range37 Extended
+	// 0-50yd (real row), school Fire.
+	{id: 29522, dispel: 1, castTimeIdx: 4, durIdx: 29, rangeIdx: 37, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3238, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 1749, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -13541,6 +13583,7 @@ func main() {
 		{4, 1000, 0}, // real SpellCastTimes 4 for 31266 (wago.tools 3.4.0.43659)
 		{92001, 2000, 0},
 		{92002, 3000, 0},
+		{92003, 600, 0},
 		{2, 250, 0},    // real SpellCastTimes 2 for 65147 (wago.tools 3.4.0.43659)
 		{14, 3000, 0},  // real SpellCastTimes 14 for 67528 (wago.tools 3.4.0.43659)
 		{16, 1500, 0},  // real SpellCastTimes 16 for 66043/67529/67534 (wago.tools 3.4.0.43659)
