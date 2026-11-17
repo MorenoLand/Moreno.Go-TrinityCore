@@ -10797,6 +10797,98 @@ var spells = []spell{
 	{id: 70265, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
 		{effect: effKillCredit2, radiusIdx: 10, misc: 37601, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
 	}},
+	// 22857 "Retaliation" (wago SpellName MATCHES;
+	// C++ SPELL_RETALIATION,
+	// boss_watchkeeper_gargolmar.cpp:43; Lua
+	// hellfireramparts/boss_watchkeeper_gargolmar.lua:95, 204 —
+	// self-cast, scheduled 1s after health first drops
+	// below 50%) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-17 verdict file
+	// wago_spells_22857_30641_34645.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PROC_TRIGGER_SPELL (aura
+	// 42) bp-1 die1 trigger 22858 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur8 15000ms (aux row
+	// pre-existing), range1 Self Only 0yd (aux row
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 132,
+	// DefenseType 2 (Melee), DispelType 0 carried as
+	// dispel 0, Mechanic 0, PreventionType 0x2) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (ProcChance 100, ProcTypeMask 0x28) —
+	// proc fields not carried (no fields in the seed
+	// struct); EffectBonusCoefficient 1 not carried (no
+	// field in the seed struct); Attributes_0 0x50010
+	// not carried (no fields in the seed struct). NOTE:
+	// the triggered spell 22858 is itself unseeded —
+	// the proc tick will resolve to a zero Spell in a
+	// seed-only deployment until 22858 is seeded.
+	{id: 22857, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: -1, dieSides: 1, trigger: 22858, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 30641 "Mortal Wound" (wago SpellName MATCHES;
+	// C++ SPELL_MORTAL_WOUND,
+	// boss_watchkeeper_gargolmar.cpp:41; Lua
+	// hellfireramparts/boss_watchkeeper_gargolmar.lua:93, 175 —
+	// victim-cast, 5s init then {5s,13s}) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_22857_30641_34645.txt, DifficultyID 0
+	// rows): eff0 WEAPON_PERCENT_DAMAGE (effect 31)
+	// bp149 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_HEALING_PCT (aura 118) bp-6 die1
+	// misc 127 (all schools) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur18
+	// 20000ms (aux row pre-existing), range2 Combat
+	// Range 0-5yd Flags 0x1 (aux row pre-existing),
+	// school Physical (0x1); SpellCategories row
+	// EXISTS (Category 0, DefenseType 2 (Melee),
+	// DispelType 0 carried as dispel 0, Mechanic 0,
+	// PreventionType 0x2, StartRecoveryCategory 133)
+	// — category/defense/prevention/recovery not
+	// carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (CumulativeAura 8,
+	// ProcChance 101) — proc fields not carried (no
+	// fields in the seed struct); Attributes_0 0x50010
+	// not carried (no fields in the seed struct).
+	{id: 30641, castTimeIdx: 1, durIdx: 18, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 149, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -6, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34645 "Surge" (wago SpellName MATCHES; C++
+	// SPELL_SURGE, boss_watchkeeper_gargolmar.cpp:42;
+	// Lua hellfireramparts/boss_watchkeeper_gargolmar.lua:94, 191 —
+	// target-cast, 4s init then {5s,13s}) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_22857_30641_34645.txt, DifficultyID 0
+	// rows): eff0 CHARGE (effect 96) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK
+	// (effect 98) bp89 die21 misc 50 tgtA
+	// TARGET_DEST_TARGET_ANY tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY (RadiusIndex_1 13
+	// NOT carried — 19703 precedent, only _0 is
+	// carried); eff2 SCHOOL_DAMAGE (effect 2) bp89
+	// die21 radiusIdx_0 13 (10yd, aux row pre-existing)
+	// tgtA TARGET_DEST_TARGET_ANY tgtB
+	// TARGET_UNIT_DEST_AREA_ENEMY; cast1 instant, dur0
+	// (no SpellDuration row 0; 10934 precedent),
+	// range5 Long Range 0-40yd (aux row pre-existing),
+	// school Physical (0x1); SpellCategories row
+	// EXISTS (Category 0, DefenseType 1 (Magic),
+	// DispelType 0 carried as dispel 0, Mechanic 0,
+	// PreventionType 0x1) — category/defense/
+	// prevention/recovery not carried (no fields in
+	// the seed struct); NO SpellAuraOptions row;
+	// EffectBonusCoefficient 1 on eff1/eff2 not
+	// carried (no field in the seed struct);
+	// Attributes_0 0x80010 / Attributes_1 0x88 not
+	// carried (no fields in the seed struct).
+	{id: 34645, castTimeIdx: 1, durIdx: 0, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 89, dieSides: 21, misc: 50, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 89, dieSides: 21, radiusIdx: 13, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
