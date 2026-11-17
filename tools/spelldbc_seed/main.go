@@ -13537,6 +13537,43 @@ var spells = []spell{
 	{id: 32264, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraHasteSpells, basePoints: -51, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91010, chainAmplitude: 1},
 	}},
+	// 8732 "Thunderclap" (Wowhead SpellName MATCH; C++
+	// SPELL_THUNDERCLAP, blackrock_depths.cpp:360
+	// (npc_phalanx), victim-cast; Lua
+	// eastern_kingdoms/npc_phalanx.lua:32 — 12s init
+	// then 10s) — Wowhead WotLK (verdict file
+	// wago_spells_8732_35327.txt; wago NOT attempted —
+	// effect row complete): single eff0 SCHOOL_DAMAGE
+	// Nature tooltip 204-276 — bp 203, die 73; tgtA
+	// SRC_CASTER tgtB SRC_AREA_ENEMY (caster-centred
+	// AoE, "Treat as Area Effect" flag) + radiusIdx 20
+	// 25yd (real row); mechanic 11 (SNARE,
+	// SharedDefines.h:1368); cast1 instant, dur0 (no
+	// duration), range3 Twenty 0-20yd (real row),
+	// school Nature. NOT carried: "Spell damage depends
+	// on caster level" (RealPointsPerLevel; no field in
+	// the seed struct — cf. 15548). Wowhead Used-by
+	// lists only Lord Kazzak, not Phalanx — C++ enum +
+	// DoCast authoritative per the maker precedent
+	// (20276/25772/30925). HELD this batch: 35327
+	// Jackhammer (see below).
+	{id: 8732, mechanic: 11, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 203, dieSides: 73, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 20, chainAmplitude: 1},
+	}},
+	// 35327 "Jackhammer" HELD — NOT seeded: Wowhead name
+	// MATCH but eff2 has NO row on the page (jumps eff1
+	// -> eff3) and the tooltip/buff show a literal 0%
+	// attack-speed reduction, so the haste-mod leg is
+	// unverifiable; eff1 periodically triggers 35330
+	// "Jackhammer Effect" every 1s, whose data is also
+	// unread (no wago attempt made — Wowhead showed
+	// effect rows, so the fallback never triggered).
+	// Seeding a 2-of-3 row with a hollow middle leg
+	// would fabricate it — hold until 35330 is read
+	// and eff2 is resolved (wago). C++
+	// SPELL_JACKHAMMER, boss_gatewatcher_ironhand.cpp:43,
+	// TRIGGERED DoCastVictim :103; Lua mechanar/
+	// boss_gatewatcher_iron_hand.lua:57,127.
 	// 16708 "Hex" HELD — NOT seeded: Wowhead name MATCH
 	// but eff0 Change Model (Snake) shows NO Value, so
 	// the transform MiscValue (snake model/creature ID)
