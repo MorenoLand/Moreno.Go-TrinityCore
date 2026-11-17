@@ -9313,6 +9313,79 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1},
 		{effect: effSchoolDamage, basePoints: 59, dieSides: 21, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1},
 	}},
+	// 11428 "Knockdown" (wago SpellName MATCHES;
+	// Lua SPELL_KNOCKDOWN,
+	// eastern_kingdoms/boss_eramas_brightblaze.lua:69,
+	// 28 — victim-cast, 6s init, 12s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_11428_15503_46182.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STUN (aura 12) bp0
+	// die0 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// SCHOOL_DAMAGE bp31 die17 (in-game 32-48)
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur39 2000ms (aux row pre-existing), range2
+	// Combat Range 0-5yd (aux row pre-existing),
+	// school Physical, mechanic 12 (SpellCategories
+	// Mechanic 12); NO SpellAuraOptions row;
+	// EffectRealPointsPerLevel 1.5 / Attributes_0
+	// 0x40010 not carried (no fields in the seed
+	// struct).
+	{id: 11428, castTimeIdx: 1, durIdx: 39, rangeIdx: 2, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 31, dieSides: 17, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 15503 "Drink Healing Potion" (wago SpellName
+	// MISMATCH vs Lua/C++ label "Healing Potion";
+	// data fits the Lua use, seeded on data per the
+	// warp_splinter 6262 precedent — Lua
+	// SPELL_HEALING_POTION,
+	// eastern_kingdoms/boss_eramas_brightblaze.lua:71,
+	// 33 — HealthBelowPct(25) self-cast heal) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_11428_15503_46182.txt, DifficultyID 0
+	// rows): eff0 HEAL (effect 10) bp393 die63
+	// (in-game 394-456) tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur0 (no SpellDuration row),
+	// range1 Self Only 0yd (aux row pre-existing),
+	// school Holy; NO SpellAuraOptions row;
+	// EffectAmplitude 1 / Category 25 /
+	// Attributes_0 0xc0010 / DefenseType 1 /
+	// PreventionType 0x1 not carried (no fields in
+	// the seed struct).
+	{id: 15503, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolHoly, effects: [3]effect{
+		{effect: effHeal, basePoints: 393, dieSides: 63, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46182 "Snap Kick" (wago SpellName MATCHES;
+	// C++ SPELL_SNAP_KICK,
+	// boss_priestess_delrissa.cpp:684; Lua
+	// SPELL_SNAP_KICK,
+	// eastern_kingdoms/boss_eramas_brightblaze.lua:70,
+	// 30 — victim-cast, 4.5s init, 12s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_11428_15503_46182.txt, DifficultyID 0
+	// rows): eff0 WEAPON_PERCENT_DAMAGE (effect 31)
+	// bp9 die1 (in-game 10%) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 INTERRUPT_CAST
+	// (effect 68) bp0 die0 mechanic 26 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff2 APPLY_AURA
+	// MOD_SILENCE (aura 27) bp0 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur39
+	// 2000ms (aux row pre-existing), range2 Combat
+	// Range 0-5yd (aux row pre-existing), school
+	// Physical; SpellAuraOptions row EXISTS (ID
+	// 184074, ProcChance 101, ProcTypeMask 0x0 —
+	// not carried, no fields in the seed struct);
+	// BonusCoefficient 1 (eff2) / Attributes_0
+	// 0x50010 / DefenseType 2 / PreventionType 0x2
+	// not carried (no fields in the seed struct).
+	{id: 46182, castTimeIdx: 1, durIdx: 39, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 9, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effInterruptCast, basePoints: 0, dieSides: 0, mechanic: 26, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSilence, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
