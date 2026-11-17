@@ -9455,6 +9455,91 @@ var spells = []spell{
 	{id: 20691, castTimeIdx: 1, durIdx: 0, rangeIdx: 11, school: schoolPhysical, effects: [3]effect{
 		{effect: effWeaponDamage, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 0.66},
 	}},
+	// 23462 "Fire Nova" (wago SpellName MATCHES;
+	// C++ SPELL_FIRENOVA,
+	// boss_drakkisath.cpp:24; Lua
+	// eastern_kingdoms/boss_drakkisath.lua:44, 27 —
+	// victim-cast, 6s init, 10s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_23462_16805_15548.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp554 die91
+	// (in-game 555-645) misc 12 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self Only
+	// 0yd (aux row pre-existing), school Fire; NO
+	// SpellAuraOptions row; BonusCoefficient 1 /
+	// Attributes_0 0x10000 / Attributes_1 0x88 /
+	// Attributes_2 0x4 / DefenseType 1 /
+	// PreventionType 0x1 not carried (no fields in
+	// the seed struct).
+	{id: 23462, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 554, dieSides: 91, misc: 12, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 16805 "Conflagration" (wago SpellName MATCHES;
+	// C++ SPELL_CONFLIGURATION,
+	// boss_drakkisath.cpp:26; Lua
+	// eastern_kingdoms/boss_drakkisath.lua:46, 29 —
+	// victim-cast, 15s init, 18s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_23462_16805_15548.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE (aura
+	// 3) bp299 die1 auraPeriod 1000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// MOD_CONFUSE (aura 5) bp0 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff2 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die1
+	// auraPeriod 1000 trigger 16806 (periodic
+	// scorch, trigger-only, NOT seeded per repo
+	// convention) tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur1 10000ms (aux row
+	// pre-existing), range4 Medium Range 0-30yd
+	// (aux row pre-existing), school Fire; NO
+	// SpellAuraOptions row; NO SpellCategories row
+	// (mechanic 0, dispel 0); BonusCoefficient 1
+	// (eff1/eff2) / Attributes_0 0x800 not carried
+	// (no fields in the seed struct).
+	{id: 16805, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 299, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModConfuse, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 16806, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 15548 "Thunderclap" (wago SpellName MATCHES —
+	// resolves the C++ "Not sure if right ID. 23931
+	// would be a harder possibility."
+	// boss_drakkisath.cpp:27 caveat in favor of
+	// 15548; Lua SPELL_THUNDERCLAP,
+	// eastern_kingdoms/boss_drakkisath.lua:47, 30 —
+	// victim-cast, 17s init, 20s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_23462_16805_15548.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp34 die5 (in-game
+	// 35-39) radius13 10yd tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; eff1
+	// APPLY_AURA MOD_DECREASE_SPEED (aura 33) bp-41
+	// die1 mechanic 11 radius13 tgtA src-caster
+	// tgtB src-area-enemy; eff2 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp-34 die1
+	// radius13 tgtA src-caster tgtB src-area-enemy;
+	// cast1 instant, dur1 10000ms (aux row
+	// pre-existing), range1 Self Only 0yd (aux row
+	// pre-existing), school Nature, dispel 1
+	// (Magic), mechanic 11 (SpellCategories
+	// Mechanic 11); NO SpellAuraOptions row;
+	// BonusCoefficient 1 / RealPointsPerLevel 1 /
+	// -0.5 / Category 22 / Attributes_0 0x10000 /
+	// Attributes_1 0x88 / Attributes_5 0x8000 /
+	// DefenseType 1 / PreventionType 0x1 /
+	// StartRecoveryCategory 133 not carried (no
+	// fields in the seed struct).
+	{id: 15548, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolNature, dispel: 1, mechanic: 11, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 34, dieSides: 5, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -41, dieSides: 1, mechanic: 11, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -34, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
