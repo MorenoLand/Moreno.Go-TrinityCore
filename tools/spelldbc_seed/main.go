@@ -11247,6 +11247,89 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModFear, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: 24, dieSides: 1, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 52666 "Disease Expulsion" (wago SpellName MATCHES;
+	// C++ SPELL_DISEASE_EXPULSION, boss_meathook.cpp:26;
+	// Lua kalimdor/boss_meathook.lua:82, 191 — self-cast
+	// (DoCastAOE), EVENT_DISEASE) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_52666_52696_58841.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp712
+	// die75 radiusIdx_0 13 (10yd, aux row pre-existing)
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 INTERRUPT_CAST
+	// (effect 68) bp0 die0 radiusIdx_0 13 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY
+	// EffectMechanic 26 carried as effect mechanic 26;
+	// cast1 instant, dur35 4000ms, range1 Self Only 0yd
+	// (aux rows pre-existing), school Nature (0x8);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed
+	// struct); SpellAuraOptions row EXISTS
+	// (CumulativeAura 0, ProcChance 101) — not carried
+	// (no fields in the seed struct); Attributes_0 16 /
+	// Attributes_1 136 / Attributes_2 4 not carried (no
+	// fields in the seed struct).
+	{id: 52666, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 712, dieSides: 75, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effInterruptCast, mechanic: 26, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 52696 "Constricting Chains" (wago SpellName MATCHES;
+	// C++ SPELL_CONSTRICTING_CHAINS, boss_meathook.cpp:25;
+	// Lua kalimdor/boss_meathook.lua:81, 170/174 —
+	// random-target or victim cast, EVENT_CONSTRICTING) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_52666_52696_58841.txt, DifficultyID 0
+	// rows, Misc/Radius/Implicit re-verified on a second
+	// fresh read): eff0 APPLY_AURA PERIODIC_DAMAGE
+	// (aura 3) bp999 die1 auraPeriod 1000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA MOD_STUN
+	// (aura 12) bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur28 5000ms, range37 Extended
+	// 0-50yd (aux rows pre-existing), school Physical
+	// (0x1); SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 12
+	// carried as mechanic 12, PreventionType 1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (CumulativeAura 0, ProcChance 101) —
+	// not carried (no fields in the seed struct);
+	// Attributes_0 16 / Attributes_3 256 not carried
+	// (no fields in the seed struct).
+	{id: 52696, castTimeIdx: 1, durIdx: 28, rangeIdx: 37, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 999, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 58841 "Frenzy" (wago SpellName MATCHES; C++
+	// SPELL_FRENZY, boss_meathook.cpp:27; Lua
+	// kalimdor/boss_meathook.lua:83, 206 — self-cast,
+	// EVENT_FRENZY) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-17 verdict file
+	// wago_spells_52666_52696_58841.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_SCALE (aura 61, C++
+	// SpellAuraDefines.h:141) bp9 die1 misc 1 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE (aura 79,
+	// SpellAuraDefines.h:159) bp9 die1 misc 1 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur9 (aux row
+	// 30000ms pre-existing — CONFLICT: this verdict
+	// reads SpellDuration 9 as 3000ms, but the 2026-11-15
+	// 49519 verdict reads 30000ms and 5 seeded spells
+	// (49519/44335/70227/22011/38067) rely on durIdx 9;
+	// keeping 30000, re-verify SpellDuration 9 on a
+	// future wago read), range1 Self Only 0yd (aux row
+	// pre-existing), school Physical (0x1); NO
+	// SpellCategories row; SpellAuraOptions row EXISTS
+	// (CumulativeAura 10, ProcChance 101) — not carried
+	// (no fields in the seed struct); Attributes_0
+	// 262160 / Attributes_3 268435456 not carried (no
+	// fields in the seed struct).
+	{id: 58841, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModScale, basePoints: 9, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 9, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
