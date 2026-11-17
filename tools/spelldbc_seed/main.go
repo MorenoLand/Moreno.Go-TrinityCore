@@ -13281,8 +13281,11 @@ var spells = []spell{
 	// mechanic 1 (MECHANIC_CHARM,
 	// SharedDefines.h:1358); eff1 APPLY_AURA TRANSFORM
 	// (aura 56; Wowhead "Change Model (Minion of
-	// Weavil)") Value 1 — bp 0, die 1, no MiscValue
-	// shown (model id unknown, left 0); both tgtA
+	// Weavil)") Value 1 — bp 0, die 1, misc 15591
+	// (Minion of Weavil creature entry, TDB
+	// creature_template modelids 15560/15559/15558;
+	// HandleAuraTransform reads MiscValue as the
+	// creature entry, pig 16358 fallback); both tgtA
 	// ENEMY; dispel 1 (Magic, SharedDefines.h:1405),
 	// spell mechanic 1; cast1 instant, dur4 120000ms
 	// (real row), range13 Anywhere 0-50000yd (real
@@ -13292,7 +13295,7 @@ var spells = []spell{
 	// buff text / model name is DBC-faithful as shown.
 	{id: 25772, dispel: 1, mechanic: 1, castTimeIdx: 1, durIdx: 4, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModCharm, mechanic: 1, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
-		{effect: effApplyAura, aura: auraTransform, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, misc: 15591, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 	// 30925 "Exploding Beaker" (Wowhead SpellName is
 	// "Exploding Beaker", not "Exploding Breaker" —
