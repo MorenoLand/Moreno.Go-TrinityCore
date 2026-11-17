@@ -10509,6 +10509,77 @@ var spells = []spell{
 		{effect: effSummon, basePoints: -1, dieSides: 1, misc: 36710, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraRoot, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 50276 "Chuck Mug" (wago SpellName MATCHES;
+	// C++ SPELL_CHUCK_MUG,
+	// boss_coren_direbrew.cpp:68; Lua
+	// eastern_kingdoms/npc_coren_direbrew_sisters.lua:50, 107 —
+	// target-cast, 4s re-arm) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_50276_50278_52850.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// (effect 2) bp2924 die151 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast14 3000ms (aux
+	// row pre-existing), dur0 (no SpellDuration row
+	// 0; 10934 precedent), range5 Long Range 0-40yd
+	// (aux row pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0 carried
+	// as dispel 0, Mechanic 0, PreventionType 0x1,
+	// StartRecoveryCategory 133) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; Speed 24 / Attributes_0 0x90000 not
+	// carried (no fields in the seed struct).
+	{id: 50276, castTimeIdx: 14, durIdx: 0, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2924, dieSides: 151, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 50278 "Barreled Control Aura" (wago SpellName
+	// MATCHES; C++ SPELL_BARRELED_CONTROL_AURA,
+	// boss_coren_direbrew.cpp:76; Lua
+	// eastern_kingdoms/npc_coren_direbrew_sisters.lua:48, 119 —
+	// self-cast, triggers SPELL_BARRELED 47442 every
+	// 18s) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_50276_50278_52850.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// (aura 23) bp0 die0 auraPeriod 18000 trigger
+	// 47442 tgtA TARGET_UNIT_CASTER (auraPeriodicTrig
+	// + trigger + auraPeriod per the 63322/65100
+	// precedent); cast1 instant, dur21 -1 infinite
+	// (aux row pre-existing), range1 Self Only 0yd
+	// (aux row pre-existing), school Physical (0x1);
+	// NO SpellCategories row; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x100 / Attributes_1 0x10000000
+	// not carried (no fields in the seed struct).
+	// NOTE: the triggered spell 47442 (SPELL_BARRELED)
+	// is itself unseeded — the 18s trigger tick will
+	// resolve to a zero Spell in a seed-only
+	// deployment until 47442 is seeded.
+	{id: 50278, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 18000, trigger: 47442, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52850 "Port to Coren" (wago SpellName MATCHES;
+	// C++ SPELL_PORT_TO_COREN,
+	// boss_coren_direbrew.cpp:69; Lua
+	// eastern_kingdoms/npc_coren_direbrew_sisters.lua:47, 117 —
+	// self-cast) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-17 verdict file
+	// wago_spells_50276_50278_52850.txt, DifficultyID 0
+	// rows): eff0 TELEPORT_UNITS (effect 5) tgtA
+	// TARGET_UNIT_CASTER tgtB TARGET_DEST_NEARBY_ENTRY
+	// (29967 effTeleportUnits + targetDestNearbyEntry
+	// precedent); cast1 instant, dur0 (no
+	// SpellDuration row 0; 10934 precedent), range13
+	// Anywhere - Unlimited 0-50000yd (aux row
+	// pre-existing), school Physical (0x1); NO
+	// SpellCategories row; NO SpellAuraOptions row;
+	// Attributes_0 0x100 / Attributes_2 0x4 not
+	// carried (no fields in the seed struct).
+	{id: 52850, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effTeleportUnits, targetA: targetCaster, targetB: targetDestNearbyEntry, chainAmplitude: 1},
+	}},
 }
 
 func main() {
