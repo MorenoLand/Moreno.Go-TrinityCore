@@ -9709,6 +9709,58 @@ var spells = []spell{
 		{},
 		{effect: effWeaponDamage, basePoints: 22, dieSides: 1, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 24673 "Curse of Blood" (wago SpellName MATCHES;
+	// C++ SPELL_CURSE_OF_BLOOD,
+	// boss_jandice_barov.cpp:24; Lua
+	// eastern_kingdoms/boss_jandice_barov.lua:45, 91 —
+	// victim-cast, 15s init -> 30s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_24673_17773_26096.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_TAKEN
+	// (aura 14) bp499 die1 misc 1 radiusIdx 18
+	// (15yd, aux row pre-existing) tgtA
+	// TARGET_UNIT_DEST_AREA_ENEMY; cast1 instant,
+	// dur6 600000ms (aux row pre-existing),
+	// range3 Twenty yards 0-20yd (aux row
+	// pre-existing), school Shadow (0x20),
+	// dispel 2 (CURSE, from SpellCategories);
+	// SpellCategories row EXISTS (Category 36,
+	// DefenseType 1, Mechanic 0, PreventionType
+	// 0x1) — category/defense/prevention not
+	// carried (no fields in the seed struct); NO
+	// SpellAuraOptions row; Speed 60 /
+	// Attributes_0–13 all 0x0 not carried.
+	{id: 24673, castTimeIdx: 1, durIdx: 6, rangeIdx: 3, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 499, dieSides: 1, radiusIdx: 18, misc: 1, targetA: targetUnitDestAreaEnemy, chainAmplitude: 1},
+	}},
+	// 17773 "Summon Illusions" (wago SpellName
+	// MISMATCH — expected "Illusion", DB2 name is
+	// "Summon Illusions"; seeded on data per the
+	// eramas_brightblaze 15503 precedent; C++
+	// SPELL_ILLUSION, boss_jandice_barov.cpp:25;
+	// Lua eastern_kingdoms/boss_jandice_barov.lua:46,
+	// 123 — self-cast, 30s init -> 25s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_24673_17773_26096.txt, DifficultyID 0
+	// rows): eff0 SUMMON (effect 28) bp14 die1
+	// misc 11439 (summon entry) miscB 61
+	// (SummonProperties row pre-existing) tgtA
+	// TARGET_DEST_CASTER; cast1 instant, dur9
+	// 30000ms (aux row pre-existing), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Shadow (0x20); NO SpellAuraOptions row; NO
+	// SpellCategories row; BonusCoefficient 1 /
+	// Attributes_0–13 all 0x0 not carried (no
+	// fields in the seed struct). 26096 (C++
+	// SPELL_DROP_JOURNAL) NOT seeded — no rows
+	// for ID 26096 in build 3.4.0.47659 (verdict
+	// file); unseedable, joins 22540/59046/65296/
+	// 68783.
+	{id: 17773, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSummon, basePoints: 14, dieSides: 1, misc: 11439, miscB: 61, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
