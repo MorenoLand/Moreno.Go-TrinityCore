@@ -10054,6 +10054,82 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraSchoolAbsorb, basePoints: 399, dieSides: 1, misc: 0x7f, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDamageShield, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 16104 "Crystallize" (wago SpellName MISMATCH vs
+	// C++/Lua "Crystalize" (one L); seeded on data
+	// per the eramas_brightblaze 15503 precedent;
+	// C++ SPELL_CRYSTALIZE,
+	// boss_mother_smolderweb.cpp:24; Lua
+	// eastern_kingdoms/boss_mother_smolderweb.lua:52, 88 —
+	// self-cast, 20s init -> 15s) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_16104_16468_16103.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STUN (aura 12)
+	// bp0 die0 radiusIdx 13 (10yd, aux row
+	// pre-existing) tgtA TARGET_UNIT_CONE_ENEMY;
+	// cast1 instant, dur32 6000ms (aux row
+	// pre-existing), range2 Combat Range 0-5yd
+	// (aux row pre-existing), school Arcane
+	// (0x40); SpellCategories row EXISTS
+	// (Category 33, DefenseType 0, DispelType 1
+	// (MAGIC) carried as dispel 1, Mechanic 12
+	// (STUN) carried as spell mechanic per the
+	// 24110/8122 precedent, PreventionType 0x0,
+	// StartRecoveryCategory 0) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; EffectBonusCoefficient 0 /
+	// EffectRealPointsPerLevel 0 not carried (no
+	// fields in the seed struct).
+	{id: 16104, castTimeIdx: 1, durIdx: 32, rangeIdx: 2, school: schoolArcane, dispel: 1, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, radiusIdx: 13, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 16468 "Mother's Milk" (wago SpellName MATCHES;
+	// C++ SPELL_MOTHERSMILK,
+	// boss_mother_smolderweb.cpp:25; Lua
+	// eastern_kingdoms/boss_mother_smolderweb.lua:53, 97 —
+	// self-cast, 10s init) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_16104_16468_16103.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY
+	// (aura 4) bp0 die1 radiusIdx 13 (10yd, aux
+	// row pre-existing) tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; cast1
+	// instant, dur21 -1 infinite (aux row
+	// pre-existing), range7 Ten yards 0-10yd
+	// (aux row pre-existing), school Nature
+	// (0x8); SpellCategories row EXISTS (Category
+	// 0, DefenseType 0, DispelType 4 (POISON)
+	// carried as dispel 4, Mechanic 0,
+	// PreventionType 0x0, StartRecoveryCategory
+	// 0) — category/defense/prevention/recovery
+	// not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; EffectBonusCoefficient
+	// 1 / EffectRealPointsPerLevel 0 not carried
+	// (no fields in the seed struct).
+	{id: 16468, castTimeIdx: 1, durIdx: 21, rangeIdx: 7, school: schoolNature, dispel: 4, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 16103 "Summon Spire Spiderling" (wago SpellName MATCHES;
+	// C++ SPELL_SUMMON_SPIRE_SPIDERLING,
+	// boss_mother_smolderweb.cpp:26; Lua
+	// eastern_kingdoms/boss_mother_smolderweb.lua:54, 143 —
+	// self-cast, triggered) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_16104_16468_16103.txt,
+	// DifficultyID 0 rows): eff0 SUMMON (effect
+	// 28) bp3 die1 misc 10375 (summon entry)
+	// miscB 64 (SummonProperties row pre-existing)
+	// tgtA TARGET_DEST_CASTER; cast1 instant,
+	// dur21 -1 infinite (aux row pre-existing),
+	// range1 Self Only 0yd (aux row pre-existing),
+	// school Physical; NO SpellCategories row;
+	// NO SpellAuraOptions row; BonusCoefficient 1
+	// / Attributes_2 0x4 not carried (no fields
+	// in the seed struct).
+	{id: 16103, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 3, dieSides: 1, misc: 10375, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
