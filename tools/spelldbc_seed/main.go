@@ -13166,6 +13166,89 @@ var spells = []spell{
 	{id: 36115, castTimeIdx: 1, rangeIdx: 93009, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, radiusIdx: 7, chainAmplitude: 1},
 	}},
+	// 45150 "Meteor Slash" (Wowhead SpellName MATCH; C++
+	// SPELL_METEOR_SLASH, boss_brutallus.cpp:53; Lua
+	// eastern_kingdoms/boss_brutallus.lua:107, 161 —
+	// DoCastVictim) — Wowhead WotLK (2026-11-17 verdict
+	// file wago_spells_45150_45185_46394.txt): eff0
+	// SCHOOL_DAMAGE Fire single Value 20000, radius
+	// 65yd — flat (bp 20000, die 0) per 35108
+	// precedent; "split between enemy targets within
+	// 65 yards in front of the caster" — tgtA CONE_ENEMY
+	// (24) + radius24 65yd (real row) per the 38576
+	// cone precedent; the split-among-targets leg is
+	// engine work, not seeded; eff1 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_TAKEN (aura 87) displayed
+	// 75% (Fire) — bp 74, die 1, misc 4 (Fire school
+	// mask, 1<<2) per the 380/391 misc-as-school-mask
+	// precedent; same cone target + radius; cast4
+	// 1000ms (real row), dur90011 40000ms (synthetic
+	// seed-local row — no real 40s row verified),
+	// range1 Self 0yd (real row), school Fire.
+	{id: 45150, castTimeIdx: 4, durIdx: 90011, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 20000, dieSides: 0, targetA: targetUnitConeEnemy, radiusIdx: 24, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgTaken, dieSides: 1, basePoints: 74, misc: 4, targetA: targetUnitConeEnemy, radiusIdx: 24, chainAmplitude: 1},
+	}},
+	// 45185 "Stomp" (Wowhead SpellName MATCH; C++
+	// SPELL_STOMP, boss_brutallus.cpp:55; Lua
+	// eastern_kingdoms/boss_brutallus.lua:109, 170 —
+	// DoCastVictim) — Wowhead WotLK (same verdict
+	// file): eff0 SCHOOL_DAMAGE Physical tooltip
+	// 18850–21150 — bp 18849, die 2301; eff1 APPLY_AURA
+	// MOD_RESISTANCE_PCT (aura 101,
+	// SPELL_AURA_MOD_RESISTANCE_PCT,
+	// SpellAuraDefines.h:181) displayed -50%
+	// (Physical) — bp -51, die 1, misc 1 (Physical
+	// school mask, 1<<0; the engine folds aura 101
+	// per-school off MiscValue, aura_resistance.go:113);
+	// eff2 SCRIPT_EFFECT (eff 77) Value 1 — bp 0,
+	// die 1 (the "removes the Burn effect" leg has no
+	// Go script-effect case yet — seeded faithfully);
+	// all tgtA ENEMY; cast1 instant, dur1 10000ms
+	// (real row), range2 Combat 0-5yd (real row),
+	// school Physical.
+	{id: 45185, castTimeIdx: 1, durIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 18849, dieSides: 2301, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistPct, dieSides: 1, basePoints: -51, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 46394 "Burn" (Wowhead SpellName MATCH; C++
+	// SPELL_BURN, boss_brutallus.cpp:54; Lua
+	// eastern_kingdoms/boss_brutallus.lua:108, 178 —
+	// target->CastSpell(target, 46394, true)) —
+	// Wowhead WotLK (same verdict file): eff0 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) displayed 100 every 1s
+	// — bp 99, die 1, auraPeriod 1000; eff1 APPLY_AURA
+	// PERIODIC_TRIGGER (aura 23) Interval 1s, trigger
+	// 45151 (follow-up read, same verdict file), no
+	// Value shown — bp 0, die 1, auraPeriod 1000;
+	// both tgtA ENEMY (the burn victim); cast1
+	// instant, dur3 60000ms (real row), range13
+	// Anywhere 0-50000yd (real row), school Fire.
+	{id: 46394, castTimeIdx: 1, durIdx: 3, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 99, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 1000, trigger: 45151, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 45151 "Burn" (Wowhead SpellName MATCH; periodic
+	// tick triggered by 46394 eff1 every 1s; no C++
+	// enum — trigger-only spell) — Wowhead WotLK
+	// (same verdict file): single eff0 SCRIPT_EFFECT
+	// (eff 77) Radius 2yd, no Value shown — bp 0,
+	// die 1, radiusIdx 7 (2yd real row); tgtA
+	// SRC_CASTER tgtB SRC_AREA_ALLY (the spread
+	// targets nearby allied players; 827/2100 pair
+	// precedent); engine-leg note: the Go 45151 case
+	// (spells.go:53894) skips hit targets WITHIN the
+	// radius and ignites those at/beyond it, so with
+	// a 2yd gathering radius the spread only fires
+	// at the exact boundary — the leg's radius
+	// semantics need a look, the seed row is
+	// DBC-faithful as shown; cast1 instant, range13
+	// Anywhere 0-50000yd, school Fire; no
+	// SpellDuration row.
+	{id: 45151, castTimeIdx: 1, rangeIdx: 13, school: schoolFire, effects: [3]effect{
+		{effect: effScriptEffect, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 7, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -13208,6 +13291,7 @@ func main() {
 		{90008, 604800000, 0, 604800000},
 		{90009, 4000, 0, 4000},
 		{90010, 500, 0, 500},
+		{90011, 40000, 0, 40000},
 		{4, 120000, 0, 120000},     // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},       // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
