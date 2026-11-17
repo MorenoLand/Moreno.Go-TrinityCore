@@ -11815,6 +11815,86 @@ var spells = []spell{
 	{id: 38718, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 2137, dieSides: 225, auraPeriod: 1000, radiusIdx: 20, targetA: targetDestCaster, targetB: targetDestDynobjEnemy, chainAmplitude: 1},
 	}},
+	// 19428 "Conflagration" (wago SpellName MISMATCH vs
+	// expected "Lava Bomb" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_LAVA_BOMB, boss_magmadar.cpp:40; Lua
+	// moltencore/boss_magmadar.lua:42, 132 — cast on a
+	// picked target, EVENT_LAVA_BOMB) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_19428_19449_19451.txt, DifficultyID 0
+	// rows): 1 effect only, APPLY_AURA PERIODIC_DAMAGE
+	// (aura 3) bp399 die1 auraPeriod 1000 radiusIdx 8
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur31
+	// 8000ms, range1 Self Only 0yd, radius8 5yd (aux
+	// rows pre-existing), school Fire (0x4);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x0 /
+	// Attributes_1 0x88 / Attributes_2 0x4 not carried
+	// (no fields in the seed struct).
+	{id: 19428, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 399, dieSides: 1, auraPeriod: 1000, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 19449 "Magma Spit" (wago SpellName MATCHES; C++
+	// SPELL_MAGMA_SPIT, boss_magmadar.cpp:38; Lua
+	// moltencore/boss_magmadar.lua:40, 187 — triggered
+	// self-cast, EVENT_MAGMA_SPIT) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_19428_19449_19451.txt, DifficultyID 0
+	// rows): 1 effect only, APPLY_AURA
+	// PROC_TRIGGER_SPELL (aura 42) bp0 die0 trigger
+	// 19450 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur21 -1 (infinite), range1 Self Only 0yd (aux
+	// rows pre-existing), school Fire (0x4);
+	// SpellCategories row does NOT exist at all (first
+	// such case in this seed run) — dispel/mechanic
+	// stay 0; SpellAuraOptions row EXISTS (ProcChance
+	// 20, ProcTypeMask_0 0x28, ProcCategoryRecovery
+	// 3000) — proc chance/type NOT carried (no fields
+	// in the seed struct); Attributes_0 0x140 and
+	// EffectBonusCoefficient 1 not carried (no fields
+	// in the seed struct); NOTE triggered 19450 itself
+	// unseeded.
+	{id: 19449, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, trigger: 19450, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 19451 "Enrage" (wago SpellName MISMATCH vs expected
+	// "Frenzy" — seeded on data per quel'danas/
+	// ghostly-citizen precedent; C++ SPELL_FRENZY,
+	// boss_magmadar.cpp:37; Lua
+	// moltencore/boss_magmadar.lua:39, 80 — self-cast,
+	// EVENT_FRENZY) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-17 verdict file
+	// wago_spells_19428_19449_19451.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_MELEE_HASTE (aura 138)
+	// bp149 die1 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_SCALE (aura 61) bp19 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die0
+	// auraPeriod 4000 trigger 19272 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur31 8000ms,
+	// range1 Self Only 0yd (aux rows pre-existing),
+	// school Physical (0x1), dispel 9 (Enrage,
+	// SpellCategories DispelType 9); SpellCategories row
+	// EXISTS (Category 0, DefenseType 1 (Magic),
+	// Mechanic 0, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes all 0 and
+	// EffectBonusCoefficient 1 (all three effects) not
+	// carried (no fields in the seed struct); NOTE
+	// triggered 19272 itself unseeded.
+	{id: 19451, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolPhysical, dispel: 9, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 149, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 4000, trigger: 19272, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
