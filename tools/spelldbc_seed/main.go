@@ -10322,6 +10322,99 @@ var spells = []spell{
 	{id: 46153, castTimeIdx: 1, durIdx: 28, rangeIdx: 36, school: schoolArcane, dispel: 1, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicManaLeech, basePoints: 499, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 15588 "Thunderclap" (wago SpellName MATCHES;
+	// C++ SPELL_THUNDERCLAP,
+	// boss_vanndar.cpp:34; Lua
+	// eastern_kingdoms/boss_vanndar.lua:44, 87 —
+	// victim-cast, 4s init -> {5,15}s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_15588_19135_20685.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE (effect 2) bp70
+	// die9 radiusIdx 13 (10yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 APPLY_AURA
+	// MOD_DECREASE_SPEED (aura 33) bp-41 die1
+	// mechanic 11 radiusIdx 13 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY (per-effect
+	// mechanic carried per the auraDecSpeed
+	// bp-41 mechanic 11 precedent); eff2 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp-34 die1
+	// radiusIdx 13 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur1 10000ms (aux row pre-existing), range1
+	// Self Only 0yd (aux row pre-existing), school
+	// Nature (0x8); SpellCategories row EXISTS
+	// (Category 22, DefenseType 1 (Magic), DispelType
+	// 1 (MAGIC) carried as dispel 1, Mechanic 11
+	// carried as spell mechanic per the 24110/8122
+	// precedent, PreventionType 0x1,
+	// StartRecoveryCategory 133) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; Attributes_0 0x10000 / Attributes_1 0x88 /
+	// Attributes_5 0x8000 not carried (no fields in
+	// the seed struct); EffectRealPointsPerLevel -0.5
+	// (eff1) not carried (no fields in the seed
+	// struct).
+	{id: 15588, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolNature, dispel: 1, mechanic: 11, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 70, dieSides: 9, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -41, dieSides: 1, mechanic: 11, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -34, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 19135 "Avatar" (wago SpellName MATCHES;
+	// C++ SPELL_AVATAR,
+	// boss_vanndar.cpp:33; Lua
+	// eastern_kingdoms/boss_vanndar.lua:43, 79 —
+	// victim-cast, 3s init -> {15,20}s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_15588_19135_20685.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// (aura 79) bp49 die1 misc 1 (Physical school
+	// mask) tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_RESISTANCE_PCT (aura 101) bp49 die1 misc 1
+	// (Physical school mask) tgtA TARGET_UNIT_CASTER;
+	// eff2 APPLY_AURA MOD_SCALE (aura 61) bp49 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur8
+	// 15000ms (aux row pre-existing), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Physical (0x1); NO SpellCategories row; NO
+	// SpellAuraOptions row; Attributes all 0x0.
+	{id: 19135, castTimeIdx: 1, durIdx: 8, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 49, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistPct, basePoints: 49, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 20685 "Storm Bolt" (wago SpellName MATCHES;
+	// C++ SPELL_STORMBOLT ("not sure" in C++),
+	// boss_vanndar.cpp:35; Lua
+	// eastern_kingdoms/boss_vanndar.lua:45, 95 —
+	// victim-cast, 6s init -> {10,25}s) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_15588_19135_20685.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE (effect 2) bp4274
+	// die451 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_STUN (aura 12) bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast4 1000ms (aux
+	// row pre-existing), dur31 8000ms (aux row
+	// pre-existing), range5 Long Range 0-40yd (aux
+	// row pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0 carried
+	// as dispel 0, Mechanic 12 (STUN) carried as
+	// spell mechanic per the 24110/8122 precedent,
+	// PreventionType 0x1, StartRecoveryCategory 0)
+	// — category/defense/prevention/recovery not
+	// carried (no fields in the seed struct); NO
+	// SpellAuraOptions row; Speed 20 /
+	// Attributes_1 0x88 / Attributes_3 0x100 not
+	// carried (no fields in the seed struct).
+	{id: 20685, castTimeIdx: 4, durIdx: 31, rangeIdx: 5, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4274, dieSides: 451, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
