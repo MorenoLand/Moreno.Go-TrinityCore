@@ -9043,6 +9043,71 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effSchoolDamage, basePoints: 63, dieSides: 23, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 7290 "Soul Siphon" (wago SpellName MATCHES;
+	// C++ SPELL_SOUL_SIPHON,
+	// boss_azshir_the_sleepless.cpp:26; Lua
+	// eastern_kingdoms/boss_azshir_the_sleepless.lua:41,
+	// 107 — victim-cast, 20s re-arm) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_7290_7399_17831.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_LEECH (aura
+	// 53) bp0 die1 auraPeriod 1000 chainTargets 2
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur1 10000ms (aux row pre-existing), range7
+	// Very Short 0-10yd (aux row pre-existing),
+	// school Shadow, dispel 1 (Magic); NO
+	// SpellAuraOptions row; EffectAmplitude 2 /
+	// EffectBonusCoefficient 0.1 /
+	// EffectRealPointsPerLevel 0.7 / Attributes_0
+	// 0x110000 / Attributes_1 0x4004 / Category 99 /
+	// DefenseType 1 / PreventionType 0x1 not carried
+	// (no fields in the seed struct).
+	{id: 7290, castTimeIdx: 1, durIdx: 1, rangeIdx: 7, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicLeech, basePoints: 0, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainTargets: 2, chainAmplitude: 1},
+	}},
+	// 7399 "Terrify" (wago SpellName MATCHES; C++
+	// SPELL_TERRIFY, boss_azshir_the_sleepless.cpp:25;
+	// Lua eastern_kingdoms/boss_azshir_the_sleepless.lua:40,
+	// 89 — victim-cast, 20s re-arm) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_7290_7399_17831.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_FEAR (aura 7) bp0
+	// die0 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur35 4000ms (aux row pre-existing),
+	// range2 Combat Range 0-5yd Flags 0x1 (aux row
+	// pre-existing), school Shadow, dispel 1
+	// (Magic), mechanic 5 (SpellCategories Mechanic
+	// 5); NO SpellAuraOptions row; Attributes_0
+	// 0x10 / Category 99 / DefenseType 1 /
+	// PreventionType 0x1 not carried (no fields in
+	// the seed struct).
+	{id: 7399, castTimeIdx: 1, durIdx: 35, rangeIdx: 2, school: schoolShadow, dispel: 1, mechanic: 5, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 17831 "Call of the Grave" (wago SpellName
+	// MATCHES; C++ SPELL_CALL_OF_THE_GRAVE,
+	// boss_azshir_the_sleepless.cpp:24; Lua
+	// eastern_kingdoms/boss_azshir_the_sleepless.lua:39,
+	// 68 — victim-cast, 30s re-arm) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_7290_7399_17831.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE (aura
+	// 3) bp34 die1 auraPeriod 60000 radius8 5yd
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur3 60000ms (aux row pre-existing), range2
+	// Combat Range 0-5yd (aux row pre-existing),
+	// school Shadow, dispel 2 (Curse); NO
+	// SpellAuraOptions row; EffectRealPointsPerLevel
+	// 35 / Attributes_1 0x888 / DefenseType 1 /
+	// PreventionType 0x1 not carried (no fields in
+	// the seed struct).
+	{id: 17831, castTimeIdx: 1, durIdx: 3, rangeIdx: 2, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 34, dieSides: 1, auraPeriod: 60000, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
