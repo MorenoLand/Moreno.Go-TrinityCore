@@ -12583,6 +12583,88 @@ var spells = []spell{
 	{id: 39290, castTimeIdx: 1, durIdx: 347, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 31485 "Super Shrink Ray" (Wowhead SpellName MATCH;
+	// C++ SPELL_SUPER_SHRINK_RAY,
+	// boss_mekgineer_steamrigger.cpp:46; Lua
+	// steamvault/boss_mekgineer_steamrigger.lua:78, 184 —
+	// DoCastVictim, 20s re-arm) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wowhead_spells_31485_31486_35107.txt): eff0
+	// APPLY_AURA MOD_DAMAGE_PERCENT_DONE (aura 79)
+	// displayed -35% all schools (misc 127) radius 15yd;
+	// eff1 APPLY_AURA MOD_SCALE (aura 61) displayed -50%
+	// radius 15yd; raw bp = displayed-1, die 1 per 44335
+	// precedent (aura79 bp49 = +50%); cast1 instant,
+	// dur8 15000ms, range4 Medium 30yd, radius18 15yd
+	// (aux rows pre-existing), school Physical (0x1);
+	// Mechanic/Dispel n/a on Wowhead — dispel/mechanic
+	// stay 0; SpellCategories/SpellAuraOptions not
+	// visible on Wowhead (not carried); Attributes not
+	// carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 31485, castTimeIdx: 1, durIdx: 8, rangeIdx: 4, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: -36, misc: 127, targetA: targetEnemy, radiusIdx: 18, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: -51, targetA: targetEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 31486 "Saw Blade" (Wowhead SpellName MATCH; C++
+	// SPELL_SAW_BLADE, boss_mekgineer_steamrigger.cpp:47;
+	// Lua steamvault/boss_mekgineer_steamrigger.lua:79,
+	// 193 — random-threat-list target, 15s re-arm) —
+	// Wowhead WotLK (2026-11-17 verdict file
+	// wowhead_spells_31485_31486_35107.txt): eff0
+	// SCHOOL_DAMAGE tooltip 2188–2812 Physical; raw bp
+	// = min-1 = 2187, die = max-min+1 = 625 per
+	// SpellInfo.cpp:402-526 + Go CalcValue
+	// (spells.go:24989-25010); cast2 250ms, range6
+	// Vision 100yd (aux rows pre-existing), no
+	// SpellDuration row, school Physical (0x1);
+	// Mechanic/Dispel n/a on Wowhead — dispel/mechanic
+	// stay 0; "Ignore Line of Sight / Can only target
+	// the player" flags not carried (no fields in the
+	// seed struct); no triggered spells.
+	{id: 31486, castTimeIdx: 2, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2187, dieSides: 625, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 35107 "Electrified Net" (Wowhead SpellName MATCH;
+	// C++ SPELL_ELECTRIFIED_NET,
+	// boss_mekgineer_steamrigger.cpp:48; Lua
+	// steamvault/boss_mekgineer_steamrigger.lua:80, 209 —
+	// DoCastVictim, 10s re-arm) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wowhead_spells_31485_31486_35107.txt): eff0
+	// APPLY_AURA ROOT (aura 26) displayed value 1,
+	// mechanic Rooted (MECHANIC_ROOT 7,
+	// SharedDefines.h:1364); eff1 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL displayed value 1 every
+	// 2s, trigger 35108 (follow-up read, same verdict
+	// file); raw bp = displayed-1, die 1 per 44335
+	// precedent; cast3 500ms, dur1 10000ms, range35
+	// Medium-Long 35yd (aux rows pre-existing), school
+	// Physical (0x1); Dispel n/a on Wowhead — dispel
+	// stays 0; "Channeled" flag not carried (no fields
+	// in the seed struct).
+	{id: 35107, mechanic: 7, castTimeIdx: 3, durIdx: 1, rangeIdx: 35, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, dieSides: 1, basePoints: 0, mechanic: 7, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 2000, trigger: 35108, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 35108 "Electrified Net" (Wowhead SpellName MATCH;
+	// periodic tick triggered by 35107 eff1 every 2s;
+	// no C++ enum — trigger-only spell) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wowhead_spells_31485_31486_35107.txt, follow-up
+	// read): eff0 SCHOOL_DAMAGE Nature, single value
+	// 602, no range shown — flat (dieSides 0, CalcValue
+	// returns the stored base, spells.go:24989-25010);
+	// cast1 instant, range13 Anywhere 50000yd (aux row
+	// pre-existing, per 44335 precedent), no
+	// SpellDuration row, school Nature (0x8);
+	// Mechanic/Dispel n/a on Wowhead — dispel/mechanic
+	// stay 0; target INFERRED TARGET_UNIT_TARGET_ENEMY
+	// from the tooltip ("shocks an enemy") — Wowhead
+	// shows no target field for this effect.
+	{id: 35108, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 602, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
