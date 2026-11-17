@@ -143,6 +143,7 @@ const (
 	auraModAttackPower         = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
+	auraHasteSpells            = 216 // SPELL_AURA_HASTE_SPELLS (SpellAuraDefines.h:296)
 	auraModCastSpeedNotStack   = 65  // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
 	auraModHealingPct          = 118 // SPELL_AURA_MOD_HEALING_PCT (SpellAuraDefines.h:198)
@@ -12911,6 +12912,125 @@ var spells = []spell{
 	{id: 29544, mechanic: 5, castTimeIdx: 1, durIdx: 32, rangeIdx: 11, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModFear, mechanic: 5, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 31956 "Grievous Wound" (Wowhead SpellName MATCH; C++
+	// SPELL_GRIEVOUS_WOUND, boss_rokmar_the_crackler.cpp:31;
+	// Lua theslavepens/boss_rokmar_the_crackler.lua:66, 117
+	// — DoCastVictim, triggered) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wago_spells_31956_31948_35008_38153_32055_34780.txt):
+	// single eff0 APPLY_AURA PERIODIC_DAMAGE (aura 3)
+	// tooltip 685–815 every 2s; raw bp = min-1 = 684,
+	// die = max-min+1 = 131 per SpellInfo.cpp:402-526 +
+	// Go CalcValue (spells.go:24989-25010); mechanic 15
+	// (MECHANIC_BLEED, SharedDefines.h:1372) at spell
+	// and effect level per 35107 precedent; no
+	// SpellDuration row (bleeds "until fully healed" —
+	// Go treats DurationIndex 0 as non-expiring,
+	// spells.go:8380 comment); cast1 instant, range2
+	// Combat 0-5yd, school Physical (0x1).
+	{id: 31956, mechanic: 15, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, mechanic: 15, dieSides: 131, basePoints: 684, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31948 "Ensnaring Moss" (Wowhead SpellName MATCH; C++
+	// SPELL_ENSNARING_MOSS, boss_rokmar_the_crackler.cpp:32;
+	// Lua theslavepens/boss_rokmar_the_crackler.lua:67, 127
+	// — DoCastAOE) — Wowhead WotLK (same verdict file):
+	// eff0 APPLY_AURA MOD_MELEE_HASTE (aura 138)
+	// displayed -50% — bp -51, die 1; eff1 APPLY_AURA
+	// HASTE_SPELLS (aura 216) displayed -50% — bp -51,
+	// die 1; both tgtA SRC_AREA_ENEMY (DoCastAOE; no
+	// radius shown — Go falls back to the spell's
+	// 30yd range per Spell.cpp:1192/1282, spells.go:1436);
+	// maxTargets 5 (shown on Wowhead); cast4 1000ms
+	// (real row), dur1 10000ms (real row), range4
+	// Medium 0-30yd (real row), school Physical.
+	{id: 31948, castTimeIdx: 4, durIdx: 1, rangeIdx: 4, maxTargets: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -51, targetA: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraHasteSpells, dieSides: 1, basePoints: -51, targetA: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 35008 "Water Spit" (Wowhead SpellName MATCH; C++
+	// SPELL_WATER_SPIT, boss_rokmar_the_crackler.cpp:33;
+	// Lua theslavepens/boss_rokmar_the_crackler.lua:68, 137
+	// — DoCastAOE) — Wowhead WotLK (same verdict file):
+	// single eff0 SCHOOL_DAMAGE Frost tooltip 1619–1881,
+	// radius 45yd; raw bp 1618, die 263; caster-centred
+	// AoE: tgtA SRC_CASTER tgtB SRC_AREA_ENEMY +
+	// radius11 45yd (real row) per 69900 precedent;
+	// cast16 1500ms (real row), range36 Longer 0-45yd
+	// (real row), school Frost (0x10); no SpellDuration
+	// row.
+	{id: 35008, castTimeIdx: 16, rangeIdx: 36, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1618, dieSides: 263, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 11, chainAmplitude: 1},
+	}},
+	// 38153 "Acid Spray" (Wowhead SpellName MATCH; C++
+	// SPELL_ACID_SPRAY, boss_quagmirran.cpp:31; Lua
+	// theslavepens/boss_quagmirran.lua:66, 158 —
+	// DoCastAOE, channeled) — Wowhead WotLK (same
+	// verdict file): eff0 APPLY_AURA DUMMY (aura 4)
+	// displayed value 1 — bp 0, die 1; eff1 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) displayed value
+	// 1 every 800ms, trigger 38163 (follow-up read,
+	// same verdict file) — bp 0, die 1, auraPeriod 800;
+	// both tgtA CASTER (channeled self-aura; 44197
+	// periodic-trig precedent); channeled 8s: cast170
+	// 8000ms (real row), dur31 8000ms (real row),
+	// range35 Medium-Long 0-35yd (real row), school
+	// Physical.
+	{id: 38153, castTimeIdx: 170, durIdx: 31, rangeIdx: 35, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 800, trigger: 38163, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 38163 "Acid Spray" (Wowhead SpellName MATCH;
+	// periodic tick triggered by 38153 eff1 every 800ms;
+	// no C++ enum — trigger-only spell) — Wowhead
+	// WotLK (same verdict file): single eff0
+	// SCHOOL_DAMAGE Nature tooltip 308–342, radius
+	// 35yd; raw bp 307, die 35; caster-centred AoE:
+	// tgtA SRC_CASTER tgtB SRC_AREA_ENEMY + radius21
+	// 35yd (real row) per 69900 precedent; cast1
+	// instant, range35 Medium-Long 0-35yd, school
+	// Nature.
+	{id: 38163, castTimeIdx: 1, rangeIdx: 35, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 307, dieSides: 35, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 21, chainAmplitude: 1},
+	}},
+	// 32055 "Uppercut" (Wowhead SpellName MATCH; C++
+	// SPELL_UPPERCUT, boss_quagmirran.cpp:33; Lua
+	// theslavepens/boss_quagmirran.lua:68, 182 —
+	// DoCast(target)) — Wowhead WotLK (same verdict
+	// file): eff0 WEAPON_DAMAGE (eff 58) "Deal Weapon
+	// Damage" Value 200, single value — flat (bp 200,
+	// die 0) per 35108 precedent; eff1 KNOCK_BACK
+	// (eff 98) "Knock Back (10)" Value 94 — bp 93,
+	// die 1, misc 10 (horizontal speed = MiscValue *
+	// 0.1 per spells.go handleEffectKnockBack; the
+	// "(10)" is the MiscValue, parallel to 32325's
+	// misc 200); cast1 instant, range7 Ten yards
+	// 0-10yd (real row), school Physical; no
+	// SpellDuration row.
+	{id: 32055, castTimeIdx: 1, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 200, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 93, misc: 10, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34780 "Poison Bolt Volley" (Wowhead SpellName MATCH;
+	// C++ SPELL_POISON_BOLT_VOLLEY, boss_quagmirran.cpp:34;
+	// Lua theslavepens/boss_quagmirran.lua:69, 192 —
+	// DoCast(me), self-cast volley) — Wowhead WotLK
+	// (same verdict file): eff0 SCHOOL_DAMAGE Nature
+	// single Value 1444, radius 55yd — flat (bp 1444,
+	// die 0) per 35108 precedent; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) single Value 289 every
+	// 2s — bp 288, die 1, auraPeriod 2000 per 44335
+	// aura convention; both tgtA SRC_CASTER tgtB
+	// SRC_AREA_ENEMY + radius91010 55yd (synthetic
+	// seed-local row — no real 55yd row verified,
+	// header-sanctioned 91xxx pattern); dispel 4
+	// (DISPEL_POISON, SharedDefines.h:1408); dur32
+	// 6000ms (real row), cast1 instant, range6 Vision
+	// 0-100yd (real row), school Nature.
+	{id: 34780, dispel: 4, castTimeIdx: 1, durIdx: 32, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1444, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91010, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 288, auraPeriod: 2000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91010, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -13026,6 +13146,7 @@ func main() {
 		{22, f32(200), f32(0), f32(200)}, // real SpellRadius 22 for 28796 Poison Bolt Volley (wago.tools 3.4.0.47659 SpellRadius row 22, 2026-11-17 verdict wago_spells_28794_28796_54097.txt)
 		{7, f32(2), f32(0), f32(2)},      // real SpellRadius 7 for 46836/46842 (wago.tools 3.4.0.47659 SpellRadius row 7, 2026-11-17 verdict wago_spells_29726_46836_46842.txt)
 		{21, f32(35), f32(0), f32(35)},   // real SpellRadius 21 = 34449 RadiusIndex_1 (wago.tools 3.4.0.47659 SpellRadius row 21, 2026-11-17 verdict wago_spells_31481_31718_34449.txt); now REFERENCED by 37730 eff0/eff1 (radiusIdx 21, verdict wago_spells_37730_37764_37871.txt) — 34449 itself still carries _0 only per kri 38718 precedent (cf. unreferenced radius 40 for 29961)
+		{91010, f32(55), f32(0), f32(55)},
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
