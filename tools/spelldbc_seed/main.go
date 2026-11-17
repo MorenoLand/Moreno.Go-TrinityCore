@@ -9386,6 +9386,75 @@ var spells = []spell{
 		{effect: effInterruptCast, basePoints: 0, dieSides: 0, mechanic: 26, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraSilence, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 14099 "Mighty Blow" (wago SpellName MATCHES;
+	// C++ SPELL_MIGHTYBLOW,
+	// boss_general_angerforge.cpp:24; Lua
+	// eastern_kingdoms/boss_general_angerforge.lua:45,
+	// 23 — victim-cast, 8s init, 15s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_14099_9080_20691.txt, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE (effect 58) bp24
+	// die1 (in-game 25) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK
+	// (effect 98) bp74 die51 misc 100 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// (no SpellDuration row), range7 Very Short
+	// 0-10yd (aux row pre-existing), school
+	// Physical; NO SpellAuraOptions row;
+	// BonusCoefficient 1 / EffectRealPointsPerLevel
+	// 2 / Attributes_0 0x10 / DefenseType 2 /
+	// PreventionType 0x2 not carried (no fields in
+	// the seed struct).
+	{id: 14099, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 24, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 74, dieSides: 51, misc: 100, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 9080 "Hamstring" (wago SpellName MATCHES; C++
+	// SPELL_HAMSTRING,
+	// boss_general_angerforge.cpp:25; Lua
+	// eastern_kingdoms/boss_general_angerforge.lua:46,
+	// 23 — victim-cast, 12s init, 15s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_14099_9080_20691.txt, DifficultyID 0
+	// rows): eff0 WEAPON_PERCENT_DAMAGE (effect 31)
+	// bp19 die1 (in-game 20%) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// MOD_DECREASE_SPEED (aura 33) bp-61 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur1
+	// 10000ms (aux row pre-existing), range2 Combat
+	// Range 0-5yd (aux row pre-existing), school
+	// Physical, mechanic 11 (SpellCategories
+	// Mechanic 11); NO SpellAuraOptions row;
+	// DifficultyID 173-176 rows excluded;
+	// Attributes_0 0x50010 / Attributes_1 0x8000000
+	// / DefenseType 2 / PreventionType 0x2 not
+	// carried (no fields in the seed struct).
+	{id: 9080, castTimeIdx: 1, durIdx: 1, rangeIdx: 2, school: schoolPhysical, mechanic: 11, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 19, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -61, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 20691 "Cleave" (wago SpellName MATCHES; C++
+	// SPELL_CLEAVE, boss_general_angerforge.cpp:26;
+	// Lua eastern_kingdoms/boss_general_angerforge.lua:47,
+	// 24 — victim-cast, 16s init, 9s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_14099_9080_20691.txt, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE (effect 58) bp-1
+	// die1 chainTargets 5 chainAmplitude 0.66 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// (no SpellDuration row), range11 Fifteen yards
+	// 0-15yd (aux row pre-existing), school
+	// Physical; NO SpellAuraOptions row;
+	// BonusCoefficient 1 / Attributes_0 0x40014 /
+	// Attributes_1 0x88 / Attributes_5 0x9000 /
+	// DefenseType 2 / PreventionType 0x2 not carried
+	// (no fields in the seed struct).
+	{id: 20691, castTimeIdx: 1, durIdx: 0, rangeIdx: 11, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 0.66},
+	}},
 }
 
 func main() {
