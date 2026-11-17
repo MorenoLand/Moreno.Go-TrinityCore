@@ -12420,6 +12420,89 @@ var spells = []spell{
 	{id: 39294, castTimeIdx: 28, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 37730 "Tidal Wave" (wago SpellName MATCH; C++
+	// SPELL_TIDAL_WAVE,
+	// boss_morogrim_tidewalker.cpp:48; Lua
+	// serpentshrinecavern/boss_morogrim_tidewalker.lua:101,
+	// 258 — self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_37730_37764_37871.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp3937
+	// die1125 tgtA TARGET_UNIT_CONE_ENEMY_24 radiusIdx
+	// 21 (35yd); eff1 APPLY_AURA MOD_MELEE_HASTE (aura
+	// 138) bp-401 die1 tgtA TARGET_UNIT_CONE_ENEMY_24
+	// radiusIdx 21; cast5 2000ms, dur8 15000ms, range1
+	// Self Only 0yd, radius21 35yd (aux rows
+	// pre-existing — radius 21 added for 34449, now
+	// referenced), school Frost (0x10);
+	// SpellCategories row EXISTS (Category 1152,
+	// DefenseType 1 Magic, DispelType 0, Mechanic 0,
+	// PreventionType 1) — none carried (no fields in
+	// the seed struct); SpellAuraOptions row EXISTS
+	// (ProcChance 101) — proc chance/type NOT carried
+	// (no fields in the seed struct); EffectBonus
+	// Coefficient 1 on both effects NOT carried (no
+	// field in the seed struct); Attributes_1 0x88 not
+	// carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 37730, castTimeIdx: 5, durIdx: 8, rangeIdx: 1, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3937, dieSides: 1125, targetA: targetUnitConeEnemy, radiusIdx: 21, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -401, dieSides: 1, targetA: targetUnitConeEnemy, radiusIdx: 21, chainAmplitude: 1},
+	}},
+	// 37764 "Earthquake" (wago SpellName MATCH; C++
+	// SPELL_EARTHQUAKE,
+	// boss_morogrim_tidewalker.cpp:50; Lua
+	// serpentshrinecavern/boss_morogrim_tidewalker.lua:102,
+	// 233 — self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_37730_37764_37871.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp3999
+	// die201 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY radiusIdx 27 (50yd);
+	// cast1 instant, dur0 (no SpellDuration row), range1
+	// Self Only 0yd, radius27 50yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 1152,
+	// DefenseType 3 Ranged, DispelType 0, Mechanic 0,
+	// PreventionType 1) — none carried (no fields in
+	// the seed struct); SpellAuraOptions row EXISTS
+	// (ProcChance 101) — proc chance/type NOT carried
+	// (no fields in the seed struct); EffectBonus
+	// Coefficient 1 NOT carried (no field in the seed
+	// struct); Attributes_0 0x10 / Attributes_1 0x88 /
+	// Attributes_2 0x4 not carried (no fields in the
+	// seed struct); no triggered spells.
+	{id: 37764, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3999, dieSides: 201, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 27, chainAmplitude: 1},
+	}},
+	// 37871 "Freeze" (wago SpellName MISMATCH vs
+	// expected "Globule Explosion" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_GLOBULE_EXPLOSION,
+	// boss_morogrim_tidewalker.cpp:64; Lua
+	// serpentshrinecavern/boss_morogrim_tidewalker.lua:103,
+	// 366 — victim-cast) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_37730_37764_37871.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp6562
+	// die875 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_STUN (aura 12) bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur31
+	// 8000ms, range2 Combat Range 5yd (aux rows
+	// pre-existing), school Frost (0x10);
+	// SpellCategories row EXISTS (Category 98,
+	// DefenseType 1 Magic, DispelType 1 MAGIC, Mechanic
+	// 0, PreventionType 1) — dispel 1 carried, rest not
+	// carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_1 0x88 / Attributes_3
+	// 0x100 not carried (no fields in the seed struct);
+	// no triggered spells.
+	{id: 37871, dispel: 1, castTimeIdx: 1, durIdx: 31, rangeIdx: 2, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 6562, dieSides: 875, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -12533,7 +12616,7 @@ func main() {
 		{61, f32(14), f32(0), f32(14)},   // real SpellRadius 61 for 68948 (wago.tools 3.4.0.47659 SpellRadius row 61, 2026-11-17 verdict wago_spells_68821_68948_69218.txt)
 		{22, f32(200), f32(0), f32(200)}, // real SpellRadius 22 for 28796 Poison Bolt Volley (wago.tools 3.4.0.47659 SpellRadius row 22, 2026-11-17 verdict wago_spells_28794_28796_54097.txt)
 		{7, f32(2), f32(0), f32(2)},      // real SpellRadius 7 for 46836/46842 (wago.tools 3.4.0.47659 SpellRadius row 7, 2026-11-17 verdict wago_spells_29726_46836_46842.txt)
-		{21, f32(35), f32(0), f32(35)},   // real SpellRadius 21 = 34449 RadiusIndex_1 (wago.tools 3.4.0.47659 SpellRadius row 21, 2026-11-17 verdict wago_spells_31481_31718_34449.txt); UNREFERENCED — 34449's radius lives in _1 only, seed carries _0 only per kri 38718 precedent (cf. unreferenced radius 40 for 29961)
+		{21, f32(35), f32(0), f32(35)},   // real SpellRadius 21 = 34449 RadiusIndex_1 (wago.tools 3.4.0.47659 SpellRadius row 21, 2026-11-17 verdict wago_spells_31481_31718_34449.txt); now REFERENCED by 37730 eff0/eff1 (radiusIdx 21, verdict wago_spells_37730_37764_37871.txt) — 34449 itself still carries _0 only per kri 38718 precedent (cf. unreferenced radius 40 for 29961)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
