@@ -13031,6 +13031,69 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 1444, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91010, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 288, auraPeriod: 2000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91010, chainAmplitude: 1},
 	}},
+	// 31690 "Putrid Mushroom" (Wowhead SpellName MATCH; C++
+	// SPELL_PUTRID_MUSHROOM, boss_hungarfen.cpp:35; Lua
+	// theunderbog/npc_underbog_mushroom.lua:51, 118 —
+	// DoCast(me), triggered) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wago_spells_31690_31698_34168.txt): single eff0
+	// APPLY_AURA DUMMY (aura 4) displayed value 1 —
+	// bp 0, die 1 per 44335 aura convention; tgtA
+	// CASTER (self-cast mushroom visual); cast1
+	// instant, range1 Self 0yd (real row), school
+	// Physical; no SpellDuration row.
+	{id: 31690, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31698 "Grow" (Wowhead SpellName MATCH; C++
+	// SPELL_GROW, boss_hungarfen.cpp:36; Lua
+	// theunderbog/npc_underbog_mushroom.lua:53, 93 —
+	// DoCast(me)) — Wowhead WotLK (same verdict file):
+	// single eff0 APPLY_AURA MOD_SCALE (aura 61,
+	// SPELL_AURA_MOD_SCALE, SpellAuraDefines.h:141)
+	// displayed 20% — bp 19, die 1 per the dominant
+	// auraModScale precedent (15 rows: bp = displayed-1,
+	// die 1) + 44335 convention; tgtA CASTER; cast1
+	// instant, range13 Anywhere 0-50000yd (real row),
+	// school Physical; no SpellDuration row.
+	{id: 31698, castTimeIdx: 1, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 19, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34168 "Spore Cloud" (Wowhead SpellName MATCH; C++
+	// SPELL_SPORE_CLOUD, boss_hungarfen.cpp:34; Lua
+	// theunderbog/npc_underbog_mushroom.lua:52 — DoCast(me),
+	// triggered) — Wowhead WotLK (same verdict file):
+	// eff0 PERSISTENT_AREA_AURA (eff 27) PERIODIC_TRIGGER
+	// (aura 23) displayed value 1 every 3s, trigger
+	// 31689 (follow-up read, same verdict file) —
+	// bp 0, die 1, auraPeriod 3000, tgtA DEST_TARGET_ANY
+	// tgtB DEST_AREA_ENEMY + radius14 8yd (real row)
+	// per the 29946 Flame Wreath precedent; eff1
+	// SCHOOL_DAMAGE Nature tooltip 1080–1320, radius
+	// 8yd — bp 1079, die 241, tgtA DEST_AREA_ENEMY +
+	// radius14 per the 33637 precedent; dur18 20000ms
+	// (real row, wago-verified for 29946 — the
+	// persistent-aura engine leg requires DurationIndex
+	// != 0, boss_ai.go creatureEffectPersistentAreaAura);
+	// cast1 instant, range1 Self 0yd, school Nature.
+	{id: 34168, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 3000, trigger: 31689, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 1079, dieSides: 241, targetA: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 31689 "Spore Cloud" (Wowhead SpellName MATCH;
+	// periodic tick triggered by 34168 eff0 every 3s;
+	// no C++ enum — trigger-only spell) — Wowhead
+	// WotLK (same verdict file): single eff0
+	// APPLY_AURA PERIODIC_DAMAGE (aura 3) tooltip
+	// 360–540 every 2s, radius 8yd — bp 359, die 181,
+	// auraPeriod 2000, radiusIdx 14; tgtA ENEMY (the
+	// periodic trigger casts on the aura's target unit,
+	// spells.go periodicTriggerTarget returns
+	// aura.TargetGUID); dur18 20000ms (real row);
+	// cast1 instant, range1 Self 0yd, school Nature.
+	{id: 31689, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 181, basePoints: 359, auraPeriod: 2000, targetA: targetEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
 }
 
 func main() {
