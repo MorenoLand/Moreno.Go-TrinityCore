@@ -268,8 +268,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	seenGUIDs := make(map[uint32]struct{})
 	spawns := make([]creatureSpawn, 0)
 	count := 0
-	for rows.Next() {
-		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3, flagsExtra, typeFlags int64
+	for rows.Next() {		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, regenerateHealth, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3, flagsExtra, typeFlags int64
 		var x, y, z, orientation, scale, hoverHeight, walkSpeed, runSpeed float64
 		if err := rows.Scan(&guid, &entry, &mapID, &x, &y, &z, &orientation, &model, &faction, &npcFlags, &unitFlags, &dynamicFlags, &level, &health, &regenerateHealth, &mana, &scale, &hoverHeight, &walkSpeed, &runSpeed, &attackTime, &rangedAttack, &mount, &bytes1, &bytes2, &emote, &item1, &item2, &item3, &flagsExtra, &typeFlags); err != nil {
 			return nil, count, err
@@ -1118,32 +1117,70 @@ func (s *Server) standCreatureMotionUp(motion *creatureMotion) bool {
 }
 
 func (s *Server) broadcastCreatureValuesUpdateInInstance(mapID, instanceID uint32, guid uint64, fields map[int]uint32) {
+	if stored, ok := fields[unitFieldDynamicFlags]; ok {
+		s.fanOutCreatureDynamicFlagsUpdate(mapID, instanceID, guid, fields, stored)
+		return
+	}
 	packet, err := s.buildCreatureValuesUpdate(guid, fields)
 	if err != nil || packet == nil {
 		return
-	}
-	// Unit::BuildValuesUpdateBlockForPlayer (Unit.cpp:13921-13931) masks
-	// UNIT_DYNFLAG_LOOTABLE per viewer via Player::isAllowedToLoot: build the
-	// masked variant once and pick per viewer. A failed masked build falls
-	// back to the base packet for everyone.
-	var masked *protocol.Packet
-	if fields[unitFieldDynamicFlags]&unitDynFlagLootable != 0 {
-		maskedFields := make(map[int]uint32, len(fields))
-		for k, v := range fields {
-			maskedFields[k] = v
-		}
-		maskedFields[unitFieldDynamicFlags] &^= unitDynFlagLootable
-		masked, _ = s.buildCreatureValuesUpdate(guid, maskedFields)
 	}
 	// WorldObject::BuildUpdate (Object.cpp:3620) builds values updates
 	// "for all visible players" — the motion-centered visibility set, not
 	// the whole instance. An unlocated creature keeps the instance-wide
 	// fan-out so no recipient is dropped.
 	if m := s.findCreatureMotion(mapID, instanceID, guid); m != nil {
-		s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, true, m.X, m.Y, m.Z, m.PhaseMask)
+		s.fanOutCreatureValuesUpdate(packet, mapID, instanceID, guid, true, m.X, m.Y, m.Z, m.PhaseMask)
 		return
 	}
-	s.fanOutCreatureValuesUpdate(packet, masked, mapID, instanceID, guid, false, 0, 0, 0, 0)
+	s.fanOutCreatureValuesUpdate(packet, mapID, instanceID, guid, false, 0, 0, 0, 0)
+}
+
+// fanOutCreatureDynamicFlagsUpdate mirrors Unit::BuildValuesUpdate
+// (Unit.cpp:13653-13670): the stored TAPPED bits are rebuilt per viewer from
+// the creature's loot recipient — TAPPED for everyone, plus TAPPED_BY_PLAYER
+// for the tapper and its group — and LOOTABLE is masked by
+// Player::isAllowedToLoot. One block is built per distinct value.
+func (s *Server) fanOutCreatureDynamicFlagsUpdate(mapID, instanceID uint32, guid uint64, fields map[int]uint32, stored uint32) {
+	var tapPlayer, tapGroup uint64
+	var tapped, gated bool
+	var cx, cy, cz float32
+	var phase uint32
+	if motion := s.findCreatureMotion(mapID, instanceID, guid); motion != nil {
+		tapPlayer, tapGroup = motion.TapPlayerGUID, motion.TapGroupID
+		tapped = tapPlayer != 0 || tapGroup != 0
+		gated, cx, cy, cz, phase = true, motion.X, motion.Y, motion.Z, motion.PhaseMask
+	}
+	variants := make(map[uint32]*protocol.Packet, 4)
+	s.fanOutCreatureValuesUpdateByViewer(func(viewerGUID, viewerGroupID uint64, pendingBind bool) *protocol.Packet {
+		flags := stored &^ (unitDynFlagTapped | unitDynFlagTappedByPlayer)
+		if tapped {
+			flags |= unitDynFlagTapped
+			if tapPlayer == viewerGUID || tapGroup != 0 && tapGroup == viewerGroupID {
+				flags |= unitDynFlagTappedByPlayer
+			}
+		}
+		if flags&unitDynFlagLootable != 0 && !s.creatureLootSparkleVisible(mapID, instanceID, guid, viewerGUID, viewerGroupID, pendingBind) {
+			flags &^= unitDynFlagLootable
+		}
+		if variant, ok := variants[flags]; ok {
+			return variant
+		}
+		variantFields := fields
+		if flags != stored {
+			variantFields = make(map[int]uint32, len(fields))
+			for index, value := range fields {
+				variantFields[index] = value
+			}
+			variantFields[unitFieldDynamicFlags] = flags
+		}
+		packet, err := s.buildCreatureValuesUpdate(guid, variantFields)
+		if err != nil {
+			packet = nil
+		}
+		variants[flags] = packet
+		return packet
+	}, mapID, instanceID, guid, gated, cx, cy, cz, phase)
 }
 
 // broadcastCreatureValuesUpdateAtInInstance is the motionMu-held twin of
@@ -1159,7 +1196,7 @@ func (s *Server) broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID uin
 	if err != nil || packet == nil {
 		return
 	}
-	s.fanOutCreatureValuesUpdate(packet, nil, mapID, instanceID, guid, true, x, y, z, phase)
+	s.fanOutCreatureValuesUpdate(packet, mapID, instanceID, guid, true, x, y, z, phase)
 }
 
 // fanOutCreatureValuesUpdate delivers a built creature values-update block
@@ -1174,7 +1211,11 @@ func (s *Server) broadcastCreatureValuesUpdateAtInInstance(mapID, instanceID uin
 // the create helpers' viewpoint set plus the body-centered grid stream;
 // an unresolvable viewpoint contributes nothing, never dropping a
 // body-qualified recipient.
-func (s *Server) fanOutCreatureValuesUpdate(packet, masked *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32, phase uint32) {
+func (s *Server) fanOutCreatureValuesUpdate(packet *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32, phase uint32) {
+	s.fanOutCreatureValuesUpdateByViewer(func(uint64, uint64, bool) *protocol.Packet { return packet }, mapID, instanceID, guid, gated, cx, cy, cz, phase)
+}
+
+func (s *Server) fanOutCreatureValuesUpdateByViewer(packetFor func(viewerGUID, viewerGroupID uint64, pendingBind bool) *protocol.Packet, mapID, instanceID uint32, guid uint64, gated bool, cx, cy, cz float32, phase uint32) {
 	s.sessionsMu.RLock()
 	targets := make([]seerRecipient, 0, len(s.sessions))
 	for sess := range s.sessions {
@@ -1199,8 +1240,8 @@ func (s *Server) fanOutCreatureValuesUpdate(packet, masked *protocol.Packet, map
 		if gated && phase&sess.currentPlayerPhaseMask() == 0 {
 			continue
 		}
-		if masked != nil && !s.creatureLootSparkleVisible(mapID, instanceID, guid, sess.player.GUID, sess.groupID, sess.hasPendingBind()) {
-			_ = sess.write(masked.Opcode, masked.Payload.Bytes(), true)
+		packet := packetFor(sess.player.GUID, sess.groupID, sess.hasPendingBind())
+		if packet == nil {
 			continue
 		}
 		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)

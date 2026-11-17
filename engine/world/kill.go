@@ -48,6 +48,12 @@ const unitDynFlagLootable uint32 = 0x00000001
 // set by Creature::SetLootRecipient on the first player-attributed hit.
 const unitDynFlagTapped uint32 = 0x00000004
 
+// unitDynFlagTappedByPlayer mirrors UNIT_DYNFLAG_TAPPED_BY_PLAYER
+// (SharedDefines.h): the client reads TAPPED without this bit as "tapped by
+// someone else" and grays the target frame, so the tap owner and its group
+// must receive both bits (Unit::BuildValuesUpdate, Unit.cpp:13653-13670).
+const unitDynFlagTappedByPlayer uint32 = 0x00000008
+
 // unitDynFlagDead mirrors UNIT_DYNFLAG_DEAD (SharedDefines.h:3133):
 // the feign-death corpse flag (AuraEffect::HandleFeignDeath).
 const unitDynFlagDead uint32 = 0x00000020

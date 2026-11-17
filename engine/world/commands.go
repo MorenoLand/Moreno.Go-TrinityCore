@@ -1684,30 +1684,30 @@ func (s *session) refreshNearbyObjects(ctx context.Context) {
 		return
 	}
 	if s.gmVisibilityDetect == 0 {
-		// The session cannot see serverside-hidden creatures (plain player,
-		// or a GM whose visibility detect was reset to SEC_PLAYER by
-		// SetGMVisible(true)/SetGameMaster(false)): destroy any hidden
-		// creatures that were previously visible, so e.g. `.gm visible on`
-		// re-hides spirit healers and GHOST_VISIBILITY creatures
-		// (Object.cpp:1622-1633, Player.cpp:2504-2523).
-		s.destroyHiddenCreaturesInRange(ctx, *s.player)
-		s.destroyHiddenGameObjectsInRange(ctx, *s.player)
+		// The session can no longer see everything a GM sees (SetGMVisible
+		// (true)/SetGameMaster(false) reset the detect to SEC_PLAYER).
+		// Destroying only the obvious hidden categories left spirit healers
+		// and scripted invisible units on the client, so the whole nearby set
+		// is torn down and the stream below re-creates exactly what a plain
+		// player is allowed to see (Player::UpdateObjectVisibility does the
+		// same incrementally).
+		s.destroyNearbyCreaturesInRange(ctx, *s.player)
+		s.destroyNearbyGameObjectsInRange(ctx, *s.player)
 	}
 	s.streamNearbyObjects(ctx)
 }
 
-func (s *session) destroyHiddenCreaturesInRange(ctx context.Context, state playerState) {
+func (s *session) destroyNearbyCreaturesInRange(ctx context.Context, state playerState) {
 	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	distance := float64(s.server.visibilityRangeForMap(state.Map))
 	if distance <= 0 {
-		distance = 150
+		distance = 100
 	}
 	query := `SELECT c.guid, c.id
-		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
-		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND ((c.phaseMask <> 0 AND (c.phaseMask & 1) = 0) OR (COALESCE(t.flags_extra, 0) & 0x400) <> 0 OR (COALESCE(t.npcflag, 0) & 0xC000) <> 0)`
+		FROM creature AS c
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
 		return
@@ -1721,61 +1721,53 @@ func (s *session) destroyHiddenCreaturesInRange(ctx context.Context, state playe
 	}
 }
 
-func (s *session) destroyHiddenGameObjectsInRange(ctx context.Context, state playerState) {
+func (s *session) destroyNearbyGameObjectsInRange(ctx context.Context, state playerState) {
 	if s == nil || s.server == nil {
 		return
 	}
-	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	distance := float64(s.server.visibilityRangeForMap(state.Map))
 	if distance <= 0 {
-		distance = 150.0
+		distance = 100.0
 	}
-	hidden := make(map[uint64]struct{})
+	destroyed := make(map[uint64]struct{})
 	s.server.objectsMu.RLock()
 	if state.InstanceID == 0 {
 		for guid := range s.server.hiddenGameObjects {
-			hidden[guid] = struct{}{}
+			destroyed[guid] = struct{}{}
 		}
 	}
 	instanceKey := instanceAdmissionKey{MapID: state.Map, InstanceID: state.InstanceID}
 	for guid := range s.server.instanceHiddenGameObjects[instanceKey] {
-		hidden[guid] = struct{}{}
+		destroyed[guid] = struct{}{}
 	}
 	for guid, dyn := range s.server.dynamicGameObjects {
 		if dyn != nil && dyn.Map == state.Map && dyn.InstanceID == state.InstanceID && math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) <= distance {
-			if _, ok := hidden[guid]; ok {
-				s.sendDestroyObject(guid, false)
-				delete(hidden, guid)
-			}
+			destroyed[guid] = struct{}{}
 		}
 	}
 	for guid, dyn := range s.server.instanceGameObjects[instanceKey] {
 		if dyn != nil && math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) <= distance {
-			if _, ok := hidden[guid]; ok {
-				s.sendDestroyObject(guid, false)
-				delete(hidden, guid)
-			}
+			destroyed[guid] = struct{}{}
 		}
 	}
 	s.server.objectsMu.RUnlock()
-	if len(hidden) == 0 || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+	for guid := range destroyed {
+		s.sendDestroyObject(guid, false)
+	}
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return
 	}
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT guid, id, position_x, position_y FROM gameobject WHERE map = ? AND position_x BETWEEN ? AND ? AND position_y BETWEEN ? AND ?`, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT guid, id FROM gameobject WHERE map = ? AND position_x BETWEEN ? AND ? AND position_y BETWEEN ? AND ?`, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var low, entry int64
-		var x, y float64
-		if rows.Scan(&low, &entry, &x, &y) != nil {
+		if rows.Scan(&low, &entry) != nil {
 			continue
 		}
-		guid := gameObjectGUID(uint32(low), uint32(entry))
-		if _, ok := hidden[guid]; ok {
-			s.sendDestroyObject(guid, false)
-			delete(hidden, guid)
-		}
+		s.sendDestroyObject(gameObjectGUID(uint32(low), uint32(entry)), false)
 	}
 }
 

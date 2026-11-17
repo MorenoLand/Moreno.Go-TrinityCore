@@ -21,3 +21,5 @@ coverage.out
 *.tmp
 .gocache/
 *_test.go
+
+/world.pid

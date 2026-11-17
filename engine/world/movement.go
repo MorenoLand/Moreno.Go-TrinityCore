@@ -1573,6 +1573,40 @@ func (s *Server) seerDeliveryPosition(mapID, instanceID uint32, playerGUID, fars
 	return found.X, found.Y, found.Z, true
 }
 
+// seerDeliveryPositionLocked is the motionMu-held twin of
+// seerDeliveryPosition: the caller already holds motionMu, so every
+// creature-motion lookup goes through the locked forms.
+func (s *Server) seerDeliveryPositionLocked(mapID, instanceID uint32, playerGUID, farsightGUID uint64) (x, y, z float32, ok bool) {
+	if s == nil {
+		return 0, 0, 0, false
+	}
+	if farsightGUID != 0 {
+		if m := s.findCreatureMotionLocked(mapID, instanceID, farsightGUID); m != nil {
+			return m.X, m.Y, m.Z, true
+		}
+		if obj := s.findDynamicSpellObject(farsightGUID); obj != nil && obj.Map == mapID && obj.InstanceID == instanceID {
+			return obj.X, obj.Y, obj.Z, true
+		}
+		if sess := s.findSessionByGUID(farsightGUID); sess != nil && sess.player != nil && sess.player.Map == mapID && sess.player.InstanceID == instanceID {
+			return sess.player.X, sess.player.Y, sess.player.Z, true
+		}
+		return 0, 0, 0, false
+	}
+	var found *creatureMotion
+	for _, motion := range s.motionMapLocked(mapID, instanceID) {
+		if motion != nil && motion.Charmed && motion.Possessed && motion.CharmerGUID == playerGUID {
+			if found != nil {
+				return 0, 0, 0, false
+			}
+			found = motion
+		}
+	}
+	if found == nil {
+		return 0, 0, 0, false
+	}
+	return found.X, found.Y, found.Z, true
+}
+
 // seerRecipient snapshots a fan-out recipient's own position plus the
 // viewpoint key, so the seer leg resolves after sessionsMu drops.
 type seerRecipient struct {
@@ -1799,6 +1833,19 @@ func (s *Server) broadcastToVisibleSetFromPhase(opcode uint16, payload []byte, m
 	s.broadcastToSetWithinFromPhase(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, sourcePhase)
 }
 
+// broadcastToVisibleSetLocked is the motionMu-held twin of
+// broadcastToVisibleSet: callers that already hold motionMu use it so the
+// seer leg never re-locks the same mutex.
+func (s *Server) broadcastToVisibleSetLocked(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, source *session) {
+	s.broadcastToSetWithinLocked(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, source)
+}
+
+// broadcastToVisibleSetFromPhaseLocked is the motionMu-held twin of
+// broadcastToVisibleSetFromPhase.
+func (s *Server) broadcastToVisibleSetFromPhaseLocked(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, sourcePhase uint32) {
+	s.broadcastToSetWithinFromPhaseLocked(opcode, payload, mapID, instanceID, cx, cy, cz, 100.0, sourcePhase)
+}
+
 // broadcastCreatureCreateToVisibleSet is the creature-create twin of
 // broadcastToVisibleSet: a summon/respawn create block fans out through
 // WorldObject::UpdateObjectVisibilityOnCreate (Map.cpp:667-680) and
@@ -2002,6 +2049,17 @@ func (s *Server) broadcastToVisibleSetForCreatureSession(sess *session, opcode u
 // SAY/TEXTEMOTE 25yd, YELL 300yd) fan out through SendMessageToSetInRange,
 // not the visibility range, so creature-talk legs use this form.
 func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, source *session) {
+	s.broadcastToSetWithinSeer(opcode, payload, mapID, instanceID, cx, cy, cz, radius, source, s.seerDeliveryPosition)
+}
+
+// broadcastToSetWithinLocked is the motionMu-held twin of
+// broadcastToSetWithin: the caller already holds motionMu, so the seer leg
+// runs through the locked resolver instead of re-locking the same mutex.
+func (s *Server) broadcastToSetWithinLocked(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, source *session) {
+	s.broadcastToSetWithinSeer(opcode, payload, mapID, instanceID, cx, cy, cz, radius, source, s.seerDeliveryPositionLocked)
+}
+
+func (s *Server) broadcastToSetWithinSeer(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, source *session, seer func(mapID, instanceID uint32, playerGUID, farsightGUID uint64) (float32, float32, float32, bool)) {
 	if s == nil {
 		return
 	}
@@ -2026,7 +2084,7 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 			continue
 		}
 		rx, ry, rz := target.x, target.y, target.z
-		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+		if vx, vy, vz, ok := seer(mapID, instanceID, target.guid, target.farsight); ok {
 			rx, ry, rz = vx, vy, vz
 		}
 		if distance3D(rx, ry, rz, cx, cy, cz) > radius {
@@ -2045,6 +2103,16 @@ func (s *Server) broadcastToSetWithin(opcode uint16, payload []byte, mapID, inst
 // phased-out mask never reaches a disjoint-phase listener; a 0 phase reads
 // as PHASEMASK_NORMAL (1), the motion convention for unstamped records.
 func (s *Server) broadcastToSetWithinFromPhase(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, sourcePhase uint32) {
+	s.broadcastToSetWithinFromPhaseSeer(opcode, payload, mapID, instanceID, cx, cy, cz, radius, sourcePhase, s.seerDeliveryPosition)
+}
+
+// broadcastToSetWithinFromPhaseLocked is the motionMu-held twin of
+// broadcastToSetWithinFromPhase, using the locked seer resolver.
+func (s *Server) broadcastToSetWithinFromPhaseLocked(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, sourcePhase uint32) {
+	s.broadcastToSetWithinFromPhaseSeer(opcode, payload, mapID, instanceID, cx, cy, cz, radius, sourcePhase, s.seerDeliveryPositionLocked)
+}
+
+func (s *Server) broadcastToSetWithinFromPhaseSeer(opcode uint16, payload []byte, mapID, instanceID uint32, cx, cy, cz float32, radius float64, sourcePhase uint32, seer func(mapID, instanceID uint32, playerGUID, farsightGUID uint64) (float32, float32, float32, bool)) {
 	if s == nil {
 		return
 	}
@@ -2068,7 +2136,7 @@ func (s *Server) broadcastToSetWithinFromPhase(opcode uint16, payload []byte, ma
 			continue
 		}
 		rx, ry, rz := target.x, target.y, target.z
-		if vx, vy, vz, ok := s.seerDeliveryPosition(mapID, instanceID, target.guid, target.farsight); ok {
+		if vx, vy, vz, ok := seer(mapID, instanceID, target.guid, target.farsight); ok {
 			rx, ry, rz = vx, vy, vz
 		}
 		if distance3D(rx, ry, rz, cx, cy, cz) > radius {

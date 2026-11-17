@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
@@ -144,6 +145,9 @@ func open(ctx context.Context, name, backend, file, info string, c config.Config
 	if err != nil {
 		return nil, fmt.Errorf("%s database: %w", name, err)
 	}
+	if kind == BackendSQLite {
+		dsn = sqliteDSN(dsn)
+	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%s database: %w", name, err)
@@ -153,4 +157,14 @@ func open(ctx context.Context, name, backend, file, info string, c config.Config
 		return nil, fmt.Errorf("%s database: %w", name, err)
 	}
 	return &Store{Name: name, Backend: kind, DB: db}, nil
+}
+
+// sqliteDSN arms a busy timeout so a statement that races another writer
+// queues instead of failing with SQLITE_BUSY (modernc defaults it to 0). A
+// failed item query is answered as "not found", and a failed save is dropped.
+func sqliteDSN(dsn string) string {
+	if strings.Contains(dsn, "?") {
+		return dsn
+	}
+	return dsn + "?_pragma=busy_timeout(10000)"
 }

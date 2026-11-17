@@ -1654,7 +1654,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
 			if playerSess != nil {
 				_ = playerSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
-				s.broadcastToVisibleSet(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, playerSess)
+				s.broadcastToVisibleSetLocked(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, playerSess)
 			} else {
 				s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, motion.Map, motion.InstanceID, motion.X, motion.Y, motion.Z, motion.PhaseMask)
 			}
@@ -11212,7 +11212,7 @@ func (s *Server) broadcastAIReactionAt(mapID, instanceID uint32, guid uint64, re
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(guid)
 	buf.WriteU32(reactionType)
-	s.broadcastToVisibleSetFromPhase(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), mapID, instanceID, x, y, z, phase)
+	s.broadcastToVisibleSetFromPhaseLocked(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), mapID, instanceID, x, y, z, phase)
 }
 
 // loadCreatureSpells queries spells configured for this creature entry from creature_template_spell.

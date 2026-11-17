@@ -101,6 +101,19 @@ func applyConfiguredMigrations(ctx context.Context, c config.Config, store *Stor
 	return nil
 }
 
+// sqliteWorldSpawnIndexes re-asserts the spawn-lookup indexes declared in
+// sql/sqlite/world.sql. Databases populated before those declarations shipped
+// lack them (updates can be disabled), and without creature__idx_map_coords a
+// nearby-object login query degrades from ~30ms to a full-map scan.
+var sqliteWorldSpawnIndexes = []string{
+	"CREATE INDEX IF NOT EXISTS creature__idx_map ON creature (map)",
+	"CREATE INDEX IF NOT EXISTS creature__idx_id ON creature (id)",
+	"CREATE INDEX IF NOT EXISTS creature__idx_map_coords ON creature (map, position_x, position_y)",
+	"CREATE INDEX IF NOT EXISTS gameobject__idx_map ON gameobject (map)",
+	"CREATE INDEX IF NOT EXISTS gameobject__idx_id ON gameobject (id)",
+	"CREATE INDEX IF NOT EXISTS gameobject__idx_map_coords ON gameobject (map, position_x, position_y)",
+}
+
 func ensureSchema(ctx context.Context, c config.Config, store *Store, mask uint32) error {
 	meta := "CREATE TABLE IF NOT EXISTS trinitygo_schema (id INTEGER NOT NULL PRIMARY KEY, version INTEGER NOT NULL)"
 	if store.Backend != BackendSQLite {
@@ -108,6 +121,13 @@ func ensureSchema(ctx context.Context, c config.Config, store *Store, mask uint3
 	}
 	if _, err := store.Exec(ctx, meta); err != nil {
 		return fmt.Errorf("%s schema metadata: %w", store.Name, err)
+	}
+	if store.Backend == BackendSQLite && strings.EqualFold(store.Name, "world") {
+		for _, statement := range sqliteWorldSpawnIndexes {
+			if _, err := store.Exec(ctx, statement); err != nil {
+				return fmt.Errorf("%s spawn index: %w", store.Name, err)
+			}
+		}
 	}
 	var version int
 	err := store.DB.QueryRowContext(ctx, "SELECT version FROM trinitygo_schema WHERE id = 1").Scan(&version)
