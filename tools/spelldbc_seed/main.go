@@ -12503,6 +12503,86 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 6562, dieSides: 875, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 39288 "Kargath's Executioner" (wago SpellName
+	// MISMATCH vs expected "Kargath Executioner 1" —
+	// seeded on data per quel'danas/ghostly-citizen
+	// precedent; C++ SPELL_KARGATH_EXECUTIONER_1,
+	// shattered_halls.h:81; Lua
+	// shatteredhalls/boss_shattered_executioner.lua:112,
+	// 349 — RemoveAura on the player caster, first
+	// prisoner) — wago.tools 3.4.0.47659 SpellEffect row
+	// + SpellMisc (2026-11-17 verdict file
+	// wago_spells_39288_39289_39290.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp-1 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur561
+	// 3300000ms (NEW aux row), range1 Self Only 0yd,
+	// school Physical (0x1); SpellCategories row does
+	// NOT exist at all — dispel/mechanic stay 0;
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0xd000110 /
+	// Attributes_2 0x10000000 / Attributes_3 0x10000000
+	// not carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 39288, castTimeIdx: 1, durIdx: 561, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39289 "Kargath's Executioner" (wago SpellName
+	// MISMATCH vs expected "Kargath Executioner 2" —
+	// seeded on data per quel'danas/ghostly-citizen
+	// precedent; C++ SPELL_KARGATH_EXECUTIONER_2,
+	// shattered_halls.h:82; Lua
+	// shatteredhalls/boss_shattered_executioner.lua:113,
+	// 350 — RemoveAura on the player caster, second
+	// prisoner) — wago.tools 3.4.0.47659 SpellEffect row
+	// + SpellMisc (2026-11-17 verdict file
+	// wago_spells_39288_39289_39290.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp-1 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur6
+	// 600000ms, range1 Self Only 0yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 0, DispelType 0, Mechanic 0,
+	// PreventionType 0, StartRecoveryCategory 133) —
+	// none carried (no fields in the seed struct;
+	// StartRecoveryCategory 133 not carried per 30621
+	// precedent); SpellAuraOptions row EXISTS
+	// (ProcChance 101) — proc chance/type NOT carried
+	// (no fields in the seed struct); Attributes_0
+	// 0xd000110 / Attributes_2 0x10000000 /
+	// Attributes_3 0x10000000 not carried (no fields in
+	// the seed struct); no triggered spells.
+	{id: 39289, castTimeIdx: 1, durIdx: 6, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39290 "Kargath's Executioner" (wago SpellName
+	// MISMATCH vs expected "Kargath Executioner 3" —
+	// seeded on data per quel'danas/ghostly-citizen
+	// precedent; C++ SPELL_KARGATH_EXECUTIONER_3,
+	// shattered_halls.h:83; Lua
+	// shatteredhalls/boss_shattered_executioner.lua:114,
+	// 351 — RemoveAura on the player caster, last
+	// prisoner) — wago.tools 3.4.0.47659 SpellEffect row
+	// + SpellMisc (2026-11-17 verdict file
+	// wago_spells_39288_39289_39290.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp-1 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur347
+	// 900000ms, range1 Self Only 0yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 0, DispelType 0, Mechanic 0,
+	// PreventionType 0, StartRecoveryCategory 133) —
+	// none carried (no fields in the seed struct;
+	// StartRecoveryCategory 133 not carried per 30621
+	// precedent); SpellAuraOptions row EXISTS
+	// (ProcChance 101) — proc chance/type NOT carried
+	// (no fields in the seed struct); Attributes_0
+	// 0xd000110 / Attributes_2 0x10000000 /
+	// Attributes_3 0x10000000 not carried (no fields in
+	// the seed struct); no triggered spells.
+	{id: 39290, castTimeIdx: 1, durIdx: 347, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -12566,6 +12646,7 @@ func main() {
 		{62, 75000, 0, 75000},      // real SpellDuration 62 for 28240 Poison Cloud (wago.tools 3.4.0.47659 SpellDuration row 62, 2026-11-16 verdict wago_spells_28157_28169_28240.txt)
 		{86, 21000, 0, 21000},      // real SpellDuration 86 for 20294 Immolate (wago.tools 3.4.0.47659 SpellDuration row 86, 2026-11-16 verdict wago_spells_20294_17820_17467.txt)
 		{347, 900000, 0, 900000},   // real SpellDuration 347 for 12255 Curse of Tuten'kash (wago.tools 3.4.0.47659 SpellDuration row 347, 2026-11-17 verdict wago_spells_8876_12252_12255.txt)
+		{561, 3300000, 0, 3300000}, // real SpellDuration 561 for 39288 (wago.tools 3.4.0.47659 SpellDuration row 561, 2026-11-17 verdict wago_spells_39288_39289_39290.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
