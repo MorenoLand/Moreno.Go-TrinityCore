@@ -11100,6 +11100,68 @@ var spells = []spell{
 	{id: 60590, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
 		{effect: effWeaponPercentDamage, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 8399 "Sleep" (wago SpellName MATCHES; C++
+	// SPELL_SLEEP, boss_kelris.cpp:25; Lua
+	// kalimdor/boss_kelris.lua:53, 131 — random-target
+	// cast, EVENT_SLEEP) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_8399_8734_15587.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_STUN
+	// (aura 12) bp0 die0 radiusIdx_0 8 (5yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast50 1300ms (aux row
+	// ADDED this tick — was absent from the seed),
+	// dur1 10000ms, range4 Medium 0-30yd (aux rows
+	// pre-existing), school Shadow (0x20);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 1 (Magic) carried
+	// as dispel 1, Mechanic 10 carried as mechanic 10,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x40110000 /
+	// Attributes_1 0x40088 not carried (no fields in the
+	// seed struct).
+	{id: 8399, castTimeIdx: 50, durIdx: 1, rangeIdx: 4, school: schoolShadow, dispel: 1, mechanic: 10, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 8734 "Blackfathom Channeling" (wago SpellName
+	// MATCHES; C++ SPELL_BLACKFATHOM_CHANNELING,
+	// boss_kelris.cpp:26; Lua kalimdor/boss_kelris.lua:54,
+	// 156/163 — self-cast, Reset + EVENT_CHANNELING) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_8399_8734_15587.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp0 die0
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite (aux row pre-existing), range1 Self Only
+	// 0yd (aux row pre-existing), school Physical (0x1);
+	// NO SpellCategories row; NO SpellAuraOptions row;
+	// Attributes_0 0x18000100 / Attributes_1 0x10000044
+	// not carried (no fields in the seed struct).
+	{id: 8734, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 15587 "Mind Blast" (wago SpellName MATCHES; C++
+	// SPELL_MIND_BLAST, boss_kelris.cpp:24; Lua
+	// kalimdor/boss_kelris.lua:52, 111 — victim-cast,
+	// EVENT_MIND_BLAST) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_8399_8734_15587.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp138
+	// die23 tgtA TARGET_UNIT_TARGET_ENEMY; cast16
+	// 1500ms, dur0 no row, range4 Medium 0-30yd (aux
+	// rows pre-existing), school Shadow (0x20);
+	// SpellCategories row EXISTS (Category 19,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0xd0000 not
+	// carried (no fields in the seed struct);
+	// EffectBonusCoefficient 1 not carried (no field in
+	// the seed struct).
+	{id: 15587, castTimeIdx: 16, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 138, dieSides: 23, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -11232,6 +11294,7 @@ func main() {
 		{15, 4000, 0},  // real SpellCastTimes 15 for 50476/50495/50496 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
 		{20, 2500, 0},  // real SpellCastTimes 20 for 25263 Holy Light (wago.tools 3.4.0.47659, 2026-11-16 verdict 9cf61680)
 		{170, 8000, 0}, // real SpellCastTimes 170 for 51110 (wago.tools 3.4.0.43659, 2026-11-15 verdict)
+		{50, 1300, 0},  // real SpellCastTimes 50 for 8399 (wago.tools 3.4.0.47659, 2026-11-17 verdict wago_spells_8399_8734_15587.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellCastTimes.dbc"), 3, castTimes); err != nil {
 		panic(err)
