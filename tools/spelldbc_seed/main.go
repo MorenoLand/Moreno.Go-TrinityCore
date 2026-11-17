@@ -11162,6 +11162,91 @@ var spells = []spell{
 	{id: 15587, castTimeIdx: 16, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 138, dieSides: 23, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 31909 "Whirlwind" (wago SpellName MATCHES; C++
+	// SPELL_WHIRLWIND, boss_leutenant_drake.cpp:77; Lua
+	// kalimdor/boss_lieutenant_drake.lua:94, 140 —
+	// victim-cast, EVENT_WHIRLWIND) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-17
+	// verdict file wago_spells_31909_31911_33789.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp-1 die1
+	// auraPeriod 2000 trigger 31910 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur35 4000ms,
+	// range2 Combat 0-5yd (aux rows pre-existing),
+	// school Physical (0x1); SpellCategories row EXISTS
+	// (Category 49, DefenseType 2 (Melee), DispelType 0,
+	// Mechanic 0, PreventionType 0x0) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (CumulativeAura 0, ProcChance 101) —
+	// not carried (no fields in the seed struct);
+	// Attributes_0 0x50010 / Attributes_1 0x40 not
+	// carried (no fields in the seed struct); NOTE
+	// triggered 31910 itself unseeded.
+	{id: 31909, castTimeIdx: 1, durIdx: 35, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 2000, trigger: 31910, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 31911 "Mortal Strike" (wago SpellName MATCHES; C++
+	// SPELL_MORTAL_STRIKE, boss_leutenant_drake.cpp:79;
+	// Lua kalimdor/boss_lieutenant_drake.lua:96, 166 —
+	// victim-cast, EVENT_MORTALSTRIKE) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_31909_31911_33789.txt, DifficultyID 0
+	// rows): eff0 WEAPON_PERCENT_DAMAGE bp149 die1
+	// tgtA TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// MOD_HEALING_PCT (aura 118) bp-51 die1 misc 127
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur28 5000ms, range2 Combat 0-5yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 22,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed
+	// struct); SpellAuraOptions row EXISTS
+	// (CumulativeAura 0, ProcChance 101) — not carried
+	// (no fields in the seed struct); Attributes_0
+	// 0x50010 not carried (no fields in the seed
+	// struct).
+	{id: 31911, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 149, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -51, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 33789 "Frightening Shout" (wago SpellName MATCHES;
+	// C++ SPELL_FRIGHTENING_SHOUT,
+	// boss_leutenant_drake.cpp:80; Lua
+	// kalimdor/boss_lieutenant_drake.lua:97, 153 —
+	// victim-cast, EVENT_FRIGHTENINGSHOUT) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_31909_31911_33789.txt, DifficultyID 0
+	// rows): eff0 TRIGGER_SPELL trigger 29544 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA MOD_FEAR
+	// (aura 7) bp0 die0 radiusIdx_0 14 (8yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff2 APPLY_AURA
+	// MOD_INCREASE_SPEED (aura 31) bp24 die1
+	// radiusIdx_0 14 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur32
+	// 6000ms, range7 Ten yards 0-10yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 22,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 5
+	// carried as mechanic 5, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (CumulativeAura 0, ProcChance 100,
+	// ProcTypeMask_0 0x800a22a8) — not carried (no
+	// fields in the seed struct); Attributes_0 0x50010
+	// not carried (no fields in the seed struct); NOTE
+	// triggered 29544 itself unseeded; eff2
+	// EffectBonusCoefficient 1 not carried (no field in
+	// the seed struct).
+	{id: 33789, castTimeIdx: 1, durIdx: 32, rangeIdx: 7, school: schoolPhysical, mechanic: 5, effects: [3]effect{
+		{effect: effTriggerSpell, trigger: 29544, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModFear, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: 24, dieSides: 1, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
