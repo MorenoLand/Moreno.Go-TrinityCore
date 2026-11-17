@@ -11734,6 +11734,87 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModCastSpeedNotStack, basePoints: -26, dieSides: 1, radiusIdx: 18, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
 		{effect: effScriptEffect, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 25812 "Toxic Volley" (wago SpellName MATCHES; C++
+	// SPELL_TOXIC_VOLLEY, boss_bug_trio.cpp:35; Lua
+	// kalimdor/boss_kri.lua:21, 83 — victim-cast,
+	// EVENT_TOXIC_VOLLEY) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_25812_26350_38718.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE (effect
+	// 2) bp449 die301 radiusIdx 12 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY;
+	// eff1 APPLY_AURA PERIODIC_DAMAGE (aura 3) bp149
+	// die1 auraPeriod 2000 radiusIdx 12 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENEMY;
+	// cast1 instant, dur387 16000ms, range4 Medium
+	// Range 0-30yd, radius12 100yd (aux rows
+	// pre-existing), school Nature (0x8), dispel 4
+	// (POISON, SpellCategories DispelType 4);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), Mechanic 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (CumulativeAura 20,
+	// ProcChance 101) — cumulative/proc NOT carried (no
+	// fields in the seed struct); Attributes_0 0x10 /
+	// Attributes_2 0x4 and EffectBonusCoefficient 1
+	// (both effects) not carried (no fields in the seed
+	// struct).
+	{id: 25812, castTimeIdx: 1, durIdx: 387, rangeIdx: 4, school: schoolNature, dispel: 4, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 449, dieSides: 301, radiusIdx: 12, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 149, dieSides: 1, auraPeriod: 2000, radiusIdx: 12, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 26350 "Cleave" (wago SpellName MATCHES; C++
+	// SPELL_CLEAVE, boss_bug_trio.cpp:34; Lua
+	// kalimdor/boss_kri.lua:20, 73 — victim-cast,
+	// EVENT_CLEAVE) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-17 verdict file
+	// wago_spells_25812_26350_38718.txt, DifficultyID 0
+	// rows): 1 effect only, WEAPON_DAMAGE (effect 58)
+	// bp199 die1 chainTargets 3 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0 (no
+	// duration), range2 Combat Range 0-5yd (aux row
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x40014 /
+	// Attributes_5 0x9000 and EffectBonusCoefficient 1
+	// not carried (no fields in the seed struct).
+	{id: 26350, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 199, dieSides: 1, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 1},
+	}},
+	// 38718 "Toxic Pool" (wago SpellName MISMATCH vs
+	// expected "Poison Cloud" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_POISON_CLOUD, boss_bug_trio.cpp:36 (comment:
+	// "Only Spell with right dmg."); Lua
+	// kalimdor/boss_kri.lua:22, 164 — victim-cast at
+	// <5% health, EVENT_POISON_CLOUD) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_25812_26350_38718.txt, DifficultyID 0
+	// rows; FKS dialog would not reopen, read entirely
+	// via direct table filters): 1 effect only,
+	// PERSISTENT_AREA_AURA (effect 27) PERIODIC_DAMAGE
+	// (aura 3) bp2137 die225 auraPeriod 1000 radiusIdx
+	// 20 (both _0 and _1 are 20; the seed struct
+	// carries only the _0 index per the established row
+	// mapping) tgtA TARGET_DEST_CASTER tgtB
+	// TARGET_DEST_DYNOBJ_ENEMY; cast1 instant, dur1
+	// 10000ms, range1 Self Only 0yd, radius20 25yd (aux
+	// rows pre-existing), school Nature (0x8);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 0x0) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x800000 /
+	// Attributes_1 0x88 / Attributes_5 0x40000000 not
+	// carried (no fields in the seed struct).
+	{id: 38718, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 2137, dieSides: 225, auraPeriod: 1000, radiusIdx: 20, targetA: targetDestCaster, targetB: targetDestDynobjEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
