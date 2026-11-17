@@ -12740,9 +12740,12 @@ var spells = []spell{
 	// RemoveAurasDueToSpell :156) — Wowhead WotLK
 	// (same verdict file): single eff0 APPLY_AURA
 	// PERIODIC_TRIGGER_SPELL (aura 23) displayed
-	// value 1 every 1s, trigger 68641 (follow-up
-	// read, same verdict file); raw bp 0, die 1 per
-	// 44335 precedent; channeled 0s: cast1 instant,
+	// value 450 every 1s, trigger 68641 (follow-up
+	// read, same verdict file); raw bp =
+	// displayed-1 = 449, die 1 per 44335 precedent
+	// (450 is anomalous for a trigger aura — the
+	// value is inert, trigger ID + 1s period carry
+	// the effect); channeled 0s: cast1 instant,
 	// no SpellDuration row (Wowhead Duration n/a —
 	// Go treats DurationIndex 0 as non-expiring,
 	// spells.go:8380 comment), range3 Twenty 0-20yd,
@@ -12750,7 +12753,7 @@ var spells = []spell{
 	// (channeled self-aura; 44197 periodic-trig
 	// precedent).
 	{id: 68589, castTimeIdx: 1, rangeIdx: 3, school: schoolNature, effects: [3]effect{
-		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 1000, trigger: 68641, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 449, auraPeriod: 1000, trigger: 68641, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 68641 "Alluring Perfume" (Wowhead SpellName
 	// MATCH; periodic tick triggered by 68589 eff0
