@@ -13517,6 +13517,39 @@ var spells = []spell{
 		{effect: effDualWield, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModHitChance, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 32264 "Inhibit Magic" (Wowhead SpellName MATCH; C++
+	// SPELL_INHIBITMAGIC, boss_shirrak_the_dead_watcher.cpp:34,
+	// AddAura per alive player within 45y :119-139; Lua
+	// outland/boss_shirrak_the_dead_watcher.lua:83,120-130 —
+	// per-player AddAura, 3s tick) — Wowhead WotLK
+	// (verdict file wago_spells_32264_16708.txt; wago
+	// NOT attempted — effect row complete): single eff0
+	// APPLY_AURA HASTE_SPELLS (aura 216) displayed -50%
+	// — bp -51, die 1 (31948 precedent); tgtA SRC_CASTER
+	// tgtB SRC_AREA_ENEMY (caster-centred AoE per 29511/
+	// 35008) + radiusIdx 91010 55yd (synthetic, Rokmar
+	// precedent); cast1 instant, dur35 4000ms (real row),
+	// range1 Self 0yd (real row), school Shadow. Engine
+	// twin: 65/216 route through the same handler
+	// (aura_haste.go:186-187). Tooltip "within 0 yards"
+	// is display-only; the effect Radius 55yd is the
+	// DBC value. HELD this batch: 16708 Hex (see below).
+	{id: 32264, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraHasteSpells, basePoints: -51, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 91010, chainAmplitude: 1},
+	}},
+	// 16708 "Hex" HELD — NOT seeded: Wowhead name MATCH
+	// but eff0 Change Model (Snake) shows NO Value, so
+	// the transform MiscValue (snake model/creature ID)
+	// is unknown; wago bot-blocked (39th consecutive).
+	// Seeding misc 0 would fabricate the transform (cf.
+	// the 25772 misc=15591 correction). eff1 Confuse
+	// (aura 5) + eff2 Dispel Mechanic Mounted (effect
+	// 108, Value 1) are derivable but the row must not
+	// ship with a hollow transform leg — hold the whole
+	// spell until wago clears. C++ SPELL_HEX,
+	// boss_shadow_hunter_voshgajin.cpp:25, DoCast random
+	// player; Lua eastern_kingdoms/
+	// boss_shadow_hunter_voshgajin.lua:53,122.
 }
 
 func main() {
