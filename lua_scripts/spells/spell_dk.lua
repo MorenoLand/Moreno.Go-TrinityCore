@@ -818,8 +818,11 @@ local SPELL_DK_HYSTERIA = 49016 -- spell_dk.cpp:1327 (class spell_dk_hysteria)
 
 -- C++ spell_dk_hysteria::PeriodicTick (spell_dk.cpp:1327-1342):
 -- EFFECT_1 PERIODIC_DUMMY tick deals CountPctFromMaxHealth of the
--- effect-1 amount as self damage (SELF_DAMAGE, school NORMAL, no
--- durability loss). RegisterAuraEvent OnEffectPeriodic = 1. The
+-- effect-1 amount as self damage (SELF_DAMAGE, SPELL_SCHOOL_MASK_NORMAL,
+-- no durability loss). C++ Unit::DealDamage applies no armor/absorb/resist
+-- itself (armor lives in CalculateSpellDamageTaken, Unit.cpp:987), so the
+-- call uses the bridge's flat leg (school 7); school 0 would wrongly
+-- armor-reduce (lua_unit_combat.go:276). RegisterAuraEvent OnEffectPeriodic = 1. The
 -- tick-294 "needs DealDamage" stay-out is stale: DealDamage is
 -- bridged on player + creature + objects (lua_player.go:3460,
 -- lua_creature_events.go:1874, lua_objects.go:2585) with the
@@ -830,7 +833,7 @@ local function hysteriaTick(event, aura, target)
         return
     end
     local damage = target:CountPctFromMaxHealth(aura:GetAmount(1))
-    target:DealDamage(target, damage, false, 0)
+    target:DealDamage(target, damage, false, 7)
 end
 
 RegisterAuraEvent(SPELL_DK_HYSTERIA, 1, hysteriaTick)
