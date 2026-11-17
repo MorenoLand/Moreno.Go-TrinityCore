@@ -137,6 +137,7 @@ const (
 	auraPeriodicLeech          = 53 // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
 	auraPeriodicManaLeech      = 64 // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
 	auraModResistPct           = 101
+	auraModAttackPower         = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
 	auraModMeleeHaste          = 138
 	auraForceReaction          = 139 // SPELL_AURA_FORCE_REACTION (SpellAuraDefines.h:219)
@@ -10129,6 +10130,109 @@ var spells = []spell{
 	// in the seed struct).
 	{id: 16103, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effSummon, basePoints: 3, dieSides: 1, misc: 10375, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 11130 "Knock Away" (wago SpellName MISMATCH vs
+	// C++/Lua "Blast Wave"; seeded on data per the
+	// eramas_brightblaze 15503 / smolderweb 16104
+	// precedent; C++ SPELL_BLASTWAVE,
+	// boss_overlord_wyrmthalak.cpp:25; Lua
+	// eastern_kingdoms/boss_overlord_wyrmthalak.lua:61, 108 —
+	// victim-cast, 20s init -> 20s) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_11130_23511_20686.txt, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE (effect 58) bp29
+	// die1 radiusIdx 13 (10yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 KNOCK_BACK
+	// (effect 98) bp112 die75 misc 75 radiusIdx 13
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row 0; 10934
+	// precedent), range7 Ten yards 0-10yd (aux row
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 2 (Melee), DispelType 0 carried
+	// as dispel 0, Mechanic 0, PreventionType 0x2,
+	// StartRecoveryCategory 0) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; Attributes_0 0x10 / Attributes_1 0x0
+	// not carried (no fields in the seed struct);
+	// EffectBonusCoefficient 1/0 not carried (no
+	// fields in the seed struct).
+	{id: 11130, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 112, dieSides: 75, misc: 75, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 23511 "Demoralizing Shout" (wago SpellName
+	// MISMATCH vs C++/Lua "Shout"; seeded on data
+	// per the eramas_brightblaze 15503 / smolderweb
+	// 16104 precedent; C++ SPELL_SHOUT,
+	// boss_overlord_wyrmthalak.cpp:26; Lua
+	// eastern_kingdoms/boss_overlord_wyrmthalak.lua:62, 120 —
+	// victim-cast, 2s init -> 10s) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_11130_23511_20686.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_ATTACK_POWER
+	// (aura 99) bp-41 die1 radiusIdx 13 (10yd,
+	// aux row pre-existing) tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; cast1
+	// instant, dur9 30000ms (aux row
+	// pre-existing), range1 Self Only 0yd (aux row
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0 carried
+	// as dispel 0, Mechanic 0, PreventionType 0x1,
+	// StartRecoveryCategory 133) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; Attributes_0 0x50010 / Attributes_1 0x0
+	// not carried (no fields in the seed struct);
+	// EffectRealPointsPerLevel -8 not carried (no
+	// fields in the seed struct).
+	{id: 23511, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModAttackPower, basePoints: -41, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 20686 "Knock Away" (wago SpellName MATCHES;
+	// C++ SPELL_KNOCKAWAY,
+	// boss_overlord_wyrmthalak.cpp:28; Lua
+	// eastern_kingdoms/boss_overlord_wyrmthalak.lua:64, 144 —
+	// victim-cast, 12s init -> 14s) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_11130_23511_20686.txt, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE (effect 58) bp29
+	// die1 radiusIdx 13 (10yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 KNOCK_BACK
+	// (effect 98) bp112 die75 misc 75 radiusIdx 13
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff2 SCRIPT_EFFECT
+	// (effect 77) bp0 die0 radiusIdx 13 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row 0; 10934
+	// precedent), range7 Ten yards 0-10yd (aux row
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 2 (Melee), DispelType 0 carried
+	// as dispel 0, Mechanic 0, PreventionType 0x2,
+	// StartRecoveryCategory 0) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; Attributes_0 0x10 / Attributes_1 0x88
+	// not carried (no fields in the seed struct);
+	// EffectBonusCoefficient 1/0/1 not carried (no
+	// fields in the seed struct). Same first two
+	// effects as 11130 plus the SCRIPT_EFFECT leg;
+	// 11130 and 20686 share the wago name
+	// "Knock Away" in this build.
+	{id: 20686, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 29, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 112, dieSides: 75, misc: 75, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
 }
 
