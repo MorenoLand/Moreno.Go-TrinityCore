@@ -12772,6 +12772,89 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 1619, dieSides: 361, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
 	}},
+	// 8260 "Rushing Charge" (Wowhead SpellName MATCH; C++
+	// SPELL_RUSHINGCHARGE, boss_herod.cpp:34; Lua
+	// eastern_kingdoms/boss_herod.lua:60, 140 —
+	// DoCast(me), self-cast) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wago_spells_8260_8989_40504_8599.txt): eff0
+	// APPLY_AURA MOD_INCREASE_SPEED (aura 31)
+	// displayed 60%, eff1 APPLY_AURA MOD_DAMAGE_DONE
+	// (aura 13, Physical) displayed 10; raw bp =
+	// displayed-1 (59 / 9), die 1 per 44335
+	// precedent. NOTE: tooltip prose says 178%
+	// speed + 600 damage — the Spell Details effect
+	// table (the DBC values) is seeded, not the
+	// tooltip text; cast1 instant, dur35 4000ms
+	// (real row), range1 Self, school Physical (0x1).
+	{id: 8260, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, dieSides: 1, basePoints: 59, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 9, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 8989 "Whirlwind" (Wowhead SpellName MATCH; C++
+	// SPELL_WHIRLWIND, boss_herod.cpp:36; Lua
+	// eastern_kingdoms/boss_herod.lua:62, 123 —
+	// DoCastVictim, channeled) — Wowhead WotLK
+	// (same verdict file): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) every 2s,
+	// trigger 15578 (follow-up read, same verdict
+	// file), no displayed value — bp 0 die 0 per
+	// 44197/31673 precedent; eff1 APPLY_AURA
+	// SCHOOL_IMMUNITY (aura 39, All) displayed
+	// value 1 — bp 0, die 1, misc 127 (all schools,
+	// inferred from "Immunity (All)"); channeled
+	// 10s: cast7 10000ms (real row), dur1 10000ms
+	// (real row), range1 Self, school Physical.
+	{id: 8989, castTimeIdx: 7, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 0, basePoints: 0, auraPeriod: 2000, trigger: 15578, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSchoolImmunity, dieSides: 1, basePoints: 0, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 15578 "Whirlwind" (Wowhead SpellName MATCH;
+	// periodic tick triggered by 8989 eff0 every 2s;
+	// no C++ enum — trigger-only spell) — Wowhead
+	// WotLK (same verdict file): single eff0
+	// WEAPON_DAMAGE (eff 58) "Deal Weapon Damage"
+	// Value 100, radius 8yd; single value — flat
+	// (bp 100, die 0, CalcValue returns the stored
+	// base, spells.go:24989-25010) per 35108
+	// precedent; caster-centred AoE: tgtA SRC_CASTER
+	// tgtB SRC_AREA_ENEMY + radius14 8yd (real row)
+	// per 69900 precedent; cast1 instant, range1
+	// Self, school Physical.
+	{id: 15578, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 100, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 40504 "Cleave" (Wowhead SpellName MATCH; C++
+	// SPELL_CLEAVE, alterac_valley.cpp:24; Lua
+	// eastern_kingdoms/npc_av_marshal_or_warmaster.lua:50,
+	// 123 — DoCastVictim) — Wowhead WotLK (same
+	// verdict file): single eff0 WEAPON_PERCENT_DAMAGE
+	// (eff 31) "Weapon Damage - %" Value 110, up to
+	// 3 targets; single value — flat (bp 110, die 0)
+	// per 35108 precedent; chainTargets 3 (total
+	// targets incl. primary, spells.go chain
+	// semantics) + chainAmplitude 1 (no falloff);
+	// cast1 instant, range2 Combat 0-5yd (real row),
+	// school Physical; no SpellDuration row.
+	{id: 40504, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 110, dieSides: 0, targetA: targetEnemy, chainTargets: 3, chainAmplitude: 1},
+	}},
+	// 8599 "Enrage" (Wowhead SpellName MATCH; C++
+	// SPELL_ENRAGE, alterac_valley.cpp:26; Lua
+	// eastern_kingdoms/npc_av_marshal_or_warmaster.lua:52,
+	// 151 — DoCast(me), self-cast) — Wowhead WotLK
+	// (same verdict file): eff0 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE (aura 79, Physical)
+	// displayed 10% — bp 9, die 1, misc 1 per 44335
+	// precedent; eff1 APPLY_AURA MOD_MELEE_HASTE
+	// (aura 138) displayed 30% — bp 29, die 1;
+	// dispel 9 (DISPEL_ENRAGE, SharedDefines.h:1413);
+	// dur4 120000ms (real row), cast1 instant, range1
+	// Self, school Physical.
+	{id: 8599, dispel: 9, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 9, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 29, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
