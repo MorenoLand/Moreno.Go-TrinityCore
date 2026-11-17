@@ -9540,6 +9540,94 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -41, dieSides: 1, mechanic: 11, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -34, dieSides: 1, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 17244 "Possess" (wago SpellName MATCHES;
+	// C++ SPELL_POSSESS,
+	// boss_baroness_anastari.cpp:30; Lua
+	// eastern_kingdoms/boss_baroness_anastari.lua:65-66, 28-30 —
+	// triggered victim-cast, 20-30s init) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_17244_17246_17250.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_CHARM (aura 6)
+	// bp99 die1 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff1 APPLY_AURA MECHANIC_IMMUNITY (aura 77)
+	// bp0 die1 misc 1 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff2 APPLY_AURA MOD_INCREASE_HEALTH (aura 34)
+	// bp1999 die1 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur4 120000ms (aux row
+	// pre-existing), range4 Medium Range 0-30yd
+	// (aux row pre-existing), school Shadow
+	// (0x20); SpellCategories row EXISTS (Category
+	// 93, DefenseType 0, DispelType 0, Mechanic 0)
+	// — category/defense not carried (no fields in
+	// the seed struct); NO SpellAuraOptions row;
+	// Speed 27 / Attributes_0 0x0 / Attributes_1
+	// 0x10010000 not carried (no fields in the
+	// seed struct); SpellTargetRestrictions row
+	// (MaxTargets 0) not carried.
+	{id: 17244, castTimeIdx: 1, durIdx: 4, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCharm, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, basePoints: 0, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseHealth, basePoints: 1999, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 17246 "Possessed" (wago SpellName MATCHES;
+	// C++ SPELL_POSSESSED,
+	// boss_baroness_anastari.cpp:31; Lua
+	// eastern_kingdoms/boss_baroness_anastari.lua:65-66, 29 —
+	// triggered victim-cast with 17244, HasAura
+	// gate + RemoveAura on check) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_17244_17246_17250.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// (aura 79) bp99 die1 misc 127 tgtA
+	// TARGET_UNIT_TARGET_ANY; NO eff1 row for
+	// DifficultyID 0 ({} gap, 34799 precedent);
+	// eff2 HEAL_MAX_HEALTH (effect 67) bp0 die1
+	// tgtA TARGET_UNIT_TARGET_ANY; cast1 instant,
+	// dur4 120000ms (aux row pre-existing),
+	// range13 Anywhere 0-50000yd -> synthetic
+	// 93008 (68415/52267 precedent), school
+	// Physical; NO SpellAuraOptions row; NO
+	// SpellCategories row; Attributes_0 0x4000110 /
+	// Attributes_2 0x4 not carried (no fields in
+	// the seed struct).
+	{id: 17246, castTimeIdx: 1, durIdx: 4, rangeIdx: 93008, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 99, dieSides: 1, misc: 127, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{},
+		{effect: effHealMaxHealth, basePoints: 0, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 17250 "Possess" (wago SpellName MISMATCH —
+	// expected "Possess Invisibility", DB2 name is
+	// plain "Possess", same as 17244; seeded on
+	// data per the eramas_brightblaze 15503
+	// precedent; C++ SPELL_POSSESS_INV,
+	// boss_baroness_anastari.cpp:32; Lua
+	// eastern_kingdoms/boss_baroness_anastari.lua:65-66, 30 —
+	// triggered self-cast, baroness invisible) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_17244_17246_17250.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA SCHOOL_IMMUNITY
+	// (aura 39) bp0 die1 misc 127 (0x7f as
+	// displayed) tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_INVISIBILITY (aura 18)
+	// bp4999 die1 tgtA TARGET_UNIT_CASTER (confirms
+	// the invisibility function despite the plain
+	// name); eff2 APPLY_AURA MOD_STUN (aura 12)
+	// bp0 die0 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur4 120000ms (aux row
+	// pre-existing), range1 Self Only 0yd (aux
+	// row pre-existing), school Physical; NO
+	// SpellAuraOptions row; NO SpellCategories
+	// row; Attributes_0 0x190 / Attributes_1
+	// 0x10000000 not carried (no fields in the
+	// seed struct).
+	{id: 17250, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolImmunity, basePoints: 0, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModInvisibility, basePoints: 4999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
