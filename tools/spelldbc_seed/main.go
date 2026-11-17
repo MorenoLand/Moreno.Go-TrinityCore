@@ -12191,6 +12191,85 @@ var spells = []spell{
 	{id: 46842, castTimeIdx: 1, durIdx: 28, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
 		{effect: effPersistentAreaAura, aura: auraDummy, radiusIdx: 7, targetA: targetDestCaster, chainAmplitude: 1},
 	}},
+	// 31481 "Lung Burst" (wago SpellName MATCH; C++
+	// SPELL_LUNG_BURST, boss_hydromancer_thespia.cpp:33;
+	// Lua steamvault/boss_hydromancer_thespia.lua:83, 185
+	// — target-cast, 7s init then {7s,12s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_31481_31718_34449.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE (aura 3)
+	// bp601 die97 auraPeriod 2000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur1
+	// 10000ms, range5 Long Range 40yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 0, DispelType 1 MAGIC, Mechanic 0,
+	// PreventionType 0) — dispel 1 carried, rest not
+	// carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0x10 not carried (no
+	// fields in the seed struct); no triggered spells.
+	{id: 31481, dispel: 1, castTimeIdx: 1, durIdx: 1, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 601, dieSides: 97, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 31718 "Enveloping Winds" (wago SpellName MATCH; C++
+	// SPELL_ENVELOPING_WINDS,
+	// boss_hydromancer_thespia.cpp:34; Lua
+	// steamvault/boss_hydromancer_thespia.lua:84, 197 —
+	// target-cast, 9s init then {10s,15s}, second heroic
+	// cast) — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_31481_31718_34449.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STUN (aura 12) bp-1
+	// die1 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur32 6000ms, range35 Medium-Long Range
+	// 35yd (aux rows pre-existing), school Nature
+	// (0x8); SpellCategories row EXISTS (Category 99,
+	// DefenseType 1 Magic, DispelType 1 MAGIC, Mechanic
+	// 12, PreventionType 1) — dispel 1 + mechanic 12
+	// carried (30621 precedent: spell mechanic from
+	// SpellCategories, feeds diminishing.go), rest not
+	// carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0x40010010 /
+	// Attributes_1 0x800 not carried (no fields in the
+	// seed struct); no triggered spells.
+	{id: 31718, dispel: 1, mechanic: 12, castTimeIdx: 1, durIdx: 32, rangeIdx: 35, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34449 "Water Bolt Volley" (wago SpellName MATCH;
+	// C++ SPELL_WATER_BOLT_VOLLEY,
+	// boss_hydromancer_thespia.cpp:124
+	// (npc_coilfang_waterelemental enum); Lua
+	// steamvault/boss_hydromancer_thespia.lua:85, 222 —
+	// non-triggered self-cast, {7s,12s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_31481_31718_34449.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp67 die15 tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; radius lives in
+	// EffectRadiusIndex_1 (21 = 35yd) only — seed struct
+	// carries only the _0 index per the kri 38718
+	// precedent, so radiusIdx stays 0 (real SpellRadius
+	// 21 row added below, unreferenced); cast16 1500ms,
+	// dur0 (no SpellDuration row), range35 Medium-Long
+	// Range 35yd (aux rows pre-existing), school Frost
+	// (0x10); SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 Magic, DispelType 0, Mechanic 0,
+	// PreventionType 1) — none carried (no fields in
+	// the seed struct); NO SpellAuraOptions row;
+	// Attributes_0 0x80000 / Attributes_2 0x4 not
+	// carried (no fields in the seed struct); the
+	// DifficultyID 173 variant row (bp93 die23) is NOT
+	// seeded per base-rows-only precedent; no triggered
+	// spells.
+	{id: 34449, castTimeIdx: 16, rangeIdx: 35, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 67, dieSides: 15, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -12304,6 +12383,7 @@ func main() {
 		{61, f32(14), f32(0), f32(14)},   // real SpellRadius 61 for 68948 (wago.tools 3.4.0.47659 SpellRadius row 61, 2026-11-17 verdict wago_spells_68821_68948_69218.txt)
 		{22, f32(200), f32(0), f32(200)}, // real SpellRadius 22 for 28796 Poison Bolt Volley (wago.tools 3.4.0.47659 SpellRadius row 22, 2026-11-17 verdict wago_spells_28794_28796_54097.txt)
 		{7, f32(2), f32(0), f32(2)},      // real SpellRadius 7 for 46836/46842 (wago.tools 3.4.0.47659 SpellRadius row 7, 2026-11-17 verdict wago_spells_29726_46836_46842.txt)
+		{21, f32(35), f32(0), f32(35)},   // real SpellRadius 21 = 34449 RadiusIndex_1 (wago.tools 3.4.0.47659 SpellRadius row 21, 2026-11-17 verdict wago_spells_31481_31718_34449.txt); UNREFERENCED — 34449's radius lives in _1 only, seed carries _0 only per kri 38718 precedent (cf. unreferenced radius 40 for 29961)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
