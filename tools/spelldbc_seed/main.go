@@ -11570,6 +11570,84 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModCastSpeedNotStack, basePoints: -16, dieSides: 1, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -19, dieSides: 1, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 19408 "Panic" (wago SpellName MISMATCH vs expected
+	// "Fear" — seeded on data per quel'danas/
+	// ghostly-citizen precedent; C++ SPELL_FEAR,
+	// boss_bug_trio.cpp:43; Lua
+	// kalimdor/boss_yauj.lua:27, 73 — victim-cast,
+	// EVENT_FEAR) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-17 verdict file
+	// wago_spells_19408_25807_34624.txt, DifficultyID 0
+	// rows): 1 effect only, APPLY_AURA MOD_FEAR (aura
+	// 7) bp0 die1 radiusIdx 11 tgtA TARGET_SRC_CASTER
+	// tgtB TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur31 8000ms, range1 Self Only 0yd, radius11
+	// 45yd (aux rows pre-existing), school Shadow
+	// (0x20), dispel 1, mechanic 5 (SpellCategories
+	// DispelType 1, Mechanic 5); SpellCategories row
+	// EXISTS (Category 0, DefenseType 1 (Magic),
+	// PreventionType 1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x10 /
+	// Attributes_1 0x88 / Attributes_2 0x4 and
+	// EffectBonusCoefficient 1 not carried (no fields
+	// in the seed struct).
+	{id: 19408, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolShadow, dispel: 1, mechanic: 5, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, dieSides: 1, radiusIdx: 11, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 25807 "Great Heal" (wago SpellName MISMATCH vs
+	// expected "Heal" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_HEAL, boss_bug_trio.cpp:42; Lua
+	// kalimdor/boss_yauj.lua:29, 96/101/104 — cast on
+	// Kri/Vem/self, EVENT_HEAL) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_19408_25807_34624.txt,
+	// DifficultyID 0 rows): 1 effect only, HEAL
+	// (effect 10) bp69374 die11251 tgtA
+	// TARGET_UNIT_TARGET_ALLY; cast5 2000ms, dur0 (no
+	// duration), range13 Anywhere - Unlimited 0-50000yd
+	// (aux rows pre-existing), school Holy (0x2);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 1, StartRecoveryCategory 133) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0x10000 and
+	// EffectBonusCoefficient 1 not carried (no fields
+	// in the seed struct).
+	{id: 25807, castTimeIdx: 5, rangeIdx: 13, school: schoolHoly, effects: [3]effect{
+		{effect: effHeal, basePoints: 69374, dieSides: 11251, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 34624 "Frenzy" (wago SpellName MISMATCH vs expected
+	// "Enrage" — seeded on data per quel'danas/
+	// ghostly-citizen precedent; C++ SPELL_ENRAGE,
+	// boss_bug_trio.cpp:37 (comment notes 25790 is cast
+	// on gamers too); Lua kalimdor/boss_yauj.lua:28,
+	// 125 — self-cast, EVENT_ENRAGE) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_19408_25807_34624.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// (aura 79) bp99 die1 misc 127 (all-schools mask —
+	// cf. 28747/28798 misc 1 Physical only) tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp49 die1 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur32 6000ms,
+	// range1 Self Only 0yd (aux rows pre-existing),
+	// school Physical (0x1); SpellCategories row EXISTS
+	// (Category 21, DefenseType 0, DispelType 0,
+	// Mechanic 0, PreventionType 0) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0x40010 /
+	// Attributes_3 0x10000000 and eff0
+	// RealPointsPerLevel 1 not carried (no fields in
+	// the seed struct).
+	{id: 34624, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 99, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
