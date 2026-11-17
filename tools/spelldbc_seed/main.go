@@ -12117,6 +12117,80 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraDummy, basePoints: 10799, dieSides: 2401, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 3149, dieSides: 701, auraPeriod: 1000, radiusIdx: 61, targetA: targetEnemy, targetB: targetUnitConeEnemy, chainAmplitude: 1},
 	}},
+	// 29726 "Test Ribbon Pole Channel" (wago SpellName
+	// MISMATCH vs expected "Ribbon Dance Cosmetic" —
+	// seeded on data per quel'danas/ghostly-citizen
+	// precedent; C++ SPELL_RIBBON_DANCE_COSMETIC,
+	// npcs_special.cpp:452; Lua
+	// world/npcs_special_part1.lua:111, 143 — HasAura
+	// gate for the ribbon-pole ring machine) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_29726_46836_46842.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp0 die1
+	// tgtA TARGET_UNIT_NEARBY_ENTRY; eff1 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die0
+	// auraPeriod 3000 trigger 29715 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// (infinite), range7 Ten yards 10yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row does NOT exist at all —
+	// dispel/mechanic stay 0; NO SpellAuraOptions row;
+	// Attributes_0 0x8000100 / Attributes_1 0x10000004 /
+	// Attributes_4 0x80 not carried (no fields in the
+	// seed struct); NOTE triggered 29715 itself
+	// unseeded.
+	{id: 29726, castTimeIdx: 1, durIdx: 21, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, targetA: targetUnitNearbyEntry, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 3000, trigger: 29715, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 46836 "Flame Patch" (wago SpellName MISMATCH vs
+	// expected "Red Fire Ring" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_RED_FIRE_RING, npcs_special.cpp:453; Lua
+	// world/npcs_special_part1.lua:112, 163 — triggered
+	// CastSpell on the ribbon pole) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_29726_46836_46842.txt, DifficultyID 0
+	// rows): eff0 PERSISTENT_AREA_AURA APPLY_AURA DUMMY
+	// (aura 4) bp0 die0 radiusIdx 7 tgtA
+	// TARGET_DEST_CASTER; cast1 instant, dur28 5000ms,
+	// range6 Vision Range 100yd, radius7 2yd (NEW aux
+	// row), school Physical (0x1); SpellCategories row
+	// does NOT exist at all — dispel/mechanic stay 0;
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0x180 / Attributes_1
+	// 0x400 not carried (no fields in the seed struct);
+	// no triggered spells.
+	{id: 46836, castTimeIdx: 1, durIdx: 28, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraDummy, radiusIdx: 7, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
+	// 46842 "Flame Ring" (wago SpellName MISMATCH vs
+	// expected "Blue Fire Ring" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_BLUE_FIRE_RING, npcs_special.cpp:454; Lua
+	// world/npcs_special_part1.lua:113, 179 — triggered
+	// CastSpell on the ribbon pole) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_29726_46836_46842.txt, DifficultyID 0
+	// rows): identical to 46836 in every seeded field —
+	// eff0 PERSISTENT_AREA_AURA APPLY_AURA DUMMY (aura
+	// 4) bp0 die0 radiusIdx 7 tgtA TARGET_DEST_CASTER;
+	// cast1 instant, dur28 5000ms, range6 Vision Range
+	// 100yd, radius7 2yd (aux row added for 46836),
+	// school Physical (0x1); SpellCategories row does
+	// NOT exist at all — dispel/mechanic stay 0;
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc chance/type NOT carried (no fields in the
+	// seed struct); Attributes_0 0x180 / Attributes_1
+	// 0x400 not carried (no fields in the seed struct);
+	// no triggered spells.
+	{id: 46842, castTimeIdx: 1, durIdx: 28, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraDummy, radiusIdx: 7, targetA: targetDestCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -12229,6 +12303,7 @@ func main() {
 		{31, f32(80), f32(0), f32(80)},   // real SpellRadius 31 for 44314 (wago.tools 3.4.0.47659 SpellRadius row 31, 2026-11-17 verdict wago_spells_44294_44314_46153.txt)
 		{61, f32(14), f32(0), f32(14)},   // real SpellRadius 61 for 68948 (wago.tools 3.4.0.47659 SpellRadius row 61, 2026-11-17 verdict wago_spells_68821_68948_69218.txt)
 		{22, f32(200), f32(0), f32(200)}, // real SpellRadius 22 for 28796 Poison Bolt Volley (wago.tools 3.4.0.47659 SpellRadius row 22, 2026-11-17 verdict wago_spells_28794_28796_54097.txt)
+		{7, f32(2), f32(0), f32(2)},      // real SpellRadius 7 for 46836/46842 (wago.tools 3.4.0.47659 SpellRadius row 7, 2026-11-17 verdict wago_spells_29726_46836_46842.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
