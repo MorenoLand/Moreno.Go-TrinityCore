@@ -13453,6 +13453,48 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 3238, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 1749, auraPeriod: 2000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 23341 "Flame Buffet" (Wowhead SpellName MATCH; C++
+	// SPELL_FLAMEBUFFET, boss_firemaw.cpp:26,
+	// DoCastVictim, 5s re-arm; Lua
+	// blackwinglair/boss_firemaw.lua:44,110) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_23341_23342.txt): eff0
+	// SCHOOL_DAMAGE Fire 139-161 — bp 138, die
+	// 23; eff1 APPLY_AURA MOD_DAMAGE_TAKEN (aura
+	// 14) +150 Fire — bp 149, die 1, misc 4 (Fire
+	// school mask); both tgtA ENEMY; NO radiusIdx
+	// (Wowhead "Radius: 100 yards" is not an
+	// EffectRadiusIndex — wago showed index 0 for
+	// 23462 with the same display); cast1 instant,
+	// dur18 20000ms (real row), range6 Vision
+	// 0-100yd (real row), school Fire.
+	{id: 23341, castTimeIdx: 1, durIdx: 18, rangeIdx: 6, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 138, dieSides: 23, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageTaken, dieSides: 1, basePoints: 149, misc: 4, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 23342 "Frenzy" (TC enum name SPELL_FRENZY,
+	// boss_flamegor.cpp:31; Wowhead display name is
+	// "Enrage" — TC enum is authoritative per the
+	// 30925 "Exploding Beaker" precedent; DoCast
+	// self, {8s,10s} re-arm; Lua
+	// blackwinglair/boss_flamegor.lua:47,116) —
+	// Wowhead WotLK (same verdict file): eff0
+	// APPLY_AURA MOD_MELEE_HASTE (aura 138) +150%
+	// — bp 149, die 1; eff1 APPLY_AURA MOD_SCALE
+	// (aura 61) +20% — bp 19, die 1; eff2
+	// APPLY_AURA PERIODIC_TRIGGER_SPELL (aura 23)
+	// Value 1 every 2s — bp 0, die 1, period 2000,
+	// trigger 23462 Fire Nova (already seeded
+	// 2026-11-16, wago-verified); all tgtA CASTER;
+	// dispel 9 (DISPEL_ENRAGE,
+	// SharedDefines.h:1413, per 8599); cast1
+	// instant, dur1 10000ms (real row), range1
+	// Self, school Physical.
+	{id: 23342, dispel: 9, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 149, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 19, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 2000, trigger: 23462, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
