@@ -11895,6 +11895,89 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModScale, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 4000, trigger: 19272, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 23331 "Blast Wave" (wago SpellName MATCHES; C++
+	// SPELL_BLASTWAVE, boss_broodlord_lashlayer.cpp:34;
+	// Lua blackwinglair/boss_broodlord_lashlayer.lua:75,
+	// 125 — non-triggered DoCastVictim, EVENT_BLASTWAVE)
+	// — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_23331_24573_25778.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp2624 die751 radiusIdx
+	// 9 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 APPLY_AURA
+	// MOD_DECREASE_SPEED (aura 33) bp-51 die1 radiusIdx 9
+	// same targets; eff2 KNOCK_BACK bp174 die1 misc 100
+	// radiusIdx 9 same targets; cast1 instant, dur31
+	// 8000ms, range1 Self Only 0yd, radius9 20yd (aux
+	// rows pre-existing), school Fire (0x4);
+	// SpellCategories row EXISTS (Category 250,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x10000 /
+	// Attributes_1 0x88 and EffectBonusCoefficient 1
+	// (eff0/eff2) not carried (no fields in the seed
+	// struct); no triggered spells.
+	{id: 23331, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2624, dieSides: 751, radiusIdx: 9, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, radiusIdx: 9, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 174, dieSides: 1, misc: 100, radiusIdx: 9, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 24573 "Mortal Strike" (wago SpellName MATCHES; C++
+	// SPELL_MORTALSTRIKE, boss_broodlord_lashlayer.cpp:35;
+	// Lua blackwinglair/boss_broodlord_lashlayer.lua:76,
+	// 137 — non-triggered DoCastVictim,
+	// EVENT_MORTALSTRIKE) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_23331_24573_25778.txt,
+	// DifficultyID 0 rows): eff0 WEAPON_PERCENT_DAMAGE
+	// bp499 die1 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// APPLY_AURA MOD_HEALING_PCT (aura 118) bp-51 die1
+	// misc 127 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur28 5000ms, range2 Combat Range 5yd
+	// (aux rows pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x2, StartRecoveryCategory 133) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0x50010 not
+	// carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 24573, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 499, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -51, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 25778 "Knock Away" (wago SpellName MISMATCH vs
+	// expected "Knockback" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_KNOCKBACK, boss_broodlord_lashlayer.cpp:36;
+	// Lua blackwinglair/boss_broodlord_lashlayer.lua:77,
+	// 149 — non-triggered DoCastVictim, EVENT_KNOCKBACK;
+	// also referenced by boss_void_reaver.lua) —
+	// wago.tools 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_23331_24573_25778.txt, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE bp29 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 KNOCK_BACK bp37
+	// die25 misc 250 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff2 SCRIPT_EFFECT bp0 die0 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur0
+	// none, range7 Ten yards 10yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x10 and
+	// EffectBonusCoefficient 1 (eff0/eff2) not carried
+	// (no fields in the seed struct); no triggered
+	// spells.
+	{id: 25778, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 29, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 37, dieSides: 25, misc: 250, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
