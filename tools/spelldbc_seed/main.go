@@ -56,6 +56,7 @@ const (
 	effApplyAura               = 6
 	effQuestComplete           = 16 // SPELL_EFFECT_QUEST_COMPLETE (SharedDefines.h:827)
 	effHealthLeech             = 9
+	effPowerDrain              = 8  // SPELL_EFFECT_POWER_DRAIN (SharedDefines.h:819)
 	effHeal                    = 10 // SPELL_EFFECT_HEAL (SharedDefines.h:821)
 	effLearnSpell              = 36 // SPELL_EFFECT_LEARN_SPELL (SharedDefines.h:847)
 	effDispel                  = 38 // SPELL_EFFECT_DISPEL (SharedDefines.h:849)
@@ -11977,6 +11978,87 @@ var spells = []spell{
 		{effect: effWeaponDamage, basePoints: 29, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effKnockBack, basePoints: 37, dieSides: 25, misc: 250, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effScriptEffect, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16099 "Frost Breath" (wago SpellName MATCHES; C++
+	// SPELL_FROSTBREATH, boss_gahzranka.cpp:24; Lua
+	// zulgurub/boss_gahzranka.lua:29, 61 — triggered
+	// DoCastVictim, EVENT_FROSTBREATH) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_16099_22421_24326.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp127 die45 radiusIdx 9
+	// tgtA TARGET_UNIT_CONE_ENEMY_24; eff1 POWER_DRAIN
+	// bp127 die45 radiusIdx 9 same target; eff2
+	// APPLY_AURA MOD_DECREASE_SPEED (aura 33) bp-51
+	// die1 mechanic 11 radiusIdx 9 same target; cast5
+	// 2000ms, dur1 10000ms, range2 Combat Range 5yd,
+	// radius9 20yd (aux rows pre-existing), school
+	// Frost (0x10); SpellCategories row EXISTS
+	// (Category 50, DefenseType 1 (Magic), DispelType 0,
+	// Mechanic 0, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0xC0010 /
+	// Attributes_1 0x88, EffectBonusCoefficient 1 (all
+	// three effects), EffectAttributes 0x20000 (all
+	// three effects) and eff1 EffectAmplitude 1 not
+	// carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 16099, castTimeIdx: 5, durIdx: 1, rangeIdx: 2, school: schoolFrost, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 127, dieSides: 45, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effPowerDrain, basePoints: 127, dieSides: 45, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, mechanic: 11, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 22421 "Massive Geyser" (wago SpellName MATCHES; C++
+	// SPELL_MASSIVEGEYSER, boss_gahzranka.cpp:25 ("Not
+	// working. (summon)"); Lua
+	// zulgurub/boss_gahzranka.lua:30, 72 — triggered
+	// DoCastVictim, EVENT_MASSIVEGEYSER; the summon
+	// effect is upstream-broken per the Lua header) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_16099_22421_24326.txt, DifficultyID 0
+	// rows): eff0 SUMMON bp0 die0 misc 14122 (Massive
+	// Geyser entry) miscB 64 tgtA
+	// TARGET_DEST_TARGET_ENEMY; cast16 1500ms, dur39
+	// 2000ms, range5 Long Range 40yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; EffectBonusCoefficient 1
+	// not carried (no fields in the seed struct); no
+	// triggered spells (misc 14122/64 are summon
+	// values, not a trigger).
+	{id: 22421, castTimeIdx: 16, durIdx: 39, rangeIdx: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, misc: 14122, miscB: 64, targetA: targetDestTargetEnemy, chainAmplitude: 1},
+	}},
+	// 24326 "Gahz'ranka Slam" (wago SpellName MISMATCH vs
+	// expected "Slam" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_SLAM, boss_gahzranka.cpp:26; Lua
+	// zulgurub/boss_gahzranka.lua:31, 83 — triggered
+	// DoCastVictim, EVENT_SLAM) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_16099_22421_24326.txt,
+	// DifficultyID 0 rows): eff0 WEAPON_DAMAGE bp249
+	// die1 radiusIdx 10 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 KNOCK_BACK bp306
+	// die87 misc 20 radiusIdx 9 same targets; cast1
+	// instant, dur0 none, range7 Ten yards 10yd,
+	// radius10 30yd / radius9 20yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 0, DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; EffectBonusCoefficient 1
+	// (eff0) not carried (no fields in the seed struct);
+	// no triggered spells.
+	{id: 24326, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 249, dieSides: 1, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 306, dieSides: 87, misc: 20, radiusIdx: 9, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
 }
 
