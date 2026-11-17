@@ -10648,6 +10648,78 @@ var spells = []spell{
 	{id: 53627, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 6000, trigger: 53628, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 6754 "Slap!" (wago SpellName MISMATCH:
+	// "Slap!" vs expected "Slap" — seeded on data per
+	// the 15503/16104 precedent; C++ SPELL_SLAP,
+	// stratholme.cpp:205; Lua
+	// eastern_kingdoms/npc_spectral_ghostly_citizen.lua:66, 96 —
+	// target-cast, rude -> DoCast(player, SPELL_SLAP))
+	// — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_6754_16333_16336.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STUN (aura 12) bp0
+	// die1 tgtA TARGET_UNIT_TARGET_ANY; cast1 instant,
+	// dur27 3000ms (aux row pre-existing), range12
+	// Interact Range 0-5yd Flags 0 (aux row
+	// pre-existing), school Physical (0x1); NO
+	// SpellCategories row; NO SpellAuraOptions row;
+	// Attributes_0 0x10 not carried (no fields in the
+	// seed struct).
+	{id: 6754, castTimeIdx: 1, durIdx: 27, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 16333 "Debilitating Touch" (wago SpellName MATCHES;
+	// C++ SPELL_DEBILITATING_TOUCH,
+	// stratholme.cpp:204; Lua
+	// eastern_kingdoms/npc_spectral_ghostly_citizen.lua:54, 160 —
+	// target-cast, TouchTimer 2000 init / 7000 re-arm)
+	// — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_6754_16333_16336.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STAT (aura 29) bp-21
+	// die1 misc 0 (Strength) tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff1 same bp-21 die1 misc 2 (Stamina) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur4
+	// 120000ms (aux row pre-existing), range4 Medium
+	// Range 0-30yd (aux row pre-existing), school
+	// Shadow (0x20); SpellCategories row EXISTS
+	// (Category 0, DefenseType 1 (Magic), DispelType 1
+	// (MAGIC) carried as dispel 1, Mechanic 0,
+	// PreventionType 0x1) — category/defense/
+	// prevention/recovery not carried (no fields in
+	// the seed struct); SpellAuraOptions row EXISTS
+	// (CumulativeAura 5, ProcChance 101) — proc fields
+	// not carried (no fields in the seed struct);
+	// Attributes_0 0x10010 not carried (no fields in
+	// the seed struct).
+	{id: 16333, castTimeIdx: 1, durIdx: 4, rangeIdx: 4, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModStat, basePoints: -21, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModStat, basePoints: -21, dieSides: 1, misc: 2, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 16336 "Haunting Phantoms" (wago SpellName MISMATCH:
+	// "Haunting Phantoms" vs expected "Haunting Phantom"
+	// — seeded on data per the 15503/16104 precedent;
+	// C++ SPELL_HAUNTING_PHANTOM, stratholme.cpp:203; Lua
+	// eastern_kingdoms/npc_spectral_ghostly_citizen.lua:53, 149 —
+	// target-cast, non-triggered DoCast(target, 16336))
+	// — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_6754_16333_16336.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp0 die0
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast5 2000ms (aux
+	// row pre-existing), dur5 300000ms (aux row
+	// pre-existing), range2 Combat Range 0-5yd Flags
+	// 0x1 (aux row pre-existing), school Shadow (0x20);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 2 (CURSE)
+	// carried as dispel 2, Mechanic 0, PreventionType
+	// 0x1) — category/defense/prevention/recovery not
+	// carried (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_1 0x800 not
+	// carried (no fields in the seed struct).
+	{id: 16336, castTimeIdx: 5, durIdx: 5, rangeIdx: 2, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
