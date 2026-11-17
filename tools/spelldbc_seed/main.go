@@ -10967,6 +10967,73 @@ var spells = []spell{
 	{id: 37605, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolShadow, dispel: 9, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 12747 "Entangling Roots" (wago SpellName MATCHES; C++
+	// SPELL_ENTANGLINGROOTS, boss_celebras_the_cursed.cpp:32;
+	// Lua kalimdor/boss_celebras_the_cursed.lua:49, 111 —
+	// victim-cast, EVENT_ENTANGLINGROOTS) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-17
+	// verdict file wago_spells_12747_21807_21968.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_ROOT
+	// (aura 26) bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff1 APPLY_AURA PERIODIC_DAMAGE (aura 3) bp9 die1
+	// auraPeriod 3000 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast16 1500ms, dur1 10000ms, range4 Medium 0-30yd
+	// (aux rows pre-existing), school Nature (0x8);
+	// SpellCategories row EXISTS (Category 99,
+	// DefenseType 1 (Magic), DispelType 1 (Magic) carried
+	// as dispel 1, Mechanic 7 carried as mechanic 7,
+	// PreventionType 1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed
+	// struct); NO SpellAuraOptions row; Attributes_0
+	// 1074331648 not carried (no fields in the seed
+	// struct); eff1 EffectBonusCoefficient 0.1 not
+	// carried (no field in the seed struct).
+	{id: 12747, castTimeIdx: 16, durIdx: 1, rangeIdx: 4, school: schoolNature, dispel: 1, mechanic: 7, effects: [3]effect{
+		{effect: effApplyAura, aura: auraRoot, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 9, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 21807 "Wrath" (wago SpellName MATCHES; C++
+	// SPELL_WRATH, boss_celebras_the_cursed.cpp:31; Lua
+	// kalimdor/boss_celebras_the_cursed.lua:48, 99 —
+	// random-target cast, EVENT_WRATH) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-17
+	// verdict file wago_spells_12747_21807_21968.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp84
+	// die31 tgtA TARGET_UNIT_TARGET_ENEMY; cast5 2000ms,
+	// dur0 no row, range5 Long 0-40yd (aux rows
+	// pre-existing), school Nature (0x8); SpellCategories
+	// row EXISTS (Category 0, DefenseType 1 (Magic),
+	// DispelType 0, Mechanic 0, PreventionType 1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 589824 not
+	// carried (no fields in the seed struct);
+	// EffectBonusCoefficient 1 not carried (no field in
+	// the seed struct).
+	{id: 21807, castTimeIdx: 5, durIdx: 0, rangeIdx: 5, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 84, dieSides: 31, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 21968 "Corrupt Forces of Nature" (wago SpellName
+	// MISMATCH vs expected "Corrupt Forces" — seeded on
+	// data per quel'danas/ghostly-citizen precedent; C++
+	// SPELL_CORRUPT_FORCES, boss_celebras_the_cursed.cpp:33;
+	// Lua kalimdor/boss_celebras_the_cursed.lua:50, 122 —
+	// self-cast, EVENT_CORRUPTFORCES) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-17
+	// verdict file wago_spells_12747_21807_21968.txt,
+	// DifficultyID 0 rows): eff0 SUMMON bp2 die1
+	// radiusIdx_0 8 (5yd, aux row pre-existing) misc
+	// 13743 miscB 61 tgtA TARGET_DEST_CASTER_SUMMON
+	// (target 32; handoff guessed TARGET_UNIT_SUMMONER,
+	// seeder const is targetDestCasterSummon);
+	// cast1 instant, dur3 60000ms (aux row pre-existing),
+	// range1 Self Only 0yd (aux row pre-existing),
+	// school Nature (0x8); NO SpellCategories row;
+	// NO SpellAuraOptions row; EffectAmplitude -5 not
+	// carried (no field in the seed struct).
+	{id: 21968, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effSummon, basePoints: 2, dieSides: 1, radiusIdx: 8, misc: 13743, miscB: 61, targetA: targetDestCasterSummon, chainAmplitude: 1},
+	}},
 }
 
 func main() {
