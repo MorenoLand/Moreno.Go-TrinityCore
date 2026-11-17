@@ -13094,6 +13094,58 @@ var spells = []spell{
 	{id: 31689, castTimeIdx: 1, durIdx: 18, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, dieSides: 181, basePoints: 359, auraPeriod: 2000, targetA: targetEnemy, radiusIdx: 14, chainAmplitude: 1},
 	}},
+	// 32717 "Hurricane" (Wowhead SpellName MATCH; C++
+	// SPELL_HURRICANE, zone_shadowmoon_valley.cpp:1305;
+	// Lua outland/npc_enraged_spirit.lua:120, 193 —
+	// DoCastVictim) — Wowhead WotLK (2026-11-17 verdict
+	// file wago_spells_32717_36006_36115.txt): eff0
+	// PERSISTENT_AREA_AURA (eff 27) PERIODIC_DAMAGE
+	// (aura 3) displayed 25 every 1s — bp 24, die 1,
+	// auraPeriod 1000; eff1 PERSISTENT_AREA_AURA
+	// MOD_MELEE_HASTE (aura 138) displayed -67% —
+	// bp -68, die 1; both tgtA DEST_TARGET_ANY tgtB
+	// DEST_AREA_ENEMY + radius14 8yd (real row) per
+	// the 29946/34168 precedent (the storm is placed
+	// at the victim's location); channeled 10s:
+	// cast7 10000ms (real row), dur1 10000ms (real
+	// row), range4 Medium 0-30yd (real row), school
+	// Nature; mana cost 100 not encoded (seed has
+	// no SpellPower row for these rows).
+	{id: 32717, castTimeIdx: 7, durIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 24, auraPeriod: 1000, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -68, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 36006 "Fel Fire Aura" (Wowhead SpellName MATCH;
+	// C++ SPELL_FEL_FIRE_AURA, zone_shadowmoon_valley.cpp:1310;
+	// Lua outland/npc_enraged_spirit.lua:117, 233, 243 —
+	// DoCastSelf, gated on !GetAura) — Wowhead WotLK
+	// (same verdict file): single eff0 APPLY_AURA DUMMY
+	// (aura 4) displayed value 1 — bp 0, die 1 per
+	// 44335 aura convention; tgtA CASTER; cast1
+	// instant, range1 Self 0yd (real row), school
+	// Physical; no SpellDuration row.
+	{id: 36006, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36115 "Fiery Soul Captured" (Wowhead name is
+	// FIERY Soul Captured — the C++ enum
+	// SPELL_SOUL_CAPTURED, zone_shadowmoon_valley.cpp:1335,
+	// is the short name; the four elemental credit spells
+	// are 36108/36117/36182/36171; Lua
+	// outland/npc_enraged_spirit.lua:140, 298 — DoCast
+	// on the Totem of Spirits, C++ :1489) — Wowhead
+	// WotLK (same verdict file): single eff0 DUMMY
+	// (eff 3, NOT an aura) displayed value 1, radius
+	// 2yd — bp 0, die 1, radiusIdx 7 (2yd real row);
+	// tgtA TARGET_ANY (the totem is a neutral quest
+	// creature — the 25 precedent for non-enemy
+	// explicit targets); range 2yd Trap: synthetic
+	// range row 93009 (0-2yd, seed-local ID per
+	// header — no real 2yd row verified); cast1
+	// instant, school Physical; no SpellDuration row.
+	{id: 36115, castTimeIdx: 1, rangeIdx: 93009, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, radiusIdx: 7, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -13259,6 +13311,7 @@ func main() {
 		{93006, f32(0), f32(0), f32(60), f32(60), 0},
 		{93007, f32(0), f32(0), f32(100), f32(100), 0},
 		{93008, f32(0), f32(0), f32(50000), f32(50000), 0},
+		{93009, f32(0), f32(0), f32(2), f32(2), 0},
 		{36, f32(0), f32(0), f32(45), f32(45), 0},       // real SpellRange 36 "Longer Range" for 29946/32265 (wago.tools 3.4.0.47659, aux read 54197700)
 		{37, f32(0), f32(0), f32(50), f32(50), 0},       // real SpellRange 37 "Extended Range" for 45532 (wago.tools 3.4.0.47659 SpellRange row 37, browser 4d453dd5)
 		{11, f32(0), f32(0), f32(15), f32(15), 0},       // real SpellRange 11 "Fifteen yards" for 29961 (wago.tools 3.4.0.47659, aux read 54197700)
