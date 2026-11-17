@@ -9175,6 +9175,79 @@ var spells = []spell{
 	{id: 17473, castTimeIdx: 4, durIdx: 29, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 12000, trigger: 17471, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 12098 "Sleep" (wago SpellName MATCHES; C++
+	// SPELL_SLEEP, boss_dathrohan_balnazzar.cpp:43;
+	// Lua eastern_kingdoms/boss_dathrohan_balnazzar.lua:87,
+	// 212 — random-target cast, 15s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_12098_13704_17288.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STUN (aura 12)
+	// bp0 die0 tgtA TARGET_UNIT_TARGET_ENEMY; cast4
+	// 1000ms (aux row pre-existing), dur18 20000ms
+	// (aux row pre-existing), range4 Medium Range
+	// 0-30yd (aux row pre-existing), school Shadow,
+	// dispel 1 (Magic), mechanic 10
+	// (SpellCategories Mechanic 10); NO
+	// SpellAuraOptions row; Attributes_0 0x40110000
+	// / Attributes_1 0x40000 / Attributes_5 0x20 /
+	// DefenseType 1 / PreventionType 0x1 /
+	// StartRecoveryCategory 133 not carried (no
+	// fields in the seed struct).
+	{id: 12098, castTimeIdx: 4, durIdx: 18, rangeIdx: 4, school: schoolShadow, dispel: 1, mechanic: 10, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 13704 "Psychic Scream" (wago SpellName MATCHES;
+	// C++ SPELL_PSYCHICSCREAM,
+	// boss_dathrohan_balnazzar.cpp:42; Lua
+	// eastern_kingdoms/boss_dathrohan_balnazzar.lua:86,
+	// 204 — self-cast AoE fear, 11s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_12098_13704_17288.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_FEAR (aura 7) bp-1
+	// die1 radius _1=14 8yd NOT seeded per repo
+	// radius convention (seed carries _0 only;
+	// _0=0 here) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur32 6000ms (aux row pre-existing), range1
+	// Self Only 0yd (aux row pre-existing), school
+	// Shadow, dispel 1 (Magic), mechanic 5
+	// (SpellCategories Mechanic 5, effect mechanic
+	// 5); NO SpellAuraOptions row; Attributes_0
+	// 0x50000 / Attributes_1 0x88 / DefenseType 1 /
+	// PreventionType 0x1 / StartRecoveryCategory
+	// 133 not carried (no fields in the seed
+	// struct). DifficultyID 173/174 rows excluded.
+	{id: 13704, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolShadow, dispel: 1, mechanic: 5, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 17288 "Balnazzar Transform" (wago SpellName
+	// MATCHES; C++ SPELL_BALNAZZARTRANSFORM,
+	// boss_dathrohan_balnazzar.cpp:37; Lua
+	// eastern_kingdoms/boss_dathrohan_balnazzar.lua:83,
+	// 36 — self-cast on transform, restores full
+	// HP/mana) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-16 verdict file
+	// wago_spells_12098_13704_17288.txt, DifficultyID 0
+	// rows): eff0 HEAL_MAX_HEALTH (effect 67) bp-1
+	// die1 tgtA TARGET_UNIT_CASTER; eff1 ENERGIZE
+	// (effect 30) bp9999 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 TRIGGER_SPELL
+	// (effect 64) bp0 die1 trigger 17398
+	// (Balnazzar Transform Stun, trigger-only, NOT
+	// seeded per repo convention) tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur0 (no
+	// SpellDuration row), range13 Anywhere 0-50000yd
+	// (aux row pre-existing), school Shadow; NO
+	// SpellAuraOptions row; Attributes_0 0x50100 /
+	// StartRecoveryCategory 133 not carried (no
+	// fields in the seed struct).
+	{id: 17288, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effHealMaxHealth, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effEnergize, basePoints: 9999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 17398, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
