@@ -12972,11 +12972,20 @@ var spells = []spell{
 	// 1 every 800ms, trigger 38163 (follow-up read,
 	// same verdict file) — bp 0, die 1, auraPeriod 800;
 	// both tgtA CASTER (channeled self-aura; 44197
-	// periodic-trig precedent); channeled 8s: cast170
-	// 8000ms (real row), dur31 8000ms (real row),
+	// periodic-trig precedent); channeled 8s: cast1
+	// instant — corrected 2026-11-17 from cast170:
+	// the "(8 sec cast)" tooltip text is the channel
+	// DURATION (dur31 8000ms, real row), not a cast
+	// time; the wago-verified channeled spells
+	// 27085/42939/49519 all carry castTimeIdx 1,
+	// and the Go channel leg reads DurationIndex
+	// for the channel length (spells.go startChannel)
+	// while castTimeIdx only drives the pre-cast bar
+	// (spellCastTimeMs) — cast170 stood the caster
+	// through an 8s cast bar before the channel.
 	// range35 Medium-Long 0-35yd (real row), school
 	// Physical.
-	{id: 38153, castTimeIdx: 170, durIdx: 31, rangeIdx: 35, school: schoolPhysical, effects: [3]effect{
+	{id: 38153, castTimeIdx: 1, durIdx: 31, rangeIdx: 35, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 800, trigger: 38163, targetA: targetCaster, chainAmplitude: 1},
 	}},
@@ -13107,11 +13116,22 @@ var spells = []spell{
 	// DEST_AREA_ENEMY + radius14 8yd (real row) per
 	// the 29946/34168 precedent (the storm is placed
 	// at the victim's location); channeled 10s:
-	// cast7 10000ms (real row), dur1 10000ms (real
-	// row), range4 Medium 0-30yd (real row), school
-	// Nature; mana cost 100 not encoded (seed has
-	// no SpellPower row for these rows).
-	{id: 32717, castTimeIdx: 7, durIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+	// cast1 instant — the "(10 sec cast)" tooltip
+	// text is the channel DURATION (dur1 10000ms,
+	// real row), not a cast time: the wago-verified
+	// channeled spells 27085/42939/49519 all carry
+	// castTimeIdx 1, and the Go channel leg reads
+	// DurationIndex for the channel length
+	// (spells.go startChannel) while castTimeIdx
+	// only drives the pre-cast bar (spellCastTimeMs);
+	// cast7 would stand the caster through a 10s
+	// cast bar before the channel — corrected
+	// 2026-11-17 from cast7 (same class as 38153's
+	// cast170, fixed this tick). Range4 Medium
+	// 0-30yd (real row), school Nature; mana cost
+	// 100 not encoded (seed has no SpellPower row
+	// for these rows).
+	{id: 32717, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
 		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, dieSides: 1, basePoints: 24, auraPeriod: 1000, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
 		{effect: effPersistentAreaAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: -68, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
 	}},
