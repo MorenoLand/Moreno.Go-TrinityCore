@@ -12665,6 +12665,110 @@ var spells = []spell{
 	{id: 35108, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 602, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 34162 "Pounding" (Wowhead SpellName MATCH; C++
+	// SPELL_POUNDING, boss_void_reaver.cpp:33; Lua
+	// the_eye/boss_void_reaver.lua:68, 154 —
+	// DoCastVictim, 15s re-arm) — Wowhead WotLK
+	// (2026-11-17 verdict file
+	// wago_spells_34162_34172_68589.txt): single eff0
+	// APPLY_AURA PERIODIC_TRIGGER_SPELL (aura 23)
+	// displayed value 1 every 1s, trigger 34164
+	// (follow-up read, same verdict file); raw bp =
+	// displayed-1 = 0, die 1 per 44335 precedent;
+	// channeled 3s: cast14 3000ms (real row), dur27
+	// 3000ms (real row), range3 Twenty 0-20yd (real
+	// row), school Arcane (0x40); aura target is the
+	// caster (channeled self-aura; 44197/66083
+	// periodic-trig precedent) — the trigger spell
+	// does the AoE damage. Mechanic/Dispel n/a on
+	// Wowhead — dispel/mechanic stay 0; no
+	// SpellCategories/SpellAuraOptions rows carried.
+	{id: 34162, castTimeIdx: 14, durIdx: 27, rangeIdx: 3, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 1000, trigger: 34164, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34164 "Pounding" (Wowhead SpellName MATCH;
+	// periodic tick triggered by 34162 eff0 every 1s;
+	// no C++ enum — trigger-only spell) — Wowhead
+	// WotLK (same verdict file): eff0 SCHOOL_DAMAGE
+	// Arcane tooltip 1350–2250, radius 18yd; raw bp =
+	// min-1 = 1349, die = max-min+1 = 901 per
+	// SpellInfo.cpp:402-526 + Go CalcValue
+	// (spells.go:24989-25010); caster-centred AoE:
+	// tgtA SRC_CASTER tgtB SRC_AREA_ENEMY + radius19
+	// 18yd (real row) per 69900 precedent; cast1
+	// instant, range3 Twenty 0-20yd, school Arcane.
+	{id: 34164, castTimeIdx: 1, rangeIdx: 3, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1349, dieSides: 901, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 19, chainAmplitude: 1},
+	}},
+	// 34172 "Arcane Orb" (Wowhead SpellName MATCH; C++
+	// SPELL_ARCANE_ORB, boss_void_reaver.cpp:34; Lua
+	// the_eye/boss_void_reaver.lua:69, 169 — random
+	// distant-player target, 3s re-arm) — Wowhead
+	// WotLK (same verdict file): eff0 TRIGGER_MISSILE
+	// displayed value 1, radius 0, trigger 34190
+	// (follow-up read, same verdict file); eff1 DUMMY
+	// displayed value 1, server-side script; raw bp =
+	// displayed-1 = 0, die 1 per 44335 precedent;
+	// cast1 instant, range13 Anywhere 50000yd (real
+	// row), school Arcane; no SpellDuration row.
+	{id: 34172, castTimeIdx: 1, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effTriggerMiss, trigger: 34190, targetA: targetEnemy},
+		{effect: effDummy, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 34190 "Arcane Orb" (Wowhead SpellName MATCH;
+	// missile-impact spell triggered by 34172 eff0;
+	// no C++ enum — trigger-only spell) — Wowhead
+	// WotLK (same verdict file): eff0 SCHOOL_DAMAGE
+	// Arcane tooltip 4675–6325, radius 20yd; raw bp
+	// 4674, die 1651; eff1 APPLY_AURA SILENCE (aura
+	// 27) displayed value 1, radius 20yd, mechanic
+	// SILENCE 9 (SharedDefines.h:1366); both TargetA
+	// 16 DEST_AREA_ENEMY + radius9 20yd (real row)
+	// per 33637 Infernal precedent (missile-impact
+	// AoE); dur32 6000ms (buff shows 6s), cast1
+	// instant, range13 Anywhere 50000yd, school
+	// Arcane.
+	{id: 34190, castTimeIdx: 1, durIdx: 32, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4674, dieSides: 1651, targetA: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSilence, mechanic: 9, dieSides: 1, basePoints: 0, targetA: targetUnitDestAreaEnemy, radiusIdx: 9, chainAmplitude: 1},
+	}},
+	// 68589 "Alluring Perfume" (Wowhead SpellName
+	// MATCH; C++ SPELL_ALLURING_PERFUME,
+	// boss_apothecary_hummel.cpp:33; Lua
+	// eastern_kingdoms/boss_apothecary_hummel.lua:154,
+	// 462 — RemoveAura, aura removed by C++
+	// RemoveAurasDueToSpell :156) — Wowhead WotLK
+	// (same verdict file): single eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) displayed
+	// value 1 every 1s, trigger 68641 (follow-up
+	// read, same verdict file); raw bp 0, die 1 per
+	// 44335 precedent; channeled 0s: cast1 instant,
+	// no SpellDuration row (Wowhead Duration n/a —
+	// Go treats DurationIndex 0 as non-expiring,
+	// spells.go:8380 comment), range3 Twenty 0-20yd,
+	// school Nature (0x8); aura target is the caster
+	// (channeled self-aura; 44197 periodic-trig
+	// precedent).
+	{id: 68589, castTimeIdx: 1, rangeIdx: 3, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, basePoints: 0, auraPeriod: 1000, trigger: 68641, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 68641 "Alluring Perfume" (Wowhead SpellName
+	// MATCH; periodic tick triggered by 68589 eff0
+	// every 1s; no C++ enum — trigger-only spell) —
+	// Wowhead WotLK (same verdict file): eff0
+	// SCHOOL_DAMAGE Nature tooltip 1620–1980,
+	// radius 5yd; raw bp 1619, die 361; eff1
+	// APPLY_AURA DUMMY (aura 4), no value shown,
+	// radius 5yd, server-side script — bp 0 die 0
+	// per 38502 precedent; caster-centred pulse:
+	// tgtA SRC_CASTER tgtB SRC_AREA_ENEMY + radius8
+	// 5yd (real row) per 69900 precedent; dur39
+	// 2000ms (buff shows 2s), cast1 instant, range2
+	// Combat 0-5yd, school Nature.
+	{id: 68641, castTimeIdx: 1, durIdx: 39, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1619, dieSides: 361, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDummy, dieSides: 0, basePoints: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
 }
 
 func main() {
