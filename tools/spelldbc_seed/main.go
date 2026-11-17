@@ -9628,6 +9628,87 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModInvisibility, basePoints: 4999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 8374 "Arcing Smash" (wago SpellName MATCHES;
+	// C++ SPELL_ARCINGSMASH,
+	// boss_ironaya.cpp:31; Lua
+	// eastern_kingdoms/boss_ironaya.lua:70, 121 —
+	// self-cast, 3s init) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_8374_10255_11876.txt, DifficultyID 0
+	// rows; loop-c browser task 2b6ef297): eff0
+	// WEAPON_DAMAGE (effect 58) bp-1 die1
+	// radiusIdx 8 (5yd, aux row pre-existing)
+	// tgtA TARGET_UNIT_CONE_ENEMY_24; cast1
+	// instant, dur0 (no SpellDuration row),
+	// range2 Combat 0-5yd (aux row pre-existing),
+	// school Physical; SpellCategories row EXISTS
+	// (Category 0, DefenseType 2 Melee,
+	// PreventionType 0x2) — category/defense/
+	// prevention not carried (no fields in the
+	// seed struct); NO SpellAuraOptions row;
+	// EffectAttributes 0x20000 / Attributes_0
+	// 0x40014 / Attributes_1 0x88 not carried.
+	{id: 8374, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: -1, dieSides: 1, radiusIdx: 8, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 10255 "Stoned" (wago SpellName MISMATCH —
+	// expected "Minion Freeze Anim", DB2 name is
+	// "Stoned"; seeded on data per the
+	// eramas_brightblaze 15503 precedent — the Lua
+	// use is an AddAura visual, not a cast under
+	// that name; C++ SPELL_MINION_FREEZE_ANIM,
+	// boss_archaedas.cpp:57; Lua
+	// eastern_kingdoms/boss_ironaya.lua:73, 163 and
+	// eastern_kingdoms/boss_archaedas.lua:166, 270/359 —
+	// AddAura/RemoveAura) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_8374_10255_11876.txt, DifficultyID 0
+	// rows; loop-c browser task 2b6ef297): eff0
+	// APPLY_AURA DUMMY (aura 4) bp0 die1 mechanic
+	// 13 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur21 -1 infinite (aux row pre-existing),
+	// range1 Self Only 0yd (aux row pre-existing),
+	// school Physical; NO SpellAuraOptions row;
+	// NO SpellCategories row; Attributes_0 0x110 /
+	// Attributes_1 0x10000000 not carried (no
+	// fields in the seed struct).
+	{id: 10255, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, mechanic: 13, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 11876 "War Stomp" (wago SpellName MATCHES;
+	// C++ SPELL_WSTOMP,
+	// boss_ironaya.cpp:33; Lua
+	// eastern_kingdoms/boss_ironaya.lua:72, 137 —
+	// self-cast, <25% one-shot) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_8374_10255_11876.txt, DifficultyID 0
+	// rows; loop-c browser task 2b6ef297): eff0
+	// APPLY_AURA MOD_STUN (aura 12) bp-1 die1
+	// radiusIdx 8 (5yd, aux row pre-existing)
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; NO eff1 row for
+	// DifficultyID 0 ({} gap, 34799 precedent);
+	// eff2 WEAPON_DAMAGE (effect 58) bp22 die1
+	// radiusIdx 8 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur28 5000ms (aux row pre-existing), range1
+	// Self Only 0yd (aux row pre-existing), school
+	// Physical; SpellCategories row EXISTS
+	// (Category 32, DefenseType 1, Mechanic 12,
+	// PreventionType 0x1) — mechanic 12 carried,
+	// category/defense/prevention not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; eff0 EffectAmplitude 1 / eff2
+	// RealPointsPerLevel 0.5 / Attributes_0 0x40010
+	// not carried (no fields in the seed struct).
+	{id: 11876, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: -1, dieSides: 1, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{},
+		{effect: effWeaponDamage, basePoints: 22, dieSides: 1, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
