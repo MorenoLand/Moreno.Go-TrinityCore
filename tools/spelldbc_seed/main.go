@@ -12855,6 +12855,62 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 9, misc: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 29, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 16856 "Mortal Strike" (Wowhead SpellName MATCH; C++
+	// SPELL_MORTAL_STRIKE, boss_galvangar.cpp:27; Lua
+	// eastern_kingdoms/boss_galvangar.lua:52, 137 —
+	// DoCastVictim) — Wowhead WotLK (2026-11-17
+	// verdict file wago_spells_16856_19134.txt):
+	// eff0 WEAPON_PERCENT_DAMAGE (eff 31) "Weapon
+	// Damage - %" Value 200, single value — flat
+	// (bp 200, die 0, CalcValue returns the stored
+	// base, spells.go:24989-25010) per 35108
+	// precedent; eff1 APPLY_AURA MOD_HEALING_PCT
+	// (aura 118, all schools) displayed -50% — bp
+	// -51, die 1, misc 127 per 44335 precedent;
+	// dur28 5000ms (real row), cast1 instant, range2
+	// Combat 0-5yd (real row), school Physical.
+	{id: 16856, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 200, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -51, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 19134 "Frightening Shout" (Wowhead SpellName
+	// MATCH; C++ SPELL_FRIGHTENING_SHOUT,
+	// boss_galvangar.cpp:24; Lua
+	// eastern_kingdoms/boss_galvangar.lua:49, 101 —
+	// DoCastVictim) — Wowhead WotLK (same verdict
+	// file): eff0 TRIGGER_SPELL (eff 64) trigger
+	// 29544 (follow-up read, same verdict file),
+	// no bp/die per 38467 precedent, tgtA
+	// SRC_AREA_ENEMY + radius14 8yd (inferred from
+	// sibling effects — no radius shown for eff0);
+	// eff1 APPLY_AURA FEAR (aura 7) displayed value
+	// 1 — bp 0, die 1, radius14 8yd, mechanic 5
+	// (MECHANIC_FEAR, SharedDefines.h:1362); eff2
+	// APPLY_AURA MOD_INCREASE_SPEED (aura 31)
+	// displayed 25% — bp 24, die 1, radius14 8yd
+	// (the "26% - Normal/Heroic" lines are
+	// difficulty-scaled displays; base row is 25%);
+	// spell mechanic 5 (Fleeing); dur31 8000ms
+	// (real row), cast1 instant, range7 Ten yards
+	// 0-10yd (real row), school Physical.
+	{id: 19134, mechanic: 5, castTimeIdx: 1, durIdx: 31, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effTriggerSpell, trigger: 29544, targetA: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModFear, mechanic: 5, dieSides: 1, basePoints: 0, targetA: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, dieSides: 1, basePoints: 24, targetA: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 29544 "Frightening Shout" (Wowhead SpellName
+	// MATCH; trigger of 19134 eff0; no C++ enum —
+	// trigger-only spell) — Wowhead WotLK (same
+	// verdict file): single eff0 APPLY_AURA FEAR
+	// (aura 7), no value/radius shown — bp 0, die 1
+	// per 30621 precedent, mechanic 5; target is the
+	// enemy the trigger was cast on (targetEnemy);
+	// spell mechanic 5 (Fleeing); dur32 6000ms (real
+	// row), cast1 instant, range11 Fifteen yards
+	// 0-15yd (real row), school Physical.
+	{id: 29544, mechanic: 5, castTimeIdx: 1, durIdx: 32, rangeIdx: 11, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, mechanic: 5, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
