@@ -13249,6 +13249,110 @@ var spells = []spell{
 	{id: 45151, castTimeIdx: 1, rangeIdx: 13, school: schoolFire, effects: [3]effect{
 		{effect: effScriptEffect, dieSides: 1, basePoints: 0, targetA: targetSrcCaster, targetB: targetUnitSrcAreaAlly, radiusIdx: 7, chainAmplitude: 1},
 	}},
+	// 20276 "Knockdown" (Wowhead SpellName MATCH; C++
+	// SPELL_KNOCKDOWN, boss_the_maker.cpp:33, DoCastVictim;
+	// Lua hellfirecitadel/boss_the_maker.lua:59, 181) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_20276_25772_30925_67334_67401_68852.txt):
+	// eff0 APPLY_AURA STUN (aura 12) Value 1 — bp 0,
+	// die 1, mechanic 12 (MECHANIC_STUN,
+	// SharedDefines.h:1369); eff1 SCHOOL_DAMAGE
+	// Physical tooltip 463–537 — bp 462, die 75; both
+	// tgtA SRC_AREA_ENEMY + maxTargets 5 per the 31948
+	// precedent (no radius shown — Go falls back to
+	// the spell's 10yd range; the victim + nearest
+	// allies are within it in melee); spell mechanic
+	// 12; cast1 instant, dur39 2000ms (real row),
+	// range7 Ten yards 0-10yd (real row), school
+	// Physical. NOTE: Wowhead "Used by" lists only
+	// Gordawg/Molten Destroyer — incomplete (the C++
+	// enum + DoCastVictim is authoritative).
+	{id: 20276, mechanic: 12, castTimeIdx: 1, durIdx: 39, rangeIdx: 7, maxTargets: 5, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, mechanic: 12, dieSides: 1, basePoints: 0, targetA: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 462, dieSides: 75, targetA: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 25772 "Mental Domination" (Wowhead SpellName is
+	// "Mental Domination", not "Domination"; C++
+	// SPELL_DOMINATION, boss_the_maker.cpp:33, DoCast
+	// on a random threat-list player; Lua
+	// hellfirecitadel/boss_the_maker.lua:60, 167) —
+	// Wowhead WotLK (same verdict file): eff0 APPLY_AURA
+	// CHARM (aura 6) Value 100 — bp 99, die 1,
+	// mechanic 1 (MECHANIC_CHARM,
+	// SharedDefines.h:1358); eff1 APPLY_AURA TRANSFORM
+	// (aura 56; Wowhead "Change Model (Minion of
+	// Weavil)") Value 1 — bp 0, die 1, no MiscValue
+	// shown (model id unknown, left 0); both tgtA
+	// ENEMY; dispel 1 (Magic, SharedDefines.h:1405),
+	// spell mechanic 1; cast1 instant, dur4 120000ms
+	// (real row), range13 Anywhere 0-50000yd (real
+	// row), school Shadow. NOTE: Wowhead "Used by"
+	// lists only Doctor Weavil — incomplete (the C++
+	// enum + DoCast is authoritative); the Weavil
+	// buff text / model name is DBC-faithful as shown.
+	{id: 25772, dispel: 1, mechanic: 1, castTimeIdx: 1, durIdx: 4, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCharm, mechanic: 1, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30925 "Exploding Beaker" (Wowhead SpellName is
+	// "Exploding Beaker", not "Exploding Breaker" —
+	// the TC enum name is a typo for the same spell
+	// id; C++ SPELL_EXPLODING_BREAKER,
+	// boss_the_maker.cpp:33, DoCast on a random
+	// threat-list player within 30yd; Lua
+	// hellfirecitadel/boss_the_maker.lua:58, 153) —
+	// Wowhead WotLK (same verdict file): eff0 SCHOOL_DAMAGE
+	// Nature tooltip 875–1125 — bp 874, die 251,
+	// radius 8yd; eff1 KNOCK_BACK Value 201 - Normal
+	// — bp 200, die 1, no MiscValue shown (misc 0;
+	// the 183 is the other difficulty's value);
+	// both tgtA DEST_AREA_ENEMY + radius14 8yd (real
+	// row) per the 34190 missile-impact AoE
+	// precedent; cast1 instant, range4 Medium 0-30yd
+	// (real row), school Nature; no SpellDuration row.
+	// NOTE: tooltip says "within 30 yards" but both
+	// effects show radius 8yd — radius seeded as shown.
+	{id: 30925, castTimeIdx: 1, rangeIdx: 4, school: schoolNature, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 874, dieSides: 251, targetA: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+		{effect: effKnockBack, dieSides: 1, basePoints: 200, targetA: targetUnitDestAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
+	}},
+	// 67334 "Tired" (C++ SPELL_TIRED_PLAYER,
+	// npcs_special.cpp:2358, player->CastSpell(player,
+	// 67334, true); Lua world/npc_argent_squire.lua:24,
+	// 106-124) — Wowhead WotLK (same verdict file):
+	// single eff0 APPLY_AURA DUMMY (aura 4), no Value
+	// shown — bp 0, die 1 per the 36006/31690 dummy
+	// precedent; tgtA CASTER (self-cast on the
+	// player); cast1 instant, dur90012 14400000ms
+	// (synthetic seed-local row — no real 4h row
+	// verified), range1 Self 0yd (real row), school
+	// Physical.
+	{id: 67334, castTimeIdx: 1, durIdx: 90012, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 67401 "Tired" (C++ SPELL_AURA_TIRED_S,
+	// npcs_special.cpp:2353, AddAura on the squire;
+	// Lua world/npc_argent_squire.lua:31, 63) —
+	// Wowhead WotLK (same verdict file): identical
+	// display to 67334 in every shown field (single
+	// DUMMY eff, no Value, 4h, Self, Physical) —
+	// distinguished by the C++/Lua usage, not by
+	// Wowhead; same row shape as 67334, tgtA CASTER
+	// (the squire's own aura).
+	{id: 67401, castTimeIdx: 1, durIdx: 90012, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 68852 "Tired" (C++ SPELL_AURA_TIRED_G,
+	// npcs_special.cpp:2357, AddAura on the gruntling;
+	// Lua world/npc_argent_squire.lua:32, 63) —
+	// Wowhead WotLK (same verdict file): same shape as
+	// 67334/67401 (single DUMMY eff, no Value, 4h,
+	// Self, Physical); the Gruntling buff text is the
+	// only Wowhead-visible distinction; same row shape,
+	// tgtA CASTER (the gruntling's own aura).
+	{id: 68852, castTimeIdx: 1, durIdx: 90012, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -13292,6 +13396,7 @@ func main() {
 		{90009, 4000, 0, 4000},
 		{90010, 500, 0, 500},
 		{90011, 40000, 0, 40000},
+		{90012, 14400000, 0, 14400000},
 		{4, 120000, 0, 120000},     // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},       // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
