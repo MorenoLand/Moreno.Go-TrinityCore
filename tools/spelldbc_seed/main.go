@@ -10889,6 +10889,84 @@ var spells = []spell{
 		{effect: effKnockBack, basePoints: 89, dieSides: 21, misc: 50, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, chainAmplitude: 1},
 		{effect: effSchoolDamage, basePoints: 89, dieSides: 21, radiusIdx: 13, targetA: targetDestTargetAny, targetB: targetUnitDestAreaEnemy, chainAmplitude: 1},
 	}},
+	// 31422 "Time Stop" (wago SpellName MATCHES; C++
+	// SPELL_TIME_STOP, boss_aeonus.cpp:40; Lua
+	// kalimdor/boss_aeonus.lua:77, 139 — victim-cast,
+	// EVENT_TIMESTOP) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_31422_31473_37605.txt, saved by
+	// a sibling tick from the same handoff b2baaa81,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_STUN
+	// (aura 12) bp0 die0 radiusIdx_0 27 (50yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur35
+	// 4000ms (aux row pre-existing), range1 Self Only
+	// 0yd (aux row pre-existing), school Arcane (0x40);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 12
+	// carried as mechanic 12, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_2 0x4 not
+	// carried (no fields in the seed struct).
+	{id: 31422, castTimeIdx: 1, durIdx: 35, rangeIdx: 1, school: schoolArcane, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, radiusIdx: 27, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 31473 "Sand Breath" (wago SpellName MATCHES; C++
+	// SPELL_SAND_BREATH, boss_aeonus.cpp:42; Lua
+	// kalimdor/boss_aeonus.lua:79, 121 — victim-cast,
+	// EVENT_SANDBREATH) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_31422_31473_37605.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp3062
+	// die875 radiusIdx_0 9 (20yd, aux row pre-existing)
+	// tgtA TARGET_UNIT_CONE_ENEMY_24; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp-101 die1 radius9
+	// tgtA TARGET_UNIT_CONE_ENEMY_24; eff2 APPLY_AURA
+	// MOD_DECREASE_SPEED (aura 33) bp-51 die1 radius9
+	// tgtA TARGET_UNIT_CONE_ENEMY_24; cast5 2000ms (aux
+	// row pre-existing), dur1 10000ms (aux row
+	// pre-existing), range3 Twenty yards 0-20yd (aux
+	// row pre-existing), school Arcane (0x40);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 11
+	// carried as mechanic 11, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// EffectBonusCoefficient 1 / EffectAttributes
+	// 0x20000 not carried (no fields in the seed
+	// struct); Attributes_0 0x40010 / Attributes_1
+	// 0x88 not carried (no fields in the seed struct).
+	{id: 31473, castTimeIdx: 5, durIdx: 1, rangeIdx: 3, school: schoolArcane, mechanic: 11, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3062, dieSides: 875, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -101, dieSides: 1, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, radiusIdx: 9, targetA: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 37605 "Enrage" (wago SpellName MATCHES; C++
+	// SPELL_ENRAGE, boss_aeonus.cpp:41; Lua
+	// kalimdor/boss_aeonus.lua:78, 156 — self-cast,
+	// EVENT_FRENZY) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-17 verdict file
+	// wago_spells_31422_31473_37605.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_MELEE_HASTE (aura 138)
+	// bp49 die1 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur31 8000ms (aux row pre-existing), range1 Self
+	// Only 0yd (aux row pre-existing), school Shadow
+	// (SchoolMask 0x20 = 32; the sibling-saved verdict
+	// file mislabels 0x20 as "(Nature)" — 0x8 is
+	// Nature, 0x20 is Shadow per the school table);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 0, DispelType 9 (ENRAGE) carried as
+	// dispel 9, Mechanic 0, PreventionType 0x0) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; EffectBonusCoefficient 1
+	// not carried (no field in the seed struct).
+	{id: 37605, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolShadow, dispel: 9, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
