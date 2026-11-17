@@ -134,6 +134,7 @@ const (
 	auraModDmgDone             = 79
 	auraModRegen               = 84 // SPELL_AURA_MOD_REGEN (SpellAuraDefines.h:164)
 	auraModDmgTaken            = 87
+	auraPeriodicDmgPct         = 89 // SPELL_AURA_PERIODIC_DAMAGE_PERCENT (SpellAuraDefines.h:169)
 	auraModHitChance           = 54 // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
 	auraPeriodicLeech          = 53 // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
 	auraPeriodicManaLeech      = 64 // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
@@ -11033,6 +11034,71 @@ var spells = []spell{
 	// carried (no field in the seed struct).
 	{id: 21968, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolNature, effects: [3]effect{
 		{effect: effSummon, basePoints: 2, dieSides: 1, radiusIdx: 8, misc: 13743, miscB: 61, targetA: targetDestCasterSummon, chainAmplitude: 1},
+	}},
+	// 60451 "Corruption of Time" (wago SpellName MATCHES;
+	// C++ SPELL_CORRUPTION_OF_TIME_TARGET,
+	// boss_infinite_corruptor.cpp:30; Lua
+	// kalimdor/boss_infinite_corruptor.lua:116, 208 —
+	// target self-cast triggered, EVENT_CORRUPTION_OF_TIME)
+	// — wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_60451_60588_60590.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp0 die0
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite (aux row pre-existing), range1 Self Only
+	// 0yd (aux row pre-existing), school Shadow (0x20);
+	// NO SpellCategories row; SpellAuraOptions row
+	// EXISTS (CumulativeAura 0, ProcChance 101) — not
+	// carried (no fields in the seed struct);
+	// Attributes_4 0x1 not carried (no fields in the
+	// seed struct).
+	{id: 60451, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 60588 "Corrupting Blight" (wago SpellName MATCHES;
+	// C++ SPELL_CORRUPTING_BLIGHT,
+	// boss_infinite_corruptor.cpp:27; Lua
+	// kalimdor/boss_infinite_corruptor.lua:112, 174 —
+	// random-target cast, EVENT_CORRUPTING_BLIGHT) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_60451_60588_60590.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE_PERCENT
+	// (aura 89) bp7 die1 auraPeriod 3000 misc 127 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur4
+	// 120000ms, range14 Extra Long 0-60yd (aux rows
+	// pre-existing), school Shadow (0x20); SpellCategories
+	// row EXISTS (Category 0, DefenseType 1 (Magic),
+	// DispelType 0, Mechanic 0, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (CumulativeAura 5, ProcChance 101) —
+	// not carried (no fields in the seed struct);
+	// Attributes_1 0x88 / Attributes_3 0x100 not carried
+	// (no fields in the seed struct).
+	{id: 60588, castTimeIdx: 1, durIdx: 4, rangeIdx: 14, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmgPct, basePoints: 7, dieSides: 1, auraPeriod: 3000, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 60590 "Void Strike" (wago SpellName MATCHES; C++
+	// SPELL_VOID_STRIKE, boss_infinite_corruptor.cpp:28;
+	// Lua kalimdor/boss_infinite_corruptor.lua:113, 192 —
+	// victim-cast, EVENT_VOID_STRIKE) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-17
+	// verdict file wago_spells_60451_60588_60590.txt,
+	// DifficultyID 0 rows): eff0 WEAPON_PERCENT_DAMAGE
+	// bp99 die1 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur0 no row, range2 Combat 0-5yd (aux row
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (CumulativeAura 0,
+	// ProcChance 101) — not carried (no fields in the
+	// seed struct); Attributes_0 0x40010 not carried
+	// (no fields in the seed struct).
+	{id: 60590, castTimeIdx: 1, durIdx: 0, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 99, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
