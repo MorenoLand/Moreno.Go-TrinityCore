@@ -8898,6 +8898,83 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModConfuse, basePoints: 0, dieSides: 1, radiusIdx: 10, targetA: targetUnitConeEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicTrigWithValue, basePoints: 299, dieSides: 1, auraPeriod: 1000, trigger: 42170, radiusIdx: 10, targetA: targetUnitConeEnemy, chainAmplitude: 1},
 	}},
+	// 6262 "Minor Healthstone" (wago SpellName
+	// MISMATCH vs C++/Lua "Heal Father"; C++
+	// SPELL_HEAL_FATHER, boss_warp_splinter.cpp:45;
+	// Lua botanica/boss_warp_splinter.lua:128, 86 —
+	// Warp self-casts with BP0 = treant current HP,
+	// C++ boss_warp_splinter.cpp:110
+	// AddSpellBP0(CurrentHP_Treant)) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_6262_34716_36705.txt,
+	// DifficultyID 0 rows): eff0 HEAL bp99 die1
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur0
+	// (no SpellDuration row), range1 Self Only 0yd
+	// (aux row pre-existing), school Physical
+	// (SchoolMask 0x1); NO SpellAuraOptions row;
+	// name mismatch recorded — the wago numeric data
+	// FITS the Lua self-heal + BP0-override use, so
+	// seeded on the data; Category 30 / DefenseType
+	// 1 / PreventionType 0x2 / Attributes all 0x0 /
+	// BonusCoefficient 0 not carried (no fields in
+	// the seed struct).
+	{id: 6262, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effHeal, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 34716 "Stomp" (wago SpellName MISMATCH, close,
+	// vs C++/Lua "War Stomp"; C++ WAR_STOMP,
+	// boss_warp_splinter.cpp:42; Lua
+	// botanica/boss_warp_splinter.lua:98, 39 —
+	// {25s,40s}) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16
+	// verdict file wago_spells_6262_34716_36705.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp2374 die251 (in-game 2375-2625) tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY, RadiusIndex_0 0
+	// (RadiusIndex_1 20 = 25yd — recorded, NOT
+	// seeded, repo convention radiusIdx =
+	// RadiusIndex_0, 19703/50770 precedent); eff1
+	// APPLY_AURA MOD_STUN (aura 12) bp0 die0
+	// radius20 25yd tgtA src-caster tgtB
+	// src-area-enemy; eff2 APPLY_AURA
+	// MOD_DAMAGE_TAKEN (aura 14) bp549 die1 misc1
+	// radius20 tgtA src-caster tgtB
+	// src-area-enemy; cast1 instant, dur28 5000ms
+	// (aux row pre-existing), range1 Self Only
+	// (aux row pre-existing), school Physical,
+	// mechanic 12 (SpellCategories Mechanic 12);
+	// NO SpellAuraOptions row; Attributes_0 0x10 /
+	// Category 1152 / BonusCoefficient not carried
+	// (no fields in the seed struct).
+	{id: 34716, castTimeIdx: 1, durIdx: 28, rangeIdx: 1, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2374, dieSides: 251, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, radiusIdx: 20, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: 549, dieSides: 1, misc: 1, radiusIdx: 20, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 36705 "Arcane Volley" (wago SpellName MATCHES;
+	// C++ ARCANE_VOLLEY, boss_warp_splinter.cpp:44;
+	// Lua botanica/boss_warp_splinter.lua:99, 42 —
+	// {8s,20s} init then {20s,35s}) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_6262_34716_36705.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE
+	// bp1849 die301 (in-game 1850-2150) radius27
+	// 50yd tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast4 1000ms
+	// (aux row pre-existing), dur0 (no
+	// SpellDuration row), range37 Extended Range
+	// 0-50yd (aux row pre-existing), school Arcane;
+	// SpellAuraOptions ProcChance 101 /
+	// DefenseType 1 / PreventionType 0x1 /
+	// Attributes_0 0x10000 / Attributes_2 0x4 /
+	// BonusCoefficient 1 not carried (no fields in
+	// the seed struct).
+	{id: 36705, castTimeIdx: 4, durIdx: 0, rangeIdx: 37, school: schoolArcane, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1849, dieSides: 301, radiusIdx: 27, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
