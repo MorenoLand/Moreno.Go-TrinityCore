@@ -10720,6 +10720,83 @@ var spells = []spell{
 	{id: 16336, castTimeIdx: 5, durIdx: 5, rangeIdx: 2, school: schoolShadow, dispel: 2, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 27123 "Cosmetic - Polymorph Impact (visual only)"
+	// (wago SpellName MISMATCH vs expected "Polymorph
+	// Visual" — seeded on data per the 15503/16104
+	// precedent; C++ SPELL_POLYMORPH_VISUAL,
+	// zone_isle_of_queldanas.cpp:99; Lua
+	// eastern_kingdoms/zone_isle_of_queldanas.lua:92, 365 —
+	// self-cast, OUTRO_3; the effect is a DUMMY visual,
+	// matching the retail cosmetic name) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-17
+	// verdict file wago_spells_27123_50689_70265.txt,
+	// DifficultyID 0 rows): eff0 DUMMY (effect 3) bp-1
+	// die1 tgtA TARGET_UNIT_CASTER; cast1 instant, dur0
+	// (no SpellDuration row 0; 10934 precedent), range1
+	// Self Only 0yd (aux row pre-existing), school
+	// Physical (0x1); NO SpellCategories row; NO
+	// SpellAuraOptions row; Attributes_0 0x100 not
+	// carried (no fields in the seed struct).
+	{id: 27123, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 50689 "Blood Presence" (wago SpellName MATCHES;
+	// C++ SPELL_BLOOD_PRESENCE,
+	// zone_isle_of_queldanas.cpp:97; Lua
+	// eastern_kingdoms/zone_isle_of_queldanas.lua:90, 308 —
+	// self-cast, Morlen) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_27123_50689_70265.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE (aura 79) bp14 die1 misc
+	// 127 (all schools) tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA PROC_TRIGGER_SPELL (aura 42) bp3 die1
+	// trigger 1206 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur30 1800000ms (aux row pre-existing),
+	// range1 Self Only 0yd (aux row pre-existing),
+	// school Shadow (0x20); SpellCategories row EXISTS
+	// (Category 0, DefenseType 1 (Magic), DispelType 0
+	// carried as dispel 0, Mechanic 0, PreventionType
+	// 0x1, StartRecoveryCategory 133) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); SpellAuraOptions row
+	// EXISTS (ProcChance 100, ProcTypeMask 0x255554) —
+	// proc fields not carried (no fields in the seed
+	// struct); Attributes_0 0x1000000 / Attributes_3
+	// 0x10000 not carried (no fields in the seed
+	// struct). NOTE: the triggered spell 1206 is
+	// itself unseeded — the proc tick will resolve to
+	// a zero Spell in a seed-only deployment until
+	// 1206 is seeded.
+	{id: 50689, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 14, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 3, dieSides: 1, trigger: 1206, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 70265 "Thalorien Dawnseeker Credit" (wago SpellName
+	// MISMATCH vs expected "Kill Credit" — seeded on
+	// data per the 15503/16104 precedent; C++ SPELL_KILL_CREDIT,
+	// zone_isle_of_queldanas.cpp:98; Lua
+	// eastern_kingdoms/zone_isle_of_queldanas.lua:91, 354 —
+	// target-cast, OUTRO_1; effect 134 misc 37601 is the
+	// Thalorien credit) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_27123_50689_70265.txt,
+	// DifficultyID 0 rows): eff0 KILL_CREDIT2 (effect
+	// 134; wago labels it KILL_CREDIT, C++
+	// SharedDefines.h:945 names 134 KILL_CREDIT2)
+	// radiusIdx_0 10 (30yd, aux row pre-existing) misc
+	// 37601 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENTRY; cast1 instant, dur0
+	// (no SpellDuration row 0; 10934 precedent),
+	// range7 Ten yards 0-10yd (aux row pre-existing),
+	// school Physical (0x1); NO SpellCategories row;
+	// SpellAuraOptions row EXISTS (ProcChance 101) —
+	// proc fields not carried (no fields in the seed
+	// struct); Attributes_0 0x100 not carried (no
+	// fields in the seed struct).
+	{id: 70265, castTimeIdx: 1, durIdx: 0, rangeIdx: 7, school: schoolPhysical, effects: [3]effect{
+		{effect: effKillCredit2, radiusIdx: 10, misc: 37601, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+	}},
 }
 
 func main() {
