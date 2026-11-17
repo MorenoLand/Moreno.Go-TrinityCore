@@ -9911,6 +9911,83 @@ var spells = []spell{
 	{id: 27286, castTimeIdx: 1, durIdx: 0, rangeIdx: 135, school: schoolShadow, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 499, dieSides: 1, chainTargets: 10, chainAmplitude: 1.5, targetA: targetEnemy},
 	}},
+	// 10947 "Mind Blast" (wago SpellName MATCHES;
+	// C++ SPELL_MINDBLAST,
+	// boss_moira_bronzebeard.cpp:27; Lua
+	// eastern_kingdoms/boss_moira_bronzebeard.lua:33, 66 —
+	// victim-cast, 16s init -> 14s) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_10947_10894_10934.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp502 die29
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast16
+	// 1500ms (aux row pre-existing), dur0 (no
+	// SpellDuration row), range4 Medium Range
+	// 0-30yd (aux row pre-existing), school
+	// Shadow (0x20); SpellCategories row EXISTS
+	// (Category 19, DefenseType 1, DispelType 0,
+	// PreventionType 0x1, StartRecoveryCategory
+	// 133) — category/defense/prevention/recovery
+	// not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row;
+	// EffectBonusCoefficient 0.429 /
+	// EffectRealPointsPerLevel 2.6 not carried
+	// (no fields in the seed struct).
+	{id: 10947, castTimeIdx: 16, durIdx: 0, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 502, dieSides: 29, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 10894 "Shadow Word: Pain" (wago SpellName MATCHES;
+	// C++ SPELL_SHADOWWORDPAIN,
+	// boss_moira_bronzebeard.cpp:28; Lua
+	// eastern_kingdoms/boss_moira_bronzebeard.lua:34, 74 —
+	// victim-cast, 2s init -> 18s) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_10947_10894_10934.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE
+	// (aura 3) bp127 die1 auraPeriod 3000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur85 18000ms (aux row pre-existing),
+	// range4 Medium Range 0-30yd (aux row
+	// pre-existing), school Shadow (0x20);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1, DispelType 1 (MAGIC),
+	// Mechanic 0, PreventionType 0x1,
+	// StartRecoveryCategory 133) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); SpellAuraOptions
+	// row EXISTS (ProcChance 100) — proc fields
+	// not carried (no fields in the seed struct);
+	// EffectBonusCoefficient 0 /
+	// EffectRealPointsPerLevel 0.
+	{id: 10894, castTimeIdx: 1, durIdx: 85, rangeIdx: 4, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 127, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 10934 "Smite" (wago SpellName MATCHES;
+	// C++ SPELL_SMITE,
+	// boss_moira_bronzebeard.cpp:29; Lua
+	// eastern_kingdoms/boss_moira_bronzebeard.lua:35, 82 —
+	// victim-cast, 8s init -> 10s) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_10947_10894_10934.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp370 die45
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast19
+	// 2500ms (aux row pre-existing), dur0 (no
+	// SpellDuration row), range4 Medium Range
+	// 0-30yd (aux row pre-existing), school Holy
+	// (0x2); SpellCategories row EXISTS (Category
+	// 0, DefenseType 1, DispelType 0, Mechanic 0,
+	// PreventionType 0x1, StartRecoveryCategory
+	// 133) — category/defense/prevention/recovery
+	// not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row;
+	// EffectBonusCoefficient 0.714 /
+	// EffectRealPointsPerLevel 2.7 not carried
+	// (no fields in the seed struct).
+	{id: 10934, castTimeIdx: 19, durIdx: 0, rangeIdx: 4, school: schoolHoly, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 370, dieSides: 45, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
