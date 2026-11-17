@@ -11648,6 +11648,92 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 99, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 28794 "Rain of Fire" (wago SpellName MATCHES; C++
+	// SPELL_RAIN_OF_FIRE, boss_faerlina.cpp:41; Lua
+	// northrend/boss_faerlina.lua:133, 260 — target-cast
+	// on a random player, EVENT_RAIN_OF_FIRE) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_28794_28796_54097.txt, DifficultyID 0
+	// rows): 1 effect only, PERSISTENT_AREA_AURA
+	// (effect 27) PERIODIC_DAMAGE (aura 3) bp2312
+	// die375 auraPeriod 2000 radiusIdx 13 tgtA
+	// TARGET_DEST_DYNOBJ_ENEMY; cast1 instant, dur32
+	// 6000ms, range5 Long Range 0-40yd, radius13 10yd
+	// (aux rows pre-existing), school Fire (0x4);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 0,
+	// PreventionType 0x1) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x0 /
+	// Attributes_1 0x10000088 / Attributes_3 0x100 not
+	// carried (no fields in the seed struct; FK dialog
+	// showed the same two non-zero values shifted by
+	// one position — direct table is authoritative).
+	{id: 28794, castTimeIdx: 1, durIdx: 32, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 2312, dieSides: 375, auraPeriod: 2000, radiusIdx: 13, targetA: targetDestDynobjEnemy, chainAmplitude: 1},
+	}},
+	// 28796 "Poison Bolt Volley" (wago SpellName MATCHES;
+	// C++ SPELL_POISON_BOLT_VOLLEY, boss_faerlina.cpp:40;
+	// Lua northrend/boss_faerlina.lua:132, 239 —
+	// self-cast (DoCastAOE), EVENT_POISON_BOLT_VOLLEY)
+	// — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_28794_28796_54097.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE (effect 2) bp2624
+	// die751 radiusIdx 22 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) bp1479 die241 auraPeriod
+	// 2000 radiusIdx 22 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur31
+	// 8000ms, range6 Vision Range 0-100yd, radius22
+	// 200yd, school Nature (0x8), dispel 4 (POISON,
+	// SpellCategories DispelType 4); SpellCategories row
+	// EXISTS (Category 1152, DefenseType 1 (Magic),
+	// Mechanic 0, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (CumulativeAura 3, ProcChance 101) —
+	// cumulative/proc NOT carried (no fields in the seed
+	// struct); Attributes_0 0x0 / Attributes_1 0x88 /
+	// Attributes_2 0x4 / Attributes_3 0x100 and eff0
+	// EffectBonusCoefficient 1 not carried (no fields
+	// in the seed struct).
+	{id: 28796, castTimeIdx: 1, durIdx: 31, rangeIdx: 6, school: schoolNature, dispel: 4, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2624, dieSides: 751, radiusIdx: 22, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 1479, dieSides: 241, auraPeriod: 2000, radiusIdx: 22, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 54097 "Widow's Embrace" (25-man; wago SpellName
+	// MATCHES; C++ SPELL_WIDOWS_EMBRACE_HELPER
+	// RAID_MODE(28732, 54097), boss_faerlina.cpp:48; Lua
+	// northrend/boss_faerlina.lua:135 — HasAura-
+	// referenced only (RAID_MODE 25-man variant; the
+	// Lua casts the 10-man 28732 and guards on the
+	// helper), seeded on wago data per the census tier)
+	// — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_28794_28796_54097.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_CASTING_SPEED_NOT_STACK
+	// (aura 65) bp-26 die1 radiusIdx 18 tgtA
+	// TARGET_SRC_CASTER tgtB TARGET_UNIT_SRC_AREA_ENTRY;
+	// eff1 SCRIPT_EFFECT (effect 77) bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur9 30000ms,
+	// range1 Self Only 0yd, radius18 15yd (aux rows
+	// pre-existing), school Arcane (0x40), dispel 1
+	// (MAGIC, SpellCategories DispelType 1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 0, Mechanic 0, PreventionType 0x0) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); SpellAuraOptions
+	// row EXISTS (CumulativeAura 0, ProcChance 101) —
+	// cumulative/proc NOT carried (no fields in the seed
+	// struct); Attributes_0 0x24800010 / Attributes_1
+	// 0x20088 / Attributes_2 0x4 / Attributes_5 0x180
+	// not carried (no fields in the seed struct).
+	{id: 54097, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolArcane, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCastSpeedNotStack, basePoints: -26, dieSides: 1, radiusIdx: 18, targetA: targetSrcCaster, targetB: targetUnitSrcAreaEntry, chainAmplitude: 1},
+		{effect: effScriptEffect, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -11759,6 +11845,7 @@ func main() {
 		{52, f32(5), f32(0), f32(5)},     // real SpellRadius 52 for 67716 (wago.tools 3.4.0.47659 SpellRadius row 52, 2026-11-16 verdict wago_spells_29426_67541_67716.txt)
 		{31, f32(80), f32(0), f32(80)},   // real SpellRadius 31 for 44314 (wago.tools 3.4.0.47659 SpellRadius row 31, 2026-11-17 verdict wago_spells_44294_44314_46153.txt)
 		{61, f32(14), f32(0), f32(14)},   // real SpellRadius 61 for 68948 (wago.tools 3.4.0.47659 SpellRadius row 61, 2026-11-17 verdict wago_spells_68821_68948_69218.txt)
+		{22, f32(200), f32(0), f32(200)}, // real SpellRadius 22 for 28796 Poison Bolt Volley (wago.tools 3.4.0.47659 SpellRadius row 22, 2026-11-17 verdict wago_spells_28794_28796_54097.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
