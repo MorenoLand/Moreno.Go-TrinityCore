@@ -9840,6 +9840,77 @@ var spells = []spell{
 	{id: 17467, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2000, trigger: 17466, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 27249 "Summon Spectral Assassin" (wago SpellName MATCHES;
+	// C++ SPELL_SUMMON_SPECTRAL_ASSASSIN,
+	// boss_lord_valthalak.cpp:26; Lua
+	// eastern_kingdoms/boss_lord_valthalak.lua:76, 116 —
+	// self-cast, 6-8s init -> 30-35s loop) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_27249_27382_27286.txt, DifficultyID 0
+	// rows): eff0 SUMMON (effect 28) bp1 die1
+	// misc 16066 (summon entry) miscB 64
+	// (SummonProperties row pre-existing)
+	// radiusIdx 8 (5yd, aux row pre-existing)
+	// tgtA TARGET_DEST_CASTER_SUMMON; cast1
+	// instant, dur3 60000ms (aux row pre-existing),
+	// range1 Self Only 0yd (aux row pre-existing),
+	// school Physical; NO SpellAuraOptions row; NO
+	// SpellCategories row; BonusCoefficient 1 /
+	// Attributes_0–13 all 0x0 not carried (no
+	// fields in the seed struct).
+	{id: 27249, castTimeIdx: 1, durIdx: 3, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 1, dieSides: 1, radiusIdx: 8, misc: 16066, miscB: 64, targetA: targetDestCasterSummon, chainAmplitude: 1},
+	}},
+	// 27382 "Shadow Bolt Volley" (wago SpellName MATCHES;
+	// C++ SPELL_SHADOW_BOLT_VOLLEY,
+	// boss_lord_valthalak.cpp:27; Lua
+	// eastern_kingdoms/boss_lord_valthalak.lua:77, 139 —
+	// victim-cast) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-16
+	// verdict file wago_spells_27249_27382_27286.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die0
+	// auraPeriod 2000 trigger 27383 (shadow damage,
+	// trigger-only, NOT seeded per repo convention)
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21
+	// -1 infinite (aux row pre-existing), range4
+	// Medium Range 0-30yd (aux row pre-existing),
+	// school Shadow (0x20); SpellCategories row
+	// EXISTS (Category 0, DefenseType 1,
+	// PreventionType 0x1, StartRecoveryCategory
+	// 133) — category/defense/prevention/recovery
+	// not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; BonusCoefficient 1 /
+	// Attributes_0 0x0 / Attributes_1 0x88 not
+	// carried (no fields in the seed struct).
+	{id: 27382, castTimeIdx: 1, durIdx: 21, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 2000, trigger: 27383, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 27286 "Shadow Wrath" (wago SpellName MATCHES;
+	// C++ SPELL_SHADOW_WRATH,
+	// boss_lord_valthalak.cpp:28; Lua
+	// eastern_kingdoms/boss_lord_valthalak.lua:78, 127 —
+	// victim-cast, 9-18s init) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_27249_27382_27286.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp499 die1
+	// chainTargets 10 chainAmplitude 1.5 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range135 Tower
+	// 100 0-100yd (aux row pre-existing), school
+	// Shadow (0x20); SpellCategories row EXISTS
+	// (Category 0, DefenseType 1, DispelType 0,
+	// Mechanic 0, PreventionType 0x1) —
+	// category/defense/prevention not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; BonusCoefficient 1 / Attributes_0–13 all
+	// 0x0 not carried (no fields in the seed
+	// struct).
+	{id: 27286, castTimeIdx: 1, durIdx: 0, rangeIdx: 135, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 499, dieSides: 1, chainTargets: 10, chainAmplitude: 1.5, targetA: targetEnemy},
+	}},
 }
 
 func main() {
