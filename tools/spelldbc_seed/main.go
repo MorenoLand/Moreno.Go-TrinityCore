@@ -13560,6 +13560,72 @@ var spells = []spell{
 	{id: 8732, mechanic: 11, castTimeIdx: 1, durIdx: 0, rangeIdx: 3, school: schoolNature, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 203, dieSides: 73, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 20, chainAmplitude: 1},
 	}},
+	// 36173 "Gift of the Doomsayer" (Wowhead SpellName MATCH;
+	// C++ SPELL_GIFT_OF_THE_DOOMSAYER,
+	// boss_dalliah_the_doomsayer.cpp:41, TRIGGERED
+	// DoCastVictim :145; Lua arcatraz/
+	// boss_dalliah_the_doomsayer.lua:107,164 — {1s,4s}
+	// init then {16s,21s}) — Wowhead WotLK (verdict
+	// file wago_spells_36142_36144_36173_39016.txt;
+	// wago NOT attempted — effect row complete):
+	// single eff0 APPLY_AURA PROC_TRIGGER_SPELL (aura
+	// 42) Value 1 — bp 0, die 1, trigger 36174 "Curse
+	// of the Doomsayer" (NOT yet seeded — delegate its
+	// read; the 2313-2687 tooltip range is the
+	// trigger's heal); tgtA ENEMY (victim-cast);
+	// cast16 1500ms (real row), dur1 10000ms (real
+	// row), range7 Ten 0-10yd (real row), school
+	// Shadow. ProcChance 100 not carried (58109
+	// precedent, no SpellAuraOptions table).
+	{id: 36173, castTimeIdx: 16, durIdx: 1, rangeIdx: 7, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 36174, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 36142 "Whirlwind" (Wowhead SpellName MATCH; C++
+	// SPELL_WHIRLWIND, boss_dalliah_the_doomsayer.cpp:42,
+	// non-triggered DoCast(me) :148; Lua arcatraz/
+	// boss_dalliah_the_doomsayer.lua:108,176 — {7s,9s}
+	// init then {19s,21s}) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — effect row
+	// complete): single eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) every 1s —
+	// bp 0, die 1, auraPeriod 1000, trigger 36175
+	// "Whirlwind" (NOT yet seeded — delegate its read;
+	// the "+300" is the trigger's damage); tgtA CASTER
+	// (8989 precedent); cast1 (channeled — 17:00 fix:
+	// castTimeIdx 1, channel length in durIdx), dur32
+	// 6000ms (real row), range1 Self 0yd (real row),
+	// school Physical.
+	{id: 36142, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 36175, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36144 "Heal" (Wowhead SpellName MATCH; C++
+	// SPELL_HEAL, boss_dalliah_the_doomsayer.cpp:43,
+	// non-triggered DoCast(me) :152; Lua arcatraz/
+	// boss_dalliah_the_doomsayer.lua:109,189 — one-shot
+	// self-cast) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — effect row complete):
+	// single eff0 HEAL Value 18500 — bp 18500, die 0
+	// (flat per 35108); tgtA CASTER (cast-driven,
+	// DoCast(me); 31285/17534 targetCaster heal
+	// precedents); cast19 2500ms (real row), dur0 (no
+	// duration), range5 Long 0-40yd (real row), school
+	// Holy. GCD Normal not carried (no field).
+	{id: 36144, castTimeIdx: 19, durIdx: 0, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effHeal, basePoints: 18500, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39016 "Shadow Wave" HELD — NOT seeded: Wowhead name
+	// MATCH but Effect #2 has NO row on the page (jumps
+	// #1 -> #3) and the single wago attempt was
+	// bot-blocked (40th consecutive), so eff2's contents
+	// are unknown — a 2-of-3 row would fabricate it
+	// (same class as 35327). eff1 SCHOOL_DAMAGE Shadow
+	// 2250-2750 (bp 2249/die 501) + eff3 MOD % DAMAGE
+	// TAKEN Shadow 50% (aura 87, bp 49/die 1, misc 32)
+	// are derivable and recorded here for the
+	// unblocking tick. C++ SPELL_SHADOW_WAVE,
+	// boss_dalliah_the_doomsayer.cpp:44, TRIGGERED
+	// DoCastVictim (heroic-only gate is script-side);
+	// Lua arcatraz/boss_dalliah_the_doomsayer.lua:110,201.
 	// 35327 "Jackhammer" HELD — NOT seeded: Wowhead name
 	// MATCH but eff2 has NO row on the page (jumps eff1
 	// -> eff3) and the tooltip/buff show a literal 0%
