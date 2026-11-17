@@ -9248,6 +9248,71 @@ var spells = []spell{
 		{effect: effEnergize, basePoints: 9999, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 17398, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 15589 "Whirlwind" (wago SpellName MATCHES; C++
+	// SPELL_WHIRLWIND, boss_drekthar.cpp:23; Lua
+	// eastern_kingdoms/boss_drekthar.lua:56, 21 —
+	// victim-cast, {1,20}s init, 25s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15589_13736_19128.txt, DifficultyID 0
+	// rows): eff0 WEAPON_DAMAGE (effect 58) bp299
+	// die1 (in-game 300%) radius _0=14 8yd tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row), range1 Self Only
+	// 0yd (aux row pre-existing), school Physical;
+	// NO SpellAuraOptions row; BonusCoefficient 1 /
+	// EffectRealPointsPerLevel 6 / Attributes_0
+	// 0x40010 / Attributes_3 0x200 / Attributes_5
+	// 0x8000 / DefenseType 2 / PreventionType 0x2
+	// not carried (no fields in the seed struct).
+	{id: 15589, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 299, dieSides: 1, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 13736 "Whirlwind" (wago SpellName MATCHES; C++
+	// SPELL_WHIRLWIND2, boss_drekthar.cpp:24; Lua
+	// eastern_kingdoms/boss_drekthar.lua:57, 23 —
+	// victim-cast aura, {1,20}s init, 25s re-arm)
+	// — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15589_13736_19128.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// (aura 23) bp-1 die1 auraPeriod 2000 trigger
+	// 15589 (seeded in this same trio — a live-cast
+	// ID, not trigger-only) tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur39
+	// 2000ms (aux row pre-existing), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Physical; NO SpellAuraOptions row; Category
+	// 49 / Attributes_0 0x50010 / Attributes_1
+	// 0x40 / DefenseType 2 / PreventionType 0x2 not
+	// carried (no fields in the seed struct).
+	{id: 13736, castTimeIdx: 1, durIdx: 39, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 2000, trigger: 15589, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 19128 "Knockdown" (wago SpellName MATCHES;
+	// C++ SPELL_KNOCKDOWN, boss_drekthar.cpp:25;
+	// Lua eastern_kingdoms/boss_drekthar.lua:58, 25
+	// — victim-cast, 12s init, 25s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15589_13736_19128.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_STUN (aura 12) bp0
+	// die0 chainTargets 5 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 SCHOOL_DAMAGE
+	// bp59 die21 (in-game 60-80) chainTargets 5
+	// tgtA TARGET_UNIT_TARGET_ENEMY; cast1 instant,
+	// dur39 2000ms (aux row pre-existing), range2
+	// Combat Range 0-5yd (aux row pre-existing),
+	// school Physical, mechanic 12 (SpellCategories
+	// Mechanic 12); NO SpellAuraOptions row;
+	// EffectRealPointsPerLevel 1.5 / Attributes_0
+	// 0x40010 / Attributes_5 0x1000 not carried (no
+	// fields in the seed struct).
+	{id: 19128, castTimeIdx: 1, durIdx: 39, rangeIdx: 2, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 59, dieSides: 21, targetA: targetEnemy, chainTargets: 5, chainAmplitude: 1},
+	}},
 }
 
 func main() {
