@@ -12270,6 +12270,82 @@ var spells = []spell{
 	{id: 34449, castTimeIdx: 16, rangeIdx: 35, school: schoolFrost, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 67, dieSides: 15, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 39277 "Hellfire - The Exorcism, Barada commands"
+	// (wago SpellName MISMATCH vs expected "Barada's
+	// Command" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_BARADAS_COMMAND,
+	// zone_hellfire_peninsula.cpp:339; Lua
+	// outland/npc_barada.lua:72, 149 — self-cast, step 1
+	// of the exorcism machine) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_39277_39278_39295.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY (aura
+	// 4) bp0 die0 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur21 -1 (infinite), range1 Self Only
+	// 0yd (aux rows pre-existing), school Physical
+	// (0x1); SpellCategories row does NOT exist at all
+	// — dispel/mechanic stay 0; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc chance/type NOT
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x100 / Attributes_1 0x10000000 not
+	// carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 39277, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39278 "Hellfire - The Exorcism, Barada falters"
+	// (wago SpellName MISMATCH vs expected "Barada
+	// Falters" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_BARADA_FALTERS,
+	// zone_hellfire_peninsula.cpp:340; Lua
+	// outland/npc_barada.lua:73, 161 — self-cast, step 4
+	// of the exorcism machine) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_39277_39278_39295.txt,
+	// DifficultyID 0 rows): identical to 39277 in every
+	// seeded field — eff0 APPLY_AURA DUMMY (aura 4) bp0
+	// die0 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur21 -1 (infinite), range1 Self Only 0yd (aux
+	// rows pre-existing), school Physical (0x1);
+	// SpellCategories row does NOT exist at all —
+	// dispel/mechanic stay 0; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc chance/type NOT
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x100 / Attributes_1 0x10000000 not
+	// carried (no fields in the seed struct); no
+	// triggered spells.
+	{id: 39278, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 39295 "Hellfire - The Exorcism, Jules vomits, aura"
+	// (wago SpellName MISMATCH vs expected "Jules
+	// Vomits Aura" — seeded on data per
+	// quel'danas/ghostly-citizen precedent; C++
+	// SPELL_JULES_VOMITS_AURA,
+	// zone_hellfire_peninsula.cpp:337; Lua
+	// outland/npc_barada.lua:74, 241 — RemoveAura on
+	// Jules, step 20 of the exorcism machine) —
+	// wago.tools 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_39277_39278_39295.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// (aura 23) bp0 die0 auraPeriod 15000 trigger 39296
+	// tgtA TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// (infinite), range1 Self Only 0yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row does NOT exist at all —
+	// dispel/mechanic stay 0; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc chance/type NOT
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x8000100 / Attributes_1 0x10000800
+	// not carried (no fields in the seed struct); NOTE
+	// triggered 39296 itself unseeded (trigger-only,
+	// per 17466/27383 precedent).
+	{id: 39295, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, auraPeriod: 15000, trigger: 39296, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
