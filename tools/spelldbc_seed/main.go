@@ -11313,13 +11313,12 @@ var spells = []spell{
 	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
 	// MOD_DAMAGE_PERCENT_DONE (aura 79,
 	// SpellAuraDefines.h:159) bp9 die1 misc 1 tgtA
-	// TARGET_UNIT_CASTER; cast1 instant, dur9 (aux row
-	// 30000ms pre-existing — CONFLICT: this verdict
-	// reads SpellDuration 9 as 3000ms, but the 2026-11-15
-	// 49519 verdict reads 30000ms and 5 seeded spells
-	// (49519/44335/70227/22011/38067) rely on durIdx 9;
-	// keeping 30000, re-verify SpellDuration 9 on a
-	// future wago read), range1 Self Only 0yd (aux row
+	// TARGET_UNIT_CASTER; cast1 instant, dur9 30000ms
+	// (aux row pre-existing; CONFLICT RESOLVED: the
+	// meathook verdict's 3000ms was a substring-filter
+	// misread — exact-ID 9 re-read 2026-11-17, theradras
+	// verdict wago_spells_21832_21869_21909.txt, confirms
+	// 30000ms), range1 Self Only 0yd (aux row
 	// pre-existing), school Physical (0x1); NO
 	// SpellCategories row; SpellAuraOptions row EXISTS
 	// (CumulativeAura 10, ProcChance 101) — not carried
@@ -11329,6 +11328,77 @@ var spells = []spell{
 	{id: 58841, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModScale, basePoints: 9, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 9, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 21832 "Boulder" (wago SpellName MATCHES; C++
+	// SPELL_BOULDER, boss_princess_theradras.cpp:32; Lua
+	// kalimdor/boss_princess_theradras.lua:41, 100 —
+	// random-target cast, EVENT_BOULDER) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc (2026-11-17
+	// verdict file wago_spells_21832_21869_21909.txt,
+	// DifficultyID 0 rows): eff0 SCHOOL_DAMAGE bp393
+	// die113 tgtA TARGET_UNIT_TARGET_ENEMY; eff1
+	// INTERRUPT_CAST (effect 68) bp0 die1 tgtA
+	// TARGET_UNIT_TARGET_ENEMY EffectMechanic 26
+	// carried as effect mechanic 26; eff2 TRIGGER_SPELL
+	// trigger 22592 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast5 2000ms, dur1 10000ms, range54 Monster Shoot
+	// 5-30yd (aux rows pre-existing), school Physical
+	// (0x1); SpellCategories row EXISTS (Category 0,
+	// DefenseType 3 (Ranged), DispelType 0, Mechanic 0,
+	// PreventionType 0x2) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x410010
+	// not carried (no fields in the seed struct); NOTE
+	// triggered 22592 itself unseeded; EffectBonusCoefficient
+	// 1 on all 3 effects not carried (no field in the
+	// seed struct).
+	{id: 21832, castTimeIdx: 5, durIdx: 1, rangeIdx: 54, school: schoolPhysical, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 393, dieSides: 113, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effInterruptCast, dieSides: 1, mechanic: 26, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effTriggerSpell, trigger: 22592, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 21869 "Repulsive Gaze" (wago SpellName MATCHES; C++
+	// SPELL_REPULSIVEGAZE, boss_princess_theradras.cpp:34;
+	// Lua kalimdor/boss_princess_theradras.lua:43, 121 —
+	// victim-cast, EVENT_REPULSIVEGAZE) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc (2026-11-17
+	// verdict file wago_spells_21832_21869_21909.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA MOD_FEAR
+	// (aura 7) bp-1 die1 radiusIdx_0 14 (8yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant, dur31
+	// 8000ms, range7 Ten yards 0-10yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0, Mechanic 5
+	// carried as mechanic 5, PreventionType 0x1) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0x50010 not
+	// carried (no fields in the seed struct).
+	{id: 21869, castTimeIdx: 1, durIdx: 31, rangeIdx: 7, school: schoolPhysical, mechanic: 5, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 21909 "Dust Field" (wago SpellName MATCHES; C++
+	// SPELL_DUSTFIELD, boss_princess_theradras.cpp:31; Lua
+	// kalimdor/boss_princess_theradras.lua:40, 88 —
+	// self-cast, EVENT_DUSTFIELD) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_21832_21869_21909.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp0 die1
+	// auraPeriod 1000 trigger 21868 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA MOD_ROOT
+	// (aura 26) bp0 die0 tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur31 8000ms, range1 Self Only 0yd (aux
+	// rows pre-existing), school Nature (0x8); NO
+	// SpellCategories row; NO SpellAuraOptions row;
+	// EffectBonusCoefficient 1 on both effects not
+	// carried (no field in the seed struct); NOTE
+	// triggered 21868 itself unseeded.
+	{id: 21909, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, auraPeriod: 1000, trigger: 21868, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
