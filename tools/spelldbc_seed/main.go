@@ -12060,6 +12060,63 @@ var spells = []spell{
 		{effect: effWeaponDamage, basePoints: 249, dieSides: 1, radiusIdx: 10, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effKnockBack, basePoints: 306, dieSides: 87, misc: 20, radiusIdx: 9, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 29266 "Permanent Feign Death" (wago SpellName
+	// MATCHES; C++ SPELL_PERMANENT_FEIGN_DEATH,
+	// boss_apothecary_hummel.cpp:38; Lua
+	// eastern_kingdoms/boss_apothecary_hummel.lua:153,
+	// 463 — triggered self-cast) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_3617_29266_68607.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY (aura
+	// 4) bp-1 die1 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA MOD_STUN (aura 12) bp0 die0 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// (infinite), range1 Self Only 0yd (aux rows
+	// pre-existing), school Physical (0x1);
+	// SpellCategories row does NOT exist at all —
+	// dispel/mechanic stay 0; NO SpellAuraOptions row;
+	// Attributes_0 0x40180 / Attributes_1 0x60400 /
+	// Attributes_5 0x8 not carried (no fields in the
+	// seed struct); no triggered spells.
+	{id: 29266, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 68607 "Alluring Perfume Spray" (wago SpellName
+	// MISMATCH vs expected "Perfume Spray" — seeded on
+	// data per quel'danas/ghostly-citizen precedent; C++
+	// SPELL_PERFUME_SPRAY, boss_apothecary_hummel.cpp:35;
+	// Lua eastern_kingdoms/boss_apothecary_hummel.lua:151,
+	// 241 — non-triggered DoCastVictim,
+	// EVENT_PERFUME_SPRAY) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_3617_29266_68607.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA DUMMY (aura
+	// 4) bp10799 die2401 tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA PERIODIC_DAMAGE (aura 3) bp3149 die701
+	// auraPeriod 1000 radiusIdx 61 tgtA
+	// TARGET_UNIT_TARGET_ENEMY tgtB
+	// TARGET_UNIT_CONE_ENEMY_24; cast1 instant, dur27
+	// 3000ms, range2 Combat Range 5yd, radius61 14yd
+	// (aux rows pre-existing), school Nature (0x8);
+	// SpellCategories row does NOT exist at all —
+	// dispel/mechanic stay 0; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc chance/type NOT
+	// carried (no fields in the seed struct);
+	// Attributes_1 0xC8 / Attributes_2 0x4 /
+	// Attributes_5 0x8008000 and EffectAttributes
+	// 0x20000 (eff1) not carried (no fields in the seed
+	// struct); no triggered spells. NOTE 3617 "Quiet
+	// Suicide" (C++ SPELL_QUIET_SUICIDE,
+	// boss_apothecary_hummel.cpp:37; Lua :156, 488 —
+	// triggered self-cast) has NO row in build
+	// 3.4.0.47659 and stays UNSEEDED (cf. 10876/59046/
+	// 65296); the Lua cast no-ops in a seed-only
+	// deployment until a row exists.
+	{id: 68607, castTimeIdx: 1, durIdx: 27, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 10799, dieSides: 2401, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 3149, dieSides: 701, auraPeriod: 1000, radiusIdx: 61, targetA: targetEnemy, targetB: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
