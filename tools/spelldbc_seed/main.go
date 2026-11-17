@@ -9988,6 +9988,72 @@ var spells = []spell{
 	{id: 10934, castTimeIdx: 19, durIdx: 0, rangeIdx: 4, school: schoolHoly, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 370, dieSides: 45, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 8122 "Psychic Scream" (wago SpellName MATCHES;
+	// C++ SPELL_PSYCHICSCREAM,
+	// boss_high_interrogator_gerstahn.cpp:26; Lua
+	// eastern_kingdoms/boss_high_interrogator_gerstahn.lua:42, 113 —
+	// victim-cast, 32s init -> 30s) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_10876_8122_22417.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_FEAR (aura 7)
+	// bp-1 die1 tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY, radius ONLY in
+	// EffectRadiusIndex_1 (14, 8yd) — NOT carried
+	// (no radiusIdxB field in the seed struct;
+	// 19703 radius-_1 precedent); eff1 APPLY_AURA
+	// MOD_INCREASE_SPEED (aura 31) bp24 die1
+	// radiusIdx 14 (8yd, aux row pre-existing)
+	// tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur31 8000ms (aux row pre-existing), range1
+	// Self Only 0yd (aux row pre-existing), school
+	// Shadow (0x20); SpellCategories row EXISTS
+	// (Category 43, DefenseType 1, DispelType 1
+	// (MAGIC) carried as dispel 1, Mechanic 5
+	// (FEAR) carried as spell mechanic per the
+	// 24110 mechanic: 7 precedent, PreventionType
+	// 0x1, StartRecoveryCategory 133) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); SpellAuraOptions
+	// row EXISTS (ProcChance 100, ProcTypeMask
+	// 0x800a22a8) — proc fields not carried (no
+	// fields in the seed struct); EffectBonusCoefficient
+	// 0/1 / EffectRealPointsPerLevel 0 not carried
+	// (no fields in the seed struct).
+	{id: 8122, castTimeIdx: 1, durIdx: 31, rangeIdx: 1, school: schoolShadow, dispel: 1, mechanic: 5, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModFear, basePoints: -1, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: 24, dieSides: 1, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 22417 "Shadow Shield" (wago SpellName MATCHES;
+	// C++ SPELL_SHADOWSHIELD,
+	// boss_high_interrogator_gerstahn.cpp:27; Lua
+	// eastern_kingdoms/boss_high_interrogator_gerstahn.lua:43, 121 —
+	// self-cast, 8s init -> 25s) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_10876_8122_22417.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA SCHOOL_ABSORB
+	// (aura 69) bp399 die1 misc 0x7f (all-schools
+	// mask) tgtA TARGET_UNIT_CASTER; eff1
+	// APPLY_AURA DAMAGE_SHIELD (aura 15) bp19
+	// die1 tgtA TARGET_UNIT_CASTER; cast1 instant,
+	// dur9 30000ms (aux row pre-existing), range5
+	// Long Range 0-40yd (aux row pre-existing),
+	// school Shadow (0x20); SpellCategories row
+	// EXISTS (Category 0, DefenseType 1,
+	// DispelType 1 (MAGIC) carried as dispel 1,
+	// Mechanic 0, PreventionType 0x1,
+	// StartRecoveryCategory 0) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; EffectBonusCoefficient 0 /
+	// EffectRealPointsPerLevel 20/1 not carried
+	// (no fields in the seed struct).
+	{id: 22417, castTimeIdx: 1, durIdx: 9, rangeIdx: 5, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, basePoints: 399, dieSides: 1, misc: 0x7f, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDamageShield, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
