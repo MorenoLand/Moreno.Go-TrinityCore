@@ -10415,6 +10415,100 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 4274, dieSides: 451, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 68821 "Chain Reaction" (wago SpellName MATCHES;
+	// C++ SPELL_CHAIN_REACTION,
+	// boss_apothecary_hummel.cpp:35; Lua
+	// eastern_kingdoms/npc_apothecary_baxter.lua:55, 103 —
+	// victim-cast, 12s init -> 25s re-arm, paired with
+	// the 69218 table summon below) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_68821_68948_69218.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE (effect 2) bp8549
+	// die901 radiusIdx 13 (10yd, aux row
+	// pre-existing) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY (radiusIdx_1 8 NOT
+	// carried — no radiusIdxB field in the seed
+	// struct; 19703 radius-_1 precedent); eff1
+	// APPLY_AURA MOD_ROOT (aura 26) bp-1 die1 tgtA
+	// TARGET_UNIT_CASTER (self-root); cast14 3000ms
+	// (aux row pre-existing), dur39 2000ms (aux row
+	// pre-existing), range2 Combat Range 0-5yd (aux
+	// row pre-existing), school Fire (0x4); NO
+	// SpellCategories row; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// Attributes not carried (no fields in the seed
+	// struct).
+	{id: 68821, castTimeIdx: 14, durIdx: 39, rangeIdx: 2, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 8549, dieSides: 901, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 68948 "Irresistible Cologne Spray" (wago
+	// SpellName MISMATCH vs C++/Lua "Cologne Spray";
+	// seeded on data per the eramas_brightblaze 15503
+	// / smolderweb 16104 precedent; C++
+	// SPELL_COLOGNE_SPRAY,
+	// boss_apothecary_hummel.cpp:39; Lua
+	// eastern_kingdoms/npc_apothecary_baxter.lua:57, 90 —
+	// victim-cast, 7s init -> 4s re-arm) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_68821_68948_69218.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA DUMMY (aura 4) bp10799
+	// die2401 tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) bp3149 die701
+	// auraPeriod 1000 radiusIdx 61 (14yd, aux row
+	// added this tick) tgtA TARGET_UNIT_TARGET_ENEMY
+	// tgtB TARGET_UNIT_CONE_ENEMY_24 (cone damage,
+	// matches the C++ cologne-spray arm); cast1
+	// instant, dur27 3000ms (aux row pre-existing),
+	// range2 Combat Range 0-5yd (aux row
+	// pre-existing), school Nature (0x8); NO
+	// SpellCategories row; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// Attributes / EffectAttributes 0x20000 (eff1)
+	// not carried (no fields in the seed struct).
+	{id: 68948, castTimeIdx: 1, durIdx: 27, rangeIdx: 2, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 10799, dieSides: 2401, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 3149, dieSides: 701, auraPeriod: 1000, radiusIdx: 61, targetA: targetEnemy, targetB: targetUnitConeEnemy, chainAmplitude: 1},
+	}},
+	// 69218 "[DND] Holiday - Valentine - Summon Table"
+	// (wago SpellName MISMATCH vs C++/Lua "Summon
+	// Table"; seeded on data per the eramas_brightblaze
+	// 15503 / smolderweb 16104 precedent — C++-checked:
+	// boss_apothecary_hummel.cpp:262/385 DoCastVictim(
+	// SPELL_SUMMON_TABLE) immediately before the 68821
+	// chain-reaction cast, and the wago SUMMON effect
+	// summons creature 36710 with SummonProperties 64,
+	// i.e. the encounter table; the [DND] Valentine
+	// name is the DB2 name stored in this build; C++
+	// SPELL_SUMMON_TABLE, boss_apothecary_hummel.cpp:36;
+	// Lua eastern_kingdoms/npc_apothecary_baxter.lua:56,
+	// 102 — victim-cast, paired with 68821) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-17 verdict file
+	// wago_spells_68821_68948_69218.txt, DifficultyID 0
+	// rows): eff0 DUMMY (effect 3) bp-1 die1 tgtA
+	// TARGET_UNIT_TARGET_ANY; eff1 SUMMON (effect 28)
+	// bp-1 die1 misc 36710 (summon entry) miscB 64
+	// (SummonProperties row pre-existing) tgtA
+	// TARGET_DEST_CASTER; eff2 APPLY_AURA MOD_ROOT
+	// (aura 26) bp-1 die1 tgtA TARGET_UNIT_CASTER
+	// (self-root); cast1 instant, dur28 5000ms (aux
+	// row pre-existing), range2 Combat Range 0-5yd
+	// (aux row pre-existing), school Physical (0x1);
+	// NO SpellCategories row; SpellAuraOptions row
+	// EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// Attributes not carried (no fields in the seed
+	// struct).
+	{id: 69218, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: -1, dieSides: 1, targetA: targetUnitTargetAny, chainAmplitude: 1},
+		{effect: effSummon, basePoints: -1, dieSides: 1, misc: 36710, miscB: 64, targetA: targetDestCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraRoot, basePoints: -1, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -10524,6 +10618,7 @@ func main() {
 		{24, f32(65), f32(0), f32(65)},   // real SpellRadius 24 for 32309 (wago.tools 3.4.0.47659 SpellRadius row 24, 2026-11-16 verdict wago_spells_28131_28308_32309.txt)
 		{52, f32(5), f32(0), f32(5)},     // real SpellRadius 52 for 67716 (wago.tools 3.4.0.47659 SpellRadius row 52, 2026-11-16 verdict wago_spells_29426_67541_67716.txt)
 		{31, f32(80), f32(0), f32(80)},   // real SpellRadius 31 for 44314 (wago.tools 3.4.0.47659 SpellRadius row 31, 2026-11-17 verdict wago_spells_44294_44314_46153.txt)
+		{61, f32(14), f32(0), f32(14)},   // real SpellRadius 61 for 68948 (wago.tools 3.4.0.47659 SpellRadius row 61, 2026-11-17 verdict wago_spells_68821_68948_69218.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
