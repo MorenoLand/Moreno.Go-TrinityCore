@@ -90,6 +90,7 @@ const (
 	effApplyAreaAuraOwner      = 143 // SPELL_EFFECT_APPLY_AREA_AURA_OWNER (SharedDefines.h:954)
 	effApplyAreaAuraParty      = 35  // SPELL_EFFECT_APPLY_AREA_AURA_PARTY (SharedDefines.h:846)
 	effApplyAreaAuraEnemy      = 129 // SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (SharedDefines.h:940)
+	effApplyAreaAuraFriend     = 128 // SPELL_EFFECT_APPLY_AREA_AURA_FRIEND (SharedDefines.h:939)
 	effCreateItem              = 24  // SPELL_EFFECT_CREATE_ITEM (SharedDefines.h:835)
 	effAddExtraAttacks         = 19  // SPELL_EFFECT_ADD_EXTRA_ATTACKS (SharedDefines.h:830)
 	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
@@ -10579,6 +10580,73 @@ var spells = []spell{
 	// carried (no fields in the seed struct).
 	{id: 52850, castTimeIdx: 1, durIdx: 0, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effTeleportUnits, targetA: targetCaster, targetB: targetDestNearbyEntry, chainAmplitude: 1},
+	}},
+	// 52894 "Anti-Magic Zone" (wago SpellName MATCHES;
+	// C++ SPELL_ANTI_MAGIC_ZONE,
+	// chapter2.cpp:94; Lua
+	// eastern_kingdoms/npc_koltira_deathweaver.lua:163, 252 —
+	// self-cast, INTRO_5) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_52894_52899_53627.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AREA_AURA_FRIEND
+	// (effect 128) aura 87 MOD_DAMAGE_PERCENT_TAKEN
+	// bp-86 die1 tgtA TARGET_UNIT_CASTER radiusIdx_0 8
+	// (5yd, aux row pre-existing) misc 126 (school mask
+	// 0x7E: all magic schools); cast1 instant, dur21 -1
+	// infinite (aux row pre-existing), range7 Ten yards
+	// 0-10yd (aux row pre-existing), school Shadow
+	// (0x20); NO SpellCategories row; NO
+	// SpellAuraOptions row; Attributes_0 0x20040100 /
+	// Attributes_1 0x4cc not carried (no fields in the
+	// seed struct); RadiusIdx_1 8 not carried (19703
+	// precedent — only _0 is carried).
+	{id: 52894, castTimeIdx: 1, durIdx: 21, rangeIdx: 7, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAreaAuraFriend, aura: auraModDmgTaken, basePoints: -86, dieSides: 1, radiusIdx: 8, misc: 126, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52899 "Koltira Transform" (wago SpellName MATCHES;
+	// C++ SPELL_KOLTIRA_TRANSFORM,
+	// chapter2.cpp:93; Lua
+	// eastern_kingdoms/npc_koltira_deathweaver.lua:162, 259 —
+	// self-cast, INTRO_4) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_52894_52899_53627.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA TRANSFORM
+	// (aura 56) bp0 die0 misc 28447 (display ID) tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite (aux row pre-existing), range1 Self Only
+	// 0yd (aux row pre-existing), school Physical
+	// (0x1); NO SpellCategories row; SpellAuraOptions
+	// row EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x180 not carried (no fields in
+	// the seed struct).
+	{id: 52899, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, misc: 28447, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 53627 "Hero Aggro Aura" (wago SpellName MISMATCH:
+	// "Hero Aggro Aura" vs expected "Hero Aggro" —
+	// seeded on data per the 15503/16104 precedent;
+	// C++ SPELL_HERO_AGGRO, chapter2.cpp:95; Lua
+	// eastern_kingdoms/npc_koltira_deathweaver.lua:164, 347 —
+	// self-cast, OUTRO) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_52894_52899_53627.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp-1 die1
+	// auraPeriod 6000 trigger 53628 tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite (aux row pre-existing), range1 Self Only
+	// 0yd (aux row pre-existing), school Physical
+	// (0x1); NO SpellCategories row; SpellAuraOptions
+	// row EXISTS (ProcChance 101) — proc fields not
+	// carried (no fields in the seed struct);
+	// Attributes_0 0x180 not carried (no fields in
+	// the seed struct). NOTE: the triggered spell
+	// 53628 is itself unseeded — the 6s trigger tick
+	// will resolve to a zero Spell in a seed-only
+	// deployment until 53628 is seeded.
+	{id: 53627, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 6000, trigger: 53628, targetA: targetCaster, chainAmplitude: 1},
 	}},
 }
 
