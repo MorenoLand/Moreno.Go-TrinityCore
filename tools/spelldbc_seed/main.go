@@ -9108,6 +9108,73 @@ var spells = []spell{
 	{id: 17831, castTimeIdx: 1, durIdx: 3, rangeIdx: 2, school: schoolShadow, dispel: 2, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 34, dieSides: 1, auraPeriod: 60000, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 15708 "Mortal Strike" (wago SpellName MATCHES;
+	// C++ SPELL_MORTALSTRIKE,
+	// boss_baron_rivendare.cpp:34; Lua
+	// eastern_kingdoms/boss_baron_rivendare.lua:96,
+	// 70 — victim-cast, 12s init, 10-25s re-arm)
+	// — wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15708_17393_17473.txt, DifficultyID 0
+	// rows): eff0 WEAPON_PERCENT_DAMAGE (effect 31)
+	// bp299 die1 (in-game 300%) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 APPLY_AURA
+	// MOD_HEALING_PCT (aura 118) bp-51 die1 misc
+	// 127 tgtA TARGET_UNIT_TARGET_ENEMY; cast1
+	// instant, dur28 5000ms (aux row pre-existing),
+	// range2 Combat Range 0-5yd (aux row
+	// pre-existing), school Physical; NO
+	// SpellAuraOptions row; DefenseType 2 /
+	// PreventionType 0x2 / Attributes_0 0x50010 /
+	// StartRecoveryCategory 133 not carried (no
+	// fields in the seed struct).
+	{id: 15708, castTimeIdx: 1, durIdx: 28, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 299, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -51, dieSides: 1, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 17393 "Shadow Bolt" (wago SpellName MATCHES;
+	// C++ SPELL_SHADOWBOLT,
+	// boss_baron_rivendare.cpp:32; Lua
+	// eastern_kingdoms/boss_baron_rivendare.lua:94,
+	// 62 — random-target cast, 5s init, 10s re-arm)
+	// — wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15708_17393_17473.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp287 die101
+	// (in-game 288-388) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast5 2000ms (aux
+	// row pre-existing), dur0 (no SpellDuration
+	// row), range5 Long Range 0-40yd (aux row
+	// pre-existing), school Shadow; NO
+	// SpellAuraOptions row; Speed 24 /
+	// BonusCoefficient 1 / Attributes_0 0x90000 /
+	// StartRecoveryCategory 133 not carried (no
+	// fields in the seed struct).
+	{id: 17393, castTimeIdx: 5, durIdx: 0, rangeIdx: 5, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 287, dieSides: 101, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 17473 "Raise Dead" (wago SpellName MATCHES;
+	// C++ SPELL_RAISE_DEAD,
+	// boss_baron_rivendare.cpp:38; Lua
+	// eastern_kingdoms/boss_baron_rivendare.lua:97,
+	// 72 — self-cast, 15s init, 12s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_15708_17393_17473.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// (aura 23) bp0 die0 auraPeriod 12000 trigger
+	// 17471 (SPELL_DEATH_PACT_2 visual, trigger-only,
+	// NOT seeded per repo convention) tgtA
+	// TARGET_UNIT_CASTER; cast4 1000ms (aux row
+	// pre-existing), dur29 12000ms (aux row
+	// pre-existing), range1 Self Only 0yd (aux row
+	// pre-existing), school Shadow; NO
+	// SpellAuraOptions row; Attributes_0 0x100 /
+	// Attributes_1 0x10000000 / BonusCoefficient 1
+	// not carried (no fields in the seed struct).
+	{id: 17473, castTimeIdx: 4, durIdx: 29, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 0, auraPeriod: 12000, trigger: 17471, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
