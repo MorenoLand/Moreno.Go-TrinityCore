@@ -13356,6 +13356,61 @@ var spells = []spell{
 	{id: 68852, castTimeIdx: 1, durIdx: 90012, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 45423 "Summon Brazier of Dancing Flames" (Wowhead
+	// SpellName is "Summon Brazier of Dancing Flames",
+	// not "Brazier"; C++ SPELL_BRAZIER,
+	// npcs_special.cpp:302, DoCast(me, 45423, true) on
+	// Reset; Lua world/npc_dancing_flames.lua:25,44) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_45423_45427_47057.txt): single eff0
+	// SUMMON_OBJECT (187457 Brazier of Dancing
+	// Flames, TDB gameobject_template type 5) Value 1
+	// — bp 0, die 1; eff 76 SUMMON_OBJECT_WILD per
+	// the 36462 precedent (no plain SUMMON_OBJECT in
+	// SharedDefines.h; Go leg live spells.go:19388);
+	// tgtA DEST_CASTER (18) + misc 187457 per 36462;
+	// cast1 instant, dur90007 180000ms 3min
+	// (synthetic seed-local row — dur25 was corrected
+	// 2026-11-16 to 30000ms, not 180000), range1 Self
+	// 0yd (real row), school Physical.
+	{id: 45423, castTimeIdx: 1, durIdx: 90007, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummonObjectWild, dieSides: 1, basePoints: 0, targetA: targetDestCaster, misc: 187457, chainAmplitude: 1},
+	}},
+	// 45427 "Brazier Dance" (Wowhead SpellName is
+	// "Brazier Dance", not "Fiery Aura"; C++
+	// SPELL_FIERY_AURA, npcs_special.cpp:304,
+	// DoCast(me, 45427, false) on Reset; Lua
+	// npc_dancing_flames.lua:26,45) — Wowhead WotLK
+	// (same verdict file): single eff0 APPLY_AURA
+	// DUMMY (aura 4), Value 1 — bp 0, die 1 per the
+	// 36006/31690 dummy precedent; server-side script,
+	// no aura icon/log — NOT a fire-damage aura;
+	// tgtA CASTER (self-cast); cast1 instant,
+	// dur90007 180000ms 3min (synthetic, see 45423),
+	// range1 Self 0yd (real row), school Physical.
+	{id: 45427, castTimeIdx: 1, durIdx: 90007, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47057 "Fiery Seduction" (Wowhead SpellName is
+	// "Fiery Seduction", not "Seduction"; C++
+	// SPELL_SEDUCTION, npcs_special.cpp:303, DoCast
+	// (player, 47057, true) on TEXT_EMOTE_DANCE if
+	// !player->HasAura(47057); Lua
+	// npc_dancing_flames.lua:27,86-87) — Wowhead
+	// WotLK (same verdict file): single eff0
+	// APPLY_AURA TRANSFORM (aura 56; "Change Model
+	// (Big Dancing Flames)") Value 1 — bp 0, die 1,
+	// misc 26267 (Big Dancing Flames creature entry,
+	// TDB creature_template modelid 23732;
+	// HandleAuraTransform reads MiscValue as the
+	// creature entry, 25772/15591 precedent);
+	// mechanic n/a — NOT a charm/control effect;
+	// tgtA ENEMY (the player); cast1 instant,
+	// dur90007 180000ms 3min (synthetic, see 45423),
+	// range3 20yd (real row), school Physical.
+	{id: 47057, castTimeIdx: 1, durIdx: 90007, rangeIdx: 3, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraTransform, misc: 26267, dieSides: 1, basePoints: 0, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
