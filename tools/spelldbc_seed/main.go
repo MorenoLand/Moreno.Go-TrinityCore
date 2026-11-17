@@ -8975,6 +8975,74 @@ var spells = []spell{
 	{id: 36705, castTimeIdx: 4, durIdx: 0, rangeIdx: 37, school: schoolArcane, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 1849, dieSides: 301, radiusIdx: 27, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 7588 "Void Bolt" (wago SpellName MATCHES;
+	// C++ SPELL_VOIDBOLT, shadowfang_keep.cpp:207;
+	// Lua eastern_kingdoms/boss_archmage_arugal.lua:79,
+	// 50 — victim-cast, 1s init, 5s re-arm) —
+	// wago.tools 3.4.0.47659 SpellEffect row +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_7588_7621_7803.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE bp221 die37
+	// (in-game 222-258) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast14 3000ms
+	// (aux row pre-existing), dur0 (no
+	// SpellDuration row), range6 Vision Range
+	// 0-100yd (aux row pre-existing), school
+	// Shadow; NO SpellAuraOptions row;
+	// EffectAmplitude 1 / EffectRealPointsPerLevel
+	// 1 / BonusCoefficient 1 / DefenseType 1 /
+	// PreventionType 0x1 / Attributes all 0x0 not
+	// carried (no fields in the seed struct).
+	{id: 7588, castTimeIdx: 14, durIdx: 0, rangeIdx: 6, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 221, dieSides: 37, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 7621 "Arugal's Curse" (wago SpellName MATCHES;
+	// C++ SPELL_ARUGAL_CURSE, shadowfang_keep.cpp:205;
+	// Lua eastern_kingdoms/boss_archmage_arugal.lua:78,
+	// 32 — random target, 7s init, 15s re-arm;
+	// SpellHitTarget fires on landing) — wago.tools
+	// 3.4.0.47659 SpellEffect rows + SpellMisc
+	// (2026-11-16 verdict file
+	// wago_spells_7588_7621_7803.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_CHARM (aura 6)
+	// bp39 die1 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// eff1 APPLY_AURA TRANSFORM (aura 56) bp0 die1
+	// misc 3857 (Shadowfang Glutton) tgtA
+	// TARGET_UNIT_TARGET_ENEMY; cast1 instant, dur1
+	// 10000ms (aux row pre-existing), range4 Medium
+	// Range 0-30yd (aux row pre-existing), school
+	// Shadow, dispel 2 (Curse); NO SpellAuraOptions
+	// row; Attributes_0 0x40000 / DefenseType 1 /
+	// PreventionType 0x1 not carried (no fields in
+	// the seed struct).
+	{id: 7621, castTimeIdx: 1, durIdx: 1, rangeIdx: 4, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCharm, basePoints: 39, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraTransform, basePoints: 0, dieSides: 1, misc: 3857, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 7803 "Thundershock" (wago SpellName MATCHES;
+	// C++ SPELL_THUNDERSHOCK, shadowfang_keep.cpp:206;
+	// Lua eastern_kingdoms/boss_archmage_arugal.lua:80,
+	// 53 — DoCastAOE) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-16
+	// verdict file wago_spells_7588_7621_7803.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_STUN (aura 12) bp0 die0 radius8 5yd tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; eff1 SCHOOL_DAMAGE
+	// bp63 die23 (in-game 64-86) radius8 tgtA
+	// src-caster tgtB src-area-enemy; cast1 instant,
+	// dur28 5000ms (aux row pre-existing), range12
+	// Interact Range 0-5yd (aux row pre-existing),
+	// school Nature, mechanic 12 (SpellCategories
+	// Mechanic 12); NO SpellAuraOptions row;
+	// BonusCoefficient 2 / Attributes_0 0x40000 /
+	// Attributes_1 0x88 / DefenseType 1 /
+	// PreventionType 0x2 not carried (no fields in
+	// the seed struct).
+	{id: 7803, castTimeIdx: 1, durIdx: 28, rangeIdx: 12, school: schoolNature, mechanic: 12, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 0, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 63, dieSides: 23, radiusIdx: 8, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
