@@ -11400,6 +11400,99 @@ var spells = []spell{
 		{effect: effApplyAura, aura: auraPeriodicTrig, dieSides: 1, auraPeriod: 1000, trigger: 21868, targetA: targetCaster, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraRoot, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 26083 "Whirlwind" (wago SpellName MATCHES; C++
+	// SPELL_WHIRLWIND, boss_sartura.cpp:37; Lua
+	// kalimdor/boss_sartura.lua:64, 124 — self-cast,
+	// EVENT_WHIRLWIND) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_26083_28747_28798.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_TRIGGER_SPELL (aura 23) bp-1 die1
+	// auraPeriod 1000 trigger 26084 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp-9901 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA
+	// MECHANIC_IMMUNITY (aura 77) bp0 die1 misc 12
+	// (stun immunity carried here, not via
+	// EffectMechanic) tgtA TARGET_UNIT_CASTER; cast1
+	// instant, dur8 15000ms, range36 Longer Range
+	// 0-45yd (aux rows pre-existing), school Physical
+	// (0x1); SpellCategories row EXISTS (Category 49,
+	// DefenseType 2 (Melee), DispelType 0, Mechanic 0,
+	// PreventionType 0x0) — category/defense/prevention/
+	// recovery not carried (no fields in the seed struct);
+	// NO SpellAuraOptions row; Attributes_0 0x50010 not
+	// carried (no fields in the seed struct); NOTE
+	// triggered 26084 itself unseeded; eff1/eff2
+	// EffectBonusCoefficient 1 not carried (no field in
+	// the seed struct).
+	{id: 26083, castTimeIdx: 1, durIdx: 8, rangeIdx: 36, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: -1, dieSides: 1, auraPeriod: 1000, trigger: 26084, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: -9901, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, dieSides: 1, misc: 12, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 28747 "Frenzy" (wago SpellName MISMATCH vs expected
+	// "Enrage" — seeded on data per quel'danas/
+	// ghostly-citizen precedent; settles the C++
+	// "Not sure if right ID" comment on
+	// boss_sartura.cpp:38 — the ID is right, the name
+	// is Frenzy; C++ SPELL_ENRAGE, boss_sartura.cpp:38;
+	// Lua kalimdor/boss_sartura.lua:65, 260 — self-cast,
+	// EVENT_ENRAGE) — wago.tools 3.4.0.47659 SpellEffect
+	// rows + SpellMisc (2026-11-17 verdict file
+	// wago_spells_26083_28747_28798.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_DAMAGE_PERCENT_DONE
+	// (aura 79) bp99 die1 misc 1 tgtA
+	// TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp49 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_SCALE
+	// (aura 61) bp14 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur6 600000ms (10 min), range1
+	// Self Only 0yd (aux rows pre-existing), school
+	// Physical (0x1); SpellCategories row EXISTS
+	// (Category 21, DefenseType 0, DispelType 0,
+	// Mechanic 0, PreventionType 0x0) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0x40010 /
+	// Attributes_3 0x10000000 not carried (no fields
+	// in the seed struct).
+	{id: 28747, castTimeIdx: 1, durIdx: 6, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 99, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 14, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 28798 "Frenzy" (wago SpellName MISMATCH vs expected
+	// "Enrage" — seeded on data per quel'danas/
+	// ghostly-citizen precedent; C++ SPELL_ENRAGEHARD,
+	// boss_sartura.cpp:39; Lua
+	// kalimdor/boss_sartura.lua:66, 227 — self-cast,
+	// EVENT_ENRAGEHARD) — wago.tools 3.4.0.47659
+	// SpellEffect rows + SpellMisc (2026-11-17 verdict
+	// file wago_spells_26083_28747_28798.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE (aura 79) bp149 die1
+	// misc 1 tgtA TARGET_UNIT_CASTER; eff1 APPLY_AURA
+	// MOD_MELEE_HASTE (aura 138) bp49 die1 tgtA
+	// TARGET_UNIT_CASTER; eff2 APPLY_AURA MOD_SCALE
+	// (aura 61) bp49 die1 tgtA TARGET_UNIT_CASTER;
+	// cast1 instant, dur30 1800000ms (30 min), range1
+	// Self Only 0yd (aux rows pre-existing), school
+	// Physical (0x1); SpellCategories row EXISTS
+	// (Category 1152, DefenseType 0, DispelType 0,
+	// Mechanic 0, PreventionType 0x0) —
+	// category/defense/prevention/recovery not carried
+	// (no fields in the seed struct); NO
+	// SpellAuraOptions row; Attributes_0 0x40010 /
+	// Attributes_3 0x10000000 not carried (no fields
+	// in the seed struct). Differs from 28747 only in
+	// durIdx 6->30, Category 21->1152, bp 99/49/14 ->
+	// 149/49/49.
+	{id: 28798, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, basePoints: 149, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, basePoints: 49, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
