@@ -9761,6 +9761,85 @@ var spells = []spell{
 	{id: 17773, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
 		{effect: effSummon, basePoints: 14, dieSides: 1, misc: 11439, miscB: 61, targetA: targetDestCaster, chainAmplitude: 1},
 	}},
+	// 20294 "Immolate" (wago SpellName MATCHES;
+	// C++ SPELL_IMMOLATE,
+	// boss_lord_alexei_barov.cpp:31; Lua
+	// eastern_kingdoms/boss_lord_alexei_barov.lua:27, 72 —
+	// triggered random-target cast) —
+	// wago.tools 3.4.0.47659 SpellEffect rows +
+	// SpellMisc (2026-11-16 verdict file
+	// wago_spells_20294_17820_17467.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_DAMAGE
+	// (aura 3) bp379 die41 auraPeriod 3000 tgtA
+	// TARGET_UNIT_TARGET_ENEMY; eff1 SCHOOL_DAMAGE
+	// bp759 die81 tgtA TARGET_UNIT_TARGET_ENEMY;
+	// cast1 instant, dur86 21000ms (NEW aux row,
+	// patchwerk precedent), range5 Long Range
+	// 0-40yd (aux row pre-existing), school Fire,
+	// dispel 1 (MAGIC, from SpellCategories);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1, Mechanic 0, PreventionType
+	// 0x1) — category/defense/prevention not
+	// carried (no fields in the seed struct); NO
+	// SpellAuraOptions row; BonusCoefficient
+	// 0.1/0.3 / Attributes_0 0x0 / Attributes_1
+	// 0x88 not carried (no fields in the seed
+	// struct).
+	{id: 20294, castTimeIdx: 1, durIdx: 86, rangeIdx: 5, school: schoolFire, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 379, dieSides: 41, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 759, dieSides: 81, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 17820 "Veil of Shadow" (wago SpellName MATCHES;
+	// C++ SPELL_VEILOFSHADOW,
+	// boss_lord_alexei_barov.cpp:32; Lua
+	// eastern_kingdoms/boss_lord_alexei_barov.lua:28, 90 —
+	// triggered victim-cast, 15s init -> 20s
+	// re-arm) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 verdict file
+	// wago_spells_20294_17820_17467.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA MOD_HEALING_PCT
+	// (aura 118) bp-76 die1 misc 126 radiusIdx 14
+	// (8yd, aux row pre-existing) tgtA
+	// TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast16 1500ms
+	// (aux row pre-existing), dur8 15000ms (aux
+	// row pre-existing), range3 Twenty yards
+	// 0-20yd (aux row pre-existing), school
+	// Shadow (0x20), dispel 2 (CURSE, from
+	// SpellCategories); SpellCategories row EXISTS
+	// (Category 36, DefenseType 1, Mechanic 0,
+	// PreventionType 0x1) — category/defense/
+	// prevention not carried (no fields in the
+	// seed struct); NO SpellAuraOptions row;
+	// Attributes_0 0x10 / Attributes_1 0x8000 not
+	// carried (no fields in the seed struct).
+	{id: 17820, castTimeIdx: 16, durIdx: 8, rangeIdx: 3, school: schoolShadow, dispel: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModHealingPct, basePoints: -76, dieSides: 1, misc: 126, radiusIdx: 14, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 17467 "Unholy Aura" (wago SpellName MATCHES;
+	// C++ SPELL_UNHOLY_AURA,
+	// boss_lord_alexei_barov.cpp:33; Lua
+	// eastern_kingdoms/boss_lord_alexei_barov.lua:29, 13 —
+	// HasAura-gated self-cast, re-applies after
+	// dispel) — wago.tools 3.4.0.47659 SpellEffect
+	// row + SpellMisc (2026-11-16 verdict file
+	// wago_spells_20294_17820_17467.txt, DifficultyID 0
+	// rows): eff0 APPLY_AURA PERIODIC_TRIGGER_SPELL
+	// (aura 23) bp0 die1 auraPeriod 2000 trigger
+	// 17466 (periodic shadow damage, trigger-only,
+	// NOT seeded per repo convention) tgtA
+	// TARGET_UNIT_CASTER; cast1 instant, dur21 -1
+	// infinite (aux row pre-existing), range1 Self
+	// Only 0yd (aux row pre-existing), school
+	// Shadow (0x20); SpellCategories row EXISTS
+	// (Category 0, DefenseType 1, DispelType 0,
+	// Mechanic 0, PreventionType 0x1) —
+	// category/defense/prevention not carried (no
+	// fields in the seed struct); NO SpellAuraOptions
+	// row; Attributes_0–13 all 0x0.
+	{id: 17467, castTimeIdx: 1, durIdx: 21, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 2000, trigger: 17466, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -9822,6 +9901,7 @@ func main() {
 		{63, 25000, 0, 25000},      // real SpellDuration 63 for 36119 Void Zone (wago.tools 3.4.0.47659 SpellDuration row 63, 2026-11-16 verdict wago_spells_16045_36119.txt)
 		{41, 360000, 0, 360000},    // real SpellDuration 41 for 30977 Conflagration Blast (wago.tools 3.4.0.47659 SpellDuration row 41, 2026-11-16 verdict wago_spells_30967_30977_31635.txt)
 		{62, 75000, 0, 75000},      // real SpellDuration 62 for 28240 Poison Cloud (wago.tools 3.4.0.47659 SpellDuration row 62, 2026-11-16 verdict wago_spells_28157_28169_28240.txt)
+		{86, 21000, 0, 21000},      // real SpellDuration 86 for 20294 Immolate (wago.tools 3.4.0.47659 SpellDuration row 86, 2026-11-16 verdict wago_spells_20294_17820_17467.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellDuration.dbc"), 4, durations); err != nil {
 		panic(err)
