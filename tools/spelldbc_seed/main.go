@@ -10234,6 +10234,94 @@ var spells = []spell{
 		{effect: effKnockBack, basePoints: 112, dieSides: 75, misc: 75, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 		{effect: effScriptEffect, radiusIdx: 13, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
 	}},
+	// 44294 "Drain Life" (wago SpellName MATCHES;
+	// C++ SPELL_DRAIN_LIFE,
+	// boss_selin_fireheart.cpp:42; Lua
+	// eastern_kingdoms/boss_selin_fireheart.lua:122, 176 —
+	// target-cast, 10s loop) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_44294_44314_46153.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_LEECH (aura 53) bp1499 die1
+	// auraPeriod 1000 tgtA TARGET_UNIT_TARGET_ENEMY
+	// tgtB NONE; cast1 instant, dur27 3000ms (aux
+	// row pre-existing), range3 Twenty yards 0-20yd
+	// (aux row pre-existing), school Shadow (0x20);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 1 (MAGIC)
+	// carried as dispel 1, Mechanic 0,
+	// PreventionType 0x1, StartRecoveryCategory 133)
+	// — category/defense/prevention/recovery not
+	// carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (ProcChance 101)
+	// — proc fields not carried (no fields in the
+	// seed struct); Attributes_0 0x10000 /
+	// Attributes_1 0x4004 not carried (no fields in
+	// the seed struct); EffectBonusCoefficient 0.3
+	// not carried (no fields in the seed struct).
+	{id: 44294, castTimeIdx: 1, durIdx: 27, rangeIdx: 3, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicLeech, basePoints: 1499, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 44314 "Fel Explosion" (wago SpellName MATCHES;
+	// C++ SPELL_FEL_EXPLOSION,
+	// boss_selin_fireheart.cpp:43; Lua
+	// eastern_kingdoms/boss_selin_fireheart.lua:121, 224 —
+	// self-cast DoCastAOE, 2s loop) — wago.tools
+	// 3.4.0.47659 SpellEffect row + SpellMisc
+	// (2026-11-17 verdict file
+	// wago_spells_44294_44314_46153.txt, DifficultyID 0
+	// rows): eff0 SCHOOL_DAMAGE (effect 2) bp974
+	// die51 radiusIdx 31 (80yd, aux row added this
+	// tick) tgtA TARGET_SRC_CASTER tgtB
+	// TARGET_UNIT_SRC_AREA_ENEMY; cast1 instant,
+	// dur0 (no SpellDuration row 0; 10934
+	// precedent), range1 Self Only 0yd (aux row
+	// pre-existing), school Fire (0x4) — wago
+	// description says Arcane damage, SpellMisc
+	// SchoolMask 0x4 rules (seeded on data);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 0 carried
+	// as dispel 0, Mechanic 0, PreventionType 0x1,
+	// StartRecoveryCategory 0) — category/
+	// defense/prevention/recovery not carried (no
+	// fields in the seed struct); SpellAuraOptions
+	// row EXISTS (ProcChance 101) — proc fields
+	// not carried (no fields in the seed struct);
+	// Attributes_0 0x10000 / Attributes_1 0x88 /
+	// Attributes_2 0x4 not carried (no fields in
+	// the seed struct); EffectBonusCoefficient 1
+	// not carried (no fields in the seed struct).
+	{id: 44314, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 974, dieSides: 51, radiusIdx: 31, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, chainAmplitude: 1},
+	}},
+	// 46153 "Drain Mana" (wago SpellName MATCHES;
+	// C++ SPELL_DRAIN_MANA (heroic only),
+	// boss_selin_fireheart.cpp:45; Lua
+	// eastern_kingdoms/boss_selin_fireheart.lua:123, 190 —
+	// target-cast, 10s loop) — wago.tools 3.4.0.47659
+	// SpellEffect row + SpellMisc (2026-11-17 verdict
+	// file wago_spells_44294_44314_46153.txt,
+	// DifficultyID 0 rows): eff0 APPLY_AURA
+	// PERIODIC_MANA_LEECH (aura 64) bp499 die1
+	// auraPeriod 1000 tgtA TARGET_UNIT_TARGET_ENEMY
+	// tgtB NONE; cast1 instant, dur28 5000ms (aux
+	// row pre-existing), range36 Longer Range 0-45yd
+	// (aux row pre-existing), school Arcane (0x40);
+	// SpellCategories row EXISTS (Category 0,
+	// DefenseType 1 (Magic), DispelType 1 (MAGIC)
+	// carried as dispel 1, Mechanic 0,
+	// PreventionType 0x1, StartRecoveryCategory 133)
+	// — category/defense/prevention/recovery not
+	// carried (no fields in the seed struct);
+	// SpellAuraOptions row EXISTS (ProcChance 101)
+	// — proc fields not carried (no fields in the
+	// seed struct); Attributes_0 0x10000 /
+	// Attributes_1 0x4004 not carried (no fields in
+	// the seed struct); EffectBonusCoefficient 0.2
+	// not carried (no fields in the seed struct).
+	{id: 46153, castTimeIdx: 1, durIdx: 28, rangeIdx: 36, school: schoolArcane, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicManaLeech, basePoints: 499, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -10342,6 +10430,7 @@ func main() {
 		{16, f32(1), f32(0), f32(1)},     // real SpellRadius 16 for 26392 eff0 (wago.tools 3.4.0.47659 SpellRadius row 16, 2026-11-16 verdict wago_spells_15284_26392_26540.txt)
 		{24, f32(65), f32(0), f32(65)},   // real SpellRadius 24 for 32309 (wago.tools 3.4.0.47659 SpellRadius row 24, 2026-11-16 verdict wago_spells_28131_28308_32309.txt)
 		{52, f32(5), f32(0), f32(5)},     // real SpellRadius 52 for 67716 (wago.tools 3.4.0.47659 SpellRadius row 52, 2026-11-16 verdict wago_spells_29426_67541_67716.txt)
+		{31, f32(80), f32(0), f32(80)},   // real SpellRadius 31 for 44314 (wago.tools 3.4.0.47659 SpellRadius row 31, 2026-11-17 verdict wago_spells_44294_44314_46153.txt)
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
