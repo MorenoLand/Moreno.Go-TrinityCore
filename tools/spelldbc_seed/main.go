@@ -14098,6 +14098,89 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 1387, dieSides: 225, targetA: targetEnemy, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 199, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 28599 "Shadow Bolt Volley" (Wowhead SpellName MATCH; C++
+	// SPELL_SHADOW_BOLT_VOLLEY, boss_kelidan_the_breaker.cpp:39;
+	// non-triggered DoCast(me) :216, self-cast; Lua
+	// boss_kelidan_the_breaker.lua:103,169, non-triggered
+	// self-cast) — Wowhead WotLK (verdict file
+	// wago_spells_28599_30938_30940_33132.txt; wago NOT
+	// attempted — effect row complete): eff0 SCHOOL_DAMAGE
+	// Shadow Value 1619, no tooltip range — flat bp 1619/die 0
+	// (35108 precedent); self-centered AoE — tgtA SRC_CASTER
+	// (22) + tgtB SRC_AREA_ENEMY (15), radius 30yd — radiusIdx
+	// 10 (real row), per the 15245 Shadow Bolt Volley precedent
+	// (same range 30yd Medium, same radius 30yd, same target
+	// pair — the radius is real, not a range echo, because the
+	// area leg needs it; the 23341 echo applies only to
+	// non-area single-target effects). Duration n/a — durIdx 0;
+	// range 30yd Medium — rangeIdx 4 (real row); cast1 instant;
+	// school Shadow. Used-by Kazzak/Spirit of Naxxramas (not
+	// Kelidan) is a Wowhead-list quirk — C++ DoCast is
+	// authoritative.
+	{id: 28599, castTimeIdx: 1, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1619, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 30938 "Corruption" (Wowhead SpellName MATCH; C++
+	// SPELL_CORRUPTION, boss_kelidan_the_breaker.cpp:33;
+	// non-triggered DoCast(me) :224, self-cast; Lua
+	// boss_kelidan_the_breaker.lua:104, non-triggered self-cast)
+	// — Wowhead WotLK (same verdict file; wago NOT attempted):
+	// eff0 APPLY_AURA PERIODIC_DAMAGE (aura 3) Value 463 every
+	// 3 seconds — bp 462/die 1, auraPeriod 3000; self-centered
+	// AoE — tgtA SRC_CASTER (22) + tgtB SRC_AREA_ENEMY (15),
+	// radius 10yd — radiusIdx 13 (real row; radius != range, so
+	// not an echo per the 24328 pattern). Duration 24s — durIdx
+	// 90013 (new synthetic row: no real 24000ms row in the
+	// table); range 30yd Medium — rangeIdx 4 (real row); cast1
+	// instant; school Shadow; manaCost 100 (29954 precedent);
+	// dispel Magic — dispel 1 (51110 precedent). The Warlock /
+	// mana / 30yd presentation is the player-spell wrapper — the
+	// DBC row is what it is. SP mod 0.125 not encodable.
+	{id: 30938, castTimeIdx: 1, durIdx: 90013, rangeIdx: 4, school: schoolShadow, manaCost: 100, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 462, dieSides: 1, auraPeriod: 3000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 30940 "Burning Nova" (Wowhead SpellName MATCH; C++
+	// SPELL_BURNING_NOVA, boss_kelidan_the_breaker.cpp:42;
+	// me->AddAura(SPELL_BURNING_NOVA, me) :237, self-aura; Lua
+	// boss_kelidan_the_breaker.lua:106,193,210, AddAura self)
+	// — Wowhead WotLK (same verdict file; wago attempted ONCE
+	// and blocked — 43rd consecutive block — so the missing
+	// Values are unrecoverable from Wowhead): eff0 APPLY_AURA
+	// STUN (aura 12), no Value shown — bp 0/die 0, the no-Value
+	// encoding (1492/1771/2163/2398 precedents; the stun aura's
+	// bp is engine-inert, the duration rides on durIdx);
+	// eff1 APPLY_AURA SCHOOL_IMMUNITY (aura 39) all 7 schools —
+	// misc 127 (same derivation as 24178/27680), bp 0/die 1
+	// (9636/12814/13716 precedents); tgtA CASTER both (the
+	// AddAura self-application; the Wowhead 15yd range and Soul
+	// Shard reagent are the player-spell wrapper and are NOT
+	// encoded — rangeIdx 11 is carried as the DBC range row
+	// only). Duration 5s — dur28 (real row); range 15yd
+	// Shorter — rangeIdx 11 (real row); cast1 instant; school
+	// Shadow; mechanic Banished — mechanic 18 (MECHANIC_BANISH,
+	// SharedDefines.h:1375); dispel Magic — dispel 1. The
+	// effect ROWS are known (aura + misc) — only the inert bp
+	// is unshown — so this is seeded, not held (contrast 9874
+	// eff2 / 13879 trigger: load-bearing fields unknown).
+	{id: 30940, castTimeIdx: 1, durIdx: 28, rangeIdx: 11, school: schoolShadow, mechanic: 18, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraSchoolImmunity, basePoints: 0, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 33132 "Fire Nova" (Wowhead SpellName MATCH; C++
+	// SPELL_FIRE_NOVA, boss_kelidan_the_breaker.cpp:36;
+	// triggered DoCast(me, true) :204, self-cast; Lua
+	// boss_kelidan_the_breaker.lua:105, triggered self-cast) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted):
+	// eff0 SCHOOL_DAMAGE Fire Value 2313, no tooltip range —
+	// flat bp 2313/die 0 (35108 precedent); self-centered AoE —
+	// tgtA SRC_CASTER (22) + tgtB SRC_AREA_ENEMY (15), radius
+	// 15yd — radiusIdx 18 (real row). Duration n/a — durIdx 0;
+	// range 0 Self — rangeIdx 1; cast1 instant; school Fire.
+	// No Used-by NPC list on the page — C++ DoCast is
+	// authoritative.
+	{id: 33132, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 2313, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -14142,6 +14225,7 @@ func main() {
 		{90010, 500, 0, 500},
 		{90011, 40000, 0, 40000},
 		{90012, 14400000, 0, 14400000},
+		{90013, 24000, 0, 24000},   // synthetic duration for 30938 Corruption (no real 24000ms row in the table)
 		{4, 120000, 0, 120000},     // real SpellDuration 4 for 67530 (wago.tools 3.4.0.43659)
 		{8, 15000, 0, 15000},       // real SpellDuration 8 for 49263 (wago.tools 3.4.0.43659)
 		{27, 3000, 0, 3000},        // real SpellDuration 27 for 66083 (wago.tools 3.4.0.43659)
