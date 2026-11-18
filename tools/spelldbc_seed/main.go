@@ -17141,6 +17141,74 @@ var spells = []spell{
 	{id: 72130, castTimeIdx: 14, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModScale, basePoints: 24, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
 	}},
+	// 31403 "Battle Shout" (Wowhead name MATCH; C++
+	// boss_nexus_commanders.cpp:24 enum, :59 DoCast me; Lua
+	// boss_nexus_commanders.lua:81 const, :217 CastSpell(creature))
+	// — Wowhead WotLK (verdict
+	// wago_spells_31403_38618_47543_60067.txt; wago NOT opened —
+	// single valued effect): single effect 6 APPLY_AURA aura99
+	// MOD_ATTACK_POWER Value 8 — bp 7/die 1 ("Mod Melee Attack
+	// Power" is aura 99, SpellAuraDefines.h:179 — no separate
+	// melee-AP aura; 102 is vs-type, 165 attacker-bonus);
+	// targetA 20 CASTER_AREA_PARTY (DoCast me + "nearby friendly
+	// targets" + 15yd radius; FLAG: needs a wago SpellEffect row
+	// check); radiusIdx 18 real 15yd (Wowhead row shows Radius 15
+	// yards); cast1 instant; dur4 real 120000ms (2 minutes);
+	// range1 Self 0yd; school Physical. NOT carried: "Requires
+	// level 1" (no field); flags (no attributes field).
+	{id: 31403, castTimeIdx: 1, durIdx: 4, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModAttackPower, basePoints: 7, dieSides: 1, targetA: targetUnitCasterAreaParty, radiusIdx: 18, chainAmplitude: 1},
+	}},
+	// 38618 "Whirlwind" (Wowhead name MATCH; C++
+	// boss_nexus_commanders.cpp:27 enum, :76 DoCast me; Lua
+	// boss_nexus_commanders.lua:82 const, :164 CastSpell(creature))
+	// — Wowhead WotLK (same verdict file; wago NOT opened —
+	// trigger link shown): single effect 64 TRIGGER_SPELL
+	// valueless — bp 0/die 1, trigger 38619 (Wowhead link; 38619
+	// NOT seeded — triggered spell); targetA CASTER (DoCast me);
+	// cast5 real 2000ms (2s cast); dur0 (Duration n/a); range1
+	// Self 0yd; school Physical. NOT carried: "Requires level
+	// 36" (no field); "Channeled" flag (no attributes field).
+	{id: 38618, castTimeIdx: 5, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 38619, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 47543 "Frozen Prison" (Wowhead name MATCH; C++
+	// boss_nexus_commanders.cpp:28 enum, :58
+	// RemoveAurasDueToSpell on engage — NO DoCast of 47543
+	// anywhere in the C++ tree (the commanders spawn frozen; the
+	// aura is removed on engage); Lua
+	// boss_nexus_commanders.lua:84 const, :212 RemoveAura) —
+	// Wowhead WotLK (same verdict file; wago NOT opened — single
+	// valued effect): single effect 6 APPLY_AURA aura4 DUMMY
+	// Value 1 — bp 0/die 1; targetA CASTER (self-applied at
+	// spawn; FLAG: needs a wago SpellEffect row check — no C++
+	// cast site); cast1 instant; dur0 (Duration n/a); range1
+	// Self 0yd; school Physical. NOT carried: "Server-side
+	// script" (no field); flags (no attributes field).
+	{id: 47543, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 60067 "Charge" (Wowhead name MATCH; C++
+	// boss_nexus_commanders.cpp:25 enum, :72 DoCast random
+	// target; Lua boss_nexus_commanders.lua:85 const, :148
+	// CastSpell(target)) — Wowhead WotLK (same verdict file; wago
+	// NOT opened — no valueless trigger row): eff0 96 CHARGE
+	// Value 1 — bp 0/die 1; eff1 58 WEAPON_DAMAGE Value 75 — bp
+	// 74/die 1; eff2 6 APPLY_AURA aura12 STUN valueless — bp
+	// 0/die 1, mechanic 12 (Stunned); all targetA ENEMY (DoCast
+	// random target); cast1 instant; dur39 real 2000ms (2s stun
+	// — real row per the 70720 fix, 57994 precedent); range95
+	// real 8-25yd (Charge); school Physical. NOT carried: 5s
+	// cooldown (no cooldown field); flags (no attributes field).
+	// (22911 Mar'li precedent has the same trio as bp 1/75/1
+	// die 0 — in-game equivalent via the DieSides==0 flat-base
+	// rule, spells.go:24989; this seed follows the current
+	// (V-1, die 1) convention.)
+	{id: 60067, castTimeIdx: 1, durIdx: 39, rangeIdx: 95, school: schoolPhysical, effects: [3]effect{
+		{effect: effCharge, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effWeaponDamage, basePoints: 74, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraStun, basePoints: 0, dieSides: 1, mechanic: 12, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
