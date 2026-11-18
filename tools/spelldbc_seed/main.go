@@ -17118,11 +17118,11 @@ var spells = []spell{
 	// APPLY_AURA aura23 PERIODIC_TRIG valueless — bp 0/die 1,
 	// auraPeriod 330, trigger 70719 (Wowhead link; 70719 NOT
 	// seeded — triggered spell); targetA CASTER (bunny casts on
-	// self); cast1 instant; dur90001 synthetic 2000ms (2s — no
-	// real 2000ms row in the table); range13 real 50000yd
+	// self); cast1 instant; dur39 real 2000ms row (57994 Wind
+	// Shear precedent); range13 real 50000yd
 	// (Anywhere - Unlimited); school Physical. NOT carried:
 	// flags (no attributes field); GCD 0 / Cost None (no fields).
-	{id: 70720, castTimeIdx: 1, durIdx: 90001, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+	{id: 70720, castTimeIdx: 1, durIdx: 39, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 330, trigger: 70719, targetA: targetCaster, chainAmplitude: 1},
 	}},
 	// 72130 "Spirit Activate Visual" (Wowhead name MISMATCH —
