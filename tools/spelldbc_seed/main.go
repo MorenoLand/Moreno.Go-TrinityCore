@@ -16385,6 +16385,75 @@ var spells = []spell{
 	{id: 52375, castTimeIdx: 1, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
 		{effect: effDummy, basePoints: 459, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
+	// 47346 "Arcane Field" (Wowhead SpellName MATCH; C++
+	// boss_novos.cpp:39 enum, :215 DoCast self; Lua
+	// boss_novos.lua:160 const, :508 CastSpell(creature)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_47346_52106_59910_59933.txt; wago NOT attempted —
+	// both effects have Values, no trigger): eff0 27
+	// PERSISTENT_AREA_AURA PERIODIC_DAMAGE (aura 3) Value 1665
+	// every 1s — bp 1664/die 1 (the flat convention); auraPeriod
+	// 1000; eff1 27 PERSISTENT_AREA_AURA DECREASE_RUN_SPEED (aura
+	// 33) Value -50% — bp -51/die 1 (the 47442 negative-value
+	// convention); both radiusIdx 91011 (NEW synthetic 11yd row —
+	// no real 11yd row in the table; synthetic-row policy, main.go
+	// header :11-13); eff0 targetA UNIT_DEST_AREA_ENEMY 16, eff1
+	// targetA omitted (the 31266 persistent-area-aura precedent;
+	// Wowhead shows no targets — wago confirmation still open,
+	// see checkpoint); cast1 instant (Channeled, 0 sec cast — no
+	// channeled cast-time row); dur90008 604800000ms 7 days
+	// (synthetic row, pre-existing, used by 24312); range7 Very
+	// Short 10yd (real row); school Arcane. NOT carried: "Channeled"
+	// / "Do Not Display Duration" (no attributes field); GCD 0 /
+	// Cost None (no fields).
+	{id: 47346, castTimeIdx: 1, durIdx: 90008, rangeIdx: 7, school: schoolArcane, effects: [3]effect{
+		{effect: effPersistentAreaAura, aura: auraPeriodicDmg, basePoints: 1664, dieSides: 1, auraPeriod: 1000, targetA: targetUnitDestAreaEnemy, radiusIdx: 91011, chainAmplitude: 1},
+		{effect: effPersistentAreaAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, radiusIdx: 91011, chainAmplitude: 1},
+	}},
+	// 52106 "Beam Channel" (Wowhead SpellName MATCH; C++
+	// boss_novos.cpp:38 enum, :246 crystalChannelTarget->CastSpell;
+	// Lua boss_novos.lua:161 const, :352 CastSpell(channelTarget)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, not a trigger): single effect 6
+	// APPLY_AURA DUMMY (aura 4) Value 1 — bp 0/die 1 ("Server-side
+	// script"); targetA CASTER (Lua casts on self); cast1 instant
+	// (Channeled, 0 sec cast — no channeled cast-time row); dur0;
+	// range135 Tower 100yd (real row); school Physical. NOT
+	// carried: "Cast time is hidden" / "Channeled" / "Ignore Line
+	// of Sight" (no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 52106, castTimeIdx: 1, rangeIdx: 135, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 59910 "Summon Minions" (Wowhead SpellName MATCH; C++
+	// boss_novos.cpp:52 enum, :155 DoCast; Lua boss_novos.lua:158
+	// const, :486 CastSpell(creature)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — single effect with a
+	// Value, not a trigger): single effect 77 SCRIPT_EFFECT Value
+	// 1 — bp 0/die 1; targetA CASTER (DoCast self); cast16 1500ms
+	// (real row); dur0; range1 Self 0yd (real row); school Shadow.
+	// NOT carried: a trigger field — the 59933 trigger lives in
+	// the C++ SpellScript (spell_novos_summon_minions), Wowhead
+	// shows no triggered-spell link; GCD 0 / Cost None (no
+	// fields).
+	{id: 59910, castTimeIdx: 16, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 59933 "Copy of Summon Minions" (Wowhead display name differs
+	// from the C++ enum SUMMON_COPY_OF_MINIONS only in word order —
+	// same spell ID, same owner; C++ boss_novos.cpp:45 enum, :387
+	// CastSpell triggered; Lua boss_novos.lua:159 const, :642
+	// CastSpell(caster, true)) — Wowhead WotLK (same verdict file;
+	// wago NOT attempted — single effect with a Value, not a
+	// trigger): single effect 28 SUMMON Value 1 — bp 0/die 1;
+	// misc 27598 NPC_FETID_TROLL_CORPSE (drak_tharon_keep.h:71);
+	// radiusIdx 15 (3yd real row); targetA CASTER (DoCast self /
+	// CastSpell(caster)); cast16 1500ms (real row); dur6 600000ms
+	// 10 min (real row); range1 Self 0yd (real row); school Shadow.
+	// NOT carried: GCD 0 / Cost None (no fields).
+	{id: 59933, castTimeIdx: 16, durIdx: 6, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 27598, targetA: targetCaster, radiusIdx: 15, chainAmplitude: 1},
+	}},
 }
 
 func main() {
@@ -16505,6 +16574,7 @@ func main() {
 		{7, f32(2), f32(0), f32(2)},      // real SpellRadius 7 for 46836/46842 (wago.tools 3.4.0.47659 SpellRadius row 7, 2026-11-17 verdict wago_spells_29726_46836_46842.txt)
 		{21, f32(35), f32(0), f32(35)},   // real SpellRadius 21 = 34449 RadiusIndex_1 (wago.tools 3.4.0.47659 SpellRadius row 21, 2026-11-17 verdict wago_spells_31481_31718_34449.txt); now REFERENCED by 37730 eff0/eff1 (radiusIdx 21, verdict wago_spells_37730_37764_37871.txt) — 34449 itself still carries _0 only per kri 38718 precedent (cf. unreferenced radius 40 for 29961)
 		{91010, f32(55), f32(0), f32(55)},
+		{91011, f32(11), f32(0), f32(11)}, // synthetic SpellRadius 91011 (11 yards) for 47346 Arcane Field — no real 11yd row in the table
 	}
 	if err := writeWDBC(filepath.Join(out, "SpellRadius.dbc"), 4, radii); err != nil {
 		panic(err)
