@@ -14031,6 +14031,73 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 874, dieSides: 251, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 199, dieSides: 1, auraPeriod: 2000, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
+	// 13879 "Magma Splash" HELD — trigger ID unresolvable: Wowhead
+	// WotLK (verdict file wago_spells_13879_19798_19953_20228.txt;
+	// wago NOT attempted — the triggered-spell link is present but
+	// names only "Magma Splash", and See also lists FOUR same-name
+	// spells with no IDs shown). Derivable values, for the
+	// unblocking tick: eff0 APPLY_AURA PROC_TRIGGER_SPELL (aura
+	// 42) Value 1 — bp 0/die 1, tgtA CASTER (triggered self-cast
+	// on Reset, boss_golemagg.cpp:63; Lua boss_golemagg.lua:172);
+	// range 0 Self — rangeIdx 1; cast1 instant; school Fire;
+	// duration n/a — durIdx 0. NOT encodable: proc chance 25%
+	// and the 1s tooltip cooldown (no fields in the seed; the
+	// Spell Details Cooldown is n/a). Every in-tree
+	// PROC_TRIGGER_SPELL precedent carries a resolved trigger:
+	// ID (15574/29907/36294) — do not seed with a guessed ID.
+	// 19798 "Earthquake" (Wowhead SpellName MATCH; C++
+	// SPELL_EARTHQUAKE, boss_golemagg.cpp:42; non-triggered
+	// DoCastVictim; Lua boss_golemagg.lua:120, non-triggered
+	// victim-cast) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 SCHOOL_DAMAGE Physical tooltip 1388-1612
+	// — bp 1387/die 225; self-centered AoE — tgtA SRC_CASTER +
+	// tgtB SRC_AREA_ENEMY per the 20603 precedent, radius 18yd
+	// — radiusIdx 19 (real row); Spell Details Mechanic Stunned
+	// — mechanic 12 (MECHANIC_STUN; the spell-level Mechanic
+	// column, 24110 precedent — no stun effect exists, so the
+	// mechanic is carried, not fabricated as an effect); durIdx
+	// 0, rangeIdx 1 (Self), cast1 instant, school Physical. The
+	// Lua's DoCastVictim + the DBC's Self range means the victim
+	// is the cast's explicit target while the damage radiates
+	// 18yd from Golemagg.
+	{id: 19798, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, mechanic: 12, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1387, dieSides: 225, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 19, chainAmplitude: 1},
+	}},
+	// 19953 "Enrage" (Wowhead name is "Frenzy" — MISMATCH; TC
+	// enum name is authoritative per 30925, and the 24318
+	// precedent is directly on point: same Wowhead "Frenzy"
+	// display, same icon, same patch, same Lord Kazzak Used-by,
+	// same "Does not appear in log" flag. C++ SPELL_ENRAGE,
+	// boss_golemagg.cpp:43; triggered DoCast(me, true) :77 when
+	// health <10% and the aura is missing; Lua
+	// boss_golemagg.lua:187, triggered self-cast) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted): eff0
+	// APPLY_AURA MOD_DAMAGE_DONE (aura 13, FLAT — "Value: 500"
+	// with NO % sign, and the buff "increased by 500" with NO %;
+	// contrast 24318's "%" effect row) — bp 499/die 1, misc 1
+	// (Physical school mask; lines 1926/2246 precedent); eff1
+	// APPLY_AURA MOD_MELEE_HASTE (aura 138) 50% — bp 49/die 1;
+	// tgtA CASTER both. Duration 10s — dur1 (real row); range 0
+	// Self — rangeIdx 1; cast1 instant; school Physical.
+	{id: 19953, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, dieSides: 1, basePoints: 499, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 49, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 20228 "Pyroblast" (Wowhead SpellName MATCH; C++
+	// SPELL_PYROBLAST, boss_golemagg.cpp:41; non-triggered
+	// DoCast(target) :97 on a threat-list target; Lua
+	// boss_golemagg.lua:102, non-triggered threat-target cast)
+	// — Wowhead WotLK (same verdict file; wago NOT attempted):
+	// eff0 SCHOOL_DAMAGE Fire tooltip 1388-1612 — bp 1387/die
+	// 225; eff1 APPLY_AURA PERIODIC_DAMAGE (aura 3) Value 200
+	// every 3 seconds — bp 199/die 1, auraPeriod 3000; tgtA
+	// ENEMY both. Duration 12s — dur29 (real row); range 40yd
+	// Long — rangeIdx 5 (real row); cast1 instant; school Fire.
+	// NOT encodable: SP mods (0.75 / 0.05), "Requires Mage".
+	{id: 20228, castTimeIdx: 1, durIdx: 29, rangeIdx: 5, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1387, dieSides: 225, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 199, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
