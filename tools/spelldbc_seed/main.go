@@ -17977,6 +17977,92 @@ var spells = []spell{
 		{effect: effSchoolDamage, basePoints: 3237, dieSides: 525, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
 		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 34, dieSides: 1, misc: 4, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 54361 "Void Shift" (Wowhead name MATCH; C++
+	// boss_zuramat.cpp:27 enum, :139 DoCast(target)
+	// non-triggered; Lua boss_zuramat.lua:115 const, :183
+	// CastSpell(target, SPELL_VOID_SHIFT)) — Wowhead WotLK
+	// (verdict wago_spells_54361_54369_54524_58650.txt; wago
+	// NOT opened — no trigger row): single effect 6
+	// APPLY_AURA aura3 PERIODIC_DAMAGE Value 750 every 1
+	// second — bp 749/die 1 (flat 750, no tooltip range),
+	// auraPeriod 1000, targetA ENEMY (DoCast target); the
+	// "(17)" parenthetical in the aura name is NOT carried
+	// (84/86 in-tree auraPeriodicDmg effects omit misc; the
+	// two that carry it use 127 all-schools, and 17 does not
+	// match the spell's Shadow school 32; FLAG: needs a wago
+	// SpellEffect row check for MiscValue + die-sides +
+	// target); cast1 channeled (5s channel); dur28 real
+	// 5000ms (Duration 5 seconds); range14 real 60yd Extra
+	// Long (57942 wago-verified); school Shadow. NOT carried:
+	// cooldown 5s (no field); buff text; flags ("Channeled" /
+	// "Can only target the player", no attributes field); GCD
+	// Special / Cost None (no fields).
+	{id: 54361, castTimeIdx: 1, durIdx: 28, rangeIdx: 14, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 749, dieSides: 1, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 54369 "Summon Void Sentry" (Wowhead name MATCH; C++
+	// boss_zuramat.cpp:26 enum, :132 DoCast(me)
+	// non-triggered; Lua boss_zuramat.lua:117 const, :216
+	// CastSpell(creature, SPELL_SUMMON_VOID_SENTRY)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened —
+	// no trigger row): single effect 28 SUMMON "Summon (Void
+	// Sentry)" Value 1, Radius 10 yards — bp 1/die 1 (summon
+	// template: 24081/63081/31331 all bp 1), misc 29364
+	// NPC_VOID_SENTRY (C++-proven: violet_hold.h:102, Lua
+	// :107; SummonedCreatureDies/Despawn check entry 29364),
+	// miscB 64 (SummonProperties row 64 real, 24081/63081
+	// template), targetA CASTER (DoCast me), radiusIdx 13
+	// real 10yd; cast4 real 1000ms (1s cast); dur90006
+	// synthetic 300000ms (Duration 5 minutes); range1 Self
+	// 0yd; school Physical. FLAG: needs a wago SpellEffect
+	// row check (target + radius + MiscValueB — Wowhead
+	// shows only the NPC name). NOT carried: flags (none
+	// shown); GCD 0 / Cost None (no fields).
+	{id: 54369, castTimeIdx: 4, durIdx: 90006, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 1, dieSides: 1, misc: 29364, miscB: 64, targetA: targetCaster, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 54524 "Shroud of Darkness" (Wowhead name MATCH; C++
+	// boss_zuramat.cpp:25 enum, :145 DoCast(me)
+	// non-triggered; Lua boss_zuramat.lua:116 const, :200
+	// CastSpell(creature, SPELL_SHROUD_OF_DARKNESS)) —
+	// Wowhead WotLK (same verdict file; wago NOT opened —
+	// the valueless proc-trigger row HAS a triggered-spell
+	// link): single effect 6 APPLY_AURA aura42
+	// PROC_TRIGGER_SPELL, valueless — bp 0/die 1 (1914
+	// precedent), trigger 54525 (the linked "Shroud of
+	// Darkness"; 54525 itself is NOT seeded — triggered
+	// spells are not seeded), targetA CASTER (DoCast me);
+	// cast5 real 2000ms (2s cast); dur28 real 5000ms
+	// (Duration 5 seconds); range1 Self 0yd; school
+	// Physical; dispel 1 Magic. Proc chance 100% NOT carried
+	// (no proc table, 58109 precedent). NOT carried:
+	// cooldown 5s (no field); buff text; GCD Special / Cost
+	// None (no fields).
+	{id: 54524, castTimeIdx: 5, durIdx: 28, rangeIdx: 1, school: schoolPhysical, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraProcTriggerSpell, basePoints: 0, dieSides: 1, trigger: 54525, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 58650 "Summon Void Sentry Ball" (Wowhead name MATCH;
+	// C++ boss_zuramat.cpp:32 enum, :174 CastSpell(me, ...,
+	// true) triggered; Lua boss_zuramat.lua:109 const, :323
+	// CastSpell(creature, SPELL_SUMMON_VOID_SENTRY_BALL,
+	// true)) — Wowhead WotLK (same verdict file; wago NOT
+	// opened — no trigger row): single effect 28 SUMMON
+	// "Summon (Void Sentry)" Value 1, no Radius shown — bp
+	// 1/die 1 (summon template), misc 29365
+	// NPC_VOID_SENTRY_BALL (C++-proven: violet_hold.h:103;
+	// npc_void_sentryAI IsSummonedBy casts 58650 triggered
+	// to summon the ball), miscB 64 (24081/63081 template),
+	// targetA CASTER (self-cast); cast1 instant; dur0
+	// (Duration n/a); range1 Self 0yd; school Physical.
+	// FLAG: needs a wago SpellEffect row check (misc +
+	// miscB + target — Wowhead shows only "(Void Sentry)",
+	// the TDB name of BOTH 29364 and 29365, so the DBC row
+	// is the authority). NOT carried: flags ("Cast time is
+	// hidden", no attributes field); GCD 0 / Cost None (no
+	// fields).
+	{id: 58650, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 1, dieSides: 1, misc: 29365, miscB: 64, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
