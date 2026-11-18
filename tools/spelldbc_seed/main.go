@@ -15638,6 +15638,92 @@ var spells = []spell{
 	{id: 26638, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 12, chainAmplitude: 1},
 	}},
+	// 12493 "Curse of Weakness" (Wowhead SpellName MATCH; C++
+	// boss_tomb_of_seven.cpp:113 enum, :217 DoCastVictim; Lua
+	// boss_doomrel.lua:90 const, :143 CastSpell(victim)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_12493_12742_13787_15092.txt; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA MOD_DAMAGE_DONE (aura 13)
+	// Value -1 — bp -2/die 1 (the 31467 negative-value
+	// convention), misc 1 Physical (the 26527 precedent);
+	// targetA 6 (DoCastVictim); cast1 instant; dur4 120000ms
+	// (real row — Duration 2 minutes); range4 Medium 30yd
+	// (real row); school Shadow; dispel 2 Curse; manaCost 105.
+	// NOT carried: "Cannot be used while shapeshifted" (no
+	// attributes field) and the level 1 requirement (no level
+	// field).
+	{id: 12493, castTimeIdx: 1, durIdx: 4, rangeIdx: 4, school: schoolShadow, dispel: 2, manaCost: 105, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: -2, dieSides: 1, misc: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 12742 "Immolate" (Wowhead SpellName MATCH; C++
+	// boss_tomb_of_seven.cpp:112 enum, :213 DoCast(target); Lua
+	// boss_doomrel.lua:92 const, :181 CastSpell(target)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0 6
+	// APPLY_AURA PERIODIC_DAMAGE (aura 3) Value 28 every 3s —
+	// bp 27/die 1, period 3000; eff1 2 SCHOOL_DAMAGE Fire
+	// Value 96 — bp 95/die 1 (both the 31436 flat convention);
+	// both targetA 6 (random-player target); cast5 2000ms
+	// (real row — Cast time 2 seconds, the 29953 precedent);
+	// dur86 21000ms (real row — Duration 21 seconds, the
+	// 20294 Immolate precedent); range4 Medium 30yd (real
+	// row); school Fire; dispel 1 Magic; manaCost 95. NOT
+	// carried: "Cannot be used while shapeshifted" / "Spell
+	// damage depends on caster level" (no attributes field),
+	// the 0.1/0.3 SP mods (no coefficient field) and the
+	// level 20 requirement (no level field).
+	{id: 12742, castTimeIdx: 5, durIdx: 86, rangeIdx: 4, school: schoolFire, dispel: 1, manaCost: 95, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 27, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 95, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 13787 "Demon Armor" (Wowhead SpellName MATCH; C++
+	// boss_tomb_of_seven.cpp:114 enum, :221 DoCast(me); Lua
+	// boss_doomrel.lua:91 const, :152 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0 6
+	// APPLY_AURA MOD_RESISTANCE (aura 22) Value 210 — bp
+	// 209/die 1, misc 1 Physical; eff1 same aura Value 3 —
+	// bp 2/die 1, misc 32 Shadow (the 2313 misc-is-school-mask
+	// precedent); eff2 6 APPLY_AURA HEALTH_REGEN (aura 84)
+	// Value 7 — bp 6/die 1 (the :2342 regen precedent); all
+	// targetA CASTER (DoCast me self-cast); cast1 instant;
+	// dur30 1800000ms (real row — Duration 30 minutes, the
+	// 12544 Frost Armor precedent); range1 Self Only (real
+	// row); school Shadow; dispel 1 Magic; manaCost 275. NOT
+	// carried: "Cannot be used while shapeshifted" / "Starts
+	// cooldown after aura fades" (no attributes field), the
+	// 10s cooldown (no cooldown field) and the level 20
+	// requirement (no level field).
+	{id: 13787, castTimeIdx: 1, durIdx: 30, rangeIdx: 1, school: schoolShadow, dispel: 1, manaCost: 275, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModResistance, basePoints: 209, dieSides: 1, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModResistance, basePoints: 2, dieSides: 1, misc: 32, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModRegen, basePoints: 6, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 15092 "Summon Voidwalkers" (Wowhead SpellName MATCH; C++
+	// boss_tomb_of_seven.cpp:115 enum, :179 DoCastVictim
+	// triggered; Lua boss_doomrel.lua:93 const, :241
+	// CastSpell(victim, ..., true)) — Wowhead WotLK + wago
+	// (verdict file wago_spells_12493_12742_13787_15092.txt;
+	// wago FIRED for the valueless Trigger Spell rows:
+	// SpellEffect 3.4.5.63697 rows 692893-692895): eff0 28
+	// SUMMON Value 1 — bp 0/die 1, misc 8996 Voidwalker Minion
+	// NPC, miscB 61 (the 31264/9774 summon precedent),
+	// targetA DEST_CASTER 18; eff1 64 TRIGGER_SPELL bp 0/die 1
+	// trigger 15093 targetA CASTER; eff2 64 TRIGGER_SPELL bp
+	// 0/die 1 trigger 15094 targetA CASTER (trigger IDs live
+	// in EffectTriggerSpell, MiscValue 0 — NOT in misc);
+	// cast1 instant; dur6 600000ms (real row — Duration 10
+	// minutes); range2 Combat 5yd (real row); school Physical.
+	// 15093/15094 NOT seeded (trigger-only references, per
+	// the 25852->6608 practice). NOT carried: "Is Ability"
+	// (no attributes field) and the level 26 requirement (no
+	// level field).
+	{id: 15092, castTimeIdx: 1, durIdx: 6, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 8996, miscB: 61, targetA: targetDestCaster, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 15093, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effTriggerSpell, basePoints: 0, dieSides: 1, trigger: 15094, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
