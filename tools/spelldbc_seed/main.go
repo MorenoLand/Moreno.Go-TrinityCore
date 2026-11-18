@@ -15876,6 +15876,72 @@ var spells = []spell{
 	{id: 47691, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, radiusIdx: 48, chainAmplitude: 1},
 	}},
+	// 20741 "Shadow Bolt Volley" (Wowhead SpellName MATCH; C++
+	// boss_kormok.cpp:25 enum, :104 DoCastVictim; Lua
+	// boss_kormok.lua:41 const, :83 CastSpell(victim)) — Wowhead
+	// WotLK (verdict file
+	// wago_spells_20741_27687_27688_27695.txt; wago NOT attempted
+	// — single effect with a Value, no trigger): single effect 2
+	// SCHOOL_DAMAGE Shadow Value 255 — bp 254/die 1 (the 31436
+	// flat convention); targetA SRC_CASTER 22 / targetB
+	// SRC_AREA_ENEMY 15 (the 26192 volley precedent); radius
+	// 30yd — radiusIdx 10 (real row); cast1 instant; dur0;
+	// range4 Medium 30yd (real row); school Shadow. NOT carried:
+	// "Spell damage depends on caster level" (no level-scaling
+	// field in the seeder; the 255 is seeded as the flat base,
+	// the 26192 note) / "Cannot be used while shapeshifted" /
+	// "Cannot be reflected" / "All spell effects are harmful"
+	// (no attributes field).
+	{id: 20741, castTimeIdx: 1, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 254, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 10, chainAmplitude: 1},
+	}},
+	// 27687 "Summon Bone Minions" (Wowhead SpellName MATCH; C++
+	// boss_kormok.cpp:35 enum, :112 DoCast; Lua
+	// boss_kormok.lua:43 const, :120 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 77
+	// SCRIPT_EFFECT Value 1 — bp 0/die 1 (the 75213/47691
+	// precedent); targetA CASTER (DoCast self); cast1 instant;
+	// dur0; range1 Self Only (real row); school Shadow. The
+	// SpellScript (boss_kormok.cpp:180-211) summons 4x bone
+	// minion at caster ±7yd — server-side script, no radius in
+	// the DBC. NOT carried: no Flags row shown (no attributes
+	// field).
+	{id: 27687, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 27688 "Bone Shield" (Wowhead SpellName MATCH; C++
+	// boss_kormok.cpp:26 enum, :108 DoCastVictim; Lua
+	// boss_kormok.lua:42 const, :101 CastSpell(victim)) — Wowhead
+	// WotLK (same verdict file; wago NOT attempted —
+	// contiguous rows, all Values present, no trigger): eff0 6
+	// APPLY_AURA SCHOOL_ABSORB (aura 69) Value 2500 — bp 2499/
+	// die 1, misc 127 all schools (the 12040 precedent); eff1 6
+	// APPLY_AURA PROC_TRIGGER_DAMAGE (aura 43) Value 100 — bp
+	// 99/die 1 (the 30403 precedent, no misc); both targetA
+	// CASTER (Range Self); cast1 instant; dur5 300000ms 5min
+	// (real row); range1 Self Only (real row); school Shadow;
+	// dispel 1 Magic. NOT carried: no Flags row shown (no
+	// attributes field).
+	{id: 27688, dispel: 1, castTimeIdx: 1, durIdx: 5, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraSchoolAbsorb, dieSides: 1, basePoints: 2499, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraProcTriggerDmg, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 27695 "Summon Bone Mages" (Wowhead SpellName MATCH; C++
+	// boss_kormok.cpp:28 enum, :84 DoCast; Lua
+	// boss_kormok.lua:44 const, :179 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 77
+	// SCRIPT_EFFECT Value 1 — bp 0/die 1 (the 75213/47691
+	// precedent); targetA CASTER (DoCast self); cast1 instant;
+	// dur0; range1 Self Only (real row); school Shadow. The
+	// SpellScript (boss_kormok.cpp:146-177) casts 2x a random of
+	// 27696-27699 triggered on the caster — 27696-27699 are
+	// trigger-only, unseeded (the 15093/15094 precedent). NOT
+	// carried: no Flags row shown (no attributes field).
+	{id: 27695, castTimeIdx: 1, rangeIdx: 1, school: schoolShadow, effects: [3]effect{
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
