@@ -98,6 +98,7 @@ const (
 	effSummonPet               = 56  // SPELL_EFFECT_SUMMON_PET (SharedDefines.h:867)
 	effSpawn                   = 46  // SPELL_EFFECT_SPAWN (SharedDefines.h:857; clientside-only, spells.go:19747)
 	auraPeriodicDmg            = 3
+	auraPeriodicHeal           = 8 // SPELL_AURA_PERIODIC_HEAL (SpellAuraDefines.h:88)
 	auraDummy                  = 4
 	auraModConfuse             = 5 // SPELL_AURA_MOD_CONFUSE (SpellAuraDefines.h:85)
 	auraModCharm               = 6 // SPELL_AURA_MOD_CHARM (SpellAuraDefines.h:86)
@@ -16229,6 +16230,80 @@ var spells = []spell{
 	// player" (no attributes field).
 	{id: 24928, dispel: 3, castTimeIdx: 1, durIdx: 4, rangeIdx: 6, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 5000, trigger: 24929, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 9889 "Healing Touch" (Wowhead SpellName MATCH; C++
+	// boss_instructor_malicia.cpp:35 enum, :125 DoCast me; Lua
+	// boss_instructor_malicia.lua:42 const, :177 CastSpell(creature)) —
+	// Wowhead WotLK (verdict file
+	// wago_spells_9889_10917_10929_11672.txt; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 10
+	// HEAL, effect-row Value 1620, tooltip range 1648-1941 — bp 1619
+	// (effect-row Value - 1; the tooltip low is level-80 scaled, the
+	// 11647 precedent) / die 294 (tooltip-range width 1941-1648+1,
+	// the 30633 width derivation — width is level-invariant);
+	// targetA TARGET_ALLY 21 (the 44256 wago-row 865838 + 67528
+	// precedent for DoCast-me heals; wago confirmation of this row
+	// still open — see checkpoint); cast14 3000ms (real row); dur0;
+	// range5 Long 40yd (real row); school Nature; manaCostPct 33.
+	// NOT carried: "Cannot be used while shapeshifted" / "Heal
+	// Prediction" (no attributes field); SP mod 1.61 (no coefficient
+	// field).
+	{id: 9889, manaCostPct: 33, castTimeIdx: 14, rangeIdx: 5, school: schoolNature, effects: [3]effect{
+		{effect: effHeal, basePoints: 1619, dieSides: 294, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 10917 "Flash Heal" (Wowhead SpellName MATCH; C++
+	// boss_instructor_malicia.cpp:33 enum, :111 DoCast me; Lua
+	// boss_instructor_malicia.lua:40 const, :151 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 10
+	// HEAL, effect-row Value 812, tooltip range 833-979 — bp 811
+	// (effect-row Value - 1; tooltip low is level-80 scaled, the
+	// 11647 precedent) / die 147 (tooltip-range width 979-833+1,
+	// the 30633 width derivation); targetA TARGET_ALLY 21 (the
+	// 44256 wago-row 865838 + 67528 precedent for DoCast-me heals;
+	// wago confirmation of this row still open — see checkpoint);
+	// cast16 1500ms (real row); dur0; range5 Long 40yd (real row);
+	// school Holy; manaCostPct 18. NOT carried: "Cannot be used
+	// while shapeshifted" / "Heal Prediction" (no attributes field);
+	// SP mod 0.807 (no coefficient field).
+	{id: 10917, manaCostPct: 18, castTimeIdx: 16, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effHeal, basePoints: 811, dieSides: 147, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 10929 "Renew" (Wowhead SpellName MATCH; C++
+	// boss_instructor_malicia.cpp:34 enum, :106 DoCast me; Lua
+	// boss_instructor_malicia.lua:41 const, :136 CastSpell(creature)) —
+	// Wowhead WotLK (same verdict file; wago NOT attempted —
+	// single effect with a Value, no trigger): single effect 6
+	// APPLY_AURA PERIODIC_HEAL (aura 8, new const) Value 162 every
+	// 3s — bp 161/die 1 (the flat convention; tooltip total 810 =
+	// 5 ticks x 162, Buff flat 162/tick — no range anywhere);
+	// auraPeriod 3000; targetA TARGET_ALLY 21 (the 44256 wago-row
+	// 865838 + 67528 precedent for DoCast-me heals; wago
+	// confirmation of this row still open — see checkpoint);
+	// cast1 instant; dur8 15000ms 15s (real row); range5 Long 40yd
+	// (real row); school Holy; dispel 1 Magic; manaCostPct 17. NOT
+	// carried: "Cannot be used while shapeshifted" / "DoT Stacking
+	// Rule" / "Vehicle Immunity Category" / "Heal Prediction" (no
+	// attributes field); SP mod 0.376 (no coefficient field).
+	{id: 10929, dispel: 1, manaCostPct: 17, castTimeIdx: 1, durIdx: 8, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicHeal, basePoints: 161, dieSides: 1, auraPeriod: 3000, targetA: targetUnitTargetAlly, chainAmplitude: 1},
+	}},
+	// 11672 "Corruption" (Wowhead SpellName MATCH; C++
+	// boss_instructor_malicia.cpp:32 enum, :102 DoCast random target
+	// triggered; Lua boss_instructor_malicia.lua:39 const, :121
+	// CastSpell(target)) — Wowhead WotLK (same verdict file; wago
+	// NOT attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA PERIODIC_DAMAGE (aura 3) Value
+	// 111 every 3s — bp 110/die 1 (the flat convention; tooltip
+	// total 666 = 6 ticks x 111, Buff flat 111/tick — no range
+	// anywhere, so no hidden die like 21401's); auraPeriod 3000;
+	// targetA TARGET_ENEMY (DoCast random target); cast1 instant;
+	// dur85 18000ms 18s (real row); range4 Medium 30yd (real row);
+	// school Shadow; dispel 1 Magic; manaCostPct 14. NOT carried:
+	// "Cannot be used while shapeshifted" / "Taps immediately" (no
+	// attributes field).
+	{id: 11672, dispel: 1, manaCostPct: 14, castTimeIdx: 1, durIdx: 85, rangeIdx: 4, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 110, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
