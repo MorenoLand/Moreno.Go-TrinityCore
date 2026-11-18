@@ -133,6 +133,7 @@ const (
 	auraMechanicImmunity       = 77 // SPELL_AURA_MECHANIC_IMMUNITY (SpellAuraDefines.h:157)
 	auraModScale               = 61
 	auraModPacifySilence       = 60  // SPELL_AURA_MOD_PACIFY_SILENCE (SpellAuraDefines.h:140)
+	auraPacify                 = 25  // SPELL_AURA_MOD_PACIFY (SpellAuraDefines.h:105)
 	auraSchoolImmunity         = 39  // SPELL_AURA_SCHOOL_IMMUNITY (SpellAuraDefines.h:119)
 	auraModCastingSpeed        = 65  // SPELL_AURA_MOD_CASTING_SPEED_NOT_STACK (SpellAuraDefines.h:145)
 	auraDetectAmore            = 170 // SPELL_AURA_DETECT_AMORE (SpellAuraDefines.h:250)
@@ -16933,6 +16934,66 @@ var spells = []spell{
 	// attributes field); GCD 0 / Cost None (no fields).
 	{id: 29231, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
 		{effect: effTeleportUnits, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 58460 "Brutal Strike" (Wowhead name MATCH; C++ boss_ioc_horde_alliance.cpp
+	// enum:24, cast:96 DoCastVictim; Lua consts:28, cast:96 victim via nil).
+	// Tooltip: "Inflicts 150% weapon damage"; no buff section.
+	// eff0 weapon-% bp 150-1=149 (61696/52374 precedents); tgtA enemy (DoCastVictim);
+	// cast1 instant; range2 Combat 5yd; dur0 (Duration n/a); school Physical.
+	// NOT carried: "Requires Melee Weapon" / "Requires level 1" (no fields);
+	// "Is Ability" / "Do Not Sheath" (no attributes field).
+	// Verdict: hidden_files/wago_spells_58460_66776_67280_68506.txt (sha8 e07e3eae).
+	{id: 58460, castTimeIdx: 1, rangeIdx: 2, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponPercentDamage, basePoints: 149, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 66776 "Rage" (Wowhead name MATCH; C++ enum:27, cast:110 DoCast(me);
+	// Lua consts:31, cast:138 on creature).
+	// Tooltip: damage done +300%, damage taken -95%, run speed +100% until he returns.
+	// eff0 mod-damage-done bp 300-1=299 misc 127 (all 7 schools, 29125/59465 precedent);
+	// eff1 mod-damage-taken bp -95-1=-96 misc 127; eff2 run-speed bp 100-1=99;
+	// all tgtA CASTER (self-only buff, range Self 0yd; 26662/28134 precedent — the
+	// 44256/59465 class, target 21, is for spells that can target others).
+	// cast1 instant; range1 Self 0yd; dur0 (Duration n/a — aura removed on return); school Physical.
+	// NOT carried: no dispel shown (no field needed); no flags row (no attributes field).
+	// Verdict: hidden_files/wago_spells_58460_66776_67280_68506.txt (sha8 e07e3eae).
+	{id: 66776, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDamageDone, basePoints: 299, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDamageTaken, basePoints: -96, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModIncreaseSpeed, basePoints: 99, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 67280 "Dagger Throw" (Wowhead name MATCH; C++ enum:25, cast:101 DoCast(target);
+	// Lua consts:29, cast:115 on target).
+	// Tooltip: "9425 to 10575 damage instantly and 7500 damage every 3 sec. Lasts 12 sec."
+	// eff0 school-dmg: effect-row base Value 7069 (9425 is the Heroic value; 7069*4/3=9425)
+	// -> bp 7068; die 1151 from tooltip-range width 10575-9425+1 (malicia precedent:
+	// bp from effect row, die from tooltip width).
+	// eff1 periodic-dmg: base Value 5000 every 3s (7500 is Heroic) -> bp 4999, die 1, period 3000.
+	// Both tgtA enemy (DoCast(target), random enemy); cast3 500ms; range6 Vision 100yd;
+	// dur29 12s; spell mechanic 15 BLEED (SharedDefines.h:1372); school Physical.
+	// NOT carried: "Can only target the player" (no attributes field);
+	// Heroic/25P values (single DBC row holds the base value).
+	// Verdict: hidden_files/wago_spells_58460_66776_67280_68506.txt (sha8 e07e3eae).
+	{id: 67280, castTimeIdx: 3, rangeIdx: 6, school: schoolPhysical, mechanic: 15, durIdx: 29, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 7068, dieSides: 1151, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 4999, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 68506 "Crushing Leap" (Wowhead name MATCH; C++ enum:26, cast:105 DoCastVictim;
+	// Lua consts:30, cast:104 victim via nil).
+	// Tooltip: "2 sec cast" only; no buff section.
+	// eff0 knockback Value 150 -> bp 149, die 1; NO "(N)" parenthetical, so misc 0 (omit —
+	// contrast 64652 "(25)").
+	// eff1 periodic-trigger aura23 bp 0/die 1 period 1000, trigger 68507 (Wowhead link;
+	// 68507 NOT seeded — triggered spell, SpellScript-side); eff2 pacify aura25 (NEW const)
+	// bp 0/die 1.
+	// All tgtA enemy (DoCastVictim; knockback is single-target, no radius — eff1/eff2 target
+	// flagged for wago: caster alternative is the boss pacified mid-leap).
+	// cast5 2000ms; range1 Self 0yd; dur36 1s; school Physical.
+	// NOT carried: "Do Not Sheath" / "No Aura Icon" (no attributes field).
+	// Verdict: hidden_files/wago_spells_58460_66776_67280_68506.txt (sha8 e07e3eae).
+	{id: 68506, castTimeIdx: 5, rangeIdx: 1, school: schoolPhysical, durIdx: 36, effects: [3]effect{
+		{effect: effKnockBack, basePoints: 149, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 68507, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPacify, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
 	}},
 }
 
