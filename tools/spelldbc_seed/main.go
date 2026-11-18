@@ -17536,6 +17536,93 @@ var spells = []spell{
 	{id: 59414, castTimeIdx: 1, rangeIdx: 13, school: schoolNature, effects: [3]effect{
 		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: 24, dieSides: 1, misc: 8, targetA: targetSrcAreaEnemy, radiusIdx: 91007, chainAmplitude: 1},
 	}},
+	// 52387 "Heat" (Wowhead name MATCH; C++ boss_volkhan.cpp:46
+	// enum, :204 non-triggered self-cast; Lua
+	// boss_volkhan.lua:249 const, :263
+	// summoned:CastSpell(summoned, SPELL_HEAT) — cast by the
+	// summoned Molten Golem on itself) — Wowhead WotLK
+	// (verdict wago_spells_23113_52387_52433_52654.txt; wago
+	// NOT opened — no trigger row): single effect 136
+	// HEAL_PCT "Heal for % of Total Health" Value 20 — bp
+	// 19/die 1 (20% of total health); targetA CASTER
+	// (self-cast both sites; FLAG: needs a wago SpellEffect
+	// row check — Wowhead-derived target); cast16 real
+	// 1500ms (1.5s cast); dur0 (Duration n/a); range37
+	// Extended 0-50yd; school Fire. NOT carried: "Requires
+	// level 20" (no field); GCD 0 / Cost None (no fields).
+	{id: 52387, castTimeIdx: 16, rangeIdx: 37, school: schoolFire, effects: [3]effect{
+		{effect: effHealPct, basePoints: 19, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 52654 "Temper" (Wowhead name matches NEITHER C++ enum
+	// name — TEMPER_DUMMY nor FORGE_VISUAL; the two enum
+	// names are descriptive aliases for one ID, :49 and :51
+	// in boss_volkhan.cpp; the ID is authoritative; C++
+	// :277 DoCast(me, SPELL_FORGE_VISUAL), :325 DoCast(target
+	// [the Anvil creature], SPELL_TEMPER_DUMMY, false); Lua
+	// boss_volkhan.lua:195 const as SPELL_FORGE_VISUAL, :214
+	// CastSpell(creature, SPELL_FORGE_VISUAL)) — Wowhead
+	// WotLK (same verdict file; wago NOT opened — Dummy with
+	// Value, not a trigger row): single effect 3 DUMMY Value
+	// 1 — bp 0/die 1 (60067 Value-1 precedent); targetA
+	// CASTER (Lua self-cast + C++ :277 DoCast me; the :325
+	// anvil cast passes a target but the DBC target decides
+	// the landing — FLAG: needs a wago SpellEffect row check,
+	// anvil-target alternative); cast4 real 1000ms (1s cast);
+	// dur0 (Duration n/a); range13 real 50000yd (Anywhere -
+	// Unlimited); school Physical. NOT carried: "Requires
+	// Melee Weapon" / "Requires level 20" (no fields); flags
+	// (no attributes field); GCD 0 / Cost None (no fields).
+	{id: 52654, castTimeIdx: 4, rangeIdx: 13, school: schoolPhysical, effects: [3]effect{
+		{effect: effDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 23113 "Blast Wave" (Wowhead name MATCH; Molten Golem;
+	// C++ boss_volkhan.cpp:54 enum, :468 DoCast(me,
+	// SPELL_BLAST_WAVE); Lua boss_volkhan.lua:318 const, :357
+	// CastSpell(creature, 23113)) — Wowhead WotLK (same
+	// verdict file; wago NOT opened — no trigger row): eff0 2
+	// SCHOOL_DAMAGE Fire Value 122 — bp 121/die 1 (single
+	// Value, no tooltip range); eff1 6 APPLY_AURA aura33
+	// MOD_DECREASE_SPEED Value -50% — bp -51/die 1 (30600
+	// identical shape: same damage + snare, radiusIdx 13,
+	// dur32, range1); both targetA SRC_CASTER + targetB
+	// SRC_AREA_ENEMY ("nearby enemies"; FLAG: needs a wago
+	// SpellEffect row check — Wowhead-derived targets),
+	// radiusIdx 13 real 10yd (Wowhead rows show Radius 10
+	// yards); mechanic NOT encoded (0): Wowhead's
+	// "Incapacitated" has no TC Mechanics entry (30600
+	// precedent — a slow with no mechanic on the row gets no
+	// guessed 12); dur32 real 6000ms (Duration 6 seconds,
+	// the snare buff); cast1 instant; range1 Self 0yd; school
+	// Fire. NOT carried: "Requires Mage" / "Requires level
+	// 20" (no fields); GCD 1.5s (no field); flags (no
+	// attributes field); Cost None (no field).
+	{id: 23113, castTimeIdx: 1, durIdx: 32, rangeIdx: 1, school: schoolFire, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 121, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraDecSpeed, basePoints: -51, dieSides: 1, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+	}},
+	// 52433 "Immolation Strike" (Wowhead name MATCH; Molten
+	// Golem; C++ boss_volkhan.cpp:55 enum, :472
+	// DoCastVictim(SPELL_IMMOLATION_STRIKE); Lua
+	// boss_volkhan.lua:319 const, :375 CastSpell(nil, 52433))
+	// — Wowhead WotLK (same verdict file; wago NOT opened —
+	// no trigger row): eff0 6 APPLY_AURA aura3 PERIODIC_DMG
+	// Value "450 every 3 seconds" — bp 449/die 1, auraPeriod
+	// 3000 (450 x 3 ticks = the tooltip's 1350 over 9s);
+	// eff1 2 SCHOOL_DAMAGE Fire Value 450 — bp 449/die 1
+	// (the upfront 450); eff2 77 SCRIPT_EFFECT Value 1 — bp
+	// 0/die 1 (60067 Value-1 precedent); all targetA ENEMY
+	// (DoCastVictim; FLAG: needs a wago SpellEffect row check
+	// — Wowhead-derived targets, esp. eff2); dur105 real
+	// 9000ms (Duration 9 seconds); cast1 instant; range2
+	// real 0-5yd (5 yards Combat); school Fire; dispel 1
+	// (Magic). NOT carried: "Requires level 20" (no field);
+	// SP mod 0.13 (SpellBonusData, no field); GCD 0 / Cost
+	// None (no fields).
+	{id: 52433, castTimeIdx: 1, durIdx: 105, rangeIdx: 2, school: schoolFire, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 449, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effSchoolDamage, basePoints: 449, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effScriptEffect, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
