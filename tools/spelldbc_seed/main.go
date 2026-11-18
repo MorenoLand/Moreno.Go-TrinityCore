@@ -13563,7 +13563,7 @@ var spells = []spell{
 	// 36173 "Gift of the Doomsayer" (Wowhead SpellName MATCH;
 	// C++ SPELL_GIFT_OF_THE_DOOMSAYER,
 	// boss_dalliah_the_doomsayer.cpp:41, TRIGGERED
-	// DoCastVictim :145; Lua arcatraz/
+	// DoCastVictim :150; Lua arcatraz/
 	// boss_dalliah_the_doomsayer.lua:107,164 — {1s,4s}
 	// init then {16s,21s}) — Wowhead WotLK (verdict
 	// file wago_spells_36142_36144_36173_39016.txt;
@@ -13582,7 +13582,7 @@ var spells = []spell{
 	}},
 	// 36142 "Whirlwind" (Wowhead SpellName MATCH; C++
 	// SPELL_WHIRLWIND, boss_dalliah_the_doomsayer.cpp:42,
-	// non-triggered DoCast(me) :148; Lua arcatraz/
+	// non-triggered DoCast(me) :154; Lua arcatraz/
 	// boss_dalliah_the_doomsayer.lua:108,176 — {7s,9s}
 	// init then {19s,21s}) — Wowhead WotLK (same
 	// verdict file; wago NOT attempted — effect row
@@ -13600,7 +13600,7 @@ var spells = []spell{
 	}},
 	// 36144 "Heal" (Wowhead SpellName MATCH; C++
 	// SPELL_HEAL, boss_dalliah_the_doomsayer.cpp:43,
-	// non-triggered DoCast(me) :152; Lua arcatraz/
+	// non-triggered DoCast(me) :160; Lua arcatraz/
 	// boss_dalliah_the_doomsayer.lua:109,189 — one-shot
 	// self-cast) — Wowhead WotLK (same verdict file;
 	// wago NOT attempted — effect row complete):
@@ -13612,6 +13612,44 @@ var spells = []spell{
 	// Holy. GCD Normal not carried (no field).
 	{id: 36144, castTimeIdx: 19, durIdx: 0, rangeIdx: 5, school: schoolHoly, effects: [3]effect{
 		{effect: effHeal, basePoints: 18500, dieSides: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 36174 "Curse of the Doomsayer" (Wowhead SpellName MATCH;
+	// trigger-only spell, no C++ enum — triggered by 36173's
+	// proc aura) — Wowhead WotLK (verdict file
+	// wago_spells_36174_36175.txt; wago NOT attempted —
+	// effect row complete): single eff0 HEAL — parent
+	// tooltip range 2313-2687 (36173's page, describing
+	// this trigger's heal) — bp 2312, die 375 (this
+	// page shows only Value 2313; the 2687 upper end is
+	// attested on the parent page); tgtA ENEMY (the heal
+	// lands on the cursed unit's target — the enemy it
+	// is fighting, i.e. Dalliah in the boss context;
+	// NOT caster: the tooltip says "its target", not
+	// "itself"); dispel 2 (CURSE, SharedDefines.h:1406);
+	// cast1 instant, dur0 (no duration), range6 Vision
+	// 0-100yd (real row), school Shadow.
+	{id: 36174, dispel: 2, castTimeIdx: 1, durIdx: 0, rangeIdx: 6, school: schoolShadow, effects: [3]effect{
+		{effect: effHeal, basePoints: 2312, dieSides: 375, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 36175 "Whirlwind" (Wowhead SpellName MATCH;
+	// trigger-only spell, no C++ enum — triggered every
+	// 1s by 36142's periodic aura; Wowhead "Triggered
+	// by (1)" confirms parent 36142) — Wowhead WotLK
+	// (same verdict file; wago NOT attempted — effect
+	// row complete): single eff0 WEAPON_DAMAGE (eff 58)
+	// "Deal Weapon Damage" Value 1750 — bp 1750, die 0
+	// (flat per 35108; 15578 precedent is the same
+	// shape); tgtA SRC_CASTER tgtB SRC_AREA_ENEMY +
+	// radius14 8yd (real row) per 15578/69900;
+	// cast1 instant, dur0, range1 Self 0yd (real row),
+	// school Physical. CONFLICT RESOLVED: the parent
+	// tooltip says "plus 300" but this spell's OWN page
+	// says "plus 1750" in BOTH tooltip and effect row —
+	// the own-page value wins (same class as
+	// TC-enum-over-Wowhead: the nearer source is
+	// authoritative); do NOT seed 300.
+	{id: 36175, castTimeIdx: 1, durIdx: 0, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effWeaponDamage, basePoints: 1750, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 14, chainAmplitude: 1},
 	}},
 	// 39016 "Shadow Wave" HELD — NOT seeded: Wowhead name
 	// MATCH but Effect #2 has NO row on the page (jumps
