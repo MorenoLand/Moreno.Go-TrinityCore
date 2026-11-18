@@ -14181,6 +14181,96 @@ var spells = []spell{
 	{id: 33132, castTimeIdx: 1, rangeIdx: 1, school: schoolFire, effects: [3]effect{
 		{effect: effSchoolDamage, basePoints: 2313, dieSides: 0, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 18, chainAmplitude: 1},
 	}},
+	// 25035 "Elemental Spawn-in" (Wowhead SpellName MATCH; C++
+	// SPELL_ELEMENTAL_SPAWNIN, boss_hydross_the_unstable.cpp:63;
+	// triggered self-cast by a summoned elemental :193/:199;
+	// Lua boss_hydross_the_unstable.lua:141,546,549, triggered
+	// self-cast) — Wowhead WotLK (verdict file
+	// wago_spells_25035_38015_38235_38246.txt; wago NOT
+	// attempted — effect row complete): eff0 SPAWN (effect 46,
+	// SPELL_EFFECT_SPAWN — Wowhead's "Spawn Effect", NOT
+	// SUMMON 28) Value 1 — per the 55761 precedent, carried
+	// as {effect: effSpawn, targetA: targetCaster} with no
+	// bp/die (the 37090 precedent carries it bare with TargetA
+	// 0); the effect is clientside-only (spells.go:19747
+	// explicit no-op) so the shown Value is an inert bp.
+	// Duration n/a — durIdx 0; range 0 Self — rangeIdx 1;
+	// cast1 instant; school Physical. Hydross himself is not
+	// in the Used-by list — the Hydross users are the Pure /
+	// Tainted Spawns, which is the C++ cast context.
+	{id: 25035, castTimeIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effSpawn, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 38015 "Blue Beam" (Wowhead SpellName MATCH; C++
+	// SPELL_BLUE_BEAM, boss_hydross_the_unstable.cpp:64;
+	// triggered beamer->CastSpell(me, true) :154/:162; Lua
+	// boss_hydross_the_unstable.lua:158,189, triggered cast by
+	// the beam dummy onto Hydross) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted): eff0 APPLY_AURA DUMMY
+	// (aura 4) Value 1 — bp 0/die 1; tgtA TARGET_UNIT_TARGET_ANY
+	// (25) per the 10258 precedent — the beamer is ENTRY_BEAM_
+	// DUMMY 21934, summoned BY Hydross (C++ SummonBeams
+	// :149-167), so the cast target is friendly and ENEMY would
+	// fizzle per checkCreatureExplicitTargetFaction. Radius
+	// 50000yd display == range → range echo, radiusIdx 0
+	// (23341 precedent; the dummy is not an area effect).
+	// Duration n/a — durIdx 0; range 50000yd Anywhere —
+	// rangeIdx 13 (real row); cast Channeled — castTimeIdx 1
+	// per the channeled-cast fix; school Shadow. The Priest /
+	// level-20 presentation and "Server-side script" tag are
+	// the player-spell wrapper — the DBC row is what it is, and
+	// the dummy aura is the script hook the Lua beam arm keys
+	// off.
+	{id: 38015, castTimeIdx: 1, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetUnitTargetAny, chainAmplitude: 1},
+	}},
+	// 38235 "Water Tomb" (Wowhead SpellName MATCH; C++
+	// SPELL_WATER_TOMB, boss_hydross_the_unstable.cpp:47;
+	// non-triggered DoCast(target) :362 on a picked target; Lua
+	// boss_hydross_the_unstable.lua:110,384, non-triggered
+	// target cast) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 APPLY_AURA STUN (aura 12) Value 1 — bp
+	// 0/die 1; eff1 APPLY_AURA PERIODIC_DAMAGE (aura 3) Value
+	// 900 every 1 second — bp 899/die 1, auraPeriod 1000; both
+	// tgtA DEST_AREA_ENEMY (16) + radius 5yd — radiusIdx 8
+	// (real row), per the 24328 precedent ("the target and any
+	// of its nearby enemies"). Duration 5s — dur28 (real row);
+	// range 100yd Vision — rangeIdx 6; cast1 instant; school
+	// Frost. The "901 - 25 Player" value is the 25-man variant
+	// (a different spell ID) — the base row is 900. "Can only
+	// target the player" not encodable.
+	{id: 38235, castTimeIdx: 1, durIdx: 28, rangeIdx: 6, school: schoolFrost, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, dieSides: 1, basePoints: 0, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 899, dieSides: 1, auraPeriod: 1000, targetA: targetUnitDestAreaEnemy, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 38246 "Vile Sludge" (Wowhead SpellName MATCH; C++
+	// SPELL_VILE_SLUDGE, boss_hydross_the_unstable.cpp:60;
+	// non-triggered DoCast(target) :278 on a picked target; Lua
+	// boss_hydross_the_unstable.lua:111,331, non-triggered
+	// target cast) — Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 APPLY_AURA PERIODIC_DAMAGE (aura 3)
+	// Value 500 every 3 seconds — bp 499/die 1, auraPeriod
+	// 3000; eff1 APPLY_AURA MOD_DAMAGE_PERCENT_DONE (aura 79)
+	// Value -50% — bp -51/die 1 (the displayed-Value-minus-1
+	// convention applied to a negative value), misc 127; eff2
+	// APPLY_AURA MOD_HEALING_PCT (aura 118) Value -50% — bp
+	// -51/die 1, misc 127; tgtA ENEMY all three; radius 100yd
+	// display == range → range echo, radiusIdx 0 (23341
+	// precedent; single-target auras, not an area effect).
+	// Duration 24s — dur90013 (synthetic row added for 30938);
+	// range 100yd Vision — rangeIdx 6; cast1 instant; school
+	// Nature. Misc 127 derivation: the buff says "All damage
+	// and healing dealt is reduced by 50%", and the engine's
+	// aura-79 handler skips misc 0 (creature_auras.go:485
+	// MiscValue&1 check, no all-schools fallback) — the 47008
+	// misc-0 row is flagged as a possible latent issue and NOT
+	// followed here. The "501 - 25 Player" value is the 25-man
+	// variant (a different spell ID) — the base row is 500.
+	{id: 38246, castTimeIdx: 1, durIdx: 90013, rangeIdx: 6, school: schoolNature, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 499, dieSides: 1, auraPeriod: 3000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: -51, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModHealingPct, dieSides: 1, basePoints: -51, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+	}},
 }
 
 func main() {
