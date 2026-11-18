@@ -140,6 +140,7 @@ const (
 	auraModHitChance           = 54 // SPELL_AURA_MOD_HIT_CHANCE (SpellAuraDefines.h:134)
 	auraPeriodicLeech          = 53 // SPELL_AURA_PERIODIC_LEECH (SpellAuraDefines.h:133)
 	auraPeriodicManaLeech      = 64 // SPELL_AURA_PERIODIC_MANA_LEECH (SpellAuraDefines.h:144)
+	auraPeriodicHealthFunnel   = 62 // SPELL_AURA_PERIODIC_HEALTH_FUNNEL (SpellAuraDefines.h:142)
 	auraModResistPct           = 101
 	auraModAttackPower         = 99  // SPELL_AURA_MOD_ATTACK_POWER (SpellAuraDefines.h:179)
 	auraFeatherFall            = 105 // SPELL_AURA_FEATHER_FALL (SpellAuraDefines.h:185)
@@ -13938,6 +13939,97 @@ var spells = []spell{
 	// C++ GO-gossip cast is authoritative.
 	{id: 11206, castTimeIdx: 1, durIdx: 6, rangeIdx: 12, school: schoolPhysical, effects: [3]effect{
 		{effect: effApplyAura, aura: auraDummy, dieSides: 1, basePoints: 0, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 24178 "Will of Hakkar" (Wowhead SpellName MATCH; C++
+	// SPELL_WILL_OF_HAKKAR, boss_hakkar.cpp:39; DoCast on
+	// max-threat target :139; Lua zulgurub/boss_hakkar.lua:55,
+	// non-triggered on top-threat player within 100yd) —
+	// Wowhead WotLK (verdict file wago_spells_24178_24318_
+	// 24322_24328.txt; wago NOT attempted — effect rows
+	// complete): eff0 APPLY_AURA CHARM (aura 6) Value 65 —
+	// bp 64/die 1 (25772 precedent); eff1 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE (aura 79) 200% all 7 schools —
+	// bp 199/die 1, misc 127 (27680 precedent); eff2
+	// APPLY_AURA MOD_MELEE_HASTE (aura 138) 100% — bp 99/die
+	// 1 (47008 precedent); tgtA ENEMY all three (cast on the
+	// max-threat player). Duration 20s — dur18 (real row);
+	// range 50000yd Anywhere — rangeIdx 13 (real row);
+	// cast1 instant, school Arcane. Used-by "Gurubashi" (not
+	// Hakkar) is a Wowhead-list quirk — C++ DoCast is
+	// authoritative (maker/dalliah override class).
+	{id: 24178, castTimeIdx: 1, durIdx: 18, rangeIdx: 13, school: schoolArcane, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModCharm, dieSides: 1, basePoints: 64, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 199, misc: 127, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 99, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 24318 "Enrage" (Wowhead name is "Frenzy" — MISMATCH;
+	// TC enum name is authoritative per 30925. C++
+	// SPELL_ENRAGE, boss_hakkar.cpp:40; DoCast(me) :144-145
+	// only if the aura is missing; Lua boss_hakkar.lua:56,
+	// 157, non-triggered self-cast) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted): eff0 APPLY_AURA
+	// MOD_DAMAGE_PERCENT_DONE (aura 79) 50% Physical — bp
+	// 49/die 1, misc 1 (Physical school mask; lines 336/350
+	// precedent); eff1 APPLY_AURA MOD_MELEE_HASTE (aura
+	// 138) 65% — bp 64/die 1; eff2 APPLY_AURA MOD_SCALE
+	// (aura 61) 15% — bp 14/die 1; tgtA CASTER all three.
+	// Duration 1.5 minutes — dur23 90000ms (real row);
+	// range 0 Self — rangeIdx 1; cast1 instant, school
+	// Physical. Tooltip "by 50" (no %) loses to the effect
+	// row "50%"; buff "1 minute remaining" loses to Spell
+	// Details "1.5 minutes". Hakkar absent from Used-by —
+	// C++ DoCast is authoritative.
+	{id: 24318, castTimeIdx: 1, durIdx: 23, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgDone, dieSides: 1, basePoints: 49, misc: 1, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModMeleeHaste, dieSides: 1, basePoints: 64, targetA: targetCaster, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraModScale, dieSides: 1, basePoints: 14, targetA: targetCaster, chainAmplitude: 1},
+	}},
+	// 24322 "Blood Siphon" (Wowhead SpellName MATCH; C++
+	// SPELL_BLOOD_SIPHON, boss_hakkar.cpp:36 (enum comment
+	// "Buggy ?"); triggered DoCastVictim :121; Lua
+	// boss_hakkar.lua:53,111, triggered victim-cast) —
+	// Wowhead WotLK (same verdict file; wago NOT
+	// attempted): eff0 APPLY_AURA PERIODIC_HEALTH_FUNNEL
+	// (aura 62, SpellAuraDefines.h:142; new const) Value 200
+	// every 1s — bp 199/die 1, auraPeriod 1000; eff1
+	// APPLY_AURA MECHANIC_IMMUNITY (aura 77) Stunned —
+	// misc 12 (MECHANIC_STUN, SharedDefines.h:1369), bp
+	// 0/die 1; eff2 same aura, Dazed — misc 27
+	// (MECHANIC_DAZE, SharedDefines.h:1384), bp 0/die 1;
+	// tgtA ENEMY all three
+	// (victim-cast). Duration 8s — dur31 (real row); range
+	// 100yd Vision — rangeIdx 6; cast Channeled — castTimeIdx
+	// 1 per the channeled-cast fix (channel length from
+	// durIdx; no AttributesEx bit in the seed); school
+	// Physical. Buff "Feeding Hakkar 1000 health per
+	// second" has NO DBC representation (no second effect)
+	// and is NOT fabricated — the effect row (200/1s) is
+	// encoded. "Aura is Debuff" flag not encodable (no
+	// attributes field). Engine twin: aura 62 live
+	// (spells.go:21104/:22053).
+	{id: 24322, castTimeIdx: 1, durIdx: 31, rangeIdx: 6, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicHealthFunnel, dieSides: 1, basePoints: 199, auraPeriod: 1000, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, dieSides: 1, basePoints: 0, misc: 12, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraMechanicImmunity, dieSides: 1, basePoints: 0, misc: 27, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 24328 "Corrupted Blood" (Wowhead SpellName MATCH; C++
+	// SPELL_CORRUPTED_BLOOD, boss_hakkar.cpp:37; triggered
+	// DoCastVictim :125; Lua boss_hakkar.lua:54,122,
+	// triggered victim-cast) — Wowhead WotLK (same verdict
+	// file; wago NOT attempted): eff0 SCHOOL_DAMAGE Shadow
+	// tooltip 875-1125 — bp 874/die 251; eff1 APPLY_AURA
+	// PERIODIC_DAMAGE (aura 3) Value 200 every 2 seconds —
+	// bp 199/die 1, auraPeriod 2000 (buff + effect agree on
+	// 2s; the tooltip's "every second" loses); both radius
+	// 10yd — radiusIdx 13 (real row); both tgtA
+	// DEST_AREA_ENEMY (16) per the 34190 missile-impact-AoE
+	// precedent (damage radiates 10yd around the victim,
+	// "the target and all nearby enemies"); cast1 instant,
+	// dur1 10s (real row), range6 Vision 100yd (real row),
+	// school Shadow.
+	{id: 24328, castTimeIdx: 1, durIdx: 1, rangeIdx: 6, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 874, dieSides: 251, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 199, dieSides: 1, auraPeriod: 2000, targetA: targetUnitDestAreaEnemy, radiusIdx: 13, chainAmplitude: 1},
 	}},
 }
 
