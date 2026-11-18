@@ -14995,6 +14995,82 @@ var spells = []spell{
 	{id: 38540, castTimeIdx: 1, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effPullTowards, basePoints: 0, dieSides: 1, misc: 125, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 27, chainAmplitude: 1},
 	}},
+	// 52720 "Carrion Swarm" (Wowhead SpellName MATCH; C++
+	// boss_mal_ganis.cpp:31 enum, :149 DoCastAOE; Lua
+	// boss_mal_ganis.lua:140 const, :266 CastSpell(creature)
+	// — DoCastAOE resolves to self-cast) — Wowhead WotLK
+	// (verdict file wago_spells_52720_52721_52722_52723.txt;
+	// wago NOT attempted — contiguous rows, all Values
+	// present, no trigger): eff0 2 SCHOOL_DAMAGE Shadow
+	// Value 3230, tooltip 3230-3570 — bp 3229/die 341 (the
+	// 30633 range convention); eff1 6 APPLY_AURA PERIODIC
+	// DAMAGE Value 380 every 3s, tooltip 380-420 — bp
+	// 379/die 41, period 3000; both targetA SRC_CASTER 22 /
+	// targetB SRC_AREA_ENEMY 15 (DoCastAOE self-cast),
+	// radius 40yd — radiusIdx 23 (real row, the 36127
+	// precedent); cast1 instant; dur8 15000ms (real row);
+	// range3 Twenty yards 0-20yd (the cast range — the
+	// tooltip header's "20 yd range", NOT the 40yd effect
+	// radius); school Shadow. NOT carried: "enemies in
+	// front of the caster" (no cone angle shown in the
+	// DBC — a cone target would fabricate one).
+	{id: 52720, castTimeIdx: 1, durIdx: 8, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 3229, dieSides: 341, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 23, chainAmplitude: 1},
+		{effect: effApplyAura, aura: auraPeriodicDmg, basePoints: 379, dieSides: 41, auraPeriod: 3000, targetA: targetSrcCaster, targetB: targetSrcAreaEnemy, radiusIdx: 23, chainAmplitude: 1},
+	}},
+	// 52721 "Sleep" (Wowhead SpellName MATCH; C++
+	// boss_mal_ganis.cpp:33 enum, :165 DoCast(target) else
+	// :167 DoCastVictim; Lua boss_mal_ganis.lua:142 const,
+	// :344/:348 CastSpell(target/victim)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — single effect with
+	// a Value, no trigger): single effect 6 APPLY_AURA Stun
+	// Value 1 — aura 12 STUN bp 0/die 1 (the effect type is
+	// Stun VERBATIM even though the spell is a sleep — the
+	// sleep-ness is the mechanic, not the aura); mechanic 10
+	// Asleep (spell + effect, the 30633 / 31480 pattern;
+	// MECHANIC_SLEEP = 10, SharedDefines.h:1367); dispel 1
+	// Magic; manaCostPct 2 (2% of base mana, the 29963
+	// precedent — field 204); cast4 1000ms; dur1 10000ms;
+	// range36 Longer 45yd; school Shadow. NOT carried:
+	// "Can only target the player" / "Prevents Anim" (no
+	// attributes field).
+	{id: 52721, castTimeIdx: 4, durIdx: 1, rangeIdx: 36, school: schoolShadow, mechanic: 10, dispel: 1, manaCostPct: 2, effects: [3]effect{
+		{effect: effApplyAura, aura: auraStun, mechanic: 10, basePoints: 0, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52722 "Mind Blast" (Wowhead SpellName MATCH; C++
+	// boss_mal_ganis.cpp:32 enum, :154 DoCast(target) else
+	// :156 DoCastVictim; Lua boss_mal_ganis.lua:141 const,
+	// :287/:291 CastSpell(target/victim)) — Wowhead WotLK (same
+	// verdict file; wago NOT attempted — single effect with
+	// a Value, no trigger): single effect 2 SCHOOL_DAMAGE
+	// Shadow Value 4163, tooltip 4163-4837 — bp 4162/die 675
+	// (the 30633 range convention); targetA
+	// TARGET_UNIT_TARGET_ENEMY (DoCastVictim); NO radius
+	// shown — radiusIdx 0; manaCost 100; cast16 1500ms
+	// (real SpellCastTimes row 16, the 66043 precedent);
+	// dur0; range37 Extended 50yd (real row); school
+	// Shadow. NOT carried: "Can only target the player"
+	// (no attributes field).
+	{id: 52722, castTimeIdx: 16, rangeIdx: 37, school: schoolShadow, manaCost: 100, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 4162, dieSides: 675, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 52723 "Vampiric Touch" (Wowhead SpellName MATCH; C++
+	// boss_mal_ganis.cpp:34 enum, :160 DoCastSelf; Lua
+	// boss_mal_ganis.lua:143 const, :308 CastSpell(creature))
+	// — Wowhead WotLK (same verdict file; wago NOT
+	// attempted — single effect with a Value, no trigger):
+	// single effect 6 APPLY_AURA Dummy Value 1 — aura 4
+	// DUMMY bp 0/die 1 ("Server-side script" — the heal,
+	// half the damage dealt by a melee attack, carries no
+	// numeric amount in the DBC and lives in the engine's
+	// dummy-aura handling); targetA CASTER (DoCastSelf);
+	// cast1 instant; dur9 30000ms (real row); range1 Self
+	// Only; school Shadow; dispel 1 Magic. NOT carried:
+	// "Aura proc chance 100%" (no proc-chance field in
+	// this seeder's spell row).
+	{id: 52723, castTimeIdx: 1, durIdx: 9, rangeIdx: 1, school: schoolShadow, dispel: 1, effects: [3]effect{
+		{effect: effApplyAura, aura: auraDummy, basePoints: 0, dieSides: 1, targetA: targetCaster, chainAmplitude: 1},
+	}},
 }
 
 func main() {
