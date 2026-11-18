@@ -19385,6 +19385,78 @@ var spells = []spell{
 	{id: 38755, castTimeIdx: 1, durIdx: 90007, rangeIdx: 1, school: schoolArcane, effects: [3]effect{
 		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 22299, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 10, chainAmplitude: 1},
 	}},
+	// 30637 "Orbital Strike" (Wowhead name MATCH; C++
+	// SPELL_ORBITAL_STRIKE,
+	// boss_omor_the_unscarred.cpp:43, :167 DoCast(temp))
+	// — eff0 School Damage (Shadow), Value 325 -> bp
+	// 324, die 1, targetA ENEMY (DoCast temp); eff1
+	// Knock Back "(150)" parenthetical = MiscValue 150
+	// (AGENTS.md 2026-11-17 rule; 32055 precedent),
+	// Value 325 -> bp 324, die 1, targetA ENEMY; cast
+	// 1s idx 4 (real row), dur n/a idx 0, range3 Short
+	// 20yd (real row), school Shadow. FLAG: tooltip
+	// states no damage (Details give 325x2); no
+	// Used-by-NPC tab.
+	{id: 30637, castTimeIdx: 4, rangeIdx: 3, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 324, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+		{effect: effKnockBack, basePoints: 324, dieSides: 1, misc: 150, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30686 "Shadow Bolt" (Wowhead name MATCH; C++
+	// SPELL_SHADOW_BOLT, boss_omor_the_unscarred.cpp:48,
+	// :208 DoCast(target)) — eff0 School Damage
+	// (Shadow), Value 1488 -> bp 1487, die 1, targetA
+	// ENEMY (DoCast target; Lua victim-cast nil); cast
+	// 3s idx 14 (real row), dur n/a idx 0, range13
+	// Anywhere 50000yd (real row), school Shadow.
+	// FLAG: tooltip states no damage number.
+	{id: 30686, castTimeIdx: 14, rangeIdx: 13, school: schoolShadow, effects: [3]effect{
+		{effect: effSchoolDamage, basePoints: 1487, dieSides: 1, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30695 "Treacherous Aura" (Wowhead name MATCH; C++
+	// SPELL_TREACHEROUS_AURA,
+	// boss_omor_the_unscarred.cpp:45, :195 DoCast(target))
+	// — eff0 Apply Aura Periodically trigger spell
+	// (aura 23), "Value: 1 every 1 second" -> bp 0,
+	// die 1, auraPeriod 1000, trigger 30697 (NOT seeded
+	// — triggered spell, outside the five; the 360-440
+	// damage lives in 30697), targetA ENEMY (DoCast
+	// target); dispel 2 Curse (SharedDefines.h:1406;
+	// 19716 precedent), cast Instant idx 1, dur8
+	// 15000ms (real row), range14 Extra Long 60yd
+	// (real row), school Shadow. The "Value: 2 every 1
+	// second - Normal" line is a difficulty-scaled
+	// display (19134/30925 precedent — base row takes
+	// Value 1). FLAG: no radius shown (Buff "within 15
+	// yards" lives in 30697, not this row).
+	{id: 30695, dispel: 2, castTimeIdx: 1, durIdx: 8, rangeIdx: 14, school: schoolShadow, effects: [3]effect{
+		{effect: effApplyAura, aura: auraPeriodicTrig, basePoints: 0, dieSides: 1, auraPeriod: 1000, trigger: 30697, targetA: targetEnemy, chainAmplitude: 1},
+	}},
+	// 30707 "Summon Fiendish Hound" (Wowhead name MATCH;
+	// C++ SPELL_SUMMON_FIENDISH_HOUND,
+	// boss_omor_the_unscarred.cpp:50, :130 DoCast(me))
+	// — eff0 Summon, Value 1 -> bp 0, die 1, misc
+	// 17540 Fiendish Hound, radiusIdx 8 (5yd real row),
+	// targetA 32 DEST_CASTER_SUMMON (31264 pattern),
+	// miscB 64 WILD TempSummon branch (38755
+	// precedent); cast 1s idx 4 (real row), dur4
+	// 120000ms (real row), range1 Self, school Shadow,
+	// manaCost 100. FLAG: miscB 64 inferred — needs a
+	// wago SummonProperties row check; 3s cooldown not
+	// carried.
+	{id: 30707, castTimeIdx: 4, durIdx: 4, rangeIdx: 1, school: schoolShadow, manaCost: 100, effects: [3]effect{
+		{effect: effSummon, basePoints: 0, dieSides: 1, misc: 17540, miscB: 64, targetA: targetDestCasterSummon, radiusIdx: 8, chainAmplitude: 1},
+	}},
+	// 31901 "Demonic Shield" (Wowhead name MATCH; C++
+	// SPELL_DEMONIC_SHIELD, boss_omor_the_unscarred.cpp:47,
+	// :182 DoCast(me)) — eff0 Apply Aura Mod %
+	// Damage Taken (aura 87), Value -75% -> bp -76,
+	// die 1, misc 127 all-schools (6361 precedent:
+	// -41/die1/misc127), targetA CASTER (DoCast me);
+	// cast Instant idx 1, dur1 10000ms (real row),
+	// range1 Self, school Physical.
+	{id: 31901, castTimeIdx: 1, durIdx: 1, rangeIdx: 1, school: schoolPhysical, effects: [3]effect{
+		{effect: effApplyAura, aura: auraModDmgTaken, basePoints: -76, dieSides: 1, misc: 127, targetA: targetCaster, chainAmplitude: 1},
+	}},
 	// 72091 "Frozen Orb" — LEFT UNSEEDED: its only effect is
 	// the same "Trigger Spell from Target with Caster as
 	// Target" type as 51849's eff1 (numeric effect type
